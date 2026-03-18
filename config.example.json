@@ -1,0 +1,26 @@
+{
+  "port": 3000,
+  "mqtt": {
+    "broker": "mqtt://localhost:1883",
+    "topic": "meshcore/+/+/packets"
+  },
+  "channelKeys": {
+    "public": "8b3387e9c5cdea6ac9e5edbaa115cd72",
+    "#test": "9cd8fcf22a47333b591d96a2b848b73f",
+    "#sf": "a32c1fcfda0def959c305e4cd803def1",
+    "#wardrive": "4076c315c1ef385fa93f066027320fe5",
+    "#yo": "51f93a1e79f96333fe5d0c8eb3bed7c3",
+    "#bot": "eb50a1bcb3e4e5d7bf69a57c9dada211",
+    "#queer": "5754476f162d93bbee3de0efba136860",
+    "#bookclub": "b803ab3fbb867737ab5b7d32914d7e67",
+    "#shtf": "9321638017bd7f42ca4468726cd06893"
+  },
+  "defaultRegion": "SJC",
+  "regions": {
+    "SJC": "San Jose, US",
+    "SFO": "San Francisco, US",
+    "OAK": "Oakland, US",
+    "MRY": "Monterey, US",
+    "LAR": "Los Angeles, US"
+  }
+}
