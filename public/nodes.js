@@ -122,6 +122,7 @@
               return `<div class="node-activity-item">
                 <span class="node-activity-time">${timeAgo(p.timestamp)}</span>
                 <span>${typeLabel}${detail}${snr}</span>
+                <a href="#/packets/id/${p.id}" class="ch-analyze-link" style="margin-left:8px;font-size:0.8em">Analyze →</a>
               </div>`;
             }).join('') : '<div class="text-muted">No recent activity</div>'}
           </div>
