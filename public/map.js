@@ -87,7 +87,46 @@
     };
     onWS(wsHandler);
 
-    loadNodes();
+    loadNodes().then(() => {
+      // Check for highlight route param (from packet detail)
+      const hashQuery = location.hash.split('?')[1];
+      if (hashQuery) {
+        const params = new URLSearchParams(hashQuery);
+        const highlight = params.get('highlight');
+        if (highlight) drawPacketRoute(highlight.split(','));
+      }
+    });
+  }
+
+  function drawPacketRoute(hopKeys) {
+    // Resolve hop keys to positions
+    const positions = [];
+    for (const hop of hopKeys) {
+      const node = nodes.find(n =>
+        n.public_key.toLowerCase().startsWith(hop.toLowerCase())
+      );
+      if (node && node.lat != null && node.lon != null && !(node.lat === 0 && node.lon === 0)) {
+        positions.push({ lat: node.lat, lon: node.lon, name: node.name || hop });
+      }
+    }
+    if (positions.length < 2) return;
+
+    // Draw route polyline
+    const coords = positions.map(p => [p.lat, p.lon]);
+    const routeLine = L.polyline(coords, {
+      color: '#f59e0b', weight: 3, opacity: 0.8, dashArray: '8 4'
+    }).addTo(markerLayer);
+
+    // Add numbered markers at each hop
+    positions.forEach((p, i) => {
+      L.circleMarker([p.lat, p.lon], {
+        radius: 8, fillColor: i === 0 ? '#22c55e' : i === positions.length - 1 ? '#ef4444' : '#f59e0b',
+        fillOpacity: 0.9, color: '#fff', weight: 2
+      }).addTo(markerLayer).bindTooltip(`${i + 1}. ${p.name}`, { permanent: true, direction: 'top', className: 'route-tooltip' });
+    });
+
+    // Fit map to route
+    map.fitBounds(L.latLngBounds(coords).pad(0.2));
   }
 
   async function loadNodes() {

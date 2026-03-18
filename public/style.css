@@ -1108,3 +1108,37 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
   transition: background 0.1s;
 }
 .node-filter-option:hover { background: var(--surface-2, rgba(255,255,255,0.08)); }
+
+/* Clickable hop links */
+.hop-link {
+  color: var(--primary, #3b82f6);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.hop-link:hover { color: var(--accent, #60a5fa); text-decoration: underline; }
+
+/* Detail map link */
+.detail-map-link {
+  display: inline-block;
+  margin: 8px 0;
+  padding: 6px 12px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: #fbbf24;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.detail-map-link:hover { background: rgba(245, 158, 11, 0.25); }
+
+/* Route tooltip on map */
+.route-tooltip {
+  background: rgba(0,0,0,0.8) !important;
+  color: #fbbf24 !important;
+  border: 1px solid rgba(245,158,11,0.3) !important;
+  font-weight: 600;
+  font-size: 0.75rem;
+}

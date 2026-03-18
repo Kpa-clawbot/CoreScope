@@ -65,8 +65,10 @@
 
   function renderHop(h) {
     const name = hopNameCache[h];
-    if (name) return '<span class="hop hop-named" title="' + h + '">' + escapeHtml(name) + '</span>';
-    return '<span class="hop">' + h + '</span>';
+    const display = name ? escapeHtml(name) : h;
+    const pubkey = name ? Object.entries(hopNameCache).find(([k,v]) => v === name)?.[0] || h : h;
+    // Try to find full pubkey from nodeData
+    return `<a class="hop hop-link ${name ? 'hop-named' : ''}" href="#/nodes/${encodeURIComponent(h)}" title="${h}" onclick="event.stopPropagation()">${display}</a>`;
   }
 
   function renderPath(hops) {
@@ -441,8 +443,9 @@
         <dt>Route Type</dt><dd>${routeTypeName(pkt.route_type)}</dd>
         <dt>Payload Type</dt><dd><span class="badge badge-${payloadTypeColor(pkt.payload_type)}">${typeName}</span></dd>
         <dt>Timestamp</dt><dd>${pkt.timestamp}</dd>
-        <dt>Path Hops</dt><dd>${decoded.path_len ?? pathHops.length}</dd>
+        <dt>Path</dt><dd>${pathHops.length ? renderPath(pathHops) : '—'}</dd>
       </dl>
+      ${pathHops.length ? `<a class="detail-map-link" href="#/map?highlight=${encodeURIComponent(pathHops.join(','))}&packet=${pkt.hash || pkt.id}" onclick="event.stopPropagation()">🗺️ View route on map</a>` : ''}
 
       ${hasRawHex ? `<div class="hex-legend">${buildHexLegend(ranges)}</div>
       <div class="hex-dump">${createColoredHexDump(pkt.raw_hex, ranges)}</div>` : ''}
