@@ -566,11 +566,23 @@ app.get('/api/analytics/rf', (req, res) => {
 // --- Topology Analytics ---
 app.get('/api/analytics/topology', (req, res) => {
   const packets = db.db.prepare(`SELECT path_json, snr, decoded_json, observer_id FROM packets WHERE path_json IS NOT NULL AND path_json != '[]'`).all();
-  const allNodes = db.db.prepare('SELECT public_key, name FROM nodes WHERE name IS NOT NULL').all();
-  const resolveHop = hop => {
+  const allNodes = db.db.prepare('SELECT public_key, name, lat, lon FROM nodes WHERE name IS NOT NULL').all();
+  const resolveHop = (hop, contextPositions) => {
     const h = hop.toLowerCase();
-    const m = allNodes.find(n => n.public_key.toLowerCase().startsWith(h));
-    return m ? { name: m.name, pubkey: m.public_key } : null;
+    const candidates = allNodes.filter(n => n.public_key.toLowerCase().startsWith(h));
+    if (candidates.length === 0) return null;
+    if (candidates.length === 1) return { name: candidates[0].name, pubkey: candidates[0].public_key };
+    // Disambiguate by proximity to context positions
+    if (contextPositions && contextPositions.length > 0) {
+      const cLat = contextPositions.reduce((s, p) => s + p.lat, 0) / contextPositions.length;
+      const cLon = contextPositions.reduce((s, p) => s + p.lon, 0) / contextPositions.length;
+      const withLoc = candidates.filter(c => c.lat && c.lon && !(c.lat === 0 && c.lon === 0));
+      if (withLoc.length) {
+        withLoc.sort((a, b) => Math.hypot(a.lat - cLat, a.lon - cLon) - Math.hypot(b.lat - cLat, b.lon - cLon));
+        return { name: withLoc[0].name, pubkey: withLoc[0].public_key };
+      }
+    }
+    return { name: candidates[0].name, pubkey: candidates[0].public_key };
   };
 
   // Hop distribution
@@ -866,14 +878,72 @@ app.get('/api/analytics/hash-sizes', (req, res) => {
 // Resolve path hop hex prefixes to node names
 app.get('/api/resolve-hops', (req, res) => {
   const hops = (req.query.hops || '').split(',').filter(Boolean);
+  const observerId = req.query.observer || null;
   if (!hops.length) return res.json({ resolved: {} });
-  const allNodes = db.db.prepare('SELECT public_key, name FROM nodes WHERE name IS NOT NULL').all();
+
+  const allNodes = db.db.prepare('SELECT public_key, name, lat, lon FROM nodes WHERE name IS NOT NULL').all();
+
+  // Build observer geographic center from nodes it typically hears
+  let observerLat = null, observerLon = null;
+  if (observerId) {
+    const obsNodes = db.db.prepare(`
+      SELECT DISTINCT n.lat, n.lon FROM packets p
+      JOIN nodes n ON p.decoded_json LIKE '%' || n.public_key || '%'
+      WHERE p.observer_id = ? AND n.lat IS NOT NULL AND n.lat != 0 AND n.lon != 0
+      LIMIT 50
+    `).all(observerId);
+    if (obsNodes.length) {
+      observerLat = obsNodes.reduce((s, n) => s + n.lat, 0) / obsNodes.length;
+      observerLon = obsNodes.reduce((s, n) => s + n.lon, 0) / obsNodes.length;
+    }
+  }
+
   const resolved = {};
+  // First pass: find all candidates for each hop
   for (const hop of hops) {
     const hopLower = hop.toLowerCase();
-    const match = allNodes.find(n => n.public_key.toLowerCase().startsWith(hopLower));
-    if (match) resolved[hop] = match.name;
+    const candidates = allNodes.filter(n => n.public_key.toLowerCase().startsWith(hopLower));
+    if (candidates.length === 0) {
+      resolved[hop] = { name: null, candidates: [] };
+    } else if (candidates.length === 1) {
+      resolved[hop] = { name: candidates[0].name, pubkey: candidates[0].public_key, candidates: [{ name: candidates[0].name, pubkey: candidates[0].public_key }] };
+    } else {
+      resolved[hop] = { name: candidates[0].name, pubkey: candidates[0].public_key, ambiguous: true, candidates: candidates.map(c => ({ name: c.name, pubkey: c.public_key, lat: c.lat, lon: c.lon })) };
+    }
   }
+
+  // Second pass: disambiguate using geographic context
+  // Collect known positions from unambiguous hops
+  const knownPositions = [];
+  for (const hop of hops) {
+    const r = resolved[hop];
+    if (r && !r.ambiguous && r.pubkey) {
+      const node = allNodes.find(n => n.public_key === r.pubkey);
+      if (node && node.lat && node.lon && !(node.lat === 0 && node.lon === 0)) {
+        knownPositions.push({ lat: node.lat, lon: node.lon });
+      }
+    }
+  }
+  if (observerLat != null) knownPositions.push({ lat: observerLat, lon: observerLon });
+
+  if (knownPositions.length > 0) {
+    const centerLat = knownPositions.reduce((s, p) => s + p.lat, 0) / knownPositions.length;
+    const centerLon = knownPositions.reduce((s, p) => s + p.lon, 0) / knownPositions.length;
+    const dist = (lat, lon) => Math.sqrt((lat - centerLat) ** 2 + (lon - centerLon) ** 2);
+
+    for (const hop of hops) {
+      const r = resolved[hop];
+      if (r && r.ambiguous) {
+        const withLoc = r.candidates.filter(c => c.lat && c.lon && !(c.lat === 0 && c.lon === 0));
+        if (withLoc.length > 0) {
+          withLoc.sort((a, b) => dist(a.lat, a.lon) - dist(b.lat, b.lon));
+          r.name = withLoc[0].name;
+          r.pubkey = withLoc[0].pubkey;
+        }
+      }
+    }
+  }
+
   res.json({ resolved });
 });
 

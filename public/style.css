@@ -1142,3 +1142,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
   font-weight: 600;
   font-size: 0.75rem;
 }
+
+/* Ambiguous hop indicator */
+.hop-ambiguous { border-bottom: 1px dashed #f59e0b; }
+.hop-warn { font-size: 0.7em; margin-left: 2px; vertical-align: super; }
