@@ -148,6 +148,22 @@
       }
       if (allHops.size) await resolveHops([...allHops]);
 
+      // Restore expanded group children
+      if (groupByHash && expandedHashes.size > 0) {
+        for (const hash of expandedHashes) {
+          const group = packets.find(p => p.hash === hash);
+          if (group) {
+            try {
+              const childData = await api(`/packets?hash=${hash}&limit=20`);
+              group._children = childData.packets || [];
+            } catch {}
+          } else {
+            // Group no longer in results — remove from expanded
+            expandedHashes.delete(hash);
+          }
+        }
+      }
+
       renderLeft();
     } catch (e) {
       console.error('Failed to load packets:', e);
