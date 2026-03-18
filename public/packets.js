@@ -64,11 +64,15 @@
   }
 
   function renderHop(h) {
-    const name = hopNameCache[h];
+    const entry = hopNameCache[h];
+    const name = entry ? (typeof entry === 'string' ? entry : entry.name) : null;
+    const pubkey = entry?.pubkey || h;
+    const ambiguous = entry?.ambiguous || false;
     const display = name ? escapeHtml(name) : h;
-    const pubkey = name ? Object.entries(hopNameCache).find(([k,v]) => v === name)?.[0] || h : h;
-    // Try to find full pubkey from nodeData
-    return `<a class="hop hop-link ${name ? 'hop-named' : ''}" href="#/nodes/${encodeURIComponent(h)}" title="${h}" onclick="event.stopPropagation()">${display}</a>`;
+    const title = ambiguous
+      ? `${h} — ⚠ ${entry.candidates.length} matches: ${entry.candidates.map(c => c.name).join(', ')}`
+      : h;
+    return `<a class="hop hop-link ${name ? 'hop-named' : ''} ${ambiguous ? 'hop-ambiguous' : ''}" href="#/nodes/${encodeURIComponent(pubkey)}" title="${title}" onclick="event.stopPropagation()">${display}${ambiguous ? '<span class="hop-warn">⚠</span>' : ''}</a>`;
   }
 
   function renderPath(hops) {
@@ -555,8 +559,9 @@
       const pathByte = parseInt(buf.slice(2, 4), 16);
       const hashSize = (pathByte >> 6) + 1;
       for (let i = 0; i < pathHops.length; i++) {
-        const hopName = hopNameCache[pathHops[i]];
-        const label = hopName ? `Hop ${i} — ${escapeHtml(hopName)}` : `Hop ${i}`;
+        const hopEntry = hopNameCache[pathHops[i]];
+        const hopName = hopEntry ? (typeof hopEntry === 'string' ? hopEntry : hopEntry.name) : null;
+        const label = hopName ? `Hop ${i} — ${escapeHtml(hopName)}${hopEntry?.ambiguous ? ' ⚠' : ''}` : `Hop ${i}`;
         rows += fieldRow(off + i * hashSize, label, pathHops[i], hopName ? hopName : '');
       }
       off += hashSize * pathHops.length;
