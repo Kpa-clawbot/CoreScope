@@ -350,7 +350,7 @@
                 <div class="advert-info">
                   <strong>${timeAgo(a.timestamp)}</strong> ${icon} ${pType}${detail}
                   ${a.snr != null ? ` · SNR ${a.snr}dB` : ''}${a.rssi != null ? ` · RSSI ${a.rssi}dBm` : ''}
-                  <br><a href="#/packets" class="ch-analyze-link" onclick="window._pktSelect && window._pktSelect(${a.id})">Analyze →</a>
+                  <br><a href="#/packets/id/${a.id}" class="ch-analyze-link">Analyze →</a>
                 </div>
               </div>`;
             }).join('') : '<div class="text-muted" style="padding:8px">No recent activity</div>'}
