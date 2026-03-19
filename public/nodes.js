@@ -43,12 +43,19 @@
         </div>
       </div>`;
       loadFullNode(directNode);
+      // Escape to go back to nodes list
+      document.addEventListener('keydown', function nodesEsc(e) {
+        if (e.key === 'Escape') {
+          document.removeEventListener('keydown', nodesEsc);
+          location.hash = '#/nodes';
+        }
+      });
       return;
     }
 
     app.innerHTML = `<div class="nodes-page">
       <div class="nodes-topbar">
-        <input type="text" class="nodes-search" id="nodeSearch" placeholder="Search nodes by name…">
+        <input type="text" class="nodes-search" id="nodeSearch" placeholder="Search nodes by name…" aria-label="Search nodes by name">
         <div class="nodes-counts" id="nodeCounts"></div>
       </div>
       <div class="split-layout">
@@ -215,7 +222,7 @@
           ${TABS.map(t => `<button class="node-tab ${activeTab === t.key ? 'active' : ''}" data-tab="${t.key}">${t.label}</button>`).join('')}
         </div>
         <div class="nodes-filters">
-          <select id="nodeLastHeard">
+          <select id="nodeLastHeard" aria-label="Filter by last heard time">
             <option value="">Last Heard: Any</option>
             <option value="1h" ${lastHeard==='1h'?'selected':''}>1 hour</option>
             <option value="6h" ${lastHeard==='6h'?'selected':''}>6 hours</option>
@@ -223,7 +230,7 @@
             <option value="7d" ${lastHeard==='7d'?'selected':''}>7 days</option>
             <option value="30d" ${lastHeard==='30d'?'selected':''}>30 days</option>
           </select>
-          <select id="nodeSort">
+          <select id="nodeSort" aria-label="Sort nodes">
             <option value="lastSeen" ${sortBy==='lastSeen'?'selected':''}>Sort: Last Seen</option>
             <option value="name" ${sortBy==='name'?'selected':''}>Sort: Name</option>
             <option value="packetCount" ${sortBy==='packetCount'?'selected':''}>Sort: Adverts</option>
@@ -243,6 +250,8 @@
       </table>`;
 
     // Tab clicks
+    const nodeTabs = document.getElementById('nodeTabs');
+    initTabBar(nodeTabs);
     el.querySelectorAll('.node-tab').forEach(btn => {
       btn.addEventListener('click', () => { activeTab = btn.dataset.tab; loadNodes(); });
     });
@@ -269,6 +278,19 @@
       tbody.addEventListener('click', handler);
       tbody.addEventListener('keydown', handler);
     }
+
+    // Escape to close node detail panel
+    document.addEventListener('keydown', function nodesPanelEsc(e) {
+      if (e.key === 'Escape') {
+        const panel = document.getElementById('nodesRight');
+        if (panel && !panel.classList.contains('empty')) {
+          panel.classList.add('empty');
+          panel.innerHTML = '<span>Select a node to view details</span>';
+          selectedKey = null;
+          renderRows();
+        }
+      }
+    });
 
     renderRows();
   }

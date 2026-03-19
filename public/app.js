@@ -395,6 +395,54 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 /**
+ * Reusable ARIA tab-bar initialiser.
+ * Adds role="tablist" to container, role="tab" + aria-selected to each button,
+ * and arrow-key navigation between tabs.
+ * @param {HTMLElement} container - the tab bar element
+ * @param {Function} [onChange] - optional callback(activeBtn) on tab change
+ */
+function initTabBar(container, onChange) {
+  if (!container || container.getAttribute('role') === 'tablist') return;
+  container.setAttribute('role', 'tablist');
+  const tabs = Array.from(container.querySelectorAll('button, [data-tab], [data-obs]'));
+  tabs.forEach(btn => {
+    btn.setAttribute('role', 'tab');
+    const isActive = btn.classList.contains('active');
+    btn.setAttribute('aria-selected', String(isActive));
+    btn.setAttribute('tabindex', isActive ? '0' : '-1');
+    // Link to panel if aria-controls target exists
+    const panelId = btn.dataset.tab || btn.dataset.obs;
+    if (panelId && document.getElementById(panelId)) {
+      btn.setAttribute('aria-controls', panelId);
+    }
+  });
+  container.addEventListener('click', (e) => {
+    const btn = e.target.closest('[role="tab"]');
+    if (!btn || !container.contains(btn)) return;
+    tabs.forEach(b => { b.setAttribute('aria-selected', 'false'); b.setAttribute('tabindex', '-1'); });
+    btn.setAttribute('aria-selected', 'true');
+    btn.setAttribute('tabindex', '0');
+    if (onChange) onChange(btn);
+  });
+  container.addEventListener('keydown', (e) => {
+    const btn = e.target.closest('[role="tab"]');
+    if (!btn) return;
+    let idx = tabs.indexOf(btn), next = -1;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (idx + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (idx - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = tabs.length - 1;
+    if (next < 0) return;
+    e.preventDefault();
+    tabs.forEach(b => { b.setAttribute('aria-selected', 'false'); b.setAttribute('tabindex', '-1'); });
+    tabs[next].setAttribute('aria-selected', 'true');
+    tabs[next].setAttribute('tabindex', '0');
+    tabs[next].focus();
+    tabs[next].click();
+  });
+}
+
+/**
  * Make table columns resizable with drag handles. Widths saved to localStorage.
  * Call after table is in DOM. Re-call safe (idempotent per table).
  * @param {string} tableSelector - CSS selector for the table
