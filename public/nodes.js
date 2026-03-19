@@ -117,7 +117,11 @@
         <div class="node-full-card">
           <div class="node-detail-name" style="font-size:20px">${escapeHtml(n.name || '(unnamed)')}</div>
           <div style="margin:6px 0 12px"><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span> ${statusLabel}</div>
-          <div class="node-detail-key mono" style="font-size:11px;word-break:break-all;margin-bottom:12px">${n.public_key}</div>
+          <div class="node-detail-key mono" style="font-size:11px;word-break:break-all;margin-bottom:8px">${n.public_key}</div>
+          <div style="margin-bottom:12px">
+            <button class="btn-primary" id="copyUrlBtn" style="font-size:12px;padding:4px 10px">📋 Copy URL</button>
+            <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:6px;text-decoration:none;font-size:12px;padding:4px 10px">📊 Analytics</a>
+          </div>
           <div class="node-qr" id="nodeFullQrCode"></div>
         </div>
 
@@ -166,11 +170,6 @@
               </div>`;
             }).join('') : '<div class="text-muted">No recent packets</div>'}
           </div>
-        </div>
-
-        <div style="text-align:center;padding:16px">
-          <button class="btn-primary" id="copyUrlBtn">📋 Copy URL</button>
-          <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:8px;text-decoration:none">📊 Analytics</a>
         </div>`;
 
       // Map
@@ -437,7 +436,10 @@
       <div class="node-detail">
         ${hasLoc ? `<div class="node-map-container node-detail-map" id="nodeMap" style="border-radius:8px;overflow:hidden;"></div>` : ''}
         <div class="node-detail-name">${escapeHtml(n.name || '(unnamed)')}</div>
-        <div class="node-detail-role"><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span> ${statusLabel}</div>
+        <div class="node-detail-role"><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span> ${statusLabel}
+          <button class="btn-primary" id="copyUrlBtn" style="font-size:11px;padding:2px 8px;margin-left:8px">📋 URL</button>
+          <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px">📊 Analytics</a>
+        </div>
 
         <div class="node-detail-section">
           <h4>Public Key</h4>
@@ -467,11 +469,6 @@
             </div>`).join('')}
           </div>
         </div>` : ''}
-
-        <div style="text-align:center;margin-bottom:16px">
-          <button class="btn-primary" id="copyUrlBtn">📋 Copy URL</button>
-          <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:8px;text-decoration:none">📊 Analytics</a>
-        </div>
 
         <div class="node-detail-section">
           <h4>Recent Packets (${adverts.length})</h4>

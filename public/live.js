@@ -606,6 +606,7 @@
         <div class="vcr-bar" id="vcrBar">
           <div class="vcr-left">
           <div class="vcr-controls">
+            <span style="font-size:10px;color:var(--text-muted);letter-spacing:1px;text-transform:uppercase;margin-right:6px">Playback</span>
             <button id="vcrRewindBtn" class="vcr-btn" title="Rewind" aria-label="Rewind">⏪</button>
             <button id="vcrPauseBtn" class="vcr-btn" title="Pause/Play" aria-label="Pause">⏸</button>
             <button id="vcrLiveBtn" class="vcr-btn vcr-live-btn" title="Jump to live" aria-label="Snap to Live">LIVE</button>
