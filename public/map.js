@@ -117,40 +117,24 @@
   }
 
   function drawPacketRoute(hopKeys) {
-    // Resolve hop short hashes to node positions with geographic disambiguation
-    const raw = hopKeys.map(hop => {
+    // Match hop keys to nodes - supports both full pubkeys and short prefixes
+    // Bidirectional prefix match handles DB nodes with truncated or full keys
+    function findNode(hop) {
       const hopLower = hop.toLowerCase();
-      const candidates = nodes.filter(n =>
-        n.public_key.toLowerCase().startsWith(hopLower) &&
-        n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0)
-      );
-      if (candidates.length === 1) {
-        return { lat: candidates[0].lat, lon: candidates[0].lon, name: candidates[0].name || hop, pubkey: candidates[0].public_key, role: candidates[0].role, resolved: true };
-      } else if (candidates.length > 1) {
-        return { name: hop, resolved: false, candidates };
-      }
-      return { name: hop, resolved: false };
-    });
-
-    // Disambiguate: pick candidate closest to center of already-resolved hops
-    const knownPos = raw.filter(h => h.resolved);
-    if (knownPos.length > 0) {
-      const cLat = knownPos.reduce((s, p) => s + p.lat, 0) / knownPos.length;
-      const cLon = knownPos.reduce((s, p) => s + p.lon, 0) / knownPos.length;
-      const dist = (lat, lon) => Math.sqrt((lat - cLat) ** 2 + (lon - cLon) ** 2);
-      for (const hop of raw) {
-        if (!hop.resolved && hop.candidates) {
-          hop.candidates.sort((a, b) => dist(a.lat, a.lon) - dist(b.lat, b.lon));
-          const best = hop.candidates[0];
-          hop.lat = best.lat; hop.lon = best.lon;
-          hop.name = best.name || hop.name;
-          hop.pubkey = best.public_key; hop.role = best.role;
-          hop.resolved = true;
-        }
-      }
+      return nodes.find(n => {
+        const pk = n.public_key.toLowerCase();
+        return (pk === hopLower || pk.startsWith(hopLower) || hopLower.startsWith(pk)) &&
+          n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0);
+      });
     }
 
-    const positions = raw.filter(h => h.resolved);
+    const positions = hopKeys.map(hop => {
+      const node = findNode(hop);
+      if (node) {
+        return { lat: node.lat, lon: node.lon, name: node.name || hop.slice(0,8), pubkey: node.public_key, role: node.role, resolved: true };
+      }
+      return null;
+    }).filter(Boolean);
     if (positions.length < 1) return;
 
     // Even a single node is worth showing (zoom to it)
