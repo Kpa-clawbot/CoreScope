@@ -5,6 +5,16 @@
   let nodes = [];
   const PAYLOAD_TYPES = {0:'Request',1:'Response',2:'Direct Msg',3:'ACK',4:'Advert',5:'Channel Msg',7:'Anon Req',8:'Path',9:'Trace'};
 
+  function syncClaimedToFavorites() {
+    const myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
+    const favs = getFavorites();
+    let changed = false;
+    myNodes.forEach(mn => {
+      if (!favs.includes(mn.pubkey)) { favs.push(mn.pubkey); changed = true; }
+    });
+    if (changed) localStorage.setItem('meshcore-favorites', JSON.stringify(favs));
+  }
+
   let counts = {};
   let selectedKey = null;
   let activeTab = 'all';
@@ -222,6 +232,23 @@
       const data = await api('/nodes?' + params);
       nodes = data.nodes || [];
       counts = data.counts || {};
+
+      // Ensure claimed nodes are always present even if not in current page
+      const myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
+      const existingKeys = new Set(nodes.map(n => n.public_key));
+      const missing = myNodes.filter(mn => !existingKeys.has(mn.pubkey));
+      if (missing.length) {
+        const fetched = await Promise.allSettled(
+          missing.map(mn => api('/nodes/' + encodeURIComponent(mn.pubkey)))
+        );
+        fetched.forEach(r => {
+          if (r.status === 'fulfilled' && r.value && r.value.public_key) nodes.push(r.value);
+        });
+      }
+
+      // Auto-sync claimed → favorites
+      syncClaimedToFavorites();
+
       renderCounts();
       renderLeft();
     } catch (e) {
