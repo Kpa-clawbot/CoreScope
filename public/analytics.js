@@ -715,7 +715,7 @@
     el.innerHTML = `
       <div class="analytics-card">
         <h3>1-Byte Hash Usage Matrix</h3>
-        <p class="text-muted" style="margin:0 0 8px;font-size:0.8em">Click a cell to see which nodes share that prefix. Darker = more traffic.</p>
+        <p class="text-muted" style="margin:0 0 8px;font-size:0.8em">Click a cell to see which nodes share that prefix. Green = available, yellow = taken, red = collision.</p>
         <div id="hashMatrix"></div>
       </div>
 
@@ -788,15 +788,14 @@
         const count = nodes.length;
         let bg, color;
         if (count === 0) {
-          bg = '#166534'; color = '#86efac'; // green — no nodes, available
+          bg = '#166534'; color = '#86efac'; // green — available
         } else if (count === 1) {
-          bg = '#1e3a5f'; color = '#93c5fd'; // blue — single user, no collision
+          bg = '#854d0e'; color = '#fde047'; // yellow — taken, no collision
         } else {
-          // 2+ nodes: interpolate yellow→red based on count
-          const t = Math.min((count - 2) / 4, 1); // 2=yellow, 6+=full red
-          const r = 239;
-          const g = Math.round(180 * (1 - t));
-          bg = `rgb(${r},${g},50)`; color = '#fff';
+          // 2+ nodes: interpolate orange→red
+          const t = Math.min((count - 2) / 4, 1);
+          const g = Math.round(80 * (1 - t));
+          bg = `rgb(200,${g},30)`; color = '#fff';
         }
         const status = count === 0 ? 'available' : count === 1 ? `1 node: ${nodes[0].name || nodes[0].public_key.slice(0,12)}` : `${count} nodes — COLLISION`;
         html += `<td class="hash-cell${count ? ' hash-active' : ''}" data-hex="${hex}" style="width:${cellSize}px;height:${cellSize}px;text-align:center;background:${bg};color:${color};border:1px solid var(--border);cursor:${count ? 'pointer' : 'default'};font-size:0.85em" title="0x${hex}: ${status}">${hex}</td>`;
@@ -807,9 +806,9 @@
     html += `<div id="hashDetail" style="flex:1;min-width:200px;max-width:400px;font-size:0.85em"></div></div>
     <div style="margin-top:8px;font-size:0.8em;display:flex;gap:16px;align-items:center">
       <span><span style="display:inline-block;width:12px;height:12px;background:#166534;border:1px solid var(--border);vertical-align:middle"></span> Available</span>
-      <span><span style="display:inline-block;width:12px;height:12px;background:#1e3a5f;border:1px solid var(--border);vertical-align:middle"></span> 1 node (no collision)</span>
-      <span><span style="display:inline-block;width:12px;height:12px;background:rgb(239,180,50);border:1px solid var(--border);vertical-align:middle"></span> 2 nodes</span>
-      <span><span style="display:inline-block;width:12px;height:12px;background:rgb(239,50,50);border:1px solid var(--border);vertical-align:middle"></span> 3+ nodes (collision)</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:#854d0e;border:1px solid var(--border);vertical-align:middle"></span> 1 node</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:rgb(200,80,30);border:1px solid var(--border);vertical-align:middle"></span> 2 nodes</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:rgb(200,0,30);border:1px solid var(--border);vertical-align:middle"></span> 3+ nodes (collision)</span>
     </div>`;
     el.innerHTML = html;
 
