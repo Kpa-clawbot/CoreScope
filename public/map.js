@@ -61,12 +61,26 @@
         </div>
       </div>`;
 
-    // Init Leaflet
-    map = L.map('leaflet-map', { zoomControl: true }).setView([37.5, -122], 6);
+    // Init Leaflet — restore saved position or default to Bay Area
+    const defaultCenter = [37.6, -122.1];
+    const defaultZoom = 9;
+    let initCenter = defaultCenter;
+    let initZoom = defaultZoom;
+    const savedView = localStorage.getItem('map-view');
+    if (savedView) {
+      try { const v = JSON.parse(savedView); initCenter = [v.lat, v.lng]; initZoom = v.zoom; } catch {}
+    }
+    map = L.map('leaflet-map', { zoomControl: true }).setView(initCenter, initZoom);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap',
       maxZoom: 19,
     }).addTo(map);
+
+    // Save position on move
+    map.on('moveend', () => {
+      const c = map.getCenter();
+      localStorage.setItem('map-view', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }));
+    });
 
     markerLayer = L.layerGroup().addTo(map);
     routeLayer = L.layerGroup().addTo(map);
@@ -154,7 +168,7 @@
       buildJumpButtons();
 
       renderMarkers();
-      fitBounds();
+      if (!savedView) fitBounds();
     } catch (e) {
       console.error('Map load error:', e);
     }
