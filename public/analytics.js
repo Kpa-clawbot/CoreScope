@@ -783,12 +783,14 @@
           </tr></thead><tbody>
           ${data.subpaths.map((s, i) => {
             const barW = Math.max(2, Math.round(s.count / maxCount * 100));
-            return `<tr>
+            const hops = s.path.split(' → ');
+            const hasSelfLoop = hops.some((h, j) => j > 0 && h === hops[j - 1]);
+            return `<tr${hasSelfLoop ? ' class="subpath-selfloop"' : ''}>
               <td>${i + 1}</td>
-              <td class="mono" style="white-space:nowrap">${escapeHtml(s.path)}</td>
+              <td class="mono" style="white-space:nowrap">${esc(s.path)}${hasSelfLoop ? ' <span title="Contains self-loop — likely 1-byte prefix collision" style="cursor:help">🔄</span>' : ''}</td>
               <td>${s.count.toLocaleString()}</td>
               <td>${s.pct}%</td>
-              <td><div style="background:var(--accent,#3b82f6);height:14px;border-radius:3px;width:${barW}%;opacity:0.7"></div></td>
+              <td><div style="background:${hasSelfLoop ? '#f59e0b' : 'var(--accent,#3b82f6)'};height:14px;border-radius:3px;width:${barW}%;opacity:0.7"></div></td>
             </tr>`;
           }).join('')}
           </tbody></table>`;
