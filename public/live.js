@@ -269,6 +269,7 @@
   function drawLcdText(text, color) {
     const canvas = document.getElementById('vcrLcdCanvas');
     if (!canvas) return;
+    canvas.setAttribute('aria-label', 'VCR time: ' + text);
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
     const cw = canvas.offsetWidth, ch = canvas.offsetHeight;
@@ -585,7 +586,7 @@
           </div>
           <div class="vcr-lcd">
             <div class="vcr-lcd-row vcr-lcd-mode" id="vcrLcdMode">LIVE</div>
-            <canvas id="vcrLcdCanvas" class="vcr-lcd-canvas" width="200" height="32"></canvas>
+            <canvas id="vcrLcdCanvas" class="vcr-lcd-canvas" width="200" height="32" role="img" aria-label="VCR time display"></canvas>
             <div class="vcr-lcd-row vcr-lcd-pkts" id="vcrLcdPkts"></div>
           </div>
           <div id="vcrPrompt" class="vcr-prompt hidden"></div>
@@ -647,6 +648,13 @@
 
     // Feed show/hide
     const feedEl = document.getElementById('liveFeed');
+    // Keyboard support for feed items (event delegation)
+    feedEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        const item = e.target.closest('.live-feed-item');
+        if (item) { e.preventDefault(); item.click(); }
+      }
+    });
     const feedHideBtn = document.getElementById('feedHideBtn');
     const feedShowBtn = document.getElementById('feedShowBtn');
     if (localStorage.getItem('live-feed-hidden') === 'true') {
@@ -1242,6 +1250,8 @@
 
     const item = document.createElement('div');
     item.className = 'live-feed-item live-feed-enter';
+    item.setAttribute('tabindex', '0');
+    item.setAttribute('role', 'button');
     item.style.cursor = 'pointer';
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>

@@ -597,10 +597,11 @@
 
 /* Mobile VCR */
 @media (max-width: 600px) {
-  .vcr-bar { padding: 4px 8px; }
-  .vcr-controls { gap: 4px; }
-  .vcr-btn { padding: 3px 6px; font-size: 0.7rem; }
-  .vcr-scope-btn { font-size: 0.6rem; padding: 1px 4px; }
+  .vcr-bar { padding: 4px 8px; flex-wrap: wrap; }
+  .vcr-controls { gap: 4px; flex-wrap: wrap; width: 100%; justify-content: center; }
+  .vcr-timeline-wrap { width: 100%; }
+  .vcr-btn { padding: 10px 14px; font-size: 0.8rem; min-height: 44px; min-width: 44px; }
+  .vcr-scope-btn { font-size: 0.75rem; padding: 10px 12px; min-height: 44px; min-width: 44px; }
 }
 
 /* Timeline time tooltip */
