@@ -545,7 +545,7 @@
     });
 
     // Timeline click to scrub
-    document.getElementById('vcrTimeline').addEventListener('click', handleTimelineClick);
+    // Timeline click handled by drag (mousedown+mouseup)
 
     // Timeline hover — show time tooltip
     const timelineEl = document.getElementById('vcrTimeline');
@@ -563,11 +563,25 @@
 
     // Drag scrubbing on timeline
     let dragging = false;
-    function scrubToX(clientX) {
+    function scrubToX(clientX, isFinal) {
       const rect = timelineEl.getBoundingClientRect();
       const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
       const now = Date.now();
       const targetTs = now - VCR.timelineScope + pct * VCR.timelineScope;
+
+      // If buffer is empty or target is before buffer start, fetch from DB on release
+      if (VCR.buffer.length === 0 || targetTs < VCR.buffer[0].ts - 5000) {
+        if (isFinal) {
+          vcrRewind(now - targetTs);
+        } else {
+          // Update playhead position visually during drag even without buffer
+          const playheadEl = document.getElementById('vcrPlayhead');
+          if (playheadEl) {
+            playheadEl.style.left = (pct * rect.width) + 'px';
+          }
+        }
+        return;
+      }
 
       let closest = 0;
       let minDist = Infinity;
@@ -576,41 +590,42 @@
         if (dist < minDist) { minDist = dist; closest = i; }
       });
 
-      if (VCR.buffer.length > 0) {
-        stopReplay();
-        VCR.playhead = closest;
-        vcrSetMode('REPLAY');
-        updateTimelinePlayhead();
-        updateVCRUI();
-      }
+      stopReplay();
+      VCR.playhead = closest;
+      vcrSetMode('REPLAY');
+      updateTimelinePlayhead();
+      updateVCRUI();
     }
     timelineEl.addEventListener('mousedown', (e) => {
       dragging = true;
-      scrubToX(e.clientX);
+      scrubToX(e.clientX, false);
       e.preventDefault();
     });
     document.addEventListener('mousemove', (e) => {
       if (!dragging) return;
-      scrubToX(e.clientX);
+      scrubToX(e.clientX, false);
     });
-    document.addEventListener('mouseup', () => {
+    document.addEventListener('mouseup', (e) => {
       if (!dragging) return;
       dragging = false;
+      scrubToX(e.clientX, true);
       if (VCR.mode === 'REPLAY') startReplay();
     });
     // Touch support
     timelineEl.addEventListener('touchstart', (e) => {
       dragging = true;
-      scrubToX(e.touches[0].clientX);
+      scrubToX(e.touches[0].clientX, false);
       e.preventDefault();
     }, { passive: false });
     timelineEl.addEventListener('touchmove', (e) => {
       if (!dragging) return;
-      scrubToX(e.touches[0].clientX);
+      scrubToX(e.touches[0].clientX, false);
     });
-    timelineEl.addEventListener('touchend', () => {
+    timelineEl.addEventListener('touchend', (e) => {
       if (!dragging) return;
+      const lastTouch = e.changedTouches[0];
       dragging = false;
+      scrubToX(lastTouch.clientX, true);
       if (VCR.mode === 'REPLAY') startReplay();
     });
 
