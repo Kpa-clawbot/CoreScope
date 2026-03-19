@@ -604,28 +604,23 @@
 
         <!-- VCR Bar -->
         <div class="vcr-bar" id="vcrBar">
-          <div class="vcr-left">
           <div class="vcr-controls">
-            <span style="font-size:10px;color:var(--text-muted);letter-spacing:1px;text-transform:uppercase;margin-right:6px">Playback</span>
             <button id="vcrRewindBtn" class="vcr-btn" title="Rewind" aria-label="Rewind">⏪</button>
             <button id="vcrPauseBtn" class="vcr-btn" title="Pause/Play" aria-label="Pause">⏸</button>
             <button id="vcrLiveBtn" class="vcr-btn vcr-live-btn" title="Jump to live" aria-label="Snap to Live">LIVE</button>
             <button id="vcrSpeedBtn" class="vcr-btn" title="Playback speed" aria-label="Speed 1x">1x</button>
             <div id="vcrMode" class="vcr-mode vcr-mode-live"><span class="vcr-live-dot"></span> LIVE</div>
           </div>
-          <div class="vcr-timeline-wrap">
-            <div class="vcr-scope-btns" role="radiogroup" aria-label="Timeline scope">
-              <button class="vcr-scope-btn active" data-scope="3600000" role="radio" aria-checked="true" aria-label="Scope 1 hour">1h</button>
-              <button class="vcr-scope-btn" data-scope="21600000" role="radio" aria-checked="false" aria-label="Scope 6 hours">6h</button>
-              <button class="vcr-scope-btn" data-scope="43200000" role="radio" aria-checked="false" aria-label="Scope 12 hours">12h</button>
-              <button class="vcr-scope-btn" data-scope="86400000" role="radio" aria-checked="false" aria-label="Scope 24 hours">24h</button>
-            </div>
-            <div class="vcr-timeline-container">
-              <canvas id="vcrTimeline" class="vcr-timeline"></canvas>
-              <div id="vcrPlayhead" class="vcr-playhead"></div>
-              <div id="vcrTimeTooltip" class="vcr-time-tooltip hidden"></div>
-            </div>
+          <div class="vcr-scope-btns" role="radiogroup" aria-label="Timeline scope">
+            <button class="vcr-scope-btn active" data-scope="3600000" role="radio" aria-checked="true" aria-label="Scope 1 hour">1h</button>
+            <button class="vcr-scope-btn" data-scope="21600000" role="radio" aria-checked="false" aria-label="Scope 6 hours">6h</button>
+            <button class="vcr-scope-btn" data-scope="43200000" role="radio" aria-checked="false" aria-label="Scope 12 hours">12h</button>
+            <button class="vcr-scope-btn" data-scope="86400000" role="radio" aria-checked="false" aria-label="Scope 24 hours">24h</button>
           </div>
+          <div class="vcr-timeline-container">
+            <canvas id="vcrTimeline" class="vcr-timeline"></canvas>
+            <div id="vcrPlayhead" class="vcr-playhead"></div>
+            <div id="vcrTimeTooltip" class="vcr-time-tooltip hidden"></div>
           </div>
           <div class="vcr-lcd">
             <div class="vcr-lcd-row vcr-lcd-mode" id="vcrLcdMode">LIVE</div>

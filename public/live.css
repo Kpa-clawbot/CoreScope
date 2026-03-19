@@ -410,14 +410,14 @@
   left: 0;
   right: 0;
   z-index: 1000;
-  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-1) 95%, transparent);
   backdrop-filter: blur(12px);
   border-top: 1px solid var(--border);
-  padding: 6px 12px;
+  padding: 4px 10px;
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
 }
 .vcr-bar > .vcr-controls,
 .vcr-bar > .vcr-timeline-wrap {
@@ -425,9 +425,10 @@
 }
 .vcr-left {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
   flex: 1;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -565,14 +566,15 @@
 .vcr-timeline-container {
   flex: 1;
   position: relative;
-  height: 24px;
+  height: 16px;
 }
 .vcr-timeline {
   width: 100%;
   height: 100%;
   cursor: grab;
   border-radius: 3px;
-  background: color-mix(in srgb, var(--text) 4%, transparent);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
   touch-action: none;
 }
 .vcr-timeline:active, .vcr-timeline.dragging {
