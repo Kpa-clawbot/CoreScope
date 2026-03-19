@@ -69,7 +69,8 @@
             <button class="tab-btn" data-tab="rf">RF / Signal</button>
             <button class="tab-btn" data-tab="topology">Topology</button>
             <button class="tab-btn" data-tab="channels">Channels</button>
-            <button class="tab-btn" data-tab="hashsizes">Repeater Hashes</button>
+            <button class="tab-btn" data-tab="hashsizes">Hash Stats</button>
+            <button class="tab-btn" data-tab="collisions">Hash Collisions</button>
             <button class="tab-btn" data-tab="subpaths">Route Patterns</button>
           </div>
         </div>
@@ -112,6 +113,7 @@
       case 'topology': renderTopology(el, d.topoData); break;
       case 'channels': renderChannels(el, d.chanData); break;
       case 'hashsizes': renderHashSizes(el, d.hashData); break;
+      case 'collisions': renderCollisionTab(el, d.hashData); break;
       case 'subpaths': renderSubpaths(el); break;
     }
     // Auto-apply column resizing to all analytics tables
@@ -705,10 +707,14 @@
           </tbody>
         </table>
       </div>
+    `;
+  }
 
+  function renderCollisionTab(el, data) {
+    el.innerHTML = `
       <div class="analytics-card">
         <h3>1-Byte Hash Usage Matrix</h3>
-        <p class="text-muted" style="margin:0 0 8px;font-size:0.8em">Each cell shows how many packets used that 1-byte hop prefix (row=high nibble, col=low nibble). Darker = more traffic.</p>
+        <p class="text-muted" style="margin:0 0 8px;font-size:0.8em">Click a cell to see which nodes share that prefix. Darker = more traffic.</p>
         <div id="hashMatrix"></div>
       </div>
 
@@ -1026,6 +1032,29 @@
           <span class="hop-prefix mono">${data.hops.join(' → ')}</span>
           <span>${data.totalMatches.toLocaleString()} occurrences</span>
         </div>
+
+        ${nodesWithLoc.length >= 2 ? `<div class="subpath-section">
+          <h5>📏 Hop Distances</h5>
+          ${(() => {
+            const dists = [];
+            let total = 0;
+            for (let i = 0; i < data.nodes.length - 1; i++) {
+              const a = data.nodes[i], b = data.nodes[i+1];
+              if (a.lat && a.lon && b.lat && b.lon && !(a.lat===0&&a.lon===0) && !(b.lat===0&&b.lon===0)) {
+                const dLat = (a.lat - b.lat) * 111;
+                const dLon = (a.lon - b.lon) * 85;
+                const km = Math.sqrt(dLat*dLat + dLon*dLon);
+                total += km;
+                const cls = km > 200 ? 'color:#ef4444;font-weight:bold' : km > 50 ? 'color:#f59e0b' : 'color:#22c55e';
+                dists.push(`<div style="padding:2px 0"><span style="${cls}">${km < 1 ? (km*1000).toFixed(0)+'m' : km.toFixed(1)+'km'}</span> <span class="text-muted">${esc(a.name)} → ${esc(b.name)}</span></div>`);
+              } else {
+                dists.push(`<div style="padding:2px 0"><span class="text-muted">? ${esc(a.name)} → ${esc(b.name)} (no coords)</span></div>`);
+              }
+            }
+            if (dists.length > 1) dists.push(`<div style="padding:4px 0;border-top:1px solid var(--border);margin-top:4px"><strong>Total: ${total < 1 ? (total*1000).toFixed(0)+'m' : total.toFixed(1)+'km'}</strong></div>`);
+            return dists.join('');
+          })()}
+        </div>` : ''}
 
         ${hasMap ? '<div id="subpathMap" style="height:200px;border-radius:8px;margin:12px 0;border:1px solid var(--border,#e5e7eb)"></div>' : ''}
 
