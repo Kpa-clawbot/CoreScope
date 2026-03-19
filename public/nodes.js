@@ -360,7 +360,7 @@
         <div class="node-detail-section">
           <h4>Public Key</h4>
           <div class="node-detail-key mono">${n.public_key}</div>
-          ${(n.advert_count || 0) > 0 ? `<div class="node-qr" id="nodeQrCode"></div>` : ''}
+          <div class="node-qr" id="nodeQrCode"></div>
         </div>
 
         <div class="node-detail-section">
@@ -375,6 +375,21 @@
 
         <div style="text-align:center;margin-bottom:16px">
           <button class="btn-primary" id="copyUrlBtn">📋 Copy URL</button>
+        </div>
+
+        <div class="node-detail-section">
+          <h4>Recent Adverts (${adverts.length})</h4>
+          <div id="advertTimeline">
+            ${adverts.length ? adverts.map(a => {
+              return `<div class="advert-entry">
+                <span class="advert-dot" style="background:${roleColor}"></span>
+                <div class="advert-info">
+                  <strong>${timeAgo(a.timestamp)}</strong> — Observer: ${escapeHtml(a.observer_name || a.observer_id || '—')}
+                  ${a.snr != null ? ` · SNR ${a.snr}dB` : ''}${a.rssi != null ? ` · RSSI ${a.rssi}dBm` : ''}
+                </div>
+              </div>`;
+            }).join('') : '<div class="text-muted" style="padding:8px">No recent adverts</div>'}
+          </div>
         </div>
 
         <div class="node-detail-section">
