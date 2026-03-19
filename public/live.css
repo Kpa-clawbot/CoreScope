@@ -619,14 +619,25 @@
 
 /* Mobile VCR */
 @media (max-width: 640px) {
-  .vcr-bar { padding: 4px 6px; overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap; }
-  .vcr-btn { padding: 6px 8px; font-size: 0.8rem; min-height: 44px; min-width: 44px; }
-  .vcr-scope-btns { gap: 1px; }
-  .vcr-scope-btn { font-size: 0.65rem; padding: 4px 6px; min-height: 36px; }
-  .vcr-lcd { display: flex; }
-  .vcr-mode { font-size: 0.65rem; padding: 2px 6px; }
-  .vcr-timeline-container { min-width: 60px; }
-  .vcr-prompt { font-size: 0.7rem; }
+  /* Mobile VCR: two-row stacked layout */
+  .vcr-bar {
+    padding: 4px 8px;
+    flex-wrap: wrap;
+    gap: 4px;
+    overflow: visible;
+  }
+  /* Row 1: controls + scope + LCD, all in one line */
+  .vcr-controls { order: 1; flex-shrink: 0; gap: 4px; }
+  .vcr-scope-btns { order: 2; flex-shrink: 0; gap: 1px; }
+  .vcr-lcd { order: 3; display: flex; margin-left: auto; min-width: 90px; padding: 2px 6px; }
+  .vcr-lcd-canvas { width: 100px; height: 22px; }
+  .vcr-mode { display: none; }
+  /* Row 2: timeline takes full width */
+  .vcr-timeline-container { order: 4; width: 100%; flex: none; height: 20px; }
+  /* Smaller buttons */
+  .vcr-btn { padding: 4px 8px; font-size: 0.75rem; min-height: 32px; min-width: 32px; }
+  .vcr-scope-btn { font-size: 0.6rem; padding: 2px 6px; min-height: 28px; }
+  .vcr-prompt { order: 5; width: 100%; font-size: 0.7rem; }
 }
 
 /* Timeline time tooltip */
