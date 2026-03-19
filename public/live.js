@@ -1002,6 +1002,25 @@
       hop.known = true; nextPos = hop.pos;
     }
 
+    // Sanity check: drop hops that are impossibly far from both neighbors (>200km ≈ 1.8°)
+    // These are almost certainly 1-byte prefix collisions with distant nodes
+    const MAX_HOP_DIST = 1.8;
+    for (let i = 0; i < raw.length; i++) {
+      if (!raw[i].known || !raw[i].pos) continue;
+      const prev = i > 0 && raw[i-1].known && raw[i-1].pos ? raw[i-1].pos : null;
+      const next = i < raw.length-1 && raw[i+1].known && raw[i+1].pos ? raw[i+1].pos : null;
+      if (!prev && !next) continue; // lone hop, keep it
+      const dPrev = prev ? dist(raw[i].pos[0], raw[i].pos[1], prev[0], prev[1]) : 0;
+      const dNext = next ? dist(raw[i].pos[0], raw[i].pos[1], next[0], next[1]) : 0;
+      if ((prev && dPrev > MAX_HOP_DIST) && (next && dNext > MAX_HOP_DIST)) {
+        raw[i].known = false; raw[i].pos = null; // too far from both neighbors
+      } else if (prev && !next && dPrev > MAX_HOP_DIST) {
+        raw[i].known = false; raw[i].pos = null; // first/last with only one neighbor, too far
+      } else if (!prev && next && dNext > MAX_HOP_DIST) {
+        raw[i].known = false; raw[i].pos = null;
+      }
+    }
+
     if (!showGhostHops) return raw.filter(h => h.known);
 
     const knownPos2 = raw.filter(h => h.known);

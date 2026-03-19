@@ -1008,6 +1008,26 @@ app.get('/api/resolve-hops', (req, res) => {
     nextPos = hopPositions[hop];
   }
 
+  // Sanity check: drop hops impossibly far from both neighbors (>200km ≈ 1.8°)
+  const MAX_HOP_DIST = 1.8;
+  for (let i = 0; i < hops.length; i++) {
+    const pos = hopPositions[hops[i]];
+    if (!pos) continue;
+    const prev = i > 0 ? hopPositions[hops[i-1]] : null;
+    const next = i < hops.length-1 ? hopPositions[hops[i+1]] : null;
+    if (!prev && !next) continue;
+    const dPrev = prev ? dist(pos.lat, pos.lon, prev.lat, prev.lon) : 0;
+    const dNext = next ? dist(pos.lat, pos.lon, next.lat, next.lon) : 0;
+    const tooFarPrev = prev && dPrev > MAX_HOP_DIST;
+    const tooFarNext = next && dNext > MAX_HOP_DIST;
+    if ((tooFarPrev && tooFarNext) || (tooFarPrev && !next) || (tooFarNext && !prev)) {
+      // Mark as unreliable — likely prefix collision with distant node
+      const r = resolved[hops[i]];
+      if (r) { r.unreliable = true; }
+      delete hopPositions[hops[i]];
+    }
+  }
+
   res.json({ resolved });
 });
 
