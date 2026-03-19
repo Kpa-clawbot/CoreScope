@@ -753,8 +753,6 @@
 
   async function renderHashMatrix(topHops) {
     const el = document.getElementById('hashMatrix');
-    const oneByteHops = topHops.filter(h => h.size === 1);
-    if (!oneByteHops.length) { el.innerHTML = '<div class="text-muted">No 1-byte hops</div>'; return; }
 
     // Fetch all nodes for lookup
     let allNodes = [];
@@ -763,23 +761,18 @@
       allNodes = nd.nodes || [];
     } catch {}
 
-    // Build 16x16 grid
-    const grid = Array.from({ length: 16 }, () => Array(16).fill(0));
-    let maxCount = 0;
-    for (const hop of oneByteHops) {
-      const byte = parseInt(hop.hex, 16);
-      if (isNaN(byte)) continue;
-      const hi = (byte >> 4) & 0xF;
-      const lo = byte & 0xF;
-      grid[hi][lo] = hop.count;
-      if (hop.count > maxCount) maxCount = hop.count;
+    // Build prefix → node count map
+    const prefixNodes = {};
+    for (let i = 0; i < 256; i++) {
+      const hex = i.toString(16).padStart(2, '0').toUpperCase();
+      prefixNodes[hex] = allNodes.filter(n => n.public_key.toUpperCase().startsWith(hex));
     }
 
     const nibbles = '0123456789ABCDEF'.split('');
     const cellSize = 36;
     const headerSize = 24;
 
-    let html = `<div style="display:flex;gap:16px;flex-wrap:wrap"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:0.75em;font-family:monospace">`;
+    let html = `<div style="display:flex;gap:16px;flex-wrap:wrap"><div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:0.7em;font-family:monospace">`;
     html += `<tr><td style="width:${headerSize}px"></td>`;
     for (const n of nibbles) {
       html += `<td style="width:${cellSize}px;text-align:center;padding:2px 0;font-weight:bold;color:var(--text-muted)">${n}</td>`;
@@ -789,38 +782,47 @@
     for (let hi = 0; hi < 16; hi++) {
       html += `<tr><td style="text-align:right;padding-right:4px;font-weight:bold;color:var(--text-muted)">${nibbles[hi]}</td>`;
       for (let lo = 0; lo < 16; lo++) {
-        const count = grid[hi][lo];
         const hex = nibbles[hi] + nibbles[lo];
-        let bg = 'transparent';
-        let color = 'var(--text-muted)';
-        if (count > 0) {
-          const intensity = Math.log(count + 1) / Math.log(maxCount + 1);
-          const r = Math.round(34 + intensity * (239 - 34));
-          const g = Math.round(197 - intensity * (197 - 68));
-          const b = Math.round(94 - intensity * (94 - 68));
-          bg = `rgb(${r},${g},${b})`;
-          color = intensity > 0.5 ? '#fff' : 'var(--text)';
+        const nodes = prefixNodes[hex] || [];
+        const count = nodes.length;
+        let bg, color;
+        if (count === 0) {
+          bg = 'var(--bg-card, #1a1a2e)'; color = 'var(--text-muted)';
+        } else if (count === 1) {
+          bg = '#166534'; color = '#fff'; // green — free, single user
+        } else {
+          // 2+ nodes: interpolate yellow→red based on count
+          const t = Math.min((count - 2) / 4, 1); // 2=yellow, 6+=full red
+          const r = 239;
+          const g = Math.round(180 * (1 - t));
+          bg = `rgb(${r},${g},50)`; color = '#fff';
         }
-        const nodeCount = allNodes.filter(n => n.public_key.toLowerCase().startsWith(hex.toLowerCase())).length;
-        html += `<td class="hash-cell${count ? ' hash-active' : ''}" data-hex="${hex}" style="width:${cellSize}px;height:${cellSize}px;text-align:center;background:${bg};color:${color};border:1px solid var(--border);cursor:${count ? 'pointer' : 'default'}" title="0x${hex}: ${count.toLocaleString()} packets, ${nodeCount} node${nodeCount !== 1 ? 's' : ''}">${count || ''}</td>`;
+        const status = count === 0 ? 'unused' : count === 1 ? `1 node: ${nodes[0].name || nodes[0].public_key.slice(0,12)}` : `${count} nodes — COLLISION`;
+        html += `<td class="hash-cell${count ? ' hash-active' : ''}" data-hex="${hex}" style="width:${cellSize}px;height:${cellSize}px;text-align:center;background:${bg};color:${color};border:1px solid var(--border);cursor:${count ? 'pointer' : 'default'};font-size:0.85em" title="0x${hex}: ${status}">${hex}</td>`;
       }
       html += '</tr>';
     }
     html += '</table></div>';
-    html += '<div id="hashDetail" style="flex:1;min-width:200px;max-width:400px;font-size:0.85em"></div></div>';
+    html += `<div id="hashDetail" style="flex:1;min-width:200px;max-width:400px;font-size:0.85em"></div></div>
+    <div style="margin-top:8px;font-size:0.8em;display:flex;gap:16px;align-items:center">
+      <span><span style="display:inline-block;width:12px;height:12px;background:var(--bg-card,#1a1a2e);border:1px solid var(--border);vertical-align:middle"></span> Unused</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:#166534;border:1px solid var(--border);vertical-align:middle"></span> 1 node (free)</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:rgb(239,180,50);border:1px solid var(--border);vertical-align:middle"></span> 2 nodes</span>
+      <span><span style="display:inline-block;width:12px;height:12px;background:rgb(239,50,50);border:1px solid var(--border);vertical-align:middle"></span> 3+ nodes (collision)</span>
+    </div>`;
     el.innerHTML = html;
 
     // Click handler for cells
     el.querySelectorAll('.hash-active').forEach(td => {
       td.addEventListener('click', () => {
-        const hex = td.dataset.hex.toLowerCase();
-        const matches = allNodes.filter(n => n.public_key.toLowerCase().startsWith(hex));
+        const hex = td.dataset.hex.toUpperCase();
+        const matches = prefixNodes[hex] || [];
         const detail = document.getElementById('hashDetail');
         if (!matches.length) {
-          detail.innerHTML = `<strong class="mono">0x${hex.toUpperCase()}</strong><br><span class="text-muted">No known nodes</span>`;
+          detail.innerHTML = `<strong class="mono">0x${hex}</strong><br><span class="text-muted">No known nodes</span>`;
           return;
         }
-        detail.innerHTML = `<strong class="mono" style="font-size:1.1em">0x${hex.toUpperCase()}</strong> — ${matches.length} node${matches.length !== 1 ? 's' : ''}` +
+        detail.innerHTML = `<strong class="mono" style="font-size:1.1em">0x${hex}</strong> — ${matches.length} node${matches.length !== 1 ? 's' : ''}` +
           `<div style="margin-top:8px">${matches.map(m => {
             const coords = (m.lat && m.lon && !(m.lat === 0 && m.lon === 0))
               ? `<span class="text-muted" style="font-size:0.8em">(${m.lat.toFixed(2)}, ${m.lon.toFixed(2)})</span>`
@@ -828,7 +830,6 @@
             const role = m.role ? `<span class="badge" style="font-size:0.7em;padding:1px 4px;background:var(--border)">${esc(m.role)}</span> ` : '';
             return `<div style="padding:3px 0">${role}<a href="#/nodes/${encodeURIComponent(m.public_key)}" class="analytics-link">${esc(m.name || m.public_key.slice(0,12))}</a> ${coords}</div>`;
           }).join('')}</div>`;
-        // Highlight selected cell
         el.querySelectorAll('.hash-selected').forEach(c => c.classList.remove('hash-selected'));
         td.classList.add('hash-selected');
       });
