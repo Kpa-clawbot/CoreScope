@@ -804,6 +804,9 @@
           <div class="subpath-list" id="subpathList">
             <h3>🛤️ Route Pattern Analysis</h3>
             <p>Click a route to see details. Most common subpaths — reveals backbone routes, bottlenecks, and preferred relay chains.</p>
+            <label style="display:inline-flex;align-items:center;gap:6px;margin-bottom:12px;cursor:pointer;font-size:0.9em">
+              <input type="checkbox" id="hideCollisions" ${localStorage.getItem('subpath-hide-collisions') === '1' ? 'checked' : ''}> Hide likely prefix collisions (self-loops)
+            </label>
             ${renderTable(d2, 'Pairs (2-hop links)')}
             ${renderTable(d3, 'Triples (3-hop chains)')}
             ${renderTable(d4, 'Quads (4-hop chains)')}
@@ -822,6 +825,16 @@
         tr.classList.add('subpath-selected');
         loadSubpathDetail(tr.dataset.hops);
       });
+
+      // Collision toggle
+      const toggle = document.getElementById('hideCollisions');
+      function applyCollisionFilter() {
+        const hide = toggle.checked;
+        localStorage.setItem('subpath-hide-collisions', hide ? '1' : '0');
+        el.querySelectorAll('tr.subpath-selfloop').forEach(r => r.style.display = hide ? 'none' : '');
+      }
+      toggle.addEventListener('change', applyCollisionFilter);
+      applyCollisionFilter();
     } catch (e) {
       el.innerHTML = `<div class="text-muted">Error loading subpath data: ${e.message}</div>`;
     }
