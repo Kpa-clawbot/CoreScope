@@ -239,14 +239,81 @@
     }
   }
 
+  // 7-segment LCD renderer
+  const SEG_MAP = {
+    '0':0x7E,'1':0x30,'2':0x6D,'3':0x79,'4':0x33,'5':0x5B,'6':0x5F,'7':0x70,
+    '8':0x7F,'9':0x7B,'-':0x01,':':0x80,' ':0x00,'P':0x67,'A':0x77,'U':0x3E,
+    'S':0x5B,'E':0x4F,'L':0x0E,'I':0x30,'V':0x3E,'+':0x01
+  };
+  function drawSegDigit(ctx, x, y, w, h, bits, color) {
+    const t = Math.max(2, h * 0.12); // segment thickness
+    const g = 1; // gap
+    const hw = w - 2*g, hh = (h - 3*g) / 2;
+    ctx.fillStyle = color;
+    // a=top, b=top-right, c=bot-right, d=bot, e=bot-left, f=top-left, g=mid
+    if (bits & 0x40) ctx.fillRect(x+g+t/2, y, hw-t, t);           // a
+    if (bits & 0x20) ctx.fillRect(x+w-t, y+g+t/2, t, hh-t/2);     // b
+    if (bits & 0x10) ctx.fillRect(x+w-t, y+hh+2*g+t/2, t, hh-t/2);// c
+    if (bits & 0x08) ctx.fillRect(x+g+t/2, y+h-t, hw-t, t);       // d
+    if (bits & 0x04) ctx.fillRect(x, y+hh+2*g+t/2, t, hh-t/2);    // e
+    if (bits & 0x02) ctx.fillRect(x, y+g+t/2, t, hh-t/2);         // f
+    if (bits & 0x01) ctx.fillRect(x+g+t/2, y+hh+g-t/2, hw-t, t);  // g
+    // colon
+    if (bits & 0x80) {
+      const r = t * 0.6;
+      ctx.beginPath(); ctx.arc(x+w/2, y+h*0.33, r, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x+w/2, y+h*0.67, r, 0, Math.PI*2); ctx.fill();
+    }
+  }
+  function drawLcdText(text, color) {
+    const canvas = document.getElementById('vcrLcdCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const cw = canvas.offsetWidth, ch = canvas.offsetHeight;
+    canvas.width = cw * dpr; canvas.height = ch * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, cw, ch);
+    
+    const digitW = Math.min(16, (cw - 10) / text.length);
+    const digitH = ch - 4;
+    const totalW = digitW * text.length;
+    let x = (cw - totalW) / 2;
+    const y = 2;
+    
+    // Draw ghost segments (dim background)
+    const dimColor = color.replace(/[\d.]+\)$/, '0.07)').replace(/^#/, '');
+    for (let i = 0; i < text.length; i++) {
+      const ch2 = text[i];
+      if (ch2 === ':') {
+        drawSegDigit(ctx, x, y, digitW * 0.5, digitH, 0x80, `rgba(74,222,128,0.07)`);
+        x += digitW * 0.5;
+      } else {
+        drawSegDigit(ctx, x, y, digitW, digitH, 0x7F, `rgba(74,222,128,0.07)`);
+        x += digitW + 1;
+      }
+    }
+    // Draw active segments
+    x = (cw - totalW) / 2;
+    for (let i = 0; i < text.length; i++) {
+      const ch2 = text[i];
+      const bits = SEG_MAP[ch2] || 0;
+      if (ch2 === ':') {
+        drawSegDigit(ctx, x, y, digitW * 0.5, digitH, bits, color);
+        x += digitW * 0.5;
+      } else {
+        drawSegDigit(ctx, x, y, digitW, digitH, bits, color);
+        x += digitW + 1;
+      }
+    }
+  }
+
   function updateVCRClock(tsMs) {
-    const el = document.getElementById('vcrLcdTime');
-    if (!el) return;
     const d = new Date(tsMs);
     const hh = String(d.getHours()).padStart(2, '0');
     const mm = String(d.getMinutes()).padStart(2, '0');
     const ss = String(d.getSeconds()).padStart(2, '0');
-    el.textContent = `${hh}:${mm}:${ss}`;
+    drawLcdText(`${hh}:${mm}:${ss}`, '#4ade80');
   }
 
   function updateVCRLcd() {
@@ -260,8 +327,6 @@
     if (pktsEl) {
       if (VCR.mode === 'PAUSED' && VCR.missedCount > 0) {
         pktsEl.textContent = `+${VCR.missedCount} PKTS`;
-      } else if (VCR.mode === 'REPLAY' && VCR.playhead >= 0) {
-        pktsEl.textContent = `${VCR.playhead}/${VCR.buffer.length}`;
       } else {
         pktsEl.textContent = '';
       }
@@ -519,7 +584,7 @@
           </div>
           <div class="vcr-lcd">
             <div class="vcr-lcd-row vcr-lcd-mode" id="vcrLcdMode">LIVE</div>
-            <div class="vcr-lcd-row vcr-lcd-time" id="vcrLcdTime">--:--:--</div>
+            <canvas id="vcrLcdCanvas" class="vcr-lcd-canvas" width="200" height="32"></canvas>
             <div class="vcr-lcd-row vcr-lcd-pkts" id="vcrLcdPkts"></div>
           </div>
           <div id="vcrPrompt" class="vcr-prompt hidden"></div>
@@ -709,6 +774,11 @@
       VCR.timelineFetchedScope = 0; // force refetch
       fetchTimelineTimestamps().then(() => updateTimeline());
     }, 30000);
+
+    // Live clock tick — update LCD every second when in LIVE mode
+    setInterval(() => {
+      if (VCR.mode === 'LIVE') updateVCRClock(Date.now());
+    }, 1000);
 
     // Auto-hide nav
     const topNav = document.querySelector('.top-nav');
