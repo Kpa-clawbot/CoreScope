@@ -854,7 +854,8 @@
         ${hasMap ? '<div id="subpathMap" style="height:200px;border-radius:8px;margin:12px 0;border:1px solid var(--border,#e5e7eb)"></div>' : ''}
 
         <div class="subpath-section">
-          <h5>📡 Signal Quality</h5>
+          <h5>📡 Observer Receive Signal</h5>
+          <p class="text-muted" style="font-size:0.8em;margin:0 0 4px">Last hop → observer only, not between nodes in the route</p>
           ${data.signal.avgSnr != null
             ? `<div>Avg SNR: <strong>${data.signal.avgSnr} dB</strong> · Avg RSSI: <strong>${data.signal.avgRssi} dBm</strong> · ${data.signal.samples} samples</div>`
             : '<div class="text-muted">No signal data</div>'}
