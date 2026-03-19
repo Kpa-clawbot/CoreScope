@@ -209,7 +209,8 @@
       buildJumpButtons();
 
       renderMarkers();
-      if (!userHasMoved) fitBounds();
+      // Don't fitBounds on initial load — respect the Bay Area default or saved view
+      // Only fitBounds on subsequent data refreshes if user hasn't manually panned
     } catch (e) {
       console.error('Map load error:', e);
     }
