@@ -231,14 +231,14 @@
         </div>
       </div>
       <div class="filter-bar" id="pktFilters">
-        <input type="text" placeholder="Packet hash…" id="fHash">
+        <input type="text" placeholder="Packet hash…" id="fHash" aria-label="Filter by packet hash">
         <div class="node-filter-wrap" style="position:relative">
           <input type="text" placeholder="Node name…" id="fNode" autocomplete="off" role="combobox" aria-expanded="false" aria-owns="fNodeDropdown" aria-activedescendant="" aria-autocomplete="list">
           <div class="node-filter-dropdown hidden" id="fNodeDropdown" role="listbox"></div>
         </div>
-        <select id="fObserver"><option value="">All Observers</option></select>
-        <select id="fRegion"><option value="">All Regions</option></select>
-        <select id="fType"><option value="">All Types</option></select>
+        <select id="fObserver" aria-label="Filter by observer"><option value="">All Observers</option></select>
+        <select id="fRegion" aria-label="Filter by region"><option value="">All Regions</option></select>
+        <select id="fType" aria-label="Filter by packet type"><option value="">All Types</option></select>
         <button class="btn ${groupByHash ? 'active' : ''}" id="fGroup">Group by Hash</button>
       </div>
       <table class="data-table" id="pktTable">
@@ -369,6 +369,19 @@
       pktBody.addEventListener('click', handler);
       pktBody.addEventListener('keydown', handler);
     }
+
+    // Escape to close packet detail panel
+    document.addEventListener('keydown', function pktEsc(e) {
+      if (e.key === 'Escape') {
+        const panel = document.getElementById('pktRight');
+        if (panel && !panel.classList.contains('empty')) {
+          panel.classList.add('empty');
+          panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div><span>Select a packet to view details</span>';
+          selectedId = null;
+          renderTableRows();
+        }
+      }
+    });
 
     renderTableRows();
     makeColumnsResizable('#pktTable', 'meshcore-pkt-col-widths');

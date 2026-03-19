@@ -17,7 +17,7 @@
           <h2>🔍 Packet Trace</h2>
         </div>
         <div class="trace-search">
-          <input type="text" id="traceHashInput" placeholder="Enter packet hash…" value="${urlHash}">
+          <input type="text" id="traceHashInput" placeholder="Enter packet hash…" value="${urlHash}" aria-label="Packet hash to trace">
           <button class="btn-primary" id="traceBtn">Trace</button>
         </div>
         <div id="traceResults"></div>
