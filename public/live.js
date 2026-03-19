@@ -98,15 +98,44 @@
 
   function vcrUnpause() {
     if (VCR.mode !== 'PAUSED') return;
-    if (VCR.missedCount > 3) {
-      // Show Option C prompt
+    if (VCR.scrubTs != null) {
+      // Scrubbed to a specific time — fetch and replay from there
+      vcrReplayFromTs(VCR.scrubTs);
+    } else if (VCR.missedCount > 3) {
       showVCRPrompt(VCR.missedCount);
     } else if (VCR.missedCount > 0) {
-      // Few packets — just replay them quickly
       vcrReplayMissed();
     } else {
       vcrResumeLive();
     }
+  }
+
+  function vcrReplayFromTs(targetTs) {
+    const fetchFrom = new Date(targetTs - 5000).toISOString();
+    vcrSetMode('REPLAY');
+    fetch(`/api/packets?limit=200&grouped=false&since=${encodeURIComponent(fetchFrom)}`)
+      .then(r => r.json())
+      .then(data => {
+        const pkts = (data.packets || []).reverse();
+        const existingIds = new Set(VCR.buffer.map(b => b.pkt.id).filter(Boolean));
+        const newEntries = pkts.filter(p => !existingIds.has(p.id)).map(p => ({
+          ts: new Date(p.timestamp || p.created_at).getTime(),
+          pkt: dbPacketToLive(p)
+        }));
+        if (newEntries.length) {
+          VCR.buffer = [...newEntries, ...VCR.buffer].sort((a, b) => a.ts - b.ts);
+        }
+        let closest = 0, minDist = Infinity;
+        VCR.buffer.forEach((entry, i) => {
+          const dist = Math.abs(entry.ts - targetTs);
+          if (dist < minDist) { minDist = dist; closest = i; }
+        });
+        VCR.playhead = closest;
+        VCR.scrubEnd = Math.min(closest + 50, VCR.buffer.length);
+        VCR.scrubTs = null;
+        startReplay();
+      })
+      .catch(() => { vcrResumeLive(); });
   }
 
   function showVCRPrompt(count) {
