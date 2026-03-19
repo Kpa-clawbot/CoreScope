@@ -328,6 +328,10 @@ function getNodeHealth(pubkey) {
   }
   const avgHops = hopCount > 0 ? Math.round(totalHops / hopCount) : 0;
 
+  const totalPackets = db.prepare(`
+    SELECT COUNT(*) as count FROM packets WHERE ${whereClause}
+  `).get(params).count;
+
   // Recent 10 packets
   const recentPackets = db.prepare(`
     SELECT * FROM packets WHERE ${whereClause} ORDER BY timestamp DESC LIMIT 10
@@ -336,7 +340,7 @@ function getNodeHealth(pubkey) {
   return {
     node,
     observers,
-    stats: { packetsToday, avgSnr: avgStats.avgSnr, avgHops, lastHeard },
+    stats: { totalPackets, packetsToday, avgSnr: avgStats.avgSnr, avgHops, lastHeard },
     recentPackets,
   };
 }

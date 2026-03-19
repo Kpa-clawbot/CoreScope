@@ -114,14 +114,30 @@
         <div class="node-full-card">
           <h4>Stats</h4>
           <dl class="detail-meta">
-            <dt>First Seen</dt><dd>${n.first_seen ? new Date(n.first_seen).toLocaleString() : '—'}</dd>
             <dt>Last Heard</dt><dd>${lastHeard ? timeAgo(lastHeard) : (n.last_seen ? timeAgo(n.last_seen) : '—')}</dd>
+            <dt>First Seen</dt><dd>${n.first_seen ? new Date(n.first_seen).toLocaleString() : '—'}</dd>
             <dt>Total Packets</dt><dd>${stats.totalPackets || n.advert_count || 0}</dd>
             <dt>Packets Today</dt><dd>${stats.packetsToday || 0}</dd>
-            <dt>Observers</dt><dd>${observers.length || 0}${observers.length ? ' (' + observers.map(o => escapeHtml(o.observer_name || o.observer_id)).join(', ') + ')' : ''}</dd>
+            ${stats.avgSnr != null ? `<dt>Avg SNR</dt><dd>${stats.avgSnr.toFixed(1)} dB</dd>` : ''}
+            ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
             ${hasLoc ? `<dt>Location</dt><dd>${n.lat.toFixed(5)}, ${n.lon.toFixed(5)}</dd>` : ''}
           </dl>
         </div>
+
+        ${observers.length ? `<div class="node-full-card">
+          <h4>Heard By (${observers.length} observer${observers.length > 1 ? 's' : ''})</h4>
+          <table class="data-table" style="font-size:12px">
+            <thead><tr><th>Observer</th><th>Packets</th><th>Avg SNR</th><th>Avg RSSI</th></tr></thead>
+            <tbody>
+              ${observers.map(o => `<tr>
+                <td style="font-weight:600">${escapeHtml(o.observer_name || o.observer_id)}</td>
+                <td>${o.packetCount}</td>
+                <td>${o.avgSnr != null ? o.avgSnr.toFixed(1) + ' dB' : '—'}</td>
+                <td>${o.avgRssi != null ? o.avgRssi.toFixed(0) + ' dBm' : '—'}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>` : ''}
 
         <div class="node-full-card">
           <h4>Recent Activity (${recent.length})</h4>
@@ -373,16 +389,29 @@
   function renderDetail(panel, data) {
     const n = data.node;
     const adverts = data.recentAdverts || [];
-    const recent = data.healthData?.recentPackets || [];
+    const h = data.healthData || {};
+    const stats = h.stats || {};
+    const observers = h.observers || [];
+    const recent = h.recentPackets || [];
     const roleColor = ROLE_COLORS[n.role] || '#6b7280';
     const hasLoc = n.lat != null && n.lon != null;
     const nodeUrl = location.origin + '#/nodes/' + encodeURIComponent(n.public_key);
 
+    // Status calculation
+    const lastHeard = stats.lastHeard;
+    const statusAge = lastHeard ? (Date.now() - new Date(lastHeard).getTime()) : Infinity;
+    const role = (n.role || '').toLowerCase();
+    const isInfra = role === 'repeater' || role === 'room';
+    const degradedMs = isInfra ? 86400000 : 3600000;
+    const silentMs = isInfra ? 259200000 : 86400000;
+    const statusLabel = statusAge < degradedMs ? '🟢 Active' : statusAge < silentMs ? '🟡 Degraded' : '🔴 Silent';
+    const totalPackets = stats.totalPackets || n.advert_count || 0;
+
     panel.innerHTML = `
       <div class="node-detail">
         ${hasLoc ? `<div class="node-map-container node-detail-map" id="nodeMap" style="border-radius:8px;overflow:hidden;"></div>` : ''}
-        <div class="node-detail-name">${n.name || '(unnamed)'}</div>
-        <div class="node-detail-role"><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span></div>
+        <div class="node-detail-name">${escapeHtml(n.name || '(unnamed)')}</div>
+        <div class="node-detail-role"><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span> ${statusLabel}</div>
 
         <div class="node-detail-section">
           <h4>Public Key</h4>
@@ -391,14 +420,27 @@
         </div>
 
         <div class="node-detail-section">
-          <h4>Info</h4>
+          <h4>Overview</h4>
           <dl class="detail-meta">
+            <dt>Last Heard</dt><dd>${lastHeard ? timeAgo(lastHeard) : (n.last_seen ? timeAgo(n.last_seen) : '—')}</dd>
             <dt>First Seen</dt><dd>${n.first_seen ? new Date(n.first_seen).toLocaleString() : '—'}</dd>
-            <dt>Last Seen</dt><dd>${n.last_seen ? timeAgo(n.last_seen) : '—'}</dd>
-            <dt>Adverts</dt><dd>${n.advert_count || 0}</dd>
+            <dt>Total Packets</dt><dd>${totalPackets}</dd>
+            <dt>Packets Today</dt><dd>${stats.packetsToday || 0}</dd>
+            ${stats.avgSnr != null ? `<dt>Avg SNR</dt><dd>${stats.avgSnr.toFixed(1)} dB</dd>` : ''}
+            ${stats.avgHops ? `<dt>Avg Hops</dt><dd>${stats.avgHops}</dd>` : ''}
             ${hasLoc ? `<dt>Location</dt><dd>${n.lat.toFixed(5)}, ${n.lon.toFixed(5)}</dd>` : ''}
           </dl>
         </div>
+
+        ${observers.length ? `<div class="node-detail-section">
+          <h4>Heard By (${observers.length} observer${observers.length > 1 ? 's' : ''})</h4>
+          <div class="observer-list">
+            ${observers.map(o => `<div class="observer-row" style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">
+              <span style="font-weight:600">${escapeHtml(o.observer_name || o.observer_id)}</span>
+              <span style="color:var(--text-muted)">${o.packetCount} pkts · ${o.avgSnr != null ? 'SNR ' + o.avgSnr.toFixed(1) + 'dB' : ''}${o.avgRssi != null ? ' · RSSI ' + o.avgRssi.toFixed(0) : ''}</span>
+            </div>`).join('')}
+          </div>
+        </div>` : ''}
 
         <div style="text-align:center;margin-bottom:16px">
           <button class="btn-primary" id="copyUrlBtn">📋 Copy URL</button>
@@ -419,7 +461,6 @@
                 </div>
               </div>`;
             }).join('') : '<div class="text-muted" style="padding:8px">No recent adverts</div>'}
-            }).join('') : '<div style="padding:8px;color:#999">No recent adverts</div>'}
           </div>
         </div>
 
