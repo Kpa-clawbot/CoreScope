@@ -68,8 +68,8 @@
         <h1>${hasNodes ? 'My Mesh' : 'MeshCore Analyzer'}</h1>
         <p>${hasNodes ? 'Your nodes at a glance. Add more by searching below.' : 'Find your nodes to start monitoring them.'}</p>
         <div class="home-search-wrap">
-          <input type="text" id="homeSearch" placeholder="Search by node name or public key…" autocomplete="off" aria-label="Search nodes">
-          <div class="home-suggest" id="homeSuggest"></div>
+          <input type="text" id="homeSearch" placeholder="Search by node name or public key…" autocomplete="off" aria-label="Search nodes" role="combobox" aria-expanded="false" aria-owns="homeSuggest" aria-autocomplete="list" aria-activedescendant="">
+          <div class="home-suggest" id="homeSuggest" role="listbox"></div>
         </div>
       </section>
 
@@ -123,7 +123,15 @@
 
     // Checklist accordion
     container.querySelectorAll('.checklist-q').forEach(q => {
-      q.addEventListener('click', () => q.parentElement.classList.toggle('open'));
+      const toggle = () => {
+        const item = q.parentElement;
+        item.classList.toggle('open');
+        q.setAttribute('aria-expanded', item.classList.contains('open'));
+      };
+      q.addEventListener('click', toggle);
+      q.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+      });
     });
   }
 
@@ -135,7 +143,7 @@
     input.addEventListener('input', () => {
       clearTimeout(searchTimeout);
       const q = input.value.trim();
-      if (!q) { suggest.classList.remove('open'); return; }
+      if (!q) { suggest.classList.remove('open'); input.setAttribute('aria-expanded', 'false'); input.setAttribute('aria-activedescendant', ''); return; }
       searchTimeout = setTimeout(async () => {
         try {
           const data = await api('/nodes/search?q=' + encodeURIComponent(q));
@@ -143,9 +151,9 @@
           if (!nodes.length) {
             suggest.innerHTML = '<div class="suggest-empty">No nodes found</div>';
           } else {
-            suggest.innerHTML = nodes.slice(0, 10).map(n => {
+            suggest.innerHTML = nodes.slice(0, 10).map((n, idx) => {
               const claimed = isMyNode(n.public_key);
-              return `<div class="suggest-item" data-key="${n.public_key}" data-name="${escapeAttr(n.name || '')}">
+              return `<div class="suggest-item" role="option" id="suggest-${idx}" data-key="${n.public_key}" data-name="${escapeAttr(n.name || '')}">
                 <div class="suggest-main">
                   <span class="suggest-name">${escapeHtml(n.name || 'Unknown')}</span>
                   <small class="suggest-key">${truncate(n.public_key, 16)}</small>
@@ -160,6 +168,8 @@
             }).join('');
           }
           suggest.classList.add('open');
+          input.setAttribute('aria-expanded', 'true');
+          input.setAttribute('aria-activedescendant', '');
 
           // Claim buttons
           suggest.querySelectorAll('.suggest-claim').forEach(btn => {
@@ -179,7 +189,7 @@
               loadMyNodes();
             });
           });
-        } catch { suggest.classList.remove('open'); }
+        } catch { suggest.classList.remove('open'); input.setAttribute('aria-expanded', 'false'); }
       }, 200);
     });
 
@@ -187,6 +197,7 @@
       const item = e.target.closest('.suggest-item');
       if (!item || !item.dataset.key || e.target.closest('.suggest-claim')) return;
       suggest.classList.remove('open');
+      input.setAttribute('aria-expanded', 'false');
       input.value = '';
       loadHealth(item.dataset.key);
     });
@@ -199,7 +210,11 @@
 
   function handleOutsideClick(e) {
     const suggest = document.getElementById('homeSuggest');
-    if (suggest && !e.target.closest('.home-search-wrap')) suggest.classList.remove('open');
+    const input = document.getElementById('homeSearch');
+    if (suggest && !e.target.closest('.home-search-wrap')) {
+      suggest.classList.remove('open');
+      if (input) { input.setAttribute('aria-expanded', 'false'); input.setAttribute('aria-activedescendant', ''); }
+    }
   }
 
   function destroy() {
@@ -251,12 +266,12 @@
         // Build sparkline from recent packets (packet timestamps → hourly buckets)
         const sparkHtml = buildSparkline(h.recentPackets || []);
 
-        return `<div class="my-node-card ${status}" data-key="${mn.pubkey}">
+        return `<div class="my-node-card ${status}" data-key="${mn.pubkey}" tabindex="0" role="button">
           <div class="mnc-header">
             <div class="mnc-status">${statusDot}</div>
             <div class="mnc-name">${escapeHtml(name)}</div>
             <div class="mnc-role">${node.role || '?'}</div>
-            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove from My Mesh">✕</button>
+            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove from My Mesh" aria-label="Remove ${escapeAttr(name)} from My Mesh">✕</button>
           </div>
           <div class="mnc-status-text">${statusText}${stats.lastHeard ? ' · ' + timeAgo(stats.lastHeard) : ''}</div>
           <div class="mnc-metrics">
@@ -285,11 +300,11 @@
           </div>
         </div>`;
       } catch {
-        return `<div class="my-node-card silent" data-key="${mn.pubkey}">
+        return `<div class="my-node-card silent" data-key="${mn.pubkey}" tabindex="0" role="button">
           <div class="mnc-header">
             <div class="mnc-status">❓</div>
             <div class="mnc-name">${escapeHtml(mn.name || truncate(mn.pubkey, 12))}</div>
-            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove">✕</button>
+            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove" aria-label="Remove ${escapeAttr(mn.name || truncate(mn.pubkey, 12))} from My Mesh">✕</button>
           </div>
           <div class="mnc-status-text">Could not load data</div>
         </div>`;
@@ -321,9 +336,13 @@
 
     // Card click → health
     grid.querySelectorAll('.my-node-card').forEach(card => {
-      card.addEventListener('click', (e) => {
+      const handler = (e) => {
         if (e.target.closest('.mnc-remove') || e.target.closest('.mnc-btn')) return;
         loadHealth(card.dataset.key);
+      };
+      card.addEventListener('click', handler);
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(e); }
       });
     });
   }
@@ -342,9 +361,9 @@
     const bars = buckets.map(v => {
       const h = Math.max(2, Math.round((v / max) * 24));
       const opacity = v > 0 ? 0.4 + (v / max) * 0.6 : 0.1;
-      return `<div class="spark-bar" style="height:${h}px;opacity:${opacity}"></div>`;
+      return `<div class="home-spark-bar" style="height:${h}px;opacity:${opacity}"></div>`;
     }).join('');
-    return `<div class="spark-label">24h activity</div><div class="spark-bars">${bars}</div>`;
+    return `<div class="home-spark-label">24h activity</div><div class="home-spark-bars">${bars}</div>`;
   }
 
   // ==================== STATS ====================
@@ -413,13 +432,13 @@
             ${packets.length ? packets.slice(0, 10).map(p => {
               const decoded = p.decoded_json ? JSON.parse(p.decoded_json) : {};
               const obsId = p.observer_name || p.observer_id || '?';
-              return `<div class="timeline-item" data-pkt='${JSON.stringify({
+              return `<div class="timeline-item" tabindex="0" role="button" data-pkt='${JSON.stringify({
                 from: node.name || truncate(pubkey, 12),
                 observers: [obsId],
                 type: p.payload_type,
                 time: p.timestamp || p.created_at
               }).replace(/'/g, '&#39;')}'>
-                <span class="badge" style="background:var(--type-${payloadTypeColor(p.payload_type)})">${payloadTypeName(p.payload_type)}</span>
+                <span class="badge" style="background:var(--type-${payloadTypeColor(p.payload_type)})">${escapeHtml(payloadTypeName(p.payload_type))}</span>
                 <span>via ${escapeHtml(obsId)}</span>
                 <span class="time">${timeAgo(p.timestamp || p.created_at)}</span>
                 <span class="snr">${p.snr != null ? p.snr.toFixed(1) + ' dB' : ''}</span>
@@ -454,14 +473,16 @@
       // Scroll to health card
       card.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-      // Timeline click → journey
+      // Timeline click/keyboard → journey
       card.querySelectorAll('.timeline-item').forEach(item => {
-        item.addEventListener('click', () => {
-          try { showJourney(JSON.parse(item.dataset.pkt)); } catch {}
+        const activate = () => { try { showJourney(JSON.parse(item.dataset.pkt)); } catch {} };
+        item.addEventListener('click', activate);
+        item.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); }
         });
       });
     } catch (e) {
-      card.innerHTML = '<p style="color:var(--status-red);padding:12px">Failed to load node health.</p>';
+      card.innerHTML = '<p style="color:var(--status-red, #ef4444);padding:12px">Failed to load node health.</p>';
     }
   }
 
@@ -477,7 +498,7 @@
       const nodeHtml = `<div class="journey-node"><div class="node-name">${escapeHtml(n.name)}</div><div class="node-meta">${n.meta}</div></div>`;
       return i < nodes.length - 1 ? nodeHtml + '<div class="journey-arrow"></div>' : nodeHtml;
     }).join('');
-    el.innerHTML = `<div class="journey-title">Packet Journey — ${payloadTypeName(data.type)}</div><div class="journey-flow">${flow}</div>`;
+    el.innerHTML = `<div class="journey-title">Packet Journey — ${escapeHtml(payloadTypeName(data.type))}</div><div class="journey-flow">${flow}</div>`;
     el.classList.add('visible');
   }
 
@@ -501,7 +522,7 @@
       { q: '📍 Repeaters near you?',
         a: '<p><a href="#/map" style="color:var(--accent)">Check the network map</a> to see active repeaters.</p>' }
     ];
-    return items.map(i => `<div class="checklist-item"><div class="checklist-q">${i.q}</div><div class="checklist-a">${i.a}</div></div>`).join('');
+    return items.map(i => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${i.q}</div><div class="checklist-a">${i.a}</div></div>`).join('');
   }
 
   registerPage('home', { init, destroy });
