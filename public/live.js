@@ -121,7 +121,7 @@
     loadNodes(targetTs);
 
     // Fetch ALL packets from scrub point to now (no limit, no until)
-    fetch(`/api/packets?limit=2000&grouped=false&since=${encodeURIComponent(fetchFrom)}`)
+    fetch(`/api/packets?limit=10000&grouped=false&since=${encodeURIComponent(fetchFrom)}`)
       .then(r => r.json())
       .then(data => {
         const pkts = (data.packets || []).reverse(); // chronological order
