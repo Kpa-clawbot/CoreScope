@@ -948,21 +948,47 @@
 
   function resolveHopPositions(hops, payload) {
     const known = Object.values(nodeData);
+    
+    // First pass: find all candidates per hop
     const raw = hops.map(hop => {
-      let found = null;
-      for (const n of known) {
-        if (n.public_key.toLowerCase().startsWith(hop.toLowerCase())) { found = n; break; }
-      }
-      if (found && !(found.lat === 0 && found.lon === 0)) {
-        return { key: found.public_key, pos: [found.lat, found.lon], name: found.name || hop, known: true };
+      const hopLower = hop.toLowerCase();
+      const candidates = known.filter(n => 
+        n.public_key.toLowerCase().startsWith(hopLower) &&
+        n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0)
+      );
+      if (candidates.length === 1) {
+        return { key: candidates[0].public_key, pos: [candidates[0].lat, candidates[0].lon], name: candidates[0].name || hop, known: true };
+      } else if (candidates.length > 1) {
+        return { key: 'ambig-' + hop, pos: null, name: hop, known: false, candidates };
       }
       return { key: 'hop-' + hop, pos: null, name: hop, known: false };
     });
 
+    // Add sender position if available
     if (payload.pubKey && payload.lat != null && !(payload.lat === 0 && payload.lon === 0)) {
       const existing = raw.find(p => p.key === payload.pubKey);
       if (!existing) {
         raw.unshift({ key: payload.pubKey, pos: [payload.lat, payload.lon], name: payload.name || payload.pubKey.slice(0, 8), known: true });
+      }
+    }
+
+    // Second pass: disambiguate by geographic proximity to known hops
+    const knownPositions = raw.filter(h => h.known && h.pos).map(h => h.pos);
+    if (knownPositions.length > 0) {
+      const centerLat = knownPositions.reduce((s, p) => s + p[0], 0) / knownPositions.length;
+      const centerLon = knownPositions.reduce((s, p) => s + p[1], 0) / knownPositions.length;
+      const dist = (lat, lon) => Math.sqrt((lat - centerLat) ** 2 + (lon - centerLon) ** 2);
+
+      for (const hop of raw) {
+        if (hop.candidates) {
+          hop.candidates.sort((a, b) => dist(a.lat, a.lon) - dist(b.lat, b.lon));
+          const best = hop.candidates[0];
+          hop.key = best.public_key;
+          hop.pos = [best.lat, best.lon];
+          hop.name = best.name || best.public_key.slice(0, 8);
+          hop.known = true;
+          delete hop.candidates;
+        }
       }
     }
 
