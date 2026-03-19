@@ -413,22 +413,15 @@
   background: color-mix(in srgb, var(--surface-1) 95%, transparent);
   backdrop-filter: blur(12px);
   border-top: 1px solid var(--border);
-  padding: 4px 10px;
+  padding: 3px 8px;
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 6px;
 }
-.vcr-bar > .vcr-controls,
-.vcr-bar > .vcr-timeline-wrap {
-  /* These stack vertically in a wrapper — but we need them side by side with LCD */
+.vcr-bar > .vcr-controls {
+  display: flex; align-items: center; gap: 4px; flex-shrink: 0;
 }
-.vcr-left {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  flex: 1;
-  gap: 6px;
   min-width: 0;
 }
 
@@ -536,12 +529,6 @@
   100% { transform: scale(1); }
 }
 
-.vcr-timeline-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .vcr-scope-btns {
   display: flex;
   gap: 2px;
@@ -566,7 +553,7 @@
 .vcr-timeline-container {
   flex: 1;
   position: relative;
-  height: 16px;
+  height: 12px;
 }
 .vcr-timeline {
   width: 100%;
@@ -614,8 +601,8 @@
 .vcr-prompt-btn:hover { background: rgba(59,130,246,0.3); }
 
 /* Adjust feed position to not overlap VCR bar */
-.live-feed { bottom: 72px; }
-.feed-show-btn { bottom: 82px !important; }
+.live-feed { bottom: 40px; }
+.feed-show-btn { bottom: 50px !important; }
 
 /* Mobile VCR */
 @media (max-width: 600px) {
