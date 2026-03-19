@@ -485,9 +485,6 @@
   50% { opacity: 0.3; }
 }
 
-.vcr-clock {
-  display: none; /* replaced by LCD panel */
-}
 .vcr-lcd {
   display: flex;
   flex-direction: column;
@@ -513,9 +510,6 @@
   color: #4ade80;
   text-shadow: 0 0 6px rgba(74, 222, 128, 0.6);
   font-weight: 700;
-}
-.vcr-lcd-time {
-  display: none; /* replaced by canvas */
 }
 .vcr-lcd-canvas {
   width: 130px;
