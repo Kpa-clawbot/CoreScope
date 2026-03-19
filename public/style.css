@@ -1250,6 +1250,30 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .hide-col-rpt .col-rpt,
 .hide-col-details .col-details { display: none; }
 
+/* === Home page fixes === */
+
+/* #25 — Widen home page content cap from 720px to 1200px */
+.home-stats,
+.home-health,
+.home-journey,
+.home-checklist,
+.home-footer,
+.home-favorites { max-width: 1200px; }
+
+/* #40 — Increase suggest-claim touch target to ≥44px */
+.suggest-claim { min-height: 44px; min-width: 44px; padding: 10px 14px; display: inline-flex; align-items: center; justify-content: center; }
+
+/* #41 — Lower My Nodes grid minimum to prevent overflow on 375-640px */
+.my-nodes-grid { max-width: 1200px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+
+/* #42 — Stats cards: use grid with max-width per card on wide screens */
+.home-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 200px)); justify-content: center; }
+
+/* #44 — Namespaced home sparkline classes (avoid collision with observers .spark-bar) */
+.home-spark-label { font-size: .65rem; color: var(--text-muted); margin-bottom: 4px; }
+.home-spark-bars { display: flex; align-items: flex-end; gap: 2px; height: 28px; }
+.home-spark-bar { flex: 1; background: var(--accent); border-radius: 1px; min-width: 0; }
+
 /* === Bug fixes: #17 #20 #21 #69 === */
 
 /* #17 — Hash matrix mobile overflow */
