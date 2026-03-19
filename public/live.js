@@ -162,8 +162,8 @@
     function tick() {
       if (VCR.mode !== 'REPLAY') return;
       if (VCR.playhead >= VCR.buffer.length) {
-        // Caught up — go live
-        vcrResumeLive();
+        // Caught up — pause instead of auto-resuming live
+        vcrSetMode('PAUSED');
         return;
       }
       const entry = VCR.buffer[VCR.playhead];
@@ -342,17 +342,18 @@
 
     // Redraw sparkline (cheap, avoids double-buffer complexity)
     // Just draw playhead line on top — clear only the line area
-    let playTs;
+    let x;
     if (VCR.mode === 'LIVE' || VCR.playhead < 0) {
-      playTs = now;
-    } else if (VCR.playhead < VCR.buffer.length) {
-      playTs = VCR.buffer[VCR.playhead].ts;
+      x = cw; // rightmost = now
+    } else if (VCR.playhead >= 0 && VCR.playhead < VCR.buffer.length) {
+      const playTs = VCR.buffer[VCR.playhead].ts;
+      x = ((playTs - startTs) / scopeMs) * cw;
+    } else if (VCR.mode === 'PAUSED' && VCR.dragPct != null) {
+      // After scrub, hold at last drag position
+      x = VCR.dragPct * cw;
     } else {
-      playTs = now;
+      x = cw;
     }
-
-    const x = ((playTs - startTs) / scopeMs) * cw;
-    // We overlay a playhead marker — use a separate tiny canvas or just draw
     const playheadEl = document.getElementById('vcrPlayhead');
     if (playheadEl) {
       playheadEl.style.left = Math.max(0, Math.min(cw - 2, x)) + 'px';
