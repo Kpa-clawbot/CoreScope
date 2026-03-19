@@ -51,7 +51,7 @@
     const nodeName = escapeHtml(n.name || n.public_key.slice(0, 12));
 
     container.innerHTML = `
-      <div style="max-width:1100px;margin:0 auto;padding:20px">
+      <div style="max-width:1100px;margin:0 auto;padding:20px;height:100%;overflow-y:auto">
         <div style="margin-bottom:16px">
           <a href="#/nodes/${encodeURIComponent(n.public_key)}" style="color:var(--accent);text-decoration:none;font-size:14px">← Back to ${nodeName}</a>
           <h2 style="margin:8px 0 4px">📊 ${nodeName} — Analytics</h2>
