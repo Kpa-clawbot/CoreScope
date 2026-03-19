@@ -561,6 +561,59 @@
     });
     timelineEl.addEventListener('mouseleave', () => { timeTooltip.classList.add('hidden'); });
 
+    // Drag scrubbing on timeline
+    let dragging = false;
+    function scrubToX(clientX) {
+      const rect = timelineEl.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const now = Date.now();
+      const targetTs = now - VCR.timelineScope + pct * VCR.timelineScope;
+
+      let closest = 0;
+      let minDist = Infinity;
+      VCR.buffer.forEach((entry, i) => {
+        const dist = Math.abs(entry.ts - targetTs);
+        if (dist < minDist) { minDist = dist; closest = i; }
+      });
+
+      if (VCR.buffer.length > 0) {
+        stopReplay();
+        VCR.playhead = closest;
+        vcrSetMode('REPLAY');
+        updateTimelinePlayhead();
+        updateVCRUI();
+      }
+    }
+    timelineEl.addEventListener('mousedown', (e) => {
+      dragging = true;
+      scrubToX(e.clientX);
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      scrubToX(e.clientX);
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      if (VCR.mode === 'REPLAY') startReplay();
+    });
+    // Touch support
+    timelineEl.addEventListener('touchstart', (e) => {
+      dragging = true;
+      scrubToX(e.touches[0].clientX);
+      e.preventDefault();
+    }, { passive: false });
+    timelineEl.addEventListener('touchmove', (e) => {
+      if (!dragging) return;
+      scrubToX(e.touches[0].clientX);
+    });
+    timelineEl.addEventListener('touchend', () => {
+      if (!dragging) return;
+      dragging = false;
+      if (VCR.mode === 'REPLAY') startReplay();
+    });
+
     // Fetch historical timestamps for timeline, then start refresh
     fetchTimelineTimestamps().then(() => updateTimeline());
     setInterval(() => {

@@ -495,9 +495,13 @@
 .vcr-timeline {
   width: 100%;
   height: 100%;
-  cursor: pointer;
+  cursor: grab;
   border-radius: 3px;
   background: rgba(255,255,255,0.03);
+  touch-action: none;
+}
+.vcr-timeline:active, .vcr-timeline.dragging {
+  cursor: grabbing;
 }
 .vcr-playhead {
   position: absolute;
