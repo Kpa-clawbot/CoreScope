@@ -51,7 +51,29 @@
     if (tip) tip.remove();
   }
 
+  let _focusTrapCleanup = null;
+  let _nodePanelTrigger = null;
+
+  function trapFocus(container) {
+    function handler(e) {
+      if (e.key === 'Escape') { closeNodeDetail(); return; }
+      if (e.key !== 'Tab') return;
+      const focusable = container.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      if (!focusable.length) return;
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+      } else {
+        if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    }
+    container.addEventListener('keydown', handler);
+    return function () { container.removeEventListener('keydown', handler); };
+  }
+
   async function showNodeDetail(name) {
+    _nodePanelTrigger = document.activeElement;
+    if (_focusTrapCleanup) { _focusTrapCleanup(); _focusTrapCleanup = null; }
     const node = await lookupNode(name);
     selectedNode = name;
 
@@ -72,6 +94,8 @@
         <div class="ch-node-panel-body">
           <div class="ch-node-field" style="color:var(--text-muted)">No node record found — this sender has only been seen in channel messages, not via adverts.</div>
         </div>`;
+      _focusTrapCleanup = trapFocus(panel);
+      panel.querySelector('.ch-node-close')?.focus();
       return;
     }
 
@@ -97,15 +121,24 @@
           </div>` : ''}
           <a href="#/nodes/${n.public_key}" class="ch-node-link">View full node detail →</a>
         </div>`;
+      _focusTrapCleanup = trapFocus(panel);
+      panel.querySelector('.ch-node-close')?.focus();
     } catch (e) {
       panel.innerHTML = `<div class="ch-node-panel-header"><strong>${escapeHtml(name)}</strong><button class="ch-node-close" data-action="ch-close-node">✕</button></div><div class="ch-node-panel-body ch-empty">Failed to load</div>`;
+      _focusTrapCleanup = trapFocus(panel);
+      panel.querySelector('.ch-node-close')?.focus();
     }
   }
 
   function closeNodeDetail() {
+    if (_focusTrapCleanup) { _focusTrapCleanup(); _focusTrapCleanup = null; }
     const panel = document.getElementById('chNodePanel');
     if (panel) panel.classList.remove('open');
     selectedNode = null;
+    if (_nodePanelTrigger && typeof _nodePanelTrigger.focus === 'function') {
+      _nodePanelTrigger.focus();
+      _nodePanelTrigger = null;
+    }
   }
 
   function chBack() {
@@ -161,7 +194,7 @@
     if (!text) return '';
     return escapeHtml(text).replace(/@\[([^\]]+)\]/g, function(_, name) {
       const safeId = btoa(encodeURIComponent(name));
-      return '<span class="ch-mention ch-sender-link" data-node="' + safeId + '">@' + name + '</span>';
+      return '<span class="ch-mention ch-sender-link" tabindex="0" role="button" data-node="' + safeId + '">@' + name + '</span>';
     });
   }
 
@@ -223,6 +256,18 @@
         closeNodeDetail();
       }
     }
+    // Keyboard support for data-node elements (Bug #82)
+    msgEl.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        const el = e.target.closest('[data-node]');
+        if (el) {
+          e.preventDefault();
+          const name = decodeURIComponent(atob(el.dataset.node));
+          showNodeDetail(name);
+        }
+      }
+    });
+
     msgEl.addEventListener('click', handleNodeTap);
     // touchend fires more reliably on mobile for non-button elements
     let touchMoved = false;
@@ -403,9 +448,9 @@
 
       const safeId = btoa(encodeURIComponent(sender));
       return `<div class="ch-msg">
-        <div class="ch-avatar ch-tappable" style="background:${senderColor}" data-node="${safeId}">${senderLetter}</div>
+        <div class="ch-avatar ch-tappable" style="background:${senderColor}" tabindex="0" role="button" data-node="${safeId}">${senderLetter}</div>
         <div class="ch-msg-content">
-          <div class="ch-msg-sender ch-sender-link ch-tappable" style="color:${senderColor}" data-node="${safeId}">${escapeHtml(sender)}</div>
+          <div class="ch-msg-sender ch-sender-link ch-tappable" style="color:${senderColor}" tabindex="0" role="button" data-node="${safeId}">${escapeHtml(sender)}</div>
           <div class="ch-msg-bubble">${displayText}</div>
           <div class="ch-msg-meta">${meta.join(' · ')}${msg.packetId ? ` · <a href="#/packets/id/${msg.packetId}" class="ch-analyze-link">View packet →</a>` : ''}</div>
         </div>
