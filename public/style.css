@@ -1346,3 +1346,5 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   cursor: pointer;
   font-size: 16px;
 }
+
+.meshcore-marker { background: none !important; border: none !important; }

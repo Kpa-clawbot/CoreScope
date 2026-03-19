@@ -17,16 +17,44 @@
   // Safe escape — falls back to identity if app.js hasn't loaded yet
   const safeEsc = (typeof esc === 'function') ? esc : function (s) { return s; };
 
-  // Role → marker style (WCAG AA compliant: all ≥4.5:1 on both light/dark backgrounds)
+  // Distinct shapes + high-contrast WCAG AA colors for each role
   const ROLE_STYLE = {
-    repeater:  { color: '#1d4ed8', fill: true,  radius: 8, weight: 2 },
-    companion: { color: '#0369a1', fill: false, radius: 7, weight: 2 },
-    room:      { color: '#6d28d9', fill: true,  radius: 7, weight: 2 },
-    sensor:    { color: '#92400e', fill: true,  radius: 4, weight: 1 },
+    repeater:  { color: '#dc2626', shape: 'diamond',  radius: 10, weight: 2 },  // red diamond
+    companion: { color: '#2563eb', shape: 'circle',   radius: 8,  weight: 2 },  // blue circle
+    room:      { color: '#16a34a', shape: 'square',   radius: 9,  weight: 2 },  // green square
+    sensor:    { color: '#d97706', shape: 'triangle', radius: 8,  weight: 2 },  // amber triangle
   };
 
   const ROLE_LABELS = { repeater: 'Repeaters', companion: 'Companions', room: 'Room Servers', sensor: 'Sensors' };
-  const ROLE_COLORS = { repeater: '#1d4ed8', companion: '#0369a1', room: '#6d28d9', sensor: '#92400e' };
+  const ROLE_COLORS = { repeater: '#dc2626', companion: '#2563eb', room: '#16a34a', sensor: '#d97706' };
+
+  function makeMarkerIcon(role) {
+    const s = ROLE_STYLE[role] || ROLE_STYLE.companion;
+    const size = s.radius * 2 + 4;
+    const c = size / 2;
+    let path;
+    switch (s.shape) {
+      case 'diamond':
+        path = `<polygon points="${c},2 ${size-2},${c} ${c},${size-2} 2,${c}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+        break;
+      case 'square':
+        path = `<rect x="3" y="3" width="${size-6}" height="${size-6}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+        break;
+      case 'triangle':
+        path = `<polygon points="${c},2 ${size-2},${size-2} 2,${size-2}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+        break;
+      default: // circle
+        path = `<circle cx="${c}" cy="${c}" r="${c-2}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+    }
+    const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">${path}</svg>`;
+    return L.divIcon({
+      html: svg,
+      className: 'meshcore-marker',
+      iconSize: [size, size],
+      iconAnchor: [c, c],
+      popupAnchor: [0, -c],
+    });
+  }
 
   function init(container) {
     container.innerHTML = `
@@ -243,7 +271,9 @@
       const cbId = 'mcRole_' + role;
       const lbl = document.createElement('label');
       lbl.setAttribute('for', cbId);
-      lbl.innerHTML = `<input type="checkbox" id="${cbId}" data-role="${role}" ${filters[role] ? 'checked' : ''}> <span style="color:${ROLE_COLORS[role]};font-weight:600;" aria-hidden="true">●</span> ${ROLE_LABELS[role]} <span style="color:var(--text-muted)">(${count})</span>`;
+      const shapeMap = { repeater: '◆', companion: '●', room: '■', sensor: '▲' };
+      const shape = shapeMap[role] || '●';
+      lbl.innerHTML = `<input type="checkbox" id="${cbId}" data-role="${role}" ${filters[role] ? 'checked' : ''}> <span style="color:${ROLE_COLORS[role]};font-weight:600;" aria-hidden="true">${shape}</span> ${ROLE_LABELS[role]} <span style="color:var(--text-muted)">(${count})</span>`;
       lbl.querySelector('input').addEventListener('change', e => {
         filters[e.target.dataset.role] = e.target.checked;
         renderMarkers();
@@ -308,13 +338,9 @@
     });
 
     for (const node of filtered) {
-      const style = ROLE_STYLE[node.role] || ROLE_STYLE.companion;
-      const marker = L.circleMarker([node.lat, node.lon], {
-        radius: style.radius,
-        color: style.color,
-        fillColor: style.color,
-        fillOpacity: style.fill ? 0.8 : 0,
-        weight: style.weight,
+      const icon = makeMarkerIcon(node.role || 'companion');
+      const marker = L.marker([node.lat, node.lon], {
+        icon,
         alt: `${node.name || 'Unknown'} (${node.role || 'node'})`,
       });
 
