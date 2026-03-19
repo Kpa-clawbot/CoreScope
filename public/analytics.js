@@ -1141,7 +1141,8 @@
   async function renderNodesTab(el) {
     el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading node analytics…</div>';
     try {
-      const nodes = await api('/nodes?limit=200&sortBy=lastSeen');
+      const nodesResp = await api('/nodes?limit=200&sortBy=lastSeen');
+      const nodes = nodesResp.nodes || nodesResp;
       const myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
       const myKeys = new Set(myNodes.map(n => n.pubkey));
 
