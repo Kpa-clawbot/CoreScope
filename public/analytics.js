@@ -6,14 +6,6 @@
   function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
 
   // --- SVG helpers ---
-  function svgLine(points, color, w, h, pad, maxX, maxY) {
-    return points.map((v, i) => {
-      const x = pad + i * ((w - pad * 2) / Math.max(points.length - 1, 1));
-      const y = h - pad - (v / Math.max(maxY, 1)) * (h - pad * 2);
-      return `${x},${y}`;
-    }).join(' ');
-  }
-
   function sparkSvg(data, color, w = 120, h = 32) {
     if (!data.length) return '';
     const max = Math.max(...data, 1);
@@ -117,7 +109,7 @@
       renderTab('overview');
     } catch (e) {
       document.getElementById('analyticsContent').innerHTML =
-        `<div class="text-muted" style="padding:40px">Failed to load: ${e.message}</div>`;
+        `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">Failed to load: ${e.message}</div>`;
     }
   }
 
