@@ -707,10 +707,17 @@
       </div>
 
       <div class="analytics-card">
+        <h3>1-Byte Hash Usage Matrix</h3>
+        <p class="text-muted" style="margin:0 0 8px;font-size:0.8em">Each cell shows how many packets used that 1-byte hop prefix (row=high nibble, col=low nibble). Darker = more traffic.</p>
+        <div id="hashMatrix"></div>
+      </div>
+
+      <div class="analytics-card">
         <h3>1-Byte Collision Risk</h3>
         <div id="collisionList"><div class="text-muted" style="padding:8px">Loading…</div></div>
       </div>
     `;
+    renderHashMatrix(data.topHops);
     renderCollisions(data.topHops);
   }
 
@@ -736,6 +743,58 @@
     svg += '</svg>';
     svg += `<div class="timeline-legend"><span><span class="legend-dot" style="background:#ef4444"></span>1-byte</span><span><span class="legend-dot" style="background:#22c55e"></span>2-byte</span><span><span class="legend-dot" style="background:#3b82f6"></span>3-byte</span></div>`;
     return svg;
+  }
+
+  function renderHashMatrix(topHops) {
+    const el = document.getElementById('hashMatrix');
+    const oneByteHops = topHops.filter(h => h.size === 1);
+    if (!oneByteHops.length) { el.innerHTML = '<div class="text-muted">No 1-byte hops</div>'; return; }
+
+    // Build 16x16 grid: row = high nibble, col = low nibble
+    const grid = Array.from({ length: 16 }, () => Array(16).fill(0));
+    let maxCount = 0;
+    for (const hop of oneByteHops) {
+      const byte = parseInt(hop.hex, 16);
+      if (isNaN(byte)) continue;
+      const hi = (byte >> 4) & 0xF;
+      const lo = byte & 0xF;
+      grid[hi][lo] = hop.count;
+      if (hop.count > maxCount) maxCount = hop.count;
+    }
+
+    const nibbles = '0123456789ABCDEF'.split('');
+    const cellSize = 36;
+    const headerSize = 24;
+
+    let html = `<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:0.75em;font-family:monospace">`;
+    // Header row
+    html += `<tr><td style="width:${headerSize}px"></td>`;
+    for (const n of nibbles) {
+      html += `<td style="width:${cellSize}px;text-align:center;padding:2px 0;font-weight:bold;color:var(--text-muted)">${n}</td>`;
+    }
+    html += '</tr>';
+
+    for (let hi = 0; hi < 16; hi++) {
+      html += `<tr><td style="text-align:right;padding-right:4px;font-weight:bold;color:var(--text-muted)">${nibbles[hi]}</td>`;
+      for (let lo = 0; lo < 16; lo++) {
+        const count = grid[hi][lo];
+        const hex = nibbles[hi] + nibbles[lo];
+        let bg = 'transparent';
+        let color = 'var(--text-muted)';
+        if (count > 0) {
+          const intensity = Math.log(count + 1) / Math.log(maxCount + 1);
+          const r = Math.round(34 + intensity * (239 - 34));
+          const g = Math.round(197 - intensity * (197 - 68));
+          const b = Math.round(94 - intensity * (94 - 68));
+          bg = `rgb(${r},${g},${b})`;
+          color = intensity > 0.5 ? '#fff' : 'var(--text)';
+        }
+        html += `<td style="width:${cellSize}px;height:${cellSize}px;text-align:center;background:${bg};color:${color};border:1px solid var(--border);cursor:default" title="0x${hex}: ${count.toLocaleString()} packets">${count || ''}</td>`;
+      }
+      html += '</tr>';
+    }
+    html += '</table></div>';
+    el.innerHTML = html;
   }
 
   async function renderCollisions(topHops) {
