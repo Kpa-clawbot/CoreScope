@@ -1115,6 +1115,12 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
   transition: background 0.1s;
 }
 .node-filter-option:hover { background: var(--surface-2, rgba(255,255,255,0.08)); }
+.node-filter-option.node-filter-active { background: var(--accent); color: #fff; }
+
+/* Hide low-value columns on mobile */
+@media (max-width: 640px) {
+  .col-region, .col-rpt, .col-size { display: none; }
+}
 
 /* Clickable hop links */
 .hop-link {

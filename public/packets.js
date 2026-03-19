@@ -233,8 +233,8 @@
       <div class="filter-bar" id="pktFilters">
         <input type="text" placeholder="Packet hash…" id="fHash">
         <div class="node-filter-wrap" style="position:relative">
-          <input type="text" placeholder="Node name…" id="fNode" autocomplete="off">
-          <div class="node-filter-dropdown hidden" id="fNodeDropdown"></div>
+          <input type="text" placeholder="Node name…" id="fNode" autocomplete="off" role="combobox" aria-expanded="false" aria-owns="fNodeDropdown" aria-activedescendant="" aria-autocomplete="list">
+          <div class="node-filter-dropdown hidden" id="fNodeDropdown" role="listbox"></div>
         </div>
         <select id="fObserver"><option value="">All Observers</option></select>
         <select id="fRegion"><option value="">All Regions</option></select>
@@ -243,8 +243,8 @@
       </div>
       <table class="data-table" id="pktTable">
         <thead><tr>
-          <th></th><th>Region</th><th>Time</th><th>Hash</th><th>Size</th>
-          <th>Type</th><th>Observer</th><th>Path</th><th>Rpt</th><th>Details</th>
+          <th></th><th class="col-region">Region</th><th>Time</th><th>Hash</th><th class="col-size">Size</th>
+          <th>Type</th><th>Observer</th><th>Path</th><th class="col-rpt">Rpt</th><th>Details</th>
         </tr></thead>
         <tbody id="pktBody"></tbody>
       </table>
@@ -278,10 +278,14 @@
     const fNode = document.getElementById('fNode');
     const fNodeDrop = document.getElementById('fNodeDropdown');
     fNode.value = filters.nodeName || '';
+    let nodeActiveIdx = -1;
     fNode.addEventListener('input', debounce(async (e) => {
       const q = e.target.value.trim();
+      nodeActiveIdx = -1;
+      fNode.setAttribute('aria-activedescendant', '');
       if (!q) {
         fNodeDrop.classList.add('hidden');
+        fNode.setAttribute('aria-expanded', 'false');
         if (filters.node) { filters.node = undefined; filters.nodeName = undefined; loadPackets(); }
         return;
       }
@@ -289,23 +293,64 @@
         const resp = await fetch('/api/nodes/search?q=' + encodeURIComponent(q));
         const data = await resp.json();
         const nodes = data.nodes || [];
-        if (nodes.length === 0) { fNodeDrop.classList.add('hidden'); return; }
-        fNodeDrop.innerHTML = nodes.map(n =>
-          `<div class="node-filter-option" data-key="${n.public_key}" data-name="${escapeHtml(n.name || n.public_key.slice(0,8))}">${escapeHtml(n.name || n.public_key.slice(0,8))} <span style="color:var(--muted);font-size:0.8em">${n.public_key.slice(0,8)}</span></div>`
+        if (nodes.length === 0) { fNodeDrop.classList.add('hidden'); fNode.setAttribute('aria-expanded', 'false'); return; }
+        fNodeDrop.innerHTML = nodes.map((n, i) =>
+          `<div class="node-filter-option" id="fNodeOpt-${i}" role="option" data-key="${n.public_key}" data-name="${escapeHtml(n.name || n.public_key.slice(0,8))}">${escapeHtml(n.name || n.public_key.slice(0,8))} <span style="color:var(--muted);font-size:0.8em">${n.public_key.slice(0,8)}</span></div>`
         ).join('');
         fNodeDrop.classList.remove('hidden');
+        fNode.setAttribute('aria-expanded', 'true');
         fNodeDrop.querySelectorAll('.node-filter-option').forEach(opt => {
           opt.addEventListener('click', () => {
-            filters.node = opt.dataset.key;
-            filters.nodeName = opt.dataset.name;
-            fNode.value = opt.dataset.name;
-            fNodeDrop.classList.add('hidden');
-            loadPackets();
+            selectNodeOption(opt);
           });
         });
       } catch {}
     }, 250));
-    fNode.addEventListener('blur', () => { setTimeout(() => fNodeDrop.classList.add('hidden'), 200); });
+
+    function selectNodeOption(opt) {
+      filters.node = opt.dataset.key;
+      filters.nodeName = opt.dataset.name;
+      fNode.value = opt.dataset.name;
+      fNodeDrop.classList.add('hidden');
+      fNode.setAttribute('aria-expanded', 'false');
+      fNode.setAttribute('aria-activedescendant', '');
+      nodeActiveIdx = -1;
+      loadPackets();
+    }
+
+    fNode.addEventListener('keydown', (e) => {
+      const options = fNodeDrop.querySelectorAll('.node-filter-option');
+      if (!options.length || fNodeDrop.classList.contains('hidden')) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        nodeActiveIdx = Math.min(nodeActiveIdx + 1, options.length - 1);
+        updateNodeActive(options);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        nodeActiveIdx = Math.max(nodeActiveIdx - 1, 0);
+        updateNodeActive(options);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (nodeActiveIdx >= 0 && options[nodeActiveIdx]) selectNodeOption(options[nodeActiveIdx]);
+      } else if (e.key === 'Escape') {
+        fNodeDrop.classList.add('hidden');
+        fNode.setAttribute('aria-expanded', 'false');
+        nodeActiveIdx = -1;
+      }
+    });
+
+    function updateNodeActive(options) {
+      options.forEach((o, i) => {
+        o.classList.toggle('node-filter-active', i === nodeActiveIdx);
+        o.setAttribute('aria-selected', i === nodeActiveIdx ? 'true' : 'false');
+      });
+      if (nodeActiveIdx >= 0 && options[nodeActiveIdx]) {
+        fNode.setAttribute('aria-activedescendant', options[nodeActiveIdx].id);
+        options[nodeActiveIdx].scrollIntoView({ block: 'nearest' });
+      }
+    }
+
+    fNode.addEventListener('blur', () => { setTimeout(() => { fNodeDrop.classList.add('hidden'); fNode.setAttribute('aria-expanded', 'false'); }, 200); });
 
     // Delegated click/keyboard handler for table rows
     const pktBody = document.getElementById('pktBody');
@@ -353,14 +398,14 @@
         const isSingle = p.count <= 1;
         html += `<tr class="${isSingle ? '' : 'group-header'} ${isExpanded ? 'expanded' : ''}" data-hash="${p.hash}" data-action="${isSingle ? 'select-hash' : 'toggle-select'}" data-value="${p.hash}" tabindex="0" role="row">
           <td style="width:28px;text-align:center;cursor:pointer">${isSingle ? '' : (isExpanded ? '▼' : '▶')}</td>
-          <td>${groupRegion ? `<span class="badge-region">${groupRegion}</span>` : '—'}</td>
+          <td class="col-region">${groupRegion ? `<span class="badge-region">${groupRegion}</span>` : '—'}</td>
           <td>${timeAgo(p.latest)}</td>
           <td class="mono">${truncate(p.hash || '—', 8)}</td>
-          <td>${groupSize ? groupSize + 'B' : '—'}</td>
+          <td class="col-size">${groupSize ? groupSize + 'B' : '—'}</td>
           <td>${p.payload_type != null ? `<span class="badge badge-${groupTypeClass}">${groupTypeName}</span>` : '—'}</td>
           <td>${isSingle ? truncate(p.observer_name || p.observer_id || '—', 16) : truncate(p.observer_name || p.observer_id || '—', 10) + (p.observer_count > 1 ? ' +' + (p.observer_count - 1) : '')}</td>
           <td><span class="path-hops">${groupPathStr}</span></td>
-          <td>${isSingle ? '' : p.count}</td>
+          <td class="col-rpt">${isSingle ? '' : p.count}</td>
           <td>${getDetailPreview((() => { try { return JSON.parse(p.decoded_json || '{}'); } catch { return {}; } })())}</td>
         </tr>`;
         // Child rows (loaded async when expanded)
@@ -374,14 +419,14 @@
             try { childPath = JSON.parse(c.path_json || '[]'); } catch {}
             const childPathStr = renderPath(childPath);
             html += `<tr class="group-child" data-id="${c.id}" data-action="select" data-value="${c.id}" tabindex="0" role="row">
-              <td></td><td>${childRegion ? `<span class="badge-region">${childRegion}</span>` : '—'}</td>
+              <td></td><td class="col-region">${childRegion ? `<span class="badge-region">${childRegion}</span>` : '—'}</td>
               <td>${timeAgo(c.timestamp)}</td>
               <td class="mono">${truncate(c.hash || '', 8)}</td>
-              <td>${size}B</td>
+              <td class="col-size">${size}B</td>
               <td><span class="badge badge-${typeClass}">${typeName}</span></td>
               <td>${truncate(c.observer_name || c.observer_id || '—', 16)}</td>
               <td><span class="path-hops">${childPathStr}</span></td>
-              <td></td>
+              <td class="col-rpt"></td>
               <td>${getDetailPreview((() => { try { return JSON.parse(c.decoded_json); } catch { return {}; } })())}</td>
             </tr>`;
           }
@@ -404,14 +449,14 @@
       const detail = getDetailPreview(decoded);
 
       return `<tr data-id="${p.id}" data-action="select" data-value="${p.id}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}">
-        <td></td><td>${region ? `<span class="badge-region">${region}</span>` : '—'}</td>
+        <td></td><td class="col-region">${region ? `<span class="badge-region">${region}</span>` : '—'}</td>
         <td>${timeAgo(p.timestamp)}</td>
         <td class="mono">${truncate(p.hash || String(p.id), 8)}</td>
-        <td>${size}B</td>
+        <td class="col-size">${size}B</td>
         <td><span class="badge badge-${typeClass}">${typeName}</span></td>
         <td>${truncate(p.observer_name || p.observer_id || '—', 16)}</td>
         <td><span class="path-hops">${pathStr}</span></td>
-        <td></td>
+        <td class="col-rpt"></td>
         <td>${detail}</td>
       </tr>`;
     }).join('');
@@ -664,9 +709,10 @@
 
   // BYOP modal — decode only, no DB injection
   function showBYOP() {
+    const triggerBtn = document.querySelector('[data-action="pkt-byop"]');
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
-    overlay.innerHTML = '<div class="modal byop-modal">'
+    overlay.innerHTML = '<div class="modal byop-modal" role="dialog" aria-label="Decode a Packet" aria-modal="true">'
       + '<div class="byop-header"><h3>📦 Decode a Packet</h3><button class="btn-icon byop-x" title="Close">✕</button></div>'
       + '<p class="text-muted" style="margin:0 0 12px;font-size:.85rem">Paste raw hex bytes from your radio or MQTT feed:</p>'
       + '<textarea id="byopHex" class="byop-input" placeholder="e.g. 15C31A8D4674FEAE37..." spellcheck="false"></textarea>'
@@ -675,9 +721,29 @@
       + '</div>';
     document.body.appendChild(overlay);
 
-    const close = () => overlay.remove();
+    const modal = overlay.querySelector('.byop-modal');
+    const close = () => { overlay.remove(); if (triggerBtn) triggerBtn.focus(); };
     overlay.querySelector('.byop-x').onclick = close;
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    // Focus trap
+    function getFocusable() {
+      return modal.querySelectorAll('textarea, button, input, [tabindex]:not([tabindex="-1"])');
+    }
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+      if (e.key === 'Tab') {
+        const focusable = getFocusable();
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey) {
+          if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+        } else {
+          if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      }
+    });
 
     const textarea = overlay.querySelector('#byopHex');
     textarea.focus();
