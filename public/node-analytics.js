@@ -51,11 +51,11 @@
     const nodeName = escapeHtml(n.name || n.public_key.slice(0, 12));
 
     container.innerHTML = `
-      <div style="max-width:1100px;margin:0 auto;padding:20px;height:100%;overflow-y:auto">
-        <div style="margin-bottom:16px">
-          <a href="#/nodes/${encodeURIComponent(n.public_key)}" style="color:var(--accent);text-decoration:none;font-size:14px">← Back to ${nodeName}</a>
-          <h2 style="margin:8px 0 4px">📊 ${nodeName} — Analytics</h2>
-          <div style="color:var(--text-muted);font-size:12px">${n.role || 'Unknown role'} · ${s.totalPackets} packets in ${days}d window</div>
+      <div style="max-width:1000px;margin:0 auto;padding:12px 16px;height:100%;overflow-y:auto">
+        <div style="margin-bottom:12px">
+          <a href="#/nodes/${encodeURIComponent(n.public_key)}" style="color:var(--accent);text-decoration:none;font-size:12px">← Back to ${nodeName}</a>
+          <h2 style="margin:4px 0 2px;font-size:18px">📊 ${nodeName} — Analytics</h2>
+          <div style="color:var(--text-muted);font-size:11px">${n.role || 'Unknown role'} · ${s.totalPackets} packets in ${days}d window</div>
         </div>
 
         <div class="analytics-time-range" id="timeRangeBtns">
@@ -69,56 +69,69 @@
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Availability</div>
             <div class="analytics-stat-value">${s.availabilityPct}%</div>
+            <div class="analytics-stat-desc">% of time windows with at least one packet</div>
           </div>
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Signal Grade</div>
             <div class="analytics-stat-value" style="color:${GRADE_COLORS[s.signalGrade]||'var(--text)'}">${s.signalGrade}</div>
+            <div class="analytics-stat-desc">A–F based on average SNR across all observers</div>
           </div>
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Packets / Day</div>
             <div class="analytics-stat-value">${s.avgPacketsPerDay}</div>
+            <div class="analytics-stat-desc">Average daily packet volume in this window</div>
           </div>
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Observers</div>
             <div class="analytics-stat-value">${s.uniqueObservers}</div>
+            <div class="analytics-stat-desc">Distinct stations that heard this node</div>
           </div>
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Relay %</div>
             <div class="analytics-stat-value">${s.relayPct}%</div>
+            <div class="analytics-stat-desc">Packets forwarded through repeaters vs direct</div>
           </div>
           <div class="analytics-stat-card">
             <div class="analytics-stat-label">Longest Silence</div>
-            <div class="analytics-stat-value" style="font-size:22px">${formatSilence(s.longestSilenceMs)}</div>
+            <div class="analytics-stat-value" style="font-size:18px">${formatSilence(s.longestSilenceMs)}</div>
+            <div class="analytics-stat-desc">Longest gap between consecutive packets</div>
           </div>
         </div>
 
         <div class="analytics-charts">
           <div class="analytics-chart-card full">
             <h4>Activity Timeline</h4>
+            <div class="analytics-chart-desc">Packet count per time bucket — shows when this node is most active</div>
             <canvas id="activityChart"></canvas>
           </div>
           <div class="analytics-chart-card">
             <h4>SNR Trend</h4>
+            <div class="analytics-chart-desc">Signal-to-noise ratio over time — higher is better reception</div>
             <canvas id="snrChart"></canvas>
           </div>
           <div class="analytics-chart-card">
             <h4>Packet Types</h4>
+            <div class="analytics-chart-desc">Breakdown of advert, position, text, and other packet types</div>
             <canvas id="packetTypeChart"></canvas>
           </div>
           <div class="analytics-chart-card">
             <h4>Observer Coverage</h4>
+            <div class="analytics-chart-desc">Which stations hear this node and how often</div>
             <canvas id="observerChart"></canvas>
           </div>
           <div class="analytics-chart-card">
             <h4>Hop Distribution</h4>
+            <div class="analytics-chart-desc">How many repeater hops packets take — 0 means direct</div>
             <canvas id="hopChart"></canvas>
           </div>
           <div class="analytics-chart-card full">
             <h4>Uptime Heatmap</h4>
+            <div class="analytics-chart-desc">Hour-by-hour activity grid — darker = more packets in that slot</div>
             <div id="heatmapGrid" class="analytics-heatmap"></div>
           </div>
           ${data.peerInteractions.length ? `<div class="analytics-chart-card full">
             <h4>Peer Interactions</h4>
+            <div class="analytics-chart-desc">Nodes this device has exchanged messages with</div>
             <table class="analytics-peer-table">
               <thead><tr><th>Peer</th><th>Messages</th><th>Last Contact</th></tr></thead>
               <tbody>${data.peerInteractions.map(p => `<tr>
