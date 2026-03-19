@@ -125,7 +125,7 @@
         n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0)
       );
       if (candidates.length === 1) {
-        return { lat: candidates[0].lat, lon: candidates[0].lon, name: candidates[0].name || hop, resolved: true };
+        return { lat: candidates[0].lat, lon: candidates[0].lon, name: candidates[0].name || hop, pubkey: candidates[0].public_key, role: candidates[0].role, resolved: true };
       } else if (candidates.length > 1) {
         return { name: hop, resolved: false, candidates };
       }
@@ -144,6 +144,7 @@
           const best = hop.candidates[0];
           hop.lat = best.lat; hop.lon = best.lon;
           hop.name = best.name || hop.name;
+          hop.pubkey = best.public_key; hop.role = best.role;
           hop.resolved = true;
         }
       }
@@ -164,10 +165,23 @@
 
     // Add numbered markers at each hop
     positions.forEach((p, i) => {
-      L.circleMarker([p.lat, p.lon], {
-        radius: 10, fillColor: i === 0 ? '#22c55e' : i === positions.length - 1 ? '#ef4444' : '#f59e0b',
+      const color = i === 0 ? '#22c55e' : i === positions.length - 1 ? '#ef4444' : '#f59e0b';
+      const label = i === 0 ? 'Origin' : i === positions.length - 1 ? 'Destination' : `Hop ${i}`;
+      const marker = L.circleMarker([p.lat, p.lon], {
+        radius: 10, fillColor: color,
         fillOpacity: 0.9, color: '#fff', weight: 2
-      }).addTo(routeLayer).bindTooltip(`${i + 1}. ${p.name}`, { permanent: true, direction: 'top', className: 'route-tooltip' });
+      }).addTo(routeLayer);
+      
+      marker.bindTooltip(`${i + 1}. ${p.name}`, { permanent: true, direction: 'top', className: 'route-tooltip' });
+      
+      const popupHtml = `<div style="font-size:12px;min-width:160px">
+        <div style="font-weight:700;margin-bottom:4px">${label}: ${esc(p.name)}</div>
+        <div style="color:#9ca3af;font-size:11px;margin-bottom:4px">${p.role || 'unknown'}</div>
+        <div style="font-family:monospace;font-size:10px;color:#6b7280;margin-bottom:6px;word-break:break-all">${esc(p.pubkey || '')}</div>
+        <div style="font-size:11px;color:#9ca3af">${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}</div>
+        ${p.pubkey ? `<div style="margin-top:6px"><a href="#/nodes/${p.pubkey}" style="color:var(--accent);font-size:11px">View Node →</a></div>` : ''}
+      </div>`;
+      marker.bindPopup(popupHtml, { className: 'route-popup' });
     });
 
     // Fit map to route
