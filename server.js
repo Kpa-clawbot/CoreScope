@@ -1778,6 +1778,37 @@ server.listen(process.env.PORT || config.port, () => {
       }
     } catch (e) { console.error('[pre-warm] subpaths:', e.message); }
     console.log(`[pre-warm] subpaths: ${Date.now() - t0}ms`);
+
+    // Background refresh jobs — recompute expensive caches before TTL expires
+    // so no user ever hits a cold compute path
+    const port = process.env.PORT || config.port;
+    const warmUrl = (path) => {
+      http.get(`http://127.0.0.1:${port}${path}?nocache=1`, (res) => {
+        res.resume(); // drain response
+      }).on('error', () => {});
+    };
+
+    const refreshJobs = [
+      // [interval seconds, endpoints to warm]
+      [TTL.analyticsRF * 0.8, ['/api/analytics/rf']],
+      [TTL.analyticsTopology * 0.8, ['/api/analytics/topology']],
+      [TTL.analyticsChannels * 0.8, ['/api/analytics/channels']],
+      [TTL.analyticsHashSizes * 0.8, ['/api/analytics/hash-sizes']],
+      [TTL.analyticsSubpaths * 0.8, [
+        '/api/analytics/subpaths?minLen=2&maxLen=2&limit=50',
+        '/api/analytics/subpaths?minLen=3&maxLen=3&limit=30',
+        '/api/analytics/subpaths?minLen=4&maxLen=4&limit=20',
+        '/api/analytics/subpaths?minLen=5&maxLen=8&limit=15',
+      ]],
+      [TTL.bulkHealth * 0.8, ['/api/nodes/bulk-health?limit=50']],
+    ];
+
+    for (const [intervalSec, paths] of refreshJobs) {
+      setInterval(() => {
+        for (const p of paths) warmUrl(p);
+      }, intervalSec * 1000);
+    }
+    console.log(`[background] ${refreshJobs.length} refresh jobs scheduled`);
   }, 1000);
 });
 
