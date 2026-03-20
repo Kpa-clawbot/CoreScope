@@ -18,7 +18,7 @@
       if (cached && !cached.fetchedAt) return cached; // legacy null entries
     }
     try {
-      const data = await api('/nodes/search?q=' + encodeURIComponent(name));
+      const data = await api('/nodes/search?q=' + encodeURIComponent(name), { ttl: 10000 });
       // Try exact match first, then case-insensitive, then contains
       const nodes = data.nodes || [];
       const match = nodes.find(n => n.name === name)
@@ -110,7 +110,7 @@
     }
 
     try {
-      const detail = await api('/nodes/' + encodeURIComponent(node.public_key));
+      const detail = await api('/nodes/' + encodeURIComponent(node.public_key), { ttl: 15000 });
       const n = detail.node;
       const adverts = detail.recentAdverts || [];
       const role = n.is_repeater ? '📡 Repeater' : n.is_room ? '🏠 Room' : n.is_sensor ? '🌡 Sensor' : '📻 Companion';
@@ -389,7 +389,7 @@
 
   async function loadChannels(silent) {
     try {
-      const data = await api('/channels');
+      const data = await api('/channels', { ttl: 15000 });
       channels = (data.channels || []).sort((a, b) => (b.lastActivity || '').localeCompare(a.lastActivity || ''));
       renderChannelList();
     } catch (e) {
@@ -451,7 +451,7 @@
     msgEl.innerHTML = '<div class="ch-loading">Loading messages…</div>';
 
     try {
-      const data = await api(`/channels/${hash}/messages?limit=200`);
+      const data = await api(`/channels/${hash}/messages?limit=200`, { ttl: 10000 });
       messages = data.messages || [];
       renderMessages();
       scrollToBottom();
@@ -466,7 +466,7 @@
     if (!msgEl) return;
     const wasAtBottom = msgEl.scrollHeight - msgEl.scrollTop - msgEl.clientHeight < 60;
     try {
-      const data = await api(`/channels/${selectedHash}/messages?limit=200`);
+      const data = await api(`/channels/${selectedHash}/messages?limit=200`, { ttl: 10000 });
       const newMsgs = data.messages || [];
       // #92: Use message ID/hash for change detection instead of count + timestamp
       var _getLastId = function (arr) { var m = arr.length ? arr[arr.length - 1] : null; return m ? (m.id || m.packetId || m.timestamp || '') : ''; };
