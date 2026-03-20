@@ -778,12 +778,12 @@ app.get('/api/nodes/network-status', (req, res) => {
 });
 
 app.get('/api/nodes/:pubkey', (req, res) => {
-  const _ck = 'node:' + req.params.pubkey;
+  const pubkey = req.params.pubkey;
+  const _ck = 'node:' + pubkey;
   const _c = cache.get(_ck); if (_c) return res.json(_c);
-  const node = db.getNode(req.params.pubkey);
+  const node = db.db.prepare('SELECT * FROM nodes WHERE public_key = ?').get(pubkey);
   if (!node) return res.status(404).json({ error: 'Not found' });
-  const recentAdverts = node.recentPackets || [];
-  delete node.recentPackets;
+  const recentAdverts = (pktStore.byNode.get(pubkey) || []).slice(-20).reverse();
   const _nResult = { node, recentAdverts };
   cache.set(_ck, _nResult, TTL.nodeDetail);
   res.json(_nResult);
