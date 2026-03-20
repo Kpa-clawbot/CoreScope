@@ -30,6 +30,32 @@ const db = require('./db');
 const pktStore = new PacketStore(db, config.packetStore || {}).load();
 const channelKeys = require("./config.json").channelKeys || {};
 
+// Auto-derive keys for hashtag channels: SHA256("#name") first 16 bytes
+// Any channel starting with # can be decrypted algorithmically
+const crypto = require('crypto');
+function deriveHashtagKey(name) {
+  return crypto.createHash('sha256').update(name).digest('hex').substring(0, 32);
+}
+// Seed with known hashtag channels from already-decrypted data
+const knownHashtags = new Set();
+try {
+  const rows = db.db.prepare("SELECT DISTINCT json_extract(decoded_json, '$.channel') as ch FROM packets WHERE json_extract(decoded_json, '$.type') = 'CHAN'").all();
+  for (const r of rows) {
+    if (r.ch && r.ch.startsWith('#')) knownHashtags.add(r.ch);
+  }
+} catch {}
+// Add any hashtag keys from config that we might not have seen yet
+for (const name of Object.keys(channelKeys)) {
+  if (name.startsWith('#')) knownHashtags.add(name);
+}
+// Derive and add keys for all known hashtags
+for (const name of knownHashtags) {
+  if (!channelKeys[name]) {
+    channelKeys[name] = deriveHashtagKey(name);
+  }
+}
+console.log(`[channels] ${Object.keys(channelKeys).length} channel keys (${knownHashtags.size} auto-derived hashtags)`);
+
 // --- Cache TTL config (seconds → ms) ---
 const _ttlCfg = config.cacheTTL || {};
 const TTL = {
