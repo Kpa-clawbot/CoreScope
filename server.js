@@ -107,6 +107,12 @@ const perfStats = {
 
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api/')) return next();
+  // Benchmark mode: bypass cache when ?nocache=1
+  if (req.query.nocache === '1') {
+    const origGet = cache.get.bind(cache);
+    cache.get = () => null;
+    res.on('finish', () => { cache.get = origGet; });
+  }
   const start = process.hrtime.bigint();
   const origEnd = res.end;
   res.end = function(...args) {
