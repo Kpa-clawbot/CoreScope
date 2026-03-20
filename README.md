@@ -4,14 +4,14 @@
 
 Collects MeshCore packets via MQTT, decodes them, and presents a full web UI with live packet feed, node map, channel chat, packet tracing, per-node analytics, and more.
 
-![Live View — Bay Area mesh network with real-time packet routing](docs/screenshots/Live-view-iOS.png)
+![Live VCR playback — watch packets flow across the Bay Area mesh](docs/screenshots/MeshVCR.gif)
 
 ## ✨ Features
 
 ### 📡 Live Trace Map
 Real-time animated map with packet route visualization, VCR-style playback controls, and a retro LCD clock. Replay the last 24 hours of mesh activity, scrub through the timeline, or watch packets flow live at up to 4× speed.
 
-![Live VCR playback](docs/screenshots/MeshVCR.gif)
+<img src="docs/screenshots/Live-view-iOS.png" alt="Live view on iOS" width="300">
 
 ### 📦 Packet Feed
 Filterable real-time packet stream with byte-level breakdown, Excel-like resizable columns, and a detail pane. Toggle "My Nodes" to focus on your mesh.
@@ -114,8 +114,6 @@ Open `http://localhost:3000` in your browser.
 
 ### Generate Test Data
 
-To populate the analyzer with synthetic packets for testing/demo:
-
 ```bash
 # Generate and inject 200 packets via API
 node tools/generate-packets.js --api --count 200
@@ -127,10 +125,10 @@ node tools/generate-packets.js --json --count 50
 ### Run Tests
 
 ```bash
-# End-to-end test (starts server, injects packets, validates all APIs)
+# End-to-end test
 DB_PATH=/tmp/test-e2e.db PORT=13590 node tools/e2e-test.js
 
-# Frontend smoke test (validates pages load and render correctly)
+# Frontend smoke test
 DB_PATH=/tmp/test-fe.db PORT=13591 node tools/frontend-test.js
 ```
 
