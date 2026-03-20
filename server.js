@@ -45,7 +45,7 @@ function computeContentHash(rawHex) {
     return crypto.createHash('sha256').update(toHash).digest('hex').slice(0, 16);
   } catch { return rawHex.slice(0, 16); }
 }
-const db = require('./db')
+const db = require('./db');
 const pktStore = new PacketStore(db, config.packetStore || {}).load();
 const configuredChannelKeys = config.channelKeys || {};
 const hashChannels = Array.isArray(config.hashChannels) ? config.hashChannels : [];
