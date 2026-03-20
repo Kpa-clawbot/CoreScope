@@ -1351,17 +1351,28 @@ const channelHashNames = {};
 
 app.get('/api/channels', (req, res) => {
   const _c = cache.get('channels'); if (_c) return res.json(_c);
-  const packets = pktStore.filter(p => p.payload_type === 5).sort((a,b) => b.timestamp > a.timestamp ? 1 : -1);
+  // Single pass: only scan type-5 packets via filter (already in memory)
   const channelMap = {};
 
-  for (const pkt of packets) {
+  for (const pkt of pktStore.all()) {
+    if (pkt.payload_type !== 5) continue;
     let decoded;
     try { decoded = JSON.parse(pkt.decoded_json); } catch { continue; }
+
+    // Companion bridge messages (no raw_hex)
+    if (!pkt.raw_hex) {
+      const ch = decoded.channel_idx !== undefined ? `c${decoded.channel_idx}` : null;
+      if (!ch) continue;
+      if (!channelMap[ch]) {
+        channelMap[ch] = { hash: ch, name: `Companion Ch ${decoded.channel_idx}`, encrypted: false, lastMessage: null, lastSender: null, messageCount: 0, lastActivity: pkt.timestamp };
+      }
+      continue;
+    }
+
     const ch = decoded.channelHash !== undefined ? decoded.channelHash : decoded.channel_idx;
     if (ch === undefined) continue;
     
     const knownName = channelHashNames[ch];
-    // If hash matches a known channel but decryption failed, it's a collision — separate bucket
     const isDecrypted = decoded.type === 'CHAN' || decoded.text;
     const isCollision = !!(knownName && !isDecrypted && decoded.encryptedData);
     const key = isCollision ? `unk_${ch}` : String(ch);
@@ -1371,14 +1382,11 @@ app.get('/api/channels', (req, res) => {
         hash: key,
         name: isCollision ? `Unknown (hash 0x${Number(ch).toString(16).toUpperCase()})` : (knownName || `Channel 0x${Number(ch).toString(16).toUpperCase()}`),
         encrypted: isCollision || !knownName,
-        lastMessage: null,
-        lastSender: null,
-        messageCount: 0,
-        lastActivity: pkt.timestamp,
+        lastMessage: null, lastSender: null, messageCount: 0, lastActivity: pkt.timestamp,
       };
     }
     channelMap[key].messageCount++;
-    if (!channelMap[key].lastMessage || pkt.timestamp >= channelMap[key].lastActivity) {
+    if (pkt.timestamp >= channelMap[key].lastActivity) {
       channelMap[key].lastActivity = pkt.timestamp;
       if (decoded.text) {
         const colonIdx = decoded.text.indexOf(': ');
@@ -1386,27 +1394,6 @@ app.get('/api/channels', (req, res) => {
         channelMap[key].lastSender = decoded.sender || null;
       }
     }
-  }
-
-  // Also include companion bridge messages (no raw_hex, have text directly)
-  const companionPkts = pktStore.filter(p => p.payload_type === 5 && !p.raw_hex).sort((a,b) => b.timestamp > a.timestamp ? 1 : -1);
-  for (const pkt of companionPkts) {
-    let decoded;
-    try { decoded = JSON.parse(pkt.decoded_json); } catch { continue; }
-    const ch = decoded.channel_idx !== undefined ? `c${decoded.channel_idx}` : null;
-    if (!ch) continue;
-    if (!channelMap[ch]) {
-      channelMap[ch] = {
-        hash: ch,
-        name: `Companion Ch ${decoded.channel_idx}`,
-        encrypted: false,
-        lastMessage: null,
-        lastSender: null,
-        messageCount: 0,
-        lastActivity: pkt.timestamp,
-      };
-    }
-    // Don't double-count if already counted above
   }
 
   const _chResult = { channels: Object.values(channelMap) };
