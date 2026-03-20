@@ -53,6 +53,20 @@ Full experience on your phone — proper touch controls, iOS safe area support, 
 - **Mobile Responsive** — proper two-row VCR bar, iOS safe area support, touch-friendly
 - **Accessible** — ARIA patterns, keyboard navigation, screen reader support, distinct marker shapes
 
+### ⚡ Performance (v2.1.0)
+
+Two-layer caching architecture: in-memory packet store + TTL response cache. All packet reads served from RAM — SQLite is write-only. Heavy endpoints pre-warmed on startup.
+
+| Endpoint | Before | After | Speedup |
+|---|---|---|---|
+| Bulk Health | 7,059 ms | 1 ms | **7,059×** |
+| Node Analytics | 381 ms | 1 ms | **381×** |
+| Topology | 685 ms | 2 ms | **342×** |
+| Node Health | 195 ms | 1 ms | **195×** |
+| Node Detail | 133 ms | 1 ms | **133×** |
+
+See [PERFORMANCE.md](PERFORMANCE.md) for the full benchmark.
+
 ## Quick Start
 
 ### Prerequisites
