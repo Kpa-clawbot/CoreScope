@@ -278,6 +278,7 @@
         </div>
       </div>
       <div class="filter-bar" id="pktFilters">
+        <button class="btn filter-toggle-btn" id="filterToggleBtn">Filters ▾</button>
         <input type="text" placeholder="Packet hash…" id="fHash" aria-label="Filter by packet hash">
         <div class="node-filter-wrap" style="position:relative">
           <input type="text" placeholder="Node name…" id="fNode" autocomplete="off" role="combobox" aria-expanded="false" aria-owns="fNodeDropdown" aria-activedescendant="" aria-autocomplete="list">
@@ -318,6 +319,13 @@
       typeSel.innerHTML += `<option value="${k}" ${String(filters.type) === k ? 'selected' : ''}>${v}</option>`;
     }
 
+    // Filter toggle button for mobile
+    document.getElementById('filterToggleBtn').addEventListener('click', function() {
+      const bar = document.getElementById('pktFilters');
+      bar.classList.toggle('filters-expanded');
+      this.textContent = bar.classList.contains('filters-expanded') ? 'Filters ▴' : 'Filters ▾';
+    });
+
     // Filter event listeners
     document.getElementById('fHash').value = filters.hash || '';
     document.getElementById('fHash').addEventListener('input', debounce((e) => { filters.hash = e.target.value || undefined; loadPackets(); }, 300));
@@ -343,7 +351,8 @@
       { key: 'rpt', label: 'Rpt' },
       { key: 'details', label: 'Details' },
     ];
-    const defaultHidden = ['region'];
+    const isMobile = window.innerWidth <= 640;
+    const defaultHidden = isMobile ? ['region', 'hash', 'observer', 'path', 'rpt', 'size'] : ['region'];
     let visibleCols;
     try {
       visibleCols = JSON.parse(localStorage.getItem('packets-visible-cols'));
@@ -633,10 +642,33 @@
   async function selectPacket(id) {
     selectedId = id;
     renderTableRows();
-    const panel = document.getElementById('pktRight');
-    panel.classList.remove('empty');
-    panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div><div class="text-center text-muted" style="padding:40px">Loading…</div>';
-    initPanelResize();
+    const isMobileNow = window.innerWidth <= 640;
+    let panel;
+    if (isMobileNow) {
+      // Use mobile bottom sheet
+      let sheet = document.getElementById('mobileDetailSheet');
+      if (!sheet) {
+        sheet = document.createElement('div');
+        sheet.id = 'mobileDetailSheet';
+        sheet.className = 'mobile-detail-sheet';
+        sheet.innerHTML = '<div class="mobile-sheet-handle"></div><button class="mobile-sheet-close" id="mobileSheetClose">✕</button><div class="mobile-sheet-content"></div>';
+        document.body.appendChild(sheet);
+        sheet.querySelector('#mobileSheetClose').addEventListener('click', () => {
+          sheet.classList.remove('open');
+        });
+        sheet.querySelector('.mobile-sheet-handle').addEventListener('click', () => {
+          sheet.classList.remove('open');
+        });
+      }
+      panel = sheet.querySelector('.mobile-sheet-content');
+      panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+      sheet.classList.add('open');
+    } else {
+      panel = document.getElementById('pktRight');
+      panel.classList.remove('empty');
+      panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div><div class="text-center text-muted" style="padding:40px">Loading…</div>';
+      initPanelResize();
+    }
 
     try {
       const data = await api(`/packets/${id}`);
@@ -647,11 +679,11 @@
         const newHops = hops.filter(h => !(h in hopNameCache));
         if (newHops.length) await resolveHops(newHops);
       } catch {}
-      panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div>';
+      panel.innerHTML = isMobileNow ? '' : '<div class="panel-resize-handle" id="pktResizeHandle"></div>';
       const content = document.createElement('div');
       panel.appendChild(content);
       renderDetail(content, data);
-      initPanelResize();
+      if (!isMobileNow) initPanelResize();
     } catch (e) {
       panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
     }
