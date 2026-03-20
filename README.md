@@ -1,19 +1,54 @@
 # MeshCore Analyzer
 
-Self-hosted, open-source MeshCore packet analyzer — a community alternative to the closed-source `analyzer.letsmesh.net`.
+> Self-hosted, open-source MeshCore packet analyzer — a community alternative to the closed-source `analyzer.letsmesh.net`.
 
-Collects MeshCore packets via MQTT, decodes them, and presents a full web UI with live packet feed, node map, channel chat, packet tracing, and more.
+Collects MeshCore packets via MQTT, decodes them, and presents a full web UI with live packet feed, node map, channel chat, packet tracing, per-node analytics, and more.
 
-## Features
+![Live View — Bay Area mesh network with real-time packet routing](docs/screenshots/Live-view-iOS.png)
 
-- **Live Packet Feed** — real-time WebSocket updates, filterable by type/region/observer
-- **Interactive Map** — Leaflet map with node markers by role, clustering, last-heard filters
-- **Channel Chat** — decoded group messages with sender names, @mentions, timestamps
-- **Node Directory** — searchable node list with role tabs, detail panel, advert timeline
-- **Packet Tracing** — follow packets across observers with SNR/RSSI timeline
+## ✨ Features
+
+### 📡 Live Trace Map
+Real-time animated map with packet route visualization, VCR-style playback controls, and a retro LCD clock. Replay the last 24 hours of mesh activity, scrub through the timeline, or watch packets flow live at up to 4× speed.
+
+![Live VCR playback](docs/screenshots/MeshVCR.gif)
+
+### 📦 Packet Feed
+Filterable real-time packet stream with byte-level breakdown, Excel-like resizable columns, and a detail pane. Toggle "My Nodes" to focus on your mesh.
+
+![Packets view](docs/screenshots/packets1.png)
+
+### 🗺️ Network Overview
+At-a-glance mesh stats — node counts, packet volume, observer coverage.
+
+![Network overview](docs/screenshots/mesh-overview.png)
+
+### 🔀 Route Patterns
+Visualize how packets traverse the mesh — see which repeaters carry the most traffic and identify routing patterns.
+
+![Route patterns](docs/screenshots/route-patterns.png)
+
+### 📊 Node Analytics
+Per-node deep dive with 6 interactive charts: activity timeline, packet type breakdown, SNR distribution, hop count analysis, peer network graph, and hourly heatmap.
+
+![Node analytics](docs/screenshots/node-analytics.png)
+
+### 💬 Channel Chat
+Decoded group messages with sender names, @mentions, timestamps — like reading a Discord channel for your mesh.
+
+![Channels](docs/screenshots/channels1.png)
+
+### And More
+
+- **Node Directory** — searchable list with role tabs, detail panel, QR codes, advert timeline, "Heard By" observer table
+- **Packet Tracing** — follow individual packets across observers with SNR/RSSI timeline
 - **Observer Status** — health monitoring, packet counts, uptime
-- **Dark Mode** — toggle with sun/moon icon, persisted in localStorage
+- **Hash Collision Matrix** — detect address collisions across the mesh
+- **Claimed Nodes** — star your nodes, always sorted to top, visual distinction
+- **Dark / Light Mode** — auto-detects system preference, instant toggle
 - **Global Search** — search packets, nodes, and channels (Ctrl+K)
+- **Mobile Responsive** — proper two-row VCR bar, iOS safe area support, touch-friendly
+- **Accessible** — ARIA patterns, keyboard navigation, screen reader support, distinct marker shapes
 
 ## Quick Start
 
@@ -25,7 +60,7 @@ Collects MeshCore packets via MQTT, decodes them, and presents a full web UI wit
 ### Install
 
 ```bash
-git clone https://github.com/youruser/meshcore-analyzer.git
+git clone https://github.com/Kpa-clawbot/meshcore-analyzer.git
 cd meshcore-analyzer
 npm install
 ```
@@ -133,9 +168,12 @@ meshcore-analyzer/
 │   ├── style.css        # Theme (light/dark)
 │   ├── app.js           # Router, WebSocket, utilities
 │   ├── packets.js       # Packet feed + byte breakdown
-│   ├── map.js           # Leaflet map
+│   ├── map.js           # Leaflet map with route visualization
+│   ├── live.js          # Live trace page with VCR playback
 │   ├── channels.js      # Channel chat
-│   ├── nodes.js         # Node directory
+│   ├── nodes.js         # Node directory + detail views
+│   ├── analytics.js     # Global analytics dashboard
+│   ├── node-analytics.js # Per-node analytics with charts
 │   ├── traces.js        # Packet tracing
 │   └── observers.js     # Observer status
 └── tools/
