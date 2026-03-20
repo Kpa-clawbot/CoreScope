@@ -40,7 +40,15 @@
     return svg;
   }
 
-  function histogram(values, bins, color, w = 800, h = 180) {
+  function histogram(data, bins, color, w = 800, h = 180) {
+    // Support pre-computed histogram from server { bins: [{x, w, count}], min, max }
+    if (data && data.bins && Array.isArray(data.bins)) {
+      const buckets = data.bins.map(b => b.count);
+      const labels = data.bins.map(b => b.x.toFixed(1));
+      return { svg: barChart(buckets, labels, color, w, h), buckets, labels };
+    }
+    // Legacy: raw values array
+    const values = data;
     const min = Math.min(...values), max = Math.max(...values);
     const step = (max - min) / bins;
     const buckets = Array(bins).fill(0);

@@ -871,8 +871,28 @@ app.get('/api/analytics/rf', (req, res) => {
     hour, count: d.count, avgSnr: d.snrs.reduce((a, b) => a + b, 0) / d.snrs.length
   }));
 
-  // Scatter data (SNR vs RSSI)
-  const scatterData = packets.filter(p => p.snr != null && p.rssi != null).map(p => ({ snr: p.snr, rssi: p.rssi }));
+  // Scatter data (SNR vs RSSI) — downsample to max 500 points
+  const scatterAll = packets.filter(p => p.snr != null && p.rssi != null);
+  const scatterStep = Math.max(1, Math.floor(scatterAll.length / 500));
+  const scatterData = scatterAll.filter((_, i) => i % scatterStep === 0).map(p => ({ snr: p.snr, rssi: p.rssi }));
+
+  // Pre-compute histograms server-side so we don't send raw arrays
+  function buildHistogram(values, bins) {
+    if (!values.length) return { bins: [], min: 0, max: 0 };
+    const min = Math.min(...values), max = Math.max(...values);
+    const range = max - min || 1;
+    const binWidth = range / bins;
+    const counts = new Array(bins).fill(0);
+    for (const v of values) {
+      const idx = Math.min(Math.floor((v - min) / binWidth), bins - 1);
+      counts[idx]++;
+    }
+    return { bins: counts.map((count, i) => ({ x: min + i * binWidth, w: binWidth, count })), min, max };
+  }
+
+  const snrHistogram = buildHistogram(snrVals, 20);
+  const rssiHistogram = buildHistogram(rssiVals, 20);
+  const sizeHistogram = buildHistogram(packetSizes, 25);
 
   const times = packets.map(p => new Date(p.timestamp).getTime());
   const timeSpanHours = times.length ? (Math.max(...times) - Math.min(...times)) / 3600000 : 0;
@@ -881,7 +901,7 @@ app.get('/api/analytics/rf', (req, res) => {
     totalPackets: packets.length,
     snr: { min: Math.min(...snrVals), max: Math.max(...snrVals), avg: snrAvg, median: median(snrVals), stddev: stddev(snrVals, snrAvg) },
     rssi: { min: Math.min(...rssiVals), max: Math.max(...rssiVals), avg: rssiAvg, median: median(rssiVals), stddev: stddev(rssiVals, rssiAvg) },
-    snrValues: snrVals, rssiValues: rssiVals, packetSizes,
+    snrValues: snrHistogram, rssiValues: rssiHistogram, packetSizes: sizeHistogram,
     minPacketSize: packetSizes.length ? Math.min(...packetSizes) : 0,
     maxPacketSize: packetSizes.length ? Math.max(...packetSizes) : 0,
     avgPacketSize: packetSizes.length ? Math.round(packetSizes.reduce((a, b) => a + b, 0) / packetSizes.length) : 0,
