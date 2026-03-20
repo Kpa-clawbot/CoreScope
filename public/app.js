@@ -11,11 +11,36 @@ function payloadTypeName(n) { return PAYLOAD_TYPES[n] || 'UNKNOWN'; }
 function payloadTypeColor(n) { return PAYLOAD_COLORS[n] || 'unknown'; }
 
 // --- Utilities ---
+const _apiPerf = { calls: 0, totalMs: 0, log: [] };
 async function api(path) {
+  const t0 = performance.now();
   const res = await fetch('/api' + path);
   if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
-  return res.json();
+  const data = await res.json();
+  const ms = performance.now() - t0;
+  _apiPerf.calls++;
+  _apiPerf.totalMs += ms;
+  _apiPerf.log.push({ path, ms: Math.round(ms), time: Date.now() });
+  if (_apiPerf.log.length > 200) _apiPerf.log.shift();
+  if (ms > 500) console.warn(`[SLOW API] ${path} took ${Math.round(ms)}ms`);
+  return data;
 }
+// Expose for console debugging: apiPerf()
+window.apiPerf = function() {
+  const byPath = {};
+  _apiPerf.log.forEach(e => {
+    if (!byPath[e.path]) byPath[e.path] = { count: 0, totalMs: 0, maxMs: 0 };
+    byPath[e.path].count++;
+    byPath[e.path].totalMs += e.ms;
+    if (e.ms > byPath[e.path].maxMs) byPath[e.path].maxMs = e.ms;
+  });
+  const rows = Object.entries(byPath).map(([p, s]) => ({
+    path: p, count: s.count, avgMs: Math.round(s.totalMs / s.count), maxMs: s.maxMs,
+    totalMs: Math.round(s.totalMs)
+  })).sort((a, b) => b.totalMs - a.totalMs);
+  console.table(rows);
+  return { calls: _apiPerf.calls, avgMs: Math.round(_apiPerf.totalMs / _apiPerf.calls), endpoints: rows };
+};
 
 function timeAgo(iso) {
   if (!iso) return '—';
@@ -217,7 +242,10 @@ function navigate() {
 
   const app = document.getElementById('app');
   if (pages[basePage]?.init) {
+    const t0 = performance.now();
     pages[basePage].init(app, routeParam);
+    const ms = performance.now() - t0;
+    if (ms > 100) console.warn(`[SLOW PAGE] ${basePage} init took ${Math.round(ms)}ms`);
     app.classList.remove('page-enter'); void app.offsetWidth; app.classList.add('page-enter');
   } else {
     app.innerHTML = `<div style="padding:40px;text-align:center;color:#6b7280"><h2>${route}</h2><p>Page not yet implemented.</p></div>`;

@@ -34,6 +34,71 @@ db.seed();
 const app = express();
 const server = http.createServer(app);
 
+// --- Performance Instrumentation ---
+const perfStats = {
+  requests: 0,
+  totalMs: 0,
+  endpoints: {},  // { path: { count, totalMs, maxMs, avgMs, p95: [], lastSlow } }
+  slowQueries: [], // last 50 requests > 100ms
+  startedAt: Date.now(),
+  reset() {
+    this.requests = 0; this.totalMs = 0; this.endpoints = {}; this.slowQueries = []; this.startedAt = Date.now();
+  }
+};
+
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
+  const start = process.hrtime.bigint();
+  const origEnd = res.end;
+  res.end = function(...args) {
+    const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    perfStats.requests++;
+    perfStats.totalMs += ms;
+    // Normalize parameterized routes
+    const key = req.route ? req.route.path : req.path.replace(/[0-9a-f]{8,}/gi, ':id');
+    if (!perfStats.endpoints[key]) perfStats.endpoints[key] = { count: 0, totalMs: 0, maxMs: 0, recent: [] };
+    const ep = perfStats.endpoints[key];
+    ep.count++;
+    ep.totalMs += ms;
+    if (ms > ep.maxMs) ep.maxMs = ms;
+    ep.recent.push(ms);
+    if (ep.recent.length > 100) ep.recent.shift();
+    if (ms > 100) {
+      perfStats.slowQueries.push({ path: req.path, ms: Math.round(ms * 10) / 10, time: new Date().toISOString(), status: res.statusCode });
+      if (perfStats.slowQueries.length > 50) perfStats.slowQueries.shift();
+    }
+    origEnd.apply(res, args);
+  };
+  next();
+});
+
+app.get('/api/perf', (req, res) => {
+  const summary = {};
+  for (const [path, ep] of Object.entries(perfStats.endpoints)) {
+    const sorted = [...ep.recent].sort((a, b) => a - b);
+    const p95 = sorted[Math.floor(sorted.length * 0.95)] || 0;
+    const p50 = sorted[Math.floor(sorted.length * 0.5)] || 0;
+    summary[path] = {
+      count: ep.count,
+      avgMs: Math.round(ep.totalMs / ep.count * 10) / 10,
+      p50Ms: Math.round(p50 * 10) / 10,
+      p95Ms: Math.round(p95 * 10) / 10,
+      maxMs: Math.round(ep.maxMs * 10) / 10,
+    };
+  }
+  // Sort by total time spent (count * avg) descending
+  const sorted = Object.entries(summary).sort((a, b) => (b[1].count * b[1].avgMs) - (a[1].count * a[1].avgMs));
+  res.json({
+    uptime: Math.round((Date.now() - perfStats.startedAt) / 1000),
+    totalRequests: perfStats.requests,
+    avgMs: perfStats.requests ? Math.round(perfStats.totalMs / perfStats.requests * 10) / 10 : 0,
+    endpoints: Object.fromEntries(sorted),
+    slowQueries: perfStats.slowQueries.slice(-20),
+  });
+});
+
+app.post('/api/perf/reset', (req, res) => { perfStats.reset(); res.json({ ok: true }); });
+
 // --- WebSocket ---
 const wss = new WebSocketServer({ server });
 
