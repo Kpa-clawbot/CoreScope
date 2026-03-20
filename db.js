@@ -364,8 +364,15 @@ function getObservers() {
 
 function getStats() {
   const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
+  // Try to get transmission count from normalized schema
+  let totalTransmissions = null;
+  try {
+    totalTransmissions = db.prepare('SELECT COUNT(*) as count FROM transmissions').get().count;
+  } catch {}
   return {
     totalPackets: stmts.countPackets.get().count,
+    totalTransmissions,
+    totalObservations: stmts.countPackets.get().count, // legacy packets = observations
     totalNodes: stmts.countNodes.get().count,
     totalObservers: stmts.countObservers.get().count,
     packetsLastHour: stmts.countRecentPackets.get(oneHourAgo).count,

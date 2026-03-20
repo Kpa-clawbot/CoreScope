@@ -562,7 +562,9 @@ for (const source of mqttSources) {
     cache.debouncedInvalidateAll();
 
         const fullPacket = pktStore.getById(packetId);
-        const broadcastData = { id: packetId, raw: msg.raw, decoded, snr: msg.SNR, rssi: msg.RSSI, hash: msg.hash, observer: observerId, packet: fullPacket };
+        const tx = pktStore.byTransmission.get(pktData.hash);
+        const observation_count = tx ? tx.observation_count : 1;
+        const broadcastData = { id: packetId, raw: msg.raw, decoded, snr: msg.SNR, rssi: msg.RSSI, hash: msg.hash, observer: observerId, packet: fullPacket, observation_count };
         broadcast({ type: 'packet', data: broadcastData });
 
         if (decoded.header.payloadTypeName === 'GRP_TXT') {
@@ -749,11 +751,23 @@ app.get('/api/packets', (req, res) => {
     return res.json({ packets: paged, total, limit: Number(limit), offset: Number(offset) });
   }
 
+  // groupByHash is now the default behavior (transmissions ARE grouped) — keep param for compat
   if (groupByHash === 'true') {
     return res.json(pktStore.queryGrouped({ limit, offset, type, route, region, observer, hash, since, until, node }));
   }
 
-  res.json(pktStore.query({ limit, offset, type, route, region, observer, hash, since, until, node, order }));
+  const expand = req.query.expand;
+  const result = pktStore.query({ limit, offset, type, route, region, observer, hash, since, until, node, order });
+
+  // Strip observations[] from default response for bandwidth; include with ?expand=observations
+  if (expand !== 'observations') {
+    result.packets = result.packets.map(p => {
+      const { observations, ...rest } = p;
+      return rest;
+    });
+  }
+
+  res.json(result);
 });
 
 // Lightweight endpoint: just timestamps for timeline sparkline
@@ -784,7 +798,12 @@ app.get('/api/packets/:id', (req, res) => {
   // Build byte breakdown
   const breakdown = buildBreakdown(packet.raw_hex, decoded);
 
-  res.json({ packet, path: pathHops, breakdown });
+  // Include sibling observations for this transmission
+  const transmission = packet.hash ? pktStore.byTransmission.get(packet.hash) : null;
+  const siblingObservations = transmission ? transmission.observations : [];
+  const observation_count = transmission ? transmission.observation_count : 1;
+
+  res.json({ packet, path: pathHops, breakdown, observation_count, observations: siblingObservations });
 });
 
 function buildBreakdown(rawHex, decoded) {
@@ -966,10 +985,12 @@ app.get('/api/nodes/bulk-health', (req, res) => {
   const results = [];
   for (const node of nodes) {
     const packets = pktStore.byNode.get(node.public_key) || [];
-    let totalPackets = packets.length, packetsToday = 0, snrSum = 0, snrCount = 0, lastHeard = null;
+    let packetsToday = 0, snrSum = 0, snrCount = 0, lastHeard = null;
     const observers = {};
+    let totalObservations = 0;
 
     for (const pkt of packets) {
+      totalObservations += pkt.observation_count || 1;
       if (pkt.timestamp > todayISO) packetsToday++;
       if (pkt.snr != null) { snrSum += pkt.snr; snrCount++; }
       if (!lastHeard || pkt.timestamp > lastHeard) lastHeard = pkt.timestamp;
@@ -996,7 +1017,12 @@ app.get('/api/nodes/bulk-health', (req, res) => {
     results.push({
       public_key: node.public_key, name: node.name, role: node.role,
       lat: node.lat, lon: node.lon,
-      stats: { totalPackets, packetsToday, avgSnr: snrCount ? snrSum / snrCount : null, lastHeard },
+      stats: {
+        totalTransmissions: packets.length,
+        totalObservations,
+        totalPackets: packets.length, // backward compat
+        packetsToday, avgSnr: snrCount ? snrSum / snrCount : null, lastHeard
+      },
       observers: observerRows
     });
   }
@@ -1864,10 +1890,22 @@ app.get('/api/nodes/:pubkey/health', (req, res) => {
 
   const recentPackets = packets.slice(0, 20);
 
+  // Count transmissions vs observations
+  const counts = pktStore.countForNode(pubkey);
+  const recentWithoutObs = recentPackets.map(p => {
+    const { observations, ...rest } = p;
+    return { ...rest, observation_count: p.observation_count || 1 };
+  });
+
   const result = {
     node: node.node || node, observers,
-    stats: { totalPackets: packets.length, packetsToday, avgSnr: snrN ? snrSum / snrN : null, avgHops: hopCount > 0 ? Math.round(totalHops / hopCount) : 0, lastHeard },
-    recentPackets
+    stats: {
+      totalTransmissions: counts.transmissions,
+      totalObservations: counts.observations,
+      totalPackets: counts.transmissions, // backward compat
+      packetsToday, avgSnr: snrN ? snrSum / snrN : null, avgHops: hopCount > 0 ? Math.round(totalHops / hopCount) : 0, lastHeard
+    },
+    recentPackets: recentWithoutObs
   };
   cache.set(_ck, result, TTL.nodeHealth);
   res.json(result);
