@@ -1177,6 +1177,19 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 }
 .detail-map-link:hover { background: rgba(245, 158, 11, 0.25); }
 
+.copy-link-btn {
+  padding: 5px 12px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  color: var(--primary, #3b82f6);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.copy-link-btn:hover { background: rgba(59, 130, 246, 0.25); }
+
 /* Route tooltip on map */
 .route-tooltip {
   background: rgba(0,0,0,0.8) !important;
