@@ -1,4 +1,32 @@
 # Changelog
+## [2.3.0] - 2026-03-20
+
+### Added
+- **Packet Deduplication**: Normalized storage with `transmissions` and `observations` tables — packets seen by multiple observers are stored once with linked observation records
+- **Observation count badges**: Packets page shows 👁 badge indicating how many observers saw each transmission
+- **`?expand=observations`**: API query param to include full observation details on packet responses
+- **`totalTransmissions` / `totalObservations`**: Health and analytics APIs return both deduped and raw counts
+- **Migration script**: `scripts/migrate-dedup.js` for converting existing packet data to normalized schema
+- **Live map deeplinks**: Node detail panel links to full node detail, observer detail, and filtered packets
+- **CI validation**: `setup-node` added to deploy workflow for JS syntax checking
+
+### Changed
+- In-memory packet store restructured around transmissions (primary) with observation indexes
+- Packets API returns unique transmissions by default (was returning inflated observation rows)
+- Home page shows "Transmissions" instead of "Packets" for network stats
+- Analytics overview uses transmission counts for throughput metrics
+- Node health stats include `totalTransmissions` alongside legacy `totalPackets`
+- WebSocket broadcasts include `observation_count`
+
+### Fixed
+- Packet expand showing only the collapsed row instead of individual observations
+- Live page "Heard By" showing "undefined pkts" (wrong field name)
+- Recent packets deeplink using query param instead of route path
+- Migration script handling concurrent dual-write during live deployment
+
+### Performance
+- **8.19× dedup ratio on production** (117K observations → 14K transmissions)
+- RAM usage reduced proportionally — store loads transmissions, not inflated observations
 
 ## v2.1.1 — Multi-Broker MQTT & Observer Detail (2026-03-20)
 
