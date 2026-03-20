@@ -43,5 +43,10 @@
     "nodeSearch": 10,
     "invalidationDebounce": 30,
     "_comment": "All values in seconds. Server uses these directly. Client fetches via /api/config/cache."
+  },
+  "packetStore": {
+    "maxMemoryMB": 1024,
+    "estimatedPacketBytes": 450,
+    "_comment": "In-memory packet store. maxMemoryMB caps RAM usage. All packets loaded on startup, served from RAM."
   }
 }

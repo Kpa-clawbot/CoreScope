@@ -8,6 +8,7 @@ const path = require('path');
 const config = require('./config.json');
 const decoder = require('./decoder');
 const crypto = require('crypto');
+const PacketStore = require('./packet-store');
 
 // Compute a content hash from raw hex: header byte + payload (skipping path hops)
 // This correctly groups retransmissions of the same packet (same content, different paths)
@@ -26,6 +27,7 @@ function computeContentHash(rawHex) {
   } catch { return rawHex.slice(0, 16); }
 }
 const db = require('./db');
+const pktStore = new PacketStore(db, config.packetStore || {}).load();
 const channelKeys = require("./config.json").channelKeys || {};
 
 // --- Cache TTL config (seconds → ms) ---
@@ -159,6 +161,7 @@ app.get('/api/perf', (req, res) => {
     endpoints: Object.fromEntries(sorted),
     slowQueries: perfStats.slowQueries.slice(-20),
     cache: { size: cache.size, hits: cache.hits, misses: cache.misses, hitRate: cache.hits + cache.misses > 0 ? Math.round(cache.hits / (cache.hits + cache.misses) * 1000) / 10 : 0 },
+    packetStore: pktStore.getStats(),
   });
 });
 
@@ -298,7 +301,7 @@ try {
         const observerId = parts[2] || null;
         const region = parts[1] || null;
 
-        const packetId = db.insertPacket({
+        const packetId = pktStore.insert({
           raw_hex: msg.raw,
           timestamp: now,
           observer_id: observerId,
@@ -370,7 +373,7 @@ try {
           const role = advert.role || (advert.flags?.repeater ? 'repeater' : advert.flags?.room ? 'room' : 'companion');
           db.upsertNode({ public_key: pubKey, name, role, lat, lon, last_seen: now });
           
-          const packetId = db.insertPacket({
+          const packetId = pktStore.insert({
             raw_hex: null,
             timestamp: now,
             observer_id: 'companion',
@@ -401,7 +404,7 @@ try {
           const senderKey = `sender-${senderName.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
           db.upsertNode({ public_key: senderKey, name: senderName, role: 'companion', lat: null, lon: null, last_seen: now });
         }
-        const packetId = db.insertPacket({
+        const packetId = pktStore.insert({
           raw_hex: null,
           timestamp: now,
           observer_id: 'companion',
@@ -423,7 +426,7 @@ try {
       // Handle direct messages
       if (topic.startsWith('meshcore/message/direct/')) {
         const dm = msg.payload || msg;
-        const packetId = db.insertPacket({
+        const packetId = pktStore.insert({
           raw_hex: null,
           timestamp: dm.timestamp || now,
           observer_id: 'companion',
@@ -443,7 +446,7 @@ try {
       // Handle traceroute
       if (topic.startsWith('meshcore/traceroute/')) {
         const trace = msg.payload || msg;
-        const packetId = db.insertPacket({
+        const packetId = pktStore.insert({
           raw_hex: null,
           timestamp: now,
           observer_id: 'companion',
@@ -489,57 +492,31 @@ app.get('/api/stats', (req, res) => {
 
 app.get('/api/packets', (req, res) => {
   const { limit = 50, offset = 0, type, route, region, observer, hash, since, until, groupByHash, node } = req.query;
-  
+  const order = req.query.order === 'asc' ? 'ASC' : 'DESC';
+
   if (groupByHash === 'true') {
-    let where = [];
-    let params = {};
-    if (type !== undefined) { where.push('payload_type = @type'); params.type = Number(type); }
-    if (route !== undefined) { where.push('route_type = @route'); params.route = Number(route); }
-    if (region) { where.push('observer_id IN (SELECT id FROM observers WHERE iata = @region)'); params.region = region; }
-    if (observer) { where.push('observer_id = @observer'); params.observer = observer; }
-    if (hash) { where.push('hash = @hash'); params.hash = hash; }
-    if (since) { where.push('timestamp > @since'); params.since = since; }
-    if (until) { where.push('timestamp < @until'); params.until = until; }
-    if (node) { where.push("(decoded_json LIKE @nodePattern OR decoded_json LIKE @nodeNamePattern)"); params.nodePattern = `%${node}%`; const n = db.db.prepare('SELECT name FROM nodes WHERE public_key = ?').get(node); params.nodeNamePattern = n ? `%${n.name}%` : `%${node}%`; }
-    const clause = where.length ? 'WHERE ' + where.join(' AND ') : '';
-    const packets = db.db.prepare(`SELECT hash, COUNT(DISTINCT observer_id) as observer_count, COUNT(*) as count, MAX(timestamp) as latest, (SELECT observer_id FROM packets pObs WHERE pObs.hash = packets.hash ORDER BY pObs.timestamp ASC LIMIT 1) as observer_id, (SELECT observer_name FROM packets pOn WHERE pOn.hash = packets.hash ORDER BY pOn.timestamp ASC LIMIT 1) as observer_name, (SELECT path_json FROM packets p2 WHERE p2.hash = packets.hash ORDER BY LENGTH(path_json) DESC LIMIT 1) as path_json, (SELECT payload_type FROM packets p3 WHERE p3.hash = packets.hash ORDER BY p3.timestamp DESC LIMIT 1) as payload_type, (SELECT raw_hex FROM packets p4 WHERE p4.hash = packets.hash ORDER BY LENGTH(raw_hex) DESC LIMIT 1) as raw_hex, (SELECT decoded_json FROM packets p5 WHERE p5.hash = packets.hash ORDER BY p5.timestamp DESC LIMIT 1) as decoded_json FROM packets ${clause} GROUP BY hash ORDER BY latest DESC LIMIT @limit OFFSET @offset`).all({ ...params, limit: Number(limit), offset: Number(offset) });
-    const total = db.db.prepare(`SELECT COUNT(DISTINCT hash) as count FROM packets ${clause}`).get(params).count;
-    return res.json({ packets, total });
+    return res.json(pktStore.queryGrouped({ limit, offset, type, route, region, observer, hash, since, until, node }));
   }
 
-  let where = [];
-  let params = {};
-  if (type !== undefined) { where.push('payload_type = @type'); params.type = Number(type); }
-  if (route !== undefined) { where.push('route_type = @route'); params.route = Number(route); }
-  if (region) { where.push('observer_id IN (SELECT id FROM observers WHERE iata = @region)'); params.region = region; }
-  if (observer) { where.push('observer_id = @observer'); params.observer = observer; }
-  if (hash) { where.push('hash = @hash'); params.hash = hash; }
-  if (since) { where.push('timestamp > @since'); params.since = since; }
-  if (until) { where.push('timestamp < @until'); params.until = until; }
-  if (node) { where.push("(decoded_json LIKE @nodePattern OR decoded_json LIKE @nodeNamePattern)"); params.nodePattern = `%${node}%`; const nn = db.db.prepare('SELECT name FROM nodes WHERE public_key = ?').get(node); params.nodeNamePattern = nn ? `%${nn.name}%` : `%${node}%`; }
-  const clause = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  const orderDir = req.query.order === 'asc' ? 'ASC' : 'DESC';
-  const packets = db.db.prepare(`SELECT * FROM packets ${clause} ORDER BY timestamp ${orderDir} LIMIT @limit OFFSET @offset`).all({ ...params, limit: Number(limit), offset: Number(offset) });
-  const total = db.db.prepare(`SELECT COUNT(*) as count FROM packets ${clause}`).get(params).count;
-  res.json({ packets, total });
+  res.json(pktStore.query({ limit, offset, type, route, region, observer, hash, since, until, node, order }));
 });
 
 // Lightweight endpoint: just timestamps for timeline sparkline
 app.get('/api/packets/timestamps', (req, res) => {
   const { since } = req.query;
   if (!since) return res.status(400).json({ error: 'since required' });
-  const rows = db.db.prepare('SELECT timestamp FROM packets WHERE timestamp > ? ORDER BY timestamp ASC').all(since);
-  res.json(rows.map(r => r.timestamp));
+  res.json(pktStore.getTimestamps(since));
 });
 
 app.get('/api/packets/:id', (req, res) => {
-  const packet = db.getPacket(Number(req.params.id));
+  const packet = pktStore.getById(Number(req.params.id)) || db.getPacket(Number(req.params.id));
   if (!packet) return res.status(404).json({ error: 'Not found' });
 
   // Use the sibling with the longest path (most hops) for display
   if (packet.hash) {
-    const best = db.db.prepare('SELECT id, path_json, raw_hex FROM packets WHERE hash = ? ORDER BY LENGTH(path_json) DESC LIMIT 1').get(packet.hash);
-    if (best && best.path_json && best.path_json.length > (packet.path_json || '').length) {
+    const siblings = pktStore.getSiblings(packet.hash);
+    const best = siblings.reduce((a, b) => (b.path_json || '').length > (a.path_json || '').length ? b : a, packet);
+    if (best.path_json && best.path_json.length > (packet.path_json || '').length) {
       packet.path_json = best.path_json;
       packet.raw_hex = best.raw_hex;
     }
@@ -638,7 +615,7 @@ app.post('/api/packets', (req, res) => {
     const decoded = decoder.decodePacket(hex, channelKeys);
     const now = new Date().toISOString();
 
-    const packetId = db.insertPacket({
+    const packetId = pktStore.insert({
       raw_hex: hex.toUpperCase(),
       timestamp: now,
       observer_id: observer || null,
