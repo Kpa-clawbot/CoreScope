@@ -1,0 +1,37 @@
+name: Deploy to VM
+
+on:
+  push:
+    branches: [master]
+
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VM_SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh -o StrictHostKeyChecking=no REDACTED@REDACTED bash -s << 'EOF'
+          set -e
+          cd $HOME/meshcore-analyzer
+          git pull origin master
+          docker build -t meshcore-analyzer .
+          docker stop meshcore-analyzer && docker rm meshcore-analyzer
+          docker run -d \
+            --name meshcore-analyzer \
+            --restart unless-stopped \
+            -p 80:80 -p 443:443 -p 1883:1883 \
+            -v $HOME/meshcore-data:/app/data \
+            -v $HOME/caddy-data:/data/caddy \
+            -v $HOME/meshcore-analyzer/Caddyfile:/etc/caddy/Caddyfile \
+            meshcore-analyzer
+          echo "Deployed $(git rev-parse --short HEAD)"
+          EOF
