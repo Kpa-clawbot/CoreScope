@@ -288,6 +288,11 @@ function navigate() {
     basePage = 'packet-detail';
   }
 
+  // Special route: observers/ID → observer detail page
+  if (basePage === 'observers' && routeParam) {
+    basePage = 'observer-detail';
+  }
+
   // Update nav active state
   document.querySelectorAll('.nav-link[data-route]').forEach(el => {
     el.classList.toggle('active', el.dataset.route === basePage);

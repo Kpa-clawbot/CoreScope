@@ -1626,6 +1626,92 @@ app.get('/api/observers', (req, res) => {
   res.json(_oResult);
 });
 
+// Observer detail
+app.get('/api/observers/:id', (req, res) => {
+  const id = req.params.id;
+  const obs = db.db.prepare('SELECT * FROM observers WHERE id = ?').get(id);
+  if (!obs) return res.status(404).json({ error: 'Observer not found' });
+  const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
+  const obsPackets = pktStore.byObserver.get(id) || [];
+  const packetsLastHour = obsPackets.filter(p => p.timestamp > oneHourAgo).length;
+  res.json({ ...obs, packetsLastHour });
+});
+
+// Observer analytics
+app.get('/api/observers/:id/analytics', (req, res) => {
+  const id = req.params.id;
+  const days = parseInt(req.query.days) || 7;
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const obsPackets = (pktStore.byObserver.get(id) || []).filter(p => p.timestamp >= since);
+
+  // Timeline: packets per hour (last N days, bucketed)
+  const bucketMs = days <= 1 ? 3600000 : days <= 7 ? 3600000 * 4 : 86400000;
+  const buckets = {};
+  for (const p of obsPackets) {
+    const t = Math.floor(new Date(p.timestamp).getTime() / bucketMs) * bucketMs;
+    buckets[t] = (buckets[t] || 0) + 1;
+  }
+  const timeline = Object.entries(buckets)
+    .sort((a, b) => a[0] - b[0])
+    .map(([t, count]) => {
+      const d = new Date(parseInt(t));
+      const label = days <= 1
+        ? d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        : days <= 7
+        ? d.toLocaleDateString('en-US', { weekday: 'short', hour: '2-digit' })
+        : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      return { label, count };
+    });
+
+  // Packet type breakdown
+  const packetTypes = {};
+  for (const p of obsPackets) {
+    packetTypes[p.payload_type] = (packetTypes[p.payload_type] || 0) + 1;
+  }
+
+  // Unique nodes per time bucket
+  const nodeBuckets = {};
+  for (const p of obsPackets) {
+    const t = Math.floor(new Date(p.timestamp).getTime() / bucketMs) * bucketMs;
+    if (!nodeBuckets[t]) nodeBuckets[t] = new Set();
+    try {
+      const decoded = typeof p.decoded_json === 'string' ? JSON.parse(p.decoded_json) : p.decoded_json;
+      if (decoded && decoded.pubKey) nodeBuckets[t].add(decoded.pubKey);
+      if (decoded && decoded.srcHash) nodeBuckets[t].add(decoded.srcHash);
+      if (decoded && decoded.destHash) nodeBuckets[t].add(decoded.destHash);
+    } catch {}
+    const hops = typeof p.path_json === 'string' ? JSON.parse(p.path_json) : (p.path_json || []);
+    for (const h of hops) nodeBuckets[t].add(h);
+  }
+  const nodesTimeline = Object.entries(nodeBuckets)
+    .sort((a, b) => a[0] - b[0])
+    .map(([t, nodes]) => {
+      const d = new Date(parseInt(t));
+      const label = days <= 1
+        ? d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+        : days <= 7
+        ? d.toLocaleDateString('en-US', { weekday: 'short', hour: '2-digit' })
+        : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      return { label, count: nodes.size };
+    });
+
+  // SNR distribution
+  const snrBuckets = {};
+  for (const p of obsPackets) {
+    if (p.snr == null) continue;
+    const bucket = Math.floor(p.snr / 2) * 2; // 2dB buckets
+    const range = bucket + ' to ' + (bucket + 2);
+    snrBuckets[bucket] = snrBuckets[bucket] || { range, count: 0 };
+    snrBuckets[bucket].count++;
+  }
+  const snrDistribution = Object.values(snrBuckets).sort((a, b) => parseFloat(a.range) - parseFloat(b.range));
+
+  // Recent packets (last 20)
+  const recentPackets = obsPackets.slice(-20).reverse();
+
+  res.json({ timeline, packetTypes, nodesTimeline, snrDistribution, recentPackets });
+});
+
 app.get('/api/traces/:hash', (req, res) => {
   const packets = (pktStore.getSiblings(req.params.hash) || []).sort((a,b) => a.timestamp > b.timestamp ? 1 : -1);
   const traces = packets.map(p => ({ observer: p.observer_id, time: p.timestamp, snr: p.snr, rssi: p.rssi }));
