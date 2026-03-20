@@ -44,6 +44,7 @@
           <div class="perf-card"><div class="perf-num">${el.currentLagMs}ms</div><div class="perf-label">EL Current</div></div>
           <div class="perf-card"><div class="perf-num">${health.websocket.clients}</div><div class="perf-label">WS Clients</div></div>
         </div>`;
+      }
 
       // Cache stats
       if (server.cache) {
