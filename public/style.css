@@ -681,7 +681,7 @@ button.ch-item.selected { background: var(--selected-bg); }
 ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
 /* === Observers Page === */
-.observers-page { padding: 20px; max-width: 1200px; margin: 0 auto; }
+.observers-page { padding: 20px; max-width: 1200px; margin: 0 auto; overflow-y: auto; height: calc(100vh - 56px); }
 .obs-summary { display: flex; gap: 20px; margin-bottom: 16px; flex-wrap: wrap; }
 .obs-stat { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text-muted); }
 .health-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
