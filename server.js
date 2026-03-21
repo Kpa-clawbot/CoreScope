@@ -64,11 +64,25 @@ for (const rawChannel of hashChannels) {
   derivedHashChannelKeys[channelName] = deriveHashtagChannelKey(channelName);
 }
 
-const channelKeys = { ...derivedHashChannelKeys, ...configuredChannelKeys };
+// Load rainbow table of pre-computed channel keys (common MeshCore channel names)
+let rainbowKeys = {};
+try {
+  const rainbowPath = path.join(__dirname, 'channel-rainbow.json');
+  if (fs.existsSync(rainbowPath)) {
+    rainbowKeys = JSON.parse(fs.readFileSync(rainbowPath, 'utf8'));
+    console.log(`[channels] Loaded ${Object.keys(rainbowKeys).length} rainbow table entries`);
+  }
+} catch (e) {
+  console.warn('[channels] Failed to load channel-rainbow.json:', e.message);
+}
+
+// Merge: rainbow (lowest priority) -> derived from hashChannels -> explicit config (highest priority)
+const channelKeys = { ...rainbowKeys, ...derivedHashChannelKeys, ...configuredChannelKeys };
 
 const totalKeys = Object.keys(channelKeys).length;
 const derivedCount = Object.keys(derivedHashChannelKeys).length;
-console.log(`[channels] ${totalKeys} channel key(s) (${derivedCount} derived from hashChannels)`);
+const rainbowCount = Object.keys(rainbowKeys).length;
+console.log(`[channels] ${totalKeys} channel key(s) (${derivedCount} derived from hashChannels, ${rainbowCount} from rainbow table)`);
 
 // --- Cache TTL config (seconds → ms) ---
 const _ttlCfg = config.cacheTTL || {};

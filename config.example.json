@@ -42,8 +42,6 @@
   },
   "hashChannels": [
     "#LongFast",
-    "#MediumSlow",
-    "#ShortFast",
     "#test",
     "#sf",
     "#wardrive",
@@ -55,7 +53,10 @@
   ],
   "defaultRegion": "SJC",
   "mapDefaults": {
-    "center": [37.45, -122.0],
+    "center": [
+      37.45,
+      -122.0
+    ],
     "zoom": 9
   },
   "regions": {
