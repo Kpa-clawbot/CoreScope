@@ -400,7 +400,7 @@
     `;
 
     // Init shared RegionFilter component
-    RegionFilter.init(document.getElementById('packetsRegionFilter'));
+    RegionFilter.init(document.getElementById('packetsRegionFilter'), { dropdown: true });
     RegionFilter.onChange(function() { loadPackets(); });
 
     const obsSel = document.getElementById('fObserver');

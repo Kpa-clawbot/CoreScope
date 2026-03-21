@@ -177,7 +177,7 @@
     }
     container.style.display = '';
 
-    if (codes.length > 4) {
+    if (codes.length > 4 || container._forceDropdown) {
       renderDropdown(container, codes);
     } else {
       renderPills(container, codes);
@@ -195,8 +195,10 @@
     _listeners = _listeners.filter(function (f) { return f !== fn; });
   }
 
-  /** Initialize filter in a container, fetch regions, render, return promise */
-  async function initFilter(container) {
+  /** Initialize filter in a container, fetch regions, render, return promise.
+   *  Options: { dropdown: true } to force dropdown mode regardless of region count */
+  async function initFilter(container, opts) {
+    if (opts && opts.dropdown) container._forceDropdown = true;
     await fetchRegions();
     render(container);
   }
