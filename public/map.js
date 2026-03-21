@@ -96,7 +96,7 @@
           <fieldset class="mc-section">
             <legend class="mc-label">Filters</legend>
             <label for="mcNeighbors"><input type="checkbox" id="mcNeighbors"> Show direct neighbors</label>
-            <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash size labels</label>
+            <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash prefix labels</label>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Last Heard</legend>
