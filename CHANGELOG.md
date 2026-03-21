@@ -3,6 +3,8 @@
 ## [2.4.0] - 2026-03-21
 
 ### Added
+- **Observation-level deeplinks** — `#/packets/HASH?obs=OBSERVER_ID` links directly to a specific observation; auto-expands group and selects the right row
+- **Observation detail pane** — clicking a child observation row shows that observation's data (observer, SNR, path) instead of the parent packet
 - **Channel name tags** in packet detail column — decrypted CHAN messages show a blue pill with channel name (#test, #sf, etc.)
 - **Distance/Range analytics tab** — haversine distance calculations, link-type breakdown (R↔R, C↔R, C↔C), distance histogram, top 20 longest hops leaderboard, top 10 multi-hop paths
 - **View on Map buttons** for distance leaderboard hops and paths
@@ -34,6 +36,10 @@
 - Channels page only shows decrypted messages, hides encrypted garbage
 
 ### Fixed
+- **Header row shows first observer's path** — removed server-side "longest path" override that replaced the transmission's path with the longest observation path
+- **Transmission header observer mismatch** — when a later observation has an earlier timestamp, observer_id/observer_name/path_json now update to match
+- **Observation sort field names** — sort was using wrong API field names (observer/rx_at vs observer_name/timestamp), producing random order
+- **Auto-seeding on empty DB disabled** — fake data no longer inserted automatically; requires `--seed` flag or `SEED_DB=true`
 - **Channel "10h ago" timestamp bug** — WS handler was using `packet.timestamp` (first_seen from earliest observation) instead of current time for lastActivity
 - **Stale UI / packets not updating** — `insert()` used wrong ID type for packet lookup after insert (packets table ID vs transmissions view ID)
 - **ADVERT timestamp validation removed** — field isn't stored; was rejecting valid nodes with slightly-off clocks
