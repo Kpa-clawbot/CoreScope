@@ -1452,22 +1452,37 @@ app.get('/api/analytics/topology', (req, res) => {
   const _c = cache.get(_ck); if (_c) return res.json(_c);
   const packets = pktStore.filter(p => p.path_json && p.path_json !== '[]' && (!regionObsIds || regionObsIds.has(p.observer_id)));
   const allNodes = db.db.prepare('SELECT public_key, name, lat, lon FROM nodes WHERE name IS NOT NULL').all();
+
+  // Build prefix map for O(1) hop resolution (same pattern as distance endpoint)
+  const topoPrefixMap = new Map();
+  for (const n of allNodes) {
+    const pk = n.public_key.toLowerCase();
+    for (let len = 2; len <= pk.length; len++) {
+      const pfx = pk.slice(0, len);
+      if (!topoPrefixMap.has(pfx)) topoPrefixMap.set(pfx, []);
+      topoPrefixMap.get(pfx).push(n);
+    }
+  }
+  const topoHopCache = new Map();
   const resolveHop = (hop, contextPositions) => {
+    if (topoHopCache.has(hop)) return topoHopCache.get(hop);
     const h = hop.toLowerCase();
-    const candidates = allNodes.filter(n => n.public_key.toLowerCase().startsWith(h));
-    if (candidates.length === 0) return null;
-    if (candidates.length === 1) return { name: candidates[0].name, pubkey: candidates[0].public_key };
-    // Disambiguate by proximity to context positions
-    if (contextPositions && contextPositions.length > 0) {
+    const candidates = topoPrefixMap.get(h);
+    if (!candidates || candidates.length === 0) { topoHopCache.set(hop, null); return null; }
+    let result;
+    if (candidates.length === 1) { result = { name: candidates[0].name, pubkey: candidates[0].public_key }; }
+    else if (contextPositions && contextPositions.length > 0) {
       const cLat = contextPositions.reduce((s, p) => s + p.lat, 0) / contextPositions.length;
       const cLon = contextPositions.reduce((s, p) => s + p.lon, 0) / contextPositions.length;
       const withLoc = candidates.filter(c => c.lat && c.lon && !(c.lat === 0 && c.lon === 0));
       if (withLoc.length) {
         withLoc.sort((a, b) => Math.hypot(a.lat - cLat, a.lon - cLon) - Math.hypot(b.lat - cLat, b.lon - cLon));
-        return { name: withLoc[0].name, pubkey: withLoc[0].public_key };
-      }
-    }
-    return { name: candidates[0].name, pubkey: candidates[0].public_key };
+        result = { name: withLoc[0].name, pubkey: withLoc[0].public_key };
+      } else { result = { name: candidates[0].name, pubkey: candidates[0].public_key }; }
+    } else { result = { name: candidates[0].name, pubkey: candidates[0].public_key }; }
+    // Only cache when no context positions (context-dependent results vary)
+    if (!contextPositions || contextPositions.length === 0) topoHopCache.set(hop, result);
+    return result;
   };
 
   // Hop distribution
@@ -1477,7 +1492,7 @@ app.get('/api/analytics/topology', (req, res) => {
   const hopFreq = {};
   const pairFreq = {};
   packets.forEach(p => {
-    const hops = JSON.parse(p.path_json);
+    const hops = p._parsedPath || (p._parsedPath = JSON.parse(p.path_json));
     const n = hops.length;
     hopCounts[n] = (hopCounts[n] || 0) + 1;
     allHopsList.push(n);
@@ -1528,7 +1543,7 @@ app.get('/api/analytics/topology', (req, res) => {
     .sort((a, b) => a.hops - b.hops);
 
   // Reachability: per-observer hop distances + cross-observer comparison + best path
-  const observerMap = new Map(); pktStore.filter(p => p.path_json && p.path_json !== '[]' && p.observer_id).forEach(p => observerMap.set(p.observer_id, p.observer_name)); const observers = [...observerMap].map(([observer_id, observer_name]) => ({ observer_id, observer_name }));
+  const observerMap = new Map(); packets.forEach(p => { if (p.observer_id) observerMap.set(p.observer_id, p.observer_name); }); const observers = [...observerMap].map(([observer_id, observer_name]) => ({ observer_id, observer_name }));
 
   // Per-observer: node → min hop distance seen from that observer
   const perObserver = {}; // observer_id → { hop_hex → { minDist, maxDist, count } }
@@ -1538,7 +1553,7 @@ app.get('/api/analytics/topology', (req, res) => {
   packets.forEach(p => {
     const obsId = p.observer_id;
     if (!perObserver[obsId]) perObserver[obsId] = {};
-    const hops = JSON.parse(p.path_json);
+    const hops = p._parsedPath || (p._parsedPath = JSON.parse(p.path_json));
     hops.forEach((h, i) => {
       const dist = hops.length - i;
       if (!perObserver[obsId][h]) perObserver[obsId][h] = { minDist: dist, maxDist: dist, count: 0 };
@@ -1628,7 +1643,7 @@ app.get('/api/analytics/channels', (req, res) => {
 
   packets.forEach(p => {
     try {
-      const d = JSON.parse(p.decoded_json);
+      const d = p._parsedDecoded || (p._parsedDecoded = typeof p.decoded_json === 'string' ? JSON.parse(p.decoded_json) : p.decoded_json);
       const hash = d.channelHash || d.channel_hash || '?';
       const name = d.channelName || (d.type === 'CHAN' ? (d.channel || `ch${hash}`) : `ch${hash}`);
       const encrypted = !d.text && !d.sender;
@@ -1873,8 +1888,17 @@ app.get('/api/analytics/hash-sizes', (req, res) => {
   const byNode = {};     // node name/prefix → { hashSize, packets, lastSeen }
   const uniqueHops = {}; // hop hex → { size, count, resolvedName }
 
-  // Resolve all known nodes for hop matching
+  // Resolve all known nodes for hop matching — use prefix map for O(1) lookup
   const allNodes = db.db.prepare('SELECT public_key, name FROM nodes WHERE name IS NOT NULL').all();
+  const hsPrefixMap = new Map();
+  for (const n of allNodes) {
+    const pk = n.public_key.toLowerCase();
+    for (let len = 2; len <= pk.length; len++) {
+      const pfx = pk.slice(0, len);
+      if (!hsPrefixMap.has(pfx)) hsPrefixMap.set(pfx, []);
+      hsPrefixMap.get(pfx).push(n);
+    }
+  }
 
   for (const p of packets) {
     const pathByte = parseInt(p.raw_hex.slice(2, 4), 16);
@@ -1901,7 +1925,8 @@ app.get('/api/analytics/hash-sizes', (req, res) => {
     for (const hop of hops) {
       if (!uniqueHops[hop]) {
         const hopLower = hop.toLowerCase();
-        const match = allNodes.find(n => n.public_key.toLowerCase().startsWith(hopLower));
+        const candidates = hsPrefixMap.get(hopLower);
+        const match = candidates && candidates.length ? candidates[0] : null;
         uniqueHops[hop] = { size: Math.ceil(hop.length / 2), count: 0, name: match?.name || null, pubkey: match?.public_key || null };
       }
       uniqueHops[hop].count++;
@@ -1910,7 +1935,7 @@ app.get('/api/analytics/hash-sizes', (req, res) => {
     // Try to identify originator from decoded_json for advert packets
     if (p.payload_type === 4) {
       try {
-        const d = JSON.parse(p.decoded_json);
+        const d = p._parsedDecoded || (p._parsedDecoded = typeof p.decoded_json === 'string' ? JSON.parse(p.decoded_json) : p.decoded_json);
         const name = d.name || (d.pubKey || d.public_key || '').slice(0, 8);
         if (name) {
           if (!byNode[name]) byNode[name] = { hashSize, packets: 0, lastSeen: p.timestamp, pubkey: d.pubKey || d.public_key || null };
@@ -2205,13 +2230,20 @@ app.get('/api/observers', (req, res) => {
   const _c = cache.get('observers'); if (_c) return res.json(_c);
   const observers = db.getObservers();
   const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
-  // Join observer location from nodes table (observers are nodes — same pubkey)
-  const nodeLocStmt = db.db.prepare("SELECT lat, lon, role FROM nodes WHERE public_key = ? COLLATE NOCASE");
+  // Batch-fetch all node locations in one query
+  const allNodes = db.db.prepare("SELECT public_key, lat, lon, role FROM nodes").all();
+  const nodeMap = new Map();
+  for (const n of allNodes) nodeMap.set(n.public_key?.toLowerCase(), n);
   const result = observers.map(o => {
     const obsPackets = pktStore.byObserver.get(o.id) || [];
-    const lastHour = { count: obsPackets.filter(p => p.timestamp > oneHourAgo).length };
-    const node = nodeLocStmt.get(o.id);
-    return { ...o, packetsLastHour: lastHour.count, lat: node?.lat || null, lon: node?.lon || null, nodeRole: node?.role || null };
+    // byObserver is sorted newest-first, so count from front until we pass the cutoff
+    let count = 0;
+    for (let i = 0; i < obsPackets.length; i++) {
+      if (obsPackets[i].timestamp > oneHourAgo) count++;
+      else break;
+    }
+    const node = nodeMap.get(o.id?.toLowerCase());
+    return { ...o, packetsLastHour: count, lat: node?.lat || null, lon: node?.lon || null, nodeRole: node?.role || null };
   });
   const _oResult = { observers: result, server_time: new Date().toISOString() };
   cache.set('observers', _oResult, TTL.observers);
