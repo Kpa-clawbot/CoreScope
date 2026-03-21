@@ -408,6 +408,7 @@
         if (!sender) sender = 'Unknown';
 
         var ts = m.data?.packet?.timestamp || m.data?.timestamp || new Date().toISOString();
+        console.log('[ch-ws] channelName:', channelName, 'ts:', ts, 'packet.ts:', m.data?.packet?.timestamp, 'data.ts:', m.data?.timestamp);
         var pktHash = m.data?.hash || m.data?.packet?.hash || null;
         var pktId = m.data?.id || null;
         var snr = m.data?.snr ?? m.data?.packet?.snr ?? payload.SNR ?? null;
