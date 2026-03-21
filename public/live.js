@@ -683,10 +683,19 @@
         </div>
       </div>`;
 
+    // Fetch configurable map defaults (#115)
+    let mapCenter = [37.45, -122.0];
+    let mapZoom = 9;
+    try {
+      const mapCfg = await (await fetch('/api/config/map')).json();
+      if (Array.isArray(mapCfg.center) && mapCfg.center.length === 2) mapCenter = mapCfg.center;
+      if (typeof mapCfg.zoom === 'number') mapZoom = mapCfg.zoom;
+    } catch {}
+
     map = L.map('liveMap', {
       zoomControl: false, attributionControl: false,
       zoomAnimation: true, markerZoomAnimation: true
-    }).setView([37.45, -122.0], 9);
+    }).setView(mapCenter, mapZoom);
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);

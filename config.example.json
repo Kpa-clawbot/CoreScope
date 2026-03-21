@@ -54,6 +54,10 @@
     "#ShortFast"
   ],
   "defaultRegion": "SJC",
+  "mapDefaults": {
+    "center": [37.45, -122.0],
+    "zoom": 9
+  },
   "regions": {
     "SJC": "San Jose, US",
     "SFO": "San Francisco, US",

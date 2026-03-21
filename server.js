@@ -255,6 +255,14 @@ app.get('/api/config/regions', (req, res) => {
   res.json(regions);
 });
 
+app.get('/api/config/map', (req, res) => {
+  const defaults = config.mapDefaults || {};
+  res.json({
+    center: defaults.center || [37.45, -122.0],
+    zoom: defaults.zoom || 9
+  });
+});
+
 app.get('/api/perf', (req, res) => {
   const summary = {};
   for (const [path, ep] of Object.entries(perfStats.endpoints)) {

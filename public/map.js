@@ -77,7 +77,7 @@
     });
   }
 
-  function init(container) {
+  async function init(container) {
     container.innerHTML = `
       <div id="map-wrap" style="position:relative;width:100%;height:100%;">
         <div id="leaflet-map" style="width:100%;height:100%;"></div>
@@ -116,9 +116,14 @@
         </div>
       </div>`;
 
-    // Init Leaflet — restore saved position or default to Bay Area
-    const defaultCenter = [37.6, -122.1];
-    const defaultZoom = 9;
+    // Init Leaflet — restore saved position or use configurable defaults (#115)
+    let defaultCenter = [37.6, -122.1];
+    let defaultZoom = 9;
+    try {
+      const mapCfg = await (await fetch('/api/config/map')).json();
+      if (Array.isArray(mapCfg.center) && mapCfg.center.length === 2) defaultCenter = mapCfg.center;
+      if (typeof mapCfg.zoom === 'number') defaultZoom = mapCfg.zoom;
+    } catch {}
     let initCenter = defaultCenter;
     let initZoom = defaultZoom;
     const savedView = localStorage.getItem('map-view');
