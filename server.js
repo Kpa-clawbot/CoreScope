@@ -2002,6 +2002,147 @@ app.get('/api/nodes/:pubkey/health', (req, res) => {
   res.json(result);
 });
 
+app.get('/api/nodes/:pubkey/paths', (req, res) => {
+  const pubkey = req.params.pubkey;
+  const _ck = 'nodePaths:' + pubkey;
+  const _c = cache.get(_ck); if (_c) return res.json(_c);
+
+  const node = db.db.prepare('SELECT public_key, name, lat, lon FROM nodes WHERE public_key = ?').get(pubkey);
+  if (!node) return res.status(404).json({ error: 'Not found' });
+
+  const prefix1 = pubkey.slice(0, 2).toLowerCase();
+  const prefix2 = pubkey.slice(0, 4).toLowerCase();
+
+  const allNodes = db.db.prepare('SELECT public_key, name, lat, lon FROM nodes WHERE name IS NOT NULL').all();
+
+  // Scan all transmissions for paths containing this node's prefix
+  const matchingTx = [];
+  for (const [, tx] of pktStore.byHash) {
+    if (!tx.path_json) continue;
+    let hops;
+    try { hops = JSON.parse(tx.path_json); } catch { continue; }
+    if (!Array.isArray(hops) || !hops.length) continue;
+    const found = hops.some(h => {
+      const hl = (typeof h === 'string' ? h : '').toLowerCase();
+      return hl === prefix1 || hl === prefix2 || hl.startsWith(prefix2);
+    });
+    if (found) matchingTx.push({ tx, hops });
+  }
+
+  // Resolve hops for each transmission using origin-anchored disambiguation
+  const dist = (lat1, lon1, lat2, lon2) => Math.sqrt((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2);
+  const MAX_HOP_DIST = MAX_HOP_DIST_SERVER;
+
+  function resolveHopsInternal(hops, originLat, originLon, observerId) {
+    let observerLat = null, observerLon = null;
+    if (observerId) {
+      const obsNode = allNodes.find(n => n.name === observerId || n.public_key === observerId);
+      if (obsNode && obsNode.lat && obsNode.lon && !(obsNode.lat === 0 && obsNode.lon === 0)) {
+        observerLat = obsNode.lat; observerLon = obsNode.lon;
+      }
+    }
+    const resolved = {};
+    for (const hop of hops) {
+      const hopLower = hop.toLowerCase();
+      const candidates = allNodes.filter(n => n.public_key.toLowerCase().startsWith(hopLower));
+      if (candidates.length === 0) resolved[hop] = { name: null, candidates: [] };
+      else if (candidates.length === 1) resolved[hop] = { name: candidates[0].name, pubkey: candidates[0].public_key, lat: candidates[0].lat, lon: candidates[0].lon };
+      else resolved[hop] = { name: candidates[0].name, pubkey: candidates[0].public_key, lat: candidates[0].lat, lon: candidates[0].lon, ambiguous: true, candidates: candidates.map(c => ({ name: c.name, pubkey: c.public_key, lat: c.lat, lon: c.lon })) };
+    }
+    const hopPositions = {};
+    for (const hop of hops) {
+      const r = resolved[hop];
+      if (r && !r.ambiguous && r.pubkey) {
+        const nd = allNodes.find(n => n.public_key === r.pubkey);
+        if (nd && nd.lat && nd.lon && !(nd.lat === 0 && nd.lon === 0)) hopPositions[hop] = { lat: nd.lat, lon: nd.lon };
+      }
+    }
+    // Forward pass
+    let lastPos = (originLat != null && originLon != null) ? { lat: originLat, lon: originLon } : null;
+    for (let i = 0; i < hops.length; i++) {
+      const hop = hops[i];
+      if (hopPositions[hop]) { lastPos = hopPositions[hop]; continue; }
+      const r = resolved[hop]; if (!r || !r.ambiguous) continue;
+      const withLoc = r.candidates.filter(c => c.lat && c.lon && !(c.lat === 0 && c.lon === 0));
+      if (!withLoc.length) continue;
+      let anchor = lastPos;
+      if (!anchor && i === hops.length - 1 && observerLat != null) anchor = { lat: observerLat, lon: observerLon };
+      if (anchor) withLoc.sort((a, b) => dist(a.lat, a.lon, anchor.lat, anchor.lon) - dist(b.lat, b.lon, anchor.lat, anchor.lon));
+      r.name = withLoc[0].name; r.pubkey = withLoc[0].pubkey; r.lat = withLoc[0].lat; r.lon = withLoc[0].lon;
+      hopPositions[hop] = { lat: withLoc[0].lat, lon: withLoc[0].lon }; lastPos = hopPositions[hop];
+    }
+    // Backward pass
+    let nextPos = observerLat != null ? { lat: observerLat, lon: observerLon } : null;
+    for (let i = hops.length - 1; i >= 0; i--) {
+      const hop = hops[i];
+      if (hopPositions[hop]) { nextPos = hopPositions[hop]; continue; }
+      const r = resolved[hop]; if (!r || !r.ambiguous) continue;
+      const withLoc = r.candidates.filter(c => c.lat && c.lon && !(c.lat === 0 && c.lon === 0));
+      if (!withLoc.length || !nextPos) continue;
+      withLoc.sort((a, b) => dist(a.lat, a.lon, nextPos.lat, nextPos.lon) - dist(b.lat, b.lon, nextPos.lat, nextPos.lon));
+      r.name = withLoc[0].name; r.pubkey = withLoc[0].pubkey; r.lat = withLoc[0].lat; r.lon = withLoc[0].lon;
+      hopPositions[hop] = { lat: withLoc[0].lat, lon: withLoc[0].lon }; nextPos = hopPositions[hop];
+    }
+    // Sanity check
+    for (let i = 0; i < hops.length; i++) {
+      const pos = hopPositions[hops[i]]; if (!pos) continue;
+      const prev = i > 0 ? hopPositions[hops[i-1]] : null;
+      const next = i < hops.length-1 ? hopPositions[hops[i+1]] : null;
+      if (!prev && !next) continue;
+      const dPrev = prev ? dist(pos.lat, pos.lon, prev.lat, prev.lon) : 0;
+      const dNext = next ? dist(pos.lat, pos.lon, next.lat, next.lon) : 0;
+      const tooFarPrev = prev && dPrev > MAX_HOP_DIST;
+      const tooFarNext = next && dNext > MAX_HOP_DIST;
+      if ((tooFarPrev && tooFarNext) || (tooFarPrev && !next) || (tooFarNext && !prev)) {
+        const r = resolved[hops[i]]; if (r) r.unreliable = true;
+        delete hopPositions[hops[i]];
+      }
+    }
+    return hops.map(h => ({ prefix: h, name: resolved[h]?.name || h, pubkey: resolved[h]?.pubkey || null, lat: resolved[h]?.lat || null, lon: resolved[h]?.lon || null }));
+  }
+
+  // Group by resolved path signature
+  const pathGroups = {};
+  let totalTransmissions = 0;
+  for (const { tx, hops } of matchingTx) {
+    totalTransmissions++;
+    // Determine origin for disambiguation
+    let originLat = null, originLon = null;
+    if (tx.decoded_json) {
+      try {
+        const dec = typeof tx.decoded_json === 'string' ? JSON.parse(tx.decoded_json) : tx.decoded_json;
+        if (dec.lat && dec.lon) { originLat = dec.lat; originLon = dec.lon; }
+        else if (dec.pubKey) {
+          const src = allNodes.find(n => n.public_key === dec.pubKey);
+          if (src && src.lat && src.lon) { originLat = src.lat; originLon = src.lon; }
+        }
+      } catch {}
+    }
+    const resolvedHops = resolveHopsInternal(hops, originLat, originLon, tx.observer_id);
+    const key = resolvedHops.map(h => h.pubkey || h.prefix).join('→');
+    if (!pathGroups[key]) pathGroups[key] = { hops: resolvedHops, count: 0, lastSeen: null, sampleHash: tx.hash };
+    pathGroups[key].count++;
+    const ts = tx.timestamp;
+    if (!pathGroups[key].lastSeen || ts > pathGroups[key].lastSeen) {
+      pathGroups[key].lastSeen = ts;
+      pathGroups[key].sampleHash = tx.hash;
+    }
+  }
+
+  const paths = Object.values(pathGroups)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 50);
+
+  const result = {
+    node: { public_key: node.public_key, name: node.name, lat: node.lat, lon: node.lon },
+    paths,
+    totalPaths: Object.keys(pathGroups).length,
+    totalTransmissions
+  };
+  cache.set(_ck, result, TTL.nodeHealth);
+  res.json(result);
+});
+
 app.get('/api/nodes/:pubkey/analytics', (req, res) => {
   const pubkey = req.params.pubkey;
   const days = Math.min(Math.max(Number(req.query.days) || 7, 1), 365);

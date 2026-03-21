@@ -938,7 +938,16 @@
             const r = data.resolved?.[h];
             return r?.pubkey || h;
           });
-          sessionStorage.setItem('map-route-hops', JSON.stringify(resolvedKeys));
+          // Build origin info for the sender node
+          const origin = {};
+          if (decoded.pubKey) origin.pubkey = decoded.pubKey;
+          else if (decoded.srcHash) origin.pubkey = decoded.srcHash;
+          if (decoded.adName || decoded.name) origin.name = decoded.adName || decoded.name;
+          if (senderLat != null && senderLon != null) { origin.lat = senderLat; origin.lon = senderLon; }
+          sessionStorage.setItem('map-route-hops', JSON.stringify({
+            origin: origin,
+            hops: resolvedKeys
+          }));
           window.location.hash = '#/map?route=1';
         } catch {
           window.location.hash = '#/map';
