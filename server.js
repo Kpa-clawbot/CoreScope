@@ -1111,7 +1111,7 @@ app.get('/api/nodes', (req, res) => {
             if (p.decoded_json) {
               const d = JSON.parse(p.decoded_json);
               const pk = d.pubKey || d.public_key;
-              if (pk) hashSizeMap.set(pk, hs);
+              if (pk && !hashSizeMap.has(pk)) hashSizeMap.set(pk, hs);
             }
           }
         }
