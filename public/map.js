@@ -61,10 +61,10 @@
   }
 
   function makeRepeaterLabelIcon(node) {
-    var hashSize = node.hash_size || 1;
     var s = ROLE_STYLE['repeater'] || ROLE_STYLE.companion;
-    var label = hashSize + 'B';
-    var html = '<div style="background:' + s.color + ';color:#fff;font-weight:bold;font-size:12px;padding:3px 7px;border-radius:4px;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.4);text-align:center;line-height:1;">' + label + '</div>';
+    var label = node.hash_size ? node.hash_size + 'B' : '?';
+    var bgColor = node.hash_size ? s.color : '#999';
+    var html = '<div style="background:' + bgColor + ';color:#fff;font-weight:bold;font-size:12px;padding:3px 7px;border-radius:4px;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.4);text-align:center;line-height:1;">' + label + '</div>';
     return L.divIcon({
       html: html,
       className: 'meshcore-marker meshcore-label-marker',
@@ -142,6 +142,10 @@
       const c = map.getCenter();
       localStorage.setItem('map-view', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: map.getZoom() }));
       userHasMoved = true;
+    });
+
+    map.on('zoomend', () => {
+      if (filters.hashLabels && !_renderingMarkers) renderMarkers();
     });
 
     markerLayer = L.layerGroup().addTo(map);
@@ -367,7 +371,55 @@
     map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
   }
 
+  var _renderingMarkers = false;
+  var _lastDeconflictZoom = null;
+
+  function deconflictLabels(labelMarkers, map) {
+    const placed = [];
+    const LABEL_W = 32;
+    const LABEL_H = 22;
+    const PAD = 4;
+
+    const overlaps = (b) => placed.some(p =>
+      b.x < p.x + p.w + PAD && b.x + b.w + PAD > p.x &&
+      b.y < p.y + p.h + PAD && b.y + b.h + PAD > p.y
+    );
+
+    for (const m of labelMarkers) {
+      const pt = map.latLngToLayerPoint(m.latLng);
+      let bestPt = pt;
+      let box = { x: pt.x - LABEL_W / 2, y: pt.y - LABEL_H / 2, w: LABEL_W, h: LABEL_H };
+
+      if (overlaps(box)) {
+        const offsets = [
+          [0, -25], [0, 25], [-30, 0], [30, 0],
+          [-25, -20], [25, -20], [-25, 20], [25, 20],
+          [0, -45], [0, 45], [-50, 0], [50, 0]
+        ];
+        for (const [dx, dy] of offsets) {
+          const tryPt = L.point(pt.x + dx, pt.y + dy);
+          const tryBox = { x: tryPt.x - LABEL_W / 2, y: tryPt.y - LABEL_H / 2, w: LABEL_W, h: LABEL_H };
+          if (!overlaps(tryBox)) {
+            bestPt = tryPt;
+            box = tryBox;
+            break;
+          }
+        }
+      }
+
+      placed.push(box);
+      m.adjustedLatLng = map.layerPointToLatLng(bestPt);
+      m.offset = Math.sqrt(Math.pow(bestPt.x - pt.x, 2) + Math.pow(bestPt.y - pt.y, 2));
+    }
+  }
+
   function renderMarkers() {
+    if (_renderingMarkers) return;
+    _renderingMarkers = true;
+    try { _renderMarkersInner(); } finally { _renderingMarkers = false; }
+  }
+
+  function _renderMarkersInner() {
     markerLayer.clearLayers();
 
     const filtered = nodes.filter(n => {
@@ -376,15 +428,43 @@
       return true;
     });
 
-    for (const node of filtered) {
-      const icon = (node.role === 'repeater' && filters.hashLabels) ? makeRepeaterLabelIcon(node) : makeMarkerIcon(node.role || 'companion');
-      const marker = L.marker([node.lat, node.lon], {
-        icon,
-        alt: `${node.name || 'Unknown'} (${node.role || 'node'})`,
-      });
+    const labelMarkers = [];
 
-      marker.bindPopup(buildPopup(node), { maxWidth: 280 });
-      markerLayer.addLayer(marker);
+    for (const node of filtered) {
+      const useLabel = node.role === 'repeater' && filters.hashLabels;
+      const icon = useLabel ? makeRepeaterLabelIcon(node) : makeMarkerIcon(node.role || 'companion');
+      const latLng = L.latLng(node.lat, node.lon);
+
+      if (useLabel) {
+        labelMarkers.push({ latLng, node, icon });
+      } else {
+        const marker = L.marker(latLng, {
+          icon,
+          alt: `${node.name || 'Unknown'} (${node.role || 'node'})`,
+        });
+        marker.bindPopup(buildPopup(node), { maxWidth: 280 });
+        markerLayer.addLayer(marker);
+      }
+    }
+
+    if (labelMarkers.length > 0) {
+      deconflictLabels(labelMarkers, map);
+      for (const m of labelMarkers) {
+        const pos = m.adjustedLatLng || m.latLng;
+        const marker = L.marker(pos, {
+          icon: m.icon,
+          alt: `${m.node.name || 'Unknown'} (${m.node.role || 'node'})`,
+        });
+        marker.bindPopup(buildPopup(m.node), { maxWidth: 280 });
+        markerLayer.addLayer(marker);
+
+        if (m.offset > 15) {
+          const line = L.polyline([m.latLng, pos], {
+            color: '#999', weight: 1, dashArray: '3,3', opacity: 0.6
+          });
+          markerLayer.addLayer(line);
+        }
+      }
     }
 
     // Add observer markers
