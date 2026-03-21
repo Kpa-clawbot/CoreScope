@@ -568,17 +568,22 @@ for (const source of mqttSources) {
 
         if (decoded.header.payloadTypeName === 'ADVERT' && decoded.payload.pubKey) {
           const p = decoded.payload;
-          const role = p.flags ? (p.flags.repeater ? 'repeater' : p.flags.room ? 'room' : p.flags.sensor ? 'sensor' : 'companion') : 'companion';
-          db.upsertNode({ public_key: p.pubKey, name: p.name || null, role, lat: p.lat, lon: p.lon, last_seen: now });
-          // Invalidate this node's caches on advert
-          cache.invalidate('node:' + p.pubKey);
-          cache.invalidate('health:' + p.pubKey);
-          cache.invalidate('bulk-health');
+          const validation = decoder.validateAdvert(p);
+          if (validation.valid) {
+            const role = p.flags ? (p.flags.repeater ? 'repeater' : p.flags.room ? 'room' : p.flags.sensor ? 'sensor' : 'companion') : 'companion';
+            db.upsertNode({ public_key: p.pubKey, name: p.name || null, role, lat: p.lat, lon: p.lon, last_seen: now });
+            // Invalidate this node's caches on advert
+            cache.invalidate('node:' + p.pubKey);
+            cache.invalidate('health:' + p.pubKey);
+            cache.invalidate('bulk-health');
 
-          // Cross-reference: if this node's pubkey matches an existing observer, backfill observer name
-          if (p.name && p.pubKey) {
-            const existingObs = db.db.prepare('SELECT id FROM observers WHERE id = ?').get(p.pubKey);
-            if (existingObs) db.updateObserverStatus({ id: p.pubKey, name: p.name });
+            // Cross-reference: if this node's pubkey matches an existing observer, backfill observer name
+            if (p.name && p.pubKey) {
+              const existingObs = db.db.prepare('SELECT id FROM observers WHERE id = ?').get(p.pubKey);
+              if (existingObs) db.updateObserverStatus({ id: p.pubKey, name: p.name });
+            }
+          } else {
+            console.warn(`[advert] Skipping corrupted ADVERT from ${tag}: ${validation.reason} (raw: ${msg.raw.slice(0, 40)}…)`);
           }
         }
 
@@ -629,6 +634,15 @@ for (const source of mqttSources) {
           const lat = advert.lat ?? advert.latitude ?? null;
           const lon = advert.lon ?? advert.lng ?? advert.longitude ?? null;
           const role = advert.role || (advert.flags?.repeater ? 'repeater' : advert.flags?.room ? 'room' : 'companion');
+
+          // Validate companion bridge adverts too
+          const bridgeAdvert = { pubKey: pubKey, name, lat, lon, timestamp: Math.floor(Date.now() / 1000), flags: advert.flags || null };
+          const validation = decoder.validateAdvert(bridgeAdvert);
+          if (!validation.valid) {
+            console.warn(`[advert] Skipping corrupted companion ADVERT: ${validation.reason}`);
+            return;
+          }
+
           db.upsertNode({ public_key: pubKey, name, role, lat, lon, last_seen: now });
           
           const advertPktData = {
@@ -955,8 +969,13 @@ app.post('/api/packets', (req, res) => {
 
     if (decoded.header.payloadTypeName === 'ADVERT' && decoded.payload.pubKey) {
       const p = decoded.payload;
-      const role = p.flags ? (p.flags.repeater ? 'repeater' : p.flags.room ? 'room' : p.flags.sensor ? 'sensor' : 'companion') : 'companion';
-      db.upsertNode({ public_key: p.pubKey, name: p.name || null, role, lat: p.lat, lon: p.lon, last_seen: now });
+      const validation = decoder.validateAdvert(p);
+      if (validation.valid) {
+        const role = p.flags ? (p.flags.repeater ? 'repeater' : p.flags.room ? 'room' : p.flags.sensor ? 'sensor' : 'companion') : 'companion';
+        db.upsertNode({ public_key: p.pubKey, name: p.name || null, role, lat: p.lat, lon: p.lon, last_seen: now });
+      } else {
+        console.warn(`[advert] Skipping corrupted ADVERT (API): ${validation.reason}`);
+      }
     }
 
     if (observer) {

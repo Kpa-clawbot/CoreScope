@@ -265,7 +265,65 @@ function decodePacket(hexString, channelKeys) {
   };
 }
 
-module.exports = { decodePacket, ROUTE_TYPES, PAYLOAD_TYPES };
+// --- ADVERT validation ---
+
+const VALID_ROLES = new Set(['repeater', 'companion', 'room', 'sensor']);
+
+/**
+ * Validate decoded ADVERT data before upserting into the DB.
+ * Returns { valid: true } or { valid: false, reason: string }.
+ */
+function validateAdvert(advert) {
+  if (!advert || advert.error) return { valid: false, reason: advert?.error || 'null advert' };
+
+  // pubkey must be at least 16 hex chars (8 bytes) and not all zeros
+  const pk = advert.pubKey || '';
+  if (pk.length < 16) return { valid: false, reason: `pubkey too short (${pk.length} hex chars)` };
+  if (/^0+$/.test(pk)) return { valid: false, reason: 'pubkey is all zeros' };
+
+  // lat/lon must be in valid ranges if present
+  if (advert.lat != null) {
+    if (!Number.isFinite(advert.lat) || advert.lat < -90 || advert.lat > 90) {
+      return { valid: false, reason: `invalid lat: ${advert.lat}` };
+    }
+  }
+  if (advert.lon != null) {
+    if (!Number.isFinite(advert.lon) || advert.lon < -180 || advert.lon > 180) {
+      return { valid: false, reason: `invalid lon: ${advert.lon}` };
+    }
+  }
+
+  // name must not contain control chars (except space) or be garbage
+  if (advert.name != null) {
+    // eslint-disable-next-line no-control-regex
+    if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(advert.name)) {
+      return { valid: false, reason: 'name contains control characters' };
+    }
+    // Reject names that are mostly non-printable or suspiciously long
+    if (advert.name.length > 64) {
+      return { valid: false, reason: `name too long (${advert.name.length} chars)` };
+    }
+  }
+
+  // role derivation check — flags byte should produce a known role
+  if (advert.flags) {
+    const role = advert.flags.repeater ? 'repeater' : advert.flags.room ? 'room' : advert.flags.sensor ? 'sensor' : 'companion';
+    if (!VALID_ROLES.has(role)) return { valid: false, reason: `unknown role: ${role}` };
+  }
+
+  // timestamp sanity: must be after 2020-01-01 and not more than 1 day in the future
+  if (advert.timestamp != null) {
+    const MIN_TS = 1577836800; // 2020-01-01
+    const MAX_TS = Math.floor(Date.now() / 1000) + 86400; // now + 1 day
+    if (advert.timestamp < MIN_TS || advert.timestamp > MAX_TS) {
+      return { valid: false, reason: `timestamp out of range: ${advert.timestamp}` };
+    }
+  }
+
+  return { valid: true };
+}
+
+module.exports = { decodePacket, validateAdvert, ROUTE_TYPES, PAYLOAD_TYPES, VALID_ROLES };
 
 // --- Tests ---
 if (require.main === module) {

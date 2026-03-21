@@ -119,6 +119,19 @@ for (const col of ['model', 'firmware', 'client_version', 'radio', 'battery_mv',
   }
 }
 
+// --- Cleanup corrupted nodes on startup ---
+// Remove nodes with obviously invalid data (short pubkeys, control chars in names, etc.)
+{
+  const cleaned = db.prepare(`
+    DELETE FROM nodes WHERE
+      length(public_key) < 16
+      OR public_key GLOB '*[^0-9a-fA-F]*'
+      OR (lat IS NOT NULL AND (lat < -90 OR lat > 90))
+      OR (lon IS NOT NULL AND (lon < -180 OR lon > 180))
+  `).run();
+  if (cleaned.changes > 0) console.log(`[cleanup] Removed ${cleaned.changes} corrupted node(s) from DB`);
+}
+
 // --- Prepared statements ---
 const stmts = {
   insertPacket: db.prepare(`

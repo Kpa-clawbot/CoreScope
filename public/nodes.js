@@ -274,6 +274,13 @@
       nodes = data.nodes || [];
       counts = data.counts || {};
 
+      // Defensive filter: hide nodes with obviously corrupted data
+      nodes = nodes.filter(n => {
+        if (n.public_key && n.public_key.length < 16) return false;
+        if (!n.name && !n.advert_count) return false;
+        return true;
+      });
+
       // Ensure claimed nodes are always present even if not in current page
       const myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
       const existingKeys = new Set(nodes.map(n => n.public_key));
