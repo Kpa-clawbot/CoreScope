@@ -1082,12 +1082,13 @@ app.get('/api/nodes', (req, res) => {
   // Compute hash_size for each node from ADVERT path byte or path hop lengths
   const hashSizeMap = new Map();
   // Pass 1: from ADVERT packets (most authoritative — path byte bits 7-6)
+  // packets array is sorted newest-first, so first-match = newest ADVERT
   for (const p of pktStore.packets) {
     if (p.payload_type === 4 && p.raw_hex) {
       try {
         const d = JSON.parse(p.decoded_json || '{}');
         const pk = d.pubKey || d.public_key;
-        if (pk) {
+        if (pk && !hashSizeMap.has(pk)) {
           const pathByte = parseInt(p.raw_hex.slice(2, 4), 16);
           hashSizeMap.set(pk, ((pathByte >> 6) & 0x3) + 1);
         }
