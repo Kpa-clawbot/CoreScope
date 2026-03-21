@@ -425,6 +425,21 @@
   }
 
   // Buffer a packet from WS
+  let _tabHidden = false;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      _tabHidden = true;
+    } else {
+      // Tab restored — skip animating anything that queued while away
+      _tabHidden = false;
+      // Clear any pending propagation buffers so they don't all fire at once
+      for (const [hash, entry] of propagationBuffer) {
+        clearTimeout(entry.timer);
+      }
+      propagationBuffer.clear();
+    }
+  });
+
   function bufferPacket(pkt) {
     pkt._ts = Date.now();
     const entry = { ts: pkt._ts, pkt };
@@ -439,6 +454,11 @@
     }
 
     if (VCR.mode === 'LIVE') {
+      // Skip animations when tab is backgrounded — just buffer for VCR timeline
+      if (_tabHidden) {
+        updateTimeline();
+        return;
+      }
       if (realisticPropagation && pkt.hash) {
         const hash = pkt.hash;
         if (propagationBuffer.has(hash)) {
