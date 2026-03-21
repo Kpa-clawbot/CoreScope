@@ -2211,8 +2211,9 @@ app.get('/api/channels/:hash/messages', (req, res) => {
 
     const sender = decoded.sender || (decoded.text ? decoded.text.split(': ')[0] : null) || pkt.observer_name || pkt.observer_id || 'Unknown';
     const text = decoded.text || decoded.encryptedData || '';
-    const ts = decoded.sender_timestamp || pkt.timestamp;
-    const dedupeKey = `${sender}:${ts}`;
+    // Use server observation timestamp for dedup — sender_timestamp is unreliable (device clocks are wildly inaccurate)
+    const ts = pkt.timestamp;
+    const dedupeKey = `${sender}:${pkt.hash}`;
 
     if (msgMap.has(dedupeKey)) {
       const existing = msgMap.get(dedupeKey);
