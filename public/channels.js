@@ -485,11 +485,18 @@
         }
       }
     });
+
+    // Tick relative timestamps every 30s
+    timeAgoTimer = setInterval(renderChannelList, 30000);
   }
+
+  var timeAgoTimer = null;
 
   function destroy() {
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
+    if (timeAgoTimer) clearInterval(timeAgoTimer);
+    timeAgoTimer = null;
     if (regionChangeHandler) RegionFilter.offChange(regionChangeHandler);
     regionChangeHandler = null;
     channels = [];
