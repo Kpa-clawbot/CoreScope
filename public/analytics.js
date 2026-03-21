@@ -1170,7 +1170,7 @@
       const [nodesResp, bulkHealth, netStatus] = await Promise.all([
         api('/nodes?limit=200&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
         api('/nodes/bulk-health?limit=50' + rq, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/nodes/network-status' + rq, { ttl: CLIENT_TTL.analyticsRF })
+        api('/nodes/network-status' + (rq ? '?' + rq.slice(1) : ''), { ttl: CLIENT_TTL.analyticsRF })
       ]);
       const nodes = nodesResp.nodes || nodesResp;
       const myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
