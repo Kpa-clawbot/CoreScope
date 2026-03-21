@@ -698,7 +698,7 @@
     // Advertisements — show node name and role
     if (decoded.type === 'ADVERT' && decoded.name) {
       const role = decoded.flags?.repeater ? '📡' : decoded.flags?.room ? '🏠' : decoded.flags?.sensor ? '🌡' : '📻';
-      return `${role} ${escapeHtml(decoded.name)}`;
+      return `${role} <a href="#/nodes/${encodeURIComponent(decoded.pubKey)}" class="hop-link hop-named" data-hop-link="true">${escapeHtml(decoded.name)}</a>`;
     }
     // Direct messages
     if (decoded.type === 'TXT_MSG') return `✉️ ${decoded.srcHash?.slice(0,8) || '?'} → ${decoded.destHash?.slice(0,8) || '?'}`;
@@ -944,7 +944,7 @@
           fOff += 8;
         }
         if (decoded.flags.hasName) {
-          rows += fieldRow(fOff, 'Node Name', escapeHtml(decoded.name || ''), '');
+          rows += fieldRow(fOff, 'Node Name', decoded.pubKey ? `<a href="#/nodes/${encodeURIComponent(decoded.pubKey)}" class="hop-link hop-named" data-hop-link="true">${escapeHtml(decoded.name || '')}</a>` : escapeHtml(decoded.name || ''), '');
         }
       }
     } else if (decoded.type === 'GRP_TXT') {
