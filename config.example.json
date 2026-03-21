@@ -1,5 +1,9 @@
 {
   "port": 3000,
+  "https": {
+    "cert": "/path/to/cert.pem",
+    "key": "/path/to/key.pem"
+  },
   "mqtt": {
     "broker": "mqtt://localhost:1883",
     "topic": "meshcore/+/+/packets"

@@ -2,9 +2,11 @@
 
 const express = require('express');
 const http = require('http');
+const https = require('https');
 const { WebSocketServer } = require('ws');
 const mqtt = require('mqtt');
 const path = require('path');
+const fs = require('fs');
 const config = require('./config.json');
 const decoder = require('./decoder');
 
@@ -154,7 +156,29 @@ const cache = new TTLCache();
 db.seed();
 
 const app = express();
-const server = http.createServer(app);
+
+function createServer(app, cfg) {
+  const tls = cfg.https || {};
+  if (!tls.cert || !tls.key) {
+    return { server: http.createServer(app), isHttps: false };
+  }
+
+  try {
+    const certPath = path.resolve(tls.cert);
+    const keyPath = path.resolve(tls.key);
+    const options = {
+      cert: fs.readFileSync(certPath),
+      key: fs.readFileSync(keyPath),
+    };
+    console.log(`[https] enabled (cert: ${certPath}, key: ${keyPath})`);
+    return { server: https.createServer(options, app), isHttps: true };
+  } catch (e) {
+    console.error(`[https] failed to load TLS cert/key, falling back to HTTP: ${e.message}`);
+    return { server: http.createServer(app), isHttps: false };
+  }
+}
+
+const { server, isHttps } = createServer(app, config);
 
 // --- Performance Instrumentation ---
 const perfStats = {
@@ -2305,8 +2329,10 @@ app.get('/{*splat}', (req, res) => {
 });
 
 // --- Start ---
-server.listen(process.env.PORT || config.port, () => {
-  console.log(`MeshCore Analyzer running on http://localhost:${config.port}`);
+const listenPort = process.env.PORT || config.port;
+server.listen(listenPort, () => {
+  const protocol = isHttps ? 'https' : 'http';
+  console.log(`MeshCore Analyzer running on ${protocol}://localhost:${listenPort}`);
   // Pre-warm expensive caches on startup
   setTimeout(() => {
     const t0 = Date.now();
@@ -2342,7 +2368,8 @@ server.listen(process.env.PORT || config.port, () => {
     console.log(`[pre-warm] subpaths: ${Date.now() - t0}ms`);
 
     // Pre-warm other heavy analytics endpoints via self-request
-    const port = process.env.PORT || config.port;
+    const port = listenPort;
+    const warmClient = isHttps ? https : http;
     const warmEndpoints = [
       '/api/analytics/rf',
       '/api/analytics/topology',
@@ -2358,7 +2385,9 @@ server.listen(process.env.PORT || config.port, () => {
         return;
       }
       const ep = warmEndpoints[warmed++];
-      http.get(`http://127.0.0.1:${port}${ep}`, (res) => {
+      const requestOptions = { hostname: '127.0.0.1', port, path: ep };
+      if (isHttps) requestOptions.rejectUnauthorized = false;
+      warmClient.get(requestOptions, (res) => {
         res.resume();
         res.on('end', warmNext);
       }).on('error', warmNext);
