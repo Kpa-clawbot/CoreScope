@@ -311,14 +311,7 @@ function validateAdvert(advert) {
     if (!VALID_ROLES.has(role)) return { valid: false, reason: `unknown role: ${role}` };
   }
 
-  // timestamp sanity: must be after 2020-01-01 and not more than 1 day in the future
-  if (advert.timestamp != null) {
-    const MIN_TS = 1577836800; // 2020-01-01
-    const MAX_TS = Math.floor(Date.now() / 1000) + 86400; // now + 1 day
-    if (advert.timestamp < MIN_TS || advert.timestamp > MAX_TS) {
-      return { valid: false, reason: `timestamp out of range: ${advert.timestamp}` };
-    }
-  }
+  // timestamp: decoded but not currently used for node storage — skip validation
 
   return { valid: true };
 }
