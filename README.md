@@ -148,6 +148,10 @@ Edit `config.json`:
 ```json
 {
   "port": 3000,
+  "https": {
+    "cert": "/path/to/cert.pem",
+    "key": "/path/to/key.pem"
+  },
   "mqtt": {
     "broker": "mqtt://localhost:1883",
     "topic": "meshcore/+/+/packets"
@@ -178,6 +182,7 @@ Edit `config.json`:
 | Field | Description |
 |-------|-------------|
 | `port` | HTTP server port (default: 3000) |
+| `https.cert` / `https.key` | Optional PEM cert/key paths to enable native HTTPS (falls back to HTTP if omitted or unreadable) |
 | `mqtt.broker` | Local MQTT broker URL. Set to `""` to disable |
 | `mqtt.topic` | MQTT topic pattern for packet ingestion |
 | `mqttSources` | Array of external MQTT broker connections (optional) |
