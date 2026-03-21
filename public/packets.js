@@ -124,6 +124,7 @@
   }
 
   let directPacketId = null;
+  let directPacketHash = null;
   let initGeneration = 0;
 
   async function init(app, routeParam) {
@@ -134,6 +135,7 @@
         directPacketId = routeParam.slice(3);
       } else if (routeParam.length <= 16) {
         filters.hash = routeParam;
+        directPacketHash = routeParam;
       } else {
         filters.node = routeParam;
       }
@@ -148,6 +150,18 @@
     initPanelResize();
     await loadObservers();
     loadPackets();
+
+    // Auto-select packet detail when arriving via hash URL
+    if (directPacketHash) {
+      const h = directPacketHash;
+      directPacketHash = null;
+      try {
+        const data = await api(`/packets/${h}`);
+        if (gen === initGeneration && data?.packet) {
+          selectPacket(data.packet.id, h);
+        }
+      } catch {}
+    }
 
     // Event delegation for data-action buttons
     app.addEventListener('click', function (e) {
@@ -279,6 +293,7 @@
     totalCount = 0;
     observers = [];
     directPacketId = null;
+    directPacketHash = null;
     groupByHash = true;
     filters = {};
     regionMap = {};
@@ -553,7 +568,11 @@
         if (e.type === 'keydown') e.preventDefault();
         const action = row.dataset.action;
         const value = row.dataset.value;
-        if (action === 'select') selectPacket(Number(value));
+        if (action === 'select') {
+          const hash = row.dataset.hash;
+          if (hash) selectPacket(null, hash);
+          else selectPacket(Number(value));
+        }
         else if (action === 'select-hash') pktSelectHash(value);
         else if (action === 'toggle-select') { pktToggleGroup(value); pktSelectHash(value); }
       };
@@ -644,7 +663,7 @@
             let childPath = [];
             try { childPath = JSON.parse(c.path_json || '[]'); } catch {}
             const childPathStr = renderPath(childPath);
-            html += `<tr class="group-child" data-id="${c.id}" data-action="select" data-value="${c.id}" tabindex="0" role="row">
+            html += `<tr class="group-child" data-id="${c.id}" data-hash="${c.hash || ''}" data-action="select" data-value="${c.id}" tabindex="0" role="row">
               <td></td><td class="col-region">${childRegion ? `<span class="badge-region">${childRegion}</span>` : '—'}</td>
               <td class="col-time">${timeAgo(c.timestamp)}</td>
               <td class="mono col-hash">${truncate(c.hash || '', 8)}</td>
@@ -674,7 +693,7 @@
       const pathStr = renderPath(pathHops);
       const detail = getDetailPreview(decoded);
 
-      return `<tr data-id="${p.id}" data-action="select" data-value="${p.id}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}">
+      return `<tr data-id="${p.id}" data-hash="${p.hash || ''}" data-action="select" data-value="${p.id}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}">
         <td></td><td class="col-region">${region ? `<span class="badge-region">${region}</span>` : '—'}</td>
         <td class="col-time">${timeAgo(p.timestamp)}</td>
         <td class="mono col-hash">${truncate(p.hash || String(p.id), 8)}</td>
@@ -715,9 +734,13 @@
     return '';
   }
 
-  async function selectPacket(id) {
+  async function selectPacket(id, hash) {
     selectedId = id;
-    history.replaceState(null, '', `#/packet/${id}`);
+    if (hash) {
+      history.replaceState(null, '', `#/packets/${hash}`);
+    } else {
+      history.replaceState(null, '', `#/packets/${id}`);
+    }
     renderTableRows();
     const isMobileNow = window.innerWidth <= 640;
     let panel;
@@ -748,7 +771,8 @@
     }
 
     try {
-      const data = await api(`/packets/${id}`);
+      const endpoint = hash ? `/packets/${hash}` : `/packets/${id}`;
+      const data = await api(endpoint);
       // Resolve path hops for detail view
       const pkt = data.packet;
       try {
@@ -813,7 +837,7 @@
         <dt>Path</dt><dd>${pathHops.length ? renderPath(pathHops) : '—'}</dd>
       </dl>
       <div class="detail-actions">
-        <button class="copy-link-btn" data-packet-id="${pkt.id}" title="Copy link to this packet">🔗 Copy Link</button>
+        <button class="copy-link-btn" data-packet-hash="${pkt.hash || ''}" data-packet-id="${pkt.id}" title="Copy link to this packet">🔗 Copy Link</button>
         ${pathHops.length ? `<button class="detail-map-link" id="viewRouteBtn">🗺️ View route on map</button>` : ''}
         <button class="replay-live-btn" title="Replay this packet on the live map">▶ Replay</button>
       </div>
@@ -828,7 +852,8 @@
     const copyLinkBtn = panel.querySelector('.copy-link-btn');
     if (copyLinkBtn) {
       copyLinkBtn.addEventListener('click', () => {
-        const url = `${location.origin}/#/packet/${copyLinkBtn.dataset.packetId}`;
+        const pktHash = copyLinkBtn.dataset.packetHash;
+        const url = pktHash ? `${location.origin}/#/packets/${pktHash}` : `${location.origin}/#/packets/${copyLinkBtn.dataset.packetId}`;
         navigator.clipboard.writeText(url).then(() => {
           copyLinkBtn.textContent = '✅ Copied!';
           setTimeout(() => { copyLinkBtn.textContent = '🔗 Copy Link'; }, 1500);
@@ -1135,20 +1160,20 @@
     // When grouped, find first packet with this hash
     try {
       const data = await api(`/packets?hash=${hash}&limit=1`);
-      if (data.packets?.[0]) selectPacket(data.packets[0].id);
+      if (data.packets?.[0]) selectPacket(data.packets[0].id, hash);
     } catch {}
   }
 
   registerPage('packets', { init, destroy });
 
-  // Standalone packet detail page: #/packet/123
+  // Standalone packet detail page: #/packet/123 or #/packet/HASH
   registerPage('packet-detail', {
     init: async (app, routeParam) => {
-      const id = Number(routeParam);
-      app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:20px"><div class="text-center text-muted" style="padding:40px">Loading packet #${id}…</div></div>`;
+      const param = routeParam;
+      app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:20px"><div class="text-center text-muted" style="padding:40px">Loading packet…</div></div>`;
       try {
-        const data = await api(`/packets/${id}`);
-        if (!data?.packet) { app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:40px;text-align:center"><h2>Packet not found</h2><p>Packet #${id} doesn't exist.</p><a href="#/packets">← Back to packets</a></div>`; return; }
+        const data = await api(`/packets/${param}`);
+        if (!data?.packet) { app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:40px;text-align:center"><h2>Packet not found</h2><p>Packet ${param} doesn't exist.</p><a href="#/packets">← Back to packets</a></div>`; return; }
         const hops = [];
         try { const ph = JSON.parse(data.packet.path_json || '[]'); hops.push(...ph); } catch {}
         const newHops = hops.filter(h => !(h in hopNameCache));

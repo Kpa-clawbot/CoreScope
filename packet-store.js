@@ -27,7 +27,6 @@ class PacketStore {
     this.byHash = new Map();         // hash → transmission object (1:1)
     this.byObserver = new Map();     // observer_id → [observation objects]
     this.byNode = new Map();         // pubkey → [transmission objects] (deduped)
-    this.byTransmission = new Map(); // hash → transmission object (same refs as byHash)
 
     // Track which hashes are indexed per node pubkey (avoid dupes in byNode)
     this._nodeHashIndex = new Map(); // pubkey → Set<hash>
@@ -77,9 +76,9 @@ class PacketStore {
     `).all();
 
     for (const row of rows) {
-      if (this.packets.length >= this.maxPackets && !this.byTransmission.has(row.hash)) break;
+      if (this.packets.length >= this.maxPackets && !this.byHash.has(row.hash)) break;
 
-      let tx = this.byTransmission.get(row.hash);
+      let tx = this.byHash.get(row.hash);
       if (!tx) {
         tx = {
           id: row.transmission_id,
@@ -100,7 +99,7 @@ class PacketStore {
           path_json: null,
           direction: null,
         };
-        this.byTransmission.set(row.hash, tx);
+        this.byHash.set(row.hash, tx);
         this.byHash.set(row.hash, tx);
         this.packets.push(tx);
         this.byTxId.set(tx.id, tx);
@@ -167,7 +166,7 @@ class PacketStore {
 
   /** Index a legacy packet row (old flat structure) — builds transmission + observation */
   _indexLegacy(pkt) {
-    let tx = this.byTransmission.get(pkt.hash);
+    let tx = this.byHash.get(pkt.hash);
     if (!tx) {
       tx = {
         id: pkt.id,
@@ -187,7 +186,7 @@ class PacketStore {
         path_json: pkt.path_json,
         direction: pkt.direction,
       };
-      this.byTransmission.set(pkt.hash, tx);
+      this.byHash.set(pkt.hash, tx);
       this.byHash.set(pkt.hash, tx);
       this.packets.push(tx);
         this.byTxId.set(tx.id, tx);
@@ -252,7 +251,7 @@ class PacketStore {
     while (this.packets.length > this.maxPackets) {
       const old = this.packets.pop();
       this.byHash.delete(old.hash);
-      this.byTransmission.delete(old.hash);
+      this.byHash.delete(old.hash);
       this.byTxId.delete(old.id);
       // Remove observations from byId and byObserver
       for (const obs of old.observations) {
@@ -270,13 +269,16 @@ class PacketStore {
   /** Insert a new packet (to both memory and SQLite) */
   insert(packetData) {
     const id = this.dbModule.insertPacket(packetData);
+    // Also write to normalized tables and get the transmission ID
+    const txResult = this.dbModule.insertTransmission ? this.dbModule.insertTransmission(packetData) : null;
+    const transmissionId = txResult ? txResult.transmissionId : null;
     const row = this.dbModule.getPacket(id);
     if (row && !this.sqliteOnly) {
       // Update or create transmission in memory
-      let tx = this.byTransmission.get(row.hash);
+      let tx = this.byHash.get(row.hash);
       if (!tx) {
         tx = {
-          id: row.id,
+          id: transmissionId || row.id,
           raw_hex: row.raw_hex,
           hash: row.hash,
           first_seen: row.timestamp,
@@ -293,7 +295,7 @@ class PacketStore {
           path_json: row.path_json,
           direction: row.direction,
         };
-        this.byTransmission.set(row.hash, tx);
+        this.byHash.set(row.hash, tx);
         this.byHash.set(row.hash, tx);
         this.packets.unshift(tx); // newest first
         this.byTxId.set(tx.id, tx);
@@ -465,7 +467,7 @@ class PacketStore {
     for (const o of obs) {
       if (!seen.has(o.hash)) {
         seen.add(o.hash);
-        const tx = this.byTransmission.get(o.hash);
+        const tx = this.byHash.get(o.hash);
         if (tx) result.push(tx);
       }
     }
@@ -531,7 +533,7 @@ class PacketStore {
   /** Get all siblings of a packet (same hash) — returns observations array */
   getSiblings(hash) {
     if (this.sqliteOnly) return this.db.prepare('SELECT * FROM packets WHERE hash = ? ORDER BY timestamp DESC').all(hash);
-    const tx = this.byTransmission.get(hash);
+    const tx = this.byHash.get(hash);
     return tx ? tx.observations : [];
   }
 
@@ -560,7 +562,6 @@ class PacketStore {
         byHash: this.byHash.size,
         byObserver: this.byObserver.size,
         byNode: this.byNode.size,
-        byTransmission: this.byTransmission.size,
       }
     };
   }

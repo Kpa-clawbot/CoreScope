@@ -327,6 +327,12 @@ function getPackets({ limit = 50, offset = 0, type, route, hash, since } = {}) {
   return { rows, total };
 }
 
+function getTransmission(id) {
+  try {
+    return db.prepare('SELECT * FROM transmissions WHERE id = ?').get(id) || null;
+  } catch { return null; }
+}
+
 function getPacket(id) {
   const packet = stmts.getPacket.get(id);
   if (!packet) return null;
@@ -652,4 +658,4 @@ function getNodeAnalytics(pubkey, days) {
   };
 }
 
-module.exports = { db, insertPacket, insertTransmission, insertPath, upsertNode, upsertObserver, updateObserverStatus, getPackets, getPacket, getNodes, getNode, getObservers, getStats, seed, searchNodes, getNodeHealth, getNodeAnalytics };
+module.exports = { db, insertPacket, insertTransmission, insertPath, upsertNode, upsertObserver, updateObserverStatus, getPackets, getPacket, getTransmission, getNodes, getNode, getObservers, getStats, seed, searchNodes, getNodeHealth, getNodeAnalytics };

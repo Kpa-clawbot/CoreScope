@@ -455,7 +455,7 @@ window.addEventListener('DOMContentLoaded', () => {
         const pktList = packets.packets || packets;
         if (Array.isArray(pktList)) {
           for (const p of pktList.slice(0, 5)) {
-            html += `<div class="search-result-item" onclick="location.hash='#/packets?id=${p.id}';document.getElementById('searchOverlay').classList.add('hidden')">
+            html += `<div class="search-result-item" onclick="location.hash='#/packets/${p.packet_hash || p.hash || p.id}';document.getElementById('searchOverlay').classList.add('hidden')">
               <span class="search-result-type">Packet</span>${truncate(p.packet_hash || '', 16)} — ${payloadTypeName(p.payload_type)}</div>`;
           }
         }

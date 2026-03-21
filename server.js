@@ -562,7 +562,7 @@ for (const source of mqttSources) {
     cache.debouncedInvalidateAll();
 
         const fullPacket = pktStore.getById(packetId);
-        const tx = pktStore.byTransmission.get(pktData.hash);
+        const tx = pktStore.byHash.get(pktData.hash);
         const observation_count = tx ? tx.observation_count : 1;
         const broadcastData = { id: packetId, raw: msg.raw, decoded, snr: msg.SNR, rssi: msg.RSSI, hash: msg.hash, observer: observerId, packet: fullPacket, observation_count };
         broadcast({ type: 'packet', data: broadcastData });
@@ -778,10 +778,21 @@ app.get('/api/packets/timestamps', (req, res) => {
 });
 
 app.get('/api/packets/:id', (req, res) => {
-  const id = Number(req.params.id);
-  // Try observation ID first, then transmission ID, then legacy packets table
-  // Try transmission ID first (what the UI sends), then observation ID, then legacy
-  const packet = pktStore.getByTxId(id) || pktStore.getById(id) || db.getPacket(id);
+  const param = req.params.id;
+  const isHash = /^[0-9a-f]{16}$/i.test(param);
+  let packet;
+  if (isHash) {
+    // Hash-based lookup
+    const tx = pktStore.byHash.get(param);
+    packet = tx || null;
+  }
+  if (!packet) {
+    const id = Number(param);
+    if (!isNaN(id)) {
+      // Try transmission ID first (what the UI sends), then observation ID, then legacy
+      packet = pktStore.getByTxId(id) || pktStore.getById(id) || db.getPacket(id);
+    }
+  }
   if (!packet) return res.status(404).json({ error: 'Not found' });
 
   // Use the sibling with the longest path (most hops) for display
@@ -802,7 +813,7 @@ app.get('/api/packets/:id', (req, res) => {
   const breakdown = buildBreakdown(packet.raw_hex, decoded);
 
   // Include sibling observations for this transmission
-  const transmission = packet.hash ? pktStore.byTransmission.get(packet.hash) : null;
+  const transmission = packet.hash ? pktStore.byHash.get(packet.hash) : null;
   const siblingObservations = transmission ? transmission.observations : [];
   const observation_count = transmission ? transmission.observation_count : 1;
 
