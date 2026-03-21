@@ -11,6 +11,8 @@
   let audioCtx = null;
   let soundEnabled = false;
   let showGhostHops = localStorage.getItem('live-ghost-hops') !== 'false';
+  let realisticPropagation = localStorage.getItem('live-realistic-propagation') === 'true';
+  const propagationBuffer = new Map(); // hash -> {timer, packets[]}
   let _onResize = null;
   let _navCleanup = null;
   let _timelineRefreshInterval = null;
@@ -437,7 +439,21 @@
     }
 
     if (VCR.mode === 'LIVE') {
-      animatePacket(pkt);
+      if (realisticPropagation && pkt.hash) {
+        const hash = pkt.hash;
+        if (propagationBuffer.has(hash)) {
+          propagationBuffer.get(hash).packets.push(pkt);
+        } else {
+          const entry = { packets: [pkt], timer: setTimeout(() => {
+            const buffered = propagationBuffer.get(hash);
+            propagationBuffer.delete(hash);
+            if (buffered) animateRealisticPropagation(buffered.packets);
+          }, PROPAGATION_BUFFER_MS) };
+          propagationBuffer.set(hash, entry);
+        }
+      } else {
+        animatePacket(pkt);
+      }
       updateTimeline();
     } else if (VCR.mode === 'PAUSED') {
       VCR.missedCount++;
@@ -592,6 +608,8 @@
             <span id="heatDesc" class="sr-only">Overlay a density heat map on the mesh nodes</span>
             <label><input type="checkbox" id="liveGhostToggle" checked aria-describedby="ghostDesc"> Ghosts</label>
             <span id="ghostDesc" class="sr-only">Show interpolated ghost markers for unknown hops</span>
+            <label><input type="checkbox" id="liveRealisticToggle" aria-describedby="realisticDesc"> Realistic</label>
+            <span id="realisticDesc" class="sr-only">Buffer packets by hash and animate all paths simultaneously</span>
           </div>
         </div>
         <div class="live-overlay live-feed" id="liveFeed">
@@ -706,6 +724,13 @@
     ghostToggle.addEventListener('change', (e) => {
       showGhostHops = e.target.checked;
       localStorage.setItem('live-ghost-hops', showGhostHops);
+    });
+
+    const realisticToggle = document.getElementById('liveRealisticToggle');
+    realisticToggle.checked = realisticPropagation;
+    realisticToggle.addEventListener('change', (e) => {
+      realisticPropagation = e.target.checked;
+      localStorage.setItem('live-realistic-propagation', realisticPropagation);
     });
 
     // Feed show/hide
@@ -1181,6 +1206,91 @@
     if (hopPositions.length === 0) return;
     if (hopPositions.length === 1) { pulseNode(hopPositions[0].key, hopPositions[0].pos, typeName); return; }
     animatePath(hopPositions, typeName, color);
+  }
+
+  function animateRealisticPropagation(packets) {
+    if (!packets.length) return;
+    const first = packets[0];
+    const decoded = first.decoded || {};
+    const header = decoded.header || {};
+    const typeName = header.payloadTypeName || 'UNKNOWN';
+    const color = TYPE_COLORS[typeName] || '#6b7280';
+    const icon = PAYLOAD_ICONS[typeName] || '📦';
+    const payload = decoded.payload || {};
+
+    packetCount += packets.length;
+    pktTimestamps.push(Date.now());
+    const _el = document.getElementById('livePktCount'); if (_el) _el.textContent = packetCount;
+
+    playSound(typeName);
+
+    // Ensure ADVERT nodes appear
+    for (const pkt of packets) {
+      const d = pkt.decoded || {};
+      const h = d.header || {};
+      const p = d.payload || {};
+      if (h.payloadTypeName === 'ADVERT' && p.pubKey) {
+        const key = p.pubKey;
+        if (!nodeMarkers[key] && p.lat != null && p.lon != null && !(p.lat === 0 && p.lon === 0)) {
+          const n = { public_key: key, name: p.name || key.slice(0,8), role: p.role || 'unknown', lat: p.lat, lon: p.lon };
+          nodeData[key] = n;
+          addNodeMarker(n);
+        }
+      }
+    }
+    const _el2 = document.getElementById('liveNodeCount'); if (_el2) _el2.textContent = Object.keys(nodeMarkers).length;
+
+    // Resolve all unique paths
+    const allPaths = [];
+    const seenPathKeys = new Set();
+    const observers = new Set();
+    for (const pkt of packets) {
+      const d = pkt.decoded || {};
+      const p = d.payload || {};
+      const hops = d.path?.hops || [];
+      if (pkt.observer) observers.add(pkt.observer);
+      const pathKey = hops.join(',');
+      if (seenPathKeys.has(pathKey)) continue;
+      seenPathKeys.add(pathKey);
+      const hopPositions = resolveHopPositions(hops, p);
+      if (hopPositions.length >= 2) allPaths.push(hopPositions);
+    }
+
+    // Consolidated feed item
+    const hops0 = decoded.path?.hops || [];
+    const text = payload.text || payload.name || '';
+    const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
+    const feed = document.getElementById('liveFeed');
+    if (feed) {
+      const item = document.createElement('div');
+      item.className = 'live-feed-item live-feed-enter';
+      item.setAttribute('tabindex', '0');
+      item.setAttribute('role', 'button');
+      item.style.cursor = 'pointer';
+      item.innerHTML = `
+        <span class="feed-icon" style="color:${color}">${icon}</span>
+        <span class="feed-type" style="color:${color}">${typeName}</span>
+        <span class="feed-hops">${allPaths.length}⇢ ${observers.size}👁</span>
+        <span class="feed-text">${escapeHtml(preview)}</span>
+        <span class="feed-time">${new Date(first._ts || Date.now()).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
+      `;
+      item.addEventListener('click', () => showFeedCard(item, first, color));
+      feed.prepend(item);
+      requestAnimationFrame(() => { requestAnimationFrame(() => item.classList.remove('live-feed-enter')); });
+      while (feed.children.length > 25) feed.removeChild(feed.lastChild);
+    }
+
+    if (allPaths.length === 0) {
+      // Single hop or unresolvable — just pulse origin if possible
+      const hp0 = resolveHopPositions(decoded.path?.hops || [], payload);
+      if (hp0.length >= 1) pulseNode(hp0[0].key, hp0[0].pos, typeName);
+      return;
+    }
+
+    // Animate all paths simultaneously
+    for (const hopPositions of allPaths) {
+      animatePath(hopPositions, typeName, color);
+    }
   }
 
   function resolveHopPositions(hops, payload) {

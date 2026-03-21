@@ -87,6 +87,9 @@
   // ─── WebSocket reconnect delay (ms) ───
   window.WS_RECONNECT_MS = 3000;
 
+  // ─── Propagation buffer (ms) for realistic mode ───
+  window.PROPAGATION_BUFFER_MS = 5000;
+
   // ─── Cache invalidation debounce (ms) ───
   window.CACHE_INVALIDATE_MS = 5000;
 
@@ -119,6 +122,7 @@
     if (cfg.wsReconnectMs != null) window.WS_RECONNECT_MS = cfg.wsReconnectMs;
     if (cfg.cacheInvalidateMs != null) window.CACHE_INVALIDATE_MS = cfg.cacheInvalidateMs;
     if (cfg.externalUrls) Object.assign(EXTERNAL_URLS, cfg.externalUrls);
+    if (cfg.propagationBufferMs != null) window.PROPAGATION_BUFFER_MS = cfg.propagationBufferMs;
     // Sync ROLE_STYLE colors with ROLE_COLORS
     for (var role in ROLE_STYLE) {
       if (ROLE_COLORS[role]) ROLE_STYLE[role].color = ROLE_COLORS[role];

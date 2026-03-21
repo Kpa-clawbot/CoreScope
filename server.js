@@ -238,7 +238,8 @@ app.get('/api/config/client', (req, res) => {
     perfSlowMs: config.perfSlowMs || null,
     wsReconnectMs: config.wsReconnectMs || null,
     cacheInvalidateMs: config.cacheInvalidateMs || null,
-    externalUrls: config.externalUrls || null
+    externalUrls: config.externalUrls || null,
+    propagationBufferMs: (config.liveMap || {}).propagationBufferMs || 5000
   });
 });
 
