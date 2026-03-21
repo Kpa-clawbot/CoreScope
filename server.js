@@ -1039,20 +1039,14 @@ app.get('/api/nodes', (req, res) => {
   // Region filtering: if region param is set, only include nodes seen by observers in those regions
   const regionObsIds = getObserverIdsForRegions(region);
   let regionNodeKeys = null;
-  if (regionObsIds) {
-    // Collect all packet hashes seen by regional observers (using byObserver index)
-    const regionalHashes = new Set();
-    for (const obsId of regionObsIds) {
-      const obs = pktStore.byObserver.get(obsId);
-      if (obs) for (const o of obs) regionalHashes.add(o.hash);
-    }
-    // Find node pubkeys that have at least one packet in the regional set (using _nodeHashIndex)
-    regionNodeKeys = new Set();
-    for (const [pubkey, hashes] of pktStore._nodeHashIndex) {
-      for (const h of hashes) {
-        if (regionalHashes.has(h)) { regionNodeKeys.add(pubkey); break; }
-      }
-    }
+  if (regionObsIds && regionObsIds.size > 0) {
+    // Use SQL to find all node pubkeys observed by regional observers
+    const obsArray = [...regionObsIds];
+    const placeholders = obsArray.map(() => '?').join(',');
+    const rows = db.db.prepare(
+      `SELECT DISTINCT t.sender_key FROM observations o JOIN transmissions t ON o.hash = t.hash WHERE o.observer_id IN (${placeholders})`
+    ).all(...obsArray);
+    regionNodeKeys = new Set(rows.map(r => r.sender_key));
   }
 
   const clause = where.length ? 'WHERE ' + where.join(' AND ') : '';
