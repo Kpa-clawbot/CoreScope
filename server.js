@@ -1559,6 +1559,11 @@ app.get('/api/analytics/hash-sizes', (req, res) => {
 app.get('/api/resolve-hops', (req, res) => {
   const hops = (req.query.hops || '').split(',').filter(Boolean);
   const observerId = req.query.observer || null;
+  // Origin anchor: sender's lat/lon for forward-pass disambiguation.
+  // Without this, the first ambiguous hop falls through to the backward pass
+  // which anchors from the observer — wrong when sender and observer are far apart.
+  const originLat = req.query.originLat ? parseFloat(req.query.originLat) : null;
+  const originLon = req.query.originLon ? parseFloat(req.query.originLon) : null;
   if (!hops.length) return res.json({ resolved: {} });
 
   const allNodes = db.db.prepare('SELECT public_key, name, lat, lon FROM nodes WHERE name IS NOT NULL').all();
@@ -1623,7 +1628,7 @@ app.get('/api/resolve-hops', (req, res) => {
   const dist = (lat1, lon1, lat2, lon2) => Math.sqrt((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2);
 
   // Forward pass: resolve each ambiguous hop using previous hop's position
-  let lastPos = null;
+  let lastPos = (originLat != null && originLon != null) ? { lat: originLat, lon: originLon } : null;
   for (let hi = 0; hi < hops.length; hi++) {
     const hop = hops[hi];
     if (hopPositions[hop]) {

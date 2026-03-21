@@ -927,7 +927,11 @@
         try {
           const obsId = obsName(pkt.observer_id);
           const observerParam = obsId ? '&observer=' + encodeURIComponent(obsId) : '';
-          const resp = await fetch('/api/resolve-hops?hops=' + encodeURIComponent(pathHops.join(',')) + observerParam);
+          // Anchor disambiguation from sender's location if known (e.g. ADVERT lat/lon)
+          const senderLat = decoded.lat || decoded.latitude;
+          const senderLon = decoded.lon || decoded.longitude;
+          const originParam = (senderLat != null && senderLon != null) ? `&originLat=${senderLat}&originLon=${senderLon}` : '';
+          const resp = await fetch('/api/resolve-hops?hops=' + encodeURIComponent(pathHops.join(',')) + observerParam + originParam);
           const data = await resp.json();
           // Pass full pubkeys (server-disambiguated) to map, falling back to short prefix
           const resolvedKeys = pathHops.map(h => {
