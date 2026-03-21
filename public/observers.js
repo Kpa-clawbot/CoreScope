@@ -5,6 +5,7 @@
   let observers = [];
   let wsHandler = null;
   let refreshTimer = null;
+  let regionChangeHandler = null;
 
   function init(app) {
     app.innerHTML = `
@@ -13,8 +14,11 @@
           <h2>Observer Status</h2>
           <button class="btn-icon" data-action="obs-refresh" title="Refresh" aria-label="Refresh observers">🔄</button>
         </div>
+        <div id="obsRegionFilter" class="region-filter-container"></div>
         <div id="obsContent"><div class="text-center text-muted" style="padding:40px">Loading…</div></div>
       </div>`;
+    RegionFilter.init(document.getElementById('obsRegionFilter'));
+    regionChangeHandler = RegionFilter.onChange(function () { render(); });
     loadObservers();
     // Event delegation for data-action buttons
     app.addEventListener('click', function (e) {
@@ -33,6 +37,8 @@
     wsHandler = null;
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = null;
+    if (regionChangeHandler) RegionFilter.offChange(regionChangeHandler);
+    regionChangeHandler = null;
     observers = [];
   }
 
@@ -78,24 +84,30 @@
     const el = document.getElementById('obsContent');
     if (!el) return;
 
-    if (observers.length === 0) {
+    // Apply region filter
+    const selectedRegions = RegionFilter.getSelected();
+    const filtered = selectedRegions
+      ? observers.filter(o => o.iata && selectedRegions.includes(o.iata))
+      : observers;
+
+    if (filtered.length === 0) {
       el.innerHTML = '<div class="text-center text-muted" style="padding:40px">No observers found.</div>';
       return;
     }
 
-    const maxPktsHr = Math.max(1, ...observers.map(o => o.packetsLastHour || 0));
+    const maxPktsHr = Math.max(1, ...filtered.map(o => o.packetsLastHour || 0));
 
     // Summary counts
-    const online = observers.filter(o => healthStatus(o.last_seen).cls === 'health-green').length;
-    const stale = observers.filter(o => healthStatus(o.last_seen).cls === 'health-yellow').length;
-    const offline = observers.filter(o => healthStatus(o.last_seen).cls === 'health-red').length;
+    const online = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-green').length;
+    const stale = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-yellow').length;
+    const offline = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-red').length;
 
     el.innerHTML = `
       <div class="obs-summary">
         <span class="obs-stat"><span class="health-dot health-green">●</span> ${online} Online</span>
         <span class="obs-stat"><span class="health-dot health-yellow">▲</span> ${stale} Stale</span>
         <span class="obs-stat"><span class="health-dot health-red">✕</span> ${offline} Offline</span>
-        <span class="obs-stat">📡 ${observers.length} Total</span>
+        <span class="obs-stat">📡 ${filtered.length} Total</span>
       </div>
       <div class="obs-table-scroll"><table class="data-table obs-table" id="obsTable">
         <caption class="sr-only">Observer status and statistics</caption>
@@ -103,7 +115,7 @@
           <th>Status</th><th>Name</th><th>Region</th><th>Last Seen</th>
           <th>Packets</th><th>Packets/Hour</th><th>Uptime</th>
         </tr></thead>
-        <tbody>${observers.map(o => {
+        <tbody>${filtered.map(o => {
           const h = healthStatus(o.last_seen);
           const shape = h.cls === 'health-green' ? '●' : h.cls === 'health-yellow' ? '▲' : '✕';
           return `<tr style="cursor:pointer" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">

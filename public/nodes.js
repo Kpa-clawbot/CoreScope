@@ -35,6 +35,8 @@
 
   let directNode = null; // set when navigating directly to #/nodes/:pubkey
 
+  let regionChangeHandler = null;
+
   function init(app, routeParam) {
     directNode = routeParam || null;
 
@@ -66,11 +68,15 @@
         <input type="text" class="nodes-search" id="nodeSearch" placeholder="Search nodes by name…" aria-label="Search nodes by name">
         <div class="nodes-counts" id="nodeCounts"></div>
       </div>
+      <div id="nodesRegionFilter" class="region-filter-container"></div>
       <div class="split-layout">
         <div class="panel-left" id="nodesLeft"></div>
         <div class="panel-right empty" id="nodesRight"><span>Select a node to view details</span></div>
       </div>
     </div>`;
+
+    RegionFilter.init(document.getElementById('nodesRegionFilter'));
+    regionChangeHandler = RegionFilter.onChange(function () { loadNodes(); });
 
     document.getElementById('nodeSearch').addEventListener('input', debounce(e => {
       search = e.target.value;
@@ -256,10 +262,12 @@
     }
   }
 
-  function destroy() {
+    function destroy() {
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
     if (detailMap) { detailMap.remove(); detailMap = null; }
+    if (regionChangeHandler) RegionFilter.offChange(regionChangeHandler);
+    regionChangeHandler = null;
     nodes = [];
     selectedKey = null;
   }
@@ -270,6 +278,8 @@
       if (activeTab !== 'all') params.set('role', activeTab);
       if (search) params.set('search', search);
       if (lastHeard) params.set('lastHeard', lastHeard);
+      const rp = RegionFilter.getRegionParam();
+      if (rp) params.set('region', rp);
       const data = await api('/nodes?' + params, { ttl: CLIENT_TTL.nodeList });
       nodes = data.nodes || [];
       counts = data.counts || {};

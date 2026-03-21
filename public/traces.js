@@ -5,6 +5,7 @@
   let currentHash = null;
   let traceData = [];
   let packetMeta = null;
+  let observerRegionMap = {}; // observer_id → iata
 
   function init(app) {
     // Check URL for pre-filled hash
@@ -16,12 +17,23 @@
         <div class="page-header">
           <h2>🔍 Packet Trace</h2>
         </div>
+        <div id="tracesRegionFilter" class="region-filter-container"></div>
         <div class="trace-search">
           <input type="text" id="traceHashInput" placeholder="Enter packet hash…" value="${urlHash}" aria-label="Packet hash to trace">
           <button class="btn-primary" id="traceBtn">Trace</button>
         </div>
         <div id="traceResults"></div>
       </div>`;
+
+    RegionFilter.init(document.getElementById('tracesRegionFilter'));
+    RegionFilter.onChange(function () { if (currentHash) doTrace(); });
+
+    // Load observer region map for filtering
+    api('/observers', { ttl: 60000 }).then(function (data) {
+      (data.observers || []).forEach(function (o) {
+        if (o.iata) observerRegionMap[o.id] = o.iata;
+      });
+    }).catch(function () {});
 
     document.getElementById('traceBtn').addEventListener('click', doTrace);
     document.getElementById('traceHashInput').addEventListener('keydown', (e) => {
@@ -35,6 +47,7 @@
     currentHash = null;
     traceData = [];
     packetMeta = null;
+    observerRegionMap = {};
   }
 
   function obsLabel(t) {
@@ -64,6 +77,15 @@
 
       traceData = traceResp.traces || [];
       const packets = pktResp.packets || [];
+
+      // Apply region filter to trace data
+      const selectedRegions = RegionFilter.getSelected();
+      if (selectedRegions) {
+        traceData = traceData.filter(function (t) {
+          var region = observerRegionMap[t.observer];
+          return region && selectedRegions.includes(region);
+        });
+      }
 
       if (traceData.length === 0 && packets.length === 0) {
         results.innerHTML = '<div class="trace-empty">No observations found for this packet hash.</div>';

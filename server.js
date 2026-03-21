@@ -255,6 +255,19 @@ app.get('/api/config/regions', (req, res) => {
   res.json(regions);
 });
 
+// Helper: get set of observer IDs matching region filter (comma-separated IATA codes)
+function getObserverIdsForRegions(regionParam) {
+  if (!regionParam) return null; // null = no filter
+  const codes = regionParam.split(',').map(s => s.trim()).filter(Boolean);
+  if (codes.length === 0) return null;
+  const ids = new Set();
+  const observers = db.getObservers();
+  for (const o of observers) {
+    if (o.iata && codes.includes(o.iata)) ids.add(o.id);
+  }
+  return ids;
+}
+
 app.get('/api/config/map', (req, res) => {
   const defaults = config.mapDefaults || {};
   res.json({
@@ -1009,12 +1022,37 @@ app.get('/api/nodes', (req, res) => {
     if (ms) { where.push('last_seen > @since'); params.since = new Date(Date.now() - ms).toISOString(); }
   }
 
+  // Region filtering: if region param is set, only include nodes seen by observers in those regions
+  const regionObsIds = getObserverIdsForRegions(region);
+  let regionNodeKeys = null;
+  if (regionObsIds) {
+    regionNodeKeys = new Set();
+    for (const pkt of pktStore.packets) {
+      if (regionObsIds.has(pkt.observer_id)) {
+        try {
+          const d = JSON.parse(pkt.decoded_json || '{}');
+          const pk = d.pubKey || d.public_key;
+          if (pk) regionNodeKeys.add(pk);
+          if (d.sender_key) regionNodeKeys.add(d.sender_key);
+        } catch {}
+      }
+    }
+  }
+
   const clause = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const sortMap = { name: 'name ASC', lastSeen: 'last_seen DESC', packetCount: 'advert_count DESC' };
   const order = sortMap[sortBy] || 'last_seen DESC';
 
-  const nodes = db.db.prepare(`SELECT * FROM nodes ${clause} ORDER BY ${order} LIMIT @limit OFFSET @offset`).all({ ...params, limit: Number(limit), offset: Number(offset) });
-  const total = db.db.prepare(`SELECT COUNT(*) as count FROM nodes ${clause}`).get(params).count;
+  let nodes, total;
+  if (regionNodeKeys) {
+    const allNodes = db.db.prepare(`SELECT * FROM nodes ${clause} ORDER BY ${order}`).all(params);
+    const filtered = allNodes.filter(n => regionNodeKeys.has(n.public_key));
+    total = filtered.length;
+    nodes = filtered.slice(Number(offset), Number(offset) + Number(limit));
+  } else {
+    nodes = db.db.prepare(`SELECT * FROM nodes ${clause} ORDER BY ${order} LIMIT @limit OFFSET @offset`).all({ ...params, limit: Number(limit), offset: Number(offset) });
+    total = db.db.prepare(`SELECT COUNT(*) as count FROM nodes ${clause}`).get(params).count;
+  }
 
   const counts = {};
   for (const r of ['repeater', 'room', 'companion', 'sensor']) {
@@ -1170,9 +1208,12 @@ app.get('/api/nodes/:pubkey', (req, res) => {
 // --- Analytics API ---
 // --- RF Analytics ---
 app.get('/api/analytics/rf', (req, res) => {
-  const _c = cache.get('analytics:rf'); if (_c) return res.json(_c);
+  const { region } = req.query;
+  const regionObsIds = getObserverIdsForRegions(region);
+  const _ck = 'analytics:rf' + (region ? ':' + region : '');
+  const _c = cache.get(_ck); if (_c) return res.json(_c);
   const PTYPES = { 0:'REQ',1:'RESPONSE',2:'TXT_MSG',3:'ACK',4:'ADVERT',5:'GRP_TXT',7:'ANON_REQ',8:'PATH',9:'TRACE',11:'CONTROL' };
-  const packets = pktStore.filter(p => p.snr != null);
+  const packets = pktStore.filter(p => p.snr != null && (!regionObsIds || regionObsIds.has(p.observer_id)));
 
   const snrVals = packets.map(p => p.snr).filter(v => v != null);
   const rssiVals = packets.map(p => p.rssi).filter(v => v != null);
@@ -1262,14 +1303,17 @@ app.get('/api/analytics/rf', (req, res) => {
     avgPacketSize: packetSizes.length ? Math.round(packetSizes.reduce((a, b) => a + b, 0) / packetSizes.length) : 0,
     packetsPerHour, payloadTypes, snrByType: snrByTypeArr, signalOverTime, scatterData, timeSpanHours
   };
-  cache.set('analytics:rf', _rfResult, TTL.analyticsRF);
+  cache.set(_ck, _rfResult, TTL.analyticsRF);
   res.json(_rfResult);
 });
 
 // --- Topology Analytics ---
 app.get('/api/analytics/topology', (req, res) => {
-  const _c = cache.get('analytics:topology'); if (_c) return res.json(_c);
-  const packets = pktStore.filter(p => p.path_json && p.path_json !== '[]');
+  const { region } = req.query;
+  const regionObsIds = getObserverIdsForRegions(region);
+  const _ck = 'analytics:topology' + (region ? ':' + region : '');
+  const _c = cache.get(_ck); if (_c) return res.json(_c);
+  const packets = pktStore.filter(p => p.path_json && p.path_json !== '[]' && (!regionObsIds || regionObsIds.has(p.observer_id)));
   const allNodes = db.db.prepare('SELECT public_key, name, lat, lon FROM nodes WHERE name IS NOT NULL').all();
   const resolveHop = (hop, contextPositions) => {
     const h = hop.toLowerCase();
@@ -1428,14 +1472,17 @@ app.get('/api/analytics/topology', (req, res) => {
     multiObsNodes,
     bestPathList
   };
-  cache.set('analytics:topology', _topoResult, TTL.analyticsTopology);
+  cache.set(_ck, _topoResult, TTL.analyticsTopology);
   res.json(_topoResult);
 });
 
 // --- Channel Analytics ---
 app.get('/api/analytics/channels', (req, res) => {
-  const _c = cache.get('analytics:channels'); if (_c) return res.json(_c);
-  const packets = pktStore.filter(p => p.payload_type === 5 && p.decoded_json);
+  const { region } = req.query;
+  const regionObsIds = getObserverIdsForRegions(region);
+  const _ck = 'analytics:channels' + (region ? ':' + region : '');
+  const _c = cache.get(_ck); if (_c) return res.json(_c);
+  const packets = pktStore.filter(p => p.payload_type === 5 && p.decoded_json && (!regionObsIds || regionObsIds.has(p.observer_id)));
 
   const channels = {};
   const senderCounts = {};
@@ -1493,14 +1540,17 @@ app.get('/api/analytics/channels', (req, res) => {
     channelTimeline,
     msgLengths
   };
-  cache.set('analytics:channels', _chanResult, TTL.analyticsChannels);
+  cache.set(_ck, _chanResult, TTL.analyticsChannels);
   res.json(_chanResult);
 });
 
 app.get('/api/analytics/hash-sizes', (req, res) => {
-  const _c = cache.get('analytics:hash-sizes'); if (_c) return res.json(_c);
+  const { region } = req.query;
+  const regionObsIds = getObserverIdsForRegions(region);
+  const _ck = 'analytics:hash-sizes' + (region ? ':' + region : '');
+  const _c = cache.get(_ck); if (_c) return res.json(_c);
   // Get all packets with raw_hex and non-empty paths from memory store
-  const packets = pktStore.filter(p => p.raw_hex && p.path_json && p.path_json !== '[]');
+  const packets = pktStore.filter(p => p.raw_hex && p.path_json && p.path_json !== '[]' && (!regionObsIds || regionObsIds.has(p.observer_id)));
 
   const distribution = { 1: 0, 2: 0, 3: 0 };
   const byHour = {};     // hour bucket → { 1: n, 2: n, 3: n }
@@ -1580,7 +1630,7 @@ app.get('/api/analytics/hash-sizes', (req, res) => {
     topHops,
     multiByteNodes
   };
-  cache.set('analytics:hash-sizes', _hsResult, TTL.analyticsHashSizes);
+  cache.set(_ck, _hsResult, TTL.analyticsHashSizes);
   res.json(_hsResult);
 });
 
@@ -1736,12 +1786,16 @@ const channelHashNames = {};
 }
 
 app.get('/api/channels', (req, res) => {
-  const _c = cache.get('channels'); if (_c) return res.json(_c);
+  const { region } = req.query;
+  const regionObsIds = getObserverIdsForRegions(region);
+  const _ck = 'channels' + (region ? ':' + region : '');
+  const _c = cache.get(_ck); if (_c) return res.json(_c);
   // Single pass: only scan type-5 packets via filter (already in memory)
   const channelMap = {};
 
   for (const pkt of pktStore.all()) {
     if (pkt.payload_type !== 5) continue;
+    if (regionObsIds && !regionObsIds.has(pkt.observer_id)) continue;
     let decoded;
     try { decoded = JSON.parse(pkt.decoded_json); } catch { continue; }
 
@@ -1786,7 +1840,7 @@ app.get('/api/channels', (req, res) => {
   }
 
   const _chResult = { channels: Object.values(channelMap) };
-  cache.set('channels', _chResult, TTL.channels);
+  cache.set(_ck, _chResult, TTL.channels);
   res.json(_chResult);
 });
 

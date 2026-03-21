@@ -213,12 +213,15 @@
     });
   }
 
+  let regionChangeHandler = null;
+
   function init(app, routeParam) {
     app.innerHTML = `<div class="ch-layout">
       <div class="ch-sidebar" aria-label="Channel list">
         <div class="ch-sidebar-header">
           <div class="ch-sidebar-title"><span class="ch-icon">💬</span> Channels</div>
         </div>
+        <div id="chRegionFilter" class="region-filter-container" style="padding:0 8px"></div>
         <div class="ch-channel-list" id="chList" role="listbox" aria-label="Channels">
           <div class="ch-loading">Loading channels…</div>
         </div>
@@ -236,6 +239,9 @@
         <button class="ch-scroll-btn hidden" id="chScrollBtn">↓ New messages</button>
       </div>
     </div>`;
+
+    RegionFilter.init(document.getElementById('chRegionFilter'));
+    regionChangeHandler = RegionFilter.onChange(function () { loadChannels(); });
 
     loadChannels().then(() => {
       if (routeParam) selectChannel(routeParam);
@@ -382,6 +388,8 @@
   function destroy() {
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
+    if (regionChangeHandler) RegionFilter.offChange(regionChangeHandler);
+    regionChangeHandler = null;
     channels = [];
     messages = [];
     selectedHash = null;
@@ -393,7 +401,9 @@
 
   async function loadChannels(silent) {
     try {
-      const data = await api('/channels', { ttl: CLIENT_TTL.channels });
+      const rp = RegionFilter.getRegionParam();
+      const qs = rp ? '?region=' + encodeURIComponent(rp) : '';
+      const data = await api('/channels' + qs, { ttl: CLIENT_TTL.channels });
       channels = (data.channels || []).sort((a, b) => (b.lastActivity || '').localeCompare(a.lastActivity || ''));
       renderChannelList();
     } catch (e) {

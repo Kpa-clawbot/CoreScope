@@ -65,6 +65,7 @@
         <div class="analytics-header">
           <h2>📊 Mesh Analytics</h2>
           <p class="text-muted">Deep dive into your mesh network data</p>
+          <div id="analyticsRegionFilter" class="region-filter-container"></div>
           <div class="analytics-tabs" id="analyticsTabs">
             <button class="tab-btn active" data-tab="overview">Overview</button>
             <button class="tab-btn" data-tab="rf">RF / Signal</button>
@@ -92,6 +93,9 @@
       renderTab(btn.dataset.tab);
     });
 
+    RegionFilter.init(document.getElementById('analyticsRegionFilter'));
+    RegionFilter.onChange(function () { loadAnalytics(); });
+
     // Delegated click/keyboard handler for clickable table rows
     const analyticsContent = document.getElementById('analyticsContent');
     if (analyticsContent) {
@@ -106,13 +110,19 @@
       analyticsContent.addEventListener('keydown', handler);
     }
 
+    loadAnalytics();
+  }
+
+  async function loadAnalytics() {
     try {
       _analyticsData = {};
+      const rqs = RegionFilter.regionQueryString();
+      const sep = rqs ? '?' + rqs.slice(1) : '';
       const [hashData, rfData, topoData, chanData] = await Promise.all([
-        api('/analytics/hash-sizes', { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/rf', { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/topology', { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/channels', { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/hash-sizes' + sep, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/rf' + sep, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/topology' + sep, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/channels' + sep, { ttl: CLIENT_TTL.analyticsRF }),
       ]);
       _analyticsData = { hashData, rfData, topoData, chanData };
       renderTab('overview');

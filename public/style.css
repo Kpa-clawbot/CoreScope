@@ -1447,3 +1447,17 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .perf-table .perf-slow td { color: #ef4444; }
 .perf-table .perf-warn { background: rgba(251, 191, 36, 0.06); }
 .perf-table .perf-warn td { color: #f59e0b; }
+
+/* ─── Region filter bar ─── */
+.region-filter-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; }
+.region-filter-container { margin-bottom: 4px; }
+.region-pill {
+  display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 16px;
+  font-size: 12px; font-weight: 500; cursor: pointer; border: 1.5px solid var(--border);
+  background: transparent; color: var(--text-muted); transition: all 0.15s;
+}
+.region-pill:hover { border-color: var(--accent); color: var(--accent); }
+.region-pill-active {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
+.region-pill-active:hover { opacity: 0.85; }
