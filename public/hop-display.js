@@ -26,7 +26,7 @@ window.HopDisplay = (function() {
     const totalRegional = entry.totalRegional || 0;
     const globalFallback = entry.globalFallback || false;
     const unreliable = entry.unreliable || false;
-    const display = name ? escapeHtml(opts.truncate ? name.slice(0, opts.truncate) : name) : h;
+    const display = opts.hexMode ? h : (name ? escapeHtml(opts.truncate ? name.slice(0, opts.truncate) : name) : h);
 
     // Build tooltip
     let title = h;

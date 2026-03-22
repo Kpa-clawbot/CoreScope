@@ -130,10 +130,7 @@
   }
 
   function renderHop(h) {
-    if (showHexHashes) {
-      return `<span class="hop">${escapeHtml(h)}</span>`;
-    }
-    return HopDisplay.renderHop(h, hopNameCache[h]);
+    return HopDisplay.renderHop(h, hopNameCache[h], { hexMode: showHexHashes });
   }
 
   function renderPath(hops) {
