@@ -1,5 +1,51 @@
 # Changelog
 
+## [2.5.0] "Digital Rain" — 2026-03-22
+
+### ✨ Matrix Mode — Full Cyberpunk Map Theme
+Toggle **Matrix** on the live map to transform the entire visualization:
+- **Green phosphor CRT aesthetic** — map tiles are desaturated and re-tinted through a `sepia → hue-rotate(70°) → saturate` filter chain, giving roads, coastlines, and terrain a faint green wireframe look against a dark background
+- **CRT scanline overlay** — subtle horizontal lines with a gentle flicker animation across the entire map
+- **Node markers dim to dark green** (#008a22 at 50% opacity) so they don't compete with packet animations
+- **Forces dark mode** while active (saves and restores your previous theme on toggle off)
+- **Disables heat map** automatically (incompatible visual combo)
+- **All UI panels themed** — feed panel, VCR controls, node detail all go green-on-black with monospace font
+- New markers created during Matrix mode (e.g. VCR timeline scrub) are automatically tinted
+
+### ✨ Matrix Hex Flight — Packet Bytes on the Wire
+When Matrix mode is enabled, packet animations between nodes show the **actual hex bytes from the raw packet data** flowing along the path:
+- **Real packet data** — bytes come from the packet's `raw_hex` field, not random/generated
+- **White leading byte** with triple-layer green neon glow (`text-shadow: 0 0 8px, 0 0 16px, 0 0 24px`)
+- **Trailing bytes fade** from bright to dim green, shrinking in size with distance from the head
+- **Scrolls through all bytes** in the packet as it travels each hop
+- **60fps animation** via `requestAnimationFrame` with time-based interpolation (1.1s per hop)
+- **300ms fade-out** after reaching the destination node
+- Replaces the standard contrail animation; toggle off to restore normal mode
+
+### ✨ Matrix Rain — Falling Packet Columns
+A separate **Rain** toggle adds a canvas-rendered overlay of falling hex byte columns, Matrix-style:
+- **Each incoming packet** spawns a column of its actual raw hex bytes falling from the top of the screen
+- **Fall distance proportional to hop count** — 4+ hops reach the bottom of the screen; a 1-hop packet barely drops. Matches the real mesh network: more hops = more propagation = longer rain trail
+- **Fall duration scales with distance** — 5 seconds for a full-screen drop, proportional for shorter
+- **Multiple observations = more rain** — each observation of a packet spawns its own column, staggered 150ms apart. A packet seen by 8 observers creates 8 simultaneous falling columns with ±1 hop variation for visual variety
+- **Leading byte is bright white** with green glow; trailing bytes progressively fade to green
+- **Entire column fades out** in the last 30% of its lifetime
+- **Canvas-rendered at 60fps** — no DOM overhead, handles hundreds of simultaneous drops
+- **Works independently or with Matrix mode** — combine both for the full effect
+- **Replay support** — the ▶ Replay button on packet detail pages now includes raw hex data so replayed packets produce rain
+
+### 🐛 Bug Fixes
+- **Fixed null element errors in Matrix hex flight** — `getElement()` returns null when DivIcon hasn't been rendered to DOM yet during fast VCR replay
+- **Fixed animation null-guard cascade** — `pulseNode`, `animatePath`, and `drawAnimatedLine` now bail early if map layers are null (stale `setInterval` callbacks after page navigation)
+- **Fixed WS broadcast with null packet** — deduplicated observations caused `fullPacket` to be null in WebSocket broadcasts
+- **Fixed pause button crash** — was killing WS handler registration
+- **Fixed multi-select menu close handler** — null-guard for missing elements
+
+### ⚡ Technical Notes
+- Matrix hex flight uses Leaflet `L.divIcon` markers for each character — the smoothness ceiling is Leaflet's DOM repositioning speed. CSS transitions were tested but caused stutter due to conflicts with Leaflet's internal transform updates.
+- Matrix Rain uses a raw `<canvas>` overlay at z-index 9998 for zero-DOM-overhead rendering. Each drop is a simple `{x, maxY, duration, bytes, startTime}` struct rendered in a single `requestAnimationFrame` loop.
+- Map tile tinting applies CSS filters to `.leaflet-tile-pane` and green overlays via `::before`/`::after` pseudo-elements on the map container (same element as `.leaflet-container`, so selectors use `.matrix-theme.leaflet-container` not descendant `.matrix-theme .leaflet-container`).
+
 ## [2.4.1] — 2026-03-22
 
 Hotfix release for regressions introduced in v2.4.0.
