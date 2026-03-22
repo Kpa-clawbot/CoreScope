@@ -1100,18 +1100,22 @@
     let pathHops;
     try { pathHops = JSON.parse(pkt.path_json || '[]'); } catch { pathHops = []; }
 
-    // Re-resolve hops with sender location + observer — bypass stale cache
+    // Re-resolve hops using SERVER-SIDE API with sender GPS + observer for proper disambiguation
     if (pathHops.length) {
-      await ensureHopResolver();
       const senderLat = decoded.lat != null ? decoded.lat : (decoded.latitude || null);
       const senderLon = decoded.lon != null ? decoded.lon : (decoded.longitude || null);
-      console.log('[renderDetail] GPS anchor:', senderLat, senderLon, 'observer:', pkt.observer_id?.slice(0,12));
-      // Always re-resolve for detail view — list view may have cached without anchor
-      const fresh = HopResolver.resolve(pathHops, senderLat, senderLon, null, null, pkt.observer_id);
-      for (const [k, v] of Object.entries(fresh || {})) {
-        console.log('[renderDetail] hop', k, '→', v.name, 'ambig:', v.ambiguous, 'conflicts:', v.conflicts?.length);
-        hopNameCache[k] = v;
-      }
+      try {
+        const params = new URLSearchParams({ hops: pathHops.join(',') });
+        if (pkt.observer_id) params.set('observer', pkt.observer_id);
+        if (senderLat != null) params.set('originLat', senderLat);
+        if (senderLon != null) params.set('originLon', senderLon);
+        const serverResolved = await api(`/resolve-hops?${params}`);
+        if (serverResolved?.resolved) {
+          for (const [k, v] of Object.entries(serverResolved.resolved)) {
+            hopNameCache[k] = v;
+          }
+        }
+      } catch {}
     }
 
     // Parse hash size from path byte
