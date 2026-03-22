@@ -8,6 +8,7 @@
   let selectedPacket = null;
   let baseBPM = 120;
   let speedMult = 1;
+  let highlightTimers = [];
 
   const TYPE_COLORS = {
     ADVERT: '#f59e0b', GRP_TXT: '#10b981', TXT_MSG: '#6366f1',
@@ -72,7 +73,11 @@
         padding: 4px 8px; border-bottom: 1px solid var(--border); font-size: 11px; }
       .alab-note-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); font-family: var(--mono); }
       .alab-byte-viz { display: flex; align-items: flex-end; height: 60px; gap: 1px; margin-top: 8px; }
-      .alab-byte-bar { flex: 1; min-width: 2px; border-radius: 1px 1px 0 0; }
+      .alab-byte-bar { flex: 1; min-width: 2px; border-radius: 1px 1px 0 0; transition: box-shadow 0.1s; }
+      .alab-byte-bar.playing { box-shadow: 0 0 8px 2px currentColor; transform: scaleY(1.15); }
+      .alab-hex .playing { background: #ff6b6b !important; color: #fff !important; border-radius: 2px; padding: 0 2px; transition: background 0.1s; }
+      .alab-note-table tr.playing { background: var(--accent) !important; color: #fff; }
+      .alab-note-table tr.playing td { color: #fff; }
       .alab-empty { text-align: center; padding: 60px 20px; color: var(--text-muted); font-size: 15px; }
       .alab-slider-group { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
       .alab-slider-group input[type=range] { width: 80px; }
@@ -166,8 +171,8 @@
     let hexHtml = '';
     for (let i = 0; i < m.payloadBytes.length; i++) {
       const h = m.payloadBytes[i].toString(16).padStart(2, '0').toUpperCase();
-      if (sampledSet.has(i)) hexHtml += `<span class="sampled">${h}</span> `;
-      else hexHtml += h + ' ';
+      if (sampledSet.has(i)) hexHtml += `<span class="sampled" id="hexByte${i}">${h}</span> `;
+      else hexHtml += `<span id="hexByte${i}">${h}</span> `;
     }
 
     document.getElementById('alabDetail').innerHTML = `
@@ -203,7 +208,7 @@
         <h3>🎹 Note Sequence</h3>
         <table class="alab-note-table">
           <tr><th>#</th><th>Byte</th><th>MIDI</th><th>Freq</th><th>Duration</th><th>Gap</th></tr>
-          ${m.notes.map((n, i) => `<tr>
+          ${m.notes.map((n, i) => `<tr id="noteRow${i}">
             <td>${i + 1}</td>
             <td>0x${n.byte.toString(16).padStart(2, '0').toUpperCase()} (${n.byte})</td>
             <td>${n.midi}</td>
@@ -226,6 +231,7 @@
       for (let i = 0; i < m.payloadBytes.length; i++) {
         const bar = document.createElement('div');
         bar.className = 'alab-byte-bar';
+        bar.id = 'byteBar' + i;
         const h = Math.max(2, (m.payloadBytes[i] / 255) * 60);
         bar.style.height = h + 'px';
         bar.style.background = sampledSet.has(i) ? m.color : '#555';
@@ -234,6 +240,36 @@
         viz.appendChild(bar);
       }
     }
+  }
+
+  function clearHighlights() {
+    highlightTimers.forEach(t => clearTimeout(t));
+    highlightTimers = [];
+    document.querySelectorAll('.alab-hex .playing, .alab-note-table .playing, .alab-byte-bar.playing').forEach(el => el.classList.remove('playing'));
+  }
+
+  function highlightPlayback(mapping) {
+    clearHighlights();
+    let timeOffset = 0;
+    mapping.notes.forEach((note, i) => {
+      // Highlight ON
+      highlightTimers.push(setTimeout(() => {
+        // Clear previous note highlights
+        document.querySelectorAll('.alab-hex .playing, .alab-note-table .playing, .alab-byte-bar.playing').forEach(el => el.classList.remove('playing'));
+        // Hex byte
+        const hexEl = document.getElementById('hexByte' + note.index);
+        if (hexEl) { hexEl.classList.add('playing'); hexEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+        // Note row
+        const rowEl = document.getElementById('noteRow' + i);
+        if (rowEl) { rowEl.classList.add('playing'); rowEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+        // Byte bar
+        const barEl = document.getElementById('byteBar' + note.index);
+        if (barEl) barEl.classList.add('playing');
+      }, timeOffset));
+      timeOffset += note.duration + (i < mapping.notes.length - 1 ? note.gap : 0);
+    });
+    // Clear all at end
+    highlightTimers.push(setTimeout(clearHighlights, timeOffset + 200));
   }
 
   function playSelected() {
@@ -257,6 +293,9 @@
         };
       } catch {}
       MeshAudio.sonifyPacket(pkt);
+      // Sync highlights with audio
+      const m = computeMapping(selectedPacket);
+      if (m) highlightPlayback(m);
     }
   }
 
@@ -386,6 +425,7 @@
   }
 
   function destroy() {
+    clearHighlights();
     if (loopTimer) { clearInterval(loopTimer); loopTimer = null; }
     if (styleEl) { styleEl.remove(); styleEl = null; }
     selectedPacket = null;
