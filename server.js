@@ -730,7 +730,7 @@ for (const source of mqttSources) {
     // Invalidate caches on new data
     cache.debouncedInvalidateAll();
 
-        const fullPacket = pktStore.getById(packetId);
+        const fullPacket = pktStore.getById(packetId) || pktStore.byHash.get(pktData.hash) || pktData;
         const tx = pktStore.byHash.get(pktData.hash);
         const observation_count = tx ? tx.observation_count : 1;
         const broadcastData = { id: packetId, raw: msg.raw, decoded, snr: msg.SNR, rssi: msg.RSSI, hash: pktData.hash, observer: observerId, packet: fullPacket, observation_count };
