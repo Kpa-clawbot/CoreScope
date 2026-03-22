@@ -1225,6 +1225,21 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 /* Ambiguous hop indicator */
 .hop-ambiguous { border-bottom: 1px dashed #f59e0b; }
 .hop-warn { font-size: 0.7em; margin-left: 2px; vertical-align: super; color: #f59e0b; }
+.hop-conflict-btn { background: #f59e0b; color: #000; border: none; border-radius: 4px; font-size: 11px;
+  font-weight: 700; padding: 1px 5px; cursor: pointer; vertical-align: middle; margin-left: 3px; line-height: 1.2; }
+.hop-conflict-btn:hover { background: #d97706; }
+.hop-conflict-popover { position: absolute; z-index: 9999; background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); width: 260px; max-height: 300px; overflow-y: auto; }
+.hop-conflict-header { padding: 10px 12px; font-size: 12px; font-weight: 700; border-bottom: 1px solid var(--border);
+  color: var(--text-muted); }
+.hop-conflict-list { padding: 4px 0; }
+.hop-conflict-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; text-decoration: none;
+  color: var(--text); font-size: 13px; border-bottom: 1px solid var(--border); }
+.hop-conflict-item:last-child { border-bottom: none; }
+.hop-conflict-item:hover { background: var(--hover-bg); }
+.hop-conflict-name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hop-conflict-dist { font-size: 11px; color: var(--text-muted); font-family: var(--mono); white-space: nowrap; }
+.hop-conflict-pk { font-size: 10px; color: var(--text-muted); font-family: var(--mono); }
 .hop-unreliable { opacity: 0.5; text-decoration: line-through; }
 .hop-global-fallback { border-bottom: 1px dashed #ef4444; }
 .hop-current { font-weight: 700 !important; color: var(--accent) !important; }
