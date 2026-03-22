@@ -405,26 +405,35 @@
       </div>
       <div class="filter-bar" id="pktFilters">
         <button class="btn filter-toggle-btn" id="filterToggleBtn">Filters ▾</button>
-        <input type="text" placeholder="Packet hash…" id="fHash" aria-label="Filter by packet hash">
-        <div class="node-filter-wrap" style="position:relative">
-          <input type="text" placeholder="Node name…" id="fNode" autocomplete="off" role="combobox" aria-expanded="false" aria-owns="fNodeDropdown" aria-activedescendant="" aria-autocomplete="list">
-          <div class="node-filter-dropdown hidden" id="fNodeDropdown" role="listbox"></div>
+        <div class="filter-group">
+          <input type="text" placeholder="Packet hash…" id="fHash" aria-label="Filter by packet hash" title="Filter packets by hex hash prefix">
+          <div class="node-filter-wrap" style="position:relative">
+            <input type="text" placeholder="Node name…" id="fNode" autocomplete="off" role="combobox" aria-expanded="false" aria-owns="fNodeDropdown" aria-activedescendant="" aria-autocomplete="list" title="Filter packets involving this node (sender or path)">
+            <div class="node-filter-dropdown hidden" id="fNodeDropdown" role="listbox"></div>
+          </div>
+          <select id="fObserver" aria-label="Filter by observer" title="Show only packets seen by this observer station"><option value="">All Observers</option></select>
+          <div id="packetsRegionFilter" class="region-filter-container" style="display:inline-block;vertical-align:middle"></div>
+          <select id="fType" aria-label="Filter by packet type" title="Filter by packet type (Advert, Channel Msg, etc.)"><option value="">All Types</option></select>
         </div>
-        <select id="fObserver" aria-label="Filter by observer"><option value="">All Observers</option></select>
-        <div id="packetsRegionFilter" class="region-filter-container" style="display:inline-block;vertical-align:middle"></div>
-        <select id="fType" aria-label="Filter by packet type"><option value="">All Types</option></select>
-        <button class="btn ${groupByHash ? 'active' : ''}" id="fGroup">Group by Hash</button>
-        <button class="btn" id="fMyNodes" title="Show only packets from claimed/favorited nodes">★ My Nodes</button>
-        <select id="fObsSort" aria-label="Observation sort order" title="Sort order for expanded observations">
-          <option value="observer">Sort: Observer</option>
-          <option value="path-asc">Sort: Path ↑ (shortest)</option>
-          <option value="path-desc">Sort: Path ↓ (longest)</option>
-          <option value="chrono-asc">Sort: Time ↑ (earliest)</option>
-          <option value="chrono-desc">Sort: Time ↓ (latest)</option>
-        </select>
-        <div class="col-toggle-wrap">
-          <button class="col-toggle-btn" id="colToggleBtn">Columns ▾</button>
-          <div class="col-toggle-menu" id="colToggleMenu"></div>
+        <div class="filter-group">
+          <button class="btn ${groupByHash ? 'active' : ''}" id="fGroup" title="Collapse duplicate observations of the same packet into expandable groups">Group by Hash</button>
+          <button class="btn" id="fMyNodes" title="Show only packets from your favorited/claimed nodes">★ My Nodes</button>
+        </div>
+        <div class="filter-group">
+          <select id="fObsSort" aria-label="Observation sort order" title="Controls how observations are ordered within packet groups and which observation appears in the header row. Observer: Groups by observer station, earliest first. Path: Orders by hop count. Time: Orders by observation timestamp.">
+            <option value="observer">Sort: Observer</option>
+            <option value="path-asc">Sort: Path ↑ (shortest)</option>
+            <option value="path-desc">Sort: Path ↓ (longest)</option>
+            <option value="chrono-asc">Sort: Time ↑ (earliest)</option>
+            <option value="chrono-desc">Sort: Time ↓ (latest)</option>
+          </select>
+          <span class="sort-help" title="Sort controls how observations within a packet group are ordered, and which observation's data (observer, path) appears in the header row.\n\nObserver — Groups observations by observer station. Earliest observer appears first. Within each observer, sorted by time.\n\nPath ↑ (shortest) — Shortest paths first, then alphabetical by observer.\nPath ↓ (longest) — Longest paths first.\n\nTime ↑ (earliest) — Chronological order, first observation at top.\nTime ↓ (latest) — Reverse chronological, most recent first.">ⓘ</span>
+        </div>
+        <div class="filter-group">
+          <div class="col-toggle-wrap">
+            <button class="col-toggle-btn" id="colToggleBtn" title="Show/hide table columns">Columns ▾</button>
+            <div class="col-toggle-menu" id="colToggleMenu"></div>
+          </div>
         </div>
       </div>
       <table class="data-table" id="pktTable">
