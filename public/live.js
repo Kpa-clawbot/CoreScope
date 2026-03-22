@@ -1755,105 +1755,80 @@
     }
 
     const matrixGreen = '#00ff41';
-    const TRAIL_LEN = 6;
-    const DURATION_MS = 1400;
-    const SPAWN_EVERY_MS = DURATION_MS / 16; // ~87ms between chars
+    const TRAIL_LEN = Math.min(6, bytes.length);
+    const DURATION_MS = 1400; // total hop duration
+    const CHAR_INTERVAL = 0.06; // spawn a char every 6% of progress
+    const charMarkers = [];
+    let nextCharAt = CHAR_INTERVAL;
+    let byteIdx = 0;
 
     const trail = L.polyline([from], {
       color: matrixGreen, weight: 1.5, opacity: 0.2, lineCap: 'round'
     }).addTo(pathsLayer);
 
-    // Pre-create reusable char markers with CSS transitions
-    const pool = [];
-    for (let i = 0; i < TRAIL_LEN; i++) {
-      const m = L.marker(from, {
-        icon: L.divIcon({
-          className: 'matrix-char matrix-char-anim',
-          html: `<span>${bytes[i % bytes.length]}</span>`,
-          iconSize: [24, 18],
-          iconAnchor: [12, 9]
-        }),
-        interactive: false
-      });
-      pool.push({ marker: m, active: false, spawnedAt: 0 });
-    }
-
-    let poolIdx = 0;
-    let byteIdx = 0;
+    const trailCoords = [from];
     const startTime = performance.now();
-    let lastSpawn = -Infinity;
-    let trailCoords = [from];
 
     function tick(now) {
       const elapsed = now - startTime;
       const t = Math.min(1, elapsed / DURATION_MS);
       const lat = from[0] + (to[0] - from[0]) * t;
       const lon = from[1] + (to[1] - from[1]) * t;
+      trailCoords.push([lat, lon]);
+      trail.setLatLngs(trailCoords);
 
-      // Update trail polyline less often (every ~3 frames)
-      if (trailCoords.length === 0 || t >= 1 || elapsed - (trailCoords.length * (DURATION_MS / 30)) >= 0) {
-        trailCoords.push([lat, lon]);
-        trail.setLatLngs(trailCoords);
+      // Remove old chars beyond trail length
+      while (charMarkers.length > TRAIL_LEN) {
+        const old = charMarkers.shift();
+        try { animLayer.removeLayer(old.marker); } catch {}
+      }
+
+      // Fade existing chars
+      for (let i = 0; i < charMarkers.length; i++) {
+        const age = charMarkers.length - i;
+        const op = Math.max(0.15, 1 - (age / TRAIL_LEN) * 0.7);
+        const size = Math.max(10, 16 - age * 1.5);
+        const el = charMarkers[i].marker.getElement();
+        if (el) { el.style.opacity = op; el.style.fontSize = size + 'px'; }
       }
 
       // Spawn new char at intervals
-      if (elapsed - lastSpawn >= SPAWN_EVERY_MS && t < 0.95) {
-        lastSpawn = elapsed;
-        const slot = pool[poolIdx % TRAIL_LEN];
-
-        // Recycle: remove old, update text
-        if (slot.active) {
-          // Just update position — CSS transition handles smoothness
-        } else {
-          slot.marker.addTo(animLayer);
-          slot.active = true;
-          // Apply CSS transition after first paint
-          requestAnimationFrame(() => {
-            const el = slot.marker.getElement();
-            if (el) el.style.transition = 'transform 80ms linear, opacity 200ms ease';
-          });
-        }
-
-        // Update byte text
-        const el = slot.marker.getElement();
-        if (el) {
-          const span = el.querySelector('span');
-          if (span) span.textContent = bytes[byteIdx % bytes.length];
-          el.style.opacity = '1';
-          el.style.fontSize = '16px';
-        }
-        slot.marker.setLatLng([lat, lon]);
-        slot.spawnedAt = elapsed;
+      if (t >= nextCharAt && t < 1) {
+        nextCharAt += CHAR_INTERVAL;
+        const charEl = L.marker([lat, lon], {
+          icon: L.divIcon({
+            className: 'matrix-char',
+            html: `<span style="color:#fff;font-family:'Courier New',monospace;font-size:16px;font-weight:bold;text-shadow:0 0 8px ${matrixGreen},0 0 16px ${matrixGreen},0 0 24px ${matrixGreen}60;pointer-events:none">${bytes[byteIdx % bytes.length]}</span>`,
+            iconSize: [24, 18],
+            iconAnchor: [12, 9]
+          }),
+          interactive: false
+        }).addTo(animLayer);
+        charMarkers.push({ marker: charEl });
         byteIdx++;
-        poolIdx++;
-
-        // Fade older chars
-        for (let i = 0; i < pool.length; i++) {
-          if (!pool[i].active) continue;
-          const age = elapsed - pool[i].spawnedAt;
-          if (age > SPAWN_EVERY_MS * 0.5) {
-            const fadeT = Math.min(1, age / (SPAWN_EVERY_MS * TRAIL_LEN));
-            const op = Math.max(0.1, 1 - fadeT * 0.85);
-            const sz = Math.max(10, 16 - fadeT * 6);
-            const pel = pool[i].marker.getElement();
-            if (pel) { pel.style.opacity = op; pel.style.fontSize = sz + 'px'; }
-          }
-        }
       }
 
       if (t < 1) {
         requestAnimationFrame(tick);
       } else {
-        // Fade out everything
-        for (const slot of pool) {
-          const el = slot.marker.getElement();
-          if (el) { el.style.transition = 'opacity 500ms ease'; el.style.opacity = '0'; }
+        // Fade out
+        const fadeStart = performance.now();
+        function fadeOut(now) {
+          const ft = Math.min(1, (now - fadeStart) / 500);
+          if (ft >= 1) {
+            for (const cm of charMarkers) try { animLayer.removeLayer(cm.marker); } catch {}
+            try { pathsLayer.removeLayer(trail); } catch {}
+            charMarkers.length = 0;
+          } else {
+            const op = 1 - ft;
+            for (const cm of charMarkers) {
+              const el = cm.marker.getElement(); if (el) el.style.opacity = op * 0.5;
+            }
+            trail.setStyle({ opacity: op * 0.15 });
+            requestAnimationFrame(fadeOut);
+          }
         }
-        trail.setStyle({ opacity: 0.05 });
-        setTimeout(() => {
-          for (const slot of pool) { try { animLayer.removeLayer(slot.marker); } catch {} }
-          try { pathsLayer.removeLayer(trail); } catch {}
-        }, 600);
+        setTimeout(() => requestAnimationFrame(fadeOut), 300);
         if (onComplete) onComplete();
       }
     }
