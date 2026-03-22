@@ -1536,7 +1536,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .matrix-char span { display: block; text-align: center; white-space: nowrap; line-height: 1; }
 
 /* === Matrix Theme === */
-.matrix-theme .leaflet-tile-pane { filter: saturate(0) brightness(0.15) contrast(1.2); }
+.matrix-theme .leaflet-tile-pane { filter: saturate(0.1) brightness(0.3) contrast(1.1); }
 .matrix-theme .leaflet-tile-pane::after {
   content: ''; position: absolute; inset: 0; z-index: 1;
   background: rgba(0, 255, 65, 0.03); mix-blend-mode: overlay; pointer-events: none;
