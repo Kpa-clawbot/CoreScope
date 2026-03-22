@@ -12,11 +12,6 @@ const decoder = require('./decoder');
 const PAYLOAD_TYPES = decoder.PAYLOAD_TYPES;
 const { nodeNearRegion, IATA_COORDS } = require('./iata-coords');
 
-// IATA coordinates for client-side regional filtering
-app.get('/api/iata-coords', (req, res) => {
-  res.json({ coords: IATA_COORDS });
-});
-
 // Health thresholds — configurable with sensible defaults
 const _ht = config.healthThresholds || {};
 const HEALTH = {
@@ -2917,6 +2912,11 @@ app.get('/api/analytics/subpath-detail', (req, res) => {
   };
   cache.set(_sdck, _sdResult, TTL.analyticsSubpathDetail);
   res.json(_sdResult);
+});
+
+// IATA coordinates for client-side regional filtering
+app.get('/api/iata-coords', (req, res) => {
+  res.json({ coords: IATA_COORDS });
 });
 
 // Audio Lab: representative packets bucketed by type
