@@ -70,6 +70,7 @@ UI polish, client-side filtering, time window selector, DB cleanup, and bug fixe
 - Feed panel position (obscured by VCR bar)
 - Hop disambiguation anchored from sender origin
 - Packet hash case normalization for deeplinks
+- Critical: packet ingestion broken after legacy table removal (`insert()` returned undefined)
 - Sort help tooltip rendering (CSS pseudo-elements don't support newlines)
 
 ### Performance
