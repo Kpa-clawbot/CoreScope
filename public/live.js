@@ -1312,6 +1312,15 @@
     marker._baseColor = color;
     marker._baseSize = size;
     nodeMarkers[n.public_key] = marker;
+
+    // Apply matrix tint if active
+    if (matrixMode) {
+      marker._matrixPrevColor = color;
+      marker._baseColor = '#005f15';
+      marker.setStyle({ fillColor: '#005f15', color: '#005f15', fillOpacity: 0.4, opacity: 0.4 });
+      glow.setStyle({ fillColor: '#005f15', fillOpacity: 0.1 });
+    }
+
     return marker;
   }
 
