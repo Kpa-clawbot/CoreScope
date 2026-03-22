@@ -10,8 +10,8 @@
 | `payload_type` | ADVERT, GRP_TXT, TXT_MSG, TRACE | Instrument/scale selection |
 | `hop_count` | 1-12+ | Note duration |
 | `path` | node sequence | Arpeggio pattern |
-| `SNR` | dB value | Volume/velocity |
-| `RSSI` | dBm value | Filter cutoff (brightness) |
+| `SNR` | dB value | ~~mostly unavailable~~ — skip |
+| `RSSI` | dBm value | ~~mostly unavailable~~ — skip |
 | `hash_size` | 1-4 bytes | — |
 | `observation_count` | 1-40+ | Chord voicing / polyphony |
 | `channel_hash` | 0-255 | Root bass note / key |
@@ -49,10 +49,9 @@
 - Or: packet origin's X position on current map viewport = pan
 - Distance between hops → reverb amount (long hops = more reverb, signal traveled far)
 
-### Dynamics from Signal Quality
-- **SNR → velocity/volume**: strong signal = loud, weak = quiet whisper
-- **RSSI → filter cutoff**: strong = bright and clear, weak = muffled/low-pass filtered
-- Low SNR could add subtle bitcrushing/distortion (degraded signal = degraded sound)
+### Dynamics from Observations + Hops
+- **Observation count → velocity/volume**: more observers heard it = louder, more present
+- **Hop count → filter cutoff**: few hops = bright and clear (nearby), many hops = muffled/filtered (traveled far, degraded)
 
 ### Harmony from Observations
 - 1 observation = single note
@@ -94,10 +93,9 @@ sonifyPacket(pkt):
   2. Select scale based on payload_type
   3. Map first 8-16 bytes to notes in scale (quantized)
   4. Set note duration from hop_count
-  5. Set velocity from SNR
-  6. Set filter cutoff from RSSI  
+  5. Set velocity from observation_count (more observers = louder)
+  6. Set filter cutoff from hop_count (more hops = more muffled)
   7. Set pan from origin longitude
-  8. Set reverb from max hop distance
   9. If observation_count > 1:
      - Play as chord (stack observation_count voices)
      - Each voice slightly detuned (+/- cents)
