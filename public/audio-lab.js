@@ -156,7 +156,7 @@
     }
 
     const bpm = MeshAudio.getBPM ? MeshAudio.getBPM() : 120;
-    const tm = 60 / bpm * speedMult;
+    const tm = 60 / bpm; // BPM already includes speed multiplier
 
     const notes = sampledBytes.map((byte, i) => {
       const midi = quantizeToScale(byte, scale);
