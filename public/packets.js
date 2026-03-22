@@ -175,6 +175,10 @@
     </div>`;
     initPanelResize();
     await loadObservers();
+    // Restore saved time window before first load
+    const fTW = document.getElementById('fTimeWindow');
+    const savedTW = localStorage.getItem('meshcore-time-window');
+    if (savedTW !== null && fTW) fTW.value = savedTW;
     loadPackets();
 
     // Auto-select packet detail when arriving via hash URL
@@ -477,16 +481,15 @@
           <button class="btn" id="fMyNodes" title="Show only packets from your favorited/claimed nodes">★ My Nodes</button>
         </div>
         <div class="filter-group">
-          <label>Window:</label>
           <select id="fTimeWindow" class="filter-select">
-            <option value="15">15 min</option>
-            <option value="30">30 min</option>
-            <option value="60">1 hour</option>
-            <option value="180">3 hours</option>
-            <option value="360">6 hours</option>
-            <option value="720">12 hours</option>
-            <option value="1440">24 hours</option>
-            <option value="0">All</option>
+            <option value="15">Last 15 min</option>
+            <option value="30">Last 30 min</option>
+            <option value="60">Last 1 hour</option>
+            <option value="180">Last 3 hours</option>
+            <option value="360">Last 6 hours</option>
+            <option value="720">Last 12 hours</option>
+            <option value="1440">Last 24 hours</option>
+            <option value="0">All time</option>
           </select>
         </div>
         <div class="filter-group">
