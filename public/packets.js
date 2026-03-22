@@ -1105,10 +1105,11 @@
       await ensureHopResolver();
       const senderLat = decoded.lat != null ? decoded.lat : (decoded.latitude || null);
       const senderLon = decoded.lon != null ? decoded.lon : (decoded.longitude || null);
+      console.log('[renderDetail] GPS anchor:', senderLat, senderLon, 'observer:', pkt.observer_id?.slice(0,12));
       // Always re-resolve for detail view — list view may have cached without anchor
       const fresh = HopResolver.resolve(pathHops, senderLat, senderLon, null, null, pkt.observer_id);
-      // Overwrite cache with better results
       for (const [k, v] of Object.entries(fresh || {})) {
+        console.log('[renderDetail] hop', k, '→', v.name, 'ambig:', v.ambiguous, 'conflicts:', v.conflicts?.length);
         hopNameCache[k] = v;
       }
     }
