@@ -384,9 +384,8 @@
         const targetNode = nodes.find(n => n.public_key === targetNodeKey);
         if (targetNode && targetNode.lat && targetNode.lon) {
           map.setView([targetNode.lat, targetNode.lon], 14);
-          // Find and open the marker's popup
           markerLayer.eachLayer(m => {
-            if (m.getLatLng && m.options.alt && m.options.alt.includes(targetNode.name || targetNodeKey.slice(0, 8))) {
+            if (m._nodeKey === targetNodeKey && m.openPopup) {
               m.openPopup();
             }
           });
@@ -562,6 +561,7 @@
     for (const m of allMarkers) {
       const pos = m.adjustedLatLng || m.latLng;
       const marker = L.marker(pos, { icon: m.icon, alt: m.alt });
+      marker._nodeKey = m.node.public_key || m.node.id || null;
       marker.bindPopup(m.popupFn(), { maxWidth: 280 });
       markerLayer.addLayer(marker);
 
