@@ -12,27 +12,19 @@ db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.pragma('wal_autocheckpoint = 0'); // Disable auto-checkpoint — manual checkpoint on timer to avoid random event loop spikes
 
+// --- Migration: drop legacy tables (replaced by transmissions + observations in v2.3.0) ---
+// Drop paths first (has FK to packets)
+const legacyTables = ['paths', 'packets'];
+for (const t of legacyTables) {
+  const exists = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(t);
+  if (exists) {
+    console.log(`[migration] Dropping legacy table: ${t}`);
+    db.exec(`DROP TABLE IF EXISTS ${t}`);
+  }
+}
+
 // --- Schema ---
 db.exec(`
-  CREATE TABLE IF NOT EXISTS packets (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    raw_hex TEXT NOT NULL,
-    timestamp TEXT NOT NULL,
-    observer_id TEXT,
-    observer_name TEXT,
-    direction TEXT,
-    snr REAL,
-    rssi REAL,
-    score INTEGER,
-    hash TEXT,
-    route_type INTEGER,
-    payload_type INTEGER,
-    payload_version INTEGER,
-    path_json TEXT,
-    decoded_json TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-
   CREATE TABLE IF NOT EXISTS nodes (
     public_key TEXT PRIMARY KEY,
     name TEXT,
@@ -60,16 +52,6 @@ db.exec(`
     noise_floor INTEGER
   );
 
-  CREATE TABLE IF NOT EXISTS paths (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    packet_id INTEGER REFERENCES packets(id),
-    hop_index INTEGER,
-    node_hash TEXT
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_packets_timestamp ON packets(timestamp);
-  CREATE INDEX IF NOT EXISTS idx_packets_hash ON packets(hash);
-  CREATE INDEX IF NOT EXISTS idx_packets_payload_type ON packets(payload_type);
   CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes(last_seen);
   CREATE INDEX IF NOT EXISTS idx_observers_last_seen ON observers(last_seen);
 
@@ -149,11 +131,6 @@ for (const col of ['model', 'firmware', 'client_version', 'radio', 'battery_mv',
 
 // --- Prepared statements ---
 const stmts = {
-  insertPacket: db.prepare(`
-    INSERT INTO packets (raw_hex, timestamp, observer_id, observer_name, direction, snr, rssi, score, hash, route_type, payload_type, payload_version, path_json, decoded_json)
-    VALUES (@raw_hex, @timestamp, @observer_id, @observer_name, @direction, @snr, @rssi, @score, @hash, @route_type, @payload_type, @payload_version, @path_json, @decoded_json)
-  `),
-  insertPath: db.prepare(`INSERT INTO paths (packet_id, hop_index, node_hash) VALUES (?, ?, ?)`),
   upsertNode: db.prepare(`
     INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
     VALUES (@public_key, @name, @role, @lat, @lon, @last_seen, @first_seen, 1)
@@ -197,7 +174,6 @@ const stmts = {
       noise_floor = COALESCE(@noise_floor, noise_floor)
   `),
   getPacket: db.prepare(`SELECT * FROM packets_v WHERE id = ?`),
-  getPathsForPacket: db.prepare(`SELECT * FROM paths WHERE packet_id = ? ORDER BY hop_index`),
   getNode: db.prepare(`SELECT * FROM nodes WHERE public_key = ?`),
   getRecentPacketsForNode: db.prepare(`
     SELECT * FROM packets_v WHERE decoded_json LIKE ? OR decoded_json LIKE ? OR decoded_json LIKE ? OR decoded_json LIKE ?
@@ -221,26 +197,6 @@ const stmts = {
 };
 
 // --- Helper functions ---
-
-function insertPacket(data) {
-  const d = {
-    raw_hex: data.raw_hex,
-    timestamp: data.timestamp || new Date().toISOString(),
-    observer_id: data.observer_id || null,
-    observer_name: data.observer_name || null,
-    direction: data.direction || null,
-    snr: data.snr ?? null,
-    rssi: data.rssi ?? null,
-    score: data.score ?? null,
-    hash: data.hash || null,
-    route_type: data.route_type ?? null,
-    payload_type: data.payload_type ?? null,
-    payload_version: data.payload_version ?? null,
-    path_json: data.path_json || null,
-    decoded_json: data.decoded_json || null,
-  };
-  return stmts.insertPacket.run(d).lastInsertRowid;
-}
 
 function insertTransmission(data) {
   const hash = data.hash;
@@ -283,15 +239,6 @@ function insertTransmission(data) {
   });
 
   return { transmissionId, observationId: obsResult.lastInsertRowid };
-}
-
-function insertPath(packetId, hops) {
-  const tx = db.transaction((hops) => {
-    for (let i = 0; i < hops.length; i++) {
-      stmts.insertPath.run(packetId, i, hops[i]);
-    }
-  });
-  tx(hops);
 }
 
 function upsertNode(data) {
@@ -365,7 +312,6 @@ function getTransmission(id) {
 function getPacket(id) {
   const packet = stmts.getPacket.get(id);
   if (!packet) return null;
-  packet.paths = stmts.getPathsForPacket.all(id);
   return packet;
 }
 
@@ -685,4 +631,4 @@ function getNodeAnalytics(pubkey, days) {
   };
 }
 
-module.exports = { db, insertPacket, insertTransmission, insertPath, upsertNode, upsertObserver, updateObserverStatus, getPackets, getPacket, getTransmission, getNodes, getNode, getObservers, getStats, seed, searchNodes, getNodeHealth, getNodeAnalytics };
+module.exports = { db, insertTransmission, upsertNode, upsertObserver, updateObserverStatus, getPackets, getPacket, getTransmission, getNodes, getNode, getObservers, getStats, seed, searchNodes, getNodeHealth, getNodeAnalytics };

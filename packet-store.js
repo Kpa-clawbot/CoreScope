@@ -8,7 +8,7 @@
  */
 class PacketStore {
   constructor(dbModule, config = {}) {
-    this.dbModule = dbModule;  // The full db module (has .db, .insertPacket, .getPacket)
+    this.dbModule = dbModule;  // The full db module (has .db, .insertTransmission, .getPacket)
     this.db = dbModule.db;     // Raw better-sqlite3 instance for queries
     this.maxBytes = (config.maxMemoryMB || 1024) * 1024 * 1024;
     this.estPacketBytes = config.estimatedPacketBytes || 450;
@@ -327,11 +327,10 @@ class PacketStore {
 
   /** Insert a new packet (to both memory and SQLite) */
   insert(packetData) {
-    const id = this.dbModule.insertPacket(packetData);
-    // Also write to normalized tables and get the transmission ID
+    // Write to normalized tables and get the transmission ID
     const txResult = this.dbModule.insertTransmission ? this.dbModule.insertTransmission(packetData) : null;
     const transmissionId = txResult ? txResult.transmissionId : null;
-    const observationId = txResult ? txResult.observationId : id;
+    const observationId = txResult ? txResult.observationId : null;
 
     // Build row directly from packetData — avoids view ID mismatch issues
     const row = {
@@ -675,7 +674,7 @@ class PacketStore {
     if (since) { where.push('timestamp > ?'); params.push(since); }
     if (until) { where.push('timestamp < ?'); params.push(until); }
     if (region) { where.push('observer_id IN (SELECT id FROM observers WHERE iata = ?)'); params.push(region); }
-    if (node) { try { const nr = this.db.prepare('SELECT public_key FROM nodes WHERE public_key = ? OR name = ? LIMIT 1').get(node, node); const pk = nr ? nr.public_key : node; where.push('(decoded_json LIKE ? OR id IN (SELECT packet_id FROM paths WHERE node_hash = ?))'); params.push('%' + pk + '%', pk.substring(0, 8)); } catch(e) { where.push('decoded_json LIKE ?'); params.push('%' + node + '%'); } }
+    if (node) { try { const nr = this.db.prepare('SELECT public_key FROM nodes WHERE public_key = ? OR name = ? LIMIT 1').get(node, node); const pk = nr ? nr.public_key : node; where.push('decoded_json LIKE ?'); params.push('%' + pk + '%'); } catch(e) { where.push('decoded_json LIKE ?'); params.push('%' + node + '%'); } }
     const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
     const total = this.db.prepare(`SELECT COUNT(*) as c FROM packets_v ${w}`).get(...params).c;
     const packets = this.db.prepare(`SELECT * FROM packets_v ${w} ORDER BY timestamp ${order === 'ASC' ? 'ASC' : 'DESC'} LIMIT ? OFFSET ?`).all(...params, limit, offset);
@@ -692,7 +691,7 @@ class PacketStore {
     if (since) { where.push('timestamp > ?'); params.push(since); }
     if (until) { where.push('timestamp < ?'); params.push(until); }
     if (region) { where.push('observer_id IN (SELECT id FROM observers WHERE iata = ?)'); params.push(region); }
-    if (node) { try { const nr = this.db.prepare('SELECT public_key FROM nodes WHERE public_key = ? OR name = ? LIMIT 1').get(node, node); const pk = nr ? nr.public_key : node; where.push('(decoded_json LIKE ? OR id IN (SELECT packet_id FROM paths WHERE node_hash = ?))'); params.push('%' + pk + '%', pk.substring(0, 8)); } catch(e) { where.push('decoded_json LIKE ?'); params.push('%' + node + '%'); } }
+    if (node) { try { const nr = this.db.prepare('SELECT public_key FROM nodes WHERE public_key = ? OR name = ? LIMIT 1').get(node, node); const pk = nr ? nr.public_key : node; where.push('decoded_json LIKE ?'); params.push('%' + pk + '%'); } catch(e) { where.push('decoded_json LIKE ?'); params.push('%' + node + '%'); } }
     const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
 
     const sql = `SELECT hash, COUNT(*) as count, COUNT(DISTINCT observer_id) as observer_count,

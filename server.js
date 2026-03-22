@@ -697,7 +697,6 @@ for (const source of mqttSources) {
         try { db.insertTransmission(pktData); } catch (e) { console.error('[dual-write] transmission insert error:', e.message); }
 
         if (decoded.path.hops.length > 0) {
-          db.insertPath(packetId, decoded.path.hops);
           // Auto-create stub nodes from 2+ byte path hops
           autoLearnHopNodes(decoded.path.hops, now);
         }
@@ -920,9 +919,7 @@ app.get('/api/packets', (req, res) => {
       for (const p of found) allPackets.set(p.id, p);
     }
     let results = [...allPackets.values()].sort((a, b) => order === 'DESC' ? b.timestamp.localeCompare(a.timestamp) : a.timestamp.localeCompare(b.timestamp));
-    // Apply additional filters
-    if (type !== undefined) { const types = String(type).split(','); results = results.filter(p => types.includes(String(p.payload_type))); }
-    if (observer) { const obsIds = observer.split(','); results = results.filter(p => obsIds.includes(p.observer_id)); }
+    // Apply additional filters (type/observer filtering done client-side; server only filters for nodes query path)
     if (region) results = results.filter(p => (p.observer_id || '').includes(region) || (p.decoded_json || '').includes(region));
     if (since) results = results.filter(p => p.timestamp >= since);
     if (until) results = results.filter(p => p.timestamp <= until);
@@ -1093,7 +1090,6 @@ app.post('/api/packets', requireApiKey, (req, res) => {
     try { db.insertTransmission(apiPktData); } catch (e) { console.error('[dual-write] transmission insert error:', e.message); }
 
     if (decoded.path.hops.length > 0) {
-      db.insertPath(packetId, decoded.path.hops);
       autoLearnHopNodes(decoded.path.hops, new Date().toISOString());
     }
 
