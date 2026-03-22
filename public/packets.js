@@ -1100,14 +1100,17 @@
     let pathHops;
     try { pathHops = JSON.parse(pkt.path_json || '[]'); } catch { pathHops = []; }
 
-    // Re-resolve hops with observer + sender location for regional filtering & disambiguation
+    // Re-resolve hops with sender location + observer — bypass stale cache
     if (pathHops.length) {
       await ensureHopResolver();
-      const senderLat = (decoded.lat != null && decoded.lat !== 0) ? decoded.lat : (decoded.latitude || null);
-      const senderLon = (decoded.lon != null && decoded.lon !== 0) ? decoded.lon : (decoded.longitude || null);
-      console.log('[renderDetail] re-resolve:', { senderLat, senderLon, observer: pkt.observer_id?.slice(0,12), decodedKeys: Object.keys(decoded) });
-      const resolved = HopResolver.resolve(pathHops, senderLat, senderLon, null, null, pkt.observer_id);
-      Object.assign(hopNameCache, resolved || {});
+      const senderLat = decoded.lat != null ? decoded.lat : (decoded.latitude || null);
+      const senderLon = decoded.lon != null ? decoded.lon : (decoded.longitude || null);
+      // Always re-resolve for detail view — list view may have cached without anchor
+      const fresh = HopResolver.resolve(pathHops, senderLat, senderLon, null, null, pkt.observer_id);
+      // Overwrite cache with better results
+      for (const [k, v] of Object.entries(fresh || {})) {
+        hopNameCache[k] = v;
+      }
     }
 
     // Parse hash size from path byte

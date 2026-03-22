@@ -81,11 +81,8 @@ window.HopResolver = (function() {
   function resolve(hops, originLat, originLon, observerLat, observerLon, observerId) {
     if (!hops || !hops.length) return {};
 
-    console.log('[HopResolver] resolve:', { hops, originLat, originLon, observerId, iataCoords: Object.keys(iataCoords).length, observers: Object.keys(observerIataMap).length });
-
     // Determine observer's IATA for regional filtering
     const packetIata = observerId ? observerIataMap[observerId] : null;
-    if (observerId) console.log('[HopResolver] observer:', observerId.slice(0,12), '→ IATA:', packetIata);
 
     const resolved = {};
     const hopPositions = {};
