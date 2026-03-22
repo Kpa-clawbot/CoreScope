@@ -1757,14 +1757,14 @@
     }
 
     const matrixGreen = '#00ff41';
-    const TRAIL_LEN = Math.min(8, bytes.length); // visible chars at once
-    const TOTAL_STEPS = 30;
+    const TRAIL_LEN = Math.min(6, bytes.length); // visible chars at once — fewer for more spacing
+    const TOTAL_STEPS = 45; // slower animation
     const charMarkers = [];
     let step = 0;
 
     // Dim trail line underneath
     const trail = L.polyline([from], {
-      color: matrixGreen, weight: 1, opacity: 0.15, lineCap: 'round'
+      color: matrixGreen, weight: 1.5, opacity: 0.2, lineCap: 'round'
     }).addTo(pathsLayer);
 
     const trailCoords = [from];
@@ -1786,24 +1786,26 @@
       // Fade existing chars
       for (let i = 0; i < charMarkers.length; i++) {
         const age = charMarkers.length - i;
-        const op = Math.max(0.1, 1 - (age / TRAIL_LEN) * 0.8);
-        const size = Math.max(7, 12 - age);
+        const op = Math.max(0.15, 1 - (age / TRAIL_LEN) * 0.7);
+        const size = Math.max(10, 16 - age * 1.5);
         const el = charMarkers[i].marker.getElement();
         if (el) { el.style.opacity = op; el.style.fontSize = size + 'px'; }
       }
 
-      // Add new leading character
-      const byteIdx = step % bytes.length;
-      const charEl = L.marker([lat, lon], {
-        icon: L.divIcon({
-          className: 'matrix-char',
-          html: `<span style="color:${matrixGreen};font-family:'Courier New',monospace;font-size:12px;font-weight:bold;text-shadow:0 0 6px ${matrixGreen},0 0 12px ${matrixGreen}80;pointer-events:none">${bytes[byteIdx]}</span>`,
-          iconSize: [20, 14],
-          iconAnchor: [10, 7]
-        }),
-        interactive: false
-      }).addTo(animLayer);
-      charMarkers.push({ marker: charEl });
+      // Add new leading character every 2nd step for spacing
+      if (step % 2 === 0) {
+        const byteIdx = (step / 2) % bytes.length;
+        const charEl = L.marker([lat, lon], {
+          icon: L.divIcon({
+            className: 'matrix-char',
+            html: `<span style="color:#fff;font-family:'Courier New',monospace;font-size:16px;font-weight:bold;text-shadow:0 0 8px ${matrixGreen},0 0 16px ${matrixGreen},0 0 24px ${matrixGreen}60;pointer-events:none">${bytes[byteIdx]}</span>`,
+            iconSize: [24, 18],
+            iconAnchor: [12, 9]
+          }),
+          interactive: false
+        }).addTo(animLayer);
+        charMarkers.push({ marker: charEl });
+      }
 
       if (step >= TOTAL_STEPS) {
         clearInterval(interval);
@@ -1830,7 +1832,7 @@
 
         if (onComplete) onComplete();
       }
-    }, 33);
+    }, 50);
   }
 
   function drawAnimatedLine(from, to, color, onComplete, overrideOpacity, rawHex) {
