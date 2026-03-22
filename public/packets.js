@@ -1179,8 +1179,11 @@
     // Location: from ADVERT lat/lon, or from known node
     let locationHtml = '—';
     if (decoded.lat != null && decoded.lon != null && !(decoded.lat === 0 && decoded.lon === 0)) {
-      locationHtml = `${decoded.lat.toFixed(5)}, ${decoded.lon.toFixed(5)} <a href="#/map?lat=${decoded.lat}&lon=${decoded.lon}&zoom=12" style="font-size:0.85em">📍map</a>`;
-      if (decoded.name) locationHtml = `${escapeHtml(decoded.name)} — ${locationHtml}`;
+      const nodeKey = decoded.pubKey || decoded.srcPubKey || '';
+      const nodeName = decoded.name || '';
+      locationHtml = `${decoded.lat.toFixed(5)}, ${decoded.lon.toFixed(5)}`;
+      if (nodeName) locationHtml = `${escapeHtml(nodeName)} — ${locationHtml}`;
+      if (nodeKey) locationHtml += ` <a href="#/map?node=${encodeURIComponent(nodeKey)}" style="font-size:0.85em">📍map</a>`;
     } else if (decoded.srcPubKey || decoded.pubKey) {
       // Try to look up sender node location from HopResolver's node list
       const senderKey = decoded.srcPubKey || decoded.pubKey;
