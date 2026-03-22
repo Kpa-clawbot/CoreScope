@@ -12,7 +12,8 @@
   let bpm = 120;
   let activeVoices = 0;
   const MAX_VOICES = 12;
-  let currentVoice = null; // active voice module
+  let currentVoice = null;
+  let _pendingVolume = 0.3; // active voice module
 
   // === Shared Helpers (available to voice modules) ===
 
@@ -79,14 +80,18 @@
     }
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     masterGain = audioCtx.createGain();
-    masterGain.gain.value = 0.3;
+    masterGain.gain.value = _pendingVolume;
     masterGain.connect(audioCtx.destination);
   }
 
   // === Engine: Sonify ===
 
   function sonifyPacket(pkt) {
-    if (!audioEnabled || !audioCtx || !currentVoice) return;
+    if (!audioEnabled || !currentVoice) return;
+    // Lazy-init AudioContext on first actual packet (may not have user gesture,
+    // but browser will auto-resume when it gets one)
+    if (!audioCtx) initAudio();
+    if (!audioCtx) return;
     if (audioCtx.state === 'suspended') audioCtx.resume();
     if (activeVoices >= MAX_VOICES) return;
 
@@ -166,10 +171,9 @@
     const savedBpm = localStorage.getItem('live-audio-bpm');
     if (savedBpm) bpm = parseInt(savedBpm, 10) || 120;
     const savedVol = localStorage.getItem('live-audio-volume');
-    if (savedVol) {
-      initAudio();
-      if (masterGain) masterGain.gain.value = parseFloat(savedVol) || 0.3;
-    }
+    // Don't create AudioContext here — no user gesture yet, browser will suspend it.
+    // Just store the desired volume; initAudio() will apply it when user interacts.
+    if (savedVol) _pendingVolume = parseFloat(savedVol) || 0.3;
     const savedVoice = localStorage.getItem('live-audio-voice');
     if (savedVoice) setVoice(savedVoice);
   }
