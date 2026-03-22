@@ -1740,7 +1740,7 @@
         const headY = progress * drop.maxY;
         // Trail shows all packet bytes, scrolling through them
         const CHAR_H = 18;
-        const VISIBLE_CHARS = Math.min(drop.bytes.length, 20); // up to 20 visible at once
+        const VISIBLE_CHARS = drop.bytes.length; // show all bytes
         const trailPx = VISIBLE_CHARS * CHAR_H;
 
         // Scroll offset — cycles through all bytes over the drop lifetime
