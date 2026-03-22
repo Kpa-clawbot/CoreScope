@@ -56,19 +56,27 @@
     // More observers = richer chord: 1→1, 3→2, 8→3, 15→4, 30→5, 60→6
     const voiceCount = Math.min(Math.max(1, Math.ceil(Math.log2(obsCount + 1))), 8);
 
-    // Audio nodes
+    // Audio chain: filter → limiter → panner → master
     const filter = audioCtx.createBiquadFilter();
     filter.type = 'lowpass';
     filter.frequency.value = filterFreq;
     filter.Q.value = 1;
 
+    const limiter = audioCtx.createDynamicsCompressor();
+    limiter.threshold.value = -6;
+    limiter.knee.value = 6;
+    limiter.ratio.value = 12;
+    limiter.attack.value = 0.001;
+    limiter.release.value = 0.05;
+
     const panner = audioCtx.createStereoPanner();
     panner.pan.value = panValue;
 
-    filter.connect(panner);
+    filter.connect(limiter);
+    limiter.connect(panner);
     panner.connect(masterGain);
 
-    let timeOffset = audioCtx.currentTime + 0.01;
+    let timeOffset = audioCtx.currentTime + 0.02; // small lookahead avoids scheduling on "now"
     let lastNoteEnd = timeOffset;
 
     for (let i = 0; i < sampledBytes.length; i++) {
@@ -84,9 +92,10 @@
 
       const noteStart = timeOffset;
       const noteEnd = noteStart + duration;
+      const { attack: a, decay: d, sustain: s, release: r } = synthConfig;
 
       for (let v = 0; v < voiceCount; v++) {
-        const detune = v === 0 ? 0 : (v % 2 === 0 ? 1 : -1) * (v * 5 + 3); // ±8, ±13, ±18, ±23...
+        const detune = v === 0 ? 0 : (v % 2 === 0 ? 1 : -1) * (v * 5 + 3);
         const osc = audioCtx.createOscillator();
         const envGain = audioCtx.createGain();
 
@@ -94,19 +103,22 @@
         osc.frequency.value = freq;
         osc.detune.value = detune;
 
-        const { attack: a, decay: d, sustain: s, release: r } = synthConfig;
         const voiceVol = volume / voiceCount;
+        const sustainVol = Math.max(voiceVol * s, 0.0001);
 
-        envGain.gain.setValueAtTime(0, noteStart);
-        envGain.gain.linearRampToValueAtTime(voiceVol, noteStart + a);
-        envGain.gain.exponentialRampToValueAtTime(Math.max(voiceVol * s, 0.0001), noteStart + a + d);
-        envGain.gain.setValueAtTime(Math.max(voiceVol * s, 0.0001), noteEnd);
-        envGain.gain.exponentialRampToValueAtTime(0.0001, noteEnd + r);
+        // Envelope: start silent, ramp up, decay to sustain, hold, release to silence
+        // Use exponentialRamp throughout to avoid discontinuities
+        envGain.gain.setValueAtTime(0.0001, noteStart);
+        envGain.gain.exponentialRampToValueAtTime(Math.max(voiceVol, 0.0001), noteStart + a);
+        envGain.gain.exponentialRampToValueAtTime(sustainVol, noteStart + a + d);
+        // Hold sustain — cancelAndHoldAtTime not universal, so just let it ride
+        // Release: ramp down from wherever we are
+        envGain.gain.setTargetAtTime(0.0001, noteEnd, r / 5); // smooth exponential decay
 
         osc.connect(envGain);
         envGain.connect(filter);
         osc.start(noteStart);
-        osc.stop(noteEnd + r + 0.05);
+        osc.stop(noteEnd + r + 0.1);
         osc.onended = () => { osc.disconnect(); envGain.disconnect(); };
       }
 
@@ -115,9 +127,9 @@
     }
 
     // Cleanup shared nodes
-    const cleanupMs = (lastNoteEnd - audioCtx.currentTime + 0.5) * 1000;
+    const cleanupMs = (lastNoteEnd - audioCtx.currentTime + 1) * 1000;
     setTimeout(() => {
-      try { filter.disconnect(); panner.disconnect(); } catch (e) {}
+      try { filter.disconnect(); limiter.disconnect(); panner.disconnect(); } catch (e) {}
     }, cleanupMs);
 
     return lastNoteEnd - audioCtx.currentTime;
