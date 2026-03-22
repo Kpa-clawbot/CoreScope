@@ -126,9 +126,16 @@
     } catch {}
     let initCenter = defaultCenter;
     let initZoom = defaultZoom;
-    const savedView = localStorage.getItem('map-view');
-    if (savedView) {
-      try { const v = JSON.parse(savedView); initCenter = [v.lat, v.lng]; initZoom = v.zoom; } catch {}
+    // Check URL query params first (from packet detail links)
+    const urlParams = new URLSearchParams(location.hash.split('?')[1] || '');
+    if (urlParams.get('lat') && urlParams.get('lon')) {
+      initCenter = [parseFloat(urlParams.get('lat')), parseFloat(urlParams.get('lon'))];
+      initZoom = parseInt(urlParams.get('zoom')) || 12;
+    } else {
+      const savedView = localStorage.getItem('map-view');
+      if (savedView) {
+        try { const v = JSON.parse(savedView); initCenter = [v.lat, v.lng]; initZoom = v.zoom; } catch {}
+      }
     }
     map = L.map('leaflet-map', { zoomControl: true }).setView(initCenter, initZoom);
 
