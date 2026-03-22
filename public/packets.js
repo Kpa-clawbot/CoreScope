@@ -346,10 +346,8 @@
     try {
       const params = new URLSearchParams();
       params.set('limit', '100');
-      if (filters.type !== undefined && filters.type !== '') params.set('type', filters.type);
       const regionParam = RegionFilter.getRegionParam();
       if (regionParam) params.set('region', regionParam);
-      if (filters.observer) params.set('observer', filters.observer);
       if (filters.hash) params.set('hash', filters.hash);
       if (filters.node) params.set('node', filters.node);
       params.set('groupByHash', 'true'); // always fetch grouped
@@ -522,7 +520,7 @@
       if (filters.observer) localStorage.setItem('meshcore-observer-filter', filters.observer); else localStorage.removeItem('meshcore-observer-filter');
       buildObserverMenu();
       updateObsTrigger();
-      loadPackets();
+      renderTableRows();
     });
 
     // --- Type multi-select ---
@@ -564,7 +562,7 @@
       if (filters.type) localStorage.setItem('meshcore-type-filter', filters.type); else localStorage.removeItem('meshcore-type-filter');
       buildTypeMenu();
       updateTypeTrigger();
-      loadPackets();
+      renderTableRows();
     });
 
     // Close multi-select menus on outside click
@@ -816,7 +814,6 @@
 
     // Update dynamic parts of the header
     const countEl = document.querySelector('#pktLeft .count');
-    if (countEl) countEl.textContent = `(${totalCount})`;
     const groupBtn = document.getElementById('fGroup');
     if (groupBtn) groupBtn.classList.toggle('active', groupByHash);
 
@@ -836,6 +833,18 @@
         displayPackets = [];
       }
     }
+
+    // Client-side type/observer filtering
+    if (filters.type) {
+      const types = filters.type.split(',').map(Number);
+      displayPackets = displayPackets.filter(p => types.includes(p.payload_type));
+    }
+    if (filters.observer) {
+      const obsIds = new Set(filters.observer.split(','));
+      displayPackets = displayPackets.filter(p => obsIds.has(p.observer_id));
+    }
+
+    if (countEl) countEl.textContent = `(${displayPackets.length})`;
 
     if (!displayPackets.length) {
       tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted" style="padding:24px">' + (filters.myNodes ? 'No packets from your claimed/favorited nodes' : 'No packets found') + '</td></tr>';
