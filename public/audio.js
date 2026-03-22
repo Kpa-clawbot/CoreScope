@@ -171,11 +171,22 @@
     const savedBpm = localStorage.getItem('live-audio-bpm');
     if (savedBpm) bpm = parseInt(savedBpm, 10) || 120;
     const savedVol = localStorage.getItem('live-audio-volume');
-    // Don't create AudioContext here — no user gesture yet, browser will suspend it.
-    // Just store the desired volume; initAudio() will apply it when user interacts.
     if (savedVol) _pendingVolume = parseFloat(savedVol) || 0.3;
     const savedVoice = localStorage.getItem('live-audio-voice');
     if (savedVoice) setVoice(savedVoice);
+
+    // If audio was enabled, wait for ANY user gesture to init context
+    if (audioEnabled) {
+      const unlockAudio = () => {
+        initAudio();
+        document.removeEventListener('click', unlockAudio, true);
+        document.removeEventListener('touchstart', unlockAudio, true);
+        document.removeEventListener('keydown', unlockAudio, true);
+      };
+      document.addEventListener('click', unlockAudio, true);
+      document.addEventListener('touchstart', unlockAudio, true);
+      document.addEventListener('keydown', unlockAudio, true);
+    }
   }
 
   // Export engine + helpers for voice modules
