@@ -31,6 +31,8 @@ Big batch: observation drill-down, distance analytics, regional filters on all t
 - Filter bar: logical grouping, consistent 34px height, help tooltips
 - Multi-select Observer and Type filters (checkbox dropdowns, OR logic)
 - Hex Paths toggle: show raw hex hash prefixes vs resolved node names
+- Time window selector (15min/30min/1h/3h/6h/12h/24h/All) replaces fixed packet count limit
+- Pause/resume button (⏸/▶) for live WebSocket updates with buffered packet count
 - localStorage persistence for all filter/view preferences
 
 ### Changed
@@ -43,6 +45,8 @@ Big batch: observation drill-down, distance analytics, regional filters on all t
 - Dark mode: active filter buttons retain accent styling
 - Region dropdown: `IATA - Friendly Name` format, proper sizing
 - Observer/Type filters are pure client-side (no API calls on filter change)
+- Packet loading: time-window based (`since`) instead of fixed count limit
+- Header row shows matching observer when observer filter is active
 
 ### Removed
 - Legacy `packets` and `paths` database tables (auto-migrated on startup)
