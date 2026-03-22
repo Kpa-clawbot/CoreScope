@@ -1796,7 +1796,8 @@
   function addRainDrop(pkt) {
     if (!rainCanvas || !matrixRain) return;
     const rawHex = pkt.raw || pkt.raw_hex || (pkt.packet && pkt.packet.raw_hex) || '';
-    if (!rawHex) return; // no real packet bytes — don't fake it
+    console.log('[rain] pkt keys:', Object.keys(pkt), 'raw:', !!pkt.raw, 'raw_hex:', !!pkt.raw_hex, 'packet.raw_hex:', !!(pkt.packet && pkt.packet.raw_hex), 'rawHex len:', rawHex.length);
+    if (!rawHex) return;
     const decoded = pkt.decoded || {};
     const hops = decoded.path?.hops || [];
     const hopCount = Math.max(1, hops.length);
