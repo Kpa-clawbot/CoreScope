@@ -208,18 +208,22 @@
     }
 
     // Event delegation for data-action buttons
-    app.addEventListener('click', function (e) {
+    document.addEventListener('click', function (e) {
       var btn = e.target.closest('[data-action]');
       if (!btn) return;
       if (btn.dataset.action === 'pkt-refresh') loadPackets();
       else if (btn.dataset.action === 'pkt-byop') showBYOP();
       else if (btn.dataset.action === 'pkt-pause') {
         packetsPaused = !packetsPaused;
-        btn.textContent = packetsPaused ? '▶' : '⏸';
-        btn.title = packetsPaused ? 'Resume live updates' : 'Pause live updates';
-        btn.classList.toggle('active', packetsPaused);
+        const pauseBtn = document.getElementById('pktPauseBtn');
+        if (pauseBtn) {
+          pauseBtn.textContent = packetsPaused ? '▶' : '⏸';
+          pauseBtn.title = packetsPaused ? 'Resume live updates' : 'Pause live updates';
+          pauseBtn.classList.toggle('active', packetsPaused);
+        }
         if (!packetsPaused && pauseBuffer.length) {
-          pauseBuffer.forEach(msg => wsHandler(msg));
+          const handler = wsHandler;
+          pauseBuffer.forEach(msg => { if (handler) handler(msg); });
           pauseBuffer = [];
         }
       }
