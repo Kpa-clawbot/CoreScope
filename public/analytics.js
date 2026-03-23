@@ -799,18 +799,22 @@
       if (!inconsistent.length) {
         ihEl.innerHTML = '<div class="text-muted" style="padding:4px">✅ No inconsistencies detected — all nodes are reporting consistent hash sizes.</div>';
       } else {
-        ihEl.innerHTML = `<table class="analytics-table">
-          <thead><tr><th>Node</th><th>Role</th><th>Current Hash</th><th>Sizes Seen</th><th>Status</th></tr></thead>
-          <tbody>${inconsistent.map(n => {
+        ihEl.innerHTML = `<table class="analytics-table" style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;overflow:hidden">
+          <thead><tr><th>Node</th><th>Role</th><th>Current Hash</th><th>Sizes Seen</th></tr></thead>
+          <tbody>${inconsistent.map((n, i) => {
             const roleColor = window.ROLE_COLORS?.[n.role] || '#6b7280';
             const prefix = n.hash_size ? n.public_key.slice(0, n.hash_size * 2).toUpperCase() : '?';
-            const sizes = (n.hash_sizes_seen || []).map(s => s + 'B').join(', ');
-            return `<tr>
-              <td><a href="#/nodes/${encodeURIComponent(n.public_key)}?highlight=hashsize" style="font-weight:600">${esc(n.name || n.public_key.slice(0, 12))}</a></td>
+            const sizeBadges = (n.hash_sizes_seen || []).map(s => {
+              const c = s >= 3 ? '#16a34a' : s === 2 ? '#86efac' : '#f97316';
+              const fg = s === 2 ? '#064e3b' : '#fff';
+              return '<span class="badge" style="background:' + c + ';color:' + fg + ';font-size:10px;font-family:var(--mono)">' + s + 'B</span>';
+            }).join(' ');
+            const stripe = i % 2 === 1 ? 'background:var(--row-stripe)' : '';
+            return `<tr style="${stripe}">
+              <td><a href="#/nodes/${encodeURIComponent(n.public_key)}?highlight=hashsize" style="font-weight:600;color:var(--accent)">${esc(n.name || n.public_key.slice(0, 12))}</a></td>
               <td><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span></td>
-              <td><code style="font-family:var(--mono);font-weight:700">${prefix}</code> (${n.hash_size || '?'}B)</td>
-              <td><span style="color:var(--status-yellow);font-weight:600">${sizes}</span></td>
-              <td><span class="badge" style="background:var(--status-yellow);color:#000;font-size:10px">⚠️ variable</span></td>
+              <td><code style="font-family:var(--mono);font-weight:700">${prefix}</code> <span class="text-muted">(${n.hash_size || '?'}B)</span></td>
+              <td>${sizeBadges}</td>
             </tr>`;
           }).join('')}</tbody>
         </table>
