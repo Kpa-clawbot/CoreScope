@@ -629,7 +629,8 @@
     tbody.innerHTML = sorted.map(n => {
       const roleColor = ROLE_COLORS[n.role] || '#6b7280';
       const isClaimed = myKeys.has(n.public_key);
-      const status = getNodeStatus(n.role || 'companion', n.last_seen ? new Date(n.last_seen).getTime() : 0);
+      const lastSeenTime = n.last_heard || n.last_seen;
+      const status = getNodeStatus(n.role || 'companion', lastSeenTime ? new Date(lastSeenTime).getTime() : 0);
       const lastSeenClass = status === 'active' ? 'last-seen-active' : 'last-seen-stale';
       return `<tr data-key="${n.public_key}" data-action="select" data-value="${n.public_key}" tabindex="0" role="row" class="${selectedKey === n.public_key ? 'selected' : ''}${isClaimed ? ' claimed-row' : ''}">
         <td>${favStar(n.public_key, 'node-fav')}${isClaimed ? '<span class="claimed-badge" title="My Mesh">★</span> ' : ''}<strong>${n.name || '(unnamed)'}</strong></td>

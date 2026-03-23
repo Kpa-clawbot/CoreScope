@@ -441,7 +441,7 @@
     for (const n of nodes) {
       const role = (n.role || 'companion').toLowerCase();
       if (!roleCounts[role]) roleCounts[role] = { active: 0, stale: 0 };
-      const lastMs = n.last_seen ? new Date(n.last_seen).getTime() : 0;
+      const lastMs = (n.last_heard || n.last_seen) ? new Date(n.last_heard || n.last_seen).getTime() : 0;
       const status = getNodeStatus(role, lastMs);
       roleCounts[role][status]++;
     }
@@ -584,7 +584,7 @@
       // Status filter
       if (filters.statusFilter !== 'all') {
         const role = (n.role || 'companion').toLowerCase();
-        const lastMs = n.last_seen ? new Date(n.last_seen).getTime() : 0;
+        const lastMs = (n.last_heard || n.last_seen) ? new Date(n.last_heard || n.last_seen).getTime() : 0;
         const status = getNodeStatus(role, lastMs);
         if (status !== filters.statusFilter) return false;
       }
@@ -594,7 +594,8 @@
     const allMarkers = [];
 
     for (const node of filtered) {
-      const isStale = getNodeStatus(node.role || 'companion', node.last_seen ? new Date(node.last_seen).getTime() : 0) === 'stale';
+      const lastSeenTime = node.last_heard || node.last_seen;
+      const isStale = getNodeStatus(node.role || 'companion', lastSeenTime ? new Date(lastSeenTime).getTime() : 0) === 'stale';
       const useLabel = node.role === 'repeater' && filters.hashLabels;
       const icon = useLabel ? makeRepeaterLabelIcon(node, isStale) : makeMarkerIcon(node.role || 'companion', isStale);
       const latLng = L.latLng(node.lat, node.lon);
