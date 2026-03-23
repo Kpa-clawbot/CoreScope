@@ -19,9 +19,42 @@
       accentHover: '#6db3ff',
       navBg: '#0f0f23',
       navBg2: '#1a1a2e',
-      statusGreen: '#45644c',
-      statusYellow: '#b08b2d',
-      statusRed: '#b54a4a'
+      text: '#1a1a2e',
+      textMuted: '#5b6370',
+      border: '#e2e5ea',
+      surface0: '#f4f5f7',
+      surface1: '#ffffff',
+      surface2: '#ffffff',
+      cardBg: '#ffffff',
+      contentBg: '#f4f5f7',
+      inputBg: '#ffffff',
+      rowStripe: '#f9fafb',
+      rowHover: '#eef2ff',
+      selectedBg: '#dbeafe',
+      statusGreen: '#22c55e',
+      statusYellow: '#eab308',
+      statusRed: '#ef4444'
+    },
+    themeDark: {
+      accent: '#4a9eff',
+      accentHover: '#6db3ff',
+      navBg: '#0f0f23',
+      navBg2: '#1a1a2e',
+      text: '#e2e8f0',
+      textMuted: '#a8b8cc',
+      border: '#334155',
+      surface0: '#0f0f23',
+      surface1: '#1a1a2e',
+      surface2: '#232340',
+      cardBg: '#1a1a2e',
+      contentBg: '#0f0f23',
+      inputBg: '#1e1e34',
+      rowStripe: '#1e1e34',
+      rowHover: '#2d2d50',
+      selectedBg: '#1e3a5f',
+      statusGreen: '#22c55e',
+      statusYellow: '#eab308',
+      statusRed: '#ef4444'
     },
     nodeColors: {
       repeater: '#dc2626',
@@ -58,29 +91,65 @@
     accentHover: '--accent-hover',
     navBg: '--nav-bg',
     navBg2: '--nav-bg2',
+    text: '--text',
+    textMuted: '--text-muted',
+    border: '--border',
+    surface0: '--surface-0',
+    surface1: '--surface-1',
+    surface2: '--surface-2',
+    cardBg: '--card-bg',
+    contentBg: '--content-bg',
+    inputBg: '--input-bg',
+    rowStripe: '--row-stripe',
+    rowHover: '--row-hover',
+    selectedBg: '--selected-bg',
     statusGreen: '--status-green',
     statusYellow: '--status-yellow',
     statusRed: '--status-red'
   };
 
   const THEME_LABELS = {
-    accent: 'Accent Color',
+    accent: 'Accent',
     accentHover: 'Accent Hover',
     navBg: 'Nav Background',
     navBg2: 'Nav Background 2',
+    text: 'Text',
+    textMuted: 'Muted Text',
+    border: 'Borders',
+    surface0: 'Page Background',
+    surface1: 'Card Background',
+    surface2: 'Surface 2',
+    cardBg: 'Card Background',
+    contentBg: 'Content Background',
+    inputBg: 'Input Background',
+    rowStripe: 'Table Stripe',
+    rowHover: 'Row Hover',
+    selectedBg: 'Selected Row',
     statusGreen: 'Status Green',
     statusYellow: 'Status Yellow',
     statusRed: 'Status Red'
   };
 
   const THEME_HINTS = {
-    accent: 'Active nav tab, buttons, links, selected rows, badges, chart bars',
-    accentHover: 'Button hover states, link hovers',
-    navBg: 'Top navigation bar background',
-    navBg2: 'Nav dropdown menus, darker nav areas',
-    statusGreen: 'Healthy nodes, online indicators, good SNR',
-    statusYellow: 'Degraded nodes, warning indicators, moderate SNR',
-    statusRed: 'Silent/offline nodes, error states, bad SNR'
+    accent: 'Active nav tab, buttons, links, selected rows, badges',
+    accentHover: 'Button and link hover states',
+    navBg: 'Top navigation bar gradient start',
+    navBg2: 'Top navigation bar gradient end',
+    text: 'Primary text color',
+    textMuted: 'Secondary/muted text, labels, timestamps',
+    border: 'Table borders, card borders, dividers',
+    surface0: 'Main page background',
+    surface1: 'Cards, panels, modals',
+    surface2: 'Nested surfaces, inputs, secondary panels',
+    cardBg: 'Card and detail panel backgrounds',
+    contentBg: 'Content area background',
+    inputBg: 'Text inputs, dropdowns, search boxes',
+    rowStripe: 'Alternating table row background',
+    rowHover: 'Table row hover highlight',
+    selectedBg: 'Selected/active row background',
+    statusGreen: 'Healthy nodes, online indicators',
+    statusYellow: 'Degraded nodes, warnings',
+    statusRed: 'Offline/silent nodes, errors'
   };
 
   const NODE_LABELS = {
@@ -111,6 +180,7 @@
     state = {
       branding: Object.assign({}, DEFAULTS.branding, cfg.branding || {}),
       theme: Object.assign({}, DEFAULTS.theme, cfg.theme || {}),
+      themeDark: Object.assign({}, DEFAULTS.themeDark, cfg.themeDark || {}),
       nodeColors: Object.assign({}, DEFAULTS.nodeColors, cfg.nodeColors || {}),
       home: {
         heroTitle: (cfg.home && cfg.home.heroTitle) || DEFAULTS.home.heroTitle,
@@ -122,6 +192,14 @@
     };
   }
 
+  function isDarkMode() {
+    return document.documentElement.getAttribute('data-theme') === 'dark' ||
+      (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  }
+
+  function activeTheme() { return isDarkMode() ? state.themeDark : state.theme; }
+  function activeDefaults() { return isDarkMode() ? DEFAULTS.themeDark : DEFAULTS.theme; }
+
   function saveOriginalCSS() {
     var cs = getComputedStyle(document.documentElement);
     originalValues = {};
@@ -131,8 +209,9 @@
   }
 
   function applyThemePreview() {
+    var t = activeTheme();
     for (var key in THEME_CSS_MAP) {
-      document.documentElement.style.setProperty(THEME_CSS_MAP[key], state.theme[key]);
+      if (t[key]) document.documentElement.style.setProperty(THEME_CSS_MAP[key], t[key]);
     }
   }
 
@@ -258,10 +337,15 @@
   }
 
   function renderTheme() {
+    var dark = isDarkMode();
+    var modeLabel = dark ? '🌙 Dark Mode' : '☀️ Light Mode';
+    var themeKey = dark ? 'themeDark' : 'theme';
+    var defs = activeDefaults();
+    var current = activeTheme();
     var rows = '';
     for (var key in THEME_LABELS) {
-      var val = state.theme[key];
-      var def = DEFAULTS.theme[key];
+      var val = current[key] || defs[key] || '#000000';
+      var def = defs[key] || '#000000';
       rows += '<div class="cust-color-row">' +
         '<div><label>' + THEME_LABELS[key] + '</label>' +
         '<div class="cust-hint">' + (THEME_HINTS[key] || '') + '</div></div>' +
@@ -271,8 +355,8 @@
       '</div>';
     }
     return '<div class="cust-panel' + (activeTab === 'theme' ? ' active' : '') + '" data-panel="theme">' +
-      '<p class="cust-section-title">Theme Colors</p>' +
-      '<p style="font-size:13px;color:var(--text-muted);margin:0 0 16px">Changes apply as a live preview. Use Export tab to save.</p>' +
+      '<p class="cust-section-title">' + modeLabel + ' Colors</p>' +
+      '<p style="font-size:11px;color:var(--text-muted);margin:0 0 12px">Editing ' + (dark ? 'dark' : 'light') + ' mode. Toggle ☀️/🌙 in nav to switch.</p>' +
       rows +
       '<button class="cust-reset-preview" id="custResetPreview">↩ Reset Preview</button>' +
     '</div>';
@@ -352,6 +436,13 @@
       if (state.theme[tk] !== DEFAULTS.theme[tk]) th[tk] = state.theme[tk];
     }
     if (Object.keys(th).length) out.theme = th;
+
+    // Dark theme
+    var thd = {};
+    for (var tdk in DEFAULTS.themeDark) {
+      if (state.themeDark[tdk] !== DEFAULTS.themeDark[tdk]) thd[tdk] = state.themeDark[tdk];
+    }
+    if (Object.keys(thd).length) out.themeDark = thd;
 
     // Node colors
     var nc = {};
@@ -436,7 +527,8 @@
     container.querySelectorAll('input[data-theme]').forEach(function (inp) {
       inp.addEventListener('input', function () {
         var key = inp.dataset.theme;
-        state.theme[key] = inp.value;
+        var themeKey = isDarkMode() ? 'themeDark' : 'theme';
+        state[themeKey][key] = inp.value;
         var hex = container.querySelector('[data-hex="' + key + '"]');
         if (hex) hex.textContent = inp.value;
         applyThemePreview();
@@ -447,7 +539,8 @@
     container.querySelectorAll('[data-reset-theme]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var key = btn.dataset.resetTheme;
-        state.theme[key] = DEFAULTS.theme[key];
+        var themeKey = isDarkMode() ? 'themeDark' : 'theme';
+        state[themeKey][key] = activeDefaults()[key];
         applyThemePreview();
         render(container);
       });
@@ -655,8 +748,11 @@
       const saved = localStorage.getItem('meshcore-user-theme');
       if (saved) {
         const userTheme = JSON.parse(saved);
-        if (userTheme.theme) {
-          for (const [key, val] of Object.entries(userTheme.theme)) {
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+          (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        const themeData = dark ? (userTheme.themeDark || userTheme.theme) : userTheme.theme;
+        if (themeData) {
+          for (const [key, val] of Object.entries(themeData)) {
             if (THEME_CSS_MAP[key]) document.documentElement.style.setProperty(THEME_CSS_MAP[key], val);
           }
         }

@@ -87,7 +87,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 /* === Nav === */
 .top-nav {
   display: flex; align-items: center; justify-content: space-between;
-  background: linear-gradient(135deg, #0f0f23 0%, #151532 50%, #1a1035 100%); color: #fff; padding: 0 20px; height: 52px;
+  background: linear-gradient(135deg, var(--nav-bg) 0%, var(--nav-bg2) 100%); color: #fff; padding: 0 20px; height: 52px;
   position: sticky; top: 0; z-index: 1100;
   box-shadow: 0 2px 8px rgba(0,0,0,.3);
 }
