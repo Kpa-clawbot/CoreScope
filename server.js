@@ -171,6 +171,32 @@ const db = require('./db');
 const pktStore = new PacketStore(db, config.packetStore || {}).load();
 _rebuildHashSizeMap();
 
+// Backfill: fix roles for nodes whose adverts were decoded with old bitfield flags
+// ADV_TYPE is a 4-bit enum (0=none, 1=chat, 2=repeater, 3=room, 4=sensor), not individual bits
+(function _backfillRoles() {
+  const ADV_ROLES = { 1: 'companion', 2: 'repeater', 3: 'room', 4: 'sensor' };
+  let fixed = 0;
+  for (const p of pktStore.packets) {
+    if (p.payload_type !== 4 || !p.raw_hex) continue;
+    try {
+      const d = JSON.parse(p.decoded_json || '{}');
+      const pk = d.pubKey || d.public_key;
+      if (!pk) continue;
+      const appStart = p.raw_hex.length - (d.flags?.raw != null ? 2 : 0); // flags byte position varies
+      const flagsByte = d.flags?.raw;
+      if (flagsByte == null) continue;
+      const advType = flagsByte & 0x0F;
+      const correctRole = ADV_ROLES[advType] || 'companion';
+      const node = db.db.prepare('SELECT role FROM nodes WHERE public_key = ?').get(pk);
+      if (node && node.role !== correctRole) {
+        db.db.prepare('UPDATE nodes SET role = ? WHERE public_key = ?').run(correctRole, pk);
+        fixed++;
+      }
+    } catch {}
+  }
+  if (fixed > 0) console.log(`[backfill] Fixed ${fixed} node roles (advert type enum vs bitfield)`);
+})();
+
 // --- Shared cached node list (refreshed every 30s, avoids repeated SQLite queries) ---
 let _cachedAllNodes = null;
 let _cachedAllNodesWithRole = null;

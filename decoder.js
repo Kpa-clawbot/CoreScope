@@ -109,12 +109,14 @@ function decodeAdvert(buf) {
 
   if (appdata.length > 0) {
     const flags = appdata[0];
+    const advType = flags & 0x0F; // lower nibble is enum type, not individual bits
     result.flags = {
       raw: flags,
-      chat: !!(flags & 0x01),
-      repeater: !!(flags & 0x02),
-      room: !!(flags & 0x04),
-      sensor: !!(flags & 0x08),
+      type: advType,
+      chat: advType === 1,
+      repeater: advType === 2,
+      room: advType === 3,
+      sensor: advType === 4,
       hasLocation: !!(flags & 0x10),
       hasName: !!(flags & 0x80),
     };
