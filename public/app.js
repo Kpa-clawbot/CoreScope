@@ -513,26 +513,33 @@ window.addEventListener('DOMContentLoaded', () => {
     // User's localStorage preferences take priority over server config
     const userTheme = (() => { try { return JSON.parse(localStorage.getItem('meshcore-user-theme') || '{}'); } catch { return {}; } })();
 
-    // Apply CSS variable overrides from theme.* (server config, skipped if user has local overrides)
-    if (cfg.theme && !userTheme.theme && !userTheme.themeDark) {
+    // Apply CSS variable overrides from theme config (skipped if user has local overrides)
+    if (!userTheme.theme && !userTheme.themeDark) {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+        (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      const themeData = dark ? { ...(cfg.theme || {}), ...(cfg.themeDark || {}) } : (cfg.theme || {});
       const root = document.documentElement.style;
       const varMap = {
         accent: '--accent', accentHover: '--accent-hover',
-        navBg: '--nav-bg', navBg2: '--nav-bg2',
+        navBg: '--nav-bg', navBg2: '--nav-bg2', navText: '--nav-text', navTextMuted: '--nav-text-muted',
+        background: '--surface-0', text: '--text', textMuted: '--text-muted', border: '--border',
         statusGreen: '--status-green', statusYellow: '--status-yellow', statusRed: '--status-red',
-        text: '--text', textMuted: '--text-muted', border: '--border',
-        surface0: '--surface-0', surface1: '--surface-1', surface2: '--surface-2', surface3: '--surface-3',
+        surface1: '--surface-1', surface2: '--surface-2', surface3: '--surface-3',
         cardBg: '--card-bg', contentBg: '--content-bg', inputBg: '--input-bg',
         rowStripe: '--row-stripe', rowHover: '--row-hover', detailBg: '--detail-bg',
-        selectedBg: '--selected-bg'
+        selectedBg: '--selected-bg', sectionBg: '--section-bg',
+        font: '--font', mono: '--mono'
       };
       for (const [key, cssVar] of Object.entries(varMap)) {
-        if (cfg.theme[key]) root.setProperty(cssVar, cfg.theme[key]);
+        if (themeData[key]) root.setProperty(cssVar, themeData[key]);
       }
-      // Also update nav gradient if navBg is customized
-      if (cfg.theme.navBg) {
+      // Derived vars
+      if (themeData.background) root.setProperty('--content-bg', themeData.contentBg || themeData.background);
+      if (themeData.surface1) root.setProperty('--card-bg', themeData.cardBg || themeData.surface1);
+      // Nav gradient
+      if (themeData.navBg) {
         const nav = document.querySelector('.top-nav');
-        if (nav) nav.style.background = `linear-gradient(135deg, ${cfg.theme.navBg} 0%, ${cfg.theme.navBg2 || cfg.theme.navBg} 50%, ${cfg.theme.navBg} 100%)`;
+        if (nav) nav.style.background = `linear-gradient(135deg, ${themeData.navBg} 0%, ${themeData.navBg2 || themeData.navBg} 50%, ${themeData.navBg} 100%)`;
       }
     }
 
@@ -542,6 +549,14 @@ window.addEventListener('DOMContentLoaded', () => {
         if (window.ROLE_COLORS && role in window.ROLE_COLORS) window.ROLE_COLORS[role] = color;
         if (window.ROLE_STYLE && window.ROLE_STYLE[role]) window.ROLE_STYLE[role].color = color;
       }
+    }
+
+    // Apply type color overrides (skip if user has local preferences)
+    if (cfg.typeColors && !userTheme.typeColors) {
+      for (const [type, color] of Object.entries(cfg.typeColors)) {
+        if (window.TYPE_COLORS && type in window.TYPE_COLORS) window.TYPE_COLORS[type] = color;
+      }
+      if (window.syncBadgeColors) window.syncBadgeColors();
     }
 
     // Apply branding (skip if user has local preferences)
