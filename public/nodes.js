@@ -593,9 +593,21 @@
         const qr = qrcode(0, 'M');
         qr.addData(meshcoreUrl);
         qr.make();
-        qrEl.innerHTML = `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Scan with MeshCore app to add contact</div>` + qr.createSvgTag(3, 0);
+        const isOverlay = !!qrEl.closest('.node-map-qr-overlay');
+        qrEl.innerHTML = (isOverlay ? '' : `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Scan with MeshCore app to add contact</div>`) + qr.createSvgTag(3, 0);
         const svg = qrEl.querySelector('svg');
-        if (svg) { svg.style.display = 'block'; svg.style.margin = '0 auto'; }
+        if (svg) {
+          svg.style.display = 'block'; svg.style.margin = '0 auto';
+          // Make QR background transparent for map overlay
+          if (isOverlay) {
+            svg.querySelectorAll('rect').forEach(r => {
+              const fill = (r.getAttribute('fill') || '').toLowerCase();
+              if (fill === '#ffffff' || fill === 'white' || fill === '#fff') {
+                r.setAttribute('fill', 'transparent');
+              }
+            });
+          }
+        }
       } catch {}
     }
 
