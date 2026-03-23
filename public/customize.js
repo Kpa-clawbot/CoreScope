@@ -679,6 +679,7 @@
         var key = inp.dataset.typeColor;
         state.typeColors[key] = inp.value;
         if (window.TYPE_COLORS) window.TYPE_COLORS[key] = inp.value;
+        if (window.syncBadgeColors) window.syncBadgeColors();
         window.dispatchEvent(new CustomEvent('theme-changed'));
         var dot = container.querySelector('[data-tdot="' + key + '"]');
         if (dot) dot.style.background = inp.value;
