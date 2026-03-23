@@ -223,11 +223,18 @@
     for (var key in THEME_CSS_MAP) {
       if (t[key]) document.documentElement.style.setProperty(THEME_CSS_MAP[key], t[key]);
     }
-    // Force nav bar to re-render gradient (some browsers cache gradient paint)
+    // Derived vars that reference other vars — need explicit override
+    if (t.background) {
+      document.documentElement.style.setProperty('--content-bg', t.background);
+    }
+    if (t.surface1) {
+      document.documentElement.style.setProperty('--card-bg', t.surface1);
+    }
+    // Force nav bar to re-render gradient
     var nav = document.querySelector('.top-nav');
     if (nav) {
       nav.style.background = 'none';
-      void nav.offsetHeight; // force reflow
+      void nav.offsetHeight;
       nav.style.background = '';
     }
   }
