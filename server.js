@@ -383,19 +383,32 @@ function getObserverIdsForRegions(regionParam) {
   return ids;
 }
 
+// Theme: load from separate theme.json (falls back to config.json keys for compat)
+const THEME_PATH = path.join(__dirname, 'theme.json');
+function loadThemeFile() {
+  try { return JSON.parse(fs.readFileSync(THEME_PATH, 'utf8')); } catch { return {}; }
+}
+
 app.get('/api/config/theme', (req, res) => {
+  const theme = loadThemeFile();
   res.json({
     branding: {
       siteName: 'MeshCore Analyzer',
       tagline: 'Real-time MeshCore LoRa mesh network analyzer',
-      ...(config.branding || {})
+      ...(config.branding || {}),
+      ...(theme.branding || {})
     },
     theme: {
       accent: '#4a9eff',
       accentHover: '#6db3ff',
       navBg: '#0f0f23',
       navBg2: '#1a1a2e',
-      ...(config.theme || {})
+      ...(config.theme || {}),
+      ...(theme.theme || {})
+    },
+    themeDark: {
+      ...(config.themeDark || {}),
+      ...(theme.themeDark || {})
     },
     nodeColors: {
       repeater: '#dc2626',
@@ -403,10 +416,26 @@ app.get('/api/config/theme', (req, res) => {
       room: '#16a34a',
       sensor: '#d97706',
       observer: '#8b5cf6',
-      ...(config.nodeColors || {})
+      ...(config.nodeColors || {}),
+      ...(theme.nodeColors || {})
     },
-    home: config.home || null,
+    typeColors: {
+      ...(config.typeColors || {}),
+      ...(theme.typeColors || {})
+    },
+    home: theme.home || config.home || null,
   });
+});
+
+app.post('/api/config/theme', express.json(), (req, res) => {
+  try {
+    const data = req.body;
+    if (!data || typeof data !== 'object') return res.status(400).json({ error: 'Invalid JSON' });
+    fs.writeFileSync(THEME_PATH, JSON.stringify(data, null, 2), 'utf8');
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/api/config/map', (req, res) => {

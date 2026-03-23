@@ -597,18 +597,19 @@
         (hasUserTheme ? '<button class="cust-reset-user" id="custResetUser">🗑️ Reset my theme</button>' : '') +
       '</div>' +
       '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">' +
-      '<p class="cust-section-title">Admin Export</p>' +
-      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Export as config.json for server deployment — applies to all users of this instance.</p>' +
-      '<textarea class="cust-export-area" readonly id="custExportJson">' + esc(json) + '</textarea>' +
+      '<p class="cust-section-title">Admin — Server Theme</p>' +
+      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Save/load the theme on the server. Applies to all users who haven\'t set their own.</p>' +
+      '<div class="cust-export-btns" style="margin-bottom:12px">' +
+        '<button class="cust-save-user" id="custSaveServer">📡 Save to Server</button>' +
+        '<button class="cust-dl-btn" id="custLoadServer">📥 Load from Server</button>' +
+      '</div>' +
+      '<details style="margin-top:8px"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted)">Export as JSON</summary>' +
+      '<textarea class="cust-export-area" readonly id="custExportJson" style="margin-top:8px">' + esc(json) + '</textarea>' +
       '<div class="cust-export-btns">' +
-        '<button class="cust-copy-btn" id="custCopy">📋 Copy to Clipboard</button>' +
-        '<button class="cust-dl-btn" id="custDownload">💾 Download config-theme.json</button>' +
+        '<button class="cust-copy-btn" id="custCopy">📋 Copy</button>' +
+        '<button class="cust-dl-btn" id="custDownload">💾 Download</button>' +
       '</div>' +
-      '<div class="cust-instructions">' +
-        '<strong>How to apply:</strong><br>' +
-        'Merge this JSON into your <code>config.json</code> file and restart the server.<br>' +
-        'Only values that differ from defaults are included.' +
-      '</div>' +
+      '</details>' +
     '</div>';
   }
 
@@ -863,6 +864,43 @@
       initState();
       render(container);
       applyThemePreview(); autoSave();
+    });
+
+    // Save to server
+    var saveServerBtn = document.getElementById('custSaveServer');
+    if (saveServerBtn) saveServerBtn.addEventListener('click', function () {
+      var data = buildExport();
+      fetch('/api/config/theme', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      }).then(function (r) {
+        if (!r.ok) throw new Error('Server returned ' + r.status);
+        return r.json();
+      }).then(function () {
+        saveServerBtn.textContent = '✓ Saved to server!';
+        setTimeout(function () { saveServerBtn.textContent = '📡 Save to Server'; }, 2000);
+      }).catch(function (e) {
+        saveServerBtn.textContent = '✕ Failed: ' + e.message;
+        setTimeout(function () { saveServerBtn.textContent = '📡 Save to Server'; }, 3000);
+      });
+    });
+
+    // Load from server
+    var loadServerBtn = document.getElementById('custLoadServer');
+    if (loadServerBtn) loadServerBtn.addEventListener('click', function () {
+      fetch('/api/config/theme').then(function (r) { return r.json(); }).then(function (cfg) {
+        window.SITE_CONFIG = cfg;
+        resetPreview();
+        initState();
+        applyThemePreview();
+        render(container);
+        loadServerBtn.textContent = '✓ Loaded!';
+        setTimeout(function () { loadServerBtn.textContent = '📥 Load from Server'; }, 2000);
+      }).catch(function (e) {
+        loadServerBtn.textContent = '✕ Failed';
+        setTimeout(function () { loadServerBtn.textContent = '📥 Load from Server'; }, 3000);
+      });
     });
   }
 
