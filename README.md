@@ -120,11 +120,26 @@ docker run -d \
   -p 3000:3000 \
   -p 1883:1883 \
   -v meshcore-data:/app/data \
-  -v $(pwd)/config.json:/app/config.json \
   meshcore-analyzer
 ```
 
-**Persist your database** across container rebuilds by using a named volume (`meshcore-data`) or bind mount (`-v ./data:/app/data`).
+Config lives in the data volume at `/app/data/config.json` — a default is created on first run. To edit it:
+```bash
+docker exec -it meshcore-analyzer vi /app/data/config.json
+```
+
+Or use a bind mount for the data directory:
+```bash
+docker run -d \
+  --name meshcore-analyzer \
+  -p 3000:3000 \
+  -p 1883:1883 \
+  -v ./data:/app/data \
+  meshcore-analyzer
+# Now edit ./data/config.json directly on the host
+```
+
+**Theme customization:** Drop a `theme.json` in the same data directory (`/app/data/theme.json`) to override default colors, branding, and node/packet type colors for all users. Use the built-in customizer (Tools → Customize) to design your theme and download the file.
 
 ### Manual Install
 
