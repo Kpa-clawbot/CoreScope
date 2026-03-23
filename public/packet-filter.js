@@ -5,11 +5,13 @@
   'use strict';
 
   // Local copies of type maps (also available as window globals from app.js)
-  var PAYLOAD_TYPES = { 0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert', 5: 'Channel Msg', 7: 'Anon Req', 8: 'Path', 9: 'Trace', 11: 'Control' };
+  // Standard firmware payload type names (canonical)
+  var FW_PAYLOAD_TYPES = { 0: 'REQ', 1: 'RESPONSE', 2: 'TXT_MSG', 3: 'ACK', 4: 'ADVERT', 5: 'GRP_TXT', 7: 'ANON_REQ', 8: 'PATH', 9: 'TRACE', 11: 'CONTROL' };
+  // Aliases: display names → firmware names (for user convenience)
+  var TYPE_ALIASES = { 'request': 'REQ', 'response': 'RESPONSE', 'direct msg': 'TXT_MSG', 'dm': 'TXT_MSG', 'ack': 'ACK', 'advert': 'ADVERT', 'channel msg': 'GRP_TXT', 'channel': 'GRP_TXT', 'anon req': 'ANON_REQ', 'path': 'PATH', 'trace': 'TRACE', 'control': 'CONTROL' };
   var ROUTE_TYPES = { 0: 'TRANSPORT_FLOOD', 1: 'FLOOD', 2: 'DIRECT', 3: 'TRANSPORT_DIRECT' };
 
   // Use window globals if available (they may have more types)
-  function getPT() { return window.PAYLOAD_TYPES || PAYLOAD_TYPES; }
   function getRT() { return window.ROUTE_TYPES || ROUTE_TYPES; }
 
   // ── Lexer ──────────────────────────────────────────────────────────────────
@@ -176,7 +178,7 @@
 
   // ── Field Resolver ─────────────────────────────────────────────────────────
   function resolveField(packet, field) {
-    if (field === 'type') return getPT()[packet.payload_type] || '';
+    if (field === 'type') return FW_PAYLOAD_TYPES[packet.payload_type] || '';
     if (field === 'route') return getRT()[packet.route_type] || '';
     if (field === 'hash') return packet.hash || '';
     if (field === 'raw') return packet.raw_hex || '';
@@ -247,12 +249,18 @@
         // Equality
         if (op === '==' || op === '!=') {
           var eq;
-          if (typeof fieldVal === 'number' && typeof target === 'number') {
-            eq = fieldVal === target;
-          } else if (typeof fieldVal === 'boolean' || typeof target === 'boolean') {
-            eq = fieldVal === target;
+          // Resolve type aliases (e.g., "Channel Msg" → "GRP_TXT")
+          var resolvedTarget = target;
+          if (node.field === 'type' && typeof target === 'string') {
+            var alias = TYPE_ALIASES[String(target).toLowerCase()];
+            if (alias) resolvedTarget = alias;
+          }
+          if (typeof fieldVal === 'number' && typeof resolvedTarget === 'number') {
+            eq = fieldVal === resolvedTarget;
+          } else if (typeof fieldVal === 'boolean' || typeof resolvedTarget === 'boolean') {
+            eq = fieldVal === resolvedTarget;
           } else {
-            eq = String(fieldVal).toLowerCase() === String(target).toLowerCase();
+            eq = String(fieldVal).toLowerCase() === String(resolvedTarget).toLowerCase();
           }
           return op === '==' ? eq : !eq;
         }
