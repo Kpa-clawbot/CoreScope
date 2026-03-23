@@ -141,10 +141,14 @@ Uses firmware-standard type names (GRP_TXT, TXT_MSG, REQ) with aliases for conve
 
 ### Unit Tests
 ```bash
-node test-packet-filter.js   # 62 tests — filter engine
-node test-aging.js            # 29 tests — node aging system
+node test-packet-filter.js        # 62 tests — filter engine
+node test-aging.js                # 29 tests — node aging system
+node test-regional-filter.js      # 22 tests — regional observer filtering
+node test-regional-integration.js #  3 tests — regional integration (1 known failure)
+node tools/e2e-test.js            # E2E test (requires running server)
+node tools/frontend-test.js       # Frontend integration (requires running server)
 ```
-Run BOTH before every push. Add tests for new logic.
+Run the first three before every push (they don't need a server). Add tests for new logic.
 
 ### Browser Validation
 After pushing, verify in the browser:
