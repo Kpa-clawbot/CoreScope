@@ -87,6 +87,21 @@
 
   /* === Shared helper functions for node detail rendering === */
 
+  function getStatusTooltip(role, status) {
+    const isInfra = role === 'repeater' || role === 'room';
+    const threshold = isInfra ? '72h' : '24h';
+    if (status === 'active') {
+      return 'Active \u2014 heard within the last ' + threshold + '.' + (isInfra ? ' Repeaters typically advertise every 12-24h.' : '');
+    }
+    if (role === 'companion') {
+      return 'Stale \u2014 not heard for over ' + threshold + '. Companions only advertise when the user initiates \u2014 this may be normal.';
+    }
+    if (role === 'sensor') {
+      return 'Stale \u2014 not heard for over ' + threshold + '. This sensor may be offline.';
+    }
+    return 'Stale \u2014 not heard for over ' + threshold + '. This ' + role + ' may be offline or out of range.';
+  }
+
   function getStatusInfo(n) {
     // Single source of truth for all status-related info
     const role = (n.role || '').toLowerCase();
@@ -95,6 +110,7 @@
     const lastHeardTime = n._lastHeard || n.last_heard || n.last_seen;
     const lastHeardMs = lastHeardTime ? new Date(lastHeardTime).getTime() : 0;
     const status = getNodeStatus(role, lastHeardMs);
+    const statusTooltip = getStatusTooltip(role, status);
     const statusLabel = status === 'active' ? '🟢 Active' : '⚪ Stale';
     const statusAge = lastHeardMs ? (Date.now() - lastHeardMs) : Infinity;
 
@@ -112,7 +128,7 @@
       explanation = 'Not heard for ' + ageStr + ' — ' + reason;
     }
 
-    return { status, statusLabel, statusAge, explanation, roleColor, lastHeardMs, role };
+    return { status, statusLabel, statusTooltip, statusAge, explanation, roleColor, lastHeardMs, role };
   }
 
   function renderNodeBadges(n, roleColor) {
@@ -125,13 +141,13 @@
     if (n.hash_size_inconsistent) {
       html += ` <a href="#/nodes/${encodeURIComponent(n.public_key)}?section=node-packets" class="badge" style="background:var(--status-yellow);color:#000;font-size:10px;cursor:pointer;text-decoration:none">⚠️ variable hash size</a>`;
     }
-    html += ' ' + info.statusLabel;
+    html += ` <span title="${info.statusTooltip}">${info.statusLabel}</span>`;
     return html;
   }
 
   function renderStatusExplanation(n) {
     const info = getStatusInfo(n);
-    return `<div style="font-size:12px;color:var(--text-muted);margin:4px 0 6px">${info.statusLabel} — ${info.explanation}</div>`;
+    return `<div style="font-size:12px;color:var(--text-muted);margin:4px 0 6px"><span title="${info.statusTooltip}">${info.statusLabel}</span> — ${info.explanation}</div>`;
   }
 
   function renderHashInconsistencyWarning(n) {
@@ -242,7 +258,7 @@
         </div>
 
         <table class="node-stats-table" id="node-stats">
-          <tr><td>Status</td><td>${statusLabel} <span style="font-size:11px;color:var(--text-muted);margin-left:4px">${statusExplanation}</span></td></tr>
+          <tr><td>Status</td><td><span title="${si.statusTooltip}">${statusLabel}</span> <span style="font-size:11px;color:var(--text-muted);margin-left:4px">${statusExplanation}</span></td></tr>
           <tr><td>Last Heard</td><td>${lastHeard ? timeAgo(lastHeard) : (n.last_seen ? timeAgo(n.last_seen) : '—')}</td></tr>
           <tr><td>First Seen</td><td>${n.first_seen ? new Date(n.first_seen).toLocaleString() : '—'}</td></tr>
           <tr><td>Total Packets</td><td>${stats.totalTransmissions || stats.totalPackets || n.advert_count || 0}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + stats.totalObservations + '×)</span>' : ''}</td></tr>

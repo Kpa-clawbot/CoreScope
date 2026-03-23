@@ -456,7 +456,11 @@
         countStr = `(${obsCount})`;
       } else {
         const rc = roleCounts[role] || { active: 0, stale: 0 };
-        countStr = `(${rc.active} active, ${rc.stale} stale)`;
+        const isInfra = role === 'repeater' || role === 'room';
+        const thresh = isInfra ? '72h' : '24h';
+        const activeTip = 'Active \u2014 heard within the last ' + thresh;
+        const staleTip = 'Stale \u2014 not heard for over ' + thresh;
+        countStr = `(<span title="${activeTip}">${rc.active} active</span>, <span title="${staleTip}">${rc.stale} stale</span>)`;
       }
       lbl.innerHTML = `<input type="checkbox" id="${cbId}" data-role="${role}" ${filters[role] ? 'checked' : ''}> <span style="color:${ROLE_COLORS[role]};font-weight:600;" aria-hidden="true">${shape}</span> ${ROLE_LABELS[role]} <span style="color:var(--text-muted)">${countStr}</span>`;
       lbl.querySelector('input').addEventListener('change', e => {
