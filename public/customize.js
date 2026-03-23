@@ -520,6 +520,23 @@
         if (parts.length === 2) {
           state[parts[0]][parts[1]] = inp.value;
         }
+        // Live DOM updates for branding
+        if (inp.dataset.key === 'branding.siteName') {
+          var brandEl = document.querySelector('.brand-text');
+          if (brandEl) brandEl.textContent = inp.value;
+          document.title = inp.value;
+        }
+        if (inp.dataset.key === 'branding.logoUrl') {
+          var iconEl = document.querySelector('.brand-icon');
+          if (iconEl) {
+            if (inp.value) { iconEl.innerHTML = '<img src="' + inp.value + '" style="height:24px" onerror="this.style.display=\'none\'">'; }
+            else { iconEl.textContent = '📡'; }
+          }
+        }
+        if (inp.dataset.key === 'branding.faviconUrl') {
+          var link = document.querySelector('link[rel="icon"]');
+          if (link && inp.value) link.href = inp.value;
+        }
       });
     });
 
