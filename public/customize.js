@@ -19,7 +19,7 @@
       statusGreen: '#22c55e', statusYellow: '#eab308', statusRed: '#ef4444',
       accentHover: '#6db3ff', navBg2: '#1a1a2e', textMuted: '#5b6370', border: '#e2e5ea',
       surface1: '#ffffff', surface2: '#ffffff', cardBg: '#ffffff', contentBg: '#f4f5f7',
-      inputBg: '#ffffff', rowStripe: '#f9fafb', rowHover: '#eef2ff', selectedBg: '#dbeafe',
+      detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f9fafb', rowHover: '#eef2ff', selectedBg: '#dbeafe',
       font: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       mono: '"SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace',
     },
@@ -28,7 +28,7 @@
       statusGreen: '#22c55e', statusYellow: '#eab308', statusRed: '#ef4444',
       accentHover: '#6db3ff', navBg2: '#1a1a2e', textMuted: '#a8b8cc', border: '#334155',
       surface1: '#1a1a2e', surface2: '#232340', cardBg: '#1a1a2e', contentBg: '#0f0f23',
-      inputBg: '#1e1e34', rowStripe: '#1e1e34', rowHover: '#2d2d50', selectedBg: '#1e3a5f',
+      detailBg: '#232340', inputBg: '#1e1e34', rowStripe: '#1e1e34', rowHover: '#2d2d50', selectedBg: '#1e3a5f',
       font: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       mono: '"SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace',
     },
@@ -85,6 +85,7 @@
     surface2: '--surface-2',
     cardBg: '--card-bg',
     contentBg: '--content-bg',
+    detailBg: '--detail-bg',
     inputBg: '--input-bg',
     rowStripe: '--row-stripe',
     rowHover: '--row-hover',
@@ -94,7 +95,8 @@
   };
 
   const BASIC_KEYS = ['accent', 'navBg', 'background', 'text', 'statusGreen', 'statusYellow', 'statusRed'];
-  const ADVANCED_KEYS = ['accentHover', 'navBg2', 'textMuted', 'border', 'surface1', 'surface2', 'cardBg', 'contentBg', 'inputBg', 'rowStripe', 'rowHover', 'selectedBg', 'font', 'mono'];
+  const ADVANCED_KEYS = ['accentHover', 'navBg2', 'textMuted', 'border', 'surface1', 'surface2', 'cardBg', 'contentBg', 'detailBg', 'inputBg', 'rowStripe', 'rowHover', 'selectedBg'];
+  const FONT_KEYS = ['font', 'mono'];
 
   const THEME_LABELS = {
     accent: 'Brand Color',
@@ -112,6 +114,7 @@
     surface2: 'Panels',
     cardBg: 'Card Fill',
     contentBg: 'Content Area',
+    detailBg: 'Detail Panels',
     inputBg: 'Inputs',
     rowStripe: 'Table Stripe',
     rowHover: 'Row Hover',
@@ -136,6 +139,7 @@
     surface2: 'Nested surfaces, secondary panels',
     cardBg: 'Detail panels, modals',
     contentBg: 'Content area behind cards',
+    detailBg: 'Modal, packet detail, side panels',
     inputBg: 'Text inputs, dropdowns',
     rowStripe: 'Alternating table rows',
     rowHover: 'Table row hover',
@@ -259,7 +263,6 @@
       _autoSaveTimer = null;
       try {
         var data = buildExport();
-        console.log('[customize] autoSave:', Object.keys(data), data.nodeColors, data.typeColors);
         localStorage.setItem('meshcore-user-theme', JSON.stringify(data));
       } catch (e) { console.error('[customize] autoSave error:', e); }
     }, 500);
@@ -425,12 +428,21 @@
       advancedRows += renderColorRow(akey, current[akey] || defs[akey] || '#000000', defs[akey] || '#000000', 'theme');
     }
 
+    var fontRows = '';
+    for (var f = 0; f < FONT_KEYS.length; f++) {
+      var fkey = FONT_KEYS[f];
+      fontRows += renderColorRow(fkey, current[fkey] || defs[fkey] || '', defs[fkey] || '', 'theme');
+    }
+
     return '<div class="cust-panel' + (activeTab === 'theme' ? ' active' : '') + '" data-panel="theme">' +
       '<p class="cust-section-title">' + modeLabel + '</p>' +
       '<p style="font-size:11px;color:var(--text-muted);margin:0 0 10px">Toggle ☀️/🌙 in nav to edit the other mode.</p>' +
       basicRows +
       '<details class="cust-advanced"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted);margin:12px 0 8px">Advanced (' + ADVANCED_KEYS.length + ' options)</summary>' +
       advancedRows +
+      '</details>' +
+      '<details class="cust-fonts" style="margin-top:12px"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted);margin:12px 0 8px">Fonts</summary>' +
+      fontRows +
       '</details>' +
       '<button class="cust-reset-preview" id="custResetPreview">↩ Reset Preview</button>' +
     '</div>';

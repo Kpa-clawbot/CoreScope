@@ -238,7 +238,7 @@
     const closeBtn = L.control({ position: 'topright' });
     closeBtn.onAdd = function () {
       const div = L.DomUtil.create('div', 'leaflet-bar');
-      div.innerHTML = '<a href="#" title="Close route" style="font-size:18px;font-weight:bold;text-decoration:none;display:block;width:36px;height:36px;line-height:36px;text-align:center;background:var(--bg-secondary,#1e293b);color:var(--text-primary,#e2e8f0);border-radius:4px">✕</a>';
+      div.innerHTML = '<a href="#" title="Close route" style="font-size:18px;font-weight:bold;text-decoration:none;display:block;width:36px;height:36px;line-height:36px;text-align:center;background:var(--input-bg,#1e293b);color:var(--text,#e2e8f0);border-radius:4px">✕</a>';
       L.DomEvent.on(div, 'click', function (e) {
         L.DomEvent.preventDefault(e);
         routeLayer.clearLayers();
@@ -317,7 +317,7 @@
     positions.forEach((p, i) => {
       const isOrigin = i === 0 && p.isOrigin;
       const isLast = i === positions.length - 1 && positions.length > 1;
-      const color = isOrigin ? '#06b6d4' : isLast ? '#ef4444' : i === 0 ? '#22c55e' : '#f59e0b';
+      const color = isOrigin ? '#06b6d4' : isLast ? (getComputedStyle(document.documentElement).getPropertyValue('--status-red').trim() || '#ef4444') : i === 0 ? (getComputedStyle(document.documentElement).getPropertyValue('--status-green').trim() || '#22c55e') : '#f59e0b';
       const radius = isOrigin ? 14 : 10;
       const label = isOrigin ? 'Sender' : isLast ? 'Last Hop' : `Hop ${isOrigin ? i : i}`;
 
@@ -575,12 +575,12 @@
 
       if (m.offset > 10) {
         const line = L.polyline([m.latLng, pos], {
-          color: '#ef4444', weight: 2, dashArray: '6,4', opacity: 0.85
+          color: getComputedStyle(document.documentElement).getPropertyValue('--status-red').trim() || '#ef4444', weight: 2, dashArray: '6,4', opacity: 0.85
         });
         markerLayer.addLayer(line);
         // Small dot at true GPS position
         const dot = L.circleMarker(m.latLng, {
-          radius: 3, fillColor: '#ef4444', fillOpacity: 0.9, stroke: true, color: '#fff', weight: 1
+          radius: 3, fillColor: getComputedStyle(document.documentElement).getPropertyValue('--status-red').trim() || '#ef4444', fillOpacity: 0.9, stroke: true, color: '#fff', weight: 1
         });
         markerLayer.addLayer(dot);
       }

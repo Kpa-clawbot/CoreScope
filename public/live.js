@@ -1210,7 +1210,7 @@
               const isThis = h.pubkey === n.public_key || (h.prefix && n.public_key.toLowerCase().startsWith(h.prefix.toLowerCase()));
               const name = escapeHtml(h.name || h.prefix);
               if (isThis) return `<strong style="color:var(--accent)">${name}</strong>`;
-              return h.pubkey ? `<a href="#/nodes/${h.pubkey}" style="color:var(--text-primary);text-decoration:none">${name}</a>` : name;
+              return h.pubkey ? `<a href="#/nodes/${h.pubkey}" style="color:var(--text);text-decoration:none">${name}</a>` : name;
             }).join(' → ');
             return `<div style="padding:3px 0;font-size:11px;line-height:1.4">${chain} <span style="color:var(--text-muted)">(${p.count}×)</span></div>`;
           }).join('');

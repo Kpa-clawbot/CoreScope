@@ -239,8 +239,8 @@
     for (const [node, pos] of nodePos) {
       const isEndpoint = node === 'Origin' || node === 'Dest';
       const r = isEndpoint ? 18 : 14;
-      const fill = isEndpoint ? 'var(--primary, #3b82f6)' : 'var(--surface-2, #374151)';
-      const stroke = isEndpoint ? 'var(--primary, #3b82f6)' : 'var(--border, #4b5563)';
+      const fill = isEndpoint ? 'var(--accent, #3b82f6)' : 'var(--surface-2, #374151)';
+      const stroke = isEndpoint ? 'var(--accent, #3b82f6)' : 'var(--border, #4b5563)';
       const label = isEndpoint ? node : node;
       nodesSvg += `<circle cx="${pos.x}" cy="${pos.y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="2"/>`;
       nodesSvg += `<text x="${pos.x}" y="${pos.y + 4}" text-anchor="middle" fill="white" font-size="${isEndpoint ? 10 : 9}" font-weight="${isEndpoint ? 700 : 500}">${escapeHtml(label)}</text>`;

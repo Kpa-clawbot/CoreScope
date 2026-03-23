@@ -264,7 +264,7 @@
         // SNR quality label
         const snrVal = stats.avgSnr;
         const snrLabel = snrVal != null ? (snrVal > 10 ? 'Excellent' : snrVal > 0 ? 'Good' : snrVal > -5 ? 'Marginal' : 'Poor') : null;
-        const snrColor = snrVal != null ? (snrVal > 10 ? '#22c55e' : snrVal > 0 ? '#3b82f6' : snrVal > -5 ? '#f59e0b' : '#ef4444') : '#6b7280';
+        const snrColor = snrVal != null ? (snrVal > 10 ? 'var(--status-green)' : snrVal > 0 ? 'var(--accent)' : snrVal > -5 ? 'var(--status-yellow)' : 'var(--status-red)') : '#6b7280';
 
         // Build sparkline from recent packets (packet timestamps → hourly buckets)
         const sparkHtml = buildSparkline(h.recentPackets || []);

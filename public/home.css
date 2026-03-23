@@ -25,12 +25,6 @@
 .chooser-btn span:last-child { font-size: .8rem; color: var(--text-muted); }
 .home-level-toggle { margin-top: 16px; }
 
-:root {
-  --status-green: #22c55e;
-  --status-yellow: #eab308;
-  --status-red: #ef4444;
-}
-
 /* Hero */
 .home-hero {
   text-align: center;

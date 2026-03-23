@@ -34,8 +34,8 @@
       // System health (memory, event loop, WS)
       if (health) {
         const m = health.memory, el = health.eventLoop;
-        const elColor = el.p95Ms > 500 ? '#ef4444' : el.p95Ms > 100 ? '#f59e0b' : '#22c55e';
-        const memColor = m.heapUsed > m.heapTotal * 0.85 ? '#ef4444' : m.heapUsed > m.heapTotal * 0.7 ? '#f59e0b' : '#22c55e';
+        const elColor = el.p95Ms > 500 ? 'var(--status-red)' : el.p95Ms > 100 ? 'var(--status-yellow)' : 'var(--status-green)';
+        const memColor = m.heapUsed > m.heapTotal * 0.85 ? 'var(--status-red)' : m.heapUsed > m.heapTotal * 0.7 ? 'var(--status-yellow)' : 'var(--status-green)';
         html += `<h3>System Health</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
           <div class="perf-card"><div class="perf-num" style="color:${memColor}">${m.heapUsed}MB</div><div class="perf-label">Heap Used / ${m.heapTotal}MB</div></div>
           <div class="perf-card"><div class="perf-num">${m.rss}MB</div><div class="perf-label">RSS</div></div>
@@ -54,7 +54,7 @@
           <div class="perf-card"><div class="perf-num">${c.size}</div><div class="perf-label">Server Entries</div></div>
           <div class="perf-card"><div class="perf-num">${c.hits}</div><div class="perf-label">Server Hits</div></div>
           <div class="perf-card"><div class="perf-num">${c.misses}</div><div class="perf-label">Server Misses</div></div>
-          <div class="perf-card"><div class="perf-num" style="color:${c.hitRate > 50 ? '#22c55e' : c.hitRate > 20 ? '#f59e0b' : '#ef4444'}">${c.hitRate}%</div><div class="perf-label">Server Hit Rate</div></div>
+          <div class="perf-card"><div class="perf-num" style="color:${c.hitRate > 50 ? 'var(--status-green)' : c.hitRate > 20 ? 'var(--status-yellow)' : 'var(--status-red)'}">${c.hitRate}%</div><div class="perf-label">Server Hit Rate</div></div>
           <div class="perf-card"><div class="perf-num">${c.staleHits || 0}</div><div class="perf-label">Stale Hits (SWR)</div></div>
           <div class="perf-card"><div class="perf-num">${c.recomputes || 0}</div><div class="perf-label">Recomputes</div></div>
           <div class="perf-card"><div class="perf-num">${clientCache}</div><div class="perf-label">Client Entries</div></div>
@@ -63,7 +63,7 @@
           html += `<div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
             <div class="perf-card"><div class="perf-num">${client.cacheHits || 0}</div><div class="perf-label">Client Hits</div></div>
             <div class="perf-card"><div class="perf-num">${client.cacheMisses || 0}</div><div class="perf-label">Client Misses</div></div>
-            <div class="perf-card"><div class="perf-num" style="color:${(client.cacheHitRate||0) > 50 ? '#22c55e' : '#f59e0b'}">${client.cacheHitRate || 0}%</div><div class="perf-label">Client Hit Rate</div></div>
+            <div class="perf-card"><div class="perf-num" style="color:${(client.cacheHitRate||0) > 50 ? 'var(--status-green)' : 'var(--status-yellow)'}">${client.cacheHitRate || 0}%</div><div class="perf-label">Client Hit Rate</div></div>
           </div>`;
         }
       }

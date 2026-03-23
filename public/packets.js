@@ -1184,7 +1184,7 @@
       const hopLabel = decoded.path_len != null ? `${decoded.path_len} hops` : '';
       const snrLabel = snr != null ? `SNR ${snr} dB` : '';
       const meta = [chLabel, hopLabel, snrLabel].filter(Boolean).join(' · ');
-      messageHtml = `<div class="detail-message" style="padding:12px;margin:8px 0;background:var(--card-bg);border-radius:8px;border-left:3px solid var(--primary)">
+      messageHtml = `<div class="detail-message" style="padding:12px;margin:8px 0;background:var(--card-bg);border-radius:8px;border-left:3px solid var(--accent)">
         <div style="font-size:1.1em">${escapeHtml(decoded.text)}</div>
         ${meta ? `<div style="font-size:0.85em;color:var(--muted);margin-top:4px">${meta}</div>` : ''}
       </div>`;
@@ -1724,7 +1724,7 @@
         if (newHops.length) await resolveHops(newHops);
         const container = document.createElement('div');
         container.style.cssText = 'max-width:800px;margin:0 auto;padding:20px';
-        container.innerHTML = `<div style="margin-bottom:16px"><a href="#/packets" style="color:var(--primary);text-decoration:none">← Back to packets</a></div>`;
+        container.innerHTML = `<div style="margin-bottom:16px"><a href="#/packets" style="color:var(--accent);text-decoration:none">← Back to packets</a></div>`;
         const detail = document.createElement('div');
         container.appendChild(detail);
         await renderDetail(detail, data);

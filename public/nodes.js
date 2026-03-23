@@ -327,10 +327,10 @@
     const el = document.getElementById('nodeCounts');
     if (!el) return;
     el.innerHTML = [
-      { k: 'repeaters', l: 'Repeaters', c: '#3b82f6' },
-      { k: 'rooms', l: 'Rooms', c: '#6b7280' },
-      { k: 'companions', l: 'Companions', c: '#22c55e' },
-      { k: 'sensors', l: 'Sensors', c: '#f59e0b' },
+      { k: 'repeaters', l: 'Repeaters', c: ROLE_COLORS.repeater },
+      { k: 'rooms', l: 'Rooms', c: ROLE_COLORS.room || '#6b7280' },
+      { k: 'companions', l: 'Companions', c: ROLE_COLORS.companion },
+      { k: 'sensors', l: 'Sensors', c: ROLE_COLORS.sensor },
     ].map(r => `<span class="node-count-pill" style="background:${r.c}">${counts[r.k] || 0} ${r.l}</span>`).join('');
   }
 
