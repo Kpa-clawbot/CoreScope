@@ -26,9 +26,9 @@
 .home-level-toggle { margin-top: 16px; }
 
 :root {
-  --status-green: #45644c;
-  --status-yellow: #b08b2d;
-  --status-red: #b54a4a;
+  --status-green: #22c55e;
+  --status-yellow: #eab308;
+  --status-red: #ef4444;
 }
 
 /* Hero */
@@ -436,7 +436,7 @@
   transition: border-color .15s, transform .15s, box-shadow .15s;
   position: relative;
 }
-.my-node-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 6px 18px rgba(6,10,19,0.12); }
+.my-node-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
 .my-node-card.healthy { border-left: 4px solid var(--status-green); }
 .my-node-card.degraded { border-left: 4px solid var(--status-yellow); }
 .my-node-card.silent { border-left: 4px solid var(--status-red); }
