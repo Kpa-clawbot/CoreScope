@@ -326,7 +326,7 @@
     var tabs = [
       { id: 'branding', label: '🏷️', title: 'Branding' },
       { id: 'theme', label: '🎨', title: 'Theme Colors' },
-      { id: 'nodes', label: '📡', title: 'Node Colors' },
+      { id: 'nodes', label: '🎯', title: 'Colors' },
       { id: 'home', label: '🏠', title: 'Home Page' },
       { id: 'export', label: '📤', title: 'Export / Save' }
     ];
