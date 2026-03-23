@@ -163,7 +163,8 @@
       // Repeaters/rooms: flood advert every 12-24h, so degraded after 24h, silent after 72h
       // Companions/sensors: user-initiated adverts, shorter thresholds
       const role = (n.role || '').toLowerCase();
-      const lastHeardMs = lastHeard ? new Date(lastHeard).getTime() : 0;
+      const lastHeardTime = lastHeard || n.last_seen;
+      const lastHeardMs = lastHeardTime ? new Date(lastHeardTime).getTime() : 0;
       const status = getNodeStatus(role, lastHeardMs);
       const statusLabel = status === 'active' ? '🟢 Active' : '⚪ Stale';
       const statusAge = lastHeardMs ? (Date.now() - lastHeardMs) : Infinity;
@@ -577,7 +578,8 @@
 
     // Status calculation
     const lastHeard = stats.lastHeard;
-    const lastHeardMs = lastHeard ? new Date(lastHeard).getTime() : 0;
+    const lastHeardTime = lastHeard || n.last_seen;
+    const lastHeardMs = lastHeardTime ? new Date(lastHeardTime).getTime() : 0;
     const role = (n.role || '').toLowerCase();
     const status = getNodeStatus(role, lastHeardMs);
     const statusLabel = status === 'active' ? '🟢 Active' : '⚪ Stale';

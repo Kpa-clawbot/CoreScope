@@ -20,7 +20,7 @@
 
   // Roles loaded from shared roles.js (ROLE_STYLE, ROLE_LABELS, ROLE_COLORS globals)
 
-  function makeMarkerIcon(role) {
+  function makeMarkerIcon(role, isStale) {
     const s = ROLE_STYLE[role] || ROLE_STYLE.companion;
     const size = s.radius * 2 + 4;
     const c = size / 2;
@@ -54,14 +54,14 @@
     const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">${path}</svg>`;
     return L.divIcon({
       html: svg,
-      className: 'meshcore-marker',
+      className: 'meshcore-marker' + (isStale ? ' marker-stale' : ''),
       iconSize: [size, size],
       iconAnchor: [c, c],
       popupAnchor: [0, -c],
     });
   }
 
-  function makeRepeaterLabelIcon(node) {
+  function makeRepeaterLabelIcon(node, isStale) {
     var s = ROLE_STYLE['repeater'] || ROLE_STYLE.companion;
     var hs = node.hash_size || 1;
     // Show the short mesh hash ID (first N bytes of pubkey, uppercased)
@@ -71,7 +71,7 @@
       shortHash + '</div>';
     return L.divIcon({
       html: html,
-      className: 'meshcore-marker meshcore-label-marker',
+      className: 'meshcore-marker meshcore-label-marker' + (isStale ? ' marker-stale' : ''),
       iconSize: null,
       iconAnchor: [14, 12],
       popupAnchor: [0, -12],
@@ -545,8 +545,9 @@
     const allMarkers = [];
 
     for (const node of filtered) {
+      const isStale = getNodeStatus(node.role || 'companion', node.last_seen ? new Date(node.last_seen).getTime() : 0) === 'stale';
       const useLabel = node.role === 'repeater' && filters.hashLabels;
-      const icon = useLabel ? makeRepeaterLabelIcon(node) : makeMarkerIcon(node.role || 'companion');
+      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale) : makeMarkerIcon(node.role || 'companion', isStale);
       const latLng = L.latLng(node.lat, node.lon);
       allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: (node.name || 'Unknown') + ' (' + (node.role || 'node') + ')' });
     }

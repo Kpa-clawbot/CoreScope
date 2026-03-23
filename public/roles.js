@@ -75,13 +75,21 @@
     nodeSilentMs:    86400000    // 24h
   };
 
-  // Helper: get degraded/silent thresholds for a role
+  // Helper: get degraded/silent thresholds for a role (backward compat)
   window.getHealthThresholds = function (role) {
     var isInfra = role === 'repeater' || role === 'room';
     return {
       degradedMs: isInfra ? HEALTH_THRESHOLDS.infraDegradedMs : HEALTH_THRESHOLDS.nodeDegradedMs,
       silentMs:   isInfra ? HEALTH_THRESHOLDS.infraSilentMs   : HEALTH_THRESHOLDS.nodeSilentMs
     };
+  };
+
+  // Simplified two-state helper: returns 'active' or 'stale'
+  window.getNodeStatus = function (role, lastSeenMs) {
+    var isInfra = role === 'repeater' || role === 'room';
+    var staleMs = isInfra ? HEALTH_THRESHOLDS.infraSilentMs : HEALTH_THRESHOLDS.nodeSilentMs;
+    var age = typeof lastSeenMs === 'number' ? (Date.now() - lastSeenMs) : Infinity;
+    return age < staleMs ? 'active' : 'stale';
   };
 
   // ─── Tile URLs ───
