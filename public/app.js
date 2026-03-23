@@ -315,9 +315,13 @@ function navigate() {
 }
 
 window.addEventListener('hashchange', navigate);
+let _themeRefreshTimer = null;
 window.addEventListener('theme-changed', () => {
-  // Notify current page to re-render without full teardown
-  window.dispatchEvent(new CustomEvent('theme-refresh'));
+  if (_themeRefreshTimer) clearTimeout(_themeRefreshTimer);
+  _themeRefreshTimer = setTimeout(() => {
+    _themeRefreshTimer = null;
+    window.dispatchEvent(new CustomEvent('theme-refresh'));
+  }, 300);
 });
 window.addEventListener('DOMContentLoaded', () => {
   connectWS();
