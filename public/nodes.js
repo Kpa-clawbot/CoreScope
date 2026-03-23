@@ -119,7 +119,8 @@
       body.innerHTML = `
         <div class="node-full-card" style="padding:12px 16px;margin-bottom:8px">
           <div class="node-detail-name" style="font-size:20px">${escapeHtml(n.name || '(unnamed)')}</div>
-          <div style="margin:4px 0 6px"><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span> ${n.hash_size ? `<span class="badge" style="background:var(--nav-bg);color:var(--nav-text);font-family:var(--mono)">${n.public_key.slice(0, n.hash_size * 2).toUpperCase()}</span>` : ''} ${n.hash_size_inconsistent ? '<span class="badge" style="background:var(--status-yellow);color:#000;font-size:10px" title="Adverts show different hash sizes — likely firmware bug (pre-1.14.1)">⚠️ hash mismatch</span>' : ''} ${statusLabel}</div>
+          <div style="margin:4px 0 6px"><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span> ${n.hash_size ? `<span class="badge" style="background:var(--nav-bg);color:var(--nav-text);font-family:var(--mono)">${n.public_key.slice(0, n.hash_size * 2).toUpperCase()}</span>` : ''} ${n.hash_size_inconsistent ? `<span class="badge" style="background:var(--status-yellow);color:#000;font-size:10px;cursor:help" onclick="var el=this.parentElement.querySelector('.hash-mismatch-info');if(el)el.hidden=!el.hidden">⚠️ hash mismatch</span>` : ''} ${statusLabel}</div>
+          ${n.hash_size_inconsistent ? `<div class="hash-mismatch-info" hidden style="font-size:11px;color:var(--text-muted);margin:-2px 0 6px;padding:6px 10px;background:var(--surface-2);border-radius:4px;border-left:3px solid var(--status-yellow)">This node has sent adverts with different hash sizes (<strong>${(n.hash_sizes_seen||[]).join('-byte, ')}-byte</strong>). Likely a firmware bug in MeshCore versions before 1.14.1. Update firmware to fix.</div>` : ''}
           <div class="node-detail-key mono" style="font-size:11px;word-break:break-all;margin-bottom:6px">${n.public_key}</div>
           <div>
             <button class="btn-primary" id="copyUrlBtn" style="font-size:12px;padding:4px 10px">📋 Copy URL</button>
@@ -143,7 +144,7 @@
           ${stats.avgSnr != null ? `<tr><td>Avg SNR</td><td>${stats.avgSnr.toFixed(1)} dB</td></tr>` : ''}
           ${stats.avgHops ? `<tr><td>Avg Hops</td><td>${stats.avgHops}</td></tr>` : ''}
           ${hasLoc ? `<tr><td>Location</td><td>${n.lat.toFixed(5)}, ${n.lon.toFixed(5)}</td></tr>` : ''}
-          <tr><td>Hash Prefix</td><td>${n.hash_size ? '<code style="font-family:var(--mono);font-weight:700">' + n.public_key.slice(0, n.hash_size * 2).toUpperCase() + '</code> (' + n.hash_size + '-byte)' : 'Unknown'}${n.hash_size_inconsistent ? ' <span style="color:var(--status-yellow)" title="Seen hash sizes: ' + (n.hash_sizes_seen || []).join(', ') + '-byte">⚠️ inconsistent — possible firmware bug</span>' : ''}</td></tr>
+          <tr><td>Hash Prefix</td><td>${n.hash_size ? '<code style="font-family:var(--mono);font-weight:700">' + n.public_key.slice(0, n.hash_size * 2).toUpperCase() + '</code> (' + n.hash_size + '-byte)' : 'Unknown'}${n.hash_size_inconsistent ? ' <span style="color:var(--status-yellow);cursor:help" title="Seen: ' + (n.hash_sizes_seen || []).join(', ') + '-byte">⚠️ varies</span>' : ''}</td></tr>
         </table>
 
         ${observers.length ? `<div class="node-full-card">
@@ -503,10 +504,11 @@
     panel.innerHTML = `
       <div class="node-detail">
         <div class="node-detail-name">${escapeHtml(n.name || '(unnamed)')}</div>
-        <div class="node-detail-role"><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span> ${n.hash_size ? `<span class="badge" style="background:var(--nav-bg);color:var(--nav-text);font-family:var(--mono)">${n.public_key.slice(0, n.hash_size * 2).toUpperCase()}</span>` : ''} ${n.hash_size_inconsistent ? '<span class="badge" style="background:var(--status-yellow);color:#000;font-size:10px" title="Adverts show different hash sizes — likely firmware bug (pre-1.14.1)">⚠️ hash mismatch</span>' : ''} ${statusLabel}
+        <div class="node-detail-role"><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span> ${n.hash_size ? `<span class="badge" style="background:var(--nav-bg);color:var(--nav-text);font-family:var(--mono)">${n.public_key.slice(0, n.hash_size * 2).toUpperCase()}</span>` : ''} ${n.hash_size_inconsistent ? `<span class="badge" style="background:var(--status-yellow);color:#000;font-size:10px;cursor:help" onclick="var el=this.closest('.node-detail').querySelector('.hash-mismatch-info');if(el)el.hidden=!el.hidden">⚠️ hash mismatch</span>` : ''} ${statusLabel}
           <a href="#/nodes/${encodeURIComponent(n.public_key)}" class="btn-primary" style="display:inline-block;text-decoration:none;font-size:11px;padding:2px 8px;margin-left:8px">🔍 Details</a>
           <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px">📊 Analytics</a>
         </div>
+        ${n.hash_size_inconsistent ? `<div class="hash-mismatch-info" hidden style="font-size:11px;color:var(--text-muted);margin:0 0 8px;padding:6px 10px;background:var(--surface-2);border-radius:4px;border-left:3px solid var(--status-yellow)">Adverts show hash sizes <strong>${(n.hash_sizes_seen||[]).join('-byte, ')}-byte</strong>. Likely a firmware bug — update to MeshCore 1.14.1+.</div>` : ''}
 
         ${hasLoc ? `<div class="node-map-qr-wrap">
           <div class="node-map-container node-detail-map" id="nodeMap" style="border-radius:8px;overflow:hidden;"></div>
