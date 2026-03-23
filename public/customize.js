@@ -627,6 +627,8 @@
         // Sync to global role colors used by map/packets/etc
         if (window.ROLE_COLORS) window.ROLE_COLORS[key] = inp.value;
         if (window.ROLE_STYLE && window.ROLE_STYLE[key]) window.ROLE_STYLE[key].color = inp.value;
+        // Trigger re-render of current page
+        window.dispatchEvent(new CustomEvent('theme-changed'));
         var dot = container.querySelector('[data-dot="' + key + '"]');
         if (dot) dot.style.background = inp.value;
         var hex = container.querySelector('[data-nhex="' + key + '"]');
@@ -651,6 +653,7 @@
         var key = inp.dataset.typeColor;
         state.typeColors[key] = inp.value;
         if (window.TYPE_COLORS) window.TYPE_COLORS[key] = inp.value;
+        window.dispatchEvent(new CustomEvent('theme-changed'));
         var dot = container.querySelector('[data-tdot="' + key + '"]');
         if (dot) dot.style.background = inp.value;
         var hex = container.querySelector('[data-thex="' + key + '"]');

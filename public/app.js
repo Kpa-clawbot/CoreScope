@@ -315,6 +315,7 @@ function navigate() {
 }
 
 window.addEventListener('hashchange', navigate);
+window.addEventListener('theme-changed', () => { if (typeof navigate === 'function') navigate(); });
 window.addEventListener('DOMContentLoaded', () => {
   connectWS();
 
