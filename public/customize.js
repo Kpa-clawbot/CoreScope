@@ -47,14 +47,14 @@
       heroTitle: 'MeshCore Analyzer',
       heroSubtitle: 'Find your nodes to start monitoring them.',
       steps: [
-        { emoji: '📡', title: 'Connect', description: 'Link your node to the mesh' },
-        { emoji: '🔍', title: 'Monitor', description: 'Watch packets flow in real-time' },
-        { emoji: '📊', title: 'Analyze', description: "Understand your network's health" }
+        { emoji: '💬', title: 'Join the Bay Area MeshCore Discord', description: 'The community Discord is the best place to get help and find local mesh enthusiasts.' },
+        { emoji: '🔵', title: 'Connect via Bluetooth', description: 'Flash BLE companion firmware and pair with your device.' },
+        { emoji: '📻', title: 'Set the right frequency preset', description: 'Match the frequency preset used by your local mesh community.' },
+        { emoji: '📡', title: 'Advertise yourself', description: 'Send an ADVERT so repeaters and observers can see you.' },
+        { emoji: '🔁', title: 'Check "Heard N repeats"', description: 'Verify your node is being relayed through the mesh.' },
+        { emoji: '📍', title: 'Repeaters near you?', description: 'Check the map for nearby repeaters and coverage.' }
       ],
-      checklist: [
-        { question: 'How do I add my node?', answer: 'Search for your node name or paste your public key.' },
-        { question: 'What regions are covered?', answer: 'Check the map page to see active observers and nodes.' }
-      ],
+      checklist: [],
       footerLinks: [
         { label: '📦 Packets', url: '#/packets' },
         { label: '🗺️ Network Map', url: '#/map' },
