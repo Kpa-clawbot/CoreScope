@@ -1100,10 +1100,28 @@
     let pathHops;
     try { pathHops = JSON.parse(pkt.path_json || '[]'); } catch { pathHops = []; }
 
-    // Re-resolve hops using SERVER-SIDE API with sender GPS + observer for proper disambiguation
+    // Resolve sender GPS — from packet directly, or from known node in DB
+    let senderLat = decoded.lat != null ? decoded.lat : (decoded.latitude || null);
+    let senderLon = decoded.lon != null ? decoded.lon : (decoded.longitude || null);
+    if (senderLat == null) {
+      // Try to find sender node GPS from DB
+      const senderKey = decoded.pubKey || decoded.srcPubKey;
+      const senderName = decoded.sender || decoded.name;
+      try {
+        if (senderKey) {
+          const nd = await api(`/nodes/${senderKey}`, { ttl: 30000 }).catch(() => null);
+          if (nd?.node?.lat && nd.node.lon) { senderLat = nd.node.lat; senderLon = nd.node.lon; }
+        }
+        if (senderLat == null && senderName) {
+          const sd = await api(`/nodes/search?q=${encodeURIComponent(senderName)}`, { ttl: 30000 }).catch(() => null);
+          const match = sd?.nodes?.[0];
+          if (match?.lat && match.lon) { senderLat = match.lat; senderLon = match.lon; }
+        }
+      } catch {}
+    }
+
+    // Re-resolve hops using SERVER-SIDE API with sender GPS + observer
     if (pathHops.length) {
-      const senderLat = decoded.lat != null ? decoded.lat : (decoded.latitude || null);
-      const senderLon = decoded.lon != null ? decoded.lon : (decoded.longitude || null);
       try {
         const params = new URLSearchParams({ hops: pathHops.join(',') });
         if (pkt.observer_id) params.set('observer', pkt.observer_id);
