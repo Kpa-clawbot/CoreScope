@@ -45,9 +45,11 @@ const PacketStore = require('./packet-store');
 // --- Precomputed hash_size map (updated on new packets, not per-request) ---
 const _hashSizeMap = new Map();      // pubkey → latest hash_size (number)
 const _hashSizeAllMap = new Map();   // pubkey → Set of all hash_sizes seen
+const _hashSizeSeqMap = new Map();   // pubkey → array of hash_sizes in chronological order (oldest first)
 function _rebuildHashSizeMap() {
   _hashSizeMap.clear();
   _hashSizeAllMap.clear();
+  _hashSizeSeqMap.clear();
   // Pass 1: from ADVERT packets (most authoritative — path byte bits 7-6)
   // packets array is sorted newest-first, so first-match = newest ADVERT
   for (const p of pktStore.packets) {
@@ -61,10 +63,15 @@ function _rebuildHashSizeMap() {
           if (!_hashSizeMap.has(pk)) _hashSizeMap.set(pk, hs);
           if (!_hashSizeAllMap.has(pk)) _hashSizeAllMap.set(pk, new Set());
           _hashSizeAllMap.get(pk).add(hs);
+          // Build sequence (will reverse later since packets are newest-first)
+          if (!_hashSizeSeqMap.has(pk)) _hashSizeSeqMap.set(pk, []);
+          _hashSizeSeqMap.get(pk).push(hs);
         }
       } catch {}
     }
   }
+  // Reverse sequences to chronological order (oldest first)
+  for (const [, seq] of _hashSizeSeqMap) seq.reverse();
   // Pass 2: for nodes without ADVERTs, derive from path hop lengths in any packet
   for (const p of pktStore.packets) {
     if (p.path_json) {
@@ -86,6 +93,23 @@ function _rebuildHashSizeMap() {
     }
   }
 }
+// Detect flip-flopping hash sizes (not just upgrades)
+// A clean upgrade: [1,1,1,2,2,2] — sizes change once and stay. That's fine.
+// Flip-flop: [1,2,1,2] or [2,1,2] — sizes go back and forth. That's a bug.
+function _isHashSizeFlipFlop(pubkey) {
+  const seq = _hashSizeSeqMap.get(pubkey);
+  if (!seq || seq.length < 3) return false; // need enough samples
+  const allSizes = _hashSizeAllMap.get(pubkey);
+  if (!allSizes || allSizes.size < 2) return false; // only one size = no issue
+  // Count transitions (size changes)
+  let transitions = 0;
+  for (let i = 1; i < seq.length; i++) {
+    if (seq[i] !== seq[i - 1]) transitions++;
+  }
+  // A clean upgrade has exactly 1 transition. Flip-flop has 2+.
+  return transitions >= 2;
+}
+
 // Update hash_size for a single new packet (called on insert)
 function _updateHashSizeForPacket(p) {
   if (p.payload_type === 4 && p.raw_hex) {
@@ -98,6 +122,8 @@ function _updateHashSizeForPacket(p) {
         _hashSizeMap.set(pk, hs);
         if (!_hashSizeAllMap.has(pk)) _hashSizeAllMap.set(pk, new Set());
         _hashSizeAllMap.get(pk).add(hs);
+        if (!_hashSizeSeqMap.has(pk)) _hashSizeSeqMap.set(pk, []);
+        _hashSizeSeqMap.get(pk).push(hs); // already chronological for live packets
       }
     } catch {}
   } else if (p.path_json && p.decoded_json) {
@@ -1247,7 +1273,7 @@ app.get('/api/nodes', (req, res) => {
   for (const node of nodes) {
     node.hash_size = _hashSizeMap.get(node.public_key) || null;
     const allSizes = _hashSizeAllMap.get(node.public_key);
-    node.hash_size_inconsistent = allSizes ? allSizes.size > 1 : false;
+    node.hash_size_inconsistent = _isHashSizeFlipFlop(node.public_key);
     if (allSizes && allSizes.size > 1) node.hash_sizes_seen = [...allSizes].sort();
   }
 
@@ -1390,7 +1416,7 @@ app.get('/api/nodes/:pubkey', (req, res) => {
   if (!node) return res.status(404).json({ error: 'Not found' });
   node.hash_size = _hashSizeMap.get(pubkey) || null;
   const allSizes = _hashSizeAllMap.get(pubkey);
-  node.hash_size_inconsistent = allSizes ? allSizes.size > 1 : false;
+  node.hash_size_inconsistent = _isHashSizeFlipFlop(pubkey);
   if (allSizes && allSizes.size > 1) node.hash_sizes_seen = [...allSizes].sort();
   const recentAdverts = (pktStore.byNode.get(pubkey) || []).slice(-20).reverse();
   const _nResult = { node, recentAdverts };
