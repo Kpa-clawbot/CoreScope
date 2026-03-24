@@ -137,10 +137,17 @@ node test-packet-filter.js        # 62 tests — filter engine
 node test-aging.js                # 29 tests — node aging system
 node test-regional-filter.js      # 22 tests — regional observer filtering
 node test-regional-integration.js # integration — hits live API (non-deterministic)
-node tools/e2e-test.js            # E2E — spins up temp server, injects packets (BROKEN — needs fix)
-node tools/frontend-test.js       # frontend smoke — spins up temp server (BROKEN — needs fix)
+node tools/e2e-test.js            # 44 tests — E2E: spins up temp server, injects packets, validates all APIs
+node tools/frontend-test.js       # 66 tests — frontend smoke: HTML, JS refs, API shapes
 ```
-Run the first three before every push (deterministic, no server needed). Add tests for new logic.
+
+**ALL existing tests must pass before pushing.** Run at minimum:
+```bash
+node test-packet-filter.js && node test-aging.js && node test-regional-filter.js && node tools/e2e-test.js && node tools/frontend-test.js
+```
+If any test fails, fix it before pushing. No exceptions. No "known failures."
+
+**Every new feature must add tests.** If you add logic, add tests. If you fix a bug, add a regression test. Test count should only go up, never down.
 
 Tests that hit live data can use `https://analyzer.00id.net` — all API endpoints are public, no auth required.
 
