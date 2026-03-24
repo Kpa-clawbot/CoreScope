@@ -9,3 +9,5 @@ config-lincomatic.json
 theme.json
 firmware/
 coverage/
+public-instrumented/
+.nyc_output/
