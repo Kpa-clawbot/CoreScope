@@ -27,7 +27,7 @@ async function run() {
   console.log('Launching Chromium...');
   const browser = await chromium.launch({
     headless: true,
-    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser',
+    executablePath: process.env.CHROMIUM_PATH || undefined,
     args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage']
   });
   const context = await browser.newContext();

@@ -86,3 +86,9 @@ jobs:
             -v $HOME/meshcore-analyzer/Caddyfile:/etc/caddy/Caddyfile \
             meshcore-analyzer
           echo "Deployed $(git rev-parse --short HEAD)"
+
+      - name: Install Playwright browser
+        run: npx playwright install chromium --with-deps 2>/dev/null || true
+
+      - name: E2E smoke tests
+        run: node test-e2e-playwright.js
