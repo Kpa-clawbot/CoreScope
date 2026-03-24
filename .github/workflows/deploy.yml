@@ -29,20 +29,20 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
-      - name: Integration tests + coverage
+      - name: Integration tests + backend coverage
         run: |
           npx c8 --reporter=text-summary --reporter=text sh test-all.sh 2>&1 | tee test-output.txt
           
           TOTAL_PASS=$(grep -oP '\d+(?= passed)' test-output.txt | awk '{s+=$1} END {print s}')
           TOTAL_FAIL=$(grep -oP '\d+(?= failed)' test-output.txt | awk '{s+=$1} END {print s}')
-          COVERAGE=$(grep 'Statements' test-output.txt | tail -1 | grep -oP '[\d.]+(?=%)')
+          BE_COVERAGE=$(grep 'Statements' test-output.txt | tail -1 | grep -oP '[\d.]+(?=%)')
           
           mkdir -p .badges
           echo "{\"schemaVersion\":1,\"label\":\"backend tests\",\"message\":\"${TOTAL_PASS} passed\",\"color\":\"brightgreen\"}" > .badges/backend-tests.json
-          echo "{\"schemaVersion\":1,\"label\":\"backend coverage\",\"message\":\"${COVERAGE}%\",\"color\":\"$([ $(echo \"$COVERAGE > 80\" | bc -l) -eq 1 ] && echo 'brightgreen' || ([ $(echo \"$COVERAGE > 60\" | bc -l) -eq 1 ] && echo 'yellow' || echo 'red'))\"}" > .badges/backend-coverage.json
+          echo "{\"schemaVersion\":1,\"label\":\"backend coverage\",\"message\":\"${BE_COVERAGE}%\",\"color\":\"$([ $(echo \"$BE_COVERAGE > 80\" | bc -l) -eq 1 ] && echo 'brightgreen' || ([ $(echo \"$BE_COVERAGE > 60\" | bc -l) -eq 1 ] && echo 'yellow' || echo 'red'))\"}" > .badges/backend-coverage.json
           
-          echo "## Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "**${TOTAL_PASS} tests passed, ${TOTAL_FAIL} failed** | Coverage: ${COVERAGE}%" >> $GITHUB_STEP_SUMMARY
+          echo "## Backend Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "**${TOTAL_PASS} tests passed, ${TOTAL_FAIL} failed** | Coverage: ${BE_COVERAGE}%" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           grep -E 'passed|failed|Results|Statements|Branches|Functions|Lines' test-output.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
@@ -50,18 +50,39 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install chromium --with-deps 2>/dev/null || true
 
-      - name: E2E smoke tests (local server)
+      - name: Frontend coverage (instrumented Playwright)
         run: |
-          PORT=13581 node server.js &
+          # Instrument frontend JS with Istanbul
+          sh scripts/instrument-frontend.sh
+          
+          # Start server with instrumented frontend
+          COVERAGE=1 PORT=13581 node server.js &
           SERVER_PID=$!
           sleep 5
+          
+          # Run E2E tests
           BASE_URL=http://localhost:13581 node test-e2e-playwright.js 2>&1 | tee e2e-output.txt
           E2E_PASS=$(grep -oP '\d+(?= passed)' e2e-output.txt | tail -1)
-          echo "{\"schemaVersion\":1,\"label\":\"frontend tests\",\"message\":\"${E2E_PASS:-0} E2E passed\",\"color\":\"brightgreen\"}" > .badges/frontend-tests.json
+          
+          # Collect frontend coverage from browser
+          BASE_URL=http://localhost:13581 node scripts/collect-frontend-coverage.js 2>&1 | tee fe-coverage-output.txt
+          
+          # Kill server
           kill $SERVER_PID 2>/dev/null || true
+          
+          # Generate frontend coverage report
+          if [ -f .nyc_output/frontend-coverage.json ]; then
+            FE_COVERAGE=$(npx nyc report --reporter=text-summary 2>&1 | grep 'Statements' | grep -oP '[\d.]+(?=%)')
+            echo "{\"schemaVersion\":1,\"label\":\"frontend coverage\",\"message\":\"${FE_COVERAGE}%\",\"color\":\"$([ $(echo \"$FE_COVERAGE > 50\" | bc -l) -eq 1 ] && echo 'yellow' || echo 'red')\"}" > .badges/frontend-coverage.json
+            echo "## Frontend Coverage" >> $GITHUB_STEP_SUMMARY
+            echo "Coverage: ${FE_COVERAGE}%" >> $GITHUB_STEP_SUMMARY
+            npx nyc report --reporter=text-summary >> $GITHUB_STEP_SUMMARY 2>&1
+          fi
+          
+          echo "{\"schemaVersion\":1,\"label\":\"frontend tests\",\"message\":\"${E2E_PASS:-0} E2E passed\",\"color\":\"brightgreen\"}" > .badges/frontend-tests.json
 
       - name: Publish badges
-        if: success()
+        if: always()
         continue-on-error: true
         run: |
           git config user.name "github-actions"
