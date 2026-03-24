@@ -12,7 +12,7 @@ function test(name, fn) {
 // === Constants ===
 console.log('\n=== Constants ===');
 test('ROUTE_TYPES has 4 entries', () => assert.strictEqual(Object.keys(ROUTE_TYPES).length, 4));
-test('PAYLOAD_TYPES has 9 entries', () => assert.strictEqual(Object.keys(PAYLOAD_TYPES).length, 9));
+test('PAYLOAD_TYPES has 13 entries', () => assert.strictEqual(Object.keys(PAYLOAD_TYPES).length, 13));
 test('VALID_ROLES has repeater, companion, room, sensor', () => {
   for (const r of ['repeater', 'companion', 'room', 'sensor']) assert(VALID_ROLES.has(r));
 });
