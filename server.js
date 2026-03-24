@@ -493,77 +493,9 @@ function broadcast(msg) {
 // When an advert arrives later with a full pubkey matching the prefix, upsertNode will upgrade it
 const hopNodeCache = new Set(); // Avoid repeated DB lookups for known hops
 
-// Sequential hop disambiguation: resolve 1-byte prefixes to best-matching nodes
-// Returns array of {hop, name, lat, lon, pubkey, ambiguous, unreliable} per hop
+// Sequential hop disambiguation — delegates to server-helpers.js (single source of truth)
 function disambiguateHops(hops, allNodes) {
-  const MAX_HOP_DIST = MAX_HOP_DIST_SERVER;
-
-  // Build prefix index on first call (cached on allNodes array)
-  if (!allNodes._prefixIdx) {
-    allNodes._prefixIdx = {};
-    allNodes._prefixIdxName = {};
-    for (const n of allNodes) {
-      const pk = n.public_key.toLowerCase();
-      for (let len = 1; len <= 3; len++) {
-        const p = pk.slice(0, len * 2);
-        if (!allNodes._prefixIdx[p]) allNodes._prefixIdx[p] = [];
-        allNodes._prefixIdx[p].push(n);
-        if (!allNodes._prefixIdxName[p]) allNodes._prefixIdxName[p] = n;
-      }
-    }
-  }
-
-  // First pass: find candidates per hop
-  const resolved = hops.map(hop => {
-    const h = hop.toLowerCase();
-    const withCoords = (allNodes._prefixIdx[h] || []).filter(n => n.lat && n.lon && !(n.lat === 0 && n.lon === 0));
-    if (withCoords.length === 1) {
-      return { hop, name: withCoords[0].name, lat: withCoords[0].lat, lon: withCoords[0].lon, pubkey: withCoords[0].public_key, known: true };
-    } else if (withCoords.length > 1) {
-      return { hop, name: hop, lat: null, lon: null, pubkey: null, known: false, candidates: withCoords };
-    }
-    const nameMatch = allNodes._prefixIdxName[h];
-    return { hop, name: nameMatch?.name || hop, lat: null, lon: null, pubkey: nameMatch?.public_key || null, known: false };
-  });
-
-  // Forward pass: resolve ambiguous hops by distance to previous
-  let lastPos = null;
-  for (const r of resolved) {
-    if (r.known && r.lat) { lastPos = [r.lat, r.lon]; continue; }
-    if (!r.candidates) continue;
-    if (lastPos) r.candidates.sort((a, b) => geoDist(a.lat, a.lon, lastPos[0], lastPos[1]) - geoDist(b.lat, b.lon, lastPos[0], lastPos[1]));
-    const best = r.candidates[0];
-    r.name = best.name; r.lat = best.lat; r.lon = best.lon; r.pubkey = best.public_key; r.known = true;
-    lastPos = [r.lat, r.lon];
-  }
-
-  // Backward pass
-  let nextPos = null;
-  for (let i = resolved.length - 1; i >= 0; i--) {
-    const r = resolved[i];
-    if (r.known && r.lat) { nextPos = [r.lat, r.lon]; continue; }
-    if (!r.candidates || !nextPos) continue;
-    r.candidates.sort((a, b) => geoDist(a.lat, a.lon, nextPos[0], nextPos[1]) - geoDist(b.lat, b.lon, nextPos[0], nextPos[1]));
-    const best = r.candidates[0];
-    r.name = best.name; r.lat = best.lat; r.lon = best.lon; r.pubkey = best.public_key; r.known = true;
-    nextPos = [r.lat, r.lon];
-  }
-
-  // Distance sanity check
-  for (let i = 0; i < resolved.length; i++) {
-    const r = resolved[i];
-    if (!r.lat) continue;
-    const prev = i > 0 && resolved[i-1].lat ? resolved[i-1] : null;
-    const next = i < resolved.length-1 && resolved[i+1].lat ? resolved[i+1] : null;
-    if (!prev && !next) continue;
-    const dPrev = prev ? geoDist(r.lat, r.lon, prev.lat, prev.lon) : 0;
-    const dNext = next ? geoDist(r.lat, r.lon, next.lat, next.lon) : 0;
-    if ((prev && dPrev > MAX_HOP_DIST) && (next && dNext > MAX_HOP_DIST)) { r.unreliable = true; r.lat = null; r.lon = null; }
-    else if (prev && !next && dPrev > MAX_HOP_DIST) { r.unreliable = true; r.lat = null; r.lon = null; }
-    else if (!prev && next && dNext > MAX_HOP_DIST) { r.unreliable = true; r.lat = null; r.lon = null; }
-  }
-
-  return resolved.map(r => ({ hop: r.hop, name: r.name, lat: r.lat, lon: r.lon, pubkey: r.pubkey, ambiguous: !!r.candidates, unreliable: !!r.unreliable }));
+  return _disambiguateHops(hops, allNodes, MAX_HOP_DIST_SERVER);
 }
 
 function autoLearnHopNodes(hops, now) {

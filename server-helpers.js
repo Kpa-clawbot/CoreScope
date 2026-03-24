@@ -205,12 +205,12 @@ function disambiguateHops(hops, allNodes, maxHopDist) {
     if (!prev && !next) continue;
     const dPrev = prev ? geoDist(r.lat, r.lon, prev.lat, prev.lon) : 0;
     const dNext = next ? geoDist(r.lat, r.lon, next.lat, next.lon) : 0;
-    if ((prev && dPrev > MAX_HOP_DIST) || (next && dNext > MAX_HOP_DIST)) {
-      r.unreliable = true;
-    }
+    if ((prev && dPrev > MAX_HOP_DIST) && (next && dNext > MAX_HOP_DIST)) { r.unreliable = true; r.lat = null; r.lon = null; }
+    else if (prev && !next && dPrev > MAX_HOP_DIST) { r.unreliable = true; r.lat = null; r.lon = null; }
+    else if (!prev && next && dNext > MAX_HOP_DIST) { r.unreliable = true; r.lat = null; r.lon = null; }
   }
 
-  return resolved;
+  return resolved.map(r => ({ hop: r.hop, name: r.name, lat: r.lat, lon: r.lon, pubkey: r.pubkey, ambiguous: !!r.candidates, unreliable: !!r.unreliable }));
 }
 
 // Update hash_size maps for a single packet

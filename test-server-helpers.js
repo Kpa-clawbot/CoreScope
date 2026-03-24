@@ -202,7 +202,7 @@ console.log('\ndisambiguateHops:');
   const r1 = helpers.disambiguateHops(['aabb'], nodes);
   assert(r1.length === 1, 'resolves single hop');
   assert(r1[0].name === 'Node-A', 'resolves to correct node');
-  assert(r1[0].known === true, 'marked as known');
+  assert(r1[0].pubkey === 'aabb11223344', 'includes pubkey');
 
   // Unknown hop
   delete nodes._prefixIdx; delete nodes._prefixIdxName;

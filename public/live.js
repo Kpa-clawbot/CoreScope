@@ -1260,6 +1260,8 @@
         }
       });
       const _el2 = document.getElementById('liveNodeCount'); if (_el2) _el2.textContent = Object.keys(nodeMarkers).length;
+      // Initialize shared HopResolver with loaded nodes
+      if (window.HopResolver) HopResolver.init(list);
     } catch (e) { console.error('Failed to load nodes:', e); }
   }
 
@@ -1269,6 +1271,7 @@
     nodeMarkers = {};
     nodeData = {};
     nodeActivity = {};
+    if (window.HopResolver) HopResolver.init([]);
     if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
   }
 
@@ -1455,6 +1458,7 @@
         const n = { public_key: key, name: payload.name || key.slice(0,8), role: payload.role || 'unknown', lat: payload.lat, lon: payload.lon };
         nodeData[key] = n;
         addNodeMarker(n);
+        if (window.HopResolver) HopResolver.init(Object.values(nodeData));
         const _el2 = document.getElementById('liveNodeCount'); if (_el2) _el2.textContent = Object.keys(nodeMarkers).length;
       }
     }
@@ -1501,6 +1505,7 @@
           const n = { public_key: key, name: p.name || key.slice(0,8), role: p.role || 'unknown', lat: p.lat, lon: p.lon };
           nodeData[key] = n;
           addNodeMarker(n);
+          if (window.HopResolver) HopResolver.init(Object.values(nodeData));
         }
       }
     }
@@ -1560,77 +1565,34 @@
   }
 
   function resolveHopPositions(hops, payload) {
-    const known = Object.values(nodeData);
-    
-    // First pass: find all candidates per hop
+    // Delegate to shared HopResolver (from hop-resolver.js) instead of reimplementing
+    const originLat = payload.lat != null && !(payload.lat === 0 && payload.lon === 0) ? payload.lat : null;
+    const originLon = payload.lon != null && !(payload.lon === 0 && payload.lon === 0) ? payload.lon : null;
+
+    // Use HopResolver if available and initialized, otherwise fall back to simple lookup
+    const resolvedMap = (window.HopResolver && HopResolver.ready())
+      ? HopResolver.resolve(hops, originLat, originLon, null, null, null)
+      : {};
+
+    // Convert HopResolver's map format to the array format live.js expects: {key, pos, name, known}
     const raw = hops.map(hop => {
-      const hopLower = hop.toLowerCase();
-      const candidates = known.filter(n => 
-        n.public_key.toLowerCase().startsWith(hopLower) &&
-        n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0)
-      );
-      if (candidates.length === 1) {
-        return { key: candidates[0].public_key, pos: [candidates[0].lat, candidates[0].lon], name: candidates[0].name || hop, known: true };
-      } else if (candidates.length > 1) {
-        return { key: 'ambig-' + hop, pos: null, name: hop, known: false, candidates };
+      const r = resolvedMap[hop];
+      if (r && r.name && r.pubkey && !r.unreliable) {
+        // Look up coordinates from nodeData (HopResolver resolves name/pubkey but doesn't return lat/lon directly)
+        const node = nodeData[r.pubkey];
+        if (node && node.lat != null && node.lon != null && !(node.lat === 0 && node.lon === 0)) {
+          return { key: r.pubkey, pos: [node.lat, node.lon], name: r.name, known: true };
+        }
+        return { key: r.pubkey, pos: null, name: r.name, known: false };
       }
       return { key: 'hop-' + hop, pos: null, name: hop, known: false };
     });
 
-    // Add sender position if available
-    if (payload.pubKey && payload.lat != null && !(payload.lat === 0 && payload.lon === 0)) {
+    // Add sender position as anchor if available
+    if (payload.pubKey && originLat != null) {
       const existing = raw.find(p => p.key === payload.pubKey);
       if (!existing) {
         raw.unshift({ key: payload.pubKey, pos: [payload.lat, payload.lon], name: payload.name || payload.pubKey.slice(0, 8), known: true });
-      }
-    }
-
-    // Sequential disambiguation: each hop nearest to previous (like server-side)
-    const dist = (lat1, lon1, lat2, lon2) => Math.sqrt((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2);
-
-    // Forward pass: resolve ambiguous hops using previous hop's position
-    let lastPos = null;
-    for (const hop of raw) {
-      if (hop.known && hop.pos) { lastPos = hop.pos; continue; }
-      if (!hop.candidates) continue;
-      if (lastPos) {
-        hop.candidates.sort((a, b) => dist(a.lat, a.lon, lastPos[0], lastPos[1]) - dist(b.lat, b.lon, lastPos[0], lastPos[1]));
-      }
-      const best = hop.candidates[0];
-      hop.key = best.public_key; hop.pos = [best.lat, best.lon];
-      hop.name = best.name || best.public_key.slice(0, 8);
-      hop.known = true; lastPos = hop.pos;
-    }
-
-    // Backward pass: catch any remaining from the tail
-    let nextPos = null;
-    for (let i = raw.length - 1; i >= 0; i--) {
-      const hop = raw[i];
-      if (hop.known && hop.pos) { nextPos = hop.pos; continue; }
-      if (!hop.candidates || !nextPos) continue;
-      hop.candidates.sort((a, b) => dist(a.lat, a.lon, nextPos[0], nextPos[1]) - dist(b.lat, b.lon, nextPos[0], nextPos[1]));
-      const best = hop.candidates[0];
-      hop.key = best.public_key; hop.pos = [best.lat, best.lon];
-      hop.name = best.name || best.public_key.slice(0, 8);
-      hop.known = true; nextPos = hop.pos;
-    }
-
-    // Sanity check: drop hops that are impossibly far from both neighbors (>200km ≈ 1.8°)
-    // These are almost certainly 1-byte prefix collisions with distant nodes
-    // MAX_HOP_DIST from shared roles.js
-    for (let i = 0; i < raw.length; i++) {
-      if (!raw[i].known || !raw[i].pos) continue;
-      const prev = i > 0 && raw[i-1].known && raw[i-1].pos ? raw[i-1].pos : null;
-      const next = i < raw.length-1 && raw[i+1].known && raw[i+1].pos ? raw[i+1].pos : null;
-      if (!prev && !next) continue; // lone hop, keep it
-      const dPrev = prev ? dist(raw[i].pos[0], raw[i].pos[1], prev[0], prev[1]) : 0;
-      const dNext = next ? dist(raw[i].pos[0], raw[i].pos[1], next[0], next[1]) : 0;
-      if ((prev && dPrev > MAX_HOP_DIST) && (next && dNext > MAX_HOP_DIST)) {
-        raw[i].known = false; raw[i].pos = null; // too far from both neighbors
-      } else if (prev && !next && dPrev > MAX_HOP_DIST) {
-        raw[i].known = false; raw[i].pos = null; // first/last with only one neighbor, too far
-      } else if (!prev && next && dNext > MAX_HOP_DIST) {
-        raw[i].known = false; raw[i].pos = null;
       }
     }
 
