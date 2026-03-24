@@ -256,125 +256,253 @@ console.log('── Golden Tests: Production Packets ──');
 
 const goldenFixtures = [
   {
-    raw_hex: "0A00D69FD7A5A7475DB07337749AE61FA53A4788E976",
-    payload_type: 2, route_type: 2,
-    decoded: {"type":"TXT_MSG","destHash":"d69fd7a5a747","srcHash":"5db07337749a","mac":"e61fa53a","encryptedData":"4788e976"},
-    path: []
+    "raw_hex": "0A00D69FD7A5A7475DB07337749AE61FA53A4788E976",
+    "payload_type": 2,
+    "route_type": 2,
+    "decoded": "{\"type\":\"TXT_MSG\",\"destHash\":\"d6\",\"srcHash\":\"9f\",\"mac\":\"d7a5\",\"encryptedData\":\"a7475db07337749ae61fa53a4788e976\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "0A009FD605771EE2EB0CDC46D100232B455947E3C2D4B9DD0B8880EACA99A3C5F7EF63183D6D",
-    payload_type: 2, route_type: 2,
-    decoded: {"type":"TXT_MSG","destHash":"9fd605771ee2","srcHash":"eb0cdc46d100","mac":"232b4559","encryptedData":"47e3c2d4b9dd0b8880eaca99a3c5f7ef63183d6d"},
-    path: []
+    "raw_hex": "0A009FD605771EE2EB0CDC46D100232B455947E3C2D4B9DD0B8880EACA99A3C5F7EF63183D6D",
+    "payload_type": 2,
+    "route_type": 2,
+    "decoded": "{\"type\":\"TXT_MSG\",\"destHash\":\"9f\",\"srcHash\":\"d6\",\"mac\":\"0577\",\"encryptedData\":\"1ee2eb0cdc46d100232b455947e3c2d4b9dd0b8880eaca99a3c5f7ef63183d6d\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "120046D62DE27D4C5194D7821FC5A34A45565DCC2537B300B9AB6275255CEFB65D840CE5C169C94C9AED39E8BCB6CB6EB0335497A198B33A1A610CD3B03D8DCFC160900E5244280323EE0B44CACAB8F02B5B38B91CFA18BD067B0B5E63E94CFC85F758A8530B9240933402E0E6B8F84D5252322D52",
-    payload_type: 4, route_type: 2,
-    decoded: {"type":"ADVERT","pubKey":"46d62de27d4c5194d7821fc5a34a45565dcc2537b300b9ab6275255cefb65d84","timestamp":1774314764,"timestampISO":"2026-03-24T01:12:44.000Z","signature":"c94c9aed39e8bcb6cb6eb0335497a198b33a1a610cd3b03d8dcfc160900e5244280323ee0b44cacab8f02b5b38b91cfa18bd067b0b5e63e94cfc85f758a8530b","flags":{"raw":146,"type":2,"chat":false,"repeater":true,"room":false,"sensor":false,"hasLocation":true,"hasName":true},"lat":37,"lon":-122.1,"name":"MRR2-R"},
-    path: []
+    "raw_hex": "120046D62DE27D4C5194D7821FC5A34A45565DCC2537B300B9AB6275255CEFB65D840CE5C169C94C9AED39E8BCB6CB6EB0335497A198B33A1A610CD3B03D8DCFC160900E5244280323EE0B44CACAB8F02B5B38B91CFA18BD067B0B5E63E94CFC85F758A8530B9240933402E0E6B8F84D5252322D52",
+    "payload_type": 4,
+    "route_type": 2,
+    "decoded": "{\"type\":\"ADVERT\",\"pubKey\":\"46d62de27d4c5194d7821fc5a34a45565dcc2537b300b9ab6275255cefb65d84\",\"timestamp\":1774314764,\"timestampISO\":\"2026-03-24T01:12:44.000Z\",\"signature\":\"c94c9aed39e8bcb6cb6eb0335497a198b33a1a610cd3b03d8dcfc160900e5244280323ee0b44cacab8f02b5b38b91cfa18bd067b0b5e63e94cfc85f758a8530b\",\"flags\":{\"raw\":146,\"type\":2,\"chat\":false,\"repeater\":true,\"room\":false,\"sensor\":false,\"hasLocation\":true,\"hasName\":true},\"lat\":37,\"lon\":-122.1,\"name\":\"MRR2-R\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "120073CFF971E1CB5754A742C152B2D2E0EB108A19B246D663ED8898A72C4A5AD86EA6768E66694B025EDF6939D5C44CFF719C5D5520E5F06B20680A83AD9C2C61C3227BBB977A85EE462F3553445FECF8EDD05C234ECE217272E503F14D6DF2B1B9B133890C923CDF3002F8FDC1F85045414BF09F8CB3",
-    payload_type: 4, route_type: 2,
-    decoded: {"type":"ADVERT","pubKey":"73cff971e1cb5754a742c152b2d2e0eb108a19b246d663ed8898a72c4a5ad86e","timestamp":1720612518,"timestampISO":"2024-07-10T11:55:18.000Z","signature":"694b025edf6939d5c44cff719c5d5520e5f06b20680a83ad9c2c61c3227bbb977a85ee462f3553445fecf8edd05c234ece217272e503f14d6df2b1b9b133890c","flags":{"raw":146,"type":2,"chat":false,"repeater":true,"room":false,"sensor":false,"hasLocation":true,"hasName":true},"lat":36.757308,"lon":-121.504264,"name":"PEAK🌳"},
-    path: []
+    "raw_hex": "120073CFF971E1CB5754A742C152B2D2E0EB108A19B246D663ED8898A72C4A5AD86EA6768E66694B025EDF6939D5C44CFF719C5D5520E5F06B20680A83AD9C2C61C3227BBB977A85EE462F3553445FECF8EDD05C234ECE217272E503F14D6DF2B1B9B133890C923CDF3002F8FDC1F85045414BF09F8CB3",
+    "payload_type": 4,
+    "route_type": 2,
+    "decoded": "{\"type\":\"ADVERT\",\"pubKey\":\"73cff971e1cb5754a742c152b2d2e0eb108a19b246d663ed8898a72c4a5ad86e\",\"timestamp\":1720612518,\"timestampISO\":\"2024-07-10T11:55:18.000Z\",\"signature\":\"694b025edf6939d5c44cff719c5d5520e5f06b20680a83ad9c2c61c3227bbb977a85ee462f3553445fecf8edd05c234ece217272e503f14d6df2b1b9b133890c\",\"flags\":{\"raw\":146,\"type\":2,\"chat\":false,\"repeater\":true,\"room\":false,\"sensor\":false,\"hasLocation\":true,\"hasName\":true},\"lat\":36.757308,\"lon\":-121.504264,\"name\":\"PEAK🌳\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "06001f33e1bef15f5596b394adf03a77d46b89afa2e3",
-    payload_type: 1, route_type: 2,
-    decoded: {"type":"RESPONSE","destHash":"1f33e1bef15f","srcHash":"5596b394adf0","mac":"3a77d46b","encryptedData":"89afa2e3"},
-    path: []
+    "raw_hex": "06001f33e1bef15f5596b394adf03a77d46b89afa2e3",
+    "payload_type": 1,
+    "route_type": 2,
+    "decoded": "{\"type\":\"RESPONSE\",\"destHash\":\"1f\",\"srcHash\":\"33\",\"mac\":\"e1be\",\"encryptedData\":\"f15f5596b394adf03a77d46b89afa2e3\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "0200331fe52805e05cf6f4bae6a094ac258d57baf045",
-    payload_type: 0, route_type: 2,
-    decoded: {"type":"REQ","destHash":"331fe52805e0","srcHash":"5cf6f4bae6a0","mac":"94ac258d","encryptedData":"57baf045"},
-    path: []
+    "raw_hex": "0200331fe52805e05cf6f4bae6a094ac258d57baf045",
+    "payload_type": 0,
+    "route_type": 2,
+    "decoded": "{\"type\":\"REQ\",\"destHash\":\"33\",\"srcHash\":\"1f\",\"mac\":\"e528\",\"encryptedData\":\"05e05cf6f4bae6a094ac258d57baf045\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "15001ABC314305D3CCC94EB3F398D3054B4E95899229027B027E450FD68B4FA4E0A0126AC1",
-    payload_type: 5, route_type: 1,
-    decoded: {"type":"GRP_TXT","channelHash":26,"mac":"bc31","encryptedData":"4305d3ccc94eb3f398d3054b4e95899229027b027e450fd68b4fa4e0a0126ac1"},
-    path: []
+    "raw_hex": "15001ABC314305D3CCC94EB3F398D3054B4E95899229027B027E450FD68B4FA4E0A0126AC1",
+    "payload_type": 5,
+    "route_type": 1,
+    "decoded": "{\"type\":\"GRP_TXT\",\"channelHash\":26,\"mac\":\"bc31\",\"encryptedData\":\"4305d3ccc94eb3f398d3054b4e95899229027b027e450fd68b4fa4e0a0126ac1\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "010673a210206cb51e42fee24c4847a99208b9fc1d7ab36c42b10748",
-    payload_type: 0, route_type: 1,
-    decoded: {"type":"REQ","destHash":"1e42fee24c48","srcHash":"47a99208b9fc","mac":"1d7ab36c","encryptedData":"42b10748"},
-    path: ["73","A2","10","20","6C","B5"]
+    "raw_hex": "010673a210206cb51e42fee24c4847a99208b9fc1d7ab36c42b10748",
+    "payload_type": 0,
+    "route_type": 1,
+    "decoded": "{\"type\":\"REQ\",\"destHash\":\"1e\",\"srcHash\":\"42\",\"mac\":\"fee2\",\"encryptedData\":\"4c4847a99208b9fc1d7ab36c42b10748\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 6,
+      "hops": [
+        "73",
+        "A2",
+        "10",
+        "20",
+        "6C",
+        "B5"
+      ]
+    }
   },
   {
-    raw_hex: "0101731E42FEE24C4847A99208293810E4A3E335640D8E",
-    payload_type: 0, route_type: 1,
-    decoded: {"type":"REQ","destHash":"1e42fee24c48","srcHash":"47a992082938","mac":"10e4a3e3","encryptedData":"35640d8e"},
-    path: ["73"]
+    "raw_hex": "0101731E42FEE24C4847A99208293810E4A3E335640D8E",
+    "payload_type": 0,
+    "route_type": 1,
+    "decoded": "{\"type\":\"REQ\",\"destHash\":\"1e\",\"srcHash\":\"42\",\"mac\":\"fee2\",\"encryptedData\":\"4c4847a99208293810e4a3e335640d8e\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 1,
+      "hops": [
+        "73"
+      ]
+    }
   },
   {
-    raw_hex: "0106FB10844070101E42BA859D1D939362F79D3F3865333629FF92E9",
-    payload_type: 0, route_type: 1,
-    decoded: {"type":"REQ","destHash":"1e42ba859d1d","srcHash":"939362f79d3f","mac":"38653336","encryptedData":"29ff92e9"},
-    path: ["FB","10","84","40","70","10"]
+    "raw_hex": "0106FB10844070101E42BA859D1D939362F79D3F3865333629FF92E9",
+    "payload_type": 0,
+    "route_type": 1,
+    "decoded": "{\"type\":\"REQ\",\"destHash\":\"1e\",\"srcHash\":\"42\",\"mac\":\"ba85\",\"encryptedData\":\"9d1d939362f79d3f3865333629ff92e9\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 6,
+      "hops": [
+        "FB",
+        "10",
+        "84",
+        "40",
+        "70",
+        "10"
+      ]
+    }
   },
   {
-    raw_hex: "0102FB101E42BA859D1D939362F79D3F3865333629FF92D9",
-    payload_type: 0, route_type: 1,
-    decoded: {"type":"REQ","destHash":"1e42ba859d1d","srcHash":"939362f79d3f","mac":"38653336","encryptedData":"29ff92d9"},
-    path: ["FB","10"]
+    "raw_hex": "0102FB101E42BA859D1D939362F79D3F3865333629FF92D9",
+    "payload_type": 0,
+    "route_type": 1,
+    "decoded": "{\"type\":\"REQ\",\"destHash\":\"1e\",\"srcHash\":\"42\",\"mac\":\"ba85\",\"encryptedData\":\"9d1d939362f79d3f3865333629ff92d9\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 2,
+      "hops": [
+        "FB",
+        "10"
+      ]
+    }
   },
   {
-    raw_hex: "22009FD65B38857C5A7F6F0F28E999CF2632C03ACCCC",
-    payload_type: 8, route_type: 2,
-    decoded: {"type":"PATH","destHash":"9fd65b38857c","srcHash":"5a7f6f0f28e9","mac":"99cf2632","pathData":"c03acccc"},
-    path: []
+    "raw_hex": "22009FD65B38857C5A7F6F0F28E999CF2632C03ACCCC",
+    "payload_type": 8,
+    "route_type": 2,
+    "decoded": "{\"type\":\"PATH\",\"destHash\":\"9f\",\"srcHash\":\"d6\",\"mac\":\"5b38\",\"pathData\":\"857c5a7f6f0f28e999cf2632c03acccc\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "0506701085AD8573D69F96FA7DD3B1AC3702794035442D9CDAD436D4",
-    payload_type: 1, route_type: 1,
-    decoded: {"type":"RESPONSE","destHash":"d69f96fa7dd3","srcHash":"b1ac37027940","mac":"35442d9c","encryptedData":"dad436d4"},
-    path: ["70","10","85","AD","85","73"]
+    "raw_hex": "0506701085AD8573D69F96FA7DD3B1AC3702794035442D9CDAD436D4",
+    "payload_type": 1,
+    "route_type": 1,
+    "decoded": "{\"type\":\"RESPONSE\",\"destHash\":\"d6\",\"srcHash\":\"9f\",\"mac\":\"96fa\",\"encryptedData\":\"7dd3b1ac3702794035442d9cdad436d4\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 6,
+      "hops": [
+        "70",
+        "10",
+        "85",
+        "AD",
+        "85",
+        "73"
+      ]
+    }
   },
   {
-    raw_hex: "0500D69F96FA7DD3B1AC3702794035442D9CDAD43654",
-    payload_type: 1, route_type: 1,
-    decoded: {"type":"RESPONSE","destHash":"d69f96fa7dd3","srcHash":"b1ac37027940","mac":"35442d9c","encryptedData":"dad43654"},
-    path: []
+    "raw_hex": "0500D69F96FA7DD3B1AC3702794035442D9CDAD43654",
+    "payload_type": 1,
+    "route_type": 1,
+    "decoded": "{\"type\":\"RESPONSE\",\"destHash\":\"d6\",\"srcHash\":\"9f\",\"mac\":\"96fa\",\"encryptedData\":\"7dd3b1ac3702794035442d9cdad43654\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "1E009FD6DFC543C53E826A2B789B072FF9CBE922E57EA093E5643A0CA813E79F42EE9108F855B72A3E0B599C9AC80D3A211E7C7BA2",
-    payload_type: 7, route_type: 2,
-    decoded: {"type":"ANON_REQ","destHash":"9fd6dfc543c5","ephemeralPubKey":"3e826a2b789b072ff9cbe922e57ea093e5643a0ca813e79f42ee9108f855b72a","mac":"3e0b599c","encryptedData":"9ac80d3a211e7c7ba2"},
-    path: []
+    "raw_hex": "1E009FD6DFC543C53E826A2B789B072FF9CBE922E57EA093E5643A0CA813E79F42EE9108F855B72A3E0B599C9AC80D3A211E7C7BA2",
+    "payload_type": 7,
+    "route_type": 2,
+    "decoded": "{\"type\":\"ANON_REQ\",\"destHash\":\"9f\",\"ephemeralPubKey\":\"d6dfc543c53e826a2b789b072ff9cbe922e57ea093e5643a0ca813e79f42ee91\",\"mac\":\"08f8\",\"encryptedData\":\"55b72a3e0b599c9ac80d3a211e7c7ba2\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "110146B7F1C45F2ED5888335F79E27085D0DE871A7C8ECB1EF5313435EBD0825BACDC181E3C1695556F51A89C9895E2114D1FECA91B58F82CBBBC1DD2B868ADDC0F7EB8C310D0887C2A2283D6F7D01A5E97B6C2F6A4CC899F27AFA513CC6B295E34ADC84A1F1019240933402E0E6B8F84D6574726F2D52",
-    payload_type: 4, route_type: 1,
-    decoded: {"type":"ADVERT","pubKey":"b7f1c45f2ed5888335f79e27085d0de871a7c8ecb1ef5313435ebd0825bacdc1","timestamp":1774314369,"timestampISO":"2026-03-24T01:06:09.000Z","signature":"5556f51a89c9895e2114d1feca91b58f82cbbbc1dd2b868addc0f7eb8c310d0887c2a2283d6f7d01a5e97b6c2f6a4cc899f27afa513cc6b295e34adc84a1f101","flags":{"raw":146,"type":2,"chat":false,"repeater":true,"room":false,"sensor":false,"hasLocation":true,"hasName":true},"lat":37,"lon":-122.1,"name":"Metro-R"},
-    path: ["46"]
+    "raw_hex": "110146B7F1C45F2ED5888335F79E27085D0DE871A7C8ECB1EF5313435EBD0825BACDC181E3C1695556F51A89C9895E2114D1FECA91B58F82CBBBC1DD2B868ADDC0F7EB8C310D0887C2A2283D6F7D01A5E97B6C2F6A4CC899F27AFA513CC6B295E34ADC84A1F1019240933402E0E6B8F84D6574726F2D52",
+    "payload_type": 4,
+    "route_type": 1,
+    "decoded": "{\"type\":\"ADVERT\",\"pubKey\":\"b7f1c45f2ed5888335f79e27085d0de871a7c8ecb1ef5313435ebd0825bacdc1\",\"timestamp\":1774314369,\"timestampISO\":\"2026-03-24T01:06:09.000Z\",\"signature\":\"5556f51a89c9895e2114d1feca91b58f82cbbbc1dd2b868addc0f7eb8c310d0887c2a2283d6f7d01a5e97b6c2f6a4cc899f27afa513cc6b295e34adc84a1f101\",\"flags\":{\"raw\":146,\"type\":2,\"chat\":false,\"repeater\":true,\"room\":false,\"sensor\":false,\"hasLocation\":true,\"hasName\":true},\"lat\":37,\"lon\":-122.1,\"name\":\"Metro-R\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 1,
+      "hops": [
+        "46"
+      ]
+    }
   },
   {
-    raw_hex: "15001A901C5D927D90572BAF6135D226F91D180AD4F7B90DF20F82EEEA920312D9CCFD9C3F8CA9EFBEB1C37DFA31265F73483BD0640EC94E247902F617B2C320BFA332F50441AD234D8324A48ABAA9A16EB15BD50F2D67029F2424E0836010A635EB45B5DFDB4CDC080C09FC849040AB4B82769E0F",
-    payload_type: 5, route_type: 1,
-    decoded: {"type":"GRP_TXT","channelHash":26,"mac":"901c","encryptedData":"5d927d90572baf6135d226f91d180ad4f7b90df20f82eeea920312d9ccfd9c3f8ca9efbeb1c37dfa31265f73483bd0640ec94e247902f617b2c320bfa332f50441ad234d8324a48abaa9a16eb15bd50f2d67029f2424e0836010a635eb45b5dfdb4cdc080c09fc849040ab4b82769e0f"},
-    path: []
+    "raw_hex": "15001A901C5D927D90572BAF6135D226F91D180AD4F7B90DF20F82EEEA920312D9CCFD9C3F8CA9EFBEB1C37DFA31265F73483BD0640EC94E247902F617B2C320BFA332F50441AD234D8324A48ABAA9A16EB15BD50F2D67029F2424E0836010A635EB45B5DFDB4CDC080C09FC849040AB4B82769E0F",
+    "payload_type": 5,
+    "route_type": 1,
+    "decoded": "{\"type\":\"GRP_TXT\",\"channelHash\":26,\"mac\":\"901c\",\"encryptedData\":\"5d927d90572baf6135d226f91d180ad4f7b90df20f82eeea920312d9ccfd9c3f8ca9efbeb1c37dfa31265f73483bd0640ec94e247902f617b2c320bfa332f50441ad234d8324a48abaa9a16eb15bd50f2d67029f2424e0836010a635eb45b5dfdb4cdc080c09fc849040ab4b82769e0f\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "0A00D69F0E65C6CCDEBE8391ED093D3C76E2D064F525",
-    payload_type: 2, route_type: 2,
-    decoded: {"type":"TXT_MSG","destHash":"d69f0e65c6cc","srcHash":"debe8391ed09","mac":"3d3c76e2","encryptedData":"d064f525"},
-    path: []
+    "raw_hex": "0A00D69F0E65C6CCDEBE8391ED093D3C76E2D064F525",
+    "payload_type": 2,
+    "route_type": 2,
+    "decoded": "{\"type\":\"TXT_MSG\",\"destHash\":\"d6\",\"srcHash\":\"9f\",\"mac\":\"0e65\",\"encryptedData\":\"c6ccdebe8391ed093d3c76e2d064f525\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "0A00D69F940E0BA255095E9540EE6E23895DA80AAC60",
-    payload_type: 2, route_type: 2,
-    decoded: {"type":"TXT_MSG","destHash":"d69f940e0ba2","srcHash":"55095e9540ee","mac":"6e23895d","encryptedData":"a80aac60"},
-    path: []
+    "raw_hex": "0A00D69F940E0BA255095E9540EE6E23895DA80AAC60",
+    "payload_type": 2,
+    "route_type": 2,
+    "decoded": "{\"type\":\"TXT_MSG\",\"destHash\":\"d6\",\"srcHash\":\"9f\",\"mac\":\"940e\",\"encryptedData\":\"0ba255095e9540ee6e23895da80aac60\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
   },
   {
-    raw_hex: "06001f5d5acf699ea80c7ca1a9349b8af9a1b47d4a1a",
-    payload_type: 1, route_type: 2,
-    decoded: {"type":"RESPONSE","destHash":"1f5d5acf699e","srcHash":"a80c7ca1a934","mac":"9b8af9a1","encryptedData":"b47d4a1a"},
-    path: []
-  },
+    "raw_hex": "06001f5d5acf699ea80c7ca1a9349b8af9a1b47d4a1a",
+    "payload_type": 1,
+    "route_type": 2,
+    "decoded": "{\"type\":\"RESPONSE\",\"destHash\":\"1f\",\"srcHash\":\"5d\",\"mac\":\"5acf\",\"encryptedData\":\"699ea80c7ca1a9349b8af9a1b47d4a1a\"}",
+    "path": {
+      "hashSize": 1,
+      "hashCount": 0,
+      "hops": []
+    }
+  }
 ];
 
 // One special case: the advert with 1 hop from prod had raw_hex starting with "110146"
@@ -385,7 +513,8 @@ const goldenFixtures = [
 
 for (let i = 0; i < goldenFixtures.length; i++) {
   const fix = goldenFixtures[i];
-  const label = `golden[${i}] ${fix.decoded.type}`;
+  const expected = typeof fix.decoded === "string" ? JSON.parse(fix.decoded) : fix.decoded;
+  const label = `golden[${i}] ${expected.type}`;
 
   try {
     const result = decodePacket(fix.raw_hex);
@@ -395,11 +524,11 @@ for (let i = 0; i < goldenFixtures.length; i++) {
     assertEq(result.header.payloadType, fix.payload_type, `${label}: payloadType`);
 
     // Verify path hops
-    assertDeepEq(result.path.hops, fix.path, `${label}: path hops`);
+    assertDeepEq(result.path.hops, (fix.path.hops || fix.path), `${label}: path hops`);
 
     // Verify payload matches prod decoded output
     // Compare key fields rather than full deep equality (to handle minor serialization diffs)
-    const expected = fix.decoded;
+    
     assertEq(result.payload.type, expected.type, `${label}: payload type`);
 
     if (expected.type === 'ADVERT') {
