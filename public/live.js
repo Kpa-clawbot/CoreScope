@@ -753,8 +753,12 @@
 
     map.on('zoomend', rescaleMarkers);
 
-    // Heat map toggle
-    document.getElementById('liveHeatToggle').addEventListener('change', (e) => {
+    // Heat map toggle — persist in localStorage
+    const liveHeatEl = document.getElementById('liveHeatToggle');
+    if (localStorage.getItem('meshcore-live-heatmap') === 'false') { liveHeatEl.checked = false; hideHeatMap(); }
+    else if (localStorage.getItem('meshcore-live-heatmap') === 'true') { liveHeatEl.checked = true; }
+    liveHeatEl.addEventListener('change', (e) => {
+      localStorage.setItem('meshcore-live-heatmap', e.target.checked);
       if (e.target.checked) showHeatMap(); else hideHeatMap();
     });
 

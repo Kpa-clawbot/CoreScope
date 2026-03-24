@@ -221,7 +221,30 @@ async function run() {
     }
   });
 
-  // Test 12: Heatmap opacity stored in localStorage
+  // Test 12: Live page heat checkbox persists across reload
+  await test('Live heat checkbox persists in localStorage', async () => {
+    await page.goto(`${BASE}/#/live`, { waitUntil: 'networkidle' });
+    await page.waitForSelector('#liveHeatToggle', { timeout: 10000 });
+    // Clear state
+    await page.evaluate(() => localStorage.removeItem('meshcore-live-heatmap'));
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('#liveHeatToggle', { timeout: 10000 });
+    // Default is checked (has `checked` attribute in HTML)
+    const defaultState = await page.$eval('#liveHeatToggle', el => el.checked);
+    // Uncheck it
+    if (defaultState) await page.click('#liveHeatToggle');
+    const stored = await page.evaluate(() => localStorage.getItem('meshcore-live-heatmap'));
+    assert(stored === 'false', `localStorage should be "false" after unchecking but got "${stored}"`);
+    // Reload and verify persisted
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('#liveHeatToggle', { timeout: 10000 });
+    const afterReload = await page.$eval('#liveHeatToggle', el => el.checked);
+    assert(!afterReload, 'Live heat checkbox should stay unchecked after reload');
+    // Clean up
+    await page.evaluate(() => localStorage.removeItem('meshcore-live-heatmap'));
+  });
+
+  // Test 13: Heatmap opacity stored in localStorage
   await test('Heatmap opacity persists in localStorage', async () => {
     await page.goto(`${BASE}/#/map`, { waitUntil: 'networkidle' });
     await page.evaluate(() => localStorage.setItem('meshcore-heatmap-opacity', '0.5'));
