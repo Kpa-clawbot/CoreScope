@@ -619,6 +619,10 @@
       }
     }
 
+    // Ensure map has correct pixel dimensions before deconfliction
+    // (SPA navigation may render markers before container is fully sized)
+    map.invalidateSize({ animate: false });
+
     // Deconflict ALL markers
     if (allMarkers.length > 0) {
       deconflictLabels(allMarkers, map);
