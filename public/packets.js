@@ -1036,7 +1036,7 @@
             const childRegion = c.observer_id ? (observers.find(o => o.id === c.observer_id)?.iata || '') : '';
             let childPath = [];
             try { childPath = JSON.parse(c.path_json || '[]'); } catch {}
-            const childPathStr = renderPath(childPath, child.observer_id);
+            const childPathStr = renderPath(childPath, c.observer_id);
             html += `<tr class="group-child" data-id="${c.id}" data-hash="${c.hash || ''}" data-action="select-observation" data-value="${c.id}" data-parent-hash="${p.hash}" tabindex="0" role="row">
               <td></td><td class="col-region">${childRegion ? `<span class="badge-region">${childRegion}</span>` : '—'}</td>
               <td class="col-time">${timeAgo(c.timestamp)}</td>
