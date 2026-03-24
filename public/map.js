@@ -175,6 +175,10 @@
       if (filters.hashLabels && !_renderingMarkers) renderMarkers();
     });
 
+    map.on('resize', () => {
+      if (!_renderingMarkers) renderMarkers();
+    });
+
     markerLayer = L.layerGroup().addTo(map);
     routeLayer = L.layerGroup().addTo(map);
 

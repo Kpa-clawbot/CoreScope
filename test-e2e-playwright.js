@@ -298,6 +298,23 @@ async function run() {
     assert(custJs.includes('Live Map') || custJs.includes('live map') || custJs.includes('📡'), 'Live slider should have live-related label');
   });
 
+  // Test 16: Map re-renders markers on resize (decollision recalculates)
+  await test('Map re-renders on resize', async () => {
+    await page.goto(`${BASE}/#/map`, { waitUntil: 'networkidle' });
+    await page.waitForSelector('.leaflet-container', { timeout: 10000 });
+    await page.waitForTimeout(2000);
+    // Count markers before resize
+    const beforeCount = await page.$$eval('.leaflet-marker-icon, .leaflet-interactive', els => els.length);
+    // Resize viewport
+    await page.setViewportSize({ width: 600, height: 400 });
+    await page.waitForTimeout(1500);
+    // Markers should still be present after resize (re-rendered, not lost)
+    const afterCount = await page.$$eval('.leaflet-marker-icon, .leaflet-interactive', els => els.length);
+    assert(afterCount > 0, `Should have markers after resize, got ${afterCount}`);
+    // Restore
+    await page.setViewportSize({ width: 1280, height: 720 });
+  });
+
   // Summary
   const passed = results.filter(r => r.pass).length;
   const failed = results.filter(r => !r.pass).length;
