@@ -10,7 +10,7 @@ const path = require('path');
 
 async function collectCoverage() {
   const browser = await chromium.launch({
-    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+    executablePath: process.env.CHROMIUM_PATH || undefined,
     args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
     headless: true
   });
