@@ -804,6 +804,10 @@
       hideHeatMap();
       const ht = document.getElementById('liveHeatToggle');
       if (ht) { ht.checked = false; ht.disabled = true; }
+    } else {
+      // Ensure heat toggle is enabled if matrix mode is off (recover from stale state)
+      const ht = document.getElementById('liveHeatToggle');
+      if (ht) { ht.disabled = false; }
     }
 
     const rainToggle = document.getElementById('liveMatrixRainToggle');
