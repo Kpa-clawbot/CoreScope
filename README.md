@@ -81,71 +81,27 @@ See [PERFORMANCE.md](PERFORMANCE.md) for the full benchmark.
 
 ### Docker (Recommended)
 
-The easiest way to run MeshCore Analyzer. Includes Mosquitto MQTT broker — everything in one container.
-
 ```bash
-docker build -t meshcore-analyzer .
-docker run -d \
-  --name meshcore-analyzer \
-  -p 80:80 \
-  -p 443:443 \
-  -p 1883:1883 \
-  -v meshcore-data:/app/data \
-  -v caddy-certs:/data/caddy \
-  meshcore-analyzer
+git clone https://github.com/Kpa-clawbot/meshcore-analyzer.git
+cd meshcore-analyzer
+./manage.sh setup
 ```
 
-Open `http://localhost`. Point your MeshCore gateway's MQTT to `<host-ip>:1883`.
+The setup wizard walks you through everything — config, domain, HTTPS, build, and run. Safe to cancel and re-run at any point.
 
-**With a domain (automatic HTTPS):**
+After setup:
 ```bash
-# Create a Caddyfile with your domain
-echo 'analyzer.example.com { reverse_proxy localhost:3000 }' > Caddyfile
-
-docker run -d \
-  --name meshcore-analyzer \
-  -p 80:80 \
-  -p 443:443 \
-  -p 1883:1883 \
-  -v meshcore-data:/app/data \
-  -v caddy-certs:/data/caddy \
-  -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile \
-  meshcore-analyzer
+./manage.sh status       # Health check + packet/node counts
+./manage.sh logs         # Follow logs
+./manage.sh backup       # Backup database
+./manage.sh update       # Pull latest + rebuild + restart
+./manage.sh mqtt-test    # Check if observer data is flowing
+./manage.sh help         # All commands
 ```
 
-Caddy automatically provisions Let's Encrypt TLS certificates.
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full deployment guide, HTTPS options (auto cert, bring your own, Cloudflare Tunnel), MQTT security, backups, and troubleshooting.
 
-**Custom config:**
-```bash
-# Copy and edit the example config
-cp config.example.json config.json
-# Edit config.json with your channel keys, regions, etc.
-
-docker run -d \
-  --name meshcore-analyzer \
-  -p 3000:3000 \
-  -p 1883:1883 \
-  -v meshcore-data:/app/data \
-  meshcore-analyzer
-```
-
-Config lives in the data volume at `/app/data/config.json` — a default is created on first run. To edit it:
-```bash
-docker exec -it meshcore-analyzer vi /app/data/config.json
-```
-
-Or use a bind mount for the data directory:
-```bash
-docker run -d \
-  --name meshcore-analyzer \
-  -p 3000:3000 \
-  -p 1883:1883 \
-  -v ./data:/app/data \
-  meshcore-analyzer
-# Now edit ./data/config.json directly on the host
-```
-
-**Theme customization:** Put `theme.json` next to `config.json` — wherever your config lives, that's where the theme goes. Use the built-in customizer (Tools → Customize) to design your theme, download the file, and drop it in. Changes are picked up on page refresh — no restart needed. The server logs where it's looking on startup.
+**Theme customization:** Use the built-in customizer (Tools → Customize) to design your theme, download the `theme.json` file, and place it next to your `config.json`. Changes are picked up on page refresh.
 
 ### Manual Install
 
