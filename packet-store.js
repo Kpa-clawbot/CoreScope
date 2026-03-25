@@ -156,19 +156,24 @@ class PacketStore {
       }
     }
 
-    // Post-load: set each transmission's observer/path to the EARLIEST observation
+    // Post-load: set each transmission's display path to the LONGEST observation path
+    // (most representative of mesh topology — short paths are just nearby observers)
     for (const tx of this.packets) {
       if (tx.observations.length > 0) {
-        let earliest = tx.observations[0];
+        let best = tx.observations[0];
+        let bestLen = 0;
+        try { bestLen = JSON.parse(best.path_json || '[]').length; } catch {}
         for (let i = 1; i < tx.observations.length; i++) {
-          if (tx.observations[i].timestamp < earliest.timestamp) earliest = tx.observations[i];
+          let len = 0;
+          try { len = JSON.parse(tx.observations[i].path_json || '[]').length; } catch {}
+          if (len > bestLen) { best = tx.observations[i]; bestLen = len; }
         }
-        tx.observer_id = earliest.observer_id;
-        tx.observer_name = earliest.observer_name;
-        tx.snr = earliest.snr;
-        tx.rssi = earliest.rssi;
-        tx.path_json = earliest.path_json;
-        tx.direction = earliest.direction;
+        tx.observer_id = best.observer_id;
+        tx.observer_name = best.observer_name;
+        tx.snr = best.snr;
+        tx.rssi = best.rssi;
+        tx.path_json = best.path_json;
+        tx.direction = best.direction;
       }
     }
 
@@ -228,6 +233,12 @@ class PacketStore {
     if (pkt.timestamp < tx.first_seen) {
       tx.first_seen = pkt.timestamp;
       tx.timestamp = pkt.timestamp;
+    }
+    // Update display path if new observation has longer path
+    let newPathLen = 0, curPathLen = 0;
+    try { newPathLen = JSON.parse(pkt.path_json || '[]').length; } catch {}
+    try { curPathLen = JSON.parse(tx.path_json || '[]').length; } catch {}
+    if (newPathLen > curPathLen) {
       tx.observer_id = pkt.observer_id;
       tx.observer_name = pkt.observer_name;
       tx.path_json = pkt.path_json;
@@ -377,10 +388,16 @@ class PacketStore {
         this.byTxId.set(tx.id, tx);
         this._indexByNode(tx);
       } else {
-        // Update first_seen if earlier — also update observer + path to match
+        // Update first_seen if earlier
         if (row.timestamp < tx.first_seen) {
           tx.first_seen = row.timestamp;
           tx.timestamp = row.timestamp;
+        }
+        // Update display path if new observation has longer path
+        let newPathLen = 0, curPathLen = 0;
+        try { newPathLen = JSON.parse(row.path_json || '[]').length; } catch {}
+        try { curPathLen = JSON.parse(tx.path_json || '[]').length; } catch {}
+        if (newPathLen > curPathLen) {
           tx.observer_id = row.observer_id;
           tx.observer_name = row.observer_name;
           tx.path_json = row.path_json;
@@ -584,6 +601,7 @@ class PacketStore {
     // Already grouped by hash — just format for backward compat
     const sorted = filtered.map(tx => ({
       hash: tx.hash,
+      first_seen: tx.first_seen || tx.timestamp,
       count: tx.observation_count,
       observer_count: new Set(tx.observations.map(o => o.observer_id).filter(Boolean)).size,
       latest: tx.observations.length ? tx.observations.reduce((max, o) => o.timestamp > max ? o.timestamp : max, tx.observations[0].timestamp) : tx.timestamp,

@@ -205,12 +205,6 @@ class TTLCache {
 }
 const cache = new TTLCache();
 
-
-// Seed DB only when explicitly requested via --seed flag or SEED_DB=true env var
-if (process.argv.includes('--seed') || process.env.SEED_DB === 'true') {
-  db.seed();
-}
-
 const app = express();
 
 function createServer(app, cfg) {
@@ -650,7 +644,7 @@ for (const source of mqttSources) {
         const fullPacket = pktStore.getById(packetId) || pktStore.byHash.get(pktData.hash) || pktData;
         const tx = pktStore.byHash.get(pktData.hash);
         const observation_count = tx ? tx.observation_count : 1;
-        const broadcastData = { id: packetId, raw: msg.raw, decoded, snr: msg.SNR, rssi: msg.RSSI, hash: pktData.hash, observer: observerId, packet: fullPacket, observation_count };
+        const broadcastData = { id: packetId, raw: msg.raw, decoded, snr: msg.SNR, rssi: msg.RSSI, hash: pktData.hash, observer: observerId, observer_name: msg.origin || null, path_json: pktData.path_json, packet: fullPacket, observation_count };
         broadcast({ type: 'packet', data: broadcastData });
 
         if (decoded.header.payloadTypeName === 'GRP_TXT') {

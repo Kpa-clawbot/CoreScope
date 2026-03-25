@@ -360,47 +360,8 @@ function getStats() {
   };
 }
 
-function seed() {
-  if (stmts.countPackets.get().count > 0) return false;
-  const now = new Date().toISOString();
-  const rawHex = '11451000D818206D3AAC152C8A91F89957E6D30CA51F36E28790228971C473B755F244F718754CF5EE4A2FD58D944466E42CDED140C66D0CC590183E32BAF40F112BE8F3F2BDF6012B4B2793C52F1D36F69EE054D9A05593286F78453E56C0EC4A3EB95DDA2A7543FCCC00B939CACC009278603902FC12BCF84B706120526F6F6620536F6C6172';
-
-  upsertObserver({ id: 'obs-seed-001', name: 'Seed Observer', iata: 'UNK', last_seen: now, first_seen: now });
-
-  insertTransmission({
-    raw_hex: rawHex,
-    timestamp: now,
-    observer_id: 'obs-seed-001',
-    observer_name: 'Seed Observer',
-    direction: 'rx',
-    snr: 10.5,
-    rssi: -85,
-    score: 42,
-    hash: 'seed-test-hash',
-    route_type: 1,
-    payload_type: 4,
-    payload_version: 1,
-    path_json: JSON.stringify(['A1B2', 'C3D4']),
-    decoded_json: JSON.stringify({ type: 'ADVERT', name: 'Test Repeater', role: 'repeater', lat: 0, lon: 0 }),
-  });
-
-  upsertNode({
-    public_key: 'seed-test-pubkey',
-    name: 'Test Repeater',
-    role: 'repeater',
-    lat: 0,
-    lon: 0,
-    last_seen: now,
-    first_seen: now,
-  });
-
-  return true;
-}
-
 // --- Run directly ---
 if (require.main === module) {
-  const seeded = seed();
-  console.log(seeded ? 'Database seeded with test data.' : 'Database already has data, skipping seed.');
   console.log('Stats:', getStats());
 }
 
@@ -631,4 +592,4 @@ function getNodeAnalytics(pubkey, days) {
   };
 }
 
-module.exports = { db, insertTransmission, upsertNode, upsertObserver, updateObserverStatus, getPackets, getPacket, getTransmission, getNodes, getNode, getObservers, getStats, seed, searchNodes, getNodeHealth, getNodeAnalytics };
+module.exports = { db, insertTransmission, upsertNode, upsertObserver, updateObserverStatus, getPackets, getPacket, getTransmission, getNodes, getNode, getObservers, getStats, searchNodes, getNodeHealth, getNodeAnalytics };
