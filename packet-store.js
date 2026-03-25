@@ -66,15 +66,28 @@ class PacketStore {
 
   /** Load from normalized transmissions + observations tables */
   _loadNormalized() {
-    const rows = this.db.prepare(`
-      SELECT t.id AS transmission_id, t.raw_hex, t.hash, t.first_seen, t.route_type,
-             t.payload_type, t.payload_version, t.decoded_json,
-             o.id AS observation_id, o.observer_id, o.observer_name, o.direction,
-             o.snr, o.rssi, o.score, o.path_json, o.timestamp AS obs_timestamp
-      FROM transmissions t
-      LEFT JOIN observations o ON o.transmission_id = t.id
-      ORDER BY t.first_seen DESC, o.timestamp DESC
-    `).all();
+    // Detect v3 schema (observer_idx instead of observer_id in observations)
+    const obsCols = this.db.pragma('table_info(observations)').map(c => c.name);
+    const isV3 = obsCols.includes('observer_idx');
+
+    const sql = isV3
+      ? `SELECT t.id AS transmission_id, t.raw_hex, t.hash, t.first_seen, t.route_type,
+               t.payload_type, t.payload_version, t.decoded_json,
+               o.id AS observation_id, obs.id AS observer_id, obs.name AS observer_name, o.direction,
+               o.snr, o.rssi, o.score, o.path_json, datetime(o.timestamp, 'unixepoch') AS obs_timestamp
+          FROM transmissions t
+          LEFT JOIN observations o ON o.transmission_id = t.id
+          LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+          ORDER BY t.first_seen DESC, o.timestamp DESC`
+      : `SELECT t.id AS transmission_id, t.raw_hex, t.hash, t.first_seen, t.route_type,
+               t.payload_type, t.payload_version, t.decoded_json,
+               o.id AS observation_id, o.observer_id, o.observer_name, o.direction,
+               o.snr, o.rssi, o.score, o.path_json, o.timestamp AS obs_timestamp
+          FROM transmissions t
+          LEFT JOIN observations o ON o.transmission_id = t.id
+          ORDER BY t.first_seen DESC, o.timestamp DESC`;
+
+    const rows = this.db.prepare(sql).all();
 
     for (const row of rows) {
       if (this.packets.length >= this.maxPackets && !this.byHash.has(row.hash)) break;

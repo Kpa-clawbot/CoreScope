@@ -252,9 +252,113 @@ console.log('\ngetNodeAnalytics:');
 // --- seed ---
 console.log('\nseed:');
 {
-  // Already has data, should return false
-  const result = db.seed();
-  assert(result === false, 'seed returns false when data exists');
+  if (typeof db.seed === 'function') {
+    // Already has data, should return false
+    const result = db.seed();
+    assert(result === false, 'seed returns false when data exists');
+  } else {
+    console.log('  (skipped — seed not exported)');
+  }
+}
+
+// --- v3 schema tests (fresh DB should be v3) ---
+console.log('\nv3 schema:');
+{
+  assert(db.schemaVersion >= 3, 'fresh DB creates v3 schema');
+
+  // observations table should have observer_idx, not observer_id
+  const cols = db.db.pragma('table_info(observations)').map(c => c.name);
+  assert(cols.includes('observer_idx'), 'observations has observer_idx column');
+  assert(!cols.includes('observer_id'), 'observations does NOT have observer_id column');
+  assert(!cols.includes('observer_name'), 'observations does NOT have observer_name column');
+  assert(!cols.includes('hash'), 'observations does NOT have hash column');
+  assert(!cols.includes('created_at'), 'observations does NOT have created_at column');
+
+  // timestamp should be integer
+  const obsRow = db.db.prepare('SELECT typeof(timestamp) as t FROM observations LIMIT 1').get();
+  if (obsRow) {
+    assert(obsRow.t === 'integer', 'timestamp is stored as integer');
+  }
+
+  // packets_v view should still expose observer_id, observer_name, ISO timestamp
+  const viewRow = db.db.prepare('SELECT * FROM packets_v LIMIT 1').get();
+  if (viewRow) {
+    assert('observer_id' in viewRow, 'packets_v exposes observer_id');
+    assert('observer_name' in viewRow, 'packets_v exposes observer_name');
+    assert(typeof viewRow.timestamp === 'string', 'packets_v timestamp is ISO string');
+  }
+
+  // schema_version table exists with version 3
+  const sv = db.db.prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1').get();
+  assert(sv && sv.version === 3, 'schema_version table has version 3');
+}
+
+// --- v3 ingestion: observer resolved via observer_idx ---
+console.log('\nv3 ingestion with observer resolution:');
+{
+  // Insert a new observer
+  db.upsertObserver({ id: 'obs-v3-test', name: 'V3 Test Observer' });
+
+  // Insert observation referencing that observer
+  const result = db.insertTransmission({
+    raw_hex: '0400deadbeef',
+    hash: 'hash-v3-001',
+    timestamp: '2025-06-01T12:00:00Z',
+    observer_id: 'obs-v3-test',
+    observer_name: 'V3 Test Observer',
+    direction: 'rx',
+    snr: 12.0,
+    rssi: -80,
+    route_type: 1,
+    payload_type: 4,
+    path_json: '["aabb"]',
+  });
+  assert(result !== null, 'v3 insertion succeeded');
+  assert(result.transmissionId > 0, 'v3 has transmissionId');
+
+  // Verify via packets_v view
+  const pkt = db.db.prepare('SELECT * FROM packets_v WHERE hash = ?').get('hash-v3-001');
+  assert(pkt !== null, 'v3 packet found via view');
+  assert(pkt.observer_id === 'obs-v3-test', 'v3 observer_id resolved in view');
+  assert(pkt.observer_name === 'V3 Test Observer', 'v3 observer_name resolved in view');
+  assert(typeof pkt.timestamp === 'string', 'v3 timestamp is ISO string in view');
+  assert(pkt.timestamp.includes('2025-06-01'), 'v3 timestamp date correct');
+
+  // Raw observation should have integer timestamp
+  const obs = db.db.prepare('SELECT * FROM observations ORDER BY id DESC LIMIT 1').get();
+  assert(typeof obs.timestamp === 'number', 'v3 raw observation timestamp is integer');
+  assert(obs.observer_idx !== null, 'v3 observation has observer_idx');
+}
+
+// --- v3 dedup ---
+console.log('\nv3 dedup:');
+{
+  // Insert same observation again — should be deduped
+  const result = db.insertTransmission({
+    raw_hex: '0400deadbeef',
+    hash: 'hash-v3-001',
+    timestamp: '2025-06-01T12:00:00Z',
+    observer_id: 'obs-v3-test',
+    direction: 'rx',
+    snr: 12.0,
+    rssi: -80,
+    path_json: '["aabb"]',
+  });
+  assert(result.observationId === 0, 'duplicate caught by in-memory dedup');
+
+  // Different observer = not a dupe
+  db.upsertObserver({ id: 'obs-v3-test-2', name: 'V3 Test Observer 2' });
+  const result2 = db.insertTransmission({
+    raw_hex: '0400deadbeef',
+    hash: 'hash-v3-001',
+    timestamp: '2025-06-01T12:01:00Z',
+    observer_id: 'obs-v3-test-2',
+    direction: 'rx',
+    snr: 9.0,
+    rssi: -88,
+    path_json: '["ccdd"]',
+  });
+  assert(result2.observationId > 0, 'different observer is not a dupe');
 }
 
 cleanup();

@@ -15,6 +15,10 @@ function createMockDb() {
   let obsIdCounter = 1000;
   return {
     db: {
+      pragma: (query) => {
+        if (query.includes('table_info(observations)')) return [{ name: 'observer_idx' }];
+        return [];
+      },
       prepare: (sql) => ({
         get: (...args) => {
           if (sql.includes('sqlite_master')) return { name: 'transmissions' };
