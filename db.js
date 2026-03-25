@@ -67,44 +67,194 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
-  CREATE TABLE IF NOT EXISTS observations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
-    hash TEXT NOT NULL,
-    observer_id TEXT,
-    observer_name TEXT,
-    direction TEXT,
-    snr REAL,
-    rssi REAL,
-    score INTEGER,
-    path_json TEXT,
-    timestamp TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now'))
+  CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL
   );
 
   CREATE INDEX IF NOT EXISTS idx_transmissions_hash ON transmissions(hash);
   CREATE INDEX IF NOT EXISTS idx_transmissions_first_seen ON transmissions(first_seen);
   CREATE INDEX IF NOT EXISTS idx_transmissions_payload_type ON transmissions(payload_type);
-  CREATE INDEX IF NOT EXISTS idx_observations_hash ON observations(hash);
-  CREATE INDEX IF NOT EXISTS idx_observations_transmission_id ON observations(transmission_id);
-  CREATE INDEX IF NOT EXISTS idx_observations_observer_id ON observations(observer_id);
-  CREATE INDEX IF NOT EXISTS idx_observations_timestamp ON observations(timestamp);
-  DROP INDEX IF EXISTS idx_observations_dedup;
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_observations_dedup ON observations(hash, observer_id, COALESCE(path_json, ''));
-
-  -- Clean up legacy duplicates (same hash+observer+path, keep lowest id)
-  DELETE FROM observations WHERE id NOT IN (
-    SELECT MIN(id) FROM observations GROUP BY hash, observer_id, COALESCE(path_json, '')
-  );
-
-  CREATE VIEW IF NOT EXISTS packets_v AS
-    SELECT o.id, t.raw_hex, o.timestamp, o.observer_id, o.observer_name,
-           o.direction, o.snr, o.rssi, o.score, t.hash, t.route_type,
-           t.payload_type, t.payload_version, o.path_json, t.decoded_json,
-           t.created_at
-    FROM observations o
-    JOIN transmissions t ON t.id = o.transmission_id;
 `);
+
+// --- Determine schema version ---
+let schemaVersion = 0;
+try {
+  const row = db.prepare('SELECT version FROM schema_version ORDER BY version DESC LIMIT 1').get();
+  if (row) schemaVersion = row.version;
+} catch {}
+
+// --- v3 migration: lean observations table ---
+function needsV3Migration() {
+  if (schemaVersion >= 3) return false;
+  // Check if observations table exists with old observer_id TEXT column
+  const obsExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='observations'").get();
+  if (!obsExists) return false;
+  const cols = db.pragma('table_info(observations)').map(c => c.name);
+  return cols.includes('observer_id');
+}
+
+function runV3Migration() {
+  const startTime = Date.now();
+  console.log('[migration-v3] Starting observations table optimization...');
+
+  // a. Backup DB
+  const backupPath = dbPath + '.pre-v3-backup';
+  try {
+    console.log(`[migration-v3] Backing up DB to ${backupPath}...`);
+    fs.copyFileSync(dbPath, backupPath);
+    console.log(`[migration-v3] Backup complete (${Date.now() - startTime}ms)`);
+  } catch (e) {
+    console.error(`[migration-v3] Backup failed, aborting migration: ${e.message}`);
+    return false;
+  }
+
+  try {
+    // b. Create lean table
+    let stepStart = Date.now();
+    db.exec(`
+      CREATE TABLE observations_v3 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
+        observer_idx INTEGER,
+        direction TEXT,
+        snr REAL,
+        rssi REAL,
+        score INTEGER,
+        path_json TEXT,
+        timestamp INTEGER NOT NULL
+      )
+    `);
+    console.log(`[migration-v3] Created observations_v3 table (${Date.now() - stepStart}ms)`);
+
+    // c. Migrate data
+    stepStart = Date.now();
+    const result = db.prepare(`
+      INSERT INTO observations_v3 (id, transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp)
+      SELECT o.id, o.transmission_id, obs.rowid, o.direction, o.snr, o.rssi, o.score, o.path_json,
+        CAST(strftime('%s', o.timestamp) AS INTEGER)
+      FROM observations o
+      LEFT JOIN observers obs ON obs.id = o.observer_id
+    `).run();
+    console.log(`[migration-v3] Migrated ${result.changes} rows (${Date.now() - stepStart}ms)`);
+
+    // d. Drop old table
+    stepStart = Date.now();
+    db.exec('DROP TABLE observations');
+    console.log(`[migration-v3] Dropped old observations table (${Date.now() - stepStart}ms)`);
+
+    // e. Rename
+    stepStart = Date.now();
+    db.exec('ALTER TABLE observations_v3 RENAME TO observations');
+    console.log(`[migration-v3] Renamed observations_v3 → observations (${Date.now() - stepStart}ms)`);
+
+    // f. Create indexes
+    stepStart = Date.now();
+    db.exec(`
+      CREATE INDEX idx_observations_transmission_id ON observations(transmission_id);
+      CREATE INDEX idx_observations_observer_idx ON observations(observer_idx);
+      CREATE INDEX idx_observations_timestamp ON observations(timestamp);
+      CREATE UNIQUE INDEX idx_observations_dedup ON observations(transmission_id, observer_idx, COALESCE(path_json, ''));
+    `);
+    console.log(`[migration-v3] Created indexes (${Date.now() - stepStart}ms)`);
+
+    // g. Set schema version
+    db.exec('DELETE FROM schema_version');
+    db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(3);
+    schemaVersion = 3;
+
+    // h. Rebuild view (done below in common code)
+
+    // i. VACUUM
+    stepStart = Date.now();
+    db.exec('VACUUM');
+    console.log(`[migration-v3] VACUUM complete (${Date.now() - stepStart}ms)`);
+
+    console.log(`[migration-v3] Migration complete! Total time: ${Date.now() - startTime}ms`);
+    return true;
+  } catch (e) {
+    console.error(`[migration-v3] Migration failed: ${e.message}`);
+    console.error('[migration-v3] Old data should still be intact if observations table was not yet dropped');
+    // Try to clean up v3 table if it exists
+    try { db.exec('DROP TABLE IF EXISTS observations_v3'); } catch {}
+    return false;
+  }
+}
+
+const isV3 = schemaVersion >= 3;
+
+if (!isV3 && needsV3Migration()) {
+  runV3Migration();
+}
+
+// If schema_version < 3 and no migration happened (fresh DB or migration skipped), create old-style table
+if (schemaVersion < 3) {
+  const obsExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='observations'").get();
+  if (!obsExists) {
+    // Fresh DB — create v3 schema directly
+    db.exec(`
+      CREATE TABLE observations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
+        observer_idx INTEGER,
+        direction TEXT,
+        snr REAL,
+        rssi REAL,
+        score INTEGER,
+        path_json TEXT,
+        timestamp INTEGER NOT NULL
+      );
+      CREATE INDEX idx_observations_transmission_id ON observations(transmission_id);
+      CREATE INDEX idx_observations_observer_idx ON observations(observer_idx);
+      CREATE INDEX idx_observations_timestamp ON observations(timestamp);
+      CREATE UNIQUE INDEX idx_observations_dedup ON observations(transmission_id, observer_idx, COALESCE(path_json, ''));
+    `);
+    db.exec('DELETE FROM schema_version');
+    db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(3);
+    schemaVersion = 3;
+  } else {
+    // Old-style observations table exists but migration wasn't run (or failed)
+    // Ensure indexes exist for old schema
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_observations_hash ON observations(hash);
+      CREATE INDEX IF NOT EXISTS idx_observations_transmission_id ON observations(transmission_id);
+      CREATE INDEX IF NOT EXISTS idx_observations_observer_id ON observations(observer_id);
+      CREATE INDEX IF NOT EXISTS idx_observations_timestamp ON observations(timestamp);
+    `);
+    // Dedup cleanup for old schema
+    try {
+      db.exec(`DROP INDEX IF EXISTS idx_observations_dedup`);
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_observations_dedup ON observations(hash, observer_id, COALESCE(path_json, ''))`);
+      db.exec(`DELETE FROM observations WHERE id NOT IN (SELECT MIN(id) FROM observations GROUP BY hash, observer_id, COALESCE(path_json, ''))`);
+    } catch {}
+  }
+}
+
+// --- Create/rebuild packets_v view ---
+db.exec('DROP VIEW IF EXISTS packets_v');
+if (schemaVersion >= 3) {
+  db.exec(`
+    CREATE VIEW packets_v AS
+      SELECT o.id, t.raw_hex,
+             datetime(o.timestamp, 'unixepoch') AS timestamp,
+             obs.id AS observer_id, obs.name AS observer_name,
+             o.direction, o.snr, o.rssi, o.score, t.hash, t.route_type,
+             t.payload_type, t.payload_version, o.path_json, t.decoded_json,
+             t.created_at
+      FROM observations o
+      JOIN transmissions t ON t.id = o.transmission_id
+      LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+  `);
+} else {
+  db.exec(`
+    CREATE VIEW packets_v AS
+      SELECT o.id, t.raw_hex, o.timestamp, o.observer_id, o.observer_name,
+             o.direction, o.snr, o.rssi, o.score, t.hash, t.route_type,
+             t.payload_type, t.payload_version, o.path_json, t.decoded_json,
+             t.created_at
+      FROM observations o
+      JOIN transmissions t ON t.id = o.transmission_id
+  `);
+}
 
 // --- Migrations for existing DBs ---
 const observerCols = db.pragma('table_info(observers)').map(c => c.name);
@@ -183,24 +333,66 @@ const stmts = {
   countPackets: db.prepare(`SELECT COUNT(*) as count FROM observations`),
   countNodes: db.prepare(`SELECT COUNT(*) as count FROM nodes`),
   countObservers: db.prepare(`SELECT COUNT(*) as count FROM observers`),
-  countRecentPackets: db.prepare(`SELECT COUNT(*) as count FROM observations WHERE timestamp > ?`),
+  countRecentPackets: schemaVersion >= 3
+    ? db.prepare(`SELECT COUNT(*) as count FROM observations WHERE timestamp > CAST(strftime('%s', ?) AS INTEGER)`)
+    : db.prepare(`SELECT COUNT(*) as count FROM observations WHERE timestamp > ?`),
   getTransmissionByHash: db.prepare(`SELECT id, first_seen FROM transmissions WHERE hash = ?`),
   insertTransmission: db.prepare(`
     INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json)
     VALUES (@raw_hex, @hash, @first_seen, @route_type, @payload_type, @payload_version, @decoded_json)
   `),
   updateTransmissionFirstSeen: db.prepare(`UPDATE transmissions SET first_seen = @first_seen WHERE id = @id`),
-  insertObservation: db.prepare(`
-    INSERT OR IGNORE INTO observations (transmission_id, hash, observer_id, observer_name, direction, snr, rssi, score, path_json, timestamp)
-    VALUES (@transmission_id, @hash, @observer_id, @observer_name, @direction, @snr, @rssi, @score, @path_json, @timestamp)
-  `),
+  insertObservation: schemaVersion >= 3
+    ? db.prepare(`
+        INSERT OR IGNORE INTO observations (transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp)
+        VALUES (@transmission_id, @observer_idx, @direction, @snr, @rssi, @score, @path_json, @timestamp)
+      `)
+    : db.prepare(`
+        INSERT OR IGNORE INTO observations (transmission_id, hash, observer_id, observer_name, direction, snr, rssi, score, path_json, timestamp)
+        VALUES (@transmission_id, @hash, @observer_id, @observer_name, @direction, @snr, @rssi, @score, @path_json, @timestamp)
+      `),
+  getObserverRowid: db.prepare(`SELECT rowid FROM observers WHERE id = ?`),
 };
+
+// --- In-memory observer map (observer_id text → rowid integer) ---
+const observerIdToRowid = new Map();
+if (schemaVersion >= 3) {
+  const rows = db.prepare('SELECT id, rowid FROM observers').all();
+  for (const r of rows) observerIdToRowid.set(r.id, r.rowid);
+}
+
+// --- In-memory dedup set for v3 ---
+const dedupSet = new Map(); // key → timestamp (for cleanup)
+const DEDUP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function cleanupDedupSet() {
+  const cutoff = Date.now() - DEDUP_TTL_MS;
+  for (const [key, ts] of dedupSet) {
+    if (ts < cutoff) dedupSet.delete(key);
+  }
+}
+
+// Periodic cleanup every 60s
+setInterval(cleanupDedupSet, 60000).unref();
+
+function resolveObserverIdx(observerId) {
+  if (!observerId) return null;
+  let rowid = observerIdToRowid.get(observerId);
+  if (rowid !== undefined) return rowid;
+  // Try DB lookup (observer may have been inserted elsewhere)
+  const row = stmts.getObserverRowid.get(observerId);
+  if (row) {
+    observerIdToRowid.set(observerId, row.rowid);
+    return row.rowid;
+  }
+  return null;
+}
 
 // --- Helper functions ---
 
 function insertTransmission(data) {
   const hash = data.hash;
-  if (!hash) return null; // Can't deduplicate without a hash
+  if (!hash) return null;
 
   const timestamp = data.timestamp || new Date().toISOString();
   let transmissionId;
@@ -208,7 +400,6 @@ function insertTransmission(data) {
   const existing = stmts.getTransmissionByHash.get(hash);
   if (existing) {
     transmissionId = existing.id;
-    // Update first_seen if this observation is earlier
     if (timestamp < existing.first_seen) {
       stmts.updateTransmissionFirstSeen.run({ id: transmissionId, first_seen: timestamp });
     }
@@ -225,18 +416,42 @@ function insertTransmission(data) {
     transmissionId = result.lastInsertRowid;
   }
 
-  const obsResult = stmts.insertObservation.run({
-    transmission_id: transmissionId,
-    hash,
-    observer_id: data.observer_id || null,
-    observer_name: data.observer_name || null,
-    direction: data.direction || null,
-    snr: data.snr ?? null,
-    rssi: data.rssi ?? null,
-    score: data.score ?? null,
-    path_json: data.path_json || null,
-    timestamp,
-  });
+  let obsResult;
+  if (schemaVersion >= 3) {
+    const observerIdx = resolveObserverIdx(data.observer_id);
+    const epochTs = typeof timestamp === 'number' ? timestamp : Math.floor(new Date(timestamp).getTime() / 1000);
+
+    // In-memory dedup check
+    const dedupKey = `${transmissionId}|${observerIdx}|${data.path_json || ''}`;
+    if (dedupSet.has(dedupKey)) {
+      return { transmissionId, observationId: 0 };
+    }
+
+    obsResult = stmts.insertObservation.run({
+      transmission_id: transmissionId,
+      observer_idx: observerIdx,
+      direction: data.direction || null,
+      snr: data.snr ?? null,
+      rssi: data.rssi ?? null,
+      score: data.score ?? null,
+      path_json: data.path_json || null,
+      timestamp: epochTs,
+    });
+    dedupSet.set(dedupKey, Date.now());
+  } else {
+    obsResult = stmts.insertObservation.run({
+      transmission_id: transmissionId,
+      hash,
+      observer_id: data.observer_id || null,
+      observer_name: data.observer_name || null,
+      direction: data.direction || null,
+      snr: data.snr ?? null,
+      rssi: data.rssi ?? null,
+      score: data.score ?? null,
+      path_json: data.path_json || null,
+      timestamp,
+    });
+  }
 
   return { transmissionId, observationId: obsResult.lastInsertRowid };
 }
@@ -270,6 +485,11 @@ function upsertObserver(data) {
     uptime_secs: data.uptime_secs || null,
     noise_floor: data.noise_floor || null,
   });
+  // Update in-memory map for v3
+  if (schemaVersion >= 3 && !observerIdToRowid.has(data.id)) {
+    const row = stmts.getObserverRowid.get(data.id);
+    if (row) observerIdToRowid.set(data.id, row.rowid);
+  }
 }
 
 function updateObserverStatus(data) {
@@ -592,4 +812,4 @@ function getNodeAnalytics(pubkey, days) {
   };
 }
 
-module.exports = { db, insertTransmission, upsertNode, upsertObserver, updateObserverStatus, getPackets, getPacket, getTransmission, getNodes, getNode, getObservers, getStats, searchNodes, getNodeHealth, getNodeAnalytics };
+module.exports = { db, schemaVersion, observerIdToRowid, resolveObserverIdx, insertTransmission, upsertNode, upsertObserver, updateObserverStatus, getPackets, getPacket, getTransmission, getNodes, getNode, getObservers, getStats, searchNodes, getNodeHealth, getNodeAnalytics };
