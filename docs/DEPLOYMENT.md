@@ -1,6 +1,6 @@
 # Deploying MeshCore Analyzer
 
-A step-by-step guide to getting MeshCore Analyzer running with automatic HTTPS on your own server. Written for people who have never done this before.
+Get MeshCore Analyzer running with automatic HTTPS on your own server.
 
 ## What You'll End Up With
 
