@@ -77,6 +77,12 @@ That's it. Docker is installed.
 
 ## Quick Start (5 minutes)
 
+```mermaid
+flowchart LR
+    A[Clone repo] --> B[Create config.json] --> C[Create Caddyfile] --> D[docker build + run] --> E[Visit https://your-domain]
+    style E fill:#22c55e,color:#000
+```
+
 ### Step 1: Download the code
 
 ```bash
@@ -347,26 +353,67 @@ In `config.json`:
 
 ## Architecture Overview
 
-```
-Internet
-   │
-   ├── Port 80  ──→ Caddy (ACME challenges + redirect to HTTPS)
-   ├── Port 443 ──→ Caddy (HTTPS termination) ──→ Node.js (:3000)
-   └── Port 1883 ─→ Mosquitto (MQTT broker, optional)
-                         │
-                         ├── Observer 1 publishes packets
-                         ├── Observer 2 publishes packets
-                         └── Node.js subscribes & ingests
+### How traffic flows
 
-Inside the container:
-┌─────────────────────────────────────────────┐
-│  supervisord                                │
-│  ├── caddy (reverse proxy + auto HTTPS)     │
-│  ├── mosquitto (MQTT broker)                │
-│  └── node server.js (the analyzer)          │
-│       ├── Express API                       │
-│       ├── WebSocket (live feed)             │
-│       ├── MQTT client (ingests packets)     │
-│       └── SQLite (data/meshcore.db)         │
-└─────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph Internet
+        U[Browser] -->|HTTPS :443| C
+        O1[Observer 1] -->|MQTT :1883| M
+        O2[Observer 2] -->|MQTT :1883| M
+        LE[Let's Encrypt] -->|HTTP :80| C
+    end
+
+    subgraph Docker Container
+        C[Caddy] -->|proxy :3000| N[Node.js]
+        M[Mosquitto] --> N
+        N --> DB[(SQLite)]
+        N -->|WebSocket| U
+    end
+
+    style C fill:#22c55e,color:#000
+    style M fill:#3b82f6,color:#fff
+    style N fill:#f59e0b,color:#000
+    style DB fill:#8b5cf6,color:#fff
+```
+
+### What runs inside the container
+
+```mermaid
+flowchart TD
+    S[supervisord] --> C[Caddy]
+    S --> M[Mosquitto]
+    S --> N[Node.js server]
+
+    C -->|reverse proxy + auto HTTPS| N
+    M -->|MQTT messages| N
+
+    N --> API[REST API]
+    N --> WS[WebSocket — live feed]
+    N --> MQTT[MQTT client — ingests packets]
+    N --> DB[(SQLite — data/meshcore.db)]
+
+    style S fill:#475569,color:#fff
+    style C fill:#22c55e,color:#000
+    style M fill:#3b82f6,color:#fff
+    style N fill:#f59e0b,color:#000
+```
+
+### Data flow: observer to browser
+
+```mermaid
+sequenceDiagram
+    participant R as LoRa Repeater
+    participant O as Observer (Pi/PC)
+    participant M as Mosquitto (MQTT)
+    participant N as Node.js Server
+    participant B as Browser
+
+    R->>O: Radio packet (915 MHz)
+    O->>M: MQTT publish (raw hex + SNR + RSSI)
+    M->>N: MQTT subscribe callback
+    N->>N: Decode packet, store in SQLite + memory
+    N->>B: WebSocket broadcast (live feed)
+    B->>N: REST API (packets, nodes, analytics)
+    N->>B: JSON response
 ```
