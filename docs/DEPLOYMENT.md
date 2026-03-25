@@ -7,15 +7,12 @@ Get MeshCore Analyzer running with automatic HTTPS on your own server.
 - [What You'll End Up With](#what-youll-end-up-with)
 - [What You Need Before Starting](#what-you-need-before-starting)
 - [Installing Docker](#installing-docker)
-- [Quick Start (5 minutes)](#quick-start-5-minutes)
+- [Quick Start](#quick-start)
 - [Connecting an Observer](#connecting-an-observer)
+- [HTTPS Options](#https-options)
+- [MQTT Security](#mqtt-security)
+- [Database Backups](#database-backups)
 - [Updating](#updating)
-- [Common Gotchas](#common-gotchas)
-  - [Port 80 must be open for HTTPS](#️-port-80-must-be-open-for-https-to-work)
-  - [MQTT port 1883 security](#️-mqtt-port-1883--do-not-expose-to-the-internet-unprotected)
-  - [Database backups](#️-database-backups)
-  - [DNS before container](#️-domain-dns-must-be-configured-before-starting-the-container)
-  - [Config is read-only](#️-config-file-is-read-only-in-docker)
 - [Customization](#customization)
 - [Troubleshooting](#troubleshooting)
 - [Architecture Overview](#architecture-overview)
@@ -31,101 +28,97 @@ Get MeshCore Analyzer running with automatic HTTPS on your own server.
 ## What You Need Before Starting
 
 ### A server
-A computer that's always on and connected to the internet. Options:
-- **Cloud VM** (easiest) — DigitalOcean, Linode, Vultr, AWS, Azure, etc. A $5-6/month VPS works fine. Pick **Ubuntu 22.04 or 24.04** when creating it.
-- **Raspberry Pi** — Works great, just slower to build.
-- **Old PC/laptop at home** — Works if your ISP doesn't block ports 80/443 (many do).
+A computer that's always on and connected to the internet:
+- **Cloud VM** — DigitalOcean, Linode, Vultr, AWS, Azure, etc. A $5-6/month VPS works. Pick **Ubuntu 22.04 or 24.04**.
+- **Raspberry Pi** — Works, just slower to build.
+- **Home PC/laptop** — Works if your ISP doesn't block ports 80/443 (many residential ISPs do).
 
-You'll need **SSH access** to your server. If you're using a cloud provider, they'll give you instructions when you create the VM.
+You'll need **SSH access** to your server. Cloud providers give you instructions when you create the VM.
 
 ### A domain name
-A domain (like `analyzer.example.com`) pointed at your server. You can:
-- Buy one (~$10/year) from Namecheap, Cloudflare, Google Domains, etc.
+A domain (like `analyzer.example.com`) pointed at your server's IP:
+- Buy one (~$10/year) from Namecheap, Cloudflare, etc.
 - Or use a free subdomain from [DuckDNS](https://www.duckdns.org/) or [FreeDNS](https://freedns.afraid.org/)
 
 After getting a domain, create an **A record** pointing to your server's IP address. Your domain provider's dashboard will have a "DNS" section for this.
 
-### Open ports
-Your server's firewall must allow traffic on:
-- **Port 80** — needed for automatic HTTPS certificate provisioning
-- **Port 443** — the actual HTTPS traffic
+**Important:** DNS must be configured and propagated *before* you start the container. Caddy will try to provision certificates on startup and fail if the domain doesn't resolve. Verify with `dig analyzer.example.com` — it should show your server's IP.
 
-If you're on a cloud provider, find "Security Groups" or "Firewall" in the dashboard and add rules to allow TCP ports 80 and 443 from anywhere (0.0.0.0/0).
+### Open ports
+Your server's firewall must allow:
+- **Port 80** — needed for HTTPS certificate provisioning (Let's Encrypt ACME challenge)
+- **Port 443** — HTTPS traffic
+
+Cloud providers: find "Security Groups" or "Firewall" in the dashboard, add inbound rules for TCP 80 and 443 from 0.0.0.0/0.
+
+Ubuntu firewall:
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+```
 
 ## Installing Docker
 
-Docker packages your app and all its dependencies into a "container" — think of it as a lightweight, isolated mini-computer running inside your server. You don't need to install Node.js, Mosquitto, or Caddy separately — Docker handles all of it.
+Docker packages an app and all its dependencies into a container — an isolated environment with everything it needs to run. You don't install Node.js, Mosquitto, or Caddy separately; they're all included in the container.
 
-**SSH into your server** and run these commands:
+SSH into your server and run:
 
 ```bash
-# Download and run Docker's official install script
+# Install Docker
 curl -fsSL https://get.docker.com | sh
 
-# Let your user run Docker without sudo (log out and back in after this)
+# Allow your user to run Docker without sudo
 sudo usermod -aG docker $USER
 ```
 
-Log out and SSH back in, then verify:
+**Log out and SSH back in** (the group change needs a new session), then verify:
 
 ```bash
 docker --version
-# Should print something like: Docker version 24.x.x
+# Should print: Docker version 24.x.x or newer
 ```
 
-That's it. Docker is installed.
-
-## Quick Start (5 minutes)
+## Quick Start
 
 ```mermaid
 flowchart LR
-    A[Clone repo] --> B[Create config.json] --> C[Create Caddyfile] --> D[docker build + run] --> E[Visit https://your-domain]
+    A[Clone repo] --> B[Create config] --> C[Create Caddyfile] --> D[Build & run] --> E[Open site]
     style E fill:#22c55e,color:#000
 ```
 
-### Step 1: Download the code
+### 1. Download the code
 
 ```bash
-# Clone the repository (downloads all the source code)
 git clone https://github.com/Kpa-clawbot/meshcore-analyzer.git
-
-# Go into the folder
 cd meshcore-analyzer
 ```
 
-### Step 2: Create your config file
+### 2. Create your config
 
 ```bash
-# Copy the example config to create your own
 cp config.example.json config.json
+nano config.json
 ```
 
-Open `config.json` in a text editor (`nano config.json` is the easiest):
+Change the `apiKey` to any random string. The rest of the defaults work out of the box.
 
 ```jsonc
 {
-  "port": 3000,                          // Leave this alone
-  "apiKey": "pick-a-random-secret",      // Make up a secret phrase — protects write endpoints
+  "apiKey": "change-me-to-something-random",
+  ...
+}
 ```
 
-The config has many options but the defaults work out of the box. You can customize later. The one thing to update now is the `apiKey` — change it from the example to any random string.
+Save: `Ctrl+O`, `Enter`, `Ctrl+X`.
 
-Save and close the file (`Ctrl+O`, `Enter`, `Ctrl+X` in nano).
-
-### Step 3: Set up HTTPS for your domain
+### 3. Set up your domain for HTTPS
 
 ```bash
-# Create a folder for the Caddy config
 mkdir -p caddy-config
-```
-
-Create the Caddyfile (this tells Caddy your domain name):
-
-```bash
 nano caddy-config/Caddyfile
 ```
 
-Type exactly this (replacing with your actual domain):
+Enter your domain (replace `analyzer.example.com` with yours):
 
 ```
 analyzer.example.com {
@@ -133,15 +126,13 @@ analyzer.example.com {
 }
 ```
 
-Save and close. **That's your entire HTTPS configuration.** Caddy will automatically get certificates from Let's Encrypt, handle renewals, and redirect HTTP to HTTPS.
+Save and close. Caddy handles certificates, renewals, and HTTP→HTTPS redirects automatically.
 
-### Step 4: Build and run
+### 4. Build and run
 
 ```bash
-# Build the Docker image (takes 1-2 minutes the first time)
 docker build -t meshcore-analyzer .
 
-# Run it
 docker run -d \
   --name meshcore-analyzer \
   --restart unless-stopped \
@@ -154,40 +145,42 @@ docker run -d \
   meshcore-analyzer
 ```
 
-**What each line does:**
-- `docker run -d` — run in the background
-- `--name meshcore-analyzer` — give it a name so you can refer to it later
-- `--restart unless-stopped` — auto-restart if it crashes or the server reboots
-- `-p 80:80 -p 443:443` — expose the web ports
-- `-v .../config.json:/app/config.json:ro` — mount your config (read-only)
-- `-v .../Caddyfile:...` — mount your domain config
-- `-v meshcore-data:/app/data` — persistent storage for the database
-- `-v caddy-data:/data/caddy` — persistent storage for HTTPS certificates
+What each flag does:
+| Flag | Purpose |
+|------|---------|
+| `-d` | Run in background |
+| `--restart unless-stopped` | Auto-restart on crash or reboot |
+| `-p 80:80 -p 443:443` | Expose web ports |
+| `-v .../config.json:...ro` | Your config (read-only) |
+| `-v .../Caddyfile:...` | Your domain config |
+| `-v meshcore-data:/app/data` | Database storage (persists across restarts) |
+| `-v caddy-data:/data/caddy` | HTTPS certificate storage |
 
-### Step 5: Verify
+### 5. Verify
 
-Open `https://your-domain.com` in a browser. You should see the MeshCore Analyzer home page. It'll be empty until you connect an observer.
+Open `https://your-domain.com`. You should see the analyzer home page.
 
 Check the logs:
-
 ```bash
 docker logs meshcore-analyzer
 ```
 
-You should see:
+Expected output:
 ```
 MeshCore Analyzer running on http://localhost:3000
 MQTT [local] connected to mqtt://localhost:1883
 [pre-warm] 12 endpoints in XXXms
 ```
 
+The container runs its own MQTT broker (Mosquitto) internally — that `localhost:1883` connection is inside the container, not exposed to the internet.
+
 ## Connecting an Observer
 
-The analyzer receives packets from MeshCore observers via MQTT. You have two options:
+The analyzer receives packets from observers via MQTT.
 
-### Option A: Use a public broker (easiest)
+### Option A: Use a public broker
 
-Add a public MQTT broker to your `config.json` under `mqttSources`:
+Add a remote broker to `mqttSources` in your `config.json`:
 
 ```json
 {
@@ -200,18 +193,162 @@ Add a public MQTT broker to your `config.json` under `mqttSources`:
 }
 ```
 
-You'll need credentials from the broker operator. Restart the container after editing config.
+Restart: `docker restart meshcore-analyzer`
 
-### Option B: Run your own observer (more data, your area)
+### Option B: Run your own observer
 
-You need:
-1. A MeshCore repeater connected via USB or BLE to a computer
-2. [meshcoretomqtt](https://github.com/Cisien/meshcoretomqtt) or a custom BLE observer script
-3. Point it at your analyzer's MQTT broker
+You need a MeshCore repeater connected via USB or BLE to a computer running [meshcoretomqtt](https://github.com/Cisien/meshcoretomqtt). Point it at your analyzer's MQTT broker.
 
-If your analyzer is at `analyzer.example.com`, configure the observer to publish to `mqtt://analyzer.example.com:1883`.
+⚠️ If your observer is remote (not on the same machine), you'll need to expose port 1883. **Read the MQTT Security section first.**
 
-⚠️ **Read the MQTT Security section below before opening port 1883.**
+## HTTPS Options
+
+### Automatic (recommended) — Caddy + Let's Encrypt
+
+This is what the Quick Start sets up. Caddy handles everything. Requirements:
+- Domain pointed at your server
+- Ports 80 + 443 open
+- No other web server (Apache, nginx) running on those ports
+
+### Bring your own certificate
+
+If you already have a certificate (from Cloudflare, your organization, etc.), tell Caddy to use it instead of Let's Encrypt:
+
+```
+analyzer.example.com {
+    tls /path/to/cert.pem /path/to/key.pem
+    reverse_proxy localhost:3000
+}
+```
+
+Mount the cert files into the container:
+```bash
+docker run ... \
+  -v /path/to/cert.pem:/certs/cert.pem:ro \
+  -v /path/to/key.pem:/certs/key.pem:ro \
+  ...
+```
+
+And update the Caddyfile paths to `/certs/cert.pem` and `/certs/key.pem`.
+
+### Cloudflare Tunnel (no open ports needed)
+
+If you can't open ports 80/443 (residential ISP, restrictive firewall), use a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/). It creates an outbound connection from your server to Cloudflare — no inbound ports needed. Your Caddyfile becomes:
+
+```
+:80 {
+    reverse_proxy localhost:3000
+}
+```
+
+And Cloudflare handles HTTPS at the edge.
+
+### Behind an existing reverse proxy (nginx, Traefik, etc.)
+
+If you already run a reverse proxy, skip Caddy entirely and proxy directly to the Node.js port:
+
+```bash
+docker run -d \
+  --name meshcore-analyzer \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v $(pwd)/config.json:/app/config.json:ro \
+  -v meshcore-data:/app/data \
+  meshcore-analyzer
+```
+
+Then configure your existing proxy to forward traffic to `localhost:3000`.
+
+### HTTP only (development / local network)
+
+For local testing or a LAN-only setup, use the default Caddyfile that ships in the image (serves on port 80, no HTTPS):
+
+```bash
+docker run -d \
+  --name meshcore-analyzer \
+  --restart unless-stopped \
+  -p 80:80 \
+  -v $(pwd)/config.json:/app/config.json:ro \
+  -v meshcore-data:/app/data \
+  meshcore-analyzer
+```
+
+## MQTT Security
+
+The container runs Mosquitto on port 1883 with **anonymous access by default**. This is safe as long as the port isn't exposed outside the container.
+
+The Quick Start docker run command above does **not** expose port 1883. Only add `-p 1883:1883` if you need remote observers to connect directly.
+
+### If you need to expose MQTT
+
+**Option 1: Firewall** — Only allow specific IPs:
+```bash
+sudo ufw allow from 203.0.113.10 to any port 1883   # Your observer's IP
+```
+
+**Option 2: Add authentication** — Edit `docker/mosquitto.conf` before building:
+```
+allow_anonymous false
+password_file /etc/mosquitto/passwd
+```
+After starting the container, create users:
+```bash
+docker exec -it meshcore-analyzer mosquitto_passwd -c /etc/mosquitto/passwd myuser
+```
+
+**Option 3: Use TLS** — For production, configure Mosquitto with TLS certificates. See the [Mosquitto docs](https://mosquitto.org/man/mosquitto-conf-5.html).
+
+### Recommended approach for remote observers
+
+Don't expose 1883 at all. Instead, have your observers publish to a shared public MQTT broker (like lincomatic's), and configure your analyzer to subscribe to that broker in `mqttSources`. The analyzer makes an outbound connection — no inbound ports needed.
+
+## Database Backups
+
+Packet data is stored in `meshcore.db` inside the `meshcore-data` Docker volume.
+
+### Find the database file
+
+```bash
+docker volume inspect meshcore-data --format '{{ .Mountpoint }}'
+# Prints something like: /var/lib/docker/volumes/meshcore-data/_data
+```
+
+The database is at that path + `/meshcore.db`.
+
+### Manual backup
+
+```bash
+cp $(docker volume inspect meshcore-data --format '{{ .Mountpoint }}')/meshcore.db \
+  ~/meshcore-backup-$(date +%Y%m%d).db
+```
+
+### Automated daily backup (cron)
+
+```bash
+crontab -e
+# Add this line:
+0 3 * * * cp $(docker volume inspect meshcore-data --format '\{\{ .Mountpoint \}\}')/meshcore.db /home/youruser/backups/meshcore-$(date +\%Y\%m\%d).db
+```
+
+### Easier alternative: use a local directory
+
+Instead of a Docker volume, mount a local directory. Replace `-v meshcore-data:/app/data` with:
+
+```bash
+-v ./analyzer-data:/app/data
+```
+
+Now the database is just `./analyzer-data/meshcore.db` — easy to find, back up, and restore.
+
+### Restoring from backup
+
+Stop the container, replace `meshcore.db` with your backup file, start the container:
+
+```bash
+docker stop meshcore-analyzer
+cp ~/meshcore-backup-20260324.db $(docker volume inspect meshcore-data --format '{{ .Mountpoint }}')/meshcore.db
+docker start meshcore-analyzer
+```
 
 ## Updating
 
@@ -219,116 +356,18 @@ If your analyzer is at `analyzer.example.com`, configure the observer to publish
 cd meshcore-analyzer
 git pull
 docker build -t meshcore-analyzer .
-docker restart meshcore-analyzer
+docker stop meshcore-analyzer
+docker rm meshcore-analyzer
+# Re-run the same docker run command from Quick Start step 4
 ```
 
-Your data is preserved in Docker volumes (`meshcore-data` and `caddy-data`).
+Data is preserved in the Docker volumes.
 
----
-
-## Common Gotchas
-
-### ⚠️ Port 80 MUST be open for HTTPS to work
-
-Caddy uses the **ACME HTTP-01 challenge** to get certificates from Let's Encrypt. This requires port 80 to be reachable from the internet. If port 80 is blocked by your firewall or cloud provider, HTTPS provisioning will fail silently and your site won't load.
-
-**Check:** `curl http://your-server-ip` from another machine should connect (even if it shows an error page — that's fine).
-
-**Common blockers:**
-- Cloud provider security groups (AWS, Azure, GCP) — add inbound rule for port 80 + 443
-- UFW firewall — `sudo ufw allow 80/tcp && sudo ufw allow 443/tcp`
-- ISP blocking port 80 on residential connections — use a Cloudflare tunnel instead
-
-### ⚠️ MQTT Port 1883 — DO NOT expose to the internet unprotected
-
-The built-in MQTT broker (Mosquitto) runs on port 1883 with **anonymous access enabled by default**. This is fine for local use, but if you expose it to the internet, anyone can:
-- Publish fake packets to your analyzer
-- Subscribe and snoop on all mesh traffic
-
-**Options (pick one):**
-
-1. **Don't expose 1883 at all** (safest) — Remove `-p 1883:1883` from the docker run command. Only processes inside the container can use MQTT. Your remote observers connect to a separate public broker instead.
-
-2. **Firewall it** — Only allow specific IPs (your observer machines):
-   ```bash
-   # UFW example
-   sudo ufw allow from 192.168.1.0/24 to any port 1883
-   ```
-
-3. **Add authentication** — Edit `docker/mosquitto.conf`:
-   ```
-   allow_anonymous false
-   password_file /etc/mosquitto/passwd
-   ```
-   Then create users: `docker exec meshcore-analyzer mosquitto_passwd -c /etc/mosquitto/passwd myuser`
-
-### ⚠️ Database backups
-
-Your packet data lives in `meshcore.db` inside the `meshcore-data` Docker volume. If the volume is deleted, all data is gone.
-
-**Find your database file:**
-
-```bash
-# Show where Docker stores the volume on disk
-docker volume inspect meshcore-data --format '{{ .Mountpoint }}'
-# e.g., /var/lib/docker/volumes/meshcore-data/_data/meshcore.db
-```
-
-**Back it up:**
-
-```bash
-# Copy the DB to a backup location
-cp $(docker volume inspect meshcore-data --format '{{ .Mountpoint }}')/meshcore.db ~/meshcore-backup-$(date +%Y%m%d).db
-```
-
-**Automate with cron (recommended):**
-
-```bash
-# Add to crontab: daily backup at 3am
-0 3 * * * cp $(docker volume inspect meshcore-data --format '\{\{ .Mountpoint \}\}')/meshcore.db /home/youruser/backups/meshcore-$(date +\%Y\%m\%d).db
-```
-
-**Tip:** If you'd rather mount a local directory instead of a Docker volume (easier to find and back up), replace `-v meshcore-data:/app/data` with `-v ./analyzer-data:/app/data` in the docker run command.
-
-### ⚠️ Domain DNS must be configured BEFORE starting the container
-
-Caddy tries to provision HTTPS certificates on startup. If your domain doesn't point to the server yet, it will fail. The order is:
-1. Create DNS A record: `analyzer.example.com → your-server-ip`
-2. Wait for DNS propagation (usually 1-5 minutes, sometimes up to an hour)
-3. Verify: `dig analyzer.example.com` should show your IP
-4. THEN start the container
-
-### ⚠️ Config file is read-only in Docker
-
-The `config.json` is mounted read-only (`:ro`). To change config:
-1. Edit the file on the host
-2. Restart: `docker restart meshcore-analyzer`
-
-Don't try to edit it from inside the container.
-
-### ⚠️ Don't use the internal HTTPS option
-
-`config.json` has an `https` section with cert/key paths. **Ignore it.** Caddy handles HTTPS for you automatically. The internal HTTPS option is for running without Docker/Caddy, which is more work and harder to maintain.
-
----
+**Tip:** Save your `docker run` command in a script (`run.sh`) so you don't have to remember all the flags.
 
 ## Customization
 
-### Changing the look
-
-Create a `theme.json` in your data directory:
-
-```bash
-# Find your volume location
-docker volume inspect meshcore-data | grep Mountpoint
-
-# Or just mount a local directory instead:
-# -v ./my-data:/app/data
-```
-
-See [CUSTOMIZATION.md](./CUSTOMIZATION.md) for all theme options.
-
-### Adding your branding
+### Branding
 
 In `config.json`:
 
@@ -343,25 +382,39 @@ In `config.json`:
 }
 ```
 
----
+### Themes
+
+Create a `theme.json` in your data directory to customize colors. See [CUSTOMIZATION.md](./CUSTOMIZATION.md) for all options.
+
+### Map defaults
+
+Center the map on your area in `config.json`:
+
+```json
+{
+  "mapDefaults": {
+    "center": [37.45, -122.0],
+    "zoom": 9
+  }
+}
+```
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| Site shows "connection refused" | Check `docker ps` — is the container running? Check `docker logs meshcore-analyzer` for errors |
-| HTTPS not working, shows HTTP | Port 80 is blocked — Caddy can't complete the ACME challenge. Open port 80. |
-| "too many certificates" error | You hit Let's Encrypt rate limits (5 certs per domain per week). Wait a week, or use a different subdomain. |
-| No packets appearing | Check MQTT: `docker exec meshcore-analyzer mosquitto_sub -t 'meshcore/#' -C 1 -W 10` — if nothing in 10 seconds, no observer is publishing. |
-| Container crashes on startup | Usually bad `config.json` — check JSON syntax: `python3 -c "import json; json.load(open('config.json'))"` |
-| Database corruption after crash | Restore from backup. SQLite WAL mode handles most crash recovery automatically, but hard kills can corrupt. |
-| "address already in use" error | Another process is using port 80 or 443. Stop Apache/nginx: `sudo systemctl stop nginx apache2` |
-
----
+| Problem | Likely cause | Fix |
+|---------|-------------|-----|
+| Site shows "connection refused" | Container not running | `docker ps` to check, `docker logs meshcore-analyzer` for errors |
+| HTTPS not working | Port 80 blocked | Open port 80 — Caddy needs it for ACME challenges |
+| "too many certificates" error | Let's Encrypt rate limit (5/domain/week) | Use a different subdomain, bring your own cert, or wait a week |
+| Certificate won't provision | DNS not pointed at server | `dig your-domain` must show your server IP before starting |
+| No packets appearing | No observer connected | `docker exec meshcore-analyzer mosquitto_sub -t 'meshcore/#' -C 1 -W 10` — if silent, no data is coming in |
+| Container crashes on startup | Bad JSON in config | `python3 -c "import json; json.load(open('config.json'))"` to validate |
+| "address already in use" | Another web server on 80/443 | Stop it: `sudo systemctl stop nginx apache2` |
+| Slow on Raspberry Pi | First build is slow | Normal — subsequent builds use cache. Runtime performance is fine. |
 
 ## Architecture Overview
 
-### How traffic flows
+### Traffic flow
 
 ```mermaid
 flowchart LR
@@ -385,7 +438,7 @@ flowchart LR
     style DB fill:#8b5cf6,color:#fff
 ```
 
-### What runs inside the container
+### Container internals
 
 ```mermaid
 flowchart TD
@@ -407,21 +460,21 @@ flowchart TD
     style N fill:#f59e0b,color:#000
 ```
 
-### Data flow: observer to browser
+### Data flow
 
 ```mermaid
 sequenceDiagram
     participant R as LoRa Repeater
-    participant O as Observer (Pi/PC)
-    participant M as Mosquitto (MQTT)
-    participant N as Node.js Server
+    participant O as Observer
+    participant M as Mosquitto
+    participant N as Node.js
     participant B as Browser
 
     R->>O: Radio packet (915 MHz)
     O->>M: MQTT publish (raw hex + SNR + RSSI)
-    M->>N: MQTT subscribe callback
-    N->>N: Decode packet, store in SQLite + memory
-    N->>B: WebSocket broadcast (live feed)
-    B->>N: REST API (packets, nodes, analytics)
-    N->>B: JSON response
+    M->>N: Subscribe callback
+    N->>N: Decode, store in SQLite + memory
+    N->>B: WebSocket broadcast
+    B->>N: REST API requests
+    N->>B: JSON responses
 ```
