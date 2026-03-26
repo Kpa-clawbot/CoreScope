@@ -58,9 +58,11 @@ get_data_mount_args() {
 get_required_ports() {
   local caddyfile_domain
   caddyfile_domain=$(grep -v '^#' caddy-config/Caddyfile 2>/dev/null | head -1 | tr -d ' {')
-  if [ "$caddyfile_domain" = ":80" ]; then
-    echo "80"
+  if echo "$caddyfile_domain" | grep -qE '^:[0-9]+$'; then
+    # HTTP-only on a specific port (e.g., :80, :8080)
+    echo "${caddyfile_domain#:}"
   else
+    # Domain name — needs 80 + 443 for Caddy auto-TLS
     echo "80 443"
   fi
 }
@@ -271,13 +273,15 @@ cmd_setup() {
   else
     mkdir -p caddy-config
     echo ""
-    echo "   How do you want to handle HTTPS?"
+    echo "   How should the analyzer be accessed?"
     echo ""
-    echo "   1) I have a domain pointed at this server (automatic HTTPS)"
-    echo "   2) I'll use Cloudflare Tunnel or my own proxy (HTTP only)"
-    echo "   3) Just HTTP for now, I'll set up HTTPS later"
+    echo "   1) Direct with built-in HTTPS — Caddy auto-provisions a TLS cert"
+    echo "      (requires ports 80 + 443 open, and a domain pointed at this server)"
     echo ""
-    read -p "   Choose [1/2/3]: " -n 1 -r
+    echo "   2) Behind my own reverse proxy — HTTP only, I choose the port"
+    echo "      (for Cloudflare Tunnel, nginx, Traefik, etc.)"
+    echo ""
+    read -p "   Choose [1/2]: " -n 1 -r
     echo ""
 
     case $REPLY in
@@ -327,14 +331,14 @@ cmd_setup() {
           fi
         fi
         ;;
-      2|3)
-        echo ':80 {
+      2)
+        read -p "   HTTP port [80]: " HTTP_PORT
+        HTTP_PORT=${HTTP_PORT:-80}
+        echo ":${HTTP_PORT} {
     reverse_proxy localhost:3000
-}' > caddy-config/Caddyfile
-        log "Caddyfile created (HTTP only on port 80)."
-        if [ "$REPLY" = "2" ]; then
-          echo "   Point your Cloudflare Tunnel or proxy to this server's port 80."
-        fi
+}" > caddy-config/Caddyfile
+        log "Caddyfile created (HTTP only on port ${HTTP_PORT})."
+        echo "   Point your reverse proxy or tunnel to this server's port ${HTTP_PORT}."
         ;;
       *)
         warn "Invalid choice. Defaulting to HTTP only."
