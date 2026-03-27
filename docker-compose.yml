@@ -45,6 +45,31 @@ services:
     profiles:
       - staging
 
+  staging-go:
+    build:
+      context: .
+      dockerfile: Dockerfile.go
+    image: meshcore-go:latest
+    container_name: meshcore-staging-go
+    restart: unless-stopped
+    ports:
+      - "${STAGING_HTTP_PORT:-81}:${STAGING_HTTP_PORT:-81}"
+      - "${STAGING_MQTT_PORT:-1884}:1883"
+    volumes:
+      - ${STAGING_DATA_DIR:-~/meshcore-staging-data}/config.json:/app/config.json:ro
+      - ${STAGING_DATA_DIR:-~/meshcore-staging-data}:/app/data
+      - caddy-data-staging-go:/data/caddy
+    environment:
+      - NODE_ENV=staging
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/stats"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - staging-go
+
 volumes:
   caddy-data:
   caddy-data-staging:
+  caddy-data-staging-go:
