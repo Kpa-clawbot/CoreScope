@@ -370,8 +370,7 @@ jobs:
           echo "Refreshing Node fixtures from staging container..."
           mkdir -p proto/testdata/node-fixtures
           
-          # Capture fresh API responses from staging container
-          # Only refresh endpoints that don't require parameters
+          # ─── Simple endpoints (no parameters) ──────────────────────────
           ENDPOINTS=(
             "stats" "health" "perf" "nodes" "packets" "observers" "channels"
             "analytics/rf" "analytics/topology" "analytics/channels"
@@ -381,7 +380,6 @@ jobs:
           )
           
           for endpoint in "${ENDPOINTS[@]}"; do
-            # Convert /api/analytics/rf → analytics-rf.json
             fixture_name=$(echo "$endpoint" | tr '/' '-')
             echo "  Fetching $endpoint → ${fixture_name}.json"
             docker exec meshcore-staging wget -qO- "http://localhost:3000/api/$endpoint" \
@@ -389,6 +387,102 @@ jobs:
                 echo "  ⚠ Failed to fetch $endpoint (container may not have data yet)"
               }
           done
+          
+          # ─── Dynamic ID endpoints (require real data) ─────────────────
+          echo ""
+          echo "Fetching endpoints that require dynamic IDs..."
+          
+          # Get a real pubkey from nodes
+          PUBKEY=$(docker exec meshcore-staging wget -qO- "http://localhost:3000/api/nodes?limit=1" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['nodes'][0]['public_key'] if d.get('nodes') and len(d['nodes']) > 0 else '')" 2>/dev/null || echo "")
+          
+          if [ -n "$PUBKEY" ]; then
+            echo "  Using pubkey: ${PUBKEY:0:16}..."
+            docker exec meshcore-staging wget -qO- "http://localhost:3000/api/nodes/$PUBKEY" \
+              > "proto/testdata/node-fixtures/node-detail.json" 2>/dev/null && \
+              echo "  ✓ node-detail.json"
+            docker exec meshcore-staging wget -qO- "http://localhost:3000/api/nodes/$PUBKEY/health" \
+              > "proto/testdata/node-fixtures/node-health.json" 2>/dev/null && \
+              echo "  ✓ node-health.json"
+            docker exec meshcore-staging wget -qO- "http://localhost:3000/api/nodes/$PUBKEY/paths" \
+              > "proto/testdata/node-fixtures/node-paths.json" 2>/dev/null && \
+              echo "  ✓ node-paths.json"
+            docker exec meshcore-staging wget -qO- "http://localhost:3000/api/nodes/$PUBKEY/analytics" \
+              > "proto/testdata/node-fixtures/node-analytics.json" 2>/dev/null && \
+              echo "  ✓ node-analytics.json"
+          else
+            echo "  ⚠ No nodes available — skipping node detail endpoints"
+          fi
+          
+          # Node search
+          docker exec meshcore-staging wget -qO- "http://localhost:3000/api/nodes/search?q=repeater" \
+            > "proto/testdata/node-fixtures/node-search.json" 2>/dev/null && \
+            echo "  ✓ node-search.json" || echo "  ⚠ node-search failed"
+          
+          # Bulk health
+          docker exec meshcore-staging wget -qO- "http://localhost:3000/api/nodes/bulk-health" \
+            > "proto/testdata/node-fixtures/bulk-health.json" 2>/dev/null && \
+            echo "  ✓ bulk-health.json" || echo "  ⚠ bulk-health failed"
+          
+          # Get a real hash from packets
+          HASH=$(docker exec meshcore-staging wget -qO- "http://localhost:3000/api/packets?limit=1" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['packets'][0]['hash'] if d.get('packets') and len(d['packets']) > 0 else '')" 2>/dev/null || echo "")
+          
+          if [ -n "$HASH" ]; then
+            echo "  Using hash: $HASH"
+            docker exec meshcore-staging wget -qO- "http://localhost:3000/api/packets/$HASH" \
+              > "proto/testdata/node-fixtures/packet-detail.json" 2>/dev/null && \
+              echo "  ✓ packet-detail.json"
+          else
+            echo "  ⚠ No packets available — skipping packet-detail"
+          fi
+          
+          # Packet timestamps
+          docker exec meshcore-staging wget -qO- "http://localhost:3000/api/packets/timestamps?since=2026-03-01T00:00:00Z" \
+            > "proto/testdata/node-fixtures/packet-timestamps.json" 2>/dev/null && \
+            echo "  ✓ packet-timestamps.json" || echo "  ⚠ packet-timestamps failed"
+          
+          # Packets grouped and since
+          docker exec meshcore-staging wget -qO- "http://localhost:3000/api/packets?limit=5&groupByHash=true" \
+            > "proto/testdata/node-fixtures/packets-grouped.json" 2>/dev/null && \
+            echo "  ✓ packets-grouped.json" || echo "  ⚠ packets-grouped failed"
+          docker exec meshcore-staging wget -qO- "http://localhost:3000/api/packets?limit=5&since=2026-03-01T00:00:00Z&groupByHash=true" \
+            > "proto/testdata/node-fixtures/packets-since.json" 2>/dev/null && \
+            echo "  ✓ packets-since.json" || echo "  ⚠ packets-since failed"
+          
+          # Get a real observer ID
+          OBSID=$(docker exec meshcore-staging wget -qO- "http://localhost:3000/api/observers" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if d and len(d) > 0 else '')" 2>/dev/null || echo "")
+          
+          if [ -n "$OBSID" ]; then
+            echo "  Using observer ID: $OBSID"
+            docker exec meshcore-staging wget -qO- "http://localhost:3000/api/observers/$OBSID" \
+              > "proto/testdata/node-fixtures/observer-detail.json" 2>/dev/null && \
+              echo "  ✓ observer-detail.json"
+            docker exec meshcore-staging wget -qO- "http://localhost:3000/api/observers/$OBSID/analytics" \
+              > "proto/testdata/node-fixtures/observer-analytics.json" 2>/dev/null && \
+              echo "  ✓ observer-analytics.json"
+          else
+            echo "  ⚠ No observers available — skipping observer detail endpoints"
+          fi
+          
+          # Channel messages
+          docker exec meshcore-staging wget -qO- "http://localhost:3000/api/channels/public/messages?limit=5" \
+            > "proto/testdata/node-fixtures/channel-messages.json" 2>/dev/null && \
+            echo "  ✓ channel-messages.json" || echo "  ⚠ channel-messages failed"
+          
+          # WebSocket message capture (capture one message if available)
+          echo "  Capturing WebSocket message..."
+          docker exec meshcore-staging node -e "
+            const WebSocket = require('ws');
+            const ws = new WebSocket('ws://localhost:3000');
+            const timeout = setTimeout(() => { console.error('timeout'); process.exit(1); }, 5000);
+            ws.on('message', (data) => {
+              console.log(data);
+              clearTimeout(timeout);
+              ws.close();
+              process.exit(0);
+            });
+            ws.on('error', () => { clearTimeout(timeout); process.exit(1); });
+          " > "proto/testdata/node-fixtures/websocket-message.json" 2>/dev/null && \
+            echo "  ✓ websocket-message.json" || echo "  ⚠ websocket-message failed (no live packets)"
           
           echo ""
           echo "Running proto validator..."
