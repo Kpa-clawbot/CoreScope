@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -61,6 +62,8 @@ type PacketStore struct {
 	byPayloadType map[int][]*StoreTx      // payload_type → transmissions
 	loaded        bool
 	totalObs      int
+	insertCount   int64
+	queryCount    int64
 	// Response caches (separate mutex to avoid contention with store RWMutex)
 	cacheMu    sync.Mutex
 	rfCache    map[string]*cachedResult // region → cached RF result
@@ -278,6 +281,7 @@ func (s *PacketStore) indexByNode(tx *StoreTx) {
 
 // QueryPackets returns filtered, paginated packets from memory.
 func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
+	atomic.AddInt64(&s.queryCount, 1)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -319,6 +323,7 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 
 // QueryGroupedPackets returns transmissions grouped by hash (already 1:1).
 func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
+	atomic.AddInt64(&s.queryCount, 1)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -431,9 +436,16 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 	estimatedMB := math.Round(float64(totalLoaded*430+totalObs*200)/1048576*10) / 10
 
 	return map[string]interface{}{
-		"totalLoaded":      totalLoaded,
+		"totalLoaded":       totalLoaded,
 		"totalObservations": totalObs,
-		"estimatedMB":      estimatedMB,
+		"evicted":           0,
+		"inserts":           atomic.LoadInt64(&s.insertCount),
+		"queries":           atomic.LoadInt64(&s.queryCount),
+		"inMemory":          totalLoaded,
+		"sqliteOnly":        false,
+		"maxPackets":        2386092,
+		"estimatedMB":       estimatedMB,
+		"maxMB":             1024,
 		"indexes": map[string]interface{}{
 			"byHash":        hashIdx,
 			"byTxID":        txIdx,
