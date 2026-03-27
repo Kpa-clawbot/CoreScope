@@ -34,9 +34,11 @@
 
   function closeDetailPanel() {
     var panel = document.getElementById('pktRight');
-    if (panel && !panel.classList.contains('empty')) {
+    if (panel) {
       panel.classList.add('empty');
       panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML + '<span>Select a packet to view details</span>';
+      var layout = panel.closest('.split-layout');
+      if (layout) layout.classList.add('detail-collapsed');
       selectedId = null;
       renderTableRows();
     }
@@ -1153,6 +1155,8 @@
     } else {
       panel = document.getElementById('pktRight');
       panel.classList.remove('empty');
+      var layout = panel.closest('.split-layout');
+      if (layout) layout.classList.remove('detail-collapsed');
       panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML + '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
       initPanelResize();
     }
