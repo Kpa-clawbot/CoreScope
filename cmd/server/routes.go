@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -266,6 +267,36 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		wsClients = s.hub.ClientCount()
 	}
 
+	// Real packet store stats
+	pktCount := 0
+	var pktEstMB float64
+	if s.store != nil {
+		ps := s.store.GetPerfStoreStats()
+		if v, ok := ps["totalLoaded"].(int); ok {
+			pktCount = v
+		}
+		if v, ok := ps["estimatedMB"].(float64); ok {
+			pktEstMB = v
+		}
+	}
+
+	// Real cache stats
+	cacheStats := map[string]interface{}{
+		"entries": 0, "hits": int64(0), "misses": int64(0),
+		"staleHits": 0, "recomputes": int64(0), "hitRate": float64(0),
+	}
+	if s.store != nil {
+		cs := s.store.GetCacheStats()
+		cacheStats = map[string]interface{}{
+			"entries":    cs["size"],
+			"hits":       cs["hits"],
+			"misses":     cs["misses"],
+			"staleHits":  cs["staleHits"],
+			"recomputes": cs["recomputes"],
+			"hitRate":    cs["hitRate"],
+		}
+	}
+
 	writeJSON(w, map[string]interface{}{
 		"status":      "ok",
 		"engine":      "go",
@@ -278,18 +309,18 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			"heapUsed":  int(m.HeapAlloc / 1024 / 1024),
 			"heapTotal": int(m.HeapSys / 1024 / 1024),
 			"external":  0,
+			"heapMB":    round(float64(m.HeapAlloc)/1048576, 1),
 		},
-		"eventLoop": map[string]interface{}{
-			"currentLagMs": 0, "maxLagMs": 0,
-			"p50Ms": 0, "p95Ms": 0, "p99Ms": 0,
+		"goRuntime": map[string]interface{}{
+			"goroutines": runtime.NumGoroutine(),
+			"gcPauses":   m.NumGC,
+			"numCPU":     runtime.NumCPU(),
 		},
-		"cache": map[string]interface{}{
-			"entries": 0, "hits": 0, "misses": 0,
-			"staleHits": 0, "recomputes": 0, "hitRate": 0,
-		},
+		"cache":     cacheStats,
 		"websocket": map[string]interface{}{"clients": wsClients},
 		"packetStore": map[string]interface{}{
-			"packets": 0, "estimatedMB": 0,
+			"packets":     pktCount,
+			"estimatedMB": pktEstMB,
 		},
 		"perf": map[string]interface{}{
 			"totalRequests": s.perfStats.Requests,
@@ -330,27 +361,89 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
-	summary := map[string]interface{}{}
+	// Endpoint performance summary
+	type epEntry struct {
+		path string
+		data map[string]interface{}
+	}
+	var entries []epEntry
 	for path, ep := range s.perfStats.Endpoints {
 		sorted := sortedCopy(ep.Recent)
-		summary[path] = map[string]interface{}{
+		d := map[string]interface{}{
 			"count": ep.Count,
 			"avgMs": round(ep.TotalMs/float64(ep.Count), 1),
 			"p50Ms": round(percentile(sorted, 0.5), 1),
 			"p95Ms": round(percentile(sorted, 0.95), 1),
 			"maxMs": round(ep.MaxMs, 1),
 		}
+		entries = append(entries, epEntry{path, d})
 	}
+	// Sort by total time spent (count * avg) descending, matching Node.js
+	sort.Slice(entries, func(i, j int) bool {
+		ti := float64(entries[i].data["count"].(int)) * entries[i].data["avgMs"].(float64)
+		tj := float64(entries[j].data["count"].(int)) * entries[j].data["avgMs"].(float64)
+		return ti > tj
+	})
+	summary := map[string]interface{}{}
+	for _, e := range entries {
+		summary[e.path] = e.data
+	}
+
+	// Memory & GC stats (Go-specific, replaces Node's event loop)
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
+	var lastPauseNs uint64
+	if m.NumGC > 0 {
+		idx := (m.NumGC + 255) % 256
+		lastPauseNs = m.PauseNs[idx]
+	}
+
+	goRuntime := map[string]interface{}{
+		"heapAllocMB":    round(float64(m.HeapAlloc)/1048576, 1),
+		"heapSysMB":      round(float64(m.HeapSys)/1048576, 1),
+		"heapInuseMB":    round(float64(m.HeapInuse)/1048576, 1),
+		"heapIdleMB":     round(float64(m.HeapIdle)/1048576, 1),
+		"heapReleasedMB": round(float64(m.HeapReleased)/1048576, 1),
+		"gcSysMB":        round(float64(m.GCSys)/1048576, 1),
+		"numGC":          m.NumGC,
+		"pauseTotalMs":   round(float64(m.PauseTotalNs)/1e6, 1),
+		"lastPauseMs":    round(float64(lastPauseNs)/1e6, 3),
+		"goroutines":     runtime.NumGoroutine(),
+		"numCPU":         runtime.NumCPU(),
+	}
+
+	// Cache stats from packet store
+	cacheStats := map[string]interface{}{
+		"size": 0, "hits": int64(0), "misses": int64(0),
+		"staleHits": 0, "recomputes": int64(0), "hitRate": float64(0),
+	}
+	if s.store != nil {
+		cacheStats = s.store.GetCacheStats()
+	}
+
+	// Packet store stats
+	var pktStoreStats map[string]interface{}
+	if s.store != nil {
+		pktStoreStats = s.store.GetPerfStoreStats()
+	}
+
+	// SQLite stats
+	var sqliteStats map[string]interface{}
+	if s.db != nil {
+		sqliteStats = s.db.GetDBSizeStats()
+	}
+
 	writeJSON(w, map[string]interface{}{
 		"uptime":        int(time.Since(s.perfStats.StartedAt).Seconds()),
 		"totalRequests": s.perfStats.Requests,
 		"avgMs":         safeAvg(s.perfStats.TotalMs, float64(s.perfStats.Requests)),
 		"endpoints":     summary,
 		"slowQueries":   lastN(s.perfStats.SlowQueries, 20),
-		"cache": map[string]interface{}{
-			"size": 0, "hits": 0, "misses": 0,
-			"staleHits": 0, "recomputes": 0, "hitRate": 0,
-		},
+		"cache":         cacheStats,
+		"goRuntime":     goRuntime,
+		"packetStore":   pktStoreStats,
+		"sqlite":        sqliteStats,
 	})
 }
 

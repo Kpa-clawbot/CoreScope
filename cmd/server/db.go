@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -14,7 +15,8 @@ import (
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
 	conn *sql.DB
-	isV3 bool // v3 schema: observer_idx in observations (vs observer_id in v2)
+	path string // filesystem path to the database file
+	isV3 bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
 }
 
 // OpenDB opens a read-only SQLite connection with WAL mode.
@@ -30,7 +32,7 @@ func OpenDB(path string) (*DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("ping failed: %w", err)
 	}
-	d := &DB{conn: conn}
+	d := &DB{conn: conn, path: path}
 	d.detectSchema()
 	return d, nil
 }
@@ -209,6 +211,40 @@ func (db *DB) GetStats() (*Stats, error) {
 	db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneHourAgo).Scan(&s.PacketsLastHour)
 
 	return s, nil
+}
+
+// GetDBSizeStats returns SQLite file sizes and row counts (matching Node.js /api/perf sqlite shape).
+func (db *DB) GetDBSizeStats() map[string]interface{} {
+	result := map[string]interface{}{}
+
+	// DB file size
+	var dbSizeMB float64
+	if db.path != "" && db.path != ":memory:" {
+		if info, err := os.Stat(db.path); err == nil {
+			dbSizeMB = math.Round(float64(info.Size())/1048576*10) / 10
+		}
+	}
+	result["dbSizeMB"] = dbSizeMB
+
+	// WAL file size
+	var walSizeMB float64
+	if db.path != "" && db.path != ":memory:" {
+		if info, err := os.Stat(db.path + "-wal"); err == nil {
+			walSizeMB = math.Round(float64(info.Size())/1048576*10) / 10
+		}
+	}
+	result["walSizeMB"] = walSizeMB
+
+	// Row counts per table
+	rows := map[string]int{}
+	for _, table := range []string{"transmissions", "observations", "nodes", "observers"} {
+		var count int
+		db.conn.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count)
+		rows[table] = count
+	}
+	result["rows"] = rows
+
+	return result
 }
 
 // GetRoleCounts returns count per role (7-day active, matching Node.js /api/stats).

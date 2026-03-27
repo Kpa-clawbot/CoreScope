@@ -65,6 +65,8 @@ type PacketStore struct {
 	cacheMu    sync.Mutex
 	rfCache    map[string]*cachedResult // region → cached RF result
 	rfCacheTTL time.Duration
+	cacheHits  int64
+	cacheMisses int64
 }
 
 type cachedResult struct {
@@ -410,6 +412,60 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 	s.db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneHourAgo).Scan(&st.PacketsLastHour)
 
 	return st, nil
+}
+
+// GetPerfStoreStats returns packet store statistics for /api/perf.
+func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
+	s.mu.RLock()
+	totalLoaded := len(s.packets)
+	totalObs := s.totalObs
+	hashIdx := len(s.byHash)
+	txIdx := len(s.byTxID)
+	obsIdx := len(s.byObsID)
+	observerIdx := len(s.byObserver)
+	nodeIdx := len(s.byNode)
+	ptIdx := len(s.byPayloadType)
+	s.mu.RUnlock()
+
+	// Rough estimate: ~430 bytes per packet + ~200 per observation
+	estimatedMB := math.Round(float64(totalLoaded*430+totalObs*200)/1048576*10) / 10
+
+	return map[string]interface{}{
+		"totalLoaded":      totalLoaded,
+		"totalObservations": totalObs,
+		"estimatedMB":      estimatedMB,
+		"indexes": map[string]interface{}{
+			"byHash":        hashIdx,
+			"byTxID":        txIdx,
+			"byObsID":       obsIdx,
+			"byObserver":    observerIdx,
+			"byNode":        nodeIdx,
+			"byPayloadType": ptIdx,
+		},
+	}
+}
+
+// GetCacheStats returns RF cache hit/miss statistics.
+func (s *PacketStore) GetCacheStats() map[string]interface{} {
+	s.cacheMu.Lock()
+	size := len(s.rfCache)
+	hits := s.cacheHits
+	misses := s.cacheMisses
+	s.cacheMu.Unlock()
+
+	var hitRate float64
+	if hits+misses > 0 {
+		hitRate = math.Round(float64(hits)/float64(hits+misses)*1000) / 10
+	}
+
+	return map[string]interface{}{
+		"size":       size,
+		"hits":       hits,
+		"misses":     misses,
+		"staleHits":  0,
+		"recomputes": misses,
+		"hitRate":    hitRate,
+	}
 }
 
 // GetTransmissionByID returns a transmission by its DB ID, formatted as a map.
@@ -1404,9 +1460,11 @@ func (s *PacketStore) GetAnalyticsChannels(region string) map[string]interface{}
 func (s *PacketStore) GetAnalyticsRF(region string) map[string]interface{} {
 	s.cacheMu.Lock()
 	if cached, ok := s.rfCache[region]; ok && time.Now().Before(cached.expiresAt) {
+		s.cacheHits++
 		s.cacheMu.Unlock()
 		return cached.data
 	}
+	s.cacheMisses++
 	s.cacheMu.Unlock()
 
 	result := s.computeAnalyticsRF(region)

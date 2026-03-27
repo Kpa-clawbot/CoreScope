@@ -169,6 +169,35 @@ func TestGetRoleCounts(t *testing.T) {
 	}
 }
 
+func TestGetDBSizeStats(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+
+	stats := db.GetDBSizeStats()
+	// In-memory DB has dbSizeMB=0 and walSizeMB=0
+	if stats["dbSizeMB"] != float64(0) {
+		t.Errorf("expected dbSizeMB=0 for in-memory DB, got %v", stats["dbSizeMB"])
+	}
+
+	rows, ok := stats["rows"].(map[string]int)
+	if !ok {
+		t.Fatal("expected rows map in DB size stats")
+	}
+	if rows["transmissions"] != 2 {
+		t.Errorf("expected 2 transmissions rows, got %d", rows["transmissions"])
+	}
+	if rows["observations"] != 3 {
+		t.Errorf("expected 3 observations rows, got %d", rows["observations"])
+	}
+	if rows["nodes"] != 3 {
+		t.Errorf("expected 3 nodes rows, got %d", rows["nodes"])
+	}
+	if rows["observers"] != 2 {
+		t.Errorf("expected 2 observers rows, got %d", rows["observers"])
+	}
+}
+
 func TestQueryPackets(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

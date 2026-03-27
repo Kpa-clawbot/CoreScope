@@ -16,6 +16,9 @@ func setupTestServer(t *testing.T) (*Server, *mux.Router) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
+	store := NewPacketStore(db)
+	store.Load()
+	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 	return srv, router
@@ -43,6 +46,51 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 	if _, ok := body["commit"]; !ok {
 		t.Error("expected commit field in health response")
+	}
+
+	// Verify memory.heapMB exists
+	mem, ok := body["memory"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected memory object in health response")
+	}
+	if _, ok := mem["heapMB"]; !ok {
+		t.Error("expected heapMB in memory")
+	}
+
+	// Verify goRuntime with goroutines and gcPauses
+	goRT, ok := body["goRuntime"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected goRuntime object in health response")
+	}
+	if _, ok := goRT["goroutines"]; !ok {
+		t.Error("expected goroutines in goRuntime")
+	}
+	if _, ok := goRT["gcPauses"]; !ok {
+		t.Error("expected gcPauses in goRuntime")
+	}
+
+	// Verify real packetStore stats (not zeros)
+	pktStore, ok := body["packetStore"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected packetStore object in health response")
+	}
+	if _, ok := pktStore["packets"]; !ok {
+		t.Error("expected packets in packetStore")
+	}
+	if _, ok := pktStore["estimatedMB"]; !ok {
+		t.Error("expected estimatedMB in packetStore")
+	}
+
+	// Verify cache has real structure
+	cache, ok := body["cache"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected cache object in health response")
+	}
+	if _, ok := cache["entries"]; !ok {
+		t.Error("expected entries in cache")
+	}
+	if _, ok := cache["hitRate"]; !ok {
+		t.Error("expected hitRate in cache")
 	}
 }
 
@@ -332,6 +380,55 @@ func TestPerfEndpoint(t *testing.T) {
 
 	if w.Code != 200 {
 		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var body map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &body)
+
+	// Verify goRuntime memory/GC stats
+	goRT, ok := body["goRuntime"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected goRuntime object in perf response")
+	}
+	for _, field := range []string{"heapAllocMB", "heapSysMB", "heapInuseMB", "heapIdleMB", "heapReleasedMB", "gcSysMB", "numGC", "pauseTotalMs", "lastPauseMs", "goroutines", "numCPU"} {
+		if _, ok := goRT[field]; !ok {
+			t.Errorf("expected %s in goRuntime", field)
+		}
+	}
+
+	// Verify cache stats (real, not hardcoded zeros)
+	cache, ok := body["cache"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected cache object in perf response")
+	}
+	for _, field := range []string{"size", "hits", "misses", "hitRate"} {
+		if _, ok := cache[field]; !ok {
+			t.Errorf("expected %s in cache", field)
+		}
+	}
+
+	// Verify packetStore stats
+	if _, ok := body["packetStore"]; !ok {
+		t.Error("expected packetStore in perf response")
+	}
+
+	// Verify sqlite stats
+	sqliteStats, ok := body["sqlite"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected sqlite object in perf response")
+	}
+	if _, ok := sqliteStats["dbSizeMB"]; !ok {
+		t.Error("expected dbSizeMB in sqlite")
+	}
+	if _, ok := sqliteStats["rows"]; !ok {
+		t.Error("expected rows in sqlite")
+	}
+
+	// Verify standard fields still present
+	if _, ok := body["uptime"]; !ok {
+		t.Error("expected uptime in perf response")
+	}
+	if _, ok := body["endpoints"]; !ok {
+		t.Error("expected endpoints in perf response")
 	}
 }
 
