@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1234,6 +1235,171 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int) 
 	return messages, total
 }
 
+// GetAnalyticsChannels returns full channel analytics computed from in-memory packets.
+func (s *PacketStore) GetAnalyticsChannels(region string) map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var regionObs map[string]bool
+	if region != "" {
+		regionObs = s.resolveRegionObservers(region)
+	}
+
+	type decodedGrp struct {
+		Type         string `json:"type"`
+		Channel      string `json:"channel"`
+		ChannelHash  string `json:"channelHash"`
+		ChannelHash2 string `json:"channel_hash"`
+		Text         string `json:"text"`
+		Sender       string `json:"sender"`
+	}
+
+	type chanInfo struct {
+		Hash         string
+		Name         string
+		Messages     int
+		Senders      map[string]bool
+		LastActivity string
+		Encrypted    bool
+	}
+
+	channelMap := map[string]*chanInfo{}
+	senderCounts := map[string]int{}
+	var msgLengths []int
+	timeline := map[string]int{} // hour|channelName → count
+
+	grpTxts := s.byPayloadType[5]
+	for _, tx := range grpTxts {
+		if regionObs != nil {
+			match := false
+			for _, obs := range tx.Observations {
+				if regionObs[obs.ObserverID] {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+
+		var decoded decodedGrp
+		if json.Unmarshal([]byte(tx.DecodedJSON), &decoded) != nil {
+			continue
+		}
+
+		hash := decoded.ChannelHash
+		if hash == "" {
+			hash = decoded.ChannelHash2
+		}
+		if hash == "" {
+			hash = "?"
+		}
+		name := decoded.Channel
+		if name == "" {
+			if decoded.Type == "CHAN" {
+				name = "ch" + hash
+			} else {
+				name = "ch" + hash
+			}
+		}
+		encrypted := decoded.Text == "" && decoded.Sender == ""
+		chKey := name
+		if decoded.Type == "CHAN" && decoded.Channel != "" {
+			chKey = hash + "_" + decoded.Channel
+		}
+
+		ch := channelMap[chKey]
+		if ch == nil {
+			ch = &chanInfo{Hash: hash, Name: name, Senders: map[string]bool{}, LastActivity: tx.FirstSeen, Encrypted: encrypted}
+			channelMap[chKey] = ch
+		}
+		ch.Messages++
+		ch.LastActivity = tx.FirstSeen
+		if !encrypted {
+			ch.Encrypted = false
+		}
+
+		if decoded.Sender != "" {
+			ch.Senders[decoded.Sender] = true
+			senderCounts[decoded.Sender]++
+		}
+		if decoded.Text != "" {
+			msgLengths = append(msgLengths, len(decoded.Text))
+		}
+
+		// Timeline
+		if len(tx.FirstSeen) >= 13 {
+			hr := tx.FirstSeen[:13]
+			key := hr + "|" + name
+			timeline[key]++
+		}
+	}
+
+	channelList := make([]map[string]interface{}, 0, len(channelMap))
+	decryptable := 0
+	for _, c := range channelMap {
+		if !c.Encrypted {
+			decryptable++
+		}
+		channelList = append(channelList, map[string]interface{}{
+			"hash": c.Hash, "name": c.Name,
+			"messages": c.Messages, "senders": len(c.Senders),
+			"lastActivity": c.LastActivity, "encrypted": c.Encrypted,
+		})
+	}
+	sort.Slice(channelList, func(i, j int) bool {
+		return channelList[i]["messages"].(int) > channelList[j]["messages"].(int)
+	})
+
+	// Top senders
+	type senderEntry struct {
+		name  string
+		count int
+	}
+	senderList := make([]senderEntry, 0, len(senderCounts))
+	for n, c := range senderCounts {
+		senderList = append(senderList, senderEntry{n, c})
+	}
+	sort.Slice(senderList, func(i, j int) bool { return senderList[i].count > senderList[j].count })
+	topSenders := make([]map[string]interface{}, 0)
+	for i, e := range senderList {
+		if i >= 15 {
+			break
+		}
+		topSenders = append(topSenders, map[string]interface{}{"name": e.name, "count": e.count})
+	}
+
+	// Channel timeline
+	type tlEntry struct {
+		hour, channel string
+		count         int
+	}
+	var tlList []tlEntry
+	for key, count := range timeline {
+		parts := strings.SplitN(key, "|", 2)
+		if len(parts) == 2 {
+			tlList = append(tlList, tlEntry{parts[0], parts[1], count})
+		}
+	}
+	sort.Slice(tlList, func(i, j int) bool { return tlList[i].hour < tlList[j].hour })
+	channelTimeline := make([]map[string]interface{}, 0, len(tlList))
+	for _, e := range tlList {
+		channelTimeline = append(channelTimeline, map[string]interface{}{
+			"hour": e.hour, "channel": e.channel, "count": e.count,
+		})
+	}
+
+	return map[string]interface{}{
+		"activeChannels":  len(channelList),
+		"decryptable":     decryptable,
+		"channels":        channelList,
+		"topSenders":      topSenders,
+		"channelTimeline": channelTimeline,
+		"msgLengths":      msgLengths,
+	}
+}
+
 // GetAnalyticsRF returns full RF analytics computed from in-memory observations.
 func (s *PacketStore) GetAnalyticsRF(region string) map[string]interface{} {
 	s.cacheMu.Lock()
@@ -1767,5 +1933,1378 @@ func (s *PacketStore) computeAnalyticsRF(region string) map[string]interface{} {
 		"signalOverTime":     signalOverTime,
 		"scatterData":        scatterData,
 		"timeSpanHours":      timeSpanHours,
+	}
+}
+
+// --- Topology Analytics ---
+
+type nodeInfo struct {
+	PublicKey string
+	Name     string
+	Role     string
+	Lat      float64
+	Lon      float64
+	HasGPS   bool
+}
+
+func (s *PacketStore) getAllNodes() []nodeInfo {
+	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var nodes []nodeInfo
+	for rows.Next() {
+		var pk string
+		var name, role sql.NullString
+		var lat, lon sql.NullFloat64
+		rows.Scan(&pk, &name, &role, &lat, &lon)
+		n := nodeInfo{PublicKey: pk, Name: nullStrVal(name), Role: nullStrVal(role)}
+		if lat.Valid && lon.Valid {
+			n.Lat = lat.Float64
+			n.Lon = lon.Float64
+			n.HasGPS = !(n.Lat == 0 && n.Lon == 0)
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes
+}
+
+type prefixMap struct {
+	m map[string][]nodeInfo
+}
+
+func buildPrefixMap(nodes []nodeInfo) *prefixMap {
+	pm := &prefixMap{m: make(map[string][]nodeInfo, len(nodes)*10)}
+	for _, n := range nodes {
+		pk := strings.ToLower(n.PublicKey)
+		for l := 2; l <= len(pk); l++ {
+			pfx := pk[:l]
+			pm.m[pfx] = append(pm.m[pfx], n)
+		}
+	}
+	return pm
+}
+
+func (pm *prefixMap) resolve(hop string) *nodeInfo {
+	h := strings.ToLower(hop)
+	candidates := pm.m[h]
+	if len(candidates) == 0 {
+		return nil
+	}
+	if len(candidates) == 1 {
+		return &candidates[0]
+	}
+	// Multiple candidates: prefer one with GPS
+	for i := range candidates {
+		if candidates[i].HasGPS {
+			return &candidates[i]
+		}
+	}
+	return &candidates[0]
+}
+
+func parsePathJSON(pathJSON string) []string {
+	if pathJSON == "" || pathJSON == "[]" {
+		return nil
+	}
+	var hops []string
+	if json.Unmarshal([]byte(pathJSON), &hops) != nil {
+		return nil
+	}
+	return hops
+}
+
+func (s *PacketStore) GetAnalyticsTopology(region string) map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var regionObs map[string]bool
+	if region != "" {
+		regionObs = s.resolveRegionObservers(region)
+	}
+
+	allNodes := s.getAllNodes()
+	pm := buildPrefixMap(allNodes)
+	hopCache := make(map[string]*nodeInfo)
+
+	resolveHop := func(hop string) *nodeInfo {
+		if cached, ok := hopCache[hop]; ok {
+			return cached
+		}
+		r := pm.resolve(hop)
+		hopCache[hop] = r
+		return r
+	}
+
+	hopCounts := map[int]int{}
+	var allHopsList []int
+	hopSnr := map[int][]float64{}
+	hopFreq := map[string]int{}
+	pairFreq := map[string]int{}
+	observerMap := map[string]string{} // observer_id → observer_name
+	perObserver := map[string]map[string]*struct{ minDist, maxDist, count int }{}
+
+	for _, tx := range s.packets {
+		hops := parsePathJSON(tx.PathJSON)
+		if len(hops) == 0 {
+			continue
+		}
+		if regionObs != nil {
+			match := false
+			for _, obs := range tx.Observations {
+				if regionObs[obs.ObserverID] {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+
+		n := len(hops)
+		hopCounts[n]++
+		allHopsList = append(allHopsList, n)
+		if tx.SNR != nil {
+			hopSnr[n] = append(hopSnr[n], *tx.SNR)
+		}
+		for _, h := range hops {
+			hopFreq[h]++
+		}
+		for i := 0; i < len(hops)-1; i++ {
+			a, b := hops[i], hops[i+1]
+			if a > b {
+				a, b = b, a
+			}
+			pairFreq[a+"|"+b]++
+		}
+
+		obsID := tx.ObserverID
+		if obsID != "" {
+			observerMap[obsID] = tx.ObserverName
+		}
+		if _, ok := perObserver[obsID]; !ok {
+			perObserver[obsID] = map[string]*struct{ minDist, maxDist, count int }{}
+		}
+		for i, h := range hops {
+			dist := n - i
+			entry := perObserver[obsID][h]
+			if entry == nil {
+				entry = &struct{ minDist, maxDist, count int }{dist, dist, 0}
+				perObserver[obsID][h] = entry
+			}
+			if dist < entry.minDist {
+				entry.minDist = dist
+			}
+			if dist > entry.maxDist {
+				entry.maxDist = dist
+			}
+			entry.count++
+		}
+	}
+
+	// Hop distribution
+	hopDist := make([]map[string]interface{}, 0)
+	for h, c := range hopCounts {
+		if h <= 25 {
+			hopDist = append(hopDist, map[string]interface{}{"hops": h, "count": c})
+		}
+	}
+	sort.Slice(hopDist, func(i, j int) bool {
+		return hopDist[i]["hops"].(int) < hopDist[j]["hops"].(int)
+	})
+
+	avgHops := 0.0
+	if len(allHopsList) > 0 {
+		sum := 0
+		for _, v := range allHopsList {
+			sum += v
+		}
+		avgHops = float64(sum) / float64(len(allHopsList))
+	}
+	medianHops := 0
+	if len(allHopsList) > 0 {
+		sorted := make([]int, len(allHopsList))
+		copy(sorted, allHopsList)
+		sort.Ints(sorted)
+		medianHops = sorted[len(sorted)/2]
+	}
+	maxHops := 0
+	for _, v := range allHopsList {
+		if v > maxHops {
+			maxHops = v
+		}
+	}
+
+	// Top repeaters
+	type freqEntry struct {
+		hop   string
+		count int
+	}
+	freqList := make([]freqEntry, 0, len(hopFreq))
+	for h, c := range hopFreq {
+		freqList = append(freqList, freqEntry{h, c})
+	}
+	sort.Slice(freqList, func(i, j int) bool { return freqList[i].count > freqList[j].count })
+	topRepeaters := make([]map[string]interface{}, 0)
+	for i, e := range freqList {
+		if i >= 20 {
+			break
+		}
+		r := resolveHop(e.hop)
+		entry := map[string]interface{}{"hop": e.hop, "count": e.count, "name": nil, "pubkey": nil}
+		if r != nil {
+			entry["name"] = r.Name
+			entry["pubkey"] = r.PublicKey
+		}
+		topRepeaters = append(topRepeaters, entry)
+	}
+
+	// Top pairs
+	pairList := make([]freqEntry, 0, len(pairFreq))
+	for p, c := range pairFreq {
+		pairList = append(pairList, freqEntry{p, c})
+	}
+	sort.Slice(pairList, func(i, j int) bool { return pairList[i].count > pairList[j].count })
+	topPairs := make([]map[string]interface{}, 0)
+	for i, e := range pairList {
+		if i >= 15 {
+			break
+		}
+		parts := strings.SplitN(e.hop, "|", 2)
+		rA := resolveHop(parts[0])
+		rB := resolveHop(parts[1])
+		entry := map[string]interface{}{
+			"hopA": parts[0], "hopB": parts[1], "count": e.count,
+			"nameA": nil, "nameB": nil, "pubkeyA": nil, "pubkeyB": nil,
+		}
+		if rA != nil {
+			entry["nameA"] = rA.Name
+			entry["pubkeyA"] = rA.PublicKey
+		}
+		if rB != nil {
+			entry["nameB"] = rB.Name
+			entry["pubkeyB"] = rB.PublicKey
+		}
+		topPairs = append(topPairs, entry)
+	}
+
+	// Hops vs SNR
+	hopsVsSnr := make([]map[string]interface{}, 0)
+	for h, snrs := range hopSnr {
+		if h > 20 {
+			continue
+		}
+		sum := 0.0
+		for _, v := range snrs {
+			sum += v
+		}
+		hopsVsSnr = append(hopsVsSnr, map[string]interface{}{
+			"hops": h, "count": len(snrs), "avgSnr": sum / float64(len(snrs)),
+		})
+	}
+	sort.Slice(hopsVsSnr, func(i, j int) bool {
+		return hopsVsSnr[i]["hops"].(int) < hopsVsSnr[j]["hops"].(int)
+	})
+
+	// Observers list
+	observers := make([]map[string]interface{}, 0)
+	for id, name := range observerMap {
+		n := name
+		if n == "" {
+			n = id
+		}
+		observers = append(observers, map[string]interface{}{"id": id, "name": n})
+	}
+
+	// Per-observer reachability
+	perObserverReach := map[string]interface{}{}
+	for obsID, nodes := range perObserver {
+		obsName := observerMap[obsID]
+		if obsName == "" {
+			obsName = obsID
+		}
+		byDist := map[int][]map[string]interface{}{}
+		for hop, data := range nodes {
+			d := data.minDist
+			if d > 15 {
+				continue
+			}
+			r := resolveHop(hop)
+			entry := map[string]interface{}{
+				"hop": hop, "name": nil, "pubkey": nil,
+				"count": data.count, "distRange": nil,
+			}
+			if r != nil {
+				entry["name"] = r.Name
+				entry["pubkey"] = r.PublicKey
+			}
+			if data.minDist != data.maxDist {
+				entry["distRange"] = fmt.Sprintf("%d-%d", data.minDist, data.maxDist)
+			}
+			byDist[d] = append(byDist[d], entry)
+		}
+		rings := make([]map[string]interface{}, 0)
+		for dist, nodeList := range byDist {
+			sort.Slice(nodeList, func(i, j int) bool {
+				return nodeList[i]["count"].(int) > nodeList[j]["count"].(int)
+			})
+			rings = append(rings, map[string]interface{}{"hops": dist, "nodes": nodeList})
+		}
+		sort.Slice(rings, func(i, j int) bool {
+			return rings[i]["hops"].(int) < rings[j]["hops"].(int)
+		})
+		perObserverReach[obsID] = map[string]interface{}{
+			"observer_name": obsName,
+			"rings":         rings,
+		}
+	}
+
+	// Cross-observer: build from perObserver
+	crossObserver := map[string][]map[string]interface{}{}
+	bestPath := map[string]map[string]interface{}{}
+	for obsID, nodes := range perObserver {
+		obsName := observerMap[obsID]
+		if obsName == "" {
+			obsName = obsID
+		}
+		for hop, data := range nodes {
+			crossObserver[hop] = append(crossObserver[hop], map[string]interface{}{
+				"observer_id": obsID, "observer_name": obsName,
+				"minDist": data.minDist, "count": data.count,
+			})
+			if bp, ok := bestPath[hop]; !ok || data.minDist < bp["minDist"].(int) {
+				bestPath[hop] = map[string]interface{}{
+					"minDist": data.minDist, "observer_id": obsID, "observer_name": obsName,
+				}
+			}
+		}
+	}
+
+	// Multi-observer nodes
+	multiObsNodes := make([]map[string]interface{}, 0)
+	for hop, obs := range crossObserver {
+		if len(obs) <= 1 {
+			continue
+		}
+		sort.Slice(obs, func(i, j int) bool {
+			return obs[i]["minDist"].(int) < obs[j]["minDist"].(int)
+		})
+		r := resolveHop(hop)
+		entry := map[string]interface{}{
+			"hop": hop, "name": nil, "pubkey": nil, "observers": obs,
+		}
+		if r != nil {
+			entry["name"] = r.Name
+			entry["pubkey"] = r.PublicKey
+		}
+		multiObsNodes = append(multiObsNodes, entry)
+	}
+	sort.Slice(multiObsNodes, func(i, j int) bool {
+		return len(multiObsNodes[i]["observers"].([]map[string]interface{})) >
+			len(multiObsNodes[j]["observers"].([]map[string]interface{}))
+	})
+	if len(multiObsNodes) > 50 {
+		multiObsNodes = multiObsNodes[:50]
+	}
+
+	// Best path list
+	bestPathList := make([]map[string]interface{}, 0, len(bestPath))
+	for hop, data := range bestPath {
+		r := resolveHop(hop)
+		entry := map[string]interface{}{
+			"hop": hop, "name": nil, "pubkey": nil,
+			"minDist": data["minDist"], "observer_id": data["observer_id"],
+			"observer_name": data["observer_name"],
+		}
+		if r != nil {
+			entry["name"] = r.Name
+			entry["pubkey"] = r.PublicKey
+		}
+		bestPathList = append(bestPathList, entry)
+	}
+	sort.Slice(bestPathList, func(i, j int) bool {
+		return bestPathList[i]["minDist"].(int) < bestPathList[j]["minDist"].(int)
+	})
+	if len(bestPathList) > 50 {
+		bestPathList = bestPathList[:50]
+	}
+
+	uniqueNodes := len(hopFreq)
+
+	return map[string]interface{}{
+		"uniqueNodes":      uniqueNodes,
+		"avgHops":          avgHops,
+		"medianHops":       medianHops,
+		"maxHops":          maxHops,
+		"hopDistribution":  hopDist,
+		"topRepeaters":     topRepeaters,
+		"topPairs":         topPairs,
+		"hopsVsSnr":        hopsVsSnr,
+		"observers":        observers,
+		"perObserverReach": perObserverReach,
+		"multiObsNodes":    multiObsNodes,
+		"bestPathList":     bestPathList,
+	}
+}
+
+// --- Distance Analytics ---
+
+func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
+	const R = 6371.0
+	dLat := (lat2 - lat1) * math.Pi / 180
+	dLon := (lon2 - lon1) * math.Pi / 180
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(lat1*math.Pi/180)*math.Cos(lat2*math.Pi/180)*
+			math.Sin(dLon/2)*math.Sin(dLon/2)
+	return R * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+}
+
+func (s *PacketStore) GetAnalyticsDistance(region string) map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var regionObs map[string]bool
+	if region != "" {
+		regionObs = s.resolveRegionObservers(region)
+	}
+
+	allNodes := s.getAllNodes()
+	pm := buildPrefixMap(allNodes)
+	hopCache := make(map[string]*nodeInfo)
+	resolveHop := func(hop string) *nodeInfo {
+		if cached, ok := hopCache[hop]; ok {
+			return cached
+		}
+		r := pm.resolve(hop)
+		hopCache[hop] = r
+		return r
+	}
+
+	repeaterSet := make(map[string]bool)
+	nodeByPk := make(map[string]*nodeInfo, len(allNodes))
+	for i := range allNodes {
+		n := &allNodes[i]
+		nodeByPk[n.PublicKey] = n
+		if strings.Contains(strings.ToLower(n.Role), "repeater") {
+			repeaterSet[n.PublicKey] = true
+		}
+	}
+
+	type hopRecord struct {
+		FromName, FromPk, ToName, ToPk string
+		Dist                           float64
+		Type                           string
+		SNR                            interface{}
+		Hash, Timestamp                string
+	}
+	type pathRecord struct {
+		Hash      string
+		TotalDist float64
+		HopCount  int
+		Timestamp string
+		Hops      []map[string]interface{}
+	}
+
+	var allHops []hopRecord
+	var pathTotals []pathRecord
+	catDists := map[string][]float64{"R↔R": {}, "C↔R": {}, "C↔C": {}}
+	distByHour := map[string][]float64{}
+
+	for _, tx := range s.packets {
+		hops := parsePathJSON(tx.PathJSON)
+		if len(hops) == 0 {
+			continue
+		}
+		if regionObs != nil {
+			match := false
+			for _, obs := range tx.Observations {
+				if regionObs[obs.ObserverID] {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+
+		// Resolve all hops to nodes
+		resolved := make([]*nodeInfo, len(hops))
+		for i, h := range hops {
+			resolved[i] = resolveHop(h)
+		}
+
+		// Resolve sender from decoded_json
+		var senderNode *nodeInfo
+		if tx.DecodedJSON != "" {
+			var dec map[string]interface{}
+			if json.Unmarshal([]byte(tx.DecodedJSON), &dec) == nil {
+				if pk, ok := dec["pubKey"].(string); ok && pk != "" {
+					senderNode = nodeByPk[pk]
+				}
+			}
+		}
+
+		// Build chain of GPS-located nodes
+		chain := make([]*nodeInfo, 0, len(hops)+1)
+		if senderNode != nil && senderNode.HasGPS {
+			chain = append(chain, senderNode)
+		}
+		for _, r := range resolved {
+			if r != nil && r.HasGPS {
+				chain = append(chain, r)
+			}
+		}
+		if len(chain) < 2 {
+			continue
+		}
+
+		hourBucket := ""
+		if tx.FirstSeen != "" {
+			if len(tx.FirstSeen) >= 13 {
+				hourBucket = tx.FirstSeen[:13]
+			}
+		}
+
+		pathDist := 0.0
+		var pathHops []map[string]interface{}
+
+		for i := 0; i < len(chain)-1; i++ {
+			a, b := chain[i], chain[i+1]
+			dist := haversineKm(a.Lat, a.Lon, b.Lat, b.Lon)
+			if dist > 300 {
+				continue
+			}
+
+			aRep := repeaterSet[a.PublicKey]
+			bRep := repeaterSet[b.PublicKey]
+			var hopType string
+			if aRep && bRep {
+				hopType = "R↔R"
+			} else if !aRep && !bRep {
+				hopType = "C↔C"
+			} else {
+				hopType = "C↔R"
+			}
+
+			roundedDist := math.Round(dist*100) / 100
+			var snrVal interface{}
+			if tx.SNR != nil {
+				snrVal = *tx.SNR
+			}
+			allHops = append(allHops, hopRecord{
+				FromName: a.Name, FromPk: a.PublicKey,
+				ToName: b.Name, ToPk: b.PublicKey,
+				Dist: roundedDist, Type: hopType,
+				SNR: snrVal, Hash: tx.Hash, Timestamp: tx.FirstSeen,
+			})
+			catDists[hopType] = append(catDists[hopType], dist)
+			pathDist += dist
+			pathHops = append(pathHops, map[string]interface{}{
+				"fromName": a.Name, "fromPk": a.PublicKey,
+				"toName": b.Name, "toPk": b.PublicKey,
+				"dist": roundedDist,
+			})
+
+			if hourBucket != "" {
+				distByHour[hourBucket] = append(distByHour[hourBucket], dist)
+			}
+		}
+
+		if len(pathHops) > 0 {
+			pathTotals = append(pathTotals, pathRecord{
+				Hash: tx.Hash, TotalDist: math.Round(pathDist*100) / 100,
+				HopCount: len(pathHops), Timestamp: tx.FirstSeen, Hops: pathHops,
+			})
+		}
+	}
+
+	// Sort and pick top hops/paths
+	sort.Slice(allHops, func(i, j int) bool { return allHops[i].Dist > allHops[j].Dist })
+	topHops := make([]map[string]interface{}, 0)
+	for i, h := range allHops {
+		if i >= 50 {
+			break
+		}
+		topHops = append(topHops, map[string]interface{}{
+			"fromName": h.FromName, "fromPk": h.FromPk,
+			"toName": h.ToName, "toPk": h.ToPk,
+			"dist": h.Dist, "type": h.Type,
+			"snr": h.SNR, "hash": h.Hash, "timestamp": h.Timestamp,
+		})
+	}
+
+	sort.Slice(pathTotals, func(i, j int) bool { return pathTotals[i].TotalDist > pathTotals[j].TotalDist })
+	topPaths := make([]map[string]interface{}, 0)
+	for i, p := range pathTotals {
+		if i >= 20 {
+			break
+		}
+		topPaths = append(topPaths, map[string]interface{}{
+			"hash": p.Hash, "totalDist": p.TotalDist,
+			"hopCount": p.HopCount, "timestamp": p.Timestamp, "hops": p.Hops,
+		})
+	}
+
+	// Category stats
+	medianF := func(arr []float64) float64 {
+		if len(arr) == 0 {
+			return 0
+		}
+		c := make([]float64, len(arr))
+		copy(c, arr)
+		sort.Float64s(c)
+		return c[len(c)/2]
+	}
+	minF := func(arr []float64) float64 {
+		if len(arr) == 0 {
+			return 0
+		}
+		m := arr[0]
+		for _, v := range arr[1:] {
+			if v < m {
+				m = v
+			}
+		}
+		return m
+	}
+	maxF := func(arr []float64) float64 {
+		if len(arr) == 0 {
+			return 0
+		}
+		m := arr[0]
+		for _, v := range arr[1:] {
+			if v > m {
+				m = v
+			}
+		}
+		return m
+	}
+
+	catStats := map[string]interface{}{}
+	for cat, dists := range catDists {
+		if len(dists) == 0 {
+			catStats[cat] = map[string]interface{}{"count": 0, "avg": 0, "median": 0, "min": 0, "max": 0}
+			continue
+		}
+		sum := 0.0
+		for _, v := range dists {
+			sum += v
+		}
+		avg := sum / float64(len(dists))
+		catStats[cat] = map[string]interface{}{
+			"count":  len(dists),
+			"avg":    math.Round(avg*100) / 100,
+			"median": math.Round(medianF(dists)*100) / 100,
+			"min":    math.Round(minF(dists)*100) / 100,
+			"max":    math.Round(maxF(dists)*100) / 100,
+		}
+	}
+
+	// Distance histogram
+	var distHistogram interface{} = []interface{}{}
+	allDists := make([]float64, len(allHops))
+	for i, h := range allHops {
+		allDists[i] = h.Dist
+	}
+	if len(allDists) > 0 {
+		hMin, hMax := minF(allDists), maxF(allDists)
+		binCount := 25
+		binW := (hMax - hMin) / float64(binCount)
+		if binW == 0 {
+			binW = 1
+		}
+		bins := make([]int, binCount)
+		for _, d := range allDists {
+			idx := int(math.Floor((d - hMin) / binW))
+			if idx >= binCount {
+				idx = binCount - 1
+			}
+			if idx < 0 {
+				idx = 0
+			}
+			bins[idx]++
+		}
+		binArr := make([]map[string]interface{}, binCount)
+		for i, c := range bins {
+			binArr[i] = map[string]interface{}{
+				"x": math.Round((hMin+float64(i)*binW)*10) / 10,
+				"w": math.Round(binW*10) / 10,
+				"count": c,
+			}
+		}
+		distHistogram = map[string]interface{}{"bins": binArr, "min": hMin, "max": hMax}
+	}
+
+	// Distance over time
+	timeKeys := make([]string, 0, len(distByHour))
+	for k := range distByHour {
+		timeKeys = append(timeKeys, k)
+	}
+	sort.Strings(timeKeys)
+	distOverTime := make([]map[string]interface{}, 0, len(timeKeys))
+	for _, hour := range timeKeys {
+		dists := distByHour[hour]
+		sum := 0.0
+		for _, v := range dists {
+			sum += v
+		}
+		distOverTime = append(distOverTime, map[string]interface{}{
+			"hour":  hour,
+			"avg":   math.Round(sum/float64(len(dists))*100) / 100,
+			"count": len(dists),
+		})
+	}
+
+	// Summary
+	summary := map[string]interface{}{
+		"totalHops":  len(allHops),
+		"totalPaths": len(pathTotals),
+		"avgDist":    0.0,
+		"maxDist":    0.0,
+	}
+	if len(allDists) > 0 {
+		sum := 0.0
+		for _, v := range allDists {
+			sum += v
+		}
+		summary["avgDist"] = math.Round(sum/float64(len(allDists))*100) / 100
+		summary["maxDist"] = math.Round(maxF(allDists)*100) / 100
+	}
+
+	return map[string]interface{}{
+		"summary":       summary,
+		"topHops":       topHops,
+		"topPaths":      topPaths,
+		"catStats":      catStats,
+		"distHistogram": distHistogram,
+		"distOverTime":  distOverTime,
+	}
+}
+
+// --- Hash Sizes Analytics ---
+
+func (s *PacketStore) GetAnalyticsHashSizes(region string) map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var regionObs map[string]bool
+	if region != "" {
+		regionObs = s.resolveRegionObservers(region)
+	}
+
+	allNodes := s.getAllNodes()
+	pm := buildPrefixMap(allNodes)
+
+	distribution := map[string]int{"1": 0, "2": 0, "3": 0}
+	byHour := map[string]map[string]int{}
+	byNode := map[string]map[string]interface{}{}
+	uniqueHops := map[string]map[string]interface{}{}
+	total := 0
+
+	for _, tx := range s.packets {
+		if tx.RawHex == "" {
+			continue
+		}
+		hops := parsePathJSON(tx.PathJSON)
+		if len(hops) == 0 {
+			continue
+		}
+		if regionObs != nil {
+			match := false
+			for _, obs := range tx.Observations {
+				if regionObs[obs.ObserverID] {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+
+		// Parse header and path byte
+		if len(tx.RawHex) < 4 {
+			continue
+		}
+		header, err := strconv.ParseUint(tx.RawHex[:2], 16, 8)
+		if err != nil {
+			continue
+		}
+		routeType := header & 0x03
+		pathByteIdx := 1
+		if routeType == 0 || routeType == 3 {
+			pathByteIdx = 5
+		}
+		hexStart := pathByteIdx * 2
+		hexEnd := hexStart + 2
+		if hexEnd > len(tx.RawHex) {
+			continue
+		}
+		actualPathByte, err := strconv.ParseUint(tx.RawHex[hexStart:hexEnd], 16, 8)
+		if err != nil {
+			continue
+		}
+
+		hashSize := int((actualPathByte>>6)&0x3) + 1
+		if hashSize > 3 {
+			continue
+		}
+		total++
+
+		sizeKey := strconv.Itoa(hashSize)
+		distribution[sizeKey]++
+
+		// Hourly buckets
+		if len(tx.FirstSeen) >= 13 {
+			hour := tx.FirstSeen[:13]
+			if byHour[hour] == nil {
+				byHour[hour] = map[string]int{"1": 0, "2": 0, "3": 0}
+			}
+			byHour[hour][sizeKey]++
+		}
+
+		// Track unique hops with their sizes
+		for _, hop := range hops {
+			if uniqueHops[hop] == nil {
+				hopLower := strings.ToLower(hop)
+				candidates := pm.m[hopLower]
+				var matchName, matchPk interface{}
+				if len(candidates) > 0 {
+					matchName = candidates[0].Name
+					matchPk = candidates[0].PublicKey
+				}
+				uniqueHops[hop] = map[string]interface{}{
+					"size": (len(hop) + 1) / 2, "count": 0,
+					"name": matchName, "pubkey": matchPk,
+				}
+			}
+			uniqueHops[hop]["count"] = uniqueHops[hop]["count"].(int) + 1
+		}
+
+		// Track originator from advert packets
+		if tx.PayloadType != nil && *tx.PayloadType == 4 && tx.DecodedJSON != "" {
+			var d map[string]interface{}
+			if json.Unmarshal([]byte(tx.DecodedJSON), &d) == nil {
+				name := ""
+				if n, ok := d["name"].(string); ok {
+					name = n
+				}
+				if name == "" {
+					if pk, ok := d["pubKey"].(string); ok && pk != "" {
+						name = pk[:8]
+					} else if pk, ok := d["public_key"].(string); ok && pk != "" {
+						name = pk[:8]
+					}
+				}
+				if name != "" {
+					if byNode[name] == nil {
+						var pubkey interface{}
+						if pk, ok := d["pubKey"].(string); ok {
+							pubkey = pk
+						} else if pk, ok := d["public_key"].(string); ok {
+							pubkey = pk
+						}
+						byNode[name] = map[string]interface{}{
+							"hashSize": hashSize, "packets": 0,
+							"lastSeen": tx.FirstSeen, "pubkey": pubkey,
+						}
+					}
+					byNode[name]["packets"] = byNode[name]["packets"].(int) + 1
+					byNode[name]["hashSize"] = hashSize
+					byNode[name]["lastSeen"] = tx.FirstSeen
+				}
+			}
+		}
+	}
+
+	// Sort hourly data
+	hourKeys := make([]string, 0, len(byHour))
+	for k := range byHour {
+		hourKeys = append(hourKeys, k)
+	}
+	sort.Strings(hourKeys)
+	hourly := make([]map[string]interface{}, 0, len(hourKeys))
+	for _, hour := range hourKeys {
+		sizes := byHour[hour]
+		hourly = append(hourly, map[string]interface{}{
+			"hour": hour, "1": sizes["1"], "2": sizes["2"], "3": sizes["3"],
+		})
+	}
+
+	// Top hops by frequency
+	type hopEntry struct {
+		hex  string
+		data map[string]interface{}
+	}
+	hopList := make([]hopEntry, 0, len(uniqueHops))
+	for hex, data := range uniqueHops {
+		hopList = append(hopList, hopEntry{hex, data})
+	}
+	sort.Slice(hopList, func(i, j int) bool {
+		return hopList[i].data["count"].(int) > hopList[j].data["count"].(int)
+	})
+	topHops := make([]map[string]interface{}, 0)
+	for i, e := range hopList {
+		if i >= 50 {
+			break
+		}
+		topHops = append(topHops, map[string]interface{}{
+			"hex": e.hex, "size": e.data["size"], "count": e.data["count"],
+			"name": e.data["name"], "pubkey": e.data["pubkey"],
+		})
+	}
+
+	// Multi-byte nodes
+	multiByteNodes := make([]map[string]interface{}, 0)
+	for name, data := range byNode {
+		if data["hashSize"].(int) > 1 {
+			multiByteNodes = append(multiByteNodes, map[string]interface{}{
+				"name": name, "hashSize": data["hashSize"],
+				"packets": data["packets"], "lastSeen": data["lastSeen"],
+				"pubkey": data["pubkey"],
+			})
+		}
+	}
+	sort.Slice(multiByteNodes, func(i, j int) bool {
+		return multiByteNodes[i]["packets"].(int) > multiByteNodes[j]["packets"].(int)
+	})
+
+	return map[string]interface{}{
+		"total":          total,
+		"distribution":   distribution,
+		"hourly":         hourly,
+		"topHops":        topHops,
+		"multiByteNodes": multiByteNodes,
+	}
+}
+
+// --- Bulk Health (in-memory) ---
+
+func (s *PacketStore) GetBulkHealth(limit int, region string) []map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Region filtering
+	var regionNodeKeys map[string]bool
+	if region != "" {
+		regionObs := s.resolveRegionObservers(region)
+		if regionObs != nil {
+			regionalHashes := make(map[string]bool)
+			for obsID := range regionObs {
+				obsList := s.byObserver[obsID]
+				for _, o := range obsList {
+					tx := s.byTxID[o.TransmissionID]
+					if tx != nil {
+						regionalHashes[tx.Hash] = true
+					}
+				}
+			}
+			regionNodeKeys = make(map[string]bool)
+			for pk, hashes := range s.nodeHashes {
+				for h := range hashes {
+					if regionalHashes[h] {
+						regionNodeKeys[pk] = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Get nodes from DB
+	queryLimit := limit
+	if regionNodeKeys != nil {
+		queryLimit = 500
+	}
+	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes ORDER BY last_seen DESC LIMIT ?", queryLimit)
+	if err != nil {
+		return []map[string]interface{}{}
+	}
+	defer rows.Close()
+
+	type dbNode struct {
+		pk, name, role string
+		lat, lon       interface{}
+	}
+	var nodes []dbNode
+	for rows.Next() {
+		var pk string
+		var name, role sql.NullString
+		var lat, lon sql.NullFloat64
+		rows.Scan(&pk, &name, &role, &lat, &lon)
+		if regionNodeKeys != nil && !regionNodeKeys[pk] {
+			continue
+		}
+		nodes = append(nodes, dbNode{
+			pk: pk, name: nullStrVal(name), role: nullStrVal(role),
+			lat: nullFloat(lat), lon: nullFloat(lon),
+		})
+		if regionNodeKeys == nil && len(nodes) >= limit {
+			break
+		}
+	}
+	if regionNodeKeys != nil && len(nodes) > limit {
+		nodes = nodes[:limit]
+	}
+
+	todayStart := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
+	results := make([]map[string]interface{}, 0, len(nodes))
+
+	for _, n := range nodes {
+		packets := s.byNode[n.pk]
+		var packetsToday int
+		var snrSum float64
+		var snrCount int
+		var lastHeard string
+		observerStats := map[string]*struct {
+			name                       string
+			snrSum, rssiSum            float64
+			snrCount, rssiCount, count int
+		}{}
+		totalObservations := 0
+
+		for _, pkt := range packets {
+			totalObservations += pkt.ObservationCount
+			if totalObservations == 0 {
+				totalObservations = 1
+			}
+			if pkt.FirstSeen > todayStart {
+				packetsToday++
+			}
+			if pkt.SNR != nil {
+				snrSum += *pkt.SNR
+				snrCount++
+			}
+			if lastHeard == "" || pkt.FirstSeen > lastHeard {
+				lastHeard = pkt.FirstSeen
+			}
+			obsID := pkt.ObserverID
+			if obsID != "" {
+				obs := observerStats[obsID]
+				if obs == nil {
+					obs = &struct {
+						name                       string
+						snrSum, rssiSum            float64
+						snrCount, rssiCount, count int
+					}{name: pkt.ObserverName}
+					observerStats[obsID] = obs
+				}
+				obs.count++
+				if pkt.SNR != nil {
+					obs.snrSum += *pkt.SNR
+					obs.snrCount++
+				}
+				if pkt.RSSI != nil {
+					obs.rssiSum += *pkt.RSSI
+					obs.rssiCount++
+				}
+			}
+		}
+
+		observerRows := make([]map[string]interface{}, 0)
+		for id, o := range observerStats {
+			var avgSnr, avgRssi interface{}
+			if o.snrCount > 0 {
+				avgSnr = o.snrSum / float64(o.snrCount)
+			}
+			if o.rssiCount > 0 {
+				avgRssi = o.rssiSum / float64(o.rssiCount)
+			}
+			observerRows = append(observerRows, map[string]interface{}{
+				"observer_id": id, "observer_name": o.name,
+				"avgSnr": avgSnr, "avgRssi": avgRssi, "packetCount": o.count,
+			})
+		}
+		sort.Slice(observerRows, func(i, j int) bool {
+			return observerRows[i]["packetCount"].(int) > observerRows[j]["packetCount"].(int)
+		})
+
+		var avgSnr interface{}
+		if snrCount > 0 {
+			avgSnr = snrSum / float64(snrCount)
+		}
+		var lhVal interface{}
+		if lastHeard != "" {
+			lhVal = lastHeard
+		}
+
+		results = append(results, map[string]interface{}{
+			"public_key": n.pk,
+			"name":       nilIfEmpty(n.name),
+			"role":       nilIfEmpty(n.role),
+			"lat":        n.lat,
+			"lon":        n.lon,
+			"stats": map[string]interface{}{
+				"totalTransmissions": len(packets),
+				"totalObservations":  totalObservations,
+				"totalPackets":       len(packets),
+				"packetsToday":       packetsToday,
+				"avgSnr":             avgSnr,
+				"lastHeard":          lhVal,
+			},
+			"observers": observerRows,
+		})
+	}
+
+	return results
+}
+
+// --- Subpaths Analytics ---
+
+func (s *PacketStore) GetAnalyticsSubpaths(region string, minLen, maxLen, limit int) map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var regionObs map[string]bool
+	if region != "" {
+		regionObs = s.resolveRegionObservers(region)
+	}
+
+	allNodes := s.getAllNodes()
+	pm := buildPrefixMap(allNodes)
+	hopCache := make(map[string]*nodeInfo)
+	resolveHop := func(hop string) string {
+		if cached, ok := hopCache[hop]; ok {
+			if cached != nil {
+				return cached.Name
+			}
+			return hop
+		}
+		r := pm.resolve(hop)
+		hopCache[hop] = r
+		if r != nil {
+			return r.Name
+		}
+		return hop
+	}
+
+	subpathCounts := map[string]*struct {
+		count int
+		raw   string
+	}{}
+	totalPaths := 0
+
+	for _, tx := range s.packets {
+		hops := parsePathJSON(tx.PathJSON)
+		if len(hops) < 2 {
+			continue
+		}
+		if regionObs != nil {
+			match := false
+			for _, obs := range tx.Observations {
+				if regionObs[obs.ObserverID] {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		totalPaths++
+
+		// Resolve hops to names
+		named := make([]string, len(hops))
+		for i, h := range hops {
+			named[i] = resolveHop(h)
+		}
+
+		for l := minLen; l <= maxLen && l <= len(named); l++ {
+			for start := 0; start <= len(named)-l; start++ {
+				sub := strings.Join(named[start:start+l], " → ")
+				raw := strings.Join(hops[start:start+l], ",")
+				entry := subpathCounts[sub]
+				if entry == nil {
+					entry = &struct {
+						count int
+						raw   string
+					}{raw: raw}
+					subpathCounts[sub] = entry
+				}
+				entry.count++
+			}
+		}
+	}
+
+	type subpathEntry struct {
+		path  string
+		count int
+		raw   string
+	}
+	ranked := make([]subpathEntry, 0, len(subpathCounts))
+	for path, data := range subpathCounts {
+		ranked = append(ranked, subpathEntry{path, data.count, data.raw})
+	}
+	sort.Slice(ranked, func(i, j int) bool { return ranked[i].count > ranked[j].count })
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+
+	subpaths := make([]map[string]interface{}, 0, len(ranked))
+	for _, e := range ranked {
+		pct := 0.0
+		if totalPaths > 0 {
+			pct = math.Round(float64(e.count)/float64(totalPaths)*1000) / 10
+		}
+		subpaths = append(subpaths, map[string]interface{}{
+			"path":    e.path,
+			"rawHops": strings.Split(e.raw, ","),
+			"count":   e.count,
+			"hops":    len(strings.Split(e.path, " → ")),
+			"pct":     pct,
+		})
+	}
+
+	return map[string]interface{}{
+		"subpaths":   subpaths,
+		"totalPaths": totalPaths,
+	}
+}
+
+// --- Subpath Detail ---
+
+func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	allNodes := s.getAllNodes()
+	pm := buildPrefixMap(allNodes)
+
+	// Resolve the requested hops
+	nodes := make([]map[string]interface{}, len(rawHops))
+	for i, hop := range rawHops {
+		r := pm.resolve(hop)
+		entry := map[string]interface{}{"hop": hop, "name": hop, "lat": nil, "lon": nil, "pubkey": nil}
+		if r != nil {
+			entry["name"] = r.Name
+			entry["pubkey"] = r.PublicKey
+			if r.HasGPS {
+				entry["lat"] = r.Lat
+				entry["lon"] = r.Lon
+			}
+		}
+		nodes[i] = entry
+	}
+
+	hourBuckets := make([]int, 24)
+	var snrSum, rssiSum float64
+	var snrCount, rssiCount int
+	observers := map[string]int{}
+	parentPaths := map[string]int{}
+	var matchCount int
+	var firstSeen, lastSeen interface{}
+
+	for _, tx := range s.packets {
+		hops := parsePathJSON(tx.PathJSON)
+		if len(hops) < len(rawHops) {
+			continue
+		}
+
+		// Check if rawHops appears as contiguous subsequence
+		found := false
+		for i := 0; i <= len(hops)-len(rawHops); i++ {
+			match := true
+			for j := 0; j < len(rawHops); j++ {
+				if !strings.EqualFold(hops[i+j], rawHops[j]) {
+					match = false
+					break
+				}
+			}
+			if match {
+				found = true
+				break
+			}
+		}
+		if !found {
+			continue
+		}
+
+		matchCount++
+		ts := tx.FirstSeen
+		if ts != "" {
+			if firstSeen == nil || ts < firstSeen.(string) {
+				firstSeen = ts
+			}
+			if lastSeen == nil || ts > lastSeen.(string) {
+				lastSeen = ts
+			}
+			// Parse hour from timestamp for hourly distribution
+			t, err := time.Parse(time.RFC3339, ts)
+			if err != nil {
+				t, err = time.Parse("2006-01-02 15:04:05", ts)
+			}
+			if err == nil {
+				hourBuckets[t.Hour()]++
+			}
+		}
+		if tx.SNR != nil {
+			snrSum += *tx.SNR
+			snrCount++
+		}
+		if tx.RSSI != nil {
+			rssiSum += *tx.RSSI
+			rssiCount++
+		}
+		if tx.ObserverName != "" {
+			observers[tx.ObserverName]++
+		}
+
+		// Full parent path (resolved)
+		resolved := make([]string, len(hops))
+		for i, h := range hops {
+			r := pm.resolve(h)
+			if r != nil {
+				resolved[i] = r.Name
+			} else {
+				resolved[i] = h
+			}
+		}
+		fullPath := strings.Join(resolved, " → ")
+		parentPaths[fullPath]++
+	}
+
+	var avgSnr, avgRssi interface{}
+	if snrCount > 0 {
+		avgSnr = snrSum / float64(snrCount)
+	}
+	if rssiCount > 0 {
+		avgRssi = rssiSum / float64(rssiCount)
+	}
+
+	topParents := make([]map[string]interface{}, 0)
+	for path, count := range parentPaths {
+		topParents = append(topParents, map[string]interface{}{"path": path, "count": count})
+	}
+	sort.Slice(topParents, func(i, j int) bool {
+		return topParents[i]["count"].(int) > topParents[j]["count"].(int)
+	})
+	if len(topParents) > 15 {
+		topParents = topParents[:15]
+	}
+
+	topObs := make([]map[string]interface{}, 0)
+	for name, count := range observers {
+		topObs = append(topObs, map[string]interface{}{"name": name, "count": count})
+	}
+	sort.Slice(topObs, func(i, j int) bool {
+		return topObs[i]["count"].(int) > topObs[j]["count"].(int)
+	})
+	if len(topObs) > 10 {
+		topObs = topObs[:10]
+	}
+
+	return map[string]interface{}{
+		"hops":             rawHops,
+		"nodes":            nodes,
+		"totalMatches":     matchCount,
+		"firstSeen":        firstSeen,
+		"lastSeen":         lastSeen,
+		"signal":           map[string]interface{}{"avgSnr": avgSnr, "avgRssi": avgRssi, "samples": snrCount},
+		"hourDistribution": hourBuckets,
+		"parentPaths":      topParents,
+		"observers":        topObs,
 	}
 }

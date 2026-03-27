@@ -615,6 +615,12 @@ func (s *Server) handleBulkHealth(w http.ResponseWriter, r *http.Request) {
 		limit = 200
 	}
 
+	if s.store != nil {
+		region := r.URL.Query().Get("region")
+		writeJSON(w, s.store.GetBulkHealth(limit, region))
+		return
+	}
+
 	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen FROM nodes ORDER BY last_seen DESC LIMIT ?", limit)
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -622,17 +628,17 @@ func (s *Server) handleBulkHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type nodeInfo struct {
+	type nodeDbInfo struct {
 		pk, name, role, lastSeen string
 		lat, lon                 interface{}
 	}
-	var nodes []nodeInfo
+	var nodes []nodeDbInfo
 	for rows.Next() {
 		var pk string
 		var name, role, lastSeen sql.NullString
 		var lat, lon sql.NullFloat64
 		rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen)
-		nodes = append(nodes, nodeInfo{
+		nodes = append(nodes, nodeDbInfo{
 			pk: pk, name: nullStrVal(name), role: nullStrVal(role),
 			lastSeen: nullStrVal(lastSeen),
 			lat:      nullFloat(lat), lon: nullFloat(lon),
@@ -927,6 +933,11 @@ func (s *Server) handleAnalyticsRF(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAnalyticsTopology(w http.ResponseWriter, r *http.Request) {
+	if s.store != nil {
+		region := r.URL.Query().Get("region")
+		writeJSON(w, s.store.GetAnalyticsTopology(region))
+		return
+	}
 	writeJSON(w, map[string]interface{}{
 		"uniqueNodes": 0, "avgHops": 0, "medianHops": 0, "maxHops": 0,
 		"hopDistribution":  []interface{}{},
@@ -941,24 +952,29 @@ func (s *Server) handleAnalyticsTopology(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleAnalyticsChannels(w http.ResponseWriter, r *http.Request) {
-	var channels []map[string]interface{}
 	if s.store != nil {
 		region := r.URL.Query().Get("region")
-		channels = s.store.GetChannels(region)
-	} else {
-		channels, _ = s.db.GetChannels()
+		writeJSON(w, s.store.GetAnalyticsChannels(region))
+		return
 	}
+	var channels []map[string]interface{}
+	channels, _ = s.db.GetChannels()
 	writeJSON(w, map[string]interface{}{
-		"activeChannels": len(channels),
-		"decryptable":    len(channels),
-		"channels":       channels,
-		"topSenders":     []interface{}{},
+		"activeChannels":  len(channels),
+		"decryptable":     len(channels),
+		"channels":        channels,
+		"topSenders":      []interface{}{},
 		"channelTimeline": []interface{}{},
-		"msgLengths":     []interface{}{},
+		"msgLengths":      []interface{}{},
 	})
 }
 
 func (s *Server) handleAnalyticsDistance(w http.ResponseWriter, r *http.Request) {
+	if s.store != nil {
+		region := r.URL.Query().Get("region")
+		writeJSON(w, s.store.GetAnalyticsDistance(region))
+		return
+	}
 	writeJSON(w, map[string]interface{}{
 		"summary":       map[string]interface{}{"totalHops": 0, "totalPaths": 0, "avgDist": 0, "maxDist": 0},
 		"topHops":       []interface{}{},
@@ -970,6 +986,11 @@ func (s *Server) handleAnalyticsDistance(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleAnalyticsHashSizes(w http.ResponseWriter, r *http.Request) {
+	if s.store != nil {
+		region := r.URL.Query().Get("region")
+		writeJSON(w, s.store.GetAnalyticsHashSizes(region))
+		return
+	}
 	writeJSON(w, map[string]interface{}{
 		"total":          0,
 		"distribution":   map[string]int{"1": 0, "2": 0, "3": 0},
@@ -980,6 +1001,17 @@ func (s *Server) handleAnalyticsHashSizes(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request) {
+	if s.store != nil {
+		region := r.URL.Query().Get("region")
+		minLen := queryInt(r, "minLen", 2)
+		if minLen < 2 {
+			minLen = 2
+		}
+		maxLen := queryInt(r, "maxLen", 8)
+		limit := queryInt(r, "limit", 100)
+		writeJSON(w, s.store.GetAnalyticsSubpaths(region, minLen, maxLen, limit))
+		return
+	}
 	writeJSON(w, map[string]interface{}{
 		"subpaths":   []interface{}{},
 		"totalPaths": 0,
@@ -992,8 +1024,17 @@ func (s *Server) handleAnalyticsSubpathDetail(w http.ResponseWriter, r *http.Req
 		writeJSON(w, map[string]interface{}{"error": "Need at least 2 hops"})
 		return
 	}
+	rawHops := strings.Split(hops, ",")
+	if len(rawHops) < 2 {
+		writeJSON(w, map[string]interface{}{"error": "Need at least 2 hops"})
+		return
+	}
+	if s.store != nil {
+		writeJSON(w, s.store.GetSubpathDetail(rawHops))
+		return
+	}
 	writeJSON(w, map[string]interface{}{
-		"hops":             strings.Split(hops, ","),
+		"hops":             rawHops,
 		"nodes":            []interface{}{},
 		"totalMatches":     0,
 		"firstSeen":        nil,
