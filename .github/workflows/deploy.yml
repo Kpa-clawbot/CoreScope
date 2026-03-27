@@ -47,7 +47,7 @@ jobs:
           # Parse server coverage
           SERVER_COV="0"
           if [ -f cmd/server/server-coverage.out ]; then
-            SERVER_COV=$(go tool cover -func=cmd/server/server-coverage.out | tail -1 | grep -oP '[\d.]+(?=%)')
+            SERVER_COV=$(cd cmd/server && go tool cover -func=server-coverage.out | tail -1 | grep -oP '[\d.]+(?=%)')
           fi
           SERVER_COLOR="red"
           if [ "$(echo "$SERVER_COV >= 80" | bc -l 2>/dev/null)" = "1" ]; then
@@ -61,7 +61,7 @@ jobs:
           # Parse ingestor coverage
           INGESTOR_COV="0"
           if [ -f cmd/ingestor/ingestor-coverage.out ]; then
-            INGESTOR_COV=$(go tool cover -func=cmd/ingestor/ingestor-coverage.out | tail -1 | grep -oP '[\d.]+(?=%)')
+            INGESTOR_COV=$(cd cmd/ingestor && go tool cover -func=ingestor-coverage.out | tail -1 | grep -oP '[\d.]+(?=%)')
           fi
           INGESTOR_COLOR="red"
           if [ "$(echo "$INGESTOR_COV >= 80" | bc -l 2>/dev/null)" = "1" ]; then
