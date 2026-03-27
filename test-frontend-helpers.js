@@ -1163,6 +1163,59 @@ console.log('\n=== app.js: formatEngineBadge ===');
   });
 }
 
+// ===== APP.JS: formatVersionBadge =====
+console.log('\n=== app.js: formatVersionBadge ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const formatVersionBadge = ctx.formatVersionBadge;
+
+  test('returns empty string when all args missing', () => {
+    assert.strictEqual(formatVersionBadge(null, null, null), '');
+    assert.strictEqual(formatVersionBadge(undefined, undefined, undefined), '');
+    assert.strictEqual(formatVersionBadge('', '', ''), '');
+  });
+  test('shows version + commit + engine', () => {
+    const result = formatVersionBadge('2.6.0', 'abc1234def', 'go');
+    assert.ok(result.includes('version-badge'), 'should have version-badge class');
+    assert.ok(result.includes('v2.6.0'), 'should show version with v prefix');
+    assert.ok(result.includes('abc1234'), 'should show truncated commit');
+    assert.ok(!result.includes('abc1234d'), 'should truncate commit to 7 chars');
+    assert.ok(result.includes('[go]'), 'should show engine in brackets');
+  });
+  test('version already has v prefix', () => {
+    const result = formatVersionBadge('v2.6.0', null, null);
+    assert.ok(result.includes('v2.6.0'), 'should not double the v prefix');
+    assert.ok(!result.includes('vv'), 'should not have vv');
+  });
+  test('skips commit when "unknown"', () => {
+    const result = formatVersionBadge('2.6.0', 'unknown', 'node');
+    assert.ok(result.includes('v2.6.0'), 'should show version');
+    assert.ok(!result.includes('unknown'), 'should not show unknown commit');
+    assert.ok(result.includes('[node]'), 'should show engine');
+  });
+  test('skips commit when missing', () => {
+    const result = formatVersionBadge('2.6.0', null, 'go');
+    assert.ok(result.includes('v2.6.0'), 'should show version');
+    assert.ok(result.includes('[go]'), 'should show engine');
+  });
+  test('shows only engine when version/commit missing', () => {
+    const result = formatVersionBadge(null, null, 'go');
+    assert.ok(result.includes('[go]'), 'should show engine');
+    assert.ok(result.includes('version-badge'), 'should use version-badge class');
+  });
+  test('short commit not truncated', () => {
+    const result = formatVersionBadge('1.0.0', 'abc1234', 'node');
+    assert.ok(result.includes('abc1234'), 'should show full short commit');
+  });
+  test('version only', () => {
+    const result = formatVersionBadge('2.6.0', null, null);
+    assert.ok(result.includes('v2.6.0'), 'should show version');
+    assert.ok(!result.includes('·'), 'should not have separator for single part');
+  });
+}
+
 // ===== SUMMARY =====
 console.log(`\n${'═'.repeat(40)}`);
 console.log(`  Frontend helpers: ${passed} passed, ${failed} failed`);

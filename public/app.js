@@ -105,6 +105,16 @@ function formatEngineBadge(engine) {
   return ` <span class="engine-badge">${engine}</span>`;
 }
 
+function formatVersionBadge(version, commit, engine) {
+  if (!version && !commit && !engine) return '';
+  var parts = [];
+  if (version) parts.push(version.charAt(0) === 'v' ? version : 'v' + version);
+  if (commit && commit !== 'unknown') parts.push(commit.length > 7 ? commit.slice(0, 7) : commit);
+  if (engine) parts.push('[' + engine + ']');
+  if (parts.length === 0) return '';
+  return ' <span class="version-badge">' + parts.join(' · ') + '</span>';
+}
+
 // --- Favorites ---
 const FAV_KEY = 'meshcore-favorites';
 function getFavorites() {
@@ -537,7 +547,7 @@ window.addEventListener('DOMContentLoaded', () => {
       const stats = await api('/stats', { ttl: CLIENT_TTL.stats });
       const el = document.getElementById('navStats');
       if (el) {
-        el.innerHTML = `<span class="stat-val">${stats.totalPackets}</span> pkts · <span class="stat-val">${stats.totalNodes}</span> nodes · <span class="stat-val">${stats.totalObservers}</span> obs${formatEngineBadge(stats.engine)}`;
+        el.innerHTML = `<span class="stat-val">${stats.totalPackets}</span> pkts · <span class="stat-val">${stats.totalNodes}</span> nodes · <span class="stat-val">${stats.totalObservers}</span> obs${formatVersionBadge(stats.version, stats.commit, stats.engine)}`;
         el.querySelectorAll('.stat-val').forEach(s => s.classList.add('updated'));
         setTimeout(() => { el.querySelectorAll('.stat-val').forEach(s => s.classList.remove('updated')); }, 600);
       }
