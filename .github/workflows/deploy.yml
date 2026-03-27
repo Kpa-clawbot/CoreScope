@@ -178,7 +178,27 @@ jobs:
           fi
 
           # Ensure data directories exist
-          mkdir -p "${PROD_DATA_DIR:-$HOME/meshcore-data}" "${STAGING_DATA_DIR:-$HOME/meshcore-staging-data}"
+          STAGING_DIR="${STAGING_DATA_DIR:-$HOME/meshcore-staging-data}"
+          mkdir -p "${PROD_DATA_DIR:-$HOME/meshcore-data}" "$STAGING_DIR"
+
+          # Ensure staging has a Caddyfile (generate from template if missing)
+          if [ ! -f "$STAGING_DIR/Caddyfile" ]; then
+            cp docker/Caddyfile.staging "$STAGING_DIR/Caddyfile"
+            echo "Generated staging Caddyfile"
+          fi
+
+          # Ensure staging has a config.json (copy from prod if missing)
+          if [ ! -f "$STAGING_DIR/config.json" ]; then
+            PROD_DIR="${PROD_DATA_DIR:-$HOME/meshcore-data}"
+            if [ -f "$PROD_DIR/config.json" ]; then
+              cp "$PROD_DIR/config.json" "$STAGING_DIR/config.json"
+            elif [ -f /opt/meshcore-deploy/config.json ]; then
+              cp /opt/meshcore-deploy/config.json "$STAGING_DIR/config.json"
+            else
+              echo '{}' > "$STAGING_DIR/config.json"
+              echo "WARNING: No config.json found, created empty one"
+            fi
+          fi
 
           # Copy compose file to deploy dir so manage.sh can use it
           mkdir -p /opt/meshcore-deploy
