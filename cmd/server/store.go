@@ -79,6 +79,7 @@ type PacketStore struct {
 	topoCache     map[string]*cachedResult // region → cached topology result
 	hashCache     map[string]*cachedResult // region → cached hash-sizes result
 	chanCache     map[string]*cachedResult // region → cached channels result
+	distCache     map[string]*cachedResult // region → cached distance result
 	rfCacheTTL    time.Duration
 	cacheHits     int64
 	cacheMisses int64
@@ -109,6 +110,7 @@ func NewPacketStore(db *DB) *PacketStore {
 		topoCache:     make(map[string]*cachedResult),
 		hashCache:     make(map[string]*cachedResult),
 		chanCache:     make(map[string]*cachedResult),
+		distCache:     make(map[string]*cachedResult),
 		rfCacheTTL:    15 * time.Second,
 	}
 }
@@ -506,7 +508,7 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 // GetCacheStats returns RF cache hit/miss statistics.
 func (s *PacketStore) GetCacheStats() map[string]interface{} {
 	s.cacheMu.Lock()
-	size := len(s.rfCache) + len(s.topoCache) + len(s.hashCache) + len(s.chanCache)
+	size := len(s.rfCache) + len(s.topoCache) + len(s.hashCache) + len(s.chanCache) + len(s.distCache)
 	hits := s.cacheHits
 	misses := s.cacheMisses
 	s.cacheMu.Unlock()
@@ -529,7 +531,7 @@ func (s *PacketStore) GetCacheStats() map[string]interface{} {
 // GetCacheStatsTyped returns cache stats as a typed struct.
 func (s *PacketStore) GetCacheStatsTyped() CacheStats {
 	s.cacheMu.Lock()
-	size := len(s.rfCache) + len(s.topoCache) + len(s.hashCache) + len(s.chanCache)
+	size := len(s.rfCache) + len(s.topoCache) + len(s.hashCache) + len(s.chanCache) + len(s.distCache)
 	hits := s.cacheHits
 	misses := s.cacheMisses
 	s.cacheMu.Unlock()
@@ -2697,6 +2699,25 @@ func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 }
 
 func (s *PacketStore) GetAnalyticsDistance(region string) map[string]interface{} {
+	s.cacheMu.Lock()
+	if cached, ok := s.distCache[region]; ok && time.Now().Before(cached.expiresAt) {
+		s.cacheHits++
+		s.cacheMu.Unlock()
+		return cached.data
+	}
+	s.cacheMisses++
+	s.cacheMu.Unlock()
+
+	result := s.computeAnalyticsDistance(region)
+
+	s.cacheMu.Lock()
+	s.distCache[region] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
+	s.cacheMu.Unlock()
+
+	return result
+}
+
+func (s *PacketStore) computeAnalyticsDistance(region string) map[string]interface{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
