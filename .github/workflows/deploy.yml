@@ -13,17 +13,27 @@ concurrency:
   group: deploy
   cancel-in-progress: true
 
-jobs:
-  go-build:
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v4
+# Pipeline: go-test ──┐
+#                      ├──→ build ──→ deploy-node ──→ deploy-go
+#           node-test ─┘
 
-      - uses: actions/setup-go@v5
+jobs:
+  # ───────────────────────────────────────────────────────────────
+  # 1. Go Build & Test — compiles + tests Go modules, coverage badges
+  # ───────────────────────────────────────────────────────────────
+  go-test:
+    name: "✅ Go Build & Test"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v5
         with:
           go-version: '1.22'
 
-      - name: Build & test Go server (with coverage)
+      - name: Build and test Go server (with coverage)
         run: |
           cd cmd/server
           go build .
@@ -31,7 +41,7 @@ jobs:
           echo "--- Go Server Coverage ---"
           go tool cover -func=server-coverage.out | tail -1
 
-      - name: Build & test Go ingestor (with coverage)
+      - name: Build and test Go ingestor (with coverage)
         run: |
           cd cmd/ingestor
           go build .
@@ -78,7 +88,7 @@ jobs:
           echo "| Server | ${SERVER_COV}% |" >> $GITHUB_STEP_SUMMARY
           echo "| Ingestor | ${INGESTOR_COV}% |" >> $GITHUB_STEP_SUMMARY
 
-      - name: Upload Go badges
+      - name: Upload Go coverage badges
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -86,22 +96,27 @@ jobs:
           path: .badges/go-*.json
           retention-days: 1
 
-  test:
-    needs: go-build
+  # ───────────────────────────────────────────────────────────────
+  # 2. Node.js Tests — backend unit tests + Playwright E2E, coverage
+  # ───────────────────────────────────────────────────────────────
+  node-test:
+    name: "🧪 Node.js Tests"
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: Install dependencies
+      - name: Install npm dependencies
         run: npm ci --production=false
 
-      - name: Detect changes
+      - name: Detect changed files
         id: changes
         run: |
           BACKEND=$(git diff --name-only HEAD~1 | grep -cE '^(server|db|decoder|packet-store|server-helpers|iata-coords)\.js$' || true)
@@ -116,7 +131,7 @@ jobs:
           echo "frontend=$([[ $FRONTEND -gt 0 ]] && echo true || echo false)" >> $GITHUB_OUTPUT
           echo "Changes: backend=$BACKEND frontend=$FRONTEND tests=$TESTS ci=$CI"
 
-      - name: Backend tests + coverage
+      - name: Run backend tests with coverage
         if: steps.changes.outputs.backend == 'true'
         run: |
           npx c8 --reporter=text-summary --reporter=text sh test-all.sh 2>&1 | tee test-output.txt
@@ -134,7 +149,7 @@ jobs:
           
           echo "## Backend: ${TOTAL_PASS} tests, ${BE_COVERAGE}% coverage" >> $GITHUB_STEP_SUMMARY
 
-      - name: Backend tests (quick — no coverage)
+      - name: Run backend tests (quick, no coverage)
         if: steps.changes.outputs.backend == 'false'
         run: npm run test:unit
 
@@ -142,11 +157,11 @@ jobs:
         if: steps.changes.outputs.frontend == 'true'
         run: npx playwright install chromium --with-deps 2>/dev/null || true
 
-      - name: Instrument frontend JS
+      - name: Instrument frontend JS for coverage
         if: steps.changes.outputs.frontend == 'true'
         run: sh scripts/instrument-frontend.sh
 
-      - name: Start test server (instrumented)
+      - name: Start instrumented test server on port 13581
         if: steps.changes.outputs.frontend == 'true'
         run: |
           COVERAGE=1 PORT=13581 node server.js &
@@ -169,7 +184,7 @@ jobs:
         if: steps.changes.outputs.frontend == 'true'
         run: BASE_URL=http://localhost:13581 node test-e2e-playwright.js 2>&1 | tee e2e-output.txt
 
-      - name: Extract coverage + generate report
+      - name: Collect frontend coverage report
         if: always() && steps.changes.outputs.frontend == 'true'
         run: |
           BASE_URL=http://localhost:13581 node scripts/collect-frontend-coverage.js 2>&1 | tee fe-coverage-output.txt
@@ -198,7 +213,7 @@ jobs:
             echo "Server stopped"
           fi
 
-      - name: Frontend E2E only (no coverage)
+      - name: Run frontend E2E (quick, no coverage)
         if: steps.changes.outputs.frontend == 'false'
         run: |
           fuser -k 13581/tcp 2>/dev/null || true
@@ -208,16 +223,46 @@ jobs:
           BASE_URL=http://localhost:13581 node test-e2e-playwright.js || true
           kill $SERVER_PID 2>/dev/null || true
 
-      - name: Download Go coverage badges
+      - name: Upload Node.js test badges
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-badges
+          path: .badges/
+          retention-days: 1
+          if-no-files-found: ignore
+
+  # ───────────────────────────────────────────────────────────────
+  # 3. Build Docker Images — Node.js + Go images for staging
+  # ───────────────────────────────────────────────────────────────
+  build:
+    name: "🏗️ Build Docker Images"
+    needs: [go-test, node-test]
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Download Go coverage badges
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: go-badges
           path: .badges/
 
-      - name: Publish badges
-        if: always()
+      - name: Download Node.js test badges
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: node-badges
+          path: .badges/
+
+      - name: Publish coverage badges to repo
         continue-on-error: true
         run: |
           git config user.name "github-actions"
@@ -226,26 +271,35 @@ jobs:
           git add .badges/ -f
           git diff --cached --quiet || (git commit -m "ci: update test badges [skip ci]" && git push) || echo "Badge push failed"
 
-  deploy:
-    needs: [go-build, test]
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Validate JS
+      - name: Validate JavaScript syntax
         run: sh scripts/validate.sh
 
-      - name: Build image
+      - name: Build Node.js Docker image
         run: |
           echo "${GITHUB_SHA::7}" > .git-commit
           docker build -t meshcore-analyzer:latest .
-          echo "Built $(git rev-parse --short HEAD)"
+          echo "Built meshcore-analyzer:latest ($(git rev-parse --short HEAD))"
 
-      - name: Deploy to staging
+      - name: Build Go Docker image
+        run: |
+          echo "${GITHUB_SHA::7}" > .git-commit
+          APP_VERSION=$(node -p "require('./package.json').version") \
+          GIT_COMMIT="${GITHUB_SHA::7}" \
+          docker compose --profile staging-go build staging-go
+          echo "Built Go staging image"
+
+  # ───────────────────────────────────────────────────────────────
+  # 4. Deploy Node Staging — start on port 81, healthcheck, smoke test
+  # ───────────────────────────────────────────────────────────────
+  deploy-node:
+    name: "🚀 Deploy Node Staging"
+    needs: build
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Prepare staging environment
         run: |
           set -e
 
@@ -287,44 +341,51 @@ jobs:
           mkdir -p /opt/meshcore-deploy
           cp docker-compose.yml /opt/meshcore-deploy/docker-compose.yml
 
-          # Run compose from the repo checkout (where docker-compose.yml lives)
+      - name: Start Node staging on port 81
+        run: |
           docker rm -f meshcore-staging 2>/dev/null || true
           docker compose --profile staging up -d staging
 
-          # Wait for Docker healthcheck — give it up to 5 minutes (big DB)
+      - name: Healthcheck Node staging container
+        run: |
           for i in $(seq 1 300); do
             HEALTH=$(docker inspect meshcore-staging --format '{{.State.Health.Status}}' 2>/dev/null || echo "starting")
             if [ "$HEALTH" = "healthy" ]; then
-              echo "Staging healthy after ${i}s"
+              echo "Node staging healthy after ${i}s"
               break
             fi
             if [ "$i" -eq 300 ]; then
-              echo "Staging failed health check after 300s"
+              echo "Node staging failed health check after 300s"
               docker logs meshcore-staging --tail 50
               exit 1
             fi
             sleep 1
           done
 
-      - name: Smoke test staging
+      - name: Smoke test Node staging API
         run: |
           curl -f http://localhost:81/api/stats || exit 1
           curl -f http://localhost:81/api/nodes || exit 1
-          echo "Staging smoke tests passed"
+          echo "Node staging smoke tests passed ✅"
 
-      - name: Deploy Go staging
+  # ───────────────────────────────────────────────────────────────
+  # 5. Deploy Go Staging — start on port 82, healthcheck, smoke test
+  # ───────────────────────────────────────────────────────────────
+  deploy-go:
+    name: "🚀 Deploy Go Staging"
+    needs: deploy-node
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start Go staging on port 82
         run: |
-          echo "Building Go staging image..."
-          echo "${GITHUB_SHA::7}" > .git-commit
-          APP_VERSION=$(node -p "require('./package.json').version") \
-          GIT_COMMIT="${GITHUB_SHA::7}" \
-          docker compose --profile staging-go build staging-go
-
-          echo "Replacing Go staging container..."
           docker rm -f meshcore-staging-go 2>/dev/null || true
           docker compose --profile staging-go up -d staging-go
 
-          # Wait for healthy — Go starts fast, 60s is generous
+      - name: Healthcheck Go staging container
+        run: |
           for i in $(seq 1 60); do
             HEALTH=$(docker inspect meshcore-staging-go --format '{{.State.Health.Status}}' 2>/dev/null || echo "starting")
             if [ "$HEALTH" = "healthy" ]; then
@@ -332,22 +393,23 @@ jobs:
               break
             fi
             if [ "$i" -eq 60 ]; then
-              echo "WARNING: Go staging did not become healthy within 60s"
+              echo "Go staging failed health check after 60s"
               docker logs meshcore-staging-go --tail 30
               exit 1
             fi
             sleep 1
           done
 
-          # Verify API responds with engine field
+      - name: Smoke test Go staging API
+        run: |
           if curl -sf http://localhost:82/api/stats | grep -q engine; then
-            echo "Go staging verified — engine field present"
+            echo "Go staging verified — engine field present ✅"
           else
-            echo "WARNING: Go staging /api/stats did not return engine field"
+            echo "Go staging /api/stats did not return engine field"
             exit 1
           fi
 
-      - name: Promotion instructions
+      - name: Post deployment summary
         run: |
           echo "## Staging Deployed ✓" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
