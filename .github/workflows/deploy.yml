@@ -23,11 +23,68 @@ jobs:
         with:
           go-version: '1.22'
 
-      - name: Build & test Go server
-        run: cd cmd/server && go build . && go test ./...
+      - name: Build & test Go server (with coverage)
+        run: |
+          cd cmd/server
+          go build .
+          go test -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
+          echo "--- Go Server Coverage ---"
+          go tool cover -func=server-coverage.out | tail -1
 
-      - name: Build & test Go ingestor
-        run: cd cmd/ingestor && go build . && go test ./...
+      - name: Build & test Go ingestor (with coverage)
+        run: |
+          cd cmd/ingestor
+          go build .
+          go test -coverprofile=ingestor-coverage.out ./... 2>&1 | tee ingestor-test.log
+          echo "--- Go Ingestor Coverage ---"
+          go tool cover -func=ingestor-coverage.out | tail -1
+
+      - name: Generate Go coverage badges
+        if: always()
+        run: |
+          mkdir -p .badges
+
+          # Parse server coverage
+          SERVER_COV="0"
+          if [ -f cmd/server/server-coverage.out ]; then
+            SERVER_COV=$(go tool cover -func=cmd/server/server-coverage.out | tail -1 | grep -oP '[\d.]+(?=%)')
+          fi
+          SERVER_COLOR="red"
+          if [ "$(echo "$SERVER_COV >= 80" | bc -l 2>/dev/null)" = "1" ]; then
+            SERVER_COLOR="green"
+          elif [ "$(echo "$SERVER_COV >= 60" | bc -l 2>/dev/null)" = "1" ]; then
+            SERVER_COLOR="yellow"
+          fi
+          echo "{\"schemaVersion\":1,\"label\":\"go server coverage\",\"message\":\"${SERVER_COV}%\",\"color\":\"${SERVER_COLOR}\"}" > .badges/go-server-coverage.json
+          echo "Go server coverage: ${SERVER_COV}% (${SERVER_COLOR})"
+
+          # Parse ingestor coverage
+          INGESTOR_COV="0"
+          if [ -f cmd/ingestor/ingestor-coverage.out ]; then
+            INGESTOR_COV=$(go tool cover -func=cmd/ingestor/ingestor-coverage.out | tail -1 | grep -oP '[\d.]+(?=%)')
+          fi
+          INGESTOR_COLOR="red"
+          if [ "$(echo "$INGESTOR_COV >= 80" | bc -l 2>/dev/null)" = "1" ]; then
+            INGESTOR_COLOR="green"
+          elif [ "$(echo "$INGESTOR_COV >= 60" | bc -l 2>/dev/null)" = "1" ]; then
+            INGESTOR_COLOR="yellow"
+          fi
+          echo "{\"schemaVersion\":1,\"label\":\"go ingestor coverage\",\"message\":\"${INGESTOR_COV}%\",\"color\":\"${INGESTOR_COLOR}\"}" > .badges/go-ingestor-coverage.json
+          echo "Go ingestor coverage: ${INGESTOR_COV}% (${INGESTOR_COLOR})"
+
+          echo "## Go Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "| Module | Coverage |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Server | ${SERVER_COV}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Ingestor | ${INGESTOR_COV}% |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Go badges
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-badges
+          path: .badges/go-*.json
+          retention-days: 1
 
   test:
     needs: go-build
@@ -150,6 +207,14 @@ jobs:
           sleep 5
           BASE_URL=http://localhost:13581 node test-e2e-playwright.js || true
           kill $SERVER_PID 2>/dev/null || true
+
+      - name: Download Go coverage badges
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: go-badges
+          path: .badges/
 
       - name: Publish badges
         if: always()
