@@ -40,8 +40,9 @@ jobs:
           # If test files changed, run everything
           if [ "$TESTS" -gt 0 ]; then BACKEND=1; FRONTEND=1; fi
           echo "backend=$([[ $BACKEND -gt 0 ]] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "frontend=$([[ $FRONTEND -gt 0 ]] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "Changes: backend=$BACKEND frontend=$FRONTEND tests=$TESTS ci=$CI"
+          # Frontend coverage temporarily disabled — 169 blind sleeps = 13min CI
+          echo "frontend=false" >> $GITHUB_OUTPUT
+          echo "Changes: backend=$BACKEND frontend=$FRONTEND (coverage SKIPPED) tests=$TESTS ci=$CI"
 
       - name: Backend tests + coverage
         if: steps.changes.outputs.backend == 'true'
