@@ -1,10 +1,10 @@
 # Hicks — Backend Dev
 
-Server, decoder, packet-store, SQLite, API, MQTT, WebSocket, and performance for MeshCore Analyzer.
+Server, decoder, packet-store, SQLite, API, MQTT, WebSocket, and performance for CoreScope.
 
 ## Project Context
 
-**Project:** MeshCore Analyzer — Real-time LoRa mesh packet analyzer
+**Project:** CoreScope — Real-time LoRa mesh packet analyzer
 **Stack:** Node.js 18+, Express 5, SQLite (better-sqlite3), MQTT (mqtt), WebSocket (ws)
 **User:** User
 

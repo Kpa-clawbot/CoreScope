@@ -2,7 +2,7 @@
 
 ## Project Context
 
-MeshCore Analyzer has 14 test files, 4,290 lines of test code. Backend coverage 85%+, frontend 42%+. Tests use Node.js native runner, Playwright for E2E, c8/nyc for coverage, supertest for API routes. vm.createContext pattern used for testing frontend helpers in Node.js.
+CoreScope has 14 test files, 4,290 lines of test code. Backend coverage 85%+, frontend 42%+. Tests use Node.js native runner, Playwright for E2E, c8/nyc for coverage, supertest for API routes. vm.createContext pattern used for testing frontend helpers in Node.js.
 
 User: User
 

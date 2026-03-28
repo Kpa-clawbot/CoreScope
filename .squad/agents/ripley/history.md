@@ -1,7 +1,7 @@
 # Ripley — Support Engineer History
 
 ## Core Context
-- Project: MeshCore Analyzer — real-time LoRa mesh packet analyzer
+- Project: CoreScope — real-time LoRa mesh packet analyzer
 - User: Kpa-clawbot
 - Joined the team 2026-03-27 to handle community support and triage
 

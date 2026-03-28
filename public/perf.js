@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — perf.js === */
+/* === CoreScope — perf.js === */
 'use strict';
 
 (function () {

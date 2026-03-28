@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — nodes.js === */
+/* === CoreScope — nodes.js === */
 'use strict';
 
 (function () {

@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — home.css === */
+/* === CoreScope — home.css === */
 
 /* Override #app overflow:hidden for home page scrolling */
 #app:has(.home-hero), #app:has(.home-chooser) { overflow-y: auto; }

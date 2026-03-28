@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — audio-lab.js === */
+/* === CoreScope — audio-lab.js === */
 /* Audio Lab: Packet Jukebox for sound debugging & understanding */
 'use strict';
 

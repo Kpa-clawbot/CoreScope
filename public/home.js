@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — home.js (My Mesh Dashboard) === */
+/* === CoreScope — home.js (My Mesh Dashboard) === */
 'use strict';
 
 (function () {
@@ -39,7 +39,7 @@
   function showChooser(container) {
     container.innerHTML = `
       <section class="home-chooser">
-        <h1>Welcome to ${escapeHtml(window.SITE_CONFIG?.branding?.siteName || 'MeshCore Analyzer')}</h1>
+        <h1>Welcome to ${escapeHtml(window.SITE_CONFIG?.branding?.siteName || 'CoreScope')}</h1>
         <p>How familiar are you with MeshCore?</p>
         <div class="chooser-options">
           <button class="chooser-btn new" id="chooseNew">
@@ -63,7 +63,7 @@
     const myNodes = getMyNodes();
     const hasNodes = myNodes.length > 0;
     const homeCfg = window.SITE_CONFIG?.home || null;
-    const siteName = window.SITE_CONFIG?.branding?.siteName || 'MeshCore Analyzer';
+    const siteName = window.SITE_CONFIG?.branding?.siteName || 'CoreScope';
 
     container.innerHTML = `
       <section class="home-hero">
@@ -324,7 +324,7 @@
         loadMyNodes();
         // Update title if no nodes left
         const h1 = document.querySelector('.home-hero h1');
-        if (h1 && !getMyNodes().length) h1.textContent = 'MeshCore Analyzer';
+        if (h1 && !getMyNodes().length) h1.textContent = 'CoreScope';
       });
     });
 

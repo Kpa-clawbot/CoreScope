@@ -2,7 +2,7 @@
 
 ## Project Context
 
-MeshCore Analyzer is a real-time LoRa mesh packet analyzer with a vanilla JS SPA frontend. 22 frontend modules, Leaflet maps, WebSocket live feed, VCR playback, Canvas animations, theme customizer with CSS variables. No build step, no framework. ES5/6 for broad browser support.
+CoreScope is a real-time LoRa mesh packet analyzer with a vanilla JS SPA frontend. 22 frontend modules, Leaflet maps, WebSocket live feed, VCR playback, Canvas animations, theme customizer with CSS variables. No build step, no framework. ES5/6 for broad browser support.
 
 User: User
 

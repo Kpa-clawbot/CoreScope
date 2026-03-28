@@ -1304,7 +1304,7 @@ console.log('\n=== app.js: formatVersionBadge ===');
     loadInCtx(ctx, 'public/app.js');
     return ctx;
   }
-  const GH = 'https://github.com/Kpa-clawbot/meshcore-analyzer';
+  const GH = 'https://github.com/Kpa-clawbot/corescope';
 
   test('returns empty string when all args missing', () => {
     const { formatVersionBadge } = makeBadgeSandbox('');

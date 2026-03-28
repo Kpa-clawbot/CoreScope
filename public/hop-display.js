@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — hop-display.js === */
+/* === CoreScope — hop-display.js === */
 /* Shared hop rendering with conflict info for all pages */
 'use strict';
 

@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — node-analytics.js === */
+/* === CoreScope — node-analytics.js === */
 'use strict';
 (function () {
   const PAYLOAD_LABELS = { 0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert', 5: 'Channel Msg', 7: 'Anon Req', 8: 'Path', 9: 'Trace', 11: 'Control' };

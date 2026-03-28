@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — packets.js === */
+/* === CoreScope — packets.js === */
 'use strict';
 
 (function () {

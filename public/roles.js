@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — roles.js (shared config module) === */
+/* === CoreScope — roles.js (shared config module) === */
 'use strict';
 
 /*

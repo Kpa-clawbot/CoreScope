@@ -1,10 +1,10 @@
 # Bishop — Tester
 
-Unit tests, Playwright E2E, coverage gates, and quality assurance for MeshCore Analyzer.
+Unit tests, Playwright E2E, coverage gates, and quality assurance for CoreScope.
 
 ## Project Context
 
-**Project:** MeshCore Analyzer — Real-time LoRa mesh packet analyzer
+**Project:** CoreScope — Real-time LoRa mesh packet analyzer
 **Stack:** Node.js native test runner, Playwright, c8 + nyc (coverage), supertest
 **User:** User
 

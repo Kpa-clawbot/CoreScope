@@ -4,7 +4,7 @@ Tracks the work queue and keeps the team moving. Always on the roster.
 
 ## Project Context
 
-**Project:** MeshCore Analyzer — Real-time LoRa mesh packet analyzer
+**Project:** CoreScope — Real-time LoRa mesh packet analyzer
 **User:** User
 
 ## Responsibilities

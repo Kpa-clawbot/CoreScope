@@ -2,7 +2,7 @@
 
 ## Project Context
 
-MeshCore Analyzer is a real-time LoRa mesh packet analyzer. Node.js + Express + SQLite backend, vanilla JS SPA frontend. Custom decoder.js fixes path_length bug from upstream library. In-memory packet store provides O(1) lookups for 30K+ packets. TTL response cache achieves 7,000× speedup on bulk health endpoint.
+CoreScope is a real-time LoRa mesh packet analyzer. Node.js + Express + SQLite backend, vanilla JS SPA frontend. Custom decoder.js fixes path_length bug from upstream library. In-memory packet store provides O(1) lookups for 30K+ packets. TTL response cache achieves 7,000× speedup on bulk health endpoint.
 
 User: User
 

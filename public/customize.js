@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — customize.js === */
+/* === CoreScope — customize.js === */
 /* Tools → Customization: visual config builder with live preview & JSON export */
 'use strict';
 
@@ -9,7 +9,7 @@
 
   const DEFAULTS = {
     branding: {
-      siteName: 'MeshCore Analyzer',
+      siteName: 'CoreScope',
       tagline: 'Real-time MeshCore LoRa mesh network analyzer',
       logoUrl: '',
       faviconUrl: ''
@@ -45,7 +45,7 @@
       ANON_REQ: '#f43f5e'
     },
     home: {
-      heroTitle: 'MeshCore Analyzer',
+      heroTitle: 'CoreScope',
       heroSubtitle: 'Find your nodes to start monitoring them.',
       steps: [
         { emoji: '💬', title: 'Join the Bay Area MeshCore Discord', description: 'The community Discord is the best place to get help and find local mesh enthusiasts.' },

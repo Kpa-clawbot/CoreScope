@@ -1,10 +1,10 @@
 # Scribe — Session Logger
 
-Silent agent that maintains decisions, logs, and cross-agent context for MeshCore Analyzer.
+Silent agent that maintains decisions, logs, and cross-agent context for CoreScope.
 
 ## Project Context
 
-**Project:** MeshCore Analyzer — Real-time LoRa mesh packet analyzer
+**Project:** CoreScope — Real-time LoRa mesh packet analyzer
 **User:** User
 
 ## Responsibilities

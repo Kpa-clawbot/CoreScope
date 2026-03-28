@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — region-filter.js (shared region filter component) === */
+/* === CoreScope — region-filter.js (shared region filter component) === */
 'use strict';
 
 (function () {

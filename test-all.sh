@@ -3,7 +3,7 @@
 set -e
 
 echo "═══════════════════════════════════════"
-echo "  MeshCore Analyzer — Test Suite"
+echo "  CoreScope — Test Suite"
 echo "═══════════════════════════════════════"
 echo ""
 

@@ -1,10 +1,10 @@
 # Newt — Frontend Dev
 
-Vanilla JS UI, Leaflet maps, live visualization, theming, and all public/ modules for MeshCore Analyzer.
+Vanilla JS UI, Leaflet maps, live visualization, theming, and all public/ modules for CoreScope.
 
 ## Project Context
 
-**Project:** MeshCore Analyzer — Real-time LoRa mesh packet analyzer
+**Project:** CoreScope — Real-time LoRa mesh packet analyzer
 **Stack:** Vanilla HTML/CSS/JavaScript (ES5/6), Leaflet maps, WebSocket, Canvas animations
 **User:** User
 

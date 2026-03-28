@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — analytics.js (v2 — full nerd mode) === */
+/* === CoreScope — analytics.js (v2 — full nerd mode) === */
 'use strict';
 
 (function () {

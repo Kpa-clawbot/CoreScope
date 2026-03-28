@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — compare.js === */
+/* === CoreScope — compare.js === */
 /* Observer packet comparison — Fixes #129 */
 'use strict';
 

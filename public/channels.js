@@ -1,4 +1,4 @@
-/* === MeshCore Analyzer — channels.js === */
+/* === CoreScope — channels.js === */
 'use strict';
 
 (function () {

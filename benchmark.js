@@ -148,7 +148,7 @@ async function benchmarkEndpoints(port, endpoints, nocache = false) {
 }
 
 async function run() {
-  console.log(`\nMeshCore Analyzer Benchmark — ${RUNS} runs per endpoint`);
+  console.log(`\nCoreScope Benchmark — ${RUNS} runs per endpoint`);
   console.log('Launching servers...\n');
 
   // Launch both servers

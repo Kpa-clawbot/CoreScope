@@ -1,10 +1,10 @@
 # Kobayashi — Lead
 
-Architecture, code review, and decision-making for MeshCore Analyzer.
+Architecture, code review, and decision-making for CoreScope.
 
 ## Project Context
 
-**Project:** MeshCore Analyzer — Real-time LoRa mesh packet analyzer
+**Project:** CoreScope — Real-time LoRa mesh packet analyzer
 **Stack:** Node.js 18+, Express 5, SQLite, vanilla JS frontend, Leaflet, WebSocket, MQTT
 **User:** User
 
