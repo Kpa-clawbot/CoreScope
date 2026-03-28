@@ -35,7 +35,8 @@ type Store struct {
 	stmtUpsertNode           *sql.Stmt
 	stmtIncrementAdvertCount *sql.Stmt
 	stmtUpsertObserver       *sql.Stmt
-	stmtGetObserverRowid     *sql.Stmt
+	stmtGetObserverRowid        *sql.Stmt
+	stmtUpdateNodeTelemetry *sql.Stmt
 }
 
 // OpenStore opens or creates a SQLite DB at the given path, applying the
@@ -81,7 +82,9 @@ func applySchema(db *sql.DB) error {
 			lon REAL,
 			last_seen TEXT,
 			first_seen TEXT,
-			advert_count INTEGER DEFAULT 0
+			advert_count INTEGER DEFAULT 0,
+			battery_mv INTEGER,
+			temperature_c REAL
 		);
 
 		CREATE TABLE IF NOT EXISTS observers (
@@ -111,7 +114,9 @@ func applySchema(db *sql.DB) error {
 			lon REAL,
 			last_seen TEXT,
 			first_seen TEXT,
-			advert_count INTEGER DEFAULT 0
+			advert_count INTEGER DEFAULT 0,
+			battery_mv INTEGER,
+			temperature_c REAL
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_inactive_nodes_last_seen ON inactive_nodes(last_seen);
@@ -215,6 +220,18 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] noise_floor migration complete")
 	}
 
+	// One-time migration: add telemetry columns to nodes and inactive_nodes tables.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'node_telemetry_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding telemetry columns to nodes/inactive_nodes...")
+		db.Exec(`ALTER TABLE nodes ADD COLUMN battery_mv INTEGER`)
+		db.Exec(`ALTER TABLE nodes ADD COLUMN temperature_c REAL`)
+		db.Exec(`ALTER TABLE inactive_nodes ADD COLUMN battery_mv INTEGER`)
+		db.Exec(`ALTER TABLE inactive_nodes ADD COLUMN temperature_c REAL`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('node_telemetry_v1')`)
+		log.Println("[migration] node telemetry columns added")
+	}
+
 	return nil
 }
 
@@ -285,6 +302,16 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtGetObserverRowid, err = s.db.Prepare("SELECT rowid FROM observers WHERE id = ?")
+	if err != nil {
+		return err
+	}
+
+	s.stmtUpdateNodeTelemetry, err = s.db.Prepare(`
+		UPDATE nodes SET
+			battery_mv = COALESCE(?, battery_mv),
+			temperature_c = COALESCE(?, temperature_c)
+		WHERE public_key = ?
+	`)
 	if err != nil {
 		return err
 	}
@@ -390,6 +417,22 @@ func (s *Store) UpsertNode(pubKey, name, role string, lat, lon *float64, lastSee
 // IncrementAdvertCount increments advert_count for a node by public key.
 func (s *Store) IncrementAdvertCount(pubKey string) error {
 	_, err := s.stmtIncrementAdvertCount.Exec(pubKey)
+	return err
+}
+
+// UpdateNodeTelemetry updates battery and temperature for a node.
+func (s *Store) UpdateNodeTelemetry(pubKey string, batteryMv *int, temperatureC *float64) error {
+	var bv, tc interface{}
+	if batteryMv != nil {
+		bv = *batteryMv
+	}
+	if temperatureC != nil {
+		tc = *temperatureC
+	}
+	_, err := s.stmtUpdateNodeTelemetry.Exec(bv, tc, pubKey)
+	if err != nil {
+		s.Stats.WriteErrors.Add(1)
+	}
 	return err
 }
 

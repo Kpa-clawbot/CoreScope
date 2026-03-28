@@ -1355,3 +1355,102 @@ func TestDecodeGrpTxtGarbageMarkedFailed(t *testing.T) {
 		t.Errorf("type=%s, want GRP_TXT", p.Type)
 	}
 }
+
+func TestDecodeAdvertWithTelemetry(t *testing.T) {
+	pubkey := strings.Repeat("AA", 32)
+	timestamp := "78563412"
+	signature := strings.Repeat("BB", 64)
+	flags := "94" // sensor(4) | hasLocation(0x10) | hasName(0x80)
+	lat := "40933402"
+	lon := "E0E6B8F8"
+	name := hex.EncodeToString([]byte("Sensor1"))
+	nullTerm := "00"
+	batteryLE := make([]byte, 2)
+	binary.LittleEndian.PutUint16(batteryLE, 3700)
+	tempLE := make([]byte, 2)
+	binary.LittleEndian.PutUint16(tempLE, uint16(int16(2850)))
+
+	hexStr := "1200" + pubkey + timestamp + signature + flags + lat + lon +
+		name + nullTerm +
+		hex.EncodeToString(batteryLE) + hex.EncodeToString(tempLE)
+
+	pkt, err := DecodePacket(hexStr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if pkt.Payload.Name != "Sensor1" {
+		t.Errorf("name=%s, want Sensor1", pkt.Payload.Name)
+	}
+	if pkt.Payload.BatteryMv == nil {
+		t.Fatal("battery_mv should not be nil")
+	}
+	if *pkt.Payload.BatteryMv != 3700 {
+		t.Errorf("battery_mv=%d, want 3700", *pkt.Payload.BatteryMv)
+	}
+	if pkt.Payload.TemperatureC == nil {
+		t.Fatal("temperature_c should not be nil")
+	}
+	if math.Abs(*pkt.Payload.TemperatureC-28.50) > 0.01 {
+		t.Errorf("temperature_c=%f, want 28.50", *pkt.Payload.TemperatureC)
+	}
+}
+
+func TestDecodeAdvertWithTelemetryNegativeTemp(t *testing.T) {
+	pubkey := strings.Repeat("CC", 32)
+	timestamp := "00000000"
+	signature := strings.Repeat("DD", 64)
+	flags := "84" // sensor(4) | hasName(0x80), no location
+	name := hex.EncodeToString([]byte("Cold"))
+	nullTerm := "00"
+	batteryLE := make([]byte, 2)
+	binary.LittleEndian.PutUint16(batteryLE, 4200)
+	tempLE := make([]byte, 2)
+	binary.LittleEndian.PutUint16(tempLE, uint16(int16(-550)))
+
+	hexStr := "1200" + pubkey + timestamp + signature + flags +
+		name + nullTerm +
+		hex.EncodeToString(batteryLE) + hex.EncodeToString(tempLE)
+
+	pkt, err := DecodePacket(hexStr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if pkt.Payload.Name != "Cold" {
+		t.Errorf("name=%s, want Cold", pkt.Payload.Name)
+	}
+	if pkt.Payload.BatteryMv == nil || *pkt.Payload.BatteryMv != 4200 {
+		t.Errorf("battery_mv=%v, want 4200", pkt.Payload.BatteryMv)
+	}
+	if pkt.Payload.TemperatureC == nil {
+		t.Fatal("temperature_c should not be nil")
+	}
+	if math.Abs(*pkt.Payload.TemperatureC-(-5.50)) > 0.01 {
+		t.Errorf("temperature_c=%f, want -5.50", *pkt.Payload.TemperatureC)
+	}
+}
+
+func TestDecodeAdvertWithoutTelemetry(t *testing.T) {
+	pubkey := strings.Repeat("EE", 32)
+	timestamp := "00000000"
+	signature := strings.Repeat("FF", 64)
+	flags := "82" // repeater(2) | hasName(0x80)
+	name := hex.EncodeToString([]byte("Node1"))
+
+	hexStr := "1200" + pubkey + timestamp + signature + flags + name
+	pkt, err := DecodePacket(hexStr, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if pkt.Payload.Name != "Node1" {
+		t.Errorf("name=%s, want Node1", pkt.Payload.Name)
+	}
+	if pkt.Payload.BatteryMv != nil {
+		t.Errorf("battery_mv should be nil for advert without telemetry, got %d", *pkt.Payload.BatteryMv)
+	}
+	if pkt.Payload.TemperatureC != nil {
+		t.Errorf("temperature_c should be nil for advert without telemetry, got %f", *pkt.Payload.TemperatureC)
+	}
+}

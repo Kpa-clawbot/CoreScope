@@ -1151,3 +1151,75 @@ func TestLoadTestThroughput(t *testing.T) {
 		t.Errorf("transmissions=%d, want %d", txCount, totalMessages)
 	}
 }
+
+func TestUpdateNodeTelemetry(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	lat := 37.0
+	lon := -122.0
+	if err := s.UpsertNode("telem1", "TelemetryNode", "sensor", &lat, &lon, "2026-03-25T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	battery := 3700
+	temp := 28.5
+	if err := s.UpdateNodeTelemetry("telem1", &battery, &temp); err != nil {
+		t.Fatal(err)
+	}
+
+	var bv int
+	var tc float64
+	err = s.db.QueryRow("SELECT battery_mv, temperature_c FROM nodes WHERE public_key = 'telem1'").Scan(&bv, &tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bv != 3700 {
+		t.Errorf("battery_mv=%d, want 3700", bv)
+	}
+	if tc != 28.5 {
+		t.Errorf("temperature_c=%f, want 28.5", tc)
+	}
+
+	newTemp := -5.0
+	if err := s.UpdateNodeTelemetry("telem1", nil, &newTemp); err != nil {
+		t.Fatal(err)
+	}
+	err = s.db.QueryRow("SELECT battery_mv, temperature_c FROM nodes WHERE public_key = 'telem1'").Scan(&bv, &tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bv != 3700 {
+		t.Errorf("battery_mv after nil update=%d, want 3700 (preserved)", bv)
+	}
+	if tc != -5.0 {
+		t.Errorf("temperature_c after update=%f, want -5.0", tc)
+	}
+}
+
+func TestTelemetryMigrationAddsColumns(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	_, err = s.db.Exec("SELECT battery_mv, temperature_c FROM nodes LIMIT 1")
+	if err != nil {
+		t.Errorf("nodes table should have battery_mv and temperature_c columns: %v", err)
+	}
+
+	_, err = s.db.Exec("SELECT battery_mv, temperature_c FROM inactive_nodes LIMIT 1")
+	if err != nil {
+		t.Errorf("inactive_nodes table should have battery_mv and temperature_c columns: %v", err)
+	}
+
+	var count int
+	s.db.QueryRow("SELECT COUNT(*) FROM _migrations WHERE name = 'node_telemetry_v1'").Scan(&count)
+	if count != 1 {
+		t.Errorf("migration node_telemetry_v1 should be recorded, count=%d", count)
+	}
+}

@@ -135,10 +135,30 @@ function decodeAdvert(buf) {
       off += 8;
     }
     if (result.flags.hasName) {
-      let name = appdata.subarray(off).toString('utf8');
-      // Strip non-printable characters (< 0x20 except tab/newline) and DEL
+      // Find null terminator to separate name from trailing telemetry bytes
+      let nameEnd = appdata.length;
+      for (let i = off; i < appdata.length; i++) {
+        if (appdata[i] === 0x00) { nameEnd = i; break; }
+      }
+      let name = appdata.subarray(off, nameEnd).toString('utf8');
       name = name.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
       result.name = name;
+      off = nameEnd;
+      // Skip null terminator(s)
+      while (off < appdata.length && appdata[off] === 0x00) off++;
+    }
+
+    // Telemetry bytes after name: battery_mv(2 LE) + temperature_c(2 LE, signed, /100)
+    if (off + 4 <= appdata.length) {
+      const batteryMv = appdata.readUInt16LE(off);
+      const tempRaw = appdata.readInt16LE(off + 2);
+      const tempC = tempRaw / 100.0;
+      if (batteryMv > 0 && batteryMv <= 10000) {
+        result.battery_mv = batteryMv;
+      }
+      if (tempRaw !== 0 || (off + 4 < appdata.length)) {
+        result.temperature_c = tempC;
+      }
     }
   }
 

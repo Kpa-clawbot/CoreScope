@@ -28,7 +28,9 @@ func setupTestDB(t *testing.T) *DB {
 			lon REAL,
 			last_seen TEXT,
 			first_seen TEXT,
-			advert_count INTEGER DEFAULT 0
+			advert_count INTEGER DEFAULT 0,
+			battery_mv INTEGER,
+			temperature_c REAL
 		);
 
 		CREATE TABLE observers (
@@ -1465,6 +1467,49 @@ func TestGetChannelsStaleMessage(t *testing.T) {
 	}
 	if ch["messageCount"] != 2 {
 		t.Errorf("expected messageCount=2 (unique transmissions), got %v", ch["messageCount"])
+	}
+}
+
+func TestNodeTelemetryFields(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c)
+		VALUES ('pk_telem1', 'SensorNode', 'sensor', 37.0, -122.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 5, 3700, 28.5)`)
+
+	node, err := db.GetNodeByPubkey("pk_telem1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node == nil {
+		t.Fatal("expected node, got nil")
+	}
+	if node["battery_mv"] != 3700 {
+		t.Errorf("battery_mv=%v, want 3700", node["battery_mv"])
+	}
+	if node["temperature_c"] != 28.5 {
+		t.Errorf("temperature_c=%v, want 28.5", node["temperature_c"])
+	}
+
+	nodes, _, _, err := db.GetNodes(50, 0, "sensor", "", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 sensor node, got %d", len(nodes))
+	}
+	if nodes[0]["battery_mv"] != 3700 {
+		t.Errorf("GetNodes battery_mv=%v, want 3700", nodes[0]["battery_mv"])
+	}
+
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count)
+		VALUES ('pk_notelem', 'PlainNode', 'repeater', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 3)`)
+	node2, _ := db.GetNodeByPubkey("pk_notelem")
+	if node2["battery_mv"] != nil {
+		t.Errorf("expected nil battery_mv for node without telemetry, got %v", node2["battery_mv"])
+	}
+	if node2["temperature_c"] != nil {
+		t.Errorf("expected nil temperature_c for node without telemetry, got %v", node2["temperature_c"])
 	}
 }
 

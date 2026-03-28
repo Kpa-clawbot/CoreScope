@@ -128,6 +128,8 @@ type Node struct {
 	LastSeen   *string  `json:"last_seen"`
 	FirstSeen  *string  `json:"first_seen"`
 	AdvertCount int     `json:"advert_count"`
+	BatteryMv    *int     `json:"battery_mv"`
+	TemperatureC *float64 `json:"temperature_c"`
 }
 
 // Observer represents a row from the observers table.
@@ -739,7 +741,7 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 	var total int
 	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM nodes %s", w), args...).Scan(&total)
 
-	querySQL := fmt.Sprintf("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
+	querySQL := fmt.Sprintf("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
 	qArgs := append(args, limit, offset)
 
 	rows, err := db.conn.Query(querySQL, qArgs...)
@@ -765,7 +767,7 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := db.conn.Query(`SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count
+	rows, err := db.conn.Query(`SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c
 		FROM nodes WHERE name LIKE ? OR public_key LIKE ? ORDER BY last_seen DESC LIMIT ?`,
 		"%"+query+"%", query+"%", limit)
 	if err != nil {
@@ -785,7 +787,7 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 
 // GetNodeByPubkey returns a single node.
 func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
-	rows, err := db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count FROM nodes WHERE public_key = ?", pubkey)
+	rows, err := db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c FROM nodes WHERE public_key = ?", pubkey)
 	if err != nil {
 		return nil, err
 	}
@@ -1658,11 +1660,13 @@ func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	var name, role, lastSeen, firstSeen sql.NullString
 	var lat, lon sql.NullFloat64
 	var advertCount int
+	var batteryMv sql.NullInt64
+	var temperatureC sql.NullFloat64
 
-	if err := rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount); err != nil {
+	if err := rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC); err != nil {
 		return nil
 	}
-	return map[string]interface{}{
+	m := map[string]interface{}{
 		"public_key":             pk,
 		"name":                   nullStr(name),
 		"role":                   nullStr(role),
@@ -1675,6 +1679,17 @@ func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 		"hash_size":              nil,
 		"hash_size_inconsistent": false,
 	}
+	if batteryMv.Valid {
+		m["battery_mv"] = int(batteryMv.Int64)
+	} else {
+		m["battery_mv"] = nil
+	}
+	if temperatureC.Valid {
+		m["temperature_c"] = temperatureC.Float64
+	} else {
+		m["temperature_c"] = nil
+	}
+	return m
 }
 
 func nullStr(ns sql.NullString) interface{} {
