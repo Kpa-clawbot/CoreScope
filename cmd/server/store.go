@@ -62,7 +62,7 @@ type StoreObs struct {
 type PacketStore struct {
 	mu            sync.RWMutex
 	db            *DB
-	packets       []*StoreTx                 // sorted by first_seen DESC
+	packets       []*StoreTx                 // sorted by first_seen ASC (oldest first; newest at tail)
 	byHash        map[string]*StoreTx        // hash → *StoreTx
 	byTxID        map[int]*StoreTx           // transmission_id → *StoreTx
 	byObsID       map[int]*StoreObs          // observation_id → *StoreObs
@@ -176,7 +176,7 @@ func (s *PacketStore) Load() error {
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-			ORDER BY t.first_seen DESC, o.timestamp DESC`
+			ORDER BY t.first_seen ASC, o.timestamp ASC`
 	} else {
 		loadSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
@@ -184,7 +184,7 @@ func (s *PacketStore) Load() error {
 				o.snr, o.rssi, o.score, o.path_json, o.timestamp
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
-			ORDER BY t.first_seen DESC, o.timestamp DESC`
+			ORDER BY t.first_seen ASC, o.timestamp ASC`
 	}
 
 	rows, err := s.db.conn.Query(loadSQL)
@@ -368,28 +368,32 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	results := s.filterPackets(q)
 	total := len(results)
 
-	if q.Order == "ASC" {
-		sorted := make([]*StoreTx, len(results))
-		copy(sorted, results)
-		sort.Slice(sorted, func(i, j int) bool {
-			return sorted[i].FirstSeen < sorted[j].FirstSeen
-		})
-		results = sorted
-	}
-
-	// Paginate
+	// results is oldest-first (ASC). For DESC (default) read backwards from the tail;
+	// for ASC read forwards. Both are O(page_size) — no sort copy needed.
 	start := q.Offset
-	if start >= len(results) {
+	if start >= total {
 		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}
 	}
-	end := start + q.Limit
-	if end > len(results) {
-		end = len(results)
+	pageSize := q.Limit
+	if start+pageSize > total {
+		pageSize = total - start
 	}
 
-	packets := make([]map[string]interface{}, 0, end-start)
-	for _, tx := range results[start:end] {
-		packets = append(packets, txToMap(tx))
+	packets := make([]map[string]interface{}, 0, pageSize)
+	if q.Order == "ASC" {
+		for _, tx := range results[start : start+pageSize] {
+			packets = append(packets, txToMap(tx))
+		}
+	} else {
+		// DESC: newest items are at the tail; page 0 = last pageSize items reversed
+		endIdx := total - start
+		startIdx := endIdx - pageSize
+		if startIdx < 0 {
+			startIdx = 0
+		}
+		for i := endIdx - 1; i >= startIdx; i-- {
+			packets = append(packets, txToMap(results[i]))
+		}
 	}
 	return &PacketResult{Packets: packets, Total: total}
 }
@@ -927,14 +931,14 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			}
 			s.byHash[r.hash] = tx
 			// Prepend (newest first)
-			s.packets = append([]*StoreTx{tx}, s.packets...)
+			s.packets = append(s.packets, tx)
 			s.byTxID[r.txID] = tx
 			s.indexByNode(tx)
 			if tx.PayloadType != nil {
 				pt := *tx.PayloadType
 				// Prepend to maintain newest-first order (matches Load ordering)
 				// so GetChannelMessages reverse iteration stays correct
-				s.byPayloadType[pt] = append([]*StoreTx{tx}, s.byPayloadType[pt]...)
+				s.byPayloadType[pt] = append(s.byPayloadType[pt], tx)
 			}
 
 			if _, exists := broadcastTxs[r.txID]; !exists {
@@ -1888,7 +1892,7 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int) 
 	msgMap := map[string]*msgEntry{}
 	var msgOrder []string
 
-	// Iterate type-5 packets oldest-first (byPayloadType is in load order = newest first)
+	// Iterate type-5 packets oldest-first (byPayloadType is ASC = oldest first)
 	type decodedMsg struct {
 		Type            string      `json:"type"`
 		Channel         string      `json:"channel"`
@@ -1899,8 +1903,7 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int) 
 	}
 
 	grpTxts := s.byPayloadType[5]
-	for i := len(grpTxts) - 1; i >= 0; i-- {
-		tx := grpTxts[i]
+	for _, tx := range grpTxts {
 		if tx.DecodedJSON == "" {
 			continue
 		}
