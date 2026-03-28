@@ -8,6 +8,13 @@ on:
       - 'LICENSE'
       - '.gitignore'
       - 'docs/**'
+  pull_request:
+    branches: [master]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - 'docs/**'
 
 concurrency:
   group: deploy
@@ -270,6 +277,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   build:
     name: "🏗️ Build Docker Image"
+    if: github.event_name == 'push'
     needs: [go-test]
     runs-on: self-hosted
     steps:
@@ -294,6 +302,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   deploy:
     name: "🚀 Deploy Staging"
+    if: github.event_name == 'push'
     needs: [build]
     runs-on: self-hosted
     steps:
@@ -338,6 +347,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   publish:
     name: "📝 Publish Badges & Summary"
+    if: github.event_name == 'push'
     needs: [deploy]
     runs-on: self-hosted
     steps:
