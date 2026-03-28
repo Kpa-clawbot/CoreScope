@@ -46,14 +46,6 @@ func setupTestDBv2(t *testing.T) *DB {
 			observer_id TEXT, observer_name TEXT, direction TEXT,
 			snr REAL, rssi REAL, score INTEGER, path_json TEXT, timestamp INTEGER NOT NULL
 		);
-		CREATE VIEW packets_v AS
-			SELECT o.id, t.raw_hex,
-				strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch') AS timestamp,
-				o.observer_id, o.observer_name,
-				o.direction, o.snr, o.rssi, o.score, t.hash, t.route_type,
-				t.payload_type, t.payload_version, o.path_json, t.decoded_json, t.created_at
-			FROM observations o
-			JOIN transmissions t ON t.id = o.transmission_id;
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
@@ -551,8 +543,8 @@ func TestHandlePacketDetailNoStore(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/packets/abc123def4567890", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
-		if w.Code != 200 {
-			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		if w.Code != 404 {
+			t.Fatalf("expected 404 (no store), got %d: %s", w.Code, w.Body.String())
 		}
 	})
 
@@ -560,8 +552,8 @@ func TestHandlePacketDetailNoStore(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/packets/1", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
-		if w.Code != 200 {
-			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		if w.Code != 404 {
+			t.Fatalf("expected 404 (no store), got %d: %s", w.Code, w.Body.String())
 		}
 	})
 
@@ -3271,20 +3263,6 @@ func TestHandlePacketDetailWithStoreAllPaths(t *testing.T) {
 }
 
 // --- Additional DB function coverage ---
-
-func TestDBGetTimestamps(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	ts, err := db.GetTimestamps("2000-01-01")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ts) < 1 {
-		t.Error("expected >=1 timestamps")
-	}
-}
 
 func TestDBGetNewTransmissionsSince(t *testing.T) {
 	db := setupTestDB(t)

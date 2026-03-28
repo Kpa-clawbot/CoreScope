@@ -120,14 +120,14 @@ func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 
 // Node represents a row from the nodes table.
 type Node struct {
-	PublicKey   string   `json:"public_key"`
-	Name       *string  `json:"name"`
-	Role       *string  `json:"role"`
-	Lat        *float64 `json:"lat"`
-	Lon        *float64 `json:"lon"`
-	LastSeen   *string  `json:"last_seen"`
-	FirstSeen  *string  `json:"first_seen"`
-	AdvertCount int     `json:"advert_count"`
+	PublicKey     string   `json:"public_key"`
+	Name         *string  `json:"name"`
+	Role         *string  `json:"role"`
+	Lat          *float64 `json:"lat"`
+	Lon          *float64 `json:"lon"`
+	LastSeen     *string  `json:"last_seen"`
+	FirstSeen    *string  `json:"first_seen"`
+	AdvertCount  int      `json:"advert_count"`
 	BatteryMv    *int     `json:"battery_mv"`
 	TemperatureC *float64 `json:"temperature_c"`
 }
@@ -162,7 +162,7 @@ type Transmission struct {
 	CreatedAt      *string `json:"created_at"`
 }
 
-// Observation (from packets_v view).
+// Observation (observation-level data).
 type Observation struct {
 	ID           int      `json:"id"`
 	RawHex       *string  `json:"raw_hex"`
@@ -435,7 +435,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 		w = "WHERE " + strings.Join(where, " AND ")
 	}
 
-	// Count total transmissions (fast — queries transmissions directly, not packets_v)
+	// Count total transmissions (fast — queries transmissions directly, not a VIEW)
 	var total int
 	if len(where) == 0 {
 		db.conn.QueryRow("SELECT COUNT(*) FROM transmissions").Scan(&total)
@@ -628,18 +628,6 @@ func (db *DB) resolveNodePubkey(nodeIDOrName string) string {
 	return pk
 }
 
-// GetPacketByID fetches a single packet/observation.
-func (db *DB) GetPacketByID(id int) (map[string]interface{}, error) {
-	rows, err := db.conn.Query("SELECT id, raw_hex, timestamp, observer_id, observer_name, direction, snr, rssi, score, hash, route_type, payload_type, payload_version, path_json, decoded_json, created_at FROM packets_v WHERE id = ?", id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	if rows.Next() {
-		return scanPacketRow(rows), nil
-	}
-	return nil, nil
-}
 
 // GetTransmissionByID fetches from transmissions table with observer data.
 func (db *DB) GetTransmissionByID(id int) (map[string]interface{}, error) {
@@ -673,24 +661,6 @@ func (db *DB) GetPacketByHash(hash string) (map[string]interface{}, error) {
 	return nil, nil
 }
 
-// GetObservationsForHash returns all observations for a given hash.
-func (db *DB) GetObservationsForHash(hash string) ([]map[string]interface{}, error) {
-	rows, err := db.conn.Query(`SELECT id, raw_hex, timestamp, observer_id, observer_name, direction, snr, rssi, score, hash, route_type, payload_type, payload_version, path_json, decoded_json, created_at
-		FROM packets_v WHERE hash = ? ORDER BY timestamp DESC`, strings.ToLower(hash))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := make([]map[string]interface{}, 0)
-	for rows.Next() {
-		p := scanPacketRow(rows)
-		if p != nil {
-			result = append(result, p)
-		}
-	}
-	return result, nil
-}
 
 // GetNodes returns filtered, paginated node list.
 func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortBy, region string) ([]map[string]interface{}, int, map[string]int, error) {
@@ -798,30 +768,6 @@ func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
 	return nil, nil
 }
 
-// GetRecentPacketsForNode returns recent packets referencing a node.
-func (db *DB) GetRecentPacketsForNode(pubkey string, name string, limit int) ([]map[string]interface{}, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	pk := "%" + pubkey + "%"
-	np := "%" + name + "%"
-	rows, err := db.conn.Query(`SELECT id, raw_hex, timestamp, observer_id, observer_name, direction, snr, rssi, score, hash, route_type, payload_type, payload_version, path_json, decoded_json, created_at
-		FROM packets_v WHERE decoded_json LIKE ? OR decoded_json LIKE ?
-		ORDER BY timestamp DESC LIMIT ?`, pk, np, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	packets := make([]map[string]interface{}, 0)
-	for rows.Next() {
-		p := scanPacketRow(rows)
-		if p != nil {
-			packets = append(packets, p)
-		}
-	}
-	return packets, nil
-}
 
 // GetRecentTransmissionsForNode returns recent transmissions referencing a node (Node.js-compatible shape).
 func (db *DB) GetRecentTransmissionsForNode(pubkey string, name string, limit int) ([]map[string]interface{}, error) {
@@ -1045,103 +991,6 @@ func (db *DB) GetDistinctIATAs() ([]string, error) {
 	return codes, nil
 }
 
-// GetNodeHealth returns health info for a node (observers, stats, recent packets).
-func (db *DB) GetNodeHealth(pubkey string) (map[string]interface{}, error) {
-	node, err := db.GetNodeByPubkey(pubkey)
-	if err != nil || node == nil {
-		return nil, err
-	}
-
-	name := ""
-	if n, ok := node["name"]; ok && n != nil {
-		name = fmt.Sprintf("%v", n)
-	}
-
-	pk := "%" + pubkey + "%"
-	np := "%" + name + "%"
-	whereClause := "decoded_json LIKE ? OR decoded_json LIKE ?"
-	if name == "" {
-		whereClause = "decoded_json LIKE ?"
-		np = pk
-	}
-
-	todayStart := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
-
-	// Observers
-	observerSQL := fmt.Sprintf(`SELECT observer_id, observer_name, AVG(snr) as avgSnr, AVG(rssi) as avgRssi, COUNT(*) as packetCount
-		FROM packets_v WHERE (%s) AND observer_id IS NOT NULL GROUP BY observer_id ORDER BY packetCount DESC`, whereClause)
-	oRows, err := db.conn.Query(observerSQL, pk, np)
-	if err != nil {
-		return nil, err
-	}
-	defer oRows.Close()
-
-	observers := make([]map[string]interface{}, 0)
-	for oRows.Next() {
-		var obsID, obsName sql.NullString
-		var avgSnr, avgRssi sql.NullFloat64
-		var pktCount int
-		oRows.Scan(&obsID, &obsName, &avgSnr, &avgRssi, &pktCount)
-		observers = append(observers, map[string]interface{}{
-			"observer_id":   nullStr(obsID),
-			"observer_name": nullStr(obsName),
-			"avgSnr":        nullFloat(avgSnr),
-			"avgRssi":       nullFloat(avgRssi),
-			"packetCount":   pktCount,
-		})
-	}
-
-	// Stats
-	var packetsToday, totalPackets int
-	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM packets_v WHERE (%s) AND timestamp > ?", whereClause), pk, np, todayStart).Scan(&packetsToday)
-	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM packets_v WHERE (%s)", whereClause), pk, np).Scan(&totalPackets)
-
-	var avgSnr sql.NullFloat64
-	db.conn.QueryRow(fmt.Sprintf("SELECT AVG(snr) FROM packets_v WHERE (%s)", whereClause), pk, np).Scan(&avgSnr)
-
-	var lastHeard sql.NullString
-	db.conn.QueryRow(fmt.Sprintf("SELECT MAX(timestamp) FROM packets_v WHERE (%s)", whereClause), pk, np).Scan(&lastHeard)
-
-	// Avg hops
-	hRows, _ := db.conn.Query(fmt.Sprintf("SELECT path_json FROM packets_v WHERE (%s) AND path_json IS NOT NULL", whereClause), pk, np)
-	totalHops, hopCount := 0, 0
-	if hRows != nil {
-		defer hRows.Close()
-		for hRows.Next() {
-			var pj sql.NullString
-			hRows.Scan(&pj)
-			if pj.Valid {
-				var hops []interface{}
-				if json.Unmarshal([]byte(pj.String), &hops) == nil {
-					totalHops += len(hops)
-					hopCount++
-				}
-			}
-		}
-	}
-	avgHops := 0
-	if hopCount > 0 {
-		avgHops = int(math.Round(float64(totalHops) / float64(hopCount)))
-	}
-
-	// Recent packets
-	recentPackets, _ := db.GetRecentTransmissionsForNode(pubkey, name, 20)
-
-	return map[string]interface{}{
-		"node":      node,
-		"observers": observers,
-		"stats": map[string]interface{}{
-			"totalTransmissions": totalPackets,
-			"totalObservations":  totalPackets,
-			"totalPackets":       totalPackets,
-			"packetsToday":       packetsToday,
-			"avgSnr":             nullFloat(avgSnr),
-			"avgHops":            avgHops,
-			"lastHeard":          nullStr(lastHeard),
-		},
-		"recentPackets": recentPackets,
-	}, nil
-}
 
 // GetNetworkStatus returns overall network health status.
 func (db *DB) GetNetworkStatus(healthThresholds HealthThresholds) (map[string]interface{}, error) {
@@ -1190,10 +1039,28 @@ func (db *DB) GetNetworkStatus(healthThresholds HealthThresholds) (map[string]in
 	}, nil
 }
 
-// GetTraces returns observations for a hash.
+// GetTraces returns observations for a hash using direct table queries.
 func (db *DB) GetTraces(hash string) ([]map[string]interface{}, error) {
-	rows, err := db.conn.Query(`SELECT observer_id, observer_name, timestamp, snr, rssi, path_json
-		FROM packets_v WHERE hash = ? ORDER BY timestamp ASC`, strings.ToLower(hash))
+	var querySQL string
+	if db.isV3 {
+		querySQL = `SELECT obs.id AS observer_id, obs.name AS observer_name,
+			strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch') AS timestamp,
+			o.snr, o.rssi, o.path_json
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE t.hash = ?
+			ORDER BY o.timestamp ASC`
+	} else {
+		querySQL = `SELECT o.observer_id, o.observer_name,
+			strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch') AS timestamp,
+			o.snr, o.rssi, o.path_json
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			WHERE t.hash = ?
+			ORDER BY o.timestamp ASC`
+	}
+	rows, err := db.conn.Query(querySQL, strings.ToLower(hash))
 	if err != nil {
 		return nil, err
 	}
@@ -1219,7 +1086,7 @@ func (db *DB) GetTraces(hash string) ([]map[string]interface{}, error) {
 }
 
 // GetChannels returns channel list from GRP_TXT packets.
-// Queries transmissions directly (not packets_v) to avoid observation-level
+// Queries transmissions directly (not a VIEW) to avoid observation-level
 // duplicates that could cause stale lastMessage when an older message has
 // a later re-observation timestamp.
 func (db *DB) GetChannels() ([]map[string]interface{}, error) {
@@ -1435,31 +1302,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int) ([]map[s
 	return messages, total, nil
 }
 
-// GetTimestamps returns packet timestamps since a given time.
-func (db *DB) GetTimestamps(since string) ([]string, error) {
-	rows, err := db.conn.Query("SELECT timestamp FROM packets_v WHERE timestamp > ? ORDER BY timestamp ASC", since)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var timestamps []string
-	for rows.Next() {
-		var ts string
-		rows.Scan(&ts)
-		timestamps = append(timestamps, ts)
-	}
-	if timestamps == nil {
-		timestamps = []string{}
-	}
-	return timestamps, nil
-}
 
-// GetNodeCountsForPacket returns observation count for a hash.
-func (db *DB) GetObservationCount(hash string) int {
-	var count int
-	db.conn.QueryRow("SELECT COUNT(*) FROM packets_v WHERE hash = ?", strings.ToLower(hash)).Scan(&count)
-	return count
-}
 
 // GetNewTransmissionsSince returns new transmissions after a given ID for WebSocket polling.
 func (db *DB) GetNewTransmissionsSince(lastID int, limit int) ([]map[string]interface{}, error) {

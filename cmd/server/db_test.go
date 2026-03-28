@@ -73,16 +73,6 @@ func setupTestDB(t *testing.T) *DB {
 			timestamp INTEGER NOT NULL
 		);
 
-		CREATE VIEW packets_v AS
-			SELECT o.id, t.raw_hex,
-				strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch') AS timestamp,
-				obs.id AS observer_id, obs.name AS observer_name,
-				o.direction, o.snr, o.rssi, o.score, t.hash, t.route_type,
-				t.payload_type, t.payload_version, o.path_json, t.decoded_json,
-				t.created_at
-			FROM observations o
-			JOIN transmissions t ON t.id = o.transmission_id
-			LEFT JOIN observers obs ON obs.rowid = o.observer_idx;
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
@@ -569,51 +559,6 @@ func TestGetNewTransmissionsSince(t *testing.T) {
 	}
 }
 
-func TestGetObservationsForHash(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	obs, err := db.GetObservationsForHash("abc123def4567890")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(obs) != 2 {
-		t.Errorf("expected 2 observations, got %d", len(obs))
-	}
-}
-
-func TestGetPacketByIDFound(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	pkt, err := db.GetPacketByID(1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pkt == nil {
-		t.Fatal("expected packet, got nil")
-	}
-	if pkt["hash"] != "abc123def4567890" {
-		t.Errorf("expected hash abc123def4567890, got %v", pkt["hash"])
-	}
-}
-
-func TestGetPacketByIDNotFound(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	pkt, err := db.GetPacketByID(9999)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pkt != nil {
-		t.Error("expected nil for nonexistent packet ID")
-	}
-}
-
 func TestGetTransmissionByIDFound(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -653,34 +598,6 @@ func TestGetPacketByHashNotFound(t *testing.T) {
 	result, _ := db.GetPacketByHash("nonexistenthash1")
 	if result != nil {
 		t.Error("expected nil result for nonexistent hash")
-	}
-}
-
-func TestGetRecentPacketsForNode(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	packets, err := db.GetRecentPacketsForNode("aabbccdd11223344", "TestRepeater", 20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(packets) == 0 {
-		t.Error("expected packets for TestRepeater")
-	}
-}
-
-func TestGetRecentPacketsForNodeDefaultLimit(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	packets, err := db.GetRecentPacketsForNode("aabbccdd11223344", "TestRepeater", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if packets == nil {
-		t.Error("expected non-nil result")
 	}
 }
 
@@ -733,46 +650,6 @@ func TestGetObserverIdsForRegion(t *testing.T) {
 	})
 }
 
-func TestGetNodeHealth(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	t.Run("found", func(t *testing.T) {
-		result, err := db.GetNodeHealth("aabbccdd11223344")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if result == nil {
-			t.Fatal("expected result, got nil")
-		}
-		node, ok := result["node"].(map[string]interface{})
-		if !ok {
-			t.Fatal("expected node object")
-		}
-		if node["name"] != "TestRepeater" {
-			t.Errorf("expected TestRepeater, got %v", node["name"])
-		}
-		stats, ok := result["stats"].(map[string]interface{})
-		if !ok {
-			t.Fatal("expected stats object")
-		}
-		if stats["totalPackets"] == nil {
-			t.Error("expected totalPackets in stats")
-		}
-	})
-
-	t.Run("not found", func(t *testing.T) {
-		result, err := db.GetNodeHealth("nonexistent")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if result != nil {
-			t.Error("expected nil for nonexistent node")
-		}
-	})
-}
-
 func TestGetChannelMessages(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -813,48 +690,6 @@ func TestGetChannelMessages(t *testing.T) {
 			t.Error("expected non-nil result")
 		}
 	})
-}
-
-func TestGetTimestamps(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	t.Run("with results", func(t *testing.T) {
-		ts, err := db.GetTimestamps("2020-01-01")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(ts) == 0 {
-			t.Error("expected timestamps")
-		}
-	})
-
-	t.Run("no results", func(t *testing.T) {
-		ts, err := db.GetTimestamps("2099-01-01")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(ts) != 0 {
-			t.Errorf("expected 0 timestamps, got %d", len(ts))
-		}
-	})
-}
-
-func TestGetObservationCount(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	count := db.GetObservationCount("abc123def4567890")
-	if count != 2 {
-		t.Errorf("expected 2, got %d", count)
-	}
-
-	count = db.GetObservationCount("nonexistent")
-	if count != 0 {
-		t.Errorf("expected 0 for nonexistent, got %d", count)
-	}
 }
 
 func TestBuildPacketWhereFilters(t *testing.T) {
@@ -1280,29 +1115,6 @@ func TestOpenDBInvalidPath(t *testing.T) {
 	}
 }
 
-func TestGetNodeHealthNoName(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-
-	// Insert a node without a name
-	db.conn.Exec(`INSERT INTO observers (id, name, iata) VALUES ('obs1', 'Observer One', 'SJC')`)
-	db.conn.Exec(`INSERT INTO nodes (public_key, role, last_seen, first_seen, advert_count)
-		VALUES ('deadbeef12345678', 'repeater', '2026-01-15T10:00:00Z', '2026-01-01T00:00:00Z', 5)`)
-	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('DDEE', 'deadbeefhash1234', '2026-01-15T10:05:00Z', 1, 4,
-		'{"pubKey":"deadbeef12345678","type":"ADVERT"}')`)
-	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
-		VALUES (1, 1, 11.0, -91, '["dd"]', 1736935500)`)
-
-	result, err := db.GetNodeHealth("deadbeef12345678")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result == nil {
-		t.Fatal("expected result, got nil")
-	}
-}
-
 func TestGetChannelMessagesObserverFallback(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -1383,20 +1195,6 @@ func TestQueryGroupedPacketsWithFilters(t *testing.T) {
 	}
 }
 
-func TestGetTracesEmpty(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	seedTestData(t, db)
-
-	traces, err := db.GetTraces("nonexistenthash1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(traces) != 0 {
-		t.Errorf("expected 0 traces, got %d", len(traces))
-	}
-}
-
 func TestNullHelpers(t *testing.T) {
 	// nullStr
 	if nullStr(sql.NullString{Valid: false}) != nil {
@@ -1474,9 +1272,11 @@ func TestNodeTelemetryFields(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
+	// Insert node with telemetry data
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c)
 		VALUES ('pk_telem1', 'SensorNode', 'sensor', 37.0, -122.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 5, 3700, 28.5)`)
 
+	// Test via GetNodeByPubkey
 	node, err := db.GetNodeByPubkey("pk_telem1")
 	if err != nil {
 		t.Fatal(err)
@@ -1491,6 +1291,7 @@ func TestNodeTelemetryFields(t *testing.T) {
 		t.Errorf("temperature_c=%v, want 28.5", node["temperature_c"])
 	}
 
+	// Test via GetNodes
 	nodes, _, _, err := db.GetNodes(50, 0, "sensor", "", "", "", "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -1502,6 +1303,7 @@ func TestNodeTelemetryFields(t *testing.T) {
 		t.Errorf("GetNodes battery_mv=%v, want 3700", nodes[0]["battery_mv"])
 	}
 
+	// Test node without telemetry — fields should be nil
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen, advert_count)
 		VALUES ('pk_notelem', 'PlainNode', 'repeater', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 3)`)
 	node2, _ := db.GetNodeByPubkey("pk_notelem")

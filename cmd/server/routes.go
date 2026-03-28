@@ -626,12 +626,7 @@ func (s *Server) handlePacketTimestamps(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, s.store.GetTimestamps(since))
 		return
 	}
-	ts, err := s.db.GetTimestamps(since)
-	if err != nil {
-		writeError(w, 500, err.Error())
-		return
-	}
-	writeJSON(w, ts)
+	writeJSON(w, []string{})
 }
 
 var hashPattern = regexp.MustCompile(`^[0-9a-f]{16}$`)
@@ -645,10 +640,8 @@ var perfHexFallback = regexp.MustCompile(`[0-9a-f]{8,}`)
 func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 	param := mux.Vars(r)["id"]
 	var packet map[string]interface{}
-	var err error
 
 	if s.store != nil {
-		// Use in-memory store for lookups
 		if hashPattern.MatchString(strings.ToLower(param)) {
 			packet = s.store.GetPacketByHash(param)
 		}
@@ -661,40 +654,22 @@ func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-	} else {
-		// Fallback to DB
-		if hashPattern.MatchString(strings.ToLower(param)) {
-			packet, err = s.db.GetPacketByHash(param)
-		}
-		if packet == nil {
-			id, parseErr := strconv.Atoi(param)
-			if parseErr == nil {
-				packet, err = s.db.GetTransmissionByID(id)
-				if packet == nil {
-					packet, err = s.db.GetPacketByID(id)
-				}
-			}
-		}
 	}
-	if err != nil || packet == nil {
+	if packet == nil {
 		writeError(w, 404, "Not found")
 		return
 	}
 
-	// Build observation list
 	hash, _ := packet["hash"].(string)
 	var observations []map[string]interface{}
 	if s.store != nil {
 		observations = s.store.GetObservationsForHash(hash)
-	} else {
-		observations, _ = s.db.GetObservationsForHash(hash)
 	}
 	observationCount := len(observations)
 	if observationCount == 0 {
 		observationCount = 1
 	}
 
-	// Parse path from path_json
 	var pathHops []interface{}
 	if pj, ok := packet["path_json"]; ok && pj != nil {
 		if pjStr, ok := pj.(string); ok && pjStr != "" {
@@ -876,18 +851,16 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleNodeHealth(w http.ResponseWriter, r *http.Request) {
 	pubkey := mux.Vars(r)["pubkey"]
-	var result map[string]interface{}
-	var err error
 	if s.store != nil {
-		result, err = s.store.GetNodeHealth(pubkey)
-	} else {
-		result, err = s.db.GetNodeHealth(pubkey)
-	}
-	if err != nil || result == nil {
-		writeError(w, 404, "Not found")
+		result, err := s.store.GetNodeHealth(pubkey)
+		if err != nil || result == nil {
+			writeError(w, 404, "Not found")
+			return
+		}
+		writeJSON(w, result)
 		return
 	}
-	writeJSON(w, result)
+	writeError(w, 404, "Not found")
 }
 
 func (s *Server) handleBulkHealth(w http.ResponseWriter, r *http.Request) {
@@ -902,118 +875,7 @@ func (s *Server) handleBulkHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen FROM nodes ORDER BY last_seen DESC LIMIT ?", limit)
-	if err != nil {
-		writeError(w, 500, err.Error())
-		return
-	}
-	defer rows.Close()
-
-	type nodeDbInfo struct {
-		pk, name, role, lastSeen string
-		lat, lon                 interface{}
-	}
-	var nodes []nodeDbInfo
-	for rows.Next() {
-		var pk string
-		var name, role, lastSeen sql.NullString
-		var lat, lon sql.NullFloat64
-		rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen)
-		nodes = append(nodes, nodeDbInfo{
-			pk: pk, name: nullStrVal(name), role: nullStrVal(role),
-			lastSeen: nullStrVal(lastSeen),
-			lat:      nullFloat(lat), lon: nullFloat(lon),
-		})
-	}
-
-	// Batch query: per-node transmission stats
-	todayStart := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339)
-	results := make([]BulkHealthEntry, 0, len(nodes))
-	for _, n := range nodes {
-		pk := "%" + n.pk + "%"
-		np := "%" + n.name + "%"
-
-		var txCount, obsCount, packetsToday int
-		var avgSnr sql.NullFloat64
-		var lastHeard sql.NullString
-
-		whereClause := "t.decoded_json LIKE ?"
-		queryArgs := []interface{}{pk}
-		if n.name != "" {
-			whereClause = "(t.decoded_json LIKE ? OR t.decoded_json LIKE ?)"
-			queryArgs = []interface{}{pk, np}
-		}
-
-		s.db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM transmissions t WHERE %s", whereClause), queryArgs...).Scan(&txCount)
-
-		if txCount > 0 {
-			// Observation count
-			s.db.conn.QueryRow(fmt.Sprintf(`SELECT COALESCE(SUM(
-				(SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id)
-			), 0) FROM transmissions t WHERE %s`, whereClause), queryArgs...).Scan(&obsCount)
-
-			// Packets today
-			todayArgs := append(queryArgs, todayStart)
-			s.db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM transmissions t WHERE %s AND t.first_seen > ?", whereClause), todayArgs...).Scan(&packetsToday)
-
-			// Avg SNR from best observation per transmission
-			s.db.conn.QueryRow(fmt.Sprintf(`SELECT AVG(o.snr) FROM transmissions t
-				LEFT JOIN observations o ON o.id = (
-					SELECT id FROM observations WHERE transmission_id = t.id AND snr IS NOT NULL LIMIT 1
-				) WHERE %s AND o.snr IS NOT NULL`, whereClause), queryArgs...).Scan(&avgSnr)
-
-			// Last heard
-			s.db.conn.QueryRow(fmt.Sprintf("SELECT MAX(t.first_seen) FROM transmissions t WHERE %s", whereClause), queryArgs...).Scan(&lastHeard)
-		}
-
-		lh := n.lastSeen
-		if lastHeard.Valid && lastHeard.String > lh {
-			lh = lastHeard.String
-		}
-
-		// Per-observer breakdown
-		pvWhere := "pv.decoded_json LIKE ?"
-		if n.name != "" {
-			pvWhere = "(pv.decoded_json LIKE ? OR pv.decoded_json LIKE ?)"
-		}
-		obsSQL := fmt.Sprintf(`SELECT pv.observer_id, pv.observer_name, AVG(pv.snr) as avgSnr, AVG(pv.rssi) as avgRssi, COUNT(*) as packetCount
-			FROM packets_v pv WHERE %s AND pv.observer_id IS NOT NULL
-			GROUP BY pv.observer_id ORDER BY packetCount DESC`, pvWhere)
-		obsRows, _ := s.db.conn.Query(obsSQL, queryArgs...)
-		observers := make([]NodeObserverStatsResp, 0)
-		if obsRows != nil {
-			for obsRows.Next() {
-				var oID, oName sql.NullString
-				var oSnr, oRssi sql.NullFloat64
-				var oPktCount int
-				obsRows.Scan(&oID, &oName, &oSnr, &oRssi, &oPktCount)
-				observers = append(observers, NodeObserverStatsResp{
-					ObserverID: nullStr(oID), ObserverName: nullStr(oName),
-					AvgSnr: nullFloat(oSnr), AvgRssi: nullFloat(oRssi),
-					PacketCount: oPktCount,
-				})
-			}
-			obsRows.Close()
-		}
-
-		results = append(results, BulkHealthEntry{
-			PublicKey: n.pk,
-			Name:      nilIfEmpty(n.name),
-			Role:      nilIfEmpty(n.role),
-			Lat:       n.lat,
-			Lon:       n.lon,
-			Stats: NodeStatsResp{
-				TotalTransmissions: txCount,
-				TotalObservations:  obsCount,
-				TotalPackets:       txCount,
-				PacketsToday:       packetsToday,
-				AvgSnr:             nullFloat(avgSnr),
-				LastHeard:          nilIfEmpty(lh),
-			},
-			Observers: observers,
-		})
-	}
-	writeJSON(w, results)
+	writeJSON(w, []BulkHealthEntry{})
 }
 
 func (s *Server) handleNetworkStatus(w http.ResponseWriter, r *http.Request) {
@@ -1034,50 +896,6 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pk := "%" + pubkey[:8] + "%"
-	name := ""
-	if n, ok := node["name"]; ok && n != nil {
-		name = fmt.Sprintf("%v", n)
-	}
-
-	whereClause := "path_json LIKE ?"
-	args := []interface{}{pk}
-	if name != "" {
-		whereClause = "(path_json LIKE ? OR path_json LIKE ?)"
-		args = append(args, "%"+name+"%")
-	}
-
-	pathSQL := fmt.Sprintf("SELECT path_json, hash, MAX(timestamp) as lastSeen, COUNT(*) as cnt FROM packets_v WHERE path_json IS NOT NULL AND path_json != '[]' AND %s GROUP BY path_json ORDER BY cnt DESC LIMIT 50", whereClause)
-	rows, _ := s.db.conn.Query(pathSQL, args...)
-
-	paths := make([]PathEntryResp, 0)
-	var totalPaths, totalTx int
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var pj, hash string
-			var lastSeen sql.NullString
-			var cnt int
-			rows.Scan(&pj, &hash, &lastSeen, &cnt)
-			var hops []string
-			if json.Unmarshal([]byte(pj), &hops) != nil {
-				continue
-			}
-			hopEntries := make([]PathHopResp, 0, len(hops))
-			for _, h := range hops {
-				hopEntries = append(hopEntries, PathHopResp{
-					Prefix: h, Name: h, Pubkey: nil, Lat: nil, Lon: nil,
-				})
-			}
-			paths = append(paths, PathEntryResp{
-				Hops: hopEntries, Count: cnt,
-				LastSeen: nullStr(lastSeen), SampleHash: hash,
-			})
-			totalPaths++
-			totalTx += cnt
-		}
-	}
-
 	writeJSON(w, NodePathsResponse{
 		Node: map[string]interface{}{
 			"public_key": node["public_key"],
@@ -1085,9 +903,9 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 			"lat":        node["lat"],
 			"lon":        node["lon"],
 		},
-		Paths:              paths,
-		TotalPaths:         totalPaths,
-		TotalTransmissions: totalTx,
+		Paths:              []PathEntryResp{},
+		TotalPaths:         0,
+		TotalTransmissions: 0,
 	})
 }
 
@@ -1101,7 +919,6 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 		days = 365
 	}
 
-	// Use in-memory store when available (fast path)
 	if s.store != nil {
 		result, err := s.store.GetNodeAnalytics(pubkey, days)
 		if err != nil || result == nil {
@@ -1112,471 +929,43 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fallback: SQL path (no in-memory store)
-	node, err := s.db.GetNodeByPubkey(pubkey)
-	if err != nil || node == nil {
-		writeError(w, 404, "Not found")
-		return
-	}
-
-	name := ""
-	if n, ok := node["name"]; ok && n != nil {
-		name = fmt.Sprintf("%v", n)
-	}
-
-	fromISO := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Format(time.RFC3339)
-	toISO := time.Now().Format(time.RFC3339)
-
-	pk := "%" + pubkey + "%"
-	np := "%" + name + "%"
-	whereClause := "decoded_json LIKE ? OR decoded_json LIKE ?"
-	if name == "" {
-		whereClause = "decoded_json LIKE ?"
-		np = pk
-	}
-	timeWhere := fmt.Sprintf("(%s) AND timestamp > ?", whereClause)
-
-	// Activity timeline
-	actSQL := fmt.Sprintf(`SELECT substr(timestamp, 1, 13) || ':00:00Z' as bucket, COUNT(*) as count
-		FROM packets_v WHERE %s GROUP BY bucket ORDER BY bucket`, timeWhere)
-	aRows, _ := s.db.conn.Query(actSQL, pk, np, fromISO)
-	activityTimeline := make([]TimeBucket, 0)
-	if aRows != nil {
-		defer aRows.Close()
-		for aRows.Next() {
-			var bucket string
-			var count int
-			aRows.Scan(&bucket, &count)
-			b := bucket
-			activityTimeline = append(activityTimeline, TimeBucket{Bucket: &b, Count: count})
-		}
-	}
-
-	// SNR trend
-	snrSQL := fmt.Sprintf(`SELECT timestamp, snr, rssi, observer_id, observer_name
-		FROM packets_v WHERE %s AND snr IS NOT NULL ORDER BY timestamp`, timeWhere)
-	sRows, _ := s.db.conn.Query(snrSQL, pk, np, fromISO)
-	snrTrend := make([]SnrTrendEntry, 0)
-	if sRows != nil {
-		defer sRows.Close()
-		for sRows.Next() {
-			var ts string
-			var snr, rssi sql.NullFloat64
-			var obsID, obsName sql.NullString
-			sRows.Scan(&ts, &snr, &rssi, &obsID, &obsName)
-			snrTrend = append(snrTrend, SnrTrendEntry{
-				Timestamp: ts, SNR: nullFloat(snr), RSSI: nullFloat(rssi),
-				ObserverID: nullStr(obsID), ObserverName: nullStr(obsName),
-			})
-		}
-	}
-
-	// Packet type breakdown
-	ptSQL := fmt.Sprintf("SELECT payload_type, COUNT(*) as count FROM packets_v WHERE %s GROUP BY payload_type", timeWhere)
-	ptRows, _ := s.db.conn.Query(ptSQL, pk, np, fromISO)
-	packetTypeBreakdown := make([]PayloadTypeCount, 0)
-	if ptRows != nil {
-		defer ptRows.Close()
-		for ptRows.Next() {
-			var pt, count int
-			ptRows.Scan(&pt, &count)
-			packetTypeBreakdown = append(packetTypeBreakdown, PayloadTypeCount{PayloadType: pt, Count: count})
-		}
-	}
-
-	// Observer coverage
-	ocSQL := fmt.Sprintf(`SELECT observer_id, observer_name, COUNT(*) as packetCount,
-		AVG(snr) as avgSnr, AVG(rssi) as avgRssi, MIN(timestamp) as firstSeen, MAX(timestamp) as lastSeen
-		FROM packets_v WHERE %s AND observer_id IS NOT NULL
-		GROUP BY observer_id ORDER BY packetCount DESC`, timeWhere)
-	ocRows, _ := s.db.conn.Query(ocSQL, pk, np, fromISO)
-	observerCoverage := make([]NodeObserverStatsResp, 0)
-	if ocRows != nil {
-		defer ocRows.Close()
-		for ocRows.Next() {
-			var obsID, obsName, first, last sql.NullString
-			var pktCount int
-			var avgSnr, avgRssi sql.NullFloat64
-			ocRows.Scan(&obsID, &obsName, &pktCount, &avgSnr, &avgRssi, &first, &last)
-			observerCoverage = append(observerCoverage, NodeObserverStatsResp{
-				ObserverID: nullStr(obsID), ObserverName: nullStr(obsName),
-				PacketCount: pktCount, AvgSnr: nullFloat(avgSnr), AvgRssi: nullFloat(avgRssi),
-				FirstSeen: nullStr(first), LastSeen: nullStr(last),
-			})
-		}
-	}
-
-	// Hop distribution from path_json
-	hdSQL := fmt.Sprintf(`SELECT path_json FROM packets_v WHERE %s AND path_json IS NOT NULL AND path_json != '[]'`, timeWhere)
-	hdRows, _ := s.db.conn.Query(hdSQL, pk, np, fromISO)
-	hopCounts := map[string]int{}
-	if hdRows != nil {
-		defer hdRows.Close()
-		for hdRows.Next() {
-			var pj string
-			hdRows.Scan(&pj)
-			var hops []interface{}
-			if json.Unmarshal([]byte(pj), &hops) == nil {
-				key := fmt.Sprintf("%d", len(hops))
-				if len(hops) >= 4 {
-					key = "4+"
-				}
-				hopCounts[key]++
-			}
-		}
-	}
-	// Also count zero-hop packets
-	zhSQL := fmt.Sprintf(`SELECT COUNT(*) FROM packets_v WHERE %s AND (path_json IS NULL OR path_json = '[]')`, timeWhere)
-	var zeroHops int
-	s.db.conn.QueryRow(zhSQL, pk, np, fromISO).Scan(&zeroHops)
-	if zeroHops > 0 {
-		hopCounts["0"] += zeroHops
-	}
-	hopDistribution := make([]HopDistEntry, 0)
-	for _, h := range []string{"0", "1", "2", "3", "4+"} {
-		if c, ok := hopCounts[h]; ok {
-			hopDistribution = append(hopDistribution, HopDistEntry{Hops: h, Count: c})
-		}
-	}
-
-	// Uptime heatmap
-	uhSQL := fmt.Sprintf(`SELECT
-		CAST(strftime('%%w', timestamp) AS INTEGER) as dayOfWeek,
-		CAST(strftime('%%H', timestamp) AS INTEGER) as hour,
-		COUNT(*) as count
-		FROM packets_v WHERE %s
-		GROUP BY dayOfWeek, hour ORDER BY count DESC`, timeWhere)
-	uhRows, _ := s.db.conn.Query(uhSQL, pk, np, fromISO)
-	uptimeHeatmap := make([]HeatmapCell, 0)
-	if uhRows != nil {
-		defer uhRows.Close()
-		for uhRows.Next() {
-			var dow, hr, cnt int
-			uhRows.Scan(&dow, &hr, &cnt)
-			uptimeHeatmap = append(uptimeHeatmap, HeatmapCell{DayOfWeek: dow, Hour: hr, Count: cnt})
-		}
-	}
-
-	// Computed stats
-	totalPackets := 0
-	for _, entry := range activityTimeline {
-		totalPackets += entry.Count
-	}
-
-	var snrMean, snrStdDev float64
-	var snrCount int
-	snrStatsSQL := fmt.Sprintf(`SELECT COUNT(*), COALESCE(AVG(snr),0), COALESCE(
-		SQRT(AVG(snr*snr) - AVG(snr)*AVG(snr)), 0)
-		FROM packets_v WHERE %s AND snr IS NOT NULL`, timeWhere)
-	s.db.conn.QueryRow(snrStatsSQL, pk, np, fromISO).Scan(&snrCount, &snrMean, &snrStdDev)
-	_ = snrCount
-
-	signalGrade := "D"
-	if snrMean >= 10 {
-		signalGrade = "A"
-	} else if snrMean >= 7 {
-		signalGrade = "A-"
-	} else if snrMean >= 4 {
-		signalGrade = "B+"
-	} else if snrMean >= 1 {
-		signalGrade = "B"
-	} else if snrMean >= -3 {
-		signalGrade = "C"
-	}
-
-	relayCount := 0
-	for _, h := range []string{"1", "2", "3", "4+"} {
-		relayCount += hopCounts[h]
-	}
-	var relayPct float64
-	if totalPackets > 0 {
-		relayPct = round(float64(relayCount)*100.0/float64(totalPackets), 1)
-	}
-
-	var avgPacketsPerDay float64
-	if days > 0 {
-		avgPacketsPerDay = round(float64(totalPackets)/float64(days), 1)
-	}
-
-	// Longest silence
-	var longestSilenceMs int
-	var longestSilenceStart interface{}
-	if len(activityTimeline) >= 2 {
-		for i := 1; i < len(activityTimeline); i++ {
-			var t1Str, t2Str string
-			if activityTimeline[i-1].Bucket != nil {
-				t1Str = *activityTimeline[i-1].Bucket
-			}
-			if activityTimeline[i].Bucket != nil {
-				t2Str = *activityTimeline[i].Bucket
-			}
-			t1, e1 := time.Parse(time.RFC3339, t1Str)
-			t2, e2 := time.Parse(time.RFC3339, t2Str)
-			if e1 == nil && e2 == nil {
-				gap := int(t2.Sub(t1).Milliseconds())
-				if gap > longestSilenceMs {
-					longestSilenceMs = gap
-					longestSilenceStart = t1Str
-				}
-			}
-		}
-	}
-
-	// Availability
-	totalHours := float64(days) * 24
-	activeHours := float64(len(activityTimeline))
-	availabilityPct := round(activeHours*100.0/totalHours, 1)
-	if availabilityPct > 100 {
-		availabilityPct = 100
-	}
-
-	writeJSON(w, NodeAnalyticsResponse{
-		Node:                node,
-		TimeRange:           TimeRangeResp{From: fromISO, To: toISO, Days: days},
-		ActivityTimeline:    activityTimeline,
-		SnrTrend:            snrTrend,
-		PacketTypeBreakdown: packetTypeBreakdown,
-		ObserverCoverage:    observerCoverage,
-		HopDistribution:     hopDistribution,
-		PeerInteractions:    []PeerInteraction{},
-		UptimeHeatmap:       uptimeHeatmap,
-		ComputedStats: ComputedNodeStats{
-			AvailabilityPct:     availabilityPct,
-			LongestSilenceMs:    longestSilenceMs,
-			LongestSilenceStart: longestSilenceStart,
-			SignalGrade:         signalGrade,
-			SnrMean:             round(snrMean, 1),
-			SnrStdDev:           round(snrStdDev, 1),
-			RelayPct:            relayPct,
-			TotalPackets:        totalPackets,
-			UniqueObservers:     len(observerCoverage),
-			UniquePeers:         0,
-			AvgPacketsPerDay:    avgPacketsPerDay,
-		},
-	})
+	writeError(w, 404, "Not found")
 }
 
 // --- Analytics Handlers ---
 
 func (s *Server) handleAnalyticsRF(w http.ResponseWriter, r *http.Request) {
+	region := r.URL.Query().Get("region")
 	if s.store != nil {
-		region := r.URL.Query().Get("region")
 		writeJSON(w, s.store.GetAnalyticsRF(region))
 		return
 	}
-	// Fallback: basic RF analytics from SQL
-	region := r.URL.Query().Get("region")
-	regionFilter := ""
-	var rArgs []interface{}
-	if region != "" {
-		regionFilter = "AND observer_id IN (SELECT id FROM observers WHERE iata = ?)"
-		rArgs = append(rArgs, region)
-	}
-
-	// SNR/RSSI stats
-	rfSQL := fmt.Sprintf(`SELECT COUNT(*) as cnt, AVG(snr) as avgSnr, MIN(snr) as minSnr, MAX(snr) as maxSnr,
-		AVG(rssi) as avgRssi, MIN(rssi) as minRssi, MAX(rssi) as maxRssi
-		FROM packets_v WHERE snr IS NOT NULL %s`, regionFilter)
-	var cnt int
-	var avgSnr, minSnr, maxSnr, avgRssi, minRssi, maxRssi sql.NullFloat64
-	s.db.conn.QueryRow(rfSQL, rArgs...).Scan(&cnt, &avgSnr, &minSnr, &maxSnr, &avgRssi, &minRssi, &maxRssi)
-
-	// Payload type distribution
-	ptSQL := fmt.Sprintf(`SELECT payload_type, COUNT(DISTINCT hash) as count FROM packets_v WHERE 1=1 %s GROUP BY payload_type ORDER BY count DESC`, regionFilter)
-	ptRows, _ := s.db.conn.Query(ptSQL, rArgs...)
-	payloadTypes := make([]PayloadTypeEntry, 0)
-	ptNames := map[int]string{0: "REQ", 1: "RESPONSE", 2: "TXT_MSG", 3: "ACK", 4: "ADVERT", 5: "GRP_TXT", 7: "ANON_REQ", 8: "PATH", 9: "TRACE", 11: "CONTROL"}
-	if ptRows != nil {
-		defer ptRows.Close()
-		for ptRows.Next() {
-			var pt, count int
-			ptRows.Scan(&pt, &count)
-			name := ptNames[pt]
-			if name == "" {
-				name = fmt.Sprintf("UNK(%d)", pt)
-			}
-			payloadTypes = append(payloadTypes, PayloadTypeEntry{Type: pt, Name: name, Count: count})
-		}
-	}
-
-	// Total counts
-	var totalAll int
-	countSQL := fmt.Sprintf("SELECT COUNT(*) FROM packets_v WHERE 1=1 %s", regionFilter)
-	s.db.conn.QueryRow(countSQL, rArgs...).Scan(&totalAll)
-	var totalTx int
-	txSQL := fmt.Sprintf("SELECT COUNT(DISTINCT hash) FROM packets_v WHERE 1=1 %s", regionFilter)
-	s.db.conn.QueryRow(txSQL, rArgs...).Scan(&totalTx)
-
 	writeJSON(w, RFAnalyticsResponse{
-		TotalPackets:       cnt,
-		TotalAllPackets:    totalAll,
-		TotalTransmissions: totalTx,
-		SNR: SignalStats{
-			Min: nullFloatVal(minSnr), Max: nullFloatVal(maxSnr),
-			Avg: nullFloatVal(avgSnr), Median: 0, Stddev: 0,
-		},
-		RSSI: SignalStats{
-			Min: nullFloatVal(minRssi), Max: nullFloatVal(maxRssi),
-			Avg: nullFloatVal(avgRssi), Median: 0, Stddev: 0,
-		},
+		SNR:            SignalStats{},
+		RSSI:           SignalStats{},
 		SnrValues:      Histogram{Bins: []HistogramBin{}, Min: 0, Max: 0},
 		RssiValues:     Histogram{Bins: []HistogramBin{}, Min: 0, Max: 0},
 		PacketSizes:    Histogram{Bins: []HistogramBin{}, Min: 0, Max: 0},
-		MinPacketSize:  0,
-		MaxPacketSize:  0,
-		AvgPacketSize:  0,
-		PacketsPerHour:  []HourlyCount{},
-		PayloadTypes:    payloadTypes,
-		SnrByType:       []PayloadTypeSignal{},
-		SignalOverTime:  []SignalOverTimeEntry{},
-		ScatterData:     []ScatterPoint{},
-		TimeSpanHours:   0,
+		PacketsPerHour: []HourlyCount{},
+		PayloadTypes:   []PayloadTypeEntry{},
+		SnrByType:      []PayloadTypeSignal{},
+		SignalOverTime: []SignalOverTimeEntry{},
+		ScatterData:    []ScatterPoint{},
 	})
 }
 
 func (s *Server) handleAnalyticsTopology(w http.ResponseWriter, r *http.Request) {
+	region := r.URL.Query().Get("region")
 	if s.store != nil {
-		region := r.URL.Query().Get("region")
 		writeJSON(w, s.store.GetAnalyticsTopology(region))
 		return
 	}
-	// SQL fallback — compute basic topology from path_json
-	region := r.URL.Query().Get("region")
-	regionFilter := ""
-	var rArgs []interface{}
-	if region != "" {
-		regionFilter = "AND observer_id IN (SELECT id FROM observers WHERE iata = ?)"
-		rArgs = append(rArgs, region)
-	}
-
-	pathSQL := fmt.Sprintf("SELECT path_json, snr FROM packets_v WHERE path_json IS NOT NULL AND path_json != '[]' %s", regionFilter)
-	pathRows, _ := s.db.conn.Query(pathSQL, rArgs...)
-
-	hopCountMap := map[int]int{}
-	repeaterCounts := map[string]int{}
-	pairCounts := map[string]int{}
-	nodesSeen := map[string]bool{}
-	hopsVsSnrSum := map[int]float64{}
-	hopsVsSnrCnt := map[int]int{}
-
-	if pathRows != nil {
-		defer pathRows.Close()
-		for pathRows.Next() {
-			var pj string
-			var snr sql.NullFloat64
-			pathRows.Scan(&pj, &snr)
-			var hops []string
-			if json.Unmarshal([]byte(pj), &hops) != nil || len(hops) == 0 {
-				continue
-			}
-			hc := len(hops)
-			if hc > 25 {
-				hc = 25
-			}
-			hopCountMap[hc]++
-			for _, h := range hops {
-				nodesSeen[h] = true
-				repeaterCounts[h]++
-			}
-			for i := 0; i+1 < len(hops); i++ {
-				pair := hops[i] + ":" + hops[i+1]
-				pairCounts[pair]++
-			}
-			if snr.Valid {
-				hopsVsSnrSum[hc] += snr.Float64
-				hopsVsSnrCnt[hc]++
-			}
-		}
-	}
-
-	var totalHopCount, maxHops int
-	for h, c := range hopCountMap {
-		totalHopCount += h * c
-		if h > maxHops {
-			maxHops = h
-		}
-	}
-	totalPaths := 0
-	for _, c := range hopCountMap {
-		totalPaths += c
-	}
-	var avgHops float64
-	if totalPaths > 0 {
-		avgHops = round(float64(totalHopCount)/float64(totalPaths), 1)
-	}
-
-	hopDistribution := make([]TopologyHopDist, 0)
-	for h := 1; h <= maxHops; h++ {
-		if c, ok := hopCountMap[h]; ok {
-			hopDistribution = append(hopDistribution, TopologyHopDist{Hops: h, Count: c})
-		}
-	}
-
-	type kv struct {
-		k string
-		v int
-	}
-	var repSorted []kv
-	for k, v := range repeaterCounts {
-		repSorted = append(repSorted, kv{k, v})
-	}
-	sort.Slice(repSorted, func(i, j int) bool { return repSorted[i].v > repSorted[j].v })
-	topRepeaters := make([]TopRepeater, 0)
-	for i, rp := range repSorted {
-		if i >= 20 {
-			break
-		}
-		topRepeaters = append(topRepeaters, TopRepeater{Hop: rp.k, Count: rp.v, Name: nil, Pubkey: nil})
-	}
-
-	var pairSorted []kv
-	for k, v := range pairCounts {
-		pairSorted = append(pairSorted, kv{k, v})
-	}
-	sort.Slice(pairSorted, func(i, j int) bool { return pairSorted[i].v > pairSorted[j].v })
-	topPairs := make([]TopPair, 0)
-	for i, p := range pairSorted {
-		if i >= 20 {
-			break
-		}
-		parts := strings.SplitN(p.k, ":", 2)
-		topPairs = append(topPairs, TopPair{
-			HopA: parts[0], HopB: parts[1], Count: p.v,
-			NameA: nil, NameB: nil, PubkeyA: nil, PubkeyB: nil,
-		})
-	}
-
-	hopsVsSnr := make([]HopsVsSnr, 0)
-	for h := 1; h <= maxHops; h++ {
-		if cnt, ok := hopsVsSnrCnt[h]; ok && cnt > 0 {
-			hopsVsSnr = append(hopsVsSnr, HopsVsSnr{
-				Hops: h, Count: cnt, AvgSnr: round(hopsVsSnrSum[h]/float64(cnt), 1),
-			})
-		}
-	}
-
-	obsList := make([]ObserverRef, 0)
-	obsRows, _ := s.db.conn.Query("SELECT id, name FROM observers")
-	if obsRows != nil {
-		defer obsRows.Close()
-		for obsRows.Next() {
-			var oid string
-			var oname sql.NullString
-			obsRows.Scan(&oid, &oname)
-			obsList = append(obsList, ObserverRef{ID: oid, Name: nullStr(oname)})
-		}
-	}
-
 	writeJSON(w, TopologyResponse{
-		UniqueNodes:      len(nodesSeen),
-		AvgHops:          avgHops,
-		MedianHops:       0,
-		MaxHops:          maxHops,
-		HopDistribution:  hopDistribution,
-		TopRepeaters:     topRepeaters,
-		TopPairs:         topPairs,
-		HopsVsSnr:        hopsVsSnr,
-		Observers:        obsList,
+		HopDistribution:  []TopologyHopDist{},
+		TopRepeaters:     []TopRepeater{},
+		TopPairs:         []TopPair{},
+		HopsVsSnr:        []HopsVsSnr{},
+		Observers:        []ObserverRef{},
 		PerObserverReach: map[string]*ObserverReach{},
 		MultiObsNodes:    []MultiObsNode{},
 		BestPathList:     []BestPathEntry{},
@@ -1604,64 +993,18 @@ func (s *Server) handleAnalyticsChannels(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleAnalyticsDistance(w http.ResponseWriter, r *http.Request) {
+	region := r.URL.Query().Get("region")
 	if s.store != nil {
-		region := r.URL.Query().Get("region")
 		writeJSON(w, s.store.GetAnalyticsDistance(region))
 		return
 	}
-	// SQL fallback
-	region := r.URL.Query().Get("region")
-	regionFilter := ""
-	var rArgs []interface{}
-	if region != "" {
-		regionFilter = "AND observer_id IN (SELECT id FROM observers WHERE iata = ?)"
-		rArgs = append(rArgs, region)
-	}
-
-	nodeLocMap := s.db.GetNodeLocations()
-	_ = nodeLocMap
-
-	pathSQL := fmt.Sprintf("SELECT path_json, hash, timestamp, snr FROM packets_v WHERE path_json IS NOT NULL AND path_json != '[]' %s ORDER BY timestamp DESC LIMIT 5000", regionFilter)
-	pathRows, _ := s.db.conn.Query(pathSQL, rArgs...)
-
-	var totalHops, totalPaths int
-	var maxDist, distSum float64
-	topHops := make([]DistanceHop, 0)
-	topPaths := make([]DistancePath, 0)
-	catStats := map[string]*CategoryDistStats{}
-	distOverTime := make([]DistOverTimeEntry, 0)
-
-	if pathRows != nil {
-		defer pathRows.Close()
-		for pathRows.Next() {
-			var pj, hash string
-			var ts sql.NullString
-			var snr sql.NullFloat64
-			pathRows.Scan(&pj, &hash, &ts, &snr)
-			var hops []string
-			if json.Unmarshal([]byte(pj), &hops) != nil || len(hops) == 0 {
-				continue
-			}
-			totalPaths++
-			totalHops += len(hops)
-		}
-	}
-
-	var avgDist float64
-	if totalHops > 0 {
-		avgDist = round(distSum/float64(totalHops), 2)
-	}
-
 	writeJSON(w, DistanceAnalyticsResponse{
-		Summary: DistanceSummary{
-			TotalHops: totalHops, TotalPaths: totalPaths,
-			AvgDist: avgDist, MaxDist: maxDist,
-		},
-		TopHops:       topHops,
-		TopPaths:      topPaths,
-		CatStats:      catStats,
+		Summary:       DistanceSummary{},
+		TopHops:       []DistanceHop{},
+		TopPaths:      []DistancePath{},
+		CatStats:      map[string]*CategoryDistStats{},
 		DistHistogram: nil,
-		DistOverTime:  distOverTime,
+		DistOverTime:  []DistOverTimeEntry{},
 	})
 }
 
@@ -1885,106 +1228,13 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request) {
-	id := mux.Vars(r)["id"]
-	days := queryInt(r, "days", 7)
-	since := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Format(time.RFC3339)
-
-	// Timeline
-	bucketH := 4
-	if days <= 1 {
-		bucketH = 1
-	} else if days > 7 {
-		bucketH = 24
-	}
-	// Timeline — packet count per time bucket
-	bucketFmt := fmt.Sprintf("strftime('%%Y-%%m-%%dT', timestamp) || printf('%%02d', (CAST(strftime('%%H', timestamp) AS INTEGER) / %d) * %d) || ':00:00Z'", bucketH, bucketH)
-	tlSQL := fmt.Sprintf(`SELECT %s as label, COUNT(*) as count
-		FROM packets_v WHERE observer_id = ? AND timestamp > ?
-		GROUP BY label ORDER BY label`, bucketFmt)
-	tlRows, _ := s.db.conn.Query(tlSQL, id, since)
-	timeline := make([]TimeBucket, 0)
-	if tlRows != nil {
-		defer tlRows.Close()
-		for tlRows.Next() {
-			var label string
-			var count int
-			tlRows.Scan(&label, &count)
-			l := label
-			timeline = append(timeline, TimeBucket{Label: &l, Count: count})
-		}
-	}
-
-	// Nodes timeline — unique nodes per time bucket
-	ntSQL := fmt.Sprintf(`SELECT %s as label, COUNT(DISTINCT hash) as count
-		FROM packets_v WHERE observer_id = ? AND timestamp > ?
-		GROUP BY label ORDER BY label`, bucketFmt)
-	ntRows, _ := s.db.conn.Query(ntSQL, id, since)
-	nodesTimeline := make([]TimeBucket, 0)
-	if ntRows != nil {
-		defer ntRows.Close()
-		for ntRows.Next() {
-			var label string
-			var count int
-			ntRows.Scan(&label, &count)
-			l := label
-			nodesTimeline = append(nodesTimeline, TimeBucket{Label: &l, Count: count})
-		}
-	}
-
-	// SNR distribution
-	snrSQL := `SELECT
-		CAST(snr / 2 AS INTEGER) * 2 as rangeStart,
-		COUNT(*) as count
-		FROM packets_v WHERE observer_id = ? AND timestamp > ? AND snr IS NOT NULL
-		GROUP BY rangeStart ORDER BY rangeStart`
-	snrRows, _ := s.db.conn.Query(snrSQL, id, since)
-	snrDistribution := make([]SnrDistributionEntry, 0)
-	if snrRows != nil {
-		defer snrRows.Close()
-		for snrRows.Next() {
-			var rangeStart, count int
-			snrRows.Scan(&rangeStart, &count)
-			snrDistribution = append(snrDistribution, SnrDistributionEntry{
-				Range: fmt.Sprintf("%d to %d", rangeStart, rangeStart+2),
-				Count: count,
-			})
-		}
-	}
-
-	// Packet type breakdown
-	ptSQL := `SELECT payload_type, COUNT(*) as count FROM packets_v WHERE observer_id = ? AND timestamp > ? GROUP BY payload_type`
-	ptRows, _ := s.db.conn.Query(ptSQL, id, since)
-	packetTypes := map[string]int{}
-	if ptRows != nil {
-		defer ptRows.Close()
-		for ptRows.Next() {
-			var pt, count int
-			ptRows.Scan(&pt, &count)
-			packetTypes[strconv.Itoa(pt)] = count
-		}
-	}
-
-	// Recent packets
-	rpSQL := `SELECT id, raw_hex, timestamp, observer_id, observer_name, direction, snr, rssi, score, hash, route_type, payload_type, payload_version, path_json, decoded_json, created_at
-		FROM packets_v WHERE observer_id = ? AND timestamp > ? ORDER BY timestamp DESC LIMIT 20`
-	rpRows, _ := s.db.conn.Query(rpSQL, id, since)
-	recentPackets := make([]map[string]interface{}, 0)
-	if rpRows != nil {
-		defer rpRows.Close()
-		for rpRows.Next() {
-			p := scanPacketRow(rpRows)
-			if p != nil {
-				recentPackets = append(recentPackets, p)
-			}
-		}
-	}
-
+	_ = mux.Vars(r)["id"]
 	writeJSON(w, ObserverAnalyticsResponse{
-		Timeline:        timeline,
-		PacketTypes:     packetTypes,
-		NodesTimeline:   nodesTimeline,
-		SnrDistribution: snrDistribution,
-		RecentPackets:   recentPackets,
+		Timeline:        []TimeBucket{},
+		PacketTypes:     map[string]int{},
+		NodesTimeline:   []TimeBucket{},
+		SnrDistribution: []SnrDistributionEntry{},
+		RecentPackets:   []map[string]interface{}{},
 	})
 }
 
@@ -2111,35 +1361,6 @@ func (s *Server) handleAudioLabBuckets(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 			buckets[typeName] = picked
-		}
-	} else {
-		// Fallback: direct DB query when store is not loaded
-		ptSQL := `SELECT payload_type, id, raw_hex, hash, decoded_json, path_json, observer_id, timestamp
-			FROM (
-				SELECT *, ROW_NUMBER() OVER (PARTITION BY payload_type ORDER BY length(raw_hex)) as rn
-				FROM packets_v WHERE raw_hex IS NOT NULL
-			) sub WHERE rn <= 8`
-		rows, err := s.db.conn.Query(ptSQL)
-		if err != nil {
-			writeJSON(w, AudioLabBucketsResponse{Buckets: buckets})
-			return
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var pt, id int
-			var rawHex, hash, decodedJSON, pathJSON, obsID, ts sql.NullString
-			rows.Scan(&pt, &id, &rawHex, &hash, &decodedJSON, &pathJSON, &obsID, &ts)
-			typeName := payloadTypeNames[pt]
-			if typeName == "" {
-				typeName = "UNKNOWN"
-			}
-			buckets[typeName] = append(buckets[typeName], AudioLabPacket{
-				Hash: nullStr(hash), RawHex: nullStr(rawHex),
-				DecodedJSON: nullStr(decodedJSON), ObservationCount: 1,
-				PayloadType: pt, PathJSON: nullStr(pathJSON),
-				ObserverID: nullStr(obsID), Timestamp: nullStr(ts),
-			})
 		}
 	}
 

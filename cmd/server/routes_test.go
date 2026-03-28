@@ -1251,6 +1251,9 @@ func TestNodeAnalyticsNoNameNode(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
+	store := NewPacketStore(db)
+	store.Load()
+	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
@@ -1282,6 +1285,9 @@ func TestNodeHealthForNoNameNode(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
+	store := NewPacketStore(db)
+	store.Load()
+	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
@@ -1521,8 +1527,6 @@ func TestHandlerErrorPaths(t *testing.T) {
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
-	// Drop the view to force query errors
-	db.conn.Exec("DROP VIEW IF EXISTS packets_v")
 
 	t.Run("stats error", func(t *testing.T) {
 		db.conn.Exec("DROP TABLE IF EXISTS transmissions")
@@ -1563,7 +1567,7 @@ func TestHandlerErrorTraces(t *testing.T) {
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
-	db.conn.Exec("DROP VIEW IF EXISTS packets_v")
+	db.conn.Exec("DROP TABLE IF EXISTS observations")
 
 	req := httptest.NewRequest("GET", "/api/traces/abc123def4567890", nil)
 	w := httptest.NewRecorder()
@@ -1697,13 +1701,12 @@ func TestHandlerErrorTimestamps(t *testing.T) {
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
-	db.conn.Exec("DROP VIEW IF EXISTS packets_v")
-
+	// Without a store, timestamps returns empty 200
 	req := httptest.NewRequest("GET", "/api/packets/timestamps?since=2020-01-01", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
-	if w.Code != 500 {
-		t.Errorf("expected 500 for timestamps error, got %d", w.Code)
+	if w.Code != 200 {
+		t.Errorf("expected 200 for timestamps without store, got %d", w.Code)
 	}
 }
 
@@ -1740,8 +1743,8 @@ func TestHandlerErrorBulkHealth(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/nodes/bulk-health", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
-	if w.Code != 500 {
-		t.Errorf("expected 500, got %d", w.Code)
+	if w.Code != 200 {
+		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
 
