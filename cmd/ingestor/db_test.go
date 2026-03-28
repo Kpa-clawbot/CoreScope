@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,6 +63,16 @@ func TestOpenStore(t *testing.T) {
 			t.Errorf("missing table %s, got %v", e, tables)
 		}
 	}
+
+	// Verify packets_v view exists
+	var viewCount int
+	err = s.db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='view' AND name='packets_v'").Scan(&viewCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if viewCount != 1 {
+		t.Error("packets_v view not created")
+	}
 }
 
 func TestInsertTransmission(t *testing.T) {
@@ -111,6 +122,54 @@ func TestInsertTransmission(t *testing.T) {
 	s.db.QueryRow("SELECT COUNT(*) FROM transmissions").Scan(&count)
 	if count != 1 {
 		t.Errorf("transmissions count after dedup=%d, want 1", count)
+	}
+}
+
+func TestPacketsViewQueryable(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Insert observer so the LEFT JOIN resolves
+	if err := s.UpsertObserver("obs1", "TestObserver", "SJC", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	snr := 3.5
+	rssi := -95.0
+	data := &PacketData{
+		RawHex:      "AABB",
+		Timestamp:   "2026-01-01T00:00:00Z",
+		ObserverID:  "obs1",
+		Hash:        "viewtesthash",
+		RouteType:   1,
+		PayloadType: 4,
+		PathJSON:    "[]",
+		DecodedJSON: `{"type":"ADVERT"}`,
+		SNR:         &snr,
+		RSSI:        &rssi,
+	}
+	if _, err := s.InsertTransmission(data); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query through packets_v — the view the Go server relies on
+	var obsID, obsName sql.NullString
+	var hash string
+	err = s.db.QueryRow("SELECT observer_id, observer_name, hash FROM packets_v LIMIT 1").Scan(&obsID, &obsName, &hash)
+	if err != nil {
+		t.Fatalf("packets_v query failed: %v", err)
+	}
+	if hash != "viewtesthash" {
+		t.Errorf("hash=%s, want viewtesthash", hash)
+	}
+	if !obsID.Valid || obsID.String != "obs1" {
+		t.Errorf("observer_id=%v, want obs1", obsID)
+	}
+	if !obsName.Valid || obsName.String != "TestObserver" {
+		t.Errorf("observer_name=%v, want TestObserver", obsName)
 	}
 }
 
