@@ -7,14 +7,26 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
 
+// DBStats tracks operational metrics for the ingestor database.
+type DBStats struct {
+	TransmissionsInserted atomic.Int64
+	ObservationsInserted  atomic.Int64
+	DuplicateTransmissions atomic.Int64
+	NodeUpserts           atomic.Int64
+	ObserverUpserts       atomic.Int64
+	WriteErrors           atomic.Int64
+}
+
 // Store wraps the SQLite database for packet ingestion.
 type Store struct {
-	db *sql.DB
+	db    *sql.DB
+	Stats DBStats
 
 	stmtGetTxByHash          *sql.Stmt
 	stmtInsertTransmission   *sql.Stmt
@@ -34,7 +46,7 @@ func OpenStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("creating data dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("opening db: %w", err)
 	}
@@ -42,6 +54,10 @@ func OpenStore(dbPath string) (*Store, error) {
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("pinging db: %w", err)
 	}
+
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	log.Printf("SQLite config: busy_timeout=5000ms, max_open_conns=1, max_idle_conns=1, journal=WAL")
 
 	if err := applySchema(db); err != nil {
 		return nil, fmt.Errorf("applying schema: %w", err)
@@ -277,9 +293,15 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 			data.DecodedJSON,
 		)
 		if err != nil {
+			s.Stats.WriteErrors.Add(1)
 			return false, fmt.Errorf("insert transmission: %w", err)
 		}
 		txID, _ = result.LastInsertId()
+		s.Stats.TransmissionsInserted.Add(1)
+	}
+
+	if !isNew {
+		s.Stats.DuplicateTransmissions.Add(1)
 	}
 
 	// Resolve observer_idx
@@ -304,7 +326,10 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		data.PathJSON, epochTs,
 	)
 	if err != nil {
+		s.Stats.WriteErrors.Add(1)
 		log.Printf("[db] observation insert (non-fatal): %v", err)
+	} else {
+		s.Stats.ObservationsInserted.Add(1)
 	}
 
 	return isNew, nil
@@ -320,6 +345,11 @@ func (s *Store) UpsertNode(pubKey, name, role string, lat, lon *float64, lastSee
 		pubKey, name, role, lat, lon, now, now,
 		name, role, lat, lon, now,
 	)
+	if err != nil {
+		s.Stats.WriteErrors.Add(1)
+	} else {
+		s.Stats.NodeUpserts.Add(1)
+	}
 	return err
 }
 
@@ -336,12 +366,29 @@ func (s *Store) UpsertObserver(id, name, iata string) error {
 		id, name, iata, now, now,
 		name, iata, now,
 	)
+	if err != nil {
+		s.Stats.WriteErrors.Add(1)
+	} else {
+		s.Stats.ObserverUpserts.Add(1)
+	}
 	return err
 }
 
 // Close closes the database.
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// LogStats logs current operational metrics.
+func (s *Store) LogStats() {
+	log.Printf("[stats] tx_inserted=%d tx_dupes=%d obs_inserted=%d node_upserts=%d observer_upserts=%d write_errors=%d",
+		s.Stats.TransmissionsInserted.Load(),
+		s.Stats.DuplicateTransmissions.Load(),
+		s.Stats.ObservationsInserted.Load(),
+		s.Stats.NodeUpserts.Load(),
+		s.Stats.ObserverUpserts.Load(),
+		s.Stats.WriteErrors.Load(),
+	)
 }
 
 // MoveStaleNodes moves nodes not seen in nodeDays to the inactive_nodes table.

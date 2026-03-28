@@ -54,6 +54,14 @@ func main() {
 		}
 	}()
 
+	// Periodic stats logging (every 5 minutes)
+	statsTicker := time.NewTicker(5 * time.Minute)
+	go func() {
+		for range statsTicker.C {
+			store.LogStats()
+		}
+	}()
+
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {
 		log.Printf("Loaded %d channel keys for GRP_TXT decryption", len(channelKeys))
@@ -73,7 +81,7 @@ func main() {
 			AddBroker(source.Broker).
 			SetAutoReconnect(true).
 			SetConnectRetry(true).
-			SetOrderMatters(false)
+			SetOrderMatters(true)
 
 		if source.Username != "" {
 			opts.SetUsername(source.Username)
@@ -137,6 +145,8 @@ func main() {
 
 	log.Println("Shutting down...")
 	retentionTicker.Stop()
+	statsTicker.Stop()
+	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
 		c.Disconnect(1000)
 	}
