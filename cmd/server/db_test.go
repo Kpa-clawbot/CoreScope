@@ -513,10 +513,10 @@ func TestGetNetworkStatus(t *testing.T) {
 	seedTestData(t, db)
 
 	ht := HealthThresholds{
-		InfraDegradedMs: 86400000,
-		InfraSilentMs:   259200000,
-		NodeDegradedMs:  3600000,
-		NodeSilentMs:    86400000,
+		InfraDegradedHours: 24,
+		InfraSilentHours:   72,
+		NodeDegradedHours:  1,
+		NodeSilentHours:    24,
 	}
 	result, err := db.GetNetworkStatus(ht)
 	if err != nil {
@@ -1050,10 +1050,10 @@ func TestGetNetworkStatusDateFormats(t *testing.T) {
 		VALUES ('node4444', 'NodeBad', 'sensor', 'not-a-date')`)
 
 	ht := HealthThresholds{
-		InfraDegradedMs: 86400000,
-		InfraSilentMs:   259200000,
-		NodeDegradedMs:  3600000,
-		NodeSilentMs:    86400000,
+		InfraDegradedHours: 24,
+		InfraSilentHours:   72,
+		NodeDegradedHours:  1,
+		NodeSilentHours:    24,
 	}
 	result, err := db.GetNetworkStatus(ht)
 	if err != nil {

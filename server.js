@@ -307,7 +307,12 @@ app.get('/api/config/cache', (req, res) => {
 app.get('/api/config/client', (req, res) => {
   res.json({
     roles: config.roles || null,
-    healthThresholds: config.healthThresholds || null,
+    healthThresholds: {
+      infraDegradedMs: HEALTH.infraDegraded * 3600000,
+      infraSilentMs:   HEALTH.infraSilent   * 3600000,
+      nodeDegradedMs:  HEALTH.nodeDegraded  * 3600000,
+      nodeSilentMs:    HEALTH.nodeSilent    * 3600000
+    },
     tiles: config.tiles || null,
     snrThresholds: config.snrThresholds || null,
     distThresholds: config.distThresholds || null,

@@ -59,17 +59,17 @@ console.log('\nloadThemeFile:');
 console.log('\nbuildHealthConfig:');
 {
   const h = helpers.buildHealthConfig({});
-  assert(h.infraDegradedMs === 86400000, 'default infraDegradedMs');
-  assert(h.infraSilentMs === 259200000, 'default infraSilentMs');
-  assert(h.nodeDegradedMs === 3600000, 'default nodeDegradedMs');
-  assert(h.nodeSilentMs === 86400000, 'default nodeSilentMs');
+  assert(h.infraDegraded === 24, 'default infraDegraded');
+  assert(h.infraSilent === 72, 'default infraSilent');
+  assert(h.nodeDegraded === 1, 'default nodeDegraded');
+  assert(h.nodeSilent === 24, 'default nodeSilent');
 
-  const h2 = helpers.buildHealthConfig({ healthThresholds: { infraDegradedMs: 1000 } });
-  assert(h2.infraDegradedMs === 1000, 'custom infraDegradedMs');
-  assert(h2.nodeDegradedMs === 3600000, 'other defaults preserved');
+  const h2 = helpers.buildHealthConfig({ healthThresholds: { infraDegradedHours: 2 } });
+  assert(h2.infraDegraded === 2, 'custom infraDegraded');
+  assert(h2.nodeDegraded === 1, 'other defaults preserved');
 
   const h3 = helpers.buildHealthConfig(null);
-  assert(h3.infraDegradedMs === 86400000, 'handles null config');
+  assert(h3.infraDegraded === 24, 'handles null config');
 }
 
 // --- getHealthMs ---
@@ -78,21 +78,21 @@ console.log('\ngetHealthMs:');
   const HEALTH = helpers.buildHealthConfig({});
 
   const rep = helpers.getHealthMs('repeater', HEALTH);
-  assert(rep.degradedMs === 86400000, 'repeater uses infra degraded');
-  assert(rep.silentMs === 259200000, 'repeater uses infra silent');
+  assert(rep.degradedMs === 24 * 3600000, 'repeater uses infra degraded');
+  assert(rep.silentMs === 72 * 3600000, 'repeater uses infra silent');
 
   const room = helpers.getHealthMs('room', HEALTH);
-  assert(room.degradedMs === 86400000, 'room uses infra degraded');
+  assert(room.degradedMs === 24 * 3600000, 'room uses infra degraded');
 
   const comp = helpers.getHealthMs('companion', HEALTH);
-  assert(comp.degradedMs === 3600000, 'companion uses node degraded');
-  assert(comp.silentMs === 86400000, 'companion uses node silent');
+  assert(comp.degradedMs === 1 * 3600000, 'companion uses node degraded');
+  assert(comp.silentMs === 24 * 3600000, 'companion uses node silent');
 
   const sensor = helpers.getHealthMs('sensor', HEALTH);
-  assert(sensor.degradedMs === 3600000, 'sensor uses node degraded');
+  assert(sensor.degradedMs === 1 * 3600000, 'sensor uses node degraded');
 
   const undef = helpers.getHealthMs(undefined, HEALTH);
-  assert(undef.degradedMs === 3600000, 'undefined role uses node degraded');
+  assert(undef.degradedMs === 1 * 3600000, 'undefined role uses node degraded');
 }
 
 // --- isHashSizeFlipFlop ---

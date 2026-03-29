@@ -23,10 +23,10 @@ func TestLoadConfigValidJSON(t *testing.T) {
 			"SJC": "San Jose",
 		},
 		"healthThresholds": map[string]interface{}{
-			"infraDegradedMs": 100000,
-			"infraSilentMs":   200000,
-			"nodeDegradedMs":  50000,
-			"nodeSilentMs":    100000,
+			"infraDegradedHours": 2,
+			"infraSilentHours":   4,
+			"nodeDegradedHours":  0.5,
+			"nodeSilentHours":    2,
 		},
 		"liveMap": map[string]interface{}{
 			"propagationBufferMs": 3000,
@@ -178,68 +178,68 @@ func TestGetHealthThresholdsDefaults(t *testing.T) {
 	cfg := &Config{}
 	ht := cfg.GetHealthThresholds()
 
-	if ht.InfraDegradedMs != 86400000 {
-		t.Errorf("expected 86400000, got %d", ht.InfraDegradedMs)
+	if ht.InfraDegradedHours != 24 {
+		t.Errorf("expected 24, got %v", ht.InfraDegradedHours)
 	}
-	if ht.InfraSilentMs != 259200000 {
-		t.Errorf("expected 259200000, got %d", ht.InfraSilentMs)
+	if ht.InfraSilentHours != 72 {
+		t.Errorf("expected 72, got %v", ht.InfraSilentHours)
 	}
-	if ht.NodeDegradedMs != 3600000 {
-		t.Errorf("expected 3600000, got %d", ht.NodeDegradedMs)
+	if ht.NodeDegradedHours != 1 {
+		t.Errorf("expected 1, got %v", ht.NodeDegradedHours)
 	}
-	if ht.NodeSilentMs != 86400000 {
-		t.Errorf("expected 86400000, got %d", ht.NodeSilentMs)
+	if ht.NodeSilentHours != 24 {
+		t.Errorf("expected 24, got %v", ht.NodeSilentHours)
 	}
 }
 
 func TestGetHealthThresholdsCustom(t *testing.T) {
 	cfg := &Config{
 		HealthThresholds: &HealthThresholds{
-			InfraDegradedMs: 100000,
-			InfraSilentMs:   200000,
-			NodeDegradedMs:  50000,
-			NodeSilentMs:    100000,
+			InfraDegradedHours: 2,
+			InfraSilentHours:   4,
+			NodeDegradedHours:  0.5,
+			NodeSilentHours:    2,
 		},
 	}
 	ht := cfg.GetHealthThresholds()
 
-	if ht.InfraDegradedMs != 100000 {
-		t.Errorf("expected 100000, got %d", ht.InfraDegradedMs)
+	if ht.InfraDegradedHours != 2 {
+		t.Errorf("expected 2, got %v", ht.InfraDegradedHours)
 	}
-	if ht.InfraSilentMs != 200000 {
-		t.Errorf("expected 200000, got %d", ht.InfraSilentMs)
+	if ht.InfraSilentHours != 4 {
+		t.Errorf("expected 4, got %v", ht.InfraSilentHours)
 	}
-	if ht.NodeDegradedMs != 50000 {
-		t.Errorf("expected 50000, got %d", ht.NodeDegradedMs)
+	if ht.NodeDegradedHours != 0.5 {
+		t.Errorf("expected 0.5, got %v", ht.NodeDegradedHours)
 	}
-	if ht.NodeSilentMs != 100000 {
-		t.Errorf("expected 100000, got %d", ht.NodeSilentMs)
+	if ht.NodeSilentHours != 2 {
+		t.Errorf("expected 2, got %v", ht.NodeSilentHours)
 	}
 }
 
 func TestGetHealthThresholdsPartialCustom(t *testing.T) {
 	cfg := &Config{
 		HealthThresholds: &HealthThresholds{
-			InfraDegradedMs: 100000,
+			InfraDegradedHours: 2,
 			// Others left as zero → should use defaults
 		},
 	}
 	ht := cfg.GetHealthThresholds()
 
-	if ht.InfraDegradedMs != 100000 {
-		t.Errorf("expected 100000, got %d", ht.InfraDegradedMs)
+	if ht.InfraDegradedHours != 2 {
+		t.Errorf("expected 2, got %v", ht.InfraDegradedHours)
 	}
-	if ht.InfraSilentMs != 259200000 {
-		t.Errorf("expected default 259200000, got %d", ht.InfraSilentMs)
+	if ht.InfraSilentHours != 72 {
+		t.Errorf("expected default 72, got %v", ht.InfraSilentHours)
 	}
 }
 
 func TestGetHealthMs(t *testing.T) {
 	ht := HealthThresholds{
-		InfraDegradedMs: 86400000,
-		InfraSilentMs:   259200000,
-		NodeDegradedMs:  3600000,
-		NodeSilentMs:    86400000,
+		InfraDegradedHours: 24,
+		InfraSilentHours:   72,
+		NodeDegradedHours:  1,
+		NodeSilentHours:    24,
 	}
 
 	tests := []struct {

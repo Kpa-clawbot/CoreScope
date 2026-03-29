@@ -60,10 +60,10 @@ func (c *Config) NodeDaysOrDefault() int {
 }
 
 type HealthThresholds struct {
-	InfraDegradedMs int `json:"infraDegradedMs"`
-	InfraSilentMs   int `json:"infraSilentMs"`
-	NodeDegradedMs  int `json:"nodeDegradedMs"`
-	NodeSilentMs    int `json:"nodeSilentMs"`
+	InfraDegradedHours float64 `json:"infraDegradedHours"`
+	InfraSilentHours   float64 `json:"infraSilentHours"`
+	NodeDegradedHours  float64 `json:"nodeDegradedHours"`
+	NodeSilentHours    float64 `json:"nodeSilentHours"`
 }
 
 // ThemeFile mirrors theme.json overlay.
@@ -126,34 +126,46 @@ func LoadTheme(baseDirs ...string) *ThemeFile {
 
 func (c *Config) GetHealthThresholds() HealthThresholds {
 	h := HealthThresholds{
-		InfraDegradedMs: 86400000,
-		InfraSilentMs:   259200000,
-		NodeDegradedMs:  3600000,
-		NodeSilentMs:    86400000,
+		InfraDegradedHours: 24,
+		InfraSilentHours:   72,
+		NodeDegradedHours:  1,
+		NodeSilentHours:    24,
 	}
 	if c.HealthThresholds != nil {
-		if c.HealthThresholds.InfraDegradedMs > 0 {
-			h.InfraDegradedMs = c.HealthThresholds.InfraDegradedMs
+		if c.HealthThresholds.InfraDegradedHours > 0 {
+			h.InfraDegradedHours = c.HealthThresholds.InfraDegradedHours
 		}
-		if c.HealthThresholds.InfraSilentMs > 0 {
-			h.InfraSilentMs = c.HealthThresholds.InfraSilentMs
+		if c.HealthThresholds.InfraSilentHours > 0 {
+			h.InfraSilentHours = c.HealthThresholds.InfraSilentHours
 		}
-		if c.HealthThresholds.NodeDegradedMs > 0 {
-			h.NodeDegradedMs = c.HealthThresholds.NodeDegradedMs
+		if c.HealthThresholds.NodeDegradedHours > 0 {
+			h.NodeDegradedHours = c.HealthThresholds.NodeDegradedHours
 		}
-		if c.HealthThresholds.NodeSilentMs > 0 {
-			h.NodeSilentMs = c.HealthThresholds.NodeSilentMs
+		if c.HealthThresholds.NodeSilentHours > 0 {
+			h.NodeSilentHours = c.HealthThresholds.NodeSilentHours
 		}
 	}
 	return h
 }
 
-// GetHealthMs returns degraded/silent thresholds for a given role.
+// GetHealthMs returns degraded/silent thresholds in ms for a given role.
 func (h HealthThresholds) GetHealthMs(role string) (degradedMs, silentMs int) {
+	const hourMs = 3600000
 	if role == "repeater" || role == "room" {
-		return h.InfraDegradedMs, h.InfraSilentMs
+		return int(h.InfraDegradedHours * hourMs), int(h.InfraSilentHours * hourMs)
 	}
-	return h.NodeDegradedMs, h.NodeSilentMs
+	return int(h.NodeDegradedHours * hourMs), int(h.NodeSilentHours * hourMs)
+}
+
+// ToClientMs returns the thresholds as ms for the frontend.
+func (h HealthThresholds) ToClientMs() map[string]int {
+	const hourMs = 3600000
+	return map[string]int{
+		"infraDegradedMs": int(h.InfraDegradedHours * hourMs),
+		"infraSilentMs":   int(h.InfraSilentHours * hourMs),
+		"nodeDegradedMs":  int(h.NodeDegradedHours * hourMs),
+		"nodeSilentMs":    int(h.NodeSilentHours * hourMs),
+	}
 }
 
 func (c *Config) ResolveDBPath(baseDir string) string {

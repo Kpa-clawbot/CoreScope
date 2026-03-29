@@ -213,7 +213,7 @@ func (s *Server) handleConfigCache(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ClientConfigResponse{
 		Roles:               s.cfg.Roles,
-		HealthThresholds:    s.cfg.HealthThresholds,
+		HealthThresholds:    s.cfg.GetHealthThresholds().ToClientMs(),
 		Tiles:               s.cfg.Tiles,
 		SnrThresholds:       s.cfg.SnrThresholds,
 		DistThresholds:      s.cfg.DistThresholds,

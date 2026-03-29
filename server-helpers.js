@@ -36,18 +36,19 @@ function loadThemeFile(themePaths) {
 function buildHealthConfig(config) {
   const _ht = (config && config.healthThresholds) || {};
   return {
-    infraDegradedMs: _ht.infraDegradedMs || 86400000,
-    infraSilentMs:   _ht.infraSilentMs   || 259200000,
-    nodeDegradedMs:  _ht.nodeDegradedMs  || 3600000,
-    nodeSilentMs:    _ht.nodeSilentMs    || 86400000
+    infraDegraded: _ht.infraDegradedHours || 24,
+    infraSilent:   _ht.infraSilentHours   || 72,
+    nodeDegraded:  _ht.nodeDegradedHours  || 1,
+    nodeSilent:    _ht.nodeSilentHours    || 24
   };
 }
 
 function getHealthMs(role, HEALTH) {
+  const H = 3600000;
   const isInfra = role === 'repeater' || role === 'room';
   return {
-    degradedMs: isInfra ? HEALTH.infraDegradedMs : HEALTH.nodeDegradedMs,
-    silentMs:   isInfra ? HEALTH.infraSilentMs   : HEALTH.nodeSilentMs
+    degradedMs: (isInfra ? HEALTH.infraDegraded : HEALTH.nodeDegraded) * H,
+    silentMs:   (isInfra ? HEALTH.infraSilent   : HEALTH.nodeSilent)   * H
   };
 }
 

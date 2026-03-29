@@ -89,7 +89,8 @@
 
   function getStatusTooltip(role, status) {
     const isInfra = role === 'repeater' || role === 'room';
-    const threshold = isInfra ? '72h' : '24h';
+    const threshMs = isInfra ? HEALTH_THRESHOLDS.infraSilentMs : HEALTH_THRESHOLDS.nodeSilentMs;
+    const threshold = threshMs >= 3600000 ? Math.round(threshMs / 3600000) + 'h' : Math.round(threshMs / 60000) + 'm';
     if (status === 'active') {
       return 'Active \u2014 heard within the last ' + threshold + '.' + (isInfra ? ' Repeaters typically advertise every 12-24h.' : '');
     }
