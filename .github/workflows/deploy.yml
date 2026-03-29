@@ -98,7 +98,7 @@ jobs:
 
       - name: Upload Go coverage badges
         if: success()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: go-badges
           path: .badges/go-*.json
@@ -204,7 +204,7 @@ jobs:
 
       - name: Upload E2E badges
         if: success()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: e2e-badges
           path: .badges/
@@ -292,14 +292,14 @@ jobs:
 
       - name: Download Go coverage badges
         continue-on-error: true
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: go-badges
           path: .badges/
 
       - name: Download E2E badges
         continue-on-error: true
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           name: e2e-badges
           path: .badges/
