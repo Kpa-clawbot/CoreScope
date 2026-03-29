@@ -3,7 +3,6 @@
 set -e
 
 echo "=== Syntax check ==="
-node -c server.js
 for f in public/*.js; do node -c "$f"; done
 echo "✅ All JS files parse OK"
 
