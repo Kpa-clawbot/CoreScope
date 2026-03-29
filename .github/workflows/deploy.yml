@@ -68,7 +68,7 @@ jobs:
           echo "✅ All .proto files are syntactically valid"
 
       - name: Generate Go coverage badges
-        if: always()
+        if: success()
         run: |
           mkdir -p .badges
 
@@ -97,7 +97,7 @@ jobs:
           echo "| Ingestor | ${INGESTOR_COV}% |" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Go coverage badges
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v5
         with:
           name: go-badges
@@ -172,12 +172,12 @@ jobs:
           BASE_URL=http://localhost:13581 node test-e2e-playwright.js 2>&1 | tee e2e-output.txt
 
       - name: Collect frontend coverage
-        if: always()
+        if: success()
         run: |
           BASE_URL=http://localhost:13581 node scripts/collect-frontend-coverage.js 2>&1 | tee fe-coverage-output.txt || true
 
       - name: Generate frontend coverage badges
-        if: always()
+        if: success()
         run: |
           E2E_PASS=$(grep -oP '[0-9]+(?=/)' e2e-output.txt | tail -1 || echo "0")
 
@@ -195,7 +195,7 @@ jobs:
           echo "{\"schemaVersion\":1,\"label\":\"e2e tests\",\"message\":\"${E2E_PASS:-0} passed\",\"color\":\"brightgreen\"}" > .badges/e2e-tests.json
 
       - name: Stop test server
-        if: always()
+        if: success()
         run: |
           if [ -f .server.pid ]; then
             kill $(cat .server.pid) 2>/dev/null || true
@@ -203,7 +203,7 @@ jobs:
           fi
 
       - name: Upload E2E badges
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v5
         with:
           name: e2e-badges
