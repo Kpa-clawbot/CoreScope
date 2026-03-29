@@ -3745,12 +3745,21 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 		return multiByteNodes[i]["packets"].(int) > multiByteNodes[j]["packets"].(int)
 	})
 
+	// Distribution by repeaters: count unique nodes per hash size
+	distributionByRepeaters := map[string]int{"1": 0, "2": 0, "3": 0}
+	for _, data := range byNode {
+		hs := data["hashSize"].(int)
+		key := strconv.Itoa(hs)
+		distributionByRepeaters[key]++
+	}
+
 	return map[string]interface{}{
-		"total":          total,
-		"distribution":   distribution,
-		"hourly":         hourly,
-		"topHops":        topHops,
-		"multiByteNodes": multiByteNodes,
+		"total":                    total,
+		"distribution":            distribution,
+		"distributionByRepeaters": distributionByRepeaters,
+		"hourly":                  hourly,
+		"topHops":                 topHops,
+		"multiByteNodes":          multiByteNodes,
 	}
 }
 

@@ -1155,12 +1155,13 @@ func (s *Server) handleAnalyticsHashSizes(w http.ResponseWriter, r *http.Request
 		writeJSON(w, s.store.GetAnalyticsHashSizes(region))
 		return
 	}
-	writeJSON(w, HashSizeAnalyticsResponse{
-		Total:          0,
-		Distribution:   map[string]int{"1": 0, "2": 0, "3": 0},
-		Hourly:         []HashSizeHourly{},
-		TopHops:        []HashSizeHop{},
-		MultiByteNodes: []MultiByteNode{},
+	writeJSON(w, map[string]interface{}{
+		"total":                    0,
+		"distribution":            map[string]int{"1": 0, "2": 0, "3": 0},
+		"distributionByRepeaters": map[string]int{"1": 0, "2": 0, "3": 0},
+		"hourly":                  []HashSizeHourly{},
+		"topHops":                 []HashSizeHop{},
+		"multiByteNodes":          []MultiByteNode{},
 	})
 }
 
