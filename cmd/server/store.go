@@ -1083,18 +1083,6 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		result = append(result, broadcastMap)
 	}
 
-	// Invalidate analytics caches since new data was ingested
-	if len(result) > 0 {
-		s.cacheMu.Lock()
-		s.rfCache = make(map[string]*cachedResult)
-		s.topoCache = make(map[string]*cachedResult)
-		s.hashCache = make(map[string]*cachedResult)
-		s.chanCache = make(map[string]*cachedResult)
-		s.distCache = make(map[string]*cachedResult)
-		s.subpathCache = make(map[string]*cachedResult)
-		s.cacheMu.Unlock()
-	}
-
 	return result, newMaxID
 }
 
@@ -1264,20 +1252,6 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) int {
 			s.buildDistanceIndex()
 			break
 		}
-	}
-
-	if len(updatedTxs) > 0 {
-		// Invalidate analytics caches
-		s.cacheMu.Lock()
-		s.rfCache = make(map[string]*cachedResult)
-		s.topoCache = make(map[string]*cachedResult)
-		s.hashCache = make(map[string]*cachedResult)
-		s.chanCache = make(map[string]*cachedResult)
-		s.distCache = make(map[string]*cachedResult)
-		s.subpathCache = make(map[string]*cachedResult)
-		s.cacheMu.Unlock()
-
-		// analytics caches cleared; no per-cycle log to avoid stdout overhead
 	}
 
 	return newMaxObsID
