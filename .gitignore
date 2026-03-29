@@ -28,3 +28,4 @@ reps.txt
 cmd/server/server.exe
 cmd/ingestor/ingestor.exe
 # CI trigger
+!test-fixtures/e2e-fixture.db

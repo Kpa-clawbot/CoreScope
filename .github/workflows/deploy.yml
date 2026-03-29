@@ -1,35 +1,25 @@
-name: Deploy
+name: CI/CD Pipeline
 
 on:
   push:
     branches: [master]
-    paths-ignore:
-      - '**.md'
-      - 'LICENSE'
-      - '.gitignore'
-      - 'docs/**'
   pull_request:
     branches: [master]
 
 concurrency:
-  group: deploy-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-# Pipeline:
-#   node-test (frontend tests) ──┐
-#   go-test                      ├──→ build → deploy → publish
-#                                └─ (both wait)
-#
-# Proto validation flow:
-#   1. go-test job: verify .proto files compile (syntax check)
-#   2. deploy job: capture fresh fixtures from prod, validate protos match actual API responses
+# Pipeline (sequential, fail-fast):
+#   go-test → e2e-test → build → deploy → publish
+#   PRs stop after build. Master continues to deploy + publish.
 
 jobs:
   # ───────────────────────────────────────────────────────────────
-  # 1. Go Build & Test — compiles + tests Go modules, coverage badges
+  # 1. Go Build & Test
   # ───────────────────────────────────────────────────────────────
   go-test:
     name: "✅ Go Build & Test"
@@ -40,20 +30,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Skip if docs-only change
-        id: docs-check
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
-            NON_DOCS=$(echo "$CHANGED" | grep -cvE '\.(md)$|^LICENSE$|^\.gitignore$|^docs/' || true)
-            if [ "$NON_DOCS" -eq 0 ]; then
-              echo "docs_only=true" >> $GITHUB_OUTPUT
-              echo "📄 Docs-only PR — skipping heavy CI"
-            fi
-          fi
-
       - name: Set up Go 1.22
-        if: steps.docs-check.outputs.docs_only != 'true'
         uses: actions/setup-go@v6
         with:
           go-version: '1.22'
@@ -62,7 +39,6 @@ jobs:
             cmd/ingestor/go.sum
 
       - name: Build and test Go server (with coverage)
-        if: steps.docs-check.outputs.docs_only != 'true'
         run: |
           set -e -o pipefail
           cd cmd/server
@@ -72,7 +48,6 @@ jobs:
           go tool cover -func=server-coverage.out | tail -1
 
       - name: Build and test Go ingestor (with coverage)
-        if: steps.docs-check.outputs.docs_only != 'true'
         run: |
           set -e -o pipefail
           cd cmd/ingestor
@@ -81,15 +56,11 @@ jobs:
           echo "--- Go Ingestor Coverage ---"
           go tool cover -func=ingestor-coverage.out | tail -1
 
-      - name: Verify proto syntax (all .proto files compile)
-        if: steps.docs-check.outputs.docs_only != 'true'
+      - name: Verify proto syntax
         run: |
           set -e
-          echo "Installing protoc..."
           sudo apt-get update -qq
           sudo apt-get install -y protobuf-compiler
-          
-          echo "Checking proto syntax..."
           for proto in proto/*.proto; do
             echo "  ✓ $(basename "$proto")"
             protoc --proto_path=proto --descriptor_set_out=/dev/null "$proto"
@@ -97,50 +68,33 @@ jobs:
           echo "✅ All .proto files are syntactically valid"
 
       - name: Generate Go coverage badges
-        if: always() && steps.docs-check.outputs.docs_only != 'true'
+        if: always()
         run: |
           mkdir -p .badges
 
-          # Parse server coverage
           SERVER_COV="0"
           if [ -f cmd/server/server-coverage.out ]; then
             SERVER_COV=$(cd cmd/server && go tool cover -func=server-coverage.out | tail -1 | grep -oP '[\d.]+(?=%)')
           fi
           SERVER_COLOR="red"
-          if [ "$(echo "$SERVER_COV >= 80" | bc -l 2>/dev/null)" = "1" ]; then
-            SERVER_COLOR="green"
-          elif [ "$(echo "$SERVER_COV >= 60" | bc -l 2>/dev/null)" = "1" ]; then
-            SERVER_COLOR="yellow"
-          fi
+          if [ "$(echo "$SERVER_COV >= 80" | bc -l 2>/dev/null)" = "1" ]; then SERVER_COLOR="green"
+          elif [ "$(echo "$SERVER_COV >= 60" | bc -l 2>/dev/null)" = "1" ]; then SERVER_COLOR="yellow"; fi
           echo "{\"schemaVersion\":1,\"label\":\"go server coverage\",\"message\":\"${SERVER_COV}%\",\"color\":\"${SERVER_COLOR}\"}" > .badges/go-server-coverage.json
-          echo "Go server coverage: ${SERVER_COV}% (${SERVER_COLOR})"
 
-          # Parse ingestor coverage
           INGESTOR_COV="0"
           if [ -f cmd/ingestor/ingestor-coverage.out ]; then
             INGESTOR_COV=$(cd cmd/ingestor && go tool cover -func=ingestor-coverage.out | tail -1 | grep -oP '[\d.]+(?=%)')
           fi
           INGESTOR_COLOR="red"
-          if [ "$(echo "$INGESTOR_COV >= 80" | bc -l 2>/dev/null)" = "1" ]; then
-            INGESTOR_COLOR="green"
-          elif [ "$(echo "$INGESTOR_COV >= 60" | bc -l 2>/dev/null)" = "1" ]; then
-            INGESTOR_COLOR="yellow"
-          fi
+          if [ "$(echo "$INGESTOR_COV >= 80" | bc -l 2>/dev/null)" = "1" ]; then INGESTOR_COLOR="green"
+          elif [ "$(echo "$INGESTOR_COV >= 60" | bc -l 2>/dev/null)" = "1" ]; then INGESTOR_COLOR="yellow"; fi
           echo "{\"schemaVersion\":1,\"label\":\"go ingestor coverage\",\"message\":\"${INGESTOR_COV}%\",\"color\":\"${INGESTOR_COLOR}\"}" > .badges/go-ingestor-coverage.json
-          echo "Go ingestor coverage: ${INGESTOR_COV}% (${INGESTOR_COLOR})"
 
           echo "## Go Coverage" >> $GITHUB_STEP_SUMMARY
           echo "| Module | Coverage |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|----------|" >> $GITHUB_STEP_SUMMARY
           echo "| Server | ${SERVER_COV}% |" >> $GITHUB_STEP_SUMMARY
           echo "| Ingestor | ${INGESTOR_COV}% |" >> $GITHUB_STEP_SUMMARY
-
-      - name: Cancel workflow on failure
-        if: failure()
-        run: |
-          curl -s -X POST \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
 
       - name: Upload Go coverage badges
         if: always()
@@ -152,11 +106,11 @@ jobs:
           if-no-files-found: ignore
 
   # ───────────────────────────────────────────────────────────────
-  # 2. Node.js Tests — backend unit tests + Playwright E2E, coverage
+  # 2. Playwright E2E Tests (against Go server with fixture DB)
   # ───────────────────────────────────────────────────────────────
-  node-test:
-    name: "🧪 Node.js Tests"
-    if: false  # TEMPORARILY DISABLED — CI restructure in progress
+  e2e-test:
+    name: "🎭 Playwright E2E Tests"
+    needs: [go-test]
     runs-on: [self-hosted, Linux]
     defaults:
       run:
@@ -167,102 +121,40 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Skip if docs-only change
-        id: docs-check
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
-            NON_DOCS=$(echo "$CHANGED" | grep -cvE '\.(md)$|^LICENSE$|^\.gitignore$|^docs/' || true)
-            if [ "$NON_DOCS" -eq 0 ]; then
-              echo "docs_only=true" >> $GITHUB_OUTPUT
-              echo "📄 Docs-only PR — skipping heavy CI"
-            fi
-          fi
-
       - name: Set up Node.js 22
-        if: steps.docs-check.outputs.docs_only != 'true'
         uses: actions/setup-node@v5
         with:
           node-version: '22'
 
       - name: Set up Go 1.22
-        if: steps.docs-check.outputs.docs_only != 'true'
         uses: actions/setup-go@v6
         with:
           go-version: '1.22'
           cache-dependency-path: cmd/server/go.sum
 
-      - name: Build Go server for E2E tests
-        if: steps.docs-check.outputs.docs_only != 'true'
+      - name: Build Go server
         run: |
           cd cmd/server
           go build -o ../../corescope-server .
           echo "Go server built successfully"
 
       - name: Install npm dependencies
-        if: steps.docs-check.outputs.docs_only != 'true'
         run: npm ci --production=false
 
-      - name: Detect changed files
-        if: steps.docs-check.outputs.docs_only != 'true'
-        id: changes
-        run: |
-          BACKEND=$(git diff --name-only HEAD~1 | grep -cE '^(server|db|decoder|packet-store|server-helpers|iata-coords)\.js$' || true)
-          FRONTEND=$(git diff --name-only HEAD~1 | grep -cE '^public/' || true)
-          TESTS=$(git diff --name-only HEAD~1 | grep -cE '^test-|^tools/' || true)
-          CI=$(git diff --name-only HEAD~1 | grep -cE '\.github/|package\.json|test-all\.sh|scripts/' || true)
-          # If CI/test infra changed, run everything
-          if [ "$CI" -gt 0 ]; then BACKEND=1; FRONTEND=1; fi
-          # If test files changed, run everything
-          if [ "$TESTS" -gt 0 ]; then BACKEND=1; FRONTEND=1; fi
-          echo "backend=$([[ $BACKEND -gt 0 ]] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "frontend=$([[ $FRONTEND -gt 0 ]] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "Changes: backend=$BACKEND frontend=$FRONTEND tests=$TESTS ci=$CI"
-
-      - name: Run backend tests with coverage
-        if: steps.docs-check.outputs.docs_only != 'true' && steps.changes.outputs.backend == 'true'
-        run: |
-          npx c8 --reporter=text-summary --reporter=text sh test-all.sh 2>&1 | tee test-output.txt
-          
-          TOTAL_PASS=$(grep -oP '\d+(?= passed)' test-output.txt | awk '{s+=$1} END {print s}')
-          TOTAL_FAIL=$(grep -oP '\d+(?= failed)' test-output.txt | awk '{s+=$1} END {print s}')
-          BE_COVERAGE=$(grep 'Statements' test-output.txt | tail -1 | grep -oP '[\d.]+(?=%)')
-          
-          mkdir -p .badges
-          BE_COLOR="red"
-          [ "$(echo "$BE_COVERAGE > 60" | bc -l 2>/dev/null)" = "1" ] && BE_COLOR="yellow"
-          [ "$(echo "$BE_COVERAGE > 80" | bc -l 2>/dev/null)" = "1" ] && BE_COLOR="brightgreen"
-          echo "{\"schemaVersion\":1,\"label\":\"backend tests\",\"message\":\"${TOTAL_PASS} passed\",\"color\":\"brightgreen\"}" > .badges/backend-tests.json
-          echo "{\"schemaVersion\":1,\"label\":\"backend coverage\",\"message\":\"${BE_COVERAGE}%\",\"color\":\"${BE_COLOR}\"}" > .badges/backend-coverage.json
-          
-          echo "## Backend: ${TOTAL_PASS} tests, ${BE_COVERAGE}% coverage" >> $GITHUB_STEP_SUMMARY
-
-      - name: Run backend tests (quick, no coverage)
-        if: steps.docs-check.outputs.docs_only != 'true' && steps.changes.outputs.backend == 'false'
-        run: npm run test:unit
-
       - name: Install Playwright browser
-        if: steps.docs-check.outputs.docs_only != 'true' && steps.changes.outputs.frontend == 'true'
         run: |
-          # Install chromium (skips download if already cached on self-hosted runner)
           npx playwright install chromium 2>/dev/null || true
-          # Install system deps only if missing (apt-get is slow)
           npx playwright install-deps chromium 2>/dev/null || true
 
       - name: Instrument frontend JS for coverage
-        if: steps.docs-check.outputs.docs_only != 'true' && steps.changes.outputs.frontend == 'true'
         run: sh scripts/instrument-frontend.sh
 
-      - name: Start instrumented test server on port 13581
-        if: steps.docs-check.outputs.docs_only != 'true' && steps.changes.outputs.frontend == 'true'
+      - name: Start Go server with fixture DB
         run: |
-          # Kill any stale server on 13581
           fuser -k 13581/tcp 2>/dev/null || true
-          sleep 2
-          ./corescope-server -port 13581 -public public-instrumented &
+          sleep 1
+          ./corescope-server -port 13581 -db test-fixtures/e2e-fixture.db -public public-instrumented &
           echo $! > .server.pid
-          echo "Server PID: $(cat .server.pid)"
-          # Health-check poll loop (up to 30s)
           for i in $(seq 1 30); do
             if curl -sf http://localhost:13581/api/stats > /dev/null 2>&1; then
               echo "Server ready after ${i}s"
@@ -270,38 +162,26 @@ jobs:
             fi
             if [ "$i" -eq 30 ]; then
               echo "Server failed to start within 30s"
-              echo "Last few lines from server logs:"
-              ps aux | grep "corescope-server" || echo "No server process found"
               exit 1
             fi
             sleep 1
           done
 
-      - name: Run Playwright E2E + coverage collection concurrently
-        if: steps.docs-check.outputs.docs_only != 'true' && steps.changes.outputs.frontend == 'true'
+      - name: Run Playwright E2E tests (fail-fast)
         run: |
-          # Run E2E tests and coverage collection in parallel — both use the same server
-          BASE_URL=http://localhost:13581 node test-e2e-playwright.js 2>&1 | tee e2e-output.txt &
-          E2E_PID=$!
-          BASE_URL=http://localhost:13581 node scripts/collect-frontend-coverage.js 2>&1 | tee fe-coverage-output.txt &
-          COV_PID=$!
+          BASE_URL=http://localhost:13581 node test-e2e-playwright.js 2>&1 | tee e2e-output.txt
 
-          # Wait for both — E2E must pass, coverage is best-effort
-          E2E_EXIT=0
-          wait $E2E_PID || E2E_EXIT=$?
-          wait $COV_PID || true
-
-          # Fail if E2E failed
-          [ $E2E_EXIT -ne 0 ] && exit $E2E_EXIT
-          true
+      - name: Collect frontend coverage
+        if: always()
+        run: |
+          BASE_URL=http://localhost:13581 node scripts/collect-frontend-coverage.js 2>&1 | tee fe-coverage-output.txt || true
 
       - name: Generate frontend coverage badges
-        if: always() && steps.docs-check.outputs.docs_only != 'true' && steps.changes.outputs.frontend == 'true'
+        if: always()
         run: |
-          E2E_PASS=$(grep -oP '[0-9]+(?=/)' e2e-output.txt | tail -1)
-          
+          E2E_PASS=$(grep -oP '[0-9]+(?=/)' e2e-output.txt | tail -1 || echo "0")
+
           mkdir -p .badges
-          # Merge E2E + coverage collector data if both exist
           if [ -f .nyc_output/frontend-coverage.json ] || [ -f .nyc_output/e2e-coverage.json ]; then
             npx nyc report --reporter=text-summary --reporter=text 2>&1 | tee fe-report.txt
             FE_COVERAGE=$(grep 'Statements' fe-report.txt | head -1 | grep -oP '[\d.]+(?=%)' || echo "0")
@@ -312,43 +192,21 @@ jobs:
             echo "{\"schemaVersion\":1,\"label\":\"frontend coverage\",\"message\":\"${FE_COVERAGE}%\",\"color\":\"${FE_COLOR}\"}" > .badges/frontend-coverage.json
             echo "## Frontend: ${FE_COVERAGE}% coverage" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "{\"schemaVersion\":1,\"label\":\"frontend tests\",\"message\":\"${E2E_PASS:-0} E2E passed\",\"color\":\"brightgreen\"}" > .badges/frontend-tests.json
+          echo "{\"schemaVersion\":1,\"label\":\"e2e tests\",\"message\":\"${E2E_PASS:-0} passed\",\"color\":\"brightgreen\"}" > .badges/e2e-tests.json
 
       - name: Stop test server
-        if: always() && steps.docs-check.outputs.docs_only != 'true' && steps.changes.outputs.frontend == 'true'
+        if: always()
         run: |
           if [ -f .server.pid ]; then
             kill $(cat .server.pid) 2>/dev/null || true
             rm -f .server.pid
-            echo "Server stopped"
           fi
 
-      - name: Run frontend E2E (quick, no coverage)
-        if: steps.docs-check.outputs.docs_only != 'true' && steps.changes.outputs.frontend == 'false'
-        run: |
-          fuser -k 13581/tcp 2>/dev/null || true
-          ./corescope-server -port 13581 -public public &
-          SERVER_PID=$!
-          # Wait for server to be ready (up to 15s)
-          for i in $(seq 1 15); do
-            curl -sf http://localhost:13581/api/stats > /dev/null 2>&1 && break
-            sleep 1
-          done
-          BASE_URL=http://localhost:13581 node test-e2e-playwright.js || true
-          kill $SERVER_PID 2>/dev/null || true
-
-      - name: Cancel workflow on failure
-        if: failure()
-        run: |
-          curl -s -X POST \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
-
-      - name: Upload Node.js test badges
+      - name: Upload E2E badges
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: node-badges
+          name: e2e-badges
           path: .badges/
           retention-days: 1
           if-no-files-found: ignore
@@ -358,8 +216,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   build:
     name: "🏗️ Build Docker Image"
-    if: github.event_name == 'push'
-    needs: [go-test, node-test]
+    needs: [e2e-test]
     runs-on: [self-hosted, Linux]
     steps:
       - name: Checkout code
@@ -376,10 +233,10 @@ jobs:
           APP_VERSION=$(node -p "require('./package.json').version") \
           GIT_COMMIT="${GITHUB_SHA::7}" \
           docker compose --profile staging-go build staging-go
-          echo "Built Go staging image"
+          echo "Built Go staging image ✅"
 
   # ───────────────────────────────────────────────────────────────
-  # 4. Deploy Staging — start on port 82, healthcheck, smoke test
+  # 4. Deploy Staging (master only)
   # ───────────────────────────────────────────────────────────────
   deploy:
     name: "🚀 Deploy Staging"
@@ -392,9 +249,7 @@ jobs:
 
       - name: Start staging on port 82
         run: |
-          # Force remove stale containers
           docker rm -f corescope-staging-go 2>/dev/null || true
-          # Clean up stale ports
           fuser -k 82/tcp 2>/dev/null || true
           docker compose --profile staging-go up -d staging-go
 
@@ -424,7 +279,7 @@ jobs:
           fi
 
   # ───────────────────────────────────────────────────────────────
-  # 5. Publish Badges & Summary
+  # 5. Publish Badges & Summary (master only)
   # ───────────────────────────────────────────────────────────────
   publish:
     name: "📝 Publish Badges & Summary"
@@ -442,11 +297,11 @@ jobs:
           name: go-badges
           path: .badges/
 
-      - name: Download Node.js test badges
+      - name: Download E2E badges
         continue-on-error: true
         uses: actions/download-artifact@v5
         with:
-          name: node-badges
+          name: e2e-badges
           path: .badges/
 
       - name: Publish coverage badges to repo
@@ -463,12 +318,3 @@ jobs:
           echo "## Staging Deployed ✓" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`$(git rev-parse --short HEAD)\` — $(git log -1 --format=%s)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Staging:** http://<VM_HOST>:82" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "To promote to production:" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "ssh deploy@\$VM_HOST" >> $GITHUB_STEP_SUMMARY
-          echo "cd /opt/corescope-deploy" >> $GITHUB_STEP_SUMMARY
-          echo "./manage.sh promote" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
