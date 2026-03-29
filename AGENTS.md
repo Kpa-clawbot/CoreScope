@@ -4,14 +4,20 @@ Guide for AI agents working on this codebase. Read this before writing any code.
 
 ## Architecture
 
-Single Node.js server + static frontend. No build step. No framework. No bundler.
+Go backend + static frontend. No build step. No framework. No bundler.
+
+**⚠️ The Node.js server (server.js) is DEPRECATED and has been removed. All backend code is in Go.**
+**⚠️ DO NOT create or modify any Node.js server files. All backend changes go in `cmd/server/` or `cmd/ingestor/`.**
 
 ```
-server.js          — Express API + MQTT ingestion + WebSocket broadcast
-decoder.js         — MeshCore packet parser (header, path, payload, adverts)
-packet-store.js    — In-memory packet store + query engine (backed by SQLite)
-db.js              — SQLite schema + prepared statements
-public/            — Frontend (vanilla JS, one file per page)
+cmd/server/        — Go API server (REST + WebSocket broadcast + static file serving)
+  main.go          — Entry point, flags, SPA handler
+  routes.go        — All /api/* endpoints
+  store.go         — In-memory packet store + analytics + SQLite queries
+  config.go        — Configuration loading
+  decoder.go       — MeshCore packet decoder
+cmd/ingestor/      — Go MQTT ingestor (separate binary, writes to shared SQLite DB)
+public/            — Frontend (vanilla JS, one file per page) — ACTIVE, NOT DEPRECATED
   app.js           — SPA router, shared globals, theme loading
   roles.js         — ROLE_COLORS, TYPE_COLORS, health thresholds, shared helpers
   nodes.js         — Nodes list + side pane + full detail page
@@ -28,17 +34,25 @@ public/            — Frontend (vanilla JS, one file per page)
   live.css         — Live page styles
   home.css         — Home page styles
   index.html       — SPA shell, script/style tags with cache busters
+test-fixtures/     — Real data SQLite fixture from staging (used for E2E tests)
+scripts/           — Tooling (coverage collector, fixture capture, frontend instrumentation)
 ```
 
 ### Data Flow
-1. MQTT brokers → server.js ingests packets → decoder.js parses → packet-store.js stores in memory + SQLite
-2. WebSocket broadcasts new packets to connected browsers
-3. Frontend fetches via REST API, filters/sorts client-side
+1. MQTT brokers → Go ingestor (`cmd/ingestor/`) ingests packets → decodes → writes to SQLite
+2. Go server (`cmd/server/`) polls SQLite for new packets, broadcasts via WebSocket
+3. Frontend fetches via REST API (`/api/*`), filters/sorts client-side
+
+### What's Deprecated (DO NOT TOUCH)
+The following were part of the old Node.js backend and have been removed:
+- `server.js`, `db.js`, `decoder.js`, `server-helpers.js`, `packet-store.js`, `iata-coords.js`
+- All `test-server-*.js`, `test-decoder*.js`, `test-db*.js`, `test-regional*.js` files
+- If you see references to these in comments or docs, they're stale — ignore them
 
 ## Rules — Read These First
 
 ### 1. No commit without tests
-Every change that touches logic MUST have unit tests. Run `node test-packet-filter.js && node test-aging.js` before pushing. If you add new logic, add tests to the appropriate test file or create a new one. No exceptions.
+Every change that touches logic MUST have tests. For Go backend: `cd cmd/server && go test ./...` and `cd cmd/ingestor && go test ./...`. For frontend: `node test-packet-filter.js && node test-aging.js && node test-frontend-helpers.js`. If you add new logic, add tests. No exceptions.
 
 ### 2. No commit without browser validation
 After pushing, verify the change works in an actual browser. Use `browser profile=openclaw` against the running instance. Take a screenshot if the change is visual. If you can't validate it, say so — don't claim it works.
