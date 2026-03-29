@@ -260,9 +260,22 @@ jobs:
 
       - name: Stop old staging container
         run: |
-          docker stop corescope-staging-go 2>/dev/null || true
-          docker rm corescope-staging-go 2>/dev/null || true
+          docker compose --profile staging-go stop staging-go 2>/dev/null || true
+          docker wait corescope-staging-go 2>/dev/null || true
+          docker rm -f corescope-staging-go 2>/dev/null || true
           fuser -k 82/tcp 2>/dev/null || true
+          for i in $(seq 1 20); do
+            if ! docker ps --filter "name=^corescope-staging-go$" --format '{{.Names}}' | grep -q '^corescope-staging-go$'; then
+              echo "Old staging container fully stopped/removed"
+              break
+            fi
+            if [ "$i" -eq 20 ]; then
+              echo "Timed out waiting for old staging container to exit"
+              docker ps --filter "name=^corescope-staging-go$"
+              exit 1
+            fi
+            sleep 1
+          done
 
       - name: Start staging on port 82
         run: |
