@@ -41,10 +41,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Go 1.22
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.22'
           cache-dependency-path: |
@@ -122,9 +122,16 @@ jobs:
           echo "| Server | ${SERVER_COV}% |" >> $GITHUB_STEP_SUMMARY
           echo "| Ingestor | ${INGESTOR_COV}% |" >> $GITHUB_STEP_SUMMARY
 
+      - name: Cancel workflow on failure
+        if: failure()
+        run: |
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
       - name: Upload Go coverage badges
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: go-badges
           path: .badges/go-*.json
@@ -136,15 +143,15 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   node-test:
     name: "🧪 Node.js Tests"
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 2
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
 
@@ -263,9 +270,16 @@ jobs:
           BASE_URL=http://localhost:13581 node test-e2e-playwright.js || true
           kill $SERVER_PID 2>/dev/null || true
 
+      - name: Cancel workflow on failure
+        if: failure()
+        run: |
+          curl -s -X POST \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
       - name: Upload Node.js test badges
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: node-badges
           path: .badges/
@@ -278,14 +292,14 @@ jobs:
   build:
     name: "🏗️ Build Docker Image"
     if: github.event_name == 'push'
-    needs: [go-test]
-    runs-on: self-hosted
+    needs: [go-test, node-test]
+    runs-on: [self-hosted, Linux]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22'
 
@@ -304,10 +318,10 @@ jobs:
     name: "🚀 Deploy Staging"
     if: github.event_name == 'push'
     needs: [build]
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Start staging on port 82
         run: |
@@ -349,21 +363,21 @@ jobs:
     name: "📝 Publish Badges & Summary"
     if: github.event_name == 'push'
     needs: [deploy]
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download Go coverage badges
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: go-badges
           path: .badges/
 
       - name: Download Node.js test badges
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: node-badges
           path: .badges/
