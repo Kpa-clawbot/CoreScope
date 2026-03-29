@@ -960,13 +960,23 @@
       </div>
 
       <div class="analytics-card" id="hashMatrixSection">
-        <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">🔢 1-Byte Hash Usage Matrix</h3><a href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a></div>
-        <p class="text-muted" style="margin:4px 0 8px;font-size:0.8em">Click a cell to see which nodes share that prefix. Green = available, yellow = taken, red = collision.</p>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <h3 style="margin:0" id="hashMatrixTitle">🔢 Hash Usage Matrix</h3>
+          <a href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;margin:8px 0">
+          <div class="hash-byte-selector" id="hashByteSelector" style="display:flex;gap:4px">
+            <button class="hash-byte-btn active" data-bytes="1">1-Byte</button>
+            <button class="hash-byte-btn" data-bytes="2">2-Byte</button>
+            <button class="hash-byte-btn" data-bytes="3">3-Byte</button>
+          </div>
+          <p class="text-muted" id="hashMatrixDesc" style="margin:0;font-size:0.8em">Click a cell to see which nodes share that prefix.</p>
+        </div>
         <div id="hashMatrix"></div>
       </div>
 
       <div class="analytics-card" id="collisionRiskSection">
-        <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">💥 1-Byte Collision Risk</h3><a href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a></div>
+        <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0" id="collisionRiskTitle">💥 Collision Risk</h3><a href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a></div>
         <div id="collisionList"><div class="text-muted" style="padding:8px">Loading…</div></div>
       </div>
     `;
@@ -1005,8 +1015,41 @@
 
     // Only repeaters matter for routing — filter out non-repeaters for collision analysis
     const repeaterNodes = allNodes.filter(n => n.role === 'repeater');
-    renderHashMatrix(data.topHops, repeaterNodes);
-    renderCollisions(data.topHops, repeaterNodes);
+
+    let currentBytes = 1;
+    function refreshHashViews(bytes) {
+      currentBytes = bytes;
+      // Update selector button states
+      document.querySelectorAll('.hash-byte-btn').forEach(b => {
+        b.classList.toggle('active', Number(b.dataset.bytes) === bytes);
+      });
+      // Update titles and description
+      const matrixTitle = document.getElementById('hashMatrixTitle');
+      const matrixDesc = document.getElementById('hashMatrixDesc');
+      const riskTitle = document.getElementById('collisionRiskTitle');
+      if (matrixTitle) matrixTitle.textContent = bytes === 3 ? '🔢 Hash Usage Matrix' : `🔢 ${bytes}-Byte Hash Usage Matrix`;
+      if (riskTitle) riskTitle.textContent = `💥 ${bytes}-Byte Collision Risk`;
+      if (matrixDesc) {
+        if (bytes === 1) matrixDesc.textContent = 'Click a cell to see which nodes share that 1-byte prefix.';
+        else if (bytes === 2) matrixDesc.textContent = 'Each cell = first-byte group. Color shows worst 2-byte collision within. Click a cell to see the breakdown.';
+        else matrixDesc.textContent = '3-byte prefix space is too large to visualize as a matrix — collision table is shown below.';
+      }
+      // 1-byte: repeaters only (they're the routing nodes for 1-byte paths)
+      // 2/3-byte: all nodes — rooms and other types can also share prefixes
+      const nodesForMode = bytes === 1 ? repeaterNodes : allNodes;
+      renderHashMatrix(data.topHops, nodesForMode, bytes, allNodes);
+      // Hide collision risk card for 3-byte — stats are shown in the matrix panel
+      const riskCard = document.getElementById('collisionRiskSection');
+      if (riskCard) riskCard.style.display = bytes === 3 ? 'none' : '';
+      if (bytes !== 3) renderCollisions(data.topHops, nodesForMode, bytes);
+    }
+
+    // Wire up selector
+    document.getElementById('hashByteSelector')?.querySelectorAll('.hash-byte-btn').forEach(btn => {
+      btn.addEventListener('click', () => refreshHashViews(Number(btn.dataset.bytes)));
+    });
+
+    refreshHashViews(1);
   }
 
   function renderHashTimeline(hourly) {
@@ -1033,93 +1076,308 @@
     return svg;
   }
 
-  async function renderHashMatrix(topHops, allNodes) {
+  // Shared hover tooltip for hash matrix cells.
+  // Called once per container — reads content from data-tip on each <td>.
+  function initMatrixTooltip(el) {
+    if (el._matrixTipInit) return;
+    el._matrixTipInit = true;
+    let tip = null;
+    el.addEventListener('mouseover', e => {
+      const td = e.target.closest('td[data-tip]');
+      if (!td) return;
+      if (!tip) {
+        tip = document.createElement('div');
+        tip.className = 'hash-matrix-tooltip';
+        document.body.appendChild(tip);
+      }
+      tip.innerHTML = td.dataset.tip;
+      tip.style.display = 'block';
+    });
+    el.addEventListener('mousemove', e => {
+      if (!tip || tip.style.display === 'none') return;
+      const x = e.clientX + 14, y = e.clientY + 14;
+      tip.style.left = Math.min(x, window.innerWidth - tip.offsetWidth - 8) + 'px';
+      tip.style.top = Math.min(y, window.innerHeight - tip.offsetHeight - 8) + 'px';
+    });
+    el.addEventListener('mouseout', e => {
+      if (e.target.closest('td[data-tip]') && !e.relatedTarget?.closest('td[data-tip]')) {
+        if (tip) tip.style.display = 'none';
+      }
+    });
+    el.addEventListener('mouseleave', () => { if (tip) tip.style.display = 'none'; });
+  }
+
+  function renderHashMatrix(topHops, allNodes, bytes, totalNodes) {
+    bytes = bytes || 1;
+    totalNodes = totalNodes || allNodes;
     const el = document.getElementById('hashMatrix');
 
-    // Build prefix → node count map
-    const prefixNodes = {};
-    for (let i = 0; i < 256; i++) {
-      const hex = i.toString(16).padStart(2, '0').toUpperCase();
-      prefixNodes[hex] = allNodes.filter(n => n.public_key.toUpperCase().startsWith(hex));
+    // 3-byte: show a summary panel instead of a matrix
+    if (bytes === 3) {
+      const total = totalNodes.length;
+      const threeByteNodes = allNodes.filter(n => n.hash_size === 3).length;
+      const prefixMap = {};
+      for (const n of allNodes) {
+        const p = n.public_key.slice(0, 6).toUpperCase();
+        if (!prefixMap[p]) prefixMap[p] = 0;
+        prefixMap[p]++;
+      }
+      const uniquePrefixes = Object.keys(prefixMap).length;
+      const collisions = Object.values(prefixMap).filter(c => c > 1).length;
+      const spaceSize = 16777216; // 2^24
+      const pct = uniquePrefixes > 0 ? ((uniquePrefixes / spaceSize) * 100).toFixed(6) : '0';
+      el.innerHTML = `
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+          <div class="analytics-stat-card" style="flex:1;min-width:110px">
+            <div class="analytics-stat-label">Nodes tracked</div>
+            <div class="analytics-stat-value">${total.toLocaleString()}</div>
+          </div>
+          <div class="analytics-stat-card" style="flex:1;min-width:110px">
+            <div class="analytics-stat-label">Using 3-byte ID</div>
+            <div class="analytics-stat-value">${threeByteNodes.toLocaleString()}</div>
+          </div>
+          <div class="analytics-stat-card" style="flex:1;min-width:110px">
+            <div class="analytics-stat-label">Prefix space used</div>
+            <div class="analytics-stat-value" style="font-size:16px">${pct}%</div>
+            <div style="font-size:10px;color:var(--text-muted);margin-top:2px">of 16.7M possible</div>
+          </div>
+          <div class="analytics-stat-card" style="flex:1;min-width:110px;border-color:${collisions > 0 ? 'var(--status-red)' : 'var(--border)'}">
+            <div class="analytics-stat-label">Prefix collisions</div>
+            <div class="analytics-stat-value" style="color:${collisions > 0 ? 'var(--status-red)' : 'var(--status-green)'}">${collisions}</div>
+          </div>
+        </div>
+        <p class="text-muted" style="margin:0;font-size:0.8em">The 3-byte prefix space (16.7M values) is too large to visualize as a grid. Collision details are in the risk table below.</p>`;
+      return;
     }
 
     const nibbles = '0123456789ABCDEF'.split('');
     const cellSize = 36;
     const headerSize = 24;
 
-    let html = `<div style="display:flex;gap:16px;flex-wrap:wrap"><div class="hash-matrix-scroll"><table class="hash-matrix-table" style="border-collapse:collapse;font-size:12px;font-family:monospace">`;
-    html += `<tr><td style="width:${headerSize}px"></td>`;
-    for (const n of nibbles) {
-      html += `<td style="width:${cellSize}px;text-align:center;padding:2px 0;font-weight:bold;color:var(--text-muted)">${n}</td>`;
-    }
-    html += '</tr>';
-
-    for (let hi = 0; hi < 16; hi++) {
-      html += `<tr><td style="text-align:right;padding-right:4px;font-weight:bold;color:var(--text-muted)">${nibbles[hi]}</td>`;
-      for (let lo = 0; lo < 16; lo++) {
-        const hex = nibbles[hi] + nibbles[lo];
-        const nodes = prefixNodes[hex] || [];
-        const count = nodes.length;
-        let bg, color;
-        if (count === 0) {
-          bg = 'var(--card-bg)'; color = 'var(--text-muted)'; // empty — subtle
-        } else if (count === 1) {
-          bg = '#dcfce7'; color = '#166534'; // light green — taken, no collision
-        } else {
-          // 2+ nodes: orange→red
-          const t = Math.min((count - 2) / 4, 1);
-          const r = Math.round(220 + 35 * t);
-          const g = Math.round(120 * (1 - t));
-          bg = `rgb(${r},${g},30)`; color = '#fff';
-        }
-        const status = count === 0 ? 'available' : count === 1 ? `1 node: ${nodes[0].name || nodes[0].public_key.slice(0,12)}` : `${count} nodes — COLLISION`;
-        const cellText = count === 0 ? `<span style="font-size:11px">${hex}</span>` : count >= 2 ? `<strong>${count >= 3 ? '3+' : count}</strong>` : String(count);
-        html += `<td class="hash-cell${count ? ' hash-active' : ''}" data-hex="${hex}" style="width:${cellSize}px;height:${cellSize}px;text-align:center;background:${bg};color:${color};border:1px solid var(--border);cursor:${count ? 'pointer' : 'default'};font-size:13px;font-weight:${count >= 2 ? '700' : '400'}" title="0x${hex}: ${status}">${cellText}</td>`;
+    if (bytes === 1) {
+      // Build 1-byte prefix → nodes map
+      const prefixNodes = {};
+      for (let i = 0; i < 256; i++) {
+        const hex = i.toString(16).padStart(2, '0').toUpperCase();
+        prefixNodes[hex] = allNodes.filter(n => n.public_key.toUpperCase().startsWith(hex));
       }
-      html += '</tr>';
-    }
-    html += '</table></div>';
-    html += `<div id="hashDetail" style="flex:1;min-width:200px;max-width:400px;font-size:0.85em"></div></div>
-    <div style="margin-top:8px;font-size:0.8em;display:flex;gap:16px;align-items:center">
-      <span><span class="legend-swatch" style="background:var(--card-bg);border:1px solid var(--border)"></span> 0 — Available</span>
-      <span><span class="legend-swatch" style="background:#dcfce7"></span> 1 — One node</span>
-      <span><span class="legend-swatch" style="background:rgb(200,80,30)"></span> 2 — Two nodes (collision)</span>
-      <span><span class="legend-swatch" style="background:rgb(200,0,30)"></span> 3+ — Three+ nodes (collision)</span>
-    </div>`;
-    el.innerHTML = html;
+      const oneByteCount = allNodes.filter(n => n.hash_size === 1).length;
+      const oneUsed = Object.values(prefixNodes).filter(v => v.length > 0).length;
+      const oneCollisions = Object.values(prefixNodes).filter(v => v.length > 1).length;
+      const onePct = ((oneUsed / 256) * 100).toFixed(1);
 
-    // Click handler for cells
-    el.querySelectorAll('.hash-active').forEach(td => {
-      td.addEventListener('click', () => {
-        const hex = td.dataset.hex.toUpperCase();
-        const matches = prefixNodes[hex] || [];
-        const detail = document.getElementById('hashDetail');
-        if (!matches.length) {
-          detail.innerHTML = `<strong class="mono">0x${hex}</strong><br><span class="text-muted">No known nodes</span>`;
-          return;
+      let html = `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div class="analytics-stat-card" style="flex:1;min-width:110px">
+          <div class="analytics-stat-label">Nodes tracked</div>
+          <div class="analytics-stat-value">${totalNodes.length.toLocaleString()}</div>
+        </div>
+        <div class="analytics-stat-card" style="flex:1;min-width:110px">
+          <div class="analytics-stat-label">Using 1-byte ID</div>
+          <div class="analytics-stat-value">${oneByteCount.toLocaleString()}</div>
+        </div>
+        <div class="analytics-stat-card" style="flex:1;min-width:110px">
+          <div class="analytics-stat-label">Prefix space used</div>
+          <div class="analytics-stat-value" style="font-size:16px">${onePct}%</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:2px">of 256 possible</div>
+        </div>
+        <div class="analytics-stat-card" style="flex:1;min-width:110px;border-color:${oneCollisions > 0 ? 'var(--status-red)' : 'var(--border)'}">
+          <div class="analytics-stat-label">Prefix collisions</div>
+          <div class="analytics-stat-value" style="color:${oneCollisions > 0 ? 'var(--status-red)' : 'var(--status-green)'}">${oneCollisions}</div>
+        </div>
+      </div>`;
+      html += `<div style="display:flex;gap:16px;flex-wrap:wrap"><div class="hash-matrix-scroll"><table class="hash-matrix-table" style="border-collapse:collapse;font-size:12px;font-family:monospace">`;
+      html += `<tr><td style="width:${headerSize}px"></td>`;
+      for (const n of nibbles) html += `<td style="width:${cellSize}px;text-align:center;padding:2px 0;font-weight:bold;color:var(--text-muted)">${n}</td>`;
+      html += '</tr>';
+      for (let hi = 0; hi < 16; hi++) {
+        html += `<tr><td style="text-align:right;padding-right:4px;font-weight:bold;color:var(--text-muted)">${nibbles[hi]}</td>`;
+        for (let lo = 0; lo < 16; lo++) {
+          const hex = nibbles[hi] + nibbles[lo];
+          const nodes = prefixNodes[hex] || [];
+          const count = nodes.length;
+          let cellClass, bgStyle;
+          if (count === 0) { cellClass = 'hash-cell-empty'; bgStyle = ''; }
+          else if (count === 1) { cellClass = 'hash-cell-taken'; bgStyle = ''; }
+          else { const t = Math.min((count - 2) / 4, 1); bgStyle = `background:rgb(${Math.round(220+35*t)},${Math.round(120*(1-t))},30);`; cellClass = 'hash-cell-collision'; }
+          const tip1 = count === 0
+            ? `<div class="hash-matrix-tooltip-hex">0x${hex}</div><div class="hash-matrix-tooltip-status">Available</div>`
+            : count === 1
+              ? `<div class="hash-matrix-tooltip-hex">0x${hex}</div><div class="hash-matrix-tooltip-status">One node — no collision</div><div class="hash-matrix-tooltip-nodes"><div style="font-size:11px">${esc(nodes[0].name || nodes[0].public_key.slice(0,12))}</div></div>`
+              : `<div class="hash-matrix-tooltip-hex">0x${hex}</div><div class="hash-matrix-tooltip-status">${count} nodes — COLLISION</div><div class="hash-matrix-tooltip-nodes">${nodes.slice(0,5).map(m=>`<div style="font-size:11px">${esc(m.name||m.public_key.slice(0,12))}</div>`).join('')}${nodes.length>5?`<div class="hash-matrix-tooltip-status">+${nodes.length-5} more</div>`:''}</div>`;
+          html += `<td class="hash-cell ${cellClass}${count ? ' hash-active' : ''}" data-hex="${hex}" data-tip="${tip1.replace(/"/g,'&quot;')}" style="width:${cellSize}px;height:${cellSize}px;text-align:center;${bgStyle}border:1px solid var(--border);cursor:${count ? 'pointer' : 'default'};font-size:11px;font-weight:${count >= 2 ? '700' : '400'}">${hex}</td>`;
         }
-        detail.innerHTML = `<strong class="mono" style="font-size:1.1em">0x${hex}</strong> — ${matches.length} node${matches.length !== 1 ? 's' : ''}` +
-          `<div style="margin-top:8px">${matches.map(m => {
-            const coords = (m.lat && m.lon && !(m.lat === 0 && m.lon === 0))
-              ? `<span class="text-muted" style="font-size:0.8em">(${m.lat.toFixed(2)}, ${m.lon.toFixed(2)})</span>`
-              : '<span class="text-muted" style="font-size:0.8em">(no coords)</span>';
-            const role = m.role ? `<span class="badge" style="font-size:0.7em;padding:1px 4px;background:var(--border)">${esc(m.role)}</span> ` : '';
-            return `<div style="padding:3px 0">${role}<a href="#/nodes/${encodeURIComponent(m.public_key)}" class="analytics-link">${esc(m.name || m.public_key.slice(0,12))}</a> ${coords}</div>`;
-          }).join('')}</div>`;
-        el.querySelectorAll('.hash-selected').forEach(c => c.classList.remove('hash-selected'));
-        td.classList.add('hash-selected');
+        html += '</tr>';
+      }
+      html += '</table></div>';
+      html += `<div id="hashDetail" style="flex:1;min-width:200px;max-width:400px;font-size:0.85em"></div></div>
+      <div style="margin-top:8px;font-size:0.8em;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+        <span><span class="legend-swatch hash-cell-empty" style="border:1px solid var(--border)"></span> Available</span>
+        <span><span class="legend-swatch hash-cell-taken"></span> One node</span>
+        <span><span class="legend-swatch hash-cell-collision" style="background:rgb(220,80,30)"></span> Collision (2)</span>
+        <span><span class="legend-swatch hash-cell-collision" style="background:rgb(255,0,30)"></span> Collision (3+)</span>
+      </div>`;
+      el.innerHTML = html;
+
+      initMatrixTooltip(el);
+
+      el.querySelectorAll('.hash-active').forEach(td => {
+        td.addEventListener('click', () => {
+          const hex = td.dataset.hex.toUpperCase();
+          const matches = prefixNodes[hex] || [];
+          const detail = document.getElementById('hashDetail');
+          if (!matches.length) { detail.innerHTML = `<strong class="mono">0x${hex}</strong><br><span class="text-muted">No known nodes</span>`; return; }
+          detail.innerHTML = `<strong class="mono" style="font-size:1.1em">0x${hex}</strong> — ${matches.length} node${matches.length !== 1 ? 's' : ''}` +
+            `<div style="margin-top:8px">${matches.map(m => {
+              const coords = (m.lat && m.lon && !(m.lat === 0 && m.lon === 0)) ? `<span class="text-muted" style="font-size:0.8em">(${m.lat.toFixed(2)}, ${m.lon.toFixed(2)})</span>` : '<span class="text-muted" style="font-size:0.8em">(no coords)</span>';
+              const role = m.role ? `<span class="badge" style="font-size:0.7em;padding:1px 4px;background:var(--border)">${esc(m.role)}</span> ` : '';
+              return `<div style="padding:3px 0">${role}<a href="#/nodes/${encodeURIComponent(m.public_key)}" class="analytics-link">${esc(m.name || m.public_key.slice(0,12))}</a> ${coords}</div>`;
+            }).join('')}</div>`;
+          el.querySelectorAll('.hash-selected').forEach(c => c.classList.remove('hash-selected'));
+          td.classList.add('hash-selected');
+        });
       });
-    });
+
+    } else if (bytes === 2) {
+      // 2-byte mode: 16×16 grid of first-byte groups
+      // For each first-byte cell, find the worst 2-byte collision count within that group
+      const firstByteInfo = {};
+      for (let i = 0; i < 256; i++) {
+        const firstHex = i.toString(16).padStart(2, '0').toUpperCase();
+        const groupNodes = allNodes.filter(n => n.public_key.toUpperCase().startsWith(firstHex));
+        if (!groupNodes.length) { firstByteInfo[firstHex] = { groupNodes: [], maxCollision: 0, collisionCount: 0 }; continue; }
+        // Build 2-byte prefix → nodes within this group
+        const twoByteMap = {};
+        for (const n of groupNodes) {
+          const twoHex = n.public_key.slice(0, 4).toUpperCase();
+          if (!twoByteMap[twoHex]) twoByteMap[twoHex] = [];
+          twoByteMap[twoHex].push(n);
+        }
+        const collisions = Object.values(twoByteMap).filter(v => v.length > 1);
+        firstByteInfo[firstHex] = {
+          groupNodes,
+          twoByteMap,
+          maxCollision: collisions.length ? Math.max(...collisions.map(v => v.length)) : 0,
+          collisionCount: collisions.length
+        };
+      }
+
+      const twoByteCount = allNodes.filter(n => n.hash_size === 2).length;
+      const twoUsed = Object.values(firstByteInfo).filter(v => v.groupNodes.length > 0).length;
+      const twoCollisions = Object.values(firstByteInfo).filter(v => v.collisionCount > 0).length;
+      const twoPct = ((twoUsed / 256) * 100).toFixed(1);
+
+      let html = `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div class="analytics-stat-card" style="flex:1;min-width:110px">
+          <div class="analytics-stat-label">Nodes tracked</div>
+          <div class="analytics-stat-value">${totalNodes.length.toLocaleString()}</div>
+        </div>
+        <div class="analytics-stat-card" style="flex:1;min-width:110px">
+          <div class="analytics-stat-label">Using 2-byte ID</div>
+          <div class="analytics-stat-value">${twoByteCount.toLocaleString()}</div>
+        </div>
+        <div class="analytics-stat-card" style="flex:1;min-width:110px">
+          <div class="analytics-stat-label">Prefix space used</div>
+          <div class="analytics-stat-value" style="font-size:16px">${twoPct}%</div>
+          <div style="font-size:10px;color:var(--text-muted);margin-top:2px">of 256 first-byte groups</div>
+        </div>
+        <div class="analytics-stat-card" style="flex:1;min-width:110px;border-color:${twoCollisions > 0 ? 'var(--status-red)' : 'var(--border)'}">
+          <div class="analytics-stat-label">Prefix collisions</div>
+          <div class="analytics-stat-value" style="color:${twoCollisions > 0 ? 'var(--status-red)' : 'var(--status-green)'}">${twoCollisions}</div>
+        </div>
+      </div>`;
+      html += `<div style="display:flex;gap:16px;flex-wrap:wrap"><div class="hash-matrix-scroll"><table class="hash-matrix-table" style="border-collapse:collapse;font-size:12px;font-family:monospace">`;
+      html += `<tr><td style="width:${headerSize}px"></td>`;
+      for (const n of nibbles) html += `<td style="width:${cellSize}px;text-align:center;padding:2px 0;font-weight:bold;color:var(--text-muted)">${n}</td>`;
+      html += '</tr>';
+      for (let hi = 0; hi < 16; hi++) {
+        html += `<tr><td style="text-align:right;padding-right:4px;font-weight:bold;color:var(--text-muted)">${nibbles[hi]}</td>`;
+        for (let lo = 0; lo < 16; lo++) {
+          const hex = nibbles[hi] + nibbles[lo];
+          const info = firstByteInfo[hex] || { groupNodes: [], maxCollision: 0, collisionCount: 0 };
+          const nodeCount = info.groupNodes.length;
+          const maxCol = info.maxCollision;
+          let cellClass2, bgStyle2;
+          if (nodeCount === 0) { cellClass2 = 'hash-cell-empty'; bgStyle2 = ''; }
+          else if (maxCol === 0) { cellClass2 = 'hash-cell-taken'; bgStyle2 = ''; }
+          else { const t = Math.min((maxCol - 2) / 4, 1); bgStyle2 = `background:rgb(${Math.round(220+35*t)},${Math.round(120*(1-t))},30);`; cellClass2 = 'hash-cell-collision'; }
+          const tip2 = nodeCount === 0
+            ? `<div class="hash-matrix-tooltip-hex">0x${hex}__</div><div class="hash-matrix-tooltip-status">No nodes in this group</div>`
+            : info.collisionCount === 0
+              ? `<div class="hash-matrix-tooltip-hex">0x${hex}__</div><div class="hash-matrix-tooltip-status">${nodeCount} node${nodeCount>1?'s':''} — no 2-byte collisions</div>`
+              : `<div class="hash-matrix-tooltip-hex">0x${hex}__</div><div class="hash-matrix-tooltip-status">${info.collisionCount} 2-byte collision${info.collisionCount>1?'s':''}</div><div class="hash-matrix-tooltip-nodes">${Object.entries(info.twoByteMap).filter(([,v])=>v.length>1).slice(0,4).map(([p,ns])=>`<div style="font-size:11px;padding:1px 0"><span style="color:var(--status-red);font-family:var(--mono);font-weight:700">${p}</span> — ${ns.map(m=>esc(m.name||m.public_key.slice(0,8))).join(', ')}</div>`).join('')}</div>`;
+          html += `<td class="hash-cell ${cellClass2}${nodeCount ? ' hash-active' : ''}" data-hex="${hex}" data-tip="${tip2.replace(/"/g,'&quot;')}" style="width:${cellSize}px;height:${cellSize}px;text-align:center;${bgStyle2}border:1px solid var(--border);cursor:${nodeCount ? 'pointer' : 'default'};font-size:11px;font-weight:${maxCol > 0 ? '700' : '400'}">${hex}</td>`;
+        }
+        html += '</tr>';
+      }
+      html += '</table></div>';
+      html += `<div id="hashDetail" style="flex:1;min-width:200px;max-width:420px;font-size:0.85em"></div></div>
+      <div style="margin-top:8px;font-size:0.8em;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+        <span><span class="legend-swatch hash-cell-empty" style="border:1px solid var(--border)"></span> No nodes in group</span>
+        <span><span class="legend-swatch hash-cell-taken"></span> Nodes present, no collision</span>
+        <span><span class="legend-swatch hash-cell-collision" style="background:rgb(220,80,30)"></span> 2-byte collision exists</span>
+      </div>`;
+      el.innerHTML = html;
+
+      el.querySelectorAll('.hash-active').forEach(td => {
+        td.addEventListener('click', () => {
+          const hex = td.dataset.hex.toUpperCase();
+          const info = firstByteInfo[hex];
+          const detail = document.getElementById('hashDetail');
+          if (!info || !info.groupNodes.length) { detail.innerHTML = ''; return; }
+          let dhtml = `<strong class="mono" style="font-size:1.1em">0x${hex}__</strong> — ${info.groupNodes.length} node${info.groupNodes.length !== 1 ? 's' : ''} in group`;
+          if (info.collisionCount === 0) {
+            dhtml += `<div class="text-muted" style="margin-top:6px;font-size:0.85em">✅ No 2-byte collisions in this group</div>`;
+            dhtml += `<div style="margin-top:8px">${info.groupNodes.map(m => {
+              const prefix = m.public_key.slice(0,4).toUpperCase();
+              return `<div style="padding:2px 0"><code class="mono" style="font-size:0.85em">${prefix}</code> <a href="#/nodes/${encodeURIComponent(m.public_key)}" class="analytics-link">${esc(m.name || m.public_key.slice(0,12))}</a></div>`;
+            }).join('')}</div>`;
+          } else {
+            dhtml += `<div style="margin-top:8px">`;
+            for (const [twoHex, nodes] of Object.entries(info.twoByteMap).sort()) {
+              const isCollision = nodes.length > 1;
+              dhtml += `<div style="margin-bottom:6px;padding:4px 6px;border-radius:4px;background:${isCollision ? 'rgba(220,50,30,0.1)' : 'transparent'};border:1px solid ${isCollision ? 'rgba(220,50,30,0.3)' : 'transparent'}">`;
+              dhtml += `<code class="mono" style="font-size:0.9em;font-weight:${isCollision?'700':'400'}">${twoHex}</code>${isCollision ? ' <span style="color:#dc2626;font-size:0.75em;font-weight:700">COLLISION</span>' : ''} `;
+              dhtml += nodes.map(m => `<a href="#/nodes/${encodeURIComponent(m.public_key)}" class="analytics-link" style="font-size:0.85em">${esc(m.name || m.public_key.slice(0,12))}</a>`).join(', ');
+              dhtml += `</div>`;
+            }
+            dhtml += '</div>';
+          }
+          detail.innerHTML = dhtml;
+          el.querySelectorAll('.hash-selected').forEach(c => c.classList.remove('hash-selected'));
+          td.classList.add('hash-selected');
+        });
+      });
+
+      initMatrixTooltip(el);
+    }
   }
 
-  async function renderCollisions(topHops, allNodes) {
+  async function renderCollisions(topHops, allNodes, bytes) {
+    bytes = bytes || 1;
     const el = document.getElementById('collisionList');
-    const oneByteHops = topHops.filter(h => h.size === 1);
-    if (!oneByteHops.length) { el.innerHTML = '<div class="text-muted">No 1-byte hops</div>'; return; }
+    const hopsForSize = topHops.filter(h => h.size === bytes);
+
+    // For 2-byte and 3-byte, scan nodes directly — topHops only reliably covers 1-byte path hops
+    const hopsToCheck = bytes === 1
+      ? hopsForSize
+      : (() => {
+          const map = {};
+          for (const n of allNodes) {
+            const p = n.public_key.slice(0, bytes * 2).toUpperCase();
+            if (!map[p]) map[p] = { hex: p, count: 0, size: bytes };
+            map[p].count++;
+          }
+          return Object.values(map).filter(h => h.count > 1);
+        })();
+
+    if (!hopsToCheck.length && bytes === 1) {
+      el.innerHTML = `<div class="text-muted" style="padding:8px">No 1-byte hops observed in recent packets.</div>`;
+      return;
+    }
     try {
       const nodes = allNodes;
       const collisions = [];
-      for (const hop of oneByteHops) {
+      for (const hop of hopsToCheck) {
         const prefix = hop.hex.toLowerCase();
         const matches = nodes.filter(n => n.public_key.toLowerCase().startsWith(prefix));
         if (matches.length > 1) {
@@ -1145,14 +1403,27 @@
           collisions.push({ hop: hop.hex, count: hop.count, matches, maxDistKm, classification, withCoords: withCoords.length });
         }
       }
-      if (!collisions.length) { el.innerHTML = '<div class="text-muted" style="padding:8px">No collisions detected</div>'; return; }
-      
+      if (!collisions.length) {
+        const cleanMsg = bytes === 3
+          ? '✅ No 3-byte prefix collisions detected — all nodes have unique 3-byte prefixes.'
+          : `✅ No ${bytes}-byte collisions detected`;
+        el.innerHTML = `<div class="text-muted" style="padding:8px">${cleanMsg}</div>`;
+        return;
+      }
+
       // Sort: local first (most likely to collide), then regional, distant, incomplete
       const classOrder = { local: 0, regional: 1, distant: 2, incomplete: 3, unknown: 4 };
       collisions.sort((a, b) => classOrder[a.classification] - classOrder[b.classification] || b.count - a.count);
 
+      const showAppearances = bytes < 3;
       el.innerHTML = `<table class="analytics-table">
-        <thead><tr><th scope="col">Hop</th><th scope="col">Appearances</th><th scope="col">Max Distance</th><th scope="col">Assessment</th><th scope="col">Colliding Nodes</th></tr></thead>
+        <thead><tr>
+          <th scope="col">Prefix</th>
+          ${showAppearances ? '<th scope="col">Appearances</th>' : ''}
+          <th scope="col">Max Distance</th>
+          <th scope="col">Assessment</th>
+          <th scope="col">Colliding Nodes</th>
+        </tr></thead>
         <tbody>${collisions.map(c => {
           let badge, tooltip;
           if (c.classification === 'local') {
@@ -1171,12 +1442,12 @@
           const distStr = c.withCoords >= 2 ? `${Math.round(c.maxDistKm)} km` : '<span class="text-muted">—</span>';
           return `<tr>
             <td class="mono">${c.hop}</td>
-            <td>${c.count.toLocaleString()}</td>
+            ${showAppearances ? `<td>${c.count.toLocaleString()}</td>` : ''}
             <td>${distStr}</td>
             <td title="${tooltip}">${badge}</td>
             <td>${c.matches.map(m => {
-              const loc = (m.lat && m.lon && !(m.lat === 0 && m.lon === 0)) 
-                ? ` <span class="text-muted" style="font-size:0.75em">(${m.lat.toFixed(2)}, ${m.lon.toFixed(2)})</span>` 
+              const loc = (m.lat && m.lon && !(m.lat === 0 && m.lon === 0))
+                ? ` <span class="text-muted" style="font-size:0.75em">(${m.lat.toFixed(2)}, ${m.lon.toFixed(2)})</span>`
                 : ' <span class="text-muted" style="font-size:0.75em">(no coords)</span>';
               return `<a href="#/nodes/${encodeURIComponent(m.public_key)}" class="analytics-link">${esc(m.name || m.public_key.slice(0,12))}</a>${loc}`;
             }).join('<br>')}</td>
