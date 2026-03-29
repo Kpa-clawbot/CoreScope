@@ -1506,3 +1506,4 @@ func TestDecodeAdvertTelemetryZeroTemp(t *testing.T) {
 		t.Errorf("temperature_c=%f, want 0.0", *pkt.Payload.TemperatureC)
 	}
 }
+
