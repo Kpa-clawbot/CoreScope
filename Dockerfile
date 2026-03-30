@@ -9,6 +9,7 @@ ARG BUILD_TIME=unknown
 # Build server
 WORKDIR /build/server
 COPY cmd/server/go.mod cmd/server/go.sum ./
+COPY internal/geofilter/ ../../internal/geofilter/
 RUN go mod download
 COPY cmd/server/ ./
 RUN go build -ldflags "-X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" -o /corescope-server .
