@@ -103,6 +103,11 @@ type PacketStore struct {
 	hashSizeInfoMu    sync.Mutex
 	hashSizeInfoCache map[string]*hashSizeNodeInfo
 	hashSizeInfoAt    time.Time
+
+	// Eviction config and stats
+	retentionHours float64 // 0 = unlimited
+	maxMemoryMB    int     // 0 = unlimited
+	evicted        int64   // total packets evicted
 }
 
 // Precomputed distance records for fast analytics aggregation.
@@ -143,8 +148,8 @@ type cachedResult struct {
 }
 
 // NewPacketStore creates a new empty packet store backed by db.
-func NewPacketStore(db *DB) *PacketStore {
-	return &PacketStore{
+func NewPacketStore(db *DB, cfg *PacketStoreConfig) *PacketStore {
+	ps := &PacketStore{
 		db:            db,
 		packets:       make([]*StoreTx, 0, 65536),
 		byHash:        make(map[string]*StoreTx, 65536),
@@ -163,6 +168,11 @@ func NewPacketStore(db *DB) *PacketStore {
 		rfCacheTTL:    15 * time.Second,
 		spIndex:       make(map[string]int, 4096),
 	}
+	if cfg != nil {
+		ps.retentionHours = cfg.RetentionHours
+		ps.maxMemoryMB = cfg.MaxMemoryMB
+	}
+	return ps
 }
 
 // Load reads all transmissions + observations from SQLite into memory.
@@ -293,7 +303,7 @@ func (s *PacketStore) Load() error {
 
 	s.loaded = true
 	elapsed := time.Since(t0)
-	estMB := (len(s.packets)*450 + s.totalObs*100) / (1024 * 1024)
+	estMB := (len(s.packets)*5120 + s.totalObs*500) / (1024 * 1024)
 	log.Printf("[store] Loaded %d transmissions (%d observations) in %v (~%dMB est)",
 		len(s.packets), s.totalObs, elapsed, estMB)
 	return nil
@@ -542,20 +552,22 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 	}
 	s.mu.RUnlock()
 
-	// Rough estimate: ~430 bytes per packet + ~200 per observation
-	estimatedMB := math.Round(float64(totalLoaded*430+totalObs*200)/1048576*10) / 10
+	// Realistic estimate: ~5KB per packet + ~500 bytes per observation
+	estimatedMB := math.Round(float64(totalLoaded*5120+totalObs*500)/1048576*10) / 10
+
+	evicted := atomic.LoadInt64(&s.evicted)
 
 	return map[string]interface{}{
 		"totalLoaded":       totalLoaded,
 		"totalObservations": totalObs,
-		"evicted":           0,
+		"evicted":           evicted,
 		"inserts":           atomic.LoadInt64(&s.insertCount),
 		"queries":           atomic.LoadInt64(&s.queryCount),
 		"inMemory":          totalLoaded,
 		"sqliteOnly":        false,
-		"maxPackets":        2386092,
+		"retentionHours":    s.retentionHours,
+		"maxMemoryMB":       s.maxMemoryMB,
 		"estimatedMB":       estimatedMB,
-		"maxMB":             1024,
 		"indexes": map[string]interface{}{
 			"byHash":           hashIdx,
 			"byTxID":           txIdx,
@@ -648,12 +660,12 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 	}
 	s.mu.RUnlock()
 
-	estimatedMB := math.Round(float64(totalLoaded*430+totalObs*200)/1048576*10) / 10
+	estimatedMB := math.Round(float64(totalLoaded*5120+totalObs*500)/1048576*10) / 10
 
 	return PerfPacketStoreStats{
 		TotalLoaded:       totalLoaded,
 		TotalObservations: totalObs,
-		Evicted:           0,
+		Evicted:           int(atomic.LoadInt64(&s.evicted)),
 		Inserts:           atomic.LoadInt64(&s.insertCount),
 		Queries:           atomic.LoadInt64(&s.queryCount),
 		InMemory:          totalLoaded,
@@ -1697,6 +1709,218 @@ func (s *PacketStore) buildDistanceIndex() {
 	s.distPaths = paths
 	log.Printf("[store] Built distance index: %d hop records, %d path records",
 		len(s.distHops), len(s.distPaths))
+}
+
+// estimatedMemoryMB returns estimated memory usage of the packet store.
+func (s *PacketStore) estimatedMemoryMB() float64 {
+	return float64(len(s.packets)*5120+s.totalObs*500) / 1048576.0
+}
+
+// EvictStale removes packets older than the retention window and/or exceeding
+// the memory cap. Must be called with s.mu held (Lock). Returns the number of
+// packets evicted.
+func (s *PacketStore) EvictStale() int {
+	if s.retentionHours <= 0 && s.maxMemoryMB <= 0 {
+		return 0
+	}
+
+	cutoffIdx := 0
+
+	// Time-based eviction: find how many packets from the head are too old
+	if s.retentionHours > 0 {
+		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours*3600) * time.Second).Format(time.RFC3339)
+		for cutoffIdx < len(s.packets) && s.packets[cutoffIdx].FirstSeen < cutoff {
+			cutoffIdx++
+		}
+	}
+
+	// Memory-based eviction: if still over budget, trim more from head
+	if s.maxMemoryMB > 0 {
+		for cutoffIdx < len(s.packets) && s.estimatedMemoryMB() > float64(s.maxMemoryMB) {
+			// Estimate how many more to evict: rough binary approach
+			overMB := s.estimatedMemoryMB() - float64(s.maxMemoryMB)
+			// ~5KB per packet, so overMB * 1024*1024 / 5120 packets
+			extra := int(overMB * 1048576.0 / 5120.0)
+			if extra < 100 {
+				extra = 100
+			}
+			cutoffIdx += extra
+			if cutoffIdx > len(s.packets) {
+				cutoffIdx = len(s.packets)
+			}
+			// Recalculate estimated memory with fewer packets
+			// (we haven't actually removed yet, so simulate)
+			remainingPkts := len(s.packets) - cutoffIdx
+			remainingObs := s.totalObs
+			for _, tx := range s.packets[:cutoffIdx] {
+				remainingObs -= len(tx.Observations)
+			}
+			estMB := float64(remainingPkts*5120+remainingObs*500) / 1048576.0
+			if estMB <= float64(s.maxMemoryMB) {
+				break
+			}
+		}
+	}
+
+	if cutoffIdx == 0 {
+		return 0
+	}
+	if cutoffIdx > len(s.packets) {
+		cutoffIdx = len(s.packets)
+	}
+
+	evicting := s.packets[:cutoffIdx]
+	evictedObs := 0
+
+	// Remove from all indexes
+	for _, tx := range evicting {
+		delete(s.byHash, tx.Hash)
+		delete(s.byTxID, tx.ID)
+
+		// Remove observations from indexes
+		for _, obs := range tx.Observations {
+			delete(s.byObsID, obs.ID)
+			// Remove from byObserver
+			if obs.ObserverID != "" {
+				obsList := s.byObserver[obs.ObserverID]
+				for i, o := range obsList {
+					if o.ID == obs.ID {
+						s.byObserver[obs.ObserverID] = append(obsList[:i], obsList[i+1:]...)
+						break
+					}
+				}
+				if len(s.byObserver[obs.ObserverID]) == 0 {
+					delete(s.byObserver, obs.ObserverID)
+				}
+			}
+			evictedObs++
+		}
+
+		// Remove from byPayloadType
+		if tx.PayloadType != nil {
+			pt := *tx.PayloadType
+			ptList := s.byPayloadType[pt]
+			for i, t := range ptList {
+				if t.ID == tx.ID {
+					s.byPayloadType[pt] = append(ptList[:i], ptList[i+1:]...)
+					break
+				}
+			}
+			if len(s.byPayloadType[pt]) == 0 {
+				delete(s.byPayloadType, pt)
+			}
+		}
+
+		// Remove from byNode and nodeHashes
+		if tx.DecodedJSON != "" {
+			var decoded map[string]interface{}
+			if json.Unmarshal([]byte(tx.DecodedJSON), &decoded) == nil {
+				for _, field := range []string{"pubKey", "destPubKey", "srcPubKey"} {
+					if v, ok := decoded[field].(string); ok && v != "" {
+						if hashes, ok := s.nodeHashes[v]; ok {
+							delete(hashes, tx.Hash)
+							if len(hashes) == 0 {
+								delete(s.nodeHashes, v)
+							}
+						}
+						// Remove tx from byNode
+						nodeList := s.byNode[v]
+						for i, t := range nodeList {
+							if t.ID == tx.ID {
+								s.byNode[v] = append(nodeList[:i], nodeList[i+1:]...)
+								break
+							}
+						}
+						if len(s.byNode[v]) == 0 {
+							delete(s.byNode, v)
+						}
+					}
+				}
+			}
+		}
+
+		// Remove from subpath index
+		removeTxFromSubpathIndex(s.spIndex, tx)
+	}
+
+	// Remove from distance indexes — filter out records referencing evicted txs
+	evictedTxSet := make(map[*StoreTx]bool, cutoffIdx)
+	for _, tx := range evicting {
+		evictedTxSet[tx] = true
+	}
+	newDistHops := s.distHops[:0]
+	for i := range s.distHops {
+		if !evictedTxSet[s.distHops[i].tx] {
+			newDistHops = append(newDistHops, s.distHops[i])
+		}
+	}
+	s.distHops = newDistHops
+
+	newDistPaths := s.distPaths[:0]
+	for i := range s.distPaths {
+		if !evictedTxSet[s.distPaths[i].tx] {
+			newDistPaths = append(newDistPaths, s.distPaths[i])
+		}
+	}
+	s.distPaths = newDistPaths
+
+	// Trim packets slice
+	n := copy(s.packets, s.packets[cutoffIdx:])
+	s.packets = s.packets[:n]
+	s.totalObs -= evictedObs
+
+	evictCount := cutoffIdx
+	atomic.AddInt64(&s.evicted, int64(evictCount))
+	freedMB := float64(evictCount*5120+evictedObs*500) / 1048576.0
+	log.Printf("[store] Evicted %d packets older than %.0fh (freed ~%.1fMB estimated)",
+		evictCount, s.retentionHours, freedMB)
+
+	// Invalidate analytics caches
+	s.cacheMu.Lock()
+	s.rfCache = make(map[string]*cachedResult)
+	s.topoCache = make(map[string]*cachedResult)
+	s.hashCache = make(map[string]*cachedResult)
+	s.chanCache = make(map[string]*cachedResult)
+	s.distCache = make(map[string]*cachedResult)
+	s.subpathCache = make(map[string]*cachedResult)
+	s.cacheMu.Unlock()
+
+	// Invalidate hash size cache
+	s.hashSizeInfoMu.Lock()
+	s.hashSizeInfoCache = nil
+	s.hashSizeInfoMu.Unlock()
+
+	return evictCount
+}
+
+// RunEviction acquires the write lock and runs eviction. Safe to call from
+// a goroutine. Returns evicted count.
+func (s *PacketStore) RunEviction() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.EvictStale()
+}
+
+// StartEvictionTicker starts a background goroutine that runs eviction every
+// minute. Returns a stop function.
+func (s *PacketStore) StartEvictionTicker() func() {
+	if s.retentionHours <= 0 && s.maxMemoryMB <= 0 {
+		return func() {} // no-op
+	}
+	ticker := time.NewTicker(1 * time.Minute)
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				s.RunEviction()
+			case <-done:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 // computeDistancesForTx computes distance records for a single transmission.

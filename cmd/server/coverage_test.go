@@ -259,7 +259,7 @@ func TestStoreQueryMultiNodePackets(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	t.Run("empty pubkeys", func(t *testing.T) {
@@ -313,7 +313,7 @@ func TestIngestNewFromDB(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	initialMax := store.MaxTransmissionID()
@@ -384,7 +384,7 @@ func TestIngestNewFromDBv2(t *testing.T) {
 	db := setupTestDBv2(t)
 	defer db.Close()
 	seedV2Data(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	initialMax := store.MaxTransmissionID()
@@ -412,7 +412,7 @@ func TestMaxTransmissionID(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	maxID := store.MaxTransmissionID()
@@ -421,7 +421,7 @@ func TestMaxTransmissionID(t *testing.T) {
 	}
 
 	t.Run("empty store", func(t *testing.T) {
-		emptyStore := NewPacketStore(db)
+		emptyStore := NewPacketStore(db, nil)
 		if emptyStore.MaxTransmissionID() != 0 {
 			t.Error("expected 0 for empty store")
 		}
@@ -599,7 +599,7 @@ func TestTransmissionsForObserverIndex(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// Query packets for an observer — hits the byObserver index
@@ -622,7 +622,7 @@ func TestGetChannelMessagesFromStore(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// Test channel should exist from seed data
@@ -675,7 +675,7 @@ func TestGetChannelMessagesDedupe(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (4, 2, 9.0, -93, '[]', ?)`, epoch)
 
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	msgs, total := store.GetChannelMessages("#test", 100, 0)
@@ -692,7 +692,7 @@ func TestGetChannelsFromStore(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	channels := store.GetChannels("")
@@ -872,7 +872,7 @@ func TestPickBestObservation(t *testing.T) {
 func TestIndexByNode(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 
 	t.Run("empty decoded_json", func(t *testing.T) {
 		tx := &StoreTx{Hash: "h1"}
@@ -973,7 +973,7 @@ func TestPollerStartWithStore(t *testing.T) {
 	defer db.Close()
 	seedTestData(t, db)
 	hub := NewHub()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	poller := NewPoller(db, hub, 50*time.Millisecond)
@@ -1000,7 +1000,7 @@ func TestPerfMiddlewareSlowQuery(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	srv.store = store
 
@@ -1339,7 +1339,7 @@ func TestStoreQueryPacketsEdgeCases(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	t.Run("hash filter", func(t *testing.T) {
@@ -1654,7 +1654,7 @@ func TestStorePerfAndCacheStats(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	stats := store.GetPerfStoreStats()
@@ -1674,7 +1674,7 @@ func TestEnrichObs(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// Find an observation from the loaded store
@@ -1928,7 +1928,7 @@ func TestStoreGetTimestamps(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	ts := store.GetTimestamps("2000-01-01")
@@ -1983,7 +1983,7 @@ func setupRichTestDB(t *testing.T) *DB {
 func TestStoreGetBulkHealthWithStore(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	results := store.GetBulkHealth(50, "")
@@ -2009,7 +2009,7 @@ func TestStoreGetBulkHealthWithStore(t *testing.T) {
 func TestStoreGetAnalyticsHashSizes(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	result := store.GetAnalyticsHashSizes("")
@@ -2031,7 +2031,7 @@ func TestStoreGetAnalyticsHashSizes(t *testing.T) {
 func TestStoreGetAnalyticsSubpaths(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	result := store.GetAnalyticsSubpaths("", 2, 8, 100)
@@ -2048,7 +2048,7 @@ func TestStoreGetAnalyticsSubpaths(t *testing.T) {
 func TestSubpathPrecomputedIndex(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// After Load(), the precomputed index must be populated.
@@ -2102,7 +2102,7 @@ func TestSubpathPrecomputedIndex(t *testing.T) {
 func TestStoreGetAnalyticsRFCacheHit(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// First call — cache miss
@@ -2128,7 +2128,7 @@ func TestStoreGetAnalyticsRFCacheHit(t *testing.T) {
 func TestStoreGetAnalyticsTopology(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	result := store.GetAnalyticsTopology("")
@@ -2158,7 +2158,7 @@ func TestStoreGetAnalyticsTopology(t *testing.T) {
 func TestStoreGetAnalyticsChannels(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	result := store.GetAnalyticsChannels("")
@@ -2205,7 +2205,7 @@ func TestStoreGetAnalyticsChannelsNumericHash(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (6, 1, 12.0, -88, '[]', ?)`, recentEpoch)
 
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	result := store.GetAnalyticsChannels("")
 
@@ -2250,7 +2250,7 @@ func TestStoreGetAnalyticsChannelsNumericHash(t *testing.T) {
 func TestStoreGetAnalyticsDistance(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	result := store.GetAnalyticsDistance("")
@@ -2267,7 +2267,7 @@ func TestStoreGetAnalyticsDistance(t *testing.T) {
 func TestStoreGetSubpathDetail(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	result := store.GetSubpathDetail([]string{"aabb", "ccdd"})
@@ -2287,7 +2287,7 @@ func TestHandleAnalyticsRFWithStore(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	srv.store = store
 	router := mux.NewRouter()
@@ -2318,7 +2318,7 @@ func TestHandleBulkHealthWithStore(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	srv.store = store
 	router := mux.NewRouter()
@@ -2338,7 +2338,7 @@ func TestHandleAnalyticsSubpathsWithStore(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	srv.store = store
 	router := mux.NewRouter()
@@ -2358,7 +2358,7 @@ func TestHandleAnalyticsSubpathDetailWithStore(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	srv.store = store
 	router := mux.NewRouter()
@@ -2378,7 +2378,7 @@ func TestHandleAnalyticsDistanceWithStore(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	srv.store = store
 	router := mux.NewRouter()
@@ -2398,7 +2398,7 @@ func TestHandleAnalyticsHashSizesWithStore(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	srv.store = store
 	router := mux.NewRouter()
@@ -2418,7 +2418,7 @@ func TestHandleAnalyticsTopologyWithStore(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	srv.store = store
 	router := mux.NewRouter()
@@ -2438,7 +2438,7 @@ func TestHandleAnalyticsChannelsWithStore(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	srv.store = store
 	router := mux.NewRouter()
@@ -2457,7 +2457,7 @@ func TestHandleAnalyticsChannelsWithStore(t *testing.T) {
 func TestGetChannelMessagesRichData(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	messages, total := store.GetChannelMessages("#test", 100, 0)
@@ -2502,7 +2502,7 @@ func TestHandleChannelMessagesWithStore(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	srv.store = store
 	router := mux.NewRouter()
@@ -2524,7 +2524,7 @@ func TestHandleChannelsWithStore(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	srv.store = store
 	router := mux.NewRouter()
@@ -2556,7 +2556,7 @@ func TestStoreGetStoreStats(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	stats, err := store.GetStoreStats()
@@ -2574,7 +2574,7 @@ func TestStoreQueryGroupedPackets(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	result := store.QueryGroupedPackets(PacketQuery{Limit: 50, Order: "DESC"})
@@ -2589,7 +2589,7 @@ func TestStoreGetPacketByHash(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	pkt := store.GetPacketByHash("abc123def4567890")
@@ -2630,7 +2630,7 @@ func TestResolvePayloadTypeNameUnknown(t *testing.T) {
 func TestCacheHitTopology(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// First call — cache miss
@@ -2655,7 +2655,7 @@ func TestCacheHitTopology(t *testing.T) {
 func TestCacheHitHashSizes(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	r1 := store.GetAnalyticsHashSizes("")
@@ -2678,7 +2678,7 @@ func TestCacheHitHashSizes(t *testing.T) {
 func TestCacheHitChannels(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	r1 := store.GetAnalyticsChannels("")
@@ -2701,7 +2701,7 @@ func TestCacheHitChannels(t *testing.T) {
 func TestGetChannelMessagesEdgeCases(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// Channel not found — empty result
@@ -2735,7 +2735,7 @@ func TestFilterPacketsEmptyRegion(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// Region with no observers → empty result
@@ -2749,7 +2749,7 @@ func TestFilterPacketsSinceUntil(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// Since far future → empty
@@ -2776,7 +2776,7 @@ func TestFilterPacketsHashOnly(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// Single hash fast-path — found
@@ -2796,7 +2796,7 @@ func TestFilterPacketsObserverWithType(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// Observer + type filter (takes non-indexed path)
@@ -2809,7 +2809,7 @@ func TestFilterPacketsNodeFilter(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// Node filter — exercises DecodedJSON containment check
@@ -2892,7 +2892,7 @@ func TestGetNodeHashSizeInfoEdgeCases(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (10, 1, 10.0, -90, '[]', ?)`, recentEpoch)
 
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	info := store.GetNodeHashSizeInfo()
 
@@ -3054,7 +3054,7 @@ func TestGetChannelMessagesDedupeRepeats(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (3, 1, 10.0, -90, '[]', ?)`, recentEpoch)
 
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	msgs, total := store.GetChannelMessages("#general", 10, 0)
@@ -3080,7 +3080,7 @@ func TestTransmissionsForObserverFromSlice(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// Test with from=nil (index path) — for non-existent observer
@@ -3100,7 +3100,7 @@ func TestTransmissionsForObserverFromSlice(t *testing.T) {
 func TestGetPerfStoreStatsPublicKeyField(t *testing.T) {
 	db := setupRichTestDB(t)
 	defer db.Close()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	stats := store.GetPerfStoreStats()
@@ -3142,7 +3142,7 @@ func TestStoreGetTransmissionByID(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	pkt := store.GetTransmissionByID(1)
@@ -3162,7 +3162,7 @@ func TestStoreGetPacketByID(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// Get an observation ID from the store
@@ -3194,7 +3194,7 @@ func TestStoreGetObservationsForHash(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	obs := store.GetObservationsForHash("abc123def4567890")
@@ -3366,7 +3366,7 @@ func TestIngestNewFromDBDuplicateObs(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	initialMax := store.MaxTransmissionID()
@@ -3397,7 +3397,7 @@ func TestIngestNewObservations(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	// Get initial observation count for transmission 1 (hash abc123def4567890)
@@ -3475,7 +3475,7 @@ func TestIngestNewObservationsV2(t *testing.T) {
 	db := setupTestDBv2(t)
 	defer db.Close()
 	seedV2Data(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	tx := store.byHash["abc123def4567890"]
@@ -3546,7 +3546,7 @@ func TestHandleNodeAnalyticsNameless(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 	srv.store = store
 	router := mux.NewRouter()
@@ -3588,7 +3588,7 @@ func TestStoreQueryPacketsRegionFilter(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	result := store.QueryPackets(PacketQuery{Region: "SJC", Limit: 50, Order: "DESC"})
@@ -3676,7 +3676,7 @@ func TestGetChannelMessagesAfterIngest(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	store.Load()
 
 	initialMax := store.MaxTransmissionID()

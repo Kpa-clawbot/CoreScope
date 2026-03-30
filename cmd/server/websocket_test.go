@@ -270,7 +270,7 @@ func TestPollerBroadcastsMultipleObservations(t *testing.T) {
 	}()
 
 	poller := NewPoller(db, hub, 50*time.Millisecond)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	if err := store.Load(); err != nil {
 		t.Fatalf("store load failed: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestIngestNewObservationsBroadcast(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	if err := store.Load(); err != nil {
 		t.Fatalf("store load failed: %v", err)
 	}

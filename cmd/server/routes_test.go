@@ -17,7 +17,7 @@ func setupTestServer(t *testing.T) (*Server, *mux.Router) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
@@ -1259,7 +1259,7 @@ func TestNodeAnalyticsNoNameNode(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
@@ -1295,7 +1295,7 @@ func TestNodeHealthForNoNameNode(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
@@ -1890,7 +1890,7 @@ t.Error("hash_sizes_seen should not be set for single size")
 func TestGetNodeHashSizeInfoFlipFlop(t *testing.T) {
 db := setupTestDB(t)
 seedTestData(t, db)
-store := NewPacketStore(db)
+store := NewPacketStore(db, nil)
 if err := store.Load(); err != nil {
 	t.Fatalf("store.Load failed: %v", err)
 }

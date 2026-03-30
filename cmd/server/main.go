@@ -128,7 +128,7 @@ func main() {
 	}
 
 	// In-memory packet store
-	store := NewPacketStore(database)
+	store := NewPacketStore(database, cfg.PacketStore)
 	if err := store.Load(); err != nil {
 		log.Fatalf("[store] failed to load: %v", err)
 	}
@@ -163,6 +163,10 @@ func main() {
 	poller := NewPoller(database, hub, time.Duration(pollMs)*time.Millisecond)
 	poller.store = store
 	go poller.Start()
+
+	// Start periodic eviction
+	stopEviction := store.StartEvictionTicker()
+	defer stopEviction()
 
 	// Graceful shutdown
 	httpServer := &http.Server{

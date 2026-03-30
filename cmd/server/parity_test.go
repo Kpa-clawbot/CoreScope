@@ -409,7 +409,7 @@ func TestParityWSMultiObserverGolden(t *testing.T) {
 	defer db.Close()
 	seedTestData(t, db)
 	hub := NewHub()
-	store := NewPacketStore(db)
+	store := NewPacketStore(db, nil)
 	if err := store.Load(); err != nil {
 		t.Fatalf("store load failed: %v", err)
 	}

@@ -45,6 +45,14 @@ type Config struct {
 	CacheTTL map[string]interface{} `json:"cacheTTL"`
 
 	Retention *RetentionConfig `json:"retention,omitempty"`
+
+	PacketStore *PacketStoreConfig `json:"packetStore,omitempty"`
+}
+
+// PacketStoreConfig controls in-memory packet store limits.
+type PacketStoreConfig struct {
+	RetentionHours float64 `json:"retentionHours"` // max age of packets in hours (0 = unlimited)
+	MaxMemoryMB    int     `json:"maxMemoryMB"`     // hard memory ceiling in MB (0 = unlimited)
 }
 
 type RetentionConfig struct {
