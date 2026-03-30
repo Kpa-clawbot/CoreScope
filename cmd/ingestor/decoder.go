@@ -572,6 +572,21 @@ func DecodePacket(hexString string, channelKeys map[string]string) (*DecodedPack
 	payloadBuf := buf[offset:]
 	payload := decodePayload(header.PayloadType, payloadBuf, channelKeys)
 
+	// TRACE packets store hop IDs in the payload (buf[9:]) rather than the header
+	// path field. The header path byte still encodes hashSize in bits 6-7, which
+	// we use to split the payload path data into individual hop prefixes.
+	if header.PayloadType == PayloadTRACE && payload.PathData != "" {
+		pathBytes, err := hex.DecodeString(payload.PathData)
+		if err == nil && path.HashSize > 0 {
+			hops := make([]string, 0, len(pathBytes)/path.HashSize)
+			for i := 0; i+path.HashSize <= len(pathBytes); i += path.HashSize {
+				hops = append(hops, strings.ToUpper(hex.EncodeToString(pathBytes[i:i+path.HashSize])))
+			}
+			path.Hops = hops
+			path.HashCount = len(hops)
+		}
+	}
+
 	return &DecodedPacket{
 		Header:         header,
 		TransportCodes: tc,

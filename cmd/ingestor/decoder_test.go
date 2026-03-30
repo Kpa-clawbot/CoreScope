@@ -564,6 +564,31 @@ func TestDecodeTraceValid(t *testing.T) {
 	}
 }
 
+func TestDecodeTracePathParsing(t *testing.T) {
+	// Packet from issue #276: 260001807dca00000000007d547d
+	// Path byte 0x00 → hashSize=1, hops in payload at buf[9:] = 7d 54 7d
+	// Expected path: ["7D", "54", "7D"]
+	pkt, err := DecodePacket("260001807dca00000000007d547d", nil)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if pkt.Payload.Type != "TRACE" {
+		t.Errorf("payload type=%s, want TRACE", pkt.Payload.Type)
+	}
+	want := []string{"7D", "54", "7D"}
+	if len(pkt.Path.Hops) != len(want) {
+		t.Fatalf("hops=%v, want %v", pkt.Path.Hops, want)
+	}
+	for i, h := range want {
+		if pkt.Path.Hops[i] != h {
+			t.Errorf("hops[%d]=%s, want %s", i, pkt.Path.Hops[i], h)
+		}
+	}
+	if pkt.Path.HashCount != 3 {
+		t.Errorf("hashCount=%d, want 3", pkt.Path.HashCount)
+	}
+}
+
 func TestDecodeAdvertShort(t *testing.T) {
 	p := decodeAdvert(make([]byte, 50))
 	if p.Error != "too short for advert" {
