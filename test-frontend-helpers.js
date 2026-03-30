@@ -1769,6 +1769,111 @@ console.log('\n=== analytics.js: hash prefix helpers ===');
   });
 }
 
+// ===== CUSTOMIZE.JS: initState merge behavior =====
+console.log('\n=== customize.js: initState merge behavior ===');
+{
+  function loadCustomizeExports(ctx) {
+    const src = fs.readFileSync('public/customize.js', 'utf8');
+    const withExports = src.replace(
+      /\}\)\(\);\s*$/,
+      'window.__customizeExport = { initState: initState, getState: function () { return state; }, getDefaults: function () { return deepClone(DEFAULTS); } };})();'
+    );
+    vm.runInContext(withExports, ctx);
+    for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+    return ctx.window.__customizeExport;
+  }
+
+  test('partial local checklist does not wipe steps/footerLinks and keeps server colors', () => {
+    const ctx = makeSandbox();
+    ctx.window.SITE_CONFIG = {
+      home: {
+        heroTitle: 'Server Hero',
+        heroSubtitle: 'Server Subtitle',
+        steps: [{ emoji: '🧪', title: 'Server Step', description: 'from server' }],
+        checklist: [{ question: 'Server Q', answer: 'Server A' }],
+        footerLinks: [{ label: 'Server Link', url: '#/server' }]
+      },
+      theme: { accent: '#123456', navBg: '#222222' },
+      nodeColors: { repeater: '#aa0000' }
+    };
+    ctx.localStorage.setItem('meshcore-user-theme', JSON.stringify({
+      home: { checklist: [{ question: 'Local Q', answer: 'Local A' }] }
+    }));
+    const ex = loadCustomizeExports(ctx);
+    ex.initState();
+    const state = ex.getState();
+    assert.strictEqual(state.home.checklist[0].question, 'Local Q');
+    assert.strictEqual(state.home.steps[0].title, 'Server Step');
+    assert.strictEqual(state.home.footerLinks[0].label, 'Server Link');
+    assert.strictEqual(state.home.heroTitle, 'Server Hero');
+    assert.strictEqual(state.theme.accent, '#123456');
+    assert.strictEqual(state.nodeColors.repeater, '#aa0000');
+  });
+
+  test('server values survive when localStorage has partial overrides', () => {
+    const ctx = makeSandbox();
+    ctx.window.SITE_CONFIG = {
+      home: {
+        heroTitle: 'Server Hero',
+        heroSubtitle: 'Server Subtitle',
+        steps: [{ emoji: '1️⃣', title: 'Server Step', description: 'server' }],
+        footerLinks: [{ label: 'Server Footer', url: '#/s' }]
+      },
+      theme: { accent: '#111111', navBg: '#222222', navText: '#333333' },
+      typeColors: { ADVERT: '#00aa00', REQUEST: '#aa00aa' }
+    };
+    ctx.localStorage.setItem('meshcore-user-theme', JSON.stringify({
+      home: { heroTitle: 'Local Hero' },
+      theme: { accent: '#999999' },
+      typeColors: { ADVERT: '#ff00ff' }
+    }));
+    const ex = loadCustomizeExports(ctx);
+    ex.initState();
+    const state = ex.getState();
+    assert.strictEqual(state.home.heroTitle, 'Local Hero');
+    assert.strictEqual(state.home.heroSubtitle, 'Server Subtitle');
+    assert.strictEqual(state.home.steps[0].title, 'Server Step');
+    assert.strictEqual(state.home.footerLinks[0].label, 'Server Footer');
+    assert.strictEqual(state.theme.accent, '#999999');
+    assert.strictEqual(state.theme.navBg, '#222222');
+    assert.strictEqual(state.typeColors.ADVERT, '#ff00ff');
+    assert.strictEqual(state.typeColors.REQUEST, '#aa00aa');
+  });
+
+  test('full localStorage values override server config', () => {
+    const ctx = makeSandbox();
+    ctx.window.SITE_CONFIG = {
+      home: {
+        heroTitle: 'Server Hero',
+        heroSubtitle: 'Server Subtitle',
+        steps: [{ emoji: 'S', title: 'Server Step', description: 'server' }],
+        checklist: [{ question: 'Server Q', answer: 'Server A' }],
+        footerLinks: [{ label: 'Server Link', url: '#/server' }]
+      },
+      theme: { accent: '#101010' }
+    };
+    ctx.localStorage.setItem('meshcore-user-theme', JSON.stringify({
+      home: {
+        heroTitle: 'Local Hero',
+        heroSubtitle: 'Local Subtitle',
+        steps: [{ emoji: 'L', title: 'Local Step', description: 'local' }],
+        checklist: [{ question: 'Local Q', answer: 'Local A' }],
+        footerLinks: [{ label: 'Local Link', url: '#/local' }]
+      },
+      theme: { accent: '#abcdef', navBg: '#fedcba' }
+    }));
+    const ex = loadCustomizeExports(ctx);
+    ex.initState();
+    const state = ex.getState();
+    assert.strictEqual(state.home.heroTitle, 'Local Hero');
+    assert.strictEqual(state.home.heroSubtitle, 'Local Subtitle');
+    assert.strictEqual(state.home.steps[0].title, 'Local Step');
+    assert.strictEqual(state.home.checklist[0].question, 'Local Q');
+    assert.strictEqual(state.home.footerLinks[0].label, 'Local Link');
+    assert.strictEqual(state.theme.accent, '#abcdef');
+    assert.strictEqual(state.theme.navBg, '#fedcba');
+  });
+}
 // ===== SUMMARY =====
 console.log(`\n${'═'.repeat(40)}`);
 console.log(`  Frontend helpers: ${passed} passed, ${failed} failed`);
