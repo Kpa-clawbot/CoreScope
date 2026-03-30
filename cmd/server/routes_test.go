@@ -2003,6 +2003,49 @@ t.Error("expected inconsistent flag to be true for flip-flop pattern")
 }
 }
 
+func TestGetNodeHashSizeInfoDominant(t *testing.T) {
+// A node that sends mostly 2-byte adverts but occasionally 1-byte (pathByte=0x00
+// on direct sends) should report HashSize=2, not 1.
+db := setupTestDB(t)
+seedTestData(t, db)
+store := NewPacketStore(db, nil)
+if err := store.Load(); err != nil {
+	t.Fatalf("store.Load failed: %v", err)
+}
+
+pk := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'Repeater2B', 'repeater')", pk)
+
+decoded := `{"name":"Repeater2B","pubKey":"` + pk + `"}`
+raw1byte := "04" + "00" + "aabb" // pathByte=0x00 → hashSize=1 (direct send, no hops)
+raw2byte := "04" + "40" + "aabb" // pathByte=0x40 → hashSize=2
+
+payloadType := 4
+// 1 packet with hashSize=1, 4 packets with hashSize=2
+raws := []string{raw1byte, raw2byte, raw2byte, raw2byte, raw2byte}
+for i, raw := range raws {
+	tx := &StoreTx{
+		ID:          8000 + i,
+		RawHex:      raw,
+		Hash:        "dominant" + strconv.Itoa(i),
+		FirstSeen:   "2024-01-01T00:00:00Z",
+		PayloadType: &payloadType,
+		DecodedJSON: decoded,
+	}
+	store.packets = append(store.packets, tx)
+	store.byPayloadType[4] = append(store.byPayloadType[4], tx)
+}
+
+info := store.GetNodeHashSizeInfo()
+ni := info[pk]
+if ni == nil {
+	t.Fatal("expected hash info for test node")
+}
+if ni.HashSize != 2 {
+	t.Errorf("HashSize=%d, want 2 (dominant size should win over occasional 1-byte)", ni.HashSize)
+}
+}
+
 func TestAnalyticsHashSizesNoNullArrays(t *testing.T) {
 _, router := setupTestServer(t)
 req := httptest.NewRequest("GET", "/api/analytics/hash-sizes", nil)

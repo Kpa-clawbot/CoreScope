@@ -4067,14 +4067,32 @@ func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 			ni = &hashSizeNodeInfo{AllSizes: make(map[int]bool)}
 			info[pk] = ni
 		}
-		ni.HashSize = hs
 		ni.AllSizes[hs] = true
 		ni.Seq = append(ni.Seq, hs)
 	}
 
-	// Compute flip-flop (inconsistent) flag: need >= 3 observations,
-	// >= 2 unique sizes, and >= 2 transitions in the sequence.
+	// Post-process: compute dominant hash size (mode) and flip-flop flag.
+	// Using the last-seen value would misreport nodes that occasionally send
+	// with pathByte=0x00 (hashSize=1) when transmitting directly with no
+	// relay hops, even though their true hash size is 2 or 3.
 	for _, ni := range info {
+		// Dominant hash size: pick the most frequently observed size.
+		// On a tie, prefer the larger value (more specific).
+		counts := make(map[int]int, len(ni.AllSizes))
+		for _, hs := range ni.Seq {
+			counts[hs]++
+		}
+		best, bestCount := 1, 0
+		for hs, cnt := range counts {
+			if cnt > bestCount || (cnt == bestCount && hs > best) {
+				best = hs
+				bestCount = cnt
+			}
+		}
+		ni.HashSize = best
+
+		// Flip-flop (inconsistent) flag: need >= 3 observations,
+		// >= 2 unique sizes, and >= 2 transitions in the sequence.
 		if len(ni.Seq) < 3 || len(ni.AllSizes) < 2 {
 			continue
 		}
