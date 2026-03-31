@@ -11,12 +11,18 @@ set -e
 
 IMAGE_NAME="corescope"
 STATE_FILE=".setup-state"
+STAGING_CONTAINER="corescope-staging-go"
 
 # Source .env for port/path overrides (same file docker compose reads)
 # Strip \r (Windows line endings) to avoid "$'\r': command not found"
 if [ -f .env ]; then
   set -a
-  eval "$(sed 's/\r$//' .env)"
+  while IFS='=' read -r key value || [ -n "$key" ]; do
+    key=$(printf '%s' "$key" | sed 's/\r$//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+    [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+    value=$(printf '%s' "$value" | sed 's/\r$//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+    export "$key=$value"
+  done < .env
   set +a
 fi
 
@@ -65,6 +71,33 @@ mark_done()  { echo "$1" >> "$STATE_FILE"; }
 is_done()    { [ -f "$STATE_FILE" ] && grep -qx "$1" "$STATE_FILE" 2>/dev/null; }
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
+
+resolve_domain_ipv4() {
+  local domain="$1"
+  local resolved_ip=""
+
+  if command -v dig >/dev/null 2>&1; then
+    resolved_ip=$(dig +short "$domain" 2>/dev/null | grep -E '^[0-9]+\.' | head -1)
+  fi
+  if [ -z "$resolved_ip" ] && command -v host >/dev/null 2>&1; then
+    resolved_ip=$(host "$domain" 2>/dev/null | awk '/has address/ {print $4; exit}')
+  fi
+  if [ -z "$resolved_ip" ] && command -v nslookup >/dev/null 2>&1; then
+    resolved_ip=$(nslookup "$domain" 2>/dev/null | awk '/^Address: / {print $2}' | grep -E '^[0-9]+\.' | head -1)
+  fi
+  if [ -z "$resolved_ip" ] && command -v getent >/dev/null 2>&1; then
+    resolved_ip=$(getent hosts "$domain" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+\.' | head -1)
+  fi
+
+  echo "$resolved_ip"
+}
+
+has_dns_resolution_tool() {
+  command -v dig >/dev/null 2>&1 || \
+  command -v host >/dev/null 2>&1 || \
+  command -v nslookup >/dev/null 2>&1 || \
+  command -v getent >/dev/null 2>&1
+}
 
 PORT_CHECK_METHOD=""
 
@@ -597,13 +630,17 @@ cmd_setup() {
 
         # Validate DNS
         info "Checking DNS..."
-        RESOLVED_IP=$(dig +short "$DOMAIN" 2>/dev/null | grep -E '^[0-9]+\.' | head -1)
+        RESOLVED_IP=$(resolve_domain_ipv4 "$DOMAIN")
         MY_IP=$(curl -s -4 ifconfig.me 2>/dev/null || curl -s -4 icanhazip.com 2>/dev/null || echo "unknown")
 
         if [ -z "$RESOLVED_IP" ]; then
-          warn "${DOMAIN} doesn't resolve yet."
-          warn "Create an A record pointing to ${MY_IP}"
-          warn "HTTPS won't work until DNS propagates (1-60 min)."
+          if has_dns_resolution_tool; then
+            warn "${DOMAIN} doesn't resolve yet."
+            warn "Create an A record pointing to ${MY_IP}"
+            warn "HTTPS won't work until DNS propagates (1-60 min)."
+          else
+            warn "DNS tool not found; skipping domain resolution check."
+          fi
           echo ""
           if ! confirm "Continue anyway?"; then
             echo "   Run ./manage.sh setup again when DNS is ready."
@@ -885,7 +922,7 @@ cmd_start() {
     prepare_staging_config
 
     info "Starting production container (corescope-prod) on ports ${PROD_HTTP_PORT:-80}/${PROD_HTTPS_PORT:-443}..."
-    info "Starting staging container (corescope-staging-go) on port ${STAGING_GO_HTTP_PORT:-82}..."
+    info "Starting staging container (${STAGING_CONTAINER}) on port ${STAGING_GO_HTTP_PORT:-82}..."
     $DC up -d prod
     $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging up -d staging-go
     log "Production started on ports ${PROD_HTTP_PORT:-80}/${PROD_HTTPS_PORT:-443}/${PROD_MQTT_PORT:-1883}"
@@ -907,16 +944,16 @@ cmd_stop() {
       log "Production stopped."
       ;;
     staging)
-      info "Stopping staging container (corescope-staging-go)..."
+      info "Stopping staging container (${STAGING_CONTAINER})..."
       $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging rm -sf staging-go 2>/dev/null || true
-      docker rm -f corescope-staging-go meshcore-staging-go corescope-staging meshcore-staging 2>/dev/null || true
+      docker rm -f "$STAGING_CONTAINER" meshcore-staging-go corescope-staging meshcore-staging 2>/dev/null || true
       log "Staging stopped and cleaned up."
       ;;
     all)
       info "Stopping all containers..."
       $DC stop prod
       $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging rm -sf staging-go 2>/dev/null || true
-      docker rm -f corescope-staging-go meshcore-staging-go corescope-staging meshcore-staging 2>/dev/null || true
+      docker rm -f "$STAGING_CONTAINER" meshcore-staging-go corescope-staging meshcore-staging 2>/dev/null || true
       log "All containers stopped."
       ;;
     *)
@@ -935,14 +972,14 @@ cmd_restart() {
       log "Production restarted."
       ;;
     staging)
-      info "Restarting staging container (corescope-staging-go)..."
+      info "Restarting staging container (${STAGING_CONTAINER})..."
       # Stop and remove old container
       $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging rm -sf staging-go 2>/dev/null || true
-      docker rm -f corescope-staging-go 2>/dev/null || true
+      docker rm -f "$STAGING_CONTAINER" 2>/dev/null || true
       # Wait for container to be fully gone and memory to be reclaimed
       # This prevents OOM when old + new containers overlap on small VMs
       for i in $(seq 1 15); do
-        if ! docker ps -a --format '{{.Names}}' | grep -q 'corescope-staging-go'; then
+        if ! docker ps -a --format '{{.Names}}' | grep -q "$STAGING_CONTAINER"; then
           break
         fi
         sleep 1
@@ -961,7 +998,7 @@ cmd_restart() {
       info "Restarting all containers..."
       $DC up -d --force-recreate prod
       $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging rm -sf staging-go 2>/dev/null || true
-      docker rm -f corescope-staging-go 2>/dev/null || true
+      docker rm -f "$STAGING_CONTAINER" 2>/dev/null || true
       $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging up -d staging-go
       log "All containers restarted."
       ;;
@@ -1014,10 +1051,10 @@ cmd_status() {
   echo ""
 
   # Staging
-  if container_running "corescope-staging-go"; then
-    show_container_status "corescope-staging-go" "Staging"
+  if container_running "$STAGING_CONTAINER"; then
+    show_container_status "$STAGING_CONTAINER" "Staging"
   else
-    info "Staging (corescope-staging-go): Not running (use --with-staging to start both)"
+    info "Staging (${STAGING_CONTAINER}): Not running (use --with-staging to start both)"
   fi
   echo ""
 
@@ -1047,7 +1084,7 @@ cmd_logs() {
       $DC logs -f --tail="$LINES" prod
       ;;
     staging)
-      if container_running "corescope-staging"; then
+      if container_running "$STAGING_CONTAINER"; then
         info "Tailing staging logs..."
         $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging logs -f --tail="$LINES" staging-go
       else
@@ -1077,8 +1114,8 @@ cmd_promote() {
 
   # Show what's currently running
   local staging_image staging_created prod_image prod_created
-  staging_image=$(docker inspect corescope-staging-go --format '{{.Config.Image}}' 2>/dev/null || echo "not running")
-  staging_created=$(docker inspect corescope-staging --format '{{.Created}}' 2>/dev/null || echo "N/A")
+  staging_image=$(docker inspect "$STAGING_CONTAINER" --format '{{.Config.Image}}' 2>/dev/null || echo "not running")
+  staging_created=$(docker inspect "$STAGING_CONTAINER" --format '{{.Created}}' 2>/dev/null || echo "N/A")
   prod_image=$(docker inspect corescope-prod --format '{{.Config.Image}}' 2>/dev/null || echo "not running")
   prod_created=$(docker inspect corescope-prod --format '{{.Created}}' 2>/dev/null || echo "N/A")
 
