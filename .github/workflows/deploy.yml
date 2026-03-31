@@ -129,6 +129,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Free disk space
+        run: |
+          # Prune old runner diagnostic logs (can accumulate 50MB+)
+          find ~/actions-runner/_diag/ -name '*.log' -mtime +3 -delete 2>/dev/null || true
+          # Show available disk space
+          df -h / | tail -1
+
       - name: Set up Node.js 22
         uses: actions/setup-node@v5
         with:
@@ -313,6 +320,17 @@ jobs:
             echo "Staging /api/stats did not return engine field"
             exit 1
           fi
+
+      - name: Clean up old Docker images
+        if: always()
+        run: |
+          # Remove dangling images and images older than 24h (keeps current build)
+          echo "--- Docker disk usage before cleanup ---"
+          docker system df
+          docker image prune -af --filter "until=24h" 2>/dev/null || true
+          docker builder prune -f --keep-storage=1GB 2>/dev/null || true
+          echo "--- Docker disk usage after cleanup ---"
+          docker system df
 
   # ───────────────────────────────────────────────────────────────
   # 5. Publish Badges & Summary (master only)
