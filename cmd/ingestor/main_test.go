@@ -177,13 +177,13 @@ func TestHandleMessageStatusTopic(t *testing.T) {
 	source := MQTTSource{Name: "test"}
 	msg := &mockMessage{
 		topic:   "meshcore/SJC/obs1/status",
-		payload: []byte(`{"origin":"MyObserver"}`),
+		payload: []byte(`{"origin":"MyObserver","model":"L1","firmware_version":"v1.2.3","client_version":"2.4.1","radio":"SX1262"}`),
 	}
 
 	handleMessage(store, "test", source, msg, nil)
 
-	var name, iata string
-	err := store.db.QueryRow("SELECT name, iata FROM observers WHERE id = 'obs1'").Scan(&name, &iata)
+	var name, iata, model, firmware, clientVersion, radio string
+	err := store.db.QueryRow("SELECT name, iata, model, firmware, client_version, radio FROM observers WHERE id = 'obs1'").Scan(&name, &iata, &model, &firmware, &clientVersion, &radio)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +192,39 @@ func TestHandleMessageStatusTopic(t *testing.T) {
 	}
 	if iata != "SJC" {
 		t.Errorf("iata=%s, want SJC", iata)
+	}
+	if model != "L1" {
+		t.Errorf("model=%s, want L1", model)
+	}
+	if firmware != "v1.2.3" {
+		t.Errorf("firmware=%s, want v1.2.3", firmware)
+	}
+	if clientVersion != "2.4.1" {
+		t.Errorf("client_version=%s, want 2.4.1", clientVersion)
+	}
+	if radio != "SX1262" {
+		t.Errorf("radio=%s, want SX1262", radio)
+	}
+}
+
+func TestHandleMessageStatusTopicMissingIdentityFields(t *testing.T) {
+	store := newTestStore(t)
+	source := MQTTSource{Name: "test"}
+	msg := &mockMessage{
+		topic:   "meshcore/SJC/obs1/status",
+		payload: []byte(`{"origin":"MyObserver","battery_mv":3500}`),
+	}
+
+	handleMessage(store, "test", source, msg, nil)
+
+	var model, firmware, clientVersion, radio interface{}
+	err := store.db.QueryRow("SELECT model, firmware, client_version, radio FROM observers WHERE id = 'obs1'").
+		Scan(&model, &firmware, &clientVersion, &radio)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != nil || firmware != nil || clientVersion != nil || radio != nil {
+		t.Errorf("identity fields should remain NULL when absent: model=%v firmware=%v client_version=%v radio=%v", model, firmware, clientVersion, radio)
 	}
 }
 

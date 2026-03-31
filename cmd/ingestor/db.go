@@ -15,12 +15,12 @@ import (
 
 // DBStats tracks operational metrics for the ingestor database.
 type DBStats struct {
-	TransmissionsInserted atomic.Int64
-	ObservationsInserted  atomic.Int64
+	TransmissionsInserted  atomic.Int64
+	ObservationsInserted   atomic.Int64
 	DuplicateTransmissions atomic.Int64
-	NodeUpserts           atomic.Int64
-	ObserverUpserts       atomic.Int64
-	WriteErrors           atomic.Int64
+	NodeUpserts            atomic.Int64
+	ObserverUpserts        atomic.Int64
+	WriteErrors            atomic.Int64
 }
 
 // Store wraps the SQLite database for packet ingestion.
@@ -35,8 +35,8 @@ type Store struct {
 	stmtUpsertNode           *sql.Stmt
 	stmtIncrementAdvertCount *sql.Stmt
 	stmtUpsertObserver       *sql.Stmt
-	stmtGetObserverRowid        *sql.Stmt
-	stmtUpdateNodeTelemetry *sql.Stmt
+	stmtGetObserverRowid     *sql.Stmt
+	stmtUpdateNodeTelemetry  *sql.Stmt
 }
 
 // OpenStore opens or creates a SQLite DB at the given path, applying the
@@ -333,13 +333,17 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtUpsertObserver, err = s.db.Prepare(`
-		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, battery_mv, uptime_secs, noise_floor)
-		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor)
+		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = COALESCE(?, name),
 			iata = COALESCE(?, iata),
 			last_seen = ?,
 			packet_count = packet_count + 1,
+			model = COALESCE(?, model),
+			firmware = COALESCE(?, firmware),
+			client_version = COALESCE(?, client_version),
+			radio = COALESCE(?, radio),
 			battery_mv = COALESCE(?, battery_mv),
 			uptime_secs = COALESCE(?, uptime_secs),
 			noise_floor = COALESCE(?, noise_floor)
@@ -485,17 +489,34 @@ func (s *Store) UpdateNodeTelemetry(pubKey string, batteryMv *int, temperatureC 
 
 // ObserverMeta holds optional observer hardware metadata.
 type ObserverMeta struct {
-	BatteryMv  *int     // millivolts, always integer
-	UptimeSecs *int64   // seconds, always integer
-	NoiseFloor *float64 // dBm, may have decimals
+	Model         *string  // e.g., L1
+	Firmware      *string  // firmware version string
+	ClientVersion *string  // client app version string
+	Radio         *string  // radio chipset/platform string
+	BatteryMv     *int     // millivolts, always integer
+	UptimeSecs    *int64   // seconds, always integer
+	NoiseFloor    *float64 // dBm, may have decimals
 }
 
 // UpsertObserver inserts or updates an observer with optional hardware metadata.
 func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
+	var model, firmware, clientVersion, radio interface{}
 	var batteryMv, uptimeSecs, noiseFloor interface{}
 	if meta != nil {
+		if meta.Model != nil {
+			model = *meta.Model
+		}
+		if meta.Firmware != nil {
+			firmware = *meta.Firmware
+		}
+		if meta.ClientVersion != nil {
+			clientVersion = *meta.ClientVersion
+		}
+		if meta.Radio != nil {
+			radio = *meta.Radio
+		}
 		if meta.BatteryMv != nil {
 			batteryMv = *meta.BatteryMv
 		}
@@ -508,8 +529,8 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 	}
 
 	_, err := s.stmtUpsertObserver.Exec(
-		id, name, iata, now, now, batteryMv, uptimeSecs, noiseFloor,
-		name, iata, now, batteryMv, uptimeSecs, noiseFloor,
+		id, name, iata, now, now, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor,
+		name, iata, now, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor,
 	)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)

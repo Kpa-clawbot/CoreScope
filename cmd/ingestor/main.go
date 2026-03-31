@@ -476,6 +476,31 @@ func extractObserverMeta(msg map[string]interface{}) *ObserverMeta {
 	meta := &ObserverMeta{}
 	hasData := false
 
+	if v, ok := msg["model"].(string); ok && v != "" {
+		meta.Model = &v
+		hasData = true
+	}
+	if v, ok := msg["firmware"].(string); ok && v != "" {
+		meta.Firmware = &v
+		hasData = true
+	}
+	if v, ok := msg["firmware_version"].(string); ok && v != "" {
+		meta.Firmware = &v
+		hasData = true
+	}
+	if v, ok := msg["client_version"].(string); ok && v != "" {
+		meta.ClientVersion = &v
+		hasData = true
+	}
+	if v, ok := msg["clientVersion"].(string); ok && v != "" {
+		meta.ClientVersion = &v
+		hasData = true
+	}
+	if v, ok := msg["radio"].(string); ok && v != "" {
+		meta.Radio = &v
+		hasData = true
+	}
+
 	if v, ok := msg["battery_mv"]; ok {
 		if f, ok := toFloat64(v); ok {
 			iv := int(math.Round(f))

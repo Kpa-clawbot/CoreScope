@@ -243,10 +243,18 @@ func TestUpsertObserverWithMeta(t *testing.T) {
 	battery := 3500
 	uptime := int64(86400)
 	noise := -115.5
+	model := "L1"
+	firmware := "v1.2.3"
+	clientVersion := "2.4.1"
+	radio := "SX1262"
 	meta := &ObserverMeta{
-		BatteryMv:  &battery,
-		UptimeSecs: &uptime,
-		NoiseFloor: &noise,
+		Model:         &model,
+		Firmware:      &firmware,
+		ClientVersion: &clientVersion,
+		Radio:         &radio,
+		BatteryMv:     &battery,
+		UptimeSecs:    &uptime,
+		NoiseFloor:    &noise,
 	}
 
 	if err := s.UpsertObserver("obs1", "Observer1", "SJC", meta); err != nil {
@@ -257,10 +265,23 @@ func TestUpsertObserverWithMeta(t *testing.T) {
 	var batteryMv int
 	var uptimeSecs int64
 	var noiseFloor float64
-	err = s.db.QueryRow("SELECT battery_mv, uptime_secs, noise_floor FROM observers WHERE id = 'obs1'").
-		Scan(&batteryMv, &uptimeSecs, &noiseFloor)
+	var gotModel, gotFirmware, gotClientVersion, gotRadio string
+	err = s.db.QueryRow("SELECT model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor FROM observers WHERE id = 'obs1'").
+		Scan(&gotModel, &gotFirmware, &gotClientVersion, &gotRadio, &batteryMv, &uptimeSecs, &noiseFloor)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if gotModel != model {
+		t.Errorf("model=%s, want %s", gotModel, model)
+	}
+	if gotFirmware != firmware {
+		t.Errorf("firmware=%s, want %s", gotFirmware, firmware)
+	}
+	if gotClientVersion != clientVersion {
+		t.Errorf("client_version=%s, want %s", gotClientVersion, clientVersion)
+	}
+	if gotRadio != radio {
+		t.Errorf("radio=%s, want %s", gotRadio, radio)
 	}
 	if batteryMv != 3500 {
 		t.Errorf("battery_mv=%d, want 3500", batteryMv)
@@ -297,9 +318,13 @@ func TestUpsertObserverMetaPreservesExisting(t *testing.T) {
 	// First upsert with metadata
 	battery := 3500
 	noise := -115.5
+	model := "L1"
+	clientVersion := "2.4.1"
 	meta := &ObserverMeta{
-		BatteryMv:  &battery,
-		NoiseFloor: &noise,
+		Model:         &model,
+		ClientVersion: &clientVersion,
+		BatteryMv:     &battery,
+		NoiseFloor:    &noise,
 	}
 	if err := s.UpsertObserver("obs1", "Observer1", "SJC", meta); err != nil {
 		t.Fatal(err)
@@ -312,8 +337,15 @@ func TestUpsertObserverMetaPreservesExisting(t *testing.T) {
 
 	var batteryMv int
 	var noiseFloor float64
-	s.db.QueryRow("SELECT battery_mv, noise_floor FROM observers WHERE id = 'obs1'").
-		Scan(&batteryMv, &noiseFloor)
+	var gotModel, gotClientVersion string
+	s.db.QueryRow("SELECT model, client_version, battery_mv, noise_floor FROM observers WHERE id = 'obs1'").
+		Scan(&gotModel, &gotClientVersion, &batteryMv, &noiseFloor)
+	if gotModel != model {
+		t.Errorf("model=%s after nil-meta upsert, want %s (preserved)", gotModel, model)
+	}
+	if gotClientVersion != clientVersion {
+		t.Errorf("client_version=%s after nil-meta upsert, want %s (preserved)", gotClientVersion, clientVersion)
+	}
 	if batteryMv != 3500 {
 		t.Errorf("battery_mv=%d after nil-meta upsert, want 3500 (preserved)", batteryMv)
 	}
@@ -325,13 +357,29 @@ func TestUpsertObserverMetaPreservesExisting(t *testing.T) {
 func TestExtractObserverMeta(t *testing.T) {
 	// Float values from JSON (typical MQTT payload)
 	msg := map[string]interface{}{
-		"battery_mv":  3500.0,
-		"uptime_secs": 86400.0,
-		"noise_floor": -115.5,
+		"model":            "L1",
+		"firmware_version": "v1.2.3",
+		"clientVersion":    "2.4.1",
+		"radio":            "SX1262",
+		"battery_mv":       3500.0,
+		"uptime_secs":      86400.0,
+		"noise_floor":      -115.5,
 	}
 	meta := extractObserverMeta(msg)
 	if meta == nil {
 		t.Fatal("expected non-nil meta")
+	}
+	if meta.Model == nil || *meta.Model != "L1" {
+		t.Errorf("Model=%v, want L1", meta.Model)
+	}
+	if meta.Firmware == nil || *meta.Firmware != "v1.2.3" {
+		t.Errorf("Firmware=%v, want v1.2.3", meta.Firmware)
+	}
+	if meta.ClientVersion == nil || *meta.ClientVersion != "2.4.1" {
+		t.Errorf("ClientVersion=%v, want 2.4.1", meta.ClientVersion)
+	}
+	if meta.Radio == nil || *meta.Radio != "SX1262" {
+		t.Errorf("Radio=%v, want SX1262", meta.Radio)
 	}
 	if meta.BatteryMv == nil || *meta.BatteryMv != 3500 {
 		t.Errorf("BatteryMv=%v, want 3500", meta.BatteryMv)
@@ -356,6 +404,19 @@ func TestExtractObserverMeta(t *testing.T) {
 	meta3 := extractObserverMeta(map[string]interface{}{})
 	if meta3 != nil {
 		t.Errorf("expected nil for empty message, got %v", meta3)
+	}
+
+	// firmware/client snake_case fields should be captured too
+	msg4 := map[string]interface{}{
+		"firmware":       "v9.9.9",
+		"client_version": "3.0.0",
+	}
+	meta4 := extractObserverMeta(msg4)
+	if meta4 == nil || meta4.Firmware == nil || *meta4.Firmware != "v9.9.9" {
+		t.Errorf("Firmware=%v, want v9.9.9", meta4)
+	}
+	if meta4 == nil || meta4.ClientVersion == nil || *meta4.ClientVersion != "3.0.0" {
+		t.Errorf("ClientVersion=%v, want 3.0.0", meta4)
 	}
 }
 
