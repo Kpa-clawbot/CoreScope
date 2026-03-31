@@ -111,18 +111,23 @@ async function run() {
     // TODO: requires running server with full customize/home wiring
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
-    const btn = await page.$('#customizeToggle, button[title*="ustom" i], [class*="customize"]');
+    const toggleSelector = '#customizeToggle, button[title*="ustom" i], button[aria-label*="theme" i], [class*="customize"]';
+    const btn = await page.$(toggleSelector);
     if (!btn) {
       console.log('    ⏭️  Customizer toggle not found — TODO: requires running server');
       return;
     }
     const editedHero = 'Persisted Hero From Playwright';
-    await btn.click();
-    const heroInput = await page.$('#cust-heroTitle');
-    if (!heroInput) {
+    await page.click(toggleSelector);
+    const homeTab = page.locator('.cust-tab[data-tab="home"]');
+    await homeTab.waitFor({ state: 'visible', timeout: 10000 });
+    await homeTab.click();
+    const heroInput = page.locator('#cust-heroTitle');
+    if (await heroInput.count() === 0) {
       console.log('    ⏭️  #cust-heroTitle not found — TODO: requires running server');
       return;
     }
+    await heroInput.waitFor({ state: 'visible', timeout: 10000 });
     await heroInput.fill(editedHero);
     await page.waitForTimeout(700); // autoSave debounce is 500ms
     await page.reload({ waitUntil: 'domcontentloaded' });
