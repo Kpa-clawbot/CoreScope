@@ -378,6 +378,35 @@ async function run() {
     assert(rowsAfter.length > 0, 'No packets after filtering');
   });
 
+  await test('Packets initial fetch honors persisted time window', async () => {
+    // Navigate to base first to get same-origin context for localStorage
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => localStorage.setItem('meshcore-time-window', '60'));
+
+    const packetsRequestPromise = page.waitForRequest((req) => {
+      try {
+        const parsed = new URL(req.url());
+        return parsed.pathname === '/api/packets' && parsed.searchParams.has('since');
+      } catch {
+        return false;
+      }
+    }, { timeout: 10000 });
+
+    // Full reload to packets page — forces app to re-read localStorage
+    await page.evaluate(() => { window.location.href = window.location.origin + '/#/packets'; window.location.reload(); });
+    await page.waitForSelector('#fTimeWindow', { timeout: 10000 });
+    const timeWindowValue = await page.$eval('#fTimeWindow', (el) => el.value);
+    assert(timeWindowValue === '60', `Expected time window dropdown to restore 60, got ${timeWindowValue}`);
+
+    const req = await packetsRequestPromise;
+    const parsed = new URL(req.url());
+    const since = parsed.searchParams.get('since');
+    assert(since, 'Expected since query parameter on initial packets request');
+
+    const deltaMin = (Date.now() - Date.parse(since)) / 60000;
+    assert(deltaMin > 45 && deltaMin < 75, `Expected ~60 minute window, got ${deltaMin.toFixed(2)} minutes`);
+  });
+
   // Test: Packet detail pane hidden on fresh load
   await test('Packets detail pane hidden on fresh load', async () => {
     await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
