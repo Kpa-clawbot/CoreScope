@@ -39,6 +39,7 @@ type StoreTx struct {
 	RSSI         *float64
 	PathJSON     string
 	Direction    string
+	LatestSeen string // max observation timestamp (or FirstSeen if no observations)
 	// Cached parsed fields (set once, read many)
 	parsedPath []string // cached parsePathJSON result
 	pathParsed bool     // whether parsedPath has been set
@@ -85,6 +86,11 @@ type PacketStore struct {
 	rfCacheTTL   time.Duration
 	cacheHits    int64
 	cacheMisses  int64
+	// Short-lived cache for QueryGroupedPackets (avoids repeated full sort)
+	groupedCacheMu  sync.Mutex
+	groupedCacheKey string
+	groupedCacheExp time.Time
+	groupedCacheRes *PacketResult
 	// Cached node list + prefix map (rebuilt on demand, shared across analytics)
 	nodeCache     []nodeInfo
 	nodePM        *prefixMap
@@ -233,6 +239,7 @@ func (s *PacketStore) Load() error {
 				RawHex:      nullStrVal(rawHex),
 				Hash:        hashStr,
 				FirstSeen:   nullStrVal(firstSeen),
+				LatestSeen:  nullStrVal(firstSeen),
 				RouteType:   nullIntPtr(routeType),
 				PayloadType: nullIntPtr(payloadType),
 				DecodedJSON: nullStrVal(decodedJSON),
@@ -279,6 +286,9 @@ func (s *PacketStore) Load() error {
 
 			tx.Observations = append(tx.Observations, obs)
 			tx.ObservationCount++
+			if obs.Timestamp > tx.LatestSeen {
+				tx.LatestSeen = obs.Timestamp
+			}
 
 			s.byObsID[oid] = obs
 
@@ -416,47 +426,40 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 // QueryGroupedPackets returns transmissions grouped by hash (already 1:1).
 func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 	atomic.AddInt64(&s.queryCount, 1)
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	if q.Limit <= 0 {
 		q.Limit = 50
 	}
 
-	results := s.filterPackets(q)
+	// Cache key covers all filter dimensions. Empty key = no filters.
+	cacheKey := q.Since + "|" + q.Until + "|" + q.Region + "|" + q.Node + "|" + q.Hash + "|" + q.Observer
+	if q.Type != nil {
+		cacheKey += fmt.Sprintf("|t%d", *q.Type)
+	}
+	if q.Route != nil {
+		cacheKey += fmt.Sprintf("|r%d", *q.Route)
+	}
 
-	// Build grouped output sorted by latest observation DESC
+	// Return cached sorted list if still fresh (3s TTL)
+	s.groupedCacheMu.Lock()
+	if s.groupedCacheRes != nil && s.groupedCacheKey == cacheKey && time.Now().Before(s.groupedCacheExp) {
+		cached := s.groupedCacheRes
+		s.groupedCacheMu.Unlock()
+		return pagePacketResult(cached, q.Offset, q.Limit)
+	}
+	s.groupedCacheMu.Unlock()
+
+	// Build entries under read lock (observer scan needs lock), sort outside it.
 	type groupEntry struct {
-		tx     *StoreTx
-		latest string
+		latest map[string]interface{}
+		ts     string
 	}
-	entries := make([]groupEntry, len(results))
-	for i, tx := range results {
-		latest := tx.FirstSeen
-		for _, obs := range tx.Observations {
-			if obs.Timestamp > latest {
-				latest = obs.Timestamp
-			}
-		}
-		entries[i] = groupEntry{tx: tx, latest: latest}
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].latest > entries[j].latest
-	})
+	var entries []groupEntry
 
-	total := len(entries)
-	start := q.Offset
-	if start >= total {
-		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}
-	}
-	end := start + q.Limit
-	if end > total {
-		end = total
-	}
-
-	packets := make([]map[string]interface{}, 0, end-start)
-	for _, e := range entries[start:end] {
-		tx := e.tx
+	s.mu.RLock()
+	results := s.filterPackets(q)
+	entries = make([]groupEntry, 0, len(results))
+	for _, tx := range results {
 		observerCount := 0
 		seen := make(map[string]bool)
 		for _, obs := range tx.Observations {
@@ -465,26 +468,61 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 				observerCount++
 			}
 		}
-		packets = append(packets, map[string]interface{}{
-			"hash":              strOrNil(tx.Hash),
-			"first_seen":        strOrNil(tx.FirstSeen),
-			"count":             tx.ObservationCount,
-			"observer_count":    observerCount,
-			"observation_count": tx.ObservationCount,
-			"latest":            strOrNil(e.latest),
-			"observer_id":       strOrNil(tx.ObserverID),
-			"observer_name":     strOrNil(tx.ObserverName),
-			"path_json":         strOrNil(tx.PathJSON),
-			"payload_type":      intPtrOrNil(tx.PayloadType),
-			"route_type":        intPtrOrNil(tx.RouteType),
-			"raw_hex":           strOrNil(tx.RawHex),
-			"decoded_json":      strOrNil(tx.DecodedJSON),
-			"snr":               floatPtrOrNil(tx.SNR),
-			"rssi":              floatPtrOrNil(tx.RSSI),
+		entries = append(entries, groupEntry{
+			ts: tx.LatestSeen,
+			latest: map[string]interface{}{
+				"hash":              strOrNil(tx.Hash),
+				"first_seen":        strOrNil(tx.FirstSeen),
+				"count":             tx.ObservationCount,
+				"observer_count":    observerCount,
+				"observation_count": tx.ObservationCount,
+				"latest":            strOrNil(tx.LatestSeen),
+				"observer_id":       strOrNil(tx.ObserverID),
+				"observer_name":     strOrNil(tx.ObserverName),
+				"path_json":         strOrNil(tx.PathJSON),
+				"payload_type":      intPtrOrNil(tx.PayloadType),
+				"route_type":        intPtrOrNil(tx.RouteType),
+				"raw_hex":           strOrNil(tx.RawHex),
+				"decoded_json":      strOrNil(tx.DecodedJSON),
+				"snr":               floatPtrOrNil(tx.SNR),
+				"rssi":              floatPtrOrNil(tx.RSSI),
+			},
 		})
 	}
+	s.mu.RUnlock()
 
-	return &PacketResult{Packets: packets, Total: total}
+	// Sort outside the lock — only touches our local slice.
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].ts > entries[j].ts
+	})
+
+	packets := make([]map[string]interface{}, len(entries))
+	for i, e := range entries {
+		packets[i] = e.latest
+	}
+
+	full := &PacketResult{Packets: packets, Total: len(packets)}
+
+	s.groupedCacheMu.Lock()
+	s.groupedCacheRes = full
+	s.groupedCacheKey = cacheKey
+	s.groupedCacheExp = time.Now().Add(3 * time.Second)
+	s.groupedCacheMu.Unlock()
+
+	return pagePacketResult(full, q.Offset, q.Limit)
+}
+
+// pagePacketResult returns a window of a PacketResult without re-allocating the slice.
+func pagePacketResult(r *PacketResult, offset, limit int) *PacketResult {
+	total := r.Total
+	if offset >= total {
+		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return &PacketResult{Packets: r.Packets[offset:end], Total: total}
 }
 
 // GetStoreStats returns aggregate counts (packet data from memory, node/observer from DB).
@@ -950,6 +988,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				RawHex:      r.rawHex,
 				Hash:        r.hash,
 				FirstSeen:   r.firstSeen,
+				LatestSeen:  r.firstSeen,
 				RouteType:   r.routeType,
 				PayloadType: r.payloadType,
 				DecodedJSON: r.decodedJSON,
@@ -999,6 +1038,9 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			}
 			tx.Observations = append(tx.Observations, obs)
 			tx.ObservationCount++
+			if obs.Timestamp > tx.LatestSeen {
+				tx.LatestSeen = obs.Timestamp
+			}
 			s.byObsID[oid] = obs
 			if r.observerID != "" {
 				s.byObserver[r.observerID] = append(s.byObserver[r.observerID], obs)
@@ -1230,6 +1272,9 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		}
 		tx.Observations = append(tx.Observations, obs)
 		tx.ObservationCount++
+		if obs.Timestamp > tx.LatestSeen {
+			tx.LatestSeen = obs.Timestamp
+		}
 		s.byObsID[r.obsID] = obs
 		if r.observerID != "" {
 			s.byObserver[r.observerID] = append(s.byObserver[r.observerID], obs)
