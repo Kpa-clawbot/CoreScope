@@ -64,8 +64,7 @@ func TestWriteEndpointsRequireAPIKey(t *testing.T) {
 	})
 
 	t.Run("wrong key returns 401", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/api/decode", bytes.NewBufferString(`{"hex":"0200"}`))
-		req.Header.Set("Content-Type", "application/json")
+		req := httptest.NewRequest("POST", "/api/perf/reset", nil)
 		req.Header.Set("X-API-Key", "wrong-secret")
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -75,8 +74,7 @@ func TestWriteEndpointsRequireAPIKey(t *testing.T) {
 	})
 
 	t.Run("correct key passes", func(t *testing.T) {
-		req := httptest.NewRequest("POST", "/api/decode", bytes.NewBufferString(`{"hex":"0200"}`))
-		req.Header.Set("Content-Type", "application/json")
+		req := httptest.NewRequest("POST", "/api/perf/reset", nil)
 		req.Header.Set("X-API-Key", "test-secret")
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -84,17 +82,35 @@ func TestWriteEndpointsRequireAPIKey(t *testing.T) {
 			t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
 		}
 	})
+
+	t.Run("decode works without key", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/decode", bytes.NewBufferString(`{"hex":"0200"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for decode without key, got %d (body: %s)", w.Code, w.Body.String())
+		}
+	})
 }
 
 func TestWriteEndpointsBlockWhenAPIKeyEmpty(t *testing.T) {
 	_, router := setupTestServerWithAPIKey(t, "")
 
-	req := httptest.NewRequest("POST", "/api/decode", bytes.NewBufferString(`{"hex":"0200"}`))
-	req.Header.Set("Content-Type", "application/json")
+	req := httptest.NewRequest("POST", "/api/perf/reset", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 with empty apiKey, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	// decode should still work even with empty apiKey
+	req2 := httptest.NewRequest("POST", "/api/decode", bytes.NewBufferString(`{"hex":"0200"}`))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200 for decode with empty apiKey, got %d (body: %s)", w2.Code, w2.Body.String())
 	}
 }
 
