@@ -317,11 +317,9 @@ async function run() {
   });
 
   await test('Packets initial fetch honors persisted time window', async () => {
+    // Navigate to base first to get same-origin context for localStorage
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
-    await page.evaluate(() => localStorage.removeItem('meshcore-time-window'));
-    await page.addInitScript(() => {
-      localStorage.setItem('meshcore-time-window', '60');
-    });
+    await page.evaluate(() => localStorage.setItem('meshcore-time-window', '60'));
 
     const packetsRequestPromise = page.waitForRequest((req) => {
       try {
@@ -332,8 +330,9 @@ async function run() {
       }
     }, { timeout: 10000 });
 
-    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#fTimeWindow');
+    // Full reload to packets page — forces app to re-read localStorage
+    await page.evaluate(() => { window.location.href = window.location.origin + '/#/packets'; window.location.reload(); });
+    await page.waitForSelector('#fTimeWindow', { timeout: 10000 });
     const timeWindowValue = await page.$eval('#fTimeWindow', (el) => el.value);
     assert(timeWindowValue === '60', `Expected time window dropdown to restore 60, got ${timeWindowValue}`);
 
