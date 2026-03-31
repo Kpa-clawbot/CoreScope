@@ -118,7 +118,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.Handle("/api/packets", s.requireAPIKey(http.HandlerFunc(s.handlePostPacket))).Methods("POST")
 
 	// Decode endpoint
-	r.Handle("/api/decode", s.requireAPIKey(http.HandlerFunc(s.handleDecode))).Methods("POST")
+	r.HandleFunc("/api/decode", s.handleDecode).Methods("POST")
 
 	// Node endpoints — fixed routes BEFORE parameterized
 	r.HandleFunc("/api/nodes/search", s.handleNodeSearch).Methods("GET")
