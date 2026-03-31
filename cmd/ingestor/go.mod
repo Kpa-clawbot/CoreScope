@@ -23,4 +23,4 @@ require (
 	modernc.org/memory v1.8.0 // indirect
 )
 
-replace github.com/corescope => ..\..
+replace github.com/corescope => ../..
