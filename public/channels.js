@@ -9,7 +9,9 @@
   let autoScroll = true;
   let nodeCache = {};
   let selectedNode = null;
-  let observerIataMap = {};
+  let observerIataById = {};
+  let observerIataByName = {};
+  let messageRequestId = 0;
   var _nodeCacheTTL = 5 * 60 * 1000; // 5 minutes
 
   function getSelectedRegionsSnapshot() {
@@ -17,11 +19,28 @@
     return rp ? rp.split(',').filter(Boolean) : null;
   }
 
-  function shouldProcessWSMessageForRegion(msg, selectedRegions, observerRegions) {
+  function normalizeObserverNameKey(name) {
+    if (!name) return '';
+    return String(name).trim().toLowerCase();
+  }
+
+  function shouldProcessWSMessageForRegion(msg, selectedRegions, observerRegionsById, observerRegionsByName) {
     if (!selectedRegions || !selectedRegions.length) return true;
+    if (observerRegionsById && observerRegionsById.byId) {
+      observerRegionsByName = observerRegionsById.byName || {};
+      observerRegionsById = observerRegionsById.byId || {};
+    }
+    observerRegionsById = observerRegionsById || {};
+    observerRegionsByName = observerRegionsByName || {};
+
     var observerId = msg?.data?.packet?.observer_id || msg?.data?.observer_id || null;
-    if (!observerId) return false;
-    var observerRegion = observerRegions[observerId];
+    var observerRegion = observerId ? observerRegionsById[observerId] : null;
+    if (!observerRegion) {
+      var observerName = msg?.data?.packet?.observer_name || msg?.data?.observer_name || msg?.data?.observer || null;
+      var observerNameKey = normalizeObserverNameKey(observerName);
+      if (observerName) observerRegion = observerRegionsByName[observerName];
+      if (!observerRegion && observerNameKey) observerRegion = observerRegionsByName[observerNameKey];
+    }
     if (!observerRegion) return false;
     return selectedRegions.indexOf(observerRegion) !== -1;
   }
@@ -30,15 +49,51 @@
     try {
       var data = await api('/observers', { ttl: CLIENT_TTL.observers });
       var list = data && data.observers ? data.observers : [];
-      var map = {};
+      var byId = {};
+      var byName = {};
       for (var i = 0; i < list.length; i++) {
         var o = list[i];
         var id = o.id || o.observer_id;
-        if (!id || !o.iata) continue;
-        map[id] = o.iata;
+        var name = o.name || o.observer_name;
+        if (!o.iata) continue;
+        if (id) byId[id] = o.iata;
+        if (name) {
+          byName[name] = o.iata;
+          var key = normalizeObserverNameKey(name);
+          if (key) byName[key] = o.iata;
+        }
       }
-      observerIataMap = map;
+      observerIataById = byId;
+      observerIataByName = byName;
     } catch {}
+  }
+
+  function beginMessageRequest(hash, regionParam) {
+    return { id: ++messageRequestId, hash: hash, regionParam: regionParam || '' };
+  }
+
+  function isStaleMessageRequest(req) {
+    if (!req) return true;
+    var currentRegion = RegionFilter.getRegionParam() || '';
+    if (req.id !== messageRequestId) return true;
+    if (selectedHash !== req.hash) return true;
+    if (currentRegion !== req.regionParam) return true;
+    return false;
+  }
+
+  function reconcileSelectionAfterChannelRefresh() {
+    if (!selectedHash || channels.some(ch => ch.hash === selectedHash)) return false;
+    selectedHash = null;
+    messages = [];
+    history.replaceState(null, '', '#/channels');
+    renderChannelList();
+    const header = document.getElementById('chHeader');
+    if (header) header.querySelector('.ch-header-text').textContent = 'Select a channel';
+    const msgEl = document.getElementById('chMessages');
+    if (msgEl) msgEl.innerHTML = '<div class="ch-empty">Choose a channel from the sidebar to view messages</div>';
+    document.querySelector('.ch-layout')?.classList.remove('ch-show-main');
+    document.getElementById('chScrollBtn')?.classList.add('hidden');
+    return true;
   }
 
   async function lookupNode(name) {
@@ -418,8 +473,7 @@
       }
     });
 
-    wsHandler = debouncedOnWS(function (msgs) {
-      var selectedRegions = getSelectedRegionsSnapshot();
+    function processWSBatch(msgs, selectedRegions) {
       var dominated = msgs.filter(function (m) {
         return m.type === 'message' || (m.type === 'packet' && m.data?.decoded?.header?.payloadTypeName === 'GRP_TXT');
       });
@@ -431,7 +485,7 @@
 
       for (var i = 0; i < dominated.length; i++) {
         var m = dominated[i];
-        if (!shouldProcessWSMessageForRegion(m, selectedRegions, observerIataMap)) continue;
+        if (!shouldProcessWSMessageForRegion(m, selectedRegions, observerIataById, observerIataByName)) continue;
         var payload = m.data?.decoded?.payload;
         if (!payload) continue;
 
@@ -532,7 +586,18 @@
           if (liveEl) liveEl.textContent = 'New message received';
         }
       }
+    }
+
+    function handleWSBatch(msgs) {
+      var selectedRegions = getSelectedRegionsSnapshot();
+      processWSBatch(msgs, selectedRegions);
+    }
+
+    wsHandler = debouncedOnWS(function (msgs) {
+      handleWSBatch(msgs);
     });
+    window._channelsHandleWSBatchForTest = handleWSBatch;
+    window._channelsProcessWSBatchForTest = processWSBatch;
 
     // Tick relative timestamps every 1s — iterates channels array, updates DOM text only
     timeAgoTimer = setInterval(function () {
@@ -574,6 +639,7 @@
         return ch;
       }).sort((a, b) => (b.lastActivityMs || 0) - (a.lastActivityMs || 0));
       renderChannelList();
+      reconcileSelectionAfterChannelRefresh();
     } catch (e) {
       if (!silent) {
         const el = document.getElementById('chList');
@@ -616,6 +682,8 @@
   }
 
   async function selectChannel(hash) {
+    const rp = RegionFilter.getRegionParam() || '';
+    const request = beginMessageRequest(hash, rp);
     selectedHash = hash;
     history.replaceState(null, '', `#/channels/${encodeURIComponent(hash)}`);
     renderChannelList();
@@ -631,9 +699,9 @@
     msgEl.innerHTML = '<div class="ch-loading">Loading messages…</div>';
 
     try {
-      const rp = RegionFilter.getRegionParam();
       const regionQs = rp ? '&region=' + encodeURIComponent(rp) : '';
       const data = await api(`/channels/${encodeURIComponent(hash)}/messages?limit=200${regionQs}`, { ttl: CLIENT_TTL.channelMessages });
+      if (isStaleMessageRequest(request)) return;
       messages = data.messages || [];
       if (messages.length === 0 && rp) {
         msgEl.innerHTML = '<div class="ch-empty">Channel not available in selected region</div>';
@@ -642,6 +710,7 @@
         scrollToBottom();
       }
     } catch (e) {
+      if (isStaleMessageRequest(request)) return;
       msgEl.innerHTML = `<div class="ch-empty">Failed to load messages: ${e.message}</div>`;
     }
   }
@@ -653,9 +722,12 @@
     if (!msgEl) return;
     const wasAtBottom = msgEl.scrollHeight - msgEl.scrollTop - msgEl.clientHeight < 60;
     try {
-      const rp = RegionFilter.getRegionParam();
+      const requestHash = selectedHash;
+      const rp = RegionFilter.getRegionParam() || '';
+      const request = beginMessageRequest(requestHash, rp);
       const regionQs = rp ? '&region=' + encodeURIComponent(rp) : '';
-      const data = await api(`/channels/${encodeURIComponent(selectedHash)}/messages?limit=200${regionQs}`, { ttl: CLIENT_TTL.channelMessages, bust: !!opts.forceNoCache });
+      const data = await api(`/channels/${encodeURIComponent(requestHash)}/messages?limit=200${regionQs}`, { ttl: CLIENT_TTL.channelMessages, bust: !!opts.forceNoCache });
+      if (isStaleMessageRequest(request)) return;
       const newMsgs = data.messages || [];
       if (opts.regionSwitch && rp && newMsgs.length === 0) {
         messages = [];
@@ -718,6 +790,25 @@
     if (msgEl) { msgEl.scrollTop = msgEl.scrollHeight; autoScroll = true; document.getElementById('chScrollBtn')?.classList.add('hidden'); }
   }
 
+  window._channelsSetStateForTest = function (state) {
+    if (!state) return;
+    if (Array.isArray(state.channels)) channels = state.channels;
+    if (Array.isArray(state.messages)) messages = state.messages;
+    if (Object.prototype.hasOwnProperty.call(state, 'selectedHash')) selectedHash = state.selectedHash;
+  };
+  window._channelsSetObserverRegionsForTest = function (byId, byName) {
+    observerIataById = byId || {};
+    observerIataByName = byName || {};
+  };
+  window._channelsSelectChannelForTest = selectChannel;
+  window._channelsRefreshMessagesForTest = refreshMessages;
+  window._channelsLoadChannelsForTest = loadChannels;
+  window._channelsBeginMessageRequestForTest = beginMessageRequest;
+  window._channelsIsStaleMessageRequestForTest = isStaleMessageRequest;
+  window._channelsReconcileSelectionForTest = reconcileSelectionAfterChannelRefresh;
+  window._channelsGetStateForTest = function () {
+    return { channels: channels, messages: messages, selectedHash: selectedHash };
+  };
   window._channelsShouldProcessWSMessageForRegion = shouldProcessWSMessageForRegion;
   registerPage('channels', { init, destroy });
 })();
