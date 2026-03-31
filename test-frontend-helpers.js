@@ -1873,6 +1873,32 @@ console.log('\n=== customize.js: initState merge behavior ===');
     assert.strictEqual(JSON.stringify(ctx.window.SITE_CONFIG.home), before);
   });
 
+  test('post-init autoSave exports user theme without mutating SITE_CONFIG.home', () => {
+    const ctx = makeSandbox();
+    let saveTimerCalls = 0;
+    ctx.setTimeout = function (fn) { saveTimerCalls++; fn(); return 1; };
+    ctx.clearTimeout = function () {};
+    ctx.HashChangeEvent = function HashChangeEvent(type) { this.type = type; };
+    ctx.window.SITE_CONFIG = {
+      home: {
+        heroTitle: 'Server Hero',
+        heroSubtitle: 'Server Subtitle',
+        steps: [{ emoji: 'S', title: 'Server Step', description: 'server' }],
+        checklist: [{ question: 'Server Q', answer: 'Server A' }],
+        footerLinks: [{ label: 'Server Link', url: '#/server' }]
+      }
+    };
+    const before = JSON.stringify(ctx.window.SITE_CONFIG.home);
+    const ex = loadCustomizeExports(ctx);
+    ex.initState();
+    ex.setInitialized(true);
+    ex.autoSave();
+    const saved = ctx.localStorage.getItem('meshcore-user-theme');
+    assert.strictEqual(saveTimerCalls, 1);
+    assert(saved && saved.length > 0, 'Expected autoSave to persist user theme');
+    assert.strictEqual(JSON.stringify(ctx.window.SITE_CONFIG.home), before);
+  });
+
   test('partial local checklist does not wipe steps/footerLinks and keeps server colors', () => {
     const ctx = makeSandbox();
     ctx.window.SITE_CONFIG = {
