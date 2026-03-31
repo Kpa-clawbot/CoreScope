@@ -280,6 +280,17 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] node telemetry columns added")
 	}
 
+	// One-time migration: add timestamp index on observations for fast stats queries.
+	// Older databases created before this index was added suffer from full table scans
+	// on COUNT(*) WHERE timestamp > ?, causing /api/stats to take 30s+.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'obs_timestamp_index_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding timestamp index on observations...")
+		db.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_timestamp ON observations(timestamp)`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('obs_timestamp_index_v1')`)
+		log.Println("[migration] observations timestamp index created")
+	}
+
 	return nil
 }
 
