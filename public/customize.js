@@ -640,6 +640,7 @@
       { id: 'theme', label: '🎨', title: 'Theme Colors' },
       { id: 'nodes', label: '🎯', title: 'Colors' },
       { id: 'home', label: '🏠', title: 'Home Page' },
+      { id: 'display', label: '🖥️', title: 'Display' },
       { id: 'export', label: '📤', title: 'Export / Save' }
     ];
     return '<div class="cust-tabs">' +
@@ -651,14 +652,20 @@
   function renderBranding() {
     var b = state.branding;
     var logoPreview = b.logoUrl ? '<img class="cust-preview-img" src="' + escAttr(b.logoUrl) + '" alt="Logo preview" onerror="this.style.display=\'none\'">' : '';
-    var tsMode = state.ui.timestampMode === 'absolute' ? 'absolute' : 'ago';
     return '<div class="cust-panel' + (activeTab === 'branding' ? ' active' : '') + '" data-panel="branding">' +
       '<div class="cust-field"><label for="cust-siteName">Site Name</label><input type="text" id="cust-siteName" data-key="branding.siteName" value="' + escAttr(b.siteName) + '"></div>' +
       '<div class="cust-field"><label for="cust-tagline">Tagline</label><input type="text" id="cust-tagline" data-key="branding.tagline" value="' + escAttr(b.tagline) + '"></div>' +
       '<div class="cust-field"><label for="cust-logoUrl">Logo URL</label><input type="text" id="cust-logoUrl" data-key="branding.logoUrl" value="' + escAttr(b.logoUrl) + '" placeholder="https://...">' + logoPreview + '</div>' +
       '<div class="cust-field"><label for="cust-faviconUrl">Favicon URL</label><input type="text" id="cust-faviconUrl" data-key="branding.faviconUrl" value="' + escAttr(b.faviconUrl) + '" placeholder="https://..."></div>' +
-      '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">' +
-      '<p class="cust-section-title">UI Settings</p>' +
+    '</div>';
+  }
+
+  function renderDisplay() {
+    var tsMode = state.ui.timestampMode === 'absolute' ? 'absolute' : 'ago';
+    return '<div class="cust-panel' + (activeTab === 'display' ? ' active' : '') + '" data-panel="display">' +
+      '<p class="cust-section-title">Display Settings</p>' +
+      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">UI preferences that affect how data is shown across pages.</p>' +
+      '<p class="cust-section-title" style="font-size:14px;margin-bottom:8px">Timestamps</p>' +
       '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Global setting — applies to all pages.</p>' +
       '<div class="cust-field"><label for="custTimestampMode">Timestamp Display</label>' +
         '<select id="custTimestampMode" data-ui="timestampMode" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
@@ -666,6 +673,7 @@
           '<option value="absolute"' + (tsMode === 'absolute' ? ' selected' : '') + '>Absolute (ISO timestamp)</option>' +
         '</select>' +
       '</div>' +
+      '<p style="font-size:11px;color:var(--text-muted);margin-top:10px">More display controls (UTC/local and format presets) can be added here in future.</p>' +
     '</div>';
   }
 
@@ -914,6 +922,7 @@
       renderTheme() +
       renderNodes() +
       renderHome() +
+      renderDisplay() +
       renderExport() +
       '</div>';
     bindEvents(container);
