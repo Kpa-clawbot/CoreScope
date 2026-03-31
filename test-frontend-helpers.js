@@ -104,6 +104,45 @@ console.log('\n=== app.js: timeAgo ===');
     const d = new Date(Date.now() - 259200000).toISOString();
     assert.strictEqual(timeAgo(d), '3d ago');
   });
+  test('future timestamp returns in-format', () => {
+    const d = new Date(Date.now() + 120000).toISOString();
+    assert.strictEqual(timeAgo(d), 'in 2m');
+  });
+}
+
+console.log('\n=== app.js: formatTimestamp / formatTimestampWithTooltip ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const formatTimestamp = ctx.formatTimestamp;
+  const formatTimestampWithTooltip = ctx.formatTimestampWithTooltip;
+
+  test('formatTimestamp null returns dash', () => {
+    assert.strictEqual(formatTimestamp(null, 'ago'), '—');
+  });
+  test('formatTimestamp ago returns relative string', () => {
+    const d = new Date(Date.now() - 300000).toISOString();
+    assert.strictEqual(formatTimestamp(d, 'ago'), '5m ago');
+  });
+  test('formatTimestamp absolute returns ISO string', () => {
+    const d = '2024-01-02T03:04:05.000Z';
+    assert.strictEqual(formatTimestamp(d, 'absolute'), d);
+  });
+  test('formatTimestampWithTooltip future returns isFuture true', () => {
+    const d = new Date(Date.now() + 120000).toISOString();
+    const out = formatTimestampWithTooltip(d, 'ago');
+    assert.strictEqual(out.isFuture, true);
+    assert.strictEqual(out.text, d);
+    assert.strictEqual(out.tooltip, 'in 2m');
+  });
+  test('tooltip is opposite format', () => {
+    const d = '2024-01-02T03:04:05.000Z';
+    const ago = formatTimestampWithTooltip(d, 'ago');
+    const absolute = formatTimestampWithTooltip(d, 'absolute');
+    assert.strictEqual(ago.tooltip, d);
+    assert.ok(absolute.tooltip.endsWith('ago') || absolute.tooltip.startsWith('in '));
+  });
 }
 
 console.log('\n=== app.js: escapeHtml ===');
@@ -151,27 +190,7 @@ console.log('\n=== app.js: truncate ===');
 // ===== NODES.JS TESTS =====
 console.log('\n=== nodes.js: getStatusInfo ===');
 {
-  const ctx = makeSandbox();
-  loadInCtx(ctx, 'public/roles.js');
-  // nodes.js is an IIFE that registers a page — we need to mock registerPage and other globals
-  ctx.registerPage = () => {};
-  ctx.api = () => Promise.resolve([]);
-  ctx.timeAgo = vm.runInContext(`(${fs.readFileSync('public/app.js', 'utf8').match(/function timeAgo[^}]+}/)[0]})`, ctx);
-  // Actually, let's load app.js first for its globals
-  loadInCtx(ctx, 'public/app.js');
-  ctx.RegionFilter = { init: () => {}, getSelected: () => null, onRegionChange: () => {} };
-  ctx.onWS = () => {};
-  ctx.offWS = () => {};
-  ctx.invalidateApiCache = () => {};
-  ctx.favStar = () => '';
-  ctx.bindFavStars = () => {};
-  ctx.getFavorites = () => [];
-  ctx.isFavorite = () => false;
-  ctx.connectWS = () => {};
-  loadInCtx(ctx, 'public/nodes.js');
-
-  // getStatusInfo is inside the IIFE, not on window. We need to extract it differently.
-  // Let's use a modified approach - inject a hook before loading
+  // Placeholder header for continuity; actual nodes tests are below using injected exports.
 }
 
 // Since nodes.js functions are inside an IIFE, we need to extract them.

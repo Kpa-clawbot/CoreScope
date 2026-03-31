@@ -88,11 +88,53 @@ window.apiPerf = function() {
 
 function timeAgo(iso) {
   if (!iso) return '—';
-  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return s + 's ago';
-  if (s < 3600) return Math.floor(s / 60) + 'm ago';
-  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
-  return Math.floor(s / 86400) + 'd ago';
+  const ms = new Date(iso).getTime();
+  if (!isFinite(ms)) return '—';
+  const s = Math.floor((Date.now() - ms) / 1000);
+  const abs = Math.abs(s);
+  let value;
+  let suffix;
+  if (abs < 60) { value = abs; suffix = 's'; }
+  else if (abs < 3600) { value = Math.floor(abs / 60); suffix = 'm'; }
+  else if (abs < 86400) { value = Math.floor(abs / 3600); suffix = 'h'; }
+  else { value = Math.floor(abs / 86400); suffix = 'd'; }
+  if (s < 0) return 'in ' + value + suffix;
+  return value + suffix + ' ago';
+}
+
+function getTimestampMode() {
+  const saved = localStorage.getItem('meshcore-timestamp-mode');
+  if (saved === 'ago' || saved === 'absolute') return saved;
+  const serverDefault = window.SITE_CONFIG?.timestamps?.defaultMode;
+  return serverDefault === 'absolute' ? 'absolute' : 'ago';
+}
+
+function formatAbsoluteTimestamp(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (!isFinite(d.getTime())) return '—';
+  const mobileShort = typeof window !== 'undefined' && window.innerWidth <= 640;
+  if (mobileShort) {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  return d.toISOString();
+}
+
+function formatTimestamp(isoString, mode) {
+  return formatTimestampWithTooltip(isoString, mode).text;
+}
+
+function formatTimestampWithTooltip(isoString, mode) {
+  if (!isoString) return { text: '—', tooltip: '—', isFuture: false };
+  const d = new Date(isoString);
+  if (!isFinite(d.getTime())) return { text: '—', tooltip: '—', isFuture: false };
+  const activeMode = mode === 'absolute' || mode === 'ago' ? mode : getTimestampMode();
+  const isFuture = d.getTime() > Date.now();
+  const absolute = formatAbsoluteTimestamp(isoString);
+  const relative = timeAgo(isoString);
+  const text = isFuture ? absolute : (activeMode === 'absolute' ? absolute : relative);
+  const tooltip = isFuture ? relative : (activeMode === 'absolute' ? relative : absolute);
+  return { text, tooltip, isFuture };
 }
 
 function truncate(str, len) {
@@ -346,6 +388,9 @@ window.addEventListener('theme-changed', () => {
     _themeRefreshTimer = null;
     window.dispatchEvent(new CustomEvent('theme-refresh'));
   }, 300);
+});
+window.addEventListener('timestamp-mode-changed', () => {
+  window.dispatchEvent(new CustomEvent('theme-refresh'));
 });
 window.addEventListener('DOMContentLoaded', () => {
   connectWS();
@@ -603,7 +648,12 @@ window.addEventListener('DOMContentLoaded', () => {
   // --- Theme Customization ---
   // Fetch theme config and apply branding/colors before first render
   fetch('/api/config/theme', { cache: 'no-store' }).then(r => r.json()).then(cfg => {
-    window.SITE_CONFIG = cfg;
+    window.SITE_CONFIG = cfg || {};
+    if (!window.SITE_CONFIG.timestamps) {
+      window.SITE_CONFIG.timestamps = { defaultMode: 'ago' };
+    } else if (window.SITE_CONFIG.timestamps.defaultMode !== 'absolute' && window.SITE_CONFIG.timestamps.defaultMode !== 'ago') {
+      window.SITE_CONFIG.timestamps.defaultMode = 'ago';
+    }
 
     // User's localStorage preferences take priority over server config
     const userTheme = (() => { try { return JSON.parse(localStorage.getItem('meshcore-user-theme') || '{}'); } catch { return {}; } })();
@@ -677,7 +727,7 @@ window.addEventListener('DOMContentLoaded', () => {
         if (favicon) favicon.href = cfg.branding.faviconUrl;
       }
     }
-  }).catch(() => { window.SITE_CONFIG = null; }).finally(() => {
+  }).catch(() => { window.SITE_CONFIG = { timestamps: { defaultMode: 'ago' } }; }).finally(() => {
     if (!location.hash || location.hash === '#/') location.hash = '#/home';
     else navigate();
   });

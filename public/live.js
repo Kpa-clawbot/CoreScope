@@ -25,6 +25,7 @@
   let _lcdClockInterval = null;
   let _rateCounterInterval = null;
   let _pruneInterval = null;
+  let activeNodeDetailKey = null;
 
   // === VCR State Machine ===
   const VCR = {
@@ -50,6 +51,19 @@
     ADVERT: '📡', GRP_TXT: '💬', TXT_MSG: '✉️', ACK: '✓',
     REQUEST: '❓', RESPONSE: '📨', TRACE: '🔍', PATH: '🛤️'
   };
+
+  function formatLiveTimestampHtml(isoLike) {
+    if (typeof formatTimestampWithTooltip !== 'function' || typeof getTimestampMode !== 'function') {
+      return escapeHtml(typeof timeAgo === 'function' ? timeAgo(isoLike) : '—');
+    }
+    const d = isoLike ? new Date(isoLike) : null;
+    const iso = d && isFinite(d.getTime()) ? d.toISOString() : null;
+    const f = formatTimestampWithTooltip(iso, getTimestampMode());
+    const warn = f.isFuture
+      ? ' <span class="timestamp-future-icon" title="Timestamp is in the future — node clock may be skewed">⚠️</span>'
+      : '';
+    return `<span class="timestamp-text" title="${escapeHtml(f.tooltip)}">${escapeHtml(f.text)}</span>${warn}`;
+  }
 
   function initResizeHandler() {
     let resizeTimer = null;
@@ -935,6 +949,7 @@
     const nodeDetailPanel = document.getElementById('liveNodeDetail');
     const nodeDetailContent = document.getElementById('nodeDetailContent');
     document.getElementById('nodeDetailClose').addEventListener('click', () => {
+      activeNodeDetailKey = null;
       nodeDetailPanel.classList.add('hidden');
     });
 
@@ -1159,6 +1174,7 @@
   }
 
   async function showNodeDetail(pubkey) {
+    activeNodeDetailKey = pubkey;
     const panel = document.getElementById('liveNodeDetail');
     const content = document.getElementById('nodeDetailContent');
     panel.classList.remove('hidden');
@@ -1176,7 +1192,7 @@
       const roleColor = ROLE_COLORS[n.role] || '#6b7280';
       const roleLabel = (ROLE_LABELS[n.role] || n.role || 'unknown').replace(/s$/, '');
       const hasLoc = n.lat != null && n.lon != null;
-      const lastSeen = n.last_seen ? timeAgo(n.last_seen) : '—';
+      const lastSeen = formatLiveTimestampHtml(n.last_seen);
       const thresholds = window.getHealthThresholds ? getHealthThresholds(n.role) : { degradedMs: 3600000, silentMs: 86400000 };
       const ageMs = n.last_seen ? Date.now() - new Date(n.last_seen).getTime() : Infinity;
       const statusDot = ageMs < thresholds.degradedMs ? 'health-green' : ageMs < thresholds.silentMs ? 'health-yellow' : 'health-red';
@@ -1217,7 +1233,7 @@
           <div style="font-size:11px;max-height:200px;overflow-y:auto;">` +
           recent.slice(0, 10).map(p => `<div style="padding:2px 0;display:flex;justify-content:space-between;">
             <a href="#/packets/${encodeURIComponent(p.hash || '')}" style="color:var(--accent);text-decoration:none;">${escapeHtml(p.payload_type || '?')}${p.observation_count > 1 ? ' <span class="badge badge-obs" style="font-size:9px">👁 ' + p.observation_count + '</span>' : ''}</a>
-            <span style="color:var(--text-muted)">${p.timestamp ? timeAgo(p.timestamp) : '—'}</span>
+            <span style="color:var(--text-muted)">${formatLiveTimestampHtml(p.timestamp)}</span>
           </div>`).join('') +
           '</div>';
       }
@@ -1403,7 +1419,7 @@
         <span class="feed-type" style="color:${color}">${typeName}</span>
         ${hopStr}${obsBadge}
         <span class="feed-text">${escapeHtml(preview)}</span>
-        <span class="feed-time">${new Date(group.latestTs || Date.now()).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
+        <span class="feed-time">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
       `;
       item.addEventListener('click', () => showFeedCard(item, pkt, color));
       feed.appendChild(item);
@@ -2267,7 +2283,7 @@
       <span class="feed-type" style="color:${color}">${typeName}</span>
       ${hopStr}${obsBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
-      <span class="feed-time">${new Date(pkt._ts || Date.now()).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
+      <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.appendChild(item);
@@ -2335,7 +2351,7 @@
       <span class="feed-type" style="color:${color}">${typeName}</span>
       ${hopStr}${obsBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
-      <span class="feed-time">${new Date(pkt._ts || Date.now()).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span>
+      <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.prepend(item);
@@ -2438,6 +2454,7 @@
     nodesLayer = pathsLayer = animLayer = heatLayer = geoFilterLayer = null;
     stopMatrixRain();
     nodeMarkers = {}; nodeData = {};
+    activeNodeDetailKey = null;
     recentPaths = [];
     packetCount = 0; activeAnims = 0;
     nodeActivity = {}; pktTimestamps = [];
@@ -2449,7 +2466,10 @@
 
   registerPage('live', {
     init: function(app, routeParam) {
-      _themeRefreshHandler = () => { /* live map rebuilds on next packet */ };
+      _themeRefreshHandler = () => {
+        rebuildFeedList();
+        if (activeNodeDetailKey) showNodeDetail(activeNodeDetailKey);
+      };
       window.addEventListener('theme-refresh', _themeRefreshHandler);
       return init(app, routeParam);
     },

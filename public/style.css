@@ -280,6 +280,8 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .data-table td.col-details { white-space: normal; word-break: break-word; }
 .data-table td:has(.spark-bar), .data-table td.col-spark { max-width: none; overflow: visible; min-width: 80px; }
+.data-table .col-time { min-width: 108px; white-space: nowrap; }
+.timestamp-future-icon { margin-left: 4px; cursor: help; }
 .data-table tbody tr:nth-child(even) { background: var(--row-stripe); }
 .data-table tbody tr:hover { background: var(--row-hover); cursor: pointer; }
 .data-table tbody tr.selected { background: var(--selected-bg); }
@@ -879,6 +881,7 @@ button.ch-item.selected { background: var(--selected-bg); }
   .data-table { font-size: 11px; min-width: 0; }
   .data-table td { padding: 5px 4px; max-width: 100px; }
   .data-table th { padding: 5px 4px; font-size: 10px; }
+  .data-table .col-time { min-width: 64px; }
   .panel-left { overflow-x: auto; }
 
   /* Filters: collapse on mobile */

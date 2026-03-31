@@ -85,6 +85,24 @@
     { key: 'sensor', label: 'Sensors' },
   ];
 
+  function renderNodeTimestampHtml(isoString) {
+    if (typeof formatTimestampWithTooltip !== 'function' || typeof getTimestampMode !== 'function') {
+      return escapeHtml(typeof timeAgo === 'function' ? timeAgo(isoString) : '—');
+    }
+    const f = formatTimestampWithTooltip(isoString, getTimestampMode());
+    const warn = f.isFuture
+      ? ' <span class="timestamp-future-icon" title="Timestamp is in the future — node clock may be skewed">⚠️</span>'
+      : '';
+    return `<span class="timestamp-text" title="${escapeHtml(f.tooltip)}">${escapeHtml(f.text)}</span>${warn}`;
+  }
+
+  function renderNodeTimestampText(isoString) {
+    if (typeof formatTimestamp !== 'function' || typeof getTimestampMode !== 'function') {
+      return typeof timeAgo === 'function' ? timeAgo(isoString) : '—';
+    }
+    return formatTimestamp(isoString, getTimestampMode());
+  }
+
   /* === Shared helper functions for node detail rendering === */
 
   function getStatusTooltip(role, status) {
@@ -117,7 +135,7 @@
 
     let explanation = '';
     if (status === 'active') {
-      explanation = 'Last heard ' + (lastHeardTime ? timeAgo(lastHeardTime) : 'unknown');
+      explanation = 'Last heard ' + (lastHeardTime ? renderNodeTimestampText(lastHeardTime) : 'unknown');
     } else {
       const ageDays = Math.floor(statusAge / 86400000);
       const ageHours = Math.floor(statusAge / 3600000);
@@ -274,8 +292,8 @@
 
         <table class="node-stats-table" id="node-stats">
           <tr><td>Status</td><td><span title="${si.statusTooltip}">${statusLabel}</span> <span style="font-size:11px;color:var(--text-muted);margin-left:4px">${statusExplanation}</span></td></tr>
-          <tr><td>Last Heard</td><td>${lastHeard ? timeAgo(lastHeard) : (n.last_seen ? timeAgo(n.last_seen) : '—')}</td></tr>
-          <tr><td>First Seen</td><td>${n.first_seen ? new Date(n.first_seen).toLocaleString() : '—'}</td></tr>
+          <tr><td>Last Heard</td><td>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</td></tr>
+          <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
           <tr><td>Total Packets</td><td>${stats.totalTransmissions || stats.totalPackets || n.advert_count || 0}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + stats.totalObservations + '×)</span>' : ''}</td></tr>
           <tr><td>Packets Today</td><td>${stats.packetsToday || 0}</td></tr>
           ${stats.avgSnr != null ? `<tr><td>Avg SNR</td><td>${Number(stats.avgSnr).toFixed(1)} dB</td></tr>` : ''}
@@ -327,7 +345,7 @@
                 hashSizeBadge = ` <span class="badge" style="background:${hsColor};color:${hsFg};font-size:9px;font-family:var(--mono)">${hs}B</span>`;
               }
               return `<div class="node-activity-item">
-                <span class="node-activity-time">${timeAgo(p.timestamp)}</span>
+                <span class="node-activity-time">${renderNodeTimestampHtml(p.timestamp)}</span>
                 <span>${typeLabel}${detail}${hashSizeBadge}${obsBadge}${obs ? ' via ' + escapeHtml(obs) : ''}${snr}${rssi}</span>
                 <a href="#/packets/${p.hash}" class="ch-analyze-link" style="margin-left:8px;font-size:0.8em">Analyze →</a>
               </div>`;
@@ -406,7 +424,7 @@
             }).join(' → ');
             return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
               <div>${chain}</div>
-              <div style="color:var(--text-muted);margin-top:2px">${p.count}× · last ${timeAgo(p.lastSeen)} · <a href="#/packets/${p.sampleHash}" class="ch-analyze-link">Analyze →</a></div>
+              <div style="color:var(--text-muted);margin-top:2px">${p.count}× · last ${renderNodeTimestampHtml(p.lastSeen)} · <a href="#/packets/${p.sampleHash}" class="ch-analyze-link">Analyze →</a></div>
             </div>`;
           }).join('');
         }
@@ -429,7 +447,7 @@
     }
   }
 
-    function destroy() {
+  function destroy() {
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
     if (detailMap) { detailMap.remove(); detailMap = null; }
@@ -438,6 +456,8 @@
     nodes = [];
     selectedKey = null;
   }
+
+  let _themeRefreshHandler = null;
 
   let _allNodes = null; // cached full node list
 
@@ -677,7 +697,7 @@
         <td>${favStar(n.public_key, 'node-fav')}${isClaimed ? '<span class="claimed-badge" title="My Mesh">★</span> ' : ''}<strong>${n.name || '(unnamed)'}</strong>${dupNameBadge(n.name, n.public_key, dupMap)}</td>
         <td class="mono col-pubkey">${truncate(n.public_key, 16)}</td>
         <td><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span></td>
-        <td class="${lastSeenClass}">${timeAgo(n.last_heard || n.last_seen)}</td>
+        <td class="${lastSeenClass}">${renderNodeTimestampHtml(n.last_heard || n.last_seen)}</td>
         <td>${n.advert_count || 0}</td>
       </tr>`;
     }).join('');
@@ -750,8 +770,8 @@
         <div class="node-detail-section">
           <h4>Overview</h4>
           <dl class="detail-meta">
-            <dt>Last Heard</dt><dd>${lastHeard ? timeAgo(lastHeard) : (n.last_seen ? timeAgo(n.last_seen) : '—')}</dd>
-            <dt>First Seen</dt><dd>${n.first_seen ? new Date(n.first_seen).toLocaleString() : '—'}</dd>
+            <dt>Last Heard</dt><dd>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</dd>
+            <dt>First Seen</dt><dd>${renderNodeTimestampHtml(n.first_seen)}</dd>
             <dt>Total Packets</dt><dd>${totalPackets}</dd>
             <dt>Packets Today</dt><dd>${stats.packetsToday || 0}</dd>
             ${stats.avgSnr != null ? `<dt>Avg SNR</dt><dd>${Number(stats.avgSnr).toFixed(1)} dB</dd>` : ''}
@@ -789,7 +809,7 @@
               return `<div class="advert-entry">
                 <span class="advert-dot" style="background:${roleColor}"></span>
                 <div class="advert-info">
-                  <strong>${timeAgo(a.timestamp)}</strong> ${icon} ${pType}${detail}
+                  <strong>${renderNodeTimestampHtml(a.timestamp)}</strong> ${icon} ${pType}${detail}
                   ${a.observation_count > 1 ? ' <span class="badge badge-obs">👁 ' + a.observation_count + '</span>' : ''}
                   ${obs ? ' via ' + escapeHtml(obs) : ''}
                   ${a.snr != null ? ` · SNR ${a.snr}dB` : ''}${a.rssi != null ? ` · RSSI ${a.rssi}dBm` : ''}
@@ -863,7 +883,7 @@
           }).join(' → ');
           return `<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
             <div>${chain}</div>
-            <div style="color:var(--text-muted);margin-top:2px">${p.count}× · last ${timeAgo(p.lastSeen)} · <a href="#/packets/${p.sampleHash}" class="ch-analyze-link">Analyze →</a></div>
+            <div style="color:var(--text-muted);margin-top:2px">${p.count}× · last ${renderNodeTimestampHtml(p.lastSeen)} · <a href="#/packets/${p.sampleHash}" class="ch-analyze-link">Analyze →</a></div>
           </div>`;
         }).join('');
       }
@@ -889,7 +909,23 @@
     return false;
   }
 
-  registerPage('nodes', { init, destroy });
+  registerPage('nodes', {
+    init: function(app, routeParam) {
+      _themeRefreshHandler = () => {
+        if (directNode) loadFullNode(directNode);
+        else {
+          renderRows();
+          if (selectedKey) selectNode(selectedKey);
+        }
+      };
+      window.addEventListener('theme-refresh', _themeRefreshHandler);
+      return init(app, routeParam);
+    },
+    destroy: function() {
+      if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; }
+      return destroy();
+    }
+  });
 
   // Test hooks
   window._nodesIsAdvertMessage = isAdvertMessage;

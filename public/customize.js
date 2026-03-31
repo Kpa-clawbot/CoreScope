@@ -63,6 +63,9 @@
         { label: '📡 All Nodes', url: '#/nodes' },
         { label: '💬 Channels', url: '#/channels' }
       ]
+    },
+    ui: {
+      timestampMode: 'ago'
     }
   };
 
@@ -441,6 +444,12 @@
     // Merge: DEFAULTS → server config → localStorage saved values
     var local = {};
     try { var s = localStorage.getItem('meshcore-user-theme'); if (s) local = JSON.parse(s); } catch {}
+    var localTsMode = localStorage.getItem('meshcore-timestamp-mode');
+    var serverTsMode = (cfg.timestamps && cfg.timestamps.defaultMode === 'absolute') ? 'absolute' : 'ago';
+    var mergedUi = Object.assign({}, DEFAULTS.ui, cfg.ui || {}, local.ui || {});
+    mergedUi.timestampMode = (localTsMode === 'ago' || localTsMode === 'absolute')
+      ? localTsMode
+      : (mergedUi.timestampMode === 'absolute' || serverTsMode === 'absolute' ? 'absolute' : 'ago');
     state = {
       branding: Object.assign({}, DEFAULTS.branding, cfg.branding || {}, local.branding || {}),
       theme: Object.assign({}, DEFAULTS.theme, cfg.theme || {}, local.theme || {}),
@@ -453,7 +462,8 @@
         steps: deepClone((local.home && local.home.steps) || (cfg.home && cfg.home.steps) || DEFAULTS.home.steps),
         checklist: deepClone((local.home && local.home.checklist) || (cfg.home && cfg.home.checklist) || DEFAULTS.home.checklist),
         footerLinks: deepClone((local.home && local.home.footerLinks) || (cfg.home && cfg.home.footerLinks) || DEFAULTS.home.footerLinks)
-      }
+      },
+      ui: mergedUi
     };
   }
 
@@ -641,11 +651,21 @@
   function renderBranding() {
     var b = state.branding;
     var logoPreview = b.logoUrl ? '<img class="cust-preview-img" src="' + escAttr(b.logoUrl) + '" alt="Logo preview" onerror="this.style.display=\'none\'">' : '';
+    var tsMode = state.ui.timestampMode === 'absolute' ? 'absolute' : 'ago';
     return '<div class="cust-panel' + (activeTab === 'branding' ? ' active' : '') + '" data-panel="branding">' +
       '<div class="cust-field"><label for="cust-siteName">Site Name</label><input type="text" id="cust-siteName" data-key="branding.siteName" value="' + escAttr(b.siteName) + '"></div>' +
       '<div class="cust-field"><label for="cust-tagline">Tagline</label><input type="text" id="cust-tagline" data-key="branding.tagline" value="' + escAttr(b.tagline) + '"></div>' +
       '<div class="cust-field"><label for="cust-logoUrl">Logo URL</label><input type="text" id="cust-logoUrl" data-key="branding.logoUrl" value="' + escAttr(b.logoUrl) + '" placeholder="https://...">' + logoPreview + '</div>' +
       '<div class="cust-field"><label for="cust-faviconUrl">Favicon URL</label><input type="text" id="cust-faviconUrl" data-key="branding.faviconUrl" value="' + escAttr(b.faviconUrl) + '" placeholder="https://..."></div>' +
+      '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">' +
+      '<p class="cust-section-title">UI Settings</p>' +
+      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Global setting — applies to all pages.</p>' +
+      '<div class="cust-field"><label for="custTimestampMode">Timestamp Display</label>' +
+        '<select id="custTimestampMode" data-ui="timestampMode" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
+          '<option value="ago"' + (tsMode === 'ago' ? ' selected' : '') + '>Relative (3m ago)</option>' +
+          '<option value="absolute"' + (tsMode === 'absolute' ? ' selected' : '') + '>Absolute (ISO timestamp)</option>' +
+        '</select>' +
+      '</div>' +
     '</div>';
   }
 
@@ -851,6 +871,11 @@
     if (JSON.stringify(state.home.footerLinks) !== JSON.stringify(DEFAULTS.home.footerLinks)) hm.footerLinks = state.home.footerLinks;
     if (Object.keys(hm).length) out.home = hm;
 
+    // UI
+    var ui = {};
+    if ((state.ui.timestampMode || 'ago') !== DEFAULTS.ui.timestampMode) ui.timestampMode = state.ui.timestampMode;
+    if (Object.keys(ui).length) out.ui = ui;
+
     return out;
   }
 
@@ -935,6 +960,22 @@
           var link = document.querySelector('link[rel="icon"]');
           if (link && inp.value) link.href = inp.value;
         }
+      });
+    });
+
+    // UI settings
+    container.querySelectorAll('select[data-ui]').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        var key = sel.dataset.ui;
+        state.ui[key] = sel.value;
+        if (key === 'timestampMode') {
+          localStorage.setItem('meshcore-timestamp-mode', sel.value);
+          if (!window.SITE_CONFIG) window.SITE_CONFIG = {};
+          if (!window.SITE_CONFIG.timestamps) window.SITE_CONFIG.timestamps = {};
+          window.SITE_CONFIG.timestamps.defaultMode = sel.value;
+          window.dispatchEvent(new CustomEvent('timestamp-mode-changed'));
+        }
+        autoSave();
       });
     });
 
