@@ -223,7 +223,7 @@ func (c *Config) ResolveDBPath(baseDir string) string {
 func (c *Config) NormalizeTimestampConfig() {
 	defaults := defaultTimestampConfig()
 	if c.Timestamps == nil {
-		log.Printf("[config] timestamps not configured — using defaults (ago/local/iso)")
+		log.Printf("[config] timestamps not configured - using defaults (ago/local/iso)")
 		c.Timestamps = &defaults
 		return
 	}
