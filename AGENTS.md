@@ -97,6 +97,27 @@ When opening a pull request, the description must be **valid, readable markdown*
 ### 12. Post a follow-up comment when review feedback is addressed
 When you push fixes for review comments, post a comment on the PR listing what was changed and the commit hash. Reviewers should not have to dig through commits to find what was fixed. Format: "Review feedback addressed (commit `abc1234`)" followed by a numbered list of what was done.
 
+### 13. Use git worktrees for parallel work — never pollute the main checkout
+Multiple agents work in parallel. The main clone (`C:\Projects\meshcore-analyzer\`) must stay on `master` and never be modified directly.
+
+**Implementation agents** must create a dedicated worktree before making any changes:
+```bash
+git worktree add _wt-<branch-name> -b <branch-name> origin/master
+cd _wt-<branch-name>
+# ... do all work here ...
+```
+After PR is merged, clean up: `git worktree remove _wt-<branch-name>`
+
+**Review agents** must NEVER read files from the working tree. Use git commands to read the remote branch directly:
+```bash
+git fetch origin <branch>
+git show origin/<branch>:<path/to/file>      # read a specific file
+git diff origin/master..origin/<branch>       # see the full diff
+```
+The working tree may have a different branch checked out. Reading it will give you wrong code.
+
+**Periodic cleanup**: run `git worktree prune` to remove stale worktree references.
+
 ## MeshCore Firmware — Source of Truth
 
 The MeshCore firmware source is cloned at `firmware/` (gitignored — not part of this repo). This is THE authoritative reference for anything related to the protocol, packet format, device behavior, advert structure, flags, hash sizes, route types, or how repeaters/companions/rooms/sensors behave.
