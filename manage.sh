@@ -21,6 +21,7 @@ if [ -f .env ]; then
     key=$(printf '%s' "$key" | sed 's/\r$//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
     [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
     value=$(printf '%s' "$value" | sed 's/\r$//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+    value="${value/#\~/$HOME}"
     export "$key=$value"
   done < .env
   set +a
@@ -534,6 +535,7 @@ cmd_setup() {
     env_https=$(get_env_value "PROD_HTTPS_PORT" ".env")
     env_mqtt=$(get_env_value "PROD_MQTT_PORT" ".env")
     env_data_dir=$(get_env_value "PROD_DATA_DIR" ".env")
+    env_data_dir="${env_data_dir/#\~/$HOME}"
     [ -n "$env_data_dir" ] && selected_data_dir="$env_data_dir"
     show_env_port_summary "${env_http:-<unset>}" "${env_https:-<unset>}" "${env_mqtt:-<unset>}" "${env_data_dir:-<unset>}"
   else
