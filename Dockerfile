@@ -40,6 +40,7 @@ RUN echo "unknown" > .git-commit
 
 # Supervisor + Mosquitto + Caddy config
 COPY docker/supervisord-go.conf /etc/supervisor/conf.d/supervisord.conf
+COPY docker/supervisord-go-no-mosquitto.conf /etc/supervisor/conf.d/supervisord-no-mosquitto.conf
 COPY docker/mosquitto.conf /etc/mosquitto/mosquitto.conf
 COPY docker/Caddyfile /etc/caddy/Caddyfile
 

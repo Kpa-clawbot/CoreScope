@@ -14,4 +14,10 @@ if [ -f /app/data/theme.json ]; then
   ln -sf /app/data/theme.json /app/theme.json
 fi
 
-exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+SUPERVISORD_CONF="/etc/supervisor/conf.d/supervisord.conf"
+if [ "${DISABLE_MOSQUITTO:-false}" = "true" ]; then
+  echo "[config] internal MQTT broker disabled (DISABLE_MOSQUITTO=true)"
+  SUPERVISORD_CONF="/etc/supervisor/conf.d/supervisord-no-mosquitto.conf"
+fi
+
+exec /usr/bin/supervisord -c "$SUPERVISORD_CONF"

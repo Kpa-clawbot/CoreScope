@@ -67,10 +67,39 @@ err()  { printf '%b\n' "${RED}✗${NC} $1"; }
 info() { printf '%b\n' "${CYAN}→${NC} $1"; }
 step() { printf '%b\n' "\n${BOLD}[$1/$TOTAL_STEPS] $2${NC}"; }
 
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|y|Y|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+dc_prod() {
+  if is_true "${DISABLE_MOSQUITTO:-false}"; then
+    $DC -f docker-compose.no-mosquitto.yml "$@"
+  else
+    $DC "$@"
+  fi
+}
+
+dc_staging() {
+  if is_true "${DISABLE_MOSQUITTO:-false}"; then
+    $DC -f docker-compose.staging.no-mosquitto.yml -p corescope-staging "$@"
+  else
+    $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging "$@"
+  fi
+}
+
 confirm() {
   read -p "   $1 [y/N] " -n 1 -r
   echo
   [[ $REPLY =~ ^[Yy]$ ]]
+}
+
+confirm_yes_default() {
+  read -p "   $1 [Y/n] " -n 1 -r
+  echo
+  [[ -z "$REPLY" || $REPLY =~ ^[Yy]$ ]]
 }
 
 # State tracking — marks completed steps so re-runs skip them
@@ -217,11 +246,13 @@ show_env_port_summary() {
   local https_port="$2"
   local mqtt_port="$3"
   local data_dir="$4"
+  local disable_mosquitto="$5"
   echo ""
   echo "   Current .env values:"
   echo "     PROD_HTTP_PORT=${http_port}"
   echo "     PROD_HTTPS_PORT=${https_port}"
   echo "     PROD_MQTT_PORT=${mqtt_port}"
+  echo "     DISABLE_MOSQUITTO=${disable_mosquitto}"
   echo "     PROD_DATA_DIR=${data_dir}"
   echo ""
 }
@@ -241,6 +272,7 @@ write_env_managed_values() {
   local https_port="$2"
   local mqtt_port="$3"
   local data_dir="$4"
+  local disable_mosquitto="$5"
   local env_file=".env"
   local tmp_file=".env.tmp.$$"
 
@@ -252,6 +284,7 @@ write_env_managed_values() {
   local seen_https=0
   local seen_mqtt=0
   local seen_data=0
+  local seen_disable_mosquitto=0
 
   : > "$tmp_file"
   while IFS= read -r line || [ -n "$line" ]; do
@@ -272,6 +305,10 @@ write_env_managed_values() {
         echo "PROD_DATA_DIR=${data_dir}" >> "$tmp_file"
         seen_data=1
         ;;
+      DISABLE_MOSQUITTO=*)
+        echo "DISABLE_MOSQUITTO=${disable_mosquitto}" >> "$tmp_file"
+        seen_disable_mosquitto=1
+        ;;
       *)
         echo "$line" >> "$tmp_file"
         ;;
@@ -282,6 +319,7 @@ write_env_managed_values() {
   [ "$seen_https" -eq 1 ] || echo "PROD_HTTPS_PORT=${https_port}" >> "$tmp_file"
   [ "$seen_mqtt" -eq 1 ] || echo "PROD_MQTT_PORT=${mqtt_port}" >> "$tmp_file"
   [ "$seen_data" -eq 1 ] || echo "PROD_DATA_DIR=${data_dir}" >> "$tmp_file"
+  [ "$seen_disable_mosquitto" -eq 1 ] || echo "DISABLE_MOSQUITTO=${disable_mosquitto}" >> "$tmp_file"
 
   mv "$tmp_file" "$env_file"
 }
@@ -330,11 +368,16 @@ prompt_for_port() {
 preflight_validate_prod_ports() {
   local http_port="${PROD_HTTP_PORT:-80}"
   local https_port="${PROD_HTTPS_PORT:-443}"
-  local mqtt_port="${PROD_MQTT_PORT:-1883}"
+  local mqtt_port=""
+  if ! is_true "${DISABLE_MOSQUITTO:-false}"; then
+    mqtt_port="${PROD_MQTT_PORT:-1883}"
+  fi
   local failed=0
 
   info "Preflight: validating configured ports are free..."
-  for port in "$http_port" "$https_port" "$mqtt_port"; do
+  local ports_to_check=("$http_port" "$https_port")
+  [ -n "$mqtt_port" ] && ports_to_check+=("$mqtt_port")
+  for port in "${ports_to_check[@]}"; do
     if is_port_in_use "$port"; then
       err "Port ${port} is in use."
       local details
@@ -522,26 +565,34 @@ cmd_setup() {
   local selected_http="$default_http"
   local selected_https="$default_https"
   local selected_mqtt="$default_mqtt"
+  local selected_disable_mosquitto="${DISABLE_MOSQUITTO:-false}"
   local selected_data_dir="${PROD_DATA_DIR:-$HOME/meshcore-data}"
 
   local env_http=""
   local env_https=""
   local env_mqtt=""
+  local env_disable_mosquitto=""
   local env_data_dir=""
 
   if [ -f .env ]; then
     env_http=$(get_env_value "PROD_HTTP_PORT" ".env")
     env_https=$(get_env_value "PROD_HTTPS_PORT" ".env")
     env_mqtt=$(get_env_value "PROD_MQTT_PORT" ".env")
+    env_disable_mosquitto=$(get_env_value "DISABLE_MOSQUITTO" ".env")
     env_data_dir=$(get_env_value "PROD_DATA_DIR" ".env")
     [ -n "$env_data_dir" ] && selected_data_dir="$env_data_dir"
-    show_env_port_summary "${env_http:-<unset>}" "${env_https:-<unset>}" "${env_mqtt:-<unset>}" "${env_data_dir:-<unset>}"
+    [ -n "$env_disable_mosquitto" ] && selected_disable_mosquitto="$env_disable_mosquitto"
+    show_env_port_summary "${env_http:-<unset>}" "${env_https:-<unset>}" "${env_mqtt:-<unset>}" "${env_data_dir:-<unset>}" "${env_disable_mosquitto:-<unset>}"
   else
     info ".env not found. It will be created from .env.example."
   fi
 
   local has_current_ports=false
-  if is_valid_port "$env_http" && is_valid_port "$env_https" && is_valid_port "$env_mqtt"; then
+  if is_true "$selected_disable_mosquitto"; then
+    if is_valid_port "$env_http" && is_valid_port "$env_https"; then
+      has_current_ports=true
+    fi
+  elif is_valid_port "$env_http" && is_valid_port "$env_https" && is_valid_port "$env_mqtt"; then
     has_current_ports=true
   fi
 
@@ -551,7 +602,9 @@ cmd_setup() {
       renegotiate=false
       selected_http="$env_http"
       selected_https="$env_https"
-      selected_mqtt="$env_mqtt"
+      if is_valid_port "$env_mqtt"; then
+        selected_mqtt="$env_mqtt"
+      fi
       log "Keeping current ports from .env."
     fi
   fi
@@ -587,18 +640,24 @@ cmd_setup() {
       [ -n "$suggested_https" ] && info "Suggested HTTPS port: ${suggested_https}"
     fi
 
-    if is_port_in_use "$default_mqtt"; then
-      warn "Port ${default_mqtt} is in use."
-      local details_mqtt
-      details_mqtt=$(port_in_use_details "$default_mqtt")
-      [ -n "$details_mqtt" ] && echo "     ${details_mqtt}"
-      suggested_mqtt=$(find_next_available_port "$default_mqtt")
-      [ -n "$suggested_mqtt" ] && info "Suggested MQTT port: ${suggested_mqtt}"
-    fi
-
     selected_http=$(prompt_for_port "HTTP" "$default_http" "$suggested_http")
     selected_https=$(prompt_for_port "HTTPS" "$default_https" "$suggested_https")
-    selected_mqtt=$(prompt_for_port "MQTT" "$default_mqtt" "$suggested_mqtt")
+
+    if confirm_yes_default "Use built-in MQTT broker?"; then
+      selected_disable_mosquitto="false"
+      if is_port_in_use "$default_mqtt"; then
+        warn "Port ${default_mqtt} is in use."
+        local details_mqtt
+        details_mqtt=$(port_in_use_details "$default_mqtt")
+        [ -n "$details_mqtt" ] && echo "     ${details_mqtt}"
+        suggested_mqtt=$(find_next_available_port "$default_mqtt")
+        [ -n "$suggested_mqtt" ] && info "Suggested MQTT port: ${suggested_mqtt}"
+      fi
+      selected_mqtt=$(prompt_for_port "MQTT" "$default_mqtt" "$suggested_mqtt")
+    else
+      selected_disable_mosquitto="true"
+      log "Internal MQTT broker disabled."
+    fi
   fi
 
   if [ -f caddy-config/Caddyfile ]; then
@@ -680,14 +739,18 @@ cmd_setup() {
     esac
   fi
 
-  write_env_managed_values "$selected_http" "$selected_https" "$selected_mqtt" "$selected_data_dir"
+  write_env_managed_values "$selected_http" "$selected_https" "$selected_mqtt" "$selected_data_dir" "$selected_disable_mosquitto"
   log "Saved negotiated ports to .env"
-  show_env_port_summary "$selected_http" "$selected_https" "$selected_mqtt" "$selected_data_dir"
+  show_env_port_summary "$selected_http" "$selected_https" "$selected_mqtt" "$selected_data_dir" "$selected_disable_mosquitto"
 
   echo "   Resolved port mapping:"
   echo "     UI HTTP:  ${selected_http}"
   echo "     UI HTTPS: ${selected_https}"
-  echo "     MQTT:     ${selected_mqtt}"
+  if is_true "$selected_disable_mosquitto"; then
+    echo "     MQTT:     disabled (external broker)"
+  else
+    echo "     MQTT:     ${selected_mqtt}"
+  fi
   echo ""
   if ! confirm "Proceed to build/start with these ports?"; then
     echo "   Setup cancelled. Re-run ./manage.sh setup when ready."
@@ -697,6 +760,7 @@ cmd_setup() {
   export PROD_HTTP_PORT="$selected_http"
   export PROD_HTTPS_PORT="$selected_https"
   export PROD_MQTT_PORT="$selected_mqtt"
+  export DISABLE_MOSQUITTO="$selected_disable_mosquitto"
   export PROD_DATA_DIR="$selected_data_dir"
   PROD_DATA="$PROD_DATA_DIR"
   mark_done "caddyfile"
@@ -709,12 +773,12 @@ cmd_setup() {
   if [ -n "$IMAGE_EXISTS" ] && is_done "build"; then
     log "Image already built."
     if confirm "Rebuild? (only needed if you updated the code)"; then
-      $DC build prod
+      dc_prod build prod
       log "Image rebuilt."
     fi
   else
     info "This takes 1-2 minutes the first time..."
-    $DC build prod
+    dc_prod build prod
     log "Image built."
   fi
   mark_done "build"
@@ -739,7 +803,7 @@ cmd_setup() {
     log "Container already running."
   else
     mkdir -p "$PROD_DATA"
-    $DC up -d prod
+    dc_prod up -d prod
     log "Container started."
   fi
   mark_done "container"
@@ -930,13 +994,18 @@ cmd_start() {
 
     info "Starting production container (corescope-prod) on ports ${PROD_HTTP_PORT:-80}/${PROD_HTTPS_PORT:-443}..."
     info "Starting staging container (${STAGING_CONTAINER}) on port ${STAGING_GO_HTTP_PORT:-82}..."
-    $DC up -d prod
-    $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging up -d staging-go
-    log "Production started on ports ${PROD_HTTP_PORT:-80}/${PROD_HTTPS_PORT:-443}/${PROD_MQTT_PORT:-1883}"
-    log "Staging started on port ${STAGING_GO_HTTP_PORT:-82} (MQTT: ${STAGING_GO_MQTT_PORT:-1885})"
+    dc_prod up -d prod
+    dc_staging up -d staging-go
+    if is_true "${DISABLE_MOSQUITTO:-false}"; then
+      log "Production started on ports ${PROD_HTTP_PORT:-80}/${PROD_HTTPS_PORT:-443} (MQTT disabled)"
+      log "Staging started on port ${STAGING_GO_HTTP_PORT:-82} (MQTT disabled)"
+    else
+      log "Production started on ports ${PROD_HTTP_PORT:-80}/${PROD_HTTPS_PORT:-443}/${PROD_MQTT_PORT:-1883}"
+      log "Staging started on port ${STAGING_GO_HTTP_PORT:-82} (MQTT: ${STAGING_GO_MQTT_PORT:-1885})"
+    fi
   else
     info "Starting production container (corescope-prod) on ports ${PROD_HTTP_PORT:-80}/${PROD_HTTPS_PORT:-443}..."
-    $DC up -d prod
+    dc_prod up -d prod
     log "Production started. Staging NOT running (use --with-staging to start both)."
   fi
 }
@@ -947,19 +1016,19 @@ cmd_stop() {
   case "$TARGET" in
     prod)
       info "Stopping production container (corescope-prod)..."
-      $DC stop prod
+      dc_prod stop prod
       log "Production stopped."
       ;;
     staging)
       info "Stopping staging container (${STAGING_CONTAINER})..."
-      $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging rm -sf staging-go 2>/dev/null || true
+      dc_staging rm -sf staging-go 2>/dev/null || true
       docker rm -f "$STAGING_CONTAINER" meshcore-staging-go corescope-staging meshcore-staging 2>/dev/null || true
       log "Staging stopped and cleaned up."
       ;;
     all)
       info "Stopping all containers..."
-      $DC stop prod
-      $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging rm -sf staging-go 2>/dev/null || true
+      dc_prod stop prod
+      dc_staging rm -sf staging-go 2>/dev/null || true
       docker rm -f "$STAGING_CONTAINER" meshcore-staging-go corescope-staging meshcore-staging 2>/dev/null || true
       log "All containers stopped."
       ;;
@@ -975,13 +1044,13 @@ cmd_restart() {
   case "$TARGET" in
     prod)
       info "Restarting production container (corescope-prod)..."
-      $DC up -d --force-recreate prod
+      dc_prod up -d --force-recreate prod
       log "Production restarted."
       ;;
     staging)
       info "Restarting staging container (${STAGING_CONTAINER})..."
       # Stop and remove old container
-      $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging rm -sf staging-go 2>/dev/null || true
+      dc_staging rm -sf staging-go 2>/dev/null || true
       docker rm -f "$STAGING_CONTAINER" 2>/dev/null || true
       # Wait for container to be fully gone and memory to be reclaimed
       # This prevents OOM when old + new containers overlap on small VMs
@@ -998,15 +1067,15 @@ cmd_restart() {
         warn "Staging config not found at $staging_config — creating from prod config..."
         prepare_staging_config
       fi
-      $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging up -d staging-go
+      dc_staging up -d staging-go
       log "Staging restarted."
       ;;
     all)
       info "Restarting all containers..."
-      $DC up -d --force-recreate prod
-      $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging rm -sf staging-go 2>/dev/null || true
+      dc_prod up -d --force-recreate prod
+      dc_staging rm -sf staging-go 2>/dev/null || true
       docker rm -f "$STAGING_CONTAINER" 2>/dev/null || true
-      $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging up -d staging-go
+      dc_staging up -d staging-go
       log "All containers restarted."
       ;;
     *)
@@ -1088,12 +1157,12 @@ cmd_logs() {
   case "$TARGET" in
     prod)
       info "Tailing production logs..."
-      $DC logs -f --tail="$LINES" prod
+      dc_prod logs -f --tail="$LINES" prod
       ;;
     staging)
       if container_running "$STAGING_CONTAINER"; then
         info "Tailing staging logs..."
-        $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging logs -f --tail="$LINES" staging-go
+        dc_staging logs -f --tail="$LINES" staging-go
       else
         err "Staging container is not running."
         info "Start with: ./manage.sh start --with-staging"
@@ -1150,7 +1219,7 @@ cmd_promote() {
 
   # Restart prod with latest image
   info "Restarting production with latest image..."
-  $DC up -d --force-recreate prod
+  dc_prod up -d --force-recreate prod
 
   # Wait for health
   info "Waiting for production health check..."
@@ -1184,10 +1253,10 @@ cmd_update() {
   git pull --ff-only
 
   info "Rebuilding image..."
-  $DC build prod
+  dc_prod build prod
 
   info "Restarting with new image..."
-  $DC up -d --force-recreate prod
+  dc_prod up -d --force-recreate prod
 
   log "Updated and restarted. Data preserved."
 }
@@ -1304,7 +1373,7 @@ cmd_restore() {
   info "Backing up current state..."
   cmd_backup "./backups/corescope-pre-restore-$(date +%Y%m%d-%H%M%S)"
 
-  $DC stop prod 2>/dev/null || true
+  dc_prod stop prod 2>/dev/null || true
 
   # Restore database
   mkdir -p "$PROD_DATA"
@@ -1332,7 +1401,7 @@ cmd_restore() {
     log "theme.json restored"
   fi
 
-  $DC up -d prod
+  dc_prod up -d prod
   log "Restored and restarted."
 }
 
@@ -1370,8 +1439,8 @@ cmd_reset() {
     exit 0
   fi
 
-  $DC down --rmi local 2>/dev/null || true
-  $DC -f "$STAGING_COMPOSE_FILE" -p corescope-staging down --rmi local 2>/dev/null || true
+  dc_prod down --rmi local 2>/dev/null || true
+  dc_staging down --rmi local 2>/dev/null || true
   rm -f "$STATE_FILE"
 
   log "Reset complete. Run './manage.sh setup' to start over."
