@@ -160,6 +160,7 @@
   let _docActionHandler = null;
   let _docMenuCloseHandler = null;
   let _docColMenuCloseHandler = null;
+  let _docEscHandler = null;
 
   let directObsId = null;
 
@@ -172,12 +173,15 @@
       ? _docActionHandler
       : kind === 'menu'
         ? _docMenuCloseHandler
-        : _docColMenuCloseHandler;
+        : kind === 'colmenu'
+          ? _docColMenuCloseHandler
+          : _docEscHandler;
     if (prev) document.removeEventListener(eventName, prev);
     document.addEventListener(eventName, handler);
     if (kind === 'action') _docActionHandler = handler;
     else if (kind === 'menu') _docMenuCloseHandler = handler;
-    else _docColMenuCloseHandler = handler;
+    else if (kind === 'colmenu') _docColMenuCloseHandler = handler;
+    else _docEscHandler = handler;
   }
 
   function renderTimestampCell(isoString) {
@@ -399,6 +403,7 @@
     if (_docActionHandler) { document.removeEventListener('click', _docActionHandler); _docActionHandler = null; }
     if (_docMenuCloseHandler) { document.removeEventListener('click', _docMenuCloseHandler); _docMenuCloseHandler = null; }
     if (_docColMenuCloseHandler) { document.removeEventListener('click', _docColMenuCloseHandler); _docColMenuCloseHandler = null; }
+    if (_docEscHandler) { document.removeEventListener('keydown', _docEscHandler); _docEscHandler = null; }
     removeAllByopOverlays();
     packets = [];
     hashIndex = new Map();    selectedId = null;
@@ -967,7 +972,7 @@
     }
 
     // Escape to close packet detail panel
-    document.addEventListener('keydown', function pktEsc(e) {
+    bindDocumentHandler('esc', 'keydown', function pktEsc(e) {
       if (e.key === 'Escape') {
         closeDetailPanel();
       }

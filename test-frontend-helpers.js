@@ -1300,6 +1300,9 @@ console.log('\n=== compare.js: comparePacketSets ===');
 {
   console.log('\nPackets page — detail pane initial state:');
   const packetsSource = fs.readFileSync('public/packets.js', 'utf8');
+  const removeAllByopOverlaysSource = extractFunctionSourceFromText(packetsSource, 'removeAllByopOverlays');
+  const showBYOPSource = extractFunctionSourceFromText(packetsSource, 'showBYOP');
+  const bindDocumentHandlerSource = extractFunctionSourceFromText(packetsSource, 'bindDocumentHandler');
 
   test('split-layout starts with detail-collapsed class', () => {
     // The template literal that creates the split-layout must include detail-collapsed
@@ -1341,6 +1344,175 @@ console.log('\n=== compare.js: comparePacketSets ===');
     assert.ok(packetsSource.includes("if (prev) document.removeEventListener(eventName, prev);"),
       'bindDocumentHandler should remove previous handler before re-binding');
   });
+
+  test('BYOP repeated opens keep exactly one overlay', () => {
+    assert.ok(removeAllByopOverlaysSource, 'removeAllByopOverlays source should be present');
+    assert.ok(showBYOPSource, 'showBYOP source should be present');
+    const ctx = vm.createContext({
+      document: createPacketsTestDocument(),
+      fetch: () => Promise.resolve({ json: () => Promise.resolve({}) }),
+      renderDecodedPacket: () => '',
+      routeTypeName: () => 'UNKNOWN',
+      payloadTypeName: () => 'UNKNOWN',
+    });
+    vm.runInContext(`${removeAllByopOverlaysSource}\n${showBYOPSource}`, ctx);
+    ctx.showBYOP();
+    ctx.showBYOP();
+    assert.strictEqual(ctx.document.getOverlayCount(), 1, 'repeated opens should leave one overlay');
+  });
+
+  test('BYOP close removes all overlays', () => {
+    assert.ok(removeAllByopOverlaysSource, 'removeAllByopOverlays source should be present');
+    assert.ok(showBYOPSource, 'showBYOP source should be present');
+    const ctx = vm.createContext({
+      document: createPacketsTestDocument(),
+      fetch: () => Promise.resolve({ json: () => Promise.resolve({}) }),
+      renderDecodedPacket: () => '',
+      routeTypeName: () => 'UNKNOWN',
+      payloadTypeName: () => 'UNKNOWN',
+    });
+    vm.runInContext(`${removeAllByopOverlaysSource}\n${showBYOPSource}`, ctx);
+    ctx.showBYOP();
+    // Simulate stale stacked overlay from prior bad state; close should clear all.
+    ctx.document.appendOverlay();
+    assert.strictEqual(ctx.document.getOverlayCount(), 2, 'setup should contain two overlays');
+    ctx.document.getFirstOverlay().querySelector('.byop-x').onclick();
+    assert.strictEqual(ctx.document.getOverlayCount(), 0, 'close should remove all BYOP overlays');
+  });
+
+  test('bindDocumentHandler removes previous handlers across SPA re-init', () => {
+    assert.ok(bindDocumentHandlerSource, 'bindDocumentHandler source should be present');
+    const doc = createBindingTestDocument();
+    const ctx = vm.createContext({
+      document: doc,
+      _docActionHandler: null,
+      _docMenuCloseHandler: null,
+      _docColMenuCloseHandler: null,
+      _docEscHandler: null,
+    });
+    vm.runInContext(bindDocumentHandlerSource, ctx);
+
+    let clicks = 0;
+    const clickHandlerV1 = () => { clicks += 1; };
+    const clickHandlerV2 = () => { clicks += 1; };
+    ctx.bindDocumentHandler('action', 'click', clickHandlerV1);
+    ctx.bindDocumentHandler('action', 'click', clickHandlerV2);
+    doc.dispatch('click', { type: 'click' });
+    assert.strictEqual(clicks, 1, 'only latest click handler should fire once');
+    assert.strictEqual(doc.getRemoveCount('click'), 1, 'rebind should remove prior click handler');
+
+    let esc = 0;
+    const escHandlerV1 = () => { esc += 1; };
+    const escHandlerV2 = () => { esc += 1; };
+    ctx.bindDocumentHandler('esc', 'keydown', escHandlerV1);
+    ctx.bindDocumentHandler('esc', 'keydown', escHandlerV2);
+    doc.dispatch('keydown', { key: 'Escape' });
+    assert.strictEqual(esc, 1, 'only latest esc handler should fire once');
+    assert.strictEqual(doc.getRemoveCount('keydown'), 1, 'rebind should remove prior keydown handler');
+  });
+}
+
+function extractFunctionSourceFromText(source, functionName) {
+  const start = source.indexOf(`function ${functionName}(`);
+  if (start === -1) return null;
+  let braceStart = source.indexOf('{', start);
+  if (braceStart === -1) return null;
+  let depth = 0;
+  for (let i = braceStart; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '{') depth += 1;
+    else if (ch === '}') depth -= 1;
+    if (depth === 0) return source.slice(start, i + 1);
+  }
+  return null;
+}
+
+function createPacketsTestDocument() {
+  let overlays = [];
+  let activeElement = null;
+
+  function createFocusable() {
+    const focusable = {
+      onclick: null,
+      addEventListener: () => {},
+      focus: () => { activeElement = focusable; }
+    };
+    return focusable;
+  }
+
+  function createOverlay() {
+    let removed = false;
+    const closeBtn = createFocusable();
+    const decodeBtn = createFocusable();
+    const textarea = createFocusable();
+    textarea.value = '';
+    const result = { innerHTML: '' };
+    const modal = {
+      querySelectorAll: () => [textarea, decodeBtn, closeBtn],
+    };
+    const overlayObj = {
+      className: '',
+      innerHTML: '',
+      addEventListener: () => {},
+      querySelector: (sel) => {
+        if (sel === '.byop-modal') return modal;
+        if (sel === '.byop-x') return closeBtn;
+        if (sel === '#byopHex') return textarea;
+        if (sel === '#byopDecode') return decodeBtn;
+        if (sel === '#byopResult') return result;
+        return null;
+      },
+      remove: () => {
+        removed = true;
+        overlays = overlays.filter(o => o !== overlayObj);
+      },
+      __removed: () => removed,
+    };
+    return overlayObj;
+  }
+
+  const triggerBtn = { focus: () => { activeElement = triggerBtn; } };
+
+  return {
+    body: {
+      appendChild: (el) => { overlays.push(el); }
+    },
+    querySelector: (sel) => (sel === '[data-action="pkt-byop"]' ? triggerBtn : null),
+    querySelectorAll: (sel) => {
+      if (sel !== '.byop-overlay') return [];
+      return overlays.filter(o => !o.__removed || !o.__removed());
+    },
+    createElement: () => createOverlay(),
+    appendOverlay: function () {
+      const extra = this.createElement('div');
+      extra.className = 'modal-overlay byop-overlay';
+      this.body.appendChild(extra);
+      return extra;
+    },
+    getFirstOverlay: () => overlays[0],
+    getOverlayCount: () => overlays.length,
+    getLastOverlay: () => overlays[overlays.length - 1],
+    get activeElement() { return activeElement; },
+  };
+}
+
+function createBindingTestDocument() {
+  const listeners = new Map();
+  const removeCounts = new Map();
+  return {
+    addEventListener: (event, handler) => {
+      listeners.set(event, handler);
+    },
+    removeEventListener: (event, handler) => {
+      if (listeners.get(event) === handler) listeners.delete(event);
+      removeCounts.set(event, (removeCounts.get(event) || 0) + 1);
+    },
+    dispatch: (event, payload) => {
+      const handler = listeners.get(event);
+      if (handler) handler(payload || {});
+    },
+    getRemoveCount: (event) => removeCounts.get(event) || 0,
+  };
 }
 
 // ===== APP.JS: formatEngineBadge =====
