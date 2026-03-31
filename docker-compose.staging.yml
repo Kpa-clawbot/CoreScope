@@ -20,7 +20,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${STAGING_GO_HTTP_PORT:-82}:${STAGING_GO_HTTP_PORT:-82}"
+      - "${STAGING_GO_HTTP_PORT:-82}:80"
       - "${STAGING_GO_MQTT_PORT:-1885}:1883"
       - "6060:6060"   # pprof server
       - "6061:6061"   # pprof ingestor
