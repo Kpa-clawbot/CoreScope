@@ -317,21 +317,28 @@ async function run() {
   });
 
   await test('Packets initial fetch honors persisted time window', async () => {
-    const requests = [];
-    await context.clearCookies();
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
-    await page.evaluate(() => localStorage.setItem('meshcore-time-window', '60'));
-    page.on('request', (req) => {
-      const url = req.url();
-      if (url.includes('/api/packets?')) requests.push(url);
+    await page.evaluate(() => localStorage.removeItem('meshcore-time-window'));
+    await page.addInitScript(() => {
+      localStorage.setItem('meshcore-time-window', '60');
     });
-    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => !!document.querySelector('#pktBody'));
-    await page.waitForTimeout(600);
 
-    const first = requests.find(u => u.includes('/api/packets?'));
-    assert(first, 'Expected an /api/packets request');
-    const parsed = new URL(first);
+    const packetsRequestPromise = page.waitForRequest((req) => {
+      try {
+        const parsed = new URL(req.url());
+        return parsed.pathname === '/api/packets' && parsed.searchParams.has('since');
+      } catch {
+        return false;
+      }
+    }, { timeout: 10000 });
+
+    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#fTimeWindow');
+    const timeWindowValue = await page.$eval('#fTimeWindow', (el) => el.value);
+    assert(timeWindowValue === '60', `Expected time window dropdown to restore 60, got ${timeWindowValue}`);
+
+    const req = await packetsRequestPromise;
+    const parsed = new URL(req.url());
     const since = parsed.searchParams.get('since');
     assert(since, 'Expected since query parameter on initial packets request');
 
