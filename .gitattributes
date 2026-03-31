@@ -1,3 +1,12 @@
+# Force LF line endings for all text files (prevents CRLF churn from Windows agents)
+* text=auto eol=lf
+
+# Explicitly mark binary files
+*.png binary
+*.jpg binary
+*.ico binary
+*.db binary
+
 # Squad: union merge for append-only team state files
 .squad/decisions.md merge=union
 .squad/agents/*/history.md merge=union
