@@ -894,8 +894,8 @@ prepare_staging_config() {
   # Copy Caddyfile for staging (HTTP-only on staging port)
   local staging_caddy="$STAGING_DATA/Caddyfile"
   if [ ! -f "$staging_caddy" ]; then
-    info "Creating staging Caddyfile (HTTP-only on port ${STAGING_HTTP_PORT:-81})..."
-    echo ":${STAGING_HTTP_PORT:-81} {" > "$staging_caddy"
+    info "Creating staging Caddyfile (HTTP-only on port ${STAGING_GO_HTTP_PORT:-82})..."
+    echo ":${STAGING_GO_HTTP_PORT:-82} {" > "$staging_caddy"
     echo "    reverse_proxy localhost:3000" >> "$staging_caddy"
     echo "}" >> "$staging_caddy"
     log "Staging Caddyfile created at ${staging_caddy}"
