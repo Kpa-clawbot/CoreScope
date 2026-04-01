@@ -1066,7 +1066,7 @@
               <td class="col-observer">${truncate(obsName(c.observer_id), 16)}</td>
               <td class="col-path"><span class="path-hops">${childPathStr}</span></td>
               <td class="col-rpt"></td>
-              <td class="col-details">${getDetailPreview((() => { try { return JSON.parse(c.decoded_json); } catch { return {}; } })())}</td>
+              <td class="col-details">${getDetailPreview((() => { try { return JSON.parse(c.decoded_json || '{}'); } catch { return {}; } })())}</td>
             </tr>`;
       }
     }
