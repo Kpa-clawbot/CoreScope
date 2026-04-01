@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -114,7 +115,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("[db] failed to open %s: %v", resolvedDB, err)
 	}
-	defer database.Close()
+	var dbCloseOnce sync.Once
+	dbClose := func() error {
+		var err error
+		dbCloseOnce.Do(func() { err = database.Close() })
+		return err
+	}
+	defer dbClose()
 
 	// Verify DB has expected tables
 	var tableName string
@@ -222,7 +229,7 @@ func main() {
 		hub.Close()
 
 		// 4. Close database (release SQLite WAL lock)
-		if err := database.Close(); err != nil {
+		if err := dbClose(); err != nil {
 			log.Printf("[server] DB close error: %v", err)
 		}
 		log.Println("[server] shutdown complete")
