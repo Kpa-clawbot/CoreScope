@@ -1332,11 +1332,13 @@ cmd_update() {
       exit 1
     fi
     info "Checking out latest release: ${latest_tag}"
-    git checkout "$latest_tag"
+    git checkout "$latest_tag" || { err "Failed to checkout tag '${latest_tag}'."; exit 1; }
   elif [ "$version" = "latest" ]; then
     # Explicit opt-in to bleeding edge (tip of master)
-    info "Checking out tip of master (bleeding edge)..."
-    git checkout origin/master
+    # Note: this creates a detached HEAD at origin/master, which is intentional —
+    # we want a read-only snapshot of upstream, not a local tracking branch.
+    info "Checking out tip of master (detached HEAD at origin/master)..."
+    git checkout origin/master || { err "Failed to checkout origin/master."; exit 1; }
   else
     # Specific tag requested
     if ! git tag -l "$version" | grep -q .; then
@@ -1347,7 +1349,7 @@ cmd_update() {
       exit 1
     fi
     info "Checking out version: ${version}"
-    git checkout "$version"
+    git checkout "$version" || { err "Failed to checkout '${version}'."; exit 1; }
   fi
 
   migrate_config auto
