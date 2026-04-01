@@ -365,13 +365,12 @@ async function run() {
   await test('Packets page loads with filter', async () => {
     // Ensure desktop viewport and broad time window so fixture timestamps are included.
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
-    // Set time window BEFORE packets.js IIFE re-executes (525600 min ≈ 1 year)
+    // Set time window BEFORE packets.js IIFE re-executes (525600 min ≈ 1 year).
+    // Navigate to the packets URL then reload — avoids about:blank cross-origin issues
+    // that can prevent the SPA from fully initializing within the timeout.
+    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
     await page.evaluate(() => localStorage.setItem('meshcore-time-window', '525600'));
-    // Navigate away so next goto is a full page load (not a same-document hash change).
-    // This guarantees scripts re-execute and packets.js IIFE reads the new localStorage.
-    await page.goto('about:blank');
-    await page.goto(`${BASE}/#/packets`, { waitUntil: 'load' });
+    await page.reload({ waitUntil: 'load' });
     await page.waitForSelector('table tbody tr', { timeout: 15000 });
     const rowsBefore = await page.$$('table tbody tr');
     assert(rowsBefore.length > 0, 'No packets visible');
@@ -387,11 +386,8 @@ async function run() {
   });
 
   await test('Packets initial fetch honors persisted time window', async () => {
-    // Navigate to base first to get same-origin context for localStorage
-    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    // Set persisted time window to 60 min and reload so the IIFE reads it
     await page.evaluate(() => localStorage.setItem('meshcore-time-window', '60'));
-    // Navigate away so next goto is a full page load
-    await page.goto('about:blank');
 
     const packetsRequestPromise = page.waitForRequest((req) => {
       try {
@@ -402,8 +398,8 @@ async function run() {
       }
     }, { timeout: 10000 });
 
-    // Full navigation from about:blank — scripts re-execute, IIFE reads localStorage
-    await page.goto(`${BASE}/#/packets`, { waitUntil: 'load' });
+    // Full reload on the packets page — scripts re-execute, IIFE reads localStorage
+    await page.reload({ waitUntil: 'load' });
     await page.waitForSelector('#fTimeWindow', { timeout: 10000 });
     const timeWindowValue = await page.$eval('#fTimeWindow', (el) => el.value);
     assert(timeWindowValue === '60', `Expected time window dropdown to restore 60, got ${timeWindowValue}`);
@@ -428,10 +424,8 @@ async function run() {
   // Test: Packets groupByHash toggle changes view
   await test('Packets groupByHash toggle works', async () => {
     // Restore wide time window — previous test set it to 60 min which excludes fixture data
-    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.evaluate(() => localStorage.setItem('meshcore-time-window', '525600'));
-    await page.goto('about:blank');
-    await page.goto(`${BASE}/#/packets`, { waitUntil: 'load' });
+    await page.reload({ waitUntil: 'load' });
     await page.waitForSelector('table tbody tr', { timeout: 15000 });
     const groupBtn = await page.$('#fGroup');
     assert(groupBtn, 'Group by hash button (#fGroup) not found');

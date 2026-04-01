@@ -1344,6 +1344,20 @@ func (s *PacketStore) MaxTransmissionID() int {
 	return maxID
 }
 
+// MaxObservationID returns the highest observation ID in the store.
+func (s *PacketStore) MaxObservationID() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	maxID := 0
+	for id := range s.byObsID {
+		if id > maxID {
+			maxID = id
+		}
+	}
+	return maxID
+}
+
 // --- Internal filter/query helpers ---
 
 // filterPackets applies PacketQuery filters to the in-memory packet list.

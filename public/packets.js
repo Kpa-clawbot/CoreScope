@@ -324,6 +324,13 @@
 
       // Check if new packets pass current filters
       const filtered = newPkts.filter(p => {
+        // Respect time window filter — drop packets outside the selected window
+        const windowMin = savedTimeWindowMin;
+        if (windowMin > 0) {
+          const cutoff = new Date(Date.now() - windowMin * 60000).toISOString();
+          const pktTime = p.latest || p.timestamp || p.first_seen;
+          if (pktTime && pktTime < cutoff) return false;
+        }
         if (filters.type) { const types = filters.type.split(',').map(Number); if (!types.includes(p.payload_type)) return false; }
         if (filters.observer) { const obsSet = new Set(filters.observer.split(',')); if (!obsSet.has(p.observer_id)) return false; }
         if (filters.hash && p.hash !== filters.hash) return false;

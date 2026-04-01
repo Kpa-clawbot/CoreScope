@@ -166,6 +166,17 @@ func NewPoller(db *DB, hub *Hub, interval time.Duration) *Poller {
 func (p *Poller) Start() {
 	lastID := p.db.GetMaxTransmissionID()
 	lastObsID := p.db.GetMaxObservationID()
+	// If the store already loaded data, use its max IDs as a floor.
+	// This prevents replaying the entire DB when the DB query fails
+	// (e.g., corrupted DB returns 0 from COALESCE).
+	if p.store != nil {
+		if storeMax := p.store.MaxTransmissionID(); storeMax > lastID {
+			lastID = storeMax
+		}
+		if storeMaxObs := p.store.MaxObservationID(); storeMaxObs > lastObsID {
+			lastObsID = storeMaxObs
+		}
+	}
 	log.Printf("[poller] starting from transmission ID %d, obs ID %d, interval %v", lastID, lastObsID, p.interval)
 
 	ticker := time.NewTicker(p.interval)
