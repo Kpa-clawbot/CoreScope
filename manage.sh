@@ -509,6 +509,24 @@ cmd_setup() {
 
   log "Docker $(docker --version | grep -oP 'version \K[^ ,]+')"
   log "Compose: $DC"
+
+  # Default to latest release tag (instead of staying on master)
+  if ! is_done "version_pin"; then
+    git fetch origin --tags 2>/dev/null || true
+    local latest_tag
+    latest_tag=$(git tag -l 'v*' --sort=-v:refname | head -1)
+    if [ -n "$latest_tag" ]; then
+      local current_ref
+      current_ref=$(git describe --tags --exact-match 2>/dev/null || echo "")
+      if [ "$current_ref" != "$latest_tag" ]; then
+        info "Pinning to latest release: ${latest_tag}"
+        git checkout "$latest_tag" 2>/dev/null
+      else
+        log "Already on latest release: ${latest_tag}"
+      fi
+    fi
+    mark_done "version_pin"
+  fi
   
   mark_done "docker"
 
@@ -1167,6 +1185,12 @@ cmd_status() {
   echo "═══════════════════════════════════════"
   echo ""
 
+  # Version
+  local current_version
+  current_version=$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  info "Version: ${current_version}"
+  echo ""
+
   # Production
   show_container_status "corescope-prod" "Production"
   echo ""
@@ -1294,8 +1318,39 @@ cmd_promote() {
 # ─── Update ───────────────────────────────────────────────────────────────
 
 cmd_update() {
-  info "Pulling latest code..."
-  git pull --ff-only
+  local version="${1:-}"
+
+  info "Fetching latest changes and tags..."
+  git fetch origin --tags
+
+  if [ -z "$version" ]; then
+    # No arg: checkout latest release tag
+    local latest_tag
+    latest_tag=$(git tag -l 'v*' --sort=-v:refname | head -1)
+    if [ -z "$latest_tag" ]; then
+      err "No release tags found. Use './manage.sh update latest' for tip of master."
+      exit 1
+    fi
+    info "Checking out latest release: ${latest_tag}"
+    git checkout "$latest_tag" || { err "Failed to checkout tag '${latest_tag}'."; exit 1; }
+  elif [ "$version" = "latest" ]; then
+    # Explicit opt-in to bleeding edge (tip of master)
+    # Note: this creates a detached HEAD at origin/master, which is intentional —
+    # we want a read-only snapshot of upstream, not a local tracking branch.
+    info "Checking out tip of master (detached HEAD at origin/master)..."
+    git checkout origin/master || { err "Failed to checkout origin/master."; exit 1; }
+  else
+    # Specific tag requested
+    if ! git tag -l "$version" | grep -q .; then
+      err "Tag '${version}' not found."
+      echo ""
+      echo "   Available releases:"
+      git tag -l 'v*' --sort=-v:refname | head -10 | sed 's/^/     /'
+      exit 1
+    fi
+    info "Checking out version: ${version}"
+    git checkout "$version" || { err "Failed to checkout '${version}'."; exit 1; }
+  fi
 
   migrate_config auto
 
@@ -1306,6 +1361,10 @@ cmd_update() {
   dc_prod up -d --force-recreate prod
 
   log "Updated and restarted. Data preserved."
+  # Show current version
+  local current
+  current=$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD)
+  log "Running version: ${current}"
 }
 
 # ─── Backup ───────────────────────────────────────────────────────────────
@@ -1515,7 +1574,7 @@ cmd_help() {
   echo "    logs [prod|staging] [N]  Follow logs (default: prod, last 100 lines)"
   echo ""
   printf '%b\n' "  ${BOLD}Maintain${NC}"
-  echo "    update             Pull latest code, rebuild, restart (keeps data)"
+  echo "    update [version]   Update to version (no arg=latest tag, 'latest'=master tip, or e.g. v3.1.0)"
   echo "    promote            Promote staging → production (backup + restart)"
   echo "    backup [dir]       Full backup: database + config + theme"
   echo "    restore <d>        Restore from backup dir or .db file"
@@ -1534,7 +1593,7 @@ case "${1:-help}" in
   restart)   cmd_restart "$2" ;;
   status)    cmd_status ;;
   logs)      cmd_logs "$2" "$3" ;;
-  update)    cmd_update ;;
+  update)    cmd_update "$2" ;;
   promote)   cmd_promote ;;
   backup)    cmd_backup "$2" ;;
   restore)   cmd_restore "$2" ;;
