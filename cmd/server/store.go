@@ -79,7 +79,8 @@ type PacketStore struct {
 	cacheMu      sync.Mutex
 	rfCache      map[string]*cachedResult // region → cached RF result
 	topoCache    map[string]*cachedResult // region → cached topology result
-	hashCache    map[string]*cachedResult // region → cached hash-sizes result
+	hashCache      map[string]*cachedResult // region → cached hash-sizes result
+	collisionCache map[string]*cachedResult // region → cached hash-collisions result
 	chanCache    map[string]*cachedResult // region → cached channels result
 	distCache    map[string]*cachedResult // region → cached distance result
 	subpathCache map[string]*cachedResult // params → cached subpaths result
@@ -172,7 +173,8 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig) *PacketStore {
 		byPayloadType: make(map[int][]*StoreTx),
 		rfCache:       make(map[string]*cachedResult),
 		topoCache:     make(map[string]*cachedResult),
-		hashCache:     make(map[string]*cachedResult),
+		hashCache:      make(map[string]*cachedResult),
+		collisionCache: make(map[string]*cachedResult),
 		chanCache:     make(map[string]*cachedResult),
 		distCache:     make(map[string]*cachedResult),
 		subpathCache:  make(map[string]*cachedResult),
@@ -626,7 +628,7 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 // GetCacheStats returns RF cache hit/miss statistics.
 func (s *PacketStore) GetCacheStats() map[string]interface{} {
 	s.cacheMu.Lock()
-	size := len(s.rfCache) + len(s.topoCache) + len(s.hashCache) + len(s.chanCache) + len(s.distCache) + len(s.subpathCache)
+	size := len(s.rfCache) + len(s.topoCache) + len(s.hashCache) + len(s.collisionCache) + len(s.chanCache) + len(s.distCache) + len(s.subpathCache)
 	hits := s.cacheHits
 	misses := s.cacheMisses
 	s.cacheMu.Unlock()
@@ -649,7 +651,7 @@ func (s *PacketStore) GetCacheStats() map[string]interface{} {
 // GetCacheStatsTyped returns cache stats as a typed struct.
 func (s *PacketStore) GetCacheStatsTyped() CacheStats {
 	s.cacheMu.Lock()
-	size := len(s.rfCache) + len(s.topoCache) + len(s.hashCache) + len(s.chanCache) + len(s.distCache) + len(s.subpathCache)
+	size := len(s.rfCache) + len(s.topoCache) + len(s.hashCache) + len(s.collisionCache) + len(s.chanCache) + len(s.distCache) + len(s.subpathCache)
 	hits := s.cacheHits
 	misses := s.cacheMisses
 	s.cacheMu.Unlock()
@@ -692,6 +694,7 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 		s.rfCache = make(map[string]*cachedResult)
 		s.topoCache = make(map[string]*cachedResult)
 		s.hashCache = make(map[string]*cachedResult)
+		s.collisionCache = make(map[string]*cachedResult)
 		s.chanCache = make(map[string]*cachedResult)
 		s.distCache = make(map[string]*cachedResult)
 		s.subpathCache = make(map[string]*cachedResult)
@@ -711,6 +714,7 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 	}
 	if inv.hasNewTransmissions {
 		s.hashCache = make(map[string]*cachedResult)
+		s.collisionCache = make(map[string]*cachedResult)
 	}
 	if inv.hasChannelData {
 		s.chanCache = make(map[string]*cachedResult)
@@ -4169,6 +4173,282 @@ type hashSizeNodeInfo struct {
 	AllSizes     map[int]bool
 	Seq          []int
 	Inconsistent bool
+}
+
+// --- Hash Collision Analytics ---
+
+// GetAnalyticsHashCollisions returns pre-computed hash collision analysis.
+// This moves the O(n²) distance computation from the frontend to the server.
+func (s *PacketStore) GetAnalyticsHashCollisions(region string) map[string]interface{} {
+	s.cacheMu.Lock()
+	if cached, ok := s.collisionCache[region]; ok && time.Now().Before(cached.expiresAt) {
+		s.cacheHits++
+		s.cacheMu.Unlock()
+		return cached.data
+	}
+	s.cacheMisses++
+	s.cacheMu.Unlock()
+
+	result := s.computeHashCollisions(region)
+
+	s.cacheMu.Lock()
+	s.collisionCache[region] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
+	s.cacheMu.Unlock()
+
+	return result
+}
+
+// collisionNode is a lightweight node representation for collision analysis.
+type collisionNode struct {
+	PublicKey          string `json:"public_key"`
+	Name               string `json:"name"`
+	Role               string `json:"role"`
+	Lat                float64 `json:"lat"`
+	Lon                float64 `json:"lon"`
+	HashSize           int    `json:"hash_size"`
+	HashSizeInconsistent bool `json:"hash_size_inconsistent"`
+	HashSizesSeen      []int  `json:"hash_sizes_seen,omitempty"`
+}
+
+// collisionEntry represents a prefix collision with pre-computed distances.
+type collisionEntry struct {
+	Prefix         string          `json:"prefix"`
+	ByteSize       int             `json:"byte_size"`
+	Appearances    int             `json:"appearances"`
+	Nodes          []collisionNode `json:"nodes"`
+	MaxDistKm      float64         `json:"max_dist_km"`
+	Classification string          `json:"classification"`
+	WithCoords     int             `json:"with_coords"`
+}
+
+// prefixCellInfo holds per-prefix-cell data for the matrix view.
+type prefixCellInfo struct {
+	Nodes []collisionNode `json:"nodes"`
+}
+
+// twoByteCellInfo holds per-first-byte-group data for 2-byte matrix.
+type twoByteCellInfo struct {
+	GroupNodes      []collisionNode            `json:"group_nodes"`
+	TwoByteMap      map[string][]collisionNode `json:"two_byte_map"`
+	MaxCollision    int                         `json:"max_collision"`
+	CollisionCount  int                         `json:"collision_count"`
+}
+
+func (s *PacketStore) computeHashCollisions(region string) map[string]interface{} {
+	// Get all nodes from DB
+	nodes := s.getAllNodes()
+	hashInfo := s.GetNodeHashSizeInfo()
+
+	// Build collision nodes with hash info
+	var allCNodes []collisionNode
+	for _, n := range nodes {
+		cn := collisionNode{
+			PublicKey: n.PublicKey,
+			Name:      n.Name,
+			Role:      n.Role,
+			Lat:       n.Lat,
+			Lon:       n.Lon,
+		}
+		if info, ok := hashInfo[n.PublicKey]; ok && info != nil {
+			cn.HashSize = info.HashSize
+			cn.HashSizeInconsistent = info.Inconsistent
+			if len(info.AllSizes) > 1 {
+				sizes := make([]int, 0, len(info.AllSizes))
+				for sz := range info.AllSizes {
+					sizes = append(sizes, sz)
+				}
+				sort.Ints(sizes)
+				cn.HashSizesSeen = sizes
+			}
+		}
+		allCNodes = append(allCNodes, cn)
+	}
+
+	// Inconsistent nodes
+	var inconsistentNodes []collisionNode
+	for _, cn := range allCNodes {
+		if cn.HashSizeInconsistent {
+			inconsistentNodes = append(inconsistentNodes, cn)
+		}
+	}
+	if inconsistentNodes == nil {
+		inconsistentNodes = make([]collisionNode, 0)
+	}
+
+	// Compute collisions for each byte size (1, 2, 3)
+	collisionsBySize := make(map[string]interface{})
+	for _, bytes := range []int{1, 2, 3} {
+		// Filter nodes relevant to this byte size
+		var nodesForByte []collisionNode
+		for _, cn := range allCNodes {
+			if cn.HashSize == bytes || cn.HashSize == 0 {
+				nodesForByte = append(nodesForByte, cn)
+			}
+		}
+
+		// Build prefix map
+		prefixMap := make(map[string][]collisionNode)
+		for _, cn := range nodesForByte {
+			if len(cn.PublicKey) < bytes*2 {
+				continue
+			}
+			prefix := strings.ToUpper(cn.PublicKey[:bytes*2])
+			prefixMap[prefix] = append(prefixMap[prefix], cn)
+		}
+
+		// Compute collisions with pairwise distances
+		var collisions []collisionEntry
+		for prefix, pnodes := range prefixMap {
+			if len(pnodes) <= 1 {
+				continue
+			}
+			// Pairwise distance
+			var withCoords []collisionNode
+			for _, cn := range pnodes {
+				if cn.Lat != 0 || cn.Lon != 0 {
+					withCoords = append(withCoords, cn)
+				}
+			}
+			var maxDistKm float64
+			classification := "unknown"
+			if len(withCoords) >= 2 {
+				for i := 0; i < len(withCoords); i++ {
+					for j := i + 1; j < len(withCoords); j++ {
+						d := haversineKm(withCoords[i].Lat, withCoords[i].Lon, withCoords[j].Lat, withCoords[j].Lon)
+						if d > maxDistKm {
+							maxDistKm = d
+						}
+					}
+				}
+				if maxDistKm < 50 {
+					classification = "local"
+				} else if maxDistKm < 200 {
+					classification = "regional"
+				} else {
+					classification = "distant"
+				}
+			} else {
+				classification = "incomplete"
+			}
+			collisions = append(collisions, collisionEntry{
+				Prefix:         prefix,
+				ByteSize:       bytes,
+				Nodes:          pnodes,
+				MaxDistKm:      maxDistKm,
+				Classification: classification,
+				WithCoords:     len(withCoords),
+			})
+		}
+		if collisions == nil {
+			collisions = make([]collisionEntry, 0)
+		}
+
+		// Sort: local first, then regional, distant, incomplete
+		classOrder := map[string]int{"local": 0, "regional": 1, "distant": 2, "incomplete": 3, "unknown": 4}
+		sort.Slice(collisions, func(i, j int) bool {
+			oi, oj := classOrder[collisions[i].Classification], classOrder[collisions[j].Classification]
+			if oi != oj {
+				return oi < oj
+			}
+			return collisions[i].Appearances > collisions[j].Appearances
+		})
+
+		// Stats
+		nodeCount := len(nodesForByte)
+		usingThisSize := 0
+		for _, cn := range allCNodes {
+			if cn.HashSize == bytes {
+				usingThisSize++
+			}
+		}
+		uniquePrefixes := len(prefixMap)
+		collisionCount := len(collisions)
+		var spaceSize int
+		switch bytes {
+		case 1:
+			spaceSize = 256
+		case 2:
+			spaceSize = 65536
+		case 3:
+			spaceSize = 16777216
+		}
+		pctUsed := 0.0
+		if spaceSize > 0 {
+			pctUsed = float64(uniquePrefixes) / float64(spaceSize) * 100
+		}
+
+		// For 1-byte and 2-byte, include the full prefix cell data for matrix rendering
+		var oneByteCells map[string][]collisionNode
+		var twoByteCells map[string]*twoByteCellInfo
+		if bytes == 1 {
+			oneByteCells = make(map[string][]collisionNode)
+			for i := 0; i < 256; i++ {
+				hex := strings.ToUpper(fmt.Sprintf("%02x", i))
+				oneByteCells[hex] = prefixMap[hex]
+				if oneByteCells[hex] == nil {
+					oneByteCells[hex] = make([]collisionNode, 0)
+				}
+			}
+		} else if bytes == 2 {
+			twoByteCells = make(map[string]*twoByteCellInfo)
+			for i := 0; i < 256; i++ {
+				hex := strings.ToUpper(fmt.Sprintf("%02x", i))
+				cell := &twoByteCellInfo{
+					GroupNodes: make([]collisionNode, 0),
+					TwoByteMap: make(map[string][]collisionNode),
+				}
+				twoByteCells[hex] = cell
+			}
+			for _, cn := range nodesForByte {
+				if len(cn.PublicKey) < 4 {
+					continue
+				}
+				firstHex := strings.ToUpper(cn.PublicKey[:2])
+				twoHex := strings.ToUpper(cn.PublicKey[:4])
+				cell := twoByteCells[firstHex]
+				if cell == nil {
+					continue
+				}
+				cell.GroupNodes = append(cell.GroupNodes, cn)
+				cell.TwoByteMap[twoHex] = append(cell.TwoByteMap[twoHex], cn)
+			}
+			for _, cell := range twoByteCells {
+				for _, ns := range cell.TwoByteMap {
+					if len(ns) > 1 {
+						cell.CollisionCount++
+						if len(ns) > cell.MaxCollision {
+							cell.MaxCollision = len(ns)
+						}
+					}
+				}
+			}
+		}
+
+		sizeData := map[string]interface{}{
+			"stats": map[string]interface{}{
+				"total_nodes":     len(allCNodes),
+				"nodes_for_byte":  nodeCount,
+				"using_this_size": usingThisSize,
+				"unique_prefixes": uniquePrefixes,
+				"collision_count": collisionCount,
+				"space_size":      spaceSize,
+				"pct_used":        pctUsed,
+			},
+			"collisions": collisions,
+		}
+		if oneByteCells != nil {
+			sizeData["one_byte_cells"] = oneByteCells
+		}
+		if twoByteCells != nil {
+			sizeData["two_byte_cells"] = twoByteCells
+		}
+		collisionsBySize[strconv.Itoa(bytes)] = sizeData
+	}
+
+	return map[string]interface{}{
+		"inconsistent_nodes": inconsistentNodes,
+		"by_size":            collisionsBySize,
+	}
 }
 
 // GetNodeHashSizeInfo returns cached per-node hash size data, recomputing at most every 15s.
