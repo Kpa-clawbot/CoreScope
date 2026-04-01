@@ -168,8 +168,6 @@ func main() {
 	for _, c := range clients {
 		c.Disconnect(5000) // 5s to allow in-flight messages to drain
 	}
-	// Checkpoint WAL before closing to release lock cleanly
-	store.Checkpoint()
 	log.Println("Done.")
 }
 

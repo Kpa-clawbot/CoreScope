@@ -553,8 +553,9 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 	return err
 }
 
-// Close closes the database.
+// Close checkpoints the WAL and closes the database.
 func (s *Store) Close() error {
+	s.Checkpoint()
 	return s.db.Close()
 }
 
