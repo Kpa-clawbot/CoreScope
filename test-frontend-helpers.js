@@ -1181,6 +1181,61 @@ console.log('\n=== nodes.js: WS handler runtime behavior ===');
     assert.ok(env.getApiCalls() > 0, 'api called because _allNodes was reset to null');
   });
 
+  test('ADVERT for known node upserts in-place without API fetch', () => {
+    const env = makeNodesWsSandbox();
+    // Pre-populate _allNodes with a known node
+    assert.ok(typeof env.ctx.window._nodesSetAllNodes === 'function', '_nodesSetAllNodes must be exposed');
+    env.ctx.window._nodesSetAllNodes([
+      { public_key: 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899', name: 'OldName', role: 'repeater', lat: null, lon: null, last_seen: '2024-01-01T00:00:00Z' }
+    ]);
+    env.resetCounters();
+
+    env.sendWS({
+      type: 'packet',
+      data: {
+        packet: { payload_type: 4, timestamp: '2024-06-01T12:00:00Z' },
+        decoded: {
+          header: { payloadTypeName: 'ADVERT' },
+          payload: { type: 'ADVERT', pubKey: 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899', name: 'NewName', lat: 50.85, lon: 4.35 }
+        }
+      }
+    });
+    env.fireTimers();
+
+    assert.strictEqual(env.getApiCalls(), 0, 'known node upsert must NOT trigger API fetch');
+    assert.strictEqual(env.getInvalidated().length, 0, 'no cache invalidation for known node upsert');
+    const nodes = env.ctx.window._nodesGetAllNodes();
+    assert.ok(nodes, '_nodesGetAllNodes must be exposed');
+    assert.strictEqual(nodes[0].name, 'NewName', 'name must be updated in place');
+    assert.strictEqual(nodes[0].lat, 50.85, 'lat must be updated in place');
+    assert.strictEqual(nodes[0].lon, 4.35, 'lon must be updated in place');
+    assert.strictEqual(nodes[0].last_seen, '2024-06-01T12:00:00Z', 'last_seen must be updated from packet timestamp');
+  });
+
+  test('ADVERT for unknown node falls back to full reload', () => {
+    const env = makeNodesWsSandbox();
+    env.ctx.window._nodesSetAllNodes([
+      { public_key: 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899', name: 'ExistingNode', role: 'repeater' }
+    ]);
+    env.resetCounters();
+
+    // Send ADVERT from a pubKey NOT in _allNodes
+    env.sendWS({
+      type: 'packet',
+      data: {
+        packet: { payload_type: 4 },
+        decoded: {
+          header: { payloadTypeName: 'ADVERT' },
+          payload: { type: 'ADVERT', pubKey: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', name: 'BrandNewNode' }
+        }
+      }
+    });
+    env.fireTimers();
+
+    assert.ok(env.getApiCalls() > 0, 'unknown node must trigger full reload');
+    assert.ok(env.getInvalidated().includes('/nodes'), 'cache must be invalidated for unknown node');
+  });
+
   test('scroll position and selection preserved during WS-triggered refresh', () => {
     const env = makeNodesWsSandbox();
     // Simulate scrolled panel state — WS handler should not touch scroll or rebuild panel
