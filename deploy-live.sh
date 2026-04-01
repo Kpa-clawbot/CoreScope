@@ -15,8 +15,8 @@ git reset --hard origin/master
 echo "[deploy] Building Docker image..."
 docker build -t meshcore-analyzer .
 
-echo "[deploy] Restarting container..."
-docker stop meshcore-analyzer && docker rm meshcore-analyzer
+echo "[deploy] Stopping old container (30s grace period)..."
+docker stop -t 30 meshcore-analyzer && docker rm meshcore-analyzer
 docker run -d --name meshcore-analyzer \
   --restart unless-stopped \
   -p 3000:3000 \

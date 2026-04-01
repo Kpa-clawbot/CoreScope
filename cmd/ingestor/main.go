@@ -166,7 +166,7 @@ func main() {
 	statsTicker.Stop()
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
-		c.Disconnect(1000)
+		c.Disconnect(5000) // 5s to allow in-flight messages to drain
 	}
 	log.Println("Done.")
 }

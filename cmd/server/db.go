@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"strings"
@@ -38,6 +39,12 @@ func OpenDB(path string) (*DB, error) {
 }
 
 func (db *DB) Close() error {
+	// Checkpoint WAL before closing to release lock cleanly for new processes
+	if _, err := db.conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		log.Printf("[db] WAL checkpoint error: %v", err)
+	} else {
+		log.Println("[db] WAL checkpoint complete")
+	}
 	return db.conn.Close()
 }
 

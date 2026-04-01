@@ -15,9 +15,11 @@ git reset --hard "origin/$BRANCH"
 echo "[staging] Building Docker image..."
 docker build -t meshcore-analyzer-staging .
 
-echo "[staging] Restarting container..."
-docker stop meshcore-staging 2>/dev/null || true
+echo "[staging] Stopping old container (30s grace period)..."
+docker stop -t 30 meshcore-staging 2>/dev/null || true
 docker rm meshcore-staging 2>/dev/null || true
+
+echo "[staging] Starting new container..."
 docker run -d --name meshcore-staging \
   --restart unless-stopped \
   -p 3001:3000 \

@@ -553,9 +553,20 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 	return err
 }
 
-// Close closes the database.
+// Close checkpoints the WAL and closes the database.
 func (s *Store) Close() error {
+	s.Checkpoint()
 	return s.db.Close()
+}
+
+// Checkpoint forces a WAL checkpoint to release the WAL lock file,
+// preventing lock contention with a new process starting up.
+func (s *Store) Checkpoint() {
+	if _, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		log.Printf("[db] WAL checkpoint error: %v", err)
+	} else {
+		log.Println("[db] WAL checkpoint complete")
+	}
 }
 
 // LogStats logs current operational metrics.
