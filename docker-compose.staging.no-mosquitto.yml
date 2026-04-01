@@ -10,6 +10,8 @@ services:
     image: corescope-go:latest
     container_name: corescope-staging-go
     restart: unless-stopped
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
     deploy:
       resources:
         limits:

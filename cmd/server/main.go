@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -204,10 +205,27 @@ func main() {
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		log.Println("[server] shutting down...")
+		sig := <-sigCh
+		log.Printf("[server] received %v, shutting down...", sig)
+
+		// 1. Stop accepting new WebSocket/poll data
 		poller.Stop()
-		httpServer.Close()
+
+		// 2. Gracefully drain HTTP connections (up to 15s)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(ctx); err != nil {
+			log.Printf("[server] HTTP shutdown error: %v", err)
+		}
+
+		// 3. Close WebSocket hub
+		hub.Close()
+
+		// 4. Close database (release SQLite WAL lock)
+		if err := database.Close(); err != nil {
+			log.Printf("[server] DB close error: %v", err)
+		}
+		log.Println("[server] shutdown complete")
 	}()
 
 	log.Printf("[server] CoreScope (Go) listening on http://localhost:%d", cfg.Port)

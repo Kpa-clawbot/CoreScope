@@ -558,6 +558,16 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// Checkpoint forces a WAL checkpoint to release the WAL lock file,
+// preventing lock contention with a new process starting up.
+func (s *Store) Checkpoint() {
+	if _, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		log.Printf("[db] WAL checkpoint error: %v", err)
+	} else {
+		log.Println("[db] WAL checkpoint complete")
+	}
+}
+
 // LogStats logs current operational metrics.
 func (s *Store) LogStats() {
 	log.Printf("[stats] tx_inserted=%d tx_dupes=%d obs_inserted=%d node_upserts=%d observer_upserts=%d write_errors=%d",

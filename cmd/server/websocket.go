@@ -58,6 +58,22 @@ func (h *Hub) Unregister(c *Client) {
 	log.Printf("[ws] client disconnected (%d total)", h.ClientCount())
 }
 
+// Close gracefully disconnects all WebSocket clients.
+func (h *Hub) Close() {
+	h.mu.Lock()
+	for c := range h.clients {
+		c.conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"),
+			time.Now().Add(3*time.Second),
+		)
+		close(c.send)
+		delete(h.clients, c)
+	}
+	h.mu.Unlock()
+	log.Println("[ws] all clients disconnected")
+}
+
 // Broadcast sends a message to all connected clients.
 func (h *Hub) Broadcast(msg interface{}) {
 	data, err := json.Marshal(msg)
