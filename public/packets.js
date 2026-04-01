@@ -1065,7 +1065,7 @@
           <td class="mono col-hash">${truncate(p.hash || '—', 8)}</td>
           <td class="col-size">${groupSize ? groupSize + 'B' : '—'}</td>
           <td class="col-hashsize mono">${groupHashBytes}</td>
-          <td class="col-type">${p.payload_type != null ? `<span class="badge badge-${groupTypeClass}">${groupTypeName}</span>` : '—'}</td>
+          <td class="col-type">${p.payload_type != null ? `<span class="badge badge-${groupTypeClass}">${groupTypeName}</span>${transportBadge(p.route_type)}` : '—'}</td>
           <td class="col-observer">${isSingle ? truncate(obsName(headerObserverId), 16) : truncate(obsName(headerObserverId), 10) + (p.observer_count > 1 ? ' +' + (p.observer_count - 1) : '')}</td>
           <td class="col-path"><span class="path-hops">${groupPathStr}</span></td>
           <td class="col-rpt">${p.observation_count > 1 ? '<span class="badge badge-obs" title="Seen ' + p.observation_count + ' times">👁 ' + p.observation_count + '</span>' : (isSingle ? '' : p.count)}</td>
@@ -1094,7 +1094,7 @@
               <td class="mono col-hash">${truncate(c.hash || '', 8)}</td>
               <td class="col-size">${size}B</td>
               <td class="col-hashsize mono">${childHashBytes}</td>
-              <td class="col-type"><span class="badge badge-${typeClass}">${typeName}</span></td>
+              <td class="col-type"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(c.route_type)}</td>
               <td class="col-observer">${truncate(obsName(c.observer_id), 16)}</td>
               <td class="col-path"><span class="path-hops">${childPathStr}</span></td>
               <td class="col-rpt"></td>
@@ -1125,7 +1125,7 @@
         <td class="mono col-hash">${truncate(p.hash || String(p.id), 8)}</td>
         <td class="col-size">${size}B</td>
         <td class="col-hashsize mono">${hashBytes}</td>
-        <td class="col-type"><span class="badge badge-${typeClass}">${typeName}</span></td>
+        <td class="col-type"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(p.route_type)}</td>
         <td class="col-observer">${truncate(obsName(p.observer_id), 16)}</td>
         <td class="col-path"><span class="path-hops">${pathStr}</span></td>
         <td class="col-rpt"></td>

@@ -9,6 +9,8 @@ const PAYLOAD_COLORS = { 0: 'req', 1: 'response', 2: 'txt-msg', 3: 'ack', 4: 'ad
 function routeTypeName(n) { return ROUTE_TYPES[n] || 'UNKNOWN'; }
 function payloadTypeName(n) { return PAYLOAD_TYPES[n] || 'UNKNOWN'; }
 function payloadTypeColor(n) { return PAYLOAD_COLORS[n] || 'unknown'; }
+function isTransportRoute(rt) { return rt === 0 || rt === 3; }
+function transportBadge(rt) { return isTransportRoute(rt) ? ' <span class="badge badge-transport" title="' + routeTypeName(rt) + '">T</span>' : ''; }
 
 // --- Utilities ---
 const _apiPerf = { calls: 0, totalMs: 0, log: [], cacheHits: 0 };

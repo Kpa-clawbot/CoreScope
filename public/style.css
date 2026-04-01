@@ -298,6 +298,12 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   font-size: 10px; font-weight: 700; font-family: var(--mono);
   background: var(--nav-bg); color: var(--nav-text); letter-spacing: .5px;
 }
+.badge-transport {
+  display: inline-block; padding: 1px 5px; border-radius: 4px;
+  font-size: 9px; font-weight: 700; font-family: var(--mono);
+  background: var(--transport-badge-bg, #f59e0b20); color: var(--transport-badge-fg, #d97706);
+  letter-spacing: .5px; vertical-align: middle;
+}
 .badge-obs {
   display: inline-block; padding: 1px 6px; border-radius: 10px;
   font-size: 10px; font-weight: 600;
