@@ -51,6 +51,27 @@ The following were part of the old Node.js backend and have been removed:
 
 ## Rules — Read These First
 
+### 0. Performance is a feature — not an afterthought
+Every change must consider performance impact BEFORE implementation. This codebase handles 30K+ packets, 2K+ nodes, and real-time WebSocket updates. A single O(n²) loop or per-item API call can freeze the UI or stall the server.
+
+**Before writing code, ask:**
+- What's the worst-case data size this code will process?
+- Am I adding work inside a hot loop (render, ingest, WS broadcast)?
+- Am I fetching from the server what I could compute client-side?
+- Am I recomputing something that could be cached/incremental?
+- Does my change invalidate caches more broadly than necessary?
+
+**Hard rules:**
+- **No per-item API calls.** Fetch bulk, filter client-side.
+- **No O(n²) in hot paths.** Use Maps/Sets for lookups, not nested array scans.
+- **No full DOM rebuilds.** Diff or virtualize — never innerHTML entire tables.
+- **No unbounded data structures.** Every map/slice/array must have eviction or size limits.
+- **No expensive work under locks.** Copy data under lock, process outside.
+- **Cache expensive computations.** Invalidate surgically, not globally.
+- **Debounce/coalesce rapid events.** WebSocket messages, scroll, resize — never fire raw.
+
+**If your change touches a hot path (packet rendering, ingest, analytics), include a perf justification in the PR description:** what the complexity is, what the expected scale is, and why it won't degrade.
+
 ### 1. No commit without tests
 Every change that touches logic MUST have tests. For Go backend: `cd cmd/server && go test ./...` and `cd cmd/ingestor && go test ./...`. For frontend: `node test-packet-filter.js && node test-aging.js && node test-frontend-helpers.js`. If you add new logic, add tests. No exceptions.
 
