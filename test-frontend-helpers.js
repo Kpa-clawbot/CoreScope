@@ -2522,6 +2522,126 @@ console.log('\n=== channels.js: WS batch + region snapshot integration ===');
     assert.ok(historyCalls.includes('#/channels'), 'should route back to channels root');
   });
 }
+// ===== PACKETS.JS: savedTimeWindowMin default guard =====
+console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
+{
+  async function captureInitialPacketsRequest(storageValue, innerWidth) {
+    const ctx = makeSandbox();
+    const apiCalls = [];
+    if (storageValue !== undefined) ctx.localStorage.setItem('meshcore-time-window', storageValue);
+    ctx.window.localStorage = ctx.localStorage;
+    ctx.window.innerWidth = innerWidth;
+    const dom = {
+      pktRight: { addEventListener() {}, classList: { add() {}, remove() {}, contains() { return false; } }, innerHTML: '' },
+    };
+    ctx.document.getElementById = (id) => {
+      if (id === 'fTimeWindow') return null;
+      return dom[id] || null;
+    };
+    ctx.document.addEventListener = () => {};
+    ctx.document.removeEventListener = () => {};
+    ctx.document.body = { appendChild() {}, removeChild() {}, contains() { return false; } };
+    ctx.window.addEventListener = () => {};
+    ctx.window.removeEventListener = () => {};
+    ctx.RegionFilter = { init() {}, onChange() { return () => {}; }, offChange() {}, getRegionParam() { return ''; } };
+    ctx.CLIENT_TTL = { observers: 120000 };
+    ctx.debouncedOnWS = (fn) => fn;
+    ctx.onWS = () => {};
+    ctx.offWS = () => {};
+    ctx.registerPage = (name, handlers) => { if (name === 'packets') ctx._packetsHandlers = handlers; };
+    ctx.api = (path) => {
+      apiCalls.push(path);
+      if (path.indexOf('/observers') === 0) return Promise.resolve({ observers: [] });
+      if (path.indexOf('/packets?') === 0) return Promise.reject(new Error('stop after request capture'));
+      if (path.indexOf('/config/regions') === 0) return Promise.resolve({});
+      return Promise.resolve({});
+    };
+
+    loadInCtx(ctx, 'public/packets.js');
+    assert.ok(ctx._packetsHandlers && typeof ctx._packetsHandlers.init === 'function',
+      'packets page should register init handler');
+    await ctx._packetsHandlers.init({ innerHTML: '' });
+
+    const firstPacketsCall = apiCalls.find(p => p.indexOf('/packets?') === 0);
+    assert.ok(firstPacketsCall, 'packets API should be called during initial packets page load');
+    const params = new URLSearchParams((firstPacketsCall.split('?')[1] || ''));
+    return { firstPacketsCall, params };
+  }
+
+  test('savedTimeWindowMin defaults to 15 when localStorage returns null', async () => {
+    const r = await captureInitialPacketsRequest(undefined, 1366);
+    const since = r.params.get('since');
+    assert.ok(since, 'initial packets request should include since parameter');
+    const deltaMin = (Date.now() - Date.parse(since)) / 60000;
+    assert.ok(deltaMin > 10 && deltaMin < 25, `expected default ~15m window, got ${deltaMin.toFixed(2)}m`);
+  });
+
+  test('savedTimeWindowMin defaults to 15 when localStorage returns "0"', async () => {
+    const r = await captureInitialPacketsRequest('0', 1366);
+    const since = r.params.get('since');
+    assert.ok(since, 'initial packets request should include since parameter');
+    const deltaMin = (Date.now() - Date.parse(since)) / 60000;
+    assert.ok(deltaMin > 10 && deltaMin < 25, `expected default ~15m window, got ${deltaMin.toFixed(2)}m`);
+  });
+
+  test('savedTimeWindowMin preserves valid value (60)', async () => {
+    const r = await captureInitialPacketsRequest('60', 1366);
+    const since = r.params.get('since');
+    assert.ok(since, 'initial packets request should include since parameter');
+    const deltaMin = (Date.now() - Date.parse(since)) / 60000;
+    assert.ok(deltaMin > 45 && deltaMin < 75, `expected persisted ~60m window, got ${deltaMin.toFixed(2)}m`);
+  });
+
+  test('savedTimeWindowMin defaults to 15 for negative value', async () => {
+    const r = await captureInitialPacketsRequest('-5', 1366);
+    const since = r.params.get('since');
+    assert.ok(since, 'initial packets request should include since parameter');
+    const deltaMin = (Date.now() - Date.parse(since)) / 60000;
+    assert.ok(deltaMin > 10 && deltaMin < 25, `expected default ~15m window, got ${deltaMin.toFixed(2)}m`);
+  });
+
+  test('savedTimeWindowMin defaults to 15 for NaN string', async () => {
+    const r = await captureInitialPacketsRequest('abc', 1366);
+    const since = r.params.get('since');
+    assert.ok(since, 'initial packets request should include since parameter');
+    const deltaMin = (Date.now() - Date.parse(since)) / 60000;
+    assert.ok(deltaMin > 10 && deltaMin < 25, `expected default ~15m window, got ${deltaMin.toFixed(2)}m`);
+  });
+
+  test('PACKET_LIMIT is 1000 on mobile', async () => {
+    const r = await captureInitialPacketsRequest('15', 375);
+    assert.strictEqual(r.params.get('limit'), '1000');
+  });
+
+  test('PACKET_LIMIT is 50000 on desktop', async () => {
+    const r = await captureInitialPacketsRequest('15', 1366);
+    assert.strictEqual(r.params.get('limit'), '50000');
+  });
+
+  test('mobile caps large time window to 15', async () => {
+    const r = await captureInitialPacketsRequest('1440', 375);
+    const since = r.params.get('since');
+    assert.ok(since, 'initial packets request should include since parameter');
+    const deltaMin = (Date.now() - Date.parse(since)) / 60000;
+    assert.ok(deltaMin > 10 && deltaMin < 25, `expected capped ~15m window, got ${deltaMin.toFixed(2)}m`);
+  });
+
+  test('mobile allows 180 min window', async () => {
+    const r = await captureInitialPacketsRequest('180', 375);
+    const since = r.params.get('since');
+    assert.ok(since, 'initial packets request should include since parameter');
+    const deltaMin = (Date.now() - Date.parse(since)) / 60000;
+    assert.ok(deltaMin > 160 && deltaMin < 210, `expected ~180m window, got ${deltaMin.toFixed(2)}m`);
+  });
+
+  test('mobile corrects desktop-persisted all-time value to 15 minutes', async () => {
+    const r = await captureInitialPacketsRequest('0', 375);
+    const since = r.params.get('since');
+    assert.ok(since, 'mobile should not keep all-time persisted value');
+    const deltaMin = (Date.now() - Date.parse(since)) / 60000;
+    assert.ok(deltaMin > 10 && deltaMin < 25, `expected capped ~15m window, got ${deltaMin.toFixed(2)}m`);
+  });
+}
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
