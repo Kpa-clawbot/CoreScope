@@ -412,6 +412,14 @@ function closeNav() {
   document.body.classList.remove('nav-open');
   var btn = document.getElementById('hamburger');
   if (btn) btn.setAttribute('aria-expanded', 'false');
+  closeMoreMenu();
+}
+
+function closeMoreMenu() {
+  var menu = document.getElementById('navMoreMenu');
+  var btn = document.getElementById('navMoreBtn');
+  if (menu) menu.classList.remove('open');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
 }
 
 function navigate() {
@@ -448,6 +456,13 @@ function navigate() {
   document.querySelectorAll('.nav-link[data-route]').forEach(el => {
     el.classList.toggle('active', el.dataset.route === basePage);
   });
+  // Update "More" button to show active state if a low-priority page is selected
+  var moreBtn = document.getElementById('navMoreBtn');
+  if (moreBtn) {
+    var moreMenu = document.getElementById('navMoreMenu');
+    var hasActiveMore = moreMenu && moreMenu.querySelector('.nav-link.active');
+    moreBtn.classList.toggle('active', !!hasActiveMore);
+  }
 
   if (currentPage && pages[currentPage]?.destroy) {
     pages[currentPage].destroy();
@@ -551,14 +566,43 @@ window.addEventListener('DOMContentLoaded', () => {
   navLinks.querySelectorAll('.nav-link').forEach(link => {
     link.addEventListener('click', closeNav);
   });
+
+  // --- "More" dropdown (tablet Priority+ nav) ---
+  const navMoreBtn = document.getElementById('navMoreBtn');
+  const navMoreMenu = document.getElementById('navMoreMenu');
+  if (navMoreBtn && navMoreMenu) {
+    navMoreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const opening = !navMoreMenu.classList.contains('open');
+      navMoreMenu.classList.toggle('open');
+      navMoreBtn.setAttribute('aria-expanded', String(opening));
+      if (opening) {
+        // Focus first menu item for keyboard accessibility
+        var firstLink = navMoreMenu.querySelector('.nav-link');
+        if (firstLink) firstLink.focus();
+      }
+    });
+    navMoreMenu.querySelectorAll('.nav-link').forEach(link => {
+      link.addEventListener('click', closeMoreMenu);
+    });
+  }
+
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && navLinks.classList.contains('open')) closeNav();
+    if (e.key === 'Escape') {
+      if (navMoreMenu && navMoreMenu.classList.contains('open')) closeMoreMenu();
+      if (navLinks.classList.contains('open')) closeNav();
+    }
   });
   document.addEventListener('click', (e) => {
     if (navLinks.classList.contains('open') &&
         !navLinks.contains(e.target) &&
         !hamburger.contains(e.target)) {
       closeNav();
+    }
+    if (navMoreMenu && navMoreMenu.classList.contains('open') &&
+        !navMoreMenu.contains(e.target) &&
+        !navMoreBtn.contains(e.target)) {
+      closeMoreMenu();
     }
   });
 

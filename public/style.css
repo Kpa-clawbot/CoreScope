@@ -837,6 +837,22 @@ button.ch-item.selected { background: var(--selected-bg); }
 
 /* === Hamburger (hidden on desktop) === */
 .hamburger { display: none; }
+/* "More" button (hidden on desktop) */
+.nav-more-wrap { display: none; position: relative; }
+.nav-more-btn { display: inline-flex; }
+.nav-more-menu {
+  display: none; position: absolute; top: calc(var(--top-nav-h, 52px) - 4px); right: 0;
+  background: var(--nav-bg); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15); flex-direction: column;
+  min-width: 160px; padding: 4px 0; z-index: 1200;
+}
+.nav-more-menu.open { display: flex; }
+.nav-more-menu .nav-link {
+  padding: 10px 16px; border-bottom: none; border-radius: 0; margin: 0;
+  white-space: nowrap;
+}
+.nav-more-menu .nav-link:hover { background: var(--nav-bg2); color: var(--nav-text); }
+.nav-more-menu .nav-link.active { background: rgba(74,158,255,0.15); }
 /* Ensure nav stays above Leaflet map */
 .nav-links.open { z-index: 1100; }
 #map-wrap .leaflet-container { z-index: 1; }
@@ -851,15 +867,27 @@ button.ch-item.selected { background: var(--selected-bg); }
   .map-controls { width: 180px; font-size: 12px; }
 }
 
-/* === Responsive — Hamburger nav (≤1023px) === */
-@media (max-width: 1023px) {
+/* === Responsive — Tablet Priority+ nav (768–1023px) === */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .nav-links { display: flex !important; flex-direction: row; gap: 2px; }
+  .nav-links a:not([data-priority="high"]) { display: none; }
+  .nav-more-wrap { display: flex; align-items: center; }
+  .hamburger { display: none; }
+  .nav-link { padding: 14px 8px; font-size: 13px; }
+  .nav-link.active { background: rgba(74,158,255,0.15); border-radius: 6px; margin: 4px 0; padding: 10px 8px; }
+}
+
+/* === Responsive — Hamburger nav (<768px) === */
+@media (max-width: 767px) {
   .hamburger { display: inline-flex; }
+  .nav-more-wrap { display: none !important; }
   .nav-links {
     display: none; position: absolute; top: 52px; left: 0; right: 0;
     background: var(--nav-bg); flex-direction: column; padding: 8px 0;
     box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 1100;
     max-height: calc(100dvh - 52px); overflow-y: auto;
   }
+  .nav-links a:not([data-priority="high"]) { display: flex; }
   .nav-links.open { display: flex; }
   .nav-link { padding: 12px 20px; border-bottom: none; }
   .nav-link.active { background: rgba(74,158,255,0.15); border-radius: 0; margin: 0; padding: 12px 20px; }
