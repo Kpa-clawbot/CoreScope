@@ -669,6 +669,51 @@ func (s *PacketStore) GetCacheStatsTyped() CacheStats {
 	}
 }
 
+// cacheInvalidation flags indicate what kind of data changed during ingestion.
+// Used by invalidateCachesFor to selectively clear only affected caches.
+type cacheInvalidation struct {
+	hasNewObservations bool // new SNR/RSSI data → rfCache
+	hasNewPaths        bool // new/changed path data → topoCache, distCache, subpathCache
+	hasNewTransmissions bool // new transmissions → hashCache
+	hasChannelData     bool // new GRP_TXT (payload_type 5) → chanCache
+	eviction           bool // data removed → all caches
+}
+
+// invalidateCachesFor selectively clears only the analytics caches affected
+// by the kind of data that changed. This avoids the previous behaviour of
+// wiping every cache on every ingest cycle, which defeated caching under
+// continuous ingestion (issue #375).
+func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+
+	if inv.eviction {
+		// Eviction can affect any analytics — clear everything
+		s.rfCache = make(map[string]*cachedResult)
+		s.topoCache = make(map[string]*cachedResult)
+		s.hashCache = make(map[string]*cachedResult)
+		s.chanCache = make(map[string]*cachedResult)
+		s.distCache = make(map[string]*cachedResult)
+		s.subpathCache = make(map[string]*cachedResult)
+		return
+	}
+
+	if inv.hasNewObservations {
+		s.rfCache = make(map[string]*cachedResult)
+	}
+	if inv.hasNewPaths {
+		s.topoCache = make(map[string]*cachedResult)
+		s.distCache = make(map[string]*cachedResult)
+		s.subpathCache = make(map[string]*cachedResult)
+	}
+	if inv.hasNewTransmissions {
+		s.hashCache = make(map[string]*cachedResult)
+	}
+	if inv.hasChannelData {
+		s.chanCache = make(map[string]*cachedResult)
+	}
+}
+
 // GetPerfStoreStatsTyped returns packet store stats as a typed struct.
 func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 	s.mu.RLock()
@@ -1144,19 +1189,27 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		}
 	}
 
-	// Invalidate analytics caches since new data was ingested
+	// Targeted cache invalidation: only clear caches affected by the ingested
+	// data instead of wiping everything on every cycle (fixes #375).
 	if len(result) > 0 {
-		s.cacheMu.Lock()
-		s.rfCache = make(map[string]*cachedResult)
-		s.topoCache = make(map[string]*cachedResult)
-		s.hashCache = make(map[string]*cachedResult)
-		s.chanCache = make(map[string]*cachedResult)
-		s.distCache = make(map[string]*cachedResult)
-		s.subpathCache = make(map[string]*cachedResult)
-		s.cacheMu.Unlock()
-		s.channelsCacheMu.Lock()
-		s.channelsCacheRes = nil
-		s.channelsCacheMu.Unlock()
+		inv := cacheInvalidation{
+			hasNewTransmissions: len(broadcastTxs) > 0,
+		}
+		for _, tx := range broadcastTxs {
+			if len(tx.Observations) > 0 {
+				inv.hasNewObservations = true
+			}
+			if tx.PayloadType != nil && *tx.PayloadType == 5 {
+				inv.hasChannelData = true
+			}
+			if tx.PathJSON != "" {
+				inv.hasNewPaths = true
+			}
+			if inv.hasNewObservations && inv.hasChannelData && inv.hasNewPaths {
+				break // all flags set, no need to continue
+			}
+		}
+		s.invalidateCachesFor(inv)
 	}
 
 	return result, newMaxID
@@ -1367,20 +1420,20 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	}
 
 	if len(updatedTxs) > 0 {
-		// Invalidate analytics caches
-		s.cacheMu.Lock()
-		s.rfCache = make(map[string]*cachedResult)
-		s.topoCache = make(map[string]*cachedResult)
-		s.hashCache = make(map[string]*cachedResult)
-		s.chanCache = make(map[string]*cachedResult)
-		s.distCache = make(map[string]*cachedResult)
-		s.subpathCache = make(map[string]*cachedResult)
-		s.cacheMu.Unlock()
-		s.channelsCacheMu.Lock()
-		s.channelsCacheRes = nil
-		s.channelsCacheMu.Unlock()
-
-		// analytics caches cleared; no per-cycle log to avoid stdout overhead
+		// Targeted cache invalidation: new observations always affect RF
+		// analytics; topology/distance/subpath caches only if paths changed.
+		// Channel and hash caches are unaffected by observation-only ingestion.
+		hasPathChanges := false
+		for txID, tx := range updatedTxs {
+			if tx.PathJSON != oldPaths[txID] {
+				hasPathChanges = true
+				break
+			}
+		}
+		s.invalidateCachesFor(cacheInvalidation{
+			hasNewObservations: true,
+			hasNewPaths:        hasPathChanges,
+		})
 	}
 
 	return broadcastMaps
@@ -1945,15 +1998,8 @@ func (s *PacketStore) EvictStale() int {
 	log.Printf("[store] Evicted %d packets older than %.0fh (freed ~%.1fMB estimated)",
 		evictCount, s.retentionHours, freedMB)
 
-	// Invalidate analytics caches
-	s.cacheMu.Lock()
-	s.rfCache = make(map[string]*cachedResult)
-	s.topoCache = make(map[string]*cachedResult)
-	s.hashCache = make(map[string]*cachedResult)
-	s.chanCache = make(map[string]*cachedResult)
-	s.distCache = make(map[string]*cachedResult)
-	s.subpathCache = make(map[string]*cachedResult)
-	s.cacheMu.Unlock()
+	// Eviction removes data — all caches may be affected
+	s.invalidateCachesFor(cacheInvalidation{eviction: true})
 
 	// Invalidate hash size cache
 	s.hashSizeInfoMu.Lock()
