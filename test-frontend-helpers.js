@@ -2642,6 +2642,56 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
     assert.ok(deltaMin > 10 && deltaMin < 25, `expected capped ~15m window, got ${deltaMin.toFixed(2)}m`);
   });
 }
+// ===== My Nodes client-side filter (issue #381) =====
+{
+  console.log('\n--- My Nodes client-side filter ---');
+
+  // Simulate the client-side filter logic from packets.js renderTableRows()
+  function filterMyNodes(packets, allKeys) {
+    if (!allKeys.length) return [];
+    return packets.filter(p => {
+      const dj = p.decoded_json || '';
+      return allKeys.some(k => dj.includes(k));
+    });
+  }
+
+  const testPackets = [
+    { decoded_json: '{"pubKey":"abc123","name":"Node1"}' },
+    { decoded_json: '{"pubKey":"def456","name":"Node2"}' },
+    { decoded_json: '{"pubKey":"ghi789","name":"Node3","hops":["abc123"]}' },
+    { decoded_json: '' },
+    { decoded_json: null },
+  ];
+
+  test('filters packets matching a single pubkey', () => {
+    const result = filterMyNodes(testPackets, ['abc123']);
+    assert.strictEqual(result.length, 2, 'should match sender + hop');
+    assert.ok(result[0].decoded_json.includes('abc123'));
+    assert.ok(result[1].decoded_json.includes('abc123'));
+  });
+
+  test('filters packets matching multiple pubkeys', () => {
+    const result = filterMyNodes(testPackets, ['abc123', 'def456']);
+    assert.strictEqual(result.length, 3);
+  });
+
+  test('returns empty array for no matching keys', () => {
+    const result = filterMyNodes(testPackets, ['zzz999']);
+    assert.strictEqual(result.length, 0);
+  });
+
+  test('returns empty array when allKeys is empty', () => {
+    const result = filterMyNodes(testPackets, []);
+    assert.strictEqual(result.length, 0);
+  });
+
+  test('handles null/empty decoded_json gracefully', () => {
+    const result = filterMyNodes(testPackets, ['abc123']);
+    // Should not throw, null decoded_json packets are skipped
+    assert.strictEqual(result.length, 2);
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);

@@ -997,7 +997,7 @@
     const groupBtn = document.getElementById('fGroup');
     if (groupBtn) groupBtn.classList.toggle('active', groupByHash);
 
-    // Filter to claimed/favorited nodes if toggle is on — use server-side multi-node lookup
+    // Filter to claimed/favorited nodes — pure client-side filter (no server round-trip)
     let displayPackets = packets;
     if (filters.myNodes) {
       const myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
@@ -1005,10 +1005,10 @@
       const favs = getFavorites();
       const allKeys = [...new Set([...myKeys, ...favs])];
       if (allKeys.length > 0) {
-        try {
-          const myData = await api('/packets?nodes=' + allKeys.join(',') + '&limit=500');
-          displayPackets = myData.packets || [];
-        } catch { displayPackets = []; }
+        displayPackets = displayPackets.filter(p => {
+          const dj = p.decoded_json || '';
+          return allKeys.some(k => dj.includes(k));
+        });
       } else {
         displayPackets = [];
       }
