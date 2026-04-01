@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -483,6 +484,13 @@ func toFloat64(v interface{}) (float64, bool) {
 	case json.Number:
 		f, err := n.Float64()
 		return f, err == nil
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+		return f, err == nil
+	case uint:
+		return float64(n), true
+	case uint64:
+		return float64(n), true
 	default:
 		return 0, false
 	}
