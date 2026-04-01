@@ -256,6 +256,20 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				mqttMsg.RSSI = &f
 			}
 		}
+		if v, ok := msg["score"]; ok {
+			if f, ok := toFloat64(v); ok {
+				mqttMsg.Score = &f
+			}
+		} else if v, ok := msg["Score"]; ok {
+			if f, ok := toFloat64(v); ok {
+				mqttMsg.Score = &f
+			}
+		}
+		if v, ok := msg["direction"].(string); ok {
+			mqttMsg.Direction = &v
+		} else if v, ok := msg["Direction"].(string); ok {
+			mqttMsg.Direction = &v
+		}
 		if v, ok := msg["origin"].(string); ok {
 			mqttMsg.Origin = v
 		}
@@ -352,7 +366,8 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		h := sha256.Sum256([]byte(hashInput))
 		hash := hex.EncodeToString(h[:])[:16]
 
-		var snr, rssi *float64
+		var snr, rssi, score *float64
+		var direction *string
 		if v, ok := msg["SNR"]; ok {
 			if f, ok := toFloat64(v); ok {
 				snr = &f
@@ -371,6 +386,20 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				rssi = &f
 			}
 		}
+		if v, ok := msg["score"]; ok {
+			if f, ok := toFloat64(v); ok {
+				score = &f
+			}
+		} else if v, ok := msg["Score"]; ok {
+			if f, ok := toFloat64(v); ok {
+				score = &f
+			}
+		}
+		if v, ok := msg["direction"].(string); ok {
+			direction = &v
+		} else if v, ok := msg["Direction"].(string); ok {
+			direction = &v
+		}
 
 		pktData := &PacketData{
 			Timestamp:    now,
@@ -378,6 +407,8 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			ObserverName: "L1 Pro (BLE)",
 			SNR:          snr,
 			RSSI:         rssi,
+			Score:        score,
+			Direction:    direction,
 			Hash:         hash,
 			RouteType:    1, // FLOOD
 			PayloadType:  5, // GRP_TXT
@@ -429,7 +460,8 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		h := sha256.Sum256([]byte(hashInput))
 		hash := hex.EncodeToString(h[:])[:16]
 
-		var snr, rssi *float64
+		var snr, rssi, score *float64
+		var direction *string
 		if v, ok := msg["SNR"]; ok {
 			if f, ok := toFloat64(v); ok {
 				snr = &f
@@ -448,6 +480,20 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				rssi = &f
 			}
 		}
+		if v, ok := msg["score"]; ok {
+			if f, ok := toFloat64(v); ok {
+				score = &f
+			}
+		} else if v, ok := msg["Score"]; ok {
+			if f, ok := toFloat64(v); ok {
+				score = &f
+			}
+		}
+		if v, ok := msg["direction"].(string); ok {
+			direction = &v
+		} else if v, ok := msg["Direction"].(string); ok {
+			direction = &v
+		}
 
 		pktData := &PacketData{
 			Timestamp:    now,
@@ -455,6 +501,8 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			ObserverName: "L1 Pro (BLE)",
 			SNR:          snr,
 			RSSI:         rssi,
+			Score:        score,
+			Direction:    direction,
 			Hash:         hash,
 			RouteType:    1, // FLOOD
 			PayloadType:  2, // TXT_MSG
@@ -485,7 +533,9 @@ func toFloat64(v interface{}) (float64, bool) {
 		f, err := n.Float64()
 		return f, err == nil
 	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(n), 64)
+		s := strings.TrimSpace(n)
+		s = stripUnitSuffix(s)
+		f, err := strconv.ParseFloat(s, 64)
 		return f, err == nil
 	case uint:
 		return float64(n), true
@@ -494,6 +544,21 @@ func toFloat64(v interface{}) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// unitSuffixes lists common RF/signal unit suffixes to strip before parsing.
+var unitSuffixes = []string{"dBm", "dB", "mW", "km", "mi", "m"}
+
+// stripUnitSuffix removes a trailing unit suffix (case-insensitive) from a
+// numeric string so that values like "-110dBm" can be parsed as float64.
+func stripUnitSuffix(s string) string {
+	lower := strings.ToLower(s)
+	for _, suffix := range unitSuffixes {
+		if strings.HasSuffix(lower, strings.ToLower(suffix)) {
+			return strings.TrimSpace(s[:len(s)-len(suffix)])
+		}
+	}
+	return s
 }
 
 // extractObserverMeta extracts hardware metadata from an MQTT status message.

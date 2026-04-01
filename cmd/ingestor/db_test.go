@@ -1571,3 +1571,85 @@ func TestObsTimestampIndexMigration(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildPacketDataScoreAndDirection(t *testing.T) {
+	rawHex := "0A00D69FD7A5A7475DB07337749AE61FA53A4788E976"
+	decoded, err := DecodePacket(rawHex, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	score := 42.0
+	dir := "incoming"
+	msg := &MQTTPacketMessage{
+		Raw:       rawHex,
+		Score:     &score,
+		Direction: &dir,
+	}
+
+	pkt := BuildPacketData(msg, decoded, "obs1", "SJC")
+	if pkt.Score == nil || *pkt.Score != 42.0 {
+		t.Errorf("Score=%v, want 42.0", pkt.Score)
+	}
+	if pkt.Direction == nil || *pkt.Direction != "incoming" {
+		t.Errorf("Direction=%v, want incoming", pkt.Direction)
+	}
+}
+
+func TestBuildPacketDataNilScoreDirection(t *testing.T) {
+	decoded, _ := DecodePacket("0A00"+strings.Repeat("00", 10), nil)
+	msg := &MQTTPacketMessage{Raw: "0A00" + strings.Repeat("00", 10)}
+	pkt := BuildPacketData(msg, decoded, "", "")
+
+	if pkt.Score != nil {
+		t.Errorf("Score should be nil, got %v", *pkt.Score)
+	}
+	if pkt.Direction != nil {
+		t.Errorf("Direction should be nil, got %v", *pkt.Direction)
+	}
+}
+
+func TestInsertTransmissionWithScoreAndDirection(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	score := 7.5
+	dir := "outgoing"
+	data := &PacketData{
+		RawHex:    "AABB",
+		Timestamp: "2025-01-01T00:00:00Z",
+		SNR:       ptrFloat(5.0),
+		RSSI:      ptrFloat(-90.0),
+		Score:     &score,
+		Direction: &dir,
+		Hash:      "abc123",
+		PathJSON:  "[]",
+	}
+
+	isNew, err := s.InsertTransmission(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isNew {
+		t.Error("expected new transmission")
+	}
+
+	// Verify the observation was stored with score and direction
+	var gotDir sql.NullString
+	var gotScore sql.NullFloat64
+	err = s.db.QueryRow("SELECT direction, score FROM observations LIMIT 1").Scan(&gotDir, &gotScore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gotDir.Valid || gotDir.String != "outgoing" {
+		t.Errorf("direction=%v, want outgoing", gotDir)
+	}
+	if !gotScore.Valid || gotScore.Float64 != 7.5 {
+		t.Errorf("score=%v, want 7.5", gotScore)
+	}
+}
+
+func ptrFloat(f float64) *float64 { return &f }

@@ -445,8 +445,8 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	}
 
 	_, err = s.stmtInsertObservation.Exec(
-		txID, observerIdx, nil, // direction
-		data.SNR, data.RSSI, nil, // score
+		txID, observerIdx, data.Direction,
+		data.SNR, data.RSSI, data.Score,
 		data.PathJSON, epochTs,
 	)
 	if err != nil {
@@ -606,6 +606,8 @@ type PacketData struct {
 	ObserverName   string
 	SNR            *float64
 	RSSI           *float64
+	Score          *float64
+	Direction      *string
 	Hash           string
 	RouteType      int
 	PayloadType    int
@@ -616,10 +618,12 @@ type PacketData struct {
 
 // MQTTPacketMessage is the JSON payload from an MQTT raw packet message.
 type MQTTPacketMessage struct {
-	Raw    string   `json:"raw"`
-	SNR    *float64 `json:"SNR"`
-	RSSI   *float64 `json:"RSSI"`
-	Origin string   `json:"origin"`
+	Raw       string   `json:"raw"`
+	SNR       *float64 `json:"SNR"`
+	RSSI      *float64 `json:"RSSI"`
+	Score     *float64 `json:"score"`
+	Direction *string  `json:"direction"`
+	Origin    string   `json:"origin"`
 }
 
 // BuildPacketData constructs a PacketData from a decoded packet and MQTT message.
@@ -638,6 +642,8 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		ObserverName:   msg.Origin,
 		SNR:            msg.SNR,
 		RSSI:           msg.RSSI,
+		Score:          msg.Score,
+		Direction:      msg.Direction,
 		Hash:           ComputeContentHash(msg.Raw),
 		RouteType:      decoded.Header.RouteType,
 		PayloadType:    decoded.Header.PayloadType,

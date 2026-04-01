@@ -129,7 +129,7 @@ type distHopRecord struct {
 	ToPk       string
 	Dist       float64
 	Type       string // "R↔R", "C↔R", "C↔C"
-	SNR        interface{}
+	SNR        *float64
 	Hash       string
 	Timestamp  string
 	HourBucket string
@@ -2056,15 +2056,11 @@ func computeDistancesForTx(tx *StoreTx, nodeByPk map[string]*nodeInfo, repeaterS
 		}
 
 		roundedDist := math.Round(dist*100) / 100
-		var snrVal interface{}
-		if tx.SNR != nil {
-			snrVal = *tx.SNR
-		}
 		hopRecords = append(hopRecords, distHopRecord{
 			FromName: a.Name, FromPk: a.PublicKey,
 			ToName: b.Name, ToPk: b.PublicKey,
 			Dist: roundedDist, Type: hopType,
-			SNR: snrVal, Hash: tx.Hash, Timestamp: tx.FirstSeen,
+			SNR: tx.SNR, Hash: tx.Hash, Timestamp: tx.FirstSeen,
 			HourBucket: hourBucket, tx: tx,
 		})
 		hopDetails = append(hopDetails, distHopDetail{
@@ -3725,7 +3721,7 @@ func (s *PacketStore) computeAnalyticsDistance(region string) map[string]interfa
 			"fromName": h.FromName, "fromPk": h.FromPk,
 			"toName": h.ToName, "toPk": h.ToPk,
 			"dist": h.Dist, "type": h.Type,
-			"snr": h.SNR, "hash": h.Hash, "timestamp": h.Timestamp,
+			"snr": floatPtrOrNil(h.SNR), "hash": h.Hash, "timestamp": h.Timestamp,
 		})
 	}
 
@@ -5095,7 +5091,7 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 	observers := map[string]int{}
 	parentPaths := map[string]int{}
 	var matchCount int
-	var firstSeen, lastSeen interface{}
+	var firstSeen, lastSeen string
 
 	for _, tx := range s.packets {
 		hops := txGetParsedPath(tx)
@@ -5125,10 +5121,10 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 		matchCount++
 		ts := tx.FirstSeen
 		if ts != "" {
-			if firstSeen == nil || ts < firstSeen.(string) {
+			if firstSeen == "" || ts < firstSeen {
 				firstSeen = ts
 			}
-			if lastSeen == nil || ts > lastSeen.(string) {
+			if lastSeen == "" || ts > lastSeen {
 				lastSeen = ts
 			}
 			// Parse hour from timestamp for hourly distribution

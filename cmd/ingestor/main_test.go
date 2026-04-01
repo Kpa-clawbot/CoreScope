@@ -692,3 +692,50 @@ func TestHandleMessageNoSNRRSSI(t *testing.T) {
 		t.Errorf("rssi should be nil when not present, got %v", *rssi)
 	}
 }
+
+func TestStripUnitSuffix(t *testing.T) {
+	tests := []struct {
+		input, want string
+	}{
+		{"-110dBm", "-110"},
+		{"-110DBM", "-110"},
+		{"5.5dB", "5.5"},
+		{"100mW", "100"},
+		{"1.5km", "1.5"},
+		{"500m", "500"},
+		{"10mi", "10"},
+		{"42", "42"},
+		{"", ""},
+		{"hello", "hello"},
+	}
+	for _, tt := range tests {
+		got := stripUnitSuffix(tt.input)
+		if got != tt.want {
+			t.Errorf("stripUnitSuffix(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestToFloat64WithUnits(t *testing.T) {
+	tests := []struct {
+		input interface{}
+		want  float64
+		ok    bool
+	}{
+		{"-110dBm", -110.0, true},
+		{"5.5dB", 5.5, true},
+		{"100mW", 100.0, true},
+		{"-85.3dBm", -85.3, true},
+		{"42", 42.0, true},
+		{"not_a_number", 0, false},
+	}
+	for _, tt := range tests {
+		got, ok := toFloat64(tt.input)
+		if ok != tt.ok {
+			t.Errorf("toFloat64(%v) ok=%v, want %v", tt.input, ok, tt.ok)
+		}
+		if ok && got != tt.want {
+			t.Errorf("toFloat64(%v) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}
