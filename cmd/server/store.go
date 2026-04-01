@@ -695,6 +695,9 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 		s.chanCache = make(map[string]*cachedResult)
 		s.distCache = make(map[string]*cachedResult)
 		s.subpathCache = make(map[string]*cachedResult)
+		s.channelsCacheMu.Lock()
+		s.channelsCacheRes = nil
+		s.channelsCacheMu.Unlock()
 		return
 	}
 
@@ -711,6 +714,10 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 	}
 	if inv.hasChannelData {
 		s.chanCache = make(map[string]*cachedResult)
+		// Also invalidate the separate channels list cache
+		s.channelsCacheMu.Lock()
+		s.channelsCacheRes = nil
+		s.channelsCacheMu.Unlock()
 	}
 }
 

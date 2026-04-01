@@ -30,3 +30,4 @@ cmd/ingestor/ingestor.exe
 # CI trigger
 !test-fixtures/e2e-fixture.db
 corescope-server
+cmd/server/server
