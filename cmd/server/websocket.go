@@ -25,8 +25,9 @@ type Hub struct {
 
 // Client is a single WebSocket connection.
 type Client struct {
-	conn *websocket.Conn
-	send chan []byte
+	conn     *websocket.Conn
+	send     chan []byte
+	closeOnce sync.Once
 }
 
 func NewHub() *Hub {
@@ -52,7 +53,7 @@ func (h *Hub) Unregister(c *Client) {
 	h.mu.Lock()
 	if _, ok := h.clients[c]; ok {
 		delete(h.clients, c)
-		close(c.send)
+		c.closeOnce.Do(func() { close(c.send) })
 	}
 	h.mu.Unlock()
 	log.Printf("[ws] client disconnected (%d total)", h.ClientCount())
@@ -67,7 +68,7 @@ func (h *Hub) Close() {
 			websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutting down"),
 			time.Now().Add(3*time.Second),
 		)
-		close(c.send)
+		c.closeOnce.Do(func() { close(c.send) })
 		delete(h.clients, c)
 	}
 	h.mu.Unlock()
