@@ -35,6 +35,11 @@
   let hopNameCache = {};
   let showHexHashes = localStorage.getItem('meshcore-hex-hashes') === 'true';
   let filtersBuilt = false;
+  let _renderTimer = null;
+  function scheduleRender() {
+    clearTimeout(_renderTimer);
+    _renderTimer = setTimeout(() => renderTableRows(), 200);
+  }
   const PANEL_WIDTH_KEY = 'meshcore-panel-width';
   const PANEL_CLOSE_HTML = '<button class="panel-close-btn" title="Close detail pane (Esc)">✕</button>';
 
@@ -327,6 +332,7 @@
     wsHandler = debouncedOnWS(function (msgs) {
       if (packetsPaused) {
         pauseBuffer.push(...msgs);
+        if (pauseBuffer.length > 2000) pauseBuffer = pauseBuffer.slice(-2000);
         const btn = document.getElementById('pktPauseBtn');
         if (btn) btn.textContent = '▶ ' + pauseBuffer.length;
         return;
@@ -383,6 +389,7 @@
               // Update expanded children if this group is expanded
               if (expandedHashes.has(h) && existing._children) {
                 existing._children.unshift(p);
+                if (existing._children.length > 200) existing._children.length = 200;
                 sortGroupChildren(existing);
               }
             } else {
@@ -403,11 +410,16 @@
               if (h) hashIndex.set(h, newGroup);
             }
           }
-          // Re-sort by latest DESC
+          // Re-sort by latest DESC, then evict oldest beyond the limit
           packets.sort((a, b) => (b.latest || '').localeCompare(a.latest || ''));
+          if (packets.length > PACKET_LIMIT) {
+            const evicted = packets.splice(PACKET_LIMIT);
+            for (const p of evicted) { if (p.hash) hashIndex.delete(p.hash); }
+          }
         } else {
-          // Flat mode: prepend
+          // Flat mode: prepend, then evict oldest beyond the limit
           packets = filtered.concat(packets);
+          if (packets.length > PACKET_LIMIT) packets.length = PACKET_LIMIT;
         }
         totalCount += filtered.length;
         // Debounce WS-triggered renders to avoid rapid full rebuilds
@@ -418,6 +430,7 @@
   }
 
   function destroy() {
+    clearTimeout(_renderTimer);
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
     detachVScrollListener();
