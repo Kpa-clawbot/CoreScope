@@ -3096,35 +3096,59 @@ console.log('\n=== channels.js: formatHashHex (issue #465) ===');
       'destroy must clear _wsRenderTimer to prevent stale renders after navigation');
   });
 }
+// ===== NODES.JS: shared sandbox factory =====
+function makeNodesSandbox(opts) {
+  opts = opts || {};
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  ctx.registerPage = () => {};
+  ctx.RegionFilter = { init: () => {}, onChange: () => () => {}, getRegionParam: () => '', offChange: () => {} };
+  ctx.onWS = () => {};
+  ctx.offWS = () => {};
+  ctx.debouncedOnWS = (fn) => fn;
+  ctx.invalidateApiCache = () => {};
+  ctx.favStar = () => '';
+  ctx.bindFavStars = () => {};
+  if (opts.liveGetFavorites) {
+    ctx.getFavorites = () => {
+      try { return JSON.parse(ctx.localStorage.getItem('meshcore-favorites') || '[]'); } catch(e) { return []; }
+    };
+  } else {
+    ctx.getFavorites = () => [];
+  }
+  ctx.isFavorite = () => false;
+  ctx.connectWS = () => {};
+  ctx.HopResolver = { init: () => {}, resolve: () => ({}), ready: () => false };
+  ctx.api = () => Promise.resolve({ nodes: [], counts: {} });
+  ctx.CLIENT_TTL = { nodeList: 90000, nodeDetail: 240000, nodeHealth: 240000 };
+  ctx.initTabBar = () => {};
+  ctx.makeColumnsResizable = () => {};
+  ctx.debounce = (fn) => fn;
+  ctx.Set = Set;
+  if (opts.exportInternals) {
+    const nodesSource = fs.readFileSync('public/nodes.js', 'utf8');
+    const modifiedSource = nodesSource.replace(
+      /\(function \(\) \{/,
+      '(function () { window.__nodesExport = {};'
+    ).replace(
+      /function getStatusInfo/,
+      'window.__nodesExport.getStatusInfo = getStatusInfo; function getStatusInfo'
+    ).replace(
+      /function getStatusTooltip/,
+      'window.__nodesExport.getStatusTooltip = getStatusTooltip; function getStatusTooltip'
+    );
+    vm.runInContext(modifiedSource, ctx);
+    for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+  } else {
+    loadInCtx(ctx, 'public/nodes.js');
+  }
+  return ctx;
+}
+
 // ===== NODES.JS: toggleSort / sortNodes / sortArrow (P0 coverage) =====
 console.log('\n=== nodes.js: toggleSort / sortNodes / sortArrow ===');
 {
-  function makeNodesSandbox() {
-    const ctx = makeSandbox();
-    loadInCtx(ctx, 'public/roles.js');
-    loadInCtx(ctx, 'public/app.js');
-    ctx.registerPage = () => {};
-    ctx.RegionFilter = { init: () => {}, onChange: () => () => {}, getRegionParam: () => '', offChange: () => {} };
-    ctx.onWS = () => {};
-    ctx.offWS = () => {};
-    ctx.debouncedOnWS = (fn) => fn;
-    ctx.invalidateApiCache = () => {};
-    ctx.favStar = () => '';
-    ctx.bindFavStars = () => {};
-    ctx.getFavorites = () => [];
-    ctx.isFavorite = () => false;
-    ctx.connectWS = () => {};
-    ctx.HopResolver = { init: () => {}, resolve: () => ({}), ready: () => false };
-    ctx.api = () => Promise.resolve({ nodes: [], counts: {} });
-    ctx.CLIENT_TTL = { nodeList: 90000, nodeDetail: 240000, nodeHealth: 240000 };
-    ctx.initTabBar = () => {};
-    ctx.makeColumnsResizable = () => {};
-    ctx.debounce = (fn) => fn;
-    ctx.Set = Set;
-    loadInCtx(ctx, 'public/nodes.js');
-    return ctx;
-  }
-
   // --- toggleSort ---
   test('toggleSort switches direction on same column', () => {
     const ctx = makeNodesSandbox();
@@ -3366,36 +3390,9 @@ console.log('\n=== nodes.js: toggleSort / sortNodes / sortArrow ===');
 // ===== NODES.JS: syncClaimedToFavorites =====
 console.log('\n=== nodes.js: syncClaimedToFavorites ===');
 {
-  function makeNodesSandbox2() {
-    const ctx = makeSandbox();
-    loadInCtx(ctx, 'public/roles.js');
-    loadInCtx(ctx, 'public/app.js');
-    ctx.registerPage = () => {};
-    ctx.RegionFilter = { init: () => {}, onChange: () => () => {}, getRegionParam: () => '', offChange: () => {} };
-    ctx.onWS = () => {};
-    ctx.offWS = () => {};
-    ctx.debouncedOnWS = (fn) => fn;
-    ctx.invalidateApiCache = () => {};
-    ctx.favStar = () => '';
-    ctx.bindFavStars = () => {};
-    ctx.getFavorites = () => {
-      try { return JSON.parse(ctx.localStorage.getItem('meshcore-favorites') || '[]'); } catch { return []; }
-    };
-    ctx.isFavorite = () => false;
-    ctx.connectWS = () => {};
-    ctx.HopResolver = { init: () => {}, resolve: () => ({}), ready: () => false };
-    ctx.api = () => Promise.resolve({ nodes: [], counts: {} });
-    ctx.CLIENT_TTL = { nodeList: 90000, nodeDetail: 240000, nodeHealth: 240000 };
-    ctx.initTabBar = () => {};
-    ctx.makeColumnsResizable = () => {};
-    ctx.debounce = (fn) => fn;
-    ctx.Set = Set;
-    loadInCtx(ctx, 'public/nodes.js');
-    return ctx;
-  }
-
+  
   test('syncClaimedToFavorites adds claimed pubkeys to favorites', () => {
-    const ctx = makeNodesSandbox2();
+    const ctx = makeNodesSandbox({ liveGetFavorites: true });
     ctx.localStorage.setItem('meshcore-my-nodes', JSON.stringify([
       { pubkey: 'key1' }, { pubkey: 'key2' }
     ]));
@@ -3408,7 +3405,7 @@ console.log('\n=== nodes.js: syncClaimedToFavorites ===');
   });
 
   test('syncClaimedToFavorites no-ops when all claimed already favorited', () => {
-    const ctx = makeNodesSandbox2();
+    const ctx = makeNodesSandbox({ liveGetFavorites: true });
     ctx.localStorage.setItem('meshcore-my-nodes', JSON.stringify([{ pubkey: 'key1' }]));
     ctx.localStorage.setItem('meshcore-favorites', JSON.stringify(['key1', 'key2']));
     ctx.window._nodesSyncClaimedToFavorites();
@@ -3417,7 +3414,7 @@ console.log('\n=== nodes.js: syncClaimedToFavorites ===');
   });
 
   test('syncClaimedToFavorites handles empty my-nodes', () => {
-    const ctx = makeNodesSandbox2();
+    const ctx = makeNodesSandbox({ liveGetFavorites: true });
     ctx.localStorage.setItem('meshcore-my-nodes', '[]');
     ctx.localStorage.setItem('meshcore-favorites', '["key1"]');
     ctx.window._nodesSyncClaimedToFavorites();
@@ -3426,7 +3423,7 @@ console.log('\n=== nodes.js: syncClaimedToFavorites ===');
   });
 
   test('syncClaimedToFavorites handles missing localStorage keys', () => {
-    const ctx = makeNodesSandbox2();
+    const ctx = makeNodesSandbox({ liveGetFavorites: true });
     // No meshcore-my-nodes or meshcore-favorites set
     ctx.window._nodesSyncClaimedToFavorites(); // should not crash
   });
@@ -3435,34 +3432,9 @@ console.log('\n=== nodes.js: syncClaimedToFavorites ===');
 // ===== NODES.JS: renderNodeTimestampHtml / renderNodeTimestampText =====
 console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText ===');
 {
-  function makeNodesSandbox3() {
-    const ctx = makeSandbox();
-    loadInCtx(ctx, 'public/roles.js');
-    loadInCtx(ctx, 'public/app.js');
-    ctx.registerPage = () => {};
-    ctx.RegionFilter = { init: () => {}, onChange: () => () => {}, getRegionParam: () => '', offChange: () => {} };
-    ctx.onWS = () => {};
-    ctx.offWS = () => {};
-    ctx.debouncedOnWS = (fn) => fn;
-    ctx.invalidateApiCache = () => {};
-    ctx.favStar = () => '';
-    ctx.bindFavStars = () => {};
-    ctx.getFavorites = () => [];
-    ctx.isFavorite = () => false;
-    ctx.connectWS = () => {};
-    ctx.HopResolver = { init: () => {}, resolve: () => ({}), ready: () => false };
-    ctx.api = () => Promise.resolve({ nodes: [], counts: {} });
-    ctx.CLIENT_TTL = { nodeList: 90000, nodeDetail: 240000, nodeHealth: 240000 };
-    ctx.initTabBar = () => {};
-    ctx.makeColumnsResizable = () => {};
-    ctx.debounce = (fn) => fn;
-    ctx.Set = Set;
-    loadInCtx(ctx, 'public/nodes.js');
-    return ctx;
-  }
-
+  
   test('renderNodeTimestampHtml returns HTML with tooltip', () => {
-    const ctx = makeNodesSandbox3();
+    const ctx = makeNodesSandbox();
     const d = new Date(Date.now() - 300000).toISOString();
     const html = ctx.window._nodesRenderNodeTimestampHtml(d);
     assert.ok(html.includes('timestamp-text'), 'should have timestamp-text class');
@@ -3470,20 +3442,20 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText =
   });
 
   test('renderNodeTimestampHtml marks future timestamps', () => {
-    const ctx = makeNodesSandbox3();
+    const ctx = makeNodesSandbox();
     const d = new Date(Date.now() + 120000).toISOString();
     const html = ctx.window._nodesRenderNodeTimestampHtml(d);
     assert.ok(html.includes('timestamp-future-icon'), 'future timestamp should show warning');
   });
 
   test('renderNodeTimestampHtml handles null', () => {
-    const ctx = makeNodesSandbox3();
+    const ctx = makeNodesSandbox();
     const html = ctx.window._nodesRenderNodeTimestampHtml(null);
     assert.ok(html.includes('—') || html.length > 0, 'null should produce dash or safe output');
   });
 
   test('renderNodeTimestampText returns plain text', () => {
-    const ctx = makeNodesSandbox3();
+    const ctx = makeNodesSandbox();
     const d = new Date(Date.now() - 300000).toISOString();
     const text = ctx.window._nodesRenderNodeTimestampText(d);
     assert.ok(!text.includes('<'), 'should be plain text, not HTML');
@@ -3491,7 +3463,7 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText =
   });
 
   test('renderNodeTimestampText handles null', () => {
-    const ctx = makeNodesSandbox3();
+    const ctx = makeNodesSandbox();
     const text = ctx.window._nodesRenderNodeTimestampText(null);
     assert.strictEqual(text, '—');
   });
@@ -3500,44 +3472,8 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText =
 // ===== NODES.JS: getStatusInfo edge cases (P0 coverage expansion) =====
 console.log('\n=== nodes.js: getStatusInfo edge cases ===');
 {
-  function makeNodesSandboxForStatus() {
-    const ctx = makeSandbox();
-    loadInCtx(ctx, 'public/roles.js');
-    loadInCtx(ctx, 'public/app.js');
-    ctx.registerPage = () => {};
-    ctx.RegionFilter = { init: () => {}, onChange: () => () => {}, getRegionParam: () => '', offChange: () => {} };
-    ctx.onWS = () => {};
-    ctx.offWS = () => {};
-    ctx.debouncedOnWS = (fn) => fn;
-    ctx.invalidateApiCache = () => {};
-    ctx.favStar = () => '';
-    ctx.bindFavStars = () => {};
-    ctx.getFavorites = () => [];
-    ctx.isFavorite = () => false;
-    ctx.api = () => Promise.resolve({ nodes: [], counts: {} });
-    ctx.CLIENT_TTL = { nodeList: 90000, nodeDetail: 240000, nodeHealth: 240000 };
-    ctx.initTabBar = () => {};
-    ctx.makeColumnsResizable = () => {};
-    ctx.debounce = (fn) => fn;
-    ctx.Set = Set;
-
-    const nodesSource = fs.readFileSync('public/nodes.js', 'utf8');
-    const modifiedSource = nodesSource.replace(
-      /\(function \(\) \{/,
-      '(function () { window.__nodesExport = {};'
-    ).replace(
-      /function getStatusInfo/,
-      'window.__nodesExport.getStatusInfo = getStatusInfo; function getStatusInfo'
-    ).replace(
-      /function getStatusTooltip/,
-      'window.__nodesExport.getStatusTooltip = getStatusTooltip; function getStatusTooltip'
-    );
-    vm.runInContext(modifiedSource, ctx);
-    for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
-    return ctx;
-  }
-
-  const ctx = makeNodesSandboxForStatus();
+  
+  const ctx = makeNodesSandbox({ exportInternals: true });
   const gsi = ctx.window.__nodesExport.getStatusInfo;
   const gst = ctx.window.__nodesExport.getStatusTooltip;
 
