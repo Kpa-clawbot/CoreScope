@@ -556,6 +556,7 @@
         var data = buildExport();
         localStorage.setItem('meshcore-user-theme', JSON.stringify(data));
         showSaved();
+        refreshOverrideIndicators(_custInner);
         // Sync to SITE_CONFIG so live pages (home, branding) pick up changes
         if (window.SITE_CONFIG) {
           if (state.branding) window.SITE_CONFIG.branding = Object.assign(window.SITE_CONFIG.branding || {}, state.branding);
@@ -611,6 +612,72 @@
     toast.classList.add('visible');
     clearTimeout(_savedToastTimer);
     _savedToastTimer = setTimeout(function() { toast.classList.remove('visible'); }, 1500);
+  }
+
+  function refreshOverrideIndicators(container) {
+    if (!container || !_initialized || !_serverState) return;
+
+    // Update tab badges
+    var tabCounts = {
+      branding: countSectionOverrides('branding'),
+      theme: countSectionOverrides('theme', 'themeDark'),
+      nodes: countSectionOverrides('nodeColors', 'typeColors'),
+      home: countSectionOverrides('home'),
+      display: countSectionOverrides('ui'),
+      export: 0
+    };
+    container.querySelectorAll('.cust-tab').forEach(function(btn) {
+      var count = tabCounts[btn.dataset.tab] || 0;
+      var badge = btn.querySelector('.cust-tab-badge');
+      if (count > 0) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'cust-tab-badge';
+          var tabText = btn.querySelector('.cust-tab-text');
+          btn.insertBefore(badge, tabText);
+        }
+        badge.textContent = count;
+      } else if (badge) {
+        badge.remove();
+      }
+    });
+
+    // Helper: add/remove override dot on a label element
+    function setDot(label, section, key) {
+      if (!label) return;
+      var dot = label.querySelector('.cust-override-dot');
+      if (isFieldOverridden(section, key)) {
+        if (!dot) {
+          dot = document.createElement('span');
+          dot.className = 'cust-override-dot';
+          dot.title = 'Changed from server default';
+          dot.textContent = '⬤';
+          label.appendChild(dot);
+        }
+      } else if (dot) {
+        dot.remove();
+      }
+    }
+
+    // Theme color labels
+    var themeSection = isDarkMode() ? 'themeDark' : 'theme';
+    container.querySelectorAll('input[data-theme]').forEach(function(inp) {
+      setDot(container.querySelector('label[for="cust-theme-' + inp.dataset.theme + '"]'), themeSection, inp.dataset.theme);
+    });
+    // Node color labels
+    container.querySelectorAll('input[data-node]').forEach(function(inp) {
+      setDot(container.querySelector('label[for="cust-node-' + inp.dataset.node + '"]'), 'nodeColors', inp.dataset.node);
+    });
+    // Type color labels
+    container.querySelectorAll('input[data-type-color]').forEach(function(inp) {
+      setDot(container.querySelector('label[for="cust-type-' + inp.dataset.typeColor + '"]'), 'typeColors', inp.dataset.typeColor);
+    });
+    // Branding text fields
+    container.querySelectorAll('input[data-key^="branding."]').forEach(function(inp) {
+      var key = inp.dataset.key.replace('branding.', '');
+      var label = inp.closest('.cust-field') && inp.closest('.cust-field').querySelector('label');
+      setDot(label, 'branding', key);
+    });
   }
 
   function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
@@ -1069,8 +1136,10 @@
   }
 
   let panelEl = null;
+  let _custInner = null;
 
   function render(container) {
+    _custInner = container;
     container.innerHTML =
       renderTabs() +
       '<div class="cust-body">' +
