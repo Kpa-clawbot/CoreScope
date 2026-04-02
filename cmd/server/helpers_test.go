@@ -345,3 +345,29 @@ func TestWriteJSON(t *testing.T) {
 		t.Errorf("expected 'value', got %v", body["key"])
 	}
 }
+
+func TestHaversineKm(t *testing.T) {
+	// Same point should be 0
+	if d := haversineKm(37.0, -122.0, 37.0, -122.0); d != 0 {
+		t.Errorf("same point: expected 0, got %f", d)
+	}
+
+	// SF to LA ~559km
+	d := haversineKm(37.7749, -122.4194, 34.0522, -118.2437)
+	if d < 550 || d > 570 {
+		t.Errorf("SF to LA: expected ~559km, got %f", d)
+	}
+
+	// Symmetry
+	d1 := haversineKm(37.7749, -122.4194, 34.0522, -118.2437)
+	d2 := haversineKm(34.0522, -118.2437, 37.7749, -122.4194)
+	if d1 != d2 {
+		t.Errorf("not symmetric: %f vs %f", d1, d2)
+	}
+
+	// Oslo to Stockholm ~415km (old Euclidean dLat*111, dLon*85 would give ~627km)
+	d = haversineKm(59.9, 10.7, 59.3, 18.0)
+	if d < 400 || d > 430 {
+		t.Errorf("Oslo to Stockholm: expected ~415km, got %f", d)
+	}
+}

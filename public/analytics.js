@@ -1488,9 +1488,9 @@
             for (let i = 0; i < data.nodes.length - 1; i++) {
               const a = data.nodes[i], b = data.nodes[i+1];
               if (a.lat && a.lon && b.lat && b.lon && !(a.lat===0&&a.lon===0) && !(b.lat===0&&b.lon===0)) {
-                const dLat = (a.lat - b.lat) * 111;
-                const dLon = (a.lon - b.lon) * 85;
-                const km = Math.sqrt(dLat*dLat + dLon*dLon);
+                const km = window.HopResolver && window.HopResolver.haversineKm
+                  ? window.HopResolver.haversineKm(a.lat, a.lon, b.lat, b.lon)
+                  : (() => { const R=6371, dLat=(b.lat-a.lat)*Math.PI/180, dLon=(b.lon-a.lon)*Math.PI/180, h=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLon/2)**2; return R*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h)); })();
                 total += km;
                 const cls = km > 200 ? 'color:var(--status-red);font-weight:bold' : km > 50 ? 'color:var(--status-yellow)' : 'color:var(--status-green)';
                 dists.push(`<div style="padding:2px 0"><span style="${cls}">${km < 1 ? (km*1000).toFixed(0)+'m' : km.toFixed(1)+'km'}</span> <span class="text-muted">${esc(a.name)} → ${esc(b.name)}</span></div>`);

@@ -564,6 +564,40 @@ console.log('\n=== hop-resolver.js ===');
   });
 }
 
+// ===== haversineKm exposed from HopResolver (issue #433) =====
+console.log('\n=== haversineKm (hop-resolver.js) ===');
+{
+  const ctx = makeSandbox();
+  ctx.IATA_COORDS_GEO = {};
+  loadInCtx(ctx, 'public/hop-resolver.js');
+  const HR = ctx.window.HopResolver;
+
+  test('haversineKm is exported', () => {
+    assert.strictEqual(typeof HR.haversineKm, 'function');
+  });
+
+  test('haversineKm same point = 0', () => {
+    assert.strictEqual(HR.haversineKm(37.0, -122.0, 37.0, -122.0), 0);
+  });
+
+  test('haversineKm SF to LA ~559km', () => {
+    // San Francisco (37.7749, -122.4194) to Los Angeles (34.0522, -118.2437)
+    const d = HR.haversineKm(37.7749, -122.4194, 34.0522, -118.2437);
+    assert.ok(d > 550 && d < 570, `Expected ~559km, got ${d}`);
+  });
+
+  test('haversineKm differs from old Euclidean approximation', () => {
+    // The old code used dLat*111, dLon*85 which is inaccurate at high latitudes
+    // Oslo (59.9, 10.7) to Stockholm (59.3, 18.0)
+    const haversine = HR.haversineKm(59.9, 10.7, 59.3, 18.0);
+    const dLat = (59.9 - 59.3) * 111;
+    const dLon = (10.7 - 18.0) * 85;
+    const euclidean = Math.sqrt(dLat*dLat + dLon*dLon);
+    // Haversine should give ~415km, Euclidean ~627km (wrong because dLon*85 is wrong at 60° latitude)
+    assert.ok(Math.abs(haversine - euclidean) > 50, `Expected significant difference, haversine=${haversine.toFixed(1)}, euclidean=${euclidean.toFixed(1)}`);
+  });
+}
+
 // ===== SNR/RSSI Number casting =====
 {
   // These test the pattern used in observer-detail.js, home.js, traces.js, live.js
