@@ -2271,14 +2271,18 @@
     function animateLine(now) {
       const elapsed = now - lastStep;
       if (elapsed >= 33) {
+        const ticks = Math.min(Math.floor(elapsed / 33), 4);
         lastStep = now;
-        step++;
-        const lat = from[0] + latStep * step;
-        const lon = from[1] + lonStep * step;
-        currentCoords.push([lat, lon]);
+        for (let t = 0; t < ticks && step < steps; t++) {
+          step++;
+          const lat = from[0] + latStep * step;
+          const lon = from[1] + lonStep * step;
+          currentCoords.push([lat, lon]);
+        }
+        const lastPt = currentCoords[currentCoords.length - 1];
         line.setLatLngs(currentCoords);
         contrail.setLatLngs(currentCoords);
-        dot.setLatLng([lat, lon]);
+        dot.setLatLng(lastPt);
 
         if (step >= steps) {
           if (animLayer) animLayer.removeLayer(dot);
@@ -2295,8 +2299,9 @@
             function animateFade(now) {
               const fadeElapsed = now - lastFade;
               if (fadeElapsed >= 52) {
+                const fadeTicks = Math.min(Math.floor(fadeElapsed / 52), 4);
                 lastFade = now;
-                fadeOp -= 0.1;
+                fadeOp -= 0.1 * fadeTicks;
                 if (fadeOp <= 0) {
                   if (pathsLayer) { pathsLayer.removeLayer(line); pathsLayer.removeLayer(contrail); }
                   recentPaths = recentPaths.filter(p => p.line !== line);
