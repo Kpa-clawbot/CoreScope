@@ -2939,6 +2939,101 @@ console.log('\n=== channels.js: formatHashHex (issue #465) ===');
   });
 }
 
+// ===== MAP NEIGHBOR FILTER LOGIC =====
+{
+  console.log('\n--- Map neighbor filter logic ---');
+
+  // Simulate the filter logic from map.js _renderMarkersInner
+  function applyNeighborFilter(nodes, filters, selectedReferenceNode, neighborPubkeys) {
+    return nodes.filter(n => {
+      if (!n.lat || !n.lon) return false;
+      if (!filters[n.role || 'companion']) return false;
+      if (filters.neighbors && selectedReferenceNode && neighborPubkeys) {
+        const pk = n.public_key;
+        if (pk !== selectedReferenceNode && !neighborPubkeys.has(pk)) return false;
+      }
+      return true;
+    });
+  }
+
+  const testNodes = [
+    { public_key: 'aaa', lat: 1, lon: 1, role: 'repeater', name: 'NodeA' },
+    { public_key: 'bbb', lat: 2, lon: 2, role: 'repeater', name: 'NodeB' },
+    { public_key: 'ccc', lat: 3, lon: 3, role: 'companion', name: 'NodeC' },
+    { public_key: 'ddd', lat: 4, lon: 4, role: 'repeater', name: 'NodeD' },
+  ];
+  const baseFilters = { repeater: true, companion: true, room: true, sensor: true, neighbors: false };
+
+  test('neighbor filter off shows all nodes', () => {
+    const result = applyNeighborFilter(testNodes, baseFilters, null, null);
+    assert.strictEqual(result.length, 4);
+  });
+
+  test('neighbor filter on with no reference shows all nodes', () => {
+    const f = { ...baseFilters, neighbors: true };
+    const result = applyNeighborFilter(testNodes, f, null, null);
+    assert.strictEqual(result.length, 4);
+  });
+
+  test('neighbor filter on with reference and neighbors filters correctly', () => {
+    const f = { ...baseFilters, neighbors: true };
+    const neighborSet = new Set(['bbb', 'ccc']);
+    const result = applyNeighborFilter(testNodes, f, 'aaa', neighborSet);
+    assert.strictEqual(result.length, 3); // aaa (ref) + bbb + ccc (neighbors)
+    const pks = result.map(n => n.public_key);
+    assert.ok(pks.includes('aaa'), 'reference node should be included');
+    assert.ok(pks.includes('bbb'), 'neighbor bbb should be included');
+    assert.ok(pks.includes('ccc'), 'neighbor ccc should be included');
+    assert.ok(!pks.includes('ddd'), 'non-neighbor ddd should be excluded');
+  });
+
+  test('neighbor filter on with reference and empty neighbors shows only reference', () => {
+    const f = { ...baseFilters, neighbors: true };
+    const neighborSet = new Set();
+    const result = applyNeighborFilter(testNodes, f, 'aaa', neighborSet);
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].public_key, 'aaa');
+  });
+
+  test('neighbor filter respects role filter', () => {
+    const f = { ...baseFilters, neighbors: true, companion: false };
+    const neighborSet = new Set(['bbb', 'ccc']);
+    const result = applyNeighborFilter(testNodes, f, 'aaa', neighborSet);
+    assert.strictEqual(result.length, 2); // aaa + bbb (ccc is companion, filtered out)
+    const pks = result.map(n => n.public_key);
+    assert.ok(!pks.includes('ccc'), 'companion ccc should be filtered by role');
+  });
+
+  // Test path parsing for neighbor extraction
+  test('neighbor extraction from paths data', () => {
+    const refPubkey = 'aaa';
+    const paths = [
+      { hops: [{ pubkey: 'bbb' }, { pubkey: 'aaa' }, { pubkey: 'ccc' }] },
+      { hops: [{ pubkey: 'aaa' }, { pubkey: 'ddd' }] },
+      { hops: [{ pubkey: 'eee' }, { pubkey: 'aaa' }] },
+    ];
+    const neighborSet = new Set();
+    for (const p of paths) {
+      const hops = p.hops || [];
+      for (let i = 0; i < hops.length; i++) {
+        if (hops[i].pubkey === refPubkey) {
+          if (i > 0 && hops[i - 1].pubkey) neighborSet.add(hops[i - 1].pubkey);
+          if (i < hops.length - 1 && hops[i + 1].pubkey) neighborSet.add(hops[i + 1].pubkey);
+        }
+      }
+      if (hops.length >= 2) {
+        if (hops[0].pubkey === refPubkey && hops[1].pubkey) neighborSet.add(hops[1].pubkey);
+        if (hops[hops.length - 1].pubkey === refPubkey && hops[hops.length - 2].pubkey) neighborSet.add(hops[hops.length - 2].pubkey);
+      }
+    }
+    assert.ok(neighborSet.has('bbb'), 'bbb is adjacent in path 1');
+    assert.ok(neighborSet.has('ccc'), 'ccc is adjacent in path 1');
+    assert.ok(neighborSet.has('ddd'), 'ddd is adjacent in path 2');
+    assert.ok(neighborSet.has('eee'), 'eee is adjacent in path 3');
+    assert.strictEqual(neighborSet.size, 4);
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);

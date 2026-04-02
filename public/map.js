@@ -10,6 +10,8 @@
   let targetNodeKey = null;
   let observers = [];
   let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clusters: false, hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all' };
+  let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
+  let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
   let heatLayer = null;
   let geoFilterLayer = null;
@@ -108,6 +110,8 @@
           <fieldset class="mc-section">
             <legend class="mc-label">Filters</legend>
             <label for="mcNeighbors"><input type="checkbox" id="mcNeighbors"> Show direct neighbors</label>
+            <div id="mcNeighborRef" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Ref: <span id="mcNeighborRefName">—</span></div>
+            <div id="mcNeighborHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Click a node marker to set the reference node</div>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Last Heard</legend>
@@ -207,7 +211,19 @@
     const heatEl = document.getElementById('mcHeatmap');
     if (localStorage.getItem('meshcore-map-heatmap') === 'true') { heatEl.checked = true; }
     heatEl.addEventListener('change', e => { localStorage.setItem('meshcore-map-heatmap', e.target.checked); toggleHeatmap(e.target.checked); });
-    document.getElementById('mcNeighbors').addEventListener('change', e => { filters.neighbors = e.target.checked; renderMarkers(); });
+    document.getElementById('mcNeighbors').addEventListener('change', e => {
+      filters.neighbors = e.target.checked;
+      const hintEl = document.getElementById('mcNeighborHint');
+      const refEl = document.getElementById('mcNeighborRef');
+      if (e.target.checked && !selectedReferenceNode) {
+        hintEl.style.display = 'block';
+        refEl.style.display = 'none';
+      } else {
+        hintEl.style.display = 'none';
+        refEl.style.display = selectedReferenceNode ? 'block' : 'none';
+      }
+      renderMarkers();
+    });
 
     // Hash Labels toggle
     const hashLabelEl = document.getElementById('mcHashLabels');
@@ -646,6 +662,11 @@
         const status = getNodeStatus(role, lastMs);
         if (status !== filters.statusFilter) return false;
       }
+      // Neighbor filter: show only the reference node and its direct neighbors
+      if (filters.neighbors && selectedReferenceNode && neighborPubkeys) {
+        const pk = n.public_key;
+        if (pk !== selectedReferenceNode && !neighborPubkeys.has(pk)) return false;
+      }
       return true;
     });
 
@@ -724,6 +745,48 @@
       </div>`;
   }
 
+  async function selectReferenceNode(pubkey, name) {
+    selectedReferenceNode = pubkey;
+    neighborPubkeys = new Set();
+    try {
+      const data = await api('/nodes/' + pubkey + '/paths');
+      const paths = data.paths || [];
+      for (const p of paths) {
+        const hops = p.hops || [];
+        // Find the reference node in the path; direct neighbors are adjacent hops
+        for (let i = 0; i < hops.length; i++) {
+          if (hops[i].pubkey === pubkey) {
+            if (i > 0 && hops[i - 1].pubkey) neighborPubkeys.add(hops[i - 1].pubkey);
+            if (i < hops.length - 1 && hops[i + 1].pubkey) neighborPubkeys.add(hops[i + 1].pubkey);
+          }
+        }
+        // Also: if path length is 1 and it contains this node, all other nodes with direct comms are neighbors
+        // For 2-hop paths, if reference is first or last, the other end is a neighbor
+        if (hops.length >= 2) {
+          if (hops[0].pubkey === pubkey && hops[1].pubkey) neighborPubkeys.add(hops[1].pubkey);
+          if (hops[hops.length - 1].pubkey === pubkey && hops[hops.length - 2].pubkey) neighborPubkeys.add(hops[hops.length - 2].pubkey);
+        }
+      }
+    } catch (e) {
+      // If paths API fails, clear neighbors
+      neighborPubkeys = new Set();
+    }
+    // Update sidebar UI
+    const refEl = document.getElementById('mcNeighborRef');
+    const refNameEl = document.getElementById('mcNeighborRefName');
+    const hintEl = document.getElementById('mcNeighborHint');
+    if (refEl) { refEl.style.display = 'block'; }
+    if (refNameEl) { refNameEl.textContent = name || pubkey.slice(0, 8); }
+    if (hintEl) { hintEl.style.display = 'none'; }
+    // Auto-enable the neighbors filter
+    filters.neighbors = true;
+    const cb = document.getElementById('mcNeighbors');
+    if (cb) cb.checked = true;
+    renderMarkers();
+  }
+  // Expose for popup onclick
+  window._mapSelectRefNode = selectReferenceNode;
+
   function buildPopup(node) {
     const key = node.public_key ? truncate(node.public_key, 16) : '—';
     const loc = (node.lat && node.lon) ? `${node.lat.toFixed(5)}, ${node.lon.toFixed(5)}` : '—';
@@ -749,7 +812,10 @@
           <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Adverts</dt>
           <dd style="margin-left:88px;padding:2px 0;">${node.advert_count || 0}</dd>
         </dl>
-        <div style="margin-top:8px;clear:both;"><a href="#/nodes/${node.public_key}" style="color:var(--accent);font-size:12px;">View Node →</a></div>
+        <div style="margin-top:8px;clear:both;">
+          <a href="#/nodes/${node.public_key}" style="color:var(--accent);font-size:12px;">View Node →</a>
+          ${node.public_key ? ` · <a href="#" onclick="event.preventDefault();window._mapSelectRefNode('${node.public_key}','${safeEsc((node.name || 'Unknown').replace(/'/g, "\\'"))}')" style="color:var(--accent);font-size:12px;">Show Neighbors</a>` : ''}
+        </div>
       </div>`;
   }
 
@@ -775,6 +841,9 @@
     routeLayer = null;
     if (heatLayer) { heatLayer = null; }
     geoFilterLayer = null;
+    selectedReferenceNode = null;
+    neighborPubkeys = null;
+    delete window._mapSelectRefNode;
   }
 
   function toggleHeatmap(on) {
