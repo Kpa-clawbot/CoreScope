@@ -3126,23 +3126,7 @@ function makeNodesSandbox(opts) {
   ctx.makeColumnsResizable = () => {};
   ctx.debounce = (fn) => fn;
   ctx.Set = Set;
-  if (opts.exportInternals) {
-    const nodesSource = fs.readFileSync('public/nodes.js', 'utf8');
-    const modifiedSource = nodesSource.replace(
-      /\(function \(\) \{/,
-      '(function () { window.__nodesExport = {};'
-    ).replace(
-      /function getStatusInfo/,
-      'window.__nodesExport.getStatusInfo = getStatusInfo; function getStatusInfo'
-    ).replace(
-      /function getStatusTooltip/,
-      'window.__nodesExport.getStatusTooltip = getStatusTooltip; function getStatusTooltip'
-    );
-    vm.runInContext(modifiedSource, ctx);
-    for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
-  } else {
-    loadInCtx(ctx, 'public/nodes.js');
-  }
+  loadInCtx(ctx, 'public/nodes.js');
   return ctx;
 }
 
@@ -3451,7 +3435,7 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText =
   test('renderNodeTimestampHtml handles null', () => {
     const ctx = makeNodesSandbox();
     const html = ctx.window._nodesRenderNodeTimestampHtml(null);
-    assert.ok(html.includes('—') || html.length > 0, 'null should produce dash or safe output');
+    assert.ok(html.includes('—'), 'null should produce dash');
   });
 
   test('renderNodeTimestampText returns plain text', () => {
@@ -3473,9 +3457,9 @@ console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText =
 console.log('\n=== nodes.js: getStatusInfo edge cases ===');
 {
   
-  const ctx = makeNodesSandbox({ exportInternals: true });
-  const gsi = ctx.window.__nodesExport.getStatusInfo;
-  const gst = ctx.window.__nodesExport.getStatusTooltip;
+  const ctx = makeNodesSandbox();
+  const gsi = ctx.window._nodesGetStatusInfo;
+  const gst = ctx.window._nodesGetStatusTooltip;
 
   test('getStatusInfo with _lastHeard prefers it over last_heard', () => {
     const recent = new Date().toISOString();

@@ -967,4 +967,6 @@
   window._nodesSyncClaimedToFavorites = syncClaimedToFavorites;
   window._nodesRenderNodeTimestampHtml = renderNodeTimestampHtml;
   window._nodesRenderNodeTimestampText = renderNodeTimestampText;
+  window._nodesGetStatusInfo = getStatusInfo;
+  window._nodesGetStatusTooltip = getStatusTooltip;
 })();
