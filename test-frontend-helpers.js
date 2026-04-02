@@ -2148,6 +2148,67 @@ console.log('\n=== customize.js: initState merge behavior ===');
   });
 }
 
+// ===== customize.js: buildExport home diff against server (#284) =====
+console.log('\n=== customize.js: buildExport home diff vs server ===');
+{
+  function makeCustomizeSandbox(serverHome, localStorageHome) {
+    const ctx = makeSandbox();
+    ctx.window.SITE_CONFIG = { home: Object.assign({}, serverHome), branding: { siteName: 'Test' } };
+    ctx.window._SITE_CONFIG_ORIGINAL_HOME = JSON.parse(JSON.stringify(serverHome));
+    if (localStorageHome) {
+      ctx.localStorage.setItem('meshcore-user-theme', JSON.stringify({ home: localStorageHome }));
+    }
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/customize.js');
+    return ctx;
+  }
+
+  test('buildExport does not capture unmodified server steps in export', () => {
+    // Server has custom steps; user only edits checklist
+    const serverHome = {
+      heroTitle: 'Server Hero',
+      steps: [{ title: 'S1', desc: '' }, { title: 'S2', desc: '' }],
+      checklist: [],
+      footerLinks: []
+    };
+    const ctx = makeCustomizeSandbox(serverHome, null);
+    const buildExport = ctx.window._customizeBuildExport;
+    const initState = ctx.window._customizeInitState;
+    if (!buildExport || !initState) { console.log('    SKIP: test hooks not exposed'); return; }
+    initState();
+    const exp = buildExport();
+    assert.ok(!exp.home || !exp.home.steps,
+      'server-provided steps must not appear in export when user did not change them');
+  });
+
+  test('buildExport captures steps only when user actually changed them', () => {
+    const serverHome = {
+      heroTitle: 'Server Hero',
+      steps: [{ title: 'S1', desc: '' }],
+      checklist: [],
+      footerLinks: []
+    };
+    const localHome = { steps: [{ title: 'User Step', desc: 'edited' }] };
+    const ctx = makeCustomizeSandbox(serverHome, localHome);
+    const buildExport = ctx.window._customizeBuildExport;
+    const initState = ctx.window._customizeInitState;
+    if (!buildExport || !initState) { console.log('    SKIP: test hooks not exposed'); return; }
+    initState();
+    const exp = buildExport();
+    assert.ok(exp.home && exp.home.steps,
+      'user-modified steps must appear in export');
+    assert.strictEqual(exp.home.steps[0].title, 'User Step');
+  });
+
+  test('autoSave syncs state.home to SITE_CONFIG.home', () => {
+    const customizeSource = fs.readFileSync('public/customize.js', 'utf8');
+    assert.ok(
+      customizeSource.includes('window.SITE_CONFIG.home = Object.assign({}, window._SITE_CONFIG_ORIGINAL_HOME'),
+      'autoSave must sync state.home to SITE_CONFIG.home using _SITE_CONFIG_ORIGINAL_HOME as base'
+    );
+  });
+}
+
 // ===== APP.JS: home rehydration merge =====
 console.log('\n=== app.js: home rehydration merge ===');
 {
