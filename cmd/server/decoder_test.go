@@ -354,4 +354,63 @@ func TestDecodePacket_TransportDirect(t *testing.T) {
 	}
 }
 
+func TestBuildBreakdown_AdvertShortPayload(t *testing.T) {
+	// ADVERT with payload < 100 bytes should get generic "Payload" label, not sub-ranges
+	h := "11" + "00" + strings.Repeat("FF", 50) // header + path + 50 bytes payload (< 100)
+	bd := BuildBreakdown(h)
+	labels := rangeLabels(bd.Ranges)
+
+	// Should have Header, Path Length, Payload — no PubKey/Timestamp/Signature sub-ranges
+	if labels[len(labels)-1] != "Payload" {
+		t.Errorf("expected last range to be 'Payload', got %q", labels[len(labels)-1])
+	}
+	for _, l := range labels {
+		if l == "PubKey" || l == "Timestamp" || l == "Signature" || l == "Flags" {
+			t.Errorf("unexpected sub-range %q in short ADVERT", l)
+		}
+	}
+}
+
+func TestBuildBreakdown_AdvertLocationAndName(t *testing.T) {
+	// flags 0x91 = location(0x10) + name(0x80) + type 1
+	pubkey := strings.Repeat("AA", 32)
+	ts := "01020304"
+	sig := strings.Repeat("BB", 64)
+	lat := "11223344"
+	lon := "55667788"
+	name := strings.Repeat("4E", 6) // "NNNNNN"
+	h := "11" + "00" + pubkey + ts + sig + "91" + lat + lon + name
+	bd := BuildBreakdown(h)
+	labels := rangeLabels(bd.Ranges)
+
+	expect := []string{"Header", "Path Length", "PubKey", "Timestamp", "Signature",
+		"Flags", "Latitude", "Longitude", "Name"}
+	if len(labels) != len(expect) {
+		t.Fatalf("expected %v, got %v", expect, labels)
+	}
+	for i, e := range expect {
+		if labels[i] != e {
+			t.Errorf("range[%d]: expected %s, got %s", i, e, labels[i])
+		}
+	}
+}
+
+func TestBuildBreakdown_AdvertTrailingBytesNoName(t *testing.T) {
+	// flags 0x11 = location(0x10) + type 1, NO name bit — trailing bytes should be "AppData"
+	pubkey := strings.Repeat("AA", 32)
+	ts := "01020304"
+	sig := strings.Repeat("BB", 64)
+	lat := "11223344"
+	lon := "55667788"
+	trailing := "DEADBEEF"
+	h := "11" + "00" + pubkey + ts + sig + "11" + lat + lon + trailing
+	bd := BuildBreakdown(h)
+	labels := rangeLabels(bd.Ranges)
+
+	lastLabel := labels[len(labels)-1]
+	if lastLabel != "AppData" {
+		t.Errorf("expected trailing bytes labeled 'AppData', got %q", lastLabel)
+	}
+}
+
 // rangeLabels is defined earlier in this file

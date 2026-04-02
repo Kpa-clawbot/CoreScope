@@ -515,6 +515,8 @@ func BuildBreakdown(hexString string) *Breakdown {
 			}
 			if appFlags&0x80 != 0 && fOff < len(buf) {
 				ranges = append(ranges, HexRange{Start: fOff, End: len(buf) - 1, Label: "Name"})
+			} else if fOff < len(buf) {
+				ranges = append(ranges, HexRange{Start: fOff, End: len(buf) - 1, Label: "AppData"})
 			}
 		}
 	} else {

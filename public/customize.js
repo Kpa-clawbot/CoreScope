@@ -100,6 +100,11 @@
     selectedBg: '--selected-bg',
     font: '--font',
     mono: '--mono',
+    // Hex breakdown section colors
+    sectionHeaderBg: '--section-header-bg',
+    sectionTransportBg: '--section-transport-bg',
+    sectionPathBg: '--section-path-bg',
+    sectionPayloadBg: '--section-payload-bg',
   };
 
   /* ── Theme Presets ── */
