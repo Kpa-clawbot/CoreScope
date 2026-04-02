@@ -4537,8 +4537,18 @@ func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 		if len(tx.RawHex) < 4 {
 			continue
 		}
+		header, err := strconv.ParseUint(tx.RawHex[:2], 16, 8)
+		if err != nil {
+			continue
+		}
+		routeType := int(header & 0x03)
 		pathByte, err := strconv.ParseUint(tx.RawHex[2:4], 16, 8)
 		if err != nil {
+			continue
+		}
+		// DIRECT zero-hop adverts use path byte 0x00 locally and can misreport
+		// multibyte repeater hash mode as 1-byte.
+		if routeType == RouteDirect && (pathByte&0x3F) == 0 {
 			continue
 		}
 		hs := int((pathByte>>6)&0x3) + 1
