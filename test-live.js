@@ -617,10 +617,9 @@ console.log('\n=== live.js: resolveHopPositions ===');
     assert.ok(result.length >= 2, `should have at least 2 positions, got ${result.length}`);
     // Check that the ghost hop got an interpolated position
     const ghost = result.find(r => r.ghost);
-    if (ghost) {
-      assert.ok(ghost.pos[0] > 37.0 && ghost.pos[0] < 38.0, 'ghost lat should be interpolated');
-      assert.ok(ghost.pos[1] > -122.0 && ghost.pos[1] < -121.0, 'ghost lon should be interpolated');
-    }
+    assert.ok(ghost, 'ghost hop should be present in resolved positions — if missing, interpolation logic changed');
+    assert.ok(ghost.pos[0] > 37.0 && ghost.pos[0] < 38.0, 'ghost lat should be interpolated');
+    assert.ok(ghost.pos[1] > -122.0 && ghost.pos[1] < -121.0, 'ghost lon should be interpolated');
     delete nodeData['n1'];
     delete nodeData['n2'];
   });
@@ -648,7 +647,8 @@ console.log('\n=== live.js: bufferPacket / VCR buffer ===');
     const pkt = { hash: 'test2', decoded: { header: {}, payload: {} } };
     const before = Date.now();
     bufferPacket(pkt);
-    assert.ok(pkt._ts >= before);
+    const after = Date.now();
+    assert.ok(pkt._ts >= before && pkt._ts <= after, `_ts should be between ${before} and ${after}, got ${pkt._ts}`);
   });
 
   test('VCR buffer caps at ~2000 entries', () => {
@@ -676,15 +676,15 @@ console.log('\n=== live.js: bufferPacket / VCR buffer ===');
 
   test('bufferPacket handles malformed packet without decoded field', () => {
     const before = VCR().buffer.length;
-    // Packet with no decoded field at all — should not throw
+    // Packet with no decoded field at all — should not throw, and should still be buffered
     bufferPacket({ hash: 'malformed1' });
-    assert.ok(VCR().buffer.length >= before, 'buffer should not shrink');
+    assert.strictEqual(VCR().buffer.length, before + 1, 'malformed packet should still be added to buffer');
   });
 
   test('bufferPacket handles packet with null decoded', () => {
     const before = VCR().buffer.length;
     bufferPacket({ hash: 'malformed2', decoded: null });
-    assert.ok(VCR().buffer.length >= before, 'buffer should not shrink');
+    assert.strictEqual(VCR().buffer.length, before + 1, 'packet with null decoded should still be added to buffer');
   });
 }
 
