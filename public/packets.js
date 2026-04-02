@@ -2009,6 +2009,28 @@
   });
 
   // Standalone packet detail page: #/packet/123 or #/packet/HASH
+  // Expose pure functions for unit testing (vm.createContext pattern)
+  if (typeof window !== 'undefined') {
+    window._packetsTestAPI = {
+      typeName,
+      obsName,
+      getDetailPreview,
+      sortGroupChildren,
+      getPathHopCount,
+      renderDecodedPacket,
+      kv,
+      buildFieldTable,
+      sectionRow,
+      fieldRow,
+      renderTimestampCell,
+      renderPath,
+      _getRowCount,
+      _cumulativeRowOffsets,
+      buildGroupRowHtml,
+      buildFlatRowHtml,
+    };
+  }
+
   registerPage('packet-detail', {
     init: async (app, routeParam) => {
       const param = routeParam;
