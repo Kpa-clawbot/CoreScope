@@ -80,7 +80,7 @@ type PacketStore struct {
 	rfCache      map[string]*cachedResult // region → cached RF result
 	topoCache    map[string]*cachedResult // region → cached topology result
 	hashCache      map[string]*cachedResult // region → cached hash-sizes result
-	collisionCache *cachedResult // cached hash-collisions result (no region filtering)
+	collisionCache map[string]*cachedResult // cached hash-collisions result keyed by region ("" = global)
 	chanCache    map[string]*cachedResult // region → cached channels result
 	distCache    map[string]*cachedResult // region → cached distance result
 	subpathCache map[string]*cachedResult // params → cached subpaths result
@@ -176,6 +176,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig) *PacketStore {
 		topoCache:     make(map[string]*cachedResult),
 		hashCache:      make(map[string]*cachedResult),
 
+		collisionCache: make(map[string]*cachedResult),
 		chanCache:     make(map[string]*cachedResult),
 		distCache:     make(map[string]*cachedResult),
 		subpathCache:  make(map[string]*cachedResult),
@@ -696,7 +697,7 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 		s.rfCache = make(map[string]*cachedResult)
 		s.topoCache = make(map[string]*cachedResult)
 		s.hashCache = make(map[string]*cachedResult)
-		s.collisionCache = nil
+		s.collisionCache = make(map[string]*cachedResult)
 		s.chanCache = make(map[string]*cachedResult)
 		s.distCache = make(map[string]*cachedResult)
 		s.subpathCache = make(map[string]*cachedResult)
@@ -716,7 +717,7 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 	}
 	if inv.hasNewTransmissions {
 		s.hashCache = make(map[string]*cachedResult)
-		s.collisionCache = nil
+		s.collisionCache = make(map[string]*cachedResult)
 	}
 	if inv.hasChannelData {
 		s.chanCache = make(map[string]*cachedResult)
@@ -4181,20 +4182,20 @@ type hashSizeNodeInfo struct {
 
 // GetAnalyticsHashCollisions returns pre-computed hash collision analysis.
 // This moves the O(n²) distance computation from the frontend to the server.
-func (s *PacketStore) GetAnalyticsHashCollisions() map[string]interface{} {
+func (s *PacketStore) GetAnalyticsHashCollisions(region string) map[string]interface{} {
 	s.cacheMu.Lock()
-	if s.collisionCache != nil && time.Now().Before(s.collisionCache.expiresAt) {
+	if cached, ok := s.collisionCache[region]; ok && time.Now().Before(cached.expiresAt) {
 		s.cacheHits++
 		s.cacheMu.Unlock()
-		return s.collisionCache.data
+		return cached.data
 	}
 	s.cacheMisses++
 	s.cacheMu.Unlock()
 
-	result := s.computeHashCollisions()
+	result := s.computeHashCollisions(region)
 
 	s.cacheMu.Lock()
-	s.collisionCache = &cachedResult{data: result, expiresAt: time.Now().Add(s.collisionCacheTTL)}
+	s.collisionCache[region] = &cachedResult{data: result, expiresAt: time.Now().Add(s.collisionCacheTTL)}
 	s.cacheMu.Unlock()
 
 	return result
@@ -4236,10 +4237,59 @@ type twoByteCellInfo struct {
 	CollisionCount  int                         `json:"collision_count"`
 }
 
-func (s *PacketStore) computeHashCollisions() map[string]interface{} {
+func (s *PacketStore) computeHashCollisions(region string) map[string]interface{} {
 	// Get all nodes from DB
 	nodes := s.getAllNodes()
 	hashInfo := s.GetNodeHashSizeInfo()
+
+	// If region is specified, filter to only nodes seen by regional observers
+	if region != "" {
+		regionObs := s.resolveRegionObservers(region)
+		if regionObs != nil {
+			s.mu.RLock()
+			regionNodePKs := make(map[string]bool)
+			for _, tx := range s.packets {
+				match := false
+				for _, obs := range tx.Observations {
+					if regionObs[obs.ObserverID] {
+						match = true
+						break
+					}
+				}
+				if !match {
+					continue
+				}
+				// Collect node public keys from advert packets
+				if tx.DecodedJSON != "" {
+					var d map[string]interface{}
+					if json.Unmarshal([]byte(tx.DecodedJSON), &d) == nil {
+						if pk, ok := d["pubKey"].(string); ok && pk != "" {
+							regionNodePKs[pk] = true
+						}
+						if pk, ok := d["public_key"].(string); ok && pk != "" {
+							regionNodePKs[pk] = true
+						}
+					}
+				}
+				// Include observers themselves as nodes in the region
+				for _, obs := range tx.Observations {
+					if obs.ObserverID != "" {
+						regionNodePKs[obs.ObserverID] = true
+					}
+				}
+			}
+			s.mu.RUnlock()
+
+			// Filter nodes to only those seen in the region
+			filtered := make([]nodeInfo, 0, len(regionNodePKs))
+			for _, n := range nodes {
+				if regionNodePKs[n.PublicKey] {
+					filtered = append(filtered, n)
+				}
+			}
+			nodes = filtered
+		}
+	}
 
 	// Build collision nodes with hash info
 	var allCNodes []collisionNode

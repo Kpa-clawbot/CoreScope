@@ -148,7 +148,7 @@
         api('/analytics/rf' + sep, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/topology' + sep, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/channels' + sep, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/hash-collisions', { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/hash-collisions' + sep, { ttl: CLIENT_TTL.analyticsRF }),
       ]);
       _analyticsData = { hashData, rfData, topoData, chanData, collisionData };
       renderTab(_currentTab);

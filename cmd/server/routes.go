@@ -1235,7 +1235,8 @@ func (s *Server) handleAnalyticsHashSizes(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleAnalyticsHashCollisions(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
-		writeJSON(w, s.store.GetAnalyticsHashCollisions())
+		region := r.URL.Query().Get("region")
+		writeJSON(w, s.store.GetAnalyticsHashCollisions(region))
 		return
 	}
 	writeJSON(w, map[string]interface{}{

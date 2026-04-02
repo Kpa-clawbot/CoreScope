@@ -2680,9 +2680,9 @@ func TestHashCollisionsNoNullArrays(t *testing.T) {
 	}
 }
 
-func TestHashCollisionsRegionParamIgnored(t *testing.T) {
-	// Issue #417: region param was accepted but ignored.
-	// After fix, the endpoint should work without region and not cache per-region.
+func TestHashCollisionsRegionParam(t *testing.T) {
+	// Issue #438: region param should be accepted and used for filtering.
+	// With no region observers configured, results should be identical to global.
 	_, router := setupTestServer(t)
 
 	// Request without region
@@ -2693,7 +2693,7 @@ func TestHashCollisionsRegionParamIgnored(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w1.Code)
 	}
 
-	// Request with region param (should be ignored, same result)
+	// Request with region param (no observers for this region, so falls back to global)
 	req2 := httptest.NewRequest("GET", "/api/analytics/hash-collisions?region=us-west", nil)
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)
@@ -2701,9 +2701,9 @@ func TestHashCollisionsRegionParamIgnored(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w2.Code)
 	}
 
-	// Both should return identical results
+	// With no region observers configured, both should return identical results
 	if w1.Body.String() != w2.Body.String() {
-		t.Error("responses differ with/without region param — region should be ignored")
+		t.Error("responses differ with/without region param when no region observers configured")
 	}
 }
 
