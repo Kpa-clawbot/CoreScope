@@ -237,13 +237,19 @@
         return;
       }
 
+      // Build a Map for O(1) lookup instead of O(n) .find() per advert
+      var nodesByKey = new Map();
+      for (var i = 0; i < _allNodes.length; i++) {
+        if (_allNodes[i].public_key) nodesByKey.set(_allNodes[i].public_key, _allNodes[i]);
+      }
+
       let needReload = false;
       for (const m of advertMsgs) {
         const payload = m.data && m.data.decoded && m.data.decoded.payload;
         const pubKey = payload && (payload.pubKey || payload.public_key);
         if (!pubKey) { needReload = true; break; }
 
-        const existing = _allNodes.find(n => n.public_key === pubKey);
+        const existing = nodesByKey.get(pubKey);
         if (existing) {
           if (payload.name) existing.name = payload.name;
           if (payload.lat != null) existing.lat = payload.lat;
