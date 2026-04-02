@@ -543,6 +543,51 @@ async function run() {
     assert(hasChannelHash, 'Undecrypted GRP_TXT detail should show "Channel Hash"');
   });
 
+  // --- Group: Hex breakdown colors (#329) ---
+
+  await test('Packet detail hex dump shows color-coded sections', async () => {
+    // Find any packet with raw_hex via API
+    const hash = await page.evaluate(async () => {
+      try {
+        const res = await fetch('/api/packets?limit=100');
+        const data = await res.json();
+        for (const p of (data.packets || [])) {
+          if (p.raw_hex && p.raw_hex.length > 10) return p.hash;
+        }
+      } catch {}
+      return null;
+    });
+    if (!hash) { console.log('    ⏭️  Skipped (no packets with raw_hex found)'); return; }
+    await page.goto(`${BASE}/#/packets/${hash}`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => {
+      const panel = document.getElementById('pktRight');
+      if (!panel || panel.classList.contains('empty')) return false;
+      return panel.textContent.length > 50 && !panel.textContent.includes('Loading');
+    }, { timeout: 8000 });
+    // Verify hex dump has colored spans (not monochrome)
+    const coloredSpans = await page.$$eval('.hex-dump span[class*="hex-"]', els => els.length);
+    assert(coloredSpans > 0, 'Hex dump should have color-coded spans with hex-* classes');
+  });
+
+  await test('Packet detail shows hex legend with color swatches', async () => {
+    // Re-use the packet detail page from previous test
+    const legendItems = await page.$$eval('.hex-legend .legend-item, .hex-legend span', els => els.length);
+    assert(legendItems > 0, 'Hex legend should show color swatch items');
+  });
+
+  await test('Field breakdown table has tinted section rows', async () => {
+    // Check that section-row elements have per-section color classes
+    const sectionClasses = await page.$$eval('.field-table .section-row', rows =>
+      rows.map(r => r.className)
+    );
+    assert(sectionClasses.length > 0, 'Field table should have section rows');
+    const hasTinted = sectionClasses.some(c =>
+      c.includes('section-header') || c.includes('section-transport') ||
+      c.includes('section-path') || c.includes('section-payload')
+    );
+    assert(hasTinted, 'Section rows should have tinted color classes (section-header, section-path, etc.)');
+  });
+
   // --- Group: Analytics page (test 8 + sub-tabs) ---
 
   // Test 8: Analytics page loads with overview
