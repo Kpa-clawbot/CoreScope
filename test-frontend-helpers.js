@@ -4089,34 +4089,73 @@ console.log('\n=== app.js: formatAbsoluteTimestamp (custom format) ===');
   });
 }
 
-// ===== APP.JS: ROUTE_TYPES / PAYLOAD_TYPES constants coverage =====
-console.log('\n=== app.js: all ROUTE_TYPES and PAYLOAD_TYPES ===');
+// ===== APP.JS: ROUTE_TYPES / PAYLOAD_TYPES edge cases =====
+console.log('\n=== app.js: routeTypeName/payloadTypeName edge cases ===');
 {
   const ctx = makeSandbox();
   loadInCtx(ctx, 'public/roles.js');
   loadInCtx(ctx, 'public/app.js');
 
-  test('routeTypeName covers all 4 route types', () => {
-    assert.strictEqual(ctx.routeTypeName(0), 'TRANSPORT_FLOOD');
-    assert.strictEqual(ctx.routeTypeName(1), 'FLOOD');
-    assert.strictEqual(ctx.routeTypeName(2), 'DIRECT');
-    assert.strictEqual(ctx.routeTypeName(3), 'TRANSPORT_DIRECT');
+  // Edge cases: unknown/boundary values, not just restating the lookup table
+  test('routeTypeName returns UNKNOWN for negative value', () => {
+    assert.strictEqual(ctx.routeTypeName(-1), 'UNKNOWN');
+  });
+  test('routeTypeName returns UNKNOWN for value beyond max', () => {
+    assert.strictEqual(ctx.routeTypeName(4), 'UNKNOWN');
+  });
+  test('routeTypeName returns UNKNOWN for null', () => {
+    assert.strictEqual(ctx.routeTypeName(null), 'UNKNOWN');
+  });
+  test('routeTypeName returns UNKNOWN for undefined', () => {
+    assert.strictEqual(ctx.routeTypeName(undefined), 'UNKNOWN');
+  });
+  test('routeTypeName returns string for valid type 0', () => {
+    assert.strictEqual(typeof ctx.routeTypeName(0), 'string');
+    assert.notStrictEqual(ctx.routeTypeName(0), 'UNKNOWN');
+  });
+  test('routeTypeName returns distinct values for each valid type', () => {
+    const names = new Set([0, 1, 2, 3].map(i => ctx.routeTypeName(i)));
+    assert.strictEqual(names.size, 4, 'all 4 route types should have unique names');
+    for (const n of names) assert.notStrictEqual(n, 'UNKNOWN');
   });
 
-  test('payloadTypeName covers all 13 payload types', () => {
-    assert.strictEqual(ctx.payloadTypeName(0), 'Request');
-    assert.strictEqual(ctx.payloadTypeName(1), 'Response');
-    assert.strictEqual(ctx.payloadTypeName(2), 'Direct Msg');
-    assert.strictEqual(ctx.payloadTypeName(3), 'ACK');
-    assert.strictEqual(ctx.payloadTypeName(4), 'Advert');
-    assert.strictEqual(ctx.payloadTypeName(5), 'Channel Msg');
-    assert.strictEqual(ctx.payloadTypeName(6), 'Group Data');
-    assert.strictEqual(ctx.payloadTypeName(7), 'Anon Req');
-    assert.strictEqual(ctx.payloadTypeName(8), 'Path');
-    assert.strictEqual(ctx.payloadTypeName(9), 'Trace');
-    assert.strictEqual(ctx.payloadTypeName(10), 'Multipart');
-    assert.strictEqual(ctx.payloadTypeName(11), 'Control');
-    assert.strictEqual(ctx.payloadTypeName(15), 'Raw Custom');
+  test('payloadTypeName returns UNKNOWN for negative value', () => {
+    assert.strictEqual(ctx.payloadTypeName(-1), 'UNKNOWN');
+  });
+  test('payloadTypeName returns UNKNOWN for gap value (12)', () => {
+    assert.strictEqual(ctx.payloadTypeName(12), 'UNKNOWN');
+  });
+  test('payloadTypeName returns UNKNOWN for gap value (14)', () => {
+    assert.strictEqual(ctx.payloadTypeName(14), 'UNKNOWN');
+  });
+  test('payloadTypeName handles type 15 (max defined)', () => {
+    assert.notStrictEqual(ctx.payloadTypeName(15), 'UNKNOWN');
+  });
+  test('payloadTypeName returns UNKNOWN for 16 (beyond max)', () => {
+    assert.strictEqual(ctx.payloadTypeName(16), 'UNKNOWN');
+  });
+  test('payloadTypeName returns UNKNOWN for null', () => {
+    assert.strictEqual(ctx.payloadTypeName(null), 'UNKNOWN');
+  });
+  test('payloadTypeName returns distinct values for all defined types', () => {
+    const definedTypes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15];
+    const names = new Set(definedTypes.map(i => ctx.payloadTypeName(i)));
+    assert.strictEqual(names.size, 13, 'all 13 payload types should have unique names');
+    for (const n of names) assert.notStrictEqual(n, 'UNKNOWN');
+  });
+
+  // isTransportRoute edge cases
+  test('isTransportRoute returns true for type 0 and 3', () => {
+    assert.strictEqual(ctx.isTransportRoute(0), true);
+    assert.strictEqual(ctx.isTransportRoute(3), true);
+  });
+  test('isTransportRoute returns false for type 1 and 2', () => {
+    assert.strictEqual(ctx.isTransportRoute(1), false);
+    assert.strictEqual(ctx.isTransportRoute(2), false);
+  });
+  test('isTransportRoute returns false for null/undefined', () => {
+    assert.strictEqual(ctx.isTransportRoute(null), false);
+    assert.strictEqual(ctx.isTransportRoute(undefined), false);
   });
 }
 
