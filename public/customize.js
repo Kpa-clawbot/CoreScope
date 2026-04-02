@@ -545,9 +545,10 @@
       try {
         var data = buildExport();
         localStorage.setItem('meshcore-user-theme', JSON.stringify(data));
-        // Sync to SITE_CONFIG so live pages (home, etc.) pick up changes
+        // Sync to SITE_CONFIG so live pages (home, branding) pick up changes
         if (window.SITE_CONFIG) {
           if (state.branding) window.SITE_CONFIG.branding = Object.assign(window.SITE_CONFIG.branding || {}, state.branding);
+          if (state.home) window.SITE_CONFIG.home = Object.assign({}, window._SITE_CONFIG_ORIGINAL_HOME || {}, state.home);
         }
         // Re-render current page to reflect home/branding changes
         window.dispatchEvent(new HashChangeEvent('hashchange'));
@@ -918,13 +919,15 @@
     }
     if (Object.keys(tc).length) out.typeColors = tc;
 
-    // Home
+    // Home — diff against server config (not DEFAULTS) so unmodified server fields
+    // are not captured in localStorage and don't block future server updates.
+    var serverHome = window._SITE_CONFIG_ORIGINAL_HOME || {};
     var hm = {};
-    if (state.home.heroTitle !== DEFAULTS.home.heroTitle) hm.heroTitle = state.home.heroTitle;
-    if (state.home.heroSubtitle !== DEFAULTS.home.heroSubtitle) hm.heroSubtitle = state.home.heroSubtitle;
-    if (JSON.stringify(state.home.steps) !== JSON.stringify(DEFAULTS.home.steps)) hm.steps = state.home.steps;
-    if (JSON.stringify(state.home.checklist) !== JSON.stringify(DEFAULTS.home.checklist)) hm.checklist = state.home.checklist;
-    if (JSON.stringify(state.home.footerLinks) !== JSON.stringify(DEFAULTS.home.footerLinks)) hm.footerLinks = state.home.footerLinks;
+    if (state.home.heroTitle !== (serverHome.heroTitle !== undefined ? serverHome.heroTitle : DEFAULTS.home.heroTitle)) hm.heroTitle = state.home.heroTitle;
+    if (state.home.heroSubtitle !== (serverHome.heroSubtitle !== undefined ? serverHome.heroSubtitle : DEFAULTS.home.heroSubtitle)) hm.heroSubtitle = state.home.heroSubtitle;
+    if (JSON.stringify(state.home.steps) !== JSON.stringify(serverHome.steps !== undefined ? serverHome.steps : DEFAULTS.home.steps)) hm.steps = state.home.steps;
+    if (JSON.stringify(state.home.checklist) !== JSON.stringify(serverHome.checklist !== undefined ? serverHome.checklist : DEFAULTS.home.checklist)) hm.checklist = state.home.checklist;
+    if (JSON.stringify(state.home.footerLinks) !== JSON.stringify(serverHome.footerLinks !== undefined ? serverHome.footerLinks : DEFAULTS.home.footerLinks)) hm.footerLinks = state.home.footerLinks;
     if (Object.keys(hm).length) out.home = hm;
 
     // UI
@@ -1427,6 +1430,10 @@
       }
     }
   } catch {}
+
+  // Test hooks
+  window._customizeBuildExport = buildExport;
+  window._customizeInitState = initState;
 
   // Wire up toggle button (needs DOM)
   document.addEventListener('DOMContentLoaded', () => {
