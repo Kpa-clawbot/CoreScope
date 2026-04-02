@@ -1586,6 +1586,20 @@
   window._liveNodeMarkers = function() { return nodeMarkers; };
   window._liveNodeData = function() { return nodeData; };
   window._vcrFormatTime = vcrFormatTime;
+  window._liveDbPacketToLive = dbPacketToLive;
+  window._liveExpandToBufferEntries = expandToBufferEntries;
+  window._liveSEG_MAP = SEG_MAP;
+  window._liveBufferPacket = bufferPacket;
+  window._liveVCR = function() { return VCR; };
+  window._liveGetFavoritePubkeys = getFavoritePubkeys;
+  window._livePacketInvolvesFavorite = packetInvolvesFavorite;
+  window._liveIsNodeFavorited = isNodeFavorited;
+  window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
+  window._liveResolveHopPositions = resolveHopPositions;
+  window._liveVcrSpeedCycle = vcrSpeedCycle;
+  window._liveVcrPause = vcrPause;
+  window._liveVcrResumeLive = vcrResumeLive;
+  window._liveVcrSetMode = vcrSetMode;
 
   async function replayRecent() {
     try {
