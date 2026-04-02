@@ -92,10 +92,8 @@ function loadInCtx(ctx, file) {
   for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
 }
 
-function makeLiveSandbox() {
-  const ctx = makeSandbox();
-  // Leaflet mock
-  ctx.L = {
+function makeLeafletMock() {
+  return {
     circleMarker: () => {
       const m = {
         addTo() { return m; }, bindTooltip() { return m; }, on() { return m; },
@@ -127,6 +125,10 @@ function makeLiveSandbox() {
     control: { attribution: () => ({ addTo() {} }) },
     DomUtil: { addClass() {}, removeClass() {} },
   };
+}
+
+function addLiveGlobals(ctx) {
+  ctx.L = makeLeafletMock();
   ctx.registerPage = () => {};
   ctx.onWS = () => {};
   ctx.offWS = () => {};
@@ -140,8 +142,14 @@ function makeLiveSandbox() {
   ctx.HopResolver = { init() {}, resolve: () => ({}), ready: () => false };
   ctx.MeshAudio = null;
   ctx.RegionFilter = { init() {}, getSelected: () => null, onRegionChange: () => {} };
+}
+
+function makeLiveSandbox({ withAppJs = false } = {}) {
+  const ctx = makeSandbox();
+  addLiveGlobals(ctx);
 
   loadInCtx(ctx, 'public/roles.js');
+  if (withAppJs) loadInCtx(ctx, 'public/app.js');
   try { loadInCtx(ctx, 'public/live.js'); } catch (e) {
     for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
   }
@@ -475,43 +483,7 @@ console.log('\n=== live.js: isNodeFavorited ===');
 // ===== formatLiveTimestampHtml =====
 console.log('\n=== live.js: formatLiveTimestampHtml ===');
 {
-  // Need app.js loaded for formatTimestampWithTooltip and getTimestampMode
-  const ctx = makeSandbox();
-  ctx.L = {
-    circleMarker: () => { const m = { addTo() { return m; }, bindTooltip() { return m; }, on() { return m; }, setRadius() {}, setStyle() {}, setLatLng() {}, getLatLng() { return { lat: 0, lng: 0 }; }, _baseColor: '', _baseSize: 5, _glowMarker: null, remove() {} }; return m; },
-    polyline: () => { const p = { addTo() { return p; }, setStyle() {}, remove() {} }; return p; },
-    polygon: () => { const p = { addTo() { return p; }, remove() {} }; return p; },
-    map: () => { const m = { setView() { return m; }, addLayer() { return m; }, on() { return m; }, getZoom() { return 11; }, getCenter() { return { lat: 37, lng: -122 }; }, getBounds() { return { contains: () => true }; }, fitBounds() { return m; }, invalidateSize() {}, remove() {}, hasLayer() { return false; }, removeLayer() {} }; return m; },
-    layerGroup: () => { const g = { addTo() { return g; }, addLayer() {}, removeLayer() {}, clearLayers() {}, hasLayer() { return true; }, eachLayer() {} }; return g; },
-    tileLayer: () => ({ addTo() { return this; } }),
-    control: { attribution: () => ({ addTo() {} }) },
-    DomUtil: { addClass() {}, removeClass() {} },
-  };
-  ctx.registerPage = () => {};
-  ctx.onWS = () => {};
-  ctx.offWS = () => {};
-  ctx.connectWS = () => {};
-  ctx.api = () => Promise.resolve([]);
-  ctx.invalidateApiCache = () => {};
-  ctx.favStar = () => '';
-  ctx.bindFavStars = () => {};
-  ctx.getFavorites = () => [];
-  ctx.isFavorite = () => false;
-  ctx.HopResolver = { init() {}, resolve: () => ({}), ready: () => false };
-  ctx.MeshAudio = null;
-  ctx.RegionFilter = { init() {}, getSelected: () => null, onRegionChange: () => {} };
-  ctx.WebSocket = function() { this.close = () => {}; };
-  ctx.navigator = {};
-  ctx.visualViewport = null;
-  ctx.MutationObserver = function() { this.observe = () => {}; this.disconnect = () => {}; };
-  ctx.cancelAnimationFrame = () => {};
-  ctx.IATA_COORDS_GEO = {};
-
-  loadInCtx(ctx, 'public/roles.js');
-  loadInCtx(ctx, 'public/app.js');
-  try { loadInCtx(ctx, 'public/live.js'); } catch (e) {
-    for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
-  }
+  const ctx = makeLiveSandbox({ withAppJs: true });
 
   const fmt = ctx.window._liveFormatLiveTimestampHtml;
   assert.ok(fmt, '_liveFormatLiveTimestampHtml must be exposed');
