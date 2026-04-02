@@ -163,6 +163,62 @@ func isTransportRoute(routeType int) bool {
 	return routeType == RouteTransportFlood || routeType == RouteTransportDirect
 }
 
+// cleanHex removes whitespace from a hex string.
+func cleanHex(s string) string {
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	s = strings.ReplaceAll(s, "\r", "")
+	return s
+}
+
+// packetFrame holds parsed packet frame offsets used by both DecodePacket and BuildBreakdown.
+type packetFrame struct {
+	buf             []byte
+	header          Header
+	hasTransport    bool
+	transportOffset int // start of transport codes (if present)
+	pathOffset      int // offset of path length byte
+	pathByte        byte
+	hashSize        int
+	hashCount       int
+	pathDataOffset  int // start of path hop data
+	payloadOffset   int // start of payload
+}
+
+// parsePacketFrame parses the common packet frame structure (header, transport codes, path).
+// Returns nil if the packet is too short.
+func parsePacketFrame(buf []byte) *packetFrame {
+	if len(buf) < 2 {
+		return nil
+	}
+	f := &packetFrame{buf: buf}
+	f.header = decodeHeader(buf[0])
+	offset := 1
+
+	f.hasTransport = isTransportRoute(f.header.RouteType)
+	if f.hasTransport {
+		if len(buf) < offset+4 {
+			return nil
+		}
+		f.transportOffset = offset
+		offset += 4
+	}
+
+	if offset >= len(buf) {
+		return nil
+	}
+	f.pathOffset = offset
+	f.pathByte = buf[offset]
+	offset++
+
+	f.hashSize = int(f.pathByte>>6) + 1
+	f.hashCount = int(f.pathByte & 0x3F)
+	f.pathDataOffset = offset
+	offset += f.hashSize * f.hashCount
+	f.payloadOffset = offset
+	return f
+}
+
 func decodeEncryptedPayload(typeName string, buf []byte) Payload {
 	if len(buf) < 4 {
 		return Payload{Type: typeName, Error: "too short", RawHex: hex.EncodeToString(buf)}
@@ -334,49 +390,34 @@ func decodePayload(payloadType int, buf []byte) Payload {
 
 // DecodePacket decodes a hex-encoded MeshCore packet.
 func DecodePacket(hexString string) (*DecodedPacket, error) {
-	hexString = strings.ReplaceAll(hexString, " ", "")
-	hexString = strings.ReplaceAll(hexString, "\n", "")
-	hexString = strings.ReplaceAll(hexString, "\r", "")
+	hexString = cleanHex(hexString)
 
 	buf, err := hex.DecodeString(hexString)
 	if err != nil {
 		return nil, fmt.Errorf("invalid hex: %w", err)
 	}
-	if len(buf) < 2 {
-		return nil, fmt.Errorf("packet too short (need at least header + pathLength)")
-	}
 
-	header := decodeHeader(buf[0])
-	offset := 1
+	f := parsePacketFrame(buf)
+	if f == nil {
+		return nil, fmt.Errorf("packet too short")
+	}
 
 	var tc *TransportCodes
-	if isTransportRoute(header.RouteType) {
-		if len(buf) < offset+4 {
-			return nil, fmt.Errorf("packet too short for transport codes")
-		}
+	if f.hasTransport {
 		tc = &TransportCodes{
-			Code1: strings.ToUpper(hex.EncodeToString(buf[offset : offset+2])),
-			Code2: strings.ToUpper(hex.EncodeToString(buf[offset+2 : offset+4])),
+			Code1: strings.ToUpper(hex.EncodeToString(buf[f.transportOffset : f.transportOffset+2])),
+			Code2: strings.ToUpper(hex.EncodeToString(buf[f.transportOffset+2 : f.transportOffset+4])),
 		}
-		offset += 4
 	}
 
-	if offset >= len(buf) {
-		return nil, fmt.Errorf("packet too short (no path byte)")
-	}
-	pathByte := buf[offset]
-	offset++
-
-	path, bytesConsumed := decodePath(pathByte, buf, offset)
-	offset += bytesConsumed
-
-	payloadBuf := buf[offset:]
-	payload := decodePayload(header.PayloadType, payloadBuf)
+	path, _ := decodePath(f.pathByte, buf, f.pathDataOffset)
+	payloadBuf := buf[f.payloadOffset:]
+	payload := decodePayload(f.header.PayloadType, payloadBuf)
 
 	// TRACE packets store hop IDs in the payload (buf[9:]) rather than the header
 	// path field. The header path byte still encodes hashSize in bits 6-7, which
 	// we use to split the payload path data into individual hop prefixes.
-	if header.PayloadType == PayloadTRACE && payload.PathData != "" {
+	if f.header.PayloadType == PayloadTRACE && payload.PathData != "" {
 		pathBytes, err := hex.DecodeString(payload.PathData)
 		if err == nil && path.HashSize > 0 {
 			hops := make([]string, 0, len(pathBytes)/path.HashSize)
@@ -389,7 +430,7 @@ func DecodePacket(hexString string) (*DecodedPacket, error) {
 	}
 
 	return &DecodedPacket{
-		Header:         header,
+		Header:         f.header,
 		TransportCodes: tc,
 		Path:           path,
 		Payload:        payload,
@@ -411,66 +452,50 @@ type Breakdown struct {
 
 // BuildBreakdown computes labeled byte ranges for each section of a MeshCore packet.
 // The returned ranges are consumed by createColoredHexDump() and buildHexLegend()
-// in the frontend (public/app.js).
+// in the frontend (public/packets.js).
 func BuildBreakdown(hexString string) *Breakdown {
-	hexString = strings.ReplaceAll(hexString, " ", "")
-	hexString = strings.ReplaceAll(hexString, "\n", "")
-	hexString = strings.ReplaceAll(hexString, "\r", "")
+	hexString = cleanHex(hexString)
 	buf, err := hex.DecodeString(hexString)
 	if err != nil || len(buf) < 2 {
 		return &Breakdown{Ranges: []HexRange{}}
 	}
 
+	f := parsePacketFrame(buf)
+	if f == nil {
+		return &Breakdown{Ranges: []HexRange{{Start: 0, End: 0, Label: "Header"}}}
+	}
+
 	var ranges []HexRange
-	offset := 0
 
-	// Byte 0: Header
+	// Header byte
 	ranges = append(ranges, HexRange{Start: 0, End: 0, Label: "Header"})
-	offset = 1
 
-	header := decodeHeader(buf[0])
-
-	// Bytes 1-4: Transport Codes (TRANSPORT_FLOOD / TRANSPORT_DIRECT only)
-	if isTransportRoute(header.RouteType) {
-		if len(buf) < offset+4 {
-			return &Breakdown{Ranges: ranges}
-		}
-		ranges = append(ranges, HexRange{Start: offset, End: offset + 3, Label: "Transport Codes"})
-		offset += 4
+	// Transport codes
+	if f.hasTransport {
+		ranges = append(ranges, HexRange{Start: f.transportOffset, End: f.transportOffset + 3, Label: "Transport Codes"})
 	}
 
-	if offset >= len(buf) {
-		return &Breakdown{Ranges: ranges}
-	}
-
-	// Next byte: Path Length (bits 7-6 = hashSize-1, bits 5-0 = hashCount)
-	ranges = append(ranges, HexRange{Start: offset, End: offset, Label: "Path Length"})
-	pathByte := buf[offset]
-	offset++
-
-	hashSize := int(pathByte>>6) + 1
-	hashCount := int(pathByte & 0x3F)
-	pathBytes := hashSize * hashCount
+	// Path length byte
+	ranges = append(ranges, HexRange{Start: f.pathOffset, End: f.pathOffset, Label: "Path Length"})
 
 	// Path hops
-	if hashCount > 0 && offset+pathBytes <= len(buf) {
-		ranges = append(ranges, HexRange{Start: offset, End: offset + pathBytes - 1, Label: "Path"})
+	pathBytes := f.hashSize * f.hashCount
+	if f.hashCount > 0 && f.pathDataOffset+pathBytes <= len(buf) {
+		ranges = append(ranges, HexRange{Start: f.pathDataOffset, End: f.pathDataOffset + pathBytes - 1, Label: "Path"})
 	}
-	offset += pathBytes
 
-	if offset >= len(buf) {
+	if f.payloadOffset >= len(buf) {
 		return &Breakdown{Ranges: ranges}
 	}
 
-	payloadStart := offset
-
 	// Payload — break ADVERT into named sub-fields; everything else is one Payload range
-	if header.PayloadType == PayloadADVERT && len(buf)-payloadStart >= 100 {
-		ranges = append(ranges, HexRange{Start: payloadStart, End: payloadStart + 31, Label: "PubKey"})
-		ranges = append(ranges, HexRange{Start: payloadStart + 32, End: payloadStart + 35, Label: "Timestamp"})
-		ranges = append(ranges, HexRange{Start: payloadStart + 36, End: payloadStart + 99, Label: "Signature"})
+	if f.header.PayloadType == PayloadADVERT && len(buf)-f.payloadOffset >= 100 {
+		ps := f.payloadOffset
+		ranges = append(ranges, HexRange{Start: ps, End: ps + 31, Label: "PubKey"})
+		ranges = append(ranges, HexRange{Start: ps + 32, End: ps + 35, Label: "Timestamp"})
+		ranges = append(ranges, HexRange{Start: ps + 36, End: ps + 99, Label: "Signature"})
 
-		appStart := payloadStart + 100
+		appStart := ps + 100
 		if appStart < len(buf) {
 			ranges = append(ranges, HexRange{Start: appStart, End: appStart, Label: "Flags"})
 			appFlags := buf[appStart]
@@ -481,9 +506,11 @@ func BuildBreakdown(hexString string) *Breakdown {
 				fOff += 8
 			}
 			if appFlags&0x20 != 0 && fOff+2 <= len(buf) {
+				ranges = append(ranges, HexRange{Start: fOff, End: fOff + 1, Label: "Feature1"})
 				fOff += 2
 			}
 			if appFlags&0x40 != 0 && fOff+2 <= len(buf) {
+				ranges = append(ranges, HexRange{Start: fOff, End: fOff + 1, Label: "Feature2"})
 				fOff += 2
 			}
 			if appFlags&0x80 != 0 && fOff < len(buf) {
@@ -491,7 +518,7 @@ func BuildBreakdown(hexString string) *Breakdown {
 			}
 		}
 	} else {
-		ranges = append(ranges, HexRange{Start: payloadStart, End: len(buf) - 1, Label: "Payload"})
+		ranges = append(ranges, HexRange{Start: f.payloadOffset, End: len(buf) - 1, Label: "Payload"})
 	}
 
 	return &Breakdown{Ranges: ranges}

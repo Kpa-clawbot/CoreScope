@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -242,3 +243,121 @@ func repeatHex(byteHex string, n int) string {
 	}
 	return s
 }
+
+// --- BuildBreakdown tests (PR #500 review feedback) ---
+
+func TestBuildBreakdown_SimplePayload(t *testing.T) {
+	// Header 0x11 = ADVERT + ZERO_HOP, path byte 0x00 = no hops
+	// Payload < 100 bytes → single "Payload" range
+	h := "1100" + strings.Repeat("AB", 10)
+	bd := BuildBreakdown(h)
+	labels := rangeLabels(bd.Ranges)
+	expect := []string{"Header", "Path Length", "Payload"}
+	if len(labels) != len(expect) {
+		t.Fatalf("expected %v, got %v", expect, labels)
+	}
+	for i, e := range expect {
+		if labels[i] != e {
+			t.Errorf("range[%d]: expected %s, got %s", i, e, labels[i])
+		}
+	}
+}
+
+func TestBuildBreakdown_TransportDirect(t *testing.T) {
+	// TXT_MSG (0x01) + TRANSPORT_DIRECT (route 3) = 0x07
+	h := "07" + "AABBCCDD" + "00" + strings.Repeat("EE", 5)
+	bd := BuildBreakdown(h)
+	labels := rangeLabels(bd.Ranges)
+	if len(labels) < 4 {
+		t.Fatalf("expected ≥4 ranges, got %v", labels)
+	}
+	if labels[1] != "Transport Codes" {
+		t.Errorf("expected Transport Codes, got %s", labels[1])
+	}
+	if bd.Ranges[1].Start != 1 || bd.Ranges[1].End != 4 {
+		t.Errorf("transport range wrong: %d-%d", bd.Ranges[1].Start, bd.Ranges[1].End)
+	}
+}
+
+func TestBuildBreakdown_AdvertAllFlags(t *testing.T) {
+	// ADVERT + ZERO_HOP = 0x11, path 0x00
+	// flags 0xF2 = location(0x10) + feat1(0x20) + feat2(0x40) + name(0x80) + type 2
+	pubkey := strings.Repeat("AA", 32)
+	ts := "01020304"
+	sig := strings.Repeat("BB", 64)
+	flags := "F2"
+	loc := "0100000002000000"
+	feat1 := "C1C2"
+	feat2 := "D1D2"
+	name := strings.Repeat("48", 5)
+
+	h := "11" + "00" + pubkey + ts + sig + flags + loc + feat1 + feat2 + name
+	bd := BuildBreakdown(h)
+	labels := rangeLabels(bd.Ranges)
+
+	expect := []string{"Header", "Path Length", "PubKey", "Timestamp", "Signature",
+		"Flags", "Latitude", "Longitude", "Feature1", "Feature2", "Name"}
+	if len(labels) != len(expect) {
+		t.Fatalf("expected %v, got %v", expect, labels)
+	}
+	for i, e := range expect {
+		if labels[i] != e {
+			t.Errorf("range[%d]: expected %s, got %s", i, e, labels[i])
+		}
+	}
+	// Verify no overlaps
+	for i := 1; i < len(bd.Ranges); i++ {
+		if bd.Ranges[i].Start <= bd.Ranges[i-1].End && bd.Ranges[i].Start < bd.Ranges[i-1].End {
+			t.Errorf("overlap: %s [%d-%d] and %s [%d-%d]",
+				bd.Ranges[i-1].Label, bd.Ranges[i-1].Start, bd.Ranges[i-1].End,
+				bd.Ranges[i].Label, bd.Ranges[i].Start, bd.Ranges[i].End)
+		}
+	}
+	// Feature1 & Feature2 are each 2 bytes
+	if sz := bd.Ranges[8].End - bd.Ranges[8].Start + 1; sz != 2 {
+		t.Errorf("Feature1 should be 2 bytes, got %d", sz)
+	}
+	if sz := bd.Ranges[9].End - bd.Ranges[9].Start + 1; sz != 2 {
+		t.Errorf("Feature2 should be 2 bytes, got %d", sz)
+	}
+}
+
+func TestBuildBreakdown_AdvertFeat1Only(t *testing.T) {
+	// flags 0xA1 = feat1(0x20) + name(0x80) + type 1, no location
+	pubkey := strings.Repeat("AA", 32)
+	ts := "01020304"
+	sig := strings.Repeat("BB", 64)
+	h := "11" + "00" + pubkey + ts + sig + "A1" + "F1F2" + strings.Repeat("4E", 4)
+	bd := BuildBreakdown(h)
+	labels := rangeLabels(bd.Ranges)
+
+	expect := []string{"Header", "Path Length", "PubKey", "Timestamp", "Signature",
+		"Flags", "Feature1", "Name"}
+	if len(labels) != len(expect) {
+		t.Fatalf("expected %v, got %v", expect, labels)
+	}
+	for i, e := range expect {
+		if labels[i] != e {
+			t.Errorf("range[%d]: expected %s, got %s", i, e, labels[i])
+		}
+	}
+}
+
+func TestDecodePacket_TransportDirect(t *testing.T) {
+	h := "07" + "AABBCCDD" + "00" + strings.Repeat("EE", 5)
+	pkt, err := DecodePacket(h)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pkt.Header.RouteType != RouteTransportDirect {
+		t.Errorf("expected route %d, got %d", RouteTransportDirect, pkt.Header.RouteType)
+	}
+	if pkt.TransportCodes == nil {
+		t.Fatal("expected transport codes")
+	}
+	if pkt.TransportCodes.Code1 != "AABB" {
+		t.Errorf("Code1: expected AABB, got %s", pkt.TransportCodes.Code1)
+	}
+}
+
+// rangeLabels is defined earlier in this file
