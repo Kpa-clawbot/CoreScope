@@ -964,7 +964,6 @@
   window._nodesSortArrow = sortArrow;
   window._nodesGetSortState = function() { return sortState; };
   window._nodesSetSortState = function(s) { sortState = s; };
-  window._nodesSortArrow = sortArrow;
   window._nodesSyncClaimedToFavorites = syncClaimedToFavorites;
   window._nodesRenderNodeTimestampHtml = renderNodeTimestampHtml;
   window._nodesRenderNodeTimestampText = renderNodeTimestampText;
