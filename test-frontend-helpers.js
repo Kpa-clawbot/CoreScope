@@ -3538,6 +3538,588 @@ console.log('\n=== nodes.js: getStatusInfo edge cases ===');
   });
 }
 
+// ===== APP.JS: payloadTypeColor =====
+console.log('\n=== app.js: payloadTypeColor ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const payloadTypeColor = ctx.payloadTypeColor;
+
+  test('payloadTypeColor(0) = req', () => assert.strictEqual(payloadTypeColor(0), 'req'));
+  test('payloadTypeColor(1) = response', () => assert.strictEqual(payloadTypeColor(1), 'response'));
+  test('payloadTypeColor(4) = advert', () => assert.strictEqual(payloadTypeColor(4), 'advert'));
+  test('payloadTypeColor(5) = grp-txt', () => assert.strictEqual(payloadTypeColor(5), 'grp-txt'));
+  test('payloadTypeColor(99) = unknown', () => assert.strictEqual(payloadTypeColor(99), 'unknown'));
+  test('payloadTypeColor(null) = unknown', () => assert.strictEqual(payloadTypeColor(null), 'unknown'));
+  test('payloadTypeColor(undefined) = unknown', () => assert.strictEqual(payloadTypeColor(undefined), 'unknown'));
+  test('payloadTypeColor(2) = txt-msg', () => assert.strictEqual(payloadTypeColor(2), 'txt-msg'));
+  test('payloadTypeColor(3) = ack', () => assert.strictEqual(payloadTypeColor(3), 'ack'));
+  test('payloadTypeColor(7) = anon-req', () => assert.strictEqual(payloadTypeColor(7), 'anon-req'));
+  test('payloadTypeColor(8) = path', () => assert.strictEqual(payloadTypeColor(8), 'path'));
+  test('payloadTypeColor(9) = trace', () => assert.strictEqual(payloadTypeColor(9), 'trace'));
+  test('payloadTypeColor(6) = unknown (no mapping for 6)', () => assert.strictEqual(payloadTypeColor(6), 'unknown'));
+}
+
+// ===== APP.JS: pad2 / pad3 =====
+console.log('\n=== app.js: pad2 / pad3 ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const pad2 = ctx.pad2;
+  const pad3 = ctx.pad3;
+
+  test('pad2(0) = "00"', () => assert.strictEqual(pad2(0), '00'));
+  test('pad2(5) = "05"', () => assert.strictEqual(pad2(5), '05'));
+  test('pad2(12) = "12"', () => assert.strictEqual(pad2(12), '12'));
+  test('pad2(99) = "99"', () => assert.strictEqual(pad2(99), '99'));
+  test('pad2(100) = "100" (no truncation)', () => assert.strictEqual(pad2(100), '100'));
+
+  test('pad3(0) = "000"', () => assert.strictEqual(pad3(0), '000'));
+  test('pad3(5) = "005"', () => assert.strictEqual(pad3(5), '005'));
+  test('pad3(42) = "042"', () => assert.strictEqual(pad3(42), '042'));
+  test('pad3(123) = "123"', () => assert.strictEqual(pad3(123), '123'));
+  test('pad3(999) = "999"', () => assert.strictEqual(pad3(999), '999'));
+}
+
+// ===== APP.JS: formatIsoLike =====
+console.log('\n=== app.js: formatIsoLike ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const formatIsoLike = ctx.formatIsoLike;
+
+  test('formatIsoLike UTC without ms', () => {
+    const d = new Date('2024-03-15T08:05:03.456Z');
+    assert.strictEqual(formatIsoLike(d, 'utc', false), '2024-03-15 08:05:03');
+  });
+
+  test('formatIsoLike UTC with ms', () => {
+    const d = new Date('2024-03-15T08:05:03.456Z');
+    assert.strictEqual(formatIsoLike(d, 'utc', true), '2024-03-15 08:05:03.456');
+  });
+
+  test('formatIsoLike local without ms', () => {
+    const d = new Date('2024-03-15T08:05:03.456Z');
+    const result = formatIsoLike(d, 'local', false);
+    assert.ok(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(result));
+  });
+
+  test('formatIsoLike local with ms', () => {
+    const d = new Date('2024-03-15T08:05:03.456Z');
+    const result = formatIsoLike(d, 'local', true);
+    assert.ok(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/.test(result));
+  });
+
+  test('formatIsoLike pads single-digit values', () => {
+    const d = new Date('2024-01-02T03:04:05.006Z');
+    assert.strictEqual(formatIsoLike(d, 'utc', true), '2024-01-02 03:04:05.006');
+  });
+}
+
+// ===== APP.JS: formatTimestampCustom =====
+console.log('\n=== app.js: formatTimestampCustom ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const formatTimestampCustom = ctx.formatTimestampCustom;
+
+  test('replaces all tokens correctly (UTC)', () => {
+    const d = new Date('2024-03-15T08:05:03.456Z');
+    const result = formatTimestampCustom(d, 'YYYY-MM-DD HH:mm:ss.SSS Z', 'utc');
+    assert.strictEqual(result, '2024-03-15 08:05:03.456 UTC');
+  });
+
+  test('replaces all tokens correctly (local)', () => {
+    const d = new Date('2024-03-15T08:05:03.456Z');
+    const result = formatTimestampCustom(d, 'YYYY/MM/DD HH:mm:ss Z', 'local');
+    assert.ok(result.endsWith('local'));
+    assert.ok(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} local$/.test(result));
+  });
+
+  test('returns empty for format with no valid tokens', () => {
+    const d = new Date('2024-03-15T08:05:03Z');
+    assert.strictEqual(formatTimestampCustom(d, 'no tokens here', 'utc'), '');
+  });
+
+  test('handles partial format strings', () => {
+    const d = new Date('2024-03-15T08:05:03Z');
+    assert.strictEqual(formatTimestampCustom(d, 'HH:mm', 'utc'), '08:05');
+  });
+
+  test('handles only date tokens', () => {
+    const d = new Date('2024-03-15T08:05:03Z');
+    assert.strictEqual(formatTimestampCustom(d, 'YYYY-MM-DD', 'utc'), '2024-03-15');
+  });
+}
+
+// ===== APP.JS: getTimestampMode / getTimestampTimezone / getTimestampFormatPreset / getTimestampCustomFormat =====
+console.log('\n=== app.js: timestamp preference getters ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+
+  // getTimestampMode
+  test('getTimestampMode defaults to ago', () => {
+    assert.strictEqual(ctx.getTimestampMode(), 'ago');
+  });
+  test('getTimestampMode reads localStorage', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-mode', 'absolute');
+    assert.strictEqual(ctx.getTimestampMode(), 'absolute');
+    ctx.localStorage.removeItem('meshcore-timestamp-mode');
+  });
+  test('getTimestampMode falls back to server config', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { defaultMode: 'absolute' } };
+    assert.strictEqual(ctx.getTimestampMode(), 'absolute');
+    ctx.window.SITE_CONFIG = null;
+  });
+  test('getTimestampMode ignores invalid localStorage value', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-mode', 'invalid');
+    assert.strictEqual(ctx.getTimestampMode(), 'ago');
+    ctx.localStorage.removeItem('meshcore-timestamp-mode');
+  });
+
+  // getTimestampTimezone
+  test('getTimestampTimezone defaults to local', () => {
+    assert.strictEqual(ctx.getTimestampTimezone(), 'local');
+  });
+  test('getTimestampTimezone reads localStorage', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    assert.strictEqual(ctx.getTimestampTimezone(), 'utc');
+    ctx.localStorage.removeItem('meshcore-timestamp-timezone');
+  });
+  test('getTimestampTimezone falls back to server config', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { timezone: 'utc' } };
+    assert.strictEqual(ctx.getTimestampTimezone(), 'utc');
+    ctx.window.SITE_CONFIG = null;
+  });
+
+  // getTimestampFormatPreset
+  test('getTimestampFormatPreset defaults to iso', () => {
+    assert.strictEqual(ctx.getTimestampFormatPreset(), 'iso');
+  });
+  test('getTimestampFormatPreset reads localStorage', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-format', 'iso-seconds');
+    assert.strictEqual(ctx.getTimestampFormatPreset(), 'iso-seconds');
+    ctx.localStorage.removeItem('meshcore-timestamp-format');
+  });
+  test('getTimestampFormatPreset reads locale from localStorage', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-format', 'locale');
+    assert.strictEqual(ctx.getTimestampFormatPreset(), 'locale');
+    ctx.localStorage.removeItem('meshcore-timestamp-format');
+  });
+
+  // getTimestampCustomFormat
+  test('getTimestampCustomFormat returns empty when not allowed', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { allowCustomFormat: false } };
+    assert.strictEqual(ctx.getTimestampCustomFormat(), '');
+  });
+  test('getTimestampCustomFormat reads localStorage when allowed', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { allowCustomFormat: true } };
+    ctx.localStorage.setItem('meshcore-timestamp-custom-format', 'YYYY/MM/DD');
+    assert.strictEqual(ctx.getTimestampCustomFormat(), 'YYYY/MM/DD');
+    ctx.localStorage.removeItem('meshcore-timestamp-custom-format');
+    ctx.window.SITE_CONFIG = null;
+  });
+  test('getTimestampCustomFormat falls back to server config', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { allowCustomFormat: true, customFormat: 'HH:mm' } };
+    assert.strictEqual(ctx.getTimestampCustomFormat(), 'HH:mm');
+    ctx.window.SITE_CONFIG = null;
+  });
+}
+
+// ===== APP.JS: invalidateApiCache =====
+console.log('\n=== app.js: invalidateApiCache ===');
+{
+  // Each test uses its own sandbox to avoid shared state between async tests
+
+  test('invalidateApiCache causes api to re-fetch after cache bust', async () => {
+    const ctx = makeSandbox();
+    let fetchCount = 0;
+    ctx.fetch = () => { fetchCount++; return Promise.resolve({ ok: true, json: () => Promise.resolve({ r: fetchCount }) }); };
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    const flush = () => new Promise(r => setImmediate(r));
+    await ctx.api('/test', { ttl: 60000 });
+    await flush();
+    const c1 = fetchCount;
+    await ctx.api('/test', { ttl: 60000 });
+    assert.strictEqual(fetchCount, c1, 'second call should use cache');
+    ctx.invalidateApiCache('/test');
+    await ctx.api('/test', { ttl: 60000 });
+    assert.ok(fetchCount > c1, 'should re-fetch after invalidation');
+  });
+
+  test('invalidateApiCache with no prefix busts all entries', async () => {
+    const ctx = makeSandbox();
+    let fetchCount = 0;
+    ctx.fetch = () => { fetchCount++; return Promise.resolve({ ok: true, json: () => Promise.resolve({ r: fetchCount }) }); };
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    const flush = () => new Promise(r => setImmediate(r));
+    await ctx.api('/a', { ttl: 60000 }); await flush();
+    await ctx.api('/b', { ttl: 60000 }); await flush();
+    const c1 = fetchCount;
+    await ctx.api('/a', { ttl: 60000 });
+    assert.strictEqual(fetchCount, c1, 'cache should work');
+    ctx.invalidateApiCache();
+    await ctx.api('/a', { ttl: 60000 });
+    await ctx.api('/b', { ttl: 60000 });
+    assert.strictEqual(fetchCount, c1 + 2, 'both should re-fetch');
+  });
+
+  test('invalidateApiCache with prefix only busts matching', async () => {
+    const ctx = makeSandbox();
+    let fetchCount = 0;
+    ctx.fetch = () => { fetchCount++; return Promise.resolve({ ok: true, json: () => Promise.resolve({ r: fetchCount }) }); };
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    const flush = () => new Promise(r => setImmediate(r));
+    await ctx.api('/statsX', { ttl: 60000 }); await flush();
+    await ctx.api('/nodesX', { ttl: 60000 }); await flush();
+    const c1 = fetchCount;
+    ctx.invalidateApiCache('/statsX');
+    await ctx.api('/statsX', { ttl: 60000 }); await flush();
+    assert.strictEqual(fetchCount, c1 + 1, '/statsX should re-fetch');
+    await ctx.api('/nodesX', { ttl: 60000 });
+    assert.strictEqual(fetchCount, c1 + 1, '/nodesX should still use cache');
+  });
+}
+
+// ===== APP.JS: formatHex =====
+console.log('\n=== app.js: formatHex ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const formatHex = ctx.formatHex;
+
+  test('formatHex formats bytes with spaces', () => {
+    assert.strictEqual(formatHex('aabbcc'), 'aa bb cc');
+  });
+  test('formatHex handles single byte', () => {
+    assert.strictEqual(formatHex('ff'), 'ff');
+  });
+  test('formatHex returns empty for null', () => {
+    assert.strictEqual(formatHex(null), '');
+  });
+  test('formatHex returns empty for empty string', () => {
+    assert.strictEqual(formatHex(''), '');
+  });
+  test('formatHex handles odd-length hex', () => {
+    assert.strictEqual(formatHex('aabbc'), 'aa bb c');
+  });
+}
+
+// ===== APP.JS: createColoredHexDump =====
+console.log('\n=== app.js: createColoredHexDump ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const createColoredHexDump = ctx.createColoredHexDump;
+
+  test('returns plain hex-byte span when no ranges', () => {
+    const result = createColoredHexDump('aabb', []);
+    assert.ok(result.includes('hex-byte'));
+    assert.ok(result.includes('aa bb'));
+  });
+
+  test('returns plain hex-byte span when ranges is null', () => {
+    const result = createColoredHexDump('aabb', null);
+    assert.ok(result.includes('hex-byte'));
+  });
+
+  test('colors bytes by range label', () => {
+    const result = createColoredHexDump('aabbccdd', [
+      { label: 'Header', start: 0, end: 1 },
+      { label: 'Payload', start: 2, end: 3 },
+    ]);
+    assert.ok(result.includes('hex-header'));
+    assert.ok(result.includes('hex-payload'));
+  });
+
+  test('later ranges override earlier ones', () => {
+    const result = createColoredHexDump('aabb', [
+      { label: 'Header', start: 0, end: 1 },
+      { label: 'Payload', start: 0, end: 1 },
+    ]);
+    // Payload should win since it comes later
+    assert.ok(result.includes('hex-payload'));
+  });
+
+  test('handles null hex', () => {
+    const result = createColoredHexDump(null, [{ label: 'Header', start: 0, end: 0 }]);
+    assert.ok(result.includes('hex-byte'));
+  });
+
+  test('handles empty hex', () => {
+    const result = createColoredHexDump('', [{ label: 'Header', start: 0, end: 0 }]);
+    assert.ok(result.includes('hex-byte'));
+  });
+}
+
+// ===== APP.JS: buildHexLegend =====
+console.log('\n=== app.js: buildHexLegend ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const buildHexLegend = ctx.buildHexLegend;
+
+  test('returns empty for null ranges', () => {
+    assert.strictEqual(buildHexLegend(null), '');
+  });
+  test('returns empty for empty ranges', () => {
+    assert.strictEqual(buildHexLegend([]), '');
+  });
+  test('builds legend entries with swatches', () => {
+    const result = buildHexLegend([
+      { label: 'Header', start: 0, end: 1 },
+      { label: 'Payload', start: 2, end: 3 },
+    ]);
+    assert.ok(result.includes('Header'));
+    assert.ok(result.includes('Payload'));
+    assert.ok(result.includes('swatch'));
+  });
+  test('deduplicates same label', () => {
+    const result = buildHexLegend([
+      { label: 'Header', start: 0, end: 1 },
+      { label: 'Header', start: 2, end: 3 },
+    ]);
+    const count = (result.match(/Header/g) || []).length;
+    assert.strictEqual(count, 1);
+  });
+  test('uses correct background colors per label', () => {
+    const result = buildHexLegend([{ label: 'Path', start: 0, end: 0 }]);
+    assert.ok(result.includes('#a6e3a1'), 'Path should have green swatch');
+  });
+}
+
+// ===== APP.JS: favorites (getFavorites, isFavorite, toggleFavorite, favStar) =====
+console.log('\n=== app.js: favorites ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+
+  test('getFavorites returns empty array when no data', () => {
+    assert.deepStrictEqual(ctx.getFavorites(), []);
+  });
+
+  test('getFavorites returns saved array', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '["pk1","pk2"]');
+    assert.deepStrictEqual(ctx.getFavorites(), ['pk1', 'pk2']);
+  });
+
+  test('getFavorites handles corrupt JSON', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '{bad}');
+    const result = ctx.getFavorites();
+    assert.ok(Array.isArray(result));
+    assert.strictEqual(result.length, 0);
+  });
+
+  test('isFavorite returns true for saved key', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '["pk1"]');
+    assert.strictEqual(ctx.isFavorite('pk1'), true);
+  });
+
+  test('isFavorite returns false for unsaved key', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '["pk1"]');
+    assert.strictEqual(ctx.isFavorite('pk2'), false);
+  });
+
+  test('toggleFavorite adds key', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '[]');
+    const result = ctx.toggleFavorite('pk1');
+    assert.strictEqual(result, true);
+    assert.deepStrictEqual(ctx.getFavorites(), ['pk1']);
+  });
+
+  test('toggleFavorite removes existing key', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '["pk1","pk2"]');
+    const result = ctx.toggleFavorite('pk1');
+    assert.strictEqual(result, false);
+    assert.deepStrictEqual(ctx.getFavorites(), ['pk2']);
+  });
+
+  test('favStar returns filled star for favorite', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '["pk1"]');
+    const html = ctx.favStar('pk1');
+    assert.ok(html.includes('★'));
+    assert.ok(html.includes('on'));
+    assert.ok(html.includes('Remove from favorites'));
+  });
+
+  test('favStar returns empty star for non-favorite', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '[]');
+    const html = ctx.favStar('pk1');
+    assert.ok(html.includes('☆'));
+    assert.ok(!html.includes(' on'));
+    assert.ok(html.includes('Add to favorites'));
+  });
+
+  test('favStar includes custom class', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '[]');
+    const html = ctx.favStar('pk1', 'my-cls');
+    assert.ok(html.includes('my-cls'));
+  });
+}
+
+// ===== APP.JS: debounce =====
+console.log('\n=== app.js: debounce ===');
+{
+  const ctx = makeSandbox();
+  let timerId = 0;
+  const scheduledFns = [];
+  ctx.setTimeout = (fn, ms) => { const id = ++timerId; scheduledFns.push({ fn, ms, id }); return id; };
+  ctx.clearTimeout = (id) => { const idx = scheduledFns.findIndex(t => t.id === id); if (idx >= 0) scheduledFns.splice(idx, 1); };
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const debounce = ctx.debounce;
+
+  test('debounce delays function call', () => {
+    let called = 0;
+    const fn = debounce(() => { called++; }, 100);
+    fn();
+    assert.strictEqual(called, 0);
+    assert.strictEqual(scheduledFns.length, 1);
+    assert.strictEqual(scheduledFns[0].ms, 100);
+    scheduledFns[0].fn();
+    assert.strictEqual(called, 1);
+  });
+
+  test('debounce resets timer on rapid calls', () => {
+    scheduledFns.length = 0;
+    let called = 0;
+    const fn = debounce(() => { called++; }, 200);
+    fn();
+    fn();
+    fn();
+    // Only last timer should remain (previous cleared)
+    assert.strictEqual(scheduledFns.length, 1);
+    scheduledFns[0].fn();
+    assert.strictEqual(called, 1);
+  });
+
+  test('debounce passes arguments', () => {
+    scheduledFns.length = 0;
+    let receivedArgs;
+    const fn = debounce((...args) => { receivedArgs = args; }, 50);
+    fn('a', 'b', 'c');
+    scheduledFns[0].fn();
+    assert.deepStrictEqual(receivedArgs, ['a', 'b', 'c']);
+  });
+}
+
+// ===== APP.JS: mergeUserHomeConfig edge cases =====
+console.log('\n=== app.js: mergeUserHomeConfig edge cases ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const merge = ctx.mergeUserHomeConfig;
+
+  test('returns siteConfig when userTheme is null', () => {
+    const cfg = { home: { heroTitle: 'Test' } };
+    assert.strictEqual(merge(cfg, null), cfg);
+  });
+
+  test('returns siteConfig when userTheme has no home', () => {
+    const cfg = { home: { heroTitle: 'Test' } };
+    assert.strictEqual(merge(cfg, { theme: {} }), cfg);
+  });
+
+  test('returns siteConfig when siteConfig is null', () => {
+    assert.strictEqual(merge(null, { home: { heroTitle: 'X' } }), null);
+  });
+
+  test('creates home on siteConfig when missing', () => {
+    const cfg = {};
+    merge(cfg, { home: { heroTitle: 'New' } });
+    assert.strictEqual(cfg.home.heroTitle, 'New');
+  });
+
+  test('userTheme.home non-object is ignored', () => {
+    const cfg = { home: { heroTitle: 'Test' } };
+    assert.strictEqual(merge(cfg, { home: 'string' }), cfg);
+    assert.strictEqual(cfg.home.heroTitle, 'Test');
+  });
+}
+
+// ===== APP.JS: formatAbsoluteTimestamp with custom format =====
+console.log('\n=== app.js: formatAbsoluteTimestamp (custom format) ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const formatAbsoluteTimestamp = ctx.formatAbsoluteTimestamp;
+
+  test('formatAbsoluteTimestamp returns dash for null', () => {
+    assert.strictEqual(formatAbsoluteTimestamp(null), '—');
+  });
+
+  test('formatAbsoluteTimestamp returns dash for invalid date', () => {
+    assert.strictEqual(formatAbsoluteTimestamp('not-a-date'), '—');
+  });
+
+  test('formatAbsoluteTimestamp uses custom format when enabled', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { allowCustomFormat: true, customFormat: 'YYYY/MM/DD' } };
+    ctx.localStorage.removeItem('meshcore-timestamp-custom-format');
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    const result = formatAbsoluteTimestamp('2024-06-15T10:30:00Z');
+    assert.strictEqual(result, '2024/06/15');
+    ctx.window.SITE_CONFIG = null;
+  });
+
+  test('formatAbsoluteTimestamp locale UTC uses toLocaleString with UTC', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { allowCustomFormat: false } };
+    ctx.localStorage.setItem('meshcore-timestamp-format', 'locale');
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    const result = formatAbsoluteTimestamp('2024-06-15T10:30:00Z');
+    // Should call toLocaleString with { timeZone: 'UTC' }
+    const expected = new Date('2024-06-15T10:30:00Z').toLocaleString([], { timeZone: 'UTC' });
+    assert.strictEqual(result, expected);
+    ctx.localStorage.removeItem('meshcore-timestamp-format');
+    ctx.localStorage.removeItem('meshcore-timestamp-timezone');
+  });
+}
+
+// ===== APP.JS: ROUTE_TYPES / PAYLOAD_TYPES constants coverage =====
+console.log('\n=== app.js: all ROUTE_TYPES and PAYLOAD_TYPES ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+
+  test('routeTypeName covers all 4 route types', () => {
+    assert.strictEqual(ctx.routeTypeName(0), 'TRANSPORT_FLOOD');
+    assert.strictEqual(ctx.routeTypeName(1), 'FLOOD');
+    assert.strictEqual(ctx.routeTypeName(2), 'DIRECT');
+    assert.strictEqual(ctx.routeTypeName(3), 'TRANSPORT_DIRECT');
+  });
+
+  test('payloadTypeName covers all 13 payload types', () => {
+    assert.strictEqual(ctx.payloadTypeName(0), 'Request');
+    assert.strictEqual(ctx.payloadTypeName(1), 'Response');
+    assert.strictEqual(ctx.payloadTypeName(2), 'Direct Msg');
+    assert.strictEqual(ctx.payloadTypeName(3), 'ACK');
+    assert.strictEqual(ctx.payloadTypeName(4), 'Advert');
+    assert.strictEqual(ctx.payloadTypeName(5), 'Channel Msg');
+    assert.strictEqual(ctx.payloadTypeName(6), 'Group Data');
+    assert.strictEqual(ctx.payloadTypeName(7), 'Anon Req');
+    assert.strictEqual(ctx.payloadTypeName(8), 'Path');
+    assert.strictEqual(ctx.payloadTypeName(9), 'Trace');
+    assert.strictEqual(ctx.payloadTypeName(10), 'Multipart');
+    assert.strictEqual(ctx.payloadTypeName(11), 'Control');
+    assert.strictEqual(ctx.payloadTypeName(15), 'Raw Custom');
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
