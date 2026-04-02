@@ -1854,9 +1854,11 @@
     function nextHop() {
       if (hopIndex >= hopPositions.length) {
         activeAnims = Math.max(0, activeAnims - 1);
-        document.getElementById('liveAnimCount').textContent = activeAnims;
+        const countEl = document.getElementById('liveAnimCount');
+        if (countEl) countEl.textContent = activeAnims;
         return;
       }
+      if (!animLayer) return;
       // Audio hook: notify per-hop callback
       if (onHop) try { onHop(hopIndex, hopPositions.length, hopPositions[hopIndex]); } catch (e) {}
       const hp = hopPositions[hopIndex];
@@ -1869,11 +1871,11 @@
           }).addTo(animLayer);
           let pulseUp = true;
           const pulseTimer = setInterval(() => {
-            if (!animLayer.hasLayer(ghost)) { clearInterval(pulseTimer); return; }
+            if (!animLayer || !animLayer.hasLayer(ghost)) { clearInterval(pulseTimer); return; }
             ghost.setStyle({ fillOpacity: pulseUp ? 0.6 : 0.25, opacity: pulseUp ? 0.7 : 0.4 });
             pulseUp = !pulseUp;
           }, 600);
-          setTimeout(() => { clearInterval(pulseTimer); if (animLayer.hasLayer(ghost)) animLayer.removeLayer(ghost); }, 3000);
+          setTimeout(() => { clearInterval(pulseTimer); if (animLayer && animLayer.hasLayer(ghost)) animLayer.removeLayer(ghost); }, 3000);
         }
       } else {
         pulseNode(hp.key, hp.pos, typeName);
