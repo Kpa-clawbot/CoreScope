@@ -2943,7 +2943,10 @@ console.log('\n=== channels.js: formatHashHex (issue #465) ===');
 {
   console.log('\n--- Map neighbor filter logic ---');
 
-  // Simulate the filter logic from map.js _renderMarkersInner
+  // NOTE: applyNeighborFilter is a hand-written copy of the filter logic from
+  // public/map.js _renderMarkersInner. The real code is browser-only (depends on
+  // Leaflet, DOM, closure state) and cannot be imported directly in Node.
+  // If the filter logic in map.js changes, update this copy to match.
   function applyNeighborFilter(nodes, filters, selectedReferenceNode, neighborPubkeys) {
     return nodes.filter(n => {
       if (!n.lat || !n.lon) return false;
@@ -3020,10 +3023,6 @@ console.log('\n=== channels.js: formatHashHex (issue #465) ===');
           if (i > 0 && hops[i - 1].pubkey) neighborSet.add(hops[i - 1].pubkey);
           if (i < hops.length - 1 && hops[i + 1].pubkey) neighborSet.add(hops[i + 1].pubkey);
         }
-      }
-      if (hops.length >= 2) {
-        if (hops[0].pubkey === refPubkey && hops[1].pubkey) neighborSet.add(hops[1].pubkey);
-        if (hops[hops.length - 1].pubkey === refPubkey && hops[hops.length - 2].pubkey) neighborSet.add(hops[hops.length - 2].pubkey);
       }
     }
     assert.ok(neighborSet.has('bbb'), 'bbb is adjacent in path 1');

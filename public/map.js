@@ -760,15 +760,10 @@
             if (i < hops.length - 1 && hops[i + 1].pubkey) neighborPubkeys.add(hops[i + 1].pubkey);
           }
         }
-        // Also: if path length is 1 and it contains this node, all other nodes with direct comms are neighbors
-        // For 2-hop paths, if reference is first or last, the other end is a neighbor
-        if (hops.length >= 2) {
-          if (hops[0].pubkey === pubkey && hops[1].pubkey) neighborPubkeys.add(hops[1].pubkey);
-          if (hops[hops.length - 1].pubkey === pubkey && hops[hops.length - 2].pubkey) neighborPubkeys.add(hops[hops.length - 2].pubkey);
-        }
+        // (Redundant block removed — the main loop above already handles first/last hops)
       }
     } catch (e) {
-      // If paths API fails, clear neighbors
+      console.warn('Failed to fetch neighbor paths for', pubkey, '— neighbor filter may be incomplete:', e);
       neighborPubkeys = new Set();
     }
     // Update sidebar UI
@@ -814,7 +809,7 @@
         </dl>
         <div style="margin-top:8px;clear:both;">
           <a href="#/nodes/${node.public_key}" style="color:var(--accent);font-size:12px;">View Node →</a>
-          ${node.public_key ? ` · <a href="#" onclick="event.preventDefault();window._mapSelectRefNode('${node.public_key}','${safeEsc((node.name || 'Unknown').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/</g, '\\x3c'))}')" style="color:var(--accent);font-size:12px;">Show Neighbors</a>` : ''}
+          ${node.public_key ? ` · <a href="#" onclick="event.preventDefault();window._mapSelectRefNode('${safeEsc(node.public_key.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/</g, '\\x3c'))}','${safeEsc((node.name || 'Unknown').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/</g, '\\x3c'))}')" style="color:var(--accent);font-size:12px;">Show Neighbors</a>` : ''}
         </div>
       </div>`;
   }
