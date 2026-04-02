@@ -36,9 +36,9 @@ type Store struct {
 	stmtUpsertNode           *sql.Stmt
 	stmtIncrementAdvertCount *sql.Stmt
 	stmtUpsertObserver       *sql.Stmt
-	stmtGetObserverRowid         *sql.Stmt
-	stmtUpdateObserverLastSeen   *sql.Stmt
-	stmtUpdateNodeTelemetry      *sql.Stmt
+	stmtGetObserverRowid       *sql.Stmt
+	stmtUpdateObserverLastSeen *sql.Stmt
+	stmtUpdateNodeTelemetry    *sql.Stmt
 }
 
 // OpenStore opens or creates a SQLite DB at the given path, applying the
@@ -443,7 +443,7 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 			observerIdx = &rowid
 			// Update observer last_seen on every packet to prevent
 			// low-traffic observers from appearing offline (#463)
-			s.stmtUpdateObserverLastSeen.Exec(now, rowid)
+			_, _ = s.stmtUpdateObserverLastSeen.Exec(now, rowid)
 		}
 	}
 
