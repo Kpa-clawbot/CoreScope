@@ -290,6 +290,7 @@
 
   /** @type {object|null} server defaults, set during init */
   var _serverDefaults = null;
+  var _initDone = false;
   var _saveStatus = 'saved'; // 'saved' | 'saving' | 'error'
   var _writeTimer = null;
 
@@ -1581,7 +1582,10 @@
       _serverDefaults = serverConfig || {};
       _cleanPhantomOverrides();
       _runPipeline();
+      _initDone = true;
     },
+    /** True after init() has been called with server config and pipeline has run */
+    get initDone() { return _initDone; },
     readOverrides: readOverrides,
     writeOverrides: writeOverrides,
     computeEffective: computeEffective,

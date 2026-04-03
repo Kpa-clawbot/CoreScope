@@ -1069,10 +1069,10 @@ async function run() {
     await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
     // Clear any existing overrides
     await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
-    // Wait for init() to complete (server config fetch) before setting override,
-    // so _runPipeline from init doesn't race with the debounced write.
+    // Wait for init() to complete (server config fetch + full pipeline) before
+    // setting override, so _runPipeline from init doesn't overwrite our value.
     await page.waitForFunction(() => {
-      return window._customizerV2 && window.SITE_CONFIG && window.SITE_CONFIG.theme;
+      return window._customizerV2 && window._customizerV2.initDone;
     }, { timeout: 5000 });
     // Set an override via the API
     const result = await page.evaluate(() => {
@@ -1097,7 +1097,7 @@ async function run() {
     await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
     // Wait for init() to complete so _serverDefaults is populated
     await page.waitForFunction(() => {
-      return window._customizerV2 && window.SITE_CONFIG && window.SITE_CONFIG.theme;
+      return window._customizerV2 && window._customizerV2.initDone;
     }, { timeout: 5000 });
     const result = await page.evaluate(() => {
       // Set the server default accent
