@@ -1416,7 +1416,27 @@
       const _el2 = document.getElementById('liveNodeCount'); if (_el2) _el2.textContent = Object.keys(nodeMarkers).length;
       // Initialize shared HopResolver with loaded nodes
       if (window.HopResolver) HopResolver.init(list);
+      // Fetch affinity data for hop disambiguation
+      fetchAffinityData();
+      startAffinityRefresh();
     } catch (e) { console.error('Failed to load nodes:', e); }
+  }
+
+  let _affinityInterval = null;
+
+  async function fetchAffinityData() {
+    try {
+      const resp = await fetch('/api/analytics/neighbor-graph');
+      const graph = await resp.json();
+      if (window.HopResolver && HopResolver.setAffinity) {
+        HopResolver.setAffinity(graph);
+      }
+    } catch (e) { console.warn('Failed to fetch affinity data:', e); }
+  }
+
+  function startAffinityRefresh() {
+    if (_affinityInterval) clearInterval(_affinityInterval);
+    _affinityInterval = setInterval(fetchAffinityData, 60000);
   }
 
   function clearNodeMarkers() {
