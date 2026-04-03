@@ -2850,24 +2850,25 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
   test('buildFlatRowHtml has null-safe decoded_json', () => {
     const flatBuilderMatch = packetsSource.match(/function buildFlatRowHtml[\s\S]*?(?=\n  function )/);
     assert.ok(flatBuilderMatch, 'buildFlatRowHtml should exist');
-    assert.ok(flatBuilderMatch[0].includes("p.decoded_json || '{}'"),
-      'buildFlatRowHtml should have null-safe decoded_json fallback');
+    // buildFlatRowHtml uses getParsedDecoded which has null-safe fallback
+    assert.ok(flatBuilderMatch[0].includes('getParsedDecoded(p)'),
+      'buildFlatRowHtml should use getParsedDecoded for null-safe decoded_json fallback');
   });
 
   test('pathHops null guard in buildFlatRowHtml (issue #451)', () => {
     const flatBuilderMatch = packetsSource.match(/function buildFlatRowHtml[\s\S]*?(?=\n  function )/);
     assert.ok(flatBuilderMatch, 'buildFlatRowHtml should exist');
-    // The JSON.parse result must be coalesced with || [] to handle literal null from path_json
-    assert.ok(flatBuilderMatch[0].includes("|| '[]') || []"),
-      'buildFlatRowHtml should coalesce parsed path_json with || [] to guard against null');
+    // buildFlatRowHtml uses getParsedPath which coalesces with || [] internally
+    assert.ok(flatBuilderMatch[0].includes('getParsedPath(p)'),
+      'buildFlatRowHtml should use getParsedPath which guards against null');
   });
 
   test('pathHops null guard in detail pane (issue #451)', () => {
-    // The detail pane (selectPacket / showPacketDetail) also parses path_json
-    const detailMatch = packetsSource.match(/let pathHops;\s*try \{[^}]+\} catch/);
-    assert.ok(detailMatch, 'detail pane pathHops parsing should exist');
-    assert.ok(detailMatch[0].includes("|| '[]') || []"),
-      'detail pane should coalesce parsed path_json with || [] to guard against null');
+    // The detail pane uses getParsedPath/getParsedDecoded cached helpers
+    assert.ok(packetsSource.includes('getParsedPath(pkt)'),
+      'detail pane should use getParsedPath for null-safe path parsing');
+    assert.ok(packetsSource.includes('getParsedDecoded(pkt)'),
+      'detail pane should use getParsedDecoded for null-safe decoded parsing');
   });
 
   test('destroy cleans up virtual scroll state', () => {

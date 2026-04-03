@@ -4,13 +4,13 @@
   // Cached JSON parse helpers to avoid repeated parsing (issue #387)
   function getParsedPath(p) {
     if (p._parsedPath === undefined) {
-      try { p._parsedPath = JSON.parse(p.path_json || '[]'); } catch { p._parsedPath = []; }
+      try { p._parsedPath = JSON.parse(p.path_json || '[]') || []; } catch { p._parsedPath = []; }
     }
     return p._parsedPath;
   }
   function getParsedDecoded(p) {
     if (p._parsedDecoded === undefined) {
-      try { p._parsedDecoded = JSON.parse(p.decoded_json || '{}'); } catch { p._parsedDecoded = {}; }
+      try { p._parsedDecoded = JSON.parse(p.decoded_json || '{}') || {}; } catch { p._parsedDecoded = {}; }
     }
     return p._parsedDecoded;
   }
