@@ -1526,7 +1526,7 @@ async function run() {
 
   await test('Node detail: affinity debug section expandable', async () => {
     await page.goto(BASE + '/#/nodes');
-    await page.waitForSelector('.node-row, .node-card, [data-pubkey]', { timeout: 5000 });
+    await page.waitForSelector('#nodesBody tr[data-key]', { timeout: 10000 });
     // Enable debug mode
     await page.evaluate(() => localStorage.setItem('meshcore-affinity-debug', 'true'));
     // Click first node to go to detail
