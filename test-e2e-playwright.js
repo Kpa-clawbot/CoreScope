@@ -1121,7 +1121,7 @@ async function run() {
       // Clear new key so migration can run
       localStorage.removeItem('cs-theme-overrides');
       // Set legacy keys
-      localStorage.setItem('meshcore-user-theme', JSON.stringify({ theme: { accent: '#legacy1' }, branding: { siteName: 'LegacyName' } }));
+      localStorage.setItem('meshcore-user-theme', JSON.stringify({ theme: { accent: '#aabb01' }, branding: { siteName: 'LegacyName' } }));
       localStorage.setItem('meshcore-timestamp-mode', 'absolute');
       localStorage.setItem('meshcore-heatmap-opacity', '0.5');
       // Run migration
@@ -1141,7 +1141,7 @@ async function run() {
     });
     assert(!result.error, result.error || '');
     assert(result.migrated, 'migrateOldKeys should return non-null');
-    assert(result.accent === '#legacy1', 'Theme accent should be migrated');
+    assert(result.accent === '#aabb01', 'Theme accent should be migrated');
     assert(result.siteName === 'LegacyName', 'Branding should be migrated');
     assert(result.tsMode === 'absolute', 'Timestamp mode should be migrated');
     assert(result.opacity === 0.5, 'Heatmap opacity should be migrated');
