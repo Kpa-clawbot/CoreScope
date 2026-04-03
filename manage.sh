@@ -40,7 +40,7 @@ STAGING_DATA="${STAGING_DATA_DIR:-$HOME/meshcore-staging-data}"
 STAGING_COMPOSE_FILE="docker-compose.staging.yml"
 
 # Build metadata — exported so docker compose build picks them up via args
-export APP_VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "unknown")
+export APP_VERSION=$(git describe --tags --match "v*" 2>/dev/null || echo "unknown")
 export GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 export BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -512,7 +512,7 @@ cmd_setup() {
 
   # Default to latest release tag (instead of staying on master)
   if ! is_done "version_pin"; then
-    git fetch origin --tags 2>/dev/null || true
+    git fetch origin --tags --force 2>/dev/null || true
     local latest_tag
     latest_tag=$(git tag -l 'v*' --sort=-v:refname | head -1)
     if [ -n "$latest_tag" ]; then
@@ -903,14 +903,10 @@ prepare_staging_config() {
     warn "No production config at ${prod_config} — staging may use defaults."
     return
   fi
-  if [ ! -f "$staging_config" ] || [ "$prod_config" -nt "$staging_config" ]; then
-    info "Copying production config to staging..."
-    cp "$prod_config" "$staging_config"
-    sed -i 's/"siteName":\s*"[^"]*"/"siteName": "CoreScope — STAGING"/' "$staging_config"
-    log "Staging config created at ${staging_config} with STAGING site name."
-  else
-    log "Staging config is up to date."
-  fi
+  info "Copying production config to staging..."
+  cp "$prod_config" "$staging_config"
+  sed -i 's/"siteName":\s*"[^"]*"/"siteName": "CoreScope — STAGING"/' "$staging_config"
+  log "Staging config created at ${staging_config} with STAGING site name."
   # Copy Caddyfile for staging (HTTP-only on staging port)
   local staging_caddy="$STAGING_DATA/Caddyfile"
   if [ ! -f "$staging_caddy" ]; then
@@ -1321,7 +1317,7 @@ cmd_update() {
   local version="${1:-}"
 
   info "Fetching latest changes and tags..."
-  git fetch origin --tags
+  git fetch origin --tags --force
 
   if [ -z "$version" ]; then
     # No arg: checkout latest release tag

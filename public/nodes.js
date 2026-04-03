@@ -175,6 +175,114 @@
     return `<div style="font-size:11px;color:var(--text-muted);margin:-2px 0 6px;padding:6px 10px;background:var(--surface-2);border-radius:4px;border-left:3px solid var(--status-yellow)">Adverts show varying hash sizes (<strong>${sizes.join('-byte, ')}-byte</strong>). This is a <a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--accent)">known bug</a> where automatic adverts ignore the configured multibyte path setting. Fixed in <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--accent)">repeater v1.14.1</a>.</div>`;
   }
 
+  // ─── Neighbor section helpers ───────────────────────────────────────────────
+
+  // Cache: pubkey → { data, ts }
+  var _neighborCache = {};
+
+  function getConfidenceIndicator(entry) {
+    if (entry.ambiguous) return { icon: '⚠️', label: 'AMBIGUOUS', cls: 'confidence-ambiguous' };
+    if (entry.count <= 1) return { icon: '🔴', label: 'LOW', cls: 'confidence-low' };
+    if (entry.score >= 0.5 && entry.count >= 3) return { icon: '🟢', label: 'HIGH', cls: 'confidence-high' };
+    return { icon: '🟡', label: 'MEDIUM', cls: 'confidence-medium' };
+  }
+
+  function renderNeighborRows(neighbors, limit) {
+    var sorted = neighbors.slice().sort(function(a, b) {
+      return (b.score || b.affinity || 0) - (a.score || a.affinity || 0);
+    });
+    var items = limit ? sorted.slice(0, limit) : sorted;
+    return items.map(function(nb) {
+      var conf = getConfidenceIndicator(nb);
+      var name = nb.name || (nb.prefix + '… (unknown)');
+      var nameHtml = nb.pubkey
+        ? '<a href="#/nodes/' + encodeURIComponent(nb.pubkey) + '">' + escapeHtml(name) + '</a>'
+        : '<span class="text-muted">' + escapeHtml(name) + '</span>';
+      var role = nb.role || '—';
+      var roleBadge = nb.role
+        ? '<span class="badge" style="background:' + (ROLE_COLORS[nb.role] || 'var(--surface-2)') + ';color:#fff;font-size:10px">' + escapeHtml(role) + '</span>'
+        : '<span class="text-muted">—</span>';
+      var scoreTitle = 'Observations: ' + nb.count;
+      if (nb.avg_snr != null) scoreTitle += ' · Avg SNR: ' + Number(nb.avg_snr).toFixed(1) + ' dB';
+      var showOnMap = nb.pubkey
+        ? ' <button class="btn-link neighbor-show-map" data-pubkey="' + escapeHtml(nb.pubkey) + '" style="font-size:11px;padding:1px 6px;white-space:nowrap">📍 Map</button>'
+        : '';
+      return '<tr>' +
+        '<td style="font-weight:600">' + nameHtml + '</td>' +
+        '<td>' + roleBadge + '</td>' +
+        '<td title="' + escapeHtml(scoreTitle) + '">' + Number(nb.score).toFixed(2) + '</td>' +
+        '<td>' + nb.count + '</td>' +
+        '<td>' + renderNodeTimestampHtml(nb.last_seen) + '</td>' +
+        '<td><span title="' + conf.label + '">' + conf.icon + '</span></td>' +
+        '<td style="text-align:right">' + showOnMap + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  function renderNeighborTable(neighbors, limit) {
+    return '<table class="data-table" style="font-size:12px">' +
+      '<thead><tr><th>Neighbor</th><th>Role</th><th>Score</th><th>Obs</th><th>Last Seen</th><th>Conf</th><th></th></tr></thead>' +
+      '<tbody>' + renderNeighborRows(neighbors, limit) + '</tbody></table>';
+  }
+
+  function fetchAndRenderNeighbors(pubkey, containerId, opts) {
+    opts = opts || {};
+    var limit = opts.limit || 0;
+    var headerSelector = opts.headerSelector;
+    var viewAllPubkey = opts.viewAllPubkey;
+
+    // Always set spinner as initial DOM state (synchronous) so tests can observe it
+    var spinnerEl = document.getElementById(containerId);
+    if (spinnerEl) spinnerEl.innerHTML = '<div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div>';
+
+    // Check cache
+    var cached = _neighborCache[pubkey];
+    if (cached && (Date.now() - cached.ts < 300000)) { // 5 min cache
+      renderNeighborData(cached.data, containerId, limit, headerSelector, viewAllPubkey);
+      return;
+    }
+
+    api('/nodes/' + encodeURIComponent(pubkey) + '/neighbors', { ttl: CLIENT_TTL.nodeDetail }).then(function(data) {
+      _neighborCache[pubkey] = { data: data, ts: Date.now() };
+      renderNeighborData(data, containerId, limit, headerSelector, viewAllPubkey);
+    }).catch(function() {
+      var el = document.getElementById(containerId);
+      if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">Could not load neighbor data</div>';
+    });
+  }
+
+  function renderNeighborData(data, containerId, limit, headerSelector, viewAllPubkey) {
+    var el = document.getElementById(containerId);
+    if (!el) return;
+    if (!data || !data.neighbors || !data.neighbors.length) {
+      el.innerHTML = '<div class="text-muted" style="padding:8px">No neighbor data available yet. Neighbor relationships are built from observed packet paths over time.</div>';
+      if (headerSelector) {
+        var h = document.querySelector(headerSelector);
+        if (h) h.textContent = 'Neighbors (0)';
+      }
+      return;
+    }
+    if (headerSelector) {
+      var h = document.querySelector(headerSelector);
+      if (h) h.textContent = 'Neighbors (' + data.neighbors.length + ')';
+    }
+    var html = renderNeighborTable(data.neighbors, limit);
+    if (limit && data.neighbors.length > limit && viewAllPubkey) {
+      html += '<div style="margin-top:6px;text-align:right"><a href="#/nodes/' + encodeURIComponent(viewAllPubkey) + '?section=node-neighbors" style="font-size:12px">View all ' + data.neighbors.length + ' neighbors →</a></div>';
+    }
+    el.innerHTML = html;
+
+    // Wire up "Show on Map" buttons via event delegation
+    el.addEventListener('click', function(e) {
+      var btn = e.target.closest('.neighbor-show-map');
+      if (!btn) return;
+      var pk = btn.getAttribute('data-pubkey');
+      if (pk) location.hash = '#/map?node=' + encodeURIComponent(pk);
+    });
+  }
+
+  // ─── End neighbor helpers ─────────────────────────────────────────────────
+
   let directNode = null; // set when navigating directly to #/nodes/:pubkey
 
   let regionChangeHandler = null;
@@ -228,11 +336,39 @@
     loadNodes();
     // Auto-refresh when ADVERT packets arrive via WebSocket (fixes #131)
     wsHandler = debouncedOnWS(function (msgs) {
-      if (msgs.some(isAdvertMessage)) {
-        _allNodes = null;
+      const advertMsgs = msgs.filter(isAdvertMessage);
+      if (!advertMsgs.length) return;
+
+      if (!_allNodes) {
         invalidateApiCache('/nodes');
         loadNodes(true);
+        return;
       }
+
+      let needReload = false;
+      for (const m of advertMsgs) {
+        const payload = m.data && m.data.decoded && m.data.decoded.payload;
+        const pubKey = payload && (payload.pubKey || payload.public_key);
+        if (!pubKey) { needReload = true; break; }
+
+        const existing = _allNodes.find(n => n.public_key === pubKey);
+        if (existing) {
+          if (payload.name) existing.name = payload.name;
+          if (payload.lat != null) existing.lat = payload.lat;
+          if (payload.lon != null) existing.lon = payload.lon;
+          const ts = m.data.packet && (m.data.packet.timestamp || m.data.packet.first_seen);
+          if (ts) existing.last_seen = ts;
+        } else {
+          needReload = true;
+          break;
+        }
+      }
+
+      if (needReload) {
+        _allNodes = null;
+        invalidateApiCache('/nodes');
+      }
+      loadNodes(true);
     }, 5000);
   }
 
@@ -319,6 +455,18 @@
           </table>
         </div>` : ''}
 
+        <div class="node-full-card" id="node-neighbors">
+          <h4 id="fullNeighborsHeader">Neighbors</h4>
+          <div id="fullNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
+        </div>
+
+        <div class="node-full-card" id="node-affinity-debug" style="display:none">
+          <h4 style="cursor:pointer" onclick="this.parentElement.querySelector('.affinity-debug-body').style.display=this.parentElement.querySelector('.affinity-debug-body').style.display==='none'?'block':'none'; this.querySelector('.toggle-icon').textContent=this.parentElement.querySelector('.affinity-debug-body').style.display==='none'?'▶':'▼'"><span class="toggle-icon">▶</span> 🔍 Affinity Debug</h4>
+          <div class="affinity-debug-body" style="display:none">
+            <div id="affinityDebugContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading debug data…</div></div>
+          </div>
+        </div>
+
         <div class="node-full-card" id="fullPathsSection">
           <h4>Paths Through This Node</h4>
           <div id="fullPathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
@@ -398,6 +546,103 @@
           if (svg) { svg.style.display = 'block'; svg.style.margin = '0 auto'; }
         } catch {}
       }
+
+      // Fetch neighbors for this node (full-screen view)
+      fetchAndRenderNeighbors(n.public_key, 'fullNeighborsContent', {
+        headerSelector: '#fullNeighborsHeader'
+      });
+
+      // Affinity debug panel — show if debugAffinity is enabled
+      (function loadAffinityDebug() {
+        var show = (window.CLIENT_CONFIG && window.CLIENT_CONFIG.debugAffinity) || localStorage.getItem('meshcore-affinity-debug') === 'true';
+        var panel = document.getElementById('node-affinity-debug');
+        if (!show || !panel) return;
+        panel.style.display = '';
+        var apiKey = localStorage.getItem('meshcore-api-key') || '';
+        fetch('/api/debug/affinity?node=' + encodeURIComponent(n.public_key), { headers: { 'X-API-Key': apiKey } })
+          .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+          .then(function (data) {
+            var el = document.getElementById('affinityDebugContent');
+            if (!el) return;
+            var html = '';
+
+            // Edges table
+            if (data.edges && data.edges.length) {
+              html += '<h5 style="margin:8px 0 4px">Neighbor Edges (' + data.edges.length + ')</h5>';
+              html += '<table class="mini-table" style="width:100%;font-size:12px"><thead><tr><th>Neighbor</th><th>Score</th><th>Count</th><th>Last Seen</th><th>Observers</th><th>Status</th></tr></thead><tbody>';
+              data.edges.forEach(function (e) {
+                var neighbor = e.nodeBName || e.nodeAName || (e.nodeB || e.nodeA || '').substring(0, 8);
+                if (e.nodeA.toLowerCase() === n.public_key.toLowerCase()) {
+                  neighbor = e.nodeBName || (e.nodeB || e.prefix || '?').substring(0, 8);
+                } else {
+                  neighbor = e.nodeAName || (e.nodeA || '').substring(0, 8);
+                }
+                var status = e.ambiguous ? (e.unresolved ? '❓ Unresolved' : '⚠️ Ambiguous') : (e.resolved ? '✅ Auto-resolved' : '✅ Resolved');
+                html += '<tr><td>' + escapeHtml(neighbor) + '</td><td>' + (e.score || 0).toFixed(3) + '</td><td>' + e.weight + '</td><td>' + (e.lastSeen || '').substring(0, 10) + '</td><td>' + (e.observers || []).length + '</td><td>' + status + '</td></tr>';
+              });
+              html += '</tbody></table>';
+            } else {
+              html += '<div class="text-muted" style="padding:8px">No affinity edges for this node</div>';
+            }
+
+            // Resolutions
+            if (data.resolutions && data.resolutions.length) {
+              html += '<h5 style="margin:12px 0 4px">Prefix Resolutions (' + data.resolutions.length + ')</h5>';
+              data.resolutions.forEach(function (r) {
+                html += '<div style="border:1px solid var(--border);border-radius:4px;padding:8px;margin-bottom:6px;font-size:12px">';
+                html += '<b>Prefix: ' + escapeHtml(r.prefix) + '</b> → ';
+                if (r.method === 'auto-resolved') {
+                  html += '<span style="color:var(--status-green)">✅ ' + escapeHtml(r.chosenName || r.chosen || '?') + '</span>';
+                  html += ' (Jaccard=' + r.chosenJaccard.toFixed(2) + ', ratio=' + ((isFinite(r.ratio) && r.ratio < 100) ? r.ratio.toFixed(1) + '×' : '∞') + ')';
+                } else {
+                  html += '<span style="color:var(--status-yellow)">⚠️ Ambiguous</span>';
+                  if (r.ratio) html += ' (ratio=' + r.ratio.toFixed(1) + '×, threshold=' + r.thresholdApplied + '×)';
+                }
+                // Show disambiguation tier used (M4 resolveWithContext)
+                if (r.tier) {
+                  var tierLabels = {
+                    'neighbor_affinity': '🏘️ Affinity',
+                    'geo_proximity': '🌍 Geo',
+                    'gps_preference': '📍 GPS',
+                    'first_match': '🎲 Naive',
+                    'unique_prefix': '✓ Unique',
+                    'no_match': '∅ None'
+                  };
+                  html += ' <span style="font-size:11px;opacity:0.8">[tier: ' + (tierLabels[r.tier] || escapeHtml(r.tier)) + ']</span>';
+                }
+                // Candidates table
+                if (r.candidates && r.candidates.length) {
+                  html += '<div style="margin-top:4px"><table class="mini-table" style="width:100%;font-size:11px"><thead><tr><th>Candidate</th><th>Jaccard</th><th>Count</th></tr></thead><tbody>';
+                  r.candidates.forEach(function (c) {
+                    var highlight = r.chosen && c.pubkey === r.chosen ? ' style="background:var(--status-green-bg,rgba(34,197,94,0.1))"' : '';
+                    html += '<tr' + highlight + '><td>' + escapeHtml(c.name || c.pubkey.substring(0, 8)) + '</td><td>' + c.jaccard.toFixed(3) + '</td><td>' + c.score + '</td></tr>';
+                  });
+                  html += '</tbody></table></div>';
+                }
+                html += '</div>';
+              });
+            }
+
+            // Stats summary
+            if (data.stats) {
+              html += '<h5 style="margin:12px 0 4px">Graph Stats</h5>';
+              html += '<div style="font-size:12px;line-height:1.6">';
+              html += 'Total edges: ' + data.stats.totalEdges + '<br>';
+              html += 'Total nodes: ' + data.stats.totalNodes + '<br>';
+              html += 'Resolved: ' + data.stats.resolvedCount + ' | Ambiguous: ' + data.stats.ambiguousCount + ' | Unresolved: ' + data.stats.unresolvedCount + '<br>';
+              html += 'Avg confidence: ' + (data.stats.avgConfidence || 0).toFixed(3) + '<br>';
+              html += 'Cold-start coverage: ' + (data.stats.coldStartCoverage || 0).toFixed(1) + '%<br>';
+              html += 'Cache age: ' + (data.stats.cacheAge || 'N/A') + ' | Last rebuild: ' + (data.stats.lastRebuild || 'N/A');
+              html += '</div>';
+            }
+
+            el.innerHTML = html;
+          })
+          .catch(function (err) {
+            var el = document.getElementById('affinityDebugContent');
+            if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">Failed to load debug data: ' + escapeHtml(err.message) + '</div>';
+          });
+      })();
 
       // Fetch paths through this node (full-screen view)
       api('/nodes/' + encodeURIComponent(n.public_key) + '/paths', { ttl: CLIENT_TTL.nodeDetail }).then(pathData => {
@@ -791,6 +1036,11 @@
           </div>
         </div>` : ''}
 
+        <div class="node-detail-section" id="panelNeighborsSection">
+          <h4 id="panelNeighborsHeader">Neighbors</h4>
+          <div id="panelNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
+        </div>
+
         <div class="node-detail-section" id="pathsSection">
           <h4>Paths Through This Node</h4>
           <div id="pathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
@@ -861,6 +1111,13 @@
       } catch {}
     }
 
+    // Fetch neighbors for this node (condensed panel — top 5)
+    fetchAndRenderNeighbors(n.public_key, 'panelNeighborsContent', {
+      limit: 5,
+      headerSelector: '#panelNeighborsHeader',
+      viewAllPubkey: n.public_key
+    });
+
     // Fetch paths through this node
     api('/nodes/' + encodeURIComponent(n.public_key) + '/paths', { ttl: CLIENT_TTL.nodeDetail }).then(pathData => {
       const el = document.getElementById('pathsContent');
@@ -929,4 +1186,16 @@
 
   // Test hooks
   window._nodesIsAdvertMessage = isAdvertMessage;
+  window._nodesGetAllNodes = function() { return _allNodes; };
+  window._nodesSetAllNodes = function(n) { _allNodes = n; };
+  window._nodesToggleSort = toggleSort;
+  window._nodesSortNodes = sortNodes;
+  window._nodesSortArrow = sortArrow;
+  window._nodesGetSortState = function() { return sortState; };
+  window._nodesSetSortState = function(s) { sortState = s; };
+  window._nodesSyncClaimedToFavorites = syncClaimedToFavorites;
+  window._nodesRenderNodeTimestampHtml = renderNodeTimestampHtml;
+  window._nodesRenderNodeTimestampText = renderNodeTimestampText;
+  window._nodesGetStatusInfo = getStatusInfo;
+  window._nodesGetStatusTooltip = getStatusTooltip;
 })();

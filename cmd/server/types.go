@@ -289,7 +289,7 @@ type PacketTimestampsResponse struct {
 type PacketDetailResponse struct {
 	Packet           interface{}       `json:"packet"`
 	Path             []interface{}     `json:"path"`
-	Breakdown        interface{}       `json:"breakdown"`
+	Breakdown        *Breakdown        `json:"breakdown"`
 	ObservationCount int               `json:"observation_count"`
 	Observations     []ObservationResp `json:"observations,omitempty"`
 }
@@ -873,18 +873,21 @@ type TraceResponse struct {
 // ─── Resolve Hops ──────────────────────────────────────────────────────────────
 
 type HopCandidate struct {
-	Name   interface{} `json:"name"`
-	Pubkey string      `json:"pubkey"`
-	Lat    interface{} `json:"lat"`
-	Lon    interface{} `json:"lon"`
+	Name          interface{} `json:"name"`
+	Pubkey        string      `json:"pubkey"`
+	Lat           interface{} `json:"lat"`
+	Lon           interface{} `json:"lon"`
+	AffinityScore *float64    `json:"affinityScore"`
 }
 
 type HopResolution struct {
-	Name       interface{}    `json:"name"`
-	Pubkey     interface{}    `json:"pubkey,omitempty"`
-	Ambiguous  *bool          `json:"ambiguous,omitempty"`
-	Candidates []HopCandidate `json:"candidates"`
-	Conflicts  []interface{}  `json:"conflicts"`
+	Name          interface{}    `json:"name"`
+	Pubkey        interface{}    `json:"pubkey,omitempty"`
+	Ambiguous     *bool          `json:"ambiguous,omitempty"`
+	Candidates    []HopCandidate `json:"candidates"`
+	Conflicts     []interface{}  `json:"conflicts"`
+	BestCandidate *string        `json:"bestCandidate,omitempty"`
+	Confidence    string         `json:"confidence,omitempty"`
 }
 
 type ResolveHopsResponse struct {
@@ -921,6 +924,7 @@ type ClientConfigResponse struct {
 	ExternalUrls       interface{} `json:"externalUrls"`
 	PropagationBufferMs float64         `json:"propagationBufferMs"`
 	Timestamps          TimestampConfig `json:"timestamps"`
+	DebugAffinity       bool            `json:"debugAffinity,omitempty"`
 }
 
 // ─── IATA Coords ───────────────────────────────────────────────────────────────

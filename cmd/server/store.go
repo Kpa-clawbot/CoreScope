@@ -80,7 +80,7 @@ type PacketStore struct {
 	rfCache      map[string]*cachedResult // region → cached RF result
 	topoCache    map[string]*cachedResult // region → cached topology result
 	hashCache      map[string]*cachedResult // region → cached hash-sizes result
-	collisionCache *cachedResult // cached hash-collisions result (no region filtering)
+	collisionCache map[string]*cachedResult // cached hash-collisions result keyed by region ("" = global)
 	chanCache    map[string]*cachedResult // region → cached channels result
 	distCache    map[string]*cachedResult // region → cached distance result
 	subpathCache map[string]*cachedResult // params → cached subpaths result
@@ -176,6 +176,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig) *PacketStore {
 		topoCache:     make(map[string]*cachedResult),
 		hashCache:      make(map[string]*cachedResult),
 
+		collisionCache: make(map[string]*cachedResult),
 		chanCache:     make(map[string]*cachedResult),
 		distCache:     make(map[string]*cachedResult),
 		subpathCache:  make(map[string]*cachedResult),
@@ -366,6 +367,11 @@ func pathLen(pathJSON string) int {
 // indexByNode extracts pubkeys from decoded_json and indexes the transmission.
 func (s *PacketStore) indexByNode(tx *StoreTx) {
 	if tx.DecodedJSON == "" {
+		return
+	}
+	// All three target fields ("pubKey", "destPubKey", "srcPubKey") share the
+	// common suffix "ubKey" — skip JSON parse for packets that have none of them.
+	if !strings.Contains(tx.DecodedJSON, "ubKey") {
 		return
 	}
 	var decoded map[string]interface{}
@@ -696,7 +702,7 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 		s.rfCache = make(map[string]*cachedResult)
 		s.topoCache = make(map[string]*cachedResult)
 		s.hashCache = make(map[string]*cachedResult)
-		s.collisionCache = nil
+		s.collisionCache = make(map[string]*cachedResult)
 		s.chanCache = make(map[string]*cachedResult)
 		s.distCache = make(map[string]*cachedResult)
 		s.subpathCache = make(map[string]*cachedResult)
@@ -716,7 +722,7 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 	}
 	if inv.hasNewTransmissions {
 		s.hashCache = make(map[string]*cachedResult)
-		s.collisionCache = nil
+		s.collisionCache = make(map[string]*cachedResult)
 	}
 	if inv.hasChannelData {
 		s.chanCache = make(map[string]*cachedResult)
@@ -3298,6 +3304,144 @@ func (pm *prefixMap) resolve(hop string) *nodeInfo {
 	return &candidates[0]
 }
 
+// resolveWithContext resolves a hop prefix using the neighbor affinity graph
+// for disambiguation when multiple candidates match. It applies a 4-tier
+// priority: (1) affinity graph score, (2) geographic proximity to context
+// nodes, (3) GPS preference, (4) first match fallback.
+//
+// contextPubkeys are pubkeys of nodes that provide context for disambiguation
+// (e.g., the originator, observer, or adjacent hops in the path).
+// graph may be nil, in which case it falls back to the existing resolve().
+func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, graph *NeighborGraph) (*nodeInfo, string, float64) {
+	h := strings.ToLower(hop)
+	candidates := pm.m[h]
+	if len(candidates) == 0 {
+		return nil, "no_match", 0
+	}
+	if len(candidates) == 1 {
+		return &candidates[0], "unique_prefix", 1.0
+	}
+
+	// Priority 1: Affinity graph score
+	//
+	// NOTE: We use raw Score() (count × time-decay) here rather than Jaccard
+	// similarity. Jaccard is used at the graph builder level (disambiguate() in
+	// neighbor_graph.go) to resolve ambiguous edges by comparing neighbor-set
+	// overlap. Here, edges are already resolved — we just need to pick the
+	// highest-affinity candidate among them. Raw score is appropriate because
+	// it reflects both observation frequency and recency, which are the right
+	// signals for "which candidate is this hop most likely referring to."
+	if graph != nil && len(contextPubkeys) > 0 {
+		type scored struct {
+			idx   int
+			score float64
+			count int // observation count of the best-scoring edge
+		}
+		now := time.Now()
+		var scores []scored
+		for i, cand := range candidates {
+			candPK := strings.ToLower(cand.PublicKey)
+			bestScore := 0.0
+			bestCount := 0
+			for _, ctxPK := range contextPubkeys {
+				edges := graph.Neighbors(strings.ToLower(ctxPK))
+				for _, e := range edges {
+					if e.Ambiguous {
+						continue
+					}
+					otherPK := e.NodeA
+					if strings.EqualFold(otherPK, ctxPK) {
+						otherPK = e.NodeB
+					}
+					if strings.EqualFold(otherPK, candPK) {
+						s := e.Score(now)
+						if s > bestScore {
+							bestScore = s
+							bestCount = e.Count
+						}
+					}
+				}
+			}
+			if bestScore > 0 {
+				scores = append(scores, scored{i, bestScore, bestCount})
+			}
+		}
+
+		if len(scores) >= 1 {
+			// Sort descending
+			for i := 0; i < len(scores)-1; i++ {
+				for j := i + 1; j < len(scores); j++ {
+					if scores[j].score > scores[i].score {
+						scores[i], scores[j] = scores[j], scores[i]
+					}
+				}
+			}
+			best := scores[0]
+			// Require both score ratio ≥ 3× AND minimum observations (mirrors
+			// disambiguate() in neighbor_graph.go which checks affinityMinObservations).
+			if best.count >= affinityMinObservations &&
+				(len(scores) == 1 || best.score >= affinityConfidenceRatio*scores[1].score) {
+				return &candidates[best.idx], "neighbor_affinity", best.score
+			}
+			// Scores too close — fall through to lower-priority strategies
+		}
+	}
+
+	// Priority 2: Geographic proximity (if context pubkeys have GPS and candidates have GPS)
+	if len(contextPubkeys) > 0 {
+		// Find GPS positions of context nodes from the prefix map or candidates
+		// We need nodeInfo for context pubkeys — look them up
+		var contextLat, contextLon float64
+		var contextGPSCount int
+		for _, ctxPK := range contextPubkeys {
+			ctxLower := strings.ToLower(ctxPK)
+			if infos, ok := pm.m[ctxLower]; ok && len(infos) == 1 && infos[0].HasGPS {
+				contextLat += infos[0].Lat
+				contextLon += infos[0].Lon
+				contextGPSCount++
+			}
+		}
+		if contextGPSCount > 0 {
+			contextLat /= float64(contextGPSCount)
+			contextLon /= float64(contextGPSCount)
+
+			bestIdx := -1
+			bestDist := math.MaxFloat64
+			for i, cand := range candidates {
+				if !cand.HasGPS {
+					continue
+				}
+				d := geoDistApprox(contextLat, contextLon, cand.Lat, cand.Lon)
+				if d < bestDist {
+					bestDist = d
+					bestIdx = i
+				}
+			}
+			if bestIdx >= 0 {
+				return &candidates[bestIdx], "geo_proximity", 0
+			}
+		}
+	}
+
+	// Priority 3: GPS preference
+	for i := range candidates {
+		if candidates[i].HasGPS {
+			return &candidates[i], "gps_preference", 0
+		}
+	}
+
+	// Priority 4: First match fallback
+	return &candidates[0], "first_match", 0
+}
+
+// geoDistApprox returns an approximate distance between two lat/lon points
+// (equirectangular approximation, sufficient for relative comparison).
+func geoDistApprox(lat1, lon1, lat2, lon2 float64) float64 {
+	dLat := (lat2 - lat1) * math.Pi / 180
+	dLon := (lon2 - lon1) * math.Pi / 180 * math.Cos((lat1+lat2)/2*math.Pi/180)
+	return math.Sqrt(dLat*dLat + dLon*dLon)
+}
+
 func parsePathJSON(pathJSON string) []string {
 	if pathJSON == "" || pathJSON == "[]" {
 		return nil
@@ -4181,20 +4325,20 @@ type hashSizeNodeInfo struct {
 
 // GetAnalyticsHashCollisions returns pre-computed hash collision analysis.
 // This moves the O(n²) distance computation from the frontend to the server.
-func (s *PacketStore) GetAnalyticsHashCollisions() map[string]interface{} {
+func (s *PacketStore) GetAnalyticsHashCollisions(region string) map[string]interface{} {
 	s.cacheMu.Lock()
-	if s.collisionCache != nil && time.Now().Before(s.collisionCache.expiresAt) {
+	if cached, ok := s.collisionCache[region]; ok && time.Now().Before(cached.expiresAt) {
 		s.cacheHits++
 		s.cacheMu.Unlock()
-		return s.collisionCache.data
+		return cached.data
 	}
 	s.cacheMisses++
 	s.cacheMu.Unlock()
 
-	result := s.computeHashCollisions()
+	result := s.computeHashCollisions(region)
 
 	s.cacheMu.Lock()
-	s.collisionCache = &cachedResult{data: result, expiresAt: time.Now().Add(s.collisionCacheTTL)}
+	s.collisionCache[region] = &cachedResult{data: result, expiresAt: time.Now().Add(s.collisionCacheTTL)}
 	s.cacheMu.Unlock()
 
 	return result
@@ -4236,10 +4380,59 @@ type twoByteCellInfo struct {
 	CollisionCount  int                         `json:"collision_count"`
 }
 
-func (s *PacketStore) computeHashCollisions() map[string]interface{} {
+func (s *PacketStore) computeHashCollisions(region string) map[string]interface{} {
 	// Get all nodes from DB
 	nodes := s.getAllNodes()
 	hashInfo := s.GetNodeHashSizeInfo()
+
+	// If region is specified, filter to only nodes seen by regional observers
+	if region != "" {
+		regionObs := s.resolveRegionObservers(region)
+		if regionObs != nil {
+			s.mu.RLock()
+			regionNodePKs := make(map[string]bool)
+			for _, tx := range s.packets {
+				match := false
+				for _, obs := range tx.Observations {
+					if regionObs[obs.ObserverID] {
+						match = true
+						break
+					}
+				}
+				if !match {
+					continue
+				}
+				// Collect node public keys from advert packets
+				if tx.DecodedJSON != "" {
+					var d map[string]interface{}
+					if json.Unmarshal([]byte(tx.DecodedJSON), &d) == nil {
+						if pk, ok := d["pubKey"].(string); ok && pk != "" {
+							regionNodePKs[pk] = true
+						}
+						if pk, ok := d["public_key"].(string); ok && pk != "" {
+							regionNodePKs[pk] = true
+						}
+					}
+				}
+				// Include observers themselves as nodes in the region
+				for _, obs := range tx.Observations {
+					if obs.ObserverID != "" {
+						regionNodePKs[obs.ObserverID] = true
+					}
+				}
+			}
+			s.mu.RUnlock()
+
+			// Filter nodes to only those seen in the region
+			filtered := make([]nodeInfo, 0, len(regionNodePKs))
+			for _, n := range nodes {
+				if regionNodePKs[n.PublicKey] {
+					filtered = append(filtered, n)
+				}
+			}
+			nodes = filtered
+		}
+	}
 
 	// Build collision nodes with hash info
 	var allCNodes []collisionNode
@@ -4487,8 +4680,18 @@ func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 		if len(tx.RawHex) < 4 {
 			continue
 		}
+		header, err := strconv.ParseUint(tx.RawHex[:2], 16, 8)
+		if err != nil {
+			continue
+		}
+		routeType := int(header & 0x03)
 		pathByte, err := strconv.ParseUint(tx.RawHex[2:4], 16, 8)
 		if err != nil {
+			continue
+		}
+		// DIRECT zero-hop adverts use path byte 0x00 locally and can misreport
+		// multibyte repeater hash mode as 1-byte.
+		if routeType == RouteDirect && (pathByte&0x3F) == 0 {
 			continue
 		}
 		hs := int((pathByte>>6)&0x3) + 1

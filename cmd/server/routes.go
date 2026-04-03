@@ -38,10 +38,15 @@ type Server struct {
 	statsMu      sync.Mutex
 	statsCache   *StatsResponse
 	statsCachedAt time.Time
+
+	// Neighbor affinity graph (lazy-built, cached with TTL)
+	neighborMu    sync.Mutex
+	neighborGraph *NeighborGraph
 }
 
 // PerfStats tracks request performance.
 type PerfStats struct {
+	mu          sync.Mutex
 	Requests    int64
 	TotalMs     float64
 	Endpoints   map[string]*EndpointPerf
@@ -110,6 +115,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/perf", s.handlePerf).Methods("GET")
 	r.Handle("/api/perf/reset", s.requireAPIKey(http.HandlerFunc(s.handlePerfReset))).Methods("POST")
 	r.Handle("/api/admin/prune", s.requireAPIKey(http.HandlerFunc(s.handleAdminPrune))).Methods("POST")
+	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
 
 	// Packet endpoints
 	r.HandleFunc("/api/packets/timestamps", s.handlePacketTimestamps).Methods("GET")
@@ -127,6 +133,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/health", s.handleNodeHealth).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/paths", s.handleNodePaths).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/analytics", s.handleNodeAnalytics).Methods("GET")
+	r.HandleFunc("/api/nodes/{pubkey}/neighbors", s.handleNodeNeighbors).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}", s.handleNodeDetail).Methods("GET")
 	r.HandleFunc("/api/nodes", s.handleNodes).Methods("GET")
 
@@ -139,6 +146,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/analytics/hash-collisions", s.handleAnalyticsHashCollisions).Methods("GET")
 	r.HandleFunc("/api/analytics/subpaths", s.handleAnalyticsSubpaths).Methods("GET")
 	r.HandleFunc("/api/analytics/subpath-detail", s.handleAnalyticsSubpathDetail).Methods("GET")
+	r.HandleFunc("/api/analytics/neighbor-graph", s.handleNeighborGraph).Methods("GET")
 
 	// Other endpoints
 	r.HandleFunc("/api/resolve-hops", s.handleResolveHops).Methods("GET")
@@ -162,10 +170,7 @@ func (s *Server) perfMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		ms := float64(time.Since(start).Microseconds()) / 1000.0
 
-		s.perfStats.Requests++
-		s.perfStats.TotalMs += ms
-
-		// Normalize key: prefer mux route template (like Node.js req.route.path)
+		// Normalize key outside lock (no shared state needed)
 		key := r.URL.Path
 		if route := mux.CurrentRoute(r); route != nil {
 			if tmpl, err := route.GetPathTemplate(); err == nil {
@@ -175,6 +180,11 @@ func (s *Server) perfMiddleware(next http.Handler) http.Handler {
 		if key == r.URL.Path {
 			key = perfHexFallback.ReplaceAllString(key, ":id")
 		}
+
+		s.perfStats.mu.Lock()
+		s.perfStats.Requests++
+		s.perfStats.TotalMs += ms
+
 		if _, ok := s.perfStats.Endpoints[key]; !ok {
 			s.perfStats.Endpoints[key] = &EndpointPerf{Recent: make([]float64, 0, 100)}
 		}
@@ -200,6 +210,7 @@ func (s *Server) perfMiddleware(next http.Handler) http.Handler {
 				s.perfStats.SlowQueries = s.perfStats.SlowQueries[1:]
 			}
 		}
+		s.perfStats.mu.Unlock()
 	})
 }
 
@@ -242,6 +253,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		ExternalUrls:        s.cfg.ExternalUrls,
 		PropagationBufferMs: float64(s.cfg.PropagationBufferMs()),
 		Timestamps:          s.cfg.GetTimestampConfig(),
+		DebugAffinity:       s.cfg.DebugAffinity,
 	})
 }
 
@@ -272,6 +284,26 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 		"accentHover": "#6db3ff",
 		"navBg":       "#0f0f23",
 		"navBg2":      "#1a1a2e",
+		"navText":     "#ffffff",
+		"navTextMuted": "#cbd5e1",
+		"background":  "#f4f5f7",
+		"text":        "#1a1a2e",
+		"textMuted":   "#5b6370",
+		"border":      "#e2e5ea",
+		"surface1":    "#ffffff",
+		"surface2":    "#ffffff",
+		"surface3":    "#ffffff",
+		"sectionBg":   "#eef2ff",
+		"cardBg":      "#ffffff",
+		"contentBg":   "#f4f5f7",
+		"detailBg":    "#ffffff",
+		"inputBg":     "#ffffff",
+		"rowStripe":   "#f9fafb",
+		"rowHover":    "#eef2ff",
+		"selectedBg":  "#dbeafe",
+		"statusGreen": "#22c55e",
+		"statusYellow": "#eab308",
+		"statusRed":   "#ef4444",
 	}, s.cfg.Theme, theme.Theme)
 
 	nodeColors := mergeMap(map[string]interface{}{
@@ -282,15 +314,60 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 		"observer":  "#8b5cf6",
 	}, s.cfg.NodeColors, theme.NodeColors)
 
-	themeDark := mergeMap(map[string]interface{}{}, s.cfg.ThemeDark, theme.ThemeDark)
-	typeColors := mergeMap(map[string]interface{}{}, s.cfg.TypeColors, theme.TypeColors)
+	themeDark := mergeMap(map[string]interface{}{
+		"accent":      "#4a9eff",
+		"accentHover": "#6db3ff",
+		"navBg":       "#0f0f23",
+		"navBg2":      "#1a1a2e",
+		"navText":     "#ffffff",
+		"navTextMuted": "#cbd5e1",
+		"background":  "#0f0f23",
+		"text":        "#e2e8f0",
+		"textMuted":   "#a8b8cc",
+		"border":      "#334155",
+		"surface1":    "#1a1a2e",
+		"surface2":    "#232340",
+		"cardBg":      "#1a1a2e",
+		"contentBg":   "#0f0f23",
+		"detailBg":    "#232340",
+		"inputBg":     "#1e1e34",
+		"rowStripe":   "#1e1e34",
+		"rowHover":    "#2d2d50",
+		"selectedBg":  "#1e3a5f",
+		"statusGreen": "#22c55e",
+		"statusYellow": "#eab308",
+		"statusRed":   "#ef4444",
+		"surface3":    "#2d2d50",
+		"sectionBg":   "#1e1e34",
+	}, s.cfg.ThemeDark, theme.ThemeDark)
+	typeColors := mergeMap(map[string]interface{}{
+		"ADVERT":   "#22c55e",
+		"GRP_TXT":  "#3b82f6",
+		"TXT_MSG":  "#f59e0b",
+		"ACK":      "#6b7280",
+		"REQUEST":  "#a855f7",
+		"RESPONSE": "#06b6d4",
+		"TRACE":    "#ec4899",
+		"PATH":     "#14b8a6",
+		"ANON_REQ": "#f43f5e",
+		"UNKNOWN":  "#6b7280",
+	}, s.cfg.TypeColors, theme.TypeColors)
 
-	var home interface{}
-	if theme.Home != nil {
-		home = theme.Home
-	} else if s.cfg.Home != nil {
-		home = s.cfg.Home
+	defaultHome := map[string]interface{}{
+		"heroTitle":    "CoreScope",
+		"heroSubtitle": "Real-time MeshCore LoRa mesh network analyzer",
+		"steps": []interface{}{
+			map[string]interface{}{"emoji": "🔵", "title": "Connect via Bluetooth", "description": "Flash **BLE companion** firmware from [MeshCore Flasher](https://flasher.meshcore.co.uk/).\n- Screenless devices: default PIN `123456`\n- Screen devices: random PIN shown on display\n- If pairing fails: forget device, reboot, re-pair"},
+			map[string]interface{}{"emoji": "📻", "title": "Set the right frequency preset", "description": "**US Recommended:**\n`910.525 MHz · BW 62.5 kHz · SF 7 · CR 5`\nSelect **\"US Recommended\"** in the app or flasher."},
+			map[string]interface{}{"emoji": "📡", "title": "Advertise yourself", "description": "Tap the signal icon → **Flood** to broadcast your node to the mesh. Companions only advert when you trigger it manually."},
+			map[string]interface{}{"emoji": "🔁", "title": "Check \"Heard N repeats\"", "description": "- **\"Sent\"** = transmitted, no confirmation\n- **\"Heard 0 repeats\"** = no repeater picked it up\n- **\"Heard 1+ repeats\"** = you're on the mesh!"},
+		},
+		"footerLinks": []interface{}{
+			map[string]interface{}{"label": "📦 Packets", "url": "#/packets"},
+			map[string]interface{}{"label": "🗺️ Network Map", "url": "#/map"},
+		},
 	}
+	home := mergeMap(defaultHome, s.cfg.Home, theme.Home)
 
 	writeJSON(w, ThemeResponse{
 		Branding:   branding,
@@ -365,7 +442,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		lastPauseMs = float64(m.PauseNs[(m.NumGC+255)%256]) / 1e6
 	}
 
-	// Build slow queries list
+	// Build slow queries list (copy under lock)
+	s.perfStats.mu.Lock()
 	recentSlow := make([]SlowQuery, 0)
 	sliceEnd := s.perfStats.SlowQueries
 	if len(sliceEnd) > 5 {
@@ -374,6 +452,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	for _, sq := range sliceEnd {
 		recentSlow = append(recentSlow, sq)
 	}
+	perfRequests := s.perfStats.Requests
+	perfTotalMs := s.perfStats.TotalMs
+	perfSlowCount := len(s.perfStats.SlowQueries)
+	s.perfStats.mu.Unlock()
 
 	writeJSON(w, HealthResponse{
 		Status:      "ok",
@@ -403,9 +485,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			EstimatedMB: pktEstMB,
 		},
 		Perf: HealthPerfStats{
-			TotalRequests: int(s.perfStats.Requests),
-			AvgMs:         safeAvg(s.perfStats.TotalMs, float64(s.perfStats.Requests)),
-			SlowQueries:   len(s.perfStats.SlowQueries),
+			TotalRequests: int(perfRequests),
+			AvgMs:         safeAvg(perfTotalMs, float64(perfRequests)),
+			SlowQueries:   perfSlowCount,
 			RecentSlow:    recentSlow,
 		},
 	})
@@ -465,22 +547,50 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
-	// Endpoint performance summary
+	// Copy perfStats under lock to avoid data races
+	s.perfStats.mu.Lock()
+	type epSnapshot struct {
+		path    string
+		count   int
+		totalMs float64
+		maxMs   float64
+		recent  []float64
+	}
+	epSnapshots := make([]epSnapshot, 0, len(s.perfStats.Endpoints))
+	for path, ep := range s.perfStats.Endpoints {
+		recentCopy := make([]float64, len(ep.Recent))
+		copy(recentCopy, ep.Recent)
+		epSnapshots = append(epSnapshots, epSnapshot{path, ep.Count, ep.TotalMs, ep.MaxMs, recentCopy})
+	}
+	uptimeSec := int(time.Since(s.perfStats.StartedAt).Seconds())
+	totalRequests := s.perfStats.Requests
+	totalMs := s.perfStats.TotalMs
+	slowQueries := make([]SlowQuery, 0)
+	sliceEnd := s.perfStats.SlowQueries
+	if len(sliceEnd) > 20 {
+		sliceEnd = sliceEnd[len(sliceEnd)-20:]
+	}
+	for _, sq := range sliceEnd {
+		slowQueries = append(slowQueries, sq)
+	}
+	s.perfStats.mu.Unlock()
+
+	// Process snapshots outside lock
 	type epEntry struct {
 		path string
 		data *EndpointStatsResp
 	}
 	var entries []epEntry
-	for path, ep := range s.perfStats.Endpoints {
-		sorted := sortedCopy(ep.Recent)
+	for _, snap := range epSnapshots {
+		sorted := sortedCopy(snap.recent)
 		d := &EndpointStatsResp{
-			Count: ep.Count,
-			AvgMs: safeAvg(ep.TotalMs, float64(ep.Count)),
+			Count: snap.count,
+			AvgMs: safeAvg(snap.totalMs, float64(snap.count)),
 			P50Ms: round(percentile(sorted, 0.5), 1),
 			P95Ms: round(percentile(sorted, 0.95), 1),
-			MaxMs: round(ep.MaxMs, 1),
+			MaxMs: round(snap.maxMs, 1),
 		}
-		entries = append(entries, epEntry{path, d})
+		entries = append(entries, epEntry{snap.path, d})
 	}
 	// Sort by total time spent (count * avg) descending, matching Node.js
 	sort.Slice(entries, func(i, j int) bool {
@@ -521,22 +631,10 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 		sqliteStats = &ss
 	}
 
-	uptimeSec := int(time.Since(s.perfStats.StartedAt).Seconds())
-
-	// Convert slow queries
-	slowQueries := make([]SlowQuery, 0)
-	sliceEnd := s.perfStats.SlowQueries
-	if len(sliceEnd) > 20 {
-		sliceEnd = sliceEnd[len(sliceEnd)-20:]
-	}
-	for _, sq := range sliceEnd {
-		slowQueries = append(slowQueries, sq)
-	}
-
 	writeJSON(w, PerfResponse{
 		Uptime:        uptimeSec,
-		TotalRequests: s.perfStats.Requests,
-		AvgMs:         safeAvg(s.perfStats.TotalMs, float64(s.perfStats.Requests)),
+		TotalRequests: totalRequests,
+		AvgMs:         safeAvg(totalMs, float64(totalRequests)),
 		Endpoints:     summary,
 		SlowQueries:   slowQueries,
 		Cache:         perfCS,
@@ -560,7 +658,13 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePerfReset(w http.ResponseWriter, r *http.Request) {
-	s.perfStats = NewPerfStats()
+	s.perfStats.mu.Lock()
+	s.perfStats.Requests = 0
+	s.perfStats.TotalMs = 0
+	s.perfStats.Endpoints = make(map[string]*EndpointPerf)
+	s.perfStats.SlowQueries = make([]SlowQuery, 0)
+	s.perfStats.StartedAt = time.Now()
+	s.perfStats.mu.Unlock()
 	writeJSON(w, OkResp{Ok: true})
 }
 
@@ -730,10 +834,11 @@ func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 		pathHops = []interface{}{}
 	}
 
+	rawHex, _ := packet["raw_hex"].(string)
 	writeJSON(w, PacketDetailResponse{
 		Packet:           packet,
 		Path:             pathHops,
-		Breakdown:        struct{}{},
+		Breakdown:        BuildBreakdown(rawHex),
 		ObservationCount: observationCount,
 		Observations:     mapSliceToObservations(observations),
 	})
@@ -1204,7 +1309,8 @@ func (s *Server) handleAnalyticsHashSizes(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleAnalyticsHashCollisions(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
-		writeJSON(w, s.store.GetAnalyticsHashCollisions())
+		region := r.URL.Query().Get("region")
+		writeJSON(w, s.store.GetAnalyticsHashCollisions(region))
 		return
 	}
 	writeJSON(w, map[string]interface{}{
@@ -1270,6 +1376,31 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 	hops := strings.Split(hopsParam, ",")
 	resolved := map[string]*HopResolution{}
 
+	// Context for affinity-based disambiguation.
+	fromNode := r.URL.Query().Get("from_node")
+	observer := r.URL.Query().Get("observer")
+	var contextPubkeys []string
+	if fromNode != "" {
+		contextPubkeys = append(contextPubkeys, fromNode)
+	}
+	if observer != "" {
+		contextPubkeys = append(contextPubkeys, observer)
+	}
+
+	// Get the neighbor graph for affinity scoring (may be nil).
+	var graph *NeighborGraph
+	if len(contextPubkeys) > 0 {
+		graph = s.getNeighborGraph()
+	}
+
+	// Get the server's prefix map for resolveWithContext.
+	var pm *prefixMap
+	if s.store != nil {
+		s.store.mu.RLock()
+		_, pm = s.store.getCachedNodesAndPM()
+		s.store.mu.RUnlock()
+	}
+
 	for _, hop := range hops {
 		if hop == "" {
 			continue
@@ -1277,7 +1408,7 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 		hopLower := strings.ToLower(hop)
 		rows, err := s.db.conn.Query("SELECT public_key, name, lat, lon FROM nodes WHERE LOWER(public_key) LIKE ?", hopLower+"%")
 		if err != nil {
-			resolved[hop] = &HopResolution{Name: nil, Candidates: []HopCandidate{}, Conflicts: []interface{}{}}
+			resolved[hop] = &HopResolution{Name: nil, Candidates: []HopCandidate{}, Conflicts: []interface{}{}, Confidence: "ambiguous"}
 			continue
 		}
 
@@ -1295,18 +1426,77 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 
 		if len(candidates) == 0 {
-			resolved[hop] = &HopResolution{Name: nil, Candidates: []HopCandidate{}, Conflicts: []interface{}{}}
+			resolved[hop] = &HopResolution{Name: nil, Candidates: []HopCandidate{}, Conflicts: []interface{}{}, Confidence: "no_match"}
 		} else if len(candidates) == 1 {
 			resolved[hop] = &HopResolution{
 				Name: candidates[0].Name, Pubkey: candidates[0].Pubkey,
 				Candidates: candidates, Conflicts: []interface{}{},
+				Confidence: "unique_prefix",
 			}
 		} else {
+			// Compute affinity scores for each candidate if we have context.
+			if graph != nil && len(contextPubkeys) > 0 {
+				now := time.Now()
+				for i := range candidates {
+					candPK := strings.ToLower(candidates[i].Pubkey)
+					bestScore := 0.0
+					for _, ctxPK := range contextPubkeys {
+						edges := graph.Neighbors(strings.ToLower(ctxPK))
+						for _, e := range edges {
+							if e.Ambiguous {
+								continue
+							}
+							otherPK := e.NodeA
+							if strings.EqualFold(otherPK, ctxPK) {
+								otherPK = e.NodeB
+							}
+							if strings.EqualFold(otherPK, candPK) {
+								sc := e.Score(now)
+								if sc > bestScore {
+									bestScore = sc
+								}
+							}
+						}
+					}
+					if bestScore > 0 {
+						s := bestScore
+						candidates[i].AffinityScore = &s
+					}
+				}
+			}
+
+			// Use resolveWithContext for 4-tier disambiguation.
+			var best *nodeInfo
+			var confidence string
+			if pm != nil {
+				best, confidence, _ = pm.resolveWithContext(hopLower, contextPubkeys, graph)
+			}
+
 			ambig := true
-			resolved[hop] = &HopResolution{
+			hr := &HopResolution{
 				Name: candidates[0].Name, Pubkey: candidates[0].Pubkey,
 				Ambiguous: &ambig, Candidates: candidates, Conflicts: hopCandidatesToConflicts(candidates),
+				Confidence: "ambiguous",
 			}
+
+			// Use the resolved node as the default (best-effort pick).
+			if best != nil {
+				hr.Name = best.Name
+				hr.Pubkey = best.PublicKey
+			}
+
+			// Only promote to bestCandidate when affinity is confident.
+			if confidence == "neighbor_affinity" && best != nil {
+				pk := best.PublicKey
+				hr.BestCandidate = &pk
+				hr.Confidence = "neighbor_affinity"
+			} else if (confidence == "geo_proximity" || confidence == "gps_preference" || confidence == "first_match") && best != nil {
+				// Propagate lower-priority tiers so the API reflects the actual
+				// resolution strategy used, rather than collapsing everything to "ambiguous".
+				hr.Confidence = confidence
+			}
+
+			resolved[hop] = hr
 		}
 	}
 	writeJSON(w, ResolveHopsResponse{Resolved: resolved})

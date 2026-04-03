@@ -1,6 +1,10 @@
 (function() {
   'use strict';
 
+  // getParsedPath / getParsedDecoded are in shared packet-helpers.js (loaded before this file)
+  var getParsedPath = window.getParsedPath;
+  var getParsedDecoded = window.getParsedDecoded;
+
   // Status color helpers (read from CSS variables for theme support)
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function statusGreen() { return cssVar('--status-green') || '#22c55e'; }
@@ -10,6 +14,7 @@
   let nodeData = {};
   let packetCount = 0;
   let activeAnims = 0;
+  const MAX_CONCURRENT_ANIMS = 20;
   let nodeActivity = {};
   let recentPaths = [];
   let showGhostHops = localStorage.getItem('live-ghost-hops') !== 'false';
@@ -368,12 +373,17 @@
     }
   }
 
-  function updateVCRClock(tsMs) {
+  function vcrFormatTime(tsMs) {
     const d = new Date(tsMs);
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    const ss = String(d.getSeconds()).padStart(2, '0');
-    drawLcdText(`${hh}:${mm}:${ss}`, statusGreen());
+    const utc = typeof getTimestampTimezone === 'function' && getTimestampTimezone() === 'utc';
+    const hh = String(utc ? d.getUTCHours() : d.getHours()).padStart(2, '0');
+    const mm = String(utc ? d.getUTCMinutes() : d.getMinutes()).padStart(2, '0');
+    const ss = String(utc ? d.getUTCSeconds() : d.getSeconds()).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  }
+
+  function updateVCRClock(tsMs) {
+    drawLcdText(vcrFormatTime(tsMs), statusGreen());
   }
 
   function updateVCRLcd() {
@@ -425,8 +435,8 @@
   }
 
   function dbPacketToLive(pkt) {
-    const raw = JSON.parse(pkt.decoded_json || '{}');
-    const hops = JSON.parse(pkt.path_json || '[]');
+    const raw = getParsedDecoded(pkt);
+    const hops = getParsedPath(pkt);
     const typeName = raw.type || pkt.payload_type_name || 'UNKNOWN';
     return {
       id: pkt.id, hash: pkt.hash,
@@ -475,8 +485,13 @@
     }
   });
 
+  function packetTimestamp(pkt) {
+    return new Date(pkt.timestamp || pkt.created_at || Date.now()).getTime();
+  }
+  if (typeof window !== 'undefined') window._live_packetTimestamp = packetTimestamp;
+
   function bufferPacket(pkt) {
-    pkt._ts = new Date(pkt.timestamp || pkt.created_at || Date.now()).getTime();
+    pkt._ts = packetTimestamp(pkt);
     const entry = { ts: pkt._ts, pkt };
     VCR.buffer.push(entry);
     // Keep buffer capped at ~2000 — adjust playhead to avoid stale indices (#63)
@@ -1060,8 +1075,7 @@
       const rect = timelineEl.getBoundingClientRect();
       const pct = (e.clientX - rect.left) / rect.width;
       const ts = Date.now() - VCR.timelineScope + pct * VCR.timelineScope;
-      const d = new Date(ts);
-      timeTooltip.textContent = d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      timeTooltip.textContent = vcrFormatTime(ts);
       timeTooltip.style.left = (e.clientX - rect.left) + 'px';
       timeTooltip.classList.remove('hidden');
     });
@@ -1074,8 +1088,7 @@
       const rect = timelineEl.getBoundingClientRect();
       const pct = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
       const ts = Date.now() - VCR.timelineScope + pct * VCR.timelineScope;
-      const d = new Date(ts);
-      timeTooltip.textContent = d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      timeTooltip.textContent = vcrFormatTime(ts);
       timeTooltip.style.left = (touch.clientX - rect.left) + 'px';
       timeTooltip.classList.remove('hidden');
     });
@@ -1436,7 +1449,7 @@
       for (const op of group.packets) {
         let opHops = [];
         if (op.path_json) {
-          try { opHops = typeof op.path_json === 'string' ? JSON.parse(op.path_json) : op.path_json; } catch {}
+          try { opHops = getParsedPath(op); } catch {}
         } else if (op.decoded?.path?.hops) {
           opHops = op.decoded.path.hops;
         }
@@ -1581,6 +1594,21 @@
   window._livePruneStaleNodes = pruneStaleNodes;
   window._liveNodeMarkers = function() { return nodeMarkers; };
   window._liveNodeData = function() { return nodeData; };
+  window._vcrFormatTime = vcrFormatTime;
+  window._liveDbPacketToLive = dbPacketToLive;
+  window._liveExpandToBufferEntries = expandToBufferEntries;
+  window._liveSEG_MAP = SEG_MAP;
+  window._liveBufferPacket = bufferPacket;
+  window._liveVCR = function() { return VCR; };
+  window._liveGetFavoritePubkeys = getFavoritePubkeys;
+  window._livePacketInvolvesFavorite = packetInvolvesFavorite;
+  window._liveIsNodeFavorited = isNodeFavorited;
+  window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
+  window._liveResolveHopPositions = resolveHopPositions;
+  window._liveVcrSpeedCycle = vcrSpeedCycle;
+  window._liveVcrPause = vcrPause;
+  window._liveVcrResumeLive = vcrResumeLive;
+  window._liveVcrSetMode = vcrSetMode;
 
   async function replayRecent() {
     try {
@@ -1705,7 +1733,7 @@
       for (const fp of packets) {
         let fpHops = [];
         if (fp.path_json) {
-          try { fpHops = typeof fp.path_json === 'string' ? JSON.parse(fp.path_json) : fp.path_json; } catch {}
+          try { fpHops = getParsedPath(fp); } catch {}
         } else if (fp.decoded?.path?.hops) {
           fpHops = fp.decoded.path.hops;
         }
@@ -1742,7 +1770,7 @@
       var qp = qd.payload || {};
       var hops;
       if (qpkt.path_json) {
-        try { hops = typeof qpkt.path_json === 'string' ? JSON.parse(qpkt.path_json) : qpkt.path_json; } catch (e) { hops = qd.path?.hops || []; }
+        try { hops = getParsedPath(qpkt); } catch (e) { hops = qd.path?.hops || []; }
       } else {
         hops = qd.path?.hops || [];
       }
@@ -1843,6 +1871,7 @@
 
   function animatePath(hopPositions, typeName, color, rawHex, onHop) {
     if (!animLayer || !pathsLayer) return;
+    if (activeAnims >= MAX_CONCURRENT_ANIMS) return;
     activeAnims++;
     document.getElementById('liveAnimCount').textContent = activeAnims;
     let hopIndex = 0;
@@ -1866,12 +1895,22 @@
             radius: 3, fillColor: '#94a3b8', fillOpacity: 0.35, color: '#94a3b8', weight: 1, opacity: 0.5
           }).addTo(animLayer);
           let pulseUp = true;
-          const pulseTimer = setInterval(() => {
-            if (!animLayer || !animLayer.hasLayer(ghost)) { clearInterval(pulseTimer); return; }
-            ghost.setStyle({ fillOpacity: pulseUp ? 0.6 : 0.25, opacity: pulseUp ? 0.7 : 0.4 });
-            pulseUp = !pulseUp;
-          }, 600);
-          setTimeout(() => { clearInterval(pulseTimer); if (animLayer && animLayer.hasLayer(ghost)) animLayer.removeLayer(ghost); }, 3000);
+          let lastPulseTime = performance.now();
+          const pulseExpiry = lastPulseTime + 3000;
+          function ghostPulse(now) {
+            if (!animLayer || !animLayer.hasLayer(ghost)) return;
+            if (now >= pulseExpiry) {
+              if (animLayer && animLayer.hasLayer(ghost)) animLayer.removeLayer(ghost);
+              return;
+            }
+            if (now - lastPulseTime >= 600) {
+              lastPulseTime = now;
+              ghost.setStyle({ fillOpacity: pulseUp ? 0.6 : 0.25, opacity: pulseUp ? 0.7 : 0.4 });
+              pulseUp = !pulseUp;
+            }
+            requestAnimationFrame(ghostPulse);
+          }
+          requestAnimationFrame(ghostPulse);
         }
       } else {
         pulseNode(hp.key, hp.pos, typeName);
@@ -1915,20 +1954,31 @@
     }).addTo(animLayer);
 
     let r = 2, op = 0.9;
-    const iv = setInterval(() => {
-      r += 1.5; op -= 0.03;
-      if (op <= 0) {
-        clearInterval(iv);
+    let lastPulse = performance.now();
+    const pulseStart = lastPulse;
+    function animatePulse(now) {
+      if (!animLayer) return;
+      if (now - pulseStart > 2000) {
         try { animLayer.removeLayer(ring); } catch {}
         return;
       }
-      try {
-        ring.setRadius(r);
-        ring.setStyle({ opacity: op, weight: Math.max(0.3, 3 - r * 0.04) });
-      } catch { clearInterval(iv); }
-    }, 26);
-    // Safety cleanup — never let a ring live longer than 2s
-    setTimeout(() => { clearInterval(iv); try { animLayer.removeLayer(ring); } catch {} }, 2000);
+      const elapsed = now - lastPulse;
+      if (elapsed >= 26) {
+        const ticks = Math.min(Math.floor(elapsed / 26), 4);
+        r += 1.5 * ticks; op -= 0.03 * ticks;
+        lastPulse = now;
+        if (op <= 0) {
+          try { animLayer.removeLayer(ring); } catch {}
+          return;
+        }
+        try {
+          ring.setRadius(r);
+          ring.setStyle({ opacity: op, weight: Math.max(0.3, 3 - r * 0.04) });
+        } catch { return; }
+      }
+      requestAnimationFrame(animatePulse);
+    }
+    requestAnimationFrame(animatePulse);
 
     const baseColor = marker._baseColor || '#6b7280';
     const baseSize = marker._baseSize || 6;
@@ -2152,6 +2202,10 @@
     const startTime = performance.now();
 
     function tick(now) {
+      if (!animLayer || !pathsLayer) {
+        if (onComplete) onComplete();
+        return;
+      }
       const elapsed = now - startTime;
       const t = Math.min(1, elapsed / DURATION_MS);
       const lat = from[0] + (to[0] - from[0]) * t;
@@ -2196,6 +2250,11 @@
         // Fade out
         const fadeStart = performance.now();
         function fadeOut(now) {
+          if (!animLayer || !pathsLayer) {
+            charMarkers.length = 0;
+            if (onComplete) onComplete();
+            return;
+          }
           const ft = Math.min(1, (now - fadeStart) / 300);
           if (ft >= 1) {
             for (const cm of charMarkers) try { animLayer.removeLayer(cm.marker); } catch {}
@@ -2241,43 +2300,66 @@
       radius: 3.5, fillColor: '#fff', fillOpacity: 1, color: color, weight: 1.5
     }).addTo(animLayer);
 
-    const interval = setInterval(() => {
-      step++;
-      const lat = from[0] + latStep * step;
-      const lon = from[1] + lonStep * step;
-      currentCoords.push([lat, lon]);
-      line.setLatLngs(currentCoords);
-      contrail.setLatLngs(currentCoords);
-      dot.setLatLng([lat, lon]);
-
-      if (step >= steps) {
-        clearInterval(interval);
-        if (animLayer) animLayer.removeLayer(dot);
-
-        recentPaths.push({ line, glowLine: contrail, time: Date.now() });
-        while (recentPaths.length > 5) {
-          const old = recentPaths.shift();
-          if (pathsLayer) { pathsLayer.removeLayer(old.line); pathsLayer.removeLayer(old.glowLine); }
-        }
-
-        setTimeout(() => {
-          let fadeOp = mainOpacity;
-          const fi = setInterval(() => {
-            fadeOp -= 0.1;
-            if (fadeOp <= 0) {
-              clearInterval(fi);
-              if (pathsLayer) { pathsLayer.removeLayer(line); pathsLayer.removeLayer(contrail); }
-              recentPaths = recentPaths.filter(p => p.line !== line);
-            } else {
-              line.setStyle({ opacity: fadeOp });
-              contrail.setStyle({ opacity: fadeOp * 0.15 });
-            }
-          }, 52);
-        }, 800);
-
+    let lastStep = performance.now();
+    function animateLine(now) {
+      if (!animLayer || !pathsLayer) {
         if (onComplete) onComplete();
+        return;
       }
-    }, 33);
+      const elapsed = now - lastStep;
+      if (elapsed >= 33) {
+        const ticks = Math.min(Math.floor(elapsed / 33), 4);
+        lastStep = now;
+        for (let t = 0; t < ticks && step < steps; t++) {
+          step++;
+          const lat = from[0] + latStep * step;
+          const lon = from[1] + lonStep * step;
+          currentCoords.push([lat, lon]);
+        }
+        const lastPt = currentCoords[currentCoords.length - 1];
+        line.setLatLngs(currentCoords);
+        contrail.setLatLngs(currentCoords);
+        dot.setLatLng(lastPt);
+
+        if (step >= steps) {
+          if (animLayer) animLayer.removeLayer(dot);
+
+          recentPaths.push({ line, glowLine: contrail, time: Date.now() });
+          while (recentPaths.length > 5) {
+            const old = recentPaths.shift();
+            if (pathsLayer) { pathsLayer.removeLayer(old.line); pathsLayer.removeLayer(old.glowLine); }
+          }
+
+          setTimeout(() => {
+            let fadeOp = mainOpacity;
+            let lastFade = performance.now();
+            function animateFade(now) {
+              if (!pathsLayer) return;
+              const fadeElapsed = now - lastFade;
+              if (fadeElapsed >= 52) {
+                const fadeTicks = Math.min(Math.floor(fadeElapsed / 52), 4);
+                lastFade = now;
+                fadeOp -= 0.1 * fadeTicks;
+                if (fadeOp <= 0) {
+                  if (pathsLayer) { pathsLayer.removeLayer(line); pathsLayer.removeLayer(contrail); }
+                  recentPaths = recentPaths.filter(p => p.line !== line);
+                  return;
+                }
+                line.setStyle({ opacity: fadeOp });
+                contrail.setStyle({ opacity: fadeOp * 0.15 });
+              }
+              requestAnimationFrame(animateFade);
+            }
+            requestAnimationFrame(animateFade);
+          }, 800);
+
+          if (onComplete) onComplete();
+          return;
+        }
+      }
+      requestAnimationFrame(animateLine);
+    }
+    requestAnimationFrame(animateLine);
   }
 
   function showHeatMap() {

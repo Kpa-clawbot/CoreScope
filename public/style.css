@@ -375,6 +375,10 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   background: var(--section-bg, #eef2ff); font-weight: 700; font-size: 11px;
   text-transform: uppercase; letter-spacing: .5px; color: var(--accent);
 }
+.field-table .section-header td  { background: rgba(243,139,168,0.18); }
+.field-table .section-transport td { background: rgba(137,180,250,0.18); }
+.field-table .section-path td    { background: rgba(166,227,161,0.18); }
+.field-table .section-payload td { background: rgba(249,226,175,0.18); }
 
 /* === Path display === */
 .path-hops {
@@ -625,6 +629,15 @@ button.ch-item.selected { background: var(--selected-bg); }
 .node-detail-section {
   background: var(--card-bg); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px; margin-bottom: 8px;
+}
+/* Bug 7 fix: neighbor table text inherits accent color — force readable text */
+.node-detail-section .data-table td,
+.node-full-card .data-table td {
+  color: var(--text);
+}
+.node-detail-section .data-table td a,
+.node-full-card .data-table td a {
+  color: var(--accent);
 }
 .node-detail-section h4 {
   font-size: 12px; text-transform: uppercase; letter-spacing: .5px;
@@ -1928,4 +1941,13 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   .compare-selector { flex-direction: column; align-items: stretch; }
   .compare-select { min-width: auto; width: 100%; }
   .compare-summary { grid-template-columns: 1fr; }
+}
+
+/* Neighbor graph canvas focus indicator for keyboard navigation */
+#ngCanvas:focus {
+  outline: 2px solid var(--link-color, #60a5fa);
+  outline-offset: 2px;
+}
+#ngCanvas:focus:not(:focus-visible) {
+  outline: none;
 }

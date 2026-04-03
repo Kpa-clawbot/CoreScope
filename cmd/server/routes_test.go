@@ -1596,6 +1596,47 @@ func TestConfigThemeWithCustomConfig(t *testing.T) {
 	}
 }
 
+func TestConfigThemeHomeDefaults(t *testing.T) {
+	// When no home config is set, server should return built-in defaults
+	db := setupTestDB(t)
+	seedTestData(t, db)
+	cfg := &Config{Port: 3000} // no Home set
+	hub := NewHub()
+	srv := NewServer(db, cfg, hub)
+	router := mux.NewRouter()
+	srv.RegisterRoutes(router)
+
+	req := httptest.NewRequest("GET", "/api/config/theme", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	home, ok := body["home"].(map[string]interface{})
+	if !ok || home == nil {
+		t.Fatal("expected non-null home object in theme response")
+	}
+	if home["heroTitle"] != "CoreScope" {
+		t.Errorf("expected heroTitle=CoreScope, got %v", home["heroTitle"])
+	}
+	if home["heroSubtitle"] == nil {
+		t.Error("expected heroSubtitle in home defaults")
+	}
+	steps, ok := home["steps"].([]interface{})
+	if !ok || len(steps) == 0 {
+		t.Error("expected non-empty steps array in home defaults")
+	}
+	footerLinks, ok := home["footerLinks"].([]interface{})
+	if !ok || len(footerLinks) == 0 {
+		t.Error("expected non-empty footerLinks array in home defaults")
+	}
+}
+
 func TestConfigCacheWithCustomTTL(t *testing.T) {
 	db := setupTestDB(t)
 	seedTestData(t, db)
@@ -2178,6 +2219,124 @@ func TestGetNodeHashSizeInfoLatestWins(t *testing.T) {
 	}
 }
 
+func TestGetNodeHashSizeInfoIgnoreDirectZeroHop(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("store.Load failed: %v", err)
+	}
+
+	pk := "dddd111122223333444455556666777788889999aaaabbbbccccddddeeee3333"
+	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'DirIgnore', 'repeater')", pk)
+
+	decoded := `{"name":"DirIgnore","pubKey":"` + pk + `"}`
+	rawFlood2B := "11" + "40" + "aabb" // FLOOD advert, hashSize=2
+	rawDirect0 := "12" + "00" + "aabb" // DIRECT advert, zero-hop (should be ignored)
+
+	payloadType := 4
+	raws := []string{rawFlood2B, rawDirect0, rawFlood2B, rawDirect0, rawFlood2B}
+	for i, raw := range raws {
+		tx := &StoreTx{
+			ID:          9150 + i,
+			RawHex:      raw,
+			Hash:        "dirignore" + strconv.Itoa(i),
+			FirstSeen:   "2024-01-01T0" + strconv.Itoa(i) + ":00:00Z",
+			PayloadType: &payloadType,
+			DecodedJSON: decoded,
+		}
+		store.packets = append(store.packets, tx)
+		store.byPayloadType[4] = append(store.byPayloadType[4], tx)
+	}
+
+	info := store.GetNodeHashSizeInfo()
+	ni := info[pk]
+	if ni == nil {
+		t.Fatal("expected hash info for test node")
+	}
+	if ni.HashSize != 2 {
+		t.Errorf("HashSize=%d, want 2 (direct zero-hop adverts should be ignored)", ni.HashSize)
+	}
+	if ni.Inconsistent {
+		t.Error("expected hash_size_inconsistent=false when direct zero-hop adverts are ignored")
+	}
+	if len(ni.AllSizes) != 1 || !ni.AllSizes[2] {
+		t.Errorf("expected only 2-byte size in AllSizes, got %#v", ni.AllSizes)
+	}
+}
+
+func TestGetNodeHashSizeInfoOnlyDirectZeroHopIgnored(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("store.Load failed: %v", err)
+	}
+
+	pk := "eeee111122223333444455556666777788889999aaaabbbbccccddddeeee4444"
+	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'OnlyDirect', 'repeater')", pk)
+
+	decoded := `{"name":"OnlyDirect","pubKey":"` + pk + `"}`
+	rawDirect0 := "12" + "00" + "aabb"
+	payloadType := 4
+
+	tx := &StoreTx{
+		ID:          9160,
+		RawHex:      rawDirect0,
+		Hash:        "onlydirect0",
+		FirstSeen:   "2024-01-01T00:00:00Z",
+		PayloadType: &payloadType,
+		DecodedJSON: decoded,
+	}
+	store.packets = append(store.packets, tx)
+	store.byPayloadType[4] = append(store.byPayloadType[4], tx)
+
+	info := store.GetNodeHashSizeInfo()
+	if ni := info[pk]; ni != nil {
+		t.Errorf("expected nil hash info for direct zero-hop only node, got HashSize=%d", ni.HashSize)
+	}
+}
+
+func TestGetNodeHashSizeInfoDirectNonZeroHopCounted(t *testing.T) {
+	// A DIRECT advert with non-zero hop count should NOT be skipped —
+	// only zero-hop DIRECT adverts misreport hash size.
+	db := setupTestDB(t)
+	seedTestData(t, db)
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("store.Load failed: %v", err)
+	}
+
+	pk := "ffff111122223333444455556666777788889999aaaabbbbccccddddeeee5555"
+	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'DirNonZero', 'repeater')", pk)
+
+	decoded := `{"name":"DirNonZero","pubKey":"` + pk + `"}`
+	// DIRECT advert (route type 2 = 0x02 in bits 0-1), path byte 0x41:
+	//   upper 2 bits = 01 → hash_size = 2, lower 6 bits = 0x01 → hop count 1 (non-zero)
+	rawDirectNonZero := "12" + "41" + "aabb" // header=0x12 (ADVERT|DIRECT), path=0x41
+	payloadType := 4
+
+	tx := &StoreTx{
+		ID:          9170,
+		RawHex:      rawDirectNonZero,
+		Hash:        "dirnonzero0",
+		FirstSeen:   "2024-01-01T00:00:00Z",
+		PayloadType: &payloadType,
+		DecodedJSON: decoded,
+	}
+	store.packets = append(store.packets, tx)
+	store.byPayloadType[4] = append(store.byPayloadType[4], tx)
+
+	info := store.GetNodeHashSizeInfo()
+	ni := info[pk]
+	if ni == nil {
+		t.Fatal("expected hash info for DIRECT non-zero-hop node — it should NOT be skipped")
+	}
+	if ni.HashSize != 2 {
+		t.Errorf("HashSize=%d, want 2 (DIRECT with hop count > 0 should be counted)", ni.HashSize)
+	}
+}
+
 func TestGetNodeHashSizeInfoNoAdverts(t *testing.T) {
 	// A node with no ADVERT packets should not appear in hash size info.
 	db := setupTestDB(t)
@@ -2680,9 +2839,9 @@ func TestHashCollisionsNoNullArrays(t *testing.T) {
 	}
 }
 
-func TestHashCollisionsRegionParamIgnored(t *testing.T) {
-	// Issue #417: region param was accepted but ignored.
-	// After fix, the endpoint should work without region and not cache per-region.
+func TestHashCollisionsRegionParam(t *testing.T) {
+	// Issue #438: region param should be accepted and used for filtering.
+	// With no region observers configured, results should be identical to global.
 	_, router := setupTestServer(t)
 
 	// Request without region
@@ -2693,7 +2852,7 @@ func TestHashCollisionsRegionParamIgnored(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w1.Code)
 	}
 
-	// Request with region param (should be ignored, same result)
+	// Request with region param (no observers for this region, so falls back to global)
 	req2 := httptest.NewRequest("GET", "/api/analytics/hash-collisions?region=us-west", nil)
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)
@@ -2701,9 +2860,9 @@ func TestHashCollisionsRegionParamIgnored(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w2.Code)
 	}
 
-	// Both should return identical results
+	// With no region observers configured, both should return identical results
 	if w1.Body.String() != w2.Body.String() {
-		t.Error("responses differ with/without region param — region should be ignored")
+		t.Error("responses differ with/without region param when no region observers configured")
 	}
 }
 

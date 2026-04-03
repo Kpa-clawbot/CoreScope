@@ -564,6 +564,40 @@ console.log('\n=== hop-resolver.js ===');
   });
 }
 
+// ===== haversineKm exposed from HopResolver (issue #433) =====
+console.log('\n=== haversineKm (hop-resolver.js) ===');
+{
+  const ctx = makeSandbox();
+  ctx.IATA_COORDS_GEO = {};
+  loadInCtx(ctx, 'public/hop-resolver.js');
+  const HR = ctx.window.HopResolver;
+
+  test('haversineKm is exported', () => {
+    assert.strictEqual(typeof HR.haversineKm, 'function');
+  });
+
+  test('haversineKm same point = 0', () => {
+    assert.strictEqual(HR.haversineKm(37.0, -122.0, 37.0, -122.0), 0);
+  });
+
+  test('haversineKm SF to LA ~559km', () => {
+    // San Francisco (37.7749, -122.4194) to Los Angeles (34.0522, -118.2437)
+    const d = HR.haversineKm(37.7749, -122.4194, 34.0522, -118.2437);
+    assert.ok(d > 550 && d < 570, `Expected ~559km, got ${d}`);
+  });
+
+  test('haversineKm differs from old Euclidean approximation', () => {
+    // The old code used dLat*111, dLon*85 which is inaccurate at high latitudes
+    // Oslo (59.9, 10.7) to Stockholm (59.3, 18.0)
+    const haversine = HR.haversineKm(59.9, 10.7, 59.3, 18.0);
+    const dLat = (59.9 - 59.3) * 111;
+    const dLon = (10.7 - 18.0) * 85;
+    const euclidean = Math.sqrt(dLat*dLat + dLon*dLon);
+    // Haversine should give ~415km, Euclidean ~627km (wrong because dLon*85 is wrong at 60° latitude)
+    assert.ok(Math.abs(haversine - euclidean) > 50, `Expected significant difference, haversine=${haversine.toFixed(1)}, euclidean=${euclidean.toFixed(1)}`);
+  });
+}
+
 // ===== SNR/RSSI Number casting =====
 {
   // These test the pattern used in observer-detail.js, home.js, traces.js, live.js
@@ -966,6 +1000,66 @@ console.log('\n=== live.js: pruneStaleNodes ===');
   });
 }
 
+// ===== live.js: vcrFormatTime respects UTC/local setting =====
+console.log('\n=== live.js: vcrFormatTime UTC/local ===');
+{
+  function makeLiveSandboxForVcr() {
+    const ctx = makeSandbox();
+    ctx.L = { map: () => ({ on: () => {}, setView: () => {}, addLayer: () => {}, remove: () => {} }), tileLayer: () => ({ addTo: () => {} }), layerGroup: () => ({ addTo: () => {}, clearLayers: () => {}, addLayer: () => {} }), circleMarker: () => ({ addTo: () => {}, remove: () => {}, setStyle: () => {}, getLatLng: () => ({}), on: () => {} }), Polyline: function() { return { addTo: () => {}, remove: () => {} }; }, Control: { extend: () => function() { return { addTo: () => {} }; } } };
+    ctx.Chart = function() { return { destroy: () => {}, update: () => {} }; };
+    ctx.navigator = {};
+    ctx.visualViewport = null;
+    ctx.document.documentElement = { getAttribute: () => null, setAttribute: () => {} };
+    ctx.document.body = { appendChild: () => {}, removeChild: () => {}, contains: () => false };
+    ctx.document.querySelector = () => null;
+    ctx.document.querySelectorAll = () => [];
+    ctx.document.createElementNS = () => ctx.document.createElement();
+    ctx.cancelAnimationFrame = () => {};
+    ctx.IATA_COORDS_GEO = {};
+    loadInCtx(ctx, 'public/roles.js');
+    try { loadInCtx(ctx, 'public/live.js'); } catch (e) {
+      for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+    }
+    return ctx;
+  }
+
+  test('vcrFormatTime is exposed as window._vcrFormatTime', () => {
+    const ctx = makeLiveSandboxForVcr();
+    assert.strictEqual(typeof ctx.window._vcrFormatTime, 'function', '_vcrFormatTime must be exposed');
+  });
+
+  test('vcrFormatTime uses UTC hours when timezone is utc', () => {
+    const ctx = makeLiveSandboxForVcr();
+    const fn = ctx.window._vcrFormatTime;
+    assert.ok(fn, '_vcrFormatTime must be exposed');
+    // Force UTC mode
+    ctx.getTimestampTimezone = () => 'utc';
+    // Use a known timestamp: 2024-01-15 14:30:45 UTC = different local time in most zones
+    const tsMs = Date.UTC(2024, 0, 15, 14, 30, 45);
+    const result = fn(tsMs);
+    assert.strictEqual(result, '14:30:45', 'UTC mode must show UTC hours 14:30:45');
+  });
+
+  test('vcrFormatTime uses local hours when timezone is local', () => {
+    const ctx = makeLiveSandboxForVcr();
+    const fn = ctx.window._vcrFormatTime;
+    assert.ok(fn, '_vcrFormatTime must be exposed');
+    ctx.getTimestampTimezone = () => 'local';
+    const d = new Date(2024, 0, 15, 9, 5, 3); // local time
+    const expected = String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0') + ':' + String(d.getSeconds()).padStart(2,'0');
+    assert.strictEqual(fn(d.getTime()), expected, 'local mode must use local hours');
+  });
+
+  test('vcrFormatTime zero-pads single-digit hours, minutes, seconds', () => {
+    const ctx = makeLiveSandboxForVcr();
+    const fn = ctx.window._vcrFormatTime;
+    assert.ok(fn, '_vcrFormatTime must be exposed');
+    ctx.getTimestampTimezone = () => 'utc';
+    const tsMs = Date.UTC(2024, 0, 15, 3, 5, 7); // 03:05:07 UTC
+    assert.strictEqual(fn(tsMs), '03:05:07');
+  });
+}
+
 // ===== NODES.JS: isAdvertMessage + auto-update logic =====
 console.log('\n=== nodes.js: isAdvertMessage ===');
 {
@@ -1179,6 +1273,61 @@ console.log('\n=== nodes.js: WS handler runtime behavior ===');
     env.fireTimers();
     // If _allNodes was reset to null, loadNodes will call api() to re-fetch
     assert.ok(env.getApiCalls() > 0, 'api called because _allNodes was reset to null');
+  });
+
+  test('ADVERT for known node upserts in-place without API fetch', () => {
+    const env = makeNodesWsSandbox();
+    // Pre-populate _allNodes with a known node
+    assert.ok(typeof env.ctx.window._nodesSetAllNodes === 'function', '_nodesSetAllNodes must be exposed');
+    env.ctx.window._nodesSetAllNodes([
+      { public_key: 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899', name: 'OldName', role: 'repeater', lat: null, lon: null, last_seen: '2024-01-01T00:00:00Z' }
+    ]);
+    env.resetCounters();
+
+    env.sendWS({
+      type: 'packet',
+      data: {
+        packet: { payload_type: 4, timestamp: '2024-06-01T12:00:00Z' },
+        decoded: {
+          header: { payloadTypeName: 'ADVERT' },
+          payload: { type: 'ADVERT', pubKey: 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899', name: 'NewName', lat: 50.85, lon: 4.35 }
+        }
+      }
+    });
+    env.fireTimers();
+
+    assert.strictEqual(env.getApiCalls(), 0, 'known node upsert must NOT trigger API fetch');
+    assert.strictEqual(env.getInvalidated().length, 0, 'no cache invalidation for known node upsert');
+    const nodes = env.ctx.window._nodesGetAllNodes();
+    assert.ok(nodes, '_nodesGetAllNodes must be exposed');
+    assert.strictEqual(nodes[0].name, 'NewName', 'name must be updated in place');
+    assert.strictEqual(nodes[0].lat, 50.85, 'lat must be updated in place');
+    assert.strictEqual(nodes[0].lon, 4.35, 'lon must be updated in place');
+    assert.strictEqual(nodes[0].last_seen, '2024-06-01T12:00:00Z', 'last_seen must be updated from packet timestamp');
+  });
+
+  test('ADVERT for unknown node falls back to full reload', () => {
+    const env = makeNodesWsSandbox();
+    env.ctx.window._nodesSetAllNodes([
+      { public_key: 'aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899', name: 'ExistingNode', role: 'repeater' }
+    ]);
+    env.resetCounters();
+
+    // Send ADVERT from a pubKey NOT in _allNodes
+    env.sendWS({
+      type: 'packet',
+      data: {
+        packet: { payload_type: 4 },
+        decoded: {
+          header: { payloadTypeName: 'ADVERT' },
+          payload: { type: 'ADVERT', pubKey: 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', name: 'BrandNewNode' }
+        }
+      }
+    });
+    env.fireTimers();
+
+    assert.ok(env.getApiCalls() > 0, 'unknown node must trigger full reload');
+    assert.ok(env.getInvalidated().includes('/nodes'), 'cache must be invalidated for unknown node');
   });
 
   test('scroll position and selection preserved during WS-triggered refresh', () => {
@@ -1793,287 +1942,111 @@ console.log('\n=== analytics.js: sortChannels ===');
 }
 
 
-// ===== CUSTOMIZE.JS: initState merge behavior =====
-console.log('\n=== customize.js: initState merge behavior ===');
+// ===== CUSTOMIZE-V2.JS: core behavior =====
+console.log('\n=== customize-v2.js: core behavior ===');
 {
-  function loadCustomizeExports(ctx) {
-    const src = fs.readFileSync('public/customize.js', 'utf8');
-    const withExports = src.replace(
-      /\}\)\(\);\s*$/,
-      'window.__customizeExport = { initState: initState, autoSave: autoSave, getState: function () { return state; }, getDefaults: function () { return deepClone(DEFAULTS); }, setInitialized: function (v) { _initialized = !!v; } };})();'
-    );
-    vm.runInContext(withExports, ctx);
+  function loadCustomizeV2(ctx) {
+    const src = fs.readFileSync('public/customize-v2.js', 'utf8');
+    vm.runInContext(src, ctx);
     for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
-    return ctx.window.__customizeExport;
+    return ctx.window._customizerV2;
   }
 
-  test('autoSave no-ops before initialization on panel open path', () => {
+  test('readOverrides returns empty object when no localStorage data', () => {
     const ctx = makeSandbox();
-    let saveTimerCalls = 0;
-    ctx.setTimeout = function () { saveTimerCalls++; return 1; };
-    ctx.clearTimeout = function () {};
-    ctx.window.SITE_CONFIG = { home: { heroTitle: 'Server Hero' } };
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    ex.setInitialized(false);
-    ex.autoSave();
-    assert.strictEqual(saveTimerCalls, 0);
-    assert.strictEqual(ctx.localStorage.getItem('meshcore-user-theme'), null);
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    const overrides = v2.readOverrides();
+    assert.strictEqual(Object.keys(overrides).length, 0);
   });
 
-  test('server home config survives customizer open without modification', () => {
+  test('writeOverrides + readOverrides roundtrip', () => {
     const ctx = makeSandbox();
-    let saveTimerCalls = 0;
-    ctx.setTimeout = function () { saveTimerCalls++; return 1; };
-    ctx.clearTimeout = function () {};
-    ctx.window.SITE_CONFIG = {
-      home: {
-        heroTitle: 'Server Hero',
-        heroSubtitle: 'Server Subtitle',
-        steps: [{ emoji: 'S', title: 'Server Step', description: 'server' }],
-        checklist: [{ question: 'Server Q', answer: 'Server A' }],
-        footerLinks: [{ label: 'Server Link', url: '#/server' }]
-      }
-    };
-    const before = JSON.stringify(ctx.window.SITE_CONFIG.home);
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    ex.setInitialized(false);
-    ex.autoSave();
-    assert.strictEqual(saveTimerCalls, 0);
-    assert.strictEqual(JSON.stringify(ctx.window.SITE_CONFIG.home), before);
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    v2.writeOverrides({ theme: { accent: '#ff0000' } });
+    const result = v2.readOverrides();
+    assert.strictEqual(result.theme.accent, '#ff0000');
   });
 
-  test('post-init autoSave exports user theme without mutating SITE_CONFIG.home', () => {
+  test('computeEffective merges server defaults with overrides', () => {
     const ctx = makeSandbox();
-    let saveTimerCalls = 0;
-    ctx.setTimeout = function (fn) { saveTimerCalls++; fn(); return 1; };
-    ctx.clearTimeout = function () {};
-    ctx.HashChangeEvent = function HashChangeEvent(type) { this.type = type; };
-    ctx.window.SITE_CONFIG = {
-      home: {
-        heroTitle: 'Server Hero',
-        heroSubtitle: 'Server Subtitle',
-        steps: [{ emoji: 'S', title: 'Server Step', description: 'server' }],
-        checklist: [{ question: 'Server Q', answer: 'Server A' }],
-        footerLinks: [{ label: 'Server Link', url: '#/server' }]
-      }
-    };
-    const before = JSON.stringify(ctx.window.SITE_CONFIG.home);
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    ex.setInitialized(true);
-    ex.autoSave();
-    const saved = ctx.localStorage.getItem('meshcore-user-theme');
-    assert.strictEqual(saveTimerCalls, 1);
-    assert(saved && saved.length > 0, 'Expected autoSave to persist user theme');
-    assert.strictEqual(JSON.stringify(ctx.window.SITE_CONFIG.home), before);
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    const server = { theme: { accent: '#111111', navBg: '#222222' } };
+    const overrides = { theme: { accent: '#ff0000' } };
+    const effective = v2.computeEffective(server, overrides);
+    assert.strictEqual(effective.theme.accent, '#ff0000');
+    assert.strictEqual(effective.theme.navBg, '#222222');
   });
 
-  test('partial local checklist does not wipe steps/footerLinks and keeps server colors', () => {
+  test('computeEffective provides home defaults when server home is null', () => {
     const ctx = makeSandbox();
-    ctx.window.SITE_CONFIG = {
-      home: {
-        heroTitle: 'Server Hero',
-        heroSubtitle: 'Server Subtitle',
-        steps: [{ emoji: '🧪', title: 'Server Step', description: 'from server' }],
-        checklist: [{ question: 'Server Q', answer: 'Server A' }],
-        footerLinks: [{ label: 'Server Link', url: '#/server' }]
-      },
-      theme: { accent: '#123456', navBg: '#222222' },
-      nodeColors: { repeater: '#aa0000' }
-    };
-    ctx.localStorage.setItem('meshcore-user-theme', JSON.stringify({
-      home: { checklist: [{ question: 'Local Q', answer: 'Local A' }] }
-    }));
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    const state = ex.getState();
-    assert.strictEqual(state.home.checklist[0].question, 'Local Q');
-    assert.strictEqual(state.home.steps[0].title, 'Server Step');
-    assert.strictEqual(state.home.footerLinks[0].label, 'Server Link');
-    assert.strictEqual(state.home.heroTitle, 'Server Hero');
-    assert.strictEqual(state.theme.accent, '#123456');
-    assert.strictEqual(state.nodeColors.repeater, '#aa0000');
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    const server = { theme: { accent: '#111111' }, home: null };
+    const effective = v2.computeEffective(server, {});
+    assert.ok(effective.home, 'home should not be null');
+    assert.strictEqual(effective.home.heroTitle, 'CoreScope');
+    assert.ok(Array.isArray(effective.home.steps), 'steps should be an array');
+    assert.ok(effective.home.steps.length > 0, 'steps should not be empty');
+    assert.ok(Array.isArray(effective.home.footerLinks), 'footerLinks should be an array');
   });
 
-  test('server values survive when localStorage has partial overrides', () => {
+  test('computeEffective merges user home overrides with defaults', () => {
     const ctx = makeSandbox();
-    ctx.window.SITE_CONFIG = {
-      home: {
-        heroTitle: 'Server Hero',
-        heroSubtitle: 'Server Subtitle',
-        steps: [{ emoji: '1️⃣', title: 'Server Step', description: 'server' }],
-        footerLinks: [{ label: 'Server Footer', url: '#/s' }]
-      },
-      theme: { accent: '#111111', navBg: '#222222', navText: '#333333' },
-      typeColors: { ADVERT: '#00aa00', REQUEST: '#aa00aa' }
-    };
-    ctx.localStorage.setItem('meshcore-user-theme', JSON.stringify({
-      home: { heroTitle: 'Local Hero' },
-      theme: { accent: '#999999' },
-      typeColors: { ADVERT: '#ff00ff' }
-    }));
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    const state = ex.getState();
-    assert.strictEqual(state.home.heroTitle, 'Local Hero');
-    assert.strictEqual(state.home.heroSubtitle, 'Server Subtitle');
-    assert.strictEqual(state.home.steps[0].title, 'Server Step');
-    assert.strictEqual(state.home.footerLinks[0].label, 'Server Footer');
-    assert.strictEqual(state.theme.accent, '#999999');
-    assert.strictEqual(state.theme.navBg, '#222222');
-    assert.strictEqual(state.typeColors.ADVERT, '#ff00ff');
-    assert.strictEqual(state.typeColors.REQUEST, '#aa00aa');
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    const server = { home: null };
+    const overrides = { home: { heroTitle: 'MyMesh' } };
+    const effective = v2.computeEffective(server, overrides);
+    assert.strictEqual(effective.home.heroTitle, 'MyMesh');
+    assert.ok(Array.isArray(effective.home.steps), 'steps should survive user override of heroTitle');
   });
 
-  test('full localStorage values override server config', () => {
+  test('isValidColor accepts hex, rgb, hsl, and named colors', () => {
     const ctx = makeSandbox();
-    ctx.window.SITE_CONFIG = {
-      home: {
-        heroTitle: 'Server Hero',
-        heroSubtitle: 'Server Subtitle',
-        steps: [{ emoji: 'S', title: 'Server Step', description: 'server' }],
-        checklist: [{ question: 'Server Q', answer: 'Server A' }],
-        footerLinks: [{ label: 'Server Link', url: '#/server' }]
-      },
-      theme: { accent: '#101010' }
-    };
-    ctx.localStorage.setItem('meshcore-user-theme', JSON.stringify({
-      home: {
-        heroTitle: 'Local Hero',
-        heroSubtitle: 'Local Subtitle',
-        steps: [{ emoji: 'L', title: 'Local Step', description: 'local' }],
-        checklist: [{ question: 'Local Q', answer: 'Local A' }],
-        footerLinks: [{ label: 'Local Link', url: '#/local' }]
-      },
-      theme: { accent: '#abcdef', navBg: '#fedcba' }
-    }));
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    const state = ex.getState();
-    assert.strictEqual(state.home.heroTitle, 'Local Hero');
-    assert.strictEqual(state.home.heroSubtitle, 'Local Subtitle');
-    assert.strictEqual(state.home.steps[0].title, 'Local Step');
-    assert.strictEqual(state.home.checklist[0].question, 'Local Q');
-    assert.strictEqual(state.home.footerLinks[0].label, 'Local Link');
-    assert.strictEqual(state.theme.accent, '#abcdef');
-    assert.strictEqual(state.theme.navBg, '#fedcba');
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    assert.strictEqual(v2.isValidColor('#ff0000'), true);
+    assert.strictEqual(v2.isValidColor('#abc'), true);
+    assert.strictEqual(v2.isValidColor('rgb(255, 0, 0)'), true);
+    assert.strictEqual(v2.isValidColor('hsl(0, 100%, 50%)'), true);
+    assert.strictEqual(v2.isValidColor('red'), true);
+    assert.strictEqual(v2.isValidColor('notacolor'), false);
+    assert.strictEqual(v2.isValidColor(123), false);
+  });
+
+  test('validateShape reports invalid color values', () => {
+    const ctx = makeSandbox();
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    const valid = v2.validateShape({ theme: { accent: '#ff0000', navBg: '#222222' } });
+    assert.strictEqual(valid.valid, true);
+    const invalid = v2.validateShape({ theme: { accent: '#ff0000', navBg: 'not-a-color' } });
+    assert.ok(invalid.errors.length > 0, 'should report invalid color');
+    assert.ok(invalid.errors[0].includes('navBg'), 'error should mention navBg');
+  });
+
+  test('migrateOldKeys reads legacy localStorage keys', () => {
+    const ctx = makeSandbox();
+    ctx.CustomEvent = function (type) { this.type = type; };
+    ctx.localStorage.setItem('meshcore-theme', 'dark');
+    const v2 = loadCustomizeV2(ctx);
+    // migrateOldKeys should handle legacy keys without crashing
+    v2.migrateOldKeys();
+  });
+
+  test('THEME_CSS_MAP includes surface3 and sectionBg', () => {
+    const ctx = makeSandbox();
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const src = fs.readFileSync('public/customize-v2.js', 'utf8');
+    assert.ok(src.includes("surface3: '--surface-3'"), 'surface3 must map to --surface-3');
+    assert.ok(src.includes("sectionBg: '--section-bg'"), 'sectionBg must map to --section-bg');
   });
 }
 
-// ===== customize.js: buildExport home diff against server (#284) =====
-console.log('\n=== customize.js: buildExport home diff vs server ===');
-{
-  function makeCustomizeSandbox(serverHome, localStorageHome) {
-    const ctx = makeSandbox();
-    ctx.window.SITE_CONFIG = { home: Object.assign({}, serverHome), branding: { siteName: 'Test' } };
-    ctx.window._SITE_CONFIG_ORIGINAL_HOME = JSON.parse(JSON.stringify(serverHome));
-    if (localStorageHome) {
-      ctx.localStorage.setItem('meshcore-user-theme', JSON.stringify({ home: localStorageHome }));
-    }
-    loadInCtx(ctx, 'public/roles.js');
-    loadInCtx(ctx, 'public/customize.js');
-    return ctx;
-  }
-
-  test('buildExport does not capture unmodified server steps in export', () => {
-    // Server has custom steps; user only edits checklist
-    const serverHome = {
-      heroTitle: 'Server Hero',
-      steps: [{ title: 'S1', desc: '' }, { title: 'S2', desc: '' }],
-      checklist: [],
-      footerLinks: []
-    };
-    const ctx = makeCustomizeSandbox(serverHome, null);
-    const buildExport = ctx.window._customizeBuildExport;
-    const initState = ctx.window._customizeInitState;
-    if (!buildExport || !initState) { console.log('    SKIP: test hooks not exposed'); return; }
-    initState();
-    const exp = buildExport();
-    assert.ok(!exp.home || !exp.home.steps,
-      'server-provided steps must not appear in export when user did not change them');
-  });
-
-  test('buildExport captures steps only when user actually changed them', () => {
-    const serverHome = {
-      heroTitle: 'Server Hero',
-      steps: [{ title: 'S1', desc: '' }],
-      checklist: [],
-      footerLinks: []
-    };
-    const localHome = { steps: [{ title: 'User Step', desc: 'edited' }] };
-    const ctx = makeCustomizeSandbox(serverHome, localHome);
-    const buildExport = ctx.window._customizeBuildExport;
-    const initState = ctx.window._customizeInitState;
-    if (!buildExport || !initState) { console.log('    SKIP: test hooks not exposed'); return; }
-    initState();
-    const exp = buildExport();
-    assert.ok(exp.home && exp.home.steps,
-      'user-modified steps must appear in export');
-    assert.strictEqual(exp.home.steps[0].title, 'User Step');
-  });
-
-  test('autoSave syncs state.home to SITE_CONFIG.home', () => {
-    const customizeSource = fs.readFileSync('public/customize.js', 'utf8');
-    assert.ok(
-      customizeSource.includes('window.SITE_CONFIG.home = Object.assign({}, window._SITE_CONFIG_ORIGINAL_HOME'),
-      'autoSave must sync state.home to SITE_CONFIG.home using _SITE_CONFIG_ORIGINAL_HOME as base'
-    );
-  });
-}
-
-// ===== APP.JS: home rehydration merge =====
-console.log('\n=== app.js: home rehydration merge ===');
-{
-  test('mergeUserHomeConfig layers local home overrides on server home', () => {
-    const ctx = makeSandbox();
-    loadInCtx(ctx, 'public/roles.js');
-    loadInCtx(ctx, 'public/app.js');
-    const merged = ctx.mergeUserHomeConfig(
-      {
-        home: {
-          heroTitle: 'Server Hero',
-          heroSubtitle: 'Server Subtitle',
-          steps: [{ title: 'Server Step' }],
-          footerLinks: [{ label: 'Server Link' }]
-        }
-      },
-      {
-        home: {
-          heroSubtitle: 'Local Subtitle',
-          checklist: [{ question: 'Local Q', answer: 'Local A' }]
-        }
-      }
-    );
-    assert.strictEqual(merged.home.heroTitle, 'Server Hero');
-    assert.strictEqual(merged.home.heroSubtitle, 'Local Subtitle');
-    assert.strictEqual(merged.home.steps[0].title, 'Server Step');
-    assert.strictEqual(merged.home.footerLinks[0].label, 'Server Link');
-    assert.strictEqual(merged.home.checklist[0].question, 'Local Q');
-  });
-
-  test('mergeUserHomeConfig handles refresh-style localStorage payload', () => {
-    const ctx = makeSandbox();
-    loadInCtx(ctx, 'public/roles.js');
-    loadInCtx(ctx, 'public/app.js');
-    ctx.localStorage.setItem('meshcore-user-theme', JSON.stringify({
-      home: { heroTitle: 'Local Hero' }
-    }));
-    const cfg = {
-      home: {
-        heroTitle: 'Server Hero',
-        heroSubtitle: 'Server Subtitle',
-        steps: [{ title: 'Server Step' }]
-      }
-    };
-    const userTheme = JSON.parse(ctx.localStorage.getItem('meshcore-user-theme') || '{}');
-    const merged = ctx.mergeUserHomeConfig(cfg, userTheme);
-    assert.strictEqual(merged.home.heroTitle, 'Local Hero');
-    assert.strictEqual(merged.home.heroSubtitle, 'Server Subtitle');
-    assert.strictEqual(merged.home.steps[0].title, 'Server Step');
-  });
-}
+// ===== APP.JS: home rehydration merge (mergeUserHomeConfig removed — dead code) =====
 
 // ===== CHANNELS.JS: WS Region Filter helper =====
 console.log('\n=== channels.js: shouldProcessWSMessageForRegion ===');
@@ -2725,24 +2698,22 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
   test('buildFlatRowHtml has null-safe decoded_json', () => {
     const flatBuilderMatch = packetsSource.match(/function buildFlatRowHtml[\s\S]*?(?=\n  function )/);
     assert.ok(flatBuilderMatch, 'buildFlatRowHtml should exist');
-    assert.ok(flatBuilderMatch[0].includes("p.decoded_json || '{}'"),
-      'buildFlatRowHtml should have null-safe decoded_json fallback');
+    assert.ok(flatBuilderMatch[0].includes('getParsedDecoded(p)'),
+      'buildFlatRowHtml should use getParsedDecoded for null-safe decoded_json fallback');
   });
 
   test('pathHops null guard in buildFlatRowHtml (issue #451)', () => {
     const flatBuilderMatch = packetsSource.match(/function buildFlatRowHtml[\s\S]*?(?=\n  function )/);
     assert.ok(flatBuilderMatch, 'buildFlatRowHtml should exist');
-    // The JSON.parse result must be coalesced with || [] to handle literal null from path_json
-    assert.ok(flatBuilderMatch[0].includes("|| '[]') || []"),
-      'buildFlatRowHtml should coalesce parsed path_json with || [] to guard against null');
+    assert.ok(flatBuilderMatch[0].includes('getParsedPath(p)'),
+      'buildFlatRowHtml should use getParsedPath which guards against null');
   });
 
   test('pathHops null guard in detail pane (issue #451)', () => {
-    // The detail pane (selectPacket / showPacketDetail) also parses path_json
-    const detailMatch = packetsSource.match(/let pathHops;\s*try \{[^}]+\} catch/);
-    assert.ok(detailMatch, 'detail pane pathHops parsing should exist');
-    assert.ok(detailMatch[0].includes("|| '[]') || []"),
-      'detail pane should coalesce parsed path_json with || [] to guard against null');
+    assert.ok(packetsSource.includes('getParsedPath(pkt)'),
+      'detail pane should use getParsedPath for null-safe path parsing');
+    assert.ok(packetsSource.includes('getParsedDecoded(pkt)'),
+      'detail pane should use getParsedDecoded for null-safe decoded parsing');
   });
 
   test('destroy cleans up virtual scroll state', () => {
@@ -2757,23 +2728,76 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
   });
 }
 
-// ===== live.js: bufferPacket timestamp =====
-console.log('\n=== live.js: bufferPacket timestamp ===');
+// ===== live.js: packetTimestamp =====
+console.log('\n=== live.js: packetTimestamp ===');
 {
-  const liveSource = fs.readFileSync('public/live.js', 'utf8');
+  // packetTimestamp is extracted and exposed via window._live_packetTimestamp
+  const ctx = makeSandbox();
+  ctx.L = {
+    circleMarker: () => { const m = { addTo() { return m; }, bindTooltip() { return m; }, on() { return m; }, setRadius() {}, setStyle() {}, setLatLng() {}, getLatLng() { return { lat: 0, lng: 0 }; }, _baseColor: '', _baseSize: 5, _glowMarker: null }; return m; },
+    polyline: () => { const p = { addTo() { return p; }, setStyle() {}, remove() {} }; return p; },
+    map: () => { const m = { setView() { return m; }, addLayer() { return m; }, on() { return m; }, getZoom() { return 11; }, getCenter() { return { lat: 37, lng: -122 }; }, getBounds() { return { contains: () => true }; }, fitBounds() { return m; }, invalidateSize() {}, remove() {}, hasLayer() { return false; } }; return m; },
+    layerGroup: () => { const g = { addTo() { return g; }, addLayer() {}, removeLayer() {}, clearLayers() {}, hasLayer() { return true; }, eachLayer() {} }; return g; },
+    tileLayer: () => ({ addTo() { return this; } }),
+    control: { attribution: () => ({ addTo() {} }) },
+    DomUtil: { addClass() {}, removeClass() {} },
+  };
+  ctx.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  ctx.matchMedia = () => ({ matches: false, addEventListener: () => {} });
+  ctx.registerPage = () => {};
+  ctx.onWS = () => {};
+  ctx.offWS = () => {};
+  ctx.connectWS = () => {};
+  ctx.api = () => Promise.resolve([]);
+  ctx.invalidateApiCache = () => {};
+  ctx.favStar = () => '';
+  ctx.bindFavStars = () => {};
+  ctx.getFavorites = () => [];
+  ctx.isFavorite = () => false;
+  ctx.HopResolver = { init: () => {}, resolve: () => ({}), ready: () => false };
+  ctx.MeshAudio = null;
+  ctx.RegionFilter = { init: () => {}, getSelected: () => null, onRegionChange: () => {} };
+  ctx.WebSocket = function() { this.close = () => {}; };
+  ctx.navigator = {};
+  ctx.visualViewport = null;
+  ctx.document.documentElement = { getAttribute: () => null, setAttribute: () => {} };
+  ctx.document.body = { appendChild: () => {}, removeChild: () => {}, contains: () => false };
+  ctx.document.querySelector = () => null;
+  ctx.document.querySelectorAll = () => [];
+  ctx.document.createElementNS = () => ctx.document.createElement();
+  ctx.cancelAnimationFrame = () => {};
+  ctx.IATA_COORDS_GEO = {};
+  loadInCtx(ctx, 'public/roles.js');
+  try { loadInCtx(ctx, 'public/live.js'); } catch (e) {
+    for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+  }
 
-  test('bufferPacket uses packet timestamp not Date.now()', () => {
-    assert.ok(
-      liveSource.includes('pkt._ts = new Date(pkt.timestamp || pkt.created_at || Date.now()).getTime()'),
-      'bufferPacket must derive _ts from pkt.timestamp, not Date.now()'
-    );
+  const packetTimestamp = ctx._live_packetTimestamp || ctx.window._live_packetTimestamp;
+
+  test('packetTimestamp uses pkt.timestamp ISO string', () => {
+    assert.ok(packetTimestamp, 'packetTimestamp should be exposed');
+    const ts = packetTimestamp({ timestamp: '2026-03-15T12:30:00.000Z' });
+    assert.strictEqual(ts, new Date('2026-03-15T12:30:00.000Z').getTime());
   });
 
-  test('bufferPacket does not unconditionally assign Date.now() to _ts', () => {
-    assert.ok(
-      !liveSource.match(/pkt\._ts\s*=\s*Date\.now\(\)\s*;/),
-      'bufferPacket must not stamp all packets with receive time'
-    );
+  test('packetTimestamp falls back to pkt.created_at', () => {
+    const ts = packetTimestamp({ created_at: '2025-06-01T00:00:00Z' });
+    assert.strictEqual(ts, new Date('2025-06-01T00:00:00Z').getTime());
+  });
+
+  test('packetTimestamp falls back to Date.now() when no fields', () => {
+    const before = Date.now();
+    const ts = packetTimestamp({});
+    const after = Date.now();
+    assert.ok(ts >= before && ts <= after, 'should fall back to current time');
+  });
+
+  test('packetTimestamp prefers timestamp over created_at', () => {
+    const ts = packetTimestamp({
+      timestamp: '2026-01-01T00:00:00Z',
+      created_at: '2025-01-01T00:00:00Z',
+    });
+    assert.strictEqual(ts, new Date('2026-01-01T00:00:00Z').getTime());
   });
 }
 
@@ -2802,6 +2826,1458 @@ console.log('\n=== live.js: nextHop null guards ===');
       'nextHop must null-check liveAnimCount element');
     assert.ok(liveSource.includes('if (countEl) countEl.textContent = activeAnims'),
       'nextHop must conditionally update liveAnimCount');
+  });
+}
+
+// === channels.js: formatHashHex (#465) ===
+console.log('\n=== channels.js: formatHashHex (issue #465) ===');
+{
+  const chSource = fs.readFileSync('public/channels.js', 'utf8');
+
+  test('formatHashHex exists in channels.js', () => {
+    assert.ok(chSource.includes('function formatHashHex('), 'formatHashHex function must exist');
+  });
+
+  test('channel fallback name uses formatHashHex', () => {
+    assert.ok(chSource.includes('formatHashHex(ch.hash)'), 'renderChannelList must format hash as hex');
+    assert.ok(chSource.includes('formatHashHex(hash)'), 'selectChannel must format hash as hex');
+  });
+
+  test('formatHashHex produces correct hex output', () => {
+    // Extract and evaluate the function
+    const match = chSource.match(/function formatHashHex\(hash\)\s*\{[^}]+\}/);
+    assert.ok(match, 'should extract formatHashHex');
+    const ctx = vm.createContext({});
+    vm.runInContext(match[0], ctx);
+    const fmt = vm.runInContext('formatHashHex', ctx);
+    assert.strictEqual(fmt(10), '0x0A');
+    assert.strictEqual(fmt(255), '0xFF');
+    assert.strictEqual(fmt(0), '0x00');
+    assert.strictEqual(fmt(1), '0x01');
+    assert.strictEqual(fmt('LongFast'), 'LongFast');  // string hash passes through
+  });
+}
+
+// ===== MAP NEIGHBOR FILTER LOGIC =====
+{
+  console.log('\n--- Map neighbor filter logic ---');
+
+  // NOTE: applyNeighborFilter is a hand-written copy of the filter logic from
+  // public/map.js _renderMarkersInner. The real code is browser-only (depends on
+  // Leaflet, DOM, closure state) and cannot be imported directly in Node.
+  // If the filter logic in map.js changes, update this copy to match.
+  function applyNeighborFilter(nodes, filters, selectedReferenceNode, neighborPubkeys) {
+    return nodes.filter(n => {
+      if (!n.lat || !n.lon) return false;
+      if (!filters[n.role || 'companion']) return false;
+      if (filters.neighbors && selectedReferenceNode && neighborPubkeys) {
+        const pk = n.public_key;
+        if (pk !== selectedReferenceNode && !neighborPubkeys.has(pk)) return false;
+      }
+      return true;
+    });
+  }
+
+  const testNodes = [
+    { public_key: 'aaa', lat: 1, lon: 1, role: 'repeater', name: 'NodeA' },
+    { public_key: 'bbb', lat: 2, lon: 2, role: 'repeater', name: 'NodeB' },
+    { public_key: 'ccc', lat: 3, lon: 3, role: 'companion', name: 'NodeC' },
+    { public_key: 'ddd', lat: 4, lon: 4, role: 'repeater', name: 'NodeD' },
+  ];
+  const baseFilters = { repeater: true, companion: true, room: true, sensor: true, neighbors: false };
+
+  test('neighbor filter off shows all nodes', () => {
+    const result = applyNeighborFilter(testNodes, baseFilters, null, null);
+    assert.strictEqual(result.length, 4);
+  });
+
+  test('neighbor filter on with no reference shows all nodes', () => {
+    const f = { ...baseFilters, neighbors: true };
+    const result = applyNeighborFilter(testNodes, f, null, null);
+    assert.strictEqual(result.length, 4);
+  });
+
+  test('neighbor filter on with reference and neighbors filters correctly', () => {
+    const f = { ...baseFilters, neighbors: true };
+    const neighborSet = new Set(['bbb', 'ccc']);
+    const result = applyNeighborFilter(testNodes, f, 'aaa', neighborSet);
+    assert.strictEqual(result.length, 3); // aaa (ref) + bbb + ccc (neighbors)
+    const pks = result.map(n => n.public_key);
+    assert.ok(pks.includes('aaa'), 'reference node should be included');
+    assert.ok(pks.includes('bbb'), 'neighbor bbb should be included');
+    assert.ok(pks.includes('ccc'), 'neighbor ccc should be included');
+    assert.ok(!pks.includes('ddd'), 'non-neighbor ddd should be excluded');
+  });
+
+  test('neighbor filter on with reference and empty neighbors shows only reference', () => {
+    const f = { ...baseFilters, neighbors: true };
+    const neighborSet = new Set();
+    const result = applyNeighborFilter(testNodes, f, 'aaa', neighborSet);
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].public_key, 'aaa');
+  });
+
+  test('neighbor filter respects role filter', () => {
+    const f = { ...baseFilters, neighbors: true, companion: false };
+    const neighborSet = new Set(['bbb', 'ccc']);
+    const result = applyNeighborFilter(testNodes, f, 'aaa', neighborSet);
+    assert.strictEqual(result.length, 2); // aaa + bbb (ccc is companion, filtered out)
+    const pks = result.map(n => n.public_key);
+    assert.ok(!pks.includes('ccc'), 'companion ccc should be filtered by role');
+  });
+
+  // Test path parsing for neighbor extraction
+  test('neighbor extraction from paths data', () => {
+    const refPubkey = 'aaa';
+    const paths = [
+      { hops: [{ pubkey: 'bbb' }, { pubkey: 'aaa' }, { pubkey: 'ccc' }] },
+      { hops: [{ pubkey: 'aaa' }, { pubkey: 'ddd' }] },
+      { hops: [{ pubkey: 'eee' }, { pubkey: 'aaa' }] },
+    ];
+    const neighborSet = new Set();
+    for (const p of paths) {
+      const hops = p.hops || [];
+      for (let i = 0; i < hops.length; i++) {
+        if (hops[i].pubkey === refPubkey) {
+          if (i > 0 && hops[i - 1].pubkey) neighborSet.add(hops[i - 1].pubkey);
+          if (i < hops.length - 1 && hops[i + 1].pubkey) neighborSet.add(hops[i + 1].pubkey);
+        }
+      }
+    }
+    assert.ok(neighborSet.has('bbb'), 'bbb is adjacent in path 1');
+    assert.ok(neighborSet.has('ccc'), 'ccc is adjacent in path 1');
+    assert.ok(neighborSet.has('ddd'), 'ddd is adjacent in path 2');
+    assert.ok(neighborSet.has('eee'), 'eee is adjacent in path 3');
+    assert.strictEqual(neighborSet.size, 4);
+  });
+}
+
+
+// ===== packets.js: memory bounds =====
+{
+  console.log('\nPackets page — memory bounds:');
+  const src = fs.readFileSync('public/packets.js', 'utf8');
+
+  test('pauseBuffer is capped at 2000 entries', () => {
+    assert.ok(src.includes('pauseBuffer.length > 2000'),
+      'pauseBuffer cap check must be present');
+    assert.ok(src.includes('pauseBuffer = pauseBuffer.slice(-2000)'),
+      'pauseBuffer must be trimmed to last 2000 entries');
+  });
+
+  test('packets array is trimmed to PACKET_LIMIT after WS update in grouped mode', () => {
+    assert.ok(src.includes('packets.length > PACKET_LIMIT'),
+      'grouped mode must check packets length against PACKET_LIMIT');
+    assert.ok(src.includes('packets.splice(PACKET_LIMIT)'),
+      'grouped mode must splice packets to PACKET_LIMIT');
+  });
+
+  test('evicted packets are removed from hashIndex', () => {
+    assert.ok(/const evicted = packets\.splice\(PACKET_LIMIT\)[\s\S]{0,200}hashIndex\.delete\(p\.hash\)/.test(src),
+      'after splice, evicted entries must be deleted from hashIndex');
+  });
+
+  test('packets array is trimmed to PACKET_LIMIT after WS update in flat mode', () => {
+    assert.ok(/packets = filtered\.concat\(packets\)[\s\S]{0,100}packets\.length = PACKET_LIMIT/.test(src),
+      'flat mode must truncate packets to PACKET_LIMIT after prepend');
+  });
+
+  test('_children is capped at 200 on WebSocket prepend', () => {
+    assert.ok(src.includes('existing._children.length > 200'),
+      '_children cap check must be present');
+    assert.ok(src.includes('existing._children.length = 200'),
+      '_children must be truncated to 200');
+  });
+
+  test('observerMap is built from observers array in loadObservers', () => {
+    assert.ok(src.includes('observerMap = new Map(observers.map(o => [o.id, o]))'),
+      'observerMap must be built as id→observer Map in loadObservers');
+  });
+
+  test('observerMap is reset in destroy', () => {
+    assert.ok(src.includes('observerMap = new Map()'),
+      'destroy must reset observerMap to empty Map');
+  });
+
+  test('WS handler debounces render via _wsRenderTimer', () => {
+    const wsBlock = src.slice(src.indexOf('wsHandler = debouncedOnWS'), src.indexOf('function destroy()'));
+    assert.ok(wsBlock.includes('_wsRenderTimer'),
+      'WS handler must debounce renders via _wsRenderTimer');
+    assert.ok(wsBlock.includes('clearTimeout(_wsRenderTimer)'),
+      'WS handler must clear pending timer before scheduling new render');
+    assert.ok(/setTimeout\(function \(\) \{ renderTableRows\(\); \}/.test(wsBlock),
+      'WS handler must schedule renderTableRows via setTimeout');
+  });
+
+  test('destroy clears _wsRenderTimer', () => {
+    const destroyBlock = src.slice(src.indexOf('function destroy()'), src.indexOf('function destroy()') + 500);
+    assert.ok(destroyBlock.includes('clearTimeout(_wsRenderTimer)'),
+      'destroy must clear _wsRenderTimer to prevent stale renders after navigation');
+  });
+}
+// ===== NODES.JS: shared sandbox factory =====
+function makeNodesSandbox(opts) {
+  opts = opts || {};
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  ctx.registerPage = () => {};
+  ctx.RegionFilter = { init: () => {}, onChange: () => () => {}, getRegionParam: () => '', offChange: () => {} };
+  ctx.onWS = () => {};
+  ctx.offWS = () => {};
+  ctx.debouncedOnWS = (fn) => fn;
+  ctx.invalidateApiCache = () => {};
+  ctx.favStar = () => '';
+  ctx.bindFavStars = () => {};
+  if (opts.liveGetFavorites) {
+    ctx.getFavorites = () => {
+      try { return JSON.parse(ctx.localStorage.getItem('meshcore-favorites') || '[]'); } catch(e) { return []; }
+    };
+  } else {
+    ctx.getFavorites = () => [];
+  }
+  ctx.isFavorite = () => false;
+  ctx.connectWS = () => {};
+  ctx.HopResolver = { init: () => {}, resolve: () => ({}), ready: () => false };
+  ctx.api = () => Promise.resolve({ nodes: [], counts: {} });
+  ctx.CLIENT_TTL = { nodeList: 90000, nodeDetail: 240000, nodeHealth: 240000 };
+  ctx.initTabBar = () => {};
+  ctx.makeColumnsResizable = () => {};
+  ctx.debounce = (fn) => fn;
+  ctx.Set = Set;
+  loadInCtx(ctx, 'public/nodes.js');
+  return ctx;
+}
+
+// ===== NODES.JS: toggleSort / sortNodes / sortArrow (P0 coverage) =====
+console.log('\n=== nodes.js: toggleSort / sortNodes / sortArrow ===');
+{
+  // --- toggleSort ---
+  test('toggleSort switches direction on same column', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'name', direction: 'asc' });
+    ctx.window._nodesToggleSort('name');
+    assert.strictEqual(ctx.window._nodesGetSortState().direction, 'desc');
+  });
+
+  test('toggleSort to different column sets default direction', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'name', direction: 'asc' });
+    ctx.window._nodesToggleSort('last_seen');
+    const s = ctx.window._nodesGetSortState();
+    assert.strictEqual(s.column, 'last_seen');
+    assert.strictEqual(s.direction, 'desc'); // last_seen defaults desc
+  });
+
+  test('toggleSort to name column defaults asc', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'last_seen', direction: 'desc' });
+    ctx.window._nodesToggleSort('name');
+    const s = ctx.window._nodesGetSortState();
+    assert.strictEqual(s.column, 'name');
+    assert.strictEqual(s.direction, 'asc');
+  });
+
+  test('toggleSort to advert_count defaults desc', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'name', direction: 'asc' });
+    ctx.window._nodesToggleSort('advert_count');
+    assert.strictEqual(ctx.window._nodesGetSortState().direction, 'desc');
+  });
+
+  test('toggleSort to role defaults asc', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'last_seen', direction: 'desc' });
+    ctx.window._nodesToggleSort('role');
+    assert.strictEqual(ctx.window._nodesGetSortState().direction, 'asc');
+  });
+
+  test('toggleSort persists to localStorage', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesToggleSort('name');
+    const stored = JSON.parse(ctx.localStorage.getItem('meshcore-nodes-sort'));
+    assert.strictEqual(stored.column, 'name');
+  });
+
+  // --- sortNodes ---
+  test('sortNodes by name asc', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'name', direction: 'asc' });
+    const arr = [
+      { name: 'Charlie', public_key: 'c' },
+      { name: 'Alpha', public_key: 'a' },
+      { name: 'Bravo', public_key: 'b' },
+    ];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result[0].name, 'Alpha');
+    assert.strictEqual(result[1].name, 'Bravo');
+    assert.strictEqual(result[2].name, 'Charlie');
+  });
+
+  test('sortNodes by name desc', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'name', direction: 'desc' });
+    const arr = [
+      { name: 'Alpha', public_key: 'a' },
+      { name: 'Charlie', public_key: 'c' },
+      { name: 'Bravo', public_key: 'b' },
+    ];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result[0].name, 'Charlie');
+    assert.strictEqual(result[2].name, 'Alpha');
+  });
+
+  test('sortNodes by name puts unnamed last (asc)', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'name', direction: 'asc' });
+    const arr = [
+      { name: null, public_key: 'x' },
+      { name: 'Alpha', public_key: 'a' },
+      { name: '', public_key: 'y' },
+    ];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result[0].name, 'Alpha');
+  });
+
+  test('sortNodes by last_seen desc (most recent first)', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'last_seen', direction: 'desc' });
+    const now = Date.now();
+    const arr = [
+      { name: 'Old', last_heard: new Date(now - 100000).toISOString() },
+      { name: 'New', last_heard: new Date(now).toISOString() },
+      { name: 'Mid', last_heard: new Date(now - 50000).toISOString() },
+    ];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result[0].name, 'New');
+    assert.strictEqual(result[2].name, 'Old');
+  });
+
+  test('sortNodes by last_seen asc', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'last_seen', direction: 'asc' });
+    const now = Date.now();
+    const arr = [
+      { name: 'New', last_heard: new Date(now).toISOString() },
+      { name: 'Old', last_heard: new Date(now - 100000).toISOString() },
+    ];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result[0].name, 'Old');
+    assert.strictEqual(result[1].name, 'New');
+  });
+
+  test('sortNodes by last_seen falls back to last_seen when last_heard missing', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'last_seen', direction: 'desc' });
+    const now = Date.now();
+    const arr = [
+      { name: 'A', last_seen: new Date(now - 100000).toISOString() },
+      { name: 'B', last_heard: new Date(now).toISOString() },
+    ];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result[0].name, 'B');
+  });
+
+  test('sortNodes by last_seen handles missing timestamps', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'last_seen', direction: 'desc' });
+    const arr = [
+      { name: 'NoTime' },
+      { name: 'HasTime', last_heard: new Date().toISOString() },
+    ];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result[0].name, 'HasTime');
+  });
+
+  test('sortNodes by advert_count desc', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'advert_count', direction: 'desc' });
+    const arr = [
+      { name: 'Low', advert_count: 5 },
+      { name: 'High', advert_count: 100 },
+      { name: 'Mid', advert_count: 50 },
+    ];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result[0].name, 'High');
+    assert.strictEqual(result[2].name, 'Low');
+  });
+
+  test('sortNodes by advert_count asc', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'advert_count', direction: 'asc' });
+    const arr = [
+      { name: 'High', advert_count: 100 },
+      { name: 'Low', advert_count: 5 },
+    ];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result[0].name, 'Low');
+  });
+
+  test('sortNodes by role asc', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'role', direction: 'asc' });
+    const arr = [
+      { name: 'A', role: 'sensor' },
+      { name: 'B', role: 'companion' },
+      { name: 'C', role: 'repeater' },
+    ];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result[0].role, 'companion');
+    assert.strictEqual(result[1].role, 'repeater');
+    assert.strictEqual(result[2].role, 'sensor');
+  });
+
+  test('sortNodes by public_key asc', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'public_key', direction: 'asc' });
+    const arr = [
+      { name: 'C', public_key: 'ccc' },
+      { name: 'A', public_key: 'aaa' },
+      { name: 'B', public_key: 'bbb' },
+    ];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result[0].public_key, 'aaa');
+    assert.strictEqual(result[2].public_key, 'ccc');
+  });
+
+  test('sortNodes handles unknown column gracefully', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'nonexistent', direction: 'asc' });
+    const arr = [{ name: 'A' }, { name: 'B' }];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result.length, 2); // no crash
+  });
+
+  test('sortNodes with empty array', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'name', direction: 'asc' });
+    const result = ctx.window._nodesSortNodes([]);
+    assert.deepStrictEqual(result, []);
+  });
+
+  test('sortNodes name case-insensitive', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'name', direction: 'asc' });
+    const arr = [
+      { name: 'bravo' },
+      { name: 'Alpha' },
+    ];
+    const result = ctx.window._nodesSortNodes([...arr]);
+    assert.strictEqual(result[0].name, 'Alpha');
+    assert.strictEqual(result[1].name, 'bravo');
+  });
+
+  // --- sortArrow ---
+  test('sortArrow returns arrow for active column', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'name', direction: 'asc' });
+    const html = ctx.window._nodesSortArrow('name');
+    assert.ok(html.includes('▲'));
+    assert.ok(html.includes('sort-arrow'));
+  });
+
+  test('sortArrow returns down arrow for desc', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'name', direction: 'desc' });
+    const html = ctx.window._nodesSortArrow('name');
+    assert.ok(html.includes('▼'));
+  });
+
+  test('sortArrow returns empty for inactive column', () => {
+    const ctx = makeNodesSandbox();
+    ctx.window._nodesSetSortState({ column: 'name', direction: 'asc' });
+    assert.strictEqual(ctx.window._nodesSortArrow('role'), '');
+  });
+}
+
+// ===== NODES.JS: syncClaimedToFavorites =====
+console.log('\n=== nodes.js: syncClaimedToFavorites ===');
+{
+  
+  test('syncClaimedToFavorites adds claimed pubkeys to favorites', () => {
+    const ctx = makeNodesSandbox({ liveGetFavorites: true });
+    ctx.localStorage.setItem('meshcore-my-nodes', JSON.stringify([
+      { pubkey: 'key1' }, { pubkey: 'key2' }
+    ]));
+    ctx.localStorage.setItem('meshcore-favorites', JSON.stringify(['key1']));
+    ctx.window._nodesSyncClaimedToFavorites();
+    const favs = JSON.parse(ctx.localStorage.getItem('meshcore-favorites'));
+    assert.ok(favs.includes('key1'));
+    assert.ok(favs.includes('key2'));
+    assert.strictEqual(favs.length, 2);
+  });
+
+  test('syncClaimedToFavorites no-ops when all claimed already favorited', () => {
+    const ctx = makeNodesSandbox({ liveGetFavorites: true });
+    ctx.localStorage.setItem('meshcore-my-nodes', JSON.stringify([{ pubkey: 'key1' }]));
+    ctx.localStorage.setItem('meshcore-favorites', JSON.stringify(['key1', 'key2']));
+    ctx.window._nodesSyncClaimedToFavorites();
+    const favs = JSON.parse(ctx.localStorage.getItem('meshcore-favorites'));
+    assert.deepStrictEqual(favs, ['key1', 'key2']); // unchanged
+  });
+
+  test('syncClaimedToFavorites handles empty my-nodes', () => {
+    const ctx = makeNodesSandbox({ liveGetFavorites: true });
+    ctx.localStorage.setItem('meshcore-my-nodes', '[]');
+    ctx.localStorage.setItem('meshcore-favorites', '["key1"]');
+    ctx.window._nodesSyncClaimedToFavorites();
+    const favs = JSON.parse(ctx.localStorage.getItem('meshcore-favorites'));
+    assert.deepStrictEqual(favs, ['key1']); // unchanged
+  });
+
+  test('syncClaimedToFavorites handles missing localStorage keys', () => {
+    const ctx = makeNodesSandbox({ liveGetFavorites: true });
+    // No meshcore-my-nodes or meshcore-favorites set
+    ctx.window._nodesSyncClaimedToFavorites(); // should not crash
+  });
+}
+
+// ===== NODES.JS: renderNodeTimestampHtml / renderNodeTimestampText =====
+console.log('\n=== nodes.js: renderNodeTimestampHtml / renderNodeTimestampText ===');
+{
+  
+  test('renderNodeTimestampHtml returns HTML with tooltip', () => {
+    const ctx = makeNodesSandbox();
+    const d = new Date(Date.now() - 300000).toISOString();
+    const html = ctx.window._nodesRenderNodeTimestampHtml(d);
+    assert.ok(html.includes('timestamp-text'), 'should have timestamp-text class');
+    assert.ok(html.includes('title='), 'should have tooltip');
+  });
+
+  test('renderNodeTimestampHtml marks future timestamps', () => {
+    const ctx = makeNodesSandbox();
+    const d = new Date(Date.now() + 120000).toISOString();
+    const html = ctx.window._nodesRenderNodeTimestampHtml(d);
+    assert.ok(html.includes('timestamp-future-icon'), 'future timestamp should show warning');
+  });
+
+  test('renderNodeTimestampHtml handles null', () => {
+    const ctx = makeNodesSandbox();
+    const html = ctx.window._nodesRenderNodeTimestampHtml(null);
+    assert.ok(html.includes('—'), 'null should produce dash');
+  });
+
+  test('renderNodeTimestampText returns plain text', () => {
+    const ctx = makeNodesSandbox();
+    const d = new Date(Date.now() - 300000).toISOString();
+    const text = ctx.window._nodesRenderNodeTimestampText(d);
+    assert.ok(!text.includes('<'), 'should be plain text, not HTML');
+    assert.ok(text.includes('5m ago') || text.includes('ago') || /^\d{4}/.test(text), 'should be a readable timestamp');
+  });
+
+  test('renderNodeTimestampText handles null', () => {
+    const ctx = makeNodesSandbox();
+    const text = ctx.window._nodesRenderNodeTimestampText(null);
+    assert.strictEqual(text, '—');
+  });
+}
+
+// ===== NODES.JS: getStatusInfo edge cases (P0 coverage expansion) =====
+console.log('\n=== nodes.js: getStatusInfo edge cases ===');
+{
+  
+  const ctx = makeNodesSandbox();
+  const gsi = ctx.window._nodesGetStatusInfo;
+  const gst = ctx.window._nodesGetStatusTooltip;
+
+  test('getStatusInfo with _lastHeard prefers it over last_heard', () => {
+    const recent = new Date().toISOString();
+    const old = new Date(Date.now() - 96 * 3600000).toISOString();
+    const info = gsi({ role: 'repeater', last_heard: old, _lastHeard: recent });
+    assert.strictEqual(info.status, 'active');
+  });
+
+  test('getStatusInfo with no timestamps returns stale', () => {
+    const info = gsi({ role: 'companion' });
+    assert.strictEqual(info.status, 'stale');
+    assert.strictEqual(info.lastHeardMs, 0);
+  });
+
+  test('getStatusInfo uses last_seen as fallback', () => {
+    const recent = new Date().toISOString();
+    const info = gsi({ role: 'repeater', last_seen: recent });
+    assert.strictEqual(info.status, 'active');
+  });
+
+  test('getStatusInfo room uses infrastructure threshold (72h)', () => {
+    const d48h = new Date(Date.now() - 48 * 3600000).toISOString();
+    const info = gsi({ role: 'room', last_heard: d48h });
+    assert.strictEqual(info.status, 'active'); // 48h < 72h threshold
+  });
+
+  test('getStatusInfo room stale at 96h', () => {
+    const d96h = new Date(Date.now() - 96 * 3600000).toISOString();
+    const info = gsi({ role: 'room', last_heard: d96h });
+    assert.strictEqual(info.status, 'stale');
+  });
+
+  test('getStatusInfo sensor stale at 25h', () => {
+    const d25h = new Date(Date.now() - 25 * 3600000).toISOString();
+    const info = gsi({ role: 'sensor', last_heard: d25h });
+    assert.strictEqual(info.status, 'stale');
+  });
+
+  test('getStatusInfo returns explanation for active node', () => {
+    const info = gsi({ role: 'repeater', last_heard: new Date().toISOString() });
+    assert.ok(info.explanation.includes('Last heard'));
+  });
+
+  test('getStatusInfo returns explanation for stale companion', () => {
+    const d48h = new Date(Date.now() - 48 * 3600000).toISOString();
+    const info = gsi({ role: 'companion', last_heard: d48h });
+    assert.ok(info.explanation.includes('companions'));
+  });
+
+  test('getStatusInfo returns explanation for stale repeater', () => {
+    const d96h = new Date(Date.now() - 96 * 3600000).toISOString();
+    const info = gsi({ role: 'repeater', last_heard: d96h });
+    assert.ok(info.explanation.includes('repeaters'));
+  });
+
+  test('getStatusInfo roleColor defaults to gray for unknown role', () => {
+    const info = gsi({ role: 'unknown_role', last_heard: new Date().toISOString() });
+    assert.strictEqual(info.roleColor, '#6b7280');
+  });
+
+  // --- getStatusTooltip edge cases ---
+  test('getStatusTooltip active room mentions 72h', () => {
+    assert.ok(gst('room', 'active').includes('72h'));
+  });
+
+  test('getStatusTooltip stale room mentions offline', () => {
+    assert.ok(gst('room', 'stale').includes('offline'));
+  });
+
+  test('getStatusTooltip active sensor mentions 24h', () => {
+    assert.ok(gst('sensor', 'active').includes('24h'));
+  });
+
+  test('getStatusTooltip stale repeater mentions offline', () => {
+    assert.ok(gst('repeater', 'stale').includes('offline'));
+  });
+}
+
+// ===== APP.JS: payloadTypeColor =====
+console.log('\n=== app.js: payloadTypeColor ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const payloadTypeColor = ctx.payloadTypeColor;
+
+  // Edge cases and behavioral properties only — no tautological lookup-table restating
+  test('payloadTypeColor(99) = unknown', () => assert.strictEqual(payloadTypeColor(99), 'unknown'));
+  test('payloadTypeColor(null) = unknown', () => assert.strictEqual(payloadTypeColor(null), 'unknown'));
+  test('payloadTypeColor(undefined) = unknown', () => assert.strictEqual(payloadTypeColor(undefined), 'unknown'));
+  test('payloadTypeColor(6) = unknown (no mapping for 6)', () => assert.strictEqual(payloadTypeColor(6), 'unknown'));
+  test('all defined payload types return a non-unknown string', () => {
+    const definedTypes = [0, 1, 2, 3, 4, 5, 7, 8, 9];
+    for (const t of definedTypes) {
+      const result = payloadTypeColor(t);
+      assert.strictEqual(typeof result, 'string', `type ${t} should return a string`);
+      assert.notStrictEqual(result, 'unknown', `type ${t} should not be unknown`);
+    }
+  });
+  test('all defined payload types return distinct values', () => {
+    const definedTypes = [0, 1, 2, 3, 4, 5, 7, 8, 9];
+    const values = new Set(definedTypes.map(t => payloadTypeColor(t)));
+    assert.strictEqual(values.size, definedTypes.length, 'each type should map to a unique color class');
+  });
+}
+
+// ===== APP.JS: pad2 / pad3 =====
+console.log('\n=== app.js: pad2 / pad3 ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const pad2 = ctx.pad2;
+  const pad3 = ctx.pad3;
+
+  test('pad2(0) = "00"', () => assert.strictEqual(pad2(0), '00'));
+  test('pad2(5) = "05"', () => assert.strictEqual(pad2(5), '05'));
+  test('pad2(12) = "12"', () => assert.strictEqual(pad2(12), '12'));
+  test('pad2(99) = "99"', () => assert.strictEqual(pad2(99), '99'));
+  test('pad2(100) = "100" (no truncation)', () => assert.strictEqual(pad2(100), '100'));
+
+  test('pad3(0) = "000"', () => assert.strictEqual(pad3(0), '000'));
+  test('pad3(5) = "005"', () => assert.strictEqual(pad3(5), '005'));
+  test('pad3(42) = "042"', () => assert.strictEqual(pad3(42), '042'));
+  test('pad3(123) = "123"', () => assert.strictEqual(pad3(123), '123'));
+  test('pad3(999) = "999"', () => assert.strictEqual(pad3(999), '999'));
+}
+
+// ===== APP.JS: formatIsoLike =====
+console.log('\n=== app.js: formatIsoLike ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const formatIsoLike = ctx.formatIsoLike;
+
+  test('formatIsoLike UTC without ms', () => {
+    const d = new Date('2024-03-15T08:05:03.456Z');
+    assert.strictEqual(formatIsoLike(d, 'utc', false), '2024-03-15 08:05:03');
+  });
+
+  test('formatIsoLike UTC with ms', () => {
+    const d = new Date('2024-03-15T08:05:03.456Z');
+    assert.strictEqual(formatIsoLike(d, 'utc', true), '2024-03-15 08:05:03.456');
+  });
+
+  test('formatIsoLike local without ms', () => {
+    const d = new Date('2024-03-15T08:05:03.456Z');
+    const result = formatIsoLike(d, 'local', false);
+    assert.ok(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(result));
+  });
+
+  test('formatIsoLike local with ms', () => {
+    const d = new Date('2024-03-15T08:05:03.456Z');
+    const result = formatIsoLike(d, 'local', true);
+    assert.ok(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$/.test(result));
+  });
+
+  test('formatIsoLike pads single-digit values', () => {
+    const d = new Date('2024-01-02T03:04:05.006Z');
+    assert.strictEqual(formatIsoLike(d, 'utc', true), '2024-01-02 03:04:05.006');
+  });
+}
+
+// ===== APP.JS: formatTimestampCustom =====
+console.log('\n=== app.js: formatTimestampCustom ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const formatTimestampCustom = ctx.formatTimestampCustom;
+
+  test('replaces all tokens correctly (UTC)', () => {
+    const d = new Date('2024-03-15T08:05:03.456Z');
+    const result = formatTimestampCustom(d, 'YYYY-MM-DD HH:mm:ss.SSS Z', 'utc');
+    assert.strictEqual(result, '2024-03-15 08:05:03.456 UTC');
+  });
+
+  test('replaces all tokens correctly (local)', () => {
+    const d = new Date('2024-03-15T08:05:03.456Z');
+    const result = formatTimestampCustom(d, 'YYYY/MM/DD HH:mm:ss Z', 'local');
+    assert.ok(result.endsWith('local'));
+    assert.ok(/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} local$/.test(result));
+  });
+
+  test('returns empty for format with no valid tokens', () => {
+    const d = new Date('2024-03-15T08:05:03Z');
+    assert.strictEqual(formatTimestampCustom(d, 'no tokens here', 'utc'), '');
+  });
+
+  test('handles partial format strings', () => {
+    const d = new Date('2024-03-15T08:05:03Z');
+    assert.strictEqual(formatTimestampCustom(d, 'HH:mm', 'utc'), '08:05');
+  });
+
+  test('handles only date tokens', () => {
+    const d = new Date('2024-03-15T08:05:03Z');
+    assert.strictEqual(formatTimestampCustom(d, 'YYYY-MM-DD', 'utc'), '2024-03-15');
+  });
+}
+
+// ===== APP.JS: getTimestampMode / getTimestampTimezone / getTimestampFormatPreset / getTimestampCustomFormat =====
+console.log('\n=== app.js: timestamp preference getters ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+
+  // getTimestampMode
+  test('getTimestampMode defaults to ago', () => {
+    assert.strictEqual(ctx.getTimestampMode(), 'ago');
+  });
+  test('getTimestampMode reads localStorage', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-mode', 'absolute');
+    assert.strictEqual(ctx.getTimestampMode(), 'absolute');
+    ctx.localStorage.removeItem('meshcore-timestamp-mode');
+  });
+  test('getTimestampMode falls back to server config', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { defaultMode: 'absolute' } };
+    assert.strictEqual(ctx.getTimestampMode(), 'absolute');
+    ctx.window.SITE_CONFIG = null;
+  });
+  test('getTimestampMode ignores invalid localStorage value', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-mode', 'invalid');
+    assert.strictEqual(ctx.getTimestampMode(), 'ago');
+    ctx.localStorage.removeItem('meshcore-timestamp-mode');
+  });
+
+  // getTimestampTimezone
+  test('getTimestampTimezone defaults to local', () => {
+    assert.strictEqual(ctx.getTimestampTimezone(), 'local');
+  });
+  test('getTimestampTimezone reads localStorage', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    assert.strictEqual(ctx.getTimestampTimezone(), 'utc');
+    ctx.localStorage.removeItem('meshcore-timestamp-timezone');
+  });
+  test('getTimestampTimezone falls back to server config', () => {
+    ctx.localStorage.removeItem('meshcore-timestamp-timezone');
+    ctx.window.SITE_CONFIG = { timestamps: { timezone: 'utc' } };
+    assert.strictEqual(ctx.getTimestampTimezone(), 'utc');
+    ctx.window.SITE_CONFIG = null;
+  });
+
+  // getTimestampFormatPreset
+  test('getTimestampFormatPreset defaults to iso', () => {
+    assert.strictEqual(ctx.getTimestampFormatPreset(), 'iso');
+  });
+  test('getTimestampFormatPreset reads localStorage', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-format', 'iso-seconds');
+    assert.strictEqual(ctx.getTimestampFormatPreset(), 'iso-seconds');
+    ctx.localStorage.removeItem('meshcore-timestamp-format');
+  });
+  test('getTimestampFormatPreset reads locale from localStorage', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-format', 'locale');
+    assert.strictEqual(ctx.getTimestampFormatPreset(), 'locale');
+    ctx.localStorage.removeItem('meshcore-timestamp-format');
+  });
+
+  // getTimestampCustomFormat
+  test('getTimestampCustomFormat returns empty when not allowed', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { allowCustomFormat: false } };
+    assert.strictEqual(ctx.getTimestampCustomFormat(), '');
+  });
+  test('getTimestampCustomFormat reads localStorage when allowed', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { allowCustomFormat: true } };
+    ctx.localStorage.setItem('meshcore-timestamp-custom-format', 'YYYY/MM/DD');
+    assert.strictEqual(ctx.getTimestampCustomFormat(), 'YYYY/MM/DD');
+    ctx.localStorage.removeItem('meshcore-timestamp-custom-format');
+    ctx.window.SITE_CONFIG = null;
+  });
+  test('getTimestampCustomFormat falls back to server config', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { allowCustomFormat: true, customFormat: 'HH:mm' } };
+    assert.strictEqual(ctx.getTimestampCustomFormat(), 'HH:mm');
+    ctx.window.SITE_CONFIG = null;
+  });
+}
+
+// ===== APP.JS: invalidateApiCache =====
+console.log('\n=== app.js: invalidateApiCache ===');
+{
+  // Each test uses its own sandbox to avoid shared state between async tests
+
+  test('invalidateApiCache causes api to re-fetch after cache bust', async () => {
+    const ctx = makeSandbox();
+    let fetchCount = 0;
+    ctx.fetch = () => { fetchCount++; return Promise.resolve({ ok: true, json: () => Promise.resolve({ r: fetchCount }) }); };
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    const flush = () => new Promise(r => setImmediate(r));
+    await ctx.api('/test', { ttl: 60000 });
+    await flush();
+    const c1 = fetchCount;
+    await ctx.api('/test', { ttl: 60000 });
+    assert.strictEqual(fetchCount, c1, 'second call should use cache');
+    ctx.invalidateApiCache('/test');
+    await ctx.api('/test', { ttl: 60000 });
+    assert.ok(fetchCount > c1, 'should re-fetch after invalidation');
+  });
+
+  test('invalidateApiCache with no prefix busts all entries', async () => {
+    const ctx = makeSandbox();
+    let fetchCount = 0;
+    ctx.fetch = () => { fetchCount++; return Promise.resolve({ ok: true, json: () => Promise.resolve({ r: fetchCount }) }); };
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    const flush = () => new Promise(r => setImmediate(r));
+    await ctx.api('/a', { ttl: 60000 }); await flush();
+    await ctx.api('/b', { ttl: 60000 }); await flush();
+    const c1 = fetchCount;
+    await ctx.api('/a', { ttl: 60000 });
+    assert.strictEqual(fetchCount, c1, 'cache should work');
+    ctx.invalidateApiCache();
+    await ctx.api('/a', { ttl: 60000 });
+    await ctx.api('/b', { ttl: 60000 });
+    assert.strictEqual(fetchCount, c1 + 2, 'both should re-fetch');
+  });
+
+  test('invalidateApiCache with prefix only busts matching', async () => {
+    const ctx = makeSandbox();
+    let fetchCount = 0;
+    ctx.fetch = () => { fetchCount++; return Promise.resolve({ ok: true, json: () => Promise.resolve({ r: fetchCount }) }); };
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    const flush = () => new Promise(r => setImmediate(r));
+    await ctx.api('/statsX', { ttl: 60000 }); await flush();
+    await ctx.api('/nodesX', { ttl: 60000 }); await flush();
+    const c1 = fetchCount;
+    ctx.invalidateApiCache('/statsX');
+    await ctx.api('/statsX', { ttl: 60000 }); await flush();
+    assert.strictEqual(fetchCount, c1 + 1, '/statsX should re-fetch');
+    await ctx.api('/nodesX', { ttl: 60000 });
+    assert.strictEqual(fetchCount, c1 + 1, '/nodesX should still use cache');
+  });
+}
+
+// ===== APP.JS: formatHex =====
+console.log('\n=== app.js: formatHex ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const formatHex = ctx.formatHex;
+
+  test('formatHex formats bytes with spaces', () => {
+    assert.strictEqual(formatHex('aabbcc'), 'aa bb cc');
+  });
+  test('formatHex handles single byte', () => {
+    assert.strictEqual(formatHex('ff'), 'ff');
+  });
+  test('formatHex returns empty for null', () => {
+    assert.strictEqual(formatHex(null), '');
+  });
+  test('formatHex returns empty for empty string', () => {
+    assert.strictEqual(formatHex(''), '');
+  });
+  test('formatHex handles odd-length hex', () => {
+    assert.strictEqual(formatHex('aabbc'), 'aa bb c');
+  });
+}
+
+// ===== APP.JS: createColoredHexDump =====
+console.log('\n=== app.js: createColoredHexDump ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const createColoredHexDump = ctx.createColoredHexDump;
+
+  test('returns plain hex-byte span when no ranges', () => {
+    const result = createColoredHexDump('aabb', []);
+    assert.ok(result.includes('hex-byte'));
+    assert.ok(result.includes('aa bb'));
+  });
+
+  test('returns plain hex-byte span when ranges is null', () => {
+    const result = createColoredHexDump('aabb', null);
+    assert.ok(result.includes('hex-byte'));
+  });
+
+  test('colors bytes by range label', () => {
+    const result = createColoredHexDump('aabbccdd', [
+      { label: 'Header', start: 0, end: 1 },
+      { label: 'Payload', start: 2, end: 3 },
+    ]);
+    assert.ok(result.includes('hex-header'));
+    assert.ok(result.includes('hex-payload'));
+  });
+
+  test('later ranges override earlier ones', () => {
+    const result = createColoredHexDump('aabb', [
+      { label: 'Header', start: 0, end: 1 },
+      { label: 'Payload', start: 0, end: 1 },
+    ]);
+    // Payload should win since it comes later
+    assert.ok(result.includes('hex-payload'), 'overriding range class should be present');
+    assert.ok(!result.includes('hex-header'), 'overridden range class should be absent');
+  });
+
+  test('handles null hex', () => {
+    const result = createColoredHexDump(null, [{ label: 'Header', start: 0, end: 0 }]);
+    assert.ok(result.includes('hex-byte'));
+  });
+
+  test('handles empty hex', () => {
+    const result = createColoredHexDump('', [{ label: 'Header', start: 0, end: 0 }]);
+    assert.ok(result.includes('hex-byte'));
+  });
+}
+
+// ===== APP.JS: buildHexLegend =====
+console.log('\n=== app.js: buildHexLegend ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const buildHexLegend = ctx.buildHexLegend;
+
+  test('returns empty for null ranges', () => {
+    assert.strictEqual(buildHexLegend(null), '');
+  });
+  test('returns empty for empty ranges', () => {
+    assert.strictEqual(buildHexLegend([]), '');
+  });
+  test('builds legend entries with swatches', () => {
+    const result = buildHexLegend([
+      { label: 'Header', start: 0, end: 1 },
+      { label: 'Payload', start: 2, end: 3 },
+    ]);
+    assert.ok(result.includes('Header'));
+    assert.ok(result.includes('Payload'));
+    assert.ok(result.includes('swatch'));
+  });
+  test('deduplicates same label', () => {
+    const result = buildHexLegend([
+      { label: 'Header', start: 0, end: 1 },
+      { label: 'Header', start: 2, end: 3 },
+    ]);
+    const count = (result.match(/Header/g) || []).length;
+    assert.strictEqual(count, 1);
+  });
+  test('swatch element exists for each label', () => {
+    const result = buildHexLegend([{ label: 'Path', start: 0, end: 0 }]);
+    assert.ok(result.includes('swatch'), 'should contain a swatch element');
+    assert.ok(result.includes('Path'), 'should contain the label text');
+    // Verify swatch has a background-color style (don't hardcode the exact color)
+    assert.ok(result.includes('background'), 'swatch should have a background color style');
+  });
+}
+
+// ===== APP.JS: favorites (getFavorites, isFavorite, toggleFavorite, favStar) =====
+console.log('\n=== app.js: favorites ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+
+  test('getFavorites returns empty array when no data', () => {
+    assert.deepStrictEqual(ctx.getFavorites(), []);
+  });
+
+  test('getFavorites returns saved array', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '["pk1","pk2"]');
+    assert.deepStrictEqual(ctx.getFavorites(), ['pk1', 'pk2']);
+  });
+
+  test('getFavorites handles corrupt JSON', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '{bad}');
+    const result = ctx.getFavorites();
+    assert.ok(Array.isArray(result));
+    assert.strictEqual(result.length, 0);
+  });
+
+  test('isFavorite returns true for saved key', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '["pk1"]');
+    assert.strictEqual(ctx.isFavorite('pk1'), true);
+  });
+
+  test('isFavorite returns false for unsaved key', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '["pk1"]');
+    assert.strictEqual(ctx.isFavorite('pk2'), false);
+  });
+
+  test('toggleFavorite adds key', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '[]');
+    const result = ctx.toggleFavorite('pk1');
+    assert.strictEqual(result, true);
+    assert.deepStrictEqual(ctx.getFavorites(), ['pk1']);
+  });
+
+  test('toggleFavorite removes existing key', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '["pk1","pk2"]');
+    const result = ctx.toggleFavorite('pk1');
+    assert.strictEqual(result, false);
+    assert.deepStrictEqual(ctx.getFavorites(), ['pk2']);
+  });
+
+  test('favStar returns filled star for favorite', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '["pk1"]');
+    const html = ctx.favStar('pk1');
+    assert.ok(html.includes('★'));
+    assert.ok(html.includes('on'));
+    assert.ok(html.includes('Remove from favorites'));
+  });
+
+  test('favStar returns empty star for non-favorite', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '[]');
+    const html = ctx.favStar('pk1');
+    assert.ok(html.includes('☆'));
+    assert.ok(!html.includes(' on'));
+    assert.ok(html.includes('Add to favorites'));
+  });
+
+  test('favStar includes custom class', () => {
+    ctx.localStorage.setItem('meshcore-favorites', '[]');
+    const html = ctx.favStar('pk1', 'my-cls');
+    assert.ok(html.includes('my-cls'));
+  });
+}
+
+// ===== APP.JS: debounce =====
+console.log('\n=== app.js: debounce ===');
+{
+  const ctx = makeSandbox();
+  let timerId = 0;
+  const scheduledFns = [];
+  ctx.setTimeout = (fn, ms) => { const id = ++timerId; scheduledFns.push({ fn, ms, id }); return id; };
+  ctx.clearTimeout = (id) => { const idx = scheduledFns.findIndex(t => t.id === id); if (idx >= 0) scheduledFns.splice(idx, 1); };
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const debounce = ctx.debounce;
+
+  test('debounce delays function call', () => {
+    scheduledFns.length = 0;
+    let called = 0;
+    const fn = debounce(() => { called++; }, 100);
+    fn();
+    assert.strictEqual(called, 0);
+    assert.strictEqual(scheduledFns.length, 1);
+    assert.strictEqual(scheduledFns[0].ms, 100);
+    scheduledFns[0].fn();
+    assert.strictEqual(called, 1);
+  });
+
+  test('debounce resets timer on rapid calls', () => {
+    scheduledFns.length = 0;
+    let called = 0;
+    const fn = debounce(() => { called++; }, 200);
+    fn();
+    fn();
+    fn();
+    // Only last timer should remain (previous cleared)
+    assert.strictEqual(scheduledFns.length, 1);
+    scheduledFns[0].fn();
+    assert.strictEqual(called, 1);
+  });
+
+  test('debounce passes arguments', () => {
+    scheduledFns.length = 0;
+    let receivedArgs;
+    const fn = debounce((...args) => { receivedArgs = args; }, 50);
+    fn('a', 'b', 'c');
+    scheduledFns[0].fn();
+    assert.deepStrictEqual(receivedArgs, ['a', 'b', 'c']);
+  });
+}
+
+// ===== APP.JS: mergeUserHomeConfig removed (dead code) =====
+
+// ===== APP.JS: formatAbsoluteTimestamp with custom format =====
+console.log('\n=== app.js: formatAbsoluteTimestamp (custom format) ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const formatAbsoluteTimestamp = ctx.formatAbsoluteTimestamp;
+
+  test('formatAbsoluteTimestamp returns dash for null', () => {
+    assert.strictEqual(formatAbsoluteTimestamp(null), '—');
+  });
+
+  test('formatAbsoluteTimestamp returns dash for invalid date', () => {
+    assert.strictEqual(formatAbsoluteTimestamp('not-a-date'), '—');
+  });
+
+  test('formatAbsoluteTimestamp uses custom format when enabled', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { allowCustomFormat: true, customFormat: 'YYYY/MM/DD' } };
+    ctx.localStorage.removeItem('meshcore-timestamp-custom-format');
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    const result = formatAbsoluteTimestamp('2024-06-15T10:30:00Z');
+    assert.strictEqual(result, '2024/06/15');
+    ctx.localStorage.removeItem('meshcore-timestamp-timezone');
+    ctx.window.SITE_CONFIG = null;
+  });
+
+  test('formatAbsoluteTimestamp locale UTC returns a formatted date string', () => {
+    ctx.window.SITE_CONFIG = { timestamps: { allowCustomFormat: false } };
+    ctx.localStorage.setItem('meshcore-timestamp-format', 'locale');
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    const result = formatAbsoluteTimestamp('2024-06-15T10:30:00Z');
+    // Verify structural properties rather than reimplementing the production code
+    assert.ok(result.includes('2024'), 'result should contain the year');
+    assert.ok(result.length > 5, 'result should be a non-trivial formatted string');
+    assert.notStrictEqual(result, '2024-06-15T10:30:00Z', 'result should differ from raw ISO format');
+    assert.notStrictEqual(result, '—', 'result should not be a dash');
+    ctx.localStorage.removeItem('meshcore-timestamp-format');
+    ctx.localStorage.removeItem('meshcore-timestamp-timezone');
+  });
+}
+
+// ===== APP.JS: ROUTE_TYPES / PAYLOAD_TYPES edge cases =====
+console.log('\n=== app.js: routeTypeName/payloadTypeName edge cases ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+
+  // Edge cases: unknown/boundary values, not just restating the lookup table
+  test('routeTypeName returns UNKNOWN for negative value', () => {
+    assert.strictEqual(ctx.routeTypeName(-1), 'UNKNOWN');
+  });
+  test('routeTypeName returns UNKNOWN for value beyond max', () => {
+    assert.strictEqual(ctx.routeTypeName(4), 'UNKNOWN');
+  });
+  test('routeTypeName returns UNKNOWN for null', () => {
+    assert.strictEqual(ctx.routeTypeName(null), 'UNKNOWN');
+  });
+  test('routeTypeName returns UNKNOWN for undefined', () => {
+    assert.strictEqual(ctx.routeTypeName(undefined), 'UNKNOWN');
+  });
+  test('routeTypeName returns string for valid type 0', () => {
+    assert.strictEqual(typeof ctx.routeTypeName(0), 'string');
+    assert.notStrictEqual(ctx.routeTypeName(0), 'UNKNOWN');
+  });
+  test('routeTypeName returns distinct values for each valid type', () => {
+    const names = new Set([0, 1, 2, 3].map(i => ctx.routeTypeName(i)));
+    assert.strictEqual(names.size, 4, 'all 4 route types should have unique names');
+    for (const n of names) assert.notStrictEqual(n, 'UNKNOWN');
+  });
+
+  test('payloadTypeName returns UNKNOWN for negative value', () => {
+    assert.strictEqual(ctx.payloadTypeName(-1), 'UNKNOWN');
+  });
+  test('payloadTypeName returns UNKNOWN for gap value (12)', () => {
+    assert.strictEqual(ctx.payloadTypeName(12), 'UNKNOWN');
+  });
+  test('payloadTypeName returns UNKNOWN for gap value (14)', () => {
+    assert.strictEqual(ctx.payloadTypeName(14), 'UNKNOWN');
+  });
+  test('payloadTypeName handles type 15 (max defined)', () => {
+    assert.notStrictEqual(ctx.payloadTypeName(15), 'UNKNOWN');
+  });
+  test('payloadTypeName returns UNKNOWN for 16 (beyond max)', () => {
+    assert.strictEqual(ctx.payloadTypeName(16), 'UNKNOWN');
+  });
+  test('payloadTypeName returns UNKNOWN for null', () => {
+    assert.strictEqual(ctx.payloadTypeName(null), 'UNKNOWN');
+  });
+  test('payloadTypeName returns distinct values for all defined types', () => {
+    const definedTypes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 15];
+    const names = new Set(definedTypes.map(i => ctx.payloadTypeName(i)));
+    assert.strictEqual(names.size, 13, 'all 13 payload types should have unique names');
+    for (const n of names) assert.notStrictEqual(n, 'UNKNOWN');
+  });
+
+  // isTransportRoute edge cases
+  test('isTransportRoute returns true for type 0 and 3', () => {
+    assert.strictEqual(ctx.isTransportRoute(0), true);
+    assert.strictEqual(ctx.isTransportRoute(3), true);
+  });
+  test('isTransportRoute returns false for type 1 and 2', () => {
+    assert.strictEqual(ctx.isTransportRoute(1), false);
+    assert.strictEqual(ctx.isTransportRoute(2), false);
+  });
+  test('isTransportRoute returns false for null/undefined', () => {
+    assert.strictEqual(ctx.isTransportRoute(null), false);
+    assert.strictEqual(ctx.isTransportRoute(undefined), false);
+  });
+}
+
+// ===== packet-helpers.js behavioral tests =====
+{
+  console.log('\n=== packet-helpers.js: getParsedPath / getParsedDecoded ===');
+
+  // Load the shared module
+  const helperSource = fs.readFileSync('public/packet-helpers.js', 'utf8');
+  const helperCtx = { window: {}, JSON, Array, Object, console, process };
+  vm.createContext(helperCtx);
+  vm.runInContext(helperSource, helperCtx);
+  const getParsedPath = helperCtx.window.getParsedPath;
+  const getParsedDecoded = helperCtx.window.getParsedDecoded;
+
+  // Helper: compare via JSON since vm context creates objects with different prototypes
+  function assertJsonEqual(actual, expected, msg) {
+    assert.strictEqual(JSON.stringify(actual), JSON.stringify(expected), msg);
+  }
+
+  // --- getParsedPath ---
+  test('getParsedPath: valid JSON array', () => {
+    const p = { path_json: '["abc","def"]' };
+    const result = getParsedPath(p);
+    assertJsonEqual(result, ["abc", "def"]);
+  });
+
+  test('getParsedPath: null input returns empty array', () => {
+    const p = { path_json: null };
+    assertJsonEqual(getParsedPath(p), []);
+  });
+
+  test('getParsedPath: undefined input returns empty array', () => {
+    const p = {};
+    assertJsonEqual(getParsedPath(p), []);
+  });
+
+  test('getParsedPath: empty string returns empty array', () => {
+    const p = { path_json: '' };
+    assertJsonEqual(getParsedPath(p), []);
+  });
+
+  test('getParsedPath: invalid JSON returns empty array', () => {
+    const p = { path_json: '{not valid json' };
+    assertJsonEqual(getParsedPath(p), []);
+  });
+
+  test('getParsedPath: JSON null string returns empty array', () => {
+    const p = { path_json: 'null' };
+    assertJsonEqual(getParsedPath(p), []);
+  });
+
+  test('getParsedPath: caching returns same reference on second call', () => {
+    const p = { path_json: '["x"]' };
+    const first = getParsedPath(p);
+    const second = getParsedPath(p);
+    assert.strictEqual(first, second, 'cached result should be same object reference');
+  });
+
+  test('getParsedPath: pre-parsed array (non-string) returned as-is', () => {
+    const arr = ['already', 'parsed'];
+    const p = { path_json: arr };
+    assert.strictEqual(getParsedPath(p), arr);
+  });
+
+  test('getParsedPath: pre-parsed non-array object returns empty array', () => {
+    const p = { path_json: { foo: 1 } };
+    assertJsonEqual(getParsedPath(p), []);
+  });
+
+  // --- getParsedDecoded ---
+  test('getParsedDecoded: valid JSON object', () => {
+    const p = { decoded_json: '{"type":"GRP_TXT","text":"hello"}' };
+    const result = getParsedDecoded(p);
+    assertJsonEqual(result, { type: "GRP_TXT", text: "hello" });
+  });
+
+  test('getParsedDecoded: null input returns empty object', () => {
+    const p = { decoded_json: null };
+    assertJsonEqual(getParsedDecoded(p), {});
+  });
+
+  test('getParsedDecoded: undefined input returns empty object', () => {
+    const p = {};
+    assertJsonEqual(getParsedDecoded(p), {});
+  });
+
+  test('getParsedDecoded: empty string returns empty object', () => {
+    const p = { decoded_json: '' };
+    assertJsonEqual(getParsedDecoded(p), {});
+  });
+
+  test('getParsedDecoded: invalid JSON returns empty object', () => {
+    const p = { decoded_json: 'not json' };
+    assertJsonEqual(getParsedDecoded(p), {});
+  });
+
+  test('getParsedDecoded: JSON null string returns empty object', () => {
+    const p = { decoded_json: 'null' };
+    assertJsonEqual(getParsedDecoded(p), {});
+  });
+
+  test('getParsedDecoded: caching returns same reference on second call', () => {
+    const p = { decoded_json: '{"a":1}' };
+    const first = getParsedDecoded(p);
+    const second = getParsedDecoded(p);
+    assert.strictEqual(first, second, 'cached result should be same object reference');
+  });
+
+  test('getParsedDecoded: pre-parsed object (non-string) returned as-is', () => {
+    const obj = { type: 'TXT_MSG' };
+    const p = { decoded_json: obj };
+    assert.strictEqual(getParsedDecoded(p), obj);
+  });
+
+  test('getParsedDecoded: pre-parsed non-object returns empty object', () => {
+    const p = { decoded_json: 42 };
+    assertJsonEqual(getParsedDecoded(p), {});
+  });
+
+  // --- Performance: caching avoids repeated JSON.parse ---
+  test('getParsedPath: caching is faster than repeated parsing', () => {
+    const iterations = 1000;
+    const p_nocache = { path_json: '["hop1","hop2","hop3","hop4","hop5"]' };
+
+    // Measure uncached: parse fresh each time
+    const startUncached = process.hrtime.bigint();
+    for (let i = 0; i < iterations; i++) {
+      JSON.parse(p_nocache.path_json);
+    }
+    const uncachedNs = Number(process.hrtime.bigint() - startUncached);
+
+    // Measure cached: first call parses, rest hit cache
+    const p_cached = { path_json: '["hop1","hop2","hop3","hop4","hop5"]' };
+    const startCached = process.hrtime.bigint();
+    for (let i = 0; i < iterations; i++) {
+      getParsedPath(p_cached);
+    }
+    const cachedNs = Number(process.hrtime.bigint() - startCached);
+
+    console.log(`    perf: ${iterations} uncached parses = ${(uncachedNs / 1e6).toFixed(2)}ms, ` +
+                `${iterations} cached calls = ${(cachedNs / 1e6).toFixed(2)}ms ` +
+                `(${(uncachedNs / cachedNs).toFixed(1)}x speedup)`);
+    assert.ok(cachedNs < uncachedNs, 'cached path should be faster than uncached parsing');
+  });
+
+  test('getParsedDecoded: caching is faster than repeated parsing', () => {
+    const iterations = 1000;
+    const json = '{"type":"GRP_TXT","text":"hello world","sender":"node1","channel":5}';
+
+    const startUncached = process.hrtime.bigint();
+    for (let i = 0; i < iterations; i++) {
+      JSON.parse(json);
+    }
+    const uncachedNs = Number(process.hrtime.bigint() - startUncached);
+
+    const p_cached = { decoded_json: json };
+    const startCached = process.hrtime.bigint();
+    for (let i = 0; i < iterations; i++) {
+      getParsedDecoded(p_cached);
+    }
+    const cachedNs = Number(process.hrtime.bigint() - startCached);
+
+    console.log(`    perf: ${iterations} uncached parses = ${(uncachedNs / 1e6).toFixed(2)}ms, ` +
+                `${iterations} cached calls = ${(cachedNs / 1e6).toFixed(2)}ms ` +
+                `(${(uncachedNs / cachedNs).toFixed(1)}x speedup)`);
+    assert.ok(cachedNs < uncachedNs, 'cached decoded should be faster than uncached parsing');
+  });
+}
+
+// ===== observation packet cache invalidation (issue #504) =====
+{
+  console.log('\n=== Issue #504: observation packets must not inherit parent cache ===');
+
+  const helperSource = fs.readFileSync('public/packet-helpers.js', 'utf8');
+  const ctx = vm.createContext({ window: {}, console, JSON, Array, Object });
+  vm.runInContext(helperSource, ctx);
+  const getParsedPath = ctx.window.getParsedPath;
+  const getParsedDecoded = ctx.window.getParsedDecoded;
+  const clearParsedCache = ctx.window.clearParsedCache;
+
+  test('clearParsedCache removes cached properties and returns the object', () => {
+    const p = { path_json: '["A"]', decoded_json: '{"t":1}' };
+    getParsedPath(p);
+    getParsedDecoded(p);
+    assert.ok(p._parsedPath !== undefined);
+    assert.ok(p._parsedDecoded !== undefined);
+    const ret = clearParsedCache(p);
+    assert.strictEqual(ret, p, 'returns same object');
+    assert.strictEqual(p._parsedPath, undefined);
+    assert.strictEqual(p._parsedDecoded, undefined);
+  });
+
+  test('observation packet gets its own path after cache invalidation', () => {
+    const parent = { path_json: '["A","B"]', decoded_json: '{"type":"GRP_TXT"}' };
+    // Prime the cache on parent
+    getParsedPath(parent);
+    getParsedDecoded(parent);
+
+    // Simulate spread + fix (like packets.js does after issue #504)
+    const obs = { ...parent, path_json: '["X","Y","Z"]', decoded_json: '{"type":"TXT_MSG"}' };
+    clearParsedCache(obs);
+
+    // getParsedPath re-parses from obs's own path_json
+    const obsPath = getParsedPath(obs);
+    assert.deepStrictEqual(obsPath, ['X', 'Y', 'Z'], 'obs gets its own path, not parent\'s');
+    const obsDecoded = getParsedDecoded(obs);
+    assert.deepStrictEqual(obsDecoded, { type: 'TXT_MSG' }, 'obs gets its own decoded, not parent\'s');
+  });
+
+  test('observation packet path differs from parent after cache invalidation', () => {
+    const parent = { path_json: '["hop1"]', decoded_json: '{"type":"REQ"}' };
+    getParsedPath(parent);
+    getParsedDecoded(parent);
+
+    const obs = { ...parent, path_json: '["hop2","hop3"]', decoded_json: '{"type":"GRP_TXT","text":"hi"}' };
+    clearParsedCache(obs);
+
+    assert.notDeepStrictEqual(getParsedPath(obs), getParsedPath(parent),
+      'observation must have different path from parent');
+    assert.notDeepStrictEqual(getParsedDecoded(obs), getParsedDecoded(parent),
+      'observation must have different decoded from parent');
   });
 }
 

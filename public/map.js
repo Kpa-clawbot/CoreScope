@@ -10,9 +10,13 @@
   let targetNodeKey = null;
   let observers = [];
   let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clusters: false, hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all' };
+  let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
+  let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
   let heatLayer = null;
   let geoFilterLayer = null;
+  let affinityLayer = null;
+  let affinityData = null;
   let userHasMoved = false;
   let controlsCollapsed = false;
 
@@ -108,6 +112,9 @@
           <fieldset class="mc-section">
             <legend class="mc-label">Filters</legend>
             <label for="mcNeighbors"><input type="checkbox" id="mcNeighbors"> Show direct neighbors</label>
+            <div id="mcNeighborRef" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Ref: <span id="mcNeighborRefName">—</span></div>
+            <div id="mcNeighborHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Click a node marker to set the reference node</div>
+            <label id="mcAffinityDebugLabel" for="mcAffinityDebug" style="display:none"><input type="checkbox" id="mcAffinityDebug"> 🔍 Affinity Debug</label>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Last Heard</legend>
@@ -207,7 +214,35 @@
     const heatEl = document.getElementById('mcHeatmap');
     if (localStorage.getItem('meshcore-map-heatmap') === 'true') { heatEl.checked = true; }
     heatEl.addEventListener('change', e => { localStorage.setItem('meshcore-map-heatmap', e.target.checked); toggleHeatmap(e.target.checked); });
-    document.getElementById('mcNeighbors').addEventListener('change', e => { filters.neighbors = e.target.checked; renderMarkers(); });
+    document.getElementById('mcNeighbors').addEventListener('change', e => {
+      filters.neighbors = e.target.checked;
+      const hintEl = document.getElementById('mcNeighborHint');
+      const refEl = document.getElementById('mcNeighborRef');
+      if (e.target.checked && !selectedReferenceNode) {
+        hintEl.style.display = 'block';
+        refEl.style.display = 'none';
+      } else {
+        hintEl.style.display = 'none';
+        refEl.style.display = selectedReferenceNode ? 'block' : 'none';
+      }
+      renderMarkers();
+    });
+
+    // Affinity Debug overlay toggle — shown only when debugAffinity config is on or localStorage override
+    (function initAffinityDebug() {
+      var label = document.getElementById('mcAffinityDebugLabel');
+      var show = (window.CLIENT_CONFIG && window.CLIENT_CONFIG.debugAffinity) || localStorage.getItem('meshcore-affinity-debug') === 'true';
+      if (show && label) label.style.display = '';
+      var cb = document.getElementById('mcAffinityDebug');
+      if (!cb) return;
+      cb.addEventListener('change', function (e) {
+        if (e.target.checked) {
+          loadAffinityDebugOverlay();
+        } else {
+          clearAffinityOverlay();
+        }
+      });
+    })();
 
     // Hash Labels toggle
     const hashLabelEl = document.getElementById('mcHashLabels');
@@ -646,6 +681,11 @@
         const status = getNodeStatus(role, lastMs);
         if (status !== filters.statusFilter) return false;
       }
+      // Neighbor filter: show only the reference node and its direct neighbors
+      if (filters.neighbors && selectedReferenceNode && neighborPubkeys) {
+        const pk = n.public_key;
+        if (pk !== selectedReferenceNode && !neighborPubkeys.has(pk)) return false;
+      }
       return true;
     });
 
@@ -724,6 +764,61 @@
       </div>`;
   }
 
+  async function selectReferenceNode(pubkey, name) {
+    selectedReferenceNode = pubkey;
+    neighborPubkeys = new Set();
+    try {
+      // Use affinity-based neighbor API (server-side disambiguation) instead of
+      // client-side path walking which fails on hash collisions (#484)
+      const data = await api('/nodes/' + pubkey + '/neighbors?min_count=3');
+      for (const n of (data.neighbors || [])) {
+        if (n.pubkey) neighborPubkeys.add(n.pubkey);
+        // For ambiguous edges, include all candidates (better to show extra than miss)
+        if (n.candidates) n.candidates.forEach(function(c) { if (c.pubkey) neighborPubkeys.add(c.pubkey); });
+      }
+      // If affinity data is insufficient, fall back to client-side path walking
+      if (neighborPubkeys.size === 0) {
+        const pathData = await api('/nodes/' + pubkey + '/paths');
+        const paths = pathData.paths || [];
+        for (const p of paths) {
+          const hops = p.hops || [];
+          for (var i = 0; i < hops.length; i++) {
+            if (hops[i].pubkey === pubkey) {
+              if (i > 0 && hops[i - 1].pubkey) neighborPubkeys.add(hops[i - 1].pubkey);
+              if (i < hops.length - 1 && hops[i + 1].pubkey) neighborPubkeys.add(hops[i + 1].pubkey);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch neighbors for', pubkey, ':', e);
+      neighborPubkeys = new Set();
+    }
+    // Update sidebar UI
+    const refEl = document.getElementById('mcNeighborRef');
+    const refNameEl = document.getElementById('mcNeighborRefName');
+    const hintEl = document.getElementById('mcNeighborHint');
+    if (refEl) { refEl.style.display = 'block'; }
+    if (refNameEl) { refNameEl.textContent = name || pubkey.slice(0, 8); }
+    if (hintEl) { hintEl.style.display = 'none'; }
+    // Auto-enable the neighbors filter
+    filters.neighbors = true;
+    const cb = document.getElementById('mcNeighbors');
+    if (cb) cb.checked = true;
+    renderMarkers();
+  }
+  // Event delegation for Show Neighbors links (avoids inline onclick / global function timing issues)
+  document.addEventListener('click', function(e) {
+    var link = e.target.closest('[data-show-neighbors]');
+    if (link) {
+      e.preventDefault();
+      selectReferenceNode(link.dataset.pubkey, link.dataset.name);
+    }
+  });
+  // Expose for testing
+  window._mapSelectRefNode = selectReferenceNode;
+  window._mapGetNeighborPubkeys = function() { return neighborPubkeys ? Array.from(neighborPubkeys) : []; };
+
   function buildPopup(node) {
     const key = node.public_key ? truncate(node.public_key, 16) : '—';
     const loc = (node.lat && node.lon) ? `${node.lat.toFixed(5)}, ${node.lon.toFixed(5)}` : '—';
@@ -749,7 +844,10 @@
           <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Adverts</dt>
           <dd style="margin-left:88px;padding:2px 0;">${node.advert_count || 0}</dd>
         </dl>
-        <div style="margin-top:8px;clear:both;"><a href="#/nodes/${node.public_key}" style="color:var(--accent);font-size:12px;">View Node →</a></div>
+        <div style="margin-top:8px;clear:both;">
+          <a href="#/nodes/${node.public_key}" style="color:var(--accent);font-size:12px;">View Node →</a>
+          ${node.public_key ? ` · <a href="#" data-show-neighbors data-pubkey="${escapeHtml(node.public_key)}" data-name="${escapeHtml(node.name || 'Unknown')}" style="color:var(--accent);font-size:12px;">Show Neighbors</a>` : ''}
+        </div>
       </div>`;
   }
 
@@ -775,6 +873,10 @@
     routeLayer = null;
     if (heatLayer) { heatLayer = null; }
     geoFilterLayer = null;
+    selectedReferenceNode = null;
+    neighborPubkeys = null;
+    delete window._mapSelectRefNode;
+    delete window._mapGetNeighborPubkeys;
   }
 
   function toggleHeatmap(on) {
@@ -810,6 +912,95 @@
   }
 
   let _themeRefreshHandler = null;
+
+  // ─── Affinity Debug Overlay ────────────────────────────────────────────────
+  function clearAffinityOverlay() {
+    if (affinityLayer) { map.removeLayer(affinityLayer); affinityLayer = null; }
+    affinityData = null;
+  }
+
+  function loadAffinityDebugOverlay() {
+    clearAffinityOverlay();
+    // Fetch debug data — requires API key stored in localStorage
+    var apiKey = localStorage.getItem('meshcore-api-key') || '';
+    fetch('/api/debug/affinity', { headers: { 'X-API-Key': apiKey } })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (data) {
+        affinityData = data;
+        renderAffinityOverlay();
+      })
+      .catch(function (err) {
+        console.warn('[affinity-debug] Failed to load:', err);
+        var cb = document.getElementById('mcAffinityDebug');
+        if (cb) cb.checked = false;
+      });
+  }
+
+  function renderAffinityOverlay() {
+    if (!affinityData || !map) return;
+    clearAffinityOverlay();
+    affinityLayer = L.layerGroup();
+
+    // Build node position lookup from current markers
+    var nodePos = {};
+    nodes.forEach(function (n) {
+      if (n.latitude && n.longitude) {
+        nodePos[n.public_key.toLowerCase()] = [n.latitude, n.longitude];
+      }
+    });
+
+    var edges = affinityData.edges || [];
+    edges.forEach(function (e) {
+      var posA = nodePos[e.nodeA];
+      var posB = e.nodeB ? nodePos[e.nodeB] : null;
+
+      if (!posA) return;
+
+      // Unresolved prefix — show ❓ marker near nodeA
+      if (e.unresolved || (!posB && e.ambiguous)) {
+        if (posA) {
+          var marker = L.marker([posA[0] + 0.001, posA[1] + 0.001], {
+            icon: L.divIcon({ html: '❓', className: 'affinity-unresolved', iconSize: [20, 20] })
+          });
+          marker.bindPopup('<b>Unresolved prefix:</b> ' + escapeHtml(e.prefix) + '<br>Observations: ' + e.weight);
+          affinityLayer.addLayer(marker);
+        }
+        return;
+      }
+
+      if (!posB) return;
+
+      // Color by confidence
+      var color = '#ef4444'; // red — ambiguous
+      var score = e.score || 0;
+      if (score >= 0.6) color = '#22c55e'; // green — high
+      else if (score >= 0.3) color = '#eab308'; // yellow — medium
+
+      // Thickness proportional to weight, clamped 1-5px
+      var weight = Math.max(1, Math.min(5, Math.round((e.weight || 1) / 20)));
+
+      var line = L.polyline([posA, posB], {
+        color: color,
+        weight: weight,
+        opacity: 0.7,
+        dashArray: e.ambiguous ? '5,5' : null
+      });
+
+      var popup = '<b>Affinity Edge</b><br>' +
+        escapeHtml(e.nodeAName || e.nodeA.substring(0, 8)) + ' ↔ ' + escapeHtml(e.nodeBName || e.nodeB.substring(0, 8)) + '<br>' +
+        'Observations: ' + e.observationCount + '<br>' +
+        'Score: ' + (e.score || 0).toFixed(3) + '<br>' +
+        'Last seen: ' + escapeHtml(e.lastSeen) + '<br>' +
+        'Observers: ' + escapeHtml((e.observers || []).join(', '));
+      if (e.avgSnr != null) popup += '<br>Avg SNR: ' + e.avgSnr.toFixed(1) + ' dB';
+
+      line.bindPopup(popup);
+      affinityLayer.addLayer(line);
+    });
+
+    affinityLayer.addTo(map);
+  }
+  // ─── End Affinity Debug ────────────────────────────────────────────────────
 
   registerPage('map', {
     init: function(app, routeParam) {

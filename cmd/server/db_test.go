@@ -1012,6 +1012,168 @@ func TestGetNodesFiltering(t *testing.T) {
 			t.Errorf("expected 1 node with offset, got %d", len(nodes))
 		}
 	})
+
+	t.Run("region filter SJC", func(t *testing.T) {
+		nodes, total, _, err := db.GetNodes(50, 0, "", "", "", "", "", "SJC")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if total != 1 {
+			t.Errorf("expected 1 node for SJC region, got %d", total)
+		}
+		if len(nodes) != 1 {
+			t.Fatalf("expected 1 node, got %d", len(nodes))
+		}
+		if nodes[0]["public_key"] != "aabbccdd11223344" {
+			t.Errorf("expected TestRepeater, got %v", nodes[0]["public_key"])
+		}
+	})
+
+	t.Run("region filter SFO", func(t *testing.T) {
+		_, total, _, err := db.GetNodes(50, 0, "", "", "", "", "", "SFO")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if total != 1 {
+			t.Errorf("expected 1 node for SFO region, got %d", total)
+		}
+	})
+
+	t.Run("region filter multi", func(t *testing.T) {
+		_, total, _, err := db.GetNodes(50, 0, "", "", "", "", "", "SJC,SFO")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if total != 1 {
+			t.Errorf("expected 1 node for SJC,SFO region, got %d", total)
+		}
+	})
+
+	t.Run("region filter unknown", func(t *testing.T) {
+		_, total, _, err := db.GetNodes(50, 0, "", "", "", "", "", "AMS")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if total != 0 {
+			t.Errorf("expected 0 nodes for unknown region, got %d", total)
+		}
+	})
+}
+
+// setupTestDBV2 creates an in-memory SQLite database with the v2 schema
+// where observations use observer_id TEXT instead of observer_idx INTEGER.
+func setupTestDBV2(t *testing.T) *DB {
+	t.Helper()
+	conn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.SetMaxOpenConns(1)
+
+	schema := `
+		CREATE TABLE nodes (
+			public_key TEXT PRIMARY KEY,
+			name TEXT,
+			role TEXT,
+			lat REAL,
+			lon REAL,
+			last_seen TEXT,
+			first_seen TEXT,
+			advert_count INTEGER DEFAULT 0,
+			battery_mv INTEGER,
+			temperature_c REAL
+		);
+
+		CREATE TABLE observers (
+			id TEXT PRIMARY KEY,
+			name TEXT,
+			iata TEXT,
+			last_seen TEXT,
+			first_seen TEXT,
+			packet_count INTEGER DEFAULT 0
+		);
+
+		CREATE TABLE transmissions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			raw_hex TEXT NOT NULL,
+			hash TEXT NOT NULL UNIQUE,
+			first_seen TEXT NOT NULL,
+			route_type INTEGER,
+			payload_type INTEGER,
+			payload_version INTEGER,
+			decoded_json TEXT,
+			created_at TEXT DEFAULT (datetime('now'))
+		);
+
+		CREATE TABLE observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
+			observer_id TEXT,
+			observer_name TEXT,
+			direction TEXT,
+			snr REAL,
+			rssi REAL,
+			score INTEGER,
+			path_json TEXT,
+			timestamp INTEGER NOT NULL
+		);
+	`
+	if _, err := conn.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+
+	return &DB{conn: conn, isV3: false}
+}
+
+func TestGetNodesRegionFilterV2(t *testing.T) {
+	db := setupTestDBV2(t)
+	defer db.Close()
+
+	now := time.Now().UTC()
+	recent := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	recentEpoch := now.Add(-1 * time.Hour).Unix()
+
+	// Seed observer with IATA code
+	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
+		VALUES ('obs-v2-1', 'V2 Observer', 'LAX', ?, '2026-01-01T00:00:00Z', 10)`, recent)
+
+	// Seed a node
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
+		VALUES ('v2pubkey11223344', 'V2Node', 'repeater', 34.0, -118.0, ?, '2026-01-01T00:00:00Z', 5)`, recent)
+
+	// Seed an ADVERT transmission for the node
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
+		VALUES ('AABB', 'v2hash0001', ?, 1, 4, '{"pubKey":"v2pubkey11223344","name":"V2Node","type":"ADVERT"}')`, recent)
+
+	// Seed v2-style observation: observer_id references observers.id directly
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_id, observer_name, snr, rssi, path_json, timestamp)
+		VALUES (1, 'obs-v2-1', 'V2 Observer', 10.0, -90, '[]', ?)`, recentEpoch)
+
+	t.Run("v2 region filter match", func(t *testing.T) {
+		nodes, total, _, err := db.GetNodes(50, 0, "", "", "", "", "", "LAX")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if total != 1 {
+			t.Errorf("expected 1 node for LAX region (v2 schema), got %d", total)
+		}
+		if len(nodes) != 1 {
+			t.Fatalf("expected 1 node, got %d", len(nodes))
+		}
+		if nodes[0]["public_key"] != "v2pubkey11223344" {
+			t.Errorf("expected V2Node, got %v", nodes[0]["public_key"])
+		}
+	})
+
+	t.Run("v2 region filter no match", func(t *testing.T) {
+		_, total, _, err := db.GetNodes(50, 0, "", "", "", "", "", "JFK")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if total != 0 {
+			t.Errorf("expected 0 nodes for JFK region (v2 schema), got %d", total)
+		}
+	})
 }
 
 func TestGetChannelMessagesDedup(t *testing.T) {

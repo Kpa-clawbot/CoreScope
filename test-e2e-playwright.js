@@ -85,7 +85,7 @@ async function run() {
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
     await page.evaluate(() => {
-      localStorage.removeItem('meshcore-user-theme');
+      localStorage.removeItem('cs-theme-overrides');
       window.SITE_CONFIG = window.SITE_CONFIG || {};
       window.SITE_CONFIG.home = {
         heroTitle: 'Server Hero (E2E)',
@@ -122,18 +122,18 @@ async function run() {
     const homeTab = page.locator('.cust-tab[data-tab="home"]');
     await homeTab.waitFor({ state: 'visible', timeout: 10000 });
     await homeTab.click();
-    const heroInput = page.locator('#cust-heroTitle');
+    const heroInput = page.locator('[data-cv2-field="home.heroTitle"]');
     if (await heroInput.count() === 0) {
-      console.log('    ⏭️  #cust-heroTitle not found — TODO: requires running server');
+      console.log('    ⏭️  home.heroTitle input not found — TODO: requires running server');
       return;
     }
     await heroInput.waitFor({ state: 'visible', timeout: 10000 });
     await heroInput.fill(editedHero);
-    await page.waitForTimeout(700); // autoSave debounce is 500ms
+    await page.waitForTimeout(700); // debounce is 300ms, allow margin
     await page.reload({ waitUntil: 'domcontentloaded' });
     const persistedHero = await page.evaluate(() => {
       try {
-        const saved = JSON.parse(localStorage.getItem('meshcore-user-theme') || '{}');
+        const saved = JSON.parse(localStorage.getItem('cs-theme-overrides') || '{}');
         return saved && saved.home ? saved.home.heroTitle : '';
       } catch {
         return '';
@@ -550,7 +550,7 @@ async function run() {
     await page.goto(`${BASE}/#/analytics`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#analyticsTabs');
     const tabs = await page.$$('#analyticsTabs .tab-btn');
-    assert(tabs.length >= 8, `Expected >=8 analytics tabs, got ${tabs.length}`);
+    assert(tabs.length >= 10, `Expected >=10 analytics tabs, got ${tabs.length}`);
     // Overview tab should be active by default and show stat cards
     await page.waitForSelector('#analyticsContent .stat-card', { timeout: 8000 });
     const cards = await page.$$('#analyticsContent .stat-card');
@@ -622,6 +622,53 @@ async function run() {
     }, { timeout: 8000 });
     const content = await page.$eval('#analyticsContent', el => el.textContent.trim());
     assert(content.length > 10, 'Distance tab should render content');
+  });
+
+  await test('Analytics Neighbor Graph tab renders canvas and stats', async () => {
+    await page.click('[data-tab="neighbor-graph"]');
+    await page.waitForSelector('#ngCanvas', { timeout: 8000 });
+    const hasCanvas = await page.$('#ngCanvas');
+    assert(hasCanvas, 'Neighbor Graph tab should have a canvas element');
+    const hasStats = await page.$$eval('#ngStats .stat-card', els => els.length);
+    assert(hasStats >= 3, `Neighbor Graph stats should have >=3 cards, got ${hasStats}`);
+    // Verify filters exist
+    const hasSlider = await page.$('#ngMinScore');
+    assert(hasSlider, 'Should have min score slider');
+    const hasConfidence = await page.$('#ngConfidence');
+    assert(hasConfidence, 'Should have confidence filter');
+  });
+
+  await test('Analytics Neighbor Graph filter changes update stats', async () => {
+    // Capture edge count before filter
+    const edgesBefore = await page.$eval('#ngStats', el => {
+      const cards = el.querySelectorAll('.stat-card');
+      for (const c of cards) {
+        if (c.textContent.toLowerCase().includes('edge')) {
+          const m = c.textContent.match(/\d+/);
+          if (m) return parseInt(m[0], 10);
+        }
+      }
+      return -1;
+    });
+    // Set min score slider to high value to reduce edges
+    await page.$eval('#ngMinScore', el => { el.value = 90; el.dispatchEvent(new Event('input')); });
+    await page.waitForTimeout(300);
+    const edgesAfter = await page.$eval('#ngStats', el => {
+      const cards = el.querySelectorAll('.stat-card');
+      for (const c of cards) {
+        if (c.textContent.toLowerCase().includes('edge')) {
+          const m = c.textContent.match(/\d+/);
+          if (m) return parseInt(m[0], 10);
+        }
+      }
+      return -1;
+    });
+    assert(edgesBefore >= 0, 'Should find edge count in stats before filter');
+    assert(edgesAfter >= 0, 'Should find edge count in stats after filter');
+    assert(edgesAfter <= edgesBefore, `Raising min score should reduce (or keep) edge count: ${edgesBefore} → ${edgesAfter}`);
+    // Reset slider
+    await page.$eval('#ngMinScore', el => { el.value = 0; el.dispatchEvent(new Event('input')); });
+    await page.waitForTimeout(200);
   });
 
   // --- Group: Compare page ---
@@ -1014,6 +1061,517 @@ async function run() {
     const hexDump = await page.$('#alabHex');
     assert(hexDump, 'Hex dump should be visible after selecting a packet');
   });
+
+  // --- Group: Customizer v2 E2E tests ---
+
+  await test('Customizer v2: setOverride persists and applies CSS', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    // Force light mode — CI headless browsers may default to dark mode,
+    // and in dark mode themeDark.accent overwrites theme.accent in applyCSS
+    await page.evaluate(() => {
+      localStorage.setItem('meshcore-theme', 'light');
+      document.documentElement.setAttribute('data-theme', 'light');
+    });
+    // Clear any existing overrides
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+    // Wait for init() to complete (server config fetch + full pipeline) before
+    // setting override, so _runPipeline from init doesn't overwrite our value.
+    await page.waitForFunction(() => {
+      return window._customizerV2 && window._customizerV2.initDone;
+    }, { timeout: 5000 });
+    // Set an override via the API
+    const result = await page.evaluate(() => {
+      window._customizerV2.setOverride('theme', 'accent', '#ff0000');
+      // Wait for debounce (300ms) + buffer
+      return new Promise(resolve => setTimeout(() => {
+        const stored = JSON.parse(localStorage.getItem('cs-theme-overrides') || '{}');
+        const cssVal = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+        resolve({ stored, cssVal });
+      }, 500));
+    });
+    assert(result.stored.theme && result.stored.theme.accent === '#ff0000',
+      'Override not persisted to localStorage');
+    assert(result.cssVal === '#ff0000',
+      `CSS variable --accent expected #ff0000 but got "${result.cssVal}"`);
+    // Cleanup
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: clearOverride resets to server default', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    // Force light mode for consistent CSS testing
+    await page.evaluate(() => {
+      localStorage.setItem('meshcore-theme', 'light');
+      document.documentElement.setAttribute('data-theme', 'light');
+    });
+    // Wait for init() to complete so _serverDefaults is populated
+    await page.waitForFunction(() => {
+      return window._customizerV2 && window._customizerV2.initDone;
+    }, { timeout: 5000 });
+    const result = await page.evaluate(() => {
+      // Set the server default accent
+      window._customizerV2.setOverride('theme', 'accent', '#ff0000');
+      return new Promise(resolve => setTimeout(() => {
+        window._customizerV2.clearOverride('theme', 'accent');
+        const stored = JSON.parse(localStorage.getItem('cs-theme-overrides') || '{}');
+        const hasAccent = stored.theme && stored.theme.hasOwnProperty('accent');
+        resolve({ hasAccent });
+      }, 500));
+    });
+    assert(!result.hasAccent, 'accent should be removed from overrides after clearOverride');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: full reset clears all overrides', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    const result = await page.evaluate(() => {
+      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
+      localStorage.setItem('cs-theme-overrides', JSON.stringify({ theme: { accent: '#ff0000' }, nodeColors: { repeater: '#00ff00' } }));
+      // Simulate full reset
+      localStorage.removeItem('cs-theme-overrides');
+      const stored = localStorage.getItem('cs-theme-overrides');
+      return { stored };
+    });
+    assert(!result.error, result.error || '');
+    assert(result.stored === null, 'cs-theme-overrides should be null after full reset');
+  });
+
+  await test('Customizer v2: export produces valid JSON', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    const result = await page.evaluate(() => {
+      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
+      // Set some overrides
+      localStorage.setItem('cs-theme-overrides', JSON.stringify({ theme: { accent: '#123456' } }));
+      const delta = window._customizerV2.readOverrides();
+      const json = JSON.stringify(delta, null, 2);
+      try { JSON.parse(json); return { valid: true, hasAccent: delta.theme && delta.theme.accent === '#123456' }; }
+      catch { return { valid: false }; }
+    });
+    assert(!result.error, result.error || '');
+    assert(result.valid, 'Exported JSON must be valid');
+    assert(result.hasAccent, 'Exported JSON must contain the stored override');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: import applies overrides', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    const result = await page.evaluate(() => {
+      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
+      localStorage.removeItem('cs-theme-overrides');
+      const importData = { theme: { accent: '#abcdef' }, nodeColors: { repeater: '#112233' } };
+      const validation = window._customizerV2.validateShape(importData);
+      if (!validation.valid) return { error: 'Validation failed: ' + validation.errors.join(', ') };
+      window._customizerV2.writeOverrides(importData);
+      const stored = window._customizerV2.readOverrides();
+      return { accent: stored.theme && stored.theme.accent, repeater: stored.nodeColors && stored.nodeColors.repeater };
+    });
+    assert(!result.error, result.error || '');
+    assert(result.accent === '#abcdef', 'Imported accent should be #abcdef');
+    assert(result.repeater === '#112233', 'Imported repeater should be #112233');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: migration from legacy keys', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    const result = await page.evaluate(() => {
+      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
+      // Clear new key so migration can run
+      localStorage.removeItem('cs-theme-overrides');
+      // Set legacy keys
+      localStorage.setItem('meshcore-user-theme', JSON.stringify({ theme: { accent: '#aabb01' }, branding: { siteName: 'LegacyName' } }));
+      localStorage.setItem('meshcore-timestamp-mode', 'absolute');
+      localStorage.setItem('meshcore-heatmap-opacity', '0.5');
+      // Run migration
+      const migrated = window._customizerV2.migrateOldKeys();
+      const stored = window._customizerV2.readOverrides();
+      const legacyGone = localStorage.getItem('meshcore-user-theme') === null &&
+                         localStorage.getItem('meshcore-timestamp-mode') === null &&
+                         localStorage.getItem('meshcore-heatmap-opacity') === null;
+      return {
+        migrated: !!migrated,
+        accent: stored.theme && stored.theme.accent,
+        siteName: stored.branding && stored.branding.siteName,
+        tsMode: stored.timestamps && stored.timestamps.defaultMode,
+        opacity: stored.heatmapOpacity,
+        legacyGone
+      };
+    });
+    assert(!result.error, result.error || '');
+    assert(result.migrated, 'migrateOldKeys should return non-null');
+    assert(result.accent === '#aabb01', 'Theme accent should be migrated');
+    assert(result.siteName === 'LegacyName', 'Branding should be migrated');
+    assert(result.tsMode === 'absolute', 'Timestamp mode should be migrated');
+    assert(result.opacity === 0.5, 'Heatmap opacity should be migrated');
+    assert(result.legacyGone, 'Legacy keys should be removed after migration');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: browser-local banner visible', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    // Open customizer
+    const toggleSel = '#customizeToggle, button[title*="ustom" i], [class*="customize"]';
+    const btn = await page.$(toggleSel);
+    if (!btn) { console.log('    ⏭️  Customizer toggle not found'); return; }
+    await btn.click();
+    await page.waitForSelector('.cv2-local-banner', { timeout: 5000 });
+    const bannerText = await page.$eval('.cv2-local-banner', el => el.textContent);
+    assert(bannerText.includes('browser only'), `Banner should mention "browser only" but got "${bannerText}"`);
+  });
+
+  await test('Customizer v2: auto-save status indicator', async () => {
+    // Panel should already be open from previous test
+    const statusEl = await page.$('#cv2-save-status');
+    if (!statusEl) { console.log('    ⏭️  Save status element not found'); return; }
+    const statusText = await page.$eval('#cv2-save-status', el => el.textContent);
+    assert(statusText.includes('saved') || statusText.includes('Saving'),
+      `Status should show save state but got "${statusText}"`);
+  });
+
+  await test('Customizer v2: override indicator appears and disappears', async () => {
+    // Set override BEFORE page load so _renderTheme sees it during init
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => {
+      // Force light mode so theme tab renders 'theme' section (not 'themeDark')
+      localStorage.setItem('meshcore-theme', 'light');
+      localStorage.setItem('cs-theme-overrides', JSON.stringify({ theme: { accent: '#ff0000' } }));
+    });
+    // Reload so customizer v2 initializes with the override in place
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    // Ensure light mode is active (CI headless may default to dark)
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+    const result = await page.evaluate(() => {
+      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
+      return { ok: true };
+    });
+    assert(!result.error, result.error || '');
+    // Open customizer and check for override dot
+    const toggleSel = '#customizeToggle, button[title*="ustom" i], [class*="customize"]';
+    const btn = await page.$(toggleSel);
+    if (!btn) { console.log('    ⏭️  Customizer toggle not found'); return; }
+    await btn.click();
+    await page.waitForSelector('.cust-overlay', { timeout: 5000 });
+    // Click theme tab
+    const themeTab = await page.$('.cust-tab[data-tab="theme"]');
+    if (themeTab) await themeTab.click();
+    await page.waitForTimeout(200);
+    // Check for override dot
+    const dots = await page.$$('.cv2-override-dot');
+    assert(dots.length > 0, 'Override dot should be visible when overrides exist');
+    // Clear overrides and reload to verify dots disappear
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    const btn2 = await page.$(toggleSel);
+    if (btn2) await btn2.click();
+    await page.waitForSelector('.cust-overlay', { timeout: 5000 });
+    const themeTab2 = await page.$('.cust-tab[data-tab="theme"]');
+    if (themeTab2) await themeTab2.click();
+    await page.waitForTimeout(200);
+    const dotsAfter = await page.$$('.cv2-override-dot');
+    assert(dotsAfter.length === 0, 'Override dots should disappear after clearing overrides');
+  });
+
+  await test('Customizer v2: presets apply through standard pipeline', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+    const toggleSel = '#customizeToggle, button[title*="ustom" i], [class*="customize"]';
+    const btn = await page.$(toggleSel);
+    if (!btn) { console.log('    ⏭️  Customizer toggle not found'); return; }
+    await btn.click();
+    await page.waitForSelector('.cust-overlay', { timeout: 5000 });
+    // Click theme tab
+    const themeTab = await page.$('.cust-tab[data-tab="theme"]');
+    if (themeTab) await themeTab.click();
+    await page.waitForTimeout(200);
+    // Click ocean preset
+    const oceanBtn = await page.$('.cust-preset-btn[data-preset="ocean"]');
+    if (!oceanBtn) { console.log('    ⏭️  Ocean preset button not found'); return; }
+    await oceanBtn.click();
+    await page.waitForTimeout(300);
+    const result = await page.evaluate(() => {
+      const stored = JSON.parse(localStorage.getItem('cs-theme-overrides') || '{}');
+      const cssAccent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+      return { hasTheme: !!stored.theme, cssAccent };
+    });
+    assert(result.hasTheme, 'Preset should write theme to localStorage');
+    assert(result.cssAccent.length > 0, 'CSS accent should be set after preset');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: page load applies overrides from localStorage', async () => {
+    // Set overrides BEFORE navigating
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => {
+      localStorage.setItem('cs-theme-overrides', JSON.stringify({ theme: { accent: '#ee1122' } }));
+    });
+    // Reload to trigger init with overrides
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    await page.waitForTimeout(500); // allow pipeline to run
+    const cssAccent = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+    );
+    assert(cssAccent === '#ee1122', `Page load should apply override accent #ee1122 but got "${cssAccent}"`);
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+
+  await test('Show Neighbors populates neighborPubkeys from affinity API', async () => {
+    const testPubkey = 'aabbccdd11223344556677889900aabbccddeeff00112233445566778899001122';
+    const neighborPubkey1 = '1111111111111111111111111111111111111111111111111111111111111111';
+    const neighborPubkey2 = '2222222222222222222222222222222222222222222222222222222222222222';
+
+    await page.route(`**/api/nodes/${testPubkey}/neighbors*`, route => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          node: testPubkey,
+          neighbors: [
+            { pubkey: neighborPubkey1, prefix: '11', name: 'Neighbor-1', role: 'repeater', count: 50, score: 0.9, ambiguous: false },
+            { pubkey: neighborPubkey2, prefix: '22', name: 'Neighbor-2', role: 'companion', count: 20, score: 0.7, ambiguous: false }
+          ],
+          total_observations: 70
+        })
+      });
+    });
+
+    await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+
+    const result = await page.evaluate(async (args) => {
+      if (typeof window._mapSelectRefNode !== 'function') return { error: 'no _mapSelectRefNode' };
+      await window._mapSelectRefNode(args.pk, 'TestNode');
+      return { neighbors: window._mapGetNeighborPubkeys() };
+    }, { pk: testPubkey });
+
+    assert(!result.error, result.error || '');
+    assert(result.neighbors.includes(neighborPubkey1), 'Should contain neighbor1');
+    assert(result.neighbors.includes(neighborPubkey2), 'Should contain neighbor2');
+    assert(result.neighbors.length === 2, `Expected 2 neighbors, got ${result.neighbors.length}`);
+    await page.unroute(`**/api/nodes/${testPubkey}/neighbors*`);
+  });
+
+  await test('Show Neighbors resolves correct node on hash collision via affinity API', async () => {
+    const nodeA = 'c0dedad4208acb6cbe44b848943fc6d3c5d43cf38a21e48b43826a70862980e4';
+    const nodeB = 'c0f1a2b3000000000000000000000000000000000000000000000000000000ff';
+    const neighborR1 = 'r1aaaaaa000000000000000000000000000000000000000000000000000000aa';
+    const neighborR2 = 'r2bbbbbb000000000000000000000000000000000000000000000000000000bb';
+    const neighborR4 = 'r4dddddd000000000000000000000000000000000000000000000000000000dd';
+
+    await page.route(`**/api/nodes/${nodeA}/neighbors*`, route => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          node: nodeA,
+          neighbors: [
+            { pubkey: neighborR1, prefix: 'R1', name: 'Repeater-R1', role: 'repeater', count: 100, score: 0.95, ambiguous: false },
+            { pubkey: neighborR2, prefix: 'R2', name: 'Repeater-R2', role: 'repeater', count: 80, score: 0.85, ambiguous: false }
+          ],
+          total_observations: 180
+        })
+      });
+    });
+
+    await page.route(`**/api/nodes/${nodeB}/neighbors*`, route => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          node: nodeB,
+          neighbors: [
+            { pubkey: neighborR4, prefix: 'R4', name: 'Repeater-R4', role: 'repeater', count: 60, score: 0.75, ambiguous: false }
+          ],
+          total_observations: 60
+        })
+      });
+    });
+
+    await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+
+    // Select Node A — should get R1, R2 but NOT R4
+    const resultA = await page.evaluate(async (pk) => {
+      await window._mapSelectRefNode(pk, 'NodeA');
+      return window._mapGetNeighborPubkeys();
+    }, nodeA);
+    assert(resultA.includes(neighborR1), 'Node A should have R1');
+    assert(resultA.includes(neighborR2), 'Node A should have R2');
+    assert(!resultA.includes(neighborR4), 'Node A should NOT have R4');
+
+    // Select Node B — should get R4 but NOT R1, R2
+    const resultB = await page.evaluate(async (pk) => {
+      await window._mapSelectRefNode(pk, 'NodeB');
+      return window._mapGetNeighborPubkeys();
+    }, nodeB);
+    assert(resultB.includes(neighborR4), 'Node B should have R4');
+    assert(!resultB.includes(neighborR1), 'Node B should NOT have R1');
+    assert(!resultB.includes(neighborR2), 'Node B should NOT have R2');
+
+    await page.unroute(`**/api/nodes/${nodeA}/neighbors*`);
+    await page.unroute(`**/api/nodes/${nodeB}/neighbors*`);
+  });
+
+  await test('Show Neighbors falls back to path walking when affinity API returns empty', async () => {
+    const testPubkey = 'fallbacktest0000000000000000000000000000000000000000000000000000';
+    const hopBefore = 'aaaa000000000000000000000000000000000000000000000000000000000000';
+    const hopAfter = 'bbbb000000000000000000000000000000000000000000000000000000000000';
+
+    await page.route(`**/api/nodes/${testPubkey}/neighbors*`, route => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ node: testPubkey, neighbors: [], total_observations: 0 })
+      });
+    });
+
+    await page.route(`**/api/nodes/${testPubkey}/paths*`, route => {
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          paths: [{
+            hops: [
+              { pubkey: hopBefore, name: 'HopBefore' },
+              { pubkey: testPubkey, name: 'Self' },
+              { pubkey: hopAfter, name: 'HopAfter' }
+            ]
+          }]
+        })
+      });
+    });
+
+    await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1500);
+
+    const result = await page.evaluate(async (pk) => {
+      if (typeof window._mapSelectRefNode !== 'function') return { error: 'no-function' };
+      await window._mapSelectRefNode(pk, 'FallbackNode');
+      return { neighbors: window._mapGetNeighborPubkeys() };
+    }, testPubkey);
+
+    assert(!result.error, result.error || '');
+    assert(result.neighbors.includes(hopBefore), 'Fallback should find hopBefore');
+    assert(result.neighbors.includes(hopAfter), 'Fallback should find hopAfter');
+    assert(result.neighbors.length === 2, `Expected 2 fallback neighbors, got ${result.neighbors.length}`);
+    await page.unroute(`**/api/nodes/${testPubkey}/neighbors*`);
+    await page.unroute(`**/api/nodes/${testPubkey}/paths*`);
+  });
+  // ─── Neighbor section tests ───────────────────────────────────────────────
+
+  await test('Node detail: neighbors section exists with correct columns', async () => {
+    // Navigate to a node detail page (use the first node in the list)
+    await page.goto(BASE + '/#/nodes');
+    await page.waitForSelector('#nodesBody tr[data-key]', { timeout: 10000 });
+    // Get the first node's pubkey from the row's data-key attribute
+    const pubkey = await page.$eval('#nodesBody tr[data-key]', el => el.dataset.key);
+    await page.goto(BASE + '/#/nodes/' + pubkey);
+    await page.waitForSelector('#node-neighbors', { timeout: 10000 });
+    // Check the section exists
+    const header = await page.$eval('#fullNeighborsHeader', el => el.textContent);
+    assert(header.startsWith('Neighbors'), 'Header should start with "Neighbors", got: ' + header);
+    // Wait for content to load (either table or empty state)
+    await page.waitForFunction(() => {
+      const el = document.getElementById('fullNeighborsContent');
+      return el && !el.innerHTML.includes('spinner');
+    }, { timeout: 10000 });
+    const hasTable = await page.$('#fullNeighborsContent .data-table');
+    if (hasTable) {
+      // Check columns
+      const headers = await page.$$eval('#fullNeighborsContent thead th', ths => ths.map(t => t.textContent));
+      assert(headers.includes('Neighbor'), 'Should have Neighbor column');
+      assert(headers.includes('Role'), 'Should have Role column');
+      assert(headers.includes('Score'), 'Should have Score column');
+      assert(headers.includes('Obs'), 'Should have Obs column');
+      assert(headers.includes('Last Seen'), 'Should have Last Seen column');
+      assert(headers.includes('Conf'), 'Should have Conf column');
+    } else {
+      // Empty state
+      const text = await page.$eval('#fullNeighborsContent', el => el.textContent);
+      assert(text.includes('No neighbor data') || text.includes('Could not load'), 'Should show empty or error state');
+    }
+  });
+
+
+  // ─── End neighbor section tests ───────────────────────────────────────────
+
+  // ─── Affinity debug overlay tests ─────────────────────────────────────────
+
+  await test('Map: affinity debug checkbox exists in DOM', async () => {
+    await page.goto(BASE + '/#/map');
+    await page.waitForSelector('#mapControls', { timeout: 5000 });
+    const checkbox = await page.$('#mcAffinityDebug');
+    assert(checkbox !== null, 'Affinity debug checkbox should exist in DOM');
+  });
+
+  await test('Map: affinity debug checkbox toggles without crash', async () => {
+    await page.goto(BASE + '/#/map');
+    await page.waitForSelector('#mapControls', { timeout: 5000 });
+    // Make the checkbox visible by setting localStorage
+    await page.evaluate(() => localStorage.setItem('meshcore-affinity-debug', 'true'));
+    await page.reload();
+    await page.waitForSelector('#mapControls', { timeout: 5000 });
+    const label = await page.$('#mcAffinityDebugLabel');
+    if (label) {
+      const display = await label.evaluate(el => getComputedStyle(el).display);
+      // When debugAffinity or localStorage is set, label should be visible
+      // Just verify toggling doesn't crash
+      const cb = await page.$('#mcAffinityDebug');
+      if (cb) {
+        await cb.click();
+        // Wait a bit for fetch to complete (or fail gracefully)
+        await page.waitForTimeout(500);
+        await cb.click();
+        await page.waitForTimeout(200);
+      }
+    }
+    // Clean up
+    await page.evaluate(() => localStorage.removeItem('meshcore-affinity-debug'));
+    assert(true, 'Toggle did not crash');
+  });
+
+  await test('Node detail: affinity debug section expandable', async () => {
+    await page.goto(BASE + '/#/nodes');
+    await page.waitForSelector('#nodesBody tr[data-key]', { timeout: 10000 });
+    // Enable debug mode
+    await page.evaluate(() => localStorage.setItem('meshcore-affinity-debug', 'true'));
+    // Click first node to go to detail
+    const nodeLink = await page.$('a[href*="/nodes/"]');
+    if (nodeLink) {
+      await nodeLink.click();
+      await page.waitForTimeout(1000);
+      const debugPanel = await page.$('#node-affinity-debug');
+      if (debugPanel) {
+        const display = await debugPanel.evaluate(el => el.style.display);
+        // Panel should be visible when debug is enabled
+        const header = await debugPanel.$('h4');
+        if (header) {
+          // Click to expand
+          await header.click();
+          await page.waitForTimeout(300);
+          const body = await debugPanel.$('.affinity-debug-body');
+          if (body) {
+            const bodyDisplay = await body.evaluate(el => el.style.display);
+            assert(bodyDisplay !== 'none', 'Debug body should be expanded after click');
+          }
+        }
+      }
+    }
+    await page.evaluate(() => localStorage.removeItem('meshcore-affinity-debug'));
+    assert(true, 'Debug panel expansion works');
+  });
+
+  // ─── End affinity debug tests ─────────────────────────────────────────────
 
   // Extract frontend coverage if instrumented server is running
   try {

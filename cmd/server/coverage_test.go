@@ -3715,3 +3715,99 @@ func TestGetChannelMessagesAfterIngest(t *testing.T) {
 		t.Errorf("newest message should be 'brand new message', got %q", lastMsg["text"])
 	}
 }
+
+func TestIndexByNodePreCheck(t *testing.T) {
+	store := &PacketStore{
+		byNode:     make(map[string][]*StoreTx),
+		nodeHashes: make(map[string]map[string]bool),
+	}
+
+	t.Run("indexes ADVERT with pubKey", func(t *testing.T) {
+		tx := &StoreTx{Hash: "h1", DecodedJSON: `{"pubKey":"AABBCC","type":"ADVERT"}`}
+		store.indexByNode(tx)
+		if len(store.byNode["AABBCC"]) != 1 {
+			t.Errorf("expected 1 entry for pubKey AABBCC, got %d", len(store.byNode["AABBCC"]))
+		}
+	})
+
+	t.Run("indexes destPubKey", func(t *testing.T) {
+		tx := &StoreTx{Hash: "h2", DecodedJSON: `{"destPubKey":"DDEEFF","type":"MSG"}`}
+		store.indexByNode(tx)
+		if len(store.byNode["DDEEFF"]) != 1 {
+			t.Errorf("expected 1 entry for destPubKey DDEEFF, got %d", len(store.byNode["DDEEFF"]))
+		}
+	})
+
+	t.Run("indexes srcPubKey", func(t *testing.T) {
+		tx := &StoreTx{Hash: "h2b", DecodedJSON: `{"srcPubKey":"112233","type":"TXT_MSG"}`}
+		store.indexByNode(tx)
+		if len(store.byNode["112233"]) != 1 {
+			t.Errorf("expected 1 entry for srcPubKey 112233, got %d", len(store.byNode["112233"]))
+		}
+	})
+
+	t.Run("skips channel message without pubKey", func(t *testing.T) {
+		beforeLen := len(store.byNode)
+		tx := &StoreTx{Hash: "h3", DecodedJSON: `{"type":"CHAN","channel":"#test","text":"hello"}`}
+		store.indexByNode(tx)
+		if len(store.byNode) != beforeLen {
+			t.Errorf("expected byNode unchanged for channel packet, got %d new entries", len(store.byNode)-beforeLen)
+		}
+	})
+
+	t.Run("skips empty DecodedJSON", func(t *testing.T) {
+		beforeLen := len(store.byNode)
+		tx := &StoreTx{Hash: "h4", DecodedJSON: ""}
+		store.indexByNode(tx)
+		if len(store.byNode) != beforeLen {
+			t.Error("expected byNode unchanged for empty DecodedJSON")
+		}
+	})
+
+	t.Run("deduplicates same hash", func(t *testing.T) {
+		tx := &StoreTx{Hash: "h1", DecodedJSON: `{"pubKey":"AABBCC","type":"ADVERT"}`}
+		store.indexByNode(tx) // second call for same hash
+		if len(store.byNode["AABBCC"]) != 1 {
+			t.Errorf("expected dedup to keep 1 entry, got %d", len(store.byNode["AABBCC"]))
+		}
+	})
+}
+
+// BenchmarkIndexByNode measures indexByNode performance with and without pubkey
+// fields to demonstrate the strings.Contains pre-check optimization.
+func BenchmarkIndexByNode(b *testing.B) {
+	// Payload WITHOUT any pubkey fields — should be skipped via pre-check
+	noPubkey := `{"type":1,"msgId":42,"sender":"node1","data":"hello world"}`
+	// Payload WITH a pubkey field — requires JSON parse
+	withPubkey := `{"type":1,"msgId":42,"pubKey":"AABB","sender":"node1","data":"hello world"}`
+
+	b.Run("no_pubkey_skip", func(b *testing.B) {
+		store := &PacketStore{
+			byNode:     make(map[string][]*StoreTx),
+			nodeHashes: make(map[string]map[string]bool),
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tx := &StoreTx{
+				Hash:        fmt.Sprintf("hash-%d", i),
+				DecodedJSON: noPubkey,
+			}
+			store.indexByNode(tx)
+		}
+	})
+
+	b.Run("with_pubkey_parse", func(b *testing.B) {
+		store := &PacketStore{
+			byNode:     make(map[string][]*StoreTx),
+			nodeHashes: make(map[string]map[string]bool),
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tx := &StoreTx{
+				Hash:        fmt.Sprintf("hash-%d", i),
+				DecodedJSON: withPubkey,
+			}
+			store.indexByNode(tx)
+		}
+	})
+}

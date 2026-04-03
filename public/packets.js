@@ -8,7 +8,7 @@
   // Resolve observer_id to friendly name from loaded observers list
   function obsName(id) {
     if (!id) return '—';
-    const o = observers.find(ob => ob.id === id);
+    const o = observerMap.get(id);
     if (!o) return id;
     return o.iata ? `${o.name} (${o.iata})` : o.name;
   }
@@ -21,6 +21,7 @@
   let packetsPaused = false;
   let pauseBuffer = [];
   let observers = [];
+  let observerMap = new Map(); // id → observer for O(1) lookups (#383)
   let regionMap = {};
   const TYPE_NAMES = { 0:'Request', 1:'Response', 2:'Direct Msg', 3:'ACK', 4:'Advert', 5:'Channel Msg', 7:'Anon Req', 8:'Path', 9:'Trace', 11:'Control' };
   function typeName(t) { return TYPE_NAMES[t] ?? `Type ${t}`; }
@@ -34,8 +35,17 @@
   let hopNameCache = {};
   let showHexHashes = localStorage.getItem('meshcore-hex-hashes') === 'true';
   let filtersBuilt = false;
+  let _renderTimer = null;
+  function scheduleRender() {
+    clearTimeout(_renderTimer);
+    _renderTimer = setTimeout(() => renderTableRows(), 200);
+  }
   const PANEL_WIDTH_KEY = 'meshcore-panel-width';
   const PANEL_CLOSE_HTML = '<button class="panel-close-btn" title="Close detail pane (Esc)">✕</button>';
+
+  // getParsedPath / getParsedDecoded are in shared packet-helpers.js (loaded before this file)
+  const getParsedPath = window.getParsedPath;
+  const getParsedDecoded = window.getParsedDecoded;
 
   // --- Virtual scroll state ---
   const VSCROLL_ROW_HEIGHT = 36;  // estimated row height in px
@@ -259,6 +269,7 @@
             if (obs) {
               expandedHashes.add(h);
               const obsPacket = {...data.packet, observer_id: obs.observer_id, observer_name: obs.observer_name, snr: obs.snr, rssi: obs.rssi, path_json: obs.path_json, timestamp: obs.timestamp, first_seen: obs.timestamp};
+              clearParsedCache(obsPacket);
               selectPacket(obs.id, h, {packet: obsPacket, breakdown: data.breakdown, observations: data.observations}, obs.id);
             } else {
               selectPacket(data.packet.id, h, data);
@@ -314,7 +325,7 @@
           panel.appendChild(content);
           const pkt = data.packet;
           try {
-            const hops = JSON.parse(pkt.path_json || '[]');
+            const hops = getParsedPath(pkt);
             const newHops = hops.filter(h => !(h in hopNameCache));
             if (newHops.length) await resolveHops(newHops);
           } catch {}
@@ -326,6 +337,7 @@
     wsHandler = debouncedOnWS(function (msgs) {
       if (packetsPaused) {
         pauseBuffer.push(...msgs);
+        if (pauseBuffer.length > 2000) pauseBuffer = pauseBuffer.slice(-2000);
         const btn = document.getElementById('pktPauseBtn');
         if (btn) btn.textContent = '▶ ' + pauseBuffer.length;
         return;
@@ -349,7 +361,7 @@
         if (filters.hash && p.hash !== filters.hash) return false;
         if (RegionFilter.getRegionParam()) {
           const selectedRegions = RegionFilter.getRegionParam().split(',');
-          const obs = observers.find(o => o.id === p.observer_id);
+          const obs = observerMap.get(p.observer_id);
           if (!obs || !selectedRegions.includes(obs.iata)) return false;
         }
         if (filters.node && !(p.decoded_json || '').includes(filters.node)) return false;
@@ -360,7 +372,7 @@
       // Resolve any new hops, then update and re-render
       const newHops = new Set();
       for (const p of filtered) {
-        try { JSON.parse(p.path_json || '[]').forEach(h => { if (!(h in hopNameCache)) newHops.add(h); }); } catch {}
+        try { getParsedPath(p).forEach(h => { if (!(h in hopNameCache)) newHops.add(h); }); } catch {}
       }
       (newHops.size ? resolveHops([...newHops]) : Promise.resolve()).then(() => {
         if (groupByHash) {
@@ -382,6 +394,7 @@
               // Update expanded children if this group is expanded
               if (expandedHashes.has(h) && existing._children) {
                 existing._children.unshift(p);
+                if (existing._children.length > 200) existing._children.length = 200;
                 sortGroupChildren(existing);
               }
             } else {
@@ -402,11 +415,16 @@
               if (h) hashIndex.set(h, newGroup);
             }
           }
-          // Re-sort by latest DESC
+          // Re-sort by latest DESC, then evict oldest beyond the limit
           packets.sort((a, b) => (b.latest || '').localeCompare(a.latest || ''));
+          if (packets.length > PACKET_LIMIT) {
+            const evicted = packets.splice(PACKET_LIMIT);
+            for (const p of evicted) { if (p.hash) hashIndex.delete(p.hash); }
+          }
         } else {
-          // Flat mode: prepend
+          // Flat mode: prepend, then evict oldest beyond the limit
           packets = filtered.concat(packets);
+          if (packets.length > PACKET_LIMIT) packets.length = PACKET_LIMIT;
         }
         totalCount += filtered.length;
         // Debounce WS-triggered renders to avoid rapid full rebuilds
@@ -417,6 +435,7 @@
   }
 
   function destroy() {
+    clearTimeout(_renderTimer);
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
     detachVScrollListener();
@@ -439,6 +458,7 @@
     hopNameCache = {};
     totalCount = 0;
     observers = [];
+    observerMap = new Map();
     directPacketId = null;
     directPacketHash = null;
     groupByHash = true;
@@ -450,6 +470,7 @@
     try {
       const data = await api('/observers', { ttl: CLIENT_TTL.observers });
       observers = data.observers || [];
+      observerMap = new Map(observers.map(o => [o.id, o]));
     } catch {}
   }
 
@@ -481,7 +502,7 @@
         await Promise.all(multiObs.map(async (p) => {
           try {
             const d = await api(`/packets/${p.hash}`);
-            if (d?.observations) p._children = d.observations.map(o => ({...d.packet, ...o, _isObservation: true}));
+            if (d?.observations) p._children = d.observations.map(o => clearParsedCache({...d.packet, ...o, _isObservation: true}));
           } catch {}
         }));
         // Flatten: replace grouped packets with individual observations
@@ -500,7 +521,7 @@
       // Pre-resolve all path hops to node names
       const allHops = new Set();
       for (const p of packets) {
-        try { const path = JSON.parse(p.path_json || '[]'); path.forEach(h => allHops.add(h)); } catch {}
+        try { getParsedPath(p).forEach(h => allHops.add(h)); } catch {}
       }
       if (allHops.size) await resolveHops([...allHops]);
 
@@ -509,7 +530,7 @@
       for (const p of packets) {
         if (!p.observer_id) continue;
         try {
-          const path = JSON.parse(p.path_json || '[]');
+          const path = getParsedPath(p);
           const ambiguous = path.filter(h => hopNameCache[h]?.ambiguous);
           if (ambiguous.length) {
             if (!hopsByObserver[p.observer_id]) hopsByObserver[p.observer_id] = new Set();
@@ -696,7 +717,7 @@
         obsTrigger.textContent = 'All Observers ▾';
       } else if (selectedObservers.size === 1) {
         const id = [...selectedObservers][0];
-        const o = observers.find(x => String(x.id) === id);
+        const o = observerMap.get(id) || observerMap.get(Number(id));
         obsTrigger.textContent = (o ? (o.name || o.id) : id) + ' ▾';
       } else {
         obsTrigger.textContent = selectedObservers.size + ' Observers ▾';
@@ -817,7 +838,7 @@
           try {
             const data = await api(`/packets/${p.hash}`);
             if (data?.packet && data.observations) {
-              p._children = data.observations.map(o => ({...data.packet, ...o, _isObservation: true}));
+              p._children = data.observations.map(o => clearParsedCache({...data.packet, ...o, _isObservation: true}));
               p._fetchedData = data;
             }
           } catch {}
@@ -830,7 +851,7 @@
       // Resolve any new hops from updated header paths
       const newHops = new Set();
       for (const p of packets) {
-        try { JSON.parse(p.path_json || '[]').forEach(h => { if (!(h in hopNameCache)) newHops.add(h); }); } catch {}
+        try { getParsedPath(p).forEach(h => { if (!(h in hopNameCache)) newHops.add(h); }); } catch {}
       }
       if (newHops.size) await resolveHops([...newHops]);
       renderTableRows();
@@ -990,6 +1011,7 @@
           if (child) {
             const parentData = group._fetchedData;
             const obsPacket = parentData ? {...parentData.packet, observer_id: child.observer_id, observer_name: child.observer_name, snr: child.snr, rssi: child.rssi, path_json: child.path_json, timestamp: child.timestamp, first_seen: child.timestamp} : child;
+            if (parentData) { clearParsedCache(obsPacket); }
             selectPacket(child.id, parentHash, {packet: obsPacket, breakdown: parentData?.breakdown, observations: parentData?.observations}, child.id);
           }
         }
@@ -1023,7 +1045,7 @@
         headerPathJson = match.path_json;
       }
     }
-    const groupRegion = headerObserverId ? (observers.find(o => o.id === headerObserverId)?.iata || '') : '';
+    const groupRegion = headerObserverId ? (observerMap.get(headerObserverId)?.iata || '') : '';
     let groupPath = [];
     try { groupPath = JSON.parse(headerPathJson || '[]'); } catch {}
     const groupPathStr = renderPath(groupPath, headerObserverId);
@@ -1043,7 +1065,7 @@
           <td class="col-observer">${isSingle ? truncate(obsName(headerObserverId), 16) : truncate(obsName(headerObserverId), 10) + (p.observer_count > 1 ? ' +' + (p.observer_count - 1) : '')}</td>
           <td class="col-path"><span class="path-hops">${groupPathStr}</span></td>
           <td class="col-rpt">${p.observation_count > 1 ? '<span class="badge badge-obs" title="Seen ' + p.observation_count + ' times">👁 ' + p.observation_count + '</span>' : (isSingle ? '' : p.count)}</td>
-          <td class="col-details">${getDetailPreview((() => { try { return JSON.parse(p.decoded_json || '{}'); } catch { return {}; } })())}</td>
+          <td class="col-details">${getDetailPreview(getParsedDecoded(p))}</td>
         </tr>`;
     if (isExpanded && p._children) {
       let visibleChildren = p._children;
@@ -1055,9 +1077,8 @@
         const typeClass = payloadTypeColor(c.payload_type);
         const size = c.raw_hex ? Math.floor(c.raw_hex.length / 2) : 0;
         const childHashBytes = ((parseInt(c.raw_hex?.slice(2, 4), 16) || 0) >> 6) + 1;
-        const childRegion = c.observer_id ? (observers.find(o => o.id === c.observer_id)?.iata || '') : '';
-        let childPath = [];
-        try { childPath = JSON.parse(c.path_json || '[]'); } catch {}
+        const childRegion = c.observer_id ? (observerMap.get(c.observer_id)?.iata || '') : '';
+        const childPath = getParsedPath(c);
         const childPathStr = renderPath(childPath, c.observer_id);
         html += `<tr class="group-child" data-id="${c.id}" data-hash="${c.hash || ''}" data-action="select-observation" data-value="${c.id}" data-parent-hash="${p.hash}" tabindex="0" role="row">
               <td></td><td class="col-region">${childRegion ? `<span class="badge-region">${childRegion}</span>` : '—'}</td>
@@ -1069,7 +1090,7 @@
               <td class="col-observer">${truncate(obsName(c.observer_id), 16)}</td>
               <td class="col-path"><span class="path-hops">${childPathStr}</span></td>
               <td class="col-rpt"></td>
-              <td class="col-details">${getDetailPreview((() => { try { return JSON.parse(c.decoded_json || '{}'); } catch { return {}; } })())}</td>
+              <td class="col-details">${getDetailPreview(getParsedDecoded(c))}</td>
             </tr>`;
       }
     }
@@ -1078,10 +1099,9 @@
 
   // Build HTML for a single flat (ungrouped) packet row
   function buildFlatRowHtml(p) {
-    let decoded, pathHops = [];
-    try { decoded = JSON.parse(p.decoded_json || '{}'); } catch {}
-    try { pathHops = JSON.parse(p.path_json || '[]') || []; } catch {}
-    const region = p.observer_id ? (observers.find(o => o.id === p.observer_id)?.iata || '') : '';
+    const decoded = getParsedDecoded(p);
+    const pathHops = getParsedPath(p);
+    const region = p.observer_id ? (observerMap.get(p.observer_id)?.iata || '') : '';
     const typeName = payloadTypeName(p.payload_type);
     const typeClass = payloadTypeColor(p.payload_type);
     const size = p.raw_hex ? Math.floor(p.raw_hex.length / 2) : 0;
@@ -1130,7 +1150,6 @@
       offsets[i + 1] = offsets[i] + _rowCounts[i];
     }
     _cumulativeOffsetsCache = offsets;
-    return offsets;
     return offsets;
   }
 
@@ -1399,7 +1418,7 @@
       // Resolve path hops for detail view
       const pkt = data.packet;
       try {
-        const hops = JSON.parse(pkt.path_json || '[]');
+        const hops = getParsedPath(pkt);
         const newHops = hops.filter(h => !(h in hopNameCache));
         if (newHops.length) await resolveHops(newHops);
       } catch {}
@@ -1417,10 +1436,8 @@
     const pkt = data.packet;
     const breakdown = data.breakdown || {};
     const ranges = breakdown.ranges || [];
-    let decoded;
-    try { decoded = JSON.parse(pkt.decoded_json); } catch { decoded = {}; }
-    let pathHops;
-    try { pathHops = JSON.parse(pkt.path_json || '[]') || []; } catch { pathHops = []; }
+    const decoded = getParsedDecoded(pkt);
+    const pathHops = getParsedPath(pkt);
 
     // Resolve sender GPS — from packet directly, or from known node in DB
     let senderLat = decoded.lat != null ? decoded.lat : (decoded.latitude || null);
@@ -1596,10 +1613,8 @@
         const replayPackets = [];
         if (obs.length > 1) {
           for (const o of obs) {
-            let oPath;
-            try { oPath = JSON.parse(o.path_json || '[]'); } catch { oPath = pathHops; }
-            let oDec;
-            try { oDec = JSON.parse(o.decoded_json || '{}'); } catch { oDec = decoded; }
+            const oPath = getParsedPath(o);
+            const oDec = getParsedDecoded(o);
             replayPackets.push({
               id: o.id, hash: pkt.hash, raw: o.raw_hex || pkt.raw_hex,
               _ts: new Date(o.timestamp).getTime(),
@@ -1674,7 +1689,7 @@
     let rows = '';
 
     // Header section
-    rows += sectionRow('Header');
+    rows += sectionRow('Header', 'section-header');
     rows += fieldRow(0, 'Header Byte', '0x' + (buf.slice(0, 2) || '??'), `Route: ${routeTypeName(pkt.route_type)}, Payload: ${payloadTypeName(pkt.payload_type)}`);
     const pathByte0 = parseInt(buf.slice(2, 4), 16);
     const hashSizeVal = isNaN(pathByte0) ? '?' : ((pathByte0 >> 6) + 1);
@@ -1684,7 +1699,7 @@
     // Transport codes
     let off = 2;
     if (pkt.route_type === 0 || pkt.route_type === 3) {
-      rows += sectionRow('Transport Codes');
+      rows += sectionRow('Transport Codes', 'section-transport');
       rows += fieldRow(off, 'Next Hop', buf.slice(off * 2, (off + 2) * 2), '');
       rows += fieldRow(off + 2, 'Last Hop', buf.slice((off + 2) * 2, (off + 4) * 2), '');
       off += 4;
@@ -1692,7 +1707,7 @@
 
     // Path
     if (pathHops.length > 0) {
-      rows += sectionRow('Path (' + pathHops.length + ' hops)');
+      rows += sectionRow('Path (' + pathHops.length + ' hops)', 'section-path');
       const pathByte = parseInt(buf.slice(2, 4), 16);
       const hashSize = (pathByte >> 6) + 1;
       for (let i = 0; i < pathHops.length; i++) {
@@ -1704,7 +1719,7 @@
     }
 
     // Payload
-    rows += sectionRow('Payload — ' + payloadTypeName(pkt.payload_type));
+    rows += sectionRow('Payload — ' + payloadTypeName(pkt.payload_type), 'section-payload');
 
     if (decoded.type === 'ADVERT') {
       rows += fieldRow(1, 'Advertised Hash Size', hashSizeVal + ' byte' + (hashSizeVal !== 1 ? 's' : ''), 'From path byte 0x' + (buf.slice(2, 4) || '??') + ' — bits 7-6 = ' + (hashSizeVal - 1));
@@ -1754,8 +1769,8 @@
     </table>`;
   }
 
-  function sectionRow(label) {
-    return `<tr class="section-row"><td colspan="4">${label}</td></tr>`;
+  function sectionRow(label, cls) {
+    return `<tr class="section-row${cls ? ' ' + cls : ''}"><td colspan="4">${label}</td></tr>`;
   }
   function fieldRow(offset, name, value, desc) {
     return `<tr><td class="mono">${offset}</td><td>${name}</td><td class="mono">${value}</td><td class="text-muted">${desc || ''}</td></tr>`;
@@ -1901,7 +1916,7 @@
   let obsSortMode = localStorage.getItem('meshcore-obs-sort') || SORT_OBSERVER;
 
   function getPathHopCount(c) {
-    try { return JSON.parse(c.path_json || '[]').length; } catch { return 0; }
+    try { return getParsedPath(c).length; } catch { return 0; }
   }
 
   function sortGroupChildren(group) {
@@ -1966,7 +1981,7 @@
       if (!pkt) return;
       const group = packets.find(p => p.hash === hash);
       if (group && data.observations) {
-        group._children = data.observations.map(o => ({...pkt, ...o, _isObservation: true}));
+        group._children = data.observations.map(o => clearParsedCache({...pkt, ...o, _isObservation: true}));
         group._fetchedData = data;
         // Sort children based on current sort mode
         sortGroupChildren(group);
@@ -1974,7 +1989,7 @@
       // Resolve any new hops from children
       const childHops = new Set();
       for (const c of (group?._children || [])) {
-        try { JSON.parse(c.path_json || '[]').forEach(h => childHops.add(h)); } catch {}
+        try { getParsedPath(c).forEach(h => childHops.add(h)); } catch {}
       }
       const newHops = [...childHops].filter(h => !(h in hopNameCache));
       if (newHops.length) await resolveHops(newHops);
@@ -2007,6 +2022,28 @@
   });
 
   // Standalone packet detail page: #/packet/123 or #/packet/HASH
+  // Expose pure functions for unit testing (vm.createContext pattern)
+  if (typeof window !== 'undefined') {
+    window._packetsTestAPI = {
+      typeName,
+      obsName,
+      getDetailPreview,
+      sortGroupChildren,
+      getPathHopCount,
+      renderDecodedPacket,
+      kv,
+      buildFieldTable,
+      sectionRow,
+      fieldRow,
+      renderTimestampCell,
+      renderPath,
+      _getRowCount,
+      _cumulativeRowOffsets,
+      buildGroupRowHtml,
+      buildFlatRowHtml,
+    };
+  }
+
   registerPage('packet-detail', {
     init: async (app, routeParam) => {
       const param = routeParam;
@@ -2016,7 +2053,7 @@
         const data = await api(`/packets/${param}`);
         if (!data?.packet) { app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:40px;text-align:center"><h2>Packet not found</h2><p>Packet ${param} doesn't exist.</p><a href="#/packets">← Back to packets</a></div>`; return; }
         const hops = [];
-        try { const ph = JSON.parse(data.packet.path_json || '[]'); hops.push(...ph); } catch {}
+        try { hops.push(...getParsedPath(data.packet)); } catch {}
         const newHops = hops.filter(h => !(h in hopNameCache));
         if (newHops.length) await resolveHops(newHops);
         const container = document.createElement('div');

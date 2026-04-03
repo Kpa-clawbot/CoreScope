@@ -203,5 +203,5 @@ window.HopResolver = (function() {
     return nodesList.length > 0;
   }
 
-  return { init: init, resolve: resolve, ready: ready };
+  return { init: init, resolve: resolve, ready: ready, haversineKm: haversineKm };
 })();

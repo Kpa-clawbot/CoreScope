@@ -136,13 +136,6 @@ function getTimestampCustomFormat() {
 function pad2(v) { return String(v).padStart(2, '0'); }
 function pad3(v) { return String(v).padStart(3, '0'); }
 
-function mergeUserHomeConfig(siteConfig, userTheme) {
-  if (!siteConfig || !userTheme || !userTheme.home || typeof userTheme.home !== 'object') return siteConfig;
-  const serverHome = (siteConfig.home && typeof siteConfig.home === 'object') ? siteConfig.home : {};
-  siteConfig.home = Object.assign({}, serverHome, userTheme.home);
-  return siteConfig;
-}
-
 function formatIsoLike(d, timezone, includeMs) {
   const useUtc = timezone === 'utc';
   const year = useUtc ? d.getUTCFullYear() : d.getFullYear();
@@ -794,91 +787,30 @@ window.addEventListener('DOMContentLoaded', () => {
   debouncedOnWS(function () { updateNavStats(); });
 
   // --- Theme Customization ---
-  // Fetch theme config and apply branding/colors before first render
+  // Fetch theme config and apply via customizer v2 pipeline
   fetch('/api/config/theme', { cache: 'no-store' }).then(r => r.json()).then(cfg => {
-    window.SITE_CONFIG = cfg || {};
-    if (!window.SITE_CONFIG.timestamps) window.SITE_CONFIG.timestamps = {};
-    const tsCfg = window.SITE_CONFIG.timestamps;
+    // Normalize timestamp defaults
+    cfg = cfg || {};
+    if (!cfg.timestamps) cfg.timestamps = {};
+    const tsCfg = cfg.timestamps;
     if (tsCfg.defaultMode !== 'absolute' && tsCfg.defaultMode !== 'ago') tsCfg.defaultMode = 'ago';
     if (tsCfg.timezone !== 'utc' && tsCfg.timezone !== 'local') tsCfg.timezone = 'local';
     if (tsCfg.formatPreset !== 'iso' && tsCfg.formatPreset !== 'iso-seconds' && tsCfg.formatPreset !== 'locale') tsCfg.formatPreset = 'iso';
     if (typeof tsCfg.customFormat !== 'string') tsCfg.customFormat = '';
     tsCfg.allowCustomFormat = tsCfg.allowCustomFormat === true;
 
-    // User's localStorage preferences take priority over server config
-    const userTheme = (() => { try { return JSON.parse(localStorage.getItem('meshcore-user-theme') || '{}'); } catch { return {}; } })();
-    mergeUserHomeConfig(window.SITE_CONFIG, userTheme);
-
-    // Apply CSS variable overrides from theme config (skipped if user has local overrides)
-    if (!userTheme.theme && !userTheme.themeDark) {
-      const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
-        (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      const themeData = dark ? { ...(cfg.theme || {}), ...(cfg.themeDark || {}) } : (cfg.theme || {});
-      const root = document.documentElement.style;
-      const varMap = {
-        accent: '--accent', accentHover: '--accent-hover',
-        navBg: '--nav-bg', navBg2: '--nav-bg2', navText: '--nav-text', navTextMuted: '--nav-text-muted',
-        background: '--surface-0', text: '--text', textMuted: '--text-muted', border: '--border',
-        statusGreen: '--status-green', statusYellow: '--status-yellow', statusRed: '--status-red',
-        surface1: '--surface-1', surface2: '--surface-2', surface3: '--surface-3',
-        cardBg: '--card-bg', contentBg: '--content-bg', inputBg: '--input-bg',
-        rowStripe: '--row-stripe', rowHover: '--row-hover', detailBg: '--detail-bg',
-        selectedBg: '--selected-bg', sectionBg: '--section-bg',
-        font: '--font', mono: '--mono'
-      };
-      for (const [key, cssVar] of Object.entries(varMap)) {
-        if (themeData[key]) root.setProperty(cssVar, themeData[key]);
-      }
-      // Derived vars
-      if (themeData.background) root.setProperty('--content-bg', themeData.contentBg || themeData.background);
-      if (themeData.surface1) root.setProperty('--card-bg', themeData.cardBg || themeData.surface1);
-      // Nav gradient
-      if (themeData.navBg) {
-        const nav = document.querySelector('.top-nav');
-        if (nav) nav.style.background = `linear-gradient(135deg, ${themeData.navBg} 0%, ${themeData.navBg2 || themeData.navBg} 50%, ${themeData.navBg} 100%)`;
-      }
+    // Customizer v2: set server defaults and run full pipeline
+    // (reads localStorage overrides → merges → sets SITE_CONFIG → applies CSS → dispatches theme-changed)
+    if (window._customizerV2) {
+      window._customizerV2.init(cfg);
+    } else {
+      // Fallback if customize-v2.js didn't load
+      window.SITE_CONFIG = cfg;
     }
-
-    // Apply node color overrides (skip if user has local preferences)
-    if (cfg.nodeColors && !userTheme.nodeColors) {
-      for (const [role, color] of Object.entries(cfg.nodeColors)) {
-        if (window.ROLE_COLORS && role in window.ROLE_COLORS) window.ROLE_COLORS[role] = color;
-        if (window.ROLE_STYLE && window.ROLE_STYLE[role]) window.ROLE_STYLE[role].color = color;
-      }
-    }
-
-    // Apply type color overrides (skip if user has local preferences)
-    if (cfg.typeColors && !userTheme.typeColors) {
-      for (const [type, color] of Object.entries(cfg.typeColors)) {
-        if (window.TYPE_COLORS && type in window.TYPE_COLORS) window.TYPE_COLORS[type] = color;
-      }
-      if (window.syncBadgeColors) window.syncBadgeColors();
-    }
-
-    // Apply branding (skip if user has local preferences)
-    if (cfg.branding && !userTheme.branding) {
-      if (cfg.branding.siteName) {
-        document.title = cfg.branding.siteName;
-        const brandText = document.querySelector('.brand-text');
-        if (brandText) brandText.textContent = cfg.branding.siteName;
-      }
-      if (cfg.branding.logoUrl) {
-        const brandIcon = document.querySelector('.brand-icon');
-        if (brandIcon) {
-          const img = document.createElement('img');
-          img.src = cfg.branding.logoUrl;
-          img.alt = cfg.branding.siteName || 'Logo';
-          img.style.height = '24px';
-          img.style.width = 'auto';
-          brandIcon.replaceWith(img);
-        }
-      }
-      if (cfg.branding.faviconUrl) {
-        const favicon = document.querySelector('link[rel="icon"]');
-        if (favicon) favicon.href = cfg.branding.faviconUrl;
-      }
-    }
-  }).catch(() => { window.SITE_CONFIG = { timestamps: { defaultMode: 'ago', timezone: 'local', formatPreset: 'iso', customFormat: '', allowCustomFormat: false } }; }).finally(() => {
+  }).catch(() => {
+    window.SITE_CONFIG = { timestamps: { defaultMode: 'ago', timezone: 'local', formatPreset: 'iso', customFormat: '', allowCustomFormat: false } };
+    if (window._customizerV2) window._customizerV2.init(window.SITE_CONFIG);
+  }).finally(() => {
     if (!location.hash || location.hash === '#/') location.hash = '#/home';
     else navigate();
   });
