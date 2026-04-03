@@ -1942,209 +1942,83 @@ console.log('\n=== analytics.js: sortChannels ===');
 }
 
 
-// ===== CUSTOMIZE.JS: initState merge behavior =====
-console.log('\n=== customize.js: initState merge behavior ===');
+// ===== CUSTOMIZE-V2.JS: core behavior =====
+console.log('\n=== customize-v2.js: core behavior ===');
 {
-  function loadCustomizeExports(ctx) {
-    const src = fs.readFileSync('public/customize.js', 'utf8');
-    const withExports = src.replace(
-      /\}\)\(\);\s*$/,
-      'window.__customizeExport = { initState: initState, autoSave: autoSave, getState: function () { return state; }, getDefaults: function () { return deepClone(DEFAULTS); }, setInitialized: function (v) { _initialized = !!v; } };})();'
-    );
-    vm.runInContext(withExports, ctx);
+  function loadCustomizeV2(ctx) {
+    const src = fs.readFileSync('public/customize-v2.js', 'utf8');
+    vm.runInContext(src, ctx);
     for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
-    return ctx.window.__customizeExport;
+    return ctx.window._customizerV2;
   }
 
-  test('autoSave no-ops before initialization on panel open path', () => {
+  test('readOverrides returns empty object when no localStorage data', () => {
     const ctx = makeSandbox();
-    let saveTimerCalls = 0;
-    ctx.setTimeout = function () { saveTimerCalls++; return 1; };
-    ctx.clearTimeout = function () {};
-    ctx.window.SITE_CONFIG = { home: { heroTitle: 'Server Hero' } };
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    ex.setInitialized(false);
-    ex.autoSave();
-    assert.strictEqual(saveTimerCalls, 0);
-    assert.strictEqual(ctx.localStorage.getItem('meshcore-user-theme'), null);
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    const overrides = v2.readOverrides();
+    assert.strictEqual(Object.keys(overrides).length, 0);
   });
 
-  test('server home config survives customizer open without modification', () => {
+  test('writeOverrides + readOverrides roundtrip', () => {
     const ctx = makeSandbox();
-    let saveTimerCalls = 0;
-    ctx.setTimeout = function () { saveTimerCalls++; return 1; };
-    ctx.clearTimeout = function () {};
-    ctx.window.SITE_CONFIG = {
-      home: {
-        heroTitle: 'Server Hero',
-        heroSubtitle: 'Server Subtitle',
-        steps: [{ emoji: 'S', title: 'Server Step', description: 'server' }],
-        checklist: [{ question: 'Server Q', answer: 'Server A' }],
-        footerLinks: [{ label: 'Server Link', url: '#/server' }]
-      }
-    };
-    const before = JSON.stringify(ctx.window.SITE_CONFIG.home);
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    ex.setInitialized(false);
-    ex.autoSave();
-    assert.strictEqual(saveTimerCalls, 0);
-    assert.strictEqual(JSON.stringify(ctx.window.SITE_CONFIG.home), before);
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    v2.writeOverrides({ theme: { accent: '#ff0000' } });
+    const result = v2.readOverrides();
+    assert.strictEqual(result.theme.accent, '#ff0000');
   });
 
-  test('post-init autoSave exports user theme without mutating SITE_CONFIG.home', () => {
+  test('computeEffective merges server defaults with overrides', () => {
     const ctx = makeSandbox();
-    let saveTimerCalls = 0;
-    ctx.setTimeout = function (fn) { saveTimerCalls++; fn(); return 1; };
-    ctx.clearTimeout = function () {};
-    ctx.HashChangeEvent = function HashChangeEvent(type) { this.type = type; };
-    ctx.window.SITE_CONFIG = {
-      home: {
-        heroTitle: 'Server Hero',
-        heroSubtitle: 'Server Subtitle',
-        steps: [{ emoji: 'S', title: 'Server Step', description: 'server' }],
-        checklist: [{ question: 'Server Q', answer: 'Server A' }],
-        footerLinks: [{ label: 'Server Link', url: '#/server' }]
-      }
-    };
-    const before = JSON.stringify(ctx.window.SITE_CONFIG.home);
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    ex.setInitialized(true);
-    ex.autoSave();
-    const saved = ctx.localStorage.getItem('meshcore-user-theme');
-    assert.strictEqual(saveTimerCalls, 1);
-    assert(saved && saved.length > 0, 'Expected autoSave to persist user theme');
-    assert.strictEqual(JSON.stringify(ctx.window.SITE_CONFIG.home), before);
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    const server = { theme: { accent: '#111111', navBg: '#222222' } };
+    const overrides = { theme: { accent: '#ff0000' } };
+    const effective = v2.computeEffective(server, overrides);
+    assert.strictEqual(effective.theme.accent, '#ff0000');
+    assert.strictEqual(effective.theme.navBg, '#222222');
   });
 
-  test('partial local checklist does not wipe steps/footerLinks and keeps server colors', () => {
+  test('isValidColor accepts hex, rgb, hsl, and named colors', () => {
     const ctx = makeSandbox();
-    ctx.window.SITE_CONFIG = {
-      home: {
-        heroTitle: 'Server Hero',
-        heroSubtitle: 'Server Subtitle',
-        steps: [{ emoji: '🧪', title: 'Server Step', description: 'from server' }],
-        checklist: [{ question: 'Server Q', answer: 'Server A' }],
-        footerLinks: [{ label: 'Server Link', url: '#/server' }]
-      },
-      theme: { accent: '#123456', navBg: '#222222' },
-      nodeColors: { repeater: '#aa0000' }
-    };
-    ctx.localStorage.setItem('meshcore-user-theme', JSON.stringify({
-      home: { checklist: [{ question: 'Local Q', answer: 'Local A' }] }
-    }));
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    const state = ex.getState();
-    assert.strictEqual(state.home.checklist[0].question, 'Local Q');
-    assert.strictEqual(state.home.steps[0].title, 'Server Step');
-    assert.strictEqual(state.home.footerLinks[0].label, 'Server Link');
-    assert.strictEqual(state.home.heroTitle, 'Server Hero');
-    assert.strictEqual(state.theme.accent, '#123456');
-    assert.strictEqual(state.nodeColors.repeater, '#aa0000');
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    assert.strictEqual(v2.isValidColor('#ff0000'), true);
+    assert.strictEqual(v2.isValidColor('#abc'), true);
+    assert.strictEqual(v2.isValidColor('rgb(255, 0, 0)'), true);
+    assert.strictEqual(v2.isValidColor('hsl(0, 100%, 50%)'), true);
+    assert.strictEqual(v2.isValidColor('red'), true);
+    assert.strictEqual(v2.isValidColor('notacolor'), false);
+    assert.strictEqual(v2.isValidColor(123), false);
   });
 
-  test('server values survive when localStorage has partial overrides', () => {
+  test('validateShape reports invalid color values', () => {
     const ctx = makeSandbox();
-    ctx.window.SITE_CONFIG = {
-      home: {
-        heroTitle: 'Server Hero',
-        heroSubtitle: 'Server Subtitle',
-        steps: [{ emoji: '1️⃣', title: 'Server Step', description: 'server' }],
-        footerLinks: [{ label: 'Server Footer', url: '#/s' }]
-      },
-      theme: { accent: '#111111', navBg: '#222222', navText: '#333333' },
-      typeColors: { ADVERT: '#00aa00', REQUEST: '#aa00aa' }
-    };
-    ctx.localStorage.setItem('meshcore-user-theme', JSON.stringify({
-      home: { heroTitle: 'Local Hero' },
-      theme: { accent: '#999999' },
-      typeColors: { ADVERT: '#ff00ff' }
-    }));
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    const state = ex.getState();
-    assert.strictEqual(state.home.heroTitle, 'Local Hero');
-    assert.strictEqual(state.home.heroSubtitle, 'Server Subtitle');
-    assert.strictEqual(state.home.steps[0].title, 'Server Step');
-    assert.strictEqual(state.home.footerLinks[0].label, 'Server Footer');
-    assert.strictEqual(state.theme.accent, '#999999');
-    assert.strictEqual(state.theme.navBg, '#222222');
-    assert.strictEqual(state.typeColors.ADVERT, '#ff00ff');
-    assert.strictEqual(state.typeColors.REQUEST, '#aa00aa');
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    const valid = v2.validateShape({ theme: { accent: '#ff0000', navBg: '#222222' } });
+    assert.strictEqual(valid.valid, true);
+    const invalid = v2.validateShape({ theme: { accent: '#ff0000', navBg: 'not-a-color' } });
+    assert.ok(invalid.errors.length > 0, 'should report invalid color');
+    assert.ok(invalid.errors[0].includes('navBg'), 'error should mention navBg');
   });
 
-  test('full localStorage values override server config', () => {
+  test('migrateOldKeys reads legacy localStorage keys', () => {
     const ctx = makeSandbox();
-    ctx.window.SITE_CONFIG = {
-      home: {
-        heroTitle: 'Server Hero',
-        heroSubtitle: 'Server Subtitle',
-        steps: [{ emoji: 'S', title: 'Server Step', description: 'server' }],
-        checklist: [{ question: 'Server Q', answer: 'Server A' }],
-        footerLinks: [{ label: 'Server Link', url: '#/server' }]
-      },
-      theme: { accent: '#101010' }
-    };
-    ctx.localStorage.setItem('meshcore-user-theme', JSON.stringify({
-      home: {
-        heroTitle: 'Local Hero',
-        heroSubtitle: 'Local Subtitle',
-        steps: [{ emoji: 'L', title: 'Local Step', description: 'local' }],
-        checklist: [{ question: 'Local Q', answer: 'Local A' }],
-        footerLinks: [{ label: 'Local Link', url: '#/local' }]
-      },
-      theme: { accent: '#abcdef', navBg: '#fedcba' }
-    }));
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    const state = ex.getState();
-    assert.strictEqual(state.home.heroTitle, 'Local Hero');
-    assert.strictEqual(state.home.heroSubtitle, 'Local Subtitle');
-    assert.strictEqual(state.home.steps[0].title, 'Local Step');
-    assert.strictEqual(state.home.checklist[0].question, 'Local Q');
-    assert.strictEqual(state.home.footerLinks[0].label, 'Local Link');
-    assert.strictEqual(state.theme.accent, '#abcdef');
-    assert.strictEqual(state.theme.navBg, '#fedcba');
+    ctx.CustomEvent = function (type) { this.type = type; };
+    ctx.localStorage.setItem('meshcore-theme', 'dark');
+    const v2 = loadCustomizeV2(ctx);
+    // migrateOldKeys should handle legacy keys without crashing
+    v2.migrateOldKeys();
   });
 
-  test('initState uses _SITE_CONFIG_ORIGINAL_HOME to bypass contaminated SITE_CONFIG.home', () => {
-    // Simulates: app.js called mergeUserHomeConfig which mutated SITE_CONFIG.home.steps = []
-    // The original server steps must still be recoverable via _SITE_CONFIG_ORIGINAL_HOME
+  test('THEME_CSS_MAP includes surface3 and sectionBg', () => {
     const ctx = makeSandbox();
-    ctx.setTimeout = function (fn) { fn(); return 1; };
-    ctx.clearTimeout = function () {};
-    // SITE_CONFIG.home is contaminated — steps wiped by mergeUserHomeConfig at page load
-    ctx.window.SITE_CONFIG = {
-      home: {
-        heroTitle: 'Server Hero',
-        steps: []   // contaminated — user had steps:[] in localStorage at page load
-      }
-    };
-    // app.js snapshots original before mutation
-    ctx.window._SITE_CONFIG_ORIGINAL_HOME = {
-      heroTitle: 'Server Hero',
-      steps: [{ emoji: '🧪', title: 'Original Step', description: 'from server' }]
-    };
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    const state = ex.getState();
-    assert.strictEqual(state.home.steps.length, 1, 'should restore from snapshot, not contaminated SITE_CONFIG');
-    assert.strictEqual(state.home.steps[0].title, 'Original Step');
-  });
-
-  test('initState uses DEFAULTS.home when no SITE_CONFIG and no snapshot', () => {
-    const ctx = makeSandbox();
-    ctx.setTimeout = function (fn) { fn(); return 1; };
-    ctx.clearTimeout = function () {};
-    // No SITE_CONFIG at all — pure DEFAULTS
-    const ex = loadCustomizeExports(ctx);
-    ex.initState();
-    const state = ex.getState();
-    assert.ok(state.home.steps.length > 0, 'should use DEFAULTS.home.steps when no server config');
-    assert.strictEqual(state.home.steps[0].title, 'Join the Bay Area MeshCore Discord');
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const src = fs.readFileSync('public/customize-v2.js', 'utf8');
+    assert.ok(src.includes("surface3: '--surface-3'"), 'surface3 must map to --surface-3');
+    assert.ok(src.includes("sectionBg: '--section-bg'"), 'sectionBg must map to --section-bg');
   });
 }
 

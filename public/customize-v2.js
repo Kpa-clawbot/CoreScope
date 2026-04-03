@@ -28,7 +28,8 @@
     navBg: '--nav-bg', navBg2: '--nav-bg2', navText: '--nav-text', navTextMuted: '--nav-text-muted',
     background: '--surface-0', text: '--text', textMuted: '--text-muted', border: '--border',
     statusGreen: '--status-green', statusYellow: '--status-yellow', statusRed: '--status-red',
-    surface1: '--surface-1', surface2: '--surface-2',
+    surface1: '--surface-1', surface2: '--surface-2', surface3: '--surface-3',
+    sectionBg: '--section-bg',
     cardBg: '--card-bg', contentBg: '--content-bg', detailBg: '--detail-bg',
     inputBg: '--input-bg', rowStripe: '--row-stripe', rowHover: '--row-hover', selectedBg: '--selected-bg',
     font: '--font', mono: '--mono'
@@ -46,14 +47,16 @@
         statusGreen: '#22c55e', statusYellow: '#eab308', statusRed: '#ef4444',
         accentHover: '#6db3ff', navBg2: '#1a1a2e', navTextMuted: '#cbd5e1', textMuted: '#5b6370', border: '#e2e5ea',
         surface1: '#ffffff', surface2: '#ffffff', cardBg: '#ffffff', contentBg: '#f4f5f7',
-        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f9fafb', rowHover: '#eef2ff', selectedBg: '#dbeafe'
+        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f9fafb', rowHover: '#eef2ff', selectedBg: '#dbeafe',
+        surface3: '#ffffff', sectionBg: '#eef2ff'
       },
       themeDark: {
         accent: '#4a9eff', navBg: '#0f0f23', navText: '#ffffff', background: '#0f0f23', text: '#e2e8f0',
         statusGreen: '#22c55e', statusYellow: '#eab308', statusRed: '#ef4444',
         accentHover: '#6db3ff', navBg2: '#1a1a2e', navTextMuted: '#cbd5e1', textMuted: '#a8b8cc', border: '#334155',
         surface1: '#1a1a2e', surface2: '#232340', cardBg: '#1a1a2e', contentBg: '#0f0f23',
-        detailBg: '#232340', inputBg: '#1e1e34', rowStripe: '#1e1e34', rowHover: '#2d2d50', selectedBg: '#1e3a5f'
+        detailBg: '#232340', inputBg: '#1e1e34', rowStripe: '#1e1e34', rowHover: '#2d2d50', selectedBg: '#1e3a5f',
+        surface3: '#2d2d50', sectionBg: '#1e1e34'
       }
     },
     ocean: {
@@ -64,14 +67,16 @@
         statusGreen: '#15803d', statusYellow: '#a16207', statusRed: '#dc2626',
         accentHover: '#0096d6', navBg2: '#023e8a', navTextMuted: '#90caf9', textMuted: '#4a6580', border: '#c8dce8',
         surface1: '#ffffff', surface2: '#e8f4f8', cardBg: '#ffffff', contentBg: '#f0f7fa',
-        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f5fafd', rowHover: '#e0f0f8', selectedBg: '#bde0fe'
+        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f5fafd', rowHover: '#e0f0f8', selectedBg: '#bde0fe',
+        surface3: '#f5fafd', sectionBg: '#e0f0f8'
       },
       themeDark: {
         accent: '#48cae4', navBg: '#03045e', navText: '#ffffff', background: '#0a1929', text: '#e0e7ef',
         statusGreen: '#4ade80', statusYellow: '#facc15', statusRed: '#f87171',
         accentHover: '#76d7ea', navBg2: '#012a4a', navTextMuted: '#90caf9', textMuted: '#8eafc4', border: '#1e3a5f',
         surface1: '#0d2137', surface2: '#122d4a', cardBg: '#0d2137', contentBg: '#0a1929',
-        detailBg: '#122d4a', inputBg: '#0d2137', rowStripe: '#0d2137', rowHover: '#153450', selectedBg: '#1a4570'
+        detailBg: '#122d4a', inputBg: '#0d2137', rowStripe: '#0d2137', rowHover: '#153450', selectedBg: '#1a4570',
+        surface3: '#153450', sectionBg: '#0d2137'
       }
     },
     forest: {
@@ -82,14 +87,16 @@
         statusGreen: '#15803d', statusYellow: '#a16207', statusRed: '#dc2626',
         accentHover: '#40916c', navBg2: '#2d6a4f', navTextMuted: '#a3c4b5', textMuted: '#557063', border: '#c8dcd2',
         surface1: '#ffffff', surface2: '#e8f0eb', cardBg: '#ffffff', contentBg: '#f2f7f4',
-        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f5faf7', rowHover: '#e4f0e8', selectedBg: '#c2e0cc'
+        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f5faf7', rowHover: '#e4f0e8', selectedBg: '#c2e0cc',
+        surface3: '#f5faf7', sectionBg: '#e4f0e8'
       },
       themeDark: {
         accent: '#52b788', navBg: '#1b3a2d', navText: '#ffffff', background: '#0d1f17', text: '#d8e8df',
         statusGreen: '#4ade80', statusYellow: '#facc15', statusRed: '#f87171',
         accentHover: '#74c69d', navBg2: '#14532d', navTextMuted: '#86b89a', textMuted: '#8aac9a', border: '#2d4a3a',
         surface1: '#162e23', surface2: '#1d3a2d', cardBg: '#162e23', contentBg: '#0d1f17',
-        detailBg: '#1d3a2d', inputBg: '#162e23', rowStripe: '#162e23', rowHover: '#1f4030', selectedBg: '#265940'
+        detailBg: '#1d3a2d', inputBg: '#162e23', rowStripe: '#162e23', rowHover: '#1f4030', selectedBg: '#265940',
+        surface3: '#1f4030', sectionBg: '#162e23'
       }
     },
     sunset: {
@@ -100,14 +107,16 @@
         statusGreen: '#15803d', statusYellow: '#a16207', statusRed: '#dc2626',
         accentHover: '#ea580c', navBg2: '#7c2d12', navTextMuted: '#fdba74', textMuted: '#6b5344', border: '#e8d5c8',
         surface1: '#ffffff', surface2: '#fef0e6', cardBg: '#ffffff', contentBg: '#fef7f2',
-        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#fefaf7', rowHover: '#fef0e0', selectedBg: '#fed7aa'
+        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#fefaf7', rowHover: '#fef0e0', selectedBg: '#fed7aa',
+        surface3: '#fefaf7', sectionBg: '#fef0e0'
       },
       themeDark: {
         accent: '#fb923c', navBg: '#431407', navText: '#ffffff', background: '#1a0f08', text: '#f0ddd0',
         statusGreen: '#4ade80', statusYellow: '#facc15', statusRed: '#f87171',
         accentHover: '#fdba74', navBg2: '#7c2d12', navTextMuted: '#c2855a', textMuted: '#b09080', border: '#4a2a18',
         surface1: '#261a10', surface2: '#332214', cardBg: '#261a10', contentBg: '#1a0f08',
-        detailBg: '#332214', inputBg: '#261a10', rowStripe: '#261a10', rowHover: '#3a2818', selectedBg: '#5c3518'
+        detailBg: '#332214', inputBg: '#261a10', rowStripe: '#261a10', rowHover: '#3a2818', selectedBg: '#5c3518',
+        surface3: '#3a2818', sectionBg: '#261a10'
       }
     },
     mono: {
@@ -118,14 +127,16 @@
         statusGreen: '#15803d', statusYellow: '#a16207', statusRed: '#dc2626',
         accentHover: '#737373', navBg2: '#262626', navTextMuted: '#a3a3a3', textMuted: '#525252', border: '#d4d4d4',
         surface1: '#ffffff', surface2: '#fafafa', cardBg: '#ffffff', contentBg: '#f5f5f5',
-        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#fafafa', rowHover: '#efefef', selectedBg: '#e5e5e5'
+        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#fafafa', rowHover: '#efefef', selectedBg: '#e5e5e5',
+        surface3: '#fafafa', sectionBg: '#efefef'
       },
       themeDark: {
         accent: '#a3a3a3', navBg: '#171717', navText: '#ffffff', background: '#0a0a0a', text: '#e5e5e5',
         statusGreen: '#4ade80', statusYellow: '#facc15', statusRed: '#f87171',
         accentHover: '#d4d4d4', navBg2: '#1a1a1a', navTextMuted: '#737373', textMuted: '#a3a3a3', border: '#333333',
         surface1: '#171717', surface2: '#1f1f1f', cardBg: '#171717', contentBg: '#0a0a0a',
-        detailBg: '#1f1f1f', inputBg: '#171717', rowStripe: '#141414', rowHover: '#222222', selectedBg: '#2a2a2a'
+        detailBg: '#1f1f1f', inputBg: '#171717', rowStripe: '#141414', rowHover: '#222222', selectedBg: '#2a2a2a',
+        surface3: '#222222', sectionBg: '#171717'
       }
     },
     highContrast: {
@@ -136,14 +147,16 @@
         statusGreen: '#006400', statusYellow: '#7a5900', statusRed: '#b30000',
         accentHover: '#0068cc', navBg2: '#1a1a1a', navTextMuted: '#e0e0e0', textMuted: '#333333', border: '#000000',
         surface1: '#ffffff', surface2: '#f0f0f0', cardBg: '#ffffff', contentBg: '#ffffff',
-        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f0f0f0', rowHover: '#e0e8f5', selectedBg: '#cce0ff'
+        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f0f0f0', rowHover: '#e0e8f5', selectedBg: '#cce0ff',
+        surface3: '#f0f0f0', sectionBg: '#e0e8f5'
       },
       themeDark: {
         accent: '#66b3ff', navBg: '#000000', navText: '#ffffff', background: '#000000', text: '#ffffff',
         statusGreen: '#66ff66', statusYellow: '#ffff00', statusRed: '#ff6666',
         accentHover: '#99ccff', navBg2: '#0a0a0a', navTextMuted: '#cccccc', textMuted: '#cccccc', border: '#ffffff',
         surface1: '#111111', surface2: '#1a1a1a', cardBg: '#111111', contentBg: '#000000',
-        detailBg: '#1a1a1a', inputBg: '#111111', rowStripe: '#0d0d0d', rowHover: '#1a2a3a', selectedBg: '#003366'
+        detailBg: '#1a1a1a', inputBg: '#111111', rowStripe: '#0d0d0d', rowHover: '#1a2a3a', selectedBg: '#003366',
+        surface3: '#1a2a3a', sectionBg: '#111111'
       },
       nodeColors: { repeater: '#ff0000', companion: '#0066ff', room: '#009900', sensor: '#cc8800', observer: '#9933ff' },
       typeColors: {
@@ -159,14 +172,16 @@
         statusGreen: '#15803d', statusYellow: '#a16207', statusRed: '#dc2626',
         accentHover: '#8b5cf6', navBg2: '#2e1065', navTextMuted: '#c4b5fd', textMuted: '#5b5075', border: '#d8d0e8',
         surface1: '#ffffff', surface2: '#ede9fe', cardBg: '#ffffff', contentBg: '#f5f3ff',
-        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#faf8ff', rowHover: '#ede9fe', selectedBg: '#ddd6fe'
+        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#faf8ff', rowHover: '#ede9fe', selectedBg: '#ddd6fe',
+        surface3: '#faf8ff', sectionBg: '#ede9fe'
       },
       themeDark: {
         accent: '#a78bfa', navBg: '#1e1045', navText: '#ffffff', background: '#0f0a24', text: '#e2ddf0',
         statusGreen: '#4ade80', statusYellow: '#facc15', statusRed: '#f87171',
         accentHover: '#c4b5fd', navBg2: '#2e1065', navTextMuted: '#9d8abf', textMuted: '#9a90b0', border: '#352a55',
         surface1: '#1a1338', surface2: '#221a48', cardBg: '#1a1338', contentBg: '#0f0a24',
-        detailBg: '#221a48', inputBg: '#1a1338', rowStripe: '#1a1338', rowHover: '#2a2050', selectedBg: '#352a6a'
+        detailBg: '#221a48', inputBg: '#1a1338', rowStripe: '#1a1338', rowHover: '#2a2050', selectedBg: '#352a6a',
+        surface3: '#2a2050', sectionBg: '#1a1338'
       }
     },
     ember: {
@@ -177,14 +192,16 @@
         statusGreen: '#15803d', statusYellow: '#a16207', statusRed: '#dc2626',
         accentHover: '#ef4444', navBg2: '#2a1010', navTextMuted: '#f0a0a0', textMuted: '#6b4444', border: '#e0c8c8',
         surface1: '#ffffff', surface2: '#faf0f0', cardBg: '#ffffff', contentBg: '#faf5f5',
-        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#fdf8f8', rowHover: '#fce8e8', selectedBg: '#fecaca'
+        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#fdf8f8', rowHover: '#fce8e8', selectedBg: '#fecaca',
+        surface3: '#fdf8f8', sectionBg: '#fce8e8'
       },
       themeDark: {
         accent: '#ef4444', navBg: '#1a0505', navText: '#ffffff', background: '#0d0505', text: '#f0dada',
         statusGreen: '#4ade80', statusYellow: '#facc15', statusRed: '#f87171',
         accentHover: '#f87171', navBg2: '#2a0a0a', navTextMuted: '#c07070', textMuted: '#b09090', border: '#4a2020',
         surface1: '#1a0d0d', surface2: '#261414', cardBg: '#1a0d0d', contentBg: '#0d0505',
-        detailBg: '#261414', inputBg: '#1a0d0d', rowStripe: '#1a0d0d', rowHover: '#301818', selectedBg: '#4a1a1a'
+        detailBg: '#261414', inputBg: '#1a0d0d', rowStripe: '#1a0d0d', rowHover: '#301818', selectedBg: '#4a1a1a',
+        surface3: '#301818', sectionBg: '#1a0d0d'
       }
     }
   };
@@ -196,7 +213,7 @@
     navBg: 'Navigation', navBg2: 'Nav Gradient End', navText: 'Nav Text', navTextMuted: 'Nav Muted Text',
     background: 'Background', text: 'Text', textMuted: 'Muted Text', border: 'Borders',
     statusGreen: 'Healthy', statusYellow: 'Warning', statusRed: 'Error',
-    surface1: 'Cards', surface2: 'Panels', cardBg: 'Card Fill', contentBg: 'Content Area',
+    surface1: 'Cards', surface2: 'Panels', surface3: 'Tertiary Surface', sectionBg: 'Section Header', cardBg: 'Card Fill', contentBg: 'Content Area',
     detailBg: 'Detail Panels', inputBg: 'Inputs', rowStripe: 'Table Stripe',
     rowHover: 'Row Hover', selectedBg: 'Selected',
     font: 'Body Font', mono: 'Mono Font'
@@ -211,6 +228,7 @@
     navBg2: 'Darker end of nav gradient', navTextMuted: 'Inactive nav links, nav buttons',
     textMuted: 'Labels, timestamps, secondary text', border: 'Dividers, table borders, card borders',
     surface1: 'Card and panel backgrounds', surface2: 'Nested surfaces, secondary panels',
+    surface3: 'Tertiary surfaces, hover accents', sectionBg: 'Section header backgrounds',
     cardBg: 'Detail panels, modals', contentBg: 'Content area behind cards',
     detailBg: 'Modal, packet detail, side panels', inputBg: 'Text inputs, dropdowns',
     rowStripe: 'Alternating table rows', rowHover: 'Table row hover', selectedBg: 'Selected/active rows',
@@ -504,18 +522,21 @@
   }
 
   // ── setOverride / clearOverride ──
+  // Uses _pendingOverrides accumulator to prevent data loss when rapid calls
+  // occur within the debounce window (each call would otherwise read stale
+  // overrides from localStorage before the previous write landed).
 
   var _debounceTimer = null;
+  var _pendingOverrides = {};
 
   function setOverride(section, key, value) {
-    var delta = readOverrides();
     if (section) {
-      if (!delta[section]) delta[section] = {};
-      delta[section][key] = value;
+      if (!_pendingOverrides[section]) _pendingOverrides[section] = {};
+      _pendingOverrides[section][key] = value;
     } else {
-      delta[key] = value;
+      _pendingOverrides[key] = value;
     }
-    _debouncedWrite(delta);
+    _debouncedWrite();
   }
 
   function clearOverride(section, key) {
@@ -528,17 +549,36 @@
     } else {
       delete delta[key];
     }
+    // Also clear from pending
+    if (section && _pendingOverrides[section]) {
+      delete _pendingOverrides[section][key];
+      if (Object.keys(_pendingOverrides[section]).length === 0) delete _pendingOverrides[section];
+    } else if (!section) {
+      delete _pendingOverrides[key];
+    }
     // No debounce on reset — instant feedback
     writeOverrides(delta);
     _runPipeline();
     _refreshPanel();
   }
 
-  function _debouncedWrite(delta) {
+  function _debouncedWrite() {
     _updateSaveStatus('saving');
     if (_debounceTimer) clearTimeout(_debounceTimer);
     _debounceTimer = setTimeout(function () {
       _debounceTimer = null;
+      var delta = readOverrides();
+      for (var sec in _pendingOverrides) {
+        if (typeof _pendingOverrides[sec] === 'object' && _pendingOverrides[sec] !== null) {
+          if (!delta[sec]) delta[sec] = {};
+          for (var k in _pendingOverrides[sec]) {
+            delta[sec][k] = _pendingOverrides[sec][k];
+          }
+        } else {
+          delta[sec] = _pendingOverrides[sec];
+        }
+      }
+      _pendingOverrides = {};
       writeOverrides(delta);
       _runPipeline();
       _refreshPanel();
