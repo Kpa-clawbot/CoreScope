@@ -134,15 +134,7 @@ func BuildFromStore(store *PacketStore) *NeighborGraph {
 
 	// Build prefix map for candidate resolution.
 	// Use cached nodes+PM (avoids DB call if cache is fresh).
-	store.mu.RLock()
-	nodes, pm := store.getCachedNodesAndPM()
-	store.mu.RUnlock()
-
-	// Also build a set of all known pubkeys (lowercased) for self-edge guard.
-	knownPK := make(map[string]bool, len(nodes))
-	for _, n := range nodes {
-		knownPK[strings.ToLower(n.PublicKey)] = true
-	}
+	_, pm := store.getCachedNodesAndPM()
 
 	// Phase 1: Extract edges from every transmission + observation.
 	for _, tx := range packets {
@@ -283,7 +275,7 @@ func (g *NeighborGraph) upsertEdgeWithCandidates(knownPK, prefix string, candida
 	}
 
 	// Filter out self from candidates
-	var filtered []string
+	filtered := make([]string, 0, len(candidates))
 	for _, c := range candidates {
 		pk := strings.ToLower(c.PublicKey)
 		if pk != knownPK {
