@@ -513,11 +513,11 @@
   function checklist(homeCfg) {
     var html = '';
     // Render steps (getting started guide)
-    if (homeCfg?.steps) {
+    if (homeCfg?.steps?.length) {
       html += homeCfg.steps.map(s => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${escapeHtml(s.emoji || '')} ${escapeHtml(s.title)}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(s.description) : escapeHtml(s.description)}</div></div>`).join('');
     }
     // Render FAQ/checklist (additional Q&A)
-    if (homeCfg?.checklist) {
+    if (homeCfg?.checklist?.length) {
       if (html) html += '<h3 style="margin:24px 0 12px;font-size:16px">❓ FAQ</h3>';
       html += homeCfg.checklist.map(i => `<div class="checklist-item"><div class="checklist-q" role="button" tabindex="0" aria-expanded="false">${escapeHtml(i.question)}</div><div class="checklist-a">${window.miniMarkdown ? miniMarkdown(i.answer) : escapeHtml(i.answer)}</div></div>`).join('');
     }
