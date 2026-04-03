@@ -117,6 +117,10 @@ type PacketStore struct {
 	hashSizeInfoCache map[string]*hashSizeNodeInfo
 	hashSizeInfoAt    time.Time
 
+	// Precomputed distinct advert pubkey count (refcounted for eviction correctness).
+	// Updated incrementally during Load/Ingest/Evict — avoids JSON parsing in GetPerfStoreStats.
+	advertPubkeys map[string]int // pubkey → number of advert packets referencing it
+
 	// Eviction config and stats
 	retentionHours float64 // 0 = unlimited
 	maxMemoryMB    int     // 0 = unlimited
@@ -183,6 +187,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig) *PacketStore {
 		rfCacheTTL:         15 * time.Second,
 		collisionCacheTTL: 60 * time.Second,
 		spIndex:       make(map[string]int, 4096),
+		advertPubkeys: make(map[string]int),
 	}
 	if cfg != nil {
 		ps.retentionHours = cfg.RetentionHours
@@ -262,6 +267,7 @@ func (s *PacketStore) Load() error {
 				pt := *tx.PayloadType
 				s.byPayloadType[pt] = append(s.byPayloadType[pt], tx)
 			}
+			s.trackAdvertPubkey(tx)
 		}
 
 		if obsID.Valid {
@@ -388,6 +394,52 @@ func (s *PacketStore) indexByNode(tx *StoreTx) {
 			}
 			s.nodeHashes[v][tx.Hash] = true
 			s.byNode[v] = append(s.byNode[v], tx)
+		}
+	}
+}
+
+// trackAdvertPubkey increments the advertPubkeys refcount for ADVERT packets.
+// Must be called under s.mu write lock.
+func (s *PacketStore) trackAdvertPubkey(tx *StoreTx) {
+	if tx.PayloadType == nil || *tx.PayloadType != 4 || tx.DecodedJSON == "" {
+		return
+	}
+	var d map[string]interface{}
+	if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {
+		return
+	}
+	pk := ""
+	if v, ok := d["pubKey"].(string); ok {
+		pk = v
+	} else if v, ok := d["public_key"].(string); ok {
+		pk = v
+	}
+	if pk != "" {
+		s.advertPubkeys[pk]++
+	}
+}
+
+// untrackAdvertPubkey decrements the advertPubkeys refcount for ADVERT packets.
+// Must be called under s.mu write lock.
+func (s *PacketStore) untrackAdvertPubkey(tx *StoreTx) {
+	if tx.PayloadType == nil || *tx.PayloadType != 4 || tx.DecodedJSON == "" {
+		return
+	}
+	var d map[string]interface{}
+	if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {
+		return
+	}
+	pk := ""
+	if v, ok := d["pubKey"].(string); ok {
+		pk = v
+	} else if v, ok := d["public_key"].(string); ok {
+		pk = v
+	}
+	if pk != "" {
+		if s.advertPubkeys[pk] <= 1 {
+			delete(s.advertPubkeys, pk)
+		} else {
+			s.advertPubkeys[pk]--
 		}
 	}
 }
@@ -579,30 +631,8 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 	nodeIdx := len(s.byNode)
 	ptIdx := len(s.byPayloadType)
 
-	// Count distinct pubkeys with ADVERT observations (matches Node.js _advertByObserver.size)
-	advertByObsCount := 0
-	if adverts, ok := s.byPayloadType[4]; ok {
-		seen := make(map[string]bool)
-		for _, tx := range adverts {
-			if tx.DecodedJSON == "" {
-				continue
-			}
-			var d map[string]interface{}
-			if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {
-				continue
-			}
-			pk := ""
-			if v, ok := d["pubKey"].(string); ok {
-				pk = v
-			} else if v, ok := d["public_key"].(string); ok {
-				pk = v
-			}
-			if pk != "" && !seen[pk] {
-				seen[pk] = true
-				advertByObsCount++
-			}
-		}
-	}
+	// Distinct advert pubkey count — precomputed incrementally (see trackAdvertPubkey).
+	advertByObsCount := len(s.advertPubkeys)
 	s.mu.RUnlock()
 
 	// Realistic estimate: ~5KB per packet + ~500 bytes per observation
@@ -742,29 +772,7 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 	observerIdx := len(s.byObserver)
 	nodeIdx := len(s.byNode)
 
-	advertByObsCount := 0
-	if adverts, ok := s.byPayloadType[4]; ok {
-		seen := make(map[string]bool)
-		for _, tx := range adverts {
-			if tx.DecodedJSON == "" {
-				continue
-			}
-			var d map[string]interface{}
-			if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {
-				continue
-			}
-			pk := ""
-			if v, ok := d["pubKey"].(string); ok {
-				pk = v
-			} else if v, ok := d["public_key"].(string); ok {
-				pk = v
-			}
-			if pk != "" && !seen[pk] {
-				seen[pk] = true
-				advertByObsCount++
-			}
-		}
-	}
+	advertByObsCount := len(s.advertPubkeys)
 	s.mu.RUnlock()
 
 	estimatedMB := math.Round(float64(totalLoaded*5120+totalObs*500)/1048576*10) / 10
@@ -1072,6 +1080,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				// so GetChannelMessages reverse iteration stays correct
 				s.byPayloadType[pt] = append(s.byPayloadType[pt], tx)
 			}
+			s.trackAdvertPubkey(tx)
 
 			if _, exists := broadcastTxs[r.txID]; !exists {
 				broadcastTxs[r.txID] = tx
@@ -1943,6 +1952,7 @@ func (s *PacketStore) EvictStale() int {
 		}
 
 		// Remove from byPayloadType
+		s.untrackAdvertPubkey(tx)
 		if tx.PayloadType != nil {
 			pt := *tx.PayloadType
 			ptList := s.byPayloadType[pt]
