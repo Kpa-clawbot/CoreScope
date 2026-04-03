@@ -209,13 +209,12 @@ func BuildFromStoreWithLog(store *PacketStore, enableLog bool) *NeighborGraph {
 	return g
 }
 
-// extractFromNode pulls the from_node pubkey from a StoreTx.
-// It looks in DecodedJSON for "from_node" or "from".
+// extractFromNode pulls the originator pubkey from a StoreTx's DecodedJSON.
+// ADVERTs use "pubKey", other packets may use "from_node" or "from".
 func extractFromNode(tx *StoreTx) string {
 	if tx.DecodedJSON == "" {
 		return ""
 	}
-	// Fast path: look for "from_node" key.
 	var decoded map[string]interface{}
 	if err := jsonUnmarshalFast(tx.DecodedJSON, &decoded); err != nil {
 		return ""
