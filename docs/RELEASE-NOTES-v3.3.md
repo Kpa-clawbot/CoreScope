@@ -65,6 +65,11 @@ v3.3 is the biggest release since launch — 50 PRs merged, touching every layer
 
 - **Docker cleanup before CI build** — prevents disk space exhaustion (#473)
 
+## ⚠️ Known Limitations
+
+- **Live map** does not yet use affinity-aware hop resolution — animated paths still use naive first-match for ambiguous hops (#528)
+- **Customizer v2 home section** requires server-side home defaults to be configured — instances without `home` in config.json will show empty customizer fields until #526 merges
+
 ---
 
 *50 PRs. Zero new dependencies. Still no build step.*
