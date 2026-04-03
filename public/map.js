@@ -15,6 +15,8 @@
   let wsHandler = null;
   let heatLayer = null;
   let geoFilterLayer = null;
+  let affinityLayer = null;
+  let affinityData = null;
   let userHasMoved = false;
   let controlsCollapsed = false;
 
@@ -112,6 +114,7 @@
             <label for="mcNeighbors"><input type="checkbox" id="mcNeighbors"> Show direct neighbors</label>
             <div id="mcNeighborRef" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Ref: <span id="mcNeighborRefName">—</span></div>
             <div id="mcNeighborHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Click a node marker to set the reference node</div>
+            <label id="mcAffinityDebugLabel" for="mcAffinityDebug" style="display:none"><input type="checkbox" id="mcAffinityDebug"> 🔍 Affinity Debug</label>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Last Heard</legend>
@@ -224,6 +227,22 @@
       }
       renderMarkers();
     });
+
+    // Affinity Debug overlay toggle — shown only when debugAffinity config is on or localStorage override
+    (function initAffinityDebug() {
+      var label = document.getElementById('mcAffinityDebugLabel');
+      var show = (window.CLIENT_CONFIG && window.CLIENT_CONFIG.debugAffinity) || localStorage.getItem('meshcore-affinity-debug') === 'true';
+      if (show && label) label.style.display = '';
+      var cb = document.getElementById('mcAffinityDebug');
+      if (!cb) return;
+      cb.addEventListener('change', function (e) {
+        if (e.target.checked) {
+          loadAffinityDebugOverlay();
+        } else {
+          clearAffinityOverlay();
+        }
+      });
+    })();
 
     // Hash Labels toggle
     const hashLabelEl = document.getElementById('mcHashLabels');
@@ -885,6 +904,95 @@
   }
 
   let _themeRefreshHandler = null;
+
+  // ─── Affinity Debug Overlay ────────────────────────────────────────────────
+  function clearAffinityOverlay() {
+    if (affinityLayer) { map.removeLayer(affinityLayer); affinityLayer = null; }
+    affinityData = null;
+  }
+
+  function loadAffinityDebugOverlay() {
+    clearAffinityOverlay();
+    // Fetch debug data — requires API key stored in localStorage
+    var apiKey = localStorage.getItem('meshcore-api-key') || '';
+    fetch('/api/debug/affinity', { headers: { 'X-API-Key': apiKey } })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (data) {
+        affinityData = data;
+        renderAffinityOverlay();
+      })
+      .catch(function (err) {
+        console.warn('[affinity-debug] Failed to load:', err);
+        var cb = document.getElementById('mcAffinityDebug');
+        if (cb) cb.checked = false;
+      });
+  }
+
+  function renderAffinityOverlay() {
+    if (!affinityData || !map) return;
+    clearAffinityOverlay();
+    affinityLayer = L.layerGroup();
+
+    // Build node position lookup from current markers
+    var nodePos = {};
+    nodes.forEach(function (n) {
+      if (n.latitude && n.longitude) {
+        nodePos[n.public_key.toLowerCase()] = [n.latitude, n.longitude];
+      }
+    });
+
+    var edges = affinityData.edges || [];
+    edges.forEach(function (e) {
+      var posA = nodePos[e.nodeA];
+      var posB = e.nodeB ? nodePos[e.nodeB] : null;
+
+      if (!posA) return;
+
+      // Unresolved prefix — show ❓ marker near nodeA
+      if (e.unresolved || (!posB && e.ambiguous)) {
+        if (posA) {
+          var marker = L.marker([posA[0] + 0.001, posA[1] + 0.001], {
+            icon: L.divIcon({ html: '❓', className: 'affinity-unresolved', iconSize: [20, 20] })
+          });
+          marker.bindPopup('<b>Unresolved prefix:</b> ' + escapeHtml(e.prefix) + '<br>Observations: ' + e.weight);
+          affinityLayer.addLayer(marker);
+        }
+        return;
+      }
+
+      if (!posB) return;
+
+      // Color by confidence
+      var color = '#ef4444'; // red — ambiguous
+      var score = e.score || 0;
+      if (score >= 0.6) color = '#22c55e'; // green — high
+      else if (score >= 0.3) color = '#eab308'; // yellow — medium
+
+      // Thickness proportional to weight, clamped 1-5px
+      var weight = Math.max(1, Math.min(5, Math.round((e.weight || 1) / 20)));
+
+      var line = L.polyline([posA, posB], {
+        color: color,
+        weight: weight,
+        opacity: 0.7,
+        dashArray: e.ambiguous ? '5,5' : null
+      });
+
+      var popup = '<b>Affinity Edge</b><br>' +
+        (e.nodeAName || e.nodeA.substring(0, 8)) + ' ↔ ' + (e.nodeBName || e.nodeB.substring(0, 8)) + '<br>' +
+        'Observations: ' + e.observationCount + '<br>' +
+        'Score: ' + (e.score || 0).toFixed(3) + '<br>' +
+        'Last seen: ' + e.lastSeen + '<br>' +
+        'Observers: ' + (e.observers || []).join(', ');
+      if (e.avgSnr != null) popup += '<br>Avg SNR: ' + e.avgSnr.toFixed(1) + ' dB';
+
+      line.bindPopup(popup);
+      affinityLayer.addLayer(line);
+    });
+
+    affinityLayer.addTo(map);
+  }
+  // ─── End Affinity Debug ────────────────────────────────────────────────────
 
   registerPage('map', {
     init: function(app, routeParam) {

@@ -55,6 +55,8 @@ type Config struct {
 	GeoFilter *GeoFilterConfig `json:"geo_filter,omitempty"`
 
 	Timestamps *TimestampConfig `json:"timestamps,omitempty"`
+
+	DebugAffinity bool `json:"debugAffinity,omitempty"`
 }
 
 // PacketStoreConfig controls in-memory packet store limits.

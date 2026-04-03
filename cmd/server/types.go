@@ -924,6 +924,7 @@ type ClientConfigResponse struct {
 	ExternalUrls       interface{} `json:"externalUrls"`
 	PropagationBufferMs float64         `json:"propagationBufferMs"`
 	Timestamps          TimestampConfig `json:"timestamps"`
+	DebugAffinity       bool            `json:"debugAffinity,omitempty"`
 }
 
 // ─── IATA Coords ───────────────────────────────────────────────────────────────

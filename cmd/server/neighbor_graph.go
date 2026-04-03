@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"math"
 	"strings"
 	"sync"
@@ -84,6 +86,7 @@ type NeighborGraph struct {
 	edges   map[edgeKey]*NeighborEdge
 	byNode  map[string][]*NeighborEdge // pubkey → edges involving this node
 	builtAt time.Time
+	logFn   func(prefix, msg string) // optional structured logging callback
 }
 
 // NewNeighborGraph creates an empty graph.
@@ -124,7 +127,17 @@ func (g *NeighborGraph) IsStale() bool {
 // BuildFromStore constructs the neighbor graph from all packets in the store.
 // The store's read-lock must NOT be held by the caller.
 func BuildFromStore(store *PacketStore) *NeighborGraph {
+	return BuildFromStoreWithLog(store, false)
+}
+
+// BuildFromStoreWithLog constructs the neighbor graph, optionally logging disambiguation decisions.
+func BuildFromStoreWithLog(store *PacketStore, enableLog bool) *NeighborGraph {
 	g := NewNeighborGraph()
+	if enableLog {
+		g.logFn = func(prefix, msg string) {
+			log.Printf("[affinity] resolve %s: %s", prefix, msg)
+		}
+	}
 
 	store.mu.RLock()
 	// Snapshot what we need under lock.
@@ -407,12 +420,32 @@ func (g *NeighborGraph) disambiguate() {
 		if secondBest.jaccard == 0 {
 			// If second-best is 0 and best > 0, ratio is infinite → resolve.
 			if best.jaccard > 0 {
+				if g.logFn != nil {
+					g.logFn(e.Prefix, fmt.Sprintf("%s score=%d Jaccard=%.2f vs %s score=%d Jaccard=%.2f → neighbor_affinity (ratio ∞)",
+						best.pubkey[:minLen(best.pubkey, 8)], e.Count, best.jaccard,
+						secondBest.pubkey[:minLen(secondBest.pubkey, 8)], e.Count, secondBest.jaccard))
+				}
 				g.resolveEdge(key, e, knownNode, best.pubkey)
 			}
 		} else if best.jaccard/secondBest.jaccard >= affinityConfidenceRatio {
+			ratio := best.jaccard / secondBest.jaccard
+			if g.logFn != nil {
+				g.logFn(e.Prefix, fmt.Sprintf("%s score=%d Jaccard=%.2f vs %s score=%d Jaccard=%.2f → neighbor_affinity (ratio %.1f×)",
+					best.pubkey[:minLen(best.pubkey, 8)], e.Count, best.jaccard,
+					secondBest.pubkey[:minLen(secondBest.pubkey, 8)], e.Count, secondBest.jaccard, ratio))
+			}
 			g.resolveEdge(key, e, knownNode, best.pubkey)
+		} else {
+			// Ambiguous
+			if g.logFn != nil {
+				ratio := 0.0
+				if secondBest.jaccard > 0 {
+					ratio = best.jaccard / secondBest.jaccard
+				}
+				g.logFn(e.Prefix, fmt.Sprintf("scores too close (%d vs %d, ratio %.1f×) → ambiguous",
+					e.Count, e.Count, ratio))
+			}
 		}
-		// Otherwise remain ambiguous.
 	}
 }
 
@@ -498,3 +531,11 @@ func parseTimestamp(s string) time.Time {
 	return time.Time{}
 }
 
+
+// minLen returns the smaller of n and len(s).
+func minLen(s string, n int) int {
+	if len(s) < n {
+		return len(s)
+	}
+	return n
+}

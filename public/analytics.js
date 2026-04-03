@@ -267,6 +267,37 @@
         </div>
       </div>
     `;
+
+    // Affinity stats widget — fetch and append if debugAffinity enabled
+    var showDebug = (window.CLIENT_CONFIG && window.CLIENT_CONFIG.debugAffinity) || localStorage.getItem('meshcore-affinity-debug') === 'true';
+    if (showDebug) {
+      var apiKey = localStorage.getItem('meshcore-api-key') || '';
+      fetch('/api/debug/affinity', { headers: { 'X-API-Key': apiKey } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) {
+          if (!data || !data.stats) return;
+          var s = data.stats;
+          var total = s.resolvedCount + s.ambiguousCount + s.unresolvedCount;
+          var resolvedPct = total > 0 ? (s.resolvedCount / total * 100).toFixed(1) : '0.0';
+          var ambiguousPct = total > 0 ? (s.ambiguousCount / total * 100).toFixed(1) : '0.0';
+          var widget = document.createElement('div');
+          widget.className = 'analytics-row';
+          widget.innerHTML = '<div class="analytics-card flex-1">' +
+            '<h3>🔍 Neighbor Affinity Graph</h3>' +
+            '<div class="stats-grid">' +
+            '<div class="stat-card"><div class="stat-value">' + s.totalEdges + '</div><div class="stat-label">Total Edges</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + s.totalNodes + '</div><div class="stat-label">Total Nodes</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + s.resolvedCount + ' <span style="font-size:12px;color:var(--text-muted)">(' + resolvedPct + '%)</span></div><div class="stat-label">Resolved Prefixes</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + s.ambiguousCount + ' <span style="font-size:12px;color:var(--text-muted)">(' + ambiguousPct + '%)</span></div><div class="stat-label">Ambiguous Prefixes</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + (s.avgConfidence || 0).toFixed(3) + '</div><div class="stat-label">Avg Confidence</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + (s.coldStartCoverage || 0).toFixed(1) + '%</div><div class="stat-label">Cold-Start Coverage</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + (s.cacheAge || 'N/A') + '</div><div class="stat-label">Cache Age</div></div>' +
+            '<div class="stat-card"><div class="stat-value">' + (s.lastRebuild ? s.lastRebuild.substring(0, 19) : 'N/A') + '</div><div class="stat-label">Last Rebuild</div></div>' +
+            '</div></div>';
+          el.appendChild(widget);
+        })
+        .catch(function () {});
+    }
   }
 
   function renderPayloadPie(types) {

@@ -115,6 +115,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/perf", s.handlePerf).Methods("GET")
 	r.Handle("/api/perf/reset", s.requireAPIKey(http.HandlerFunc(s.handlePerfReset))).Methods("POST")
 	r.Handle("/api/admin/prune", s.requireAPIKey(http.HandlerFunc(s.handleAdminPrune))).Methods("POST")
+	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
 
 	// Packet endpoints
 	r.HandleFunc("/api/packets/timestamps", s.handlePacketTimestamps).Methods("GET")
@@ -252,6 +253,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		ExternalUrls:        s.cfg.ExternalUrls,
 		PropagationBufferMs: float64(s.cfg.PropagationBufferMs()),
 		Timestamps:          s.cfg.GetTimestampConfig(),
+		DebugAffinity:       s.cfg.DebugAffinity,
 	})
 }
 

@@ -456,6 +456,13 @@
           <div id="fullNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
         </div>
 
+        <div class="node-full-card" id="node-affinity-debug" style="display:none">
+          <h4 style="cursor:pointer" onclick="this.parentElement.querySelector('.affinity-debug-body').style.display=this.parentElement.querySelector('.affinity-debug-body').style.display==='none'?'block':'none'; this.querySelector('.toggle-icon').textContent=this.parentElement.querySelector('.affinity-debug-body').style.display==='none'?'▶':'▼'"><span class="toggle-icon">▶</span> 🔍 Affinity Debug</h4>
+          <div class="affinity-debug-body" style="display:none">
+            <div id="affinityDebugContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading debug data…</div></div>
+          </div>
+        </div>
+
         <div class="node-full-card" id="fullPathsSection">
           <h4>Paths Through This Node</h4>
           <div id="fullPathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
@@ -540,6 +547,86 @@
       fetchAndRenderNeighbors(n.public_key, 'fullNeighborsContent', {
         headerSelector: '#fullNeighborsHeader'
       });
+
+      // Affinity debug panel — show if debugAffinity is enabled
+      (function loadAffinityDebug() {
+        var show = (window.CLIENT_CONFIG && window.CLIENT_CONFIG.debugAffinity) || localStorage.getItem('meshcore-affinity-debug') === 'true';
+        var panel = document.getElementById('node-affinity-debug');
+        if (!show || !panel) return;
+        panel.style.display = '';
+        var apiKey = localStorage.getItem('meshcore-api-key') || '';
+        fetch('/api/debug/affinity?node=' + encodeURIComponent(n.public_key), { headers: { 'X-API-Key': apiKey } })
+          .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+          .then(function (data) {
+            var el = document.getElementById('affinityDebugContent');
+            if (!el) return;
+            var html = '';
+
+            // Edges table
+            if (data.edges && data.edges.length) {
+              html += '<h5 style="margin:8px 0 4px">Neighbor Edges (' + data.edges.length + ')</h5>';
+              html += '<table class="mini-table" style="width:100%;font-size:12px"><thead><tr><th>Neighbor</th><th>Score</th><th>Count</th><th>Last Seen</th><th>Observers</th><th>Status</th></tr></thead><tbody>';
+              data.edges.forEach(function (e) {
+                var neighbor = e.nodeBName || e.nodeAName || (e.nodeB || e.nodeA || '').substring(0, 8);
+                if (e.nodeA.toLowerCase() === n.public_key.toLowerCase()) {
+                  neighbor = e.nodeBName || (e.nodeB || e.prefix || '?').substring(0, 8);
+                } else {
+                  neighbor = e.nodeAName || (e.nodeA || '').substring(0, 8);
+                }
+                var status = e.ambiguous ? (e.unresolved ? '❓ Unresolved' : '⚠️ Ambiguous') : (e.resolved ? '✅ Auto-resolved' : '✅ Resolved');
+                html += '<tr><td>' + escapeHtml(neighbor) + '</td><td>' + (e.score || 0).toFixed(3) + '</td><td>' + e.weight + '</td><td>' + (e.lastSeen || '').substring(0, 10) + '</td><td>' + (e.observers || []).length + '</td><td>' + status + '</td></tr>';
+              });
+              html += '</tbody></table>';
+            } else {
+              html += '<div class="text-muted" style="padding:8px">No affinity edges for this node</div>';
+            }
+
+            // Resolutions
+            if (data.resolutions && data.resolutions.length) {
+              html += '<h5 style="margin:12px 0 4px">Prefix Resolutions (' + data.resolutions.length + ')</h5>';
+              data.resolutions.forEach(function (r) {
+                html += '<div style="border:1px solid var(--border);border-radius:4px;padding:8px;margin-bottom:6px;font-size:12px">';
+                html += '<b>Prefix: ' + escapeHtml(r.prefix) + '</b> → ';
+                if (r.method === 'auto-resolved') {
+                  html += '<span style="color:var(--status-green)">✅ ' + escapeHtml(r.chosenName || r.chosen || '?') + '</span>';
+                  html += ' (Jaccard=' + r.chosenJaccard.toFixed(2) + ', ratio=' + (isFinite(r.ratio) ? r.ratio.toFixed(1) + '×' : '∞') + ')';
+                } else {
+                  html += '<span style="color:var(--status-yellow)">⚠️ Ambiguous</span>';
+                  if (r.ratio) html += ' (ratio=' + r.ratio.toFixed(1) + '×, threshold=' + r.thresholdApplied + '×)';
+                }
+                // Candidates table
+                if (r.candidates && r.candidates.length) {
+                  html += '<div style="margin-top:4px"><table class="mini-table" style="width:100%;font-size:11px"><thead><tr><th>Candidate</th><th>Jaccard</th><th>Count</th></tr></thead><tbody>';
+                  r.candidates.forEach(function (c) {
+                    var highlight = r.chosen && c.pubkey === r.chosen ? ' style="background:var(--status-green-bg,rgba(34,197,94,0.1))"' : '';
+                    html += '<tr' + highlight + '><td>' + escapeHtml(c.name || c.pubkey.substring(0, 8)) + '</td><td>' + c.jaccard.toFixed(3) + '</td><td>' + c.score + '</td></tr>';
+                  });
+                  html += '</tbody></table></div>';
+                }
+                html += '</div>';
+              });
+            }
+
+            // Stats summary
+            if (data.stats) {
+              html += '<h5 style="margin:12px 0 4px">Graph Stats</h5>';
+              html += '<div style="font-size:12px;line-height:1.6">';
+              html += 'Total edges: ' + data.stats.totalEdges + '<br>';
+              html += 'Total nodes: ' + data.stats.totalNodes + '<br>';
+              html += 'Resolved: ' + data.stats.resolvedCount + ' | Ambiguous: ' + data.stats.ambiguousCount + ' | Unresolved: ' + data.stats.unresolvedCount + '<br>';
+              html += 'Avg confidence: ' + (data.stats.avgConfidence || 0).toFixed(3) + '<br>';
+              html += 'Cold-start coverage: ' + (data.stats.coldStartCoverage || 0).toFixed(1) + '%<br>';
+              html += 'Cache age: ' + (data.stats.cacheAge || 'N/A') + ' | Last rebuild: ' + (data.stats.lastRebuild || 'N/A');
+              html += '</div>';
+            }
+
+            el.innerHTML = html;
+          })
+          .catch(function (err) {
+            var el = document.getElementById('affinityDebugContent');
+            if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">Failed to load debug data: ' + escapeHtml(err.message) + '</div>';
+          });
+      })();
 
       // Fetch paths through this node (full-screen view)
       api('/nodes/' + encodeURIComponent(n.public_key) + '/paths', { ttl: CLIENT_TTL.nodeDetail }).then(pathData => {

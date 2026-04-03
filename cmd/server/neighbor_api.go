@@ -80,7 +80,8 @@ func (s *Server) getNeighborGraph() *NeighborGraph {
 
 	if s.neighborGraph == nil || s.neighborGraph.IsStale() {
 		if s.store != nil {
-			s.neighborGraph = BuildFromStore(s.store)
+			debugLog := s.cfg != nil && s.cfg.DebugAffinity
+			s.neighborGraph = BuildFromStoreWithLog(s.store, debugLog)
 		} else {
 			s.neighborGraph = NewNeighborGraph()
 		}
