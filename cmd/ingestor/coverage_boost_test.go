@@ -327,8 +327,12 @@ func TestHandleMessageAdvertGeoFiltered(t *testing.T) {
 	}
 	handleMessage(store, "test", source, msg, nil, gf)
 
-	// With a tiny radius at (0,0), nodes near SJC should be filtered
-	// Verify the function doesn't crash at minimum
+	// Geo-filtered adverts should not create nodes
+	var nodeCount int
+	store.db.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&nodeCount)
+	if nodeCount != 0 {
+		t.Errorf("nodes=%d, want 0 (geo-filtered advert should not create node)", nodeCount)
+	}
 }
 
 // --- decoder.go: decodeAdvert with features but insufficient data ---
@@ -492,8 +496,8 @@ func TestComputeContentHashPathOverflow(t *testing.T) {
 	// path byte 0xFF = hashSize=4, hashCount=63 = 252 bytes needed, but only a few available
 	rawHex := "0AFF" + "AABBCCDD"
 	got := ComputeContentHash(rawHex)
-	if len(got) < 4 {
-		t.Errorf("got=%s", got)
+	if got == "" {
+		t.Error("should return non-empty hash even with overflowing path byte")
 	}
 }
 
@@ -644,12 +648,9 @@ func TestComputeContentHashTransportShortAfterCodes(t *testing.T) {
 	// Transport route (0x00), 4 bytes transport codes, but then nothing (no path byte)
 	rawHex := "00AABBCCDD"
 	got := ComputeContentHash(rawHex)
-	// Should fallback since offset >= len(buf) after transport codes
-	if got != rawHex[:10] {
-		// Actually rawHex is 10 chars, so first 10 chars
-	}
-	if len(got) == 0 {
-		t.Error("should return something")
+	// Should return a non-empty fallback hash even when data is truncated
+	if got == "" {
+		t.Error("should return non-empty hash for truncated transport packet")
 	}
 }
 
