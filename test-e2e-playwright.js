@@ -1488,9 +1488,13 @@ async function run() {
 
   await test('Node detail: neighbors section loading state', async () => {
     // Navigate to a node - the section should initially show a spinner
+    // Use a DIFFERENT node than the first test to avoid neighbor cache hits
     await page.goto(BASE + '/#/nodes');
     await page.waitForSelector('#nodesBody tr[data-key]', { timeout: 10000 });
-    const pubkey = await page.$eval('#nodesBody tr[data-key]', el => el.dataset.key);
+    const rows = await page.$$('#nodesBody tr[data-key]');
+    const pubkey = rows.length > 1
+      ? await rows[1].evaluate(el => el.dataset.key)
+      : await rows[0].evaluate(el => el.dataset.key);
     // Intercept API to delay response
     await page.route('**/api/nodes/*/neighbors*', async route => {
       await new Promise(r => setTimeout(r, 500));

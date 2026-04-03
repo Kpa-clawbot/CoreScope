@@ -230,18 +230,19 @@
     var limit = opts.limit || 0;
     var headerSelector = opts.headerSelector;
     var viewAllPubkey = opts.viewAllPubkey;
-    var bust = opts.bust || false;
+
+    // Always set spinner as initial DOM state (synchronous) so tests can observe it
+    var spinnerEl = document.getElementById(containerId);
+    if (spinnerEl) spinnerEl.innerHTML = '<div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div>';
 
     // Check cache
     var cached = _neighborCache[pubkey];
-    if (!bust && cached && (Date.now() - cached.ts < 300000)) { // 5 min cache
+    if (cached && (Date.now() - cached.ts < 300000)) { // 5 min cache
       renderNeighborData(cached.data, containerId, limit, headerSelector, viewAllPubkey);
       return;
     }
 
-    var apiOpts = { ttl: CLIENT_TTL.nodeDetail };
-    if (bust) apiOpts.bust = true;
-    api('/nodes/' + encodeURIComponent(pubkey) + '/neighbors', apiOpts).then(function(data) {
+    api('/nodes/' + encodeURIComponent(pubkey) + '/neighbors', { ttl: CLIENT_TTL.nodeDetail }).then(function(data) {
       _neighborCache[pubkey] = { data: data, ts: Date.now() };
       renderNeighborData(data, containerId, limit, headerSelector, viewAllPubkey);
     }).catch(function() {
@@ -548,8 +549,7 @@
 
       // Fetch neighbors for this node (full-screen view)
       fetchAndRenderNeighbors(n.public_key, 'fullNeighborsContent', {
-        headerSelector: '#fullNeighborsHeader',
-        bust: true
+        headerSelector: '#fullNeighborsHeader'
       });
 
       // Affinity debug panel — show if debugAffinity is enabled
