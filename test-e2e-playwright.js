@@ -1573,6 +1573,47 @@ async function run() {
 
   // ─── End affinity debug tests ─────────────────────────────────────────────
 
+  // ─── Mobile filter dropdown tests (#534) ──────────────────────────────────
+
+  await test('Mobile: filter toggle expands filter bar on packets page (#534)', async () => {
+    // Use a mobile viewport
+    await page.setViewportSize({ width: 480, height: 800 });
+    await page.goto(`${BASE_URL}/#/packets`);
+    await page.waitForTimeout(500);
+
+    const filterBar = await page.$('.filter-bar');
+    assert(filterBar, 'Filter bar should exist on packets page');
+
+    // Before clicking toggle, filter inputs should be hidden
+    const toggleBtn = await page.$('.filter-toggle-btn');
+    assert(toggleBtn, 'Filter toggle button should exist on mobile');
+
+    await toggleBtn.click();
+    await page.waitForTimeout(300);
+
+    // After clicking, .filters-expanded should be on the filter bar
+    const expanded = await filterBar.evaluate(el => el.classList.contains('filters-expanded'));
+    assert(expanded, 'Filter bar should have filters-expanded class after toggle');
+
+    // Filter inputs should now be visible
+    const filterInput = await page.$('.filter-bar input');
+    if (filterInput) {
+      const display = await filterInput.evaluate(el => getComputedStyle(el).display);
+      assert(display !== 'none', `Filter input should be visible when expanded, got display: ${display}`);
+    }
+
+    const filterSelect = await page.$('.filter-bar select');
+    if (filterSelect) {
+      const display = await filterSelect.evaluate(el => getComputedStyle(el).display);
+      assert(display !== 'none', `Filter select should be visible when expanded, got display: ${display}`);
+    }
+
+    // Reset viewport
+    await page.setViewportSize({ width: 1280, height: 720 });
+  });
+
+  // ─── End mobile filter tests ──────────────────────────────────────────────
+
   // Extract frontend coverage if instrumented server is running
   try {
     const coverage = await page.evaluate(() => window.__coverage__);

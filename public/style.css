@@ -947,7 +947,9 @@ button.ch-item.selected { background: var(--selected-bg); }
   .filter-bar { flex-direction: row; flex-wrap: wrap; gap: 4px; }
   .filter-toggle-btn { display: inline-flex !important; }
   .filter-bar > *:not(.filter-toggle-btn):not(.col-toggle-wrap) { display: none; }
-  .filter-bar.filters-expanded > * { display: inline-flex; }
+  /* Must match :not() specificity of the hide rule above, otherwise .filters-expanded loses
+     the specificity battle and filter children stay hidden (see issue #534). */
+  .filter-bar.filters-expanded > *:not(.filter-toggle-btn):not(.col-toggle-wrap) { display: inline-flex; }
   .filter-bar.filters-expanded > .col-toggle-wrap { display: inline-block; }
   .filter-bar.filters-expanded input { width: 100%; }
   .filter-bar.filters-expanded select { width: 100%; }
