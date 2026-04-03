@@ -3323,16 +3323,26 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 	}
 
 	// Priority 1: Affinity graph score
+	//
+	// NOTE: We use raw Score() (count × time-decay) here rather than Jaccard
+	// similarity. Jaccard is used at the graph builder level (disambiguate() in
+	// neighbor_graph.go) to resolve ambiguous edges by comparing neighbor-set
+	// overlap. Here, edges are already resolved — we just need to pick the
+	// highest-affinity candidate among them. Raw score is appropriate because
+	// it reflects both observation frequency and recency, which are the right
+	// signals for "which candidate is this hop most likely referring to."
 	if graph != nil && len(contextPubkeys) > 0 {
 		type scored struct {
 			idx   int
 			score float64
+			count int // observation count of the best-scoring edge
 		}
 		now := time.Now()
 		var scores []scored
 		for i, cand := range candidates {
 			candPK := strings.ToLower(cand.PublicKey)
 			bestScore := 0.0
+			bestCount := 0
 			for _, ctxPK := range contextPubkeys {
 				edges := graph.Neighbors(strings.ToLower(ctxPK))
 				for _, e := range edges {
@@ -3347,12 +3357,13 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 						s := e.Score(now)
 						if s > bestScore {
 							bestScore = s
+							bestCount = e.Count
 						}
 					}
 				}
 			}
 			if bestScore > 0 {
-				scores = append(scores, scored{i, bestScore})
+				scores = append(scores, scored{i, bestScore, bestCount})
 			}
 		}
 
@@ -3366,7 +3377,10 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 				}
 			}
 			best := scores[0]
-			if len(scores) == 1 || best.score >= affinityConfidenceRatio*scores[1].score {
+			// Require both score ratio ≥ 3× AND minimum observations (mirrors
+			// disambiguate() in neighbor_graph.go which checks affinityMinObservations).
+			if best.count >= affinityMinObservations &&
+				(len(scores) == 1 || best.score >= affinityConfidenceRatio*scores[1].score) {
 				return &candidates[best.idx], "neighbor_affinity", best.score
 			}
 			// Scores too close — fall through to lower-priority strategies

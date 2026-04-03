@@ -1423,6 +1423,10 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 				pk := best.PublicKey
 				hr.BestCandidate = &pk
 				hr.Confidence = "neighbor_affinity"
+			} else if (confidence == "geo_proximity" || confidence == "gps_preference") && best != nil {
+				// Propagate lower-priority tiers so the API reflects the actual
+				// resolution strategy used, rather than collapsing everything to "ambiguous".
+				hr.Confidence = confidence
 			}
 
 			resolved[hop] = hr
