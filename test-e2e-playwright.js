@@ -1067,6 +1067,12 @@ async function run() {
   await test('Customizer v2: setOverride persists and applies CSS', async () => {
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    // Force light mode — CI headless browsers may default to dark mode,
+    // and in dark mode themeDark.accent overwrites theme.accent in applyCSS
+    await page.evaluate(() => {
+      localStorage.setItem('meshcore-theme', 'light');
+      document.documentElement.setAttribute('data-theme', 'light');
+    });
     // Clear any existing overrides
     await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
     // Wait for init() to complete (server config fetch + full pipeline) before
@@ -1076,24 +1082,14 @@ async function run() {
     }, { timeout: 5000 });
     // Set an override via the API
     const result = await page.evaluate(() => {
-      var dbg = {
-        initDone: window._customizerV2.initDone,
-        serverDefaults: JSON.stringify(window._customizerV2._getServer ? window._customizerV2._getServer() : 'no _getServer'),
-        overridesBefore: localStorage.getItem('cs-theme-overrides'),
-        cssBefore: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
-        siteConfigAccent: window.SITE_CONFIG && window.SITE_CONFIG.theme ? window.SITE_CONFIG.theme.accent : 'no SITE_CONFIG.theme'
-      };
       window._customizerV2.setOverride('theme', 'accent', '#ff0000');
       // Wait for debounce (300ms) + buffer
       return new Promise(resolve => setTimeout(() => {
         const stored = JSON.parse(localStorage.getItem('cs-theme-overrides') || '{}');
         const cssVal = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-        dbg.overridesAfter = JSON.stringify(stored);
-        dbg.cssAfter = cssVal;
-        resolve({ stored, cssVal, dbg });
+        resolve({ stored, cssVal });
       }, 500));
     });
-    console.log('DEBUG setOverride test:', JSON.stringify(result.dbg, null, 2));
     assert(result.stored.theme && result.stored.theme.accent === '#ff0000',
       'Override not persisted to localStorage');
     assert(result.cssVal === '#ff0000',
@@ -1105,6 +1101,11 @@ async function run() {
   await test('Customizer v2: clearOverride resets to server default', async () => {
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    // Force light mode for consistent CSS testing
+    await page.evaluate(() => {
+      localStorage.setItem('meshcore-theme', 'light');
+      document.documentElement.setAttribute('data-theme', 'light');
+    });
     // Wait for init() to complete so _serverDefaults is populated
     await page.waitForFunction(() => {
       return window._customizerV2 && window._customizerV2.initDone;
