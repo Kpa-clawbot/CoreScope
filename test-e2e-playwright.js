@@ -1578,7 +1578,7 @@ async function run() {
   await test('Mobile: filter toggle expands filter bar on packets page (#534)', async () => {
     // Use a mobile viewport
     await page.setViewportSize({ width: 480, height: 800 });
-    await page.goto(`${BASE_URL}/#/packets`);
+    await page.goto(`${BASE}/#/packets`);
     await page.waitForTimeout(500);
 
     const filterBar = await page.$('.filter-bar');
