@@ -847,6 +847,165 @@ no misleading data, existing functionality preserved
 
 ---
 
+## Observability & Debugging
+
+A probabilistic graph algorithm is only as useful as its debuggability. Without clear visibility into edge weights, resolution decisions, and fallback paths, the affinity system becomes an opaque black box that's impossible to diagnose when it gets a disambiguation wrong. This section specifies the tooling needed to inspect, debug, and monitor the neighbor affinity graph in development and production.
+
+### Debug API Endpoint — `/api/debug/affinity`
+
+A dedicated admin endpoint that exposes the full internal state of the affinity graph for programmatic inspection.
+
+**Response includes:**
+
+- **Full graph state** — all edges with weights, observation counts, and last-seen timestamps
+- **Per-prefix resolution log** — disambiguation decisions with full reasoning:
+  ```
+  prefix "C0DE" → chose c0dedad4... (score 47, Jaccard 0.82, confidence HIGH)
+                   over  c0dedad9... (score 3, Jaccard 0.11, confidence LOW)
+  ```
+- **Scoring details** — Jaccard similarity scores, raw observation counts, which confidence threshold was applied, and whether the result was auto-resolved or flagged as ambiguous
+
+**Authentication:** Protected by API key, using the same auth mechanism as other admin endpoints.
+
+**Query parameters:**
+
+| Parameter | Description | Example |
+|-----------|-------------|---------|
+| `prefix`  | Filter to a specific hex prefix | `?prefix=C0DE` |
+| `node`    | Filter to a specific node's edges | `?node=<full_pubkey>` |
+
+**Example response shape:**
+
+```json
+{
+  "edges": [
+    {
+      "nodeA": "c0dedad4...",
+      "nodeB": "a1b2c3d4...",
+      "weight": 47,
+      "observationCount": 52,
+      "lastSeen": "2026-04-02T18:30:00Z",
+      "jaccard": 0.82
+    }
+  ],
+  "resolutions": [
+    {
+      "prefix": "C0DE",
+      "chosen": "c0dedad4...",
+      "chosenScore": 47,
+      "chosenJaccard": 0.82,
+      "confidence": "HIGH",
+      "candidates": [
+        { "pubkey": "c0dedad9...", "score": 3, "jaccard": 0.11, "confidence": "LOW" }
+      ],
+      "ratio": 15.7,
+      "thresholdApplied": 3.0,
+      "method": "auto-resolved"
+    }
+  ],
+  "stats": {
+    "totalEdges": 342,
+    "totalResolutions": 128,
+    "ambiguousCount": 7
+  }
+}
+```
+
+### Debug Overlay on Map
+
+A toggle-able map layer (developer/admin tool) that visualizes affinity edges directly on the Leaflet map.
+
+**Controls:**
+
+- Checkbox in the map controls panel: "Show Affinity Edges" (unchecked by default, not shown to non-admin users)
+- When enabled, draws lines between nodes that share affinity edges
+
+**Visual encoding:**
+
+| Property | Encoding |
+|----------|----------|
+| Line thickness | Proportional to affinity weight (normalized to 1–5px range) |
+| Line opacity | Proportional to affinity weight (0.2–1.0 range) |
+| Line color — green | High confidence (Jaccard ≥ 0.6, ratio ≥ 3×) |
+| Line color — yellow | Medium confidence (Jaccard 0.3–0.6 or ratio 1.5–3×) |
+| Line color — red | Low confidence / ambiguous (Jaccard < 0.3 or ratio < 1.5×) |
+
+**Interactions:**
+
+- **Unresolved prefixes** — shown as question mark (`?`) markers at estimated positions (or at the position of known candidate nodes)
+- **Click an edge** — popup showing: observation count, last seen timestamp, Jaccard score, and list of contributing observers (which nodes reported seeing both endpoints)
+
+**Implementation notes:**
+
+- Uses a dedicated Leaflet layer group (`L.layerGroup`) so it can be toggled without affecting other map layers
+- Edge data fetched from `/api/debug/affinity` on toggle-on, cached until manual refresh or page reload
+- This is a developer/admin tool — the checkbox is hidden unless a `debugAffinity` config flag is enabled or the user has admin privileges
+
+### Per-Node Debug Panel
+
+On the node detail page, an expandable "Affinity Debug" section provides node-specific graph inspection.
+
+**Display (collapsed by default):**
+
+- **Neighbor edges table** — all edges involving this node, with columns: neighbor pubkey/name, affinity score, Jaccard similarity, observation count, last seen, confidence level
+- **Prefix resolutions** — all disambiguation decisions where this node was either the chosen result or a rejected candidate
+- **"Why was X chosen over Y?"** — explicit reasoning trace for each resolution:
+  - Raw affinity scores for all candidates
+  - Jaccard similarity values
+  - Threshold comparison (ratio vs. configured threshold)
+  - Fallback path taken: affinity → geo-distance → GPS → naive (which step resolved it, and why earlier steps didn't)
+- **Edge timeline** — observation count over time for each neighbor edge, showing whether edges are growing (active relationship), stable (established neighbor), or decaying (stale/departed node)
+
+**Data source:** Fetched from `/api/debug/affinity?node=<pubkey>` — no additional API endpoint needed.
+
+### Server-Side Structured Logging
+
+Structured log lines for every affinity resolution decision, enabling post-hoc debugging from server logs.
+
+**Log format** (follows existing server log conventions):
+
+```
+[affinity] resolve C0DE: c0dedad4 score=47 Jaccard=0.82 vs c0dedad9 score=3 Jaccard=0.11 → auto-resolved (ratio 15.7×, threshold 3×)
+```
+
+**Event types:**
+
+| Event | Log pattern |
+|-------|------------|
+| Auto-resolve (clear winner) | `[affinity] resolve <PREFIX>: <chosen> score=<N> Jaccard=<F> vs <rejected> score=<N> Jaccard=<F> → auto-resolved (ratio <N>×, threshold <N>×)` |
+| Fallback (no affinity data) | `[affinity] resolve <PREFIX>: no affinity data, falling back to geo-distance` |
+| Ambiguous (scores too close) | `[affinity] resolve <PREFIX>: scores too close (<N> vs <N>, ratio <F>×) → ambiguous, returning <N> candidates` |
+
+**Gating:** All affinity logging is controlled by a configuration flag to avoid log spam in production:
+
+- CLI flag: `--debug-affinity`
+- Config file: `debugAffinity: true`
+- When disabled (default), no affinity log lines are emitted
+- When enabled, all resolution decisions are logged at INFO level
+
+### Dashboard Stats Widget
+
+A summary widget added to the existing dashboard/stats page, providing at-a-glance health metrics for the affinity graph.
+
+**Metrics displayed:**
+
+| Metric | Description |
+|--------|-------------|
+| Total edges | Number of edges in the affinity graph |
+| Resolved prefixes | Count and percentage of prefixes that resolved unambiguously |
+| Ambiguous prefixes | Count and percentage of prefixes where scores were too close to auto-resolve |
+| Average confidence | Mean confidence score across all resolutions (weighted by observation count) |
+| Cold-start coverage | Percentage of active 1-byte prefixes that have ≥3 observations (minimum threshold for auto-resolve) |
+| Graph age | Timestamps of the oldest and newest edges, showing the observation window |
+
+**Implementation notes:**
+
+- Data sourced from `/api/debug/affinity` stats summary (or a lightweight `/api/analytics/neighbor-graph` stats sub-object if the debug endpoint is too heavy for the dashboard)
+- Widget updates on page load and on manual refresh — no polling needed given the slow rate of graph change
+- Displayed alongside existing analytics widgets (RF stats, topology stats, etc.)
+
+---
+
 ## What's NOT in scope
 
 - **Full mesh topology visualization** — this spec covers first-hop neighbors only, not multi-hop routing topology
