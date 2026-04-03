@@ -8,9 +8,9 @@ services:
     build:
       context: .
       args:
-        APP_VERSION: ${APP_VERSION:-unknown}
-        GIT_COMMIT: ${GIT_COMMIT:-unknown}
-        BUILD_TIME: ${BUILD_TIME:-unknown}
+        APP_VERSION: ${APP_VERSION}
+        GIT_COMMIT: ${GIT_COMMIT}
+        BUILD_TIME: ${BUILD_TIME}
     image: corescope:latest
     container_name: corescope-prod
     restart: unless-stopped
@@ -19,16 +19,16 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${PROD_HTTP_PORT:-80}:80"
-      - "${PROD_HTTPS_PORT:-443}:443"
-      - "${PROD_MQTT_PORT:-1883}:1883"
+      - "${PROD_HTTP_PORT}:80"
+      - "${PROD_HTTPS_PORT}:443"
+      - "${PROD_MQTT_PORT}:1883"
     volumes:
       - ./caddy-config/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${PROD_DATA_DIR:-~/meshcore-data}:/app/data
+      - ${PROD_DATA_DIR}:/app/data
       - caddy-data:/data/caddy
     environment:
       - NODE_ENV=production
-      - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-false}
+      - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/stats"]
       interval: 30s

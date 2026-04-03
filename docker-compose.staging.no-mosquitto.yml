@@ -4,9 +4,9 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        APP_VERSION: ${APP_VERSION:-unknown}
-        GIT_COMMIT: ${GIT_COMMIT:-unknown}
-        BUILD_TIME: ${BUILD_TIME:-unknown}
+        APP_VERSION: ${APP_VERSION}
+        GIT_COMMIT: ${GIT_COMMIT}
+        BUILD_TIME: ${BUILD_TIME}
     image: corescope-go:latest
     container_name: corescope-staging-go
     restart: unless-stopped
@@ -19,11 +19,11 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${STAGING_GO_HTTP_PORT:-82}:80"
+      - "${STAGING_GO_HTTP_PORT}:80"
       - "6060:6060"
       - "6061:6061"
     volumes:
-      - ${STAGING_DATA_DIR:-~/meshcore-staging-data}:/app/data
+      - ${STAGING_DATA_DIR}:/app/data
       - caddy-data-staging-go:/data/caddy
     environment:
       - NODE_ENV=staging
