@@ -1076,14 +1076,24 @@ async function run() {
     }, { timeout: 5000 });
     // Set an override via the API
     const result = await page.evaluate(() => {
+      var dbg = {
+        initDone: window._customizerV2.initDone,
+        serverDefaults: JSON.stringify(window._customizerV2._getServer ? window._customizerV2._getServer() : 'no _getServer'),
+        overridesBefore: localStorage.getItem('cs-theme-overrides'),
+        cssBefore: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),
+        siteConfigAccent: window.SITE_CONFIG && window.SITE_CONFIG.theme ? window.SITE_CONFIG.theme.accent : 'no SITE_CONFIG.theme'
+      };
       window._customizerV2.setOverride('theme', 'accent', '#ff0000');
       // Wait for debounce (300ms) + buffer
       return new Promise(resolve => setTimeout(() => {
         const stored = JSON.parse(localStorage.getItem('cs-theme-overrides') || '{}');
         const cssVal = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-        resolve({ stored, cssVal });
+        dbg.overridesAfter = JSON.stringify(stored);
+        dbg.cssAfter = cssVal;
+        resolve({ stored, cssVal, dbg });
       }, 500));
     });
+    console.log('DEBUG setOverride test:', JSON.stringify(result.dbg, null, 2));
     assert(result.stored.theme && result.stored.theme.accent === '#ff0000',
       'Override not persisted to localStorage');
     assert(result.cssVal === '#ff0000',
