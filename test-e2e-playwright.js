@@ -1263,8 +1263,7 @@ async function run() {
 
   // --- Group: Show Neighbors (#484 fix) ---
 
-  await test('Show Neighbors displays neighbor markers on map (affinity API)', async () => {
-    // Mock the neighbor API to return known neighbors
+  await test('Show Neighbors populates neighborPubkeys from affinity API', async () => {
     const testPubkey = 'aabbccdd11223344556677889900aabbccddeeff00112233445566778899001122';
     const neighborPubkey1 = '1111111111111111111111111111111111111111111111111111111111111111';
     const neighborPubkey2 = '2222222222222222222222222222222222222222222222222222222222222222';
@@ -1287,31 +1286,26 @@ async function run() {
     await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(1500);
 
-    // Call selectReferenceNode via the exposed window function
-    const neighborCount = await page.evaluate(async (pk) => {
-      if (typeof window._mapSelectRefNode === 'function') {
-        await window._mapSelectRefNode(pk, 'TestNode');
-        // Access the neighborPubkeys set from closure — check via the filter behavior
-        // The function sets neighborPubkeys internally; we verify by checking UI state
-        const refEl = document.getElementById('mcNeighborRef');
-        return refEl ? refEl.style.display : 'not-found';
-      }
-      return 'no-function';
-    }, testPubkey);
+    const result = await page.evaluate(async (args) => {
+      if (typeof window._mapSelectRefNode !== 'function') return { error: 'no _mapSelectRefNode' };
+      await window._mapSelectRefNode(args.pk, 'TestNode');
+      return { neighbors: window._mapGetNeighborPubkeys() };
+    }, { pk: testPubkey });
 
-    assert(neighborCount === 'block', `Reference node UI should be visible after selectReferenceNode, got: ${neighborCount}`);
+    assert(!result.error, result.error || '');
+    assert(result.neighbors.includes(neighborPubkey1), 'Should contain neighbor1');
+    assert(result.neighbors.includes(neighborPubkey2), 'Should contain neighbor2');
+    assert(result.neighbors.length === 2, `Expected 2 neighbors, got ${result.neighbors.length}`);
     await page.unroute(`**/api/nodes/${testPubkey}/neighbors*`);
   });
 
   await test('Show Neighbors resolves correct node on hash collision via affinity API', async () => {
-    // Two nodes share prefix "C0" — affinity API disambiguates
     const nodeA = 'c0dedad4208acb6cbe44b848943fc6d3c5d43cf38a21e48b43826a70862980e4';
     const nodeB = 'c0f1a2b3000000000000000000000000000000000000000000000000000000ff';
     const neighborR1 = 'r1aaaaaa000000000000000000000000000000000000000000000000000000aa';
     const neighborR2 = 'r2bbbbbb000000000000000000000000000000000000000000000000000000bb';
     const neighborR4 = 'r4dddddd000000000000000000000000000000000000000000000000000000dd';
 
-    // Mock API for Node A — returns R1, R2 as neighbors (NOT R4)
     await page.route(`**/api/nodes/${nodeA}/neighbors*`, route => {
       route.fulfill({
         status: 200,
@@ -1327,7 +1321,6 @@ async function run() {
       });
     });
 
-    // Mock API for Node B — returns R4 as neighbor (NOT R1, R2)
     await page.route(`**/api/nodes/${nodeB}/neighbors*`, route => {
       route.fulfill({
         status: 200,
@@ -1345,31 +1338,23 @@ async function run() {
     await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(1500);
 
-    // Select Node A — should get R1, R2 as neighbors
+    // Select Node A — should get R1, R2 but NOT R4
     const resultA = await page.evaluate(async (pk) => {
-      if (typeof window._mapSelectRefNode !== 'function') return { error: 'no-function' };
       await window._mapSelectRefNode(pk, 'NodeA');
-      // Access neighborPubkeys through a test hook — we need to verify the Set contents
-      // Since neighborPubkeys is in closure, test via filtering behavior
-      return { selected: true };
+      return window._mapGetNeighborPubkeys();
     }, nodeA);
-    assert(resultA.selected, 'Should select Node A as reference');
+    assert(resultA.includes(neighborR1), 'Node A should have R1');
+    assert(resultA.includes(neighborR2), 'Node A should have R2');
+    assert(!resultA.includes(neighborR4), 'Node A should NOT have R4');
 
-    // Verify Node A's neighbors are set correctly by checking the API was called
-    const apiCallsA = await page.evaluate(() => {
-      return performance.getEntriesByType('resource')
-        .filter(r => r.name.includes('/neighbors'))
-        .map(r => r.name);
-    });
-    // The fetch to nodeA/neighbors should have been intercepted
-    assert(apiCallsA.length >= 0, 'API calls tracked'); // resource timing may not capture intercepted routes
-
-    // Select Node B — should get R4 as neighbor (different from A)
+    // Select Node B — should get R4 but NOT R1, R2
     const resultB = await page.evaluate(async (pk) => {
       await window._mapSelectRefNode(pk, 'NodeB');
-      return { selected: true };
+      return window._mapGetNeighborPubkeys();
     }, nodeB);
-    assert(resultB.selected, 'Should select Node B as reference');
+    assert(resultB.includes(neighborR4), 'Node B should have R4');
+    assert(!resultB.includes(neighborR1), 'Node B should NOT have R1');
+    assert(!resultB.includes(neighborR2), 'Node B should NOT have R2');
 
     await page.unroute(`**/api/nodes/${nodeA}/neighbors*`);
     await page.unroute(`**/api/nodes/${nodeB}/neighbors*`);
@@ -1377,35 +1362,29 @@ async function run() {
 
   await test('Show Neighbors falls back to path walking when affinity API returns empty', async () => {
     const testPubkey = 'fallbacktest0000000000000000000000000000000000000000000000000000';
+    const hopBefore = 'aaaa000000000000000000000000000000000000000000000000000000000000';
+    const hopAfter = 'bbbb000000000000000000000000000000000000000000000000000000000000';
 
-    // Mock the neighbor API to return empty neighbors (cold start scenario)
     await page.route(`**/api/nodes/${testPubkey}/neighbors*`, route => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-          node: testPubkey,
-          neighbors: [],
-          total_observations: 0
-        })
+        body: JSON.stringify({ node: testPubkey, neighbors: [], total_observations: 0 })
       });
     });
 
-    // Also mock the paths API (fallback) to return path data
     await page.route(`**/api/nodes/${testPubkey}/paths*`, route => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          paths: [
-            {
-              hops: [
-                { pubkey: 'aaaa000000000000000000000000000000000000000000000000000000000000', name: 'HopBefore' },
-                { pubkey: testPubkey, name: 'Self' },
-                { pubkey: 'bbbb000000000000000000000000000000000000000000000000000000000000', name: 'HopAfter' }
-              ]
-            }
-          ]
+          paths: [{
+            hops: [
+              { pubkey: hopBefore, name: 'HopBefore' },
+              { pubkey: testPubkey, name: 'Self' },
+              { pubkey: hopAfter, name: 'HopAfter' }
+            ]
+          }]
         })
       });
     });
@@ -1414,13 +1393,15 @@ async function run() {
     await page.waitForTimeout(1500);
 
     const result = await page.evaluate(async (pk) => {
-      if (typeof window._mapSelectRefNode !== 'function') return 'no-function';
+      if (typeof window._mapSelectRefNode !== 'function') return { error: 'no-function' };
       await window._mapSelectRefNode(pk, 'FallbackNode');
-      const refEl = document.getElementById('mcNeighborRef');
-      return refEl ? refEl.style.display : 'not-found';
+      return { neighbors: window._mapGetNeighborPubkeys() };
     }, testPubkey);
 
-    assert(result === 'block', `Fallback: reference node UI should be visible, got: ${result}`);
+    assert(!result.error, result.error || '');
+    assert(result.neighbors.includes(hopBefore), 'Fallback should find hopBefore');
+    assert(result.neighbors.includes(hopAfter), 'Fallback should find hopAfter');
+    assert(result.neighbors.length === 2, `Expected 2 fallback neighbors, got ${result.neighbors.length}`);
     await page.unroute(`**/api/nodes/${testPubkey}/neighbors*`);
     await page.unroute(`**/api/nodes/${testPubkey}/paths*`);
   });

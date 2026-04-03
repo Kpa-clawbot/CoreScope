@@ -32,7 +32,7 @@ async function run() {
 
   console.log(`\nRunning Show Neighbors tests against ${BASE}\n`);
 
-  await test('Show Neighbors calls affinity API and sets neighborPubkeys', async () => {
+  await test('Show Neighbors calls affinity API and populates neighborPubkeys', async () => {
     const testPubkey = 'aabbccdd11223344556677889900aabbccddeeff00112233445566778899001122';
     const neighborPubkey1 = '1111111111111111111111111111111111111111111111111111111111111111';
     const neighborPubkey2 = '2222222222222222222222222222222222222222222222222222222222222222';
@@ -57,16 +57,18 @@ async function run() {
     await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2000);
 
-    const result = await page.evaluate(async (pk) => {
+    const result = await page.evaluate(async (args) => {
       if (typeof window._mapSelectRefNode !== 'function') return { error: 'no _mapSelectRefNode function' };
-      await window._mapSelectRefNode(pk, 'TestNode');
-      const refEl = document.getElementById('mcNeighborRef');
-      return { refVisible: refEl ? refEl.style.display : 'not-found' };
-    }, testPubkey);
+      if (typeof window._mapGetNeighborPubkeys !== 'function') return { error: 'no _mapGetNeighborPubkeys function' };
+      await window._mapSelectRefNode(args.pk, 'TestNode');
+      return { neighbors: window._mapGetNeighborPubkeys() };
+    }, { pk: testPubkey });
 
     assert(!result.error, result.error || '');
-    assert(result.refVisible === 'block', `Reference node UI should be visible, got: ${result.refVisible}`);
     assert(apiCalled, 'The /neighbors API should have been called');
+    assert(result.neighbors.includes(neighborPubkey1), `Should contain neighbor1, got: ${JSON.stringify(result.neighbors)}`);
+    assert(result.neighbors.includes(neighborPubkey2), `Should contain neighbor2, got: ${JSON.stringify(result.neighbors)}`);
+    assert(result.neighbors.length === 2, `Should have exactly 2 neighbors, got ${result.neighbors.length}`);
     await page.unroute(`**/api/nodes/${testPubkey}/neighbors*`);
   });
 
@@ -77,10 +79,7 @@ async function run() {
     const neighborR2 = 'r2bbbbbb000000000000000000000000000000000000000000000000000000bb';
     const neighborR4 = 'r4dddddd000000000000000000000000000000000000000000000000000000dd';
 
-    let apiCalledA = false, apiCalledB = false;
-
     await page.route(`**/api/nodes/${nodeA}/neighbors*`, route => {
-      apiCalledA = true;
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -96,7 +95,6 @@ async function run() {
     });
 
     await page.route(`**/api/nodes/${nodeB}/neighbors*`, route => {
-      apiCalledB = true;
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -113,17 +111,23 @@ async function run() {
     await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2000);
 
-    // Select Node A — should call nodeA's neighbor API
-    await page.evaluate(async (pk) => {
+    // Select Node A — should get R1, R2 but NOT R4
+    const resultA = await page.evaluate(async (pk) => {
       await window._mapSelectRefNode(pk, 'NodeA');
+      return window._mapGetNeighborPubkeys();
     }, nodeA);
-    assert(apiCalledA, 'Should call neighbor API for Node A');
+    assert(resultA.includes(neighborR1), 'Node A should have R1 as neighbor');
+    assert(resultA.includes(neighborR2), 'Node A should have R2 as neighbor');
+    assert(!resultA.includes(neighborR4), 'Node A should NOT have R4 (that belongs to Node B)');
 
-    // Select Node B — should call nodeB's neighbor API
-    await page.evaluate(async (pk) => {
+    // Select Node B — should get R4 but NOT R1, R2
+    const resultB = await page.evaluate(async (pk) => {
       await window._mapSelectRefNode(pk, 'NodeB');
+      return window._mapGetNeighborPubkeys();
     }, nodeB);
-    assert(apiCalledB, 'Should call neighbor API for Node B');
+    assert(resultB.includes(neighborR4), 'Node B should have R4 as neighbor');
+    assert(!resultB.includes(neighborR1), 'Node B should NOT have R1 (that belongs to Node A)');
+    assert(!resultB.includes(neighborR2), 'Node B should NOT have R2 (that belongs to Node A)');
 
     await page.unroute(`**/api/nodes/${nodeA}/neighbors*`);
     await page.unroute(`**/api/nodes/${nodeB}/neighbors*`);
@@ -167,28 +171,28 @@ async function run() {
     await page.waitForTimeout(2000);
 
     const result = await page.evaluate(async (pk) => {
-      if (typeof window._mapSelectRefNode !== 'function') return 'no-function';
+      if (typeof window._mapSelectRefNode !== 'function') return { error: 'no-function' };
       await window._mapSelectRefNode(pk, 'FallbackNode');
-      const refEl = document.getElementById('mcNeighborRef');
-      return refEl ? refEl.style.display : 'not-found';
+      return { neighbors: window._mapGetNeighborPubkeys() };
     }, testPubkey);
 
-    assert(result === 'block', `Fallback: reference node UI should be visible, got: ${result}`);
+    assert(!result.error, result.error || '');
     assert(neighborApiCalled, 'Should try neighbor API first');
     assert(pathsApiCalled, 'Should fall back to paths API when neighbors empty');
+    assert(result.neighbors.includes(hopBefore), 'Fallback should find hopBefore as neighbor');
+    assert(result.neighbors.includes(hopAfter), 'Fallback should find hopAfter as neighbor');
+    assert(result.neighbors.length === 2, `Fallback should find exactly 2 neighbors, got ${result.neighbors.length}`);
     await page.unroute(`**/api/nodes/${testPubkey}/neighbors*`);
     await page.unroute(`**/api/nodes/${testPubkey}/paths*`);
   });
 
-  await test('Show Neighbors includes ambiguous candidates', async () => {
+  await test('Show Neighbors includes ambiguous candidates in neighborPubkeys', async () => {
     const testPubkey = 'ambigtest000000000000000000000000000000000000000000000000000000';
     const candidate1 = 'a3b4c500000000000000000000000000000000000000000000000000000000';
     const candidate2 = 'a3f0e100000000000000000000000000000000000000000000000000000000';
     const knownNeighbor = 'b7e8f9a000000000000000000000000000000000000000000000000000000000';
 
-    let apiCalled = false;
     await page.route(`**/api/nodes/${testPubkey}/neighbors*`, route => {
-      apiCalled = true;
       route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -212,15 +216,15 @@ async function run() {
     await page.waitForTimeout(2000);
 
     const result = await page.evaluate(async (pk) => {
-      if (typeof window._mapSelectRefNode !== 'function') return { error: 'no-function' };
       await window._mapSelectRefNode(pk, 'AmbigNode');
-      const refEl = document.getElementById('mcNeighborRef');
-      return { refVisible: refEl ? refEl.style.display : 'not-found' };
+      return window._mapGetNeighborPubkeys();
     }, testPubkey);
 
-    assert(!result.error, result.error || '');
-    assert(result.refVisible === 'block', `Reference node UI should show, got: ${result.refVisible}`);
-    assert(apiCalled, 'Neighbor API should be called');
+    // Should include the known neighbor AND both ambiguous candidates
+    assert(result.includes(knownNeighbor), 'Should include known neighbor');
+    assert(result.includes(candidate1), 'Should include ambiguous candidate 1');
+    assert(result.includes(candidate2), 'Should include ambiguous candidate 2');
+    assert(result.length === 3, `Should have 3 neighbors (1 known + 2 candidates), got ${result.length}`);
     await page.unroute(`**/api/nodes/${testPubkey}/neighbors*`);
   });
 

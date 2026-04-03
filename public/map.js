@@ -751,14 +751,13 @@
     try {
       // Use affinity-based neighbor API (server-side disambiguation) instead of
       // client-side path walking which fails on hash collisions (#484)
-      const resp = await fetch('/api/nodes/' + pubkey + '/neighbors?min_count=3');
-      const data = await resp.json();
+      const data = await api('/nodes/' + pubkey + '/neighbors?min_count=3');
       for (const n of (data.neighbors || [])) {
         if (n.pubkey) neighborPubkeys.add(n.pubkey);
         // For ambiguous edges, include all candidates (better to show extra than miss)
         if (n.candidates) n.candidates.forEach(function(c) { if (c.pubkey) neighborPubkeys.add(c.pubkey); });
       }
-      // If affinity data is insufficient, fall back to geo-centroid path walking
+      // If affinity data is insufficient, fall back to client-side path walking
       if (neighborPubkeys.size === 0) {
         const pathData = await api('/nodes/' + pubkey + '/paths');
         const paths = pathData.paths || [];
@@ -789,8 +788,9 @@
     if (cb) cb.checked = true;
     renderMarkers();
   }
-  // Expose for popup onclick
+  // Expose for popup onclick and testing
   window._mapSelectRefNode = selectReferenceNode;
+  window._mapGetNeighborPubkeys = function() { return neighborPubkeys ? Array.from(neighborPubkeys) : []; };
 
   function buildPopup(node) {
     const key = node.public_key ? truncate(node.public_key, 16) : '—';
@@ -849,6 +849,7 @@
     selectedReferenceNode = null;
     neighborPubkeys = null;
     delete window._mapSelectRefNode;
+    delete window._mapGetNeighborPubkeys;
   }
 
   function toggleHeatmap(on) {
