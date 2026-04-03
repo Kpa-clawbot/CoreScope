@@ -362,6 +362,12 @@ One logical change per commit. Each commit is deployable. Each commit has its te
 - Tests: `test-{feature}.js` in repo root
 - No build step, no transpilation — write ES2020 for server, ES5/6 for frontend (broad browser support)
 
+### Deep Linking
+All new UI states that a user might want to share or bookmark MUST be reflected in the URL hash.
+This includes: tabs, filters, selected items, view modes. Use query parameters on the hash
+(e.g., `#/packets?observer=ABC&timeRange=24h`) for filter state.
+Existing patterns: `#/nodes/{pubkey}?section=node-neighbors`, `#/analytics?tab=collisions`, `#/packets/{hash}`.
+
 ## What NOT to Do
 - **Don't check in private information** — no names, API keys, tokens, passwords, IP addresses, personal data, or any identifying information. This is a PUBLIC repo.
 - Don't add npm dependencies without asking
