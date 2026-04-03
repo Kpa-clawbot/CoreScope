@@ -1868,9 +1868,13 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
         </div>
         <div id="ngStats" class="stat-row" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px"></div>
         <div style="position:relative;border:1px solid var(--border);border-radius:6px;overflow:hidden">
-          <canvas id="ngCanvas" width="900" height="600" style="width:100%;height:600px;cursor:grab" role="img" aria-label="Neighbor affinity graph visualization — interactive force-directed network topology" tabindex="0"></canvas>
+          <canvas id="ngCanvas" width="900" height="600" style="width:100%;height:600px;cursor:grab;outline-offset:2px" role="img" aria-label="Neighbor affinity graph visualization — interactive force-directed network topology" tabindex="0"></canvas>
           <div id="ngTooltip" style="position:absolute;display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,0.2)"></div>
         </div>
+        <details id="ngAccessibleList" style="margin-top:12px">
+          <summary style="cursor:pointer;font-size:13px;color:var(--text-secondary)">📋 Text-based neighbor list (accessible alternative)</summary>
+          <div id="ngTextList" style="font-size:12px;max-height:300px;overflow-y:auto;padding:8px;background:var(--bg-secondary);border-radius:4px;margin-top:4px"></div>
+        </details>
       </div>`;
 
     // Role checkboxes
@@ -1976,6 +1980,48 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       <div class="stat-card"><div class="stat-value">${avgScore.toFixed(2)}</div><div class="stat-label">Avg Score</div></div>
       <div class="stat-card"><div class="stat-value">${resolved.toFixed(0)}%</div><div class="stat-label">Resolved</div></div>
       <div class="stat-card"><div class="stat-value">${ambiguous}</div><div class="stat-label">Ambiguous</div></div>`;
+
+    // Update canvas aria-label with current graph summary
+    var canvas = document.getElementById('ngCanvas');
+    if (canvas) {
+      canvas.setAttribute('aria-label', 'Neighbor affinity graph: ' + nodes.length + ' nodes, ' + edges.length + ' edges, ' + resolved.toFixed(0) + '% resolved. Use arrow keys to pan, +/- to zoom, 0 to reset.');
+    }
+
+    // Update accessible text list
+    updateNGTextList(st);
+  }
+
+  function updateNGTextList(st) {
+    var listEl = document.getElementById('ngTextList');
+    if (!listEl) return;
+    var nodes = st.nodes, edges = st.edges;
+    if (nodes.length === 0) {
+      listEl.innerHTML = '<p class="text-muted">No nodes to display.</p>';
+      return;
+    }
+    // Build adjacency for text list
+    var adj = {};
+    edges.forEach(function(e) {
+      if (!adj[e.source]) adj[e.source] = [];
+      if (!adj[e.target]) adj[e.target] = [];
+      adj[e.source].push({ pk: e.target, score: e.score, ambiguous: e.ambiguous });
+      adj[e.target].push({ pk: e.source, score: e.score, ambiguous: e.ambiguous });
+    });
+    var nodeMap = {};
+    nodes.forEach(function(n) { nodeMap[n.pubkey] = n; });
+    var html = '<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border)">Node</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border)">Role</th><th style="text-align:left;padding:4px;border-bottom:1px solid var(--border)">Neighbors</th></tr></thead><tbody>';
+    nodes.slice().sort(function(a, b) { return (a.name || a.pubkey).localeCompare(b.name || b.pubkey); }).forEach(function(n) {
+      var neighbors = (adj[n.pubkey] || []).map(function(nb) {
+        var peer = nodeMap[nb.pk];
+        var name = peer ? (peer.name || nb.pk.slice(0, 8)) : nb.pk.slice(0, 8);
+        var conf = nb.ambiguous ? ' ⚠' : (nb.score >= 0.5 ? ' ●' : ' ○');
+        return esc(name) + conf;
+      }).join(', ');
+      html += '<tr><td style="padding:4px;border-bottom:1px solid var(--border)">' + esc(n.name || n.pubkey.slice(0, 12)) + '</td><td style="padding:4px;border-bottom:1px solid var(--border)">' + esc(n.role || 'unknown') + '</td><td style="padding:4px;border-bottom:1px solid var(--border)">' + (neighbors || '<em>none</em>') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '<p style="margin-top:8px;font-size:11px;color:var(--text-secondary)">● = high confidence (score ≥ 0.5), ○ = low confidence, ⚠ = ambiguous/unresolved</p>';
+    listEl.innerHTML = html;
   }
 
   function startGraphRenderer() {
@@ -2212,7 +2258,9 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
         ctx.lineTo(b.x, b.y);
         ctx.strokeStyle = e.ambiguous ? 'rgba(255,200,0,0.4)' : 'rgba(150,150,150,0.35)';
         ctx.lineWidth = Math.max(0.5, e.score * 4);
+        if (e.ambiguous) { ctx.setLineDash([4, 4]); } else { ctx.setLineDash([]); }
         ctx.stroke();
+        ctx.setLineDash([]);
       }
 
       // Nodes

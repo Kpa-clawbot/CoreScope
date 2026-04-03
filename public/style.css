@@ -1933,3 +1933,12 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   .compare-select { min-width: auto; width: 100%; }
   .compare-summary { grid-template-columns: 1fr; }
 }
+
+/* Neighbor graph canvas focus indicator for keyboard navigation */
+#ngCanvas:focus {
+  outline: 2px solid var(--link-color, #60a5fa);
+  outline-offset: 2px;
+}
+#ngCanvas:focus:not(:focus-visible) {
+  outline: none;
+}

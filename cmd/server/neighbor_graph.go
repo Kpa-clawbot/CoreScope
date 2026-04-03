@@ -220,14 +220,13 @@ func extractFromNode(tx *StoreTx) string {
 	if err := jsonUnmarshalFast(tx.DecodedJSON, &decoded); err != nil {
 		return ""
 	}
-	if v, ok := decoded["from_node"]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	if v, ok := decoded["from"]; ok {
-		if s, ok := v.(string); ok {
-			return s
+	// ADVERTs store the originator pubkey as "pubKey"; other packets may use
+	// "from_node" or "from".  Check all three so we never miss the originator.
+	for _, field := range []string{"pubKey", "from_node", "from"} {
+		if v, ok := decoded[field]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
 		}
 	}
 	return ""

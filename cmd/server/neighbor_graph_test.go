@@ -622,6 +622,83 @@ func TestBuildNeighborGraph_ADVERTOnlyConstraint(t *testing.T) {
 	}
 }
 
+// ngPubKeyJSON creates decoded JSON using the real ADVERT format ("pubKey" field).
+func ngPubKeyJSON(pubkey string) string {
+	b, _ := json.Marshal(map[string]string{"pubKey": pubkey})
+	return string(b)
+}
+
+func TestBuildNeighborGraph_AdvertPubKeyField(t *testing.T) {
+	// Real ADVERTs use "pubKey", not "from_node". Verify the builder handles it.
+	nodes := []nodeInfo{
+		{PublicKey: "99bf37abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234", Name: "Originator"},
+		{PublicKey: "r1aabbccdd001122334455667788990011223344556677889900112233445566", Name: "R1"},
+		{PublicKey: "obs0000100112233445566778899001122334455667788990011223344556677", Name: "Observer"},
+	}
+	tx := ngMakeTx(1, 4, ngPubKeyJSON("99bf37abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234"), []*StoreObs{
+		ngMakeObs("obs0000100112233445566778899001122334455667788990011223344556677", `["r1"]`, nowStr, ngFloatPtr(-8.5)),
+	})
+	store := ngTestStore(nodes, []*StoreTx{tx})
+	g := BuildFromStore(store)
+
+	edges := g.AllEdges()
+	if len(edges) < 1 {
+		t.Fatalf("expected >=1 edges from ADVERT with pubKey field, got %d", len(edges))
+	}
+
+	// Check originator↔R1 edge exists
+	found := false
+	for _, e := range edges {
+		a := e.NodeA
+		b := e.NodeB
+		orig := "99bf37abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234"
+		r1 := "r1aabbccdd001122334455667788990011223344556677889900112233445566"
+		if (a == orig && b == r1) || (a == r1 && b == orig) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("missing originator↔R1 edge when using pubKey field (real ADVERT format)")
+	}
+}
+
+func TestBuildNeighborGraph_OneByteHashPrefixes(t *testing.T) {
+	// Real-world scenario: 1-byte hash prefixes with multiple candidates.
+	// Should create edges (possibly ambiguous) rather than empty graph.
+	nodes := []nodeInfo{
+		{PublicKey: "c0dedad400000000000000000000000000000000000000000000000000000001", Name: "NodeC0-1"},
+		{PublicKey: "c0dedad900000000000000000000000000000000000000000000000000000002", Name: "NodeC0-2"},
+		{PublicKey: "a3bbccdd00000000000000000000000000000000000000000000000000000003", Name: "Originator"},
+		{PublicKey: "obs1234500000000000000000000000000000000000000000000000000000004", Name: "Observer"},
+	}
+	// ADVERT from Originator with 1-byte path hop "c0"
+	tx := ngMakeTx(1, 4, ngPubKeyJSON("a3bbccdd00000000000000000000000000000000000000000000000000000003"), []*StoreObs{
+		ngMakeObs("obs1234500000000000000000000000000000000000000000000000000000004", `["c0"]`, nowStr, ngFloatPtr(-12)),
+	})
+	store := ngTestStore(nodes, []*StoreTx{tx})
+	g := BuildFromStore(store)
+
+	edges := g.AllEdges()
+	if len(edges) == 0 {
+		t.Fatal("expected non-empty edges for 1-byte hash prefix network, got 0")
+	}
+
+	// The originator↔c0 edge should be ambiguous (2 candidates match "c0")
+	var hasAmbig bool
+	for _, e := range edges {
+		if e.Ambiguous && e.Prefix == "c0" {
+			hasAmbig = true
+			if len(e.Candidates) != 2 {
+				t.Errorf("expected 2 candidates for prefix c0, got %d", len(e.Candidates))
+			}
+		}
+	}
+	if !hasAmbig {
+		// Could be resolved if one candidate was filtered — check we got some edge
+		t.Log("no ambiguous edge found, but edges exist — acceptable if resolved")
+	}
+}
+
 func TestNeighborGraph_CacheTTL(t *testing.T) {
 	g := NewNeighborGraph()
 	if !g.IsStale() {
