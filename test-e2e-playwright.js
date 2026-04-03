@@ -1261,6 +1261,7 @@ async function run() {
     await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
   });
 
+<<<<<<< HEAD
   // --- Group: Show Neighbors (#484 fix) ---
 
   await test('Show Neighbors populates neighborPubkeys from affinity API', async () => {
@@ -1405,6 +1406,66 @@ async function run() {
     await page.unroute(`**/api/nodes/${testPubkey}/neighbors*`);
     await page.unroute(`**/api/nodes/${testPubkey}/paths*`);
   });
+  // ─── Neighbor section tests ───────────────────────────────────────────────
+
+  await test('Node detail: neighbors section exists with correct columns', async () => {
+    // Navigate to a node detail page (use the first node in the list)
+    await page.goto(BASE + '/#/nodes');
+    await page.waitForSelector('.nodes-table-row', { timeout: 10000 });
+    // Get the first node's pubkey from the row link
+    const href = await page.$eval('.nodes-table-row a[href*="#/nodes/"]', el => el.getAttribute('href'));
+    const pubkey = href.split('/nodes/')[1];
+    await page.goto(BASE + '/#/nodes/' + pubkey);
+    await page.waitForSelector('#node-neighbors', { timeout: 10000 });
+    // Check the section exists
+    const header = await page.$eval('#fullNeighborsHeader', el => el.textContent);
+    assert(header.startsWith('Neighbors'), 'Header should start with "Neighbors", got: ' + header);
+    // Wait for content to load (either table or empty state)
+    await page.waitForFunction(() => {
+      const el = document.getElementById('fullNeighborsContent');
+      return el && !el.innerHTML.includes('spinner');
+    }, { timeout: 10000 });
+    const hasTable = await page.$('#fullNeighborsContent .data-table');
+    if (hasTable) {
+      // Check columns
+      const headers = await page.$$eval('#fullNeighborsContent thead th', ths => ths.map(t => t.textContent));
+      assert(headers.includes('Neighbor'), 'Should have Neighbor column');
+      assert(headers.includes('Role'), 'Should have Role column');
+      assert(headers.includes('Score'), 'Should have Score column');
+      assert(headers.includes('Obs'), 'Should have Obs column');
+      assert(headers.includes('Last Seen'), 'Should have Last Seen column');
+      assert(headers.includes('Conf'), 'Should have Conf column');
+    } else {
+      // Empty state
+      const text = await page.$eval('#fullNeighborsContent', el => el.textContent);
+      assert(text.includes('No neighbor data') || text.includes('Could not load'), 'Should show empty or error state');
+    }
+  });
+
+  await test('Node detail: neighbors section loading state', async () => {
+    // Navigate to a node - the section should initially show a spinner
+    await page.goto(BASE + '/#/nodes');
+    await page.waitForSelector('.nodes-table-row', { timeout: 10000 });
+    const href = await page.$eval('.nodes-table-row a[href*="#/nodes/"]', el => el.getAttribute('href'));
+    const pubkey = href.split('/nodes/')[1];
+    // Intercept API to delay response
+    await page.route('**/api/nodes/*/neighbors*', async route => {
+      await new Promise(r => setTimeout(r, 500));
+      await route.continue();
+    });
+    await page.goto(BASE + '/#/nodes/' + pubkey);
+    // Check spinner appears
+    const spinnerVisible = await page.waitForSelector('#fullNeighborsContent .spinner', { timeout: 5000 }).then(() => true).catch(() => false);
+    assert(spinnerVisible, 'Loading spinner should be visible initially');
+    // Wait for loading to finish
+    await page.waitForFunction(() => {
+      const el = document.getElementById('fullNeighborsContent');
+      return el && !el.innerHTML.includes('spinner');
+    }, { timeout: 15000 });
+    await page.unroute('**/api/nodes/*/neighbors*');
+  });
+
+  // ─── End neighbor section tests ───────────────────────────────────────────
 
   // Extract frontend coverage if instrumented server is running
   try {

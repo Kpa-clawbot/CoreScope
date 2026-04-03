@@ -175,6 +175,99 @@
     return `<div style="font-size:11px;color:var(--text-muted);margin:-2px 0 6px;padding:6px 10px;background:var(--surface-2);border-radius:4px;border-left:3px solid var(--status-yellow)">Adverts show varying hash sizes (<strong>${sizes.join('-byte, ')}-byte</strong>). This is a <a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--accent)">known bug</a> where automatic adverts ignore the configured multibyte path setting. Fixed in <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--accent)">repeater v1.14.1</a>.</div>`;
   }
 
+  // ─── Neighbor section helpers ───────────────────────────────────────────────
+
+  // Cache: pubkey → { data, ts }
+  var _neighborCache = {};
+
+  function getConfidenceIndicator(entry) {
+    if (entry.ambiguous) return { icon: '⚠️', label: 'AMBIGUOUS', cls: 'confidence-ambiguous' };
+    if (entry.count <= 1) return { icon: '🔴', label: 'LOW', cls: 'confidence-low' };
+    if (entry.score >= 0.5 && entry.count >= 3) return { icon: '🟢', label: 'HIGH', cls: 'confidence-high' };
+    return { icon: '🟡', label: 'MEDIUM', cls: 'confidence-medium' };
+  }
+
+  function renderNeighborRows(neighbors, limit) {
+    var items = limit ? neighbors.slice(0, limit) : neighbors;
+    return items.map(function(nb) {
+      var conf = getConfidenceIndicator(nb);
+      var name = nb.name || (nb.prefix + '… (unknown)');
+      var nameHtml = nb.pubkey
+        ? '<a href="#/nodes/' + encodeURIComponent(nb.pubkey) + '">' + escapeHtml(name) + '</a>'
+        : '<span class="text-muted">' + escapeHtml(name) + '</span>';
+      var role = nb.role || '—';
+      var roleBadge = nb.role
+        ? '<span class="badge" style="background:' + (ROLE_COLORS[nb.role] || 'var(--surface-2)') + ';color:#fff;font-size:10px">' + escapeHtml(role) + '</span>'
+        : '<span class="text-muted">—</span>';
+      var scoreTitle = 'Observations: ' + nb.count;
+      if (nb.avg_snr != null) scoreTitle += ' · Avg SNR: ' + Number(nb.avg_snr).toFixed(1) + ' dB';
+      var showOnMap = nb.pubkey
+        ? ' <button class="btn-link neighbor-show-map" data-pubkey="' + escapeHtml(nb.pubkey) + '" style="font-size:11px;padding:1px 6px;white-space:nowrap">📍 Map</button>'
+        : '';
+      return '<tr>' +
+        '<td style="font-weight:600">' + nameHtml + '</td>' +
+        '<td>' + roleBadge + '</td>' +
+        '<td title="' + escapeHtml(scoreTitle) + '">' + Number(nb.score).toFixed(2) + '</td>' +
+        '<td>' + nb.count + '</td>' +
+        '<td>' + renderNodeTimestampHtml(nb.last_seen) + '</td>' +
+        '<td><span title="' + conf.label + '">' + conf.icon + '</span></td>' +
+        '<td style="text-align:right">' + showOnMap + '</td>' +
+        '</tr>';
+    }).join('');
+  }
+
+  function renderNeighborTable(neighbors, limit) {
+    return '<table class="data-table" style="font-size:12px">' +
+      '<thead><tr><th>Neighbor</th><th>Role</th><th>Score</th><th>Obs</th><th>Last Seen</th><th>Conf</th><th></th></tr></thead>' +
+      '<tbody>' + renderNeighborRows(neighbors, limit) + '</tbody></table>';
+  }
+
+  function fetchAndRenderNeighbors(pubkey, containerId, opts) {
+    opts = opts || {};
+    var limit = opts.limit || 0;
+    var headerSelector = opts.headerSelector;
+    var viewAllPubkey = opts.viewAllPubkey;
+
+    // Check cache
+    var cached = _neighborCache[pubkey];
+    if (cached && (Date.now() - cached.ts < 300000)) { // 5 min cache
+      renderNeighborData(cached.data, containerId, limit, headerSelector, viewAllPubkey);
+      return;
+    }
+
+    api('/nodes/' + encodeURIComponent(pubkey) + '/neighbors', { ttl: CLIENT_TTL.nodeDetail }).then(function(data) {
+      _neighborCache[pubkey] = { data: data, ts: Date.now() };
+      renderNeighborData(data, containerId, limit, headerSelector, viewAllPubkey);
+    }).catch(function() {
+      var el = document.getElementById(containerId);
+      if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">Could not load neighbor data</div>';
+    });
+  }
+
+  function renderNeighborData(data, containerId, limit, headerSelector, viewAllPubkey) {
+    var el = document.getElementById(containerId);
+    if (!el) return;
+    if (!data || !data.neighbors || !data.neighbors.length) {
+      el.innerHTML = '<div class="text-muted" style="padding:8px">No neighbor data available yet. Neighbor relationships are built from observed packet paths over time.</div>';
+      if (headerSelector) {
+        var h = document.querySelector(headerSelector);
+        if (h) h.textContent = 'Neighbors (0)';
+      }
+      return;
+    }
+    if (headerSelector) {
+      var h = document.querySelector(headerSelector);
+      if (h) h.textContent = 'Neighbors (' + data.neighbors.length + ')';
+    }
+    var html = renderNeighborTable(data.neighbors, limit);
+    if (limit && data.neighbors.length > limit && viewAllPubkey) {
+      html += '<div style="margin-top:6px;text-align:right"><a href="#/nodes/' + encodeURIComponent(viewAllPubkey) + '?section=node-neighbors" style="font-size:12px">View all ' + data.neighbors.length + ' neighbors →</a></div>';
+    }
+    el.innerHTML = html;
+  }
+
+  // ─── End neighbor helpers ─────────────────────────────────────────────────
+
   let directNode = null; // set when navigating directly to #/nodes/:pubkey
 
   let regionChangeHandler = null;
@@ -347,6 +440,11 @@
           </table>
         </div>` : ''}
 
+        <div class="node-full-card" id="node-neighbors">
+          <h4 id="fullNeighborsHeader">Neighbors</h4>
+          <div id="fullNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
+        </div>
+
         <div class="node-full-card" id="fullPathsSection">
           <h4>Paths Through This Node</h4>
           <div id="fullPathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
@@ -426,6 +524,11 @@
           if (svg) { svg.style.display = 'block'; svg.style.margin = '0 auto'; }
         } catch {}
       }
+
+      // Fetch neighbors for this node (full-screen view)
+      fetchAndRenderNeighbors(n.public_key, 'fullNeighborsContent', {
+        headerSelector: '#fullNeighborsHeader'
+      });
 
       // Fetch paths through this node (full-screen view)
       api('/nodes/' + encodeURIComponent(n.public_key) + '/paths', { ttl: CLIENT_TTL.nodeDetail }).then(pathData => {
@@ -819,6 +922,11 @@
           </div>
         </div>` : ''}
 
+        <div class="node-detail-section" id="panelNeighborsSection">
+          <h4 id="panelNeighborsHeader">Neighbors</h4>
+          <div id="panelNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
+        </div>
+
         <div class="node-detail-section" id="pathsSection">
           <h4>Paths Through This Node</h4>
           <div id="pathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
@@ -888,6 +996,13 @@
         }
       } catch {}
     }
+
+    // Fetch neighbors for this node (condensed panel — top 5)
+    fetchAndRenderNeighbors(n.public_key, 'panelNeighborsContent', {
+      limit: 5,
+      headerSelector: '#panelNeighborsHeader',
+      viewAllPubkey: n.public_key
+    });
 
     // Fetch paths through this node
     api('/nodes/' + encodeURIComponent(n.public_key) + '/paths', { ttl: CLIENT_TTL.nodeDetail }).then(pathData => {
