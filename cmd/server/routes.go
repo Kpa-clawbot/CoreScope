@@ -292,8 +292,42 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 		"observer":  "#8b5cf6",
 	}, s.cfg.NodeColors, theme.NodeColors)
 
-	themeDark := mergeMap(map[string]interface{}{}, s.cfg.ThemeDark, theme.ThemeDark)
-	typeColors := mergeMap(map[string]interface{}{}, s.cfg.TypeColors, theme.TypeColors)
+	themeDark := mergeMap(map[string]interface{}{
+		"accent":      "#4a9eff",
+		"accentHover": "#6db3ff",
+		"navBg":       "#0f0f23",
+		"navBg2":      "#1a1a2e",
+		"navText":     "#ffffff",
+		"navTextMuted": "#cbd5e1",
+		"background":  "#0f0f23",
+		"text":        "#e2e8f0",
+		"textMuted":   "#a8b8cc",
+		"border":      "#334155",
+		"surface1":    "#1a1a2e",
+		"surface2":    "#232340",
+		"cardBg":      "#1a1a2e",
+		"contentBg":   "#0f0f23",
+		"detailBg":    "#232340",
+		"inputBg":     "#1e1e34",
+		"rowStripe":   "#1e1e34",
+		"rowHover":    "#2d2d50",
+		"selectedBg":  "#1e3a5f",
+		"statusGreen": "#22c55e",
+		"statusYellow": "#eab308",
+		"statusRed":   "#ef4444",
+	}, s.cfg.ThemeDark, theme.ThemeDark)
+	typeColors := mergeMap(map[string]interface{}{
+		"ADVERT":   "#22c55e",
+		"GRP_TXT":  "#3b82f6",
+		"TXT_MSG":  "#f59e0b",
+		"ACK":      "#6b7280",
+		"REQUEST":  "#a855f7",
+		"RESPONSE": "#06b6d4",
+		"TRACE":    "#ec4899",
+		"PATH":     "#14b8a6",
+		"ANON_REQ": "#f43f5e",
+		"UNKNOWN":  "#6b7280",
+	}, s.cfg.TypeColors, theme.TypeColors)
 
 	var home interface{}
 	if theme.Home != nil {

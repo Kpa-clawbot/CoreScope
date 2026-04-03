@@ -403,6 +403,62 @@ test('returns true when server has no default for overridden key', () => {
   assert.strictEqual(api.isOverridden('theme', 'accent'), true);
 });
 
+// ── Bug #518 Fixes ──
+
+test('phantom overrides cleaned on init — matching scalars removed', () => {
+  const { api, ls } = loadCustomizer();
+  const server = { theme: { accent: '#4a9eff', border: '#e2e5ea' }, typeColors: { ADVERT: '#22c55e' } };
+  ls.setItem('cs-theme-overrides', JSON.stringify({ theme: { accent: '#4a9eff' }, typeColors: { ADVERT: '#22c55e' } }));
+  api.init(server);
+  const delta = JSON.parse(ls.getItem('cs-theme-overrides') || '{}');
+  assert.ok(!delta.theme, 'phantom theme override should be cleaned');
+  assert.ok(!delta.typeColors, 'phantom typeColors override should be cleaned');
+});
+
+test('phantom overrides cleaned on init — matching arrays removed', () => {
+  const { api, ls } = loadCustomizer();
+  const server = { home: { steps: [{ emoji: '📡', title: 'Go', description: 'Do it' }] } };
+  ls.setItem('cs-theme-overrides', JSON.stringify({ home: { steps: [{ emoji: '📡', title: 'Go', description: 'Do it' }] } }));
+  api.init(server);
+  const delta = JSON.parse(ls.getItem('cs-theme-overrides') || '{}');
+  assert.ok(!delta.home, 'phantom home array override should be cleaned');
+});
+
+test('real overrides preserved after init cleanup', () => {
+  const { api, ls } = loadCustomizer();
+  const server = { theme: { accent: '#4a9eff' } };
+  ls.setItem('cs-theme-overrides', JSON.stringify({ theme: { accent: '#ff0000' } }));
+  api.init(server);
+  const delta = JSON.parse(ls.getItem('cs-theme-overrides'));
+  assert.strictEqual(delta.theme.accent, '#ff0000');
+});
+
+test('isOverridden handles array comparison via JSON.stringify', () => {
+  const { api, ls } = loadCustomizer();
+  const server = { home: { steps: [{ emoji: '📡', title: 'Go', description: 'Do' }] } };
+  ls.setItem('cs-theme-overrides', JSON.stringify({ home: { steps: [{ emoji: '📡', title: 'Go', description: 'Do' }] } }));
+  api.init(server);
+  assert.strictEqual(api.isOverridden('home', 'steps'), false, 'matching array should not be overridden');
+});
+
+test('isOverridden returns true for differing arrays', () => {
+  const { api, ls } = loadCustomizer();
+  const server = { home: { steps: [{ emoji: '📡', title: 'Go', description: 'Do' }] } };
+  ls.setItem('cs-theme-overrides', JSON.stringify({ home: { steps: [{ emoji: '🚀', title: 'New', description: 'Changed' }] } }));
+  api.init(server);
+  assert.strictEqual(api.isOverridden('home', 'steps'), true, 'differing array should be overridden');
+});
+
+test('setOverride prunes value matching server default', () => {
+  const { api, ls } = loadCustomizer();
+  const server = { theme: { accent: '#4a9eff' } };
+  api.init(server);
+  api.setOverride('theme', 'accent', '#4a9eff');
+  // debounce fires synchronously in sandbox
+  const delta = JSON.parse(ls.getItem('cs-theme-overrides') || '{}');
+  assert.ok(!delta.theme || !delta.theme.accent, 'matching value should be pruned after setOverride');
+});
+
 // ── Summary ──
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
