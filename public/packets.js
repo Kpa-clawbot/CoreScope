@@ -357,7 +357,7 @@
           if (pktTime && pktTime < cutoff) return false;
         }
         if (filters.type) { const types = filters.type.split(',').map(Number); if (!types.includes(p.payload_type)) return false; }
-        if (filters.observer) { const obsSet = new Set(filters.observer.split(',')); if (!obsSet.has(p.observer_id)) return false; }
+        if (filters.observer) { const obsSet = new Set(filters.observer.split(',')); if (!obsSet.has(p.observer_id) && !(p._children && p._children.some(c => obsSet.has(String(c.observer_id))))) return false; }
         if (filters.hash && p.hash !== filters.hash) return false;
         if (RegionFilter.getRegionParam()) {
           const selectedRegions = RegionFilter.getRegionParam().split(',');
@@ -1290,9 +1290,13 @@
       const types = filters.type.split(',').map(Number);
       displayPackets = displayPackets.filter(p => types.includes(p.payload_type));
     }
-    if (filters.observer && !groupByHash) {
+    if (filters.observer) {
       const obsIds = new Set(filters.observer.split(','));
-      displayPackets = displayPackets.filter(p => obsIds.has(p.observer_id));
+      displayPackets = displayPackets.filter(p => {
+        if (obsIds.has(p.observer_id)) return true;
+        if (p._children) return p._children.some(c => obsIds.has(String(c.observer_id)));
+        return false;
+      });
     }
 
     // Packet Filter Language

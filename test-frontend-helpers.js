@@ -2695,6 +2695,63 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
       'buildGroupRowHtml should use hoisted _observerFilterSet');
   });
 
+  test('observer filter in grouped mode includes packet when child matches (#537)', () => {
+    // The display filter should keep a grouped packet whose primary observer_id
+    // does NOT match, but one of its _children does.
+    const obsIds = new Set(['OBS_B']);
+    const packets = [
+      { observer_id: 'OBS_A', _children: [{ observer_id: 'OBS_A' }, { observer_id: 'OBS_B' }] },
+      { observer_id: 'OBS_C', _children: [{ observer_id: 'OBS_C' }] },
+    ];
+    const result = packets.filter(p => {
+      if (obsIds.has(p.observer_id)) return true;
+      if (p._children) return p._children.some(c => obsIds.has(String(c.observer_id)));
+      return false;
+    });
+    assert.strictEqual(result.length, 1, 'should keep packet with matching child observer');
+    assert.strictEqual(result[0].observer_id, 'OBS_A');
+  });
+
+  test('observer filter in grouped mode hides packet with no matching observations (#537)', () => {
+    const obsIds = new Set(['OBS_X']);
+    const packets = [
+      { observer_id: 'OBS_A', _children: [{ observer_id: 'OBS_A' }, { observer_id: 'OBS_B' }] },
+    ];
+    const result = packets.filter(p => {
+      if (obsIds.has(p.observer_id)) return true;
+      if (p._children) return p._children.some(c => obsIds.has(String(c.observer_id)));
+      return false;
+    });
+    assert.strictEqual(result.length, 0, 'should hide packet with no matching observers');
+  });
+
+  test('WS observer filter checks children for grouped packets (#537)', () => {
+    const filters = { observer: 'OBS_B' };
+    const obsSet = new Set(filters.observer.split(','));
+    const p = { observer_id: 'OBS_A', _children: [{ observer_id: 'OBS_B' }] };
+    const passes = obsSet.has(p.observer_id) || (p._children && p._children.some(c => obsSet.has(String(c.observer_id))));
+    assert.ok(passes, 'WS filter should pass grouped packet when child matches');
+
+    const p2 = { observer_id: 'OBS_C', _children: [{ observer_id: 'OBS_D' }] };
+    const passes2 = obsSet.has(p2.observer_id) || (p2._children && p2._children.some(c => obsSet.has(String(c.observer_id))));
+    assert.ok(!passes2, 'WS filter should reject grouped packet with no matching observers');
+  });
+
+  test('packets.js display filter checks _children for observer match (#537)', () => {
+    // Verify the actual source code has the children check
+    assert.ok(
+      packetsSource.includes('p._children) return p._children.some(c => obsIds.has(String(c.observer_id))'),
+      'display filter should check _children for observer match'
+    );
+  });
+
+  test('packets.js WS filter checks _children for observer match (#537)', () => {
+    assert.ok(
+      packetsSource.includes('p._children && p._children.some(c => obsSet.has(String(c.observer_id)))'),
+      'WS filter should check _children for observer match'
+    );
+  });
+
   test('buildFlatRowHtml has null-safe decoded_json', () => {
     const flatBuilderMatch = packetsSource.match(/function buildFlatRowHtml[\s\S]*?(?=\n  function )/);
     assert.ok(flatBuilderMatch, 'buildFlatRowHtml should exist');
