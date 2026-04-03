@@ -1837,7 +1837,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
         </div>
         <div id="ngStats" class="stat-row" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px"></div>
         <div style="position:relative;border:1px solid var(--border);border-radius:6px;overflow:hidden">
-          <canvas id="ngCanvas" width="900" height="600" style="width:100%;height:600px;cursor:grab"></canvas>
+          <canvas id="ngCanvas" width="900" height="600" style="width:100%;height:600px;cursor:grab" role="img" aria-label="Neighbor affinity graph visualization — interactive force-directed network topology" tabindex="0"></canvas>
           <div id="ngTooltip" style="position:absolute;display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:4px;padding:6px 10px;font-size:12px;pointer-events:none;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,0.2)"></div>
         </div>
       </div>`;
@@ -1913,7 +1913,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     // Filter edges
     _ngState.edges = _ngState.allEdges.filter(e => {
       if (e.score < minScore) return false;
-      if (conf === 'high' && e.ambiguous) return false;
+      if (conf === 'high' && (e.ambiguous || e.score < 0.5)) return false;
       if (conf === 'hide-ambiguous' && e.ambiguous) return false;
       return visiblePKs.has(e.source) && visiblePKs.has(e.target);
     });
@@ -2050,6 +2050,19 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       if (n) location.hash = '#/nodes/' + n.pubkey;
     });
 
+    canvas.addEventListener('keydown', function(e) {
+      const PAN_STEP = 30, ZOOM_STEP = 1.15;
+      switch (e.key) {
+        case 'ArrowLeft':  _ngState.panX += PAN_STEP; e.preventDefault(); break;
+        case 'ArrowRight': _ngState.panX -= PAN_STEP; e.preventDefault(); break;
+        case 'ArrowUp':    _ngState.panY += PAN_STEP; e.preventDefault(); break;
+        case 'ArrowDown':  _ngState.panY -= PAN_STEP; e.preventDefault(); break;
+        case '+': case '=': _ngState.zoom = Math.min(10, _ngState.zoom * ZOOM_STEP); e.preventDefault(); break;
+        case '-': case '_': _ngState.zoom = Math.max(0.1, _ngState.zoom / ZOOM_STEP); e.preventDefault(); break;
+        case '0':           _ngState.zoom = 1; _ngState.panX = 0; _ngState.panY = 0; e.preventDefault(); break;
+      }
+    });
+
     canvas.addEventListener('wheel', function(e) {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
@@ -2061,6 +2074,9 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       _ngState.panY = cy - (cy - _ngState.panY) * (newZoom / _ngState.zoom);
       _ngState.zoom = newZoom;
     }, { passive: false });
+
+    // Cache text color to avoid getComputedStyle every frame
+    const _labelColor = cssVar('--text-primary') || '#e0e0e0';
 
     // Force simulation + render loop
     function tick() {
@@ -2154,7 +2170,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
         // Label
         const label = n.name || (n.pubkey ? n.pubkey.slice(0, 8) + '…' : '');
         if (label && st.zoom > 0.4) {
-          ctx.fillStyle = cssVar('--text-primary') || '#e0e0e0';
+          ctx.fillStyle = _labelColor;
           ctx.font = '10px sans-serif';
           ctx.textAlign = 'center';
           ctx.fillText(label, n.x, n.y + n.radius + 12);
