@@ -4420,6 +4420,19 @@ console.log('\n=== app.js: routeTypeName/payloadTypeName edge cases ===');
   vm.runInContext(helperSource, ctx);
   const getParsedPath = ctx.window.getParsedPath;
   const getParsedDecoded = ctx.window.getParsedDecoded;
+  const clearParsedCache = ctx.window.clearParsedCache;
+
+  test('clearParsedCache removes cached properties and returns the object', () => {
+    const p = { path_json: '["A"]', decoded_json: '{"t":1}' };
+    getParsedPath(p);
+    getParsedDecoded(p);
+    assert.ok(p._parsedPath !== undefined);
+    assert.ok(p._parsedDecoded !== undefined);
+    const ret = clearParsedCache(p);
+    assert.strictEqual(ret, p, 'returns same object');
+    assert.strictEqual(p._parsedPath, undefined);
+    assert.strictEqual(p._parsedDecoded, undefined);
+  });
 
   test('observation packet gets its own path after cache invalidation', () => {
     const parent = { path_json: '["A","B"]', decoded_json: '{"type":"GRP_TXT"}' };
@@ -4429,8 +4442,7 @@ console.log('\n=== app.js: routeTypeName/payloadTypeName edge cases ===');
 
     // Simulate spread + fix (like packets.js does after issue #504)
     const obs = { ...parent, path_json: '["X","Y","Z"]', decoded_json: '{"type":"TXT_MSG"}' };
-    delete obs._parsedPath;
-    delete obs._parsedDecoded;
+    clearParsedCache(obs);
 
     // getParsedPath re-parses from obs's own path_json
     const obsPath = getParsedPath(obs);
@@ -4445,8 +4457,7 @@ console.log('\n=== app.js: routeTypeName/payloadTypeName edge cases ===');
     getParsedDecoded(parent);
 
     const obs = { ...parent, path_json: '["hop2","hop3"]', decoded_json: '{"type":"GRP_TXT","text":"hi"}' };
-    delete obs._parsedPath;
-    delete obs._parsedDecoded;
+    clearParsedCache(obs);
 
     assert.notDeepStrictEqual(getParsedPath(obs), getParsedPath(parent),
       'observation must have different path from parent');

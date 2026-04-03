@@ -269,8 +269,7 @@
             if (obs) {
               expandedHashes.add(h);
               const obsPacket = {...data.packet, observer_id: obs.observer_id, observer_name: obs.observer_name, snr: obs.snr, rssi: obs.rssi, path_json: obs.path_json, timestamp: obs.timestamp, first_seen: obs.timestamp};
-              delete obsPacket._parsedPath;
-              delete obsPacket._parsedDecoded;
+              clearParsedCache(obsPacket);
               selectPacket(obs.id, h, {packet: obsPacket, breakdown: data.breakdown, observations: data.observations}, obs.id);
             } else {
               selectPacket(data.packet.id, h, data);
@@ -503,7 +502,7 @@
         await Promise.all(multiObs.map(async (p) => {
           try {
             const d = await api(`/packets/${p.hash}`);
-            if (d?.observations) p._children = d.observations.map(o => { const c = {...d.packet, ...o, _isObservation: true}; delete c._parsedPath; delete c._parsedDecoded; return c; });
+            if (d?.observations) p._children = d.observations.map(o => clearParsedCache({...d.packet, ...o, _isObservation: true}));
           } catch {}
         }));
         // Flatten: replace grouped packets with individual observations
@@ -839,7 +838,7 @@
           try {
             const data = await api(`/packets/${p.hash}`);
             if (data?.packet && data.observations) {
-              p._children = data.observations.map(o => { const c = {...data.packet, ...o, _isObservation: true}; delete c._parsedPath; delete c._parsedDecoded; return c; });
+              p._children = data.observations.map(o => clearParsedCache({...data.packet, ...o, _isObservation: true}));
               p._fetchedData = data;
             }
           } catch {}
@@ -1012,7 +1011,7 @@
           if (child) {
             const parentData = group._fetchedData;
             const obsPacket = parentData ? {...parentData.packet, observer_id: child.observer_id, observer_name: child.observer_name, snr: child.snr, rssi: child.rssi, path_json: child.path_json, timestamp: child.timestamp, first_seen: child.timestamp} : child;
-            if (parentData) { delete obsPacket._parsedPath; delete obsPacket._parsedDecoded; }
+            if (parentData) { clearParsedCache(obsPacket); }
             selectPacket(child.id, parentHash, {packet: obsPacket, breakdown: parentData?.breakdown, observations: parentData?.observations}, child.id);
           }
         }
@@ -1982,7 +1981,7 @@
       if (!pkt) return;
       const group = packets.find(p => p.hash === hash);
       if (group && data.observations) {
-        group._children = data.observations.map(o => { const c = {...pkt, ...o, _isObservation: true}; delete c._parsedPath; delete c._parsedDecoded; return c; });
+        group._children = data.observations.map(o => clearParsedCache({...pkt, ...o, _isObservation: true}));
         group._fetchedData = data;
         // Sort children based on current sort mode
         sortGroupChildren(group);
