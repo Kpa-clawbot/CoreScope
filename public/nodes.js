@@ -264,6 +264,14 @@
       html += '<div style="margin-top:6px;text-align:right"><a href="#/nodes/' + encodeURIComponent(viewAllPubkey) + '?section=node-neighbors" style="font-size:12px">View all ' + data.neighbors.length + ' neighbors →</a></div>';
     }
     el.innerHTML = html;
+
+    // Wire up "Show on Map" buttons via event delegation
+    el.addEventListener('click', function(e) {
+      var btn = e.target.closest('.neighbor-show-map');
+      if (!btn) return;
+      var pk = btn.getAttribute('data-pubkey');
+      if (pk) location.hash = '#/map?node=' + encodeURIComponent(pk);
+    });
   }
 
   // ─── End neighbor helpers ─────────────────────────────────────────────────
