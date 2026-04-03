@@ -1175,7 +1175,7 @@ async function run() {
     // Set override BEFORE page load so _renderTheme sees it during init
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.evaluate(() => {
-      localStorage.setItem('cs-theme-overrides', JSON.stringify({ theme: { accent: '#ff0000' } }));
+      localStorage.setItem('cs-theme-overrides', JSON.stringify({ theme: { accent: '#ff0000' }, themeDark: { accent: '#ff0000' } }));
     });
     // Reload so customizer v2 initializes with the override in place
     await page.reload({ waitUntil: 'domcontentloaded' });
