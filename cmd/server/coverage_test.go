@@ -3772,3 +3772,42 @@ func TestIndexByNodePreCheck(t *testing.T) {
 		}
 	})
 }
+
+// BenchmarkIndexByNode measures indexByNode performance with and without pubkey
+// fields to demonstrate the strings.Contains pre-check optimization.
+func BenchmarkIndexByNode(b *testing.B) {
+	// Payload WITHOUT any pubkey fields — should be skipped via pre-check
+	noPubkey := `{"type":1,"msgId":42,"sender":"node1","data":"hello world"}`
+	// Payload WITH a pubkey field — requires JSON parse
+	withPubkey := `{"type":1,"msgId":42,"pubKey":"AABB","sender":"node1","data":"hello world"}`
+
+	b.Run("no_pubkey_skip", func(b *testing.B) {
+		store := &PacketStore{
+			byNode:     make(map[string][]*StoreTx),
+			nodeHashes: make(map[string]map[string]bool),
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tx := &StoreTx{
+				Hash:        fmt.Sprintf("hash-%d", i),
+				DecodedJSON: noPubkey,
+			}
+			store.indexByNode(tx)
+		}
+	})
+
+	b.Run("with_pubkey_parse", func(b *testing.B) {
+		store := &PacketStore{
+			byNode:     make(map[string][]*StoreTx),
+			nodeHashes: make(map[string]map[string]bool),
+		}
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			tx := &StoreTx{
+				Hash:        fmt.Sprintf("hash-%d", i),
+				DecodedJSON: withPubkey,
+			}
+			store.indexByNode(tx)
+		}
+	})
+}
