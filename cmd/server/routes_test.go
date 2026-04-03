@@ -1596,6 +1596,47 @@ func TestConfigThemeWithCustomConfig(t *testing.T) {
 	}
 }
 
+func TestConfigThemeHomeDefaults(t *testing.T) {
+	// When no home config is set, server should return built-in defaults
+	db := setupTestDB(t)
+	seedTestData(t, db)
+	cfg := &Config{Port: 3000} // no Home set
+	hub := NewHub()
+	srv := NewServer(db, cfg, hub)
+	router := mux.NewRouter()
+	srv.RegisterRoutes(router)
+
+	req := httptest.NewRequest("GET", "/api/config/theme", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	home, ok := body["home"].(map[string]interface{})
+	if !ok || home == nil {
+		t.Fatal("expected non-null home object in theme response")
+	}
+	if home["heroTitle"] != "CoreScope" {
+		t.Errorf("expected heroTitle=CoreScope, got %v", home["heroTitle"])
+	}
+	if home["heroSubtitle"] == nil {
+		t.Error("expected heroSubtitle in home defaults")
+	}
+	steps, ok := home["steps"].([]interface{})
+	if !ok || len(steps) == 0 {
+		t.Error("expected non-empty steps array in home defaults")
+	}
+	footerLinks, ok := home["footerLinks"].([]interface{})
+	if !ok || len(footerLinks) == 0 {
+		t.Error("expected non-empty footerLinks array in home defaults")
+	}
+}
+
 func TestConfigCacheWithCustomTTL(t *testing.T) {
 	db := setupTestDB(t)
 	seedTestData(t, db)

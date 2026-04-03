@@ -353,12 +353,21 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 		"UNKNOWN":  "#6b7280",
 	}, s.cfg.TypeColors, theme.TypeColors)
 
-	var home interface{}
-	if theme.Home != nil {
-		home = theme.Home
-	} else if s.cfg.Home != nil {
-		home = s.cfg.Home
+	defaultHome := map[string]interface{}{
+		"heroTitle":    "CoreScope",
+		"heroSubtitle": "Real-time MeshCore LoRa mesh network analyzer",
+		"steps": []interface{}{
+			map[string]interface{}{"emoji": "🔵", "title": "Connect via Bluetooth", "description": "Flash **BLE companion** firmware from [MeshCore Flasher](https://flasher.meshcore.co.uk/).\n- Screenless devices: default PIN `123456`\n- Screen devices: random PIN shown on display\n- If pairing fails: forget device, reboot, re-pair"},
+			map[string]interface{}{"emoji": "📻", "title": "Set the right frequency preset", "description": "**US Recommended:**\n`910.525 MHz · BW 62.5 kHz · SF 7 · CR 5`\nSelect **\"US Recommended\"** in the app or flasher."},
+			map[string]interface{}{"emoji": "📡", "title": "Advertise yourself", "description": "Tap the signal icon → **Flood** to broadcast your node to the mesh. Companions only advert when you trigger it manually."},
+			map[string]interface{}{"emoji": "🔁", "title": "Check \"Heard N repeats\"", "description": "- **\"Sent\"** = transmitted, no confirmation\n- **\"Heard 0 repeats\"** = no repeater picked it up\n- **\"Heard 1+ repeats\"** = you're on the mesh!"},
+		},
+		"footerLinks": []interface{}{
+			map[string]interface{}{"label": "📦 Packets", "url": "#/packets"},
+			map[string]interface{}{"label": "🗺️ Network Map", "url": "#/map"},
+		},
 	}
+	home := mergeMap(defaultHome, s.cfg.Home, theme.Home)
 
 	writeJSON(w, ThemeResponse{
 		Branding:   branding,

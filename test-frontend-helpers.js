@@ -1980,6 +1980,30 @@ console.log('\n=== customize-v2.js: core behavior ===');
     assert.strictEqual(effective.theme.navBg, '#222222');
   });
 
+  test('computeEffective provides home defaults when server home is null', () => {
+    const ctx = makeSandbox();
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    const server = { theme: { accent: '#111111' }, home: null };
+    const effective = v2.computeEffective(server, {});
+    assert.ok(effective.home, 'home should not be null');
+    assert.strictEqual(effective.home.heroTitle, 'CoreScope');
+    assert.ok(Array.isArray(effective.home.steps), 'steps should be an array');
+    assert.ok(effective.home.steps.length > 0, 'steps should not be empty');
+    assert.ok(Array.isArray(effective.home.footerLinks), 'footerLinks should be an array');
+  });
+
+  test('computeEffective merges user home overrides with defaults', () => {
+    const ctx = makeSandbox();
+    ctx.CustomEvent = function (type) { this.type = type; };
+    const v2 = loadCustomizeV2(ctx);
+    const server = { home: null };
+    const overrides = { home: { heroTitle: 'MyMesh' } };
+    const effective = v2.computeEffective(server, overrides);
+    assert.strictEqual(effective.home.heroTitle, 'MyMesh');
+    assert.ok(Array.isArray(effective.home.steps), 'steps should survive user override of heroTitle');
+  });
+
   test('isValidColor accepts hex, rgb, hsl, and named colors', () => {
     const ctx = makeSandbox();
     ctx.CustomEvent = function (type) { this.type = type; };
