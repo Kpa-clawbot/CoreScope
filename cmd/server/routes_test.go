@@ -3195,20 +3195,26 @@ func TestHashCollisionsMissingCoordinates(t *testing.T) {
 	}
 }
 
-// TestHashCollisionsExcludesZeroHashAndCompanions verifies that nodes with
-// hash_size==0 and companion nodes are excluded from collision buckets. (#441)
-func TestHashCollisionsExcludesZeroHashAndCompanions(t *testing.T) {
+// TestHashCollisionsOnlyRepeaters verifies that only repeater nodes
+// are included in collision analysis. Companions, rooms, sensors, and
+// hash_size==0 nodes are excluded — per firmware analysis, only repeaters
+// forward packets and appear in path[] arrays. (#441)
+func TestHashCollisionsOnlyRepeaters(t *testing.T) {
 	db := setupTestDB(t)
 
-	// Insert 3 nodes sharing the same 1-byte prefix "AA":
+	// Insert nodes sharing the same 1-byte prefix "AA":
 	//   1. repeater with hash_size=1 → should be counted
 	//   2. repeater with hash_size=0 (unknown) → should be excluded
 	//   3. companion with hash_size=1 → should be excluded
+	//   4. room with hash_size=1 → should be excluded
+	//   5. sensor with hash_size=1 → should be excluded
 	now := time.Now().Format("2006-01-02 15:04:05")
 	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen) VALUES
 		('aa11223344556677', 'Repeater1', 'repeater', ?),
 		('aa99887766554433', 'UnknownNode', 'repeater', ?),
-		('aadeadbeefcafe01', 'Companion1', 'companion', ?)`, now, now, now)
+		('aadeadbeefcafe01', 'Companion1', 'companion', ?),
+		('aabbcc1122334455', 'Room1', 'room', ?),
+		('aabbcc9988776655', 'Sensor1', 'sensor', ?)`, now, now, now, now, now)
 
 	// We also need a second repeater with hash_size=1 and same prefix to
 	// confirm that genuine collisions ARE still detected.
@@ -3229,6 +3235,8 @@ func TestHashCollisionsExcludesZeroHashAndCompanions(t *testing.T) {
 		"aa00112233445566": {HashSize: 1, AllSizes: map[int]bool{1: true}},
 		"aa99887766554433": {HashSize: 0, AllSizes: map[int]bool{}},       // unknown
 		"aadeadbeefcafe01": {HashSize: 1, AllSizes: map[int]bool{1: true}}, // companion
+		"aabbcc1122334455": {HashSize: 1, AllSizes: map[int]bool{1: true}}, // room
+		"aabbcc9988776655": {HashSize: 1, AllSizes: map[int]bool{1: true}}, // sensor
 	}
 	store.hashSizeInfoAt = time.Now()
 	store.hashSizeInfoMu.Unlock()
@@ -3251,7 +3259,7 @@ func TestHashCollisionsExcludesZeroHashAndCompanions(t *testing.T) {
 	}
 
 	// Only Repeater1 and Repeater2 should be in nodesForByte (hash_size=1, role=repeater).
-	// UnknownNode (hash_size=0) and Companion1 (role=companion) must be excluded.
+	// UnknownNode (hash_size=0), Companion1, Room1, Sensor1 must all be excluded.
 	nodesForByte := stats["nodes_for_byte"]
 	if nodesForByte != 2 {
 		t.Errorf("expected nodes_for_byte=2 (only repeaters with hash_size=1), got %v", nodesForByte)

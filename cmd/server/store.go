@@ -4527,7 +4527,7 @@ func (s *PacketStore) computeHashCollisions(region string) map[string]interface{
 		// (Fixes #441)
 		var nodesForByte []collisionNode
 		for _, cn := range allCNodes {
-			if cn.HashSize == bytes && cn.Role != "companion" {
+			if cn.HashSize == bytes && cn.Role == "repeater" {
 				nodesForByte = append(nodesForByte, cn)
 			}
 		}
