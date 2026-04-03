@@ -11,22 +11,64 @@ This spec defines a clean rework based on event-driven state management with a s
 These are agreed and final. Do not reinterpret or deviate.
 
 1. **Three state layers:** server defaults (immutable after fetch), user overrides (delta in localStorage), effective config (computed via merge, never stored directly).
-2. **Single data flow:** user action → debounce (~300ms) → write delta to localStorage → read back from localStorage → merge with server defaults → apply CSS variables. No shortcuts, no optimistic CSS updates.
+2. **Single data flow:** user action → debounce (~300ms) → write delta to localStorage → read back from localStorage → merge with server defaults → apply CSS variables. No shortcuts, no optimistic CSS updates (see Decision #12 for the one exception).
 3. **One localStorage key:** `cs-theme-overrides` — replaces the current 7 scattered keys (`meshcore-user-theme`, `meshcore-timestamp-mode`, `meshcore-timestamp-timezone`, `meshcore-timestamp-format`, `meshcore-timestamp-custom-format`, `meshcore-heatmap-opacity`, `meshcore-live-heatmap-opacity`).
 4. **Universal format:** same shape as the server's `ThemeResponse` plus additional keys. Works identically for user export, admin `theme.json`, and user import.
 5. **User overrides always win** in merge — `merge(serverDefaults, userOverrides)` = effective config.
 6. **Override indicator:** shown in customizer panel ONLY when override value differs from current server default.
-7. **Silent pruning:** if an override value matches the server default, remove it from the delta. Prune on page load (after fetching server config) and during each merge cycle. Keeps delta minimal.
+7. **No silent pruning:** overrides stay in localStorage until the user explicitly resets them (per-field reset or full reset). The delta may contain values that happen to match current server defaults — that's fine. User intent is preserved; nothing silently disappears.
 8. **Per-field reset:** remove a single key from the delta → re-merge → re-apply CSS.
 9. **Full reset:** `localStorage.removeItem('cs-theme-overrides')` → re-merge (effective = server defaults) → re-apply CSS.
 10. **Export = dump delta object as JSON download. Import = validate shape, write to localStorage, trigger re-merge.**
-11. **No CSS magic:** CSS variables ONLY update after the localStorage round-trip completes. No optimistic updates.
+11. **No CSS magic:** CSS variables ONLY update after the localStorage round-trip completes. No optimistic updates (see Decision #12 for the one exception).
+12. **Color picker optimistic CSS exception:** For continuous inputs (color pickers, sliders), CSS is updated optimistically during `input` events for visual responsiveness. The localStorage write only happens on `change` event (mouseup/blur). On `change`, the full pipeline runs: write → read → merge → apply (which will match the optimistic state). If the user refreshes mid-drag before `change` fires, the change is lost — this is acceptable. This is the ONLY exception to the localStorage-first rule.
+
+## Dark/Light Mode
+
+The customizer treats light and dark mode as separate override sections:
+
+- **`theme`** stores light mode color overrides.
+- **`themeDark`** stores dark mode color overrides.
+- When the user changes a color in the customizer, it writes to whichever section matches their current mode: `theme` if light, `themeDark` if dark.
+- The dark/light mode toggle preference (`meshcore-theme` localStorage key) is **separate** from the delta object. It is a view preference, not a customization — it is not stored in `cs-theme-overrides`.
+- The customizer UI shows color fields for the currently active mode only. Switching modes re-renders the color fields with values from the matching section.
+
+## Presets
+
+The existing preset themes are preserved and flow through the standard pipeline:
+
+**Available presets:** Default, Ocean, Forest, Sunset, Monochrome.
+
+**How presets work:**
+- Clicking a preset writes its values to localStorage via the same pipeline as any other change: preset data → `writeOverrides()` → read back → merge → apply CSS.
+- Presets are NOT special — they are pre-built delta objects applied through the standard flow.
+- Each preset contains both `theme` (light) and `themeDark` (dark) sections, plus any other overrides the preset defines (e.g., `nodeColors`).
+- **"Reset to Default"** = clear all overrides (equivalent to full reset: `localStorage.removeItem('cs-theme-overrides')` → re-merge → apply).
+
+**Preset data format:** Same shape as the delta object. Example:
+
+```json
+{
+  "theme": {
+    "accent": "#0077b6",
+    "navBg": "#03045e",
+    "background": "#f0f7fa"
+  },
+  "themeDark": {
+    "accent": "#48cae4",
+    "navBg": "#03045e",
+    "background": "#0a1929"
+  }
+}
+```
+
+Applying a preset **replaces** the entire delta (it's a `writeOverrides(presetData)`, not a merge onto existing overrides). The user can then further customize individual fields on top.
 
 ## Data Model
 
 ### Delta Object Format
 
-The user override delta is a sparse object — it only contains fields the user has explicitly changed that differ from server defaults. The shape mirrors the server's `ThemeResponse` (from `/api/config/theme`) plus additional client-only sections:
+The user override delta is a sparse object — it only contains fields the user has explicitly changed. The shape mirrors the server's `ThemeResponse` (from `/api/config/theme`) plus additional client-only sections:
 
 ```json
 {
@@ -103,7 +145,6 @@ The user override delta is a sparse object — it only contains fields the user 
 
 **Rules:**
 - All sections and keys are optional. An empty object `{}` means "no overrides."
-- Only keys that differ from server defaults are stored (enforced by pruning).
 - The `timestamps`, `heatmapOpacity`, and `liveHeatmapOpacity` keys are client-only extensions — not part of the server's `ThemeResponse`, but included in the universal format for portability.
 
 ### localStorage Key
@@ -111,6 +152,12 @@ The user override delta is a sparse object — it only contains fields the user 
 **Key:** `cs-theme-overrides`
 **Value:** JSON string of the delta object above.
 **Absent key** = no overrides = effective config equals server defaults.
+
+### Dark/Light Mode Preference
+
+**Key:** `meshcore-theme`
+**Value:** `"dark"` or `"light"` (or absent = follow system preference).
+**This key is NOT part of the delta object.** It controls which mode is active, not which colors are used. The delta stores overrides for both modes independently in `theme` and `themeDark`.
 
 ## Data Flow Diagrams
 
@@ -127,19 +174,24 @@ The user override delta is a sparse object — it only contains fields the user 
   serverDefaults      userOverrides (possibly migrated)
        │                     │
        ▼                     ▼
-  ┌──────────────────────────────┐
-  │ pruneOverrides(server, user) │ ← remove keys matching defaults
-  └──────────────┬───────────────┘
-                 │
-                 ▼ (pruned delta written back)
   ┌──────────────────────────────────────┐
-  │ computeEffective(server, prunedUser) │
+  │ computeEffective(server, userOverrides) │
+  └──────────────┬───────────────────────┘
+                 │
+                 ▼
+  ┌──────────────────────────────────────┐
+  │ window.SITE_CONFIG = effective       │ ← atomic assignment
   └──────────────┬───────────────────────┘
                  │
                  ▼
   ┌──────────────────────┐
-  │ applyCSS(effective)  │ ← sets CSS vars on :root
+  │ applyCSS(effective)  │ ← sets CSS vars on :root for current mode
   └──────────────────────┘
+                 │
+                 ▼
+  ┌──────────────────────────────┐
+  │ dispatch 'theme-changed'     │ ← bare signal, no payload
+  └──────────────────────────────┘
 ```
 
 ### User Change (e.g., picks new accent color)
@@ -159,9 +211,6 @@ The user override delta is a sparse object — it only contains fields the user 
        ├─► update delta object      ← set delta.theme.accent = '#ff0000'
        │       │
        │       ▼
-       ├─► pruneOverrides(server, delta)  ← if value matches server default, remove it
-       │       │
-       │       ▼
        ├─► writeOverrides(delta)    ← serialize & write to localStorage
        │       │
        │       ▼
@@ -171,8 +220,16 @@ The user override delta is a sparse object — it only contains fields the user 
        ├─► computeEffective(server, delta)
        │       │
        │       ▼
+       ├─► window.SITE_CONFIG = effective  ← atomic assignment
+       │       │
+       │       ▼
        └─► applyCSS(effective)      ← CSS vars updated on :root
+              │
+              ▼
+         dispatch 'theme-changed'
 ```
+
+**Color picker / slider exception:** During continuous `input` events (drag), CSS is updated optimistically (directly setting `--var` on `:root`) without the localStorage round-trip. The full pipeline above only runs on the `change` event (mouseup/blur).
 
 ### Per-Field Reset
 
@@ -188,7 +245,11 @@ The user override delta is a sparse object — it only contains fields the user 
        ├─► writeOverrides(delta)
        ├─► readOverrides()          ← round-trip
        ├─► computeEffective(server, delta)
+       ├─► window.SITE_CONFIG = effective
        └─► applyCSS(effective)
+              │
+              ▼
+         dispatch 'theme-changed'
 ```
 
 ### Full Reset
@@ -203,7 +264,13 @@ The user override delta is a sparse object — it only contains fields the user 
   computeEffective(server, {})    ← no overrides = server defaults
        │
        ▼
+  window.SITE_CONFIG = effective
+       │
+       ▼
   applyCSS(effective)
+       │
+       ▼
+  dispatch 'theme-changed'
 ```
 
 ### Export
@@ -230,7 +297,7 @@ The user override delta is a sparse object — it only contains fields the user 
   parse JSON
        │
        ▼
-  validateShape(parsed)           ← check structure, reject unknown top-level keys
+  validateShape(parsed)           ← check structure, validate values
        │
        ├─► invalid → show error, abort
        │
@@ -241,16 +308,16 @@ The user override delta is a sparse object — it only contains fields the user 
   readOverrides()                 ← round-trip
        │
        ▼
-  pruneOverrides(server, delta)   ← prune matches
+  computeEffective(server, delta)
        │
        ▼
-  writeOverrides(prunedDelta)
-       │
-       ▼
-  computeEffective(server, prunedDelta)
+  window.SITE_CONFIG = effective
        │
        ▼
   applyCSS(effective)
+       │
+       ▼
+  dispatch 'theme-changed'
 ```
 
 ## Function Signatures
@@ -263,6 +330,16 @@ Reads `cs-theme-overrides` from localStorage, parses as JSON. Returns empty obje
 
 Serializes `delta` to JSON and writes to `cs-theme-overrides` in localStorage. If `delta` is empty (`{}`), removes the key entirely.
 
+**Validation on write:**
+- Color values must match: `#hex` (3, 4, 6, or 8 digit), `rgb()`, `rgba()`, `hsl()`, `hsla()`, or CSS named colors. Invalid color values are rejected (not written) with `console.warn`.
+- Numeric values (`heatmapOpacity`, `liveHeatmapOpacity`) must be finite numbers in the range 0–1. Invalid values are rejected with `console.warn`.
+- Timestamp enum values are validated against known options (`defaultMode`: `'ago'`/`'absolute'`; `timezone`: `'local'`/`'utc'`; `formatPreset`: `'iso'`/`'iso-seconds'`/`'locale'`). Invalid values are rejected with `console.warn`.
+
+**Quota error handling:**
+- Wrap `localStorage.setItem` in try/catch.
+- On `QuotaExceededError`: show a visible warning to the user ("Storage full — changes may not be saved"), log to console.
+- Do NOT silently swallow the error.
+
 ### `computeEffective(serverConfig: object, userOverrides: object) → object`
 
 Deep merges `userOverrides` onto `serverConfig`. For each section (e.g., `theme`, `nodeColors`), if `userOverrides` has the section, its keys override the corresponding `serverConfig` keys. Top-level non-object keys (e.g., `heatmapOpacity`) are directly overridden.
@@ -274,41 +351,41 @@ Returns a new object — neither input is mutated.
 - Array sections (e.g., `home.steps`): full replacement (user array wins entirely, no element-level merge)
 - Scalar sections (e.g., `heatmapOpacity`): direct replacement
 
+After computing the effective config, writes it to `window.SITE_CONFIG` atomically (single assignment, not piecemeal mutations).
+
 ### `applyCSS(effectiveConfig: object) → void`
 
-Maps effective config values to CSS custom properties on `:root` using the existing `THEME_CSS_MAP` mapping. Also applies:
-- Node colors as `--node-{role}` variables
-- Type colors as `--type-{name}` variables
-- Font families as `--font-body` and `--font-mono`
-- Dark mode values via the existing media query / class mechanism
+Maps effective config values to CSS custom properties on `:root`. Behavior:
+
+1. Reads the current mode (light/dark) from the `meshcore-theme` localStorage key, falling back to system preference (`prefers-color-scheme`).
+2. Applies the matching section's values: `theme` for light mode, `themeDark` for dark mode.
+3. Also applies mode-independent values: node colors as `--node-{role}`, type colors as `--type-{name}`, font families as `--font-body` and `--font-mono`.
+4. Does NOT generate dual CSS rule blocks — only the current mode's values are applied to `:root`.
+5. On dark/light mode toggle, `applyCSS` is called again to re-apply the correct section.
 
 Updates the `<style>` element (create if absent, reuse if present). Dispatches a `theme-changed` CustomEvent on `window` after applying.
+
+### `theme-changed` Event
+
+- `theme-changed` is a bare `CustomEvent` with no payload (matches current behavior).
+- After each merge cycle, the effective config is written to `window.SITE_CONFIG` atomically (single assignment).
+- `window.SITE_CONFIG` is the canonical readable source for effective config throughout the app. All existing listeners that read from `SITE_CONFIG` continue to work without changes.
 
 ### `setOverride(section: string, key: string, value: any) → void`
 
 Sets a single override. For nested sections (e.g., `section='theme'`, `key='accent'`), sets `delta[section][key] = value`. For top-level scalars (e.g., `section=null`, `key='heatmapOpacity'`), sets `delta[key] = value`.
 
-Follows the full data flow: read → update → prune → write → read-back → merge → apply CSS. Debounced at ~300ms (the debounce wraps the write-through-to-CSS portion).
+Follows the full data flow: read → update → write → read-back → merge → apply CSS → dispatch `theme-changed`. Debounced at ~300ms (the debounce wraps the write-through-to-CSS portion).
 
 ### `clearOverride(section: string, key: string) → void`
 
 Removes a single key from the delta. If the section becomes empty after removal, removes the section too. Triggers the full data flow (no debounce — resets should feel instant).
 
-### `pruneOverrides(serverConfig: object, userOverrides: object) → object`
-
-Compares each key in `userOverrides` against `serverConfig`. If values are deeply equal, removes the key from the result. Returns a new pruned delta object. Removes empty sections.
-
-**Comparison rules:**
-- Strings: strict equality
-- Numbers: strict equality
-- Arrays: JSON.stringify comparison (order-sensitive)
-- Objects: recursive key-by-key comparison
-
 ### `migrateOldKeys() → object | null`
 
 One-time migration. Checks for any of the 7 legacy localStorage keys. If found:
 1. Reads all legacy values
-2. Maps them into the new delta format
+2. Maps them into the new delta format (see Migration Plan)
 3. Writes the merged delta to `cs-theme-overrides`
 4. Removes all 7 legacy keys
 5. Returns the migrated delta
@@ -321,7 +398,9 @@ Validates that an imported object conforms to the expected shape:
 - Must be a plain object
 - Top-level keys must be from the known set: `branding`, `theme`, `themeDark`, `nodeColors`, `typeColors`, `home`, `timestamps`, `heatmapOpacity`, `liveHeatmapOpacity`
 - Section values must be objects (where expected) or correct scalar types
-- Does NOT validate individual color values (any string is accepted)
+- Color values are validated: must match `#hex` (3, 4, 6, or 8 digit), `rgb()`, `rgba()`, `hsl()`, `hsla()`, or CSS named colors
+- Numeric values (`heatmapOpacity`, `liveHeatmapOpacity`) must be finite numbers in range 0–1
+- Timestamp enum values validated against known options
 
 Unknown top-level keys cause a warning but don't fail validation (forward compatibility).
 
@@ -331,27 +410,40 @@ On first page load, before the normal init flow:
 
 1. Check if `cs-theme-overrides` already exists → if yes, skip migration.
 2. Check if ANY of the 7 legacy keys exist in localStorage.
-3. If legacy keys found, build a delta object:
+3. If legacy keys found, build a delta object using the exact mapping below:
 
-| Legacy Key | Maps To |
-|---|---|
-| `meshcore-user-theme` | Parse as JSON, spread into appropriate sections (`theme`, `nodeColors`, `typeColors`, `branding`, `home`) |
-| `meshcore-timestamp-mode` | `timestamps.defaultMode` |
-| `meshcore-timestamp-timezone` | `timestamps.timezone` |
-| `meshcore-timestamp-format` | `timestamps.formatPreset` |
-| `meshcore-timestamp-custom-format` | `timestamps.customFormat` |
-| `meshcore-heatmap-opacity` | `heatmapOpacity` (parse as float) |
-| `meshcore-live-heatmap-opacity` | `liveHeatmapOpacity` (parse as float) |
+### Field-by-Field Migration Mapping
+
+```
+meshcore-user-theme (JSON) → parse, map directly:
+  .branding  → delta.branding
+  .theme     → delta.theme
+  .themeDark → delta.themeDark
+  .nodeColors → delta.nodeColors
+  .typeColors → delta.typeColors
+  .home      → delta.home
+  (any other keys are dropped)
+
+meshcore-timestamp-mode           → delta.timestamps.defaultMode
+meshcore-timestamp-timezone       → delta.timestamps.timezone
+meshcore-timestamp-format         → delta.timestamps.formatPreset
+meshcore-timestamp-custom-format  → delta.timestamps.customFormat
+meshcore-heatmap-opacity          → delta.heatmapOpacity (parseFloat)
+meshcore-live-heatmap-opacity     → delta.liveHeatmapOpacity (parseFloat)
+```
 
 4. Write the assembled delta to `cs-theme-overrides`.
 5. Delete all 7 legacy keys.
-6. Prune the delta against server defaults (some migrated values may match).
-7. Continue with normal init.
+6. Continue with normal init.
 
 **Edge cases:**
 - If `meshcore-user-theme` contains invalid JSON, skip it (log a warning to console).
 - If a legacy value is empty string or null, skip that field.
 - Migration runs exactly once — the presence of `cs-theme-overrides` (even as `{}`) prevents re-migration.
+
+## `allowCustomFormat` — User Preferences Trump
+
+The server-side `allowCustomFormat` gate is not enforced client-side. If a user imports a delta with a custom format, it's applied regardless. The server controls what formats are available in the UI (whether the custom format input field is shown), but does not block stored preferences.
 
 ## Override Indicator UX
 
@@ -366,6 +458,26 @@ In the customizer panel, each field that has an active override (value differs f
 **Section-level indicator:** If any field in a section (e.g., "Theme Colors") is overridden, the tab/section header shows a count badge (e.g., "Theme Colors (3)").
 
 **"Reset All" button:** Always visible at bottom of panel. Confirms before executing (`localStorage.removeItem` + re-merge).
+
+## UX Requirements
+
+### Browser-Local Banner
+
+The customizer panel must display a persistent, always-visible notice:
+
+> **"These settings are saved in your browser only and don't affect other users."**
+
+This is NOT a tooltip, NOT a dismissible popup — it must be always visible in the panel header or footer area. Users must understand at a glance that their changes are local.
+
+### Auto-Save Indicator
+
+Show a persistent status in the customizer panel footer, Google Docs style — subtle but always present:
+
+- **Default state:** "All changes saved" (muted text)
+- **During debounce:** "Saving..." (muted text)
+- **On quota error:** "⚠️ Storage full — changes may not be saved" (red text, persistent until resolved)
+
+The indicator reflects the actual state of the localStorage write, not just the UI action.
 
 ## Server Compatibility
 
@@ -391,6 +503,10 @@ The server's `ThemeResponse` struct currently returns: `branding`, `theme`, `the
    - Writes serialized JSON to localStorage
    - Removes key when delta is empty `{}`
    - Round-trips correctly (write → read = identical object)
+   - Rejects invalid color values with console.warn
+   - Rejects out-of-range numeric values with console.warn
+   - Rejects invalid timestamp enum values with console.warn
+   - Handles QuotaExceededError gracefully (warns user, does not throw)
 
 3. **`computeEffective`**
    - Returns server defaults when overrides is `{}`
@@ -401,35 +517,30 @@ The server's `ThemeResponse` struct currently returns: `branding`, `theme`, `the
    - Array values (e.g., `home.steps`) are fully replaced, not merged
    - Top-level scalars (`heatmapOpacity`) are directly replaced
 
-4. **`pruneOverrides`**
-   - Removes keys that match server defaults
-   - Keeps keys that differ from server defaults
-   - Removes empty sections after pruning
-   - Returns `{}` when all overrides match defaults
-   - Handles nested object comparison correctly
-   - Handles array comparison correctly (order-sensitive)
-
-5. **`setOverride` / `clearOverride`**
+4. **`setOverride` / `clearOverride`**
    - Setting a value stores it in the delta
-   - Setting a value that matches server default prunes it
    - Clearing a key removes it from delta
    - Clearing the last key in a section removes the section
    - Full data flow executes (CSS vars updated)
 
-6. **`migrateOldKeys`**
-   - Migrates all 7 keys correctly
+5. **`migrateOldKeys`**
+   - Migrates all 7 keys correctly using exact field mapping
    - Handles partial migration (only some keys present)
    - Handles invalid JSON in `meshcore-user-theme`
    - Removes all legacy keys after migration
    - Skips migration if `cs-theme-overrides` already exists
    - Returns null when no legacy keys found
+   - Drops unknown keys from `meshcore-user-theme`
 
-7. **`validateShape`**
+6. **`validateShape`**
    - Accepts valid delta objects
    - Accepts empty object
    - Rejects non-objects (string, array, null)
    - Warns on unknown top-level keys (doesn't reject)
    - Validates section types (object vs scalar)
+   - Rejects invalid color values
+   - Rejects out-of-range opacity values
+   - Rejects invalid timestamp enum values
 
 ### Browser/E2E Tests (Playwright)
 
@@ -441,13 +552,17 @@ The server's `ThemeResponse` struct currently returns: `branding`, `theme`, `the
 6. **Export** downloads a JSON file with current delta.
 7. **Import** applies overrides from uploaded JSON file.
 8. **Migration** — set legacy keys, reload, verify they're migrated and removed.
+9. **Preset application** — clicking a preset applies its colors, fields update.
+10. **Dark/light mode toggle** — switching mode re-applies correct section's CSS vars.
+11. **Browser-local banner** — verify persistent notice is visible in customizer panel.
+12. **Auto-save indicator** — verify status text updates during and after changes.
 
 ## What's NOT In Scope
 
-- **Server-side timestamp config** (`allowCustomFormat` gate) — remains server-only, not exposed in the customizer delta. Future work.
+- **Undo/redo stack** — could be added as P2. For v1, per-field reset to server default is the only revert mechanism.
+- **Cross-tab synchronization** — two tabs editing simultaneously may clobber each other's changes. Acceptable for v1.
+- **Server-side timestamp config** (`allowCustomFormat` gate) — remains server-only, not exposed in the customizer delta. The server controls UI availability but does not block stored preferences (see `allowCustomFormat` section above).
 - **Admin import endpoint** — no server API for uploading `theme.json` via the UI. Admins edit the file directly. Future work.
 - **Map config overrides** (`mapDefaults.center`, `mapDefaults.zoom`) — separate concern, not part of theme. Future work.
 - **Geo-filter config** — server-only. Not in scope.
 - **Per-page layout preferences** (column widths, sort orders) — separate from theming. Future work.
-- **Multi-theme presets** (e.g., "Solarized", "Dracula") — could be built on top of import/export, but not in this rework.
-- **Real-time sync across tabs** — `storage` event listening for cross-tab sync is a nice-to-have but not required for v1. The data flow supports it naturally if added later.
