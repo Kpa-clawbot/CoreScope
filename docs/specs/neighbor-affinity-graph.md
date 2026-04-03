@@ -10,7 +10,7 @@
 
 ### What is the first-hop neighbor affinity graph?
 
-A weighted, undirected graph where nodes are MeshCore devices and edges represent observed first-hop neighbor relationships. Each edge carries a weight (observation count), recency data, and optional signal quality metrics. The graph is built by analyzing `path_json` data from received packets — specifically, the first hop in each path reveals which node is the direct RF neighbor of the originating node.
+A weighted, undirected graph where nodes are MeshCore devices and edges represent observed first-hop neighbor relationships. Each edge carries a weight (observation count), recency data, and optional signal quality metrics. The graph is built by analyzing `path_json` data from received packets to extract direct neighbor relationships from both ends of the path.
 
 ### Why is it needed?
 
@@ -20,6 +20,12 @@ MeshCore uses short hash prefixes (typically 1–2 bytes) to identify nodes in r
 2. **Incorrect topology display** — paths appear to route through the wrong node
 3. **hash_size==0 nodes inflate collision counts** (#441), compounding the problem
 
+### Primary value: 1-byte hash networks
+
+The disambiguation value of this graph is highest in networks using 1-byte hash prefixes. With ~2K nodes and 1-byte prefixes, approximately 8 nodes share each prefix — making collisions the norm rather than the exception. This is the primary use case.
+
+With 2+ byte hash prefixes, collisions are rare enough that simple prefix matching usually resolves unambiguously. The neighbor affinity graph still provides topology insight but is less critical for disambiguation.
+
 ### What problem does it solve?
 
 By aggregating first-hop observations over time, we build a stable model of which nodes are physically adjacent. This model serves as a disambiguation signal: when a 1-byte prefix like `"C0"` appears as a hop, and we know from hundreds of prior observations that `c0dedad4...` is a neighbor of the adjacent hop but `c0dedad9...` is not, we can resolve the ambiguity with high confidence.
@@ -28,33 +34,79 @@ This is especially effective for **repeaters and routers** which are stationary 
 
 ---
 
+## Protocol Reference
+
+> **Source:** MeshCore firmware `Mesh.cpp`, `routeRecvPacket()` — verified 2026-04-03.
+
+Repeaters **append** their hash to the path array in queue order (oldest first). This means:
+
+| Position | Meaning |
+|----------|---------|
+| `path[0]` | Originator's direct neighbor — the **first repeater** that forwarded the packet |
+| `path[last]` | Observer's direct neighbor — the **last repeater** before the packet reached the observer |
+| Originator | **Never** appears in the path |
+| Observer | **Never** appears in the path |
+| `path = []` | **Direct/zero-hop** — the originator transmitted directly to the observer with no repeaters |
+
+Example: node `X` sends a packet that is relayed by `R1 → R2 → R3` and received by observer `O`:
+- `path = ["R1", "R2", "R3"]`
+- `path[0] = R1` → `X`'s direct neighbor
+- `path[last] = R3` → `O`'s direct neighbor
+
+Implementers should not need to re-verify this against the firmware source.
+
+---
+
 ## Data Model
 
 ### How neighbor relationships are derived
 
-Every packet stored in CoreScope has a `path_json` field containing the route hops as a JSON array of hex strings, e.g. `["A3","B7","C0"]`. The path represents the route from the originating node to the observer, where:
+Every packet stored in CoreScope has a `path_json` field containing the route hops as a JSON array of hex strings, e.g. `["A3","B7","C0"]`. Two types of edges can be extracted:
 
-- The **first element** is the first hop after the origin (the origin's direct RF neighbor)
-- The **last element** is the hop closest to the observer (the observer's direct RF neighbor)
-- The originating node's pubkey is in the transmission record (`from_node`)
+#### Edge type 1: `originator ↔ path[0]` (ADVERT packets only)
 
-Therefore, a packet from node `X` with path `["A3", "B7"]` observed by observer `O` tells us:
+Only **ADVERT** packets expose the originator's full public key in cleartext. All other packet types (REQ, TXT_MSG, ACK, etc.) have encrypted payloads that do not reveal the sender's identity. Therefore, the `originator ↔ path[0]` edge can **only** be extracted from ADVERT packets.
+
+A packet from node `X` with path `["A3", "B7"]` tells us:
 - `X` has a direct neighbor matching prefix `A3`
-- The node matching `A3` has a direct neighbor matching `B7`
-- The node matching `B7` has a direct neighbor that is observer `O`
 
-For **first-hop neighbor extraction**, we focus on:
-- `from_node` ↔ `path[0]` (origin's direct neighbor)
+This is the highest-confidence edge because we know the originator exactly (full pubkey) and only need to resolve `path[0]`.
 
-This is the highest-confidence relationship because we know `from_node` exactly (full pubkey) and only need to resolve `path[0]`.
+#### Edge type 2: `observer ↔ path[last]` (ALL packet types)
+
+The observer's identity is always known from the server connection context — it is not derived from the packet payload. Therefore, `observer ↔ path[last]` can be extracted from **any** packet type, not just ADVERTs.
+
+A packet with path `["A3", "B7"]` received by observer `O` tells us:
+- `O` has a direct neighbor matching prefix `B7`
+
+This effectively doubles the graph data compared to extracting only originator edges.
+
+#### Summary of edge extraction by packet type
+
+| Packet Type | `originator ↔ path[0]` | `observer ↔ path[last]` |
+|-------------|:----------------------:|:-----------------------:|
+| ADVERT      | ✅ Yes                 | ✅ Yes                  |
+| All others  | ❌ No (encrypted)      | ✅ Yes                  |
+
+### Empty path handling
+
+- **ADVERT with `path = []`**: The originator transmitted directly to the observer — zero hops. Create edge `originator ↔ observer` directly (both identities are known).
+- **Non-ADVERT with `path = []`**: No edge can be extracted. The originator identity is unknown (encrypted) and there are no path hops.
+- **Single-hop (`path` has 1 element)**: For ADVERTs, `path[0] == path[last]`, so both edge types resolve to the same single edge. The originator's neighbor and the observer's neighbor are the same repeater.
 
 ### What constitutes a "first-hop neighbor"
 
-A first-hop neighbor of node `X` is any node that appears as `path[0]` in packets originating from `X`, OR any node `Y` where `X` appears as `path[0]` in packets originating from `Y`. The relationship is bidirectional in physical space (RF range is symmetric), though observations may be asymmetric (node A's packets may be observed more often than node B's).
+A first-hop neighbor of node `X` is any node that appears as `path[0]` in ADVERT packets originating from `X`, any node `Y` where `X` appears as `path[0]` in ADVERT packets originating from `Y`, or any observer `O` where `X` appears as `path[last]` in packets received by `O`. The relationship is bidirectional in physical space (RF range is approximately symmetric), though observations may be asymmetric (node A's packets may be observed more often than node B's).
+
+### Edge directionality
+
+For v1, all edges are **undirected**. An edge between nodes A and B means "A and B have been observed as direct RF neighbors," regardless of which direction the packet traveled. The edge weight is the total observation count from both directions combined.
+
+**Known limitation:** RF propagation is not perfectly symmetric — node A may hear node B but not vice versa. Directional edges would capture this asymmetry and could improve topology visualization accuracy. This is deferred as a future enhancement; for v1's primary purpose (hash disambiguation), directionality does not matter.
 
 ### Handling hash collisions
 
-When `path[0]` is a short prefix like `"A3"`, multiple nodes may match. The system must:
+When `path[0]` or `path[last]` is a short prefix like `"A3"`, multiple nodes may match. The system must:
 
 1. **Record all candidates** — do not discard ambiguous observations. Store the raw prefix alongside resolved candidates.
 2. **Score candidates by context** — if node `X` has sent 500 packets with `path[0] = "A3"`, and candidate `a3xxxx` appears as a known neighbor of `X`'s other known neighbors but `a3yyyy` does not, `a3xxxx` scores higher.
@@ -115,24 +167,40 @@ Decay is applied at **query time**, not stored. The raw `count`, `first_seen`, a
 ```
 for each transmission T in packet store:
     from_pubkey = T.from_node (full pubkey, known)
+    packet_type = T.type
+    
     for each observation O of T:
         path = parsePathJSON(O.path_json)
+        observer = O.observer_id
+        
         if len(path) == 0:
-            continue  // direct reception, no hops — no neighbor data
+            // Direct/zero-hop packet
+            if packet_type == ADVERT:
+                // Originator is observer's direct neighbor
+                upsert_edge(from_pubkey, observer, observer, O.snr, O.timestamp)
+            // Non-ADVERTs with empty path: no edge can be extracted
+            continue
         
-        first_hop_prefix = path[0]
-        candidates = resolve_prefix(first_hop_prefix)
+        // Edge 1: originator ↔ path[0] (ADVERTs only)
+        if packet_type == ADVERT:
+            first_hop_prefix = path[0]
+            candidates = resolve_prefix(first_hop_prefix)
+            upsert_edge(from_pubkey, first_hop_prefix, candidates, observer, O.snr, O.timestamp)
         
-        upsert_edge(from_pubkey, first_hop_prefix, candidates, O.observer_id, O.snr, O.timestamp)
+        // Edge 2: observer ↔ path[last] (ALL packet types)
+        last_hop_prefix = path[len(path)-1]
+        last_candidates = resolve_prefix(last_hop_prefix)
+        upsert_edge(observer, last_hop_prefix, last_candidates, observer, O.snr, O.timestamp)
 ```
 
 **`resolve_prefix(prefix)`** looks up all nodes whose pubkey starts with the given prefix (case-insensitive). Returns a list of `(pubkey, name)` tuples.
 
 **`upsert_edge(from, prefix, candidates, observer, snr, timestamp)`**:
-- Key: `(from_pubkey, neighbor_prefix, observer_id)`
+- Key: `(from_pubkey, neighbor_prefix)` — canonicalized so `A < B` lexicographically
 - If single candidate: set `neighbor_pubkey = candidates[0]`, `ambiguous = false`
 - If multiple candidates: set `neighbor_pubkey = null`, `ambiguous = true`, `candidates = [...]`
 - Increment `count`, update `last_seen`, running average `avg_snr`
+- Add `observer` to the `observers` set
 
 ### Disambiguation via graph structure
 
@@ -423,14 +491,23 @@ This is a later milestone — the API and "Show Neighbors" fix come first.
 TestBuildNeighborGraph_EmptyStore
     → empty graph, no edges
 
-TestBuildNeighborGraph_SingleHopPath
-    → from_node=X, path=["A3"] → edge(X, A3-resolved)
+TestBuildNeighborGraph_AdvertSingleHopPath
+    → ADVERT from_node=X, path=["A3"] → edge(X, A3-resolved) AND edge(observer, A3-resolved)
 
-TestBuildNeighborGraph_MultiHopPath
-    → from_node=X, path=["A3","B7"] → edge(X, A3-resolved), edge(A3, B7) only if extracting beyond first hop (out of scope — verify NOT created)
+TestBuildNeighborGraph_AdvertMultiHopPath
+    → ADVERT from_node=X, path=["A3","B7"] → edge(X, A3-resolved) AND edge(observer, B7-resolved)
 
-TestBuildNeighborGraph_NoPath
-    → from_node=X, path=[] → no edges (direct reception)
+TestBuildNeighborGraph_NonAdvertMultiHopPath
+    → non-ADVERT from_node=X, path=["A3","B7"] → only edge(observer, B7-resolved), NO originator edge
+
+TestBuildNeighborGraph_NonAdvertSingleHop
+    → non-ADVERT with path=["A3"] → edge(observer, A3-resolved) only
+
+TestBuildNeighborGraph_AdvertEmptyPath
+    → ADVERT from_node=X, path=[] → edge(X, observer) directly (zero-hop)
+
+TestBuildNeighborGraph_NonAdvertEmptyPath
+    → non-ADVERT from_node=X, path=[] → no edges
 
 TestBuildNeighborGraph_HashCollision
     → two nodes share prefix "A3" → edge marked ambiguous with both candidates
@@ -471,21 +548,26 @@ TestNeighborGraphAPI_RegionFilter → only edges from filtered observers
 
 | Case | Expected behavior |
 |------|-------------------|
-| Single-hop network (all nodes 1 hop from observer) | Every node is a neighbor of the observer; no inter-node edges |
+| ADVERT with empty path (direct reception) | Edge created: `originator ↔ observer` |
+| Non-ADVERT with empty path | No edge created |
+| Single-hop ADVERT | Both edge types resolve to same repeater; one edge created |
+| Single-hop non-ADVERT | `observer ↔ path[0]` edge only |
 | Hash collision on first hop | Edge marked ambiguous, candidates listed |
+| Hash collision on last hop | Edge marked ambiguous, candidates listed |
 | `hash_size == 0` node in path | Still processed (prefix matching works regardless of hash_size) |
-| Zero-hop advert (direct reception) | No neighbor edge created; skip gracefully |
 | Stale data (node not seen in 30+ days) | Score decays to ~0; filtered out by `min_score` |
 | Self-referencing path (`from_node` matches `path[0]`) | Skip — a node cannot be its own neighbor |
-| Very long paths (10+ hops) | Only extract first hop; ignore deeper hops |
+| Very long paths (10+ hops) | Extract first hop (ADVERTs only) and last hop (all types); ignore intermediate hops |
 | Duplicate observations (same observer, same path, same timestamp) | Deduplicated by existing `PacketStore` logic |
+| Non-ADVERT packet types (REQ, TXT_MSG, ACK, etc.) | Only `observer ↔ path[last]` edge extracted |
 
 ---
 
 ## What's NOT in scope
 
 - **Full mesh topology visualization** — this spec covers first-hop neighbors only, not multi-hop routing topology
-- **Multi-hop path analysis beyond first hop** — extracting `path[1]` ↔ `path[2]` relationships is a natural extension but adds complexity (both endpoints are prefixes, not full pubkeys). Defer to a future issue
+- **Multi-hop path analysis beyond endpoints** — extracting `path[1]` ↔ `path[2]` relationships is a natural extension but adds complexity (both endpoints are prefixes, not full pubkeys). Defer to a future issue
+- **Directional edges** — v1 uses undirected edges. Directional edges (capturing RF asymmetry) are a future enhancement for topology visualization
 - **Real-time graph updates via WebSocket** — the graph is cached and served via REST. WebSocket push for graph changes is unnecessary given the slow rate of topology change
 - **Persistent storage in SQLite** — initial implementation is in-memory only. A `node_neighbors` table can be added later if the in-memory window is insufficient
 - **Geographic clustering** — while the `neighbor-graph` API response includes a `stats` field, actual geographic cluster detection (e.g., community detection algorithms) is deferred
@@ -495,7 +577,7 @@ TestNeighborGraphAPI_RegionFilter → only edges from filtered observers
 
 ## Implementation Order
 
-1. **Graph builder** — `neighbor_graph.go` with `NeighborGraph` struct, `BuildFromStore()`, scoring functions
+1. **Graph builder** — `neighbor_graph.go` with `NeighborGraph` struct, `BuildFromStore()`, scoring functions. Must handle ADVERT vs non-ADVERT distinction and extract both originator and observer edges.
 2. **Unit tests** — `neighbor_graph_test.go` covering all cases above
 3. **API endpoints** — `/api/nodes/{pubkey}/neighbors` and `/api/analytics/neighbor-graph` in `routes.go`
 4. **API tests** — route-level tests
