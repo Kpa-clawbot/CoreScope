@@ -230,15 +230,18 @@
     var limit = opts.limit || 0;
     var headerSelector = opts.headerSelector;
     var viewAllPubkey = opts.viewAllPubkey;
+    var bust = opts.bust || false;
 
     // Check cache
     var cached = _neighborCache[pubkey];
-    if (cached && (Date.now() - cached.ts < 300000)) { // 5 min cache
+    if (!bust && cached && (Date.now() - cached.ts < 300000)) { // 5 min cache
       renderNeighborData(cached.data, containerId, limit, headerSelector, viewAllPubkey);
       return;
     }
 
-    api('/nodes/' + encodeURIComponent(pubkey) + '/neighbors', { ttl: CLIENT_TTL.nodeDetail }).then(function(data) {
+    var apiOpts = { ttl: CLIENT_TTL.nodeDetail };
+    if (bust) apiOpts.bust = true;
+    api('/nodes/' + encodeURIComponent(pubkey) + '/neighbors', apiOpts).then(function(data) {
       _neighborCache[pubkey] = { data: data, ts: Date.now() };
       renderNeighborData(data, containerId, limit, headerSelector, viewAllPubkey);
     }).catch(function() {
@@ -545,7 +548,8 @@
 
       // Fetch neighbors for this node (full-screen view)
       fetchAndRenderNeighbors(n.public_key, 'fullNeighborsContent', {
-        headerSelector: '#fullNeighborsHeader'
+        headerSelector: '#fullNeighborsHeader',
+        bust: true
       });
 
       // Affinity debug panel — show if debugAffinity is enabled
