@@ -43,6 +43,7 @@
     timelineScope: 3600000, // 1h default ms
     timelineTimestamps: [], // historical timestamps from DB for sparkline
     timelineFetchedScope: 0, // last fetched scope to avoid redundant fetches
+    replayGen: 0,            // generation counter — incremented on each replay/rewind to discard stale async results
   };
 
   // ROLE_COLORS loaded from shared roles.js (includes 'unknown')
@@ -116,6 +117,7 @@
 
   function vcrResumeLive() {
     stopReplay();
+    VCR.replayGen++; // invalidate any in-flight async chunk processing
     VCR.playhead = -1;
     VCR.speed = 1;
     VCR.missedCount = 0;
@@ -142,6 +144,8 @@
   function vcrReplayFromTs(targetTs) {
     const fetchFrom = new Date(targetTs).toISOString();
     stopReplay();
+    VCR.replayGen++;
+    var gen = VCR.replayGen;
     vcrSetMode('REPLAY');
 
     // Reload map nodes to match the replay time
@@ -156,6 +160,7 @@
         return expandToBufferEntriesAsync(pkts);
       })
       .then(function(replayEntries) {
+        if (gen !== VCR.replayGen) return; // stale async result — user changed mode
         if (replayEntries.length === 0) {
           vcrSetMode('PAUSED');
           return;
@@ -204,6 +209,8 @@
 
   function vcrRewind(ms) {
     stopReplay();
+    VCR.replayGen++;
+    var gen = VCR.replayGen;
     // Fetch packets from DB for the time window
     const now = Date.now();
     const from = new Date(now - ms).toISOString();
@@ -217,6 +224,7 @@
         return expandToBufferEntriesAsync(filtered);
       })
       .then(function(newEntries) {
+        if (gen !== VCR.replayGen) return; // stale async result
         VCR.buffer = [].concat(newEntries, VCR.buffer);
         VCR.playhead = 0;
         VCR.speed = 1;
@@ -278,6 +286,7 @@
     // Get timestamp of last packet in buffer to fetch the next page
     const last = VCR.buffer[VCR.buffer.length - 1];
     if (!last) return Promise.resolve(false);
+    var gen = VCR.replayGen;
     const since = new Date(last.ts + 1).toISOString(); // +1ms to avoid dupe
     return fetch(`/api/packets?limit=10000&grouped=false&expand=observations&since=${encodeURIComponent(since)}&order=asc`)
       .then(r => r.json())
@@ -285,6 +294,7 @@
         const pkts = data.packets || [];
         if (pkts.length === 0) return false;
         return expandToBufferEntriesAsync(pkts).then(function(newEntries) {
+          if (gen !== VCR.replayGen) return false; // stale
           VCR.buffer = VCR.buffer.concat(newEntries);
           return true;
         });
@@ -2632,7 +2642,7 @@
     packetCount = 0; activeAnims = 0;
     nodeActivity = {}; pktTimestamps = [];
     feedDedup.clear();
-    VCR.buffer = []; VCR.playhead = -1; VCR.mode = 'LIVE'; VCR.missedCount = 0; VCR.speed = 1;
+    VCR.buffer = []; VCR.playhead = -1; VCR.mode = 'LIVE'; VCR.missedCount = 0; VCR.speed = 1; VCR.replayGen = 0;
   }
 
   let _themeRefreshHandler = null;
