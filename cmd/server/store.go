@@ -88,6 +88,10 @@ type PacketStore struct {
 	collisionCacheTTL time.Duration
 	cacheHits    int64
 	cacheMisses  int64
+	// Rate-limited invalidation (fixes #533: caches cleared faster than hit)
+	lastInvalidated time.Time
+	pendingInv      *cacheInvalidation // accumulated dirty flags during cooldown
+	invCooldown     time.Duration      // minimum time between invalidations
 	// Short-lived cache for QueryGroupedPackets (avoids repeated full sort)
 	groupedCacheMu  sync.Mutex
 	groupedCacheKey string
@@ -182,6 +186,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig) *PacketStore {
 		subpathCache:  make(map[string]*cachedResult),
 		rfCacheTTL:         15 * time.Second,
 		collisionCacheTTL: 60 * time.Second,
+		invCooldown:       10 * time.Second,
 		spIndex:       make(map[string]int, 4096),
 	}
 	if cfg != nil {
@@ -690,15 +695,16 @@ type cacheInvalidation struct {
 }
 
 // invalidateCachesFor selectively clears only the analytics caches affected
-// by the kind of data that changed. This avoids the previous behaviour of
-// wiping every cache on every ingest cycle, which defeated caching under
-// continuous ingestion (issue #375).
+// by the kind of data that changed. To prevent continuous ingestion from
+// defeating caching entirely (issue #533), invalidation is rate-limited:
+// if called within invCooldown of the last invalidation, the flags are
+// accumulated in pendingInv and applied on the next call after cooldown.
 func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 
+	// Eviction bypasses rate-limiting — data was removed, caches must clear.
 	if inv.eviction {
-		// Eviction can affect any analytics — clear everything
 		s.rfCache = make(map[string]*cachedResult)
 		s.topoCache = make(map[string]*cachedResult)
 		s.hashCache = make(map[string]*cachedResult)
@@ -709,9 +715,40 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 		s.channelsCacheMu.Lock()
 		s.channelsCacheRes = nil
 		s.channelsCacheMu.Unlock()
+		s.lastInvalidated = time.Now()
+		s.pendingInv = nil
 		return
 	}
 
+	now := time.Now()
+	if now.Sub(s.lastInvalidated) < s.invCooldown {
+		// Within cooldown — accumulate dirty flags
+		if s.pendingInv == nil {
+			s.pendingInv = &cacheInvalidation{}
+		}
+		s.pendingInv.hasNewObservations = s.pendingInv.hasNewObservations || inv.hasNewObservations
+		s.pendingInv.hasNewPaths = s.pendingInv.hasNewPaths || inv.hasNewPaths
+		s.pendingInv.hasNewTransmissions = s.pendingInv.hasNewTransmissions || inv.hasNewTransmissions
+		s.pendingInv.hasChannelData = s.pendingInv.hasChannelData || inv.hasChannelData
+		return
+	}
+
+	// Cooldown expired — merge any pending flags and apply
+	if s.pendingInv != nil {
+		inv.hasNewObservations = inv.hasNewObservations || s.pendingInv.hasNewObservations
+		inv.hasNewPaths = inv.hasNewPaths || s.pendingInv.hasNewPaths
+		inv.hasNewTransmissions = inv.hasNewTransmissions || s.pendingInv.hasNewTransmissions
+		inv.hasChannelData = inv.hasChannelData || s.pendingInv.hasChannelData
+		s.pendingInv = nil
+	}
+
+	s.applyCacheInvalidation(inv)
+	s.lastInvalidated = now
+}
+
+// applyCacheInvalidation performs the actual cache clearing. Must be called
+// with cacheMu held.
+func (s *PacketStore) applyCacheInvalidation(inv cacheInvalidation) {
 	if inv.hasNewObservations {
 		s.rfCache = make(map[string]*cachedResult)
 	}
@@ -726,7 +763,6 @@ func (s *PacketStore) invalidateCachesFor(inv cacheInvalidation) {
 	}
 	if inv.hasChannelData {
 		s.chanCache = make(map[string]*cachedResult)
-		// Also invalidate the separate channels list cache
 		s.channelsCacheMu.Lock()
 		s.channelsCacheRes = nil
 		s.channelsCacheMu.Unlock()
