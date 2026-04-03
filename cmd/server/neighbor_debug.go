@@ -48,6 +48,7 @@ type DebugResolution struct {
 	Ratio            float64            `json:"ratio"`
 	ThresholdApplied float64            `json:"thresholdApplied"`
 	Method           string             `json:"method"`
+	Tier             string             `json:"tier"`
 	KnownNode        string             `json:"knownNode"`
 	KnownNodeName    string             `json:"knownNodeName,omitempty"`
 }
@@ -221,9 +222,17 @@ func (s *Server) handleDebugAffinity(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildResolutions generates per-prefix resolution decision logs.
+// It uses resolveWithContext (M4) to show the actual 4-tier fallback path
+// (affinity → geo → GPS → first_match) for each prefix resolution.
 func (s *Server) buildResolutions(graph *NeighborGraph, nodeMap map[string]nodeInfo, prefixFilter, nodeFilter string) []DebugResolution {
 	graph.mu.RLock()
 	defer graph.mu.RUnlock()
+
+	// Get the prefix map for resolveWithContext tier computation.
+	var pm *prefixMap
+	if s.store != nil {
+		_, pm = s.store.getCachedNodesAndPM()
+	}
 
 	// Build resolved neighbor sets for Jaccard computation
 	resolvedNeighbors := make(map[string]map[string]bool)
@@ -324,6 +333,14 @@ func (s *Server) buildResolutions(graph *NeighborGraph, nodeMap map[string]nodeI
 			}
 		}
 
+		// Use resolveWithContext to determine the actual 4-tier fallback path.
+		tier := ""
+		if pm != nil {
+			contextPubkeys := []string{knownNode}
+			_, tierUsed, _ := pm.resolveWithContext(e.Prefix, contextPubkeys, graph)
+			tier = tierUsed
+		}
+
 		if e.Resolved && len(candidates) > 0 {
 			dr.Chosen = candidates[0].Pubkey
 			dr.ChosenName = candidates[0].Name
@@ -331,6 +348,7 @@ func (s *Server) buildResolutions(graph *NeighborGraph, nodeMap map[string]nodeI
 			dr.ChosenJaccard = candidates[0].Jaccard
 			dr.Confidence = "HIGH"
 			dr.Method = "auto-resolved"
+			dr.Tier = tier
 			if len(candidates) > 1 && candidates[1].Jaccard > 0 {
 				dr.Ratio = math.Round(candidates[0].Jaccard/candidates[1].Jaccard*10) / 10
 			} else if candidates[0].Jaccard > 0 {
@@ -339,6 +357,7 @@ func (s *Server) buildResolutions(graph *NeighborGraph, nodeMap map[string]nodeI
 		} else {
 			dr.Confidence = "AMBIGUOUS"
 			dr.Method = "ambiguous"
+			dr.Tier = tier
 			if len(candidates) >= 2 {
 				dr.ChosenScore = candidates[0].Score
 				dr.ChosenJaccard = candidates[0].Jaccard

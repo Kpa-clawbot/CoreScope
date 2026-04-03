@@ -594,6 +594,18 @@
                   html += '<span style="color:var(--status-yellow)">⚠️ Ambiguous</span>';
                   if (r.ratio) html += ' (ratio=' + r.ratio.toFixed(1) + '×, threshold=' + r.thresholdApplied + '×)';
                 }
+                // Show disambiguation tier used (M4 resolveWithContext)
+                if (r.tier) {
+                  var tierLabels = {
+                    'neighbor_affinity': '🏘️ Affinity',
+                    'geo_proximity': '🌍 Geo',
+                    'gps_preference': '📍 GPS',
+                    'first_match': '🎲 Naive',
+                    'unique_prefix': '✓ Unique',
+                    'no_match': '∅ None'
+                  };
+                  html += ' <span style="font-size:11px;opacity:0.8">[tier: ' + (tierLabels[r.tier] || escapeHtml(r.tier)) + ']</span>';
+                }
                 // Candidates table
                 if (r.candidates && r.candidates.length) {
                   html += '<div style="margin-top:4px"><table class="mini-table" style="width:100%;font-size:11px"><thead><tr><th>Candidate</th><th>Jaccard</th><th>Count</th></tr></thead><tbody>';
