@@ -1069,18 +1069,21 @@ async function run() {
     await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
     // Clear any existing overrides
     await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+    // Wait for init() to complete (server config fetch) before setting override,
+    // so _runPipeline from init doesn't race with the debounced write.
+    await page.waitForFunction(() => {
+      return window._customizerV2 && window.SITE_CONFIG && window.SITE_CONFIG.theme;
+    }, { timeout: 5000 });
     // Set an override via the API
     const result = await page.evaluate(() => {
-      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
       window._customizerV2.setOverride('theme', 'accent', '#ff0000');
-      // Wait for debounce
+      // Wait for debounce (300ms) + buffer
       return new Promise(resolve => setTimeout(() => {
         const stored = JSON.parse(localStorage.getItem('cs-theme-overrides') || '{}');
         const cssVal = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
         resolve({ stored, cssVal });
       }, 500));
     });
-    assert(!result.error, result.error || '');
     assert(result.stored.theme && result.stored.theme.accent === '#ff0000',
       'Override not persisted to localStorage');
     assert(result.cssVal === '#ff0000',
@@ -1092,9 +1095,12 @@ async function run() {
   await test('Customizer v2: clearOverride resets to server default', async () => {
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    // Wait for init() to complete so _serverDefaults is populated
+    await page.waitForFunction(() => {
+      return window._customizerV2 && window.SITE_CONFIG && window.SITE_CONFIG.theme;
+    }, { timeout: 5000 });
     const result = await page.evaluate(() => {
-      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
-      // Get the server default accent
+      // Set the server default accent
       window._customizerV2.setOverride('theme', 'accent', '#ff0000');
       return new Promise(resolve => setTimeout(() => {
         window._customizerV2.clearOverride('theme', 'accent');
@@ -1103,7 +1109,6 @@ async function run() {
         resolve({ hasAccent });
       }, 500));
     });
-    assert(!result.error, result.error || '');
     assert(!result.hasAccent, 'accent should be removed from overrides after clearOverride');
     await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
   });
