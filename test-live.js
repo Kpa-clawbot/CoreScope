@@ -881,6 +881,17 @@ console.log('\n=== live.js: source-level safety checks ===');
     assert.ok(src.includes('const existingIds = new Set(VCR.buffer.map(b => b.pkt.id)'),
       'vcrRewind should dedup by packet ID');
   });
+
+  test('feed items include transport badge', () => {
+    const count = (src.match(/transportBadge\(pkt\.route_type\)/g) || []).length;
+    assert.ok(count >= 3,
+      `feed rendering should call transportBadge(pkt.route_type) in at least 3 places (found ${count})`);
+  });
+
+  test('node detail recent packets include transport badge', () => {
+    assert.ok(src.includes('transportBadge(p.route_type)'),
+      'node detail recent packets should call transportBadge(p.route_type)');
+  });
 }
 
 // ===== SUMMARY =====
