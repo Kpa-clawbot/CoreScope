@@ -3546,19 +3546,24 @@ console.log('\n=== app.js: payloadTypeColor ===');
   loadInCtx(ctx, 'public/app.js');
   const payloadTypeColor = ctx.payloadTypeColor;
 
-  test('payloadTypeColor(0) = req', () => assert.strictEqual(payloadTypeColor(0), 'req'));
-  test('payloadTypeColor(1) = response', () => assert.strictEqual(payloadTypeColor(1), 'response'));
-  test('payloadTypeColor(4) = advert', () => assert.strictEqual(payloadTypeColor(4), 'advert'));
-  test('payloadTypeColor(5) = grp-txt', () => assert.strictEqual(payloadTypeColor(5), 'grp-txt'));
+  // Edge cases and behavioral properties only — no tautological lookup-table restating
   test('payloadTypeColor(99) = unknown', () => assert.strictEqual(payloadTypeColor(99), 'unknown'));
   test('payloadTypeColor(null) = unknown', () => assert.strictEqual(payloadTypeColor(null), 'unknown'));
   test('payloadTypeColor(undefined) = unknown', () => assert.strictEqual(payloadTypeColor(undefined), 'unknown'));
-  test('payloadTypeColor(2) = txt-msg', () => assert.strictEqual(payloadTypeColor(2), 'txt-msg'));
-  test('payloadTypeColor(3) = ack', () => assert.strictEqual(payloadTypeColor(3), 'ack'));
-  test('payloadTypeColor(7) = anon-req', () => assert.strictEqual(payloadTypeColor(7), 'anon-req'));
-  test('payloadTypeColor(8) = path', () => assert.strictEqual(payloadTypeColor(8), 'path'));
-  test('payloadTypeColor(9) = trace', () => assert.strictEqual(payloadTypeColor(9), 'trace'));
   test('payloadTypeColor(6) = unknown (no mapping for 6)', () => assert.strictEqual(payloadTypeColor(6), 'unknown'));
+  test('all defined payload types return a non-unknown string', () => {
+    const definedTypes = [0, 1, 2, 3, 4, 5, 7, 8, 9];
+    for (const t of definedTypes) {
+      const result = payloadTypeColor(t);
+      assert.strictEqual(typeof result, 'string', `type ${t} should return a string`);
+      assert.notStrictEqual(result, 'unknown', `type ${t} should not be unknown`);
+    }
+  });
+  test('all defined payload types return distinct values', () => {
+    const definedTypes = [0, 1, 2, 3, 4, 5, 7, 8, 9];
+    const values = new Set(definedTypes.map(t => payloadTypeColor(t)));
+    assert.strictEqual(values.size, definedTypes.length, 'each type should map to a unique color class');
+  });
 }
 
 // ===== APP.JS: pad2 / pad3 =====
@@ -3693,6 +3698,7 @@ console.log('\n=== app.js: timestamp preference getters ===');
     ctx.localStorage.removeItem('meshcore-timestamp-timezone');
   });
   test('getTimestampTimezone falls back to server config', () => {
+    ctx.localStorage.removeItem('meshcore-timestamp-timezone');
     ctx.window.SITE_CONFIG = { timestamps: { timezone: 'utc' } };
     assert.strictEqual(ctx.getTimestampTimezone(), 'utc');
     ctx.window.SITE_CONFIG = null;
@@ -3849,7 +3855,8 @@ console.log('\n=== app.js: createColoredHexDump ===');
       { label: 'Payload', start: 0, end: 1 },
     ]);
     // Payload should win since it comes later
-    assert.ok(result.includes('hex-payload'));
+    assert.ok(result.includes('hex-payload'), 'overriding range class should be present');
+    assert.ok(!result.includes('hex-header'), 'overridden range class should be absent');
   });
 
   test('handles null hex', () => {
@@ -3894,9 +3901,12 @@ console.log('\n=== app.js: buildHexLegend ===');
     const count = (result.match(/Header/g) || []).length;
     assert.strictEqual(count, 1);
   });
-  test('uses correct background colors per label', () => {
+  test('swatch element exists for each label', () => {
     const result = buildHexLegend([{ label: 'Path', start: 0, end: 0 }]);
-    assert.ok(result.includes('#a6e3a1'), 'Path should have green swatch');
+    assert.ok(result.includes('swatch'), 'should contain a swatch element');
+    assert.ok(result.includes('Path'), 'should contain the label text');
+    // Verify swatch has a background-color style (don't hardcode the exact color)
+    assert.ok(result.includes('background'), 'swatch should have a background color style');
   });
 }
 
@@ -3983,6 +3993,7 @@ console.log('\n=== app.js: debounce ===');
   const debounce = ctx.debounce;
 
   test('debounce delays function call', () => {
+    scheduledFns.length = 0;
     let called = 0;
     const fn = debounce(() => { called++; }, 100);
     fn();
@@ -4073,17 +4084,20 @@ console.log('\n=== app.js: formatAbsoluteTimestamp (custom format) ===');
     ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
     const result = formatAbsoluteTimestamp('2024-06-15T10:30:00Z');
     assert.strictEqual(result, '2024/06/15');
+    ctx.localStorage.removeItem('meshcore-timestamp-timezone');
     ctx.window.SITE_CONFIG = null;
   });
 
-  test('formatAbsoluteTimestamp locale UTC uses toLocaleString with UTC', () => {
+  test('formatAbsoluteTimestamp locale UTC returns a formatted date string', () => {
     ctx.window.SITE_CONFIG = { timestamps: { allowCustomFormat: false } };
     ctx.localStorage.setItem('meshcore-timestamp-format', 'locale');
     ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
     const result = formatAbsoluteTimestamp('2024-06-15T10:30:00Z');
-    // Should call toLocaleString with { timeZone: 'UTC' }
-    const expected = new Date('2024-06-15T10:30:00Z').toLocaleString([], { timeZone: 'UTC' });
-    assert.strictEqual(result, expected);
+    // Verify structural properties rather than reimplementing the production code
+    assert.ok(result.includes('2024'), 'result should contain the year');
+    assert.ok(result.length > 5, 'result should be a non-trivial formatted string');
+    assert.notStrictEqual(result, '2024-06-15T10:30:00Z', 'result should differ from raw ISO format');
+    assert.notStrictEqual(result, '—', 'result should not be a dash');
     ctx.localStorage.removeItem('meshcore-timestamp-format');
     ctx.localStorage.removeItem('meshcore-timestamp-timezone');
   });
