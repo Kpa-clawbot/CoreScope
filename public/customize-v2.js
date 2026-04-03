@@ -1090,14 +1090,18 @@
         var id = btn.dataset.preset;
         var p = PRESETS[id];
         if (!p) return;
-        // "Reset to Default" = clear all overrides if preset is 'default'
-        // Otherwise write preset data as delta
-        var delta = {};
-        if (p.theme) delta.theme = JSON.parse(JSON.stringify(p.theme));
-        if (p.themeDark) delta.themeDark = JSON.parse(JSON.stringify(p.themeDark));
-        if (p.nodeColors) delta.nodeColors = JSON.parse(JSON.stringify(p.nodeColors));
-        if (p.typeColors) delta.typeColors = JSON.parse(JSON.stringify(p.typeColors));
-        writeOverrides(delta);
+        // "Reset to Default" preset = clear all overrides (full reset per spec)
+        if (id === 'default') {
+          localStorage.removeItem(STORAGE_KEY);
+        } else {
+          // Other presets: write preset data as delta (replaces entire delta per spec)
+          var delta = {};
+          if (p.theme) delta.theme = JSON.parse(JSON.stringify(p.theme));
+          if (p.themeDark) delta.themeDark = JSON.parse(JSON.stringify(p.themeDark));
+          if (p.nodeColors) delta.nodeColors = JSON.parse(JSON.stringify(p.nodeColors));
+          if (p.typeColors) delta.typeColors = JSON.parse(JSON.stringify(p.typeColors));
+          writeOverrides(delta);
+        }
         _runPipeline();
         _renderPanel(container);
       });

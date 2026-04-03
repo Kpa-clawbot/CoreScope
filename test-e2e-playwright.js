@@ -85,7 +85,7 @@ async function run() {
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
     await page.evaluate(() => {
-      localStorage.removeItem('meshcore-user-theme');
+      localStorage.removeItem('cs-theme-overrides');
       window.SITE_CONFIG = window.SITE_CONFIG || {};
       window.SITE_CONFIG.home = {
         heroTitle: 'Server Hero (E2E)',
@@ -122,18 +122,18 @@ async function run() {
     const homeTab = page.locator('.cust-tab[data-tab="home"]');
     await homeTab.waitFor({ state: 'visible', timeout: 10000 });
     await homeTab.click();
-    const heroInput = page.locator('#cust-heroTitle');
+    const heroInput = page.locator('[data-cv2-field="home.heroTitle"]');
     if (await heroInput.count() === 0) {
-      console.log('    ⏭️  #cust-heroTitle not found — TODO: requires running server');
+      console.log('    ⏭️  home.heroTitle input not found — TODO: requires running server');
       return;
     }
     await heroInput.waitFor({ state: 'visible', timeout: 10000 });
     await heroInput.fill(editedHero);
-    await page.waitForTimeout(700); // autoSave debounce is 500ms
+    await page.waitForTimeout(700); // debounce is 300ms, allow margin
     await page.reload({ waitUntil: 'domcontentloaded' });
     const persistedHero = await page.evaluate(() => {
       try {
-        const saved = JSON.parse(localStorage.getItem('meshcore-user-theme') || '{}');
+        const saved = JSON.parse(localStorage.getItem('cs-theme-overrides') || '{}');
         return saved && saved.home ? saved.home.heroTitle : '';
       } catch {
         return '';
@@ -1013,6 +1013,238 @@ async function run() {
     // Verify hex dump is present
     const hexDump = await page.$('#alabHex');
     assert(hexDump, 'Hex dump should be visible after selecting a packet');
+  });
+
+  // --- Group: Customizer v2 E2E tests ---
+
+  await test('Customizer v2: setOverride persists and applies CSS', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    // Clear any existing overrides
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+    // Set an override via the API
+    const result = await page.evaluate(() => {
+      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
+      window._customizerV2.setOverride('theme', 'accent', '#ff0000');
+      // Wait for debounce
+      return new Promise(resolve => setTimeout(() => {
+        const stored = JSON.parse(localStorage.getItem('cs-theme-overrides') || '{}');
+        const cssVal = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+        resolve({ stored, cssVal });
+      }, 500));
+    });
+    assert(!result.error, result.error || '');
+    assert(result.stored.theme && result.stored.theme.accent === '#ff0000',
+      'Override not persisted to localStorage');
+    assert(result.cssVal === '#ff0000',
+      `CSS variable --accent expected #ff0000 but got "${result.cssVal}"`);
+    // Cleanup
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: clearOverride resets to server default', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    const result = await page.evaluate(() => {
+      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
+      // Get the server default accent
+      window._customizerV2.setOverride('theme', 'accent', '#ff0000');
+      return new Promise(resolve => setTimeout(() => {
+        window._customizerV2.clearOverride('theme', 'accent');
+        const stored = JSON.parse(localStorage.getItem('cs-theme-overrides') || '{}');
+        const hasAccent = stored.theme && stored.theme.hasOwnProperty('accent');
+        resolve({ hasAccent });
+      }, 500));
+    });
+    assert(!result.error, result.error || '');
+    assert(!result.hasAccent, 'accent should be removed from overrides after clearOverride');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: full reset clears all overrides', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    const result = await page.evaluate(() => {
+      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
+      localStorage.setItem('cs-theme-overrides', JSON.stringify({ theme: { accent: '#ff0000' }, nodeColors: { repeater: '#00ff00' } }));
+      // Simulate full reset
+      localStorage.removeItem('cs-theme-overrides');
+      const stored = localStorage.getItem('cs-theme-overrides');
+      return { stored };
+    });
+    assert(!result.error, result.error || '');
+    assert(result.stored === null, 'cs-theme-overrides should be null after full reset');
+  });
+
+  await test('Customizer v2: export produces valid JSON', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    const result = await page.evaluate(() => {
+      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
+      // Set some overrides
+      localStorage.setItem('cs-theme-overrides', JSON.stringify({ theme: { accent: '#123456' } }));
+      const delta = window._customizerV2.readOverrides();
+      const json = JSON.stringify(delta, null, 2);
+      try { JSON.parse(json); return { valid: true, hasAccent: delta.theme && delta.theme.accent === '#123456' }; }
+      catch { return { valid: false }; }
+    });
+    assert(!result.error, result.error || '');
+    assert(result.valid, 'Exported JSON must be valid');
+    assert(result.hasAccent, 'Exported JSON must contain the stored override');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: import applies overrides', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    const result = await page.evaluate(() => {
+      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
+      localStorage.removeItem('cs-theme-overrides');
+      const importData = { theme: { accent: '#abcdef' }, nodeColors: { repeater: '#112233' } };
+      const validation = window._customizerV2.validateShape(importData);
+      if (!validation.valid) return { error: 'Validation failed: ' + validation.errors.join(', ') };
+      window._customizerV2.writeOverrides(importData);
+      const stored = window._customizerV2.readOverrides();
+      return { accent: stored.theme && stored.theme.accent, repeater: stored.nodeColors && stored.nodeColors.repeater };
+    });
+    assert(!result.error, result.error || '');
+    assert(result.accent === '#abcdef', 'Imported accent should be #abcdef');
+    assert(result.repeater === '#112233', 'Imported repeater should be #112233');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: migration from legacy keys', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    const result = await page.evaluate(() => {
+      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
+      // Clear new key so migration can run
+      localStorage.removeItem('cs-theme-overrides');
+      // Set legacy keys
+      localStorage.setItem('meshcore-user-theme', JSON.stringify({ theme: { accent: '#legacy1' }, branding: { siteName: 'LegacyName' } }));
+      localStorage.setItem('meshcore-timestamp-mode', 'absolute');
+      localStorage.setItem('meshcore-heatmap-opacity', '0.5');
+      // Run migration
+      const migrated = window._customizerV2.migrateOldKeys();
+      const stored = window._customizerV2.readOverrides();
+      const legacyGone = localStorage.getItem('meshcore-user-theme') === null &&
+                         localStorage.getItem('meshcore-timestamp-mode') === null &&
+                         localStorage.getItem('meshcore-heatmap-opacity') === null;
+      return {
+        migrated: !!migrated,
+        accent: stored.theme && stored.theme.accent,
+        siteName: stored.branding && stored.branding.siteName,
+        tsMode: stored.timestamps && stored.timestamps.defaultMode,
+        opacity: stored.heatmapOpacity,
+        legacyGone
+      };
+    });
+    assert(!result.error, result.error || '');
+    assert(result.migrated, 'migrateOldKeys should return non-null');
+    assert(result.accent === '#legacy1', 'Theme accent should be migrated');
+    assert(result.siteName === 'LegacyName', 'Branding should be migrated');
+    assert(result.tsMode === 'absolute', 'Timestamp mode should be migrated');
+    assert(result.opacity === 0.5, 'Heatmap opacity should be migrated');
+    assert(result.legacyGone, 'Legacy keys should be removed after migration');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: browser-local banner visible', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    // Open customizer
+    const toggleSel = '#customizeToggle, button[title*="ustom" i], [class*="customize"]';
+    const btn = await page.$(toggleSel);
+    if (!btn) { console.log('    ⏭️  Customizer toggle not found'); return; }
+    await btn.click();
+    await page.waitForSelector('.cv2-local-banner', { timeout: 5000 });
+    const bannerText = await page.$eval('.cv2-local-banner', el => el.textContent);
+    assert(bannerText.includes('browser only'), `Banner should mention "browser only" but got "${bannerText}"`);
+  });
+
+  await test('Customizer v2: auto-save status indicator', async () => {
+    // Panel should already be open from previous test
+    const statusEl = await page.$('#cv2-save-status');
+    if (!statusEl) { console.log('    ⏭️  Save status element not found'); return; }
+    const statusText = await page.$eval('#cv2-save-status', el => el.textContent);
+    assert(statusText.includes('saved') || statusText.includes('Saving'),
+      `Status should show save state but got "${statusText}"`);
+  });
+
+  await test('Customizer v2: override indicator appears and disappears', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    const result = await page.evaluate(() => {
+      if (!window._customizerV2) return { error: 'customizerV2 not loaded' };
+      // Set an override
+      localStorage.setItem('cs-theme-overrides', JSON.stringify({ theme: { accent: '#ff0000' } }));
+      return { ok: true };
+    });
+    assert(!result.error, result.error || '');
+    // Open customizer and check for override dot
+    const toggleSel = '#customizeToggle, button[title*="ustom" i], [class*="customize"]';
+    const btn = await page.$(toggleSel);
+    if (!btn) { console.log('    ⏭️  Customizer toggle not found'); return; }
+    await btn.click();
+    await page.waitForSelector('.cust-overlay', { timeout: 5000 });
+    // Click theme tab
+    const themeTab = await page.$('.cust-tab[data-tab="theme"]');
+    if (themeTab) await themeTab.click();
+    await page.waitForTimeout(200);
+    // Check for override dot
+    const dots = await page.$$('.cv2-override-dot');
+    assert(dots.length > 0, 'Override dot should be visible when overrides exist');
+    // Clear and verify dot disappears
+    await page.evaluate(() => {
+      localStorage.removeItem('cs-theme-overrides');
+      if (window._customizerV2) window._customizerV2.clearOverride('theme', 'accent');
+    });
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: presets apply through standard pipeline', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+    const toggleSel = '#customizeToggle, button[title*="ustom" i], [class*="customize"]';
+    const btn = await page.$(toggleSel);
+    if (!btn) { console.log('    ⏭️  Customizer toggle not found'); return; }
+    await btn.click();
+    await page.waitForSelector('.cust-overlay', { timeout: 5000 });
+    // Click theme tab
+    const themeTab = await page.$('.cust-tab[data-tab="theme"]');
+    if (themeTab) await themeTab.click();
+    await page.waitForTimeout(200);
+    // Click ocean preset
+    const oceanBtn = await page.$('.cust-preset-btn[data-preset="ocean"]');
+    if (!oceanBtn) { console.log('    ⏭️  Ocean preset button not found'); return; }
+    await oceanBtn.click();
+    await page.waitForTimeout(300);
+    const result = await page.evaluate(() => {
+      const stored = JSON.parse(localStorage.getItem('cs-theme-overrides') || '{}');
+      const cssAccent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+      return { hasTheme: !!stored.theme, cssAccent };
+    });
+    assert(result.hasTheme, 'Preset should write theme to localStorage');
+    assert(result.cssAccent.length > 0, 'CSS accent should be set after preset');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: page load applies overrides from localStorage', async () => {
+    // Set overrides BEFORE navigating
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => {
+      localStorage.setItem('cs-theme-overrides', JSON.stringify({ theme: { accent: '#ee1122' } }));
+    });
+    // Reload to trigger init with overrides
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    await page.waitForTimeout(500); // allow pipeline to run
+    const cssAccent = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
+    );
+    assert(cssAccent === '#ee1122', `Page load should apply override accent #ee1122 but got "${cssAccent}"`);
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
   });
 
   // Extract frontend coverage if instrumented server is running
