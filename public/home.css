@@ -1,7 +1,6 @@
 /* === CoreScope — home.css === */
 
-/* Override #app overflow:hidden for home page scrolling */
-#app:has(.home-hero), #app:has(.home-chooser) { overflow-y: auto; }
+/* Home page now uses body scroll (no #app override needed — see style.css) */
 
 /* Chooser */
 .home-chooser {

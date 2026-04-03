@@ -181,7 +181,12 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 
 /* === Layout === */
-#app { height: calc(100vh - 52px); height: calc(100dvh - 52px); overflow: hidden; }
+/* Default: body-scroll mode — content pushes beyond viewport, iOS status-bar
+   tap-to-scroll works because <body> is the scroll container.  Pages that need
+   a fixed-height container (maps, virtual-scroll, split-panels) add
+   .app-fixed via the router so their children can use height:100%. */
+#app { min-height: calc(100vh - 52px); min-height: calc(100dvh - 52px); }
+#app.app-fixed { height: calc(100vh - 52px); height: calc(100dvh - 52px); min-height: 0; overflow: hidden; }
 
 .split-layout {
   display: flex; height: 100%; overflow: hidden;
@@ -674,7 +679,7 @@ button.ch-item.selected { background: var(--selected-bg); }
 .advert-info { font-size: 12px; line-height: 1.5; }
 
 /* === Traces Page === */
-.traces-page { padding: 16px; max-width: var(--trace-max-width, 95vw); margin: 0 auto; overflow-y: auto; height: 100%; }
+.traces-page { padding: 16px; max-width: var(--trace-max-width, 95vw); margin: 0 auto; }
 .trace-search {
   display: flex; gap: 8px; margin-bottom: 20px;
 }
@@ -746,7 +751,7 @@ button.ch-item.selected { background: var(--selected-bg); }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
 /* === Observers Page === */
-.observers-page { padding: 20px; max-width: 1200px; margin: 0 auto; overflow-y: auto; height: calc(100vh - 56px); }
+.observers-page { padding: 20px; max-width: 1200px; margin: 0 auto; }
 .obs-summary { display: flex; gap: 20px; margin-bottom: 16px; flex-wrap: wrap; }
 .obs-stat { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text-muted); }
 .health-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
@@ -1138,7 +1143,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .node-activity-time { color: var(--text-muted); white-space: nowrap; min-width: 70px; font-size: 12px; }
 
 /* Analytics page */
-.analytics-page { padding: 16px 24px; max-width: 1600px; margin: 0 auto; overflow-y: auto; height: 100%; }
+.analytics-page { padding: 16px 24px; max-width: 1600px; margin: 0 auto; }
 .analytics-header { margin-bottom: 20px; }
 .analytics-header h2 { margin: 0 0 4px; }
 .analytics-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }

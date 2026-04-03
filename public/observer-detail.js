@@ -37,7 +37,7 @@
     }
 
     app.innerHTML = `
-      <div class="observer-detail-page" style="overflow-y:auto;height:calc(100vh - 56px);padding:16px">
+      <div class="observer-detail-page" style="padding:16px">
         <div class="page-header" style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
           <a href="#/observers" class="btn-icon" title="Back to Observers" aria-label="Back">←</a>
           <h2 style="margin:0" id="obsTitle">Observer Detail</h2>
