@@ -2882,6 +2882,79 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
   });
 }
 
+// ===== live.js: packetTimestamp =====
+console.log('\n=== live.js: packetTimestamp ===');
+{
+  // packetTimestamp is extracted and exposed via window._live_packetTimestamp
+  const ctx = makeSandbox();
+  ctx.L = {
+    circleMarker: () => { const m = { addTo() { return m; }, bindTooltip() { return m; }, on() { return m; }, setRadius() {}, setStyle() {}, setLatLng() {}, getLatLng() { return { lat: 0, lng: 0 }; }, _baseColor: '', _baseSize: 5, _glowMarker: null }; return m; },
+    polyline: () => { const p = { addTo() { return p; }, setStyle() {}, remove() {} }; return p; },
+    map: () => { const m = { setView() { return m; }, addLayer() { return m; }, on() { return m; }, getZoom() { return 11; }, getCenter() { return { lat: 37, lng: -122 }; }, getBounds() { return { contains: () => true }; }, fitBounds() { return m; }, invalidateSize() {}, remove() {}, hasLayer() { return false; } }; return m; },
+    layerGroup: () => { const g = { addTo() { return g; }, addLayer() {}, removeLayer() {}, clearLayers() {}, hasLayer() { return true; }, eachLayer() {} }; return g; },
+    tileLayer: () => ({ addTo() { return this; } }),
+    control: { attribution: () => ({ addTo() {} }) },
+    DomUtil: { addClass() {}, removeClass() {} },
+  };
+  ctx.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  ctx.matchMedia = () => ({ matches: false, addEventListener: () => {} });
+  ctx.registerPage = () => {};
+  ctx.onWS = () => {};
+  ctx.offWS = () => {};
+  ctx.connectWS = () => {};
+  ctx.api = () => Promise.resolve([]);
+  ctx.invalidateApiCache = () => {};
+  ctx.favStar = () => '';
+  ctx.bindFavStars = () => {};
+  ctx.getFavorites = () => [];
+  ctx.isFavorite = () => false;
+  ctx.HopResolver = { init: () => {}, resolve: () => ({}), ready: () => false };
+  ctx.MeshAudio = null;
+  ctx.RegionFilter = { init: () => {}, getSelected: () => null, onRegionChange: () => {} };
+  ctx.WebSocket = function() { this.close = () => {}; };
+  ctx.navigator = {};
+  ctx.visualViewport = null;
+  ctx.document.documentElement = { getAttribute: () => null, setAttribute: () => {} };
+  ctx.document.body = { appendChild: () => {}, removeChild: () => {}, contains: () => false };
+  ctx.document.querySelector = () => null;
+  ctx.document.querySelectorAll = () => [];
+  ctx.document.createElementNS = () => ctx.document.createElement();
+  ctx.cancelAnimationFrame = () => {};
+  ctx.IATA_COORDS_GEO = {};
+  loadInCtx(ctx, 'public/roles.js');
+  try { loadInCtx(ctx, 'public/live.js'); } catch (e) {
+    for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+  }
+
+  const packetTimestamp = ctx._live_packetTimestamp || ctx.window._live_packetTimestamp;
+
+  test('packetTimestamp uses pkt.timestamp ISO string', () => {
+    assert.ok(packetTimestamp, 'packetTimestamp should be exposed');
+    const ts = packetTimestamp({ timestamp: '2026-03-15T12:30:00.000Z' });
+    assert.strictEqual(ts, new Date('2026-03-15T12:30:00.000Z').getTime());
+  });
+
+  test('packetTimestamp falls back to pkt.created_at', () => {
+    const ts = packetTimestamp({ created_at: '2025-06-01T00:00:00Z' });
+    assert.strictEqual(ts, new Date('2025-06-01T00:00:00Z').getTime());
+  });
+
+  test('packetTimestamp falls back to Date.now() when no fields', () => {
+    const before = Date.now();
+    const ts = packetTimestamp({});
+    const after = Date.now();
+    assert.ok(ts >= before && ts <= after, 'should fall back to current time');
+  });
+
+  test('packetTimestamp prefers timestamp over created_at', () => {
+    const ts = packetTimestamp({
+      timestamp: '2026-01-01T00:00:00Z',
+      created_at: '2025-01-01T00:00:00Z',
+    });
+    assert.strictEqual(ts, new Date('2026-01-01T00:00:00Z').getTime());
+  });
+}
+
 // ===== live.js: nextHop null guards =====
 console.log('\n=== live.js: nextHop null guards ===');
 {
