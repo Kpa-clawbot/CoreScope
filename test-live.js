@@ -242,6 +242,9 @@ console.log('\n=== live.js: expandToBufferEntries ===');
     // All should share the same hash
     assert.strictEqual(entries[0].pkt.hash, 'h10');
     assert.strictEqual(entries[2].pkt.hash, 'h10');
+    // Entries should be in chronological order
+    assert.ok(entries[0].ts < entries[1].ts, 'entry 0 should be before entry 1');
+    assert.ok(entries[1].ts < entries[2].ts, 'entry 1 should be before entry 2');
   });
 
   test('empty observations array treated as no observations', () => {
@@ -283,27 +286,35 @@ console.log('\n=== live.js: SEG_MAP ===');
     }
   });
 
-  test('colon has 0x80 flag', () => {
-    assert.strictEqual(SEG_MAP[':'], 0x80);
+  test('digit 8 lights all 7 segments and no others', () => {
+    // 0x7F = 0b01111111 — all 7 segment bits on, MSB (colon) off
+    const val = SEG_MAP['8'];
+    assert.strictEqual(val & 0x7F, 0x7F, 'all 7 segment bits should be set');
+    assert.strictEqual(val & 0x80, 0, 'colon bit should not be set for a digit');
   });
 
-  test('space has 0x00', () => {
-    assert.strictEqual(SEG_MAP[' '], 0x00);
+  test('colon only sets the MSB (dot/colon indicator)', () => {
+    const val = SEG_MAP[':'];
+    assert.strictEqual(val & 0x80, 0x80, 'MSB (colon bit) should be set');
+    assert.strictEqual(val & 0x7F, 0, 'no segment bits should be set for colon');
   });
 
-  test('digit 8 has all segments (0x7F)', () => {
-    assert.strictEqual(SEG_MAP['8'], 0x7F);
+  test('space lights no segments', () => {
+    assert.strictEqual(SEG_MAP[' '], 0x00, 'space should have no bits set');
   });
 
-  test('VCR mode letters are mapped', () => {
-    assert.ok(SEG_MAP['P'] !== undefined, 'P for PAUSE');
-    assert.ok(SEG_MAP['A'] !== undefined, 'A');
-    assert.ok(SEG_MAP['U'] !== undefined, 'U');
-    assert.ok(SEG_MAP['S'] !== undefined, 'S');
-    assert.ok(SEG_MAP['E'] !== undefined, 'E');
-    assert.ok(SEG_MAP['L'] !== undefined, 'L');
-    assert.ok(SEG_MAP['I'] !== undefined, 'I');
-    assert.ok(SEG_MAP['V'] !== undefined, 'V');
+  test('digit 1 lights fewer segments than digit 8', () => {
+    // Behavioral: 1 has fewer segments lit than 8
+    const ones = (n) => { let c = 0; while (n) { c += n & 1; n >>= 1; } return c; };
+    assert.ok(ones(SEG_MAP['1']) < ones(SEG_MAP['8']),
+      'digit 1 should have fewer segment bits than digit 8');
+  });
+
+  test('VCR mode letters are mapped with non-zero segments', () => {
+    for (const ch of ['P', 'A', 'U', 'S', 'E', 'L', 'I', 'V']) {
+      assert.ok(SEG_MAP[ch] !== undefined, `${ch} must be in SEG_MAP`);
+      assert.ok(SEG_MAP[ch] > 0, `${ch} must have non-zero segments`);
+    }
   });
 }
 
@@ -343,8 +354,10 @@ console.log('\n=== live.js: VCR state machine ===');
   test('vcrPause is idempotent', () => {
     vcrPause();
     const frozen1 = VCR().frozenNow;
+    assert.strictEqual(VCR().mode, 'PAUSED', 'mode should be PAUSED after first call');
     vcrPause();
     assert.strictEqual(VCR().frozenNow, frozen1);
+    assert.strictEqual(VCR().mode, 'PAUSED', 'mode should stay PAUSED after second call');
   });
 
   test('vcrSpeedCycle cycles through 1,2,4,8', () => {
@@ -421,6 +434,7 @@ console.log('\n=== live.js: getFavoritePubkeys ===');
     ctx.localStorage.setItem('meshcore-my-nodes', '{bad}');
     const result = getFavPubkeys();
     assert.ok(Array.isArray(result));
+    assert.strictEqual(result.length, 0, 'corrupt data should yield empty array');
   });
 
   test('filters out falsy values', () => {
@@ -520,12 +534,14 @@ console.log('\n=== live.js: formatLiveTimestampHtml ===');
   test('handles null input', () => {
     const html = fmt(null);
     assert.ok(typeof html === 'string');
-    assert.ok(html.includes('—') || html.includes('timestamp-text'));
+    assert.ok(html.includes('—'), 'null input should render em-dash fallback');
   });
 
   test('handles numeric timestamp', () => {
     const html = fmt(Date.now() - 60000);
     assert.ok(typeof html === 'string');
+    assert.ok(html.includes('timestamp-text'), 'numeric timestamp should produce timestamp-text span');
+    assert.ok(html.includes('title='), 'numeric timestamp should have tooltip');
   });
 
   test('future timestamp shows warning icon', () => {
@@ -657,10 +673,10 @@ console.log('\n=== live.js: bufferPacket / VCR buffer ===');
     for (let i = 0; i < 2100; i++) {
       VCR().buffer.push({ ts: Date.now(), pkt: { hash: 'fill' + i } });
     }
-    // Next bufferPacket should trigger trim
+    // Next bufferPacket triggers trim: 2100+1=2101 > 2000 → splice(0, 500) → 1601
     const pkt = { hash: 'overflow', decoded: { header: {}, payload: {} } };
     bufferPacket(pkt);
-    assert.ok(VCR().buffer.length <= 2001, `buffer should be capped, got ${VCR().buffer.length}`);
+    assert.strictEqual(VCR().buffer.length, 1601, `buffer should be 2101 - 500 = 1601, got ${VCR().buffer.length}`);
   });
 
   test('bufferPacket increments missedCount when PAUSED', () => {
