@@ -547,19 +547,22 @@
       // Ambiguous hops are already resolved by HopResolver client-side
       // No need for per-observer server API calls
 
-      // Restore expanded group children
+      // Restore expanded group children (parallel fetch, Map lookup)
       if (groupByHash && expandedHashes.size > 0) {
-        for (const hash of expandedHashes) {
-          const group = packets.find(p => p.hash === hash);
-          if (group) {
-            try {
-              const childData = await api(`/packets?hash=${hash}&limit=20`);
-              group._children = childData.packets || [];
-              sortGroupChildren(group);
-            } catch {}
-          } else {
-            // Group no longer in results — remove from expanded
+        const expandedArr = [...expandedHashes];
+        const results = await Promise.all(expandedArr.map(hash => {
+          const group = hashIndex.get(hash);
+          if (!group) return { hash, group: null, data: null };
+          return api(`/packets?hash=${hash}&limit=20`)
+            .then(data => ({ hash, group, data }))
+            .catch(() => ({ hash, group, data: null }));
+        }));
+        for (const { hash, group, data } of results) {
+          if (!group) {
             expandedHashes.delete(hash);
+          } else if (data) {
+            group._children = data.packets || [];
+            sortGroupChildren(group);
           }
         }
       }
@@ -1012,7 +1015,7 @@
         }
         else if (action === 'select-observation') {
           const parentHash = row.dataset.parentHash;
-          const group = packets.find(p => p.hash === parentHash);
+          const group = hashIndex.get(parentHash);
           const child = group?._children?.find(c => String(c.id) === String(value));
           if (child) {
             const parentData = group._fetchedData;
@@ -2009,7 +2012,7 @@
       const data = await api(`/packets/${hash}`);
       const pkt = data.packet;
       if (!pkt) return;
-      const group = packets.find(p => p.hash === hash);
+      const group = hashIndex.get(hash);
       if (group && data.observations) {
         group._children = data.observations.map(o => clearParsedCache({...pkt, ...o, _isObservation: true}));
         group._fetchedData = data;
