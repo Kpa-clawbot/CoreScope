@@ -749,21 +749,31 @@
     selectedReferenceNode = pubkey;
     neighborPubkeys = new Set();
     try {
-      const data = await api('/nodes/' + pubkey + '/paths');
-      const paths = data.paths || [];
-      for (const p of paths) {
-        const hops = p.hops || [];
-        // Find the reference node in the path; direct neighbors are adjacent hops
-        for (let i = 0; i < hops.length; i++) {
-          if (hops[i].pubkey === pubkey) {
-            if (i > 0 && hops[i - 1].pubkey) neighborPubkeys.add(hops[i - 1].pubkey);
-            if (i < hops.length - 1 && hops[i + 1].pubkey) neighborPubkeys.add(hops[i + 1].pubkey);
+      // Use affinity-based neighbor API (server-side disambiguation) instead of
+      // client-side path walking which fails on hash collisions (#484)
+      const resp = await fetch('/api/nodes/' + pubkey + '/neighbors?min_count=3');
+      const data = await resp.json();
+      for (const n of (data.neighbors || [])) {
+        if (n.pubkey) neighborPubkeys.add(n.pubkey);
+        // For ambiguous edges, include all candidates (better to show extra than miss)
+        if (n.candidates) n.candidates.forEach(function(c) { if (c.pubkey) neighborPubkeys.add(c.pubkey); });
+      }
+      // If affinity data is insufficient, fall back to geo-centroid path walking
+      if (neighborPubkeys.size === 0) {
+        const pathData = await api('/nodes/' + pubkey + '/paths');
+        const paths = pathData.paths || [];
+        for (const p of paths) {
+          const hops = p.hops || [];
+          for (var i = 0; i < hops.length; i++) {
+            if (hops[i].pubkey === pubkey) {
+              if (i > 0 && hops[i - 1].pubkey) neighborPubkeys.add(hops[i - 1].pubkey);
+              if (i < hops.length - 1 && hops[i + 1].pubkey) neighborPubkeys.add(hops[i + 1].pubkey);
+            }
           }
         }
-        // (Redundant block removed — the main loop above already handles first/last hops)
       }
     } catch (e) {
-      console.warn('Failed to fetch neighbor paths for', pubkey, '— neighbor filter may be incomplete:', e);
+      console.warn('Failed to fetch neighbors for', pubkey, ':', e);
       neighborPubkeys = new Set();
     }
     // Update sidebar UI
