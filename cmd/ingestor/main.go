@@ -196,26 +196,32 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 	}
 
+	// Status topic: meshcore/<region>/<observer_id>/status
+	// Checked BEFORE JSON parse — non-JSON or malformed payloads must still update last_seen (#463)
+	if len(parts) >= 4 && parts[3] == "status" {
+		observerID := parts[2]
+		iata := parts[1]
+		var name string
+		var meta *ObserverMeta
+		var statusMsg map[string]interface{}
+		if json.Unmarshal(m.Payload(), &statusMsg) == nil {
+			name, _ = statusMsg["origin"].(string)
+			meta = extractObserverMeta(statusMsg)
+		}
+		if err := store.UpsertObserver(observerID, name, iata, meta); err != nil {
+			log.Printf("MQTT [%s] observer status error: %v", tag, err)
+		}
+		log.Printf("MQTT [%s] status: %s (%s)", tag, firstNonEmpty(name, observerID), iata)
+		return
+	}
+
 	var msg map[string]interface{}
 	if err := json.Unmarshal(m.Payload(), &msg); err != nil {
 		return
 	}
 
-	// Skip status/connection topics
+	// Skip global status/connection topics
 	if topic == "meshcore/status" || topic == "meshcore/events/connection" {
-		return
-	}
-
-	// Status topic: meshcore/<region>/<observer_id>/status
-	if len(parts) >= 4 && parts[3] == "status" {
-		observerID := parts[2]
-		name, _ := msg["origin"].(string)
-		iata := parts[1]
-		meta := extractObserverMeta(msg)
-		if err := store.UpsertObserver(observerID, name, iata, meta); err != nil {
-			log.Printf("MQTT [%s] observer status error: %v", tag, err)
-		}
-		log.Printf("MQTT [%s] status: %s (%s)", tag, firstNonEmpty(name, observerID), iata)
 		return
 	}
 

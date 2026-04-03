@@ -201,6 +201,28 @@ func TestHandleMessageStatusTopic(t *testing.T) {
 	}
 }
 
+// #463: status messages with non-JSON payloads must still update last_seen.
+// Some firmware versions may send plain-text or binary status payloads.
+func TestHandleMessageStatusNonJSONPayload(t *testing.T) {
+	store := newTestStore(t)
+	source := MQTTSource{Name: "test"}
+	msg := &mockMessage{
+		topic:   "meshcore/SJC/obs1/status",
+		payload: []byte(`not json`),
+	}
+
+	handleMessage(store, "test", source, msg, nil, nil)
+
+	var lastSeen string
+	err := store.db.QueryRow("SELECT last_seen FROM observers WHERE id = 'obs1'").Scan(&lastSeen)
+	if err != nil {
+		t.Fatalf("observer not found after non-JSON status: %v", err)
+	}
+	if lastSeen == "" {
+		t.Error("last_seen should be set even for non-JSON status payloads")
+	}
+}
+
 func TestHandleMessageSkipStatusTopics(t *testing.T) {
 	store := newTestStore(t)
 	source := MQTTSource{Name: "test"}

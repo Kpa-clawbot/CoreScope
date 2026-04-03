@@ -6,6 +6,8 @@
   let wsHandler = null;
   let refreshTimer = null;
   let regionChangeHandler = null;
+  let _serverTimeAtFetch = null;  // server clock at last API response
+  let _clientTimeAtFetch = null;  // client clock at last API response
 
   function init(app) {
     app.innerHTML = `
@@ -57,6 +59,10 @@
     try {
       const data = await api('/observers', { ttl: CLIENT_TTL.observers });
       observers = data.observers || [];
+      if (data.server_time) {
+        _serverTimeAtFetch = new Date(data.server_time).getTime();
+        _clientTimeAtFetch = Date.now();
+      }
       render();
     } catch (e) {
       document.getElementById('obsContent').innerHTML =
@@ -64,14 +70,16 @@
     }
   }
 
-  // NOTE: Comparing server timestamps to Date.now() can skew if client/server
-  // clocks differ. We add ±30s tolerance to thresholds to reduce false positives.
+  // Use server clock as reference to eliminate client/server clock skew (#463).
+  // _serverTimeAtFetch + elapsed gives a corrected "now" in server time.
   function healthStatus(lastSeen) {
     if (!lastSeen) return { cls: 'health-red', label: 'Unknown' };
-    const ago = Date.now() - new Date(lastSeen).getTime();
-    const tolerance = 30000; // 30s tolerance for clock skew
-    if (ago < 600000 + tolerance) return { cls: 'health-green', label: 'Online' };    // < 10 min + tolerance
-    if (ago < 3600000 + tolerance) return { cls: 'health-yellow', label: 'Stale' };   // < 1 hour + tolerance
+    const serverNow = (_serverTimeAtFetch !== null)
+      ? _serverTimeAtFetch + (Date.now() - _clientTimeAtFetch)
+      : Date.now();
+    const ago = serverNow - new Date(lastSeen).getTime();
+    if (ago < 600000) return { cls: 'health-green', label: 'Online' };    // < 10 min
+    if (ago < 3600000) return { cls: 'health-yellow', label: 'Stale' };   // < 1 hour
     return { cls: 'health-red', label: 'Offline' };
   }
 
