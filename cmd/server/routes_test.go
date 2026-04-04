@@ -2513,14 +2513,16 @@ func TestInconsistentNodesExcludesCompanions(t *testing.T) {
 		{"cc33333333333333333333333333333333333333333333333333333333333333", "companion"},
 	}
 
-	for _, n := range nodes {
+	for ni, n := range nodes {
 		db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, ?, ?)", n.pk, "Node-"+n.role, n.role)
 		decoded := `{"name":"Node-` + n.role + `","pubKey":"` + n.pk + `"}`
 		// Create flip-flop pattern: 1-byte, 2-byte, 1-byte (transitions=2 → inconsistent)
-		raws := []string{"04" + "40" + "aabb", "04" + "80" + "aabb", "04" + "40" + "aabb"}
+		// Use header 0x11 (routeType=FLOOD, payloadType=4) and pathByte 0x41/0x81
+		// (non-zero hop count) so packets aren't skipped by direct zero-hop filter.
+		raws := []string{"11" + "41" + "aabb", "11" + "81" + "aabb", "11" + "41" + "aabb"}
 		for i, raw := range raws {
 			tx := &StoreTx{
-				ID:          7000 + i + len(n.pk),
+				ID:          7000 + ni*10 + i,
 				RawHex:      raw,
 				Hash:        "incon-" + n.role + strconv.Itoa(i),
 				FirstSeen:   now,
@@ -2588,8 +2590,10 @@ func TestHashSizeInfoTimeWindow(t *testing.T) {
 	payloadType := 4
 
 	// Old adverts (>7 days ago) with flip-flop pattern
+	// Use header 0x11 (routeType=FLOOD) and pathByte 0x41/0x81 (non-zero hop count)
+	// so packets aren't skipped by direct zero-hop filter.
 	oldTime := time.Now().UTC().Add(-10 * 24 * time.Hour).Format("2006-01-02T15:04:05.000Z")
-	oldRaws := []string{"04" + "40" + "aabb", "04" + "80" + "aabb", "04" + "40" + "aabb"}
+	oldRaws := []string{"11" + "41" + "aabb", "11" + "81" + "aabb", "11" + "41" + "aabb"}
 	for i, raw := range oldRaws {
 		tx := &StoreTx{
 			ID:          6000 + i,
@@ -2617,7 +2621,7 @@ func TestHashSizeInfoTimeWindow(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		tx := &StoreTx{
 			ID:          6100 + i,
-			RawHex:      "04" + "40" + "aabb",
+			RawHex:      "11" + "41" + "aabb",
 			Hash:        "new-" + strconv.Itoa(i),
 			FirstSeen:   recentTime,
 			PayloadType: &payloadType,
