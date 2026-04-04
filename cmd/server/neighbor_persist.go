@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+// persistSem limits concurrent async persistence goroutines to 1.
+// Without this, each ingest cycle spawns a goroutine that opens a new
+// SQLite RW connection; under sustained load goroutines pile up with
+// no backpressure, causing contention and busy-timeout cascades.
+var persistSem = make(chan struct{}, 1)
+
 // ─── neighbor_edges table ──────────────────────────────────────────────────────
 
 // ensureNeighborEdgesTable creates the neighbor_edges table if it doesn't exist.
@@ -127,6 +133,11 @@ func asyncPersistResolvedPathsAndEdges(dbPath string, obsUpdates []persistObsUpd
 		return
 	}
 	go func() {
+		// Acquire semaphore — blocks if another persistence goroutine is
+		// running, ensuring at most 1 concurrent persistence operation.
+		persistSem <- struct{}{}
+		defer func() { <-persistSem }()
+
 		rw, err := openRW(dbPath)
 		if err != nil {
 			log.Printf("[store] %s rw open error: %v", logPrefix, err)

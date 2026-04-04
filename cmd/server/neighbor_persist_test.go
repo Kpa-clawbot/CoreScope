@@ -525,3 +525,23 @@ func TestExtractEdgesFromObs_SameNodeNoEdge(t *testing.T) {
 }
 
 
+
+func TestPersistSemaphoreLimitsConcurrency(t *testing.T) {
+	// Verify that persistSem is a buffered channel of size 1,
+	// ensuring at most 1 concurrent persistence goroutine.
+	if cap(persistSem) != 1 {
+		t.Errorf("persistSem capacity = %d, want 1", cap(persistSem))
+	}
+	// Acquire the semaphore, confirm a second acquire would block.
+	persistSem <- struct{}{}
+	select {
+	case persistSem <- struct{}{}:
+		// Drain both before failing so we don't poison other tests.
+		<-persistSem
+		<-persistSem
+		t.Fatal("persistSem allowed 2 concurrent acquires, want 1")
+	default:
+		// Expected: second send blocks (hits default).
+	}
+	<-persistSem // release
+}
