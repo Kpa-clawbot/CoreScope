@@ -42,8 +42,10 @@ type StoreTx struct {
 	ResolvedPath []*string // resolved path from best observation
 	LatestSeen string // max observation timestamp (or FirstSeen if no observations)
 	// Cached parsed fields (set once, read many)
-	parsedPath []string // cached parsePathJSON result
-	pathParsed bool     // whether parsedPath has been set
+	parsedPath    []string               // cached parsePathJSON result
+	pathParsed    bool                    // whether parsedPath has been set
+	decodedOnce   sync.Once              // guards parsedDecoded
+	parsedDecoded map[string]interface{} // cached json.Unmarshal of DecodedJSON
 	// Dedup map: "observerID|pathJSON" → true for O(1) duplicate checks
 	obsKeys map[string]bool
 }
@@ -61,6 +63,17 @@ type StoreObs struct {
 	PathJSON       string
 	ResolvedPath   []*string // resolved full pubkeys, parallel to path_json; nil elements = unresolved
 	Timestamp      string
+}
+
+// ParsedDecoded returns the parsed DecodedJSON map, caching the result.
+// Thread-safe via sync.Once — the first call parses, subsequent calls return cached.
+func (tx *StoreTx) ParsedDecoded() map[string]interface{} {
+	tx.decodedOnce.Do(func() {
+		if tx.DecodedJSON != "" {
+			json.Unmarshal([]byte(tx.DecodedJSON), &tx.parsedDecoded)
+		}
+	})
+	return tx.parsedDecoded
 }
 
 // distRebuildInterval is the minimum time between distance index rebuilds
@@ -406,8 +419,8 @@ func (s *PacketStore) indexByNode(tx *StoreTx) {
 	if !strings.Contains(tx.DecodedJSON, "ubKey") {
 		return
 	}
-	var decoded map[string]interface{}
-	if json.Unmarshal([]byte(tx.DecodedJSON), &decoded) != nil {
+	decoded := tx.ParsedDecoded()
+	if decoded == nil {
 		return
 	}
 	for _, field := range []string{"pubKey", "destPubKey", "srcPubKey"} {
@@ -430,8 +443,8 @@ func (s *PacketStore) trackAdvertPubkey(tx *StoreTx) {
 	if tx.PayloadType == nil || *tx.PayloadType != 4 || tx.DecodedJSON == "" {
 		return
 	}
-	var d map[string]interface{}
-	if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {
+	d := tx.ParsedDecoded()
+	if d == nil {
 		return
 	}
 	pk := ""
