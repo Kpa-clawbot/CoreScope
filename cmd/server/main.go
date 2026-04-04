@@ -157,6 +157,8 @@ func main() {
 	// AND to SQLite. On next restart, detectSchema finds the column and Load() reads it.
 	if err := ensureResolvedPathColumn(dbPath); err != nil {
 		log.Printf("[store] warning: could not add resolved_path column: %v", err)
+	} else {
+		database.hasResolvedPath = true // detectSchema ran before column was added; fix the flag
 	}
 
 	// Load or build neighbor graph
