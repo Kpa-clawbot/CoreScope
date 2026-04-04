@@ -96,22 +96,6 @@ func loadNeighborEdgesFromDB(conn *sql.DB) *NeighborGraph {
 	return g
 }
 
-// persistEdge upserts a single edge into the neighbor_edges SQLite table.
-func persistEdge(rw *sql.DB, nodeA, nodeB string, now string) {
-	a, b := nodeA, nodeB
-	if a > b {
-		a, b = b, a
-	}
-	_, err := rw.Exec(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
-		VALUES (?, ?, 1, ?)
-		ON CONFLICT(node_a, node_b) DO UPDATE SET
-		count = count + 1, last_seen = excluded.last_seen`,
-		a, b, now)
-	if err != nil {
-		log.Printf("[neighbor] persist edge error: %v", err)
-	}
-}
-
 // ─── shared async persistence helper ───────────────────────────────────────────
 
 // persistObsUpdate holds data for a resolved_path SQLite update.
@@ -132,10 +116,17 @@ func asyncPersistResolvedPathsAndEdges(dbPath string, obsUpdates []persistObsUpd
 	if len(obsUpdates) == 0 && len(edgeUpdates) == 0 {
 		return
 	}
+	// Try-acquire semaphore BEFORE spawning goroutine. If another
+	// persistence operation is already running, drop this batch —
+	// data lives in memory and will be backfilled on restart.
+	select {
+	case persistSem <- struct{}{}:
+		// Acquired — spawn goroutine to do the work.
+	default:
+		log.Printf("[store] %s skipped: persistence already in progress", logPrefix)
+		return
+	}
 	go func() {
-		// Acquire semaphore — blocks if another persistence goroutine is
-		// running, ensuring at most 1 concurrent persistence operation.
-		persistSem <- struct{}{}
 		defer func() { <-persistSem }()
 
 		rw, err := openRW(dbPath)

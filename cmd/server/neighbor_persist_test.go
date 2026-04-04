@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -170,34 +171,6 @@ func TestEnsureNeighborEdgesTable(t *testing.T) {
 	if err := conn.QueryRow("SELECT COUNT(*) FROM neighbor_edges").Scan(&cnt); err != nil {
 		t.Fatalf("neighbor_edges table not created: %v", err)
 	}
-}
-
-func TestPersistEdge(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-
-	conn, _ := sql.Open("sqlite", "file:"+dbPath+"?_journal_mode=WAL")
-	conn.Exec(`CREATE TABLE neighbor_edges (
-		node_a TEXT NOT NULL, node_b TEXT NOT NULL,
-		count INTEGER DEFAULT 1, last_seen TEXT,
-		PRIMARY KEY (node_a, node_b)
-	)`)
-
-	// Persist an edge
-	persistEdge(conn, "aaa", "bbb", "2024-01-01T00:00:00Z")
-	persistEdge(conn, "bbb", "aaa", "2024-01-02T00:00:00Z") // canonical ordering
-
-	var cnt int
-	var lastSeen string
-	conn.QueryRow("SELECT count, last_seen FROM neighbor_edges WHERE node_a = 'aaa' AND node_b = 'bbb'").Scan(&cnt, &lastSeen)
-	if cnt != 2 {
-		t.Errorf("expected count 2, got %d", cnt)
-	}
-	// Verify last_seen was updated to the later timestamp (review item #9)
-	if lastSeen != "2024-01-02T00:00:00Z" {
-		t.Errorf("expected last_seen '2024-01-02T00:00:00Z', got '%s'", lastSeen)
-	}
-	conn.Close()
 }
 
 func TestLoadNeighborEdgesFromDB(t *testing.T) {
@@ -526,22 +499,36 @@ func TestExtractEdgesFromObs_SameNodeNoEdge(t *testing.T) {
 
 
 
-func TestPersistSemaphoreLimitsConcurrency(t *testing.T) {
-	// Verify that persistSem is a buffered channel of size 1,
-	// ensuring at most 1 concurrent persistence goroutine.
+func TestPersistSemaphoreTryAcquireSkipsBatch(t *testing.T) {
+	// Verify that persistSem is a buffered channel of size 1.
 	if cap(persistSem) != 1 {
 		t.Errorf("persistSem capacity = %d, want 1", cap(persistSem))
 	}
-	// Acquire the semaphore, confirm a second acquire would block.
+	// Acquire the semaphore to simulate an in-progress persistence.
 	persistSem <- struct{}{}
+
+	// asyncPersistResolvedPathsAndEdges should skip (not block, not
+	// spawn a goroutine) when the semaphore is already held.
+	done := make(chan struct{})
+	go func() {
+		asyncPersistResolvedPathsAndEdges(
+			"/nonexistent/path.db",
+			[]persistObsUpdate{{obsID: 1, resolvedPath: "x"}},
+			nil,
+			"test",
+		)
+		close(done)
+	}()
+
+	// If the function blocks on the semaphore instead of skipping,
+	// this select will hit the timeout.
 	select {
-	case persistSem <- struct{}{}:
-		// Drain both before failing so we don't poison other tests.
+	case <-done:
+		// Expected: returned immediately because semaphore was busy.
+	case <-time.After(500 * time.Millisecond):
 		<-persistSem
-		<-persistSem
-		t.Fatal("persistSem allowed 2 concurrent acquires, want 1")
-	default:
-		// Expected: second send blocks (hits default).
+		t.Fatal("asyncPersistResolvedPathsAndEdges blocked instead of skipping when semaphore was held")
 	}
+
 	<-persistSem // release
 }
