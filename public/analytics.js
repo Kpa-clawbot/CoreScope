@@ -1602,10 +1602,9 @@
     el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading node analytics…</div>';
     try {
       const rq = RegionFilter.regionQueryString();
-      const [nodesResp, bulkHealth, netStatus] = await Promise.all([
+      const [nodesResp, bulkHealth] = await Promise.all([
         api('/nodes?limit=200&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
-        api('/nodes/bulk-health?limit=50' + rq, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/nodes/network-status' + (rq ? '?' + rq.slice(1) : ''), { ttl: CLIENT_TTL.analyticsRF })
+        api('/nodes/bulk-health?limit=50' + rq, { ttl: CLIENT_TTL.analyticsRF })
       ]);
       const nodes = nodesResp.nodes || nodesResp;
       const myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
@@ -1622,8 +1621,22 @@
       const byObservers = [...enriched].sort((a, b) => (b.health.observers?.length || 0) - (a.health.observers?.length || 0));
       const byRecent = [...enriched].filter(n => n.health.stats.lastHeard).sort((a, b) => new Date(b.health.stats.lastHeard) - new Date(a.health.stats.lastHeard));
 
-      // Use server-computed status across ALL nodes
-      const { active, degraded, silent, total: totalNodes, roleCounts } = netStatus;
+      // Compute network status client-side from loaded nodes using shared getHealthThresholds()
+      const now = Date.now();
+      let active = 0, degraded = 0, silent = 0;
+      nodes.forEach(function(n) {
+        const role = n.role || 'unknown';
+        const th = getHealthThresholds(role);
+        const lastMs = n.last_heard ? new Date(n.last_heard).getTime()
+                     : n.last_seen ? new Date(n.last_seen).getTime()
+                     : 0;
+        const age = lastMs ? (now - lastMs) : Infinity;
+        if (age < th.degradedMs) active++;
+        else if (age < th.silentMs) degraded++;
+        else silent++;
+      });
+      const totalNodes = nodesResp.total || nodes.length;
+      const roleCounts = nodesResp.counts || {};
 
       function nodeLink(n) {
         return `<a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link">${esc(n.name || n.public_key.slice(0, 12))}</a>`;
