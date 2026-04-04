@@ -828,7 +828,7 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 		SqliteOnly:        false,
 		MaxPackets:        2386092,
 		EstimatedMB:       estimatedMB,
-		MaxMB:             1024,
+		MaxMB:             s.maxMemoryMB,
 		Indexes: PacketStoreIndexes{
 			ByHash:           hashIdx,
 			ByObserver:       observerIdx,
