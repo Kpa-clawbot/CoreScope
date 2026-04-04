@@ -686,8 +686,8 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 		defer wg.Done()
 		obsErr = s.db.conn.QueryRow(
 			`SELECT
-				SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END),
-				SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END)
+				COALESCE(SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), 0)
 			FROM observations WHERE timestamp > ?`,
 			oneHourAgo, oneDayAgo, oneDayAgo,
 		).Scan(&st.PacketsLastHour, &st.PacketsLast24h)
