@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -152,9 +153,10 @@ type PacketStore struct {
 	graph *NeighborGraph
 
 	// Eviction config and stats
-	retentionHours float64 // 0 = unlimited
-	maxMemoryMB    int     // 0 = unlimited
-	evicted        int64   // total packets evicted
+	retentionHours   float64        // 0 = unlimited
+	maxMemoryMB      int            // 0 = unlimited
+	evicted          int64          // total packets evicted
+	memoryEstimator  func() float64 // injectable for tests; nil = use runtime.ReadMemStats
 }
 
 // Precomputed distance records for fast analytics aggregation.
@@ -367,9 +369,8 @@ func (s *PacketStore) Load() error {
 
 	s.loaded = true
 	elapsed := time.Since(t0)
-	estMB := (len(s.packets)*5120 + s.totalObs*500) / (1024 * 1024)
-	log.Printf("[store] Loaded %d transmissions (%d observations) in %v (~%dMB est)",
-		len(s.packets), s.totalObs, elapsed, estMB)
+	log.Printf("[store] Loaded %d transmissions (%d observations) in %v (heap ~%.0fMB)",
+		len(s.packets), s.totalObs, elapsed, s.estimatedMemoryMB())
 	return nil
 }
 
@@ -677,8 +678,7 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 	advertByObsCount := len(s.advertPubkeys)
 	s.mu.RUnlock()
 
-	// Realistic estimate: ~5KB per packet + ~500 bytes per observation
-	estimatedMB := math.Round(float64(totalLoaded*5120+totalObs*500)/1048576*10) / 10
+	estimatedMB := math.Round(s.estimatedMemoryMB()*10) / 10
 
 	evicted := atomic.LoadInt64(&s.evicted)
 
@@ -848,7 +848,7 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 	advertByObsCount := len(s.advertPubkeys)
 	s.mu.RUnlock()
 
-	estimatedMB := math.Round(float64(totalLoaded*5120+totalObs*500)/1048576*10) / 10
+	estimatedMB := math.Round(s.estimatedMemoryMB()*10) / 10
 
 	return PerfPacketStoreStats{
 		TotalLoaded:       totalLoaded,
@@ -2046,9 +2046,17 @@ func (s *PacketStore) buildDistanceIndex() {
 		len(s.distHops), len(s.distPaths))
 }
 
-// estimatedMemoryMB returns estimated memory usage of the packet store.
+// estimatedMemoryMB returns current Go heap allocation in MB.
+// Uses runtime.ReadMemStats so it accounts for all data structures
+// (distHops, distPaths, spIndex, map overhead) not just packets/observations.
+// In tests, memoryEstimator can be set to inject a deterministic value.
 func (s *PacketStore) estimatedMemoryMB() float64 {
-	return float64(len(s.packets)*5120+s.totalObs*500) / 1048576.0
+	if s.memoryEstimator != nil {
+		return s.memoryEstimator()
+	}
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	return float64(ms.HeapAlloc) / 1048576.0
 }
 
 // EvictStale removes packets older than the retention window and/or exceeding
@@ -2069,30 +2077,24 @@ func (s *PacketStore) EvictStale() int {
 		}
 	}
 
-	// Memory-based eviction: if still over budget, trim more from head
+	// Memory-based eviction: if heap exceeds budget, trim proportionally from head.
+	// All major data structures (distHops, distPaths, spIndex) scale with packet count,
+	// so evicting a fraction of packets frees roughly the same fraction of total heap.
+	// A 10% buffer avoids immediately re-triggering on the next ingest cycle.
 	if s.maxMemoryMB > 0 {
-		for cutoffIdx < len(s.packets) && s.estimatedMemoryMB() > float64(s.maxMemoryMB) {
-			// Estimate how many more to evict: rough binary approach
-			overMB := s.estimatedMemoryMB() - float64(s.maxMemoryMB)
-			// ~5KB per packet, so overMB * 1024*1024 / 5120 packets
-			extra := int(overMB * 1048576.0 / 5120.0)
-			if extra < 100 {
-				extra = 100
+		currentMB := s.estimatedMemoryMB()
+		if currentMB > float64(s.maxMemoryMB) && len(s.packets) > 0 {
+			fractionToKeep := (float64(s.maxMemoryMB) / currentMB) * 0.9
+			keepCount := int(float64(len(s.packets)) * fractionToKeep)
+			if keepCount < 0 {
+				keepCount = 0
 			}
-			cutoffIdx += extra
+			newCutoff := len(s.packets) - keepCount
+			if newCutoff > cutoffIdx {
+				cutoffIdx = newCutoff
+			}
 			if cutoffIdx > len(s.packets) {
 				cutoffIdx = len(s.packets)
-			}
-			// Recalculate estimated memory with fewer packets
-			// (we haven't actually removed yet, so simulate)
-			remainingPkts := len(s.packets) - cutoffIdx
-			remainingObs := s.totalObs
-			for _, tx := range s.packets[:cutoffIdx] {
-				remainingObs -= len(tx.Observations)
-			}
-			estMB := float64(remainingPkts*5120+remainingObs*500) / 1048576.0
-			if estMB <= float64(s.maxMemoryMB) {
-				break
 			}
 		}
 	}
@@ -2207,9 +2209,7 @@ func (s *PacketStore) EvictStale() int {
 
 	evictCount := cutoffIdx
 	atomic.AddInt64(&s.evicted, int64(evictCount))
-	freedMB := float64(evictCount*5120+evictedObs*500) / 1048576.0
-	log.Printf("[store] Evicted %d packets older than %.0fh (freed ~%.1fMB estimated)",
-		evictCount, s.retentionHours, freedMB)
+	log.Printf("[store] Evicted %d packets (%d obs)", evictCount, evictedObs)
 
 	// Eviction removes data — all caches may be affected
 	s.invalidateCachesFor(cacheInvalidation{eviction: true})
