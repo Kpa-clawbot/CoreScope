@@ -1701,16 +1701,15 @@
       const data = await resp.json();
       const groups = (data.packets || []).reverse();
 
-      // Fetch all observations first, then stagger rendering
-      const allGroups = [];
-      for (let i = 0; i < groups.length; i++) {
-        const group = groups[i];
-        let observations = [];
-        try {
-          const detail = await fetch('/api/packets/' + encodeURIComponent(group.hash));
-          const detailData = await detail.json();
-          observations = detailData.observations || [];
-        } catch {}
+      // Fetch all observations in parallel (not sequentially)
+      const detailResults = await Promise.all(groups.map(group =>
+        fetch('/api/packets/' + encodeURIComponent(group.hash))
+          .then(r => r.json())
+          .catch(() => ({}))
+      ));
+
+      const allGroups = groups.map((group, i) => {
+        const observations = detailResults[i].observations || [];
 
         const livePackets = observations.map(obs => {
           const livePkt = dbPacketToLive(Object.assign({}, group, obs, {
@@ -1729,8 +1728,8 @@
         }
 
         livePackets.forEach(lp => VCR.buffer.push({ ts: lp._ts, pkt: lp }));
-        allGroups.push(livePackets);
-      }
+        return livePackets;
+      });
 
       // Render with real timing gaps between packets
       // Sort by earliest timestamp
