@@ -62,17 +62,59 @@ ON CONFLICT(node_a, node_b) DO UPDATE SET
   last_seen = excluded.last_seen;
 ```
 
+### In-memory structure
+
+```go
+type NeighborGraph struct {
+    edges map[string][]NeighborEdge  // pubkey → list of neighbor edges
+    mu    sync.RWMutex
+}
+```
+
 ### Cold startup and backfill
 
 On startup:
 
-1. **Load `neighbor_edges` from SQLite** → build in-memory graph.
+```go
+// 1. Query all edges from SQLite
+rows := db.Query("SELECT node_a, node_b, count, last_seen FROM neighbor_edges")
+
+// 2. Build in-memory graph
+graph := NewNeighborGraph()
+for rows.Next() {
+    var a, b string
+    var count int
+    var lastSeen string
+    rows.Scan(&a, &b, &count, &lastSeen)
+    graph.UpsertEdge(a, b, count, lastSeen)
+}
+
+// 3. Attach to PacketStore
+store.graph = graph
+```
+
+1. **Load `neighbor_edges` from SQLite** → build in-memory graph (code above).
 2. **If table empty (first run):** `BuildFromStore(packets)` — scan all existing packets, extract edges per the rules above, INSERT into `neighbor_edges`.
 3. **Load observations from SQLite.**
 4. **For observations without `resolved_path`:** resolve using the graph, UPDATE `resolved_path` in SQLite.
 5. **Ready to serve.**
 
 On subsequent runs, step 2 is skipped (table already populated). Step 4 only processes observations with NULL `resolved_path` (new or previously unresolved).
+
+### Incremental update at ingest
+
+Every edge upsert writes to **both** the in-memory graph and SQLite — they stay in sync. SQLite is the persistence layer, in-memory is the fast lookup layer.
+
+```go
+// Extract edge from packet
+graph.UpsertEdge(nodeA, nodeB, 1, now)
+
+// Also persist to SQLite
+db.Exec(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
+         VALUES (?, ?, 1, ?)
+         ON CONFLICT(node_a, node_b) DO UPDATE SET
+         count = count + 1, last_seen = ?`, a, b, now, now)
+```
 
 ## Data model
 
