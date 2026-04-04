@@ -1603,7 +1603,7 @@
     try {
       const rq = RegionFilter.regionQueryString();
       const [nodesResp, bulkHealth] = await Promise.all([
-        api('/nodes?limit=200&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
+        api('/nodes?limit=10000&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
         api('/nodes/bulk-health?limit=50' + rq, { ttl: CLIENT_TTL.analyticsRF })
       ]);
       const nodes = nodesResp.nodes || nodesResp;
