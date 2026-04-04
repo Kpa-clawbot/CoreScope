@@ -193,6 +193,10 @@ func TestPersistEdge(t *testing.T) {
 	if cnt != 2 {
 		t.Errorf("expected count 2, got %d", cnt)
 	}
+	// Verify last_seen was updated to the later timestamp (review item #9)
+	if lastSeen != "2024-01-02T00:00:00Z" {
+		t.Errorf("expected last_seen '2024-01-02T00:00:00Z', got '%s'", lastSeen)
+	}
 	conn.Close()
 }
 
@@ -450,4 +454,88 @@ func TestResolvedPathOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestExtractEdgesFromObs_AdvertNoPath(t *testing.T) {
+	tx := &StoreTx{
+		DecodedJSON: `{"pubKey":"aaaa1111"}`,
+		PayloadType: intPtr(4),
+	}
+	obs := &StoreObs{
+		ObserverID: "bbbb2222",
+		PathJSON:   "",
+		Timestamp:  "2024-01-01T00:00:00Z",
+	}
+
+	edges := extractEdgesFromObs(obs, tx, nil)
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge for zero-hop advert, got %d", len(edges))
+	}
+	// Canonical ordering: aaaa < bbbb
+	if edges[0].A != "aaaa1111" || edges[0].B != "bbbb2222" {
+		t.Errorf("unexpected edge: %+v", edges[0])
+	}
+}
+
+func TestExtractEdgesFromObs_NonAdvertNoPath(t *testing.T) {
+	tx := &StoreTx{PayloadType: intPtr(1)}
+	obs := &StoreObs{ObserverID: "obs1", PathJSON: ""}
+	edges := extractEdgesFromObs(obs, tx, nil)
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for non-advert without path, got %d", len(edges))
+	}
+}
+
+func TestExtractEdgesFromObs_WithPath(t *testing.T) {
+	nodes := []nodeInfo{
+		{PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
+		{PublicKey: "ffgghhii1234567890aabbccddee1234567890aabbccddee1234567890aabb11", Name: "Node-FF"},
+	}
+	pm := buildPrefixMap(nodes)
+
+	tx := &StoreTx{
+		DecodedJSON: `{"pubKey":"originator00"}`,
+		PayloadType: intPtr(4),
+	}
+	obs := &StoreObs{
+		ObserverID: "observer00",
+		PathJSON:   `["aa","ff"]`,
+		Timestamp:  "2024-01-01T00:00:00Z",
+	}
+
+	edges := extractEdgesFromObs(obs, tx, pm)
+	// Should get: originator↔aa (advert), observer↔ff (last hop)
+	if len(edges) != 2 {
+		t.Fatalf("expected 2 edges, got %d", len(edges))
+	}
+}
+
+func TestExtractEdgesFromObs_SameNodeNoEdge(t *testing.T) {
+	tx := &StoreTx{
+		DecodedJSON: `{"pubKey":"same1234"}`,
+		PayloadType: intPtr(4),
+	}
+	obs := &StoreObs{
+		ObserverID: "same1234",
+		PathJSON:   "",
+		Timestamp:  "2024-01-01T00:00:00Z",
+	}
+	edges := extractEdgesFromObs(obs, tx, nil)
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges when originator == observer, got %d", len(edges))
+	}
+}
+
+func TestNeighborPersistFileCompiles(t *testing.T) {
+	_ = openRW
+	_ = ensureNeighborEdgesTable
+	_ = ensureResolvedPathColumn
+	_ = loadNeighborEdgesFromDB
+	_ = persistEdge
+	_ = resolvePathForObs
+	_ = marshalResolvedPath
+	_ = unmarshalResolvedPath
+	_ = backfillResolvedPaths
+	_ = buildAndPersistEdges
+	_ = neighborEdgesTableExists
+	_ = extractEdgesFromObs
+}
 

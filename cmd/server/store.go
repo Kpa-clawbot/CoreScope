@@ -999,6 +999,9 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		limit = 100
 	}
 
+	// NOTE: The SQL query intentionally does NOT select resolved_path from the DB.
+	// New ingests always resolve fresh using the current prefix map and neighbor graph.
+	// On restart, Load() handles reading persisted resolved_path values. (review item #7)
 	var querySQL string
 	if s.db.isV3 {
 		querySQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
@@ -1103,6 +1106,10 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	broadcastTxs := make(map[int]*StoreTx) // track new transmissions for broadcast
 	var broadcastOrder []int
 
+	// Hoist getCachedNodesAndPM() once before the observation loop to avoid
+	// per-observation function calls (review item #1).
+	_, cachedPM := s.getCachedNodesAndPM()
+
 	for _, r := range tempRows {
 		if r.txID > newMaxID {
 			newMaxID = r.txID
@@ -1164,11 +1171,9 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			}
 
 			// Resolve path at ingest time using neighbor graph
-			if r.pathJSON != "" && r.pathJSON != "[]" {
-				_, pm := s.getCachedNodesAndPM()
-				if pm != nil {
-					obs.ResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, s.graph)
-				}
+			// (cachedPM is hoisted before the observation loop to avoid per-obs function calls)
+			if r.pathJSON != "" && r.pathJSON != "[]" && cachedPM != nil {
+				obs.ResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, cachedPM, s.graph)
 			}
 
 			tx.Observations = append(tx.Observations, obs)
@@ -1316,10 +1321,10 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		var edgeUpdates []persistEdge
 
 		_, pm := s.getCachedNodesAndPM()
+		// Read graph ref under lock (it's set during startup and not replaced after,
+		// but reading under lock is safer — review item #5).
+		graphRef := s.graph
 		for _, tx := range broadcastTxs {
-			isAdvert := tx.PayloadType != nil && *tx.PayloadType == 4
-			fromNode := extractFromNode(tx)
-
 			for _, obs := range tx.Observations {
 				// Collect resolved_path updates
 				if obs.ResolvedPath != nil {
@@ -1329,64 +1334,13 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 					}
 				}
 
-				// Extract neighbor edges
-				path := parsePathJSON(obs.PathJSON)
-				observerPK := strings.ToLower(obs.ObserverID)
-
-				if len(path) == 0 {
-					if isAdvert && fromNode != "" {
-						fromLower := strings.ToLower(fromNode)
-						if fromLower != observerPK {
-							a, b := fromLower, observerPK
-							if a > b {
-								a, b = b, a
-							}
-							edgeUpdates = append(edgeUpdates, persistEdge{a, b, obs.Timestamp})
-							// Update in-memory graph
-							if s.graph != nil {
-								s.graph.upsertEdge(fromLower, observerPK, "", observerPK, obs.SNR, parseTimestamp(obs.Timestamp))
-							}
-						}
-					}
-					continue
-				}
-
-				// Edge 1: originator ↔ path[0] (ADVERTs only, unambiguous)
-				if isAdvert && fromNode != "" && pm != nil {
-					firstHop := strings.ToLower(path[0])
-					fromLower := strings.ToLower(fromNode)
-					candidates := pm.m[firstHop]
-					if len(candidates) == 1 {
-						resolved := strings.ToLower(candidates[0].PublicKey)
-						if resolved != fromLower {
-							a, b := fromLower, resolved
-							if a > b {
-								a, b = b, a
-							}
-							edgeUpdates = append(edgeUpdates, persistEdge{a, b, obs.Timestamp})
-							if s.graph != nil {
-								s.graph.upsertEdge(fromLower, resolved, firstHop, observerPK, obs.SNR, parseTimestamp(obs.Timestamp))
-							}
-						}
-					}
-				}
-
-				// Edge 2: observer ↔ path[last] (ALL types, unambiguous)
-				if pm != nil {
-					lastHop := strings.ToLower(path[len(path)-1])
-					candidates := pm.m[lastHop]
-					if len(candidates) == 1 {
-						resolved := strings.ToLower(candidates[0].PublicKey)
-						if resolved != observerPK {
-							a, b := observerPK, resolved
-							if a > b {
-								a, b = b, a
-							}
-							edgeUpdates = append(edgeUpdates, persistEdge{a, b, obs.Timestamp})
-							if s.graph != nil {
-								s.graph.upsertEdge(observerPK, resolved, lastHop, observerPK, obs.SNR, parseTimestamp(obs.Timestamp))
-							}
-						}
+				// Extract neighbor edges using shared helper (review item #3 — DRY)
+				for _, ec := range extractEdgesFromObs(obs, tx, pm) {
+					edgeUpdates = append(edgeUpdates, persistEdge{ec.A, ec.B, ec.Timestamp})
+					// Update in-memory graph
+					if graphRef != nil {
+						// parseTimestamp handles empty strings safely (returns zero time — review item #8)
+						graphRef.upsertEdge(ec.A, ec.B, "", obs.ObserverID, obs.SNR, parseTimestamp(ec.Timestamp))
 					}
 				}
 			}
@@ -1407,10 +1361,18 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 					if err == nil {
 						stmt, err := sqlTx.Prepare("UPDATE observations SET resolved_path = ? WHERE id = ?")
 						if err == nil {
+							var firstErr error
 							for _, u := range obsUpdates {
-								stmt.Exec(u.resolvedPath, u.obsID)
+								if _, err := stmt.Exec(u.resolvedPath, u.obsID); err != nil && firstErr == nil {
+									firstErr = err
+								}
 							}
 							stmt.Close()
+							if firstErr != nil {
+								log.Printf("[store] async persist resolved_path error (first): %v", firstErr)
+							}
+						} else {
+							log.Printf("[store] async persist resolved_path prepare error: %v", err)
 						}
 						sqlTx.Commit()
 					}
@@ -1424,10 +1386,18 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 							ON CONFLICT(node_a, node_b) DO UPDATE SET
 							count = count + 1, last_seen = MAX(last_seen, excluded.last_seen)`)
 						if err == nil {
+							var firstErr error
 							for _, e := range edgeUpdates {
-								stmt.Exec(e.a, e.b, e.ts)
+								if _, err := stmt.Exec(e.a, e.b, e.ts); err != nil && firstErr == nil {
+									firstErr = err
+								}
 							}
 							stmt.Close()
+							if firstErr != nil {
+								log.Printf("[store] async persist edge error (first): %v", firstErr)
+							}
+						} else {
+							log.Printf("[store] async persist edge prepare error: %v", err)
 						}
 						sqlTx.Commit()
 					}
@@ -1552,6 +1522,15 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			PathJSON:       r.pathJSON,
 			Timestamp:      normalizeTimestamp(r.timestamp),
 		}
+
+		// Resolve path at ingest time for late-arriving observations (review item #2).
+		if r.pathJSON != "" && r.pathJSON != "[]" {
+			_, pm := s.getCachedNodesAndPM()
+			if pm != nil {
+				obs.ResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, s.graph)
+			}
+		}
+
 		tx.Observations = append(tx.Observations, obs)
 		tx.obsKeys[dk] = true
 		tx.ObservationCount++

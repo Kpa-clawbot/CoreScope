@@ -149,6 +149,12 @@ func main() {
 	if err := ensureNeighborEdgesTable(dbPath); err != nil {
 		log.Printf("[neighbor] warning: could not create neighbor_edges table: %v", err)
 	}
+	// Add resolved_path column if missing.
+	// NOTE on startup ordering (review item #10): ensureResolvedPathColumn runs AFTER
+	// OpenDB/detectSchema, so db.hasResolvedPath will be false on first run with a
+	// pre-existing DB. This means Load() won't SELECT resolved_path from SQLite.
+	// That's OK: backfillResolvedPaths (below) computes and persists them in-memory
+	// AND to SQLite. On next restart, detectSchema finds the column and Load() reads it.
 	if err := ensureResolvedPathColumn(dbPath); err != nil {
 		log.Printf("[store] warning: could not add resolved_path column: %v", err)
 	}

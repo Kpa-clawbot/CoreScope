@@ -145,60 +145,10 @@ func buildAndPersistEdges(store *PacketStore, rw *sql.DB) int {
 
 	edgeCount := 0
 	for _, pkt := range packets {
-		isAdvert := pkt.PayloadType != nil && *pkt.PayloadType == 4
-		fromNode := extractFromNode(pkt)
-
 		for _, obs := range pkt.Observations {
-			path := parsePathJSON(obs.PathJSON)
-			observerPK := strings.ToLower(obs.ObserverID)
-			ts := obs.Timestamp
-
-			if len(path) == 0 {
-				if isAdvert && fromNode != "" {
-					fromLower := strings.ToLower(fromNode)
-					if fromLower != observerPK {
-						a, b := fromLower, observerPK
-						if a > b {
-							a, b = b, a
-						}
-						stmt.Exec(a, b, ts)
-						edgeCount++
-					}
-				}
-				continue
-			}
-
-			// Edge 1: originator ↔ path[0] — ADVERTs only (resolve prefix to full pubkey)
-			if isAdvert && fromNode != "" {
-				firstHop := strings.ToLower(path[0])
-				fromLower := strings.ToLower(fromNode)
-				candidates := pm.m[firstHop]
-				if len(candidates) == 1 {
-					resolved := strings.ToLower(candidates[0].PublicKey)
-					if resolved != fromLower {
-						a, b := fromLower, resolved
-						if a > b {
-							a, b = b, a
-						}
-						stmt.Exec(a, b, ts)
-						edgeCount++
-					}
-				}
-			}
-
-			// Edge 2: observer ↔ path[last] — ALL packet types
-			lastHop := strings.ToLower(path[len(path)-1])
-			candidates := pm.m[lastHop]
-			if len(candidates) == 1 {
-				resolved := strings.ToLower(candidates[0].PublicKey)
-				if resolved != observerPK {
-					a, b := observerPK, resolved
-					if a > b {
-						a, b = b, a
-					}
-					stmt.Exec(a, b, ts)
-					edgeCount++
-				}
+			for _, ec := range extractEdgesFromObs(obs, pkt, pm) {
+				stmt.Exec(ec.A, ec.B, ec.Timestamp)
+				edgeCount++
 			}
 		}
 	}
@@ -311,6 +261,7 @@ func unmarshalResolvedPath(s string) []*string {
 // backfillResolvedPaths resolves paths for all observations that have NULL resolved_path.
 func backfillResolvedPaths(store *PacketStore, dbPath string) int {
 	// Collect pending observations and snapshot immutable fields under read lock.
+	// graph is set in main.go before backfill is called; nil-safe throughout (review item #6).
 	type obsRef struct {
 		obsID      int
 		pathJSON   string
@@ -410,6 +361,72 @@ func backfillResolvedPaths(store *PacketStore, dbPath string) int {
 }
 
 // ─── Shared helpers ────────────────────────────────────────────────────────────
+
+// edgeCandidate represents an extracted edge to be persisted.
+type edgeCandidate struct {
+	A, B, Timestamp string
+}
+
+// extractEdgesFromObs extracts neighbor edge candidates from a single observation.
+// For ADVERTs: originator↔path[0] (if unambiguous). For ALL types: observer↔path[last] (if unambiguous).
+// Also handles zero-hop ADVERTs (originator↔observer direct link).
+func extractEdgesFromObs(obs *StoreObs, tx *StoreTx, pm *prefixMap) []edgeCandidate {
+	isAdvert := tx.PayloadType != nil && *tx.PayloadType == 4
+	fromNode := extractFromNode(tx)
+	path := parsePathJSON(obs.PathJSON)
+	observerPK := strings.ToLower(obs.ObserverID)
+	ts := obs.Timestamp
+	var edges []edgeCandidate
+
+	if len(path) == 0 {
+		if isAdvert && fromNode != "" {
+			fromLower := strings.ToLower(fromNode)
+			if fromLower != observerPK {
+				a, b := fromLower, observerPK
+				if a > b {
+					a, b = b, a
+				}
+				edges = append(edges, edgeCandidate{a, b, ts})
+			}
+		}
+		return edges
+	}
+
+	// Edge 1: originator ↔ path[0] — ADVERTs only (resolve prefix to full pubkey)
+	if isAdvert && fromNode != "" && pm != nil {
+		firstHop := strings.ToLower(path[0])
+		fromLower := strings.ToLower(fromNode)
+		candidates := pm.m[firstHop]
+		if len(candidates) == 1 {
+			resolved := strings.ToLower(candidates[0].PublicKey)
+			if resolved != fromLower {
+				a, b := fromLower, resolved
+				if a > b {
+					a, b = b, a
+				}
+				edges = append(edges, edgeCandidate{a, b, ts})
+			}
+		}
+	}
+
+	// Edge 2: observer ↔ path[last] — ALL packet types
+	if pm != nil {
+		lastHop := strings.ToLower(path[len(path)-1])
+		candidates := pm.m[lastHop]
+		if len(candidates) == 1 {
+			resolved := strings.ToLower(candidates[0].PublicKey)
+			if resolved != observerPK {
+				a, b := observerPK, resolved
+				if a > b {
+					a, b = b, a
+				}
+				edges = append(edges, edgeCandidate{a, b, ts})
+			}
+		}
+	}
+
+	return edges
+}
 
 // openRW opens a read-write SQLite connection (same pattern as PruneOldPackets).
 func openRW(dbPath string) (*sql.DB, error) {
