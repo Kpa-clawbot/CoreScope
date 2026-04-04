@@ -3193,20 +3193,24 @@ console.log('\n=== channels.js: formatHashHex (issue #465) ===');
       'destroy must reset observerMap to empty Map');
   });
 
-  test('WS handler debounces render via _wsRenderTimer', () => {
+  test('WS handler coalesces render via rAF (#396)', () => {
     const wsBlock = src.slice(src.indexOf('wsHandler = debouncedOnWS'), src.indexOf('function destroy()'));
-    assert.ok(wsBlock.includes('_wsRenderTimer'),
-      'WS handler must debounce renders via _wsRenderTimer');
-    assert.ok(wsBlock.includes('clearTimeout(_wsRenderTimer)'),
-      'WS handler must clear pending timer before scheduling new render');
-    assert.ok(/setTimeout\(function \(\) \{ renderTableRows\(\); \}/.test(wsBlock),
-      'WS handler must schedule renderTableRows via setTimeout');
+    assert.ok(wsBlock.includes('scheduleWSRender()'),
+      'WS handler must coalesce renders via scheduleWSRender()');
+    // Verify scheduleWSRender uses requestAnimationFrame
+    const schedFn = src.slice(src.indexOf('function scheduleWSRender()'), src.indexOf('function scheduleWSRender()') + 300);
+    assert.ok(schedFn.includes('requestAnimationFrame'),
+      'scheduleWSRender must use requestAnimationFrame for coalescing');
+    assert.ok(schedFn.includes('_wsRenderDirty'),
+      'scheduleWSRender must use dirty flag pattern');
   });
 
-  test('destroy clears _wsRenderTimer', () => {
-    const destroyBlock = src.slice(src.indexOf('function destroy()'), src.indexOf('function destroy()') + 500);
-    assert.ok(destroyBlock.includes('clearTimeout(_wsRenderTimer)'),
-      'destroy must clear _wsRenderTimer to prevent stale renders after navigation');
+  test('destroy clears rAF and dirty flag (#396)', () => {
+    const destroyBlock = src.slice(src.indexOf('function destroy()'), src.indexOf('function destroy()') + 600);
+    assert.ok(destroyBlock.includes('cancelAnimationFrame(_wsRafId)'),
+      'destroy must cancel pending rAF to prevent stale renders after navigation');
+    assert.ok(destroyBlock.includes('_wsRenderDirty = false'),
+      'destroy must reset dirty flag');
   });
 }
 // ===== NODES.JS: shared sandbox factory =====

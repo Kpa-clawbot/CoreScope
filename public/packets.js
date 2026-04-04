@@ -40,6 +40,21 @@
     clearTimeout(_renderTimer);
     _renderTimer = setTimeout(() => renderTableRows(), 200);
   }
+
+  // Coalesce WS-triggered renders into one per animation frame (#396).
+  // Multiple WS batches arriving within the same frame only trigger a single
+  // renderTableRows() call on the next rAF, preventing rapid full rebuilds.
+  function scheduleWSRender() {
+    _wsRenderDirty = true;
+    if (_wsRafId) return;  // already scheduled
+    _wsRafId = requestAnimationFrame(function () {
+      _wsRafId = null;
+      if (_wsRenderDirty) {
+        _wsRenderDirty = false;
+        renderTableRows();
+      }
+    });
+  }
   const PANEL_WIDTH_KEY = 'meshcore-panel-width';
   const PANEL_CLOSE_HTML = '<button class="panel-close-btn" title="Close detail pane (Esc)">✕</button>';
 
@@ -59,6 +74,8 @@
   let _lastVisibleEnd = -1;       // last rendered end index (for dirty checking)
   let _vsScrollHandler = null;    // scroll listener reference
   let _wsRenderTimer = null;      // debounce timer for WS-triggered renders
+  let _wsRafId = null;            // rAF id for coalescing WS-triggered renders (#396)
+  let _wsRenderDirty = false;     // dirty flag for rAF render coalescing (#396)
   let _observerFilterSet = null;  // cached Set from filters.observer, hoisted above loops (#427)
 
   function closeDetailPanel() {
@@ -461,9 +478,8 @@
           if (packets.length > PACKET_LIMIT) packets.length = PACKET_LIMIT;
         }
         totalCount += filtered.length;
-        // Debounce WS-triggered renders to avoid rapid full rebuilds
-        clearTimeout(_wsRenderTimer);
-        _wsRenderTimer = setTimeout(function () { renderTableRows(); }, 200);
+        // Coalesce WS-triggered renders via rAF (#396)
+        scheduleWSRender();
       });
     });
   }
@@ -474,6 +490,8 @@
     wsHandler = null;
     detachVScrollListener();
     clearTimeout(_wsRenderTimer);
+    if (_wsRafId) { cancelAnimationFrame(_wsRafId); _wsRafId = null; }
+    _wsRenderDirty = false;
     _displayPackets = [];
     _rowCounts = [];
     _rowCountsDirty = false;
