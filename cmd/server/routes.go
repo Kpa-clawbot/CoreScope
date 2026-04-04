@@ -1431,10 +1431,8 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 						c.Name = ni.Name
 					}
 					if ni.HasGPS {
-						lat := ni.Lat
-						lon := ni.Lon
-						c.Lat = lat
-						c.Lon = lon
+						c.Lat = ni.Lat
+						c.Lon = ni.Lon
 					}
 					candidates = append(candidates, c)
 				}
