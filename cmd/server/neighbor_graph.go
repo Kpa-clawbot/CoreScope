@@ -18,7 +18,7 @@ const (
 	// Time-decay half-life: 7 days.
 	affinityHalfLifeHours = 168.0
 	// Cache TTL for the built graph.
-	neighborGraphTTL = 60 * time.Second
+	neighborGraphTTL = 5 * time.Minute
 	// Auto-resolve confidence: best must be >= this factor × second-best.
 	affinityConfidenceRatio = 3.0
 	// Minimum observation count to auto-resolve.
@@ -130,6 +130,17 @@ func BuildFromStore(store *PacketStore) *NeighborGraph {
 	return BuildFromStoreWithLog(store, false)
 }
 
+// cachedToLower returns strings.ToLower(s), caching results to avoid
+// repeated allocations for the same pubkey string.
+func cachedToLower(cache map[string]string, s string) string {
+	if v, ok := cache[s]; ok {
+		return v
+	}
+	v := strings.ToLower(s)
+	cache[s] = v
+	return v
+}
+
 // BuildFromStoreWithLog constructs the neighbor graph, optionally logging disambiguation decisions.
 func BuildFromStoreWithLog(store *PacketStore, enableLog bool) *NeighborGraph {
 	g := NewNeighborGraph()
@@ -149,30 +160,27 @@ func BuildFromStoreWithLog(store *PacketStore, enableLog bool) *NeighborGraph {
 	// Use cached nodes+PM (avoids DB call if cache is fresh).
 	_, pm := store.getCachedNodesAndPM()
 
+	// Local cache for strings.ToLower — pubkeys are immutable and repeat
+	// across hundreds of thousands of observations.
+	lowerCache := make(map[string]string, 256)
+
 	// Phase 1: Extract edges from every transmission + observation.
 	for _, tx := range packets {
 		isAdvert := tx.PayloadType != nil && *tx.PayloadType == 4
-		fromNode := "" // originator pubkey (from byNode index key)
-		// Find the originator pubkey — it's the key in store.byNode.
-		// StoreTx doesn't store from_node directly; we find it via decoded JSON
-		// or the byNode index. However, iterating byNode is expensive.
-		// The originator pubkey is in the decoded JSON "from_node" field,
-		// but parsing JSON per tx is expensive too.
-		// Actually, let's look at how byNode is keyed.
-		// Looking at store.go, byNode maps pubkey → transmissions where that
-		// pubkey is the "from" node. We need the reverse: tx → from_node.
-		// The from_node is embedded in DecodedJSON.
-		// For efficiency, let's extract it once.
-		fromNode = extractFromNode(tx)
+		fromNode := extractFromNode(tx)
+		// Pre-compute lowered originator once per tx (not per observation).
+		fromLower := ""
+		if fromNode != "" {
+			fromLower = cachedToLower(lowerCache, fromNode)
+		}
 
 		for _, obs := range tx.Observations {
 			path := parsePathJSON(obs.PathJSON)
-			observerPK := strings.ToLower(obs.ObserverID)
+			observerPK := cachedToLower(lowerCache, obs.ObserverID)
 
 			if len(path) == 0 {
 				// Zero-hop
-				if isAdvert && fromNode != "" {
-					fromLower := strings.ToLower(fromNode)
+				if isAdvert && fromLower != "" {
 					if fromLower != observerPK { // self-edge guard
 						g.upsertEdge(fromLower, observerPK, "", observerPK, obs.SNR, parseTimestamp(obs.Timestamp))
 					}
@@ -181,20 +189,19 @@ func BuildFromStoreWithLog(store *PacketStore, enableLog bool) *NeighborGraph {
 			}
 
 			// Edge 1: originator ↔ path[0] — ADVERTs only
-			if isAdvert && fromNode != "" {
-				firstHop := strings.ToLower(path[0])
-				fromLower := strings.ToLower(fromNode)
+			if isAdvert && fromLower != "" {
+				firstHop := cachedToLower(lowerCache, path[0])
 				if fromLower != firstHop { // self-edge guard (shouldn't happen but spec says check)
 					candidates := pm.m[firstHop]
-					g.upsertEdgeWithCandidates(fromLower, firstHop, candidates, observerPK, obs.SNR, parseTimestamp(obs.Timestamp))
+					g.upsertEdgeWithCandidates(fromLower, firstHop, candidates, observerPK, obs.SNR, parseTimestamp(obs.Timestamp), lowerCache)
 				}
 			}
 
 			// Edge 2: observer ↔ path[last] — ALL packet types
-			lastHop := strings.ToLower(path[len(path)-1])
+			lastHop := cachedToLower(lowerCache, path[len(path)-1])
 			if observerPK != lastHop { // self-edge guard
 				candidates := pm.m[lastHop]
-				g.upsertEdgeWithCandidates(observerPK, lastHop, candidates, observerPK, obs.SNR, parseTimestamp(obs.Timestamp))
+				g.upsertEdgeWithCandidates(observerPK, lastHop, candidates, observerPK, obs.SNR, parseTimestamp(obs.Timestamp), lowerCache)
 			}
 		}
 	}
@@ -211,12 +218,10 @@ func BuildFromStoreWithLog(store *PacketStore, enableLog bool) *NeighborGraph {
 
 // extractFromNode pulls the originator pubkey from a StoreTx's DecodedJSON.
 // ADVERTs use "pubKey", other packets may use "from_node" or "from".
+// Uses the cached ParsedDecoded() accessor to avoid repeated json.Unmarshal.
 func extractFromNode(tx *StoreTx) string {
-	if tx.DecodedJSON == "" {
-		return ""
-	}
-	var decoded map[string]interface{}
-	if err := jsonUnmarshalFast(tx.DecodedJSON, &decoded); err != nil {
+	decoded := tx.ParsedDecoded()
+	if decoded == nil {
 		return ""
 	}
 	// ADVERTs store the originator pubkey as "pubKey"; other packets may use
@@ -275,9 +280,9 @@ func (g *NeighborGraph) upsertEdge(pubkeyA, pubkeyB, prefix, observer string, sn
 }
 
 // upsertEdgeWithCandidates handles prefix-based edges that may be ambiguous.
-func (g *NeighborGraph) upsertEdgeWithCandidates(knownPK, prefix string, candidates []nodeInfo, observer string, snr *float64, ts time.Time) {
+func (g *NeighborGraph) upsertEdgeWithCandidates(knownPK, prefix string, candidates []nodeInfo, observer string, snr *float64, ts time.Time, lc map[string]string) {
 	if len(candidates) == 1 {
-		resolved := strings.ToLower(candidates[0].PublicKey)
+		resolved := cachedToLower(lc, candidates[0].PublicKey)
 		if resolved == knownPK {
 			return // self-edge guard
 		}
@@ -288,7 +293,7 @@ func (g *NeighborGraph) upsertEdgeWithCandidates(knownPK, prefix string, candida
 	// Filter out self from candidates
 	filtered := make([]string, 0, len(candidates))
 	for _, c := range candidates {
-		pk := strings.ToLower(c.PublicKey)
+		pk := cachedToLower(lc, c.PublicKey)
 		if pk != knownPK {
 			filtered = append(filtered, pk)
 		}
