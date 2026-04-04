@@ -1728,68 +1728,114 @@ func (s *PacketStore) filterPackets(q PacketQuery) []*StoreTx {
 		return s.transmissionsForObserver(q.Observer, nil)
 	}
 
-	results := s.packets
-
+	// Pre-compute filter parameters outside the hot loop.
+	var (
+		filterType  int
+		hasType     bool
+		filterRoute int
+		hasRoute    bool
+		filterHash  string
+		hasSince    = q.Since != ""
+		hasUntil    = q.Until != ""
+	)
 	if q.Type != nil {
-		t := *q.Type
-		results = filterTxSlice(results, func(tx *StoreTx) bool {
-			return tx.PayloadType != nil && *tx.PayloadType == t
-		})
+		hasType = true
+		filterType = *q.Type
 	}
 	if q.Route != nil {
-		r := *q.Route
-		results = filterTxSlice(results, func(tx *StoreTx) bool {
-			return tx.RouteType != nil && *tx.RouteType == r
-		})
-	}
-	if q.Observer != "" {
-		results = s.transmissionsForObserver(q.Observer, results)
+		hasRoute = true
+		filterRoute = *q.Route
 	}
 	if q.Hash != "" {
-		h := strings.ToLower(q.Hash)
-		results = filterTxSlice(results, func(tx *StoreTx) bool {
-			return tx.Hash == h
-		})
+		filterHash = strings.ToLower(q.Hash)
 	}
-	if q.Since != "" {
-		results = filterTxSlice(results, func(tx *StoreTx) bool {
-			return tx.FirstSeen > q.Since
-		})
+
+	// Pre-compute observer set for observer filter.
+	var observerSet map[string]bool
+	if q.Observer != "" {
+		ids := strings.Split(q.Observer, ",")
+		observerSet = make(map[string]bool, len(ids))
+		for _, id := range ids {
+			observerSet[strings.TrimSpace(id)] = true
+		}
 	}
-	if q.Until != "" {
-		results = filterTxSlice(results, func(tx *StoreTx) bool {
-			return tx.FirstSeen < q.Until
-		})
-	}
+
+	// Pre-compute region observer set.
+	var regionObservers map[string]bool
 	if q.Region != "" {
-		regionObservers := s.resolveRegionObservers(q.Region)
-		if len(regionObservers) > 0 {
-			results = filterTxSlice(results, func(tx *StoreTx) bool {
-				for _, obs := range tx.Observations {
-					if regionObservers[obs.ObserverID] {
-						return true
-					}
+		regionObservers = s.resolveRegionObservers(q.Region)
+		if len(regionObservers) == 0 {
+			return nil
+		}
+	}
+
+	// Pre-compute node filter parameters.
+	var nodePK string
+	hasNode := q.Node != ""
+	if hasNode {
+		nodePK = s.db.resolveNodePubkey(q.Node)
+	}
+
+	// Determine the source slice. Use index-based source when only node
+	// filter is active and an index exists.
+	source := s.packets
+	if hasNode && !hasType && !hasRoute && q.Observer == "" &&
+		filterHash == "" && !hasSince && !hasUntil && q.Region == "" {
+		if indexed, ok := s.byNode[nodePK]; ok {
+			return indexed
+		}
+	}
+	// Single-pass filter: apply all predicates in one scan.
+	results := filterTxSlice(source, func(tx *StoreTx) bool {
+		if hasType && (tx.PayloadType == nil || *tx.PayloadType != filterType) {
+			return false
+		}
+		if hasRoute && (tx.RouteType == nil || *tx.RouteType != filterRoute) {
+			return false
+		}
+		if filterHash != "" && tx.Hash != filterHash {
+			return false
+		}
+		if hasSince && tx.FirstSeen <= q.Since {
+			return false
+		}
+		if hasUntil && tx.FirstSeen >= q.Until {
+			return false
+		}
+		if observerSet != nil {
+			found := false
+			for _, obs := range tx.Observations {
+				if observerSet[obs.ObserverID] {
+					found = true
+					break
 				}
+			}
+			if !found {
 				return false
-			})
-		} else {
-			results = nil
+			}
 		}
-	}
-	if q.Node != "" {
-		pk := s.db.resolveNodePubkey(q.Node)
-		// Use node index if available
-		if indexed, ok := s.byNode[pk]; ok && results == nil {
-			results = indexed
-		} else {
-			results = filterTxSlice(results, func(tx *StoreTx) bool {
-				if tx.DecodedJSON == "" {
-					return false
+		if regionObservers != nil {
+			found := false
+			for _, obs := range tx.Observations {
+				if regionObservers[obs.ObserverID] {
+					found = true
+					break
 				}
-				return strings.Contains(tx.DecodedJSON, pk) || strings.Contains(tx.DecodedJSON, q.Node)
-			})
+			}
+			if !found {
+				return false
+			}
 		}
-	}
+		if hasNode {
+			if tx.DecodedJSON == "" {
+				return false
+			}
+			if !strings.Contains(tx.DecodedJSON, nodePK) && !strings.Contains(tx.DecodedJSON, q.Node) {
+				return false
+			}
+		}
+		return true
+	})
 
 	return results
 }
