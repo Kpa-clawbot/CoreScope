@@ -1419,24 +1419,25 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		hopLower := strings.ToLower(hop)
-		rows, err := s.db.conn.Query("SELECT public_key, name, lat, lon FROM nodes WHERE LOWER(public_key) LIKE ?", hopLower+"%")
-		if err != nil {
-			resolved[hop] = &HopResolution{Name: nil, Candidates: []HopCandidate{}, Conflicts: []interface{}{}, Confidence: "ambiguous"}
-			continue
-		}
 
+		// Resolve candidates from the in-memory prefix map instead of
+		// issuing per-hop DB queries (fixes N+1 pattern, see #369).
 		var candidates []HopCandidate
-		for rows.Next() {
-			var pk string
-			var name sql.NullString
-			var lat, lon sql.NullFloat64
-			rows.Scan(&pk, &name, &lat, &lon)
-			candidates = append(candidates, HopCandidate{
-				Name: nullStr(name), Pubkey: pk,
-				Lat: nullFloat(lat), Lon: nullFloat(lon),
-			})
+		if pm != nil {
+			if matched, ok := pm.m[hopLower]; ok {
+				for _, ni := range matched {
+					c := HopCandidate{Pubkey: ni.PublicKey}
+					if ni.Name != "" {
+						c.Name = ni.Name
+					}
+					if ni.HasGPS {
+						c.Lat = ni.Lat
+						c.Lon = ni.Lon
+					}
+					candidates = append(candidates, c)
+				}
+			}
 		}
-		rows.Close()
 
 		if len(candidates) == 0 {
 			resolved[hop] = &HopResolution{Name: nil, Candidates: []HopCandidate{}, Conflicts: []interface{}{}, Confidence: "no_match"}
