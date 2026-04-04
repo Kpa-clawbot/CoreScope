@@ -144,13 +144,19 @@ func buildAndPersistEdges(store *PacketStore, rw *sql.DB) int {
 	defer stmt.Close()
 
 	edgeCount := 0
+	var firstErr error
 	for _, pkt := range packets {
 		for _, obs := range pkt.Observations {
 			for _, ec := range extractEdgesFromObs(obs, pkt, pm) {
-				stmt.Exec(ec.A, ec.B, ec.Timestamp)
+				if _, err := stmt.Exec(ec.A, ec.B, ec.Timestamp); err != nil && firstErr == nil {
+					firstErr = err
+				}
 				edgeCount++
 			}
 		}
+	}
+	if firstErr != nil {
+		log.Printf("[neighbor] edge exec error (first): %v", firstErr)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -337,8 +343,14 @@ func backfillResolvedPaths(store *PacketStore, dbPath string) int {
 	}
 	defer stmt.Close()
 
+	var firstErr error
 	for _, r := range results {
-		stmt.Exec(r.rpJSON, r.obsID)
+		if _, err := stmt.Exec(r.rpJSON, r.obsID); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		log.Printf("[store] backfill resolved_path exec error (first): %v", firstErr)
 	}
 
 	if err := sqlTx.Commit(); err != nil {

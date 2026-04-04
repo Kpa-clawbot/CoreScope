@@ -524,18 +524,4 @@ func TestExtractEdgesFromObs_SameNodeNoEdge(t *testing.T) {
 	}
 }
 
-func TestNeighborPersistFileCompiles(t *testing.T) {
-	_ = openRW
-	_ = ensureNeighborEdgesTable
-	_ = ensureResolvedPathColumn
-	_ = loadNeighborEdgesFromDB
-	_ = persistEdge
-	_ = resolvePathForObs
-	_ = marshalResolvedPath
-	_ = unmarshalResolvedPath
-	_ = backfillResolvedPaths
-	_ = buildAndPersistEdges
-	_ = neighborEdgesTableExists
-	_ = extractEdgesFromObs
-}
 
