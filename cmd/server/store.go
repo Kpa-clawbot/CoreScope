@@ -61,6 +61,10 @@ type StoreObs struct {
 	Timestamp      string
 }
 
+// distRebuildInterval is the minimum time between distance index rebuilds
+// to avoid hot-looping on busy meshes.
+const distRebuildInterval = 30 * time.Second
+
 // PacketStore holds all transmissions in memory with indexes for fast queries.
 type PacketStore struct {
 	mu            sync.RWMutex
@@ -1473,15 +1477,20 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		}
 	}
 
-	// Mark distance index dirty if any paths changed (rebuild is debounced)
+	// Check if any paths changed (used for both distance rebuild and cache invalidation).
+	hasPathChanges := false
 	for txID, tx := range updatedTxs {
 		if tx.PathJSON != oldPaths[txID] {
-			s.distDirty = true
+			hasPathChanges = true
 			break
 		}
 	}
-	// Rebuild at most every 30s to avoid hot-looping on busy meshes
-	if s.distDirty && time.Since(s.distLast) > 30*time.Second {
+
+	// Mark distance index dirty if any paths changed (rebuild is debounced)
+	if hasPathChanges {
+		s.distDirty = true
+	}
+	if s.distDirty && time.Since(s.distLast) > distRebuildInterval {
 		s.buildDistanceIndex()
 		s.distDirty = false
 		s.distLast = time.Now()
@@ -1491,13 +1500,6 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		// Targeted cache invalidation: new observations always affect RF
 		// analytics; topology/distance/subpath caches only if paths changed.
 		// Channel and hash caches are unaffected by observation-only ingestion.
-		hasPathChanges := false
-		for txID, tx := range updatedTxs {
-			if tx.PathJSON != oldPaths[txID] {
-				hasPathChanges = true
-				break
-			}
-		}
 		s.invalidateCachesFor(cacheInvalidation{
 			hasNewObservations: true,
 			hasNewPaths:        hasPathChanges,
