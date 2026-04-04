@@ -3811,3 +3811,147 @@ func BenchmarkIndexByNode(b *testing.B) {
 		}
 	})
 }
+
+// --- Multi-observer comma-separated filter tests ---
+
+func TestTransmissionsForObserverMultiCSV(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+	store := NewPacketStore(db, nil)
+	store.Load()
+
+	t.Run("comma-separated returns union via index", func(t *testing.T) {
+		result := store.transmissionsForObserver("obs1,obs2", nil)
+		if len(result) == 0 {
+			t.Fatal("expected results for obs1,obs2")
+		}
+		// obs1 has transmissions 1,2,3; obs2 has transmission 1
+		// Union should include all unique transmissions
+		obs1Only := store.transmissionsForObserver("obs1", nil)
+		obs2Only := store.transmissionsForObserver("obs2", nil)
+		if len(result) < len(obs1Only) || len(result) < len(obs2Only) {
+			t.Errorf("union (%d) should be >= each individual set (obs1=%d, obs2=%d)",
+				len(result), len(obs1Only), len(obs2Only))
+		}
+	})
+
+	t.Run("comma-separated with spaces via index", func(t *testing.T) {
+		result := store.transmissionsForObserver("obs1, obs2", nil)
+		if len(result) == 0 {
+			t.Fatal("expected results for 'obs1, obs2' (with space)")
+		}
+		noSpace := store.transmissionsForObserver("obs1,obs2", nil)
+		if len(result) != len(noSpace) {
+			t.Errorf("with-space (%d) should equal no-space (%d)", len(result), len(noSpace))
+		}
+	})
+
+	t.Run("comma-separated returns union via filter path", func(t *testing.T) {
+		allTx := store.packets
+		result := store.transmissionsForObserver("obs1,obs2", allTx)
+		if len(result) == 0 {
+			t.Fatal("expected results for obs1,obs2 via filter path")
+		}
+	})
+
+	t.Run("comma-separated with spaces via filter path", func(t *testing.T) {
+		allTx := store.packets
+		withSpace := store.transmissionsForObserver("obs1, obs2", allTx)
+		noSpace := store.transmissionsForObserver("obs1,obs2", allTx)
+		if len(withSpace) != len(noSpace) {
+			t.Errorf("filter path: with-space (%d) should equal no-space (%d)", len(withSpace), len(noSpace))
+		}
+	})
+}
+
+func TestBuildTransmissionWhereMultiObserver(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+
+	t.Run("comma-separated produces IN clause", func(t *testing.T) {
+		q := PacketQuery{Observer: "obs1,obs2"}
+		where, args := db.buildTransmissionWhere(q)
+		if len(where) != 1 {
+			t.Fatalf("expected 1 WHERE clause, got %d", len(where))
+		}
+		clause := where[0]
+		if !strings.Contains(clause, "IN (?,?)") {
+			t.Errorf("expected IN (?,?) in clause, got: %s", clause)
+		}
+		if len(args) != 2 {
+			t.Fatalf("expected 2 args, got %d", len(args))
+		}
+		if args[0] != "obs1" || args[1] != "obs2" {
+			t.Errorf("expected [obs1, obs2], got %v", args)
+		}
+	})
+
+	t.Run("comma-separated with spaces trims IDs", func(t *testing.T) {
+		q := PacketQuery{Observer: "obs1, obs2"}
+		_, args := db.buildTransmissionWhere(q)
+		if len(args) != 2 {
+			t.Fatalf("expected 2 args, got %d", len(args))
+		}
+		if args[0] != "obs1" || args[1] != "obs2" {
+			t.Errorf("expected trimmed [obs1, obs2], got %v", args)
+		}
+	})
+
+	t.Run("single observer still works", func(t *testing.T) {
+		q := PacketQuery{Observer: "obs1"}
+		where, args := db.buildTransmissionWhere(q)
+		if len(where) != 1 {
+			t.Fatalf("expected 1 WHERE clause, got %d", len(where))
+		}
+		if !strings.Contains(where[0], "IN (?)") {
+			t.Errorf("expected IN (?) for single observer, got: %s", where[0])
+		}
+		if len(args) != 1 || args[0] != "obs1" {
+			t.Errorf("expected [obs1], got %v", args)
+		}
+	})
+}
+
+// --- Distance index rebuild debounce (#557) ---
+
+func TestDistanceRebuildDebounce(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+	store := NewPacketStore(db, nil)
+	store.Load()
+
+	// After Load(), distLast is set to now — so distDirty should be false
+	if store.distDirty {
+		t.Fatal("distDirty should be false after Load()")
+	}
+
+	// Insert a new observation with a different path to trigger distDirty
+	maxObsID := db.GetMaxObservationID()
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 2, 5.0, -100, '["xx","yy","zz"]', ?)`, time.Now().Unix())
+
+	store.IngestNewObservations(maxObsID, 500)
+
+	// distDirty should be true (30s hasn't elapsed since Load)
+	if !store.distDirty {
+		t.Fatal("distDirty should be true after path change within 30s window")
+	}
+
+	// Now simulate 30s having elapsed by backdating distLast
+	store.distLast = time.Now().Add(-31 * time.Second)
+
+	// Insert another observation to trigger another ingest cycle
+	maxObsID = db.GetMaxObservationID()
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (1, 2, 7.0, -95, '["aa","bb","cc","dd"]', ?)`, time.Now().Unix())
+
+	store.IngestNewObservations(maxObsID, 500)
+
+	// After 30s elapsed, distDirty should be cleared (rebuild happened)
+	if store.distDirty {
+		t.Fatal("distDirty should be false after rebuild (30s elapsed)")
+	}
+}

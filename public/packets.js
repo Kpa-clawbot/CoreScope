@@ -53,6 +53,7 @@
   let _displayPackets = [];       // filtered packets for current view
   let _displayGrouped = false;    // whether _displayPackets is in grouped mode
   let _rowCounts = [];            // per-entry DOM row counts (1 for flat, 1+children for expanded groups)
+  let _rowCountsDirty = false;    // set when _rowCounts may be stale (e.g. WS added children) (#410)
   let _cumulativeOffsetsCache = null; // cached cumulative offsets, invalidated on _rowCounts change
   let _lastVisibleStart = -1;     // last rendered start index (for dirty checking)
   let _lastVisibleEnd = -1;       // last rendered end index (for dirty checking)
@@ -170,6 +171,29 @@
     }
   }
 
+  /**
+   * Pre-populate hopNameCache from server-side resolved_path on packets.
+   * Packets with resolved_path skip client-side HopResolver entirely.
+   * Must call ensureHopResolver() first so nodesList is available for name lookup.
+   */
+  async function cacheResolvedPaths(packets) {
+    if (!packets || !packets.length) return;
+    let needsInit = false;
+    for (const p of packets) {
+      const rp = getResolvedPath(p);
+      if (rp) { needsInit = true; break; }
+    }
+    if (!needsInit) return;
+    await ensureHopResolver();
+    for (const p of packets) {
+      const rp = getResolvedPath(p);
+      if (!rp) continue;
+      const hops = getParsedPath(p);
+      const resolved = HopResolver.resolveFromServer(hops, rp);
+      Object.assign(hopNameCache, resolved);
+    }
+  }
+
   function renderHop(h, observerId) {
     // Use per-packet cache key if observer context available (ambiguous hops differ by region)
     const cacheKey = observerId ? h + ':' + observerId : h;
@@ -268,7 +292,7 @@
             const obs = data.observations.find(o => String(o.id) === String(obsTarget));
             if (obs) {
               expandedHashes.add(h);
-              const obsPacket = {...data.packet, observer_id: obs.observer_id, observer_name: obs.observer_name, snr: obs.snr, rssi: obs.rssi, path_json: obs.path_json, timestamp: obs.timestamp, first_seen: obs.timestamp};
+              const obsPacket = {...data.packet, observer_id: obs.observer_id, observer_name: obs.observer_name, snr: obs.snr, rssi: obs.rssi, path_json: obs.path_json, resolved_path: obs.resolved_path, timestamp: obs.timestamp, first_seen: obs.timestamp};
               clearParsedCache(obsPacket);
               selectPacket(obs.id, h, {packet: obsPacket, breakdown: data.breakdown, observations: data.observations}, obs.id);
             } else {
@@ -357,7 +381,7 @@
           if (pktTime && pktTime < cutoff) return false;
         }
         if (filters.type) { const types = filters.type.split(',').map(Number); if (!types.includes(p.payload_type)) return false; }
-        if (filters.observer) { const obsSet = new Set(filters.observer.split(',')); if (!obsSet.has(p.observer_id)) return false; }
+        if (filters.observer) { const obsSet = new Set(filters.observer.split(',')); if (!obsSet.has(p.observer_id) && !(p._children && p._children.some(c => obsSet.has(String(c.observer_id))))) return false; }
         if (filters.hash && p.hash !== filters.hash) return false;
         if (RegionFilter.getRegionParam()) {
           const selectedRegions = RegionFilter.getRegionParam().split(',');
@@ -370,9 +394,16 @@
       if (!filtered.length) return;
 
       // Resolve any new hops, then update and re-render
+      // Pre-populate from server-side resolved_path, then fall back for remaining
       const newHops = new Set();
       for (const p of filtered) {
-        try { getParsedPath(p).forEach(h => { if (!(h in hopNameCache)) newHops.add(h); }); } catch {}
+        const rp = getResolvedPath(p);
+        const hops = getParsedPath(p);
+        if (rp && rp.length === hops.length && window.HopResolver && HopResolver.ready()) {
+          const resolved = HopResolver.resolveFromServer(hops, rp);
+          Object.assign(hopNameCache, resolved);
+        }
+        try { hops.forEach(h => { if (!(h in hopNameCache)) newHops.add(h); }); } catch {}
       }
       (newHops.size ? resolveHops([...newHops]) : Promise.resolve()).then(() => {
         if (groupByHash) {
@@ -396,6 +427,9 @@
                 existing._children.unshift(p);
                 if (existing._children.length > 200) existing._children.length = 200;
                 sortGroupChildren(existing);
+                // Invalidate row counts — child count changed, so virtual scroll
+                // heights are stale until next renderTableRows() (#410)
+                _invalidateRowCounts();
               }
             } else {
               // New group
@@ -442,6 +476,7 @@
     clearTimeout(_wsRenderTimer);
     _displayPackets = [];
     _rowCounts = [];
+    _rowCountsDirty = false;
     _cumulativeOffsetsCache = null;
     _observerFilterSet = null;
     _lastVisibleStart = -1;
@@ -519,7 +554,10 @@
         totalCount = flat.length;
       }
 
-      // Pre-resolve all path hops to node names
+      // Pre-resolve from server-side resolved_path (preferred, no client-side disambiguation needed)
+      await cacheResolvedPaths(packets);
+
+      // Pre-resolve all path hops to node names (fallback for packets without resolved_path)
       const allHops = new Set();
       for (const p of packets) {
         try { getParsedPath(p).forEach(h => allHops.add(h)); } catch {}
@@ -542,19 +580,22 @@
       // Ambiguous hops are already resolved by HopResolver client-side
       // No need for per-observer server API calls
 
-      // Restore expanded group children
+      // Restore expanded group children (parallel fetch, Map lookup)
       if (groupByHash && expandedHashes.size > 0) {
-        for (const hash of expandedHashes) {
-          const group = packets.find(p => p.hash === hash);
-          if (group) {
-            try {
-              const childData = await api(`/packets?hash=${hash}&limit=20`);
-              group._children = childData.packets || [];
-              sortGroupChildren(group);
-            } catch {}
-          } else {
-            // Group no longer in results — remove from expanded
+        const expandedArr = [...expandedHashes];
+        const results = await Promise.all(expandedArr.map(hash => {
+          const group = hashIndex.get(hash);
+          if (!group) return { hash, group: null, data: null };
+          return api(`/packets?hash=${hash}&limit=20`)
+            .then(data => ({ hash, group, data }))
+            .catch(() => ({ hash, group, data: null }));
+        }));
+        for (const { hash, group, data } of results) {
+          if (!group) {
             expandedHashes.delete(hash);
+          } else if (data) {
+            group._children = data.packets || [];
+            sortGroupChildren(group);
           }
         }
       }
@@ -1007,11 +1048,11 @@
         }
         else if (action === 'select-observation') {
           const parentHash = row.dataset.parentHash;
-          const group = packets.find(p => p.hash === parentHash);
+          const group = hashIndex.get(parentHash);
           const child = group?._children?.find(c => String(c.id) === String(value));
           if (child) {
             const parentData = group._fetchedData;
-            const obsPacket = parentData ? {...parentData.packet, observer_id: child.observer_id, observer_name: child.observer_name, snr: child.snr, rssi: child.rssi, path_json: child.path_json, timestamp: child.timestamp, first_seen: child.timestamp} : child;
+            const obsPacket = parentData ? {...parentData.packet, observer_id: child.observer_id, observer_name: child.observer_name, snr: child.snr, rssi: child.rssi, path_json: child.path_json, resolved_path: child.resolved_path, timestamp: child.timestamp, first_seen: child.timestamp} : child;
             if (parentData) { clearParsedCache(obsPacket); }
             selectPacket(child.id, parentHash, {packet: obsPacket, breakdown: parentData?.breakdown, observations: parentData?.observations}, child.id);
           }
@@ -1100,8 +1141,8 @@
 
   // Build HTML for a single flat (ungrouped) packet row
   function buildFlatRowHtml(p) {
-    const decoded = getParsedDecoded(p);
-    const pathHops = getParsedPath(p);
+    const decoded = getParsedDecoded(p) || {};
+    const pathHops = getParsedPath(p) || [];
     const region = p.observer_id ? (observerMap.get(p.observer_id)?.iata || '') : '';
     const typeName = payloadTypeName(p.payload_type);
     const typeClass = payloadTypeColor(p.payload_type);
@@ -1121,6 +1162,21 @@
         <td class="col-rpt"></td>
         <td class="col-details">${detail}</td>
       </tr>`;
+  }
+
+  // Mark _rowCounts as stale so renderVisibleRows() recomputes them lazily.
+  // Called when expanded group children change outside renderTableRows() (#410).
+  function _invalidateRowCounts() {
+    _rowCountsDirty = true;
+    _cumulativeOffsetsCache = null;
+  }
+
+  // Recompute _rowCounts from _displayPackets if they've been invalidated.
+  function _refreshRowCountsIfDirty() {
+    if (!_rowCountsDirty || !_displayPackets.length) return;
+    _rowCounts = _displayPackets.map(function(p) { return _getRowCount(p); });
+    _cumulativeOffsetsCache = null;
+    _rowCountsDirty = false;
   }
 
   // Compute the number of DOM <tr> rows a single entry produces.
@@ -1160,6 +1216,9 @@
 
     const scrollContainer = document.getElementById('pktLeft');
     if (!scrollContainer) return;
+
+    // Recompute row counts if they were invalidated (e.g. WS added children) (#410)
+    _refreshRowCountsIfDirty();
 
     // Compute total DOM rows accounting for expanded groups
     const offsets = _cumulativeRowOffsets();
@@ -1292,7 +1351,11 @@
     }
     if (filters.observer && !groupByHash) {
       const obsIds = new Set(filters.observer.split(','));
-      displayPackets = displayPackets.filter(p => obsIds.has(p.observer_id));
+      displayPackets = displayPackets.filter(p => {
+        if (obsIds.has(p.observer_id)) return true;
+        if (p._children) return p._children.some(c => obsIds.has(String(c.observer_id)));
+        return false;
+      });
     }
 
     // Packet Filter Language
@@ -1313,6 +1376,7 @@
     if (!displayPackets.length) {
       _displayPackets = [];
       _rowCounts = [];
+      _rowCountsDirty = false;
       _cumulativeOffsetsCache = null;
       _observerFilterSet = null;
       _lastVisibleStart = -1;
@@ -1332,6 +1396,7 @@
     _displayGrouped = groupByHash;
     _observerFilterSet = filters.observer ? new Set(filters.observer.split(',')) : null;
     _rowCounts = displayPackets.map(p => _getRowCount(p));
+    _rowCountsDirty = false;
     _cumulativeOffsetsCache = null;
 
     attachVScrollListener();
@@ -1437,8 +1502,8 @@
     const pkt = data.packet;
     const breakdown = data.breakdown || {};
     const ranges = breakdown.ranges || [];
-    const decoded = getParsedDecoded(pkt);
-    const pathHops = getParsedPath(pkt);
+    const decoded = getParsedDecoded(pkt) || {};
+    const pathHops = getParsedPath(pkt) || [];
 
     // Resolve sender GPS — from packet directly, or from known node in DB
     let senderLat = decoded.lat != null ? decoded.lat : (decoded.latitude || null);
@@ -1460,11 +1525,18 @@
       } catch {}
     }
 
-    // Re-resolve hops using client-side HopResolver with sender GPS context
+    // Resolve hops: prefer server-side resolved_path, fall back to client-side HopResolver
     if (pathHops.length) {
       try {
-        await ensureHopResolver();
-        const resolved = HopResolver.resolve(pathHops);
+        const serverResolved = getResolvedPath(pkt);
+        let resolved;
+        if (serverResolved && serverResolved.length === pathHops.length) {
+          await ensureHopResolver();
+          resolved = HopResolver.resolveFromServer(pathHops, serverResolved);
+        } else {
+          await ensureHopResolver();
+          resolved = HopResolver.resolve(pathHops);
+        }
         if (resolved) {
           for (const [k, v] of Object.entries(resolved)) {
             hopNameCache[k] = v;
@@ -1641,22 +1713,25 @@
     if (routeBtn && pathHops.length) {
       routeBtn.addEventListener('click', async () => {
         try {
-          // Anchor disambiguation from sender's location if known (e.g. ADVERT lat/lon)
-          const senderLat = decoded.lat || decoded.latitude;
-          const senderLon = decoded.lon || decoded.longitude;
-          // Resolve observer position for backward-pass anchor
-          let obsLat = null, obsLon = null;
-          const obsId = obsName(pkt.observer_id);
-          if (obsId && HopResolver.ready()) {
-            // Try to find observer in nodes list by name — best effort
+          // Prefer server-side resolved_path if available
+          const serverResolved = getResolvedPath(pkt);
+          let resolvedKeys;
+          if (serverResolved && serverResolved.length === pathHops.length) {
+            // Use server-resolved pubkeys, fall back to short prefix for null entries
+            resolvedKeys = pathHops.map((h, i) => serverResolved[i] || h);
+          } else {
+            // Fall back to client-side HopResolver
+            const senderLat = decoded.lat || decoded.latitude;
+            const senderLon = decoded.lon || decoded.longitude;
+            let obsLat = null, obsLon = null;
+            const obsId = obsName(pkt.observer_id);
+            await ensureHopResolver();
+            const data = { resolved: HopResolver.resolve(pathHops, senderLat || null, senderLon || null, obsLat, obsLon, pkt.observer_id) };
+            resolvedKeys = pathHops.map(h => {
+              const r = data.resolved?.[h];
+              return r?.pubkey || h;
+            });
           }
-          await ensureHopResolver();
-          const data = { resolved: HopResolver.resolve(pathHops, senderLat || null, senderLon || null, obsLat, obsLon, pkt.observer_id) };
-          // Pass full pubkeys (client-disambiguated) to map, falling back to short prefix
-          const resolvedKeys = pathHops.map(h => {
-            const r = data.resolved?.[h];
-            return r?.pubkey || h;
-          });
           // Build origin info for the sender node
           const origin = {};
           if (decoded.pubKey) origin.pubkey = decoded.pubKey;
@@ -1980,14 +2055,15 @@
       const data = await api(`/packets/${hash}`);
       const pkt = data.packet;
       if (!pkt) return;
-      const group = packets.find(p => p.hash === hash);
+      const group = hashIndex.get(hash);
       if (group && data.observations) {
         group._children = data.observations.map(o => clearParsedCache({...pkt, ...o, _isObservation: true}));
         group._fetchedData = data;
         // Sort children based on current sort mode
         sortGroupChildren(group);
       }
-      // Resolve any new hops from children
+      // Resolve hops from children: prefer server-side resolved_path
+      await cacheResolvedPaths(group?._children || []);
       const childHops = new Set();
       for (const c of (group?._children || [])) {
         try { getParsedPath(c).forEach(h => childHops.add(h)); } catch {}
@@ -2040,6 +2116,8 @@
       renderPath,
       _getRowCount,
       _cumulativeRowOffsets,
+      _invalidateRowCounts,
+      _refreshRowCountsIfDirty,
       buildGroupRowHtml,
       buildFlatRowHtml,
     };

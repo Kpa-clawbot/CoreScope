@@ -5,7 +5,7 @@
   let interval = null;
 
   async function render(app) {
-    app.innerHTML = '<div id="perfWrapper" style="height:100%;overflow-y:auto;padding:16px 24px;"><h2>⚡ Performance Dashboard</h2><div id="perfContent">Loading...</div></div>';
+    app.innerHTML = '<div id="perfWrapper" style="padding:16px 24px;"><h2>⚡ Performance Dashboard</h2><div id="perfContent">Loading...</div></div>';
     await refresh();
   }
 

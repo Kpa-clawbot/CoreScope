@@ -48,7 +48,7 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
     packetsB = [];
     currentView = 'summary';
 
-    app.innerHTML = '<div class="compare-page" style="overflow-y:auto;height:calc(100vh - 56px);padding:16px">' +
+    app.innerHTML = '<div class="compare-page" style="padding:16px">' +
       '<div class="page-header" style="display:flex;align-items:center;gap:12px;margin-bottom:16px">' +
         '<a href="#/observers" class="btn-icon" title="Back to Observers" aria-label="Back">\u2190</a>' +
         '<h2 style="margin:0">\uD83D\uDD0D Observer Comparison</h2>' +

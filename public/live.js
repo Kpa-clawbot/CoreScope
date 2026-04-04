@@ -43,6 +43,7 @@
     timelineScope: 3600000, // 1h default ms
     timelineTimestamps: [], // historical timestamps from DB for sparkline
     timelineFetchedScope: 0, // last fetched scope to avoid redundant fetches
+    replayGen: 0,            // generation counter — incremented on each replay/rewind to discard stale async results
   };
 
   // ROLE_COLORS loaded from shared roles.js (includes 'unknown')
@@ -116,6 +117,7 @@
 
   function vcrResumeLive() {
     stopReplay();
+    VCR.replayGen++; // invalidate any in-flight async chunk processing
     VCR.playhead = -1;
     VCR.speed = 1;
     VCR.missedCount = 0;
@@ -142,6 +144,8 @@
   function vcrReplayFromTs(targetTs) {
     const fetchFrom = new Date(targetTs).toISOString();
     stopReplay();
+    VCR.replayGen++;
+    var gen = VCR.replayGen;
     vcrSetMode('REPLAY');
 
     // Reload map nodes to match the replay time
@@ -153,7 +157,10 @@
       .then(r => r.json())
       .then(data => {
         const pkts = data.packets || [];
-        const replayEntries = expandToBufferEntries(pkts);
+        return expandToBufferEntriesAsync(pkts);
+      })
+      .then(function(replayEntries) {
+        if (gen !== VCR.replayGen) return; // stale async result — user changed mode
         if (replayEntries.length === 0) {
           vcrSetMode('PAUSED');
           return;
@@ -202,6 +209,8 @@
 
   function vcrRewind(ms) {
     stopReplay();
+    VCR.replayGen++;
+    var gen = VCR.replayGen;
     // Fetch packets from DB for the time window
     const now = Date.now();
     const from = new Date(now - ms).toISOString();
@@ -212,8 +221,11 @@
         // Prepend to buffer (avoid duplicates by ID)
         const existingIds = new Set(VCR.buffer.map(b => b.pkt.id).filter(Boolean));
         const filtered = pkts.filter(p => !existingIds.has(p.id));
-        const newEntries = expandToBufferEntries(filtered);
-        VCR.buffer = [...newEntries, ...VCR.buffer];
+        return expandToBufferEntriesAsync(filtered);
+      })
+      .then(function(newEntries) {
+        if (gen !== VCR.replayGen) return; // stale async result
+        VCR.buffer = [].concat(newEntries, VCR.buffer);
         VCR.playhead = 0;
         VCR.speed = 1;
         vcrSetMode('REPLAY');
@@ -274,15 +286,18 @@
     // Get timestamp of last packet in buffer to fetch the next page
     const last = VCR.buffer[VCR.buffer.length - 1];
     if (!last) return Promise.resolve(false);
+    var gen = VCR.replayGen;
     const since = new Date(last.ts + 1).toISOString(); // +1ms to avoid dupe
     return fetch(`/api/packets?limit=10000&grouped=false&expand=observations&since=${encodeURIComponent(since)}&order=asc`)
       .then(r => r.json())
       .then(data => {
         const pkts = data.packets || [];
         if (pkts.length === 0) return false;
-        const newEntries = expandToBufferEntries(pkts);
-        VCR.buffer = VCR.buffer.concat(newEntries);
-        return true;
+        return expandToBufferEntriesAsync(pkts).then(function(newEntries) {
+          if (gen !== VCR.replayGen) return false; // stale
+          VCR.buffer = VCR.buffer.concat(newEntries);
+          return true;
+        });
       })
       .catch(() => false);
   }
@@ -442,6 +457,7 @@
       id: pkt.id, hash: pkt.hash,
       raw: pkt.raw_hex,
       path_json: pkt.path_json,
+      resolved_path: pkt.resolved_path,
       _ts: new Date(pkt.timestamp || pkt.created_at).getTime(),
       decoded: { header: { payloadTypeName: typeName }, payload: raw, path: { hops } },
       snr: pkt.snr, rssi: pkt.rssi, observer: pkt.observer_name
@@ -449,11 +465,53 @@
   }
 
   // Expand a DB packet (with optional observations[]) into VCR buffer entries
+  /**
+   * Process packets into buffer entries in chunks to avoid blocking the main thread.
+   * Returns a Promise that resolves with the entries array.
+   * Each chunk processes CHUNK_SIZE packets, then yields to the event loop via setTimeout(0).
+   */
+  var VCR_CHUNK_SIZE = 200;
+  function expandToBufferEntriesAsync(pkts) {
+    return new Promise(function(resolve) {
+      var entries = [];
+      var i = 0;
+      function processChunk() {
+        var end = Math.min(i + VCR_CHUNK_SIZE, pkts.length);
+        for (; i < end; i++) {
+          var p = pkts[i];
+          if (p.observations && p.observations.length > 0) {
+            for (var j = 0; j < p.observations.length; j++) {
+              var obs = p.observations[j];
+              entries.push({
+                ts: new Date(obs.timestamp || p.timestamp || p.created_at).getTime(),
+                pkt: dbPacketToLive(Object.assign({}, p, obs, { hash: p.hash, raw_hex: p.raw_hex, decoded_json: p.decoded_json }))
+              });
+            }
+          } else {
+            entries.push({
+              ts: new Date(p.timestamp || p.created_at).getTime(),
+              pkt: dbPacketToLive(p)
+            });
+          }
+        }
+        if (i < pkts.length) {
+          setTimeout(processChunk, 0);
+        } else {
+          resolve(entries);
+        }
+      }
+      processChunk();
+    });
+  }
+
+  // Synchronous version kept for small datasets and backward compat (tests)
   function expandToBufferEntries(pkts) {
-    const entries = [];
-    for (const p of pkts) {
+    var entries = [];
+    for (var k = 0; k < pkts.length; k++) {
+      var p = pkts[k];
       if (p.observations && p.observations.length > 0) {
-        for (const obs of p.observations) {
+        for (var j = 0; j < p.observations.length; j++) {
+          var obs = p.observations[j];
           entries.push({
             ts: new Date(obs.timestamp || p.timestamp || p.created_at).getTime(),
             pkt: dbPacketToLive(Object.assign({}, p, obs, { hash: p.hash, raw_hex: p.raw_hex, decoded_json: p.decoded_json }))
@@ -1286,7 +1344,7 @@
         html += `<h4 style="font-size:12px;margin:12px 0 6px;color:var(--text-muted);">Recent Packets</h4>
           <div style="font-size:11px;max-height:200px;overflow-y:auto;">` +
           recent.slice(0, 10).map(p => `<div style="padding:2px 0;display:flex;justify-content:space-between;">
-            <a href="#/packets/${encodeURIComponent(p.hash || '')}" style="color:var(--accent);text-decoration:none;">${escapeHtml(p.payload_type || '?')}${p.observation_count > 1 ? ' <span class="badge badge-obs" style="font-size:9px">👁 ' + p.observation_count + '</span>' : ''}</a>
+            <a href="#/packets/${encodeURIComponent(p.hash || '')}" style="color:var(--accent);text-decoration:none;">${escapeHtml(p.payload_type || '?')}${transportBadge(p.route_type)}${p.observation_count > 1 ? ' <span class="badge badge-obs" style="font-size:9px">👁 ' + p.observation_count + '</span>' : ''}</a>
             <span style="color:var(--text-muted)">${formatLiveTimestampHtml(p.timestamp)}</span>
           </div>`).join('') +
           '</div>';
@@ -1359,7 +1417,27 @@
       const _el2 = document.getElementById('liveNodeCount'); if (_el2) _el2.textContent = Object.keys(nodeMarkers).length;
       // Initialize shared HopResolver with loaded nodes
       if (window.HopResolver) HopResolver.init(list);
+      // Fetch affinity data for hop disambiguation
+      fetchAffinityData();
+      startAffinityRefresh();
     } catch (e) { console.error('Failed to load nodes:', e); }
+  }
+
+  let _affinityInterval = null;
+
+  async function fetchAffinityData() {
+    try {
+      const resp = await fetch('/api/analytics/neighbor-graph');
+      const graph = await resp.json();
+      if (window.HopResolver && HopResolver.setAffinity) {
+        HopResolver.setAffinity(graph);
+      }
+    } catch (e) { console.warn('Failed to fetch affinity data:', e); }
+  }
+
+  function startAffinityRefresh() {
+    if (_affinityInterval) clearInterval(_affinityInterval);
+    _affinityInterval = setInterval(fetchAffinityData, 60000);
   }
 
   function clearNodeMarkers() {
@@ -1471,7 +1549,7 @@
       item.innerHTML = `
         <span class="feed-icon" style="color:${color}">${icon}</span>
         <span class="feed-type" style="color:${color}">${typeName}</span>
-        ${hopStr}${obsBadge}
+        ${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
         <span class="feed-text">${escapeHtml(preview)}</span>
         <span class="feed-time">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
       `;
@@ -1573,6 +1651,7 @@
           }
           delete nodeMarkers[key];
           delete nodeData[key];
+          delete nodeActivity[key];
           pruned = true;
         }
       } else if (marker && marker._staleDimmed) {
@@ -1588,15 +1667,21 @@
       if (_el2) _el2.textContent = Object.keys(nodeMarkers).length;
       if (window.HopResolver) HopResolver.init(Object.values(nodeData));
     }
+    // Prune orphaned nodeActivity entries (nodes removed above or never tracked)
+    for (var aKey in nodeActivity) {
+      if (!(aKey in nodeData)) delete nodeActivity[aKey];
+    }
   }
 
   // Expose for testing
   window._livePruneStaleNodes = pruneStaleNodes;
   window._liveNodeMarkers = function() { return nodeMarkers; };
   window._liveNodeData = function() { return nodeData; };
+  window._liveNodeActivity = function() { return nodeActivity; };
   window._vcrFormatTime = vcrFormatTime;
   window._liveDbPacketToLive = dbPacketToLive;
   window._liveExpandToBufferEntries = expandToBufferEntries;
+  window._liveExpandToBufferEntriesAsync = expandToBufferEntriesAsync;
   window._liveSEG_MAP = SEG_MAP;
   window._liveBufferPacket = bufferPacket;
   window._liveVCR = function() { return VCR; };
@@ -1777,7 +1862,7 @@
       var pathKey = hops.join(',');
       if (seenPathKeys.has(pathKey)) continue;
       seenPathKeys.add(pathKey);
-      var hopPositions = resolveHopPositions(hops, qp);
+      var hopPositions = resolveHopPositions(hops, qp, window.getResolvedPath ? getResolvedPath(qpkt) : null);
       if (hopPositions.length >= 2) {
         allPaths.push({ hopPositions: hopPositions, raw: qpkt.raw || first.raw });
       } else if (hopPositions.length === 1) {
@@ -1814,15 +1899,29 @@
     }
   }
 
-  function resolveHopPositions(hops, payload) {
-    // Delegate to shared HopResolver (from hop-resolver.js) instead of reimplementing
-    const originLat = payload.lat != null && !(payload.lat === 0 && payload.lon === 0) ? payload.lat : null;
-    const originLon = payload.lon != null && !(payload.lon === 0 && payload.lon === 0) ? payload.lon : null;
+  function resolveHopPositions(hops, payload, resolvedPath) {
+    // Prefer server-side resolved_path when available
+    var resolvedMap;
+    if (resolvedPath && resolvedPath.length === hops.length && window.HopResolver && HopResolver.ready()) {
+      resolvedMap = HopResolver.resolveFromServer(hops, resolvedPath);
+      // Fill in any null entries from client-side fallback, preserving sender GPS context
+      var nullHops = hops.filter(function(h, i) { return !resolvedPath[i] && !resolvedMap[h]; });
+      if (nullHops.length) {
+        const originLat = payload.lat != null && !(payload.lat === 0 && payload.lon === 0) ? payload.lat : null;
+        const originLon = payload.lon != null && !(payload.lon === 0 && payload.lon === 0) ? payload.lon : null;
+        var fallback = HopResolver.resolve(nullHops, originLat, originLon, null, null, null);
+        for (var k in fallback) resolvedMap[k] = fallback[k];
+      }
+    } else {
+      // Delegate to shared HopResolver (from hop-resolver.js) instead of reimplementing
+      const originLat = payload.lat != null && !(payload.lat === 0 && payload.lon === 0) ? payload.lat : null;
+      const originLon = payload.lon != null && !(payload.lon === 0 && payload.lon === 0) ? payload.lon : null;
 
-    // Use HopResolver if available and initialized, otherwise fall back to simple lookup
-    const resolvedMap = (window.HopResolver && HopResolver.ready())
-      ? HopResolver.resolve(hops, originLat, originLon, null, null, null)
-      : {};
+      // Use HopResolver if available and initialized, otherwise fall back to simple lookup
+      resolvedMap = (window.HopResolver && HopResolver.ready())
+        ? HopResolver.resolve(hops, originLat, originLon, null, null, null)
+        : {};
+    }
 
     // Convert HopResolver's map format to the array format live.js expects: {key, pos, name, known}
     const raw = hops.map(hop => {
@@ -2406,7 +2505,7 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${hopStr}${obsBadge}
+      ${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
@@ -2474,7 +2573,7 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${hopStr}${obsBadge}
+      ${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
@@ -2552,6 +2651,7 @@
     if (_lcdClockInterval) { clearInterval(_lcdClockInterval); _lcdClockInterval = null; }
     if (_rateCounterInterval) { clearInterval(_rateCounterInterval); _rateCounterInterval = null; }
     if (_pruneInterval) { clearInterval(_pruneInterval); _pruneInterval = null; }
+    if (_affinityInterval) { clearInterval(_affinityInterval); _affinityInterval = null; }
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     if (map) { map.remove(); map = null; }
     if (_onResize) {
@@ -2584,7 +2684,7 @@
     packetCount = 0; activeAnims = 0;
     nodeActivity = {}; pktTimestamps = [];
     feedDedup.clear();
-    VCR.buffer = []; VCR.playhead = -1; VCR.mode = 'LIVE'; VCR.missedCount = 0; VCR.speed = 1;
+    VCR.buffer = []; VCR.playhead = -1; VCR.mode = 'LIVE'; VCR.missedCount = 0; VCR.speed = 1; VCR.replayGen = 0;
   }
 
   let _themeRefreshHandler = null;

@@ -15,9 +15,10 @@ import (
 
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
-	conn *sql.DB
-	path string // filesystem path to the database file
-	isV3 bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
+	conn             *sql.DB
+	path             string // filesystem path to the database file
+	isV3             bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
+	hasResolvedPath  bool   // observations table has resolved_path column
 }
 
 // OpenDB opens a read-only SQLite connection with WAL mode.
@@ -61,9 +62,13 @@ func (db *DB) detectSchema() {
 		var colType sql.NullString
 		var notNull, pk int
 		var dflt sql.NullString
-		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == "observer_idx" {
-			db.isV3 = true
-			return
+		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
+			if colName == "observer_idx" {
+				db.isV3 = true
+			}
+			if colName == "resolved_path" {
+				db.hasResolvedPath = true
+			}
 		}
 	}
 }
@@ -617,7 +622,7 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 			where = append(where, "EXISTS (SELECT 1 FROM observations oi WHERE oi.transmission_id = t.id AND oi.observer_id IN ("+placeholders+"))")
 		}
 		for _, id := range ids {
-			args = append(args, id)
+			args = append(args, strings.TrimSpace(id))
 		}
 	}
 	if q.Region != "" {

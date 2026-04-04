@@ -717,3 +717,120 @@ func TestNeighborGraph_CacheTTL(t *testing.T) {
 		t.Error("old graph should be stale")
 	}
 }
+
+func TestNeighborGraph_TTLIsReasonable(t *testing.T) {
+	// TTL must be long enough to avoid rebuild storms on busy meshes,
+	// but short enough to reflect topology changes within minutes.
+	if neighborGraphTTL < 1*time.Minute {
+		t.Errorf("neighborGraphTTL too short (%v), will cause rebuild storms", neighborGraphTTL)
+	}
+	if neighborGraphTTL > 10*time.Minute {
+		t.Errorf("neighborGraphTTL too long (%v), topology changes will be stale", neighborGraphTTL)
+	}
+}
+
+func TestCachedToLower(t *testing.T) {
+	cache := make(map[string]string)
+	// Basic lowercasing
+	if got := cachedToLower(cache, "AABB"); got != "aabb" {
+		t.Errorf("expected 'aabb', got %q", got)
+	}
+	// Verify it was cached
+	if _, ok := cache["AABB"]; !ok {
+		t.Error("expected 'AABB' to be in cache")
+	}
+	// Same input returns cached result
+	if got := cachedToLower(cache, "AABB"); got != "aabb" {
+		t.Errorf("expected cached 'aabb', got %q", got)
+	}
+	// Already lowercase stays the same
+	if got := cachedToLower(cache, "aabb"); got != "aabb" {
+		t.Errorf("expected 'aabb', got %q", got)
+	}
+	// Empty string
+	if got := cachedToLower(cache, ""); got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
+func TestParsedDecoded_Caching(t *testing.T) {
+	tx := &StoreTx{DecodedJSON: `{"pubKey":"abc123","name":"test"}`}
+	// First call parses
+	d1 := tx.ParsedDecoded()
+	if d1 == nil {
+		t.Fatal("expected non-nil parsed result")
+	}
+	if d1["pubKey"] != "abc123" {
+		t.Errorf("expected pubKey=abc123, got %v", d1["pubKey"])
+	}
+	// Second call must return the exact same map (pointer equality proves caching)
+	d2 := tx.ParsedDecoded()
+	if &d1 == nil || &d2 == nil {
+		t.Fatal("unexpected nil")
+	}
+	// Mutate d1 and verify d2 sees the mutation — proves same underlying map
+	d1["_sentinel"] = true
+	if d2["_sentinel"] != true {
+		t.Error("expected same map instance from second call (caching broken)")
+	}
+	delete(d1, "_sentinel") // clean up
+}
+
+func TestParsedDecoded_EmptyJSON(t *testing.T) {
+	tx := &StoreTx{DecodedJSON: ""}
+	d := tx.ParsedDecoded()
+	if d != nil {
+		t.Errorf("expected nil for empty DecodedJSON, got %v", d)
+	}
+}
+
+func TestParsedDecoded_InvalidJSON(t *testing.T) {
+	tx := &StoreTx{DecodedJSON: "not json"}
+	d := tx.ParsedDecoded()
+	if d != nil {
+		t.Errorf("expected nil for invalid JSON, got %v", d)
+	}
+}
+
+func TestExtractFromNode_UsesCachedParse(t *testing.T) {
+	tx := &StoreTx{DecodedJSON: `{"pubKey":"aabb1122"}`}
+	// First call to extractFromNode should use ParsedDecoded
+	from := extractFromNode(tx)
+	if from != "aabb1122" {
+		t.Errorf("expected aabb1122, got %q", from)
+	}
+	// ParsedDecoded should now be cached
+	d := tx.ParsedDecoded()
+	if d == nil || d["pubKey"] != "aabb1122" {
+		t.Error("expected ParsedDecoded to return cached result")
+	}
+}
+
+func BenchmarkBuildFromStore(b *testing.B) {
+	// Simulate a dataset with many packets and repeated pubkeys
+	nodes := []nodeInfo{
+		{PublicKey: "aaaa1111", Name: "NodeA"},
+		{PublicKey: "bbbb2222", Name: "NodeB"},
+		{PublicKey: "cccc3333", Name: "NodeC"},
+		{PublicKey: "dddd4444", Name: "NodeD"},
+	}
+	const numPackets = 1000
+	packets := make([]*StoreTx, 0, numPackets)
+	for i := 0; i < numPackets; i++ {
+		pt := 4 // ADVERT
+		packets = append(packets, &StoreTx{
+			ID:          i,
+			PayloadType: &pt,
+			DecodedJSON: `{"pubKey":"aaaa1111"}`,
+			Observations: []*StoreObs{
+				{ObserverID: "bbbb2222", PathJSON: `["cccc"]`, Timestamp: nowStr, SNR: ngFloatPtr(-5.0)},
+			},
+		})
+	}
+	store := ngTestStore(nodes, packets)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		BuildFromStore(store)
+	}
+}

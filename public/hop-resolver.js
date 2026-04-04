@@ -8,9 +8,11 @@ window.HopResolver = (function() {
   const MAX_HOP_DIST = 1.8; // ~200km in degrees
   const REGION_RADIUS_KM = 300;
   let prefixIdx = {};   // lowercase hex prefix → [node, ...]
+  let pubkeyIdx = {};   // full lowercase pubkey → node (O(1) lookup)
   let nodesList = [];
   let observerIataMap = {}; // observer_id → iata
   let iataCoords = {};  // iata → {lat, lon}
+  let affinityMap = {}; // pubkey → { neighborPubkey → score }
 
   function dist(lat1, lon1, lat2, lon2) {
     return Math.sqrt((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2);
@@ -34,9 +36,11 @@ window.HopResolver = (function() {
   function init(nodes, opts) {
     nodesList = nodes || [];
     prefixIdx = {};
+    pubkeyIdx = {};
     for (const n of nodesList) {
       if (!n.public_key) continue;
       const pk = n.public_key.toLowerCase();
+      pubkeyIdx[pk] = n;
       for (let len = 1; len <= 3; len++) {
         const p = pk.slice(0, len * 2);
         if (!prefixIdx[p]) prefixIdx[p] = [];
@@ -65,6 +69,34 @@ window.HopResolver = (function() {
       return { near: d <= REGION_RADIUS_KM, method: 'geo', distKm: Math.round(d) };
     }
     return null; // no GPS — can't geo-filter client-side
+  }
+
+  /**
+   * Pick the best candidate using affinity first, then geo-distance fallback.
+   * @param {Array} candidates - candidates with lat/lon/pubkey/name
+   * @param {string|null} adjacentPubkey - pubkey of the previously/next resolved hop
+   * @param {Object|null} anchor - {lat, lon} for geo fallback
+   * @param {number|null} fallbackLat - fallback anchor lat (e.g. observer)
+   * @param {number|null} fallbackLon - fallback anchor lon
+   * @returns {Object} best candidate
+   */
+  function pickByAffinity(candidates, adjacentPubkey, anchor, fallbackLat, fallbackLon) {
+    // If we have affinity data and an adjacent hop, prefer neighbors
+    if (adjacentPubkey && Object.keys(affinityMap).length > 0) {
+      const withAffinity = candidates
+        .map(c => ({ ...c, affinity: getAffinity(adjacentPubkey, c.pubkey) }))
+        .filter(c => c.affinity > 0);
+      if (withAffinity.length > 0) {
+        withAffinity.sort((a, b) => b.affinity - a.affinity);
+        return withAffinity[0];
+      }
+    }
+    // Fallback: geo-distance sort (existing behavior)
+    const effectiveAnchor = anchor || (fallbackLat != null ? { lat: fallbackLat, lon: fallbackLon } : null);
+    if (effectiveAnchor) {
+      candidates.sort((a, b) => dist(a.lat, a.lon, effectiveAnchor.lat, effectiveAnchor.lon) - dist(b.lat, b.lon, effectiveAnchor.lat, effectiveAnchor.lon));
+    }
+    return candidates[0];
   }
 
   /**
@@ -139,40 +171,50 @@ window.HopResolver = (function() {
 
     // Forward pass
     let lastPos = (originLat != null && originLon != null) ? { lat: originLat, lon: originLon } : null;
+    let lastResolvedPubkey = null;
     for (let i = 0; i < hops.length; i++) {
       const hop = hops[i];
-      if (hopPositions[hop]) { lastPos = hopPositions[hop]; continue; }
+      if (hopPositions[hop]) {
+        lastPos = hopPositions[hop];
+        lastResolvedPubkey = resolved[hop] ? resolved[hop].pubkey : null;
+        continue;
+      }
       const r = resolved[hop];
       if (!r || !r.ambiguous) continue;
       const withLoc = r.candidates.filter(c => c.lat && c.lon && !(c.lat === 0 && c.lon === 0));
       if (!withLoc.length) continue;
-      let anchor = lastPos;
-      if (!anchor && i === hops.length - 1 && observerLat != null) {
-        anchor = { lat: observerLat, lon: observerLon };
-      }
-      if (anchor) {
-        withLoc.sort((a, b) => dist(a.lat, a.lon, anchor.lat, anchor.lon) - dist(b.lat, b.lon, anchor.lat, anchor.lon));
-      }
-      r.name = withLoc[0].name;
-      r.pubkey = withLoc[0].pubkey;
-      hopPositions[hop] = { lat: withLoc[0].lat, lon: withLoc[0].lon };
+
+      // Affinity-aware: prefer candidates that are neighbors of the previous hop
+      const picked = pickByAffinity(withLoc, lastResolvedPubkey, lastPos, i === hops.length - 1 ? observerLat : null, i === hops.length - 1 ? observerLon : null);
+      r.name = picked.name;
+      r.pubkey = picked.pubkey;
+      hopPositions[hop] = { lat: picked.lat, lon: picked.lon };
       lastPos = hopPositions[hop];
+      lastResolvedPubkey = picked.pubkey;
     }
 
     // Backward pass
     let nextPos = (observerLat != null && observerLon != null) ? { lat: observerLat, lon: observerLon } : null;
+    let nextResolvedPubkey = null;
     for (let i = hops.length - 1; i >= 0; i--) {
       const hop = hops[i];
-      if (hopPositions[hop]) { nextPos = hopPositions[hop]; continue; }
+      if (hopPositions[hop]) {
+        nextPos = hopPositions[hop];
+        nextResolvedPubkey = resolved[hop] ? resolved[hop].pubkey : null;
+        continue;
+      }
       const r = resolved[hop];
       if (!r || !r.ambiguous) continue;
       const withLoc = r.candidates.filter(c => c.lat && c.lon && !(c.lat === 0 && c.lon === 0));
       if (!withLoc.length || !nextPos) continue;
-      withLoc.sort((a, b) => dist(a.lat, a.lon, nextPos.lat, nextPos.lon) - dist(b.lat, b.lon, nextPos.lat, nextPos.lon));
-      r.name = withLoc[0].name;
-      r.pubkey = withLoc[0].pubkey;
-      hopPositions[hop] = { lat: withLoc[0].lat, lon: withLoc[0].lon };
+
+      // Affinity-aware: prefer candidates that are neighbors of the next hop
+      const picked = pickByAffinity(withLoc, nextResolvedPubkey, nextPos, null, null);
+      r.name = picked.name;
+      r.pubkey = picked.pubkey;
+      hopPositions[hop] = { lat: picked.lat, lon: picked.lon };
       nextPos = hopPositions[hop];
+      nextResolvedPubkey = picked.pubkey;
     }
 
     // Sanity check: drop hops impossibly far from neighbors
@@ -203,5 +245,53 @@ window.HopResolver = (function() {
     return nodesList.length > 0;
   }
 
-  return { init: init, resolve: resolve, ready: ready, haversineKm: haversineKm };
+  /**
+   * Load neighbor-graph affinity data.
+   * @param {Object} graph - { edges: [{source, target, score, weight}, ...] }
+   */
+  function setAffinity(graph) {
+    affinityMap = {};
+    if (!graph || !graph.edges) return;
+    for (const e of graph.edges) {
+      if (!affinityMap[e.source]) affinityMap[e.source] = {};
+      affinityMap[e.source][e.target] = e.score || e.weight || 1;
+      if (!affinityMap[e.target]) affinityMap[e.target] = {};
+      affinityMap[e.target][e.source] = e.score || e.weight || 1;
+    }
+  }
+
+  /**
+   * Get the affinity score between two pubkeys (0 if not neighbors).
+   */
+  function getAffinity(pubkeyA, pubkeyB) {
+    if (!pubkeyA || !pubkeyB || !affinityMap[pubkeyA]) return 0;
+    return affinityMap[pubkeyA][pubkeyB] || 0;
+  }
+
+  /**
+   * Resolve hops using server-provided resolved_path (full pubkeys).
+   * Returns the same format as resolve() — { [hop]: { name, pubkey, ... } }.
+   * resolved_path is an array aligned with path_json: each element is a
+   * 64-char lowercase hex pubkey or null. Skips entries that are null.
+   */
+  function resolveFromServer(hops, resolvedPath) {
+    if (!hops || !resolvedPath || hops.length !== resolvedPath.length) return {};
+    var result = {};
+    for (var i = 0; i < hops.length; i++) {
+      var hop = hops[i];
+      var pubkey = resolvedPath[i];
+      if (!pubkey) continue; // null = unresolved, leave for client-side fallback
+      // O(1) lookup via pubkeyIdx built during init()
+      var node = pubkeyIdx[pubkey.toLowerCase()] || null;
+      result[hop] = {
+        name: node ? node.name : pubkey.slice(0, 8),
+        pubkey: pubkey,
+        candidates: node ? [{ name: node.name, pubkey: pubkey, lat: node.lat, lon: node.lon }] : [],
+        conflicts: []
+      };
+    }
+    return result;
+  }
+
+  return { init: init, resolve: resolve, resolveFromServer: resolveFromServer, ready: ready, haversineKm: haversineKm, setAffinity: setAffinity, getAffinity: getAffinity };
 })();

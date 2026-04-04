@@ -10,7 +10,7 @@
  */
 
 window.getParsedPath = function getParsedPath(p) {
-  if (p._parsedPath !== undefined) return p._parsedPath;
+  if (p._parsedPath !== undefined) return p._parsedPath || [];
   var raw = p.path_json;
   if (typeof raw !== 'string') {
     p._parsedPath = Array.isArray(raw) ? raw : [];
@@ -28,11 +28,29 @@ window.getParsedPath = function getParsedPath(p) {
 window.clearParsedCache = function clearParsedCache(p) {
   delete p._parsedPath;
   delete p._parsedDecoded;
+  delete p._parsedResolvedPath;
   return p;
 };
 
+/**
+ * Parse resolved_path (server-side resolved full pubkeys).
+ * Returns array of pubkey strings (or null entries) if present, or null if absent.
+ * Cached as _parsedResolvedPath on the packet object.
+ */
+window.getResolvedPath = function getResolvedPath(p) {
+  if (p._parsedResolvedPath !== undefined) return p._parsedResolvedPath;
+  var raw = p.resolved_path;
+  if (!raw) { p._parsedResolvedPath = null; return null; }
+  if (typeof raw !== 'string') {
+    p._parsedResolvedPath = Array.isArray(raw) ? raw : null;
+    return p._parsedResolvedPath;
+  }
+  try { p._parsedResolvedPath = JSON.parse(raw) || null; } catch (e) { p._parsedResolvedPath = null; }
+  return p._parsedResolvedPath;
+};
+
 window.getParsedDecoded = function getParsedDecoded(p) {
-  if (p._parsedDecoded !== undefined) return p._parsedDecoded;
+  if (p._parsedDecoded !== undefined) return p._parsedDecoded || {};
   var raw = p.decoded_json;
   if (typeof raw !== 'string') {
     p._parsedDecoded = (raw && typeof raw === 'object') ? raw : {};
