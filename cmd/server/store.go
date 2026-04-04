@@ -3337,19 +3337,6 @@ func (s *PacketStore) computeAnalyticsRF(region string) map[string]interface{} {
 	}
 
 	// Stats helpers
-	sortedF64 := func(arr []float64) []float64 {
-		c := make([]float64, len(arr))
-		copy(c, arr)
-		sort.Float64s(c)
-		return c
-	}
-	medianF64 := func(arr []float64) float64 {
-		s := sortedF64(arr)
-		if len(s) == 0 {
-			return 0
-		}
-		return s[len(s)/2]
-	}
 	stddevF64 := func(arr []float64, avg float64) float64 {
 		if len(arr) == 0 {
 			return 0
@@ -3409,6 +3396,11 @@ func (s *PacketStore) computeAnalyticsRF(region string) map[string]interface{} {
 		}
 		return m
 	}
+
+	// Sort snrVals and rssiVals once; reuse sorted order for min/max/median
+	// instead of copying+sorting per stat call (#366).
+	sort.Float64s(snrVals)
+	sort.Float64s(rssiVals)
 
 	snrAvg := 0.0
 	if len(snrVals) > 0 {
@@ -3602,19 +3594,20 @@ func (s *PacketStore) computeAnalyticsRF(region string) map[string]interface{} {
 		avgPktSize = sum / len(packetSizes)
 	}
 
+	// snrVals and rssiVals are already sorted — read min/max/median directly.
 	snrStats := map[string]interface{}{"min": 0.0, "max": 0.0, "avg": 0.0, "median": 0.0, "stddev": 0.0}
 	if len(snrVals) > 0 {
 		snrStats = map[string]interface{}{
-			"min": minF64(snrVals), "max": maxF64(snrVals),
-			"avg": snrAvg, "median": medianF64(snrVals),
+			"min": snrVals[0], "max": snrVals[len(snrVals)-1],
+			"avg": snrAvg, "median": snrVals[len(snrVals)/2],
 			"stddev": stddevF64(snrVals, snrAvg),
 		}
 	}
 	rssiStats := map[string]interface{}{"min": 0.0, "max": 0.0, "avg": 0.0, "median": 0.0, "stddev": 0.0}
 	if len(rssiVals) > 0 {
 		rssiStats = map[string]interface{}{
-			"min": minF64(rssiVals), "max": maxF64(rssiVals),
-			"avg": rssiAvg, "median": medianF64(rssiVals),
+			"min": rssiVals[0], "max": rssiVals[len(rssiVals)-1],
+			"avg": rssiAvg, "median": rssiVals[len(rssiVals)/2],
 			"stddev": stddevF64(rssiVals, rssiAvg),
 		}
 	}
