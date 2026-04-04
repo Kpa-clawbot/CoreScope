@@ -1904,10 +1904,12 @@
     var resolvedMap;
     if (resolvedPath && resolvedPath.length === hops.length && window.HopResolver && HopResolver.ready()) {
       resolvedMap = HopResolver.resolveFromServer(hops, resolvedPath);
-      // Fill in any null entries from client-side fallback
+      // Fill in any null entries from client-side fallback, preserving sender GPS context
       var nullHops = hops.filter(function(h, i) { return !resolvedPath[i] && !resolvedMap[h]; });
       if (nullHops.length) {
-        var fallback = HopResolver.resolve(nullHops, null, null, null, null, null);
+        const originLat = payload.lat != null && !(payload.lat === 0 && payload.lon === 0) ? payload.lat : null;
+        const originLon = payload.lon != null && !(payload.lon === 0 && payload.lon === 0) ? payload.lon : null;
+        var fallback = HopResolver.resolve(nullHops, originLat, originLon, null, null, null);
         for (var k in fallback) resolvedMap[k] = fallback[k];
       }
     } else {

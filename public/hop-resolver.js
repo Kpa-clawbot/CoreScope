@@ -8,6 +8,7 @@ window.HopResolver = (function() {
   const MAX_HOP_DIST = 1.8; // ~200km in degrees
   const REGION_RADIUS_KM = 300;
   let prefixIdx = {};   // lowercase hex prefix → [node, ...]
+  let pubkeyIdx = {};   // full lowercase pubkey → node (O(1) lookup)
   let nodesList = [];
   let observerIataMap = {}; // observer_id → iata
   let iataCoords = {};  // iata → {lat, lon}
@@ -35,9 +36,11 @@ window.HopResolver = (function() {
   function init(nodes, opts) {
     nodesList = nodes || [];
     prefixIdx = {};
+    pubkeyIdx = {};
     for (const n of nodesList) {
       if (!n.public_key) continue;
       const pk = n.public_key.toLowerCase();
+      pubkeyIdx[pk] = n;
       for (let len = 1; len <= 3; len++) {
         const p = pk.slice(0, len * 2);
         if (!prefixIdx[p]) prefixIdx[p] = [];
@@ -278,11 +281,8 @@ window.HopResolver = (function() {
       var hop = hops[i];
       var pubkey = resolvedPath[i];
       if (!pubkey) continue; // null = unresolved, leave for client-side fallback
-      // Find the node by pubkey to get its name
-      var node = null;
-      for (var j = 0; j < nodesList.length; j++) {
-        if (nodesList[j].public_key === pubkey) { node = nodesList[j]; break; }
-      }
+      // O(1) lookup via pubkeyIdx built during init()
+      var node = pubkeyIdx[pubkey.toLowerCase()] || null;
       result[hop] = {
         name: node ? node.name : pubkey.slice(0, 8),
         pubkey: pubkey,

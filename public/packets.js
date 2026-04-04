@@ -1725,9 +1725,6 @@
             const senderLon = decoded.lon || decoded.longitude;
             let obsLat = null, obsLon = null;
             const obsId = obsName(pkt.observer_id);
-            if (obsId && HopResolver.ready()) {
-              // Try to find observer in nodes list by name — best effort
-            }
             await ensureHopResolver();
             const data = { resolved: HopResolver.resolve(pathHops, senderLat || null, senderLon || null, obsLat, obsLon, pkt.observer_id) };
             resolvedKeys = pathHops.map(h => {
