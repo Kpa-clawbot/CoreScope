@@ -664,15 +664,42 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 	}
 
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
-	s.db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE last_seen > ?", sevenDaysAgo).Scan(&st.TotalNodes)
-	s.db.conn.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&st.TotalNodesAllTime)
-	s.db.conn.QueryRow("SELECT COUNT(*) FROM observers").Scan(&st.TotalObservers)
-
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
-	s.db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneHourAgo).Scan(&st.PacketsLastHour)
-
 	oneDayAgo := time.Now().Add(-24 * time.Hour).Unix()
-	s.db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneDayAgo).Scan(&st.PacketsLast24h)
+
+	// Run node/observer counts and observation counts concurrently (2 queries instead of 5).
+	var wg sync.WaitGroup
+	var nodeErr, obsErr error
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		nodeErr = s.db.conn.QueryRow(
+			`SELECT
+				(SELECT COUNT(*) FROM nodes WHERE last_seen > ?) AS active_nodes,
+				(SELECT COUNT(*) FROM nodes) AS all_nodes,
+				(SELECT COUNT(*) FROM observers) AS observers`,
+			sevenDaysAgo,
+		).Scan(&st.TotalNodes, &st.TotalNodesAllTime, &st.TotalObservers)
+	}()
+	go func() {
+		defer wg.Done()
+		obsErr = s.db.conn.QueryRow(
+			`SELECT
+				SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END),
+				SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END)
+			FROM observations WHERE timestamp > ?`,
+			oneHourAgo, oneDayAgo, oneDayAgo,
+		).Scan(&st.PacketsLastHour, &st.PacketsLast24h)
+	}()
+	wg.Wait()
+
+	if nodeErr != nil {
+		return st, nodeErr
+	}
+	if obsErr != nil {
+		return st, obsErr
+	}
 
 	return st, nil
 }
