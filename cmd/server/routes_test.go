@@ -2105,7 +2105,7 @@ tx := &StoreTx{
 ID:          9000 + i,
 RawHex:      rawHex,
 Hash:        "testhash" + strconv.Itoa(i),
-FirstSeen:   "2024-01-01T00:00:00Z",
+FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 PayloadType: &payloadType,
 DecodedJSON: decoded,
 }
@@ -2151,7 +2151,7 @@ for i, raw := range raws {
 		ID:          8000 + i,
 		RawHex:      raw,
 		Hash:        "dominant" + strconv.Itoa(i),
-		FirstSeen:   "2024-01-01T00:00:00Z",
+		FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		PayloadType: &payloadType,
 		DecodedJSON: decoded,
 	}
@@ -2195,7 +2195,7 @@ func TestGetNodeHashSizeInfoLatestWins(t *testing.T) {
 			ID:          7000 + i,
 			RawHex:      raw,
 			Hash:        "latest" + strconv.Itoa(i),
-			FirstSeen:   "2024-01-01T0" + strconv.Itoa(i) + ":00:00Z",
+			FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 			PayloadType: &payloadType,
 			DecodedJSON: decoded,
 		}
@@ -2241,7 +2241,7 @@ func TestGetNodeHashSizeInfoIgnoreDirectZeroHop(t *testing.T) {
 			ID:          9150 + i,
 			RawHex:      raw,
 			Hash:        "dirignore" + strconv.Itoa(i),
-			FirstSeen:   "2024-01-01T0" + strconv.Itoa(i) + ":00:00Z",
+			FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 			PayloadType: &payloadType,
 			DecodedJSON: decoded,
 		}
@@ -2284,7 +2284,7 @@ func TestGetNodeHashSizeInfoOnlyDirectZeroHopIgnored(t *testing.T) {
 		ID:          9160,
 		RawHex:      rawDirect0,
 		Hash:        "onlydirect0",
-		FirstSeen:   "2024-01-01T00:00:00Z",
+		FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		PayloadType: &payloadType,
 		DecodedJSON: decoded,
 	}
@@ -2320,7 +2320,7 @@ func TestGetNodeHashSizeInfoDirectNonZeroHopCounted(t *testing.T) {
 		ID:          9170,
 		RawHex:      rawDirectNonZero,
 		Hash:        "dirnonzero0",
-		FirstSeen:   "2024-01-01T00:00:00Z",
+		FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		PayloadType: &payloadType,
 		DecodedJSON: decoded,
 	}
@@ -2355,7 +2355,7 @@ func TestGetNodeHashSizeInfoNoAdverts(t *testing.T) {
 		ID:          6000,
 		RawHex:      "0440aabb",
 		Hash:        "noadverts0",
-		FirstSeen:   "2024-01-01T00:00:00Z",
+		FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		PayloadType: &payloadType,
 		DecodedJSON: `{"pubKey":"` + pk + `"}`,
 	}
@@ -2397,7 +2397,7 @@ func TestHashAnalyticsZeroHopAdvert(t *testing.T) {
 		ID:          8000,
 		RawHex:      raw,
 		Hash:        "zerohop0",
-		FirstSeen:   "2024-01-01T00:00:00Z",
+		FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		PayloadType: &payloadType,
 		DecodedJSON: decoded,
 		// No PathJSON → txGetParsedPath returns nil (zero hops)
@@ -2451,7 +2451,7 @@ func TestAnalyticsHashSizeSameNameDifferentPubkey(t *testing.T) {
 			ID:          6100 + i,
 			RawHex:      raw2byte,
 			Hash:        "samename" + strconv.Itoa(i),
-			FirstSeen:   "2024-01-01T00:00:00Z",
+			FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 			PayloadType: &payloadType,
 			DecodedJSON: decoded,
 			PathJSON:    `["AABB"]`,
@@ -2491,6 +2491,154 @@ t.Errorf("field %q is null, expected []", field)
 }
 	}
 }
+func TestInconsistentNodesExcludesCompanions(t *testing.T) {
+	// Issue #566: inconsistentNodes should only include repeaters and room servers.
+	db := setupTestDB(t)
+	seedTestData(t, db)
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("store.Load failed: %v", err)
+	}
+
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	payloadType := 4
+
+	// Create three nodes: repeater, room_server, companion — all with inconsistent hash sizes
+	nodes := []struct {
+		pk   string
+		role string
+	}{
+		{"aa11111111111111111111111111111111111111111111111111111111111111", "repeater"},
+		{"bb22222222222222222222222222222222222222222222222222222222222222", "room_server"},
+		{"cc33333333333333333333333333333333333333333333333333333333333333", "companion"},
+	}
+
+	for _, n := range nodes {
+		db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, ?, ?)", n.pk, "Node-"+n.role, n.role)
+		decoded := `{"name":"Node-` + n.role + `","pubKey":"` + n.pk + `"}`
+		// Create flip-flop pattern: 1-byte, 2-byte, 1-byte (transitions=2 → inconsistent)
+		raws := []string{"04" + "40" + "aabb", "04" + "80" + "aabb", "04" + "40" + "aabb"}
+		for i, raw := range raws {
+			tx := &StoreTx{
+				ID:          7000 + i + len(n.pk),
+				RawHex:      raw,
+				Hash:        "incon-" + n.role + strconv.Itoa(i),
+				FirstSeen:   now,
+				PayloadType: &payloadType,
+				DecodedJSON: decoded,
+			}
+			store.packets = append(store.packets, tx)
+			store.byPayloadType[4] = append(store.byPayloadType[4], tx)
+		}
+	}
+
+	cfg := &Config{Port: 3000}
+	hub := NewHub()
+	srv := NewServer(db, cfg, hub)
+	srv.store = store
+	router := mux.NewRouter()
+	srv.RegisterRoutes(router)
+
+	req := httptest.NewRequest("GET", "/api/analytics/hash-collisions", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var body map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &body)
+
+	incon := body["inconsistent_nodes"].([]interface{})
+	for _, item := range incon {
+		node := item.(map[string]interface{})
+		role := node["role"].(string)
+		if role == "companion" {
+			t.Error("companion node should be excluded from inconsistent_nodes")
+		}
+	}
+
+	// Repeater and room_server should be present
+	roles := make(map[string]bool)
+	for _, item := range incon {
+		node := item.(map[string]interface{})
+		roles[node["role"].(string)] = true
+	}
+	if !roles["repeater"] {
+		t.Error("expected repeater in inconsistent_nodes")
+	}
+	if !roles["room_server"] {
+		t.Error("expected room_server in inconsistent_nodes")
+	}
+}
+
+func TestHashSizeInfoTimeWindow(t *testing.T) {
+	// Issue #566: adverts older than 7 days should be excluded from hash size computation.
+	db := setupTestDB(t)
+	seedTestData(t, db)
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("store.Load failed: %v", err)
+	}
+
+	pk := "dd44444444444444444444444444444444444444444444444444444444444444"
+	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'OldNode', 'repeater')", pk)
+
+	decoded := `{"name":"OldNode","pubKey":"` + pk + `"}`
+	payloadType := 4
+
+	// Old adverts (>7 days ago) with flip-flop pattern
+	oldTime := time.Now().UTC().Add(-10 * 24 * time.Hour).Format("2006-01-02T15:04:05.000Z")
+	oldRaws := []string{"04" + "40" + "aabb", "04" + "80" + "aabb", "04" + "40" + "aabb"}
+	for i, raw := range oldRaws {
+		tx := &StoreTx{
+			ID:          6000 + i,
+			RawHex:      raw,
+			Hash:        "old-" + strconv.Itoa(i),
+			FirstSeen:   oldTime,
+			PayloadType: &payloadType,
+			DecodedJSON: decoded,
+		}
+		store.packets = append(store.packets, tx)
+		store.byPayloadType[4] = append(store.byPayloadType[4], tx)
+	}
+
+	info := store.GetNodeHashSizeInfo()
+	ni := info[pk]
+	if ni != nil && ni.Inconsistent {
+		t.Error("old adverts (>7 days) should be excluded; node should not be flagged as inconsistent")
+	}
+
+	// Now add recent adverts with consistent hash size — should appear in info
+	pk2 := "ee55555555555555555555555555555555555555555555555555555555555555"
+	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'NewNode', 'repeater')", pk2)
+	decoded2 := `{"name":"NewNode","pubKey":"` + pk2 + `"}`
+	recentTime := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	for i := 0; i < 3; i++ {
+		tx := &StoreTx{
+			ID:          6100 + i,
+			RawHex:      "04" + "40" + "aabb",
+			Hash:        "new-" + strconv.Itoa(i),
+			FirstSeen:   recentTime,
+			PayloadType: &payloadType,
+			DecodedJSON: decoded2,
+		}
+		store.packets = append(store.packets, tx)
+		store.byPayloadType[4] = append(store.byPayloadType[4], tx)
+	}
+
+	// Invalidate cache before second call
+	store.hashSizeInfoMu.Lock()
+	store.hashSizeInfoCache = nil
+	store.hashSizeInfoMu.Unlock()
+
+	info2 := store.GetNodeHashSizeInfo()
+	ni2 := info2[pk2]
+	if ni2 == nil {
+		t.Error("recent adverts should be included in hash size info")
+	}
+}
+
 func TestObserverAnalyticsNoStore(t *testing.T) {
 	_, router := setupNoStoreServer(t)
 	req := httptest.NewRequest("GET", "/api/observers/obs1/analytics", nil)

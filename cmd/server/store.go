@@ -4656,7 +4656,7 @@ func (s *PacketStore) computeHashCollisions(region string) map[string]interface{
 	// Inconsistent nodes
 	var inconsistentNodes []collisionNode
 	for _, cn := range allCNodes {
-		if cn.HashSizeInconsistent {
+		if cn.HashSizeInconsistent && (cn.Role == "repeater" || cn.Role == "room_server") {
 			inconsistentNodes = append(inconsistentNodes, cn)
 		}
 	}
@@ -4866,14 +4866,23 @@ func (s *PacketStore) GetNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 }
 
 // computeNodeHashSizeInfo scans advert packets to compute per-node hash size data.
+// Only adverts from the last 7 days are considered so that legitimate config
+// changes during testing don't create permanent false positives.
 func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	info := make(map[string]*hashSizeNodeInfo)
 
+	cutoff := time.Now().UTC().Add(-7 * 24 * time.Hour).Format("2006-01-02T15:04:05.000Z")
+
 	adverts := s.byPayloadType[4]
 	for _, tx := range adverts {
+		// Skip adverts older than 7 days to avoid false positives from
+		// historical config changes during testing.
+		if tx.FirstSeen != "" && tx.FirstSeen < cutoff {
+			continue
+		}
 		if tx.RawHex == "" || tx.DecodedJSON == "" {
 			continue
 		}
