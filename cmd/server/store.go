@@ -3621,6 +3621,15 @@ func (s *PacketStore) getCachedNodesAndPM() ([]nodeInfo, *prefixMap) {
 	return nodes, pm
 }
 
+// InvalidateNodeCache forces the next getCachedNodesAndPM call to rebuild.
+func (s *PacketStore) InvalidateNodeCache() {
+	s.cacheMu.Lock()
+	s.nodeCache = nil
+	s.nodePM = nil
+	s.nodeCacheTime = time.Time{}
+	s.cacheMu.Unlock()
+}
+
 func (pm *prefixMap) resolve(hop string) *nodeInfo {
 	h := strings.ToLower(hop)
 	candidates := pm.m[h]

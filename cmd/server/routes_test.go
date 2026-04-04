@@ -1170,6 +1170,11 @@ func TestResolveHopsAmbiguous(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("store.Load failed: %v", err)
+	}
+	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
