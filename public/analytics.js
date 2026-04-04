@@ -2378,30 +2378,35 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
 
     el.innerHTML = `
       <div class="analytics-card" id="ptOverview">
-        <h3 style="margin-top:0">Network Overview</h3>
-        ${regionNote}
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0 16px">
-          <div class="analytics-stat-card" style="flex:1;min-width:110px">
-            <div class="analytics-stat-label">Total nodes</div>
-            <div class="analytics-stat-value">${totalNodes.toLocaleString()}</div>
-          </div>
-          ${[1, 2, 3].map(b => `
-          <div class="analytics-stat-card" style="flex:1;min-width:150px;border-color:${stats[b].collidingPrefixes > 0 ? 'var(--status-red)' : 'var(--border)'}">
-            <div class="analytics-stat-label">${b}-byte prefixes</div>
-            <div class="analytics-stat-value" style="font-size:1em">
-              ${stats[b].usedPrefixes.toLocaleString()}
-              <span class="text-muted" style="font-size:0.7em"> / ${spaceSizes[b].toLocaleString()}</span>
-            </div>
-            <div style="font-size:0.82em;margin-top:4px;color:${stats[b].collidingPrefixes > 0 ? 'var(--status-red)' : 'var(--status-green)'}">
-              ${stats[b].collidingPrefixes === 0
-                ? '✅ No collisions'
-                : `⚠️ ${stats[b].collidingPrefixes} prefix${stats[b].collidingPrefixes !== 1 ? 'es' : ''} collide`}
-            </div>
-          </div>`).join('')}
+        <div style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none" id="ptOverviewToggle">
+          <span id="ptOverviewChevron" style="font-size:0.75em;color:var(--text-muted);transition:transform 0.2s">▶</span>
+          <h3 style="margin:0">Network Overview</h3>
         </div>
-        <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px">
-          <strong>Recommendation: ${rec} prefixes</strong> — ${recDetail}
-          <span class="text-muted" style="font-size:0.8em;display:block;margin-top:4px">Hash size is configured per-node in firmware. Changing requires reflashing.</span>
+        <div id="ptOverviewBody" style="display:none">
+          ${regionNote}
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0 16px">
+            <div class="analytics-stat-card" style="flex:1;min-width:110px">
+              <div class="analytics-stat-label">Total nodes</div>
+              <div class="analytics-stat-value">${totalNodes.toLocaleString()}</div>
+            </div>
+            ${[1, 2, 3].map(b => `
+            <div class="analytics-stat-card" style="flex:1;min-width:150px;border-color:${stats[b].collidingPrefixes > 0 ? 'var(--status-red)' : 'var(--border)'}">
+              <div class="analytics-stat-label">${b}-byte prefixes</div>
+              <div class="analytics-stat-value" style="font-size:1em">
+                ${stats[b].usedPrefixes.toLocaleString()}
+                <span class="text-muted" style="font-size:0.7em"> / ${spaceSizes[b].toLocaleString()}</span>
+              </div>
+              <div style="font-size:0.82em;margin-top:4px;color:${stats[b].collidingPrefixes > 0 ? 'var(--status-red)' : 'var(--status-green)'}">
+                ${stats[b].collidingPrefixes === 0
+                  ? '✅ No collisions'
+                  : `⚠️ ${stats[b].collidingPrefixes} prefix${stats[b].collidingPrefixes !== 1 ? 'es' : ''} collide`}
+              </div>
+            </div>`).join('')}
+          </div>
+          <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px">
+            <strong>Recommendation: ${rec} prefixes</strong> — ${recDetail}
+            <span class="text-muted" style="font-size:0.8em;display:block;margin-top:4px">Hash size is configured per-node in firmware. Changing requires reflashing.</span>
+          </div>
         </div>
       </div>
 
@@ -2563,6 +2568,15 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     checkBtn.addEventListener('click', () => doCheck(prefixInput.value));
     prefixInput.addEventListener('keydown', e => { if (e.key === 'Enter') doCheck(prefixInput.value); });
     genBtn.addEventListener('click', doGenerate);
+
+    // Network Overview toggle
+    document.getElementById('ptOverviewToggle').addEventListener('click', () => {
+      const body = document.getElementById('ptOverviewBody');
+      const chevron = document.getElementById('ptOverviewChevron');
+      const open = body.style.display === 'none';
+      body.style.display = open ? '' : 'none';
+      chevron.style.transform = open ? 'rotate(90deg)' : '';
+    });
 
     // Auto-run from URL params
     if (initPrefix) {
