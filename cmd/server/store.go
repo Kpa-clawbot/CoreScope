@@ -2340,47 +2340,36 @@ func (s *PacketStore) EvictStale() int {
 	evicting := s.packets[:cutoffIdx]
 	evictedObs := 0
 
-	// Remove from all indexes
+	// Build sets of evicted IDs for batch removal from secondary indexes
+	evictedTxIDs := make(map[int]struct{}, cutoffIdx)
+	evictedObsIDs := make(map[int]struct{}, cutoffIdx*2)
+	// Track which observer IDs and payload types need filtering
+	affectedObservers := make(map[string]struct{})
+	affectedPayloadTypes := make(map[int]struct{})
+	affectedNodes := make(map[string]struct{})
+
+	// First pass: remove from primary indexes (byHash, byTxID, byObsID),
+	// collect IDs for batch secondary index cleanup, and handle non-index work
 	for _, tx := range evicting {
 		delete(s.byHash, tx.Hash)
 		delete(s.byTxID, tx.ID)
+		evictedTxIDs[tx.ID] = struct{}{}
 
-		// Remove observations from indexes
 		for _, obs := range tx.Observations {
 			delete(s.byObsID, obs.ID)
-			// Remove from byObserver
+			evictedObsIDs[obs.ID] = struct{}{}
 			if obs.ObserverID != "" {
-				obsList := s.byObserver[obs.ObserverID]
-				for i, o := range obsList {
-					if o.ID == obs.ID {
-						s.byObserver[obs.ObserverID] = append(obsList[:i], obsList[i+1:]...)
-						break
-					}
-				}
-				if len(s.byObserver[obs.ObserverID]) == 0 {
-					delete(s.byObserver, obs.ObserverID)
-				}
+				affectedObservers[obs.ObserverID] = struct{}{}
 			}
 			evictedObs++
 		}
 
-		// Remove from byPayloadType
 		s.untrackAdvertPubkey(tx)
 		if tx.PayloadType != nil {
-			pt := *tx.PayloadType
-			ptList := s.byPayloadType[pt]
-			for i, t := range ptList {
-				if t.ID == tx.ID {
-					s.byPayloadType[pt] = append(ptList[:i], ptList[i+1:]...)
-					break
-				}
-			}
-			if len(s.byPayloadType[pt]) == 0 {
-				delete(s.byPayloadType, pt)
-			}
+			affectedPayloadTypes[*tx.PayloadType] = struct{}{}
 		}
 
-		// Remove from byNode and nodeHashes
+		// Remove from nodeHashes and collect affected node keys
 		if tx.DecodedJSON != "" {
 			var decoded map[string]interface{}
 			if json.Unmarshal([]byte(tx.DecodedJSON), &decoded) == nil {
@@ -2392,17 +2381,7 @@ func (s *PacketStore) EvictStale() int {
 								delete(s.nodeHashes, v)
 							}
 						}
-						// Remove tx from byNode
-						nodeList := s.byNode[v]
-						for i, t := range nodeList {
-							if t.ID == tx.ID {
-								s.byNode[v] = append(nodeList[:i], nodeList[i+1:]...)
-								break
-							}
-						}
-						if len(s.byNode[v]) == 0 {
-							delete(s.byNode, v)
-						}
+						affectedNodes[v] = struct{}{}
 					}
 				}
 			}
@@ -2412,6 +2391,54 @@ func (s *PacketStore) EvictStale() int {
 		removeTxFromSubpathIndexFull(s.spIndex, s.spTxIndex, tx)
 		// Remove from path-hop index
 		removeTxFromPathHopIndex(s.byPathHop, tx)
+	}
+
+	// Batch-remove from byObserver: single pass per affected observer slice
+	for obsID := range affectedObservers {
+		obsList := s.byObserver[obsID]
+		filtered := obsList[:0]
+		for _, o := range obsList {
+			if _, evicted := evictedObsIDs[o.ID]; !evicted {
+				filtered = append(filtered, o)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(s.byObserver, obsID)
+		} else {
+			s.byObserver[obsID] = filtered
+		}
+	}
+
+	// Batch-remove from byPayloadType: single pass per affected type slice
+	for pt := range affectedPayloadTypes {
+		ptList := s.byPayloadType[pt]
+		filtered := ptList[:0]
+		for _, t := range ptList {
+			if _, evicted := evictedTxIDs[t.ID]; !evicted {
+				filtered = append(filtered, t)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(s.byPayloadType, pt)
+		} else {
+			s.byPayloadType[pt] = filtered
+		}
+	}
+
+	// Batch-remove from byNode: single pass per affected node slice
+	for nodeKey := range affectedNodes {
+		nodeList := s.byNode[nodeKey]
+		filtered := nodeList[:0]
+		for _, t := range nodeList {
+			if _, evicted := evictedTxIDs[t.ID]; !evicted {
+				filtered = append(filtered, t)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(s.byNode, nodeKey)
+		} else {
+			s.byNode[nodeKey] = filtered
+		}
 	}
 
 	// Remove from distance indexes — filter out records referencing evicted txs
