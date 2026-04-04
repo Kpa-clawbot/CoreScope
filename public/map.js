@@ -9,7 +9,7 @@
   let nodes = [];
   let targetNodeKey = null;
   let observers = [];
-  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clusters: false, hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all' };
+  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clusters: false, hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all' };
   let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
   let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
@@ -93,6 +93,15 @@
           <fieldset class="mc-section">
             <legend class="mc-label">Node Types</legend>
             <div id="mcRoleChecks"></div>
+          </fieldset>
+          <fieldset class="mc-section">
+            <legend class="mc-label">Byte Size</legend>
+            <div class="filter-group" id="mcByteFilter">
+              <button class="btn ${filters.byteSize==='all'?'active':''}" data-byte="all">All</button>
+              <button class="btn ${filters.byteSize==='1'?'active':''}" data-byte="1">1-byte</button>
+              <button class="btn ${filters.byteSize==='2'?'active':''}" data-byte="2">2-byte</button>
+              <button class="btn ${filters.byteSize==='3'?'active':''}" data-byte="3">3-byte</button>
+            </div>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Display</legend>
@@ -258,6 +267,16 @@
         filters.statusFilter = btn.dataset.status;
         localStorage.setItem('meshcore-map-status-filter', filters.statusFilter);
         document.querySelectorAll('#mcStatusFilter .btn').forEach(b => b.classList.toggle('active', b.dataset.status === filters.statusFilter));
+        renderMarkers();
+      });
+    });
+
+    // Byte size filter buttons
+    document.querySelectorAll('#mcByteFilter .btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        filters.byteSize = btn.dataset.byte;
+        localStorage.setItem('meshcore-map-byte-filter', filters.byteSize);
+        document.querySelectorAll('#mcByteFilter .btn').forEach(b => b.classList.toggle('active', b.dataset.byte === filters.byteSize));
         renderMarkers();
       });
     });
@@ -674,6 +693,11 @@
     const filtered = nodes.filter(n => {
       if (!n.lat || !n.lon) return false;
       if (!filters[n.role || 'companion']) return false;
+      // Byte size filter (applies only to repeaters)
+      if (filters.byteSize !== 'all' && (n.role || 'companion') === 'repeater') {
+        const hs = n.hash_size || 1;
+        if (String(hs) !== filters.byteSize) return false;
+      }
       // Status filter
       if (filters.statusFilter !== 'all') {
         const role = (n.role || 'companion').toLowerCase();
