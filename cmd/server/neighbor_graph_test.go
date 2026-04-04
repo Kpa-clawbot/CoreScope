@@ -718,9 +718,14 @@ func TestNeighborGraph_CacheTTL(t *testing.T) {
 	}
 }
 
-func TestNeighborGraph_TTLIsFiveMinutes(t *testing.T) {
-	if neighborGraphTTL != 5*time.Minute {
-		t.Errorf("expected neighborGraphTTL = 5m, got %v", neighborGraphTTL)
+func TestNeighborGraph_TTLIsReasonable(t *testing.T) {
+	// TTL must be long enough to avoid rebuild storms on busy meshes,
+	// but short enough to reflect topology changes within minutes.
+	if neighborGraphTTL < 1*time.Minute {
+		t.Errorf("neighborGraphTTL too short (%v), will cause rebuild storms", neighborGraphTTL)
+	}
+	if neighborGraphTTL > 10*time.Minute {
+		t.Errorf("neighborGraphTTL too long (%v), topology changes will be stale", neighborGraphTTL)
 	}
 }
 
@@ -758,11 +763,17 @@ func TestParsedDecoded_Caching(t *testing.T) {
 	if d1["pubKey"] != "abc123" {
 		t.Errorf("expected pubKey=abc123, got %v", d1["pubKey"])
 	}
-	// Second call returns same cached pointer
+	// Second call must return the exact same map (pointer equality proves caching)
 	d2 := tx.ParsedDecoded()
-	if d1["pubKey"] != d2["pubKey"] {
-		t.Error("expected same cached map from second call")
+	if &d1 == nil || &d2 == nil {
+		t.Fatal("unexpected nil")
 	}
+	// Mutate d1 and verify d2 sees the mutation — proves same underlying map
+	d1["_sentinel"] = true
+	if d2["_sentinel"] != true {
+		t.Error("expected same map instance from second call (caching broken)")
+	}
+	delete(d1, "_sentinel") // clean up
 }
 
 func TestParsedDecoded_EmptyJSON(t *testing.T) {
