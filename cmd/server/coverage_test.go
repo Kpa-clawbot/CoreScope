@@ -813,10 +813,9 @@ func TestPrefixMapCap(t *testing.T) {
 	t.Run("map size is capped", func(t *testing.T) {
 		// LongKey: 7 prefix entries (2..8) + 1 full key = 8
 		// ShortKey: 7 prefix entries (2..8), no full key entry (len == maxPrefixLen) = 7
-		// Some prefixes overlap (shared "ee" etc.) — entries share slices, but map keys are unique
-		// Just verify it's much less than uncapped (which would be 7+15+6 = ~22 for 2 nodes)
-		if len(pm.m) > 20 {
-			t.Errorf("expected capped map size, got %d entries", len(pm.m))
+		// No overlapping prefixes between the two nodes → 8 + 7 = 15 unique map keys
+		if len(pm.m) != 15 {
+			t.Errorf("expected 15 map entries (8 for LongKey + 7 for ShortKey), got %d", len(pm.m))
 		}
 	})
 }

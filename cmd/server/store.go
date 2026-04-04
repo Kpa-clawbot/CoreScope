@@ -3454,11 +3454,11 @@ func buildPrefixMap(nodes []nodeInfo) *prefixMap {
 	pm := &prefixMap{m: make(map[string][]nodeInfo, len(nodes)*(maxPrefixLen+1))}
 	for _, n := range nodes {
 		pk := strings.ToLower(n.PublicKey)
-		cap := maxPrefixLen
-		if cap > len(pk) {
-			cap = len(pk)
+		maxLen := maxPrefixLen
+		if maxLen > len(pk) {
+			maxLen = len(pk)
 		}
-		for l := 2; l <= cap; l++ {
+		for l := 2; l <= maxLen; l++ {
 			pfx := pk[:l]
 			pm.m[pfx] = append(pm.m[pfx], n)
 		}
