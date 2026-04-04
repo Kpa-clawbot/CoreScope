@@ -240,6 +240,7 @@ type TransmissionResp struct {
 	SNR              interface{}      `json:"snr"`
 	RSSI             interface{}      `json:"rssi"`
 	PathJSON         interface{}      `json:"path_json"`
+	ResolvedPath     []*string        `json:"resolved_path,omitempty"`
 	Direction        interface{}      `json:"direction"`
 	Score            interface{}      `json:"score,omitempty"`
 	Observations     []ObservationResp `json:"observations,omitempty"`
@@ -254,6 +255,7 @@ type ObservationResp struct {
 	SNR            interface{} `json:"snr"`
 	RSSI           interface{} `json:"rssi"`
 	PathJSON       interface{} `json:"path_json"`
+	ResolvedPath   []*string   `json:"resolved_path,omitempty"`
 	Timestamp      interface{} `json:"timestamp"`
 }
 

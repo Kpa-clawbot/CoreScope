@@ -1088,7 +1088,7 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r := pm.resolve(hop)
+		r, _, _ := pm.resolveWithContext(hop, nil, s.store.graph)
 		hopCache[hop] = r
 		return r
 	}
@@ -1997,6 +1997,9 @@ func mapSliceToTransmissions(maps []map[string]interface{}) []TransmissionResp {
 		tx.PathJSON = m["path_json"]
 		tx.Direction = m["direction"]
 		tx.Score = m["score"]
+		if rp, ok := m["resolved_path"].([]*string); ok {
+			tx.ResolvedPath = rp
+		}
 		result = append(result, tx)
 	}
 	return result
@@ -2018,6 +2021,9 @@ func mapSliceToObservations(maps []map[string]interface{}) []ObservationResp {
 		obs.RSSI = m["rssi"]
 		obs.PathJSON = m["path_json"]
 		obs.Timestamp = m["timestamp"]
+		if rp, ok := m["resolved_path"].([]*string); ok {
+			obs.ResolvedPath = rp
+		}
 		result = append(result, obs)
 	}
 	return result

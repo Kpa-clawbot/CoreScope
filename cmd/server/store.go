@@ -39,6 +39,7 @@ type StoreTx struct {
 	RSSI         *float64
 	PathJSON     string
 	Direction    string
+	ResolvedPath []*string // resolved path from best observation
 	LatestSeen string // max observation timestamp (or FirstSeen if no observations)
 	// Cached parsed fields (set once, read many)
 	parsedPath []string // cached parsePathJSON result
@@ -58,6 +59,7 @@ type StoreObs struct {
 	RSSI           *float64
 	Score          *int
 	PathJSON       string
+	ResolvedPath   []*string // resolved full pubkeys, parallel to path_json; nil elements = unresolved
 	Timestamp      string
 }
 
@@ -126,6 +128,9 @@ type PacketStore struct {
 	// Precomputed distinct advert pubkey count (refcounted for eviction correctness).
 	// Updated incrementally during Load/Ingest/Evict — avoids JSON parsing in GetPerfStoreStats.
 	advertPubkeys map[string]int // pubkey → number of advert packets referencing it
+
+	// Persisted neighbor graph for hop resolution at ingest time.
+	graph *NeighborGraph
 
 	// Eviction config and stats
 	retentionHours float64 // 0 = unlimited
@@ -211,11 +216,15 @@ func (s *PacketStore) Load() error {
 	t0 := time.Now()
 
 	var loadSQL string
+	rpCol := ""
+	if s.db.hasResolvedPath {
+		rpCol = ",\n\t\t\t\to.resolved_path"
+	}
 	if s.db.isV3 {
 		loadSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, obs.id, obs.name, o.direction,
-				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')
+				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + rpCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
@@ -224,7 +233,7 @@ func (s *PacketStore) Load() error {
 		loadSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
 				o.id, o.observer_id, o.observer_name, o.direction,
-				o.snr, o.rssi, o.score, o.path_json, o.timestamp
+				o.snr, o.rssi, o.score, o.path_json, o.timestamp` + rpCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
 			ORDER BY t.first_seen ASC, o.timestamp DESC`
@@ -244,11 +253,16 @@ func (s *PacketStore) Load() error {
 		var observerID, observerName, direction, pathJSON, obsTimestamp sql.NullString
 		var snr, rssi sql.NullFloat64
 		var score sql.NullInt64
+		var resolvedPathStr sql.NullString
 
-		if err := rows.Scan(&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
+		scanArgs := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
 			&payloadVersion, &decodedJSON,
 			&obsID, &observerID, &observerName, &direction,
-			&snr, &rssi, &score, &pathJSON, &obsTimestamp); err != nil {
+			&snr, &rssi, &score, &pathJSON, &obsTimestamp}
+		if s.db.hasResolvedPath {
+			scanArgs = append(scanArgs, &resolvedPathStr)
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
 			log.Printf("[store] scan error: %v", err)
 			continue
 		}
@@ -299,6 +313,7 @@ func (s *PacketStore) Load() error {
 				RSSI:           nullFloatPtr(rssi),
 				Score:          nullIntPtr(score),
 				PathJSON:       obsPJ,
+				ResolvedPath:   unmarshalResolvedPath(nullStrVal(resolvedPathStr)),
 				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
 			}
 
@@ -359,6 +374,7 @@ func pickBestObservation(tx *StoreTx) {
 	tx.RSSI = best.RSSI
 	tx.PathJSON = best.PathJSON
 	tx.Direction = best.Direction
+	tx.ResolvedPath = best.ResolvedPath
 	tx.pathParsed = false // invalidate cached parsed path
 }
 
@@ -1146,6 +1162,15 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				PathJSON:       r.pathJSON,
 				Timestamp:      normalizeTimestamp(r.obsTS),
 			}
+
+			// Resolve path at ingest time using neighbor graph
+			if r.pathJSON != "" && r.pathJSON != "[]" {
+				_, pm := s.getCachedNodesAndPM()
+				if pm != nil {
+					obs.ResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, s.graph)
+				}
+			}
+
 			tx.Observations = append(tx.Observations, obs)
 			tx.obsKeys[dk] = true
 			tx.ObservationCount++
@@ -1189,7 +1214,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			if cached, ok := hopCache[hop]; ok {
 				return cached
 			}
-			r := pm.resolve(hop)
+			r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
 			hopCache[hop] = r
 			return r
 		}
@@ -1239,6 +1264,9 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				"direction":         strOrNil(obs.Direction),
 				"observation_count": tx.ObservationCount,
 			}
+			if obs.ResolvedPath != nil {
+				pkt["resolved_path"] = obs.ResolvedPath
+			}
 			// Broadcast map: top-level fields for live.js + nested packet for packets.js
 			broadcastMap := make(map[string]interface{}, len(pkt)+2)
 			for k, v := range pkt {
@@ -1271,6 +1299,141 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			}
 		}
 		s.invalidateCachesFor(inv)
+	}
+
+	// Persist resolved paths and neighbor edges asynchronously (don't block ingest).
+	if len(broadcastTxs) > 0 && s.db != nil {
+		dbPath := s.db.path
+		// Collect data for persistence outside the lock
+		type persistObs struct {
+			obsID        int
+			resolvedPath string
+		}
+		type persistEdge struct {
+			a, b, ts string
+		}
+		var obsUpdates []persistObs
+		var edgeUpdates []persistEdge
+
+		_, pm := s.getCachedNodesAndPM()
+		for _, tx := range broadcastTxs {
+			isAdvert := tx.PayloadType != nil && *tx.PayloadType == 4
+			fromNode := extractFromNode(tx)
+
+			for _, obs := range tx.Observations {
+				// Collect resolved_path updates
+				if obs.ResolvedPath != nil {
+					rpJSON := marshalResolvedPath(obs.ResolvedPath)
+					if rpJSON != "" {
+						obsUpdates = append(obsUpdates, persistObs{obs.ID, rpJSON})
+					}
+				}
+
+				// Extract neighbor edges
+				path := parsePathJSON(obs.PathJSON)
+				observerPK := strings.ToLower(obs.ObserverID)
+
+				if len(path) == 0 {
+					if isAdvert && fromNode != "" {
+						fromLower := strings.ToLower(fromNode)
+						if fromLower != observerPK {
+							a, b := fromLower, observerPK
+							if a > b {
+								a, b = b, a
+							}
+							edgeUpdates = append(edgeUpdates, persistEdge{a, b, obs.Timestamp})
+							// Update in-memory graph
+							if s.graph != nil {
+								s.graph.upsertEdge(fromLower, observerPK, "", observerPK, obs.SNR, parseTimestamp(obs.Timestamp))
+							}
+						}
+					}
+					continue
+				}
+
+				// Edge 1: originator ↔ path[0] (ADVERTs only, unambiguous)
+				if isAdvert && fromNode != "" && pm != nil {
+					firstHop := strings.ToLower(path[0])
+					fromLower := strings.ToLower(fromNode)
+					candidates := pm.m[firstHop]
+					if len(candidates) == 1 {
+						resolved := strings.ToLower(candidates[0].PublicKey)
+						if resolved != fromLower {
+							a, b := fromLower, resolved
+							if a > b {
+								a, b = b, a
+							}
+							edgeUpdates = append(edgeUpdates, persistEdge{a, b, obs.Timestamp})
+							if s.graph != nil {
+								s.graph.upsertEdge(fromLower, resolved, firstHop, observerPK, obs.SNR, parseTimestamp(obs.Timestamp))
+							}
+						}
+					}
+				}
+
+				// Edge 2: observer ↔ path[last] (ALL types, unambiguous)
+				if pm != nil {
+					lastHop := strings.ToLower(path[len(path)-1])
+					candidates := pm.m[lastHop]
+					if len(candidates) == 1 {
+						resolved := strings.ToLower(candidates[0].PublicKey)
+						if resolved != observerPK {
+							a, b := observerPK, resolved
+							if a > b {
+								a, b = b, a
+							}
+							edgeUpdates = append(edgeUpdates, persistEdge{a, b, obs.Timestamp})
+							if s.graph != nil {
+								s.graph.upsertEdge(observerPK, resolved, lastHop, observerPK, obs.SNR, parseTimestamp(obs.Timestamp))
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Persist asynchronously
+		if len(obsUpdates) > 0 || len(edgeUpdates) > 0 {
+			go func() {
+				rw, err := openRW(dbPath)
+				if err != nil {
+					log.Printf("[store] persist rw open error: %v", err)
+					return
+				}
+				defer rw.Close()
+
+				if len(obsUpdates) > 0 {
+					sqlTx, err := rw.Begin()
+					if err == nil {
+						stmt, err := sqlTx.Prepare("UPDATE observations SET resolved_path = ? WHERE id = ?")
+						if err == nil {
+							for _, u := range obsUpdates {
+								stmt.Exec(u.resolvedPath, u.obsID)
+							}
+							stmt.Close()
+						}
+						sqlTx.Commit()
+					}
+				}
+
+				if len(edgeUpdates) > 0 {
+					sqlTx, err := rw.Begin()
+					if err == nil {
+						stmt, err := sqlTx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
+							VALUES (?, ?, 1, ?)
+							ON CONFLICT(node_a, node_b) DO UPDATE SET
+							count = count + 1, last_seen = MAX(last_seen, excluded.last_seen)`)
+						if err == nil {
+							for _, e := range edgeUpdates {
+								stmt.Exec(e.a, e.b, e.ts)
+							}
+							stmt.Close()
+						}
+						sqlTx.Commit()
+					}
+				}
+			}()
+		}
 	}
 
 	return result, newMaxID
@@ -1675,6 +1838,9 @@ func (s *PacketStore) enrichObs(obs *StoreObs) map[string]interface{} {
 		"score":         intPtrOrNil(obs.Score),
 		"path_json":     strOrNil(obs.PathJSON),
 	}
+	if obs.ResolvedPath != nil {
+		m["resolved_path"] = obs.ResolvedPath
+	}
 
 	if tx != nil {
 		m["hash"] = strOrNil(tx.Hash)
@@ -1708,6 +1874,9 @@ func txToMap(tx *StoreTx) map[string]interface{} {
 		"path_json":         strOrNil(tx.PathJSON),
 		"direction":         strOrNil(tx.Direction),
 	}
+	if tx.ResolvedPath != nil {
+		m["resolved_path"] = tx.ResolvedPath
+	}
 	// Include parsed path array to match Node.js output shape
 	if hops := txGetParsedPath(tx); len(hops) > 0 {
 		m["_parsedPath"] = hops
@@ -1717,7 +1886,7 @@ func txToMap(tx *StoreTx) map[string]interface{} {
 	// Include observations for expand=observations support (stripped by handler when not requested)
 	obs := make([]map[string]interface{}, 0, len(tx.Observations))
 	for _, o := range tx.Observations {
-		obs = append(obs, map[string]interface{}{
+		om := map[string]interface{}{
 			"id":            o.ID,
 			"observer_id":   strOrNil(o.ObserverID),
 			"observer_name": strOrNil(o.ObserverName),
@@ -1726,7 +1895,11 @@ func txToMap(tx *StoreTx) map[string]interface{} {
 			"path_json":     strOrNil(o.PathJSON),
 			"timestamp":     strOrNil(o.Timestamp),
 			"direction":     strOrNil(o.Direction),
-		})
+		}
+		if o.ResolvedPath != nil {
+			om["resolved_path"] = o.ResolvedPath
+		}
+		obs = append(obs, om)
 	}
 	m["observations"] = obs
 	return m
@@ -1873,7 +2046,7 @@ func (s *PacketStore) buildDistanceIndex() {
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r := pm.resolve(hop)
+		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
 		hopCache[hop] = r
 		return r
 	}
@@ -3534,7 +3707,7 @@ func (s *PacketStore) computeAnalyticsTopology(region string) map[string]interfa
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r := pm.resolve(hop)
+		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
 		hopCache[hop] = r
 		return r
 	}
@@ -5525,7 +5698,7 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 			}
 			return hop
 		}
-		r := pm.resolve(hop)
+		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
 		hopCache[hop] = r
 		if r != nil {
 			return r.Name
@@ -5662,7 +5835,7 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 	// Resolve the requested hops
 	nodes := make([]map[string]interface{}, len(rawHops))
 	for i, hop := range rawHops {
-		r := pm.resolve(hop)
+		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
 		entry := map[string]interface{}{"hop": hop, "name": hop, "lat": nil, "lon": nil, "pubkey": nil}
 		if r != nil {
 			entry["name"] = r.Name
@@ -5741,7 +5914,7 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 		// Full parent path (resolved)
 		resolved := make([]string, len(hops))
 		for i, h := range hops {
-			r := pm.resolve(h)
+			r, _, _ := pm.resolveWithContext(h, nil, s.graph)
 			if r != nil {
 				resolved[i] = r.Name
 			} else {

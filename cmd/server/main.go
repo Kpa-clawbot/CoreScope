@@ -144,6 +144,42 @@ func main() {
 		log.Fatalf("[store] failed to load: %v", err)
 	}
 
+	// Initialize persisted neighbor graph
+	dbPath = database.path
+	if err := ensureNeighborEdgesTable(dbPath); err != nil {
+		log.Printf("[neighbor] warning: could not create neighbor_edges table: %v", err)
+	}
+	if err := ensureResolvedPathColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add resolved_path column: %v", err)
+	}
+
+	// Load or build neighbor graph
+	if neighborEdgesTableExists(database.conn) {
+		store.graph = loadNeighborEdgesFromDB(database.conn)
+		log.Printf("[neighbor] loaded persisted neighbor graph")
+	} else {
+		log.Printf("[neighbor] no persisted edges found, building from store...")
+		rw, rwErr := openRW(dbPath)
+		if rwErr == nil {
+			edgeCount := buildAndPersistEdges(store, rw)
+			rw.Close()
+			log.Printf("[neighbor] persisted %d edges", edgeCount)
+		}
+		store.graph = BuildFromStore(store)
+	}
+
+	// Backfill resolved_path for observations that don't have it yet
+	if backfilled := backfillResolvedPaths(store, dbPath); backfilled > 0 {
+		log.Printf("[store] backfilled resolved_path for %d observations", backfilled)
+	}
+
+	// Re-pick best observation now that resolved paths are populated
+	store.mu.Lock()
+	for _, tx := range store.packets {
+		pickBestObservation(tx)
+	}
+	store.mu.Unlock()
+
 	// WebSocket hub
 	hub := NewHub()
 
