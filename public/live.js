@@ -540,6 +540,8 @@
         clearTimeout(entry.timer);
       }
       propagationBuffer.clear();
+      // Batch-update timeline once on restore instead of per-packet while hidden
+      updateTimeline();
     }
   });
 
@@ -564,7 +566,6 @@
     if (VCR.mode === 'LIVE') {
       // Skip animations when tab is backgrounded — just buffer for VCR timeline
       if (_tabHidden) {
-        updateTimeline();
         return;
       }
       if (realisticPropagation && pkt.hash) {
