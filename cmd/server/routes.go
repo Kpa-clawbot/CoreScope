@@ -1560,8 +1560,12 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
 	pktCounts := s.db.GetObserverPacketCounts(oneHourAgo)
 
-	// Batch lookup: node locations (observer ID may match a node public_key)
-	nodeLocations := s.db.GetNodeLocations()
+	// Batch lookup: node locations only for observer IDs (not all nodes)
+	observerIDs := make([]string, len(observers))
+	for i, o := range observers {
+		observerIDs[i] = o.ID
+	}
+	nodeLocations := s.db.GetNodeLocationsByKeys(observerIDs)
 
 	result := make([]ObserverResp, 0, len(observers))
 	for _, o := range observers {

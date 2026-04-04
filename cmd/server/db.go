@@ -1497,6 +1497,39 @@ func (db *DB) GetNodeLocations() map[string]map[string]interface{} {
 	return result
 }
 
+// GetNodeLocationsByKeys returns location data only for the given public keys.
+// This avoids fetching ALL nodes when only a few keys need to be matched.
+func (db *DB) GetNodeLocationsByKeys(keys []string) map[string]map[string]interface{} {
+	result := make(map[string]map[string]interface{})
+	if len(keys) == 0 {
+		return result
+	}
+	placeholders := make([]string, len(keys))
+	args := make([]interface{}, len(keys))
+	for i, k := range keys {
+		placeholders[i] = "?"
+		args[i] = strings.ToLower(k)
+	}
+	query := "SELECT public_key, lat, lon, role FROM nodes WHERE LOWER(public_key) IN (" + strings.Join(placeholders, ",") + ")"
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return result
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pk string
+		var role sql.NullString
+		var lat, lon sql.NullFloat64
+		rows.Scan(&pk, &lat, &lon, &role)
+		result[strings.ToLower(pk)] = map[string]interface{}{
+			"lat":  nullFloat(lat),
+			"lon":  nullFloat(lon),
+			"role": nullStr(role),
+		}
+	}
+	return result
+}
+
 // QueryMultiNodePackets returns transmissions referencing any of the given pubkeys.
 func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, since, until string) (*PacketResult, error) {
 	if len(pubkeys) == 0 {

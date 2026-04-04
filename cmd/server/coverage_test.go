@@ -1426,6 +1426,40 @@ func TestGetNodeLocations(t *testing.T) {
 	}
 }
 
+// --- GetNodeLocationsByKeys ---
+
+func TestGetNodeLocationsByKeys(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+
+	// Query with a known key
+	pk := "aabbccdd11223344"
+	locs := db.GetNodeLocationsByKeys([]string{pk})
+	if len(locs) != 1 {
+		t.Errorf("expected 1 location, got %d", len(locs))
+	}
+	if entry, ok := locs[strings.ToLower(pk)]; ok {
+		if entry["lat"] == nil {
+			t.Error("expected non-nil lat")
+		}
+	} else {
+		t.Error("expected node location for test repeater")
+	}
+
+	// Query with no keys returns empty map
+	empty := db.GetNodeLocationsByKeys([]string{})
+	if len(empty) != 0 {
+		t.Errorf("expected 0 locations for empty keys, got %d", len(empty))
+	}
+
+	// Query with unknown key returns empty map
+	unknown := db.GetNodeLocationsByKeys([]string{"nonexistent"})
+	if len(unknown) != 0 {
+		t.Errorf("expected 0 locations for unknown key, got %d", len(unknown))
+	}
+}
+
 // --- Store edge cases ---
 
 func TestStoreQueryPacketsEdgeCases(t *testing.T) {
