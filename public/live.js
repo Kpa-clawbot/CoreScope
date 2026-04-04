@@ -1697,19 +1697,13 @@
 
   async function replayRecent() {
     try {
-      const resp = await fetch('/api/packets?limit=8&groupByHash=true');
+      // Single bulk fetch with expand=observations — no N+1 calls
+      const resp = await fetch('/api/packets?limit=8&expand=observations');
       const data = await resp.json();
       const groups = (data.packets || []).reverse();
 
-      // Fetch all observations in parallel (not sequentially)
-      const detailResults = await Promise.all(groups.map(group =>
-        fetch('/api/packets/' + encodeURIComponent(group.hash))
-          .then(r => r.json())
-          .catch(() => ({}))
-      ));
-
-      const allGroups = groups.map((group, i) => {
-        const observations = detailResults[i].observations || [];
+      const allGroups = groups.map((group) => {
+        const observations = group.observations || [];
 
         const livePackets = observations.map(obs => {
           const livePkt = dbPacketToLive(Object.assign({}, group, obs, {
