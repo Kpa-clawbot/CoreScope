@@ -1309,16 +1309,8 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	// Persist resolved paths and neighbor edges asynchronously (don't block ingest).
 	if len(broadcastTxs) > 0 && s.db != nil {
 		dbPath := s.db.path
-		// Collect data for persistence outside the lock
-		type persistObs struct {
-			obsID        int
-			resolvedPath string
-		}
-		type persistEdge struct {
-			a, b, ts string
-		}
-		var obsUpdates []persistObs
-		var edgeUpdates []persistEdge
+		var obsUpdates []persistObsUpdate
+		var edgeUpdates []persistEdgeUpdate
 
 		_, pm := s.getCachedNodesAndPM()
 		// Read graph ref under lock (it's set during startup and not replaced after,
@@ -1326,84 +1318,22 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		graphRef := s.graph
 		for _, tx := range broadcastTxs {
 			for _, obs := range tx.Observations {
-				// Collect resolved_path updates
 				if obs.ResolvedPath != nil {
 					rpJSON := marshalResolvedPath(obs.ResolvedPath)
 					if rpJSON != "" {
-						obsUpdates = append(obsUpdates, persistObs{obs.ID, rpJSON})
+						obsUpdates = append(obsUpdates, persistObsUpdate{obs.ID, rpJSON})
 					}
 				}
-
-				// Extract neighbor edges using shared helper (review item #3 — DRY)
 				for _, ec := range extractEdgesFromObs(obs, tx, pm) {
-					edgeUpdates = append(edgeUpdates, persistEdge{ec.A, ec.B, ec.Timestamp})
-					// Update in-memory graph
+					edgeUpdates = append(edgeUpdates, persistEdgeUpdate{ec.A, ec.B, ec.Timestamp})
 					if graphRef != nil {
-						// parseTimestamp handles empty strings safely (returns zero time — review item #8)
 						graphRef.upsertEdge(ec.A, ec.B, "", obs.ObserverID, obs.SNR, parseTimestamp(ec.Timestamp))
 					}
 				}
 			}
 		}
 
-		// Persist asynchronously
-		if len(obsUpdates) > 0 || len(edgeUpdates) > 0 {
-			go func() {
-				rw, err := openRW(dbPath)
-				if err != nil {
-					log.Printf("[store] persist rw open error: %v", err)
-					return
-				}
-				defer rw.Close()
-
-				if len(obsUpdates) > 0 {
-					sqlTx, err := rw.Begin()
-					if err == nil {
-						stmt, err := sqlTx.Prepare("UPDATE observations SET resolved_path = ? WHERE id = ?")
-						if err == nil {
-							var firstErr error
-							for _, u := range obsUpdates {
-								if _, err := stmt.Exec(u.resolvedPath, u.obsID); err != nil && firstErr == nil {
-									firstErr = err
-								}
-							}
-							stmt.Close()
-							if firstErr != nil {
-								log.Printf("[store] async persist resolved_path error (first): %v", firstErr)
-							}
-						} else {
-							log.Printf("[store] async persist resolved_path prepare error: %v", err)
-						}
-						sqlTx.Commit()
-					}
-				}
-
-				if len(edgeUpdates) > 0 {
-					sqlTx, err := rw.Begin()
-					if err == nil {
-						stmt, err := sqlTx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
-							VALUES (?, ?, 1, ?)
-							ON CONFLICT(node_a, node_b) DO UPDATE SET
-							count = count + 1, last_seen = MAX(last_seen, excluded.last_seen)`)
-						if err == nil {
-							var firstErr error
-							for _, e := range edgeUpdates {
-								if _, err := stmt.Exec(e.a, e.b, e.ts); err != nil && firstErr == nil {
-									firstErr = err
-								}
-							}
-							stmt.Close()
-							if firstErr != nil {
-								log.Printf("[store] async persist edge error (first): %v", firstErr)
-							}
-						} else {
-							log.Printf("[store] async persist edge prepare error: %v", err)
-						}
-						sqlTx.Commit()
-					}
-				}
-			}()
-		}
+		asyncPersistResolvedPathsAndEdges(dbPath, obsUpdates, edgeUpdates, "persist")
 	}
 
 	return result, newMaxID
@@ -1489,6 +1419,9 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 
 	updatedTxs := make(map[int]*StoreTx)
 	broadcastMaps := make([]map[string]interface{}, 0, len(obsRows))
+	// Track newly created observations for persistence — only these should be
+	// persisted, not all observations of each updated tx (fixes edge count inflation).
+	var newObs []*StoreObs
 
 	// Hoist getCachedNodesAndPM() before the loop — same pattern as IngestNewFromDB (review fix #1).
 	_, pm := s.getCachedNodesAndPM()
@@ -1537,6 +1470,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		tx.Observations = append(tx.Observations, obs)
 		tx.obsKeys[dk] = true
 		tx.ObservationCount++
+		newObs = append(newObs, obs)
 		if obs.Timestamp > tx.LatestSeen {
 			tx.LatestSeen = obs.Timestamp
 		}
@@ -1644,93 +1578,33 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	}
 
 	// Persist resolved paths and neighbor edges asynchronously (review fix #3).
-	// Same pattern as IngestNewFromDB — late observations need persistence too.
-	if len(updatedTxs) > 0 && s.db != nil {
+	// Only process NEW observations — not all observations of each updated tx —
+	// to avoid edge count inflation and unnecessary UPDATEs for pre-existing data.
+	if len(newObs) > 0 && s.db != nil {
 		dbPath := s.db.path
-		type persistObs struct {
-			obsID        int
-			resolvedPath string
-		}
-		type persistEdge struct {
-			a, b, ts string
-		}
-		var obsUpdates []persistObs
-		var edgeUpdates []persistEdge
+		var obsUpdates []persistObsUpdate
+		var edgeUpdates []persistEdgeUpdate
 
-		for _, tx := range updatedTxs {
-			for _, obs := range tx.Observations {
-				if obs.ResolvedPath != nil {
-					rpJSON := marshalResolvedPath(obs.ResolvedPath)
-					if rpJSON != "" {
-						obsUpdates = append(obsUpdates, persistObs{obs.ID, rpJSON})
-					}
+		for _, obs := range newObs {
+			tx := s.byTxID[obs.TransmissionID]
+			if tx == nil {
+				continue
+			}
+			if obs.ResolvedPath != nil {
+				rpJSON := marshalResolvedPath(obs.ResolvedPath)
+				if rpJSON != "" {
+					obsUpdates = append(obsUpdates, persistObsUpdate{obs.ID, rpJSON})
 				}
-				for _, ec := range extractEdgesFromObs(obs, tx, pm) {
-					edgeUpdates = append(edgeUpdates, persistEdge{ec.A, ec.B, ec.Timestamp})
-					if graphRef != nil {
-						graphRef.upsertEdge(ec.A, ec.B, "", obs.ObserverID, obs.SNR, parseTimestamp(ec.Timestamp))
-					}
+			}
+			for _, ec := range extractEdgesFromObs(obs, tx, pm) {
+				edgeUpdates = append(edgeUpdates, persistEdgeUpdate{ec.A, ec.B, ec.Timestamp})
+				if graphRef != nil {
+					graphRef.upsertEdge(ec.A, ec.B, "", obs.ObserverID, obs.SNR, parseTimestamp(ec.Timestamp))
 				}
 			}
 		}
 
-		if len(obsUpdates) > 0 || len(edgeUpdates) > 0 {
-			go func() {
-				rw, err := openRW(dbPath)
-				if err != nil {
-					log.Printf("[store] obs-persist rw open error: %v", err)
-					return
-				}
-				defer rw.Close()
-
-				if len(obsUpdates) > 0 {
-					sqlTx, err := rw.Begin()
-					if err == nil {
-						stmt, err := sqlTx.Prepare("UPDATE observations SET resolved_path = ? WHERE id = ?")
-						if err == nil {
-							var firstErr error
-							for _, u := range obsUpdates {
-								if _, err := stmt.Exec(u.resolvedPath, u.obsID); err != nil && firstErr == nil {
-									firstErr = err
-								}
-							}
-							stmt.Close()
-							if firstErr != nil {
-								log.Printf("[store] obs-persist resolved_path error (first): %v", firstErr)
-							}
-						} else {
-							log.Printf("[store] obs-persist resolved_path prepare error: %v", err)
-						}
-						sqlTx.Commit()
-					}
-				}
-
-				if len(edgeUpdates) > 0 {
-					sqlTx, err := rw.Begin()
-					if err == nil {
-						stmt, err := sqlTx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
-							VALUES (?, ?, 1, ?)
-							ON CONFLICT(node_a, node_b) DO UPDATE SET
-							count = count + 1, last_seen = MAX(last_seen, excluded.last_seen)`)
-						if err == nil {
-							var firstErr error
-							for _, e := range edgeUpdates {
-								if _, err := stmt.Exec(e.a, e.b, e.ts); err != nil && firstErr == nil {
-									firstErr = err
-								}
-							}
-							stmt.Close()
-							if firstErr != nil {
-								log.Printf("[store] obs-persist edge error (first): %v", firstErr)
-							}
-						} else {
-							log.Printf("[store] obs-persist edge prepare error: %v", err)
-						}
-						sqlTx.Commit()
-					}
-				}
-			}()
-		}
+		asyncPersistResolvedPathsAndEdges(dbPath, obsUpdates, edgeUpdates, "obs-persist")
 	}
 
 	return broadcastMaps

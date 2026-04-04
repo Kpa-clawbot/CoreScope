@@ -106,6 +106,83 @@ func persistEdge(rw *sql.DB, nodeA, nodeB string, now string) {
 	}
 }
 
+// ─── shared async persistence helper ───────────────────────────────────────────
+
+// persistObsUpdate holds data for a resolved_path SQLite update.
+type persistObsUpdate struct {
+	obsID        int
+	resolvedPath string
+}
+
+// persistEdgeUpdate holds data for a neighbor_edges SQLite upsert.
+type persistEdgeUpdate struct {
+	a, b, ts string
+}
+
+// asyncPersistResolvedPathsAndEdges writes resolved_path updates and neighbor
+// edge upserts to SQLite in a background goroutine. Shared between
+// IngestNewFromDB and IngestNewObservations to avoid DRY violation.
+func asyncPersistResolvedPathsAndEdges(dbPath string, obsUpdates []persistObsUpdate, edgeUpdates []persistEdgeUpdate, logPrefix string) {
+	if len(obsUpdates) == 0 && len(edgeUpdates) == 0 {
+		return
+	}
+	go func() {
+		rw, err := openRW(dbPath)
+		if err != nil {
+			log.Printf("[store] %s rw open error: %v", logPrefix, err)
+			return
+		}
+		defer rw.Close()
+
+		if len(obsUpdates) > 0 {
+			sqlTx, err := rw.Begin()
+			if err == nil {
+				stmt, err := sqlTx.Prepare("UPDATE observations SET resolved_path = ? WHERE id = ?")
+				if err == nil {
+					var firstErr error
+					for _, u := range obsUpdates {
+						if _, err := stmt.Exec(u.resolvedPath, u.obsID); err != nil && firstErr == nil {
+							firstErr = err
+						}
+					}
+					stmt.Close()
+					if firstErr != nil {
+						log.Printf("[store] %s resolved_path error (first): %v", logPrefix, firstErr)
+					}
+				} else {
+					log.Printf("[store] %s resolved_path prepare error: %v", logPrefix, err)
+				}
+				sqlTx.Commit()
+			}
+		}
+
+		if len(edgeUpdates) > 0 {
+			sqlTx, err := rw.Begin()
+			if err == nil {
+				stmt, err := sqlTx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
+					VALUES (?, ?, 1, ?)
+					ON CONFLICT(node_a, node_b) DO UPDATE SET
+					count = count + 1, last_seen = MAX(last_seen, excluded.last_seen)`)
+				if err == nil {
+					var firstErr error
+					for _, e := range edgeUpdates {
+						if _, err := stmt.Exec(e.a, e.b, e.ts); err != nil && firstErr == nil {
+							firstErr = err
+						}
+					}
+					stmt.Close()
+					if firstErr != nil {
+						log.Printf("[store] %s edge error (first): %v", logPrefix, firstErr)
+					}
+				} else {
+					log.Printf("[store] %s edge prepare error: %v", logPrefix, err)
+				}
+				sqlTx.Commit()
+			}
+		}
+	}()
+}
+
 // neighborEdgesTableExists checks if the neighbor_edges table has any data.
 func neighborEdgesTableExists(conn *sql.DB) bool {
 	var cnt int
