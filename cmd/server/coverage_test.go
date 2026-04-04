@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -4197,4 +4198,68 @@ func TestDistanceIncrementalUpdate(t *testing.T) {
 
 	t.Logf("Distance index: %d→%d hops, %d→%d paths (incremental)",
 		initialHops, len(store.distHops), initialPaths, len(store.distPaths))
+}
+
+func TestHandleBatchObservations(t *testing.T) {
+	_, router := setupNoStoreServer(t)
+
+	t.Run("empty hashes returns empty results", func(t *testing.T) {
+		body := strings.NewReader(`{"hashes":[]}`)
+		req := httptest.NewRequest("POST", "/api/packets/observations", body)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+		results, ok := resp["results"].(map[string]interface{})
+		if !ok || len(results) != 0 {
+			t.Fatalf("expected empty results map, got %v", resp)
+		}
+	})
+
+	t.Run("invalid JSON returns 400", func(t *testing.T) {
+		body := strings.NewReader(`not json`)
+		req := httptest.NewRequest("POST", "/api/packets/observations", body)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != 400 {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("too many hashes returns 400", func(t *testing.T) {
+		hashes := make([]string, 201)
+		for i := range hashes {
+			hashes[i] = fmt.Sprintf("hash%d", i)
+		}
+		data, _ := json.Marshal(map[string][]string{"hashes": hashes})
+		req := httptest.NewRequest("POST", "/api/packets/observations", bytes.NewReader(data))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != 400 {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("valid hashes with no store returns empty results", func(t *testing.T) {
+		body := strings.NewReader(`{"hashes":["abc123","def456"]}`)
+		req := httptest.NewRequest("POST", "/api/packets/observations", body)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+		_, ok := resp["results"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected results map, got %v", resp)
+		}
+	})
 }

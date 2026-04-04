@@ -873,18 +873,30 @@
     obsSortSel.addEventListener('change', async function () {
       obsSortMode = this.value;
       localStorage.setItem('meshcore-obs-sort', obsSortMode);
-      // For non-observer sorts, fetch children for visible groups that don't have them yet
+      // For non-observer sorts, batch-fetch children for visible groups that don't have them yet
       if (obsSortMode !== SORT_OBSERVER && groupByHash) {
         const toFetch = packets.filter(p => p.hash && !p._children && (p.observation_count || 0) > 1);
-        await Promise.all(toFetch.map(async (p) => {
+        if (toFetch.length > 0) {
+          const hashes = toFetch.map(p => p.hash);
           try {
-            const data = await api(`/packets/${p.hash}`);
-            if (data?.packet && data.observations) {
-              p._children = data.observations.map(o => clearParsedCache({...data.packet, ...o, _isObservation: true}));
-              p._fetchedData = data;
+            const resp = await fetch('/api/packets/observations', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({hashes})
+            });
+            if (resp.ok) {
+              const data = await resp.json();
+              const results = data.results || {};
+              for (const p of toFetch) {
+                const obs = results[p.hash];
+                if (obs && obs.length) {
+                  p._children = obs.map(o => clearParsedCache({...p, ...o, _isObservation: true}));
+                  p._fetchedData = {packet: p, observations: obs};
+                }
+              }
             }
           } catch {}
-        }));
+        }
       }
       // Re-sort all groups with children
       for (const p of packets) {

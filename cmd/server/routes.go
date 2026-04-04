@@ -118,6 +118,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
 
 	// Packet endpoints
+	r.HandleFunc("/api/packets/observations", s.handleBatchObservations).Methods("POST")
 	r.HandleFunc("/api/packets/timestamps", s.handlePacketTimestamps).Methods("GET")
 	r.HandleFunc("/api/packets/{id}", s.handlePacketDetail).Methods("GET")
 	r.HandleFunc("/api/packets", s.handlePackets).Methods("GET")
@@ -790,6 +791,38 @@ var muxBraceParam = regexp.MustCompile(`\{([^}]+)\}`)
 
 // perfHexFallback matches hex IDs for perf path normalization fallback.
 var perfHexFallback = regexp.MustCompile(`[0-9a-f]{8,}`)
+
+// handleBatchObservations returns observations for multiple hashes in a single request.
+// POST /api/packets/observations with JSON body: {"hashes": ["abc123", "def456", ...]}
+// Response: {"results": {"abc123": [...observations...], "def456": [...], ...}}
+// Limited to 200 hashes per request to prevent abuse.
+func (s *Server) handleBatchObservations(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Hashes []string `json:"hashes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, 400, "invalid JSON body")
+		return
+	}
+	const maxHashes = 200
+	if len(body.Hashes) > maxHashes {
+		writeError(w, 400, fmt.Sprintf("too many hashes (max %d)", maxHashes))
+		return
+	}
+	if len(body.Hashes) == 0 {
+		writeJSON(w, map[string]interface{}{"results": map[string]interface{}{}})
+		return
+	}
+
+	results := make(map[string][]ObservationResp, len(body.Hashes))
+	if s.store != nil {
+		for _, hash := range body.Hashes {
+			obs := s.store.GetObservationsForHash(hash)
+			results[hash] = mapSliceToObservations(obs)
+		}
+	}
+	writeJSON(w, map[string]interface{}{"results": results})
+}
 
 func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 	param := mux.Vars(r)["id"]
