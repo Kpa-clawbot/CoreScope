@@ -2167,7 +2167,10 @@
     init: function(app, routeParam) {
       _themeRefreshHandler = () => { if (typeof renderTableRows === 'function') renderTableRows(); };
       window.addEventListener('theme-refresh', _themeRefreshHandler);
-      return init(app, routeParam);
+      var result = init(app, routeParam);
+      // Install channel color picker on packets table (M2, #271)
+      if (window.ChannelColorPicker) window.ChannelColorPicker.installPacketsTable();
+      return result;
     },
     destroy: function() {
       if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; }
@@ -2178,6 +2181,7 @@
   // Standalone packet detail page: #/packet/123 or #/packet/HASH
   // Expose pure functions for unit testing (vm.createContext pattern)
   if (typeof window !== 'undefined') {
+    window._packetsRenderVisible = renderVisibleRows;
     window._packetsTestAPI = {
       typeName,
       obsName,

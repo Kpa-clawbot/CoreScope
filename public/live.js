@@ -1563,6 +1563,7 @@
         <span class="feed-text">${escapeHtml(preview)}</span>
         <span class="feed-time">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
       `;
+      item._ccPkt = pkt; // channel color picker reference (#271 M2)
       item.addEventListener('click', () => showFeedCard(item, pkt, color));
       feed.appendChild(item);
 
@@ -2524,6 +2525,7 @@
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
+    item._ccPkt = pkt; // channel color picker reference (#271 M2)
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.appendChild(item);
   }
@@ -2595,6 +2597,7 @@
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
+    item._ccPkt = pkt; // channel color picker reference (#271 M2)
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.prepend(item);
     requestAnimationFrame(() => requestAnimationFrame(() => item.classList.remove('live-feed-enter')));
@@ -2714,7 +2717,10 @@
         if (activeNodeDetailKey) showNodeDetail(activeNodeDetailKey);
       };
       window.addEventListener('theme-refresh', _themeRefreshHandler);
-      return init(app, routeParam);
+      var result = init(app, routeParam);
+      // Install channel color picker (M2, #271)
+      if (window.ChannelColorPicker) window.ChannelColorPicker.installLiveFeed();
+      return result;
     },
     destroy: function() {
       if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; }
