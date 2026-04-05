@@ -1563,7 +1563,7 @@
         <span class="feed-text">${escapeHtml(preview)}</span>
         <span class="feed-time">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
       `;
-      item._ccPkt = pkt; // channel color picker reference (#271 M2)
+      var _ccD = (pkt.decoded || {}), _ccH = (_ccD.header || {}), _ccP = (_ccD.payload || {}); if (_ccH.payloadTypeName === 'GRP_TXT' || _ccH.payloadTypeName === 'CHAN') item._ccChannel = _ccP.channelName || null; // channel color picker (#271 M2)
       item.addEventListener('click', () => showFeedCard(item, pkt, color));
       feed.appendChild(item);
 
@@ -2525,7 +2525,7 @@
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
-    item._ccPkt = pkt; // channel color picker reference (#271 M2)
+    var _ccD = (pkt.decoded || {}), _ccH = (_ccD.header || {}), _ccP = (_ccD.payload || {}); if (_ccH.payloadTypeName === 'GRP_TXT' || _ccH.payloadTypeName === 'CHAN') item._ccChannel = _ccP.channelName || null; // channel color picker (#271 M2)
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.appendChild(item);
   }
@@ -2597,7 +2597,7 @@
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
-    item._ccPkt = pkt; // channel color picker reference (#271 M2)
+    var _ccD = (pkt.decoded || {}), _ccH = (_ccD.header || {}), _ccP = (_ccD.payload || {}); if (_ccH.payloadTypeName === 'GRP_TXT' || _ccH.payloadTypeName === 'CHAN') item._ccChannel = _ccP.channelName || null; // channel color picker (#271 M2)
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.prepend(item);
     requestAnimationFrame(() => requestAnimationFrame(() => item.classList.remove('live-feed-enter')));

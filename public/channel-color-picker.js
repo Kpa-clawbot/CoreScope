@@ -201,22 +201,17 @@
     var feedItems = document.querySelectorAll('.live-feed-item');
     for (var i = 0; i < feedItems.length; i++) {
       var item = feedItems[i];
-      var pkt = item._ccPkt;
-      if (!pkt) continue;
-      var d = pkt.decoded || {};
-      var h = d.header || {};
-      var p = d.payload || {};
-      var style = window.ChannelColors.getRowStyle(h.payloadTypeName || '', p.channelName || null);
+      var ch = item._ccChannel;
+      if (!ch) continue;
+      var style = window.ChannelColors.getRowStyle('GRP_TXT', ch);
       // Remove old channel color styles, reapply
       item.style.borderLeft = '';
       item.style.background = '';
       if (style) item.style.cssText += style;
     }
 
-    // Packets table — trigger re-render if available
-    if (window._packetsRenderVisible) {
-      window._packetsRenderVisible();
-    }
+    // Packets table — trigger re-render via custom event
+    document.dispatchEvent(new CustomEvent('channel-colors-changed'));
   }
 
   /**
@@ -252,9 +247,8 @@
 
     feed.addEventListener('contextmenu', function(e) {
       var item = e.target.closest('.live-feed-item');
-      if (!item || !item._ccPkt) return;
-      var ch = extractChannel(item._ccPkt);
-      if (!ch) return;
+      if (!item || !item._ccChannel) return;
+      var ch = item._ccChannel;
       e.preventDefault();
       showPopover(ch, e.clientX, e.clientY);
     });
@@ -263,8 +257,8 @@
     var longPressTriggered = false;
     feed.addEventListener('touchstart', function(e) {
       var item = e.target.closest('.live-feed-item');
-      if (!item || !item._ccPkt) return;
-      var ch = extractChannel(item._ccPkt);
+      if (!item || !item._ccChannel) return;
+      var ch = item._ccChannel;
       if (!ch) return;
       var touch = e.touches[0];
       var tx = touch.clientX;

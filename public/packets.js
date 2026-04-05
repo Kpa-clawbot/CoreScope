@@ -2181,7 +2181,7 @@
   // Standalone packet detail page: #/packet/123 or #/packet/HASH
   // Expose pure functions for unit testing (vm.createContext pattern)
   if (typeof window !== 'undefined') {
-    window._packetsRenderVisible = renderVisibleRows;
+    document.addEventListener('channel-colors-changed', function() { renderVisibleRows(); });
     window._packetsTestAPI = {
       typeName,
       obsName,
