@@ -224,8 +224,15 @@ func main() {
 	defer stopEviction()
 
 	// Auto-prune old packets if retention.packetDays is configured
+	var stopPrune func()
 	if cfg.Retention != nil && cfg.Retention.PacketDays > 0 {
 		days := cfg.Retention.PacketDays
+		pruneTicker := time.NewTicker(24 * time.Hour)
+		pruneDone := make(chan struct{})
+		stopPrune = func() {
+			pruneTicker.Stop()
+			close(pruneDone)
+		}
 		go func() {
 			time.Sleep(1 * time.Minute)
 			if n, err := database.PruneOldPackets(days); err != nil {
@@ -233,15 +240,45 @@ func main() {
 			} else {
 				log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
 			}
-			for range time.Tick(24 * time.Hour) {
-				if n, err := database.PruneOldPackets(days); err != nil {
-					log.Printf("[prune] error: %v", err)
-				} else {
-					log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
+			for {
+				select {
+				case <-pruneTicker.C:
+					if n, err := database.PruneOldPackets(days); err != nil {
+						log.Printf("[prune] error: %v", err)
+					} else {
+						log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
+					}
+				case <-pruneDone:
+					return
 				}
 			}
 		}()
 		log.Printf("[prune] auto-prune enabled: packets older than %d days will be removed daily", days)
+	}
+
+	// Auto-prune old metrics
+	var stopMetricsPrune func()
+	{
+		metricsDays := cfg.MetricsRetentionDays()
+		metricsPruneTicker := time.NewTicker(24 * time.Hour)
+		metricsPruneDone := make(chan struct{})
+		stopMetricsPrune = func() {
+			metricsPruneTicker.Stop()
+			close(metricsPruneDone)
+		}
+		go func() {
+			time.Sleep(2 * time.Minute) // stagger after packet prune
+			database.PruneOldMetrics(metricsDays)
+			for {
+				select {
+				case <-metricsPruneTicker.C:
+					database.PruneOldMetrics(metricsDays)
+				case <-metricsPruneDone:
+					return
+				}
+			}
+		}()
+		log.Printf("[metrics-prune] auto-prune enabled: metrics older than %d days", metricsDays)
 	}
 
 	// Graceful shutdown
@@ -261,6 +298,14 @@ func main() {
 
 		// 1. Stop accepting new WebSocket/poll data
 		poller.Stop()
+
+		// 1b. Stop auto-prune ticker
+		if stopPrune != nil {
+			stopPrune()
+		}
+		if stopMetricsPrune != nil {
+			stopMetricsPrune()
+		}
 
 		// 2. Gracefully drain HTTP connections (up to 15s)
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

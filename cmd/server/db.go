@@ -377,7 +377,8 @@ type PacketQuery struct {
 	Until    string
 	Region   string
 	Node     string
-	Order    string // ASC or DESC
+	Order               string // ASC or DESC
+	ExpandObservations  bool   // when true, include observation sub-maps in txToMap output
 }
 
 // PacketResult wraps paginated packet list.
@@ -1497,6 +1498,39 @@ func (db *DB) GetNodeLocations() map[string]map[string]interface{} {
 	return result
 }
 
+// GetNodeLocationsByKeys returns location data only for the given public keys.
+// This avoids fetching ALL nodes when only a few keys need to be matched.
+func (db *DB) GetNodeLocationsByKeys(keys []string) map[string]map[string]interface{} {
+	result := make(map[string]map[string]interface{})
+	if len(keys) == 0 {
+		return result
+	}
+	placeholders := make([]string, len(keys))
+	args := make([]interface{}, len(keys))
+	for i, k := range keys {
+		placeholders[i] = "?"
+		args[i] = strings.ToLower(k)
+	}
+	query := "SELECT public_key, lat, lon, role FROM nodes WHERE LOWER(public_key) IN (" + strings.Join(placeholders, ",") + ")"
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return result
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pk string
+		var role sql.NullString
+		var lat, lon sql.NullFloat64
+		rows.Scan(&pk, &lat, &lon, &role)
+		result[strings.ToLower(pk)] = map[string]interface{}{
+			"lat":  nullFloat(lat),
+			"lon":  nullFloat(lon),
+			"role": nullStr(role),
+		}
+	}
+	return result
+}
+
 // QueryMultiNodePackets returns transmissions referencing any of the given pubkeys.
 func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, since, until string) (*PacketResult, error) {
 	if len(pubkeys) == 0 {
@@ -1699,4 +1733,342 @@ func (db *DB) PruneOldPackets(days int) (int64, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n, tx.Commit()
+}
+
+// MetricsSample represents a single row from observer_metrics with computed deltas.
+type MetricsSample struct {
+	Timestamp     string   `json:"timestamp"`
+	NoiseFloor    *float64 `json:"noise_floor"`
+	TxAirSecs     *int     `json:"tx_air_secs,omitempty"`
+	RxAirSecs     *int     `json:"rx_air_secs,omitempty"`
+	RecvErrors    *int     `json:"recv_errors,omitempty"`
+	BatteryMv     *int     `json:"battery_mv"`
+	PacketsSent   *int     `json:"packets_sent,omitempty"`
+	PacketsRecv   *int     `json:"packets_recv,omitempty"`
+	TxAirtimePct  *float64 `json:"tx_airtime_pct"`
+	RxAirtimePct  *float64 `json:"rx_airtime_pct"`
+	RecvErrorRate *float64 `json:"recv_error_rate"`
+	IsReboot      bool     `json:"is_reboot_sample,omitempty"`
+}
+
+// rawMetricsSample is the raw DB row before delta computation.
+type rawMetricsSample struct {
+	Timestamp   string
+	NoiseFloor  *float64
+	TxAirSecs   *int
+	RxAirSecs   *int
+	RecvErrors  *int
+	BatteryMv   *int
+	PacketsSent *int
+	PacketsRecv *int
+}
+
+// GetObserverMetrics returns time-series metrics with server-side delta computation.
+// resolution: "5m" (raw), "1h", "1d"
+// sampleIntervalSec: expected interval between samples (default 300)
+func (db *DB) GetObserverMetrics(observerID, since, until, resolution string, sampleIntervalSec int) ([]MetricsSample, []string, error) {
+	if sampleIntervalSec <= 0 {
+		sampleIntervalSec = 300
+	}
+
+	// Build query based on resolution
+	var query string
+	args := []interface{}{observerID}
+
+	// Determine the effective bucket size for gap threshold scaling.
+	// For raw data (5m), use sampleIntervalSec. For aggregated resolutions,
+	// use the bucket duration so consecutive buckets aren't treated as gaps.
+	bucketSizeSec := sampleIntervalSec
+	switch resolution {
+	case "1h":
+		bucketSizeSec = 3600
+		// Use LAST value per bucket (latest timestamp) instead of MAX to preserve
+		// reboot semantics: if a device reboots mid-bucket, the last sample is the
+		// post-reboot baseline, not the pre-reboot high-water mark.
+		query = `SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv FROM (
+			SELECT
+				strftime('%Y-%m-%dT%H:00:00Z', timestamp) as ts,
+				noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv,
+				ROW_NUMBER() OVER (PARTITION BY observer_id, strftime('%Y-%m-%dT%H:00:00Z', timestamp) ORDER BY timestamp DESC) as rn
+			FROM observer_metrics WHERE observer_id = ?`
+	case "1d":
+		bucketSizeSec = 86400
+		query = `SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv FROM (
+			SELECT
+				strftime('%Y-%m-%dT00:00:00Z', timestamp) as ts,
+				noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv,
+				ROW_NUMBER() OVER (PARTITION BY observer_id, strftime('%Y-%m-%dT00:00:00Z', timestamp) ORDER BY timestamp DESC) as rn
+			FROM observer_metrics WHERE observer_id = ?`
+	default: // "5m" or raw
+		query = `SELECT timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv
+			FROM observer_metrics WHERE observer_id = ?`
+	}
+
+	if since != "" {
+		query += " AND timestamp >= ?"
+		args = append(args, since)
+	}
+	if until != "" {
+		query += " AND timestamp <= ?"
+		args = append(args, until)
+	}
+
+	switch resolution {
+	case "1h", "1d":
+		query += ") WHERE rn = 1 ORDER BY ts ASC"
+	default:
+		query += " ORDER BY timestamp ASC"
+	}
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	var raw []rawMetricsSample
+	for rows.Next() {
+		var s rawMetricsSample
+		if err := rows.Scan(&s.Timestamp, &s.NoiseFloor, &s.TxAirSecs, &s.RxAirSecs, &s.RecvErrors, &s.BatteryMv, &s.PacketsSent, &s.PacketsRecv); err != nil {
+			return nil, nil, err
+		}
+		raw = append(raw, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	// Compute deltas between consecutive samples.
+	// bucketSizeSec determines gap threshold: for raw data it's sampleIntervalSec,
+	// for aggregated resolutions it's the bucket duration (3600 for 1h, 86400 for 1d).
+	return computeDeltas(raw, bucketSizeSec)
+}
+
+// computeDeltas computes per-interval rates from cumulative counters.
+// Handles reboots (counter reset) and gaps (missing samples).
+// bucketSizeSec is the expected interval between consecutive points
+// (sampleInterval for raw data, bucket duration for aggregated resolutions).
+func computeDeltas(raw []rawMetricsSample, bucketSizeSec int) ([]MetricsSample, []string, error) {
+	if len(raw) == 0 {
+		return nil, nil, nil
+	}
+
+	gapThreshold := float64(bucketSizeSec) * 2.0
+	result := make([]MetricsSample, 0, len(raw))
+	var reboots []string
+
+	for i, cur := range raw {
+		s := MetricsSample{
+			Timestamp:  cur.Timestamp,
+			NoiseFloor: cur.NoiseFloor,
+			BatteryMv:  cur.BatteryMv,
+		}
+
+		if i == 0 {
+			// First sample: no delta possible
+			result = append(result, s)
+			continue
+		}
+
+		prev := raw[i-1]
+
+		// Check for gap
+		curT, err1 := time.Parse(time.RFC3339, cur.Timestamp)
+		prevT, err2 := time.Parse(time.RFC3339, prev.Timestamp)
+		if err1 != nil || err2 != nil {
+			result = append(result, s)
+			continue
+		}
+		intervalSecs := curT.Sub(prevT).Seconds()
+		if intervalSecs > gapThreshold {
+			// Gap detected: insert null deltas (don't interpolate)
+			result = append(result, s)
+			continue
+		}
+		if intervalSecs <= 0 {
+			result = append(result, s)
+			continue
+		}
+
+		// Detect reboot: any cumulative counter decreased
+		isReboot := false
+		if cur.TxAirSecs != nil && prev.TxAirSecs != nil && *cur.TxAirSecs < *prev.TxAirSecs {
+			isReboot = true
+		}
+		if cur.RxAirSecs != nil && prev.RxAirSecs != nil && *cur.RxAirSecs < *prev.RxAirSecs {
+			isReboot = true
+		}
+		if cur.RecvErrors != nil && prev.RecvErrors != nil && *cur.RecvErrors < *prev.RecvErrors {
+			isReboot = true
+		}
+		if cur.PacketsSent != nil && prev.PacketsSent != nil && *cur.PacketsSent < *prev.PacketsSent {
+			isReboot = true
+		}
+		if cur.PacketsRecv != nil && prev.PacketsRecv != nil && *cur.PacketsRecv < *prev.PacketsRecv {
+			isReboot = true
+		}
+
+		if isReboot {
+			s.IsReboot = true
+			reboots = append(reboots, cur.Timestamp)
+			// Skip delta computation for reboot samples — use as new baseline
+			result = append(result, s)
+			continue
+		}
+
+		// Compute TX airtime percentage
+		if cur.TxAirSecs != nil && prev.TxAirSecs != nil {
+			delta := float64(*cur.TxAirSecs - *prev.TxAirSecs)
+			pct := (delta / intervalSecs) * 100.0
+			if pct < 0 {
+				pct = 0
+			}
+			if pct > 100 {
+				pct = 100
+			}
+			result_pct := math.Round(pct*100) / 100
+			s.TxAirtimePct = &result_pct
+		}
+
+		// Compute RX airtime percentage
+		if cur.RxAirSecs != nil && prev.RxAirSecs != nil {
+			delta := float64(*cur.RxAirSecs - *prev.RxAirSecs)
+			pct := (delta / intervalSecs) * 100.0
+			if pct < 0 {
+				pct = 0
+			}
+			if pct > 100 {
+				pct = 100
+			}
+			result_pct := math.Round(pct*100) / 100
+			s.RxAirtimePct = &result_pct
+		}
+
+		// Compute recv error rate
+		if cur.RecvErrors != nil && prev.RecvErrors != nil &&
+			cur.PacketsRecv != nil && prev.PacketsRecv != nil {
+			deltaErrors := float64(*cur.RecvErrors - *prev.RecvErrors)
+			deltaRecv := float64(*cur.PacketsRecv - *prev.PacketsRecv)
+			total := deltaRecv + deltaErrors
+			if total > 0 {
+				rate := (deltaErrors / total) * 100.0
+				rate = math.Round(rate*100) / 100
+				s.RecvErrorRate = &rate
+			}
+		}
+
+		result = append(result, s)
+	}
+
+	return result, reboots, nil
+}
+
+// MetricsSummaryRow holds summary data for one observer.
+type MetricsSummaryRow struct {
+	ObserverID    string     `json:"observer_id"`
+	ObserverName  *string    `json:"observer_name"`
+	IATA          string     `json:"iata,omitempty"`
+	CurrentNF     *float64   `json:"current_noise_floor"`
+	AvgNF         *float64   `json:"avg_noise_floor_24h"`
+	MaxNF         *float64   `json:"max_noise_floor_24h"`
+	CurrentBattMv *int       `json:"battery_mv"`
+	SampleCount   int        `json:"sample_count"`
+	Sparkline     []*float64 `json:"sparkline"`
+}
+
+// GetMetricsSummary returns a fleet summary of observer metrics within a time window.
+// Uses a CTE with ROW_NUMBER to get latest values in a single pass (no correlated subqueries).
+// Also returns sparkline data (noise_floor time series) per observer.
+func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
+	query := `
+		WITH ranked AS (
+			SELECT observer_id, noise_floor, battery_mv,
+				ROW_NUMBER() OVER (PARTITION BY observer_id ORDER BY timestamp DESC) as rn
+			FROM observer_metrics
+			WHERE timestamp >= ?
+		)
+		SELECT m.observer_id, o.name, COALESCE(o.iata, '') as iata,
+			r.noise_floor as current_nf,
+			AVG(m.noise_floor) as avg_nf,
+			MAX(m.noise_floor) as max_nf,
+			r.battery_mv as current_batt,
+			COUNT(*) as sample_count
+		FROM observer_metrics m
+		LEFT JOIN observers o ON o.id = m.observer_id
+		LEFT JOIN ranked r ON r.observer_id = m.observer_id AND r.rn = 1
+		WHERE m.timestamp >= ?
+		GROUP BY m.observer_id
+		ORDER BY max_nf DESC
+	`
+	rows, err := db.conn.Query(query, since, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []MetricsSummaryRow
+	for rows.Next() {
+		var s MetricsSummaryRow
+		if err := rows.Scan(&s.ObserverID, &s.ObserverName, &s.IATA, &s.CurrentNF, &s.AvgNF, &s.MaxNF, &s.CurrentBattMv, &s.SampleCount); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Fetch sparkline data (noise_floor series) for all observers in one query
+	if len(result) > 0 {
+		sparkQuery := `SELECT observer_id, noise_floor FROM observer_metrics
+			WHERE timestamp >= ? ORDER BY observer_id, timestamp ASC`
+		sparkRows, err := db.conn.Query(sparkQuery, since)
+		if err != nil {
+			return nil, err
+		}
+		defer sparkRows.Close()
+
+		sparkMap := make(map[string][]*float64)
+		for sparkRows.Next() {
+			var oid string
+			var nf *float64
+			if err := sparkRows.Scan(&oid, &nf); err != nil {
+				return nil, err
+			}
+			sparkMap[oid] = append(sparkMap[oid], nf)
+		}
+		if err := sparkRows.Err(); err != nil {
+			return nil, err
+		}
+
+		for i := range result {
+			if s, ok := sparkMap[result[i].ObserverID]; ok {
+				result[i].Sparkline = s
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// PruneOldMetrics deletes observer_metrics rows older than retentionDays.
+func (db *DB) PruneOldMetrics(retentionDays int) (int64, error) {
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=10000", db.path)
+	rw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return 0, err
+	}
+	rw.SetMaxOpenConns(1)
+	defer rw.Close()
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
+	res, err := rw.Exec(`DELETE FROM observer_metrics WHERE timestamp < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		log.Printf("[metrics] Pruned %d observer_metrics rows older than %d days", n, retentionDays)
+	}
+	return n, nil
 }

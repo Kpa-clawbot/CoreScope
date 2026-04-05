@@ -166,6 +166,7 @@ func TestResolveHopsAPI_UniquePrefix(t *testing.T) {
 	// Insert a unique node
 	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon) VALUES (?, ?, ?, ?)",
 		"ff11223344", "UniqueNode", 37.0, -122.0)
+	srv.store.InvalidateNodeCache()
 
 	req := httptest.NewRequest("GET", "/api/resolve-hops?hops=ff11223344", nil)
 	rr := httptest.NewRecorder()
@@ -192,6 +193,7 @@ func TestResolveHopsAPI_AmbiguousNoContext(t *testing.T) {
 		"ee1aaaaaaa", "Node-E1", 37.0, -122.0)
 	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon) VALUES (?, ?, ?, ?)",
 		"ee1bbbbbbb", "Node-E2", 38.0, -121.0)
+	srv.store.InvalidateNodeCache()
 
 	req := httptest.NewRequest("GET", "/api/resolve-hops?hops=ee1", nil)
 	rr := httptest.NewRecorder()
@@ -204,8 +206,10 @@ func TestResolveHopsAPI_AmbiguousNoContext(t *testing.T) {
 	if hr == nil {
 		t.Fatal("expected hop in resolved map")
 	}
-	if hr.Confidence != "ambiguous" {
-		t.Fatalf("expected ambiguous, got %s", hr.Confidence)
+	// With both candidates having GPS and no affinity context, the resolver
+	// picks the GPS-preferred candidate → confidence is "gps_preference".
+	if hr.Confidence != "gps_preference" {
+		t.Fatalf("expected gps_preference, got %s", hr.Confidence)
 	}
 	if len(hr.Candidates) != 2 {
 		t.Fatalf("expected 2 candidates, got %d", len(hr.Candidates))

@@ -53,7 +53,7 @@ func main() {
 		log.Fatal("no MQTT sources configured — set mqttSources in config or MQTT_BROKER env var")
 	}
 
-	store, err := OpenStore(cfg.DBPath)
+	store, err := OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
@@ -64,11 +64,23 @@ func main() {
 	nodeDays := cfg.NodeDaysOrDefault()
 	store.MoveStaleNodes(nodeDays)
 
+	// Metrics retention: prune old metrics on startup
+	metricsDays := cfg.MetricsRetentionDays()
+	store.PruneOldMetrics(metricsDays)
+
 	// Daily ticker for node retention
 	retentionTicker := time.NewTicker(1 * time.Hour)
 	go func() {
 		for range retentionTicker.C {
 			store.MoveStaleNodes(nodeDays)
+		}
+	}()
+
+	// Daily ticker for metrics retention (every 24h)
+	metricsRetentionTicker := time.NewTicker(24 * time.Hour)
+	go func() {
+		for range metricsRetentionTicker.C {
+			store.PruneOldMetrics(metricsDays)
 		}
 	}()
 
@@ -163,6 +175,7 @@ func main() {
 
 	log.Println("Shutting down...")
 	retentionTicker.Stop()
+	metricsRetentionTicker.Stop()
 	statsTicker.Stop()
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
@@ -224,6 +237,36 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 	if topic == "meshcore/status" || topic == "meshcore/events/connection" {
 		return
 	}
+
+	// Status topic: meshcore/<region>/<observer_id>/status
+	if len(parts) >= 4 && parts[3] == "status" {
+		observerID := parts[2]
+		name, _ := msg["origin"].(string)
+		iata := parts[1]
+		meta := extractObserverMeta(msg)
+		if err := store.UpsertObserver(observerID, name, iata, meta); err != nil {
+			log.Printf("MQTT [%s] observer status error: %v", tag, err)
+		}
+		// Insert metrics sample from status message
+		if meta != nil {
+			metricsData := &MetricsData{
+				ObserverID:  observerID,
+				NoiseFloor:  meta.NoiseFloor,
+				TxAirSecs:   meta.TxAirSecs,
+				RxAirSecs:   meta.RxAirSecs,
+				RecvErrors:  meta.RecvErrors,
+				BatteryMv:   meta.BatteryMv,
+				PacketsSent: meta.PacketsSent,
+				PacketsRecv: meta.PacketsRecv,
+			}
+			if err := store.InsertMetrics(metricsData); err != nil {
+				log.Printf("MQTT [%s] metrics insert error: %v", tag, err)
+			}
+		}
+		log.Printf("MQTT [%s] status: %s (%s)", tag, firstNonEmpty(name, observerID), iata)
+		return
+	}
+
 
 	// Format 1: Raw packet (meshcoretomqtt / Cisien format)
 	rawHex, _ := msg["raw"].(string)
@@ -619,6 +662,41 @@ func extractObserverMeta(msg map[string]interface{}) *ObserverMeta {
 	if v := nestedOrTopLevel(stats, msg, "noise_floor"); v != nil {
 		if f, ok := toFloat64(v); ok {
 			meta.NoiseFloor = &f
+			hasData = true
+		}
+	}
+	if v := nestedOrTopLevel(stats, msg, "tx_air_secs"); v != nil {
+		if f, ok := toFloat64(v); ok {
+			iv := int(math.Round(f))
+			meta.TxAirSecs = &iv
+			hasData = true
+		}
+	}
+	if v := nestedOrTopLevel(stats, msg, "rx_air_secs"); v != nil {
+		if f, ok := toFloat64(v); ok {
+			iv := int(math.Round(f))
+			meta.RxAirSecs = &iv
+			hasData = true
+		}
+	}
+	if v := nestedOrTopLevel(stats, msg, "recv_errors"); v != nil {
+		if f, ok := toFloat64(v); ok {
+			iv := int(math.Round(f))
+			meta.RecvErrors = &iv
+			hasData = true
+		}
+	}
+	if v := nestedOrTopLevel(stats, msg, "packets_sent"); v != nil {
+		if f, ok := toFloat64(v); ok {
+			iv := int(math.Round(f))
+			meta.PacketsSent = &iv
+			hasData = true
+		}
+	}
+	if v := nestedOrTopLevel(stats, msg, "packets_recv"); v != nil {
+		if f, ok := toFloat64(v); ok {
+			iv := int(math.Round(f))
+			meta.PacketsRecv = &iv
 			hasData = true
 		}
 	}

@@ -75,6 +75,21 @@ func setupTestDB(t *testing.T) *DB {
 			timestamp INTEGER NOT NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS observer_metrics (
+			observer_id TEXT NOT NULL,
+			timestamp TEXT NOT NULL,
+			noise_floor REAL,
+			tx_air_secs INTEGER,
+			rx_air_secs INTEGER,
+			recv_errors INTEGER,
+			battery_mv INTEGER,
+			packets_sent INTEGER,
+			packets_recv INTEGER,
+			PRIMARY KEY (observer_id, timestamp)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_observer_metrics_timestamp ON observer_metrics(timestamp);
+
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
@@ -1536,4 +1551,368 @@ func TestNodeTelemetryFields(t *testing.T) {
 
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
+}
+
+func TestGetObserverMetrics(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	now := time.Now().UTC()
+	t1 := now.Add(-2 * time.Hour).Format(time.RFC3339)
+	t2 := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	t3 := now.Format(time.RFC3339)
+
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		"obs1", t1, -112.5, 100, 500, 3, 3720)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors) VALUES (?, ?, ?, ?, ?, ?)",
+		"obs1", t2, -110.0, 200, 800, 5)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors) VALUES (?, ?, ?, ?, ?, ?)",
+		"obs1", t3, -108.0, 300, 1100, 8)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+		"obs2", t1, -115.0)
+
+	// Query all for obs1
+	since := now.Add(-3 * time.Hour).Format(time.RFC3339)
+	metrics, reboots, err := db.GetObserverMetrics("obs1", since, "", "5m", 3600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics) != 3 {
+		t.Errorf("expected 3 metrics, got %d", len(metrics))
+	}
+	if len(reboots) != 0 {
+		t.Errorf("expected 0 reboots, got %d", len(reboots))
+	}
+
+	// Verify first row has noise_floor
+	if metrics[0].NoiseFloor == nil || *metrics[0].NoiseFloor != -112.5 {
+		t.Errorf("first noise_floor = %v, want -112.5", metrics[0].NoiseFloor)
+	}
+	// First row: no delta possible (first sample)
+	if metrics[0].TxAirtimePct != nil {
+		t.Errorf("first sample should have nil tx_airtime_pct, got %v", *metrics[0].TxAirtimePct)
+	}
+
+	// Second row should have computed deltas
+	// TX: (200-100) / 3600 * 100 ≈ 2.78%
+	if metrics[1].TxAirtimePct == nil {
+		t.Errorf("second sample tx_airtime_pct should not be nil")
+	} else if *metrics[1].TxAirtimePct < 2.0 || *metrics[1].TxAirtimePct > 3.5 {
+		t.Errorf("second sample tx_airtime_pct = %v, want ~2.78", *metrics[1].TxAirtimePct)
+	}
+
+	// Query with until filter
+	metrics2, _, err := db.GetObserverMetrics("obs1", since, t2, "5m", 3600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics2) != 2 {
+		t.Errorf("expected 2 metrics with until filter, got %d", len(metrics2))
+	}
+}
+
+func TestGetMetricsSummary(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	now := time.Now().UTC()
+	t1 := now.Add(-2 * time.Hour).Format(time.RFC3339)
+	t2 := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, battery_mv) VALUES (?, ?, ?, ?)",
+		"obs1", t1, -112.0, 3720)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+		"obs1", t2, -108.0)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+		"obs2", t1, -115.0)
+
+	since := now.Add(-24 * time.Hour).Format(time.RFC3339)
+	summary, err := db.GetMetricsSummary(since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary) != 2 {
+		t.Fatalf("expected 2 observers in summary, got %d", len(summary))
+	}
+
+	// Results sorted by max_nf DESC
+	// obs1 has max -108, obs2 has max -115
+	if summary[0].ObserverID != "obs1" {
+		t.Errorf("first observer should be obs1 (highest max NF), got %s", summary[0].ObserverID)
+	}
+	if summary[0].CurrentNF == nil || *summary[0].CurrentNF != -108.0 {
+		t.Errorf("obs1 current NF = %v, want -108.0", summary[0].CurrentNF)
+	}
+	if summary[0].SampleCount != 2 {
+		t.Errorf("obs1 sample count = %d, want 2", summary[0].SampleCount)
+	}
+	// Verify sparkline data is included
+	if len(summary[0].Sparkline) != 2 {
+		t.Errorf("obs1 sparkline length = %d, want 2", len(summary[0].Sparkline))
+	}
+	if len(summary[1].Sparkline) != 1 {
+		t.Errorf("obs2 sparkline length = %d, want 1", len(summary[1].Sparkline))
+	}
+	// Sparkline should be ordered by timestamp ASC
+	if summary[0].Sparkline[0] != nil && *summary[0].Sparkline[0] != -112.0 {
+		t.Errorf("obs1 sparkline[0] = %v, want -112.0", *summary[0].Sparkline[0])
+	}
+	if summary[0].Sparkline[1] != nil && *summary[0].Sparkline[1] != -108.0 {
+		t.Errorf("obs1 sparkline[1] = %v, want -108.0", *summary[0].Sparkline[1])
+	}
+}
+
+func TestObserverMetricsAPIEndpoints(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	now := time.Now().UTC()
+	t1 := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+		"obs1", t1, -112.0)
+
+	// Query directly to verify
+	metrics, _, err := db.GetObserverMetrics("obs1", "", "", "5m", 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics) != 1 {
+		t.Errorf("expected 1 metric, got %d", len(metrics))
+	}
+}
+
+func TestComputeDeltas(t *testing.T) {
+	intPtr := func(v int) *int { return &v }
+	floatPtr := func(v float64) *float64 { return &v }
+
+	t.Run("empty input", func(t *testing.T) {
+		result, reboots, err := computeDeltas(nil, 300)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result != nil {
+			t.Errorf("expected nil, got %v", result)
+		}
+		if reboots != nil {
+			t.Errorf("expected nil reboots, got %v", reboots)
+		}
+	})
+
+	t.Run("normal delta computation", func(t *testing.T) {
+		raw := []rawMetricsSample{
+			{Timestamp: "2026-04-05T00:00:00Z", NoiseFloor: floatPtr(-112), TxAirSecs: intPtr(100), RxAirSecs: intPtr(500), RecvErrors: intPtr(3), PacketsRecv: intPtr(1000)},
+			{Timestamp: "2026-04-05T00:05:00Z", NoiseFloor: floatPtr(-110), TxAirSecs: intPtr(115), RxAirSecs: intPtr(525), RecvErrors: intPtr(5), PacketsRecv: intPtr(1100)},
+		}
+		result, reboots, err := computeDeltas(raw, 300)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result) != 2 {
+			t.Fatalf("expected 2 results, got %d", len(result))
+		}
+		if len(reboots) != 0 {
+			t.Errorf("expected 0 reboots, got %d", len(reboots))
+		}
+		// First sample: no deltas
+		if result[0].TxAirtimePct != nil {
+			t.Errorf("first sample should have nil tx_airtime_pct")
+		}
+		// Second sample: TX delta = 15 secs / 300 secs * 100 = 5%
+		if result[1].TxAirtimePct == nil {
+			t.Fatal("second sample tx_airtime_pct should not be nil")
+		}
+		if *result[1].TxAirtimePct != 5.0 {
+			t.Errorf("tx_airtime_pct = %v, want 5.0", *result[1].TxAirtimePct)
+		}
+		// RX delta = 25 secs / 300 secs * 100 ≈ 8.33%
+		if result[1].RxAirtimePct == nil {
+			t.Fatal("second sample rx_airtime_pct should not be nil")
+		}
+		if *result[1].RxAirtimePct < 8.3 || *result[1].RxAirtimePct > 8.4 {
+			t.Errorf("rx_airtime_pct = %v, want ~8.33", *result[1].RxAirtimePct)
+		}
+		// Error rate: delta_errors=2, delta_recv=100, rate = 2/(100+2)*100 ≈ 1.96%
+		if result[1].RecvErrorRate == nil {
+			t.Fatal("second sample recv_error_rate should not be nil")
+		}
+		if *result[1].RecvErrorRate < 1.9 || *result[1].RecvErrorRate > 2.0 {
+			t.Errorf("recv_error_rate = %v, want ~1.96", *result[1].RecvErrorRate)
+		}
+	})
+
+	t.Run("reboot detection", func(t *testing.T) {
+		raw := []rawMetricsSample{
+			{Timestamp: "2026-04-05T00:00:00Z", TxAirSecs: intPtr(1000), RxAirSecs: intPtr(5000)},
+			{Timestamp: "2026-04-05T00:05:00Z", TxAirSecs: intPtr(10), RxAirSecs: intPtr(20)}, // reboot!
+			{Timestamp: "2026-04-05T00:10:00Z", TxAirSecs: intPtr(25), RxAirSecs: intPtr(45)},
+		}
+		result, reboots, err := computeDeltas(raw, 300)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(reboots) != 1 {
+			t.Fatalf("expected 1 reboot, got %d", len(reboots))
+		}
+		if reboots[0] != "2026-04-05T00:05:00Z" {
+			t.Errorf("reboot timestamp = %s", reboots[0])
+		}
+		if !result[1].IsReboot {
+			t.Error("second sample should be marked as reboot")
+		}
+		// Reboot sample should have nil deltas
+		if result[1].TxAirtimePct != nil {
+			t.Error("reboot sample should have nil tx_airtime_pct")
+		}
+		// Third sample should have valid deltas from post-reboot baseline
+		if result[2].TxAirtimePct == nil {
+			t.Fatal("third sample tx_airtime_pct should not be nil")
+		}
+		if *result[2].TxAirtimePct != 5.0 { // 15/300*100
+			t.Errorf("third sample tx_airtime_pct = %v, want 5.0", *result[2].TxAirtimePct)
+		}
+	})
+
+	t.Run("gap detection", func(t *testing.T) {
+		raw := []rawMetricsSample{
+			{Timestamp: "2026-04-05T00:00:00Z", TxAirSecs: intPtr(100)},
+			{Timestamp: "2026-04-05T00:15:00Z", TxAirSecs: intPtr(200)}, // 15min gap > 2*300s
+		}
+		result, _, err := computeDeltas(raw, 300)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Gap sample should have nil deltas
+		if result[1].TxAirtimePct != nil {
+			t.Error("gap sample should have nil tx_airtime_pct")
+		}
+	})
+}
+
+func TestGetObserverMetricsResolution(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs) VALUES (?, ?, ?, ?)",
+		"obs1", "2026-04-05T00:00:00Z", -112.0, 100)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs) VALUES (?, ?, ?, ?)",
+		"obs1", "2026-04-05T00:05:00Z", -110.0, 200)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs) VALUES (?, ?, ?, ?)",
+		"obs1", "2026-04-05T01:00:00Z", -108.0, 500)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs) VALUES (?, ?, ?, ?)",
+		"obs1", "2026-04-05T01:05:00Z", -106.0, 600)
+
+	// 5m resolution: all 4 rows
+	m5, _, err := db.GetObserverMetrics("obs1", "2026-04-04T00:00:00Z", "", "5m", 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m5) != 4 {
+		t.Errorf("5m resolution: expected 4 rows, got %d", len(m5))
+	}
+
+	// 1h resolution: 2 buckets
+	m1h, _, err := db.GetObserverMetrics("obs1", "2026-04-04T00:00:00Z", "", "1h", 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m1h) != 2 {
+		t.Errorf("1h resolution: expected 2 rows, got %d", len(m1h))
+	}
+
+	// 1d resolution: 1 bucket
+	m1d, _, err := db.GetObserverMetrics("obs1", "2026-04-04T00:00:00Z", "", "1d", 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m1d) != 1 {
+		t.Errorf("1d resolution: expected 1 row, got %d", len(m1d))
+	}
+}
+
+func TestHourlyResolutionDeltasNotNull(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	// Two hourly buckets, each with one sample. With old MAX+hardcoded gap threshold,
+	// the 3600s gap would exceed sampleInterval*2 (600s) and deltas would be null.
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, packets_sent, packets_recv) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"obs_hr", "2026-04-05T10:00:00Z", -110.0, 100, 200, 5, 50, 100)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, packets_sent, packets_recv) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"obs_hr", "2026-04-05T11:00:00Z", -108.0, 200, 400, 10, 80, 200)
+
+	m, _, err := db.GetObserverMetrics("obs_hr", "2026-04-04T00:00:00Z", "", "1h", 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(m))
+	}
+	// Second row should have computed deltas (not null)
+	if m[1].TxAirtimePct == nil {
+		t.Error("1h resolution: tx_airtime_pct should not be nil — gap threshold must scale with resolution")
+	}
+}
+
+func TestLastValuePreservesReboot(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	// Hour bucket with two samples: pre-reboot (high) and post-reboot (low).
+	// With MAX(), the pre-reboot value wins and the reboot is hidden.
+	// With LAST (latest timestamp), the post-reboot value wins.
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, packets_sent, packets_recv) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"obs_rb", "2026-04-05T10:00:00Z", -110.0, 1000, 2000, 500, 400, 800) // pre-reboot baseline
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, packets_sent, packets_recv) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"obs_rb", "2026-04-05T10:20:00Z", -110.0, 5000, 6000, 900, 700, 1200) // pre-reboot peak
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, packets_sent, packets_recv) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"obs_rb", "2026-04-05T10:40:00Z", -110.0, 10, 20, 1, 5, 10) // post-reboot (counter reset)
+
+	// Next hour bucket
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, packets_sent, packets_recv) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"obs_rb", "2026-04-05T11:00:00Z", -108.0, 100, 120, 5, 20, 50)
+
+	m, reboots, err := db.GetObserverMetrics("obs_rb", "2026-04-04T00:00:00Z", "", "1h", 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(m))
+	}
+
+	// First bucket should use the LAST value (post-reboot: tx_air_secs=10).
+	// Second bucket (tx_air_secs=100) is a normal increase from 10→100.
+	// With LAST-value semantics, the second bucket should have valid deltas (not a reboot).
+	// With MAX(), first bucket would have tx_air_secs=5000, and second=100 would
+	// trigger a false reboot detection.
+	if m[1].IsReboot {
+		t.Error("second bucket should NOT be flagged as reboot with LAST-value aggregation")
+	}
+	if m[1].TxAirtimePct == nil {
+		t.Error("second bucket should have non-nil tx_airtime_pct")
+	}
+	_ = reboots // reboots list is informational
+}
+
+func TestParseWindowDuration(t *testing.T) {
+	tests := []struct {
+		input string
+		want  time.Duration
+		err   bool
+	}{
+		{"1h", time.Hour, false},
+		{"24h", 24 * time.Hour, false},
+		{"3d", 3 * 24 * time.Hour, false},
+		{"30d", 30 * 24 * time.Hour, false},
+		{"invalid", 0, true},
+	}
+	for _, tc := range tests {
+		got, err := parseWindowDuration(tc.input)
+		if tc.err && err == nil {
+			t.Errorf("parseWindowDuration(%q) expected error", tc.input)
+		}
+		if !tc.err && got != tc.want {
+			t.Errorf("parseWindowDuration(%q) = %v, want %v", tc.input, got, tc.want)
+		}
+	}
 }

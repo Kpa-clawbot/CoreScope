@@ -540,6 +540,8 @@
         clearTimeout(entry.timer);
       }
       propagationBuffer.clear();
+      // Batch-update timeline once on restore instead of per-packet while hidden
+      updateTimeline();
     }
   });
 
@@ -564,7 +566,6 @@
     if (VCR.mode === 'LIVE') {
       // Skip animations when tab is backgrounded — just buffer for VCR timeline
       if (_tabHidden) {
-        updateTimeline();
         return;
       }
       if (realisticPropagation && pkt.hash) {
@@ -761,7 +762,7 @@
           <button class="feed-hide-btn" id="nodeDetailClose" title="Close">✕</button>
           <div id="nodeDetailContent"></div>
         </div>
-        <button class="legend-toggle-btn hidden" id="legendToggleBtn" aria-label="Show legend" title="Show legend">🎨</button>
+        <button class="legend-toggle-btn" id="legendToggleBtn" aria-label="Show legend" title="Show legend">🎨</button>
         <div class="live-overlay live-legend" id="liveLegend" role="region" aria-label="Map legend">
           <h3 class="legend-title">PACKET TYPES</h3>
           <ul class="legend-list">
@@ -1042,10 +1043,19 @@
     const legendEl = document.getElementById('liveLegend');
     const legendToggleBtn = document.getElementById('legendToggleBtn');
     if (legendToggleBtn && legendEl) {
+      // Restore legend collapsed state from localStorage (#279)
+      try {
+        if (localStorage.getItem('live-legend-hidden') === 'true') {
+          legendEl.classList.add('hidden');
+          legendToggleBtn.setAttribute('aria-label', 'Show legend');
+          legendToggleBtn.textContent = '🎨';
+        }
+      } catch (_) { /* private browsing / storage disabled */ }
       legendToggleBtn.addEventListener('click', () => {
-        const isVisible = legendEl.classList.toggle('legend-mobile-visible');
-        legendToggleBtn.setAttribute('aria-label', isVisible ? 'Hide legend' : 'Show legend');
-        legendToggleBtn.textContent = isVisible ? '✕' : '🎨';
+        const nowHidden = legendEl.classList.toggle('hidden');
+        legendToggleBtn.setAttribute('aria-label', nowHidden ? 'Show legend' : 'Hide legend');
+        legendToggleBtn.textContent = nowHidden ? '🎨' : '✕';
+        try { localStorage.setItem('live-legend-hidden', String(nowHidden)); } catch (_) { /* ignore */ }
       });
     }
 
@@ -1697,20 +1707,13 @@
 
   async function replayRecent() {
     try {
-      const resp = await fetch('/api/packets?limit=8&groupByHash=true');
+      // Single bulk fetch with expand=observations — no N+1 calls
+      const resp = await fetch('/api/packets?limit=8&expand=observations');
       const data = await resp.json();
       const groups = (data.packets || []).reverse();
 
-      // Fetch all observations first, then stagger rendering
-      const allGroups = [];
-      for (let i = 0; i < groups.length; i++) {
-        const group = groups[i];
-        let observations = [];
-        try {
-          const detail = await fetch('/api/packets/' + encodeURIComponent(group.hash));
-          const detailData = await detail.json();
-          observations = detailData.observations || [];
-        } catch {}
+      const allGroups = groups.map((group) => {
+        const observations = group.observations || [];
 
         const livePackets = observations.map(obs => {
           const livePkt = dbPacketToLive(Object.assign({}, group, obs, {
@@ -1729,8 +1732,8 @@
         }
 
         livePackets.forEach(lp => VCR.buffer.push({ ts: lp._ts, pkt: lp }));
-        allGroups.push(livePackets);
-      }
+        return livePackets;
+      });
 
       // Render with real timing gaps between packets
       // Sort by earliest timestamp
@@ -2492,6 +2495,15 @@
     if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
   }
 
+  /** Extract channel row style from a packet (shared by feed item builders). */
+  function _getChannelStyle(pkt) {
+    if (!window.ChannelColors) return '';
+    var d = pkt.decoded || {};
+    var h = d.header || {};
+    var p = d.payload || {};
+    return window.ChannelColors.getRowStyle(h.payloadTypeName || '', p.channelName || null);
+  }
+
   function addFeedItemDOM(icon, typeName, payload, hops, color, pkt, feed) {
     const text = payload.text || payload.name || '';
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
@@ -2502,6 +2514,9 @@
     item.setAttribute('tabindex', '0');
     item.setAttribute('role', 'button');
     item.style.cursor = 'pointer';
+    // Channel color highlighting for GRP_TXT packets (#271)
+    var _cs = _getChannelStyle(pkt);
+    if (_cs) item.style.cssText += _cs;
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
@@ -2570,6 +2585,9 @@
     item.setAttribute('role', 'button');
     if (hash) item.setAttribute('data-hash', hash);
     item.style.cursor = 'pointer';
+    // Channel color highlighting for GRP_TXT packets (#271)
+    var _chanStyle = _getChannelStyle(pkt);
+    if (_chanStyle) item.style.cssText += _chanStyle;
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>

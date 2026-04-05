@@ -118,6 +118,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
 
 	// Packet endpoints
+	r.HandleFunc("/api/packets/observations", s.handleBatchObservations).Methods("POST")
 	r.HandleFunc("/api/packets/timestamps", s.handlePacketTimestamps).Methods("GET")
 	r.HandleFunc("/api/packets/{id}", s.handlePacketDetail).Methods("GET")
 	r.HandleFunc("/api/packets", s.handlePackets).Methods("GET")
@@ -145,6 +146,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/analytics/hash-sizes", s.handleAnalyticsHashSizes).Methods("GET")
 	r.HandleFunc("/api/analytics/hash-collisions", s.handleAnalyticsHashCollisions).Methods("GET")
 	r.HandleFunc("/api/analytics/subpaths", s.handleAnalyticsSubpaths).Methods("GET")
+	r.HandleFunc("/api/analytics/subpaths-bulk", s.handleAnalyticsSubpathsBulk).Methods("GET")
 	r.HandleFunc("/api/analytics/subpath-detail", s.handleAnalyticsSubpathDetail).Methods("GET")
 	r.HandleFunc("/api/analytics/neighbor-graph", s.handleNeighborGraph).Methods("GET")
 
@@ -152,6 +154,8 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/resolve-hops", s.handleResolveHops).Methods("GET")
 	r.HandleFunc("/api/channels/{hash}/messages", s.handleChannelMessages).Methods("GET")
 	r.HandleFunc("/api/channels", s.handleChannels).Methods("GET")
+	r.HandleFunc("/api/observers/metrics/summary", s.handleMetricsSummary).Methods("GET")
+	r.HandleFunc("/api/observers/{id}/metrics", s.handleObserverMetrics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/analytics", s.handleObserverAnalytics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
 	r.HandleFunc("/api/observers", s.handleObservers).Methods("GET")
@@ -718,7 +722,8 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		Until:    r.URL.Query().Get("until"),
 		Region:   r.URL.Query().Get("region"),
 		Node:     r.URL.Query().Get("node"),
-		Order:    "DESC",
+		Order:              "DESC",
+		ExpandObservations: r.URL.Query().Get("expand") == "observations",
 	}
 	if r.URL.Query().Get("order") == "asc" {
 		q.Order = "ASC"
@@ -760,13 +765,6 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Strip observations from default response
-	if r.URL.Query().Get("expand") != "observations" {
-		for _, p := range result.Packets {
-			delete(p, "observations")
-		}
-	}
-
 	writeJSON(w, result)
 }
 
@@ -790,6 +788,38 @@ var muxBraceParam = regexp.MustCompile(`\{([^}]+)\}`)
 
 // perfHexFallback matches hex IDs for perf path normalization fallback.
 var perfHexFallback = regexp.MustCompile(`[0-9a-f]{8,}`)
+
+// handleBatchObservations returns observations for multiple hashes in a single request.
+// POST /api/packets/observations with JSON body: {"hashes": ["abc123", "def456", ...]}
+// Response: {"results": {"abc123": [...observations...], "def456": [...], ...}}
+// Limited to 200 hashes per request to prevent abuse.
+func (s *Server) handleBatchObservations(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Hashes []string `json:"hashes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, 400, "invalid JSON body")
+		return
+	}
+	const maxHashes = 200
+	if len(body.Hashes) > maxHashes {
+		writeError(w, 400, fmt.Sprintf("too many hashes (max %d)", maxHashes))
+		return
+	}
+	if len(body.Hashes) == 0 {
+		writeJSON(w, map[string]interface{}{"results": map[string]interface{}{}})
+		return
+	}
+
+	results := make(map[string][]ObservationResp, len(body.Hashes))
+	if s.store != nil {
+		for _, hash := range body.Hashes {
+			obs := s.store.GetObservationsForHash(hash)
+			results[hash] = mapSliceToObservations(obs)
+		}
+	}
+	writeJSON(w, map[string]interface{}{"results": results})
+}
 
 func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 	param := mux.Vars(r)["id"]
@@ -1065,16 +1095,44 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prefix1 := strings.ToLower(pubkey)
-	if len(prefix1) > 2 {
-		prefix1 = prefix1[:2]
-	}
-	prefix2 := strings.ToLower(pubkey)
+	// Use the precomputed byPathHop index instead of scanning all packets.
+	// Look up by full pubkey (resolved hops) and by short prefixes (raw hops).
+	lowerPK := strings.ToLower(pubkey)
+	prefix2 := lowerPK
 	if len(prefix2) > 4 {
 		prefix2 = prefix2[:4]
 	}
+	prefix1 := lowerPK
+	if len(prefix1) > 2 {
+		prefix1 = prefix1[:2]
+	}
+
 	s.store.mu.RLock()
 	_, pm := s.store.getCachedNodesAndPM()
+
+	// Collect candidate transmissions from the index, deduplicating by tx ID.
+	seen := make(map[int]bool)
+	var candidates []*StoreTx
+	addCandidates := func(key string) {
+		for _, tx := range s.store.byPathHop[key] {
+			if !seen[tx.ID] {
+				seen[tx.ID] = true
+				candidates = append(candidates, tx)
+			}
+		}
+	}
+	addCandidates(lowerPK) // full pubkey match (from resolved_path)
+	addCandidates(prefix1) // 2-char raw hop match
+	addCandidates(prefix2) // 4-char raw hop match
+	// Also check any raw hops that start with prefix2 (longer prefixes).
+	// Raw hops are typically 2 chars, so iterate only keys with HasPrefix
+	// on the small set of index keys rather than all packets.
+	for key := range s.store.byPathHop {
+		if len(key) > 4 && len(key) < len(lowerPK) && strings.HasPrefix(key, prefix2) {
+			addCandidates(key)
+		}
+	}
+
 	type pathAgg struct {
 		Hops       []PathHopResp
 		Count      int
@@ -1092,24 +1150,9 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		hopCache[hop] = r
 		return r
 	}
-	for _, tx := range s.store.packets {
-		hops := txGetParsedPath(tx)
-		if len(hops) == 0 {
-			continue
-		}
-		found := false
-		for _, hop := range hops {
-			hl := strings.ToLower(hop)
-			if hl == prefix1 || hl == prefix2 || strings.HasPrefix(hl, prefix2) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			continue
-		}
-
+	for _, tx := range candidates {
 		totalTransmissions++
+		hops := txGetParsedPath(tx)
 		resolvedHops := make([]PathHopResp, len(hops))
 		sigParts := make([]string, len(hops))
 		for i, hop := range hops {
@@ -1337,6 +1380,57 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// handleAnalyticsSubpathsBulk returns multiple length-range buckets in a single
+// response, avoiding repeated scans of the same packet data. Query format:
+//   ?groups=2-2:50,3-3:30,4-4:20,5-8:15   (minLen-maxLen:limit per group)
+func (s *Server) handleAnalyticsSubpathsBulk(w http.ResponseWriter, r *http.Request) {
+	region := r.URL.Query().Get("region")
+	groupsParam := r.URL.Query().Get("groups")
+	if groupsParam == "" {
+		writeJSON(w, ErrorResp{Error: "groups parameter required (e.g. groups=2-2:50,3-3:30)"})
+		return
+	}
+
+	var groups []subpathGroup
+	for _, g := range strings.Split(groupsParam, ",") {
+		parts := strings.SplitN(g, ":", 2)
+		if len(parts) != 2 {
+			writeJSON(w, ErrorResp{Error: "invalid group format: " + g})
+			return
+		}
+		rangeParts := strings.SplitN(parts[0], "-", 2)
+		if len(rangeParts) != 2 {
+			writeJSON(w, ErrorResp{Error: "invalid range format: " + parts[0]})
+			return
+		}
+		mn, err1 := strconv.Atoi(rangeParts[0])
+		mx, err2 := strconv.Atoi(rangeParts[1])
+		lim, err3 := strconv.Atoi(parts[1])
+		if err1 != nil || err2 != nil || err3 != nil || mn < 2 || mx < mn || lim < 1 {
+			writeJSON(w, ErrorResp{Error: "invalid group: " + g})
+			return
+		}
+		groups = append(groups, subpathGroup{mn, mx, lim})
+	}
+
+	if s.store == nil {
+		results := make([]map[string]interface{}, len(groups))
+		for i := range groups {
+			results[i] = map[string]interface{}{"subpaths": []interface{}{}, "totalPaths": 0}
+		}
+		writeJSON(w, map[string]interface{}{"results": results})
+		return
+	}
+
+	results := s.store.GetAnalyticsSubpathsBulk(region, groups)
+	writeJSON(w, map[string]interface{}{"results": results})
+}
+
+// subpathGroup defines a length-range + limit for the bulk subpaths endpoint.
+type subpathGroup struct {
+	MinLen, MaxLen, Limit int
+}
+
 func (s *Server) handleAnalyticsSubpathDetail(w http.ResponseWriter, r *http.Request) {
 	hops := r.URL.Query().Get("hops")
 	if hops == "" {
@@ -1406,24 +1500,25 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		hopLower := strings.ToLower(hop)
-		rows, err := s.db.conn.Query("SELECT public_key, name, lat, lon FROM nodes WHERE LOWER(public_key) LIKE ?", hopLower+"%")
-		if err != nil {
-			resolved[hop] = &HopResolution{Name: nil, Candidates: []HopCandidate{}, Conflicts: []interface{}{}, Confidence: "ambiguous"}
-			continue
-		}
 
+		// Resolve candidates from the in-memory prefix map instead of
+		// issuing per-hop DB queries (fixes N+1 pattern, see #369).
 		var candidates []HopCandidate
-		for rows.Next() {
-			var pk string
-			var name sql.NullString
-			var lat, lon sql.NullFloat64
-			rows.Scan(&pk, &name, &lat, &lon)
-			candidates = append(candidates, HopCandidate{
-				Name: nullStr(name), Pubkey: pk,
-				Lat: nullFloat(lat), Lon: nullFloat(lon),
-			})
+		if pm != nil {
+			if matched, ok := pm.m[hopLower]; ok {
+				for _, ni := range matched {
+					c := HopCandidate{Pubkey: ni.PublicKey}
+					if ni.Name != "" {
+						c.Name = ni.Name
+					}
+					if ni.HasGPS {
+						c.Lat = ni.Lat
+						c.Lon = ni.Lon
+					}
+					candidates = append(candidates, c)
+				}
+			}
 		}
-		rows.Close()
 
 		if len(candidates) == 0 {
 			resolved[hop] = &HopResolution{Name: nil, Candidates: []HopCandidate{}, Conflicts: []interface{}{}, Confidence: "no_match"}
@@ -1546,8 +1641,12 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
 	pktCounts := s.db.GetObserverPacketCounts(oneHourAgo)
 
-	// Batch lookup: node locations (observer ID may match a node public_key)
-	nodeLocations := s.db.GetNodeLocations()
+	// Batch lookup: node locations only for observer IDs (not all nodes)
+	observerIDs := make([]string, len(observers))
+	for i, o := range observers {
+		observerIDs[i] = o.ID
+	}
+	nodeLocations := s.db.GetNodeLocationsByKeys(observerIDs)
 
 	result := make([]ObserverResp, 0, len(observers))
 	for _, o := range observers {
@@ -2054,6 +2153,112 @@ func nullFloatVal(n sql.NullFloat64) float64 {
 		return n.Float64
 	}
 	return 0
+}
+
+func (s *Server) handleObserverMetrics(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	since := r.URL.Query().Get("since")
+	until := r.URL.Query().Get("until")
+	resolution := r.URL.Query().Get("resolution")
+
+	// Default to last 24h if no since provided
+	if since == "" {
+		since = time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
+	}
+
+	// Validate resolution
+	if resolution == "" {
+		resolution = "5m"
+	}
+	switch resolution {
+	case "5m", "1h", "1d":
+		// valid
+	default:
+		writeError(w, 400, "invalid resolution: "+resolution+". Must be 5m, 1h, or 1d")
+		return
+	}
+
+	// Sample interval (default 300s = 5min)
+	sampleInterval := 300
+
+	metrics, reboots, err := s.db.GetObserverMetrics(id, since, until, resolution, sampleInterval)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if metrics == nil {
+		metrics = []MetricsSample{}
+	}
+	if reboots == nil {
+		reboots = []string{}
+	}
+
+	// Get observer name
+	obs, _ := s.db.GetObserverByID(id)
+	var name *string
+	if obs != nil {
+		name = obs.Name
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"observer_id":   id,
+		"observer_name": name,
+		"reboots":       reboots,
+		"metrics":       metrics,
+	})
+}
+
+func (s *Server) handleMetricsSummary(w http.ResponseWriter, r *http.Request) {
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = "24h"
+	}
+	region := r.URL.Query().Get("region")
+
+	// Parse window duration
+	dur, err := parseWindowDuration(window)
+	if err != nil {
+		writeError(w, 400, "invalid window: "+window)
+		return
+	}
+
+	since := time.Now().UTC().Add(-dur).Format(time.RFC3339)
+	summary, err := s.db.GetMetricsSummary(since)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if summary == nil {
+		summary = []MetricsSummaryRow{}
+	}
+
+	// Filter by region if specified
+	if region != "" {
+		filtered := make([]MetricsSummaryRow, 0)
+		for _, row := range summary {
+			if strings.EqualFold(row.IATA, region) {
+				filtered = append(filtered, row)
+			}
+		}
+		summary = filtered
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"observers": summary,
+	})
+}
+
+// parseWindowDuration parses strings like "24h", "3d", "7d", "30d".
+func parseWindowDuration(window string) (time.Duration, error) {
+	if strings.HasSuffix(window, "d") {
+		daysStr := strings.TrimSuffix(window, "d")
+		days, err := strconv.Atoi(daysStr)
+		if err != nil || days <= 0 {
+			return 0, fmt.Errorf("invalid days: %s", daysStr)
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(window)
 }
 
 func (s *Server) handleAdminPrune(w http.ResponseWriter, r *http.Request) {

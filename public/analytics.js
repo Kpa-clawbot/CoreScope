@@ -86,6 +86,8 @@
             <button class="tab-btn" data-tab="nodes">Nodes</button>
             <button class="tab-btn" data-tab="distance">Distance</button>
             <button class="tab-btn" data-tab="neighbor-graph">Neighbor Graph</button>
+            <button class="tab-btn" data-tab="rf-health">RF Health</button>
+            <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
           </div>
         </div>
         <div id="analyticsContent" class="analytics-content">
@@ -173,6 +175,8 @@
       case 'nodes': await renderNodesTab(el); break;
       case 'distance': await renderDistanceTab(el); break;
       case 'neighbor-graph': await renderNeighborGraphTab(el); break;
+      case 'rf-health': await renderRFHealthTab(el); break;
+      case 'prefix-tool': await renderPrefixTool(el); break;
     }
     // Auto-apply column resizing to all analytics tables
     requestAnimationFrame(() => {
@@ -985,11 +989,13 @@
         <a href="#/analytics?tab=collisions&section=hashMatrixSection" style="color:var(--accent)">🔢 Hash Matrix</a>
         <span style="color:var(--border)">|</span>
         <a href="#/analytics?tab=collisions&section=collisionRiskSection" style="color:var(--accent)">💥 Collision Risk</a>
+        <span style="color:var(--border)">|</span>
+        <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">🔎 Check a prefix →</a>
       </nav>
 
       <div class="analytics-card" id="inconsistentHashSection">
         <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">⚠️ Inconsistent Hash Sizes</h3><a href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a></div>
-        <p class="text-muted" style="margin:4px 0 8px;font-size:0.8em">Nodes sending adverts with varying hash sizes. Caused by a <a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--accent)">bug</a> where automatic adverts ignored the configured multibyte path setting. Fixed in <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--accent)">repeater v1.14.1</a>.</p>
+        <p class="text-muted" style="margin:4px 0 8px;font-size:0.8em">Repeaters and room servers sending adverts with varying hash sizes in the last 7 days. Originally caused by a <a href="https://github.com/meshcore-dev/MeshCore/commit/fcfdc5f" target="_blank" style="color:var(--accent)">firmware bug</a> where automatic adverts ignored the configured multibyte path setting, fixed in <a href="https://github.com/meshcore-dev/MeshCore/releases/tag/repeater-v1.14.1" target="_blank" style="color:var(--accent)">repeater v1.14.1</a>. Companion nodes are excluded.</p>
         <div id="inconsistentHashList"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading…</div></div>
       </div>
 
@@ -1398,12 +1404,8 @@
     el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Analyzing route patterns…</div>';
     try {
       const rq = RegionFilter.regionQueryString();
-      const [d2, d3, d4, d5] = await Promise.all([
-        api('/analytics/subpaths?minLen=2&maxLen=2&limit=50' + rq, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/subpaths?minLen=3&maxLen=3&limit=30' + rq, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/subpaths?minLen=4&maxLen=4&limit=20' + rq, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/subpaths?minLen=5&maxLen=8&limit=15' + rq, { ttl: CLIENT_TTL.analyticsRF })
-      ]);
+      const bulk = await api('/analytics/subpaths-bulk?groups=2-2:50,3-3:30,4-4:20,5-8:15' + rq, { ttl: CLIENT_TTL.analyticsRF });
+      const [d2, d3, d4, d5] = bulk.results;
 
       function renderTable(data, title) {
         if (!data.subpaths.length) return `<h4>${title}</h4><div class="text-muted">No data</div>`;
@@ -1602,10 +1604,9 @@
     el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading node analytics…</div>';
     try {
       const rq = RegionFilter.regionQueryString();
-      const [nodesResp, bulkHealth, netStatus] = await Promise.all([
-        api('/nodes?limit=200&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
-        api('/nodes/bulk-health?limit=50' + rq, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/nodes/network-status' + (rq ? '?' + rq.slice(1) : ''), { ttl: CLIENT_TTL.analyticsRF })
+      const [nodesResp, bulkHealth] = await Promise.all([
+        api('/nodes?limit=10000&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
+        api('/nodes/bulk-health?limit=50' + rq, { ttl: CLIENT_TTL.analyticsRF })
       ]);
       const nodes = nodesResp.nodes || nodesResp;
       const myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
@@ -1622,8 +1623,22 @@
       const byObservers = [...enriched].sort((a, b) => (b.health.observers?.length || 0) - (a.health.observers?.length || 0));
       const byRecent = [...enriched].filter(n => n.health.stats.lastHeard).sort((a, b) => new Date(b.health.stats.lastHeard) - new Date(a.health.stats.lastHeard));
 
-      // Use server-computed status across ALL nodes
-      const { active, degraded, silent, total: totalNodes, roleCounts } = netStatus;
+      // Compute network status client-side from loaded nodes using shared getHealthThresholds()
+      const now = Date.now();
+      let active = 0, degraded = 0, silent = 0;
+      nodes.forEach(function(n) {
+        const role = n.role || 'unknown';
+        const th = getHealthThresholds(role);
+        const lastMs = n.last_heard ? new Date(n.last_heard).getTime()
+                     : n.last_seen ? new Date(n.last_seen).getTime()
+                     : 0;
+        const age = lastMs ? (now - lastMs) : Infinity;
+        if (age < th.degradedMs) active++;
+        else if (age < th.silentMs) degraded++;
+        else silent++;
+      });
+      const totalNodes = nodesResp.total || nodes.length;
+      const roleCounts = nodesResp.counts || {};
 
       function nodeLink(n) {
         return `<a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="analytics-link">${esc(n.name || n.public_key.slice(0, 12))}</a>`;
@@ -2291,6 +2306,897 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     }
 
     _ngState.animId = requestAnimationFrame(tick);
+  }
+
+  // --- Prefix Tool ---
+  async function renderPrefixTool(el) {
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading prefix data…</div>';
+
+    const rq = RegionFilter.regionQueryString();
+    const regionLabel = rq ? (new URLSearchParams(rq.slice(1)).get('region') || '') : '';
+
+    let nodesResp;
+    try {
+      nodesResp = await api('/nodes?limit=10000&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList });
+    } catch (e) {
+      el.innerHTML = `<div class="text-muted" role="alert" style="padding:40px">Failed to load: ${esc(e.message)}</div>`;
+      return;
+    }
+
+    // Deduplicate by public_key, require at least 6 hex chars to build all 3 tiers
+    const nodeMap = new Map();
+    (nodesResp.nodes || nodesResp).forEach(n => {
+      if (n.public_key && n.public_key.length >= 6 && !nodeMap.has(n.public_key)) {
+        nodeMap.set(n.public_key, n);
+      }
+    });
+    const nodes = [...nodeMap.values()];
+
+    if (nodes.length === 0) {
+      el.innerHTML = `<div class="analytics-card"><p class="text-muted">No nodes in the network yet. Any prefix is available!</p></div>`;
+      return;
+    }
+
+    // Build 3-tier prefix indexes: prefix (uppercase hex) -> [nodes]
+    const idx = { 1: new Map(), 2: new Map(), 3: new Map() };
+    nodes.forEach(n => {
+      const pk = n.public_key.toUpperCase();
+      [1, 2, 3].forEach(b => {
+        const p = pk.slice(0, b * 2);
+        if (!idx[b].has(p)) idx[b].set(p, []);
+        idx[b].get(p).push(n);
+      });
+    });
+
+    // Network overview stats
+    const spaceSizes = { 1: 256, 2: 65536, 3: 16777216 };
+    const stats = {};
+    [1, 2, 3].forEach(b => {
+      stats[b] = {
+        usedPrefixes: idx[b].size,
+        collidingPrefixes: [...idx[b].values()].filter(arr => arr.length > 1).length,
+      };
+    });
+
+    // Recommendation by network size
+    const totalNodes = nodes.length;
+    let rec, recDetail;
+    if (totalNodes < 20) {
+      rec = '1-byte'; recDetail = `With only ${totalNodes} nodes, 1-byte prefixes have low collision risk.`;
+    } else if (totalNodes < 500) {
+      rec = '2-byte'; recDetail = `With ${totalNodes} nodes, 2-byte prefixes are recommended to avoid collisions.`;
+    } else {
+      rec = '2-byte'; recDetail = `With ${totalNodes} nodes, 2-byte prefixes are strongly recommended.`;
+    }
+
+    // URL params for pre-fill / auto-run
+    const hashParams = new URLSearchParams((location.hash.split('?')[1] || ''));
+    const initPrefix = hashParams.get('prefix') || '';
+    const initGenerate = hashParams.get('generate') || '';
+
+    const regionNote = regionLabel
+      ? `<p class="text-muted" style="font-size:0.85em;margin:4px 0 0">Showing data for region: <strong>${esc(regionLabel)}</strong>. <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">Check all nodes →</a></p>`
+      : '';
+
+    el.innerHTML = `
+      <div class="analytics-card" id="ptOverview">
+        <div style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none" id="ptOverviewToggle">
+          <span id="ptOverviewChevron" style="font-size:0.75em;color:var(--text-muted);transition:transform 0.2s">▶</span>
+          <h3 style="margin:0">Network Overview</h3>
+        </div>
+        <div id="ptOverviewBody" style="display:none">
+          ${regionNote}
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0 16px">
+            <div class="analytics-stat-card" style="flex:1;min-width:110px">
+              <div class="analytics-stat-label">Total nodes</div>
+              <div class="analytics-stat-value">${totalNodes.toLocaleString()}</div>
+            </div>
+            ${[1, 2, 3].map(b => `
+            <div class="analytics-stat-card" style="flex:1;min-width:150px;border-color:${stats[b].collidingPrefixes > 0 ? 'var(--status-red)' : 'var(--border)'}">
+              <div class="analytics-stat-label">${b}-byte prefixes</div>
+              <div class="analytics-stat-value" style="font-size:1em">
+                ${stats[b].usedPrefixes.toLocaleString()}
+                <span class="text-muted" style="font-size:0.7em"> / ${spaceSizes[b].toLocaleString()}</span>
+              </div>
+              <div style="font-size:0.82em;margin-top:4px;color:${stats[b].collidingPrefixes > 0 ? 'var(--status-red)' : 'var(--status-green)'}">
+                ${stats[b].collidingPrefixes === 0
+                  ? '✅ No collisions'
+                  : `⚠️ ${stats[b].collidingPrefixes} prefix${stats[b].collidingPrefixes !== 1 ? 'es' : ''} collide`}
+              </div>
+            </div>`).join('')}
+          </div>
+          <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px">
+            <strong>Recommendation: ${rec} prefixes</strong> — ${recDetail}
+            <span class="text-muted" style="font-size:0.8em;display:block;margin-top:4px">Hash size is configured per-node in firmware. Changing requires reflashing.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="analytics-card" id="ptChecker">
+        <h3 style="margin-top:0">Check a Prefix</h3>
+        <p class="text-muted" style="margin-top:0;font-size:0.9em">Enter a 1-byte (2 hex chars), 2-byte (4 hex chars), or 3-byte (6 hex chars) prefix — or paste a full public key.</p>
+        <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
+          <input id="ptPrefixInput" type="text" placeholder="e.g. A3F1" maxlength="64"
+            style="font-family:var(--mono);font-size:1em;padding:6px 10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;min-width:180px;flex:1"
+            value="${esc(initPrefix)}">
+          <button id="ptCheckBtn" style="padding:6px 16px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">Check</button>
+        </div>
+        <div id="ptCheckerResults" style="margin-top:14px"></div>
+      </div>
+
+      <div class="analytics-card" id="ptGenerator">
+        <h3 style="margin-top:0">Generate Available Prefix</h3>
+        <p class="text-muted" style="margin-top:0;font-size:0.9em">Find a prefix with zero current collisions.</p>
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="ptGenSize" value="1" ${initGenerate === '1' ? 'checked' : ''}> 1-byte
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="ptGenSize" value="2" ${initGenerate !== '1' && initGenerate !== '3' ? 'checked' : ''}> 2-byte
+            <span class="text-muted" style="font-size:0.8em">(recommended)</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="radio" name="ptGenSize" value="3" ${initGenerate === '3' ? 'checked' : ''}> 3-byte
+          </label>
+          <button id="ptGenBtn" style="padding:6px 16px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">Generate</button>
+        </div>
+        <div id="ptGenResult"></div>
+        <div style="margin-top:14px;padding:10px 14px;border:1px solid var(--accent);border-radius:6px;background:var(--bg-secondary,var(--bg));font-size:0.88em">
+          📖 <strong>New to multi-byte prefixes?</strong>
+          <a href="https://github.com/meshcore-dev/MeshCore/blob/main/docs/faq.md#39-q-what-is-multi-byte-support--what-do-1-byte-2-byte-3-byte-adverts-and-messages-mean"
+            target="_blank" rel="noopener noreferrer" style="color:var(--accent);margin-left:4px">
+            Read the MeshCore FAQ on multi-byte support →
+          </a>
+        </div>
+      </div>`;
+
+    // --- Helpers ---
+    function nodeEntry(n) {
+      const name = esc(n.name || n.public_key.slice(0, 12));
+      const role = n.role ? `<span class="text-muted" style="font-size:0.82em">${esc(n.role)}</span>` : '';
+      const when = n.last_seen ? ` <span class="text-muted" style="font-size:0.8em">${new Date(n.last_seen).toLocaleDateString()}</span>` : '';
+      return `<div style="padding:3px 0"><a href="#/nodes/${encodeURIComponent(n.public_key)}" class="analytics-link">${name}</a> ${role}${when}</div>`;
+    }
+
+    function severityBadge(count) {
+      if (count === 0) return '<span style="color:var(--status-green)">✅ Unique</span>';
+      if (count <= 2) return `<span style="color:var(--status-yellow)">⚠️ ${count} collision${count !== 1 ? 's' : ''}</span>`;
+      return `<span style="color:var(--status-red)">🔴 ${count} collisions</span>`;
+    }
+
+    // --- Checker ---
+    function doCheck(raw) {
+      const resultsEl = document.getElementById('ptCheckerResults');
+      if (!resultsEl) return;
+      const input = raw.trim().toUpperCase();
+      if (!input) { resultsEl.innerHTML = ''; return; }
+
+      if (!/^[0-9A-F]+$/.test(input)) {
+        resultsEl.innerHTML = '<p style="color:var(--status-red);margin:0">Invalid input — hex characters only (0-9, A-F).</p>';
+        return;
+      }
+      if (input.length % 2 !== 0 || (input.length !== 2 && input.length !== 4 && input.length !== 6 && input.length < 8)) {
+        resultsEl.innerHTML = '<p style="color:var(--status-red);margin:0">Prefix must be 2, 4, or 6 hex characters. For a full public key, use 64 characters.</p>';
+        return;
+      }
+
+      const isFullKey = input.length >= 8;
+      const tiers = isFullKey
+        ? [{ b: 1, prefix: input.slice(0, 2) }, { b: 2, prefix: input.slice(0, 4) }, { b: 3, prefix: input.slice(0, 6) }]
+        : [{ b: input.length / 2, prefix: input }];
+
+      let html = '';
+      if (isFullKey) {
+        const inNetwork = nodes.some(n => n.public_key.toUpperCase() === input);
+        html += `<p class="text-muted" style="font-size:0.85em;margin:0 0 10px">Derived prefixes: <code class="mono">${input.slice(0,2)}</code> / <code class="mono">${input.slice(0,4)}</code> / <code class="mono">${input.slice(0,6)}</code>${!inNetwork ? ' — <em>this node is not yet in the network</em>' : ''}</p>`;
+      }
+
+      tiers.forEach(({ b, prefix }) => {
+        const matches = idx[b].get(prefix) || [];
+        const colliders = isFullKey ? matches.filter(n => n.public_key.toUpperCase() !== input) : matches;
+        const count = colliders.length;
+        html += `
+          <div style="margin-bottom:10px;padding:10px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary,var(--bg))">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <code class="mono" style="font-weight:700">${prefix}</code>
+              <span class="text-muted" style="font-size:0.82em">${b}-byte</span>
+              ${severityBadge(count)}
+            </div>
+            ${count === 0
+              ? '<div class="text-muted" style="font-size:0.85em">No existing nodes use this prefix.</div>'
+              : `<div style="font-size:0.85em;max-height:140px;overflow-y:auto">${colliders.map(nodeEntry).join('')}</div>`}
+          </div>`;
+      });
+
+      resultsEl.innerHTML = html;
+    }
+
+    // --- Generator ---
+    function doGenerate() {
+      const genResultEl = document.getElementById('ptGenResult');
+      if (!genResultEl) return;
+      const sizeInput = el.querySelector('input[name="ptGenSize"]:checked');
+      const b = sizeInput ? parseInt(sizeInput.value) : 2;
+      const hexLen = b * 2;
+      const totalSpace = spaceSizes[b];
+      const available = totalSpace - idx[b].size;
+
+      if (available === 0) {
+        const next = b < 3 ? (b + 1) + '-byte' : 'a different size';
+        genResultEl.innerHTML = `<p style="color:var(--status-red);margin:0">No collision-free ${b}-byte prefixes available. Try ${next}.</p>`;
+        return;
+      }
+
+      let prefix;
+      if (b === 1) {
+        // Enumerate all 256 options
+        const free = [];
+        for (let i = 0; i < totalSpace; i++) {
+          const p = i.toString(16).toUpperCase().padStart(hexLen, '0');
+          if (!idx[b].has(p)) free.push(p);
+        }
+        prefix = free[Math.floor(Math.random() * free.length)];
+      } else {
+        // Random sampling — with 2K used / 65K space, hit rate >96%
+        let attempts = 0;
+        do {
+          prefix = Math.floor(Math.random() * totalSpace).toString(16).toUpperCase().padStart(hexLen, '0');
+        } while (idx[b].has(prefix) && ++attempts < 500);
+        // Fallback to enumeration if sampling kept hitting used prefixes
+        if (idx[b].has(prefix)) {
+          for (let i = 0; i < totalSpace; i++) {
+            const p = i.toString(16).toUpperCase().padStart(hexLen, '0');
+            if (!idx[b].has(p)) { prefix = p; break; }
+          }
+        }
+      }
+
+      genResultEl.innerHTML = `
+        <div style="padding:12px 16px;border:1px solid var(--status-green);border-radius:6px;background:var(--bg-secondary,var(--bg))">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <code class="mono" style="font-size:1.3em;font-weight:700;color:var(--status-green)">${prefix}</code>
+            <span style="color:var(--status-green)">✅ No existing nodes use this prefix</span>
+          </div>
+          <div class="text-muted" style="font-size:0.85em;margin-top:6px">${available.toLocaleString()} of ${totalSpace.toLocaleString()} ${b}-byte prefixes are available.</div>
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button id="ptRegenBtn" style="padding:5px 14px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;cursor:pointer;font-size:0.9em">Try another</button>
+            <a href="https://agessaman.github.io/meshcore-web-keygen/?prefix=${prefix}" target="_blank" rel="noopener noreferrer"
+              style="padding:5px 14px;background:var(--bg);color:var(--accent);border:1px solid var(--border);border-radius:4px;text-decoration:none;font-size:0.9em">
+              Generate key with this prefix →
+            </a>
+          </div>
+        </div>`;
+      document.getElementById('ptRegenBtn').addEventListener('click', doGenerate);
+    }
+
+    // --- Wire up ---
+    const checkBtn = document.getElementById('ptCheckBtn');
+    const prefixInput = document.getElementById('ptPrefixInput');
+    const genBtn = document.getElementById('ptGenBtn');
+
+    checkBtn.addEventListener('click', () => doCheck(prefixInput.value));
+    prefixInput.addEventListener('keydown', e => { if (e.key === 'Enter') doCheck(prefixInput.value); });
+    genBtn.addEventListener('click', doGenerate);
+
+    // Network Overview toggle
+    document.getElementById('ptOverviewToggle').addEventListener('click', () => {
+      const body = document.getElementById('ptOverviewBody');
+      const chevron = document.getElementById('ptOverviewChevron');
+      const open = body.style.display === 'none';
+      body.style.display = open ? '' : 'none';
+      chevron.style.transform = open ? 'rotate(90deg)' : '';
+    });
+
+    // Auto-run from URL params
+    if (initPrefix) {
+      doCheck(initPrefix);
+      setTimeout(() => { document.getElementById('ptChecker')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
+    } else if (initGenerate) {
+      doGenerate();
+      setTimeout(() => { document.getElementById('ptGenerator')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
+    }
+  }
+
+  // ===================== RF HEALTH =====================
+
+  let _rfHealthState = { range: '24h', selectedObserver: null, customFrom: '', customTo: '' };
+
+  function rfHealthTimeRangeToParams(range, customFrom, customTo) {
+    const now = new Date();
+    let since, until;
+    if (range === 'custom' && customFrom) {
+      since = new Date(customFrom).toISOString();
+      until = customTo ? new Date(customTo).toISOString() : now.toISOString();
+    } else {
+      const durations = { '1h': 1, '3h': 3, '6h': 6, '12h': 12, '24h': 24, '3d': 72, '7d': 168, '30d': 720 };
+      const hours = durations[range] || 24;
+      since = new Date(now.getTime() - hours * 3600000).toISOString();
+      until = now.toISOString();
+    }
+    return { since, until };
+  }
+
+  function rfHealthUpdateHash() {
+    const params = new URLSearchParams();
+    params.set('tab', 'rf-health');
+    if (_rfHealthState.range !== '24h') params.set('range', _rfHealthState.range);
+    if (_rfHealthState.selectedObserver) params.set('observer', _rfHealthState.selectedObserver);
+    if (_rfHealthState.range === 'custom') {
+      if (_rfHealthState.customFrom) params.set('from', _rfHealthState.customFrom);
+      if (_rfHealthState.customTo) params.set('to', _rfHealthState.customTo);
+    }
+    history.replaceState(null, '', '#/analytics?' + params.toString());
+  }
+
+  async function renderRFHealthTab(el) {
+    // Restore state from URL
+    const hashParams = new URLSearchParams((location.hash.split('?')[1] || ''));
+    if (hashParams.get('range')) _rfHealthState.range = hashParams.get('range');
+    if (hashParams.get('observer')) _rfHealthState.selectedObserver = hashParams.get('observer');
+    if (hashParams.get('from')) { _rfHealthState.customFrom = hashParams.get('from'); _rfHealthState.range = 'custom'; }
+    if (hashParams.get('to')) { _rfHealthState.customTo = hashParams.get('to'); _rfHealthState.range = 'custom'; }
+
+    const ranges = ['1h','3h','6h','12h','24h','3d','7d','30d'];
+    const rangeButtons = ranges.map(r =>
+      `<button class="rf-range-btn${_rfHealthState.range === r ? ' active' : ''}" data-range="${r}">${r}</button>`
+    ).join('');
+
+    el.innerHTML = `
+      <div class="rf-health-container">
+        <div class="rf-time-selector">
+          ${rangeButtons}
+          <button class="rf-range-btn${_rfHealthState.range === 'custom' ? ' active' : ''}" data-range="custom">Custom</button>
+          <span class="rf-custom-inputs" style="display:${_rfHealthState.range === 'custom' ? 'inline' : 'none'}">
+            <input type="datetime-local" class="rf-datetime" id="rfFrom" value="${_rfHealthState.customFrom}">
+            <span>→</span>
+            <input type="datetime-local" class="rf-datetime" id="rfTo" value="${_rfHealthState.customTo}">
+            <button class="rf-range-btn" id="rfCustomApply">Apply</button>
+          </span>
+        </div>
+        <div class="rf-health-split">
+          <div id="rfHealthGrid" class="rf-health-grid">
+            <div class="text-muted" style="padding:20px">Loading RF metrics…</div>
+          </div>
+          <div id="rfHealthDetail" class="rf-health-detail rf-panel-empty">
+            <span>Select an observer to view details</span>
+          </div>
+        </div>
+      </div>`;
+
+    // Range button handlers
+    el.querySelectorAll('.rf-range-btn[data-range]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const range = btn.dataset.range;
+        _rfHealthState.range = range;
+        el.querySelectorAll('.rf-range-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const customInputs = el.querySelector('.rf-custom-inputs');
+        if (customInputs) customInputs.style.display = range === 'custom' ? 'inline' : 'none';
+        if (range !== 'custom') {
+          rfHealthUpdateHash();
+          loadRFHealthData(el);
+        }
+      });
+    });
+
+    const applyBtn = document.getElementById('rfCustomApply');
+    if (applyBtn) {
+      applyBtn.addEventListener('click', () => {
+        _rfHealthState.customFrom = document.getElementById('rfFrom').value;
+        _rfHealthState.customTo = document.getElementById('rfTo').value;
+        rfHealthUpdateHash();
+        loadRFHealthData(el);
+      });
+    }
+
+    await loadRFHealthData(el);
+  }
+
+  async function loadRFHealthData(el) {
+    const grid = document.getElementById('rfHealthGrid');
+    const detail = document.getElementById('rfHealthDetail');
+
+    try {
+      // Compute window string for summary endpoint
+      const windowMap = { '1h':'1h', '3h':'3h', '6h':'6h', '12h':'12h', '24h':'24h', '3d':'3d', '7d':'7d', '30d':'30d' };
+      const window = windowMap[_rfHealthState.range] || '24h';
+      const summaryData = await api('/observers/metrics/summary?window=' + window + (RegionFilter.regionQueryString() || ''));
+      const observers = summaryData.observers || [];
+
+      // Filter to observers with sufficient sparkline data (≥2 non-null noise_floor values)
+      const filteredObservers = observers.filter(obs => {
+        const nfValues = (obs.sparkline || []).filter(v => v != null);
+        return nfValues.length >= 2;
+      });
+
+      if (!filteredObservers.length) {
+        grid.innerHTML = '<div class="text-muted" style="padding:20px">No RF metrics data available yet. Metrics are collected from observer status messages every ~5 minutes.</div>';
+        return;
+      }
+
+      // Render small multiples grid
+      grid.innerHTML = filteredObservers.map(obs => {
+        const nf = obs.current_noise_floor != null ? obs.current_noise_floor.toFixed(1) : '—';
+        const avgNf = obs.avg_noise_floor_24h != null ? obs.avg_noise_floor_24h.toFixed(1) : '—';
+        const maxNf = obs.max_noise_floor_24h != null ? obs.max_noise_floor_24h.toFixed(1) : '—';
+        const batt = obs.battery_mv != null ? (obs.battery_mv / 1000).toFixed(2) + 'V' : '';
+        const name = obs.observer_name || obs.observer_id.substring(0, 8);
+        const isSelected = _rfHealthState.selectedObserver === obs.observer_id;
+
+        // NF status coloring
+        let nfClass = '';
+        if (obs.current_noise_floor != null) {
+          if (obs.current_noise_floor >= -85) nfClass = 'rf-nf-critical';
+          else if (obs.current_noise_floor >= -100) nfClass = 'rf-nf-warning';
+        }
+
+        return `<div class="rf-cell${isSelected ? ' rf-cell-selected' : ''}" data-observer="${obs.observer_id}" tabindex="0" role="button" aria-label="Observer ${name}, noise floor ${nf} dBm">
+          <div class="rf-cell-header">
+            <span class="rf-cell-name">${esc(name)}</span>
+            <span class="rf-cell-nf ${nfClass}">${nf} dBm</span>
+            ${batt ? `<span class="rf-cell-batt">${batt}</span>` : ''}
+          </div>
+          <div class="rf-cell-sparkline" id="rf-spark-${obs.observer_id}"></div>
+          <div class="rf-cell-stats">
+            <span>avg: ${avgNf}</span>
+            <span>max: ${maxNf}</span>
+            <span>${obs.sample_count} samples</span>
+          </div>
+        </div>`;
+      }).join('');
+
+      // Click handler for cells
+      grid.querySelectorAll('.rf-cell').forEach(cell => {
+        cell.addEventListener('click', () => {
+          const obsId = cell.dataset.observer;
+          grid.querySelectorAll('.rf-cell').forEach(c => c.classList.remove('rf-cell-selected'));
+          cell.classList.add('rf-cell-selected');
+          _rfHealthState.selectedObserver = obsId;
+          rfHealthUpdateHash();
+          loadRFHealthDetail(obsId, detail);
+        });
+        cell.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cell.click(); }
+        });
+      });
+
+      // Render sparklines from summary data (no extra API calls)
+      for (const obs of filteredObservers) {
+        const nfValues = (obs.sparkline || []).filter(v => v != null);
+        const container = document.getElementById(`rf-spark-${obs.observer_id}`);
+        if (container && nfValues.length > 1) {
+          container.innerHTML = rfNFSparkline(nfValues, 140, 24);
+        }
+      }
+
+      // Auto-expand selected observer from URL
+      if (_rfHealthState.selectedObserver) {
+        const selectedCell = grid.querySelector(`[data-observer="${_rfHealthState.selectedObserver}"]`);
+        if (selectedCell) {
+          selectedCell.classList.add('rf-cell-selected');
+          loadRFHealthDetail(_rfHealthState.selectedObserver, detail);
+        }
+      }
+    } catch (e) {
+      grid.innerHTML = `<div class="text-muted" style="padding:20px">Failed to load RF health data: ${esc(e.message)}</div>`;
+    }
+  }
+
+  async function loadRFSparkline(observerId) {
+    const { since, until } = rfHealthTimeRangeToParams(_rfHealthState.range, _rfHealthState.customFrom, _rfHealthState.customTo);
+    try {
+      const data = await api(`/observers/${observerId}/metrics?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`);
+      const metrics = data.metrics || [];
+      const nfValues = metrics.map(m => m.noise_floor).filter(v => v != null);
+      const container = document.getElementById(`rf-spark-${observerId}`);
+      if (container && nfValues.length > 1) {
+        container.innerHTML = rfNFSparkline(nfValues, 140, 24);
+      } else if (container) {
+        container.innerHTML = '<span class="text-muted" style="font-size:10px">insufficient data</span>';
+      }
+    } catch (e) {
+      // Non-fatal — sparkline just won't render
+    }
+  }
+
+  function rfNFSparkline(data, w, h) {
+    if (!data.length) return '';
+    // For noise floor, invert: more negative = better = lower on chart
+    const min = Math.min(...data);
+    const max = Math.max(...data);
+    const range = max - min || 1;
+    const pts = data.map((v, i) => {
+      const x = (i / Math.max(data.length - 1, 1)) * w;
+      // Higher dBm (worse) = higher on chart
+      const y = h - 2 - ((v - min) / range) * (h - 4);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+
+    // Reference lines
+    let refs = '';
+    if (min <= -100 && max >= -100) {
+      const y100 = h - 2 - ((-100 - min) / range) * (h - 4);
+      refs += `<line x1="0" y1="${y100.toFixed(1)}" x2="${w}" y2="${y100.toFixed(1)}" stroke="var(--text-muted)" stroke-width="0.5" stroke-dasharray="2"/>`;
+    }
+
+    return `<svg viewBox="0 0 ${w} ${h}" style="width:${w}px;height:${h}px" role="img" aria-label="Noise floor sparkline"><title>Noise floor trend</title>${refs}<polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.5"/></svg>`;
+  }
+
+  async function loadRFHealthDetail(observerId, container) {
+    container.classList.remove('rf-panel-empty');
+    container.innerHTML = '<div class="text-muted" style="padding:10px">Loading detail…</div>';
+
+    const { since, until } = rfHealthTimeRangeToParams(_rfHealthState.range, _rfHealthState.customFrom, _rfHealthState.customTo);
+    // Choose resolution based on time range
+    let resolution = '5m';
+    const rangeMap = { '7d': '1h', '30d': '1h' };
+    if (rangeMap[_rfHealthState.range]) resolution = rangeMap[_rfHealthState.range];
+
+    try {
+      const data = await api(`/observers/${observerId}/metrics?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}&resolution=${resolution}`);
+      const metrics = data.metrics || [];
+      const reboots = (data.reboots || []).map(r => new Date(r).getTime());
+      const name = data.observer_name || observerId.substring(0, 8);
+
+      if (!metrics.length) {
+        container.innerHTML = `<div class="text-muted" style="padding:10px">No metrics data for ${esc(name)} in selected time range.</div>`;
+        return;
+      }
+
+      // Extract data series
+      const nfData = metrics.map(m => ({ t: m.timestamp, v: m.noise_floor })).filter(d => d.v != null);
+      const txData = metrics.map(m => ({ t: m.timestamp, v: m.tx_airtime_pct })).filter(d => d.v != null);
+      const rxData = metrics.map(m => ({ t: m.timestamp, v: m.rx_airtime_pct })).filter(d => d.v != null);
+      const errData = metrics.map(m => ({ t: m.timestamp, v: m.recv_error_rate })).filter(d => d.v != null);
+      const battData = metrics.map(m => ({ t: m.timestamp, v: m.battery_mv })).filter(d => d.v != null && d.v > 0);
+
+      const hasAirtime = txData.length > 1 || rxData.length > 1;
+      const hasErrors = errData.length > 1;
+      const hasBattery = battData.length > 1;
+
+      // Current values
+      const latest = metrics[metrics.length - 1];
+      const nfValues = metrics.map(m => m.noise_floor).filter(v => v != null);
+      const avgNf = nfValues.length ? (nfValues.reduce((a,b) => a+b, 0) / nfValues.length).toFixed(1) : '—';
+      const minNf = nfValues.length ? Math.min(...nfValues).toFixed(1) : '—';
+      const maxNf = nfValues.length ? Math.max(...nfValues).toFixed(1) : '—';
+      const curNf = latest.noise_floor != null ? latest.noise_floor.toFixed(1) : '—';
+      const curBatt = latest.battery_mv != null && latest.battery_mv > 0 ? (latest.battery_mv / 1000).toFixed(2) + 'V' : '—';
+      const curTx = latest.tx_airtime_pct != null ? latest.tx_airtime_pct.toFixed(1) + '%' : '—';
+      const curRx = latest.rx_airtime_pct != null ? latest.rx_airtime_pct.toFixed(1) + '%' : '—';
+      const curErr = latest.recv_error_rate != null ? latest.recv_error_rate.toFixed(2) + '%' : '—';
+
+      container.innerHTML = `
+        <div class="rf-detail-header">
+          <h3>${esc(name)}</h3>
+          <button class="rf-detail-close" aria-label="Close detail" title="Close">✕</button>
+        </div>
+        <div class="rf-detail-charts">
+          <div class="rf-detail-chart" id="rfDetailNFChart"></div>
+          ${hasAirtime ? '<div class="rf-detail-chart" id="rfDetailAirtimeChart"></div>' : ''}
+          ${hasErrors ? '<div class="rf-detail-chart" id="rfDetailErrorChart"></div>' : ''}
+          ${hasBattery ? '<div class="rf-detail-chart" id="rfDetailBatteryChart"></div>' : ''}
+        </div>
+        <div class="rf-detail-summary">
+          NF: ${curNf} dBm | avg: ${avgNf} | min: ${minNf} | max: ${maxNf} | TX: ${curTx} | RX: ${curRx} | Err: ${curErr} | Batt: ${curBatt}${reboots.length ? ' | ' + reboots.length + ' reboots' : ''}
+        </div>`;
+
+      // Close button
+      container.querySelector('.rf-detail-close').addEventListener('click', () => {
+        container.classList.add('rf-panel-empty');
+        container.innerHTML = '<span>Select an observer to view details</span>';
+        _rfHealthState.selectedObserver = null;
+        rfHealthUpdateHash();
+        document.querySelectorAll('.rf-cell').forEach(c => c.classList.remove('rf-cell-selected'));
+      });
+
+      // Compute shared time range across all charts
+      const allTimestamps = metrics.map(m => new Date(m.timestamp).getTime());
+      const minT = Math.min(...allTimestamps);
+      const maxT = Math.max(...allTimestamps);
+
+      // Render noise floor chart
+      const nfEl = document.getElementById('rfDetailNFChart');
+      if (nfEl && nfData.length > 1) {
+        nfEl.innerHTML = rfNFLineChart(nfData, nfEl.clientWidth || 700, 180, reboots, minT, maxT);
+      } else if (nfEl) {
+        nfEl.innerHTML = '<span class="text-muted">Not enough noise floor data</span>';
+      }
+
+      // Render airtime chart
+      if (hasAirtime) {
+        const atEl = document.getElementById('rfDetailAirtimeChart');
+        if (atEl) {
+          atEl.innerHTML = rfAirtimeChart(txData, rxData, atEl.clientWidth || 700, 150, reboots, minT, maxT);
+        }
+      }
+
+      // Render error rate chart
+      if (hasErrors) {
+        const errEl = document.getElementById('rfDetailErrorChart');
+        if (errEl) {
+          errEl.innerHTML = rfErrorRateChart(errData, errEl.clientWidth || 700, 120, reboots, minT, maxT);
+        }
+      }
+
+      // Render battery chart
+      if (hasBattery) {
+        const battEl = document.getElementById('rfDetailBatteryChart');
+        if (battEl) {
+          battEl.innerHTML = rfBatteryChart(battData, battEl.clientWidth || 700, 120, reboots, minT, maxT);
+        }
+      }
+    } catch (e) {
+      container.innerHTML = `<div class="text-muted" style="padding:10px">Failed to load detail: ${esc(e.message)}</div>`;
+    }
+  }
+
+  // Shared helper: render reboot markers as vertical hairlines
+  function rfRebootMarkers(reboots, sx, pad, h, w) {
+    let svg = '';
+    for (const rt of reboots) {
+      const x = sx(rt);
+      if (x >= pad.left && x <= w - pad.right) {
+        svg += `<line x1="${x.toFixed(1)}" y1="${pad.top}" x2="${x.toFixed(1)}" y2="${(h - pad.bottom).toFixed(1)}" stroke="var(--text-muted)" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.6"/>`;
+        svg += `<text x="${(x + 2).toFixed(1)}" y="${(pad.top + 8).toFixed(1)}" font-size="7" fill="var(--text-muted)" opacity="0.7">reboot</text>`;
+      }
+    }
+    return svg;
+  }
+
+  // Shared helper: render X-axis time labels
+  function rfXAxisLabels(data, sx, h, pad) {
+    let svg = '';
+    const xTicks = Math.min(6, data.length);
+    for (let i = 0; i < xTicks; i++) {
+      const idx = Math.floor(i * (data.length - 1) / Math.max(xTicks - 1, 1));
+      const t = new Date(data[idx].t);
+      const x = sx(t.getTime());
+      const label = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      svg += `<text x="${x.toFixed(1)}" y="${h - 5}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${label}</text>`;
+    }
+    return svg;
+  }
+
+  // Shared: build polyline points string from data, skip nulls (break line)
+  // Airtime chart: TX (red/orange) + RX (blue) lines, Y 0-100%
+  function rfAirtimeChart(txData, rxData, w, h, reboots, sharedMinT, sharedMaxT) {
+    const pad = { top: 20, right: 50, bottom: 30, left: 55 };
+    const cw = w - pad.left - pad.right;
+    const ch = h - pad.top - pad.bottom;
+    const minT = sharedMinT, maxT = sharedMaxT;
+    const rangeT = maxT - minT || 1;
+
+    const sx = t => pad.left + ((t - minT) / rangeT) * cw;
+    const sy = v => pad.top + ch - (v / 100) * ch; // 0-100%
+
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Airtime chart"><title>Airtime %</title>`;
+
+    // Chart title
+    svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">Airtime %</text>`;
+
+    // Y-axis: 0, 25, 50, 75, 100
+    for (let pct = 0; pct <= 100; pct += 25) {
+      const y = sy(pct);
+      svg += `<text x="${pad.left - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-muted)">${pct}</text>`;
+      svg += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w - pad.right}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="0.3"/>`;
+    }
+
+    // Reboot markers
+    svg += rfRebootMarkers(reboots, sx, pad, h, w);
+
+    // TX line (red/orange)
+    if (txData.length > 1) {
+      const txPts = txData.map(d => `${sx(new Date(d.t).getTime()).toFixed(1)},${sy(d.v).toFixed(1)}`).join(' ');
+      svg += `<polyline points="${txPts}" fill="none" stroke="var(--danger, #e74c3c)" stroke-width="1.5"/>`;
+      // Direct label at last point
+      const lastTx = txData[txData.length - 1];
+      const lx = sx(new Date(lastTx.t).getTime());
+      const ly = sy(lastTx.v);
+      // Offset label up if RX label would overlap (within 12px)
+      const lastRx = rxData.length > 1 ? rxData[rxData.length - 1] : null;
+      const rxLy = lastRx ? sy(lastRx.v) : Infinity;
+      const txLabelY = (Math.abs(ly - rxLy) < 12) ? ly - 8 : ly + 3;
+      svg += `<text x="${(lx + 4).toFixed(1)}" y="${txLabelY.toFixed(1)}" font-size="9" fill="var(--danger, #e74c3c)">TX ${lastTx.v.toFixed(1)}%</text>`;
+    }
+
+    // RX line (blue)
+    if (rxData.length > 1) {
+      const rxPts = rxData.map(d => `${sx(new Date(d.t).getTime()).toFixed(1)},${sy(d.v).toFixed(1)}`).join(' ');
+      svg += `<polyline points="${rxPts}" fill="none" stroke="var(--info, #3498db)" stroke-width="1.5"/>`;
+      // Direct label at last point
+      const lastRx = rxData[rxData.length - 1];
+      const lx = sx(new Date(lastRx.t).getTime());
+      const ly = sy(lastRx.v);
+      // Offset label down if TX label is nearby
+      const lastTx = txData.length > 1 ? txData[txData.length - 1] : null;
+      const txLy = lastTx ? sy(lastTx.v) : -Infinity;
+      const rxLabelY = (Math.abs(ly - txLy) < 12) ? ly + 12 : ly + 3;
+      svg += `<text x="${(lx + 4).toFixed(1)}" y="${rxLabelY.toFixed(1)}" font-size="9" fill="var(--info, #3498db)">RX ${lastRx.v.toFixed(1)}%</text>`;
+    }
+
+    // X-axis labels
+    const allData = txData.length >= rxData.length ? txData : rxData;
+    svg += rfXAxisLabels(allData, sx, h, pad);
+
+    svg += '</svg>';
+    return svg;
+  }
+
+  // Error rate chart: recv_error_rate line
+  function rfErrorRateChart(errData, w, h, reboots, sharedMinT, sharedMaxT) {
+    const pad = { top: 20, right: 50, bottom: 30, left: 55 };
+    const cw = w - pad.left - pad.right;
+    const ch = h - pad.top - pad.bottom;
+    const minT = sharedMinT, maxT = sharedMaxT;
+    const rangeT = maxT - minT || 1;
+
+    const values = errData.map(d => d.v);
+    const maxV = Math.max(...values, 1); // at least 1% scale
+    const rangeV = maxV || 1;
+
+    const sx = t => pad.left + ((t - minT) / rangeT) * cw;
+    const sy = v => pad.top + ch - (v / rangeV) * ch;
+
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Error rate chart"><title>Error Rate</title>`;
+
+    // Chart title
+    svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">Error Rate %</text>`;
+
+    // Y-axis
+    const yTicks = 4;
+    for (let i = 0; i <= yTicks; i++) {
+      const v = (rangeV * i / yTicks);
+      const y = sy(v);
+      svg += `<text x="${pad.left - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-muted)">${v.toFixed(1)}</text>`;
+      svg += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w - pad.right}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="0.3"/>`;
+    }
+
+    // Reboot markers
+    svg += rfRebootMarkers(reboots, sx, pad, h, w);
+
+    // Error rate line
+    const pts = errData.map(d => `${sx(new Date(d.t).getTime()).toFixed(1)},${sy(d.v).toFixed(1)}`).join(' ');
+    svg += `<polyline points="${pts}" fill="none" stroke="var(--warning, #f39c12)" stroke-width="1.5"/>`;
+
+    // Direct label at last point
+    const last = errData[errData.length - 1];
+    const lx = sx(new Date(last.t).getTime());
+    const ly = sy(last.v);
+    svg += `<text x="${(lx + 4).toFixed(1)}" y="${(ly + 3).toFixed(1)}" font-size="9" fill="var(--warning, #f39c12)">${last.v.toFixed(2)}%</text>`;
+
+    // X-axis labels
+    svg += rfXAxisLabels(errData, sx, h, pad);
+
+    svg += '</svg>';
+    return svg;
+  }
+
+  // Battery voltage chart
+  function rfBatteryChart(battData, w, h, reboots, sharedMinT, sharedMaxT) {
+    const pad = { top: 20, right: 50, bottom: 30, left: 55 };
+    const cw = w - pad.left - pad.right;
+    const ch = h - pad.top - pad.bottom;
+    const minT = sharedMinT, maxT = sharedMaxT;
+    const rangeT = maxT - minT || 1;
+
+    const values = battData.map(d => d.v);
+    const minV = Math.min(...values);
+    const maxV = Math.max(...values);
+    const rangeV = maxV - minV || 100; // at least 100mV range
+
+    const sx = t => pad.left + ((t - minT) / rangeT) * cw;
+    const sy = v => pad.top + ch - ((v - minV) / rangeV) * ch;
+
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Battery voltage chart"><title>Battery</title>`;
+
+    // Chart title
+    svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">Battery</text>`;
+
+    // Y-axis (in volts)
+    const yTicks = 4;
+    for (let i = 0; i <= yTicks; i++) {
+      const v = minV + (rangeV * i / yTicks);
+      const y = sy(v);
+      svg += `<text x="${pad.left - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-muted)">${(v/1000).toFixed(2)}V</text>`;
+      svg += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w - pad.right}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="0.3"/>`;
+    }
+
+    // Low battery reference line at 3.3V
+    const lowBattMv = 3300;
+    if (lowBattMv >= minV && lowBattMv <= maxV) {
+      const y = sy(lowBattMv);
+      svg += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w - pad.right}" y2="${y.toFixed(1)}" stroke="var(--warning, #f39c12)" stroke-width="0.5" stroke-dasharray="4,2"/>`;
+      svg += `<text x="${w - pad.right + 2}" y="${(y + 3).toFixed(1)}" font-size="8" fill="var(--warning, #f39c12)">3.3V low</text>`;
+    }
+
+    // Reboot markers
+    svg += rfRebootMarkers(reboots, sx, pad, h, w);
+
+    // Battery line
+    const pts = battData.map(d => `${sx(new Date(d.t).getTime()).toFixed(1)},${sy(d.v).toFixed(1)}`).join(' ');
+    svg += `<polyline points="${pts}" fill="none" stroke="var(--success, #27ae60)" stroke-width="1.5"/>`;
+
+    // Direct label at last point
+    const last = battData[battData.length - 1];
+    const lx = sx(new Date(last.t).getTime());
+    const ly = sy(last.v);
+    svg += `<text x="${(lx + 4).toFixed(1)}" y="${(ly + 3).toFixed(1)}" font-size="9" fill="var(--success, #27ae60)">${(last.v/1000).toFixed(2)}V</text>`;
+
+    // X-axis labels
+    svg += rfXAxisLabels(battData, sx, h, pad);
+
+    svg += '</svg>';
+    return svg;
+  }
+
+  function rfNFLineChart(data, w, h, reboots, sharedMinT, sharedMaxT) {
+    reboots = reboots || [];
+    const pad = { top: 20, right: 40, bottom: 30, left: 55 };
+    const cw = w - pad.left - pad.right;
+    const ch = h - pad.top - pad.bottom;
+
+    const values = data.map(d => d.v);
+    const minT = sharedMinT != null ? sharedMinT : Math.min(...data.map(d => new Date(d.t).getTime()));
+    const maxT = sharedMaxT != null ? sharedMaxT : Math.max(...data.map(d => new Date(d.t).getTime()));
+    const minV = Math.min(...values);
+    const maxV = Math.max(...values);
+    const rangeV = maxV - minV || 1;
+    const rangeT = maxT - minT || 1;
+
+    const sx = t => pad.left + ((t - minT) / rangeT) * cw;
+    const sy = v => pad.top + ch - ((v - minV) / rangeV) * ch;
+
+    const pts = data.map(d => `${sx(new Date(d.t).getTime()).toFixed(1)},${sy(d.v).toFixed(1)}`).join(' ');
+
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Noise floor line chart"><title>Noise floor over time</title>`;
+
+    // Chart title
+    svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">Noise Floor dBm</text>`;
+
+    // Reference lines
+    const refLines = [-100, -85];
+    const refLabels = ['-100 warning', '-85 critical'];
+    refLines.forEach((ref, i) => {
+      if (ref >= minV && ref <= maxV) {
+        const y = sy(ref);
+        svg += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w - pad.right}" y2="${y.toFixed(1)}" stroke="var(--text-muted)" stroke-width="0.5" stroke-dasharray="4,2"/>`;
+        svg += `<text x="${w - pad.right + 2}" y="${(y + 3).toFixed(1)}" font-size="9" fill="var(--text-muted)">${refLabels[i]}</text>`;
+      }
+    });
+
+    // Y-axis labels
+    const yTicks = 5;
+    for (let i = 0; i <= yTicks; i++) {
+      const v = minV + (rangeV * i / yTicks);
+      const y = sy(v);
+      svg += `<text x="${pad.left - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-muted)">${v.toFixed(0)}</text>`;
+      svg += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w - pad.right}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="0.3"/>`;
+    }
+
+    // Reboot markers
+    svg += rfRebootMarkers(reboots, sx, pad, h, w);
+
+    // X-axis labels
+    svg += rfXAxisLabels(data, sx, h, pad);
+
+    // Data polyline
+    svg += `<polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>`;
+
+    // Direct labels: min and max points
+    const times = data.map(d => new Date(d.t).getTime());
+    const maxIdx = values.indexOf(maxV);
+    const minIdx = values.indexOf(minV);
+    svg += `<circle cx="${sx(times[maxIdx]).toFixed(1)}" cy="${sy(maxV).toFixed(1)}" r="3" fill="var(--danger, red)"/>`;
+    svg += `<text x="${sx(times[maxIdx]).toFixed(1)}" y="${(sy(maxV) - 6).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--danger, red)">${maxV.toFixed(1)}</text>`;
+    svg += `<circle cx="${sx(times[minIdx]).toFixed(1)}" cy="${sy(minV).toFixed(1)}" r="3" fill="var(--success, green)"/>`;
+    svg += `<text x="${sx(times[minIdx]).toFixed(1)}" y="${(sy(minV) + 14).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--success, green)">${minV.toFixed(1)}</text>`;
+
+    // Y-axis label
+    svg += `<text x="12" y="${(h / 2)}" text-anchor="middle" font-size="10" fill="var(--text-muted)" transform="rotate(-90,12,${h/2})">dBm</text>`;
+
+    svg += '</svg>';
+    return svg;
   }
 
   registerPage('analytics', { init, destroy });

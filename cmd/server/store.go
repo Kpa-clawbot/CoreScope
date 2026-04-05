@@ -41,14 +41,16 @@ type StoreTx struct {
 	PathJSON     string
 	Direction    string
 	ResolvedPath []*string // resolved path from best observation
-	LatestSeen string // max observation timestamp (or FirstSeen if no observations)
+	LatestSeen           string // max observation timestamp (or FirstSeen if no observations)
+	UniqueObserverCount  int    // cached count of distinct observer IDs
 	// Cached parsed fields (set once, read many)
 	parsedPath    []string               // cached parsePathJSON result
 	pathParsed    bool                    // whether parsedPath has been set
 	decodedOnce   sync.Once              // guards parsedDecoded
 	parsedDecoded map[string]interface{} // cached json.Unmarshal of DecodedJSON
 	// Dedup map: "observerID|pathJSON" → true for O(1) duplicate checks
-	obsKeys map[string]bool
+	obsKeys     map[string]bool
+	observerSet map[string]bool // unique observer IDs (for UniqueObserverCount)
 }
 
 // StoreObs is a lean in-memory observation (no duplication of transmission fields).
@@ -77,10 +79,6 @@ func (tx *StoreTx) ParsedDecoded() map[string]interface{} {
 	return tx.parsedDecoded
 }
 
-// distRebuildInterval is the minimum time between distance index rebuilds
-// to avoid hot-looping on busy meshes.
-const distRebuildInterval = 30 * time.Second
-
 // PacketStore holds all transmissions in memory with indexes for fast queries.
 type PacketStore struct {
 	mu            sync.RWMutex
@@ -89,9 +87,12 @@ type PacketStore struct {
 	byHash        map[string]*StoreTx        // hash → *StoreTx
 	byTxID        map[int]*StoreTx           // transmission_id → *StoreTx
 	byObsID       map[int]*StoreObs          // observation_id → *StoreObs
+	maxTxID       int                        // highest transmission_id in store
+	maxObsID      int                        // highest observation_id in store
 	byObserver    map[string][]*StoreObs     // observer_id → observations
 	byNode        map[string][]*StoreTx      // pubkey → transmissions
 	nodeHashes    map[string]map[string]bool // pubkey → Set<hash>
+	byPathHop     map[string][]*StoreTx      // lowercase hop/pubkey → transmissions with that hop in path
 	byPayloadType map[int][]*StoreTx         // payload_type → transmissions
 	loaded        bool
 	totalObs      int
@@ -115,15 +116,20 @@ type PacketStore struct {
 	pendingInv      *cacheInvalidation // accumulated dirty flags during cooldown
 	invCooldown     time.Duration      // minimum time between invalidations
 	// Short-lived cache for QueryGroupedPackets (avoids repeated full sort)
-	groupedCacheMu  sync.Mutex
-	groupedCacheKey string
-	groupedCacheExp time.Time
-	groupedCacheRes *PacketResult
+	groupedCacheMu    sync.Mutex
+	groupedCacheKey   string
+	groupedCacheExp   time.Time
+	groupedCacheTxs   []*StoreTx // sorted by LatestSeen DESC
+	groupedCacheTotal int
 	// Short-lived cache for GetChannels (avoids repeated full scan + JSON unmarshal)
 	channelsCacheMu  sync.Mutex
 	channelsCacheKey string
 	channelsCacheExp time.Time
 	channelsCacheRes []map[string]interface{}
+	// Cached region → observer ID mapping (30s TTL, avoids repeated DB queries)
+	regionObsMu        sync.Mutex
+	regionObsCache     map[string]map[string]bool
+	regionObsCacheTime time.Time
 	// Cached node list + prefix map (rebuilt on demand, shared across analytics)
 	nodeCache     []nodeInfo
 	nodePM        *prefixMap
@@ -131,14 +137,13 @@ type PacketStore struct {
 	// Precomputed subpath index: raw comma-joined hops → occurrence count.
 	// Built during Load(), incrementally updated on ingest. Avoids full
 	// packet iteration at query time (O(unique_subpaths) vs O(total_packets)).
-	spIndex      map[string]int // "hop1,hop2" → count
-	spTotalPaths int            // transmissions with paths >= 2 hops
+	spIndex      map[string]int        // "hop1,hop2" → count
+	spTxIndex    map[string][]*StoreTx // "hop1,hop2" → transmissions containing this subpath
+	spTotalPaths int                   // transmissions with paths >= 2 hops
 	// Precomputed distance analytics: hop distances and path totals
 	// computed during Load() and incrementally updated on ingest.
 	distHops  []distHopRecord
 	distPaths []distPathRecord
-	distDirty bool      // set when paths change; cleared after rebuild
-	distLast  time.Time // last time distance index was rebuilt
 
 	// Cached GetNodeHashSizeInfo result — recomputed at most once every 15s
 	hashSizeInfoMu    sync.Mutex
@@ -206,6 +211,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig) *PacketStore {
 		byObsID:       make(map[int]*StoreObs, 65536),
 		byObserver:    make(map[string][]*StoreObs),
 		byNode:        make(map[string][]*StoreTx),
+		byPathHop:     make(map[string][]*StoreTx),
 		nodeHashes:    make(map[string]map[string]bool),
 		byPayloadType: make(map[int][]*StoreTx),
 		rfCache:       make(map[string]*cachedResult),
@@ -220,6 +226,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig) *PacketStore {
 		collisionCacheTTL: 60 * time.Second,
 		invCooldown:       10 * time.Second,
 		spIndex:       make(map[string]int, 4096),
+		spTxIndex:     make(map[string][]*StoreTx, 4096),
 		advertPubkeys: make(map[string]int),
 	}
 	if cfg != nil {
@@ -301,10 +308,14 @@ func (s *PacketStore) Load() error {
 				PayloadType: nullIntPtr(payloadType),
 				DecodedJSON: nullStrVal(decodedJSON),
 				obsKeys:     make(map[string]bool),
+				observerSet: make(map[string]bool),
 			}
 			s.byHash[hashStr] = tx
 			s.packets = append(s.packets, tx)
 			s.byTxID[txID] = tx
+			if txID > s.maxTxID {
+				s.maxTxID = txID
+			}
 			s.indexByNode(tx)
 			if tx.PayloadType != nil {
 				pt := *tx.PayloadType
@@ -340,12 +351,19 @@ func (s *PacketStore) Load() error {
 
 			tx.Observations = append(tx.Observations, obs)
 			tx.obsKeys[dk] = true
+			if obs.ObserverID != "" && !tx.observerSet[obs.ObserverID] {
+				tx.observerSet[obs.ObserverID] = true
+				tx.UniqueObserverCount++
+			}
 			tx.ObservationCount++
 			if obs.Timestamp > tx.LatestSeen {
 				tx.LatestSeen = obs.Timestamp
 			}
 
 			s.byObsID[oid] = obs
+			if oid > s.maxObsID {
+				s.maxObsID = oid
+			}
 
 			if obsIDStr != "" {
 				s.byObserver[obsIDStr] = append(s.byObserver[obsIDStr], obs)
@@ -363,9 +381,11 @@ func (s *PacketStore) Load() error {
 	// Build precomputed subpath index for O(1) analytics queries
 	s.buildSubpathIndex()
 
+	// Build path-hop index for O(1) node path lookups
+	s.buildPathHopIndex()
+
 	// Precompute distance analytics (hop distances, path totals)
 	s.buildDistanceIndex()
-	s.distLast = time.Now()
 
 	s.loaded = true
 	elapsed := time.Since(t0)
@@ -514,7 +534,7 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	packets := make([]map[string]interface{}, 0, pageSize)
 	if q.Order == "ASC" {
 		for _, tx := range results[start : start+pageSize] {
-			packets = append(packets, txToMap(tx))
+			packets = append(packets, txToMap(tx, q.ExpandObservations))
 		}
 	} else {
 		// DESC: newest items are at the tail; page 0 = last pageSize items reversed
@@ -524,7 +544,7 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 			startIdx = 0
 		}
 		for i := endIdx - 1; i >= startIdx; i-- {
-			packets = append(packets, txToMap(results[i]))
+			packets = append(packets, txToMap(results[i], q.ExpandObservations))
 		}
 	}
 	return &PacketResult{Packets: packets, Total: total}
@@ -549,77 +569,37 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 
 	// Return cached sorted list if still fresh (3s TTL)
 	s.groupedCacheMu.Lock()
-	if s.groupedCacheRes != nil && s.groupedCacheKey == cacheKey && time.Now().Before(s.groupedCacheExp) {
-		cached := s.groupedCacheRes
+	if s.groupedCacheTxs != nil && s.groupedCacheKey == cacheKey && time.Now().Before(s.groupedCacheExp) {
+		cachedTxs := s.groupedCacheTxs
+		cachedTotal := s.groupedCacheTotal
 		s.groupedCacheMu.Unlock()
-		return pagePacketResult(cached, q.Offset, q.Limit)
+		return groupedTxsToPage(cachedTxs, cachedTotal, q.Offset, q.Limit)
 	}
 	s.groupedCacheMu.Unlock()
 
-	// Build entries under read lock (observer scan needs lock), sort outside it.
-	type groupEntry struct {
-		latest map[string]interface{}
-		ts     string
-	}
-	var entries []groupEntry
-
+	// Collect StoreTx pointers under read lock; sort outside it.
 	s.mu.RLock()
 	results := s.filterPackets(q)
-	entries = make([]groupEntry, 0, len(results))
-	for _, tx := range results {
-		observerCount := 0
-		seen := make(map[string]bool)
-		for _, obs := range tx.Observations {
-			if obs.ObserverID != "" && !seen[obs.ObserverID] {
-				seen[obs.ObserverID] = true
-				observerCount++
-			}
-		}
-		entries = append(entries, groupEntry{
-			ts: tx.LatestSeen,
-			latest: map[string]interface{}{
-				"hash":              strOrNil(tx.Hash),
-				"first_seen":        strOrNil(tx.FirstSeen),
-				"count":             tx.ObservationCount,
-				"observer_count":    observerCount,
-				"observation_count": tx.ObservationCount,
-				"latest":            strOrNil(tx.LatestSeen),
-				"observer_id":       strOrNil(tx.ObserverID),
-				"observer_name":     strOrNil(tx.ObserverName),
-				"path_json":         strOrNil(tx.PathJSON),
-				"payload_type":      intPtrOrNil(tx.PayloadType),
-				"route_type":        intPtrOrNil(tx.RouteType),
-				"raw_hex":           strOrNil(tx.RawHex),
-				"decoded_json":      strOrNil(tx.DecodedJSON),
-				"snr":               floatPtrOrNil(tx.SNR),
-				"rssi":              floatPtrOrNil(tx.RSSI),
-			},
-		})
-		if tx.ResolvedPath != nil {
-			entries[len(entries)-1].latest["resolved_path"] = tx.ResolvedPath
-		}
-	}
+	txs := make([]*StoreTx, len(results))
+	copy(txs, results)
 	s.mu.RUnlock()
 
-	// Sort outside the lock — only touches our local slice.
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].ts > entries[j].ts
+	total := len(txs)
+
+	// Full sort by LatestSeen DESC so the cached slice supports all page offsets.
+	sort.Slice(txs, func(i, j int) bool {
+		return txs[i].LatestSeen > txs[j].LatestSeen
 	})
 
-	packets := make([]map[string]interface{}, len(entries))
-	for i, e := range entries {
-		packets[i] = e.latest
-	}
-
-	full := &PacketResult{Packets: packets, Total: len(packets)}
-
+	// Cache the sorted StoreTx slice (not maps) — lightweight and reusable for any page.
 	s.groupedCacheMu.Lock()
-	s.groupedCacheRes = full
+	s.groupedCacheTxs = txs
+	s.groupedCacheTotal = total
 	s.groupedCacheKey = cacheKey
 	s.groupedCacheExp = time.Now().Add(3 * time.Second)
 	s.groupedCacheMu.Unlock()
 
-	return pagePacketResult(full, q.Offset, q.Limit)
+	return groupedTxsToPage(txs, total, q.Offset, q.Limit)
 }
 
 // pagePacketResult returns a window of a PacketResult without re-allocating the slice.
@@ -633,6 +613,46 @@ func pagePacketResult(r *PacketResult, offset, limit int) *PacketResult {
 		end = total
 	}
 	return &PacketResult{Packets: r.Packets[offset:end], Total: total}
+}
+
+// groupedTxsToPage builds map representations only for the requested page of sorted StoreTx pointers.
+// This avoids allocating maps for all 30K+ transmissions when only 50 are needed.
+func groupedTxsToPage(txs []*StoreTx, total, offset, limit int) *PacketResult {
+	if offset >= len(txs) {
+		return &PacketResult{Packets: []map[string]interface{}{}, Total: total}
+	}
+	end := offset + limit
+	if end > len(txs) {
+		end = len(txs)
+	}
+	page := txs[offset:end]
+
+	packets := make([]map[string]interface{}, len(page))
+	for i, tx := range page {
+		m := map[string]interface{}{
+			"hash":              strOrNil(tx.Hash),
+			"first_seen":        strOrNil(tx.FirstSeen),
+			"count":             tx.ObservationCount,
+			"observer_count":    tx.UniqueObserverCount,
+			"observation_count": tx.ObservationCount,
+			"latest":            strOrNil(tx.LatestSeen),
+			"observer_id":       strOrNil(tx.ObserverID),
+			"observer_name":     strOrNil(tx.ObserverName),
+			"path_json":         strOrNil(tx.PathJSON),
+			"payload_type":      intPtrOrNil(tx.PayloadType),
+			"route_type":        intPtrOrNil(tx.RouteType),
+			"raw_hex":           strOrNil(tx.RawHex),
+			"decoded_json":      strOrNil(tx.DecodedJSON),
+			"snr":               floatPtrOrNil(tx.SNR),
+			"rssi":              floatPtrOrNil(tx.RSSI),
+		}
+		if tx.ResolvedPath != nil {
+			m["resolved_path"] = tx.ResolvedPath
+		}
+		packets[i] = m
+	}
+
+	return &PacketResult{Packets: packets, Total: total}
 }
 
 // GetStoreStats returns aggregate counts (packet data from memory, node/observer from DB).
@@ -649,15 +669,42 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 	}
 
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
-	s.db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE last_seen > ?", sevenDaysAgo).Scan(&st.TotalNodes)
-	s.db.conn.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&st.TotalNodesAllTime)
-	s.db.conn.QueryRow("SELECT COUNT(*) FROM observers").Scan(&st.TotalObservers)
-
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
-	s.db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneHourAgo).Scan(&st.PacketsLastHour)
-
 	oneDayAgo := time.Now().Add(-24 * time.Hour).Unix()
-	s.db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneDayAgo).Scan(&st.PacketsLast24h)
+
+	// Run node/observer counts and observation counts concurrently (2 queries instead of 5).
+	var wg sync.WaitGroup
+	var nodeErr, obsErr error
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		nodeErr = s.db.conn.QueryRow(
+			`SELECT
+				(SELECT COUNT(*) FROM nodes WHERE last_seen > ?) AS active_nodes,
+				(SELECT COUNT(*) FROM nodes) AS all_nodes,
+				(SELECT COUNT(*) FROM observers) AS observers`,
+			sevenDaysAgo,
+		).Scan(&st.TotalNodes, &st.TotalNodesAllTime, &st.TotalObservers)
+	}()
+	go func() {
+		defer wg.Done()
+		obsErr = s.db.conn.QueryRow(
+			`SELECT
+				COALESCE(SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), 0)
+			FROM observations WHERE timestamp > ?`,
+			oneHourAgo, oneDayAgo, oneDayAgo,
+		).Scan(&st.PacketsLastHour, &st.PacketsLast24h)
+	}()
+	wg.Wait()
+
+	if nodeErr != nil {
+		return st, nodeErr
+	}
+	if obsErr != nil {
+		return st, obsErr
+	}
 
 	return st, nil
 }
@@ -672,6 +719,7 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 	obsIdx := len(s.byObsID)
 	observerIdx := len(s.byObserver)
 	nodeIdx := len(s.byNode)
+	pathHopIdx := len(s.byPathHop)
 	ptIdx := len(s.byPayloadType)
 
 	// Distinct advert pubkey count — precomputed incrementally (see trackAdvertPubkey).
@@ -699,6 +747,7 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 			"byObsID":          obsIdx,
 			"byObserver":       observerIdx,
 			"byNode":           nodeIdx,
+			"byPathHop":        pathHopIdx,
 			"byPayloadType":    ptIdx,
 			"advertByObserver": advertByObsCount,
 		},
@@ -879,7 +928,7 @@ func (s *PacketStore) GetTransmissionByID(id int) map[string]interface{} {
 	if tx == nil {
 		return nil
 	}
-	return txToMap(tx)
+	return txToMap(tx, true)
 }
 
 // GetPacketByHash returns a transmission by content hash.
@@ -891,7 +940,7 @@ func (s *PacketStore) GetPacketByHash(hash string) map[string]interface{} {
 	if tx == nil {
 		return nil
 	}
-	return txToMap(tx)
+	return txToMap(tx, true)
 }
 
 // GetPacketByID returns an observation (enriched with transmission fields) by observation ID.
@@ -961,29 +1010,28 @@ func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int,
 		resolved[i] = s.db.resolveNodePubkey(pk)
 	}
 
+	// Use byNode index instead of scanning all packets (O(indexed) vs O(all×pubkeys×json)).
+	hashSet := make(map[string]bool)
 	var filtered []*StoreTx
-	for _, tx := range s.packets {
-		if tx.DecodedJSON == "" {
-			continue
-		}
-		match := false
-		for _, pk := range resolved {
-			if strings.Contains(tx.DecodedJSON, pk) {
-				match = true
-				break
+	for _, pk := range resolved {
+		for _, tx := range s.byNode[pk] {
+			if hashSet[tx.Hash] {
+				continue
 			}
+			if since != "" && tx.FirstSeen < since {
+				continue
+			}
+			if until != "" && tx.FirstSeen > until {
+				continue
+			}
+			hashSet[tx.Hash] = true
+			filtered = append(filtered, tx)
 		}
-		if !match {
-			continue
-		}
-		if since != "" && tx.FirstSeen < since {
-			continue
-		}
-		if until != "" && tx.FirstSeen > until {
-			continue
-		}
-		filtered = append(filtered, tx)
 	}
+	// Sort oldest-first to match pagination expectations (same as s.packets order).
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].FirstSeen < filtered[j].FirstSeen
+	})
 
 	total := len(filtered)
 
@@ -1150,10 +1198,14 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				PayloadType: r.payloadType,
 				DecodedJSON: r.decodedJSON,
 				obsKeys:     make(map[string]bool),
+				observerSet: make(map[string]bool),
 			}
 			s.byHash[r.hash] = tx
 			s.packets = append(s.packets, tx) // oldest-first; new items go to tail
 			s.byTxID[r.txID] = tx
+			if r.txID > s.maxTxID {
+				s.maxTxID = r.txID
+			}
 			s.indexByNode(tx)
 			if tx.PayloadType != nil {
 				pt := *tx.PayloadType
@@ -1175,6 +1227,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			dk := r.observerID + "|" + r.pathJSON
 			if tx.obsKeys == nil {
 				tx.obsKeys = make(map[string]bool)
+				tx.observerSet = make(map[string]bool)
 			}
 			if tx.obsKeys[dk] {
 				continue
@@ -1201,11 +1254,18 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 
 			tx.Observations = append(tx.Observations, obs)
 			tx.obsKeys[dk] = true
+			if obs.ObserverID != "" && !tx.observerSet[obs.ObserverID] {
+				tx.observerSet[obs.ObserverID] = true
+				tx.UniqueObserverCount++
+			}
 			tx.ObservationCount++
 			if obs.Timestamp > tx.LatestSeen {
 				tx.LatestSeen = obs.Timestamp
 			}
 			s.byObsID[oid] = obs
+			if oid > s.maxObsID {
+				s.maxObsID = oid
+			}
 			if r.observerID != "" {
 				s.byObserver[r.observerID] = append(s.byObserver[r.observerID], obs)
 			}
@@ -1220,9 +1280,10 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 
 	// Incrementally update precomputed subpath index with new transmissions
 	for _, tx := range broadcastTxs {
-		if addTxToSubpathIndex(s.spIndex, tx) {
+		if addTxToSubpathIndexFull(s.spIndex, s.spTxIndex, tx) {
 			s.spTotalPaths++
 		}
+		addTxToPathHopIndex(s.byPathHop, tx)
 	}
 
 	// Incrementally update precomputed distance index with new transmissions
@@ -1465,6 +1526,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		dk := r.observerID + "|" + r.pathJSON
 		if tx.obsKeys == nil {
 			tx.obsKeys = make(map[string]bool)
+			tx.observerSet = make(map[string]bool)
 		}
 		if tx.obsKeys[dk] {
 			continue
@@ -1492,12 +1554,19 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 
 		tx.Observations = append(tx.Observations, obs)
 		tx.obsKeys[dk] = true
+		if obs.ObserverID != "" && !tx.observerSet[obs.ObserverID] {
+			tx.observerSet[obs.ObserverID] = true
+			tx.UniqueObserverCount++
+		}
 		tx.ObservationCount++
 		newObs = append(newObs, obs)
 		if obs.Timestamp > tx.LatestSeen {
 			tx.LatestSeen = obs.Timestamp
 		}
 		s.byObsID[r.obsID] = obs
+		if r.obsID > s.maxObsID {
+			s.maxObsID = r.obsID
+		}
 		if r.observerID != "" {
 			s.byObserver[r.observerID] = append(s.byObserver[r.observerID], obs)
 		}
@@ -1548,8 +1617,10 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	// Re-pick best observation for updated transmissions and update subpath index
 	// if the path changed.
 	oldPaths := make(map[int]string, len(updatedTxs))
+	oldResolvedPaths := make(map[int][]*string, len(updatedTxs))
 	for txID, tx := range updatedTxs {
 		oldPaths[txID] = tx.PathJSON
+		oldResolvedPaths[txID] = tx.ResolvedPath
 	}
 	for _, tx := range updatedTxs {
 		pickBestObservation(tx)
@@ -1562,36 +1633,41 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				// Temporarily set parsedPath to old hops for removal.
 				saved, savedFlag := tx.parsedPath, tx.pathParsed
 				tx.parsedPath, tx.pathParsed = oldHops, true
-				if removeTxFromSubpathIndex(s.spIndex, tx) {
+				if removeTxFromSubpathIndexFull(s.spIndex, s.spTxIndex, tx) {
 					s.spTotalPaths--
 				}
 				tx.parsedPath, tx.pathParsed = saved, savedFlag
 			}
+			// Remove old path-hop index entries using old hops + old resolved path.
+			if len(oldHops) > 0 {
+				saved, savedFlag := tx.parsedPath, tx.pathParsed
+				savedRP := tx.ResolvedPath
+				tx.parsedPath, tx.pathParsed = oldHops, true
+				tx.ResolvedPath = oldResolvedPaths[txID]
+				removeTxFromPathHopIndex(s.byPathHop, tx)
+				tx.parsedPath, tx.pathParsed = saved, savedFlag
+				tx.ResolvedPath = savedRP
+			}
 			// pickBestObservation already set pathParsed=false so
 			// addTxToSubpathIndex will re-parse the new path.
-			if addTxToSubpathIndex(s.spIndex, tx) {
+			if addTxToSubpathIndexFull(s.spIndex, s.spTxIndex, tx) {
 				s.spTotalPaths++
 			}
+			addTxToPathHopIndex(s.byPathHop, tx)
 		}
 	}
 
-	// Check if any paths changed (used for both distance rebuild and cache invalidation).
+	// Check if any paths changed (used for distance update and cache invalidation).
 	hasPathChanges := false
+	var changedTxs []*StoreTx
 	for txID, tx := range updatedTxs {
 		if tx.PathJSON != oldPaths[txID] {
 			hasPathChanges = true
-			break
+			changedTxs = append(changedTxs, tx)
 		}
 	}
-
-	// Mark distance index dirty if any paths changed (rebuild is debounced)
-	if hasPathChanges {
-		s.distDirty = true
-	}
-	if s.distDirty && time.Since(s.distLast) > distRebuildInterval {
-		s.buildDistanceIndex()
-		s.distDirty = false
-		s.distLast = time.Now()
+	if len(changedTxs) > 0 {
+		s.updateDistanceIndexForTxs(changedTxs)
 	}
 
 	if len(updatedTxs) > 0 {
@@ -1641,28 +1717,14 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 func (s *PacketStore) MaxTransmissionID() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	maxID := 0
-	for id := range s.byTxID {
-		if id > maxID {
-			maxID = id
-		}
-	}
-	return maxID
+	return s.maxTxID
 }
 
 // MaxObservationID returns the highest observation ID in the store.
 func (s *PacketStore) MaxObservationID() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	maxID := 0
-	for id := range s.byObsID {
-		if id > maxID {
-			maxID = id
-		}
-	}
-	return maxID
+	return s.maxObsID
 }
 
 // --- Internal filter/query helpers ---
@@ -1684,68 +1746,114 @@ func (s *PacketStore) filterPackets(q PacketQuery) []*StoreTx {
 		return s.transmissionsForObserver(q.Observer, nil)
 	}
 
-	results := s.packets
-
+	// Pre-compute filter parameters outside the hot loop.
+	var (
+		filterType  int
+		hasType     bool
+		filterRoute int
+		hasRoute    bool
+		filterHash  string
+		hasSince    = q.Since != ""
+		hasUntil    = q.Until != ""
+	)
 	if q.Type != nil {
-		t := *q.Type
-		results = filterTxSlice(results, func(tx *StoreTx) bool {
-			return tx.PayloadType != nil && *tx.PayloadType == t
-		})
+		hasType = true
+		filterType = *q.Type
 	}
 	if q.Route != nil {
-		r := *q.Route
-		results = filterTxSlice(results, func(tx *StoreTx) bool {
-			return tx.RouteType != nil && *tx.RouteType == r
-		})
-	}
-	if q.Observer != "" {
-		results = s.transmissionsForObserver(q.Observer, results)
+		hasRoute = true
+		filterRoute = *q.Route
 	}
 	if q.Hash != "" {
-		h := strings.ToLower(q.Hash)
-		results = filterTxSlice(results, func(tx *StoreTx) bool {
-			return tx.Hash == h
-		})
+		filterHash = strings.ToLower(q.Hash)
 	}
-	if q.Since != "" {
-		results = filterTxSlice(results, func(tx *StoreTx) bool {
-			return tx.FirstSeen > q.Since
-		})
+
+	// Pre-compute observer set for observer filter.
+	var observerSet map[string]bool
+	if q.Observer != "" {
+		ids := strings.Split(q.Observer, ",")
+		observerSet = make(map[string]bool, len(ids))
+		for _, id := range ids {
+			observerSet[strings.TrimSpace(id)] = true
+		}
 	}
-	if q.Until != "" {
-		results = filterTxSlice(results, func(tx *StoreTx) bool {
-			return tx.FirstSeen < q.Until
-		})
-	}
+
+	// Pre-compute region observer set.
+	var regionObservers map[string]bool
 	if q.Region != "" {
-		regionObservers := s.resolveRegionObservers(q.Region)
-		if len(regionObservers) > 0 {
-			results = filterTxSlice(results, func(tx *StoreTx) bool {
-				for _, obs := range tx.Observations {
-					if regionObservers[obs.ObserverID] {
-						return true
-					}
+		regionObservers = s.resolveRegionObservers(q.Region)
+		if len(regionObservers) == 0 {
+			return nil
+		}
+	}
+
+	// Pre-compute node filter parameters.
+	var nodePK string
+	hasNode := q.Node != ""
+	if hasNode {
+		nodePK = s.db.resolveNodePubkey(q.Node)
+	}
+
+	// Determine the source slice. Use index-based source when only node
+	// filter is active and an index exists.
+	source := s.packets
+	if hasNode && !hasType && !hasRoute && q.Observer == "" &&
+		filterHash == "" && !hasSince && !hasUntil && q.Region == "" {
+		if indexed, ok := s.byNode[nodePK]; ok {
+			return indexed
+		}
+	}
+	// Single-pass filter: apply all predicates in one scan.
+	results := filterTxSlice(source, func(tx *StoreTx) bool {
+		if hasType && (tx.PayloadType == nil || *tx.PayloadType != filterType) {
+			return false
+		}
+		if hasRoute && (tx.RouteType == nil || *tx.RouteType != filterRoute) {
+			return false
+		}
+		if filterHash != "" && tx.Hash != filterHash {
+			return false
+		}
+		if hasSince && tx.FirstSeen <= q.Since {
+			return false
+		}
+		if hasUntil && tx.FirstSeen >= q.Until {
+			return false
+		}
+		if observerSet != nil {
+			found := false
+			for _, obs := range tx.Observations {
+				if observerSet[obs.ObserverID] {
+					found = true
+					break
 				}
+			}
+			if !found {
 				return false
-			})
-		} else {
-			results = nil
+			}
 		}
-	}
-	if q.Node != "" {
-		pk := s.db.resolveNodePubkey(q.Node)
-		// Use node index if available
-		if indexed, ok := s.byNode[pk]; ok && results == nil {
-			results = indexed
-		} else {
-			results = filterTxSlice(results, func(tx *StoreTx) bool {
-				if tx.DecodedJSON == "" {
-					return false
+		if regionObservers != nil {
+			found := false
+			for _, obs := range tx.Observations {
+				if regionObservers[obs.ObserverID] {
+					found = true
+					break
 				}
-				return strings.Contains(tx.DecodedJSON, pk) || strings.Contains(tx.DecodedJSON, q.Node)
-			})
+			}
+			if !found {
+				return false
+			}
 		}
-	}
+		if hasNode {
+			if tx.DecodedJSON == "" {
+				return false
+			}
+			if !strings.Contains(tx.DecodedJSON, nodePK) && !strings.Contains(tx.DecodedJSON, q.Node) {
+				return false
+			}
+		}
+		return true
+	})
 
 	return results
 }
@@ -1787,15 +1895,42 @@ func (s *PacketStore) transmissionsForObserver(observerIDs string, from []*Store
 }
 
 // resolveRegionObservers returns a set of observer IDs for a given IATA region.
+// Results are cached for 30 seconds to avoid repeated DB queries.
+// Uses its own mutex (regionObsMu) so callers holding s.mu won't deadlock.
 func (s *PacketStore) resolveRegionObservers(region string) map[string]bool {
+	s.regionObsMu.Lock()
+	defer s.regionObsMu.Unlock()
+
+	if s.regionObsCache != nil && time.Since(s.regionObsCacheTime) < 30*time.Second {
+		if m, ok := s.regionObsCache[region]; ok {
+			return m
+		}
+		return s.fetchAndCacheRegionObs(region)
+	}
+	// Cache expired — rebuild.
+	s.regionObsCache = make(map[string]map[string]bool)
+	s.regionObsCacheTime = time.Now()
+
+	// Fetch for the requested region and cache it.
+	return s.fetchAndCacheRegionObs(region)
+}
+
+// fetchAndCacheRegionObs fetches observer IDs for a region from the DB and stores in cache.
+// Caller must hold regionObsMu.
+func (s *PacketStore) fetchAndCacheRegionObs(region string) map[string]bool {
+	if m, ok := s.regionObsCache[region]; ok {
+		return m
+	}
 	ids, err := s.db.GetObserverIdsForRegion(region)
 	if err != nil || len(ids) == 0 {
+		s.regionObsCache[region] = nil
 		return nil
 	}
 	m := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		m[id] = true
 	}
+	s.regionObsCache[region] = m
 	return m
 }
 
@@ -1832,7 +1967,7 @@ func (s *PacketStore) enrichObs(obs *StoreObs) map[string]interface{} {
 // --- Conversion helpers ---
 
 // txToMap converts a StoreTx to the map shape matching scanTransmissionRow output.
-func txToMap(tx *StoreTx) map[string]interface{} {
+func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 	m := map[string]interface{}{
 		"id":                tx.ID,
 		"raw_hex":           strOrNil(tx.RawHex),
@@ -1859,25 +1994,27 @@ func txToMap(tx *StoreTx) map[string]interface{} {
 	} else {
 		m["_parsedPath"] = nil
 	}
-	// Include observations for expand=observations support (stripped by handler when not requested)
-	obs := make([]map[string]interface{}, 0, len(tx.Observations))
-	for _, o := range tx.Observations {
-		om := map[string]interface{}{
-			"id":            o.ID,
-			"observer_id":   strOrNil(o.ObserverID),
-			"observer_name": strOrNil(o.ObserverName),
-			"snr":           floatPtrOrNil(o.SNR),
-			"rssi":          floatPtrOrNil(o.RSSI),
-			"path_json":     strOrNil(o.PathJSON),
-			"timestamp":     strOrNil(o.Timestamp),
-			"direction":     strOrNil(o.Direction),
+	// Only build observation sub-maps when caller requests them (avoids allocations that get stripped)
+	if len(includeObservations) > 0 && includeObservations[0] {
+		obs := make([]map[string]interface{}, 0, len(tx.Observations))
+		for _, o := range tx.Observations {
+			om := map[string]interface{}{
+				"id":            o.ID,
+				"observer_id":   strOrNil(o.ObserverID),
+				"observer_name": strOrNil(o.ObserverName),
+				"snr":           floatPtrOrNil(o.SNR),
+				"rssi":          floatPtrOrNil(o.RSSI),
+				"path_json":     strOrNil(o.PathJSON),
+				"timestamp":     strOrNil(o.Timestamp),
+				"direction":     strOrNil(o.Direction),
+			}
+			if o.ResolvedPath != nil {
+				om["resolved_path"] = o.ResolvedPath
+			}
+			obs = append(obs, om)
 		}
-		if o.ResolvedPath != nil {
-			om["resolved_path"] = o.ResolvedPath
-		}
-		obs = append(obs, om)
+		m["observations"] = obs
 	}
-	m["observations"] = obs
 	return m
 }
 
@@ -1954,6 +2091,12 @@ func txGetParsedPath(tx *StoreTx) []string {
 // increments their counts in the index.  Returns true if the tx contributed
 // (path had ≥ 2 hops).
 func addTxToSubpathIndex(idx map[string]int, tx *StoreTx) bool {
+	return addTxToSubpathIndexFull(idx, nil, tx)
+}
+
+// addTxToSubpathIndexFull is like addTxToSubpathIndex but also appends
+// tx to txIdx for each subpath key (if txIdx is non-nil).
+func addTxToSubpathIndexFull(idx map[string]int, txIdx map[string][]*StoreTx, tx *StoreTx) bool {
 	hops := txGetParsedPath(tx)
 	if len(hops) < 2 {
 		return false
@@ -1961,8 +2104,11 @@ func addTxToSubpathIndex(idx map[string]int, tx *StoreTx) bool {
 	maxL := min(8, len(hops))
 	for l := 2; l <= maxL; l++ {
 		for start := 0; start <= len(hops)-l; start++ {
-			key := strings.Join(hops[start:start+l], ",")
+			key := strings.ToLower(strings.Join(hops[start:start+l], ","))
 			idx[key]++
+			if txIdx != nil {
+				txIdx[key] = append(txIdx[key], tx)
+			}
 		}
 	}
 	return true
@@ -1972,6 +2118,12 @@ func addTxToSubpathIndex(idx map[string]int, tx *StoreTx) bool {
 // decrements counts for all raw subpaths of tx.  Returns true if the tx
 // had a path.
 func removeTxFromSubpathIndex(idx map[string]int, tx *StoreTx) bool {
+	return removeTxFromSubpathIndexFull(idx, nil, tx)
+}
+
+// removeTxFromSubpathIndexFull is like removeTxFromSubpathIndex but also
+// removes tx from txIdx for each subpath key (if txIdx is non-nil).
+func removeTxFromSubpathIndexFull(idx map[string]int, txIdx map[string][]*StoreTx, tx *StoreTx) bool {
 	hops := txGetParsedPath(tx)
 	if len(hops) < 2 {
 		return false
@@ -1979,10 +2131,22 @@ func removeTxFromSubpathIndex(idx map[string]int, tx *StoreTx) bool {
 	maxL := min(8, len(hops))
 	for l := 2; l <= maxL; l++ {
 		for start := 0; start <= len(hops)-l; start++ {
-			key := strings.Join(hops[start:start+l], ",")
+			key := strings.ToLower(strings.Join(hops[start:start+l], ","))
 			idx[key]--
 			if idx[key] <= 0 {
 				delete(idx, key)
+			}
+			if txIdx != nil {
+				txs := txIdx[key]
+				for i, t := range txs {
+					if t == tx {
+						txIdx[key] = append(txs[:i], txs[i+1:]...)
+						break
+					}
+				}
+				if len(txIdx[key]) == 0 {
+					delete(txIdx, key)
+				}
 			}
 		}
 	}
@@ -1993,14 +2157,147 @@ func removeTxFromSubpathIndex(idx map[string]int, tx *StoreTx) bool {
 // Must be called with s.mu held.
 func (s *PacketStore) buildSubpathIndex() {
 	s.spIndex = make(map[string]int, 4096)
+	s.spTxIndex = make(map[string][]*StoreTx, 4096)
 	s.spTotalPaths = 0
 	for _, tx := range s.packets {
-		if addTxToSubpathIndex(s.spIndex, tx) {
+		if addTxToSubpathIndexFull(s.spIndex, s.spTxIndex, tx) {
 			s.spTotalPaths++
 		}
 	}
 	log.Printf("[store] Built subpath index: %d unique raw subpaths from %d paths",
 		len(s.spIndex), s.spTotalPaths)
+}
+
+// buildPathHopIndex scans all packets and populates byPathHop.
+// Must be called with s.mu held.
+func (s *PacketStore) buildPathHopIndex() {
+	s.byPathHop = make(map[string][]*StoreTx, 4096)
+	for _, tx := range s.packets {
+		addTxToPathHopIndex(s.byPathHop, tx)
+	}
+	log.Printf("[store] Built path-hop index: %d unique keys", len(s.byPathHop))
+}
+
+// addTxToPathHopIndex indexes a transmission under each unique hop key
+// (raw lowercase hop + resolved full pubkey from ResolvedPath).
+func addTxToPathHopIndex(idx map[string][]*StoreTx, tx *StoreTx) {
+	hops := txGetParsedPath(tx)
+	if len(hops) == 0 {
+		return
+	}
+	seen := make(map[string]bool, len(hops)*2)
+	for i, hop := range hops {
+		key := strings.ToLower(hop)
+		if !seen[key] {
+			seen[key] = true
+			idx[key] = append(idx[key], tx)
+		}
+		// Also index by resolved pubkey if available
+		if tx.ResolvedPath != nil && i < len(tx.ResolvedPath) && tx.ResolvedPath[i] != nil {
+			pk := *tx.ResolvedPath[i]
+			if !seen[pk] {
+				seen[pk] = true
+				idx[pk] = append(idx[pk], tx)
+			}
+		}
+	}
+}
+
+// removeTxFromPathHopIndex removes a transmission from all its path-hop index entries.
+func removeTxFromPathHopIndex(idx map[string][]*StoreTx, tx *StoreTx) {
+	hops := txGetParsedPath(tx)
+	if len(hops) == 0 {
+		return
+	}
+	seen := make(map[string]bool, len(hops)*2)
+	for i, hop := range hops {
+		key := strings.ToLower(hop)
+		if !seen[key] {
+			seen[key] = true
+			removeTxFromSlice(idx, key, tx)
+		}
+		if tx.ResolvedPath != nil && i < len(tx.ResolvedPath) && tx.ResolvedPath[i] != nil {
+			pk := *tx.ResolvedPath[i]
+			if !seen[pk] {
+				seen[pk] = true
+				removeTxFromSlice(idx, pk, tx)
+			}
+		}
+	}
+}
+
+// removeTxFromSlice removes tx from idx[key] by ID, deleting the key if empty.
+func removeTxFromSlice(idx map[string][]*StoreTx, key string, tx *StoreTx) {
+	list := idx[key]
+	for i, t := range list {
+		if t.ID == tx.ID {
+			idx[key] = append(list[:i], list[i+1:]...)
+			break
+		}
+	}
+	if len(idx[key]) == 0 {
+		delete(idx, key)
+	}
+}
+
+// updateDistanceIndexForTxs removes old distance records for the given
+// transmissions and recomputes them. Builds lookup maps once, amortising the
+// cost across all changed txs in a single ingest cycle. Must be called with
+// s.mu held.
+func (s *PacketStore) updateDistanceIndexForTxs(txs []*StoreTx) {
+	// Remove old records for all changed txs first.
+	removeSet := make(map[*StoreTx]bool, len(txs))
+	for _, tx := range txs {
+		removeSet[tx] = true
+	}
+	n := 0
+	for _, r := range s.distHops {
+		if !removeSet[r.tx] {
+			s.distHops[n] = r
+			n++
+		}
+	}
+	s.distHops = s.distHops[:n]
+	n = 0
+	for _, r := range s.distPaths {
+		if !removeSet[r.tx] {
+			s.distPaths[n] = r
+			n++
+		}
+	}
+	s.distPaths = s.distPaths[:n]
+
+	// Build lookup maps once.
+	allNodes, pm := s.getCachedNodesAndPM()
+	nodeByPk := make(map[string]*nodeInfo, len(allNodes))
+	repeaterSet := make(map[string]bool)
+	for i := range allNodes {
+		nd := &allNodes[i]
+		nodeByPk[nd.PublicKey] = nd
+		if strings.Contains(strings.ToLower(nd.Role), "repeater") {
+			repeaterSet[nd.PublicKey] = true
+		}
+	}
+	hopCache := make(map[string]*nodeInfo)
+	resolveHop := func(hop string) *nodeInfo {
+		if cached, ok := hopCache[hop]; ok {
+			return cached
+		}
+		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
+		hopCache[hop] = r
+		return r
+	}
+
+	// Recompute distance records for each changed tx.
+	for _, tx := range txs {
+		txHops, txPath := computeDistancesForTx(tx, nodeByPk, repeaterSet, resolveHop)
+		if len(txHops) > 0 {
+			s.distHops = append(s.distHops, txHops...)
+		}
+		if txPath != nil {
+			s.distPaths = append(s.distPaths, *txPath)
+		}
+	}
 }
 
 // buildDistanceIndex precomputes haversine distances for all packets.
@@ -2109,47 +2406,36 @@ func (s *PacketStore) EvictStale() int {
 	evicting := s.packets[:cutoffIdx]
 	evictedObs := 0
 
-	// Remove from all indexes
+	// Build sets of evicted IDs for batch removal from secondary indexes
+	evictedTxIDs := make(map[int]struct{}, cutoffIdx)
+	evictedObsIDs := make(map[int]struct{}, cutoffIdx*2)
+	// Track which observer IDs and payload types need filtering
+	affectedObservers := make(map[string]struct{})
+	affectedPayloadTypes := make(map[int]struct{})
+	affectedNodes := make(map[string]struct{})
+
+	// First pass: remove from primary indexes (byHash, byTxID, byObsID),
+	// collect IDs for batch secondary index cleanup, and handle non-index work
 	for _, tx := range evicting {
 		delete(s.byHash, tx.Hash)
 		delete(s.byTxID, tx.ID)
+		evictedTxIDs[tx.ID] = struct{}{}
 
-		// Remove observations from indexes
 		for _, obs := range tx.Observations {
 			delete(s.byObsID, obs.ID)
-			// Remove from byObserver
+			evictedObsIDs[obs.ID] = struct{}{}
 			if obs.ObserverID != "" {
-				obsList := s.byObserver[obs.ObserverID]
-				for i, o := range obsList {
-					if o.ID == obs.ID {
-						s.byObserver[obs.ObserverID] = append(obsList[:i], obsList[i+1:]...)
-						break
-					}
-				}
-				if len(s.byObserver[obs.ObserverID]) == 0 {
-					delete(s.byObserver, obs.ObserverID)
-				}
+				affectedObservers[obs.ObserverID] = struct{}{}
 			}
 			evictedObs++
 		}
 
-		// Remove from byPayloadType
 		s.untrackAdvertPubkey(tx)
 		if tx.PayloadType != nil {
-			pt := *tx.PayloadType
-			ptList := s.byPayloadType[pt]
-			for i, t := range ptList {
-				if t.ID == tx.ID {
-					s.byPayloadType[pt] = append(ptList[:i], ptList[i+1:]...)
-					break
-				}
-			}
-			if len(s.byPayloadType[pt]) == 0 {
-				delete(s.byPayloadType, pt)
-			}
+			affectedPayloadTypes[*tx.PayloadType] = struct{}{}
 		}
 
-		// Remove from byNode and nodeHashes
+		// Remove from nodeHashes and collect affected node keys
 		if tx.DecodedJSON != "" {
 			var decoded map[string]interface{}
 			if json.Unmarshal([]byte(tx.DecodedJSON), &decoded) == nil {
@@ -2161,24 +2447,64 @@ func (s *PacketStore) EvictStale() int {
 								delete(s.nodeHashes, v)
 							}
 						}
-						// Remove tx from byNode
-						nodeList := s.byNode[v]
-						for i, t := range nodeList {
-							if t.ID == tx.ID {
-								s.byNode[v] = append(nodeList[:i], nodeList[i+1:]...)
-								break
-							}
-						}
-						if len(s.byNode[v]) == 0 {
-							delete(s.byNode, v)
-						}
+						affectedNodes[v] = struct{}{}
 					}
 				}
 			}
 		}
 
 		// Remove from subpath index
-		removeTxFromSubpathIndex(s.spIndex, tx)
+		removeTxFromSubpathIndexFull(s.spIndex, s.spTxIndex, tx)
+		// Remove from path-hop index
+		removeTxFromPathHopIndex(s.byPathHop, tx)
+	}
+
+	// Batch-remove from byObserver: single pass per affected observer slice
+	for obsID := range affectedObservers {
+		obsList := s.byObserver[obsID]
+		filtered := obsList[:0]
+		for _, o := range obsList {
+			if _, evicted := evictedObsIDs[o.ID]; !evicted {
+				filtered = append(filtered, o)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(s.byObserver, obsID)
+		} else {
+			s.byObserver[obsID] = filtered
+		}
+	}
+
+	// Batch-remove from byPayloadType: single pass per affected type slice
+	for pt := range affectedPayloadTypes {
+		ptList := s.byPayloadType[pt]
+		filtered := ptList[:0]
+		for _, t := range ptList {
+			if _, evicted := evictedTxIDs[t.ID]; !evicted {
+				filtered = append(filtered, t)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(s.byPayloadType, pt)
+		} else {
+			s.byPayloadType[pt] = filtered
+		}
+	}
+
+	// Batch-remove from byNode: single pass per affected node slice
+	for nodeKey := range affectedNodes {
+		nodeList := s.byNode[nodeKey]
+		filtered := nodeList[:0]
+		for _, t := range nodeList {
+			if _, evicted := evictedTxIDs[t.ID]; !evicted {
+				filtered = append(filtered, t)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(s.byNode, nodeKey)
+		} else {
+			s.byNode[nodeKey] = filtered
+		}
 	}
 
 	// Remove from distance indexes — filter out records referencing evicted txs
@@ -3104,19 +3430,6 @@ func (s *PacketStore) computeAnalyticsRF(region string) map[string]interface{} {
 	}
 
 	// Stats helpers
-	sortedF64 := func(arr []float64) []float64 {
-		c := make([]float64, len(arr))
-		copy(c, arr)
-		sort.Float64s(c)
-		return c
-	}
-	medianF64 := func(arr []float64) float64 {
-		s := sortedF64(arr)
-		if len(s) == 0 {
-			return 0
-		}
-		return s[len(s)/2]
-	}
 	stddevF64 := func(arr []float64, avg float64) float64 {
 		if len(arr) == 0 {
 			return 0
@@ -3176,6 +3489,11 @@ func (s *PacketStore) computeAnalyticsRF(region string) map[string]interface{} {
 		}
 		return m
 	}
+
+	// Sort snrVals and rssiVals once; reuse sorted order for min/max/median
+	// instead of copying+sorting per stat call (#366).
+	sort.Float64s(snrVals)
+	sort.Float64s(rssiVals)
 
 	snrAvg := 0.0
 	if len(snrVals) > 0 {
@@ -3369,19 +3687,20 @@ func (s *PacketStore) computeAnalyticsRF(region string) map[string]interface{} {
 		avgPktSize = sum / len(packetSizes)
 	}
 
+	// snrVals and rssiVals are already sorted — read min/max/median directly.
 	snrStats := map[string]interface{}{"min": 0.0, "max": 0.0, "avg": 0.0, "median": 0.0, "stddev": 0.0}
 	if len(snrVals) > 0 {
 		snrStats = map[string]interface{}{
-			"min": minF64(snrVals), "max": maxF64(snrVals),
-			"avg": snrAvg, "median": medianF64(snrVals),
+			"min": snrVals[0], "max": snrVals[len(snrVals)-1],
+			"avg": snrAvg, "median": snrVals[len(snrVals)/2],
 			"stddev": stddevF64(snrVals, snrAvg),
 		}
 	}
 	rssiStats := map[string]interface{}{"min": 0.0, "max": 0.0, "avg": 0.0, "median": 0.0, "stddev": 0.0}
 	if len(rssiVals) > 0 {
 		rssiStats = map[string]interface{}{
-			"min": minF64(rssiVals), "max": maxF64(rssiVals),
-			"avg": rssiAvg, "median": medianF64(rssiVals),
+			"min": rssiVals[0], "max": rssiVals[len(rssiVals)-1],
+			"avg": rssiAvg, "median": rssiVals[len(rssiVals)/2],
 			"stddev": stddevF64(rssiVals, rssiAvg),
 		}
 	}
@@ -3445,13 +3764,26 @@ type prefixMap struct {
 	m map[string][]nodeInfo
 }
 
+// maxPrefixLen caps prefix map entries. MeshCore path hops use 2–6 char
+// prefixes; 8 gives comfortable headroom while cutting map size from ~31×N
+// entries to ~7×N (+ 1 full-key entry per node for exact-match lookups).
+const maxPrefixLen = 8
+
 func buildPrefixMap(nodes []nodeInfo) *prefixMap {
-	pm := &prefixMap{m: make(map[string][]nodeInfo, len(nodes)*10)}
+	pm := &prefixMap{m: make(map[string][]nodeInfo, len(nodes)*(maxPrefixLen+1))}
 	for _, n := range nodes {
 		pk := strings.ToLower(n.PublicKey)
-		for l := 2; l <= len(pk); l++ {
+		maxLen := maxPrefixLen
+		if maxLen > len(pk) {
+			maxLen = len(pk)
+		}
+		for l := 2; l <= maxLen; l++ {
 			pfx := pk[:l]
 			pm.m[pfx] = append(pm.m[pfx], n)
+		}
+		// Always add full pubkey so exact-match lookups work.
+		if len(pk) > maxPrefixLen {
+			pm.m[pk] = append(pm.m[pk], n)
 		}
 	}
 	return pm
@@ -3478,6 +3810,15 @@ func (s *PacketStore) getCachedNodesAndPM() ([]nodeInfo, *prefixMap) {
 	s.cacheMu.Unlock()
 
 	return nodes, pm
+}
+
+// InvalidateNodeCache forces the next getCachedNodesAndPM call to rebuild.
+func (s *PacketStore) InvalidateNodeCache() {
+	s.cacheMu.Lock()
+	s.nodeCache = nil
+	s.nodePM = nil
+	s.nodeCacheTime = time.Time{}
+	s.cacheMu.Unlock()
 }
 
 func (pm *prefixMap) resolve(hop string) *nodeInfo {
@@ -4656,7 +4997,7 @@ func (s *PacketStore) computeHashCollisions(region string) map[string]interface{
 	// Inconsistent nodes
 	var inconsistentNodes []collisionNode
 	for _, cn := range allCNodes {
-		if cn.HashSizeInconsistent {
+		if cn.HashSizeInconsistent && (cn.Role == "repeater" || cn.Role == "room_server") {
 			inconsistentNodes = append(inconsistentNodes, cn)
 		}
 	}
@@ -4866,14 +5207,23 @@ func (s *PacketStore) GetNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 }
 
 // computeNodeHashSizeInfo scans advert packets to compute per-node hash size data.
+// Only adverts from the last 7 days are considered so that legitimate config
+// changes during testing don't create permanent false positives.
 func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	info := make(map[string]*hashSizeNodeInfo)
 
+	cutoff := time.Now().UTC().Add(-7 * 24 * time.Hour).Format("2006-01-02T15:04:05.000Z")
+
 	adverts := s.byPayloadType[4]
 	for _, tx := range adverts {
+		// Skip adverts older than 7 days to avoid false positives from
+		// historical config changes during testing.
+		if tx.FirstSeen != "" && tx.FirstSeen < cutoff {
+			continue
+		}
 		if tx.RawHex == "" || tx.DecodedJSON == "" {
 			continue
 		}
@@ -5288,24 +5638,24 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	for _, tx := range indexed {
 		hashSet[tx.Hash] = true
 	}
-	var allPkts []*StoreTx
+	var packets []*StoreTx
 	if name != "" {
 		for _, tx := range s.packets {
+			if tx.FirstSeen <= fromISO {
+				continue // Skip old packets early before expensive string matching
+			}
 			if hashSet[tx.Hash] {
-				allPkts = append(allPkts, tx)
+				packets = append(packets, tx)
 			} else if tx.DecodedJSON != "" && (strings.Contains(tx.DecodedJSON, name) || strings.Contains(tx.DecodedJSON, pubkey)) {
-				allPkts = append(allPkts, tx)
+				packets = append(packets, tx)
 			}
 		}
 	} else {
-		allPkts = indexed
-	}
-
-	// Filter by time range
-	var packets []*StoreTx
-	for _, p := range allPkts {
-		if p.FirstSeen > fromISO {
-			packets = append(packets, p)
+		// Filter indexed packets by time range
+		for _, p := range indexed {
+			if p.FirstSeen > fromISO {
+				packets = append(packets, p)
+			}
 		}
 	}
 
@@ -5655,6 +6005,111 @@ func (s *PacketStore) GetAnalyticsSubpaths(region string, minLen, maxLen, limit 
 	return result
 }
 
+// GetAnalyticsSubpathsBulk returns multiple length-range buckets from a single
+// scan of the subpath index, avoiding repeated iterations.
+func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGroup) []map[string]interface{} {
+	// For region queries or when there are few groups, fall back to individual calls
+	// which benefit from per-key caching.
+	if region != "" {
+		results := make([]map[string]interface{}, len(groups))
+		for i, g := range groups {
+			results[i] = s.GetAnalyticsSubpaths(region, g.MinLen, g.MaxLen, g.Limit)
+		}
+		return results
+	}
+
+	// Check if all groups are cached.
+	allCached := true
+	cachedResults := make([]map[string]interface{}, len(groups))
+	s.cacheMu.Lock()
+	for i, g := range groups {
+		cacheKey := fmt.Sprintf("|%d|%d|%d", g.MinLen, g.MaxLen, g.Limit)
+		if cached, ok := s.subpathCache[cacheKey]; ok && time.Now().Before(cached.expiresAt) {
+			cachedResults[i] = cached.data
+		} else {
+			allCached = false
+			break
+		}
+	}
+	if allCached {
+		s.cacheHits += int64(len(groups))
+		s.cacheMu.Unlock()
+		return cachedResults
+	}
+	s.cacheMu.Unlock()
+
+	// Single scan: bucket by hop length into per-group accumulators.
+	s.mu.RLock()
+	_, pm := s.getCachedNodesAndPM()
+	hopCache := make(map[string]*nodeInfo)
+	resolveHop := func(hop string) string {
+		if cached, ok := hopCache[hop]; ok {
+			if cached != nil {
+				return cached.Name
+			}
+			return hop
+		}
+		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
+		hopCache[hop] = r
+		if r != nil {
+			return r.Name
+		}
+		return hop
+	}
+
+	perGroup := make([]map[string]*subpathAccum, len(groups))
+	for i := range groups {
+		perGroup[i] = make(map[string]*subpathAccum)
+	}
+
+	for rawKey, count := range s.spIndex {
+		hops := strings.Split(rawKey, ",")
+		hopLen := len(hops)
+
+		// Resolve hop names once, reuse across groups.
+		var named []string
+		var namedKey string
+		resolved := false
+
+		for gi, g := range groups {
+			if hopLen < g.MinLen || hopLen > g.MaxLen {
+				continue
+			}
+			if !resolved {
+				named = make([]string, hopLen)
+				for i, h := range hops {
+					named[i] = resolveHop(h)
+				}
+				namedKey = strings.Join(named, " → ")
+				resolved = true
+			}
+			entry := perGroup[gi][namedKey]
+			if entry == nil {
+				entry = &subpathAccum{raw: rawKey}
+				perGroup[gi][namedKey] = entry
+			}
+			entry.count += count
+		}
+	}
+	totalPaths := s.spTotalPaths
+	s.mu.RUnlock()
+
+	results := make([]map[string]interface{}, len(groups))
+	for i, g := range groups {
+		results[i] = s.rankSubpaths(perGroup[i], totalPaths, g.Limit)
+	}
+
+	// Cache individual results for future single-key lookups too.
+	s.cacheMu.Lock()
+	for i, g := range groups {
+		cacheKey := fmt.Sprintf("|%d|%d|%d", g.MinLen, g.MaxLen, g.Limit)
+		s.subpathCache[cacheKey] = &cachedResult{data: results[i], expiresAt: time.Now().Add(s.rfCacheTTL)}
+	}
+	s.cacheMu.Unlock()
+
+	return results
+}
+
 // subpathAccum holds a running count for a single named subpath.
 type subpathAccum struct {
 	count int
@@ -5824,40 +6279,21 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 		nodes[i] = entry
 	}
 
+	// Build the subpath key the same way the index does (lowercase, comma-joined)
+	spKey := strings.ToLower(strings.Join(rawHops, ","))
+
+	// Direct lookup instead of scanning all packets
+	matchedTxs := s.spTxIndex[spKey]
+
 	hourBuckets := make([]int, 24)
 	var snrSum, rssiSum float64
 	var snrCount, rssiCount int
 	observers := map[string]int{}
 	parentPaths := map[string]int{}
-	var matchCount int
+	matchCount := len(matchedTxs)
 	var firstSeen, lastSeen string
 
-	for _, tx := range s.packets {
-		hops := txGetParsedPath(tx)
-		if len(hops) < len(rawHops) {
-			continue
-		}
-
-		// Check if rawHops appears as contiguous subsequence
-		found := false
-		for i := 0; i <= len(hops)-len(rawHops); i++ {
-			match := true
-			for j := 0; j < len(rawHops); j++ {
-				if !strings.EqualFold(hops[i+j], rawHops[j]) {
-					match = false
-					break
-				}
-			}
-			if match {
-				found = true
-				break
-			}
-		}
-		if !found {
-			continue
-		}
-
-		matchCount++
+	for _, tx := range matchedTxs {
 		ts := tx.FirstSeen
 		if ts != "" {
 			if firstSeen == "" || ts < firstSeen {
@@ -5866,7 +6302,6 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 			if lastSeen == "" || ts > lastSeen {
 				lastSeen = ts
 			}
-			// Parse hour from timestamp for hourly distribution
 			t, err := time.Parse(time.RFC3339, ts)
 			if err != nil {
 				t, err = time.Parse("2006-01-02 15:04:05", ts)
@@ -5888,6 +6323,7 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 		}
 
 		// Full parent path (resolved)
+		hops := txGetParsedPath(tx)
 		resolved := make([]string, len(hops))
 		for i, h := range hops {
 			r, _, _ := pm.resolveWithContext(h, nil, s.graph)

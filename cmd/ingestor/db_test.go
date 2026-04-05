@@ -1703,3 +1703,182 @@ func TestInsertTransmissionWithScoreAndDirection(t *testing.T) {
 }
 
 func ptrFloat(f float64) *float64 { return &f }
+func ptrInt(i int) *int           { return &i }
+
+func TestRoundToInterval(t *testing.T) {
+	tests := []struct {
+		input    time.Time
+		interval int
+		want     time.Time
+	}{
+		{time.Date(2026, 4, 5, 10, 2, 0, 0, time.UTC), 300, time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC)},
+		{time.Date(2026, 4, 5, 10, 3, 0, 0, time.UTC), 300, time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC)},
+		{time.Date(2026, 4, 5, 10, 2, 30, 0, time.UTC), 300, time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC)},
+		{time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC), 300, time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC)},
+		{time.Date(2026, 4, 5, 10, 7, 29, 0, time.UTC), 300, time.Date(2026, 4, 5, 10, 5, 0, 0, time.UTC)},
+	}
+	for _, tc := range tests {
+		got := RoundToInterval(tc.input, tc.interval)
+		if !got.Equal(tc.want) {
+			t.Errorf("RoundToInterval(%v, %d) = %v, want %v", tc.input, tc.interval, got, tc.want)
+		}
+	}
+}
+
+func TestInsertMetrics(t *testing.T) {
+	store, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	nf := -112.5
+	txAir := 100
+	rxAir := 500
+	recvErr := 3
+	batt := 3720
+	data := &MetricsData{
+		ObserverID: "obs1",
+		NoiseFloor: &nf,
+		TxAirSecs:  &txAir,
+		RxAirSecs:  &rxAir,
+		RecvErrors: &recvErr,
+		BatteryMv:  &batt,
+	}
+
+	if err := store.InsertMetrics(data); err != nil {
+		t.Fatalf("InsertMetrics: %v", err)
+	}
+
+	// Verify insertion
+	var count int
+	store.db.QueryRow("SELECT COUNT(*) FROM observer_metrics WHERE observer_id = 'obs1'").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 row, got %d", count)
+	}
+
+	// Verify values
+	var gotNF float64
+	var gotTx, gotRx, gotErr, gotBatt int
+	store.db.QueryRow("SELECT noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv FROM observer_metrics WHERE observer_id = 'obs1'").Scan(&gotNF, &gotTx, &gotRx, &gotErr, &gotBatt)
+	if gotNF != -112.5 {
+		t.Errorf("noise_floor = %v, want -112.5", gotNF)
+	}
+	if gotTx != 100 {
+		t.Errorf("tx_air_secs = %d, want 100", gotTx)
+	}
+}
+
+func TestInsertMetricsIdempotent(t *testing.T) {
+	store, err := OpenStoreWithInterval(tempDBPath(t), 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	nf := -110.0
+	data := &MetricsData{ObserverID: "obs1", NoiseFloor: &nf}
+
+	// Insert twice — should result in 1 row (INSERT OR REPLACE)
+	store.InsertMetrics(data)
+	nf2 := -108.0
+	data.NoiseFloor = &nf2
+	store.InsertMetrics(data)
+
+	var count int
+	store.db.QueryRow("SELECT COUNT(*) FROM observer_metrics WHERE observer_id = 'obs1'").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 row (idempotent), got %d", count)
+	}
+
+	// Verify the value was replaced
+	var gotNF float64
+	store.db.QueryRow("SELECT noise_floor FROM observer_metrics WHERE observer_id = 'obs1'").Scan(&gotNF)
+	if gotNF != -108.0 {
+		t.Errorf("noise_floor = %v, want -108.0 (replaced)", gotNF)
+	}
+}
+
+func TestInsertMetricsNullFields(t *testing.T) {
+	store, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	nf := -115.0
+	data := &MetricsData{
+		ObserverID: "obs1",
+		NoiseFloor: &nf,
+		// All other fields nil
+	}
+
+	if err := store.InsertMetrics(data); err != nil {
+		t.Fatalf("InsertMetrics with nulls: %v", err)
+	}
+
+	var gotNF sql.NullFloat64
+	var gotTx sql.NullInt64
+	store.db.QueryRow("SELECT noise_floor, tx_air_secs FROM observer_metrics WHERE observer_id = 'obs1'").Scan(&gotNF, &gotTx)
+	if !gotNF.Valid || gotNF.Float64 != -115.0 {
+		t.Errorf("noise_floor = %v, want -115.0", gotNF)
+	}
+	if gotTx.Valid {
+		t.Errorf("tx_air_secs should be NULL, got %v", gotTx.Int64)
+	}
+}
+
+func TestPruneOldMetrics(t *testing.T) {
+	store, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Insert old and new metrics directly
+	oldTs := time.Now().UTC().AddDate(0, 0, -40).Format(time.RFC3339)
+	newTs := time.Now().UTC().Format(time.RFC3339)
+	store.db.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)", "obs1", oldTs, -110.0)
+	store.db.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)", "obs1", newTs, -112.0)
+
+	n, err := store.PruneOldMetrics(30)
+	if err != nil {
+		t.Fatalf("PruneOldMetrics: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("pruned %d rows, want 1", n)
+	}
+
+	var count int
+	store.db.QueryRow("SELECT COUNT(*) FROM observer_metrics").Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 row remaining, got %d", count)
+	}
+}
+
+func TestExtractObserverMetaNewFields(t *testing.T) {
+	msg := map[string]interface{}{
+		"model": "L1",
+		"stats": map[string]interface{}{
+			"noise_floor":  -112.5,
+			"battery_mv":   3720.0,
+			"uptime_secs":  86400.0,
+			"tx_air_secs":  100.0,
+			"rx_air_secs":  500.0,
+			"recv_errors":  3.0,
+		},
+	}
+	meta := extractObserverMeta(msg)
+	if meta == nil {
+		t.Fatal("expected non-nil meta")
+	}
+	if meta.TxAirSecs == nil || *meta.TxAirSecs != 100 {
+		t.Errorf("TxAirSecs = %v, want 100", meta.TxAirSecs)
+	}
+	if meta.RxAirSecs == nil || *meta.RxAirSecs != 500 {
+		t.Errorf("RxAirSecs = %v, want 500", meta.RxAirSecs)
+	}
+	if meta.RecvErrors == nil || *meta.RecvErrors != 3 {
+		t.Errorf("RecvErrors = %v, want 3", meta.RecvErrors)
+	}
+}

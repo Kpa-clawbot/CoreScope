@@ -40,6 +40,21 @@
     clearTimeout(_renderTimer);
     _renderTimer = setTimeout(() => renderTableRows(), 200);
   }
+
+  // Coalesce WS-triggered renders into one per animation frame (#396).
+  // Multiple WS batches arriving within the same frame only trigger a single
+  // renderTableRows() call on the next rAF, preventing rapid full rebuilds.
+  function scheduleWSRender() {
+    _wsRenderDirty = true;
+    if (_wsRafId) return;  // already scheduled
+    _wsRafId = requestAnimationFrame(function () {
+      _wsRafId = null;
+      if (_wsRenderDirty) {
+        _wsRenderDirty = false;
+        renderTableRows();
+      }
+    });
+  }
   const PANEL_WIDTH_KEY = 'meshcore-panel-width';
   const PANEL_CLOSE_HTML = '<button class="panel-close-btn" title="Close detail pane (Esc)">✕</button>';
 
@@ -59,6 +74,8 @@
   let _lastVisibleEnd = -1;       // last rendered end index (for dirty checking)
   let _vsScrollHandler = null;    // scroll listener reference
   let _wsRenderTimer = null;      // debounce timer for WS-triggered renders
+  let _wsRafId = null;            // rAF id for coalescing WS-triggered renders (#396)
+  let _wsRenderDirty = false;     // dirty flag for rAF render coalescing (#396)
   let _observerFilterSet = null;  // cached Set from filters.observer, hoisted above loops (#427)
 
   function closeDetailPanel() {
@@ -461,9 +478,8 @@
           if (packets.length > PACKET_LIMIT) packets.length = PACKET_LIMIT;
         }
         totalCount += filtered.length;
-        // Debounce WS-triggered renders to avoid rapid full rebuilds
-        clearTimeout(_wsRenderTimer);
-        _wsRenderTimer = setTimeout(function () { renderTableRows(); }, 200);
+        // Coalesce WS-triggered renders via rAF (#396)
+        scheduleWSRender();
       });
     });
   }
@@ -474,6 +490,8 @@
     wsHandler = null;
     detachVScrollListener();
     clearTimeout(_wsRenderTimer);
+    if (_wsRafId) { cancelAnimationFrame(_wsRafId); _wsRafId = null; }
+    _wsRenderDirty = false;
     _displayPackets = [];
     _rowCounts = [];
     _rowCountsDirty = false;
@@ -524,7 +542,11 @@
       if (filters.hash) params.set('hash', filters.hash);
       if (filters.node) params.set('node', filters.node);
       if (filters.observer) params.set('observer', filters.observer);
-      params.set('groupByHash', 'true'); // always fetch grouped
+      if (groupByHash) {
+        params.set('groupByHash', 'true');
+      } else {
+        params.set('expand', 'observations');
+      }
 
       const data = await api('/packets?' + params.toString());
       packets = data.packets || [];
@@ -532,20 +554,14 @@
       for (const p of packets) { if (p.hash) hashIndex.set(p.hash, p); }
       totalCount = data.total || packets.length;
 
-      // When ungrouped, fetch observations for all multi-obs packets and flatten
+      // When ungrouped, flatten observations inline (single API call, no N+1)
       if (!groupByHash) {
-        const multiObs = packets.filter(p => (p.observation_count || p.count || 1) > 1);
-        await Promise.all(multiObs.map(async (p) => {
-          try {
-            const d = await api(`/packets/${p.hash}`);
-            if (d?.observations) p._children = d.observations.map(o => clearParsedCache({...d.packet, ...o, _isObservation: true}));
-          } catch {}
-        }));
-        // Flatten: replace grouped packets with individual observations
         const flat = [];
         for (const p of packets) {
-          if (p._children && p._children.length > 1) {
-            for (const c of p._children) flat.push(c);
+          if (p.observations && p.observations.length > 1) {
+            for (const o of p.observations) {
+              flat.push(clearParsedCache({...p, ...o, _isObservation: true, observations: undefined}));
+            }
           } else {
             flat.push(p);
           }
@@ -604,7 +620,7 @@
     } catch (e) {
       console.error('Failed to load packets:', e);
       const tbody = document.getElementById('pktBody');
-      if (tbody) tbody.innerHTML = '<tr><td colspan="10" class="text-center" style="padding:24px;color:var(--error,#ef4444)"><div role="alert" aria-live="polite">Failed to load packets. Please try again.</div></td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="' + _getColCount() + '" class="text-center" style="padding:24px;color:var(--error,#ef4444)"><div role="alert" aria-live="polite">Failed to load packets. Please try again.</div></td></tr>';
     }
   }
 
@@ -873,18 +889,30 @@
     obsSortSel.addEventListener('change', async function () {
       obsSortMode = this.value;
       localStorage.setItem('meshcore-obs-sort', obsSortMode);
-      // For non-observer sorts, fetch children for visible groups that don't have them yet
+      // For non-observer sorts, batch-fetch children for visible groups that don't have them yet
       if (obsSortMode !== SORT_OBSERVER && groupByHash) {
         const toFetch = packets.filter(p => p.hash && !p._children && (p.observation_count || 0) > 1);
-        await Promise.all(toFetch.map(async (p) => {
+        if (toFetch.length > 0) {
+          const hashes = toFetch.map(p => p.hash);
           try {
-            const data = await api(`/packets/${p.hash}`);
-            if (data?.packet && data.observations) {
-              p._children = data.observations.map(o => clearParsedCache({...data.packet, ...o, _isObservation: true}));
-              p._fetchedData = data;
+            const resp = await fetch('/api/packets/observations', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({hashes})
+            });
+            if (resp.ok) {
+              const data = await resp.json();
+              const results = data.results || {};
+              for (const p of toFetch) {
+                const obs = results[p.hash];
+                if (obs && obs.length) {
+                  p._children = obs.map(o => clearParsedCache({...p, ...o, _isObservation: true}));
+                  p._fetchedData = {packet: p, observations: obs};
+                }
+              }
             }
           } catch {}
-        }));
+        }
       }
       // Re-sort all groups with children
       for (const p of packets) {
@@ -1076,7 +1104,7 @@
   }
 
   // Build HTML for a single grouped packet row
-  function buildGroupRowHtml(p) {
+  function buildGroupRowHtml(p, entryIdx = -1) {
     const isExpanded = expandedHashes.has(p.hash);
     let headerObserverId = p.observer_id;
     let headerPathJson = p.path_json;
@@ -1096,7 +1124,10 @@
     const groupSize = p.raw_hex ? Math.floor(p.raw_hex.length / 2) : 0;
     const groupHashBytes = ((parseInt(p.raw_hex?.slice(2, 4), 16) || 0) >> 6) + 1;
     const isSingle = p.count <= 1;
-    let html = `<tr class="${isSingle ? '' : 'group-header'} ${isExpanded ? 'expanded' : ''}" data-hash="${p.hash}" data-action="${isSingle ? 'select-hash' : 'toggle-select'}" data-value="${p.hash}" tabindex="0" role="row">
+    // Channel color highlighting (#271)
+    const _grpDecoded = getParsedDecoded(p) || {};
+    const _grpChanStyle = window.ChannelColors ? window.ChannelColors.getRowStyle(_grpDecoded.type || groupTypeName, _grpDecoded.channel) : '';
+    let html = `<tr class="${isSingle ? '' : 'group-header'} ${isExpanded ? 'expanded' : ''}" data-hash="${p.hash}" data-action="${isSingle ? 'select-hash' : 'toggle-select'}" data-value="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_grpChanStyle ? ' style="' + _grpChanStyle + '"' : ''}>
           <td style="width:28px;text-align:center;cursor:pointer">${isSingle ? '' : (isExpanded ? '▼' : '▶')}</td>
           <td class="col-region">${groupRegion ? `<span class="badge-region">${groupRegion}</span>` : '—'}</td>
           <td class="col-time">${renderTimestampCell(p.latest)}</td>
@@ -1122,7 +1153,7 @@
         const childRegion = c.observer_id ? (observerMap.get(c.observer_id)?.iata || '') : '';
         const childPath = getParsedPath(c);
         const childPathStr = renderPath(childPath, c.observer_id);
-        html += `<tr class="group-child" data-id="${c.id}" data-hash="${c.hash || ''}" data-action="select-observation" data-value="${c.id}" data-parent-hash="${p.hash}" tabindex="0" role="row">
+        html += `<tr class="group-child" data-id="${c.id}" data-hash="${c.hash || ''}" data-action="select-observation" data-value="${c.id}" data-parent-hash="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row">
               <td></td><td class="col-region">${childRegion ? `<span class="badge-region">${childRegion}</span>` : '—'}</td>
               <td class="col-time">${renderTimestampCell(c.timestamp)}</td>
               <td class="mono col-hash">${truncate(c.hash || '', 8)}</td>
@@ -1140,17 +1171,19 @@
   }
 
   // Build HTML for a single flat (ungrouped) packet row
-  function buildFlatRowHtml(p) {
+  function buildFlatRowHtml(p, entryIdx = -1) {
     const decoded = getParsedDecoded(p) || {};
     const pathHops = getParsedPath(p) || [];
     const region = p.observer_id ? (observerMap.get(p.observer_id)?.iata || '') : '';
     const typeName = payloadTypeName(p.payload_type);
     const typeClass = payloadTypeColor(p.payload_type);
+    // Channel color highlighting (#271)
+    const _chanStyle = window.ChannelColors ? window.ChannelColors.getRowStyle(decoded.type || typeName, decoded.channel) : '';
     const size = p.raw_hex ? Math.floor(p.raw_hex.length / 2) : 0;
     const hashBytes = ((parseInt(p.raw_hex?.slice(2, 4), 16) || 0) >> 6) + 1;
     const pathStr = renderPath(pathHops, p.observer_id);
     const detail = getDetailPreview(decoded);
-    return `<tr data-id="${p.id}" data-hash="${p.hash || ''}" data-action="select-hash" data-value="${p.hash || p.id}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}">
+    return `<tr data-id="${p.id}" data-hash="${p.hash || ''}" data-action="select-hash" data-value="${p.hash || p.id}" data-entry-idx="${entryIdx}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}"${_chanStyle ? ' style="' + _chanStyle + '"' : ''}>
         <td></td><td class="col-region">${region ? `<span class="badge-region">${region}</span>` : '—'}</td>
         <td class="col-time">${renderTimestampCell(p.timestamp)}</td>
         <td class="mono col-hash">${truncate(p.hash || String(p.id), 8)}</td>
@@ -1211,6 +1244,7 @@
   }
 
   function renderVisibleRows() {
+    const _rvr_t0 = performance.now();
     const tbody = document.getElementById('pktBody');
     if (!tbody || !_displayPackets.length) return;
 
@@ -1274,7 +1308,13 @@
     const endIdx = Math.min(_displayPackets.length, lastEntry + VSCROLL_BUFFER);
 
     // Skip DOM rebuild if visible range hasn't changed
-    if (startIdx === _lastVisibleStart && endIdx === _lastVisibleEnd) return;
+    if (startIdx === _lastVisibleStart && endIdx === _lastVisibleEnd) {
+      if (window.__PERF_LOG_RENDER) console.log('[perf] renderVisibleRows: skip (no change) %.2fms', performance.now() - _rvr_t0);
+      return;
+    }
+
+    const prevStart = _lastVisibleStart;
+    const prevEnd = _lastVisibleEnd;
     _lastVisibleStart = startIdx;
     _lastVisibleEnd = endIdx;
 
@@ -1285,14 +1325,51 @@
     topSpacer.firstChild.style.height = topPad + 'px';
     bottomSpacer.firstChild.style.height = bottomPad + 'px';
 
-    // LAZY ROW GENERATION: only build HTML for the visible slice (#422)
     const builder = _displayGrouped ? buildGroupRowHtml : buildFlatRowHtml;
-    const visibleSlice = _displayPackets.slice(startIdx, endIdx);
-    const visibleHtml = visibleSlice.map(p => builder(p)).join('');
-    tbody.innerHTML = '';
-    tbody.appendChild(topSpacer);
-    tbody.insertAdjacentHTML('beforeend', visibleHtml);
-    tbody.appendChild(bottomSpacer);
+    const hasOverlap = prevStart !== -1 && startIdx < prevEnd && endIdx > prevStart;
+
+    if (!hasOverlap) {
+      // Full rebuild: initial render or large scroll jump past buffer
+      const visibleHtml = _displayPackets.slice(startIdx, endIdx)
+        .map((p, i) => builder(p, startIdx + i)).join('');
+      tbody.innerHTML = '';
+      tbody.appendChild(topSpacer);
+      tbody.insertAdjacentHTML('beforeend', visibleHtml);
+      tbody.appendChild(bottomSpacer);
+      if (window.__PERF_LOG_RENDER) console.log('[perf] renderVisibleRows: full rebuild %d entries, %.2fms', endIdx - startIdx, performance.now() - _rvr_t0);
+      return;
+    }
+
+    // Incremental update: remove rows that scrolled out at the top (positional)
+    const headRowCount = offsets[Math.min(startIdx, prevEnd)] - offsets[prevStart];
+    for (let r = 0; r < headRowCount; r++) {
+      const row = topSpacer.nextElementSibling;
+      if (row && row !== bottomSpacer) row.remove();
+    }
+    // Remove rows that scrolled out at the bottom (positional)
+    const tailFrom = Math.max(endIdx, prevStart);
+    const tailRowCount = offsets[prevEnd] - offsets[tailFrom];
+    for (let r = 0; r < tailRowCount; r++) {
+      const row = bottomSpacer.previousElementSibling;
+      if (row && row !== topSpacer) row.remove();
+    }
+    // Prepend rows that scrolled into view at the top
+    if (startIdx < prevStart) {
+      let html = '';
+      for (let i = startIdx; i < Math.min(prevStart, endIdx); i++) {
+        html += builder(_displayPackets[i], i);
+      }
+      topSpacer.insertAdjacentHTML('afterend', html);
+    }
+    // Append rows that scrolled into view at the bottom
+    if (endIdx > prevEnd) {
+      let html = '';
+      for (let i = Math.max(prevEnd, startIdx); i < endIdx; i++) {
+        html += builder(_displayPackets[i], i);
+      }
+      bottomSpacer.insertAdjacentHTML('beforebegin', html);
+    }
+    if (window.__PERF_LOG_RENDER) console.log('[perf] renderVisibleRows: incremental head=%d tail=%d, %.2fms', headRowCount, tailRowCount, performance.now() - _rvr_t0);
   }
 
   // Attach/detach scroll listener for virtual scrolling
@@ -1709,7 +1786,7 @@
     }
 
     // Wire up view route on map button
-    const routeBtn = document.getElementById('viewRouteBtn');
+    const routeBtn = panel.querySelector('#viewRouteBtn');
     if (routeBtn && pathHops.length) {
       routeBtn.addEventListener('click', async () => {
         try {

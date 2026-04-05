@@ -39,11 +39,19 @@ type Store struct {
 	stmtGetObserverRowid       *sql.Stmt
 	stmtUpdateObserverLastSeen *sql.Stmt
 	stmtUpdateNodeTelemetry    *sql.Stmt
+	stmtUpsertMetrics          *sql.Stmt
+
+	sampleIntervalSec int
 }
 
 // OpenStore opens or creates a SQLite DB at the given path, applying the
 // v3 schema that is compatible with the Node.js server.
 func OpenStore(dbPath string) (*Store, error) {
+	return OpenStoreWithInterval(dbPath, 300)
+}
+
+// OpenStoreWithInterval opens or creates a SQLite DB with a configurable sample interval.
+func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error) {
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating data dir: %w", err)
@@ -66,7 +74,7 @@ func OpenStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("applying schema: %w", err)
 	}
 
-	s := &Store{db: db}
+	s := &Store{db: db, sampleIntervalSec: sampleIntervalSec}
 	if err := s.prepareStatements(); err != nil {
 		return nil, fmt.Errorf("preparing statements: %w", err)
 	}
@@ -292,6 +300,51 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] observations timestamp index created")
 	}
 
+	// observer_metrics table for RF health dashboard
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_metrics_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Creating observer_metrics table...")
+		_, err := db.Exec(`
+			CREATE TABLE IF NOT EXISTS observer_metrics (
+				observer_id TEXT NOT NULL,
+				timestamp TEXT NOT NULL,
+				noise_floor REAL,
+				tx_air_secs INTEGER,
+				rx_air_secs INTEGER,
+				recv_errors INTEGER,
+				battery_mv INTEGER,
+				PRIMARY KEY (observer_id, timestamp)
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("observer_metrics schema: %w", err)
+		}
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_metrics_v1')`)
+		log.Println("[migration] observer_metrics table created")
+	}
+
+	// Migration: add timestamp index for cross-observer time-range queries
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_metrics_ts_idx'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Creating observer_metrics timestamp index...")
+		_, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_observer_metrics_timestamp ON observer_metrics(timestamp)`)
+		if err != nil {
+			return fmt.Errorf("observer_metrics timestamp index: %w", err)
+		}
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_metrics_ts_idx')`)
+		log.Println("[migration] observer_metrics timestamp index created")
+	}
+
+	// Migration: add packets_sent and packets_recv columns to observer_metrics
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_metrics_packets_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding packets_sent/packets_recv columns to observer_metrics...")
+		db.Exec(`ALTER TABLE observer_metrics ADD COLUMN packets_sent INTEGER`)
+		db.Exec(`ALTER TABLE observer_metrics ADD COLUMN packets_recv INTEGER`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_metrics_packets_v1')`)
+		log.Println("[migration] packets_sent/packets_recv columns added")
+	}
+
 	return nil
 }
 
@@ -380,6 +433,14 @@ func (s *Store) prepareStatements() error {
 			battery_mv = COALESCE(?, battery_mv),
 			temperature_c = COALESCE(?, temperature_c)
 		WHERE public_key = ?
+	`)
+	if err != nil {
+		return err
+	}
+
+	s.stmtUpsertMetrics, err = s.db.Prepare(`
+		INSERT OR REPLACE INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -517,6 +578,11 @@ type ObserverMeta struct {
 	BatteryMv     *int     // millivolts, always integer
 	UptimeSecs    *int64   // seconds, always integer
 	NoiseFloor    *float64 // dBm, may have decimals
+	TxAirSecs     *int     // cumulative TX seconds since boot
+	RxAirSecs     *int     // cumulative RX seconds since boot
+	RecvErrors    *int     // cumulative CRC/decode failures since boot
+	PacketsSent   *int     // cumulative packets sent since boot
+	PacketsRecv   *int     // cumulative packets received since boot
 }
 
 // UpsertObserver inserts or updates an observer with optional hardware metadata.
@@ -566,6 +632,79 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 func (s *Store) Close() error {
 	s.Checkpoint()
 	return s.db.Close()
+}
+
+// RoundToInterval rounds a time to the nearest sample interval boundary.
+func RoundToInterval(t time.Time, intervalSec int) time.Time {
+	if intervalSec <= 0 {
+		intervalSec = 300
+	}
+	epoch := t.Unix()
+	half := int64(intervalSec) / 2
+	rounded := ((epoch + half) / int64(intervalSec)) * int64(intervalSec)
+	return time.Unix(rounded, 0).UTC()
+}
+
+// MetricsData holds the fields to insert into observer_metrics.
+type MetricsData struct {
+	ObserverID  string
+	NoiseFloor  *float64
+	TxAirSecs   *int
+	RxAirSecs   *int
+	RecvErrors  *int
+	BatteryMv   *int
+	PacketsSent *int
+	PacketsRecv *int
+}
+
+// InsertMetrics inserts a metrics sample for an observer using ingestor wall clock.
+func (s *Store) InsertMetrics(data *MetricsData) error {
+	ts := RoundToInterval(time.Now().UTC(), s.sampleIntervalSec)
+	tsStr := ts.Format(time.RFC3339)
+
+	var nf, txAir, rxAir, recvErr, batt, pktSent, pktRecv interface{}
+	if data.NoiseFloor != nil {
+		nf = *data.NoiseFloor
+	}
+	if data.TxAirSecs != nil {
+		txAir = *data.TxAirSecs
+	}
+	if data.RxAirSecs != nil {
+		rxAir = *data.RxAirSecs
+	}
+	if data.RecvErrors != nil {
+		recvErr = *data.RecvErrors
+	}
+	if data.BatteryMv != nil {
+		batt = *data.BatteryMv
+	}
+	if data.PacketsSent != nil {
+		pktSent = *data.PacketsSent
+	}
+	if data.PacketsRecv != nil {
+		pktRecv = *data.PacketsRecv
+	}
+
+	_, err := s.stmtUpsertMetrics.Exec(data.ObserverID, tsStr, nf, txAir, rxAir, recvErr, batt, pktSent, pktRecv)
+	if err != nil {
+		s.Stats.WriteErrors.Add(1)
+		return fmt.Errorf("insert metrics: %w", err)
+	}
+	return nil
+}
+
+// PruneOldMetrics deletes observer_metrics rows older than retentionDays.
+func (s *Store) PruneOldMetrics(retentionDays int) (int64, error) {
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
+	result, err := s.db.Exec(`DELETE FROM observer_metrics WHERE timestamp < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune metrics: %w", err)
+	}
+	n, _ := result.RowsAffected()
+	if n > 0 {
+		log.Printf("[metrics] Pruned %d rows older than %d days", n, retentionDays)
+	}
+	return n, nil
 }
 
 // Checkpoint forces a WAL checkpoint to release the WAL lock file,

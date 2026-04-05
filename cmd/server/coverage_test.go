@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -428,6 +429,49 @@ func TestMaxTransmissionID(t *testing.T) {
 	})
 }
 
+// --- MaxTransmissionID incremental tracking ---
+
+func TestMaxTransmissionIDIncremental(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+	store := NewPacketStore(db, nil)
+	store.Load()
+
+	maxTx := store.MaxTransmissionID()
+	maxObs := store.MaxObservationID()
+
+	if maxTx <= 0 {
+		t.Fatalf("expected maxTx > 0 after Load, got %d", maxTx)
+	}
+	if maxObs <= 0 {
+		t.Fatalf("expected maxObs > 0 after Load, got %d", maxObs)
+	}
+
+	// Verify incremental field matches brute-force iteration
+	store.mu.RLock()
+	bruteMaxTx := 0
+	for id := range store.byTxID {
+		if id > bruteMaxTx {
+			bruteMaxTx = id
+		}
+	}
+	bruteMaxObs := 0
+	for id := range store.byObsID {
+		if id > bruteMaxObs {
+			bruteMaxObs = id
+		}
+	}
+	store.mu.RUnlock()
+
+	if maxTx != bruteMaxTx {
+		t.Errorf("maxTxID mismatch: incremental=%d brute=%d", maxTx, bruteMaxTx)
+	}
+	if maxObs != bruteMaxObs {
+		t.Errorf("maxObsID mismatch: incremental=%d brute=%d", maxObs, bruteMaxObs)
+	}
+}
+
 // --- Route handler DB fallback (no store) ---
 
 func TestHandleBulkHealthNoStore(t *testing.T) {
@@ -767,6 +811,56 @@ func TestPrefixMapResolve(t *testing.T) {
 			t.Fatal("expected non-nil")
 		}
 		// Should return first candidate
+	})
+}
+
+func TestPrefixMapCap(t *testing.T) {
+	// 16-char pubkey — longer than maxPrefixLen
+	nodes := []nodeInfo{
+		{PublicKey: "aabbccdd11223344", Name: "LongKey"},
+		{PublicKey: "eeff0011", Name: "ShortKey"}, // exactly 8 chars
+	}
+	pm := buildPrefixMap(nodes)
+
+	t.Run("short prefixes still work", func(t *testing.T) {
+		n := pm.resolve("aabb")
+		if n == nil || n.Name != "LongKey" {
+			t.Errorf("expected LongKey for short prefix, got %v", n)
+		}
+	})
+
+	t.Run("full pubkey exact match works", func(t *testing.T) {
+		n := pm.resolve("aabbccdd11223344")
+		if n == nil || n.Name != "LongKey" {
+			t.Errorf("expected LongKey for full key, got %v", n)
+		}
+	})
+
+	t.Run("intermediate prefix beyond cap returns nil", func(t *testing.T) {
+		// 10-char prefix — beyond maxPrefixLen but not full key
+		n := pm.resolve("aabbccdd11")
+		if n != nil {
+			t.Errorf("expected nil for intermediate prefix beyond cap, got %v", n.Name)
+		}
+	})
+
+	t.Run("short key within cap has all prefixes", func(t *testing.T) {
+		for l := 2; l <= 8; l++ {
+			pfx := "eeff0011"[:l]
+			n := pm.resolve(pfx)
+			if n == nil || n.Name != "ShortKey" {
+				t.Errorf("prefix %q: expected ShortKey, got %v", pfx, n)
+			}
+		}
+	})
+
+	t.Run("map size is capped", func(t *testing.T) {
+		// LongKey: 7 prefix entries (2..8) + 1 full key = 8
+		// ShortKey: 7 prefix entries (2..8), no full key entry (len == maxPrefixLen) = 7
+		// No overlapping prefixes between the two nodes → 8 + 7 = 15 unique map keys
+		if len(pm.m) != 15 {
+			t.Errorf("expected 15 map entries (8 for LongKey + 7 for ShortKey), got %d", len(pm.m))
+		}
 	})
 }
 
@@ -1330,6 +1424,40 @@ func TestGetNodeLocations(t *testing.T) {
 		}
 	} else {
 		t.Error("expected node location for test repeater")
+	}
+}
+
+// --- GetNodeLocationsByKeys ---
+
+func TestGetNodeLocationsByKeys(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+
+	// Query with a known key
+	pk := "aabbccdd11223344"
+	locs := db.GetNodeLocationsByKeys([]string{pk})
+	if len(locs) != 1 {
+		t.Errorf("expected 1 location, got %d", len(locs))
+	}
+	if entry, ok := locs[strings.ToLower(pk)]; ok {
+		if entry["lat"] == nil {
+			t.Error("expected non-nil lat")
+		}
+	} else {
+		t.Error("expected node location for test repeater")
+	}
+
+	// Query with no keys returns empty map
+	empty := db.GetNodeLocationsByKeys([]string{})
+	if len(empty) != 0 {
+		t.Errorf("expected 0 locations for empty keys, got %d", len(empty))
+	}
+
+	// Query with unknown key returns empty map
+	unknown := db.GetNodeLocationsByKeys([]string{"nonexistent"})
+	if len(unknown) != 0 {
+		t.Errorf("expected 0 locations for unknown key, got %d", len(unknown))
 	}
 }
 
@@ -1906,6 +2034,48 @@ func TestTxToMap(t *testing.T) {
 	}
 }
 
+func TestTxToMapLazyObservations(t *testing.T) {
+	snr := 10.5
+	rssi := -90.0
+	tx := &StoreTx{
+		ID:   1,
+		Hash: "abc",
+		Observations: []*StoreObs{
+			{ID: 10, ObserverID: "obs1", ObserverName: "O1", SNR: &snr, RSSI: &rssi, Timestamp: "2025-01-01"},
+			{ID: 11, ObserverID: "obs2", ObserverName: "O2", SNR: &snr, RSSI: &rssi, Timestamp: "2025-01-02"},
+		},
+	}
+
+	// Without flag: no observations key
+	m := txToMap(tx)
+	if _, ok := m["observations"]; ok {
+		t.Error("txToMap without includeObservations should not include observations key")
+	}
+
+	// With false: no observations key
+	m = txToMap(tx, false)
+	if _, ok := m["observations"]; ok {
+		t.Error("txToMap(tx, false) should not include observations key")
+	}
+
+	// With true: observations included
+	m = txToMap(tx, true)
+	obs, ok := m["observations"]
+	if !ok {
+		t.Fatal("txToMap(tx, true) should include observations key")
+	}
+	obsList, ok := obs.([]map[string]interface{})
+	if !ok {
+		t.Fatal("observations should be []map[string]interface{}")
+	}
+	if len(obsList) != 2 {
+		t.Errorf("expected 2 observations, got %d", len(obsList))
+	}
+	if obsList[0]["observer_id"] != "obs1" {
+		t.Errorf("expected observer_id obs1, got %v", obsList[0]["observer_id"])
+	}
+}
+
 // --- filterTxSlice ---
 
 func TestFilterTxSlice(t *testing.T) {
@@ -2096,6 +2266,84 @@ func TestSubpathPrecomputedIndex(t *testing.T) {
 	// Verify fast path totalPaths matches index.
 	if tp, ok := fast["totalPaths"].(int); ok && tp != store.spTotalPaths {
 		t.Errorf("fast totalPaths=%d, spTotalPaths=%d", tp, store.spTotalPaths)
+	}
+}
+
+func TestSubpathTxIndexPopulated(t *testing.T) {
+	db := setupRichTestDB(t)
+	defer db.Close()
+	store := NewPacketStore(db, nil)
+	store.Load()
+
+	// spTxIndex must be populated alongside spIndex
+	if len(store.spTxIndex) == 0 {
+		t.Fatal("expected spTxIndex to be populated after Load()")
+	}
+
+	// Every key in spIndex must also exist in spTxIndex with matching count
+	for key, count := range store.spIndex {
+		txs, ok := store.spTxIndex[key]
+		if !ok {
+			t.Errorf("spTxIndex missing key %q that exists in spIndex", key)
+			continue
+		}
+		if len(txs) != count {
+			t.Errorf("spTxIndex[%q] has %d txs, spIndex count is %d", key, len(txs), count)
+		}
+	}
+
+	// GetSubpathDetail should return correct match count via indexed lookup
+	detail := store.GetSubpathDetail([]string{"eeff", "0011"})
+	if detail == nil {
+		t.Fatal("expected non-nil detail for existing subpath")
+	}
+	matches, _ := detail["totalMatches"].(int)
+	if matches != 1 {
+		t.Errorf("totalMatches = %d, want 1", matches)
+	}
+
+	// Non-existent subpath should return 0 matches
+	detail2 := store.GetSubpathDetail([]string{"zzzz", "yyyy"})
+	if detail2 == nil {
+		t.Fatal("expected non-nil result even for non-existent subpath")
+	}
+	matches2, _ := detail2["totalMatches"].(int)
+	if matches2 != 0 {
+		t.Errorf("totalMatches for non-existent subpath = %d, want 0", matches2)
+	}
+}
+
+func TestSubpathDetailMixedCaseHops(t *testing.T) {
+	db := setupRichTestDB(t)
+	defer db.Close()
+	store := NewPacketStore(db, nil)
+	store.Load()
+
+	// Query with lowercase hops to establish baseline
+	lower := store.GetSubpathDetail([]string{"eeff", "0011"})
+	if lower == nil {
+		t.Fatal("expected non-nil detail for lowercase subpath")
+	}
+	lowerMatches, _ := lower["totalMatches"].(int)
+	if lowerMatches == 0 {
+		t.Fatal("expected >0 matches for lowercase subpath")
+	}
+
+	// Query with mixed-case hops — must return the same results (case-insensitive)
+	mixed := store.GetSubpathDetail([]string{"EEFF", "0011"})
+	if mixed == nil {
+		t.Fatal("expected non-nil detail for mixed-case subpath")
+	}
+	mixedMatches, _ := mixed["totalMatches"].(int)
+	if mixedMatches != lowerMatches {
+		t.Errorf("mixed-case totalMatches = %d, want %d (same as lowercase)", mixedMatches, lowerMatches)
+	}
+
+	// All-uppercase should also match
+	upper := store.GetSubpathDetail([]string{"EEFF", "0011"})
+	upperMatches, _ := upper["totalMatches"].(int)
+	if upperMatches != lowerMatches {
+		t.Errorf("uppercase totalMatches = %d, want %d", upperMatches, lowerMatches)
 	}
 }
 
@@ -3716,6 +3964,71 @@ func TestGetChannelMessagesAfterIngest(t *testing.T) {
 	}
 }
 
+// --- resolveRegionObservers caching ---
+
+func TestResolveRegionObserversCaching(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+
+	store := &PacketStore{db: db}
+
+	// First call should populate cache.
+	obs1 := store.resolveRegionObservers("SJC")
+	if obs1 == nil || len(obs1) == 0 {
+		t.Fatal("expected observer IDs for SJC on first call")
+	}
+
+	// Second call should return cached result (same pointer).
+	obs2 := store.resolveRegionObservers("SJC")
+	if len(obs2) != len(obs1) {
+		t.Errorf("cached result differs: got %d, want %d", len(obs2), len(obs1))
+	}
+
+	// Non-existent region should return nil even from cache.
+	obs3 := store.resolveRegionObservers("NONEXIST")
+	if obs3 != nil {
+		t.Errorf("expected nil for NONEXIST, got %v", obs3)
+	}
+
+	// Verify cache fields are set.
+	if store.regionObsCache == nil {
+		t.Error("regionObsCache should be non-nil after calls")
+	}
+	if store.regionObsCacheTime.IsZero() {
+		t.Error("regionObsCacheTime should be set")
+	}
+}
+
+func TestResolveRegionObserversCacheMissNewRegion(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+
+	store := &PacketStore{db: db}
+
+	// Populate cache with SJC.
+	obs1 := store.resolveRegionObservers("SJC")
+	if obs1 == nil || len(obs1) == 0 {
+		t.Fatal("expected observer IDs for SJC on first call")
+	}
+
+	// Cache is now valid. Request a different region that exists in DB.
+	// Before the fix, this would return nil from the map lookup instead of
+	// fetching from DB, silently returning "no observers" for up to 30s.
+	obs2 := store.resolveRegionObservers("LAX")
+	// LAX may or may not have data in the test DB, but the key point is:
+	// a non-existent region should be fetched (not just nil-returned).
+	// Verify the region key was cached (even if empty).
+	store.regionObsMu.Lock()
+	_, cached := store.regionObsCache["LAX"]
+	store.regionObsMu.Unlock()
+	if !cached {
+		t.Error("LAX should be cached after resolveRegionObservers call, even if empty")
+	}
+	_ = obs2
+}
+
 func TestIndexByNodePreCheck(t *testing.T) {
 	store := &PacketStore{
 		byNode:     make(map[string][]*StoreTx),
@@ -3914,44 +4227,115 @@ func TestBuildTransmissionWhereMultiObserver(t *testing.T) {
 	})
 }
 
-// --- Distance index rebuild debounce (#557) ---
+// --- Distance index incremental update (#365, replaces debounce #557) ---
 
-func TestDistanceRebuildDebounce(t *testing.T) {
+func TestDistanceIncrementalUpdate(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 	seedTestData(t, db)
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	// After Load(), distLast is set to now — so distDirty should be false
-	if store.distDirty {
-		t.Fatal("distDirty should be false after Load()")
-	}
+	// Record initial distance index size.
+	initialHops := len(store.distHops)
+	initialPaths := len(store.distPaths)
 
-	// Insert a new observation with a different path to trigger distDirty
+	// Insert a new observation with a different path to trigger an incremental update.
 	maxObsID := db.GetMaxObservationID()
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (1, 2, 5.0, -100, '["xx","yy","zz"]', ?)`, time.Now().Unix())
 
 	store.IngestNewObservations(maxObsID, 500)
 
-	// distDirty should be true (30s hasn't elapsed since Load)
-	if !store.distDirty {
-		t.Fatal("distDirty should be true after path change within 30s window")
-	}
+	// Distance index should have been updated incrementally (sizes may differ
+	// if the new path resolves differently, but should not panic or corrupt).
+	_ = len(store.distHops)
+	_ = len(store.distPaths)
 
-	// Now simulate 30s having elapsed by backdating distLast
-	store.distLast = time.Now().Add(-31 * time.Second)
-
-	// Insert another observation to trigger another ingest cycle
+	// Insert another observation with yet another path.
 	maxObsID = db.GetMaxObservationID()
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (1, 2, 7.0, -95, '["aa","bb","cc","dd"]', ?)`, time.Now().Unix())
 
 	store.IngestNewObservations(maxObsID, 500)
 
-	// After 30s elapsed, distDirty should be cleared (rebuild happened)
-	if store.distDirty {
-		t.Fatal("distDirty should be false after rebuild (30s elapsed)")
+	// Verify the index is still coherent (no duplicates for the same tx).
+	txSeen := make(map[int]int)
+	for _, r := range store.distPaths {
+		if r.tx != nil {
+			txSeen[r.tx.ID]++
+		}
 	}
+	for txID, count := range txSeen {
+		if count > 1 {
+			t.Errorf("distPaths has %d entries for tx %d (expected at most 1)", count, txID)
+		}
+	}
+
+	t.Logf("Distance index: %d→%d hops, %d→%d paths (incremental)",
+		initialHops, len(store.distHops), initialPaths, len(store.distPaths))
+}
+
+func TestHandleBatchObservations(t *testing.T) {
+	_, router := setupNoStoreServer(t)
+
+	t.Run("empty hashes returns empty results", func(t *testing.T) {
+		body := strings.NewReader(`{"hashes":[]}`)
+		req := httptest.NewRequest("POST", "/api/packets/observations", body)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+		results, ok := resp["results"].(map[string]interface{})
+		if !ok || len(results) != 0 {
+			t.Fatalf("expected empty results map, got %v", resp)
+		}
+	})
+
+	t.Run("invalid JSON returns 400", func(t *testing.T) {
+		body := strings.NewReader(`not json`)
+		req := httptest.NewRequest("POST", "/api/packets/observations", body)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != 400 {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("too many hashes returns 400", func(t *testing.T) {
+		hashes := make([]string, 201)
+		for i := range hashes {
+			hashes[i] = fmt.Sprintf("hash%d", i)
+		}
+		data, _ := json.Marshal(map[string][]string{"hashes": hashes})
+		req := httptest.NewRequest("POST", "/api/packets/observations", bytes.NewReader(data))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != 400 {
+			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("valid hashes with no store returns empty results", func(t *testing.T) {
+		body := strings.NewReader(`{"hashes":["abc123","def456"]}`)
+		req := httptest.NewRequest("POST", "/api/packets/observations", body)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+		_, ok := resp["results"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected results map, got %v", resp)
+		}
+	})
 }

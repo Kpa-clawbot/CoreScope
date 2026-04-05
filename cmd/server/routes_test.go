@@ -1105,6 +1105,63 @@ func TestAnalyticsSubpaths(t *testing.T) {
 	}
 }
 
+func TestAnalyticsSubpathsBulk(t *testing.T) {
+	_, router := setupTestServer(t)
+
+	// Valid request with multiple groups.
+	req := httptest.NewRequest("GET", "/api/analytics/subpaths-bulk?groups=2-2:50,3-3:30,5-8:15", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var body map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &body)
+	results, ok := body["results"].([]interface{})
+	if !ok {
+		t.Fatal("expected results array")
+	}
+	if len(results) != 3 {
+		t.Errorf("expected 3 result groups, got %d", len(results))
+	}
+	// Each result should have subpaths and totalPaths.
+	for i, r := range results {
+		rm, ok := r.(map[string]interface{})
+		if !ok {
+			t.Fatalf("result %d not a map", i)
+		}
+		if _, ok := rm["subpaths"]; !ok {
+			t.Errorf("result %d missing subpaths", i)
+		}
+		if _, ok := rm["totalPaths"]; !ok {
+			t.Errorf("result %d missing totalPaths", i)
+		}
+	}
+
+	// Missing groups param → error.
+	req2 := httptest.NewRequest("GET", "/api/analytics/subpaths-bulk", nil)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Code != 200 {
+		t.Fatalf("expected 200 with error body, got %d", w2.Code)
+	}
+	var errBody map[string]interface{}
+	json.Unmarshal(w2.Body.Bytes(), &errBody)
+	if _, ok := errBody["error"]; !ok {
+		t.Error("expected error field for missing groups param")
+	}
+
+	// Invalid group format.
+	req3 := httptest.NewRequest("GET", "/api/analytics/subpaths-bulk?groups=bad", nil)
+	w3 := httptest.NewRecorder()
+	router.ServeHTTP(w3, req3)
+	var errBody3 map[string]interface{}
+	json.Unmarshal(w3.Body.Bytes(), &errBody3)
+	if _, ok := errBody3["error"]; !ok {
+		t.Error("expected error for invalid group format")
+	}
+}
+
 func TestAnalyticsSubpathDetailWithHops(t *testing.T) {
 	_, router := setupTestServer(t)
 	req := httptest.NewRequest("GET", "/api/analytics/subpath-detail?hops=aa,bb", nil)
@@ -1170,6 +1227,11 @@ func TestResolveHopsAmbiguous(t *testing.T) {
 	cfg := &Config{Port: 3000}
 	hub := NewHub()
 	srv := NewServer(db, cfg, hub)
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("store.Load failed: %v", err)
+	}
+	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
@@ -2105,7 +2167,7 @@ tx := &StoreTx{
 ID:          9000 + i,
 RawHex:      rawHex,
 Hash:        "testhash" + strconv.Itoa(i),
-FirstSeen:   "2024-01-01T00:00:00Z",
+FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 PayloadType: &payloadType,
 DecodedJSON: decoded,
 }
@@ -2151,7 +2213,7 @@ for i, raw := range raws {
 		ID:          8000 + i,
 		RawHex:      raw,
 		Hash:        "dominant" + strconv.Itoa(i),
-		FirstSeen:   "2024-01-01T00:00:00Z",
+		FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		PayloadType: &payloadType,
 		DecodedJSON: decoded,
 	}
@@ -2190,12 +2252,13 @@ func TestGetNodeHashSizeInfoLatestWins(t *testing.T) {
 	// 4 historical 1-byte adverts, then 1 recent 2-byte advert (latest).
 	// Mode would pick 1 (majority), but latest-wins should pick 2.
 	raws := []string{raw1byte, raw1byte, raw1byte, raw1byte, raw2byte}
+	baseTime := time.Now().UTC().Add(-1 * time.Hour)
 	for i, raw := range raws {
 		tx := &StoreTx{
 			ID:          7000 + i,
 			RawHex:      raw,
 			Hash:        "latest" + strconv.Itoa(i),
-			FirstSeen:   "2024-01-01T0" + strconv.Itoa(i) + ":00:00Z",
+			FirstSeen:   baseTime.Add(time.Duration(i) * time.Minute).Format("2006-01-02T15:04:05.000Z"),
 			PayloadType: &payloadType,
 			DecodedJSON: decoded,
 		}
@@ -2236,12 +2299,13 @@ func TestGetNodeHashSizeInfoIgnoreDirectZeroHop(t *testing.T) {
 
 	payloadType := 4
 	raws := []string{rawFlood2B, rawDirect0, rawFlood2B, rawDirect0, rawFlood2B}
+	baseTime2 := time.Now().UTC().Add(-1 * time.Hour)
 	for i, raw := range raws {
 		tx := &StoreTx{
 			ID:          9150 + i,
 			RawHex:      raw,
 			Hash:        "dirignore" + strconv.Itoa(i),
-			FirstSeen:   "2024-01-01T0" + strconv.Itoa(i) + ":00:00Z",
+			FirstSeen:   baseTime2.Add(time.Duration(i) * time.Minute).Format("2006-01-02T15:04:05.000Z"),
 			PayloadType: &payloadType,
 			DecodedJSON: decoded,
 		}
@@ -2284,7 +2348,7 @@ func TestGetNodeHashSizeInfoOnlyDirectZeroHopIgnored(t *testing.T) {
 		ID:          9160,
 		RawHex:      rawDirect0,
 		Hash:        "onlydirect0",
-		FirstSeen:   "2024-01-01T00:00:00Z",
+		FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		PayloadType: &payloadType,
 		DecodedJSON: decoded,
 	}
@@ -2320,7 +2384,7 @@ func TestGetNodeHashSizeInfoDirectNonZeroHopCounted(t *testing.T) {
 		ID:          9170,
 		RawHex:      rawDirectNonZero,
 		Hash:        "dirnonzero0",
-		FirstSeen:   "2024-01-01T00:00:00Z",
+		FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		PayloadType: &payloadType,
 		DecodedJSON: decoded,
 	}
@@ -2355,7 +2419,7 @@ func TestGetNodeHashSizeInfoNoAdverts(t *testing.T) {
 		ID:          6000,
 		RawHex:      "0440aabb",
 		Hash:        "noadverts0",
-		FirstSeen:   "2024-01-01T00:00:00Z",
+		FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		PayloadType: &payloadType,
 		DecodedJSON: `{"pubKey":"` + pk + `"}`,
 	}
@@ -2397,7 +2461,7 @@ func TestHashAnalyticsZeroHopAdvert(t *testing.T) {
 		ID:          8000,
 		RawHex:      raw,
 		Hash:        "zerohop0",
-		FirstSeen:   "2024-01-01T00:00:00Z",
+		FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		PayloadType: &payloadType,
 		DecodedJSON: decoded,
 		// No PathJSON → txGetParsedPath returns nil (zero hops)
@@ -2451,7 +2515,7 @@ func TestAnalyticsHashSizeSameNameDifferentPubkey(t *testing.T) {
 			ID:          6100 + i,
 			RawHex:      raw2byte,
 			Hash:        "samename" + strconv.Itoa(i),
-			FirstSeen:   "2024-01-01T00:00:00Z",
+			FirstSeen:   time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 			PayloadType: &payloadType,
 			DecodedJSON: decoded,
 			PathJSON:    `["AABB"]`,
@@ -2491,6 +2555,158 @@ t.Errorf("field %q is null, expected []", field)
 }
 	}
 }
+func TestInconsistentNodesExcludesCompanions(t *testing.T) {
+	// Issue #566: inconsistentNodes should only include repeaters and room servers.
+	db := setupTestDB(t)
+	seedTestData(t, db)
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("store.Load failed: %v", err)
+	}
+
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	payloadType := 4
+
+	// Create three nodes: repeater, room_server, companion — all with inconsistent hash sizes
+	nodes := []struct {
+		pk   string
+		role string
+	}{
+		{"aa11111111111111111111111111111111111111111111111111111111111111", "repeater"},
+		{"bb22222222222222222222222222222222222222222222222222222222222222", "room_server"},
+		{"cc33333333333333333333333333333333333333333333333333333333333333", "companion"},
+	}
+
+	for ni, n := range nodes {
+		db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, ?, ?)", n.pk, "Node-"+n.role, n.role)
+		decoded := `{"name":"Node-` + n.role + `","pubKey":"` + n.pk + `"}`
+		// Create flip-flop pattern: 1-byte, 2-byte, 1-byte (transitions=2 → inconsistent)
+		// Use header 0x11 (routeType=FLOOD, payloadType=4) and pathByte 0x41/0x81
+		// (non-zero hop count) so packets aren't skipped by direct zero-hop filter.
+		raws := []string{"11" + "41" + "aabb", "11" + "81" + "aabb", "11" + "41" + "aabb"}
+		for i, raw := range raws {
+			tx := &StoreTx{
+				ID:          7000 + ni*10 + i,
+				RawHex:      raw,
+				Hash:        "incon-" + n.role + strconv.Itoa(i),
+				FirstSeen:   now,
+				PayloadType: &payloadType,
+				DecodedJSON: decoded,
+			}
+			store.packets = append(store.packets, tx)
+			store.byPayloadType[4] = append(store.byPayloadType[4], tx)
+		}
+	}
+
+	cfg := &Config{Port: 3000}
+	hub := NewHub()
+	srv := NewServer(db, cfg, hub)
+	srv.store = store
+	router := mux.NewRouter()
+	srv.RegisterRoutes(router)
+
+	req := httptest.NewRequest("GET", "/api/analytics/hash-collisions", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var body map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &body)
+
+	incon := body["inconsistent_nodes"].([]interface{})
+	for _, item := range incon {
+		node := item.(map[string]interface{})
+		role := node["role"].(string)
+		if role == "companion" {
+			t.Error("companion node should be excluded from inconsistent_nodes")
+		}
+	}
+
+	// Repeater and room_server should be present
+	roles := make(map[string]bool)
+	for _, item := range incon {
+		node := item.(map[string]interface{})
+		roles[node["role"].(string)] = true
+	}
+	if !roles["repeater"] {
+		t.Error("expected repeater in inconsistent_nodes")
+	}
+	if !roles["room_server"] {
+		t.Error("expected room_server in inconsistent_nodes")
+	}
+}
+
+func TestHashSizeInfoTimeWindow(t *testing.T) {
+	// Issue #566: adverts older than 7 days should be excluded from hash size computation.
+	db := setupTestDB(t)
+	seedTestData(t, db)
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("store.Load failed: %v", err)
+	}
+
+	pk := "dd44444444444444444444444444444444444444444444444444444444444444"
+	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'OldNode', 'repeater')", pk)
+
+	decoded := `{"name":"OldNode","pubKey":"` + pk + `"}`
+	payloadType := 4
+
+	// Old adverts (>7 days ago) with flip-flop pattern
+	// Use header 0x11 (routeType=FLOOD) and pathByte 0x41/0x81 (non-zero hop count)
+	// so packets aren't skipped by direct zero-hop filter.
+	oldTime := time.Now().UTC().Add(-10 * 24 * time.Hour).Format("2006-01-02T15:04:05.000Z")
+	oldRaws := []string{"11" + "41" + "aabb", "11" + "81" + "aabb", "11" + "41" + "aabb"}
+	for i, raw := range oldRaws {
+		tx := &StoreTx{
+			ID:          6000 + i,
+			RawHex:      raw,
+			Hash:        "old-" + strconv.Itoa(i),
+			FirstSeen:   oldTime,
+			PayloadType: &payloadType,
+			DecodedJSON: decoded,
+		}
+		store.packets = append(store.packets, tx)
+		store.byPayloadType[4] = append(store.byPayloadType[4], tx)
+	}
+
+	info := store.GetNodeHashSizeInfo()
+	ni := info[pk]
+	if ni != nil && ni.Inconsistent {
+		t.Error("old adverts (>7 days) should be excluded; node should not be flagged as inconsistent")
+	}
+
+	// Now add recent adverts with consistent hash size — should appear in info
+	pk2 := "ee55555555555555555555555555555555555555555555555555555555555555"
+	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'NewNode', 'repeater')", pk2)
+	decoded2 := `{"name":"NewNode","pubKey":"` + pk2 + `"}`
+	recentTime := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	for i := 0; i < 3; i++ {
+		tx := &StoreTx{
+			ID:          6100 + i,
+			RawHex:      "11" + "41" + "aabb",
+			Hash:        "new-" + strconv.Itoa(i),
+			FirstSeen:   recentTime,
+			PayloadType: &payloadType,
+			DecodedJSON: decoded2,
+		}
+		store.packets = append(store.packets, tx)
+		store.byPayloadType[4] = append(store.byPayloadType[4], tx)
+	}
+
+	// Invalidate cache before second call
+	store.hashSizeInfoMu.Lock()
+	store.hashSizeInfoCache = nil
+	store.hashSizeInfoMu.Unlock()
+
+	info2 := store.GetNodeHashSizeInfo()
+	ni2 := info2[pk2]
+	if ni2 == nil {
+		t.Error("recent adverts should be included in hash size info")
+	}
+}
+
 func TestObserverAnalyticsNoStore(t *testing.T) {
 	_, router := setupNoStoreServer(t)
 	req := httptest.NewRequest("GET", "/api/observers/obs1/analytics", nil)
@@ -3275,5 +3491,133 @@ func TestHashCollisionsOnlyRepeaters(t *testing.T) {
 	}
 	if len(collisions) == 1 && len(collisions[0].Nodes) != 2 {
 		t.Errorf("expected 2 nodes in collision, got %d", len(collisions[0].Nodes))
+	}
+}
+
+func TestNodePathsEndpointUsesIndex(t *testing.T) {
+	srv, router := setupTestServer(t)
+
+	// Verify byPathHop index was built during Load
+	srv.store.mu.RLock()
+	hopKeys := len(srv.store.byPathHop)
+	srv.store.mu.RUnlock()
+	if hopKeys == 0 {
+		t.Fatal("byPathHop index is empty after Load")
+	}
+
+	// Query paths for TestRepeater (pubkey aabbccdd11223344, prefix "aa")
+	// Should find transmissions with hop "aa" in path
+	req := httptest.NewRequest("GET", "/api/nodes/aabbccdd11223344/paths", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Paths              []json.RawMessage `json:"paths"`
+		TotalTransmissions int               `json:"totalTransmissions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+
+	// Transmission 1 has path ["aa","bb"] which contains "aa" matching prefix of aabbccdd11223344
+	if resp.TotalTransmissions == 0 {
+		t.Error("expected at least 1 transmission matching node paths")
+	}
+	if len(resp.Paths) == 0 {
+		t.Error("expected at least 1 path group")
+	}
+}
+
+func TestPathHopIndexIncrementalUpdate(t *testing.T) {
+	// Test that addTxToPathHopIndex and removeTxFromPathHopIndex work correctly
+	idx := make(map[string][]*StoreTx)
+
+	pk1 := "fullpubkey1"
+	tx1 := &StoreTx{
+		ID:       1,
+		PathJSON: `["ab","cd"]`,
+		ResolvedPath: []*string{&pk1, nil},
+	}
+
+	addTxToPathHopIndex(idx, tx1)
+
+	// Should be indexed under "ab", "cd", and "fullpubkey1"
+	if len(idx["ab"]) != 1 {
+		t.Errorf("expected 1 entry for 'ab', got %d", len(idx["ab"]))
+	}
+	if len(idx["cd"]) != 1 {
+		t.Errorf("expected 1 entry for 'cd', got %d", len(idx["cd"]))
+	}
+	if len(idx["fullpubkey1"]) != 1 {
+		t.Errorf("expected 1 entry for resolved pubkey, got %d", len(idx["fullpubkey1"]))
+	}
+
+	// Add another tx with overlapping hop
+	tx2 := &StoreTx{
+		ID:       2,
+		PathJSON: `["ab","ef"]`,
+	}
+	addTxToPathHopIndex(idx, tx2)
+
+	if len(idx["ab"]) != 2 {
+		t.Errorf("expected 2 entries for 'ab', got %d", len(idx["ab"]))
+	}
+	if len(idx["ef"]) != 1 {
+		t.Errorf("expected 1 entry for 'ef', got %d", len(idx["ef"]))
+	}
+
+	// Remove tx1
+	removeTxFromPathHopIndex(idx, tx1)
+
+	if len(idx["ab"]) != 1 {
+		t.Errorf("expected 1 entry for 'ab' after removal, got %d", len(idx["ab"]))
+	}
+	if _, ok := idx["cd"]; ok {
+		t.Error("expected 'cd' key to be deleted after removal")
+	}
+	if _, ok := idx["fullpubkey1"]; ok {
+		t.Error("expected resolved pubkey key to be deleted after removal")
+	}
+}
+
+func TestMetricsAPIEndpoints(t *testing.T) {
+	srv, router := setupTestServer(t)
+
+	now := time.Now().UTC()
+	t1 := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	srv.db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+		"obs1", t1, -112.0)
+
+	// Test /api/observers/obs1/metrics
+	req := httptest.NewRequest("GET", "/api/observers/obs1/metrics", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("GET /api/observers/obs1/metrics = %d, want 200", w.Code)
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	metrics, ok := resp["metrics"].([]interface{})
+	if !ok || len(metrics) != 1 {
+		t.Errorf("expected 1 metric in response, got %v", resp["metrics"])
+	}
+
+	// Test /api/observers/metrics/summary
+	req2 := httptest.NewRequest("GET", "/api/observers/metrics/summary?window=24h", nil)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Code != 200 {
+		t.Fatalf("GET /api/observers/metrics/summary = %d, want 200", w2.Code)
+	}
+	var resp2 map[string]interface{}
+	json.Unmarshal(w2.Body.Bytes(), &resp2)
+	observers, ok := resp2["observers"].([]interface{})
+	if !ok || len(observers) != 1 {
+		t.Errorf("expected 1 observer in summary, got %v", resp2["observers"])
 	}
 }
