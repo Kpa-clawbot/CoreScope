@@ -69,7 +69,7 @@ type ResolvedPathConfig struct {
 
 // NeighborGraphConfig controls neighbor edge pruning.
 type NeighborGraphConfig struct {
-	MaxAgeDays int `json:"maxAgeDays"` // edges older than this are pruned (default 30)
+	MaxAgeDays int `json:"maxAgeDays"` // edges older than this are pruned (default 5)
 }
 
 // PacketStoreConfig controls in-memory packet store limits.
@@ -92,7 +92,7 @@ func (c *Config) MetricsRetentionDays() int {
 	if c.Retention != nil && c.Retention.MetricsDays > 0 {
 		return c.Retention.MetricsDays
 	}
-	return 30
+	return 5
 }
 
 // BackfillHours returns configured backfill window or 24h default.
@@ -108,7 +108,7 @@ func (c *Config) NeighborMaxAgeDays() int {
 	if c.NeighborGraph != nil && c.NeighborGraph.MaxAgeDays > 0 {
 		return c.NeighborGraph.MaxAgeDays
 	}
-	return 30
+	return 5
 }
 
 type TimestampConfig struct {

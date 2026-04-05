@@ -162,7 +162,7 @@
     "_comment": "How far back (hours) the async backfill scans for observations with NULL resolved_path. Default: 24. Set higher to backfill older data, lower to speed up startup."
   },
   "neighborGraph": {
-    "maxAgeDays": 30,
-    "_comment": "Neighbor edges older than this many days are pruned on startup and daily. Default: 30."
+    "maxAgeDays": 5,
+    "_comment": "Neighbor edges older than this many days are pruned on startup and daily. Default: 5."
   }
 }
