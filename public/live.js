@@ -2495,6 +2495,15 @@
     if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
   }
 
+  /** Extract channel row style from a packet (shared by feed item builders). */
+  function _getChannelStyle(pkt) {
+    if (!window.ChannelColors) return '';
+    var d = pkt.decoded || {};
+    var h = d.header || {};
+    var p = d.payload || {};
+    return window.ChannelColors.getRowStyle(h.payloadTypeName || '', p.channelName || null);
+  }
+
   function addFeedItemDOM(icon, typeName, payload, hops, color, pkt, feed) {
     const text = payload.text || payload.name || '';
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
@@ -2506,11 +2515,7 @@
     item.setAttribute('role', 'button');
     item.style.cursor = 'pointer';
     // Channel color highlighting for GRP_TXT packets (#271)
-    var _d = pkt.decoded || {};
-    var _h = _d.header || {};
-    var _p = _d.payload || {};
-    var _cn = _p.channelName || null;
-    var _cs = window.ChannelColors ? window.ChannelColors.getRowStyle(_h.payloadTypeName || '', _cn) : '';
+    var _cs = _getChannelStyle(pkt);
     if (_cs) item.style.cssText += _cs;
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
@@ -2581,11 +2586,7 @@
     if (hash) item.setAttribute('data-hash', hash);
     item.style.cursor = 'pointer';
     // Channel color highlighting for GRP_TXT packets (#271)
-    var _decoded = pkt.decoded || {};
-    var _header = _decoded.header || {};
-    var _payload = _decoded.payload || {};
-    var _chanName = _payload.channelName || null;
-    var _chanStyle = window.ChannelColors ? window.ChannelColors.getRowStyle(_header.payloadTypeName || '', _chanName) : '';
+    var _chanStyle = _getChannelStyle(pkt);
     if (_chanStyle) item.style.cssText += _chanStyle;
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>

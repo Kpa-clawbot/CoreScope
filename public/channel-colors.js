@@ -24,6 +24,20 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(colors));
   }
 
+  /** Validate hex color format: #RGB or #RRGGBB */
+  var HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+  function _isValidHex(color) {
+    return typeof color === 'string' && HEX_RE.test(color);
+  }
+
+  /** Normalize 3-digit hex to 6-digit: #abc → #aabbcc */
+  function _normalize(color) {
+    if (color.length === 4) {
+      return '#' + color[1] + color[1] + color[2] + color[2] + color[3] + color[3];
+    }
+    return color;
+  }
+
   /**
    * Get the assigned color for a channel, or null if unassigned.
    * @param {string} channel - Channel name (e.g. "#test")
@@ -42,8 +56,9 @@
    */
   function setChannelColor(channel, color) {
     if (!channel || !color) return;
+    if (!_isValidHex(color)) return;
     var colors = _load();
-    colors[channel] = color;
+    colors[channel] = _normalize(color);
     _save(colors);
   }
 

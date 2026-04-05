@@ -98,6 +98,28 @@ test('set with null/empty channel is no-op', function() {
   assert.strictEqual(JSON.stringify(ctx.window.ChannelColors.getAll()), '{}');
 });
 
+test('set rejects invalid hex colors', function() {
+  const ctx = makeSandbox();
+  ctx.window.ChannelColors.set('#ch', 'red');
+  ctx.window.ChannelColors.set('#ch', '#xyz');
+  ctx.window.ChannelColors.set('#ch', '#12345');
+  ctx.window.ChannelColors.set('#ch', '#1234567');
+  ctx.window.ChannelColors.set('#ch', 'ff0000');
+  assert.strictEqual(ctx.window.ChannelColors.get('#ch'), null);
+});
+
+test('set normalizes 3-digit hex to 6-digit', function() {
+  const ctx = makeSandbox();
+  ctx.window.ChannelColors.set('#ch', '#abc');
+  assert.strictEqual(ctx.window.ChannelColors.get('#ch'), '#aabbcc');
+});
+
+test('set accepts valid 6-digit hex', function() {
+  const ctx = makeSandbox();
+  ctx.window.ChannelColors.set('#ch', '#ef4444');
+  assert.strictEqual(ctx.window.ChannelColors.get('#ch'), '#ef4444');
+});
+
 test('get with null/empty channel returns null', function() {
   const ctx = makeSandbox();
   assert.strictEqual(ctx.window.ChannelColors.get(''), null);
