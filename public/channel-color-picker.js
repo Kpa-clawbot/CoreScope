@@ -136,19 +136,25 @@
     // Show/hide clear button
     el.querySelector('.cc-picker-clear').style.display = current ? '' : 'none';
 
-    // Position
+    // Position — on touch devices, CSS handles bottom-sheet via @media(pointer:coarse)
     el.style.display = '';
-    el.style.left = '0';
-    el.style.top = '0';
-    var rect = el.getBoundingClientRect();
-    var pw = rect.width;
-    var ph = rect.height;
-    var vw = window.innerWidth;
-    var vh = window.innerHeight;
-    var finalX = x + pw > vw ? Math.max(0, vw - pw - 8) : x;
-    var finalY = y + ph > vh ? Math.max(0, vh - ph - 8) : y;
-    el.style.left = finalX + 'px';
-    el.style.top = finalY + 'px';
+    var isTouch = window.matchMedia('(pointer: coarse)').matches;
+    if (!isTouch) {
+      el.style.left = '0';
+      el.style.top = '0';
+      var rect = el.getBoundingClientRect();
+      var pw = rect.width;
+      var ph = rect.height;
+      var vw = window.innerWidth;
+      var vh = window.innerHeight;
+      var finalX = x + pw > vw ? Math.max(0, vw - pw - 8) : x;
+      var finalY = y + ph > vh ? Math.max(0, vh - ph - 8) : y;
+      el.style.left = finalX + 'px';
+      el.style.top = finalY + 'px';
+    }
+
+    // Lock background scroll while popover is open
+    document.body.style.overflow = 'hidden';
 
     // Focus first swatch for keyboard accessibility
     var firstSwatch = el.querySelector('.cc-swatch');
@@ -164,6 +170,7 @@
   function hidePopover() {
     if (popoverEl) popoverEl.style.display = 'none';
     currentChannel = null;
+    document.body.style.overflow = '';
     document.removeEventListener('click', onOutsideClick, true);
     document.removeEventListener('keydown', onEscape, true);
   }
@@ -264,12 +271,13 @@
       var tx = touch.clientX;
       var ty = touch.clientY;
       longPressTriggered = false;
+      e.preventDefault(); // prevent native long-press context menu / text selection
       longPressTimer = setTimeout(function() {
         longPressTimer = null;
         longPressTriggered = true;
         showPopover(ch, tx, ty);
       }, 500);
-    }, { passive: true });
+    }, { passive: false });
 
     feed.addEventListener('touchend', function(e) {
       if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
