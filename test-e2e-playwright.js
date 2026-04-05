@@ -1646,12 +1646,11 @@ async function run() {
     await page.goto(BASE + '#/nodes', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.node-tab', { timeout: 8000 });
     const roomTab = await page.$('.node-tab[data-tab="room"]');
-    if (roomTab) {
-      await roomTab.click();
-      await page.waitForTimeout(300);
-      const url = page.url();
-      assert(url.includes('tab=room'), `URL should contain tab=room after click, got: ${url}`);
-    }
+    assert(roomTab, 'Room tab (data-tab="room") not found — nodes page may not have rendered or tab selector changed');
+    await roomTab.click();
+    await page.waitForTimeout(300);
+    const url = page.url();
+    assert(url.includes('tab=room'), `URL should contain tab=room after click, got: ${url}`);
   });
 
   await browser.close();
