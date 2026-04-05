@@ -106,11 +106,18 @@ func (tx *StoreTx) ParsedDecoded() map[string]interface{} {
 //   5. regionObsMu   (sync.Mutex)  — guards the region→observer mapping
 //                     cache (regionObsCache, regionObsCacheTime).
 //
-// Nesting that occurs today:
-//   - invalidateCachesFor: cacheMu → channelsCacheMu  (order 2 → 3, OK)
-//   - rebuildAnalyticsCaches: cacheMu → channelsCacheMu  (order 2 → 3, OK)
+//   6. hashSizeInfoMu (sync.Mutex)  — guards the cached hash-size-info
+//                     result (hashSizeInfoCache). Acquired independently or
+//                     under mu (in EvictStale).
 //
-// No other nesting exists. Each remaining lock is acquired independently.
+// Nesting that occurs today:
+//   - IngestNew:               mu → cacheMu → channelsCacheMu  (1 → 2 → 3, OK)
+//   - IngestObservations:      mu → cacheMu                    (1 → 2, OK)
+//   - RunEviction/EvictStale:  mu → cacheMu → channelsCacheMu  (1 → 2 → 3, OK)
+//   - RunEviction/EvictStale:  mu → hashSizeInfoMu             (1 → 6, OK)
+//   - invalidateCachesFor:     cacheMu → channelsCacheMu       (2 → 3, OK)
+//
+// All other locks are acquired independently (no nesting).
 // When adding new lock acquisitions, respect this ordering.
 type PacketStore struct {
 	mu            sync.RWMutex
