@@ -449,6 +449,20 @@ Note: No hardcoded duty cycle limit line on charts. Duty cycle regulations vary 
 - Optional: per-observer historical baseline trend
 - Use 1h resolution for 7d views
 
+### M5: Metrics export — Prometheus / Grafana / external systems
+- **Prometheus endpoint:** `GET /metrics` exposing observer radio metrics in Prometheus exposition format
+  - Gauges per observer: `corescope_observer_noise_floor_dbm{observer="...",name="..."}`, `corescope_observer_tx_air_secs_total`, `corescope_observer_rx_air_secs_total`, `corescope_observer_recv_errors_total`, `corescope_observer_battery_mv`, `corescope_observer_uptime_secs`
+  - Fleet-level: `corescope_observers_total`, `corescope_observers_online`
+  - Packet counters: `corescope_packets_total`, `corescope_observations_total`
+  - Standard `process_*` and `go_*` runtime metrics via `promhttp` handler
+- **Configurable:** Enable/disable via `config.json` (`metrics.prometheusEnabled: true`, `metrics.prometheusPath: "/metrics"`)
+- **Auth:** Optional bearer token or basic auth on the metrics endpoint (prevents public scraping)
+- **Labels:** Each observer metric labeled with `observer` (pubkey), `name` (friendly name), `region`
+- **Why Prometheus format:** Industry standard, compatible with Grafana, Datadog, Victoria Metrics, Mimir, and any OpenMetrics consumer. Operators who already run monitoring stacks can integrate CoreScope without any custom work.
+- **Implementation:** Use Go `prometheus/client_golang` library. Register collectors that read from the in-memory `PacketStore` and `observer_metrics` table. No additional polling — just expose current state on each scrape.
+- **Grafana dashboard template:** Ship a JSON dashboard template (`docs/grafana-dashboard.json`) that operators can import for instant RF health visualization in Grafana. Pre-configured panels matching the built-in RF Health tab.
+- **OpenTelemetry (future):** If demand exists, add OTLP export alongside Prometheus. Not in M5 scope.
+
 ## Design Decisions
 
 1. **Per-observer, not per-device.** Even if two observers share hardware, their RF environments may differ (different antennas, channels). observer_id is already the natural key.
