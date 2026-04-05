@@ -157,6 +157,12 @@ type PacketStore struct {
 	// Persisted neighbor graph for hop resolution at ingest time.
 	graph *NeighborGraph
 
+	// Async backfill state: set after backfillResolvedPathsAsync completes.
+	backfillComplete atomic.Bool
+	// Progress tracking for async backfill (total pending and processed so far).
+	backfillTotal     int64 // set once at start of async backfill
+	backfillProcessed atomic.Int64
+
 	// Eviction config and stats
 	retentionHours   float64        // 0 = unlimited
 	maxMemoryMB      int            // 0 = unlimited

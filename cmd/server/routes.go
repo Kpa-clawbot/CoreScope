@@ -101,6 +101,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// Performance instrumentation middleware
 	r.Use(s.perfMiddleware)
 
+	// Backfill status header middleware
+	r.Use(s.backfillStatusMiddleware)
+
 	// Config endpoints
 	r.HandleFunc("/api/config/cache", s.handleConfigCache).Methods("GET")
 	r.HandleFunc("/api/config/client", s.handleConfigClient).Methods("GET")
@@ -162,6 +165,17 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")
 	r.HandleFunc("/api/iata-coords", s.handleIATACoords).Methods("GET")
 	r.HandleFunc("/api/audio-lab/buckets", s.handleAudioLabBuckets).Methods("GET")
+}
+
+func (s *Server) backfillStatusMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.store != nil && s.store.backfillComplete.Load() {
+			w.Header().Set("X-CoreScope-Status", "ready")
+		} else {
+			w.Header().Set("X-CoreScope-Status", "backfilling")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) perfMiddleware(next http.Handler) http.Handler {
@@ -521,6 +535,19 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	counts := s.db.GetRoleCounts()
+
+	// Compute backfill progress
+	backfilling := s.store != nil && !s.store.backfillComplete.Load()
+	var backfillProgress float64
+	if backfilling && s.store != nil && s.store.backfillTotal > 0 {
+		backfillProgress = float64(s.store.backfillProcessed.Load()) / float64(s.store.backfillTotal)
+		if backfillProgress > 1 {
+			backfillProgress = 1
+		}
+	} else if !backfilling {
+		backfillProgress = 1
+	}
+
 	resp := &StatsResponse{
 		TotalPackets:       stats.TotalPackets,
 		TotalTransmissions: &stats.TotalTransmissions,
@@ -540,6 +567,8 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			Companions: counts["companions"],
 			Sensors:    counts["sensors"],
 		},
+		Backfilling:      backfilling,
+		BackfillProgress: backfillProgress,
 	}
 
 	s.statsMu.Lock()

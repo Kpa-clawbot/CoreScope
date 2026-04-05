@@ -451,6 +451,150 @@ func backfillResolvedPaths(store *PacketStore, dbPath string) int {
 	return count
 }
 
+// backfillResolvedPathsAsync processes observations with NULL resolved_path in
+// chunks, yielding between batches so HTTP handlers remain responsive. It sets
+// store.backfillComplete when finished and re-picks best observations for any
+// transmissions affected by newly resolved paths.
+func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int, yieldDuration time.Duration) {
+	// Count total pending under read lock.
+	store.mu.RLock()
+	pm := store.nodePM
+	graph := store.graph
+	var totalPending int
+	for _, tx := range store.packets {
+		for _, obs := range tx.Observations {
+			if obs.ResolvedPath == nil && obs.PathJSON != "" && obs.PathJSON != "[]" {
+				totalPending++
+			}
+		}
+	}
+	store.mu.RUnlock()
+
+	if totalPending == 0 || pm == nil {
+		store.backfillComplete.Store(true)
+		log.Printf("[store] async resolved_path backfill: nothing to do")
+		return
+	}
+
+	store.backfillTotal = int64(totalPending)
+	store.backfillProcessed.Store(0)
+	log.Printf("[store] async resolved_path backfill starting: %d observations", totalPending)
+
+	totalProcessed := 0
+	for {
+		// Collect a chunk of pending observations under read lock.
+		type obsRef struct {
+			obsID      int
+			pathJSON   string
+			observerID string
+			txJSON     string
+			payloadType *int
+			txHash     string // to re-pick best obs
+		}
+
+		store.mu.RLock()
+		var chunk []obsRef
+		for _, tx := range store.packets {
+			if len(chunk) >= chunkSize {
+				break
+			}
+			for _, obs := range tx.Observations {
+				if obs.ResolvedPath == nil && obs.PathJSON != "" && obs.PathJSON != "[]" {
+					chunk = append(chunk, obsRef{
+						obsID:       obs.ID,
+						pathJSON:    obs.PathJSON,
+						observerID:  obs.ObserverID,
+						txJSON:      tx.DecodedJSON,
+						payloadType: tx.PayloadType,
+						txHash:      tx.Hash,
+					})
+					if len(chunk) >= chunkSize {
+						break
+					}
+				}
+			}
+		}
+		store.mu.RUnlock()
+
+		if len(chunk) == 0 {
+			break
+		}
+
+		// Resolve paths outside the lock.
+		type resolved struct {
+			obsID  int
+			rp     []*string
+			rpJSON string
+			txHash string
+		}
+		var results []resolved
+		for _, ref := range chunk {
+			fakeTx := &StoreTx{DecodedJSON: ref.txJSON, PayloadType: ref.payloadType}
+			rp := resolvePathForObs(ref.pathJSON, ref.observerID, fakeTx, pm, graph)
+			if len(rp) > 0 {
+				rpJSON := marshalResolvedPath(rp)
+				if rpJSON != "" {
+					results = append(results, resolved{ref.obsID, rp, rpJSON, ref.txHash})
+				}
+			}
+		}
+
+		// Persist to SQLite.
+		if len(results) > 0 {
+			rw, err := openRW(dbPath)
+			if err != nil {
+				log.Printf("[store] async backfill: open rw error: %v", err)
+			} else {
+				sqlTx, err := rw.Begin()
+				if err != nil {
+					log.Printf("[store] async backfill: begin tx error: %v", err)
+				} else {
+					stmt, err := sqlTx.Prepare("UPDATE observations SET resolved_path = ? WHERE id = ?")
+					if err != nil {
+						log.Printf("[store] async backfill: prepare error: %v", err)
+						sqlTx.Rollback()
+					} else {
+						for _, r := range results {
+							stmt.Exec(r.rpJSON, r.obsID)
+						}
+						stmt.Close()
+						if err := sqlTx.Commit(); err != nil {
+							log.Printf("[store] async backfill: commit error: %v", err)
+						}
+					}
+				}
+				rw.Close()
+			}
+
+			// Update in-memory state + re-pick best obs for affected txs.
+			affectedTxs := make(map[string]bool)
+			store.mu.Lock()
+			for _, r := range results {
+				if obs, ok := store.byObsID[r.obsID]; ok {
+					obs.ResolvedPath = r.rp
+				}
+				affectedTxs[r.txHash] = true
+			}
+			for hash := range affectedTxs {
+				if tx, ok := store.byHash[hash]; ok {
+					pickBestObservation(tx)
+				}
+			}
+			store.mu.Unlock()
+		}
+
+		totalProcessed += len(chunk)
+		store.backfillProcessed.Store(int64(totalProcessed))
+		pct := float64(totalProcessed) / float64(totalPending) * 100
+		log.Printf("[store] backfill progress: %d/%d observations (%.1f%%)", totalProcessed, totalPending, pct)
+
+		time.Sleep(yieldDuration)
+	}
+
+	store.backfillComplete.Store(true)
+	log.Printf("[store] async resolved_path backfill complete: %d observations processed", totalProcessed)
+}
+
 // ─── Shared helpers ────────────────────────────────────────────────────────────
 
 // edgeCandidate represents an extracted edge to be persisted.

@@ -176,12 +176,9 @@ func main() {
 		store.graph = BuildFromStore(store)
 	}
 
-	// Backfill resolved_path for observations that don't have it yet
-	if backfilled := backfillResolvedPaths(store, dbPath); backfilled > 0 {
-		log.Printf("[store] backfilled resolved_path for %d observations", backfilled)
-	}
-
-	// Re-pick best observation now that resolved paths are populated
+	// Backfill resolved_path runs asynchronously after HTTP starts (see below).
+	// Initial pickBestObservation runs with whatever resolved_path data was
+	// loaded from SQLite; the async backfill will re-pick affected transmissions.
 	store.mu.Lock()
 	for _, tx := range store.packets {
 		pickBestObservation(tx)
@@ -325,6 +322,10 @@ func main() {
 	}()
 
 	log.Printf("[server] CoreScope (Go) listening on http://localhost:%d", cfg.Port)
+
+	// Start async backfill in background — HTTP is now available.
+	go backfillResolvedPathsAsync(store, dbPath, 5000, 100*time.Millisecond)
+
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("[server] %v", err)
 	}
