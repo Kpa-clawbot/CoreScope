@@ -456,20 +456,37 @@ func backfillResolvedPaths(store *PacketStore, dbPath string) int {
 // store.backfillComplete when finished and re-picks best observations for any
 // transmissions affected by newly resolved paths.
 func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int, yieldDuration time.Duration) {
-	// Count total pending under read lock.
+	// Collect ALL pending obs refs upfront in one pass under a single RLock (fix A).
+	type obsRef struct {
+		obsID       int
+		pathJSON    string
+		observerID  string
+		txJSON      string
+		payloadType *int
+		txHash      string // to re-pick best obs
+	}
+
 	store.mu.RLock()
 	pm := store.nodePM
 	graph := store.graph
-	var totalPending int
+	var allPending []obsRef
 	for _, tx := range store.packets {
 		for _, obs := range tx.Observations {
 			if obs.ResolvedPath == nil && obs.PathJSON != "" && obs.PathJSON != "[]" {
-				totalPending++
+				allPending = append(allPending, obsRef{
+					obsID:       obs.ID,
+					pathJSON:    obs.PathJSON,
+					observerID:  obs.ObserverID,
+					txJSON:      tx.DecodedJSON,
+					payloadType: tx.PayloadType,
+					txHash:      tx.Hash,
+				})
 			}
 		}
 	}
 	store.mu.RUnlock()
 
+	totalPending := len(allPending)
 	if totalPending == 0 || pm == nil {
 		store.backfillComplete.Store(true)
 		log.Printf("[store] async resolved_path backfill: nothing to do")
@@ -480,47 +497,30 @@ func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int
 	store.backfillProcessed.Store(0)
 	log.Printf("[store] async resolved_path backfill starting: %d observations", totalPending)
 
+	// Open RW connection once before the chunk loop (fix B).
+	var rw *sql.DB
+	if dbPath != "" {
+		var err error
+		rw, err = openRW(dbPath)
+		if err != nil {
+			log.Printf("[store] async backfill: open rw error: %v", err)
+		}
+	}
+	defer func() {
+		if rw != nil {
+			rw.Close()
+		}
+	}()
+
 	totalProcessed := 0
-	for {
-		// Collect a chunk of pending observations under read lock.
-		type obsRef struct {
-			obsID      int
-			pathJSON   string
-			observerID string
-			txJSON     string
-			payloadType *int
-			txHash     string // to re-pick best obs
+	for totalProcessed < totalPending {
+		end := totalProcessed + chunkSize
+		if end > totalPending {
+			end = totalPending
 		}
+		chunk := allPending[totalProcessed:end]
 
-		store.mu.RLock()
-		var chunk []obsRef
-		for _, tx := range store.packets {
-			if len(chunk) >= chunkSize {
-				break
-			}
-			for _, obs := range tx.Observations {
-				if obs.ResolvedPath == nil && obs.PathJSON != "" && obs.PathJSON != "[]" {
-					chunk = append(chunk, obsRef{
-						obsID:       obs.ID,
-						pathJSON:    obs.PathJSON,
-						observerID:  obs.ObserverID,
-						txJSON:      tx.DecodedJSON,
-						payloadType: tx.PayloadType,
-						txHash:      tx.Hash,
-					})
-					if len(chunk) >= chunkSize {
-						break
-					}
-				}
-			}
-		}
-		store.mu.RUnlock()
-
-		if len(chunk) == 0 {
-			break
-		}
-
-		// Resolve paths outside the lock.
+		// Resolve paths outside any lock.
 		type resolved struct {
 			obsID  int
 			rp     []*string
@@ -539,46 +539,96 @@ func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int
 			}
 		}
 
-		// Persist to SQLite.
-		if len(results) > 0 {
-			rw, err := openRW(dbPath)
+		// Persist to SQLite using the shared connection.
+		if len(results) > 0 && rw != nil {
+			sqlTx, err := rw.Begin()
 			if err != nil {
-				log.Printf("[store] async backfill: open rw error: %v", err)
+				log.Printf("[store] async backfill: begin tx error: %v", err)
 			} else {
-				sqlTx, err := rw.Begin()
+				stmt, err := sqlTx.Prepare("UPDATE observations SET resolved_path = ? WHERE id = ?")
 				if err != nil {
-					log.Printf("[store] async backfill: begin tx error: %v", err)
+					log.Printf("[store] async backfill: prepare error: %v", err)
+					sqlTx.Rollback()
 				} else {
-					stmt, err := sqlTx.Prepare("UPDATE observations SET resolved_path = ? WHERE id = ?")
-					if err != nil {
-						log.Printf("[store] async backfill: prepare error: %v", err)
-						sqlTx.Rollback()
-					} else {
-						for _, r := range results {
-							stmt.Exec(r.rpJSON, r.obsID)
-						}
-						stmt.Close()
-						if err := sqlTx.Commit(); err != nil {
-							log.Printf("[store] async backfill: commit error: %v", err)
-						}
+					for _, r := range results {
+						stmt.Exec(r.rpJSON, r.obsID)
+					}
+					stmt.Close()
+					if err := sqlTx.Commit(); err != nil {
+						log.Printf("[store] async backfill: commit error: %v", err)
 					}
 				}
-				rw.Close()
 			}
 
-			// Update in-memory state + re-pick best obs for affected txs.
-			affectedTxs := make(map[string]bool)
+			// Fix C: minimize write lock hold time.
+			// Step 1: Under write lock, update resolved paths in memory and collect affected tx pointers.
+			var affectedTxs []*StoreTx
 			store.mu.Lock()
+			affectedSet := make(map[string]bool)
 			for _, r := range results {
 				if obs, ok := store.byObsID[r.obsID]; ok {
 					obs.ResolvedPath = r.rp
 				}
-				affectedTxs[r.txHash] = true
-			}
-			for hash := range affectedTxs {
-				if tx, ok := store.byHash[hash]; ok {
-					pickBestObservation(tx)
+				if !affectedSet[r.txHash] {
+					affectedSet[r.txHash] = true
+					if tx, ok := store.byHash[r.txHash]; ok {
+						affectedTxs = append(affectedTxs, tx)
+					}
 				}
+			}
+			store.mu.Unlock()
+
+			// Step 2: Re-pick best observation for each affected tx outside write lock.
+			// pickBestObservation reads tx.Observations (slice doesn't change during backfill)
+			// and computes which obs is "best" — a read-only scan. We snapshot the result
+			// and write it back under a brief lock.
+			type bestPick struct {
+				tx           *StoreTx
+				observerID   string
+				observerName string
+				snr          *float64
+				rssi         *float64
+				pathJSON     string
+				direction    string
+				resolvedPath []*string
+			}
+			var picks []bestPick
+			for _, tx := range affectedTxs {
+				if len(tx.Observations) == 0 {
+					continue
+				}
+				best := tx.Observations[0]
+				bestLen := pathLen(best.PathJSON)
+				for _, obs := range tx.Observations[1:] {
+					l := pathLen(obs.PathJSON)
+					if l > bestLen {
+						best = obs
+						bestLen = l
+					}
+				}
+				picks = append(picks, bestPick{
+					tx:           tx,
+					observerID:   best.ObserverID,
+					observerName: best.ObserverName,
+					snr:          best.SNR,
+					rssi:         best.RSSI,
+					pathJSON:     best.PathJSON,
+					direction:    best.Direction,
+					resolvedPath: best.ResolvedPath,
+				})
+			}
+
+			// Step 3: Under brief write lock, write back the re-picked best observation fields.
+			store.mu.Lock()
+			for _, p := range picks {
+				p.tx.ObserverID = p.observerID
+				p.tx.ObserverName = p.observerName
+				p.tx.SNR = p.snr
+				p.tx.RSSI = p.rssi
+				p.tx.PathJSON = p.pathJSON
+				p.tx.Direction = p.direction
+				p.tx.ResolvedPath = p.resolvedPath
+				p.tx.pathParsed = false
 			}
 			store.mu.Unlock()
 		}
