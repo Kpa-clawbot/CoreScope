@@ -4490,6 +4490,50 @@ console.log('\n=== app.js: routeTypeName/payloadTypeName edge cases ===');
   });
 }
 
+// ===== REGION-FILTER.JS: setSelected =====
+console.log('\n=== region-filter.js: setSelected ===');
+{
+  const ctx = makeSandbox();
+  ctx.fetch = () => Promise.resolve({ json: () => Promise.resolve({ 'US-SFO': 'San Jose', 'US-LAX': 'Los Angeles' }) });
+
+  // Patch createElement to return an object with style property
+  const origCreate = ctx.document.createElement;
+  ctx.document.createElement = () => ({
+    id: '', textContent: '', innerHTML: '',
+    style: {},
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    onclick: null,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  });
+
+  loadInCtx(ctx, 'public/region-filter.js');
+
+  const RF = ctx.RegionFilter;
+
+  test('setSelected sets region codes', async () => {
+    await RF.init(ctx.document.createElement('div'));
+    RF.setSelected(['US-SFO', 'US-LAX']);
+    assert.strictEqual(RF.getRegionParam(), 'US-SFO,US-LAX');
+  });
+
+  test('setSelected with null clears selection', async () => {
+    await RF.init(ctx.document.createElement('div'));
+    RF.setSelected(['US-SFO']);
+    RF.setSelected(null);
+    assert.strictEqual(RF.getRegionParam(), '');
+  });
+
+  test('setSelected with empty array clears selection', async () => {
+    await RF.init(ctx.document.createElement('div'));
+    RF.setSelected(['US-SFO']);
+    RF.setSelected([]);
+    assert.strictEqual(RF.getRegionParam(), '');
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
