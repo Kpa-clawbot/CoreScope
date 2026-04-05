@@ -2306,7 +2306,231 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     _ngState.animId = requestAnimationFrame(tick);
   }
 
-  // --- Prefix Tool ---
+  // --- Prefix Tool: Pure logic (exported for testing via _prefixToolExports) ---
+  const PREFIX_SPACE_SIZES = { 1: 256, 2: 65536, 3: 16777216 };
+
+  /** Build 3-tier prefix indexes from deduplicated nodes. Returns { 1: Map, 2: Map, 3: Map } */
+  function buildPrefixIndex(nodes) {
+    const idx = { 1: new Map(), 2: new Map(), 3: new Map() };
+    nodes.forEach(n => {
+      const pk = n.public_key.toUpperCase();
+      [1, 2, 3].forEach(b => {
+        const p = pk.slice(0, b * 2);
+        if (!idx[b].has(p)) idx[b].set(p, []);
+        idx[b].get(p).push(n);
+      });
+    });
+    return idx;
+  }
+
+  /** Compute collision stats per tier */
+  function computePrefixStats(idx) {
+    const stats = {};
+    [1, 2, 3].forEach(b => {
+      stats[b] = {
+        usedPrefixes: idx[b].size,
+        collidingPrefixes: [...idx[b].values()].filter(arr => arr.length > 1).length,
+      };
+    });
+    return stats;
+  }
+
+  /** Recommend prefix byte size based on network size */
+  function recommendPrefixSize(totalNodes) {
+    if (totalNodes < 20) {
+      return { rec: '1-byte', detail: `With only ${totalNodes} nodes, 1-byte prefixes have low collision risk.` };
+    } else if (totalNodes < 500) {
+      return { rec: '2-byte', detail: `With ${totalNodes} nodes, 2-byte prefixes are recommended to avoid collisions.` };
+    } else {
+      return { rec: '3-byte', detail: `With ${totalNodes} nodes, 3-byte prefixes are recommended for collision-free operation.` };
+    }
+  }
+
+  /** Validate prefix input. Returns { valid, error, input, isFullKey, tiers } */
+  function validatePrefixInput(raw) {
+    const input = raw.trim().toUpperCase();
+    if (!input) return { valid: false, error: null, input, isEmpty: true };
+    if (!/^[0-9A-F]+$/.test(input)) {
+      return { valid: false, error: 'Invalid input — hex characters only (0-9, A-F).', input };
+    }
+    if (input.length % 2 !== 0 || (input.length !== 2 && input.length !== 4 && input.length !== 6 && input.length < 8)) {
+      return { valid: false, error: 'Prefix must be 2, 4, or 6 hex characters. For a full public key, use 64 characters.', input };
+    }
+    const isFullKey = input.length >= 8;
+    const tiers = isFullKey
+      ? [{ b: 1, prefix: input.slice(0, 2) }, { b: 2, prefix: input.slice(0, 4) }, { b: 3, prefix: input.slice(0, 6) }]
+      : [{ b: input.length / 2, prefix: input }];
+    return { valid: true, input, isFullKey, tiers };
+  }
+
+  /** Check a prefix against the index. Returns collision info per tier. */
+  function checkPrefix(raw, idx, nodes) {
+    const v = validatePrefixInput(raw);
+    if (!v.valid) return v;
+    const results = v.tiers.map(({ b, prefix }) => {
+      const matches = idx[b].get(prefix) || [];
+      const colliders = v.isFullKey ? matches.filter(n => n.public_key.toUpperCase() !== v.input) : matches;
+      return { b, prefix, colliders, count: colliders.length };
+    });
+    const inNetwork = v.isFullKey ? nodes.some(n => n.public_key.toUpperCase() === v.input) : null;
+    return { valid: true, input: v.input, isFullKey: v.isFullKey, results, inNetwork };
+  }
+
+  /** Generate a collision-free prefix of the given byte size. Returns null if none available. */
+  function generatePrefix(b, idx, randFn) {
+    const hexLen = b * 2;
+    const totalSpace = PREFIX_SPACE_SIZES[b];
+    const available = totalSpace - idx[b].size;
+    if (available === 0) return null;
+
+    const _rand = randFn || Math.random;
+    if (b === 1) {
+      const free = [];
+      for (let i = 0; i < totalSpace; i++) {
+        const p = i.toString(16).toUpperCase().padStart(hexLen, '0');
+        if (!idx[b].has(p)) free.push(p);
+      }
+      return free[Math.floor(_rand() * free.length)];
+    }
+    // Random sampling with fallback
+    let attempts = 0, prefix;
+    do {
+      prefix = Math.floor(_rand() * totalSpace).toString(16).toUpperCase().padStart(hexLen, '0');
+    } while (idx[b].has(prefix) && ++attempts < 500);
+    if (idx[b].has(prefix)) {
+      for (let i = 0; i < totalSpace; i++) {
+        const p = i.toString(16).toUpperCase().padStart(hexLen, '0');
+        if (!idx[b].has(p)) return p;
+      }
+    }
+    return prefix;
+  }
+
+  // --- Prefix Tool: HTML helpers ---
+  function renderNodeEntry(n, escFn) {
+    const name = escFn(n.name || n.public_key.slice(0, 12));
+    const role = n.role ? `<span class="text-muted" style="font-size:0.82em">${escFn(n.role)}</span>` : '';
+    const when = n.last_seen ? ` <span class="text-muted" style="font-size:0.8em">${new Date(n.last_seen).toLocaleDateString()}</span>` : '';
+    return `<div style="padding:3px 0"><a href="#/nodes/${encodeURIComponent(n.public_key)}" class="analytics-link">${name}</a> ${role}${when}</div>`;
+  }
+
+  function renderSeverityBadge(count) {
+    if (count === 0) return '<span style="color:var(--status-green)">✅ Unique</span>';
+    if (count <= 2) return `<span style="color:var(--status-yellow)">⚠️ ${count} collision${count !== 1 ? 's' : ''}</span>`;
+    return `<span style="color:var(--status-red)">🔴 ${count} collisions</span>`;
+  }
+
+  function renderPrefixStatCard(b, stat, spaceSize) {
+    const hasCollisions = stat.collidingPrefixes > 0;
+    return `<div class="analytics-stat-card" style="flex:1;min-width:150px;border-color:${hasCollisions ? 'var(--status-red)' : 'var(--border)'}">
+      <div class="analytics-stat-label">${b}-byte prefixes</div>
+      <div class="analytics-stat-value" style="font-size:1em">
+        ${stat.usedPrefixes.toLocaleString()}
+        <span class="text-muted" style="font-size:0.7em"> / ${spaceSize.toLocaleString()}</span>
+      </div>
+      <div style="font-size:0.82em;margin-top:4px;color:${hasCollisions ? 'var(--status-red)' : 'var(--status-green)'}">
+        ${stat.collidingPrefixes === 0
+          ? '✅ No collisions'
+          : `⚠️ ${stat.collidingPrefixes} prefix${stat.collidingPrefixes !== 1 ? 'es' : ''} collide`}
+      </div>
+    </div>`;
+  }
+
+  function renderNetworkOverview(totalNodes, stats, rec, recDetail, regionLabel) {
+    const regionNote = regionLabel
+      ? `<p class="text-muted" style="font-size:0.85em;margin:4px 0 0">Showing data for region: <strong>${esc(regionLabel)}</strong>. <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">Check all nodes →</a></p>`
+      : '';
+    return `<div class="analytics-card" id="ptOverview">
+      <div style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none" id="ptOverviewToggle">
+        <span id="ptOverviewChevron" style="font-size:0.75em;color:var(--text-muted);transition:transform 0.2s">▶</span>
+        <h3 style="margin:0">Network Overview</h3>
+      </div>
+      <div id="ptOverviewBody" style="display:none">
+        ${regionNote}
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0 16px">
+          <div class="analytics-stat-card" style="flex:1;min-width:110px">
+            <div class="analytics-stat-label">Total nodes</div>
+            <div class="analytics-stat-value">${totalNodes.toLocaleString()}</div>
+          </div>
+          ${[1, 2, 3].map(b => renderPrefixStatCard(b, stats[b], PREFIX_SPACE_SIZES[b])).join('')}
+        </div>
+        <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px">
+          <strong>Recommendation: ${rec} prefixes</strong> — ${recDetail}
+          <span class="text-muted" style="font-size:0.8em;display:block;margin-top:4px">Hash size is configured per-node in firmware. Changing requires reflashing.</span>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderPrefixChecker(initPrefix) {
+    return `<div class="analytics-card" id="ptChecker">
+      <h3 style="margin-top:0">Check a Prefix</h3>
+      <p class="text-muted" style="margin-top:0;font-size:0.9em">Enter a 1-byte (2 hex chars), 2-byte (4 hex chars), or 3-byte (6 hex chars) prefix — or paste a full public key.</p>
+      <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
+        <input id="ptPrefixInput" type="text" placeholder="e.g. A3F1" maxlength="64"
+          style="font-family:var(--mono);font-size:1em;padding:6px 10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;min-width:180px;flex:1"
+          value="${esc(initPrefix)}">
+        <button id="ptCheckBtn" style="padding:6px 16px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">Check</button>
+      </div>
+      <div id="ptCheckerResults" style="margin-top:14px"></div>
+    </div>`;
+  }
+
+  function renderPrefixGenerator(initGenerate) {
+    return `<div class="analytics-card" id="ptGenerator">
+      <h3 style="margin-top:0">Generate Available Prefix</h3>
+      <p class="text-muted" style="margin-top:0;font-size:0.9em">Find a prefix with zero current collisions.</p>
+      <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="radio" name="ptGenSize" value="1" ${initGenerate === '1' ? 'checked' : ''}> 1-byte
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="radio" name="ptGenSize" value="2" ${initGenerate !== '1' && initGenerate !== '3' ? 'checked' : ''}> 2-byte
+          <span class="text-muted" style="font-size:0.8em">(recommended)</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="radio" name="ptGenSize" value="3" ${initGenerate === '3' ? 'checked' : ''}> 3-byte
+        </label>
+        <button id="ptGenBtn" style="padding:6px 16px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">Generate</button>
+      </div>
+      <div id="ptGenResult"></div>
+      <div style="margin-top:14px;padding:10px 14px;border:1px solid var(--accent);border-radius:6px;background:var(--bg-secondary,var(--bg));font-size:0.88em">
+        📖 <strong>New to multi-byte prefixes?</strong>
+        <a href="https://github.com/meshcore-dev/MeshCore/blob/main/docs/faq.md#39-q-what-is-multi-byte-support--what-do-1-byte-2-byte-3-byte-adverts-and-messages-mean"
+          target="_blank" rel="noopener noreferrer" style="color:var(--accent);margin-left:4px">
+          Read the MeshCore FAQ on multi-byte support →
+        </a>
+      </div>
+    </div>`;
+  }
+
+  function renderCheckerResults(checkResult, escFn) {
+    if (!checkResult.valid) {
+      return checkResult.error
+        ? `<p style="color:var(--status-red);margin:0">${checkResult.error}</p>`
+        : '';
+    }
+    let html = '';
+    if (checkResult.isFullKey) {
+      const inp = checkResult.input;
+      html += `<p class="text-muted" style="font-size:0.85em;margin:0 0 10px">Derived prefixes: <code class="mono">${inp.slice(0,2)}</code> / <code class="mono">${inp.slice(0,4)}</code> / <code class="mono">${inp.slice(0,6)}</code>${checkResult.inNetwork === false ? ' — <em>this node is not yet in the network</em>' : ''}</p>`;
+    }
+    checkResult.results.forEach(({ b, prefix, colliders, count }) => {
+      html += `<div style="margin-bottom:10px;padding:10px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary,var(--bg))">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <code class="mono" style="font-weight:700">${prefix}</code>
+          <span class="text-muted" style="font-size:0.82em">${b}-byte</span>
+          ${renderSeverityBadge(count)}
+        </div>
+        ${count === 0
+          ? '<div class="text-muted" style="font-size:0.85em">No existing nodes use this prefix.</div>'
+          : `<div style="font-size:0.85em;max-height:140px;overflow-y:auto">${colliders.map(n => renderNodeEntry(n, escFn)).join('')}</div>`}
+      </div>`;
+    });
+    return html;
+  }
+
+  // --- Prefix Tool: main render (orchestrates the above) ---
   async function renderPrefixTool(el) {
     el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading prefix data…</div>';
 
@@ -2321,7 +2545,6 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       return;
     }
 
-    // Deduplicate by public_key, require at least 6 hex chars to build all 3 tiers
     const nodeMap = new Map();
     (nodesResp.nodes || nodesResp).forEach(n => {
       if (n.public_key && n.public_key.length >= 6 && !nodeMap.has(n.public_key)) {
@@ -2335,220 +2558,46 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       return;
     }
 
-    // Build 3-tier prefix indexes: prefix (uppercase hex) -> [nodes]
-    const idx = { 1: new Map(), 2: new Map(), 3: new Map() };
-    nodes.forEach(n => {
-      const pk = n.public_key.toUpperCase();
-      [1, 2, 3].forEach(b => {
-        const p = pk.slice(0, b * 2);
-        if (!idx[b].has(p)) idx[b].set(p, []);
-        idx[b].get(p).push(n);
-      });
-    });
-
-    // Network overview stats
-    const spaceSizes = { 1: 256, 2: 65536, 3: 16777216 };
-    const stats = {};
-    [1, 2, 3].forEach(b => {
-      stats[b] = {
-        usedPrefixes: idx[b].size,
-        collidingPrefixes: [...idx[b].values()].filter(arr => arr.length > 1).length,
-      };
-    });
-
-    // Recommendation by network size
+    const idx = buildPrefixIndex(nodes);
+    const stats = computePrefixStats(idx);
     const totalNodes = nodes.length;
-    let rec, recDetail;
-    if (totalNodes < 20) {
-      rec = '1-byte'; recDetail = `With only ${totalNodes} nodes, 1-byte prefixes have low collision risk.`;
-    } else if (totalNodes < 500) {
-      rec = '2-byte'; recDetail = `With ${totalNodes} nodes, 2-byte prefixes are recommended to avoid collisions.`;
-    } else {
-      rec = '2-byte'; recDetail = `With ${totalNodes} nodes, 2-byte prefixes are strongly recommended.`;
-    }
+    const { rec, detail: recDetail } = recommendPrefixSize(totalNodes);
 
-    // URL params for pre-fill / auto-run
     const hashParams = new URLSearchParams((location.hash.split('?')[1] || ''));
     const initPrefix = hashParams.get('prefix') || '';
     const initGenerate = hashParams.get('generate') || '';
 
-    const regionNote = regionLabel
-      ? `<p class="text-muted" style="font-size:0.85em;margin:4px 0 0">Showing data for region: <strong>${esc(regionLabel)}</strong>. <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">Check all nodes →</a></p>`
-      : '';
+    el.innerHTML = renderNetworkOverview(totalNodes, stats, rec, recDetail, regionLabel)
+      + renderPrefixChecker(initPrefix)
+      + renderPrefixGenerator(initGenerate);
 
-    el.innerHTML = `
-      <div class="analytics-card" id="ptOverview">
-        <div style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none" id="ptOverviewToggle">
-          <span id="ptOverviewChevron" style="font-size:0.75em;color:var(--text-muted);transition:transform 0.2s">▶</span>
-          <h3 style="margin:0">Network Overview</h3>
-        </div>
-        <div id="ptOverviewBody" style="display:none">
-          ${regionNote}
-          <div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0 16px">
-            <div class="analytics-stat-card" style="flex:1;min-width:110px">
-              <div class="analytics-stat-label">Total nodes</div>
-              <div class="analytics-stat-value">${totalNodes.toLocaleString()}</div>
-            </div>
-            ${[1, 2, 3].map(b => `
-            <div class="analytics-stat-card" style="flex:1;min-width:150px;border-color:${stats[b].collidingPrefixes > 0 ? 'var(--status-red)' : 'var(--border)'}">
-              <div class="analytics-stat-label">${b}-byte prefixes</div>
-              <div class="analytics-stat-value" style="font-size:1em">
-                ${stats[b].usedPrefixes.toLocaleString()}
-                <span class="text-muted" style="font-size:0.7em"> / ${spaceSizes[b].toLocaleString()}</span>
-              </div>
-              <div style="font-size:0.82em;margin-top:4px;color:${stats[b].collidingPrefixes > 0 ? 'var(--status-red)' : 'var(--status-green)'}">
-                ${stats[b].collidingPrefixes === 0
-                  ? '✅ No collisions'
-                  : `⚠️ ${stats[b].collidingPrefixes} prefix${stats[b].collidingPrefixes !== 1 ? 'es' : ''} collide`}
-              </div>
-            </div>`).join('')}
-          </div>
-          <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px">
-            <strong>Recommendation: ${rec} prefixes</strong> — ${recDetail}
-            <span class="text-muted" style="font-size:0.8em;display:block;margin-top:4px">Hash size is configured per-node in firmware. Changing requires reflashing.</span>
-          </div>
-        </div>
-      </div>
-
-      <div class="analytics-card" id="ptChecker">
-        <h3 style="margin-top:0">Check a Prefix</h3>
-        <p class="text-muted" style="margin-top:0;font-size:0.9em">Enter a 1-byte (2 hex chars), 2-byte (4 hex chars), or 3-byte (6 hex chars) prefix — or paste a full public key.</p>
-        <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
-          <input id="ptPrefixInput" type="text" placeholder="e.g. A3F1" maxlength="64"
-            style="font-family:var(--mono);font-size:1em;padding:6px 10px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;min-width:180px;flex:1"
-            value="${esc(initPrefix)}">
-          <button id="ptCheckBtn" style="padding:6px 16px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">Check</button>
-        </div>
-        <div id="ptCheckerResults" style="margin-top:14px"></div>
-      </div>
-
-      <div class="analytics-card" id="ptGenerator">
-        <h3 style="margin-top:0">Generate Available Prefix</h3>
-        <p class="text-muted" style="margin-top:0;font-size:0.9em">Find a prefix with zero current collisions.</p>
-        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-            <input type="radio" name="ptGenSize" value="1" ${initGenerate === '1' ? 'checked' : ''}> 1-byte
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-            <input type="radio" name="ptGenSize" value="2" ${initGenerate !== '1' && initGenerate !== '3' ? 'checked' : ''}> 2-byte
-            <span class="text-muted" style="font-size:0.8em">(recommended)</span>
-          </label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-            <input type="radio" name="ptGenSize" value="3" ${initGenerate === '3' ? 'checked' : ''}> 3-byte
-          </label>
-          <button id="ptGenBtn" style="padding:6px 16px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.95em">Generate</button>
-        </div>
-        <div id="ptGenResult"></div>
-        <div style="margin-top:14px;padding:10px 14px;border:1px solid var(--accent);border-radius:6px;background:var(--bg-secondary,var(--bg));font-size:0.88em">
-          📖 <strong>New to multi-byte prefixes?</strong>
-          <a href="https://github.com/meshcore-dev/MeshCore/blob/main/docs/faq.md#39-q-what-is-multi-byte-support--what-do-1-byte-2-byte-3-byte-adverts-and-messages-mean"
-            target="_blank" rel="noopener noreferrer" style="color:var(--accent);margin-left:4px">
-            Read the MeshCore FAQ on multi-byte support →
-          </a>
-        </div>
-      </div>`;
-
-    // --- Helpers ---
-    function nodeEntry(n) {
-      const name = esc(n.name || n.public_key.slice(0, 12));
-      const role = n.role ? `<span class="text-muted" style="font-size:0.82em">${esc(n.role)}</span>` : '';
-      const when = n.last_seen ? ` <span class="text-muted" style="font-size:0.8em">${new Date(n.last_seen).toLocaleDateString()}</span>` : '';
-      return `<div style="padding:3px 0"><a href="#/nodes/${encodeURIComponent(n.public_key)}" class="analytics-link">${name}</a> ${role}${when}</div>`;
-    }
-
-    function severityBadge(count) {
-      if (count === 0) return '<span style="color:var(--status-green)">✅ Unique</span>';
-      if (count <= 2) return `<span style="color:var(--status-yellow)">⚠️ ${count} collision${count !== 1 ? 's' : ''}</span>`;
-      return `<span style="color:var(--status-red)">🔴 ${count} collisions</span>`;
-    }
-
-    // --- Checker ---
-    function doCheck(raw) {
+    // --- Wire up checker ---
+    const doCheck = (raw) => {
       const resultsEl = document.getElementById('ptCheckerResults');
       if (!resultsEl) return;
-      const input = raw.trim().toUpperCase();
-      if (!input) { resultsEl.innerHTML = ''; return; }
+      const result = checkPrefix(raw, idx, nodes);
+      resultsEl.innerHTML = renderCheckerResults(result, esc);
+    };
 
-      if (!/^[0-9A-F]+$/.test(input)) {
-        resultsEl.innerHTML = '<p style="color:var(--status-red);margin:0">Invalid input — hex characters only (0-9, A-F).</p>';
-        return;
-      }
-      if (input.length % 2 !== 0 || (input.length !== 2 && input.length !== 4 && input.length !== 6 && input.length < 8)) {
-        resultsEl.innerHTML = '<p style="color:var(--status-red);margin:0">Prefix must be 2, 4, or 6 hex characters. For a full public key, use 64 characters.</p>';
-        return;
-      }
+    document.getElementById('ptCheckBtn').addEventListener('click', () => doCheck(document.getElementById('ptPrefixInput').value));
+    document.getElementById('ptPrefixInput').addEventListener('keydown', e => { if (e.key === 'Enter') doCheck(e.target.value); });
 
-      const isFullKey = input.length >= 8;
-      const tiers = isFullKey
-        ? [{ b: 1, prefix: input.slice(0, 2) }, { b: 2, prefix: input.slice(0, 4) }, { b: 3, prefix: input.slice(0, 6) }]
-        : [{ b: input.length / 2, prefix: input }];
-
-      let html = '';
-      if (isFullKey) {
-        const inNetwork = nodes.some(n => n.public_key.toUpperCase() === input);
-        html += `<p class="text-muted" style="font-size:0.85em;margin:0 0 10px">Derived prefixes: <code class="mono">${input.slice(0,2)}</code> / <code class="mono">${input.slice(0,4)}</code> / <code class="mono">${input.slice(0,6)}</code>${!inNetwork ? ' — <em>this node is not yet in the network</em>' : ''}</p>`;
-      }
-
-      tiers.forEach(({ b, prefix }) => {
-        const matches = idx[b].get(prefix) || [];
-        const colliders = isFullKey ? matches.filter(n => n.public_key.toUpperCase() !== input) : matches;
-        const count = colliders.length;
-        html += `
-          <div style="margin-bottom:10px;padding:10px 14px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary,var(--bg))">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-              <code class="mono" style="font-weight:700">${prefix}</code>
-              <span class="text-muted" style="font-size:0.82em">${b}-byte</span>
-              ${severityBadge(count)}
-            </div>
-            ${count === 0
-              ? '<div class="text-muted" style="font-size:0.85em">No existing nodes use this prefix.</div>'
-              : `<div style="font-size:0.85em;max-height:140px;overflow-y:auto">${colliders.map(nodeEntry).join('')}</div>`}
-          </div>`;
-      });
-
-      resultsEl.innerHTML = html;
-    }
-
-    // --- Generator ---
-    function doGenerate() {
+    // --- Wire up generator ---
+    const doGenerate = () => {
       const genResultEl = document.getElementById('ptGenResult');
       if (!genResultEl) return;
       const sizeInput = el.querySelector('input[name="ptGenSize"]:checked');
       const b = sizeInput ? parseInt(sizeInput.value) : 2;
-      const hexLen = b * 2;
-      const totalSpace = spaceSizes[b];
-      const available = totalSpace - idx[b].size;
+      const prefix = generatePrefix(b, idx);
 
-      if (available === 0) {
+      if (!prefix) {
         const next = b < 3 ? (b + 1) + '-byte' : 'a different size';
         genResultEl.innerHTML = `<p style="color:var(--status-red);margin:0">No collision-free ${b}-byte prefixes available. Try ${next}.</p>`;
         return;
       }
 
-      let prefix;
-      if (b === 1) {
-        // Enumerate all 256 options
-        const free = [];
-        for (let i = 0; i < totalSpace; i++) {
-          const p = i.toString(16).toUpperCase().padStart(hexLen, '0');
-          if (!idx[b].has(p)) free.push(p);
-        }
-        prefix = free[Math.floor(Math.random() * free.length)];
-      } else {
-        // Random sampling — with 2K used / 65K space, hit rate >96%
-        let attempts = 0;
-        do {
-          prefix = Math.floor(Math.random() * totalSpace).toString(16).toUpperCase().padStart(hexLen, '0');
-        } while (idx[b].has(prefix) && ++attempts < 500);
-        // Fallback to enumeration if sampling kept hitting used prefixes
-        if (idx[b].has(prefix)) {
-          for (let i = 0; i < totalSpace; i++) {
-            const p = i.toString(16).toUpperCase().padStart(hexLen, '0');
-            if (!idx[b].has(p)) { prefix = p; break; }
-          }
-        }
-      }
-
+      const totalSpace = PREFIX_SPACE_SIZES[b];
+      const available = totalSpace - idx[b].size;
       genResultEl.innerHTML = `
         <div style="padding:12px 16px;border:1px solid var(--status-green);border-radius:6px;background:var(--bg-secondary,var(--bg))">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -2565,16 +2614,9 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
           </div>
         </div>`;
       document.getElementById('ptRegenBtn').addEventListener('click', doGenerate);
-    }
+    };
 
-    // --- Wire up ---
-    const checkBtn = document.getElementById('ptCheckBtn');
-    const prefixInput = document.getElementById('ptPrefixInput');
-    const genBtn = document.getElementById('ptGenBtn');
-
-    checkBtn.addEventListener('click', () => doCheck(prefixInput.value));
-    prefixInput.addEventListener('keydown', e => { if (e.key === 'Enter') doCheck(prefixInput.value); });
-    genBtn.addEventListener('click', doGenerate);
+    document.getElementById('ptGenBtn').addEventListener('click', doGenerate);
 
     // Network Overview toggle
     document.getElementById('ptOverviewToggle').addEventListener('click', () => {
@@ -2593,6 +2635,15 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       doGenerate();
       setTimeout(() => { document.getElementById('ptGenerator')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
     }
+  }
+
+  // Export pure functions for testing
+  if (typeof window !== 'undefined') {
+    window._prefixToolExports = {
+      buildPrefixIndex, computePrefixStats, recommendPrefixSize,
+      validatePrefixInput, checkPrefix, generatePrefix,
+      renderSeverityBadge, PREFIX_SPACE_SIZES
+    };
   }
 
   registerPage('analytics', { init, destroy });
