@@ -2954,7 +2954,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       const y = sy(d.v);
       const ts = t.toISOString().replace('T', ' ').replace(/\.\d+Z/, ' UTC');
       const tip = `${label}: ${formatV(d.v)}${unit}\n${ts}`;
-      svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="transparent" stroke="none"><title>${tip}</title></circle>`;
+      svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="8" fill="transparent" stroke="none" pointer-events="all"><title>${tip}</title></circle>`;
     });
     return svg;
   }
@@ -2982,8 +2982,10 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     const rangeT = maxT - minT || 1;
 
     // Auto-scale Y-axis to data range (20% headroom, min 1%)
-    const allValues = txData.map(d => d.v).concat(rxData.map(d => d.v));
-    const yMax = Math.max((Math.max(...allValues) || 0) * 1.2, 1);
+    let dataMax = 0;
+    for (let i = 0; i < txData.length; i++) { if (txData[i].v > dataMax) dataMax = txData[i].v; }
+    for (let i = 0; i < rxData.length; i++) { if (rxData[i].v > dataMax) dataMax = rxData[i].v; }
+    const yMax = Math.max(dataMax * 1.2, 1);
 
     const sx = t => pad.left + ((t - minT) / rangeT) * cw;
     const sy = v => pad.top + ch - (v / yMax) * ch;
