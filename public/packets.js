@@ -1124,7 +1124,10 @@
     const groupSize = p.raw_hex ? Math.floor(p.raw_hex.length / 2) : 0;
     const groupHashBytes = ((parseInt(p.raw_hex?.slice(2, 4), 16) || 0) >> 6) + 1;
     const isSingle = p.count <= 1;
-    let html = `<tr class="${isSingle ? '' : 'group-header'} ${isExpanded ? 'expanded' : ''}" data-hash="${p.hash}" data-action="${isSingle ? 'select-hash' : 'toggle-select'}" data-value="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row">
+    // Channel color highlighting (#271)
+    const _grpDecoded = getParsedDecoded(p) || {};
+    const _grpChanStyle = window.ChannelColors ? window.ChannelColors.getRowStyle(_grpDecoded.type || groupTypeName, _grpDecoded.channel) : '';
+    let html = `<tr class="${isSingle ? '' : 'group-header'} ${isExpanded ? 'expanded' : ''}" data-hash="${p.hash}" data-action="${isSingle ? 'select-hash' : 'toggle-select'}" data-value="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_grpChanStyle ? ' style="' + _grpChanStyle + '"' : ''}>
           <td style="width:28px;text-align:center;cursor:pointer">${isSingle ? '' : (isExpanded ? '▼' : '▶')}</td>
           <td class="col-region">${groupRegion ? `<span class="badge-region">${groupRegion}</span>` : '—'}</td>
           <td class="col-time">${renderTimestampCell(p.latest)}</td>
@@ -1174,11 +1177,13 @@
     const region = p.observer_id ? (observerMap.get(p.observer_id)?.iata || '') : '';
     const typeName = payloadTypeName(p.payload_type);
     const typeClass = payloadTypeColor(p.payload_type);
+    // Channel color highlighting (#271)
+    const _chanStyle = window.ChannelColors ? window.ChannelColors.getRowStyle(decoded.type || typeName, decoded.channel) : '';
     const size = p.raw_hex ? Math.floor(p.raw_hex.length / 2) : 0;
     const hashBytes = ((parseInt(p.raw_hex?.slice(2, 4), 16) || 0) >> 6) + 1;
     const pathStr = renderPath(pathHops, p.observer_id);
     const detail = getDetailPreview(decoded);
-    return `<tr data-id="${p.id}" data-hash="${p.hash || ''}" data-action="select-hash" data-value="${p.hash || p.id}" data-entry-idx="${entryIdx}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}">
+    return `<tr data-id="${p.id}" data-hash="${p.hash || ''}" data-action="select-hash" data-value="${p.hash || p.id}" data-entry-idx="${entryIdx}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}"${_chanStyle ? ' style="' + _chanStyle + '"' : ''}>
         <td></td><td class="col-region">${region ? `<span class="badge-region">${region}</span>` : '—'}</td>
         <td class="col-time">${renderTimestampCell(p.timestamp)}</td>
         <td class="mono col-hash">${truncate(p.hash || String(p.id), 8)}</td>

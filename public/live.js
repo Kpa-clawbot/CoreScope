@@ -2505,6 +2505,13 @@
     item.setAttribute('tabindex', '0');
     item.setAttribute('role', 'button');
     item.style.cursor = 'pointer';
+    // Channel color highlighting for GRP_TXT packets (#271)
+    var _d = pkt.decoded || {};
+    var _h = _d.header || {};
+    var _p = _d.payload || {};
+    var _cn = _p.channelName || null;
+    var _cs = window.ChannelColors ? window.ChannelColors.getRowStyle(_h.payloadTypeName || '', _cn) : '';
+    if (_cs) item.style.cssText += _cs;
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
@@ -2573,6 +2580,13 @@
     item.setAttribute('role', 'button');
     if (hash) item.setAttribute('data-hash', hash);
     item.style.cursor = 'pointer';
+    // Channel color highlighting for GRP_TXT packets (#271)
+    var _decoded = pkt.decoded || {};
+    var _header = _decoded.header || {};
+    var _payload = _decoded.payload || {};
+    var _chanName = _payload.channelName || null;
+    var _chanStyle = window.ChannelColors ? window.ChannelColors.getRowStyle(_header.payloadTypeName || '', _chanName) : '';
+    if (_chanStyle) item.style.cssText += _chanStyle;
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
