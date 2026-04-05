@@ -245,7 +245,7 @@ func (s *Server) requireAPIKey(next http.Handler) http.Handler {
 			return
 		}
 		if IsWeakAPIKey(key) {
-			writeError(w, http.StatusForbidden, "API key rejected — configured key is a known default or too weak")
+			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
 		next.ServeHTTP(w, r)
