@@ -156,5 +156,13 @@
     "maxMemoryMB": 1024,
     "estimatedPacketBytes": 450,
     "_comment": "In-memory packet store. maxMemoryMB caps RAM usage. All packets loaded on startup, served from RAM."
+  },
+  "resolvedPath": {
+    "backfillHours": 24,
+    "_comment": "How far back (hours) the async backfill scans for observations with NULL resolved_path. Default: 24. Set higher to backfill older data, lower to speed up startup."
+  },
+  "neighborGraph": {
+    "maxAgeDays": 30,
+    "_comment": "Neighbor edges older than this many days are pruned on startup and daily. Default: 30."
   }
 }

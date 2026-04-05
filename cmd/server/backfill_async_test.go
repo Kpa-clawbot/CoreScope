@@ -21,7 +21,7 @@ func TestBackfillAsyncChunked(t *testing.T) {
 	}
 
 	// No pending observations → should complete immediately.
-	backfillResolvedPathsAsync(store, "", 100, time.Millisecond)
+	backfillResolvedPathsAsync(store, "", 100, time.Millisecond, 24)
 	if !store.backfillComplete.Load() {
 		t.Fatal("expected backfillComplete to be true with empty store")
 	}

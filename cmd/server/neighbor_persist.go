@@ -348,7 +348,7 @@ func unmarshalResolvedPath(s string) []*string {
 // chunks, yielding between batches so HTTP handlers remain responsive. It sets
 // store.backfillComplete when finished and re-picks best observations for any
 // transmissions affected by newly resolved paths.
-func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int, yieldDuration time.Duration) {
+func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int, yieldDuration time.Duration, backfillHours int) {
 	// Collect ALL pending obs refs upfront in one pass under a single RLock (fix A).
 	type obsRef struct {
 		obsID       int
@@ -359,11 +359,23 @@ func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int
 		txHash      string // to re-pick best obs
 	}
 
+	cutoff := time.Now().UTC().Add(-time.Duration(backfillHours) * time.Hour)
+
 	store.mu.RLock()
 	pm := store.nodePM
 	graph := store.graph
 	var allPending []obsRef
 	for _, tx := range store.packets {
+		// Skip transmissions older than the backfill window.
+		if tx.FirstSeen != "" {
+			if ts, err := time.Parse(time.RFC3339Nano, tx.FirstSeen); err == nil && ts.Before(cutoff) {
+				continue
+			}
+			// Also try the common SQLite format
+			if ts, err := time.Parse("2006-01-02 15:04:05", tx.FirstSeen); err == nil && ts.Before(cutoff) {
+				continue
+			}
+		}
 		for _, obs := range tx.Observations {
 			if obs.ResolvedPath == nil && obs.PathJSON != "" && obs.PathJSON != "[]" {
 				allPending = append(allPending, obsRef{
@@ -562,4 +574,28 @@ func openRW(dbPath string) (*sql.DB, error) {
 	}
 	rw.SetMaxOpenConns(1)
 	return rw, nil
+}
+
+// PruneNeighborEdges removes edges older than maxAgeDays from both SQLite and
+// the in-memory graph. Returns the number of edges pruned.
+func PruneNeighborEdges(conn *sql.DB, graph *NeighborGraph, maxAgeDays int) (int, error) {
+	cutoff := time.Now().UTC().Add(-time.Duration(maxAgeDays) * 24 * time.Hour)
+
+	// 1. Prune from SQLite
+	res, err := conn.Exec("DELETE FROM neighbor_edges WHERE last_seen < ?", cutoff.Format(time.RFC3339))
+	if err != nil {
+		return 0, fmt.Errorf("prune neighbor_edges: %w", err)
+	}
+	dbPruned, _ := res.RowsAffected()
+
+	// 2. Prune from in-memory graph
+	memPruned := 0
+	if graph != nil {
+		memPruned = graph.PruneOlderThan(cutoff)
+	}
+
+	if dbPruned > 0 || memPruned > 0 {
+		log.Printf("[neighbor-prune] removed %d DB rows, %d in-memory edges older than %d days", dbPruned, memPruned, maxAgeDays)
+	}
+	return int(dbPruned), nil
 }

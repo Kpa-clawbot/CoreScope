@@ -278,6 +278,31 @@ func main() {
 		log.Printf("[metrics-prune] auto-prune enabled: metrics older than %d days", metricsDays)
 	}
 
+	// Auto-prune old neighbor edges
+	var stopEdgePrune func()
+	{
+		maxAgeDays := cfg.NeighborMaxAgeDays()
+		edgePruneTicker := time.NewTicker(24 * time.Hour)
+		edgePruneDone := make(chan struct{})
+		stopEdgePrune = func() {
+			edgePruneTicker.Stop()
+			close(edgePruneDone)
+		}
+		go func() {
+			time.Sleep(4 * time.Minute) // stagger after metrics prune
+			PruneNeighborEdges(database.conn, store.graph, maxAgeDays)
+			for {
+				select {
+				case <-edgePruneTicker.C:
+					PruneNeighborEdges(database.conn, store.graph, maxAgeDays)
+				case <-edgePruneDone:
+					return
+				}
+			}
+		}()
+		log.Printf("[neighbor-prune] auto-prune enabled: edges older than %d days", maxAgeDays)
+	}
+
 	// Graceful shutdown
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -303,6 +328,9 @@ func main() {
 		if stopMetricsPrune != nil {
 			stopMetricsPrune()
 		}
+		if stopEdgePrune != nil {
+			stopEdgePrune()
+		}
 
 		// 2. Gracefully drain HTTP connections (up to 15s)
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -324,7 +352,7 @@ func main() {
 	log.Printf("[server] CoreScope (Go) listening on http://localhost:%d", cfg.Port)
 
 	// Start async backfill in background — HTTP is now available.
-	go backfillResolvedPathsAsync(store, dbPath, 5000, 100*time.Millisecond)
+	go backfillResolvedPathsAsync(store, dbPath, 5000, 100*time.Millisecond, cfg.BackfillHours())
 
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("[server] %v", err)
