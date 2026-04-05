@@ -2820,8 +2820,9 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
     assert.ok(!packetsSource.includes('_lastRenderedRows'),
       'should NOT have pre-built row HTML cache');
     assert.ok(packetsSource.includes('_displayPackets.slice(startIdx, endIdx)'),
-      'should slice display packets for visible range');
-    assert.ok(packetsSource.includes('visibleSlice.map(p => builder(p))'),
+      'should slice display packets for visible range on full rebuild');
+    // Incremental path uses builder() per-item in loops; full rebuild uses .map()
+    assert.ok(packetsSource.includes('builder(p, startIdx + i)') || packetsSource.includes('builder(_displayPackets[i], i)'),
       'should build HTML lazily per visible packet');
   });
 
