@@ -299,11 +299,17 @@ func main() {
 		}
 		go func() {
 			time.Sleep(4 * time.Minute) // stagger after metrics prune
-			PruneNeighborEdges(database.conn, store.graph, maxAgeDays)
+			store.mu.RLock()
+			g := store.graph
+			store.mu.RUnlock()
+			PruneNeighborEdges(database.conn, g, maxAgeDays)
 			for {
 				select {
 				case <-edgePruneTicker.C:
-					PruneNeighborEdges(database.conn, store.graph, maxAgeDays)
+					store.mu.RLock()
+					g := store.graph
+					store.mu.RUnlock()
+					PruneNeighborEdges(database.conn, g, maxAgeDays)
 				case <-edgePruneDone:
 					return
 				}

@@ -92,7 +92,7 @@ func (c *Config) MetricsRetentionDays() int {
 	if c.Retention != nil && c.Retention.MetricsDays > 0 {
 		return c.Retention.MetricsDays
 	}
-	return 5
+	return 30
 }
 
 // BackfillHours returns configured backfill window or 24h default.

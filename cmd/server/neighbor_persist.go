@@ -455,8 +455,14 @@ func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int
 					log.Printf("[store] async backfill: prepare error: %v", err)
 					sqlTx.Rollback()
 				} else {
+					var execErr error
 					for _, r := range results {
-						stmt.Exec(r.rpJSON, r.obsID)
+						if _, e := stmt.Exec(r.rpJSON, r.obsID); e != nil && execErr == nil {
+							execErr = e
+						}
+					}
+					if execErr != nil {
+						log.Printf("[store] async backfill: exec error (first): %v", execErr)
 					}
 					stmt.Close()
 					if err := sqlTx.Commit(); err != nil {
