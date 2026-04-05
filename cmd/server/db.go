@@ -1775,28 +1775,29 @@ func (db *DB) GetObserverMetrics(observerID, since, until, resolution string, sa
 	var query string
 	args := []interface{}{observerID}
 
+	// Determine the effective bucket size for gap threshold scaling.
+	// For raw data (5m), use sampleIntervalSec. For aggregated resolutions,
+	// use the bucket duration so consecutive buckets aren't treated as gaps.
+	bucketSizeSec := sampleIntervalSec
 	switch resolution {
 	case "1h":
-		query = `SELECT
-			strftime('%Y-%m-%dT%H:00:00Z', timestamp) as ts,
-			AVG(noise_floor) as noise_floor,
-			MAX(tx_air_secs) as tx_air_secs,
-			MAX(rx_air_secs) as rx_air_secs,
-			MAX(recv_errors) as recv_errors,
-			AVG(battery_mv) as battery_mv,
-			MAX(packets_sent) as packets_sent,
-			MAX(packets_recv) as packets_recv
+		bucketSizeSec = 3600
+		// Use LAST value per bucket (latest timestamp) instead of MAX to preserve
+		// reboot semantics: if a device reboots mid-bucket, the last sample is the
+		// post-reboot baseline, not the pre-reboot high-water mark.
+		query = `SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv FROM (
+			SELECT
+				strftime('%Y-%m-%dT%H:00:00Z', timestamp) as ts,
+				noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv,
+				ROW_NUMBER() OVER (PARTITION BY observer_id, strftime('%Y-%m-%dT%H:00:00Z', timestamp) ORDER BY timestamp DESC) as rn
 			FROM observer_metrics WHERE observer_id = ?`
 	case "1d":
-		query = `SELECT
-			strftime('%Y-%m-%dT00:00:00Z', timestamp) as ts,
-			AVG(noise_floor) as noise_floor,
-			MAX(tx_air_secs) as tx_air_secs,
-			MAX(rx_air_secs) as rx_air_secs,
-			MAX(recv_errors) as recv_errors,
-			AVG(battery_mv) as battery_mv,
-			MAX(packets_sent) as packets_sent,
-			MAX(packets_recv) as packets_recv
+		bucketSizeSec = 86400
+		query = `SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv FROM (
+			SELECT
+				strftime('%Y-%m-%dT00:00:00Z', timestamp) as ts,
+				noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv,
+				ROW_NUMBER() OVER (PARTITION BY observer_id, strftime('%Y-%m-%dT00:00:00Z', timestamp) ORDER BY timestamp DESC) as rn
 			FROM observer_metrics WHERE observer_id = ?`
 	default: // "5m" or raw
 		query = `SELECT timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv
@@ -1813,10 +1814,8 @@ func (db *DB) GetObserverMetrics(observerID, since, until, resolution string, sa
 	}
 
 	switch resolution {
-	case "1h":
-		query += " GROUP BY strftime('%Y-%m-%dT%H:00:00Z', timestamp) ORDER BY ts ASC"
-	case "1d":
-		query += " GROUP BY strftime('%Y-%m-%dT00:00:00Z', timestamp) ORDER BY ts ASC"
+	case "1h", "1d":
+		query += ") WHERE rn = 1 ORDER BY ts ASC"
 	default:
 		query += " ORDER BY timestamp ASC"
 	}
@@ -1839,18 +1838,22 @@ func (db *DB) GetObserverMetrics(observerID, since, until, resolution string, sa
 		return nil, nil, err
 	}
 
-	// Compute deltas between consecutive samples
-	return computeDeltas(raw, sampleIntervalSec)
+	// Compute deltas between consecutive samples.
+	// bucketSizeSec determines gap threshold: for raw data it's sampleIntervalSec,
+	// for aggregated resolutions it's the bucket duration (3600 for 1h, 86400 for 1d).
+	return computeDeltas(raw, bucketSizeSec)
 }
 
 // computeDeltas computes per-interval rates from cumulative counters.
 // Handles reboots (counter reset) and gaps (missing samples).
-func computeDeltas(raw []rawMetricsSample, sampleIntervalSec int) ([]MetricsSample, []string, error) {
+// bucketSizeSec is the expected interval between consecutive points
+// (sampleInterval for raw data, bucket duration for aggregated resolutions).
+func computeDeltas(raw []rawMetricsSample, bucketSizeSec int) ([]MetricsSample, []string, error) {
 	if len(raw) == 0 {
 		return nil, nil, nil
 	}
 
-	gapThreshold := float64(sampleIntervalSec) * 2.0
+	gapThreshold := float64(bucketSizeSec) * 2.0
 	result := make([]MetricsSample, 0, len(raw))
 	var reboots []string
 

@@ -1830,6 +1830,70 @@ func TestGetObserverMetricsResolution(t *testing.T) {
 	}
 }
 
+func TestHourlyResolutionDeltasNotNull(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	// Two hourly buckets, each with one sample. With old MAX+hardcoded gap threshold,
+	// the 3600s gap would exceed sampleInterval*2 (600s) and deltas would be null.
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, packets_sent, packets_recv) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"obs_hr", "2026-04-05T10:00:00Z", -110.0, 100, 200, 5, 50, 100)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, packets_sent, packets_recv) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"obs_hr", "2026-04-05T11:00:00Z", -108.0, 200, 400, 10, 80, 200)
+
+	m, _, err := db.GetObserverMetrics("obs_hr", "2026-04-04T00:00:00Z", "", "1h", 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(m))
+	}
+	// Second row should have computed deltas (not null)
+	if m[1].TxAirtimePct == nil {
+		t.Error("1h resolution: tx_airtime_pct should not be nil — gap threshold must scale with resolution")
+	}
+}
+
+func TestLastValuePreservesReboot(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	// Hour bucket with two samples: pre-reboot (high) and post-reboot (low).
+	// With MAX(), the pre-reboot value wins and the reboot is hidden.
+	// With LAST (latest timestamp), the post-reboot value wins.
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, packets_sent, packets_recv) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"obs_rb", "2026-04-05T10:00:00Z", -110.0, 1000, 2000, 500, 400, 800) // pre-reboot baseline
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, packets_sent, packets_recv) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"obs_rb", "2026-04-05T10:20:00Z", -110.0, 5000, 6000, 900, 700, 1200) // pre-reboot peak
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, packets_sent, packets_recv) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"obs_rb", "2026-04-05T10:40:00Z", -110.0, 10, 20, 1, 5, 10) // post-reboot (counter reset)
+
+	// Next hour bucket
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, packets_sent, packets_recv) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		"obs_rb", "2026-04-05T11:00:00Z", -108.0, 100, 120, 5, 20, 50)
+
+	m, reboots, err := db.GetObserverMetrics("obs_rb", "2026-04-04T00:00:00Z", "", "1h", 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(m))
+	}
+
+	// First bucket should use the LAST value (post-reboot: tx_air_secs=10).
+	// Second bucket (tx_air_secs=100) is a normal increase from 10→100.
+	// With LAST-value semantics, the second bucket should have valid deltas (not a reboot).
+	// With MAX(), first bucket would have tx_air_secs=5000, and second=100 would
+	// trigger a false reboot detection.
+	if m[1].IsReboot {
+		t.Error("second bucket should NOT be flagged as reboot with LAST-value aggregation")
+	}
+	if m[1].TxAirtimePct == nil {
+		t.Error("second bucket should have non-nil tx_airtime_pct")
+	}
+	_ = reboots // reboots list is informational
+}
+
 func TestParseWindowDuration(t *testing.T) {
 	tests := []struct {
 		input string
