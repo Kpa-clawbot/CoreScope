@@ -1,6 +1,6 @@
 # Proposal: Terminal/TUI Interface for CoreScope
 
-**Status:** Idea / Early Proposal
+**Status:** Approved for MVP
 **Issue:** TBD
 
 ## Problem
@@ -11,81 +11,122 @@ CoreScope's web UI requires a browser. Operators managing remote mesh deployment
 
 A terminal-based user interface (TUI) that connects to a CoreScope instance's API and renders key views directly in the terminal. Think `htop` for mesh networks.
 
-## Core Views
+---
 
-### 1. Fleet Dashboard (default view)
+## Expert Review
+
+### Carmack (Performance / Data Flow)
+
+- **bubbletea is fine for this.** The TUI is a thin API consumer — it's not processing 7.3M observations locally. The server does the heavy lifting; the TUI just renders summary data from `/api/observers/metrics/summary` (dozens of rows, not millions). No performance concern here.
+- **WebSocket in a TUI — one gotcha:** reconnection. SSH sessions drop, networks flake. The TUI MUST have automatic reconnect with exponential backoff. Don't let a dropped WS kill the whole UI — show a "reconnecting..." status and keep the last-known state visible.
+- **Memory footprint:** Should be trivial. The TUI holds at most a few hundred packets in a ring buffer for the live feed + summary stats. Target <20MB RSS. bubbletea itself is lightweight. The danger is unbounded packet accumulation — use a fixed-size ring buffer (e.g., last 1000 packets) for the live feed, not an ever-growing slice.
+- **Batch WS messages.** Don't re-render on every single packet. Coalesce WS messages and re-render at most 10fps (every 100ms). Terminal rendering is slow — flooding it with updates causes flicker and CPU burn.
+
+### Torvalds (Simplicity / Scope)
+
+- **The scope is too big for an MVP.** Node detail view, sparklines, SSH server mode, multi-instance, export — delete all of that from M1. You need TWO views to prove this works: fleet dashboard table and live packet feed. That's it.
+- **bubbletea vs tview:** bubbletea. Not because Elm-architecture is "clean" — because it's what the Go community actually uses now, the examples are good, and lipgloss makes table rendering trivial. Don't overthink this.
+- **Over-engineering risk is HIGH.** The proposal describes 4 views, stretch features, and SSH server mode before a single line of code exists. Build the two-view demo. Ship it. Then decide what's next based on whether anyone actually uses it.
+- **Same repo, `cmd/tui/`.** Don't create a separate repo for what's going to be 500 lines of Go initially. It shares the same API types. Keep it together.
+- **Kill the "Open Questions" section.** Answer them: Target user = anyone with SSH access. M1 = dashboard + live feed. Same repo. Name = `corescope-tui`. Done. Stop discussing, start building.
+
+### Doshi (Strategy / Prioritization)
+
+- **This is an N (Neutral) feature, not an L.** It doesn't change CoreScope's trajectory — the web UI already works. But it's a solid N: it unlocks a real use case (SSH-only operators) and proves CoreScope's API is a proper platform, not just a web app backend.
+- **The MVP that proves the concept:** Can an operator SSH into a Pi, run `corescope-tui --url http://analyzer:3000`, and immediately see fleet health + live packets? If yes, the concept is proven. Everything else (node detail, sparklines, alerting) is M2+.
+- **Defer list:** Node detail view, RF sparklines, SSH server mode, multi-instance, export, mouse support, true-color fallback, alerting. ALL of these are M2 or later.
+- **Pre-mortem — why would this fail?**
+  1. Nobody uses it because the web UI is good enough (likely for most users — that's fine, this is for the SSH-only niche)
+  2. The API doesn't return what the TUI needs in the right shape (validate this FIRST — curl the endpoints before writing any TUI code)
+  3. Scope creep kills the demo — someone adds "just one more view" and it's never done
+- **Opportunity cost:** Low. This is a day of work for the MVP. The API already exists. The risk is spending a week on polish nobody asked for.
+
+---
+
+## MVP Definition (Demo Target)
+
+**Goal:** A working two-view TUI that connects to any CoreScope instance and displays real-time mesh data in a terminal. Buildable in one focused session.
+
+### View 1: Fleet Dashboard (default)
 ```
 ┌─ CoreScope TUI ──────────────────────────────────────────┐
-│ Nodes: 518 active | Observers: 35 | Packets/hr: 2,336   │
+│ Connected: analyzer.00id.net | Observers: 35 | ● Live    │
 ├──────────────────────────────────────────────────────────┤
-│ Observer          │ NF     │ TX%  │ RX%  │ Errs │ Status │
-│ GY889 Repeater    │ -112   │ 2.1  │ 8.3  │    0 │ ●      │
-│ C0ffee SF         │ -108   │ 1.4  │ 12.1 │   42 │ ●      │
-│ ELC-ONNIE-RPT-1   │ -95   │ 3.2  │ 6.7  │  180 │ ▲      │
-│ Bar Repeater 🤷   │ -76   │ 0.1  │ 0.0  │   62 │ ▼      │
+│ Observer          │ Nodes │ Pkts/hr │ NF     │ Status    │
+│ GY889 Repeater    │   142 │     312 │ -112   │ ● active  │
+│ C0ffee SF         │    89 │     201 │ -108   │ ● active  │
+│ ELC-ONNIE-RPT-1  │    67 │     156 │  -95   │ ▲ warning │
+│ Bar Repeater      │    12 │       3 │  -76   │ ▼ stale   │
 └──────────────────────────────────────────────────────────┘
+  Tab: [Dashboard] [Live Feed]    q: quit    ?: help
 ```
 
-### 2. Live Packet Feed
+- **Data source:** `GET /api/observers/metrics/summary`
+- **Refresh:** Poll every 5s (simple, no WS needed for this view)
+- **Sort:** By observer name initially. Stretch: column sort with arrow keys.
+
+### View 2: Live Packet Feed
 ```
 ┌─ Live Feed ──────────────────────────────────────────────┐
 │ 14:32:01 ADVERT   GY889 Repeater       → 3 hops  -112dB │
-│ 14:32:02 GRP_TXT  #test "hello world"  → 5 hops  -98dB  │
+│ 14:32:02 GRP_TXT  #test "hello world"  → 5 hops   -98dB │
 │ 14:32:03 TXT_MSG  [encrypted]          → 2 hops  -105dB │
-│ 14:32:04 CHAN     #sf "anyone on?"     → 8 hops  -91dB  │
+│ 14:32:04 CHAN     #sf "anyone on?"     → 8 hops   -91dB │
+│ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
 └──────────────────────────────────────────────────────────┘
+  Tab: [Dashboard] [Live Feed]    p: pause    q: quit
 ```
 
-### 3. Node Detail
-- Select a node → see its packets, paths, neighbors, health history
-- Keyboard navigation (j/k up/down, Enter to select, Esc to back)
+- **Data source:** WebSocket (`/ws`)
+- **Buffer:** Ring buffer, last 500 packets max
+- **Render:** Coalesce updates, re-render at most 10fps
+- **Reconnect:** Auto-reconnect with exponential backoff (1s, 2s, 4s, max 30s)
 
-### 4. RF Health Sparklines
-- ASCII sparklines for noise floor over time per observer
-- `▁▂▃▅▇█` block characters for compact visualization
+### What's NOT in MVP
+- Node detail view
+- RF sparklines
+- SSH server mode (`--serve-ssh`)
+- Multi-instance support
+- Export to CSV/JSON
+- Mouse support
+- Alerting / terminal bell
+- Color theme configuration
+- Custom filters (/ to filter)
 
-## Architecture
+### Technical Decisions (Resolved)
+| Question | Answer |
+|---|---|
+| Target user | SSH operators, power users, field techs |
+| Library | bubbletea + lipgloss |
+| Location | `cmd/tui/` in same repo |
+| Binary name | `corescope-tui` |
+| Min terminal | 256-color, 80x24 |
+| State | Stateless — pure API consumer, no local DB |
 
-```
-CoreScope Server (existing)
-    ↑ REST API + WebSocket
-    │
-CoreScope TUI (new binary)
-    - Go binary using bubbletea/lipgloss (or tview)
-    - Connects to any CoreScope instance via --url flag
-    - No database, no state — pure API consumer
-    - Real-time updates via WebSocket
-```
+### Implementation Plan
+1. Scaffold `cmd/tui/main.go` — flag parsing (`--url`), bubbletea app init
+2. Fleet dashboard model — fetch `/api/observers/metrics/summary`, render table
+3. Live feed model — WebSocket connect, ring buffer, packet rendering
+4. Tab switching between views
+5. Status bar (connection state, help hints)
+6. Test against `https://analyzer.00id.net`
 
-## Key Design Decisions
+---
 
-- **Separate binary** — `corescope-tui` alongside `corescope-server`. Not embedded in the server.
-- **API consumer only** — uses existing REST + WebSocket APIs. No direct DB access. Works against any CoreScope instance (local or remote).
-- **Keyboard-driven** — vim-like navigation (j/k/g/G), tab to switch views, / to filter, q to quit
-- **No mouse required** — but mouse support for clicking rows is nice-to-have
-- **Color terminal assumed** — 256-color minimum, true-color preferred. Graceful fallback to 16-color.
-- **Cross-platform** — single Go binary, no dependencies. Works on Linux, macOS, Windows.
+## Future Milestones (post-MVP, not scheduled)
 
-## Technology Options
+### M2: Navigation & Detail
+- Node detail view (select observer → see its packets/neighbors)
+- Keyboard navigation (j/k, Enter, Esc)
+- `/` to filter packets
 
-| Library | Language | Pros | Cons |
-|---|---|---|---|
-| **bubbletea + lipgloss** | Go | Elm-architecture, composable, beautiful output, active community | Newer, less battle-tested |
-| **tview** | Go | Mature, widget-rich, built-in tables/forms | Imperative style, harder to compose |
-| **charm/wish** | Go | SSH server built-in — serve TUI over SSH without local install | Adds complexity |
-| **textual** | Python | Rich widget library | Not Go, separate runtime |
+### M3: Visualization
+- RF noise floor sparklines (`▁▂▃▅▇█`)
+- Health history over time
+- Color theme support
 
-**Recommendation:** bubbletea + lipgloss. Matches CoreScope's Go stack, Elm-architecture is clean, lipgloss styling is excellent.
-
-## Stretch Features (not M1)
-- **SSH server mode** — run `corescope-tui --serve-ssh :2222` and operators SSH into the TUI directly. No binary install needed on client side.
-- **Alerting** — terminal bell / desktop notification on RF anomalies
-- **Multi-instance** — connect to multiple CoreScope instances, tab between them
-- **Export** — dump current view as CSV/JSON to stdout
-
-## Open Questions
-
-1. **Who is the target user?** Field operators? Sysadmins? Power users who prefer terminal? All of the above?
-2. **Minimum API coverage for M1?** Fleet dashboard + live feed is probably enough.
-3. **Should this live in the same repo or a separate one?** Same repo (`cmd/tui/`) keeps it co-located but adds build complexity.
-4. **Branding?** `corescope-tui`? `cscope`? `meshmon`?
+### M4: Advanced
+- SSH server mode (`--serve-ssh :2222`)
+- Multi-instance tabs
+- Export current view to stdout (CSV/JSON)
+- Desktop notifications on anomalies
