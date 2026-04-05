@@ -1044,16 +1044,18 @@
     const legendToggleBtn = document.getElementById('legendToggleBtn');
     if (legendToggleBtn && legendEl) {
       // Restore legend collapsed state from localStorage (#279)
-      if (localStorage.getItem('live-legend-hidden') === 'true') {
-        legendEl.classList.add('hidden');
-        legendToggleBtn.setAttribute('aria-label', 'Show legend');
-        legendToggleBtn.textContent = '🎨';
-      }
+      try {
+        if (localStorage.getItem('live-legend-hidden') === 'true') {
+          legendEl.classList.add('hidden');
+          legendToggleBtn.setAttribute('aria-label', 'Show legend');
+          legendToggleBtn.textContent = '🎨';
+        }
+      } catch (_) { /* private browsing / storage disabled */ }
       legendToggleBtn.addEventListener('click', () => {
         const nowHidden = legendEl.classList.toggle('hidden');
         legendToggleBtn.setAttribute('aria-label', nowHidden ? 'Show legend' : 'Hide legend');
         legendToggleBtn.textContent = nowHidden ? '🎨' : '✕';
-        localStorage.setItem('live-legend-hidden', String(nowHidden));
+        try { localStorage.setItem('live-legend-hidden', String(nowHidden)); } catch (_) { /* ignore */ }
       });
     }
 

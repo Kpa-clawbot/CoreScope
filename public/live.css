@@ -738,7 +738,6 @@
   transition: all 0.2s;
 }
 .legend-toggle-btn:hover { color: var(--text); border-color: rgba(59,130,246,0.4); }
-.legend-toggle-btn.hidden { display: none; }
 
 /* Feed resize handle (#27) */
 .feed-resize-handle {
