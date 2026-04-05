@@ -4599,6 +4599,67 @@ console.log('\n=== nodes.js: buildNodesQuery ===');
   }
 }
 
+// ===== PACKETS.JS: buildPacketsUrl =====
+console.log('\n=== packets.js: buildPacketsUrl ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+
+  ctx.registerPage = () => {};
+  ctx.RegionFilter = { init: () => Promise.resolve(), onChange: () => () => {}, offChange: () => {}, getSelected: () => null, getRegionParam: () => '', setSelected: () => {} };
+  ctx.onWS = () => {};
+  ctx.offWS = () => {};
+  ctx.debouncedOnWS = () => () => {};
+  ctx.invalidateApiCache = () => {};
+  ctx.api = () => Promise.resolve({});
+  ctx.observerMap = new Map();
+  ctx.getParsedPath = () => [];
+  ctx.getParsedDecoded = () => ({});
+  ctx.clearParsedCache = () => {};
+  ctx.escapeHtml = (s) => s;
+  ctx.timeAgo = () => '';
+  ctx.formatTimestampWithTooltip = () => '';
+  ctx.getTimestampMode = () => 'ago';
+  ctx.copyToClipboard = () => {};
+  ctx.CLIENT_TTL = {};
+  ctx.debounce = (fn) => fn;
+  ctx.initTabBar = () => {};
+
+  try {
+    const src = fs.readFileSync('public/packet-helpers.js', 'utf8');
+    vm.runInContext(src, ctx);
+    for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+    const src2 = fs.readFileSync('public/packets.js', 'utf8');
+    vm.runInContext(src2, ctx);
+    for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+  } catch (e) {
+    console.log('  ⚠️ packets.js sandbox load failed:', e.message.slice(0, 120));
+  }
+
+  const buildPacketsUrl = ctx.buildPacketsUrl;
+
+  if (buildPacketsUrl) {
+    test('buildPacketsUrl: default (15min, no region) = bare #/packets', () => {
+      assert.strictEqual(buildPacketsUrl(15, ''), '#/packets');
+    });
+    test('buildPacketsUrl: non-default timeWindow', () => {
+      assert.strictEqual(buildPacketsUrl(60, ''), '#/packets?timeWindow=60');
+    });
+    test('buildPacketsUrl: region only', () => {
+      assert.strictEqual(buildPacketsUrl(15, 'US-SFO'), '#/packets?region=US-SFO');
+    });
+    test('buildPacketsUrl: timeWindow + region', () => {
+      assert.strictEqual(buildPacketsUrl(30, 'US-SFO,US-LAX'), '#/packets?timeWindow=30&region=US-SFO%2CUS-LAX');
+    });
+    test('buildPacketsUrl: timeWindow=0 treated as default', () => {
+      assert.strictEqual(buildPacketsUrl(0, ''), '#/packets');
+    });
+  } else {
+    console.log('  ⚠️ buildPacketsUrl not exposed — skipping');
+  }
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);

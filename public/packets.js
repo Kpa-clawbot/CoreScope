@@ -34,6 +34,19 @@
   let expandedHashes = new Set();
   let hopNameCache = {};
   let showHexHashes = localStorage.getItem('meshcore-hex-hashes') === 'true';
+
+  function buildPacketsUrl(timeWindowMin, regionParam) {
+    var parts = [];
+    if (timeWindowMin && timeWindowMin !== 15) parts.push('timeWindow=' + timeWindowMin);
+    if (regionParam) parts.push('region=' + encodeURIComponent(regionParam));
+    return '#/packets' + (parts.length ? '?' + parts.join('&') : '');
+  }
+  window.buildPacketsUrl = buildPacketsUrl;
+
+  function updatePacketsUrl() {
+    history.replaceState(null, '', buildPacketsUrl(savedTimeWindowMin, RegionFilter.getRegionParam()));
+  }
+
   let filtersBuilt = false;
   let _renderTimer = null;
   function scheduleRender() {
@@ -280,6 +293,19 @@
         filters.node = routeParam;
       }
     }
+
+    // Read URL params (router strips query from routeParam; read from location.hash)
+    var _initUrlParams = new URLSearchParams(location.hash.split('?')[1] || '');
+    var _urlTimeWindow = Number(_initUrlParams.get('timeWindow'));
+    if (Number.isFinite(_urlTimeWindow) && _urlTimeWindow > 0) {
+      savedTimeWindowMin = _urlTimeWindow;
+      localStorage.setItem('meshcore-time-window', String(_urlTimeWindow));
+    }
+    var _urlRegion = _initUrlParams.get('region');
+    if (_urlRegion) {
+      RegionFilter.setSelected(_urlRegion.split(',').filter(Boolean));
+    }
+
     app.innerHTML = `<div class="split-layout detail-collapsed">
       <div class="panel-left" id="pktLeft"></div>
       <div class="panel-right empty" id="pktRight" aria-live="polite">
@@ -716,7 +742,7 @@
 
     // Init shared RegionFilter component
     RegionFilter.init(document.getElementById('packetsRegionFilter'), { dropdown: true });
-    RegionFilter.onChange(function() { loadPackets(); });
+    RegionFilter.onChange(function() { updatePacketsUrl(); loadPackets(); });
 
     // --- Packet Filter Language ---
     (function() {
@@ -866,6 +892,7 @@
       savedTimeWindowMin = Number(fTimeWindow.value);
       if (!Number.isFinite(savedTimeWindowMin) || savedTimeWindowMin <= 0) savedTimeWindowMin = 15;
       localStorage.setItem('meshcore-time-window', fTimeWindow.value);
+      updatePacketsUrl();
       loadPackets();
     });
 

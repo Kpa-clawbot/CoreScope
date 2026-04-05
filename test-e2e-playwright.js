@@ -1653,6 +1653,26 @@ async function run() {
     assert(url.includes('tab=room'), `URL should contain tab=room after click, got: ${url}`);
   });
 
+  // Test: packets timeWindow deep link
+  await test('Packets timeWindow deep link restores dropdown', async () => {
+    await page.goto(BASE + '#/packets?timeWindow=60', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#fTimeWindow', { timeout: 8000 });
+    const val = await page.$eval('#fTimeWindow', el => el.value);
+    assert(val === '60', `Expected timeWindow dropdown = 60, got: ${val}`);
+    const url = page.url();
+    assert(url.includes('timeWindow=60'), `URL should still contain timeWindow=60, got: ${url}`);
+  });
+
+  // Test: timeWindow change updates URL
+  await test('Packets timeWindow change updates URL', async () => {
+    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#fTimeWindow', { timeout: 8000 });
+    await page.selectOption('#fTimeWindow', '30');
+    await page.waitForTimeout(300);
+    const url = page.url();
+    assert(url.includes('timeWindow=30'), `URL should contain timeWindow=30 after change, got: ${url}`);
+  });
+
   await browser.close();
 
   // Summary
