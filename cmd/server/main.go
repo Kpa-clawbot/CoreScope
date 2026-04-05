@@ -166,14 +166,21 @@ func main() {
 		store.graph = loadNeighborEdgesFromDB(database.conn)
 		log.Printf("[neighbor] loaded persisted neighbor graph")
 	} else {
-		log.Printf("[neighbor] no persisted edges found, building from store...")
-		rw, rwErr := openRW(dbPath)
-		if rwErr == nil {
-			edgeCount := buildAndPersistEdges(store, rw)
-			rw.Close()
-			log.Printf("[neighbor] persisted %d edges", edgeCount)
-		}
-		store.graph = BuildFromStore(store)
+		log.Printf("[neighbor] no persisted edges found, will build in background...")
+		store.graph = NewNeighborGraph() // empty graph — gets populated by background goroutine
+		go func() {
+			rw, rwErr := openRW(dbPath)
+			if rwErr == nil {
+				edgeCount := buildAndPersistEdges(store, rw)
+				rw.Close()
+				log.Printf("[neighbor] persisted %d edges", edgeCount)
+			}
+			built := BuildFromStore(store)
+			store.mu.Lock()
+			store.graph = built
+			store.mu.Unlock()
+			log.Printf("[neighbor] graph build complete")
+		}()
 	}
 
 	// Initial pickBestObservation runs in background — doesn't need to block HTTP.

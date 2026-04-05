@@ -31,8 +31,8 @@ func TestBackfillHoursZeroFallsBack(t *testing.T) {
 
 func TestNeighborMaxAgeDaysDefault(t *testing.T) {
 	cfg := &Config{}
-	if got := cfg.NeighborMaxAgeDays(); got != 30 {
-		t.Errorf("NeighborMaxAgeDays() = %d, want 30", got)
+	if got := cfg.NeighborMaxAgeDays(); got != 5 {
+		t.Errorf("NeighborMaxAgeDays() = %d, want 5", got)
 	}
 }
 
