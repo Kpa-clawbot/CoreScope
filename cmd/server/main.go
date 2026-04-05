@@ -176,14 +176,16 @@ func main() {
 		store.graph = BuildFromStore(store)
 	}
 
-	// Backfill resolved_path runs asynchronously after HTTP starts (see below).
-	// Initial pickBestObservation runs with whatever resolved_path data was
-	// loaded from SQLite; the async backfill will re-pick affected transmissions.
-	store.mu.Lock()
-	for _, tx := range store.packets {
-		pickBestObservation(tx)
-	}
-	store.mu.Unlock()
+	// Initial pickBestObservation runs in background — doesn't need to block HTTP.
+	// API serves best-effort data until this completes (~10s for 100K txs).
+	go func() {
+		store.mu.Lock()
+		for _, tx := range store.packets {
+			pickBestObservation(tx)
+		}
+		store.mu.Unlock()
+		log.Printf("[store] initial pickBestObservation complete (%d transmissions)", len(store.packets))
+	}()
 
 	// WebSocket hub
 	hub := NewHub()
