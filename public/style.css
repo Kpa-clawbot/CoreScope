@@ -2239,3 +2239,9 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 @media (max-width: 640px) {
   .data-table { min-width: 480px; }
 }
+
+/* Table sorting indicators */
+th[data-sort-key] { cursor: pointer; user-select: none; }
+th[data-sort-key]:hover { background: var(--hover-bg, rgba(255,255,255,0.05)); }
+th.sort-active { color: var(--accent, #60a5fa); }
+.sort-arrow { font-size: 0.75em; opacity: 0.8; }

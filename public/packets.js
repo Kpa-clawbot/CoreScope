@@ -33,6 +33,9 @@
   let totalCount = 0;
   let expandedHashes = new Set();
   let hopNameCache = {};
+  let _tableSortInstance = null;
+  let _packetSortColumn = null;
+  let _packetSortDirection = 'desc';
   let showHexHashes = localStorage.getItem('meshcore-hex-hashes') === 'true';
   let filtersBuilt = false;
   let _renderTimer = null;
@@ -468,8 +471,12 @@
               if (h) hashIndex.set(h, newGroup);
             }
           }
-          // Re-sort by latest DESC, then evict oldest beyond the limit
-          packets.sort((a, b) => (b.latest || '').localeCompare(a.latest || ''));
+          // Re-sort by active sort column (or latest DESC as default), then evict oldest beyond the limit
+          if (_packetSortColumn) {
+            sortPacketsArray();
+          } else {
+            packets.sort((a, b) => (b.latest || '').localeCompare(a.latest || ''));
+          }
           if (packets.length > PACKET_LIMIT) {
             const evicted = packets.splice(PACKET_LIMIT);
             for (const p of evicted) { if (p.hash) hashIndex.delete(p.hash); }
@@ -490,6 +497,7 @@
     clearTimeout(_renderTimer);
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
+    if (_tableSortInstance) { _tableSortInstance.destroy(); _tableSortInstance = null; }
     detachVScrollListener();
     clearTimeout(_wsRenderTimer);
     if (_wsRafId) { cancelAnimationFrame(_wsRafId); _wsRafId = null; }
@@ -618,6 +626,7 @@
         }
       }
 
+      sortPacketsArray();
       renderLeft();
     } catch (e) {
       console.error('Failed to load packets:', e);
@@ -708,9 +717,9 @@
       </div>
       <table class="data-table" id="pktTable">
         <thead><tr>
-          <th scope="col"></th><th scope="col" class="col-region">Region</th><th scope="col" class="col-time">Time</th><th scope="col" class="col-hash">Hash</th><th scope="col" class="col-size">Size</th>
-          <th scope="col" class="col-hashsize">HB</th>
-          <th scope="col" class="col-type">Type</th><th scope="col" class="col-observer">Observer</th><th scope="col" class="col-path">Path</th><th scope="col" class="col-rpt">Rpt</th><th scope="col" class="col-details">Details</th>
+          <th scope="col"></th><th scope="col" class="col-region" data-sort-key="region">Region</th><th scope="col" class="col-time" data-sort-key="time" data-type="date">Time</th><th scope="col" class="col-hash" data-sort-key="hash">Hash</th><th scope="col" class="col-size" data-sort-key="size" data-type="numeric">Size</th>
+          <th scope="col" class="col-hashsize" data-sort-key="hb" data-type="numeric">HB</th>
+          <th scope="col" class="col-type" data-sort-key="type">Type</th><th scope="col" class="col-observer" data-sort-key="observer">Observer</th><th scope="col" class="col-path" data-sort-key="path">Path</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric">Rpt</th><th scope="col" class="col-details">Details</th>
         </tr></thead>
         <tbody id="pktBody"></tbody>
       </table>
@@ -1103,6 +1112,33 @@
 
     renderTableRows();
     makeColumnsResizable('#pktTable', 'meshcore-pkt-col-widths');
+
+    // Initialize table sorting (virtual scroll — sort data array, not DOM)
+    if (window.TableSort) {
+      var pktTableEl = document.getElementById('pktTable');
+      if (pktTableEl) {
+        if (_tableSortInstance) _tableSortInstance.destroy();
+        _tableSortInstance = TableSort.init(pktTableEl, {
+          defaultColumn: 'time',
+          defaultDirection: 'desc',
+          storageKey: 'meshcore-packets-sort',
+          domReorder: false,
+          onSort: function(column, direction) {
+            _packetSortColumn = column;
+            _packetSortDirection = direction;
+            sortPacketsArray();
+            renderTableRows();
+          }
+        });
+        // Apply initial sort state from TableSort
+        if (_tableSortInstance) {
+          var st = _tableSortInstance.getState();
+          _packetSortColumn = st.column;
+          _packetSortDirection = st.direction;
+          sortPacketsArray();
+        }
+      }
+    }
   }
 
   // Build HTML for a single grouped packet row
@@ -1405,6 +1441,48 @@
     const scrollContainer = document.getElementById('pktLeft');
     if (scrollContainer) scrollContainer.removeEventListener('scroll', _vsScrollHandler);
     _vsScrollHandler = null;
+  }
+
+  /** Sort the packets array by the current sort column. Called before renderTableRows. */
+  function sortPacketsArray() {
+    if (!_packetSortColumn || !packets.length) return;
+    var col = _packetSortColumn;
+    var dir = _packetSortDirection === 'asc' ? 1 : -1;
+
+    var accessor;
+    switch (col) {
+      case 'time': accessor = function(p) { return p.latest || p.timestamp || ''; }; break;
+      case 'type': accessor = function(p) { return typeName(p.payload_type); }; break;
+      case 'hash': accessor = function(p) { return p.hash || ''; }; break;
+      case 'observer': accessor = function(p) { return obsName(p.observer_id); }; break;
+      case 'size': accessor = function(p) { return p.packet_size || 0; }; break;
+      case 'hb': accessor = function(p) { return p.hash_byte_count != null ? p.hash_byte_count : (p.hash_size || 0); }; break;
+      case 'rpt': accessor = function(p) {
+        try { var pj = typeof p.path_json === 'string' ? JSON.parse(p.path_json) : p.path_json; return Array.isArray(pj) ? pj.length : 0; } catch(e) { return 0; }
+      }; break;
+      case 'region': accessor = function(p) { return (regionMap && regionMap[p.observer_id]) || ''; }; break;
+      case 'path': accessor = function(p) {
+        try { var pj = typeof p.path_json === 'string' ? JSON.parse(p.path_json) : p.path_json; return Array.isArray(pj) ? pj.join(',') : ''; } catch(e) { return ''; }
+      }; break;
+      default: return; // unsortable column
+    }
+
+    // Choose comparator based on column type
+    var isNumeric = (col === 'size' || col === 'hb' || col === 'rpt');
+    var isDate = (col === 'time');
+
+    packets.sort(function(a, b) {
+      var va = accessor(a), vb = accessor(b);
+      var result;
+      if (isDate) {
+        result = TableSort.comparators.date(va, vb);
+      } else if (isNumeric) {
+        result = TableSort.comparators.numeric(va, vb);
+      } else {
+        result = TableSort.comparators.text(va, vb);
+      }
+      return dir * result;
+    });
   }
 
   async function renderTableRows() {
