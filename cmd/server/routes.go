@@ -154,8 +154,10 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/resolve-hops", s.handleResolveHops).Methods("GET")
 	r.HandleFunc("/api/channels/{hash}/messages", s.handleChannelMessages).Methods("GET")
 	r.HandleFunc("/api/channels", s.handleChannels).Methods("GET")
+	r.HandleFunc("/api/observers/{id}/metrics", s.handleObserverMetrics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/analytics", s.handleObserverAnalytics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
+	r.HandleFunc("/api/observers/metrics/summary", s.handleMetricsSummary).Methods("GET")
 	r.HandleFunc("/api/observers", s.handleObservers).Methods("GET")
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")
 	r.HandleFunc("/api/iata-coords", s.handleIATACoords).Methods("GET")
@@ -2151,6 +2153,80 @@ func nullFloatVal(n sql.NullFloat64) float64 {
 		return n.Float64
 	}
 	return 0
+}
+
+func (s *Server) handleObserverMetrics(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	since := r.URL.Query().Get("since")
+	until := r.URL.Query().Get("until")
+
+	// Default to last 24h if no since provided
+	if since == "" {
+		since = time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339)
+	}
+
+	metrics, err := s.db.GetObserverMetrics(id, since, until)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if metrics == nil {
+		metrics = []MetricsSample{}
+	}
+
+	// Get observer name
+	obs, _ := s.db.GetObserverByID(id)
+	var name *string
+	if obs != nil {
+		name = obs.Name
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"observer_id":   id,
+		"observer_name": name,
+		"metrics":       metrics,
+	})
+}
+
+func (s *Server) handleMetricsSummary(w http.ResponseWriter, r *http.Request) {
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = "24h"
+	}
+
+	// Parse window duration
+	dur, err := parseWindowDuration(window)
+	if err != nil {
+		writeError(w, 400, "invalid window: "+window)
+		return
+	}
+
+	since := time.Now().UTC().Add(-dur).Format(time.RFC3339)
+	summary, err := s.db.GetMetricsSummary(since)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if summary == nil {
+		summary = []MetricsSummaryRow{}
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"observers": summary,
+	})
+}
+
+// parseWindowDuration parses strings like "24h", "3d", "7d", "30d".
+func parseWindowDuration(window string) (time.Duration, error) {
+	if strings.HasSuffix(window, "d") {
+		daysStr := strings.TrimSuffix(window, "d")
+		days, err := strconv.Atoi(daysStr)
+		if err != nil || days <= 0 {
+			return 0, fmt.Errorf("invalid days: %s", daysStr)
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(window)
 }
 
 func (s *Server) handleAdminPrune(w http.ResponseWriter, r *http.Request) {

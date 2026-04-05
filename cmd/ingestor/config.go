@@ -36,6 +36,7 @@ type Config struct {
 	ChannelKeys     map[string]string `json:"channelKeys,omitempty"`
 	HashChannels    []string          `json:"hashChannels,omitempty"`
 	Retention       *RetentionConfig  `json:"retention,omitempty"`
+	Metrics         *MetricsConfig    `json:"metrics,omitempty"`
 	GeoFilter       *GeoFilterConfig  `json:"geo_filter,omitempty"`
 }
 
@@ -44,7 +45,29 @@ type GeoFilterConfig = geofilter.Config
 
 // RetentionConfig controls how long stale nodes are kept before being moved to inactive_nodes.
 type RetentionConfig struct {
-	NodeDays int `json:"nodeDays"`
+	NodeDays    int `json:"nodeDays"`
+	MetricsDays int `json:"metricsDays"`
+}
+
+// MetricsConfig controls observer metrics collection.
+type MetricsConfig struct {
+	SampleIntervalSec int `json:"sampleIntervalSec"`
+}
+
+// MetricsSampleInterval returns the configured sample interval or 300s default.
+func (c *Config) MetricsSampleInterval() int {
+	if c.Metrics != nil && c.Metrics.SampleIntervalSec > 0 {
+		return c.Metrics.SampleIntervalSec
+	}
+	return 300
+}
+
+// MetricsRetentionDays returns configured metrics retention or 30 days default.
+func (c *Config) MetricsRetentionDays() int {
+	if c.Retention != nil && c.Retention.MetricsDays > 0 {
+		return c.Retention.MetricsDays
+	}
+	return 30
 }
 
 // NodeDaysOrDefault returns the configured retention.nodeDays or 7 if not set.

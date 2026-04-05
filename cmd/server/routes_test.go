@@ -3583,3 +3583,41 @@ func TestPathHopIndexIncrementalUpdate(t *testing.T) {
 		t.Error("expected resolved pubkey key to be deleted after removal")
 	}
 }
+
+func TestMetricsAPIEndpoints(t *testing.T) {
+	srv, router := setupTestServer(t)
+
+	now := time.Now().UTC()
+	t1 := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	srv.db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+		"obs1", t1, -112.0)
+
+	// Test /api/observers/obs1/metrics
+	req := httptest.NewRequest("GET", "/api/observers/obs1/metrics", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("GET /api/observers/obs1/metrics = %d, want 200", w.Code)
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	metrics, ok := resp["metrics"].([]interface{})
+	if !ok || len(metrics) != 1 {
+		t.Errorf("expected 1 metric in response, got %v", resp["metrics"])
+	}
+
+	// Test /api/observers/metrics/summary
+	req2 := httptest.NewRequest("GET", "/api/observers/metrics/summary?window=24h", nil)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Code != 200 {
+		t.Fatalf("GET /api/observers/metrics/summary = %d, want 200", w2.Code)
+	}
+	var resp2 map[string]interface{}
+	json.Unmarshal(w2.Body.Bytes(), &resp2)
+	observers, ok := resp2["observers"].([]interface{})
+	if !ok || len(observers) != 1 {
+		t.Errorf("expected 1 observer in summary, got %v", resp2["observers"])
+	}
+}

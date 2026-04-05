@@ -69,8 +69,17 @@ type PacketStoreConfig struct {
 type GeoFilterConfig = geofilter.Config
 
 type RetentionConfig struct {
-	NodeDays   int `json:"nodeDays"`
-	PacketDays int `json:"packetDays"`
+	NodeDays    int `json:"nodeDays"`
+	PacketDays  int `json:"packetDays"`
+	MetricsDays int `json:"metricsDays"`
+}
+
+// MetricsRetentionDays returns configured metrics retention or 30 days default.
+func (c *Config) MetricsRetentionDays() int {
+	if c.Retention != nil && c.Retention.MetricsDays > 0 {
+		return c.Retention.MetricsDays
+	}
+	return 30
 }
 
 

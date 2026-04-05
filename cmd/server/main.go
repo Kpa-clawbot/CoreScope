@@ -256,6 +256,31 @@ func main() {
 		log.Printf("[prune] auto-prune enabled: packets older than %d days will be removed daily", days)
 	}
 
+	// Auto-prune old metrics
+	var stopMetricsPrune func()
+	{
+		metricsDays := cfg.MetricsRetentionDays()
+		metricsPruneTicker := time.NewTicker(24 * time.Hour)
+		metricsPruneDone := make(chan struct{})
+		stopMetricsPrune = func() {
+			metricsPruneTicker.Stop()
+			close(metricsPruneDone)
+		}
+		go func() {
+			time.Sleep(2 * time.Minute) // stagger after packet prune
+			database.PruneOldMetrics(metricsDays)
+			for {
+				select {
+				case <-metricsPruneTicker.C:
+					database.PruneOldMetrics(metricsDays)
+				case <-metricsPruneDone:
+					return
+				}
+			}
+		}()
+		log.Printf("[metrics-prune] auto-prune enabled: metrics older than %d days", metricsDays)
+	}
+
 	// Graceful shutdown
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
@@ -277,6 +302,9 @@ func main() {
 		// 1b. Stop auto-prune ticker
 		if stopPrune != nil {
 			stopPrune()
+		}
+		if stopMetricsPrune != nil {
+			stopMetricsPrune()
 		}
 
 		// 2. Gracefully drain HTTP connections (up to 15s)

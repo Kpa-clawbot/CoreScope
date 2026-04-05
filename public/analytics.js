@@ -86,6 +86,7 @@
             <button class="tab-btn" data-tab="nodes">Nodes</button>
             <button class="tab-btn" data-tab="distance">Distance</button>
             <button class="tab-btn" data-tab="neighbor-graph">Neighbor Graph</button>
+            <button class="tab-btn" data-tab="rf-health">RF Health</button>
             <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
           </div>
         </div>
@@ -174,6 +175,7 @@
       case 'nodes': await renderNodesTab(el); break;
       case 'distance': await renderDistanceTab(el); break;
       case 'neighbor-graph': await renderNeighborGraphTab(el); break;
+      case 'rf-health': await renderRFHealthTab(el); break;
       case 'prefix-tool': await renderPrefixTool(el); break;
     }
     // Auto-apply column resizing to all analytics tables
@@ -2594,6 +2596,348 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       setTimeout(() => { document.getElementById('ptGenerator')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
     }
   }
+
+  // ===================== RF HEALTH =====================
+
+  let _rfHealthState = { range: '24h', selectedObserver: null, customFrom: '', customTo: '' };
+
+  function rfHealthTimeRangeToParams(range, customFrom, customTo) {
+    const now = new Date();
+    let since, until;
+    if (range === 'custom' && customFrom) {
+      since = new Date(customFrom).toISOString();
+      until = customTo ? new Date(customTo).toISOString() : now.toISOString();
+    } else {
+      const durations = { '1h': 1, '3h': 3, '6h': 6, '12h': 12, '24h': 24, '3d': 72, '7d': 168, '30d': 720 };
+      const hours = durations[range] || 24;
+      since = new Date(now.getTime() - hours * 3600000).toISOString();
+      until = now.toISOString();
+    }
+    return { since, until };
+  }
+
+  function rfHealthUpdateHash() {
+    const params = new URLSearchParams();
+    params.set('tab', 'rf-health');
+    if (_rfHealthState.range !== '24h') params.set('range', _rfHealthState.range);
+    if (_rfHealthState.selectedObserver) params.set('observer', _rfHealthState.selectedObserver);
+    if (_rfHealthState.range === 'custom') {
+      if (_rfHealthState.customFrom) params.set('from', _rfHealthState.customFrom);
+      if (_rfHealthState.customTo) params.set('to', _rfHealthState.customTo);
+    }
+    history.replaceState(null, '', '#/analytics?' + params.toString());
+  }
+
+  async function renderRFHealthTab(el) {
+    // Restore state from URL
+    const hashParams = new URLSearchParams((location.hash.split('?')[1] || ''));
+    if (hashParams.get('range')) _rfHealthState.range = hashParams.get('range');
+    if (hashParams.get('observer')) _rfHealthState.selectedObserver = hashParams.get('observer');
+    if (hashParams.get('from')) { _rfHealthState.customFrom = hashParams.get('from'); _rfHealthState.range = 'custom'; }
+    if (hashParams.get('to')) { _rfHealthState.customTo = hashParams.get('to'); _rfHealthState.range = 'custom'; }
+
+    const ranges = ['1h','3h','6h','12h','24h','3d','7d','30d'];
+    const rangeButtons = ranges.map(r =>
+      `<button class="rf-range-btn${_rfHealthState.range === r ? ' active' : ''}" data-range="${r}">${r}</button>`
+    ).join('');
+
+    el.innerHTML = `
+      <div class="rf-health-container">
+        <div class="rf-time-selector">
+          ${rangeButtons}
+          <button class="rf-range-btn${_rfHealthState.range === 'custom' ? ' active' : ''}" data-range="custom">Custom</button>
+          <span class="rf-custom-inputs" style="display:${_rfHealthState.range === 'custom' ? 'inline' : 'none'}">
+            <input type="datetime-local" class="rf-datetime" id="rfFrom" value="${_rfHealthState.customFrom}">
+            <span>→</span>
+            <input type="datetime-local" class="rf-datetime" id="rfTo" value="${_rfHealthState.customTo}">
+            <button class="rf-range-btn" id="rfCustomApply">Apply</button>
+          </span>
+        </div>
+        <div id="rfHealthGrid" class="rf-health-grid">
+          <div class="text-muted" style="padding:20px">Loading RF metrics…</div>
+        </div>
+        <div id="rfHealthDetail" class="rf-health-detail" style="display:none"></div>
+      </div>`;
+
+    // Range button handlers
+    el.querySelectorAll('.rf-range-btn[data-range]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const range = btn.dataset.range;
+        _rfHealthState.range = range;
+        el.querySelectorAll('.rf-range-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const customInputs = el.querySelector('.rf-custom-inputs');
+        if (customInputs) customInputs.style.display = range === 'custom' ? 'inline' : 'none';
+        if (range !== 'custom') {
+          rfHealthUpdateHash();
+          loadRFHealthData(el);
+        }
+      });
+    });
+
+    const applyBtn = document.getElementById('rfCustomApply');
+    if (applyBtn) {
+      applyBtn.addEventListener('click', () => {
+        _rfHealthState.customFrom = document.getElementById('rfFrom').value;
+        _rfHealthState.customTo = document.getElementById('rfTo').value;
+        rfHealthUpdateHash();
+        loadRFHealthData(el);
+      });
+    }
+
+    await loadRFHealthData(el);
+  }
+
+  async function loadRFHealthData(el) {
+    const grid = document.getElementById('rfHealthGrid');
+    const detail = document.getElementById('rfHealthDetail');
+
+    try {
+      // Compute window string for summary endpoint
+      const windowMap = { '1h':'1h', '3h':'3h', '6h':'6h', '12h':'12h', '24h':'24h', '3d':'3d', '7d':'7d', '30d':'30d' };
+      const window = windowMap[_rfHealthState.range] || '24h';
+      const summaryData = await api('/observers/metrics/summary?window=' + window);
+      const observers = summaryData.observers || [];
+
+      if (!observers.length) {
+        grid.innerHTML = '<div class="text-muted" style="padding:20px">No RF metrics data available yet. Metrics are collected from observer status messages every ~5 minutes.</div>';
+        return;
+      }
+
+      // Render small multiples grid
+      grid.innerHTML = observers.map(obs => {
+        const nf = obs.current_noise_floor != null ? obs.current_noise_floor.toFixed(1) : '—';
+        const avgNf = obs.avg_noise_floor_24h != null ? obs.avg_noise_floor_24h.toFixed(1) : '—';
+        const maxNf = obs.max_noise_floor_24h != null ? obs.max_noise_floor_24h.toFixed(1) : '—';
+        const batt = obs.battery_mv != null ? (obs.battery_mv / 1000).toFixed(2) + 'V' : '';
+        const name = obs.observer_name || obs.observer_id.substring(0, 8);
+        const isSelected = _rfHealthState.selectedObserver === obs.observer_id;
+
+        // NF status coloring
+        let nfClass = '';
+        if (obs.current_noise_floor != null) {
+          if (obs.current_noise_floor >= -85) nfClass = 'rf-nf-critical';
+          else if (obs.current_noise_floor >= -100) nfClass = 'rf-nf-warning';
+        }
+
+        return `<div class="rf-cell${isSelected ? ' rf-cell-selected' : ''}" data-observer="${obs.observer_id}" tabindex="0" role="button" aria-label="Observer ${name}, noise floor ${nf} dBm">
+          <div class="rf-cell-header">
+            <span class="rf-cell-name">${esc(name)}</span>
+            <span class="rf-cell-nf ${nfClass}">${nf} dBm</span>
+            ${batt ? `<span class="rf-cell-batt">${batt}</span>` : ''}
+          </div>
+          <div class="rf-cell-sparkline" id="rf-spark-${obs.observer_id}"></div>
+          <div class="rf-cell-stats">
+            <span>avg: ${avgNf}</span>
+            <span>max: ${maxNf}</span>
+            <span>${obs.sample_count} samples</span>
+          </div>
+        </div>`;
+      }).join('');
+
+      // Click handler for cells
+      grid.querySelectorAll('.rf-cell').forEach(cell => {
+        cell.addEventListener('click', () => {
+          const obsId = cell.dataset.observer;
+          grid.querySelectorAll('.rf-cell').forEach(c => c.classList.remove('rf-cell-selected'));
+          cell.classList.add('rf-cell-selected');
+          _rfHealthState.selectedObserver = obsId;
+          rfHealthUpdateHash();
+          loadRFHealthDetail(obsId, detail);
+        });
+        cell.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cell.click(); }
+        });
+      });
+
+      // Load sparklines for each observer
+      for (const obs of observers) {
+        loadRFSparkline(obs.observer_id);
+      }
+
+      // Auto-expand selected observer from URL
+      if (_rfHealthState.selectedObserver) {
+        const selectedCell = grid.querySelector(`[data-observer="${_rfHealthState.selectedObserver}"]`);
+        if (selectedCell) {
+          selectedCell.classList.add('rf-cell-selected');
+          loadRFHealthDetail(_rfHealthState.selectedObserver, detail);
+        }
+      }
+    } catch (e) {
+      grid.innerHTML = `<div class="text-muted" style="padding:20px">Failed to load RF health data: ${esc(e.message)}</div>`;
+    }
+  }
+
+  async function loadRFSparkline(observerId) {
+    const { since, until } = rfHealthTimeRangeToParams(_rfHealthState.range, _rfHealthState.customFrom, _rfHealthState.customTo);
+    try {
+      const data = await api(`/observers/${observerId}/metrics?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`);
+      const metrics = data.metrics || [];
+      const nfValues = metrics.map(m => m.noise_floor).filter(v => v != null);
+      const container = document.getElementById(`rf-spark-${observerId}`);
+      if (container && nfValues.length > 1) {
+        container.innerHTML = rfNFSparkline(nfValues, 140, 24);
+      } else if (container) {
+        container.innerHTML = '<span class="text-muted" style="font-size:10px">insufficient data</span>';
+      }
+    } catch (e) {
+      // Non-fatal — sparkline just won't render
+    }
+  }
+
+  function rfNFSparkline(data, w, h) {
+    if (!data.length) return '';
+    // For noise floor, invert: more negative = better = lower on chart
+    const min = Math.min(...data);
+    const max = Math.max(...data);
+    const range = max - min || 1;
+    const pts = data.map((v, i) => {
+      const x = (i / Math.max(data.length - 1, 1)) * w;
+      // Higher dBm (worse) = higher on chart
+      const y = h - 2 - ((v - min) / range) * (h - 4);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+
+    // Reference lines
+    let refs = '';
+    if (min <= -100 && max >= -100) {
+      const y100 = h - 2 - ((-100 - min) / range) * (h - 4);
+      refs += `<line x1="0" y1="${y100.toFixed(1)}" x2="${w}" y2="${y100.toFixed(1)}" stroke="var(--text-muted)" stroke-width="0.5" stroke-dasharray="2"/>`;
+    }
+
+    return `<svg viewBox="0 0 ${w} ${h}" style="width:${w}px;height:${h}px" role="img" aria-label="Noise floor sparkline"><title>Noise floor trend</title>${refs}<polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.5"/></svg>`;
+  }
+
+  async function loadRFHealthDetail(observerId, container) {
+    container.style.display = 'block';
+    container.innerHTML = '<div class="text-muted" style="padding:10px">Loading detail…</div>';
+
+    const { since, until } = rfHealthTimeRangeToParams(_rfHealthState.range, _rfHealthState.customFrom, _rfHealthState.customTo);
+    try {
+      const data = await api(`/observers/${observerId}/metrics?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}`);
+      const metrics = data.metrics || [];
+      const name = data.observer_name || observerId.substring(0, 8);
+
+      if (!metrics.length) {
+        container.innerHTML = `<div class="text-muted" style="padding:10px">No metrics data for ${esc(name)} in selected time range.</div>`;
+        return;
+      }
+
+      // Extract noise floor data
+      const nfData = metrics.map(m => ({ t: m.timestamp, v: m.noise_floor })).filter(d => d.v != null);
+
+      // Current values
+      const latest = metrics[metrics.length - 1];
+      const nfValues = metrics.map(m => m.noise_floor).filter(v => v != null);
+      const avgNf = nfValues.length ? (nfValues.reduce((a,b) => a+b, 0) / nfValues.length).toFixed(1) : '—';
+      const minNf = nfValues.length ? Math.min(...nfValues).toFixed(1) : '—';
+      const maxNf = nfValues.length ? Math.max(...nfValues).toFixed(1) : '—';
+      const curNf = latest.noise_floor != null ? latest.noise_floor.toFixed(1) : '—';
+      const curBatt = latest.battery_mv != null ? (latest.battery_mv / 1000).toFixed(2) + 'V' : '—';
+
+      container.innerHTML = `
+        <div class="rf-detail-header">
+          <h3>${esc(name)}</h3>
+          <button class="rf-detail-close" aria-label="Close detail" title="Close">✕</button>
+        </div>
+        <div class="rf-detail-chart" id="rfDetailChart"></div>
+        <div class="rf-detail-summary">
+          NF: ${curNf} dBm | avg: ${avgNf} | min: ${minNf} | max: ${maxNf} | Batt: ${curBatt}
+        </div>`;
+
+      // Close button
+      container.querySelector('.rf-detail-close').addEventListener('click', () => {
+        container.style.display = 'none';
+        _rfHealthState.selectedObserver = null;
+        rfHealthUpdateHash();
+        document.querySelectorAll('.rf-cell').forEach(c => c.classList.remove('rf-cell-selected'));
+      });
+
+      // Render noise floor line chart
+      const chartEl = document.getElementById('rfDetailChart');
+      if (nfData.length > 1) {
+        chartEl.innerHTML = rfNFLineChart(nfData, chartEl.clientWidth || 700, 200);
+      } else {
+        chartEl.innerHTML = '<span class="text-muted">Not enough data points for chart</span>';
+      }
+    } catch (e) {
+      container.innerHTML = `<div class="text-muted" style="padding:10px">Failed to load detail: ${esc(e.message)}</div>`;
+    }
+  }
+
+  function rfNFLineChart(data, w, h) {
+    const pad = { top: 20, right: 40, bottom: 30, left: 55 };
+    const cw = w - pad.left - pad.right;
+    const ch = h - pad.top - pad.bottom;
+
+    const values = data.map(d => d.v);
+    const times = data.map(d => new Date(d.t).getTime());
+    const minT = Math.min(...times);
+    const maxT = Math.max(...times);
+    const minV = Math.min(...values);
+    const maxV = Math.max(...values);
+    const rangeV = maxV - minV || 1;
+    const rangeT = maxT - minT || 1;
+
+    // Scale functions
+    const sx = t => pad.left + ((t - minT) / rangeT) * cw;
+    const sy = v => pad.top + ((v - minV) / rangeV) * ch; // higher dBm = higher on chart (top)
+
+    // Data line
+    const pts = data.map(d => `${sx(new Date(d.t).getTime()).toFixed(1)},${sy(d.v).toFixed(1)}`).join(' ');
+
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Noise floor line chart"><title>Noise floor over time</title>`;
+
+    // Reference lines
+    const refLines = [-100, -85];
+    const refLabels = ['-100 warning', '-85 critical'];
+    refLines.forEach((ref, i) => {
+      if (ref >= minV && ref <= maxV) {
+        const y = sy(ref);
+        svg += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w - pad.right}" y2="${y.toFixed(1)}" stroke="var(--text-muted)" stroke-width="0.5" stroke-dasharray="4,2"/>`;
+        svg += `<text x="${w - pad.right + 2}" y="${(y + 3).toFixed(1)}" font-size="9" fill="var(--text-muted)">${refLabels[i]}</text>`;
+      }
+    });
+
+    // Y-axis labels
+    const yTicks = 5;
+    for (let i = 0; i <= yTicks; i++) {
+      const v = minV + (rangeV * i / yTicks);
+      const y = sy(v);
+      svg += `<text x="${pad.left - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-muted)">${v.toFixed(0)}</text>`;
+      svg += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w - pad.right}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="0.3"/>`;
+    }
+
+    // X-axis labels
+    const xTicks = Math.min(6, data.length);
+    for (let i = 0; i < xTicks; i++) {
+      const idx = Math.floor(i * (data.length - 1) / Math.max(xTicks - 1, 1));
+      const t = new Date(data[idx].t);
+      const x = sx(t.getTime());
+      const label = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      svg += `<text x="${x.toFixed(1)}" y="${h - 5}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${label}</text>`;
+    }
+
+    // Data polyline
+    svg += `<polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>`;
+
+    // Direct labels: min and max points
+    const maxIdx = values.indexOf(maxV);
+    const minIdx = values.indexOf(minV);
+    svg += `<circle cx="${sx(times[maxIdx]).toFixed(1)}" cy="${sy(maxV).toFixed(1)}" r="3" fill="var(--danger, red)"/>`;
+    svg += `<text x="${sx(times[maxIdx]).toFixed(1)}" y="${(sy(maxV) - 6).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--danger, red)">${maxV.toFixed(1)}</text>`;
+    svg += `<circle cx="${sx(times[minIdx]).toFixed(1)}" cy="${sy(minV).toFixed(1)}" r="3" fill="var(--success, green)"/>`;
+    svg += `<text x="${sx(times[minIdx]).toFixed(1)}" y="${(sy(minV) + 14).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--success, green)">${minV.toFixed(1)}</text>`;
+
+    // Y-axis label
+    svg += `<text x="12" y="${(h / 2)}" text-anchor="middle" font-size="10" fill="var(--text-muted)" transform="rotate(-90,12,${h/2})">dBm</text>`;
+
+    svg += '</svg>';
+    return svg;
+  }
+
+  // HTML escaping helper (in case not defined)
+  function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 
   registerPage('analytics', { init, destroy });
 })();

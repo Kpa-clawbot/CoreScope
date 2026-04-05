@@ -75,6 +75,17 @@ func setupTestDB(t *testing.T) *DB {
 			timestamp INTEGER NOT NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS observer_metrics (
+			observer_id TEXT NOT NULL,
+			timestamp TEXT NOT NULL,
+			noise_floor REAL,
+			tx_air_secs INTEGER,
+			rx_air_secs INTEGER,
+			recv_errors INTEGER,
+			battery_mv INTEGER,
+			PRIMARY KEY (observer_id, timestamp)
+		);
+
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
@@ -1536,4 +1547,135 @@ func TestNodeTelemetryFields(t *testing.T) {
 
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
+}
+
+func TestGetObserverMetrics(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	now := time.Now().UTC()
+	t1 := now.Add(-2 * time.Hour).Format(time.RFC3339)
+	t2 := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	t3 := now.Format(time.RFC3339)
+
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		"obs1", t1, -112.5, 100, 500, 3, 3720)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+		"obs1", t2, -110.0)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+		"obs1", t3, -108.0)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+		"obs2", t1, -115.0)
+
+	// Query all for obs1
+	since := now.Add(-3 * time.Hour).Format(time.RFC3339)
+	metrics, err := db.GetObserverMetrics("obs1", since, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics) != 3 {
+		t.Errorf("expected 3 metrics, got %d", len(metrics))
+	}
+
+	// Verify first row has all fields
+	if metrics[0].NoiseFloor == nil || *metrics[0].NoiseFloor != -112.5 {
+		t.Errorf("first noise_floor = %v, want -112.5", metrics[0].NoiseFloor)
+	}
+	if metrics[0].TxAirSecs == nil || *metrics[0].TxAirSecs != 100 {
+		t.Errorf("first tx_air_secs = %v, want 100", metrics[0].TxAirSecs)
+	}
+
+	// Second row has NULL for tx_air_secs
+	if metrics[1].TxAirSecs != nil {
+		t.Errorf("second tx_air_secs should be nil, got %v", *metrics[1].TxAirSecs)
+	}
+
+	// Query with until filter
+	metrics2, err := db.GetObserverMetrics("obs1", since, t2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics2) != 2 {
+		t.Errorf("expected 2 metrics with until filter, got %d", len(metrics2))
+	}
+}
+
+func TestGetMetricsSummary(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	now := time.Now().UTC()
+	t1 := now.Add(-2 * time.Hour).Format(time.RFC3339)
+	t2 := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, battery_mv) VALUES (?, ?, ?, ?)",
+		"obs1", t1, -112.0, 3720)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+		"obs1", t2, -108.0)
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+		"obs2", t1, -115.0)
+
+	since := now.Add(-24 * time.Hour).Format(time.RFC3339)
+	summary, err := db.GetMetricsSummary(since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary) != 2 {
+		t.Fatalf("expected 2 observers in summary, got %d", len(summary))
+	}
+
+	// Results sorted by max_nf DESC
+	// obs1 has max -108, obs2 has max -115
+	if summary[0].ObserverID != "obs1" {
+		t.Errorf("first observer should be obs1 (highest max NF), got %s", summary[0].ObserverID)
+	}
+	if summary[0].CurrentNF == nil || *summary[0].CurrentNF != -108.0 {
+		t.Errorf("obs1 current NF = %v, want -108.0", summary[0].CurrentNF)
+	}
+	if summary[0].SampleCount != 2 {
+		t.Errorf("obs1 sample count = %d, want 2", summary[0].SampleCount)
+	}
+}
+
+func TestObserverMetricsAPIEndpoints(t *testing.T) {
+	db := setupTestDB(t)
+	seedTestData(t, db)
+
+	now := time.Now().UTC()
+	t1 := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	db.conn.Exec("INSERT INTO observer_metrics (observer_id, timestamp, noise_floor) VALUES (?, ?, ?)",
+		"obs1", t1, -112.0)
+
+	// Query directly to verify
+	metrics, err := db.GetObserverMetrics("obs1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics) != 1 {
+		t.Errorf("expected 1 metric, got %d", len(metrics))
+	}
+}
+
+func TestParseWindowDuration(t *testing.T) {
+	tests := []struct {
+		input string
+		want  time.Duration
+		err   bool
+	}{
+		{"1h", time.Hour, false},
+		{"24h", 24 * time.Hour, false},
+		{"3d", 3 * 24 * time.Hour, false},
+		{"30d", 30 * 24 * time.Hour, false},
+		{"invalid", 0, true},
+	}
+	for _, tc := range tests {
+		got, err := parseWindowDuration(tc.input)
+		if tc.err && err == nil {
+			t.Errorf("parseWindowDuration(%q) expected error", tc.input)
+		}
+		if !tc.err && got != tc.want {
+			t.Errorf("parseWindowDuration(%q) = %v, want %v", tc.input, got, tc.want)
+		}
+	}
 }

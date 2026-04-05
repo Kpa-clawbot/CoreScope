@@ -1734,3 +1734,112 @@ func (db *DB) PruneOldPackets(days int) (int64, error) {
 	n, _ := res.RowsAffected()
 	return n, tx.Commit()
 }
+
+// MetricsSample represents a single row from observer_metrics.
+type MetricsSample struct {
+	Timestamp  string   `json:"timestamp"`
+	NoiseFloor *float64 `json:"noise_floor"`
+	TxAirSecs  *int     `json:"tx_air_secs"`
+	RxAirSecs  *int     `json:"rx_air_secs"`
+	RecvErrors *int     `json:"recv_errors"`
+	BatteryMv  *int     `json:"battery_mv"`
+}
+
+// GetObserverMetrics returns time-series metrics for a single observer.
+func (db *DB) GetObserverMetrics(observerID, since, until string) ([]MetricsSample, error) {
+	query := `SELECT timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv
+		FROM observer_metrics WHERE observer_id = ?`
+	args := []interface{}{observerID}
+	if since != "" {
+		query += " AND timestamp >= ?"
+		args = append(args, since)
+	}
+	if until != "" {
+		query += " AND timestamp <= ?"
+		args = append(args, until)
+	}
+	query += " ORDER BY timestamp ASC"
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []MetricsSample
+	for rows.Next() {
+		var s MetricsSample
+		if err := rows.Scan(&s.Timestamp, &s.NoiseFloor, &s.TxAirSecs, &s.RxAirSecs, &s.RecvErrors, &s.BatteryMv); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	return result, rows.Err()
+}
+
+// MetricsSummaryRow holds summary data for one observer.
+type MetricsSummaryRow struct {
+	ObserverID    string   `json:"observer_id"`
+	ObserverName  *string  `json:"observer_name"`
+	CurrentNF     *float64 `json:"current_noise_floor"`
+	AvgNF         *float64 `json:"avg_noise_floor_24h"`
+	MaxNF         *float64 `json:"max_noise_floor_24h"`
+	CurrentBattMv *int     `json:"battery_mv"`
+	SampleCount   int      `json:"sample_count"`
+}
+
+// GetMetricsSummary returns a fleet summary of observer metrics within a time window.
+func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
+	query := `
+		SELECT m.observer_id, o.name,
+			(SELECT noise_floor FROM observer_metrics m2
+			 WHERE m2.observer_id = m.observer_id ORDER BY m2.timestamp DESC LIMIT 1) as current_nf,
+			AVG(m.noise_floor) as avg_nf,
+			MAX(m.noise_floor) as max_nf,
+			(SELECT battery_mv FROM observer_metrics m2
+			 WHERE m2.observer_id = m.observer_id ORDER BY m2.timestamp DESC LIMIT 1) as current_batt,
+			COUNT(*) as sample_count
+		FROM observer_metrics m
+		LEFT JOIN observers o ON o.id = m.observer_id
+		WHERE m.timestamp >= ?
+		GROUP BY m.observer_id
+		ORDER BY max_nf DESC
+	`
+	rows, err := db.conn.Query(query, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []MetricsSummaryRow
+	for rows.Next() {
+		var s MetricsSummaryRow
+		if err := rows.Scan(&s.ObserverID, &s.ObserverName, &s.CurrentNF, &s.AvgNF, &s.MaxNF, &s.CurrentBattMv, &s.SampleCount); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	return result, rows.Err()
+}
+
+// PruneOldMetrics deletes observer_metrics rows older than retentionDays.
+func (db *DB) PruneOldMetrics(retentionDays int) (int64, error) {
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=10000", db.path)
+	rw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return 0, err
+	}
+	rw.SetMaxOpenConns(1)
+	defer rw.Close()
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
+	res, err := rw.Exec(`DELETE FROM observer_metrics WHERE timestamp < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		log.Printf("[metrics] Pruned %d observer_metrics rows older than %d days", n, retentionDays)
+	}
+	return n, nil
+}
