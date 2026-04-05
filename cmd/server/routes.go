@@ -43,6 +43,9 @@ type Server struct {
 	// Neighbor affinity graph (lazy-built, cached with TTL)
 	neighborMu    sync.Mutex
 	neighborGraph *NeighborGraph
+
+	// Router reference for OpenAPI spec generation
+	router *mux.Router
 }
 
 // PerfStats tracks request performance.
@@ -99,6 +102,7 @@ func (s *Server) getMemStats() runtime.MemStats {
 
 // RegisterRoutes sets up all HTTP routes on the given router.
 func (s *Server) RegisterRoutes(r *mux.Router) {
+	s.router = r
 	// Performance instrumentation middleware
 	r.Use(s.perfMiddleware)
 
@@ -166,6 +170,10 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")
 	r.HandleFunc("/api/iata-coords", s.handleIATACoords).Methods("GET")
 	r.HandleFunc("/api/audio-lab/buckets", s.handleAudioLabBuckets).Methods("GET")
+
+	// OpenAPI spec + Swagger UI
+	r.HandleFunc("/api/spec", s.handleOpenAPISpec).Methods("GET")
+	r.HandleFunc("/api/docs", s.handleSwaggerUI).Methods("GET")
 }
 
 func (s *Server) backfillStatusMiddleware(next http.Handler) http.Handler {
