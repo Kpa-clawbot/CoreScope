@@ -171,9 +171,10 @@
   async function showNodeDetail(name) {
     _nodePanelTrigger = document.activeElement;
     if (_focusTrapCleanup) { _focusTrapCleanup(); _focusTrapCleanup = null; }
+    var _capturedHash = selectedHash;
     const node = await lookupNode(name);
     selectedNode = name;
-    var _chBase = selectedHash ? '#/channels/' + encodeURIComponent(selectedHash) : '#/channels';
+    var _chBase = _capturedHash ? '#/channels/' + encodeURIComponent(_capturedHash) : '#/channels';
     history.replaceState(null, '', _chBase + '?node=' + encodeURIComponent(name));
 
     let panel = document.getElementById('chNodePanel');
@@ -356,7 +357,7 @@
     loadObserverRegions();
     loadChannels().then(async function () {
       if (routeParam) await selectChannel(routeParam);
-      if (_pendingNode) showNodeDetail(_pendingNode);
+      if (_pendingNode) await showNodeDetail(_pendingNode);
     });
 
     // #89: Sidebar resize handle
