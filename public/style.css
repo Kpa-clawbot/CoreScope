@@ -2089,6 +2089,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   transition: border-color 0.15s;
 }
 .cc-swatch:hover { border-color: var(--text-primary, #e0e0e0); }
+.cc-swatch:focus-visible { border-color: #fff; outline: 2px solid var(--accent, #3b82f6); outline-offset: 1px; }
 .cc-swatch-active { border-color: #fff; box-shadow: 0 0 0 1px rgba(255,255,255,0.5); }
 .cc-picker-custom {
   display: flex;

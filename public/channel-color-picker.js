@@ -31,18 +31,21 @@
     if (popoverEl) return popoverEl;
     var el = document.createElement('div');
     el.className = 'cc-picker-popover';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'Channel color picker');
     el.style.display = 'none';
     el.innerHTML =
       '<div class="cc-picker-header">' +
-        '<span class="cc-picker-title"></span>' +
-        '<button class="cc-picker-close" title="Close">✕</button>' +
+        '<span class="cc-picker-title" id="cc-picker-title"></span>' +
+        '<button class="cc-picker-close" title="Close" aria-label="Close">✕</button>' +
       '</div>' +
-      '<div class="cc-picker-swatches"></div>' +
+      '<div class="cc-picker-swatches" role="group" aria-label="Color swatches"></div>' +
       '<div class="cc-picker-custom">' +
-        '<label>Custom: <input type="color" class="cc-picker-input" value="#3b82f6"></label>' +
+        '<label>Custom: <input type="color" class="cc-picker-input" value="#3b82f6" aria-label="Custom color"></label>' +
         '<button class="cc-picker-apply">Apply</button>' +
       '</div>' +
       '<button class="cc-picker-clear">Clear color</button>';
+    el.setAttribute('aria-labelledby', 'cc-picker-title');
 
     // Build swatches
     var swatchContainer = el.querySelector('.cc-picker-swatches');
@@ -51,6 +54,7 @@
       sw.className = 'cc-swatch';
       sw.style.background = PRESET_COLORS[i];
       sw.setAttribute('data-color', PRESET_COLORS[i]);
+      sw.setAttribute('aria-label', PRESET_COLORS[i]);
       sw.title = PRESET_COLORS[i];
       swatchContainer.appendChild(sw);
     }
@@ -60,6 +64,20 @@
       var btn = e.target.closest('.cc-swatch');
       if (!btn) return;
       assignColor(btn.getAttribute('data-color'));
+    });
+
+    // Keyboard navigation for swatches (arrow keys)
+    swatchContainer.addEventListener('keydown', function(e) {
+      var btn = e.target.closest('.cc-swatch');
+      if (!btn) return;
+      var swatches = swatchContainer.querySelectorAll('.cc-swatch');
+      var idx = Array.prototype.indexOf.call(swatches, btn);
+      if (idx < 0) return;
+      var next = -1;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (idx + 1) % swatches.length;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (idx - 1 + swatches.length) % swatches.length;
+      else if (e.key === 'Enter' || e.key === ' ') { assignColor(btn.getAttribute('data-color')); e.preventDefault(); return; }
+      if (next >= 0) { swatches[next].focus(); e.preventDefault(); }
     });
 
     // Event: custom apply
@@ -132,6 +150,10 @@
     el.style.left = finalX + 'px';
     el.style.top = finalY + 'px';
 
+    // Focus first swatch for keyboard accessibility
+    var firstSwatch = el.querySelector('.cc-swatch');
+    if (firstSwatch) setTimeout(function() { firstSwatch.focus(); }, 0);
+
     // Listen for outside click / Escape
     setTimeout(function() {
       document.addEventListener('click', onOutsideClick, true);
@@ -156,6 +178,18 @@
     if (e.key === 'Escape') {
       hidePopover();
       e.stopPropagation();
+    }
+    // Trap Tab within the popover
+    if (e.key === 'Tab' && popoverEl && popoverEl.style.display !== 'none') {
+      var focusable = popoverEl.querySelectorAll('button, input, [tabindex]');
+      if (focusable.length === 0) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        last.focus(); e.preventDefault();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        first.focus(); e.preventDefault();
+      }
     }
   }
 
@@ -226,6 +260,7 @@
     });
 
     // Long-press for mobile
+    var longPressTriggered = false;
     feed.addEventListener('touchstart', function(e) {
       var item = e.target.closest('.live-feed-item');
       if (!item || !item._ccPkt) return;
@@ -234,18 +269,24 @@
       var touch = e.touches[0];
       var tx = touch.clientX;
       var ty = touch.clientY;
+      longPressTriggered = false;
       longPressTimer = setTimeout(function() {
         longPressTimer = null;
-        e.preventDefault();
+        longPressTriggered = true;
         showPopover(ch, tx, ty);
       }, 500);
-    }, { passive: false });
+    }, { passive: true });
 
-    feed.addEventListener('touchend', function() {
+    feed.addEventListener('touchend', function(e) {
       if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+      if (longPressTriggered) { e.preventDefault(); longPressTriggered = false; }
     });
     feed.addEventListener('touchmove', function() {
       if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+    });
+    // Prevent context menu on long-press (some browsers fire contextmenu after touch)
+    feed.addEventListener('contextmenu', function(e) {
+      if (longPressTriggered) e.preventDefault();
     });
   }
 
