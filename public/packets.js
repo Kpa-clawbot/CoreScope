@@ -34,6 +34,7 @@
   let expandedHashes = new Set();
   let hopNameCache = {};
   let showHexHashes = localStorage.getItem('meshcore-hex-hashes') === 'true';
+  var _pendingUrlRegion = null;
 
   function buildPacketsUrl(timeWindowMin, regionParam) {
     var parts = [];
@@ -302,9 +303,7 @@
       localStorage.setItem('meshcore-time-window', String(_urlTimeWindow));
     }
     var _urlRegion = _initUrlParams.get('region');
-    if (_urlRegion) {
-      RegionFilter.setSelected(_urlRegion.split(',').filter(Boolean));
-    }
+    if (_urlRegion) _pendingUrlRegion = _urlRegion;
 
     app.innerHTML = `<div class="split-layout detail-collapsed">
       <div class="panel-left" id="pktLeft"></div>
@@ -742,6 +741,10 @@
 
     // Init shared RegionFilter component
     RegionFilter.init(document.getElementById('packetsRegionFilter'), { dropdown: true });
+    if (_pendingUrlRegion) {
+      RegionFilter.setSelected(_pendingUrlRegion.split(',').filter(Boolean));
+      _pendingUrlRegion = null;
+    }
     RegionFilter.onChange(function() { updatePacketsUrl(); loadPackets(); });
 
     // --- Packet Filter Language ---
