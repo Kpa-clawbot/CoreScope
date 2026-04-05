@@ -539,8 +539,8 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	// Compute backfill progress
 	backfilling := s.store != nil && !s.store.backfillComplete.Load()
 	var backfillProgress float64
-	if backfilling && s.store != nil && s.store.backfillTotal > 0 {
-		backfillProgress = float64(s.store.backfillProcessed.Load()) / float64(s.store.backfillTotal)
+	if backfilling && s.store != nil && s.store.backfillTotal.Load() > 0 {
+		backfillProgress = float64(s.store.backfillProcessed.Load()) / float64(s.store.backfillTotal.Load())
 		if backfillProgress > 1 {
 			backfillProgress = 1
 		}

@@ -476,7 +476,7 @@ func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int
 		return
 	}
 
-	store.backfillTotal = int64(totalPending)
+	store.backfillTotal.Store(int64(totalPending))
 	store.backfillProcessed.Store(0)
 	log.Printf("[store] async resolved_path backfill starting: %d observations", totalPending)
 
