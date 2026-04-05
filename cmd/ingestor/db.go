@@ -323,6 +323,18 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] observer_metrics table created")
 	}
 
+	// Migration: add timestamp index for cross-observer time-range queries
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_metrics_ts_idx'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Creating observer_metrics timestamp index...")
+		_, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_observer_metrics_timestamp ON observer_metrics(timestamp)`)
+		if err != nil {
+			return fmt.Errorf("observer_metrics timestamp index: %w", err)
+		}
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_metrics_ts_idx')`)
+		log.Println("[migration] observer_metrics timestamp index created")
+	}
+
 	return nil
 }
 

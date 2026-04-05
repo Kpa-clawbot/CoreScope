@@ -2750,9 +2750,15 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
         });
       });
 
-      // Load sparklines for each observer
+      // Render sparklines from summary data (no extra API calls)
       for (const obs of observers) {
-        loadRFSparkline(obs.observer_id);
+        const nfValues = (obs.sparkline || []).filter(v => v != null);
+        const container = document.getElementById(`rf-spark-${obs.observer_id}`);
+        if (container && nfValues.length > 1) {
+          container.innerHTML = rfNFSparkline(nfValues, 140, 24);
+        } else if (container) {
+          container.innerHTML = '<span class="text-muted" style="font-size:10px">insufficient data</span>';
+        }
       }
 
       // Auto-expand selected observer from URL

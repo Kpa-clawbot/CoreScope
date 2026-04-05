@@ -1779,33 +1779,41 @@ func (db *DB) GetObserverMetrics(observerID, since, until string) ([]MetricsSamp
 
 // MetricsSummaryRow holds summary data for one observer.
 type MetricsSummaryRow struct {
-	ObserverID    string   `json:"observer_id"`
-	ObserverName  *string  `json:"observer_name"`
-	CurrentNF     *float64 `json:"current_noise_floor"`
-	AvgNF         *float64 `json:"avg_noise_floor_24h"`
-	MaxNF         *float64 `json:"max_noise_floor_24h"`
-	CurrentBattMv *int     `json:"battery_mv"`
-	SampleCount   int      `json:"sample_count"`
+	ObserverID    string     `json:"observer_id"`
+	ObserverName  *string    `json:"observer_name"`
+	CurrentNF     *float64   `json:"current_noise_floor"`
+	AvgNF         *float64   `json:"avg_noise_floor_24h"`
+	MaxNF         *float64   `json:"max_noise_floor_24h"`
+	CurrentBattMv *int       `json:"battery_mv"`
+	SampleCount   int        `json:"sample_count"`
+	Sparkline     []*float64 `json:"sparkline"`
 }
 
 // GetMetricsSummary returns a fleet summary of observer metrics within a time window.
+// Uses a CTE with ROW_NUMBER to get latest values in a single pass (no correlated subqueries).
+// Also returns sparkline data (noise_floor time series) per observer.
 func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
 	query := `
+		WITH ranked AS (
+			SELECT observer_id, noise_floor, battery_mv,
+				ROW_NUMBER() OVER (PARTITION BY observer_id ORDER BY timestamp DESC) as rn
+			FROM observer_metrics
+			WHERE timestamp >= ?
+		)
 		SELECT m.observer_id, o.name,
-			(SELECT noise_floor FROM observer_metrics m2
-			 WHERE m2.observer_id = m.observer_id ORDER BY m2.timestamp DESC LIMIT 1) as current_nf,
+			r.noise_floor as current_nf,
 			AVG(m.noise_floor) as avg_nf,
 			MAX(m.noise_floor) as max_nf,
-			(SELECT battery_mv FROM observer_metrics m2
-			 WHERE m2.observer_id = m.observer_id ORDER BY m2.timestamp DESC LIMIT 1) as current_batt,
+			r.battery_mv as current_batt,
 			COUNT(*) as sample_count
 		FROM observer_metrics m
 		LEFT JOIN observers o ON o.id = m.observer_id
+		LEFT JOIN ranked r ON r.observer_id = m.observer_id AND r.rn = 1
 		WHERE m.timestamp >= ?
 		GROUP BY m.observer_id
 		ORDER BY max_nf DESC
 	`
-	rows, err := db.conn.Query(query, since)
+	rows, err := db.conn.Query(query, since, since)
 	if err != nil {
 		return nil, err
 	}
@@ -1819,7 +1827,41 @@ func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
 		}
 		result = append(result, s)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Fetch sparkline data (noise_floor series) for all observers in one query
+	if len(result) > 0 {
+		sparkQuery := `SELECT observer_id, noise_floor FROM observer_metrics
+			WHERE timestamp >= ? ORDER BY observer_id, timestamp ASC`
+		sparkRows, err := db.conn.Query(sparkQuery, since)
+		if err != nil {
+			return nil, err
+		}
+		defer sparkRows.Close()
+
+		sparkMap := make(map[string][]*float64)
+		for sparkRows.Next() {
+			var oid string
+			var nf *float64
+			if err := sparkRows.Scan(&oid, &nf); err != nil {
+				return nil, err
+			}
+			sparkMap[oid] = append(sparkMap[oid], nf)
+		}
+		if err := sparkRows.Err(); err != nil {
+			return nil, err
+		}
+
+		for i := range result {
+			if s, ok := sparkMap[result[i].ObserverID]; ok {
+				result[i].Sparkline = s
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // PruneOldMetrics deletes observer_metrics rows older than retentionDays.

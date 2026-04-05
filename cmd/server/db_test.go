@@ -86,6 +86,8 @@ func setupTestDB(t *testing.T) *DB {
 			PRIMARY KEY (observer_id, timestamp)
 		);
 
+		CREATE INDEX IF NOT EXISTS idx_observer_metrics_timestamp ON observer_metrics(timestamp);
+
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
@@ -1634,6 +1636,20 @@ func TestGetMetricsSummary(t *testing.T) {
 	}
 	if summary[0].SampleCount != 2 {
 		t.Errorf("obs1 sample count = %d, want 2", summary[0].SampleCount)
+	}
+	// Verify sparkline data is included
+	if len(summary[0].Sparkline) != 2 {
+		t.Errorf("obs1 sparkline length = %d, want 2", len(summary[0].Sparkline))
+	}
+	if len(summary[1].Sparkline) != 1 {
+		t.Errorf("obs2 sparkline length = %d, want 1", len(summary[1].Sparkline))
+	}
+	// Sparkline should be ordered by timestamp ASC
+	if summary[0].Sparkline[0] != nil && *summary[0].Sparkline[0] != -112.0 {
+		t.Errorf("obs1 sparkline[0] = %v, want -112.0", *summary[0].Sparkline[0])
+	}
+	if summary[0].Sparkline[1] != nil && *summary[0].Sparkline[1] != -108.0 {
+		t.Errorf("obs1 sparkline[1] = %v, want -108.0", *summary[0].Sparkline[1])
 	}
 }
 
