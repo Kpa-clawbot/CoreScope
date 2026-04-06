@@ -1942,7 +1942,8 @@
     });
 
     // Add sender position as anchor if available
-    if (payload.pubKey && originLat != null) {
+    const senderLat = payload.lat != null && !(payload.lat === 0 && payload.lon === 0) ? payload.lat : null;
+    if (payload.pubKey && senderLat != null) {
       const existing = raw.find(p => p.key === payload.pubKey);
       if (!existing) {
         raw.unshift({ key: payload.pubKey, pos: [payload.lat, payload.lon], name: payload.name || payload.pubKey.slice(0, 8), known: true });
