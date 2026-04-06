@@ -1365,7 +1365,7 @@
 
     if (!collisions.length) {
       const cleanMsg = bytes === 3
-        ? '✅ No 3-byte prefix collisions detected — all nodes have unique 3-byte prefixes.'
+        ? '✅ No 3-byte prefix collisions detected — all repeaters have unique 3-byte prefixes.'
         : `✅ No ${bytes}-byte collisions detected`;
       el.innerHTML = `<div class="text-muted" style="padding:8px">${cleanMsg}</div>`;
       return;
@@ -2430,7 +2430,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
             <span class="text-muted" style="font-size:0.8em;display:block;margin-top:4px">Hash size is configured per-node in firmware. Changing requires reflashing.</span>
           </div>
           <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:0.85em">
-            <strong>ℹ️ About these numbers:</strong> This tool checks <em>all</em> nodes' public key prefixes regardless of their configured hash size or role.
+            <strong>ℹ️ About these numbers:</strong> This tool checks <em>repeater</em> public key prefixes regardless of their configured hash size. Only repeaters are included because they are the nodes that relay packets using hash-based addressing.
             The <a href="#/analytics?tab=collisions" style="color:var(--accent)">Hash Issues</a> tab shows only <em>operational</em> collisions — nodes that actually use the same hash size and are repeaters.
             A collision shown here may not appear in Hash Issues if the nodes use a different hash size.
           </div>
