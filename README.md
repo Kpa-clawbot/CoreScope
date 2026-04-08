@@ -254,6 +254,8 @@ Contributions welcome. Please read [AGENTS.md](AGENTS.md) for coding conventions
 
 **Live instance:** [analyzer.00id.net](https://analyzer.00id.net) — all API endpoints are public, no auth required.
 
+**API Documentation:** CoreScope auto-generates an OpenAPI 3.0 spec. Browse the interactive Swagger UI at [`/api/docs`](https://analyzer.00id.net/api/docs) or fetch the machine-readable spec at [`/api/spec`](https://analyzer.00id.net/api/spec).
+
 ## License
 
 MIT

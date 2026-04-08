@@ -52,3 +52,14 @@ CoreScope uses URL hashes for deep linking. Copy the URL from your browser — i
 - `#/packets/abc123` — a specific packet
 - `#/analytics?tab=collisions` — the hash issues tab
 - `#/nodes/pubkey123` — a specific node's detail page
+
+### Where is the API documentation?
+
+CoreScope auto-generates an OpenAPI 3.0 specification from its route definitions:
+
+- **Interactive docs (Swagger UI):** `/api/docs` — browse and test all 40+ endpoints from your browser
+- **Machine-readable spec:** `/api/spec` — import into Postman, Insomnia, or any OpenAPI tool
+
+The spec is always in sync with the running server. No manual maintenance needed.
+
+On the public instance: [analyzer.00id.net/api/docs](https://analyzer.00id.net/api/docs)

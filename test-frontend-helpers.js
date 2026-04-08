@@ -2079,6 +2079,151 @@ console.log('\n=== analytics.js: sortChannels ===');
   });
 }
 
+// ===== analytics.js: rfNFColumnChart =====
+console.log('\n=== analytics.js: rfNFColumnChart ===');
+{
+  function makeAnalyticsSandbox2() {
+    const ctx = makeSandbox();
+    ctx.getComputedStyle = () => ({ getPropertyValue: () => '' });
+    ctx.registerPage = () => {};
+    ctx.api = () => Promise.resolve({});
+    ctx.timeAgo = (iso) => iso ? 'x ago' : '—';
+    ctx.RegionFilter = { init: () => {}, onChange: () => {}, regionQueryString: () => '' };
+    ctx.onWS = () => {};
+    ctx.offWS = () => {};
+    ctx.connectWS = () => {};
+    ctx.invalidateApiCache = () => {};
+    ctx.makeColumnsResizable = () => {};
+    ctx.initTabBar = () => {};
+    ctx.IATA_COORDS_GEO = {};
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    try { loadInCtx(ctx, 'public/analytics.js'); } catch (e) {
+      for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+    }
+    return ctx;
+  }
+
+  const ctx2 = makeAnalyticsSandbox2();
+  const rfNFColumnChart = ctx2.window._analyticsRfNFColumnChart;
+
+  test('rfNFColumnChart is exposed', () => assert.ok(rfNFColumnChart, '_analyticsRfNFColumnChart must be exposed'));
+
+  test('returns SVG string with column bars', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -110 },
+      { t: '2024-01-01T00:05:00Z', v: -95 },
+      { t: '2024-01-01T00:10:00Z', v: -80 },
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    assert.ok(svg.includes('<svg'), 'should produce SVG');
+    assert.ok(svg.includes('class="nf-bar"'), 'should have column bars');
+    assert.ok(svg.includes('Noise floor column chart'), 'should have aria label');
+  });
+
+  test('color-codes bars by threshold', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -110 },  // green (< -100)
+      { t: '2024-01-01T00:05:00Z', v: -95 },   // yellow (-100 to -85)
+      { t: '2024-01-01T00:10:00Z', v: -80 },   // red (>= -85)
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    assert.ok(svg.includes('var(--success'), 'green bar for < -100');
+    assert.ok(svg.includes('var(--warning'), 'yellow bar for -100 to -85');
+    assert.ok(svg.includes('var(--danger'), 'red bar for >= -85');
+  });
+
+  test('includes hover tooltips in bars', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -105 },
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    assert.ok(svg.includes('<title>NF: -105.0 dBm'), 'tooltip with dBm value');
+  });
+
+  test('handles empty data gracefully', () => {
+    const svg = rfNFColumnChart([], 700, 180, []);
+    assert.ok(svg.includes('<svg'), 'should return empty SVG');
+  });
+
+  test('handles single data point with visible bar', () => {
+    const data = [{ t: '2024-01-01T00:00:00Z', v: -100 }];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    assert.ok(svg.includes('class="nf-bar"'), 'should render single bar');
+    // Bar must have non-zero height (division-by-zero guard)
+    const m = svg.match(/height="([\d.]+)"/);
+    assert.ok(m && parseFloat(m[1]) > 0, 'single data point bar must have non-zero height');
+    assert.ok(!svg.includes('NaN'), 'must not contain NaN');
+  });
+
+  test('handles constant values with visible bars', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -95 },
+      { t: '2024-01-01T00:05:00Z', v: -95 },
+      { t: '2024-01-01T00:10:00Z', v: -95 },
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    const heights = [...svg.matchAll(/class="nf-bar"[^>]*height="([\d.]+)"/g)].map(m => parseFloat(m[1]));
+    assert.strictEqual(heights.length, 3, 'should render 3 bars');
+    assert.ok(heights.every(h => h > 0), 'all bars must have non-zero height');
+    assert.ok(!svg.includes('NaN'), 'must not contain NaN');
+  });
+
+  test('includes legend', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -110 },
+      { t: '2024-01-01T00:05:00Z', v: -90 },
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    assert.ok(svg.includes('&lt; -100'), 'legend has green label');
+    assert.ok(svg.includes('-100…-85'), 'legend has yellow label');
+    assert.ok(svg.includes('≥ -85'), 'legend has red label');
+  });
+
+  test('no reference lines (removed per spec)', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -110 },
+      { t: '2024-01-01T00:05:00Z', v: -80 },
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    assert.ok(!svg.includes('-100 warning'), 'no -100 warning reference line');
+    assert.ok(!svg.includes('-85 critical'), 'no -85 critical reference line');
+    assert.ok(!svg.includes('stroke-dasharray="4,2"'), 'no dashed reference lines');
+  });
+
+  test('renders all bars even with time gaps', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -110 },
+      { t: '2024-01-01T06:00:00Z', v: -95 },  // 6h gap
+      { t: '2024-01-01T06:05:00Z', v: -80 },
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    const barCount = (svg.match(/class="nf-bar"/g) || []).length;
+    assert.strictEqual(barCount, 3, 'all 3 bars rendered despite time gap');
+  });
+
+  test('respects shared time axis', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -100 },
+      { t: '2024-01-01T00:05:00Z', v: -95 },
+    ];
+    const minT = new Date('2023-12-31T00:00:00Z').getTime();
+    const maxT = new Date('2024-01-02T00:00:00Z').getTime();
+    const svg = rfNFColumnChart(data, 700, 180, [], minT, maxT);
+    assert.ok(svg.includes('class="nf-bar"'), 'renders with shared time axis');
+  });
+
+  test('renders reboot markers when reboots provided', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -105 },
+      { t: '2024-01-01T01:00:00Z', v: -95 },
+    ];
+    const reboots = [new Date('2024-01-01T00:30:00Z').getTime()];
+    const svg = rfNFColumnChart(data, 700, 180, reboots);
+    assert.ok(svg.includes('reboot'), 'should render reboot marker');
+  });
+}
+
 
 // ===== CUSTOMIZE-V2.JS: core behavior =====
 console.log('\n=== customize-v2.js: core behavior ===');
@@ -4685,6 +4830,92 @@ console.log('\n=== packets.js: buildPacketsQuery ===');
   } else {
     console.log('  ⚠️ buildPacketsQuery not exposed — skipping');
   }
+}
+
+// ===== APP.JS: formatDistance / getDistanceUnit =====
+console.log('\n=== app.js: formatDistance ===');
+{
+  function makeDistCtx(localeLang, storageUnit) {
+    const ctx = makeSandbox();
+    if (storageUnit !== undefined) ctx.localStorage.setItem('meshcore-distance-unit', storageUnit);
+    ctx.navigator = { language: localeLang || 'en-BE' };
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    return ctx;
+  }
+
+  test('formatDistance: km mode, 12.3 km', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistance(12.3), '12.3 km');
+  });
+  test('formatDistance: km mode, sub-1km shows meters', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistance(0.45), '450 m');
+  });
+  test('formatDistance: mi mode, 12.3 km → 7.6 mi', () => {
+    const ctx = makeDistCtx('en-BE', 'mi');
+    assert.strictEqual(ctx.formatDistance(12.3), '7.6 mi');
+  });
+  test('formatDistance: auto + en-US locale → mi', () => {
+    const ctx = makeDistCtx('en-US', 'auto');
+    assert.strictEqual(ctx.getDistanceUnit(), 'mi');
+  });
+  test('formatDistance: auto + en-GB locale → mi', () => {
+    const ctx = makeDistCtx('en-GB', 'auto');
+    assert.strictEqual(ctx.getDistanceUnit(), 'mi');
+  });
+  test('formatDistance: auto + fr-BE locale → km', () => {
+    const ctx = makeDistCtx('fr-BE', 'auto');
+    assert.strictEqual(ctx.getDistanceUnit(), 'km');
+  });
+  test('formatDistance: null input returns —', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistance(null), '—');
+  });
+  test('formatDistanceRound: 50 km → "50 km"', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistanceRound(50), '50 km');
+  });
+  test('formatDistanceRound: 50 km in mi mode → "31 mi"', () => {
+    const ctx = makeDistCtx('en-BE', 'mi');
+    assert.strictEqual(ctx.formatDistanceRound(50), '31 mi');
+  });
+  test('formatDistanceRound: 200 km in mi mode → "124 mi"', () => {
+    const ctx = makeDistCtx('en-BE', 'mi');
+    assert.strictEqual(ctx.formatDistanceRound(200), '124 mi');
+  });
+  test('formatDistance: 0 in km mode → "0 m"', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistance(0), '0 m');
+  });
+  test('formatDistance: 0 in mi mode → "0 ft"', () => {
+    const ctx = makeDistCtx('en-BE', 'mi');
+    assert.strictEqual(ctx.formatDistance(0), '0 ft');
+  });
+  test('formatDistance: NaN input returns —', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistance(NaN), '—');
+  });
+  test('formatDistance: "abc" input returns —', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistance('abc'), '—');
+  });
+  test('formatDistanceRound: null input returns —', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistanceRound(null), '—');
+  });
+  test('formatDistanceRound: NaN input returns —', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistanceRound(NaN), '—');
+  });
+  test('formatDistanceRound: 0 in km mode → "0 km"', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistanceRound(0), '0 km');
+  });
+  test('formatDistance: mi mode sub-0.1mi shows feet', () => {
+    const ctx = makeDistCtx('en-BE', 'mi');
+    assert.strictEqual(ctx.formatDistance(0.01), '33 ft');
+  });
 }
 
 // ===== SUMMARY =====

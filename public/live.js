@@ -58,6 +58,92 @@
     REQUEST: '❓', RESPONSE: '📨', TRACE: '🔍', PATH: '🛤️'
   };
 
+  /* ---- Panel Corner Positioning (#608 M0) ---- */
+  var PANEL_DEFAULTS = { liveFeed: 'bl', liveLegend: 'br', liveNodeDetail: 'tr' };
+  var CORNER_CYCLE = ['tl', 'tr', 'br', 'bl'];
+  var CORNER_ARROWS = { tl: '↘', tr: '↙', bl: '↗', br: '↖' };
+  var CORNER_LABELS = { tl: 'top-left', tr: 'top-right', bl: 'bottom-left', br: 'bottom-right' };
+  var PANEL_NAMES = { liveFeed: 'Feed', liveLegend: 'Legend', liveNodeDetail: 'Node detail' };
+
+  function getPanelPositions() {
+    var pos = {};
+    for (var id in PANEL_DEFAULTS) {
+      try { pos[id] = localStorage.getItem('panel-corner-' + id) || PANEL_DEFAULTS[id]; }
+      catch (_) { pos[id] = PANEL_DEFAULTS[id]; }
+    }
+    return pos;
+  }
+
+  function nextAvailableCorner(panelId, desired, allPositions) {
+    var idx = CORNER_CYCLE.indexOf(desired);
+    for (var i = 0; i < 4; i++) {
+      var candidate = CORNER_CYCLE[(idx + i) % 4];
+      var occupied = false;
+      for (var otherId in allPositions) {
+        if (otherId !== panelId && allPositions[otherId] === candidate) { occupied = true; break; }
+      }
+      if (!occupied) return candidate;
+    }
+    return desired; // all occupied (impossible with 3 panels, 4 corners)
+  }
+
+  function applyPanelPosition(id, corner) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.setAttribute('data-position', corner);
+    var btn = el.querySelector('.panel-corner-btn');
+    if (btn) {
+      btn.textContent = CORNER_ARROWS[corner];
+      btn.setAttribute('aria-label',
+        'Move ' + (PANEL_NAMES[id] || 'panel') + ' to next corner (currently ' + CORNER_LABELS[corner] + ')');
+    }
+  }
+
+  function initPanelPositions() {
+    var positions = getPanelPositions();
+    for (var id in positions) {
+      applyPanelPosition(id, positions[id]);
+    }
+    // Wire up click handlers on corner buttons
+    var btns = document.querySelectorAll('.panel-corner-btn[data-panel]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].addEventListener('click', function(e) {
+        e.stopPropagation();
+        var panelId = this.getAttribute('data-panel');
+        onCornerClick(panelId);
+      });
+    }
+  }
+
+  function onCornerClick(panelId) {
+    var positions = getPanelPositions();
+    var current = positions[panelId];
+    var nextIdx = (CORNER_CYCLE.indexOf(current) + 1) % 4;
+    var next = nextAvailableCorner(panelId, CORNER_CYCLE[nextIdx], positions);
+    try { localStorage.setItem('panel-corner-' + panelId, next); } catch (_) { /* quota */ }
+    applyPanelPosition(panelId, next);
+    // Announce for screen readers
+    var announce = document.getElementById('panelPositionAnnounce');
+    if (announce) announce.textContent = (PANEL_NAMES[panelId] || 'Panel') + ' moved to ' + CORNER_LABELS[next];
+  }
+
+  function resetPanelPositions() {
+    for (var id in PANEL_DEFAULTS) {
+      try { localStorage.removeItem('panel-corner-' + id); } catch (_) { /* ignore */ }
+      applyPanelPosition(id, PANEL_DEFAULTS[id]);
+    }
+  }
+
+  // Export for testing
+  if (typeof window !== 'undefined') {
+    window._panelCorner = {
+      PANEL_DEFAULTS: PANEL_DEFAULTS, CORNER_CYCLE: CORNER_CYCLE,
+      getPanelPositions: getPanelPositions, nextAvailableCorner: nextAvailableCorner,
+      applyPanelPosition: applyPanelPosition, onCornerClick: onCornerClick,
+      resetPanelPositions: resetPanelPositions
+    };
+  }
+
   function formatLiveTimestampHtml(isoLike) {
     if (typeof formatTimestampWithTooltip !== 'function' || typeof getTimestampMode !== 'function') {
       return escapeHtml(typeof timeAgo === 'function' ? timeAgo(isoLike) : '—');
@@ -754,16 +840,27 @@
             <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
           </div>
         </div>
-        <div class="live-overlay live-feed" id="liveFeed" aria-live="polite" aria-relevant="additions" role="log">
-          <button class="feed-hide-btn" id="feedHideBtn" title="Hide feed">✕</button>
+        <div class="live-overlay live-feed" id="liveFeed">
+          <div class="panel-header">
+            <button class="panel-corner-btn" data-panel="liveFeed" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
+            <button class="feed-hide-btn" id="feedHideBtn" title="Hide feed">✕</button>
+          </div>
+          <div class="panel-content" aria-live="polite" aria-relevant="additions" role="log"></div>
         </div>
         <button class="feed-show-btn hidden" id="feedShowBtn" title="Show feed">📋</button>
         <div class="live-overlay live-node-detail hidden" id="liveNodeDetail">
-          <button class="feed-hide-btn" id="nodeDetailClose" title="Close">✕</button>
-          <div id="nodeDetailContent"></div>
+          <div class="panel-header">
+            <button class="panel-corner-btn" data-panel="liveNodeDetail" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
+            <button class="feed-hide-btn" id="nodeDetailClose" title="Close">✕</button>
+          </div>
+          <div class="panel-content" id="nodeDetailContent"></div>
         </div>
         <button class="legend-toggle-btn" id="legendToggleBtn" aria-label="Show legend" title="Show legend">🎨</button>
         <div class="live-overlay live-legend" id="liveLegend" role="region" aria-label="Map legend">
+          <div class="panel-header">
+            <button class="panel-corner-btn" data-panel="liveLegend" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
+          </div>
+          <div class="panel-content">
           <h3 class="legend-title">PACKET TYPES</h3>
           <ul class="legend-list">
             <li><span class="live-dot" style="background:${TYPE_COLORS.ADVERT}" aria-hidden="true"></span> Advert — Node advertisement</li>
@@ -774,9 +871,11 @@
           </ul>
           <h3 class="legend-title" style="margin-top:8px">NODE ROLES</h3>
           <ul class="legend-list" id="roleLegendList"></ul>
+          </div>
         </div>
 
         <!-- VCR Bar -->
+        <div class="sr-only" id="panelPositionAnnounce" aria-live="polite"></div>
         <div class="vcr-bar" id="vcrBar">
           <div class="vcr-controls">
             <button id="vcrRewindBtn" class="vcr-btn" title="Rewind" aria-label="Rewind">⏪</button>
@@ -1060,6 +1159,8 @@
     }
 
     // Populate role legend from shared roles.js
+    // Initialize panel corner positions (#608 M0)
+    initPanelPositions();
     const roleLegendList = document.getElementById('roleLegendList');
     if (roleLegendList) {
       for (const role of (window.ROLE_SORT || ['repeater', 'companion', 'room', 'sensor', 'observer'])) {
@@ -1502,7 +1603,9 @@
   function rebuildFeedList() {
     const feed = document.getElementById('liveFeed');
     if (!feed) return;
-    feed.querySelectorAll('.live-feed-item').forEach(el => el.remove());
+    const feedContent = feed.querySelector('.panel-content');
+    if (!feedContent) return;
+    feedContent.querySelectorAll('.live-feed-item').forEach(el => el.remove());
     feedDedup.clear();
 
     // Aggregate VCR buffer by hash, then create one feed item per unique hash
@@ -1550,6 +1653,10 @@
       const hopStr = longestHops.length ? `<span class="feed-hops">${longestHops.length}⇢</span>` : '';
       const obsBadge = group.count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${group.count}</span>` : '';
 
+      var _ccPayload = (pkt.decoded || {}).payload || {};
+      var _ccChan1 = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload.channel || null) : null;
+      var dotHtml1 = _ccChan1 ? _feedColorDot(_ccChan1) : '';
+
       const item = document.createElement('div');
       item.className = 'live-feed-item';
       item.setAttribute('tabindex', '0');
@@ -1559,13 +1666,13 @@
       item.innerHTML = `
         <span class="feed-icon" style="color:${color}">${icon}</span>
         <span class="feed-type" style="color:${color}">${typeName}</span>
-        ${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+        ${dotHtml1}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
         <span class="feed-text">${escapeHtml(preview)}</span>
         <span class="feed-time">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
       `;
-      var _ccD = (pkt.decoded || {}), _ccH = (_ccD.header || {}), _ccP = (_ccD.payload || {}); if (_ccH.payloadTypeName === 'GRP_TXT' || _ccH.payloadTypeName === 'CHAN') item._ccChannel = _ccP.channelName || null; // channel color picker (#271 M2)
+      if (_ccChan1) item._ccChannel = _ccChan1; // channel color picker (#674)
       item.addEventListener('click', () => showFeedCard(item, pkt, color));
-      feed.appendChild(item);
+      feedContent.appendChild(item);
 
       // Register in dedup map so replay and live updates work
       if (group.hash) {
@@ -1899,11 +2006,66 @@
         }
       }
       firstPathDone = true;
-      animatePath(allPaths[ai].hopPositions, typeName, color, allPaths[ai].raw, onHop);
+      // For TRACE packets, split at hopsCompleted: solid for completed, dashed for remaining
+      var hopsCompleted = decoded.path && decoded.path.hopsCompleted;
+      if (typeName === 'TRACE' && hopsCompleted != null && hopsCompleted < allPaths[ai].hopPositions.length) {
+        var completedPositions = allPaths[ai].hopPositions.slice(0, hopsCompleted + 1);
+        var remainingPositions = allPaths[ai].hopPositions.slice(hopsCompleted);
+        if (completedPositions.length >= 2) {
+          animatePath(completedPositions, typeName, color, allPaths[ai].raw, onHop);
+        } else if (completedPositions.length === 1) {
+          pulseNode(completedPositions[0].key, completedPositions[0].pos, typeName);
+        }
+        if (remainingPositions.length >= 2) {
+          drawDashedPath(remainingPositions, color);
+        }
+      } else {
+        animatePath(allPaths[ai].hopPositions, typeName, color, allPaths[ai].raw, onHop);
+      }
+    }
+  }
+
+  // Draw a static dashed/ghosted line for unreached TRACE hops
+  function drawDashedPath(hopPositions, color) {
+    var GHOST_TIMEOUT_MS = 10000;
+    var ghostColor = getComputedStyle(document.documentElement).getPropertyValue('--trace-ghost-color').trim() || '#94a3b8';
+    if (!pathsLayer) return;
+    for (var i = 0; i < hopPositions.length - 1; i++) {
+      var from = hopPositions[i].pos;
+      var to = hopPositions[i + 1].pos;
+      var line = L.polyline([from, to], {
+        color: color, weight: 2, opacity: 0.25, dashArray: '6, 8'
+      }).addTo(pathsLayer);
+      // Pulse the unreached hop nodes as ghost markers
+      if (i > 0) {
+        var hp = hopPositions[i];
+        if (!nodeMarkers[hp.key]) {
+          var ghost = L.circleMarker(hp.pos, {
+            radius: 3, fillColor: ghostColor, fillOpacity: 0.2, color: color, weight: 1, opacity: 0.3
+          }).addTo(pathsLayer);
+          setTimeout((function(g) { return function() { if (pathsLayer.hasLayer(g)) pathsLayer.removeLayer(g); }; })(ghost), GHOST_TIMEOUT_MS);
+        }
+      }
+      // Remove dashed line after timeout
+      setTimeout((function(l) { return function() { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), GHOST_TIMEOUT_MS);
+    }
+    // Ghost marker for the final unreached hop
+    var last = hopPositions[hopPositions.length - 1];
+    if (!nodeMarkers[last.key]) {
+      var ghostEnd = L.circleMarker(last.pos, {
+        radius: 4, fillColor: ghostColor, fillOpacity: 0.25, color: color, weight: 1, opacity: 0.35
+      }).addTo(pathsLayer);
+      setTimeout(function() { if (pathsLayer.hasLayer(ghostEnd)) pathsLayer.removeLayer(ghostEnd); }, GHOST_TIMEOUT_MS);
     }
   }
 
   function resolveHopPositions(hops, payload, resolvedPath) {
+    // Hoist sender GPS guard once — reject (0,0) as "no GPS"
+    const hasValidGps = payload.lat != null && payload.lon != null
+      && !(payload.lat === 0 && payload.lon === 0);
+    const senderLat = hasValidGps ? payload.lat : null;
+    const senderLon = hasValidGps ? payload.lon : null;
+
     // Prefer server-side resolved_path when available
     var resolvedMap;
     if (resolvedPath && resolvedPath.length === hops.length && window.HopResolver && HopResolver.ready()) {
@@ -1911,19 +2073,14 @@
       // Fill in any null entries from client-side fallback, preserving sender GPS context
       var nullHops = hops.filter(function(h, i) { return !resolvedPath[i] && !resolvedMap[h]; });
       if (nullHops.length) {
-        const originLat = payload.lat != null && !(payload.lat === 0 && payload.lon === 0) ? payload.lat : null;
-        const originLon = payload.lon != null && !(payload.lon === 0 && payload.lon === 0) ? payload.lon : null;
-        var fallback = HopResolver.resolve(nullHops, originLat, originLon, null, null, null);
+        var fallback = HopResolver.resolve(nullHops, senderLat, senderLon, null, null, null);
         for (var k in fallback) resolvedMap[k] = fallback[k];
       }
     } else {
       // Delegate to shared HopResolver (from hop-resolver.js) instead of reimplementing
-      const originLat = payload.lat != null && !(payload.lat === 0 && payload.lon === 0) ? payload.lat : null;
-      const originLon = payload.lon != null && !(payload.lon === 0 && payload.lon === 0) ? payload.lon : null;
-
       // Use HopResolver if available and initialized, otherwise fall back to simple lookup
       resolvedMap = (window.HopResolver && HopResolver.ready())
-        ? HopResolver.resolve(hops, originLat, originLon, null, null, null)
+        ? HopResolver.resolve(hops, senderLat, senderLon, null, null, null)
         : {};
     }
 
@@ -1942,7 +2099,7 @@
     });
 
     // Add sender position as anchor if available
-    if (payload.pubKey && originLat != null) {
+    if (payload.pubKey && senderLat != null) {
       const existing = raw.find(p => p.key === payload.pubKey);
       if (!existing) {
         raw.unshift({ key: payload.pubKey, pos: [payload.lat, payload.lon], name: payload.name || payload.pubKey.slice(0, 8), known: true });
@@ -2500,9 +2657,22 @@
   function _getChannelStyle(pkt) {
     if (!window.ChannelColors) return '';
     var d = pkt.decoded || {};
-    var h = d.header || {};
     var p = d.payload || {};
-    return window.ChannelColors.getRowStyle(h.payloadTypeName || '', p.channelName || null);
+    var typeName = p.type || (d.header || {}).payloadTypeName || '';
+    var ch = p.channel || null;
+    return window.ChannelColors.getRowStyle(typeName, ch);
+  }
+
+  /** Build a clickable 12×12 color dot for a channel feed item (#674). */
+  function _feedColorDot(channel) {
+    if (!channel || !window.ChannelColors) return '';
+    var c = window.ChannelColors.get(channel);
+    var bg = c || 'transparent';
+    var border = c ? c : 'var(--border-color, #555)';
+    var style = c
+      ? 'background:' + bg + ';border:1px solid ' + border
+      : 'background:transparent;border:1px dashed ' + border;
+    return '<span class="feed-color-dot" data-channel="' + escapeHtml(channel) + '" style="display:inline-block;width:12px;height:12px;border-radius:50%;' + style + ';cursor:pointer;vertical-align:middle;margin-left:4px;flex-shrink:0" title="Set color for ' + escapeHtml(channel) + '"></span>';
   }
 
   function addFeedItemDOM(icon, typeName, payload, hops, color, pkt, feed) {
@@ -2510,6 +2680,9 @@
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = pkt.observation_count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${pkt.observation_count}</span>` : '';
+    var _ccPayload2 = (pkt.decoded || {}).payload || {};
+    var _ccChan = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload2.channel || null) : null;
+    var dotHtml = _ccChan ? _feedColorDot(_ccChan) : '';
     const item = document.createElement('div');
     item.className = 'live-feed-item';
     item.setAttribute('tabindex', '0');
@@ -2521,11 +2694,11 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
-    var _ccD = (pkt.decoded || {}), _ccH = (_ccD.header || {}), _ccP = (_ccD.payload || {}); if (_ccH.payloadTypeName === 'GRP_TXT' || _ccH.payloadTypeName === 'CHAN') item._ccChannel = _ccP.channelName || null; // channel color picker (#271 M2)
+    if (_ccChan) item._ccChannel = _ccChan; // channel color picker (#674)
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.appendChild(item);
   }
@@ -2538,7 +2711,8 @@
   const DEDUP_WINDOW = 30000;
 
   function addFeedItem(icon, typeName, payload, hops, color, pkt) {
-    const feed = document.getElementById('liveFeed');
+    const feedPanel = document.getElementById('liveFeed');
+    const feed = feedPanel ? feedPanel.querySelector('.panel-content') : null;
     if (!feed) return;
     if (showOnlyFavorites && !packetInvolvesFavorite(pkt)) return;
 
@@ -2580,6 +2754,9 @@
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = incomingObs > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${incomingObs}</span>` : '';
+    var _ccPayload3 = (pkt.decoded || {}).payload || {};
+    var _ccChan3 = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload3.channel || null) : null;
+    var dotHtml3 = _ccChan3 ? _feedColorDot(_ccChan3) : '';
 
     const item = document.createElement('div');
     item.className = 'live-feed-item live-feed-enter';
@@ -2593,11 +2770,11 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+      ${dotHtml3}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
-    var _ccD = (pkt.decoded || {}), _ccH = (_ccD.header || {}), _ccP = (_ccD.payload || {}); if (_ccH.payloadTypeName === 'GRP_TXT' || _ccH.payloadTypeName === 'CHAN') item._ccChannel = _ccP.channelName || null; // channel color picker (#271 M2)
+    if (_ccChan3) item._ccChannel = _ccChan3; // channel color picker (#674)
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.prepend(item);
     requestAnimationFrame(() => requestAnimationFrame(() => item.classList.remove('live-feed-enter')));

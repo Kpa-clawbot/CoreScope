@@ -19,6 +19,36 @@
   position: absolute;
   z-index: 1000;
   pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- Panel header (non-scrolling) ---- */
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 4px 6px;
+}
+
+/* ---- Panel content (scrollable) ---- */
+.panel-content {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.live-feed .panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.live-legend .panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 /* ---- Header / Stats ---- */
@@ -106,7 +136,6 @@
   right: 12px;
   width: 320px;
   max-height: calc(100vh - 140px);
-  overflow-y: auto;
   background: color-mix(in srgb, var(--surface-1) 95%, transparent);
   backdrop-filter: blur(12px);
   border-radius: 10px;
@@ -126,16 +155,12 @@
   left: 12px;
   width: 360px;
   max-height: 340px;
-  overflow-y: auto;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
   backdrop-filter: blur(12px);
   border-radius: 10px;
   border: 1px solid var(--border);
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
   padding: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
 }
 
 .live-feed-item {
@@ -198,9 +223,6 @@
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
   color: var(--text-muted);
   font-size: 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
   transition: opacity 0.3s, transform 0.3s;
 }
 
@@ -778,3 +800,52 @@
 }
 .nav-pin-btn:hover { opacity: 0.8; }
 .nav-pin-btn.pinned { opacity: 1; filter: drop-shadow(0 0 4px rgba(59,130,246,0.5)); }
+
+/* ========== Panel Corner Positioning (#608 M0) ========== */
+/* Corner positions — applied via data-position attribute on .live-overlay panels */
+.live-overlay[data-position="tl"] { top: 64px; left: 12px; bottom: auto; right: auto; }
+.live-overlay[data-position="tr"] { top: 64px; right: 12px; bottom: auto; left: auto; }
+.live-overlay[data-position="bl"] { bottom: 12px; left: 12px; top: auto; right: auto; }
+.live-overlay[data-position="br"] { bottom: 12px; right: 12px; top: auto; left: auto; }
+
+/* Override hide animations for positioned panels — slide toward nearest edge */
+.live-overlay[data-position="tl"].hidden,
+.live-overlay[data-position="bl"].hidden { transform: translateX(-100%); }
+.live-overlay[data-position="tr"].hidden,
+.live-overlay[data-position="br"].hidden { transform: translateX(100%); }
+.live-overlay[data-position].hidden { opacity: 0; pointer-events: none; visibility: hidden; }
+
+/* Corner toggle button */
+.panel-corner-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s;
+  font-size: 14px;
+  line-height: 28px;
+  text-align: center;
+  flex-shrink: 0;
+  border-radius: 4px;
+}
+.panel-corner-btn:hover { opacity: 1; background: color-mix(in srgb, var(--text) 12%, transparent); }
+.panel-corner-btn:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* On mobile, corner toggle is not useful (panels are hidden or bottom-sheet) */
+@media (max-width: 640px) {
+  .panel-corner-btn { display: none !important; }
+  .live-overlay[data-position] {
+    top: unset !important; bottom: unset !important;
+    left: unset !important; right: unset !important;
+  }
+}
+

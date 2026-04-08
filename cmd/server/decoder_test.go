@@ -235,10 +235,171 @@ func assertRange(t *testing.T, ranges []HexRange, label string, wantStart, wantE
 	t.Errorf("range %q not found in %v", label, rangeLabels(ranges))
 }
 
+func TestZeroHopDirectHashSize(t *testing.T) {
+	// DIRECT (RouteType=2) + REQ (PayloadType=0) → header byte = 0x02
+	// pathByte=0x00 → hash_count=0, hash_size bits=0 → should get HashSize=0
+	// Need at least a few payload bytes after pathByte.
+	hex := "02" + "00" + repeatHex("AA", 20)
+	pkt, err := DecodePacket(hex)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	if pkt.Path.HashSize != 0 {
+		t.Errorf("DIRECT zero-hop: want HashSize=0, got %d", pkt.Path.HashSize)
+	}
+}
+
+func TestZeroHopDirectHashSizeWithNonZeroUpperBits(t *testing.T) {
+	// DIRECT (RouteType=2) + REQ (PayloadType=0) → header byte = 0x02
+	// pathByte=0x40 → hash_count=0, hash_size bits=01 → should still get HashSize=0
+	// because hash_count is zero (lower 6 bits are 0).
+	hex := "02" + "40" + repeatHex("AA", 20)
+	pkt, err := DecodePacket(hex)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	if pkt.Path.HashSize != 0 {
+		t.Errorf("DIRECT zero-hop with hash_size bits set: want HashSize=0, got %d", pkt.Path.HashSize)
+	}
+}
+
+func TestZeroHopTransportDirectHashSize(t *testing.T) {
+	// TRANSPORT_DIRECT (RouteType=3) + REQ (PayloadType=0) → header byte = 0x03
+	// 4 bytes transport codes + pathByte=0x00 → hash_count=0 → should get HashSize=0
+	hex := "03" + "11223344" + "00" + repeatHex("AA", 20)
+	pkt, err := DecodePacket(hex)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	if pkt.Path.HashSize != 0 {
+		t.Errorf("TRANSPORT_DIRECT zero-hop: want HashSize=0, got %d", pkt.Path.HashSize)
+	}
+}
+
+func TestZeroHopTransportDirectHashSizeWithNonZeroUpperBits(t *testing.T) {
+	// TRANSPORT_DIRECT (RouteType=3) + REQ (PayloadType=0) → header byte = 0x03
+	// 4 bytes transport codes + pathByte=0xC0 → hash_count=0, hash_size bits=11 → should still get HashSize=0
+	hex := "03" + "11223344" + "C0" + repeatHex("AA", 20)
+	pkt, err := DecodePacket(hex)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	if pkt.Path.HashSize != 0 {
+		t.Errorf("TRANSPORT_DIRECT zero-hop with hash_size bits set: want HashSize=0, got %d", pkt.Path.HashSize)
+	}
+}
+
+func TestNonDirectZeroPathByteKeepsHashSize(t *testing.T) {
+	// FLOOD (RouteType=1) + REQ (PayloadType=0) → header byte = 0x01
+	// pathByte=0x00 → even though hash_count=0, non-DIRECT should keep HashSize=1
+	hex := "01" + "00" + repeatHex("AA", 20)
+	pkt, err := DecodePacket(hex)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	if pkt.Path.HashSize != 1 {
+		t.Errorf("FLOOD zero pathByte: want HashSize=1 (unchanged), got %d", pkt.Path.HashSize)
+	}
+}
+
+func TestDirectNonZeroHopKeepsHashSize(t *testing.T) {
+	// DIRECT (RouteType=2) + REQ (PayloadType=0) → header byte = 0x02
+	// pathByte=0x01 → hash_count=1, hash_size=1 → should keep HashSize=1
+	// Need 1 hop hash byte after pathByte.
+	hex := "02" + "01" + repeatHex("BB", 21)
+	pkt, err := DecodePacket(hex)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	if pkt.Path.HashSize != 1 {
+		t.Errorf("DIRECT with 1 hop: want HashSize=1, got %d", pkt.Path.HashSize)
+	}
+}
+
 func repeatHex(byteHex string, n int) string {
 	s := ""
 	for i := 0; i < n; i++ {
 		s += byteHex
 	}
 	return s
+}
+
+func TestDecodePacket_TraceHopsCompleted(t *testing.T) {
+	// Build a TRACE packet:
+	// header: route=FLOOD(1), payload=TRACE(9), version=0 → (0<<6)|(9<<2)|1 = 0x25
+	// path_length: hash_size bits=0b00 (1-byte), hash_count=2 (2 SNR bytes) → 0x02
+	// path: 2 SNR bytes: 0xAA, 0xBB
+	// payload: tag(4 LE) + authCode(4 LE) + flags(1) + 4 hop hashes (1 byte each)
+	hex := "2502AABB" + // header + path_length + 2 SNR bytes
+		"01000000" + // tag = 1
+		"02000000" + // authCode = 2
+		"00" + // flags = 0
+		"DEADBEEF" // 4 hops (1-byte hash each)
+
+	pkt, err := DecodePacket(hex)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if pkt.Payload.Type != "TRACE" {
+		t.Fatalf("expected TRACE, got %s", pkt.Payload.Type)
+	}
+	// Full intended route = 4 hops from payload
+	if len(pkt.Path.Hops) != 4 {
+		t.Errorf("expected 4 hops, got %d: %v", len(pkt.Path.Hops), pkt.Path.Hops)
+	}
+	// HopsCompleted = 2 (from header path SNR count)
+	if pkt.Path.HopsCompleted == nil {
+		t.Fatal("expected HopsCompleted to be set")
+	}
+	if *pkt.Path.HopsCompleted != 2 {
+		t.Errorf("expected HopsCompleted=2, got %d", *pkt.Path.HopsCompleted)
+	}
+}
+
+func TestDecodePacket_TraceNoSNR(t *testing.T) {
+	// TRACE with 0 SNR bytes (trace hasn't been forwarded yet)
+	// path_length: hash_size=0b00 (1-byte), hash_count=0 → 0x00
+	hex := "2500" + // header + path_length (0 hops in header)
+		"01000000" + // tag
+		"02000000" + // authCode
+		"00" + // flags
+		"AABBCC" // 3 hops intended
+
+	pkt, err := DecodePacket(hex)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if pkt.Path.HopsCompleted == nil {
+		t.Fatal("expected HopsCompleted to be set")
+	}
+	if *pkt.Path.HopsCompleted != 0 {
+		t.Errorf("expected HopsCompleted=0, got %d", *pkt.Path.HopsCompleted)
+	}
+	if len(pkt.Path.Hops) != 3 {
+		t.Errorf("expected 3 hops, got %d", len(pkt.Path.Hops))
+	}
+}
+
+func TestDecodePacket_TraceFullyCompleted(t *testing.T) {
+	// TRACE where all hops completed (SNR count = hop count)
+	// path_length: hash_size=0b00 (1-byte), hash_count=3 → 0x03
+	hex := "2503AABBCC" + // header + path_length + 3 SNR bytes
+		"01000000" + // tag
+		"02000000" + // authCode
+		"00" + // flags
+		"DDEEFF" // 3 hops intended
+
+	pkt, err := DecodePacket(hex)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if pkt.Path.HopsCompleted == nil {
+		t.Fatal("expected HopsCompleted to be set")
+	}
+	if *pkt.Path.HopsCompleted != 3 {
+		t.Errorf("expected HopsCompleted=3, got %d", *pkt.Path.HopsCompleted)
+	}
+	if len(pkt.Path.Hops) != 3 {
+		t.Errorf("expected 3 hops, got %d", len(pkt.Path.Hops))
+	}
 }

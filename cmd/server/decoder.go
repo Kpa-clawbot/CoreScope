@@ -60,9 +60,10 @@ type TransportCodes struct {
 
 // Path holds decoded path/hop information.
 type Path struct {
-	HashSize  int      `json:"hashSize"`
-	HashCount int      `json:"hashCount"`
-	Hops      []string `json:"hops"`
+	HashSize      int      `json:"hashSize"`
+	HashCount     int      `json:"hashCount"`
+	Hops          []string `json:"hops"`
+	HopsCompleted *int     `json:"hopsCompleted,omitempty"`
 }
 
 // AdvertFlags holds decoded advert flag bits.
@@ -376,7 +377,12 @@ func DecodePacket(hexString string) (*DecodedPacket, error) {
 	// TRACE packets store hop IDs in the payload (buf[9:]) rather than the header
 	// path field. The header path byte still encodes hashSize in bits 6-7, which
 	// we use to split the payload path data into individual hop prefixes.
+	// The header path contains SNR bytes — one per hop that actually forwarded.
+	// We expose hopsCompleted (count of SNR bytes) so consumers can distinguish
+	// how far the trace got vs the full intended route.
 	if header.PayloadType == PayloadTRACE && payload.PathData != "" {
+		// The header path hops count represents SNR entries = completed hops
+		hopsCompleted := path.HashCount
 		pathBytes, err := hex.DecodeString(payload.PathData)
 		if err == nil && path.HashSize > 0 {
 			hops := make([]string, 0, len(pathBytes)/path.HashSize)
@@ -385,7 +391,18 @@ func DecodePacket(hexString string) (*DecodedPacket, error) {
 			}
 			path.Hops = hops
 			path.HashCount = len(hops)
+			path.HopsCompleted = &hopsCompleted
 		}
+	}
+
+	// Zero-hop direct packets have hash_count=0 (lower 6 bits of pathByte),
+	// which makes the generic formula yield a bogus hashSize. Reset to 0
+	// (unknown) so API consumers get correct data. We mask with 0x3F to check
+	// only hash_count, matching the JS frontend approach — the upper hash_size
+	// bits are meaningless when there are no hops. Skip TRACE packets — they
+	// use hashSize to parse hops from the payload above.
+	if (header.RouteType == RouteDirect || header.RouteType == RouteTransportDirect) && pathByte&0x3F == 0 && header.PayloadType != PayloadTRACE {
+		path.HashSize = 0
 	}
 
 	return &DecodedPacket{

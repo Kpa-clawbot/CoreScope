@@ -136,9 +136,14 @@
       analyticsContent.addEventListener('keydown', handler);
     }
 
+    // Re-render when distance unit or theme changes
+    _themeRefreshHandler = function () { renderTab(_currentTab); };
+    window.addEventListener('theme-refresh', _themeRefreshHandler);
+
     loadAnalytics();
   }
 
+  var _themeRefreshHandler = null;
   let _currentTab = 'overview';
 
   async function loadAnalytics() {
@@ -1372,6 +1377,8 @@
     }
 
     const showAppearances = bytes < 3;
+    const t50 = formatDistanceRound(50);
+    const t200 = formatDistanceRound(200);
     el.innerHTML = `<table class="analytics-table">
       <thead><tr>
         <th scope="col">Prefix</th>
@@ -1383,20 +1390,20 @@
       <tbody>${collisions.map(c => {
         let badge, tooltip;
         if (c.classification === 'local') {
-          badge = '<span class="badge" style="background:var(--status-green);color:#fff" title="All nodes within 50km — likely true collision, same RF neighborhood">🏘️ Local</span>';
+          badge = `<span class="badge" style="background:var(--status-green);color:#fff" title="All nodes within ${t50} — likely true collision, same RF neighborhood">🏘️ Local</span>`;
           tooltip = 'Nodes close enough for direct RF — probably genuine prefix collision';
         } else if (c.classification === 'regional') {
-          badge = '<span class="badge" style="background:var(--status-yellow);color:#fff" title="Nodes 50–200km apart — edge of LoRa range, could be atmospheric">⚡ Regional</span>';
+          badge = `<span class="badge" style="background:var(--status-yellow);color:#fff" title="Nodes ${t50}–${t200} apart — edge of LoRa range, could be atmospheric">⚡ Regional</span>`;
           tooltip = 'At edge of 915MHz range — could indicate atmospheric ducting or hilltop-to-hilltop links';
         } else if (c.classification === 'distant') {
-          badge = '<span class="badge" style="background:var(--status-red);color:#fff" title="Nodes >200km apart — beyond typical 915MHz range">🌐 Distant</span>';
+          badge = `<span class="badge" style="background:var(--status-red);color:#fff" title="Nodes >${t200} apart — beyond typical 915MHz range">🌐 Distant</span>`;
           tooltip = 'Beyond typical LoRa range — likely internet bridging, MQTT gateway, or separate mesh networks sharing prefix';
         } else {
           badge = '<span class="badge" style="background:#6b7280;color:#fff">❓ Unknown</span>';
           tooltip = 'Not enough coordinate data to classify';
         }
         const nodes = c.nodes || [];
-        const distStr = c.with_coords >= 2 ? `${Math.round(c.max_dist_km)} km` : '<span class="text-muted">—</span>';
+        const distStr = c.with_coords >= 2 ? formatDistanceRound(c.max_dist_km) : '<span class="text-muted">—</span>';
         return `<tr>
           <td class="mono">${c.prefix}</td>
           ${showAppearances ? `<td>${(c.appearances || 0).toLocaleString()}</td>` : ''}
@@ -1412,9 +1419,9 @@
       }).join('')}</tbody>
     </table>
     <div class="text-muted" style="padding:8px;font-size:0.8em">
-      <strong>🏘️ Local</strong> &lt;50km: true prefix collision, same mesh area &nbsp;
-      <strong>⚡ Regional</strong> 50–200km: edge of LoRa range, possible atmospheric propagation &nbsp;
-      <strong>🌐 Distant</strong> &gt;200km: beyond 915MHz range — internet bridge, MQTT gateway, or separate networks
+      <strong>🏘️ Local</strong> &lt;${t50}: true prefix collision, same mesh area &nbsp;
+      <strong>⚡ Regional</strong> ${t50}–${t200}: edge of LoRa range, possible atmospheric propagation &nbsp;
+      <strong>🌐 Distant</strong> &gt;${t200}: beyond 915MHz range — internet bridge, MQTT gateway, or separate networks
     </div>`;
   }
     async function renderSubpaths(el) {
@@ -1545,12 +1552,12 @@
                   : (() => { const R=6371, dLat=(b.lat-a.lat)*Math.PI/180, dLon=(b.lon-a.lon)*Math.PI/180, h=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLon/2)**2; return R*2*Math.atan2(Math.sqrt(h),Math.sqrt(1-h)); })();
                 total += km;
                 const cls = km > 200 ? 'color:var(--status-red);font-weight:bold' : km > 50 ? 'color:var(--status-yellow)' : 'color:var(--status-green)';
-                dists.push(`<div style="padding:2px 0"><span style="${cls}">${km < 1 ? (km*1000).toFixed(0)+'m' : km.toFixed(1)+'km'}</span> <span class="text-muted">${esc(a.name)} → ${esc(b.name)}</span></div>`);
+                dists.push(`<div style="padding:2px 0"><span style="${cls}">${formatDistance(km)}</span> <span class="text-muted">${esc(a.name)} → ${esc(b.name)}</span></div>`);
               } else {
                 dists.push(`<div style="padding:2px 0"><span class="text-muted">? ${esc(a.name)} → ${esc(b.name)} (no coords)</span></div>`);
               }
             }
-            if (dists.length > 1) dists.push(`<div style="padding:4px 0;border-top:1px solid var(--border);margin-top:4px"><strong>Total: ${total < 1 ? (total*1000).toFixed(0)+'m' : total.toFixed(1)+'km'}</strong></div>`);
+            if (dists.length > 1) dists.push(`<div style="padding:4px 0;border-top:1px solid var(--border);margin-top:4px"><strong>Total: ${formatDistance(total)}</strong></div>`);
             return dists.join('');
           })()}
         </div>` : ''}
@@ -1787,16 +1794,17 @@
       let html = `<div class="analytics-grid">
         <div class="stat-card"><div class="stat-value">${s.totalHops.toLocaleString()}</div><div class="stat-label">Total Hops Analyzed</div></div>
         <div class="stat-card"><div class="stat-value">${s.totalPaths.toLocaleString()}</div><div class="stat-label">Paths Analyzed</div></div>
-        <div class="stat-card"><div class="stat-value">${s.avgDist} km</div><div class="stat-label">Avg Hop Distance</div></div>
-        <div class="stat-card"><div class="stat-value">${s.maxDist} km</div><div class="stat-label">Max Hop Distance</div></div>
+        <div class="stat-card"><div class="stat-value">${formatDistance(s.avgDist)}</div><div class="stat-label">Avg Hop Distance</div></div>
+        <div class="stat-card"><div class="stat-value">${formatDistance(s.maxDist)}</div><div class="stat-label">Max Hop Distance</div></div>
       </div>`;
 
       // Category stats
       const cats = data.catStats;
-      html += `<div class="analytics-section"><h3>Distance by Link Type</h3><table class="data-table"><thead><tr><th scope="col">Type</th><th scope="col">Count</th><th scope="col">Avg (km)</th><th scope="col">Median (km)</th><th scope="col">Min (km)</th><th scope="col">Max (km)</th></tr></thead><tbody>`;
+      const distUnitLabel = getDistanceUnit() === 'mi' ? 'mi' : 'km';
+      html += `<div class="analytics-section"><h3>Distance by Link Type</h3><table class="data-table"><thead><tr><th scope="col">Type</th><th scope="col">Count</th><th scope="col">Avg (${distUnitLabel})</th><th scope="col">Median (${distUnitLabel})</th><th scope="col">Min (${distUnitLabel})</th><th scope="col">Max (${distUnitLabel})</th></tr></thead><tbody>`;
       for (const [cat, st] of Object.entries(cats)) {
         if (!st.count) continue;
-        html += `<tr><td><strong>${esc(cat)}</strong></td><td>${st.count.toLocaleString()}</td><td>${st.avg}</td><td>${st.median}</td><td>${st.min}</td><td>${st.max}</td></tr>`;
+        html += `<tr><td><strong>${esc(cat)}</strong></td><td>${st.count.toLocaleString()}</td><td>${formatDistance(st.avg)}</td><td>${formatDistance(st.median)}</td><td>${formatDistance(st.min)}</td><td>${formatDistance(st.max)}</td></tr>`;
       }
       html += `</tbody></table></div>`;
 
@@ -1813,7 +1821,7 @@
       }
 
       // Top hops leaderboard
-      html += `<div class="analytics-section"><h3>🏆 Top 20 Longest Hops</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">From</th><th scope="col">To</th><th scope="col">Distance (km)</th><th scope="col">Type</th><th scope="col">SNR</th><th scope="col">Packet</th><th scope="col"></th></tr></thead><tbody>`;
+      html += `<div class="analytics-section"><h3>🏆 Top 20 Longest Hops</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">From</th><th scope="col">To</th><th scope="col">Distance (${distUnitLabel})</th><th scope="col">Type</th><th scope="col">SNR</th><th scope="col">Packet</th><th scope="col"></th></tr></thead><tbody>`;
       const top20 = data.topHops.slice(0, 20);
       top20.forEach((h, i) => {
         const fromLink = h.fromPk ? `<a href="#/nodes/${encodeURIComponent(h.fromPk)}" class="analytics-link">${esc(h.fromName)}</a>` : esc(h.fromName || '?');
@@ -1821,13 +1829,13 @@
         const snr = h.snr != null ? h.snr + ' dB' : '<span class="text-muted">—</span>';
         const pktLink = h.hash ? `<a href="#/packet/${encodeURIComponent(h.hash)}" class="analytics-link mono" style="font-size:0.85em">${esc(h.hash.slice(0, 12))}…</a>` : '—';
         const mapBtn = h.fromPk && h.toPk ? `<button class="btn-icon dist-map-hop" data-from="${esc(h.fromPk)}" data-to="${esc(h.toPk)}" title="View on map">🗺️</button>` : '';
-        html += `<tr><td>${i+1}</td><td>${fromLink}</td><td>${toLink}</td><td><strong>${h.dist}</strong></td><td>${esc(h.type)}</td><td>${snr}</td><td>${pktLink}</td><td>${mapBtn}</td></tr>`;
+        html += `<tr><td>${i+1}</td><td>${fromLink}</td><td>${toLink}</td><td><strong>${formatDistance(h.dist)}</strong></td><td>${esc(h.type)}</td><td>${snr}</td><td>${pktLink}</td><td>${mapBtn}</td></tr>`;
       });
       html += `</tbody></table></div>`;
 
       // Top paths
       if (data.topPaths.length) {
-        html += `<div class="analytics-section"><h3>🛤️ Top 10 Longest Multi-Hop Paths</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">Total Distance (km)</th><th scope="col">Hops</th><th scope="col">Route</th><th scope="col">Packet</th><th scope="col"></th></tr></thead><tbody>`;
+        html += `<div class="analytics-section"><h3>🛤️ Top 10 Longest Multi-Hop Paths</h3><table class="data-table"><thead><tr><th scope="col">#</th><th scope="col">Total Distance (${distUnitLabel})</th><th scope="col">Hops</th><th scope="col">Route</th><th scope="col">Packet</th><th scope="col"></th></tr></thead><tbody>`;
         data.topPaths.slice(0, 10).forEach((p, i) => {
           const route = p.hops.map(h => esc(h.fromName)).concat(esc(p.hops[p.hops.length-1].toName)).join(' → ');
           const pktLink = p.hash ? `<a href="#/packet/${encodeURIComponent(p.hash)}" class="analytics-link mono" style="font-size:0.85em">${esc(p.hash.slice(0, 12))}…</a>` : '—';
@@ -1836,7 +1844,7 @@
           p.hops.forEach(h => { if (h.fromPk && !pathPks.includes(h.fromPk)) pathPks.push(h.fromPk); });
           if (p.hops.length && p.hops[p.hops.length-1].toPk) { const last = p.hops[p.hops.length-1].toPk; if (!pathPks.includes(last)) pathPks.push(last); }
           const mapBtn = pathPks.length >= 2 ? `<button class="btn-icon dist-map-path" data-hops='${JSON.stringify(pathPks)}' title="View on map">🗺️</button>` : '';
-          html += `<tr><td>${i+1}</td><td><strong>${p.totalDist}</strong></td><td>${p.hopCount}</td><td style="font-size:0.9em">${route}</td><td>${pktLink}</td><td>${mapBtn}</td></tr>`;
+          html += `<tr><td>${i+1}</td><td><strong>${formatDistance(p.totalDist)}</strong></td><td>${p.hopCount}</td><td style="font-size:0.9em">${route}</td><td>${pktLink}</td><td>${mapBtn}</td></tr>`;
         });
         html += `</tbody></table></div>`;
       }
@@ -1864,7 +1872,7 @@
     }
   }
 
-function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; }
+function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
@@ -1873,6 +1881,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     window._analyticsSaveChannelSort = saveChannelSort;
     window._analyticsChannelTbodyHtml = channelTbodyHtml;
     window._analyticsChannelTheadHtml = channelTheadHtml;
+    window._analyticsRfNFColumnChart = rfNFColumnChart;
   }
 
   // ─── Neighbor Graph Tab ─────────────────────────────────────────────────────
@@ -2924,7 +2933,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       // Render noise floor chart
       const nfEl = document.getElementById('rfDetailNFChart');
       if (nfEl && nfData.length > 1) {
-        nfEl.innerHTML = rfNFLineChart(nfData, nfEl.clientWidth || 700, 180, reboots, minT, maxT);
+        nfEl.innerHTML = rfNFColumnChart(nfData, nfEl.clientWidth || 700, 180, reboots, minT, maxT);
       } else if (nfEl) {
         nfEl.innerHTML = '<span class="text-muted">Not enough noise floor data</span>';
       }
@@ -3188,7 +3197,13 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     return svg;
   }
 
-  function rfNFLineChart(data, w, h, reboots, sharedMinT, sharedMaxT) {
+  /**
+   * Noise floor column chart — color-coded bars (green/yellow/red) by threshold.
+   * Replaces the old line chart for better discrete-sample readability.
+   * Thresholds: green (< -100 dBm), yellow (-100 to -85 dBm), red (≥ -85 dBm).
+   */
+  function rfNFColumnChart(data, w, h, reboots, sharedMinT, sharedMaxT) {
+    if (!data || !data.length) return '<svg viewBox="0 0 1 1"></svg>';
     reboots = reboots || [];
     const pad = { top: 20, right: 40, bottom: 30, left: 55 };
     const cw = w - pad.left - pad.right;
@@ -3199,34 +3214,33 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     const maxT = sharedMaxT != null ? sharedMaxT : Math.max(...data.map(d => new Date(d.t).getTime()));
     const minV = Math.min(...values);
     const maxV = Math.max(...values);
-    const rangeV = maxV - minV || 1;
+    // Guard against zero range (single data point or constant values):
+    // use a ±5 dBm window so bars are visible and centered in the chart
+    const rawRangeV = maxV - minV;
+    const rangeV = rawRangeV || 10;
+    const adjMinV = rawRangeV ? minV : minV - 5;
     const rangeT = maxT - minT || 1;
 
     const sx = t => pad.left + ((t - minT) / rangeT) * cw;
-    const sy = v => pad.top + ch - ((v - minV) / rangeV) * ch;
+    const sy = v => pad.top + ch - ((v - adjMinV) / rangeV) * ch;
 
-    const pts = data.map(d => `${sx(new Date(d.t).getTime()).toFixed(1)},${sy(d.v).toFixed(1)}`).join(' ');
+    // Column width: proportional to chart width / data points, min 2px, gap of 1px
+    const colW = Math.max(2, Math.floor(cw / data.length) - 1);
 
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Noise floor line chart"><title>Noise floor over time</title>`;
+    const times = data.map(d => new Date(d.t).getTime());
+
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Noise floor column chart"><title>Noise floor over time</title>`;
+
+    // Inline style for hover highlighting
+    svg += `<style>.nf-bar{transition:opacity 0.05s}.nf-bar:hover{opacity:0.75;stroke:var(--text);stroke-width:1}</style>`;
 
     // Chart title
     svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">Noise Floor dBm</text>`;
 
-    // Reference lines
-    const refLines = [-100, -85];
-    const refLabels = ['-100 warning', '-85 critical'];
-    refLines.forEach((ref, i) => {
-      if (ref >= minV && ref <= maxV) {
-        const y = sy(ref);
-        svg += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w - pad.right}" y2="${y.toFixed(1)}" stroke="var(--text-muted)" stroke-width="0.5" stroke-dasharray="4,2"/>`;
-        svg += `<text x="${w - pad.right + 2}" y="${(y + 3).toFixed(1)}" font-size="9" fill="var(--text-muted)">${refLabels[i]}</text>`;
-      }
-    });
-
-    // Y-axis labels
+    // Y-axis labels + grid lines
     const yTicks = 5;
     for (let i = 0; i <= yTicks; i++) {
-      const v = minV + (rangeV * i / yTicks);
+      const v = adjMinV + (rangeV * i / yTicks);
       const y = sy(v);
       svg += `<text x="${pad.left - 4}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--text-muted)">${v.toFixed(0)}</text>`;
       svg += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w - pad.right}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="0.3"/>`;
@@ -3238,23 +3252,38 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     // X-axis labels
     svg += rfXAxisLabels(data, sx, h, pad);
 
-    // Data polyline
-    svg += `<polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>`;
+    // Color-coded columns
+    for (let i = 0; i < data.length; i++) {
+      const t = times[i];
+      const v = data[i].v;
+      const x = sx(t) - colW / 2;
+      const y = sy(v);
+      const barH = pad.top + ch - y;
 
-    // Hover tooltips
-    svg += rfTooltipCircles(data, sx, sy, 'NF', ' dBm');
+      // Threshold color: green < -100, yellow -100 to -85, red >= -85
+      let color;
+      if (v < -100) color = 'var(--success, #22c55e)';
+      else if (v < -85) color = 'var(--warning, #eab308)';
+      else color = 'var(--danger, #ef4444)';
 
-    // Direct labels: min and max points
-    const times = data.map(d => new Date(d.t).getTime());
-    const maxIdx = values.indexOf(maxV);
-    const minIdx = values.indexOf(minV);
-    svg += `<circle cx="${sx(times[maxIdx]).toFixed(1)}" cy="${sy(maxV).toFixed(1)}" r="3" fill="var(--danger, red)"/>`;
-    svg += `<text x="${sx(times[maxIdx]).toFixed(1)}" y="${(sy(maxV) - 6).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--danger, red)">${maxV.toFixed(1)}</text>`;
-    svg += `<circle cx="${sx(times[minIdx]).toFixed(1)}" cy="${sy(minV).toFixed(1)}" r="3" fill="var(--success, green)"/>`;
-    svg += `<text x="${sx(times[minIdx]).toFixed(1)}" y="${(sy(minV) + 14).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--success, green)">${minV.toFixed(1)}</text>`;
+      const ts = new Date(data[i].t).toISOString().replace('T', ' ').replace(/\.\d+Z/, ' UTC');
+      const tip = `NF: ${v.toFixed(1)} dBm\n${ts}`;
+
+      svg += `<rect class="nf-bar" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${colW}" height="${Math.max(0, barH).toFixed(1)}" fill="${color}" rx="0.5"><title>${tip}</title></rect>`;
+    }
 
     // Y-axis label
     svg += `<text x="12" y="${(h / 2)}" text-anchor="middle" font-size="10" fill="var(--text-muted)" transform="rotate(-90,12,${h/2})">dBm</text>`;
+
+    // Legend
+    const legendY = pad.top + 2;
+    const legendX = w - pad.right - 140;
+    svg += `<rect x="${legendX}" y="${legendY}" width="8" height="8" fill="var(--success, #22c55e)" rx="1"/>`;
+    svg += `<text x="${legendX + 11}" y="${legendY + 7}" font-size="8" fill="var(--text-muted)">&lt; -100</text>`;
+    svg += `<rect x="${legendX + 48}" y="${legendY}" width="8" height="8" fill="var(--warning, #eab308)" rx="1"/>`;
+    svg += `<text x="${legendX + 59}" y="${legendY + 7}" font-size="8" fill="var(--text-muted)">-100…-85</text>`;
+    svg += `<rect x="${legendX + 105}" y="${legendY}" width="8" height="8" fill="var(--danger, #ef4444)" rx="1"/>`;
+    svg += `<text x="${legendX + 116}" y="${legendY + 7}" font-size="8" fill="var(--text-muted)">≥ -85</text>`;
 
     svg += '</svg>';
     return svg;

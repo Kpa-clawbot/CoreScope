@@ -629,8 +629,17 @@ console.log('\n=== packets.js: buildFieldTable ===');
   });
 
   test('buildFieldTable hash_size calculation', () => {
-    // Path byte 0xC0 → bits 7-6 = 3 → hash_size = 4
+    // Path byte 0xC0 → bits 7-6 = 3 → hash_size = 4, but hash_count = 0
+    // Since #653: when hashCount == 0, shows "hash_count=0 (direct advert)" instead of hash_size
     const pkt = { raw_hex: '00C0', route_type: 1, payload_type: 0 };
+    const decoded = {};
+    const result = api.buildFieldTable(pkt, decoded, [], []);
+    assert(result.includes('hash_count=0 (direct advert)'));
+  });
+
+  test('buildFieldTable hash_size shown when hash_count > 0', () => {
+    // Path byte 0xC1 → bits 7-6 = 3 → hash_size = 4, hash_count = 1
+    const pkt = { raw_hex: '00C1aabbccdd', route_type: 1, payload_type: 0 };
     const decoded = {};
     const result = api.buildFieldTable(pkt, decoded, [], []);
     assert(result.includes('hash_size=4'));

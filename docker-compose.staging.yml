@@ -15,15 +15,11 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     stop_signal: SIGTERM
-    deploy:
-      resources:
-        limits:
-          memory: 3g
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${STAGING_GO_HTTP_PORT:-82}:80"
-      - "${STAGING_GO_MQTT_PORT:-1885}:1883"
+      - "${STAGING_GO_HTTP_PORT:-80}:80"
+      - "${STAGING_GO_MQTT_PORT:-1883}:1883"
       - "6060:6060"   # pprof server
       - "6061:6061"   # pprof ingestor
     volumes:

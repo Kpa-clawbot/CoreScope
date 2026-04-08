@@ -261,6 +261,38 @@ Caddy handles certificate issuance and renewal automatically.
 
 ---
 
+## API Documentation
+
+CoreScope auto-generates an OpenAPI 3.0 specification from its route definitions. The spec is always in sync with the running server — no manual maintenance required.
+
+### Endpoints
+
+| URL | Description |
+|-----|-------------|
+| `/api/spec` | OpenAPI 3.0 JSON schema — machine-readable API definition |
+| `/api/docs` | Interactive Swagger UI — browse and test all 40+ endpoints |
+
+### Usage
+
+**Browse the API interactively:**
+```
+http://your-instance/api/docs
+```
+
+**Fetch the spec programmatically:**
+```bash
+curl http://your-instance/api/spec | jq .
+```
+
+**For bot/integration developers:** The spec includes all request parameters, response schemas, and example values. Import it into Postman, Insomnia, or any OpenAPI-compatible tool.
+
+### Public instance
+The live instance at [analyzer.00id.net](https://analyzer.00id.net) has all API endpoints publicly accessible:
+- Spec: [analyzer.00id.net/api/spec](https://analyzer.00id.net/api/spec)
+- Docs: [analyzer.00id.net/api/docs](https://analyzer.00id.net/api/docs)
+
+---
+
 ## Monitoring & Health Checks
 
 ### Docker health check

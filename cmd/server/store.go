@@ -2157,6 +2157,40 @@ func resolvePayloadTypeName(pt *int) string {
 	return fmt.Sprintf("UNK(%d)", *pt)
 }
 
+// nodeInResolvedPath checks whether a transmission's resolved_path contains
+// the target node's full pubkey. Returns true if at least one observation's
+// resolved_path includes targetPK (lowercased). Excludes transmissions where
+// resolved_path is nil/empty or the hop resolved to a different node.
+func nodeInResolvedPath(tx *StoreTx, targetPK string) bool {
+	// If no resolved_path data exists anywhere on this tx, we can't
+	// disambiguate — return true to keep it (avoid dropping old data).
+	hasAny := false
+
+	// Check the best observation's resolved_path (stored on tx directly).
+	if tx.ResolvedPath != nil && len(tx.ResolvedPath) > 0 {
+		hasAny = true
+		for _, rp := range tx.ResolvedPath {
+			if rp != nil && strings.ToLower(*rp) == targetPK {
+				return true
+			}
+		}
+	}
+	// Also check all observations in case a non-best observation resolved it.
+	for _, obs := range tx.Observations {
+		if obs.ResolvedPath == nil || len(obs.ResolvedPath) == 0 {
+			continue
+		}
+		hasAny = true
+		for _, rp := range obs.ResolvedPath {
+			if rp != nil && strings.ToLower(*rp) == targetPK {
+				return true
+			}
+		}
+	}
+	// No resolved_path data at all — can't disambiguate, keep the candidate.
+	return !hasAny
+}
+
 // txGetParsedPath returns cached parsed path hops, parsing on first call.
 func txGetParsedPath(tx *StoreTx) []string {
 	if tx.pathParsed {
@@ -4731,7 +4765,13 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 		regionObs = s.resolveRegionObservers(region)
 	}
 
-	_, pm := s.getCachedNodesAndPM()
+	allNodes, pm := s.getCachedNodesAndPM()
+
+	// Build pubkey→role map for filtering by node type.
+	nodeRoleByPK := make(map[string]string, len(allNodes))
+	for _, n := range allNodes {
+		nodeRoleByPK[n.PublicKey] = n.Role
+	}
 
 	distribution := map[string]int{"1": 0, "2": 0, "3": 0}
 	byHour := map[string]map[string]int{}
@@ -4808,9 +4848,11 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 						}
 					}
 					if byNode[pk] == nil {
+						role := nodeRoleByPK[pk] // empty if unknown
 						byNode[pk] = map[string]interface{}{
 							"hashSize": hashSize, "packets": 0,
 							"lastSeen": tx.FirstSeen, "name": name,
+							"role": role,
 						}
 					}
 					byNode[pk]["packets"] = byNode[pk]["packets"].(int) + 1
@@ -4902,7 +4944,7 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 			multiByteNodes = append(multiByteNodes, map[string]interface{}{
 				"name": data["name"], "hashSize": data["hashSize"],
 				"packets": data["packets"], "lastSeen": data["lastSeen"],
-				"pubkey": pk,
+				"pubkey": pk, "role": data["role"],
 			})
 		}
 	}
@@ -4910,9 +4952,13 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 		return multiByteNodes[i]["packets"].(int) > multiByteNodes[j]["packets"].(int)
 	})
 
-	// Distribution by repeaters: count unique nodes per hash size
+	// Distribution by repeaters: count unique REPEATER nodes per hash size
 	distributionByRepeaters := map[string]int{"1": 0, "2": 0, "3": 0}
 	for _, data := range byNode {
+		role, _ := data["role"].(string)
+		if !strings.Contains(strings.ToLower(role), "repeater") {
+			continue
+		}
 		hs := data["hashSize"].(int)
 		key := strconv.Itoa(hs)
 		distributionByRepeaters[key]++
