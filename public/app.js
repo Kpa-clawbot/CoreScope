@@ -113,7 +113,7 @@ function getDistanceUnit() {
   if (stored === 'km') return 'km';
   if (stored === 'mi') return 'mi';
   // 'auto' or no value — locale detection
-  var milesLocales = ['en-us', 'en-gb', 'my', 'lr'];
+  var milesLocales = ['en-us', 'en-gb'];
   var lang = (typeof navigator !== 'undefined' && navigator.language || '').toLowerCase();
   for (var i = 0; i < milesLocales.length; i++) {
     if (lang === milesLocales[i] || lang.startsWith(milesLocales[i] + '-')) return 'mi';
@@ -126,7 +126,11 @@ function formatDistance(km) {
   if (km == null || isNaN(+km)) return '—';
   var d = +km;
   var unit = getDistanceUnit();
-  if (unit === 'mi') return (d / 1.60934).toFixed(1) + ' mi';
+  if (unit === 'mi') {
+    var mi = d / 1.60934;
+    if (mi < 0.1) return Math.round(mi * 5280) + ' ft';
+    return mi.toFixed(1) + ' mi';
+  }
   if (d < 1) return Math.round(d * 1000) + ' m';
   return d.toFixed(1) + ' km';
 }

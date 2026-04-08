@@ -136,9 +136,14 @@
       analyticsContent.addEventListener('keydown', handler);
     }
 
+    // Re-render when distance unit or theme changes
+    _themeRefreshHandler = function () { renderTab(_currentTab); };
+    window.addEventListener('theme-refresh', _themeRefreshHandler);
+
     loadAnalytics();
   }
 
+  var _themeRefreshHandler = null;
   let _currentTab = 'overview';
 
   async function loadAnalytics() {
@@ -1372,6 +1377,8 @@
     }
 
     const showAppearances = bytes < 3;
+    const t50 = formatDistanceRound(50);
+    const t200 = formatDistanceRound(200);
     el.innerHTML = `<table class="analytics-table">
       <thead><tr>
         <th scope="col">Prefix</th>
@@ -1381,8 +1388,6 @@
         <th scope="col">Colliding Nodes</th>
       </tr></thead>
       <tbody>${collisions.map(c => {
-        const t50 = formatDistanceRound(50);
-        const t200 = formatDistanceRound(200);
         let badge, tooltip;
         if (c.classification === 'local') {
           badge = `<span class="badge" style="background:var(--status-green);color:#fff" title="All nodes within ${t50} — likely true collision, same RF neighborhood">🏘️ Local</span>`;
@@ -1414,9 +1419,9 @@
       }).join('')}</tbody>
     </table>
     <div class="text-muted" style="padding:8px;font-size:0.8em">
-      <strong>🏘️ Local</strong> &lt;${formatDistanceRound(50)}: true prefix collision, same mesh area &nbsp;
-      <strong>⚡ Regional</strong> ${formatDistanceRound(50)}–${formatDistanceRound(200)}: edge of LoRa range, possible atmospheric propagation &nbsp;
-      <strong>🌐 Distant</strong> &gt;${formatDistanceRound(200)}: beyond 915MHz range — internet bridge, MQTT gateway, or separate networks
+      <strong>🏘️ Local</strong> &lt;${t50}: true prefix collision, same mesh area &nbsp;
+      <strong>⚡ Regional</strong> ${t50}–${t200}: edge of LoRa range, possible atmospheric propagation &nbsp;
+      <strong>🌐 Distant</strong> &gt;${t200}: beyond 915MHz range — internet bridge, MQTT gateway, or separate networks
     </div>`;
   }
     async function renderSubpaths(el) {
@@ -1867,7 +1872,7 @@
     }
   }
 
-function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; }
+function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {

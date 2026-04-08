@@ -4739,6 +4739,38 @@ console.log('\n=== app.js: formatDistance ===');
     const ctx = makeDistCtx('en-BE', 'mi');
     assert.strictEqual(ctx.formatDistanceRound(200), '124 mi');
   });
+  test('formatDistance: 0 in km mode → "0 m"', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistance(0), '0 m');
+  });
+  test('formatDistance: 0 in mi mode → "0 ft"', () => {
+    const ctx = makeDistCtx('en-BE', 'mi');
+    assert.strictEqual(ctx.formatDistance(0), '0 ft');
+  });
+  test('formatDistance: NaN input returns —', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistance(NaN), '—');
+  });
+  test('formatDistance: "abc" input returns —', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistance('abc'), '—');
+  });
+  test('formatDistanceRound: null input returns —', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistanceRound(null), '—');
+  });
+  test('formatDistanceRound: NaN input returns —', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistanceRound(NaN), '—');
+  });
+  test('formatDistanceRound: 0 in km mode → "0 km"', () => {
+    const ctx = makeDistCtx('en-BE', 'km');
+    assert.strictEqual(ctx.formatDistanceRound(0), '0 km');
+  });
+  test('formatDistance: mi mode sub-0.1mi shows feet', () => {
+    const ctx = makeDistCtx('en-BE', 'mi');
+    assert.strictEqual(ctx.formatDistance(0.01), '33 ft');
+  });
 }
 
 // ===== SUMMARY =====
