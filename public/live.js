@@ -840,19 +840,27 @@
             <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
           </div>
         </div>
-        <div class="live-overlay live-feed" id="liveFeed" aria-live="polite" aria-relevant="additions" role="log">
-          <button class="panel-corner-btn" data-panel="liveFeed" title="Move panel to next corner" aria-label="Move panel to next corner">↗</button>
-          <button class="feed-hide-btn" id="feedHideBtn" title="Hide feed">✕</button>
+        <div class="live-overlay live-feed" id="liveFeed">
+          <div class="panel-header">
+            <button class="panel-corner-btn" data-panel="liveFeed" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
+            <button class="feed-hide-btn" id="feedHideBtn" title="Hide feed">✕</button>
+          </div>
+          <div class="panel-content" aria-live="polite" aria-relevant="additions" role="log"></div>
         </div>
         <button class="feed-show-btn hidden" id="feedShowBtn" title="Show feed">📋</button>
         <div class="live-overlay live-node-detail hidden" id="liveNodeDetail">
-          <button class="panel-corner-btn" data-panel="liveNodeDetail" title="Move panel to next corner" aria-label="Move panel to next corner">↙</button>
-          <button class="feed-hide-btn" id="nodeDetailClose" title="Close">✕</button>
-          <div id="nodeDetailContent"></div>
+          <div class="panel-header">
+            <button class="panel-corner-btn" data-panel="liveNodeDetail" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
+            <button class="feed-hide-btn" id="nodeDetailClose" title="Close">✕</button>
+          </div>
+          <div class="panel-content" id="nodeDetailContent"></div>
         </div>
         <button class="legend-toggle-btn" id="legendToggleBtn" aria-label="Show legend" title="Show legend">🎨</button>
         <div class="live-overlay live-legend" id="liveLegend" role="region" aria-label="Map legend">
-          <button class="panel-corner-btn" data-panel="liveLegend" title="Move panel to next corner" aria-label="Move panel to next corner">↖</button>
+          <div class="panel-header">
+            <button class="panel-corner-btn" data-panel="liveLegend" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
+          </div>
+          <div class="panel-content">
           <h3 class="legend-title">PACKET TYPES</h3>
           <ul class="legend-list">
             <li><span class="live-dot" style="background:${TYPE_COLORS.ADVERT}" aria-hidden="true"></span> Advert — Node advertisement</li>
@@ -863,6 +871,7 @@
           </ul>
           <h3 class="legend-title" style="margin-top:8px">NODE ROLES</h3>
           <ul class="legend-list" id="roleLegendList"></ul>
+          </div>
         </div>
 
         <!-- VCR Bar -->
@@ -1594,7 +1603,9 @@
   function rebuildFeedList() {
     const feed = document.getElementById('liveFeed');
     if (!feed) return;
-    feed.querySelectorAll('.live-feed-item').forEach(el => el.remove());
+    const feedContent = feed.querySelector('.panel-content');
+    if (!feedContent) return;
+    feedContent.querySelectorAll('.live-feed-item').forEach(el => el.remove());
     feedDedup.clear();
 
     // Aggregate VCR buffer by hash, then create one feed item per unique hash
@@ -1661,7 +1672,7 @@
       `;
       if (_ccChan1) item._ccChannel = _ccChan1; // channel color picker (#674)
       item.addEventListener('click', () => showFeedCard(item, pkt, color));
-      feed.appendChild(item);
+      feedContent.appendChild(item);
 
       // Register in dedup map so replay and live updates work
       if (group.hash) {
@@ -2700,7 +2711,8 @@
   const DEDUP_WINDOW = 30000;
 
   function addFeedItem(icon, typeName, payload, hops, color, pkt) {
-    const feed = document.getElementById('liveFeed');
+    const feedPanel = document.getElementById('liveFeed');
+    const feed = feedPanel ? feedPanel.querySelector('.panel-content') : null;
     if (!feed) return;
     if (showOnlyFavorites && !packetInvolvesFavorite(pkt)) return;
 
