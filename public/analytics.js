@@ -1881,6 +1881,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     window._analyticsSaveChannelSort = saveChannelSort;
     window._analyticsChannelTbodyHtml = channelTbodyHtml;
     window._analyticsChannelTheadHtml = channelTheadHtml;
+    window._analyticsRfNFColumnChart = rfNFColumnChart;
   }
 
   // ─── Neighbor Graph Tab ─────────────────────────────────────────────────────
@@ -2932,7 +2933,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       // Render noise floor chart
       const nfEl = document.getElementById('rfDetailNFChart');
       if (nfEl && nfData.length > 1) {
-        nfEl.innerHTML = rfNFLineChart(nfData, nfEl.clientWidth || 700, 180, reboots, minT, maxT);
+        nfEl.innerHTML = rfNFColumnChart(nfData, nfEl.clientWidth || 700, 180, reboots, minT, maxT);
       } else if (nfEl) {
         nfEl.innerHTML = '<span class="text-muted">Not enough noise floor data</span>';
       }
@@ -3196,7 +3197,13 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     return svg;
   }
 
-  function rfNFLineChart(data, w, h, reboots, sharedMinT, sharedMaxT) {
+  /**
+   * Noise floor column chart — color-coded bars (green/yellow/red) by threshold.
+   * Replaces the old line chart for better discrete-sample readability.
+   * Thresholds: green (< -100 dBm), yellow (-100 to -85 dBm), red (≥ -85 dBm).
+   */
+  function rfNFColumnChart(data, w, h, reboots, sharedMinT, sharedMaxT) {
+    if (!data || !data.length) return '<svg viewBox="0 0 1 1"></svg>';
     reboots = reboots || [];
     const pad = { top: 20, right: 40, bottom: 30, left: 55 };
     const cw = w - pad.left - pad.right;
@@ -3213,25 +3220,22 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     const sx = t => pad.left + ((t - minT) / rangeT) * cw;
     const sy = v => pad.top + ch - ((v - minV) / rangeV) * ch;
 
-    const pts = data.map(d => `${sx(new Date(d.t).getTime()).toFixed(1)},${sy(d.v).toFixed(1)}`).join(' ');
+    // Column width: proportional to chart width / data points, min 2px, gap of 1px
+    const colW = Math.max(2, Math.floor(cw / data.length) - 1);
 
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Noise floor line chart"><title>Noise floor over time</title>`;
+    // Detect average interval for gap detection
+    const times = data.map(d => new Date(d.t).getTime());
+    const avgInterval = data.length > 1 ? (times[times.length - 1] - times[0]) / (data.length - 1) : Infinity;
+
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Noise floor column chart"><title>Noise floor over time</title>`;
+
+    // Inline style for hover highlighting
+    svg += `<style>.nf-bar{transition:opacity 0.05s}.nf-bar:hover{opacity:0.75;stroke:var(--text);stroke-width:1}</style>`;
 
     // Chart title
     svg += `<text x="${pad.left}" y="12" font-size="10" fill="var(--text-muted)" font-weight="600">Noise Floor dBm</text>`;
 
-    // Reference lines
-    const refLines = [-100, -85];
-    const refLabels = ['-100 warning', '-85 critical'];
-    refLines.forEach((ref, i) => {
-      if (ref >= minV && ref <= maxV) {
-        const y = sy(ref);
-        svg += `<line x1="${pad.left}" y1="${y.toFixed(1)}" x2="${w - pad.right}" y2="${y.toFixed(1)}" stroke="var(--text-muted)" stroke-width="0.5" stroke-dasharray="4,2"/>`;
-        svg += `<text x="${w - pad.right + 2}" y="${(y + 3).toFixed(1)}" font-size="9" fill="var(--text-muted)">${refLabels[i]}</text>`;
-      }
-    });
-
-    // Y-axis labels
+    // Y-axis labels + grid lines
     const yTicks = 5;
     for (let i = 0; i <= yTicks; i++) {
       const v = minV + (rangeV * i / yTicks);
@@ -3246,23 +3250,41 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     // X-axis labels
     svg += rfXAxisLabels(data, sx, h, pad);
 
-    // Data polyline
-    svg += `<polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>`;
+    // Color-coded columns
+    for (let i = 0; i < data.length; i++) {
+      const t = times[i];
+      // Gap detection: skip if gap > 2× average interval from previous point
+      if (i > 0 && (t - times[i - 1]) > avgInterval * 2.5) continue;
 
-    // Hover tooltips
-    svg += rfTooltipCircles(data, sx, sy, 'NF', ' dBm');
+      const v = data[i].v;
+      const x = sx(t) - colW / 2;
+      const y = sy(v);
+      const barH = pad.top + ch - y;
 
-    // Direct labels: min and max points
-    const times = data.map(d => new Date(d.t).getTime());
-    const maxIdx = values.indexOf(maxV);
-    const minIdx = values.indexOf(minV);
-    svg += `<circle cx="${sx(times[maxIdx]).toFixed(1)}" cy="${sy(maxV).toFixed(1)}" r="3" fill="var(--danger, red)"/>`;
-    svg += `<text x="${sx(times[maxIdx]).toFixed(1)}" y="${(sy(maxV) - 6).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--danger, red)">${maxV.toFixed(1)}</text>`;
-    svg += `<circle cx="${sx(times[minIdx]).toFixed(1)}" cy="${sy(minV).toFixed(1)}" r="3" fill="var(--success, green)"/>`;
-    svg += `<text x="${sx(times[minIdx]).toFixed(1)}" y="${(sy(minV) + 14).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--success, green)">${minV.toFixed(1)}</text>`;
+      // Threshold color: green < -100, yellow -100 to -85, red >= -85
+      let color;
+      if (v < -100) color = 'var(--success, #22c55e)';
+      else if (v < -85) color = 'var(--warning, #eab308)';
+      else color = 'var(--danger, #ef4444)';
+
+      const ts = new Date(data[i].t).toISOString().replace('T', ' ').replace(/\.\d+Z/, ' UTC');
+      const tip = `NF: ${v.toFixed(1)} dBm\n${ts}`;
+
+      svg += `<rect class="nf-bar" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${colW}" height="${Math.max(0, barH).toFixed(1)}" fill="${color}" rx="0.5"><title>${tip}</title></rect>`;
+    }
 
     // Y-axis label
     svg += `<text x="12" y="${(h / 2)}" text-anchor="middle" font-size="10" fill="var(--text-muted)" transform="rotate(-90,12,${h/2})">dBm</text>`;
+
+    // Legend
+    const legendY = pad.top + 2;
+    const legendX = w - pad.right - 140;
+    svg += `<rect x="${legendX}" y="${legendY}" width="8" height="8" fill="var(--success, #22c55e)" rx="1"/>`;
+    svg += `<text x="${legendX + 11}" y="${legendY + 7}" font-size="8" fill="var(--text-muted)">&lt; -100</text>`;
+    svg += `<rect x="${legendX + 48}" y="${legendY}" width="8" height="8" fill="var(--warning, #eab308)" rx="1"/>`;
+    svg += `<text x="${legendX + 59}" y="${legendY + 7}" font-size="8" fill="var(--text-muted)">-100…-85</text>`;
+    svg += `<rect x="${legendX + 105}" y="${legendY}" width="8" height="8" fill="var(--danger, #ef4444)" rx="1"/>`;
+    svg += `<text x="${legendX + 116}" y="${legendY + 7}" font-size="8" fill="var(--text-muted)">≥ -85</text>`;
 
     svg += '</svg>';
     return svg;

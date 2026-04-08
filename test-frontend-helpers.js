@@ -2079,6 +2079,113 @@ console.log('\n=== analytics.js: sortChannels ===');
   });
 }
 
+// ===== analytics.js: rfNFColumnChart =====
+console.log('\n=== analytics.js: rfNFColumnChart ===');
+{
+  function makeAnalyticsSandbox2() {
+    const ctx = makeSandbox();
+    ctx.getComputedStyle = () => ({ getPropertyValue: () => '' });
+    ctx.registerPage = () => {};
+    ctx.api = () => Promise.resolve({});
+    ctx.timeAgo = (iso) => iso ? 'x ago' : '—';
+    ctx.RegionFilter = { init: () => {}, onChange: () => {}, regionQueryString: () => '' };
+    ctx.onWS = () => {};
+    ctx.offWS = () => {};
+    ctx.connectWS = () => {};
+    ctx.invalidateApiCache = () => {};
+    ctx.makeColumnsResizable = () => {};
+    ctx.initTabBar = () => {};
+    ctx.IATA_COORDS_GEO = {};
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    try { loadInCtx(ctx, 'public/analytics.js'); } catch (e) {
+      for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+    }
+    return ctx;
+  }
+
+  const ctx2 = makeAnalyticsSandbox2();
+  const rfNFColumnChart = ctx2.window._analyticsRfNFColumnChart;
+
+  test('rfNFColumnChart is exposed', () => assert.ok(rfNFColumnChart, '_analyticsRfNFColumnChart must be exposed'));
+
+  test('returns SVG string with column bars', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -110 },
+      { t: '2024-01-01T00:05:00Z', v: -95 },
+      { t: '2024-01-01T00:10:00Z', v: -80 },
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    assert.ok(svg.includes('<svg'), 'should produce SVG');
+    assert.ok(svg.includes('class="nf-bar"'), 'should have column bars');
+    assert.ok(svg.includes('Noise floor column chart'), 'should have aria label');
+  });
+
+  test('color-codes bars by threshold', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -110 },  // green (< -100)
+      { t: '2024-01-01T00:05:00Z', v: -95 },   // yellow (-100 to -85)
+      { t: '2024-01-01T00:10:00Z', v: -80 },   // red (>= -85)
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    assert.ok(svg.includes('var(--success'), 'green bar for < -100');
+    assert.ok(svg.includes('var(--warning'), 'yellow bar for -100 to -85');
+    assert.ok(svg.includes('var(--danger'), 'red bar for >= -85');
+  });
+
+  test('includes hover tooltips in bars', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -105 },
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    assert.ok(svg.includes('<title>NF: -105.0 dBm'), 'tooltip with dBm value');
+  });
+
+  test('handles empty data gracefully', () => {
+    const svg = rfNFColumnChart([], 700, 180, []);
+    assert.ok(svg.includes('<svg'), 'should return empty SVG');
+  });
+
+  test('handles single data point', () => {
+    const data = [{ t: '2024-01-01T00:00:00Z', v: -100 }];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    assert.ok(svg.includes('class="nf-bar"'), 'should render single bar');
+  });
+
+  test('includes legend', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -110 },
+      { t: '2024-01-01T00:05:00Z', v: -90 },
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    assert.ok(svg.includes('&lt; -100'), 'legend has green label');
+    assert.ok(svg.includes('-100…-85'), 'legend has yellow label');
+    assert.ok(svg.includes('≥ -85'), 'legend has red label');
+  });
+
+  test('no reference lines (removed per spec)', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -110 },
+      { t: '2024-01-01T00:05:00Z', v: -80 },
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    assert.ok(!svg.includes('-100 warning'), 'no -100 warning reference line');
+    assert.ok(!svg.includes('-85 critical'), 'no -85 critical reference line');
+    assert.ok(!svg.includes('stroke-dasharray="4,2"'), 'no dashed reference lines');
+  });
+
+  test('respects shared time axis', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -100 },
+      { t: '2024-01-01T00:05:00Z', v: -95 },
+    ];
+    const minT = new Date('2023-12-31T00:00:00Z').getTime();
+    const maxT = new Date('2024-01-02T00:00:00Z').getTime();
+    const svg = rfNFColumnChart(data, 700, 180, [], minT, maxT);
+    assert.ok(svg.includes('class="nf-bar"'), 'renders with shared time axis');
+  });
+}
+
 
 // ===== CUSTOMIZE-V2.JS: core behavior =====
 console.log('\n=== customize-v2.js: core behavior ===');
