@@ -3223,9 +3223,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     // Column width: proportional to chart width / data points, min 2px, gap of 1px
     const colW = Math.max(2, Math.floor(cw / data.length) - 1);
 
-    // Detect average interval for gap detection
     const times = data.map(d => new Date(d.t).getTime());
-    const avgInterval = data.length > 1 ? (times[times.length - 1] - times[0]) / (data.length - 1) : Infinity;
 
     let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Noise floor column chart"><title>Noise floor over time</title>`;
 
@@ -3253,9 +3251,6 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     // Color-coded columns
     for (let i = 0; i < data.length; i++) {
       const t = times[i];
-      // Gap detection: skip if gap > 2× average interval from previous point
-      if (i > 0 && (t - times[i - 1]) > avgInterval * 2.5) continue;
-
       const v = data[i].v;
       const x = sx(t) - colW / 2;
       const y = sy(v);

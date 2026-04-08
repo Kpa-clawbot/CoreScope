@@ -2174,6 +2174,17 @@ console.log('\n=== analytics.js: rfNFColumnChart ===');
     assert.ok(!svg.includes('stroke-dasharray="4,2"'), 'no dashed reference lines');
   });
 
+  test('renders all bars even with time gaps', () => {
+    const data = [
+      { t: '2024-01-01T00:00:00Z', v: -110 },
+      { t: '2024-01-01T06:00:00Z', v: -95 },  // 6h gap
+      { t: '2024-01-01T06:05:00Z', v: -80 },
+    ];
+    const svg = rfNFColumnChart(data, 700, 180, []);
+    const barCount = (svg.match(/class="nf-bar"/g) || []).length;
+    assert.strictEqual(barCount, 3, 'all 3 bars rendered despite time gap');
+  });
+
   test('respects shared time axis', () => {
     const data = [
       { t: '2024-01-01T00:00:00Z', v: -100 },
