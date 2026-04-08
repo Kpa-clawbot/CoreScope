@@ -219,6 +219,15 @@
     var feed = document.getElementById('liveFeed');
     if (!feed) return;
 
+    // Click on color dot opens picker (#674)
+    feed.addEventListener('click', function(e) {
+      var dot = e.target.closest('.feed-color-dot');
+      if (!dot) return;
+      e.stopPropagation();
+      var ch = dot.getAttribute('data-channel');
+      if (ch) showPopover(ch, e.clientX, e.clientY);
+    });
+
     feed.addEventListener('contextmenu', function(e) {
       var item = e.target.closest('.live-feed-item');
       if (!item || !item._ccChannel) return;

@@ -1642,6 +1642,10 @@
       const hopStr = longestHops.length ? `<span class="feed-hops">${longestHops.length}⇢</span>` : '';
       const obsBadge = group.count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${group.count}</span>` : '';
 
+      var _ccPayload = (pkt.decoded || {}).payload || {};
+      var _ccChan1 = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload.channel || null) : null;
+      var dotHtml1 = _ccChan1 ? _feedColorDot(_ccChan1) : '';
+
       const item = document.createElement('div');
       item.className = 'live-feed-item';
       item.setAttribute('tabindex', '0');
@@ -1651,11 +1655,11 @@
       item.innerHTML = `
         <span class="feed-icon" style="color:${color}">${icon}</span>
         <span class="feed-type" style="color:${color}">${typeName}</span>
-        ${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+        ${dotHtml1}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
         <span class="feed-text">${escapeHtml(preview)}</span>
         <span class="feed-time">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
       `;
-      var _ccPayload = (pkt.decoded || {}).payload || {}; if (typeName === 'GRP_TXT' || typeName === 'CHAN') item._ccChannel = _ccPayload.channel || null; // channel color picker (#674)
+      if (_ccChan1) item._ccChannel = _ccChan1; // channel color picker (#674)
       item.addEventListener('click', () => showFeedCard(item, pkt, color));
       feed.appendChild(item);
 
@@ -2642,10 +2646,22 @@
   function _getChannelStyle(pkt) {
     if (!window.ChannelColors) return '';
     var d = pkt.decoded || {};
-    var h = d.header || {};
     var p = d.payload || {};
+    var typeName = p.type || (d.header || {}).payloadTypeName || '';
     var ch = p.channel || null;
-    return window.ChannelColors.getRowStyle(h.payloadTypeName || '', ch);
+    return window.ChannelColors.getRowStyle(typeName, ch);
+  }
+
+  /** Build a clickable 12×12 color dot for a channel feed item (#674). */
+  function _feedColorDot(channel) {
+    if (!channel || !window.ChannelColors) return '';
+    var c = window.ChannelColors.get(channel);
+    var bg = c || 'transparent';
+    var border = c ? c : 'var(--border-color, #555)';
+    var style = c
+      ? 'background:' + bg + ';border:1px solid ' + border
+      : 'background:transparent;border:1px dashed ' + border;
+    return '<span class="feed-color-dot" data-channel="' + escapeHtml(channel) + '" style="display:inline-block;width:12px;height:12px;border-radius:50%;' + style + ';cursor:pointer;vertical-align:middle;margin-left:4px;flex-shrink:0" title="Set color for ' + escapeHtml(channel) + '"></span>';
   }
 
   function addFeedItemDOM(icon, typeName, payload, hops, color, pkt, feed) {
@@ -2653,6 +2669,9 @@
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = pkt.observation_count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${pkt.observation_count}</span>` : '';
+    var _ccPayload2 = (pkt.decoded || {}).payload || {};
+    var _ccChan = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload2.channel || null) : null;
+    var dotHtml = _ccChan ? _feedColorDot(_ccChan) : '';
     const item = document.createElement('div');
     item.className = 'live-feed-item';
     item.setAttribute('tabindex', '0');
@@ -2664,11 +2683,11 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
-    var _ccPayload2 = (pkt.decoded || {}).payload || {}; if (typeName === 'GRP_TXT' || typeName === 'CHAN') item._ccChannel = _ccPayload2.channel || null; // channel color picker (#674)
+    if (_ccChan) item._ccChannel = _ccChan; // channel color picker (#674)
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.appendChild(item);
   }
@@ -2723,6 +2742,9 @@
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = incomingObs > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${incomingObs}</span>` : '';
+    var _ccPayload3 = (pkt.decoded || {}).payload || {};
+    var _ccChan3 = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload3.channel || null) : null;
+    var dotHtml3 = _ccChan3 ? _feedColorDot(_ccChan3) : '';
 
     const item = document.createElement('div');
     item.className = 'live-feed-item live-feed-enter';
@@ -2736,11 +2758,11 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+      ${dotHtml3}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
-    var _ccPayload3 = (pkt.decoded || {}).payload || {}; if (typeName === 'GRP_TXT' || typeName === 'CHAN') item._ccChannel = _ccPayload3.channel || null; // channel color picker (#674)
+    if (_ccChan3) item._ccChannel = _ccChan3; // channel color picker (#674)
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.prepend(item);
     requestAnimationFrame(() => requestAnimationFrame(() => item.classList.remove('live-feed-enter')));
