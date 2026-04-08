@@ -1900,7 +1900,7 @@
       }
       firstPathDone = true;
       // For TRACE packets, split at hopsCompleted: solid for completed, dashed for remaining
-      var hopsCompleted = decoded.path?.hopsCompleted;
+      var hopsCompleted = decoded.path && decoded.path.hopsCompleted;
       if (typeName === 'TRACE' && hopsCompleted != null && hopsCompleted < allPaths[ai].hopPositions.length) {
         var completedPositions = allPaths[ai].hopPositions.slice(0, hopsCompleted + 1);
         var remainingPositions = allPaths[ai].hopPositions.slice(hopsCompleted);
@@ -1920,6 +1920,8 @@
 
   // Draw a static dashed/ghosted line for unreached TRACE hops
   function drawDashedPath(hopPositions, color) {
+    var GHOST_TIMEOUT_MS = 10000;
+    var ghostColor = getComputedStyle(document.documentElement).getPropertyValue('--trace-ghost-color').trim() || '#94a3b8';
     if (!pathsLayer) return;
     for (var i = 0; i < hopPositions.length - 1; i++) {
       var from = hopPositions[i].pos;
@@ -1932,21 +1934,21 @@
         var hp = hopPositions[i];
         if (!nodeMarkers[hp.key]) {
           var ghost = L.circleMarker(hp.pos, {
-            radius: 3, fillColor: '#94a3b8', fillOpacity: 0.2, color: color, weight: 1, opacity: 0.3
+            radius: 3, fillColor: ghostColor, fillOpacity: 0.2, color: color, weight: 1, opacity: 0.3
           }).addTo(pathsLayer);
-          setTimeout((function(g) { return function() { if (pathsLayer.hasLayer(g)) pathsLayer.removeLayer(g); }; })(ghost), 10000);
+          setTimeout((function(g) { return function() { if (pathsLayer.hasLayer(g)) pathsLayer.removeLayer(g); }; })(ghost), GHOST_TIMEOUT_MS);
         }
       }
-      // Remove dashed line after 10 seconds
-      setTimeout((function(l) { return function() { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), 10000);
+      // Remove dashed line after timeout
+      setTimeout((function(l) { return function() { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), GHOST_TIMEOUT_MS);
     }
     // Ghost marker for the final unreached hop
     var last = hopPositions[hopPositions.length - 1];
     if (!nodeMarkers[last.key]) {
       var ghostEnd = L.circleMarker(last.pos, {
-        radius: 4, fillColor: '#94a3b8', fillOpacity: 0.25, color: color, weight: 1, opacity: 0.35
+        radius: 4, fillColor: ghostColor, fillOpacity: 0.25, color: color, weight: 1, opacity: 0.35
       }).addTo(pathsLayer);
-      setTimeout(function() { if (pathsLayer.hasLayer(ghostEnd)) pathsLayer.removeLayer(ghostEnd); }, 10000);
+      setTimeout(function() { if (pathsLayer.hasLayer(ghostEnd)) pathsLayer.removeLayer(ghostEnd); }, GHOST_TIMEOUT_MS);
     }
   }
 
