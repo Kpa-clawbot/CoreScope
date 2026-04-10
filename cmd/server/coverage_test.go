@@ -4386,3 +4386,53 @@ func TestHandleBatchObservations(t *testing.T) {
 		}
 	})
 }
+
+// TestIngestTraceBroadcastIncludesPath verifies that TRACE packet broadcasts
+// include decoded.path with hopsCompleted (#683).
+func TestIngestTraceBroadcastIncludesPath(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	store := NewPacketStore(db, nil)
+	store.Load()
+
+	initialMax := store.MaxTransmissionID()
+
+	// TRACE packet: header=0x25, path_byte=0x02 (2 SNR bytes), 2 SNR bytes,
+	// then payload: tag(4) + authCode(4) + flags(1) + 4 hop hashes (1-byte each)
+	traceHex := "2502AABB010000000200000000DEADBEEF"
+	now := time.Now().UTC().Format(time.RFC3339)
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
+		VALUES (?, 'tracehash683test', ?, 1, 9, '')`, traceHex, now)
+	newTxID := 0
+	db.conn.QueryRow("SELECT MAX(id) FROM transmissions").Scan(&newTxID)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (?, 1, 5.0, -100, '["aa"]', ?)`, newTxID, time.Now().Unix())
+
+	broadcastMaps, _ := store.IngestNewFromDB(initialMax, 100)
+	if len(broadcastMaps) < 1 {
+		t.Fatal("expected >=1 broadcast maps")
+	}
+
+	bm := broadcastMaps[0]
+	decoded, ok := bm["decoded"].(map[string]interface{})
+	if !ok {
+		t.Fatal("broadcast map missing 'decoded'")
+	}
+
+	pathObj, ok := decoded["path"]
+	if !ok {
+		t.Fatal("decoded missing 'path' for TRACE packet — hopsCompleted not delivered to frontend (#683)")
+	}
+
+	// The path should be a Path struct with HopsCompleted = 2
+	pathStruct, ok := pathObj.(Path)
+	if !ok {
+		t.Fatalf("expected Path struct, got %T", pathObj)
+	}
+	if pathStruct.HopsCompleted == nil {
+		t.Fatal("path.HopsCompleted is nil for TRACE packet")
+	}
+	if *pathStruct.HopsCompleted != 2 {
+		t.Errorf("expected hopsCompleted=2, got %d", *pathStruct.HopsCompleted)
+	}
+}

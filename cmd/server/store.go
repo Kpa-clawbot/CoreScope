@@ -1414,6 +1414,13 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				decoded["payload"] = payload
 			}
 		}
+		// For TRACE packets, decode the full packet to include path.hopsCompleted
+		// so the frontend can distinguish completed vs remaining hops (#683).
+		if tx.PayloadType != nil && *tx.PayloadType == PayloadTRACE && tx.RawHex != "" {
+			if dp, err := DecodePacket(tx.RawHex); err == nil {
+				decoded["path"] = dp.Path
+			}
+		}
 		for _, obs := range tx.Observations {
 			// Build the nested packet object (packets.js checks m.data.packet)
 			pkt := map[string]interface{}{
@@ -1662,6 +1669,13 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			var payload map[string]interface{}
 			if json.Unmarshal([]byte(tx.DecodedJSON), &payload) == nil {
 				decoded["payload"] = payload
+			}
+		}
+		// For TRACE packets, decode the full packet to include path.hopsCompleted
+		// so the frontend can distinguish completed vs remaining hops (#683).
+		if tx.PayloadType != nil && *tx.PayloadType == PayloadTRACE && tx.RawHex != "" {
+			if dp, err := DecodePacket(tx.RawHex); err == nil {
+				decoded["path"] = dp.Path
 			}
 		}
 
