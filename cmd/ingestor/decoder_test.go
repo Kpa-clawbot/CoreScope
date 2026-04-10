@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/aes"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
@@ -1600,5 +1601,123 @@ func TestDirectNonZeroHopKeepsHashSize(t *testing.T) {
 	}
 	if pkt.Path.HashSize != 1 {
 		t.Errorf("DIRECT with 1 hop: want HashSize=1, got %d", pkt.Path.HashSize)
+	}
+}
+
+func TestValidateAdvertSignature(t *testing.T) {
+	// Generate a real ed25519 key pair
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubHex := hex.EncodeToString(pub)
+
+	var timestamp uint32 = 1234567890
+	appdata := []byte{0x02, 0x11, 0x22} // flags + some data
+
+	// Build the message the same way validateAdvertSignature does
+	message := make([]byte, 32+4+len(appdata))
+	copy(message[0:32], pub)
+	binary.LittleEndian.PutUint32(message[32:36], timestamp)
+	copy(message[36:], appdata)
+
+	sig := ed25519.Sign(priv, message)
+	sigHex := hex.EncodeToString(sig)
+
+	// Valid signature
+	valid, err := validateAdvertSignature(pubHex, sigHex, timestamp, appdata)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !valid {
+		t.Error("expected valid signature")
+	}
+
+	// Tampered appdata → invalid
+	badAppdata := []byte{0x03, 0x11, 0x22}
+	valid, err = validateAdvertSignature(pubHex, sigHex, timestamp, badAppdata)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if valid {
+		t.Error("expected invalid signature with tampered appdata")
+	}
+
+	// Wrong timestamp → invalid
+	valid, err = validateAdvertSignature(pubHex, sigHex, timestamp+1, appdata)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if valid {
+		t.Error("expected invalid signature with wrong timestamp")
+	}
+
+	// Malformed pubkey
+	_, err = validateAdvertSignature("ZZZZ", sigHex, timestamp, appdata)
+	if err == nil {
+		t.Error("expected error for malformed pubkey hex")
+	}
+
+	// Wrong length pubkey
+	_, err = validateAdvertSignature("AABB", sigHex, timestamp, appdata)
+	if err == nil {
+		t.Error("expected error for short pubkey")
+	}
+
+	// Malformed signature
+	_, err = validateAdvertSignature(pubHex, "ZZZZ", timestamp, appdata)
+	if err == nil {
+		t.Error("expected error for malformed signature hex")
+	}
+
+	// Wrong length signature
+	_, err = validateAdvertSignature(pubHex, "AABB", timestamp, appdata)
+	if err == nil {
+		t.Error("expected error for short signature")
+	}
+}
+
+func TestDecodeAdvertWithSignatureValidation(t *testing.T) {
+	// Generate key pair
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var timestamp uint32 = 1000000
+	appdata := []byte{0x02} // repeater type, no location
+
+	// Build signed message
+	message := make([]byte, 32+4+len(appdata))
+	copy(message[0:32], pub)
+	binary.LittleEndian.PutUint32(message[32:36], timestamp)
+	copy(message[36:], appdata)
+	sig := ed25519.Sign(priv, message)
+
+	// Build advert buffer: pubkey(32) + timestamp(4) + signature(64) + appdata
+	buf := make([]byte, 0, 101)
+	buf = append(buf, pub...)
+	ts := make([]byte, 4)
+	binary.LittleEndian.PutUint32(ts, timestamp)
+	buf = append(buf, ts...)
+	buf = append(buf, sig...)
+	buf = append(buf, appdata...)
+
+	// With validation enabled
+	p := decodeAdvert(buf, true)
+	if p.Error != "" {
+		t.Fatalf("decode error: %s", p.Error)
+	}
+	if p.SignatureValid == nil {
+		t.Fatal("SignatureValid should be set when validation enabled")
+	}
+	if !*p.SignatureValid {
+		t.Error("expected valid signature")
+	}
+
+	// Without validation
+	p2 := decodeAdvert(buf, false)
+	if p2.SignatureValid != nil {
+		t.Error("SignatureValid should be nil when validation disabled")
 	}
 }
