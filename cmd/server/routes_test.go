@@ -774,6 +774,67 @@ func TestNodeHealthNotFound(t *testing.T) {
 	}
 }
 
+// TestNodeHealthPartialFromPackets verifies that a node with packets in the
+// in-memory store but no DB entry returns a partial 200 response instead of 404.
+// This is the fix for issue #665 (companion nodes without adverts).
+func TestNodeHealthPartialFromPackets(t *testing.T) {
+	srv, router := setupTestServer(t)
+
+	// Inject a packet into byNode for a pubkey that doesn't exist in the nodes table
+	ghostPubkey := "ghost_companion_no_advert"
+	now := time.Now().UTC().Format(time.RFC3339)
+	snr := 5.0
+	srv.store.mu.Lock()
+	if srv.store.byNode == nil {
+		srv.store.byNode = make(map[string][]*StoreTx)
+	}
+	if srv.store.nodeHashes == nil {
+		srv.store.nodeHashes = make(map[string]map[string]bool)
+	}
+	srv.store.byNode[ghostPubkey] = []*StoreTx{
+		{Hash: "abc123", FirstSeen: now, SNR: &snr, ObservationCount: 1},
+	}
+	srv.store.nodeHashes[ghostPubkey] = map[string]bool{"abc123": true}
+	srv.store.mu.Unlock()
+
+	req := httptest.NewRequest("GET", "/api/nodes/"+ghostPubkey+"/health", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200 for ghost companion, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("json unmarshal: %v", err)
+	}
+
+	// Should have a synthetic node stub
+	node, ok := body["node"].(map[string]interface{})
+	if !ok || node == nil {
+		t.Fatal("expected node in response")
+	}
+	if node["role"] != "unknown" {
+		t.Errorf("expected role=unknown, got %v", node["role"])
+	}
+	if node["public_key"] != ghostPubkey {
+		t.Errorf("expected public_key=%s, got %v", ghostPubkey, node["public_key"])
+	}
+
+	// Should have stats from the packet
+	stats, ok := body["stats"].(map[string]interface{})
+	if !ok || stats == nil {
+		t.Fatal("expected stats in response")
+	}
+	if stats["totalPackets"] != 1.0 { // JSON numbers are float64
+		t.Errorf("expected totalPackets=1, got %v", stats["totalPackets"])
+	}
+	if stats["lastHeard"] == nil {
+		t.Error("expected lastHeard to be set")
+	}
+}
+
 func TestBulkHealthEndpoint(t *testing.T) {
 	_, router := setupTestServer(t)
 	req := httptest.NewRequest("GET", "/api/nodes/bulk-health?limit=10", nil)

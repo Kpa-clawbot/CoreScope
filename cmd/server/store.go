@@ -5615,8 +5615,24 @@ func (s *PacketStore) GetBulkHealth(limit int, region string) []map[string]inter
 func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, error) {
 	// Fetch node info from DB (fast single-row lookup)
 	node, err := s.db.GetNodeByPubkey(pubkey)
-	if err != nil || node == nil {
+	if err != nil {
 		return nil, err
+	}
+	// If the node isn't in the DB (e.g. companion that never advertised),
+	// check if we have any packet data for it. If so, build a partial response.
+	if node == nil {
+		s.mu.RLock()
+		hasPackets := len(s.byNode[pubkey]) > 0
+		s.mu.RUnlock()
+		if !hasPackets {
+			return nil, nil
+		}
+		// Build a synthetic node stub so the rest of the function works
+		node = map[string]interface{}{
+			"public_key": pubkey,
+			"name":       "Unknown",
+			"role":       "unknown",
+		}
 	}
 
 	s.mu.RLock()

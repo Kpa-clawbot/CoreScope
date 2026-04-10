@@ -203,21 +203,13 @@ func TestHandleMessageChannelMessage(t *testing.T) {
 		t.Errorf("direction=%v, want rx", direction)
 	}
 
-	// Should create sender node
+	// Sender node should NOT be created (see issue #665: synthetic "sender-" keys
+	// are unreachable from the claiming/health flow)
 	if err := store.db.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 {
-		t.Errorf("nodes count=%d, want 1 (sender node)", count)
-	}
-
-	// Verify sender node name
-	var nodeName string
-	if err := store.db.QueryRow("SELECT name FROM nodes LIMIT 1").Scan(&nodeName); err != nil {
-		t.Fatal(err)
-	}
-	if nodeName != "Alice" {
-		t.Errorf("node name=%s, want Alice", nodeName)
+	if count != 0 {
+		t.Errorf("nodes count=%d, want 0 (no phantom sender node)", count)
 	}
 }
 
