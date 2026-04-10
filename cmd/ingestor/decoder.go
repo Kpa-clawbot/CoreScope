@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/aes"
-	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
@@ -12,6 +11,8 @@ import (
 	"math"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/meshcore-analyzer/sigvalidate"
 )
 
 // Route type constants (header bits 1-0)
@@ -217,26 +218,6 @@ func decodeAck(buf []byte) Payload {
 	}
 }
 
-func validateAdvertSignature(pubKeyHex, signatureHex string, timestamp uint32, appdata []byte) (bool, error) {
-	pubKey, err := hex.DecodeString(pubKeyHex)
-	if err != nil || len(pubKey) != 32 {
-		return false, fmt.Errorf("invalid pubkey")
-	}
-
-	signature, err := hex.DecodeString(signatureHex)
-	if err != nil || len(signature) != 64 {
-		return false, fmt.Errorf("invalid signature")
-	}
-
-	// Signed data: pubKey (32) + timestamp (4 LE) + appdata
-	message := make([]byte, 32+4+len(appdata))
-	copy(message[0:32], pubKey)
-	binary.LittleEndian.PutUint32(message[32:36], timestamp)
-	copy(message[36:], appdata)
-
-	return ed25519.Verify(ed25519.PublicKey(pubKey), message, signature), nil
-}
-
 func decodeAdvert(buf []byte, validateSignatures bool) Payload {
 	if len(buf) < 100 {
 		return Payload{Type: "ADVERT", Error: "too short for advert", RawHex: hex.EncodeToString(buf)}
@@ -256,7 +237,7 @@ func decodeAdvert(buf []byte, validateSignatures bool) Payload {
 	}
 
 	if validateSignatures {
-		valid, err := validateAdvertSignature(pubKey, signature, timestamp, appdata)
+		valid, err := sigvalidate.ValidateAdvert(buf[0:32], buf[36:100], timestamp, appdata)
 		if err != nil {
 			f := false
 			p.SignatureValid = &f
