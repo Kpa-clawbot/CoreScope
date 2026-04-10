@@ -10,6 +10,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/meshcore-analyzer/sigvalidate"
 )
 
 func TestDecodeHeaderRoutTypes(t *testing.T) {
@@ -1610,70 +1612,42 @@ func TestValidateAdvertSignature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pubHex := hex.EncodeToString(pub)
 
 	var timestamp uint32 = 1234567890
 	appdata := []byte{0x02, 0x11, 0x22} // flags + some data
 
-	// Build the message the same way validateAdvertSignature does
+	// Build the message the same way ValidateAdvertSignature does
 	message := make([]byte, 32+4+len(appdata))
 	copy(message[0:32], pub)
 	binary.LittleEndian.PutUint32(message[32:36], timestamp)
 	copy(message[36:], appdata)
 
 	sig := ed25519.Sign(priv, message)
-	sigHex := hex.EncodeToString(sig)
 
 	// Valid signature
-	valid, err := validateAdvertSignature(pubHex, sigHex, timestamp, appdata)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !valid {
+	if !sigvalidate.ValidateAdvertSignature(pub, sig, timestamp, appdata) {
 		t.Error("expected valid signature")
 	}
 
 	// Tampered appdata → invalid
 	badAppdata := []byte{0x03, 0x11, 0x22}
-	valid, err = validateAdvertSignature(pubHex, sigHex, timestamp, badAppdata)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if valid {
+	if sigvalidate.ValidateAdvertSignature(pub, sig, timestamp, badAppdata) {
 		t.Error("expected invalid signature with tampered appdata")
 	}
 
 	// Wrong timestamp → invalid
-	valid, err = validateAdvertSignature(pubHex, sigHex, timestamp+1, appdata)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if valid {
+	if sigvalidate.ValidateAdvertSignature(pub, sig, timestamp+1, appdata) {
 		t.Error("expected invalid signature with wrong timestamp")
 	}
 
-	// Malformed pubkey
-	_, err = validateAdvertSignature("ZZZZ", sigHex, timestamp, appdata)
-	if err == nil {
-		t.Error("expected error for malformed pubkey hex")
+	// Wrong length pubkey → false
+	if sigvalidate.ValidateAdvertSignature([]byte{0xAA, 0xBB}, sig, timestamp, appdata) {
+		t.Error("expected false for short pubkey")
 	}
 
-	// Wrong length pubkey
-	_, err = validateAdvertSignature("AABB", sigHex, timestamp, appdata)
-	if err == nil {
-		t.Error("expected error for short pubkey")
-	}
-
-	// Malformed signature
-	_, err = validateAdvertSignature(pubHex, "ZZZZ", timestamp, appdata)
-	if err == nil {
-		t.Error("expected error for malformed signature hex")
-	}
-
-	// Wrong length signature
-	_, err = validateAdvertSignature(pubHex, "AABB", timestamp, appdata)
-	if err == nil {
-		t.Error("expected error for short signature")
+	// Wrong length signature → false
+	if sigvalidate.ValidateAdvertSignature(pub, []byte{0xAA, 0xBB}, timestamp, appdata) {
+		t.Error("expected false for short signature")
 	}
 }
 

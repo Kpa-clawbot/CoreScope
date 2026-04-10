@@ -1,7 +1,11 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/binary"
 	"testing"
+
+	"github.com/meshcore-analyzer/sigvalidate"
 )
 
 func TestDecodeHeader_TransportFlood(t *testing.T) {
@@ -401,5 +405,90 @@ func TestDecodePacket_TraceFullyCompleted(t *testing.T) {
 	}
 	if len(pkt.Path.Hops) != 3 {
 		t.Errorf("expected 3 hops, got %d", len(pkt.Path.Hops))
+	}
+}
+
+func TestValidateAdvertSignature(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var timestamp uint32 = 1234567890
+	appdata := []byte{0x02, 0x11, 0x22}
+
+	message := make([]byte, 32+4+len(appdata))
+	copy(message[0:32], pub)
+	binary.LittleEndian.PutUint32(message[32:36], timestamp)
+	copy(message[36:], appdata)
+
+	sig := ed25519.Sign(priv, message)
+
+	// Valid signature
+	if !sigvalidate.ValidateAdvertSignature(pub, sig, timestamp, appdata) {
+		t.Error("expected valid signature")
+	}
+
+	// Tampered appdata
+	if sigvalidate.ValidateAdvertSignature(pub, sig, timestamp, []byte{0x03, 0x11, 0x22}) {
+		t.Error("expected invalid with tampered appdata")
+	}
+
+	// Wrong timestamp
+	if sigvalidate.ValidateAdvertSignature(pub, sig, timestamp+1, appdata) {
+		t.Error("expected invalid with wrong timestamp")
+	}
+
+	// Short pubkey
+	if sigvalidate.ValidateAdvertSignature([]byte{0xAA}, sig, timestamp, appdata) {
+		t.Error("expected false for short pubkey")
+	}
+
+	// Short signature
+	if sigvalidate.ValidateAdvertSignature(pub, []byte{0xBB}, timestamp, appdata) {
+		t.Error("expected false for short signature")
+	}
+}
+
+func TestDecodeAdvertWithSignatureValidation(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var timestamp uint32 = 1000000
+	appdata := []byte{0x02} // repeater type
+
+	message := make([]byte, 32+4+len(appdata))
+	copy(message[0:32], pub)
+	binary.LittleEndian.PutUint32(message[32:36], timestamp)
+	copy(message[36:], appdata)
+	sig := ed25519.Sign(priv, message)
+
+	// Build advert buffer: pubkey(32) + timestamp(4) + signature(64) + appdata
+	buf := make([]byte, 0, 101)
+	buf = append(buf, pub...)
+	ts := make([]byte, 4)
+	binary.LittleEndian.PutUint32(ts, timestamp)
+	buf = append(buf, ts...)
+	buf = append(buf, sig...)
+	buf = append(buf, appdata...)
+
+	// With validation
+	p := decodeAdvert(buf, true)
+	if p.Error != "" {
+		t.Fatalf("decode error: %s", p.Error)
+	}
+	if p.SignatureValid == nil {
+		t.Fatal("SignatureValid should be set when validation enabled")
+	}
+	if !*p.SignatureValid {
+		t.Error("expected valid signature")
+	}
+
+	// Without validation
+	p2 := decodeAdvert(buf, false)
+	if p2.SignatureValid != nil {
+		t.Error("SignatureValid should be nil when validation disabled")
 	}
 }
