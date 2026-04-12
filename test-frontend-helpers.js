@@ -4918,6 +4918,102 @@ console.log('\n=== app.js: formatDistance ===');
   });
 }
 
+// ===== analytics.js: renderMultiByteCapability =====
+console.log('\n=== analytics.js: renderMultiByteCapability ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  try { loadInCtx(ctx, 'public/analytics.js'); } catch (e) { /* IIFE side-effects ok */ }
+
+  const render = ctx.window._analyticsRenderMultiByteCapability;
+  test('renderMultiByteCapability is exposed', () => assert.ok(render, '_analyticsRenderMultiByteCapability must be exposed'));
+
+  if (render) {
+    test('empty array returns empty string', () => {
+      assert.strictEqual(render([]), '');
+    });
+
+    test('renders confirmed status with green indicator', () => {
+      const html = render([{ pubkey: 'aabb', name: 'RepA', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' }]);
+      assert.ok(html.includes('✅'), 'should contain confirmed icon');
+      assert.ok(html.includes('Confirmed'), 'should contain Confirmed label');
+      assert.ok(html.includes('--success'), 'should use --success CSS var for green');
+    });
+
+    test('renders suspected status with yellow indicator', () => {
+      const html = render([{ pubkey: 'ccdd', name: 'RepB', role: 'repeater', status: 'suspected', evidence: 'path', maxHashSize: 2, lastSeen: '' }]);
+      assert.ok(html.includes('⚠️'), 'should contain suspected icon');
+      assert.ok(html.includes('Suspected'), 'should contain Suspected label');
+      assert.ok(html.includes('--warning'), 'should use --warning CSS var for yellow');
+    });
+
+    test('renders unknown status with gray indicator', () => {
+      const html = render([{ pubkey: 'eeff', name: 'RepC', role: 'repeater', status: 'unknown', evidence: '', maxHashSize: 1, lastSeen: '' }]);
+      assert.ok(html.includes('❓'), 'should contain unknown icon');
+      assert.ok(html.includes('Unknown'), 'should contain Unknown label');
+      assert.ok(html.includes('--text-muted'), 'should use --text-muted CSS var for gray');
+    });
+
+    test('renders all three statuses together', () => {
+      const caps = [
+        { pubkey: 'aa11', name: 'R1', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 3, lastSeen: '' },
+        { pubkey: 'bb22', name: 'R2', role: 'repeater', status: 'suspected', evidence: 'path', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'cc33', name: 'R3', role: 'repeater', status: 'unknown', evidence: '', maxHashSize: 1, lastSeen: '' },
+      ];
+      const html = render(caps);
+      assert.ok(html.includes('R1'), 'should contain R1');
+      assert.ok(html.includes('R2'), 'should contain R2');
+      assert.ok(html.includes('R3'), 'should contain R3');
+      assert.ok(html.includes('3-byte'), 'should show 3-byte badge');
+      assert.ok(html.includes('2-byte'), 'should show 2-byte badge');
+      assert.ok(html.includes('1-byte'), 'should show 1-byte badge');
+    });
+
+    test('filter buttons show correct counts', () => {
+      const caps = [
+        { pubkey: 'a1', name: 'C1', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'a2', name: 'C2', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'b1', name: 'S1', role: 'repeater', status: 'suspected', evidence: 'path', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'c1', name: 'U1', role: 'repeater', status: 'unknown', evidence: '', maxHashSize: 1, lastSeen: '' },
+      ];
+      const html = render(caps);
+      assert.ok(html.includes('All (4)'), 'should show total count 4');
+      assert.ok(html.includes('✅ 2'), 'should show 2 confirmed');
+      assert.ok(html.includes('⚠️ 1'), 'should show 1 suspected');
+      assert.ok(html.includes('❓ 1'), 'should show 1 unknown');
+    });
+
+    test('evidence labels are correct', () => {
+      const html = render([
+        { pubkey: 'a1', name: 'R1', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'b1', name: 'R2', role: 'repeater', status: 'suspected', evidence: 'path', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'c1', name: 'R3', role: 'repeater', status: 'unknown', evidence: '', maxHashSize: 1, lastSeen: '' },
+      ]);
+      assert.ok(html.includes('Advert with multi-byte hash'), 'confirmed should show advert evidence');
+      assert.ok(html.includes('Path appearance'), 'suspected should show path evidence');
+      // unknown has empty evidence → '—'
+    });
+
+    test('table rows link to node detail', () => {
+      const html = render([{ pubkey: 'aabbccdd', name: 'Rep1', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' }]);
+      assert.ok(html.includes('#/nodes/aabbccdd'), 'row should link to node detail page');
+    });
+
+    test('node names are HTML-escaped', () => {
+      const html = render([{ pubkey: 'x1', name: '<script>alert(1)</script>', role: 'repeater', status: 'unknown', evidence: '', maxHashSize: 1, lastSeen: '' }]);
+      assert.ok(!html.includes('<script>'), 'should escape HTML in name');
+    });
+
+    test('table has sortable column headers', () => {
+      const html = render([{ pubkey: 'a1', name: 'R1', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' }]);
+      assert.ok(html.includes('data-sort="status"'), 'status column should be sortable');
+      assert.ok(html.includes('data-sort="name"'), 'name column should be sortable');
+      assert.ok(html.includes('data-sort="maxHashSize"'), 'maxHashSize column should be sortable');
+    });
+  }
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);

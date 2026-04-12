@@ -1984,6 +1984,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     window._analyticsChannelTbodyHtml = channelTbodyHtml;
     window._analyticsChannelTheadHtml = channelTheadHtml;
     window._analyticsRfNFColumnChart = rfNFColumnChart;
+    window._analyticsRenderMultiByteCapability = renderMultiByteCapability;
   }
 
   // ─── Neighbor Graph Tab ─────────────────────────────────────────────────────
