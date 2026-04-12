@@ -916,6 +916,9 @@
           },
           "estimatedMB": {
             "type": "number"
+          },
+          "trackedMB": {
+            "type": "number"
           }
         }
       },

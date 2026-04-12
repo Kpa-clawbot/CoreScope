@@ -446,10 +446,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Real packet store stats
 	pktCount := 0
 	var pktEstMB float64
+	var pktTrackedMB float64
 	if s.store != nil {
 		ps := s.store.GetPerfStoreStatsTyped()
 		pktCount = ps.TotalLoaded
 		pktEstMB = ps.EstimatedMB
+		pktTrackedMB = ps.TrackedMB
 	}
 
 	// Real cache stats
@@ -515,6 +517,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		PacketStore: HealthPacketStoreStats{
 			Packets:     pktCount,
 			EstimatedMB: pktEstMB,
+			TrackedMB:   pktTrackedMB,
 		},
 		Perf: HealthPerfStats{
 			TotalRequests: int(perfRequests),

@@ -170,6 +170,9 @@ func TestHealthEndpoint(t *testing.T) {
 	if _, ok := pktStore["estimatedMB"]; !ok {
 		t.Error("expected estimatedMB in packetStore")
 	}
+	if _, ok := pktStore["trackedMB"]; !ok {
+		t.Error("expected trackedMB in packetStore")
+	}
 
 	// Verify eventLoop (GC pause metrics matching Node.js shape)
 	el, ok := body["eventLoop"].(map[string]interface{})

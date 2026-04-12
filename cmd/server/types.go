@@ -115,6 +115,7 @@ type WebSocketStatsResp struct {
 type HealthPacketStoreStats struct {
 	Packets     int     `json:"packets"`
 	EstimatedMB float64 `json:"estimatedMB"`
+	TrackedMB   float64 `json:"trackedMB"`
 }
 
 type SlowQuery struct {

@@ -91,8 +91,9 @@
         const ps = server.packetStore;
         html += `<h3>In-Memory Packet Store</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
           <div class="perf-card"><div class="perf-num">${ps.inMemory.toLocaleString()}</div><div class="perf-label">Packets in RAM</div></div>
-          <div class="perf-card"><div class="perf-num">${ps.estimatedMB}MB</div><div class="perf-label">Memory Used</div></div>
+          <div class="perf-card"><div class="perf-num">${ps.trackedMB}MB</div><div class="perf-label">Tracked Memory</div></div>
           <div class="perf-card"><div class="perf-num">${ps.maxMB}MB</div><div class="perf-label">Memory Limit</div></div>
+          <div class="perf-card"><div class="perf-num">${ps.estimatedMB}MB</div><div class="perf-label">Heap (debug)</div></div>
           <div class="perf-card"><div class="perf-num">${ps.queries.toLocaleString()}</div><div class="perf-label">Queries Served</div></div>
           <div class="perf-card"><div class="perf-num">${ps.inserts.toLocaleString()}</div><div class="perf-label">Live Inserts</div></div>
           <div class="perf-card"><div class="perf-num">${ps.evicted.toLocaleString()}</div><div class="perf-label">Evicted</div></div>
