@@ -590,6 +590,12 @@ func openRW(dbPath string) (*sql.DB, error) {
 		return nil, err
 	}
 	rw.SetMaxOpenConns(1)
+	// DSN _busy_timeout may not be honored by all drivers; set via PRAGMA
+	// to guarantee SQLite retries for up to 5s before returning SQLITE_BUSY.
+	if _, err := rw.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		rw.Close()
+		return nil, fmt.Errorf("set busy_timeout: %w", err)
+	}
 	return rw, nil
 }
 

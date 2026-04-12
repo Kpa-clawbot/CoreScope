@@ -532,3 +532,31 @@ func TestPersistSemaphoreTryAcquireSkipsBatch(t *testing.T) {
 
 	<-persistSem // release
 }
+
+func TestOpenRW_BusyTimeout(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// Create the DB file first
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?_journal_mode=WAL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Exec("CREATE TABLE dummy (id INTEGER)")
+	db.Close()
+
+	// Open via openRW and verify busy_timeout is set
+	rw, err := openRW(dbPath)
+	if err != nil {
+		t.Fatalf("openRW failed: %v", err)
+	}
+	defer rw.Close()
+
+	var timeout int
+	if err := rw.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatalf("query busy_timeout: %v", err)
+	}
+	if timeout != 5000 {
+		t.Errorf("expected busy_timeout=5000, got %d", timeout)
+	}
+}
