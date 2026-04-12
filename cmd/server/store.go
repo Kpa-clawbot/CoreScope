@@ -5579,11 +5579,7 @@ func (s *PacketStore) computeMultiByteCapability() []MultiByteCapEntry {
 	}
 	s.mu.RUnlock()
 
-	// Build result for all repeaters
-	// Also find last_seen from DB
-	type dbNode struct {
-		lastSeen string
-	}
+	// Build result for all repeaters — fetch last_seen from DB
 	dbLastSeen := make(map[string]string)
 	rows, err := s.db.conn.Query("SELECT public_key, last_seen FROM nodes WHERE role LIKE '%repeater%'")
 	if err == nil {
