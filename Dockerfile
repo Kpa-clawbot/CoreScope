@@ -10,6 +10,7 @@ ARG BUILD_TIME=unknown
 WORKDIR /build/server
 COPY cmd/server/go.mod cmd/server/go.sum ./
 COPY internal/geofilter/ ../../internal/geofilter/
+COPY internal/sigvalidate/ ../../internal/sigvalidate/
 RUN go mod download
 COPY cmd/server/ ./
 RUN go build -ldflags "-X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" -o /corescope-server .
@@ -17,6 +18,8 @@ RUN go build -ldflags "-X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMI
 # Build ingestor
 WORKDIR /build/ingestor
 COPY cmd/ingestor/go.mod cmd/ingestor/go.sum ./
+COPY internal/geofilter/ ../../internal/geofilter/
+COPY internal/sigvalidate/ ../../internal/sigvalidate/
 RUN go mod download
 COPY cmd/ingestor/ ./
 RUN go build -o /corescope-ingestor .
