@@ -30,6 +30,7 @@
   let _lcdClockInterval = null;
   let _rateCounterInterval = null;
   let _pruneInterval = null;
+  let _feedTimestampInterval = null;
   let activeNodeDetailKey = null;
 
   // === VCR State Machine ===
@@ -1376,6 +1377,13 @@
     // Prune stale nodes every 60 seconds
     _pruneInterval = setInterval(pruneStaleNodes, 60000);
 
+    // Refresh relative timestamps in feed every 10 seconds (#701)
+    _feedTimestampInterval = setInterval(function() {
+      document.querySelectorAll('.feed-time[data-ts]').forEach(function(el) {
+        el.innerHTML = formatLiveTimestampHtml(Number(el.dataset.ts));
+      });
+    }, 10000);
+
     // Auto-hide nav with pin toggle (#62)
     const topNav = document.querySelector('.top-nav');
     if (topNav) { topNav.style.position = 'fixed'; topNav.style.width = '100%'; topNav.style.zIndex = '1100'; }
@@ -1710,7 +1718,7 @@
         <span class="feed-type" style="color:${color}">${typeName}</span>
         ${dotHtml1}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
         <span class="feed-text">${escapeHtml(preview)}</span>
-        <span class="feed-time">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
+        <span class="feed-time" data-ts="${group.latestTs || Date.now()}">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
       `;
       if (_ccChan1) item._ccChannel = _ccChan1; // channel color picker (#674)
       item.addEventListener('click', () => showFeedCard(item, pkt, color));
@@ -2738,7 +2746,7 @@
       <span class="feed-type" style="color:${color}">${typeName}</span>
       ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
-      <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
+      <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
     if (_ccChan) item._ccChannel = _ccChan; // channel color picker (#674)
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
@@ -2784,6 +2792,13 @@
         requestAnimationFrame(() => requestAnimationFrame(() => entry.element.classList.remove('live-feed-enter')));
         // Re-add to DOM top (works even if it was trimmed out)
         feed.prepend(entry.element);
+        // Update timestamp to latest observation (#701)
+        var _dedupTimeSpan = entry.element.querySelector('.feed-time');
+        if (_dedupTimeSpan) {
+          var _dedupNow = pkt._ts || Date.now();
+          _dedupTimeSpan.setAttribute('data-ts', _dedupNow);
+          _dedupTimeSpan.innerHTML = formatLiveTimestampHtml(_dedupNow);
+        }
         entry.pkt.observation_count = entry.count;
         return;
       }
@@ -2814,7 +2829,7 @@
       <span class="feed-type" style="color:${color}">${typeName}</span>
       ${dotHtml3}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
-      <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
+      <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
     if (_ccChan3) item._ccChannel = _ccChan3; // channel color picker (#674)
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
@@ -2891,6 +2906,7 @@
     if (_lcdClockInterval) { clearInterval(_lcdClockInterval); _lcdClockInterval = null; }
     if (_rateCounterInterval) { clearInterval(_rateCounterInterval); _rateCounterInterval = null; }
     if (_pruneInterval) { clearInterval(_pruneInterval); _pruneInterval = null; }
+    if (_feedTimestampInterval) { clearInterval(_feedTimestampInterval); _feedTimestampInterval = null; }
     if (_affinityInterval) { clearInterval(_affinityInterval); _affinityInterval = null; }
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     if (map) { map.remove(); map = null; }

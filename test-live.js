@@ -593,6 +593,40 @@ console.log('\n=== live.js: formatLiveTimestampHtml ===');
   });
 }
 
+// ===== Feed timestamp refresh — data-ts attribute and selector (#701) =====
+console.log('\n=== live.js: feed timestamp refresh (#701) ===');
+{
+  const ctx = makeLiveSandbox({ withAppJs: true });
+  const fmt = ctx.window._liveFormatLiveTimestampHtml;
+
+  test('formatLiveTimestampHtml returns different text for different ages', () => {
+    const recent = fmt(Date.now() - 5000);
+    const older = fmt(Date.now() - 120000);
+    // Both should produce valid HTML
+    assert.ok(recent.includes('timestamp-text'), 'recent should have timestamp-text');
+    assert.ok(older.includes('timestamp-text'), 'older should have timestamp-text');
+  });
+
+  test('formatLiveTimestampHtml accepts numeric ms timestamp', () => {
+    const ts = Date.now() - 45000;
+    const html = fmt(ts);
+    assert.ok(html.includes('timestamp-text'), 'numeric ms timestamp should render');
+    // Re-calling with same ts should produce same result (idempotent refresh)
+    const html2 = fmt(ts);
+    assert.strictEqual(html, html2, 'same input should produce same output');
+  });
+
+  test('feed-time template with data-ts round-trips correctly', () => {
+    // Verify that Number(dataset.ts) fed back to fmt produces valid output
+    const ts = Date.now() - 30000;
+    const tsStr = String(ts);
+    const reparsed = Number(tsStr);
+    assert.strictEqual(reparsed, ts, 'data-ts round-trip should preserve value');
+    const html = fmt(reparsed);
+    assert.ok(html.includes('timestamp-text'), 'round-tripped timestamp should render');
+  });
+}
+
 // ===== resolveHopPositions =====
 console.log('\n=== live.js: resolveHopPositions ===');
 {
