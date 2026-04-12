@@ -1010,10 +1010,10 @@
             '<strong>Unknown</strong> = no multi-byte evidence.</p>' +
           '</div>' +
           '<div style="display:flex;gap:4px;flex-wrap:wrap" id="mbCapFilters">' +
-            '<button class="filter-btn' + (filter === 'all' ? ' active' : '') + '" data-mb-filter="all">All (' + caps.length + ')</button>' +
-            '<button class="filter-btn' + (filter === 'confirmed' ? ' active' : '') + '" data-mb-filter="confirmed" style="--filter-color:var(--success, #22c55e)">✅ ' + counts.confirmed + '</button>' +
-            '<button class="filter-btn' + (filter === 'suspected' ? ' active' : '') + '" data-mb-filter="suspected" style="--filter-color:var(--warning, #eab308)">⚠️ ' + counts.suspected + '</button>' +
-            '<button class="filter-btn' + (filter === 'unknown' ? ' active' : '') + '" data-mb-filter="unknown" style="--filter-color:var(--text-muted, #888)">❓ ' + counts.unknown + '</button>' +
+            '<button class="tab-btn' + (filter === 'all' ? ' active' : '') + '" data-mb-filter="all">All (' + caps.length + ')</button>' +
+            '<button class="tab-btn' + (filter === 'confirmed' ? ' active' : '') + '" data-mb-filter="confirmed" style="--filter-color:var(--success, #22c55e)">✅ ' + counts.confirmed + '</button>' +
+            '<button class="tab-btn' + (filter === 'suspected' ? ' active' : '') + '" data-mb-filter="suspected" style="--filter-color:var(--warning, #eab308)">⚠️ ' + counts.suspected + '</button>' +
+            '<button class="tab-btn' + (filter === 'unknown' ? ' active' : '') + '" data-mb-filter="unknown" style="--filter-color:var(--text-muted, #888)">❓ ' + counts.unknown + '</button>' +
           '</div>' +
         '</div>' +
         (filtered.length ? '<table class="analytics-table" id="mbCapTable" style="margin-top:12px">' +
