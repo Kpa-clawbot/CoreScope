@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/binary"
+	"encoding/hex"
 	"testing"
 )
 
@@ -65,7 +68,7 @@ func TestDecodePacket_TransportFloodHasCodes(t *testing.T) {
 	// Path byte: 0x00 (hashSize=1, hashCount=0)
 	// Payload: at least some bytes for GRP_TXT
 	hex := "14AABBCCDD00112233445566778899"
-	pkt, err := DecodePacket(hex)
+	pkt, err := DecodePacket(hex, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -85,7 +88,7 @@ func TestDecodePacket_FloodHasNoCodes(t *testing.T) {
 	// Path byte: 0x00 (no hops)
 	// Some payload bytes
 	hex := "110011223344556677889900AABBCCDD"
-	pkt, err := DecodePacket(hex)
+	pkt, err := DecodePacket(hex, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -240,7 +243,7 @@ func TestZeroHopDirectHashSize(t *testing.T) {
 	// pathByte=0x00 → hash_count=0, hash_size bits=0 → should get HashSize=0
 	// Need at least a few payload bytes after pathByte.
 	hex := "02" + "00" + repeatHex("AA", 20)
-	pkt, err := DecodePacket(hex)
+	pkt, err := DecodePacket(hex, false)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
@@ -254,7 +257,7 @@ func TestZeroHopDirectHashSizeWithNonZeroUpperBits(t *testing.T) {
 	// pathByte=0x40 → hash_count=0, hash_size bits=01 → should still get HashSize=0
 	// because hash_count is zero (lower 6 bits are 0).
 	hex := "02" + "40" + repeatHex("AA", 20)
-	pkt, err := DecodePacket(hex)
+	pkt, err := DecodePacket(hex, false)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
@@ -267,7 +270,7 @@ func TestZeroHopTransportDirectHashSize(t *testing.T) {
 	// TRANSPORT_DIRECT (RouteType=3) + REQ (PayloadType=0) → header byte = 0x03
 	// 4 bytes transport codes + pathByte=0x00 → hash_count=0 → should get HashSize=0
 	hex := "03" + "11223344" + "00" + repeatHex("AA", 20)
-	pkt, err := DecodePacket(hex)
+	pkt, err := DecodePacket(hex, false)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
@@ -280,7 +283,7 @@ func TestZeroHopTransportDirectHashSizeWithNonZeroUpperBits(t *testing.T) {
 	// TRANSPORT_DIRECT (RouteType=3) + REQ (PayloadType=0) → header byte = 0x03
 	// 4 bytes transport codes + pathByte=0xC0 → hash_count=0, hash_size bits=11 → should still get HashSize=0
 	hex := "03" + "11223344" + "C0" + repeatHex("AA", 20)
-	pkt, err := DecodePacket(hex)
+	pkt, err := DecodePacket(hex, false)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
@@ -293,7 +296,7 @@ func TestNonDirectZeroPathByteKeepsHashSize(t *testing.T) {
 	// FLOOD (RouteType=1) + REQ (PayloadType=0) → header byte = 0x01
 	// pathByte=0x00 → even though hash_count=0, non-DIRECT should keep HashSize=1
 	hex := "01" + "00" + repeatHex("AA", 20)
-	pkt, err := DecodePacket(hex)
+	pkt, err := DecodePacket(hex, false)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
@@ -307,7 +310,7 @@ func TestDirectNonZeroHopKeepsHashSize(t *testing.T) {
 	// pathByte=0x01 → hash_count=1, hash_size=1 → should keep HashSize=1
 	// Need 1 hop hash byte after pathByte.
 	hex := "02" + "01" + repeatHex("BB", 21)
-	pkt, err := DecodePacket(hex)
+	pkt, err := DecodePacket(hex, false)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
@@ -336,7 +339,7 @@ func TestDecodePacket_TraceHopsCompleted(t *testing.T) {
 		"00" + // flags = 0
 		"DEADBEEF" // 4 hops (1-byte hash each)
 
-	pkt, err := DecodePacket(hex)
+	pkt, err := DecodePacket(hex, false)
 	if err != nil {
 		t.Fatalf("DecodePacket error: %v", err)
 	}
@@ -365,7 +368,7 @@ func TestDecodePacket_TraceNoSNR(t *testing.T) {
 		"00" + // flags
 		"AABBCC" // 3 hops intended
 
-	pkt, err := DecodePacket(hex)
+	pkt, err := DecodePacket(hex, false)
 	if err != nil {
 		t.Fatalf("DecodePacket error: %v", err)
 	}
@@ -389,7 +392,7 @@ func TestDecodePacket_TraceFullyCompleted(t *testing.T) {
 		"00" + // flags
 		"DDEEFF" // 3 hops intended
 
-	pkt, err := DecodePacket(hex)
+	pkt, err := DecodePacket(hex, false)
 	if err != nil {
 		t.Fatalf("DecodePacket error: %v", err)
 	}
@@ -401,5 +404,57 @@ func TestDecodePacket_TraceFullyCompleted(t *testing.T) {
 	}
 	if len(pkt.Path.Hops) != 3 {
 		t.Errorf("expected 3 hops, got %d", len(pkt.Path.Hops))
+	}
+}
+
+func TestDecodeAdvertSignatureValidation(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var timestamp uint32 = 1234567890
+	appdata := []byte{0x02} // flags: repeater, no extras
+
+	// Build signed message: pubKey(32) + timestamp(4 LE) + appdata
+	msg := make([]byte, 32+4+len(appdata))
+	copy(msg[0:32], pub)
+	binary.LittleEndian.PutUint32(msg[32:36], timestamp)
+	copy(msg[36:], appdata)
+	sig := ed25519.Sign(priv, msg)
+
+	// Build a raw advert buffer: pubKey(32) + timestamp(4) + signature(64) + appdata
+	buf := make([]byte, 100+len(appdata))
+	copy(buf[0:32], pub)
+	binary.LittleEndian.PutUint32(buf[32:36], timestamp)
+	copy(buf[36:100], sig)
+	copy(buf[100:], appdata)
+
+	// With validation enabled
+	p := decodeAdvert(buf, true)
+	if p.SignatureValid == nil {
+		t.Fatal("expected SignatureValid to be set")
+	}
+	if !*p.SignatureValid {
+		t.Error("expected valid signature")
+	}
+	if p.PubKey != hex.EncodeToString(pub) {
+		t.Errorf("pubkey mismatch: got %s", p.PubKey)
+	}
+
+	// Tamper with signature → invalid
+	buf[40] ^= 0xFF
+	p = decodeAdvert(buf, true)
+	if p.SignatureValid == nil {
+		t.Fatal("expected SignatureValid to be set")
+	}
+	if *p.SignatureValid {
+		t.Error("expected invalid signature after tampering")
+	}
+
+	// Without validation → SignatureValid should be nil
+	p = decodeAdvert(buf, false)
+	if p.SignatureValid != nil {
+		t.Error("expected SignatureValid to be nil when validation disabled")
 	}
 }

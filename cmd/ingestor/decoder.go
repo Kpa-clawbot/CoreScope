@@ -11,6 +11,8 @@ import (
 	"math"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/meshcore-analyzer/sigvalidate"
 )
 
 // Route type constants (header bits 1-0)
@@ -109,6 +111,7 @@ type Payload struct {
 	Timestamp     uint32       `json:"timestamp,omitempty"`
 	TimestampISO  string       `json:"timestampISO,omitempty"`
 	Signature     string       `json:"signature,omitempty"`
+	SignatureValid *bool       `json:"signatureValid,omitempty"`
 	Flags         *AdvertFlags `json:"flags,omitempty"`
 	Lat           *float64     `json:"lat,omitempty"`
 	Lon           *float64     `json:"lon,omitempty"`
@@ -215,7 +218,7 @@ func decodeAck(buf []byte) Payload {
 	}
 }
 
-func decodeAdvert(buf []byte) Payload {
+func decodeAdvert(buf []byte, validateSignatures bool) Payload {
 	if len(buf) < 100 {
 		return Payload{Type: "ADVERT", Error: "too short for advert", RawHex: hex.EncodeToString(buf)}
 	}
@@ -231,6 +234,16 @@ func decodeAdvert(buf []byte) Payload {
 		Timestamp:    timestamp,
 		TimestampISO: fmt.Sprintf("%s", epochToISO(timestamp)),
 		Signature:    signature,
+	}
+
+	if validateSignatures {
+		valid, err := sigvalidate.ValidateAdvert(buf[0:32], buf[36:100], timestamp, appdata)
+		if err != nil {
+			f := false
+			p.SignatureValid = &f
+		} else {
+			p.SignatureValid = &valid
+		}
 	}
 
 	if len(appdata) > 0 {
@@ -506,7 +519,7 @@ func decodeTrace(buf []byte) Payload {
 	return p
 }
 
-func decodePayload(payloadType int, buf []byte, channelKeys map[string]string) Payload {
+func decodePayload(payloadType int, buf []byte, channelKeys map[string]string, validateSignatures bool) Payload {
 	switch payloadType {
 	case PayloadREQ:
 		return decodeEncryptedPayload("REQ", buf)
@@ -517,7 +530,7 @@ func decodePayload(payloadType int, buf []byte, channelKeys map[string]string) P
 	case PayloadACK:
 		return decodeAck(buf)
 	case PayloadADVERT:
-		return decodeAdvert(buf)
+		return decodeAdvert(buf, validateSignatures)
 	case PayloadGRP_TXT:
 		return decodeGrpTxt(buf, channelKeys)
 	case PayloadANON_REQ:
@@ -532,7 +545,7 @@ func decodePayload(payloadType int, buf []byte, channelKeys map[string]string) P
 }
 
 // DecodePacket decodes a hex-encoded MeshCore packet.
-func DecodePacket(hexString string, channelKeys map[string]string) (*DecodedPacket, error) {
+func DecodePacket(hexString string, channelKeys map[string]string, validateSignatures bool) (*DecodedPacket, error) {
 	hexString = strings.ReplaceAll(hexString, " ", "")
 	hexString = strings.ReplaceAll(hexString, "\n", "")
 	hexString = strings.ReplaceAll(hexString, "\r", "")
@@ -570,7 +583,7 @@ func DecodePacket(hexString string, channelKeys map[string]string) (*DecodedPack
 	offset += bytesConsumed
 
 	payloadBuf := buf[offset:]
-	payload := decodePayload(header.PayloadType, payloadBuf, channelKeys)
+	payload := decodePayload(header.PayloadType, payloadBuf, channelKeys, validateSignatures)
 
 	// TRACE packets store hop IDs in the payload (buf[9:]) rather than the header
 	// path field. The header path byte still encodes hashSize in bits 6-7, which
