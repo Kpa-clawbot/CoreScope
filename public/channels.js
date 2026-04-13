@@ -1046,6 +1046,9 @@
 
   async function refreshMessages(opts) {
     if (!selectedHash) return;
+    // Skip refresh for encrypted channels — no messages to fetch
+    var selCh = channels.find(function (c) { return c.hash === selectedHash; });
+    if (selCh && selCh.encrypted) return;
     opts = opts || {};
     const msgEl = document.getElementById('chMessages');
     if (!msgEl) return;
