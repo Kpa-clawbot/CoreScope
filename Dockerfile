@@ -24,6 +24,14 @@ RUN go mod download
 COPY cmd/ingestor/ ./
 RUN go build -o /corescope-ingestor .
 
+# Build decrypt CLI
+WORKDIR /build/decrypt
+COPY cmd/decrypt/go.mod cmd/decrypt/go.sum ./
+COPY internal/channel/ ../../internal/channel/
+RUN go mod download
+COPY cmd/decrypt/ ./
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /corescope-decrypt .
+
 # Runtime image
 FROM alpine:3.20
 
@@ -32,7 +40,7 @@ RUN apk add --no-cache mosquitto mosquitto-clients supervisor caddy wget
 WORKDIR /app
 
 # Go binaries
-COPY --from=builder /corescope-server /corescope-ingestor /app/
+COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /app/
 
 # Frontend assets + config
 COPY public/ ./public/

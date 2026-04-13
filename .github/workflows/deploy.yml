@@ -68,6 +68,17 @@ jobs:
           echo "--- Go Ingestor Coverage ---"
           go tool cover -func=ingestor-coverage.out | tail -1
 
+      - name: Build and test channel library + decrypt CLI
+        run: |
+          set -e -o pipefail
+          cd internal/channel
+          go test ./...
+          echo "--- Channel library tests passed ---"
+          cd ../../cmd/decrypt
+          CGO_ENABLED=0 go build -ldflags="-s -w" -o corescope-decrypt .
+          go test ./...
+          echo "--- Decrypt CLI tests passed ---"
+
       - name: Verify proto syntax
         run: |
           set -e
@@ -317,7 +328,43 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ───────────────────────────────────────────────────────────────
-  # 4. Deploy Staging (master only)
+  # 4. Release Artifacts (tags only)
+  # ───────────────────────────────────────────────────────────────
+  release-artifacts:
+    name: "📦 Release Artifacts"
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [go-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.22'
+
+      - name: Build corescope-decrypt (static, linux/amd64)
+        run: |
+          cd cmd/decrypt
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-amd64 .
+
+      - name: Build corescope-decrypt (static, linux/arm64)
+        run: |
+          cd cmd/decrypt
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.version=${{ github.ref_name }}" -o ../../corescope-decrypt-linux-arm64 .
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            corescope-decrypt-linux-amd64
+            corescope-decrypt-linux-arm64
+
+  # ───────────────────────────────────────────────────────────────
+  # 4b. Deploy Staging (master only)
   # ───────────────────────────────────────────────────────────────
   deploy:
     name: "🚀 Deploy Staging"
