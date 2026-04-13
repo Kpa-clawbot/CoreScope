@@ -1353,7 +1353,7 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 			channelMap[key] = ch
 		}
 		ch.messageCount++
-		if fs.Valid {
+		if fs.Valid && fs.String > ch.lastActivity {
 			ch.lastActivity = fs.String
 		}
 	}
