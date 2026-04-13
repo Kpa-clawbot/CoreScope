@@ -2730,6 +2730,7 @@
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = pkt.observation_count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${pkt.observation_count}</span>` : '';
+    const anomalyIcon = (pkt.decoded && pkt.decoded.anomaly) ? '<span title="Anomaly detected" style="margin-left:4px">⚠️</span>' : '';
     var _ccPayload2 = (pkt.decoded || {}).payload || {};
     var _ccChan = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload2.channel || null) : null;
     var dotHtml = _ccChan ? _feedColorDot(_ccChan) : '';
@@ -2744,7 +2745,7 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${anomalyIcon}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;

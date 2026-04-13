@@ -5079,6 +5079,42 @@ console.log('\n=== analytics.js: renderMultiByteAdopters ===');
   }
 }
 
+// ===== packets.js: anomaly banner rendering =====
+console.log('\n=== packets.js: anomaly UI rendering ===');
+{
+  const packetsSource = fs.readFileSync('public/packets.js', 'utf8');
+
+  test('renderDetail shows anomaly banner when decoded.anomaly is set', () => {
+    assert.ok(packetsSource.includes('anomaly-banner'),
+      'packets.js should contain anomaly-banner class');
+    assert.ok(packetsSource.includes("decoded.anomaly"),
+      'packets.js should reference decoded.anomaly');
+  });
+
+  test('buildFieldTable includes anomaly row when present', () => {
+    assert.ok(packetsSource.includes('anomaly-row'),
+      'buildFieldTable should have anomaly-row class for highlighted row');
+  });
+
+  test('renderDecodedPacket shows anomaly banner', () => {
+    assert.ok(packetsSource.includes("d.anomaly"),
+      'renderDecodedPacket should check d.anomaly');
+  });
+}
+
+// ===== live.js: anomaly icon in feed =====
+console.log('\n=== live.js: anomaly icon in feed ===');
+{
+  const liveSource = fs.readFileSync('public/live.js', 'utf8');
+
+  test('addFeedItemDOM shows anomaly icon when decoded has anomaly', () => {
+    assert.ok(liveSource.includes('anomalyIcon'),
+      'live.js should have anomalyIcon variable for feed items');
+    assert.ok(liveSource.includes('pkt.decoded && pkt.decoded.anomaly'),
+      'live.js should check pkt.decoded.anomaly');
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);

@@ -1849,7 +1849,12 @@
       }
     }
 
+    const anomalyBanner = decoded.anomaly
+      ? `<div class="anomaly-banner" style="background:var(--warning, #f0ad4e); color:#000; padding:8px 12px; border-radius:4px; margin-bottom:8px; font-weight:600;">⚠️ Anomaly: ${escapeHtml(decoded.anomaly)}</div>`
+      : '';
+
     panel.innerHTML = `
+      ${anomalyBanner}
       <div class="detail-title">${hasRawHex ? `Packet Byte Breakdown (${size} bytes)` : typeName + ' Packet'}</div>
       <div class="detail-hash">${pkt.hash || 'Packet #' + pkt.id}</div>
       ${messageHtml}
@@ -2053,6 +2058,10 @@
       rows += fieldRow(off, 'Raw', truncate(buf.slice(off * 2), 40), '');
     }
 
+    if (decoded.anomaly) {
+      rows += `<tr class="anomaly-row" style="background:var(--warning, #f0ad4e); color:#000; font-weight:600;"><td colspan="2">⚠️ Anomaly</td><td colspan="2">${escapeHtml(decoded.anomaly)}</td></tr>`;
+    }
+
     return `<table class="field-table">
       <thead><tr><th scope="col">Offset</th><th scope="col">Field</th><th scope="col">Value</th><th scope="col">Description</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -2143,6 +2152,11 @@
     const size = hex ? Math.floor(hex.length / 2) : 0;
 
     let html = '<div class="byop-decoded">';
+
+    // Anomaly banner
+    if (d.anomaly) {
+      html += '<div class="anomaly-banner" style="background:var(--warning, #f0ad4e); color:#000; padding:8px 12px; border-radius:4px; margin-bottom:8px; font-weight:600;">⚠️ Anomaly: ' + escapeHtml(d.anomaly) + '</div>';
+    }
 
     // Header section
     html += '<div class="byop-section">'
