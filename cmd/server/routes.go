@@ -1666,7 +1666,9 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 		}
 		if includeEncrypted {
 			encrypted, err := s.db.GetEncryptedChannels(region)
-			if err == nil {
+			if err != nil {
+				log.Printf("WARN GetEncryptedChannels: %v", err)
+			} else {
 				channels = append(channels, encrypted...)
 			}
 		}

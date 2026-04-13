@@ -1318,7 +1318,7 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 
 	for rows.Next() {
 		var dj, fs sql.NullString
-		rows.Scan(&dj, &fs)
+		if err := rows.Scan(&dj, &fs); err != nil { continue }
 		if !dj.Valid {
 			continue
 		}

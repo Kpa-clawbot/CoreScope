@@ -3169,6 +3169,12 @@ func (s *PacketStore) GetEncryptedChannels(region string) []map[string]interface
 		messageCount int
 		lastActivity string
 	}
+	type grpDec struct {
+		Type             string      `json:"type"`
+		ChannelHash      interface{} `json:"channelHash"`
+		ChannelHashHex   string      `json:"channelHashHex"`
+		DecryptionStatus string      `json:"decryptionStatus"`
+	}
 	channelMap := map[string]*encInfo{}
 
 	for _, tx := range grpTxts {
@@ -3183,12 +3189,6 @@ func (s *PacketStore) GetEncryptedChannels(region string) []map[string]interface
 			if !match {
 				continue
 			}
-		}
-		type grpDec struct {
-			Type             string      `json:"type"`
-			ChannelHash      interface{} `json:"channelHash"`
-			ChannelHashHex   string      `json:"channelHashHex"`
-			DecryptionStatus string      `json:"decryptionStatus"`
 		}
 		var decoded grpDec
 		if json.Unmarshal([]byte(tx.DecodedJSON), &decoded) != nil {
