@@ -587,8 +587,10 @@ func DecodePacket(hexString string, channelKeys map[string]string, validateSigna
 	payload := decodePayload(header.PayloadType, payloadBuf, channelKeys, validateSignatures)
 
 	// TRACE packets store hop IDs in the payload (buf[9:]) rather than the header
-	// path field. The header path byte still encodes hashSize in bits 6-7, which
-	// we use to split the payload path data into individual hop prefixes.
+	// path field. Firmware always sends TRACE as DIRECT (route_type 2 or 3);
+	// FLOOD-routed TRACEs are anomalous but handled gracefully.
+	// The TRACE flags byte (payload offset 8) encodes path_sz in bits 0-1,
+	// NOT the header path byte's hash_size bits.
 	if header.PayloadType == PayloadTRACE && payload.PathData != "" {
 		// The header path hops count represents SNR entries = completed hops
 		hopsCompleted := path.HashCount

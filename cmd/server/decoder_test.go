@@ -409,8 +409,9 @@ func TestDecodePacket_TraceFullyCompleted(t *testing.T) {
 
 func TestDecodePacket_TraceFlags1_TwoBytePathSz(t *testing.T) {
 	// TRACE with flags=1 → path_sz = (1 & 0x03) + 1 = 2-byte hashes
-	// path_length: hash_size=0b00 (1-byte in header — irrelevant), hash_count=0 → 0x00
-	hex := "2500" + // header + path_length (0 SNR)
+	// Firmware always sends TRACE as DIRECT (route_type=2), so header byte =
+	// (0<<6)|(9<<2)|2 = 0x26. path_length 0x00 = 0 SNR bytes.
+	hex := "2600" + // header (DIRECT+TRACE) + path_length (0 SNR)
 		"01000000" + // tag
 		"02000000" + // authCode
 		"01" + // flags = 1 → path_sz = 2
@@ -430,7 +431,8 @@ func TestDecodePacket_TraceFlags1_TwoBytePathSz(t *testing.T) {
 
 func TestDecodePacket_TraceFlags2_ThreeBytePathSz(t *testing.T) {
 	// TRACE with flags=2 → path_sz = (2 & 0x03) + 1 = 3-byte hashes
-	hex := "2500" + // header + path_length (0 SNR)
+	// DIRECT route_type (0x26)
+	hex := "2600" + // header (DIRECT+TRACE) + path_length (0 SNR)
 		"01000000" + // tag
 		"02000000" + // authCode
 		"02" + // flags = 2 → path_sz = 3
@@ -451,7 +453,7 @@ func TestDecodePacket_TraceFlags2_ThreeBytePathSz(t *testing.T) {
 func TestDecodePacket_TracePathSzUnevenPayload(t *testing.T) {
 	// TRACE with flags=1 → path_sz=2, but 5 bytes of path data (not evenly divisible)
 	// Should produce 2 hops (4 bytes) and ignore the trailing byte
-	hex := "2500" + // header + path_length (0 SNR)
+	hex := "2600" + // header (DIRECT+TRACE) + path_length (0 SNR)
 		"01000000" + // tag
 		"02000000" + // authCode
 		"01" + // flags = 1 → path_sz = 2
@@ -463,6 +465,55 @@ func TestDecodePacket_TracePathSzUnevenPayload(t *testing.T) {
 	}
 	if len(pkt.Path.Hops) != 2 {
 		t.Errorf("expected 2 hops (trailing byte ignored), got %d: %v", len(pkt.Path.Hops), pkt.Path.Hops)
+	}
+}
+
+func TestDecodePacket_TraceTransportDirect(t *testing.T) {
+	// TRACE via TRANSPORT_DIRECT (route_type=3) — includes 4 transport code bytes
+	// header: (0<<6)|(9<<2)|3 = 0x27
+	hex := "27" + // header (TRANSPORT_DIRECT+TRACE)
+		"AABB" + "CCDD" + // transport codes (2+2 bytes)
+		"02" + // path_length: hash_count=2 SNR bytes
+		"EEFF" + // 2 SNR bytes
+		"01000000" + // tag
+		"02000000" + // authCode
+		"00" + // flags = 0 → path_sz = 1
+		"112233" // 3 hops (1-byte each)
+
+	pkt, err := DecodePacket(hex, false)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if pkt.TransportCodes == nil {
+		t.Fatal("expected transport codes for TRANSPORT_DIRECT")
+	}
+	if pkt.TransportCodes.Code1 != "AABB" {
+		t.Errorf("expected Code1=AABB, got %s", pkt.TransportCodes.Code1)
+	}
+	if len(pkt.Path.Hops) != 3 {
+		t.Errorf("expected 3 hops, got %d: %v", len(pkt.Path.Hops), pkt.Path.Hops)
+	}
+	if pkt.Path.HopsCompleted == nil || *pkt.Path.HopsCompleted != 2 {
+		t.Errorf("expected HopsCompleted=2, got %v", pkt.Path.HopsCompleted)
+	}
+}
+
+func TestDecodePacket_TraceFloodRouteGraceful(t *testing.T) {
+	// TRACE via FLOOD (route_type=1) — anomalous per firmware (firmware rejects
+	// TRACE via flood), but we handle it gracefully without crashing.
+	// Existing test packets use 0x25 (FLOOD+TRACE) from legacy/anomalous data.
+	hex := "2500" + // header (FLOOD+TRACE) + path_length (0 SNR)
+		"01000000" + // tag
+		"02000000" + // authCode
+		"01" + // flags = 1 → path_sz = 2
+		"AABBCCDD" // 4 bytes = 2 hops of 2-byte each
+
+	pkt, err := DecodePacket(hex, false)
+	if err != nil {
+		t.Fatalf("should not crash on anomalous FLOOD+TRACE: %v", err)
+	}
+	if len(pkt.Path.Hops) != 2 {
+		t.Errorf("expected 2 hops even for anomalous FLOOD route, got %d", len(pkt.Path.Hops))
 	}
 }
 
