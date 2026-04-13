@@ -590,6 +590,13 @@
       });
     }
 
+    // Auto-enable encrypted toggle if deep-linking to an encrypted channel
+    if (routeParam && routeParam.startsWith('enc_') && !showEncrypted) {
+      showEncrypted = true;
+      showEncryptedCb.checked = true;
+      localStorage.setItem('channels-show-encrypted', 'true');
+    }
+
     loadObserverRegions();
     loadChannels().then(async function () {
       // Also load user-added encrypted channels into the sidebar
