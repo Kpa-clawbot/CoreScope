@@ -51,6 +51,55 @@ func main() {
 	format := flag.String("format", "json", "Output format: json, html, irc (or log)")
 	output := flag.String("output", "", "Output file (default: stdout)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
+
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, `corescope-decrypt — Decrypt and export MeshCore hashtag channel messages
+
+USAGE
+  corescope-decrypt --channel NAME --db PATH [--format FORMAT] [--output FILE]
+
+FLAGS
+  --channel NAME   Channel name to decrypt (e.g. "#wardriving", "wardriving")
+                   The "#" prefix is added automatically if missing.
+  --db PATH        Path to a CoreScope SQLite database file (read-only access).
+  --format FORMAT  Output format (default: json):
+                     json  — Machine-readable JSON array with full metadata
+                     html  — Self-contained HTML viewer with search and sorting
+                     irc   — Plain-text IRC-style log, one line per message
+                     log   — Alias for irc
+  --output FILE    Write output to FILE instead of stdout.
+  --version        Print version and exit.
+
+EXAMPLES
+  # Export #wardriving messages as JSON
+  corescope-decrypt --channel "#wardriving" --db /app/data/meshcore.db
+
+  # Generate an interactive HTML viewer
+  corescope-decrypt --channel wardriving --db meshcore.db --format html --output wardriving.html
+
+  # Greppable IRC log
+  corescope-decrypt --channel "#MeshCore" --db meshcore.db --format irc --output meshcore.log
+  grep "KE6QR" meshcore.log
+
+  # From the Docker container
+  docker exec corescope-prod /app/corescope-decrypt --channel "#wardriving" --db /app/data/meshcore.db
+
+RETROACTIVE DECRYPTION
+  MeshCore hashtag channels use symmetric encryption — the key is derived from the
+  channel name. The CoreScope ingestor stores ALL GRP_TXT packets in the database,
+  even those it cannot decrypt at ingest time. This tool lets you retroactively
+  decrypt messages for any channel whose name you know, even if the ingestor was
+  never configured with that channel's key.
+
+  This means you can recover historical messages by simply knowing the channel name.
+
+LIMITATIONS
+  - Only hashtag channels (shared-secret, name-derived key) are supported.
+  - Direct messages (TXT_MSG) use per-peer encryption and cannot be decrypted.
+  - Custom PSK channels (non-hashtag) require the raw key, not a channel name.
+`)
+	}
+
 	flag.Parse()
 
 	if *showVersion {
@@ -59,7 +108,7 @@ func main() {
 	}
 
 	if *channelName == "" || *dbPath == "" {
-		fmt.Fprintf(os.Stderr, "Usage: corescope-decrypt --channel \"#wardriving\" --db meshcore.db [--format json|html|irc] [--output file]\n")
+		flag.Usage()
 		os.Exit(1)
 	}
 
