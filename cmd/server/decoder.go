@@ -397,13 +397,18 @@ func DecodePacket(hexString string, validateSignatures bool) (*DecodedPacket, er
 		// The header path hops count represents SNR entries = completed hops
 		hopsCompleted := path.HashCount
 		pathBytes, err := hex.DecodeString(payload.PathData)
-		if err == nil && path.HashSize > 0 {
-			hops := make([]string, 0, len(pathBytes)/path.HashSize)
-			for i := 0; i+path.HashSize <= len(pathBytes); i += path.HashSize {
-				hops = append(hops, strings.ToUpper(hex.EncodeToString(pathBytes[i:i+path.HashSize])))
+		if err == nil && payload.TraceFlags != nil {
+			// TRACE route hashes use path_sz from flags byte, not header hash_size
+			pathSz := (*payload.TraceFlags & 0x03) + 1
+			if pathSz > 0 {
+				hops := make([]string, 0, len(pathBytes)/pathSz)
+				for i := 0; i+pathSz <= len(pathBytes); i += pathSz {
+					hops = append(hops, strings.ToUpper(hex.EncodeToString(pathBytes[i:i+pathSz])))
+				}
+				path.Hops = hops
+				path.HashCount = len(hops)
+				path.HashSize = pathSz
 			}
-			path.Hops = hops
-			path.HashCount = len(hops)
 			path.HopsCompleted = &hopsCompleted
 		}
 	}

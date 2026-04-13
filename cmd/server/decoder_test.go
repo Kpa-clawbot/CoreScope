@@ -407,6 +407,65 @@ func TestDecodePacket_TraceFullyCompleted(t *testing.T) {
 	}
 }
 
+func TestDecodePacket_TraceFlags1_TwoBytePathSz(t *testing.T) {
+	// TRACE with flags=1 → path_sz = (1 & 0x03) + 1 = 2-byte hashes
+	// path_length: hash_size=0b00 (1-byte in header — irrelevant), hash_count=0 → 0x00
+	hex := "2500" + // header + path_length (0 SNR)
+		"01000000" + // tag
+		"02000000" + // authCode
+		"01" + // flags = 1 → path_sz = 2
+		"AABBCCDD" // 4 bytes = 2 hops of 2-byte each
+
+	pkt, err := DecodePacket(hex, false)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if len(pkt.Path.Hops) != 2 {
+		t.Errorf("expected 2 hops (2-byte path_sz), got %d: %v", len(pkt.Path.Hops), pkt.Path.Hops)
+	}
+	if pkt.Path.HashSize != 2 {
+		t.Errorf("expected HashSize=2, got %d", pkt.Path.HashSize)
+	}
+}
+
+func TestDecodePacket_TraceFlags2_ThreeBytePathSz(t *testing.T) {
+	// TRACE with flags=2 → path_sz = (2 & 0x03) + 1 = 3-byte hashes
+	hex := "2500" + // header + path_length (0 SNR)
+		"01000000" + // tag
+		"02000000" + // authCode
+		"02" + // flags = 2 → path_sz = 3
+		"AABBCCDDEEFF" // 6 bytes = 2 hops of 3-byte each
+
+	pkt, err := DecodePacket(hex, false)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if len(pkt.Path.Hops) != 2 {
+		t.Errorf("expected 2 hops (3-byte path_sz), got %d: %v", len(pkt.Path.Hops), pkt.Path.Hops)
+	}
+	if pkt.Path.HashSize != 3 {
+		t.Errorf("expected HashSize=3, got %d", pkt.Path.HashSize)
+	}
+}
+
+func TestDecodePacket_TracePathSzUnevenPayload(t *testing.T) {
+	// TRACE with flags=1 → path_sz=2, but 5 bytes of path data (not evenly divisible)
+	// Should produce 2 hops (4 bytes) and ignore the trailing byte
+	hex := "2500" + // header + path_length (0 SNR)
+		"01000000" + // tag
+		"02000000" + // authCode
+		"01" + // flags = 1 → path_sz = 2
+		"AABBCCDDEE" // 5 bytes → 2 hops, 1 byte remainder ignored
+
+	pkt, err := DecodePacket(hex, false)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if len(pkt.Path.Hops) != 2 {
+		t.Errorf("expected 2 hops (trailing byte ignored), got %d: %v", len(pkt.Path.Hops), pkt.Path.Hops)
+	}
+}
+
 func TestDecodeAdvertSignatureValidation(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {

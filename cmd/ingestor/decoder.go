@@ -80,9 +80,10 @@ type TransportCodes struct {
 
 // Path holds decoded path/hop information.
 type Path struct {
-	HashSize  int      `json:"hashSize"`
-	HashCount int      `json:"hashCount"`
-	Hops      []string `json:"hops"`
+	HashSize      int      `json:"hashSize"`
+	HashCount     int      `json:"hashCount"`
+	Hops          []string `json:"hops"`
+	HopsCompleted *int     `json:"hopsCompleted,omitempty"`
 }
 
 // AdvertFlags holds decoded advert flag bits.
@@ -589,14 +590,22 @@ func DecodePacket(hexString string, channelKeys map[string]string, validateSigna
 	// path field. The header path byte still encodes hashSize in bits 6-7, which
 	// we use to split the payload path data into individual hop prefixes.
 	if header.PayloadType == PayloadTRACE && payload.PathData != "" {
+		// The header path hops count represents SNR entries = completed hops
+		hopsCompleted := path.HashCount
 		pathBytes, err := hex.DecodeString(payload.PathData)
-		if err == nil && path.HashSize > 0 {
-			hops := make([]string, 0, len(pathBytes)/path.HashSize)
-			for i := 0; i+path.HashSize <= len(pathBytes); i += path.HashSize {
-				hops = append(hops, strings.ToUpper(hex.EncodeToString(pathBytes[i:i+path.HashSize])))
+		if err == nil && payload.TraceFlags != nil {
+			// TRACE route hashes use path_sz from flags byte, not header hash_size
+			pathSz := (*payload.TraceFlags & 0x03) + 1
+			if pathSz > 0 {
+				hops := make([]string, 0, len(pathBytes)/pathSz)
+				for i := 0; i+pathSz <= len(pathBytes); i += pathSz {
+					hops = append(hops, strings.ToUpper(hex.EncodeToString(pathBytes[i:i+pathSz])))
+				}
+				path.Hops = hops
+				path.HashCount = len(hops)
+				path.HashSize = pathSz
 			}
-			path.Hops = hops
-			path.HashCount = len(hops)
+			path.HopsCompleted = &hopsCompleted
 		}
 	}
 
