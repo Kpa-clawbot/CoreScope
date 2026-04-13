@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -46,6 +47,9 @@ type Server struct {
 
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
+
+	// Channel key manager for runtime decryption keys
+	channelKeys *ChannelKeyManager
 }
 
 // PerfStats tracks request performance.
@@ -75,14 +79,15 @@ func NewPerfStats() *PerfStats {
 
 func NewServer(db *DB, cfg *Config, hub *Hub) *Server {
 	return &Server{
-		db:        db,
-		cfg:       cfg,
-		hub:       hub,
-		startedAt: time.Now(),
-		perfStats: NewPerfStats(),
-		version:   resolveVersion(),
-		commit:    resolveCommit(),
-		buildTime: resolveBuildTime(),
+		db:          db,
+		cfg:         cfg,
+		hub:         hub,
+		startedAt:   time.Now(),
+		perfStats:   NewPerfStats(),
+		version:     resolveVersion(),
+		commit:      resolveCommit(),
+		buildTime:   resolveBuildTime(),
+		channelKeys: NewChannelKeyManager(),
 	}
 }
 
@@ -160,6 +165,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 
 	// Other endpoints
 	r.HandleFunc("/api/resolve-hops", s.handleResolveHops).Methods("GET")
+	r.HandleFunc("/api/channels/keys", s.handleAddChannelKey).Methods("POST")
+	r.HandleFunc("/api/channels/keys", s.handleListChannelKeys).Methods("GET")
+	r.HandleFunc("/api/channels/keys/{name}", s.handleDeleteChannelKey).Methods("DELETE")
 	r.HandleFunc("/api/channels/{hash}/messages", s.handleChannelMessages).Methods("GET")
 	r.HandleFunc("/api/channels", s.handleChannels).Methods("GET")
 	r.HandleFunc("/api/observers/metrics/summary", s.handleMetricsSummary).Methods("GET")
@@ -1695,6 +1703,122 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, ChannelMessagesResponse{Messages: []map[string]interface{}{}, Total: 0})
+}
+
+// handleAddChannelKey adds a new channel key (hashtag-derived or PSK).
+func (s *Server) handleAddChannelKey(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+		Key  string `json:"key,omitempty"` // optional hex PSK
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, 400, "invalid JSON body")
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		writeError(w, 400, "name is required")
+		return
+	}
+
+	// Ensure hashtag prefix
+	if !strings.HasPrefix(name, "#") {
+		name = "#" + name
+	}
+
+	var keyHex string
+	source := "hashtag"
+	if req.Key != "" {
+		// Validate hex key (must be 32 hex chars = 16 bytes)
+		if len(req.Key) != 32 {
+			writeError(w, 400, "key must be 32 hex characters (16 bytes)")
+			return
+		}
+		if _, err := hex.DecodeString(req.Key); err != nil {
+			writeError(w, 400, "key must be valid hex")
+			return
+		}
+		keyHex = req.Key
+		source = "psk"
+	} else {
+		keyHex = deriveHashtagKey(name)
+	}
+
+	// Add to runtime key manager
+	s.channelKeys.AddKey(name, keyHex)
+
+	// Persist to SQLite
+	if s.db != nil {
+		if err := saveUserChannelKey(s.db.path, UserChannelKey{
+			Name:   name,
+			KeyHex: keyHex,
+			Source: source,
+		}); err != nil {
+			log.Printf("[channels] failed to persist key for %s: %v", name, err)
+		}
+	}
+
+	// Retroactive decryption in background
+	if s.db != nil {
+		go func() {
+			count, err := retroactiveDecrypt(s.db.path, s.db, name, keyHex)
+			if err != nil {
+				log.Printf("[channels] retroactive decrypt error: %v", err)
+			} else if count > 0 {
+				log.Printf("[channels] retroactively decrypted %d packets for %s", count, name)
+			}
+		}()
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"ok":      true,
+		"name":    name,
+		"key":     keyHex,
+		"source":  source,
+		"message": fmt.Sprintf("Added %s — decrypting matching messages...", name),
+	})
+}
+
+// handleListChannelKeys returns all user-added channel keys.
+func (s *Server) handleListChannelKeys(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		writeJSON(w, map[string]interface{}{"keys": []UserChannelKey{}})
+		return
+	}
+	keys, err := loadUserChannelKeys(s.db)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if keys == nil {
+		keys = []UserChannelKey{}
+	}
+	writeJSON(w, map[string]interface{}{"keys": keys})
+}
+
+// handleDeleteChannelKey removes a user-added channel key.
+func (s *Server) handleDeleteChannelKey(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	if name == "" {
+		writeError(w, 400, "name is required")
+		return
+	}
+
+	// URL-decode: the name may contain # which is URL-encoded
+	if !strings.HasPrefix(name, "#") {
+		name = "#" + name
+	}
+
+	s.channelKeys.RemoveKey(name)
+
+	if s.db != nil {
+		if err := deleteUserChannelKey(s.db.path, name); err != nil {
+			log.Printf("[channels] failed to delete key for %s: %v", name, err)
+		}
+	}
+
+	writeJSON(w, map[string]interface{}{"ok": true, "name": name})
 }
 
 func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {

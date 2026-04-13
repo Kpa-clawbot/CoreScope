@@ -327,6 +327,13 @@
         <div class="ch-sidebar-header">
           <div class="ch-sidebar-title"><span class="ch-icon">💬</span> Channels</div>
         </div>
+        <div class="ch-add-channel" id="chAddChannel">
+          <form id="chAddForm" class="ch-add-form" autocomplete="off">
+            <input type="text" id="chAddInput" class="ch-add-input" placeholder="Enter #channelname" aria-label="Add channel" />
+            <button type="submit" class="ch-add-btn" title="Add channel">+</button>
+          </form>
+          <div id="chAddFeedback" class="ch-add-feedback" style="display:none"></div>
+        </div>
         <div id="chRegionFilter" class="region-filter-container" style="padding:0 8px"></div>
         <div class="ch-channel-list" id="chList" role="listbox" aria-label="Channels">
           <div class="ch-loading">Loading channels…</div>
@@ -355,6 +362,47 @@
     });
 
     loadObserverRegions();
+
+    // Add channel form handler
+    (function () {
+      var form = document.getElementById('chAddForm');
+      var input = document.getElementById('chAddInput');
+      var feedback = document.getElementById('chAddFeedback');
+      if (!form) return;
+      form.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        var val = (input.value || '').trim();
+        if (!val) return;
+        // Auto-add # prefix if missing
+        if (val.charAt(0) !== '#') val = '#' + val;
+        feedback.style.display = 'block';
+        feedback.textContent = 'Adding ' + val + '…';
+        feedback.className = 'ch-add-feedback';
+        try {
+          var resp = await fetch('/api/channels/keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: val })
+          });
+          var data = await resp.json();
+          if (!resp.ok) {
+            feedback.textContent = data.error || 'Failed to add channel';
+            feedback.className = 'ch-add-feedback ch-add-error';
+            return;
+          }
+          feedback.textContent = data.message || ('Added ' + val);
+          feedback.className = 'ch-add-feedback ch-add-success';
+          input.value = '';
+          // Refresh channel list after a short delay (retroactive decryption is async)
+          setTimeout(function () { loadChannels(); }, 1500);
+          setTimeout(function () { feedback.style.display = 'none'; }, 4000);
+        } catch (err) {
+          feedback.textContent = 'Network error';
+          feedback.className = 'ch-add-feedback ch-add-error';
+        }
+      });
+    })();
+
     loadChannels().then(async function () {
       if (routeParam) await selectChannel(routeParam);
       if (_pendingNode && _pendingNode.length < 200) await showNodeDetail(_pendingNode);

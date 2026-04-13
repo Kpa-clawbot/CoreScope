@@ -460,6 +460,22 @@ fieldset.mc-section legend.mc-label { padding: 0; }
 .ch-sidebar-header {
   padding: 14px 16px; border-bottom: 1px solid var(--border);
 }
+.ch-add-channel { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.ch-add-form { display: flex; gap: 4px; }
+.ch-add-input {
+  flex: 1; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
+  font-size: 13px; background: var(--input-bg, var(--bg)); color: var(--text); font-family: var(--font);
+}
+.ch-add-input::placeholder { color: var(--text-secondary, #999); }
+.ch-add-btn {
+  padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--accent, #4a9eff); color: #fff; font-size: 16px; font-weight: 700;
+  cursor: pointer; line-height: 1;
+}
+.ch-add-btn:hover { opacity: 0.85; }
+.ch-add-feedback { font-size: 12px; padding: 4px 0 0; color: var(--text-secondary, #999); }
+.ch-add-feedback.ch-add-success { color: var(--success, #4caf50); }
+.ch-add-feedback.ch-add-error { color: var(--error, #f44336); }
 .ch-sidebar-title {
   display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; margin-bottom: 8px;
 }

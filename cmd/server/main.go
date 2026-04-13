@@ -228,6 +228,23 @@ func main() {
 	// HTTP server
 	srv := NewServer(database, cfg, hub)
 	srv.store = store
+
+	// Initialize user channel keys table and load persisted keys
+	if err := ensureUserChannelKeysTable(dbPath); err != nil {
+		log.Printf("[channels] warning: could not create user_channel_keys table: %v", err)
+	}
+	if database != nil {
+		userKeys, err := loadUserChannelKeys(database)
+		if err != nil {
+			log.Printf("[channels] warning: could not load user channel keys: %v", err)
+		} else if len(userKeys) > 0 {
+			for _, k := range userKeys {
+				srv.channelKeys.AddKey(k.Name, k.KeyHex)
+			}
+			log.Printf("[channels] loaded %d user channel keys", len(userKeys))
+		}
+	}
+
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
