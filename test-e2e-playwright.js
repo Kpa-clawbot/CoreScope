@@ -1470,6 +1470,8 @@ async function run() {
   // ─── Neighbor section tests ───────────────────────────────────────────────
 
   await test('Node detail: neighbors section exists with correct columns', async () => {
+    // Full-screen node view (with #node-neighbors) is mobile-only since #676 fix.
+    await page.setViewportSize({ width: 390, height: 844 });
     // Navigate to a node detail page (use the first node in the list)
     await page.goto(BASE + '/#/nodes');
     await page.waitForSelector('#nodesBody tr[data-key]', { timeout: 10000 });
@@ -1500,6 +1502,7 @@ async function run() {
       const text = await page.$eval('#fullNeighborsContent', el => el.textContent);
       assert(text.includes('No neighbor data') || text.includes('Could not load'), 'Should show empty or error state');
     }
+    await page.setViewportSize({ width: 1280, height: 800 });
   });
 
 
