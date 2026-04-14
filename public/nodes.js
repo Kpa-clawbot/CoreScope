@@ -318,8 +318,8 @@
   function init(app, routeParam) {
     directNode = routeParam || null;
 
-    if (directNode) {
-      // Full-screen single node view
+    if (directNode && window.innerWidth <= 640) {
+      // Full-screen single node view (mobile only)
       app.innerHTML = `<div class="node-fullscreen">
         <div class="node-full-header">
           <button class="detail-back-btn node-back-btn" id="nodeBackBtn" aria-label="Back to nodes">←</button>
@@ -377,6 +377,7 @@
     }, 250));
 
     loadNodes();
+    if (directNode) selectNode(directNode);
     // Auto-refresh when ADVERT packets arrive via WebSocket (fixes #131)
     wsHandler = debouncedOnWS(function (msgs) {
       const advertMsgs = msgs.filter(isAdvertMessage);
@@ -979,6 +980,7 @@
           panel.classList.add('empty');
           panel.innerHTML = '<span>Select a node to view details</span>';
           selectedKey = null;
+          history.replaceState(null, '', '#/nodes');
           renderRows();
         }
       }
@@ -991,6 +993,7 @@
         panel.classList.add('empty');
         panel.innerHTML = '<span>Select a node to view details</span>';
         selectedKey = null;
+        history.replaceState(null, '', '#/nodes');
         renderRows();
       }
     });
@@ -1048,6 +1051,7 @@
       return;
     }
     selectedKey = pubkey;
+    history.replaceState(null, '', '#/nodes/' + encodeURIComponent(pubkey));
     renderRows();
     const panel = document.getElementById('nodesRight');
     panel.classList.remove('empty');
