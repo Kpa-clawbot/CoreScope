@@ -72,6 +72,8 @@ The **🗺️ GeoFilter** tab lets operators configure geographic filtering dire
 
 The editing controls are only revealed after the server confirms write access. On public deployments without an `apiKey`, the tab is read-only.
 
+The Export tab also includes a **GeoFilter Builder →** link for a full-screen polygon drawing tool at `/geofilter-builder.html`.
+
 See [Geographic Filtering](geofilter.md) for the full guide, including the API, the prune script, and the standalone GeoFilter Builder.
 
 ## How it works
