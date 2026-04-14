@@ -1687,15 +1687,15 @@ async function run() {
   await test('Packets filter expression updates URL and restores on reload', async () => {
     await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#packetFilterInput', { timeout: 8000 });
-    await page.fill('#packetFilterInput', 'type=ADVERT');
+    await page.fill('#packetFilterInput', 'type == ADVERT');
     await page.waitForTimeout(500);
     const url = page.url();
-    assert(url.includes('filter=') && url.includes('ADVERT'), `URL should contain filter=type%3DADVERT, got: ${url}`);
+    assert(url.includes('filter=') && url.includes('ADVERT'), `URL should contain filter=type%3D%3DADVERT, got: ${url}`);
     // Reload and check expression restored
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#packetFilterInput', { timeout: 8000 });
     const val = await page.$eval('#packetFilterInput', el => el.value);
-    assert(val === 'type=ADVERT', `packetFilterInput should be restored, got: ${val}`);
+    assert(val === 'type == ADVERT', `packetFilterInput should be restored, got: ${val}`);
   });
 
   // Test: timeWindow change updates URL
