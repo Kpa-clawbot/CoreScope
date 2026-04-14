@@ -45,6 +45,10 @@
     var parts = [];
     if (timeWindowMin && timeWindowMin !== DEFAULT_TIME_WINDOW) parts.push('timeWindow=' + timeWindowMin);
     if (regionParam) parts.push('region=' + encodeURIComponent(regionParam));
+    if (filters.hash) parts.push('hash=' + encodeURIComponent(filters.hash));
+    if (filters.node) parts.push('node=' + encodeURIComponent(filters.node));
+    if (filters.observer) parts.push('observer=' + encodeURIComponent(filters.observer));
+    if (filters._filterExpr) parts.push('filter=' + encodeURIComponent(filters._filterExpr));
     return parts.length ? '?' + parts.join('&') : '';
   }
   window.buildPacketsQuery = buildPacketsQuery;
@@ -342,6 +346,14 @@
     }
     var _urlRegion = _initUrlParams.get('region');
     if (_urlRegion) _pendingUrlRegion = _urlRegion;
+    var _urlHash = _initUrlParams.get('hash');
+    if (_urlHash) filters.hash = _urlHash;
+    var _urlNode = _initUrlParams.get('node');
+    if (_urlNode) { filters.node = _urlNode; filters.nodeName = _urlNode.slice(0, 8); }
+    var _urlObserver = _initUrlParams.get('observer');
+    if (_urlObserver) filters.observer = _urlObserver;
+    var _urlFilterExpr = _initUrlParams.get('filter');
+    if (_urlFilterExpr) filters._filterExpr = _urlFilterExpr;
 
     app.innerHTML = `<div class="split-layout detail-collapsed">
       <div class="panel-left" id="pktLeft" aria-live="polite" aria-relevant="additions removals"></div>
@@ -797,6 +809,12 @@
       var pfError = document.getElementById('packetFilterError');
       var pfCount = document.getElementById('packetFilterCount');
       if (!pfInput || !window.PacketFilter) return;
+      // Restore Wireshark filter expression from URL
+      if (filters._filterExpr) {
+        pfInput.value = filters._filterExpr;
+        var _restored = PacketFilter.compile(filters._filterExpr);
+        if (!_restored.error) { pfInput.classList.add('filter-active'); filters._packetFilter = _restored.filter; }
+      }
       var pfTimer = null;
       pfInput.addEventListener('input', function() {
         clearTimeout(pfTimer);
@@ -807,6 +825,8 @@
             pfError.style.display = 'none';
             pfCount.style.display = 'none';
             filters._packetFilter = null;
+            filters._filterExpr = undefined;
+            updatePacketsUrl();
             renderTableRows();
             return;
           }
@@ -818,12 +838,16 @@
             pfError.style.display = 'block';
             pfCount.style.display = 'none';
             filters._packetFilter = null;
+            filters._filterExpr = undefined;
+            updatePacketsUrl();
             renderTableRows();
           } else {
             pfInput.classList.remove('filter-error');
             pfInput.classList.add('filter-active');
             pfError.style.display = 'none';
             filters._packetFilter = compiled.filter;
+            filters._filterExpr = expr;
+            updatePacketsUrl();
             renderTableRows();
           }
         }, 300);
@@ -868,6 +892,7 @@
       if (filters.observer) localStorage.setItem('meshcore-observer-filter', filters.observer); else localStorage.removeItem('meshcore-observer-filter');
       buildObserverMenu();
       updateObsTrigger();
+      updatePacketsUrl();
       renderTableRows();
     });
 
@@ -930,7 +955,7 @@
 
     // Filter event listeners
     document.getElementById('fHash').value = filters.hash || '';
-    document.getElementById('fHash').addEventListener('input', debounce((e) => { filters.hash = e.target.value || undefined; loadPackets(); }, 300));
+    document.getElementById('fHash').addEventListener('input', debounce((e) => { filters.hash = e.target.value || undefined; updatePacketsUrl(); loadPackets(); }, 300));
 
     // Time window dropdown — restore from localStorage and bind change
     const fTimeWindow = document.getElementById('fTimeWindow');
@@ -1065,7 +1090,7 @@
       if (!q) {
         fNodeDrop.classList.add('hidden');
         fNode.setAttribute('aria-expanded', 'false');
-        if (filters.node) { filters.node = undefined; filters.nodeName = undefined; loadPackets(); }
+        if (filters.node) { filters.node = undefined; filters.nodeName = undefined; updatePacketsUrl(); loadPackets(); }
         return;
       }
       try {
@@ -1094,6 +1119,7 @@
       fNode.setAttribute('aria-expanded', 'false');
       fNode.setAttribute('aria-activedescendant', '');
       nodeActiveIdx = -1;
+      updatePacketsUrl();
       loadPackets();
     }
 

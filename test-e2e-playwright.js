@@ -1663,6 +1663,36 @@ async function run() {
     assert(url.includes('timeWindow=60'), `URL should still contain timeWindow=60, got: ${url}`);
   });
 
+  // Test: hash filter updates URL and is restored (#682)
+  await test('Packets hash filter updates URL and restores on reload', async () => {
+    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#fHash', { timeout: 8000 });
+    await page.fill('#fHash', 'abc123');
+    await page.waitForTimeout(500);
+    const url = page.url();
+    assert(url.includes('hash=abc123'), `URL should contain hash=abc123, got: ${url}`);
+    // Reload and check input restored
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#fHash', { timeout: 8000 });
+    const val = await page.$eval('#fHash', el => el.value);
+    assert(val === 'abc123', `fHash should be restored to abc123, got: ${val}`);
+  });
+
+  // Test: Wireshark filter expression updates URL and is restored (#682)
+  await test('Packets filter expression updates URL and restores on reload', async () => {
+    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#packetFilterInput', { timeout: 8000 });
+    await page.fill('#packetFilterInput', 'type=ADVERT');
+    await page.waitForTimeout(500);
+    const url = page.url();
+    assert(url.includes('filter=') && url.includes('ADVERT'), `URL should contain filter=type%3DADVERT, got: ${url}`);
+    // Reload and check expression restored
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#packetFilterInput', { timeout: 8000 });
+    const val = await page.$eval('#packetFilterInput', el => el.value);
+    assert(val === 'type=ADVERT', `packetFilterInput should be restored, got: ${val}`);
+  });
+
   // Test: timeWindow change updates URL
   await test('Packets timeWindow change updates URL', async () => {
     await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
