@@ -638,7 +638,7 @@
           container.style.display = '';
           var severityColor = SKEW_SEVERITY_COLORS[cs.severity] || 'var(--text-muted)';
           var severityLabel = SKEW_SEVERITY_LABELS[cs.severity] || cs.severity;
-          var driftHtml = cs.driftPerDaySec ? '<div style="font-size:12px;color:var(--text-muted);margin-top:2px">Drift: ' + (cs.driftPerDaySec >= 0 ? '+' : '') + cs.driftPerDaySec.toFixed(1) + 's/day</div>' : '';
+          var driftHtml = cs.driftPerDaySec ? '<div style="font-size:12px;color:var(--text-muted);margin-top:2px">Drift: ' + formatDrift(cs.driftPerDaySec) + '</div>' : '';
           var sparkHtml = renderSkewSparkline(cs.samples, 200, 32);
           container.innerHTML =
             '<h4 style="margin:0 0 6px">⏰ Clock Skew</h4>' +

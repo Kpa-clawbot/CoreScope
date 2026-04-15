@@ -3460,7 +3460,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
             '<td><strong>' + esc(n.nodeName || n.pubkey.slice(0, 12)) + '</strong></td>' +
             '<td style="font-family:var(--mono,monospace)">' + formatSkew(n.medianSkewSec) + '</td>' +
             '<td>' + renderSkewBadge(n.severity, n.medianSkewSec) + '</td>' +
-            '<td style="font-family:var(--mono,monospace)">' + (n.driftPerDaySec ? (n.driftPerDaySec >= 0 ? '+' : '') + n.driftPerDaySec.toFixed(1) + ' s/day' : '—') + '</td>' +
+            '<td style="font-family:var(--mono,monospace)">' + formatDrift(n.driftPerDaySec) + '</td>' +
             '<td style="font-size:11px">' + lastAdv + '</td>' +
             '</tr>';
         }).join('');

@@ -422,6 +422,12 @@
     return sign + Math.floor(abs / 86400) + 'd ' + Math.round((abs % 86400) / 3600) + 'h';
   };
 
+  /** Format drift rate as "+X.Xs/day" or "—" if falsy */
+  window.formatDrift = function(secPerDay) {
+    if (!secPerDay) return '—';
+    return (secPerDay >= 0 ? '+' : '') + secPerDay.toFixed(1) + ' s/day';
+  };
+
   /** Render a clock skew badge HTML */
   window.renderSkewBadge = function(severity, skewSec) {
     if (!severity) return '';
