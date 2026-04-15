@@ -503,6 +503,9 @@ button.ch-item.selected { background: var(--selected-bg); }
 .ch-item-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px; }
 .ch-item-name { font-weight: 600; font-size: 14px; }
 .ch-item-time { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.ch-remove-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 13px; padding: 0 2px; margin-left: 4px; opacity: 0; transition: opacity 0.15s; line-height: 1; }
+button.ch-item:hover .ch-remove-btn { opacity: 0.6; }
+.ch-remove-btn:hover { opacity: 1 !important; color: var(--danger, #dc2626); }
 .ch-item-preview { font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .ch-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
