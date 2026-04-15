@@ -302,3 +302,68 @@ func TestJsonNumber(t *testing.T) {
 		t.Error("missing key should return 0")
 	}
 }
+
+// ── Integration: GetNodeClockSkew via PacketStore ──────────────────────────────
+
+func TestGetNodeClockSkew_Integration(t *testing.T) {
+	ps := NewPacketStore(nil, nil)
+
+	// Simulate two ADVERT transmissions for the same node, seen by 2 observers each.
+	// Node "AABB" has clock 120s ahead.
+	pt := 4 // ADVERT
+	tx1 := &StoreTx{
+		Hash:        "hash1",
+		PayloadType: &pt,
+		DecodedJSON: `{"payload":{"timestamp":1700002320}}`, // obs=1700002200, node ahead by 120s
+		Observations: []*StoreObs{
+			{ObserverID: "obs1", Timestamp: "2023-11-14T22:50:00Z"}, // 1700002200
+			{ObserverID: "obs2", Timestamp: "2023-11-14T22:50:00Z"}, // 1700002200
+		},
+	}
+	tx2 := &StoreTx{
+		Hash:        "hash2",
+		PayloadType: &pt,
+		DecodedJSON: `{"payload":{"timestamp":1700005920}}`, // obs=1700005800, node ahead by 120s
+		Observations: []*StoreObs{
+			{ObserverID: "obs1", Timestamp: "2023-11-14T23:50:00Z"}, // 1700005800
+			{ObserverID: "obs2", Timestamp: "2023-11-14T23:50:00Z"}, // 1700005800
+		},
+	}
+
+	ps.mu.Lock()
+	ps.byNode["AABB"] = []*StoreTx{tx1, tx2}
+	ps.byPayloadType[4] = []*StoreTx{tx1, tx2}
+	// Force recompute by setting interval to 0.
+	ps.clockSkew.computeInterval = 0
+	ps.mu.Unlock()
+
+	result := ps.GetNodeClockSkew("AABB")
+	if result == nil {
+		t.Fatal("expected clock skew result for node AABB")
+	}
+	if result.Pubkey != "AABB" {
+		t.Errorf("pubkey = %q, want AABB", result.Pubkey)
+	}
+	// Both transmissions show 120s skew, so median should be 120.
+	if result.MedianSkewSec != 120 {
+		t.Errorf("median skew = %v, want 120", result.MedianSkewSec)
+	}
+	if result.SampleCount < 2 {
+		t.Errorf("sample count = %v, want >= 2", result.SampleCount)
+	}
+	if result.Severity != SkewOK {
+		t.Errorf("severity = %v, want ok (120s < 5min)", result.Severity)
+	}
+	// Drift should be ~0 since skew is constant.
+	if math.Abs(result.DriftPerDaySec) > 1 {
+		t.Errorf("drift = %v, want ~0 for constant skew", result.DriftPerDaySec)
+	}
+}
+
+func TestGetNodeClockSkew_NoData(t *testing.T) {
+	ps := NewPacketStore(nil, nil)
+	result := ps.GetNodeClockSkew("nonexistent")
+	if result != nil {
+		t.Error("expected nil for nonexistent node")
+	}
+}

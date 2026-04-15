@@ -25,6 +25,9 @@ const (
 	skewThresholdAbsurdSec   = 30 * 24 * 3600 // 30 days
 )
 
+// classifySkew maps absolute skew (seconds) to a severity level.
+// Float64 comparison is safe: inputs are rounded to 1 decimal via round(),
+// and thresholds are integer multiples of 60 — no rounding artifacts.
 func classifySkew(absSkewSec float64) SkewSeverity {
 	switch {
 	case absSkewSec >= skewThresholdAbsurdSec:
@@ -92,28 +95,46 @@ func NewClockSkewEngine() *ClockSkewEngine {
 
 // Recompute recalculates all clock skew data from the packet store.
 // Called periodically or on demand. Holds store RLock externally.
+// Uses read-copy-update: heavy computation runs outside the write lock,
+// then results are swapped in under a brief lock.
 func (e *ClockSkewEngine) Recompute(store *PacketStore) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if time.Since(e.lastComputed) < e.computeInterval {
+	// Fast path: check under read lock if recompute is needed.
+	e.mu.RLock()
+	fresh := time.Since(e.lastComputed) < e.computeInterval
+	e.mu.RUnlock()
+	if fresh {
 		return
 	}
 
-	// Phase 1: Collect skew samples from ADVERT packets.
+	// Phase 1: Collect skew samples from ADVERT packets (store RLock held by caller).
 	samples := e.collectSamples(store)
-	if len(samples) == 0 {
-		e.lastComputed = time.Now()
-		return
+
+	// Phase 2–3: Compute outside the write lock.
+	var newOffsets map[string]float64
+	var newSamples map[string]int
+	var newNodeSkew map[string]*NodeClockSkew
+
+	if len(samples) > 0 {
+		newOffsets, newSamples = calibrateObservers(samples)
+		newNodeSkew = computeNodeSkew(samples, newOffsets)
+	} else {
+		newOffsets = make(map[string]float64)
+		newSamples = make(map[string]int)
+		newNodeSkew = make(map[string]*NodeClockSkew)
 	}
 
-	// Phase 2: Observer calibration via multi-observer cross-check.
-	e.observerOffsets, e.observerSamples = calibrateObservers(samples)
-
-	// Phase 3: Compute per-node corrected skew.
-	e.nodeSkew = computeNodeSkew(samples, e.observerOffsets)
-
+	// Swap results under brief write lock.
+	e.mu.Lock()
+	// Re-check: another goroutine may have computed while we were working.
+	if time.Since(e.lastComputed) < e.computeInterval {
+		e.mu.Unlock()
+		return
+	}
+	e.observerOffsets = newOffsets
+	e.observerSamples = newSamples
+	e.nodeSkew = newNodeSkew
 	e.lastComputed = time.Now()
+	e.mu.Unlock()
 }
 
 // collectSamples extracts skew samples from ADVERT packets in the store.
