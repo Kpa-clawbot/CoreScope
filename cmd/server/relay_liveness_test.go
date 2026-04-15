@@ -136,8 +136,9 @@ func TestRelayMetrics_Counts(t *testing.T) {
 	if c24h != 3 {
 		t.Errorf("relay_count_24h: expected 3, got %d", c24h)
 	}
-	if lastRelayed == "" {
-		t.Error("last_relayed should not be empty")
+	wantLast := time.UnixMilli(times[2]).UTC().Format(time.RFC3339)
+	if lastRelayed != wantLast {
+		t.Errorf("last_relayed: got %q, want %q", lastRelayed, wantLast)
 	}
 }
 
