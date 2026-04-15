@@ -2760,8 +2760,11 @@ func removeFromRelayTimeIndex(idx map[string][]int64, firstSeen string, pubkeys 
 		slice := idx[pk]
 		i := sort.Search(len(slice), func(j int) bool { return slice[j] >= millis })
 		if i < len(slice) && slice[i] == millis {
-			idx[pk] = append(slice[:i], slice[i+1:]...)
-			if len(idx[pk]) == 0 {
+			newSlice := make([]int64, 0, len(slice)-1)
+			newSlice = append(newSlice, slice[:i]...)
+			newSlice = append(newSlice, slice[i+1:]...)
+			idx[pk] = newSlice
+			if len(newSlice) == 0 {
 				delete(idx, pk)
 			}
 		}
