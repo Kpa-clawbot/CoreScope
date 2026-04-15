@@ -438,8 +438,8 @@ func (s *PacketStore) GetFleetClockSkew() []*NodeClockSkew {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Build name/role lookup from DB cache.
-	allNodes := s.nodeCache
+	// Build name/role lookup from DB cache (requires s.mu held).
+	allNodes, _ := s.getCachedNodesAndPM()
 	nameMap := make(map[string]nodeInfo, len(allNodes))
 	for _, ni := range allNodes {
 		nameMap[ni.PublicKey] = ni
