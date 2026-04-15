@@ -644,7 +644,7 @@ func (s *PacketStore) touchRelayLastSeen(tx *StoreTx, now time.Time) {
 // trackAdvertPubkey increments the advertPubkeys refcount for ADVERT packets.
 // Must be called under s.mu write lock.
 func (s *PacketStore) trackAdvertPubkey(tx *StoreTx) {
-	if tx.PayloadType == nil || *tx.PayloadType != 4 || tx.DecodedJSON == "" {
+	if tx.PayloadType == nil || *tx.PayloadType != PayloadADVERT || tx.DecodedJSON == "" {
 		return
 	}
 	d := tx.ParsedDecoded()
@@ -665,7 +665,7 @@ func (s *PacketStore) trackAdvertPubkey(tx *StoreTx) {
 // untrackAdvertPubkey decrements the advertPubkeys refcount for ADVERT packets.
 // Must be called under s.mu write lock.
 func (s *PacketStore) untrackAdvertPubkey(tx *StoreTx) {
-	if tx.PayloadType == nil || *tx.PayloadType != 4 || tx.DecodedJSON == "" {
+	if tx.PayloadType == nil || *tx.PayloadType != PayloadADVERT || tx.DecodedJSON == "" {
 		return
 	}
 	var d map[string]interface{}
@@ -5138,7 +5138,7 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 
 		// Track originator from advert packets (including zero-hop adverts,
 		// keyed by pubKey so same-name nodes don't merge).
-		if tx.PayloadType != nil && *tx.PayloadType == 4 && tx.DecodedJSON != "" {
+		if tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT && tx.DecodedJSON != "" {
 			var d map[string]interface{}
 			if json.Unmarshal([]byte(tx.DecodedJSON), &d) == nil {
 				pk := ""

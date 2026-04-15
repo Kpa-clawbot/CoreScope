@@ -72,6 +72,11 @@ type NodeClockSkew struct {
 	LastObservedTS  int64        `json:"lastObservedTS"`   // most recent observation timestamp
 }
 
+// txSkewResult maps tx hash → per-transmission skew stats. This is an
+// intermediate result keyed by hash (not pubkey); the store maps hash → pubkey
+// when building the final per-node view.
+type txSkewResult = map[string]*NodeClockSkew
+
 // ── Clock Skew Engine ──────────────────────────────────────────────────────────
 
 // ClockSkewEngine computes and caches clock skew data for nodes and observers.
@@ -79,7 +84,7 @@ type ClockSkewEngine struct {
 	mu               sync.RWMutex
 	observerOffsets  map[string]float64 // observerID → calibrated offset (seconds)
 	observerSamples  map[string]int     // observerID → number of multi-observer packets used
-	nodeSkew         map[string]*NodeClockSkew
+	nodeSkew         txSkewResult
 	lastComputed     time.Time
 	computeInterval  time.Duration
 }
@@ -88,7 +93,7 @@ func NewClockSkewEngine() *ClockSkewEngine {
 	return &ClockSkewEngine{
 		observerOffsets:  make(map[string]float64),
 		observerSamples: make(map[string]int),
-		nodeSkew:       make(map[string]*NodeClockSkew),
+		nodeSkew:       make(txSkewResult),
 		computeInterval: 30 * time.Second,
 	}
 }
@@ -107,12 +112,12 @@ func (e *ClockSkewEngine) Recompute(store *PacketStore) {
 	}
 
 	// Phase 1: Collect skew samples from ADVERT packets (store RLock held by caller).
-	samples := e.collectSamples(store)
+	samples := collectSamples(store)
 
 	// Phase 2–3: Compute outside the write lock.
 	var newOffsets map[string]float64
 	var newSamples map[string]int
-	var newNodeSkew map[string]*NodeClockSkew
+	var newNodeSkew txSkewResult
 
 	if len(samples) > 0 {
 		newOffsets, newSamples = calibrateObservers(samples)
@@ -120,7 +125,7 @@ func (e *ClockSkewEngine) Recompute(store *PacketStore) {
 	} else {
 		newOffsets = make(map[string]float64)
 		newSamples = make(map[string]int)
-		newNodeSkew = make(map[string]*NodeClockSkew)
+		newNodeSkew = make(txSkewResult)
 	}
 
 	// Swap results under brief write lock.
@@ -139,9 +144,8 @@ func (e *ClockSkewEngine) Recompute(store *PacketStore) {
 
 // collectSamples extracts skew samples from ADVERT packets in the store.
 // Must be called with store.mu held (at least RLock).
-func (e *ClockSkewEngine) collectSamples(store *PacketStore) []skewSample {
-	advertType := 4
-	adverts := store.byPayloadType[advertType]
+func collectSamples(store *PacketStore) []skewSample {
+	adverts := store.byPayloadType[PayloadADVERT]
 	if len(adverts) == 0 {
 		return nil
 	}
@@ -270,7 +274,7 @@ func calibrateObservers(samples []skewSample) (map[string]float64, map[string]in
 // ── Phase 3: Per-Node Skew ─────────────────────────────────────────────────────
 
 // computeNodeSkew calculates corrected skew statistics for each node.
-func computeNodeSkew(samples []skewSample, obsOffsets map[string]float64) map[string]*NodeClockSkew {
+func computeNodeSkew(samples []skewSample, obsOffsets map[string]float64) txSkewResult {
 	// Compute corrected skew per sample, grouped by hash (each hash = one
 	// node's advert transmission). The caller maps hash → pubkey via byNode.
 	type correctedSample struct {
@@ -368,7 +372,7 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 	var tsSkews []tsSkewPair
 
 	for _, tx := range txs {
-		if tx.PayloadType == nil || *tx.PayloadType != 4 {
+		if tx.PayloadType == nil || *tx.PayloadType != PayloadADVERT {
 			continue
 		}
 		cs, ok := s.clockSkew.nodeSkew[tx.Hash]
