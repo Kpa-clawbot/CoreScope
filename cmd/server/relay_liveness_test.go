@@ -180,6 +180,107 @@ func TestRelayTimesWiredIntoIngest(t *testing.T) {
 	t.Logf("byPathHop keys: %d, relayTimes keys: %d", hopKeys, relayKeys)
 }
 
+func TestGetBulkHealthRepeaterRelayFields(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	// Insert a synthetic repeater node into the DB if none exists
+	_, err := srv.db.conn.Exec(`INSERT OR IGNORE INTO nodes (public_key, name, role, last_seen, first_seen, advert_count)
+		VALUES ('relay662test0001', 'TestRepeater662', 'repeater', datetime('now'), datetime('now'), 1)`)
+	if err != nil {
+		t.Fatalf("insert test node: %v", err)
+	}
+
+	// Inject a relay timestamp within the last hour
+	pk := "relay662test0001"
+	now := time.Now().UnixMilli()
+	recentMs := now - 10*60*1000 // 10 min ago
+	srv.store.mu.Lock()
+	srv.store.relayTimes[pk] = []int64{recentMs}
+	srv.store.mu.Unlock()
+
+	results := srv.store.GetBulkHealth(200, "")
+
+	var found map[string]interface{}
+	for _, r := range results {
+		if r["public_key"] == pk {
+			found = r
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("test repeater not found in GetBulkHealth results")
+	}
+
+	stats, ok := found["stats"].(map[string]interface{})
+	if !ok {
+		t.Fatal("missing stats map in result")
+	}
+
+	if v, ok := stats["relay_count_1h"].(int); !ok || v != 1 {
+		t.Errorf("relay_count_1h: expected 1, got %v", stats["relay_count_1h"])
+	}
+	if v, ok := stats["relay_count_24h"].(int); !ok || v != 1 {
+		t.Errorf("relay_count_24h: expected 1, got %v", stats["relay_count_24h"])
+	}
+	if _, ok := stats["last_relayed"].(string); !ok {
+		t.Errorf("last_relayed: expected string, got %T", stats["last_relayed"])
+	}
+}
+
+func TestGetBulkHealthCompanionNoRelayFields(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	_, err := srv.db.conn.Exec(`INSERT OR IGNORE INTO nodes (public_key, name, role, last_seen, first_seen, advert_count)
+		VALUES ('comp662test0001', 'TestCompanion662', 'companion', datetime('now'), datetime('now'), 1)`)
+	if err != nil {
+		t.Fatalf("insert test node: %v", err)
+	}
+
+	// Give the companion a relay entry (should be ignored by role gate)
+	pk := "comp662test0001"
+	srv.store.mu.Lock()
+	srv.store.relayTimes[pk] = []int64{time.Now().UnixMilli() - 5*60*1000}
+	srv.store.mu.Unlock()
+
+	results := srv.store.GetBulkHealth(200, "")
+	for _, r := range results {
+		if r["public_key"] == pk {
+			stats, _ := r["stats"].(map[string]interface{})
+			if _, present := stats["relay_count_24h"]; present {
+				t.Error("relay_count_24h should be absent for companion nodes")
+			}
+			return
+		}
+	}
+	t.Fatal("test companion not found in GetBulkHealth results")
+}
+
+func TestGetBulkHealthRepeaterNoRelayActivity(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	_, err := srv.db.conn.Exec(`INSERT OR IGNORE INTO nodes (public_key, name, role, last_seen, first_seen, advert_count)
+		VALUES ('relay662idle001', 'IdleRepeater662', 'repeater', datetime('now'), datetime('now'), 1)`)
+	if err != nil {
+		t.Fatalf("insert test node: %v", err)
+	}
+
+	// No entry in relayTimes for this node
+	results := srv.store.GetBulkHealth(200, "")
+	for _, r := range results {
+		if r["public_key"] == "relay662idle001" {
+			stats, _ := r["stats"].(map[string]interface{})
+			if v, ok := stats["relay_count_24h"].(int); !ok || v != 0 {
+				t.Errorf("relay_count_24h: expected 0, got %v", stats["relay_count_24h"])
+			}
+			if _, present := stats["last_relayed"]; present {
+				t.Error("last_relayed should be absent when no relay activity")
+			}
+			return
+		}
+	}
+	t.Fatal("idle repeater not found in results")
+}
+
 func TestAddTxToRelayTimeIndex_LowercasesKey(t *testing.T) {
 	idx := make(map[string][]int64)
 	pkUpper := "AABBCCDD11223344"
