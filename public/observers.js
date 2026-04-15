@@ -15,6 +15,76 @@
           <a href="#/compare" class="btn-icon" title="Compare observers" aria-label="Compare observers" style="text-decoration:none">🔍</a>
           <button class="btn-icon" data-action="obs-refresh" title="Refresh" aria-label="Refresh observers">🔄</button>
         </div>
+        <div class="obs-help">
+          <div class="help-box">
+            <div style="margin-bottom:6px">
+              <strong>ℹ️ How to connect your observer</strong>
+            </div>
+
+            <div class="text-muted" style="font-size:12px;margin-bottom:10px">
+              Connect your node to the Cornmeister MQTT broker to share raw packets.
+            </div>
+
+            <table class="help-table">
+              <tr><td>Server:</td><td><code>mqtt.cornmeister.nl</code></td></tr>
+              <tr><td>Port:</td><td><code>8883</code> (TLS)</td></tr>
+              <tr><td>Transport:</td><td><code>TCP</code></td></tr>
+              <tr><td>Username:</td><td><code>observer</code></td></tr>
+              <tr><td>Password:</td><td><code>hiermetdiedata</code></td></tr>
+            </table>
+
+            <div style="margin-top:10px">
+              <strong>Alternative (Meshwiki Community MQTT)</strong>
+              <div class="text-muted" style="font-size:12px;margin-bottom:6px">
+                TLS-enabled community endpoint:
+              </div>
+
+              <table class="help-table">
+                <tr><td>Server:</td><td><code>mqtt.mwiki.nl</code></td></tr>
+                <tr><td>Port (TLS):</td><td><code>8883</code></td></tr>
+                <tr><td>Port (plain):</td><td><code>1883</code></td></tr>
+                <tr><td>Transport:</td><td><code>TCP</code></td></tr>
+                <tr><td>Username:</td><td><code>observer</code></td></tr>
+                <tr><td>Password:</td><td><code>86w7bW9NJxuPcErp2Y5NCQ==</code></td></tr>
+              </table>
+            </div>
+
+            <hr style="margin:10px 0;border:none;border-top:1px solid var(--border)">
+
+            <strong>MQTT Bridge Firmware</strong>
+            <div class="text-muted" style="font-size:12px;margin-bottom:6px">
+              Paste into your device console:
+            </div>
+
+            <strong>Cornmeister (TLS - Recommended)</strong>
+            <div class="text-muted" style="font-size:12px;margin-bottom:6px">
+              Secure connection:
+            </div>
+
+            <pre class="help-code"><code>set mqtt.server mqtt.cornmeister.nl
+set mqtt.port 8883
+set mqtt.username observer
+set mqtt.password hiermetdiedata
+set mqtt.tls 1</code></pre>
+
+            <strong>Meshwiki Community (Plain)</strong>
+            <div class="text-muted" style="font-size:12px;margin-bottom:6px">
+              Unencrypted connection:
+            </div>
+
+            <pre class="help-code"><code>set mqtt.server mqtt.mwiki.nl
+set mqtt.port 1883
+set mqtt.username observer
+set mqtt.password 86w7bW9NJxuPcErp2Y5NCQ==</code></pre>
+
+            <hr style="margin:10px 0;border:none;border-top:1px solid var(--border)">
+
+            <div style="margin-top:8px;font-size:12px" class="text-muted">
+              Live packets: <a href="https://cornmeister.nl" target="_blank" rel="noopener">cornmeister.nl</a>
+            </div>
+          </div>
+        </div>
+		<hr class="section-divider">
         <div id="obsRegionFilter" class="region-filter-container"></div>
         <div id="obsContent"><div class="text-center text-muted" style="padding:40px">Loading…</div></div>
       </div>`;
