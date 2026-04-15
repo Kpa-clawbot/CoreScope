@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"testing"
 	"time"
 )
@@ -166,9 +165,4 @@ func BenchmarkEstimateStoreObsBytes(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		estimateStoreObsBytes(obs)
 	}
-}
-
-// helper to avoid import cycle — padded hex string for unique hashes
-func trackedBytesPadHex(i int) string {
-	return fmt.Sprintf("%016x", i)
 }
