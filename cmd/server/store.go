@@ -6557,21 +6557,30 @@ func (s *PacketStore) GetBulkHealth(limit int, region string) []map[string]inter
 			lhVal = lastHeard
 		}
 
+		statsMap := map[string]interface{}{
+			"totalTransmissions": len(packets),
+			"totalObservations":  totalObservations,
+			"totalPackets":       len(packets),
+			"packetsToday":       packetsToday,
+			"avgSnr":             avgSnr,
+			"lastHeard":          lhVal,
+		}
+		if strings.ToLower(n.role) == "repeater" {
+			c1h, c24h, lastRel := relayMetrics(s.relayTimes[n.pk], time.Now().UnixMilli())
+			statsMap["relay_count_1h"] = c1h
+			statsMap["relay_count_24h"] = c24h
+			if lastRel != "" {
+				statsMap["last_relayed"] = lastRel
+			}
+		}
 		results = append(results, map[string]interface{}{
 			"public_key": n.pk,
 			"name":       nilIfEmpty(n.name),
 			"role":       nilIfEmpty(n.role),
 			"lat":        n.lat,
 			"lon":        n.lon,
-			"stats": map[string]interface{}{
-				"totalTransmissions": len(packets),
-				"totalObservations":  totalObservations,
-				"totalPackets":       len(packets),
-				"packetsToday":       packetsToday,
-				"avgSnr":             avgSnr,
-				"lastHeard":          lhVal,
-			},
-			"observers": observerRows,
+			"stats":      statsMap,
+			"observers":  observerRows,
 		})
 	}
 
@@ -6708,18 +6717,32 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		recentPackets = append(recentPackets, p)
 	}
 
+	nodeStats := map[string]interface{}{
+		"totalTransmissions": len(packets),
+		"totalObservations":  totalObservations,
+		"totalPackets":       len(packets),
+		"packetsToday":       packetsToday,
+		"avgSnr":             avgSnr,
+		"avgHops":            avgHops,
+		"lastHeard":          lhVal,
+	}
+	role := ""
+	if r, ok := node["role"].(string); ok {
+		role = strings.ToLower(r)
+	}
+	if role == "repeater" {
+		lowerPK := strings.ToLower(pubkey)
+		c1h, c24h, lastRel := relayMetrics(s.relayTimes[lowerPK], time.Now().UnixMilli())
+		nodeStats["relay_count_1h"] = c1h
+		nodeStats["relay_count_24h"] = c24h
+		if lastRel != "" {
+			nodeStats["last_relayed"] = lastRel
+		}
+	}
 	return map[string]interface{}{
-		"node":      node,
-		"observers": observerRows,
-		"stats": map[string]interface{}{
-			"totalTransmissions": len(packets),
-			"totalObservations":  totalObservations,
-			"totalPackets":       len(packets),
-			"packetsToday":       packetsToday,
-			"avgSnr":             avgSnr,
-			"avgHops":            avgHops,
-			"lastHeard":          lhVal,
-		},
+		"node":          node,
+		"observers":     observerRows,
+		"stats":         nodeStats,
 		"recentPackets": recentPackets,
 	}, nil
 }
