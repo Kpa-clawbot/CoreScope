@@ -132,6 +132,7 @@ type PacketStore struct {
 	byNode        map[string][]*StoreTx      // pubkey → transmissions
 	nodeHashes    map[string]map[string]bool // pubkey → Set<hash>
 	byPathHop     map[string][]*StoreTx      // lowercase hop/pubkey → transmissions with that hop in path
+	relayTimes    map[string][]int64         // lowercase pubkey → sorted unix-millis of relay events (full pubkeys only)
 	byPayloadType map[int][]*StoreTx         // payload_type → transmissions
 	loaded        bool
 	totalObs      int
@@ -290,6 +291,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		byObserver:    make(map[string][]*StoreObs),
 		byNode:        make(map[string][]*StoreTx),
 		byPathHop:     make(map[string][]*StoreTx),
+		relayTimes:    make(map[string][]int64),
 		nodeHashes:    make(map[string]map[string]bool),
 		byPayloadType: make(map[int][]*StoreTx),
 		rfCache:       make(map[string]*cachedResult),
@@ -2460,6 +2462,83 @@ func addTxToPathHopIndex(idx map[string][]*StoreTx, tx *StoreTx) {
 			}
 		}
 	}
+}
+
+// addTxToRelayTimeIndex records the relay timestamp for each full pubkey in
+// tx.ResolvedPath. Maintains sorted ascending order for O(log n) window queries.
+// Must be called with s.mu held (or during build before store is live).
+func addTxToRelayTimeIndex(idx map[string][]int64, tx *StoreTx) {
+	if len(tx.ResolvedPath) == 0 {
+		return
+	}
+	ms, err := time.Parse(time.RFC3339, tx.FirstSeen)
+	if err != nil {
+		return
+	}
+	millis := ms.UnixMilli()
+	seen := make(map[string]bool, len(tx.ResolvedPath))
+	for _, rp := range tx.ResolvedPath {
+		if rp == nil {
+			continue
+		}
+		pk := strings.ToLower(*rp)
+		if seen[pk] {
+			continue
+		}
+		seen[pk] = true
+		slice := idx[pk]
+		i := sort.Search(len(slice), func(j int) bool { return slice[j] >= millis })
+		slice = append(slice, 0)
+		copy(slice[i+1:], slice[i:])
+		slice[i] = millis
+		idx[pk] = slice
+	}
+}
+
+// removeFromRelayTimeIndex removes the relay timestamp for each full pubkey in
+// tx.ResolvedPath. Inverse of addTxToRelayTimeIndex.
+func removeFromRelayTimeIndex(idx map[string][]int64, tx *StoreTx) {
+	if len(tx.ResolvedPath) == 0 {
+		return
+	}
+	ms, err := time.Parse(time.RFC3339, tx.FirstSeen)
+	if err != nil {
+		return
+	}
+	millis := ms.UnixMilli()
+	seen := make(map[string]bool, len(tx.ResolvedPath))
+	for _, rp := range tx.ResolvedPath {
+		if rp == nil {
+			continue
+		}
+		pk := strings.ToLower(*rp)
+		if seen[pk] {
+			continue
+		}
+		seen[pk] = true
+		slice := idx[pk]
+		i := sort.Search(len(slice), func(j int) bool { return slice[j] >= millis })
+		if i < len(slice) && slice[i] == millis {
+			idx[pk] = append(slice[:i], slice[i+1:]...)
+			if len(idx[pk]) == 0 {
+				delete(idx, pk)
+			}
+		}
+	}
+}
+
+// relayMetrics computes relay_count_1h, relay_count_24h, and last_relayed from a
+// sorted unix-millis slice. now is time.Now().UnixMilli(). O(log n).
+func relayMetrics(times []int64, now int64) (count1h, count24h int, lastRelayed string) {
+	if len(times) == 0 {
+		return 0, 0, ""
+	}
+	i1h := sort.Search(len(times), func(i int) bool { return times[i] >= now-3600000 })
+	i24h := sort.Search(len(times), func(i int) bool { return times[i] >= now-86400000 })
+	count1h = len(times) - i1h
+	count24h = len(times) - i24h
+	lastRelayed = time.UnixMilli(times[len(times)-1]).UTC().Format(time.RFC3339)
+	return
 }
 
 // removeTxFromPathHopIndex removes a transmission from all its path-hop index entries.
