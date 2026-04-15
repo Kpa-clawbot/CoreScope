@@ -60,7 +60,7 @@
     let obsOverlay = '';
     if (isAlsoObserver) {
       const starSize = 8;
-      const sx = size - starSize + 1, sy = -1;
+      const sx = size - starSize, sy = 0;
       const scx = starSize / 2, scy = starSize / 2, so = starSize / 2 - 0.5, si = so * 0.4;
       let starPts = '';
       for (let i = 0; i < 5; i++) {
@@ -656,6 +656,7 @@
   var _renderingMarkers = false;
   var _lastDeconflictZoom = null;
   var _currentMarkerData = []; // stored marker data for zoom-only repositioning
+  var _observerByPubkey = new Map(); // observer id (pubkey) → observer object, rebuilt on each render
   var _zoomResizeTimer = null;
 
   function deconflictLabels(markers, mapRef) {
@@ -799,16 +800,16 @@
     const allMarkers = [];
 
     // Build a set of observer public keys for quick lookup
-    const observerByPubkey = new Map();
+    _observerByPubkey = new Map();
     for (const obs of observers) {
-      if (obs.id) observerByPubkey.set(obs.id.toLowerCase(), obs);
+      if (obs.id) _observerByPubkey.set(obs.id.toLowerCase(), obs);
     }
 
     for (const node of filtered) {
       const lastSeenTime = node.last_heard || node.last_seen;
       const isStale = getNodeStatus(node.role || 'companion', lastSeenTime ? new Date(lastSeenTime).getTime() : 0) === 'stale';
       const pk = (node.public_key || '').toLowerCase();
-      const isAlsoObserver = observerByPubkey.has(pk);
+      const isAlsoObserver = _observerByPubkey.has(pk);
       const useLabel = node.role === 'repeater' && filters.hashLabels;
       const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver);
       const latLng = L.latLng(node.lat, node.lon);
@@ -940,7 +941,7 @@
     const lastAdvert = node.last_seen ? timeAgo(node.last_seen) : '—';
     const roleBadge = `<span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;background:${ROLE_COLORS[node.role] || '#4b5563'};color:#fff;">${(node.role || 'unknown').toUpperCase()}</span>`;
     // Check if this node is also an observer (combined repeater+observer)
-    const matchingObs = observers.find(o => o.id && node.public_key && o.id.toLowerCase() === node.public_key.toLowerCase());
+    const matchingObs = node.public_key ? _observerByPubkey.get(node.public_key.toLowerCase()) : null;
     const obsBadge = matchingObs ? ` <span style="display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;background:${ROLE_COLORS.observer || '#f1c40f'};color:#fff;">OBSERVER</span>` : '';
     const hs = node.hash_size || 1;
     const hashPrefix = node.public_key ? node.public_key.slice(0, hs * 2).toUpperCase() : '—';
