@@ -1668,6 +1668,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			s.spTotalPaths++
 		}
 		addTxToPathHopIndex(s.byPathHop, tx)
+		addTxToRelayTimeIndex(s.relayTimes, tx)
 	}
 
 	// Incrementally update precomputed distance index with new transmissions
@@ -2091,6 +2092,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				saved, savedFlag := tx.parsedPath, tx.pathParsed
 				tx.parsedPath, tx.pathParsed = oldHops, true
 				removeTxFromPathHopIndex(s.byPathHop, tx)
+				removeFromRelayTimeIndex(s.relayTimes, tx)
 				tx.parsedPath, tx.pathParsed = saved, savedFlag
 			}
 			// pickBestObservation already set pathParsed=false so
@@ -2099,6 +2101,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				s.spTotalPaths++
 			}
 			addTxToPathHopIndex(s.byPathHop, tx)
+			addTxToRelayTimeIndex(s.relayTimes, tx)
 		}
 	}
 
@@ -2684,10 +2687,12 @@ func (s *PacketStore) buildSubpathIndex() {
 // Must be called with s.mu held.
 func (s *PacketStore) buildPathHopIndex() {
 	s.byPathHop = make(map[string][]*StoreTx, 4096)
+	s.relayTimes = make(map[string][]int64, 4096)
 	for _, tx := range s.packets {
 		addTxToPathHopIndex(s.byPathHop, tx)
+		addTxToRelayTimeIndex(s.relayTimes, tx)
 	}
-	log.Printf("[store] Built path-hop index: %d unique keys", len(s.byPathHop))
+	log.Printf("[store] Built path-hop index: %d unique keys, %d relay-time keys", len(s.byPathHop), len(s.relayTimes))
 }
 
 // addTxToPathHopIndex indexes a transmission under each unique raw hop key.
@@ -3217,6 +3222,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		removeTxFromSubpathIndexFull(s.spIndex, s.spTxIndex, tx)
 		// Remove from path-hop index
 		removeTxFromPathHopIndex(s.byPathHop, tx)
+		removeFromRelayTimeIndex(s.relayTimes, tx)
 	}
 
 	// Batch-remove from byObserver: single pass per affected observer slice
