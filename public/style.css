@@ -2261,8 +2261,6 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .skew-sparkline-wrap { margin-top: 6px; }
 .skew-sparkline-wrap svg { display: block; }
 
-.clock-health-summary { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
-.clock-health-stat { font-size: 13px; padding: 4px 10px; border-radius: 4px; }
 
 .clock-fleet-row--ok { }
 .clock-fleet-row--warning { background: color-mix(in srgb, var(--status-yellow) 10%, transparent); }

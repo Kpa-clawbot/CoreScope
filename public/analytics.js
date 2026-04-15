@@ -3442,18 +3442,13 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
         var counts = { ok: 0, warning: 0, critical: 0, absurd: 0 };
         data.forEach(function(n) { if (counts[n.severity] !== undefined) counts[n.severity]++; });
 
-        var summaryHtml = '<div class="clock-health-summary">' +
-          '<span class="clock-health-stat" style="background:var(--status-green);color:#fff">' + counts.ok + ' OK</span>' +
-          '<span class="clock-health-stat" style="background:var(--status-yellow);color:#000">' + counts.warning + ' Warning</span>' +
-          '<span class="clock-health-stat" style="background:var(--status-orange);color:#fff">' + counts.critical + ' Critical</span>' +
-          '<span class="clock-health-stat" style="background:var(--status-purple);color:#fff">' + counts.absurd + ' Absurd</span>' +
-          '</div>';
-
-        // Filter buttons
+        // Filter buttons (also serve as summary — no separate stats pills needed)
+        var filterColors = { ok: 'var(--status-green)', warning: 'var(--status-yellow)', critical: 'var(--status-orange)', absurd: 'var(--status-purple)' };
         var filters = ['all', 'ok', 'warning', 'critical', 'absurd'];
         var filterHtml = '<div style="margin-bottom:10px">' + filters.map(function(f) {
+          var dot = f !== 'all' ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + filterColors[f] + ';margin-right:4px;vertical-align:middle"></span>' : '';
           return '<button class="clock-filter-btn' + (activeFilter === f ? ' active' : '') + '" data-filter="' + f + '">' +
-            (f === 'all' ? 'All (' + data.length + ')' : (SKEW_SEVERITY_LABELS[f] || f) + ' (' + (counts[f] || 0) + ')') +
+            dot + (f === 'all' ? 'All (' + data.length + ')' : (SKEW_SEVERITY_LABELS[f] || f) + ' (' + (counts[f] || 0) + ')') +
             '</button>';
         }).join('') + '</div>';
 
@@ -3471,7 +3466,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
         }).join('');
 
         el.innerHTML = '<h3 style="margin:0 0 10px">⏰ Clock Health</h3>' +
-          summaryHtml + filterHtml +
+          filterHtml +
           '<table class="data-table analytics-table" id="clock-health-table">' +
           '<thead><tr>' +
           '<th data-sort-col="name" style="cursor:pointer">Name</th>' +
