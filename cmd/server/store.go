@@ -200,6 +200,9 @@ type PacketStore struct {
 	// Persisted neighbor graph for hop resolution at ingest time.
 	graph *NeighborGraph
 
+	// Clock skew detection engine.
+	clockSkew *ClockSkewEngine
+
 	// Async backfill state: set after backfillResolvedPathsAsync completes.
 	backfillComplete atomic.Bool
 	// Progress tracking for async backfill (total pending and processed so far).
@@ -304,6 +307,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		spTxIndex:     make(map[string][]*StoreTx, 4096),
 		advertPubkeys:   make(map[string]int),
 		lastSeenTouched: make(map[string]time.Time),
+		clockSkew:       NewClockSkewEngine(),
 	}
 	if cfg != nil {
 		ps.retentionHours = cfg.RetentionHours
@@ -640,7 +644,7 @@ func (s *PacketStore) touchRelayLastSeen(tx *StoreTx, now time.Time) {
 // trackAdvertPubkey increments the advertPubkeys refcount for ADVERT packets.
 // Must be called under s.mu write lock.
 func (s *PacketStore) trackAdvertPubkey(tx *StoreTx) {
-	if tx.PayloadType == nil || *tx.PayloadType != 4 || tx.DecodedJSON == "" {
+	if tx.PayloadType == nil || *tx.PayloadType != PayloadADVERT || tx.DecodedJSON == "" {
 		return
 	}
 	d := tx.ParsedDecoded()
@@ -661,7 +665,7 @@ func (s *PacketStore) trackAdvertPubkey(tx *StoreTx) {
 // untrackAdvertPubkey decrements the advertPubkeys refcount for ADVERT packets.
 // Must be called under s.mu write lock.
 func (s *PacketStore) untrackAdvertPubkey(tx *StoreTx) {
-	if tx.PayloadType == nil || *tx.PayloadType != 4 || tx.DecodedJSON == "" {
+	if tx.PayloadType == nil || *tx.PayloadType != PayloadADVERT || tx.DecodedJSON == "" {
 		return
 	}
 	var d map[string]interface{}
@@ -5134,7 +5138,7 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 
 		// Track originator from advert packets (including zero-hop adverts,
 		// keyed by pubKey so same-name nodes don't merge).
-		if tx.PayloadType != nil && *tx.PayloadType == 4 && tx.DecodedJSON != "" {
+		if tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT && tx.DecodedJSON != "" {
 			var d map[string]interface{}
 			if json.Unmarshal([]byte(tx.DecodedJSON), &d) == nil {
 				pk := ""
@@ -6621,6 +6625,9 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 		relayPct = round(float64(relayedCount)*100.0/float64(totalWithPath), 1)
 	}
 
+	// Compute clock skew (already under RLock).
+	clockSkew := s.getNodeClockSkewLocked(pubkey)
+
 	return &NodeAnalyticsResponse{
 		Node:                node,
 		TimeRange:           TimeRangeResp{From: fromISO, To: toISO, Days: days},
@@ -6644,6 +6651,7 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 			UniquePeers:         len(peerSlice),
 			AvgPacketsPerDay:    avgPacketsPerDay,
 		},
+		ClockSkew: clockSkew,
 	}, nil
 }
 
