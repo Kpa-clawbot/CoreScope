@@ -1668,7 +1668,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			s.spTotalPaths++
 		}
 		addTxToPathHopIndex(s.byPathHop, tx)
-		addTxToRelayTimeIndex(s.relayTimes, tx)
+		s.addTxToRelayTimeIndex(tx)
 	}
 
 	// Incrementally update precomputed distance index with new transmissions
@@ -2092,7 +2092,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				saved, savedFlag := tx.parsedPath, tx.pathParsed
 				tx.parsedPath, tx.pathParsed = oldHops, true
 				removeTxFromPathHopIndex(s.byPathHop, tx)
-				removeFromRelayTimeIndex(s.relayTimes, tx)
+				s.removeFromRelayTimeIndex(tx)
 				tx.parsedPath, tx.pathParsed = saved, savedFlag
 			}
 			// pickBestObservation already set pathParsed=false so
@@ -2101,7 +2101,11 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				s.spTotalPaths++
 			}
 			addTxToPathHopIndex(s.byPathHop, tx)
-			addTxToRelayTimeIndex(s.relayTimes, tx)
+			s.addTxToRelayTimeIndex(tx)
+		} else {
+			// Path unchanged: new observation may have relay hops in its resolved
+			// path that aren't indexed yet (idempotent — safe to call repeatedly).
+			s.addTxToRelayTimeIndex(tx)
 		}
 	}
 
@@ -2690,7 +2694,7 @@ func (s *PacketStore) buildPathHopIndex() {
 	s.relayTimes = make(map[string][]int64, 4096)
 	for _, tx := range s.packets {
 		addTxToPathHopIndex(s.byPathHop, tx)
-		addTxToRelayTimeIndex(s.relayTimes, tx)
+		s.addTxToRelayTimeIndex(tx)
 	}
 	log.Printf("[store] Built path-hop index: %d unique keys, %d relay-time keys", len(s.byPathHop), len(s.relayTimes))
 }
@@ -2712,54 +2716,65 @@ func addTxToPathHopIndex(idx map[string][]*StoreTx, tx *StoreTx) {
 	}
 }
 
-// addTxToRelayTimeIndex records the relay timestamp for each resolved pubkey.
-// pubkeys is the pre-extracted list (use extractResolvedPubkeys on the decoded path).
-// Maintains sorted ascending order for O(log n) window queries.
+// addTxToRelayTimeIndex records the relay timestamp for each full pubkey that
+// appears in ANY observation's resolved path. Scanning all observations (not
+// just the best one) ensures relay activity is captured even when the best
+// observer received the packet directly without a relay hop.
+// Insert is idempotent: if the same timestamp already exists for a pubkey it is
+// not duplicated, so the function may be called multiple times safely.
 // Must be called with s.mu held (or during build before store is live).
-func addTxToRelayTimeIndex(idx map[string][]int64, firstSeen string, pubkeys []string) {
-	if len(pubkeys) == 0 {
-		return
-	}
-	ms, err := time.Parse(time.RFC3339, firstSeen)
+func (s *PacketStore) addTxToRelayTimeIndex(tx *StoreTx) {
+	ms, err := time.Parse(time.RFC3339, tx.FirstSeen)
 	if err != nil {
 		return
 	}
 	millis := ms.UnixMilli()
-	seen := make(map[string]bool, len(pubkeys))
-	for _, pk := range pubkeys {
-		pk = strings.ToLower(pk)
-		if pk == "" || seen[pk] {
-			continue
+	idx := s.relayTimes
+	seen := make(map[string]bool)
+	insert := func(rp *string) {
+		if rp == nil {
+			return
+		}
+		pk := strings.ToLower(*rp)
+		if seen[pk] {
+			return
 		}
 		seen[pk] = true
 		slice := idx[pk]
 		i := sort.Search(len(slice), func(j int) bool { return slice[j] >= millis })
 		if i < len(slice) && slice[i] == millis {
-			continue // idempotent
+			return // idempotent: already present
 		}
 		slice = append(slice, 0)
 		copy(slice[i+1:], slice[i:])
 		slice[i] = millis
 		idx[pk] = slice
 	}
+	for _, rp := range s.fetchResolvedPathsForTx(tx.ID) {
+		for _, ptr := range rp {
+			insert(ptr)
+		}
+	}
 }
 
-// removeFromRelayTimeIndex removes the relay timestamp for each resolved pubkey.
-// Inverse of addTxToRelayTimeIndex.
-func removeFromRelayTimeIndex(idx map[string][]int64, firstSeen string, pubkeys []string) {
-	if len(pubkeys) == 0 {
-		return
-	}
-	ms, err := time.Parse(time.RFC3339, firstSeen)
+// removeFromRelayTimeIndex removes the relay timestamp for every full pubkey
+// that appears in any observation's resolved path. Symmetric with
+// addTxToRelayTimeIndex so eviction does not leave orphaned entries.
+func (s *PacketStore) removeFromRelayTimeIndex(tx *StoreTx) {
+	ms, err := time.Parse(time.RFC3339, tx.FirstSeen)
 	if err != nil {
 		return
 	}
 	millis := ms.UnixMilli()
-	seen := make(map[string]bool, len(pubkeys))
-	for _, pk := range pubkeys {
-		pk = strings.ToLower(pk)
-		if pk == "" || seen[pk] {
-			continue
+	idx := s.relayTimes
+	seen := make(map[string]bool)
+	remove := func(rp *string) {
+		if rp == nil {
+			return
+		}
+		pk := strings.ToLower(*rp)
+		if seen[pk] {
+			return
 		}
 		seen[pk] = true
 		slice := idx[pk]
@@ -2769,6 +2784,11 @@ func removeFromRelayTimeIndex(idx map[string][]int64, firstSeen string, pubkeys 
 			if len(idx[pk]) == 0 {
 				delete(idx, pk)
 			}
+		}
+	}
+	for _, rp := range s.fetchResolvedPathsForTx(tx.ID) {
+		for _, ptr := range rp {
+			remove(ptr)
 		}
 	}
 }
@@ -3221,7 +3241,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		removeTxFromSubpathIndexFull(s.spIndex, s.spTxIndex, tx)
 		// Remove from path-hop index
 		removeTxFromPathHopIndex(s.byPathHop, tx)
-		removeFromRelayTimeIndex(s.relayTimes, tx)
+		s.removeFromRelayTimeIndex(tx)
 	}
 
 	// Batch-remove from byObserver: single pass per affected observer slice
