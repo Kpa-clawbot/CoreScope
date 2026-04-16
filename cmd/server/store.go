@@ -5894,8 +5894,7 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 		prefix string
 	}
 	nodePrefixes := make(map[string][]prefixEntry) // prefix → entries
-	for pk, n := range nodeByPK {
-		_ = n
+	for pk := range nodeByPK {
 		// Generate 1-byte, 2-byte, 3-byte prefixes
 		pkLower := strings.ToLower(pk)
 		for byteLen := 1; byteLen <= 3; byteLen++ {
