@@ -30,6 +30,7 @@
   let _lcdClockInterval = null;
   let _rateCounterInterval = null;
   let _pruneInterval = null;
+  let _feedTimestampInterval = null;
   let activeNodeDetailKey = null;
 
   // === VCR State Machine ===
@@ -1161,6 +1162,48 @@
     // Populate role legend from shared roles.js
     // Initialize panel corner positions (#608 M0)
     initPanelPositions();
+
+    // Initialize DragManager for free-form panel dragging (#608 M1)
+    if (window.DragManager) {
+      var dragMgr = new DragManager();
+      var dragPanels = ['liveFeed', 'liveLegend', 'liveNodeDetail'];
+      for (var di = 0; di < dragPanels.length; di++) {
+        dragMgr.register(document.getElementById(dragPanels[di]));
+      }
+      dragMgr.restorePositions();
+
+      // Responsive gate: disable drag below medium breakpoint or on touch
+      var dragMql = window.matchMedia('(pointer: fine) and (min-width: 768px)');
+      function onDragMediaChange(e) {
+        if (!e.matches) {
+          // Revert dragged panels to corner positions
+          document.querySelectorAll('.live-overlay[data-dragged="true"]').forEach(function (p) {
+            delete p.dataset.dragged;
+            p.style.transform = '';
+            p.style.top = '';
+            p.style.left = '';
+            p.style.right = '';
+            p.style.bottom = '';
+          });
+          initPanelPositions();
+          dragMgr.disable();
+        } else {
+          dragMgr.enable();
+          dragMgr.restorePositions();
+        }
+      }
+      dragMql.addEventListener('change', onDragMediaChange);
+      // Initial check
+      if (!dragMql.matches) dragMgr.disable();
+
+      // Resize clamping (debounced)
+      var resizeTimer = null;
+      window.addEventListener('resize', function () {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function () { dragMgr.handleResize(); }, 200);
+      });
+    }
+
     const roleLegendList = document.getElementById('roleLegendList');
     if (roleLegendList) {
       for (const role of (window.ROLE_SORT || ['repeater', 'companion', 'room', 'sensor', 'observer'])) {
@@ -1333,6 +1376,13 @@
 
     // Prune stale nodes every 60 seconds
     _pruneInterval = setInterval(pruneStaleNodes, 60000);
+
+    // Refresh relative timestamps in feed every 10 seconds (#701)
+    _feedTimestampInterval = setInterval(function() {
+      document.querySelectorAll('.feed-time[data-ts]').forEach(function(el) {
+        el.innerHTML = formatLiveTimestampHtml(Number(el.dataset.ts));
+      });
+    }, 10000);
 
     // Auto-hide nav with pin toggle (#62)
     const topNav = document.querySelector('.top-nav');
@@ -1668,7 +1718,7 @@
         <span class="feed-type" style="color:${color}">${typeName}</span>
         ${dotHtml1}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
         <span class="feed-text">${escapeHtml(preview)}</span>
-        <span class="feed-time">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
+        <span class="feed-time" data-ts="${group.latestTs || Date.now()}">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
       `;
       if (_ccChan1) item._ccChannel = _ccChan1; // channel color picker (#674)
       item.addEventListener('click', () => showFeedCard(item, pkt, color));
@@ -2680,6 +2730,7 @@
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = pkt.observation_count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${pkt.observation_count}</span>` : '';
+    const anomalyIcon = (pkt.decoded && pkt.decoded.anomaly) ? '<span title="Anomaly detected" style="margin-left:4px">⚠️</span>' : '';
     var _ccPayload2 = (pkt.decoded || {}).payload || {};
     var _ccChan = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload2.channel || null) : null;
     var dotHtml = _ccChan ? _feedColorDot(_ccChan) : '';
@@ -2694,9 +2745,9 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${anomalyIcon}
       <span class="feed-text">${escapeHtml(preview)}</span>
-      <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
+      <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
     if (_ccChan) item._ccChannel = _ccChan; // channel color picker (#674)
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
@@ -2742,6 +2793,13 @@
         requestAnimationFrame(() => requestAnimationFrame(() => entry.element.classList.remove('live-feed-enter')));
         // Re-add to DOM top (works even if it was trimmed out)
         feed.prepend(entry.element);
+        // Update timestamp to latest observation (#701)
+        var _dedupTimeSpan = entry.element.querySelector('.feed-time');
+        if (_dedupTimeSpan) {
+          var _dedupNow = pkt._ts || Date.now();
+          _dedupTimeSpan.setAttribute('data-ts', _dedupNow);
+          _dedupTimeSpan.innerHTML = formatLiveTimestampHtml(_dedupNow);
+        }
         entry.pkt.observation_count = entry.count;
         return;
       }
@@ -2772,7 +2830,7 @@
       <span class="feed-type" style="color:${color}">${typeName}</span>
       ${dotHtml3}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
-      <span class="feed-time">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
+      <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
     if (_ccChan3) item._ccChannel = _ccChan3; // channel color picker (#674)
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
@@ -2849,6 +2907,7 @@
     if (_lcdClockInterval) { clearInterval(_lcdClockInterval); _lcdClockInterval = null; }
     if (_rateCounterInterval) { clearInterval(_rateCounterInterval); _rateCounterInterval = null; }
     if (_pruneInterval) { clearInterval(_pruneInterval); _pruneInterval = null; }
+    if (_feedTimestampInterval) { clearInterval(_feedTimestampInterval); _feedTimestampInterval = null; }
     if (_affinityInterval) { clearInterval(_affinityInterval); _affinityInterval = null; }
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     if (map) { map.remove(); map = null; }

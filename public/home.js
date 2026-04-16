@@ -302,14 +302,19 @@
             <button class="mnc-btn" data-action="packets" data-key="${mn.pubkey}">View packets →</button>
           </div>
         </div>`;
-      } catch {
+      } catch (err) {
+        const is404 = err && err.message && err.message.includes('404');
+        const statusIcon = is404 ? '📡' : '❓';
+        const statusMsg = is404
+          ? 'Waiting for first advert — this node has been seen in channel messages but hasn\u2019t advertised yet'
+          : 'Could not load data';
         return `<div class="my-node-card silent" data-key="${mn.pubkey}" tabindex="0" role="button">
           <div class="mnc-header">
-            <div class="mnc-status">❓</div>
+            <div class="mnc-status">${statusIcon}</div>
             <div class="mnc-name">${escapeHtml(mn.name || truncate(mn.pubkey, 12))}</div>
             <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove" aria-label="Remove ${escapeAttr(mn.name || truncate(mn.pubkey, 12))} from My Mesh">✕</button>
           </div>
-          <div class="mnc-status-text">Could not load data</div>
+          <div class="mnc-status-text">${statusMsg}</div>
         </div>`;
       }
     }));

@@ -142,6 +142,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/health", s.handleNodeHealth).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/paths", s.handleNodePaths).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/analytics", s.handleNodeAnalytics).Methods("GET")
+	r.HandleFunc("/api/nodes/clock-skew", s.handleFleetClockSkew).Methods("GET")
+	r.HandleFunc("/api/nodes/{pubkey}/clock-skew", s.handleNodeClockSkew).Methods("GET")
+	r.HandleFunc("/api/observers/clock-skew", s.handleObserverClockSkew).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/neighbors", s.handleNodeNeighbors).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}", s.handleNodeDetail).Methods("GET")
 	r.HandleFunc("/api/nodes", s.handleNodes).Methods("GET")
@@ -446,10 +449,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Real packet store stats
 	pktCount := 0
 	var pktEstMB float64
+	var pktTrackedMB float64
 	if s.store != nil {
 		ps := s.store.GetPerfStoreStatsTyped()
 		pktCount = ps.TotalLoaded
 		pktEstMB = ps.EstimatedMB
+		pktTrackedMB = ps.TrackedMB
 	}
 
 	// Real cache stats
@@ -515,6 +520,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		PacketStore: HealthPacketStoreStats{
 			Packets:     pktCount,
 			EstimatedMB: pktEstMB,
+			TrackedMB:   pktTrackedMB,
 		},
 		Perf: HealthPerfStats{
 			TotalRequests: int(perfRequests),
@@ -930,7 +936,7 @@ func (s *Server) handleDecode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "hex is required")
 		return
 	}
-	decoded, err := DecodePacket(hexStr)
+	decoded, err := DecodePacket(hexStr, true)
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -962,7 +968,7 @@ func (s *Server) handlePostPacket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "hex is required")
 		return
 	}
-	decoded, err := DecodePacket(hexStr)
+	decoded, err := DecodePacket(hexStr, false)
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -1312,6 +1318,36 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 	writeError(w, 404, "Not found")
 }
 
+func (s *Server) handleNodeClockSkew(w http.ResponseWriter, r *http.Request) {
+	pubkey := mux.Vars(r)["pubkey"]
+	if s.store == nil {
+		writeError(w, 404, "Not found")
+		return
+	}
+	result := s.store.GetNodeClockSkew(pubkey)
+	if result == nil {
+		writeError(w, 404, "No clock skew data for this node")
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleObserverClockSkew(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeJSON(w, []ObserverCalibration{})
+		return
+	}
+	writeJSON(w, s.store.GetObserverCalibrations())
+}
+
+func (s *Server) handleFleetClockSkew(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeJSON(w, []*NodeClockSkew{})
+		return
+	}
+	writeJSON(w, s.store.GetFleetClockSkew())
+}
+
 // --- Analytics Handlers ---
 
 func (s *Server) handleAnalyticsRF(w http.ResponseWriter, r *http.Request) {
@@ -1652,18 +1688,35 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
-	if s.store != nil {
-		region := r.URL.Query().Get("region")
-		channels := s.store.GetChannels(region)
+	region := r.URL.Query().Get("region")
+	includeEncrypted := r.URL.Query().Get("includeEncrypted") == "true"
+	// Prefer DB for full history (in-memory store has limited retention)
+	if s.db != nil {
+		channels, err := s.db.GetChannels(region)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		if includeEncrypted {
+			encrypted, err := s.db.GetEncryptedChannels(region)
+			if err != nil {
+				log.Printf("WARN GetEncryptedChannels: %v", err)
+			} else {
+				channels = append(channels, encrypted...)
+			}
+		}
 		writeJSON(w, ChannelListResponse{Channels: channels})
 		return
 	}
-	channels, err := s.db.GetChannels()
-	if err != nil {
-		writeError(w, 500, err.Error())
+	if s.store != nil {
+		channels := s.store.GetChannels(region)
+		if includeEncrypted {
+			channels = append(channels, s.store.GetEncryptedChannels(region)...)
+		}
+		writeJSON(w, ChannelListResponse{Channels: channels})
 		return
 	}
-	writeJSON(w, ChannelListResponse{Channels: channels})
+	writeJSON(w, ChannelListResponse{Channels: []map[string]interface{}{}})
 }
 
 func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
@@ -1671,17 +1724,22 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 100)
 	offset := queryInt(r, "offset", 0)
 	region := r.URL.Query().Get("region")
+	// Prefer DB for full history (in-memory store has limited retention)
+	if s.db != nil {
+		messages, total, err := s.db.GetChannelMessages(hash, limit, offset, region)
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
+		return
+	}
 	if s.store != nil {
 		messages, total := s.store.GetChannelMessages(hash, limit, offset, region)
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
 		return
 	}
-	messages, total, err := s.db.GetChannelMessages(hash, limit, offset, region)
-	if err != nil {
-		writeError(w, 500, err.Error())
-		return
-	}
-	writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
+	writeJSON(w, ChannelMessagesResponse{Messages: []map[string]interface{}{}, Total: 0})
 }
 
 func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {

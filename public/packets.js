@@ -45,6 +45,10 @@
     var parts = [];
     if (timeWindowMin && timeWindowMin !== DEFAULT_TIME_WINDOW) parts.push('timeWindow=' + timeWindowMin);
     if (regionParam) parts.push('region=' + encodeURIComponent(regionParam));
+    if (filters.hash) parts.push('hash=' + encodeURIComponent(filters.hash));
+    if (filters.node) parts.push('node=' + encodeURIComponent(filters.node));
+    if (filters.observer) parts.push('observer=' + encodeURIComponent(filters.observer));
+    if (filters._filterExpr) parts.push('filter=' + encodeURIComponent(filters._filterExpr));
     return parts.length ? '?' + parts.join('&') : '';
   }
   window.buildPacketsQuery = buildPacketsQuery;
@@ -342,6 +346,14 @@
     }
     var _urlRegion = _initUrlParams.get('region');
     if (_urlRegion) _pendingUrlRegion = _urlRegion;
+    var _urlHash = _initUrlParams.get('hash');
+    if (_urlHash) filters.hash = _urlHash;
+    var _urlNode = _initUrlParams.get('node');
+    if (_urlNode) { filters.node = _urlNode; filters.nodeName = _urlNode.slice(0, 8); }
+    var _urlObserver = _initUrlParams.get('observer');
+    if (_urlObserver) filters.observer = _urlObserver;
+    var _urlFilterExpr = _initUrlParams.get('filter');
+    if (_urlFilterExpr) filters._filterExpr = _urlFilterExpr;
 
     app.innerHTML = `<div class="split-layout detail-collapsed">
       <div class="panel-left" id="pktLeft" aria-live="polite" aria-relevant="additions removals"></div>
@@ -797,6 +809,12 @@
       var pfError = document.getElementById('packetFilterError');
       var pfCount = document.getElementById('packetFilterCount');
       if (!pfInput || !window.PacketFilter) return;
+      // Restore Wireshark filter expression from URL
+      if (filters._filterExpr) {
+        pfInput.value = filters._filterExpr;
+        var _restored = PacketFilter.compile(filters._filterExpr);
+        if (!_restored.error) { pfInput.classList.add('filter-active'); filters._packetFilter = _restored.filter; }
+      }
       var pfTimer = null;
       pfInput.addEventListener('input', function() {
         clearTimeout(pfTimer);
@@ -807,6 +825,8 @@
             pfError.style.display = 'none';
             pfCount.style.display = 'none';
             filters._packetFilter = null;
+            filters._filterExpr = undefined;
+            updatePacketsUrl();
             renderTableRows();
             return;
           }
@@ -818,12 +838,16 @@
             pfError.style.display = 'block';
             pfCount.style.display = 'none';
             filters._packetFilter = null;
+            filters._filterExpr = undefined;
+            updatePacketsUrl();
             renderTableRows();
           } else {
             pfInput.classList.remove('filter-error');
             pfInput.classList.add('filter-active');
             pfError.style.display = 'none';
             filters._packetFilter = compiled.filter;
+            filters._filterExpr = expr;
+            updatePacketsUrl();
             renderTableRows();
           }
         }, 300);
@@ -868,6 +892,7 @@
       if (filters.observer) localStorage.setItem('meshcore-observer-filter', filters.observer); else localStorage.removeItem('meshcore-observer-filter');
       buildObserverMenu();
       updateObsTrigger();
+      updatePacketsUrl();
       renderTableRows();
     });
 
@@ -930,7 +955,7 @@
 
     // Filter event listeners
     document.getElementById('fHash').value = filters.hash || '';
-    document.getElementById('fHash').addEventListener('input', debounce((e) => { filters.hash = e.target.value || undefined; loadPackets(); }, 300));
+    document.getElementById('fHash').addEventListener('input', debounce((e) => { filters.hash = e.target.value || undefined; updatePacketsUrl(); loadPackets(); }, 300));
 
     // Time window dropdown — restore from localStorage and bind change
     const fTimeWindow = document.getElementById('fTimeWindow');
@@ -1065,7 +1090,7 @@
       if (!q) {
         fNodeDrop.classList.add('hidden');
         fNode.setAttribute('aria-expanded', 'false');
-        if (filters.node) { filters.node = undefined; filters.nodeName = undefined; loadPackets(); }
+        if (filters.node) { filters.node = undefined; filters.nodeName = undefined; updatePacketsUrl(); loadPackets(); }
         return;
       }
       try {
@@ -1094,6 +1119,7 @@
       fNode.setAttribute('aria-expanded', 'false');
       fNode.setAttribute('aria-activedescendant', '');
       nodeActiveIdx = -1;
+      updatePacketsUrl();
       loadPackets();
     }
 
@@ -1849,7 +1875,12 @@
       }
     }
 
+    const anomalyBanner = decoded.anomaly
+      ? `<div class="anomaly-banner" style="background:var(--warning, #f0ad4e); color:#000; padding:8px 12px; border-radius:4px; margin-bottom:8px; font-weight:600;">⚠️ Anomaly: ${escapeHtml(decoded.anomaly)}</div>`
+      : '';
+
     panel.innerHTML = `
+      ${anomalyBanner}
       <div class="detail-title">${hasRawHex ? `Packet Byte Breakdown (${size} bytes)` : typeName + ' Packet'}</div>
       <div class="detail-hash">${pkt.hash || 'Packet #' + pkt.id}</div>
       ${messageHtml}
@@ -1981,13 +2012,9 @@
     // Header section
     rows += sectionRow('Header', 'section-header');
     rows += fieldRow(0, 'Header Byte', '0x' + (buf.slice(0, 2) || '??'), `Route: ${routeTypeName(pkt.route_type)}, Payload: ${payloadTypeName(pkt.payload_type)}`);
-    const pathByte0 = parseInt(buf.slice(2, 4), 16);
-    const hashSizeVal = isNaN(pathByte0) ? '?' : ((pathByte0 >> 6) + 1);
-    const hashCountVal = isNaN(pathByte0) ? '?' : (pathByte0 & 0x3F);
-    rows += fieldRow(1, 'Path Length', '0x' + (buf.slice(2, 4) || '??'), hashCountVal === 0 ? `hash_count=0 (direct advert)` : `hash_size=${hashSizeVal} byte${hashSizeVal !== 1 ? 's' : ''}, hash_count=${hashCountVal}`);
 
-    // Transport codes
-    let off = 2;
+    // Transport codes come BEFORE path length for transport routes (bytes 1-4)
+    let off = 1;
     if (pkt.route_type === 0 || pkt.route_type === 3) {
       rows += sectionRow('Transport Codes', 'section-transport');
       rows += fieldRow(off, 'Next Hop', buf.slice(off * 2, (off + 2) * 2), '');
@@ -1995,11 +2022,18 @@
       off += 4;
     }
 
+    // Path length byte is at current offset (byte 1 for non-transport, byte 5 for transport)
+    const pathLenOffset = off;
+    const pathByte0 = parseInt(buf.slice(off * 2, off * 2 + 2), 16);
+    const hashSizeVal = isNaN(pathByte0) ? '?' : ((pathByte0 >> 6) + 1);
+    const hashCountVal = isNaN(pathByte0) ? '?' : (pathByte0 & 0x3F);
+    rows += fieldRow(off, 'Path Length', '0x' + (buf.slice(off * 2, off * 2 + 2) || '??'), hashCountVal === 0 ? `hash_count=0 (direct advert)` : `hash_size=${hashSizeVal} byte${hashSizeVal !== 1 ? 's' : ''}, hash_count=${hashCountVal}`);
+    off += 1;
+
     // Path
     if (pathHops.length > 0) {
       rows += sectionRow('Path (' + pathHops.length + ' hops)', 'section-path');
-      const pathByte = parseInt(buf.slice(2, 4), 16);
-      const hashSize = (pathByte >> 6) + 1;
+      const hashSize = isNaN(pathByte0) ? 1 : ((pathByte0 >> 6) + 1);
       for (let i = 0; i < pathHops.length; i++) {
         const hopHtml = HopDisplay.renderHop(pathHops[i], hopNameCache[pathHops[i]]);
         const label = `Hop ${i} — ${hopHtml}`;
@@ -2012,7 +2046,7 @@
     rows += sectionRow('Payload — ' + payloadTypeName(pkt.payload_type), 'section-payload');
 
     if (decoded.type === 'ADVERT') {
-      if (hashCountVal !== 0) rows += fieldRow(1, 'Advertised Hash Size', hashSizeVal + ' byte' + (hashSizeVal !== 1 ? 's' : ''), 'From path byte 0x' + (buf.slice(2, 4) || '??') + ' — bits 7-6 = ' + (hashSizeVal - 1));
+      if (hashCountVal !== 0) rows += fieldRow(pathLenOffset, 'Advertised Hash Size', hashSizeVal + ' byte' + (hashSizeVal !== 1 ? 's' : ''), 'From path byte 0x' + (buf.slice(pathLenOffset * 2, pathLenOffset * 2 + 2) || '??') + ' — bits 7-6 = ' + (hashSizeVal - 1));
       rows += fieldRow(off, 'Public Key (32B)', truncate(decoded.pubKey || '', 24), '');
       rows += fieldRow(off + 32, 'Timestamp (4B)', decoded.timestampISO || '', 'Unix: ' + (decoded.timestamp || ''));
       rows += fieldRow(off + 36, 'Signature (64B)', truncate(decoded.signature || '', 24), '');
@@ -2051,6 +2085,10 @@
       rows += fieldRow(off + 4, 'Encrypted Data', truncate(decoded.encryptedData || '', 30), '');
     } else {
       rows += fieldRow(off, 'Raw', truncate(buf.slice(off * 2), 40), '');
+    }
+
+    if (decoded.anomaly) {
+      rows += `<tr class="anomaly-row" style="background:var(--warning, #f0ad4e); color:#000; font-weight:600;"><td colspan="2">⚠️ Anomaly</td><td colspan="2">${escapeHtml(decoded.anomaly)}</td></tr>`;
     }
 
     return `<table class="field-table">
@@ -2144,6 +2182,11 @@
 
     let html = '<div class="byop-decoded">';
 
+    // Anomaly banner
+    if (d.anomaly) {
+      html += '<div class="anomaly-banner" style="background:var(--warning, #f0ad4e); color:#000; padding:8px 12px; border-radius:4px; margin-bottom:8px; font-weight:600;">⚠️ Anomaly: ' + escapeHtml(d.anomaly) + '</div>';
+    }
+
     // Header section
     html += '<div class="byop-section">'
       + '<div class="byop-section-title">Header</div>'
@@ -2173,6 +2216,12 @@
       } else {
         html += kv(k, String(v));
       }
+    }
+    // Special handling for advert signature validation
+    if (h.payloadType === 4 && p.signatureValid !== undefined) {
+      const status = p.signatureValid ? 'Valid' : 'Invalid';
+      const badgeClass = p.signatureValid ? 'badge-success' : 'badge-danger';
+      html += kv('Signature', `<span class="badge ${badgeClass}">${status}</span>`);
     }
     html += '</div></div>';
 

@@ -115,6 +115,7 @@ type WebSocketStatsResp struct {
 type HealthPacketStoreStats struct {
 	Packets     int     `json:"packets"`
 	EstimatedMB float64 `json:"estimatedMB"`
+	TrackedMB   float64 `json:"trackedMB"`
 }
 
 type SlowQuery struct {
@@ -174,6 +175,8 @@ type PerfPacketStoreStats struct {
 	SqliteOnly        bool               `json:"sqliteOnly"`
 	MaxPackets        int                `json:"maxPackets"`
 	EstimatedMB       float64            `json:"estimatedMB"`
+	TrackedMB         float64            `json:"trackedMB"`
+	AvgBytesPerPacket int64              `json:"avgBytesPerPacket"`
 	MaxMB             int                `json:"maxMB"`
 	Indexes           PacketStoreIndexes `json:"indexes"`
 }
@@ -466,6 +469,7 @@ type NodeAnalyticsResponse struct {
 	PeerInteractions    []PeerInteraction       `json:"peerInteractions"`
 	UptimeHeatmap       []HeatmapCell           `json:"uptimeHeatmap"`
 	ComputedStats       ComputedNodeStats       `json:"computedStats"`
+	ClockSkew           *NodeClockSkew          `json:"clockSkew,omitempty"`
 }
 
 // ─── Analytics — RF ────────────────────────────────────────────────────────────

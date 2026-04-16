@@ -525,7 +525,7 @@ type edgeCandidate struct {
 // For ADVERTs: originator↔path[0] (if unambiguous). For ALL types: observer↔path[last] (if unambiguous).
 // Also handles zero-hop ADVERTs (originator↔observer direct link).
 func extractEdgesFromObs(obs *StoreObs, tx *StoreTx, pm *prefixMap) []edgeCandidate {
-	isAdvert := tx.PayloadType != nil && *tx.PayloadType == 4
+	isAdvert := tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT
 	fromNode := extractFromNode(tx)
 	path := parsePathJSON(obs.PathJSON)
 	observerPK := strings.ToLower(obs.ObserverID)
@@ -584,12 +584,18 @@ func extractEdgesFromObs(obs *StoreObs, tx *StoreTx, pm *prefixMap) []edgeCandid
 
 // openRW opens a read-write SQLite connection (same pattern as PruneOldPackets).
 func openRW(dbPath string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=10000", dbPath)
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL", dbPath)
 	rw, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
 	rw.SetMaxOpenConns(1)
+	// DSN _busy_timeout may not be honored by all drivers; set via PRAGMA
+	// to guarantee SQLite retries for up to 5s before returning SQLITE_BUSY.
+	if _, err := rw.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		rw.Close()
+		return nil, fmt.Errorf("set busy_timeout: %w", err)
+	}
 	return rw, nil
 }
 

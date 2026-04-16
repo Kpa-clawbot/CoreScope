@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/aes"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
@@ -9,6 +10,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/meshcore-analyzer/sigvalidate"
 )
 
 func TestDecodeHeaderRoutTypes(t *testing.T) {
@@ -55,7 +58,7 @@ func TestDecodeHeaderPayloadTypes(t *testing.T) {
 
 func TestDecodePathZeroHops(t *testing.T) {
 	// 0x00: 0 hops, 1-byte hashes
-	pkt, err := DecodePacket("0500"+strings.Repeat("00", 10), nil)
+	pkt, err := DecodePacket("0500"+strings.Repeat("00", 10), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +75,7 @@ func TestDecodePathZeroHops(t *testing.T) {
 
 func TestDecodePath1ByteHashes(t *testing.T) {
 	// 0x05: 5 hops, 1-byte hashes → 5 path bytes
-	pkt, err := DecodePacket("0505"+"AABBCCDDEE"+strings.Repeat("00", 10), nil)
+	pkt, err := DecodePacket("0505"+"AABBCCDDEE"+strings.Repeat("00", 10), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +98,7 @@ func TestDecodePath1ByteHashes(t *testing.T) {
 
 func TestDecodePath2ByteHashes(t *testing.T) {
 	// 0x45: 5 hops, 2-byte hashes
-	pkt, err := DecodePacket("0545"+"AA11BB22CC33DD44EE55"+strings.Repeat("00", 10), nil)
+	pkt, err := DecodePacket("0545"+"AA11BB22CC33DD44EE55"+strings.Repeat("00", 10), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +115,7 @@ func TestDecodePath2ByteHashes(t *testing.T) {
 
 func TestDecodePath3ByteHashes(t *testing.T) {
 	// 0x8A: 10 hops, 3-byte hashes
-	pkt, err := DecodePacket("058A"+strings.Repeat("AA11FF", 10)+strings.Repeat("00", 10), nil)
+	pkt, err := DecodePacket("058A"+strings.Repeat("AA11FF", 10)+strings.Repeat("00", 10), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +134,7 @@ func TestTransportCodes(t *testing.T) {
 	// Route type 0 (TRANSPORT_FLOOD) should have transport codes
 	// Firmware order: header + transport_codes(4) + path_len + path + payload
 	hex := "14" + "AABB" + "CCDD" + "00" + strings.Repeat("00", 10)
-	pkt, err := DecodePacket(hex, nil)
+	pkt, err := DecodePacket(hex, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +152,7 @@ func TestTransportCodes(t *testing.T) {
 	}
 
 	// Route type 1 (FLOOD) should NOT have transport codes
-	pkt2, err := DecodePacket("0500"+strings.Repeat("00", 10), nil)
+	pkt2, err := DecodePacket("0500"+strings.Repeat("00", 10), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +172,7 @@ func TestDecodeAdvertFull(t *testing.T) {
 	name := "546573744E6F6465" // "TestNode"
 
 	hex := "1200" + pubkey + timestamp + signature + flags + lat + lon + name
-	pkt, err := DecodePacket(hex, nil)
+	pkt, err := DecodePacket(hex, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +230,7 @@ func TestDecodeAdvertTypeEnums(t *testing.T) {
 	makeAdvert := func(flagsByte byte) *DecodedPacket {
 		hex := "1200" + strings.Repeat("AA", 32) + "00000000" + strings.Repeat("BB", 64) +
 			strings.ToUpper(string([]byte{hexDigit(flagsByte>>4), hexDigit(flagsByte & 0x0f)}))
-		pkt, err := DecodePacket(hex, nil)
+		pkt, err := DecodePacket(hex, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -272,7 +275,7 @@ func hexDigit(v byte) byte {
 
 func TestDecodeAdvertNoLocationNoName(t *testing.T) {
 	hex := "1200" + strings.Repeat("CC", 32) + "00000000" + strings.Repeat("DD", 64) + "02"
-	pkt, err := DecodePacket(hex, nil)
+	pkt, err := DecodePacket(hex, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +294,7 @@ func TestDecodeAdvertNoLocationNoName(t *testing.T) {
 }
 
 func TestGoldenFixtureTxtMsg(t *testing.T) {
-	pkt, err := DecodePacket("0A00D69FD7A5A7475DB07337749AE61FA53A4788E976", nil)
+	pkt, err := DecodePacket("0A00D69FD7A5A7475DB07337749AE61FA53A4788E976", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +317,7 @@ func TestGoldenFixtureTxtMsg(t *testing.T) {
 
 func TestGoldenFixtureAdvert(t *testing.T) {
 	rawHex := "120046D62DE27D4C5194D7821FC5A34A45565DCC2537B300B9AB6275255CEFB65D840CE5C169C94C9AED39E8BCB6CB6EB0335497A198B33A1A610CD3B03D8DCFC160900E5244280323EE0B44CACAB8F02B5B38B91CFA18BD067B0B5E63E94CFC85F758A8530B9240933402E0E6B8F84D5252322D52"
-	pkt, err := DecodePacket(rawHex, nil)
+	pkt, err := DecodePacket(rawHex, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +340,7 @@ func TestGoldenFixtureAdvert(t *testing.T) {
 
 func TestGoldenFixtureUnicodeAdvert(t *testing.T) {
 	rawHex := "120073CFF971E1CB5754A742C152B2D2E0EB108A19B246D663ED8898A72C4A5AD86EA6768E66694B025EDF6939D5C44CFF719C5D5520E5F06B20680A83AD9C2C61C3227BBB977A85EE462F3553445FECF8EDD05C234ECE217272E503F14D6DF2B1B9B133890C923CDF3002F8FDC1F85045414BF09F8CB3"
-	pkt, err := DecodePacket(rawHex, nil)
+	pkt, err := DecodePacket(rawHex, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,14 +357,14 @@ func TestGoldenFixtureUnicodeAdvert(t *testing.T) {
 }
 
 func TestDecodePacketTooShort(t *testing.T) {
-	_, err := DecodePacket("FF", nil)
+	_, err := DecodePacket("FF", nil, false)
 	if err == nil {
 		t.Error("expected error for 1-byte packet")
 	}
 }
 
 func TestDecodePacketInvalidHex(t *testing.T) {
-	_, err := DecodePacket("ZZZZ", nil)
+	_, err := DecodePacket("ZZZZ", nil, false)
 	if err == nil {
 		t.Error("expected error for invalid hex")
 	}
@@ -568,7 +571,7 @@ func TestDecodeTracePathParsing(t *testing.T) {
 	// Packet from issue #276: 260001807dca00000000007d547d
 	// Path byte 0x00 → hashSize=1, hops in payload at buf[9:] = 7d 54 7d
 	// Expected path: ["7D", "54", "7D"]
-	pkt, err := DecodePacket("260001807dca00000000007d547d", nil)
+	pkt, err := DecodePacket("260001807dca00000000007d547d", nil, false)
 	if err != nil {
 		t.Fatalf("DecodePacket error: %v", err)
 	}
@@ -590,7 +593,7 @@ func TestDecodeTracePathParsing(t *testing.T) {
 }
 
 func TestDecodeAdvertShort(t *testing.T) {
-	p := decodeAdvert(make([]byte, 50))
+	p := decodeAdvert(make([]byte, 50), false)
 	if p.Error != "too short for advert" {
 		t.Errorf("expected 'too short for advert' error, got %q", p.Error)
 	}
@@ -628,7 +631,7 @@ func TestDecodeEncryptedPayloadValid(t *testing.T) {
 
 func TestDecodePayloadGRPData(t *testing.T) {
 	buf := []byte{0x01, 0x02, 0x03}
-	p := decodePayload(PayloadGRP_DATA, buf, nil)
+	p := decodePayload(PayloadGRP_DATA, buf, nil, false)
 	if p.Type != "UNKNOWN" {
 		t.Errorf("type=%s, want UNKNOWN", p.Type)
 	}
@@ -639,7 +642,7 @@ func TestDecodePayloadGRPData(t *testing.T) {
 
 func TestDecodePayloadRAWCustom(t *testing.T) {
 	buf := []byte{0xFF, 0xFE}
-	p := decodePayload(PayloadRAW_CUSTOM, buf, nil)
+	p := decodePayload(PayloadRAW_CUSTOM, buf, nil, false)
 	if p.Type != "UNKNOWN" {
 		t.Errorf("type=%s, want UNKNOWN", p.Type)
 	}
@@ -647,49 +650,49 @@ func TestDecodePayloadRAWCustom(t *testing.T) {
 
 func TestDecodePayloadAllTypes(t *testing.T) {
 	// REQ
-	p := decodePayload(PayloadREQ, make([]byte, 10), nil)
+	p := decodePayload(PayloadREQ, make([]byte, 10), nil, false)
 	if p.Type != "REQ" {
 		t.Errorf("REQ: type=%s", p.Type)
 	}
 
 	// RESPONSE
-	p = decodePayload(PayloadRESPONSE, make([]byte, 10), nil)
+	p = decodePayload(PayloadRESPONSE, make([]byte, 10), nil, false)
 	if p.Type != "RESPONSE" {
 		t.Errorf("RESPONSE: type=%s", p.Type)
 	}
 
 	// TXT_MSG
-	p = decodePayload(PayloadTXT_MSG, make([]byte, 10), nil)
+	p = decodePayload(PayloadTXT_MSG, make([]byte, 10), nil, false)
 	if p.Type != "TXT_MSG" {
 		t.Errorf("TXT_MSG: type=%s", p.Type)
 	}
 
 	// ACK
-	p = decodePayload(PayloadACK, make([]byte, 10), nil)
+	p = decodePayload(PayloadACK, make([]byte, 10), nil, false)
 	if p.Type != "ACK" {
 		t.Errorf("ACK: type=%s", p.Type)
 	}
 
 	// GRP_TXT
-	p = decodePayload(PayloadGRP_TXT, make([]byte, 10), nil)
+	p = decodePayload(PayloadGRP_TXT, make([]byte, 10), nil, false)
 	if p.Type != "GRP_TXT" {
 		t.Errorf("GRP_TXT: type=%s", p.Type)
 	}
 
 	// ANON_REQ
-	p = decodePayload(PayloadANON_REQ, make([]byte, 40), nil)
+	p = decodePayload(PayloadANON_REQ, make([]byte, 40), nil, false)
 	if p.Type != "ANON_REQ" {
 		t.Errorf("ANON_REQ: type=%s", p.Type)
 	}
 
 	// PATH
-	p = decodePayload(PayloadPATH, make([]byte, 10), nil)
+	p = decodePayload(PayloadPATH, make([]byte, 10), nil, false)
 	if p.Type != "PATH" {
 		t.Errorf("PATH: type=%s", p.Type)
 	}
 
 	// TRACE
-	p = decodePayload(PayloadTRACE, make([]byte, 20), nil)
+	p = decodePayload(PayloadTRACE, make([]byte, 20), nil, false)
 	if p.Type != "TRACE" {
 		t.Errorf("TRACE: type=%s", p.Type)
 	}
@@ -925,7 +928,7 @@ func TestComputeContentHashLongFallback(t *testing.T) {
 
 func TestDecodePacketWithWhitespace(t *testing.T) {
 	raw := "0A 00 D6 9F D7 A5 A7 47 5D B0 73 37 74 9A E6 1F A5 3A 47 88 E9 76"
-	pkt, err := DecodePacket(raw, nil)
+	pkt, err := DecodePacket(raw, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -936,7 +939,7 @@ func TestDecodePacketWithWhitespace(t *testing.T) {
 
 func TestDecodePacketWithNewlines(t *testing.T) {
 	raw := "0A00\nD69F\r\nD7A5A7475DB07337749AE61FA53A4788E976"
-	pkt, err := DecodePacket(raw, nil)
+	pkt, err := DecodePacket(raw, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -947,7 +950,7 @@ func TestDecodePacketWithNewlines(t *testing.T) {
 
 func TestDecodePacketTransportRouteTooShort(t *testing.T) {
 	// TRANSPORT_FLOOD (route=0) but only 2 bytes total → too short for transport codes
-	_, err := DecodePacket("1400", nil)
+	_, err := DecodePacket("1400", nil, false)
 	if err == nil {
 		t.Error("expected error for transport route with too-short buffer")
 	}
@@ -1007,7 +1010,7 @@ func TestDecodeHeaderUnknownTypes(t *testing.T) {
 
 func TestDecodePayloadMultipart(t *testing.T) {
 	// MULTIPART (0x0A) falls through to default → UNKNOWN
-	p := decodePayload(PayloadMULTIPART, []byte{0x01, 0x02}, nil)
+	p := decodePayload(PayloadMULTIPART, []byte{0x01, 0x02}, nil, false)
 	if p.Type != "UNKNOWN" {
 		t.Errorf("MULTIPART type=%s, want UNKNOWN", p.Type)
 	}
@@ -1015,7 +1018,7 @@ func TestDecodePayloadMultipart(t *testing.T) {
 
 func TestDecodePayloadControl(t *testing.T) {
 	// CONTROL (0x0B) falls through to default → UNKNOWN
-	p := decodePayload(PayloadCONTROL, []byte{0x01, 0x02}, nil)
+	p := decodePayload(PayloadCONTROL, []byte{0x01, 0x02}, nil, false)
 	if p.Type != "UNKNOWN" {
 		t.Errorf("CONTROL type=%s, want UNKNOWN", p.Type)
 	}
@@ -1039,7 +1042,7 @@ func TestDecodePathTruncatedBuffer(t *testing.T) {
 func TestDecodeFloodAdvert5Hops(t *testing.T) {
 	// From test-decoder.js Test 1
 	raw := "11451000D818206D3AAC152C8A91F89957E6D30CA51F36E28790228971C473B755F244F718754CF5EE4A2FD58D944466E42CDED140C66D0CC590183E32BAF40F112BE8F3F2BDF6012B4B2793C52F1D36F69EE054D9A05593286F78453E56C0EC4A3EB95DDA2A7543FCCC00B939CACC009278603902FC12BCF84B706120526F6F6620536F6C6172"
-	pkt, err := DecodePacket(raw, nil)
+	pkt, err := DecodePacket(raw, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1410,7 +1413,7 @@ func TestDecodeAdvertWithTelemetry(t *testing.T) {
 		name + nullTerm +
 		hex.EncodeToString(batteryLE) + hex.EncodeToString(tempLE)
 
-	pkt, err := DecodePacket(hexStr, nil)
+	pkt, err := DecodePacket(hexStr, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1449,7 +1452,7 @@ func TestDecodeAdvertWithTelemetryNegativeTemp(t *testing.T) {
 		name + nullTerm +
 		hex.EncodeToString(batteryLE) + hex.EncodeToString(tempLE)
 
-	pkt, err := DecodePacket(hexStr, nil)
+	pkt, err := DecodePacket(hexStr, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1476,7 +1479,7 @@ func TestDecodeAdvertWithoutTelemetry(t *testing.T) {
 	name := hex.EncodeToString([]byte("Node1"))
 
 	hexStr := "1200" + pubkey + timestamp + signature + flags + name
-	pkt, err := DecodePacket(hexStr, nil)
+	pkt, err := DecodePacket(hexStr, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1503,7 +1506,7 @@ func TestDecodeAdvertNonSensorIgnoresTelemetryBytes(t *testing.T) {
 	extraBytes := "B40ED403" // battery-like and temp-like bytes
 
 	hexStr := "1200" + pubkey + timestamp + signature + flags + name + nullTerm + extraBytes
-	pkt, err := DecodePacket(hexStr, nil)
+	pkt, err := DecodePacket(hexStr, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1531,7 +1534,7 @@ func TestDecodeAdvertTelemetryZeroTemp(t *testing.T) {
 		name + nullTerm +
 		hex.EncodeToString(batteryLE) + hex.EncodeToString(tempLE)
 
-	pkt, err := DecodePacket(hexStr, nil)
+	pkt, err := DecodePacket(hexStr, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1555,7 +1558,7 @@ func TestZeroHopDirectHashSize(t *testing.T) {
 	// DIRECT (RouteType=2) + REQ (PayloadType=0) → header byte = 0x02
 	// pathByte=0x00 → hash_count=0, hash_size bits=0 → should get HashSize=0
 	hex := "02" + "00" + repeatHex("AA", 20)
-	pkt, err := DecodePacket(hex, nil)
+	pkt, err := DecodePacket(hex, nil, false)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
@@ -1568,7 +1571,7 @@ func TestZeroHopDirectHashSizeWithNonZeroUpperBits(t *testing.T) {
 	// DIRECT (RouteType=2) + REQ (PayloadType=0) → header byte = 0x02
 	// pathByte=0x40 → hash_count=0, hash_size bits=01 → should still get HashSize=0
 	hex := "02" + "40" + repeatHex("AA", 20)
-	pkt, err := DecodePacket(hex, nil)
+	pkt, err := DecodePacket(hex, nil, false)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
@@ -1581,7 +1584,7 @@ func TestNonDirectZeroPathByteKeepsHashSize(t *testing.T) {
 	// FLOOD (RouteType=1) + REQ (PayloadType=0) → header byte = 0x01
 	// pathByte=0x00 → non-DIRECT should keep HashSize=1
 	hex := "01" + "00" + repeatHex("AA", 20)
-	pkt, err := DecodePacket(hex, nil)
+	pkt, err := DecodePacket(hex, nil, false)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
@@ -1594,7 +1597,7 @@ func TestDirectNonZeroHopKeepsHashSize(t *testing.T) {
 	// DIRECT (RouteType=2) + REQ (PayloadType=0) → header byte = 0x02
 	// pathByte=0x01 → hash_count=1, hash_size=1 → should keep HashSize=1
 	hex := "02" + "01" + repeatHex("BB", 21)
-	pkt, err := DecodePacket(hex, nil)
+	pkt, err := DecodePacket(hex, nil, false)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
@@ -1607,7 +1610,7 @@ func TestZeroHopTransportDirectHashSize(t *testing.T) {
 	// TRANSPORT_DIRECT (RouteType=3) + REQ (PayloadType=0) → header byte = 0x03
 	// 4 bytes transport codes + pathByte=0x00 → hash_count=0 → should get HashSize=0
 	hex := "03" + "11223344" + "00" + repeatHex("AA", 20)
-	pkt, err := DecodePacket(hex, nil)
+	pkt, err := DecodePacket(hex, nil, false)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
@@ -1620,11 +1623,115 @@ func TestZeroHopTransportDirectHashSizeWithNonZeroUpperBits(t *testing.T) {
 	// TRANSPORT_DIRECT (RouteType=3) + REQ (PayloadType=0) → header byte = 0x03
 	// 4 bytes transport codes + pathByte=0xC0 → hash_count=0, hash_size bits=11 → should still get HashSize=0
 	hex := "03" + "11223344" + "C0" + repeatHex("AA", 20)
-	pkt, err := DecodePacket(hex, nil)
+	pkt, err := DecodePacket(hex, nil, false)
 	if err != nil {
 		t.Fatalf("DecodePacket failed: %v", err)
 	}
 	if pkt.Path.HashSize != 0 {
 		t.Errorf("TRANSPORT_DIRECT zero-hop with hash_size bits set: want HashSize=0, got %d", pkt.Path.HashSize)
+	}
+}
+
+func TestValidateAdvertSignature(t *testing.T) {
+	// Generate a real ed25519 key pair
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var timestamp uint32 = 1234567890
+	appdata := []byte{0x02, 0x11, 0x22} // flags + some data
+
+	// Build the signed message: pubKey + timestamp(LE) + appdata
+	message := make([]byte, 32+4+len(appdata))
+	copy(message[0:32], pub)
+	binary.LittleEndian.PutUint32(message[32:36], timestamp)
+	copy(message[36:], appdata)
+
+	sig := ed25519.Sign(priv, message)
+
+	// Valid signature
+	valid, err := sigvalidate.ValidateAdvert([]byte(pub), sig, timestamp, appdata)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !valid {
+		t.Error("expected valid signature")
+	}
+
+	// Tampered appdata → invalid
+	badAppdata := []byte{0x03, 0x11, 0x22}
+	valid, err = sigvalidate.ValidateAdvert([]byte(pub), sig, timestamp, badAppdata)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if valid {
+		t.Error("expected invalid signature with tampered appdata")
+	}
+
+	// Wrong timestamp → invalid
+	valid, err = sigvalidate.ValidateAdvert([]byte(pub), sig, timestamp+1, appdata)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if valid {
+		t.Error("expected invalid signature with wrong timestamp")
+	}
+
+	// Wrong length pubkey
+	_, err = sigvalidate.ValidateAdvert([]byte{0xAA, 0xBB}, sig, timestamp, appdata)
+	if err == nil {
+		t.Error("expected error for short pubkey")
+	}
+
+	// Wrong length signature
+	_, err = sigvalidate.ValidateAdvert([]byte(pub), []byte{0xAA, 0xBB}, timestamp, appdata)
+	if err == nil {
+		t.Error("expected error for short signature")
+	}
+}
+
+func TestDecodeAdvertWithSignatureValidation(t *testing.T) {
+	// Generate key pair
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var timestamp uint32 = 1000000
+	appdata := []byte{0x02} // repeater type, no location
+
+	// Build signed message
+	message := make([]byte, 32+4+len(appdata))
+	copy(message[0:32], pub)
+	binary.LittleEndian.PutUint32(message[32:36], timestamp)
+	copy(message[36:], appdata)
+	sig := ed25519.Sign(priv, message)
+
+	// Build advert buffer: pubkey(32) + timestamp(4) + signature(64) + appdata
+	buf := make([]byte, 0, 101)
+	buf = append(buf, pub...)
+	ts := make([]byte, 4)
+	binary.LittleEndian.PutUint32(ts, timestamp)
+	buf = append(buf, ts...)
+	buf = append(buf, sig...)
+	buf = append(buf, appdata...)
+
+	// With validation enabled
+	p := decodeAdvert(buf, true)
+	if p.Error != "" {
+		t.Fatalf("decode error: %s", p.Error)
+	}
+	if p.SignatureValid == nil {
+		t.Fatal("SignatureValid should be set when validation enabled")
+	}
+	if !*p.SignatureValid {
+		t.Error("expected valid signature")
+	}
+
+	// Without validation
+	p2 := decodeAdvert(buf, false)
+	if p2.SignatureValid != nil {
+		t.Error("SignatureValid should be nil when validation disabled")
 	}
 }

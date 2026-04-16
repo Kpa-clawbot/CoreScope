@@ -268,7 +268,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 	// Format 1: Raw packet (meshcoretomqtt / Cisien format)
 	rawHex, _ := msg["raw"].(string)
 	if rawHex != "" {
-		decoded, err := DecodePacket(rawHex, channelKeys)
+		decoded, err := DecodePacket(rawHex, channelKeys, false)
 		if err != nil {
 			log.Printf("MQTT [%s] decode error: %v", tag, err)
 			return
@@ -460,19 +460,18 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			PayloadType:  5, // GRP_TXT
 			PathJSON:     "[]",
 			DecodedJSON:  string(decodedJSON),
+			ChannelHash:  channelName, // fast channel queries (#762)
 		}
 
 		if _, err := store.InsertTransmission(pktData); err != nil {
 			log.Printf("MQTT [%s] channel insert error: %v", tag, err)
 		}
 
-		// Upsert sender as a companion node
-		if sender != "" {
-			senderKey := "sender-" + strings.ToLower(sender)
-			if err := store.UpsertNode(senderKey, sender, "companion", nil, nil, now); err != nil {
-				log.Printf("MQTT [%s] sender node upsert error: %v", tag, err)
-			}
-		}
+		// Note: we intentionally do NOT create a node entry for channel message senders.
+		// Channel messages don't carry the sender's real pubkey, so any entry we create
+		// would use a synthetic key ("sender-<name>") that doesn't match the real pubkey
+		// used for claiming/health lookups. The node will get a proper entry when it
+		// sends an advert. See issue #665.
 
 		log.Printf("MQTT [%s] channel message: ch%s from %s", tag, channelIdx, firstNonEmpty(sender, "unknown"))
 		return

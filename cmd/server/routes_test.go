@@ -170,6 +170,9 @@ func TestHealthEndpoint(t *testing.T) {
 	if _, ok := pktStore["estimatedMB"]; !ok {
 		t.Error("expected estimatedMB in packetStore")
 	}
+	if _, ok := pktStore["trackedMB"]; !ok {
+		t.Error("expected trackedMB in packetStore")
+	}
 
 	// Verify eventLoop (GC pause metrics matching Node.js shape)
 	el, ok := body["eventLoop"].(map[string]interface{})
@@ -771,6 +774,67 @@ func TestNodeHealthNotFound(t *testing.T) {
 
 	if w.Code != 404 {
 		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
+
+// TestNodeHealthPartialFromPackets verifies that a node with packets in the
+// in-memory store but no DB entry returns a partial 200 response instead of 404.
+// This is the fix for issue #665 (companion nodes without adverts).
+func TestNodeHealthPartialFromPackets(t *testing.T) {
+	srv, router := setupTestServer(t)
+
+	// Inject a packet into byNode for a pubkey that doesn't exist in the nodes table
+	ghostPubkey := "ghost_companion_no_advert"
+	now := time.Now().UTC().Format(time.RFC3339)
+	snr := 5.0
+	srv.store.mu.Lock()
+	if srv.store.byNode == nil {
+		srv.store.byNode = make(map[string][]*StoreTx)
+	}
+	if srv.store.nodeHashes == nil {
+		srv.store.nodeHashes = make(map[string]map[string]bool)
+	}
+	srv.store.byNode[ghostPubkey] = []*StoreTx{
+		{Hash: "abc123", FirstSeen: now, SNR: &snr, ObservationCount: 1},
+	}
+	srv.store.nodeHashes[ghostPubkey] = map[string]bool{"abc123": true}
+	srv.store.mu.Unlock()
+
+	req := httptest.NewRequest("GET", "/api/nodes/"+ghostPubkey+"/health", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200 for ghost companion, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("json unmarshal: %v", err)
+	}
+
+	// Should have a synthetic node stub
+	node, ok := body["node"].(map[string]interface{})
+	if !ok || node == nil {
+		t.Fatal("expected node in response")
+	}
+	if node["role"] != "unknown" {
+		t.Errorf("expected role=unknown, got %v", node["role"])
+	}
+	if node["public_key"] != ghostPubkey {
+		t.Errorf("expected public_key=%s, got %v", ghostPubkey, node["public_key"])
+	}
+
+	// Should have stats from the packet
+	stats, ok := body["stats"].(map[string]interface{})
+	if !ok || stats == nil {
+		t.Fatal("expected stats in response")
+	}
+	if stats["totalPackets"] != 1.0 { // JSON numbers are float64
+		t.Errorf("expected totalPackets=1, got %v", stats["totalPackets"])
+	}
+	if stats["lastHeard"] == nil {
+		t.Error("expected lastHeard to be set")
 	}
 }
 
@@ -2155,8 +2219,8 @@ pk := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'TestNode', 'repeater')", pk)
 
 decoded := `{"name":"TestNode","pubKey":"` + pk + `"}`
-raw1 := "04" + "00" + "aabb"
-raw2 := "04" + "40" + "aabb"
+raw1 := "11" + "01" + "aabb"
+raw2 := "11" + "41" + "aabb"
 
 payloadType := 4
 for i := 0; i < 3; i++ {
@@ -2203,8 +2267,8 @@ pk := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'Repeater2B', 'repeater')", pk)
 
 decoded := `{"name":"Repeater2B","pubKey":"` + pk + `"}`
-raw1byte := "04" + "00" + "aabb" // pathByte=0x00 → hashSize=1 (direct send, no hops)
-raw2byte := "04" + "40" + "aabb" // pathByte=0x40 → hashSize=2
+raw1byte := "11" + "01" + "aabb" // FLOOD, pathByte=0x01 → hashSize=1
+raw2byte := "11" + "41" + "aabb" // FLOOD, pathByte=0x41 → hashSize=2
 
 payloadType := 4
 // 1 packet with hashSize=1, 4 packets with hashSize=2 (latest is 2-byte)
@@ -2246,8 +2310,8 @@ func TestGetNodeHashSizeInfoLatestWins(t *testing.T) {
 	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'LatestWins', 'repeater')", pk)
 
 	decoded := `{"name":"LatestWins","pubKey":"` + pk + `"}`
-	raw1byte := "04" + "00" + "aabb" // pathByte=0x00 → hashSize=1
-	raw2byte := "04" + "40" + "aabb" // pathByte=0x40 → hashSize=2
+	raw1byte := "11" + "01" + "aabb" // FLOOD, pathByte=0x01 → hashSize=1
+	raw2byte := "11" + "41" + "aabb" // FLOOD, pathByte=0x41 → hashSize=2
 
 	payloadType := 4
 	// 4 historical 1-byte adverts, then 1 recent 2-byte advert (latest).

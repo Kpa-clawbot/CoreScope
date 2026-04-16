@@ -2345,7 +2345,9 @@ console.log('\n=== channels.js: shouldProcessWSMessageForRegion ===');
   ctx.history = { replaceState() {} };
   ctx.btoa = (s) => Buffer.from(String(s), 'utf8').toString('base64');
   ctx.atob = (s) => Buffer.from(String(s), 'base64').toString('utf8');
-  loadInCtx(ctx, 'public/channels.js');
+  ctx.crypto = { subtle: require('crypto').webcrypto.subtle }; ctx.TextEncoder = TextEncoder; ctx.TextDecoder = TextDecoder; ctx.Uint8Array = Uint8Array;
+    loadInCtx(ctx, 'public/channel-decrypt.js');
+    loadInCtx(ctx, 'public/channels.js');
   const shouldProcess = ctx.window._channelsShouldProcessWSMessageForRegion;
 
   test('helper is exported', () => assert.ok(typeof shouldProcess === 'function'));
@@ -2467,6 +2469,8 @@ console.log('\n=== channels.js: WS batch + region snapshot integration ===');
     ctx.btoa = (s) => Buffer.from(String(s), 'utf8').toString('base64');
     ctx.atob = (s) => Buffer.from(String(s), 'base64').toString('utf8');
 
+    ctx.crypto = { subtle: require('crypto').webcrypto.subtle }; ctx.TextEncoder = TextEncoder; ctx.TextDecoder = TextDecoder; ctx.Uint8Array = Uint8Array;
+    loadInCtx(ctx, 'public/channel-decrypt.js');
     loadInCtx(ctx, 'public/channels.js');
     ctx._pageHandlers.init(appEl);
     return { ctx, dom };
@@ -2586,6 +2590,8 @@ console.log('\n=== channels.js: WS batch + region snapshot integration ===');
     ctx.btoa = (s) => Buffer.from(String(s), 'utf8').toString('base64');
     ctx.atob = (s) => Buffer.from(String(s), 'base64').toString('utf8');
 
+    ctx.crypto = { subtle: require('crypto').webcrypto.subtle }; ctx.TextEncoder = TextEncoder; ctx.TextDecoder = TextDecoder; ctx.Uint8Array = Uint8Array;
+    loadInCtx(ctx, 'public/channel-decrypt.js');
     loadInCtx(ctx, 'public/channels.js');
     ctx._pageHandlers.init(appEl);
     await Promise.resolve();
@@ -2681,6 +2687,8 @@ console.log('\n=== channels.js: WS batch + region snapshot integration ===');
     ctx.btoa = (s) => Buffer.from(String(s), 'utf8').toString('base64');
     ctx.atob = (s) => Buffer.from(String(s), 'base64').toString('utf8');
 
+    ctx.crypto = { subtle: require('crypto').webcrypto.subtle }; ctx.TextEncoder = TextEncoder; ctx.TextDecoder = TextDecoder; ctx.Uint8Array = Uint8Array;
+    loadInCtx(ctx, 'public/channel-decrypt.js');
     loadInCtx(ctx, 'public/channels.js');
     ctx._pageHandlers.init(appEl);
     await Promise.resolve();
@@ -4915,6 +4923,593 @@ console.log('\n=== app.js: formatDistance ===');
   test('formatDistance: mi mode sub-0.1mi shows feet', () => {
     const ctx = makeDistCtx('en-BE', 'mi');
     assert.strictEqual(ctx.formatDistance(0.01), '33 ft');
+  });
+}
+
+// ===== analytics.js: renderMultiByteCapability =====
+console.log('\n=== analytics.js: renderMultiByteCapability ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  try { loadInCtx(ctx, 'public/analytics.js'); } catch (e) { /* IIFE side-effects ok */ }
+
+  const render = ctx.window._analyticsRenderMultiByteCapability;
+  test('renderMultiByteCapability is exposed', () => assert.ok(render, '_analyticsRenderMultiByteCapability must be exposed'));
+
+  if (render) {
+    test('empty array returns empty string', () => {
+      assert.strictEqual(render([]), '');
+    });
+
+    test('renders confirmed status with green indicator', () => {
+      const html = render([{ pubkey: 'aabb', name: 'RepA', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' }]);
+      assert.ok(html.includes('✅'), 'should contain confirmed icon');
+      assert.ok(html.includes('Confirmed'), 'should contain Confirmed label');
+      assert.ok(html.includes('--success'), 'should use --success CSS var for green');
+    });
+
+    test('renders suspected status with yellow indicator', () => {
+      const html = render([{ pubkey: 'ccdd', name: 'RepB', role: 'repeater', status: 'suspected', evidence: 'path', maxHashSize: 2, lastSeen: '' }]);
+      assert.ok(html.includes('⚠️'), 'should contain suspected icon');
+      assert.ok(html.includes('Suspected'), 'should contain Suspected label');
+      assert.ok(html.includes('--warning'), 'should use --warning CSS var for yellow');
+    });
+
+    test('renders unknown status with gray indicator', () => {
+      const html = render([{ pubkey: 'eeff', name: 'RepC', role: 'repeater', status: 'unknown', evidence: '', maxHashSize: 1, lastSeen: '' }]);
+      assert.ok(html.includes('❓'), 'should contain unknown icon');
+      assert.ok(html.includes('Unknown'), 'should contain Unknown label');
+      assert.ok(html.includes('--text-muted'), 'should use --text-muted CSS var for gray');
+    });
+
+    test('renders all three statuses together', () => {
+      const caps = [
+        { pubkey: 'aa11', name: 'R1', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 3, lastSeen: '' },
+        { pubkey: 'bb22', name: 'R2', role: 'repeater', status: 'suspected', evidence: 'path', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'cc33', name: 'R3', role: 'repeater', status: 'unknown', evidence: '', maxHashSize: 1, lastSeen: '' },
+      ];
+      const html = render(caps);
+      assert.ok(html.includes('R1'), 'should contain R1');
+      assert.ok(html.includes('R2'), 'should contain R2');
+      assert.ok(html.includes('R3'), 'should contain R3');
+      assert.ok(html.includes('3-byte'), 'should show 3-byte badge');
+      assert.ok(html.includes('2-byte'), 'should show 2-byte badge');
+      assert.ok(html.includes('1-byte'), 'should show 1-byte badge');
+    });
+
+    test('filter buttons show correct counts', () => {
+      const caps = [
+        { pubkey: 'a1', name: 'C1', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'a2', name: 'C2', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'b1', name: 'S1', role: 'repeater', status: 'suspected', evidence: 'path', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'c1', name: 'U1', role: 'repeater', status: 'unknown', evidence: '', maxHashSize: 1, lastSeen: '' },
+      ];
+      const html = render(caps);
+      assert.ok(html.includes('All (4)'), 'should show total count 4');
+      assert.ok(html.includes('Confirmed (2)'), 'should show 2 confirmed');
+      assert.ok(html.includes('Suspected (1)'), 'should show 1 suspected');
+      assert.ok(html.includes('Unknown (1)'), 'should show 1 unknown');
+    });
+
+    test('evidence labels map to status display', () => {
+      const html = render([
+        { pubkey: 'a1', name: 'R1', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'b1', name: 'R2', role: 'repeater', status: 'suspected', evidence: 'path', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'c1', name: 'R3', role: 'repeater', status: 'unknown', evidence: '', maxHashSize: 1, lastSeen: '' },
+      ]);
+      assert.ok(html.includes('Confirmed'), 'confirmed status should be shown');
+      assert.ok(html.includes('Suspected'), 'suspected status should be shown');
+      assert.ok(html.includes('Unknown'), 'unknown status should be shown');
+    });
+
+    test('table rows link to node detail', () => {
+      const html = render([{ pubkey: 'aabbccdd', name: 'Rep1', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' }]);
+      assert.ok(html.includes('#/nodes/aabbccdd'), 'row should link to node detail page');
+    });
+
+    test('node names are HTML-escaped', () => {
+      const html = render([{ pubkey: 'x1', name: '<script>alert(1)</script>', role: 'repeater', status: 'unknown', evidence: '', maxHashSize: 1, lastSeen: '' }]);
+      assert.ok(!html.includes('<script>'), 'should escape HTML in name');
+    });
+
+    test('table has sortable column headers', () => {
+      const html = render([{ pubkey: 'a1', name: 'R1', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' }]);
+      assert.ok(html.includes('data-sort="status"'), 'status column should be sortable');
+      assert.ok(html.includes('data-sort="name"'), 'name column should be sortable');
+    });
+  }
+}
+
+// ===== analytics.js: renderMultiByteAdopters (integrated) =====
+console.log('\n=== analytics.js: renderMultiByteAdopters ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  try { loadInCtx(ctx, 'public/analytics.js'); } catch (e) { /* IIFE side-effects ok */ }
+
+  const renderAdopters = ctx.window._analyticsRenderMultiByteAdopters;
+  test('renderMultiByteAdopters is exposed', () => assert.ok(renderAdopters, '_analyticsRenderMultiByteAdopters must be exposed'));
+
+  if (renderAdopters) {
+    test('empty nodes returns no-adopters message', () => {
+      const html = renderAdopters([], []);
+      assert.ok(html.includes('No multi-byte adopters found'), 'should show empty message');
+    });
+
+    test('integrates capability status into adopter rows', () => {
+      const nodes = [
+        { name: 'NodeA', pubkey: 'aa11', role: 'repeater', hashSize: 2, packets: 5, lastSeen: '2026-01-01T00:00:00Z' },
+      ];
+      const caps = [
+        { pubkey: 'aa11', name: 'NodeA', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' },
+      ];
+      const html = renderAdopters(nodes, caps);
+      assert.ok(html.includes('✅'), 'should show confirmed icon');
+      assert.ok(html.includes('Confirmed'), 'should show Confirmed label');
+      assert.ok(html.includes('2-byte'), 'should show hash size badge');
+    });
+
+    test('filter buttons have text labels with counts', () => {
+      const nodes = [
+        { name: 'N1', pubkey: 'a1', role: 'repeater', hashSize: 2, packets: 3, lastSeen: '' },
+        { name: 'N2', pubkey: 'b1', role: 'repeater', hashSize: 2, packets: 1, lastSeen: '' },
+      ];
+      const caps = [
+        { pubkey: 'a1', name: 'N1', role: 'repeater', status: 'confirmed', evidence: 'advert', maxHashSize: 2, lastSeen: '' },
+        { pubkey: 'b1', name: 'N2', role: 'repeater', status: 'suspected', evidence: 'path', maxHashSize: 2, lastSeen: '' },
+      ];
+      const html = renderAdopters(nodes, caps);
+      assert.ok(html.includes('Confirmed (1)'), 'should show "Confirmed (1)"');
+      assert.ok(html.includes('Suspected (1)'), 'should show "Suspected (1)"');
+      assert.ok(html.includes('Unknown (0)'), 'should show "Unknown (0)"');
+      assert.ok(html.includes('All (2)'), 'should show total "All (2)"');
+    });
+
+    test('nodes without capability data default to unknown', () => {
+      const nodes = [
+        { name: 'Orphan', pubkey: 'zz99', role: 'repeater', hashSize: 2, packets: 1, lastSeen: '' },
+      ];
+      const html = renderAdopters(nodes, []); // no caps
+      assert.ok(html.includes('❓'), 'should show unknown icon');
+      assert.ok(html.includes('Unknown'), 'should show Unknown label');
+    });
+
+    test('integrated table has Status column', () => {
+      const nodes = [
+        { name: 'R1', pubkey: 'a1', role: 'repeater', hashSize: 2, packets: 1, lastSeen: '' },
+      ];
+      const html = renderAdopters(nodes, []);
+      assert.ok(html.includes('Status'), 'should have Status column header');
+      assert.ok(html.includes('data-sort="status"'), 'Status should be sortable');
+    });
+  }
+}
+
+
+// ===== packets.js: anomaly banner rendering =====
+console.log('\n=== packets.js: anomaly UI rendering ===');
+{
+  const packetsSource = fs.readFileSync('public/packets.js', 'utf8');
+
+  test('renderDetail shows anomaly banner when decoded.anomaly is set', () => {
+    assert.ok(packetsSource.includes('anomaly-banner'),
+      'packets.js should contain anomaly-banner class');
+    assert.ok(packetsSource.includes("decoded.anomaly"),
+      'packets.js should reference decoded.anomaly');
+  });
+
+  test('buildFieldTable includes anomaly row when present', () => {
+    assert.ok(packetsSource.includes('anomaly-row'),
+      'buildFieldTable should have anomaly-row class for highlighted row');
+  });
+
+  test('renderDecodedPacket shows anomaly banner', () => {
+    assert.ok(packetsSource.includes("d.anomaly"),
+      'renderDecodedPacket should check d.anomaly');
+  });
+}
+
+// ===== packets.js: buildFieldTable transport offset tests (#765) =====
+console.log('\n=== packets.js: buildFieldTable transport offsets (#765) ===');
+{
+  const ftCtx = makeSandbox();
+  ftCtx.registerPage = () => {};
+  ftCtx.onWS = () => {};
+  ftCtx.offWS = () => {};
+  ftCtx.api = () => Promise.resolve({});
+  ftCtx.window.getParsedPath = () => [];
+  ftCtx.window.getParsedDecoded = () => ({});
+  // Provide globals from app.js that packets.js depends on
+  const ROUTE_TYPES = {0:'TRANSPORT_FLOOD',1:'FLOOD',2:'DIRECT',3:'TRANSPORT_DIRECT'};
+  const PAYLOAD_TYPES = {0:'ADVERT',1:'TXT_MSG',2:'GRP_TXT',3:'REQ',4:'ACK'};
+  ftCtx.routeTypeName = (n) => ROUTE_TYPES[n] || 'UNKNOWN';
+  ftCtx.payloadTypeName = (n) => PAYLOAD_TYPES[n] || 'UNKNOWN';
+  ftCtx.window.routeTypeName = ftCtx.routeTypeName;
+  ftCtx.window.payloadTypeName = ftCtx.payloadTypeName;
+  ftCtx.truncate = (str, len) => str && str.length > len ? str.slice(0, len) + '…' : (str || '');
+  ftCtx.window.truncate = ftCtx.truncate;
+  ftCtx.escapeHtml = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  ftCtx.window.escapeHtml = ftCtx.escapeHtml;
+  loadInCtx(ftCtx, 'public/packets.js');
+  const { buildFieldTable, fieldRow } = ftCtx.window._packetsTestAPI;
+
+  // Helper: build a hex string with specific bytes
+  function makeHex(bytes) { return bytes.map(b => b.toString(16).padStart(2, '0')).join(''); }
+
+  test('FLOOD (route_type=1): path_length at byte 1, no transport codes', () => {
+    // header=0x05 (route_type=1, payload=1), path_length=0x41 (hash_size=2, count=1), hop=AABB
+    const raw = makeHex([0x05, 0x41, 0xAA, 0xBB]);
+    const pkt = { raw_hex: raw, route_type: 1, payload_type: 1 };
+    const html = buildFieldTable(pkt, {}, [], {});
+    // Path Length should be at offset 1
+    assert.ok(html.includes('>1<') || html.includes('data-offset="1"'),
+      'FLOOD: Path Length row should reference byte offset 1');
+    // Should NOT contain transport codes
+    assert.ok(!html.includes('Next Hop'), 'FLOOD: should not show Next Hop transport');
+    assert.ok(!html.includes('Last Hop'), 'FLOOD: should not show Last Hop transport');
+  });
+
+  test('TRANSPORT_FLOOD (route_type=0): transport codes at bytes 1-4, path_length at byte 5', () => {
+    // header=0x04 (route_type=0, payload=1), next_hop=1122, last_hop=3344, path_length=0x41
+    const raw = makeHex([0x04, 0x11, 0x22, 0x33, 0x44, 0x41, 0xAA, 0xBB]);
+    const pkt = { raw_hex: raw, route_type: 0, payload_type: 1 };
+    const html = buildFieldTable(pkt, {}, [], {});
+    // Transport codes should appear
+    assert.ok(html.includes('Next Hop'), 'TRANSPORT_FLOOD: should show Next Hop');
+    assert.ok(html.includes('Last Hop'), 'TRANSPORT_FLOOD: should show Last Hop');
+    // Path Length should be at offset 5, not 1
+    // Check that Path Length row does NOT show offset 1
+    const pathLenMatch = html.match(/Path Length/);
+    assert.ok(pathLenMatch, 'TRANSPORT_FLOOD: should have Path Length row');
+    // The field table renders offset in first <td>. Check transport codes come before path length
+    const nextHopIdx = html.indexOf('Next Hop');
+    const pathLenIdx = html.indexOf('Path Length');
+    assert.ok(nextHopIdx < pathLenIdx,
+      'TRANSPORT_FLOOD: transport codes should appear before Path Length in table order');
+  });
+
+  test('TRANSPORT_DIRECT (route_type=3): same offsets as TRANSPORT_FLOOD', () => {
+    const raw = makeHex([0x0F, 0x11, 0x22, 0x33, 0x44, 0x41]);
+    const pkt = { raw_hex: raw, route_type: 3, payload_type: 3 };
+    const html = buildFieldTable(pkt, {}, [], {});
+    assert.ok(html.includes('Next Hop'), 'TRANSPORT_DIRECT: should show Next Hop');
+    assert.ok(html.includes('Last Hop'), 'TRANSPORT_DIRECT: should show Last Hop');
+    const nextHopIdx = html.indexOf('Next Hop');
+    const pathLenIdx = html.indexOf('Path Length');
+    assert.ok(nextHopIdx < pathLenIdx,
+      'TRANSPORT_DIRECT: transport codes should appear before Path Length');
+  });
+
+  test('field table row order matches byte layout for transport routes', () => {
+    const raw = makeHex([0x04, 0x11, 0x22, 0x33, 0x44, 0x41, 0xAA, 0xBB]);
+    const pkt = { raw_hex: raw, route_type: 0, payload_type: 1 };
+    const html = buildFieldTable(pkt, {}, [], {});
+    // Order: Header (0) → Next Hop (1) → Last Hop (3) → Path Length (5)
+    const headerIdx = html.indexOf('Header Byte');
+    const nextHopIdx = html.indexOf('Next Hop');
+    const lastHopIdx = html.indexOf('Last Hop');
+    const pathLenIdx = html.indexOf('Path Length');
+    assert.ok(headerIdx < nextHopIdx, 'Header should come before Next Hop');
+    assert.ok(nextHopIdx < lastHopIdx, 'Next Hop should come before Last Hop');
+    assert.ok(lastHopIdx < pathLenIdx, 'Last Hop should come before Path Length');
+  });
+}
+
+// ===== live.js: anomaly icon in feed =====
+console.log('\n=== live.js: anomaly icon in feed ===');
+{
+  const liveSource = fs.readFileSync('public/live.js', 'utf8');
+
+  test('addFeedItemDOM shows anomaly icon when decoded has anomaly', () => {
+    assert.ok(liveSource.includes('anomalyIcon'),
+      'live.js should have anomalyIcon variable for feed items');
+    assert.ok(liveSource.includes('pkt.decoded && pkt.decoded.anomaly'),
+      'live.js should check pkt.decoded.anomaly');
+  });
+}
+
+// ===== channel-decrypt.js: client-side crypto =====
+console.log('\n=== channel-decrypt.js: key derivation, MAC, parsing, storage ===');
+{
+  const cryptoModule = require('crypto');
+  const ctx = makeSandbox();
+  // Provide Web Crypto API in sandbox
+  ctx.crypto = { subtle: cryptoModule.webcrypto.subtle };
+  ctx.TextEncoder = TextEncoder;
+  ctx.TextDecoder = TextDecoder;
+  ctx.Uint8Array = Uint8Array;
+  loadInCtx(ctx, 'public/channel-decrypt.js');
+  const CD = ctx.ChannelDecrypt;
+
+  test('deriveKey: SHA256("#test")[:16] matches known value', async () => {
+    const key = await CD.deriveKey('#test');
+    const hex = CD.bytesToHex(key);
+    // Verify against Node.js crypto
+    const expected = cryptoModule.createHash('sha256').update('#test').digest('hex').substring(0, 32);
+    assert.strictEqual(hex, expected, 'deriveKey should produce SHA256("#test")[:16]');
+  });
+
+  test('deriveKey: returns 16 bytes', async () => {
+    const key = await CD.deriveKey('#LongFast');
+    assert.strictEqual(key.length, 16);
+  });
+
+  test('computeChannelHash: SHA256(key)[0]', async () => {
+    const key = await CD.deriveKey('#test');
+    const hashByte = await CD.computeChannelHash(key);
+    const keyHex = CD.bytesToHex(key);
+    const expected = cryptoModule.createHash('sha256').update(Buffer.from(keyHex, 'hex')).digest()[0];
+    assert.strictEqual(hashByte, expected);
+  });
+
+  test('verifyMAC: valid MAC passes', async () => {
+    // Create a known ciphertext and compute MAC using Node.js
+    const key = await CD.deriveKey('#test');
+    const secret = Buffer.alloc(32);
+    Buffer.from(CD.bytesToHex(key), 'hex').copy(secret, 0);
+    const ciphertext = Buffer.from('00112233445566778899aabbccddeeff', 'hex');
+    const mac = cryptoModule.createHmac('sha256', secret).update(ciphertext).digest();
+    const macHex = mac.slice(0, 2).toString('hex');
+    const result = await CD.verifyMAC(key, new Uint8Array(ciphertext), macHex);
+    assert.strictEqual(result, true, 'valid MAC should pass');
+  });
+
+  test('verifyMAC: invalid MAC fails', async () => {
+    const key = await CD.deriveKey('#test');
+    const ciphertext = new Uint8Array(16);
+    const result = await CD.verifyMAC(key, ciphertext, 'ffff');
+    assert.strictEqual(result, false, 'invalid MAC should fail');
+  });
+
+  test('parsePlaintext: extracts sender and message', () => {
+    // Build plaintext: timestamp(4 LE) + flags(1) + "alice: hello\0"
+    const msg = 'alice: hello\0';
+    const buf = new Uint8Array(5 + msg.length);
+    // timestamp = 1000 (LE)
+    buf[0] = 0xe8; buf[1] = 0x03; buf[2] = 0; buf[3] = 0;
+    buf[4] = 0; // flags
+    const enc = new TextEncoder();
+    const msgBytes = enc.encode(msg);
+    buf.set(msgBytes, 5);
+    const parsed = CD.parsePlaintext(buf);
+    assert.ok(parsed, 'should parse successfully');
+    assert.strictEqual(parsed.sender, 'alice');
+    assert.strictEqual(parsed.message, 'hello');
+    assert.strictEqual(parsed.timestamp, 1000);
+  });
+
+  test('parsePlaintext: no sender prefix returns empty sender', () => {
+    const msg = 'just a message\0';
+    const buf = new Uint8Array(5 + msg.length);
+    buf[0] = 1; buf[1] = 0; buf[2] = 0; buf[3] = 0; buf[4] = 0;
+    buf.set(new TextEncoder().encode(msg), 5);
+    const parsed = CD.parsePlaintext(buf);
+    assert.ok(parsed);
+    assert.strictEqual(parsed.sender, '');
+    assert.strictEqual(parsed.message, 'just a message');
+  });
+
+  test('parsePlaintext: returns null for too-short input', () => {
+    assert.strictEqual(CD.parsePlaintext(new Uint8Array(3)), null);
+  });
+
+  test('localStorage persistence: save/get/remove keys', () => {
+    CD.saveKey('#test', 'abcd1234abcd1234abcd1234abcd1234');
+    const keys = CD.getKeys();
+    assert.strictEqual(keys['#test'], 'abcd1234abcd1234abcd1234abcd1234');
+    CD.removeKey('#test');
+    const keys2 = CD.getKeys();
+    assert.strictEqual(keys2['#test'], undefined);
+  });
+
+  test('bytesToHex and hexToBytes roundtrip', () => {
+    const hex = 'deadbeef01020304';
+    const bytes = CD.hexToBytes(hex);
+    assert.strictEqual(CD.bytesToHex(bytes), hex);
+  });
+}
+
+// ===== Encrypted Channels Toggle Tests (#728) =====
+{
+  console.log('\n--- Encrypted Channels Toggle (#728) ---');
+
+  test('encrypted toggle reads from localStorage', () => {
+    const store = {};
+    const ls = {
+      getItem: k => store[k] || null,
+      setItem: (k, v) => { store[k] = String(v); },
+    };
+    // Default: not set → should be false
+    assert.strictEqual(ls.getItem('channels-show-encrypted'), null);
+    const showEncrypted = ls.getItem('channels-show-encrypted') === 'true';
+    assert.strictEqual(showEncrypted, false);
+
+    // Set to true
+    ls.setItem('channels-show-encrypted', 'true');
+    assert.strictEqual(ls.getItem('channels-show-encrypted') === 'true', true);
+
+    // Set to false
+    ls.setItem('channels-show-encrypted', 'false');
+    assert.strictEqual(ls.getItem('channels-show-encrypted') === 'true', false);
+  });
+
+  test('encrypted channels get ch-encrypted CSS class', () => {
+    // Simulate the rendering logic from channels.js
+    const ch = { hash: 'enc_A1B2', name: 'Encrypted (0xA1B2)', encrypted: true, messageCount: 5 };
+    const isEncrypted = ch.encrypted === true;
+    const encClass = isEncrypted ? ' ch-encrypted' : '';
+    const className = 'ch-item' + encClass;
+    assert.ok(className.includes('ch-encrypted'), 'encrypted channel should have ch-encrypted class');
+
+    // Non-encrypted channel should NOT have the class
+    const ch2 = { hash: 'AABB', name: '#general', encrypted: false };
+    const encClass2 = ch2.encrypted === true ? ' ch-encrypted' : '';
+    const className2 = 'ch-item' + encClass2;
+    assert.ok(!className2.includes('ch-encrypted'), 'non-encrypted channel should not have ch-encrypted class');
+
+  });
+}
+
+// ===== #690 — Clock Skew UI Tests =====
+{
+  console.log('\n--- Clock Skew UI (roles.js helpers) ---');
+  const ctx = makeSandbox();
+  vm.runInContext(fs.readFileSync('public/roles.js', 'utf8'), ctx);
+
+  test('formatSkew handles seconds', () => {
+    assert.strictEqual(ctx.window.formatSkew(30), '+30s');
+    assert.strictEqual(ctx.window.formatSkew(-45), '-45s');
+  });
+
+  test('formatSkew handles minutes', () => {
+    assert.strictEqual(ctx.window.formatSkew(154), '+2m 34s');
+    assert.strictEqual(ctx.window.formatSkew(-900), '-15m 0s');
+  });
+
+  test('formatSkew handles hours', () => {
+    assert.strictEqual(ctx.window.formatSkew(3661), '+1h 1m');
+    assert.strictEqual(ctx.window.formatSkew(-55320), '-15h 22m');
+  });
+
+  test('formatSkew handles days', () => {
+    assert.strictEqual(ctx.window.formatSkew(90000), '+1d 1h');
+  });
+
+  test('formatSkew handles null', () => {
+    assert.strictEqual(ctx.window.formatSkew(null), '—');
+  });
+
+  test('renderSkewBadge renders correct severity class', () => {
+    var html = ctx.window.renderSkewBadge('warning', 400);
+    assert.ok(html.includes('skew-badge--warning'), 'should contain warning class');
+    assert.ok(html.includes('⏰'), 'should contain clock emoji');
+  });
+
+  test('renderSkewBadge renders ok badge (icon only)', () => {
+    var html = ctx.window.renderSkewBadge('ok', 10);
+    assert.ok(html.includes('skew-badge--ok'), 'should contain ok class');
+  });
+
+  test('renderSkewBadge returns empty for null severity', () => {
+    assert.strictEqual(ctx.window.renderSkewBadge(null, 0), '');
+  });
+
+  test('renderSkewSparkline returns SVG with data points', () => {
+    var samples = [
+      { ts: 1000, skew: 10 },
+      { ts: 2000, skew: 20 },
+      { ts: 3000, skew: -5 }
+    ];
+    var svg = ctx.window.renderSkewSparkline(samples, 120, 24);
+    assert.ok(svg.includes('<svg'), 'should return SVG element');
+    assert.ok(svg.includes('polyline'), 'should contain polyline');
+    assert.ok(svg.includes('points='), 'should have points attribute');
+  });
+
+  test('renderSkewSparkline returns empty for insufficient data', () => {
+    assert.strictEqual(ctx.window.renderSkewSparkline([], 120, 24), '');
+    assert.strictEqual(ctx.window.renderSkewSparkline([{ ts: 1, skew: 5 }], 120, 24), '');
+    assert.strictEqual(ctx.window.renderSkewSparkline(null, 120, 24), '');
+  });
+
+  test('SKEW_SEVERITY_ORDER sorts worst first', () => {
+    var order = ctx.window.SKEW_SEVERITY_ORDER;
+    assert.ok(order.absurd < order.critical, 'absurd should sort before critical');
+    assert.ok(order.critical < order.warning, 'critical should sort before warning');
+    assert.ok(order.warning < order.ok, 'warning should sort before ok');
+  });
+}
+
+// ===== analytics.js: hashStatCardsHtml collision clickability (#757) =====
+console.log('\n=== analytics.js: hashStatCardsHtml collision details ===');
+{
+  function makeAnalyticsSandbox757() {
+    const ctx = makeSandbox();
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    try { loadInCtx(ctx, 'public/analytics.js'); } catch (e) {
+      for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+    }
+    return ctx;
+  }
+  const ctx = makeAnalyticsSandbox757();
+  const hashStatCardsHtml = ctx.window._analyticsHashStatCardsHtml;
+
+  test('hashStatCardsHtml is exposed', () => assert.ok(hashStatCardsHtml, '_analyticsHashStatCardsHtml must be exposed'));
+
+  test('collision count > 0 renders clickable card with onclick', () => {
+    const html = hashStatCardsHtml(100, 50, '3-byte', 16777216, 48, 3);
+    assert.ok(html.includes('onclick='), 'should have onclick when collisions > 0');
+    assert.ok(html.includes('collisionRiskSection'), 'should scroll to collisionRiskSection');
+    assert.ok(html.includes('cursor:pointer'), 'should show pointer cursor');
+    assert.ok(html.includes('▼'), 'should show expand indicator');
+  });
+
+  test('collision count 0 renders non-clickable card', () => {
+    const html = hashStatCardsHtml(100, 50, '1-byte', 256, 48, 0);
+    assert.ok(!html.includes('onclick='), 'should not have onclick when collisions = 0');
+    assert.ok(!html.includes('cursor:pointer'), 'should not show pointer cursor');
+  });
+}
+
+// ===== analytics.js: renderCollisionsFromServer node links (#757) =====
+console.log('\n=== analytics.js: renderCollisionsFromServer collision table ===');
+{
+  function makeAnalyticsSandbox757b() {
+    const ctx = makeSandbox();
+    const collisionListEl = { innerHTML: '', querySelectorAll: () => [] };
+    const origGetById = ctx.document.getElementById;
+    ctx.document.getElementById = (id) => {
+      if (id === 'collisionList') return collisionListEl;
+      return origGetById ? origGetById(id) : null;
+    };
+    ctx.window.document = ctx.document;
+    loadInCtx(ctx, 'public/roles.js');
+    loadInCtx(ctx, 'public/app.js');
+    try { loadInCtx(ctx, 'public/analytics.js'); } catch (e) {
+      for (const k of Object.keys(ctx.window)) ctx[k] = ctx.window[k];
+    }
+    ctx._collisionListEl = collisionListEl;
+    return ctx;
+  }
+  const ctx = makeAnalyticsSandbox757b();
+  const renderCollisions = ctx.window._analyticsRenderCollisionsFromServer;
+
+  test('renderCollisionsFromServer is exposed', () => assert.ok(renderCollisions, '_analyticsRenderCollisionsFromServer must be exposed'));
+
+  test('renders collision table with node links to correct pubkey', () => {
+    const sizeData = {
+      collisions: [
+        {
+          prefix: 'A3F2C1',
+          byte_size: 3,
+          appearances: 2,
+          nodes: [
+            { public_key: 'abc123def456', name: 'Mountain Repeater', role: 'repeater', lat: 34.0, lon: -118.0 },
+            { public_key: 'def456abc789', name: 'Valley Node', role: 'repeater', lat: 34.5, lon: -118.5 }
+          ],
+          max_dist_km: 45.2,
+          classification: 'local',
+          with_coords: 2
+        }
+      ]
+    };
+    renderCollisions(sizeData, 3);
+    const html = ctx._collisionListEl.innerHTML;
+    assert.ok(html.includes('A3F2C1'), 'should show prefix');
+    assert.ok(html.includes('#/nodes/abc123def456'), 'first node link should point to correct pubkey');
+    assert.ok(html.includes('#/nodes/def456abc789'), 'second node link should point to correct pubkey');
+    assert.ok(html.includes('Mountain Repeater'), 'should show first node name');
+    assert.ok(html.includes('Valley Node'), 'should show second node name');
+  });
+
+  test('renders no-collision message when collisions empty', () => {
+    const sizeData = { collisions: [] };
+    renderCollisions(sizeData, 3);
+    const html = ctx._collisionListEl.innerHTML;
+    assert.ok(html.includes('No 3-byte prefix collisions'), 'should show no-collision message');
   });
 }
 

@@ -66,6 +66,12 @@ Click **Import JSON** and paste a previously exported theme. The customizer load
 
 Click **Reset to Defaults** to restore all settings to the built-in defaults.
 
+## GeoFilter Builder
+
+The Export tab includes a **GeoFilter Builder →** link. Click it to open a Leaflet map where you can draw a polygon boundary for your deployment area. The tool generates a `geo_filter` block you can paste directly into `config.json`.
+
+See [Geographic Filtering](geofilter.md) for full details on what geo filtering does and how to configure it.
+
 ## How it works
 
 The customizer writes CSS custom properties (variables) to override the defaults. Exported JSON maps directly to the `theme`, `nodeColors`, `branding`, and `home` sections of [config.json](configuration.md).

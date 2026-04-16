@@ -87,6 +87,7 @@
             <button class="tab-btn" data-tab="distance">Distance</button>
             <button class="tab-btn" data-tab="neighbor-graph">Neighbor Graph</button>
             <button class="tab-btn" data-tab="rf-health">RF Health</button>
+            <button class="tab-btn" data-tab="clock-health">Clock Health</button>
             <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
           </div>
         </div>
@@ -181,6 +182,7 @@
       case 'distance': await renderDistanceTab(el); break;
       case 'neighbor-graph': await renderNeighborGraphTab(el); break;
       case 'rf-health': await renderRFHealthTab(el); break;
+      case 'clock-health': await renderClockHealthTab(el); break;
       case 'prefix-tool': await renderPrefixTool(el); break;
     }
     // Auto-apply column resizing to all analytics tables
@@ -946,25 +948,9 @@
         </div>
       </div>
 
-      <div class="analytics-row">
-        <div class="analytics-card flex-1">
-          <h3>Multi-Byte Hash Adopters</h3>
-          <p class="text-muted">Nodes advertising with 2+ byte hash paths</p>
-        ${data.multiByteNodes.length ? `
-          <table class="analytics-table">
-            <thead><tr><th scope="col">Node</th><th scope="col">Hash Size</th><th scope="col">Adverts</th><th scope="col">Last Seen</th></tr></thead>
-            <tbody>
-              ${data.multiByteNodes.map(n => `<tr class="clickable-row" data-action="navigate" data-value="#/nodes/${n.pubkey ? encodeURIComponent(n.pubkey) : ''}" tabindex="0" role="row">
-                <td><strong>${esc(n.name)}</strong></td>
-                <td><span class="badge badge-hash-${n.hashSize}">${n.hashSize}-byte</span></td>
-                <td>${n.packets}</td>
-                <td>${timeAgo(n.lastSeen)}</td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
-        ` : '<div class="text-muted" style="padding:16px">No multi-byte adopters found</div>'}
-        </div>
+      ${renderMultiByteAdopters(data.multiByteNodes, data.multiByteCapability || [])}
 
+      <div class="analytics-row">
         <div class="analytics-card flex-1">
           <h3>Top Path Hops</h3>
         <table class="analytics-table">
@@ -984,6 +970,136 @@
         </div>
       </div>
     `;
+  }
+
+  function renderMultiByteAdopters(nodes, caps) {
+    // Merge capability status into adopter nodes
+    var capByPubkey = {};
+    (caps || []).forEach(function(c) { capByPubkey[c.pubkey] = c; });
+
+    var statusIcon = { confirmed: '✅', suspected: '⚠️', unknown: '❓' };
+    var statusLabel = { confirmed: 'Confirmed', suspected: 'Suspected', unknown: 'Unknown' };
+    var statusColor = { confirmed: 'var(--success, #22c55e)', suspected: 'var(--warning, #eab308)', unknown: 'var(--text-muted, #888)' };
+
+    // Build merged rows: each adopter node gets a capability status
+    var rows = (nodes || []).map(function(n) {
+      var cap = capByPubkey[n.pubkey] || {};
+      return {
+        name: n.name, pubkey: n.pubkey || '', role: n.role || '',
+        hashSize: n.hashSize, packets: n.packets, lastSeen: n.lastSeen,
+        status: cap.status || 'unknown', evidence: cap.evidence || ''
+      };
+    });
+
+    // Count statuses
+    var counts = { confirmed: 0, suspected: 0, unknown: 0 };
+    rows.forEach(function(r) { counts[r.status] = (counts[r.status] || 0) + 1; });
+
+    function buildTableContent(rows, filter) {
+      var filtered = filter === 'all' ? rows : rows.filter(function(r) { return r.status === filter; });
+      return (filtered.length ? '<table class="analytics-table" id="mbAdoptersTable" style="margin-top:12px">' +
+          '<thead><tr>' +
+            '<th scope="col" data-sort="name">Node</th>' +
+            '<th scope="col" data-sort="role">Role</th>' +
+            '<th scope="col" data-sort="status">Status</th>' +
+            '<th scope="col" data-sort="hashSize">Hash Size</th>' +
+            '<th scope="col" data-sort="packets">Adverts</th>' +
+            '<th scope="col" data-sort="lastSeen">Last Seen</th>' +
+          '</tr></thead>' +
+          '<tbody>' +
+            filtered.map(function(r) {
+              var roleColor = (window.ROLE_COLORS || {})[r.role] || '#6b7280';
+              return '<tr class="clickable-row" data-action="navigate" data-value="#/nodes/' + encodeURIComponent(r.pubkey) + '" tabindex="0" role="row">' +
+                '<td><strong>' + esc(r.name) + '</strong></td>' +
+                '<td><span class="badge" style="background:' + roleColor + '20;color:' + roleColor + '">' + esc(r.role || 'unknown') + '</span></td>' +
+                '<td><span style="color:' + (statusColor[r.status] || statusColor.unknown) + '">' +
+                  (statusIcon[r.status] || '❓') + ' ' + (statusLabel[r.status] || 'Unknown') + '</span></td>' +
+                '<td><span class="badge badge-hash-' + r.hashSize + '">' + r.hashSize + '-byte</span></td>' +
+                '<td>' + r.packets + '</td>' +
+                '<td>' + (r.lastSeen ? timeAgo(r.lastSeen) : '—') + '</td>' +
+              '</tr>';
+            }).join('') +
+          '</tbody>' +
+        '</table>' : '<div class="text-muted" style="padding:16px">No adopters match this filter.</div>');
+    }
+
+    if (!rows.length) return '<div class="analytics-row"><div class="analytics-card flex-1">' +
+      '<h3>Multi-Byte Hash Adopters</h3>' +
+      '<div class="text-muted" style="padding:16px">No multi-byte adopters found</div></div></div>';
+
+    var html = '<div class="analytics-row"><div class="analytics-card flex-1" id="mbAdoptersSection">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">' +
+        '<div>' +
+          '<h3 style="margin:0">Multi-Byte Hash Adopters</h3>' +
+          '<p class="text-muted" style="margin:4px 0 0;font-size:0.8em">Nodes advertising with 2+ byte hash paths. ' +
+          '<strong>Confirmed</strong> = seen advertising with multi-byte hash. ' +
+          '<strong>Suspected</strong> = prefix appeared in a multi-byte path. ' +
+          '<strong>Unknown</strong> = no multi-byte evidence yet.</p>' +
+        '</div>' +
+        '<div style="display:flex;gap:4px;flex-wrap:wrap" id="mbCapFilters">' +
+          '<button class="tab-btn active" data-mb-filter="all">All (' + rows.length + ')</button>' +
+          '<button class="tab-btn" data-mb-filter="confirmed" style="--filter-color:var(--success, #22c55e)">✅ Confirmed (' + counts.confirmed + ')</button>' +
+          '<button class="tab-btn" data-mb-filter="suspected" style="--filter-color:var(--warning, #eab308)">⚠️ Suspected (' + counts.suspected + ')</button>' +
+          '<button class="tab-btn" data-mb-filter="unknown" style="--filter-color:var(--text-muted, #888)">❓ Unknown (' + counts.unknown + ')</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="mbAdoptersTableWrap">' + buildTableContent(rows, 'all') + '</div>' +
+    '</div></div>';
+
+    // Use setTimeout for event delegation on the stable section container
+    setTimeout(function() {
+      var section = document.getElementById('mbAdoptersSection');
+      if (!section) return;
+      var currentFilter = 'all';
+
+      section.addEventListener('click', function handler(e) {
+        var btn = e.target.closest('[data-mb-filter]');
+        if (btn) {
+          currentFilter = btn.dataset.mbFilter;
+          // Update active state on buttons (no DOM replacement needed)
+          var buttons = section.querySelectorAll('[data-mb-filter]');
+          buttons.forEach(function(b) { b.classList.toggle('active', b.dataset.mbFilter === currentFilter); });
+          // Replace only the table content, not the whole section
+          var wrap = section.querySelector('#mbAdoptersTableWrap');
+          if (wrap) wrap.innerHTML = buildTableContent(rows, currentFilter);
+          return;
+        }
+        var th = e.target.closest('[data-sort]');
+        if (th) {
+          var tbody = section.querySelector('tbody');
+          if (!tbody) return;
+          var sortRows = Array.from(tbody.querySelectorAll('tr'));
+          var col = th.dataset.sort;
+          var colIdx = { name: 0, status: 1, hashSize: 2, packets: 3, lastSeen: 4 };
+          var statusWeight = { 'confirmed': 0, 'suspected': 1, 'unknown': 2 };
+          sortRows.sort(function(a, b) {
+            var va = a.children[colIdx[col]] ? a.children[colIdx[col]].textContent.trim() : '';
+            var vb = b.children[colIdx[col]] ? b.children[colIdx[col]].textContent.trim() : '';
+            if (col === 'status') {
+              va = statusWeight[va.toLowerCase().split(' ').pop()] !== undefined ? statusWeight[va.toLowerCase().split(' ').pop()] : 2;
+              vb = statusWeight[vb.toLowerCase().split(' ').pop()] !== undefined ? statusWeight[vb.toLowerCase().split(' ').pop()] : 2;
+            }
+            if (col === 'hashSize' || col === 'packets') { va = parseInt(va) || 0; vb = parseInt(vb) || 0; }
+            if (va < vb) return -1;
+            if (va > vb) return 1;
+            return 0;
+          });
+          sortRows.forEach(function(r) { tbody.appendChild(r); });
+        }
+      });
+    }, 100);
+
+    return html;
+  }
+
+  // Legacy alias for tests — delegates to renderMultiByteAdopters with empty nodes
+  function renderMultiByteCapability(caps) {
+    if (!caps.length) return '';
+    // Convert caps to adopter-style rows for backward compat
+    var fakeNodes = caps.map(function(c) {
+      return { name: c.name, pubkey: c.pubkey, role: c.role, hashSize: c.maxHashSize, packets: 0, lastSeen: c.lastSeen };
+    });
+    return renderMultiByteAdopters(fakeNodes, caps);
   }
 
   async function renderCollisionTab(el, data, collisionData) {
@@ -1079,10 +1195,10 @@
         else matrixDesc.textContent = '3-byte prefix space is too large to visualize as a matrix — collision table is shown below.';
       }
       renderHashMatrixFromServer(cData.by_size[String(bytes)], bytes);
-      // Hide collision risk card for 3-byte — stats are shown in the matrix panel
+      // Show collision risk section for all byte sizes
       const riskCard = document.getElementById('collisionRiskSection');
-      if (riskCard) riskCard.style.display = bytes === 3 ? 'none' : '';
-      if (bytes !== 3) renderCollisionsFromServer(cData.by_size[String(bytes)], bytes);
+      if (riskCard) riskCard.style.display = '';
+      renderCollisionsFromServer(cData.by_size[String(bytes)], bytes);
     }
 
     // Wire up selector
@@ -1174,9 +1290,9 @@
         <div class="analytics-stat-value" style="font-size:16px">${pctStr}%</div>
         <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${usedCount > 256 ? usedCount + ' of ' : 'of '}${spaceLabel} possible</div>
       </div>
-      <div class="analytics-stat-card" style="flex:1;min-width:110px;border-color:${collisionCount > 0 ? 'var(--status-red)' : 'var(--border)'}">
+      <div class="analytics-stat-card" style="flex:1;min-width:110px;border-color:${collisionCount > 0 ? 'var(--status-red)' : 'var(--border)'}${collisionCount > 0 ? ';cursor:pointer' : ''}" ${collisionCount > 0 ? 'onclick="document.getElementById(\'collisionRiskSection\')?.scrollIntoView({behavior:\'smooth\',block:\'start\'})"' : ''} ${collisionCount > 0 ? 'title="Click to see collision details"' : ''}>
         <div class="analytics-stat-label">Prefix collisions</div>
-        <div class="analytics-stat-value" style="color:${collisionCount > 0 ? 'var(--status-red)' : 'var(--status-green)'}">${collisionCount}</div>
+        <div class="analytics-stat-value" style="color:${collisionCount > 0 ? 'var(--status-red)' : 'var(--status-green)'}">${collisionCount}${collisionCount > 0 ? ' <span style="font-size:11px;opacity:0.7">▼</span>' : ''}</div>
       </div>
     </div>`;
   }
@@ -1251,7 +1367,7 @@
     // 3-byte: show a summary panel instead of a matrix
     if (bytes === 3) {
       el.innerHTML = hashStatCardsHtml(totalNodes, stats.using_this_size || 0, '3-byte', 16777216, stats.unique_prefixes || 0, stats.collision_count || 0) +
-        `<p class="text-muted" style="margin:0;font-size:0.8em">The 3-byte prefix space (16.7M values) is too large to visualize as a grid.</p>` +
+        `<p class="text-muted" style="margin:0;font-size:0.8em">The 3-byte prefix space (16.7M values) is too large to visualize as a grid.${(stats.collision_count || 0) > 0 ? ' See collision details below.' : ''}</p>` +
         `<p class="text-muted" style="margin:8px 0 0;font-size:0.8em">ℹ️ This tab only counts collisions among repeaters configured for this hash size. The <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">Prefix Tool</a> checks all repeaters regardless of configured hash size.</p>`;
       return;
     }
@@ -1882,6 +1998,10 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     window._analyticsChannelTbodyHtml = channelTbodyHtml;
     window._analyticsChannelTheadHtml = channelTheadHtml;
     window._analyticsRfNFColumnChart = rfNFColumnChart;
+    window._analyticsRenderMultiByteCapability = renderMultiByteCapability;
+    window._analyticsRenderMultiByteAdopters = renderMultiByteAdopters;
+    window._analyticsHashStatCardsHtml = hashStatCardsHtml;
+    window._analyticsRenderCollisionsFromServer = renderCollisionsFromServer;
   }
 
   // ─── Neighbor Graph Tab ─────────────────────────────────────────────────────
@@ -3287,6 +3407,112 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
 
     svg += '</svg>';
     return svg;
+  }
+
+  // #690 — Clock Health fleet view (M3)
+  async function renderClockHealthTab(el) {
+    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading clock health data…</div>';
+    try {
+      var data = await (await fetch('/api/nodes/clock-skew')).json();
+      if (!Array.isArray(data) || !data.length) {
+        el.innerHTML = '<div class="text-center text-muted" style="padding:40px">No clock skew data available. Nodes need recent adverts for clock analysis.</div>';
+        return;
+      }
+
+      // State
+      var activeFilter = 'all';
+      var sortKey = 'severity';
+      var sortDir = 'asc'; // severity worst-first
+
+      function render() {
+        // Filter
+        var filtered = activeFilter === 'all' ? data : data.filter(function(n) { return n.severity === activeFilter; });
+
+        // Sort
+        filtered = filtered.slice().sort(function(a, b) {
+          var v;
+          if (sortKey === 'severity') {
+            v = (SKEW_SEVERITY_ORDER[a.severity] || 9) - (SKEW_SEVERITY_ORDER[b.severity] || 9);
+          } else if (sortKey === 'skew') {
+            v = Math.abs(b.medianSkewSec || 0) - Math.abs(a.medianSkewSec || 0);
+          } else if (sortKey === 'name') {
+            v = (a.nodeName || '').localeCompare(b.nodeName || '');
+          } else if (sortKey === 'drift') {
+            v = Math.abs(b.driftPerDaySec || 0) - Math.abs(a.driftPerDaySec || 0);
+          }
+          return sortDir === 'desc' ? -v : v;
+        });
+
+        // Summary
+        var counts = { ok: 0, warning: 0, critical: 0, absurd: 0 };
+        data.forEach(function(n) { if (counts[n.severity] !== undefined) counts[n.severity]++; });
+
+        // Filter buttons (also serve as summary — no separate stats pills needed)
+        var filterColors = { ok: 'var(--status-green)', warning: 'var(--status-yellow)', critical: 'var(--status-orange)', absurd: 'var(--status-purple)', no_clock: 'var(--text-muted)' };
+        var filters = ['all', 'ok', 'warning', 'critical', 'absurd', 'no_clock'];
+        var filterHtml = '<div style="margin-bottom:10px">' + filters.map(function(f) {
+          var dot = f !== 'all' ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + filterColors[f] + ';margin-right:4px;vertical-align:middle"></span>' : '';
+          return '<button class="clock-filter-btn' + (activeFilter === f ? ' active' : '') + '" data-filter="' + f + '">' +
+            dot + (f === 'all' ? 'All (' + data.length + ')' : (SKEW_SEVERITY_LABELS[f] || f) + ' (' + (counts[f] || 0) + ')') +
+            '</button>';
+        }).join('') + '</div>';
+
+        // Table
+        var rowsHtml = filtered.map(function(n) {
+          var rowClass = 'clock-fleet-row--' + (n.severity || 'ok');
+          var lastAdv = n.lastObservedTS ? new Date(n.lastObservedTS * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z/, ' UTC') : '—';
+          var skewText = n.severity === 'no_clock' ? 'No Clock' : formatSkew(n.medianSkewSec);
+          var driftText = n.severity === 'no_clock' || !n.driftPerDaySec ? '–' : formatDrift(n.driftPerDaySec);
+          return '<tr class="' + rowClass + '" data-pubkey="' + esc(n.pubkey) + '" style="cursor:pointer">' +
+            '<td><strong>' + esc(n.nodeName || n.pubkey.slice(0, 12)) + '</strong></td>' +
+            '<td style="font-family:var(--mono,monospace)">' + skewText + '</td>' +
+            '<td>' + renderSkewBadge(n.severity, n.medianSkewSec) + '</td>' +
+            '<td style="font-family:var(--mono,monospace)">' + driftText + '</td>' +
+            '<td style="font-size:11px">' + lastAdv + '</td>' +
+            '</tr>';
+        }).join('');
+
+        el.innerHTML = '<h3 style="margin:0 0 10px">⏰ Clock Health</h3>' +
+          filterHtml +
+          '<table class="data-table analytics-table" id="clock-health-table">' +
+          '<thead><tr>' +
+          '<th data-sort-col="name" style="cursor:pointer">Name</th>' +
+          '<th data-sort-col="skew" style="cursor:pointer">Skew</th>' +
+          '<th data-sort-col="severity" style="cursor:pointer">Severity</th>' +
+          '<th data-sort-col="drift" style="cursor:pointer">Drift Rate</th>' +
+          '<th>Last Advert</th>' +
+          '</tr></thead><tbody>' + rowsHtml + '</tbody></table>';
+
+        // Bind filter clicks
+        el.querySelectorAll('.clock-filter-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            activeFilter = btn.dataset.filter;
+            render();
+          });
+        });
+
+        // Bind header sort clicks
+        el.querySelectorAll('[data-sort-col]').forEach(function(th) {
+          th.addEventListener('click', function() {
+            var col = th.dataset.sortCol;
+            if (sortKey === col) { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; }
+            else { sortKey = col; sortDir = 'asc'; }
+            render();
+          });
+        });
+
+        // Bind row clicks → navigate to node
+        el.querySelectorAll('tr[data-pubkey]').forEach(function(tr) {
+          tr.addEventListener('click', function() {
+            location.hash = '#/nodes/' + encodeURIComponent(tr.dataset.pubkey);
+          });
+        });
+      }
+
+      render();
+    } catch (err) {
+      el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:40px">Failed to load clock health data: ' + esc(String(err)) + '</div>';
+    }
   }
 
   registerPage('analytics', { init, destroy });

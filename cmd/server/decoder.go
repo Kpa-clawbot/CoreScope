@@ -9,6 +9,8 @@ import (
 	"math"
 	"strings"
 	"time"
+
+	"github.com/meshcore-analyzer/sigvalidate"
 )
 
 // Route type constants (header bits 1-0)
@@ -92,6 +94,7 @@ type Payload struct {
 	Timestamp       uint32       `json:"timestamp,omitempty"`
 	TimestampISO    string       `json:"timestampISO,omitempty"`
 	Signature       string       `json:"signature,omitempty"`
+	SignatureValid  *bool        `json:"signatureValid,omitempty"`
 	Flags           *AdvertFlags `json:"flags,omitempty"`
 	Lat             *float64     `json:"lat,omitempty"`
 	Lon             *float64     `json:"lon,omitempty"`
@@ -113,6 +116,7 @@ type DecodedPacket struct {
 	Path           Path            `json:"path"`
 	Payload        Payload         `json:"payload"`
 	Raw            string          `json:"raw"`
+	Anomaly        string          `json:"anomaly,omitempty"`
 }
 
 func decodeHeader(b byte) Header {
@@ -188,7 +192,7 @@ func decodeAck(buf []byte) Payload {
 	}
 }
 
-func decodeAdvert(buf []byte) Payload {
+func decodeAdvert(buf []byte, validateSignatures bool) Payload {
 	if len(buf) < 100 {
 		return Payload{Type: "ADVERT", Error: "too short for advert", RawHex: hex.EncodeToString(buf)}
 	}
@@ -204,6 +208,16 @@ func decodeAdvert(buf []byte) Payload {
 		Timestamp:    timestamp,
 		TimestampISO: fmt.Sprintf("%s", epochToISO(timestamp)),
 		Signature:    signature,
+	}
+
+	if validateSignatures {
+		valid, err := sigvalidate.ValidateAdvert(buf[0:32], buf[36:100], timestamp, appdata)
+		if err != nil {
+			f := false
+			p.SignatureValid = &f
+		} else {
+			p.SignatureValid = &valid
+		}
 	}
 
 	if len(appdata) > 0 {
@@ -308,7 +322,7 @@ func decodeTrace(buf []byte) Payload {
 	return p
 }
 
-func decodePayload(payloadType int, buf []byte) Payload {
+func decodePayload(payloadType int, buf []byte, validateSignatures bool) Payload {
 	switch payloadType {
 	case PayloadREQ:
 		return decodeEncryptedPayload("REQ", buf)
@@ -319,7 +333,7 @@ func decodePayload(payloadType int, buf []byte) Payload {
 	case PayloadACK:
 		return decodeAck(buf)
 	case PayloadADVERT:
-		return decodeAdvert(buf)
+		return decodeAdvert(buf, validateSignatures)
 	case PayloadGRP_TXT:
 		return decodeGrpTxt(buf)
 	case PayloadANON_REQ:
@@ -334,7 +348,7 @@ func decodePayload(payloadType int, buf []byte) Payload {
 }
 
 // DecodePacket decodes a hex-encoded MeshCore packet.
-func DecodePacket(hexString string) (*DecodedPacket, error) {
+func DecodePacket(hexString string, validateSignatures bool) (*DecodedPacket, error) {
 	hexString = strings.ReplaceAll(hexString, " ", "")
 	hexString = strings.ReplaceAll(hexString, "\n", "")
 	hexString = strings.ReplaceAll(hexString, "\r", "")
@@ -372,25 +386,37 @@ func DecodePacket(hexString string) (*DecodedPacket, error) {
 	offset += bytesConsumed
 
 	payloadBuf := buf[offset:]
-	payload := decodePayload(header.PayloadType, payloadBuf)
+	payload := decodePayload(header.PayloadType, payloadBuf, validateSignatures)
 
 	// TRACE packets store hop IDs in the payload (buf[9:]) rather than the header
-	// path field. The header path byte still encodes hashSize in bits 6-7, which
-	// we use to split the payload path data into individual hop prefixes.
-	// The header path contains SNR bytes — one per hop that actually forwarded.
+	// path field. Firmware always sends TRACE as DIRECT (route_type 2 or 3);
+	// FLOOD-routed TRACEs are anomalous but handled gracefully (parsed, but
+	// flagged). The TRACE flags byte (payload offset 8) encodes path_sz in
+	// bits 0-1 as a power-of-two exponent: hash_bytes = 1 << path_sz.
+	// NOT the header path byte's hash_size bits. The header path contains SNR
+	// bytes — one per hop that actually forwarded.
 	// We expose hopsCompleted (count of SNR bytes) so consumers can distinguish
 	// how far the trace got vs the full intended route.
+	var anomaly string
 	if header.PayloadType == PayloadTRACE && payload.PathData != "" {
+		// Flag anomalous routing — firmware only sends TRACE as DIRECT
+		if header.RouteType != RouteDirect && header.RouteType != RouteTransportDirect {
+			anomaly = "TRACE packet with non-DIRECT routing (expected DIRECT or TRANSPORT_DIRECT)"
+		}
 		// The header path hops count represents SNR entries = completed hops
 		hopsCompleted := path.HashCount
 		pathBytes, err := hex.DecodeString(payload.PathData)
-		if err == nil && path.HashSize > 0 {
-			hops := make([]string, 0, len(pathBytes)/path.HashSize)
-			for i := 0; i+path.HashSize <= len(pathBytes); i += path.HashSize {
-				hops = append(hops, strings.ToUpper(hex.EncodeToString(pathBytes[i:i+path.HashSize])))
+		if err == nil && payload.TraceFlags != nil {
+			// path_sz from flags byte is a power-of-two exponent per firmware:
+			// hash_bytes = 1 << (flags & 0x03)
+			pathSz := 1 << (*payload.TraceFlags & 0x03)
+			hops := make([]string, 0, len(pathBytes)/pathSz)
+			for i := 0; i+pathSz <= len(pathBytes); i += pathSz {
+				hops = append(hops, strings.ToUpper(hex.EncodeToString(pathBytes[i:i+pathSz])))
 			}
 			path.Hops = hops
 			path.HashCount = len(hops)
+			path.HashSize = pathSz
 			path.HopsCompleted = &hopsCompleted
 		}
 	}
@@ -411,6 +437,7 @@ func DecodePacket(hexString string) (*DecodedPacket, error) {
 		Path:           path,
 		Payload:        payload,
 		Raw:            strings.ToUpper(hexString),
+		Anomaly:        anomaly,
 	}, nil
 }
 

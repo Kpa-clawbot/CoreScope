@@ -10,6 +10,7 @@ ARG BUILD_TIME=unknown
 WORKDIR /build/server
 COPY cmd/server/go.mod cmd/server/go.sum ./
 COPY internal/geofilter/ ../../internal/geofilter/
+COPY internal/sigvalidate/ ../../internal/sigvalidate/
 RUN go mod download
 COPY cmd/server/ ./
 RUN go build -ldflags "-X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" -o /corescope-server .
@@ -17,9 +18,19 @@ RUN go build -ldflags "-X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMI
 # Build ingestor
 WORKDIR /build/ingestor
 COPY cmd/ingestor/go.mod cmd/ingestor/go.sum ./
+COPY internal/geofilter/ ../../internal/geofilter/
+COPY internal/sigvalidate/ ../../internal/sigvalidate/
 RUN go mod download
 COPY cmd/ingestor/ ./
 RUN go build -o /corescope-ingestor .
+
+# Build decrypt CLI
+WORKDIR /build/decrypt
+COPY cmd/decrypt/go.mod cmd/decrypt/go.sum ./
+COPY internal/channel/ ../../internal/channel/
+RUN go mod download
+COPY cmd/decrypt/ ./
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /corescope-decrypt .
 
 # Runtime image
 FROM alpine:3.20
@@ -29,7 +40,7 @@ RUN apk add --no-cache mosquitto mosquitto-clients supervisor caddy wget
 WORKDIR /app
 
 # Go binaries
-COPY --from=builder /corescope-server /corescope-ingestor /app/
+COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /app/
 
 # Frontend assets + config
 COPY public/ ./public/
