@@ -1031,6 +1031,7 @@
           <th scope="col" class="col-pubkey" data-sort-key="public_key">Public Key</th>
           <th scope="col" data-sort-key="role">Role</th>
           <th scope="col" data-sort-key="last_seen" data-sort-default="desc">Last Seen</th>
+          <th scope="col" title="Node status">St.</th>
           <th scope="col" data-sort-key="advert_count" data-sort-default="desc">Adverts</th>
         </tr></thead>
         <tbody id="nodesBody"></tbody>
@@ -1151,19 +1152,19 @@
 
     const dupMap = buildDupNameMap(_allNodes);
     tbody.innerHTML = sorted.map(n => {
-      const roleColor = ROLE_COLORS[n.role] || '#6b7280';
       const isClaimed = myKeys.has(n.public_key);
-      const lastSeenTime = n.last_heard || n.last_seen;
-      const relayCount24h = (n.stats && typeof n.stats.relay_count_24h === 'number') ? n.stats.relay_count_24h : undefined;
-      const status = getNodeStatus((n.role || 'companion').toLowerCase(), lastSeenTime ? new Date(lastSeenTime).getTime() : 0, relayCount24h);
-      const lastSeenClass = status === 'relaying' ? 'last-seen-active' : status === 'active' ? ((n.role || '').toLowerCase() === 'repeater' ? 'last-seen-idle' : 'last-seen-active') : 'last-seen-stale';
+      const si = getStatusInfo(n);
+      const lastSeenClass = si.status === 'relaying' ? 'last-seen-active' : si.status === 'active' ? (si.role === 'repeater' ? 'last-seen-idle' : 'last-seen-active') : 'last-seen-stale';
+      const statusEmoji = si.statusLabel.split(' ')[0];
+      const statusTooltip = si.statusLabel.replace(/^.\s/, '') + (si.explanation ? ' — ' + si.explanation : '');
       const cs = _fleetSkew && _fleetSkew[n.public_key];
       const skewBadgeHtml = cs && cs.severity && cs.severity !== 'ok' ? renderSkewBadge(cs.severity, window.currentSkewValue(cs), cs) : '';
       return `<tr data-key="${n.public_key}" data-action="select" data-value="${n.public_key}" tabindex="0" role="row" class="${selectedKey === n.public_key ? 'selected' : ''}${isClaimed ? ' claimed-row' : ''}">
         <td>${favStar(n.public_key, 'node-fav')}${isClaimed ? '<span class="claimed-badge" title="My Mesh">★</span> ' : ''}<strong>${n.name || '(unnamed)'}</strong>${dupNameBadge(n.name, n.public_key, dupMap)}${skewBadgeHtml}</td>
         <td class="mono col-pubkey">${truncate(n.public_key, 16)}</td>
-        <td><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span></td>
+        <td><span class="badge" style="background:${si.roleColor}20;color:${si.roleColor}">${n.role}</span></td>
         <td class="${lastSeenClass}">${renderNodeTimestampHtml(n.last_heard || n.last_seen)}</td>
+        <td style="text-align:center;font-size:15px" title="${escapeHtml(statusTooltip)}">${statusEmoji}</td>
         <td>${n.advert_count || 0}</td>
       </tr>`;
     }).join('');
