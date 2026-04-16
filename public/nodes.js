@@ -906,10 +906,9 @@
       // Status filter (active/stale)
       if (statusFilter === 'active' || statusFilter === 'stale') {
         filtered = filtered.filter(n => {
-          const role = (n.role || 'companion').toLowerCase();
-          const t = n.last_heard || n.last_seen;
-          const lastMs = t ? new Date(t).getTime() : 0;
-          return getNodeStatus(role, lastMs) === statusFilter;
+          const si = getStatusInfo(n);
+          if (statusFilter === 'active') return si.status === 'active' || si.status === 'relaying';
+          return si.status === statusFilter;
         });
       }
       nodes = filtered;
