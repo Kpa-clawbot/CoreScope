@@ -440,6 +440,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			PayloadType:  5, // GRP_TXT
 			PathJSON:     "[]",
 			DecodedJSON:  string(decodedJSON),
+			ChannelHash:  channelName, // fast channel queries (#762)
 		}
 
 		if _, err := store.InsertTransmission(pktData); err != nil {

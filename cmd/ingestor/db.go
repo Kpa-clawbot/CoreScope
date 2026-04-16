@@ -345,6 +345,28 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] packets_sent/packets_recv columns added")
 	}
 
+	// Migration: add channel_hash column for fast channel queries (#762)
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'channel_hash_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding channel_hash column to transmissions...")
+		db.Exec(`ALTER TABLE transmissions ADD COLUMN channel_hash TEXT DEFAULT NULL`)
+		db.Exec(`CREATE INDEX IF NOT EXISTS idx_tx_channel_hash ON transmissions(channel_hash) WHERE payload_type = 5`)
+		// Backfill: extract channel name for decrypted (CHAN) packets
+		res, err := db.Exec(`UPDATE transmissions SET channel_hash = json_extract(decoded_json, '$.channel') WHERE payload_type = 5 AND channel_hash IS NULL AND json_extract(decoded_json, '$.type') = 'CHAN'`)
+		if err == nil {
+			n, _ := res.RowsAffected()
+			log.Printf("[migration] Backfilled channel_hash for %d CHAN packets", n)
+		}
+		// Backfill: extract channelHashHex for encrypted (GRP_TXT) packets, prefixed with 'enc_'
+		res, err = db.Exec(`UPDATE transmissions SET channel_hash = 'enc_' || json_extract(decoded_json, '$.channelHashHex') WHERE payload_type = 5 AND channel_hash IS NULL AND json_extract(decoded_json, '$.type') = 'GRP_TXT'`)
+		if err == nil {
+			n, _ := res.RowsAffected()
+			log.Printf("[migration] Backfilled channel_hash for %d GRP_TXT packets", n)
+		}
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('channel_hash_v1')`)
+		log.Println("[migration] channel_hash column added and backfilled")
+	}
+
 	return nil
 }
 
@@ -357,8 +379,8 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtInsertTransmission, err = s.db.Prepare(`
-		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -481,7 +503,7 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		result, err := s.stmtInsertTransmission.Exec(
 			data.RawHex, hash, now,
 			data.RouteType, data.PayloadType, data.PayloadVersion,
-			data.DecodedJSON,
+			data.DecodedJSON, nilIfEmpty(data.ChannelHash),
 		)
 		if err != nil {
 			s.Stats.WriteErrors.Add(1)
@@ -773,6 +795,15 @@ type PacketData struct {
 	PayloadVersion int
 	PathJSON       string
 	DecodedJSON    string
+	ChannelHash    string // grouping key for channel queries (#762)
+}
+
+// nilIfEmpty returns nil for empty strings (for nullable DB columns).
+func nilIfEmpty(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // MQTTPacketMessage is the JSON payload from an MQTT raw packet message.
@@ -794,7 +825,7 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		pathJSON = string(b)
 	}
 
-	return &PacketData{
+	pd := &PacketData{
 		RawHex:         msg.Raw,
 		Timestamp:      now,
 		ObserverID:     observerID,
@@ -810,4 +841,15 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		PathJSON:       pathJSON,
 		DecodedJSON:    PayloadJSON(&decoded.Payload),
 	}
+
+	// Populate channel_hash for fast channel queries (#762)
+	if decoded.Header.PayloadType == PayloadGRP_TXT {
+		if decoded.Payload.Type == "CHAN" && decoded.Payload.Channel != "" {
+			pd.ChannelHash = decoded.Payload.Channel
+		} else if decoded.Payload.Type == "GRP_TXT" && decoded.Payload.ChannelHashHex != "" {
+			pd.ChannelHash = "enc_" + decoded.Payload.ChannelHashHex
+		}
+	}
+
+	return pd
 }
