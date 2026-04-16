@@ -5111,6 +5111,92 @@ console.log('\n=== packets.js: anomaly UI rendering ===');
   });
 }
 
+// ===== packets.js: buildFieldTable transport offset tests (#765) =====
+console.log('\n=== packets.js: buildFieldTable transport offsets (#765) ===');
+{
+  const ftCtx = makeSandbox();
+  ftCtx.registerPage = () => {};
+  ftCtx.onWS = () => {};
+  ftCtx.offWS = () => {};
+  ftCtx.api = () => Promise.resolve({});
+  ftCtx.window.getParsedPath = () => [];
+  ftCtx.window.getParsedDecoded = () => ({});
+  // Provide globals from app.js that packets.js depends on
+  const ROUTE_TYPES = {0:'TRANSPORT_FLOOD',1:'FLOOD',2:'DIRECT',3:'TRANSPORT_DIRECT'};
+  const PAYLOAD_TYPES = {0:'ADVERT',1:'TXT_MSG',2:'GRP_TXT',3:'REQ',4:'ACK'};
+  ftCtx.routeTypeName = (n) => ROUTE_TYPES[n] || 'UNKNOWN';
+  ftCtx.payloadTypeName = (n) => PAYLOAD_TYPES[n] || 'UNKNOWN';
+  ftCtx.window.routeTypeName = ftCtx.routeTypeName;
+  ftCtx.window.payloadTypeName = ftCtx.payloadTypeName;
+  ftCtx.truncate = (str, len) => str && str.length > len ? str.slice(0, len) + '…' : (str || '');
+  ftCtx.window.truncate = ftCtx.truncate;
+  ftCtx.escapeHtml = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  ftCtx.window.escapeHtml = ftCtx.escapeHtml;
+  loadInCtx(ftCtx, 'public/packets.js');
+  const { buildFieldTable, fieldRow } = ftCtx.window._packetsTestAPI;
+
+  // Helper: build a hex string with specific bytes
+  function makeHex(bytes) { return bytes.map(b => b.toString(16).padStart(2, '0')).join(''); }
+
+  test('FLOOD (route_type=1): path_length at byte 1, no transport codes', () => {
+    // header=0x05 (route_type=1, payload=1), path_length=0x41 (hash_size=2, count=1), hop=AABB
+    const raw = makeHex([0x05, 0x41, 0xAA, 0xBB]);
+    const pkt = { raw_hex: raw, route_type: 1, payload_type: 1 };
+    const html = buildFieldTable(pkt, {}, [], {});
+    // Path Length should be at offset 1
+    assert.ok(html.includes('>1<') || html.includes('data-offset="1"'),
+      'FLOOD: Path Length row should reference byte offset 1');
+    // Should NOT contain transport codes
+    assert.ok(!html.includes('Next Hop'), 'FLOOD: should not show Next Hop transport');
+    assert.ok(!html.includes('Last Hop'), 'FLOOD: should not show Last Hop transport');
+  });
+
+  test('TRANSPORT_FLOOD (route_type=0): transport codes at bytes 1-4, path_length at byte 5', () => {
+    // header=0x04 (route_type=0, payload=1), next_hop=1122, last_hop=3344, path_length=0x41
+    const raw = makeHex([0x04, 0x11, 0x22, 0x33, 0x44, 0x41, 0xAA, 0xBB]);
+    const pkt = { raw_hex: raw, route_type: 0, payload_type: 1 };
+    const html = buildFieldTable(pkt, {}, [], {});
+    // Transport codes should appear
+    assert.ok(html.includes('Next Hop'), 'TRANSPORT_FLOOD: should show Next Hop');
+    assert.ok(html.includes('Last Hop'), 'TRANSPORT_FLOOD: should show Last Hop');
+    // Path Length should be at offset 5, not 1
+    // Check that Path Length row does NOT show offset 1
+    const pathLenMatch = html.match(/Path Length/);
+    assert.ok(pathLenMatch, 'TRANSPORT_FLOOD: should have Path Length row');
+    // The field table renders offset in first <td>. Check transport codes come before path length
+    const nextHopIdx = html.indexOf('Next Hop');
+    const pathLenIdx = html.indexOf('Path Length');
+    assert.ok(nextHopIdx < pathLenIdx,
+      'TRANSPORT_FLOOD: transport codes should appear before Path Length in table order');
+  });
+
+  test('TRANSPORT_DIRECT (route_type=3): same offsets as TRANSPORT_FLOOD', () => {
+    const raw = makeHex([0x0F, 0x11, 0x22, 0x33, 0x44, 0x41]);
+    const pkt = { raw_hex: raw, route_type: 3, payload_type: 3 };
+    const html = buildFieldTable(pkt, {}, [], {});
+    assert.ok(html.includes('Next Hop'), 'TRANSPORT_DIRECT: should show Next Hop');
+    assert.ok(html.includes('Last Hop'), 'TRANSPORT_DIRECT: should show Last Hop');
+    const nextHopIdx = html.indexOf('Next Hop');
+    const pathLenIdx = html.indexOf('Path Length');
+    assert.ok(nextHopIdx < pathLenIdx,
+      'TRANSPORT_DIRECT: transport codes should appear before Path Length');
+  });
+
+  test('field table row order matches byte layout for transport routes', () => {
+    const raw = makeHex([0x04, 0x11, 0x22, 0x33, 0x44, 0x41, 0xAA, 0xBB]);
+    const pkt = { raw_hex: raw, route_type: 0, payload_type: 1 };
+    const html = buildFieldTable(pkt, {}, [], {});
+    // Order: Header (0) → Next Hop (1) → Last Hop (3) → Path Length (5)
+    const headerIdx = html.indexOf('Header Byte');
+    const nextHopIdx = html.indexOf('Next Hop');
+    const lastHopIdx = html.indexOf('Last Hop');
+    const pathLenIdx = html.indexOf('Path Length');
+    assert.ok(headerIdx < nextHopIdx, 'Header should come before Next Hop');
+    assert.ok(nextHopIdx < lastHopIdx, 'Next Hop should come before Last Hop');
+    assert.ok(lastHopIdx < pathLenIdx, 'Last Hop should come before Path Length');
+  });
+}
+
 // ===== live.js: anomaly icon in feed =====
 console.log('\n=== live.js: anomaly icon in feed ===');
 {
