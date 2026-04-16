@@ -757,6 +757,30 @@ func (s *Store) MoveStaleNodes(nodeDays int) (int64, error) {
 	return moved, nil
 }
 
+// RemoveStaleObservers removes observers that have not actively sent data in observerDays.
+// Unlike nodes (which are moved to inactive_nodes), observers are simply deleted since
+// they have no separate inactive table. An observer must actively send data to stay listed
+// — being seen by another node does not count.
+// observerDays <= -1 means never remove (keep forever).
+func (s *Store) RemoveStaleObservers(observerDays int) (int64, error) {
+	if observerDays <= -1 {
+		return 0, nil // keep forever
+	}
+	if observerDays == 0 {
+		observerDays = 14
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -observerDays).Format(time.RFC3339)
+	result, err := s.db.Exec(`DELETE FROM observers WHERE last_seen < ?`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete stale observers: %w", err)
+	}
+	removed, _ := result.RowsAffected()
+	if removed > 0 {
+		log.Printf("Removed %d stale observer(s) (not seen in %d days)", removed, observerDays)
+	}
+	return removed, nil
+}
+
 // PacketData holds the data needed to insert a packet into the DB.
 type PacketData struct {
 	RawHex         string

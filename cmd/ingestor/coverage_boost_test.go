@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // hmacSHA256 computes HMAC-SHA256 for test use.
@@ -1136,5 +1137,124 @@ func TestDecodeTraceWithPath(t *testing.T) {
 	}
 	if p.TraceFlags == nil || *p.TraceFlags != 3 {
 		t.Errorf("flags=%v, want 3", p.TraceFlags)
+	}
+}
+
+// --- db.go: RemoveStaleObservers (0% → 100%) ---
+
+func TestRemoveStaleObservers(t *testing.T) {
+	store := newTestStore(t)
+
+	// Insert an observer with last_seen 30 days ago
+	err := store.UpsertObserver("obs-old", "OldObserver", "LAX", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Override last_seen to 30 days ago
+	cutoff := time.Now().UTC().AddDate(0, 0, -30).Format(time.RFC3339)
+	_, err = store.db.Exec("UPDATE observers SET last_seen = ? WHERE id = ?", cutoff, "obs-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert a recent observer
+	err = store.UpsertObserver("obs-new", "NewObserver", "NYC", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := store.RemoveStaleObservers(14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Errorf("removed=%d, want 1", removed)
+	}
+
+	var count int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM observers").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Errorf("observers count=%d, want 1", count)
+	}
+}
+
+func TestRemoveStaleObserversNone(t *testing.T) {
+	store := newTestStore(t)
+
+	removed, err := store.RemoveStaleObservers(14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Errorf("removed=%d, want 0", removed)
+	}
+}
+
+func TestRemoveStaleObserversKeepForever(t *testing.T) {
+	store := newTestStore(t)
+
+	// Insert an old observer
+	err := store.UpsertObserver("obs-ancient", "AncientObserver", "LAX", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -365).Format(time.RFC3339)
+	_, err = store.db.Exec("UPDATE observers SET last_seen = ? WHERE id = ?", cutoff, "obs-ancient")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// observerDays = -1 means keep forever
+	removed, err := store.RemoveStaleObservers(-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Errorf("removed=%d, want 0 (keep forever)", removed)
+	}
+
+	var count int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM observers").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Errorf("observers count=%d, want 1 (keep forever)", count)
+	}
+}
+
+func TestRemoveStaleObserversDefault(t *testing.T) {
+	store := newTestStore(t)
+
+	// observerDays = 0 should default to 14
+	removed, err := store.RemoveStaleObservers(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Errorf("removed=%d, want 0 (empty store)", removed)
+	}
+}
+
+func TestObserverDaysOrDefault(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *Config
+		want int
+	}{
+		{"nil retention", &Config{}, 14},
+		{"zero observer days", &Config{Retention: &RetentionConfig{ObserverDays: 0}}, 14},
+		{"positive value", &Config{Retention: &RetentionConfig{ObserverDays: 30}}, 30},
+		{"keep forever", &Config{Retention: &RetentionConfig{ObserverDays: -1}}, -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.cfg.ObserverDaysOrDefault()
+			if got != tt.want {
+				t.Errorf("ObserverDaysOrDefault() = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }

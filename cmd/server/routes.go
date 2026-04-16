@@ -2385,13 +2385,31 @@ func (s *Server) handleAdminPrune(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "days parameter required (or set retention.packetDays in config)")
 		return
 	}
+
+	results := map[string]interface{}{}
+
+	// Prune old packets
 	n, err := s.db.PruneOldPackets(days)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
 	log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
-	writeJSON(w, map[string]interface{}{"deleted": n, "days": days})
+	results["packets_deleted"] = n
+
+	// Also prune stale observers if observerDays is configured
+	observerDays := s.cfg.ObserverDaysOrDefault()
+	if observerDays > 0 {
+		obsN, obsErr := s.db.RemoveStaleObservers(observerDays)
+		if obsErr != nil {
+			log.Printf("[prune] observer prune error: %v", obsErr)
+		} else {
+			results["observers_removed"] = obsN
+		}
+	}
+
+	results["days"] = days
+	writeJSON(w, results)
 }
 
 // constantTimeEqual compares two strings in constant time to prevent timing attacks.

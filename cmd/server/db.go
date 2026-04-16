@@ -2222,6 +2222,34 @@ func (db *DB) PruneOldMetrics(retentionDays int) (int64, error) {
 	return n, nil
 }
 
+// RemoveStaleObservers removes observers that have not actively sent data in observerDays.
+// An observer must actively send packets to stay listed — being seen by another node does not count.
+// observerDays <= -1 means never remove (keep forever).
+func (db *DB) RemoveStaleObservers(observerDays int) (int64, error) {
+	if observerDays <= -1 {
+		return 0, nil // keep forever
+	}
+	if observerDays == 0 {
+		observerDays = 14
+	}
+	rw, err := openRW(db.path)
+	if err != nil {
+		return 0, err
+	}
+	defer rw.Close()
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -observerDays).Format(time.RFC3339)
+	res, err := rw.Exec(`DELETE FROM observers WHERE last_seen < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		log.Printf("[observers] Removed %d stale observer(s) (not seen in %d days)", n, observerDays)
+	}
+	return n, nil
+}
+
 // TouchNodeLastSeen updates last_seen for a node identified by full public key.
 // Only updates if the new timestamp is newer than the existing value (or NULL).
 // Returns nil even if no rows are affected (node doesn't exist).
