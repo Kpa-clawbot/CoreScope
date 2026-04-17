@@ -95,6 +95,43 @@
     return history.slice(-(TIMEFRAME_SAMPLES[timeframe] || 60));
   }
 
+  // --- Server-side history preload ---
+  // Fetches the server-side ring buffer on page load and merges it into the local
+  // buffers.  Deduplication is by timestamp: only samples newer than the most recent
+  // entry already in each buffer are appended, so a simple page refresh never adds
+  // duplicates.
+  async function preloadFromServer() {
+    try {
+      const res = await fetch('/api/perf/history');
+      if (!res.ok) return;
+      const data = await res.json();
+      const samples = data.samples;
+      if (!samples || samples.length === 0) return;
+
+      const lastLongTs  = longHistory.length > 0 ? longHistory[longHistory.length - 1].ts : 0;
+      const lastShortTs = history.length     > 0 ? history[history.length - 1].ts         : 0;
+      const oneHourAgo  = Date.now() - 3600000;
+
+      for (const s of samples) {
+        // Long history — everything we don't already have
+        if (s.ts > lastLongTs) {
+          longHistory.push(s);
+          if (longHistory.length > MAX_LONG_SAMPLES) longHistory.shift();
+        }
+        // Short history — last-hour samples (1-min resolution is sparse but useful
+        // for the 1h graph on a fresh load before 5 s ticks accumulate)
+        if (s.ts > oneHourAgo && s.ts > lastShortTs) {
+          history.push(s);
+          if (history.length > MAX_SAMPLES) history.shift();
+        }
+      }
+      if (longHistory.length > 0) lastLongSampleTs = longHistory[longHistory.length - 1].ts;
+
+      try { sessionStorage.setItem(HISTORY_KEY,      JSON.stringify(history));     } catch (e) { /* quota */ }
+      try { sessionStorage.setItem(LONG_HISTORY_KEY, JSON.stringify(longHistory)); } catch (e) { /* quota */ }
+    } catch (e) { /* non-fatal — server may not have history yet */ }
+  }
+
   // --- Chart lifecycle ---
   function destroyCharts() {
     activeCharts.forEach(function (c) { c.chart.destroy(); });
@@ -148,6 +185,7 @@
       }
     });
 
+    await preloadFromServer();
     await refresh();
   }
 
