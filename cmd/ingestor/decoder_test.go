@@ -989,6 +989,30 @@ func TestComputeContentHashMatchesFirmware(t *testing.T) {
 	}
 }
 
+// TestComputeContentHashTraceGoldenValue is a golden-value test that locks down
+// the 2-byte path_len (uint16 LE) behavior for TRACE hashing. If anyone removes
+// the 0x00 byte from the hash input, this test breaks.
+//
+// Packet: header=0x25 (FLOOD route=1, payload_type=TRACE=0x09), pathByte=0x02
+// (2 hops, 1-byte hash), path=[AA,BB], payload=[DE,AD,BE,EF].
+// Hash input: [0x09, 0x02, 0x00, 0xDE, 0xAD, 0xBE, 0xEF]
+//   → SHA256 = b1baaf3bf0d0726c2672b1ec9e2665dc...
+//   → first 16 hex chars = "b1baaf3bf0d0726c"
+func TestComputeContentHashTraceGoldenValue(t *testing.T) {
+	// TRACE packet: header byte 0x25 = payload_type 9 (TRACE), route_type 1 (FLOOD)
+	// pathByte 0x02 = hash_size 1, hash_count 2
+	// 2 path bytes (AA, BB), then payload DEADBEEF
+	rawHex := "2502AABBDEADBEEF"
+	hash := ComputeContentHash(rawHex)
+
+	// Pre-computed: SHA256(0x09 0x02 0x00 0xDE 0xAD 0xBE 0xEF)[:16hex]
+	// The 0x00 is the high byte of uint16_t path_len (little-endian).
+	const golden = "b1baaf3bf0d0726c"
+	if hash != golden {
+		t.Errorf("TRACE golden hash = %s, want %s (2-byte path_len encoding)", hash, golden)
+	}
+}
+
 func TestDecodePacketWithWhitespace(t *testing.T) {
 	raw := "0A 00 D6 9F D7 A5 A7 47 5D B0 73 37 74 9A E6 1F A5 3A 47 88 E9 76"
 	pkt, err := DecodePacket(raw, nil, false)
