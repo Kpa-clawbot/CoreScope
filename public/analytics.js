@@ -2016,8 +2016,8 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
           <label style="font-size:13px">Roles:
             <span id="ngRoleChecks" style="margin-left:4px"></span>
           </label>
-          <label style="font-size:13px">Min Score: <input type="range" id="ngMinScore" min="0" max="100" value="10" style="width:100px;vertical-align:middle">
-            <span id="ngMinScoreVal">0.10</span>
+          <label style="font-size:13px">Min Score: <input type="range" id="ngMinScore" min="0" max="100" value="70" style="width:100px;vertical-align:middle">
+            <span id="ngMinScoreVal">0.70</span>
           </label>
           <label style="font-size:13px">Confidence:
             <select id="ngConfidence" style="font-size:12px;padding:2px 4px">
@@ -2067,8 +2067,16 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     startGraphRenderer();
 
     // Filter listeners
+    // Restore saved min score from localStorage
+    var savedScore = localStorage.getItem('ng-min-score');
+    if (savedScore !== null) {
+      document.getElementById('ngMinScore').value = savedScore;
+      document.getElementById('ngMinScoreVal').textContent = (savedScore / 100).toFixed(2);
+    }
+
     document.getElementById('ngMinScore').addEventListener('input', function() {
       document.getElementById('ngMinScoreVal').textContent = (this.value / 100).toFixed(2);
+      localStorage.setItem('ng-min-score', this.value);
       applyNGFilters();
     });
     document.getElementById('ngConfidence').addEventListener('change', applyNGFilters);

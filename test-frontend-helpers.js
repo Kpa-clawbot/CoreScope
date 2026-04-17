@@ -5513,6 +5513,7 @@ console.log('\n=== analytics.js: renderCollisionsFromServer collision table ==='
   });
 }
 
+
 // ===== Observer role support (#753 / PR #774) =====
 {
   console.log('\n--- Observer role support (PR #774) ---');
@@ -5561,6 +5562,29 @@ console.log('\n=== analytics.js: renderCollisionsFromServer collision table ==='
     assert.ok(filterLine, 'filter line must exist');
     assert.ok(!filterLine[0].includes("'observer'"), 'filter should NOT auto-include observer role');
     assert.ok(filterLine[0].includes("'unknown'"), 'filter should still auto-include unknown role');
+  });
+}
+
+// ===== Neighbor Graph Min Score Slider Persistence =====
+{
+  console.log('\n--- Neighbor Graph Slider Persistence ---');
+
+  test('default slider value is 70 (0.70)', () => {
+    // Read the raw HTML from analytics.js to verify default
+    const src = fs.readFileSync('public/analytics.js', 'utf8');
+    assert.ok(src.includes('value="70"'), 'ngMinScore input should default to value="70"');
+    assert.ok(src.includes('>0.70</span>'), 'ngMinScoreVal should display 0.70');
+  });
+
+  test('localStorage read on load is present in code', () => {
+    const src = fs.readFileSync('public/analytics.js', 'utf8');
+    assert.ok(src.includes("localStorage.getItem('ng-min-score')"), 'should read ng-min-score from localStorage on load');
+  });
+
+  test('localStorage write on slider change is present in code', () => {
+    const src = fs.readFileSync('public/analytics.js', 'utf8');
+    assert.ok(src.includes("localStorage.setItem('ng-min-score'"), 'should write ng-min-score to localStorage on change');
+
   });
 }
 
