@@ -2072,6 +2072,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     if (savedScore !== null) {
       document.getElementById('ngMinScore').value = savedScore;
       document.getElementById('ngMinScoreVal').textContent = (savedScore / 100).toFixed(2);
+      applyNGFilters();
     }
 
     document.getElementById('ngMinScore').addEventListener('input', function() {
