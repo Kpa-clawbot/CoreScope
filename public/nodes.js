@@ -1049,7 +1049,9 @@
         e.preventDefault();
         var href = link.getAttribute('href');
         if (href.indexOf('/analytics') === -1) {
-          // Detail link — re-init with the pubkey directly
+          // Detail link — re-init with the pubkey directly;
+          // destroy() first to clean up WS handlers, maps, listeners
+          destroy();
           var pubkey = href.replace('#/nodes/', '').split('/')[0];
           var appEl = document.getElementById('app');
           init(appEl, decodeURIComponent(pubkey));
