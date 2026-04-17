@@ -1041,14 +1041,24 @@
     document.getElementById('nodesRight').addEventListener('click', function(e) {
       // #778: Details/Analytics links don't navigate because replaceState
       // already set the hash to #/nodes/PUBKEY, so clicking <a href="#/nodes/PUBKEY">
-      // is a same-hash no-op. Force navigation by temporarily clearing the hash.
+      // is a same-hash no-op. For the detail link (same page), call init()
+      // directly — faster than a full router teardown/rebuild cycle.
+      // For analytics (different page), force hashchange via setTimeout.
       var link = e.target.closest('a.btn-primary[href^="#/nodes/"]');
       if (link) {
         e.preventDefault();
-        var target = link.getAttribute('href');
-        // Always clear and reassign — hashchange won't fire if hash already matches
-        history.replaceState(null, '', '#/');
-        location.hash = target.substring(1);
+        var href = link.getAttribute('href');
+        if (href.indexOf('/analytics') === -1) {
+          // Detail link — re-init with the pubkey directly
+          var pubkey = href.replace('#/nodes/', '').split('/')[0];
+          var appEl = document.getElementById('app');
+          init(appEl, decodeURIComponent(pubkey));
+          history.replaceState(null, '', href);
+        } else {
+          // Analytics link — different page, force hashchange via router
+          location.hash = '#/';
+          setTimeout(function() { location.hash = href.substring(1); }, 0);
+        }
         return;
       }
       if (e.target.closest('.panel-close-btn')) {
