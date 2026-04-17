@@ -2700,6 +2700,114 @@ console.log('\n=== channels.js: WS batch + region snapshot integration ===');
     assert.ok(historyCalls.includes('#/channels'), 'should route back to channels root');
   });
 }
+// ===== CHANNELS.JS: #781 encrypted channel without key shows lock message =====
+console.log('\n=== channels.js: encrypted channel without key shows lock message (#781) ===');
+{
+  test('selectChannel shows lock message for encrypted channel with no matching key', async () => {
+    const ctx = makeSandbox();
+    const dom = {};
+    function makeEl(id) {
+      if (dom[id]) return dom[id];
+      dom[id] = {
+        id,
+        innerHTML: '',
+        textContent: '',
+        value: '',
+        scrollTop: 0,
+        scrollHeight: 100,
+        clientHeight: 80,
+        style: {},
+        dataset: {},
+        classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+        addEventListener() {},
+        removeEventListener() {},
+        querySelector() { return null; },
+        querySelectorAll() { return []; },
+        getBoundingClientRect() { return { left: 0, bottom: 0, width: 0 }; },
+        setAttribute() {},
+        removeAttribute() {},
+        focus() {},
+      };
+      return dom[id];
+    }
+    const headerText = { textContent: '' };
+    makeEl('chHeader').querySelector = (sel) => (sel === '.ch-header-text' ? headerText : null);
+    makeEl('chMessages');
+    makeEl('chList');
+    makeEl('chScrollBtn');
+    makeEl('chAriaLive');
+    makeEl('chBackBtn');
+    makeEl('chRegionFilter');
+    const appEl = {
+      innerHTML: '',
+      querySelector(sel) {
+        if (sel === '.ch-sidebar' || sel === '.ch-sidebar-resize' || sel === '.ch-main') return makeEl(sel);
+        if (sel === '.ch-layout') return { classList: { add() {}, remove() {}, contains() { return false; } } };
+        return makeEl(sel);
+      },
+      addEventListener() {},
+    };
+    let apiCallPaths = [];
+    ctx.document.getElementById = makeEl;
+    ctx.document.querySelector = (sel) => {
+      if (sel === '.ch-layout') return { classList: { add() {}, remove() {}, contains() { return false; } } };
+      return null;
+    };
+    ctx.document.querySelectorAll = () => [];
+    ctx.document.addEventListener = () => {};
+    ctx.document.removeEventListener = () => {};
+    ctx.document.documentElement = { getAttribute: () => null, setAttribute: () => {} };
+    ctx.document.body = { appendChild() {}, removeChild() {}, contains() { return false; } };
+    ctx.history = { replaceState() {} };
+    ctx.matchMedia = () => ({ matches: false });
+    ctx.window.matchMedia = ctx.matchMedia;
+    ctx.MutationObserver = function () { this.observe = () => {}; this.disconnect = () => {}; };
+    ctx.RegionFilter = { init() {}, onChange() { return () => {}; }, offChange() {}, getRegionParam() { return ''; } };
+    ctx.debouncedOnWS = (fn) => fn;
+    ctx.onWS = () => {};
+    ctx.offWS = () => {};
+    ctx.api = (path) => {
+      apiCallPaths.push(path);
+      if (path.indexOf('/observers') === 0) return Promise.resolve({ observers: [] });
+      // Return an encrypted channel in the list
+      if (path.indexOf('/channels') === 0 && path.indexOf('/messages') === -1) {
+        return Promise.resolve({ channels: [
+          { hash: '42', name: 'secret-chan', messageCount: 5, lastActivity: null, encrypted: true }
+        ] });
+      }
+      // This should NOT be called for encrypted channels without a key
+      if (path.indexOf('/messages') !== -1) {
+        return Promise.resolve({ messages: [{ sender: 'X', text: 'gibberish', timestamp: '2025-01-01T00:00:00Z' }] });
+      }
+      return Promise.resolve({});
+    };
+    ctx.CLIENT_TTL = { observers: 120000, channels: 15000, channelMessages: 10000, nodeDetail: 10000 };
+    ctx.ROLE_EMOJI = {};
+    ctx.ROLE_LABELS = {};
+    ctx.timeAgo = () => '1m ago';
+    ctx.registerPage = (name, handlers) => { ctx._pageHandlers = handlers; };
+    ctx.btoa = (s) => Buffer.from(String(s), 'utf8').toString('base64');
+    ctx.atob = (s) => Buffer.from(String(s), 'base64').toString('utf8');
+
+    ctx.crypto = { subtle: require('crypto').webcrypto.subtle }; ctx.TextEncoder = TextEncoder; ctx.TextDecoder = TextDecoder; ctx.Uint8Array = Uint8Array;
+    loadInCtx(ctx, 'public/channel-decrypt.js');
+    loadInCtx(ctx, 'public/channels.js');
+    ctx._pageHandlers.init(appEl);
+    // Wait for loadChannels() to resolve (async in init)
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    // Select the encrypted channel — no stored keys exist
+    apiCallPaths = [];
+    await ctx.window._channelsSelectChannelForTest('42');
+
+    // Should show lock message, NOT fetch messages API
+    const msgEl = dom['chMessages'];
+    assert.ok(msgEl.innerHTML.includes('🔒'), 'should show lock emoji for encrypted channel without key');
+    assert.ok(msgEl.innerHTML.includes('no decryption key'), 'should mention no decryption key');
+    const messageApiFetched = apiCallPaths.some(p => p.indexOf('/messages') !== -1);
+    assert.ok(!messageApiFetched, 'should NOT fetch messages API for encrypted channel without key');
+  });
+}
 // ===== PACKETS.JS: savedTimeWindowMin default guard =====
 console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
 {
