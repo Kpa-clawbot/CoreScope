@@ -5513,6 +5513,57 @@ console.log('\n=== analytics.js: renderCollisionsFromServer collision table ==='
   });
 }
 
+// ===== Observer role support (#753 / PR #774) =====
+{
+  console.log('\n--- Observer role support (PR #774) ---');
+
+  // Test 1: ROLE_COLORS.observer is defined and not empty
+  test('ROLE_COLORS.observer is defined and not empty', () => {
+    const rolesJs = fs.readFileSync(__dirname + '/public/roles.js', 'utf8');
+    const ctx = makeSandbox();
+    vm.runInNewContext(rolesJs, ctx);
+    assert.ok(ctx.window.ROLE_COLORS.observer, 'ROLE_COLORS.observer should be defined');
+    assert.ok(ctx.window.ROLE_COLORS.observer.length > 0, 'ROLE_COLORS.observer should not be empty');
+  });
+
+  // Test 2: Observer checkbox exists in neighbor graph filter (unchecked by default)
+  test('Observer checkbox exists in neighbor graph filter section', () => {
+    const analyticsJs = fs.readFileSync(__dirname + '/public/analytics.js', 'utf8');
+    // The observer checkbox is added with data-role="observer" and NO "checked" attribute
+    assert.ok(analyticsJs.includes('data-role="observer"'), 'analytics.js should contain observer checkbox');
+    // Verify it's NOT checked by default (no "checked" attribute on observer checkbox)
+    const observerCheckboxMatch = analyticsJs.match(/data-role="observer"[^>]*>/);
+    assert.ok(observerCheckboxMatch, 'observer checkbox markup must exist');
+    assert.ok(!observerCheckboxMatch[0].includes('checked'), 'observer checkbox should NOT be checked by default');
+  });
+
+  // Test 3: Other role checkboxes ARE checked by default
+  test('Non-observer role checkboxes are checked by default', () => {
+    const analyticsJs = fs.readFileSync(__dirname + '/public/analytics.js', 'utf8');
+    // The main role loop uses "checked" attribute
+    const mainRoleCheckbox = analyticsJs.match(/data-role="\$\{r\}"[^>]*checked/);
+    assert.ok(mainRoleCheckbox, 'Main role checkboxes should have checked attribute');
+  });
+
+  // Test 4: --role-observer CSS variable exists in style.css
+  test('--role-observer CSS variable exists in style.css', () => {
+    const css = fs.readFileSync(__dirname + '/public/style.css', 'utf8');
+    assert.ok(css.includes('--role-observer:'), 'style.css should define --role-observer CSS variable');
+  });
+
+  // Test 5: Filter logic does NOT auto-include observer role
+  test('Filter logic excludes observer nodes when checkbox unchecked', () => {
+    const analyticsJs = fs.readFileSync(__dirname + '/public/analytics.js', 'utf8');
+    // Old code had: return checkedRoles.has(role) || role === 'unknown' || role === 'observer';
+    // New code: return checkedRoles.has(role) || role === 'unknown';
+    // Verify observer is NOT given special pass-through treatment
+    const filterLine = analyticsJs.match(/return checkedRoles\.has\(role\)[^;]+;/);
+    assert.ok(filterLine, 'filter line must exist');
+    assert.ok(!filterLine[0].includes("'observer'"), 'filter should NOT auto-include observer role');
+    assert.ok(filterLine[0].includes("'unknown'"), 'filter should still auto-include unknown role');
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
