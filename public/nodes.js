@@ -1043,7 +1043,7 @@
       // already set the hash to #/nodes/PUBKEY, so clicking <a href="#/nodes/PUBKEY">
       // is a same-hash no-op. For the detail link (same page), call init()
       // directly — faster than a full router teardown/rebuild cycle.
-      // For analytics (different page), force hashchange via setTimeout.
+      // For analytics (different page), force hashchange via replaceState + assign.
       var link = e.target.closest('a.btn-primary[href^="#/nodes/"]');
       if (link) {
         e.preventDefault();
