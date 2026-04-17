@@ -59,6 +59,25 @@
                   Paste into your device console:
                 </div>
 
+                <div style="margin-bottom:12px;padding:10px 12px;background:var(--surface-0);border:1px solid var(--border);border-radius:6px">
+                  <strong style="font-size:12px">📍 Your region (IATA code)</strong>
+                  <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:8px">
+                    CoreScope groups observers by the IATA airport code nearest to them.
+                    If your node shows as <strong>Offline</strong> or doesn't appear in the list, you most likely haven't set this yet.
+                    Pick your region below — the commands update automatically.
+                  </div>
+                  <select id="obsIataSelect" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;cursor:pointer">
+                    <option value="AMS">AMS — Amsterdam (Schiphol)</option>
+                    <option value="RTM">RTM — Rotterdam / Den Haag</option>
+                    <option value="EIN">EIN — Eindhoven</option>
+                    <option value="GRQ">GRQ — Groningen</option>
+                    <option value="MST">MST — Maastricht / Limburg</option>
+                    <option value="LEY">LEY — Lelystad / Flevoland</option>
+                    <option value="ENS">ENS — Enschede / Twente</option>
+                    <option value="DHR">DHR — Den Helder</option>
+                  </select>
+                </div>
+
                 <div style="margin-bottom:12px">
                   <strong>Cornmeister (TLS - Recommended)</strong>
                   <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:8px">
@@ -68,7 +87,8 @@
 set mqtt.port 8883
 set mqtt.username observer
 set mqtt.password hiermetdiedata
-set mqtt.tls 1</code></pre>
+set mqtt.tls 1
+set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
                 </div>
 
                 <div>
@@ -79,7 +99,8 @@ set mqtt.tls 1</code></pre>
                   <pre class="help-code"><code>set mqtt.server mqtt.mwiki.nl
 set mqtt.port 1883
 set mqtt.username observer
-set mqtt.password 86w7bW9NJxuPcErp2Y5NCQ==</code></pre>
+set mqtt.password 86w7bW9NJxuPcErp2Y5NCQ==
+set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
                 </div>
               </div>
 
@@ -111,6 +132,15 @@ set mqtt.password 86w7bW9NJxuPcErp2Y5NCQ==</code></pre>
       }
       var row = e.target.closest('tr[data-action="navigate"]');
       if (row) location.hash = row.dataset.value;
+    });
+    // IATA picker — update both code blocks when a region is selected
+    app.addEventListener('change', function (e) {
+      if (e.target.id === 'obsIataSelect') {
+        var code = e.target.value;
+        app.querySelectorAll('.obs-iata-val').forEach(function (span) {
+          span.textContent = code;
+        });
+      }
     });
     // #209 — Keyboard accessibility for observer rows
     app.addEventListener('keydown', function (e) {
