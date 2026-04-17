@@ -102,7 +102,7 @@
         <p class="home-donate-text">The Cornmeister.nl Meshcore Analyzer runs on real hardware, processing tens of thousands of mesh packets around the clock. If it's useful to you, a small donation goes a long way toward keeping the server running.</p>
         <div class="home-donate-actions">
           <a href="https://bunq.me/CornmeisterNL" target="_blank" rel="noopener" class="home-donate-btn">❤️ Support the project</a>
-          <a href="https://discord.gg/placeholder" target="_blank" rel="noopener" class="home-discord-btn">💬 Join the Discord</a>
+          <a href="https://discord.gg/5JKARZC6" target="_blank" rel="noopener" class="home-discord-btn">💬 Join the Discord</a>
         </div>
       </section>
 
