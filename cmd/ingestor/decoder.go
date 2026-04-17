@@ -687,7 +687,8 @@ func ComputeContentHash(rawHex string) string {
 	payloadType := (headerByte >> 2) & 0x0F
 	toHash := []byte{payloadType}
 	if int(payloadType) == PayloadTRACE {
-		toHash = append(toHash, pathByte)
+		// Firmware uses uint16_t path_len (2 bytes, little-endian)
+		toHash = append(toHash, pathByte, 0x00)
 	}
 	toHash = append(toHash, payload...)
 
