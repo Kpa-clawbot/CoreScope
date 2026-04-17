@@ -1046,11 +1046,9 @@
       if (link) {
         e.preventDefault();
         var target = link.getAttribute('href');
-        // If hash is already the target, hashchange won't fire — force it
-        if (location.hash === target || '#/' + location.hash.replace('#/', '') === target) {
-          history.replaceState(null, '', '#/');
-        }
-        location.hash = target.substring(1); // strip leading #
+        // Always clear and reassign — hashchange won't fire if hash already matches
+        history.replaceState(null, '', '#/');
+        location.hash = target.substring(1);
         return;
       }
       if (e.target.closest('.panel-close-btn')) {
