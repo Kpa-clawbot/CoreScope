@@ -61,6 +61,10 @@ func main() {
 	nodeDays := cfg.NodeDaysOrDefault()
 	store.MoveStaleNodes(nodeDays)
 
+	// Observer retention: remove stale observers on startup
+	observerDays := cfg.ObserverDaysOrDefault()
+	store.RemoveStaleObservers(observerDays)
+
 	// Metrics retention: prune old metrics on startup
 	metricsDays := cfg.MetricsRetentionDays()
 	store.PruneOldMetrics(metricsDays)
@@ -70,6 +74,16 @@ func main() {
 	go func() {
 		for range retentionTicker.C {
 			store.MoveStaleNodes(nodeDays)
+		}
+	}()
+
+	// Daily ticker for observer retention (every 24h, staggered 90s after startup)
+	observerRetentionTicker := time.NewTicker(24 * time.Hour)
+	go func() {
+		time.Sleep(90 * time.Second) // stagger after metrics prune
+		store.RemoveStaleObservers(observerDays)
+		for range observerRetentionTicker.C {
+			store.RemoveStaleObservers(observerDays)
 		}
 	}()
 

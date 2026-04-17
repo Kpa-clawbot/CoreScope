@@ -336,6 +336,40 @@ func main() {
 		log.Printf("[metrics-prune] auto-prune enabled: metrics older than %d days", metricsDays)
 	}
 
+	// Auto-prune stale observers
+	var stopObserverPrune func()
+	{
+		observerDays := cfg.ObserverDaysOrDefault()
+		if observerDays <= -1 {
+			// -1 means keep forever, skip
+		} else {
+			observerPruneTicker := time.NewTicker(24 * time.Hour)
+			observerPruneDone := make(chan struct{})
+			stopObserverPrune = func() {
+				observerPruneTicker.Stop()
+				close(observerPruneDone)
+			}
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[observer-prune] panic recovered: %v", r)
+					}
+				}()
+				time.Sleep(3 * time.Minute) // stagger after metrics prune
+				database.RemoveStaleObservers(observerDays)
+				for {
+					select {
+					case <-observerPruneTicker.C:
+						database.RemoveStaleObservers(observerDays)
+					case <-observerPruneDone:
+						return
+					}
+				}
+			}()
+			log.Printf("[observer-prune] auto-prune enabled: observers not seen in %d days will be removed", observerDays)
+		}
+	}
+
 	// Auto-prune old neighbor edges
 	var stopEdgePrune func()
 	{
@@ -396,6 +430,9 @@ func main() {
 		}
 		if stopMetricsPrune != nil {
 			stopMetricsPrune()
+		}
+		if stopObserverPrune != nil {
+			stopObserverPrune()
 		}
 		if stopEdgePrune != nil {
 			stopEdgePrune()

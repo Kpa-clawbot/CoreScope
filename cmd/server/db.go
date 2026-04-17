@@ -2213,6 +2213,35 @@ func (db *DB) PruneOldMetrics(retentionDays int) (int64, error) {
 	return n, nil
 }
 
+// RemoveStaleObservers marks observers that have not actively sent data in observerDays
+// as inactive (soft-delete). This preserves JOIN integrity for observations.observer_idx
+// and observer_metrics.observer_id — historical data still references the correct observer.
+// An observer must actively send data to stay listed — being seen by another node does not count.
+// observerDays <= -1 means never remove (keep forever).
+func (db *DB) RemoveStaleObservers(observerDays int) (int64, error) {
+	if observerDays <= -1 {
+		return 0, nil // keep forever
+	}
+	rw, err := openRW(db.path)
+	if err != nil {
+		return 0, err
+	}
+	defer rw.Close()
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -observerDays).Format(time.RFC3339)
+	res, err := rw.Exec(`UPDATE observers SET inactive = 1 WHERE last_seen < ? AND (inactive IS NULL OR inactive = 0)`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		// Clean up orphaned metrics for now-inactive observers
+		rw.Exec(`DELETE FROM observer_metrics WHERE observer_id IN (SELECT id FROM observers WHERE inactive = 1)`)
+		log.Printf("[observers] Marked %d observer(s) as inactive (not seen in %d days)", n, observerDays)
+	}
+	return n, nil
+}
+
 // TouchNodeLastSeen updates last_seen for a node identified by full public key.
 // Only updates if the new timestamp is newer than the existing value (or NULL).
 // Returns nil even if no rows are affected (node doesn't exist).

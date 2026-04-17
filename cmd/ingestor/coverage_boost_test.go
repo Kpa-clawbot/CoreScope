@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // hmacSHA256 computes HMAC-SHA256 for test use.
@@ -1136,5 +1137,184 @@ func TestDecodeTraceWithPath(t *testing.T) {
 	}
 	if p.TraceFlags == nil || *p.TraceFlags != 3 {
 		t.Errorf("flags=%v, want 3", p.TraceFlags)
+	}
+}
+
+// --- db.go: RemoveStaleObservers (soft-delete) ---
+
+func TestRemoveStaleObservers(t *testing.T) {
+	store := newTestStore(t)
+
+	// Insert an observer with last_seen 30 days ago
+	err := store.UpsertObserver("obs-old", "OldObserver", "LAX", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Override last_seen to 30 days ago
+	cutoff := time.Now().UTC().AddDate(0, 0, -30).Format(time.RFC3339)
+	_, err = store.db.Exec("UPDATE observers SET last_seen = ? WHERE id = ?", cutoff, "obs-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert a recent observer
+	err = store.UpsertObserver("obs-new", "NewObserver", "NYC", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := store.RemoveStaleObservers(14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Errorf("removed=%d, want 1", removed)
+	}
+
+	// Observer should still be in the table (soft-delete), but marked inactive
+	var count int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM observers").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Errorf("observers count=%d, want 2 (soft-delete preserves row)", count)
+	}
+
+	// Check that the old observer is marked inactive
+	var inactive int
+	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = ?", "obs-old").Scan(&inactive); err != nil {
+		t.Fatal(err)
+	}
+	if inactive != 1 {
+		t.Errorf("obs-old inactive=%d, want 1", inactive)
+	}
+
+	// Check that the recent observer is still active
+	var newInactive int
+	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = ?", "obs-new").Scan(&newInactive); err != nil {
+		t.Fatal(err)
+	}
+	if newInactive != 0 {
+		t.Errorf("obs-new inactive=%d, want 0", newInactive)
+	}
+}
+
+func TestRemoveStaleObserversNone(t *testing.T) {
+	store := newTestStore(t)
+
+	removed, err := store.RemoveStaleObservers(14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Errorf("removed=%d, want 0", removed)
+	}
+}
+
+func TestRemoveStaleObserversKeepForever(t *testing.T) {
+	store := newTestStore(t)
+
+	// Insert an old observer
+	err := store.UpsertObserver("obs-ancient", "AncientObserver", "LAX", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -365).Format(time.RFC3339)
+	_, err = store.db.Exec("UPDATE observers SET last_seen = ? WHERE id = ?", cutoff, "obs-ancient")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// observerDays = -1 means keep forever
+	removed, err := store.RemoveStaleObservers(-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Errorf("removed=%d, want 0 (keep forever)", removed)
+	}
+
+	var count int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM observers").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Errorf("observers count=%d, want 1 (keep forever)", count)
+	}
+
+	// Observer should NOT be marked inactive
+	var inactive int
+	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = ?", "obs-ancient").Scan(&inactive); err != nil {
+		t.Fatal(err)
+	}
+	if inactive != 0 {
+		t.Errorf("obs-ancient inactive=%d, want 0 (keep forever)", inactive)
+	}
+}
+
+func TestRemoveStaleObserversReactivation(t *testing.T) {
+	store := newTestStore(t)
+
+	// Insert and stale-mark an observer
+	err := store.UpsertObserver("obs-test", "TestObserver", "LAX", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -30).Format(time.RFC3339)
+	_, err = store.db.Exec("UPDATE observers SET last_seen = ? WHERE id = ?", cutoff, "obs-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := store.RemoveStaleObservers(14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Errorf("removed=%d, want 1", removed)
+	}
+
+	// Verify it's inactive
+	var inactive int
+	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = ?", "obs-test").Scan(&inactive); err != nil {
+		t.Fatal(err)
+	}
+	if inactive != 1 {
+		t.Errorf("inactive=%d, want 1 after soft-delete", inactive)
+	}
+
+	// Now UpsertObserver should reactivate it
+	err = store.UpsertObserver("obs-test", "TestObserver", "LAX", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.db.QueryRow("SELECT inactive FROM observers WHERE id = ?", "obs-test").Scan(&inactive); err != nil {
+		t.Fatal(err)
+	}
+	if inactive != 0 {
+		t.Errorf("inactive=%d, want 0 after reactivation", inactive)
+	}
+}
+
+func TestObserverDaysOrDefault(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *Config
+		want int
+	}{
+		{"nil retention", &Config{}, 14},
+		{"zero observer days", &Config{Retention: &RetentionConfig{ObserverDays: 0}}, 14},
+		{"positive value", &Config{Retention: &RetentionConfig{ObserverDays: 30}}, 30},
+		{"keep forever", &Config{Retention: &RetentionConfig{ObserverDays: -1}}, -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.cfg.ObserverDaysOrDefault()
+			if got != tt.want {
+				t.Errorf("ObserverDaysOrDefault() = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }

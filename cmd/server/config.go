@@ -110,9 +110,10 @@ type PacketStoreConfig struct {
 type GeoFilterConfig = geofilter.Config
 
 type RetentionConfig struct {
-	NodeDays    int `json:"nodeDays"`
-	PacketDays  int `json:"packetDays"`
-	MetricsDays int `json:"metricsDays"`
+	NodeDays      int `json:"nodeDays"`
+	ObserverDays  int `json:"observerDays"`
+	PacketDays    int `json:"packetDays"`
+	MetricsDays   int `json:"metricsDays"`
 }
 
 // MetricsRetentionDays returns configured metrics retention or 30 days default.
@@ -163,6 +164,15 @@ func (c *Config) NodeDaysOrDefault() int {
 		return c.Retention.NodeDays
 	}
 	return 7
+}
+
+// ObserverDaysOrDefault returns the configured retention.observerDays or 14 if not set.
+// A value of -1 means observers are never removed.
+func (c *Config) ObserverDaysOrDefault() int {
+	if c.Retention != nil && c.Retention.ObserverDays != 0 {
+		return c.Retention.ObserverDays
+	}
+	return 14
 }
 
 type HealthThresholds struct {
