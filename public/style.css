@@ -164,6 +164,10 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center;
 }
 .nav-btn:hover { background: var(--nav-bg2); color: var(--nav-text); }
+/* === Nav action buttons (donate/discord) === */
+.nav-action-btn { padding: 6px 12px; white-space: nowrap; }
+@media (max-width: 900px) { .nav-action-label { display: none; } .nav-action-btn { padding: 6px 10px; } }
+@media (max-width: 640px) { .nav-action-btn { display: none; } }
 /* === Nav Stats === */
 .nav-stats {
   display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--nav-text-muted);
