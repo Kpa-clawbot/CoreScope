@@ -69,13 +69,18 @@
                   </div>
                   <select id="obsIataSelect" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;cursor:pointer">
                     <option value="AMS">AMS – Amsterdam Schiphol</option>
-                    <option value="RTM">RTM – Rotterdam The Hague</option>
-                    <option value="EIN">EIN – Eindhoven</option>
-                    <option value="MST">MST – Maastricht Aachen</option>
-                    <option value="GRQ">GRQ – Groningen Eelde</option>
-                    <option value="LEY">LEY – Lelystad</option>
-                    <option value="DHR">DHR – Den Helder (De Kooy)</option>
-                    <option value="ENS">ENS – Enschede Twente</option>
+					<option value="DHR">DHR – Den Helder (De Kooy)</option>
+					<option value="EIN">EIN – Eindhoven</option>
+					<option value="ENS">ENS – Enschede Twente</option>
+					<option value="GLZ">GLZ – Gilze-Rijen Noord-Brabant</option>
+					<option value="GRQ">GRQ – Groningen Eelde</option>
+					<option value="LWR">LWR – Leeuwarden Friesland</option>
+					<option value="LEY">LEY – Lelystad Flevoland</option>
+					<option value="MST">MST – Maastricht Aachen</option>
+					<option value="QAR">QAR – Arnhem Twente</option>
+					<option value="RTM">RTM – Rotterdam The Hague</option>
+					<option value="UDE">UDE – Volkel Noord-Brabant</option>
+					<option value="WOE">WOE – Bergen Op Zoom Noord-Brabant</option>
                   </select>
                 </div>                
 
