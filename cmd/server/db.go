@@ -2360,6 +2360,8 @@ func (db *DB) GetNodesForGeoPrune() ([]NodeForGeoPrune, error) {
 }
 
 // DeleteNodesByPubkeys deletes nodes by their public keys and returns the count deleted.
+// Only the nodes table is affected — references in transmissions or other tables are
+// not cascaded (no FK constraints exist today; revisit if schema adds them).
 func (db *DB) DeleteNodesByPubkeys(pubkeys []string) (int64, error) {
 	if len(pubkeys) == 0 {
 		return 0, nil

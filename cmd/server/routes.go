@@ -2537,6 +2537,8 @@ func (s *Server) handleAdminPrune(w http.ResponseWriter, r *http.Request) {
 // handlePruneGeoFilter identifies (dry_run=true, default) or deletes (confirm=true)
 // nodes whose GPS coordinates fall outside the currently configured geo_filter.
 // Nodes with no GPS fix are always kept. Requires geo_filter to be configured.
+// Confirm requires the pubkeys from the preview in the request body to prevent
+// TOCTOU races: only nodes in the passed list AND still outside the filter are deleted.
 func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.GeoFilter == nil || len(s.cfg.GeoFilter.Polygon) < 3 {
 		writeError(w, http.StatusBadRequest, "no geo_filter configured")
@@ -2558,14 +2560,10 @@ func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
 
 	var outside []nodeResult
 	for _, n := range nodes {
-		var lat, lon float64
-		if n.Lat != nil {
-			lat = *n.Lat
+		if n.Lat == nil || n.Lon == nil {
+			continue // no GPS — always keep
 		}
-		if n.Lon != nil {
-			lon = *n.Lon
-		}
-		if !NodePassesGeoFilter(lat, lon, s.cfg.GeoFilter) {
+		if !NodePassesGeoFilter(*n.Lat, *n.Lon, s.cfg.GeoFilter) {
 			outside = append(outside, nodeResult{PubKey: n.PubKey, Name: n.Name, Lat: n.Lat, Lon: n.Lon})
 		}
 	}
@@ -2580,9 +2578,29 @@ func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Confirmed — delete the nodes
-	pubkeys := make([]string, len(outside))
-	for i, n := range outside {
+	// Confirmed delete — require pubkeys from the preview to prevent TOCTOU:
+	// only nodes that were shown in preview AND are still outside the filter are deleted.
+	var body struct {
+		Pubkeys []string `json:"pubkeys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Pubkeys) == 0 {
+		writeError(w, http.StatusBadRequest, "confirm requires pubkeys from preview in request body")
+		return
+	}
+	allowed := make(map[string]bool, len(body.Pubkeys))
+	for _, pk := range body.Pubkeys {
+		allowed[pk] = true
+	}
+
+	var toDelete []nodeResult
+	for _, n := range outside {
+		if allowed[n.PubKey] {
+			toDelete = append(toDelete, n)
+		}
+	}
+
+	pubkeys := make([]string, len(toDelete))
+	for i, n := range toDelete {
 		pubkeys[i] = n.PubKey
 	}
 	deleted, err := s.db.DeleteNodesByPubkeys(pubkeys)
@@ -2590,10 +2608,14 @@ func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "delete failed")
 		return
 	}
+	for _, n := range toDelete {
+		log.Printf("[geo-prune] deleted node %q (%s)", n.Name, n.PubKey)
+	}
 	log.Printf("[geo-prune] deleted %d nodes outside geo filter", deleted)
 	writeJSON(w, map[string]interface{}{
 		"dryRun":  false,
 		"deleted": deleted,
+		"nodes":   toDelete,
 	})
 }
 
