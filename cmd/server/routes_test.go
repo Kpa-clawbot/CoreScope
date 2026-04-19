@@ -4263,22 +4263,28 @@ func TestPruneGeoFilterEndpoint(t *testing.T) {
 	t.Run("confirm=true deletes outside nodes", func(t *testing.T) {
 		srv, router := setupPruneGeoFilterServer(t, apiKey, gf)
 
-		req := httptest.NewRequest("POST", "/api/admin/prune-geo-filter?confirm=true", nil)
+		body := strings.NewReader(`{"pubkeys":["aaaa111122223333"]}`)
+		req := httptest.NewRequest("POST", "/api/admin/prune-geo-filter?confirm=true", body)
 		req.Header.Set("X-API-Key", apiKey)
+		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
 		if w.Code != 200 {
 			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 		}
-		var body map[string]interface{}
-		json.Unmarshal(w.Body.Bytes(), &body)
-		if body["dryRun"] != false {
+		var resp map[string]interface{}
+		json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp["dryRun"] != false {
 			t.Error("expected dryRun=false")
 		}
-		deleted, _ := body["deleted"].(float64)
+		deleted, _ := resp["deleted"].(float64)
 		if deleted != 1 {
 			t.Errorf("expected 1 deleted, got %v", deleted)
+		}
+		nodes, _ := resp["nodes"].([]interface{})
+		if len(nodes) != 1 {
+			t.Errorf("expected 1 node in response, got %d", len(nodes))
 		}
 
 		// Verify node is actually gone from DB
@@ -4291,6 +4297,19 @@ func TestPruneGeoFilterEndpoint(t *testing.T) {
 		srv.db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE public_key = 'bbbb111122223333'").Scan(&count)
 		if count != 1 {
 			t.Error("expected NoGPSNode to be kept")
+		}
+	})
+
+	t.Run("confirm=true without pubkeys body returns 400", func(t *testing.T) {
+		_, router := setupPruneGeoFilterServer(t, apiKey, gf)
+
+		req := httptest.NewRequest("POST", "/api/admin/prune-geo-filter?confirm=true", nil)
+		req.Header.Set("X-API-Key", apiKey)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
 		}
 	})
 

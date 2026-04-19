@@ -1464,9 +1464,11 @@
     if (!apiKey) { _gfPruneMsg(container, 'API key required.', false); return; }
     var count = _gfPruneNodes.length;
     if (!confirm('Delete ' + count + ' node' + (count !== 1 ? 's' : '') + ' from the database? This cannot be undone.')) return;
+    var pubkeys = _gfPruneNodes.map(function (n) { return n.pubkey; });
     fetch('/api/admin/prune-geo-filter?confirm=true', {
       method: 'POST',
-      headers: { 'X-API-Key': apiKey }
+      headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pubkeys: pubkeys })
     }).then(function (r) {
       if (!r.ok) return r.json().then(function (e) { throw new Error(e.error || ('HTTP ' + r.status)); });
       return r.json();
@@ -1474,7 +1476,8 @@
       _gfPruneNodes = [];
       var resultEl = container.querySelector('#cv2-gf-prune-result');
       if (resultEl) resultEl.style.display = 'none';
-      _gfPruneMsg(container, 'Deleted ' + data.deleted + ' node' + (data.deleted !== 1 ? 's' : '') + '.', true);
+      var n = data.deleted;
+      _gfPruneMsg(container, 'Deleted ' + n + ' node' + (n !== 1 ? 's' : '') + '.', true);
     }).catch(function (e) { _gfPruneMsg(container, 'Error: ' + e.message, false); });
   }
 
