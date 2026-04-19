@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"regexp"
 	"runtime"
@@ -30,6 +31,9 @@ type Server struct {
 	version   string
 	commit    string
 	buildTime string
+
+	// Guards s.cfg.GeoFilter — read by ingest/handler goroutines, written by PUT handler
+	cfgMu sync.RWMutex
 
 	// Cached runtime.MemStats to avoid stop-the-world pauses on every health check
 	memStatsMu   sync.Mutex
@@ -57,6 +61,18 @@ type PerfStats struct {
 	Endpoints   map[string]*EndpointPerf
 	SlowQueries []SlowQuery
 	StartedAt   time.Time
+}
+
+func (s *Server) getGeoFilter() *GeoFilterConfig {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.GeoFilter
+}
+
+func (s *Server) setGeoFilter(gf *GeoFilterConfig) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	s.cfg.GeoFilter = gf
 }
 
 type EndpointPerf struct {
@@ -426,7 +442,10 @@ func (s *Server) handleConfigMap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigGeoFilter(w http.ResponseWriter, r *http.Request) {
-	gf := s.cfg.GeoFilter
+	gf := s.getGeoFilter()
+	// writeEnabled leaks whether the server has a strong API key to unauthenticated
+	// callers. Risk accepted: the information (key is/isn't configured) is low-sensitivity
+	// and the GET endpoint is intentionally public for read-only clients.
 	writeEnabled := s.cfg != nil && s.cfg.APIKey != "" && !IsWeakAPIKey(s.cfg.APIKey)
 	if gf == nil || len(gf.Polygon) == 0 {
 		writeJSON(w, map[string]interface{}{"polygon": nil, "bufferKm": 0, "writeEnabled": writeEnabled})
@@ -436,6 +455,8 @@ func (s *Server) handleConfigGeoFilter(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutConfigGeoFilter(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB cap
+
 	var body struct {
 		Polygon  [][2]float64 `json:"polygon"`
 		BufferKm float64      `json:"bufferKm"`
@@ -449,6 +470,17 @@ func (s *Server) handlePutConfigGeoFilter(w http.ResponseWriter, r *http.Request
 	if len(body.Polygon) > 0 && len(body.Polygon) < 3 {
 		writeError(w, http.StatusBadRequest, "polygon must have at least 3 points")
 		return
+	}
+	if len(body.Polygon) > 1000 {
+		writeError(w, http.StatusBadRequest, "polygon must have at most 1000 points")
+		return
+	}
+	for _, pt := range body.Polygon {
+		if math.IsNaN(pt[0]) || math.IsNaN(pt[1]) || math.IsInf(pt[0], 0) || math.IsInf(pt[1], 0) ||
+			pt[0] < -90 || pt[0] > 90 || pt[1] < -180 || pt[1] > 180 {
+			writeError(w, http.StatusBadRequest, "polygon point out of range: lat must be in [-90,90], lon in [-180,180]")
+			return
+		}
 	}
 
 	var gf *GeoFilterConfig
@@ -464,7 +496,7 @@ func (s *Server) handlePutConfigGeoFilter(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	s.cfg.GeoFilter = gf
+	s.setGeoFilter(gf)
 
 	if gf != nil {
 		writeJSON(w, map[string]interface{}{"polygon": gf.Polygon, "bufferKm": gf.BufferKm})
@@ -1079,10 +1111,10 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if s.cfg.GeoFilter != nil {
+	if gf := s.getGeoFilter(); gf != nil {
 		filtered := nodes[:0]
 		for _, node := range nodes {
-			if NodePassesGeoFilter(node["lat"], node["lon"], s.cfg.GeoFilter) {
+			if NodePassesGeoFilter(node["lat"], node["lon"], gf) {
 				filtered = append(filtered, node)
 			}
 		}
