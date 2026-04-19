@@ -4066,7 +4066,7 @@ func TestPutConfigGeoFilter(t *testing.T) {
 	t.Run("clears filter when polygon is empty", func(t *testing.T) {
 		srv, router, dir := setupGeoFilterServer(t, apiKey)
 		// Pre-set a filter so we can clear it
-		srv.cfg.GeoFilter = &GeoFilterConfig{Polygon: [][2]float64{{51.0, 4.0}, {51.0, 5.0}, {50.5, 4.0}}, BufferKm: 10}
+		srv.setGeoFilter(&GeoFilterConfig{Polygon: [][2]float64{{51.0, 4.0}, {51.0, 5.0}, {50.5, 4.0}}, BufferKm: 10})
 
 		req := httptest.NewRequest("PUT", "/api/config/geo-filter", strings.NewReader(`{"polygon":null}`))
 		req.Header.Set("X-API-Key", apiKey)
@@ -4098,6 +4098,40 @@ func TestPutConfigGeoFilter(t *testing.T) {
 
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("rejects out-of-range coordinates", func(t *testing.T) {
+		_, router, _ := setupGeoFilterServer(t, apiKey)
+
+		body := `{"polygon":[[91.0,4.0],[51.0,5.0],[50.5,4.0]],"bufferKm":0}`
+		req := httptest.NewRequest("PUT", "/api/config/geo-filter", strings.NewReader(body))
+		req.Header.Set("X-API-Key", apiKey)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for out-of-range lat, got %d", w.Code)
+		}
+	})
+
+	t.Run("rejects polygon exceeding 1000 points", func(t *testing.T) {
+		_, router, _ := setupGeoFilterServer(t, apiKey)
+
+		pts := make([][2]float64, 1001)
+		for i := range pts {
+			pts[i] = [2]float64{51.0 + float64(i)*0.0001, 4.0}
+		}
+		b, _ := json.Marshal(map[string]interface{}{"polygon": pts, "bufferKm": 0})
+		req := httptest.NewRequest("PUT", "/api/config/geo-filter", strings.NewReader(string(b)))
+		req.Header.Set("X-API-Key", apiKey)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for oversized polygon, got %d", w.Code)
 		}
 	})
 
