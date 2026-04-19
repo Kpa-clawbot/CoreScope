@@ -2780,9 +2780,12 @@ func (s *PacketStore) removeFromRelayTimeIndex(tx *StoreTx) {
 		slice := idx[pk]
 		i := sort.Search(len(slice), func(j int) bool { return slice[j] >= millis })
 		if i < len(slice) && slice[i] == millis {
-			idx[pk] = append(slice[:i], slice[i+1:]...)
-			if len(idx[pk]) == 0 {
+			copy(slice[i:], slice[i+1:])
+			slice = slice[:len(slice)-1]
+			if len(slice) == 0 {
 				delete(idx, pk)
+			} else {
+				idx[pk] = slice
 			}
 		}
 	}
@@ -6588,7 +6591,7 @@ func (s *PacketStore) GetBulkHealth(limit int, region string) []map[string]inter
 			c1h, c24h, lastRel := relayMetrics(s.relayTimes[strings.ToLower(n.pk)], time.Now().UnixMilli())
 			statsMap["relay_count_1h"] = c1h
 			statsMap["relay_count_24h"] = c24h
-			if lastRel != "" {
+			if lastRel != "" && (c1h > 0 || c24h > 0) {
 				statsMap["last_relayed"] = lastRel
 			}
 		}
@@ -6754,7 +6757,7 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		c1h, c24h, lastRel := relayMetrics(s.relayTimes[lowerPK], time.Now().UnixMilli())
 		nodeStats["relay_count_1h"] = c1h
 		nodeStats["relay_count_24h"] = c24h
-		if lastRel != "" {
+		if lastRel != "" && (c1h > 0 || c24h > 0) {
 			nodeStats["last_relayed"] = lastRel
 		}
 	}
