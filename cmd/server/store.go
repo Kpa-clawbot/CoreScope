@@ -412,6 +412,8 @@ func (s *PacketStore) Load() error {
 	}
 	defer rows.Close()
 
+	hopsSeen := make(map[string]bool) // reused across observations; cleared per use
+
 	for rows.Next() {
 		var txID int
 		var rawHex, hash, firstSeen, decodedJSON sql.NullString
@@ -501,7 +503,7 @@ func (s *PacketStore) Load() error {
 					}
 					// touchRelayLastSeen handled in post-load pass
 					// byPathHop resolved-key entries
-					hopsSeen := make(map[string]bool)
+					clear(hopsSeen)
 					for _, hop := range txGetParsedPath(tx) {
 						hopsSeen[strings.ToLower(hop)] = true
 					}
@@ -1417,6 +1419,8 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	var broadcastRP map[int][]*string           // obsID → resolved path (for broadcast/persist)
 	allResolvedPKs := make(map[int][]string)    // txID → all resolved pubkeys (for touchRelayLastSeen)
 
+	hopsSeen := make(map[string]bool) // reused across observations; cleared per use
+
 	for _, r := range tempRows {
 		if r.txID > newMaxID {
 			newMaxID = r.txID
@@ -1498,7 +1502,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				}
 				s.addToResolvedPubkeyIndex(tx.ID, resolvedPubkeys)
 				// byPathHop resolved-key entries
-				hopsSeen := make(map[string]bool)
+				clear(hopsSeen)
 				for _, hop := range txGetParsedPath(tx) {
 					hopsSeen[strings.ToLower(hop)] = true
 				}
@@ -1804,6 +1808,8 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	_, pm := s.getCachedNodesAndPM()
 	graphRef := s.graph
 
+	hopsSeen := make(map[string]bool) // reused across observations; cleared per use
+
 	for _, r := range obsRows {
 		// Already ingested (e.g. by IngestNewFromDB in same cycle)
 		if _, exists := s.byObsID[r.obsID]; exists {
@@ -1850,7 +1856,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				}
 				s.addToResolvedPubkeyIndex(tx.ID, pks)
 				// byPathHop resolved-key entries
-				hopsSeen := make(map[string]bool)
+				clear(hopsSeen)
 				for _, hop := range txGetParsedPath(tx) {
 					hopsSeen[strings.ToLower(hop)] = true
 				}
@@ -2776,7 +2782,70 @@ func (s *PacketStore) trackedMemoryMB() float64 {
 // EvictStale removes packets older than the retention window and/or exceeding
 // the memory cap. Must be called with s.mu held (Lock). Returns the number of
 // packets evicted.
+// evictionCandidateTxIDs determines which tx IDs would be evicted and returns them.
+// Must be called under s.mu.Lock (or RLock). Does NOT modify any state.
+func (s *PacketStore) evictionCandidateTxIDs() []int {
+	if s.retentionHours <= 0 && s.maxMemoryMB <= 0 {
+		return nil
+	}
+	cutoffIdx := 0
+	if s.retentionHours > 0 {
+		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours*3600) * time.Second).Format(time.RFC3339)
+		for cutoffIdx < len(s.packets) && s.packets[cutoffIdx].FirstSeen < cutoff {
+			cutoffIdx++
+		}
+	}
+	if s.maxMemoryMB > 0 {
+		highWatermark := int64(s.maxMemoryMB) * 1048576
+		lowWatermark := int64(float64(highWatermark) * 0.85)
+		if s.trackedBytes > highWatermark && len(s.packets) > 0 {
+			var bytesToEvict int64
+			memCutoff := cutoffIdx
+			for memCutoff < len(s.packets) && (s.trackedBytes-bytesToEvict) > lowWatermark {
+				tx := s.packets[memCutoff]
+				bytesToEvict += estimateStoreTxBytes(tx)
+				for _, obs := range tx.Observations {
+					bytesToEvict += estimateStoreObsBytes(obs)
+				}
+				memCutoff++
+			}
+			maxEvict := len(s.packets) / 4
+			if maxEvict < 1 {
+				maxEvict = 1
+			}
+			if memCutoff > maxEvict {
+				memCutoff = maxEvict
+			}
+			if memCutoff > cutoffIdx {
+				cutoffIdx = memCutoff
+			}
+		}
+	}
+	if cutoffIdx == 0 || cutoffIdx > len(s.packets) {
+		return nil
+	}
+	ids := make([]int, cutoffIdx)
+	for i := 0; i < cutoffIdx; i++ {
+		ids[i] = s.packets[i].ID
+	}
+	return ids
+}
+
+// EvictStaleWithRP runs eviction using pre-fetched resolved pubkeys.
+// rpBatch may be nil (in which case resolved pubkey cleanup for byNode/nodeHashes is skipped).
+// Must be called under s.mu.Lock.
+func (s *PacketStore) EvictStaleWithRP(rpBatch map[int][]string) int {
+	return s.evictStaleInternal(rpBatch)
+}
+
+// EvictStale runs eviction, fetching resolved pubkeys inline (SQL under lock).
+// Prefer RunEviction() which batches the SQL outside the lock.
+// Must be called under s.mu.Lock.
 func (s *PacketStore) EvictStale() int {
+	return s.evictStaleInternal(nil)
+}
+
+func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 	if s.retentionHours <= 0 && s.maxMemoryMB <= 0 {
 		return 0
 	}
@@ -2885,9 +2954,12 @@ func (s *PacketStore) EvictStale() int {
 				}
 			}
 		}
-		// Clean up resolved_path pubkeys from byNode/nodeHashes via on-demand SQL fetch.
-		// This is a cold path (eviction runs infrequently) so SQL cost is acceptable.
-		rpPubkeys := s.resolvedPubkeysForEviction(tx.ID)
+		// Clean up resolved_path pubkeys from byNode/nodeHashes.
+		// Uses pre-fetched batch data when available (no SQL under lock).
+		var rpPubkeys []string
+		if rpBatch != nil {
+			rpPubkeys = rpBatch[tx.ID]
+		}
 		for _, pk := range rpPubkeys {
 			if pk == "" || evictedFromNode[pk] {
 				continue
@@ -3007,10 +3079,25 @@ func (s *PacketStore) EvictStale() int {
 
 // RunEviction acquires the write lock and runs eviction. Safe to call from
 // a goroutine. Returns evicted count.
+// Uses a two-phase approach: determines eviction candidates under lock,
+// releases lock for batch SQL fetch of resolved pubkeys, then re-acquires
+// lock for the actual eviction pass.
 func (s *PacketStore) RunEviction() int {
+	// Phase 1: determine candidates under lock
+	s.mu.Lock()
+	txIDs := s.evictionCandidateTxIDs()
+	s.mu.Unlock()
+
+	// Phase 2: batch-fetch resolved pubkeys from SQL (no lock held)
+	var rpBatch map[int][]string
+	if len(txIDs) > 0 {
+		rpBatch = s.resolvedPubkeysForEvictionBatch(txIDs)
+	}
+
+	// Phase 3: actual eviction under write lock, using pre-fetched data
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.EvictStale()
+	return s.EvictStaleWithRP(rpBatch)
 }
 
 // StartEvictionTicker starts a background goroutine that runs eviction every

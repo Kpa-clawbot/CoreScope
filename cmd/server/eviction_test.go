@@ -318,7 +318,7 @@ func TestEvictStale_CleansResolvedPathNodeIndexes(t *testing.T) {
 		t.Fatalf("expected nodeHashes[%s] to contain %s", relayPK, tx.Hash)
 	}
 
-	evicted := store.EvictStale()
+	evicted := store.RunEviction()
 	if evicted != 1 {
 		t.Fatalf("expected 1 evicted, got %d", evicted)
 	}

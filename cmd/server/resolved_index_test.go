@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -356,13 +357,100 @@ func TestEviction_ByNodeCleanup_OnDemandSQL(t *testing.T) {
 		t.Fatalf("expected relay in byNode")
 	}
 
-	evicted := store.EvictStale()
+	evicted := store.RunEviction()
 	if evicted != 1 {
 		t.Fatalf("expected 1 evicted, got %d", evicted)
 	}
 
 	if len(store.byNode[relayPK]) != 0 {
 		t.Error("expected byNode cleanup after eviction via on-demand SQL")
+	}
+}
+
+// TestRunEviction_NoLockDuringSQLFetch proves that RunEviction releases the
+// write lock during the batch SQL fetch phase. A concurrent goroutine acquires
+// mu.RLock within a tight deadline — if the lock were held during SQL, it would
+// time out.
+func TestRunEviction_NoLockDuringSQLFetch(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	store := &PacketStore{
+		packets:              make([]*StoreTx, 0),
+		byHash:               make(map[string]*StoreTx),
+		byTxID:               make(map[int]*StoreTx),
+		byObsID:              make(map[int]*StoreObs),
+		byObserver:           make(map[string][]*StoreObs),
+		byNode:               make(map[string][]*StoreTx),
+		nodeHashes:           make(map[string]map[string]bool),
+		byPayloadType:        make(map[int][]*StoreTx),
+		byPathHop:            make(map[string][]*StoreTx),
+		spIndex:              make(map[string]int),
+		distHops:             make([]distHopRecord, 0),
+		distPaths:            make([]distPathRecord, 0),
+		rfCache:              make(map[string]*cachedResult),
+		topoCache:            make(map[string]*cachedResult),
+		hashCache:            make(map[string]*cachedResult),
+		chanCache:            make(map[string]*cachedResult),
+		distCache:            make(map[string]*cachedResult),
+		subpathCache:         make(map[string]*cachedResult),
+		rfCacheTTL:           15 * time.Second,
+		retentionHours:       24,
+		db:                   db,
+		useResolvedPathIndex: true,
+	}
+	store.initResolvedPathIndex()
+
+	now := time.Now().UTC()
+
+	// Create 10 stale packets with resolved_path data in DB
+	for i := 1; i <= 10; i++ {
+		staleTime := now.Add(-48 * time.Hour).Format(time.RFC3339)
+		db.conn.Exec("INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (?, '', ?, ?)",
+			i, fmt.Sprintf("h%d", i), staleTime)
+		db.conn.Exec("INSERT INTO observations (id, transmission_id, observer_idx, path_json, timestamp, resolved_path) VALUES (?, ?, 1, ?, ?, ?)",
+			i, i, `["aa"]`, now.Add(-48*time.Hour).Unix(), `["pk`+fmt.Sprintf("%d", i)+`"]`)
+
+		tx := &StoreTx{
+			ID:        i,
+			Hash:      fmt.Sprintf("h%d", i),
+			FirstSeen: staleTime,
+		}
+		obs := &StoreObs{ID: i, TransmissionID: i, ObserverID: "obs0", Timestamp: staleTime}
+		tx.Observations = []*StoreObs{obs}
+		store.packets = append(store.packets, tx)
+		store.byHash[tx.Hash] = tx
+		store.byTxID[i] = tx
+		store.byObsID[i] = obs
+		store.byObserver["obs0"] = append(store.byObserver["obs0"], obs)
+	}
+
+	// Run eviction in a goroutine
+	evictDone := make(chan int, 1)
+	go func() {
+		evictDone <- store.RunEviction()
+	}()
+
+	// Concurrently try to acquire RLock — should succeed quickly if SQL phase releases the lock
+	lockAcquired := make(chan bool, 1)
+	go func() {
+		// Give eviction a moment to start
+		time.Sleep(5 * time.Millisecond)
+		store.mu.RLock()
+		store.mu.RUnlock()
+		lockAcquired <- true
+	}()
+
+	select {
+	case <-lockAcquired:
+		// Good — lock was available during SQL phase
+	case <-time.After(5 * time.Second):
+		t.Fatal("mu.RLock blocked for >5s — SQL likely running under write lock")
+	}
+
+	evicted := <-evictDone
+	if evicted != 10 {
+		t.Fatalf("expected 10 evicted, got %d", evicted)
 	}
 }
 
@@ -685,6 +773,114 @@ func BenchmarkLoad_BeforeAfter(b *testing.B) {
 		heapUsed := m2.HeapAlloc - m1.HeapAlloc
 		b.ReportMetric(float64(heapUsed)/1048576, "MB")
 	}
+}
+
+// BenchmarkLoad_OldFieldStorage simulates the OLD approach where each observation
+// stored a []*string ResolvedPath directly on the struct. This serves as the "before"
+// baseline for comparison with BenchmarkLoad_BeforeAfter (the "after").
+func BenchmarkLoad_OldFieldStorage(b *testing.B) {
+	const numTx = 10000
+	const numObsPerTx = 5
+	const numHops = 3
+
+	for n := 0; n < b.N; n++ {
+		var m1 runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&m1)
+
+		packets := make([]*StoreTx, 0, numTx)
+		byHash := make(map[string]*StoreTx, numTx)
+		byTxID := make(map[int]*StoreTx, numTx)
+		byObsID := make(map[int]*StoreObs, numTx*numObsPerTx)
+		// Simulate old per-obs []*string storage — keep slices alive in a map
+		oldResolvedPaths := make(map[int][]*string, numTx*numObsPerTx)
+
+		for i := 0; i < numTx; i++ {
+			tx := &StoreTx{
+				ID:       i,
+				Hash:     string(rune(i)),
+				PathJSON: `["aa","bb","cc"]`,
+			}
+			packets = append(packets, tx)
+			byHash[tx.Hash] = tx
+			byTxID[i] = tx
+
+			for j := 0; j < numObsPerTx; j++ {
+				obsID := i*numObsPerTx + j
+				obs := &StoreObs{
+					ID:             obsID,
+					TransmissionID: i,
+					PathJSON:       `["aa","bb","cc"]`,
+				}
+				// OLD approach: each observation stores its own []*string
+				rp := make([]*string, numHops)
+				for h := 0; h < numHops; h++ {
+					s := string(rune(i*numHops + h))
+					rp[h] = &s
+				}
+				oldResolvedPaths[obsID] = rp
+				tx.Observations = append(tx.Observations, obs)
+				byObsID[obs.ID] = obs
+			}
+		}
+
+		var m2 runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&m2)
+
+		heapUsed := m2.HeapAlloc - m1.HeapAlloc
+		b.ReportMetric(float64(heapUsed)/1048576, "MB")
+
+		// Keep everything alive past GC
+		runtime.KeepAlive(packets)
+		runtime.KeepAlive(byHash)
+		runtime.KeepAlive(byTxID)
+		runtime.KeepAlive(byObsID)
+		runtime.KeepAlive(oldResolvedPaths)
+	}
+}
+
+// BenchmarkHopsSeen_Reuse measures allocations from reusing hopsSeen map
+// via clear() vs allocating a new map per observation.
+func BenchmarkHopsSeen_Reuse(b *testing.B) {
+	// Simulate realistic hop counts (10 hops + 10 resolved pubkeys per observation)
+	hops := make([]string, 10)
+	pks := make([]string, 10)
+	for i := range hops {
+		hops[i] = fmt.Sprintf("hop%04d", i)
+		pks[i] = fmt.Sprintf("pk%04d", i+100)
+	}
+
+	b.Run("clear-reuse", func(b *testing.B) {
+		b.ReportAllocs()
+		hopsSeen := make(map[string]bool)
+		for i := 0; i < b.N; i++ {
+			clear(hopsSeen)
+			for _, hop := range hops {
+				hopsSeen[strings.ToLower(hop)] = true
+			}
+			for _, pk := range pks {
+				if !hopsSeen[pk] {
+					hopsSeen[pk] = true
+				}
+			}
+		}
+	})
+
+	b.Run("alloc-each", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			hopsSeen := make(map[string]bool)
+			for _, hop := range hops {
+				hopsSeen[strings.ToLower(hop)] = true
+			}
+			for _, pk := range pks {
+				if !hopsSeen[pk] {
+					hopsSeen[pk] = true
+				}
+			}
+		}
+	})
 }
 
 // BenchmarkPathsThroughNode_Latency measures index lookup performance.

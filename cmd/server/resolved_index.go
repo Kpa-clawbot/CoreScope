@@ -285,20 +285,75 @@ func (s *PacketStore) lruDelete(obsID int) {
 	// Don't scan lruOrder — eviction handles stale entries naturally.
 }
 
-// resolvedPubkeysForEviction fetches resolved pubkeys for a tx from SQL
-// for use during eviction cleanup of byNode/nodeHashes.
-func (s *PacketStore) resolvedPubkeysForEviction(txID int) []string {
-	obsMap := s.fetchResolvedPathsForTx(txID)
-	seen := make(map[string]bool)
-	var result []string
-	for _, rp := range obsMap {
-		for _, p := range rp {
-			if p != nil && *p != "" && !seen[*p] {
-				seen[*p] = true
-				result = append(result, *p)
+// resolvedPubkeysForEvictionBatch fetches resolved pubkeys for multiple txIDs
+// from SQL in a single batched query. Returns a map from txID to unique pubkeys.
+// MUST be called WITHOUT holding s.mu — this is the whole point of the batch approach.
+// Chunks queries to stay under SQLite's 500-parameter limit.
+func (s *PacketStore) resolvedPubkeysForEvictionBatch(txIDs []int) map[int][]string {
+	result := make(map[int][]string, len(txIDs))
+	if len(txIDs) == 0 || s.db == nil || s.db.conn == nil {
+		return result
+	}
+
+	const chunkSize = 499 // SQLite SQLITE_MAX_VARIABLE_NUMBER default is 999; stay well under
+	for start := 0; start < len(txIDs); start += chunkSize {
+		end := start + chunkSize
+		if end > len(txIDs) {
+			end = len(txIDs)
+		}
+		chunk := txIDs[start:end]
+
+		// Build query with placeholders
+		placeholders := make([]byte, 0, len(chunk)*2)
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args[i] = id
+		}
+
+		query := "SELECT transmission_id, resolved_path FROM observations WHERE transmission_id IN (" +
+			string(placeholders) + ") AND resolved_path IS NOT NULL"
+
+		rows, err := s.db.conn.Query(query, args...)
+		if err != nil {
+			continue
+		}
+
+		for rows.Next() {
+			var txID int
+			var rpJSON sql.NullString
+			if err := rows.Scan(&txID, &rpJSON); err != nil {
+				continue
+			}
+			if !rpJSON.Valid || rpJSON.String == "" {
+				continue
+			}
+			rp := unmarshalResolvedPath(rpJSON.String)
+			for _, p := range rp {
+				if p != nil && *p != "" {
+					result[txID] = append(result[txID], *p)
+				}
 			}
 		}
+		rows.Close()
 	}
+
+	// Deduplicate per-txID
+	for txID, pks := range result {
+		seen := make(map[string]bool, len(pks))
+		deduped := pks[:0]
+		for _, pk := range pks {
+			if !seen[pk] {
+				seen[pk] = true
+				deduped = append(deduped, pk)
+			}
+		}
+		result[txID] = deduped
+	}
+
 	return result
 }
 
