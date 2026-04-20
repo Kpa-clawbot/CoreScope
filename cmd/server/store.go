@@ -500,7 +500,17 @@ func (s *PacketStore) Load() error {
 						s.addToByNode(tx, pk)
 					}
 					// touchRelayLastSeen handled in post-load pass
-					// byPathHop resolved keys handled in buildPathHopIndex
+					// byPathHop resolved-key entries
+					hopsSeen := make(map[string]bool)
+					for _, hop := range txGetParsedPath(tx) {
+						hopsSeen[strings.ToLower(hop)] = true
+					}
+					for _, pk := range pks {
+						if !hopsSeen[pk] {
+							hopsSeen[pk] = true
+							s.byPathHop[pk] = append(s.byPathHop[pk], tx)
+						}
+					}
 					// resolvedPubkeyIndex
 					s.addToResolvedPubkeyIndex(tx.ID, pks)
 				}
@@ -740,7 +750,7 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	packets := make([]map[string]interface{}, 0, pageSize)
 	if q.Order == "ASC" {
 		for _, tx := range results[start : start+pageSize] {
-			packets = append(packets, txToMap(tx, q.ExpandObservations))
+			packets = append(packets, s.txToMapWithRP(tx, q.ExpandObservations))
 		}
 	} else {
 		// DESC: newest items are at the tail; page 0 = last pageSize items reversed
@@ -750,7 +760,7 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 			startIdx = 0
 		}
 		for i := endIdx - 1; i >= startIdx; i-- {
-			packets = append(packets, txToMap(results[i], q.ExpandObservations))
+			packets = append(packets, s.txToMapWithRP(results[i], q.ExpandObservations))
 		}
 	}
 	return &PacketResult{Packets: packets, Total: total}
@@ -1148,7 +1158,7 @@ func (s *PacketStore) GetTransmissionByID(id int) map[string]interface{} {
 	if tx == nil {
 		return nil
 	}
-	return txToMap(tx, true)
+	return s.txToMapWithRP(tx, true)
 }
 
 // GetPacketByHash returns a transmission by content hash.
@@ -1160,7 +1170,7 @@ func (s *PacketStore) GetPacketByHash(hash string) map[string]interface{} {
 	if tx == nil {
 		return nil
 	}
-	return txToMap(tx, true)
+	return s.txToMapWithRP(tx, true)
 }
 
 // GetPacketByID returns an observation (enriched with transmission fields) by observation ID.
@@ -1268,7 +1278,7 @@ func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int,
 	packets := make([]map[string]interface{}, 0, pageSize)
 	if order == "ASC" {
 		for _, tx := range filtered[offset : offset+pageSize] {
-			packets = append(packets, txToMap(tx))
+			packets = append(packets, s.txToMapWithRP(tx))
 		}
 	} else {
 		endIdx := total - offset
@@ -1277,7 +1287,7 @@ func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int,
 			startIdx = 0
 		}
 		for i := endIdx - 1; i >= startIdx; i-- {
-			packets = append(packets, txToMap(filtered[i]))
+			packets = append(packets, s.txToMapWithRP(filtered[i]))
 		}
 	}
 	return &PacketResult{Packets: packets, Total: total}
@@ -2287,7 +2297,6 @@ func (s *PacketStore) enrichObs(obs *StoreObs) map[string]interface{} {
 // --- Conversion helpers ---
 
 // txToMap converts a StoreTx to the map shape matching scanTransmissionRow output.
-// resolvedPathFn is an optional function to fetch resolved_path on demand (nil = omit).
 func txToMap(tx *StoreTx, includeObservations ...bool) map[string]interface{} {
 	m := map[string]interface{}{
 		"id":                tx.ID,
@@ -2414,17 +2423,6 @@ func resolvePayloadTypeName(pt *int) string {
 		return name
 	}
 	return fmt.Sprintf("UNK(%d)", *pt)
-}
-
-// nodeInResolvedPath checks whether a transmission's resolved_path contains
-// the target node's full pubkey. Uses the membership index for O(1) lookup
-// with SQL collision-safety fallback. Returns true if the index confirms the
-// target, or if no resolved_path data is available (can't disambiguate = keep).
-//
-// Deprecated: use s.nodeInResolvedPathViaIndex directly. This wrapper exists
-// for call-site compatibility during the #800 transition.
-func (s *PacketStore) nodeInResolvedPathIndexed(tx *StoreTx, targetPK string) bool {
-	return s.nodeInResolvedPathViaIndex(tx, targetPK)
 }
 
 // txGetParsedPath returns cached parsed path hops, parsing on first call.
@@ -2749,8 +2747,7 @@ func estimateStoreTxBytesTypical(numObs int) int64 {
 }
 
 // estimateStoreObsBytes returns the estimated memory cost of a StoreObs.
-// Includes ResolvedPath membership index overhead.
-// estimateStoreObsBytes returns the estimated memory cost of a StoreObs.
+// ResolvedPath membership index overhead is tracked separately.
 func estimateStoreObsBytes(obs *StoreObs) int64 {
 	base := int64(storeObsBaseBytes)
 	base += int64(len(obs.PathJSON) + len(obs.ObserverID))

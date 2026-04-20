@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"hash/fnv"
 	"strings"
-	"sync"
 )
 
 // resolvedPubkeyHash computes a fast 64-bit hash for membership index keying.
@@ -275,6 +274,3 @@ func (s *PacketStore) initResolvedPathIndex() {
 	s.apiResolvedPathLRU = make(map[int][]*string, lruMaxSize)
 	s.lruOrder = make([]int, 0, lruMaxSize)
 }
-
-// Placeholder for sync.RWMutex usage check
-var _ sync.RWMutex
