@@ -416,6 +416,8 @@ func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
 		return fmt.Errorf("rename config: %w", err)
 	}
 	return nil
+}
+
 // blacklistSet lazily builds and caches the nodeBlacklist as a set for O(1) lookups.
 // Uses sync.Once to eliminate the data race on first concurrent access.
 func (c *Config) blacklistSet() map[string]bool {
