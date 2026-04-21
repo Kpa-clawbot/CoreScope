@@ -1,17 +1,23 @@
-FROM golang:1.22-alpine AS builder
+# Build stage always runs natively on the builder's arch ($BUILDPLATFORM)
+# and cross-compiles to $TARGETOS/$TARGETARCH via Go toolchain. No QEMU.
+FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
 
 ARG APP_VERSION=unknown
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIME=unknown
+# Provided by buildx for multi-arch builds
+ARG TARGETOS
+ARG TARGETARCH
 
-# Build server (pure-Go sqlite — no CGO needed)
+# Build server (pure-Go sqlite — no CGO needed, cross-compiles cleanly)
 WORKDIR /build/server
 COPY cmd/server/go.mod cmd/server/go.sum ./
 COPY internal/geofilter/ ../../internal/geofilter/
 COPY internal/sigvalidate/ ../../internal/sigvalidate/
 RUN go mod download
 COPY cmd/server/ ./
-RUN CGO_ENABLED=0 go build -ldflags "-X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" -o /corescope-server .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags "-X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" -o /corescope-server .
 
 # Build ingestor
 WORKDIR /build/ingestor
@@ -20,7 +26,8 @@ COPY internal/geofilter/ ../../internal/geofilter/
 COPY internal/sigvalidate/ ../../internal/sigvalidate/
 RUN go mod download
 COPY cmd/ingestor/ ./
-RUN CGO_ENABLED=0 go build -o /corescope-ingestor .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -o /corescope-ingestor .
 
 # Build decrypt CLI
 WORKDIR /build/decrypt
@@ -28,7 +35,8 @@ COPY cmd/decrypt/go.mod cmd/decrypt/go.sum ./
 COPY internal/channel/ ../../internal/channel/
 RUN go mod download
 COPY cmd/decrypt/ ./
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /corescope-decrypt .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w" -o /corescope-decrypt .
 
 # Runtime image
 FROM alpine:3.20

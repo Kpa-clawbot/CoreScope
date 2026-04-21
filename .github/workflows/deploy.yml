@@ -286,10 +286,6 @@ jobs:
           docker compose -f "$STAGING_COMPOSE_FILE" -p corescope-staging build "$STAGING_SERVICE"
           echo "Built Go staging image ✅"
 
-      - name: Set up QEMU (multi-arch)
-        if: github.event_name == 'push'
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         if: github.event_name == 'push'
         uses: docker/setup-buildx-action@v3
