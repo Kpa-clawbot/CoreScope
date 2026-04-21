@@ -15,6 +15,11 @@ async function test(name, fn) {
     results.push({ name, pass: true });
     console.log(`  \u2705 ${name}`);
   } catch (err) {
+    if (err.skip) {
+      results.push({ name, pass: true, skipped: true });
+      console.log(`  ⏭ ${name}: ${err.message}`);
+      return;
+    }
     results.push({ name, pass: false, error: err.message });
     console.log(`  \u274c ${name}: ${err.message}`);
     console.log(`\nFail-fast: stopping after first failure.`);
@@ -1940,7 +1945,7 @@ async function run() {
         if (fieldTable) {
           for (const tr of fieldTable.querySelectorAll('tr')) {
             const txt = tr.textContent.trim();
-            const sec = txt.match(/^Path\s*\((\d+)\s*hops?\)/);
+            const sec = txt.match(/^Path\s*\((\d+)\s*hops?(?:\s*in\s*raw_hex)?/);
             if (sec) breakdownSectionCount = parseInt(sec[1], 10);
             if (/^\s*\d+\s*Hop\s+\d+\s*—/.test(txt) || /^Hop\s+\d+\s*—/.test(txt.replace(/^\d+/, '').trim())) {
               breakdownRowCount++;
@@ -1961,25 +1966,31 @@ async function run() {
             `Path pill badge ${result.pillBadgeCount} but rendered ${result.pillNameCount} hop names`);
         }
         // And breakdown rendered rows should match its own section count
-        if (result.breakdownRowCount > 0) {
-          assert(result.breakdownRowCount === result.breakdownSectionCount,
-            `Byte breakdown section says ${result.breakdownSectionCount} hops but rendered ${result.breakdownRowCount} hop rows`);
-        }
+        assert(result.breakdownRowCount > 0,
+          'breakdown rows selector matched nothing — selector or DOM changed');
+        assert(result.breakdownRowCount === result.breakdownSectionCount,
+          `Byte breakdown section says ${result.breakdownSectionCount} hops but rendered ${result.breakdownRowCount} hop rows`);
         console.log(`    ✓ Path pill (${result.pillBadgeCount}) and byte breakdown (${result.breakdownSectionCount}) agree`);
         break;
       }
     }
     if (!found) {
-      console.log('    ⏭ No multi-hop packet with byte breakdown found in first 15 rows');
+      if (process.env.E2E_REQUIRE_PATH_TEST === '1') {
+        throw new Error('BLOCKED — no multi-hop packet found in first 15 rows (E2E_REQUIRE_PATH_TEST=1 requires it)');
+      }
+      const skipErr = new Error('SKIP: No multi-hop packet with byte breakdown found in first 15 rows — needs fixture');
+      skipErr.skip = true;
+      throw skipErr;
     }
   });
 
   await browser.close();
 
   // Summary
-  const passed = results.filter(r => r.pass).length;
+  const skipped = results.filter(r => r.skipped).length;
+  const passed = results.filter(r => r.pass && !r.skipped).length;
   const failed = results.filter(r => !r.pass).length;
-  console.log(`\n${passed}/${results.length} tests passed${failed ? `, ${failed} failed` : ''}`);
+  console.log(`\n${passed}/${results.length} tests passed${skipped ? `, ${skipped} skipped` : ''}${failed ? `, ${failed} failed` : ''}`);
   process.exit(failed > 0 ? 1 : 0);
 }
 
