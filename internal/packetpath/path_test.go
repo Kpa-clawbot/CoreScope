@@ -125,3 +125,26 @@ func TestTracePathJSON_UsesPayloadHops(t *testing.T) {
 	_ = snrHops // snrHops == headerHops — used for documentation
 	t.Logf("TRACE: header path (SNR) = %s, payload path (route) = %s", headerJSON, payloadJSON)
 }
+
+func TestDecodeHopsForPayload_NonTrace(t *testing.T) {
+	// header 0x01, path_len 0x02, hops 0xAA 0xBB, then payload bytes
+	raw := "0102AABB00"
+	hops, err := DecodeHopsForPayload(raw, 0x05) // GRP_TXT — header path bytes ARE hops
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hops) != 2 || hops[0] != "AA" || hops[1] != "BB" {
+		t.Errorf("expected [AA BB], got %v", hops)
+	}
+}
+
+func TestDecodeHopsForPayload_TraceReturnsError(t *testing.T) {
+	raw := "010205F00100"
+	hops, err := DecodeHopsForPayload(raw, PayloadTRACE)
+	if err != ErrPayloadHasNoHeaderHops {
+		t.Errorf("expected ErrPayloadHasNoHeaderHops, got %v", err)
+	}
+	if hops != nil {
+		t.Errorf("expected nil hops for TRACE, got %v", hops)
+	}
+}
