@@ -519,7 +519,7 @@
               if (p.decoded_json) existing.decoded_json = p.decoded_json;
               // Update expanded children if this group is expanded
               if (expandedHashes.has(h) && existing._children) {
-                existing._children.unshift(p);
+                existing._children.unshift(clearParsedCache({...p, _isObservation: true}));
                 if (existing._children.length > 200) existing._children.length = 200;
                 sortGroupChildren(existing);
                 // Invalidate row counts — child count changed, so virtual scroll
