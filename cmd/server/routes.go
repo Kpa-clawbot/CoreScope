@@ -2083,7 +2083,7 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 			}
 			snrBuckets[bucket].Count++
 		}
-		if i < 20 {
+		if i < 20 && enriched["hash"] != nil {
 			recentPackets = append(recentPackets, enriched)
 		}
 	}

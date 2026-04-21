@@ -2412,6 +2412,31 @@ func (s *PacketStore) enrichObs(obs *StoreObs) map[string]interface{} {
 		m["payload_type"] = intPtrOrNil(tx.PayloadType)
 		m["route_type"] = intPtrOrNil(tx.RouteType)
 		m["decoded_json"] = strOrNil(tx.DecodedJSON)
+	} else {
+		// Parent tx was evicted from memory — fall back to DB lookup so that
+		// hash/timestamp are always present in the response (root cause of #857).
+		if s.db != nil {
+			if row, err := s.db.GetTransmissionByID(obs.TransmissionID); err == nil && row != nil {
+				if h, ok := row["hash"]; ok {
+					m["hash"] = h
+				}
+				if ts, ok := row["first_seen"]; ok && m["timestamp"] == nil {
+					m["timestamp"] = ts
+				}
+				if rh, ok := row["raw_hex"]; ok {
+					m["raw_hex"] = rh
+				}
+				if pt, ok := row["payload_type"]; ok {
+					m["payload_type"] = pt
+				}
+				if rt, ok := row["route_type"]; ok {
+					m["route_type"] = rt
+				}
+				if dj, ok := row["decoded_json"]; ok {
+					m["decoded_json"] = dj
+				}
+			}
+		}
 	}
 
 	return m
@@ -6580,6 +6605,10 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	for i := len(packets) - 1; i >= len(packets)-recentLimit; i-- {
 		p := s.txToMapWithRP(packets[i])
 		delete(p, "observations")
+		// Defensive: skip packets missing hash or timestamp (belt-and-suspenders for #857)
+		if p["hash"] == nil || p["timestamp"] == nil {
+			continue
+		}
 		recentPackets = append(recentPackets, p)
 	}
 
