@@ -2051,6 +2051,10 @@
       row.addEventListener('click', () => {
         const obsId = row.dataset.obsId;
         selectedObservationId = obsId;
+        // Update URL hash to reflect selected observation (deep linking)
+        const pktHash = pkt.hash || pkt.id;
+        const obsParam = obsId ? `?obs=${obsId}` : '';
+        history.replaceState(null, '', `#/packets/${pktHash}${obsParam}`);
         renderDetail(panel, data, obsId);
       });
     });
