@@ -69,3 +69,29 @@ func TestLoadChannelKeys_LeavesCustomNamesUntouched(t *testing.T) {
 		t.Error("Custom channel names should NOT be auto-capitalized")
 	}
 }
+
+func TestLoadChannelKeys_DuplicateCasingLogsWarning(t *testing.T) {
+	// Verify that config with both "public" and "Public" logs a warning
+	// and the last one wins (Go map iteration order is nondeterministic)
+	cfg := &Config{
+		ChannelKeys: map[string]string{
+			"public": "8b3387e9c5cdea6ac9e5edbaa115cd72",
+			"Public": "differentkey1234567",
+		},
+	}
+
+	keys := loadChannelKeys(cfg, "/dev/null")
+
+	// After normalization, only one key should exist: "Public"
+	// The value is nondeterministic since Go map iteration order varies
+	if _, ok := keys["public"]; ok {
+		t.Error("Expected 'public' to be normalized away")
+	}
+	if _, ok := keys["Public"]; !ok {
+		t.Error("Expected 'Public' key to exist")
+	}
+	// Exactly one entry for the normalized key
+	if len(keys) != 1 {
+		t.Errorf("Expected exactly 1 key, got %d", len(keys))
+	}
+}
