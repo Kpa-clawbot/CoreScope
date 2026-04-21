@@ -1,85 +1,8 @@
 package main
 
 import (
-	"sort"
 	"testing"
 )
-
-// dedupeHopsByPair mirrors the production logic in store.go for testability.
-// It groups distHopRecords by unordered pair, keeps max-distance record per pair,
-// and computes obsCount, bestSnr, medianSnr.
-func dedupeHopsByPair(hops []distHopRecord) []map[string]interface{} {
-	type pairAgg struct {
-		best     *distHopRecord
-		obsCount int
-		maxSNR   *float64
-		snrs     []float64
-	}
-	pairMap := make(map[string]*pairAgg)
-	for i := range hops {
-		h := &hops[i]
-		pk1, pk2 := h.FromPk, h.ToPk
-		if pk1 > pk2 {
-			pk1, pk2 = pk2, pk1
-		}
-		key := pk1 + "|" + pk2
-		agg, ok := pairMap[key]
-		if !ok {
-			agg = &pairAgg{}
-			pairMap[key] = agg
-		}
-		agg.obsCount++
-		if h.SNR != nil {
-			agg.snrs = append(agg.snrs, *h.SNR)
-			if agg.maxSNR == nil || *h.SNR > *agg.maxSNR {
-				v := *h.SNR
-				agg.maxSNR = &v
-			}
-		}
-		if agg.best == nil || h.Dist > agg.best.Dist {
-			agg.best = h
-		}
-	}
-	type pairEntry struct {
-		key string
-		agg *pairAgg
-	}
-	pairs := make([]pairEntry, 0, len(pairMap))
-	for k, v := range pairMap {
-		pairs = append(pairs, pairEntry{k, v})
-	}
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i].agg.best.Dist > pairs[j].agg.best.Dist })
-	result := make([]map[string]interface{}, 0)
-	for i, pe := range pairs {
-		if i >= 20 {
-			break
-		}
-		h := pe.agg.best
-		var medianSNR *float64
-		if len(pe.agg.snrs) > 0 {
-			sorted := make([]float64, len(pe.agg.snrs))
-			copy(sorted, pe.agg.snrs)
-			sort.Float64s(sorted)
-			mid := len(sorted) / 2
-			if len(sorted)%2 == 0 {
-				v := (sorted[mid-1] + sorted[mid]) / 2
-				medianSNR = &v
-			} else {
-				v := sorted[mid]
-				medianSNR = &v
-			}
-		}
-		result = append(result, map[string]interface{}{
-			"fromName": h.FromName, "fromPk": h.FromPk,
-			"toName": h.ToName, "toPk": h.ToPk,
-			"dist": h.Dist, "type": h.Type,
-			"bestSnr": floatPtrOrNil(pe.agg.maxSNR), "medianSnr": floatPtrOrNil(medianSNR),
-			"obsCount": pe.agg.obsCount,
-			"hash": h.Hash, "timestamp": h.Timestamp,
-		})
-	}
-	return result
-}
 
 func f64(v float64) *float64 { return &v }
 
@@ -93,7 +16,7 @@ func TestDedupeTopHopsByPair(t *testing.T) {
 		{FromPk: "CCC", ToPk: "DDD", FromName: "C", ToName: "D", Dist: 50, Type: "C↔R", SNR: f64(7.0), Hash: "h6", Timestamp: "t6"},
 	}
 
-	result := dedupeHopsByPair(hops)
+	result := dedupeHopsByPair(hops, 20)
 
 	if len(result) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(result))
@@ -108,9 +31,8 @@ func TestDedupeTopHopsByPair(t *testing.T) {
 		t.Errorf("expected obsCount 5, got %v", ab["obsCount"])
 	}
 	if ab["hash"].(string) != "h1" {
-		t.Errorf("expected hash h1, got %v", ab["hash"])
+		t.Errorf("expected hash h1 (from max-dist record), got %v", ab["hash"])
 	}
-	// bestSnr should be 8.0
 	if ab["bestSnr"].(float64) != 8.0 {
 		t.Errorf("expected bestSnr 8.0, got %v", ab["bestSnr"])
 	}
@@ -130,12 +52,11 @@ func TestDedupeTopHopsByPair(t *testing.T) {
 }
 
 func TestDedupeTopHopsReversePairMerges(t *testing.T) {
-	// (B,A) and (A,B) should merge
 	hops := []distHopRecord{
 		{FromPk: "BBB", ToPk: "AAA", FromName: "B", ToName: "A", Dist: 50, Type: "R↔R", Hash: "h1"},
 		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 80, Type: "R↔R", Hash: "h2"},
 	}
-	result := dedupeHopsByPair(hops)
+	result := dedupeHopsByPair(hops, 20)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(result))
 	}
@@ -152,7 +73,7 @@ func TestDedupeTopHopsNilSNR(t *testing.T) {
 		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 100, Type: "R↔R", SNR: nil, Hash: "h1"},
 		{FromPk: "AAA", ToPk: "BBB", FromName: "A", ToName: "B", Dist: 90, Type: "R↔R", SNR: nil, Hash: "h2"},
 	}
-	result := dedupeHopsByPair(hops)
+	result := dedupeHopsByPair(hops, 20)
 	if len(result) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(result))
 	}
@@ -161,5 +82,35 @@ func TestDedupeTopHopsNilSNR(t *testing.T) {
 	}
 	if result[0]["medianSnr"] != nil {
 		t.Errorf("expected medianSnr nil, got %v", result[0]["medianSnr"])
+	}
+}
+
+func TestDedupeTopHopsLimit(t *testing.T) {
+	// Generate 25 unique pairs, verify limit=20 caps output
+	hops := make([]distHopRecord, 25)
+	for i := range hops {
+		hops[i] = distHopRecord{
+			FromPk: "A", ToPk: string(rune('a' + i)),
+			Dist: float64(i), Type: "R↔R", Hash: "h",
+		}
+	}
+	result := dedupeHopsByPair(hops, 20)
+	if len(result) != 20 {
+		t.Errorf("expected 20 entries, got %d", len(result))
+	}
+}
+
+func TestDedupeTopHopsEvenMedian(t *testing.T) {
+	// Even count: median = avg of two middle values
+	hops := []distHopRecord{
+		{FromPk: "A", ToPk: "B", Dist: 10, Type: "R↔R", SNR: f64(2.0), Hash: "h1"},
+		{FromPk: "A", ToPk: "B", Dist: 20, Type: "R↔R", SNR: f64(4.0), Hash: "h2"},
+		{FromPk: "A", ToPk: "B", Dist: 30, Type: "R↔R", SNR: f64(6.0), Hash: "h3"},
+		{FromPk: "A", ToPk: "B", Dist: 40, Type: "R↔R", SNR: f64(8.0), Hash: "h4"},
+	}
+	result := dedupeHopsByPair(hops, 20)
+	// sorted SNR: [2,4,6,8], median = (4+6)/2 = 5.0
+	if result[0]["medianSnr"].(float64) != 5.0 {
+		t.Errorf("expected medianSnr 5.0, got %v", result[0]["medianSnr"])
 	}
 }

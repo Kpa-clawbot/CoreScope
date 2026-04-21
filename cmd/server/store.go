@@ -247,6 +247,82 @@ type distHopRecord struct {
 	tx         *StoreTx
 }
 
+// dedupeHopsByPair groups hops by unordered node-pair, keeps the max-distance
+// record per pair, and computes obsCount / bestSnr / medianSnr.  limit caps the
+// number of returned entries (sorted by distance descending).
+func dedupeHopsByPair(hops []distHopRecord, limit int) []map[string]interface{} {
+	type pairAgg struct {
+		best     *distHopRecord
+		obsCount int
+		maxSNR   *float64
+		snrs     []float64
+	}
+	pairMap := make(map[string]*pairAgg)
+	for i := range hops {
+		h := &hops[i]
+		pk1, pk2 := h.FromPk, h.ToPk
+		if pk1 > pk2 {
+			pk1, pk2 = pk2, pk1
+		}
+		key := pk1 + "|" + pk2
+		agg, ok := pairMap[key]
+		if !ok {
+			agg = &pairAgg{}
+			pairMap[key] = agg
+		}
+		agg.obsCount++
+		if h.SNR != nil {
+			agg.snrs = append(agg.snrs, *h.SNR)
+			if agg.maxSNR == nil || *h.SNR > *agg.maxSNR {
+				v := *h.SNR
+				agg.maxSNR = &v
+			}
+		}
+		if agg.best == nil || h.Dist > agg.best.Dist {
+			agg.best = h
+		}
+	}
+	type pairEntry struct {
+		key string
+		agg *pairAgg
+	}
+	pairs := make([]pairEntry, 0, len(pairMap))
+	for k, v := range pairMap {
+		pairs = append(pairs, pairEntry{k, v})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].agg.best.Dist > pairs[j].agg.best.Dist })
+	result := make([]map[string]interface{}, 0, min(limit, len(pairs)))
+	for i, pe := range pairs {
+		if i >= limit {
+			break
+		}
+		h := pe.agg.best
+		var medianSNR *float64
+		if len(pe.agg.snrs) > 0 {
+			sorted := make([]float64, len(pe.agg.snrs))
+			copy(sorted, pe.agg.snrs)
+			sort.Float64s(sorted)
+			mid := len(sorted) / 2
+			if len(sorted)%2 == 0 {
+				v := (sorted[mid-1] + sorted[mid]) / 2
+				medianSNR = &v
+			} else {
+				v := sorted[mid]
+				medianSNR = &v
+			}
+		}
+		result = append(result, map[string]interface{}{
+			"fromName": h.FromName, "fromPk": h.FromPk,
+			"toName": h.ToName, "toPk": h.ToPk,
+			"dist": h.Dist, "type": h.Type,
+			"bestSnr": floatPtrOrNil(pe.agg.maxSNR), "medianSnr": floatPtrOrNil(medianSNR),
+			"obsCount": pe.agg.obsCount,
+			"hash": h.Hash, "timestamp": h.Timestamp,
+		})
+	}
+	return result
+}
+
 type distPathRecord struct {
 	Hash      string
 	TotalDist float64
@@ -5114,76 +5190,7 @@ func (s *PacketStore) computeAnalyticsDistance(region string) map[string]interfa
 		}
 	}
 
-	// Dedupe hops by unordered pair, keep max-distance record per pair
-	type pairAgg struct {
-		best     *distHopRecord
-		obsCount int
-		maxSNR   *float64
-		snrs     []float64
-	}
-	pairMap := make(map[string]*pairAgg)
-	for i := range filteredHops {
-		h := &filteredHops[i]
-		pk1, pk2 := h.FromPk, h.ToPk
-		if pk1 > pk2 {
-			pk1, pk2 = pk2, pk1
-		}
-		key := pk1 + "|" + pk2
-		agg, ok := pairMap[key]
-		if !ok {
-			agg = &pairAgg{}
-			pairMap[key] = agg
-		}
-		agg.obsCount++
-		if h.SNR != nil {
-			agg.snrs = append(agg.snrs, *h.SNR)
-			if agg.maxSNR == nil || *h.SNR > *agg.maxSNR {
-				v := *h.SNR
-				agg.maxSNR = &v
-			}
-		}
-		if agg.best == nil || h.Dist > agg.best.Dist {
-			agg.best = h
-		}
-	}
-	type pairEntry struct {
-		key string
-		agg *pairAgg
-	}
-	pairs := make([]pairEntry, 0, len(pairMap))
-	for k, v := range pairMap {
-		pairs = append(pairs, pairEntry{k, v})
-	}
-	sort.Slice(pairs, func(i, j int) bool { return pairs[i].agg.best.Dist > pairs[j].agg.best.Dist })
-	topHops := make([]map[string]interface{}, 0)
-	for i, pe := range pairs {
-		if i >= 20 {
-			break
-		}
-		h := pe.agg.best
-		var medianSNR *float64
-		if len(pe.agg.snrs) > 0 {
-			sorted := make([]float64, len(pe.agg.snrs))
-			copy(sorted, pe.agg.snrs)
-			sort.Float64s(sorted)
-			mid := len(sorted) / 2
-			if len(sorted)%2 == 0 {
-				v := (sorted[mid-1] + sorted[mid]) / 2
-				medianSNR = &v
-			} else {
-				v := sorted[mid]
-				medianSNR = &v
-			}
-		}
-		topHops = append(topHops, map[string]interface{}{
-			"fromName": h.FromName, "fromPk": h.FromPk,
-			"toName": h.ToName, "toPk": h.ToPk,
-			"dist": h.Dist, "type": h.Type,
-			"bestSnr": floatPtrOrNil(pe.agg.maxSNR), "medianSnr": floatPtrOrNil(medianSNR),
-			"obsCount": pe.agg.obsCount,
-			"hash": h.Hash, "timestamp": h.Timestamp,
-		})
-	}
+	topHops := dedupeHopsByPair(filteredHops, 20)
 
 	// Sort and pick top paths
 	sort.Slice(filteredPaths, func(i, j int) bool { return filteredPaths[i].TotalDist > filteredPaths[j].TotalDist })
