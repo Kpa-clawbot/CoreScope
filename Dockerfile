@@ -1,19 +1,17 @@
 FROM golang:1.22-alpine AS builder
 
-RUN apk add --no-cache build-base
-
 ARG APP_VERSION=unknown
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIME=unknown
 
-# Build server
+# Build server (pure-Go sqlite — no CGO needed)
 WORKDIR /build/server
 COPY cmd/server/go.mod cmd/server/go.sum ./
 COPY internal/geofilter/ ../../internal/geofilter/
 COPY internal/sigvalidate/ ../../internal/sigvalidate/
 RUN go mod download
 COPY cmd/server/ ./
-RUN go build -ldflags "-X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" -o /corescope-server .
+RUN CGO_ENABLED=0 go build -ldflags "-X main.Version=${APP_VERSION} -X main.Commit=${GIT_COMMIT} -X main.BuildTime=${BUILD_TIME}" -o /corescope-server .
 
 # Build ingestor
 WORKDIR /build/ingestor
@@ -22,7 +20,7 @@ COPY internal/geofilter/ ../../internal/geofilter/
 COPY internal/sigvalidate/ ../../internal/sigvalidate/
 RUN go mod download
 COPY cmd/ingestor/ ./
-RUN go build -o /corescope-ingestor .
+RUN CGO_ENABLED=0 go build -o /corescope-ingestor .
 
 # Build decrypt CLI
 WORKDIR /build/decrypt
