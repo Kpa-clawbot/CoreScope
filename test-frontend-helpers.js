@@ -5360,6 +5360,7 @@ console.log('\n=== packets.js: buildFieldTable transport offsets (#765) ===');
   ftCtx.window.truncate = ftCtx.truncate;
   ftCtx.escapeHtml = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   ftCtx.window.escapeHtml = ftCtx.escapeHtml;
+  ftCtx.window.HopDisplay = { renderHop: (hex) => hex };
   loadInCtx(ftCtx, 'public/packets.js');
   const { buildFieldTable, fieldRow } = ftCtx.window._packetsTestAPI;
 
@@ -5422,6 +5423,77 @@ console.log('\n=== packets.js: buildFieldTable transport offsets (#765) ===');
     assert.ok(headerIdx < nextHopIdx, 'Header should come before Next Hop');
     assert.ok(nextHopIdx < lastHopIdx, 'Next Hop should come before Last Hop');
     assert.ok(lastHopIdx < pathLenIdx, 'Last Hop should come before Path Length');
+  });
+}
+
+// ===== packets.js: buildFieldTable hop count from path_len (#844) =====
+console.log('\n=== packets.js: buildFieldTable hop count from path_len (#844) ===');
+{
+  const ftCtx = makeSandbox();
+  ftCtx.registerPage = () => {};
+  ftCtx.onWS = () => {};
+  ftCtx.offWS = () => {};
+  ftCtx.api = () => Promise.resolve({});
+  ftCtx.window.getParsedPath = () => [];
+  ftCtx.window.getParsedDecoded = () => ({});
+  const ROUTE_TYPES = {0:'TRANSPORT_FLOOD',1:'FLOOD',2:'DIRECT',3:'TRANSPORT_DIRECT'};
+  const PAYLOAD_TYPES = {0:'ADVERT',1:'TXT_MSG',2:'GRP_TXT',3:'REQ',4:'ACK'};
+  ftCtx.routeTypeName = (n) => ROUTE_TYPES[n] || 'UNKNOWN';
+  ftCtx.payloadTypeName = (n) => PAYLOAD_TYPES[n] || 'UNKNOWN';
+  ftCtx.window.routeTypeName = ftCtx.routeTypeName;
+  ftCtx.window.payloadTypeName = ftCtx.payloadTypeName;
+  ftCtx.truncate = (str, len) => str && str.length > len ? str.slice(0, len) + '…' : (str || '');
+  ftCtx.window.truncate = ftCtx.truncate;
+  ftCtx.escapeHtml = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  ftCtx.window.escapeHtml = ftCtx.escapeHtml;
+  ftCtx.window.HopDisplay = { renderHop: (hex) => hex };
+  loadInCtx(ftCtx, 'public/packets.js');
+  const { buildFieldTable } = ftCtx.window._packetsTestAPI;
+  function makeHex(bytes) { return bytes.map(b => b.toString(16).padStart(2, '0')).join(''); }
+
+  test('#844: byte breakdown uses path_len hop count, not aggregated _parsedPath', () => {
+    // path_len = 0x42 → hash_size=2, hash_count=2
+    // raw_hex: header(11) + path_len(42) + hop0(41B1) + hop1(27D7) + pubkey(32 bytes)...
+    const pubkey = 'C0DEDAD4'.padEnd(64, '0'); // 32 bytes = 64 hex chars
+    const raw = '1142' + '41B1' + '27D7' + pubkey + '00000000' + '0'.repeat(128);
+    const pkt = { raw_hex: raw, route_type: 1, payload_type: 0 };
+    // Pass aggregated pathHops with 7 hops (mismatched)
+    const pathHops = ['41B1', '5EB0', '1000', '2DD2', '52F8', '9535', '762B'];
+    const html = buildFieldTable(pkt, {}, pathHops, {});
+
+    // Section header should say "2 hops", not "7 hops"
+    assert.ok(html.includes('Path (2 hops)'), 'Should show "Path (2 hops)" from path_len, got: ' +
+      (html.match(/Path \(\d+ hops\)/)?.[0] || 'no match'));
+    assert.ok(!html.includes('Path (7 hops)'), 'Should NOT show 7 hops from aggregated path');
+
+    // Should contain hop values from raw_hex
+    assert.ok(html.includes('41B1'), 'Should show hop 0 = 41B1');
+    assert.ok(html.includes('27D7'), 'Should show hop 1 = 27D7');
+
+    // Should NOT contain hops from aggregated path that aren't in raw_hex
+    assert.ok(!html.includes('5EB0'), 'Should NOT show aggregated hop 5EB0');
+    assert.ok(!html.includes('9535'), 'Should NOT show aggregated hop 9535');
+  });
+
+  test('#844: pubkey offset correct after 2-hop path (not after 7-hop)', () => {
+    const pubkey = 'C0DEDAD4'.padEnd(64, '0');
+    const raw = '1142' + '41B1' + '27D7' + pubkey + '00000000' + '0'.repeat(128);
+    const pkt = { raw_hex: raw, route_type: 1, payload_type: 0 };
+    const html = buildFieldTable(pkt, { type: 'ADVERT', pubKey: pubkey }, ['41B1','5EB0','1000','2DD2','52F8','9535','762B'], {});
+
+    // Public Key should be at offset 6 (1 header + 1 path_len + 2*2 hops = 6)
+    // Not at offset 16 (1 + 1 + 2*7 = 16)
+    assert.ok(html.includes('>6<') || html.includes('"6"'),
+      'Public Key should be at offset 6, not 16');
+  });
+
+  test('#844: hashCountVal=0 (direct advert) skips Path section', () => {
+    // path_len = 0x00 → hash_size=1, hash_count=0
+    const raw = '1100' + '0'.repeat(200);
+    const pkt = { raw_hex: raw, route_type: 1, payload_type: 0 };
+    const html = buildFieldTable(pkt, {}, [], {});
+    assert.ok(!html.includes('section-path'), 'Should not render Path section for direct advert');
+    assert.ok(html.includes('direct advert'), 'Should note direct advert in path_length description');
   });
 }
 
