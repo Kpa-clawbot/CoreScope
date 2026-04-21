@@ -47,10 +47,10 @@ const (
 	// The effective window is min(recentSkewWindowCount, samples in 1h).
 	recentSkewWindowSec = 3600
 
-	// BimodalSkewThresholdSec is the absolute skew threshold (1 hour)
+	// bimodalSkewThresholdSec is the absolute skew threshold (1 hour)
 	// above which a sample is considered "bad" — likely firmware emitting
 	// a nonsense timestamp from an uninitialized RTC, not real drift.
-	BimodalSkewThresholdSec = 3600.0
+	bimodalSkewThresholdSec = 3600.0
 
 	// maxPlausibleSkewJumpSec is the largest skew change between
 	// consecutive samples that we treat as physical drift. Anything larger
@@ -509,7 +509,7 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 	//   ok/warn/etc.   — goodFraction >= 0.80 (normal, outliers filtered)
 	var goodSamples []float64
 	for _, v := range recentVals {
-		if math.Abs(v) <= BimodalSkewThresholdSec {
+		if math.Abs(v) <= bimodalSkewThresholdSec {
 			goodSamples = append(goodSamples, v)
 		}
 	}

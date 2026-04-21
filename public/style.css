@@ -49,6 +49,9 @@
     --status-red: #ef4444;
     --status-orange: #f97316;
     --status-purple: #a855f7;
+    --status-amber: #f59e0b;
+    --status-amber-light: #422006;
+    --status-amber-text: #fcd34d;
     --surface-0: #0f0f23;
     --surface-1: #1a1a2e;
     --surface-2: #232340;
@@ -75,6 +78,9 @@
   --status-red: #ef4444;
   --status-orange: #f97316;
   --status-purple: #a855f7;
+  --status-amber: #f59e0b;
+  --status-amber-light: #422006;
+  --status-amber-text: #fcd34d;
   --surface-0: #0f0f23;
   --surface-1: #1a1a2e;
   --surface-2: #232340;
