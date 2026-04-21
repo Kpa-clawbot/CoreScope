@@ -416,11 +416,15 @@ func applySchema(db *sql.DB) error {
 	if row.Scan(&migDone) != nil {
 		log.Println("[migration] Normalizing known channel_hash values...")
 		res, err := db.Exec(`UPDATE transmissions SET channel_hash = 'Public' WHERE channel_hash = 'public' AND payload_type = 5`)
-		if err == nil {
-			n, _ := res.RowsAffected()
-			log.Printf("[migration] Normalized %d channel_hash rows from 'public' to 'Public'", n)
+		if err != nil {
+			log.Printf("[migration] ERROR: failed to normalize channel_hash: %v", err)
+			return fmt.Errorf("migration channel_hash_casing_v1 UPDATE failed: %w", err)
 		}
-		db.Exec(`INSERT INTO _migrations (name) VALUES ('channel_hash_casing_v1')`)
+		n, _ := res.RowsAffected()
+		log.Printf("[migration] Normalized %d channel_hash rows from 'public' to 'Public'", n)
+		if _, err := db.Exec(`INSERT OR IGNORE INTO _migrations (name) VALUES ('channel_hash_casing_v1')`); err != nil {
+			log.Printf("[migration] WARNING: failed to record migration: %v", err)
+		}
 		log.Println("[migration] channel_hash casing normalization complete")
 	}
 
