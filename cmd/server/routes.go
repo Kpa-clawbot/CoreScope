@@ -877,9 +877,11 @@ func (s *Server) handleBatchObservations(w http.ResponseWriter, r *http.Request)
 func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 	param := mux.Vars(r)["id"]
 	var packet map[string]interface{}
+	fromDB := false
 
+	isHash := hashPattern.MatchString(strings.ToLower(param))
 	if s.store != nil {
-		if hashPattern.MatchString(strings.ToLower(param)) {
+		if isHash {
 			packet = s.store.GetPacketByHash(param)
 		}
 		if packet == nil {
@@ -888,6 +890,25 @@ func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 				packet = s.store.GetTransmissionByID(id)
 				if packet == nil {
 					packet = s.store.GetPacketByID(id)
+				}
+			}
+		}
+	}
+	// DB fallback: in-memory PacketStore prunes old entries, but the SQLite
+	// DB retains them and is the source for /api/nodes recentAdverts. Without
+	// this fallback, links from node-detail pages 404 once the packet ages out.
+	if packet == nil && s.db != nil {
+		if isHash {
+			if dbPkt, err := s.db.GetPacketByHash(param); err == nil && dbPkt != nil {
+				packet = dbPkt
+				fromDB = true
+			}
+		}
+		if packet == nil {
+			if id, parseErr := strconv.Atoi(param); parseErr == nil {
+				if dbPkt, err := s.db.GetTransmissionByID(id); err == nil && dbPkt != nil {
+					packet = dbPkt
+					fromDB = true
 				}
 			}
 		}
@@ -901,6 +922,9 @@ func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 	var observations []map[string]interface{}
 	if s.store != nil {
 		observations = s.store.GetObservationsForHash(hash)
+	}
+	if len(observations) == 0 && fromDB && s.db != nil && hash != "" {
+		observations = s.db.GetObservationsForHash(hash)
 	}
 	observationCount := len(observations)
 	if observationCount == 0 {

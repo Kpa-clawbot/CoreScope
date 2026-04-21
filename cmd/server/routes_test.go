@@ -3878,3 +3878,97 @@ func TestPacketsExpand_ResolvedPath(t *testing.T) {
 		t.Error("expected at least one expanded observation with resolved_path")
 	}
 }
+
+// TestPacketDetailFallsBackToDBWhenStoreMisses verifies that handlePacketDetail
+// serves transmissions present in the DB but absent from the in-memory store.
+// This is the recentAdverts → "Not found" bug (#827).
+func TestPacketDetailFallsBackToDBWhenStoreMisses(t *testing.T) {
+	srv, router := setupTestServer(t)
+	// Insert a transmission directly into the DB AFTER store.Load(), so the
+	// in-memory PacketStore won't see it. Mirrors the production case where
+	// the store has pruned an entry but the DB still has it.
+	const dbOnlyHash = "deadbeef00112233"
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := srv.db.conn.Exec(`INSERT INTO transmissions
+		(raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
+		VALUES ('FFEE', ?, ?, 1, 4, '{"type":"ADVERT"}')`, dbOnlyHash, now); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	var txID int
+	if err := srv.db.conn.QueryRow("SELECT id FROM transmissions WHERE hash = ?", dbOnlyHash).Scan(&txID); err != nil {
+		t.Fatalf("lookup tx id: %v", err)
+	}
+	if _, err := srv.db.conn.Exec(`INSERT INTO observations
+		(transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (?, 1, 7.5, -99, '[]', ?)`, txID, time.Now().Unix()); err != nil {
+		t.Fatalf("insert obs: %v", err)
+	}
+
+	// Confirm the store really doesn't have it (precondition for the fix).
+	if got := srv.store.GetPacketByHash(dbOnlyHash); got != nil {
+		t.Fatalf("test precondition failed: store unexpectedly has %s", dbOnlyHash)
+	}
+
+	req := httptest.NewRequest("GET", "/api/packets/"+dbOnlyHash, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	pkt, ok := body["packet"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected packet object")
+	}
+	if pkt["hash"] != dbOnlyHash {
+		t.Errorf("expected hash %s, got %v", dbOnlyHash, pkt["hash"])
+	}
+	// Observations fallback should populate from DB too.
+	obs, _ := body["observations"].([]interface{})
+	if len(obs) == 0 {
+		t.Errorf("expected DB observations to be returned, got 0")
+	}
+}
+
+// TestPacketDetail404WhenAbsentFromBoth verifies that a hash present in
+// neither store nor DB still returns 404 (no false positives from the fallback).
+func TestPacketDetail404WhenAbsentFromBoth(t *testing.T) {
+	_, router := setupTestServer(t)
+	req := httptest.NewRequest("GET", "/api/packets/0011223344556677", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 404 {
+		t.Errorf("expected 404, got %d (body: %s)", w.Code, w.Body.String())
+	}
+}
+
+// TestPacketDetailPrefersStoreOverDB verifies the store result wins when the
+// hash exists in both — the DB fallback must not double-fetch / overwrite.
+func TestPacketDetailPrefersStoreOverDB(t *testing.T) {
+	srv, router := setupTestServer(t)
+	// abc123def4567890 is seeded in both DB and (after Load) the store.
+	const hash = "abc123def4567890"
+	if got := srv.store.GetPacketByHash(hash); got == nil {
+		t.Fatalf("test precondition failed: store should have %s", hash)
+	}
+
+	req := httptest.NewRequest("GET", "/api/packets/"+hash, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var body map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &body)
+	pkt, _ := body["packet"].(map[string]interface{})
+	if pkt == nil || pkt["hash"] != hash {
+		t.Fatalf("expected packet with hash %s, got %v", hash, pkt)
+	}
+	// observation_count comes from store observations (2 seeded for tx 1).
+	if cnt, _ := body["observation_count"].(float64); cnt != 2 {
+		t.Errorf("expected observation_count=2 (from store), got %v", body["observation_count"])
+	}
+}

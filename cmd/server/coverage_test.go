@@ -585,12 +585,15 @@ func TestHandlePacketsMultiNodeWithStore(t *testing.T) {
 func TestHandlePacketDetailNoStore(t *testing.T) {
 	_, router := setupNoStoreServer(t)
 
+	// With no in-memory store, handlePacketDetail now falls back to the DB
+	// (#827). The seeded transmissions are present in the DB, so by-hash and
+	// by-ID lookups succeed; only truly absent IDs return 404.
 	t.Run("by hash", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/packets/abc123def4567890", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
-		if w.Code != 404 {
-			t.Fatalf("expected 404 (no store), got %d: %s", w.Code, w.Body.String())
+		if w.Code != 200 {
+			t.Fatalf("expected 200 (DB fallback), got %d: %s", w.Code, w.Body.String())
 		}
 	})
 
@@ -598,8 +601,8 @@ func TestHandlePacketDetailNoStore(t *testing.T) {
 		req := httptest.NewRequest("GET", "/api/packets/1", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
-		if w.Code != 404 {
-			t.Fatalf("expected 404 (no store), got %d: %s", w.Code, w.Body.String())
+		if w.Code != 200 {
+			t.Fatalf("expected 200 (DB fallback), got %d: %s", w.Code, w.Body.String())
 		}
 	})
 

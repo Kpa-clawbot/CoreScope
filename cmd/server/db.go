@@ -692,6 +692,20 @@ func (db *DB) GetPacketByHash(hash string) (map[string]interface{}, error) {
 	return nil, nil
 }
 
+// GetObservationsForHash returns all observations for the transmission with
+// the given content hash. Used as a fallback by the packet-detail handler
+// when the in-memory PacketStore has pruned the entry but the DB still has it.
+func (db *DB) GetObservationsForHash(hash string) []map[string]interface{} {
+	var txID int
+	err := db.conn.QueryRow("SELECT id FROM transmissions WHERE hash = ?",
+		strings.ToLower(hash)).Scan(&txID)
+	if err != nil {
+		return nil
+	}
+	obsByTx := db.getObservationsForTransmissions([]int{txID})
+	return obsByTx[txID]
+}
+
 
 // GetNodes returns filtered, paginated node list.
 func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortBy, region string) ([]map[string]interface{}, int, map[string]int, error) {
