@@ -6040,6 +6040,70 @@ console.log('\n=== analytics.js: renderCollisionsFromServer collision table ==='
   });
 }
 
+// ─── #862: Pubkey prefix search ──────────────────────────────────────────────
+{
+  const ctx = makeSandbox();
+  ctx.ROLE_COLORS = { repeater: '#22c55e', room: '#6366f1', companion: '#3b82f6', sensor: '#f59e0b' };
+  ctx.ROLE_STYLE = {};
+  ctx.TYPE_COLORS = {};
+  ctx.getNodeStatus = () => 'active';
+  ctx.getHealthThresholds = () => ({ staleMs: 600000, degradedMs: 1800000, silentMs: 86400000 });
+  ctx.timeAgo = () => '1m ago';
+  ctx.truncate = (s) => s;
+  ctx.escapeHtml = (s) => String(s || '');
+  ctx.payloadTypeName = () => 'Advert';
+  ctx.payloadTypeColor = () => 'advert';
+  ctx.registerPage = () => {};
+  ctx.RegionFilter = { init: () => {}, onChange: () => () => {}, getRegionParam: () => '' };
+  ctx.debouncedOnWS = () => null;
+  ctx.onWS = () => {};
+  ctx.offWS = () => {};
+  ctx.debounce = (fn) => fn;
+  ctx.api = () => Promise.resolve({ nodes: [], counts: {} });
+  ctx.invalidateApiCache = () => {};
+  ctx.CLIENT_TTL = { nodeList: 90000, nodeDetail: 240000, nodeHealth: 240000 };
+  ctx.initTabBar = () => {};
+  ctx.getFavorites = () => [];
+  ctx.favStar = () => '';
+  ctx.bindFavStars = () => {};
+  ctx.makeColumnsResizable = () => {};
+  ctx.Set = Set;
+  ctx.HEALTH_THRESHOLDS = { infraSilentMs: 86400000, nodeSilentMs: 7200000 };
+  loadInCtx(ctx, 'public/nodes.js');
+
+  const matchesSearch = ctx.window._nodesMatchesSearch;
+
+  test('#862: _nodesMatchesSearch matches name substring', () => {
+    const node = { name: 'MyRepeater', public_key: '3faebb0011223344' };
+    assert.strictEqual(matchesSearch(node, 'repeat'), true);
+    assert.strictEqual(matchesSearch(node, 'REPEAT'), true);
+  });
+
+  test('#862: _nodesMatchesSearch matches pubkey prefix (hex)', () => {
+    const node = { name: 'MyRepeater', public_key: '3faebb0011223344' };
+    assert.strictEqual(matchesSearch(node, '3f'), true);
+    assert.strictEqual(matchesSearch(node, '3fae'), true);
+    assert.strictEqual(matchesSearch(node, '3FAEBB'), true);
+  });
+
+  test('#862: _nodesMatchesSearch does NOT match pubkey substring (only prefix)', () => {
+    const node = { name: 'MyRepeater', public_key: '3faebb0011223344' };
+    assert.strictEqual(matchesSearch(node, 'aebb'), false);
+  });
+
+  test('#862: _nodesMatchesSearch returns true for empty query', () => {
+    const node = { name: 'Test', public_key: 'abcdef1234567890' };
+    assert.strictEqual(matchesSearch(node, ''), true);
+    assert.strictEqual(matchesSearch(node, null), true);
+  });
+
+  test('#862: _nodesMatchesSearch mixed query (non-hex) only matches name', () => {
+    const node = { name: 'alpha', public_key: 'abcdef1234567890' };
+    assert.strictEqual(matchesSearch(node, 'xyz'), false);
+    assert.strictEqual(matchesSearch(node, 'alph'), true);
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
