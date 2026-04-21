@@ -808,6 +808,12 @@ func loadChannelKeys(cfg *Config, configPath string) map[string]string {
 		if normalized != k {
 			log.Printf("[channels] Normalizing known channel key %q → %q for display", k, normalized)
 		}
+		// Detect config collision: if both "public" and "Public" are present,
+		// the normalized key collides. Log a warning and let the last one win.
+		if existing, dupe := keys[normalized]; dupe {
+			log.Printf("[channels] WARNING: duplicate channel key %q — config has both %q and another key normalizing to %q, keeping last value", normalized, k, normalized)
+			_ = existing
+		}
 		keys[normalized] = v
 	}
 
