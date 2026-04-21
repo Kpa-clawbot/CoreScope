@@ -432,10 +432,11 @@ jobs:
 
       - name: Smoke test staging API
         run: |
-          if curl -sf http://localhost:82/api/stats | grep -q engine; then
+          PORT="${STAGING_GO_HTTP_PORT:-80}"
+          if curl -sf "http://localhost:${PORT}/api/stats" | grep -q engine; then
             echo "Staging verified — engine field present ✅"
           else
-            echo "Staging /api/stats did not return engine field"
+            echo "Staging /api/stats did not return engine field (port ${PORT})"
             exit 1
           fi
 
