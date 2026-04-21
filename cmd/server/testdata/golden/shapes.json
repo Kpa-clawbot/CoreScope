@@ -42,14 +42,20 @@
             "type": {
               "type": "string"
             },
-            "snr": {
-              "type": "number"
-            },
             "hash": {
               "type": "string"
             },
             "timestamp": {
               "type": "string"
+            },
+            "bestSnr": {
+              "type": "number"
+            },
+            "medianSnr": {
+              "type": "number"
+            },
+            "obsCount": {
+              "type": "number"
             }
           }
         }
