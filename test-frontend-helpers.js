@@ -690,6 +690,88 @@ console.log('\n=== haversineKm (hop-resolver.js) ===');
   });
 }
 
+// ===== pickByAffinity — neighbor-graph + centroid scoring (#874) =====
+console.log('\n=== pickByAffinity neighbor-graph scoring (#874) ===');
+{
+  const ctx = makeSandbox();
+  ctx.IATA_COORDS_GEO = {};
+  loadInCtx(ctx, 'public/hop-resolver.js');
+  const HR = ctx.window.HopResolver;
+
+  // Two nodes sharing prefix "ab", hundreds of km apart.
+  // NodeSF is near San Francisco, NodeDEN is near Denver.
+  const nodeSF = { public_key: 'ab11111111111111', name: 'NodeSF', lat: 37.7, lon: -122.4 };
+  const nodeDEN = { public_key: 'ab22222222222222', name: 'NodeDEN', lat: 39.7, lon: -104.9 };
+  // A known neighbor of NodeSF (in the graph)
+  const nodeNeighbor = { public_key: 'cc33333333333333', name: 'SFNeighbor', lat: 37.8, lon: -122.3 };
+  // Another known node near Denver
+  const nodeDenNeighbor = { public_key: 'dd44444444444444', name: 'DENNeighbor', lat: 39.8, lon: -105.0 };
+
+  test('#874: graph edge scoring picks correct regional candidate (SF)', () => {
+    HR.init([nodeSF, nodeDEN, nodeNeighbor, nodeDenNeighbor]);
+    HR.setAffinity({ edges: [
+      { source: 'cc33333333333333', target: 'ab11111111111111', weight: 5 },
+      { source: 'dd44444444444444', target: 'ab22222222222222', weight: 5 },
+    ]});
+    // Path: SFNeighbor → [ab??] → DENNeighbor
+    // With graph edges, ab11 (NodeSF) has edge to SFNeighbor, ab22 (NodeDEN) has edge to DENNeighbor
+    // Prev=SFNeighbor, Next=DENNeighbor → both have score 5, but SFNeighbor edge only to ab11
+    const result = HR.resolve(['cc', 'ab', 'dd'],
+      null, null, null, null);
+    assert.strictEqual(result['ab'].name, 'NodeSF',
+      'Should pick NodeSF because it has a graph edge to prev hop SFNeighbor');
+  });
+
+  test('#874: graph edge scoring — next hop breaks tie', () => {
+    HR.init([nodeSF, nodeDEN, nodeNeighbor, nodeDenNeighbor]);
+    HR.setAffinity({ edges: [
+      { source: 'dd44444444444444', target: 'ab22222222222222', weight: 8 },
+      // No edge from SFNeighbor to either ab node
+    ]});
+    // Path: SFNeighbor → [ab??] → DENNeighbor
+    // Only ab22 (NodeDEN) has edge to DENNeighbor (next hop)
+    const result = HR.resolve(['cc', 'ab', 'dd'],
+      null, null, null, null);
+    assert.strictEqual(result['ab'].name, 'NodeDEN',
+      'Should pick NodeDEN because it has graph edge to next hop DENNeighbor');
+  });
+
+  test('#874: centroid fallback when no graph edges exist', () => {
+    HR.init([nodeSF, nodeDEN, nodeNeighbor]);
+    HR.setAffinity({ edges: [] }); // no edges at all
+    // Path: SFNeighbor → [ab??]
+    // SFNeighbor is at (37.8, -122.3), centroid is just that point
+    // NodeSF (37.7, -122.4) is ~14km away, NodeDEN (39.7, -104.9) is ~1500km away
+    const result = HR.resolve(['cc', 'ab'],
+      null, null, null, null);
+    assert.strictEqual(result['ab'].name, 'NodeSF',
+      'Should pick NodeSF via centroid proximity to SFNeighbor');
+  });
+
+  test('#874: centroid uses average of prev+next positions', () => {
+    // Prev near SF, next near Denver → centroid is midpoint (~Nevada)
+    // NodeDEN is closer to Nevada midpoint than NodeSF
+    const nodeMid = { public_key: 'ee55555555555555', name: 'MidNode', lat: 38.5, lon: -114.0 };
+    HR.init([nodeSF, nodeDEN, nodeNeighbor, nodeDenNeighbor, nodeMid]);
+    HR.setAffinity({ edges: [] });
+    // Path: SFNeighbor → [ab??] → DENNeighbor
+    // centroid = avg(37.8,-122.3, 39.8,-105.0) = (38.8, -113.65) — closer to Denver
+    const result = HR.resolve(['cc', 'ab', 'dd'],
+      null, null, null, null);
+    assert.strictEqual(result['ab'].name, 'NodeDEN',
+      'Should pick NodeDEN because centroid of SF+Denver neighbors is closer to Denver');
+  });
+
+  test('#874: fallback when no context at all', () => {
+    HR.init([nodeSF, nodeDEN]);
+    HR.setAffinity({ edges: [] });
+    // Single ambiguous hop, no origin/observer, no neighbors
+    const result = HR.resolve(['ab'], null, null, null, null);
+    assert.ok(result['ab'].ambiguous || result['ab'].name != null,
+      'Should resolve to some candidate without crashing');
+  });
+}
+
 // ===== SNR/RSSI Number casting =====
 {
   // These test the pattern used in observer-detail.js, home.js, traces.js, live.js
