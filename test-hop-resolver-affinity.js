@@ -95,5 +95,27 @@ const result6 = HopResolver.resolve(['ee44'], null, null, null, null, null);
 assert(result6['ee44'].name === 'NodeD', 'Unique prefix resolves directly — got: ' + result6['ee44'].name);
 assert(!result6['ee44'].ambiguous, 'Should not be marked ambiguous');
 
+// Test 7: lat=0 / lon=0 candidates are NOT excluded (equator/prime-meridian bug fix)
+console.log('\nTest 7: lat=0 / lon=0 candidates are included in geo scoring');
+const nodeEquator = { public_key: 'ab5555', name: 'EquatorNode', lat: 0, lon: 10 };
+const nodeFar = { public_key: 'ab6666', name: 'FarNode', lat: 60, lon: 60 };
+const anchorNearEq = { public_key: 'cd7777', name: 'AnchorEq', lat: 1, lon: 11 };
+HopResolver.init([nodeEquator, nodeFar, anchorNearEq]);
+HopResolver.setAffinity({});
+// Anchor near equator — EquatorNode (0,10) should be geo-closest
+const result7 = HopResolver.resolve(['cd77', 'ab'], 1.0, 11.0, null, null, null);
+assert(result7['ab'].name === 'EquatorNode',
+  'lat=0 candidate should be included and win by geo — got: ' + result7['ab'].name);
+
+// Test 8: lon=0 candidate is also included
+console.log('\nTest 8: lon=0 candidate is included in geo scoring');
+const nodePrime = { public_key: 'ab8888', name: 'PrimeMeridian', lat: 10, lon: 0 };
+const anchorNearPM = { public_key: 'cd9999', name: 'AnchorPM', lat: 11, lon: 1 };
+HopResolver.init([nodePrime, nodeFar, anchorNearPM]);
+HopResolver.setAffinity({});
+const result8 = HopResolver.resolve(['cd99', 'ab'], 11.0, 1.0, null, null, null);
+assert(result8['ab'].name === 'PrimeMeridian',
+  'lon=0 candidate should be included and win by geo — got: ' + result8['ab'].name);
+
 console.log('\n' + (passed + failed) + ' tests, ' + passed + ' passed, ' + failed + ' failed\n');
 process.exit(failed > 0 ? 1 : 0);

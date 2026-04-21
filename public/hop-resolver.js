@@ -89,18 +89,18 @@ window.HopResolver = (function() {
    * @returns {Object} best candidate
    */
   function pickByAffinity(candidates, prevPubkey, nextPubkey, prevPos, nextPos) {
-    var hasGraph = Object.keys(affinityMap).length > 0;
-    var hasAdj = prevPubkey || nextPubkey;
+    const hasGraph = Object.keys(affinityMap).length > 0;
+    const hasAdj = prevPubkey || nextPubkey;
 
     // Strategy 1: neighbor-graph edge weights (sum of prev + next)
     if (hasGraph && hasAdj) {
-      var scored = candidates.map(function(c) {
-        var s = 0;
+      const scored = candidates.map(function(c) {
+        let s = 0;
         if (prevPubkey) s += getAffinity(prevPubkey, c.pubkey);
         if (nextPubkey) s += getAffinity(nextPubkey, c.pubkey);
         return { candidate: c, edgeScore: s };
       });
-      var withEdges = scored.filter(function(s) { return s.edgeScore > 0; });
+      const withEdges = scored.filter(function(s) { return s.edgeScore > 0; });
       if (withEdges.length > 0) {
         withEdges.sort(function(a, b) { return b.edgeScore - a.edgeScore; });
         _traceMultiCandidate(candidates, scored, withEdges[0].candidate, 'graph');
@@ -109,7 +109,7 @@ window.HopResolver = (function() {
     }
 
     // Strategy 2/3: geographic — centroid of prev+next, or single anchor
-    var anchorLat = null, anchorLon = null, anchorCount = 0;
+    let anchorLat = null, anchorLon = null, anchorCount = 0;
     if (prevPos && prevPos.lat != null && prevPos.lon != null) {
       anchorLat = (anchorLat || 0) + prevPos.lat;
       anchorLon = (anchorLon || 0) + prevPos.lon;
@@ -123,8 +123,8 @@ window.HopResolver = (function() {
     if (anchorCount > 0) {
       anchorLat /= anchorCount;
       anchorLon /= anchorCount;
-      var geoScored = candidates.map(function(c) {
-        var d = (c.lat && c.lon && !(c.lat === 0 && c.lon === 0))
+      const geoScored = candidates.map(function(c) {
+        const d = (c.lat != null && c.lon != null && !(c.lat === 0 && c.lon === 0))
           ? haversineKm(c.lat, c.lon, anchorLat, anchorLon) : 999999;
         return { candidate: c, distKm: d };
       });
@@ -143,10 +143,10 @@ window.HopResolver = (function() {
     if (typeof console === 'undefined' || !console.debug) return;
     if (candidates.length < 2) return;
     try {
-      var prefix = candidates[0].pubkey ? candidates[0].pubkey.slice(0, 2) : '??';
-      var scoreSummary = scored ? scored.map(function(s) {
-        var pk = (s.candidate || s).pubkey || '?';
-        var val = s.edgeScore != null ? s.edgeScore : (s.distKm != null ? s.distKm + 'km' : '?');
+      const prefix = candidates[0].pubkey ? candidates[0].pubkey.slice(0, 2) : '??';
+      const scoreSummary = scored ? scored.map(function(s) {
+        const pk = (s.candidate || s).pubkey || '?';
+        const val = s.edgeScore != null ? s.edgeScore : (s.distKm != null ? s.distKm + 'km' : '?');
         return pk.slice(0, 8) + ':' + val;
       }) : [];
       console.debug('[hop-resolver] hash=' + prefix + ' candidates=' + candidates.length +
@@ -239,7 +239,7 @@ window.HopResolver = (function() {
         if (hopPositions[hop]) continue; // already resolved
         const r = resolved[hop];
         if (!r || !r.ambiguous) continue;
-        const withLoc = r.candidates.filter(c => c.lat && c.lon && !(c.lat === 0 && c.lon === 0));
+        const withLoc = r.candidates.filter(c => c.lat != null && c.lon != null && !(c.lat === 0 && c.lon === 0));
         if (!withLoc.length) continue;
 
         // Find prev resolved neighbor
@@ -334,13 +334,13 @@ window.HopResolver = (function() {
    */
   function resolveFromServer(hops, resolvedPath) {
     if (!hops || !resolvedPath || hops.length !== resolvedPath.length) return {};
-    var result = {};
-    for (var i = 0; i < hops.length; i++) {
-      var hop = hops[i];
-      var pubkey = resolvedPath[i];
+    const result = {};
+    for (let i = 0; i < hops.length; i++) {
+      const hop = hops[i];
+      const pubkey = resolvedPath[i];
       if (!pubkey) continue; // null = unresolved, leave for client-side fallback
       // O(1) lookup via pubkeyIdx built during init()
-      var node = pubkeyIdx[pubkey.toLowerCase()] || null;
+      const node = pubkeyIdx[pubkey.toLowerCase()] || null;
       result[hop] = {
         name: node ? node.name : pubkey.slice(0, 8),
         pubkey: pubkey,
