@@ -6102,6 +6102,18 @@ console.log('\n=== analytics.js: renderCollisionsFromServer collision table ==='
     assert.strictEqual(matchesSearch(node, 'xyz'), false);
     assert.strictEqual(matchesSearch(node, 'alph'), true);
   });
+
+  test('#862: _nodesMatchesSearch hex-named node — name "cafe" with pubkey "deadbeef..."', () => {
+    const node = { name: 'cafe', public_key: 'deadbeef11223344' };
+    // "cafe" matches by name (substring), NOT pubkey prefix
+    assert.strictEqual(matchesSearch(node, 'cafe'), true);
+    // "dead" matches by pubkey prefix
+    assert.strictEqual(matchesSearch(node, 'dead'), true);
+    // "cafe" should NOT match pubkey (not a prefix of "deadbeef")
+    assert.strictEqual(matchesSearch(node, 'beef'), false); // not a prefix, not in name
+    // "ca" matches name substring
+    assert.strictEqual(matchesSearch(node, 'ca'), true);
+  });
 }
 
 // ===== SUMMARY =====

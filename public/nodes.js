@@ -288,6 +288,9 @@
     var html = renderNeighborTable(data.neighbors, limit);
     if (limit && data.neighbors.length > limit) {
       html += '<div style="margin-top:6px;text-align:right"><button class="btn-link show-all-neighbors-btn" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--accent);padding:0">Show all ' + data.neighbors.length + ' neighbors ▼</button></div>';
+    } else if (!limit && data.neighbors.length > 5) {
+      // Collapse toggle when expanded (#855)
+      html += '<div style="margin-top:6px;text-align:right"><button class="btn-link collapse-neighbors-btn" style="font-size:12px;cursor:pointer;background:none;border:none;color:var(--accent);padding:0">Show fewer ▲</button></div>';
     }
     el.innerHTML = html;
 
@@ -296,6 +299,13 @@
     if (expandBtn) {
       expandBtn.addEventListener('click', function() {
         renderNeighborData(data, containerId, 0, headerSelector, null);
+      });
+    }
+    // Wire collapse button (#855)
+    var collapseBtn = el.querySelector('.collapse-neighbors-btn');
+    if (collapseBtn) {
+      collapseBtn.addEventListener('click', function() {
+        renderNeighborData(data, containerId, 5, headerSelector, null);
       });
     }
 
@@ -549,9 +559,10 @@
         </div>
 
         <div class="node-full-card" id="node-packets">
-          <h4>Recent Packets (${adverts.filter(p => p.hash && p.timestamp).length})</h4>
+          ${(() => { const validPackets = adverts.filter(p => p.hash && p.timestamp); return `
+          <h4>Recent Packets (${validPackets.length})</h4>
           <div class="node-activity-list">
-            ${adverts.length ? adverts.filter(p => p.hash && p.timestamp).map(p => {
+            ${validPackets.length ? validPackets.map(p => {
               let decoded; try { decoded = JSON.parse(p.decoded_json); } catch {}
               const typeLabel = p.payload_type === 4 ? '📡 Advert' : p.payload_type === 5 ? '💬 Channel' : p.payload_type === 2 ? '✉️ DM' : '📦 Packet';
               const detail = decoded?.text ? ': ' + escapeHtml(truncate(decoded.text, 50)) : decoded?.name ? ' — ' + escapeHtml(decoded.name) : '';
@@ -577,6 +588,7 @@
               </div>`;
             }).join('') : '<div class="text-muted">No recent packets</div>'}
           </div>
+        `; })()}
         </div>`;
 
       // Map
@@ -890,14 +902,7 @@
       let filtered = _allNodes;
       if (activeTab !== 'all') filtered = filtered.filter(n => (n.role || '').toLowerCase() === activeTab);
       if (search) {
-        const q = search.toLowerCase();
-        // #862: hex-like queries match pubkey prefix; text queries match name
-        const isHex = /^[0-9a-f]+$/i.test(q);
-        filtered = filtered.filter(n => {
-          if ((n.name || '').toLowerCase().includes(q)) return true;
-          if (isHex && (n.public_key || '').toLowerCase().startsWith(q)) return true;
-          return false;
-        });
+        filtered = filtered.filter(n => window._nodesMatchesSearch(n, search));
       }
       if (lastHeard) {
         const ms = { '1h': 3600000, '2h': 7200000, '6h': 21600000, '12h': 43200000, '24h': 86400000, '48h': 172800000, '3d': 259200000, '7d': 604800000, '14d': 1209600000, '30d': 2592000000 }[lastHeard];
@@ -1068,7 +1073,8 @@
 
     // #630: Close button for node detail panel (important for mobile full-screen overlay)
     document.getElementById('nodesRight').addEventListener('click', function(e) {
-      // #778: Analytics link — force hashchange via replaceState + assign.
+      // #778/#856: Analytics link — force hashchange via replaceState + assign.
+      // (Details button is handled separately via .node-detail-btn click listener)
       var link = e.target.closest('a.btn-primary[href^="#/nodes/"]');
       if (link) {
         e.preventDefault();
@@ -1184,7 +1190,7 @@
       <div class="node-detail">
         <div class="node-detail-name">${escapeHtml(n.name || '(unnamed)')}${dupBadge}</div>
         <div class="node-detail-role">${renderNodeBadges(n, roleColor)}
-          <button class="btn-primary node-detail-btn" data-pubkey="${encodeURIComponent(n.public_key)}" style="font-size:11px;padding:2px 8px;margin-left:8px;cursor:pointer">🔍 Details</button>
+          <button class="btn-primary node-detail-btn" data-pubkey="${encodeURIComponent(n.public_key)}" aria-label="View details for ${escapeHtml(n.name || n.public_key)}" style="font-size:11px;padding:2px 8px;margin-left:8px;cursor:pointer">🔍 Details</button>
           <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px">📊 Analytics</a>
         </div>
         ${renderStatusExplanation(n)}
@@ -1235,9 +1241,10 @@
         </div>
 
         <div class="node-detail-section">
-          <h4>Recent Packets (${adverts.filter(a => a.hash && a.timestamp).length})</h4>
+          ${(() => { const validPackets = adverts.filter(a => a.hash && a.timestamp); return `
+          <h4>Recent Packets (${validPackets.length})</h4>
           <div id="advertTimeline">
-            ${adverts.length ? adverts.filter(a => a.hash && a.timestamp).map(a => {
+            ${validPackets.length ? validPackets.map(a => {
               let decoded;
               try { decoded = JSON.parse(a.decoded_json); } catch {}
               const pType = PAYLOAD_TYPES[a.payload_type] || 'Packet';
@@ -1256,6 +1263,7 @@
               </div>`;
             }).join('') : '<div class="text-muted" style="padding:8px">No recent packets</div>'}
           </div>
+          `; })()}
         </div>
       </div>`;
 
