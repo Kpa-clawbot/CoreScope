@@ -6198,6 +6198,62 @@ console.log('\n=== analytics.js: renderCollisionsFromServer collision table ==='
   });
 }
 
+// ===== #872 — hop-display unreliable badge =====
+{
+  console.log('\n--- #872: hop-display unreliable warning badge ---');
+
+  function makeHopDisplaySandbox() {
+    const sb = {
+      window: { addEventListener: () => {}, dispatchEvent: () => {} },
+      document: {
+        readyState: 'complete',
+        createElement: () => ({ id: '', textContent: '', innerHTML: '' }),
+        head: { appendChild: () => {} },
+        getElementById: () => null,
+        addEventListener: () => {},
+        querySelectorAll: () => [],
+        querySelector: () => null,
+      },
+      console,
+      Date, Math, Array, Object, String, Number, JSON, RegExp, Map, Set,
+      encodeURIComponent, parseInt, parseFloat, isNaN, Infinity, NaN, undefined,
+      setTimeout: () => {}, setInterval: () => {}, clearTimeout: () => {}, clearInterval: () => {},
+    };
+    sb.window.document = sb.document;
+    sb.self = sb.window;
+    sb.globalThis = sb.window;
+    const ctx = vm.createContext(sb);
+    const hopSrc = fs.readFileSync(__dirname + '/public/hop-display.js', 'utf8');
+    vm.runInContext(hopSrc, ctx);
+    return ctx;
+  }
+
+  const hopCtx = makeHopDisplaySandbox();
+
+  test('#872: unreliable hop renders warning badge, not strikethrough', () => {
+    const html = hopCtx.window.HopDisplay.renderHop('AABB', {
+      name: 'TestNode', pubkey: 'pk123', unreliable: true,
+      ambiguous: false, conflicts: [], globalFallback: false,
+    }, {});
+    // Must contain unreliable warning badge button
+    assert.ok(html.includes('hop-unreliable-btn'), 'should have unreliable badge button');
+    assert.ok(html.includes('⚠️'), 'should have ⚠️ icon');
+    assert.ok(html.includes('Unreliable name resolution'), 'should have tooltip text');
+    // Must NOT contain line-through in inline style (CSS class no longer has it)
+    assert.ok(!html.includes('line-through'), 'should not contain line-through');
+    // Should still have hop-unreliable class for subtle styling
+    assert.ok(html.includes('hop-unreliable'), 'should have hop-unreliable class');
+  });
+
+  test('#872: reliable hop does NOT render unreliable badge', () => {
+    const html = hopCtx.window.HopDisplay.renderHop('CCDD', {
+      name: 'GoodNode', pubkey: 'pk456', unreliable: false,
+      ambiguous: false, conflicts: [], globalFallback: false,
+    }, {});
+    assert.ok(!html.includes('hop-unreliable-btn'), 'should not have unreliable badge');
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);

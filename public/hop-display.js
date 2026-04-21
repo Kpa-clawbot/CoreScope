@@ -81,9 +81,13 @@ window.HopDisplay = (function() {
     const regionalConflicts = conflicts.filter(c => c.regional);
     const badgeCount = regionalConflicts.length > 0 ? regionalConflicts.length : (globalFallback ? conflicts.length : 0);
     const conflictData = escapeHtml(JSON.stringify({ h, conflicts, globalFallback }));
-    const warnBadge = badgeCount > 1
+    const conflictBadge = badgeCount > 1
       ? ` <button class="hop-conflict-btn" data-conflict='${conflictData}' onclick="event.preventDefault();event.stopPropagation();HopDisplay._showFromBtn(this)" title="${badgeCount} candidates — click for details">⚠${badgeCount}</button>`
       : '';
+    const unreliableBadge = unreliable
+      ? ' <button class="hop-unreliable-btn" aria-label="Unreliable name resolution" title="Unreliable name resolution — this hash\u2192name match is geographically inconsistent with the surrounding path hops. The repeater itself may be fine; this specific hop assignment is uncertain.">⚠️</button>'
+      : '';
+    const warnBadge = conflictBadge + unreliableBadge;
 
     const cls = [
       'hop',

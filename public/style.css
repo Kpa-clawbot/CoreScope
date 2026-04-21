@@ -1437,7 +1437,9 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .hop-conflict-name { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hop-conflict-dist { font-size: 11px; color: var(--text-muted); font-family: var(--mono); white-space: nowrap; }
 .hop-conflict-pk { font-size: 10px; color: var(--text-muted); font-family: var(--mono); }
-.hop-unreliable { opacity: 0.5; text-decoration: line-through; }
+.hop-unreliable { opacity: 0.85; }
+.hop-unreliable-btn { background: none; border: none; color: var(--status-yellow, #f59e0b); font-size: 13px;
+  cursor: help; vertical-align: middle; margin-left: 2px; padding: 0 2px; line-height: 1; }
 .hop-global-fallback { border-bottom: 1px dashed var(--status-red); }
 .hop-current { font-weight: 700 !important; color: var(--accent) !important; }
 
