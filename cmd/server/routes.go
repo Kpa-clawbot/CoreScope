@@ -577,7 +577,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		storeDataMB = s.store.trackedMemoryMB()
 	}
-	mem := getMemorySnapshot(storeDataMB)
+	mem := s.getMemorySnapshot(storeDataMB)
 
 	resp := &StatsResponse{
 		TotalPackets:       stats.TotalPackets,

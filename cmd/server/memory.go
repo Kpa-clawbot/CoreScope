@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +31,10 @@ import (
 // processRSSMB and storeDataMB are monotonic only relative to ingest +
 // eviction; both can shrink when packets age out. goHeapInuseMB and goSysMB
 // fluctuate with GC.
+//
+// cgoBytesMB intentionally absent: this build uses the pure-Go
+// modernc.org/sqlite driver, so there is no cgo allocator to measure.
+// Reintroduce only if we ever switch back to mattn/go-sqlite3.
 type MemorySnapshot struct {
 	ProcessRSSMB  float64 `json:"processRSSMB"`
 	GoHeapInuseMB float64 `json:"goHeapInuseMB"`
@@ -39,56 +42,46 @@ type MemorySnapshot struct {
 	StoreDataMB   float64 `json:"storeDataMB"`
 }
 
-// memSnapshotCache rate-limits both ReadMemStats (stop-the-world) and the
-// /proc/self/status read so that hot endpoints (/api/stats, /api/health)
-// don't pay the cost on every request.
+// rssCache rate-limits the /proc/self/status read. Go memory stats are
+// already cached by Server.getMemStats (5s TTL). We use a tighter 1s TTL
+// here so processRSSMB stays reasonably fresh during ops debugging
+// without paying the syscall cost on every /api/stats hit.
 var (
-	memSnapshotMu       sync.Mutex
-	memSnapshotCache    MemorySnapshot
-	memSnapshotCachedAt time.Time
+	rssCacheMu       sync.Mutex
+	rssCacheValueMB  float64
+	rssCacheCachedAt time.Time
 )
 
-const memSnapshotTTL = 1 * time.Second
+const rssCacheTTL = 1 * time.Second
 
-// getMemorySnapshot returns a cached memory snapshot. storeDataMB is filled
-// in by the caller (passed in) since the packet store is the source of
-// truth and we don't want to import a package cycle here.
-//
-// The 1s TTL is a compromise: stats endpoints are typically polled every
-// 5–30s, but operators sometimes hit /api/stats in tight loops while
-// debugging. ReadMemStats stops the world; readProcRSSMB does a small
-// /proc read. Both are cheap individually but add up under burst load.
-func getMemorySnapshot(storeDataMB float64) MemorySnapshot {
-	memSnapshotMu.Lock()
-	defer memSnapshotMu.Unlock()
+// getMemorySnapshot composes a MemorySnapshot using the Server's existing
+// runtime.MemStats cache (5s TTL, used by /api/health and /api/perf too)
+// plus a rate-limited /proc RSS read. storeDataMB is supplied by the
+// caller because the packet store is the source of truth.
+func (s *Server) getMemorySnapshot(storeDataMB float64) MemorySnapshot {
+	ms := s.getMemStats()
 
-	if time.Since(memSnapshotCachedAt) < memSnapshotTTL {
-		snap := memSnapshotCache
-		snap.StoreDataMB = roundMB(storeDataMB)
-		return snap
+	rssCacheMu.Lock()
+	if time.Since(rssCacheCachedAt) > rssCacheTTL {
+		rssCacheValueMB = readProcRSSMB()
+		rssCacheCachedAt = time.Now()
 	}
+	rssMB := rssCacheValueMB
+	rssCacheMu.Unlock()
 
-	var ms runtime.MemStats
-	runtime.ReadMemStats(&ms)
-
-	rssMB := readProcRSSMB()
 	if rssMB <= 0 {
-		// Fallback: Go runtime "Sys" is a reasonable upper bound on what
-		// the kernel actually has resident, ignoring cgo. For pure-Go
-		// builds (modernc.org/sqlite) this is close.
+		// Fallback when /proc is unavailable (non-Linux, sandboxes, etc.).
+		// runtime.Sys is an upper bound on Go-attributable memory and a
+		// reasonable proxy for pure-Go builds.
 		rssMB = float64(ms.Sys) / 1048576.0
 	}
 
-	memSnapshotCache = MemorySnapshot{
+	return MemorySnapshot{
 		ProcessRSSMB:  roundMB(rssMB),
 		GoHeapInuseMB: roundMB(float64(ms.HeapInuse) / 1048576.0),
 		GoSysMB:       roundMB(float64(ms.Sys) / 1048576.0),
+		StoreDataMB:   roundMB(storeDataMB),
 	}
-	memSnapshotCachedAt = time.Now()
-
-	snap := memSnapshotCache
-	snap.StoreDataMB = roundMB(storeDataMB)
-	return snap
 }
 
 // readProcRSSMB parses /proc/self/status for the VmRSS line. Returns 0 on
@@ -98,7 +91,7 @@ func getMemorySnapshot(storeDataMB float64) MemorySnapshot {
 // Safety notes (djb): the file path is hard-coded, no untrusted input is
 // concatenated. We bound the read at 8 KiB (the whole status file is
 // well under 4 KiB on modern kernels) so a corrupt /proc can't OOM us.
-// We only parse digits with strconv; no shell, no exec.
+// We only parse digits with strconv; no shell, no exec, no format strings.
 func readProcRSSMB() float64 {
 	const maxStatusBytes = 8 * 1024
 	f, err := os.Open("/proc/self/status")
@@ -122,7 +115,7 @@ func readProcRSSMB() float64 {
 			return 0
 		}
 		kb, err := strconv.ParseFloat(fields[0], 64)
-		if err != nil {
+		if err != nil || kb < 0 {
 			return 0
 		}
 		// Unit is kB per kernel convention; convert to MB.
@@ -135,6 +128,5 @@ func roundMB(v float64) float64 {
 	if v < 0 {
 		return 0
 	}
-	// One decimal place.
 	return float64(int64(v*10+0.5)) / 10.0
 }
