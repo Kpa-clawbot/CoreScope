@@ -2096,16 +2096,18 @@
     rows += fieldRow(off, 'Path Length', '0x' + (buf.slice(off * 2, off * 2 + 2) || '??'), hashCountVal === 0 ? `hash_count=0 (direct advert)` : `hash_size=${hashSizeVal} byte${hashSizeVal !== 1 ? 's' : ''}, hash_count=${hashCountVal}`);
     off += 1;
 
-    // Path
-    if (pathHops.length > 0) {
-      rows += sectionRow('Path (' + pathHops.length + ' hops)', 'section-path');
-      const hashSize = isNaN(pathByte0) ? 1 : ((pathByte0 >> 6) + 1);
-      for (let i = 0; i < pathHops.length; i++) {
-        const hopHtml = HopDisplay.renderHop(pathHops[i], hopNameCache[pathHops[i]]);
+    // Path — derive hop count from path_len byte (firmware truth), not aggregated _parsedPath
+    const hashSize = isNaN(pathByte0) ? 1 : ((pathByte0 >> 6) + 1);
+    if (typeof hashCountVal === 'number' && hashCountVal > 0) {
+      rows += sectionRow('Path (' + hashCountVal + ' hops)', 'section-path');
+      for (let i = 0; i < hashCountVal; i++) {
+        const hopOff = off + i * hashSize;
+        const hex = buf.slice(hopOff * 2, (hopOff + hashSize) * 2).toUpperCase();
+        const hopHtml = HopDisplay.renderHop(hex, hopNameCache[hex]);
         const label = `Hop ${i} — ${hopHtml}`;
-        rows += fieldRow(off + i * hashSize, label, pathHops[i], '');
+        rows += fieldRow(hopOff, label, hex, '');
       }
-      off += hashSize * pathHops.length;
+      off += hashSize * hashCountVal;
     }
 
     // Payload
