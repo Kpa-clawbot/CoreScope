@@ -233,20 +233,50 @@ func (s *PacketStore) fetchResolvedPathForObs(obsID int) []*string {
 }
 
 // fetchResolvedPathForTxBest returns the best observation's resolved_path for a tx.
+//
+// "Best" = the longest path_json among observations that actually have a stored
+// resolved_path. Earlier versions picked the longest-path obs unconditionally
+// and queried SQL for that single ID — if the longest-path obs had NULL
+// resolved_path while a shorter sibling had one, the call returned nil and
+// callers (e.g. /api/nodes/{pk}/health.recentPackets) lost the field. Fixes
+// #810 by checking all observations and falling back to the longest sibling
+// that has a stored path.
 func (s *PacketStore) fetchResolvedPathForTxBest(tx *StoreTx) []*string {
 	if tx == nil || len(tx.Observations) == 0 {
 		return nil
 	}
-	best := tx.Observations[0]
-	bestLen := pathLen(best.PathJSON)
+	// Fast path: try the longest-path obs first via the LRU/SQL helper.
+	longest := tx.Observations[0]
+	longestLen := pathLen(longest.PathJSON)
 	for _, obs := range tx.Observations[1:] {
-		l := pathLen(obs.PathJSON)
-		if l > bestLen {
-			best = obs
-			bestLen = l
+		if l := pathLen(obs.PathJSON); l > longestLen {
+			longest = obs
+			longestLen = l
 		}
 	}
-	return s.fetchResolvedPathForObs(best.ID)
+	if rp := s.fetchResolvedPathForObs(longest.ID); rp != nil {
+		return rp
+	}
+	// Fallback: longest-path obs has no stored resolved_path. Query all
+	// observations for this tx and pick the one with the longest path_json
+	// that actually has a stored resolved_path.
+	rpMap := s.fetchResolvedPathsForTx(tx.ID)
+	if len(rpMap) == 0 {
+		return nil
+	}
+	var bestRP []*string
+	bestLen := -1
+	for _, obs := range tx.Observations {
+		rp, ok := rpMap[obs.ID]
+		if !ok || rp == nil {
+			continue
+		}
+		if l := pathLen(obs.PathJSON); l > bestLen {
+			bestLen = l
+			bestRP = rp
+		}
+	}
+	return bestRP
 }
 
 // --- Simple LRU cache for resolved paths ---
