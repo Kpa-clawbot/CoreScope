@@ -569,6 +569,16 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		backfillProgress = 1
 	}
 
+	// Memory accounting (#832). storeDataMB is the in-store packet byte
+	// estimate (the old "trackedMB"); processRSSMB / goHeapInuseMB / goSysMB
+	// give ops the breakdown needed to reason about real RSS. All values
+	// share a single 1s-cached snapshot to amortize ReadMemStats cost.
+	var storeDataMB float64
+	if s.store != nil {
+		storeDataMB = s.store.trackedMemoryMB()
+	}
+	mem := getMemorySnapshot(storeDataMB)
+
 	resp := &StatsResponse{
 		TotalPackets:       stats.TotalPackets,
 		TotalTransmissions: &stats.TotalTransmissions,
@@ -592,6 +602,12 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		BackfillProgress:      backfillProgress,
 		SignatureDrops:        s.db.GetSignatureDropCount(),
 		HashMigrationComplete: s.store != nil && s.store.hashMigrationComplete.Load(),
+
+		TrackedMB:     mem.StoreDataMB, // deprecated alias
+		StoreDataMB:   mem.StoreDataMB,
+		ProcessRSSMB:  mem.ProcessRSSMB,
+		GoHeapInuseMB: mem.GoHeapInuseMB,
+		GoSysMB:       mem.GoSysMB,
 	}
 
 	s.statsMu.Lock()
