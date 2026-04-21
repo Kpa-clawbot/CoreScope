@@ -1833,8 +1833,7 @@
     let rawHopCount = null;
     if (obsRawHex.length >= 4) {
       // path_len byte position depends on route type
-      let plOff = 1;
-      if (pkt.route_type === 0 || pkt.route_type === 3) plOff = 5;
+      const plOff = getPathLenOffset(pkt.route_type);
       const plByte = parseInt(obsRawHex.slice(plOff * 2, plOff * 2 + 2), 16);
       if (!isNaN(plByte)) rawHopCount = plByte & 0x3F;
     }
@@ -1884,7 +1883,7 @@
     }
 
     // Parse hash size from path byte
-    const plOff = (pkt.route_type === 0 || pkt.route_type === 3) ? 5 : 1;
+    const plOff = getPathLenOffset(pkt.route_type);
     const rawPathByte = pkt.raw_hex ? parseInt(pkt.raw_hex.slice(plOff * 2, plOff * 2 + 2), 16) : NaN;
     const hashSize = (isNaN(rawPathByte) || (rawPathByte & 0x3F) === 0) ? null : ((rawPathByte >> 6) + 1);
 
@@ -2167,7 +2166,7 @@
 
     // Transport codes come BEFORE path length for transport routes (bytes 1-4)
     let off = 1;
-    if (pkt.route_type === 0 || pkt.route_type === 3) {
+    if (isTransportRoute(pkt.route_type)) {
       rows += sectionRow('Transport Codes', 'section-transport');
       rows += fieldRow(off, 'Next Hop', buf.slice(off * 2, (off + 2) * 2), '');
       rows += fieldRow(off + 2, 'Last Hop', buf.slice((off + 2) * 2, (off + 4) * 2), '');

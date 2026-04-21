@@ -222,6 +222,10 @@ console.log('\n=== app.js: routeTypeName / payloadTypeName ===');
   test('payloadTypeName(4) = Advert', () => assert.strictEqual(ctx.payloadTypeName(4), 'Advert'));
   test('payloadTypeName(2) = Direct Msg', () => assert.strictEqual(ctx.payloadTypeName(2), 'Direct Msg'));
   test('payloadTypeName(99) = UNKNOWN', () => assert.strictEqual(ctx.payloadTypeName(99), 'UNKNOWN'));
+  test('getPathLenOffset: transport route (0) → 5', () => assert.strictEqual(ctx.getPathLenOffset(0), 5));
+  test('getPathLenOffset: transport route (3) → 5', () => assert.strictEqual(ctx.getPathLenOffset(3), 5));
+  test('getPathLenOffset: flood route (1) → 1', () => assert.strictEqual(ctx.getPathLenOffset(1), 1));
+  test('getPathLenOffset: direct route (2) → 1', () => assert.strictEqual(ctx.getPathLenOffset(2), 1));
 }
 
 console.log('\n=== app.js: truncate ===');
@@ -5361,6 +5365,10 @@ console.log('\n=== packets.js: buildFieldTable transport offsets (#765) ===');
   ftCtx.escapeHtml = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   ftCtx.window.escapeHtml = ftCtx.escapeHtml;
   ftCtx.window.HopDisplay = { renderHop: (hex) => hex };
+  ftCtx.isTransportRoute = (rt) => rt === 0 || rt === 3;
+  ftCtx.window.isTransportRoute = ftCtx.isTransportRoute;
+  ftCtx.getPathLenOffset = (rt) => ftCtx.isTransportRoute(rt) ? 5 : 1;
+  ftCtx.window.getPathLenOffset = ftCtx.getPathLenOffset;
   loadInCtx(ftCtx, 'public/packets.js');
   const { buildFieldTable, fieldRow } = ftCtx.window._packetsTestAPI;
 
@@ -5447,6 +5455,10 @@ console.log('\n=== packets.js: buildFieldTable hop count from path_len (#844) ==
   ftCtx.escapeHtml = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   ftCtx.window.escapeHtml = ftCtx.escapeHtml;
   ftCtx.window.HopDisplay = { renderHop: (hex) => hex };
+  ftCtx.isTransportRoute = (rt) => rt === 0 || rt === 3;
+  ftCtx.window.isTransportRoute = ftCtx.isTransportRoute;
+  ftCtx.getPathLenOffset = (rt) => ftCtx.isTransportRoute(rt) ? 5 : 1;
+  ftCtx.window.getPathLenOffset = ftCtx.getPathLenOffset;
   loadInCtx(ftCtx, 'public/packets.js');
   const { buildFieldTable } = ftCtx.window._packetsTestAPI;
 
@@ -5972,8 +5984,13 @@ console.log('\n=== analytics.js: renderCollisionsFromServer collision table ==='
 {
   console.log('\n=== Issue #852: hashSize path_len offset + var(--muted) regression ===');
 
+  // Use getPathLenOffset from app.js (loaded via vm context) to avoid duplicating offset logic
+  const ctx852 = makeSandbox();
+  loadInCtx(ctx852, 'public/roles.js');
+  loadInCtx(ctx852, 'public/app.js');
+
   function extractHashSize(rawHex, routeType) {
-    const plOff = (routeType === 0 || routeType === 3) ? 5 : 1;
+    const plOff = ctx852.getPathLenOffset(routeType);
     const rawPathByte = rawHex ? parseInt(rawHex.slice(plOff * 2, plOff * 2 + 2), 16) : NaN;
     return (isNaN(rawPathByte) || (rawPathByte & 0x3F) === 0) ? null : ((rawPathByte >> 6) + 1);
   }
