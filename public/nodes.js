@@ -1144,6 +1144,19 @@
     makeColumnsResizable('#nodesTable', 'meshcore-nodes-col-widths');
   }
 
+  /**
+   * Navigate to the full-screen node view for `pubkey` from anywhere within
+   * the nodes module. Single source of navigation truth — works regardless
+   * of current hash state (hash assignment alone is a no-op when the hash
+   * is already the target).
+   */
+  function navigateToNode(pubkey) {
+    destroy();
+    var appEl = document.getElementById('app');
+    history.replaceState(null, '', '#/nodes/' + encodeURIComponent(pubkey));
+    init(appEl, pubkey);
+  }
+
   async function selectNode(pubkey) {
     // On mobile, navigate to full-screen node view
     if (window.innerWidth <= 640) {
@@ -1307,12 +1320,11 @@
       } catch {}
     }
 
-    // #856: Wire "Details" button to navigate to full-screen node view
+    // Wire "Details" button via the unified navigateToNode helper
     var detailBtn = panel.querySelector('.node-detail-btn');
     if (detailBtn) {
       detailBtn.addEventListener('click', function() {
-        var pk = detailBtn.getAttribute('data-pubkey');
-        location.hash = '#/nodes/' + pk;
+        navigateToNode(decodeURIComponent(detailBtn.getAttribute('data-pubkey')));
       });
     }
 

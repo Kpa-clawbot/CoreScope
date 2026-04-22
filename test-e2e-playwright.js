@@ -2095,6 +2095,24 @@ async function run() {
     console.log(`    ✓ obs A: ${snapA.pathBytes} path bytes / ${snapA.hopCount} hops; obs B: ${snapB.pathBytes} / ${snapB.hopCount}`);
   });
 
+  // Test: clicking the 🔍 Details button in the nodes side panel navigates to
+  // the full-screen node detail view. Regression: hash already === target,
+  // so location.hash assignment was a no-op and the panel stayed open.
+  await test('Nodes side panel Details button opens full-screen view', async () => {
+    await page.goto(BASE + '#/nodes', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('table tbody tr[data-action]', { timeout: 15000 });
+    await page.waitForTimeout(500);
+    // Open side panel
+    await page.click('table tbody tr[data-action]');
+    await page.waitForSelector('#nodesRight .node-detail-btn', { timeout: 5000 });
+    // Click Details
+    await page.click('#nodesRight .node-detail-btn');
+    // Wait for full-screen view to appear
+    await page.waitForSelector('.node-fullscreen', { timeout: 5000 });
+    const isFullScreen = await page.evaluate(() => !!document.querySelector('.node-fullscreen'));
+    assert(isFullScreen, 'Details button should open full-screen node view');
+  });
+
   await browser.close();
 
   // Summary
