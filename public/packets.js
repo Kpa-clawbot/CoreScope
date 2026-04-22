@@ -2488,7 +2488,7 @@
       renderTableRows();
       return;
     }
-    // Single fetch — gets packet + observations + path + breakdown
+    // Single fetch — gets packet + observations + path
     try {
       const data = await api(`/packets/${hash}`);
       const pkt = data.packet;
