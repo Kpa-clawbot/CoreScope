@@ -557,7 +557,8 @@ func TestSeverityUsesRecentNotMedian(t *testing.T) {
 
 	baseObs := int64(1700000000)
 	var txs []*StoreTx
-	for i := 0; i < 105; i++ {
+	// 100 bad samples then 25 good — recent window (20) is dominated by good.
+	for i := 0; i < 125; i++ {
 		obsTS := baseObs + int64(i)*300 // 5 min apart
 		var skew int64 = -60
 		if i >= 100 {
@@ -646,12 +647,13 @@ func TestReporterScenario_789(t *testing.T) {
 
 	baseObs := int64(1700000000)
 	var txs []*StoreTx
-	// 1657 samples with the bad ~-683-day skew (the historical poison),
-	// then 5 freshly corrected samples at -0.8s — totals 1662.
-	for i := 0; i < 1662; i++ {
+	// 1660 samples with the bad ~-683-day skew (the historical poison),
+	// then 20 freshly corrected samples at -0.8s — totals 1680.
+	// Need ≥20 corrected to fill the recent-window (recentSkewWindowCount=20).
+	for i := 0; i < 1680; i++ {
 		obsTS := baseObs + int64(i)*60 // 1 min apart
 		var skew int64
-		if i < 1657 {
+		if i < 1660 {
 			skew = -59063561 // ~ -683 days
 		} else {
 			skew = -1 // corrected (rounded; reporter saw -0.8)
@@ -680,8 +682,12 @@ func TestReporterScenario_789(t *testing.T) {
 		t.Fatal("nil result")
 	}
 	// Severity must reflect current health, not the all-time median.
-	if r.Severity != SkewOK && r.Severity != SkewWarning {
-		t.Errorf("severity = %v, want ok/warning (recent samples are healthy)", r.Severity)
+	// Post-#845 + hysteresis: a node with massive historical bad samples
+	// is correctly flagged bimodal_clock even when recent window is clean,
+	// because operators need to know the RTC is flaky. SkewOK only when
+	// long-term ALSO looks healthy.
+	if r.Severity != SkewOK && r.Severity != SkewWarning && r.Severity != SkewBimodalClock {
+		t.Errorf("severity = %v, want ok/warning/bimodal_clock (recent samples are healthy)", r.Severity)
 	}
 	if math.Abs(r.RecentMedianSkewSec) > 5 {
 		t.Errorf("recentMedianSkewSec = %v, want near 0", r.RecentMedianSkewSec)
@@ -952,5 +958,118 @@ func TestAllGood_OK_845(t *testing.T) {
 	}
 	if r.RecentBadSampleCount != 0 {
 		t.Errorf("recentBadSampleCount = %v, want 0", r.RecentBadSampleCount)
+	}
+}
+
+// TestBimodalHysteresis: a node with mostly good long-term samples but a
+// recent burst of all-bad samples must stay bimodal_clock, NOT flip to
+// no_clock. This is the "Kpa Roof Solar" scenario seen on staging
+// (2026-04-22): historically bimodal node hits a transient all-bad burst
+// and the operator briefly sees "🚫 No Clock" even though the most recent
+// real advert decoded with a valid 2026 timestamp.
+func TestBimodalHysteresis(t *testing.T) {
+	ps := NewPacketStore(nil, nil)
+	pt := 4
+	baseObs := int64(1700000000)
+	var txs []*StoreTx
+	// 80 historical samples: 50% good (-2s), 50% bad (-58M sec ≈ -1.8yr)
+	for i := 0; i < 80; i++ {
+		obsTS := baseObs + int64(i)*60
+		var skew int64 = -2
+		if i%2 == 0 {
+			skew = -58000000
+		}
+		tx := &StoreTx{
+			Hash:        fmt.Sprintf("hist-%04d", i),
+			PayloadType: &pt,
+			DecodedJSON: `{"payload":{"timestamp":` + formatInt64(obsTS+skew) + `}}`,
+			Observations: []*StoreObs{
+				{ObserverID: "obs1", Timestamp: time.Unix(obsTS, 0).UTC().Format(time.RFC3339)},
+			},
+		}
+		txs = append(txs, tx)
+	}
+	// 25 recent samples ALL bad — fills the recent window (size 20) entirely
+	// with bad samples. recent goodFraction = 0.
+	for i := 80; i < 105; i++ {
+		obsTS := baseObs + int64(i)*60
+		tx := &StoreTx{
+			Hash:        fmt.Sprintf("badburst-%04d", i),
+			PayloadType: &pt,
+			DecodedJSON: `{"payload":{"timestamp":` + formatInt64(obsTS-58000000) + `}}`,
+			Observations: []*StoreObs{
+				{ObserverID: "obs1", Timestamp: time.Unix(obsTS, 0).UTC().Format(time.RFC3339)},
+			},
+		}
+		txs = append(txs, tx)
+	}
+	ps.mu.Lock()
+	ps.byNode["BIHYST"] = txs
+	for _, tx := range txs {
+		ps.byPayloadType[4] = append(ps.byPayloadType[4], tx)
+	}
+	ps.clockSkew.computeInterval = 0
+	ps.mu.Unlock()
+
+	r := ps.GetNodeClockSkew("BIHYST")
+	if r == nil {
+		t.Fatal("nil result")
+	}
+	// Without hysteresis: severity would be no_clock (recent goodFraction=0).
+	// With hysteresis: long-term goodFraction ≈ 0.38 ≥ 0.10, so stays bimodal.
+	if r.Severity != SkewBimodalClock {
+		t.Errorf("severity = %v, want bimodal_clock (long-term has good samples)", r.Severity)
+	}
+	if r.GoodFraction != 0 {
+		t.Errorf("recent goodFraction = %v, want 0 (bad burst)", r.GoodFraction)
+	}
+	if r.LongTermGoodFraction < 0.10 {
+		t.Errorf("longTermGoodFraction = %v, want >= 0.10", r.LongTermGoodFraction)
+	}
+	// Displayed skew should be the long-term good median (-2s), not the
+	// nonsense bad value, so the operator sees a meaningful number.
+	if r.RecentMedianSkewSec < -10 || r.RecentMedianSkewSec > 10 {
+		t.Errorf("recentMedianSkewSec = %v, want near -2 (long-term good median fallback)", r.RecentMedianSkewSec)
+	}
+}
+
+// TestNoClock_BothWindowsBad: the inverse of TestBimodalHysteresis. When
+// BOTH the recent window and the long-term goodFraction are essentially 0,
+// the node is genuinely no_clock (uninitialized RTC throughout).
+func TestNoClock_BothWindowsBad(t *testing.T) {
+	ps := NewPacketStore(nil, nil)
+	pt := 4
+	baseObs := int64(1700000000)
+	var txs []*StoreTx
+	// 50 samples — all bad.
+	for i := 0; i < 50; i++ {
+		obsTS := baseObs + int64(i)*60
+		tx := &StoreTx{
+			Hash:        fmt.Sprintf("dead-%04d", i),
+			PayloadType: &pt,
+			DecodedJSON: `{"payload":{"timestamp":` + formatInt64(obsTS-58000000) + `}}`,
+			Observations: []*StoreObs{
+				{ObserverID: "obs1", Timestamp: time.Unix(obsTS, 0).UTC().Format(time.RFC3339)},
+			},
+		}
+		txs = append(txs, tx)
+	}
+	ps.mu.Lock()
+	ps.byNode["DEADCLOCK"] = txs
+	for _, tx := range txs {
+		ps.byPayloadType[4] = append(ps.byPayloadType[4], tx)
+	}
+	ps.clockSkew.computeInterval = 0
+	ps.mu.Unlock()
+
+	r := ps.GetNodeClockSkew("DEADCLOCK")
+	if r == nil {
+		t.Fatal("nil result")
+	}
+	if r.Severity != SkewNoClock {
+		t.Errorf("severity = %v, want no_clock", r.Severity)
+	}
+	if r.LongTermGoodFraction != 0 {
+		t.Errorf("longTermGoodFraction = %v, want 0", r.LongTermGoodFraction)
 	}
 }

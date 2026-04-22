@@ -40,12 +40,17 @@ const (
 	// issue #789). The all-time median is poisoned by historical bad
 	// samples (e.g. a node that was off and then GPS-corrected); severity
 	// must reflect current health, not lifetime statistics.
-	recentSkewWindowCount = 5
+	//
+	// Widened from 5 → 20 to add hysteresis: a brief burst of bad samples
+	// in a known-bimodal node should not flip its severity to "no_clock"
+	// (see classification rule below that also gates on long-term goodFraction).
+	recentSkewWindowCount = 20
 
 	// recentSkewWindowSec bounds the recent-window in time as well: only
 	// samples from the last N seconds count as "recent" for severity.
-	// The effective window is min(recentSkewWindowCount, samples in 1h).
-	recentSkewWindowSec = 3600
+	// The effective window is min(recentSkewWindowCount, samples in 6h).
+	// Widened from 1h → 6h to match the larger sample budget.
+	recentSkewWindowSec = 21600
 
 	// bimodalSkewThresholdSec is the absolute skew threshold (1 hour)
 	// above which a sample is considered "bad" — likely firmware emitting
@@ -118,6 +123,7 @@ type NodeClockSkew struct {
 	LastObservedTS  int64        `json:"lastObservedTS"`   // most recent observation timestamp
 	Samples         []SkewSample `json:"samples,omitempty"` // time-series for sparklines
 	GoodFraction        float64  `json:"goodFraction"`        // fraction of recent samples with |skew| <= 1h
+	LongTermGoodFraction float64 `json:"longTermGoodFraction"` // fraction of ALL samples with |skew| <= 1h (hysteresis input)
 	RecentBadSampleCount int     `json:"recentBadSampleCount"` // count of recent samples with |skew| > 1h
 	RecentSampleCount    int     `json:"recentSampleCount"`    // total recent samples in window
 	NodeName        string       `json:"nodeName,omitempty"` // populated in fleet responses
@@ -502,13 +508,18 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 		}
 	}
 
-	// ── Bimodal detection (#845) ─────────────────────────────────────────
+	// ── Bimodal detection (#845, hysteresis) ─────────────────────────────
 	// Split recent samples into "good" (|skew| <= 1h, real clock) and
 	// "bad" (|skew| > 1h, firmware nonsense from uninitialized RTC).
 	// Classification order (first match wins):
-	//   no_clock       — goodFraction < 0.10 (essentially no real clock)
-	//   bimodal_clock  — 0.10 <= goodFraction < 0.80 AND badCount > 0
-	//   ok/warn/etc.   — goodFraction >= 0.80 (normal, outliers filtered)
+	//   no_clock       — recent goodFraction < 0.10 AND long-term goodFraction < 0.10
+	//                    (the long-term gate is hysteresis: a bimodal node that
+	//                     hits a transient burst of bad samples must NOT flip
+	//                     to no_clock — it's still bimodal historically)
+	//   bimodal_clock  — recent goodFraction < 0.80 AND badCount > 0
+	//                    (also catches nodes where recent < 0.10 but long-term
+	//                     is healthier — i.e. flaky rather than dead)
+	//   ok/warn/etc.   — recent goodFraction >= 0.80 (normal, outliers filtered)
 	var goodSamples []float64
 	for _, v := range recentVals {
 		if math.Abs(v) <= bimodalSkewThresholdSec {
@@ -522,16 +533,42 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 		goodFraction = float64(len(goodSamples)) / float64(recentSampleCount)
 	}
 
+	// Long-term goodFraction across ALL samples — used as hysteresis to
+	// prevent a recent burst of bad samples from flipping a bimodal node
+	// to no_clock. If a node has EVER had real-clock samples (>10% of all
+	// samples are good), it stays bimodal even when the recent window is
+	// 100% bad.
+	longTermGoodCount := 0
+	for _, p := range tsSkews {
+		if math.Abs(p.skew) <= bimodalSkewThresholdSec {
+			longTermGoodCount++
+		}
+	}
+	var longTermGoodFraction float64
+	if len(tsSkews) > 0 {
+		longTermGoodFraction = float64(longTermGoodCount) / float64(len(tsSkews))
+	}
+
 	var severity SkewSeverity
-	if goodFraction < 0.10 {
-		// Essentially no real clock — classify as no_clock regardless
-		// of the raw skew magnitude.
+	if goodFraction < 0.10 && longTermGoodFraction < 0.10 {
+		// Essentially no real clock — recent AND long-term agree.
 		severity = SkewNoClock
-	} else if goodFraction < 0.80 && recentBadCount > 0 {
-		// Bimodal: use median of GOOD samples as the "real" skew.
+	} else if goodFraction < 0.80 && (recentBadCount > 0 || longTermGoodFraction < 0.80) {
+		// Bimodal: recent window is mixed, OR recent is all-bad but the node
+		// has historical good samples (transient bad-burst on a flaky node).
+		// Use median of GOOD samples — prefer recent good if present, else
+		// fall back to long-term good median so the displayed skew is meaningful.
 		severity = SkewBimodalClock
 		if len(goodSamples) > 0 {
 			recentSkew = median(goodSamples)
+		} else if longTermGoodCount > 0 {
+			ltGood := make([]float64, 0, longTermGoodCount)
+			for _, p := range tsSkews {
+				if math.Abs(p.skew) <= bimodalSkewThresholdSec {
+					ltGood = append(ltGood, p.skew)
+				}
+			}
+			recentSkew = median(ltGood)
 		}
 	} else {
 		// Normal path: if there are good samples, use their median
@@ -572,6 +609,7 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 		LastObservedTS:       lastObsTS,
 		Samples:              samples,
 		GoodFraction:         round(goodFraction, 2),
+		LongTermGoodFraction: round(longTermGoodFraction, 2),
 		RecentBadSampleCount: recentBadCount,
 		RecentSampleCount:    recentSampleCount,
 	}
