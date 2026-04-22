@@ -1877,6 +1877,22 @@ console.log('\n=== app.js: computeBreakdownRanges ===');
     assert.deepEqual(findRange(r, 'Payload'), { start: 10, end: 11, label: 'Payload' });
   });
 
+  test('hash_size=3 (plb top bits=10): 2 hops × 3 bytes', () => {
+    // plb = 10 0000 10 = 0x82 → hash_size=3, hash_count=2 → 6 path bytes
+    const hex = '15' + '82' + 'AABBCC' + 'DDEEFF' + '99';
+    const r = computeBreakdownRanges(hex, 1, 5);
+    assert.deepEqual(findRange(r, 'Path'), { start: 2, end: 7, label: 'Path' });
+    assert.deepEqual(findRange(r, 'Payload'), { start: 8, end: 8, label: 'Payload' });
+  });
+
+  test('hash_size=4 (plb top bits=11): 2 hops × 4 bytes', () => {
+    // plb = 11 0000 10 = 0xC2 → hash_size=4, hash_count=2 → 8 path bytes
+    const hex = '15' + 'C2' + 'AABBCCDD' + 'EEFF1122' + '99887766';
+    const r = computeBreakdownRanges(hex, 1, 5);
+    assert.deepEqual(findRange(r, 'Path'), { start: 2, end: 9, label: 'Path' });
+    assert.deepEqual(findRange(r, 'Payload'), { start: 10, end: 13, label: 'Payload' });
+  });
+
   test('truncated path: not enough bytes → no Path range', () => {
     // plb=04 says 4 hops but only 2 bytes remain
     const hex = '1504AABB';
