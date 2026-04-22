@@ -1819,7 +1819,6 @@
   async function renderDetail(panel, data, chosenObsId) {
     const pkt = data.packet;
     const breakdown = data.breakdown || {};
-    const ranges = breakdown.ranges || [];
     const observations = data.observations || [];
 
     // Per-observation rendering (issue #849):
@@ -1839,6 +1838,15 @@
     const effectivePkt = currentObs ? clearParsedCache({...pkt, ...currentObs, _isObservation: true}) : pkt;
     const decoded = getParsedDecoded(effectivePkt) || {};
     const pathHops = getParsedPath(effectivePkt) || [];
+
+    // Compute breakdown ranges from the actually-rendered raw_hex (per-observation).
+    // Server-supplied breakdown is computed once from the top-level packet's raw_hex,
+    // but per-obs raw_hex (#882) can differ in path length, making the server breakdown
+    // off-by-N for the displayed bytes.
+    const obsRawHexForRanges = effectivePkt.raw_hex || pkt.raw_hex || '';
+    const ranges = obsRawHexForRanges
+      ? computeBreakdownRanges(obsRawHexForRanges, pkt.route_type, pkt.payload_type)
+      : (breakdown.ranges || []);
 
     // Cross-check: hop count from raw_hex path_len byte vs path_json length
     const obsRawHex = effectivePkt.raw_hex || pkt.raw_hex || '';

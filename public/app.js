@@ -14,6 +14,71 @@ function isTransportRoute(rt) { return rt === 0 || rt === 3; }
 function getPathLenOffset(routeType) { return isTransportRoute(routeType) ? 5 : 1; }
 function transportBadge(rt) { return isTransportRoute(rt) ? ' <span class="badge badge-transport" title="' + routeTypeName(rt) + '">T</span>' : ''; }
 
+/**
+ * Compute breakdown byte ranges from raw_hex on the client.
+ * Mirrors cmd/server/decoder.go BuildBreakdown(). Used so per-observation raw_hex
+ * (which can differ in path length from the top-level packet) gets accurate
+ * highlighted byte ranges, instead of using the server-supplied breakdown
+ * computed once from the top-level raw_hex.
+ */
+function computeBreakdownRanges(hexString, routeType, payloadType) {
+  if (!hexString) return [];
+  const clean = hexString.replace(/\s+/g, '');
+  const bytes = clean.length / 2;
+  if (bytes < 2) return [];
+  const ranges = [];
+  // Header
+  ranges.push({ start: 0, end: 0, label: 'Header' });
+  let offset = 1;
+  if (isTransportRoute(routeType)) {
+    if (bytes < offset + 4) return ranges;
+    ranges.push({ start: offset, end: offset + 3, label: 'Transport Codes' });
+    offset += 4;
+  }
+  if (offset >= bytes) return ranges;
+  // Path Length byte
+  ranges.push({ start: offset, end: offset, label: 'Path Length' });
+  const pathByte = parseInt(clean.slice(offset * 2, offset * 2 + 2), 16);
+  offset += 1;
+  if (isNaN(pathByte)) return ranges;
+  const hashSize = (pathByte >> 6) + 1;
+  const hashCount = pathByte & 0x3F;
+  const pathBytes = hashSize * hashCount;
+  if (hashCount > 0 && offset + pathBytes <= bytes) {
+    ranges.push({ start: offset, end: offset + pathBytes - 1, label: 'Path' });
+  }
+  offset += pathBytes;
+  if (offset >= bytes) return ranges;
+  const payloadStart = offset;
+  // ADVERT (payload_type 4) gets sub-fields when full record present
+  if (payloadType === 4 && bytes - payloadStart >= 100) {
+    ranges.push({ start: payloadStart,      end: payloadStart + 31, label: 'PubKey' });
+    ranges.push({ start: payloadStart + 32, end: payloadStart + 35, label: 'Timestamp' });
+    ranges.push({ start: payloadStart + 36, end: payloadStart + 99, label: 'Signature' });
+    const appStart = payloadStart + 100;
+    if (appStart < bytes) {
+      ranges.push({ start: appStart, end: appStart, label: 'Flags' });
+      const appFlags = parseInt(clean.slice(appStart * 2, appStart * 2 + 2), 16);
+      let fOff = appStart + 1;
+      if (!isNaN(appFlags)) {
+        if ((appFlags & 0x10) && fOff + 8 <= bytes) {
+          ranges.push({ start: fOff,     end: fOff + 3, label: 'Latitude' });
+          ranges.push({ start: fOff + 4, end: fOff + 7, label: 'Longitude' });
+          fOff += 8;
+        }
+        if ((appFlags & 0x20) && fOff + 2 <= bytes) fOff += 2;
+        if ((appFlags & 0x40) && fOff + 2 <= bytes) fOff += 2;
+        if ((appFlags & 0x80) && fOff < bytes) {
+          ranges.push({ start: fOff, end: bytes - 1, label: 'Name' });
+        }
+      }
+    }
+  } else {
+    ranges.push({ start: payloadStart, end: bytes - 1, label: 'Payload' });
+  }
+  return ranges;
+}
+
 // --- Utilities ---
 const _apiPerf = { calls: 0, totalMs: 0, log: [], cacheHits: 0 };
 const _apiCache = new Map();
