@@ -1984,6 +1984,117 @@ async function run() {
     }
   });
 
+  // Test: hex-strip color spans match the labeled byte rows (per-obs raw_hex).
+  // Regression #891: server-supplied breakdown was computed once from top-level
+  // raw_hex, so per-observation rendering had off-by-N highlights vs the labels.
+  await test('Packet detail hex strip Path range matches hop row count', async () => {
+    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('table tbody tr', { timeout: 15000 });
+    await page.waitForTimeout(500);
+
+    const rows = await page.$$('table tbody tr[data-action]');
+    let checked = 0;
+    for (let i = 0; i < Math.min(rows.length, 25) && checked < 3; i++) {
+      await rows[i].click({ timeout: 3000 }).catch(() => null);
+      await page.waitForTimeout(400);
+
+      const result = await page.evaluate(() => {
+        const dump = document.querySelector('.hex-dump');
+        const fieldTable = document.querySelector('table.field-table');
+        if (!dump || !fieldTable) return null;
+        const pathSpan = dump.querySelector('span.hex-byte.hex-path');
+        const pathBytes = pathSpan ? pathSpan.textContent.trim().split(/\s+/).filter(Boolean).length : 0;
+        const hopRows = [];
+        for (const tr of fieldTable.querySelectorAll('tr')) {
+          const cells = [...tr.cells].map(c => c.textContent.trim());
+          if (cells.length >= 2 && /^Hop\s+\d+/.test(cells[1])) hopRows.push(cells[2]);
+        }
+        return { pathBytes, hopRows };
+      });
+
+      if (!result || (result.pathBytes === 0 && result.hopRows.length === 0)) continue;
+      checked++;
+      // Either both zero, or the count of bytes inside hex-path == hop rows.
+      // (For multi-byte hash sizes this is bytes-per-hop * hops; for hash_size=1 it's just hops.)
+      // The simpler invariant: if there are hop rows, hex-path span must exist and have at least
+      // as many bytes as there are hops (== exactly hops * hash_size).
+      assert(result.hopRows.length > 0,
+        `row ${i}: hex-path span has ${result.pathBytes} bytes but no hop rows in the labeled table`);
+      assert(result.pathBytes >= result.hopRows.length,
+        `row ${i}: hex-path has ${result.pathBytes} bytes but ${result.hopRows.length} hop rows — strip and labels disagree`);
+      assert(result.pathBytes % result.hopRows.length === 0,
+        `row ${i}: hex-path has ${result.pathBytes} bytes but ${result.hopRows.length} hop rows — bytes/hops not divisible (hash_size violated)`);
+      console.log(`    ✓ row ${i}: hex-path ${result.pathBytes} bytes / ${result.hopRows.length} hop rows (hash_size=${result.pathBytes / result.hopRows.length})`);
+    }
+    if (checked === 0) {
+      const skipErr = new Error('SKIP: no packet with rendered hex strip + hop rows found in first 25 rows');
+      skipErr.skip = true;
+      throw skipErr;
+    }
+  });
+
+  // Test: clicking a different observation row re-renders strip + breakdown consistently.
+  // Regression: observations of the same packet hash have different raw_hex (#882),
+  // so picking a different obs must recompute the byte ranges, not reuse the old ones.
+  await test('Packet detail switches consistently across observations', async () => {
+    await page.goto(BASE + '#/packets?groupByHash=1', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('table tbody tr', { timeout: 15000 });
+    await page.waitForTimeout(500);
+
+    let opened = false;
+    const groupRows = await page.$$('table tbody tr[data-action]');
+    for (let i = 0; i < Math.min(groupRows.length, 10); i++) {
+      await groupRows[i].click({ timeout: 3000 }).catch(() => null);
+      await page.waitForTimeout(400);
+      const obsCount = await page.evaluate(() => {
+        return document.querySelectorAll('table.observations-table tbody tr, .obs-row').length;
+      });
+      if (obsCount >= 2) { opened = true; break; }
+    }
+    if (!opened) {
+      const skipErr = new Error('SKIP: no multi-observation packet found in first 10 group rows');
+      skipErr.skip = true;
+      throw skipErr;
+    }
+
+    async function snapshot() {
+      return page.evaluate(() => {
+        const dump = document.querySelector('.hex-dump');
+        const fieldTable = document.querySelector('table.field-table');
+        if (!dump || !fieldTable) return null;
+        const pathSpan = dump.querySelector('span.hex-byte.hex-path');
+        const pathBytes = pathSpan ? pathSpan.textContent.trim().split(/\s+/).filter(Boolean).length : 0;
+        const hopRows = [];
+        for (const tr of fieldTable.querySelectorAll('tr')) {
+          const cells = [...tr.cells].map(c => c.textContent.trim());
+          if (cells.length >= 2 && /^Hop\s+\d+/.test(cells[1])) hopRows.push(cells[2]);
+        }
+        const rawHexParts = [...dump.querySelectorAll('span.hex-byte')].map(s => s.textContent.trim());
+        return { pathBytes, hopCount: hopRows.length, rawHexJoined: rawHexParts.join('|') };
+      });
+    }
+
+    const snapA = await snapshot();
+    assert(snapA, 'first snapshot must have hex dump + field table');
+    assert(snapA.hopCount === 0 || snapA.pathBytes >= snapA.hopCount,
+      `obs A inconsistent: hex-path ${snapA.pathBytes} bytes vs ${snapA.hopCount} hop rows`);
+
+    const switched = await page.evaluate(() => {
+      const obsRows = [...document.querySelectorAll('table.observations-table tbody tr, .obs-row')];
+      if (obsRows.length < 2) return false;
+      obsRows[1].click();
+      return true;
+    });
+    assert(switched, 'should click second observation row');
+    await page.waitForTimeout(500);
+
+    const snapB = await snapshot();
+    assert(snapB, 'second snapshot must have hex dump + field table');
+    assert(snapB.hopCount === 0 || snapB.pathBytes >= snapB.hopCount,
+      `obs B inconsistent: hex-path ${snapB.pathBytes} bytes vs ${snapB.hopCount} hop rows`);
+    console.log(`    ✓ obs A: ${snapA.pathBytes} path bytes / ${snapA.hopCount} hops; obs B: ${snapB.pathBytes} / ${snapB.hopCount}`);
+  });
+
   await browser.close();
 
   // Summary
