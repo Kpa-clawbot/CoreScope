@@ -117,6 +117,8 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/config/theme", s.handleConfigTheme).Methods("GET")
 	r.HandleFunc("/api/config/map", s.handleConfigMap).Methods("GET")
 	r.HandleFunc("/api/config/geo-filter", s.handleConfigGeoFilter).Methods("GET")
+	r.HandleFunc("/api/config/areas", s.handleConfigAreas).Methods("GET")
+	r.HandleFunc("/api/config/areas/polygons", s.handleConfigAreasPolygons).Methods("GET")
 
 	// System endpoints
 	r.HandleFunc("/api/health", s.handleHealth).Methods("GET")
@@ -292,6 +294,46 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		Timestamps:          s.cfg.GetTimestampConfig(),
 		DebugAffinity:       s.cfg.DebugAffinity,
 	})
+}
+
+func (s *Server) handleConfigAreas(w http.ResponseWriter, r *http.Request) {
+	type areaListEntry struct {
+		Key   string `json:"key"`
+		Label string `json:"label"`
+	}
+	result := make([]areaListEntry, 0, len(s.cfg.Areas))
+	for k, v := range s.cfg.Areas {
+		if v.Label == "" {
+			continue // skip comment/invalid entries (e.g. "_comment" keys in config)
+		}
+		result = append(result, areaListEntry{Key: k, Label: v.Label})
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleConfigAreasPolygons(w http.ResponseWriter, r *http.Request) {
+	type areaDebugEntry struct {
+		Key     string       `json:"key"`
+		Label   string       `json:"label"`
+		Polygon [][2]float64 `json:"polygon,omitempty"`
+		LatMin  *float64     `json:"latMin,omitempty"`
+		LatMax  *float64     `json:"latMax,omitempty"`
+		LonMin  *float64     `json:"lonMin,omitempty"`
+		LonMax  *float64     `json:"lonMax,omitempty"`
+	}
+	result := make([]areaDebugEntry, 0, len(s.cfg.Areas))
+	for k, v := range s.cfg.Areas {
+		result = append(result, areaDebugEntry{
+			Key:     k,
+			Label:   v.Label,
+			Polygon: v.Polygon,
+			LatMin:  v.LatMin,
+			LatMax:  v.LatMax,
+			LonMin:  v.LonMin,
+			LonMax:  v.LonMax,
+		})
+	}
+	writeJSON(w, result)
 }
 
 func (s *Server) handleConfigRegions(w http.ResponseWriter, r *http.Request) {
@@ -791,7 +833,8 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		Until:    r.URL.Query().Get("until"),
 		Region:   r.URL.Query().Get("region"),
 		Node:     r.URL.Query().Get("node"),
-		Channel:  r.URL.Query().Get("channel"),
+		Channel:            r.URL.Query().Get("channel"),
+		Area:               r.URL.Query().Get("area"),
 		Order:              "DESC",
 		ExpandObservations: r.URL.Query().Get("expand") == "observations",
 	}
@@ -1114,6 +1157,34 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		total = len(filtered)
 		nodes = filtered
 	}
+	// Filter by area
+	if area := q.Get("area"); area != "" {
+		var areaNodes map[string]bool
+		if s.store != nil {
+			areaNodes = s.store.resolveAreaNodes(area)
+		} else if s.cfg != nil && s.cfg.Areas != nil {
+			if entry, ok := s.cfg.Areas[area]; ok {
+				pks, err := s.db.GetNodePubkeysInArea(entry)
+				if err == nil {
+					areaNodes = make(map[string]bool, len(pks))
+					for _, pk := range pks {
+						areaNodes[pk] = true
+					}
+				}
+			}
+		}
+		if areaNodes != nil {
+			filtered := make([]map[string]interface{}, 0, len(nodes))
+			for _, n := range nodes {
+				pk, _ := n["public_key"].(string)
+				if areaNodes[pk] {
+					filtered = append(filtered, n)
+				}
+			}
+			nodes = filtered
+			total = len(filtered)
+		}
+	}
 	writeJSON(w, NodeListResponse{Nodes: nodes, Total: total, Counts: counts})
 }
 
@@ -1196,7 +1267,8 @@ func (s *Server) handleBulkHealth(w http.ResponseWriter, r *http.Request) {
 
 	if s.store != nil {
 		region := r.URL.Query().Get("region")
-		results := s.store.GetBulkHealth(limit, region)
+		area := r.URL.Query().Get("area")
+		results := s.store.GetBulkHealth(limit, region, area)
 		// Filter blacklisted nodes
 		if len(s.cfg.NodeBlacklist) > 0 {
 			filtered := make([]map[string]interface{}, 0, len(results))
@@ -1484,15 +1556,17 @@ func (s *Server) handleFleetClockSkew(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []*NodeClockSkew{})
 		return
 	}
-	writeJSON(w, s.store.GetFleetClockSkew())
+	area := r.URL.Query().Get("area")
+	writeJSON(w, s.store.GetFleetClockSkew(area))
 }
 
 // --- Analytics Handlers ---
 
 func (s *Server) handleAnalyticsRF(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
+	area := r.URL.Query().Get("area")
 	if s.store != nil {
-		writeJSON(w, s.store.GetAnalyticsRF(region))
+		writeJSON(w, s.store.GetAnalyticsRF(region, area))
 		return
 	}
 	writeJSON(w, RFAnalyticsResponse{
@@ -1511,8 +1585,9 @@ func (s *Server) handleAnalyticsRF(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAnalyticsTopology(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
+	area := r.URL.Query().Get("area")
 	if s.store != nil {
-		data := s.store.GetAnalyticsTopology(region)
+		data := s.store.GetAnalyticsTopology(region, area)
 		if s.cfg != nil && len(s.cfg.NodeBlacklist) > 0 {
 			data = s.filterBlacklistedFromTopology(data)
 		}
@@ -1534,7 +1609,8 @@ func (s *Server) handleAnalyticsTopology(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleAnalyticsChannels(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		region := r.URL.Query().Get("region")
-		writeJSON(w, s.store.GetAnalyticsChannels(region))
+		area := r.URL.Query().Get("area")
+		writeJSON(w, s.store.GetAnalyticsChannels(region, area))
 		return
 	}
 	channels, _ := s.db.GetChannels()
@@ -1553,8 +1629,9 @@ func (s *Server) handleAnalyticsChannels(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleAnalyticsDistance(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
+	area := r.URL.Query().Get("area")
 	if s.store != nil {
-		writeJSON(w, s.store.GetAnalyticsDistance(region))
+		writeJSON(w, s.store.GetAnalyticsDistance(region, area))
 		return
 	}
 	writeJSON(w, DistanceAnalyticsResponse{
@@ -1570,7 +1647,8 @@ func (s *Server) handleAnalyticsDistance(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleAnalyticsHashSizes(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		region := r.URL.Query().Get("region")
-		writeJSON(w, s.store.GetAnalyticsHashSizes(region))
+		area := r.URL.Query().Get("area")
+		writeJSON(w, s.store.GetAnalyticsHashSizes(region, area))
 		return
 	}
 	writeJSON(w, map[string]interface{}{
@@ -1586,7 +1664,8 @@ func (s *Server) handleAnalyticsHashSizes(w http.ResponseWriter, r *http.Request
 func (s *Server) handleAnalyticsHashCollisions(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		region := r.URL.Query().Get("region")
-		writeJSON(w, s.store.GetAnalyticsHashCollisions(region))
+		area := r.URL.Query().Get("area")
+		writeJSON(w, s.store.GetAnalyticsHashCollisions(region, area))
 		return
 	}
 	writeJSON(w, map[string]interface{}{

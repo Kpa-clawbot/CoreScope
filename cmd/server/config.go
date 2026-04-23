@@ -11,6 +11,16 @@ import (
 	"github.com/meshcore-analyzer/geofilter"
 )
 
+// AreaEntry defines a geographic area by polygon or bounding box.
+type AreaEntry struct {
+	Label   string       `json:"label"`
+	Polygon [][2]float64 `json:"polygon,omitempty"`
+	LatMin  *float64     `json:"latMin,omitempty"`
+	LatMax  *float64     `json:"latMax,omitempty"`
+	LonMin  *float64     `json:"lonMin,omitempty"`
+	LonMax  *float64     `json:"lonMax,omitempty"`
+}
+
 // Config mirrors the Node.js config.json structure (read-only fields).
 type Config struct {
 	Port    int    `json:"port"`
@@ -65,6 +75,8 @@ type Config struct {
 	PacketStore *PacketStoreConfig `json:"packetStore,omitempty"`
 
 	GeoFilter *GeoFilterConfig `json:"geo_filter,omitempty"`
+
+	Areas map[string]AreaEntry `json:"areas,omitempty"`
 
 	Timestamps *TimestampConfig `json:"timestamps,omitempty"`
 

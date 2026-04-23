@@ -33,7 +33,7 @@ func TestCollisionDetailsIncludeNodePairs(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	result := store.GetAnalyticsHashCollisions("")
+	result := store.GetAnalyticsHashCollisions("", "")
 	bySize, ok := result["by_size"].(map[string]interface{})
 	if !ok {
 		t.Fatal("expected by_size map")
@@ -109,7 +109,7 @@ func TestCollisionDetailsEmptyWhenNoCollisions(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	result := store.GetAnalyticsHashCollisions("")
+	result := store.GetAnalyticsHashCollisions("", "")
 	bySize, ok := result["by_size"].(map[string]interface{})
 	if !ok {
 		t.Fatal("expected by_size map")
