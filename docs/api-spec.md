@@ -3,8 +3,8 @@
 > **Authoritative contract.** Both the Node.js and Go backends MUST conform to this spec.
 > The frontend relies on these exact shapes. Breaking changes require a spec update first.
 
-**Version:** 1.0.0
-**Last updated:** 2025-07-17
+**Version:** 1.1.0
+**Last updated:** 2026-04-22
 
 ---
 
@@ -44,12 +44,17 @@
 - [GET /api/traces/:hash](#get-apitraceshash)
 - [GET /api/config/theme](#get-apiconfigtheme)
 - [GET /api/config/regions](#get-apiconfigregions)
+- [GET /api/config/areas](#get-apiconfigareas)
+- [GET /api/config/areas/polygons](#get-apiconfigareaspolygons)
 - [GET /api/config/client](#get-apiconfigclient)
 - [GET /api/config/cache](#get-apiconfigcache)
 - [GET /api/config/map](#get-apiconfigmap)
 - [GET /api/iata-coords](#get-apiiata-coords)
+- [GET /api/nodes/clock-skew](#get-apinodesclock-skew)
+- [GET /api/analytics/hash-collisions](#get-apianalyticshash-collisions)
 - [GET /api/audio-lab/buckets](#get-apiaudio-labbuckets)
 - [WebSocket Messages](#websocket-messages)
+- [Area Filter](#area-filter)
 
 ---
 
@@ -286,6 +291,7 @@ Paginated node list with filtering.
 | `offset`   | number | `0`          | Pagination offset                                  |
 | `role`     | string | —            | Filter by role: `repeater`, `room`, `companion`, `sensor` |
 | `region`   | string | —            | Comma-separated IATA codes for regional filtering  |
+| `area`     | string | —            | Area key from `config.json` — filters to nodes whose GPS falls inside the area polygon (see [Area Filter](#area-filter)) |
 | `lastHeard`| string | —            | Recency filter: `1h`, `6h`, `24h`, `7d`, `30d`    |
 | `sortBy`   | string | `lastSeen`   | Sort key: `name`, `lastSeen`, `packetCount`        |
 | `search`   | string | —            | Substring match on `name`                          |
@@ -1076,6 +1082,7 @@ RF signal analytics.
 | Param    | Type   | Default | Description                         |
 |----------|--------|---------|-------------------------------------|
 | `region` | string | —       | Comma-separated IATA codes          |
+| `area`   | string | —       | Area key — restricts to packets whose transmitter GPS falls in the area (ADVERT packets only; see [Area Filter](#area-filter)) |
 
 ### Response `200`
 
@@ -1146,6 +1153,7 @@ Network topology analytics.
 | Param    | Type   | Default | Description                         |
 |----------|--------|---------|-------------------------------------|
 | `region` | string | —       | Comma-separated IATA codes          |
+| `area`   | string | —       | Area key — only hops that resolve to nodes inside the area are counted in repeater/pair frequency tables |
 
 ### Response `200`
 
@@ -1241,6 +1249,7 @@ Channel analytics.
 | Param    | Type   | Default | Description                         |
 |----------|--------|---------|-------------------------------------|
 | `region` | string | —       | Comma-separated IATA codes          |
+| `area`   | string | —       | Area key — area filtering is supported but not exposed in the dashboard (channel stats are observer-based) |
 
 ### Response `200`
 
@@ -1279,6 +1288,7 @@ Hop distance analytics.
 | Param    | Type   | Default | Description                         |
 |----------|--------|---------|-------------------------------------|
 | `region` | string | —       | Comma-separated IATA codes          |
+| `area`   | string | —       | Area key — restricts distance calculations to paths where the transmitter GPS falls in the area |
 
 ### Response `200`
 
@@ -1343,6 +1353,7 @@ Hash size analysis across the network.
 | Param    | Type   | Default | Description                         |
 |----------|--------|---------|-------------------------------------|
 | `region` | string | —       | Comma-separated IATA codes          |
+| `area`   | string | —       | Area key — restricts to packets from nodes in the area |
 
 ### Response `200`
 
@@ -1377,6 +1388,73 @@ Hash size analysis across the network.
   ]
 }
 ```
+
+---
+
+## GET /api/analytics/hash-collisions
+
+Hash collision analysis — packets where the same hash was used by multiple different nodes (ambiguous routing).
+
+### Query Parameters
+
+| Param    | Type   | Default | Description                         |
+|----------|--------|---------|-------------------------------------|
+| `region` | string | —       | Comma-separated IATA codes          |
+| `area`   | string | —       | Area key — restricts to packets from nodes in the area |
+
+### Response `200`
+
+```jsonc
+{
+  "collisions": [
+    {
+      "hash":     string,           // hop hex prefix that collides
+      "count":    number,           // number of distinct nodes sharing this prefix
+      "nodes": [
+        {
+          "pubkey": string,
+          "name":   string | null,
+          "count":  number          // observation count for this node
+        }
+      ]
+    }
+  ],
+  "totalCollisions": number,
+  "affectedPackets": number
+}
+```
+
+---
+
+## GET /api/nodes/clock-skew
+
+Fleet-wide clock skew data. Returns all nodes for which clock skew has been calculated from ADVERT timestamp pairs.
+
+### Query Parameters
+
+| Param  | Type   | Default | Description                                         |
+|--------|--------|---------|-----------------------------------------------------|
+| `area` | string | —       | Area key — restricts to nodes whose GPS falls in the area |
+
+### Response `200`
+
+Returns a JSON array (not wrapped in an object):
+
+```jsonc
+[
+  {
+    "pubkey":         string,
+    "nodeName":       string | null,
+    "nodeRole":       string | null,
+    "skewMs":         number | null,          // current estimated clock offset (ms)
+    "driftPerDaySec": number | null,          // drift rate (seconds/day)
+    "severity":       string,                 // "good" | "warning" | "critical"
+    "samples":        null                    // always null in fleet response (too large)
+  }
+]
+```
+
+**Note:** This is a bare array, not `{ nodes: [...] }`.
 
 ---
 
@@ -1591,6 +1669,51 @@ Available regions (IATA codes) merged from config + DB.
 ```
 
 Returns a flat key-value object.
+
+---
+
+## GET /api/config/areas
+
+Available area filters defined in `config.json` under `areas`. Used by the frontend to populate the area pill bar. Entries with an empty `label` (e.g. comment keys) are excluded.
+
+### Response `200`
+
+```jsonc
+[
+  {
+    "key":   string,   // area key as defined in config (e.g. "bayarea")
+    "label": string    // display name (e.g. "Bay Area")
+  }
+]
+```
+
+Returns `[]` when no areas are configured.
+
+**Note:** Polygon coordinates are **not** included. Use `/api/config/areas/polygons` for the full geometry.
+
+---
+
+## GET /api/config/areas/polygons
+
+Full area definitions including polygon/bounding-box coordinates. Intended for map rendering tools (e.g. the area-map debug tool).
+
+### Response `200`
+
+```jsonc
+[
+  {
+    "key":   string,
+    "label": string,
+    "polygon": [[number, number]] | undefined,   // [lat, lon] pairs (if polygon-style)
+    "latMin":  number | undefined,               // bounding-box style
+    "latMax":  number | undefined,
+    "lonMin":  number | undefined,
+    "lonMax":  number | undefined
+  }
+]
+```
+
+Returns `[]` when no areas are configured.
 
 ---
 
@@ -1908,3 +2031,61 @@ A single observation of a transmission by an observer:
 | 1     | `FLOOD`     | Flood/broadcast                      |
 | 2     | (reserved)  |                                      |
 | 3     | `TRANSPORT` | Transport (with transport codes)     |
+
+---
+
+## Area Filter
+
+The `?area=<key>` query parameter is a **display-side geographic filter** that attributes data to a region based on the **transmitting node's own GPS coordinates**, as broadcast in its ADVERT packets. It is distinct from the observer-based `?region=` filter.
+
+### Configuration
+
+Areas are defined in `config.json` under the `areas` key:
+
+```jsonc
+{
+  "areas": {
+    "bayarea": {
+      "label": "Bay Area",
+      "polygon": [[37.9, -122.5], [37.9, -121.9], [37.3, -121.9], [37.3, -122.5]]
+    },
+    "sanjose": {
+      "label": "San Jose",
+      "latMin": 37.25, "latMax": 37.45,
+      "lonMin": -122.05, "lonMax": -121.75
+    }
+  }
+}
+```
+
+Each entry may use either a `polygon` (array of `[lat, lon]` pairs, minimum 3 points) or a bounding box (`latMin`/`latMax`/`lonMin`/`lonMax`). The polygon check uses standard ray-casting point-in-polygon.
+
+### Attribution rules
+
+| Packet type | Area-attributable? | Reason |
+|-------------|-------------------|--------|
+| ADVERT (4)  | Yes | Carries `public_key` + transmitter GPS in payload |
+| GRP_TXT (5), TXT_MSG (2), REQ (0), others | No | Sender is encrypted; origin cannot be determined |
+
+When `?area=` is active, **only ADVERT packets** (and nodes derived from them) are included in filtered results. All other packet types are excluded. This is by design — non-ADVERT packets have encrypted senders and cannot be attributed to a geographic origin.
+
+### GPS staleness
+
+Node GPS coordinates are read from the `nodes` table, which is updated on ADVERT ingest. A node that moves between areas will not be re-attributed until its next ADVERT (typically 12–24 hours for repeaters). The area node set is cached for 30 seconds server-side.
+
+### Endpoints supporting `?area=`
+
+| Endpoint | Area support |
+|----------|-------------|
+| `GET /api/nodes` | Filters node list by GPS in area |
+| `GET /api/analytics/rf` | Restricts RF stats to ADVERT packets from area nodes |
+| `GET /api/analytics/topology` | Counts only hops that resolve to nodes in the area |
+| `GET /api/analytics/channels` | Supported (not used by dashboard UI) |
+| `GET /api/analytics/distance` | Restricts distance paths to area-node transmitters |
+| `GET /api/analytics/hash-sizes` | Restricts hash analysis to area-node packets |
+| `GET /api/analytics/hash-collisions` | Restricts collision analysis to area-node packets |
+| `GET /api/nodes/clock-skew` | Restricts fleet clock skew list to nodes in area |
+
+### Cross-antimeridian polygons
+
+Polygons that span the 180° meridian (antimeridian) are **not supported** — ray-casting point-in-polygon breaks at the date line. Split such areas into two separate entries.
