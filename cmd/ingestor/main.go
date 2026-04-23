@@ -396,7 +396,9 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 	}
 	if source.RejectUnauthorized != nil && !*source.RejectUnauthorized {
 		opts.SetTLSConfig(&tls.Config{InsecureSkipVerify: true})
-	} else if strings.HasPrefix(source.Broker, "ssl://") {
+	} else if strings.HasPrefix(source.Broker, "ssl://") || strings.HasPrefix(source.Broker, "wss://") {
+		// TLS with system CA pool — valid for ssl:// MQTT brokers and
+		// wss:// WebSocket brokers behind a publicly-trusted certificate.
 		opts.SetTLSConfig(&tls.Config{})
 	}
 	return opts
