@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -29,16 +32,19 @@ func resolveCommit() string {
 	if Commit != "" {
 		return Commit
 	}
+
 	// Try .git-commit file (baked by Docker / CI)
 	if data, err := os.ReadFile(".git-commit"); err == nil {
 		if c := strings.TrimSpace(string(data)); c != "" && c != "unknown" {
 			return c
 		}
 	}
+
 	// Try git rev-parse at runtime
 	if out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
 		return strings.TrimSpace(string(out))
 	}
+
 	return "unknown"
 }
 
@@ -54,6 +60,84 @@ func resolveBuildTime() string {
 		return BuildTime
 	}
 	return "unknown"
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	n, err := r.ResponseWriter.Write(b)
+	r.bytes += n
+	return n, err
+}
+
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("underlying ResponseWriter does not implement http.Hijacker")
+	}
+	return hj.Hijack()
+}
+
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (r *statusRecorder) Push(target string, opts *http.PushOptions) error {
+	if p, ok := r.ResponseWriter.(http.Pusher); ok {
+		return p.Push(target, opts)
+	}
+	return http.ErrNotSupported
+}
+
+func accessLogMiddleware(next http.Handler) http.Handler {
+	_ = os.MkdirAll("/app/logs", 0o755)
+
+	f, err := os.OpenFile("/app/logs/access.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Printf("[accesslog] failed to open /app/logs/access.log: %v", err)
+		return next
+	}
+
+	logger := log.New(io.MultiWriter(f), "", 0)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w}
+
+		next.ServeHTTP(rec, r)
+
+		remoteAddr := r.Header.Get("X-Forwarded-For")
+		if remoteAddr == "" {
+			remoteAddr = r.RemoteAddr
+		}
+
+		logger.Printf("%s - - [%s] \"%s %s %s\" %d %d \"%s\" \"%s\" %dms",
+			remoteAddr,
+			time.Now().Format("02/Jan/2006:15:04:05 -0700"),
+			r.Method,
+			r.URL.RequestURI(),
+			r.Proto,
+			rec.status,
+			rec.bytes,
+			r.Referer(),
+			r.UserAgent(),
+			time.Since(start).Milliseconds(),
+		)
+	})
 }
 
 func main() {
@@ -72,11 +156,11 @@ func main() {
 	}
 
 	var (
-		configDir  string
-		port       int
-		dbPath     string
-		publicDir  string
-		pollMs     int
+		configDir string
+		port      int
+		dbPath    string
+		publicDir string
+		pollMs    int
 	)
 
 	flag.StringVar(&configDir, "config-dir", ".", "Directory containing config.json")
@@ -102,6 +186,7 @@ func main() {
 	if dbPath != "" {
 		cfg.DBPath = dbPath
 	}
+
 	if cfg.APIKey == "" {
 		log.Printf("[security] WARNING: no apiKey configured — write endpoints are BLOCKED (set apiKey in config.json to enable them)")
 	} else if IsWeakAPIKey(cfg.APIKey) {
@@ -111,11 +196,12 @@ func main() {
 	// Resolve DB path
 	resolvedDB := cfg.ResolveDBPath(configDir)
 	log.Printf("[config] port=%d db=%s public=%s", cfg.Port, resolvedDB, publicDir)
+
 	if len(cfg.NodeBlacklist) > 0 {
 		log.Printf("[config] nodeBlacklist: %d node(s) will be hidden from API", len(cfg.NodeBlacklist))
 		for _, pk := range cfg.NodeBlacklist {
 			if trimmed := strings.ToLower(strings.TrimSpace(pk)); trimmed != "" {
-				log.Printf("[config]   blacklisted: %s", trimmed)
+				log.Printf("[config] blacklisted: %s", trimmed)
 			}
 		}
 	}
@@ -125,10 +211,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("[db] failed to open %s: %v", resolvedDB, err)
 	}
+
 	var dbCloseOnce sync.Once
 	dbClose := func() error {
 		var err error
-		dbCloseOnce.Do(func() { err = database.Close() })
+		dbCloseOnce.Do(func() {
+			err = database.Close()
+		})
 		return err
 	}
 	defer dbClose()
@@ -159,6 +248,7 @@ func main() {
 	if err := ensureNeighborEdgesTable(dbPath); err != nil {
 		log.Printf("[neighbor] warning: could not create neighbor_edges table: %v", err)
 	}
+
 	// Add resolved_path column if missing.
 	// NOTE on startup ordering (review item #10): ensureResolvedPathColumn runs AFTER
 	// OpenDB/detectSchema, so db.hasResolvedPath will be false on first run with a
@@ -208,7 +298,9 @@ func main() {
 				log.Printf("[store] pickBestObservation panic recovered: %v", r)
 			}
 		}()
+
 		const chunkSize = 5000
+
 		store.mu.RLock()
 		totalPackets := len(store.packets)
 		store.mu.RUnlock()
@@ -218,15 +310,18 @@ func main() {
 			if end > totalPackets {
 				end = totalPackets
 			}
+
 			store.mu.Lock()
 			for j := i; j < end && j < len(store.packets); j++ {
 				pickBestObservation(store.packets[j])
 			}
 			store.mu.Unlock()
+
 			if end < totalPackets {
 				time.Sleep(10 * time.Millisecond) // yield to API handlers
 			}
 		}
+
 		log.Printf("[store] initial pickBestObservation complete (%d transmissions)", totalPackets)
 	}()
 
@@ -236,6 +331,7 @@ func main() {
 	// HTTP server
 	srv := NewServer(database, cfg, hub)
 	srv.store = store
+
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
@@ -263,9 +359,15 @@ func main() {
 		log.Printf("[static] directory %s not found — API-only mode", absPublic)
 		router.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/html")
-			w.Write([]byte(`<!DOCTYPE html><html><body><h1>CoreScope</h1><p>Frontend not found. API available at /api/</p></body></html>`))
+			w.Write([]byte(`
+# CoreScope
+
+Frontend not found. API available at /api/
+`))
 		})
 	}
+
+	loggedRouter := accessLogMiddleware(router)
 
 	// Start SQLite poller for WebSocket broadcast
 	poller := NewPoller(database, hub, time.Duration(pollMs)*time.Millisecond)
@@ -417,7 +519,7 @@ func main() {
 	// Graceful shutdown
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
-		Handler:      router,
+		Handler:      loggedRouter,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -460,6 +562,7 @@ func main() {
 		if err := dbClose(); err != nil {
 			log.Printf("[server] DB close error: %v", err)
 		}
+
 		log.Println("[server] shutdown complete")
 	}()
 
@@ -485,7 +588,11 @@ func spaHandler(root string, fs http.Handler) http.Handler {
 	rawHTML, err := os.ReadFile(indexPath)
 	if err != nil {
 		log.Printf("[static] warning: could not read index.html for cache-bust: %v", err)
-		rawHTML = []byte("<!DOCTYPE html><html><body><h1>CoreScope</h1><p>index.html not found</p></body></html>")
+		rawHTML = []byte(`
+# CoreScope
+
+index.html not found
+`)
 	}
 	bustValue := fmt.Sprintf("%d", time.Now().Unix())
 	indexHTML := []byte(strings.ReplaceAll(string(rawHTML), "__BUST__", bustValue))
@@ -496,7 +603,7 @@ func spaHandler(root string, fs http.Handler) http.Handler {
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			w.Write(indexHTML)
+			_, _ = w.Write(indexHTML)
 			return
 		}
 
@@ -505,13 +612,15 @@ func spaHandler(root string, fs http.Handler) http.Handler {
 			// SPA fallback — serve pre-processed index.html
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			w.Write(indexHTML)
+			_, _ = w.Write(indexHTML)
 			return
 		}
+
 		// Disable caching for JS/CSS/HTML
 		if filepath.Ext(path) == ".js" || filepath.Ext(path) == ".css" || filepath.Ext(path) == ".html" {
 			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		}
+
 		fs.ServeHTTP(w, r)
 	})
 }

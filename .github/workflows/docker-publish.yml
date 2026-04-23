@@ -2,12 +2,12 @@ name: Build and publish CoreScope image
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "etto" ]
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: cornmeister/corescope
+  IMAGE_NAME: cornmeister/etto
 
 jobs:
   build-and-push:
