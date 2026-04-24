@@ -576,3 +576,66 @@ func TestGetNodeClockSkew_TooFewSamplesForDrift(t *testing.T) {
 		t.Errorf("drift = %v, want 0 for 2-sample node", result.DriftPerDaySec)
 	}
 }
+
+func TestGetNodeClockSkew_EpochZeroAdvert(t *testing.T) {
+	// An advert with timestamp == 0 (epoch-0 firmware boot) should classify
+	// as "default" with DefaultEpoch == 0.
+	ps := NewPacketStore(nil, nil)
+	pt := 4
+
+	now := time.Now().Unix()
+	tx := &StoreTx{
+		Hash:        "epoch0-h1",
+		PayloadType: &pt,
+		DecodedJSON: `{"payload":{"timestamp":0}}`,
+		Observations: []*StoreObs{
+			{ObserverID: "obs1", Timestamp: time.Unix(now, 0).UTC().Format(time.RFC3339)},
+		},
+	}
+
+	ps.mu.Lock()
+	ps.byNode["EPOCH0"] = []*StoreTx{tx}
+	ps.byPayloadType[4] = []*StoreTx{tx}
+	ps.clockSkew.computeInterval = 0
+	ps.mu.Unlock()
+
+	r := ps.GetNodeClockSkew("EPOCH0")
+	if r == nil {
+		t.Fatal("expected result for epoch-0 node")
+	}
+	if r.Severity != SkewDefault {
+		t.Errorf("severity = %v, want default", r.Severity)
+	}
+	if r.DefaultEpoch == nil || *r.DefaultEpoch != 0 {
+		t.Errorf("defaultEpoch = %v, want &0", r.DefaultEpoch)
+	}
+}
+
+func TestGetNodeClockSkew_MissingTimestamp(t *testing.T) {
+	// An advert with NO timestamp field should be skipped entirely —
+	// extractTimestamp returns timestampMissing (-1), collectSamples
+	// filters it out, so GetNodeClockSkew returns nil.
+	ps := NewPacketStore(nil, nil)
+	pt := 4
+
+	now := time.Now().Unix()
+	tx := &StoreTx{
+		Hash:        "nots-h1",
+		PayloadType: &pt,
+		DecodedJSON: `{"payload":{"name":"test-node"}}`,
+		Observations: []*StoreObs{
+			{ObserverID: "obs1", Timestamp: time.Unix(now, 0).UTC().Format(time.RFC3339)},
+		},
+	}
+
+	ps.mu.Lock()
+	ps.byNode["NOTS"] = []*StoreTx{tx}
+	ps.byPayloadType[4] = []*StoreTx{tx}
+	ps.clockSkew.computeInterval = 0
+	ps.mu.Unlock()
+
+	r := ps.GetNodeClockSkew("NOTS")
+	if r != nil {
+		t.Errorf("expected nil for node with missing timestamp, got severity=%v", r.Severity)
+	}
+}
