@@ -84,6 +84,17 @@
     return { cls: 'health-red', label: 'Offline' };
   }
 
+  function packetBadge(o) {
+    if (!o.last_packet_at) return '<span title="No packets ever observed">📡⚠ never</span>';
+    const pktAgo = Date.now() - new Date(o.last_packet_at).getTime();
+    const statusAgo = o.last_seen ? Date.now() - new Date(o.last_seen).getTime() : Infinity;
+    const gap = pktAgo - statusAgo;
+    if (gap > 600000) {
+      return `<span title="Last packet ${timeAgo(o.last_packet_at)} — status is newer by ${Math.round(gap/60000)}min. Observer may be alive but not forwarding packets.">📡⚠ ${timeAgo(o.last_packet_at)}</span>`;
+    }
+    return timeAgo(o.last_packet_at);
+  }
+
   function uptimeStr(firstSeen) {
     if (!firstSeen) return '—';
     const ms = Date.now() - new Date(firstSeen).getTime();
@@ -132,7 +143,7 @@
       <div class="obs-table-scroll"><table class="data-table obs-table" id="obsTable">
         <caption class="sr-only">Observer status and statistics</caption>
         <thead><tr>
-          <th scope="col">Status</th><th scope="col">Name</th><th scope="col">Region</th><th scope="col">Last Seen</th>
+          <th scope="col">Status</th><th scope="col">Name</th><th scope="col">Region</th><th scope="col">Last Status</th><th scope="col">Last Packet</th>
           <th scope="col">Packets</th><th scope="col">Packets/Hour</th><th scope="col">Clock Offset</th><th scope="col">Uptime</th>
         </tr></thead>
         <tbody>${filtered.map(o => {
@@ -143,6 +154,8 @@
             <td class="mono">${o.name || o.id}</td>
             <td>${o.iata ? `<span class="badge-region">${o.iata}</span>` : '—'}</td>
             <td>${timeAgo(o.last_seen)}</td>
+            <td>${o.last_packet_at ? timeAgo(o.last_packet_at) : '<span class="text-muted">—</span>'}</td>
+            <td>${packetBadge(o)}</td>
             <td>${(o.packet_count || 0).toLocaleString()}</td>
             <td>${sparkBar(o.packetsLastHour || 0, maxPktsHr)}</td>
             <td>${(function() {
