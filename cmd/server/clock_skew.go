@@ -238,19 +238,43 @@ func collectSamples(store *PacketStore) []skewSample {
 	return samples
 }
 
+// timestampMissing is the sentinel returned by extractTimestamp when no
+// timestamp field is present in the decoded advert. Using -1 lets us
+// distinguish "field absent" from a real epoch-0 timestamp (ts == 0).
+const timestampMissing int64 = -1
+
 // extractTimestamp gets the Unix timestamp from a decoded ADVERT payload.
+// Returns timestampMissing (-1) if no timestamp field is found.
 func extractTimestamp(decoded map[string]interface{}) int64 {
 	if payload, ok := decoded["payload"]; ok {
 		if pm, ok := payload.(map[string]interface{}); ok {
-			if ts := jsonNumber(pm, "timestamp"); ts > 0 {
+			if ts, ok := jsonNumberOk(pm, "timestamp"); ok {
 				return ts
 			}
 		}
 	}
-	if ts := jsonNumber(decoded, "timestamp"); ts > 0 {
+	if ts, ok := jsonNumberOk(decoded, "timestamp"); ok {
 		return ts
 	}
-	return 0
+	return timestampMissing
+}
+
+// jsonNumberOk extracts an int64 from a JSON-parsed map, returning (value, true)
+// if the key exists and is numeric, or (0, false) otherwise.
+func jsonNumberOk(m map[string]interface{}, key string) (int64, bool) {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0, false
+	}
+	switch n := v.(type) {
+	case float64:
+		return int64(n), true
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	}
+	return 0, false
 }
 
 // jsonNumber extracts an int64 from a JSON-parsed map (handles float64 and json.Number).

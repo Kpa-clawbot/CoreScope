@@ -234,8 +234,19 @@ func TestExtractTimestamp(t *testing.T) {
 
 	decoded3 := map[string]interface{}{"foo": "bar"}
 	got3 := extractTimestamp(decoded3)
-	if got3 != 0 {
-		t.Errorf("extractTimestamp (missing) = %v, want 0", got3)
+	if got3 != timestampMissing {
+		t.Errorf("extractTimestamp (missing) = %v, want %v", got3, timestampMissing)
+	}
+
+	// Epoch-0 timestamp is a valid value, not "missing".
+	decoded4 := map[string]interface{}{
+		"payload": map[string]interface{}{
+			"timestamp": float64(0),
+		},
+	}
+	got4 := extractTimestamp(decoded4)
+	if got4 != 0 {
+		t.Errorf("extractTimestamp (epoch-0) = %v, want 0", got4)
 	}
 }
 
