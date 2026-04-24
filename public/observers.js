@@ -3,6 +3,7 @@
 
 (function () {
   let observers = [];
+  let obsSkewMap = {}; // observerID → {offsetSec, samples}
   let wsHandler = null;
   let refreshTimer = null;
   let regionChangeHandler = null;
@@ -51,12 +52,20 @@
     if (regionChangeHandler) RegionFilter.offChange(regionChangeHandler);
     regionChangeHandler = null;
     observers = [];
+    obsSkewMap = {};
   }
 
   async function loadObservers() {
     try {
-      const data = await api('/observers', { ttl: CLIENT_TTL.observers });
+      const [data, skewData] = await Promise.all([
+        api('/observers', { ttl: CLIENT_TTL.observers }),
+        api('/observers/clock-skew', { ttl: 30000 }).catch(function() { return []; })
+      ]);
       observers = data.observers || [];
+      obsSkewMap = {};
+      (Array.isArray(skewData) ? skewData : []).forEach(function(s) {
+        if (s && s.observerID) obsSkewMap[s.observerID] = s;
+      });
       render();
     } catch (e) {
       document.getElementById('obsContent').innerHTML =
@@ -124,7 +133,7 @@
         <caption class="sr-only">Observer status and statistics</caption>
         <thead><tr>
           <th scope="col">Status</th><th scope="col">Name</th><th scope="col">Region</th><th scope="col">Last Seen</th>
-          <th scope="col">Packets</th><th scope="col">Packets/Hour</th><th scope="col">Uptime</th>
+          <th scope="col">Packets</th><th scope="col">Packets/Hour</th><th scope="col">Clock Offset</th><th scope="col">Uptime</th>
         </tr></thead>
         <tbody>${filtered.map(o => {
           const h = healthStatus(o.last_seen);
@@ -136,6 +145,12 @@
             <td>${timeAgo(o.last_seen)}</td>
             <td>${(o.packet_count || 0).toLocaleString()}</td>
             <td>${sparkBar(o.packetsLastHour || 0, maxPktsHr)}</td>
+            <td>${(function() {
+              var sk = obsSkewMap[o.id];
+              if (!sk || sk.samples == null || sk.samples === 0) return '<span class="text-muted">—</span>';
+              var sev = (function(abs) { return abs >= 300 ? (abs >= 3600 ? 'critical' : 'warning') : 'ok'; })(Math.abs(sk.offsetSec));
+              return renderSkewBadge(sev, sk.offsetSec) + ' <span class="text-muted" title="Computed from ' + sk.samples + ' multi-observer packets. Positive = observer ahead of consensus.">(' + sk.samples + ')</span>';
+            })()}</td>
             <td>${uptimeStr(o.first_seen)}</td>
           </tr>`;
         }).join('')}</tbody>
