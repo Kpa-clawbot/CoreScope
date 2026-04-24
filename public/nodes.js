@@ -827,6 +827,25 @@
       var skewDisplay = cs.severity === 'default'
         ? '<span style="font-size:18px;font-weight:700;color:var(--text-muted)">Default</span>'
         : '<span style="font-size:18px;font-weight:700;font-family:var(--mono)">' + formatSkew(skewVal) + '</span>';
+
+      // Per-tier explainer line (plain English reason).
+      var explainer = '';
+      var absSkew = Math.abs(cs.lastSkewSec || 0);
+      var skewStr = Math.round(absSkew) + 's';
+      if (cs.severity === 'default') {
+        var isoAdv = cs.lastAdvertTS ? new Date(cs.lastAdvertTS * 1000).toISOString() : '?';
+        explainer = 'Last advert at ' + isoAdv + ' — matches firmware default (volatile RTC, not user-set since boot)';
+      } else if (cs.severity === 'ok') {
+        explainer = 'Last advert ' + skewStr + ' vs wall clock — within OK tolerance (≤15s)';
+      } else if (cs.severity === 'degrading') {
+        explainer = 'Last advert ' + skewStr + ' vs wall clock — drift accumulating (≤60s)';
+      } else if (cs.severity === 'degraded') {
+        explainer = 'Last advert ' + skewStr + ' vs wall clock — significantly off (≤10m)';
+      } else if (cs.severity === 'wrong') {
+        explainer = 'Last advert ' + skewStr + ' vs wall clock — clock incorrect (operator-set or RTC failure)';
+      }
+      var explainerHtml = explainer ? '<div style="font-size:12px;color:var(--text-muted);margin-top:4px">' + explainer + '</div>' : '';
+
       container.innerHTML =
         '<h4 style="margin:0 0 6px">⏰ Clock Skew</h4>' +
         '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
@@ -834,6 +853,7 @@
           renderSkewBadge(cs.severity, skewVal, cs) +
           (cs.calibrated ? ' <span style="font-size:10px;color:var(--text-muted)" title="Observer-calibrated">✓ calibrated</span>' : '') +
         '</div>' +
+        explainerHtml +
         driftHtml +
         (sparkHtml ? '<div class="skew-sparkline-wrap" style="margin-top:8px">' + sparkHtml + '<div style="font-size:10px;color:var(--text-muted)">Skew over time (' + (cs.samples || []).length + ' samples)</div></div>' : '');
     } catch (e) {
