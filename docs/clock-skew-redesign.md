@@ -67,7 +67,7 @@ Per-node `lastAdvertTS` raw timestamp distribution shows a sharp default cluster
 +113d    count=2  samples=53776
 ```
 
-103 of 416 nodes (25%) have `lastAdvertTS` between `1715770351` and `1715770351 + 730 days`, consistent with the volatile-RTC-default-ticking-up pattern.
+103 of 416 nodes (25%) have `lastAdvertTS` between `1715770351` and `1715770351 + 1095 days`, consistent with the volatile-RTC-default-ticking-up pattern.
 
 A second cluster of 5 nodes has `lastAdvertTS = 1672531542 ≈ 1672531200 + 5min` = **2023-01-01 00:00:00 UTC** + small uptime. This is a *different* firmware-default epoch from an older firmware version.
 
@@ -148,7 +148,7 @@ Per-advert classification, no windowing:
 
 ```python
 DEFAULT_EPOCHS = [0, 1609459200, 1672531200, 1715770351]
-MAX_PLAUSIBLE_UPTIME_SEC = 730 * 86400  # 2 years
+MAX_PLAUSIBLE_UPTIME_SEC = 1095 * 86400  # 3 years
 
 def is_default(ts):
     return any(d <= ts <= d + MAX_PLAUSIBLE_UPTIME_SEC for d in DEFAULT_EPOCHS)
@@ -171,7 +171,7 @@ Per-node state = classification of the node's most-recent advert (per hash, pick
 
 | Tier | Condition | Color | UI label | Meaning |
 |---|---|---|---|---|
-| `default` | Advert ts within `[default, default + 2y]` of any known epoch | Gray | "Default" | Volatile RTC at firmware boot constant; never set or rebooted and not re-synced. |
+| `default` | Advert ts within `[default, default + 3y]` of any known epoch | Gray | "Default" | Volatile RTC at firmware boot constant; never set or rebooted and not re-synced. |
 | `ok` | abs(skew) ≤ 15s | Green | "OK" | Working clock. |
 | `degrading` | 15s < abs(skew) ≤ 60s | Yellow | "Degrading" | Real but accumulating drift. |
 | `degraded` | 60s < abs(skew) ≤ 600s | Orange | "Degraded" | Off by minutes — needs re-sync. |
@@ -227,7 +227,7 @@ Single PR replaces the classifier in `clock_skew.go` and updates the frontend ba
    - The 2027 / 2067 cascadia outliers reclassify as `wrong`.
    - The 285 cascadia 2026-04 nodes reclassify as `ok` (or `degrading` if drift exceeds 15s).
 2. Add per-tier unit tests in `cmd/server/clock_skew_test.go`.
-3. Add a regression test for each known default epoch (synthesize advert at `default + 0s`, `default + 1d`, `default + 2y - 1s` → all classify as `default`).
+3. Add a regression test for each known default epoch (synthesize advert at `default + 0s`, `default + 1d`, `default + 3y - 1s` → all classify as `default`).
 4. Edge cases:
    - `advert_ts == 0` → matches default epoch 0.
    - `advert_ts == 1715770351 + 731 days` → no longer matches (uptime cap exceeded) — should fall through to time-based classification, likely `wrong`.

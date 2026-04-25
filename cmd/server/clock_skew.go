@@ -28,7 +28,7 @@ var defaultEpochs = []int64{0, 1609459200, 1672531200, 1715770351}
 const (
 	// maxPlausibleUptimeSec caps how far past a default epoch we still
 	// consider "default + uptime ticking". 730 days ≈ 2 years.
-	maxPlausibleUptimeSec = 730 * 86400
+	maxPlausibleUptimeSec = 1095 * 86400 // 3 years — covers solar repeater deployment lifetimes at firmware default
 
 	// Severity band boundaries (absolute skew in seconds).
 	skewThresholdOKSec        = 15

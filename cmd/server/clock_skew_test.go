@@ -20,11 +20,11 @@ func TestClassify_Default_AllKnownEpochs(t *testing.T) {
 			}
 		}
 	}
-	// Also test at 729d for the most recent epoch (no overlap issue).
-	advTS := defaultEpochs[len(defaultEpochs)-1] + 729*86400
+	// Also test at 1094d for the most recent epoch (no overlap issue).
+	advTS := defaultEpochs[len(defaultEpochs)-1] + 1094*86400
 	sev, matched := classifySkew(advTS, 999999)
 	if sev != SkewDefault {
-		t.Errorf("classifySkew(latest epoch + 729d) = %v, want default", sev)
+		t.Errorf("classifySkew(latest epoch + 1094d) = %v, want default", sev)
 	}
 	if matched != defaultEpochs[len(defaultEpochs)-1] {
 		t.Errorf("matched = %d, want %d", matched, defaultEpochs[len(defaultEpochs)-1])
@@ -32,18 +32,29 @@ func TestClassify_Default_AllKnownEpochs(t *testing.T) {
 }
 
 func TestClassify_Default_BeyondUptimeCap(t *testing.T) {
-	// 731 days past the LATEST epoch → NOT default.
+	// 1096 days past the LATEST epoch → NOT default.
 	latestEpoch := defaultEpochs[len(defaultEpochs)-1]
-	advTS := latestEpoch + 731*86400
+	advTS := latestEpoch + 1096*86400
 	sev, _ := classifySkew(advTS, 5)
 	if sev == SkewDefault {
-		t.Errorf("classifySkew(latestEpoch + 731d) = default, should fall through")
+		t.Errorf("classifySkew(latestEpoch + 1096d) = default, should fall through")
+	}
+}
+
+func TestMaxPlausibleUptime_CoversSolarRepeaterLifetimes(t *testing.T) {
+	// A solar repeater running for 3 years at firmware default 1715770351
+	// should still classify as "default".
+	epoch := int64(1715770351)
+	advTS := epoch + 1095*86400 // exactly 3 years
+	sev, _ := classifySkew(advTS, 5)
+	if sev != SkewDefault {
+		t.Errorf("classifySkew(firmware default + 3y) = %v, want default", sev)
 	}
 }
 
 func TestClassify_OK(t *testing.T) {
 	// Use a timestamp outside all default-epoch ranges.
-	advTS := int64(1900000000) // 2030-03 — well past any default+730d
+	advTS := int64(1900000000) // 2030-03 — well past any default+1095d
 	tests := []struct {
 		skew float64
 		want SkewSeverity
@@ -151,7 +162,7 @@ func TestIsDefaultEpoch_Boundaries(t *testing.T) {
 
 func TestIsDefault_OverlappingWindowsPicksLargest(t *testing.T) {
 	// 1715770351 (2024-05-15) falls in the range of BOTH epoch 1672531200
-	// (2023-01-01, +730d covers through 2025) AND epoch 1715770351 itself.
+	// (2023-01-01, +1095d covers through 2026) AND epoch 1715770351 itself.
 	// The classifier must pick the largest epoch ≤ advertTS.
 	ok, ep := isDefaultEpoch(1715770351)
 	if !ok || ep != 1715770351 {
