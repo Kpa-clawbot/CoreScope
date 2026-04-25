@@ -485,6 +485,39 @@ func TestSchemaNoiseFloorIsReal(t *testing.T) {
 	}
 }
 
+func TestSchemaMultibyteSupColumns(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	cols := map[string]string{}
+	rows, err := s.db.Query("PRAGMA table_info(nodes)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var colName, colType string
+		var notNull, pk int
+		var dflt interface{}
+		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
+			cols[colName] = colType
+		}
+	}
+
+	if ct, ok := cols["multibyte_sup"]; !ok {
+		t.Error("nodes.multibyte_sup column missing")
+	} else if ct != "INTEGER" {
+		t.Errorf("nodes.multibyte_sup type=%s, want INTEGER", ct)
+	}
+	if _, ok := cols["multibyte_evidence"]; !ok {
+		t.Error("nodes.multibyte_evidence column missing")
+	}
+}
+
 func TestInsertTransmissionWithObserver(t *testing.T) {
 	s, err := OpenStore(tempDBPath(t))
 	if err != nil {
