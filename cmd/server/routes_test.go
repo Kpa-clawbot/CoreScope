@@ -2509,7 +2509,7 @@ func TestHashAnalyticsZeroHopAdvert(t *testing.T) {
 	}
 
 	// Capture baseline from seed data (bypass cache via computeAnalyticsHashSizes)
-	baseline := store.computeAnalyticsHashSizes("")
+	baseline := store.computeAnalyticsHashSizes("", "")
 	baseTotal, _ := baseline["total"].(int)
 	baseDist, _ := baseline["distribution"].(map[string]int)
 	baseDist1 := baseDist["1"]
@@ -2535,7 +2535,7 @@ func TestHashAnalyticsZeroHopAdvert(t *testing.T) {
 	store.packets = append(store.packets, tx)
 	store.byPayloadType[4] = append(store.byPayloadType[4], tx)
 
-	result := store.computeAnalyticsHashSizes("")
+	result := store.computeAnalyticsHashSizes("", "")
 
 	// distributionByRepeaters should include the zero-hop advert's node
 	distByRepeaters, ok := result["distributionByRepeaters"].(map[string]int)
@@ -2595,7 +2595,7 @@ func TestAnalyticsHashSizeSameNameDifferentPubkey(t *testing.T) {
 		store.byPayloadType[4] = append(store.byPayloadType[4], tx)
 	}
 
-	result := store.GetAnalyticsHashSizes("")
+	result := store.GetAnalyticsHashSizes("", "")
 
 	distByRepeaters, ok := result["distributionByRepeaters"].(map[string]int)
 	if !ok {
@@ -3528,7 +3528,7 @@ func TestHashCollisionsOnlyRepeaters(t *testing.T) {
 	store.hashSizeInfoAt = time.Now()
 	store.hashSizeInfoMu.Unlock()
 
-	result := store.computeHashCollisions("")
+	result := store.computeHashCollisions("", "")
 
 	bySize, ok := result["by_size"].(map[string]interface{})
 	if !ok {

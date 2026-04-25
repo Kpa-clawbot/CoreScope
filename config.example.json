@@ -166,6 +166,25 @@
     "bufferKm": 20,
     "_comment": "Optional. Restricts ingestion and API responses to nodes within the polygon + bufferKm. Polygon is an array of [lat, lon] pairs (minimum 3). Use tools/geofilter-builder.html to draw a polygon visually. Remove this section to disable filtering. Nodes with no GPS fix are always allowed through."
   },
+  "areas": {
+    "_comment": "Optional. GPS-based display filter. Each entry defines a geographic area by polygon ([lat, lon] pairs) or bounding box (latMin/latMax/lonMin/lonMax). Packets and nodes are attributed to an area based on the transmitting node's own GPS coordinates — not the observer's location. Areas appear as a filter pill bar in the dashboard. Remove this section to disable the area filter UI.",
+    "BAY": {
+      "label": "Bay Area",
+      "polygon": [
+        [37.90, -122.55],
+        [37.90, -121.75],
+        [37.25, -121.75],
+        [37.25, -122.55]
+      ]
+    },
+    "SJC": {
+      "label": "San Jose",
+      "latMin": 37.20,
+      "latMax": 37.45,
+      "lonMin": -122.05,
+      "lonMax": -121.75
+    }
+  },
   "regions": {
     "SJC": "San Jose, US",
     "SFO": "San Francisco, US",

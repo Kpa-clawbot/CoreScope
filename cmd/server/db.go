@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/meshcore-analyzer/geofilter"
 	_ "modernc.org/sqlite"
 )
 
@@ -387,6 +388,7 @@ type PacketQuery struct {
 	Since    string
 	Until    string
 	Region   string
+	Area     string   // area key; filters by transmitting node's GPS position
 	Node     string
 	Channel  string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
 	Order               string // ASC or DESC
@@ -2332,6 +2334,44 @@ func (db *DB) GetDroppedPackets(limit int, observerID, nodePubkey string) ([]map
 		results = []map[string]interface{}{}
 	}
 	return results, nil
+}
+
+// GetNodePubkeysInArea returns public keys of nodes whose GPS coordinates
+// fall inside the given area polygon or bounding box.
+func (db *DB) GetNodePubkeysInArea(entry AreaEntry) ([]string, error) {
+	rows, err := db.conn.Query("SELECT public_key, lat, lon FROM nodes WHERE lat IS NOT NULL AND lon IS NOT NULL")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	gf := &geofilter.Config{
+		Polygon: entry.Polygon,
+		LatMin:  entry.LatMin,
+		LatMax:  entry.LatMax,
+		LonMin:  entry.LonMin,
+		LonMax:  entry.LonMax,
+	}
+
+	var result []string
+	for rows.Next() {
+		var pk string
+		var lat, lon sql.NullFloat64
+		if err := rows.Scan(&pk, &lat, &lon); err != nil {
+			continue
+		}
+		if !lat.Valid || !lon.Valid {
+			continue
+		}
+		// Skip (0,0) — PassesFilter allows it but these nodes have no real GPS.
+		if lat.Float64 == 0 && lon.Float64 == 0 {
+			continue
+		}
+		if geofilter.PassesFilter(lat.Float64, lon.Float64, gf) {
+			result = append(result, pk)
+		}
+	}
+	return result, rows.Err()
 }
 
 // GetSignatureDropCount returns the total number of dropped packets.

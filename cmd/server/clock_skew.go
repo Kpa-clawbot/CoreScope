@@ -579,7 +579,12 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 
 // GetFleetClockSkew returns clock skew data for all nodes that have skew data.
 // Must NOT be called with s.mu held.
-func (s *PacketStore) GetFleetClockSkew() []*NodeClockSkew {
+func (s *PacketStore) GetFleetClockSkew(area string) []*NodeClockSkew {
+	var areaNodes map[string]bool
+	if area != "" {
+		areaNodes = s.resolveAreaNodes(area)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -592,6 +597,9 @@ func (s *PacketStore) GetFleetClockSkew() []*NodeClockSkew {
 
 	var results []*NodeClockSkew
 	for pubkey := range s.byNode {
+		if areaNodes != nil && !areaNodes[pubkey] {
+			continue
+		}
 		cs := s.getNodeClockSkewLocked(pubkey)
 		if cs == nil {
 			continue

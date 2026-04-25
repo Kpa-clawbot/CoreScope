@@ -38,6 +38,10 @@ Type in the search box to filter by name or public key. The filter applies insta
 
 Filter to show only active, degraded, or silent nodes.
 
+### Area filter
+
+If [areas are configured](area-filter.md), an area pill bar appears above the list. Selecting an area shows only nodes whose GPS position falls within that area.
+
 ### Last heard filter
 
 Filter nodes by how recently they were heard (e.g., last hour, last 24h).

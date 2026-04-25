@@ -189,6 +189,27 @@ Restricts ingestion and API responses to nodes within the polygon plus a buffer 
 
 See [Geographic Filtering](geofilter.md) for the full guide including the visual polygon builder and the prune script for cleaning up historical data.
 
+## Areas
+
+```json
+"areas": {
+  "BAY": {
+    "label": "Bay Area",
+    "polygon": [[37.90, -122.55], [37.90, -121.75], [37.25, -121.75], [37.25, -122.55]]
+  },
+  "SJC": {
+    "label": "San Jose",
+    "latMin": 37.20, "latMax": 37.45, "lonMin": -122.05, "lonMax": -121.75
+  }
+}
+```
+
+GPS-based display filter. When configured, a pill bar appears in the dashboard letting users scope packets, nodes, and analytics to nodes physically located within a named area. Attribution is based on the transmitting node's own GPS coordinates — not the observer's location.
+
+Each entry supports a `polygon` (array of `[lat, lon]` pairs) or a bounding box (`latMin`/`latMax`/`lonMin`/`lonMax`). Remove the block to disable the area filter UI.
+
+See [Area Filter](area-filter.md) for the full guide including the visual builder tool.
+
 ## Home page
 
 The `home` section customizes the onboarding experience. See `config.example.json` for the full structure including `steps`, `checklist`, and `footerLinks`.

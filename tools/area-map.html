@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Area Map Debug</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 10px 16px; background: #0f0f23; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 1rem; font-weight: 600; color: #4a9eff; white-space: nowrap; }
+  #base-url-form { display: flex; gap: 8px; align-items: center; }
+  #base-url-form label { font-size: 0.8rem; color: #888; }
+  #base-url { background: #111; border: 1px solid #444; border-radius: 6px; padding: 5px 10px; color: #e0e0e0; font-size: 0.85rem; width: 280px; }
+  #btn-load { padding: 5px 14px; background: #1a4a7a; color: #7ec8e3; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+  #btn-load:hover { background: #2a6aaa; }
+  #status { font-size: 0.8rem; color: #888; margin-left: auto; }
+  #status.err { color: #ff7070; }
+  #main { flex: 1; display: flex; overflow: hidden; }
+  #sidebar { width: 240px; min-width: 240px; background: #0f0f23; border-right: 1px solid #333; display: flex; flex-direction: column; overflow: hidden; }
+  #sidebar-title { padding: 10px 14px; font-size: 0.75rem; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #222; }
+  #area-list { flex: 1; overflow-y: auto; padding: 8px 0; }
+  .area-item { display: flex; align-items: center; gap: 10px; padding: 8px 14px; cursor: pointer; user-select: none; }
+  .area-item:hover { background: #1a1a3e; }
+  .area-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; border: 1px solid rgba(255,255,255,0.2); }
+  .area-label { font-size: 0.85rem; flex: 1; }
+  .area-key { font-size: 0.72rem; color: #666; }
+  .area-check { width: 16px; height: 16px; accent-color: #4a9eff; cursor: pointer; }
+  #node-section { border-top: 1px solid #333; padding: 8px 0; }
+  #node-toggle-row { display: flex; align-items: center; gap: 8px; padding: 8px 14px; }
+  #node-toggle-row label { font-size: 0.82rem; color: #ccc; cursor: pointer; }
+  #show-nodes { accent-color: #4a9eff; cursor: pointer; }
+  #node-count { font-size: 0.75rem; color: #666; margin-left: auto; }
+  #map { flex: 1; }
+  .node-popup { font-size: 0.8rem; line-height: 1.5; }
+  .node-popup strong { color: #4a9eff; }
+  .no-gps-badge { background: #5a2020; color: #ff9090; font-size: 0.7rem; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Area Map Debug</h1>
+  <div id="base-url-form">
+    <label for="base-url">Server:</label>
+    <input id="base-url" type="text" value="http://localhost:3000" placeholder="http://localhost:3000"/>
+    <button id="btn-load">Load</button>
+  </div>
+  <span id="status">Enter server URL and click Load</span>
+</header>
+
+<div id="main">
+  <div id="sidebar">
+    <div id="sidebar-title">Areas</div>
+    <div id="area-list"><div style="padding:12px 14px;color:#555;font-size:0.8rem;">No areas loaded</div></div>
+    <div id="node-section">
+      <div id="node-toggle-row">
+        <input type="checkbox" id="show-nodes"/>
+        <label for="show-nodes">Show all nodes</label>
+        <span id="node-count"></span>
+      </div>
+    </div>
+  </div>
+  <div id="map"></div>
+</div>
+
+<script>
+const COLORS = ['#4a9eff','#ff6b6b','#51cf66','#ffd43b','#cc5de8','#ff922b','#20c997','#f06595','#74c0fc','#a9e34b'];
+
+const map = L.map('map').setView([37.5, -122.0], 9);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors',
+  maxZoom: 19
+}).addTo(map);
+
+let areaLayers = {};   // key -> { polygon: L.Layer, nodes: L.LayerGroup }
+let allNodeLayer = L.layerGroup();
+let areas = [];
+let allNodes = [];
+let baseUrl = '';
+
+function setStatus(msg, isErr) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = isErr ? 'err' : '';
+}
+
+async function load() {
+  baseUrl = document.getElementById('base-url').value.replace(/\/$/, '');
+  setStatus('Loading…');
+
+  // Clean up existing layers
+  Object.values(areaLayers).forEach(g => { map.removeLayer(g.poly); map.removeLayer(g.nodes); });
+  areaLayers = {};
+  allNodeLayer.clearLayers();
+  map.removeLayer(allNodeLayer);
+  document.getElementById('area-list').innerHTML = '';
+  document.getElementById('node-count').textContent = '';
+  document.getElementById('show-nodes').checked = false;
+
+  try {
+    const [areasResp, nodesResp] = await Promise.all([
+      fetch(`${baseUrl}/api/config/areas/polygons`),
+      fetch(`${baseUrl}/api/nodes?limit=9999`)
+    ]);
+    if (!areasResp.ok) throw new Error(`/api/config/areas/polygons: ${areasResp.status}`);
+    if (!nodesResp.ok) throw new Error(`/api/nodes: ${nodesResp.status}`);
+
+    areas = await areasResp.json();
+    const nodesData = await nodesResp.json();
+    allNodes = nodesData.nodes || nodesData || [];
+
+    if (!areas.length) {
+      setStatus('No areas defined in config');
+      return;
+    }
+
+    buildSidebar();
+    buildNodeLayer();
+    setStatus(`${areas.length} area(s), ${allNodes.length} node(s) loaded`);
+
+    // Auto-fit to all area bounds
+    const allBounds = [];
+    areas.forEach(a => {
+      const pts = getLatLngs(a);
+      if (pts.length) pts.forEach(p => allBounds.push(p));
+    });
+    if (allBounds.length) map.fitBounds(L.latLngBounds(allBounds).pad(0.1));
+
+  } catch(e) {
+    setStatus('Error: ' + e.message, true);
+  }
+}
+
+function getLatLngs(area) {
+  if (area.polygon && area.polygon.length) {
+    return area.polygon.map(p => [p[0], p[1]]);
+  }
+  if (area.latMin != null) {
+    return [
+      [area.latMin, area.lonMin],
+      [area.latMin, area.lonMax],
+      [area.latMax, area.lonMax],
+      [area.latMax, area.lonMin],
+    ];
+  }
+  return [];
+}
+
+function buildSidebar() {
+  const list = document.getElementById('area-list');
+  list.innerHTML = '';
+  areas.forEach((area, i) => {
+    const color = COLORS[i % COLORS.length];
+    const item = document.createElement('div');
+    item.className = 'area-item';
+    item.innerHTML = `
+      <div class="area-swatch" style="background:${color}55;border-color:${color}"></div>
+      <div style="flex:1;min-width:0">
+        <div class="area-label">${area.label || area.key}</div>
+        <div class="area-key">${area.key}</div>
+      </div>
+      <input type="checkbox" class="area-check" data-key="${area.key}" checked/>
+    `;
+    item.querySelector('.area-check').addEventListener('change', e => {
+      toggleArea(area.key, e.target.checked);
+    });
+    list.appendChild(item);
+
+    // Draw polygon
+    const lls = getLatLngs(area);
+    if (!lls.length) return;
+    const poly = L.polygon(lls, {
+      color: color,
+      fillColor: color,
+      fillOpacity: 0.12,
+      weight: 2,
+      opacity: 0.8
+    }).addTo(map);
+    poly.bindTooltip(area.label || area.key, { permanent: false, sticky: true });
+
+    // Nodes filtered to this area (server-side)
+    const nodesGroup = L.layerGroup().addTo(map);
+    loadAreaNodes(area.key, color, nodesGroup);
+
+    areaLayers[area.key] = { poly, nodes: nodesGroup, color };
+  });
+}
+
+async function loadAreaNodes(areaKey, color, group) {
+  try {
+    const resp = await fetch(`${baseUrl}/api/nodes?area=${encodeURIComponent(areaKey)}&limit=9999`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const nodes = data.nodes || data || [];
+    nodes.forEach(n => {
+      if (!n.lat || !n.lon) return;
+      const marker = L.circleMarker([n.lat, n.lon], {
+        radius: 7,
+        color: color,
+        fillColor: color,
+        fillOpacity: 0.85,
+        weight: 2
+      });
+      marker.bindPopup(`<div class="node-popup">
+        <strong>${n.name || n.public_key?.slice(0,8) || '?'}</strong><br>
+        Key: ${n.public_key?.slice(0,16) || '—'}…<br>
+        GPS: ${n.lat?.toFixed(5)}, ${n.lon?.toFixed(5)}<br>
+        Area: <em>${areaKey}</em>
+      </div>`);
+      group.addLayer(marker);
+    });
+  } catch(_) {}
+}
+
+function buildNodeLayer() {
+  allNodeLayer.clearLayers();
+  let count = 0;
+  allNodes.forEach(n => {
+    const hasGps = n.lat && n.lon && !(Math.abs(n.lat) < 0.001 && Math.abs(n.lon) < 0.001);
+    const lat = hasGps ? n.lat : null;
+    const lon = hasGps ? n.lon : null;
+    if (!lat) return;
+    count++;
+    const marker = L.circleMarker([lat, lon], {
+      radius: 5,
+      color: '#aaa',
+      fillColor: '#888',
+      fillOpacity: 0.5,
+      weight: 1
+    });
+    marker.bindPopup(`<div class="node-popup">
+      <strong>${n.name || n.public_key?.slice(0,8) || '?'}</strong><br>
+      Key: ${n.public_key?.slice(0,16) || '—'}…<br>
+      GPS: ${lat.toFixed(5)}, ${lon.toFixed(5)}
+    </div>`);
+    allNodeLayer.addLayer(marker);
+  });
+  document.getElementById('node-count').textContent = `${count}`;
+}
+
+function toggleArea(key, visible) {
+  const g = areaLayers[key];
+  if (!g) return;
+  if (visible) {
+    g.poly.addTo(map);
+    g.nodes.addTo(map);
+  } else {
+    map.removeLayer(g.poly);
+    map.removeLayer(g.nodes);
+  }
+}
+
+document.getElementById('btn-load').addEventListener('click', load);
+document.getElementById('base-url').addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+document.getElementById('show-nodes').addEventListener('change', e => {
+  if (e.target.checked) allNodeLayer.addTo(map);
+  else map.removeLayer(allNodeLayer);
+});
+</script>
+</body>
+</html>
