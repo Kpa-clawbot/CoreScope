@@ -5416,7 +5416,9 @@ func (s *PacketStore) GetAnalyticsHashSizes(region string) map[string]interface{
 				}
 			}
 		}
-		result["multiByteCapability"] = s.computeMultiByteCapability(adopterHS)
+		entries := s.computeMultiByteCapability(adopterHS)
+		result["multiByteCapability"] = entries
+		s.persistMultiByteCapability(entries)
 	}
 
 	s.cacheMu.Lock()
@@ -6319,6 +6321,31 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 	})
 
 	return result
+}
+
+func (s *PacketStore) persistMultiByteCapability(entries []MultiByteCapEntry) {
+	if !s.db.hasMultibyteSupCols {
+		return
+	}
+	for _, e := range entries {
+		var sup int
+		switch e.Status {
+		case "confirmed":
+			sup = 2
+		case "suspected":
+			sup = 1
+		default:
+			continue
+		}
+		var evidence interface{}
+		if e.Evidence != "" {
+			evidence = e.Evidence
+		}
+		s.db.conn.Exec(
+			"UPDATE nodes SET multibyte_sup = ?, multibyte_evidence = ? WHERE public_key = ? AND multibyte_sup < ?",
+			sup, evidence, e.PublicKey, sup,
+		)
+	}
 }
 
 // --- Bulk Health (in-memory) ---
