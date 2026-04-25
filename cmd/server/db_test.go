@@ -2083,3 +2083,31 @@ func TestGetScopeStats(t *testing.T) {
 		t.Errorf("ByRegion = %+v, want [{#belgium 1}]", stats.ByRegion)
 	}
 }
+
+func TestGetNodesReturnsMultibyteSupField(t *testing.T) {
+	conn, _ := sql.Open("sqlite", ":memory:")
+	conn.SetMaxOpenConns(1)
+	conn.Exec(`CREATE TABLE nodes (
+		public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
+		lat REAL, lon REAL, last_seen TEXT, first_seen TEXT,
+		advert_count INTEGER DEFAULT 0, battery_mv INTEGER, temperature_c REAL,
+		multibyte_sup INTEGER NOT NULL DEFAULT 0, multibyte_evidence TEXT
+	)`)
+	conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen)
+		VALUES ('aabb1122', 'TestRep', 'repeater', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+	db := &DB{conn: conn, hasMultibyteSupCols: true}
+
+	nodes, _, _, err := db.GetNodes(10, 0, "", "", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) == 0 {
+		t.Fatal("expected 1 node")
+	}
+	if _, ok := nodes[0]["multibyte_sup"]; !ok {
+		t.Error("multibyte_sup missing from GetNodes response")
+	}
+	if nodes[0]["multibyte_sup"] != 0 {
+		t.Errorf("multibyte_sup = %v, want 0", nodes[0]["multibyte_sup"])
+	}
+}
