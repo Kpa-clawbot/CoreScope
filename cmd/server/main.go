@@ -154,6 +154,9 @@ func main() {
 		log.Fatalf("[store] failed to load: %v", err)
 	}
 
+	// Warm the multibyte capability snapshot so node enrichment works immediately.
+	go store.GetAnalyticsHashSizes("")
+
 	// Initialize persisted neighbor graph
 	dbPath = database.path
 	if err := ensureNeighborEdgesTable(dbPath); err != nil {
