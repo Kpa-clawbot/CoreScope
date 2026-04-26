@@ -309,7 +309,9 @@ Paginated node list with filtering.
       "hash_size":     number | null,    // latest hash size (1–3 bytes)
       "hash_size_inconsistent": boolean, // true if flip-flopping
       "hash_sizes_seen": [number] | undefined, // present only if >1 unique size seen
-      "last_heard":    string (ISO) | undefined // from in-memory packets or path relay
+      "last_heard":    string (ISO) | undefined, // from in-memory packets or path relay
+      "multibyte_sup": number,           // 0 = unknown, 1 = suspected, 2 = confirmed multibyte capability
+      "multibyte_evidence": string | null // "advert" | "path" | null
     }
   ],
   "total":  number,                      // total matching count (before pagination)
@@ -464,7 +466,9 @@ Node detail page data.
     "advert_count":  number,
     "hash_size":     number | null,
     "hash_size_inconsistent": boolean,
-    "hash_sizes_seen": [number] | undefined
+    "hash_sizes_seen": [number] | undefined,
+    "multibyte_sup": number,           // 0 = unknown, 1 = suspected, 2 = confirmed multibyte capability
+    "multibyte_evidence": string | null // "advert" | "path" | null
   },
   "recentAdverts": [Packet]   // last 20 packets for this node, newest first
 }
