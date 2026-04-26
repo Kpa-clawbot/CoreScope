@@ -6303,26 +6303,9 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 			entry.Evidence = "advert"
 			entry.MaxHashSize = maxHS
 		} else if maxHS, ok := suspected[pk]; ok {
-			// Don't mark as suspected if node's own adverts confirm hash_size=1.
-			// A prefix collision with a multibyte hop is a false positive when the
-			// node has advertised and never used hash_size >= 2.
-			ownMax := 0
-			if info, hasInfo := hashInfo[pk]; hasInfo {
-				for sz := range info.AllSizes {
-					if sz > ownMax {
-						ownMax = sz
-					}
-				}
-			}
-			if ownMax == 0 || ownMax >= 2 {
-				// No own advert data (can't rule it out), or own adverts also show >=2
-				entry.Status = "suspected"
-				entry.Evidence = "path"
-				entry.MaxHashSize = maxHS
-			} else {
-				// Own adverts confirm hash_size=1 — prefix collision false positive
-				entry.Status = "unknown"
-			}
+			entry.Status = "suspected"
+			entry.Evidence = "path"
+			entry.MaxHashSize = maxHS
 		} else {
 			entry.Status = "unknown"
 		}
