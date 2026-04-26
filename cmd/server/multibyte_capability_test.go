@@ -385,125 +385,66 @@ func TestMultiByteCapability_RoleColumnPopulated(t *testing.T) {
 	}
 }
 
-// setupCapabilityTestDBWithMultibyteCols returns a DB with multibyte columns.
-func setupCapabilityTestDBWithMultibyteCols(t *testing.T) *DB {
-	t.Helper()
+func TestGetMultibyteCapMap_Confirmed(t *testing.T) {
 	db := setupCapabilityTestDB(t)
-	db.conn.Exec(`ALTER TABLE nodes ADD COLUMN multibyte_sup INTEGER NOT NULL DEFAULT 0`)
-	db.conn.Exec(`ALTER TABLE nodes ADD COLUMN multibyte_evidence TEXT`)
-	db.hasMultibyteSupCols = true
-	return db
-}
-
-func TestPersistMultiByteCapability_Confirmed(t *testing.T) {
-	db := setupCapabilityTestDBWithMultibyteCols(t)
 	defer db.conn.Close()
 
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
-		"aabbccdd11223344", "RepA", "repeater", recentTS(1))
-
 	store := NewPacketStore(db, nil)
-	entries := []MultiByteCapEntry{
+	store.cacheMu.Lock()
+	store.mbCapSnapshot = []MultiByteCapEntry{
 		{PublicKey: "aabbccdd11223344", Status: "confirmed", Evidence: "advert"},
+		{PublicKey: "1122334455667788", Status: "suspected", Evidence: "path"},
 	}
-	store.persistMultiByteCapability(entries)
+	store.cacheMu.Unlock()
 
-	var sup int
-	var evidence sql.NullString
-	db.conn.QueryRow("SELECT multibyte_sup, multibyte_evidence FROM nodes WHERE public_key = ?",
-		"aabbccdd11223344").Scan(&sup, &evidence)
-
-	if sup != 2 {
-		t.Errorf("multibyte_sup = %d, want 2", sup)
+	m := store.GetMultibyteCapMap()
+	if e, ok := m["aabbccdd11223344"]; !ok || e.Status != "confirmed" || e.Evidence != "advert" {
+		t.Errorf("confirmed entry: got %+v, want confirmed/advert", e)
 	}
-	if !evidence.Valid || evidence.String != "advert" {
-		t.Errorf("multibyte_evidence = %v, want 'advert'", evidence)
+	if e, ok := m["1122334455667788"]; !ok || e.Status != "suspected" || e.Evidence != "path" {
+		t.Errorf("suspected entry: got %+v, want suspected/path", e)
 	}
 }
 
-func TestPersistMultiByteCapability_Suspected(t *testing.T) {
-	db := setupCapabilityTestDBWithMultibyteCols(t)
+func TestGetMultibyteCapMap_EmptyWhenNoSnapshot(t *testing.T) {
+	db := setupCapabilityTestDB(t)
 	defer db.conn.Close()
 
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
-		"aabbccdd11223344", "RepA", "repeater", recentTS(1))
-
 	store := NewPacketStore(db, nil)
-	entries := []MultiByteCapEntry{
-		{PublicKey: "aabbccdd11223344", Status: "suspected", Evidence: "path"},
-	}
-	store.persistMultiByteCapability(entries)
-
-	var sup int
-	db.conn.QueryRow("SELECT multibyte_sup FROM nodes WHERE public_key = ?",
-		"aabbccdd11223344").Scan(&sup)
-
-	if sup != 1 {
-		t.Errorf("multibyte_sup = %d, want 1", sup)
+	m := store.GetMultibyteCapMap()
+	if len(m) != 0 {
+		t.Errorf("expected empty map before any analytics cycle, got %d entries", len(m))
 	}
 }
 
-func TestPersistMultiByteCapability_NoDowngrade(t *testing.T) {
-	db := setupCapabilityTestDBWithMultibyteCols(t)
-	defer db.conn.Close()
-
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen, multibyte_sup, multibyte_evidence) VALUES (?, ?, ?, ?, ?, ?)",
-		"aabbccdd11223344", "RepA", "repeater", recentTS(1), 2, "advert")
-
-	store := NewPacketStore(db, nil)
-	entries := []MultiByteCapEntry{
-		{PublicKey: "aabbccdd11223344", Status: "suspected", Evidence: "path"},
+func TestEnrichNodeWithMultibyte_Confirmed(t *testing.T) {
+	node := map[string]interface{}{"public_key": "aabb", "multibyte_sup": 0}
+	enrichNodeWithMultibyte(node, MultiByteCapEntry{Status: "confirmed", Evidence: "advert"})
+	if node["multibyte_sup"] != 2 {
+		t.Errorf("multibyte_sup = %v, want 2", node["multibyte_sup"])
 	}
-	store.persistMultiByteCapability(entries)
-
-	var sup int
-	var evidence sql.NullString
-	db.conn.QueryRow("SELECT multibyte_sup, multibyte_evidence FROM nodes WHERE public_key = ?",
-		"aabbccdd11223344").Scan(&sup, &evidence)
-
-	if sup != 2 {
-		t.Errorf("multibyte_sup = %d after downgrade attempt, want 2 (no downgrade)", sup)
-	}
-	if !evidence.Valid || evidence.String != "advert" {
-		t.Errorf("multibyte_evidence = %v after downgrade attempt, want 'advert'", evidence)
+	if node["multibyte_evidence"] != "advert" {
+		t.Errorf("multibyte_evidence = %v, want advert", node["multibyte_evidence"])
 	}
 }
 
-func TestPersistMultiByteCapability_UnknownSkipped(t *testing.T) {
-	db := setupCapabilityTestDBWithMultibyteCols(t)
-	defer db.conn.Close()
-
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
-		"aabbccdd11223344", "RepA", "repeater", recentTS(1))
-
-	store := NewPacketStore(db, nil)
-	entries := []MultiByteCapEntry{
-		{PublicKey: "aabbccdd11223344", Status: "unknown", Evidence: ""},
-	}
-	store.persistMultiByteCapability(entries)
-
-	var sup int
-	db.conn.QueryRow("SELECT multibyte_sup FROM nodes WHERE public_key = ?",
-		"aabbccdd11223344").Scan(&sup)
-
-	if sup != 0 {
-		t.Errorf("multibyte_sup = %d after unknown entry, want 0 (unchanged)", sup)
+func TestEnrichNodeWithMultibyte_Suspected(t *testing.T) {
+	node := map[string]interface{}{"public_key": "aabb", "multibyte_sup": 0}
+	enrichNodeWithMultibyte(node, MultiByteCapEntry{Status: "suspected", Evidence: "path"})
+	if node["multibyte_sup"] != 1 {
+		t.Errorf("multibyte_sup = %v, want 1", node["multibyte_sup"])
 	}
 }
 
-func TestPersistMultiByteCapability_NoOpWhenColsMissing(t *testing.T) {
-	db := setupCapabilityTestDB(t) // no multibyte cols, hasMultibyteSupCols = false
-	defer db.conn.Close()
-
-	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
-		"aabbccdd11223344", "RepA", "repeater", recentTS(1))
-
-	store := NewPacketStore(db, nil)
-	entries := []MultiByteCapEntry{
-		{PublicKey: "aabbccdd11223344", Status: "confirmed", Evidence: "advert"},
+func TestEnrichNodeWithMultibyte_ZeroEntryNoChange(t *testing.T) {
+	node := map[string]interface{}{"public_key": "aabb", "multibyte_sup": 0}
+	enrichNodeWithMultibyte(node, MultiByteCapEntry{}) // zero-value = unknown, no pubkey
+	if node["multibyte_sup"] != 0 {
+		t.Errorf("multibyte_sup = %v, want 0 (unchanged for unknown)", node["multibyte_sup"])
 	}
-	// Must not panic or error when columns don't exist
-	store.persistMultiByteCapability(entries)
+	if _, ok := node["multibyte_evidence"]; ok {
+		t.Error("multibyte_evidence should not be set for unknown entry")
+	}
 }
 
 // TestMultiByteCapability_AdopterEvidenceTakesPrecedence tests that when

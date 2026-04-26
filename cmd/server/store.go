@@ -141,6 +141,7 @@ type PacketStore struct {
 	rfCache      map[string]*cachedResult // region → cached RF result
 	topoCache    map[string]*cachedResult // region → cached topology result
 	hashCache      map[string]*cachedResult // region → cached hash-sizes result
+	mbCapSnapshot  []MultiByteCapEntry     // latest computeMultiByteCapability result, under cacheMu
 	collisionCache map[string]*cachedResult // cached hash-collisions result keyed by region ("" = global)
 	chanCache    map[string]*cachedResult // region → cached channels result
 	distCache    map[string]*cachedResult // region → cached distance result
@@ -5427,7 +5428,9 @@ func (s *PacketStore) GetAnalyticsHashSizes(region string) map[string]interface{
 		}
 		entries := s.computeMultiByteCapability(adopterHS)
 		result["multiByteCapability"] = entries
-		s.persistMultiByteCapability(entries)
+		s.cacheMu.Lock()
+		s.mbCapSnapshot = entries
+		s.cacheMu.Unlock()
 	}
 
 	s.cacheMu.Lock()
@@ -6332,29 +6335,17 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 	return result
 }
 
-func (s *PacketStore) persistMultiByteCapability(entries []MultiByteCapEntry) {
-	if !s.db.hasMultibyteSupCols {
-		return
+// GetMultibyteCapMap returns a pubkey→entry snapshot from the last analytics cycle.
+// Used by routes to enrich node responses without a DB write (server conn is read-only).
+func (s *PacketStore) GetMultibyteCapMap() map[string]MultiByteCapEntry {
+	s.cacheMu.Lock()
+	snap := s.mbCapSnapshot
+	s.cacheMu.Unlock()
+	m := make(map[string]MultiByteCapEntry, len(snap))
+	for _, e := range snap {
+		m[e.PublicKey] = e
 	}
-	for _, e := range entries {
-		var sup int
-		switch e.Status {
-		case "confirmed":
-			sup = 2
-		case "suspected":
-			sup = 1
-		default:
-			continue
-		}
-		var evidence interface{}
-		if e.Evidence != "" {
-			evidence = e.Evidence
-		}
-		s.db.conn.Exec(
-			"UPDATE nodes SET multibyte_sup = ?, multibyte_evidence = ? WHERE public_key = ? AND multibyte_sup < ?",
-			sup, evidence, e.PublicKey, sup,
-		)
-	}
+	return m
 }
 
 // --- Bulk Health (in-memory) ---
