@@ -250,6 +250,9 @@
     markerLayer = L.layerGroup().addTo(map);
     routeLayer = L.layerGroup().addTo(map);
 
+    map.on('popupopen',  () => { _popupOpen = true; });
+    map.on('popupclose', () => { _popupOpen = false; });
+
     // Fix map size on SPA load
     setTimeout(() => map.invalidateSize(), 100);
 
@@ -558,7 +561,7 @@
       buildRoleChecks(data.counts || {});
       buildJumpButtons();
 
-      renderMarkers();
+      if (!_popupOpen) renderMarkers();
 
       // Restore heatmap if previously enabled
       if (localStorage.getItem('meshcore-map-heatmap') === 'true') {
@@ -686,6 +689,7 @@
   }
 
   var _renderingMarkers = false;
+  var _popupOpen = false;        // true while any marker popup is visible
   var _lastDeconflictZoom = null;
   var _currentMarkerData = []; // stored marker data for zoom-only repositioning
   var _observerByPubkey = new Map(); // observer id (pubkey) → observer object, rebuilt on each render
