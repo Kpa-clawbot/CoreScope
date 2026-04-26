@@ -6256,6 +6256,12 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 			if hs < 2 {
 				continue
 			}
+			// Hop length must match hash_size. Pre-#886 ingestor data stored path
+			// bytes individually (1-byte entries) even for hs=2 packets, so a
+			// 1-byte prefix could match a malformed hop in a hs=2 packet.
+			if len(pfx)/2 != hs {
+				continue
+			}
 			// This packet uses multi-byte hashes and contains this prefix as a hop
 			for _, e := range entries {
 				if hs > suspected[e.pubkey] {
