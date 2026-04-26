@@ -447,6 +447,45 @@ func TestEnrichNodeWithMultibyte_ZeroEntryNoChange(t *testing.T) {
 	}
 }
 
+// TestMultiByteCapability_SuspectedGuard_OwnHashSize1 tests that a node
+// whose own adverts confirm hash_size=1 is NOT marked suspected, even when
+// its prefix appears as a hop in a multibyte packet (prefix collision).
+func TestMultiByteCapability_SuspectedGuard_OwnHashSize1(t *testing.T) {
+	db := setupCapabilityTestDB(t)
+	defer db.conn.Close()
+
+	// LegacyNode advertises hash_size=1 (old firmware).
+	// Its 1-byte prefix "aa" collides with a hop in a multibyte packet.
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+		"aabbccdd11223344", "LegacyNode", "repeater", recentTS(24))
+
+	store := NewPacketStore(db, nil)
+
+	// Own advert: hash_size=1
+	addTestPacket(store, makeTestAdvert("aabbccdd11223344", 1))
+
+	// A multibyte packet (payload_type=1, path with 2-byte hop) whose hop
+	// prefix "aa" collides with LegacyNode's prefix.
+	pathByte := buildPathByte(2, 1)
+	rawHex := "01" + pathByte + "aa"
+	pt := 1
+	pkt := &StoreTx{
+		RawHex:      rawHex,
+		PayloadType: &pt,
+		PathJSON:    `["aa"]`,
+		FirstSeen:   recentTS(48),
+	}
+	addTestPacket(store, pkt)
+
+	caps := store.computeMultiByteCapability(nil)
+	if len(caps) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(caps))
+	}
+	if caps[0].Status != "unknown" {
+		t.Errorf("expected unknown (own advert confirms hash_size=1 — false positive guard), got %s", caps[0].Status)
+	}
+}
+
 // TestMultiByteCapability_AdopterEvidenceTakesPrecedence tests that when
 // adopter data shows hashSize >= 2 but path evidence says "suspected",
 // the node is upgraded to "confirmed" (Bug 3, #754).
