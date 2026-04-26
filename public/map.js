@@ -9,7 +9,7 @@
   let nodes = [];
   let targetNodeKey = null;
   let observers = [];
-  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clusters: false, hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all' };
+  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clusters: false, hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multibyteOverlay: localStorage.getItem('meshcore-map-multibyte') === 'true' };
   let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
   let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
@@ -25,20 +25,33 @@
 
   // Roles loaded from shared roles.js (ROLE_STYLE, ROLE_LABELS, ROLE_COLORS globals)
 
-  function makeMarkerIcon(role, isStale, isAlsoObserver) {
+  function makeMarkerIcon(role, isStale, isAlsoObserver, mbSup) {
     const s = ROLE_STYLE[role] || ROLE_STYLE.companion;
     const size = s.radius * 2 + 4;
     const c = size / 2;
+    let fill = s.color;
+    let stroke = '#fff';
+    let strokeExtra = '';
+    let svgOpacity = 1;
+    if (mbSup !== null && mbSup !== undefined) {
+      if (mbSup >= 2) {
+        fill = '#22c55e'; stroke = '#16a34a';
+      } else if (mbSup >= 1) {
+        fill = '#86efac'; stroke = '#22c55e'; strokeExtra = ' stroke-dasharray="3,2"';
+      } else {
+        svgOpacity = 0.45;
+      }
+    }
     let path;
     switch (s.shape) {
       case 'diamond':
-        path = `<polygon points="${c},2 ${size-2},${c} ${c},${size-2} 2,${c}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+        path = `<polygon points="${c},2 ${size-2},${c} ${c},${size-2} 2,${c}" fill="${fill}" stroke="${stroke}" stroke-width="2"${strokeExtra}/>`;
         break;
       case 'square':
-        path = `<rect x="3" y="3" width="${size-6}" height="${size-6}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+        path = `<rect x="3" y="3" width="${size-6}" height="${size-6}" fill="${fill}" stroke="${stroke}" stroke-width="2"${strokeExtra}/>`;
         break;
       case 'triangle':
-        path = `<polygon points="${c},2 ${size-2},${size-2} 2,${size-2}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+        path = `<polygon points="${c},2 ${size-2},${size-2} 2,${size-2}" fill="${fill}" stroke="${stroke}" stroke-width="2"${strokeExtra}/>`;
         break;
       case 'star': {
         // 5-pointed star
@@ -50,11 +63,11 @@
           pts += `${cx + outer * Math.cos(aOuter)},${cy + outer * Math.sin(aOuter)} `;
           pts += `${cx + inner * Math.cos(aInner)},${cy + inner * Math.sin(aInner)} `;
         }
-        path = `<polygon points="${pts.trim()}" fill="${s.color}" stroke="#fff" stroke-width="1.5"/>`;
+        path = `<polygon points="${pts.trim()}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"${strokeExtra}/>`;
         break;
       }
       default: // circle
-        path = `<circle cx="${c}" cy="${c}" r="${c-2}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+        path = `<circle cx="${c}" cy="${c}" r="${c-2}" fill="${fill}" stroke="${stroke}" stroke-width="2"${strokeExtra}/>`;
     }
     // If this node is also an observer, add a small star overlay
     let obsOverlay = '';
@@ -71,7 +84,8 @@
       }
       obsOverlay = `<g transform="translate(${sx},${sy})"><polygon points="${starPts.trim()}" fill="${ROLE_COLORS.observer || '#f1c40f'}" stroke="#fff" stroke-width="0.8"/></g>`;
     }
-    const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">${path}${obsOverlay}</svg>`;
+    const svgOpacityAttr = svgOpacity < 1 ? ` opacity="${svgOpacity}"` : '';
+    const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg"${svgOpacityAttr}>${path}${obsOverlay}</svg>`;
     return L.divIcon({
       html: svg,
       className: 'meshcore-marker' + (isStale ? ' marker-stale' : ''),
@@ -81,15 +95,27 @@
     });
   }
 
-  function makeRepeaterLabelIcon(node, isStale, isAlsoObserver) {
+  function makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbSup) {
     var s = ROLE_STYLE['repeater'] || ROLE_STYLE.companion;
     var hs = node.hash_size || 1;
     // Show the short mesh hash ID (first N bytes of pubkey, uppercased)
     var shortHash = node.public_key ? node.public_key.slice(0, hs * 2).toUpperCase() : '??';
     var bgColor = s.color;
+    var textColor = '#fff';
+    var border = '2px solid #fff';
+    var extraStyle = '';
+    if (mbSup !== null && mbSup !== undefined) {
+      if (mbSup >= 2) {
+        bgColor = '#22c55e'; border = '2px solid #16a34a';
+      } else if (mbSup >= 1) {
+        bgColor = '#86efac'; textColor = '#14532d'; border = '2px dashed #22c55e';
+      } else {
+        extraStyle = 'opacity:0.45;';
+      }
+    }
     // If this repeater is also an observer, show a star indicator inside the label
     var obsIndicator = isAlsoObserver ? ' <span style="color:' + (ROLE_COLORS.observer || '#f1c40f') + ';font-size:13px;line-height:1;" title="Also an observer">★</span>' : '';
-    var html = '<div style="background:' + bgColor + ';color:#fff;font-weight:bold;font-size:11px;padding:2px 5px;border-radius:3px;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.4);text-align:center;line-height:1.2;white-space:nowrap;">' +
+    var html = '<div style="background:' + bgColor + ';color:' + textColor + ';font-weight:bold;font-size:11px;padding:2px 5px;border-radius:3px;border:' + border + ';box-shadow:0 1px 3px rgba(0,0,0,0.4);text-align:center;line-height:1.2;white-space:nowrap;' + extraStyle + '">' +
       shortHash + obsIndicator + '</div>';
     return L.divIcon({
       html: html,
@@ -119,6 +145,7 @@
               <button class="btn ${filters.byteSize==='2'?'active':''}" data-byte="2">2-byte</button>
               <button class="btn ${filters.byteSize==='3'?'active':''}" data-byte="3">3-byte</button>
             </div>
+            <label for="mcMultibyte" style="display:block;margin-top:6px;font-size:12px;cursor:pointer"><input type="checkbox" id="mcMultibyte" ${filters.multibyteOverlay?'checked':''}> Show multibyte capability</label>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Display</legend>
@@ -302,6 +329,11 @@
         document.querySelectorAll('#mcByteFilter .btn').forEach(b => b.classList.toggle('active', b.dataset.byte === filters.byteSize));
         renderMarkers();
       });
+    });
+    document.getElementById('mcMultibyte').addEventListener('change', function(e) {
+      filters.multibyteOverlay = e.target.checked;
+      localStorage.setItem('meshcore-map-multibyte', e.target.checked);
+      renderMarkers();
     });
 
     // Geo filter overlay
@@ -811,7 +843,10 @@
       const pk = (node.public_key || '').toLowerCase();
       const isAlsoObserver = _observerByPubkey.has(pk);
       const useLabel = node.role === 'repeater' && filters.hashLabels;
-      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver);
+      const mbSup = (filters.multibyteOverlay && node.role === 'repeater')
+        ? (typeof node.multibyte_sup === 'number' ? node.multibyte_sup : 0)
+        : null;
+      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbSup) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbSup);
       const latLng = L.latLng(node.lat, node.lon);
       allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' });
     }
@@ -947,6 +982,13 @@
     const hashPrefix = node.public_key ? node.public_key.slice(0, hs * 2).toUpperCase() : '—';
     const hashPrefixRow = `<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Hash Prefix</dt>
           <dd style="font-family:var(--mono);font-size:11px;font-weight:700;margin-left:88px;padding:2px 0;">${safeEsc(hashPrefix)} <span style="font-weight:400;color:var(--text-muted);">(${hs}B)</span></dd>`;
+    const mbSup = typeof node.multibyte_sup === 'number' ? node.multibyte_sup : 0;
+    const mbLabel = mbSup >= 2 ? 'confirmed (advert)' : mbSup >= 1 ? 'suspected (path)' : 'not detected';
+    const mbColor = mbSup >= 2 ? '#22c55e' : mbSup >= 1 ? '#86efac' : '#9ca3af';
+    const mbRow = (filters.multibyteOverlay && node.role === 'repeater')
+      ? `<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Multibyte</dt>
+          <dd style="color:${mbColor};margin-left:88px;padding:2px 0;">${safeEsc(mbLabel)}</dd>`
+      : '';
 
     return `
       <div class="map-popup" style="font-family:var(--font);min-width:180px;">
@@ -954,6 +996,7 @@
         ${roleBadge}${obsBadge}
         <dl style="margin-top:8px;font-size:12px;">
           ${hashPrefixRow}
+          ${mbRow}
           <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Key</dt>
           <dd style="font-family:var(--mono);font-size:11px;margin-left:88px;padding:2px 0;">${safeEsc(key)}</dd>
           <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Location</dt>
