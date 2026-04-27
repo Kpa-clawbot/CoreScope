@@ -59,7 +59,7 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		return nil, fmt.Errorf("creating data dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=auto_vacuum(INCREMENTAL)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("opening db: %w", err)
 	}
@@ -85,14 +85,8 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 }
 
 func applySchema(db *sql.DB) error {
-	// Enable incremental auto-vacuum BEFORE any CREATE TABLE (#919).
-	// This pragma only takes effect on a brand-new database; existing DBs
-	// ignore it (requires a full VACUUM to migrate — see startup warning below).
-	if _, err := db.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
-		log.Printf("[db] warning: could not set auto_vacuum=INCREMENTAL: %v", err)
-	}
-
-	// Log current auto_vacuum mode for operator visibility
+	// auto_vacuum=INCREMENTAL is set via DSN pragma (must be before journal_mode).
+	// Log current mode for operator visibility (#919).
 	var autoVacuum int
 	if err := db.QueryRow("PRAGMA auto_vacuum").Scan(&autoVacuum); err == nil {
 		modes := map[int]string{0: "NONE", 1: "FULL", 2: "INCREMENTAL"}
