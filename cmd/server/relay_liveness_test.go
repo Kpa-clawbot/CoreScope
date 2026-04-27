@@ -9,36 +9,28 @@ import (
 
 func makeRp(s string) *string { return &s }
 
-func TestAddTxToRelayTimeIndex_SingleNode(t *testing.T) {
+func TestRelayIndexInsertPaths_SingleNode(t *testing.T) {
 	idx := make(map[string][]int64)
 	pk := "aabbccdd11223344"
-	ts := time.Now().Add(-30 * time.Minute).UTC()
-	tx := &StoreTx{
-		FirstSeen:    ts.Format(time.RFC3339),
-		ResolvedPath: []*string{makeRp(pk)},
-	}
-	addTxToRelayTimeIndex(idx, tx, ts.UnixMilli())
+	millis := time.Now().Add(-30 * time.Minute).UnixMilli()
+	relayIndexInsertPaths(idx, millis, []*string{makeRp(pk)})
 	if len(idx[pk]) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(idx[pk]))
 	}
-	wantMs := ts.UnixMilli()
-	// RFC3339 has second precision, so allow ±1000ms
-	if diff := idx[pk][0] - wantMs; diff < -1000 || diff > 1000 {
-		t.Errorf("timestamp mismatch: got %d, want ~%d", idx[pk][0], wantMs)
+	if idx[pk][0] != millis {
+		t.Errorf("timestamp mismatch: got %d, want %d", idx[pk][0], millis)
 	}
 }
 
-func TestAddTxToRelayTimeIndex_SortedOrder(t *testing.T) {
+func TestRelayIndexInsertPaths_SortedOrder(t *testing.T) {
 	idx := make(map[string][]int64)
 	pk := "aabbccdd11223344"
-	t1 := time.Now().Add(-2 * time.Hour).UTC()
-	t2 := time.Now().Add(-30 * time.Minute).UTC()
+	ms1 := time.Now().Add(-2 * time.Hour).UnixMilli()
+	ms2 := time.Now().Add(-30 * time.Minute).UnixMilli()
 
 	// Insert newer first, expect sorted ascending
-	tx2 := &StoreTx{FirstSeen: t2.Format(time.RFC3339), ResolvedPath: []*string{makeRp(pk)}}
-	tx1 := &StoreTx{FirstSeen: t1.Format(time.RFC3339), ResolvedPath: []*string{makeRp(pk)}}
-	addTxToRelayTimeIndex(idx, tx2, t2.UnixMilli())
-	addTxToRelayTimeIndex(idx, tx1, t1.UnixMilli())
+	relayIndexInsertPaths(idx, ms2, []*string{makeRp(pk)})
+	relayIndexInsertPaths(idx, ms1, []*string{makeRp(pk)})
 
 	if len(idx[pk]) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(idx[pk]))
@@ -48,16 +40,12 @@ func TestAddTxToRelayTimeIndex_SortedOrder(t *testing.T) {
 	}
 }
 
-func TestAddTxToRelayTimeIndex_MultipleNodes(t *testing.T) {
+func TestRelayIndexInsertPaths_MultipleNodes(t *testing.T) {
 	idx := make(map[string][]int64)
 	pk1 := "aabbccdd11223344"
 	pk2 := "eeff001122334455"
-	ts := time.Now().Add(-10 * time.Minute).UTC()
-	tx := &StoreTx{
-		FirstSeen:    ts.Format(time.RFC3339),
-		ResolvedPath: []*string{makeRp(pk1), makeRp(pk2)},
-	}
-	addTxToRelayTimeIndex(idx, tx, ts.UnixMilli())
+	millis := time.Now().Add(-10 * time.Minute).UnixMilli()
+	relayIndexInsertPaths(idx, millis, []*string{makeRp(pk1), makeRp(pk2)})
 	if len(idx[pk1]) != 1 {
 		t.Errorf("pk1: expected 1 entry, got %d", len(idx[pk1]))
 	}
@@ -66,56 +54,64 @@ func TestAddTxToRelayTimeIndex_MultipleNodes(t *testing.T) {
 	}
 }
 
-func TestAddTxToRelayTimeIndex_NilResolvedPath(t *testing.T) {
+func TestRelayIndexInsertPaths_NilPaths(t *testing.T) {
 	idx := make(map[string][]int64)
-	tx := &StoreTx{FirstSeen: time.Now().UTC().Format(time.RFC3339), ResolvedPath: nil}
-	addTxToRelayTimeIndex(idx, tx, time.Now().UnixMilli()) // must not panic
+	relayIndexInsertPaths(idx, time.Now().UnixMilli(), nil) // must not panic
 	if len(idx) != 0 {
-		t.Error("expected empty index for nil ResolvedPath")
+		t.Error("expected empty index for nil paths")
 	}
 }
 
-func TestAddTxToRelayTimeIndex_DuplicatePubkeyInPath(t *testing.T) {
+func TestRelayIndexInsertPaths_DuplicatePubkey(t *testing.T) {
 	idx := make(map[string][]int64)
 	pk := "aabbccdd11223344"
-	ts := time.Now().UTC()
-	tx := &StoreTx{
-		FirstSeen:    ts.Format(time.RFC3339),
-		ResolvedPath: []*string{makeRp(pk), makeRp(pk)}, // same pubkey twice
-	}
-	addTxToRelayTimeIndex(idx, tx, ts.UnixMilli())
+	millis := time.Now().UnixMilli()
+	relayIndexInsertPaths(idx, millis, []*string{makeRp(pk), makeRp(pk)}) // same pubkey twice
 	if len(idx[pk]) != 1 {
 		t.Errorf("duplicate pubkey should produce only 1 entry, got %d", len(idx[pk]))
 	}
 }
 
-func TestRemoveFromRelayTimeIndex_RemovesEntry(t *testing.T) {
+func TestRelayIndexInsertPaths_LowercasesKey(t *testing.T) {
+	idx := make(map[string][]int64)
+	pkUpper := "AABBCCDD11223344"
+	pkLower := strings.ToLower(pkUpper)
+	millis := time.Now().UnixMilli()
+	relayIndexInsertPaths(idx, millis, []*string{makeRp(pkUpper)})
+	if len(idx[pkLower]) != 1 {
+		t.Errorf("expected index keyed by lowercase, found %d entries at lowercase key", len(idx[pkLower]))
+	}
+	if len(idx[pkUpper]) != 0 {
+		t.Errorf("expected no entry at uppercase key")
+	}
+}
+
+func TestRelayIndexRemovePaths_RemovesEntry(t *testing.T) {
 	idx := make(map[string][]int64)
 	pk := "aabbccdd11223344"
-	ts := time.Now().Add(-1 * time.Hour).Truncate(time.Second).UTC()
-	tx := &StoreTx{FirstSeen: ts.Format(time.RFC3339), ResolvedPath: []*string{makeRp(pk)}}
+	millis := time.Now().Add(-1 * time.Hour).UnixMilli()
+	paths := []*string{makeRp(pk)}
 
-	addTxToRelayTimeIndex(idx, tx, ts.UnixMilli())
+	relayIndexInsertPaths(idx, millis, paths)
 	if len(idx[pk]) != 1 {
 		t.Fatal("setup: expected 1 entry")
 	}
-	removeFromRelayTimeIndex(idx, tx)
+	relayIndexRemovePaths(idx, millis, paths)
 	if _, ok := idx[pk]; ok {
 		t.Error("expected key deleted after last entry removed")
 	}
 }
 
-func TestRemoveFromRelayTimeIndex_PartialRemove(t *testing.T) {
+func TestRelayIndexRemovePaths_PartialRemove(t *testing.T) {
 	idx := make(map[string][]int64)
 	pk := "aabbccdd11223344"
-	t1 := time.Now().Add(-2 * time.Hour).Truncate(time.Second).UTC()
-	t2 := time.Now().Add(-30 * time.Minute).Truncate(time.Second).UTC()
-	tx1 := &StoreTx{FirstSeen: t1.Format(time.RFC3339), ResolvedPath: []*string{makeRp(pk)}}
-	tx2 := &StoreTx{FirstSeen: t2.Format(time.RFC3339), ResolvedPath: []*string{makeRp(pk)}}
+	ms1 := time.Now().Add(-2 * time.Hour).UnixMilli()
+	ms2 := time.Now().Add(-30 * time.Minute).UnixMilli()
+	paths := []*string{makeRp(pk)}
 
-	addTxToRelayTimeIndex(idx, tx1, t1.UnixMilli())
-	addTxToRelayTimeIndex(idx, tx2, t2.UnixMilli())
-	removeFromRelayTimeIndex(idx, tx1)
+	relayIndexInsertPaths(idx, ms1, paths)
+	relayIndexInsertPaths(idx, ms2, paths)
+	relayIndexRemovePaths(idx, ms1, paths)
 
 	if len(idx[pk]) != 1 {
 		t.Errorf("expected 1 entry after removing one, got %d", len(idx[pk]))
@@ -169,8 +165,6 @@ func TestRelayTimesWiredIntoIngest(t *testing.T) {
 	if hopKeys == 0 {
 		t.Skip("no path-hop data in test store — skipping relay wiring test")
 	}
-	// relayTimes will only be populated if test packets have ResolvedPath entries.
-	// At minimum it must not panic and must be initialised.
 	if srv.store.relayTimes == nil {
 		t.Fatal("relayTimes map is nil after load")
 	}
@@ -186,17 +180,14 @@ func TestRelayTimesWiredIntoIngest(t *testing.T) {
 func TestGetBulkHealthRepeaterRelayFields(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
-	// Insert a synthetic repeater node into the DB if none exists
 	_, err := srv.db.conn.Exec(`INSERT OR IGNORE INTO nodes (public_key, name, role, last_seen, first_seen, advert_count)
 		VALUES ('relay662test0001', 'TestRepeater662', 'repeater', datetime('now'), datetime('now'), 1)`)
 	if err != nil {
 		t.Fatalf("insert test node: %v", err)
 	}
 
-	// Inject a relay timestamp within the last hour
 	pk := "relay662test0001"
-	now := time.Now().UnixMilli()
-	recentMs := now - 10*60*1000 // 10 min ago
+	recentMs := time.Now().UnixMilli() - 10*60*1000 // 10 min ago
 	srv.store.mu.Lock()
 	srv.store.relayTimes[pk] = []int64{recentMs}
 	srv.store.mu.Unlock()
@@ -239,7 +230,6 @@ func TestGetBulkHealthCompanionNoRelayFields(t *testing.T) {
 		t.Fatalf("insert test node: %v", err)
 	}
 
-	// Give the companion a relay entry (should be ignored by role gate)
 	pk := "comp662test0001"
 	srv.store.mu.Lock()
 	srv.store.relayTimes[pk] = []int64{time.Now().UnixMilli() - 5*60*1000}
@@ -267,7 +257,6 @@ func TestGetBulkHealthRepeaterNoRelayActivity(t *testing.T) {
 		t.Fatalf("insert test node: %v", err)
 	}
 
-	// No entry in relayTimes for this node
 	results := srv.store.GetBulkHealth(200, "")
 	for _, r := range results {
 		if r["public_key"] == "relay662idle001" {
@@ -284,21 +273,6 @@ func TestGetBulkHealthRepeaterNoRelayActivity(t *testing.T) {
 	t.Fatal("idle repeater not found in results")
 }
 
-func TestAddTxToRelayTimeIndex_LowercasesKey(t *testing.T) {
-	idx := make(map[string][]int64)
-	pkUpper := "AABBCCDD11223344"
-	pkLower := strings.ToLower(pkUpper)
-	ts := time.Now().UTC()
-	tx := &StoreTx{FirstSeen: ts.Format(time.RFC3339), ResolvedPath: []*string{makeRp(pkUpper)}}
-	addTxToRelayTimeIndex(idx, tx, ts.UnixMilli())
-	if len(idx[pkLower]) != 1 {
-		t.Errorf("expected index keyed by lowercase, found %d entries at lowercase key", len(idx[pkLower]))
-	}
-	if len(idx[pkUpper]) != 0 {
-		t.Errorf("expected no entry at uppercase key")
-	}
-}
-
 func TestGetNodeHealthRepeaterRelayFields(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
@@ -309,8 +283,7 @@ func TestGetNodeHealthRepeaterRelayFields(t *testing.T) {
 		t.Fatalf("insert test node: %v", err)
 	}
 
-	now := time.Now().UnixMilli()
-	recentMs := now - 15*60*1000 // 15 min ago
+	recentMs := time.Now().UnixMilli() - 15*60*1000 // 15 min ago
 	srv.store.mu.Lock()
 	srv.store.relayTimes[pk] = []int64{recentMs}
 	srv.store.mu.Unlock()
