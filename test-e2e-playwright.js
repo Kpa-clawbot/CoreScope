@@ -224,10 +224,11 @@ async function run() {
   // Test 5: Node detail loads (reuses nodes page from test 2)
   await test('Node detail loads', async () => {
     await page.waitForSelector('table tbody tr');
-    // Click first row
-    const firstRow = await page.$('table tbody tr');
-    assert(firstRow, 'No node rows found');
-    await firstRow.click();
+    // Use locator (lazy) instead of elementHandle (snapshot) so a WebSocket
+    // table re-render between capture and click doesn't detach the element.
+    const firstRowLocator = page.locator('table tbody tr').first();
+    await firstRowLocator.waitFor({ state: 'visible' });
+    await firstRowLocator.click();
     // Wait for detail pane to appear
     await page.waitForSelector('.node-detail');
     const html = await page.content();
@@ -240,14 +241,14 @@ async function run() {
   await test('Node side panel Details link navigates', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('table tbody tr');
-    // Click first row to open side panel
-    const firstRow = await page.$('table tbody tr');
-    assert(firstRow, 'No node rows found');
-    await firstRow.click();
+    // Use locator (lazy) so a WebSocket re-render can't detach the element handle
+    const firstRowLocator = page.locator('table tbody tr').first();
+    await firstRowLocator.waitFor({ state: 'visible' });
+    await firstRowLocator.click();
     await page.waitForSelector('.node-detail');
-    // Find the Details link in the side panel
-    const detailsLink = await page.$('#nodesRight a.btn-primary[href^="#/nodes/"]');
-    assert(detailsLink, 'Details link not found in side panel');
+    // Find the Details link in the side panel — also use locator for the same reason
+    const detailsLink = page.locator('#nodesRight a.btn-primary[href^="#/nodes/"]');
+    await detailsLink.waitFor({ state: 'visible' });
     const href = await detailsLink.getAttribute('href');
     // Click the Details link — this should navigate to the full detail page
     await detailsLink.click();
