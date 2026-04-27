@@ -86,20 +86,7 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 
 func applySchema(db *sql.DB) error {
 	// auto_vacuum=INCREMENTAL is set via DSN pragma (must be before journal_mode).
-	// Log current mode for operator visibility (#919).
-	var autoVacuum int
-	if err := db.QueryRow("PRAGMA auto_vacuum").Scan(&autoVacuum); err == nil {
-		modes := map[int]string{0: "NONE", 1: "FULL", 2: "INCREMENTAL"}
-		mode := modes[autoVacuum]
-		if mode == "" {
-			mode = fmt.Sprintf("UNKNOWN(%d)", autoVacuum)
-		}
-		if autoVacuum == 2 {
-			log.Printf("[db] auto_vacuum=INCREMENTAL")
-		} else {
-			log.Printf("[db] auto_vacuum=%s — see https://github.com/Kpa-clawbot/CoreScope/issues/919 for migration", mode)
-		}
-	}
+	// Logging of current mode is handled by CheckAutoVacuum — no duplicate log here.
 
 	schema := `
 		CREATE TABLE IF NOT EXISTS nodes (
@@ -829,7 +816,9 @@ func (s *Store) CheckAutoVacuum(cfg *Config) {
 		"See https://github.com/Kpa-clawbot/CoreScope/issues/919", mode)
 
 	if cfg.DB != nil && cfg.DB.VacuumOnStartup {
-		log.Printf("[db] vacuumOnStartup=true — starting one-time full VACUUM...")
+		// WARNING: Full VACUUM creates a temporary copy of the entire DB file.
+		// Requires ~2× the DB file size in free disk space or it will fail.
+		log.Printf("[db] vacuumOnStartup=true — starting one-time full VACUUM (ensure 2x DB size free disk space)...")
 		start := time.Now()
 
 		if _, err := s.db.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {

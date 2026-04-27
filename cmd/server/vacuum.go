@@ -32,7 +32,9 @@ func checkAutoVacuum(db *DB, cfg *Config, dbPath string) {
 		"See https://github.com/Kpa-clawbot/CoreScope/issues/919", mode)
 
 	if cfg.DB != nil && cfg.DB.VacuumOnStartup {
-		log.Printf("[db] vacuumOnStartup=true — starting one-time full VACUUM to enable incremental auto-vacuum...")
+		// WARNING: Full VACUUM creates a temporary copy of the entire DB file.
+		// Requires ~2× the DB file size in free disk space or it will fail.
+		log.Printf("[db] vacuumOnStartup=true — starting one-time full VACUUM (ensure 2x DB size free disk space)...")
 		start := time.Now()
 
 		rw, err := openRW(dbPath)

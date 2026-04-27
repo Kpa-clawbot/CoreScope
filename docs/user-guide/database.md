@@ -36,7 +36,9 @@ and holds an exclusive lock.
    ```
    [db] auto_vacuum=NONE — DB needs one-time VACUUM to enable incremental auto-vacuum.
    ```
-2. Set `db.vacuumOnStartup: true` in your `config.json`:
+2. **Ensure at least 2× the database file size in free disk space.** Full VACUUM
+   creates a temporary copy of the entire file — on a near-full disk it will fail.
+3. Set `db.vacuumOnStartup: true` in your `config.json`:
    ```json
    {
      "db": {
@@ -44,8 +46,8 @@ and holds an exclusive lock.
      }
    }
    ```
-3. Restart CoreScope. The one-time `VACUUM` will run and block startup.
-4. After migration, remove or set `vacuumOnStartup: false` — it's not needed again.
+4. Restart CoreScope. The one-time `VACUUM` will run and block startup.
+5. After migration, remove or set `vacuumOnStartup: false` — it's not needed again.
 
 ### Configuration
 
@@ -63,6 +65,9 @@ sqlite3 data/meshcore.db "PRAGMA auto_vacuum = INCREMENTAL; VACUUM;"
 ```
 
 This is equivalent to `vacuumOnStartup: true` but can be done offline.
+
+> ⚠️ Full VACUUM requires **2× the database file size** in free disk space (it
+> creates a temporary copy). Check with `ls -lh data/meshcore.db` before running.
 
 ## Checking current mode
 
