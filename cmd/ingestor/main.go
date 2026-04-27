@@ -80,6 +80,7 @@ func main() {
 	go func() {
 		for range retentionTicker.C {
 			store.MoveStaleNodes(nodeDays)
+			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()
 

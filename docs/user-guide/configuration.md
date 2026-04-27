@@ -112,6 +112,7 @@ How long (in hours) before a node is marked degraded or silent:
 | `db.incrementalVacuumPages` | `1024` | Free pages returned to the OS after each retention reaper cycle |
 
 See [Database](database.md) for details on SQLite auto-vacuum, WAL, and manual maintenance.
+See [#919](https://github.com/Kpa-clawbot/CoreScope/issues/919) for background.
 
 ## Channel decryption
 
