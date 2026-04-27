@@ -69,6 +69,8 @@ func main() {
 	metricsDays := cfg.MetricsRetentionDays()
 	store.PruneOldMetrics(metricsDays)
 	store.PruneDroppedPackets(metricsDays)
+	vacuumPages := cfg.IncrementalVacuumPages()
+	store.RunIncrementalVacuum(vacuumPages)
 
 	// Daily ticker for node retention
 	retentionTicker := time.NewTicker(1 * time.Hour)
@@ -83,8 +85,10 @@ func main() {
 	go func() {
 		time.Sleep(90 * time.Second) // stagger after metrics prune
 		store.RemoveStaleObservers(observerDays)
+		store.RunIncrementalVacuum(vacuumPages)
 		for range observerRetentionTicker.C {
 			store.RemoveStaleObservers(observerDays)
+			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()
 
@@ -94,6 +98,7 @@ func main() {
 		for range metricsRetentionTicker.C {
 			store.PruneOldMetrics(metricsDays)
 			store.PruneDroppedPackets(metricsDays)
+			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()
 

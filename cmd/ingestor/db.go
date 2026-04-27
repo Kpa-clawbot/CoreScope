@@ -810,6 +810,14 @@ func (s *Store) PruneOldMetrics(retentionDays int) (int64, error) {
 	return n, nil
 }
 
+// RunIncrementalVacuum returns free pages to the OS (#919).
+// Safe to call on auto_vacuum=NONE databases (noop).
+func (s *Store) RunIncrementalVacuum(pages int) {
+	if _, err := s.db.Exec(fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)); err != nil {
+		log.Printf("[vacuum] incremental_vacuum error: %v", err)
+	}
+}
+
 // Checkpoint forces a WAL checkpoint to release the WAL lock file,
 // preventing lock contention with a new process starting up.
 func (s *Store) Checkpoint() {
