@@ -937,6 +937,10 @@ button.ch-item:hover .ch-remove-btn { opacity: 0.6; }
 }
 
 /* === Responsive — Hamburger nav (<768px) === */
+@keyframes navSlideDown {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 @media (max-width: 767px) {
   .hamburger { display: inline-flex; }
   .nav-more-wrap { display: none !important; }
@@ -947,11 +951,30 @@ button.ch-item:hover .ch-remove-btn { opacity: 0.6; }
     max-height: calc(100dvh - 52px); overflow-y: auto;
   }
   .nav-links a:not([data-priority="high"]) { display: flex; }
-  .nav-links.open { display: flex; }
+  .nav-links.open { display: flex; animation: navSlideDown .18s ease; }
   .nav-link { padding: 12px 20px; border-bottom: none; }
   .nav-link.active { background: var(--nav-active-bg); border-radius: 0; margin: 0; padding: 12px 20px; }
   .nav-left { gap: 12px; }
   body.nav-open { overflow: hidden; }
+
+  /* Flatten the Tools nested dropdown — inline items instead of hover sub-menu */
+  .nav-dropdown { width: 100%; }
+  .nav-dropdown .nav-tools-btn { display: none; }
+  .nav-dropdown .dropdown-menu {
+    display: block; position: static; box-shadow: none;
+    background: none; border: none; border-radius: 0; padding: 0; min-width: 0;
+  }
+  .nav-dropdown .dropdown-item { padding: 12px 20px 12px 32px; font-size: 14px; color: var(--nav-text-muted); }
+  .nav-dropdown .dropdown-item:hover { background: var(--nav-bg2); color: var(--nav-text); }
+}
+
+/* === Responsive — very small screens (≤480px) === */
+@media (max-width: 480px) {
+  /* Brand text stays hidden (already gone at ≤640px) — shrink right-side further */
+  .nav-right { gap: 2px; }
+  /* Hide lower-priority icon buttons to prevent overflow */
+  #customizeToggle { display: none; }
+  #favToggle { display: none; }
 }
 
 /* === Responsive — Mobile (≤640px) === */
