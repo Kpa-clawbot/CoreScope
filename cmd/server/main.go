@@ -148,6 +148,9 @@ func main() {
 			stats.TotalTransmissions, stats.TotalObservations, stats.TotalNodes, stats.TotalObservers)
 	}
 
+	// Check auto_vacuum mode and optionally migrate (#919)
+	checkAutoVacuum(database, cfg, resolvedDB)
+
 	// In-memory packet store
 	store := NewPacketStore(database, cfg.PacketStore, cfg.CacheTTL)
 	if err := store.Load(); err != nil {
@@ -266,6 +269,7 @@ func main() {
 	defer stopEviction()
 
 	// Auto-prune old packets if retention.packetDays is configured
+	vacuumPages := cfg.IncrementalVacuumPages()
 	var stopPrune func()
 	if cfg.Retention != nil && cfg.Retention.PacketDays > 0 {
 		days := cfg.Retention.PacketDays
@@ -286,6 +290,9 @@ func main() {
 				log.Printf("[prune] error: %v", err)
 			} else {
 				log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
+				if n > 0 {
+					runIncrementalVacuum(resolvedDB, vacuumPages)
+				}
 			}
 			for {
 				select {
@@ -294,6 +301,9 @@ func main() {
 						log.Printf("[prune] error: %v", err)
 					} else {
 						log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
+						if n > 0 {
+							runIncrementalVacuum(resolvedDB, vacuumPages)
+						}
 					}
 				case <-pruneDone:
 					return
@@ -321,10 +331,12 @@ func main() {
 			}()
 			time.Sleep(2 * time.Minute) // stagger after packet prune
 			database.PruneOldMetrics(metricsDays)
+			runIncrementalVacuum(resolvedDB, vacuumPages)
 			for {
 				select {
 				case <-metricsPruneTicker.C:
 					database.PruneOldMetrics(metricsDays)
+					runIncrementalVacuum(resolvedDB, vacuumPages)
 				case <-metricsPruneDone:
 					return
 				}
@@ -354,10 +366,12 @@ func main() {
 				}()
 				time.Sleep(3 * time.Minute) // stagger after metrics prune
 				database.RemoveStaleObservers(observerDays)
+				runIncrementalVacuum(resolvedDB, vacuumPages)
 				for {
 					select {
 					case <-observerPruneTicker.C:
 						database.RemoveStaleObservers(observerDays)
+						runIncrementalVacuum(resolvedDB, vacuumPages)
 					case <-observerPruneDone:
 						return
 					}
@@ -388,6 +402,7 @@ func main() {
 			g := store.graph
 			store.mu.RUnlock()
 			PruneNeighborEdges(dbPath, g, maxAgeDays)
+			runIncrementalVacuum(resolvedDB, vacuumPages)
 			for {
 				select {
 				case <-edgePruneTicker.C:
@@ -395,6 +410,7 @@ func main() {
 					g := store.graph
 					store.mu.RUnlock()
 					PruneNeighborEdges(dbPath, g, maxAgeDays)
+					runIncrementalVacuum(resolvedDB, vacuumPages)
 				case <-edgePruneDone:
 					return
 				}

@@ -62,6 +62,8 @@ type Config struct {
 
 	Retention *RetentionConfig `json:"retention,omitempty"`
 
+	DB *DBConfig `json:"db,omitempty"`
+
 	PacketStore *PacketStoreConfig `json:"packetStore,omitempty"`
 
 	GeoFilter *GeoFilterConfig `json:"geo_filter,omitempty"`
@@ -127,6 +129,20 @@ type RetentionConfig struct {
 	ObserverDays  int `json:"observerDays"`
 	PacketDays    int `json:"packetDays"`
 	MetricsDays   int `json:"metricsDays"`
+}
+
+// DBConfig controls SQLite vacuum and maintenance behavior (#919).
+type DBConfig struct {
+	VacuumOnStartup        bool `json:"vacuumOnStartup"`        // one-time full VACUUM on startup if auto_vacuum is not INCREMENTAL
+	IncrementalVacuumPages int  `json:"incrementalVacuumPages"` // pages returned to OS per reaper cycle (default 1024)
+}
+
+// IncrementalVacuumPages returns the configured pages per vacuum or 1024 default.
+func (c *Config) IncrementalVacuumPages() int {
+	if c.DB != nil && c.DB.IncrementalVacuumPages > 0 {
+		return c.DB.IncrementalVacuumPages
+	}
+	return 1024
 }
 
 // MetricsRetentionDays returns configured metrics retention or 30 days default.
