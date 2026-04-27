@@ -810,6 +810,48 @@ func (s *Store) PruneOldMetrics(retentionDays int) (int64, error) {
 	return n, nil
 }
 
+// CheckAutoVacuum inspects the current auto_vacuum mode and logs a warning
+// if not INCREMENTAL. Performs opt-in full VACUUM if db.vacuumOnStartup is set (#919).
+func (s *Store) CheckAutoVacuum(cfg *Config) {
+	var autoVacuum int
+	if err := s.db.QueryRow("PRAGMA auto_vacuum").Scan(&autoVacuum); err != nil {
+		log.Printf("[db] warning: could not read auto_vacuum: %v", err)
+		return
+	}
+
+	if autoVacuum == 2 {
+		log.Printf("[db] auto_vacuum=INCREMENTAL")
+		return
+	}
+
+	modes := map[int]string{0: "NONE", 1: "FULL", 2: "INCREMENTAL"}
+	mode := modes[autoVacuum]
+	if mode == "" {
+		mode = fmt.Sprintf("UNKNOWN(%d)", autoVacuum)
+	}
+
+	log.Printf("[db] auto_vacuum=%s — DB needs one-time VACUUM to enable incremental auto-vacuum. "+
+		"Set db.vacuumOnStartup: true in config to migrate (will block startup for several minutes on large DBs). "+
+		"See https://github.com/Kpa-clawbot/CoreScope/issues/919", mode)
+
+	if cfg.DB != nil && cfg.DB.VacuumOnStartup {
+		log.Printf("[db] vacuumOnStartup=true — starting one-time full VACUUM...")
+		start := time.Now()
+
+		if _, err := s.db.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
+			log.Printf("[db] VACUUM failed: could not set auto_vacuum: %v", err)
+			return
+		}
+		if _, err := s.db.Exec("VACUUM"); err != nil {
+			log.Printf("[db] VACUUM failed: %v", err)
+			return
+		}
+
+		elapsed := time.Since(start)
+		log.Printf("[db] VACUUM complete in %v — auto_vacuum is now INCREMENTAL", elapsed.Round(time.Millisecond))
+	}
+}
+
 // RunIncrementalVacuum returns free pages to the OS (#919).
 // Safe to call on auto_vacuum=NONE databases (noop).
 func (s *Store) RunIncrementalVacuum(pages int) {

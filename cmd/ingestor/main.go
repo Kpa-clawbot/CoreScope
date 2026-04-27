@@ -57,6 +57,9 @@ func main() {
 	defer store.Close()
 	log.Printf("SQLite opened: %s", cfg.DBPath)
 
+	// Check auto_vacuum mode and optionally migrate (#919)
+	store.CheckAutoVacuum(cfg)
+
 	// Node retention: move stale nodes to inactive_nodes on startup
 	nodeDays := cfg.NodeDaysOrDefault()
 	store.MoveStaleNodes(nodeDays)
