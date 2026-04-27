@@ -510,6 +510,7 @@ func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int
 				if tx, ok := store.byHash[r.txHash]; ok {
 					pks := extractResolvedPubkeys(r.rp)
 					store.addToResolvedPubkeyIndex(tx.ID, pks)
+					store.addTxToRelayTimeIndex(tx)
 					// Update byNode for relay nodes
 					for _, pk := range pks {
 						store.addToByNode(tx, pk)
