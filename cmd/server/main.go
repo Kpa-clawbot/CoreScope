@@ -148,6 +148,9 @@ func main() {
 			stats.TotalTransmissions, stats.TotalObservations, stats.TotalNodes, stats.TotalObservers)
 	}
 
+	// Check auto_vacuum mode and optionally migrate (#919)
+	checkAutoVacuum(database, cfg, resolvedDB)
+
 	// In-memory packet store
 	store := NewPacketStore(database, cfg.PacketStore, cfg.CacheTTL)
 	if err := store.Load(); err != nil {

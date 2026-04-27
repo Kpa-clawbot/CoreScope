@@ -85,6 +85,28 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 }
 
 func applySchema(db *sql.DB) error {
+	// Enable incremental auto-vacuum BEFORE any CREATE TABLE (#919).
+	// This pragma only takes effect on a brand-new database; existing DBs
+	// ignore it (requires a full VACUUM to migrate — see startup warning below).
+	if _, err := db.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
+		log.Printf("[db] warning: could not set auto_vacuum=INCREMENTAL: %v", err)
+	}
+
+	// Log current auto_vacuum mode for operator visibility
+	var autoVacuum int
+	if err := db.QueryRow("PRAGMA auto_vacuum").Scan(&autoVacuum); err == nil {
+		modes := map[int]string{0: "NONE", 1: "FULL", 2: "INCREMENTAL"}
+		mode := modes[autoVacuum]
+		if mode == "" {
+			mode = fmt.Sprintf("UNKNOWN(%d)", autoVacuum)
+		}
+		if autoVacuum == 2 {
+			log.Printf("[db] auto_vacuum=INCREMENTAL")
+		} else {
+			log.Printf("[db] auto_vacuum=%s — see https://github.com/Kpa-clawbot/CoreScope/issues/919 for migration", mode)
+		}
+	}
+
 	schema := `
 		CREATE TABLE IF NOT EXISTS nodes (
 			public_key TEXT PRIMARY KEY,

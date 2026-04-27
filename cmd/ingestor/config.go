@@ -41,6 +41,7 @@ type Config struct {
 	Metrics         *MetricsConfig    `json:"metrics,omitempty"`
 	GeoFilter            *GeoFilterConfig  `json:"geo_filter,omitempty"`
 	ValidateSignatures   *bool             `json:"validateSignatures,omitempty"`
+	DB                   *DBConfig         `json:"db,omitempty"`
 }
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
@@ -56,6 +57,20 @@ type RetentionConfig struct {
 // MetricsConfig controls observer metrics collection.
 type MetricsConfig struct {
 	SampleIntervalSec int `json:"sampleIntervalSec"`
+}
+
+// DBConfig controls SQLite vacuum and maintenance behavior (#919).
+type DBConfig struct {
+	VacuumOnStartup        bool `json:"vacuumOnStartup"`        // one-time full VACUUM on startup if auto_vacuum is not INCREMENTAL
+	IncrementalVacuumPages int  `json:"incrementalVacuumPages"` // pages returned to OS per reaper cycle (default 1024)
+}
+
+// IncrementalVacuumPages returns the configured pages per vacuum or 1024 default.
+func (c *Config) IncrementalVacuumPages() int {
+	if c.DB != nil && c.DB.IncrementalVacuumPages > 0 {
+		return c.DB.IncrementalVacuumPages
+	}
+	return 1024
 }
 
 // ShouldValidateSignatures returns true (default) unless explicitly disabled.
