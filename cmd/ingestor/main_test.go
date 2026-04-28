@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 func TestToFloat64(t *testing.T) {
@@ -778,5 +780,30 @@ func TestIATAFilterDoesNotDropStatusMessages(t *testing.T) {
 	store.db.QueryRow("SELECT COUNT(*) FROM transmissions").Scan(&count)
 	if count != 0 {
 		t.Error("packet from out-of-region BFL should still be filtered by IATA")
+	}
+}
+
+// TestMQTTConnectRetryTimeoutDoesNotBlock verifies that WaitTimeout returns within
+// the deadline for an unreachable broker when ConnectRetry=true (#910). Previously,
+// token.Wait() would block forever in this configuration.
+func TestMQTTConnectRetryTimeoutDoesNotBlock(t *testing.T) {
+	opts := mqtt.NewClientOptions().
+		AddBroker("tcp://127.0.0.1:1"). // port 1 — nothing listening, fast refusal
+		SetConnectRetry(true).
+		SetAutoReconnect(true)
+
+	client := mqtt.NewClient(opts)
+	token := client.Connect()
+	defer client.Disconnect(100)
+
+	start := time.Now()
+	connected := token.WaitTimeout(3 * time.Second)
+	elapsed := time.Since(start)
+
+	if connected {
+		t.Skip("port 1 unexpectedly accepted a connection — skipping")
+	}
+	if elapsed > 4*time.Second {
+		t.Errorf("WaitTimeout blocked for %v — token.Wait() would block forever with ConnectRetry=true", elapsed)
 	}
 }
