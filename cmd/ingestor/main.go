@@ -114,6 +114,7 @@ func main() {
 
 	// Connect to each MQTT source
 	var clients []mqtt.Client
+	connectedCount := 0
 	for _, source := range sources {
 		tag := source.Name
 		if tag == "" {
@@ -167,11 +168,19 @@ func main() {
 
 		client := mqtt.NewClient(opts)
 		token := client.Connect()
-		token.Wait()
+		// With ConnectRetry=true, token.Wait() blocks forever for unreachable brokers.
+		// WaitTimeout lets startup proceed; the client keeps retrying in the background
+		// and OnConnect fires (subscribing) when it eventually connects (#910).
+		if !token.WaitTimeout(30 * time.Second) {
+			log.Printf("MQTT [%s] initial connection timed out — retrying in background", tag)
+			clients = append(clients, client)
+			continue
+		}
 		if token.Error() != nil {
 			log.Printf("MQTT [%s] connection failed (non-fatal): %v", tag, token.Error())
 			continue
 		}
+		connectedCount++
 		clients = append(clients, client)
 	}
 
@@ -179,7 +188,11 @@ func main() {
 		log.Fatal("no MQTT connections established — check broker is running (default: mqtt://localhost:1883). Set MQTT_BROKER env var or configure mqttSources in config.json")
 	}
 
-	log.Printf("Running — %d MQTT source(s) connected", len(clients))
+	if connectedCount < len(clients) {
+		log.Printf("Running — %d MQTT source(s) connected, %d retrying in background", connectedCount, len(clients)-connectedCount)
+	} else {
+		log.Printf("Running — %d MQTT source(s) connected", connectedCount)
+	}
 
 	// Wait for shutdown signal
 	sig := make(chan os.Signal, 1)
