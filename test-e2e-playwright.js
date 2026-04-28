@@ -1358,6 +1358,38 @@ async function run() {
     await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
   });
 
+  await test('Customizer v2: typing in text field does not collapse focus (re-render guard)', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    await page.waitForFunction(() => window._customizerV2 && window._customizerV2.initDone, { timeout: 5000 });
+    const toggleSel = '#customizeToggle, button[title*="ustom" i], [class*="customize"]';
+    const btn = await page.$(toggleSel);
+    if (!btn) { console.log('    ⏭️  Customizer toggle not found'); return; }
+    await btn.click();
+    await page.waitForSelector('.cust-overlay', { timeout: 5000 });
+    const result = await page.evaluate(() => {
+      const input = document.querySelector('.cust-overlay input[type="text"][data-cv2-field]');
+      if (!input) return { skipped: true };
+      input.focus();
+      input.value = 'test';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const inputRef = input;
+      return new Promise(resolve => {
+        setTimeout(() => {
+          const panel = document.querySelector('.cust-overlay');
+          resolve({
+            inputConnected: inputRef.isConnected,
+            focusInPanel: panel ? panel.contains(document.activeElement) : false,
+          });
+        }, 500);
+      });
+    });
+    if (result.skipped) { console.log('    ⏭️  No text input with data-cv2-field found in panel'); return; }
+    assert(result.inputConnected, 'Input element should remain connected to DOM after debounce fires');
+    assert(result.focusInPanel, 'Focus should remain inside panel after debounce — re-render must not run while typing');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
 
   await test('Show Neighbors populates neighborPubkeys from affinity API', async () => {
     const testPubkey = 'aabbccdd11223344556677889900aabbccddeeff00112233445566778899001122';
