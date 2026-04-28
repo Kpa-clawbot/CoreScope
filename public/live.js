@@ -96,6 +96,8 @@
     }
     return m;
   }
+  const _savedSpeed = parseFloat(localStorage.getItem('live-vcr-speed'));
+  const _initialSpeed = [0.25, 0.5, 1, 2, 4, 8].includes(_savedSpeed) ? _savedSpeed : 1;
   let rainCanvas = null, rainCtx = null, rainDrops = [], rainRAF = null;
   const propagationBuffer = new Map(); // hash -> {timer, packets[]}
   let _onResize = null;
@@ -577,12 +579,17 @@
         .openOn(map);
       dismissTimer = setTimeout(() => { if (map) map.closePopup(); }, CLICKABLE_POPUP_DISMISS_MS);
     });
+  function speedLabel(s) {
+    if (s === 0.25) return '¼x';
+    if (s === 0.5) return '½x';
+    return s + 'x';
   }
 
   function vcrSpeedCycle() {
-    const speeds = [1, 2, 4, 8];
+    const speeds = [0.25, 0.5, 1, 2, 4, 8];
     const idx = speeds.indexOf(VCR.speed);
     VCR.speed = speeds[(idx + 1) % speeds.length];
+    localStorage.setItem('live-vcr-speed', VCR.speed);
     updateVCRUI();
     // If replaying, restart with new speed
     if (VCR.mode === 'REPLAY' && VCR.replayTimer) {
@@ -718,7 +725,7 @@
       if (pauseBtn) { pauseBtn.textContent = '⏸'; pauseBtn.setAttribute('aria-label', 'Pause'); }
       if (missedEl) missedEl.classList.add('hidden');
     }
-    if (speedBtn) { speedBtn.textContent = VCR.speed + 'x'; speedBtn.setAttribute('aria-label', 'Speed ' + VCR.speed + 'x'); }
+    if (speedBtn) { speedBtn.textContent = speedLabel(VCR.speed); speedBtn.setAttribute('aria-label', 'Speed ' + speedLabel(VCR.speed)); }
     updateVCRLcd();
   }
 
@@ -2461,6 +2468,7 @@
   window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
   window._liveResolveHopPositions = resolveHopPositions;
   window._liveVcrSpeedCycle = vcrSpeedCycle;
+  window._liveSpeedLabel = speedLabel;
   window._liveVcrPause = vcrPause;
   window._liveVcrResumeLive = vcrResumeLive;
   window._liveVcrSetMode = vcrSetMode;
@@ -3129,7 +3137,7 @@
 
     const matrixGreen = '#00ff41';
     const TRAIL_LEN = Math.min(6, bytes.length);
-    const DURATION_MS = 1100; // total hop duration
+    const DURATION_MS = 1100 / VCR.speed;
     const CHAR_INTERVAL = 0.06; // spawn a char every 6% of progress
     const charMarkers = [];
     let nextCharAt = CHAR_INTERVAL;
@@ -3261,8 +3269,9 @@
         return;
       }
       const elapsed = now - lastStep;
-      if (elapsed >= 33) {
-        const ticks = Math.min(Math.floor(elapsed / 33), 4);
+      const stepMs = 33 / VCR.speed;
+      if (elapsed >= stepMs) {
+        const ticks = Math.min(Math.floor(elapsed / stepMs), 4);
         lastStep = now;
         for (let t = 0; t < ticks && step < steps; t++) {
           step++;
@@ -3605,7 +3614,7 @@
     packetCount = 0; activeAnims = 0;
     nodeActivity = {}; pktTimestamps = [];
     feedDedup.clear();
-    VCR.buffer = []; VCR.playhead = -1; VCR.mode = 'LIVE'; VCR.missedCount = 0; VCR.speed = 1; VCR.replayGen = 0;
+    VCR.buffer = []; VCR.playhead = -1; VCR.mode = 'LIVE'; VCR.missedCount = 0; VCR.speed = _initialSpeed; VCR.replayGen = 0;
   }
 
   let _themeRefreshHandler = null;

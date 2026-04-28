@@ -402,9 +402,13 @@ console.log('\n=== live.js: VCR state machine ===');
     assert.strictEqual(VCR().mode, 'PAUSED', 'mode should stay PAUSED after second call');
   });
 
-  test('vcrSpeedCycle cycles through 1,2,4,8', () => {
+  test('vcrSpeedCycle cycles through 0.25, 0.5, 1, 2, 4, 8 and wraps', () => {
     vcrSetMode('LIVE');
-    VCR().speed = 1;
+    VCR().speed = 0.25;
+    vcrSpeedCycle();
+    assert.strictEqual(VCR().speed, 0.5);
+    vcrSpeedCycle();
+    assert.strictEqual(VCR().speed, 1);
     vcrSpeedCycle();
     assert.strictEqual(VCR().speed, 2);
     vcrSpeedCycle();
@@ -412,7 +416,26 @@ console.log('\n=== live.js: VCR state machine ===');
     vcrSpeedCycle();
     assert.strictEqual(VCR().speed, 8);
     vcrSpeedCycle();
-    assert.strictEqual(VCR().speed, 1); // wraps around
+    assert.strictEqual(VCR().speed, 0.25); // wraps around
+  });
+
+  test('vcrSpeedCycle saves speed to localStorage', () => {
+    VCR().speed = 1;
+    vcrSpeedCycle();
+    assert.strictEqual(ctx.localStorage.getItem('live-vcr-speed'), '2');
+    vcrSpeedCycle();
+    assert.strictEqual(ctx.localStorage.getItem('live-vcr-speed'), '4');
+  });
+
+  const speedLabel = ctx.window._liveSpeedLabel;
+  assert.ok(speedLabel, '_liveSpeedLabel must be exposed');
+
+  test('speedLabel returns fraction strings for sub-1x speeds', () => {
+    assert.strictEqual(speedLabel(0.25), '¼x');
+    assert.strictEqual(speedLabel(0.5), '½x');
+    assert.strictEqual(speedLabel(1), '1x');
+    assert.strictEqual(speedLabel(2), '2x');
+    assert.strictEqual(speedLabel(8), '8x');
   });
 
   const vcrResumeLive = ctx.window._liveVcrResumeLive;
