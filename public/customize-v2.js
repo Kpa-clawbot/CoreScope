@@ -629,7 +629,11 @@
       }
       writeOverrides(delta);
       _runPipeline();
-      _refreshPanel();
+      // Skip re-render while the user is typing inside the panel — setting
+      // innerHTML would destroy the focused input and collapse the mobile keyboard.
+      if (!(_panelEl && _panelEl.contains(document.activeElement))) {
+        _refreshPanel();
+      }
     }, 300);
   }
 
