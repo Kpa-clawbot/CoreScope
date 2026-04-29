@@ -1258,25 +1258,31 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	_, pm := s.store.getCachedNodesAndPM()
 
 	// Collect candidate transmissions from the index, deduplicating by tx ID.
+	// confirmedByFullKey tracks TXs found via the full-pubkey index key — these are
+	// already resolved_path-confirmed and bypass the hop-level check below.
+	confirmedByFullKey := make(map[int]bool)
 	seen := make(map[int]bool)
 	var candidates []*StoreTx
-	addCandidates := func(key string) {
+	addCandidates := func(key string, confirmed bool) {
 		for _, tx := range s.store.byPathHop[key] {
 			if !seen[tx.ID] {
 				seen[tx.ID] = true
+				if confirmed {
+					confirmedByFullKey[tx.ID] = true
+				}
 				candidates = append(candidates, tx)
 			}
 		}
 	}
-	addCandidates(lowerPK) // full pubkey match (from resolved_path)
-	addCandidates(prefix1) // 2-char raw hop match
-	addCandidates(prefix2) // 4-char raw hop match
+	addCandidates(lowerPK, true)  // full pubkey match (from resolved_path) → confirmed
+	addCandidates(prefix1, false) // 2-char raw hop match
+	addCandidates(prefix2, false) // 4-char raw hop match
 	// Also check any raw hops that start with prefix2 (longer prefixes).
 	// Raw hops are typically 2 chars, so iterate only keys with HasPrefix
 	// on the small set of index keys rather than all packets.
 	for key := range s.store.byPathHop {
 		if len(key) > 4 && len(key) < len(lowerPK) && strings.HasPrefix(key, prefix2) {
-			addCandidates(key)
+			addCandidates(key, false)
 		}
 	}
 
@@ -1313,6 +1319,7 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	s.store.mu.RUnlock()
 
 	// Now run SQL checks outside the lock for candidates that need confirmation.
+	confirmedBySQL := make(map[int]bool)
 	filtered := candidates[:0]
 	for _, cc := range checks {
 		if cc.inIndex {
@@ -1320,6 +1327,7 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		} else if cc.hasReverse {
 			if s.store.confirmResolvedPathContains(cc.tx.ID, lowerPK) {
 				filtered = append(filtered, cc.tx)
+				confirmedBySQL[cc.tx.ID] = true
 			}
 		}
 		// else: not in index → exclude
@@ -1347,10 +1355,14 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		return r
 	}
 	for _, tx := range candidates {
-		totalTransmissions++
 		hops := txGetParsedPath(tx)
 		resolvedHops := make([]PathHopResp, len(hops))
 		sigParts := make([]string, len(hops))
+		// For candidates not confirmed via full-pubkey index or SQL, verify that at
+		// least one hop actually resolves to the target. This catches prefix collisions
+		// (e.g. two nodes sharing a "7a" 1-byte prefix) that slipped through the
+		// conservative resolved_path fallback.
+		containsTarget := confirmedByFullKey[tx.ID] || confirmedBySQL[tx.ID]
 		for i, hop := range hops {
 			resolved := resolveHop(hop)
 			entry := PathHopResp{Prefix: hop, Name: hop}
@@ -1362,11 +1374,22 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 					entry.Lon = resolved.Lon
 				}
 				sigParts[i] = resolved.PublicKey
+				if strings.ToLower(resolved.PublicKey) == lowerPK {
+					containsTarget = true
+				}
 			} else {
 				sigParts[i] = hop
+				// Unresolvable hop: keep conservative if prefix could be the target.
+				if strings.HasPrefix(lowerPK, strings.ToLower(hop)) {
+					containsTarget = true
+				}
 			}
 			resolvedHops[i] = entry
 		}
+		if !containsTarget {
+			continue
+		}
+		totalTransmissions++
 
 		sig := strings.Join(sigParts, "→")
 		agg := pathGroups[sig]
