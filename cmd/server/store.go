@@ -4551,9 +4551,20 @@ type prefixMap struct {
 // entries to ~7×N (+ 1 full-key entry per node for exact-match lookups).
 const maxPrefixLen = 8
 
+// canAppearInPath returns true if the node's role allows it to appear as a
+// path hop.  Only repeaters, room servers, and rooms can forward packets;
+// companions and sensors originate but never relay.
+func canAppearInPath(role string) bool {
+	r := strings.ToLower(role)
+	return strings.Contains(r, "repeater") || strings.Contains(r, "room_server") || r == "room"
+}
+
 func buildPrefixMap(nodes []nodeInfo) *prefixMap {
 	pm := &prefixMap{m: make(map[string][]nodeInfo, len(nodes)*(maxPrefixLen+1))}
 	for _, n := range nodes {
+		if !canAppearInPath(n.Role) {
+			continue
+		}
 		pk := strings.ToLower(n.PublicKey)
 		maxLen := maxPrefixLen
 		if maxLen > len(pk) {
