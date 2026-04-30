@@ -11,7 +11,7 @@ import (
 
 func TestResolveWithContext_UniquePrefix(t *testing.T) {
 	pm := buildPrefixMap([]nodeInfo{
-		{PublicKey: "a1b2c3d4", Name: "Node-A", HasGPS: true, Lat: 1, Lon: 2},
+		{Role: "repeater", PublicKey: "a1b2c3d4", Name: "Node-A", HasGPS: true, Lat: 1, Lon: 2},
 	})
 	ni, confidence, _ := pm.resolveWithContext("a1b2c3d4", nil, nil)
 	if ni == nil || ni.Name != "Node-A" {
@@ -24,7 +24,7 @@ func TestResolveWithContext_UniquePrefix(t *testing.T) {
 
 func TestResolveWithContext_NoMatch(t *testing.T) {
 	pm := buildPrefixMap([]nodeInfo{
-		{PublicKey: "a1b2c3d4", Name: "Node-A"},
+		{Role: "repeater", PublicKey: "a1b2c3d4", Name: "Node-A"},
 	})
 	ni, confidence, _ := pm.resolveWithContext("ff", nil, nil)
 	if ni != nil {
@@ -37,8 +37,8 @@ func TestResolveWithContext_NoMatch(t *testing.T) {
 
 func TestResolveWithContext_AffinityWins(t *testing.T) {
 	pm := buildPrefixMap([]nodeInfo{
-		{PublicKey: "a1aaaaaa", Name: "Node-A1"},
-		{PublicKey: "a1bbbbbb", Name: "Node-A2"},
+		{Role: "repeater", PublicKey: "a1aaaaaa", Name: "Node-A1"},
+		{Role: "repeater", PublicKey: "a1bbbbbb", Name: "Node-A2"},
 	})
 
 	graph := NewNeighborGraph()
@@ -60,9 +60,9 @@ func TestResolveWithContext_AffinityWins(t *testing.T) {
 
 func TestResolveWithContext_AffinityTooClose_FallsToGeo(t *testing.T) {
 	pm := buildPrefixMap([]nodeInfo{
-		{PublicKey: "a1aaaaaa", Name: "Node-A1", HasGPS: true, Lat: 10, Lon: 20},
-		{PublicKey: "a1bbbbbb", Name: "Node-A2", HasGPS: true, Lat: 11, Lon: 21},
-		{PublicKey: "c0c0c0c0", Name: "Ctx", HasGPS: true, Lat: 10.1, Lon: 20.1},
+		{Role: "repeater", PublicKey: "a1aaaaaa", Name: "Node-A1", HasGPS: true, Lat: 10, Lon: 20},
+		{Role: "repeater", PublicKey: "a1bbbbbb", Name: "Node-A2", HasGPS: true, Lat: 11, Lon: 21},
+		{Role: "repeater", PublicKey: "c0c0c0c0", Name: "Ctx", HasGPS: true, Lat: 10.1, Lon: 20.1},
 	})
 
 	graph := NewNeighborGraph()
@@ -85,8 +85,8 @@ func TestResolveWithContext_AffinityTooClose_FallsToGeo(t *testing.T) {
 
 func TestResolveWithContext_GPSPreference(t *testing.T) {
 	pm := buildPrefixMap([]nodeInfo{
-		{PublicKey: "a1aaaaaa", Name: "NoGPS"},
-		{PublicKey: "a1bbbbbb", Name: "HasGPS", HasGPS: true, Lat: 1, Lon: 2},
+		{Role: "repeater", PublicKey: "a1aaaaaa", Name: "NoGPS"},
+		{Role: "repeater", PublicKey: "a1bbbbbb", Name: "HasGPS", HasGPS: true, Lat: 1, Lon: 2},
 	})
 
 	ni, confidence, _ := pm.resolveWithContext("a1", nil, nil)
@@ -100,8 +100,8 @@ func TestResolveWithContext_GPSPreference(t *testing.T) {
 
 func TestResolveWithContext_FirstMatchFallback(t *testing.T) {
 	pm := buildPrefixMap([]nodeInfo{
-		{PublicKey: "a1aaaaaa", Name: "First"},
-		{PublicKey: "a1bbbbbb", Name: "Second"},
+		{Role: "repeater", PublicKey: "a1aaaaaa", Name: "First"},
+		{Role: "repeater", PublicKey: "a1bbbbbb", Name: "Second"},
 	})
 
 	ni, confidence, _ := pm.resolveWithContext("a1", nil, nil)
@@ -115,8 +115,8 @@ func TestResolveWithContext_FirstMatchFallback(t *testing.T) {
 
 func TestResolveWithContext_NilGraphFallsToGPS(t *testing.T) {
 	pm := buildPrefixMap([]nodeInfo{
-		{PublicKey: "a1aaaaaa", Name: "NoGPS"},
-		{PublicKey: "a1bbbbbb", Name: "HasGPS", HasGPS: true, Lat: 1, Lon: 2},
+		{Role: "repeater", PublicKey: "a1aaaaaa", Name: "NoGPS"},
+		{Role: "repeater", PublicKey: "a1bbbbbb", Name: "HasGPS", HasGPS: true, Lat: 1, Lon: 2},
 	})
 
 	ni, confidence, _ := pm.resolveWithContext("a1", []string{"someone"}, nil)
@@ -131,8 +131,8 @@ func TestResolveWithContext_NilGraphFallsToGPS(t *testing.T) {
 func TestResolveWithContext_BackwardCompatResolve(t *testing.T) {
 	// Verify original resolve() still works unchanged
 	pm := buildPrefixMap([]nodeInfo{
-		{PublicKey: "a1aaaaaa", Name: "NoGPS"},
-		{PublicKey: "a1bbbbbb", Name: "HasGPS", HasGPS: true, Lat: 1, Lon: 2},
+		{Role: "repeater", PublicKey: "a1aaaaaa", Name: "NoGPS"},
+		{Role: "repeater", PublicKey: "a1bbbbbb", Name: "HasGPS", HasGPS: true, Lat: 1, Lon: 2},
 	})
 	ni := pm.resolve("a1")
 	if ni == nil || ni.Name != "HasGPS" {
@@ -164,8 +164,8 @@ func TestResolveHopsAPI_UniquePrefix(t *testing.T) {
 	_ = srv
 
 	// Insert a unique node
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon) VALUES (?, ?, ?, ?)",
-		"ff11223344", "UniqueNode", 37.0, -122.0)
+	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+		"ff11223344", "UniqueNode", 37.0, -122.0, "repeater")
 	srv.store.InvalidateNodeCache()
 
 	req := httptest.NewRequest("GET", "/api/resolve-hops?hops=ff11223344", nil)
@@ -189,10 +189,10 @@ func TestResolveHopsAPI_UniquePrefix(t *testing.T) {
 func TestResolveHopsAPI_AmbiguousNoContext(t *testing.T) {
 	srv, router := setupTestServer(t)
 
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon) VALUES (?, ?, ?, ?)",
-		"ee1aaaaaaa", "Node-E1", 37.0, -122.0)
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon) VALUES (?, ?, ?, ?)",
-		"ee1bbbbbbb", "Node-E2", 38.0, -121.0)
+	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+		"ee1aaaaaaa", "Node-E1", 37.0, -122.0, "repeater")
+	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+		"ee1bbbbbbb", "Node-E2", 38.0, -121.0, "repeater")
 	srv.store.InvalidateNodeCache()
 
 	req := httptest.NewRequest("GET", "/api/resolve-hops?hops=ee1", nil)
@@ -224,12 +224,12 @@ func TestResolveHopsAPI_AmbiguousNoContext(t *testing.T) {
 func TestResolveHopsAPI_WithAffinityContext(t *testing.T) {
 	srv, router := setupTestServer(t)
 
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon) VALUES (?, ?, ?, ?)",
-		"dd1aaaaaaa", "Node-D1", 37.0, -122.0)
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon) VALUES (?, ?, ?, ?)",
-		"dd1bbbbbbb", "Node-D2", 38.0, -121.0)
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon) VALUES (?, ?, ?, ?)",
-		"c0c0c0c0c0", "Context", 37.1, -122.1)
+	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+		"dd1aaaaaaa", "Node-D1", 37.0, -122.0, "repeater")
+	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+		"dd1bbbbbbb", "Node-D2", 38.0, -121.0, "repeater")
+	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+		"c0c0c0c0c0", "Context", 37.1, -122.1, "repeater")
 
 	// Invalidate node cache so the PM includes newly inserted nodes.
 	srv.store.cacheMu.Lock()
@@ -279,8 +279,8 @@ func TestResolveHopsAPI_WithAffinityContext(t *testing.T) {
 func TestResolveHopsAPI_ResponseShape(t *testing.T) {
 	srv, router := setupTestServer(t)
 
-	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon) VALUES (?, ?, ?, ?)",
-		"bb1aaaaaaa", "Node-B1", 37.0, -122.0)
+	srv.db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, lat, lon, role) VALUES (?, ?, ?, ?, ?)",
+		"bb1aaaaaaa", "Node-B1", 37.0, -122.0, "repeater")
 
 	req := httptest.NewRequest("GET", "/api/resolve-hops?hops=bb1a", nil)
 	rr := httptest.NewRecorder()
