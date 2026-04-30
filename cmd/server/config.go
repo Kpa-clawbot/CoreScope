@@ -70,6 +70,7 @@ type Config struct {
 
 	DebugAffinity bool `json:"debugAffinity,omitempty"`
 
+	Compression   *CompressionConfig   `json:"compression,omitempty"`
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
 }
@@ -100,6 +101,23 @@ func IsWeakAPIKey(key string) bool {
 		return true
 	}
 	return false
+}
+
+// CompressionConfig controls HTTP gzip and WebSocket permessage-deflate compression.
+// Both are disabled by default — enable only when the upstream proxy does not already compress.
+type CompressionConfig struct {
+	GZip      bool `json:"gzip"`
+	Websocket bool `json:"websocket"`
+}
+
+// GZipEnabled returns true when HTTP gzip compression is explicitly enabled.
+func (c *Config) GZipEnabled() bool {
+	return c.Compression != nil && c.Compression.GZip
+}
+
+// WSCompressionEnabled returns true when WebSocket permessage-deflate is explicitly enabled.
+func (c *Config) WSCompressionEnabled() bool {
+	return c.Compression != nil && c.Compression.Websocket
 }
 
 // ResolvedPathConfig controls async backfill behavior.

@@ -232,6 +232,7 @@ func main() {
 
 	// WebSocket hub
 	hub := NewHub()
+	hub.upgrader.EnableCompression = cfg.WSCompressionEnabled()
 
 	// HTTP server
 	srv := NewServer(database, cfg, hub)
@@ -404,9 +405,17 @@ func main() {
 	}
 
 	// Graceful shutdown
+	var handler http.Handler = router
+	if cfg.GZipEnabled() {
+		handler = gzipMiddleware(router)
+		log.Printf("[server] HTTP gzip compression enabled")
+	}
+	if cfg.WSCompressionEnabled() {
+		log.Printf("[server] WebSocket permessage-deflate compression enabled")
+	}
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
-		Handler:      router,
+		Handler:      handler,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
