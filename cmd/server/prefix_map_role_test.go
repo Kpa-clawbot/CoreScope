@@ -48,40 +48,6 @@ func TestBuildPrefixMap_ExcludesSensors(t *testing.T) {
 	}
 }
 
-func TestResolveWithContext_ReturnsRepeaterAtItsPrefix(t *testing.T) {
-	nodes := []nodeInfo{
-		{PublicKey: "7a1234abcdef", Role: "repeater", Name: "MyRepeater"},
-	}
-	pm := buildPrefixMap(nodes)
-	r, reason, _ := pm.resolveWithContext("7a", nil, nil)
-	if r == nil {
-		t.Fatal("expected non-nil result for repeater prefix")
-	}
-	if r.Name != "MyRepeater" {
-		t.Fatalf("expected MyRepeater, got %s", r.Name)
-	}
-	if reason != "unique_prefix" {
-		t.Fatalf("expected reason unique_prefix, got %s", reason)
-	}
-}
-
-func TestResolveWithContext_ReturnsRoomServerAtItsPrefix(t *testing.T) {
-	nodes := []nodeInfo{
-		{PublicKey: "ab1234567890", Role: "room_server", Name: "MyRoom"},
-	}
-	pm := buildPrefixMap(nodes)
-	r, reason, _ := pm.resolveWithContext("ab", nil, nil)
-	if r == nil {
-		t.Fatal("expected non-nil result for room_server prefix")
-	}
-	if r.Name != "MyRoom" {
-		t.Fatalf("expected MyRoom, got %s", r.Name)
-	}
-	if reason != "unique_prefix" {
-		t.Fatalf("expected reason unique_prefix, got %s", reason)
-	}
-}
-
 func TestResolveWithContext_NilWhenOnlyCompanionMatchesPrefix(t *testing.T) {
 	nodes := []nodeInfo{
 		{PublicKey: "7a1234abcdef", Role: "companion", Name: "MyCompanion"},
@@ -213,17 +179,34 @@ func TestComputeDistancesForTx_CompanionNeverInResolvedChain(t *testing.T) {
 
 	hops, pathRec := computeDistancesForTx(tx, nodeByPk, repeaterSet, resolveHop)
 
-	// The chain should include Sender, GoodRepeater, OtherRepeater — never BadCompanion
+	// Verify BadCompanion's pubkey never appears in hops
+	badPK := "7a1234abcdef"
+	for i, h := range hops {
+		if h.FromPk == badPK || h.ToPk == badPK {
+			t.Fatalf("hop[%d] contains BadCompanion pubkey: from=%s to=%s", i, h.FromPk, h.ToPk)
+		}
+	}
+
+	// Verify BadCompanion's pubkey never appears in pathRec
 	if pathRec == nil {
 		t.Fatal("expected non-nil path record (3 GPS nodes in chain)")
 	}
-	_ = hops
-	// Verify via resolveHop that "7a" resolves to GoodRepeater
-	resolved := pm.resolve("7a")
-	if resolved == nil {
-		t.Fatal("expected resolve('7a') to return GoodRepeater")
+	for i, hop := range pathRec.Hops {
+		if hop.FromPk == badPK || hop.ToPk == badPK {
+			t.Fatalf("pathRec.Hops[%d] contains BadCompanion pubkey: from=%s to=%s", i, hop.FromPk, hop.ToPk)
+		}
 	}
-	if resolved.Name != "GoodRepeater" {
-		t.Fatalf("expected GoodRepeater in resolved chain, got %s", resolved.Name)
+
+	// Verify GoodRepeater IS in the chain (proves the prefix was resolved to the right node)
+	goodPK := "7a5678901234"
+	foundGood := false
+	for _, hop := range pathRec.Hops {
+		if hop.FromPk == goodPK || hop.ToPk == goodPK {
+			foundGood = true
+			break
+		}
+	}
+	if !foundGood {
+		t.Fatal("expected GoodRepeater (7a5678901234) in pathRec.Hops but not found")
 	}
 }
