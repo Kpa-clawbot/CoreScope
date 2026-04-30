@@ -224,10 +224,9 @@ async function run() {
   // Test 5: Node detail loads (reuses nodes page from test 2)
   await test('Node detail loads', async () => {
     await page.waitForSelector('table tbody tr');
-    // Click first row
-    const firstRow = await page.$('table tbody tr');
-    assert(firstRow, 'No node rows found');
-    await firstRow.click();
+    // Use page.click() instead of an element handle to avoid detached-element races
+    // when the WebSocket auto-refresh re-renders the table between querySelector and click.
+    await page.click('table tbody tr');
     // Wait for detail pane to appear
     await page.waitForSelector('.node-detail');
     const html = await page.content();
@@ -240,10 +239,8 @@ async function run() {
   await test('Node side panel Details link navigates', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('table tbody tr');
-    // Click first row to open side panel
-    const firstRow = await page.$('table tbody tr');
-    assert(firstRow, 'No node rows found');
-    await firstRow.click();
+    // Use page.click() to avoid detached-element race with WebSocket auto-refresh.
+    await page.click('table tbody tr');
     await page.waitForSelector('.node-detail');
     // Find the Details link in the side panel
     const detailsLink = await page.$('#nodesRight a.btn-primary[href^="#/nodes/"]');
