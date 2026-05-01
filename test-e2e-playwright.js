@@ -2172,7 +2172,10 @@ async function run() {
 
   await test('Packets table rows have border-left stripe when toggle ON', async () => {
     await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+    // Hard reload to re-init page handler with the new toggle state.
+    // page.goto with same hash URL is a no-op for re-rendering.
     await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
     // Wait for hash stripe to be applied (inline style set during render).
     // Assert specifically 4px (per spec §2.10) so we don't false-pass on the
@@ -2188,7 +2191,9 @@ async function run() {
     await page.evaluate(() => {
       localStorage.setItem('meshcore-color-packets-by-hash', 'false');
     });
-    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    // Hard reload (page.goto with same hash URL no-ops — must reload to re-init
+    // the page handler and re-render rows with the new toggle state).
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
     await page.waitForTimeout(500);
     const noStripe = await page.evaluate(() => {
