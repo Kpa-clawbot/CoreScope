@@ -1,0 +1,404 @@
+package main
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	"math"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// ─── Path Inspector ────────────────────────────────────────────────────────────
+// POST /api/paths/inspect — beam-search scorer for prefix path candidates.
+// Spec: issue #944 §2.1–2.5.
+
+// pathInspectRequest is the JSON body for the inspect endpoint.
+type pathInspectRequest struct {
+	Prefixes []string             `json:"prefixes"`
+	Context  *pathInspectContext  `json:"context,omitempty"`
+	Limit    int                  `json:"limit,omitempty"`
+}
+
+type pathInspectContext struct {
+	ObserverID string `json:"observerId,omitempty"`
+	Since      string `json:"since,omitempty"`
+	Until      string `json:"until,omitempty"`
+}
+
+// pathCandidate is one scored candidate path in the response.
+type pathCandidate struct {
+	Path        []string        `json:"path"`
+	Names       []string        `json:"names"`
+	Score       float64         `json:"score"`
+	Speculative bool            `json:"speculative"`
+	Evidence    pathEvidence    `json:"evidence"`
+}
+
+type pathEvidence struct {
+	PerHop []hopEvidence `json:"perHop"`
+}
+
+type hopEvidence struct {
+	Prefix               string  `json:"prefix"`
+	CandidatesConsidered int     `json:"candidatesConsidered"`
+	Chosen               string  `json:"chosen"`
+	EdgeWeight           float64 `json:"edgeWeight"`
+}
+
+type pathInspectResponse struct {
+	Candidates []pathCandidate        `json:"candidates"`
+	Input      map[string]interface{} `json:"input"`
+	Stats      map[string]interface{} `json:"stats"`
+}
+
+// beamEntry represents a partial path being extended during beam search.
+type beamEntry struct {
+	pubkeys  []string
+	names    []string
+	evidence []hopEvidence
+	score    float64 // product of per-hop scores (pre-geometric-mean)
+}
+
+const (
+	beamWidth       = 20
+	maxInputHops    = 64
+	maxPrefixBytes  = 3
+	maxRequestItems = 64
+	geoMaxKm        = 50.0
+	hopScoreFloor   = 0.05
+	speculativeThreshold = 0.7
+	inspectCacheTTL = 30 * time.Second
+	inspectBodyLimit = 4096
+)
+
+// Weights per spec §2.3.
+const (
+	wEdge        = 0.35
+	wGeo         = 0.20
+	wRecency     = 0.15
+	wSelectivity = 0.30
+)
+
+func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
+	// Body limit per spec §2.1.
+	r.Body = http.MaxBytesReader(w, r.Body, inspectBodyLimit)
+
+	var req pathInspectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Validate prefixes.
+	if len(req.Prefixes) == 0 {
+		http.Error(w, `{"error":"prefixes required"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.Prefixes) > maxRequestItems {
+		http.Error(w, `{"error":"too many prefixes (max 64)"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Normalize + validate each prefix.
+	prefixByteLen := -1
+	for i, p := range req.Prefixes {
+		p = strings.ToLower(strings.TrimSpace(p))
+		req.Prefixes[i] = p
+		if len(p) == 0 || len(p)%2 != 0 {
+			http.Error(w, `{"error":"prefixes must be even-length hex"}`, http.StatusBadRequest)
+			return
+		}
+		if _, err := hex.DecodeString(p); err != nil {
+			http.Error(w, `{"error":"prefixes must be valid hex"}`, http.StatusBadRequest)
+			return
+		}
+		byteLen := len(p) / 2
+		if byteLen > maxPrefixBytes {
+			http.Error(w, `{"error":"prefix exceeds 3 bytes"}`, http.StatusBadRequest)
+			return
+		}
+		if prefixByteLen == -1 {
+			prefixByteLen = byteLen
+		} else if byteLen != prefixByteLen {
+			http.Error(w, `{"error":"mixed prefix lengths not allowed"}`, http.StatusBadRequest)
+			return
+		}
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	// Check cache.
+	cacheKey := s.store.inspectCacheKey(req)
+	s.store.inspectMu.RLock()
+	if cached, ok := s.store.inspectCache[cacheKey]; ok && time.Now().Before(cached.expiresAt) {
+		s.store.inspectMu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cached.data)
+		return
+	}
+	s.store.inspectMu.RUnlock()
+
+	// Snapshot data under read lock.
+	nodes, pm := s.store.getCachedNodesAndPM()
+	_ = nodes
+
+	// Get neighbor graph; handle cold start.
+	graph := s.store.graph
+	if graph == nil || graph.IsStale() {
+		rebuilt := make(chan struct{})
+		go func() {
+			s.store.ensureNeighborGraph()
+			close(rebuilt)
+		}()
+		select {
+		case <-rebuilt:
+			graph = s.store.graph
+		case <-time.After(2 * time.Second):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]interface{}{"retry": true})
+			return
+		}
+		if graph == nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]interface{}{"retry": true})
+			return
+		}
+	}
+
+	now := time.Now()
+	start := now
+
+	// Beam search.
+	beam := s.store.beamSearch(req.Prefixes, pm, graph, now)
+
+	// Sort by score descending, take top limit.
+	sortBeam(beam)
+	if len(beam) > limit {
+		beam = beam[:limit]
+	}
+
+	// Build response.
+	candidates := make([]pathCandidate, 0, len(beam))
+	for _, entry := range beam {
+		nHops := len(entry.pubkeys)
+		var score float64
+		if nHops > 0 {
+			score = math.Pow(entry.score, 1.0/float64(nHops))
+		}
+		candidates = append(candidates, pathCandidate{
+			Path:        entry.pubkeys,
+			Names:       entry.names,
+			Score:       math.Round(score*1000) / 1000,
+			Speculative: score < speculativeThreshold,
+			Evidence:    pathEvidence{PerHop: entry.evidence},
+		})
+	}
+
+	elapsed := time.Since(start).Milliseconds()
+	resp := pathInspectResponse{
+		Candidates: candidates,
+		Input: map[string]interface{}{
+			"prefixes": req.Prefixes,
+			"hops":     len(req.Prefixes),
+		},
+		Stats: map[string]interface{}{
+			"beamWidth":     beamWidth,
+			"expansionsRun": len(req.Prefixes) * beamWidth,
+			"elapsedMs":     elapsed,
+		},
+	}
+
+	// Cache result.
+	s.store.inspectMu.Lock()
+	if s.store.inspectCache == nil {
+		s.store.inspectCache = make(map[string]*inspectCachedResult)
+	}
+	s.store.inspectCache[cacheKey] = &inspectCachedResult{
+		data:      resp,
+		expiresAt: time.Now().Add(inspectCacheTTL),
+	}
+	s.store.inspectMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+type inspectCachedResult struct {
+	data      pathInspectResponse
+	expiresAt time.Time
+}
+
+func (s *PacketStore) inspectCacheKey(req pathInspectRequest) string {
+	key := strings.Join(req.Prefixes, ",")
+	if req.Context != nil {
+		key += "|" + req.Context.ObserverID + "|" + req.Context.Since + "|" + req.Context.Until
+	}
+	return key
+}
+
+func (s *PacketStore) beamSearch(prefixes []string, pm *prefixMap, graph *NeighborGraph, now time.Time) []beamEntry {
+	// Start with empty beam.
+	beam := []beamEntry{{pubkeys: nil, names: nil, evidence: nil, score: 1.0}}
+
+	for hopIdx, prefix := range prefixes {
+		candidates := pm.m[prefix]
+		// Filter by role at lookup time (spec §2.2 step 2).
+		var filtered []nodeInfo
+		for _, c := range candidates {
+			if canAppearInPath(c.Role) {
+				filtered = append(filtered, c)
+			}
+		}
+
+		candidateCount := len(filtered)
+		if candidateCount == 0 {
+			// No candidates for this hop — beam dies.
+			return nil
+		}
+
+		var nextBeam []beamEntry
+		for _, entry := range beam {
+			for _, cand := range filtered {
+				hopScore := s.scoreHop(entry, cand, candidateCount, graph, now, hopIdx)
+				if hopScore < hopScoreFloor {
+					hopScore = hopScoreFloor
+				}
+
+				newEntry := beamEntry{
+					pubkeys:  append(append([]string{}, entry.pubkeys...), cand.PublicKey),
+					names:    append(append([]string{}, entry.names...), cand.Name),
+					evidence: append(append([]hopEvidence{}, entry.evidence...), hopEvidence{
+						Prefix:               prefix,
+						CandidatesConsidered: candidateCount,
+						Chosen:               cand.PublicKey,
+						EdgeWeight:           hopScore,
+					}),
+					score: entry.score * hopScore,
+				}
+				nextBeam = append(nextBeam, newEntry)
+			}
+		}
+
+		// Prune to beam width.
+		sortBeam(nextBeam)
+		if len(nextBeam) > beamWidth {
+			nextBeam = nextBeam[:beamWidth]
+		}
+		beam = nextBeam
+	}
+
+	return beam
+}
+
+func (s *PacketStore) scoreHop(entry beamEntry, cand nodeInfo, candidateCount int, graph *NeighborGraph, now time.Time, hopIdx int) float64 {
+	// Component 1: Edge weight (35%).
+	var edgeScore float64
+	if hopIdx == 0 || len(entry.pubkeys) == 0 {
+		edgeScore = 1.0 // First hop, no prior node.
+	} else {
+		lastPK := entry.pubkeys[len(entry.pubkeys)-1]
+		edges := graph.Neighbors(lastPK)
+		for _, e := range edges {
+			peer := e.NodeA
+			if strings.EqualFold(peer, lastPK) {
+				peer = e.NodeB
+			}
+			if strings.EqualFold(peer, cand.PublicKey) {
+				edgeScore = e.Score(now)
+				break
+			}
+		}
+		// edgeScore stays 0 if no edge found.
+	}
+
+	// Component 2: Geographic plausibility (20%).
+	var geoScore float64 = 1.0 // neutral if no GPS
+	if hopIdx > 0 && len(entry.pubkeys) > 0 {
+		// Find prev node GPS.
+		prevPK := entry.pubkeys[len(entry.pubkeys)-1]
+		prevNode := s.findNodeByPK(prevPK)
+		if prevNode != nil && prevNode.HasGPS && cand.HasGPS {
+			dist := haversineKm(prevNode.Lat, prevNode.Lon, cand.Lat, cand.Lon)
+			if dist <= geoMaxKm {
+				geoScore = 1.0
+			} else {
+				// Linear decay beyond max range, floor at 0.1.
+				geoScore = math.Max(0.1, geoMaxKm/dist)
+			}
+		}
+	}
+
+	// Component 3: Recency of edge co-observation (15%).
+	var recencyScore float64 = 1.0
+	if hopIdx > 0 && len(entry.pubkeys) > 0 {
+		lastPK := entry.pubkeys[len(entry.pubkeys)-1]
+		edges := graph.Neighbors(lastPK)
+		for _, e := range edges {
+			peer := e.NodeA
+			if strings.EqualFold(peer, lastPK) {
+				peer = e.NodeB
+			}
+			if strings.EqualFold(peer, cand.PublicKey) {
+				hoursSince := now.Sub(e.LastSeen).Hours()
+				if hoursSince <= 24 {
+					recencyScore = 1.0
+				} else {
+					recencyScore = math.Max(0.1, 24.0/hoursSince)
+				}
+				break
+			}
+		}
+		if recencyScore == 1.0 && edgeScore == 0 {
+			recencyScore = 0.0 // No edge at all.
+		}
+	}
+
+	// Component 4: Prefix selectivity (30%).
+	selectivityScore := 1.0 / float64(candidateCount)
+
+	// Weighted sum.
+	return wEdge*edgeScore + wGeo*geoScore + wRecency*recencyScore + wSelectivity*selectivityScore
+}
+
+func (s *PacketStore) findNodeByPK(pk string) *nodeInfo {
+	s.cacheMu.Lock()
+	nodes := s.nodeCache
+	s.cacheMu.Unlock()
+	if nodes == nil {
+		return nil
+	}
+	pkLower := strings.ToLower(pk)
+	for i := range nodes {
+		if strings.ToLower(nodes[i].PublicKey) == pkLower {
+			return &nodes[i]
+		}
+	}
+	return nil
+}
+
+func sortBeam(beam []beamEntry) {
+	// Sort descending by score.
+	for i := 1; i < len(beam); i++ {
+		for j := i; j > 0 && beam[j].score > beam[j-1].score; j-- {
+			beam[j], beam[j-1] = beam[j-1], beam[j]
+		}
+	}
+}
+
+// ensureNeighborGraph triggers a graph rebuild if nil or stale.
+func (s *PacketStore) ensureNeighborGraph() {
+	if s.graph != nil && !s.graph.IsStale() {
+		return
+	}
+	g := BuildFromStore(s)
+	s.graph = g
+}
