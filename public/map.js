@@ -553,6 +553,16 @@
         }
       }
 
+      // Check for pending path inspector route (cross-page navigation from Path Inspector).
+      if (window._pendingPathInspectorRoute) {
+        var pending = window._pendingPathInspectorRoute;
+        delete window._pendingPathInspectorRoute;
+        if (pending.path && pending.path.length > 0) {
+          if (window.routeLayer) window.routeLayer.clearLayers();
+          drawPacketRoute(pending.path.slice(1), pending.path[0]);
+        }
+      }
+
       // Don't fitBounds on initial load — respect the Bay Area default or saved view
       // Only fitBounds on subsequent data refreshes if user hasn't manually panned
     } catch (e) {
