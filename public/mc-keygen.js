@@ -3,9 +3,45 @@
 
 (function () {
   /* ---------------------------------------------------------------
-   * MeshCoreKeyGenerator — ported from agessaman/meshcore-web-keygen
-   * All processing is local; keys never leave the device.
+   * MeshCoreKeyGenerator
+   * CPU path  : WASM workers (default, unchanged)
+   * GPU path  : blob hash-workers + WebGPU scanner (jkingsman/meshcore-web-keygen)
+   * Keys never leave the device.
    * --------------------------------------------------------------- */
+
+  const ED25519_ORDER = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3edn;
+
+  // Inline blob-worker that generates SHA-512 scalar candidates for the GPU pipeline.
+  // Each invocation produces scalarWords (8 u32 per candidate) + suffixes (32 bytes each).
+  const HASH_WORKER_SCRIPT = `
+self.onmessage = async (event) => {
+  const { type, batchSize } = event.data;
+  if (type !== 'generate') return;
+  const scalarWords = new Uint32Array(batchSize * 8);
+  const suffixes   = new Uint8Array(batchSize * 32);
+  for (let i = 0; i < batchSize; i++) {
+    const seed   = crypto.getRandomValues(new Uint8Array(32));
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-512', seed));
+    const c0   = digest[0] & 248;
+    const c31  = (digest[31] & 63) | 64;
+    const wo   = i * 8;
+    scalarWords[wo]   = c0          | (digest[1]  << 8) | (digest[2]  << 16) | (digest[3]  << 24);
+    scalarWords[wo+1] = digest[4]   | (digest[5]  << 8) | (digest[6]  << 16) | (digest[7]  << 24);
+    scalarWords[wo+2] = digest[8]   | (digest[9]  << 8) | (digest[10] << 16) | (digest[11] << 24);
+    scalarWords[wo+3] = digest[12]  | (digest[13] << 8) | (digest[14] << 16) | (digest[15] << 24);
+    scalarWords[wo+4] = digest[16]  | (digest[17] << 8) | (digest[18] << 16) | (digest[19] << 24);
+    scalarWords[wo+5] = digest[20]  | (digest[21] << 8) | (digest[22] << 16) | (digest[23] << 24);
+    scalarWords[wo+6] = digest[24]  | (digest[25] << 8) | (digest[26] << 16) | (digest[27] << 24);
+    scalarWords[wo+7] = digest[28]  | (digest[29] << 8) | (digest[30] << 16) | (c31        << 24);
+    for (let b = 0; b < 32; b++) suffixes[i * 32 + b] = digest[32 + b];
+  }
+  self.postMessage(
+    { type: 'results', scalarWords: scalarWords.buffer, suffixes: suffixes.buffer },
+    [scalarWords.buffer, suffixes.buffer]
+  );
+};
+`;
+
   let nobleEd25519 = null;
 
   class MeshCoreKeyGenerator {
@@ -17,6 +53,9 @@
       this.updateInterval = null;
       this.difficultyUpdateInterval = null;
       this.initialized = false;
+      this.currentTargetPrefix = '';
+
+      // CPU (WASM) path state
       this.workers = [];
       this.numWorkers = navigator.hardwareConcurrency || 4;
       this.batchSize = 4096;
@@ -30,7 +69,19 @@
       this.jsFallbackModule = null;
       this.jsFallbackReason = null;
       this.perfStats = this._emptyPerf();
+
+      // GPU path state
+      this.gpuAvailable = false;
+      this.gpuChecked = false;
+      this.gpuScanner = null;
+      this.useGpu = false;
+      this.gpuBatchSize = 131072;
+      this.hashWorkers = [];
+      this.maxHashWorkers = Math.min(6, navigator.hardwareConcurrency || 4);
+      this._hashWorkerUrl = null;
     }
+
+    // ------------------------------------------------------------------ perf
 
     _emptyPerf() {
       return { messages: 0, batches: 0, wasmMs: 0, batchWallMs: 0, startedAt: 0, lastLogAt: 0 };
@@ -44,6 +95,8 @@
       this.perfStats.batchWallMs += m.batchWallMs || 0;
     }
 
+    // ------------------------------------------------------------------ init
+
     async initialize() {
       if (this.initialized) return;
       let libraryUrl = null;
@@ -55,11 +108,8 @@
         './noble-ed25519-offline-simple.js'
       ];
       for (const url of cdnUrls) {
-        try {
-          nobleEd25519 = await import(url);
-          libraryUrl = url;
-          break;
-        } catch (e) { /* try next */ }
+        try { nobleEd25519 = await import(url); libraryUrl = url; break; }
+        catch (e) { /* try next */ }
       }
       if (!nobleEd25519) throw new Error('Failed to load Ed25519 library from all sources.');
       this.libraryUrl = libraryUrl;
@@ -72,6 +122,8 @@
       }
       this.initialized = true;
     }
+
+    // ------------------------------------------------------------------ CPU / WASM path
 
     async _initWorkers() {
       if (this.workers.length > 0) return;
@@ -163,6 +215,178 @@
       });
     }
 
+    // ------------------------------------------------------------------ GPU path
+
+    async detectGpu() {
+      if (this.gpuChecked) return this.gpuAvailable;
+      this.gpuChecked = true;
+      if (!navigator?.gpu) { this.gpuAvailable = false; return false; }
+      try {
+        // The bundle is a UMD IIFE — use script injection, not ES import()
+        if (!globalThis.MeshCoreGpuModule) {
+          await new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = new URL('./vendor/webgpu-ed25519.js', document.baseURI).href;
+            s.onload = resolve;
+            s.onerror = reject;
+            document.head.appendChild(s);
+          });
+        }
+        const { WebGpuEd25519Scanner } = globalThis.MeshCoreGpuModule;
+        const scanner = new WebGpuEd25519Scanner();
+        const ready = await scanner.initialize();
+        if (ready) {
+          this.gpuScanner = scanner;
+          this.gpuAvailable = true;
+          return true;
+        }
+      } catch (e) {
+        console.warn('[GPU] module load failed:', e);
+      }
+      this.gpuAvailable = false;
+      return false;
+    }
+
+    async enableGpu() {
+      const avail = await this.detectGpu();
+      if (!avail) return false;
+      await this.gpuScanner.autotuneWorkgroupSize(this.gpuBatchSize);
+      await this.gpuScanner.warmup();
+      this._initHashWorkers();
+      this.useGpu = true;
+      return true;
+    }
+
+    disableGpu() {
+      this.useGpu = false;
+    }
+
+    _initHashWorkers() {
+      if (this.hashWorkers.length > 0) return;
+      const blob = new Blob([HASH_WORKER_SCRIPT], { type: 'application/javascript' });
+      this._hashWorkerUrl = URL.createObjectURL(blob);
+      for (let i = 0; i < this.maxHashWorkers; i++) {
+        this.hashWorkers.push(new Worker(this._hashWorkerUrl));
+      }
+    }
+
+    _terminateHashWorkers() {
+      for (const w of this.hashWorkers) w.terminate();
+      this.hashWorkers = [];
+      if (this._hashWorkerUrl) { URL.revokeObjectURL(this._hashWorkerUrl); this._hashWorkerUrl = null; }
+    }
+
+    async _generateHashBatch() {
+      const activeWorkers = this.hashWorkers.slice(0, this.maxHashWorkers);
+      if (!activeWorkers.length) throw new Error('No hash workers');
+      const perWorker = Math.ceil(this.gpuBatchSize / activeWorkers.length);
+
+      const batches = await Promise.all(activeWorkers.map(worker =>
+        new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            worker.removeEventListener('message', onMsg);
+            worker.removeEventListener('error', onErr);
+            reject(new Error('Hash worker timeout'));
+          }, 30000);
+          const onMsg = (e) => {
+            if (e.data.type !== 'results') return;
+            clearTimeout(timeout);
+            worker.removeEventListener('message', onMsg);
+            worker.removeEventListener('error', onErr);
+            resolve({ scalarWords: new Uint32Array(e.data.scalarWords), suffixes: new Uint8Array(e.data.suffixes) });
+          };
+          const onErr = (e) => {
+            clearTimeout(timeout);
+            worker.removeEventListener('message', onMsg);
+            worker.removeEventListener('error', onErr);
+            reject(e);
+          };
+          worker.addEventListener('message', onMsg);
+          worker.addEventListener('error', onErr);
+          worker.postMessage({ type: 'generate', batchSize: perWorker });
+        })
+      ));
+
+      const scalarWords = new Uint32Array(batches.reduce((s, b) => s + b.scalarWords.length, 0));
+      const suffixes   = new Uint8Array(batches.reduce((s, b) => s + b.suffixes.length, 0));
+      let wo = 0, so = 0;
+      for (const b of batches) {
+        scalarWords.set(b.scalarWords, wo); suffixes.set(b.suffixes, so);
+        wo += b.scalarWords.length; so += b.suffixes.length;
+      }
+      return { scalarWords, suffixes };
+    }
+
+    _prefixToBytes(prefix) {
+      const bytes = [];
+      for (let i = 0; i < prefix.length; i += 2) {
+        bytes.push(parseInt(prefix.slice(i, i + 2).padEnd(2, '0'), 16));
+      }
+      return bytes;
+    }
+
+    _unpackScalarBytes(scalarWords, index) {
+      const bytes = new Uint8Array(32);
+      const wo = index * 8;
+      for (let w = 0; w < 8; w++) {
+        const v = scalarWords[wo + w], b = w * 4;
+        bytes[b] = v & 255; bytes[b+1] = (v >>> 8) & 255;
+        bytes[b+2] = (v >>> 16) & 255; bytes[b+3] = (v >>> 24) & 255;
+      }
+      return bytes;
+    }
+
+    _derivePublicKey(clampedScalar) {
+      let v = 0n;
+      for (let i = 0; i < 32; i++) v |= BigInt(clampedScalar[i]) << BigInt(i * 8);
+      const scalar = v % ED25519_ORDER;
+      if (scalar === 0n) throw new Error('Scalar reduced to zero');
+      const point = nobleEd25519.Point.BASE.multiply(scalar);
+      return point.toRawBytes ? point.toRawBytes() : point.toBytes();
+    }
+
+    // Pipelined GPU search loop: generates next batch while scanning the current one.
+    async _gpuLoop(prefix, prefixLen) {
+      const prefixBytes = this._prefixToBytes(prefix);
+      let nextBatch = this._generateHashBatch();
+
+      while (this.isRunning) {
+        let batch;
+        try { batch = await nextBatch; }
+        catch (e) { nextBatch = this._generateHashBatch(); continue; }
+
+        nextBatch = this._generateHashBatch(); // overlap hash gen with GPU scan
+
+        const matchedIdxs = await this.gpuScanner.scanBatchMatches(batch.scalarWords, prefixBytes, prefixLen);
+        this.attempts += batch.scalarWords.length / 8;
+
+        for (const idx of matchedIdxs) {
+          const privBytes = new Uint8Array(64);
+          privBytes.set(this._unpackScalarBytes(batch.scalarWords, idx), 0);
+          privBytes.set(batch.suffixes.slice(idx * 32, idx * 32 + 32), 32);
+
+          let pubBytes;
+          try { pubBytes = this._derivePublicKey(privBytes.slice(0, 32)); }
+          catch (e) { continue; }
+
+          const pubHex = this.toHex(pubBytes);
+          if (pubHex.startsWith('00') || pubHex.startsWith('FF') || !pubHex.startsWith(prefix)) continue;
+
+          const privHex = this.toHex(privBytes);
+          const val = await this.validateKeypair(privHex, pubHex);
+          if (!val.valid) continue;
+
+          this.isRunning = false;
+          return { publicKey: pubHex, privateKey: privHex, attempts: this.attempts, timeElapsed: (Date.now() - this.startTime) / 1000 };
+        }
+
+        await new Promise(r => setTimeout(r, 0)); // yield to event loop
+      }
+      return null;
+    }
+
+    // ------------------------------------------------------------------ shared
+
     toHex(bytes) {
       return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
     }
@@ -192,7 +416,7 @@
         let derivedBytes;
         if (derived instanceof Uint8Array) derivedBytes = derived;
         else if (derived?.toRawBytes) derivedBytes = derived.toRawBytes();
-        else if (derived?.toBytes) derivedBytes = derived.toBytes();
+        else if (derived?.toBytes)    derivedBytes = derived.toBytes();
         else {
           const arr = new Uint8Array(32);
           for (let i = 0; i < 31; i++) arr[i] = Number((derived.y >> BigInt(8 * i)) & 255n);
@@ -219,10 +443,11 @@
         const rate = this.attempts / Math.max(elapsed, 0.001);
         const el = (id) => document.getElementById(id);
         if (el('kgn-attempts')) el('kgn-attempts').textContent = this.attempts.toLocaleString();
-        if (el('kgn-elapsed')) el('kgn-elapsed').textContent = elapsed.toFixed(1) + 's';
-        if (el('kgn-rate')) el('kgn-rate').textContent = Math.round(rate).toLocaleString();
-        const method = this.generationMode === 'js-fallback'
-          ? 'JS fallback' : `${this.workers.length} WASM workers`;
+        if (el('kgn-elapsed'))  el('kgn-elapsed').textContent  = elapsed.toFixed(1) + 's';
+        if (el('kgn-rate'))     el('kgn-rate').textContent     = Math.round(rate).toLocaleString();
+        const method = this.useGpu
+          ? `GPU + ${this.maxHashWorkers} hash workers`
+          : this.generationMode === 'js-fallback' ? 'JS fallback' : `${this.workers.length} WASM workers`;
         const pt = el('kgn-progress-text');
         if (pt) pt.textContent = `${this.attempts.toLocaleString()} attempts | ${Math.round(rate).toLocaleString()} keys/sec | ${elapsed.toFixed(1)}s [${method}]`;
         const prob = 1 / Math.pow(16, prefixLen);
@@ -235,15 +460,15 @@
       this.difficultyUpdateInterval = setInterval(() => {
         if (!this.isRunning) return;
         const elapsed = (Date.now() - this.startTime) / 1000;
-        if (elapsed >= 10) {
-          const rate = this.attempts / elapsed;
-          updateDifficulty(this.currentTargetPrefix, rate);
-        }
+        if (elapsed >= 10) updateDifficulty(this.currentTargetPrefix, this.attempts / elapsed);
       }, 10000);
 
       try {
         let matched = null;
-        if (this.generationMode === 'js-fallback') {
+
+        if (this.useGpu && this.gpuScanner) {
+          matched = await this._gpuLoop(prefix, prefixLen);
+        } else if (this.generationMode === 'js-fallback') {
           matched = await this._startJsFallback(prefix);
         } else {
           try { matched = await this._startWorkerSearch(prefix); }
@@ -252,6 +477,7 @@
             matched = await this._startJsFallback(prefix);
           }
         }
+
         if (!matched) return null;
         const validation = await this.validateKeypair(matched.privateKey, matched.publicKey);
         if (!validation.valid) throw new Error('Key validation failed: ' + validation.error);
@@ -261,21 +487,21 @@
         return { publicKey: matched.publicKey, privateKey: matched.privateKey, attempts: this.attempts, timeElapsed: (Date.now() - this.startTime) / 1000 };
       } catch (e) {
         this.isRunning = false;
-        this._stopWorkers();
+        if (!this.useGpu) this._stopWorkers();
         this._clearTimers();
         throw e;
       }
     }
 
     _clearTimers() {
-      if (this.updateInterval) { clearInterval(this.updateInterval); this.updateInterval = null; }
+      if (this.updateInterval)           { clearInterval(this.updateInterval);           this.updateInterval = null; }
       if (this.difficultyUpdateInterval) { clearInterval(this.difficultyUpdateInterval); this.difficultyUpdateInterval = null; }
     }
 
     stop() {
       this.isRunning = false;
       this.stopRequested = true;
-      if (this.generationMode === 'wasm') this._stopWorkers();
+      if (!this.useGpu) this._stopWorkers();
       this._clearTimers();
     }
 
@@ -283,12 +509,13 @@
       this.stop();
       for (const w of this.workers) w.worker.terminate();
       this.workers = [];
+      this._terminateHashWorkers();
       this.initialized = false;
     }
   }
 
   /* ---------------------------------------------------------------
-   * Difficulty estimate helper (pure function, no DOM side-effects)
+   * Difficulty estimate helper
    * --------------------------------------------------------------- */
   function difficultyInfo(prefix, currentRate) {
     if (!prefix || !prefix.length) return null;
@@ -329,7 +556,7 @@
   }
 
   function updateDifficulty(prefix, rate) {
-    const info = document.getElementById('kgn-prefix-info');
+    const info   = document.getElementById('kgn-prefix-info');
     const detail = document.getElementById('kgn-prefix-detail');
     if (!info || !detail) return;
     const d = difficultyInfo(prefix, rate);
@@ -342,18 +569,14 @@
   }
 
   /* ---------------------------------------------------------------
-   * SPA page
+   * SPA page HTML
    * --------------------------------------------------------------- */
-  let generator = null;
-  let _modalClickHandler = null;
-  let _keydownHandler = null;
-
   const HTML = `
 <div class="keygen-page">
   <div class="keygen-header">
     <h1>MC-Keygen</h1>
     <p class="keygen-subtitle">Generate custom Ed25519 key pairs for your MeshCore nodes — runs entirely in your browser, keys never leave your device.</p>
-    <a href="https://github.com/agessaman/meshcore-web-keygen" target="_blank" rel="noopener" class="keygen-source-link">View source on GitHub ↗</a>
+    <a href="https://github.com/jkingsman/meshcore-web-keygen" target="_blank" rel="noopener" class="keygen-source-link">View source on GitHub ↗</a>
   </div>
 
   <div class="kgn-card">
@@ -381,9 +604,18 @@
         </div>
       </div>
 
+      <div class="kgn-field kgn-gpu-row" id="kgn-gpu-row" style="display:none">
+        <label class="kgn-gpu-label" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="kgn-gpu-toggle" style="width:16px;height:16px;cursor:pointer">
+          <span>⚡ Use GPU acceleration (WebGPU)</span>
+        </label>
+        <div class="kgn-hint" id="kgn-gpu-hint" style="margin-top:4px"></div>
+      </div>
+
       <div class="kgn-btns">
         <button type="submit" class="kgn-btn kgn-btn-primary" id="kgn-generate-btn" disabled>Generate Key</button>
         <button type="button" class="kgn-btn kgn-btn-secondary" id="kgn-stop-btn" disabled>Stop</button>
+        <button type="button" class="kgn-btn kgn-btn-secondary" id="kgn-popup-btn" title="Open in a popup window so generation continues while you browse other pages">⧉ Open in popup</button>
       </div>
     </form>
 
@@ -490,8 +722,18 @@
     </div>
 
     <div class="keygen-faq-section">
+      <h3>What is GPU acceleration?</h3>
+      <p>When your browser supports WebGPU, you can enable the ⚡ GPU toggle to use your graphics card for prefix scanning. The GPU evaluates thousands of candidates in parallel, typically delivering a significant speedup for longer prefixes. A ~2 MB WebGPU module is downloaded on first use. GPU mode requires Chrome 113+ or Edge 113+; Firefox and Safari do not yet support WebGPU.</p>
+    </div>
+
+    <div class="keygen-faq-section">
+      <h3>What does "Open in popup" do?</h3>
+      <p>Launches the keygen in a separate browser window so generation continues uninterrupted while you navigate to other pages in the main window. Each window runs independently with its own workers.</p>
+    </div>
+
+    <div class="keygen-faq-section">
       <h3>How long does generation take?</h3>
-      <p>Depends on prefix length and hardware. At ~100,000 keys/second (modern desktop):</p>
+      <p>Depends on prefix length and hardware. At ~100,000 keys/second (modern desktop, CPU):</p>
       <table class="keygen-perf-table">
         <thead><tr><th>Prefix length</th><th>Expected time</th></tr></thead>
         <tbody>
@@ -515,6 +757,7 @@
         <li><strong>Wrong key format:</strong> Copy the full 128-character private key.</li>
         <li><strong>Key import fails:</strong> Verify the public key prefix matches, then retry.</li>
         <li><strong>Browser freezes / slow:</strong> Refresh and try a shorter prefix.</li>
+        <li><strong>GPU toggle not visible:</strong> Your browser does not support WebGPU. Try Chrome 113+ or Edge 113+.</li>
       </ul>
     </div>
 
@@ -535,6 +778,10 @@
     return prefix.length >= 2 && (prefix.startsWith('00') || prefix.startsWith('FF'));
   }
 
+  let generator = null;
+  let _modalClickHandler = null;
+  let _keydownHandler = null;
+
   function init(app) {
     app.innerHTML = HTML;
 
@@ -548,15 +795,18 @@
     const resultEl    = $('kgn-result');
     const errorEl     = $('kgn-error');
     const modal       = $('kgn-modal');
+    const gpuRow      = $('kgn-gpu-row');
+    const gpuToggle   = $('kgn-gpu-toggle');
+    const gpuHint     = $('kgn-gpu-hint');
 
     function showError(msg) { errorEl.textContent = msg; errorEl.style.display = 'block'; }
     function hideError()    { errorEl.style.display = 'none'; }
 
     function setGenerating(on) {
       generateBtn.disabled = on;
-      stopBtn.disabled = !on;
-      stopBtn.textContent = on ? 'Stop' : 'Stop';
+      stopBtn.disabled     = !on;
       progressEl.style.display = on ? 'block' : 'none';
+      if (gpuToggle) gpuToggle.disabled = on;
     }
 
     function showResult(result) {
@@ -568,6 +818,20 @@
       resultEl.style.display = 'block';
       resultEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
+
+    // Probe GPU availability (non-blocking)
+    generator.detectGpu().then(avail => {
+      if (!avail) return;
+      gpuRow.style.display = 'block';
+      gpuHint.textContent = 'GPU detected — loads a ~2 MB WebGPU module and autotunes on first use.';
+    }).catch(() => {});
+
+    // Popup button — opens the SPA in a separate window; generation is independent
+    $('kgn-popup-btn').addEventListener('click', () => {
+      const base = location.href.split('#')[0];
+      window.open(base + '#/mc-keygen', 'meshcore-keygen',
+        'width=800,height=920,resizable=yes,scrollbars=yes');
+    });
 
     prefixInput.addEventListener('input', () => {
       const val = prefixInput.value.trim().toUpperCase();
@@ -595,11 +859,27 @@
       hideError();
       resultEl.style.display = 'none';
       setGenerating(true);
-      $('kgn-progress-text').textContent = 'Loading Ed25519 library…';
+
+      const wantGpu = gpuToggle && gpuToggle.checked;
+      $('kgn-progress-text').textContent = wantGpu
+        ? 'Loading WebGPU module and autotuning…'
+        : 'Loading Ed25519 library…';
       $('kgn-progress-fill').style.width = '0%';
 
       try {
         await generator.initialize();
+
+        if (wantGpu) {
+          const gpuReady = await generator.enableGpu();
+          if (!gpuReady) {
+            if (gpuToggle) gpuToggle.checked = false;
+            gpuHint.textContent = 'GPU unavailable in this session — falling back to CPU.';
+            generator.disableGpu();
+          }
+        } else {
+          generator.disableGpu();
+        }
+
         const result = await generator.generateVanityKey(prefix, prefix.length);
         if (result) {
           showResult(result);
@@ -611,7 +891,7 @@
       } finally {
         setGenerating(false);
         stopBtn.textContent = 'Stop';
-        stopBtn.disabled = true;
+        stopBtn.disabled    = true;
         generateBtn.disabled = false;
       }
     });
@@ -623,11 +903,11 @@
     });
 
     $('kgn-download-btn').addEventListener('click', () => {
-      const pub  = $('kgn-pub').textContent;
-      const priv = $('kgn-priv').textContent;
+      const pub    = $('kgn-pub').textContent;
+      const priv   = $('kgn-priv').textContent;
       const prefix = prefixInput.value.trim().toUpperCase();
-      const blob = new Blob([JSON.stringify({ public_key: pub, private_key: priv }, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
+      const blob   = new Blob([JSON.stringify({ public_key: pub, private_key: priv }, null, 2)], { type: 'application/json' });
+      const url    = URL.createObjectURL(blob);
       const a = Object.assign(document.createElement('a'), { href: url, download: `meshcore_${prefix}_${Date.now()}.json` });
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       URL.revokeObjectURL(url);
