@@ -1111,7 +1111,7 @@
         var idx = parseInt(btn.dataset.idx);
         var cand = data.candidates[idx];
         if (routeLayer) routeLayer.clearLayers();
-        drawPacketRoute(cand.path.slice(1), cand.path[0]);
+        drawPacketRoute(cand.path, null);
       });
     });
     // Expand evidence on row click.
