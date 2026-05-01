@@ -505,6 +505,21 @@ const pages = {};
 
 function registerPage(name, mod) { pages[name] = mod; }
 
+// Tools landing page — shows sub-menu with Trace and Path Inspector (spec §2.8, M1 fix).
+registerPage('tools-landing', {
+  init: function (container) {
+    container.innerHTML =
+      '<div class="tools-landing">' +
+        '<h2>Tools</h2>' +
+        '<div class="tools-menu">' +
+          '<a href="#/tools/path-inspector" class="tools-card"><h3>🔍 Path Inspector</h3><p>Resolve prefix paths to candidate full-pubkey routes with confidence scoring.</p></a>' +
+          '<a href="#/tools/trace/" class="tools-card"><h3>📡 Trace Viewer</h3><p>View detailed packet traces by hash.</p></a>' +
+        '</div>' +
+      '</div>';
+  },
+  destroy: function () {}
+});
+
 let currentPage = null;
 
 function closeNav() {
@@ -567,8 +582,8 @@ function navigate() {
       basePage = 'path-inspector';
       routeParam = null;
     } else if (!routeParam) {
-      // Default tools landing = path-inspector.
-      basePage = 'path-inspector';
+      // Default tools landing shows menu with both entries.
+      basePage = 'tools-landing';
     }
   }
   // Also support old #/traces (no sub-path) → traces page.
@@ -578,7 +593,7 @@ function navigate() {
 
   // Update nav active state
   document.querySelectorAll('.nav-link[data-route]').forEach(el => {
-    el.classList.toggle('active', el.dataset.route === basePage || (el.dataset.route === 'tools' && (basePage === 'traces' || basePage === 'path-inspector')));
+    el.classList.toggle('active', el.dataset.route === basePage || (el.dataset.route === 'tools' && (basePage === 'traces' || basePage === 'path-inspector' || basePage === 'tools-landing')));
   });
   // Update "More" button to show active state if a low-priority page is selected
   var moreBtn = document.getElementById('navMoreBtn');

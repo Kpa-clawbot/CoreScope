@@ -2336,3 +2336,13 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .map-side-pane { flex: 0 0 32px; overflow: hidden; transition: flex-basis 0.2s; border-left: 1px solid var(--border); background: var(--card-bg); }
 .map-side-pane.expanded { flex: 0 0 320px; overflow-y: auto; padding: 12px; }
 .map-side-pane .pane-toggle { cursor: pointer; padding: 8px; font-size: 14px; text-align: center; }
+.map-side-pane .pane-content { display: none; }
+.map-side-pane.expanded .pane-content { display: block; }
+
+/* Tools landing page */
+.tools-landing { padding: 24px; max-width: 600px; }
+.tools-menu { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.tools-card { display: block; padding: 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); text-decoration: none; transition: border-color 0.2s; }
+.tools-card:hover { border-color: var(--primary); }
+.tools-card h3 { margin: 0 0 4px 0; font-size: 16px; }
+.tools-card p { margin: 0; font-size: 13px; color: var(--text-muted); }
