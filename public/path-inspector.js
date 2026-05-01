@@ -131,7 +131,16 @@
         var h = c.evidence.perHop[j];
         html += '<div class="hop-evidence">Hop ' + (j + 1) + ': prefix=' + h.prefix +
           ', candidates=' + h.candidatesConsidered +
-          ', edge=' + h.edgeWeight.toFixed(3) + '</div>';
+          ', edge=' + h.edgeWeight.toFixed(3);
+        if (h.alternatives && h.alternatives.length > 0) {
+          html += '<div class="hop-alternatives" style="margin-left:12px;font-size:12px;color:var(--text-muted);">';
+          for (var k = 0; k < h.alternatives.length; k++) {
+            var alt = h.alternatives[k];
+            html += '<div>↳ ' + escapeHtml(alt.name || alt.publicKey.substring(0, 8)) + ' (score=' + alt.score.toFixed(3) + ')</div>';
+          }
+          html += '</div>';
+        }
+        html += '</div>';
       }
       html += '</div></td></tr>';
     }
@@ -165,19 +174,18 @@
   }
 
   function showOnMap(candidate) {
-    // Navigate to map and draw route.
-    if (window.drawPacketRoute) {
-      // Clear prior route, draw new one.
+    // Store pending route for map init to pick up.
+    window._pendingPathInspectorRoute = candidate;
+    // Switch to map page if not there; map init will draw the route.
+    if (location.hash.indexOf('#/map') !== 0) {
+      location.hash = '#/map';
+    } else {
+      // Already on map — draw directly.
+      delete window._pendingPathInspectorRoute;
       if (window.routeLayer) window.routeLayer.clearLayers();
       var hops = candidate.path.slice(1);
       var origin = candidate.path[0] || null;
-      window.drawPacketRoute(hops, origin);
-    }
-    // Switch to map page if not there.
-    if (location.hash.indexOf('#/map') !== 0) {
-      // Store pending route to draw after map init.
-      window._pendingPathInspectorRoute = candidate;
-      location.hash = '#/map';
+      if (window.drawPacketRoute) window.drawPacketRoute(hops, origin);
     }
   }
 

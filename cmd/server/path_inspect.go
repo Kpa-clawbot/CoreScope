@@ -41,10 +41,18 @@ type pathEvidence struct {
 }
 
 type hopEvidence struct {
-	Prefix               string  `json:"prefix"`
-	CandidatesConsidered int     `json:"candidatesConsidered"`
-	Chosen               string  `json:"chosen"`
-	EdgeWeight           float64 `json:"edgeWeight"`
+	Prefix               string           `json:"prefix"`
+	CandidatesConsidered int              `json:"candidatesConsidered"`
+	Chosen               string           `json:"chosen"`
+	EdgeWeight           float64          `json:"edgeWeight"`
+	Alternatives         []hopAlternative `json:"alternatives,omitempty"`
+}
+
+// hopAlternative shows a candidate that was considered but not chosen for this hop.
+type hopAlternative struct {
+	PublicKey string  `json:"publicKey"`
+	Name     string  `json:"name"`
+	Score    float64 `json:"score"`
 }
 
 type pathInspectResponse struct {
@@ -192,7 +200,7 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 		beam = beam[:limit]
 	}
 
-	// Build response.
+	// Build response with per-hop alternatives (spec §2.7, M2 fix).
 	candidates := make([]pathCandidate, 0, len(beam))
 	for _, entry := range beam {
 		nHops := len(entry.pubkeys)
@@ -200,12 +208,49 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 		if nHops > 0 {
 			score = math.Pow(entry.score, 1.0/float64(nHops))
 		}
+
+		// Populate per-hop alternatives: other candidates at each hop that weren't chosen.
+		evidence := make([]hopEvidence, len(entry.evidence))
+		copy(evidence, entry.evidence)
+		for hi, ev := range evidence {
+			if hi >= len(req.Prefixes) {
+				break
+			}
+			prefix := req.Prefixes[hi]
+			allCands := pm.m[prefix]
+			var alts []hopAlternative
+			for _, c := range allCands {
+				if !canAppearInPath(c.Role) || c.PublicKey == ev.Chosen {
+					continue
+				}
+				// Score this alternative in context of the partial path up to this hop.
+				var partialEntry beamEntry
+				if hi > 0 {
+					partialEntry = beamEntry{pubkeys: entry.pubkeys[:hi], names: entry.names[:hi], score: 1.0}
+				}
+				altScore := s.store.scoreHop(partialEntry, c, ev.CandidatesConsidered, graph, nodeByPK, now, hi)
+				alts = append(alts, hopAlternative{PublicKey: c.PublicKey, Name: c.Name, Score: math.Round(altScore*1000) / 1000})
+			}
+			// Sort alts by score desc, cap at 5.
+			sort.Slice(alts, func(i, j int) bool { return alts[i].Score > alts[j].Score })
+			if len(alts) > 5 {
+				alts = alts[:5]
+			}
+			evidence[hi] = hopEvidence{
+				Prefix:               ev.Prefix,
+				CandidatesConsidered: ev.CandidatesConsidered,
+				Chosen:               ev.Chosen,
+				EdgeWeight:           ev.EdgeWeight,
+				Alternatives:         alts,
+			}
+		}
+
 		candidates = append(candidates, pathCandidate{
 			Path:        entry.pubkeys,
 			Names:       entry.names,
 			Score:       math.Round(score*1000) / 1000,
 			Speculative: score < speculativeThreshold,
-			Evidence:    pathEvidence{PerHop: entry.evidence},
+			Evidence:    pathEvidence{PerHop: evidence},
 		})
 	}
 
