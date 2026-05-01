@@ -359,7 +359,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   deploy:
     name: "🚀 Deploy Staging"
-    if: false  # disabled: staging VM offline, manual deploy required
+    if: github.event_name == 'push'
     needs: [build-and-publish]
     runs-on: [self-hosted, meshcore-runner-2]
     steps:
@@ -448,7 +448,7 @@ jobs:
   publish:
     name: "📝 Publish Badges & Summary"
     if: github.event_name == 'push'
-    needs: [build-and-publish]
+    needs: [deploy]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
