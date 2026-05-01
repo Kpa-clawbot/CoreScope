@@ -209,6 +209,10 @@ type PacketStore struct {
 	// Persisted neighbor graph for hop resolution at ingest time.
 	graph *NeighborGraph
 
+	// Path inspector score cache (issue #944).
+	inspectMu    sync.RWMutex
+	inspectCache map[string]*inspectCachedResult
+
 	// Clock skew detection engine.
 	clockSkew *ClockSkewEngine
 
@@ -4517,12 +4521,19 @@ type nodeInfo struct {
 	Lat       float64
 	Lon       float64
 	HasGPS    bool
+	LastSeen  time.Time
 }
 
 func (s *PacketStore) getAllNodes() []nodeInfo {
-	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes")
+	// Try with last_seen first; fall back to without if column doesn't exist.
+	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen FROM nodes")
+	hasLastSeen := true
 	if err != nil {
-		return nil
+		rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes")
+		hasLastSeen = false
+		if err != nil {
+			return nil
+		}
 	}
 	defer rows.Close()
 	var nodes []nodeInfo
@@ -4530,12 +4541,24 @@ func (s *PacketStore) getAllNodes() []nodeInfo {
 		var pk string
 		var name, role sql.NullString
 		var lat, lon sql.NullFloat64
-		rows.Scan(&pk, &name, &role, &lat, &lon)
+		var lastSeen sql.NullString
+		if hasLastSeen {
+			rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen)
+		} else {
+			rows.Scan(&pk, &name, &role, &lat, &lon)
+		}
 		n := nodeInfo{PublicKey: pk, Name: nullStrVal(name), Role: nullStrVal(role)}
 		if lat.Valid && lon.Valid {
 			n.Lat = lat.Float64
 			n.Lon = lon.Float64
 			n.HasGPS = !(n.Lat == 0 && n.Lon == 0)
+		}
+		if hasLastSeen && lastSeen.Valid && lastSeen.String != "" {
+			if t, err := time.Parse(time.RFC3339, lastSeen.String); err == nil {
+				n.LastSeen = t
+			} else if t, err := time.Parse("2006-01-02 15:04:05", lastSeen.String); err == nil {
+				n.LastSeen = t
+			}
 		}
 		nodes = append(nodes, n)
 	}
@@ -4551,9 +4574,20 @@ type prefixMap struct {
 // entries to ~7×N (+ 1 full-key entry per node for exact-match lookups).
 const maxPrefixLen = 8
 
+// canAppearInPath returns true if the node's role allows it to appear as a
+// path hop.  Only repeaters, room servers, and rooms can forward packets;
+// companions and sensors originate but never relay.
+func canAppearInPath(role string) bool {
+	r := strings.ToLower(role)
+	return strings.Contains(r, "repeater") || strings.Contains(r, "room_server") || r == "room"
+}
+
 func buildPrefixMap(nodes []nodeInfo) *prefixMap {
 	pm := &prefixMap{m: make(map[string][]nodeInfo, len(nodes)*(maxPrefixLen+1))}
 	for _, n := range nodes {
+		if !canAppearInPath(n.Role) {
+			continue
+		}
 		pk := strings.ToLower(n.PublicKey)
 		maxLen := maxPrefixLen
 		if maxLen > len(pk) {

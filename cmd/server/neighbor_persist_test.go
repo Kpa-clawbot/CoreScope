@@ -58,8 +58,8 @@ func createTestDBWithSchema(t *testing.T) (*DB, string) {
 func TestResolvePathForObs(t *testing.T) {
 	// Build a prefix map with known nodes
 	nodes := []nodeInfo{
-		{PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
-		{PublicKey: "bbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb11", Name: "Node-BB"},
+		{Role: "repeater", PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
+		{Role: "repeater", PublicKey: "bbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb11", Name: "Node-BB"},
 	}
 	pm := buildPrefixMap(nodes)
 	graph := NewNeighborGraph()
@@ -97,7 +97,7 @@ func TestResolvePathForObs_EmptyPath(t *testing.T) {
 
 func TestResolvePathForObs_Unresolvable(t *testing.T) {
 	nodes := []nodeInfo{
-		{PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
+		{Role: "repeater", PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
 	}
 	pm := buildPrefixMap(nodes)
 
@@ -437,8 +437,8 @@ func TestExtractEdgesFromObs_NonAdvertNoPath(t *testing.T) {
 
 func TestExtractEdgesFromObs_WithPath(t *testing.T) {
 	nodes := []nodeInfo{
-		{PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
-		{PublicKey: "ffgghhii1234567890aabbccddee1234567890aabbccddee1234567890aabb11", Name: "Node-FF"},
+		{Role: "repeater", PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
+		{Role: "repeater", PublicKey: "ffgghhii1234567890aabbccddee1234567890aabbccddee1234567890aabb11", Name: "Node-FF"},
 	}
 	pm := buildPrefixMap(nodes)
 

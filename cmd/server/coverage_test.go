@@ -763,9 +763,9 @@ func TestGetChannelsFromStore(t *testing.T) {
 
 func TestPrefixMapResolve(t *testing.T) {
 	nodes := []nodeInfo{
-		{PublicKey: "aabbccdd11223344", Name: "NodeA", HasGPS: true, Lat: 37.5, Lon: -122.0},
-		{PublicKey: "aabbccdd55667788", Name: "NodeB", HasGPS: false},
-		{PublicKey: "eeff0011aabbccdd", Name: "NodeC", HasGPS: true, Lat: 38.0, Lon: -121.0},
+		{Role: "repeater", PublicKey: "aabbccdd11223344", Name: "NodeA", HasGPS: true, Lat: 37.5, Lon: -122.0},
+		{Role: "repeater", PublicKey: "aabbccdd55667788", Name: "NodeB", HasGPS: false},
+		{Role: "repeater", PublicKey: "eeff0011aabbccdd", Name: "NodeC", HasGPS: true, Lat: 38.0, Lon: -121.0},
 	}
 	pm := buildPrefixMap(nodes)
 
@@ -805,8 +805,8 @@ func TestPrefixMapResolve(t *testing.T) {
 
 	t.Run("multiple candidates no GPS", func(t *testing.T) {
 		noGPSNodes := []nodeInfo{
-			{PublicKey: "aa11bb22", Name: "X", HasGPS: false},
-			{PublicKey: "aa11cc33", Name: "Y", HasGPS: false},
+			{Role: "repeater", PublicKey: "aa11bb22", Name: "X", HasGPS: false},
+			{Role: "repeater", PublicKey: "aa11cc33", Name: "Y", HasGPS: false},
 		}
 		pm2 := buildPrefixMap(noGPSNodes)
 		n := pm2.resolve("aa11")
@@ -820,8 +820,8 @@ func TestPrefixMapResolve(t *testing.T) {
 func TestPrefixMapCap(t *testing.T) {
 	// 16-char pubkey — longer than maxPrefixLen
 	nodes := []nodeInfo{
-		{PublicKey: "aabbccdd11223344", Name: "LongKey"},
-		{PublicKey: "eeff0011", Name: "ShortKey"}, // exactly 8 chars
+		{Role: "repeater", PublicKey: "aabbccdd11223344", Name: "LongKey"},
+		{Role: "repeater", PublicKey: "eeff0011", Name: "ShortKey"}, // exactly 8 chars
 	}
 	pm := buildPrefixMap(nodes)
 

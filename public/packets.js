@@ -468,6 +468,9 @@
 
       // Check if new packets pass current filters
       const filtered = newPkts.filter(p => {
+        // When user pinned a hash, accept ONLY that exact packet — bypass all
+        // other filters (window/region/type/observer/node).
+        if (filters.hash) return p.hash === filters.hash;
         // Respect time window filter — drop packets outside the selected window
         const windowMin = savedTimeWindowMin;
         if (windowMin > 0) {
@@ -477,7 +480,6 @@
         }
         if (filters.type) { const types = filters.type.split(',').map(Number); if (!types.includes(p.payload_type)) return false; }
         if (filters.observer) { const obsSet = new Set(filters.observer.split(',')); if (!obsSet.has(p.observer_id) && !(p._children && p._children.some(c => obsSet.has(String(c.observer_id))))) return false; }
-        if (filters.hash && p.hash !== filters.hash) return false;
         if (RegionFilter.getRegionParam()) {
           const selectedRegions = RegionFilter.getRegionParam().split(',');
           const obs = observerMap.get(p.observer_id);
@@ -610,27 +612,52 @@
     } catch {}
   }
 
-  async function loadPackets() {
-    try {
-      const params = new URLSearchParams();
-      const selectedWindow = Number(document.getElementById('fTimeWindow')?.value);
-      const windowMin = Number.isFinite(selectedWindow) ? selectedWindow : savedTimeWindowMin;
-      if (windowMin > 0 && !filters.hash) {
-        const since = new Date(Date.now() - windowMin * 60000).toISOString();
-        params.set('since', since);
-      }
-      params.set('limit', String(PACKET_LIMIT));
-      const regionParam = RegionFilter.getRegionParam();
-      if (regionParam) params.set('region', regionParam);
-      if (filters.hash) params.set('hash', filters.hash);
-      if (filters.node) params.set('node', filters.node);
-      if (filters.observer) params.set('observer', filters.observer);
-      if (filters.channel) params.set('channel', filters.channel);
+  // Build URLSearchParams for /api/packets given UI state. Pure function for
+  // testability — returns the params object the next call to /api/packets
+  // would use. The hash filter is an exact identifier: when present it
+  // suppresses ALL other filters (region, time window, observer, node,
+  // channel). The user is asking for THAT packet regardless of saved
+  // selections.
+  function buildPacketsParams({ filters, regionParam, windowMin, groupByHash, limit }) {
+    const params = new URLSearchParams();
+    if (filters.hash) {
+      params.set('hash', filters.hash);
+      params.set('limit', String(limit));
       if (groupByHash) {
         params.set('groupByHash', 'true');
       } else {
         params.set('expand', 'observations');
       }
+      return params;
+    }
+    if (windowMin > 0) {
+      const since = new Date(Date.now() - windowMin * 60000).toISOString();
+      params.set('since', since);
+    }
+    params.set('limit', String(limit));
+    if (regionParam) params.set('region', regionParam);
+    if (filters.node) params.set('node', filters.node);
+    if (filters.observer) params.set('observer', filters.observer);
+    if (filters.channel) params.set('channel', filters.channel);
+    if (groupByHash) {
+      params.set('groupByHash', 'true');
+    } else {
+      params.set('expand', 'observations');
+    }
+    return params;
+  }
+
+  async function loadPackets() {
+    try {
+      const selectedWindow = Number(document.getElementById('fTimeWindow')?.value);
+      const windowMin = Number.isFinite(selectedWindow) ? selectedWindow : savedTimeWindowMin;
+      const params = buildPacketsParams({
+        filters,
+        regionParam: RegionFilter.getRegionParam(),
+        windowMin,
+        groupByHash,
+        limit: PACKET_LIMIT,
+      });
 
       const data = await api('/packets?' + params.toString());
       packets = data.packets || [];
@@ -1647,7 +1674,14 @@
 
     // Filter to claimed/favorited nodes — pure client-side filter (no server round-trip)
     let displayPackets = packets;
-    if (filters.myNodes) {
+
+    // When loading a specific packet by hash, bypass ALL client-side filters
+    // (myNodes, type, observer, packet-filter-expression). The user is asking
+    // for THAT exact packet — saved type/observer/expression filters must not
+    // hide it. Hash filter is the exact identifier; nothing else applies.
+    const hashOnly = !!filters.hash;
+
+    if (!hashOnly && filters.myNodes) {
       const myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
       const myKeys = myNodes.map(n => n.pubkey).filter(Boolean);
       const favs = getFavorites();
@@ -1663,11 +1697,11 @@
     }
 
     // Client-side type/observer filtering
-    if (filters.type) {
+    if (!hashOnly && filters.type) {
       const types = filters.type.split(',').map(Number);
       displayPackets = displayPackets.filter(p => types.includes(p.payload_type));
     }
-    if (filters.observer) {
+    if (!hashOnly && filters.observer) {
       const obsIds = new Set(filters.observer.split(','));
       displayPackets = displayPackets.filter(p => {
         if (obsIds.has(p.observer_id)) return true;
@@ -1678,7 +1712,7 @@
 
     // Packet Filter Language
     const pfCount = document.getElementById('packetFilterCount');
-    if (filters._packetFilter) {
+    if (!hashOnly && filters._packetFilter) {
       const beforeCount = displayPackets.length;
       displayPackets = displayPackets.filter(filters._packetFilter);
       if (pfCount) {
@@ -2563,6 +2597,7 @@
       buildGroupRowHtml,
       buildFlatRowHtml,
       _calcVisibleRange,
+      buildPacketsParams,
     };
   }
 
