@@ -388,6 +388,14 @@
   }
 
   function drawPacketRoute(hopKeys, origin) {
+    // Defensive: origin must be an object with pubkey/lat/lon/name. A bare
+    // string slips through both branches at lines below and silently no-ops
+    // the originator marker (caused PR #950's bug). Coerce string → object
+    // and warn so callers get a clear signal.
+    if (typeof origin === 'string') {
+      console.warn('drawPacketRoute: origin should be an object {pubkey,lat,lon,name}, got string. Coercing.');
+      origin = { pubkey: origin };
+    }
     // Hide default markers so only the route is visible
     if (markerLayer) map.removeLayer(markerLayer);
     if (clusterGroup) map.removeLayer(clusterGroup);
