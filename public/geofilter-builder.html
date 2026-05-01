@@ -70,7 +70,7 @@
 <div id="help-bar">
   Copy the JSON above → paste as a top-level key in <code>config.json</code> → restart the server.
   Nodes with no GPS fix always pass through. Remove the <code>geo_filter</code> block to disable filtering.
-  &nbsp;·&nbsp; <a href="https://github.com/Kpa-clawbot/CoreScope/blob/master/docs/user-guide/geofilter.md" target="_blank">Documentation ↗</a>
+  &nbsp;·&nbsp; <a href="/geofilter-docs.html">Documentation</a>
 </div>
 
 <script>
@@ -87,7 +87,8 @@ let polygon = null;
 let closingLine = null;
 
 function latLonPair(latlng) {
-  return [parseFloat(latlng.lat.toFixed(6)), parseFloat(latlng.lng.toFixed(6))];
+  const w = latlng.wrap();
+  return [parseFloat(w.lat.toFixed(6)), parseFloat(w.lng.toFixed(6))];
 }
 
 function render() {

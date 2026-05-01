@@ -127,6 +127,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/config/map", s.handleConfigMap).Methods("GET")
 	r.HandleFunc("/api/config/geo-filter", s.handleConfigGeoFilter).Methods("GET")
 
+	// Readiness endpoint (gated on background init completion)
+	r.HandleFunc("/api/healthz", s.handleHealthz).Methods("GET")
+
 	// System endpoints
 	r.HandleFunc("/api/health", s.handleHealth).Methods("GET")
 	r.HandleFunc("/api/stats", s.handleStats).Methods("GET")
@@ -183,6 +186,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
 	r.HandleFunc("/api/observers", s.handleObservers).Methods("GET")
 	r.HandleFunc("/api/traces/{hash}", s.handleTraces).Methods("GET")
+	r.HandleFunc("/api/paths/inspect", s.handlePathInspect).Methods("POST")
 	r.HandleFunc("/api/iata-coords", s.handleIATACoords).Methods("GET")
 	r.HandleFunc("/api/audio-lab/buckets", s.handleAudioLabBuckets).Methods("GET")
 
@@ -2013,9 +2017,13 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Batch lookup: packetsLastHour per observer
-	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
-	pktCounts := s.db.GetObserverPacketCounts(oneHourAgo)
+	// Batch lookup: packet counts per observer for multiple windows
+	oneHourAgo  := time.Now().Add(-1 * time.Hour).Unix()
+	oneDayAgo   := time.Now().Add(-24 * time.Hour).Unix()
+	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Unix()
+	pktCounts    := s.db.GetObserverPacketCounts(oneHourAgo)
+	pktCounts24h := s.db.GetObserverPacketCounts(oneDayAgo)
+	pktCounts7d  := s.db.GetObserverPacketCounts(sevenDaysAgo)
 
 	// Batch lookup: node locations only for observer IDs (not all nodes)
 	observerIDs := make([]string, len(observers))
@@ -2029,6 +2037,14 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 		plh := 0
 		if c, ok := pktCounts[o.ID]; ok {
 			plh = c
+		}
+		pl24h := 0
+		if c, ok := pktCounts24h[o.ID]; ok {
+			pl24h = c
+		}
+		pl7d := 0
+		if c, ok := pktCounts7d[o.ID]; ok {
+			pl7d = c
 		}
 		var lat, lon, nodeRole interface{}
 		if nodeLoc, ok := nodeLocations[strings.ToLower(o.ID)]; ok {
@@ -2045,7 +2061,7 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 			ClientVersion: o.ClientVersion, Radio: o.Radio,
 			BatteryMv: o.BatteryMv, UptimeSecs: o.UptimeSecs,
 			NoiseFloor: o.NoiseFloor,
-			PacketsLastHour: plh,
+			PacketsLastHour: plh, PacketsLast24h: pl24h, PacketsLast7d: pl7d,
 			Lat: lat, Lon: lon, NodeRole: nodeRole,
 		})
 	}

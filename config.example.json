@@ -9,6 +9,11 @@
     "packetDays": 30,
     "_comment": "nodeDays: nodes not seen in N days moved to inactive_nodes (default 7). observerDays: observers not sending data in N days are removed (-1 = keep forever, default 14). packetDays: transmissions older than N days are deleted (0 = disabled)."
   },
+  "db": {
+    "vacuumOnStartup": false,
+    "incrementalVacuumPages": 1024,
+    "_comment": "vacuumOnStartup: run one-time full VACUUM to enable incremental auto-vacuum on existing DBs (blocks startup for minutes on large DBs; requires 2x DB file size in free disk space). incrementalVacuumPages: free pages returned to OS after each retention reaper cycle (default 1024). See #919."
+  },
   "https": {
     "cert": "/path/to/cert.pem",
     "key": "/path/to/key.pem",
@@ -208,7 +213,8 @@
   "packetStore": {
     "maxMemoryMB": 1024,
     "estimatedPacketBytes": 450,
-    "_comment": "In-memory packet store. maxMemoryMB caps RAM usage. All packets loaded on startup, served from RAM."
+    "retentionHours": 168,
+    "_comment": "In-memory packet store. maxMemoryMB caps RAM usage. retentionHours: only packets younger than this are loaded on startup and kept in memory (0 = unlimited, not recommended for large DBs — causes OOM on cold start). 168 = 7 days. Must be ≤ retention.packetDays * 24."
   },
   "resolvedPath": {
     "backfillHours": 24,

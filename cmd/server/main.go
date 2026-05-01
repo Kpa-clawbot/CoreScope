@@ -237,6 +237,9 @@ func main() {
 			stats.TotalTransmissions, stats.TotalObservations, stats.TotalNodes, stats.TotalObservers)
 	}
 
+	// Check auto_vacuum mode and optionally migrate (#919)
+	checkAutoVacuum(database, cfg, resolvedDB)
+
 	// In-memory packet store
 	store := NewPacketStore(database, cfg.PacketStore, cfg.CacheTTL)
 	if err := store.Load(); err != nil {
@@ -261,6 +264,9 @@ func main() {
 		database.hasResolvedPath = true // detectSchema ran before column was added; fix the flag
 	}
 
+	// WaitGroup for background init steps that gate /api/healthz readiness.
+	var initWg sync.WaitGroup
+
 	// Load or build neighbor graph
 	if neighborEdgesTableExists(database.conn) {
 		store.graph = loadNeighborEdgesFromDB(database.conn)
@@ -268,7 +274,9 @@ func main() {
 	} else {
 		log.Printf("[neighbor] no persisted edges found, will build in background...")
 		store.graph = NewNeighborGraph() // empty graph — gets populated by background goroutine
+		initWg.Add(1)
 		go func() {
+			defer initWg.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("[neighbor] graph build panic recovered: %v", r)
@@ -292,7 +300,9 @@ func main() {
 	// API serves best-effort data until this completes (~10s for 100K txs).
 	// Processes in chunks of 5000, releasing the lock between chunks so API
 	// handlers remain responsive.
+	initWg.Add(1)
 	go func() {
+		defer initWg.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[store] pickBestObservation panic recovered: %v", r)
@@ -323,6 +333,13 @@ func main() {
 		}
 
 		log.Printf("[store] initial pickBestObservation complete (%d transmissions)", totalPackets)
+	}()
+
+	// Mark server ready once all background init completes.
+	go func() {
+		initWg.Wait()
+		readiness.Store(1)
+		log.Printf("[server] readiness: ready=true (background init complete)")
 	}()
 
 	// WebSocket hub
@@ -379,6 +396,7 @@ Frontend not found. API available at /api/
 	defer stopEviction()
 
 	// Auto-prune old packets if retention.packetDays is configured
+	vacuumPages := cfg.IncrementalVacuumPages()
 	var stopPrune func()
 	if cfg.Retention != nil && cfg.Retention.PacketDays > 0 {
 		days := cfg.Retention.PacketDays
@@ -399,6 +417,9 @@ Frontend not found. API available at /api/
 				log.Printf("[prune] error: %v", err)
 			} else {
 				log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
+				if n > 0 {
+					runIncrementalVacuum(resolvedDB, vacuumPages)
+				}
 			}
 			for {
 				select {
@@ -407,6 +428,9 @@ Frontend not found. API available at /api/
 						log.Printf("[prune] error: %v", err)
 					} else {
 						log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
+						if n > 0 {
+							runIncrementalVacuum(resolvedDB, vacuumPages)
+						}
 					}
 				case <-pruneDone:
 					return
@@ -434,10 +458,12 @@ Frontend not found. API available at /api/
 			}()
 			time.Sleep(2 * time.Minute) // stagger after packet prune
 			database.PruneOldMetrics(metricsDays)
+			runIncrementalVacuum(resolvedDB, vacuumPages)
 			for {
 				select {
 				case <-metricsPruneTicker.C:
 					database.PruneOldMetrics(metricsDays)
+					runIncrementalVacuum(resolvedDB, vacuumPages)
 				case <-metricsPruneDone:
 					return
 				}
@@ -467,10 +493,12 @@ Frontend not found. API available at /api/
 				}()
 				time.Sleep(3 * time.Minute) // stagger after metrics prune
 				database.RemoveStaleObservers(observerDays)
+				runIncrementalVacuum(resolvedDB, vacuumPages)
 				for {
 					select {
 					case <-observerPruneTicker.C:
 						database.RemoveStaleObservers(observerDays)
+						runIncrementalVacuum(resolvedDB, vacuumPages)
 					case <-observerPruneDone:
 						return
 					}
@@ -501,6 +529,7 @@ Frontend not found. API available at /api/
 			g := store.graph
 			store.mu.RUnlock()
 			PruneNeighborEdges(dbPath, g, maxAgeDays)
+			runIncrementalVacuum(resolvedDB, vacuumPages)
 			for {
 				select {
 				case <-edgePruneTicker.C:
@@ -508,6 +537,7 @@ Frontend not found. API available at /api/
 					g := store.graph
 					store.mu.RUnlock()
 					PruneNeighborEdges(dbPath, g, maxAgeDays)
+					runIncrementalVacuum(resolvedDB, vacuumPages)
 				case <-edgePruneDone:
 					return
 				}

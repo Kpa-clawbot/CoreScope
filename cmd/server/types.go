@@ -894,6 +894,8 @@ type ObserverResp struct {
 	UptimeSecs      interface{} `json:"uptime_secs"`
 	NoiseFloor      interface{} `json:"noise_floor"`
 	PacketsLastHour int         `json:"packetsLastHour"`
+	PacketsLast24h  int         `json:"packetsLast24h"`
+	PacketsLast7d   int         `json:"packetsLast7d"`
 	Lat             interface{} `json:"lat"`
 	Lon             interface{} `json:"lon"`
 	NodeRole        interface{} `json:"nodeRole"`

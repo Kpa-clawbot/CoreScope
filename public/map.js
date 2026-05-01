@@ -102,8 +102,21 @@
 
   async function init(container) {
     container.innerHTML = `
-      <div id="map-wrap" style="position:relative;width:100%;height:100%;">
-        <div id="leaflet-map" style="width:100%;height:100%;"></div>
+      <div id="map-wrap" style="position:relative;width:100%;height:100%;display:flex;">
+        <div id="leaflet-map" style="flex:1 1 0%;height:100%;"></div>
+        <div class="map-side-pane" id="mapSidePane">
+          <div class="pane-toggle" id="mapPaneToggle" title="Path Inspector">◀</div>
+          <div class="pane-content">
+            <h3 style="margin:0 0 8px 0;font-size:14px;">Path Inspector</h3>
+            <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px 0;">Hex prefixes (1-3 bytes), comma or space separated.</p>
+            <div style="display:flex;gap:4px;margin-bottom:8px;">
+              <input type="text" id="mapPiInput" class="input" placeholder="2C,A1,F4" style="flex:1;">
+              <button id="mapPiSubmit" class="btn btn-primary btn-sm">Go</button>
+            </div>
+            <div id="mapPiError" class="path-inspector-error"></div>
+            <div id="mapPiResults"></div>
+          </div>
+        </div>
         <button class="map-controls-toggle" id="mapControlsToggle" aria-label="Toggle map controls" aria-expanded="true">⚙️</button>
         <div class="map-controls" id="mapControls" role="region" aria-label="Map controls">
           <h3>🗺️ Map Controls</h3>
@@ -375,6 +388,14 @@
   }
 
   function drawPacketRoute(hopKeys, origin) {
+    // Defensive: origin must be an object with pubkey/lat/lon/name. A bare
+    // string slips through both branches at lines below and silently no-ops
+    // the originator marker (caused PR #950's bug). Coerce string → object
+    // and warn so callers get a clear signal.
+    if (typeof origin === 'string') {
+      console.warn('drawPacketRoute: origin should be an object {pubkey,lat,lon,name}, got string. Coercing.');
+      origin = { pubkey: origin };
+    }
     // Hide default markers so only the route is visible
     if (markerLayer) map.removeLayer(markerLayer);
     if (clusterGroup) map.removeLayer(clusterGroup);
@@ -528,6 +549,10 @@
 
       renderMarkers();
 
+      // Signal that map data is loaded and markers rendered (used by E2E tests)
+      var mapContainer = document.getElementById('leaflet-map');
+      if (mapContainer) mapContainer.setAttribute('data-loaded', 'true');
+
       // Restore heatmap if previously enabled
       if (localStorage.getItem('meshcore-map-heatmap') === 'true') {
         toggleHeatmap(true);
@@ -552,6 +577,23 @@
           }, 500);
         }
       }
+
+      // Check for pending path inspector route (cross-page navigation from Path Inspector).
+      if (window._pendingPathInspectorRoute) {
+        var pending = window._pendingPathInspectorRoute;
+        delete window._pendingPathInspectorRoute;
+        if (pending.path && pending.path.length > 0) {
+          if (window.routeLayer) window.routeLayer.clearLayers();
+          // Pass full path as hopKeys; null origin (origin is already the first
+          // hop). slice(1) + path[0] string was wrong — drawPacketRoute expects
+          // origin to be an OBJECT with pubkey/lat/lon, and stripping the head
+          // hid the originating node from the route polyline.
+          drawPacketRoute(pending.path, null);
+        }
+      }
+
+      // Wire up map side pane (Path Inspector embedded - spec §2.7).
+      initMapSidePane();
 
       // Don't fitBounds on initial load — respect the Bay Area default or saved view
       // Only fitBounds on subsequent data refreshes if user hasn't manually panned
@@ -979,6 +1021,122 @@
     }
     const bounds = L.latLngBounds(nodesWithLoc.map(n => [n.lat, n.lon]));
     map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+  }
+
+  // === Map Side Pane — Path Inspector (spec §2.7) ===
+  function initMapSidePane() {
+    var pane = document.getElementById('mapSidePane');
+    var toggle = document.getElementById('mapPaneToggle');
+    var input = document.getElementById('mapPiInput');
+    var btn = document.getElementById('mapPiSubmit');
+    if (!pane || !toggle) return;
+
+    toggle.addEventListener('click', function () {
+      pane.classList.toggle('expanded');
+      toggle.textContent = pane.classList.contains('expanded') ? '▶' : '◀';
+      // Invalidate map size after transition.
+      setTimeout(function () { if (map) map.invalidateSize(); }, 220);
+    });
+
+    if (btn && input) {
+      btn.addEventListener('click', function () { mapPiSubmit(input.value); });
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') mapPiSubmit(input.value);
+      });
+    }
+
+    // Auto-open if URL has prefixes param while on map.
+    var params = new URLSearchParams(location.hash.split('?')[1] || '');
+    var prefixParam = params.get('prefixes');
+    if (prefixParam && input) {
+      pane.classList.add('expanded');
+      toggle.textContent = '▶';
+      input.value = prefixParam;
+      setTimeout(function () { if (map) map.invalidateSize(); }, 220);
+      mapPiSubmit(prefixParam);
+    }
+  }
+
+  function mapPiSubmit(raw) {
+    var errDiv = document.getElementById('mapPiError');
+    var resultsDiv = document.getElementById('mapPiResults');
+    if (!errDiv || !resultsDiv) return;
+    errDiv.textContent = '';
+    resultsDiv.innerHTML = '';
+
+    // Reuse PathInspector validation if available.
+    var prefixes = raw.trim().split(/[\s,]+/).filter(function (s) { return s.length > 0; }).map(function (s) { return s.toLowerCase(); });
+    var err = (window.PathInspector && window.PathInspector.validatePrefixes) ? window.PathInspector.validatePrefixes(prefixes) : null;
+    if (!err && prefixes.length === 0) err = 'Enter at least one prefix.';
+    if (err) { errDiv.textContent = err; return; }
+
+    resultsDiv.innerHTML = '<p style="font-size:12px;">Loading...</p>';
+    fetch('/api/paths/inspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefixes: prefixes })
+    })
+      .then(function (r) {
+        if (r.status === 503) return r.json().then(function () { throw new Error('Service warming up, retry shortly.'); });
+        if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || 'Request failed'); });
+        return r.json();
+      })
+      .then(function (data) { renderMapPiResults(data, resultsDiv); })
+      .catch(function (e) { resultsDiv.innerHTML = ''; errDiv.textContent = e.message; });
+  }
+
+  function renderMapPiResults(data, div) {
+    if (!data.candidates || data.candidates.length === 0) {
+      div.innerHTML = '<p style="font-size:12px;color:var(--text-muted);">No candidates found.</p>';
+      return;
+    }
+    var html = '<table class="path-inspector-table" style="font-size:11px;width:100%;"><thead><tr><th>#</th><th>Score</th><th>Path</th><th></th></tr></thead><tbody>';
+    for (var i = 0; i < data.candidates.length; i++) {
+      var c = data.candidates[i];
+      var rowClass = c.speculative ? 'speculative-row' : '';
+      html += '<tr class="' + rowClass + '">';
+      html += '<td>' + (i + 1) + '</td>';
+      html += '<td class="' + (c.speculative ? 'speculative-warning' : '') + '">' + c.score.toFixed(2) + (c.speculative ? ' ⚠' : '') + '</td>';
+      html += '<td title="' + safeEsc(c.names.join(' → ')) + '">' + safeEsc(c.names.slice(0, 3).join('→')) + (c.names.length > 3 ? '…' : '') + '</td>';
+      html += '<td><button class="btn btn-sm" data-idx="' + i + '" title="Show on Map">📍</button></td>';
+      html += '</tr>';
+      // Per-hop evidence (collapsed).
+      html += '<tr class="evidence-row collapsed" data-evidence="' + i + '"><td colspan="4"><div class="evidence-detail" style="font-size:10px;">';
+      if (c.evidence && c.evidence.perHop) {
+        for (var j = 0; j < c.evidence.perHop.length; j++) {
+          var h = c.evidence.perHop[j];
+          html += '<div>Hop ' + (j+1) + ': ' + h.prefix + ' (×' + h.candidatesConsidered + ') w=' + h.edgeWeight.toFixed(2);
+          if (h.alternatives && h.alternatives.length > 0) {
+            html += ' <span style="color:var(--text-muted);">[+' + h.alternatives.length + ' alt]</span>';
+          }
+          html += '</div>';
+        }
+      }
+      html += '</div></td></tr>';
+    }
+    html += '</tbody></table>';
+    div.innerHTML = html;
+
+    // Wire buttons.
+    div.querySelectorAll('button[data-idx]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var idx = parseInt(btn.dataset.idx);
+        var cand = data.candidates[idx];
+        if (routeLayer) routeLayer.clearLayers();
+        drawPacketRoute(cand.path, null);
+      });
+    });
+    // Expand evidence on row click.
+    div.querySelectorAll('.path-inspector-table tbody tr:not(.evidence-row)').forEach(function (row) {
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', function (e) {
+        if (e.target.tagName === 'BUTTON') return;
+        var b = row.querySelector('button[data-idx]');
+        if (!b) return;
+        var ev = div.querySelector('tr[data-evidence="' + b.dataset.idx + '"]');
+        if (ev) ev.classList.toggle('collapsed');
+      });
+    });
   }
 
   function destroy() {

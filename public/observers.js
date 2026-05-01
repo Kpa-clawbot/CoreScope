@@ -6,14 +6,91 @@
   let wsHandler = null;
   let refreshTimer = null;
   let regionChangeHandler = null;
+  let sortState = { col: null, dir: 'asc' };
+
+  var STATS_OPEN_KEY   = 'meshcore-obs-stats-open';
+  var STATS_ALL_KEY    = 'meshcore-obs-stats-all';
+  var STATS_RANGE_KEY  = 'meshcore-obs-stats-range';
+  let statsShowAll   = false;
+  let statsTimeRange = '24h';
+
+  function loadSortState() {
+    try {
+      var s = localStorage.getItem('meshcore-obs-sort');
+      if (s) sortState = JSON.parse(s);
+    } catch (e) {}
+  }
+
+  function saveSortState() {
+    try { localStorage.setItem('meshcore-obs-sort', JSON.stringify(sortState)); } catch (e) {}
+  }
+
+  function applySortState(arr) {
+    if (!sortState.col) return arr;
+    return arr.slice().sort(function (a, b) {
+      var va, vb;
+      switch (sortState.col) {
+        case 'status': {
+          var order = { 'health-green': 0, 'health-yellow': 1, 'health-red': 2 };
+          va = order[healthStatus(a.last_seen).cls] ?? 3;
+          vb = order[healthStatus(b.last_seen).cls] ?? 3;
+          break;
+        }
+        case 'name':
+          va = (a.name || a.id || '').toLowerCase();
+          vb = (b.name || b.id || '').toLowerCase();
+          break;
+        case 'region':
+          va = (a.iata || '').toLowerCase();
+          vb = (b.iata || '').toLowerCase();
+          break;
+        case 'last_seen':
+          va = a.last_seen ? new Date(a.last_seen).getTime() : 0;
+          vb = b.last_seen ? new Date(b.last_seen).getTime() : 0;
+          break;
+        case 'packets':
+          va = a.packet_count || 0;
+          vb = b.packet_count || 0;
+          break;
+        case 'packets_hr':
+          va = a.packetsLastHour || 0;
+          vb = b.packetsLastHour || 0;
+          break;
+        case 'uptime':
+          va = a.first_seen ? Date.now() - new Date(a.first_seen).getTime() : 0;
+          vb = b.first_seen ? Date.now() - new Date(b.first_seen).getTime() : 0;
+          break;
+        default:
+          return 0;
+      }
+      var cmp = va < vb ? -1 : va > vb ? 1 : 0;
+      return sortState.dir === 'asc' ? cmp : -cmp;
+    });
+  }
 
   function init(app) {
+    loadSortState();
     app.innerHTML = `
       <div class="observers-page">
         <div class="page-header">
           <h2>Observer Status</h2>
           <a href="#/compare" class="btn-icon" title="Compare observers" aria-label="Compare observers" style="text-decoration:none">🔍</a>
           <button class="btn-icon" data-action="obs-refresh" title="Refresh" aria-label="Refresh observers">🔄</button>
+        </div>
+        <div class="obs-stats-panel" id="obsStatsPanel">
+          <div class="obs-stats-header" data-action="toggle-stats">
+            <strong>📊 Observer Statistics</strong>
+            <span style="display:flex;align-items:center;gap:8px">
+              <span class="obs-stats-range-pills">
+                <button class="obs-stats-range-btn" data-action="toggle-stats-range" data-range="24h">24h</button><button class="obs-stats-range-btn" data-action="toggle-stats-range" data-range="7d">7d</button>
+              </span>
+              <button class="obs-stats-all-btn" data-action="toggle-stats-all">Show all</button>
+              <span class="obs-stats-toggle">▶</span>
+            </span>
+          </div>
+          <div class="obs-stats-body" id="obsStatsBody" style="max-height:0px">
+            <div class="obs-stats-grid" id="obsStatsGrid"></div>
+          </div>
         </div>
         <div class="obs-help">
           <div class="help-box">
@@ -96,11 +173,51 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
       </div>`;
     RegionFilter.init(document.getElementById('obsRegionFilter'));
     regionChangeHandler = RegionFilter.onChange(function () { render(); });
+    // Restore stats panel open/close state and show-all toggle
+    try {
+      if (localStorage.getItem(STATS_OPEN_KEY) === '1') {
+        var body = document.getElementById('obsStatsBody');
+        var tog = app.querySelector('.obs-stats-toggle');
+        if (body) body.style.maxHeight = '2000px';
+        if (tog) tog.textContent = '▼';
+      }
+      statsShowAll = localStorage.getItem(STATS_ALL_KEY) === '1';
+      statsTimeRange = localStorage.getItem(STATS_RANGE_KEY) || '24h';
+    } catch (e) {}
     loadObservers();
     // Event delegation for data-action buttons
     app.addEventListener('click', function (e) {
+      var th = e.target.closest('th[data-sort-col]');
+      if (th) {
+        var col = th.dataset.sortCol;
+        sortState.dir = sortState.col === col && sortState.dir === 'asc' ? 'desc' : 'asc';
+        sortState.col = col;
+        saveSortState();
+        render();
+        return;
+      }
       var btn = e.target.closest('[data-action]');
       if (btn && btn.dataset.action === 'obs-refresh') loadObservers();
+      if (btn && btn.dataset.action === 'toggle-stats-range') {
+        statsTimeRange = btn.dataset.range;
+        try { localStorage.setItem(STATS_RANGE_KEY, statsTimeRange); } catch (e) {}
+        render();
+        return;
+      }
+      if (btn && btn.dataset.action === 'toggle-stats-all') {
+        statsShowAll = !statsShowAll;
+        try { localStorage.setItem(STATS_ALL_KEY, statsShowAll ? '1' : '0'); } catch (e) {}
+        render();
+        return;
+      }
+      if (btn && btn.dataset.action === 'toggle-stats') {
+        var statsBody = document.getElementById('obsStatsBody');
+        var statsTog = btn.querySelector('.obs-stats-toggle');
+        var isOpen = statsBody.style.maxHeight !== '0px';
+        statsBody.style.maxHeight = isOpen ? '0px' : '2000px';
+        statsTog.textContent = isOpen ? '▶' : '▼';
+        try { localStorage.setItem(STATS_OPEN_KEY, isOpen ? '0' : '1'); } catch (e) {}
+      }
       if (btn && btn.dataset.action === 'toggle-help') {
         var content = btn.closest('.help-box').querySelector('.help-content');
         var toggle = btn.querySelector('.help-toggle');
@@ -183,6 +300,61 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
     return `<span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap"><span style="display:inline-block;width:60px;height:12px;background:var(--border);border-radius:3px;overflow:hidden;vertical-align:middle"><span style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,#3b82f6,#60a5fa);border-radius:3px"></span></span><span style="font-size:11px">${count}/hr</span></span>`;
   }
 
+  function renderStatsGrid(data) {
+    var grid = document.getElementById('obsStatsGrid');
+    if (!grid) return;
+
+    function statBlock(title, items) {
+      var rows = items.length
+        ? items.map(function (item, i) {
+            return `<li><span class="obs-stat-rank">${i + 1}</span><span class="obs-stat-name" title="${item.title || item.name}">${item.name}</span><span class="obs-stat-val">${item.val}</span></li>`;
+          }).join('')
+        : '<li><span class="text-muted" style="font-size:11px">No data</span></li>';
+      return `<div class="obs-stat-block"><div class="obs-stat-block-title">${title}</div><ol class="obs-stat-list">${rows}</ol></div>`;
+    }
+
+    var limit = statsShowAll ? Infinity : 5;
+    var prefix = statsShowAll ? '' : 'Top 5 · ';
+
+    // Sync show-all button
+    var allBtn = document.querySelector('.obs-stats-all-btn');
+    if (allBtn) {
+      allBtn.textContent = statsShowAll ? 'Show top 5' : 'Show all';
+      allBtn.classList.toggle('active', statsShowAll);
+    }
+    // Sync range pills
+    document.querySelectorAll('.obs-stats-range-btn').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.range === statsTimeRange);
+    });
+
+    // Pick the right packet field and label for selected time range
+    var pktField = statsTimeRange === '7d' ? 'packetsLast7d' : 'packetsLast24h';
+    var pktLabel = statsTimeRange === '7d' ? 'Packets / 7d' : 'Packets / 24h';
+
+    var byPktsWindow = data.slice().sort(function (a, b) { return (b[pktField] || 0) - (a[pktField] || 0); }).slice(0, limit)
+      .map(function (o) { return { name: o.name || o.id, val: (o[pktField] || 0).toLocaleString() }; });
+
+    var byPacketsTotal = data.slice().sort(function (a, b) { return (b.packet_count || 0) - (a.packet_count || 0); }).slice(0, limit)
+      .map(function (o) { return { name: o.name || o.id, val: (o.packet_count || 0).toLocaleString() }; });
+
+    var byUptime = data.slice().sort(function (a, b) {
+      var ua = a.first_seen ? Date.now() - new Date(a.first_seen).getTime() : 0;
+      var ub = b.first_seen ? Date.now() - new Date(b.first_seen).getTime() : 0;
+      return ub - ua;
+    }).slice(0, limit).map(function (o) { return { name: o.name || o.id, val: uptimeStr(o.first_seen) }; });
+
+    var regionMap = {};
+    data.forEach(function (o) { if (o.iata) regionMap[o.iata] = (regionMap[o.iata] || 0) + 1; });
+    var byRegion = Object.entries(regionMap).sort(function (a, b) { return b[1] - a[1]; }).slice(0, limit)
+      .map(function (entry) { return { name: `<span class="badge-region">${entry[0]}</span>`, title: entry[0], val: entry[1] + (entry[1] === 1 ? ' observer' : ' observers') }; });
+
+    grid.innerHTML =
+      statBlock(prefix + pktLabel, byPktsWindow) +
+      statBlock(prefix + 'All-time Packets', byPacketsTotal) +
+      statBlock(prefix + 'Uptime', byUptime) +
+      statBlock(statsShowAll ? 'Regions' : 'Top Regions', byRegion);
+  }
+
   function render() {
     const el = document.getElementById('obsContent');
     if (!el) return;
@@ -193,17 +365,26 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
       ? observers.filter(o => o.iata && selectedRegions.includes(o.iata))
       : observers;
 
+    renderStatsGrid(filtered);
+
     if (filtered.length === 0) {
       el.innerHTML = '<div class="text-center text-muted" style="padding:40px">No observers found.</div>';
       return;
     }
 
+    const sorted = applySortState(filtered);
     const maxPktsHr = Math.max(1, ...filtered.map(o => o.packetsLastHour || 0));
 
     // Summary counts
     const online = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-green').length;
     const stale = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-yellow').length;
     const offline = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-red').length;
+
+    function sortTh(label, col) {
+      var active = sortState.col === col;
+      var arrow = active ? (sortState.dir === 'asc' ? '▲' : '▼') : '⇅';
+      return `<th scope="col" class="sortable-col${active ? ' sort-active' : ''}" data-sort-col="${col}">${label}<span class="sort-arrow">${arrow}</span></th>`;
+    }
 
     el.innerHTML = `
       <div class="obs-summary">
@@ -215,10 +396,10 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
       <div class="obs-table-scroll"><table class="data-table obs-table" id="obsTable">
         <caption class="sr-only">Observer status and statistics</caption>
         <thead><tr>
-          <th scope="col">Status</th><th scope="col">Name</th><th scope="col">Region</th><th scope="col">Last Seen</th>
-          <th scope="col">Packets</th><th scope="col">Packets/Hour</th><th scope="col">Uptime</th>
+          ${sortTh('Status','status')}${sortTh('Name','name')}${sortTh('Region','region')}${sortTh('Last Seen','last_seen')}
+          ${sortTh('Packets','packets')}${sortTh('Packets/Hour','packets_hr')}${sortTh('Uptime','uptime')}
         </tr></thead>
-        <tbody>${filtered.map(o => {
+        <tbody>${sorted.map(o => {
           const h = healthStatus(o.last_seen);
           const shape = h.cls === 'health-green' ? '●' : h.cls === 'health-yellow' ? '▲' : '✕';
           return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">

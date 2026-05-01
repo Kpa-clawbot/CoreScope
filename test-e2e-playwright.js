@@ -211,6 +211,7 @@ async function run() {
   // Test 2: Nodes page loads with data
   await test('Nodes page loads with data', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('table tbody tr');
     const headers = await page.$$eval('th', els => els.map(e => e.textContent.trim()));
     for (const col of ['Name', 'Public Key', 'Role']) {
@@ -224,10 +225,7 @@ async function run() {
   // Test 5: Node detail loads (reuses nodes page from test 2)
   await test('Node detail loads', async () => {
     await page.waitForSelector('table tbody tr');
-    // Click first row
-    const firstRow = await page.$('table tbody tr');
-    assert(firstRow, 'No node rows found');
-    await firstRow.click();
+    await page.click('table tbody tr');
     // Wait for detail pane to appear
     await page.waitForSelector('.node-detail');
     const html = await page.content();
@@ -239,18 +237,16 @@ async function run() {
   // Test: Node side panel Details link navigates to full detail page (#778)
   await test('Node side panel Details link navigates', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('table tbody tr');
-    // Click first row to open side panel
-    const firstRow = await page.$('table tbody tr');
-    assert(firstRow, 'No node rows found');
-    await firstRow.click();
+    await page.click('table tbody tr');
     await page.waitForSelector('.node-detail');
     // Find the Details link in the side panel
-    const detailsLink = await page.$('#nodesRight a.btn-primary[href^="#/nodes/"]');
-    assert(detailsLink, 'Details link not found in side panel');
-    const href = await detailsLink.getAttribute('href');
+    await page.waitForSelector('#nodesRight a.btn-primary[href^="#/nodes/"]');
+    const href = await page.$eval('#nodesRight a.btn-primary[href^="#/nodes/"]', el => el.getAttribute('href'));
+    assert(href, 'Details link not found in side panel');
     // Click the Details link — this should navigate to the full detail page
-    await detailsLink.click();
+    await page.click('#nodesRight a.btn-primary[href^="#/nodes/"]');
     // Wait for navigation — the full detail page has sections like neighbors/packets
     await page.waitForFunction((expectedHash) => {
       return location.hash === expectedHash;
@@ -263,6 +259,7 @@ async function run() {
   // Test: Nodes page has WebSocket auto-update listener (#131)
   await test('Nodes page has WebSocket auto-update', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('table tbody tr');
     // The live dot in navbar indicates WS connection status
     const liveDot = await page.$('#liveDot');
@@ -288,11 +285,12 @@ async function run() {
   // Test 3: Map page loads with markers
   await test('Map page loads with markers', async () => {
     await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('.leaflet-container');
     await page.waitForSelector('.leaflet-tile-loaded');
     // Wait for markers/overlays to render (may not exist with empty DB)
     try {
-      await page.waitForSelector('.leaflet-marker-icon, .leaflet-interactive, circle, .marker-cluster, .leaflet-marker-pane > *, .leaflet-overlay-pane svg path, .leaflet-overlay-pane svg circle', { timeout: 3000 });
+      await page.waitForSelector('.leaflet-marker-icon, .leaflet-interactive, circle, .marker-cluster, .leaflet-marker-pane > *, .leaflet-overlay-pane svg path, .leaflet-overlay-pane svg circle', { timeout: 8000 });
     } catch (_) {
       // No markers with empty DB \u2014 assertion below handles it
     }
@@ -368,7 +366,7 @@ async function run() {
     await page.waitForSelector('.leaflet-container');
     // Wait for markers (may not exist with empty DB)
     try {
-      await page.waitForSelector('.leaflet-marker-icon, .leaflet-interactive', { timeout: 3000 });
+      await page.waitForSelector('.leaflet-marker-icon, .leaflet-interactive', { timeout: 8000 });
     } catch (_) {
       // No markers with empty DB
     }
@@ -400,6 +398,7 @@ async function run() {
     await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
     await page.evaluate(() => localStorage.setItem('meshcore-time-window', '525600'));
     await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('table tbody tr', { timeout: 15000 });
     const rowsBefore = await page.$$('table tbody tr');
     assert(rowsBefore.length > 0, 'No packets visible');
@@ -663,6 +662,8 @@ async function run() {
     await page.waitForSelector('#ngCanvas', { timeout: 8000 });
     const hasCanvas = await page.$('#ngCanvas');
     assert(hasCanvas, 'Neighbor Graph tab should have a canvas element');
+    // Stats are populated after the async API call — wait for at least one card before counting
+    await page.waitForSelector('#ngStats .stat-card', { timeout: 8000 });
     const hasStats = await page.$$eval('#ngStats .stat-card', els => els.length);
     assert(hasStats >= 3, `Neighbor Graph stats should have >=3 cards, got ${hasStats}`);
     // Verify filters exist
@@ -1355,6 +1356,38 @@ async function run() {
       getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
     );
     assert(cssAccent === '#ee1122', `Page load should apply override accent #ee1122 but got "${cssAccent}"`);
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: typing in text field does not collapse focus (re-render guard)', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    await page.waitForFunction(() => window._customizerV2 && window._customizerV2.initDone, { timeout: 5000 });
+    const toggleSel = '#customizeToggle, button[title*="ustom" i], [class*="customize"]';
+    const btn = await page.$(toggleSel);
+    if (!btn) { console.log('    ⏭️  Customizer toggle not found'); return; }
+    await btn.click();
+    await page.waitForSelector('.cust-overlay', { timeout: 5000 });
+    const result = await page.evaluate(() => {
+      const input = document.querySelector('.cust-overlay input[type="text"][data-cv2-field]');
+      if (!input) return { skipped: true };
+      input.focus();
+      input.value = 'test';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const inputRef = input;
+      return new Promise(resolve => {
+        setTimeout(() => {
+          const panel = document.querySelector('.cust-overlay');
+          resolve({
+            inputConnected: inputRef.isConnected,
+            focusInPanel: panel ? panel.contains(document.activeElement) : false,
+          });
+        }, 500);
+      });
+    });
+    if (result.skipped) { console.log('    ⏭️  No text input with data-cv2-field found in panel'); return; }
+    assert(result.inputConnected, 'Input element should remain connected to DOM after debounce fires');
+    assert(result.focusInPanel, 'Focus should remain inside panel after debounce — re-render must not run while typing');
     await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
   });
 
@@ -2111,6 +2144,120 @@ async function run() {
     await page.waitForSelector('.node-fullscreen', { timeout: 5000 });
     const isFullScreen = await page.evaluate(() => !!document.querySelector('.node-fullscreen'));
     assert(isFullScreen, 'Details button should open full-screen node view');
+  });
+
+  // === Hash color toggle E2E tests (#946) ===
+
+  await test('Color-by-hash toggle present on Live page, defaults ON', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    // Wait until live.js has initialized the toggle (checked = true by default)
+    await page.waitForFunction(() => {
+      const el = document.getElementById('liveColorHashToggle');
+      return el && el.checked === true;
+    }, { timeout: 10000 });
+    const checked = await page.$eval('#liveColorHashToggle', el => el.checked);
+    assert(checked, 'Color by hash toggle should default to ON');
+  });
+
+  await test('Color-by-hash toggle persists across reload', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveColorHashToggle', { timeout: 10000 });
+    // Uncheck toggle
+    await page.click('#liveColorHashToggle');
+    const unchecked = await page.$eval('#liveColorHashToggle', el => !el.checked);
+    assert(unchecked, 'Toggle should be OFF after click');
+    // Reload
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveColorHashToggle', { timeout: 10000 });
+    const afterReload = await page.$eval('#liveColorHashToggle', el => !el.checked);
+    assert(afterReload, 'Toggle OFF state should persist after reload');
+    // Reset to ON for other tests
+    await page.click('#liveColorHashToggle');
+  });
+
+  await test('Packets table rows have border-left stripe when toggle ON', async () => {
+    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+    // Hard reload to re-init page handler with the new toggle state.
+    // page.goto with same hash URL is a no-op for re-rendering.
+    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
+    // Wait for hash stripe to be applied (inline style set during render).
+    // Assert specifically 4px (per spec §2.10) so we don't false-pass on the
+    // 3px channel-color highlight which is independent of this toggle.
+    const hasStripe = await page.waitForFunction(() => {
+      const row = document.querySelector('table tbody tr[data-hash]');
+      return row && (row.getAttribute('style') || '').includes('border-left:4px');
+    }, { timeout: 5000 }).then(() => true).catch(() => false);
+    assert(hasStripe, 'At least one <tr> should have hash-color border-left:4px stripe when toggle ON');
+  });
+
+  await test('Packets table rows have NO border-left stripe when toggle OFF', async () => {
+    await page.evaluate(() => {
+      localStorage.setItem('meshcore-color-packets-by-hash', 'false');
+    });
+    // Hard reload (page.goto with same hash URL no-ops — must reload to re-init
+    // the page handler and re-render rows with the new toggle state).
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
+    await page.waitForTimeout(500);
+    const noStripe = await page.evaluate(() => {
+      const rows = document.querySelectorAll('table tbody tr[data-hash]');
+      for (const r of rows) {
+        // Hash stripe is 4px (per spec §2.10). Channel-color highlight uses
+        // 3px and is independent of the hash-color toggle. Only assert no
+        // 4px hash stripe is present.
+        if ((r.getAttribute('style') || '').includes('border-left:4px')) return false;
+      }
+      return true;
+    });
+    assert(noStripe, 'No <tr> should have hash-color border-left:4px stripe when toggle OFF');
+    // Reset
+    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+  });
+
+  // --- Live feed hash-color stripe ---
+  await test('Live feed items have border-left stripe when toggle ON', async () => {
+    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+    await page.goto(BASE + '/#/live');
+    await page.waitForTimeout(3000); // allow feed to populate
+    const hasStripe = await page.evaluate(() => {
+      const items = document.querySelectorAll('.live-feed-item');
+      for (const item of items) {
+        if ((item.getAttribute('style') || item.style.cssText || '').includes('border-left')) return true;
+      }
+      return false;
+    });
+    // May not have live packets in fixture — skip if no feed items
+    const itemCount = await page.evaluate(() => document.querySelectorAll('.live-feed-item').length);
+    if (itemCount === 0) {
+      console.log('    (skipped — no live feed items in fixture)');
+      return;
+    }
+    assert(hasStripe, 'At least one .live-feed-item should have hash-color border-left stripe when toggle ON');
+  });
+
+  // --- Map polyline uses hash color ---
+  await test('Map trace polyline uses hash-derived color when toggle ON', async () => {
+    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+    await page.goto(BASE + '/#/live');
+    await page.waitForTimeout(3000);
+    // Use the dedicated .live-packet-trace class so we don't pick up
+    // unrelated leaflet paths (geofilter polygons, region overlays, etc).
+    const pathCount = await page.evaluate(() => document.querySelectorAll('path.live-packet-trace').length);
+    if (pathCount === 0) {
+      console.log('    (skipped — no live-packet-trace polylines drawn in 3s window)');
+      return;
+    }
+    const hasHslPolyline = await page.evaluate(() => {
+      const paths = document.querySelectorAll('path.live-packet-trace');
+      for (const p of paths) {
+        const stroke = p.getAttribute('stroke') || '';
+        if (stroke.startsWith('hsl(')) return true;
+      }
+      return false;
+    });
+    assert(hasHslPolyline, 'At least one live-packet-trace polyline should have hsl() stroke color from hash');
   });
 
   await browser.close();
