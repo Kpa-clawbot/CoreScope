@@ -663,6 +663,12 @@ async function run() {
     await page.waitForSelector('#ngCanvas', { timeout: 8000 });
     const hasCanvas = await page.$('#ngCanvas');
     assert(hasCanvas, 'Neighbor Graph tab should have a canvas element');
+    // Stats render asynchronously after canvas mount — wait for them to populate
+    // before counting, otherwise we race the hydration and read 0 cards.
+    await page.waitForFunction(
+      () => document.querySelectorAll('#ngStats .stat-card').length >= 3,
+      { timeout: 8000 },
+    );
     const hasStats = await page.$$eval('#ngStats .stat-card', els => els.length);
     assert(hasStats >= 3, `Neighbor Graph stats should have >=3 cards, got ${hasStats}`);
     // Verify filters exist
