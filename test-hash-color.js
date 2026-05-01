@@ -125,14 +125,6 @@ function hslDistance(a, b) {
   return Math.sqrt(dh*dh + ds*ds + dl*dl);
 }
 
-const sampleHashes = [];
-for (var i = 0; i < 50; i++) {
-  // Generate pseudo-random 8-char hex
-  var h = '';
-  for (var j = 0; j < 8; j++) h += Math.floor(Math.random() * 16).toString(16);
-  sampleHashes.push(h);
-}
-// Fix seed for reproducibility — use deterministic hashes instead
 const deterministicHashes = [];
 for (var i = 0; i < 50; i++) {
   var hex = ('0000000' + (i * 5347 + 12345).toString(16)).slice(-8);
