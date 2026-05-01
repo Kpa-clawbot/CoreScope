@@ -549,10 +549,6 @@
 
       renderMarkers();
 
-      // Signal that map data is loaded and markers rendered (used by E2E tests)
-      var mapContainer = document.getElementById('leaflet-map');
-      if (mapContainer) mapContainer.setAttribute('data-loaded', 'true');
-
       // Restore heatmap if previously enabled
       if (localStorage.getItem('meshcore-map-heatmap') === 'true') {
         toggleHeatmap(true);
@@ -599,6 +595,11 @@
       // Only fitBounds on subsequent data refreshes if user hasn't manually panned
     } catch (e) {
       console.error('Map load error:', e);
+    } finally {
+      // Always signal data-loaded — even on error — so E2E tests can proceed.
+      // Otherwise an api() failure leaves the test waiting forever.
+      var mapContainer = document.getElementById('leaflet-map');
+      if (mapContainer) mapContainer.setAttribute('data-loaded', 'true');
     }
   }
 

@@ -744,13 +744,14 @@
 
       sortPacketsArray();
       renderLeft();
-      // Signal that packet data is loaded and rendered (used by E2E tests)
-      var pktContainer = document.getElementById('pktLeft') || document.getElementById('pktBody');
-      if (pktContainer) pktContainer.setAttribute('data-loaded', 'true');
     } catch (e) {
       console.error('Failed to load packets:', e);
       const tbody = document.getElementById('pktBody');
       if (tbody) tbody.innerHTML = '<tr><td colspan="' + _getColCount() + '" class="text-center" style="padding:24px;color:var(--error,#ef4444)"><div role="alert" aria-live="polite">Failed to load packets. Please try again.</div></td></tr>';
+    } finally {
+      // Always signal data-loaded — even on error — so E2E tests can proceed.
+      var pktContainer = document.getElementById('pktLeft') || document.getElementById('pktBody');
+      if (pktContainer) pktContainer.setAttribute('data-loaded', 'true');
     }
   }
 
