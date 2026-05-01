@@ -826,7 +826,7 @@
             <span id="ghostDesc" class="sr-only">Show interpolated ghost markers for unknown hops</span>
             <label><input type="checkbox" id="liveRealisticToggle" aria-describedby="realisticDesc"> Realistic</label>
             <span id="realisticDesc" class="sr-only">Buffer packets by hash and animate all paths simultaneously</span>
-            <label><input type="checkbox" id="liveColorHashToggle" checked aria-describedby="colorHashDesc"> Color by hash</label>
+            <label><input type="checkbox" id="liveColorHashToggle" aria-describedby="colorHashDesc"> Color by hash</label>
             <span id="colorHashDesc" class="sr-only">Color flying-packet dots and contrails by packet hash for propagation tracing</span>
             <label><input type="checkbox" id="liveMatrixToggle" aria-describedby="matrixDesc"> Matrix</label>
             <span id="matrixDesc" class="sr-only">Animate packet hex bytes flowing along paths like the Matrix</span>
@@ -2615,10 +2615,9 @@
     const isDashed = overrideOpacity != null;
 
     // Hash-derived color for fill + contrail (when toggle ON and not ghost/dashed line)
-    var isGhostLine = overrideOpacity != null;
     var hashFill = '#fff';
     var contrailColor = color;
-    if (colorByHash && hash && !isGhostLine && window.HashColor) {
+    if (colorByHash && hash && !isDashed && window.HashColor) {
       var theme = (document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
       var hsl = HashColor.hashToHsl(hash, theme);
       hashFill = hsl;

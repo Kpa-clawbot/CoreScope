@@ -14,6 +14,8 @@
   }
   let selectedId = null;
   let _colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
+  function _currentTheme() { return document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
+  function _hashStripeStyle(hash) { return _colorByHash && hash && window.HashColor ? 'border-left:4px solid ' + HashColor.hashToHsl(hash, _currentTheme()) + ';' : ''; }
   let groupByHash = true;
   let filters = {};
   { const o = localStorage.getItem('meshcore-observer-filter'); if (o) filters.observer = o;
@@ -1360,7 +1362,7 @@
     // Channel color highlighting (#271)
     const _grpDecoded = getParsedDecoded(p) || {};
     const _grpChanStyle = window.ChannelColors ? window.ChannelColors.getRowStyle(_grpDecoded.type || groupTypeName, _grpDecoded.channel) : '';
-    const _grpHashStripe = _colorByHash && window.HashColor ? 'border-left:4px solid ' + HashColor.hashToHsl(p.hash, document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) + ';' : '';
+    const _grpHashStripe = _hashStripeStyle(p.hash);
     const _grpStyle = _grpHashStripe + _grpChanStyle;
     let html = `<tr class="${isSingle ? '' : 'group-header'} ${isExpanded ? 'expanded' : ''}" data-hash="${p.hash}" data-action="${isSingle ? 'select-hash' : 'toggle-select'}" data-value="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_grpStyle ? ' style="' + _grpStyle + '"' : ''}>
           <td style="width:28px;text-align:center;cursor:pointer">${isSingle ? '' : (isExpanded ? '▼' : '▶')}</td>
@@ -1388,7 +1390,7 @@
         const childRegion = c.observer_id ? (observerMap.get(c.observer_id)?.iata || '') : '';
         const childPath = getParsedPath(c);
         const childPathStr = renderPath(childPath, c.observer_id);
-        const _childHashStripe = _colorByHash && window.HashColor ? 'border-left:4px solid ' + HashColor.hashToHsl(c.hash || p.hash, document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) + ';' : '';
+        const _childHashStripe = _hashStripeStyle(c.hash || p.hash);
         html += `<tr class="group-child" data-id="${c.id}" data-hash="${c.hash || ''}" data-action="select-observation" data-value="${c.id}" data-parent-hash="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_childHashStripe ? ' style="' + _childHashStripe + '"' : ''}>
               <td></td><td class="col-region">${childRegion ? `<span class="badge-region">${childRegion}</span>` : '—'}</td>
               <td class="col-time">${renderTimestampCell(c.timestamp)}</td>
@@ -1419,7 +1421,7 @@
     const hashBytes = ((parseInt(p.raw_hex?.slice(2, 4), 16) || 0) >> 6) + 1;
     const pathStr = renderPath(pathHops, p.observer_id);
     const detail = getDetailPreview(decoded);
-    const _flatHashStripe = _colorByHash && window.HashColor ? 'border-left:4px solid ' + HashColor.hashToHsl(p.hash, document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) + ';' : '';
+    const _flatHashStripe = _hashStripeStyle(p.hash);
     const _flatStyle = _flatHashStripe + _chanStyle;
     return `<tr data-id="${p.id}" data-hash="${p.hash || ''}" data-action="select-hash" data-value="${p.hash || p.id}" data-entry-idx="${entryIdx}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}"${_flatStyle ? ' style="' + _flatStyle + '"' : ''}>
         <td></td><td class="col-region">${region ? `<span class="badge-region">${region}</span>` : '—'}</td>
