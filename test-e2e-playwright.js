@@ -2141,6 +2141,63 @@ async function run() {
     assert(isFullScreen, 'Details button should open full-screen node view');
   });
 
+  // === Hash color toggle E2E tests (#946) ===
+
+  await test('Color-by-hash toggle present on Live page, defaults ON', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveColorHashToggle', { timeout: 10000 });
+    const checked = await page.$eval('#liveColorHashToggle', el => el.checked);
+    assert(checked, 'Color by hash toggle should default to ON');
+  });
+
+  await test('Color-by-hash toggle persists across reload', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveColorHashToggle', { timeout: 10000 });
+    // Uncheck toggle
+    await page.click('#liveColorHashToggle');
+    const unchecked = await page.$eval('#liveColorHashToggle', el => !el.checked);
+    assert(unchecked, 'Toggle should be OFF after click');
+    // Reload
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveColorHashToggle', { timeout: 10000 });
+    const afterReload = await page.$eval('#liveColorHashToggle', el => !el.checked);
+    assert(afterReload, 'Toggle OFF state should persist after reload');
+    // Reset to ON for other tests
+    await page.click('#liveColorHashToggle');
+  });
+
+  await test('Packets table rows have border-left stripe when toggle ON', async () => {
+    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
+    await page.waitForTimeout(500);
+    const hasStripe = await page.evaluate(() => {
+      const row = document.querySelector('table tbody tr[data-hash]');
+      return row && row.style.borderLeft && row.style.borderLeft.includes('solid');
+    });
+    assert(hasStripe, 'At least one <tr> should have border-left stripe when toggle ON');
+  });
+
+  await test('Packets table rows have NO border-left stripe when toggle OFF', async () => {
+    await page.evaluate(() => {
+      localStorage.setItem('meshcore-color-packets-by-hash', 'false');
+      window.dispatchEvent(new Event('storage'));
+    });
+    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
+    await page.waitForTimeout(500);
+    const noStripe = await page.evaluate(() => {
+      const rows = document.querySelectorAll('table tbody tr[data-hash]');
+      for (const r of rows) {
+        if (r.style.borderLeft && r.style.borderLeft.includes('solid')) return false;
+      }
+      return true;
+    });
+    assert(noStripe, 'No <tr> should have border-left stripe when toggle OFF');
+    // Reset
+    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+  });
+
   await browser.close();
 
   // Summary
