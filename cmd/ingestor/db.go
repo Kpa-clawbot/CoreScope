@@ -59,7 +59,7 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		return nil, fmt.Errorf("creating data dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=auto_vacuum(INCREMENTAL)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("opening db: %w", err)
 	}
@@ -85,6 +85,9 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 }
 
 func applySchema(db *sql.DB) error {
+	// auto_vacuum=INCREMENTAL is set via DSN pragma (must be before journal_mode).
+	// Logging of current mode is handled by CheckAutoVacuum — no duplicate log here.
+
 	schema := `
 		CREATE TABLE IF NOT EXISTS nodes (
 			public_key TEXT PRIMARY KEY,
@@ -786,6 +789,58 @@ func (s *Store) PruneOldMetrics(retentionDays int) (int64, error) {
 		log.Printf("[metrics] Pruned %d rows older than %d days", n, retentionDays)
 	}
 	return n, nil
+}
+
+// CheckAutoVacuum inspects the current auto_vacuum mode and logs a warning
+// if not INCREMENTAL. Performs opt-in full VACUUM if db.vacuumOnStartup is set (#919).
+func (s *Store) CheckAutoVacuum(cfg *Config) {
+	var autoVacuum int
+	if err := s.db.QueryRow("PRAGMA auto_vacuum").Scan(&autoVacuum); err != nil {
+		log.Printf("[db] warning: could not read auto_vacuum: %v", err)
+		return
+	}
+
+	if autoVacuum == 2 {
+		log.Printf("[db] auto_vacuum=INCREMENTAL")
+		return
+	}
+
+	modes := map[int]string{0: "NONE", 1: "FULL", 2: "INCREMENTAL"}
+	mode := modes[autoVacuum]
+	if mode == "" {
+		mode = fmt.Sprintf("UNKNOWN(%d)", autoVacuum)
+	}
+
+	log.Printf("[db] auto_vacuum=%s — DB needs one-time VACUUM to enable incremental auto-vacuum. "+
+		"Set db.vacuumOnStartup: true in config to migrate (will block startup for several minutes on large DBs). "+
+		"See https://github.com/Kpa-clawbot/CoreScope/issues/919", mode)
+
+	if cfg.DB != nil && cfg.DB.VacuumOnStartup {
+		// WARNING: Full VACUUM creates a temporary copy of the entire DB file.
+		// Requires ~2× the DB file size in free disk space or it will fail.
+		log.Printf("[db] vacuumOnStartup=true — starting one-time full VACUUM (ensure 2x DB size free disk space)...")
+		start := time.Now()
+
+		if _, err := s.db.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
+			log.Printf("[db] VACUUM failed: could not set auto_vacuum: %v", err)
+			return
+		}
+		if _, err := s.db.Exec("VACUUM"); err != nil {
+			log.Printf("[db] VACUUM failed: %v", err)
+			return
+		}
+
+		elapsed := time.Since(start)
+		log.Printf("[db] VACUUM complete in %v — auto_vacuum is now INCREMENTAL", elapsed.Round(time.Millisecond))
+	}
+}
+
+// RunIncrementalVacuum returns free pages to the OS (#919).
+// Safe to call on auto_vacuum=NONE databases (noop).
+func (s *Store) RunIncrementalVacuum(pages int) {
+	if _, err := s.db.Exec(fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)); err != nil {
+		log.Printf("[vacuum] incremental_vacuum error: %v", err)
+	}
 }
 
 // Checkpoint forces a WAL checkpoint to release the WAL lock file,

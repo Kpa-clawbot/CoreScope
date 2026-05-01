@@ -98,6 +98,22 @@ How long (in hours) before a node is marked degraded or silent:
 | `retention.nodeDays` | `7` | Nodes not seen in N days move to inactive |
 | `retention.packetDays` | `30` | Packets older than N days are deleted daily |
 
+> **Note:** Lowering retention does **not** immediately shrink the database file.
+> SQLite marks deleted pages as free but does not return them to the filesystem
+> unless [incremental auto-vacuum](database.md) is enabled. New databases created
+> after v0.x.x have auto-vacuum enabled automatically. Existing databases require
+> a one-time migration — see the [Database](database.md) guide.
+
+## Database
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `db.vacuumOnStartup` | `false` | Run a one-time full `VACUUM` on startup to enable incremental auto-vacuum (blocks for minutes on large DBs) |
+| `db.incrementalVacuumPages` | `1024` | Free pages returned to the OS after each retention reaper cycle |
+
+See [Database](database.md) for details on SQLite auto-vacuum, WAL, and manual maintenance.
+See [#919](https://github.com/Kpa-clawbot/CoreScope/issues/919) for background.
+
 ## Channel decryption
 
 | Field | Description |
@@ -150,6 +166,9 @@ Lower values = fresher data but more server load.
 |-------|---------|-------------|
 | `packetStore.maxMemoryMB` | `1024` | Maximum RAM for in-memory packet store |
 | `packetStore.estimatedPacketBytes` | `450` | Estimated bytes per packet (for memory budgeting) |
+| `packetStore.retentionHours` | `0` | Only load packets younger than N hours on startup and keep them in memory. **Set this on any instance with a large DB.** `0` = unlimited (loads full DB history — causes OOM on cold start when the DB has hundreds of thousands of paths). Recommended: same as `retention.packetDays × 24` (e.g. `168` for 7 days). |
+
+> **Warning:** Leaving `retentionHours` at `0` on a large database will cause the server to OOM-kill itself on every cold start. The full packet history is loaded into the subpath index at startup; a DB with ~280K paths produces ~13M index entries before the process is killed.
 
 ## Timestamps
 

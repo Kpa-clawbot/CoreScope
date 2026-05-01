@@ -57,6 +57,9 @@ func main() {
 	defer store.Close()
 	log.Printf("SQLite opened: %s", cfg.DBPath)
 
+	// Check auto_vacuum mode and optionally migrate (#919)
+	store.CheckAutoVacuum(cfg)
+
 	// Node retention: move stale nodes to inactive_nodes on startup
 	nodeDays := cfg.NodeDaysOrDefault()
 	store.MoveStaleNodes(nodeDays)
@@ -69,12 +72,15 @@ func main() {
 	metricsDays := cfg.MetricsRetentionDays()
 	store.PruneOldMetrics(metricsDays)
 	store.PruneDroppedPackets(metricsDays)
+	vacuumPages := cfg.IncrementalVacuumPages()
+	store.RunIncrementalVacuum(vacuumPages)
 
 	// Daily ticker for node retention
 	retentionTicker := time.NewTicker(1 * time.Hour)
 	go func() {
 		for range retentionTicker.C {
 			store.MoveStaleNodes(nodeDays)
+			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()
 
@@ -83,8 +89,10 @@ func main() {
 	go func() {
 		time.Sleep(90 * time.Second) // stagger after metrics prune
 		store.RemoveStaleObservers(observerDays)
+		store.RunIncrementalVacuum(vacuumPages)
 		for range observerRetentionTicker.C {
 			store.RemoveStaleObservers(observerDays)
+			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()
 
@@ -94,6 +102,7 @@ func main() {
 		for range metricsRetentionTicker.C {
 			store.PruneOldMetrics(metricsDays)
 			store.PruneDroppedPackets(metricsDays)
+			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()
 

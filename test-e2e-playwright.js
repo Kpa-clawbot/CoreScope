@@ -224,10 +224,7 @@ async function run() {
   // Test 5: Node detail loads (reuses nodes page from test 2)
   await test('Node detail loads', async () => {
     await page.waitForSelector('table tbody tr');
-    // Click first row
-    const firstRow = await page.$('table tbody tr');
-    assert(firstRow, 'No node rows found');
-    await firstRow.click();
+    await page.click('table tbody tr');
     // Wait for detail pane to appear
     await page.waitForSelector('.node-detail');
     const html = await page.content();
@@ -240,17 +237,14 @@ async function run() {
   await test('Node side panel Details link navigates', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('table tbody tr');
-    // Click first row to open side panel
-    const firstRow = await page.$('table tbody tr');
-    assert(firstRow, 'No node rows found');
-    await firstRow.click();
+    await page.click('table tbody tr');
     await page.waitForSelector('.node-detail');
     // Find the Details link in the side panel
-    const detailsLink = await page.$('#nodesRight a.btn-primary[href^="#/nodes/"]');
-    assert(detailsLink, 'Details link not found in side panel');
-    const href = await detailsLink.getAttribute('href');
+    await page.waitForSelector('#nodesRight a.btn-primary[href^="#/nodes/"]');
+    const href = await page.$eval('#nodesRight a.btn-primary[href^="#/nodes/"]', el => el.getAttribute('href'));
+    assert(href, 'Details link not found in side panel');
     // Click the Details link — this should navigate to the full detail page
-    await detailsLink.click();
+    await page.click('#nodesRight a.btn-primary[href^="#/nodes/"]');
     // Wait for navigation — the full detail page has sections like neighbors/packets
     await page.waitForFunction((expectedHash) => {
       return location.hash === expectedHash;
@@ -663,6 +657,8 @@ async function run() {
     await page.waitForSelector('#ngCanvas', { timeout: 8000 });
     const hasCanvas = await page.$('#ngCanvas');
     assert(hasCanvas, 'Neighbor Graph tab should have a canvas element');
+    // Stats are populated after the async API call — wait for at least one card before counting
+    await page.waitForSelector('#ngStats .stat-card', { timeout: 8000 });
     const hasStats = await page.$$eval('#ngStats .stat-card', els => els.length);
     assert(hasStats >= 3, `Neighbor Graph stats should have >=3 cards, got ${hasStats}`);
     // Verify filters exist
@@ -1355,6 +1351,38 @@ async function run() {
       getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()
     );
     assert(cssAccent === '#ee1122', `Page load should apply override accent #ee1122 but got "${cssAccent}"`);
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
+  await test('Customizer v2: typing in text field does not collapse focus (re-render guard)', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    await page.waitForFunction(() => window._customizerV2 && window._customizerV2.initDone, { timeout: 5000 });
+    const toggleSel = '#customizeToggle, button[title*="ustom" i], [class*="customize"]';
+    const btn = await page.$(toggleSel);
+    if (!btn) { console.log('    ⏭️  Customizer toggle not found'); return; }
+    await btn.click();
+    await page.waitForSelector('.cust-overlay', { timeout: 5000 });
+    const result = await page.evaluate(() => {
+      const input = document.querySelector('.cust-overlay input[type="text"][data-cv2-field]');
+      if (!input) return { skipped: true };
+      input.focus();
+      input.value = 'test';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const inputRef = input;
+      return new Promise(resolve => {
+        setTimeout(() => {
+          const panel = document.querySelector('.cust-overlay');
+          resolve({
+            inputConnected: inputRef.isConnected,
+            focusInPanel: panel ? panel.contains(document.activeElement) : false,
+          });
+        }, 500);
+      });
+    });
+    if (result.skipped) { console.log('    ⏭️  No text input with data-cv2-field found in panel'); return; }
+    assert(result.inputConnected, 'Input element should remain connected to DOM after debounce fires');
+    assert(result.focusInPanel, 'Focus should remain inside panel after debounce — re-render must not run while typing');
     await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
   });
 

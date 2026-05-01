@@ -87,7 +87,8 @@ let polygon = null;
 let closingLine = null;
 
 function latLonPair(latlng) {
-  return [parseFloat(latlng.lat.toFixed(6)), parseFloat(latlng.lng.toFixed(6))];
+  const w = latlng.wrap();
+  return [parseFloat(w.lat.toFixed(6)), parseFloat(w.lng.toFixed(6))];
 }
 
 function render() {
