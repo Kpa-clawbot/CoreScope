@@ -440,7 +440,6 @@ func applySchema(db *sql.DB) error {
 		}
 		log.Println("[migration] channel_hash casing normalization complete")
 	}
-	}
 
 	return nil
 }
