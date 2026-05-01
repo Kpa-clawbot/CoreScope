@@ -2211,6 +2211,49 @@ async function run() {
     await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
   });
 
+  // --- Live feed hash-color stripe ---
+  await test('Live feed items have border-left stripe when toggle ON', async () => {
+    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+    await page.goto(BASE_URL + '/#/live');
+    await page.waitForTimeout(3000); // allow feed to populate
+    const hasStripe = await page.evaluate(() => {
+      const items = document.querySelectorAll('.live-feed-item');
+      for (const item of items) {
+        if ((item.getAttribute('style') || item.style.cssText || '').includes('border-left')) return true;
+      }
+      return false;
+    });
+    // May not have live packets in fixture — skip if no feed items
+    const itemCount = await page.evaluate(() => document.querySelectorAll('.live-feed-item').length);
+    if (itemCount === 0) {
+      console.log('    (skipped — no live feed items in fixture)');
+      return;
+    }
+    assert(hasStripe, 'At least one .live-feed-item should have hash-color border-left stripe when toggle ON');
+  });
+
+  // --- Map polyline uses hash color ---
+  await test('Map trace polyline uses hash-derived color when toggle ON', async () => {
+    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+    await page.goto(BASE_URL + '/#/live');
+    await page.waitForTimeout(3000);
+    // Check if any polyline SVG path has an hsl stroke
+    const hasHslPolyline = await page.evaluate(() => {
+      const paths = document.querySelectorAll('path.leaflet-interactive');
+      for (const p of paths) {
+        const stroke = p.getAttribute('stroke') || '';
+        if (stroke.startsWith('hsl(')) return true;
+      }
+      return false;
+    });
+    const pathCount = await page.evaluate(() => document.querySelectorAll('path.leaflet-interactive').length);
+    if (pathCount === 0) {
+      console.log('    (skipped — no polyline paths on map in fixture)');
+      return;
+    }
+    assert(hasHslPolyline, 'At least one map polyline should have hsl() stroke color from hash');
+  });
+
   await browser.close();
 
   // Summary

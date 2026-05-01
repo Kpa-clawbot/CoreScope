@@ -2704,13 +2704,15 @@
     const mainOpacity = overrideOpacity ?? 0.8;
     const isDashed = overrideOpacity != null;
 
-    // Hash-derived color for fill + contrail (when toggle ON and not ghost/dashed line)
+    // Hash-derived color for fill + contrail + outline (when toggle ON and not ghost/dashed line)
     var hashFill = '#fff';
+    var hashOutline = color;
     var contrailColor = color;
     if (colorByHash && hash && !isDashed && window.HashColor) {
       var theme = (document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
       var hsl = HashColor.hashToHsl(hash, theme);
       hashFill = hsl;
+      hashOutline = HashColor.hashToOutline(hash, theme);
       contrailColor = hsl;
     }
 
@@ -2719,12 +2721,13 @@
     }).addTo(pathsLayer);
 
     const line = L.polyline([from], {
-      color: color, weight: isDashed ? 1.5 : 2, opacity: mainOpacity, lineCap: 'round',
+      color: (colorByHash && hash && !isDashed && window.HashColor) ? hashFill : color,
+      weight: isDashed ? 1.5 : 2, opacity: mainOpacity, lineCap: 'round',
       dashArray: isDashed ? '4 6' : null
     }).addTo(pathsLayer);
 
     const dot = L.circleMarker(from, {
-      radius: 3.5, fillColor: hashFill, fillOpacity: 1, color: color, weight: 1.5
+      radius: 3.5, fillColor: hashFill, fillOpacity: 1, color: hashOutline, weight: 1.5
     }).addTo(animLayer);
 
     let lastStep = performance.now();
@@ -2856,6 +2859,11 @@
     item.setAttribute('tabindex', '0');
     item.setAttribute('role', 'button');
     item.style.cursor = 'pointer';
+    // Hash-color stripe for feed items (mirrors packets table border-left)
+    if (colorByHash && pkt.hash && window.HashColor) {
+      var _feedTheme = document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      item.style.borderLeft = '4px solid ' + HashColor.hashToHsl(pkt.hash, _feedTheme);
+    }
     // Channel color highlighting for GRP_TXT packets (#271)
     var _cs = _getChannelStyle(pkt);
     if (_cs) item.style.cssText += _cs;
@@ -2939,6 +2947,11 @@
     item.setAttribute('role', 'button');
     if (hash) item.setAttribute('data-hash', hash);
     item.style.cursor = 'pointer';
+    // Hash-color stripe for feed items (mirrors packets table border-left)
+    if (colorByHash && hash && window.HashColor) {
+      var _feedTheme2 = document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      item.style.borderLeft = '4px solid ' + HashColor.hashToHsl(hash, _feedTheme2);
+    }
     // Channel color highlighting for GRP_TXT packets (#271)
     var _chanStyle = _getChannelStyle(pkt);
     if (_chanStyle) item.style.cssText += _chanStyle;

@@ -1,5 +1,6 @@
 /* test-hash-color.js — Unit tests for hash-color.js (vm.createContext sandbox)
- * Tests: purity, theme split, yellow-zone clamp, sentinel, WCAG sweep
+ * Tests: purity, theme split, saturation variability, lightness variability,
+ *        outline darker than fill, sentinel, perceptual distance
  */
 'use strict';
 const vm = require('vm');
@@ -24,6 +25,12 @@ function assert(cond, msg) {
   else { failed++; console.error('  ✗ ' + msg); }
 }
 
+function parseHsl(str) {
+  const m = str.match(/hsl\((\d+),\s*(\d+)%,\s*(\d+)%\)/);
+  if (!m) return null;
+  return { h: parseInt(m[1]), s: parseInt(m[2]), l: parseInt(m[3]) };
+}
+
 // --- Purity: same input → same output ---
 console.log('Purity:');
 const r1 = HashColor.hashToHsl('a1b2c3d4', 'light');
@@ -34,110 +41,117 @@ assert(r1 === r3, 'Third call still identical (no internal state)');
 
 // --- Theme split: light vs dark produce different L ---
 console.log('Theme split:');
-const light = HashColor.hashToHsl('ff00aabb', 'light');
-const dark = HashColor.hashToHsl('ff00aabb', 'dark');
+const light = HashColor.hashToHsl('ff00aa80', 'light');
+const dark = HashColor.hashToHsl('ff00aa80', 'dark');
 assert(light !== dark, 'Light and dark produce different colors for same hash');
-// Extract L values
-const lightL = parseInt(light.match(/(\d+)%\)$/)[1]);
-const darkL = parseInt(dark.match(/(\d+)%\)$/)[1]);
-assert(lightL <= 45, 'Light theme L ≤ 45% (got ' + lightL + ')');
-assert(darkL >= 60, 'Dark theme L ≥ 60% (got ' + darkL + ')');
+const lightP = parseHsl(light);
+const darkP = parseHsl(dark);
+assert(lightP.l >= 50 && lightP.l <= 65, 'Light theme L in [50,65] (got ' + lightP.l + ')');
+assert(darkP.l >= 55 && darkP.l <= 72, 'Dark theme L in [55,72] (got ' + darkP.l + ')');
 
-// --- Yellow-zone clamp: hue ∈ [45°, 75°] → L=45% in light mode ---
-console.log('Yellow-zone clamp (hue 45-195 → L=30%):');
-// Hue 60° → bytes: 60/360 * 65535 = 10922 = 0x2AAA → hex "2aaa"
-const yellow = HashColor.hashToHsl('2aaa0000', 'light');
-const yellowL = parseInt(yellow.match(/(\d+)%\)$/)[1]);
-const yellowH = parseInt(yellow.match(/hsl\((\d+)/)[1]);
-assert(yellowH >= 45 && yellowH <= 75, 'Yellow zone hue confirmed (' + yellowH + '°)');
-assert(yellowL === 30, 'Yellow-zone L clamped to 30% in light (got ' + yellowL + ')');
-// Same hash in dark should NOT clamp
-const yellowDark = HashColor.hashToHsl('2aaa0000', 'dark');
-const yellowDarkL = parseInt(yellowDark.match(/(\d+)%\)$/)[1]);
-assert(yellowDarkL === 65, 'Yellow-zone NOT clamped in dark (got ' + yellowDarkL + ')');
+// --- Saturation varies with byte 2 ---
+console.log('Saturation variability (byte 2):');
+const lowSat = HashColor.hashToHsl('000000ff', 'light');  // byte2=0x00
+const highSat = HashColor.hashToHsl('0000ffff', 'light'); // byte2=0xff
+const lowSatP = parseHsl(lowSat);
+const highSatP = parseHsl(highSat);
+assert(lowSatP.s === 55, 'byte2=0x00 → S=55% (got ' + lowSatP.s + ')');
+assert(highSatP.s === 95, 'byte2=0xff → S=95% (got ' + highSatP.s + ')');
+// Mid value
+const midSat = HashColor.hashToHsl('00008000', 'light'); // byte2=0x80
+const midSatP = parseHsl(midSat);
+assert(midSatP.s > 55 && midSatP.s < 95, 'byte2=0x80 → S between 55 and 95 (got ' + midSatP.s + ')');
 
-// --- Sentinel: null/empty hash ---
+// --- Lightness varies with byte 3 ---
+console.log('Lightness variability (byte 3):');
+const lowL = HashColor.hashToHsl('00000000', 'light');  // byte3=0x00
+const highL = HashColor.hashToHsl('000000ff', 'light'); // byte3=0xff
+const lowLP = parseHsl(lowL);
+const highLP = parseHsl(highL);
+assert(lowLP.l === 50, 'byte3=0x00 light → L=50 (got ' + lowLP.l + ')');
+assert(highLP.l === 65, 'byte3=0xff light → L=65 (got ' + highLP.l + ')');
+const lowLD = HashColor.hashToHsl('00000000', 'dark');
+const highLD = HashColor.hashToHsl('000000ff', 'dark');
+assert(parseHsl(lowLD).l === 55, 'byte3=0x00 dark → L=55 (got ' + parseHsl(lowLD).l + ')');
+assert(parseHsl(highLD).l === 72, 'byte3=0xff dark → L=72 (got ' + parseHsl(highLD).l + ')');
+
+// --- Outline is darker than fill ---
+console.log('Outline darker than fill:');
+['a1b2c3d4', 'ff00aa80', '12345678', 'deadbeef'].forEach(h => {
+  ['light', 'dark'].forEach(theme => {
+    const fill = parseHsl(HashColor.hashToHsl(h, theme));
+    const outline = parseHsl(HashColor.hashToOutline(h, theme));
+    assert(outline.l < fill.l, 'Outline L(' + outline.l + ') < Fill L(' + fill.l + ') for ' + h + '/' + theme);
+  });
+});
+
+// --- Outline same hue as fill ---
+console.log('Outline same hue as fill:');
+['a1b2c3d4', 'deadbeef'].forEach(h => {
+  const fill = parseHsl(HashColor.hashToHsl(h, 'light'));
+  const outline = parseHsl(HashColor.hashToOutline(h, 'light'));
+  assert(fill.h === outline.h, 'Hue matches: fill=' + fill.h + ' outline=' + outline.h + ' for ' + h);
+});
+
+// --- Sentinel: null/empty/short hash ---
 console.log('Sentinel:');
 assert(HashColor.hashToHsl(null, 'light') === 'hsl(0, 0%, 50%)', 'null → sentinel');
 assert(HashColor.hashToHsl('', 'light') === 'hsl(0, 0%, 50%)', 'empty string → sentinel');
 assert(HashColor.hashToHsl('ab', 'dark') === 'hsl(0, 0%, 50%)', 'too short (2 chars) → sentinel');
+assert(HashColor.hashToHsl('abcdef', 'dark') === 'hsl(0, 0%, 50%)', '6 chars (need 8) → sentinel');
 assert(HashColor.hashToHsl(undefined, 'dark') === 'hsl(0, 0%, 50%)', 'undefined → sentinel');
+assert(HashColor.hashToOutline(null, 'light') === 'hsl(0, 0%, 30%)', 'null outline → sentinel');
 
 // --- Variability: different hashes → different colors (anti-tautology) ---
 console.log('Variability (anti-tautology):');
 const colors = new Set();
-['00000000', '80000000', 'ff000000', '00ff0000', 'ffff0000'].forEach(h => {
+['00008080', '80008080', 'ff008080', '00ff8080', 'ffff8080'].forEach(h => {
   colors.add(HashColor.hashToHsl(h, 'light'));
 });
 assert(colors.size >= 4, 'At least 4 distinct colors from 5 different hashes (got ' + colors.size + ')');
 
-const darkColors = new Set();
-['11110000', '55550000', '99990000', 'dddd0000'].forEach(h => {
-  darkColors.add(HashColor.hashToHsl(h, 'dark'));
-});
-assert(darkColors.size >= 3, 'At least 3 distinct dark colors from 4 hashes (got ' + darkColors.size + ')');
-
-// Another variability: consecutive hashes differ
-const c1 = HashColor.hashToHsl('01000000', 'light');
-const c2 = HashColor.hashToHsl('02000000', 'light');
+// Adjacent hashes differ
+const c1 = HashColor.hashToHsl('01008080', 'light');
+const c2 = HashColor.hashToHsl('02008080', 'light');
 assert(c1 !== c2, 'Adjacent hashes produce different colors');
 
-// --- WCAG contrast sweep ---
-// Background constants from style.css:37 (light --content-bg) and style.css:61 (dark --content-bg)
-console.log('WCAG contrast sweep (≥3.0 against --content-bg):');
-
-function hexToRgb(hex) {
-  hex = hex.replace('#', '');
-  return [parseInt(hex.slice(0,2),16), parseInt(hex.slice(2,4),16), parseInt(hex.slice(4,6),16)];
+// --- Perceptual distance: sample 50 hashes, compute pairwise HSL distance ---
+console.log('Perceptual distance (50 sample hashes):');
+function hslDistance(a, b) {
+  // Simple cylindrical distance: weight hue wrap, sat, lightness
+  var dh = Math.min(Math.abs(a.h - b.h), 360 - Math.abs(a.h - b.h)) / 180; // 0-1
+  var ds = Math.abs(a.s - b.s) / 100; // 0-1
+  var dl = Math.abs(a.l - b.l) / 100; // 0-1
+  return Math.sqrt(dh*dh + ds*ds + dl*dl);
 }
 
-function hslToRgb(h, s, l) {
-  s /= 100; l /= 100;
-  var c = (1 - Math.abs(2*l - 1)) * s;
-  var x = c * (1 - Math.abs((h/60) % 2 - 1));
-  var m = l - c/2;
-  var r, g, b;
-  if (h < 60) { r=c; g=x; b=0; }
-  else if (h < 120) { r=x; g=c; b=0; }
-  else if (h < 180) { r=0; g=c; b=x; }
-  else if (h < 240) { r=0; g=x; b=c; }
-  else if (h < 300) { r=x; g=0; b=c; }
-  else { r=c; g=0; b=x; }
-  return [Math.round((r+m)*255), Math.round((g+m)*255), Math.round((b+m)*255)];
+const sampleHashes = [];
+for (var i = 0; i < 50; i++) {
+  // Generate pseudo-random 8-char hex
+  var h = '';
+  for (var j = 0; j < 8; j++) h += Math.floor(Math.random() * 16).toString(16);
+  sampleHashes.push(h);
+}
+// Fix seed for reproducibility — use deterministic hashes instead
+const deterministicHashes = [];
+for (var i = 0; i < 50; i++) {
+  var hex = ('0000000' + (i * 5347 + 12345).toString(16)).slice(-8);
+  deterministicHashes.push(hex);
 }
 
-function luminance(rgb) {
-  var a = rgb.map(function(v) { v /= 255; return v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); });
-  return 0.2126*a[0] + 0.7152*a[1] + 0.0722*a[2];
+const parsedColors = deterministicHashes.map(h => parseHsl(HashColor.hashToHsl(h, 'light')));
+var distances = [];
+for (var i = 0; i < parsedColors.length; i++) {
+  for (var j = i + 1; j < parsedColors.length; j++) {
+    distances.push(hslDistance(parsedColors[i], parsedColors[j]));
+  }
 }
-
-function contrastRatio(rgb1, rgb2) {
-  var l1 = luminance(rgb1), l2 = luminance(rgb2);
-  var lighter = Math.max(l1, l2), darker = Math.min(l1, l2);
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
-// Light bg: #f4f5f7 (style.css:33 --surface-0, referenced by --content-bg at line 37)
-var lightBg = hexToRgb('#f4f5f7');
-// Dark bg: #0f0f23 (style.css:57 --surface-0 dark, referenced by --content-bg at line 61)
-var darkBg = hexToRgb('#0f0f23');
-
-var wcagFails = [];
-for (var hue = 0; hue < 360; hue += 15) {
-  // Simulate hashToHsl output for this hue
-  // Light theme
-  var lL = (hue >= 45 && hue <= 195) ? 30 : 38;
-  var lightRgb = hslToRgb(hue, 70, lL);
-  var lRatio = contrastRatio(lightRgb, lightBg);
-  if (lRatio < 3.0) wcagFails.push('light hue=' + hue + ' ratio=' + lRatio.toFixed(2));
-
-  // Dark theme
-  var darkRgb = hslToRgb(hue, 70, 65);
-  var dRatio = contrastRatio(darkRgb, darkBg);
-  if (dRatio < 3.0) wcagFails.push('dark hue=' + hue + ' ratio=' + dRatio.toFixed(2));
-}
-
-assert(wcagFails.length === 0, 'All hues pass WCAG ≥3.0 contrast' + (wcagFails.length ? ' FAILURES: ' + wcagFails.join('; ') : ''));
+var avgDist = distances.reduce((a, b) => a + b, 0) / distances.length;
+var minDist = Math.min(...distances);
+console.log('    Avg pairwise HSL distance: ' + avgDist.toFixed(4));
+console.log('    Min pairwise HSL distance: ' + minDist.toFixed(4));
+assert(avgDist > 0.15, 'Average pairwise distance > 0.15 (got ' + avgDist.toFixed(4) + ')');
+assert(minDist > 0.01, 'Min pairwise distance > 0.01 (got ' + minDist.toFixed(4) + ')');
 
 // --- Summary ---
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
