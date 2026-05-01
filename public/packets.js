@@ -13,6 +13,9 @@
     return o.iata ? `${o.name} (${o.iata})` : o.name;
   }
   let selectedId = null;
+  function _isColorByHash() { return localStorage.getItem('meshcore-color-packets-by-hash') !== 'false'; }
+  function _currentTheme() { return document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
+  function _hashStripeStyle(hash) { return _isColorByHash() && hash && window.HashColor ? 'border-left:4px solid ' + HashColor.hashToHsl(hash, _currentTheme()) + ';' : ''; }
   let groupByHash = true;
   let filters = {};
   { const o = localStorage.getItem('meshcore-observer-filter'); if (o) filters.observer = o;
@@ -468,6 +471,9 @@
 
       // Check if new packets pass current filters
       const filtered = newPkts.filter(p => {
+        // When user pinned a hash, accept ONLY that exact packet — bypass all
+        // other filters (window/region/type/observer/node).
+        if (filters.hash) return p.hash === filters.hash;
         // Respect time window filter — drop packets outside the selected window
         const windowMin = savedTimeWindowMin;
         if (windowMin > 0) {
@@ -477,7 +483,6 @@
         }
         if (filters.type) { const types = filters.type.split(',').map(Number); if (!types.includes(p.payload_type)) return false; }
         if (filters.observer) { const obsSet = new Set(filters.observer.split(',')); if (!obsSet.has(p.observer_id) && !(p._children && p._children.some(c => obsSet.has(String(c.observer_id))))) return false; }
-        if (filters.hash && p.hash !== filters.hash) return false;
         if (RegionFilter.getRegionParam()) {
           const selectedRegions = RegionFilter.getRegionParam().split(',');
           const obs = observerMap.get(p.observer_id);
@@ -610,27 +615,52 @@
     } catch {}
   }
 
-  async function loadPackets() {
-    try {
-      const params = new URLSearchParams();
-      const selectedWindow = Number(document.getElementById('fTimeWindow')?.value);
-      const windowMin = Number.isFinite(selectedWindow) ? selectedWindow : savedTimeWindowMin;
-      if (windowMin > 0 && !filters.hash) {
-        const since = new Date(Date.now() - windowMin * 60000).toISOString();
-        params.set('since', since);
-      }
-      params.set('limit', String(PACKET_LIMIT));
-      const regionParam = RegionFilter.getRegionParam();
-      if (regionParam) params.set('region', regionParam);
-      if (filters.hash) params.set('hash', filters.hash);
-      if (filters.node) params.set('node', filters.node);
-      if (filters.observer) params.set('observer', filters.observer);
-      if (filters.channel) params.set('channel', filters.channel);
+  // Build URLSearchParams for /api/packets given UI state. Pure function for
+  // testability — returns the params object the next call to /api/packets
+  // would use. The hash filter is an exact identifier: when present it
+  // suppresses ALL other filters (region, time window, observer, node,
+  // channel). The user is asking for THAT packet regardless of saved
+  // selections.
+  function buildPacketsParams({ filters, regionParam, windowMin, groupByHash, limit }) {
+    const params = new URLSearchParams();
+    if (filters.hash) {
+      params.set('hash', filters.hash);
+      params.set('limit', String(limit));
       if (groupByHash) {
         params.set('groupByHash', 'true');
       } else {
         params.set('expand', 'observations');
       }
+      return params;
+    }
+    if (windowMin > 0) {
+      const since = new Date(Date.now() - windowMin * 60000).toISOString();
+      params.set('since', since);
+    }
+    params.set('limit', String(limit));
+    if (regionParam) params.set('region', regionParam);
+    if (filters.node) params.set('node', filters.node);
+    if (filters.observer) params.set('observer', filters.observer);
+    if (filters.channel) params.set('channel', filters.channel);
+    if (groupByHash) {
+      params.set('groupByHash', 'true');
+    } else {
+      params.set('expand', 'observations');
+    }
+    return params;
+  }
+
+  async function loadPackets() {
+    try {
+      const selectedWindow = Number(document.getElementById('fTimeWindow')?.value);
+      const windowMin = Number.isFinite(selectedWindow) ? selectedWindow : savedTimeWindowMin;
+      const params = buildPacketsParams({
+        filters,
+        regionParam: RegionFilter.getRegionParam(),
+        windowMin,
+        groupByHash,
+        limit: PACKET_LIMIT,
+      });
 
       const data = await api('/packets?' + params.toString());
       packets = data.packets || [];
@@ -1332,7 +1362,9 @@
     // Channel color highlighting (#271)
     const _grpDecoded = getParsedDecoded(p) || {};
     const _grpChanStyle = window.ChannelColors ? window.ChannelColors.getRowStyle(_grpDecoded.type || groupTypeName, _grpDecoded.channel) : '';
-    let html = `<tr class="${isSingle ? '' : 'group-header'} ${isExpanded ? 'expanded' : ''}" data-hash="${p.hash}" data-action="${isSingle ? 'select-hash' : 'toggle-select'}" data-value="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_grpChanStyle ? ' style="' + _grpChanStyle + '"' : ''}>
+    const _grpHashStripe = _hashStripeStyle(p.hash);
+    const _grpStyle = _grpHashStripe + _grpChanStyle;
+    let html = `<tr class="${isSingle ? '' : 'group-header'} ${isExpanded ? 'expanded' : ''}" data-hash="${p.hash}" data-action="${isSingle ? 'select-hash' : 'toggle-select'}" data-value="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_grpStyle ? ' style="' + _grpStyle + '"' : ''}>
           <td style="width:28px;text-align:center;cursor:pointer">${isSingle ? '' : (isExpanded ? '▼' : '▶')}</td>
           <td class="col-region">${groupRegion ? `<span class="badge-region">${groupRegion}</span>` : '—'}</td>
           <td class="col-time">${renderTimestampCell(p.latest)}</td>
@@ -1358,7 +1390,8 @@
         const childRegion = c.observer_id ? (observerMap.get(c.observer_id)?.iata || '') : '';
         const childPath = getParsedPath(c);
         const childPathStr = renderPath(childPath, c.observer_id);
-        html += `<tr class="group-child" data-id="${c.id}" data-hash="${c.hash || ''}" data-action="select-observation" data-value="${c.id}" data-parent-hash="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row">
+        const _childHashStripe = _hashStripeStyle(c.hash || p.hash);
+        html += `<tr class="group-child" data-id="${c.id}" data-hash="${c.hash || ''}" data-action="select-observation" data-value="${c.id}" data-parent-hash="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_childHashStripe ? ' style="' + _childHashStripe + '"' : ''}>
               <td></td><td class="col-region">${childRegion ? `<span class="badge-region">${childRegion}</span>` : '—'}</td>
               <td class="col-time">${renderTimestampCell(c.timestamp)}</td>
               <td class="mono col-hash">${truncate(c.hash || '', 8)}</td>
@@ -1388,7 +1421,9 @@
     const hashBytes = ((parseInt(p.raw_hex?.slice(2, 4), 16) || 0) >> 6) + 1;
     const pathStr = renderPath(pathHops, p.observer_id);
     const detail = getDetailPreview(decoded);
-    return `<tr data-id="${p.id}" data-hash="${p.hash || ''}" data-action="select-hash" data-value="${p.hash || p.id}" data-entry-idx="${entryIdx}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}"${_chanStyle ? ' style="' + _chanStyle + '"' : ''}>
+    const _flatHashStripe = _hashStripeStyle(p.hash);
+    const _flatStyle = _flatHashStripe + _chanStyle;
+    return `<tr data-id="${p.id}" data-hash="${p.hash || ''}" data-action="select-hash" data-value="${p.hash || p.id}" data-entry-idx="${entryIdx}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}"${_flatStyle ? ' style="' + _flatStyle + '"' : ''}>
         <td></td><td class="col-region">${region ? `<span class="badge-region">${region}</span>` : '—'}</td>
         <td class="col-time">${renderTimestampCell(p.timestamp)}</td>
         <td class="mono col-hash">${truncate(p.hash || String(p.id), 8)}</td>
@@ -1647,7 +1682,14 @@
 
     // Filter to claimed/favorited nodes — pure client-side filter (no server round-trip)
     let displayPackets = packets;
-    if (filters.myNodes) {
+
+    // When loading a specific packet by hash, bypass ALL client-side filters
+    // (myNodes, type, observer, packet-filter-expression). The user is asking
+    // for THAT exact packet — saved type/observer/expression filters must not
+    // hide it. Hash filter is the exact identifier; nothing else applies.
+    const hashOnly = !!filters.hash;
+
+    if (!hashOnly && filters.myNodes) {
       const myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
       const myKeys = myNodes.map(n => n.pubkey).filter(Boolean);
       const favs = getFavorites();
@@ -1663,11 +1705,11 @@
     }
 
     // Client-side type/observer filtering
-    if (filters.type) {
+    if (!hashOnly && filters.type) {
       const types = filters.type.split(',').map(Number);
       displayPackets = displayPackets.filter(p => types.includes(p.payload_type));
     }
-    if (filters.observer) {
+    if (!hashOnly && filters.observer) {
       const obsIds = new Set(filters.observer.split(','));
       displayPackets = displayPackets.filter(p => {
         if (obsIds.has(p.observer_id)) return true;
@@ -1678,7 +1720,7 @@
 
     // Packet Filter Language
     const pfCount = document.getElementById('packetFilterCount');
-    if (filters._packetFilter) {
+    if (!hashOnly && filters._packetFilter) {
       const beforeCount = displayPackets.length;
       displayPackets = displayPackets.filter(filters._packetFilter);
       if (pfCount) {
@@ -2522,12 +2564,22 @@
     } catch {}
   }
 
+  let _lastColorByHash = _isColorByHash();
+  function _onStorageChange() {
+    var current = _isColorByHash();
+    if (_lastColorByHash !== current) {
+      _lastColorByHash = current;
+      renderVisibleRows();
+    }
+  }
+
   let _themeRefreshHandler = null;
 
   registerPage('packets', {
     init: function(app, routeParam) {
       _themeRefreshHandler = () => { if (typeof renderTableRows === 'function') renderTableRows(); };
       window.addEventListener('theme-refresh', _themeRefreshHandler);
+      window.addEventListener('storage', _onStorageChange);
       var result = init(app, routeParam);
       // Install channel color picker on packets table (M2, #271)
       if (window.ChannelColorPicker) window.ChannelColorPicker.installPacketsTable();
@@ -2535,6 +2587,7 @@
     },
     destroy: function() {
       if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; }
+      window.removeEventListener('storage', _onStorageChange);
       return destroy();
     }
   });
@@ -2563,6 +2616,7 @@
       buildGroupRowHtml,
       buildFlatRowHtml,
       _calcVisibleRange,
+      buildPacketsParams,
     };
   }
 

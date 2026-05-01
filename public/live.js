@@ -23,6 +23,12 @@
   let nodeFilterText = localStorage.getItem('live-node-filter') || '';
   let matrixMode = localStorage.getItem('live-matrix-mode') === 'true';
   let matrixRain = localStorage.getItem('live-matrix-rain') === 'true';
+  let colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
+  /** Current theme string for hash-color functions. */
+  function _liveTheme() { return document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
+  let nodeFilterKeys = (localStorage.getItem('live-node-filter') || '').split(',').map(s => s.trim()).filter(Boolean);
+  let nodeFilterTotal = 0;
+  let nodeFilterShown = 0;
   let rainCanvas = null, rainCtx = null, rainDrops = [], rainRAF = null;
   const propagationBuffer = new Map(); // hash -> {timer, packets[]}
   let _onResize = null;
@@ -826,6 +832,8 @@
             <span id="ghostDesc" class="sr-only">Show interpolated ghost markers for unknown hops</span>
             <label><input type="checkbox" id="liveRealisticToggle" aria-describedby="realisticDesc"> Realistic</label>
             <span id="realisticDesc" class="sr-only">Buffer packets by hash and animate all paths simultaneously</span>
+            <label><input type="checkbox" id="liveColorHashToggle" aria-describedby="colorHashDesc"> Color by hash</label>
+            <span id="colorHashDesc" class="sr-only">Color flying-packet dots and contrails by packet hash for propagation tracing</span>
             <label><input type="checkbox" id="liveMatrixToggle" aria-describedby="matrixDesc"> Matrix</label>
             <span id="matrixDesc" class="sr-only">Animate packet hex bytes flowing along paths like the Matrix</span>
             <label><input type="checkbox" id="liveMatrixRainToggle" aria-describedby="rainDesc"> Rain</label>
@@ -834,6 +842,12 @@
             <span id="audioDesc" class="sr-only">Sonify packets — turn raw bytes into generative music</span>
             <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ Favorites</label>
             <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
+            <div class="live-node-filter-wrap">
+              <input type="text" id="liveNodeFilterInput" list="liveNodeFilterList" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input">
+              <datalist id="liveNodeFilterList"></datalist>
+              <button id="liveNodeFilterClear" class="vcr-btn" title="Clear node filter" style="display:none">×</button>
+            </div>
+            <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
             <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
             <input type="search" id="liveNodeFilter" class="live-node-filter" placeholder="Filter nodes…"
               value="${escapeHtml(nodeFilterText)}" autocomplete="off" spellcheck="false"
@@ -987,6 +1001,14 @@
       localStorage.setItem('live-realistic-propagation', realisticPropagation);
     });
 
+    const colorHashToggle = document.getElementById('liveColorHashToggle');
+    colorHashToggle.checked = colorByHash;
+    colorHashToggle.addEventListener('change', (e) => {
+      colorByHash = e.target.checked;
+      localStorage.setItem('meshcore-color-packets-by-hash', colorByHash);
+      window.dispatchEvent(new Event('storage'));
+    });
+
     const favoritesToggle = document.getElementById('liveFavoritesToggle');
     favoritesToggle.checked = showOnlyFavorites;
     favoritesToggle.addEventListener('change', (e) => {
@@ -995,12 +1017,34 @@
       applyFavoritesFilter();
     });
 
-    const nodeFilterInput = document.getElementById('liveNodeFilter');
-    nodeFilterInput.addEventListener('input', (e) => {
-      nodeFilterText = e.target.value.trim();
-      try { localStorage.setItem('live-node-filter', nodeFilterText); } catch (_) {}
-      applyNodeFilter();
-    });
+    // Node filter input
+    const nodeFilterInput = document.getElementById('liveNodeFilterInput');
+    const nodeFilterClear = document.getElementById('liveNodeFilterClear');
+    if (nodeFilterInput) {
+      // Restore from URL param or localStorage
+      const urlNode = getHashParams && getHashParams().get('node');
+      if (urlNode) setNodeFilter(urlNode.split(',').map(s => s.trim()).filter(Boolean));
+      else if (nodeFilterKeys.length) updateNodeFilterUI();
+
+      nodeFilterInput.addEventListener('change', (e) => {
+        const val = e.target.value.trim();
+        setNodeFilter(val ? val.split(',').map(s => s.trim()).filter(Boolean) : []);
+        const params = getHashParams ? getHashParams() : new URLSearchParams();
+        if (nodeFilterKeys.length) params.set('node', nodeFilterKeys.join(','));
+        else params.delete('node');
+        const base = location.hash.split('?')[0];
+        const qs = params.toString();
+        location.hash = base + (qs ? '?' + qs : '');
+      });
+    }
+    if (nodeFilterClear) {
+      nodeFilterClear.addEventListener('click', () => {
+        if (nodeFilterInput) nodeFilterInput.value = '';
+        setNodeFilter([]);
+        const base = location.hash.split('?')[0];
+        location.hash = base;
+      });
+    }
 
     // Geo filter overlay
     (async function () {
@@ -1667,6 +1711,47 @@
     return getFavoritePubkeys().some(f => f === pubkey);
   }
 
+  function packetInvolvesFilterNode(pkt, filterKeys) {
+    if (!filterKeys.length) return true;
+    const hops = (pkt.decoded?.path?.hops) || [];
+    for (const hop of hops) {
+      const h = (hop.id || hop.public_key || hop).toString().toLowerCase();
+      if (filterKeys.some(f => f.toLowerCase().startsWith(h) || h.startsWith(f.toLowerCase()))) return true;
+    }
+    return false;
+  }
+
+  function setNodeFilter(keys) {
+    nodeFilterKeys = keys;
+    nodeFilterTotal = 0;
+    nodeFilterShown = 0;
+    localStorage.setItem('live-node-filter', keys.join(','));
+    updateNodeFilterUI();
+  }
+
+  function updateNodeFilterUI() {
+    const countEl = document.getElementById('liveNodeFilterCount');
+    const clearBtn = document.getElementById('liveNodeFilterClear');
+    const input = document.getElementById('liveNodeFilterInput');
+    if (nodeFilterKeys.length > 0) {
+      if (clearBtn) clearBtn.style.display = '';
+      if (countEl) { countEl.textContent = `Showing ${nodeFilterShown} of ${nodeFilterTotal}`; countEl.classList.remove('hidden'); }
+      if (input && input.value !== nodeFilterKeys.join(', ')) input.value = nodeFilterKeys.join(', ');
+    } else {
+      if (clearBtn) clearBtn.style.display = 'none';
+      if (countEl) countEl.classList.add('hidden');
+    }
+    updateNodeFilterDatalist();
+  }
+
+  function updateNodeFilterDatalist() {
+    const dl = document.getElementById('liveNodeFilterList');
+    if (!dl) return;
+    dl.innerHTML = Object.values(nodeData).map(n =>
+      `<option value="${n.public_key}">${n.name || n.public_key.slice(0, 8)}</option>`
+    ).join('');
+  }
+
   function rebuildFeedList() {
     const feed = document.getElementById('liveFeed');
     if (!feed) return;
@@ -1936,6 +2021,9 @@
   window._liveGetFavoritePubkeys = getFavoritePubkeys;
   window._livePacketInvolvesFavorite = packetInvolvesFavorite;
   window._liveIsNodeFavorited = isNodeFavorited;
+  window._livePacketInvolvesFilterNode = packetInvolvesFilterNode;
+  window._liveGetNodeFilterKeys = function() { return nodeFilterKeys; };
+  window._liveSetNodeFilter = setNodeFilter;
   window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
   window._liveResolveHopPositions = resolveHopPositions;
   window._liveVcrSpeedCycle = vcrSpeedCycle;
@@ -2027,6 +2115,14 @@
     if (showOnlyFavorites && !packets.some(function(p) { return packetInvolvesFavorite(p); })) return;
     // --- Node name filter ---
     if (nodeFilterText && !packets.some(function(p) { return packetInvolvesFilteredNode(p); })) return;
+
+    // --- Node filter ---
+    if (nodeFilterKeys.length) {
+      nodeFilterTotal++;
+      if (!packets.some(function(p) { return packetInvolvesFilterNode(p, nodeFilterKeys); })) return;
+      nodeFilterShown++;
+      updateNodeFilterUI();
+    }
 
     // --- Ensure ADVERT nodes appear on map ---
     for (var pi = 0; pi < packets.length; pi++) {
@@ -2144,7 +2240,7 @@
         var completedPositions = allPaths[ai].hopPositions.slice(0, hopsCompleted + 1);
         var remainingPositions = allPaths[ai].hopPositions.slice(hopsCompleted);
         if (completedPositions.length >= 2) {
-          animatePath(completedPositions, typeName, color, allPaths[ai].raw, onHop);
+          animatePath(completedPositions, typeName, color, allPaths[ai].raw, onHop, first.hash);
         } else if (completedPositions.length === 1) {
           pulseNode(completedPositions[0].key, completedPositions[0].pos, typeName);
         }
@@ -2152,7 +2248,7 @@
           drawDashedPath(remainingPositions, color);
         }
       } else {
-        animatePath(allPaths[ai].hopPositions, typeName, color, allPaths[ai].raw, onHop);
+        animatePath(allPaths[ai].hopPositions, typeName, color, allPaths[ai].raw, onHop, first.hash);
       }
     }
   }
@@ -2261,7 +2357,7 @@
     return raw.filter(h => h.pos != null);
   }
 
-  function animatePath(hopPositions, typeName, color, rawHex, onHop) {
+  function animatePath(hopPositions, typeName, color, rawHex, onHop, hash) {
     if (!animLayer || !pathsLayer) return;
     if (activeAnims >= MAX_CONCURRENT_ANIMS) return;
     activeAnims++;
@@ -2313,7 +2409,7 @@
         const nextGhost = hopPositions[hopIndex + 1].ghost;
         const lineColor = (isGhost || nextGhost) ? '#94a3b8' : color;
         const lineOpacity = (isGhost || nextGhost) ? 0.3 : undefined;
-        drawAnimatedLine(hp.pos, nextPos, lineColor, () => { hopIndex++; nextHop(); }, lineOpacity, rawHex);
+        drawAnimatedLine(hp.pos, nextPos, lineColor, () => { hopIndex++; nextHop(); }, lineOpacity, rawHex, hash);
       } else {
         if (!isGhost) pulseNode(hp.key, hp.pos, typeName);
         hopIndex++; nextHop();
@@ -2668,7 +2764,7 @@
     requestAnimationFrame(tick);
   }
 
-  function drawAnimatedLine(from, to, color, onComplete, overrideOpacity, rawHex) {
+  function drawAnimatedLine(from, to, color, onComplete, overrideOpacity, rawHex, hash) {
     if (!animLayer || !pathsLayer) { if (onComplete) onComplete(); return; }
     if (matrixMode) return drawMatrixLine(from, to, color, onComplete, rawHex);
     const steps = 20;
@@ -2679,17 +2775,30 @@
     const mainOpacity = overrideOpacity ?? 0.8;
     const isDashed = overrideOpacity != null;
 
+    // Hash-derived color for fill + contrail + outline (when toggle ON and not ghost/dashed line)
+    var hashFill = '#fff';
+    var hashOutline = color;
+    var contrailColor = color;
+    if (colorByHash && hash && !isDashed && window.HashColor) {
+      var hsl = HashColor.hashToHsl(hash, _liveTheme());
+      hashFill = hsl;
+      hashOutline = HashColor.hashToOutline(hash, _liveTheme());
+      contrailColor = hsl;
+    }
+
     const contrail = L.polyline([from], {
-      color: color, weight: 6, opacity: mainOpacity * 0.2, lineCap: 'round'
+      color: contrailColor, weight: 6, opacity: mainOpacity * 0.2, lineCap: 'round'
     }).addTo(pathsLayer);
 
     const line = L.polyline([from], {
-      color: color, weight: isDashed ? 1.5 : 2, opacity: mainOpacity, lineCap: 'round',
-      dashArray: isDashed ? '4 6' : null
+      color: (colorByHash && hash && !isDashed && window.HashColor) ? hashFill : color,
+      weight: isDashed ? 1.5 : 2, opacity: mainOpacity, lineCap: 'round',
+      dashArray: isDashed ? '4 6' : null,
+      className: 'live-packet-trace'
     }).addTo(pathsLayer);
 
     const dot = L.circleMarker(from, {
-      radius: 3.5, fillColor: '#fff', fillOpacity: 1, color: color, weight: 1.5
+      radius: 3.5, fillColor: hashFill, fillOpacity: 1, color: hashOutline, weight: 1.5
     }).addTo(animLayer);
 
     let lastStep = performance.now();
@@ -2821,6 +2930,10 @@
     item.setAttribute('tabindex', '0');
     item.setAttribute('role', 'button');
     item.style.cursor = 'pointer';
+    // Hash-color stripe for feed items (mirrors packets table border-left)
+    if (colorByHash && pkt.hash && window.HashColor) {
+      item.style.borderLeft = '4px solid ' + HashColor.hashToHsl(pkt.hash, _liveTheme());
+    }
     // Channel color highlighting for GRP_TXT packets (#271)
     var _cs = _getChannelStyle(pkt);
     if (_cs) item.style.cssText += _cs;
@@ -2905,6 +3018,10 @@
     item.setAttribute('role', 'button');
     if (hash) item.setAttribute('data-hash', hash);
     item.style.cursor = 'pointer';
+    // Hash-color stripe for feed items (mirrors packets table border-left)
+    if (colorByHash && hash && window.HashColor) {
+      item.style.borderLeft = '4px solid ' + HashColor.hashToHsl(hash, _liveTheme());
+    }
     // Channel color highlighting for GRP_TXT packets (#271)
     var _chanStyle = _getChannelStyle(pkt);
     if (_chanStyle) item.style.cssText += _chanStyle;

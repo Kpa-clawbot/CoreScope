@@ -127,6 +127,92 @@ func TestBoundedLoad_AscendingOrder(t *testing.T) {
 	}
 }
 
+// loadStoreWithRetention creates a PacketStore with retentionHours set.
+func loadStoreWithRetention(t *testing.T, dbPath string, retentionHours float64) *PacketStore {
+	t.Helper()
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &PacketStoreConfig{RetentionHours: retentionHours}
+	store := NewPacketStore(db, cfg)
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+// createTestDBWithAgedPackets inserts numRecent packets with timestamps within
+// the last hour and numOld packets with timestamps 48 hours ago.
+func createTestDBWithAgedPackets(t *testing.T, numRecent, numOld int) string {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	conn, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	execOrFail := func(s string) {
+		if _, err := conn.Exec(s); err != nil {
+			t.Fatalf("setup: %v\nSQL: %s", err, s)
+		}
+	}
+	execOrFail(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, raw_hex TEXT, hash TEXT, first_seen TEXT, route_type INTEGER, payload_type INTEGER, payload_version INTEGER, decoded_json TEXT)`)
+	execOrFail(`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_id TEXT, observer_name TEXT, direction TEXT, snr REAL, rssi REAL, score INTEGER, path_json TEXT, timestamp TEXT, raw_hex TEXT)`)
+	execOrFail(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT)`)
+	execOrFail(`CREATE TABLE nodes (pubkey TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, frequency REAL)`)
+	execOrFail(`CREATE TABLE schema_version (version INTEGER)`)
+	execOrFail(`INSERT INTO schema_version (version) VALUES (1)`)
+	execOrFail(`CREATE INDEX idx_tx_first_seen ON transmissions(first_seen)`)
+
+	now := time.Now().UTC()
+	id := 1
+	// Insert old packets (48 hours ago)
+	for i := 0; i < numOld; i++ {
+		ts := now.Add(-48 * time.Hour).Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		conn.Exec("INSERT INTO transmissions VALUES (?,?,?,?,0,4,1,?)", id, "aa", fmt.Sprintf("old%d", i), ts, `{}`)
+		conn.Exec("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,?,?)", id, id, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `[]`, ts, "")
+		id++
+	}
+	// Insert recent packets (within last hour)
+	for i := 0; i < numRecent; i++ {
+		ts := now.Add(-30 * time.Minute).Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		conn.Exec("INSERT INTO transmissions VALUES (?,?,?,?,0,4,1,?)", id, "bb", fmt.Sprintf("new%d", i), ts, `{}`)
+		conn.Exec("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,?,?)", id, id, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `[]`, ts, "")
+		id++
+	}
+	return dbPath
+}
+
+func TestRetentionLoad_OnlyLoadsRecentPackets(t *testing.T) {
+	dbPath := createTestDBWithAgedPackets(t, 50, 100)
+	defer os.RemoveAll(filepath.Dir(dbPath))
+
+	// retention = 2 hours — should load only the 50 recent packets, not the 100 old ones
+	store := loadStoreWithRetention(t, dbPath, 2)
+	defer store.db.conn.Close()
+
+	if len(store.packets) != 50 {
+		t.Errorf("expected 50 recent packets, got %d (old packets should be excluded by retentionHours)", len(store.packets))
+	}
+}
+
+func TestRetentionLoad_ZeroRetentionLoadsAll(t *testing.T) {
+	dbPath := createTestDBWithAgedPackets(t, 50, 100)
+	defer os.RemoveAll(filepath.Dir(dbPath))
+
+	// retention = 0 (unlimited) — should load all 150 packets
+	store := loadStoreWithRetention(t, dbPath, 0)
+	defer store.db.conn.Close()
+
+	if len(store.packets) != 150 {
+		t.Errorf("expected all 150 packets with retentionHours=0, got %d", len(store.packets))
+	}
+}
+
 func TestEstimateStoreTxBytesTypical(t *testing.T) {
 	est := estimateStoreTxBytesTypical(10)
 	if est < 1000 {
