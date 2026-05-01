@@ -224,10 +224,22 @@ async function run() {
   // Test 5: Node detail loads (reuses nodes page from test 2)
   await test('Node detail loads', async () => {
     await page.waitForSelector('table tbody tr');
-    // Click first row
-    const firstRow = await page.$('table tbody tr');
-    assert(firstRow, 'No node rows found');
-    await firstRow.click();
+    // Use a stable selector + retry-on-detach pattern. Querying a row handle
+    // and clicking it later races with WebSocket-driven table re-renders that
+    // detach the original element. Click via a fresh selector each time and
+    // retry on the "not attached" error.
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await page.click('table tbody tr:first-child', { timeout: 2000 });
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        await page.waitForTimeout(200);
+      }
+    }
+    if (lastErr) throw lastErr;
     // Wait for detail pane to appear
     await page.waitForSelector('.node-detail');
     const html = await page.content();
