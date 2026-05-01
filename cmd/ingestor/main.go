@@ -120,23 +120,7 @@ func main() {
 			tag = source.Broker
 		}
 
-		opts := mqtt.NewClientOptions().
-			AddBroker(source.Broker).
-			SetAutoReconnect(true).
-			SetConnectRetry(true).
-			SetOrderMatters(true)
-
-		if source.Username != "" {
-			opts.SetUsername(source.Username)
-		}
-		if source.Password != "" {
-			opts.SetPassword(source.Password)
-		}
-		if source.RejectUnauthorized != nil && !*source.RejectUnauthorized {
-			opts.SetTLSConfig(&tls.Config{InsecureSkipVerify: true})
-		} else if strings.HasPrefix(source.Broker, "ssl://") {
-			opts.SetTLSConfig(&tls.Config{})
-		}
+		opts := buildMQTTOpts(source)
 
 		opts.SetOnConnectHandler(func(c mqtt.Client) {
 			log.Printf("MQTT [%s] connected to %s", tag, source.Broker)
@@ -156,7 +140,11 @@ func main() {
 		})
 
 		opts.SetConnectionLostHandler(func(c mqtt.Client, err error) {
-			log.Printf("MQTT [%s] disconnected: %v", tag, err)
+			log.Printf("MQTT [%s] disconnected from %s: %v", tag, source.Broker, err)
+		})
+
+		opts.SetReconnectingHandler(func(c mqtt.Client, options *mqtt.ClientOptions) {
+			log.Printf("MQTT [%s] reconnecting to %s", tag, source.Broker)
 		})
 
 		// Capture source for closure
@@ -195,6 +183,32 @@ func main() {
 		c.Disconnect(5000) // 5s to allow in-flight messages to drain
 	}
 	log.Println("Done.")
+}
+
+// buildMQTTOpts creates MQTT client options for a source with bounded reconnect
+// backoff, connect timeout, and TLS/auth configuration.
+func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
+	opts := mqtt.NewClientOptions().
+		AddBroker(source.Broker).
+		SetAutoReconnect(true).
+		SetConnectRetry(true).
+		SetOrderMatters(true).
+		SetMaxReconnectInterval(30 * time.Second).
+		SetConnectTimeout(10 * time.Second).
+		SetWriteTimeout(10 * time.Second)
+
+	if source.Username != "" {
+		opts.SetUsername(source.Username)
+	}
+	if source.Password != "" {
+		opts.SetPassword(source.Password)
+	}
+	if source.RejectUnauthorized != nil && !*source.RejectUnauthorized {
+		opts.SetTLSConfig(&tls.Config{InsecureSkipVerify: true})
+	} else if strings.HasPrefix(source.Broker, "ssl://") {
+		opts.SetTLSConfig(&tls.Config{})
+	}
+	return opts
 }
 
 func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, channelKeys map[string]string, cfg *Config) {
