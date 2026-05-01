@@ -2614,10 +2614,11 @@
     const mainOpacity = overrideOpacity ?? 0.8;
     const isDashed = overrideOpacity != null;
 
-    // Hash-derived color for fill + contrail (when toggle ON and not ghost line)
+    // Hash-derived color for fill + contrail (when toggle ON and not ghost/dashed line)
+    var isGhostLine = overrideOpacity != null;
     var hashFill = '#fff';
     var contrailColor = color;
-    if (colorByHash && hash && window.HashColor) {
+    if (colorByHash && hash && !isGhostLine && window.HashColor) {
       var theme = (document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
       var hsl = HashColor.hashToHsl(hash, theme);
       hashFill = hsl;
