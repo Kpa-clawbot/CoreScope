@@ -1587,6 +1587,12 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .obs-table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .obs-table-scroll .obs-table { min-width: 640px; }
 
+/* Observer table column sorting */
+.obs-table th.sortable-col { cursor: pointer; user-select: none; white-space: nowrap; }
+.obs-table th.sortable-col:hover { color: var(--text); background: var(--hover-bg, rgba(255,255,255,0.05)); }
+.obs-table th.sortable-col .sort-arrow { font-size: 10px; opacity: 0.35; margin-left: 4px; }
+.obs-table th.sortable-col.sort-active .sort-arrow { opacity: 1; color: var(--accent, #3b82f6); }
+
 /* #206 — Analytics/Compare tables scroll wrappers on mobile */
 .analytics-table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .analytics-table-scroll .analytics-table,
