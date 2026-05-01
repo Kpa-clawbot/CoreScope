@@ -2145,7 +2145,11 @@ async function run() {
 
   await test('Color-by-hash toggle present on Live page, defaults ON', async () => {
     await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#liveColorHashToggle', { timeout: 10000 });
+    // Wait until live.js has initialized the toggle (checked = true by default)
+    await page.waitForFunction(() => {
+      const el = document.getElementById('liveColorHashToggle');
+      return el && el.checked === true;
+    }, { timeout: 10000 });
     const checked = await page.$eval('#liveColorHashToggle', el => el.checked);
     assert(checked, 'Color by hash toggle should default to ON');
   });
@@ -2170,18 +2174,17 @@ async function run() {
     await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
     await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
-    await page.waitForTimeout(500);
-    const hasStripe = await page.evaluate(() => {
+    // Wait for stripe to be applied (inline style set during render)
+    const hasStripe = await page.waitForFunction(() => {
       const row = document.querySelector('table tbody tr[data-hash]');
-      return row && row.style.borderLeft && row.style.borderLeft.includes('solid');
-    });
+      return row && (row.getAttribute('style') || '').includes('border-left');
+    }, { timeout: 5000 }).then(() => true).catch(() => false);
     assert(hasStripe, 'At least one <tr> should have border-left stripe when toggle ON');
   });
 
   await test('Packets table rows have NO border-left stripe when toggle OFF', async () => {
     await page.evaluate(() => {
       localStorage.setItem('meshcore-color-packets-by-hash', 'false');
-      window.dispatchEvent(new Event('storage'));
     });
     await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
@@ -2189,7 +2192,7 @@ async function run() {
     const noStripe = await page.evaluate(() => {
       const rows = document.querySelectorAll('table tbody tr[data-hash]');
       for (const r of rows) {
-        if (r.style.borderLeft && r.style.borderLeft.includes('solid')) return false;
+        if ((r.getAttribute('style') || '').includes('border-left')) return false;
       }
       return true;
     });

@@ -83,7 +83,7 @@ const c2 = HashColor.hashToHsl('02000000', 'light');
 assert(c1 !== c2, 'Adjacent hashes produce different colors');
 
 // --- WCAG contrast sweep ---
-// Background constants from style.css:32 (light --content-bg: #f4f5f7) and style.css:55 (dark --content-bg: #0f0f23)
+// Background constants from style.css:37 (light --content-bg) and style.css:61 (dark --content-bg)
 console.log('WCAG contrast sweep (≥3.0 against --content-bg):');
 
 function hexToRgb(hex) {
@@ -117,9 +117,9 @@ function contrastRatio(rgb1, rgb2) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-// Light bg: #f4f5f7 (style.css:32 --surface-0, which --content-bg references)
+// Light bg: #f4f5f7 (style.css:33 --surface-0, referenced by --content-bg at line 37)
 var lightBg = hexToRgb('#f4f5f7');
-// Dark bg: #0f0f23 (style.css:55 --surface-0 dark, which --content-bg references)
+// Dark bg: #0f0f23 (style.css:57 --surface-0 dark, referenced by --content-bg at line 61)
 var darkBg = hexToRgb('#0f0f23');
 
 var wcagFails = [];
