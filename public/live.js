@@ -26,9 +26,6 @@
   let colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
   /** Current theme string for hash-color functions. */
   function _liveTheme() { return document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
-  let nodeFilterKeys = (localStorage.getItem('live-node-filter') || '').split(',').map(s => s.trim()).filter(Boolean);
-  let nodeFilterTotal = 0;
-  let nodeFilterShown = 0;
   let rainCanvas = null, rainCtx = null, rainDrops = [], rainRAF = null;
   const propagationBuffer = new Map(); // hash -> {timer, packets[]}
   let _onResize = null;
@@ -842,12 +839,6 @@
             <span id="audioDesc" class="sr-only">Sonify packets — turn raw bytes into generative music</span>
             <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ Favorites</label>
             <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
-            <div class="live-node-filter-wrap">
-              <input type="text" id="liveNodeFilterInput" list="liveNodeFilterList" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input">
-              <datalist id="liveNodeFilterList"></datalist>
-              <button id="liveNodeFilterClear" class="vcr-btn" title="Clear node filter" style="display:none">×</button>
-            </div>
-            <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
             <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
             <input type="search" id="liveNodeFilter" class="live-node-filter" placeholder="Filter nodes…"
               value="${escapeHtml(nodeFilterText)}" autocomplete="off" spellcheck="false"
@@ -1017,34 +1008,12 @@
       applyFavoritesFilter();
     });
 
-    // Node filter input
-    const nodeFilterInput = document.getElementById('liveNodeFilterInput');
-    const nodeFilterClear = document.getElementById('liveNodeFilterClear');
-    if (nodeFilterInput) {
-      // Restore from URL param or localStorage
-      const urlNode = getHashParams && getHashParams().get('node');
-      if (urlNode) setNodeFilter(urlNode.split(',').map(s => s.trim()).filter(Boolean));
-      else if (nodeFilterKeys.length) updateNodeFilterUI();
-
-      nodeFilterInput.addEventListener('change', (e) => {
-        const val = e.target.value.trim();
-        setNodeFilter(val ? val.split(',').map(s => s.trim()).filter(Boolean) : []);
-        const params = getHashParams ? getHashParams() : new URLSearchParams();
-        if (nodeFilterKeys.length) params.set('node', nodeFilterKeys.join(','));
-        else params.delete('node');
-        const base = location.hash.split('?')[0];
-        const qs = params.toString();
-        location.hash = base + (qs ? '?' + qs : '');
-      });
-    }
-    if (nodeFilterClear) {
-      nodeFilterClear.addEventListener('click', () => {
-        if (nodeFilterInput) nodeFilterInput.value = '';
-        setNodeFilter([]);
-        const base = location.hash.split('?')[0];
-        location.hash = base;
-      });
-    }
+    const nodeFilterInput = document.getElementById('liveNodeFilter');
+    nodeFilterInput.addEventListener('input', (e) => {
+      nodeFilterText = e.target.value.trim();
+      try { localStorage.setItem('live-node-filter', nodeFilterText); } catch (_) {}
+      applyNodeFilter();
+    });
 
     // Geo filter overlay
     (async function () {
@@ -1711,47 +1680,6 @@
     return getFavoritePubkeys().some(f => f === pubkey);
   }
 
-  function packetInvolvesFilterNode(pkt, filterKeys) {
-    if (!filterKeys.length) return true;
-    const hops = (pkt.decoded?.path?.hops) || [];
-    for (const hop of hops) {
-      const h = (hop.id || hop.public_key || hop).toString().toLowerCase();
-      if (filterKeys.some(f => f.toLowerCase().startsWith(h) || h.startsWith(f.toLowerCase()))) return true;
-    }
-    return false;
-  }
-
-  function setNodeFilter(keys) {
-    nodeFilterKeys = keys;
-    nodeFilterTotal = 0;
-    nodeFilterShown = 0;
-    localStorage.setItem('live-node-filter', keys.join(','));
-    updateNodeFilterUI();
-  }
-
-  function updateNodeFilterUI() {
-    const countEl = document.getElementById('liveNodeFilterCount');
-    const clearBtn = document.getElementById('liveNodeFilterClear');
-    const input = document.getElementById('liveNodeFilterInput');
-    if (nodeFilterKeys.length > 0) {
-      if (clearBtn) clearBtn.style.display = '';
-      if (countEl) { countEl.textContent = `Showing ${nodeFilterShown} of ${nodeFilterTotal}`; countEl.classList.remove('hidden'); }
-      if (input && input.value !== nodeFilterKeys.join(', ')) input.value = nodeFilterKeys.join(', ');
-    } else {
-      if (clearBtn) clearBtn.style.display = 'none';
-      if (countEl) countEl.classList.add('hidden');
-    }
-    updateNodeFilterDatalist();
-  }
-
-  function updateNodeFilterDatalist() {
-    const dl = document.getElementById('liveNodeFilterList');
-    if (!dl) return;
-    dl.innerHTML = Object.values(nodeData).map(n =>
-      `<option value="${n.public_key}">${n.name || n.public_key.slice(0, 8)}</option>`
-    ).join('');
-  }
-
   function rebuildFeedList() {
     const feed = document.getElementById('liveFeed');
     if (!feed) return;
@@ -1843,10 +1771,12 @@
   function nodeMatchesFilter(n) {
     if (!nodeFilterText) return true;
     const f = nodeFilterText.toLowerCase();
-    return (n.name || '').toLowerCase().includes(f);
+    return (n.name || '').toLowerCase().includes(f) ||
+           (n.public_key || '').toLowerCase().startsWith(f);
   }
 
   // Check whether any node involved in a packet (sender, hops) matches the active node filter.
+  // Matches by node name (substring) or public key prefix.
   function packetInvolvesFilteredNode(pkt) {
     if (!nodeFilterText) return true;
     const f = nodeFilterText.toLowerCase();
@@ -1856,7 +1786,9 @@
     const resolved = window.getResolvedPath ? window.getResolvedPath(pkt) : null;
     if (resolved && resolved.length) {
       for (const key of resolved) {
-        if (key && nodeData[key] && (nodeData[key].name || '').toLowerCase().includes(f)) return true;
+        if (!key) continue;
+        if (key.toLowerCase().startsWith(f)) return true;
+        if (nodeData[key] && (nodeData[key].name || '').toLowerCase().includes(f)) return true;
       }
       return false;
     }
@@ -1866,9 +1798,10 @@
     const hops = getParsedPath(pkt).length ? getParsedPath(pkt) : ((pkt.decoded || {}).path?.hops || []);
     for (const hop of hops) {
       const h = (hop.id || hop.public_key || hop).toString().toLowerCase();
+      if (h.startsWith(f) || f.startsWith(h)) return true;
       for (const [k, nd] of Object.entries(nodeData)) {
         if (k.toLowerCase().startsWith(h) || h.startsWith(k.toLowerCase())) {
-          if ((nd.name || '').toLowerCase().includes(f)) return true;
+          if ((nd.name || '').toLowerCase().includes(f) || k.toLowerCase().startsWith(f)) return true;
         }
       }
     }
@@ -2021,9 +1954,6 @@
   window._liveGetFavoritePubkeys = getFavoritePubkeys;
   window._livePacketInvolvesFavorite = packetInvolvesFavorite;
   window._liveIsNodeFavorited = isNodeFavorited;
-  window._livePacketInvolvesFilterNode = packetInvolvesFilterNode;
-  window._liveGetNodeFilterKeys = function() { return nodeFilterKeys; };
-  window._liveSetNodeFilter = setNodeFilter;
   window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
   window._liveResolveHopPositions = resolveHopPositions;
   window._liveVcrSpeedCycle = vcrSpeedCycle;
@@ -2115,14 +2045,6 @@
     if (showOnlyFavorites && !packets.some(function(p) { return packetInvolvesFavorite(p); })) return;
     // --- Node name filter ---
     if (nodeFilterText && !packets.some(function(p) { return packetInvolvesFilteredNode(p); })) return;
-
-    // --- Node filter ---
-    if (nodeFilterKeys.length) {
-      nodeFilterTotal++;
-      if (!packets.some(function(p) { return packetInvolvesFilterNode(p, nodeFilterKeys); })) return;
-      nodeFilterShown++;
-      updateNodeFilterUI();
-    }
 
     // --- Ensure ADVERT nodes appear on map ---
     for (var pi = 0; pi < packets.length; pi++) {
