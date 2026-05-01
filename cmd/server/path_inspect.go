@@ -300,72 +300,56 @@ func (s *PacketStore) beamSearch(prefixes []string, pm *prefixMap, graph *Neighb
 }
 
 func (s *PacketStore) scoreHop(entry beamEntry, cand nodeInfo, candidateCount int, graph *NeighborGraph, now time.Time, hopIdx int) float64 {
-	// Component 1: Edge weight (35%).
 	var edgeScore float64
+	var geoScore float64 = 1.0
+	var recencyScore float64 = 1.0
+
 	if hopIdx == 0 || len(entry.pubkeys) == 0 {
-		edgeScore = 1.0 // First hop, no prior node.
+		// First hop: no prior node to compare against.
+		edgeScore = 1.0
 	} else {
 		lastPK := entry.pubkeys[len(entry.pubkeys)-1]
+
+		// Single scan over neighbors for both edge weight and recency.
 		edges := graph.Neighbors(lastPK)
+		var foundEdge *NeighborEdge
 		for _, e := range edges {
 			peer := e.NodeA
 			if strings.EqualFold(peer, lastPK) {
 				peer = e.NodeB
 			}
 			if strings.EqualFold(peer, cand.PublicKey) {
-				edgeScore = e.Score(now)
+				foundEdge = e
 				break
 			}
 		}
-		// edgeScore stays 0 if no edge found.
-	}
 
-	// Component 2: Geographic plausibility (20%).
-	var geoScore float64 = 1.0 // neutral if no GPS
-	if hopIdx > 0 && len(entry.pubkeys) > 0 {
-		// Find prev node GPS.
-		prevPK := entry.pubkeys[len(entry.pubkeys)-1]
-		prevNode := s.findNodeByPK(prevPK)
+		if foundEdge != nil {
+			edgeScore = foundEdge.Score(now)
+			hoursSince := now.Sub(foundEdge.LastSeen).Hours()
+			if hoursSince <= 24 {
+				recencyScore = 1.0
+			} else {
+				recencyScore = math.Max(0.1, 24.0/hoursSince)
+			}
+		} else {
+			edgeScore = 0
+			recencyScore = 0
+		}
+
+		// Geographic plausibility.
+		prevNode := s.findNodeByPK(lastPK)
 		if prevNode != nil && prevNode.HasGPS && cand.HasGPS {
 			dist := haversineKm(prevNode.Lat, prevNode.Lon, cand.Lat, cand.Lon)
-			if dist <= geoMaxKm {
-				geoScore = 1.0
-			} else {
-				// Linear decay beyond max range, floor at 0.1.
+			if dist > geoMaxKm {
 				geoScore = math.Max(0.1, geoMaxKm/dist)
 			}
 		}
 	}
 
-	// Component 3: Recency of edge co-observation (15%).
-	var recencyScore float64 = 1.0
-	if hopIdx > 0 && len(entry.pubkeys) > 0 {
-		lastPK := entry.pubkeys[len(entry.pubkeys)-1]
-		edges := graph.Neighbors(lastPK)
-		for _, e := range edges {
-			peer := e.NodeA
-			if strings.EqualFold(peer, lastPK) {
-				peer = e.NodeB
-			}
-			if strings.EqualFold(peer, cand.PublicKey) {
-				hoursSince := now.Sub(e.LastSeen).Hours()
-				if hoursSince <= 24 {
-					recencyScore = 1.0
-				} else {
-					recencyScore = math.Max(0.1, 24.0/hoursSince)
-				}
-				break
-			}
-		}
-		if recencyScore == 1.0 && edgeScore == 0 {
-			recencyScore = 0.0 // No edge at all.
-		}
-	}
-
-	// Component 4: Prefix selectivity (30%).
+	// Prefix selectivity.
 	selectivityScore := 1.0 / float64(candidateCount)
 
-	// Weighted sum.
 	return wEdge*edgeScore + wGeo*geoScore + wRecency*recencyScore + wSelectivity*selectivityScore
 }
 
