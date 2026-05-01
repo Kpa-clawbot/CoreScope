@@ -2174,12 +2174,14 @@ async function run() {
     await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
     await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
-    // Wait for stripe to be applied (inline style set during render)
+    // Wait for hash stripe to be applied (inline style set during render).
+    // Assert specifically 4px (per spec §2.10) so we don't false-pass on the
+    // 3px channel-color highlight which is independent of this toggle.
     const hasStripe = await page.waitForFunction(() => {
       const row = document.querySelector('table tbody tr[data-hash]');
-      return row && (row.getAttribute('style') || '').includes('border-left');
+      return row && (row.getAttribute('style') || '').includes('border-left:4px');
     }, { timeout: 5000 }).then(() => true).catch(() => false);
-    assert(hasStripe, 'At least one <tr> should have border-left stripe when toggle ON');
+    assert(hasStripe, 'At least one <tr> should have hash-color border-left:4px stripe when toggle ON');
   });
 
   await test('Packets table rows have NO border-left stripe when toggle OFF', async () => {
@@ -2192,11 +2194,14 @@ async function run() {
     const noStripe = await page.evaluate(() => {
       const rows = document.querySelectorAll('table tbody tr[data-hash]');
       for (const r of rows) {
-        if ((r.getAttribute('style') || '').includes('border-left')) return false;
+        // Hash stripe is 4px (per spec §2.10). Channel-color highlight uses
+        // 3px and is independent of the hash-color toggle. Only assert no
+        // 4px hash stripe is present.
+        if ((r.getAttribute('style') || '').includes('border-left:4px')) return false;
       }
       return true;
     });
-    assert(noStripe, 'No <tr> should have border-left stripe when toggle OFF');
+    assert(noStripe, 'No <tr> should have hash-color border-left:4px stripe when toggle OFF');
     // Reset
     await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
   });
