@@ -951,13 +951,14 @@
       } else {
         renderLeft();
       }
-      // Signal that node data is loaded and rendered (used by E2E tests)
-      var nodesContainer = document.getElementById('nodesLeft') || document.getElementById('nodesBody');
-      if (nodesContainer) nodesContainer.setAttribute('data-loaded', 'true');
     } catch (e) {
       console.error('Failed to load nodes:', e);
       const tbody = document.getElementById('nodesBody');
       if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="padding:24px;color:var(--error,#ef4444)"><div role="alert" aria-live="polite">Failed to load nodes. Please try again.</div></td></tr>';
+    } finally {
+      // Always signal data-loaded — even on error — so E2E tests can proceed.
+      var nodesContainer = document.getElementById('nodesLeft') || document.getElementById('nodesBody');
+      if (nodesContainer) nodesContainer.setAttribute('data-loaded', 'true');
     }
   }
 
