@@ -35,7 +35,7 @@ func TestScoreHop_EdgeWeight(t *testing.T) {
 	entry := beamEntry{pubkeys: []string{"aaaa"}, names: []string{"NodeA"}}
 	cand := nodeInfo{PublicKey: "bbbb", Name: "NodeB", Role: "repeater"}
 
-	score := store.scoreHop(entry, cand, 2, graph, now, 1)
+	score := store.scoreHop(entry, cand, 2, graph, nil, now, 1)
 
 	// With edge present, edgeScore > 0. With 2 candidates, selectivity = 0.5.
 	// Anti-tautology: if we zero out edge weight constant, score would change.
@@ -45,7 +45,7 @@ func TestScoreHop_EdgeWeight(t *testing.T) {
 
 	// No edge: score should be lower.
 	candNoEdge := nodeInfo{PublicKey: "cccc", Name: "NodeC", Role: "repeater"}
-	scoreNoEdge := store.scoreHop(entry, candNoEdge, 2, graph, now, 1)
+	scoreNoEdge := store.scoreHop(entry, candNoEdge, 2, graph, nil, now, 1)
 	if scoreNoEdge >= score {
 		t.Errorf("expected no-edge score (%f) < edge score (%f)", scoreNoEdge, score)
 	}
@@ -59,7 +59,7 @@ func TestScoreHop_FirstHop(t *testing.T) {
 	entry := beamEntry{pubkeys: nil, names: nil}
 	cand := nodeInfo{PublicKey: "aaaa", Name: "NodeA", Role: "repeater"}
 
-	score := store.scoreHop(entry, cand, 3, graph, now, 0)
+	score := store.scoreHop(entry, cand, 3, graph, nil, now, 0)
 	// First hop: edgeScore=1.0, geoScore=1.0, recencyScore=1.0, selectivity=1/3
 	// = 0.35*1 + 0.20*1 + 0.15*1 + 0.30*(1/3) = 0.35+0.20+0.15+0.10 = 0.80
 	expected := 0.35 + 0.20 + 0.15 + 0.30/3.0
@@ -81,11 +81,17 @@ func TestScoreHop_GeoPlausibility(t *testing.T) {
 	graph := NewNeighborGraph()
 	now := time.Now()
 
+	nodeByPK := map[string]*nodeInfo{
+		"aaaa": &store.nodeCache[0],
+		"bbbb": &store.nodeCache[1],
+		"cccc": &store.nodeCache[2],
+	}
+
 	entry := beamEntry{pubkeys: []string{"aaaa"}, names: []string{"A"}}
 
 	// Close node should score higher than far node (geo component).
-	scoreClose := store.scoreHop(entry, store.nodeCache[1], 2, graph, now, 1)
-	scoreFar := store.scoreHop(entry, store.nodeCache[2], 2, graph, now, 1)
+	scoreClose := store.scoreHop(entry, store.nodeCache[1], 2, graph, nodeByPK, now, 1)
+	scoreFar := store.scoreHop(entry, store.nodeCache[2], 2, graph, nodeByPK, now, 1)
 	if scoreFar >= scoreClose {
 		t.Errorf("expected far node score (%f) < close node score (%f)", scoreFar, scoreClose)
 	}
@@ -107,7 +113,7 @@ func TestBeamSearch_WidthCap(t *testing.T) {
 	pm := buildPrefixMap(nodes)
 
 	// Two hops of "aa" — should produce 25*25=625 combos, pruned to 20.
-	beam := store.beamSearch([]string{"aa", "aa"}, pm, graph, now)
+	beam := store.beamSearch([]string{"aa", "aa"}, pm, graph, nil, now)
 	if len(beam) > beamWidth {
 		t.Errorf("beam exceeded width: got %d, want <= %d", len(beam), beamWidth)
 	}
@@ -131,7 +137,7 @@ func TestBeamSearch_Speculative(t *testing.T) {
 	}
 	pm := buildPrefixMap(nodes)
 
-	beam := store.beamSearch([]string{"aa", "cc"}, pm, graph, now)
+	beam := store.beamSearch([]string{"aa", "cc"}, pm, graph, nil, now)
 	if len(beam) == 0 {
 		t.Fatal("expected at least one result")
 	}

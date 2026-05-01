@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -147,7 +148,12 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 
 	// Snapshot data under read lock.
 	nodes, pm := s.store.getCachedNodesAndPM()
-	_ = nodes
+
+	// Build pubkey→nodeInfo map for O(1) geo lookup in scorer.
+	nodeByPK := make(map[string]*nodeInfo, len(nodes))
+	for i := range nodes {
+		nodeByPK[strings.ToLower(nodes[i].PublicKey)] = &nodes[i]
+	}
 
 	// Get neighbor graph; handle cold start.
 	graph := s.store.graph
@@ -178,7 +184,7 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 	start := now
 
 	// Beam search.
-	beam := s.store.beamSearch(req.Prefixes, pm, graph, now)
+	beam := s.store.beamSearch(req.Prefixes, pm, graph, nodeByPK, now)
 
 	// Sort by score descending, take top limit.
 	sortBeam(beam)
@@ -251,7 +257,7 @@ func (s *PacketStore) inspectCacheKey(req pathInspectRequest) string {
 	return key
 }
 
-func (s *PacketStore) beamSearch(prefixes []string, pm *prefixMap, graph *NeighborGraph, now time.Time) []beamEntry {
+func (s *PacketStore) beamSearch(prefixes []string, pm *prefixMap, graph *NeighborGraph, nodeByPK map[string]*nodeInfo, now time.Time) []beamEntry {
 	// Start with empty beam.
 	beam := []beamEntry{{pubkeys: nil, names: nil, evidence: nil, score: 1.0}}
 
@@ -274,7 +280,7 @@ func (s *PacketStore) beamSearch(prefixes []string, pm *prefixMap, graph *Neighb
 		var nextBeam []beamEntry
 		for _, entry := range beam {
 			for _, cand := range filtered {
-				hopScore := s.scoreHop(entry, cand, candidateCount, graph, now, hopIdx)
+				hopScore := s.scoreHop(entry, cand, candidateCount, graph, nodeByPK, now, hopIdx)
 				if hopScore < hopScoreFloor {
 					hopScore = hopScoreFloor
 				}
@@ -305,7 +311,7 @@ func (s *PacketStore) beamSearch(prefixes []string, pm *prefixMap, graph *Neighb
 	return beam
 }
 
-func (s *PacketStore) scoreHop(entry beamEntry, cand nodeInfo, candidateCount int, graph *NeighborGraph, now time.Time, hopIdx int) float64 {
+func (s *PacketStore) scoreHop(entry beamEntry, cand nodeInfo, candidateCount int, graph *NeighborGraph, nodeByPK map[string]*nodeInfo, now time.Time, hopIdx int) float64 {
 	var edgeScore float64
 	var geoScore float64 = 1.0
 	var recencyScore float64 = 1.0
@@ -344,7 +350,7 @@ func (s *PacketStore) scoreHop(entry beamEntry, cand nodeInfo, candidateCount in
 		}
 
 		// Geographic plausibility.
-		prevNode := s.findNodeByPK(lastPK)
+		prevNode := nodeByPK[strings.ToLower(lastPK)]
 		if prevNode != nil && prevNode.HasGPS && cand.HasGPS {
 			dist := haversineKm(prevNode.Lat, prevNode.Lon, cand.Lat, cand.Lon)
 			if dist > geoMaxKm {
@@ -359,29 +365,11 @@ func (s *PacketStore) scoreHop(entry beamEntry, cand nodeInfo, candidateCount in
 	return wEdge*edgeScore + wGeo*geoScore + wRecency*recencyScore + wSelectivity*selectivityScore
 }
 
-func (s *PacketStore) findNodeByPK(pk string) *nodeInfo {
-	s.cacheMu.Lock()
-	nodes := s.nodeCache
-	s.cacheMu.Unlock()
-	if nodes == nil {
-		return nil
-	}
-	pkLower := strings.ToLower(pk)
-	for i := range nodes {
-		if strings.ToLower(nodes[i].PublicKey) == pkLower {
-			return &nodes[i]
-		}
-	}
-	return nil
-}
 
 func sortBeam(beam []beamEntry) {
-	// Sort descending by score.
-	for i := 1; i < len(beam); i++ {
-		for j := i; j > 0 && beam[j].score > beam[j-1].score; j-- {
-			beam[j], beam[j-1] = beam[j-1], beam[j]
-		}
-	}
+	sort.Slice(beam, func(i, j int) bool {
+		return beam[i].score > beam[j].score
+	})
 }
 
 // ensureNeighborGraph triggers a graph rebuild if nil or stale.
