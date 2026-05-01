@@ -844,6 +844,95 @@ console.log('\n=== packets.js: _invalidateRowCounts / _refreshRowCountsIfDirty (
   });
 }
 
+console.log('\n=== packets.js: buildPacketsParams ===');
+{
+  const ctx = loadPacketsSandbox();
+  const api = ctx._packetsTestAPI;
+  assert(typeof api.buildPacketsParams === 'function', 'buildPacketsParams must be exported');
+
+  test('hash filter suppresses region — direct hash links work regardless of saved region', () => {
+    // This is the bug from URL https://analyzer.../#/packets?hash=178525e9f693aa7e
+    // when the user's saved RegionFilter excludes the packet's observer region.
+    // The hash is an exact identifier; region must be ignored when present.
+    const p = api.buildPacketsParams({
+      filters: { hash: 'abc123' },
+      regionParam: 'SJC,SFO,OAK,MRY',
+      windowMin: 60,
+      groupByHash: false,
+      limit: 200,
+    });
+    assert.strictEqual(p.get('hash'), 'abc123');
+    assert.strictEqual(p.get('region'), null, 'region must NOT be set when hash is present');
+    assert.strictEqual(p.get('since'), null, 'since must NOT be set when hash is present');
+  });
+
+  test('hash filter suppresses region even when only filters.hash is set', () => {
+    const p = api.buildPacketsParams({
+      filters: { hash: 'deadbeef' },
+      regionParam: 'COA',
+      windowMin: 0,
+      groupByHash: false,
+      limit: 50,
+    });
+    assert.strictEqual(p.get('hash'), 'deadbeef');
+    assert.strictEqual(p.get('region'), null);
+  });
+
+  test('region applied normally when hash filter is absent', () => {
+    const p = api.buildPacketsParams({
+      filters: {},
+      regionParam: 'SJC,SFO',
+      windowMin: 60,
+      groupByHash: false,
+      limit: 200,
+    });
+    assert.strictEqual(p.get('region'), 'SJC,SFO', 'region must apply when no hash');
+    assert.strictEqual(p.get('hash'), null);
+    assert(p.get('since'), 'since must apply when no hash and windowMin>0');
+  });
+
+  test('region absent when regionParam empty — no spurious empty region= param', () => {
+    const p = api.buildPacketsParams({
+      filters: {},
+      regionParam: '',
+      windowMin: 0,
+      groupByHash: false,
+      limit: 50,
+    });
+    assert.strictEqual(p.get('region'), null);
+  });
+
+  test('node and observer filters always pass through regardless of hash', () => {
+    const p = api.buildPacketsParams({
+      filters: { hash: 'h', node: 'n', observer: 'o', channel: 'c' },
+      regionParam: 'SJC',
+      windowMin: 60,
+      groupByHash: false,
+      limit: 200,
+    });
+    assert.strictEqual(p.get('node'), 'n');
+    assert.strictEqual(p.get('observer'), 'o');
+    assert.strictEqual(p.get('channel'), 'c');
+    assert.strictEqual(p.get('region'), null);
+  });
+
+  test('groupByHash=true sets groupByHash and omits expand', () => {
+    const p = api.buildPacketsParams({
+      filters: {}, regionParam: '', windowMin: 0, groupByHash: true, limit: 50,
+    });
+    assert.strictEqual(p.get('groupByHash'), 'true');
+    assert.strictEqual(p.get('expand'), null);
+  });
+
+  test('groupByHash=false sets expand=observations', () => {
+    const p = api.buildPacketsParams({
+      filters: {}, regionParam: '', windowMin: 0, groupByHash: false, limit: 50,
+    });
+    assert.strictEqual(p.get('expand'), 'observations');
+    assert.strictEqual(p.get('groupByHash'), null);
+  });
+}
+
 // ===== SUMMARY =====
 console.log(`\n${'='.repeat(40)}`);
 console.log(`packets.js tests: ${passed} passed, ${failed} failed`);

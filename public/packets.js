@@ -610,27 +610,42 @@
     } catch {}
   }
 
+  // Build URLSearchParams for /api/packets given UI state. Pure function for
+  // testability — returns the params object the next call to /api/packets
+  // would use. The hash filter intentionally suppresses the time-window AND
+  // region filters: a user asking for a specific packet by hash wants THAT
+  // packet regardless of their saved region/time selection.
+  function buildPacketsParams({ filters, regionParam, windowMin, groupByHash, limit }) {
+    const params = new URLSearchParams();
+    if (windowMin > 0 && !filters.hash) {
+      const since = new Date(Date.now() - windowMin * 60000).toISOString();
+      params.set('since', since);
+    }
+    params.set('limit', String(limit));
+    if (!filters.hash && regionParam) params.set('region', regionParam);
+    if (filters.hash) params.set('hash', filters.hash);
+    if (filters.node) params.set('node', filters.node);
+    if (filters.observer) params.set('observer', filters.observer);
+    if (filters.channel) params.set('channel', filters.channel);
+    if (groupByHash) {
+      params.set('groupByHash', 'true');
+    } else {
+      params.set('expand', 'observations');
+    }
+    return params;
+  }
+
   async function loadPackets() {
     try {
-      const params = new URLSearchParams();
       const selectedWindow = Number(document.getElementById('fTimeWindow')?.value);
       const windowMin = Number.isFinite(selectedWindow) ? selectedWindow : savedTimeWindowMin;
-      if (windowMin > 0 && !filters.hash) {
-        const since = new Date(Date.now() - windowMin * 60000).toISOString();
-        params.set('since', since);
-      }
-      params.set('limit', String(PACKET_LIMIT));
-      const regionParam = RegionFilter.getRegionParam();
-      if (regionParam) params.set('region', regionParam);
-      if (filters.hash) params.set('hash', filters.hash);
-      if (filters.node) params.set('node', filters.node);
-      if (filters.observer) params.set('observer', filters.observer);
-      if (filters.channel) params.set('channel', filters.channel);
-      if (groupByHash) {
-        params.set('groupByHash', 'true');
-      } else {
-        params.set('expand', 'observations');
-      }
+      const params = buildPacketsParams({
+        filters,
+        regionParam: RegionFilter.getRegionParam(),
+        windowMin,
+        groupByHash,
+        limit: PACKET_LIMIT,
+      });
 
       const data = await api('/packets?' + params.toString());
       packets = data.packets || [];
@@ -2563,6 +2578,7 @@
       buildGroupRowHtml,
       buildFlatRowHtml,
       _calcVisibleRange,
+      buildPacketsParams,
     };
   }
 
