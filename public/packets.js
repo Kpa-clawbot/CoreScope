@@ -13,6 +13,7 @@
     return o.iata ? `${o.name} (${o.iata})` : o.name;
   }
   let selectedId = null;
+  let _colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
   let groupByHash = true;
   let filters = {};
   { const o = localStorage.getItem('meshcore-observer-filter'); if (o) filters.observer = o;
@@ -1359,7 +1360,9 @@
     // Channel color highlighting (#271)
     const _grpDecoded = getParsedDecoded(p) || {};
     const _grpChanStyle = window.ChannelColors ? window.ChannelColors.getRowStyle(_grpDecoded.type || groupTypeName, _grpDecoded.channel) : '';
-    let html = `<tr class="${isSingle ? '' : 'group-header'} ${isExpanded ? 'expanded' : ''}" data-hash="${p.hash}" data-action="${isSingle ? 'select-hash' : 'toggle-select'}" data-value="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_grpChanStyle ? ' style="' + _grpChanStyle + '"' : ''}>
+    const _grpHashStripe = _colorByHash && window.HashColor ? 'border-left:4px solid ' + HashColor.hashToHsl(p.hash, document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) + ';' : '';
+    const _grpStyle = _grpHashStripe + _grpChanStyle;
+    let html = `<tr class="${isSingle ? '' : 'group-header'} ${isExpanded ? 'expanded' : ''}" data-hash="${p.hash}" data-action="${isSingle ? 'select-hash' : 'toggle-select'}" data-value="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_grpStyle ? ' style="' + _grpStyle + '"' : ''}>
           <td style="width:28px;text-align:center;cursor:pointer">${isSingle ? '' : (isExpanded ? '▼' : '▶')}</td>
           <td class="col-region">${groupRegion ? `<span class="badge-region">${groupRegion}</span>` : '—'}</td>
           <td class="col-time">${renderTimestampCell(p.latest)}</td>
@@ -1385,7 +1388,8 @@
         const childRegion = c.observer_id ? (observerMap.get(c.observer_id)?.iata || '') : '';
         const childPath = getParsedPath(c);
         const childPathStr = renderPath(childPath, c.observer_id);
-        html += `<tr class="group-child" data-id="${c.id}" data-hash="${c.hash || ''}" data-action="select-observation" data-value="${c.id}" data-parent-hash="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row">
+        const _childHashStripe = _colorByHash && window.HashColor ? 'border-left:4px solid ' + HashColor.hashToHsl(c.hash || p.hash, document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) + ';' : '';
+        html += `<tr class="group-child" data-id="${c.id}" data-hash="${c.hash || ''}" data-action="select-observation" data-value="${c.id}" data-parent-hash="${p.hash}" data-entry-idx="${entryIdx}" tabindex="0" role="row"${_childHashStripe ? ' style="' + _childHashStripe + '"' : ''}>
               <td></td><td class="col-region">${childRegion ? `<span class="badge-region">${childRegion}</span>` : '—'}</td>
               <td class="col-time">${renderTimestampCell(c.timestamp)}</td>
               <td class="mono col-hash">${truncate(c.hash || '', 8)}</td>
@@ -1415,7 +1419,9 @@
     const hashBytes = ((parseInt(p.raw_hex?.slice(2, 4), 16) || 0) >> 6) + 1;
     const pathStr = renderPath(pathHops, p.observer_id);
     const detail = getDetailPreview(decoded);
-    return `<tr data-id="${p.id}" data-hash="${p.hash || ''}" data-action="select-hash" data-value="${p.hash || p.id}" data-entry-idx="${entryIdx}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}"${_chanStyle ? ' style="' + _chanStyle + '"' : ''}>
+    const _flatHashStripe = _colorByHash && window.HashColor ? 'border-left:4px solid ' + HashColor.hashToHsl(p.hash, document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) + ';' : '';
+    const _flatStyle = _flatHashStripe + _chanStyle;
+    return `<tr data-id="${p.id}" data-hash="${p.hash || ''}" data-action="select-hash" data-value="${p.hash || p.id}" data-entry-idx="${entryIdx}" tabindex="0" role="row" class="${selectedId === p.id ? 'selected' : ''}"${_flatStyle ? ' style="' + _flatStyle + '"' : ''}>
         <td></td><td class="col-region">${region ? `<span class="badge-region">${region}</span>` : '—'}</td>
         <td class="col-time">${renderTimestampCell(p.timestamp)}</td>
         <td class="mono col-hash">${truncate(p.hash || String(p.id), 8)}</td>
@@ -2556,12 +2562,19 @@
     } catch {}
   }
 
+  function _onStorageChange() {
+    var prev = _colorByHash;
+    _colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
+    if (prev !== _colorByHash) renderVisibleRows();
+  }
+
   let _themeRefreshHandler = null;
 
   registerPage('packets', {
     init: function(app, routeParam) {
       _themeRefreshHandler = () => { if (typeof renderTableRows === 'function') renderTableRows(); };
       window.addEventListener('theme-refresh', _themeRefreshHandler);
+      window.addEventListener('storage', _onStorageChange);
       var result = init(app, routeParam);
       // Install channel color picker on packets table (M2, #271)
       if (window.ChannelColorPicker) window.ChannelColorPicker.installPacketsTable();
@@ -2569,6 +2582,7 @@
     },
     destroy: function() {
       if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; }
+      window.removeEventListener('storage', _onStorageChange);
       return destroy();
     }
   });
