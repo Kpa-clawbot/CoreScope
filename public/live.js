@@ -2724,7 +2724,8 @@
     const line = L.polyline([from], {
       color: (colorByHash && hash && !isDashed && window.HashColor) ? hashFill : color,
       weight: isDashed ? 1.5 : 2, opacity: mainOpacity, lineCap: 'round',
-      dashArray: isDashed ? '4 6' : null
+      dashArray: isDashed ? '4 6' : null,
+      className: 'live-packet-trace'
     }).addTo(pathsLayer);
 
     const dot = L.circleMarker(from, {

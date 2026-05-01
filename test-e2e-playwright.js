@@ -2237,21 +2237,22 @@ async function run() {
     await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
     await page.goto(BASE + '/#/live');
     await page.waitForTimeout(3000);
-    // Check if any polyline SVG path has an hsl stroke
+    // Use the dedicated .live-packet-trace class so we don't pick up
+    // unrelated leaflet paths (geofilter polygons, region overlays, etc).
+    const pathCount = await page.evaluate(() => document.querySelectorAll('path.live-packet-trace').length);
+    if (pathCount === 0) {
+      console.log('    (skipped — no live-packet-trace polylines drawn in 3s window)');
+      return;
+    }
     const hasHslPolyline = await page.evaluate(() => {
-      const paths = document.querySelectorAll('path.leaflet-interactive');
+      const paths = document.querySelectorAll('path.live-packet-trace');
       for (const p of paths) {
         const stroke = p.getAttribute('stroke') || '';
         if (stroke.startsWith('hsl(')) return true;
       }
       return false;
     });
-    const pathCount = await page.evaluate(() => document.querySelectorAll('path.leaflet-interactive').length);
-    if (pathCount === 0) {
-      console.log('    (skipped — no polyline paths on map in fixture)');
-      return;
-    }
-    assert(hasHslPolyline, 'At least one map polyline should have hsl() stroke color from hash');
+    assert(hasHslPolyline, 'At least one live-packet-trace polyline should have hsl() stroke color from hash');
   });
 
   await browser.close();
