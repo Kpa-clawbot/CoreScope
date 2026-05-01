@@ -183,7 +183,7 @@ jobs:
           ./corescope-server -port 13581 -db test-fixtures/e2e-fixture.db -public public-instrumented &
           echo $! > .server.pid
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:13581/api/stats > /dev/null 2>&1; then
+            if curl -sf http://localhost:13581/api/healthz > /dev/null 2>&1; then
               echo "Server ready after ${i}s"
               break
             fi
