@@ -23,6 +23,8 @@
   let matrixMode = localStorage.getItem('live-matrix-mode') === 'true';
   let matrixRain = localStorage.getItem('live-matrix-rain') === 'true';
   let colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
+  /** Current theme string for hash-color functions. */
+  function _liveTheme() { return document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
   let nodeFilterKeys = (localStorage.getItem('live-node-filter') || '').split(',').map(s => s.trim()).filter(Boolean);
   let nodeFilterTotal = 0;
   let nodeFilterShown = 0;
@@ -2709,10 +2711,9 @@
     var hashOutline = color;
     var contrailColor = color;
     if (colorByHash && hash && !isDashed && window.HashColor) {
-      var theme = (document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
-      var hsl = HashColor.hashToHsl(hash, theme);
+      var hsl = HashColor.hashToHsl(hash, _liveTheme());
       hashFill = hsl;
-      hashOutline = HashColor.hashToOutline(hash, theme);
+      hashOutline = HashColor.hashToOutline(hash, _liveTheme());
       contrailColor = hsl;
     }
 
@@ -2861,8 +2862,7 @@
     item.style.cursor = 'pointer';
     // Hash-color stripe for feed items (mirrors packets table border-left)
     if (colorByHash && pkt.hash && window.HashColor) {
-      var _feedTheme = document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-      item.style.borderLeft = '4px solid ' + HashColor.hashToHsl(pkt.hash, _feedTheme);
+      item.style.borderLeft = '4px solid ' + HashColor.hashToHsl(pkt.hash, _liveTheme());
     }
     // Channel color highlighting for GRP_TXT packets (#271)
     var _cs = _getChannelStyle(pkt);
@@ -2949,8 +2949,7 @@
     item.style.cursor = 'pointer';
     // Hash-color stripe for feed items (mirrors packets table border-left)
     if (colorByHash && hash && window.HashColor) {
-      var _feedTheme2 = document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-      item.style.borderLeft = '4px solid ' + HashColor.hashToHsl(hash, _feedTheme2);
+      item.style.borderLeft = '4px solid ' + HashColor.hashToHsl(hash, _liveTheme());
     }
     // Channel color highlighting for GRP_TXT packets (#271)
     var _chanStyle = _getChannelStyle(pkt);
