@@ -211,6 +211,7 @@ async function run() {
   // Test 2: Nodes page loads with data
   await test('Nodes page loads with data', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('table tbody tr');
     const headers = await page.$$eval('th', els => els.map(e => e.textContent.trim()));
     for (const col of ['Name', 'Public Key', 'Role']) {
@@ -236,6 +237,7 @@ async function run() {
   // Test: Node side panel Details link navigates to full detail page (#778)
   await test('Node side panel Details link navigates', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('table tbody tr');
     await page.click('table tbody tr');
     await page.waitForSelector('.node-detail');
@@ -257,6 +259,7 @@ async function run() {
   // Test: Nodes page has WebSocket auto-update listener (#131)
   await test('Nodes page has WebSocket auto-update', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('table tbody tr');
     // The live dot in navbar indicates WS connection status
     const liveDot = await page.$('#liveDot');
@@ -282,11 +285,12 @@ async function run() {
   // Test 3: Map page loads with markers
   await test('Map page loads with markers', async () => {
     await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('.leaflet-container');
     await page.waitForSelector('.leaflet-tile-loaded');
     // Wait for markers/overlays to render (may not exist with empty DB)
     try {
-      await page.waitForSelector('.leaflet-marker-icon, .leaflet-interactive, circle, .marker-cluster, .leaflet-marker-pane > *, .leaflet-overlay-pane svg path, .leaflet-overlay-pane svg circle', { timeout: 3000 });
+      await page.waitForSelector('.leaflet-marker-icon, .leaflet-interactive, circle, .marker-cluster, .leaflet-marker-pane > *, .leaflet-overlay-pane svg path, .leaflet-overlay-pane svg circle', { timeout: 8000 });
     } catch (_) {
       // No markers with empty DB \u2014 assertion below handles it
     }
@@ -362,7 +366,7 @@ async function run() {
     await page.waitForSelector('.leaflet-container');
     // Wait for markers (may not exist with empty DB)
     try {
-      await page.waitForSelector('.leaflet-marker-icon, .leaflet-interactive', { timeout: 3000 });
+      await page.waitForSelector('.leaflet-marker-icon, .leaflet-interactive', { timeout: 8000 });
     } catch (_) {
       // No markers with empty DB
     }
@@ -394,6 +398,7 @@ async function run() {
     await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
     await page.evaluate(() => localStorage.setItem('meshcore-time-window', '525600'));
     await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('table tbody tr', { timeout: 15000 });
     const rowsBefore = await page.$$('table tbody tr');
     assert(rowsBefore.length > 0, 'No packets visible');

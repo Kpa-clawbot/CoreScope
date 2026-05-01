@@ -744,6 +744,9 @@
 
       sortPacketsArray();
       renderLeft();
+      // Signal that packet data is loaded and rendered (used by E2E tests)
+      var pktContainer = document.getElementById('pktLeft') || document.getElementById('pktBody');
+      if (pktContainer) pktContainer.setAttribute('data-loaded', 'true');
     } catch (e) {
       console.error('Failed to load packets:', e);
       const tbody = document.getElementById('pktBody');

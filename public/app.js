@@ -965,10 +965,11 @@ window.addEventListener('DOMContentLoaded', () => {
   }).catch(() => {
     window.SITE_CONFIG = { timestamps: { defaultMode: 'ago', timezone: 'local', formatPreset: 'iso', customFormat: '', allowCustomFormat: false } };
     if (window._customizerV2) window._customizerV2.init(window.SITE_CONFIG);
-  }).finally(() => {
-    if (!location.hash || location.hash === '#/') location.hash = '#/home';
-    else navigate();
   });
+
+  // Navigate immediately — don't gate data-fetching pages on cosmetic theme fetch
+  if (!location.hash || location.hash === '#/') location.hash = '#/home';
+  else navigate();
 });
 
 /**

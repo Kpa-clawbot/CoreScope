@@ -174,6 +174,9 @@ func main() {
 		database.hasResolvedPath = true // detectSchema ran before column was added; fix the flag
 	}
 
+	// WaitGroup for background init steps that gate /api/healthz readiness.
+	var initWg sync.WaitGroup
+
 	// Load or build neighbor graph
 	if neighborEdgesTableExists(database.conn) {
 		store.graph = loadNeighborEdgesFromDB(database.conn)
@@ -181,7 +184,9 @@ func main() {
 	} else {
 		log.Printf("[neighbor] no persisted edges found, will build in background...")
 		store.graph = NewNeighborGraph() // empty graph — gets populated by background goroutine
+		initWg.Add(1)
 		go func() {
+			defer initWg.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("[neighbor] graph build panic recovered: %v", r)
@@ -205,7 +210,9 @@ func main() {
 	// API serves best-effort data until this completes (~10s for 100K txs).
 	// Processes in chunks of 5000, releasing the lock between chunks so API
 	// handlers remain responsive.
+	initWg.Add(1)
 	go func() {
+		defer initWg.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[store] pickBestObservation panic recovered: %v", r)
@@ -231,6 +238,13 @@ func main() {
 			}
 		}
 		log.Printf("[store] initial pickBestObservation complete (%d transmissions)", totalPackets)
+	}()
+
+	// Mark server ready once all background init completes.
+	go func() {
+		initWg.Wait()
+		readiness.Store(1)
+		log.Printf("[server] readiness: ready=true (background init complete)")
 	}()
 
 	// WebSocket hub
