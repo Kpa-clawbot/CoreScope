@@ -951,6 +951,9 @@
       } else {
         renderLeft();
       }
+      // Signal that node data is loaded and rendered (used by E2E tests)
+      var nodesContainer = document.getElementById('nodesLeft') || document.getElementById('nodesBody');
+      if (nodesContainer) nodesContainer.setAttribute('data-loaded', 'true');
     } catch (e) {
       console.error('Failed to load nodes:', e);
       const tbody = document.getElementById('nodesBody');

@@ -549,6 +549,10 @@
 
       renderMarkers();
 
+      // Signal that map data is loaded and markers rendered (used by E2E tests)
+      var mapContainer = document.getElementById('leaflet-map');
+      if (mapContainer) mapContainer.setAttribute('data-loaded', 'true');
+
       // Restore heatmap if previously enabled
       if (localStorage.getItem('meshcore-map-heatmap') === 'true') {
         toggleHeatmap(true);

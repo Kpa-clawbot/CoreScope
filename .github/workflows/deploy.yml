@@ -176,6 +176,9 @@ jobs:
       - name: Instrument frontend JS for coverage
         run: sh scripts/instrument-frontend.sh
 
+      - name: Freshen fixture timestamps
+        run: bash tools/freshen-fixture.sh test-fixtures/e2e-fixture.db
+
       - name: Start Go server with fixture DB
         run: |
           fuser -k 13581/tcp 2>/dev/null || true
@@ -183,7 +186,7 @@ jobs:
           ./corescope-server -port 13581 -db test-fixtures/e2e-fixture.db -public public-instrumented &
           echo $! > .server.pid
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:13581/api/stats > /dev/null 2>&1; then
+            if curl -sf http://localhost:13581/api/healthz > /dev/null 2>&1; then
               echo "Server ready after ${i}s"
               break
             fi
