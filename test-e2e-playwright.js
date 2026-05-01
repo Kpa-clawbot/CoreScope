@@ -2214,7 +2214,7 @@ async function run() {
   // --- Live feed hash-color stripe ---
   await test('Live feed items have border-left stripe when toggle ON', async () => {
     await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
-    await page.goto(BASE_URL + '/#/live');
+    await page.goto(BASE + '/#/live');
     await page.waitForTimeout(3000); // allow feed to populate
     const hasStripe = await page.evaluate(() => {
       const items = document.querySelectorAll('.live-feed-item');
@@ -2235,7 +2235,7 @@ async function run() {
   // --- Map polyline uses hash color ---
   await test('Map trace polyline uses hash-derived color when toggle ON', async () => {
     await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
-    await page.goto(BASE_URL + '/#/live');
+    await page.goto(BASE + '/#/live');
     await page.waitForTimeout(3000);
     // Check if any polyline SVG path has an hsl stroke
     const hasHslPolyline = await page.evaluate(() => {
