@@ -222,9 +222,18 @@ self.onmessage = async (event) => {
       this.gpuChecked = true;
       if (!navigator?.gpu) { this.gpuAvailable = false; return false; }
       try {
-        const moduleUrl = new URL('./vendor/webgpu-ed25519.js', document.baseURI).href;
-        const mod = await import(moduleUrl);
-        const scanner = new mod.WebGpuEd25519Scanner();
+        // The bundle is a UMD IIFE — use script injection, not ES import()
+        if (!globalThis.MeshCoreGpuModule) {
+          await new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = new URL('./vendor/webgpu-ed25519.js', document.baseURI).href;
+            s.onload = resolve;
+            s.onerror = reject;
+            document.head.appendChild(s);
+          });
+        }
+        const { WebGpuEd25519Scanner } = globalThis.MeshCoreGpuModule;
+        const scanner = new WebGpuEd25519Scanner();
         const ready = await scanner.initialize();
         if (ready) {
           this.gpuScanner = scanner;
