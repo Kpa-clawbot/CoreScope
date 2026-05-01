@@ -178,7 +178,7 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
       if (localStorage.getItem(STATS_OPEN_KEY) === '1') {
         var body = document.getElementById('obsStatsBody');
         var tog = app.querySelector('.obs-stats-toggle');
-        if (body) body.style.maxHeight = '2000px';
+        if (body) body.style.maxHeight = body.scrollHeight + 'px';
         if (tog) tog.textContent = '▼';
       }
       statsShowAll = localStorage.getItem(STATS_ALL_KEY) === '1';
@@ -214,7 +214,7 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
         var statsBody = document.getElementById('obsStatsBody');
         var statsTog = btn.querySelector('.obs-stats-toggle');
         var isOpen = statsBody.style.maxHeight !== '0px';
-        statsBody.style.maxHeight = isOpen ? '0px' : '2000px';
+        statsBody.style.maxHeight = isOpen ? '0px' : statsBody.scrollHeight + 'px';
         statsTog.textContent = isOpen ? '▶' : '▼';
         try { localStorage.setItem(STATS_OPEN_KEY, isOpen ? '0' : '1'); } catch (e) {}
       }
@@ -353,6 +353,12 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
       statBlock(prefix + 'All-time Packets', byPacketsTotal) +
       statBlock(prefix + 'Uptime', byUptime) +
       statBlock(statsShowAll ? 'Regions' : 'Top Regions', byRegion);
+
+    // Expand max-height to fit actual content — prevents show-all from clipping
+    var statsBody = document.getElementById('obsStatsBody');
+    if (statsBody && statsBody.style.maxHeight !== '0px') {
+      statsBody.style.maxHeight = statsBody.scrollHeight + 'px';
+    }
   }
 
   function render() {
