@@ -22,6 +22,7 @@
   let showOnlyFavorites = localStorage.getItem('live-favorites-only') === 'true';
   let matrixMode = localStorage.getItem('live-matrix-mode') === 'true';
   let matrixRain = localStorage.getItem('live-matrix-rain') === 'true';
+  let colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
   let rainCanvas = null, rainCtx = null, rainDrops = [], rainRAF = null;
   const propagationBuffer = new Map(); // hash -> {timer, packets[]}
   let _onResize = null;
@@ -825,6 +826,8 @@
             <span id="ghostDesc" class="sr-only">Show interpolated ghost markers for unknown hops</span>
             <label><input type="checkbox" id="liveRealisticToggle" aria-describedby="realisticDesc"> Realistic</label>
             <span id="realisticDesc" class="sr-only">Buffer packets by hash and animate all paths simultaneously</span>
+            <label><input type="checkbox" id="liveColorHashToggle" checked aria-describedby="colorHashDesc"> Color by hash</label>
+            <span id="colorHashDesc" class="sr-only">Color flying-packet dots and contrails by packet hash for propagation tracing</span>
             <label><input type="checkbox" id="liveMatrixToggle" aria-describedby="matrixDesc"> Matrix</label>
             <span id="matrixDesc" class="sr-only">Animate packet hex bytes flowing along paths like the Matrix</span>
             <label><input type="checkbox" id="liveMatrixRainToggle" aria-describedby="rainDesc"> Rain</label>
@@ -981,6 +984,14 @@
     realisticToggle.addEventListener('change', (e) => {
       realisticPropagation = e.target.checked;
       localStorage.setItem('live-realistic-propagation', realisticPropagation);
+    });
+
+    const colorHashToggle = document.getElementById('liveColorHashToggle');
+    colorHashToggle.checked = colorByHash;
+    colorHashToggle.addEventListener('change', (e) => {
+      colorByHash = e.target.checked;
+      localStorage.setItem('meshcore-color-packets-by-hash', colorByHash);
+      window.dispatchEvent(new Event('storage'));
     });
 
     const favoritesToggle = document.getElementById('liveFavoritesToggle');
@@ -2068,7 +2079,7 @@
         var completedPositions = allPaths[ai].hopPositions.slice(0, hopsCompleted + 1);
         var remainingPositions = allPaths[ai].hopPositions.slice(hopsCompleted);
         if (completedPositions.length >= 2) {
-          animatePath(completedPositions, typeName, color, allPaths[ai].raw, onHop);
+          animatePath(completedPositions, typeName, color, allPaths[ai].raw, onHop, first.hash);
         } else if (completedPositions.length === 1) {
           pulseNode(completedPositions[0].key, completedPositions[0].pos, typeName);
         }
@@ -2076,7 +2087,7 @@
           drawDashedPath(remainingPositions, color);
         }
       } else {
-        animatePath(allPaths[ai].hopPositions, typeName, color, allPaths[ai].raw, onHop);
+        animatePath(allPaths[ai].hopPositions, typeName, color, allPaths[ai].raw, onHop, first.hash);
       }
     }
   }
@@ -2185,7 +2196,7 @@
     return raw.filter(h => h.pos != null);
   }
 
-  function animatePath(hopPositions, typeName, color, rawHex, onHop) {
+  function animatePath(hopPositions, typeName, color, rawHex, onHop, hash) {
     if (!animLayer || !pathsLayer) return;
     if (activeAnims >= MAX_CONCURRENT_ANIMS) return;
     activeAnims++;
@@ -2237,7 +2248,7 @@
         const nextGhost = hopPositions[hopIndex + 1].ghost;
         const lineColor = (isGhost || nextGhost) ? '#94a3b8' : color;
         const lineOpacity = (isGhost || nextGhost) ? 0.3 : undefined;
-        drawAnimatedLine(hp.pos, nextPos, lineColor, () => { hopIndex++; nextHop(); }, lineOpacity, rawHex);
+        drawAnimatedLine(hp.pos, nextPos, lineColor, () => { hopIndex++; nextHop(); }, lineOpacity, rawHex, hash);
       } else {
         if (!isGhost) pulseNode(hp.key, hp.pos, typeName);
         hopIndex++; nextHop();
@@ -2592,7 +2603,7 @@
     requestAnimationFrame(tick);
   }
 
-  function drawAnimatedLine(from, to, color, onComplete, overrideOpacity, rawHex) {
+  function drawAnimatedLine(from, to, color, onComplete, overrideOpacity, rawHex, hash) {
     if (!animLayer || !pathsLayer) { if (onComplete) onComplete(); return; }
     if (matrixMode) return drawMatrixLine(from, to, color, onComplete, rawHex);
     const steps = 20;
@@ -2603,8 +2614,18 @@
     const mainOpacity = overrideOpacity ?? 0.8;
     const isDashed = overrideOpacity != null;
 
+    // Hash-derived color for fill + contrail (when toggle ON and not ghost line)
+    var hashFill = '#fff';
+    var contrailColor = color;
+    if (colorByHash && hash && window.HashColor) {
+      var theme = (document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+      var hsl = HashColor.hashToHsl(hash, theme);
+      hashFill = hsl;
+      contrailColor = hsl;
+    }
+
     const contrail = L.polyline([from], {
-      color: color, weight: 6, opacity: mainOpacity * 0.2, lineCap: 'round'
+      color: contrailColor, weight: 6, opacity: mainOpacity * 0.2, lineCap: 'round'
     }).addTo(pathsLayer);
 
     const line = L.polyline([from], {
@@ -2613,7 +2634,7 @@
     }).addTo(pathsLayer);
 
     const dot = L.circleMarker(from, {
-      radius: 3.5, fillColor: '#fff', fillOpacity: 1, color: color, weight: 1.5
+      radius: 3.5, fillColor: hashFill, fillOpacity: 1, color: color, weight: 1.5
     }).addTo(animLayer);
 
     let lastStep = performance.now();
