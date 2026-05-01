@@ -231,7 +231,7 @@ func (db *DB) GetStats() (*Stats, error) {
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
 	db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE last_seen > ?", sevenDaysAgo).Scan(&s.TotalNodes)
 	db.conn.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&s.TotalNodesAllTime)
-	db.conn.QueryRow("SELECT COUNT(*) FROM observers").Scan(&s.TotalObservers)
+	db.conn.QueryRow("SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0").Scan(&s.TotalObservers)
 
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
 	db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneHourAgo).Scan(&s.PacketsLastHour)
@@ -970,9 +970,9 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 	return result
 }
 
-// GetObservers returns all observers sorted by last_seen DESC.
+// GetObservers returns active observers (not soft-deleted) sorted by last_seen DESC.
 func (db *DB) GetObservers() ([]Observer, error) {
-	rows, err := db.conn.Query("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor FROM observers ORDER BY last_seen DESC")
+	rows, err := db.conn.Query("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC")
 	if err != nil {
 		return nil, err
 	}

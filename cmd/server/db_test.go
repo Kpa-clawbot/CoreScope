@@ -48,7 +48,8 @@ func setupTestDB(t *testing.T) *DB {
 			radio TEXT,
 			battery_mv INTEGER,
 			uptime_secs INTEGER,
-			noise_floor REAL
+			noise_floor REAL,
+			inactive INTEGER DEFAULT 0
 		);
 
 		CREATE TABLE transmissions (
@@ -354,6 +355,31 @@ func TestGetObservers(t *testing.T) {
 	}
 	if observers[0].ID != "obs1" {
 		t.Errorf("expected obs1 first (most recent), got %s", observers[0].ID)
+	}
+}
+
+// Regression: GetObservers must exclude soft-deleted (inactive=1) rows.
+// Stale observers were appearing in /api/observers despite the auto-prune
+// marking them inactive, because the SELECT query had no WHERE filter.
+func TestGetObservers_ExcludesInactive(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+	// Mark obs2 inactive — soft delete simulating a stale-observer prune.
+	if _, err := db.conn.Exec(`UPDATE observers SET inactive = 1 WHERE id = ?`, "obs2"); err != nil {
+		t.Fatalf("update inactive: %v", err)
+	}
+	observers, err := db.GetObservers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observers) != 1 {
+		t.Errorf("expected 1 observer (obs1) after marking obs2 inactive, got %d", len(observers))
+	}
+	for _, o := range observers {
+		if o.ID == "obs2" {
+			t.Errorf("inactive observer obs2 should be excluded")
+		}
 	}
 }
 
