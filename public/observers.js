@@ -8,7 +8,11 @@
   let regionChangeHandler = null;
   let sortState = { col: null, dir: 'asc' };
 
-  var STATS_OPEN_KEY = 'meshcore-obs-stats-open';
+  var STATS_OPEN_KEY   = 'meshcore-obs-stats-open';
+  var STATS_ALL_KEY    = 'meshcore-obs-stats-all';
+  var STATS_RANGE_KEY  = 'meshcore-obs-stats-range';
+  let statsShowAll   = false;
+  let statsTimeRange = '24h';
 
   function loadSortState() {
     try {
@@ -76,7 +80,13 @@
         <div class="obs-stats-panel" id="obsStatsPanel">
           <div class="obs-stats-header" data-action="toggle-stats">
             <strong>📊 Observer Statistics</strong>
-            <span class="obs-stats-toggle">▶</span>
+            <span style="display:flex;align-items:center;gap:8px">
+              <span class="obs-stats-range-pills">
+                <button class="obs-stats-range-btn" data-action="toggle-stats-range" data-range="24h">24h</button><button class="obs-stats-range-btn" data-action="toggle-stats-range" data-range="7d">7d</button>
+              </span>
+              <button class="obs-stats-all-btn" data-action="toggle-stats-all">Show all</button>
+              <span class="obs-stats-toggle">▶</span>
+            </span>
           </div>
           <div class="obs-stats-body" id="obsStatsBody" style="max-height:0px">
             <div class="obs-stats-grid" id="obsStatsGrid"></div>
@@ -163,7 +173,7 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
       </div>`;
     RegionFilter.init(document.getElementById('obsRegionFilter'));
     regionChangeHandler = RegionFilter.onChange(function () { render(); });
-    // Restore stats panel open/close state
+    // Restore stats panel open/close state and show-all toggle
     try {
       if (localStorage.getItem(STATS_OPEN_KEY) === '1') {
         var body = document.getElementById('obsStatsBody');
@@ -171,6 +181,8 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
         if (body) body.style.maxHeight = '2000px';
         if (tog) tog.textContent = '▼';
       }
+      statsShowAll = localStorage.getItem(STATS_ALL_KEY) === '1';
+      statsTimeRange = localStorage.getItem(STATS_RANGE_KEY) || '24h';
     } catch (e) {}
     loadObservers();
     // Event delegation for data-action buttons
@@ -186,6 +198,18 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
       }
       var btn = e.target.closest('[data-action]');
       if (btn && btn.dataset.action === 'obs-refresh') loadObservers();
+      if (btn && btn.dataset.action === 'toggle-stats-range') {
+        statsTimeRange = btn.dataset.range;
+        try { localStorage.setItem(STATS_RANGE_KEY, statsTimeRange); } catch (e) {}
+        render();
+        return;
+      }
+      if (btn && btn.dataset.action === 'toggle-stats-all') {
+        statsShowAll = !statsShowAll;
+        try { localStorage.setItem(STATS_ALL_KEY, statsShowAll ? '1' : '0'); } catch (e) {}
+        render();
+        return;
+      }
       if (btn && btn.dataset.action === 'toggle-stats') {
         var statsBody = document.getElementById('obsStatsBody');
         var statsTog = btn.querySelector('.obs-stats-toggle');
@@ -289,32 +313,46 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
       return `<div class="obs-stat-block"><div class="obs-stat-block-title">${title}</div><ol class="obs-stat-list">${rows}</ol></div>`;
     }
 
-    // Top 5 by total packets
-    var byPackets = data.slice().sort(function (a, b) { return (b.packet_count || 0) - (a.packet_count || 0); }).slice(0, 5)
+    var limit = statsShowAll ? Infinity : 5;
+    var prefix = statsShowAll ? '' : 'Top 5 · ';
+
+    // Sync show-all button
+    var allBtn = document.querySelector('.obs-stats-all-btn');
+    if (allBtn) {
+      allBtn.textContent = statsShowAll ? 'Show top 5' : 'Show all';
+      allBtn.classList.toggle('active', statsShowAll);
+    }
+    // Sync range pills
+    document.querySelectorAll('.obs-stats-range-btn').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.range === statsTimeRange);
+    });
+
+    // Pick the right packet field and label for selected time range
+    var pktField = statsTimeRange === '7d' ? 'packetsLast7d' : 'packetsLast24h';
+    var pktLabel = statsTimeRange === '7d' ? 'Packets / 7d' : 'Packets / 24h';
+
+    var byPktsWindow = data.slice().sort(function (a, b) { return (b[pktField] || 0) - (a[pktField] || 0); }).slice(0, limit)
+      .map(function (o) { return { name: o.name || o.id, val: (o[pktField] || 0).toLocaleString() }; });
+
+    var byPacketsTotal = data.slice().sort(function (a, b) { return (b.packet_count || 0) - (a.packet_count || 0); }).slice(0, limit)
       .map(function (o) { return { name: o.name || o.id, val: (o.packet_count || 0).toLocaleString() }; });
 
-    // Top 5 by packets/hour
-    var byPktsHr = data.slice().sort(function (a, b) { return (b.packetsLastHour || 0) - (a.packetsLastHour || 0); }).slice(0, 5)
-      .map(function (o) { return { name: o.name || o.id, val: (o.packetsLastHour || 0) + '/hr' }; });
-
-    // Top 5 by uptime (longest first)
     var byUptime = data.slice().sort(function (a, b) {
       var ua = a.first_seen ? Date.now() - new Date(a.first_seen).getTime() : 0;
       var ub = b.first_seen ? Date.now() - new Date(b.first_seen).getTime() : 0;
       return ub - ua;
-    }).slice(0, 5).map(function (o) { return { name: o.name || o.id, val: uptimeStr(o.first_seen) }; });
+    }).slice(0, limit).map(function (o) { return { name: o.name || o.id, val: uptimeStr(o.first_seen) }; });
 
-    // Top 5 regions by observer count
     var regionMap = {};
     data.forEach(function (o) { if (o.iata) regionMap[o.iata] = (regionMap[o.iata] || 0) + 1; });
-    var byRegion = Object.entries(regionMap).sort(function (a, b) { return b[1] - a[1]; }).slice(0, 5)
+    var byRegion = Object.entries(regionMap).sort(function (a, b) { return b[1] - a[1]; }).slice(0, limit)
       .map(function (entry) { return { name: `<span class="badge-region">${entry[0]}</span>`, title: entry[0], val: entry[1] + (entry[1] === 1 ? ' observer' : ' observers') }; });
 
     grid.innerHTML =
-      statBlock('Top 5 · Total Packets', byPackets) +
-      statBlock('Top 5 · Packets / Hour', byPktsHr) +
-      statBlock('Top 5 · Uptime', byUptime) +
-      statBlock('Top Regions', byRegion);
+      statBlock(prefix + pktLabel, byPktsWindow) +
+      statBlock(prefix + 'All-time Packets', byPacketsTotal) +
+      statBlock(prefix + 'Uptime', byUptime) +
+      statBlock(statsShowAll ? 'Regions' : 'Top Regions', byRegion);
   }
 
   function render() {

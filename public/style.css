@@ -812,6 +812,14 @@ button.ch-item:hover .ch-remove-btn { opacity: 0.6; }
 .obs-stats-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; cursor: pointer; user-select: none; font-size: 14px; gap: 8px; }
 .obs-stats-header:hover { background: var(--hover-bg); }
 .obs-stats-toggle { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+.obs-stats-all-btn { font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface-0); color: var(--text-muted); cursor: pointer; line-height: 1.5; }
+.obs-stats-all-btn:hover { color: var(--text); background: var(--hover-bg); }
+.obs-stats-all-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.obs-stats-range-pills { display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
+.obs-stats-range-btn { font-size: 11px; padding: 2px 8px; border: none; border-right: 1px solid var(--border); background: var(--surface-0); color: var(--text-muted); cursor: pointer; line-height: 1.5; }
+.obs-stats-range-btn:last-child { border-right: none; }
+.obs-stats-range-btn:hover { color: var(--text); background: var(--hover-bg); }
+.obs-stats-range-btn.active { background: var(--accent); color: #fff; }
 .obs-stats-body { overflow: hidden; transition: max-height 0.3s ease; }
 .obs-stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 2px 14px 14px; }
 .obs-stat-block { background: var(--surface-0); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; min-width: 0; }
