@@ -217,14 +217,20 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// Cache result.
+	// Cache result (and evict stale entries).
 	s.store.inspectMu.Lock()
 	if s.store.inspectCache == nil {
 		s.store.inspectCache = make(map[string]*inspectCachedResult)
 	}
+	now2 := time.Now()
+	for k, v := range s.store.inspectCache {
+		if now2.After(v.expiresAt) {
+			delete(s.store.inspectCache, k)
+		}
+	}
 	s.store.inspectCache[cacheKey] = &inspectCachedResult{
 		data:      resp,
-		expiresAt: time.Now().Add(inspectCacheTTL),
+		expiresAt: now2.Add(inspectCacheTTL),
 	}
 	s.store.inspectMu.Unlock()
 
