@@ -13,9 +13,9 @@
     return o.iata ? `${o.name} (${o.iata})` : o.name;
   }
   let selectedId = null;
-  let _colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
+  function _isColorByHash() { return localStorage.getItem('meshcore-color-packets-by-hash') !== 'false'; }
   function _currentTheme() { return document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
-  function _hashStripeStyle(hash) { return _colorByHash && hash && window.HashColor ? 'border-left:4px solid ' + HashColor.hashToHsl(hash, _currentTheme()) + ';' : ''; }
+  function _hashStripeStyle(hash) { return _isColorByHash() && hash && window.HashColor ? 'border-left:4px solid ' + HashColor.hashToHsl(hash, _currentTheme()) + ';' : ''; }
   let groupByHash = true;
   let filters = {};
   { const o = localStorage.getItem('meshcore-observer-filter'); if (o) filters.observer = o;
@@ -2564,10 +2564,13 @@
     } catch {}
   }
 
+  let _lastColorByHash = _isColorByHash();
   function _onStorageChange() {
-    var prev = _colorByHash;
-    _colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
-    if (prev !== _colorByHash) renderVisibleRows();
+    var current = _isColorByHash();
+    if (_lastColorByHash !== current) {
+      _lastColorByHash = current;
+      renderVisibleRows();
+    }
   }
 
   let _themeRefreshHandler = null;
