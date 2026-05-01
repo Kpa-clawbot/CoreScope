@@ -572,7 +572,11 @@
         delete window._pendingPathInspectorRoute;
         if (pending.path && pending.path.length > 0) {
           if (window.routeLayer) window.routeLayer.clearLayers();
-          drawPacketRoute(pending.path.slice(1), pending.path[0]);
+          // Pass full path as hopKeys; null origin (origin is already the first
+          // hop). slice(1) + path[0] string was wrong — drawPacketRoute expects
+          // origin to be an OBJECT with pubkey/lat/lon, and stripping the head
+          // hid the originating node from the route polyline.
+          drawPacketRoute(pending.path, null);
         }
       }
 

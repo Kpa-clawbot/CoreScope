@@ -183,9 +183,12 @@
       // Already on map — draw directly.
       delete window._pendingPathInspectorRoute;
       if (window.routeLayer) window.routeLayer.clearLayers();
-      var hops = candidate.path.slice(1);
-      var origin = candidate.path[0] || null;
-      if (window.drawPacketRoute) window.drawPacketRoute(hops, origin);
+      // Pass FULL path as hopKeys (not slice(1)) — drawPacketRoute resolves
+      // each entry against nodes[] for plotting. The 2nd arg is the origin
+      // OBJECT (with pubkey/lat/lon/name); pass null since the origin is
+      // already the first hop in the path itself, and drawPacketRoute draws
+      // a marker for every resolved hop.
+      if (window.drawPacketRoute) window.drawPacketRoute(candidate.path, null);
     }
   }
 
