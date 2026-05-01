@@ -23,6 +23,9 @@
   let matrixMode = localStorage.getItem('live-matrix-mode') === 'true';
   let matrixRain = localStorage.getItem('live-matrix-rain') === 'true';
   let colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
+  let nodeFilterKeys = (localStorage.getItem('live-node-filter') || '').split(',').map(s => s.trim()).filter(Boolean);
+  let nodeFilterTotal = 0;
+  let nodeFilterShown = 0;
   let rainCanvas = null, rainCtx = null, rainDrops = [], rainRAF = null;
   const propagationBuffer = new Map(); // hash -> {timer, packets[]}
   let _onResize = null;
@@ -836,6 +839,12 @@
             <span id="audioDesc" class="sr-only">Sonify packets — turn raw bytes into generative music</span>
             <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ Favorites</label>
             <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
+            <div class="live-node-filter-wrap">
+              <input type="text" id="liveNodeFilterInput" list="liveNodeFilterList" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input">
+              <datalist id="liveNodeFilterList"></datalist>
+              <button id="liveNodeFilterClear" class="vcr-btn" title="Clear node filter" style="display:none">×</button>
+            </div>
+            <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
             <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
           </div>
           <div class="audio-controls hidden" id="audioControls">
@@ -1001,6 +1010,35 @@
       localStorage.setItem('live-favorites-only', showOnlyFavorites);
       applyFavoritesFilter();
     });
+
+    // Node filter input
+    const nodeFilterInput = document.getElementById('liveNodeFilterInput');
+    const nodeFilterClear = document.getElementById('liveNodeFilterClear');
+    if (nodeFilterInput) {
+      // Restore from URL param or localStorage
+      const urlNode = getHashParams && getHashParams().get('node');
+      if (urlNode) setNodeFilter(urlNode.split(',').map(s => s.trim()).filter(Boolean));
+      else if (nodeFilterKeys.length) updateNodeFilterUI();
+
+      nodeFilterInput.addEventListener('change', (e) => {
+        const val = e.target.value.trim();
+        setNodeFilter(val ? val.split(',').map(s => s.trim()).filter(Boolean) : []);
+        const params = getHashParams ? getHashParams() : new URLSearchParams();
+        if (nodeFilterKeys.length) params.set('node', nodeFilterKeys.join(','));
+        else params.delete('node');
+        const base = location.hash.split('?')[0];
+        const qs = params.toString();
+        location.hash = base + (qs ? '?' + qs : '');
+      });
+    }
+    if (nodeFilterClear) {
+      nodeFilterClear.addEventListener('click', () => {
+        if (nodeFilterInput) nodeFilterInput.value = '';
+        setNodeFilter([]);
+        const base = location.hash.split('?')[0];
+        location.hash = base;
+      });
+    }
 
     // Geo filter overlay
     (async function () {
@@ -1667,6 +1705,47 @@
     return getFavoritePubkeys().some(f => f === pubkey);
   }
 
+  function packetInvolvesFilterNode(pkt, filterKeys) {
+    if (!filterKeys.length) return true;
+    const hops = (pkt.decoded?.path?.hops) || [];
+    for (const hop of hops) {
+      const h = (hop.id || hop.public_key || hop).toString().toLowerCase();
+      if (filterKeys.some(f => f.toLowerCase().startsWith(h) || h.startsWith(f.toLowerCase()))) return true;
+    }
+    return false;
+  }
+
+  function setNodeFilter(keys) {
+    nodeFilterKeys = keys;
+    nodeFilterTotal = 0;
+    nodeFilterShown = 0;
+    localStorage.setItem('live-node-filter', keys.join(','));
+    updateNodeFilterUI();
+  }
+
+  function updateNodeFilterUI() {
+    const countEl = document.getElementById('liveNodeFilterCount');
+    const clearBtn = document.getElementById('liveNodeFilterClear');
+    const input = document.getElementById('liveNodeFilterInput');
+    if (nodeFilterKeys.length > 0) {
+      if (clearBtn) clearBtn.style.display = '';
+      if (countEl) { countEl.textContent = `Showing ${nodeFilterShown} of ${nodeFilterTotal}`; countEl.classList.remove('hidden'); }
+      if (input && input.value !== nodeFilterKeys.join(', ')) input.value = nodeFilterKeys.join(', ');
+    } else {
+      if (clearBtn) clearBtn.style.display = 'none';
+      if (countEl) countEl.classList.add('hidden');
+    }
+    updateNodeFilterDatalist();
+  }
+
+  function updateNodeFilterDatalist() {
+    const dl = document.getElementById('liveNodeFilterList');
+    if (!dl) return;
+    dl.innerHTML = Object.values(nodeData).map(n =>
+      `<option value="${n.public_key}">${n.name || n.public_key.slice(0, 8)}</option>`
+    ).join('');
+  }
+
   function rebuildFeedList() {
     const feed = document.getElementById('liveFeed');
     if (!feed) return;
@@ -1873,6 +1952,9 @@
   window._liveGetFavoritePubkeys = getFavoritePubkeys;
   window._livePacketInvolvesFavorite = packetInvolvesFavorite;
   window._liveIsNodeFavorited = isNodeFavorited;
+  window._livePacketInvolvesFilterNode = packetInvolvesFilterNode;
+  window._liveGetNodeFilterKeys = function() { return nodeFilterKeys; };
+  window._liveSetNodeFilter = setNodeFilter;
   window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
   window._liveResolveHopPositions = resolveHopPositions;
   window._liveVcrSpeedCycle = vcrSpeedCycle;
@@ -1962,6 +2044,14 @@
 
     // --- Favorites filter ---
     if (showOnlyFavorites && !packets.some(function(p) { return packetInvolvesFavorite(p); })) return;
+
+    // --- Node filter ---
+    if (nodeFilterKeys.length) {
+      nodeFilterTotal++;
+      if (!packets.some(function(p) { return packetInvolvesFilterNode(p, nodeFilterKeys); })) return;
+      nodeFilterShown++;
+      updateNodeFilterUI();
+    }
 
     // --- Ensure ADVERT nodes appear on map ---
     for (var pi = 0; pi < packets.length; pi++) {

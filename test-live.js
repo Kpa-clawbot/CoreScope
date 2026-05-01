@@ -928,6 +928,56 @@ console.log('\n=== live.js: source-level safety checks ===');
   });
 }
 
+// ===== Node filter (M3 — #771) =====
+console.log('\n=== live.js: node filter ===');
+{
+  const ctx = makeLiveSandbox();
+  const pktInvolvesFilter = ctx.window._livePacketInvolvesFilterNode;
+  assert.ok(pktInvolvesFilter, '_livePacketInvolvesFilterNode must be exposed');
+
+  const makePkt = (hops) => ({ decoded: { path: { hops }, payload: {} } });
+
+  test('packetInvolvesFilterNode returns true when filter is empty', () => {
+    assert.strictEqual(pktInvolvesFilter(makePkt(['abcd1234']), []), true);
+  });
+
+  test('packetInvolvesFilterNode matches hop by prefix', () => {
+    assert.strictEqual(pktInvolvesFilter(makePkt(['abcd1234', 'ef012345']), ['abcd1234567890ab']), true);
+  });
+
+  test('packetInvolvesFilterNode matches full key against short hop', () => {
+    assert.strictEqual(pktInvolvesFilter(makePkt(['abcd']), ['abcd1234567890ab']), true);
+  });
+
+  test('packetInvolvesFilterNode returns false when no hop matches', () => {
+    assert.strictEqual(pktInvolvesFilter(makePkt(['ffff1234', '00001111']), ['abcd1234567890ab']), false);
+  });
+
+  test('packetInvolvesFilterNode matches any of multiple filter keys (OR logic)', () => {
+    assert.strictEqual(pktInvolvesFilter(makePkt(['ffff0000']), ['abcd1234', 'ffff0000']), true);
+  });
+
+  test('packetInvolvesFilterNode returns false for packet with no hops', () => {
+    assert.strictEqual(pktInvolvesFilter(makePkt([]), ['abcd1234']), false);
+  });
+
+  const getNodeFilterKeys = ctx.window._liveGetNodeFilterKeys;
+  assert.ok(getNodeFilterKeys, '_liveGetNodeFilterKeys must be exposed');
+
+  test('node filter defaults to empty array when localStorage is unset', () => {
+    assert.strictEqual(getNodeFilterKeys().length, 0);
+  });
+
+  test('node filter saves to localStorage when set', () => {
+    const setFilter = ctx.window._liveSetNodeFilter;
+    assert.ok(setFilter, '_liveSetNodeFilter must be exposed');
+    setFilter(['abcd1234', 'ef012345']);
+    assert.strictEqual(ctx.localStorage.getItem('live-node-filter'), 'abcd1234,ef012345');
+    setFilter([]);
+    assert.strictEqual(ctx.localStorage.getItem('live-node-filter'), '');
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
