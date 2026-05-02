@@ -1955,6 +1955,7 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 			ClientVersion: o.ClientVersion, Radio: o.Radio,
 			BatteryMv: o.BatteryMv, UptimeSecs: o.UptimeSecs,
 			NoiseFloor: o.NoiseFloor,
+			LastPacketAt: o.LastPacketAt,
 			PacketsLastHour: plh,
 			Lat: lat, Lon: lon, NodeRole: nodeRole,
 		})
@@ -1996,6 +1997,7 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 		ClientVersion: obs.ClientVersion, Radio: obs.Radio,
 		BatteryMv: obs.BatteryMv, UptimeSecs: obs.UptimeSecs,
 		NoiseFloor: obs.NoiseFloor,
+		LastPacketAt: obs.LastPacketAt,
 		PacketsLastHour: plh,
 	})
 }
