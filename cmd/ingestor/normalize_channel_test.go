@@ -71,8 +71,8 @@ func TestLoadChannelKeys_LeavesCustomNamesUntouched(t *testing.T) {
 }
 
 func TestLoadChannelKeys_DuplicateCasingLogsWarning(t *testing.T) {
-	// Verify that config with both "public" and "Public" logs a warning
-	// and the last one wins (Go map iteration order is nondeterministic)
+	// Verify that config with both "public" and "Public" resolves deterministically:
+	// the canonical (already-normalized) form should win.
 	cfg := &Config{
 		ChannelKeys: map[string]string{
 			"public": "8b3387e9c5cdea6ac9e5edbaa115cd72",
@@ -83,15 +83,15 @@ func TestLoadChannelKeys_DuplicateCasingLogsWarning(t *testing.T) {
 	keys := loadChannelKeys(cfg, "/dev/null")
 
 	// After normalization, only one key should exist: "Public"
-	// The value is nondeterministic since Go map iteration order varies
+	// The canonical form ("Public") should win over the lowercase form ("public")
 	if _, ok := keys["public"]; ok {
 		t.Error("Expected 'public' to be normalized away")
 	}
 	if _, ok := keys["Public"]; !ok {
 		t.Error("Expected 'Public' key to exist")
 	}
-	// Exactly one entry for the normalized key
-	if len(keys) != 1 {
-		t.Errorf("Expected exactly 1 key, got %d", len(keys))
+	// Assert the canonical form's value won, not just any value
+	if keys["Public"] != "differentkey1234567" {
+		t.Errorf("Expected canonical 'Public' value to win, got %q", keys["Public"])
 	}
 }
