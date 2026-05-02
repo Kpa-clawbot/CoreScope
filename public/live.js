@@ -428,29 +428,31 @@
   }
 
   function buildClickablePathPopupHtml(typeName, color, hopNames, tsMs, hash) {
+    // tsMs is packet receive time — "ago" is relative to when the packet arrived, not when the animation ended
     const secsAgo = Math.round((Date.now() - tsMs) / 1000);
     const timeStr = secsAgo < 60 ? secsAgo + 's ago' : Math.round(secsAgo / 60) + 'm ago';
     const chain = hopNames.join(' → ');
-    const link = hash ? `<a href="#/packets/${hash}" style="color:${color};font-size:11px">full detail →</a>` : '';
-    return `<div style="font-size:12px;line-height:1.6;min-width:160px">
-      <span style="background:${color};color:#fff;border-radius:3px;padding:1px 5px;font-size:11px;font-weight:600">${typeName}</span>
-      <div style="margin-top:4px;color:var(--text-muted,#6b7280);font-size:11px">${timeStr}</div>
-      <div style="margin-top:4px;word-break:break-word">${chain}</div>
-      ${link ? '<div style="margin-top:4px">' + link + '</div>' : ''}
+    const link = hash ? `<a class="lc-path-link" href="#/packets/${hash}" style="color:${color}">full detail →</a>` : '';
+    return `<div class="lc-path-popup">
+      <span class="lc-path-badge" style="background:${color}">${typeName}</span>
+      <div class="lc-path-time">${timeStr}</div>
+      <div class="lc-path-chain">${chain}</div>
+      ${link ? '<div class="lc-path-link-wrap">' + link + '</div>' : ''}
     </div>`;
   }
 
-  function pruneClickablePaths(paths, now) {
+  function pruneClickablePaths(now) {
     const cutoff = now - CLICKABLE_PATH_TTL_MS;
-    const alive = paths.filter(p => {
-      if (p.addedAt < cutoff) { try { p.poly.remove(); } catch (_) {} return false; }
-      return true;
-    });
-    while (alive.length > CLICKABLE_PATH_MAX) {
-      const evicted = alive.shift();
-      try { evicted.poly.remove(); } catch (_) {}
+    for (let i = clickablePaths.length - 1; i >= 0; i--) {
+      if (clickablePaths[i].addedAt < cutoff) {
+        try { clickablePaths[i].poly.remove(); } catch (_) {}
+        clickablePaths.splice(i, 1);
+      }
     }
-    return alive;
+    while (clickablePaths.length > CLICKABLE_PATH_MAX) {
+      try { clickablePaths[0].poly.remove(); } catch (_) {}
+      clickablePaths.shift();
+    }
   }
 
   function registerClickablePath(latLngs, typeName, color, hopNames, tsMs, hash) {
@@ -458,7 +460,7 @@
     const poly = L.polyline(latLngs, { weight: 12, opacity: 0, interactive: true }).addTo(clickablePathsLayer);
     const entry = { addedAt: Date.now(), poly };
     clickablePaths.push(entry);
-    clickablePaths = pruneClickablePaths(clickablePaths, Date.now());
+    pruneClickablePaths(Date.now());
     let dismissTimer = null;
     poly.on('click', function(e) {
       if (dismissTimer) clearTimeout(dismissTimer);
@@ -2155,13 +2157,14 @@
     for (var aKey in nodeActivity) {
       if (!(aKey in nodeData)) delete nodeActivity[aKey];
     }
-    clickablePaths = pruneClickablePaths(clickablePaths, Date.now());
+    pruneClickablePaths(Date.now());
   }
 
   // Expose for testing
   window._livePruneStaleNodes = pruneStaleNodes;
   window._liveBuildClickablePathPopupHtml = buildClickablePathPopupHtml;
   window._livePruneClickablePaths = pruneClickablePaths;
+  window._liveClickablePaths = clickablePaths;
   window._liveNodeMarkers = function() { return nodeMarkers; };
   window._liveNodeData = function() { return nodeData; };
   window._liveNodeActivity = function() { return nodeActivity; };
@@ -2531,8 +2534,11 @@
         const countEl = document.getElementById('liveAnimCount');
         if (countEl) countEl.textContent = activeAnims;
         if (pktMeta && hopPositions.length >= 2) {
-          const latLngs = hopPositions.map(hp => hp.pos);
-          const hopNames = hopPositions.map(hp => hp.name || (hp.key ? hp.key.slice(0, 8) : '?'));
+          const latLngs = [], hopNames = [];
+          for (const hp of hopPositions) {
+            latLngs.push(hp.pos);
+            hopNames.push(hp.name || (hp.key ? hp.key.slice(0, 8) : '?'));
+          }
           registerClickablePath(latLngs, typeName, color, hopNames, pktMeta.ts, pktMeta.hash);
         }
         return;
