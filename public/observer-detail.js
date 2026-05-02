@@ -70,18 +70,24 @@
     try {
       destroyCharts();
       chartDefaults();
-      const [obs, analytics] = await Promise.all([
+      const [obs, analytics, obsSkewArr] = await Promise.all([
         api('/observers/' + encodeURIComponent(currentId)),
         api('/observers/' + encodeURIComponent(currentId) + '/analytics?days=' + currentDays),
+        api('/observers/clock-skew', { ttl: 30000 }).catch(function() { return []; }),
       ]);
-      renderDetail(obs, analytics);
+      // Find this observer's calibration data.
+      var obsSkew = null;
+      (Array.isArray(obsSkewArr) ? obsSkewArr : []).forEach(function(s) {
+        if (s && s.observerID === currentId) obsSkew = s;
+      });
+      renderDetail(obs, analytics, obsSkew);
     } catch (e) {
       document.getElementById('obsDetailContent').innerHTML =
         '<div class="text-muted" style="padding:40px">Error: ' + e.message + '</div>';
     }
   }
 
-  function renderDetail(obs, analytics) {
+  function renderDetail(obs, analytics, obsSkew) {
     const el = document.getElementById('obsDetailContent');
     if (!el) return;
 
@@ -154,6 +160,18 @@
       <div class="mono" style="font-size:0.75em;color:var(--text-muted);margin-bottom:20px;word-break:break-all">
         ID: ${obs.id}
       </div>
+      ${obsSkew && obsSkew.samples > 0 ? `
+      <div class="node-full-card skew-detail-section" style="margin-bottom:20px;padding:12px">
+        <h4 style="margin:0 0 6px">⏰ Clock Offset</h4>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span style="font-size:18px;font-weight:700;font-family:var(--mono)">${formatSkew(obsSkew.offsetSec)}</span>
+          ${renderSkewBadge(observerSkewSeverity(obsSkew.offsetSec), obsSkew.offsetSec)}
+          <span class="text-muted" style="font-size:12px">${obsSkew.samples} sample${obsSkew.samples !== 1 ? 's' : ''}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:8px;max-width:600px">
+          <strong>How this is computed:</strong> when this observer and another observer see the same packet, we compare their receive timestamps. The median deviation across all multi-observer packets is this observer's offset.
+        </div>
+      </div>` : ''}
       <div class="obs-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:16px">
         <div class="chart-card" style="padding:12px">
           <h3 style="margin:0 0 8px;font-size:0.95em">Packets Over Time</h3>
