@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/meshcore-analyzer/geofilter"
 )
@@ -48,8 +49,9 @@ type Config struct {
 	// no UpsertObserver, no observations, no metrics.
 	ObserverBlacklist []string `json:"observerBlacklist,omitempty"`
 
-	// obsBlacklistSet is the lazily-built lowercase set for O(1) lookups.
-	obsBlacklistSet map[string]bool
+	// obsBlacklistSetCached is the lazily-built lowercase set for O(1) lookups.
+	obsBlacklistSetCached map[string]bool
+	obsBlacklistOnce      sync.Once
 }
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
@@ -127,7 +129,7 @@ func (c *Config) IsObserverBlacklisted(id string) bool {
 	if c == nil || len(c.ObserverBlacklist) == 0 {
 		return false
 	}
-	if c.obsBlacklistSet == nil {
+	c.obsBlacklistOnce.Do(func() {
 		m := make(map[string]bool, len(c.ObserverBlacklist))
 		for _, pk := range c.ObserverBlacklist {
 			trimmed := strings.ToLower(strings.TrimSpace(pk))
@@ -135,9 +137,9 @@ func (c *Config) IsObserverBlacklisted(id string) bool {
 				m[trimmed] = true
 			}
 		}
-		c.obsBlacklistSet = m
-	}
-	return c.obsBlacklistSet[strings.ToLower(strings.TrimSpace(id))]
+		c.obsBlacklistSetCached = m
+	})
+	return c.obsBlacklistSetCached[strings.ToLower(strings.TrimSpace(id))]
 }
 
 // LoadConfig reads configuration from a JSON file, with env var overrides.
