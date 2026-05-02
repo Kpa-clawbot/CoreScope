@@ -62,7 +62,7 @@
     // Update clear-filters button visibility
     var cb = document.getElementById('clearFiltersBtn');
     if (cb) {
-      var active = !!(filters.hash || filters.node || filters.observer || filters.channel || filters.type || filters._filterExpr || filters.myNodes) || !!RegionFilter.getRegionParam();
+      var active = !!(filters.hash || filters.node || filters.observer || filters.channel || filters.type || filters._filterExpr || filters.myNodes) || !!RegionFilter.getRegionParam() || savedTimeWindowMin !== DEFAULT_TIME_WINDOW;
       cb.style.display = active ? '' : 'none';
     }
   }
@@ -1112,6 +1112,12 @@
       var typeMenu = document.getElementById('typeMenu');
       if (typeMenu) typeMenu.querySelectorAll('input[type=checkbox]').forEach(function(cb) { cb.checked = false; });
       document.getElementById('typeTrigger').textContent = 'All Types ▾';
+
+      // Reset time window to default
+      savedTimeWindowMin = DEFAULT_TIME_WINDOW;
+      var fTW = document.getElementById('fTimeWindow');
+      if (fTW) fTW.value = String(DEFAULT_TIME_WINDOW);
+      localStorage.removeItem('meshcore-time-window');
 
       // Reset region filter
       RegionFilter.setSelected([]);
