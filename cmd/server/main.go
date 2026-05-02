@@ -264,6 +264,18 @@ func main() {
 		database.hasResolvedPath = true // detectSchema ran before column was added; fix the flag
 	}
 
+	// Ensure observers.inactive column exists (PR #954 filters on it; ingestor migration
+	// adds it but server may run against DBs ingestor never touched, e.g. e2e fixture).
+	if err := ensureObserverInactiveColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add observers.inactive column: %v", err)
+	}
+
+	// Soft-delete observers that are in the blacklist (mark inactive=1) so
+	// historical data from a prior unblocked window is hidden too.
+	if len(cfg.ObserverBlacklist) > 0 {
+		softDeleteBlacklistedObservers(dbPath, cfg.ObserverBlacklist)
+	}
+
 	// WaitGroup for background init steps that gate /api/healthz readiness.
 	var initWg sync.WaitGroup
 
