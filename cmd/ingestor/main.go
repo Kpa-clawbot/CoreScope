@@ -834,7 +834,25 @@ func loadChannelKeys(cfg *Config, configPath string) map[string]string {
 
 	// 3. Explicit config keys (highest priority — overrides rainbow + derived)
 	for k, v := range cfg.ChannelKeys {
-		keys[k] = v
+		normalized := normalizeChannelName(k)
+		if normalized != k {
+			log.Printf("[channels] Normalizing known channel key %q → %q for display", k, normalized)
+		}
+		// Detect config collision: if both "public" and "Public" are present,
+		// the normalized key collides. Resolve deterministically: prefer the
+		// canonical (already-normalized) form over the lowercase variant.
+		if _, dupe := keys[normalized]; dupe {
+			// If the incoming key IS the canonical form, it wins (overwrite).
+			// If the incoming key is a non-canonical form (e.g., "public"), keep existing.
+			if k == normalized {
+				log.Printf("[channels] Resolving duplicate %q: canonical form wins over non-canonical", normalized)
+				keys[normalized] = v
+			} else {
+				log.Printf("[channels] WARNING: duplicate channel key %q — config has %q normalizing to %q, keeping canonical value", normalized, k, normalized)
+			}
+		} else {
+			keys[normalized] = v
+		}
 	}
 
 	return keys
