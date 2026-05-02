@@ -3,6 +3,7 @@
 
 (function () {
   let observers = [];
+  let obsSkewMap = {}; // observerID → {offsetSec, samples}
   let wsHandler = null;
   let refreshTimer = null;
   let regionChangeHandler = null;
@@ -48,6 +49,14 @@
           va = a.last_seen ? new Date(a.last_seen).getTime() : 0;
           vb = b.last_seen ? new Date(b.last_seen).getTime() : 0;
           break;
+        case 'last_packet':
+          va = a.last_packet_at ? new Date(a.last_packet_at).getTime() : 0;
+          vb = b.last_packet_at ? new Date(b.last_packet_at).getTime() : 0;
+          break;
+        case 'forwarding':
+          va = a.last_packet_at ? Date.now() - new Date(a.last_packet_at).getTime() : Infinity;
+          vb = b.last_packet_at ? Date.now() - new Date(b.last_packet_at).getTime() : Infinity;
+          break;
         case 'packets':
           va = a.packet_count || 0;
           vb = b.packet_count || 0;
@@ -55,6 +64,10 @@
         case 'packets_hr':
           va = a.packetsLastHour || 0;
           vb = b.packetsLastHour || 0;
+          break;
+        case 'clock_offset':
+          va = obsSkewMap[a.id] && obsSkewMap[a.id].samples ? Math.abs(obsSkewMap[a.id].offsetSec || 0) : Infinity;
+          vb = obsSkewMap[b.id] && obsSkewMap[b.id].samples ? Math.abs(obsSkewMap[b.id].offsetSec || 0) : Infinity;
           break;
         case 'uptime':
           va = a.first_seen ? Date.now() - new Date(a.first_seen).getTime() : 0;
@@ -268,12 +281,20 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
     if (regionChangeHandler) RegionFilter.offChange(regionChangeHandler);
     regionChangeHandler = null;
     observers = [];
+    obsSkewMap = {};
   }
 
   async function loadObservers() {
     try {
-      const data = await api('/observers', { ttl: CLIENT_TTL.observers });
+      const [data, skewData] = await Promise.all([
+        api('/observers', { ttl: CLIENT_TTL.observers }),
+        api('/observers/clock-skew', { ttl: 30000 }).catch(function() { return []; })
+      ]);
       observers = data.observers || [];
+      obsSkewMap = {};
+      (Array.isArray(skewData) ? skewData : []).forEach(function(s) {
+        if (s && s.observerID) obsSkewMap[s.observerID] = s;
+      });
       render();
     } catch (e) {
       document.getElementById('obsContent').innerHTML =
@@ -290,6 +311,17 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
     if (ago < 600000 + tolerance) return { cls: 'health-green', label: 'Online' };    // < 10 min + tolerance
     if (ago < 3600000 + tolerance) return { cls: 'health-yellow', label: 'Stale' };   // < 1 hour + tolerance
     return { cls: 'health-red', label: 'Offline' };
+  }
+
+  function packetBadge(o) {
+    if (!o.last_packet_at) return '<span title="No packets ever observed">📡⚠ never</span>';
+    const pktAgo = Date.now() - new Date(o.last_packet_at).getTime();
+    const statusAgo = o.last_seen ? Date.now() - new Date(o.last_seen).getTime() : Infinity;
+    const gap = pktAgo - statusAgo;
+    if (gap > 600000) {
+      return `<span title="Last packet ${timeAgo(o.last_packet_at)} — status is newer by ${Math.round(gap/60000)}min. Observer may be alive but not forwarding packets.">📡⚠ ${timeAgo(o.last_packet_at)}</span>`;
+    }
+    return timeAgo(o.last_packet_at);
   }
 
   function uptimeStr(firstSeen) {
@@ -407,11 +439,11 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
         <span class="obs-stat"><span class="health-dot health-red">✕</span> ${offline} Offline</span>
         <span class="obs-stat">📡 ${filtered.length} Total</span>
       </div>
-      <div class="obs-table-scroll"><table class="data-table obs-table" id="obsTable">
-        <caption class="sr-only">Observer status and statistics</caption>
+        <div class="obs-table-scroll"><table class="data-table obs-table" id="obsTable">
+          <caption class="sr-only">Observer status and statistics</caption>
         <thead><tr>
-          ${sortTh('Status','status')}${sortTh('Name','name')}${sortTh('Region','region')}${sortTh('Last Seen','last_seen')}
-          ${sortTh('Packets','packets')}${sortTh('Packets/Hour','packets_hr')}${sortTh('Uptime','uptime')}
+          ${sortTh('Status','status')}${sortTh('Name','name')}${sortTh('Region','region')}${sortTh('Last Status','last_seen')}${sortTh('Last Packet','last_packet')}
+          ${sortTh('Forwarding','forwarding')}${sortTh('Packets','packets')}${sortTh('Packets/Hour','packets_hr')}${sortTh('Clock Offset','clock_offset')}${sortTh('Uptime','uptime')}
         </tr></thead>
         <tbody>${sorted.map(o => {
           const h = healthStatus(o.last_seen);
@@ -421,8 +453,16 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
             <td class="mono">${o.name || o.id}</td>
             <td>${o.iata ? `<span class="badge-region">${o.iata}</span>` : '—'}</td>
             <td>${timeAgo(o.last_seen)}</td>
+            <td>${o.last_packet_at ? timeAgo(o.last_packet_at) : '<span class="text-muted">—</span>'}</td>
+            <td>${packetBadge(o)}</td>
             <td>${(o.packet_count || 0).toLocaleString()}</td>
             <td>${sparkBar(o.packetsLastHour || 0, maxPktsHr)}</td>
+            <td>${(function() {
+              var sk = obsSkewMap[o.id];
+              if (!sk || sk.samples == null || sk.samples === 0) return '<span class="text-muted">—</span>';
+              var sev = observerSkewSeverity(sk.offsetSec);
+              return renderSkewBadge(sev, sk.offsetSec) + ' <span class="text-muted" title="Computed from ' + sk.samples + ' multi-observer packets. Positive = observer ahead of consensus.">(' + sk.samples + ')</span>';
+            })()}</td>
             <td>${uptimeStr(o.first_seen)}</td>
           </tr>`;
         }).join('')}</tbody>

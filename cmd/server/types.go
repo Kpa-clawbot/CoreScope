@@ -893,6 +893,7 @@ type ObserverResp struct {
 	BatteryMv       interface{} `json:"battery_mv"`
 	UptimeSecs      interface{} `json:"uptime_secs"`
 	NoiseFloor      interface{} `json:"noise_floor"`
+	LastPacketAt    interface{} `json:"last_packet_at"`
 	PacketsLastHour int         `json:"packetsLastHour"`
 	PacketsLast24h  int         `json:"packetsLast24h"`
 	PacketsLast7d   int         `json:"packetsLast7d"`

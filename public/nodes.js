@@ -815,6 +815,41 @@
    * Shared between the full-screen detail page and the side panel (#813, #690).
    * No-op if the container is missing, the API errors, or the response lacks severity.
    */
+  /** Build collapsible evidence panel for node clock skew card */
+  function buildEvidencePanel(cs) {
+    var evidence = cs.recentHashEvidence;
+    if (!evidence || evidence.length === 0) return '';
+
+    var calSum = cs.calibrationSummary || {};
+    var calLine = calSum.totalSamples
+      ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Last ' + calSum.totalSamples + ' samples: ' + (calSum.calibratedSamples || 0) + ' corrected via observer calibration, ' + (calSum.uncalibratedSamples || 0) + ' uncorrected (single-observer).</div>'
+      : '';
+
+    // Severity reason.
+    var skewVal = window.currentSkewValue(cs);
+    var sampleCount = (cs.samples || []).length;
+    var sevLabel = SKEW_SEVERITY_LABELS[cs.severity] || cs.severity;
+    var reasonLine = '<div style="font-size:12px;margin-bottom:8px"><strong>Recent ' + sampleCount + ' adverts median ' + formatSkew(skewVal) + ' → ' + sevLabel + '</strong></div>';
+
+    var hashBlocks = evidence.map(function(ev) {
+      var shortHash = (ev.hash || '').substring(0, 8) + '…';
+      var obsCount = ev.observers ? ev.observers.length : 0;
+      var header = '<div style="font-weight:600;font-size:12px;margin-top:6px">Hash ' + shortHash + '  ·  ' + obsCount + ' observer' + (obsCount !== 1 ? 's' : '') + '  ·  median corrected: ' + formatSkew(ev.medianCorrectedSkewSec) + '</div>';
+      var lines = (ev.observers || []).map(function(o) {
+        var name = o.observerName || o.observerID;
+        return '<div style="font-size:11px;padding-left:16px;font-family:var(--mono)">' +
+          name + '   raw=' + formatSkew(o.rawSkewSec) + '  corrected=' + formatSkew(o.correctedSkewSec) + '  (observer offset ' + formatSkew(o.observerOffsetSec) + ')' +
+          '</div>';
+      }).join('');
+      return header + lines;
+    }).join('');
+
+    return '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:var(--text-muted)">Evidence (' + evidence.length + ' hashes)</summary>' +
+      '<div style="margin-top:6px;padding:8px;background:var(--bg-secondary);border-radius:6px">' +
+      reasonLine + calLine + hashBlocks +
+      '</div></details>';
+  }
+
   async function loadClockSkewInto(container, pubkey) {
     if (!container) return;
     try {
@@ -841,7 +876,8 @@
         '</div>' +
         driftHtml +
         (sparkHtml ? '<div class="skew-sparkline-wrap" style="margin-top:8px">' + sparkHtml + '<div style="font-size:10px;color:var(--text-muted)">Skew over time (' + (cs.samples || []).length + ' samples)</div></div>' : '') +
-        bimodalWarning;
+        bimodalWarning +
+        buildEvidencePanel(cs);
     } catch (e) {
       // Non-fatal — section stays hidden
     }

@@ -26,7 +26,7 @@
   let observers = [];
   let observerMap = new Map(); // id → observer for O(1) lookups (#383)
   let regionMap = {};
-  const TYPE_NAMES = { 0:'Request', 1:'Response', 2:'Direct Msg', 3:'ACK', 4:'Advert', 5:'Channel Msg', 7:'Anon Req', 8:'Path', 9:'Trace', 11:'Control' };
+  const TYPE_NAMES = { 0:'Request', 1:'Response', 2:'Direct Msg', 3:'ACK', 4:'Advert', 5:'Channel Msg', 6:'Group Data', 7:'Anon Req', 8:'Path', 9:'Trace', 10:'Multipart', 11:'Control', 15:'Raw Custom' };
   function typeName(t) { return TYPE_NAMES[t] ?? `Type ${t}`; }
   const isMobile = window.innerWidth <= 1024;
   const PACKET_LIMIT = isMobile ? 1000 : 50000;
@@ -59,6 +59,12 @@
 
   function updatePacketsUrl() {
     history.replaceState(null, '', '#/packets' + buildPacketsQuery(savedTimeWindowMin, RegionFilter.getRegionParam()));
+    // Update clear-filters button visibility
+    var cb = document.getElementById('clearFiltersBtn');
+    if (cb) {
+      var active = !!(filters.hash || filters.node || filters.observer || filters.channel || filters.type || filters._filterExpr || filters.myNodes) || !!RegionFilter.getRegionParam() || savedTimeWindowMin !== DEFAULT_TIME_WINDOW;
+      cb.style.display = active ? '' : 'none';
+    }
   }
 
   let filtersBuilt = false;
@@ -785,6 +791,7 @@
       </div>
       <div class="filter-bar" id="pktFilters">
         <button class="btn filter-toggle-btn" id="filterToggleBtn">Filters ▾</button>
+        <button class="btn btn-clear-filters" id="clearFiltersBtn" title="Clear all filters" style="display:none;font-size:12px;padding:2px 8px;color:var(--text-muted);border:1px solid var(--border);border-radius:4px;background:transparent;cursor:pointer">✕ Clear</button>
         <div class="filter-group">
           <input type="text" placeholder="Packet hash…" id="fHash" aria-label="Filter by packet hash" title="Filter packets by hex hash prefix">
           <div class="node-filter-wrap" style="position:relative">
@@ -1064,6 +1071,63 @@
       bar.classList.toggle('filters-expanded');
       this.textContent = bar.classList.contains('filters-expanded') ? 'Filters ▴' : 'Filters ▾';
     });
+
+    // --- Clear filters button ---
+    const clearBtn = document.getElementById('clearFiltersBtn');
+    if (clearBtn) clearBtn.addEventListener('click', function() {
+      // Reset filters object
+      filters.hash = undefined;
+      filters.node = undefined;
+      filters.nodeName = undefined;
+      filters.observer = undefined;
+      filters.channel = undefined;
+      filters.type = undefined;
+      filters._filterExpr = undefined;
+      filters._packetFilter = null;
+      filters.myNodes = false;
+      _observerFilterSet = null;
+
+      // Clear localStorage filter entries
+      localStorage.removeItem('meshcore-observer-filter');
+      localStorage.removeItem('meshcore-type-filter');
+
+      // Reset DOM inputs
+      document.getElementById('fHash').value = '';
+      document.getElementById('fNode').value = '';
+      var pfInput = document.getElementById('packetFilterInput');
+      if (pfInput) { pfInput.value = ''; pfInput.classList.remove('filter-active', 'filter-error'); }
+      var pfError = document.getElementById('packetFilterError');
+      if (pfError) pfError.style.display = 'none';
+      var pfCount = document.getElementById('packetFilterCount');
+      if (pfCount) pfCount.style.display = 'none';
+      document.getElementById('fChannel').value = '';
+      document.getElementById('fMyNodes').classList.remove('active');
+
+      // Reset observer multi-select
+      var obMenu = document.getElementById('observerMenu');
+      if (obMenu) obMenu.querySelectorAll('input[type=checkbox]').forEach(function(cb) { cb.checked = false; });
+      document.getElementById('observerTrigger').textContent = 'All Observers ▾';
+
+      // Reset type multi-select
+      var typeMenu = document.getElementById('typeMenu');
+      if (typeMenu) typeMenu.querySelectorAll('input[type=checkbox]').forEach(function(cb) { cb.checked = false; });
+      document.getElementById('typeTrigger').textContent = 'All Types ▾';
+
+      // Reset time window to default
+      savedTimeWindowMin = DEFAULT_TIME_WINDOW;
+      var fTW = document.getElementById('fTimeWindow');
+      if (fTW) fTW.value = String(DEFAULT_TIME_WINDOW);
+      localStorage.removeItem('meshcore-time-window');
+
+      // Reset region filter
+      RegionFilter.setSelected([]);
+
+      // Update URL and reload
+      updatePacketsUrl();
+      loadPackets();
+    });
+    // Show clear button if page loaded with active filters (e.g. from URL params)
+    updatePacketsUrl();
 
     // Filter event listeners
     document.getElementById('fHash').value = filters.hash || '';

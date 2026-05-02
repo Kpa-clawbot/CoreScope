@@ -21,6 +21,16 @@ type MQTTSource struct {
 	RejectUnauthorized *bool    `json:"rejectUnauthorized,omitempty"`
 	Topics             []string `json:"topics"`
 	IATAFilter         []string `json:"iataFilter,omitempty"`
+	ConnectTimeoutSec  int      `json:"connectTimeoutSec,omitempty"`
+}
+
+// ConnectTimeoutOrDefault returns the per-source connect timeout in seconds,
+// or 30 if not set (matching the WaitTimeout default from #926).
+func (s MQTTSource) ConnectTimeoutOrDefault() int {
+	if s.ConnectTimeoutSec > 0 {
+		return s.ConnectTimeoutSec
+	}
+	return 30
 }
 
 // MQTTLegacy is the old single-broker config format.

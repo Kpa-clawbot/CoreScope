@@ -284,3 +284,36 @@ func TestLoadConfigWithAllFields(t *testing.T) {
 		t.Errorf("iataFilter=%v", src.IATAFilter)
 	}
 }
+
+func TestConnectTimeoutOrDefault(t *testing.T) {
+	// Default when unset
+	s := MQTTSource{}
+	if got := s.ConnectTimeoutOrDefault(); got != 30 {
+		t.Errorf("default: got %d, want 30", got)
+	}
+
+	// Custom value
+	s.ConnectTimeoutSec = 5
+	if got := s.ConnectTimeoutOrDefault(); got != 5 {
+		t.Errorf("custom: got %d, want 5", got)
+	}
+
+	// Zero treated as unset
+	s.ConnectTimeoutSec = 0
+	if got := s.ConnectTimeoutOrDefault(); got != 30 {
+		t.Errorf("zero: got %d, want 30", got)
+	}
+}
+
+func TestConnectTimeoutFromJSON(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := dir + "/config.json"
+	os.WriteFile(cfgPath, []byte(`{"mqttSources":[{"name":"s1","broker":"tcp://b:1883","topics":["#"],"connectTimeoutSec":5}]}`), 0644)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.MQTTSources[0].ConnectTimeoutOrDefault(); got != 5 {
+		t.Errorf("from JSON: got %d, want 5", got)
+	}
+}
