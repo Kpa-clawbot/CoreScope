@@ -455,6 +455,12 @@
     return '<span class="' + cls + '" title="Clock skew: ' + window.formatSkew(skewSec) + ' (' + (SKEW_SEVERITY_LABELS[severity] || severity) + ')">' + label + '</span>';
   };
 
+  /** Compute severity for an observer's clock offset (seconds). */
+  window.observerSkewSeverity = function(offsetSec) {
+    var abs = Math.abs(offsetSec);
+    return abs >= 3600 ? 'critical' : abs >= 300 ? 'warning' : 'ok';
+  };
+
   /** Render a skew sparkline SVG (inline, word-sized) */
   window.renderSkewSparkline = function(samples, w, h) {
     w = w || 120; h = h || 24;

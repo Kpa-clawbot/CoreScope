@@ -165,7 +165,7 @@
         <h4 style="margin:0 0 6px">⏰ Clock Offset</h4>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <span style="font-size:18px;font-weight:700;font-family:var(--mono)">${formatSkew(obsSkew.offsetSec)}</span>
-          ${renderSkewBadge((function(abs) { return abs >= 300 ? (abs >= 3600 ? 'critical' : 'warning') : 'ok'; })(Math.abs(obsSkew.offsetSec)), obsSkew.offsetSec)}
+          ${renderSkewBadge(observerSkewSeverity(obsSkew.offsetSec), obsSkew.offsetSec)}
           <span class="text-muted" style="font-size:12px">${obsSkew.samples} sample${obsSkew.samples !== 1 ? 's' : ''}</span>
         </div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:8px;max-width:600px">

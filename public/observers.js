@@ -148,7 +148,7 @@
             <td>${(function() {
               var sk = obsSkewMap[o.id];
               if (!sk || sk.samples == null || sk.samples === 0) return '<span class="text-muted">—</span>';
-              var sev = (function(abs) { return abs >= 300 ? (abs >= 3600 ? 'critical' : 'warning') : 'ok'; })(Math.abs(sk.offsetSec));
+              var sev = observerSkewSeverity(sk.offsetSec);
               return renderSkewBadge(sev, sk.offsetSec) + ' <span class="text-muted" title="Computed from ' + sk.samples + ' multi-observer packets. Positive = observer ahead of consensus.">(' + sk.samples + ')</span>';
             })()}</td>
             <td>${uptimeStr(o.first_seen)}</td>
