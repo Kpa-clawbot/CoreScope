@@ -104,6 +104,9 @@ func (s *Server) getMemStats() runtime.MemStats {
 // RegisterRoutes sets up all HTTP routes on the given router.
 func (s *Server) RegisterRoutes(r *mux.Router) {
 	s.router = r
+	// CORS middleware (must run before route handlers)
+	r.Use(s.corsMiddleware)
+
 	// Performance instrumentation middleware
 	r.Use(s.perfMiddleware)
 

@@ -70,6 +70,11 @@ type Config struct {
 
 	Timestamps *TimestampConfig `json:"timestamps,omitempty"`
 
+	// CORSAllowedOrigins is the list of origins permitted to make cross-origin
+	// requests. When empty (default), no Access-Control-* headers are sent,
+	// so browsers enforce same-origin policy. Set to ["*"] to allow all origins.
+	CORSAllowedOrigins []string `json:"corsAllowedOrigins,omitempty"`
+
 	DebugAffinity bool `json:"debugAffinity,omitempty"`
 
 	// ObserverBlacklist is a list of observer public keys to exclude from API
