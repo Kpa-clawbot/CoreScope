@@ -104,14 +104,19 @@
                 Connect your node to the Cornmeister MQTT broker to share raw packets.
               </div>
 
-              <table class="help-table">
-                <tr><td>Server:</td><td><code>mqtt.cornmeister.nl</code></td></tr>
-                <tr><td>Port (TLS):</td><td><code>8883</code></td></tr>
-                <tr><td>Port (plain):</td><td><code>1883</code></td></tr>
+              <strong style="font-size:12px">Broker 1</strong>
+              <table class="help-table" style="margin-top:6px;margin-bottom:12px">
+                <tr><td>Server:</td><td><code>collector1.dutchmeshcore.nl</code></td></tr>
+                <tr><td>Port (TLS):</td><td><code>443</code></td></tr>
                 <tr><td>Transport:</td><td><code>TCP</code></td></tr>
-                <tr><td>Username:</td><td><code>observer</code></td></tr>
-                <tr><td>Password:</td><td><code>hiermetdiedata</code></td></tr>
-              </table>             
+              </table>
+
+              <strong style="font-size:12px">Broker 2</strong>
+              <table class="help-table" style="margin-top:6px;margin-bottom:12px">
+                <tr><td>Server:</td><td><code>collector2.dutchmeshcore.nl</code></td></tr>
+                <tr><td>Port (TLS):</td><td><code>443</code></td></tr>
+                <tr><td>Transport:</td><td><code>TCP</code></td></tr>
+              </table>
 
               <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
 
@@ -145,19 +150,22 @@
 					<option value="UTC">UTC – Utrecht Airport</option>
 					<option value="WOE">WOE – Woensdrecht Airbase</option>
                   </select>
-                </div>                
+                </div>
 
                 <div style="margin-bottom:12px">
-                  <strong>Cornmeister.nl (Recommended)</strong>
-                  <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:8px">
-                    Unencrypted non-tls connection uses port 1883
-                  </div>
-                  <pre class="help-code"><code>set mqtt.server mqtt.cornmeister.nl
-set mqtt.port 8883
-set mqtt.username observer
-set mqtt.password hiermetdiedata
+                  <strong>Broker 1</strong>
+                  <pre class="help-code"><code>set mqtt.server collector1.dutchmeshcore.nl
+set mqtt.port 443
 set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
-                </div>          
+                </div>
+
+                <div style="margin-bottom:12px">
+                  <strong>Broker 2</strong>
+                  <pre class="help-code"><code>set mqtt.server collector2.dutchmeshcore.nl
+set mqtt.port 443
+set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
+                </div>
+              </div>
 
               <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
 
