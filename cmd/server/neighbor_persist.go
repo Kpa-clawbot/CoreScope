@@ -320,6 +320,44 @@ func ensureObserverInactiveColumn(dbPath string) error {
 	return nil
 }
 
+// ensureLastPacketAtColumn adds the last_packet_at column to observers if missing.
+// The column was originally added by ingestor migration (observers_last_packet_at_v1)
+// to track the most recent packet observation time separately from status updates.
+// When the server starts against a DB that was never touched by the ingestor (e.g.
+// the e2e fixture), the column is missing and read queries that reference it
+// (GetObservers, GetObserverByID) fail with "no such column: last_packet_at".
+func ensureLastPacketAtColumn(dbPath string) error {
+	rw, err := openRW(dbPath)
+	if err != nil {
+		return err
+	}
+	defer rw.Close()
+
+	rows, err := rw.Query("PRAGMA table_info(observers)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == "last_packet_at" {
+			return nil // already exists
+		}
+	}
+
+	_, err = rw.Exec("ALTER TABLE observers ADD COLUMN last_packet_at TEXT")
+	if err != nil {
+		return fmt.Errorf("add last_packet_at column: %w", err)
+	}
+	log.Println("[store] Added last_packet_at column to observers")
+	return nil
+}
+
 // softDeleteBlacklistedObservers marks observers matching the blacklist as
 // inactive=1 so they are hidden from API responses.  Runs once at startup.
 func softDeleteBlacklistedObservers(dbPath string, blacklist []string) {
