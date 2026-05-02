@@ -2498,9 +2498,9 @@ func TestStoreGetAnalyticsChannelsNumericHash(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (5, 1, 10.0, -90, '[]', ?)`, recentEpoch)
 
-	// Also a decrypted CHAN with numeric channelHash
+	// Also a decrypted CHAN with numeric channelHash — use hash 198 which is the real hash for #general
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('DD03', 'chan_num_hash_3', ?, 1, 5, '{"type":"CHAN","channel":"general","channelHash":97,"channelHashHex":"61","text":"hello","sender":"Alice"}')`, recent)
+		VALUES ('DD03', 'chan_num_hash_3', ?, 1, 5, '{"type":"CHAN","channel":"general","channelHash":198,"channelHashHex":"C6","text":"hello","sender":"Alice"}')`, recent)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (6, 1, 12.0, -88, '[]', ?)`, recentEpoch)
 
@@ -2509,8 +2509,8 @@ func TestStoreGetAnalyticsChannelsNumericHash(t *testing.T) {
 	result := store.GetAnalyticsChannels("")
 
 	channels := result["channels"].([]map[string]interface{})
-	if len(channels) < 2 {
-		t.Errorf("expected at least 2 channels (hash 97 + hash 42), got %d", len(channels))
+	if len(channels) < 3 {
+		t.Errorf("expected at least 3 channels (hash 97 + hash 42 + hash 198), got %d", len(channels))
 	}
 
 	// Verify the numeric-hash channels we inserted have proper hashes (not "?")
@@ -2531,13 +2531,13 @@ func TestStoreGetAnalyticsChannelsNumericHash(t *testing.T) {
 		t.Error("expected to find channel with hash '42' (numeric channelHash parsing)")
 	}
 
-	// Verify the decrypted CHAN channel has the correct name
+	// Verify the decrypted CHAN channel has the correct name (now at hash 198)
 	foundGeneral := false
 	for _, ch := range channels {
 		if ch["name"] == "general" {
 			foundGeneral = true
-			if ch["hash"] != "97" {
-				t.Errorf("expected hash '97' for general channel, got %v", ch["hash"])
+			if ch["hash"] != "198" {
+				t.Errorf("expected hash '198' for general channel, got %v", ch["hash"])
 			}
 		}
 	}
