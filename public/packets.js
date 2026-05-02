@@ -26,7 +26,7 @@
   let observers = [];
   let observerMap = new Map(); // id → observer for O(1) lookups (#383)
   let regionMap = {};
-  const TYPE_NAMES = { 0:'Request', 1:'Response', 2:'Direct Msg', 3:'ACK', 4:'Advert', 5:'Channel Msg', 6:'Group Data', 7:'Anon Req', 8:'Path', 9:'Trace', 11:'Control' };
+  const TYPE_NAMES = { 0:'Request', 1:'Response', 2:'Direct Msg', 3:'ACK', 4:'Advert', 5:'Channel Msg', 6:'Group Data', 7:'Anon Req', 8:'Path', 9:'Trace', 10:'Multipart', 11:'Control', 15:'Raw Custom' };
   function typeName(t) { return TYPE_NAMES[t] ?? `Type ${t}`; }
   const isMobile = window.innerWidth <= 1024;
   const PACKET_LIMIT = isMobile ? 1000 : 50000;
