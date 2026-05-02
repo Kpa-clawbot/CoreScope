@@ -42,6 +42,14 @@ type Config struct {
 	GeoFilter            *GeoFilterConfig  `json:"geo_filter,omitempty"`
 	ValidateSignatures   *bool             `json:"validateSignatures,omitempty"`
 	DB                   *DBConfig         `json:"db,omitempty"`
+
+	// ObserverBlacklist is a list of observer public keys to drop at ingest.
+	// Messages from blacklisted observers are silently discarded — no DB writes,
+	// no UpsertObserver, no observations, no metrics.
+	ObserverBlacklist []string `json:"observerBlacklist,omitempty"`
+
+	// obsBlacklistSet is the lazily-built lowercase set for O(1) lookups.
+	obsBlacklistSet map[string]bool
 }
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
@@ -112,6 +120,24 @@ func (c *Config) ObserverDaysOrDefault() int {
 		return c.Retention.ObserverDays
 	}
 	return 14
+}
+
+// IsObserverBlacklisted returns true if the given observer ID is in the observerBlacklist.
+func (c *Config) IsObserverBlacklisted(id string) bool {
+	if c == nil || len(c.ObserverBlacklist) == 0 {
+		return false
+	}
+	if c.obsBlacklistSet == nil {
+		m := make(map[string]bool, len(c.ObserverBlacklist))
+		for _, pk := range c.ObserverBlacklist {
+			trimmed := strings.ToLower(strings.TrimSpace(pk))
+			if trimmed != "" {
+				m[trimmed] = true
+			}
+		}
+		c.obsBlacklistSet = m
+	}
+	return c.obsBlacklistSet[strings.ToLower(strings.TrimSpace(id))]
 }
 
 // LoadConfig reads configuration from a JSON file, with env var overrides.

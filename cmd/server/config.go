@@ -72,6 +72,15 @@ type Config struct {
 
 	DebugAffinity bool `json:"debugAffinity,omitempty"`
 
+	// ObserverBlacklist is a list of observer public keys to exclude from API
+	// responses (defense in depth — ingestor drops at ingest, server filters
+	// any that slipped through from a prior unblocked window).
+	ObserverBlacklist []string `json:"observerBlacklist,omitempty"`
+
+	// obsBlacklistSetCached is the lazily-built set version of ObserverBlacklist.
+	obsBlacklistSetCached map[string]bool
+	obsBlacklistOnce      sync.Once
+
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
 }
@@ -403,4 +412,30 @@ func (c *Config) IsBlacklisted(pubkey string) bool {
 		return false
 	}
 	return c.blacklistSet()[strings.ToLower(strings.TrimSpace(pubkey))]
+}
+
+// obsBlacklistSet lazily builds and caches the observerBlacklist as a set for O(1) lookups.
+func (c *Config) obsBlacklistSet() map[string]bool {
+	c.obsBlacklistOnce.Do(func() {
+		if len(c.ObserverBlacklist) == 0 {
+			return
+		}
+		m := make(map[string]bool, len(c.ObserverBlacklist))
+		for _, pk := range c.ObserverBlacklist {
+			trimmed := strings.ToLower(strings.TrimSpace(pk))
+			if trimmed != "" {
+				m[trimmed] = true
+			}
+		}
+		c.obsBlacklistSetCached = m
+	})
+	return c.obsBlacklistSetCached
+}
+
+// IsObserverBlacklisted returns true if the given observer ID is in the observerBlacklist.
+func (c *Config) IsObserverBlacklisted(id string) bool {
+	if c == nil || len(c.ObserverBlacklist) == 0 {
+		return false
+	}
+	return c.obsBlacklistSet()[strings.ToLower(strings.TrimSpace(id))]
 }

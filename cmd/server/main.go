@@ -180,6 +180,12 @@ func main() {
 		log.Printf("[store] warning: could not add observers.inactive column: %v", err)
 	}
 
+	// Soft-delete observers that are in the blacklist (mark inactive=1) so
+	// historical data from a prior unblocked window is hidden too.
+	if len(cfg.ObserverBlacklist) > 0 {
+		softDeleteBlacklistedObservers(dbPath, cfg.ObserverBlacklist)
+	}
+
 	// WaitGroup for background init steps that gate /api/healthz readiness.
 	var initWg sync.WaitGroup
 

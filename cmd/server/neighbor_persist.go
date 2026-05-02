@@ -320,6 +320,41 @@ func ensureObserverInactiveColumn(dbPath string) error {
 	return nil
 }
 
+// softDeleteBlacklistedObservers marks observers matching the blacklist as
+// inactive=1 so they are hidden from API responses.  Runs once at startup.
+func softDeleteBlacklistedObservers(dbPath string, blacklist []string) {
+	rw, err := openRW(dbPath)
+	if err != nil {
+		log.Printf("[observer-blacklist] warning: could not open DB for soft-delete: %v", err)
+		return
+	}
+	defer rw.Close()
+
+	placeholders := make([]string, 0, len(blacklist))
+	args := make([]interface{}, 0, len(blacklist))
+	for _, pk := range blacklist {
+		trimmed := strings.TrimSpace(pk)
+		if trimmed == "" {
+			continue
+		}
+		placeholders = append(placeholders, "LOWER(?)")
+		args = append(args, trimmed)
+	}
+	if len(placeholders) == 0 {
+		return
+	}
+
+	query := "UPDATE observers SET inactive = 1 WHERE LOWER(id) IN (" + strings.Join(placeholders, ",") + ") AND (inactive IS NULL OR inactive = 0)"
+	result, err := rw.Exec(query, args...)
+	if err != nil {
+		log.Printf("[observer-blacklist] warning: soft-delete failed: %v", err)
+		return
+	}
+	if n, _ := result.RowsAffected(); n > 0 {
+		log.Printf("[observer-blacklist] soft-deleted %d blacklisted observer(s)", n)
+	}
+}
+
 // resolvePathForObs resolves hop prefixes to full pubkeys for an observation.
 // Returns nil if path is empty.
 func resolvePathForObs(pathJSON, observerID string, tx *StoreTx, pm *prefixMap, graph *NeighborGraph) []*string {

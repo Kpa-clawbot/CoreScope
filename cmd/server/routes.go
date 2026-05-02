@@ -1932,6 +1932,10 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 
 	result := make([]ObserverResp, 0, len(observers))
 	for _, o := range observers {
+		// Defense in depth: skip observers that are in the blacklist
+		if s.cfg != nil && s.cfg.IsObserverBlacklisted(o.ID) {
+			continue
+		}
 		plh := 0
 		if c, ok := pktCounts[o.ID]; ok {
 			plh = c
@@ -1963,6 +1967,13 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
+
+	// Defense in depth: reject blacklisted observer
+	if s.cfg != nil && s.cfg.IsObserverBlacklisted(id) {
+		writeError(w, 404, "Observer not found")
+		return
+	}
+
 	obs, err := s.db.GetObserverByID(id)
 	if err != nil || obs == nil {
 		writeError(w, 404, "Observer not found")
