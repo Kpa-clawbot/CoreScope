@@ -180,6 +180,12 @@ func main() {
 		log.Printf("[store] warning: could not add observers.inactive column: %v", err)
 	}
 
+	// Ensure observers.last_packet_at column exists (PR #905 reads it; ingestor migration
+	// adds it but server may run against DBs ingestor never touched, e.g. e2e fixture).
+	if err := ensureLastPacketAtColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add observers.last_packet_at column: %v", err)
+	}
+
 	// Soft-delete observers that are in the blacklist (mark inactive=1) so
 	// historical data from a prior unblocked window is hidden too.
 	if len(cfg.ObserverBlacklist) > 0 {
