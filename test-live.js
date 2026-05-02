@@ -1005,39 +1005,50 @@ console.log('\n=== live.js: clickable paths ===');
 
   test('buildClickablePathPopupHtml shows relative time', () => {
     const html = buildPopupHtml('GRP_TXT', '#22c55e', ['A', 'B'], Date.now() - 10000);
-    assert.ok(html.includes('s ago') || html.includes('ago'), 'should show relative time');
+    assert.ok(html.includes('10s ago'), 'should show 10s ago');
   });
 
   const pruneClickablePaths = ctx.window._livePruneClickablePaths;
+  const clickablePaths = ctx.window._liveClickablePaths;
   assert.ok(pruneClickablePaths, '_livePruneClickablePaths must be exposed');
+  assert.ok(Array.isArray(clickablePaths), '_liveClickablePaths must be exposed');
+
+  function loadPaths(entries) {
+    clickablePaths.splice(0, clickablePaths.length, ...entries);
+  }
 
   test('pruneClickablePaths removes entries older than TTL', () => {
     const now = Date.now();
-    const paths = [
+    loadPaths([
       { addedAt: now - 35000, poly: { remove() {} } },
       { addedAt: now - 5000,  poly: { remove() {} } },
       { addedAt: now - 1000,  poly: { remove() {} } },
-    ];
-    const remaining = pruneClickablePaths(paths, now);
-    assert.strictEqual(remaining.length, 2, 'should remove paths older than 30s');
+    ]);
+    pruneClickablePaths(now);
+    assert.strictEqual(clickablePaths.length, 2, 'should remove paths older than 30s');
   });
 
   test('pruneClickablePaths keeps all entries within TTL', () => {
     const now = Date.now();
-    const paths = [
+    loadPaths([
       { addedAt: now - 5000,  poly: { remove() {} } },
       { addedAt: now - 1000,  poly: { remove() {} } },
-    ];
-    const remaining = pruneClickablePaths(paths, now);
-    assert.strictEqual(remaining.length, 2);
+    ]);
+    pruneClickablePaths(now);
+    assert.strictEqual(clickablePaths.length, 2);
   });
 
   test('pruneClickablePaths enforces max 50 entries (FIFO eviction)', () => {
     const now = Date.now();
-    const paths = [];
-    for (let i = 0; i < 52; i++) paths.push({ addedAt: now - i * 100, poly: { remove() {} } });
-    const remaining = pruneClickablePaths(paths, now);
-    assert.strictEqual(remaining.length, 50, 'should evict oldest beyond 50');
+    // Match production insertion order: oldest at front (index 0), newest at back
+    // entries[0].addedAt = now-5100 (oldest), entries[51].addedAt = now (newest)
+    const entries = [];
+    for (let i = 51; i >= 0; i--) entries.push({ addedAt: now - i * 100, poly: { remove() {} } });
+    loadPaths(entries);
+    pruneClickablePaths(now);
+    assert.strictEqual(clickablePaths.length, 50, 'should evict oldest beyond 50');
+    // FIFO: the 2 oldest (addedAt now-5100 and now-5000) were shifted off; now-4900 is oldest remaining
+    assert.strictEqual(clickablePaths[0].addedAt, now - 49 * 100, 'oldest remaining should have addedAt = now-4900');
   });
 }
 
