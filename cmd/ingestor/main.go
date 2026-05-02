@@ -123,6 +123,7 @@ func main() {
 
 	// Connect to each MQTT source
 	var clients []mqtt.Client
+	connectedCount := 0
 	for _, source := range sources {
 		tag := source.Name
 		if tag == "" {
@@ -164,19 +165,43 @@ func main() {
 
 		client := mqtt.NewClient(opts)
 		token := client.Connect()
-		token.Wait()
-		if token.Error() != nil {
-			log.Printf("MQTT [%s] connection failed (non-fatal): %v", tag, token.Error())
+		// With ConnectRetry=true, token.Wait() blocks forever for unreachable brokers.
+		// WaitTimeout lets startup proceed; the client keeps retrying in the background
+		// and OnConnect fires (subscribing) when it eventually connects (#910).
+		if !token.WaitTimeout(30 * time.Second) {
+			log.Printf("MQTT [%s] initial connection timed out — retrying in background", tag)
+			clients = append(clients, client)
 			continue
 		}
+		if token.Error() != nil {
+			log.Printf("MQTT [%s] connection failed (non-fatal): %v", tag, token.Error())
+			// BL1 fix: Disconnect to stop Paho's internal retry goroutines.
+			// With ConnectRetry=true, Connect() spawns background goroutines
+			// that leak if the client is simply discarded.
+			client.Disconnect(0)
+			continue
+		}
+		connectedCount++
 		clients = append(clients, client)
 	}
 
-	if len(clients) == 0 {
-		log.Fatal("no MQTT connections established — check broker is running (default: mqtt://localhost:1883). Set MQTT_BROKER env var or configure mqttSources in config.json")
+	// BL2 fix: require at least one immediately-connected source. Timed-out
+	// clients are retrying in background (tracked in clients) but don't count
+	// as "connected" — a single unreachable broker must not silently run with
+	// zero active connections.
+	if connectedCount == 0 {
+		// Clean up any timed-out clients still retrying
+		for _, c := range clients {
+			c.Disconnect(0)
+		}
+		log.Fatal("no MQTT sources connected — all timed out or failed. Check broker is running (default: mqtt://localhost:1883). Set MQTT_BROKER env var or configure mqttSources in config.json")
 	}
 
-	log.Printf("Running — %d MQTT source(s) connected", len(clients))
+	if connectedCount < len(clients) {
+		log.Printf("Running — %d MQTT source(s) connected, %d retrying in background", connectedCount, len(clients)-connectedCount)
+	} else {
+		log.Printf("Running — %d MQTT source(s) connected", connectedCount)
+	}
 
 	// Wait for shutdown signal
 	sig := make(chan os.Signal, 1)
