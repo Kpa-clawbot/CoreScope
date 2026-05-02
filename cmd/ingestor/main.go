@@ -131,6 +131,8 @@ func main() {
 		}
 
 		opts := buildMQTTOpts(source)
+		connectTimeout := source.ConnectTimeoutOrDefault()
+		log.Printf("MQTT [%s] connect timeout: %ds", tag, connectTimeout)
 
 		opts.SetOnConnectHandler(func(c mqtt.Client) {
 			log.Printf("MQTT [%s] connected to %s", tag, source.Broker)
@@ -168,7 +170,7 @@ func main() {
 		// With ConnectRetry=true, token.Wait() blocks forever for unreachable brokers.
 		// WaitTimeout lets startup proceed; the client keeps retrying in the background
 		// and OnConnect fires (subscribing) when it eventually connects (#910).
-		if !token.WaitTimeout(30 * time.Second) {
+		if !token.WaitTimeout(time.Duration(connectTimeout) * time.Second) {
 			log.Printf("MQTT [%s] initial connection timed out — retrying in background", tag)
 			clients = append(clients, client)
 			continue
