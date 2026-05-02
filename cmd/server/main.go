@@ -174,6 +174,12 @@ func main() {
 		database.hasResolvedPath = true // detectSchema ran before column was added; fix the flag
 	}
 
+	// Ensure observers.inactive column exists (PR #954 filters on it; ingestor migration
+	// adds it but server may run against DBs ingestor never touched, e.g. e2e fixture).
+	if err := ensureObserverInactiveColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add observers.inactive column: %v", err)
+	}
+
 	// WaitGroup for background init steps that gate /api/healthz readiness.
 	var initWg sync.WaitGroup
 
