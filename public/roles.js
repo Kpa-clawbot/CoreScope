@@ -17,7 +17,7 @@
   window.TYPE_COLORS = {
     ADVERT: '#22c55e', GRP_TXT: '#3b82f6', GRP_DATA: '#8b5cf6', TXT_MSG: '#f59e0b', ACK: '#6b7280',
     REQUEST: '#a855f7', RESPONSE: '#06b6d4', TRACE: '#ec4899', PATH: '#14b8a6',
-    ANON_REQ: '#f43f5e', MULTIPART: '#0d9488', CONTROL: '#64748b', RAW_CUSTOM: '#db2777',
+    ANON_REQ: '#f43f5e', MULTIPART: '#0d9488', CONTROL: '#b45309', RAW_CUSTOM: '#c026d3',
     UNKNOWN: '#6b7280'
   };
 
