@@ -172,13 +172,13 @@ func TestMultiByteCapability_Unknown(t *testing.T) {
 }
 
 // TestMultiByteCapability_PrefixCollision tests that when two repeaters
-// share the same prefix, one confirmed via advert, the other gets
+// share the same 2-byte prefix, one confirmed via advert, the other gets
 // suspected (not confirmed) from path data alone.
 func TestMultiByteCapability_PrefixCollision(t *testing.T) {
 	db := setupCapabilityTestDB(t)
 	defer db.conn.Close()
 
-	// Two repeaters sharing 1-byte prefix "aa"
+	// Two repeaters sharing 2-byte prefix "aacc"
 	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
 		"aabb000000000001", "RepConfirmed", "repeater", recentTS(24))
 	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
@@ -189,14 +189,15 @@ func TestMultiByteCapability_PrefixCollision(t *testing.T) {
 	// RepConfirmed has a 2-byte advert
 	addTestPacket(store, makeTestAdvert("aabb000000000001", 2))
 
-	// A packet with 2-byte path containing 1-byte hop "aa" — both share this prefix
+	// A packet with hs=2 path containing 2-byte hop "aacc" — matches RepOther's
+	// 2-byte prefix. Hop length (2 bytes) correctly matches hash_size=2.
 	pathByte := buildPathByte(2, 1)
-	rawHex := "01" + pathByte + "aa"
+	rawHex := "01" + pathByte + "aacc"
 	pt := 1
 	pkt := &StoreTx{
 		RawHex:      rawHex,
 		PayloadType: &pt,
-		PathJSON:    `["aa"]`,
+		PathJSON:    `["aacc"]`,
 		FirstSeen:   recentTS(48),
 	}
 	addTestPacket(store, pkt)
@@ -382,6 +383,106 @@ func TestMultiByteCapability_RoleColumnPopulated(t *testing.T) {
 	}
 	if roleByName["Room1"] != "room_server" {
 		t.Errorf("Room1 role: expected room_server, got %s", roleByName["Room1"])
+	}
+}
+
+func TestGetMultibyteCapMap_Confirmed(t *testing.T) {
+	db := setupCapabilityTestDB(t)
+	defer db.conn.Close()
+
+	store := NewPacketStore(db, nil)
+	store.cacheMu.Lock()
+	store.mbCapSnapshot = []MultiByteCapEntry{
+		{PublicKey: "aabbccdd11223344", Status: "confirmed", Evidence: "advert"},
+		{PublicKey: "1122334455667788", Status: "suspected", Evidence: "path"},
+	}
+	store.cacheMu.Unlock()
+
+	m := store.GetMultibyteCapMap()
+	if e, ok := m["aabbccdd11223344"]; !ok || e.Status != "confirmed" || e.Evidence != "advert" {
+		t.Errorf("confirmed entry: got %+v, want confirmed/advert", e)
+	}
+	if e, ok := m["1122334455667788"]; !ok || e.Status != "suspected" || e.Evidence != "path" {
+		t.Errorf("suspected entry: got %+v, want suspected/path", e)
+	}
+}
+
+func TestGetMultibyteCapMap_EmptyWhenNoSnapshot(t *testing.T) {
+	db := setupCapabilityTestDB(t)
+	defer db.conn.Close()
+
+	store := NewPacketStore(db, nil)
+	m := store.GetMultibyteCapMap()
+	if len(m) != 0 {
+		t.Errorf("expected empty map before any analytics cycle, got %d entries", len(m))
+	}
+}
+
+func TestEnrichNodeWithMultibyte_Confirmed(t *testing.T) {
+	node := map[string]interface{}{"public_key": "aabb", "multibyte_sup": 0}
+	enrichNodeWithMultibyte(node, MultiByteCapEntry{Status: "confirmed", Evidence: "advert"})
+	if node["multibyte_sup"] != 2 {
+		t.Errorf("multibyte_sup = %v, want 2", node["multibyte_sup"])
+	}
+	if node["multibyte_evidence"] != "advert" {
+		t.Errorf("multibyte_evidence = %v, want advert", node["multibyte_evidence"])
+	}
+}
+
+func TestEnrichNodeWithMultibyte_Suspected(t *testing.T) {
+	node := map[string]interface{}{"public_key": "aabb", "multibyte_sup": 0}
+	enrichNodeWithMultibyte(node, MultiByteCapEntry{Status: "suspected", Evidence: "path"})
+	if node["multibyte_sup"] != 1 {
+		t.Errorf("multibyte_sup = %v, want 1", node["multibyte_sup"])
+	}
+}
+
+func TestEnrichNodeWithMultibyte_ZeroEntryNoChange(t *testing.T) {
+	node := map[string]interface{}{"public_key": "aabb", "multibyte_sup": 0}
+	enrichNodeWithMultibyte(node, MultiByteCapEntry{}) // zero-value = unknown, no pubkey
+	if node["multibyte_sup"] != 0 {
+		t.Errorf("multibyte_sup = %v, want 0 (unchanged for unknown)", node["multibyte_sup"])
+	}
+	if _, ok := node["multibyte_evidence"]; ok {
+		t.Error("multibyte_evidence should not be set for unknown entry")
+	}
+}
+
+// TestMultiByteCapability_HopLengthMismatch tests that a 1-byte hop stored
+// in a hs=2 packet (pre-#886 ingestor data) does NOT trigger suspected.
+// The 1-byte prefix of a node must not match a malformed single-byte entry
+// from a path that was incorrectly split into individual bytes.
+func TestMultiByteCapability_HopLengthMismatch(t *testing.T) {
+	db := setupCapabilityTestDB(t)
+	defer db.conn.Close()
+
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+		"daabccdd11223344", "LegacyNode", "repeater", recentTS(24))
+
+	store := NewPacketStore(db, nil)
+
+	// Malformed packet: path_json has 1-byte hops but path_byte in raw_hex
+	// encodes hash_size=2 (pre-#886 ingestor stored path bytes individually).
+	// buildPathByte(2,1) gives a path byte with hs=2, hop_count=1.
+	pathByte := buildPathByte(2, 1)
+	// path_json has 1-byte hop "da" — matches 1-byte prefix of node "daab..."
+	// raw_hex says hash_size=2.
+	rawHex := "01" + pathByte + "da"
+	pt := 1
+	pkt := &StoreTx{
+		RawHex:      rawHex,
+		PayloadType: &pt,
+		PathJSON:    `["da"]`,
+		FirstSeen:   recentTS(48),
+	}
+	addTestPacket(store, pkt)
+
+	caps := store.computeMultiByteCapability(nil)
+	if len(caps) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(caps))
+	}
+	if caps[0].Status != "unknown" {
+		t.Errorf("expected unknown (hop length mismatch should be filtered), got %s", caps[0].Status)
 	}
 }
 

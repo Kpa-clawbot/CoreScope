@@ -141,6 +141,7 @@ type PacketStore struct {
 	rfCache      map[string]*cachedResult // region → cached RF result
 	topoCache    map[string]*cachedResult // region → cached topology result
 	hashCache      map[string]*cachedResult // region → cached hash-sizes result
+	mbCapSnapshot  []MultiByteCapEntry     // latest computeMultiByteCapability result, under cacheMu
 	collisionCache map[string]*cachedResult // cached hash-collisions result keyed by region ("" = global)
 	chanCache    map[string]*cachedResult // region → cached channels result
 	distCache    map[string]*cachedResult // region → cached distance result
@@ -5459,7 +5460,11 @@ func (s *PacketStore) GetAnalyticsHashSizes(region string) map[string]interface{
 				}
 			}
 		}
-		result["multiByteCapability"] = s.computeMultiByteCapability(adopterHS)
+		entries := s.computeMultiByteCapability(adopterHS)
+		result["multiByteCapability"] = entries
+		s.cacheMu.Lock()
+		s.mbCapSnapshot = entries
+		s.cacheMu.Unlock()
 	}
 
 	s.cacheMu.Lock()
@@ -6285,6 +6290,12 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 			if hs < 2 {
 				continue
 			}
+			// Hop length must match hash_size. Pre-#886 ingestor data stored path
+			// bytes individually (1-byte entries) even for hs=2 packets, so a
+			// 1-byte prefix could match a malformed hop in a hs=2 packet.
+			if len(pfx)/2 != hs {
+				continue
+			}
 			// This packet uses multi-byte hashes and contains this prefix as a hop
 			for _, e := range entries {
 				if hs > suspected[e.pubkey] {
@@ -6362,6 +6373,19 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 	})
 
 	return result
+}
+
+// GetMultibyteCapMap returns a pubkey→entry snapshot from the last analytics cycle.
+// Used by routes to enrich node responses without a DB write (server conn is read-only).
+func (s *PacketStore) GetMultibyteCapMap() map[string]MultiByteCapEntry {
+	s.cacheMu.Lock()
+	snap := s.mbCapSnapshot
+	s.cacheMu.Unlock()
+	m := make(map[string]MultiByteCapEntry, len(snap))
+	for _, e := range snap {
+		m[e.PublicKey] = e
+	}
+	return m
 }
 
 // --- Bulk Health (in-memory) ---

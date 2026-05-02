@@ -20,7 +20,8 @@ type DB struct {
 	path             string // filesystem path to the database file
 	isV3             bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
 	hasResolvedPath  bool   // observations table has resolved_path column
-	hasObsRawHex     bool   // observations table has raw_hex column (#881)
+	hasObsRawHex        bool   // observations table has raw_hex column (#881)
+	hasMultibyteSupCols bool   // nodes table has multibyte_sup/multibyte_evidence columns (#903)
 
 	// Channel list cache (60s TTL) — avoids repeated GROUP BY scans (#762)
 	channelsCacheMu  sync.Mutex
@@ -79,6 +80,24 @@ func (db *DB) detectSchema() {
 			}
 			if colName == "raw_hex" {
 				db.hasObsRawHex = true
+			}
+		}
+	}
+
+	nodeRows, err := db.conn.Query("PRAGMA table_info(nodes)")
+	if err != nil {
+		return
+	}
+	defer nodeRows.Close()
+	for nodeRows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if nodeRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
+			if colName == "multibyte_sup" {
+				db.hasMultibyteSupCols = true
 			}
 		}
 	}
@@ -786,7 +805,11 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 	var total int
 	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM nodes %s", w), args...).Scan(&total)
 
-	querySQL := fmt.Sprintf("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
+	nodeColList := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c"
+	if db.hasMultibyteSupCols {
+		nodeColList += ", multibyte_sup, multibyte_evidence"
+	}
+	querySQL := fmt.Sprintf("SELECT %s FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", nodeColList, w, order)
 	qArgs := append(args, limit, offset)
 
 	rows, err := db.conn.Query(querySQL, qArgs...)
@@ -797,7 +820,7 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 
 	nodes := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		n := scanNodeRow(rows)
+		n := db.scanNodeRow(rows)
 		if n != nil {
 			nodes = append(nodes, n)
 		}
@@ -812,8 +835,12 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := db.conn.Query(`SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c
-		FROM nodes WHERE name LIKE ? OR public_key LIKE ? ORDER BY last_seen DESC LIMIT ?`,
+	colList := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c"
+	if db.hasMultibyteSupCols {
+		colList += ", multibyte_sup, multibyte_evidence"
+	}
+	rows, err := db.conn.Query(
+		fmt.Sprintf("SELECT %s FROM nodes WHERE name LIKE ? OR public_key LIKE ? ORDER BY last_seen DESC LIMIT ?", colList),
 		"%"+query+"%", query+"%", limit)
 	if err != nil {
 		return nil, err
@@ -822,7 +849,7 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 
 	nodes := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		n := scanNodeRow(rows)
+		n := db.scanNodeRow(rows)
 		if n != nil {
 			nodes = append(nodes, n)
 		}
@@ -832,13 +859,17 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 
 // GetNodeByPubkey returns a single node.
 func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
-	rows, err := db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c FROM nodes WHERE public_key = ?", pubkey)
+	colList := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c"
+	if db.hasMultibyteSupCols {
+		colList += ", multibyte_sup, multibyte_evidence"
+	}
+	rows, err := db.conn.Query(fmt.Sprintf("SELECT %s FROM nodes WHERE public_key = ?", colList), pubkey)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	if rows.Next() {
-		return scanNodeRow(rows), nil
+		return db.scanNodeRow(rows), nil
 	}
 	return nil, nil
 }
@@ -1795,15 +1826,21 @@ func scanPacketRow(rows *sql.Rows) map[string]interface{} {
 	}
 }
 
-func scanNodeRow(rows *sql.Rows) map[string]interface{} {
+func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	var pk string
 	var name, role, lastSeen, firstSeen sql.NullString
 	var lat, lon sql.NullFloat64
 	var advertCount int
 	var batteryMv sql.NullInt64
 	var temperatureC sql.NullFloat64
+	var multibyteSup sql.NullInt64
+	var multibyteEvidence sql.NullString
 
-	if err := rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC); err != nil {
+	scanArgs := []interface{}{&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC}
+	if db.hasMultibyteSupCols {
+		scanArgs = append(scanArgs, &multibyteSup, &multibyteEvidence)
+	}
+	if err := rows.Scan(scanArgs...); err != nil {
 		return nil
 	}
 	m := map[string]interface{}{
@@ -1818,6 +1855,12 @@ func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 		"last_heard":             nullStr(lastSeen),
 		"hash_size":              nil,
 		"hash_size_inconsistent": false,
+		"multibyte_sup":          int(multibyteSup.Int64), // always present; zero-value when col absent
+	}
+	if multibyteEvidence.Valid {
+		m["multibyte_evidence"] = multibyteEvidence.String
+	} else {
+		m["multibyte_evidence"] = nil
 	}
 	if batteryMv.Valid {
 		m["battery_mv"] = int(batteryMv.Int64)
