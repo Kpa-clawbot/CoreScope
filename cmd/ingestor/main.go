@@ -240,6 +240,13 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		return
 	}
 
+	// Observer blacklist: drop ALL messages from blacklisted observers before any
+	// DB writes (status, metrics, packets). Trumps IATA filter.
+	if len(parts) > 2 && cfg.IsObserverBlacklisted(parts[2]) {
+		log.Printf("MQTT [%s] observer %.8s blacklisted, dropping", tag, parts[2])
+		return
+	}
+
 	// Status topic: meshcore/<region>/<observer_id>/status
 	// IATA filter does NOT apply here — observer metadata (noise_floor, battery, etc.)
 	// is region-independent and should be accepted from all observers regardless of

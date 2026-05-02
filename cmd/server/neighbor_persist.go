@@ -281,6 +281,80 @@ func ensureResolvedPathColumn(dbPath string) error {
 	return nil
 }
 
+// ensureObserverInactiveColumn adds the inactive column to observers if missing.
+// The column was originally added by ingestor migration (cmd/ingestor/db.go:344) to
+// support soft-delete via RemoveStaleObservers + filtered reads (PR #954). When the
+// server starts against a DB that was never touched by the ingestor (e.g. the e2e
+// fixture), the column is missing and read queries that filter on it (GetObservers,
+// GetStats) silently fail with "no such column: inactive" — leaving /api/observers
+// returning empty.
+func ensureObserverInactiveColumn(dbPath string) error {
+	rw, err := openRW(dbPath)
+	if err != nil {
+		return err
+	}
+	defer rw.Close()
+
+	rows, err := rw.Query("PRAGMA table_info(observers)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == "inactive" {
+			return nil // already exists
+		}
+	}
+
+	_, err = rw.Exec("ALTER TABLE observers ADD COLUMN inactive INTEGER DEFAULT 0")
+	if err != nil {
+		return fmt.Errorf("add inactive column: %w", err)
+	}
+	log.Println("[store] Added inactive column to observers")
+	return nil
+}
+
+// softDeleteBlacklistedObservers marks observers matching the blacklist as
+// inactive=1 so they are hidden from API responses.  Runs once at startup.
+func softDeleteBlacklistedObservers(dbPath string, blacklist []string) {
+	rw, err := openRW(dbPath)
+	if err != nil {
+		log.Printf("[observer-blacklist] warning: could not open DB for soft-delete: %v", err)
+		return
+	}
+	defer rw.Close()
+
+	placeholders := make([]string, 0, len(blacklist))
+	args := make([]interface{}, 0, len(blacklist))
+	for _, pk := range blacklist {
+		trimmed := strings.TrimSpace(pk)
+		if trimmed == "" {
+			continue
+		}
+		placeholders = append(placeholders, "LOWER(?)")
+		args = append(args, trimmed)
+	}
+	if len(placeholders) == 0 {
+		return
+	}
+
+	query := "UPDATE observers SET inactive = 1 WHERE LOWER(id) IN (" + strings.Join(placeholders, ",") + ") AND (inactive IS NULL OR inactive = 0)"
+	result, err := rw.Exec(query, args...)
+	if err != nil {
+		log.Printf("[observer-blacklist] warning: soft-delete failed: %v", err)
+		return
+	}
+	if n, _ := result.RowsAffected(); n > 0 {
+		log.Printf("[observer-blacklist] soft-deleted %d blacklisted observer(s)", n)
+	}
+}
+
 // resolvePathForObs resolves hop prefixes to full pubkeys for an observation.
 // Returns nil if path is empty.
 func resolvePathForObs(pathJSON, observerID string, tx *StoreTx, pm *prefixMap, graph *NeighborGraph) []*string {
