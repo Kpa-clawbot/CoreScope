@@ -284,3 +284,36 @@ func TestLoadConfigWithAllFields(t *testing.T) {
 		t.Errorf("iataFilter=%v", src.IATAFilter)
 	}
 }
+
+func TestMQTTConnectTimeoutOrDefault(t *testing.T) {
+	// Default when unset
+	cfg := &Config{}
+	if got := cfg.MQTTConnectTimeoutOrDefault(); got != 10 {
+		t.Errorf("default: got %d, want 10", got)
+	}
+
+	// Custom value
+	cfg.MQTTConnectTimeoutSeconds = 45
+	if got := cfg.MQTTConnectTimeoutOrDefault(); got != 45 {
+		t.Errorf("custom: got %d, want 45", got)
+	}
+
+	// Zero treated as unset
+	cfg.MQTTConnectTimeoutSeconds = 0
+	if got := cfg.MQTTConnectTimeoutOrDefault(); got != 10 {
+		t.Errorf("zero: got %d, want 10", got)
+	}
+}
+
+func TestMQTTConnectTimeoutFromJSON(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := dir + "/config.json"
+	os.WriteFile(cfgPath, []byte(`{"mqttConnectTimeoutSeconds": 5}`), 0644)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.MQTTConnectTimeoutOrDefault(); got != 5 {
+		t.Errorf("from JSON: got %d, want 5", got)
+	}
+}

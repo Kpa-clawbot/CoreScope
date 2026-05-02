@@ -10,7 +10,7 @@ func TestBuildMQTTOpts_ReconnectSettings(t *testing.T) {
 		Broker: "tcp://localhost:1883",
 		Name:   "test",
 	}
-	opts := buildMQTTOpts(source)
+	opts := buildMQTTOpts(source, 10)
 
 	if opts.MaxReconnectInterval != 30*time.Second {
 		t.Errorf("MaxReconnectInterval = %v, want 30s", opts.MaxReconnectInterval)
@@ -35,7 +35,7 @@ func TestBuildMQTTOpts_Credentials(t *testing.T) {
 		Username: "user1",
 		Password: "pass1",
 	}
-	opts := buildMQTTOpts(source)
+	opts := buildMQTTOpts(source, 10)
 
 	if opts.Username != "user1" {
 		t.Errorf("Username = %q, want %q", opts.Username, "user1")
@@ -51,7 +51,7 @@ func TestBuildMQTTOpts_TLS_InsecureSkipVerify(t *testing.T) {
 		Broker:             "ssl://broker:8883",
 		RejectUnauthorized: &f,
 	}
-	opts := buildMQTTOpts(source)
+	opts := buildMQTTOpts(source, 10)
 
 	if opts.TLSConfig == nil {
 		t.Fatal("TLSConfig should be set")
@@ -65,7 +65,7 @@ func TestBuildMQTTOpts_TLS_SSL_Prefix(t *testing.T) {
 	source := MQTTSource{
 		Broker: "ssl://broker:8883",
 	}
-	opts := buildMQTTOpts(source)
+	opts := buildMQTTOpts(source, 10)
 
 	if opts.TLSConfig == nil {
 		t.Fatal("TLSConfig should be set for ssl:// brokers")

@@ -44,6 +44,9 @@ type Config struct {
 	ValidateSignatures   *bool             `json:"validateSignatures,omitempty"`
 	DB                   *DBConfig         `json:"db,omitempty"`
 
+	// MQTTConnectTimeoutSeconds overrides the MQTT connect timeout (default 10s).
+	MQTTConnectTimeoutSeconds int `json:"mqttConnectTimeoutSeconds,omitempty"`
+
 	// ObserverBlacklist is a list of observer public keys to drop at ingest.
 	// Messages from blacklisted observers are silently discarded — no DB writes,
 	// no UpsertObserver, no observations, no metrics.
@@ -105,6 +108,15 @@ func (c *Config) MetricsRetentionDays() int {
 		return c.Retention.MetricsDays
 	}
 	return 30
+}
+
+// MQTTConnectTimeoutOrDefault returns the configured MQTT connect timeout in
+// seconds, or 10 if not set (matching the paho default used historically).
+func (c *Config) MQTTConnectTimeoutOrDefault() int {
+	if c.MQTTConnectTimeoutSeconds > 0 {
+		return c.MQTTConnectTimeoutSeconds
+	}
+	return 10
 }
 
 // NodeDaysOrDefault returns the configured retention.nodeDays or 7 if not set.

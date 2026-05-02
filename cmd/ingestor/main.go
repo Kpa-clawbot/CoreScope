@@ -129,7 +129,8 @@ func main() {
 			tag = source.Broker
 		}
 
-		opts := buildMQTTOpts(source)
+		opts := buildMQTTOpts(source, cfg.MQTTConnectTimeoutOrDefault())
+		log.Printf("MQTT [%s] connect timeout: %ds", tag, cfg.MQTTConnectTimeoutOrDefault())
 
 		opts.SetOnConnectHandler(func(c mqtt.Client) {
 			log.Printf("MQTT [%s] connected to %s", tag, source.Broker)
@@ -196,14 +197,14 @@ func main() {
 
 // buildMQTTOpts creates MQTT client options for a source with bounded reconnect
 // backoff, connect timeout, and TLS/auth configuration.
-func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
+func buildMQTTOpts(source MQTTSource, connectTimeoutSec int) *mqtt.ClientOptions {
 	opts := mqtt.NewClientOptions().
 		AddBroker(source.Broker).
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
 		SetOrderMatters(true).
 		SetMaxReconnectInterval(30 * time.Second).
-		SetConnectTimeout(10 * time.Second).
+		SetConnectTimeout(time.Duration(connectTimeoutSec) * time.Second).
 		SetWriteTimeout(10 * time.Second)
 
 	if source.Username != "" {

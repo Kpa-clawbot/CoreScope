@@ -14,6 +14,8 @@
     "incrementalVacuumPages": 1024,
     "_comment": "vacuumOnStartup: run one-time full VACUUM to enable incremental auto-vacuum on existing DBs (blocks startup for minutes on large DBs; requires 2x DB file size in free disk space). incrementalVacuumPages: free pages returned to OS after each retention reaper cycle (default 1024). See #919."
   },
+  "mqttConnectTimeoutSeconds": 10,
+  "_commentMqttConnectTimeout": "MQTT connect timeout in seconds (default 10). Increase for high-latency brokers.",
   "https": {
     "cert": "/path/to/cert.pem",
     "key": "/path/to/key.pem",
