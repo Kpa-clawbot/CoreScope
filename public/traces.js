@@ -69,14 +69,25 @@
         return;
       }
 
-      // Extract ALL unique paths from observations
-      const allPaths = [];
+      // Extract unique paths from observations.
+      // Drop partial paths that are a prefix of a longer observed path — these are
+      // the same packet seen at intermediate relay nodes before it reached the final
+      // hop, not genuinely different routes. Keeping them creates confusing long
+      // "shortcut" edges in the path graph that visually obscure the actual route.
+      const allPathsRaw = [];
       for (const t of traceData) {
         try {
           const hops = JSON.parse(t.path_json || '[]');
-          if (hops.length > 0) allPaths.push({ hops, observer: obsLabel(t) });
+          if (hops.length > 0) allPathsRaw.push({ hops, observer: obsLabel(t) });
         } catch {}
       }
+      const allPaths = allPathsRaw.filter(({ hops }) => {
+        const sig = hops.join(',');
+        return !allPathsRaw.some(other => {
+          if (other.hops.length <= hops.length) return false;
+          return other.hops.slice(0, hops.length).join(',') === sig;
+        });
+      });
       // Fallback to packet-level path
       if (allPaths.length === 0) {
         for (const p of packets) {
