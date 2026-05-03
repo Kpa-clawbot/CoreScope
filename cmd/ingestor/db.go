@@ -444,6 +444,56 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] observers.last_packet_at column added")
 	}
 
+	// Migration: backfill observations.path_json from raw_hex (#888)
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Backfilling observations.path_json from raw_hex...")
+		updated := 0
+		const batchSize = 1000
+		for {
+			rows, err := db.Query(`
+				SELECT o.id, o.raw_hex
+				FROM observations o
+				JOIN transmissions t ON o.transmission_id = t.id
+				WHERE o.raw_hex IS NOT NULL AND o.raw_hex != ''
+				AND (o.path_json IS NULL OR o.path_json = '' OR o.path_json = '[]')
+				AND t.payload_type != 9
+				LIMIT ?`, batchSize)
+			if err != nil {
+				log.Printf("[migration] backfill_path_json query error: %v", err)
+				break
+			}
+			type pendingRow struct {
+				id     int64
+				rawHex string
+			}
+			var batch []pendingRow
+			for rows.Next() {
+				var r pendingRow
+				if err := rows.Scan(&r.id, &r.rawHex); err == nil {
+					batch = append(batch, r)
+				}
+			}
+			rows.Close()
+			if len(batch) == 0 {
+				break
+			}
+			for _, r := range batch {
+				hops, err := packetpath.DecodePathFromRawHex(r.rawHex)
+				if err != nil || len(hops) == 0 {
+					// Mark as processed with empty path to avoid re-scanning
+					db.Exec(`UPDATE observations SET path_json = '[]' WHERE id = ?`, r.id)
+					continue
+				}
+				b, _ := json.Marshal(hops)
+				db.Exec(`UPDATE observations SET path_json = ? WHERE id = ?`, string(b), r.id)
+				updated++
+			}
+		}
+		log.Printf("[migration] Backfilled path_json for %d observations from raw_hex", updated)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_path_json_from_raw_hex_v1')`)
+	}
+
 	return nil
 }
 

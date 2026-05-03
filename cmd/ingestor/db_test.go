@@ -2178,3 +2178,77 @@ func TestBuildPacketData_NonTracePathJSON(t *testing.T) {
 		t.Errorf("path_json = %s, want %s", pd.PathJSON, expectedPathJSON)
 	}
 }
+
+// --- Issue #888: Backfill path_json from raw_hex ---
+
+func TestBackfillPathJsonFromRawHex(t *testing.T) {
+	dbPath := tempDBPath(t)
+	s, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert a transmission with payload_type != TRACE (e.g. 0x01)
+	// raw_hex: header 0x05 (route FLOOD, payload 0x01), path byte 0x42 (hash_size=2, count=2),
+	// hops: AABB, CCDD, then some payload bytes
+	rawHex := "0542AABBCCDD0000000000000000000000000000"
+	s.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES (?, 'h1', '2025-01-01T00:00:00Z', 1)`, rawHex)
+
+	// Insert observation with raw_hex but empty path_json
+	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (1, 1000, ?, '[]')`, rawHex)
+	// Insert observation with raw_hex and NULL path_json
+	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (1, 1001, ?, NULL)`, rawHex)
+	// Insert observation with existing path_json (should NOT be overwritten)
+	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (1, 1002, ?, '["XX","YY"]')`, rawHex)
+
+	// Insert a TRACE transmission (payload_type = 0x09) — should be skipped
+	traceRaw := "2604302D0D2359FEE7B100000000006733D63367"
+	s.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES (?, 'h2', '2025-01-01T00:00:00Z', 9)`, traceRaw)
+	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (2, 1003, ?, '[]')`, traceRaw)
+
+	// Remove the migration marker so it runs again on reopen
+	s.db.Exec(`DELETE FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'`)
+	s.Close()
+
+	// Reopen — migration should run
+	s2, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+
+	// Check migration ran
+	var migCount int
+	s2.db.QueryRow("SELECT COUNT(*) FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'").Scan(&migCount)
+	if migCount != 1 {
+		t.Fatalf("migration not recorded")
+	}
+
+	// Row 1 (was '[]') should now have decoded hops
+	var pj1 string
+	s2.db.QueryRow("SELECT path_json FROM observations WHERE id = 1").Scan(&pj1)
+	if pj1 != `["AABB","CCDD"]` {
+		t.Errorf("row 1 path_json = %q, want %q", pj1, `["AABB","CCDD"]`)
+	}
+
+	// Row 2 (was NULL) should now have decoded hops
+	var pj2 string
+	s2.db.QueryRow("SELECT path_json FROM observations WHERE id = 2").Scan(&pj2)
+	if pj2 != `["AABB","CCDD"]` {
+		t.Errorf("row 2 path_json = %q, want %q", pj2, `["AABB","CCDD"]`)
+	}
+
+	// Row 3 (had existing data) should NOT be overwritten
+	var pj3 string
+	s2.db.QueryRow("SELECT path_json FROM observations WHERE id = 3").Scan(&pj3)
+	if pj3 != `["XX","YY"]` {
+		t.Errorf("row 3 path_json = %q, want %q (should not be overwritten)", pj3, `["XX","YY"]`)
+	}
+
+	// Row 4 (TRACE) should NOT be updated
+	var pj4 string
+	s2.db.QueryRow("SELECT path_json FROM observations WHERE id = 4").Scan(&pj4)
+	if pj4 != "[]" {
+		t.Errorf("row 4 (TRACE) path_json = %q, want %q (should be skipped)", pj4, "[]")
+	}
+}
