@@ -189,6 +189,10 @@ type PacketStore struct {
 	hashSizeInfoCache map[string]*hashSizeNodeInfo
 	hashSizeInfoAt    time.Time
 
+	// Cached multi-byte capability map (pubkey → entry), recomputed every 15s.
+	multiByteCapCache map[string]*MultiByteCapEntry
+	multiByteCapAt    time.Time
+
 	// Precomputed distinct advert pubkey count (refcounted for eviction correctness).
 	// Updated incrementally during Load/Ingest/Evict — avoids JSON parsing in GetPerfStoreStats.
 	advertPubkeys map[string]int // pubkey → number of advert packets referencing it
@@ -6308,6 +6312,47 @@ func EnrichNodeWithHashSize(node map[string]interface{}, info *hashSizeNodeInfo)
 		sort.Ints(sizes)
 		node["hash_sizes_seen"] = sizes
 	}
+}
+
+// EnrichNodeWithMultiByte adds multi-byte capability fields to a node map.
+func EnrichNodeWithMultiByte(node map[string]interface{}, entry *MultiByteCapEntry) {
+	if entry == nil {
+		return
+	}
+	node["multi_byte_status"] = entry.Status
+	node["multi_byte_evidence"] = entry.Evidence
+	node["multi_byte_max_hash_size"] = entry.MaxHashSize
+}
+
+// GetMultiByteCapMap returns a cached pubkey → MultiByteCapEntry map.
+// Reuses the same 15s TTL cache pattern as hash size info.
+func (s *PacketStore) GetMultiByteCapMap() map[string]*MultiByteCapEntry {
+	s.hashSizeInfoMu.Lock()
+	defer s.hashSizeInfoMu.Unlock()
+
+	if s.multiByteCapCache != nil && time.Since(s.multiByteCapAt) < 15*time.Second {
+		return s.multiByteCapCache
+	}
+
+	// Get adopter hash sizes from analytics for cross-referencing
+	analyticsData := s.GetAnalyticsHashSizes("")
+	adopterSizes := make(map[string]int)
+	if nodes, ok := analyticsData["nodes"].(map[string]map[string]interface{}); ok {
+		for pk, data := range nodes {
+			if hs, ok := data["hashSize"].(int); ok {
+				adopterSizes[pk] = hs
+			}
+		}
+	}
+
+	caps := s.computeMultiByteCapability(adopterSizes)
+	result := make(map[string]*MultiByteCapEntry, len(caps))
+	for i := range caps {
+		result[caps[i].PublicKey] = &caps[i]
+	}
+	s.multiByteCapCache = result
+	s.multiByteCapAt = time.Now()
+	return result
 }
 
 // --- Multi-Byte Capability Inference ---
