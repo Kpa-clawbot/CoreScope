@@ -26,6 +26,12 @@
   #btnCopy { padding: 6px 14px; background: #1a4a7a; color: #7ec8e3; border-radius: 6px; border: none; cursor: pointer; font-size: 0.85rem; white-space: nowrap; align-self: flex-end; }
   #btnCopy:hover { background: #2a6aaa; }
   #btnCopy.copied { background: #1a6a3a; color: #7effa0; }
+  #btnSaveDraft { background: #1a5a3a; color: #7effa0; }
+  #btnSaveDraft:hover { background: #2a7a4a; }
+  #btnLoadDraft { background: #3a3a1a; color: #ffe07e; }
+  #btnLoadDraft:hover { background: #5a5a2a; }
+  #btnDownload { background: #1a4a7a; color: #7ec8e3; }
+  #btnDownload:hover { background: #2a6aaa; }
   #counter { font-size: 0.8rem; color: #888; padding-top: 6px; white-space: nowrap; }
   .bufferRow { display: flex; align-items: center; gap: 8px; }
   .bufferRow label { font-size: 0.85rem; color: #aaa; }
@@ -45,6 +51,8 @@
   <div class="controls">
     <button id="btnUndo">↩ Undo</button>
     <button id="btnClear">✕ Clear</button>
+    <button id="btnSaveDraft">💾 Save Draft</button>
+    <button id="btnLoadDraft">📂 Load Draft</button>
   </div>
   <div class="bufferRow">
     <label for="bufferKm">Buffer km:</label>
@@ -63,16 +71,18 @@
   <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
     <span id="counter">0 points</span>
     <button id="btnCopy">Copy</button>
+    <button id="btnDownload">⬇ Download</button>
   </div>
 </div>
 
 <!-- Instructions: paste the output into config.json as a top-level "geo_filter" key, then restart the server -->
 <div id="help-bar">
-  Copy the JSON above → paste as a top-level key in <code>config.json</code> → restart the server.
+  <strong>Save Draft</strong> preserves your polygon across sessions. <strong>Download</strong> exports a JSON snippet → paste as a top-level key in <code>config.json</code> → restart the server.
   Nodes with no GPS fix always pass through. Remove the <code>geo_filter</code> block to disable filtering.
   &nbsp;·&nbsp; <a href="/geofilter-docs.html">Documentation</a>
 </div>
 
+<script src="geofilter-draft.js"></script>
 <script>
 const map = L.map('map').setView([50.5, 4.4], 8);
 
@@ -165,6 +175,40 @@ document.getElementById('btnCopy').addEventListener('click', function() {
     btn.classList.add('copied');
     setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
   });
+});
+
+document.getElementById('btnSaveDraft').addEventListener('click', function() {
+  if (points.length < 3) return;
+  const bufferKm = parseFloat(document.getElementById('bufferKm').value) || 0;
+  GeofilterDraft.saveDraft(points, bufferKm);
+  const btn = document.getElementById('btnSaveDraft');
+  btn.textContent = '✓ Saved';
+  setTimeout(() => { btn.textContent = '💾 Save Draft'; }, 2000);
+});
+
+document.getElementById('btnLoadDraft').addEventListener('click', function() {
+  const draft = GeofilterDraft.loadDraft();
+  if (!draft || !draft.polygon || draft.polygon.length < 3) return;
+  // Clear current
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  points = draft.polygon.slice();
+  if (draft.bufferKm != null) document.getElementById('bufferKm').value = draft.bufferKm;
+  // Recreate markers
+  points.forEach(function(pt, i) {
+    const marker = L.circleMarker([pt[0], pt[1]], {
+      radius: 6, color: '#4a9eff', weight: 2, fillColor: '#4a9eff', fillOpacity: 0.9
+    }).addTo(map).bindTooltip(String(i + 1), { permanent: true, direction: 'top', offset: [0, -8], className: 'pt-label' });
+    markers.push(marker);
+  });
+  render();
+  map.fitBounds(L.polygon(points).getBounds().pad(0.2));
+});
+
+document.getElementById('btnDownload').addEventListener('click', function() {
+  if (points.length < 3) return;
+  const bufferKm = parseFloat(document.getElementById('bufferKm').value) || 0;
+  GeofilterDraft.downloadConfig(points, bufferKm);
 });
 </script>
 </body>
