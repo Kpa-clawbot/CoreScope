@@ -1743,6 +1743,10 @@
     const tbody = document.getElementById('pktBody');
     if (!tbody) return;
 
+    // Preserve scroll position across re-render (#431)
+    const scrollContainer = document.getElementById('pktLeft');
+    const savedScrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+
     // Update dynamic parts of the header
     const countEl = document.querySelector('#pktLeft .count');
     const groupBtn = document.getElementById('fGroup');
@@ -1812,6 +1816,8 @@
       detachVScrollListener();
       const colCount = _getColCount();
       tbody.innerHTML = '<tr><td colspan="' + colCount + '" class="text-center text-muted" style="padding:24px">' + (filters.myNodes ? 'No packets from your claimed/favorited nodes' : 'No packets found') + '</td></tr>';
+      // Restore scroll position after DOM rebuild (#431)
+      if (scrollContainer) scrollContainer.scrollTop = savedScrollTop;
       return;
     }
 
@@ -1829,6 +1835,9 @@
 
     attachVScrollListener();
     renderVisibleRows();
+
+    // Restore scroll position after re-render (#431)
+    if (scrollContainer) scrollContainer.scrollTop = savedScrollTop;
   }
 
   function getDetailPreview(decoded) {
@@ -2685,6 +2694,9 @@
       buildFlatRowHtml,
       _calcVisibleRange,
       buildPacketsParams,
+      renderTableRows,
+      _setPackets: function(p) { packets = p; },
+      _setFilter: function(k, v) { filters[k] = v; },
     };
   }
 
