@@ -2252,3 +2252,104 @@ func TestBackfillPathJsonFromRawHex(t *testing.T) {
 		t.Errorf("row 4 (TRACE) path_json = %q, want %q (should be skipped)", pj4, "[]")
 	}
 }
+
+func TestCleanupLegacyNullHashTimestamp(t *testing.T) {
+	path := tempDBPath(t)
+
+	// Create a bare-bones DB with legacy bad data
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`CREATE TABLE IF NOT EXISTS transmissions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		raw_hex TEXT NOT NULL,
+		hash TEXT NOT NULL,
+		first_seen TEXT NOT NULL,
+		route_type INTEGER,
+		payload_type INTEGER,
+		payload_version INTEGER,
+		decoded_json TEXT,
+		created_at TEXT DEFAULT (datetime('now')),
+		channel_hash TEXT DEFAULT NULL
+	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS observations (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
+		observer_idx INTEGER,
+		direction TEXT,
+		snr REAL,
+		rssi REAL,
+		score INTEGER,
+		path_json TEXT,
+		timestamp INTEGER NOT NULL
+	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS nodes (public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0, battery_mv INTEGER, temperature_c REAL)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS observers (id TEXT PRIMARY KEY, name TEXT, iata TEXT, last_seen TEXT, first_seen TEXT, packet_count INTEGER DEFAULT 0, model TEXT, firmware TEXT, client_version TEXT, radio TEXT, battery_mv INTEGER, uptime_secs INTEGER, noise_floor REAL, inactive INTEGER DEFAULT 0, last_packet_at TEXT DEFAULT NULL)`)
+
+	// Insert good transmission
+	db.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (1, 'aabb', 'abc123', '2024-01-01T00:00:00Z')`)
+	db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (1, 1, 1704067200)`)
+
+	// Insert bad: empty hash
+	db.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (2, 'ccdd', '', '2024-01-01T00:00:00Z')`)
+	db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (2, 1, 1704067200)`)
+
+	// Insert bad: empty first_seen
+	db.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (3, 'eeff', 'def456', '')`)
+	db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (3, 2, 1704067200)`)
+
+	db.Close()
+
+	// Now open via OpenStore which should run the migration
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Good transmission should remain
+	var count int
+	s.db.QueryRow("SELECT COUNT(*) FROM transmissions WHERE id = 1").Scan(&count)
+	if count != 1 {
+		t.Error("good transmission should not be deleted")
+	}
+
+	// Bad transmissions should be gone
+	s.db.QueryRow("SELECT COUNT(*) FROM transmissions WHERE id = 2").Scan(&count)
+	if count != 0 {
+		t.Errorf("transmission with empty hash should be deleted, got count=%d", count)
+	}
+	s.db.QueryRow("SELECT COUNT(*) FROM transmissions WHERE id = 3").Scan(&count)
+	if count != 0 {
+		t.Errorf("transmission with empty first_seen should be deleted, got count=%d", count)
+	}
+
+	// Observations for bad transmissions should be gone
+	s.db.QueryRow("SELECT COUNT(*) FROM observations WHERE transmission_id IN (2, 3)").Scan(&count)
+	if count != 0 {
+		t.Errorf("observations for bad transmissions should be deleted, got count=%d", count)
+	}
+
+	// Observation for good transmission should remain
+	s.db.QueryRow("SELECT COUNT(*) FROM observations WHERE transmission_id = 1").Scan(&count)
+	if count != 1 {
+		t.Error("observation for good transmission should remain")
+	}
+
+	// Migration marker should exist
+	var migCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM _migrations WHERE name = 'cleanup_legacy_null_hash_ts'").Scan(&migCount)
+	if migCount != 1 {
+		t.Error("migration marker cleanup_legacy_null_hash_ts should be recorded")
+	}
+
+	// Idempotent: opening again should not error
+	s.Close()
+	s2, err := OpenStore(path)
+	if err != nil {
+		t.Fatal("second open should not fail:", err)
+	}
+	s2.Close()
+}
