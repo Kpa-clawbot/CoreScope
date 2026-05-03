@@ -831,6 +831,14 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 	return nodes, nil
 }
 
+// GetNodeByPrefix resolves a hex prefix (>=8 chars) to a unique node.
+// Returns (node, ambiguous, error). When multiple nodes share the prefix,
+// returns (nil, true, nil). Stub — implementation in follow-up commit (issue #772).
+func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, error) {
+	_ = prefix
+	return nil, false, nil
+}
+
 // GetNodeByPubkey returns a single node.
 func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
 	rows, err := db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c FROM nodes WHERE public_key = ?", pubkey)
