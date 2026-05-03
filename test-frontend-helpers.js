@@ -2287,6 +2287,14 @@ console.log('\n=== analytics.js: sortChannels ===');
   });
 }
 
+// === analytics.js: hash prefix helpers (removed — moved server-side) ===
+// 15 tests for buildOneBytePrefixMap, buildTwoBytePrefixInfo, and
+// buildCollisionHops were removed in PR #415 when collision analysis moved to
+// the Go backend.  The equivalent logic is now covered by server-side Go tests:
+//   cmd/server/collision_details_test.go  — collision prefix + node-pair assertions
+//   cmd/server/routes_test.go             — hash-collision endpoint integration
+// See issue #437 for the full accounting.
+
 // ===== analytics.js: rfNFColumnChart =====
 console.log('\n=== analytics.js: rfNFColumnChart ===');
 {

@@ -1192,9 +1192,11 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.store != nil {
 		hashInfo := s.store.GetNodeHashSizeInfo()
+		mbCap := s.store.GetMultiByteCapMap()
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
+				EnrichNodeWithMultiByte(node, mbCap[pk])
 			}
 		}
 	}
@@ -1261,6 +1263,8 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		hashInfo := s.store.GetNodeHashSizeInfo()
 		EnrichNodeWithHashSize(node, hashInfo[pubkey])
+		mbCap := s.store.GetMultiByteCapMap()
+		EnrichNodeWithMultiByte(node, mbCap[pubkey])
 	}
 
 	name := ""
