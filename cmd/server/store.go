@@ -2272,6 +2272,10 @@ func (s *PacketStore) filterPackets(q PacketQuery) []*StoreTx {
 	}
 	// Single-pass filter: apply all predicates in one scan.
 	results := filterTxSlice(source, func(tx *StoreTx) bool {
+		// Data integrity: exclude legacy rows missing hash or timestamp (#871)
+		if tx.Hash == "" || tx.FirstSeen == "" {
+			return false
+		}
 		if hasType && (tx.PayloadType == nil || *tx.PayloadType != filterType) {
 			return false
 		}
