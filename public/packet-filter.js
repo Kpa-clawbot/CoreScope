@@ -10,6 +10,11 @@
   // Aliases: display names → firmware names (for user convenience)
   var TYPE_ALIASES = { 'request': 'REQ', 'response': 'RESPONSE', 'direct msg': 'TXT_MSG', 'dm': 'TXT_MSG', 'ack': 'ACK', 'advert': 'ADVERT', 'channel msg': 'GRP_TXT', 'channel': 'GRP_TXT', 'group data': 'GRP_DATA', 'anon req': 'ANON_REQ', 'path': 'PATH', 'trace': 'TRACE', 'multipart': 'MULTIPART', 'control': 'CONTROL', 'raw': 'RAW_CUSTOM', 'custom': 'RAW_CUSTOM' };
   var ROUTE_TYPES = { 0: 'TRANSPORT_FLOOD', 1: 'FLOOD', 2: 'DIRECT', 3: 'TRANSPORT_DIRECT' };
+  // Aliases: shorthand → canonical route name (issue #339)
+  var ROUTE_ALIASES = { 't_flood': 'TRANSPORT_FLOOD', 't_direct': 'TRANSPORT_DIRECT' };
+  // Transport route_type values: TRANSPORT_FLOOD (0) and TRANSPORT_DIRECT (3).
+  // Mirrors isTransportRoute() in cmd/server/decoder.go.
+  function isTransportRouteType(rt) { return rt === 0 || rt === 3; }
 
   // Use window globals if available (they may have more types)
   function getRT() { return window.ROUTE_TYPES || ROUTE_TYPES; }
@@ -180,6 +185,7 @@
   function resolveField(packet, field) {
     if (field === 'type') return FW_PAYLOAD_TYPES[packet.payload_type] || '';
     if (field === 'route') return getRT()[packet.route_type] || '';
+    if (field === 'transport') return isTransportRouteType(packet.route_type);
     if (field === 'hash') return packet.hash || '';
     if (field === 'raw') return packet.raw_hex || '';
     if (field === 'size') return packet.raw_hex ? packet.raw_hex.length / 2 : 0;
@@ -254,6 +260,10 @@
           if (ast.field === 'type' && typeof target === 'string') {
             var alias = TYPE_ALIASES[String(target).toLowerCase()];
             if (alias) resolvedTarget = alias;
+          }
+          if (ast.field === 'route' && typeof target === 'string') {
+            var rAlias = ROUTE_ALIASES[String(target).toLowerCase()];
+            if (rAlias) resolvedTarget = rAlias;
           }
           if (typeof fieldVal === 'number' && typeof resolvedTarget === 'number') {
             eq = fieldVal === resolvedTarget;
