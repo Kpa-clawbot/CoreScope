@@ -793,6 +793,14 @@
         renderChannelList();
         return;
       }
+      // Color clear button — remove color without opening picker (#681)
+      const clearBtn = e.target.closest('.ch-color-clear');
+      if (clearBtn && window.ChannelColors) {
+        e.stopPropagation();
+        var clearCh = clearBtn.getAttribute('data-channel');
+        if (clearCh) { window.ChannelColors.remove(clearCh); renderChannelList(); }
+        return;
+      }
       // Color dot click — open picker, don't select channel
       const dot = e.target.closest('.ch-color-dot');
       if (dot && window.ChannelColorPicker) {
@@ -1098,7 +1106,7 @@
         <div class="ch-item-body">
           <div class="ch-item-top">
             <span class="ch-item-name">${escapeHtml(name)}</span>
-            <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="Change channel color" aria-label="Change color for ${escapeHtml(name)}"></span>
+            <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="Change channel color" aria-label="Change color for ${escapeHtml(name)}"></span>${chColor ? '<span class="ch-color-clear" data-channel="' + escapeHtml(ch.hash) + '" title="Clear color" aria-label="Clear color for ' + escapeHtml(name) + '">✕</span>' : ''}
             <span class="ch-item-time" data-channel-hash="${ch.hash}">${time}</span>${removeBtn}
           </div>
           <div class="ch-item-preview">${escapeHtml(preview)}</div>

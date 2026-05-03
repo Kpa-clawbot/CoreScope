@@ -2844,7 +2844,7 @@
     var style = c
       ? 'background:' + bg + ';border:1px solid ' + border
       : 'background:transparent;border:1px dashed ' + border;
-    return '<span class="feed-color-dot" data-channel="' + escapeHtml(channel) + '" style="display:inline-block;width:12px;height:12px;border-radius:50%;' + style + ';cursor:pointer;vertical-align:middle;margin-left:4px;flex-shrink:0" title="Set color for ' + escapeHtml(channel) + '"></span>';
+    return '<span class="feed-color-dot" data-channel="' + escapeHtml(channel) + '" style="display:inline-block;width:18px;height:18px;border-radius:50%;' + style + ';cursor:pointer;vertical-align:middle;margin-left:4px;flex-shrink:0" title="Set color for ' + escapeHtml(channel) + '"></span>';
   }
 
   function addFeedItemDOM(icon, typeName, payload, hops, color, pkt, feed) {
