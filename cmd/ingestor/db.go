@@ -450,15 +450,18 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] Backfilling observations.path_json from raw_hex...")
 		updated := 0
 		const batchSize = 1000
+		lastID := int64(0)
 		for {
 			rows, err := db.Query(`
 				SELECT o.id, o.raw_hex
 				FROM observations o
 				JOIN transmissions t ON o.transmission_id = t.id
-				WHERE o.raw_hex IS NOT NULL AND o.raw_hex != ''
-				AND (o.path_json IS NULL OR o.path_json = '')
+				WHERE o.id > ?
+				AND o.raw_hex IS NOT NULL AND o.raw_hex != ''
+				AND (o.path_json IS NULL OR o.path_json = '' OR o.path_json = '[]')
 				AND t.payload_type != 9
-				LIMIT ?`, batchSize)
+				ORDER BY o.id
+				LIMIT ?`, lastID, batchSize)
 			if err != nil {
 				log.Printf("[migration] backfill_path_json query error: %v", err)
 				break
@@ -478,10 +481,10 @@ func applySchema(db *sql.DB) error {
 			if len(batch) == 0 {
 				break
 			}
+			lastID = batch[len(batch)-1].id
 			for _, r := range batch {
 				hops, err := packetpath.DecodePathFromRawHex(r.rawHex)
 				if err != nil || len(hops) == 0 {
-					// Mark as processed with empty path to avoid re-scanning
 					db.Exec(`UPDATE observations SET path_json = '[]' WHERE id = ?`, r.id)
 					continue
 				}
