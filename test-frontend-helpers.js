@@ -6451,6 +6451,73 @@ console.log('\n=== analytics.js: renderCollisionsFromServer collision table ==='
   });
 }
 
+// ===== APP.JS: formatChartAxisLabel =====
+console.log('\n=== app.js: formatChartAxisLabel ===');
+{
+  const ctx = makeSandbox();
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  const formatChartAxisLabel = ctx.formatChartAxisLabel;
+
+  test('formatChartAxisLabel returns dash for invalid date', () => {
+    assert.strictEqual(formatChartAxisLabel(new Date('invalid'), true), '—');
+  });
+
+  test('formatChartAxisLabel returns dash for non-Date', () => {
+    assert.strictEqual(formatChartAxisLabel('not a date', true), '—');
+  });
+
+  test('formatChartAxisLabel ISO short form returns HH:MM', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-format', 'iso');
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    const d = new Date('2024-06-15T14:30:00Z');
+    assert.strictEqual(formatChartAxisLabel(d, true), '14:30');
+  });
+
+  test('formatChartAxisLabel ISO long form returns MM-DD HH:MM', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-format', 'iso');
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    const d = new Date('2024-06-15T14:30:00Z');
+    assert.strictEqual(formatChartAxisLabel(d, false), '06-15 14:30');
+  });
+
+  test('formatChartAxisLabel ISO-seconds short form includes seconds', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-format', 'iso-seconds');
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    const d = new Date('2024-06-15T14:30:05Z');
+    assert.strictEqual(formatChartAxisLabel(d, true), '14:30:05');
+  });
+
+  test('formatChartAxisLabel ISO-seconds long form includes seconds', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-format', 'iso-seconds');
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    const d = new Date('2024-06-15T14:30:05Z');
+    assert.strictEqual(formatChartAxisLabel(d, false), '06-15 14:30:05');
+  });
+
+  test('formatChartAxisLabel locale short form returns localized time', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-format', 'locale');
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    const d = new Date('2024-06-15T14:30:00Z');
+    const result = formatChartAxisLabel(d, true);
+    // Locale output varies by env, but should contain hour digits
+    assert.ok(result.includes('14') || result.includes('2:'), 'short locale should contain hour: ' + result);
+  });
+
+  test('formatChartAxisLabel locale long form returns date+time', () => {
+    ctx.localStorage.setItem('meshcore-timestamp-format', 'locale');
+    ctx.localStorage.setItem('meshcore-timestamp-timezone', 'utc');
+    const d = new Date('2024-06-15T14:30:00Z');
+    const result = formatChartAxisLabel(d, false);
+    // Should contain day reference and time
+    assert.ok(result.length > 5, 'long locale should be non-trivial: ' + result);
+  });
+
+  // Clean up
+  ctx.localStorage.removeItem('meshcore-timestamp-format');
+  ctx.localStorage.removeItem('meshcore-timestamp-timezone');
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
