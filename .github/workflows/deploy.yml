@@ -79,6 +79,11 @@ jobs:
           go test ./...
           echo "--- Decrypt CLI tests passed ---"
 
+      - name: Run JS unit tests (packet-filter)
+        run: |
+          set -e
+          node test-packet-filter.js
+
       - name: Verify proto syntax
         run: |
           set -e
