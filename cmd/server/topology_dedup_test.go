@@ -89,7 +89,7 @@ func TestTopologyDedup_RepeatersMergeByPubkey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := store.computeAnalyticsTopology("")
+	result := store.computeAnalyticsTopology("", TimeWindow{})
 	topRepeaters := result["topRepeaters"].([]map[string]interface{})
 
 	// Build a map of pubkey → total count from topRepeaters
@@ -209,7 +209,7 @@ func TestTopologyDedup_AmbiguousPrefixNotMerged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := store.computeAnalyticsTopology("")
+	result := store.computeAnalyticsTopology("", TimeWindow{})
 	topRepeaters := result["topRepeaters"].([]map[string]interface{})
 
 	// "ab" is ambiguous — should NOT be merged with "ab1122"
@@ -310,7 +310,7 @@ func TestTopologyDedup_PairsMergeByPubkey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := store.computeAnalyticsTopology("")
+	result := store.computeAnalyticsTopology("", TimeWindow{})
 	topPairs := result["topPairs"].([]map[string]interface{})
 
 	// Should have exactly 1 pair entry for AQUA-BETA with count=15

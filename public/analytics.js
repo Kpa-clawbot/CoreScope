@@ -75,6 +75,16 @@
           <h2>📊 Mesh Analytics</h2>
           <p class="text-muted">Deep dive into your mesh network data</p>
           <div id="analyticsRegionFilter" class="region-filter-container"></div>
+          <div class="time-window-filter" style="margin:8px 0">
+            <label for="analyticsTimeWindow" style="font-size:0.9em;color:var(--text-muted);margin-right:6px">Time window:</label>
+            <select id="analyticsTimeWindow" data-testid="analytics-time-window" aria-label="Time window">
+              <option value="">All data</option>
+              <option value="1h">Last 1 hour</option>
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+            </select>
+          </div>
           <div class="analytics-tabs" id="analyticsTabs" role="tablist" aria-label="Analytics tabs">
             <button class="tab-btn active" data-tab="overview">Overview</button>
             <button class="tab-btn" data-tab="rf">RF / Signal</button>
@@ -123,6 +133,12 @@
     RegionFilter.init(document.getElementById('analyticsRegionFilter'));
     RegionFilter.onChange(function () { loadAnalytics(); });
 
+    // Time-window picker (#842) — refresh analytics on change.
+    const tw = document.getElementById('analyticsTimeWindow');
+    if (tw) {
+      tw.addEventListener('change', function () { loadAnalytics(); });
+    }
+
     // Delegated click/keyboard handler for clickable table rows
     const analyticsContent = document.getElementById('analyticsContent');
     if (analyticsContent) {
@@ -150,8 +166,13 @@
   async function loadAnalytics() {
     try {
       _analyticsData = {};
-      const rqs = RegionFilter.regionQueryString();
-      const sep = rqs ? '?' + rqs.slice(1) : '';
+      const rqs = RegionFilter.regionQueryString(); // "&region=..." or ""
+      // Time window picker (#842) — append &window=… when set.
+      const twEl = document.getElementById('analyticsTimeWindow');
+      const twVal = twEl ? twEl.value : '';
+      const tws = twVal ? '&window=' + encodeURIComponent(twVal) : '';
+      const combined = (rqs + tws).slice(1); // drop leading '&'
+      const sep = combined ? '?' + combined : '';
       const [hashData, rfData, topoData, chanData, collisionData] = await Promise.all([
         api('/analytics/hash-sizes' + sep, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/rf' + sep, { ttl: CLIENT_TTL.analyticsRF }),

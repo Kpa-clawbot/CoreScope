@@ -590,6 +590,26 @@ async function run() {
     assert(cards.length >= 3, `Expected >=3 overview stat cards, got ${cards.length}`);
   });
 
+  // Test 8b (#842): time-window picker triggers requests with ?window=… param.
+  await test('Analytics time-window picker refetches with window param', async () => {
+    // Picker must be rendered.
+    await page.waitForSelector('#analyticsTimeWindow', { timeout: 5000 });
+    const opts = await page.$$eval('#analyticsTimeWindow option', els => els.map(e => e.value));
+    assert(opts.includes('24h'), `picker must offer 24h, got ${JSON.stringify(opts)}`);
+
+    // Listen for the next /api/analytics/rf request after we change the picker.
+    const reqPromise = page.waitForRequest(
+      r => /\/api\/analytics\/rf(\?|$)/.test(r.url()),
+      { timeout: 8000 }
+    );
+    await page.selectOption('#analyticsTimeWindow', '24h');
+    const req = await reqPromise;
+    assert(
+      /[?&]window=24h(&|$)/.test(req.url()),
+      `analytics/rf request should carry window=24h, got ${req.url()}`
+    );
+  });
+
   // Analytics sub-tab tests
   await test('Analytics RF tab renders content', async () => {
     await page.click('[data-tab="rf"]');

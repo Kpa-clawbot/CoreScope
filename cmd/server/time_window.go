@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"time"
 )
 
 // TimeWindow is a half-open time range used to bound analytics queries.
@@ -50,9 +51,47 @@ func (w TimeWindow) Includes(ts string) bool {
 // When neither is set, returns the zero TimeWindow (unbounded; original behavior).
 // Invalid values are silently ignored to preserve backwards compatibility.
 func ParseTimeWindow(r *http.Request) TimeWindow {
-	// STUB — implementation in green commit. Returns zero window so any
-	// assertion-level test that expects a populated Since/Until fails on
-	// the assertion (not on a build error).
-	_ = r
+	q := r.URL.Query()
+
+	// Absolute range takes precedence if either bound is set.
+	from := q.Get("from")
+	to := q.Get("to")
+	if from != "" || to != "" {
+		w := TimeWindow{}
+		if from != "" {
+			if t, err := time.Parse(time.RFC3339, from); err == nil {
+				w.Since = t.UTC().Format(time.RFC3339)
+			}
+		}
+		if to != "" {
+			if t, err := time.Parse(time.RFC3339, to); err == nil {
+				w.Until = t.UTC().Format(time.RFC3339)
+			}
+		}
+		return w
+	}
+
+	// Relative window.
+	if win := q.Get("window"); win != "" {
+		var d time.Duration
+		switch win {
+		case "1h":
+			d = 1 * time.Hour
+		case "24h", "1d":
+			d = 24 * time.Hour
+		case "3d":
+			d = 3 * 24 * time.Hour
+		case "7d", "1w":
+			d = 7 * 24 * time.Hour
+		case "30d":
+			d = 30 * 24 * time.Hour
+		default:
+			// Unknown values are silently ignored — backwards compatible.
+			return TimeWindow{}
+		}
+		since := time.Now().UTC().Add(-d).Format(time.RFC3339)
+		return TimeWindow{Since: since}
+	}
+
 	return TimeWindow{}
 }

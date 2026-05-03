@@ -1525,8 +1525,9 @@ func (s *Server) handleFleetClockSkew(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAnalyticsRF(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
+	window := ParseTimeWindow(r)
 	if s.store != nil {
-		writeJSON(w, s.store.GetAnalyticsRF(region))
+		writeJSON(w, s.store.GetAnalyticsRFWithWindow(region, window))
 		return
 	}
 	writeJSON(w, RFAnalyticsResponse{
@@ -1545,8 +1546,9 @@ func (s *Server) handleAnalyticsRF(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAnalyticsTopology(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
+	window := ParseTimeWindow(r)
 	if s.store != nil {
-		data := s.store.GetAnalyticsTopology(region)
+		data := s.store.GetAnalyticsTopologyWithWindow(region, window)
 		if s.cfg != nil && len(s.cfg.NodeBlacklist) > 0 {
 			data = s.filterBlacklistedFromTopology(data)
 		}
@@ -1568,7 +1570,8 @@ func (s *Server) handleAnalyticsTopology(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleAnalyticsChannels(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		region := r.URL.Query().Get("region")
-		writeJSON(w, s.store.GetAnalyticsChannels(region))
+		window := ParseTimeWindow(r)
+		writeJSON(w, s.store.GetAnalyticsChannelsWithWindow(region, window))
 		return
 	}
 	channels, _ := s.db.GetChannels()

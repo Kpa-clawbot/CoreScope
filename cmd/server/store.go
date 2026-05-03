@@ -3791,8 +3791,18 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int, 
 
 // GetAnalyticsChannels returns full channel analytics computed from in-memory packets.
 func (s *PacketStore) GetAnalyticsChannels(region string) map[string]interface{} {
+	return s.GetAnalyticsChannelsWithWindow(region, TimeWindow{})
+}
+
+// GetAnalyticsChannelsWithWindow returns channel analytics for the given region,
+// optionally bounded to a time window (issue #842). Zero TimeWindow = all data.
+func (s *PacketStore) GetAnalyticsChannelsWithWindow(region string, window TimeWindow) map[string]interface{} {
+	cacheKey := region
+	if !window.IsZero() {
+		cacheKey = region + "|" + window.CacheKey()
+	}
 	s.cacheMu.Lock()
-	if cached, ok := s.chanCache[region]; ok && time.Now().Before(cached.expiresAt) {
+	if cached, ok := s.chanCache[cacheKey]; ok && time.Now().Before(cached.expiresAt) {
 		s.cacheHits++
 		s.cacheMu.Unlock()
 		return cached.data
@@ -3800,10 +3810,10 @@ func (s *PacketStore) GetAnalyticsChannels(region string) map[string]interface{}
 	s.cacheMisses++
 	s.cacheMu.Unlock()
 
-	result := s.computeAnalyticsChannels(region)
+	result := s.computeAnalyticsChannels(region, window)
 
 	s.cacheMu.Lock()
-	s.chanCache[region] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
+	s.chanCache[cacheKey] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
 	s.cacheMu.Unlock()
 
 	return result
@@ -3836,7 +3846,7 @@ func isPlaceholderName(name string) bool {
 	return err == nil
 }
 
-func (s *PacketStore) computeAnalyticsChannels(region string) map[string]interface{} {
+func (s *PacketStore) computeAnalyticsChannels(region string, window TimeWindow) map[string]interface{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -3885,6 +3895,9 @@ func (s *PacketStore) computeAnalyticsChannels(region string) map[string]interfa
 
 	grpTxts := s.byPayloadType[5]
 	for _, tx := range grpTxts {
+		if !window.Includes(tx.FirstSeen) {
+			continue
+		}
 		if regionObs != nil {
 			match := false
 			for _, obs := range tx.Observations {
@@ -4025,8 +4038,18 @@ func (s *PacketStore) computeAnalyticsChannels(region string) map[string]interfa
 
 // GetAnalyticsRF returns full RF analytics computed from in-memory observations.
 func (s *PacketStore) GetAnalyticsRF(region string) map[string]interface{} {
+	return s.GetAnalyticsRFWithWindow(region, TimeWindow{})
+}
+
+// GetAnalyticsRFWithWindow returns RF analytics bounded by an optional
+// time window (issue #842). Zero TimeWindow = all data (backwards compatible).
+func (s *PacketStore) GetAnalyticsRFWithWindow(region string, window TimeWindow) map[string]interface{} {
+	cacheKey := region
+	if !window.IsZero() {
+		cacheKey = region + "|" + window.CacheKey()
+	}
 	s.cacheMu.Lock()
-	if cached, ok := s.rfCache[region]; ok && time.Now().Before(cached.expiresAt) {
+	if cached, ok := s.rfCache[cacheKey]; ok && time.Now().Before(cached.expiresAt) {
 		s.cacheHits++
 		s.cacheMu.Unlock()
 		return cached.data
@@ -4034,16 +4057,16 @@ func (s *PacketStore) GetAnalyticsRF(region string) map[string]interface{} {
 	s.cacheMisses++
 	s.cacheMu.Unlock()
 
-	result := s.computeAnalyticsRF(region)
+	result := s.computeAnalyticsRF(region, window)
 
 	s.cacheMu.Lock()
-	s.rfCache[region] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
+	s.rfCache[cacheKey] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
 	s.cacheMu.Unlock()
 
 	return result
 }
 
-func (s *PacketStore) computeAnalyticsRF(region string) map[string]interface{} {
+func (s *PacketStore) computeAnalyticsRF(region string, window TimeWindow) map[string]interface{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -4082,6 +4105,9 @@ func (s *PacketStore) computeAnalyticsRF(region string) map[string]interface{} {
 		for obsID := range regionObs {
 			obsList := s.byObserver[obsID]
 			for _, obs := range obsList {
+				if !window.Includes(obs.Timestamp) {
+					continue
+				}
 				totalObs++
 				tx := s.byTxID[obs.TransmissionID]
 				hash := ""
@@ -4167,6 +4193,12 @@ func (s *PacketStore) computeAnalyticsRF(region string) map[string]interface{} {
 	} else {
 		// No region: iterate all transmissions and their observations
 		for _, tx := range s.packets {
+			// Window filter: skip transmissions outside the requested window.
+			// We use tx.FirstSeen as the bounding timestamp; per-obs window
+			// filter below handles cases where individual obs timestamps differ.
+			if !window.Includes(tx.FirstSeen) {
+				continue
+			}
 			hash := tx.Hash
 			if hash != "" {
 				regionalHashes[hash] = true
@@ -4861,8 +4893,17 @@ func parsePathJSON(pathJSON string) []string {
 }
 
 func (s *PacketStore) GetAnalyticsTopology(region string) map[string]interface{} {
+	return s.GetAnalyticsTopologyWithWindow(region, TimeWindow{})
+}
+
+// GetAnalyticsTopologyWithWindow — see issue #842.
+func (s *PacketStore) GetAnalyticsTopologyWithWindow(region string, window TimeWindow) map[string]interface{} {
+	cacheKey := region
+	if !window.IsZero() {
+		cacheKey = region + "|" + window.CacheKey()
+	}
 	s.cacheMu.Lock()
-	if cached, ok := s.topoCache[region]; ok && time.Now().Before(cached.expiresAt) {
+	if cached, ok := s.topoCache[cacheKey]; ok && time.Now().Before(cached.expiresAt) {
 		s.cacheHits++
 		s.cacheMu.Unlock()
 		return cached.data
@@ -4870,16 +4911,16 @@ func (s *PacketStore) GetAnalyticsTopology(region string) map[string]interface{}
 	s.cacheMisses++
 	s.cacheMu.Unlock()
 
-	result := s.computeAnalyticsTopology(region)
+	result := s.computeAnalyticsTopology(region, window)
 
 	s.cacheMu.Lock()
-	s.topoCache[region] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
+	s.topoCache[cacheKey] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
 	s.cacheMu.Unlock()
 
 	return result
 }
 
-func (s *PacketStore) computeAnalyticsTopology(region string) map[string]interface{} {
+func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow) map[string]interface{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -4910,6 +4951,9 @@ func (s *PacketStore) computeAnalyticsTopology(region string) map[string]interfa
 	perObserver := map[string]map[string]*struct{ minDist, maxDist, count int }{}
 
 	for _, tx := range s.packets {
+		if !window.Includes(tx.FirstSeen) {
+			continue
+		}
 		hops := txGetParsedPath(tx)
 		if len(hops) == 0 {
 			continue

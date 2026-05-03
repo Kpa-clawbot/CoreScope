@@ -68,7 +68,7 @@ func TestComputeAnalyticsChannels_MergesEncryptedAndDecrypted(t *testing.T) {
 	}
 
 	store := newChannelTestStore(packets)
-	result := store.computeAnalyticsChannels("")
+	result := store.computeAnalyticsChannels("", TimeWindow{})
 
 	channels := result["channels"].([]map[string]interface{})
 	if len(channels) != 1 {
@@ -98,7 +98,7 @@ func TestComputeAnalyticsChannels_RejectsRainbowTableMismatch(t *testing.T) {
 	}
 
 	store := newChannelTestStore(packets)
-	result := store.computeAnalyticsChannels("")
+	result := store.computeAnalyticsChannels("", TimeWindow{})
 
 	channels := result["channels"].([]map[string]interface{})
 	if len(channels) != 2 {
