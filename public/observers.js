@@ -114,7 +114,7 @@
 
             <div class="help-content" style="overflow:hidden;transition:max-height 0.3s ease;max-height:0px">
               <div class="text-muted" style="font-size:12px;margin-bottom:12px">
-                Connect your node to the Cornmeister MQTT broker to share raw packets.
+                Connect your node to the DutchMeshcore.nl MQTT broker to share raw packets.
               </div>
 
               <strong style="font-size:12px">Broker 1</strong>
@@ -134,9 +134,9 @@
               <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
 
               <div style="margin-bottom:16px">
-                <strong>MQTT Bridge Firmware Commands</strong>
+                <strong>Dutch Meshcore MQTT Bridge Firmware Commands</strong>
                 <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:12px">
-                  Paste into your device console:
+                  When using the fw builds provided by DutchMeshcore.nl - Paste into your device console:
                 </div>
 
                 <div style="margin-bottom:12px;padding:10px 12px;background:var(--surface-0);border:1px solid var(--border);border-radius:6px">
@@ -154,37 +154,37 @@
 					<option value="GLZ">GLZ – Gilze-Rijen Airbase</option>
 					<option value="GRQ">GRQ – Eelde Airport</option>
 					<option value="LEY">LEY – Lelystad Airport</option>
-					<option value="LID">LID – Valkenburg Airbase</option>
+					<option value="LID">LID – Valkenburg Airbase (Closed)</option>
 					<option value="LWR">LWR – Leeuwarden Airbase</option>
 					<option value="MST">MST – Maastricht Airport</option>
 					<option value="QAR">QAR – Deelen Airbase</option>
 					<option value="RTM">RTM – Rotterdam Airport</option>
 					<option value="UDE">UDE – Volkel Airbase</option>
-					<option value="UTC">UTC – Utrecht Airport</option>
+					<option value="UTC">UTC – Soesterberg Airbase (Closed)</option>
 					<option value="WOE">WOE – Woensdrecht Airbase</option>
                   </select>
                 </div>
 
-                <div style="margin-bottom:12px">
-                  <strong>Broker 1</strong>
-                  <pre class="help-code"><code>set mqtt.server collector1.dutchmeshcore.nl
-set mqtt.port 443
-set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
+                <div style="margin-bottom:12px;padding:10px 12px;background:var(--surface-0);border:1px solid var(--border);border-radius:6px">
+                  <strong style="font-size:12px">✉️ Owner email address</strong>
+                  <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:8px">
+                    Optional. Used for ownership verification or observer notifications.
+                  </div>
+                  <input id="obsEmailInput" type="email" placeholder="name@example.nl" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;box-sizing:border-box" />
                 </div>
 
                 <div style="margin-bottom:12px">
-                  <strong>Broker 2</strong>
-                  <pre class="help-code"><code>set mqtt.server collector2.dutchmeshcore.nl
-set mqtt.port 443
-set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
+                  <pre class="help-code"><code>set mqtt.iata <span class="obs-iata-val">AMS</span>
+<span class="obs-email-line" style="display:none">set mqtt.email <span class="obs-email-val"></span>
+</span>set mqtt1.preset dutchmeshcore-1
+set mqtt2.preset dutchmeshcore-2
+reboot</code></pre>
                 </div>
               </div>
 
               <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
 
-              <div style="font-size:12px" class="text-muted">
-                Live packets: <a href="https://cornmeister.nl" target="_blank" rel="noopener">cornmeister.nl</a>
-              </div>
+              
             </div>
           </div>
         </div>
@@ -249,12 +249,24 @@ set mqtt.iata <span class="obs-iata-val">AMS</span></code></pre>
       var row = e.target.closest('tr[data-action="navigate"]');
       if (row) location.hash = row.dataset.value;
     });
-    // IATA picker — update both code blocks when a region is selected
+    // IATA picker — update code block when a region is selected
     app.addEventListener('change', function (e) {
       if (e.target.id === 'obsIataSelect') {
         var code = e.target.value;
         app.querySelectorAll('.obs-iata-val').forEach(function (span) {
           span.textContent = code;
+        });
+      }
+    });
+    // Email input — show/hide and update the mqtt.email line live
+    app.addEventListener('input', function (e) {
+      if (e.target.id === 'obsEmailInput') {
+        var val = e.target.value.trim();
+        app.querySelectorAll('.obs-email-val').forEach(function (span) {
+          span.textContent = val;
+        });
+        app.querySelectorAll('.obs-email-line').forEach(function (span) {
+          span.style.display = val ? 'inline' : 'none';
         });
       }
     });
