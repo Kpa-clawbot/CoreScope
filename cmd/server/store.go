@@ -4997,6 +4997,16 @@ func (s *PacketStore) computeAnalyticsTopology(region string) map[string]interfa
 		}
 	}
 
+	// pmLookup resolves a hop hex string to its prefix-map candidates,
+	// applying the same truncation used during map construction.
+	pmLookup := func(hop string) []nodeInfo {
+		key := strings.ToLower(hop)
+		if len(key) > maxPrefixLen {
+			key = key[:maxPrefixLen]
+		}
+		return pm.m[key]
+	}
+
 	// --- Dedup pass: merge hop prefixes that resolve unambiguously to the same node ---
 	// Only merge when pm.m[hop] has exactly 1 candidate (unique_prefix).
 	// Ambiguous short prefixes (efiten's concern: 1-byte collisions) stay separate.
@@ -5007,13 +5017,6 @@ func (s *PacketStore) computeAnalyticsTopology(region string) map[string]interfa
 		}
 		byPubkey := map[string]*dedupInfo{} // pubkey → merged info
 		ambiguous := map[string]int{}       // hop → count (kept as-is)
-		pmLookup := func(hop string) []nodeInfo {
-			key := strings.ToLower(hop)
-			if len(key) > maxPrefixLen {
-				key = key[:maxPrefixLen]
-			}
-			return pm.m[key]
-		}
 		for h, c := range hopFreq {
 			candidates := pmLookup(h)
 			if len(candidates) == 1 {
@@ -5049,17 +5052,10 @@ func (s *PacketStore) computeAnalyticsTopology(region string) map[string]interfa
 		}
 		byPubkeyPair := map[string]*pairDedupInfo{} // "pkA|pkB" (sorted) → merged info
 		ambiguousPairs := map[string]int{}
-		pairPmLookup := func(hop string) []nodeInfo {
-			key := strings.ToLower(hop)
-			if len(key) > maxPrefixLen {
-				key = key[:maxPrefixLen]
-			}
-			return pm.m[key]
-		}
 		for p, c := range pairFreq {
 			parts := strings.SplitN(p, "|", 2)
-			candA := pairPmLookup(parts[0])
-			candB := pairPmLookup(parts[1])
+			candA := pmLookup(parts[0])
+			candB := pmLookup(parts[1])
 			if len(candA) == 1 && len(candB) == 1 {
 				pkA := strings.ToLower(candA[0].PublicKey)
 				pkB := strings.ToLower(candB[0].PublicKey)
