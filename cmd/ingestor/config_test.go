@@ -375,3 +375,22 @@ func TestObserverIATAWhitelistJSON(t *testing.T) {
 		t.Error("ARN should be allowed after loading from JSON")
 	}
 }
+
+func TestMQTTSourceRegionField(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	os.WriteFile(cfgPath, []byte(`{
+		"dbPath": "/tmp/test.db",
+		"mqttSources": [
+			{"name": "cascadia", "broker": "tcp://localhost:1883", "topics": ["meshcore/#"], "region": "PDX"}
+		]
+	}`), 0o644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MQTTSources[0].Region != "PDX" {
+		t.Fatalf("expected region PDX, got %q", cfg.MQTTSources[0].Region)
+	}
+}

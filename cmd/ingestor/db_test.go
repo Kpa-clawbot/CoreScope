@@ -2353,3 +2353,26 @@ func TestCleanupLegacyNullHashTimestamp(t *testing.T) {
 	}
 	s2.Close()
 }
+
+func TestBuildPacketDataRegionFromPayload(t *testing.T) {
+	msg := &MQTTPacketMessage{Raw: "0102030405060708", Region: "PDX"}
+	decoded := &DecodedPacket{
+		Header: Header{RouteType: 1, PayloadType: 3},
+	}
+	pkt := BuildPacketData(msg, decoded, "obs1", "SJC")
+	// When payload has region, it should override the topic-derived region
+	if pkt.Region != "PDX" {
+		t.Fatalf("expected region PDX from payload, got %q", pkt.Region)
+	}
+}
+
+func TestBuildPacketDataRegionFallsBackToTopic(t *testing.T) {
+	msg := &MQTTPacketMessage{Raw: "0102030405060708"}
+	decoded := &DecodedPacket{
+		Header: Header{RouteType: 1, PayloadType: 3},
+	}
+	pkt := BuildPacketData(msg, decoded, "obs1", "SJC")
+	if pkt.Region != "SJC" {
+		t.Fatalf("expected region SJC from topic, got %q", pkt.Region)
+	}
+}
