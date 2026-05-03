@@ -599,6 +599,9 @@ func DecodePacket(hexString string, channelKeys map[string]string, validateSigna
 	// We expose hopsCompleted (count of SNR bytes) so consumers can distinguish
 	// how far the trace got vs the full intended route.
 	var anomaly string
+	if header.PayloadType == PayloadTRACE && payload.Error != "" {
+		anomaly = fmt.Sprintf("TRACE payload decode failed: %s", payload.Error)
+	}
 	if header.PayloadType == PayloadTRACE && payload.PathData != "" {
 		// Flag anomalous routing — firmware only sends TRACE as DIRECT
 		if header.RouteType != RouteDirect && header.RouteType != RouteTransportDirect {
