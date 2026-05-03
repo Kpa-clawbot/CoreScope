@@ -2336,6 +2336,16 @@
       off += hashSize * pathHops.length;
     }
 
+    // TRACE SNR values (from header path bytes, decoded by backend)
+    if (decoded.type === 'TRACE' && decoded.snrValues && decoded.snrValues.length > 0) {
+      rows += sectionRow('SNR Path (' + decoded.snrValues.length + ' hops completed)', 'section-path');
+      for (let i = 0; i < decoded.snrValues.length; i++) {
+        const snr = decoded.snrValues[i];
+        const snrStr = (snr >= 0 ? '+' : '') + snr.toFixed(2) + ' dB';
+        rows += fieldRow('', 'SNR (hop ' + i + ')', snrStr, '');
+      }
+    }
+
     // Payload
     rows += sectionRow('Payload — ' + payloadTypeName(pkt.payload_type), 'section-payload');
 
@@ -2372,6 +2382,13 @@
       if (decoded.sender_timestamp) rows += fieldRow(off + 2, 'Sender Time', decoded.sender_timestamp, '');
     } else if (decoded.type === 'ACK') {
       rows += fieldRow(off, 'Checksum (4B)', decoded.ackChecksum || '', '');
+    } else if (decoded.type === 'TRACE') {
+      rows += fieldRow(off, 'Trace Tag (4B)', decoded.tag ? '0x' + decoded.tag.toString(16).toUpperCase().padStart(8, '0') : '—', '');
+      rows += fieldRow(off + 4, 'Auth Code (4B)', decoded.authCode ? '0x' + decoded.authCode.toString(16).toUpperCase().padStart(8, '0') : '—', '');
+      rows += fieldRow(off + 8, 'Flags', decoded.traceFlags != null ? '0x' + decoded.traceFlags.toString(16).padStart(2, '0') : '—', decoded.traceFlags != null ? 'hash_size=' + (1 << (decoded.traceFlags & 0x03)) + ' byte(s)' : '');
+      if (decoded.pathData) {
+        rows += fieldRow(off + 9, 'Route Hops', decoded.pathData.toUpperCase(), pathHops.length + ' hop(s)');
+      }
     } else if (decoded.destHash !== undefined) {
       rows += fieldRow(off, 'Dest Hash (1B)', decoded.destHash || '', '');
       rows += fieldRow(off + 1, 'Src Hash (1B)', decoded.srcHash || '', '');
