@@ -919,7 +919,9 @@ func (s *Store) BackfillPathJSONAsync() {
 
 		log.Println("[backfill] Starting async path_json backfill from raw_hex...")
 		updated := 0
+		errored := false
 		const batchSize = 1000
+		batchNum := 0
 		for {
 			rows, err := s.db.Query(`
 				SELECT o.id, o.raw_hex
@@ -931,6 +933,7 @@ func (s *Store) BackfillPathJSONAsync() {
 				LIMIT ?`, batchSize)
 			if err != nil {
 				log.Printf("[backfill] path_json query error: %v", err)
+				errored = true
 				break
 			}
 			type pendingRow struct {
@@ -951,18 +954,31 @@ func (s *Store) BackfillPathJSONAsync() {
 			for _, r := range batch {
 				hops, err := packetpath.DecodePathFromRawHex(r.rawHex)
 				if err != nil || len(hops) == 0 {
-					s.db.Exec(`UPDATE observations SET path_json = '[]' WHERE id = ?`, r.id)
+					if _, execErr := s.db.Exec(`UPDATE observations SET path_json = '[]' WHERE id = ?`, r.id); execErr != nil {
+						log.Printf("[backfill] write error (id=%d): %v", r.id, execErr)
+					}
 					continue
 				}
 				b, _ := json.Marshal(hops)
-				s.db.Exec(`UPDATE observations SET path_json = ? WHERE id = ?`, string(b), r.id)
-				updated++
+				if _, execErr := s.db.Exec(`UPDATE observations SET path_json = ? WHERE id = ?`, string(b), r.id); execErr != nil {
+					log.Printf("[backfill] write error (id=%d): %v", r.id, execErr)
+				} else {
+					updated++
+				}
+			}
+			batchNum++
+			if batchNum%50 == 0 {
+				log.Printf("[backfill] progress: %d observations updated so far (%d batches)", updated, batchNum)
 			}
 			// Throttle: yield to ingest writers between batches
 			time.Sleep(50 * time.Millisecond)
 		}
 		log.Printf("[backfill] Async path_json backfill complete: %d observations updated", updated)
-		s.db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_path_json_from_raw_hex_v1')`)
+		if !errored {
+			s.db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_path_json_from_raw_hex_v1')`)
+		} else {
+			log.Printf("[backfill] NOT recording migration due to errors — will retry on next restart")
+		}
 	}()
 }
 
