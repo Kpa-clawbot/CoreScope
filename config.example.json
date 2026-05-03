@@ -3,6 +3,8 @@
   "apiKey": "your-secret-api-key-here",
   "nodeBlacklist": [],
   "_comment_nodeBlacklist": "Public keys of nodes to hide from all API responses. Use for trolls, offensive names, or nodes reporting false data that operators refuse to fix.",
+  "observerIATAWhitelist": [],
+  "_comment_observerIATAWhitelist": "Global IATA region whitelist. When non-empty, only observers whose IATA code (from MQTT topic) matches are processed. Case-insensitive. Empty = allow all. Unlike per-source iataFilter, this applies across all MQTT sources.",
   "retention": {
     "nodeDays": 7,
     "observerDays": 14,
