@@ -69,6 +69,16 @@
 <p>Both the server and the ingestor read <code>geo_filter</code> from <code>config.json</code>. Restart both after changing this section.</p>
 <p>To disable filtering entirely, remove the <code>geo_filter</code> block.</p>
 
+<h2>Builder workflow: Save Draft, Load Draft, Download</h2>
+<p>The <a href="/geofilter-builder.html">GeoFilter Builder</a> lets you draw a polygon on a map and produce the <code>geo_filter</code> snippet without hand-editing JSON. Three buttons drive the workflow:</p>
+<ul>
+  <li><strong>💾 Save Draft</strong> — writes the current polygon and <code>bufferKm</code> to your browser's <code>localStorage</code> under the key <code>geofilter-draft</code>. Drafts persist across page reloads and browser restarts so you can iterate on a shape over multiple sessions.</li>
+  <li><strong>📂 Load Draft</strong> — restores the most recently saved draft into the builder. The current polygon is replaced. If no draft exists the button is a no-op.</li>
+  <li><strong>⬇ Download</strong> — exports the current polygon and <code>bufferKm</code> as <code>geofilter-config-snippet.json</code> — a single JSON object containing a top-level <code>geo_filter</code> block. Open the file, copy the <code>geo_filter</code> entry, and paste it into your <code>config.json</code>.</li>
+</ul>
+<div class="note"><p>Drafts are stored locally in your browser only — they are not uploaded anywhere. Clearing site data or switching browsers will lose the draft. Use <strong>Download</strong> to keep a portable copy.</p></div>
+<p>After pasting the snippet into <code>config.json</code>, restart the server and ingestor for the new filter to take effect.</p>
+
 <h2>Coordinate ordering</h2>
 <div class="warn"><p><strong>Important:</strong> Coordinates are <code>[lat, lon]</code> — latitude first, longitude second. This is the opposite of GeoJSON, which uses <code>[lon, lat]</code>. Swapping them will place your polygon in the wrong location.</p></div>
 
