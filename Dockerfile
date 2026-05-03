@@ -15,6 +15,7 @@ COPY cmd/server/go.mod cmd/server/go.sum ./
 COPY internal/geofilter/ ../../internal/geofilter/
 COPY internal/sigvalidate/ ../../internal/sigvalidate/
 COPY internal/packetpath/ ../../internal/packetpath/
+COPY internal/dbconfig/ ../../internal/dbconfig/
 RUN go mod download
 COPY cmd/server/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
@@ -26,6 +27,7 @@ COPY cmd/ingestor/go.mod cmd/ingestor/go.sum ./
 COPY internal/geofilter/ ../../internal/geofilter/
 COPY internal/sigvalidate/ ../../internal/sigvalidate/
 COPY internal/packetpath/ ../../internal/packetpath/
+COPY internal/dbconfig/ ../../internal/dbconfig/
 RUN go mod download
 COPY cmd/ingestor/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
