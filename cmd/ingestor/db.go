@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,6 +45,7 @@ type Store struct {
 	stmtUpsertMetrics          *sql.Stmt
 
 	sampleIntervalSec int
+	backfillWg        sync.WaitGroup
 }
 
 // OpenStore opens or creates a SQLite DB at the given path, applying the
@@ -445,54 +447,8 @@ func applySchema(db *sql.DB) error {
 	}
 
 	// Migration: backfill observations.path_json from raw_hex (#888)
-	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'")
-	if row.Scan(&migDone) != nil {
-		log.Println("[migration] Backfilling observations.path_json from raw_hex...")
-		updated := 0
-		const batchSize = 1000
-		for {
-			rows, err := db.Query(`
-				SELECT o.id, o.raw_hex
-				FROM observations o
-				JOIN transmissions t ON o.transmission_id = t.id
-				WHERE o.raw_hex IS NOT NULL AND o.raw_hex != ''
-				AND (o.path_json IS NULL OR o.path_json = '' OR o.path_json = '[]')
-				AND t.payload_type != 9
-				LIMIT ?`, batchSize)
-			if err != nil {
-				log.Printf("[migration] backfill_path_json query error: %v", err)
-				break
-			}
-			type pendingRow struct {
-				id     int64
-				rawHex string
-			}
-			var batch []pendingRow
-			for rows.Next() {
-				var r pendingRow
-				if err := rows.Scan(&r.id, &r.rawHex); err == nil {
-					batch = append(batch, r)
-				}
-			}
-			rows.Close()
-			if len(batch) == 0 {
-				break
-			}
-			for _, r := range batch {
-				hops, err := packetpath.DecodePathFromRawHex(r.rawHex)
-				if err != nil || len(hops) == 0 {
-					// Mark as processed with empty path to avoid re-scanning
-					db.Exec(`UPDATE observations SET path_json = '[]' WHERE id = ?`, r.id)
-					continue
-				}
-				b, _ := json.Marshal(hops)
-				db.Exec(`UPDATE observations SET path_json = ? WHERE id = ?`, string(b), r.id)
-				updated++
-			}
-		}
-		log.Printf("[migration] Backfilled path_json for %d observations from raw_hex", updated)
-		db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_path_json_from_raw_hex_v1')`)
-	}
+	// NOTE: This runs ASYNC via BackfillPathJSONAsync() to avoid blocking MQTT startup.
+	// See staging outage where ~502K rows blocked ingest for 15+ hours.
 
 	// One-time cleanup: delete legacy packets with empty hash or empty first_seen (#994)
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'cleanup_legacy_null_hash_ts'")
@@ -800,6 +756,7 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 
 // Close checkpoints the WAL and closes the database.
 func (s *Store) Close() error {
+	s.backfillWg.Wait()
 	s.Checkpoint()
 	return s.db.Close()
 }
@@ -937,6 +894,92 @@ func (s *Store) Checkpoint() {
 	} else {
 		log.Println("[db] WAL checkpoint complete")
 	}
+}
+
+// BackfillPathJSONAsync launches the path_json backfill in a background goroutine.
+// It processes observations with NULL/empty path_json that have raw_hex available,
+// decoding hop paths and updating the column. Safe to run concurrently with ingest
+// because new observations get path_json at write time; this only touches NULL rows.
+// Idempotent: skips if migration already recorded.
+func (s *Store) BackfillPathJSONAsync() {
+	s.backfillWg.Add(1)
+	go func() {
+		defer s.backfillWg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[backfill] path_json async panic recovered: %v", r)
+			}
+		}()
+
+		var migDone int
+		row := s.db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'")
+		if row.Scan(&migDone) == nil {
+			return // already done
+		}
+
+		log.Println("[backfill] Starting async path_json backfill from raw_hex...")
+		updated := 0
+		errored := false
+		const batchSize = 1000
+		batchNum := 0
+		for {
+			rows, err := s.db.Query(`
+				SELECT o.id, o.raw_hex
+				FROM observations o
+				JOIN transmissions t ON o.transmission_id = t.id
+				WHERE o.raw_hex IS NOT NULL AND o.raw_hex != ''
+				AND (o.path_json IS NULL OR o.path_json = '' OR o.path_json = '[]')
+				AND t.payload_type != 9
+				LIMIT ?`, batchSize)
+			if err != nil {
+				log.Printf("[backfill] path_json query error: %v", err)
+				errored = true
+				break
+			}
+			type pendingRow struct {
+				id     int64
+				rawHex string
+			}
+			var batch []pendingRow
+			for rows.Next() {
+				var r pendingRow
+				if err := rows.Scan(&r.id, &r.rawHex); err == nil {
+					batch = append(batch, r)
+				}
+			}
+			rows.Close()
+			if len(batch) == 0 {
+				break
+			}
+			for _, r := range batch {
+				hops, err := packetpath.DecodePathFromRawHex(r.rawHex)
+				if err != nil || len(hops) == 0 {
+					if _, execErr := s.db.Exec(`UPDATE observations SET path_json = '[]' WHERE id = ?`, r.id); execErr != nil {
+						log.Printf("[backfill] write error (id=%d): %v", r.id, execErr)
+					}
+					continue
+				}
+				b, _ := json.Marshal(hops)
+				if _, execErr := s.db.Exec(`UPDATE observations SET path_json = ? WHERE id = ?`, string(b), r.id); execErr != nil {
+					log.Printf("[backfill] write error (id=%d): %v", r.id, execErr)
+				} else {
+					updated++
+				}
+			}
+			batchNum++
+			if batchNum%50 == 0 {
+				log.Printf("[backfill] progress: %d observations updated so far (%d batches)", updated, batchNum)
+			}
+			// Throttle: yield to ingest writers between batches
+			time.Sleep(50 * time.Millisecond)
+		}
+		log.Printf("[backfill] Async path_json backfill complete: %d observations updated", updated)
+		if !errored {
+			s.db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_path_json_from_raw_hex_v1')`)
+		} else {
+			log.Printf("[backfill] NOT recording migration due to errors — will retry on next restart")
+		}
+	}()
 }
 
 // LogStats logs current operational metrics.
