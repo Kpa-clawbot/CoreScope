@@ -2260,6 +2260,86 @@ async function run() {
     assert(hasHslPolyline, 'At least one live-packet-trace polyline should have hsl() stroke color from hash');
   });
 
+  // --- Geofilter draft: save/load/download buttons (issue #819, rule 18) ---
+  await test('Geofilter draft: save → reload → load → download round-trip', async () => {
+    // Open the geofilter builder page and clear any prior draft.
+    await page.goto(BASE + '/geofilter-builder.html', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#map', { timeout: 10000 });
+    await page.evaluate(() => localStorage.removeItem('geofilter-draft'));
+    // Wait for leaflet to finish initial render so click handlers are bound.
+    await page.waitForFunction(() => window.L && document.querySelector('#map .leaflet-container'), { timeout: 10000 });
+    await page.waitForTimeout(300);
+
+    // Click 3 distinct points on the map to form a polygon.
+    const mapBox = await page.$eval('#map', el => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, w: r.width, h: r.height };
+    });
+    const clicks = [
+      { x: mapBox.x + mapBox.w * 0.30, y: mapBox.y + mapBox.h * 0.30 },
+      { x: mapBox.x + mapBox.w * 0.70, y: mapBox.y + mapBox.h * 0.30 },
+      { x: mapBox.x + mapBox.w * 0.50, y: mapBox.y + mapBox.h * 0.70 },
+    ];
+    for (const c of clicks) {
+      await page.mouse.click(c.x, c.y);
+      await page.waitForTimeout(120);
+    }
+    // Verify the page registered 3 points before we save.
+    await page.waitForFunction(() => {
+      const txt = (document.getElementById('counter') || {}).textContent || '';
+      return /^3 points?/.test(txt);
+    }, { timeout: 5000 });
+
+    // Save draft → assert localStorage populated with the polygon.
+    await page.click('#btnSaveDraft');
+    const draftRaw = await page.evaluate(() => localStorage.getItem('geofilter-draft'));
+    assert(draftRaw, 'localStorage geofilter-draft should be populated after Save Draft click');
+    const draft = JSON.parse(draftRaw);
+    assert(Array.isArray(draft.polygon) && draft.polygon.length === 3,
+      `draft.polygon should contain exactly 3 points, got ${draft.polygon && draft.polygon.length}`);
+    assert(typeof draft.polygon[0][0] === 'number' && typeof draft.polygon[0][1] === 'number',
+      'draft.polygon points should be [lat, lon] number pairs');
+
+    // Reload the page (draft persists in localStorage), then Load Draft.
+    await page.goto(BASE + '/geofilter-builder.html', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#btnLoadDraft', { timeout: 10000 });
+    await page.waitForFunction(() => window.GeofilterDraft && typeof window.GeofilterDraft.loadDraft === 'function', { timeout: 5000 });
+    // Counter should start at 0 after reload (before Load Draft click).
+    const counterBefore = await page.$eval('#counter', el => el.textContent);
+    assert(/^0 points?/.test(counterBefore),
+      `Counter should be "0 points" right after reload, got "${counterBefore}"`);
+    await page.click('#btnLoadDraft');
+    await page.waitForFunction(() => {
+      const txt = (document.getElementById('counter') || {}).textContent || '';
+      return /^3 points?/.test(txt);
+    }, { timeout: 5000 });
+    // Output should now contain a populated geo_filter snippet (not the empty placeholder).
+    const outputAfterLoad = await page.$eval('#output', el => el.textContent);
+    assert(outputAfterLoad.includes('"geo_filter"') && outputAfterLoad.includes('"polygon"'),
+      `#output should contain geo_filter+polygon after Load Draft, got: ${outputAfterLoad.slice(0, 120)}`);
+
+    // Download → intercept the blob, parse it, assert valid geo_filter snippet.
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 5000 }),
+      page.click('#btnDownload'),
+    ]);
+    const dlPath = await download.path();
+    assert(dlPath, 'Download should produce a file path');
+    const fs = require('fs');
+    const downloaded = fs.readFileSync(dlPath, 'utf8');
+    let parsed;
+    try { parsed = JSON.parse(downloaded); }
+    catch (e) { throw new Error('Downloaded file is not valid JSON: ' + e.message); }
+    assert(parsed.geo_filter, 'Downloaded JSON must have a top-level "geo_filter" key');
+    assert(Array.isArray(parsed.geo_filter.polygon) && parsed.geo_filter.polygon.length === 3,
+      `Downloaded geo_filter.polygon should contain 3 points, got ${parsed.geo_filter.polygon && parsed.geo_filter.polygon.length}`);
+    assert(typeof parsed.geo_filter.bufferKm === 'number',
+      'Downloaded geo_filter.bufferKm should be a number');
+
+    // Cleanup: remove the draft so we leave no test data behind.
+    await page.evaluate(() => localStorage.removeItem('geofilter-draft'));
+  });
+
   await browser.close();
 
   // Summary
