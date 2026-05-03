@@ -106,3 +106,39 @@ func TestTimeWindow_CacheKey_DistinctPerWindow(t *testing.T) {
 		t.Errorf("cache key should encode Since, got %q", a.CacheKey())
 	}
 }
+
+// Self-review fixes (#1018 polish).
+
+// B1: a relative window must produce a STABLE cache key across calls,
+// otherwise the analytics cache thrashes (one entry per second).
+func TestTimeWindow_RelativeWindow_StableCacheKey(t *testing.T) {
+	r1 := httptest.NewRequest("GET", "/api/analytics/rf?window=24h", nil)
+	w1 := ParseTimeWindow(r1)
+	time.Sleep(1100 * time.Millisecond)
+	r2 := httptest.NewRequest("GET", "/api/analytics/rf?window=24h", nil)
+	w2 := ParseTimeWindow(r2)
+	if w1.CacheKey() != w2.CacheKey() {
+		t.Fatalf("relative window cache key must be stable across calls, got %q vs %q", w1.CacheKey(), w2.CacheKey())
+	}
+}
+
+// B2: stored timestamps use millisecond precision (".000Z") while RFC3339
+// bounds have none. Includes() must use time-based compare, not lex compare,
+// so tx past Until are correctly excluded regardless of fractional digits.
+func TestTimeWindow_Includes_FractionalSecondsBoundary(t *testing.T) {
+	w := TimeWindow{Until: "2026-04-08T00:00:00Z"}
+	// A tx 1ms past Until should NOT be included.
+	if w.Includes("2026-04-08T00:00:00.001Z") {
+		t.Error("ts 1ms past Until must be excluded; lex compare against fractional ts is wrong")
+	}
+	// A tx well inside the window must be included.
+	if !w.Includes("2026-04-07T23:59:59.999Z") {
+		t.Error("ts just before Until must be included")
+	}
+
+	w2 := TimeWindow{Since: "2026-04-01T00:00:00Z"}
+	// A tx at exactly Since should be included.
+	if !w2.Includes("2026-04-01T00:00:00.000Z") {
+		t.Error("ts exactly at Since must be included; lex compare excludes it because '.' < 'Z'")
+	}
+}
