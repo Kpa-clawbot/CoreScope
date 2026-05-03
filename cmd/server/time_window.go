@@ -10,6 +10,12 @@ import (
 type TimeWindow struct {
 	Since string // RFC3339, empty = unbounded
 	Until string // RFC3339, empty = unbounded
+	// Label is a stable identifier for the user-requested window
+	// (e.g. "24h"). For relative windows it is the original alias; for
+	// absolute ranges it is empty (Since/Until are already stable).
+	// Used only for cache keying so that "?window=24h" produces a single
+	// cache entry instead of one per second.
+	Label string
 }
 
 // IsZero reports whether the window imposes no bounds at all.
@@ -18,9 +24,14 @@ func (w TimeWindow) IsZero() bool {
 }
 
 // CacheKey returns a deterministic key suitable for analytics caches.
+// For relative windows the key is the alias label so that the cache
+// remains stable across the wall-clock advancing.
 func (w TimeWindow) CacheKey() string {
 	if w.IsZero() {
 		return ""
+	}
+	if w.Label != "" {
+		return "rel:" + w.Label
 	}
 	return w.Since + "|" + w.Until
 }
@@ -28,17 +39,42 @@ func (w TimeWindow) CacheKey() string {
 // Includes reports whether ts (an RFC3339-style string) falls within the
 // window. Empty ts is treated as included (for callers that don't have a
 // timestamp on every observation).
+//
+// Comparison is done by parsing both sides into time.Time. Lex compare is
+// unsafe here because stored timestamps carry millisecond precision
+// ("...HH:MM:SS.000Z") while bounds emitted by ParseTimeWindow do not
+// ("...HH:MM:SSZ"), and '.' (0x2e) sorts before 'Z' (0x5a). If a timestamp
+// fails to parse we fall back to lex compare to preserve old behavior.
 func (w TimeWindow) Includes(ts string) bool {
 	if ts == "" {
 		return true
 	}
-	if w.Since != "" && ts < w.Since {
-		return false
+	tt, terr := parseAnyRFC3339(ts)
+	if w.Since != "" {
+		if s, err := parseAnyRFC3339(w.Since); err == nil && terr == nil {
+			if tt.Before(s) {
+				return false
+			}
+		} else if ts < w.Since {
+			return false
+		}
 	}
-	if w.Until != "" && ts > w.Until {
-		return false
+	if w.Until != "" {
+		if u, err := parseAnyRFC3339(w.Until); err == nil && terr == nil {
+			if tt.After(u) {
+				return false
+			}
+		} else if ts > w.Until {
+			return false
+		}
 	}
 	return true
+}
+
+// parseAnyRFC3339 accepts both fractional-second ("...000Z") and second-
+// precision ("...Z") RFC3339 timestamps. time.RFC3339Nano handles both.
+func parseAnyRFC3339(s string) (time.Time, error) {
+	return time.Parse(time.RFC3339Nano, s)
 }
 
 // ParseTimeWindow extracts a TimeWindow from query params.
@@ -90,7 +126,7 @@ func ParseTimeWindow(r *http.Request) TimeWindow {
 			return TimeWindow{}
 		}
 		since := time.Now().UTC().Add(-d).Format(time.RFC3339)
-		return TimeWindow{Since: since}
+		return TimeWindow{Since: since, Label: win}
 	}
 
 	return TimeWindow{}
