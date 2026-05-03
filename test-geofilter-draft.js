@@ -47,8 +47,9 @@ const path = require('path');
 
 function loadModule(localStorage, document) {
   const code = fs.readFileSync(path.join(__dirname, 'public', 'geofilter-draft.js'), 'utf8');
-  const sandbox = { localStorage, document, URL: { createObjectURL() { return 'blob:mock'; }, revokeObjectURL() {} }, Blob: class { constructor(parts, opts) { this.parts = parts; this.opts = opts; } } };
+  const sandbox = { localStorage, document, window: {}, URL: { createObjectURL() { return 'blob:mock'; }, revokeObjectURL() {} }, Blob: class { constructor(parts, opts) { this.parts = parts; this.opts = opts; } } };
   vm.runInNewContext(code, sandbox);
+  sandbox.GeofilterDraft = sandbox.window.GeofilterDraft;
   return sandbox;
 }
 
@@ -61,7 +62,7 @@ test('saveDraft stores polygon + bufferKm to localStorage', () => {
   const polygon = [[50.1, 4.2], [50.3, 4.5], [49.9, 4.8]];
   ctx.GeofilterDraft.saveDraft(polygon, 20);
   const stored = JSON.parse(ls.getItem('geofilter-draft'));
-  assert.deepStrictEqual(stored.polygon, polygon);
+  assert.strictEqual(JSON.stringify(stored.polygon), JSON.stringify(polygon));
   assert.strictEqual(stored.bufferKm, 20);
 });
 
@@ -78,7 +79,7 @@ test('loadDraft returns saved draft', () => {
   const doc = makeDoc();
   const ctx = loadModule(ls, doc);
   const draft = ctx.GeofilterDraft.loadDraft();
-  assert.deepStrictEqual(draft.polygon, [[1,2],[3,4],[5,6]]);
+  assert.strictEqual(JSON.stringify(draft.polygon), JSON.stringify([[1,2],[3,4],[5,6]]));
   assert.strictEqual(draft.bufferKm, 10);
 });
 
@@ -98,7 +99,7 @@ test('buildConfigSnippet returns correct JSON structure', () => {
   const polygon = [[50.1, 4.2], [50.3, 4.5], [49.9, 4.8]];
   const snippet = ctx.GeofilterDraft.buildConfigSnippet(polygon, 15);
   const parsed = JSON.parse(snippet);
-  assert.deepStrictEqual(parsed, { geo_filter: { bufferKm: 15, polygon: polygon } });
+  assert.strictEqual(JSON.stringify(parsed), JSON.stringify({ geo_filter: { bufferKm: 15, polygon: polygon } }));
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
