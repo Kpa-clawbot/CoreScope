@@ -1926,3 +1926,24 @@ func TestDecodePathFromRawHex_Transport(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeTracePayloadFailSetsAnomaly(t *testing.T) {
+	// Issue #889: TRACE packet with payload too short to decode (< 9 bytes)
+	// should still return a DecodedPacket (observation stored) but with Anomaly
+	// set to warn operators that the decode was degraded.
+	// Packet: header 0x26 (TRACE+DIRECT), pathByte 0x00, payload 4 bytes (too short).
+	pkt, err := DecodePacket("2600aabbccdd", nil, false)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if pkt.Payload.Type != "TRACE" {
+		t.Fatalf("payload type=%s, want TRACE", pkt.Payload.Type)
+	}
+	if pkt.Payload.Error == "" {
+		t.Fatal("expected payload.Error to indicate decode failure")
+	}
+	// The key assertion: Anomaly must be set when TRACE decode fails
+	if pkt.Anomaly == "" {
+		t.Error("expected Anomaly to be set when TRACE payload decode fails but observation is stored")
+	}
+}
