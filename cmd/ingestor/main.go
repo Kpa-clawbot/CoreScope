@@ -345,8 +345,16 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		if len(parts) > 1 {
 			region = parts[1]
 		}
+		// Fallback to source-level region config when topic has no region (#788)
+		if region == "" && source.Region != "" {
+			region = source.Region
+		}
 
 		mqttMsg := &MQTTPacketMessage{Raw: rawHex}
+		// Parse optional region from JSON payload (#788)
+		if v, ok := msg["region"].(string); ok && v != "" {
+			mqttMsg.Region = v
+		}
 		if v, ok := msg["SNR"]; ok {
 			if f, ok := toFloat64(v); ok {
 				mqttMsg.SNR = &f
@@ -446,7 +454,12 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		// Upsert observer
 		if observerID != "" {
 			origin, _ := msg["origin"].(string)
-			if err := store.UpsertObserver(observerID, origin, region, nil); err != nil {
+			// Use effective region: payload > topic > source config (#788)
+			effectiveRegion := region
+			if mqttMsg.Region != "" {
+				effectiveRegion = mqttMsg.Region
+			}
+			if err := store.UpsertObserver(observerID, origin, effectiveRegion, nil); err != nil {
 				log.Printf("MQTT [%s] observer upsert error: %v", tag, err)
 			}
 		}

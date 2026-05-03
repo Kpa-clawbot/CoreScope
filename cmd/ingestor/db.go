@@ -1062,6 +1062,7 @@ type PacketData struct {
 	PathJSON       string
 	DecodedJSON    string
 	ChannelHash    string // grouping key for channel queries (#762)
+	Region         string // observer region: payload > topic > source config (#788)
 }
 
 // nilIfEmpty returns nil for empty strings (for nullable DB columns).
@@ -1080,6 +1081,7 @@ type MQTTPacketMessage struct {
 	Score     *float64 `json:"score"`
 	Direction *string  `json:"direction"`
 	Origin    string   `json:"origin"`
+	Region    string   `json:"region,omitempty"` // optional region override (#788)
 }
 
 // BuildPacketData constructs a PacketData from a decoded packet and MQTT message.
@@ -1117,6 +1119,13 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		PayloadVersion: decoded.Header.PayloadVersion,
 		PathJSON:       pathJSON,
 		DecodedJSON:    PayloadJSON(&decoded.Payload),
+	}
+
+	// Region priority: payload field > topic-derived parameter (#788)
+	if msg.Region != "" {
+		pd.Region = msg.Region
+	} else {
+		pd.Region = region
 	}
 
 	// Populate channel_hash for fast channel queries (#762)

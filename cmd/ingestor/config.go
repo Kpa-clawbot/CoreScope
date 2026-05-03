@@ -23,6 +23,7 @@ type MQTTSource struct {
 	Topics             []string `json:"topics"`
 	IATAFilter         []string `json:"iataFilter,omitempty"`
 	ConnectTimeoutSec  int      `json:"connectTimeoutSec,omitempty"`
+	Region             string   `json:"region,omitempty"`
 }
 
 // ConnectTimeoutOrDefault returns the per-source connect timeout in seconds,
