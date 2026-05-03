@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,6 +45,7 @@ type Store struct {
 	stmtUpsertMetrics          *sql.Stmt
 
 	sampleIntervalSec int
+	backfillWg        sync.WaitGroup
 }
 
 // OpenStore opens or creates a SQLite DB at the given path, applying the
@@ -754,6 +756,7 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 
 // Close checkpoints the WAL and closes the database.
 func (s *Store) Close() error {
+	s.backfillWg.Wait()
 	s.Checkpoint()
 	return s.db.Close()
 }
@@ -899,7 +902,9 @@ func (s *Store) Checkpoint() {
 // because new observations get path_json at write time; this only touches NULL rows.
 // Idempotent: skips if migration already recorded.
 func (s *Store) BackfillPathJSONAsync() {
+	s.backfillWg.Add(1)
 	go func() {
+		defer s.backfillWg.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[backfill] path_json async panic recovered: %v", r)
@@ -953,6 +958,8 @@ func (s *Store) BackfillPathJSONAsync() {
 				s.db.Exec(`UPDATE observations SET path_json = ? WHERE id = ?`, string(b), r.id)
 				updated++
 			}
+			// Throttle: yield to ingest writers between batches
+			time.Sleep(50 * time.Millisecond)
 		}
 		log.Printf("[backfill] Async path_json backfill complete: %d observations updated", updated)
 		s.db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_path_json_from_raw_hex_v1')`)
