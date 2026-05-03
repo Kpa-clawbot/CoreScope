@@ -274,8 +274,14 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		return
 	}
 
+	// Global observer IATA whitelist: if configured, drop messages from observers
+	// in non-whitelisted IATA regions. Applies to ALL message types (status + packets).
+	if len(parts) > 1 && !cfg.IsObserverIATAAllowed(parts[1]) {
+		return
+	}
+
 	// Status topic: meshcore/<region>/<observer_id>/status
-	// IATA filter does NOT apply here — observer metadata (noise_floor, battery, etc.)
+	// Per-source IATA filter does NOT apply here — observer metadata (noise_floor, battery, etc.)
 	// is region-independent and should be accepted from all observers regardless of
 	// which IATA regions are configured for packet ingestion.
 	if len(parts) >= 4 && parts[3] == "status" {

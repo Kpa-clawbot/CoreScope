@@ -904,3 +904,34 @@ func TestBL2_ZeroConnectedFatals(t *testing.T) {
 		t.Log("BL2 confirmed: old guard len(clients)==0 would NOT fatal; new guard connectedCount==0 correctly catches zero-connected state")
 	}
 }
+
+func TestHandleMessageObserverIATAWhitelist(t *testing.T) {
+	store := newTestStore(t)
+	source := MQTTSource{Name: "test"}
+	cfg := &Config{
+		ObserverIATAWhitelist: []string{"ARN"},
+	}
+
+	// Message from non-whitelisted region GOT — should be dropped
+	handleMessage(store, "test", source, &mockMessage{
+		topic:   "meshcore/GOT/obs1/status",
+		payload: []byte(`{"origin":"node1","noise_floor":-110}`),
+	}, nil, cfg)
+
+	var count int
+	store.db.QueryRow("SELECT COUNT(*) FROM observers WHERE id='obs1'").Scan(&count)
+	if count != 0 {
+		t.Error("observer from non-whitelisted IATA GOT should be dropped")
+	}
+
+	// Message from whitelisted region ARN — should be accepted
+	handleMessage(store, "test", source, &mockMessage{
+		topic:   "meshcore/ARN/obs2/status",
+		payload: []byte(`{"origin":"node2","noise_floor":-105}`),
+	}, nil, cfg)
+
+	store.db.QueryRow("SELECT COUNT(*) FROM observers WHERE id='obs2'").Scan(&count)
+	if count != 1 {
+		t.Errorf("observer from whitelisted IATA ARN should be accepted, got count=%d", count)
+	}
+}
