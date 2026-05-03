@@ -36,8 +36,8 @@ func TestTopologyDedup_RepeatersMergeByPubkey(t *testing.T) {
 	)`)
 	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT)`)
 	exec(`CREATE TABLE nodes (
-		pubkey TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
-		last_seen TEXT, first_seen TEXT, frequency REAL
+		public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
+		last_seen TEXT, frequency REAL
 	)`)
 	exec(`CREATE TABLE schema_version (version INTEGER)`)
 	exec(`INSERT INTO schema_version (version) VALUES (1)`)
@@ -46,8 +46,8 @@ func TestTopologyDedup_RepeatersMergeByPubkey(t *testing.T) {
 	// Insert two repeater nodes with distinct pubkeys.
 	// AQUA: pubkey starts with 0735bc...
 	// BETA: pubkey starts with 99aabb...
-	exec(`INSERT INTO nodes (pubkey, name, role) VALUES ('0735bc6dda4d1122aabbccdd', 'AQUA', 'Repeater')`)
-	exec(`INSERT INTO nodes (pubkey, name, role) VALUES ('99aabb001122334455667788', 'BETA', 'Repeater')`)
+	exec(`INSERT INTO nodes (public_key, name, role) VALUES ('0735bc6dda4d1122aabbccdd', 'AQUA', 'Repeater')`)
+	exec(`INSERT INTO nodes (public_key, name, role) VALUES ('99aabb001122334455667788', 'BETA', 'Repeater')`)
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -72,9 +72,9 @@ func TestTopologyDedup_RepeatersMergeByPubkey(t *testing.T) {
 
 	insertTx(`["07","99aa"]`, 10)
 	insertTx(`["0735bc","99"]`, 5)
-	insertTx(`["0735bc6dda4d","99aabb"]`, 3)
+	insertTx(`["0735bc6d","99aabb"]`, 3)
 
-	// Total: AQUA appears as "07" (10×), "0735bc" (5×), "0735bc6dda4d" (3×) = 18 total
+	// Total: AQUA appears as "07" (10×), "0735bc" (5×), "0735bc6d" (3×) = 18 total
 	// Total: BETA appears as "99aa" (10×), "99" (5×), "99aabb" (3×) = 18 total
 	// After dedup, each should appear ONCE with count=18.
 
@@ -160,16 +160,16 @@ func TestTopologyDedup_AmbiguousPrefixNotMerged(t *testing.T) {
 	)`)
 	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT)`)
 	exec(`CREATE TABLE nodes (
-		pubkey TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
-		last_seen TEXT, first_seen TEXT, frequency REAL
+		public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
+		last_seen TEXT, frequency REAL
 	)`)
 	exec(`CREATE TABLE schema_version (version INTEGER)`)
 	exec(`INSERT INTO schema_version (version) VALUES (1)`)
 	exec(`CREATE INDEX idx_tx_first_seen ON transmissions(first_seen)`)
 
 	// Two nodes whose pubkeys share the prefix "ab" — collision!
-	exec(`INSERT INTO nodes (pubkey, name, role) VALUES ('ab11223344556677aabbccdd', 'NODE_A', 'Repeater')`)
-	exec(`INSERT INTO nodes (pubkey, name, role) VALUES ('ab99887766554433aabbccdd', 'NODE_B', 'Repeater')`)
+	exec(`INSERT INTO nodes (public_key, name, role) VALUES ('ab11223344556677aabbccdd', 'NODE_A', 'Repeater')`)
+	exec(`INSERT INTO nodes (public_key, name, role) VALUES ('ab99887766554433aabbccdd', 'NODE_B', 'Repeater')`)
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	txID := 1
@@ -266,15 +266,15 @@ func TestTopologyDedup_PairsMergeByPubkey(t *testing.T) {
 	)`)
 	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT)`)
 	exec(`CREATE TABLE nodes (
-		pubkey TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
-		last_seen TEXT, first_seen TEXT, frequency REAL
+		public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
+		last_seen TEXT, frequency REAL
 	)`)
 	exec(`CREATE TABLE schema_version (version INTEGER)`)
 	exec(`INSERT INTO schema_version (version) VALUES (1)`)
 	exec(`CREATE INDEX idx_tx_first_seen ON transmissions(first_seen)`)
 
-	exec(`INSERT INTO nodes (pubkey, name, role) VALUES ('0735bc6dda4d1122aabbccdd', 'AQUA', 'Repeater')`)
-	exec(`INSERT INTO nodes (pubkey, name, role) VALUES ('99aabb001122334455667788', 'BETA', 'Repeater')`)
+	exec(`INSERT INTO nodes (public_key, name, role) VALUES ('0735bc6dda4d1122aabbccdd', 'AQUA', 'Repeater')`)
+	exec(`INSERT INTO nodes (public_key, name, role) VALUES ('99aabb001122334455667788', 'BETA', 'Repeater')`)
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	txID := 1

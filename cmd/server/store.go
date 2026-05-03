@@ -4997,6 +4997,107 @@ func (s *PacketStore) computeAnalyticsTopology(region string) map[string]interfa
 		}
 	}
 
+	// --- Dedup pass: merge hop prefixes that resolve unambiguously to the same node ---
+	// Only merge when pm.m[hop] has exactly 1 candidate (unique_prefix).
+	// Ambiguous short prefixes (efiten's concern: 1-byte collisions) stay separate.
+	{
+		type dedupInfo struct {
+			totalCount int
+			longestHop string
+		}
+		byPubkey := map[string]*dedupInfo{} // pubkey → merged info
+		ambiguous := map[string]int{}       // hop → count (kept as-is)
+		pmLookup := func(hop string) []nodeInfo {
+			key := strings.ToLower(hop)
+			if len(key) > maxPrefixLen {
+				key = key[:maxPrefixLen]
+			}
+			return pm.m[key]
+		}
+		for h, c := range hopFreq {
+			candidates := pmLookup(h)
+			if len(candidates) == 1 {
+				pk := strings.ToLower(candidates[0].PublicKey)
+				if info, ok := byPubkey[pk]; ok {
+					info.totalCount += c
+					if len(h) > len(info.longestHop) {
+						info.longestHop = h
+					}
+				} else {
+					byPubkey[pk] = &dedupInfo{totalCount: c, longestHop: h}
+				}
+			} else {
+				ambiguous[h] = c
+			}
+		}
+		// Rebuild hopFreq
+		hopFreq = make(map[string]int, len(byPubkey)+len(ambiguous))
+		for _, info := range byPubkey {
+			hopFreq[info.longestHop] = info.totalCount
+		}
+		for h, c := range ambiguous {
+			hopFreq[h] = c
+		}
+	}
+
+	// --- Dedup pass for pairs: merge by resolved pubkey pair ---
+	{
+		type pairDedupInfo struct {
+			totalCount int
+			longestA   string
+			longestB   string
+		}
+		byPubkeyPair := map[string]*pairDedupInfo{} // "pkA|pkB" (sorted) → merged info
+		ambiguousPairs := map[string]int{}
+		pairPmLookup := func(hop string) []nodeInfo {
+			key := strings.ToLower(hop)
+			if len(key) > maxPrefixLen {
+				key = key[:maxPrefixLen]
+			}
+			return pm.m[key]
+		}
+		for p, c := range pairFreq {
+			parts := strings.SplitN(p, "|", 2)
+			candA := pairPmLookup(parts[0])
+			candB := pairPmLookup(parts[1])
+			if len(candA) == 1 && len(candB) == 1 {
+				pkA := strings.ToLower(candA[0].PublicKey)
+				pkB := strings.ToLower(candB[0].PublicKey)
+				// Canonicalize by sorted pubkey
+				if pkA > pkB {
+					pkA, pkB = pkB, pkA
+					parts[0], parts[1] = parts[1], parts[0]
+				}
+				key := pkA + "|" + pkB
+				if info, ok := byPubkeyPair[key]; ok {
+					info.totalCount += c
+					if len(parts[0]) > len(info.longestA) {
+						info.longestA = parts[0]
+					}
+					if len(parts[1]) > len(info.longestB) {
+						info.longestB = parts[1]
+					}
+				} else {
+					byPubkeyPair[key] = &pairDedupInfo{totalCount: c, longestA: parts[0], longestB: parts[1]}
+				}
+			} else {
+				ambiguousPairs[p] = c
+			}
+		}
+		// Rebuild pairFreq
+		pairFreq = make(map[string]int, len(byPubkeyPair)+len(ambiguousPairs))
+		for _, info := range byPubkeyPair {
+			a, b := info.longestA, info.longestB
+			if a > b {
+				a, b = b, a
+			}
+			pairFreq[a+"|"+b] = info.totalCount
+		}
+		for p, c := range ambiguousPairs {
+			pairFreq[p] = c
+		}
+	}
+
 	// Top repeaters
 	type freqEntry struct {
 		hop   string
