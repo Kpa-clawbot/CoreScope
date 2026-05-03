@@ -2267,7 +2267,7 @@ async function run() {
     await page.waitForSelector('#map', { timeout: 10000 });
     await page.evaluate(() => localStorage.removeItem('geofilter-draft'));
     // Wait for leaflet to finish initial render so click handlers are bound.
-    await page.waitForFunction(() => window.L && document.querySelector('#map .leaflet-container'), { timeout: 10000 });
+    await page.waitForFunction(() => window.L && document.querySelector('#map.leaflet-container'), { timeout: 10000 });
     await page.waitForTimeout(300);
 
     // Click 3 distinct points on the map to form a polygon.
