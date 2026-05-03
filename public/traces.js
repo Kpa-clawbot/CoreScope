@@ -196,7 +196,7 @@
     const colCount = maxCol + 1;
     const svgW = Math.max(600, colCount * 200);
     const maxRows = Math.max(...[...colGroups.values()].map(g => g.length));
-    const svgH = Math.max(120, maxRows * 60 + 40);
+    const svgH = Math.max(160, maxRows * 80 + 60);
     const colSpacing = svgW / (colCount + 1);
 
     // Compute node positions
@@ -249,12 +249,16 @@
     let nodesSvg = '';
     for (const [node, pos] of nodePos) {
       const isEndpoint = node === 'Origin' || node === 'Dest';
-      const r = isEndpoint ? 18 : 14;
-      const fill = isEndpoint ? 'var(--accent, #3b82f6)' : 'var(--surface-2, #374151)';
-      const stroke = isEndpoint ? 'var(--accent, #3b82f6)' : 'var(--border, #4b5563)';
-      const label = isEndpoint ? node : node;
+      const r = isEndpoint ? 18 : 16;
+      const fill = isEndpoint ? 'var(--accent, #3b82f6)' : 'var(--accent-bg, rgba(59,130,246,0.12))';
+      const stroke = isEndpoint ? 'var(--accent, #3b82f6)' : 'var(--accent, #3b82f6)';
       nodesSvg += `<circle cx="${pos.x}" cy="${pos.y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="2"/>`;
-      nodesSvg += `<text x="${pos.x}" y="${pos.y + 4}" text-anchor="middle" fill="white" font-size="${isEndpoint ? 10 : 9}" font-weight="${isEndpoint ? 700 : 500}">${escapeHtml(label)}</text>`;
+      if (isEndpoint) {
+        nodesSvg += `<text x="${pos.x}" y="${pos.y + 4}" text-anchor="middle" fill="white" font-size="10" font-weight="700">${escapeHtml(node)}</text>`;
+      } else {
+        // Label below the circle so it doesn't fight for space inside the small node
+        nodesSvg += `<text x="${pos.x}" y="${pos.y + r + 14}" text-anchor="middle" fill="var(--text, #111827)" font-size="10" font-weight="500">${escapeHtml(node)}</text>`;
+      }
     }
 
     // Legend: unique paths
