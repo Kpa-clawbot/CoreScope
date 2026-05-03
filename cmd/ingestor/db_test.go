@@ -2210,16 +2210,24 @@ func TestBackfillPathJsonFromRawHex(t *testing.T) {
 	s.db.Exec(`DELETE FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'`)
 	s.Close()
 
-	// Reopen — migration should run
+	// Reopen — backfill is now async, must trigger explicitly
 	s2, err := OpenStore(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s2.Close()
 
-	// Check migration ran
+	// Trigger async backfill and wait for completion
+	s2.BackfillPathJSONAsync()
+	deadline := time.Now().Add(10 * time.Second)
 	var migCount int
-	s2.db.QueryRow("SELECT COUNT(*) FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'").Scan(&migCount)
+	for time.Now().Before(deadline) {
+		s2.db.QueryRow("SELECT COUNT(*) FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'").Scan(&migCount)
+		if migCount == 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if migCount != 1 {
 		t.Fatalf("migration not recorded")
 	}
@@ -2508,20 +2516,20 @@ func TestBackfillPathJSONAsync(t *testing.T) {
 	}
 	defer store.Close()
 
-	// OpenStore must return in under 2 seconds (async backfill doesn't block)
+	// OpenStore must return in under 2 seconds (backfill is no longer in applySchema)
 	if elapsed > 2*time.Second {
-		t.Fatalf("OpenStore blocked for %v — backfill is synchronous (must be async)", elapsed)
+		t.Fatalf("OpenStore blocked for %v — backfill must not run in applySchema", elapsed)
 	}
 
-	// The migration should NOT be recorded yet (backfill is running in background)
+	// Backfill must NOT be recorded yet — it hasn't been triggered
 	var done int
 	err = store.db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'").Scan(&done)
 	if err == nil {
-		// If it completed already that's OK for small data — but let's verify
-		// the key property: OpenStore returned fast. The timing check above is
-		// the real assertion.
-		t.Log("backfill completed before check (fast for small data) — timing assertion passed")
+		t.Fatal("migration recorded during OpenStore — backfill must be async via BackfillPathJSONAsync()")
 	}
+
+	// Now trigger the async backfill (simulates what main.go does after OpenStore)
+	store.BackfillPathJSONAsync()
 
 	// Wait for backfill to complete (should be very fast with 100 rows)
 	deadline := time.Now().Add(10 * time.Second)

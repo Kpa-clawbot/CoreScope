@@ -57,6 +57,9 @@ func main() {
 	defer store.Close()
 	log.Printf("SQLite opened: %s", cfg.DBPath)
 
+	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
+	store.BackfillPathJSONAsync()
+
 	// Check auto_vacuum mode and optionally migrate (#919)
 	store.CheckAutoVacuum(cfg)
 
