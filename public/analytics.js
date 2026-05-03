@@ -168,17 +168,22 @@
       _analyticsData = {};
       const rqs = RegionFilter.regionQueryString(); // "&region=..." or ""
       // Time window picker (#842) — append &window=… when set.
+      // NOTE: only the three window-aware endpoints (rf/topology/channels)
+      // receive ?window=…; hash-sizes and hash-collisions are about node
+      // identity / hash-byte distribution and intentionally span all data.
       const twEl = document.getElementById('analyticsTimeWindow');
       const twVal = twEl ? twEl.value : '';
       const tws = twVal ? '&window=' + encodeURIComponent(twVal) : '';
-      const combined = (rqs + tws).slice(1); // drop leading '&'
-      const sep = combined ? '?' + combined : '';
+      const baseQS = rqs.slice(1); // drop leading '&', "" or "region=…"
+      const sepBase = baseQS ? '?' + baseQS : '';
+      const windowedQS = (rqs + tws).slice(1);
+      const sepWin = windowedQS ? '?' + windowedQS : '';
       const [hashData, rfData, topoData, chanData, collisionData] = await Promise.all([
-        api('/analytics/hash-sizes' + sep, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/rf' + sep, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/topology' + sep, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/channels' + sep, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/hash-collisions' + sep, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/hash-sizes' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/rf' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/topology' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/channels' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/hash-collisions' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
       ]);
       _analyticsData = { hashData, rfData, topoData, chanData, collisionData };
       renderTab(_currentTab);

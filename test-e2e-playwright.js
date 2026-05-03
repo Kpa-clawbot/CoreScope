@@ -597,7 +597,15 @@ async function run() {
     const opts = await page.$$eval('#analyticsTimeWindow option', els => els.map(e => e.value));
     assert(opts.includes('24h'), `picker must offer 24h, got ${JSON.stringify(opts)}`);
 
-    // Listen for the next /api/analytics/rf request after we change the picker.
+    // Capture all analytics requests fired after we change the picker.
+    const seen = [];
+    const onReq = r => {
+      const u = r.url();
+      if (/\/api\/analytics\/(rf|topology|channels|hash-sizes|hash-collisions)(\?|$)/.test(u)) {
+        seen.push(u);
+      }
+    };
+    page.on('request', onReq);
     const reqPromise = page.waitForRequest(
       r => /\/api\/analytics\/rf(\?|$)/.test(r.url()),
       { timeout: 8000 }
@@ -608,6 +616,19 @@ async function run() {
       /[?&]window=24h(&|$)/.test(req.url()),
       `analytics/rf request should carry window=24h, got ${req.url()}`
     );
+    // Drain the rest of the parallel fetches.
+    await page.waitForTimeout(500);
+    page.off('request', onReq);
+
+    // Window must be scoped to rf/topology/channels only — not to
+    // hash-sizes / hash-collisions, whose semantics are time-independent.
+    const winFor = pat => seen.filter(u => pat.test(u)).some(u => /[?&]window=24h(&|$)/.test(u));
+    const noWinFor = pat => seen.filter(u => pat.test(u)).every(u => !/[?&]window=/.test(u));
+    assert(winFor(/\/api\/analytics\/rf/), `expected window=24h on rf, saw: ${seen.join(', ')}`);
+    assert(winFor(/\/api\/analytics\/topology/), `expected window=24h on topology, saw: ${seen.join(', ')}`);
+    assert(winFor(/\/api\/analytics\/channels/), `expected window=24h on channels, saw: ${seen.join(', ')}`);
+    assert(noWinFor(/\/api\/analytics\/hash-sizes/), `hash-sizes must NOT carry window param, saw: ${seen.join(', ')}`);
+    assert(noWinFor(/\/api\/analytics\/hash-collisions/), `hash-collisions must NOT carry window param, saw: ${seen.join(', ')}`);
   });
 
   // Analytics sub-tab tests
