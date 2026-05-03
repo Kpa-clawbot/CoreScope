@@ -23,8 +23,28 @@ function comparePacketSets(hashesA, hashesB) {
   return { onlyA: onlyA, onlyB: onlyB, both: both };
 }
 
+/**
+ * Filter packets by route type.
+ * mode: 'all' | 'flood' | 'direct'
+ * Flood = route_type 0 (TransportFlood) or 1 (Flood)
+ * Direct = route_type 2 (Direct) or 3 (TransportDirect)
+ */
+function filterPacketsByRoute(packets, mode) {
+  if (!packets || mode === 'all') return packets || [];
+  if (mode === 'flood') {
+    return packets.filter(function (p) { return p.route_type === 0 || p.route_type === 1; });
+  }
+  if (mode === 'direct') {
+    return packets.filter(function (p) { return p.route_type === 2 || p.route_type === 3; });
+  }
+  return packets;
+}
+
 // Expose for testing
-if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
+if (typeof window !== 'undefined') {
+  window.comparePacketSets = comparePacketSets;
+  window.filterPacketsByRoute = filterPacketsByRoute;
+}
 
 (function () {
   var PAYLOAD_LABELS = { 0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert', 5: 'Channel Msg', 7: 'Anon Req', 8: 'Path', 9: 'Trace', 11: 'Control' };
@@ -36,6 +56,7 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
   var packetsA = [];
   var packetsB = [];
   var currentView = 'summary';
+  var routeFilter = 'all';
 
   function init(app, routeParam) {
     // Parse preselected observers from URL: #/compare?a=ID1&b=ID2
@@ -47,6 +68,7 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
     packetsA = [];
     packetsB = [];
     currentView = 'summary';
+    routeFilter = 'all';
 
     app.innerHTML = '<div class="compare-page" style="padding:16px">' +
       '<div class="page-header" style="display:flex;align-items:center;gap:12px;margin-bottom:16px">' +
@@ -76,6 +98,7 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
     comparisonResult = null;
     packetsA = [];
     packetsB = [];
+    routeFilter = 'all';
   }
 
   async function loadObservers() {
@@ -115,6 +138,14 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
           '<select id="compareObsB" class="compare-select">' + optionsHtml + '</select>' +
         '</div>' +
         '<button id="compareBtn" class="compare-btn" disabled>Compare</button>' +
+        '<div class="compare-select-group">' +
+          '<label for="compareRouteFilter">Packet Type</label>' +
+          '<select id="compareRouteFilter" class="compare-select">' +
+            '<option value="all">All packets</option>' +
+            '<option value="flood">Flood only</option>' +
+            '<option value="direct">Direct only</option>' +
+          '</select>' +
+        '</div>' +
       '</div>';
 
     var ddA = document.getElementById('compareObsA');
@@ -123,6 +154,13 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
 
     if (selA) ddA.value = selA;
     if (selB) ddB.value = selB;
+
+    var ddRoute = document.getElementById('compareRouteFilter');
+    ddRoute.value = routeFilter;
+    ddRoute.addEventListener('change', function () {
+      routeFilter = ddRoute.value;
+      if (comparisonResult) runComparison();
+    });
 
     function updateBtn() {
       selA = ddA.value || null;
@@ -162,16 +200,20 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
       packetsA = results[0].packets || [];
       packetsB = results[1].packets || [];
 
-      var hashesA = new Set(packetsA.map(function (p) { return p.hash; }));
-      var hashesB = new Set(packetsB.map(function (p) { return p.hash; }));
+      // Apply flood/direct filter (#928)
+      var filteredA = filterPacketsByRoute(packetsA, routeFilter);
+      var filteredB = filterPacketsByRoute(packetsB, routeFilter);
+
+      var hashesA = new Set(filteredA.map(function (p) { return p.hash; }));
+      var hashesB = new Set(filteredB.map(function (p) { return p.hash; }));
 
       comparisonResult = comparePacketSets(hashesA, hashesB);
 
       // Build hash→packet lookups for detail rendering
       comparisonResult.packetMapA = new Map();
       comparisonResult.packetMapB = new Map();
-      packetsA.forEach(function (p) { comparisonResult.packetMapA.set(p.hash, p); });
-      packetsB.forEach(function (p) { comparisonResult.packetMapB.set(p.hash, p); });
+      filteredA.forEach(function (p) { comparisonResult.packetMapA.set(p.hash, p); });
+      filteredB.forEach(function (p) { comparisonResult.packetMapB.set(p.hash, p); });
 
       currentView = 'summary';
       renderComparison();
