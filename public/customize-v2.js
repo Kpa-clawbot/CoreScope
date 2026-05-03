@@ -33,7 +33,7 @@
     'meshcore-live-heatmap-opacity'
   ];
 
-  var VALID_SECTIONS = ['branding', 'theme', 'themeDark', 'nodeColors', 'typeColors', 'home', 'timestamps', 'heatmapOpacity', 'liveHeatmapOpacity', 'distanceUnit'];
+  var VALID_SECTIONS = ['branding', 'theme', 'themeDark', 'nodeColors', 'typeColors', 'home', 'timestamps', 'heatmapOpacity', 'liveHeatmapOpacity', 'distanceUnit', 'favorites', 'myNodes'];
   var OBJECT_SECTIONS = ['branding', 'theme', 'themeDark', 'nodeColors', 'typeColors', 'home', 'timestamps'];
   var SCALAR_SECTIONS = ['heatmapOpacity', 'liveHeatmapOpacity'];
   var DISTANCE_UNIT_VALUES = ['km', 'mi', 'auto'];
@@ -313,9 +313,17 @@
   function readOverrides() {
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
-      if (raw == null) return {};
-      var parsed = JSON.parse(raw);
-      if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      var parsed = (raw != null) ? JSON.parse(raw) : {};
+      if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) parsed = {};
+      // Include favorites and claimed nodes from their own localStorage keys
+      try {
+        var favs = JSON.parse(localStorage.getItem('meshcore-favorites') || '[]');
+        if (Array.isArray(favs) && favs.length) parsed.favorites = favs;
+      } catch (e) { /* ignore */ }
+      try {
+        var myNodes = JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]');
+        if (Array.isArray(myNodes) && myNodes.length) parsed.myNodes = myNodes;
+      } catch (e) { /* ignore */ }
       return parsed;
     } catch (e) {
       return {};
@@ -386,14 +394,28 @@
 
   function writeOverrides(delta) {
     if (delta == null || typeof delta !== 'object') return;
+    // Extract favorites/myNodes and store in their own localStorage keys
+    if (Array.isArray(delta.favorites)) {
+      try { localStorage.setItem('meshcore-favorites', JSON.stringify(delta.favorites)); } catch (e) { /* ignore */ }
+    }
+    if (Array.isArray(delta.myNodes)) {
+      try { localStorage.setItem('meshcore-my-nodes', JSON.stringify(delta.myNodes)); } catch (e) { /* ignore */ }
+    }
+    // Build theme-only delta (without favorites/myNodes)
+    var themeDelta = {};
+    for (var k in delta) {
+      if (delta.hasOwnProperty(k) && k !== 'favorites' && k !== 'myNodes') {
+        themeDelta[k] = delta[k];
+      }
+    }
     // If empty, remove key entirely
-    var keys = Object.keys(delta);
+    var keys = Object.keys(themeDelta);
     if (keys.length === 0) {
       try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ }
       _updateSaveStatus('saved');
       return;
     }
-    var validated = _validateDelta(delta);
+    var validated = _validateDelta(themeDelta);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(validated));
       _updateSaveStatus('saved');
@@ -757,6 +779,17 @@
       // Validate distanceUnit
       if (key === 'distanceUnit' && DISTANCE_UNIT_VALUES.indexOf(obj[key]) === -1) {
         errors.push('Invalid distanceUnit: "' + obj[key] + '" — must be km, mi, or auto');
+      }
+      // Validate favorites and myNodes arrays
+      if (key === 'favorites') {
+        if (!Array.isArray(obj[key])) {
+          errors.push('"favorites" must be an array of public key strings');
+        }
+      }
+      if (key === 'myNodes') {
+        if (!Array.isArray(obj[key])) {
+          errors.push('"myNodes" must be an array of node objects');
+        }
       }
     }
     return { valid: errors.length === 0, errors: errors };
