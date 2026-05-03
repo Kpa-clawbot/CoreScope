@@ -499,9 +499,11 @@ func applySchema(db *sql.DB) error {
 	if row.Scan(&migDone) != nil {
 		log.Println("[migration] Cleaning up legacy packets with empty hash/timestamp...")
 		db.Exec(`DELETE FROM observations WHERE transmission_id IN (SELECT id FROM transmissions WHERE hash = '' OR first_seen = '')`)
-		res, _ := db.Exec(`DELETE FROM transmissions WHERE hash = '' OR first_seen = ''`)
-		deleted, _ := res.RowsAffected()
-		log.Printf("[migration] deleted %d legacy packets with empty hash/timestamp", deleted)
+		res, err := db.Exec(`DELETE FROM transmissions WHERE hash = '' OR first_seen = ''`)
+		if err == nil {
+			deleted, _ := res.RowsAffected()
+			log.Printf("[migration] deleted %d legacy packets with empty hash/timestamp", deleted)
+		}
 		db.Exec(`INSERT INTO _migrations (name) VALUES ('cleanup_legacy_null_hash_ts')`)
 	}
 
