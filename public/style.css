@@ -2175,6 +2175,16 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   margin-left: 6px;
   flex-shrink: 0;
 }
+.ch-color-clear {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  margin-left: 3px;
+  vertical-align: middle;
+}
+.ch-color-clear:hover { color: var(--text-primary, #e0e0e0); }
 .ch-color-dot:not([style*="background"]) {
   background: transparent;
   border-style: dashed;

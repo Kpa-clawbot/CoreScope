@@ -120,8 +120,8 @@
       var ph = rect.height;
       var vw = window.innerWidth;
       var vh = window.innerHeight;
-      var finalX = x + pw > vw ? Math.max(0, vw - pw - 8) : x;
-      var finalY = y + ph > vh ? Math.max(0, vh - ph - 8) : y;
+      var finalX = x + pw > vw ? Math.max(0, vw - pw - 14) : x;
+      var finalY = y + ph > vh ? Math.max(0, vh - ph - 14) : y;
       el.style.left = finalX + 'px';
       el.style.top = finalY + 'px';
     }
@@ -228,12 +228,6 @@
       if (ch) showPopover(ch, e.clientX, e.clientY);
     });
 
-    feed.addEventListener('contextmenu', function(e) {
-      var item = e.target.closest('.live-feed-item');
-      if (!item || !item._ccChannel) return;
-      e.preventDefault();
-      showPopover(item._ccChannel, e.clientX, e.clientY);
-    });
   }
 
   /**
