@@ -1157,9 +1157,37 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	node, err := s.db.GetNodeByPubkey(pubkey)
-	if err != nil || node == nil {
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	// Issue #772: short-URL fallback. If exact pubkey lookup misses and the
+	// path looks like a hex prefix (>=8 chars, <64), try prefix resolution.
+	if node == nil && len(pubkey) >= 8 && len(pubkey) < 64 {
+		resolved, ambiguous, perr := s.db.GetNodeByPrefix(pubkey)
+		if perr != nil {
+			writeError(w, 500, perr.Error())
+			return
+		}
+		if ambiguous {
+			writeError(w, http.StatusConflict, "Ambiguous prefix: multiple nodes match. Use a longer prefix.")
+			return
+		}
+		if resolved != nil {
+			if pk, _ := resolved["public_key"].(string); pk != "" && s.cfg.IsBlacklisted(pk) {
+				writeError(w, 404, "Not found")
+				return
+			}
+			node = resolved
+		}
+	}
+	if node == nil {
 		writeError(w, 404, "Not found")
 		return
+	}
+	// From here on use the canonical pubkey for downstream lookups.
+	if pk, _ := node["public_key"].(string); pk != "" {
+		pubkey = pk
 	}
 
 	if s.store != nil {

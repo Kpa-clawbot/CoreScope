@@ -833,10 +833,51 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 
 // GetNodeByPrefix resolves a hex prefix (>=8 chars) to a unique node.
 // Returns (node, ambiguous, error). When multiple nodes share the prefix,
-// returns (nil, true, nil). Stub — implementation in follow-up commit (issue #772).
+// returns (nil, true, nil). Used by the short-URL feature (issue #772).
+//
+// Trade-off vs an opaque ID lookup table: prefixes are stable across
+// restarts, self-describing (no allocator needed), and resolve to the
+// authoritative pubkey on the server. Cost: ambiguity grows with the
+// node directory; we mitigate with a hard 8-hex-char (32-bit) minimum
+// and surface 409 Conflict when collisions occur.
 func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, error) {
-	_ = prefix
-	return nil, false, nil
+	if len(prefix) < 8 {
+		return nil, false, nil
+	}
+	// Validate hex (avoid SQL LIKE wildcards leaking through).
+	for _, c := range prefix {
+		isHex := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+		if !isHex {
+			return nil, false, nil
+		}
+	}
+	rows, err := db.conn.Query(
+		`SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c
+		   FROM nodes WHERE public_key LIKE ? LIMIT 2`,
+		prefix+"%",
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var first map[string]interface{}
+	count := 0
+	for rows.Next() {
+		n := scanNodeRow(rows)
+		if n == nil {
+			continue
+		}
+		count++
+		if count == 1 {
+			first = n
+		} else {
+			return nil, true, nil
+		}
+	}
+	if count == 0 {
+		return nil, false, nil
+	}
+	return first, false, nil
 }
 
 // GetNodeByPubkey returns a single node.

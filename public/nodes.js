@@ -492,6 +492,7 @@
           <div class="node-detail-key mono" style="font-size:11px;word-break:break-all;margin-bottom:6px">${n.public_key}</div>
           <div>
             <button class="btn-primary" id="copyUrlBtn" style="font-size:12px;padding:4px 10px">📋 Copy URL</button>
+            <button class="btn-primary" id="copyShortUrlBtn" title="Short URL using an 8-char pubkey prefix — easier to send over the mesh (issue #772)" style="font-size:12px;padding:4px 10px;margin-left:6px">📡 Copy short URL</button>
             <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:6px;text-decoration:none;font-size:12px;padding:4px 10px">📊 Analytics</a>
           </div>
         </div>
@@ -609,6 +610,17 @@
         window.copyToClipboard(nodeUrl, () => {
           btn.textContent = '✅ Copied!';
           setTimeout(() => btn.textContent = '📋 Copy URL', 2000);
+        });
+      });
+
+      // Copy short URL — issue #772. Uses an 8-char pubkey prefix; the
+      // backend resolves it to the canonical pubkey when unambiguous.
+      const shortUrl = location.origin + '#/nodes/' + n.public_key.slice(0, 8);
+      document.getElementById('copyShortUrlBtn')?.addEventListener('click', () => {
+        const btn = document.getElementById('copyShortUrlBtn');
+        window.copyToClipboard(shortUrl, () => {
+          btn.textContent = '✅ Copied!';
+          setTimeout(() => btn.textContent = '📡 Copy short URL', 2000);
         });
       });
 
