@@ -6328,11 +6328,12 @@ func EnrichNodeWithMultiByte(node map[string]interface{}, entry *MultiByteCapEnt
 // Reuses the same 15s TTL cache pattern as hash size info.
 func (s *PacketStore) GetMultiByteCapMap() map[string]*MultiByteCapEntry {
 	s.hashSizeInfoMu.Lock()
-	defer s.hashSizeInfoMu.Unlock()
-
 	if s.multiByteCapCache != nil && time.Since(s.multiByteCapAt) < 15*time.Second {
-		return s.multiByteCapCache
+		cached := s.multiByteCapCache
+		s.hashSizeInfoMu.Unlock()
+		return cached
 	}
+	s.hashSizeInfoMu.Unlock()
 
 	// Get adopter hash sizes from analytics for cross-referencing
 	analyticsData := s.GetAnalyticsHashSizes("")
@@ -6350,8 +6351,11 @@ func (s *PacketStore) GetMultiByteCapMap() map[string]*MultiByteCapEntry {
 	for i := range caps {
 		result[caps[i].PublicKey] = &caps[i]
 	}
+
+	s.hashSizeInfoMu.Lock()
 	s.multiByteCapCache = result
 	s.multiByteCapAt = time.Now()
+	s.hashSizeInfoMu.Unlock()
 	return result
 }
 
