@@ -1873,11 +1873,10 @@ func nullInt(ni sql.NullInt64) interface{} {
 // Returns the number of transmissions deleted.
 // Opens a separate read-write connection since the main connection is read-only.
 func (db *DB) PruneOldPackets(days int) (int64, error) {
-	rw, err := openRW(db.path)
+	rw, err := cachedRW(db.path)
 	if err != nil {
 		return 0, err
 	}
-	defer rw.Close()
 
 	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
 	tx, err := rw.Begin()
@@ -2220,11 +2219,10 @@ func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
 
 // PruneOldMetrics deletes observer_metrics rows older than retentionDays.
 func (db *DB) PruneOldMetrics(retentionDays int) (int64, error) {
-	rw, err := openRW(db.path)
+	rw, err := cachedRW(db.path)
 	if err != nil {
 		return 0, err
 	}
-	defer rw.Close()
 
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
 	res, err := rw.Exec(`DELETE FROM observer_metrics WHERE timestamp < ?`, cutoff)
@@ -2247,11 +2245,10 @@ func (db *DB) RemoveStaleObservers(observerDays int) (int64, error) {
 	if observerDays <= -1 {
 		return 0, nil // keep forever
 	}
-	rw, err := openRW(db.path)
+	rw, err := cachedRW(db.path)
 	if err != nil {
 		return 0, err
 	}
-	defer rw.Close()
 
 	cutoff := time.Now().UTC().AddDate(0, 0, -observerDays).Format(time.RFC3339)
 	res, err := rw.Exec(`UPDATE observers SET inactive = 1 WHERE last_seen < ? AND (inactive IS NULL OR inactive = 0)`, cutoff)

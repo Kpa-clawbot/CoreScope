@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
 )
 
@@ -79,11 +80,8 @@ type MetricsConfig struct {
 	SampleIntervalSec int `json:"sampleIntervalSec"`
 }
 
-// DBConfig controls SQLite vacuum and maintenance behavior (#919).
-type DBConfig struct {
-	VacuumOnStartup        bool `json:"vacuumOnStartup"`        // one-time full VACUUM on startup if auto_vacuum is not INCREMENTAL
-	IncrementalVacuumPages int  `json:"incrementalVacuumPages"` // pages returned to OS per reaper cycle (default 1024)
-}
+// DBConfig is the shared SQLite vacuum/maintenance config (#919, #921).
+type DBConfig = dbconfig.DBConfig
 
 // IncrementalVacuumPages returns the configured pages per vacuum or 1024 default.
 func (c *Config) IncrementalVacuumPages() int {

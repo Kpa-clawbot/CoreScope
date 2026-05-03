@@ -20,11 +20,10 @@ var persistSem = make(chan struct{}, 1)
 // ensureNeighborEdgesTable creates the neighbor_edges table if it doesn't exist.
 // Uses a separate read-write connection since the main DB is read-only.
 func ensureNeighborEdgesTable(dbPath string) error {
-	rw, err := openRW(dbPath)
+	rw, err := cachedRW(dbPath)
 	if err != nil {
 		return fmt.Errorf("open rw for neighbor_edges: %w", err)
 	}
-	defer rw.Close()
 
 	_, err = rw.Exec(`CREATE TABLE IF NOT EXISTS neighbor_edges (
 		node_a TEXT NOT NULL,
@@ -129,12 +128,11 @@ func asyncPersistResolvedPathsAndEdges(dbPath string, obsUpdates []persistObsUpd
 	go func() {
 		defer func() { <-persistSem }()
 
-		rw, err := openRW(dbPath)
+		rw, err := cachedRW(dbPath)
 		if err != nil {
 			log.Printf("[store] %s rw open error: %v", logPrefix, err)
 			return
 		}
-		defer rw.Close()
 
 		if len(obsUpdates) > 0 {
 			sqlTx, err := rw.Begin()
@@ -249,11 +247,10 @@ func buildAndPersistEdges(store *PacketStore, rw *sql.DB) int {
 
 // ensureResolvedPathColumn adds the resolved_path column to observations if missing.
 func ensureResolvedPathColumn(dbPath string) error {
-	rw, err := openRW(dbPath)
+	rw, err := cachedRW(dbPath)
 	if err != nil {
 		return err
 	}
-	defer rw.Close()
 
 	// Check if column already exists
 	rows, err := rw.Query("PRAGMA table_info(observations)")
@@ -289,11 +286,10 @@ func ensureResolvedPathColumn(dbPath string) error {
 // GetStats) silently fail with "no such column: inactive" — leaving /api/observers
 // returning empty.
 func ensureObserverInactiveColumn(dbPath string) error {
-	rw, err := openRW(dbPath)
+	rw, err := cachedRW(dbPath)
 	if err != nil {
 		return err
 	}
-	defer rw.Close()
 
 	rows, err := rw.Query("PRAGMA table_info(observers)")
 	if err != nil {
@@ -327,11 +323,10 @@ func ensureObserverInactiveColumn(dbPath string) error {
 // the e2e fixture), the column is missing and read queries that reference it
 // (GetObservers, GetObserverByID) fail with "no such column: last_packet_at".
 func ensureLastPacketAtColumn(dbPath string) error {
-	rw, err := openRW(dbPath)
+	rw, err := cachedRW(dbPath)
 	if err != nil {
 		return err
 	}
-	defer rw.Close()
 
 	rows, err := rw.Query("PRAGMA table_info(observers)")
 	if err != nil {
@@ -361,12 +356,11 @@ func ensureLastPacketAtColumn(dbPath string) error {
 // softDeleteBlacklistedObservers marks observers matching the blacklist as
 // inactive=1 so they are hidden from API responses.  Runs once at startup.
 func softDeleteBlacklistedObservers(dbPath string, blacklist []string) {
-	rw, err := openRW(dbPath)
+	rw, err := cachedRW(dbPath)
 	if err != nil {
 		log.Printf("[observer-blacklist] warning: could not open DB for soft-delete: %v", err)
 		return
 	}
-	defer rw.Close()
 
 	placeholders := make([]string, 0, len(blacklist))
 	args := make([]interface{}, 0, len(blacklist))
@@ -528,16 +522,12 @@ func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int
 	var rw *sql.DB
 	if dbPath != "" {
 		var err error
-		rw, err = openRW(dbPath)
+		rw, err = cachedRW(dbPath)
 		if err != nil {
 			log.Printf("[store] async backfill: open rw error: %v", err)
 		}
 	}
-	defer func() {
-		if rw != nil {
-			rw.Close()
-		}
-	}()
+	// rw is cached process-wide; do not close
 
 	totalProcessed := 0
 	for totalProcessed < totalPending {
@@ -762,11 +752,10 @@ func PruneNeighborEdges(dbPath string, graph *NeighborGraph, maxAgeDays int) (in
 
 	// 1. Prune from SQLite using a read-write connection
 	var dbPruned int64
-	rw, err := openRW(dbPath)
+	rw, err := cachedRW(dbPath)
 	if err != nil {
 		return 0, fmt.Errorf("prune neighbor_edges: open rw: %w", err)
 	}
-	defer rw.Close()
 	res, err := rw.Exec("DELETE FROM neighbor_edges WHERE last_seen < ?", cutoff.Format(time.RFC3339))
 	if err != nil {
 		return 0, fmt.Errorf("prune neighbor_edges: %w", err)

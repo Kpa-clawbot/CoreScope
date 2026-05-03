@@ -210,10 +210,9 @@ func main() {
 					log.Printf("[neighbor] graph build panic recovered: %v", r)
 				}
 			}()
-			rw, rwErr := openRW(dbPath)
+			rw, rwErr := cachedRW(dbPath)
 			if rwErr == nil {
 				edgeCount := buildAndPersistEdges(store, rw)
-				rw.Close()
 				log.Printf("[neighbor] persisted %d edges", edgeCount)
 			}
 			built := BuildFromStore(store)

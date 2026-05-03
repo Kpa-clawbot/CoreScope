@@ -37,12 +37,11 @@ func checkAutoVacuum(db *DB, cfg *Config, dbPath string) {
 		log.Printf("[db] vacuumOnStartup=true — starting one-time full VACUUM (ensure 2x DB size free disk space)...")
 		start := time.Now()
 
-		rw, err := openRW(dbPath)
+		rw, err := cachedRW(dbPath)
 		if err != nil {
 			log.Printf("[db] VACUUM failed: could not open RW connection: %v", err)
 			return
 		}
-		defer rw.Close()
 
 		if _, err := rw.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
 			log.Printf("[db] VACUUM failed: could not set auto_vacuum: %v", err)
@@ -71,12 +70,11 @@ func checkAutoVacuum(db *DB, cfg *Config, dbPath string) {
 // runIncrementalVacuum runs PRAGMA incremental_vacuum(N) on a read-write
 // connection. Safe to call on auto_vacuum=NONE databases (noop).
 func runIncrementalVacuum(dbPath string, pages int) {
-	rw, err := openRW(dbPath)
+	rw, err := cachedRW(dbPath)
 	if err != nil {
 		log.Printf("[vacuum] could not open RW connection: %v", err)
 		return
 	}
-	defer rw.Close()
 
 	if _, err := rw.Exec(fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)); err != nil {
 		log.Printf("[vacuum] incremental_vacuum error: %v", err)
