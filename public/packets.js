@@ -2685,6 +2685,9 @@
       buildFlatRowHtml,
       _calcVisibleRange,
       buildPacketsParams,
+      renderTableRows,
+      _setPackets: function(p) { packets = p; },
+      _setFilter: function(k, v) { filters[k] = v; },
     };
   }
 
