@@ -309,6 +309,39 @@ function formatTimestampWithTooltip(isoString, mode) {
   return { text, tooltip, isFuture };
 }
 
+// Format a Date for chart axis labels, respecting customizer timestamp settings.
+// shortForm: true = time only (for intra-day), false = date+time (multi-day).
+function formatChartAxisLabel(d, shortForm) {
+  if (!(d instanceof Date) || !isFinite(d.getTime())) return '—';
+  var timezone = (typeof getTimestampTimezone === 'function') ? getTimestampTimezone() : 'local';
+  var preset = (typeof getTimestampFormatPreset === 'function') ? getTimestampFormatPreset() : 'iso';
+  var useUtc = timezone === 'utc';
+
+  if (preset === 'locale') {
+    if (shortForm) {
+      var opts = { hour: '2-digit', minute: '2-digit' };
+      if (useUtc) opts.timeZone = 'UTC';
+      return d.toLocaleTimeString([], opts);
+    }
+    var opts2 = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+    if (useUtc) opts2.timeZone = 'UTC';
+    return d.toLocaleString([], opts2);
+  }
+
+  // ISO-style (iso or iso-seconds)
+  var hour = useUtc ? d.getUTCHours() : d.getHours();
+  var minute = useUtc ? d.getUTCMinutes() : d.getMinutes();
+  var timeStr = pad2(hour) + ':' + pad2(minute);
+  if (preset === 'iso-seconds') {
+    var sec = useUtc ? d.getUTCSeconds() : d.getSeconds();
+    timeStr += ':' + pad2(sec);
+  }
+  if (shortForm) return timeStr;
+  var month = useUtc ? d.getUTCMonth() + 1 : d.getMonth() + 1;
+  var day = useUtc ? d.getUTCDate() : d.getDate();
+  return pad2(month) + '-' + pad2(day) + ' ' + timeStr;
+}
+
 function truncate(str, len) {
   if (!str) return '';
   return str.length > len ? str.slice(0, len) + '…' : str;

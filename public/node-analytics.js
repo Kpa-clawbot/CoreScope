@@ -170,7 +170,7 @@
       data: {
         labels: tl.map(b => {
           const d = new Date(b.bucket);
-          return currentDays <= 3 ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+          return (typeof formatChartAxisLabel === 'function') ? formatChartAxisLabel(d, currentDays <= 3) : (currentDays <= 3 ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' }));
         }),
         datasets: [{ label: 'Packets', data: tl.map(b => b.count), backgroundColor: 'rgba(74,158,255,0.5)', borderColor: '#4a9eff', borderWidth: 1 }]
       },
@@ -197,7 +197,7 @@
     const longestObs = Object.values(byObs).sort((a, b) => b.points.length - a.points.length)[0];
     const labels = longestObs ? longestObs.points.map(p => {
       const d = p.x;
-      return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return (typeof formatChartAxisLabel === 'function') ? formatChartAxisLabel(d, false) : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }) : [];
     const c = new Chart(ctx, {
       type: 'line',

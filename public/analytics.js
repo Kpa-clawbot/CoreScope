@@ -1732,8 +1732,8 @@
 
         <div class="subpath-section">
           <h5>⏱️ Timeline</h5>
-          <div>First seen: ${data.firstSeen ? new Date(data.firstSeen).toLocaleString() : '—'}</div>
-          <div>Last seen: ${data.lastSeen ? new Date(data.lastSeen).toLocaleString() : '—'}</div>
+          <div>First seen: ${data.firstSeen ? (typeof formatAbsoluteTimestamp === 'function' ? formatAbsoluteTimestamp(data.firstSeen) : new Date(data.firstSeen).toLocaleString()) : '—'}</div>
+          <div>Last seen: ${data.lastSeen ? (typeof formatAbsoluteTimestamp === 'function' ? formatAbsoluteTimestamp(data.lastSeen) : new Date(data.lastSeen).toLocaleString()) : '—'}</div>
         </div>
 
         ${data.observers.length ? `
@@ -2660,7 +2660,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       const name = esc(n.name || n.public_key.slice(0, 12));
       const role = n.role ? `<span class="text-muted" style="font-size:0.82em">${esc(n.role)}</span>` : '';
       const hs = n.hash_size ? ` <span class="text-muted" style="font-size:0.78em;opacity:0.7">${n.hash_size}B hash</span>` : '';
-      const when = n.last_seen ? ` <span class="text-muted" style="font-size:0.8em">${new Date(n.last_seen).toLocaleDateString()}</span>` : '';
+      const when = n.last_seen ? ` <span class="text-muted" style="font-size:0.8em">${(typeof formatAbsoluteTimestamp === 'function') ? formatAbsoluteTimestamp(n.last_seen) : new Date(n.last_seen).toLocaleDateString()}</span>` : '';
       return `<div style="padding:3px 0"><a href="#/nodes/${encodeURIComponent(n.public_key)}" class="analytics-link">${name}</a> ${role}${hs}${when}</div>`;
     }
 
@@ -3158,7 +3158,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       const t = new Date(d.t);
       const x = sx(t.getTime());
       const y = sy(d.v);
-      const ts = t.toISOString().replace('T', ' ').replace(/\.\d+Z/, ' UTC');
+      const ts = (typeof formatAbsoluteTimestamp === 'function') ? formatAbsoluteTimestamp(d.t) : t.toISOString().replace('T', ' ').replace(/\.\d+Z/, ' UTC');
       const tip = `${label}: ${formatV(d.v)}${unit}\n${ts}`;
       svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="8" fill="transparent" stroke="none" pointer-events="all"><title>${tip}</title></circle>`;
     });
@@ -3172,7 +3172,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       const idx = Math.floor(i * (data.length - 1) / Math.max(xTicks - 1, 1));
       const t = new Date(data[idx].t);
       const x = sx(t.getTime());
-      const label = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const label = (typeof formatChartAxisLabel === 'function') ? formatChartAxisLabel(t, true) : t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       svg += `<text x="${x.toFixed(1)}" y="${h - 5}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${label}</text>`;
     }
     return svg;
