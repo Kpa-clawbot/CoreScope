@@ -15,6 +15,7 @@ window.ChannelDecrypt = (function () {
   'use strict';
 
   var STORAGE_KEY = 'corescope_channel_keys';
+  var LABELS_KEY = 'corescope_channel_labels';
   var CACHE_KEY = 'corescope_channel_cache';
 
   // ---- Hex utilities ----
@@ -181,10 +182,13 @@ window.ChannelDecrypt = (function () {
 
   // ---- Key storage (localStorage) ----
 
-  function saveKey(channelName, keyHex) {
+  function saveKey(channelName, keyHex, label) {
     var keys = getKeys();
     keys[channelName] = keyHex;
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(keys)); } catch (e) { /* quota */ }
+    if (typeof label === 'string' && label.trim()) {
+      saveLabel(channelName, label.trim());
+    }
   }
 
   // Alias used by channels.js
@@ -204,8 +208,38 @@ window.ChannelDecrypt = (function () {
     var keys = getKeys();
     delete keys[channelName];
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(keys)); } catch (e) { /* quota */ }
-    // Also clear cached messages for this channel
+    // Also clear cached messages and any label for this channel (#1020)
     clearChannelCache(channelName);
+    var labels = getLabels();
+    if (labels[channelName]) {
+      delete labels[channelName];
+      try { localStorage.setItem(LABELS_KEY, JSON.stringify(labels)); } catch (e) { /* quota */ }
+    }
+  }
+
+  // ---- User-supplied display labels (#1020) ----
+  // Stored separately from keys so we can display friendly names instead of
+  // psk:<hex8> for user-added PSK channels.
+  function getLabels() {
+    try {
+      var raw = localStorage.getItem(LABELS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) { return {}; }
+  }
+
+  function getLabel(channelName) {
+    var labels = getLabels();
+    return labels[channelName] || '';
+  }
+
+  function saveLabel(channelName, label) {
+    var labels = getLabels();
+    if (typeof label === 'string' && label.trim()) {
+      labels[channelName] = label.trim();
+    } else {
+      delete labels[channelName];
+    }
+    try { localStorage.setItem(LABELS_KEY, JSON.stringify(labels)); } catch (e) { /* quota */ }
   }
 
   /** Remove cached messages for a specific channel (by name or hash). */
@@ -278,10 +312,10 @@ window.ChannelDecrypt = (function () {
     getKeys: getKeys,
     getStoredKeys: getStoredKeys,
     removeKey: removeKey,
-    // #1020 stubs — implemented in green commit
-    saveLabel: function () {},
-    getLabel: function () { return ''; },
-    getLabels: function () { return {}; },
+    // #1020: optional user-friendly display labels for stored keys
+    saveLabel: saveLabel,
+    getLabel: getLabel,
+    getLabels: getLabels,
     clearChannelCache: clearChannelCache,
     cacheMessages: cacheMessages,
     getCachedMessages: getCachedMessages,

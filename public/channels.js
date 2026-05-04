@@ -339,8 +339,10 @@
     }
   }
 
-  // Add a user channel by name (#channelname) or hex key
-  async function addUserChannel(val) {
+  // Add a user channel by name (#channelname) or hex key.
+  // `label` (#1020) is an optional friendly name shown in the sidebar instead
+  // of "psk:<hex8>" — stored alongside the key in localStorage.
+  async function addUserChannel(val, label) {
     var displayName = val.startsWith('#') ? val : (isHexKey(val) ? val.substring(0, 8) + '…' : '#' + val);
     showAddStatus('Decrypting ' + displayName + ' messages…', 'loading');
     var channelName, keyHex;
@@ -359,7 +361,8 @@
         keyHex = ChannelDecrypt.bytesToHex(keyBytes2);
       }
 
-      ChannelDecrypt.storeKey(channelName, keyHex);
+      // #1020: persist optional user-supplied label alongside the key
+      ChannelDecrypt.storeKey(channelName, keyHex, label);
 
       // Compute channel hash byte to find matching encrypted channels
       var keyBytes3 = ChannelDecrypt.hexToBytes(keyHex);
@@ -378,15 +381,21 @@
       if (existingEncrypted) {
         targetHash = existingEncrypted.hash;
       }
-      await selectChannel(targetHash, { userKey: keyHex, channelHashByte: hashByte, channelName: channelName });
+      var selectResult = await selectChannel(targetHash, { userKey: keyHex, channelHashByte: hashByte, channelName: channelName });
 
-      // Show success feedback (#759)
-      var msgCount = document.querySelectorAll('#chMessages .ch-msg').length;
-      var userDisplay = channelName.startsWith('psk:') ? 'Custom channel (' + channelName.substring(4) + ')' : channelName;
-      if (msgCount > 0) {
-        showAddStatus('Added ' + userDisplay + ' — ' + msgCount + ' messages decrypted', 'success');
+      // #1020: derive count from selectChannel's reported result, not from a
+      // DOM scrape that can race with rendering.
+      var msgCount = (selectResult && typeof selectResult.messageCount === 'number')
+        ? selectResult.messageCount
+        : (Array.isArray(messages) ? messages.length : 0);
+      var displayLabel = (typeof label === 'string' && label.trim()) ? label.trim() :
+        (channelName.startsWith('psk:') ? 'Custom channel (' + channelName.substring(4) + ')' : channelName);
+      if (selectResult && selectResult.wrongKey) {
+        showAddStatus('Key does not match any packets for ' + displayLabel, 'error');
+      } else if (msgCount > 0) {
+        showAddStatus('Added ' + displayLabel + ' — ' + msgCount + ' messages decrypted', 'success');
       } else {
-        showAddStatus('No messages found for ' + userDisplay, 'warn');
+        showAddStatus('Added ' + displayLabel + ' — no messages found yet', 'warn');
       }
     } catch (err) {
       showAddStatus('Failed to decrypt', 'error');
@@ -399,14 +408,17 @@
   // remove a key they added but that the server already knows about.
   function mergeUserChannels() {
     var keys = ChannelDecrypt.getStoredKeys();
+    var labels = (typeof ChannelDecrypt.getLabels === 'function') ? ChannelDecrypt.getLabels() : {};
     var names = Object.keys(keys);
     for (var i = 0; i < names.length; i++) {
       var name = names[i];
+      var label = labels[name] || '';
       var matched = false;
       for (var j = 0; j < channels.length; j++) {
         var ch = channels[j];
         if (ch.name === name || ch.hash === name || ch.hash === ('user:' + name)) {
           ch.userAdded = true;
+          if (label) ch.userLabel = label;
           matched = true;
           break;
         }
@@ -415,6 +427,7 @@
         channels.push({
           hash: 'user:' + name,
           name: name,
+          userLabel: label,
           messageCount: 0,
           lastActivityMs: 0,
           lastSender: '',
@@ -630,6 +643,11 @@
                      aria-label="Channel name or hex key" spellcheck="false">
               <button type="submit" class="ch-add-btn" title="Add channel">+</button>
             </div>
+            <div class="ch-add-row">
+              <input type="text" id="chKeyLabelInput" class="ch-key-label-input"
+                     placeholder="optional name (e.g. My Crew)"
+                     aria-label="Optional display name for this channel" spellcheck="false">
+            </div>
             <div class="ch-add-hint">e.g. #LongFast or 32-char hex key — decrypted in your browser.</div>
             <div id="chAddStatus" class="ch-add-status" style="display:none"></div>
           </form>
@@ -678,10 +696,13 @@
       var submitHandler = async function (e) {
         e.preventDefault();
         var input = document.getElementById('chKeyInput');
+        var labelInput = document.getElementById('chKeyLabelInput');
         var val = (input.value || '').trim();
+        var label = labelInput ? (labelInput.value || '').trim() : '';
         if (!val) return;
         input.value = '';
-        await addUserChannel(val);
+        if (labelInput) labelInput.value = '';
+        await addUserChannel(val, label);
       };
       chKeyForm.addEventListener('submit', submitHandler);
       var chKeyInput = document.getElementById('chKeyInput');
@@ -1082,30 +1103,46 @@
 
     el.innerHTML = sorted.map(ch => {
       const isEncrypted = ch.encrypted === true;
-      const name = isEncrypted ? (ch.name || 'Unknown') : (ch.name || `Channel ${formatHashHex(ch.hash)}`);
+      const isUserAdded = ch.userAdded === true;
+      // #1020: prefer user-supplied label over psk:<hex>
+      const baseName = isEncrypted ? (ch.name || 'Unknown') : (ch.name || `Channel ${formatHashHex(ch.hash)}`);
+      const name = (isUserAdded && ch.userLabel) ? ch.userLabel : baseName;
       const color = isEncrypted ? 'var(--text-muted, #6b7280)' : getChannelColor(ch.hash);
       const time = ch.lastActivityMs ? formatSecondsAgo(Math.floor((Date.now() - ch.lastActivityMs) / 1000)) : '';
-      const preview = isEncrypted
-        ? `${ch.messageCount} encrypted messages (no key configured)`
-        : ch.lastSender && ch.lastMessage
-          ? `${ch.lastSender}: ${truncate(ch.lastMessage, 28)}`
-          : `${ch.messageCount} messages`;
+      const preview = isUserAdded
+        ? (ch.lastSender && ch.lastMessage
+            ? `${ch.lastSender}: ${truncate(ch.lastMessage, 28)}`
+            : `${ch.messageCount || 0} messages (your key)`)
+        : isEncrypted
+          ? `${ch.messageCount} encrypted messages (no key configured)`
+          : ch.lastSender && ch.lastMessage
+            ? `${ch.lastSender}: ${truncate(ch.lastMessage, 28)}`
+            : `${ch.messageCount} messages`;
       const sel = selectedHash === ch.hash ? ' selected' : '';
-      const encClass = isEncrypted ? ' ch-encrypted' : '';
-      const abbr = isEncrypted ? '🔒' : (name.startsWith('#') ? name.slice(0, 3) : name.slice(0, 2).toUpperCase());
+      // #1020: distinct class so styling/tests can tell user-added apart
+      // from server-known encrypted channels.
+      const encClass = isUserAdded
+        ? ' ch-user-added'
+        : (isEncrypted ? ' ch-encrypted' : '');
+      // #1020: 🔓 marks "I have the key" vs 🔒 "encrypted, no key"
+      const badgeIcon = isUserAdded ? '🔓' : (isEncrypted ? '🔒' : null);
+      const abbr = badgeIcon || (name.startsWith('#') ? name.slice(0, 3) : name.slice(0, 2).toUpperCase());
       // Channel color dot for color picker (#674)
       const chColor = window.ChannelColors ? window.ChannelColors.get(ch.hash) : null;
       const dotStyle = chColor ? ` style="background:${chColor}"` : '';
       // Left border for assigned color
       const borderStyle = chColor ? ` style="border-left:3px solid ${chColor}"` : '';
-      // M4: Remove button for user-added channels
-      const removeBtn = ch.userAdded ? ' <button class="ch-remove-btn" data-remove-channel="' + escapeHtml(ch.hash) + '" title="Remove channel" aria-label="Remove ' + escapeHtml(name) + '">✕</button>' : '';
+      // M4 / #1020: Remove button for user-added channels
+      const removeBtn = isUserAdded ? ' <button class="ch-remove-btn" data-remove-channel="' + escapeHtml(ch.hash) + '" title="Remove channel and clear saved key" aria-label="Remove ' + escapeHtml(name) + '">✕</button>' : '';
+      // #1020: explicit badge marker for "your key" so it's distinguishable
+      // from server-known encrypted rows at a glance and for screen readers.
+      const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key">🔑</span>' : '';
 
-      return `<button class="ch-item${sel}${encClass}" data-hash="${ch.hash}"${borderStyle} type="button" role="option" aria-selected="${selectedHash === ch.hash ? 'true' : 'false'}" aria-label="${escapeHtml(name)}"${isEncrypted ? ' data-encrypted="true"' : ''}>
-        <div class="ch-badge" style="background:${color}" aria-hidden="true">${isEncrypted ? '🔒' : escapeHtml(abbr)}</div>
+      return `<button class="ch-item${sel}${encClass}" data-hash="${ch.hash}"${borderStyle} type="button" role="option" aria-selected="${selectedHash === ch.hash ? 'true' : 'false'}" aria-label="${escapeHtml(name)}"${isEncrypted ? ' data-encrypted="true"' : ''}${isUserAdded ? ' data-user-added="true"' : ''}>
+        <div class="ch-badge" style="background:${color}" aria-hidden="true">${badgeIcon ? badgeIcon : escapeHtml(abbr)}</div>
         <div class="ch-item-body">
           <div class="ch-item-top">
-            <span class="ch-item-name">${escapeHtml(name)}</span>
+            <span class="ch-item-name">${escapeHtml(name)}</span>${userBadge}
             <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="Change channel color" aria-label="Change color for ${escapeHtml(name)}"></span>${chColor ? '<span class="ch-color-clear" data-channel="' + escapeHtml(ch.hash) + '" title="Clear color" aria-label="Clear color for ' + escapeHtml(name) + '">✕</span>' : ''}
             <span class="ch-item-time" data-channel-hash="${ch.hash}">${time}</span>${removeBtn}
           </div>
@@ -1145,14 +1182,14 @@
           }
         }
       });
-      if (isStaleMessageRequest(request)) return true;
+      if (isStaleMessageRequest(request)) return { stale: true };
       if (result.wrongKey) {
         msgEl.innerHTML = '<div class="ch-empty ch-wrong-key">🔒 Key does not match — no messages could be decrypted</div>';
-        return true;
+        return { wrongKey: true, messageCount: 0 };
       }
       if (result.error) {
         msgEl.innerHTML = '<div class="ch-empty">' + escapeHtml(result.error) + '</div>';
-        return true;
+        return { error: result.error, messageCount: 0 };
       }
       messages = result.messages || [];
       if (messages.length === 0) {
@@ -1162,13 +1199,12 @@
         renderMessages();
         scrollToBottom();
       }
-      return true;
+      return { messageCount: messages.length };
     }
 
     // Client-side decryption path (#725 M2)
     if (decryptOpts && decryptOpts.userKey) {
-      await decryptAndRender(decryptOpts.userKey, decryptOpts.channelHashByte, decryptOpts.channelName);
-      return;
+      return await decryptAndRender(decryptOpts.userKey, decryptOpts.channelHashByte, decryptOpts.channelName);
     }
 
     // Check if this is a user-added channel that needs decryption
