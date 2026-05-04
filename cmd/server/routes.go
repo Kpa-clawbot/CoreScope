@@ -158,6 +158,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes", s.handleNodes).Methods("GET")
 
 	// Analytics endpoints
+	r.HandleFunc("/api/analytics/roles", s.handleAnalyticsRoles).Methods("GET")
 	r.HandleFunc("/api/analytics/rf", s.handleAnalyticsRF).Methods("GET")
 	r.HandleFunc("/api/analytics/topology", s.handleAnalyticsTopology).Methods("GET")
 	r.HandleFunc("/api/analytics/channels", s.handleAnalyticsChannels).Methods("GET")

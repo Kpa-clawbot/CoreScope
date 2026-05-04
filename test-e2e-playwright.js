@@ -2327,6 +2327,42 @@ async function run() {
     assert(hasHslPolyline, 'At least one live-packet-trace polyline should have hsl() stroke color from hash');
   });
 
+  // --- Roles page (issue #818): renders distribution + per-role skew ---
+  await test('Roles page renders distribution table from /api/analytics/roles', async () => {
+    await page.goto(BASE + '/#/roles', { waitUntil: 'domcontentloaded' });
+    // Wait for roles-page.js to mount and the table to render.
+    await page.waitForSelector('.roles-page[data-page="roles"]', { timeout: 10000 });
+    await page.waitForFunction(() => {
+      var el = document.querySelector('#rolesContent');
+      if (!el) return false;
+      // Either the table renders, or the empty-state message appears.
+      return !!el.querySelector('#rolesTable') || /No roles to show|Failed to load/.test(el.textContent);
+    }, { timeout: 10000 });
+    var hasTable = await page.$('#rolesTable');
+    if (!hasTable) {
+      // Empty fixture is acceptable; at least the page must NOT show the
+      // generic "Page not yet implemented" placeholder (the bug we fixed).
+      var bodyText = await page.evaluate(() => document.body.innerText);
+      assert(!/Page not yet implemented/i.test(bodyText), 'Roles page must not show "Page not yet implemented" placeholder');
+      return;
+    }
+    // With data: header columns and at least one body row must be present.
+    var headers = await page.$$eval('#rolesTable thead th', ths => ths.map(t => t.textContent.trim()));
+    assert(headers.includes('Role'), 'Roles table must have a Role column, got ' + JSON.stringify(headers));
+    assert(headers.some(h => /Median/.test(h)), 'Roles table must have a Median |skew| column, got ' + JSON.stringify(headers));
+    var rowCount = await page.$$eval('#rolesTable tbody tr', rs => rs.length);
+    assert(rowCount > 0, 'Roles table should have at least one row when API returns data');
+    // API contract sanity check: shape matches the page's expectations.
+    var apiOk = await page.evaluate(async () => {
+      var r = await fetch('/api/analytics/roles');
+      if (!r.ok) return { ok: false, status: r.status };
+      var j = await r.json();
+      return { ok: true, hasRoles: Array.isArray(j.roles), hasTotal: typeof j.totalNodes === 'number' };
+    });
+    assert(apiOk.ok, '/api/analytics/roles must return 200, got ' + JSON.stringify(apiOk));
+    assert(apiOk.hasRoles && apiOk.hasTotal, '/api/analytics/roles response must have {roles:[], totalNodes:n}, got ' + JSON.stringify(apiOk));
+  });
+
   // --- Geofilter draft: save/load/download buttons (issue #819, rule 18) ---
   await test('Geofilter draft: save → reload → load → download round-trip', async () => {
     // Open the geofilter builder page and clear any prior draft.
