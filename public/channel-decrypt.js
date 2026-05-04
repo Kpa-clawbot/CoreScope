@@ -278,6 +278,10 @@ window.ChannelDecrypt = (function () {
     getKeys: getKeys,
     getStoredKeys: getStoredKeys,
     removeKey: removeKey,
+    // #1020 stubs — implemented in green commit
+    saveLabel: function () {},
+    getLabel: function () { return ''; },
+    getLabels: function () { return {}; },
     clearChannelCache: clearChannelCache,
     cacheMessages: cacheMessages,
     getCachedMessages: getCachedMessages,
