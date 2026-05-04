@@ -524,6 +524,19 @@ button.ch-item.selected { background: var(--selected-bg); }
 .ch-item-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 2px; }
 .ch-item-name { font-weight: 600; font-size: 14px; }
 .ch-item-time { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.ch-unread-badge {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 6px;
+  margin-left: 4px;
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 9px;
+  text-align: center;
+  line-height: 1.4;
+}
 .ch-remove-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 13px; padding: 0 2px; margin-left: 4px; opacity: 0; transition: opacity 0.15s; line-height: 1; }
 button.ch-item:hover .ch-remove-btn { opacity: 0.6; }
 .ch-remove-btn:hover { opacity: 1 !important; color: var(--danger, #dc2626); }

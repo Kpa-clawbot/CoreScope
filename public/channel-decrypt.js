@@ -211,14 +211,84 @@ window.ChannelDecrypt = (function () {
   var decryptPacket = decrypt;
 
   // ---- Live PSK decrypt (WS path) ----
-  // Stubs (red commit): real implementation lands in the green commit so the
-  // test fails on an assertion, not on a missing symbol.
+  //
+  // Build a Map<channelHashByte, { channelName, keyBytes, keyHex }> from all
+  // stored PSK keys so the WebSocket handler can do an O(1) lookup on each
+  // incoming GRP_TXT packet. Hash byte derivation is async, so we cache the
+  // map between calls and only rebuild when the stored-keys set changes.
+  var _keyMapCache = null;
+  var _keyMapSig = '';
+
+  function _keysSignature(keys) {
+    var names = Object.keys(keys).sort();
+    var sig = '';
+    for (var i = 0; i < names.length; i++) {
+      sig += names[i] + '=' + keys[names[i]] + ';';
+    }
+    return sig;
+  }
+
   async function buildKeyMap() {
-    return new Map();
+    var keys = getKeys();
+    var sig = _keysSignature(keys);
+    if (_keyMapCache && _keyMapSig === sig) return _keyMapCache;
+    var map = new Map();
+    var names = Object.keys(keys);
+    for (var i = 0; i < names.length; i++) {
+      var channelName = names[i];
+      var keyHex = keys[channelName];
+      if (!keyHex || typeof keyHex !== 'string') continue;
+      var keyBytes;
+      try { keyBytes = hexToBytes(keyHex); } catch (e) { continue; }
+      if (keyBytes.length !== 16) continue;
+      var hashByte;
+      try { hashByte = await computeChannelHash(keyBytes); } catch (e) { continue; }
+      // First-write-wins on collision (rare): different channel names can
+      // hash to the same byte. The downstream MAC check still gates rendering.
+      if (!map.has(hashByte)) {
+        map.set(hashByte, { channelName: channelName, keyBytes: keyBytes, keyHex: keyHex });
+      }
+    }
+    _keyMapCache = map;
+    _keyMapSig = sig;
+    return map;
   }
-  async function tryDecryptLive(_payload, _keyMap) {
-    return null;
+
+  /**
+   * Attempt to decrypt a live GRP_TXT payload using a prebuilt key map.
+   * Returns { sender, text, channelName, channelHashByte } on success,
+   * or null when no key matches, MAC verification fails, or the payload
+   * is not an encrypted GRP_TXT.
+   */
+  async function tryDecryptLive(payload, keyMap) {
+    if (!payload || payload.type !== 'GRP_TXT') return null;
+    if (!payload.encryptedData || !payload.mac) return null;
+    if (!keyMap || typeof keyMap.get !== 'function') return null;
+    var hashByte = payload.channelHash;
+    // channelHash arrives as either a number or a hex string in some paths;
+    // normalize to number so Map.get hits.
+    if (typeof hashByte === 'string') {
+      var n = parseInt(hashByte, 16);
+      if (!isFinite(n)) return null;
+      hashByte = n;
+    }
+    if (typeof hashByte !== 'number') return null;
+    var entry = keyMap.get(hashByte);
+    if (!entry) return null;
+    var result;
+    try {
+      result = await decrypt(entry.keyBytes, payload.mac, payload.encryptedData);
+    } catch (e) { return null; }
+    if (!result) return null;
+    return {
+      sender: result.sender || 'Unknown',
+      text: result.message || '',
+      channelName: entry.channelName,
+      channelHashByte: hashByte,
+      timestamp: result.timestamp || null
+    };
   }
+
 
   // ---- Key storage (localStorage) ----
 
@@ -226,6 +296,7 @@ window.ChannelDecrypt = (function () {
     var keys = getKeys();
     keys[channelName] = keyHex;
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(keys)); } catch (e) { /* quota */ }
+    _keyMapCache = null; // invalidate live-decrypt index
     if (typeof label === 'string' && label.trim()) {
       saveLabel(channelName, label.trim());
     }
@@ -248,6 +319,7 @@ window.ChannelDecrypt = (function () {
     var keys = getKeys();
     delete keys[channelName];
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(keys)); } catch (e) { /* quota */ }
+    _keyMapCache = null; // invalidate live-decrypt index
     // Also clear cached messages and any label for this channel (#1020)
     clearChannelCache(channelName);
     var labels = getLabels();

@@ -1032,8 +1032,68 @@
       processWSBatch(msgs, selectedRegions);
     }
 
+    // Pre-pass: rewrite encrypted GRP_TXT live packets into decrypted form
+    // when a stored PSK key matches their channel hash byte (#1029 — live
+    // PSK decrypt). Without this, users viewing a PSK-decrypted channel
+    // had to refresh the page to see new messages.
+    async function decryptLivePSKBatch(msgs) {
+      if (typeof ChannelDecrypt === 'undefined' ||
+          typeof ChannelDecrypt.tryDecryptLive !== 'function') {
+        return;
+      }
+      // Quick scan: do any messages look like encrypted GRP_TXT?
+      var anyEncrypted = false;
+      for (var i = 0; i < msgs.length; i++) {
+        var p = msgs[i] && msgs[i].data && msgs[i].data.decoded && msgs[i].data.decoded.payload;
+        if (p && p.type === 'GRP_TXT' && p.encryptedData && p.mac) { anyEncrypted = true; break; }
+      }
+      if (!anyEncrypted) return;
+      var keyMap;
+      try { keyMap = await ChannelDecrypt.buildKeyMap(); } catch (e) { return; }
+      if (!keyMap || keyMap.size === 0) return;
+      for (var j = 0; j < msgs.length; j++) {
+        var m = msgs[j];
+        var payload = m && m.data && m.data.decoded && m.data.decoded.payload;
+        if (!payload || payload.type !== 'GRP_TXT' || !payload.encryptedData || !payload.mac) continue;
+        var dec;
+        try { dec = await ChannelDecrypt.tryDecryptLive(payload, keyMap); } catch (e) { dec = null; }
+        if (!dec) continue;
+        // Rewrite payload into a CHAN-like shape so processWSBatch picks it
+        // up as a real message instead of an encrypted blob. Keep the original
+        // hash byte for any downstream consumer that wants it.
+        payload.channel = dec.channelName;
+        payload.sender = dec.sender;
+        payload.text = dec.sender ? (dec.sender + ': ' + dec.text) : dec.text;
+        payload.decryptedLocally = true;
+        if (m.data.decoded.header) {
+          // Leave payloadTypeName as GRP_TXT — processWSBatch already
+          // accepts both 'message' and GRP_TXT-typed packet messages.
+        }
+      }
+    }
+
     wsHandler = debouncedOnWS(function (msgs) {
-      handleWSBatch(msgs);
+      var selectedRegions = getSelectedRegionsSnapshot();
+      var prior = selectedHash;
+      decryptLivePSKBatch(msgs).then(function () {
+        // Bump unread for live-decrypted channels the user is NOT viewing.
+        // Done here (not inside processWSBatch) so the count reflects ONLY
+        // newly-decrypted live packets, not historical-fetch path.
+        var bumped = false;
+        for (var i = 0; i < msgs.length; i++) {
+          var p = msgs[i] && msgs[i].data && msgs[i].data.decoded && msgs[i].data.decoded.payload;
+          if (!p || !p.decryptedLocally) continue;
+          var chName = p.channel;
+          if (!chName || chName === prior) continue;
+          var ch = channels.find(function (c) { return c.hash === chName || c.name === chName || c.hash === ('user:' + chName); });
+          if (ch) {
+            ch.unread = (ch.unread || 0) + 1;
+            bumped = true;
+          }
+        }
+        processWSBatch(msgs, selectedRegions);
+        if (bumped) renderChannelList();
+      });
     });
     window._channelsHandleWSBatchForTest = handleWSBatch;
     window._channelsProcessWSBatchForTest = processWSBatch;
@@ -1137,12 +1197,16 @@
       // #1020: explicit badge marker for "your key" so it's distinguishable
       // from server-known encrypted rows at a glance and for screen readers.
       const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key">🔑</span>' : '';
+      // #1029 Unread badge — bumped by live PSK decrypt for channels not currently selected.
+      const unreadBadge = (ch.unread && ch.unread > 0)
+        ? ' <span class="ch-unread-badge" data-unread-channel="' + escapeHtml(ch.hash) + '" title="' + ch.unread + ' new" aria-label="' + ch.unread + ' unread">' + (ch.unread > 99 ? '99+' : ch.unread) + '</span>'
+        : '';
 
       return `<button class="ch-item${sel}${encClass}" data-hash="${ch.hash}"${borderStyle} type="button" role="option" aria-selected="${selectedHash === ch.hash ? 'true' : 'false'}" aria-label="${escapeHtml(name)}"${isEncrypted ? ' data-encrypted="true"' : ''}${isUserAdded ? ' data-user-added="true"' : ''}>
         <div class="ch-badge" style="background:${color}" aria-hidden="true">${badgeIcon ? badgeIcon : escapeHtml(abbr)}</div>
         <div class="ch-item-body">
           <div class="ch-item-top">
-            <span class="ch-item-name">${escapeHtml(name)}</span>${userBadge}
+            <span class="ch-item-name">${escapeHtml(name)}</span>${userBadge}${unreadBadge}
             <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="Change channel color" aria-label="Change color for ${escapeHtml(name)}"></span>${chColor ? '<span class="ch-color-clear" data-channel="' + escapeHtml(ch.hash) + '" title="Clear color" aria-label="Clear color for ' + escapeHtml(name) + '">✕</span>' : ''}
             <span class="ch-item-time" data-channel-hash="${ch.hash}">${time}</span>${removeBtn}
           </div>
@@ -1156,6 +1220,9 @@
     const rp = RegionFilter.getRegionParam() || '';
     const request = beginMessageRequest(hash, rp);
     selectedHash = hash;
+    // Clear unread badge on the channel we're about to view (#1029).
+    var __selCh = channels.find(function (c) { return c.hash === hash; });
+    if (__selCh && __selCh.unread) { __selCh.unread = 0; }
     history.replaceState(null, '', `#/channels/${encodeURIComponent(hash)}`);
     renderChannelList();
     const ch = channels.find(c => c.hash === hash);
