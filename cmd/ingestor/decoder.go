@@ -610,6 +610,21 @@ func DecodePacket(hexString string, channelKeys map[string]string, validateSigna
 		}
 		// The header path hops count represents SNR entries = completed hops
 		hopsCompleted := path.HashCount
+		// Extract per-hop SNR from header path bytes (int8, quarter-dB encoding).
+		// Mirrors cmd/server/decoder.go — must be done at ingest time so SNR
+		// values are persisted in decoded_json (server endpoint serves DB as-is).
+		if hopsCompleted > 0 && len(path.Hops) >= hopsCompleted {
+			snrVals := make([]float64, 0, hopsCompleted)
+			for i := 0; i < hopsCompleted; i++ {
+				b, err := hex.DecodeString(path.Hops[i])
+				if err == nil && len(b) == 1 {
+					snrVals = append(snrVals, float64(int8(b[0]))/4.0)
+				}
+			}
+			if len(snrVals) > 0 {
+				payload.SNRValues = snrVals
+			}
+		}
 		pathBytes, err := hex.DecodeString(payload.PathData)
 		if err == nil && payload.TraceFlags != nil {
 			// path_sz from flags byte is a power-of-two exponent per firmware:
