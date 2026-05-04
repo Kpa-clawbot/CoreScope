@@ -929,6 +929,11 @@
         if (!payload) continue;
 
         var channelName = payload.channel || 'unknown';
+        // For live-decrypted user-added (PSK) channels, decryptLivePSKBatch
+        // also stamps payload.channelKey ("user:<name>") so we route the
+        // message to the correct sidebar row and to the open chat view.
+        // Falls back to channelName for server-known CHAN packets.
+        var channelKey = payload.channelKey || channelName;
         var rawText = payload.text || '';
         var sender = payload.sender || null;
         var displayText = rawText;
@@ -955,10 +960,10 @@
         var observer = m.data?.packet?.observer_name || m.data?.observer || null;
 
         // Update channel list entry — only once per unique packet hash
-        var isFirstObservation = pktHash && !seenHashes.has(pktHash + ':' + channelName);
-        if (pktHash) seenHashes.add(pktHash + ':' + channelName);
+        var isFirstObservation = pktHash && !seenHashes.has(pktHash + ':' + channelKey);
+        if (pktHash) seenHashes.add(pktHash + ':' + channelKey);
 
-        var ch = channels.find(function (c) { return c.hash === channelName; });
+        var ch = channels.find(function (c) { return c.hash === channelKey; });
         if (ch) {
           if (isFirstObservation) ch.messageCount = (ch.messageCount || 0) + 1;
           ch.lastActivityMs = Date.now();
@@ -968,7 +973,7 @@
         } else if (isFirstObservation) {
           // New channel we haven't seen
           channels.push({
-            hash: channelName,
+            hash: channelKey,
             name: channelName,
             messageCount: 1,
             lastActivityMs: Date.now(),
@@ -979,7 +984,7 @@
         }
 
         // If this message is for the selected channel, append to messages
-        if (selectedHash && channelName === selectedHash) {
+        if (selectedHash && channelKey === selectedHash) {
           // Deduplicate by packet hash — same message seen by multiple observers
           var existing = pktHash ? messages.find(function (msg) { return msg.packetHash === pktHash; }) : null;
           if (existing) {
@@ -1062,6 +1067,18 @@
         // up as a real message instead of an encrypted blob. Keep the original
         // hash byte for any downstream consumer that wants it.
         payload.channel = dec.channelName;
+        // For user-added PSK channels the sidebar entry & selectedHash use a
+        // "user:<name>" key (see addUserChannel). Stamp the canonical key on
+        // the payload so processWSBatch routes the live message to the
+        // correct sidebar row and to the open chat view instead of dropping
+        // it / creating a duplicate plain entry. Falls back to the raw name
+        // for non-user channels (server-known CHAN paths still work).
+        var userKey = 'user:' + dec.channelName;
+        var hasUserCh = false;
+        for (var ck = 0; ck < channels.length; ck++) {
+          if (channels[ck].hash === userKey) { hasUserCh = true; break; }
+        }
+        payload.channelKey = hasUserCh ? userKey : dec.channelName;
         payload.sender = dec.sender;
         payload.text = dec.sender ? (dec.sender + ': ' + dec.text) : dec.text;
         payload.decryptedLocally = true;
@@ -1083,9 +1100,12 @@
         for (var i = 0; i < msgs.length; i++) {
           var p = msgs[i] && msgs[i].data && msgs[i].data.decoded && msgs[i].data.decoded.payload;
           if (!p || !p.decryptedLocally) continue;
-          var chName = p.channel;
-          if (!chName || chName === prior) continue;
-          var ch = channels.find(function (c) { return c.hash === chName || c.name === chName || c.hash === ('user:' + chName); });
+          // Use the canonical sidebar key stamped by decryptLivePSKBatch so
+          // the comparison against `prior` (= selectedHash) actually matches
+          // for user-added (user:*-prefixed) channels.
+          var chKey = p.channelKey || p.channel;
+          if (!chKey || chKey === prior) continue;
+          var ch = channels.find(function (c) { return c.hash === chKey || c.name === chKey || c.hash === ('user:' + chKey); });
           if (ch) {
             ch.unread = (ch.unread || 0) + 1;
             bumped = true;
