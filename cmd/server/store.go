@@ -2441,6 +2441,145 @@ func (s *PacketStore) fetchAndCacheRegionObs(region string) map[string]bool {
 	return m
 }
 
+// iataMatchesRegion returns true if iata matches any of the comma-separated
+// region codes in regionParam. Comparison is case-insensitive and trim-tolerant.
+// Empty iata never matches; empty regionParam never matches.
+//
+// #804: shared helper used by analytics to attribute transmissions to a node's
+// HOME region (derived from observers that hear its zero-hop direct adverts)
+// rather than to the observer that happened to relay a packet.
+func iataMatchesRegion(iata, regionParam string) bool {
+	if iata == "" || regionParam == "" {
+		return false
+	}
+	codes := normalizeRegionCodes(regionParam)
+	if len(codes) == 0 {
+		return false
+	}
+	got := strings.TrimSpace(strings.ToUpper(iata))
+	if got == "" {
+		return false
+	}
+	for _, c := range codes {
+		if c == got {
+			return true
+		}
+	}
+	return false
+}
+
+// computeNodeHomeRegions returns a pubkey → IATA map deriving each node's
+// HOME region from zero-hop DIRECT adverts. A zero-hop direct advert is the
+// most authoritative location signal because the path byte is set locally on
+// the originating radio and the packet has not been relayed: the observer
+// that hears it is necessarily within direct RF range of the originator.
+//
+// When a node has zero-hop direct adverts heard by observers from multiple
+// regions, the most-frequently-observed region wins (geographic plurality).
+//
+// Caller must hold s.mu (read or write). Returns empty map (not nil) if no
+// observers are loaded or no zero-hop direct adverts have been seen.
+//
+// #804: feeds analytics region-attribution so a multi-byte repeater whose
+// flood adverts get relayed across regions is still attributed to its home.
+func (s *PacketStore) computeNodeHomeRegions() map[string]string {
+	// Build observer → IATA map. observers table is small (≪ packets), so a
+	// single DB read here is acceptable; resolveRegionObservers does similar.
+	obsIATA := make(map[string]string, 64)
+	if s.db != nil {
+		if observers, err := s.db.GetObservers(); err == nil {
+			for _, o := range observers {
+				if o.IATA != nil && *o.IATA != "" {
+					obsIATA[o.ID] = strings.TrimSpace(strings.ToUpper(*o.IATA))
+				}
+			}
+		}
+	}
+	if len(obsIATA) == 0 {
+		return map[string]string{}
+	}
+
+	// Tally zero-hop direct ADVERT region observations per pubkey.
+	type tally struct {
+		counts map[string]int
+	}
+	per := make(map[string]*tally, 256)
+
+	for _, tx := range s.packets {
+		if tx.RawHex == "" || len(tx.RawHex) < 4 {
+			continue
+		}
+		if tx.PayloadType == nil || *tx.PayloadType != PayloadADVERT {
+			continue
+		}
+		if tx.DecodedJSON == "" {
+			continue
+		}
+		header, err := strconv.ParseUint(tx.RawHex[:2], 16, 8)
+		if err != nil {
+			continue
+		}
+		routeType := header & 0x03
+		if routeType != uint64(RouteDirect) && routeType != uint64(RouteTransportDirect) {
+			continue
+		}
+		// Path byte index — for direct/transport-direct it's at offset 1
+		// (matches the analytics decoder's pathByteIdx logic).
+		if len(tx.RawHex) < 4 {
+			continue
+		}
+		pathByte, err := strconv.ParseUint(tx.RawHex[2:4], 16, 8)
+		if err != nil {
+			continue
+		}
+		hopCount := pathByte & 0x3F
+		if hopCount != 0 {
+			continue
+		}
+
+		var d map[string]interface{}
+		if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {
+			continue
+		}
+		pk, _ := d["pubKey"].(string)
+		if pk == "" {
+			pk, _ = d["public_key"].(string)
+		}
+		if pk == "" {
+			continue
+		}
+
+		for _, obs := range tx.Observations {
+			iata := obsIATA[obs.ObserverID]
+			if iata == "" {
+				continue
+			}
+			t := per[pk]
+			if t == nil {
+				t = &tally{counts: map[string]int{}}
+				per[pk] = t
+			}
+			t.counts[iata]++
+		}
+	}
+
+	out := make(map[string]string, len(per))
+	for pk, t := range per {
+		var bestIATA string
+		bestCount := 0
+		for iata, n := range t.counts {
+			if n > bestCount || (n == bestCount && iata < bestIATA) {
+				bestCount = n
+				bestIATA = iata
+			}
+		}
+		if bestIATA != "" {
+			out[pk] = bestIATA
+		}
+	}
+	return out
+}
+
 // enrichObs returns a map with observation fields + transmission fields.
 func (s *PacketStore) enrichObs(obs *StoreObs) map[string]interface{} {
 	tx := s.byTxID[obs.TransmissionID]
@@ -5666,6 +5805,16 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 		regionObs = s.resolveRegionObservers(region)
 	}
 
+	// #804: derive each node's HOME region from zero-hop direct adverts (the
+	// most authoritative location signal — those packets cannot have been
+	// relayed). When non-empty, multi-byte node attribution prefers this
+	// over observer-region. Falls back to observer-region when unknown.
+	nodeHomeRegion := s.computeNodeHomeRegions()
+	attributionMethod := "observer"
+	if region != "" && len(nodeHomeRegion) > 0 {
+		attributionMethod = "repeater"
+	}
+
 	allNodes, pm := s.getCachedNodesAndPM()
 
 	// Build pubkey→role map for filtering by node type.
@@ -5683,18 +5832,6 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 	for _, tx := range s.packets {
 		if tx.RawHex == "" {
 			continue
-		}
-		if regionObs != nil {
-			match := false
-			for _, obs := range tx.Observations {
-				if regionObs[obs.ObserverID] {
-					match = true
-					break
-				}
-			}
-			if !match {
-				continue
-			}
 		}
 
 		// Parse header and path byte
@@ -5725,52 +5862,84 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 			continue
 		}
 
-		// Track originator from advert packets (including zero-hop adverts,
-		// keyed by pubKey so same-name nodes don't merge).
+		// #804: pre-extract originator pubkey for ADVERT packets so we can
+		// (a) relax observer-region filter when the originator's HOME region
+		//     matches the requested region (a flood relay heard outside the
+		//     home region must still attribute to the home), and
+		// (b) reuse the parsed values below without re-parsing.
+		var advertPK, advertName string
+		var advertParsed bool
 		if tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT && tx.DecodedJSON != "" {
 			var d map[string]interface{}
 			if json.Unmarshal([]byte(tx.DecodedJSON), &d) == nil {
-				pk := ""
 				if v, ok := d["pubKey"].(string); ok {
-					pk = v
+					advertPK = v
 				} else if v, ok := d["public_key"].(string); ok {
-					pk = v
+					advertPK = v
 				}
-				if pk != "" {
-					name := ""
-					if n, ok := d["name"].(string); ok {
-						name = n
-					}
-					if name == "" {
-						if len(pk) >= 8 {
-							name = pk[:8]
-						} else {
-							name = pk
-						}
-					}
-					// Skip zero-hop direct adverts for hash_size — the
-					// path byte is locally generated and unreliable.
-					// Still count the packet and update lastSeen.
-					isZeroHop := (routeType == uint64(RouteDirect) || routeType == uint64(RouteTransportDirect)) && (actualPathByte&0x3F) == 0
-					if byNode[pk] == nil {
-						role := nodeRoleByPK[pk] // empty if unknown
-						initHS := hashSize
-						if isZeroHop {
-							initHS = 0
-						}
-						byNode[pk] = map[string]interface{}{
-							"hashSize": initHS, "packets": 0,
-							"lastSeen": tx.FirstSeen, "name": name,
-							"role": role,
-						}
-					}
-					byNode[pk]["packets"] = byNode[pk]["packets"].(int) + 1
-					if !isZeroHop {
-						byNode[pk]["hashSize"] = hashSize
-					}
-					byNode[pk]["lastSeen"] = tx.FirstSeen
+				if n, ok := d["name"].(string); ok {
+					advertName = n
+				}
+				advertParsed = advertPK != ""
+			}
+		}
+
+		if regionObs != nil {
+			match := false
+			for _, obs := range tx.Observations {
+				if regionObs[obs.ObserverID] {
+					match = true
+					break
 				}
 			}
+			// #804: allow ADVERTs from a node whose HOME region matches the
+			// requested region even if no observer in that region heard this
+			// particular packet (e.g. flood relay heard only by an out-of-
+			// region observer). Conservative: only ADVERTs (the source is
+			// known by pubkey) and only when home is established.
+			if !match && advertParsed {
+				if home, ok := nodeHomeRegion[advertPK]; ok && iataMatchesRegion(home, region) {
+					match = true
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+
+		// Track originator from advert packets (including zero-hop adverts,
+		// keyed by pubKey so same-name nodes don't merge).
+		if advertParsed {
+			pk := advertPK
+			name := advertName
+			if name == "" {
+				if len(pk) >= 8 {
+					name = pk[:8]
+				} else {
+					name = pk
+				}
+			}
+			// Skip zero-hop direct adverts for hash_size — the
+			// path byte is locally generated and unreliable.
+			// Still count the packet and update lastSeen.
+			isZeroHop := (routeType == uint64(RouteDirect) || routeType == uint64(RouteTransportDirect)) && (actualPathByte&0x3F) == 0
+			if byNode[pk] == nil {
+				role := nodeRoleByPK[pk] // empty if unknown
+				initHS := hashSize
+				if isZeroHop {
+					initHS = 0
+				}
+				byNode[pk] = map[string]interface{}{
+					"hashSize": initHS, "packets": 0,
+					"lastSeen": tx.FirstSeen, "name": name,
+					"role": role,
+				}
+			}
+			byNode[pk]["packets"] = byNode[pk]["packets"].(int) + 1
+			if !isZeroHop {
+				byNode[pk]["hashSize"] = hashSize
+			}
+			byNode[pk]["lastSeen"] = tx.FirstSeen
 		}
 
 		// Distribution/hourly/uniqueHops only for packets with relay hops
@@ -5851,6 +6020,15 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 	// Multi-byte nodes
 	multiByteNodes := make([]map[string]interface{}, 0)
 	for pk, data := range byNode {
+		// #804: when a region filter is active, prefer the repeater's HOME
+		// region over the observer that happened to relay it. Falls back to
+		// the (already-applied) observer-region filter when the node's home
+		// region is unknown.
+		if region != "" {
+			if home, ok := nodeHomeRegion[pk]; ok && !iataMatchesRegion(home, region) {
+				continue
+			}
+		}
 		if data["hashSize"].(int) > 1 {
 			multiByteNodes = append(multiByteNodes, map[string]interface{}{
 				"name": data["name"], "hashSize": data["hashSize"],
@@ -5865,10 +6043,16 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 
 	// Distribution by repeaters: count unique REPEATER nodes per hash size
 	distributionByRepeaters := map[string]int{"1": 0, "2": 0, "3": 0}
-	for _, data := range byNode {
+	for pk, data := range byNode {
 		role, _ := data["role"].(string)
 		if !strings.Contains(strings.ToLower(role), "repeater") {
 			continue
+		}
+		// #804: same repeater-region preference as multiByteNodes.
+		if region != "" {
+			if home, ok := nodeHomeRegion[pk]; ok && !iataMatchesRegion(home, region) {
+				continue
+			}
 		}
 		hs := data["hashSize"].(int)
 		key := strconv.Itoa(hs)
@@ -5882,6 +6066,7 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 		"hourly":                  hourly,
 		"topHops":                 topHops,
 		"multiByteNodes":          multiByteNodes,
+		"attributionMethod":       attributionMethod,
 	}
 }
 
