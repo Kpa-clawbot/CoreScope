@@ -1105,6 +1105,17 @@ func (db *DB) GetObserverIdsForRegion(regionParam string) ([]string, error) {
 	return ids, nil
 }
 
+// normalizeRegionCodes parses a region query parameter into a list of upper-case
+// IATA codes. Returns nil to signal "no filter" (match all regions).
+//
+// Sentinel handling (issue #770): the frontend region filter dropdown labels its
+// catch-all option "All". When that option is selected the UI may send
+// ?region=All; older code interpreted that literally and tried to match an
+// IATA code "ALL", which never exists, returning an empty result set. Treat
+// "All" / "ALL" / "all" (case-insensitive, optionally surrounded by whitespace
+// or mixed with empty CSV slots) as equivalent to an empty value.
+//
+// Real IATA codes (e.g. "SJC", "PDX") still pass through unchanged.
 func normalizeRegionCodes(regionParam string) []string {
 	if regionParam == "" {
 		return nil
@@ -1113,9 +1124,13 @@ func normalizeRegionCodes(regionParam string) []string {
 	codes := make([]string, 0, len(tokens))
 	for _, token := range tokens {
 		code := strings.TrimSpace(strings.ToUpper(token))
-		if code != "" {
-			codes = append(codes, code)
+		if code == "" || code == "ALL" {
+			continue
 		}
+		codes = append(codes, code)
+	}
+	if len(codes) == 0 {
+		return nil
 	}
 	return codes
 }
