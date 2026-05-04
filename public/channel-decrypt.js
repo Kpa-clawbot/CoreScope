@@ -38,6 +38,25 @@ window.ChannelDecrypt = (function () {
 
   // ---- Key derivation ----
 
+  // Detect whether SubtleCrypto is available. SubtleCrypto is only exposed
+  // in **secure contexts** (HTTPS or localhost) — when CoreScope is served
+  // over plain HTTP, `crypto.subtle` is undefined and any digest/HMAC call
+  // throws. We fall back to the vendored pure-JS implementation in
+  // public/vendor/sha256-hmac.js. PR #1021 did the same for AES-ECB.
+  function hasSubtle() {
+    return typeof crypto !== 'undefined' && crypto && crypto.subtle && typeof crypto.subtle.digest === 'function';
+  }
+
+  function pureCryptoOrThrow() {
+    var host = (typeof window !== 'undefined') ? window
+             : (typeof self !== 'undefined') ? self : null;
+    if (!host || !host.PureCrypto || !host.PureCrypto.sha256 || !host.PureCrypto.hmacSha256) {
+      throw new Error('PureCrypto vendor module not loaded (public/vendor/sha256-hmac.js). ' +
+        'crypto.subtle is unavailable (HTTP context) and no fallback present.');
+    }
+    return host.PureCrypto;
+  }
+
   /**
    * Derive AES-128 key from channel name: SHA-256("#channelname")[:16].
    * @param {string} channelName - e.g. "#LongFast"
@@ -45,8 +64,12 @@ window.ChannelDecrypt = (function () {
    */
   async function deriveKey(channelName) {
     var enc = new TextEncoder();
-    var hash = await crypto.subtle.digest('SHA-256', enc.encode(channelName));
-    return new Uint8Array(hash).slice(0, 16);
+    var data = enc.encode(channelName);
+    if (hasSubtle()) {
+      var hash = await crypto.subtle.digest('SHA-256', data);
+      return new Uint8Array(hash).slice(0, 16);
+    }
+    return pureCryptoOrThrow().sha256(data).slice(0, 16);
   }
 
   /**
@@ -55,8 +78,11 @@ window.ChannelDecrypt = (function () {
    * @returns {Promise<number>} single byte (0-255)
    */
   async function computeChannelHash(key) {
-    var hash = await crypto.subtle.digest('SHA-256', key);
-    return new Uint8Array(hash)[0];
+    if (hasSubtle()) {
+      var hash = await crypto.subtle.digest('SHA-256', key);
+      return new Uint8Array(hash)[0];
+    }
+    return pureCryptoOrThrow().sha256(key)[0];
   }
 
   // ---- AES-128-ECB via vendored pure-JS implementation ----
@@ -104,13 +130,17 @@ window.ChannelDecrypt = (function () {
     secret.set(key, 0);
     // remaining 16 bytes are already 0
 
-    var cryptoKey = await crypto.subtle.importKey(
-      'raw', secret, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
-    );
-    var sig = await crypto.subtle.sign('HMAC', cryptoKey, ciphertext);
-    var sigBytes = new Uint8Array(sig);
-
     var macBytes = hexToBytes(macHex);
+    var sigBytes;
+    if (hasSubtle() && typeof crypto.subtle.importKey === 'function' && typeof crypto.subtle.sign === 'function') {
+      var cryptoKey = await crypto.subtle.importKey(
+        'raw', secret, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+      );
+      var sig = await crypto.subtle.sign('HMAC', cryptoKey, ciphertext);
+      sigBytes = new Uint8Array(sig);
+    } else {
+      sigBytes = pureCryptoOrThrow().hmacSha256(secret, ciphertext);
+    }
     return sigBytes[0] === macBytes[0] && sigBytes[1] === macBytes[1];
   }
 
