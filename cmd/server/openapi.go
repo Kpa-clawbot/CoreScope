@@ -45,6 +45,7 @@ func routeDescriptions() map[string]routeMeta {
 		"POST /api/perf/reset": {Summary: "Reset performance stats", Tag: "admin", Auth: true},
 		"POST /api/admin/prune": {Summary: "Prune old data", Description: "Deletes packets and nodes older than the configured retention period.", Tag: "admin", Auth: true},
 		"GET /api/debug/affinity": {Summary: "Debug neighbor affinity scores", Tag: "admin", Auth: true},
+		"GET /api/backup": {Summary: "Download SQLite backup", Description: "Streams a consistent SQLite snapshot of the analyzer DB (VACUUM INTO). Response is application/octet-stream with attachment filename corescope-backup-<unix>.db.", Tag: "admin", Auth: true},
 
 		// Packets
 		"GET /api/packets": {Summary: "List packets", Description: "Returns decoded packets with filtering, sorting, and pagination.", Tag: "packets",

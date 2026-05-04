@@ -132,6 +132,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.Handle("/api/admin/prune", s.requireAPIKey(http.HandlerFunc(s.handleAdminPrune))).Methods("POST")
 	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
 	r.Handle("/api/dropped-packets", s.requireAPIKey(http.HandlerFunc(s.handleDroppedPackets))).Methods("GET")
+	r.Handle("/api/backup", s.requireAPIKey(http.HandlerFunc(s.handleBackup))).Methods("GET")
 
 	// Packet endpoints
 	r.HandleFunc("/api/packets/observations", s.handleBatchObservations).Methods("POST")
