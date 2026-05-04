@@ -1947,3 +1947,32 @@ func TestDecodeTracePayloadFailSetsAnomaly(t *testing.T) {
 		t.Error("expected Anomaly to be set when TRACE payload decode fails but observation is stored")
 	}
 }
+
+// TestDecodeTraceExtractsSNRValues verifies that for TRACE packets, the header
+// path bytes are interpreted as int8 SNR values (quarter-dB) and exposed via
+// payload.SNRValues. Mirrors logic in cmd/server/decoder.go (issue: SNR values
+// extracted by server but never written into decoded_json by ingestor).
+//
+// Packet 26022FF8116A23A80000000001C0DE1000DEDE:
+//   header  0x26 → TRACE (pt=9), DIRECT (rt=2)
+//   pathByte 0x02 → hash_size=1, hash_count=2
+//   header path: 2F F8 → SNR = [int8(0x2F)/4, int8(0xF8)/4] = [11.75, -2.0]
+//   payload (15B): tag=116A23A8 auth=00000000 flags=0x01 pathData=C0DE1000DEDE
+func TestDecodeTraceExtractsSNRValues(t *testing.T) {
+	pkt, err := DecodePacket("26022FF8116A23A80000000001C0DE1000DEDE", nil, false)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if pkt.Payload.Type != "TRACE" {
+		t.Fatalf("payload type=%s, want TRACE", pkt.Payload.Type)
+	}
+	if len(pkt.Payload.SNRValues) != 2 {
+		t.Fatalf("len(SNRValues)=%d, want 2 (got %v)", len(pkt.Payload.SNRValues), pkt.Payload.SNRValues)
+	}
+	if pkt.Payload.SNRValues[0] != 11.75 {
+		t.Errorf("SNRValues[0]=%v, want 11.75", pkt.Payload.SNRValues[0])
+	}
+	if pkt.Payload.SNRValues[1] != -2.0 {
+		t.Errorf("SNRValues[1]=%v, want -2.0", pkt.Payload.SNRValues[1])
+	}
+}

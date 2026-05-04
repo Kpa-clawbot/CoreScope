@@ -131,6 +131,7 @@ type Payload struct {
 	SenderTimestamp  uint32    `json:"sender_timestamp,omitempty"`
 	EphemeralPubKey string     `json:"ephemeralPubKey,omitempty"`
 	PathData      string       `json:"pathData,omitempty"`
+	SNRValues     []float64    `json:"snrValues,omitempty"`
 	Tag           uint32       `json:"tag,omitempty"`
 	AuthCode      uint32       `json:"authCode,omitempty"`
 	TraceFlags    *int         `json:"traceFlags,omitempty"`
