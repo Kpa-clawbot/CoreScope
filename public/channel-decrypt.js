@@ -58,42 +58,34 @@ window.ChannelDecrypt = (function () {
     return new Uint8Array(hash)[0];
   }
 
-  // ---- AES-128-ECB via Web Crypto (CBC with zero IV, block-by-block) ----
+  // ---- AES-128-ECB via vendored pure-JS implementation ----
+  //
+  // Web Crypto exposes AES-CBC/CTR/GCM but NOT raw AES-ECB. The previous
+  // implementation simulated ECB with AES-CBC + zero IV + a dummy PKCS7
+  // padding block; that hack throws OperationError on real ciphertext
+  // because Web Crypto validates PKCS7 padding on the decrypted output
+  // and the dummy padding bytes rarely form a valid PKCS7 sequence
+  // after decryption. We use a pure-JS AES-128 ECB core
+  // (public/vendor/aes-ecb.js, MIT, derived from aes-js by Richard
+  // Moore) so decryption is deterministic across browsers and works in
+  // HTTP contexts.
 
   /**
-   * Decrypt AES-128-ECB by decrypting each 16-byte block independently
-   * using AES-CBC with a zero IV (equivalent to ECB for single blocks).
+   * Decrypt AES-128-ECB.
    * @param {Uint8Array} key - 16-byte AES key
-   * @param {Uint8Array} ciphertext - must be multiple of 16 bytes
-   * @returns {Promise<Uint8Array>} plaintext
+   * @param {Uint8Array} ciphertext - must be a non-zero multiple of 16 bytes
+   * @returns {Promise<Uint8Array|null>} plaintext, or null on invalid input
    */
   async function decryptECB(key, ciphertext) {
-    if (ciphertext.length === 0 || ciphertext.length % 16 !== 0) {
+    if (!ciphertext || ciphertext.length === 0 || ciphertext.length % 16 !== 0) {
       return null;
     }
-    var cryptoKey = await crypto.subtle.importKey(
-      'raw', key, { name: 'AES-CBC' }, false, ['decrypt']
-    );
-    var zeroIV = new Uint8Array(16);
-    var plaintext = new Uint8Array(ciphertext.length);
-
-    for (var i = 0; i < ciphertext.length; i += 16) {
-      var block = ciphertext.slice(i, i + 16);
-      // Append a dummy block (16 bytes of 0x10 = PKCS7 padding for empty next block)
-      // so Web Crypto doesn't complain about padding
-      var padded = new Uint8Array(32);
-      padded.set(block, 0);
-      // Second block is PKCS7 padding: 16 bytes of 0x10
-      for (var j = 16; j < 32; j++) padded[j] = 16;
-
-      var decrypted = await crypto.subtle.decrypt(
-        { name: 'AES-CBC', iv: zeroIV }, cryptoKey, padded
-      );
-      var decBytes = new Uint8Array(decrypted);
-      plaintext.set(decBytes.slice(0, 16), i);
+    var host = (typeof window !== 'undefined') ? window
+             : (typeof self !== 'undefined') ? self : null;
+    if (!host || !host.AES_ECB || !host.AES_ECB.decrypt) {
+      throw new Error('AES_ECB vendor module not loaded (public/vendor/aes-ecb.js)');
     }
-
-    return plaintext;
+    return host.AES_ECB.decrypt(key, ciphertext);
   }
 
   // ---- MAC verification ----
