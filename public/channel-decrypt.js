@@ -210,6 +210,16 @@ window.ChannelDecrypt = (function () {
   // Alias used by channels.js
   var decryptPacket = decrypt;
 
+  // ---- Live PSK decrypt (WS path) ----
+  // Stubs (red commit): real implementation lands in the green commit so the
+  // test fails on an assertion, not on a missing symbol.
+  async function buildKeyMap() {
+    return new Map();
+  }
+  async function tryDecryptLive(_payload, _keyMap) {
+    return null;
+  }
+
   // ---- Key storage (localStorage) ----
 
   function saveKey(channelName, keyHex, label) {
@@ -350,6 +360,8 @@ window.ChannelDecrypt = (function () {
     cacheMessages: cacheMessages,
     getCachedMessages: getCachedMessages,
     setCache: setCache,
-    getCache: getCache
+    getCache: getCache,
+    buildKeyMap: buildKeyMap,
+    tryDecryptLive: tryDecryptLive
   };
 })();
