@@ -505,7 +505,7 @@ function offWS(fn) { wsListeners = wsListeners.filter(f => f !== fn); }
 // Touch-device pull-down at scrollTop=0 reconnects the WebSocket
 // (instead of triggering native pull-to-refresh full-page reload).
 // Visual indicator pulses during pull; toast confirms result.
-const PULL_THRESHOLD_PX = 80;
+const PULL_THRESHOLD_PX = 140;
 let _pullToast = null;
 let _pullToastTimer = null;
 let _pullIndicator = null;
@@ -590,7 +590,8 @@ function setupPullToReconnect() {
 
   function onStart(e) {
     if (!_isTouchDevice()) return;
-    if (getScrollTop() > 0) { startY = null; pulling = false; return; }
+    // Strict scrollTop === 0: ignore any negative overscroll, ignore any scrolled state
+    if (getScrollTop() !== 0) { startY = null; pulling = false; return; }
     const t = e.touches && e.touches[0];
     startY = t ? t.clientY : null;
     pulling = false;
@@ -599,7 +600,8 @@ function setupPullToReconnect() {
 
   function onMove(e) {
     if (startY == null) return;
-    if (getScrollTop() > 0) { startY = null; pulling = false; return; }
+    // Cancel gesture if scrollTop leaves 0 (page scrolled mid-pull)
+    if (getScrollTop() !== 0) { startY = null; pulling = false; dist = 0; return; }
     const t = e.touches && e.touches[0];
     if (!t) return;
     const dy = t.clientY - startY;
@@ -613,8 +615,9 @@ function setupPullToReconnect() {
       ind.style.transform = 'translate(-50%, ' + (-100 + pct * 100) + '%)';
       const icon = ind.querySelector && ind.querySelector('.prr-icon');
       if (icon) icon.style.transform = 'rotate(' + Math.round(pct * 360) + 'deg)';
-      // Prevent native pull-to-refresh ONLY once we've committed to the gesture
-      if (dy > 16 && typeof e.preventDefault === 'function' && e.cancelable !== false) {
+      // Only block native pull-to-refresh once we've crossed the commit
+      // threshold — below that, let the browser handle natural scroll/bounce.
+      if (dy >= PULL_THRESHOLD_PX && typeof e.preventDefault === 'function' && e.cancelable !== false) {
         try { e.preventDefault(); } catch (_) {}
       }
     }
@@ -623,12 +626,14 @@ function setupPullToReconnect() {
   function onEnd() {
     const wasPulling = pulling;
     const finalDist = dist;
+    const stillAtTop = getScrollTop() === 0;
     startY = null; pulling = false; dist = 0;
     if (_pullIndicator) {
       _pullIndicator.style.opacity = '0';
       _pullIndicator.style.transform = 'translate(-50%, -100%)';
     }
-    if (wasPulling && finalDist >= PULL_THRESHOLD_PX) {
+    // Trigger only if: gesture was active, crossed threshold, and page is still at scrollTop=0.
+    if (wasPulling && finalDist >= PULL_THRESHOLD_PX && stillAtTop) {
       try { (window.pullReconnect || pullReconnect)(); } catch (e) {}
     }
   }
