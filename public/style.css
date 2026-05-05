@@ -441,6 +441,7 @@ input[type="week"] {
 /* === Nav action buttons (donate/discord) === */
 .nav-action-btn { padding: 6px 12px; white-space: nowrap; }
 @media (max-width: 900px) { .nav-action-label { display: none; } .nav-action-btn { padding: 6px 10px; } }
+@media (min-width: 768px) and (max-width: 1100px) { .brand-text { display: none; } }
 @media (max-width: 640px) { .nav-action-btn { display: none; } }
 /* === Nav Stats === */
 .nav-stats {
