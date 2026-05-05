@@ -29,15 +29,16 @@ console.log('\n=== #1101: Share modal markup ===');
 // Locate the share modal markup block.
 const shareModalIdx = channelsSrc.indexOf('id="chShareModal"');
 assert(shareModalIdx > 0, 'share modal markup located');
-// Take a generous block; share modal is small.
-const shareEnd = channelsSrc.indexOf('</div>', shareModalIdx);
-const shareModalBlock = channelsSrc.substring(
-  shareModalIdx,
-  // Look for the closing of the share modal overlay's outer div by
-  // scanning for the #chShareModal closing — use a chunk that's safely
-  // larger than the modal but small enough to exclude later modals.
-  channelsSrc.indexOf('<div class="ch-main"', shareModalIdx)
-);
+// Tighten block isolation: scan forward for the share modal's own
+// closing tag (the outer overlay div is indented 6 spaces, so its
+// matching close is the first "\n      </div>" we hit after the
+// opener). Falls back to the old ch-main heuristic if that pattern
+// disappears for any reason.
+let shareEnd = channelsSrc.indexOf('\n      </div>', shareModalIdx);
+if (shareEnd < 0) {
+  shareEnd = channelsSrc.indexOf('<div class="ch-main"', shareModalIdx);
+}
+const shareModalBlock = channelsSrc.substring(shareModalIdx, shareEnd);
 assert(shareModalBlock.length > 0 && shareModalBlock.length < 4000,
   'share modal block isolated');
 

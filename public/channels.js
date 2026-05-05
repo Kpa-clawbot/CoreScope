@@ -939,10 +939,10 @@
         var copyBtn = e.target.closest && e.target.closest('[data-share-copy]');
         if (copyBtn) {
           e.preventDefault();
-          var which = copyBtn.getAttribute('data-share-copy');
           // #1101: only the hex key is copyable from the share modal;
-          // the URL field was removed. Defensive default: 'key'.
-          var src = document.getElementById(which === 'url' ? 'chShareUrl' : 'chShareKey');
+          // the URL field was removed, so the data-share-copy attribute
+          // is informational only — the source is always #chShareKey.
+          var src = document.getElementById('chShareKey');
           if (src) {
             try { src.select(); } catch (e2) {}
             var doneCopy = function () {
