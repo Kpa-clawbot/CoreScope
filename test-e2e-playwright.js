@@ -2569,12 +2569,14 @@ async function run() {
       await page.waitForSelector('#scan-qr-btn', { timeout: 3000 });
       const disabled = await page.$eval('#scan-qr-btn', (b) => b.hasAttribute('disabled'));
       assert(!disabled, '#scan-qr-btn must be enabled (wired to ChannelQR.scan)');
+      await page.keyboard.press('Escape').catch(() => {});
     });
 
     await test('#1034 PR3: scan handler populates #chPskKey + #chPskName from result', async () => {
       // Stub ChannelQR.scan to return a deterministic result, then click
       // the scan button and assert the form fields are populated.
       await page.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
+      await page.reload({ waitUntil: 'domcontentloaded' });
       await page.waitForSelector('#chAddChannelBtn', { timeout: 8000 });
       await page.click('#chAddChannelBtn');
       await page.waitForSelector('#scan-qr-btn', { timeout: 3000 });
