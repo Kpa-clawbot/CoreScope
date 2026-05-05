@@ -1379,6 +1379,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 @media (min-width: 768px) {
   .nav-links { display: flex !important; flex-direction: row; gap: var(--space-xs); }
   .nav-links a:not([data-priority="high"]) { display: none; }
+  .nav-links .nav-dropdown { display: none; }
   .nav-more-wrap { display: flex; align-items: center; }
   .hamburger { display: none; }
   .nav-link { padding: 14px clamp(8px, 0.6vw + 4px, 14px); font-size: var(--fs-sm); }
