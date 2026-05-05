@@ -82,24 +82,51 @@ func (s *PacketStore) GetRepeaterRelayInfo(pubkey string, windowHours float64) R
 	key := strings.ToLower(pubkey)
 
 	s.mu.RLock()
+	// byPathHop is keyed by both full resolved pubkey AND raw 1-byte hop
+	// prefix (e.g. "a3"). Many ingested non-advert packets only carry the
+	// raw hop on the wire — resolution to the full pubkey happens later
+	// via neighbor affinity. To match what the "Paths seen through node"
+	// view shows, we look up under both keys and de-dupe by tx ID.
+	//
+	// The 1-byte prefix lookup CAN over-count when multiple nodes share
+	// the same first byte. This trades a possible over-count for clearly
+	// false zeros (issue #662). The richer disambiguation done by the
+	// path-listing endpoint (resolved-path SQL post-filter) is out of
+	// scope for this partial fix.
 	txList := s.byPathHop[key]
+	var prefixList []*StoreTx
+	if len(key) >= 2 {
+		prefix := key[:2]
+		if prefix != key {
+			prefixList = s.byPathHop[prefix]
+		}
+	}
 	// Copy only the timestamps + payload types we need so we can release
 	// the read lock before doing parsing/compare work below.
 	type entry struct {
 		ts string
 		pt int
 	}
-	scratch := make([]entry, 0, len(txList))
-	for _, tx := range txList {
-		if tx == nil {
-			continue
+	scratch := make([]entry, 0, len(txList)+len(prefixList))
+	seen := make(map[int]bool, len(txList)+len(prefixList))
+	collect := func(list []*StoreTx) {
+		for _, tx := range list {
+			if tx == nil {
+				continue
+			}
+			if seen[tx.ID] {
+				continue
+			}
+			seen[tx.ID] = true
+			pt := -1
+			if tx.PayloadType != nil {
+				pt = *tx.PayloadType
+			}
+			scratch = append(scratch, entry{ts: tx.FirstSeen, pt: pt})
 		}
-		pt := -1
-		if tx.PayloadType != nil {
-			pt = *tx.PayloadType
-		}
-		scratch = append(scratch, entry{ts: tx.FirstSeen, pt: pt})
 	}
+	collect(txList)
+	collect(prefixList)
 	s.mu.RUnlock()
 
 	now := time.Now().UTC()
