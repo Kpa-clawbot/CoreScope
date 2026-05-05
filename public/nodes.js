@@ -1090,16 +1090,16 @@
           </select>
         </div>
       </div>
-      <table class="data-table" id="nodesTable">
+      <div class="table-fluid-wrap"><table class="data-table" id="nodesTable">
         <thead><tr>
-          <th scope="col" data-sort-key="name">Name</th>
-          <th scope="col" class="col-pubkey" data-sort-key="public_key">Public Key</th>
-          <th scope="col" data-sort-key="role">Role</th>
-          <th scope="col" data-sort-key="last_seen" data-sort-default="desc">Last Seen</th>
-          <th scope="col" data-sort-key="advert_count" data-sort-default="desc">Adverts</th>
+          <th scope="col" data-sort-key="name" data-priority="1">Name</th>
+          <th scope="col" class="col-pubkey" data-sort-key="public_key" data-priority="3">Public Key</th>
+          <th scope="col" data-sort-key="role" data-priority="2">Role</th>
+          <th scope="col" data-sort-key="last_seen" data-sort-default="desc" data-priority="1">Last Seen</th>
+          <th scope="col" data-sort-key="advert_count" data-sort-default="desc" data-priority="2">Adverts</th>
         </tr></thead>
         <tbody id="nodesBody"></tbody>
-      </table>`;
+      </table></div>`;
 
     // Tab clicks
     const nodeTabs = document.getElementById('nodeTabs');
@@ -1233,6 +1233,11 @@
     }).join('');
     bindFavStars(tbody);
     makeColumnsResizable('#nodesTable', 'meshcore-nodes-col-widths');
+    // #1056: fluid columns + +N hidden pill
+    if (window.TableResponsive) {
+      var _ndTbl = document.getElementById('nodesTable');
+      if (_ndTbl) window.TableResponsive.register(_ndTbl);
+    }
   }
 
   /**

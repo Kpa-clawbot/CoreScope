@@ -1,6 +1,143 @@
 /* === CoreScope — packets.js === */
 'use strict';
 
+/* === #1056: TableResponsive — fluid columns + "+N hidden" pill ============
+ * Tiny helper, defined once, used by packets/nodes/observers tables.
+ *
+ * Usage: TableResponsive.apply(tableEl)
+ *
+ * Each <th> may carry a `data-priority` attribute (1=keep always, higher
+ * numbers = drop first as viewport narrows). Default priority is 1.
+ *
+ * apply() measures the container width and progressively hides the highest-
+ * priority columns (and matching <td>s) until the table's natural scrollWidth
+ * fits, then renders a "+N hidden" pill in the last visible <th>. Click the
+ * pill to reveal all hidden columns until the next layout pass.
+ *
+ * Re-runs on window resize (debounced) and is idempotent — safe to call after
+ * every render. ResizeObserver on the wrapping element also triggers re-fit.
+ */
+(function () {
+  if (window.TableResponsive) return;
+
+  const REVEAL_FLAG = '__tr_reveal';
+  const PILL_CLASS = 'col-hidden-pill';
+  const HIDDEN_CLASS = 'col-hidden';
+
+  function thsOf(table) { return Array.from(table.querySelectorAll('thead > tr > th')); }
+
+  function clearHidden(table) {
+    table.querySelectorAll('.' + HIDDEN_CLASS).forEach(el => el.classList.remove(HIDDEN_CLASS));
+    const pill = table.querySelector('.' + PILL_CLASS);
+    if (pill) pill.remove();
+  }
+
+  function colIndexCells(table, idx) {
+    // Return the <td> at column index `idx` for every body row.
+    const out = [];
+    const rows = table.querySelectorAll('tbody > tr');
+    rows.forEach(r => {
+      // colSpan-aware mapping: walk cells, accumulate colspans.
+      let i = 0;
+      for (const cell of r.children) {
+        const span = cell.colSpan || 1;
+        if (i <= idx && idx < i + span) { out.push(cell); break; }
+        i += span;
+      }
+    });
+    return out;
+  }
+
+  function apply(table) {
+    if (!table || !table.isConnected) return;
+    if (table[REVEAL_FLAG]) {
+      // user explicitly requested reveal — clear hidden state and skip
+      clearHidden(table);
+      return;
+    }
+    clearHidden(table);
+
+    const ths = thsOf(table);
+    if (ths.length === 0) return;
+
+    // Viewport-breakpoint hiding (per issue #1056 acceptance criteria):
+    //   data-priority on each <th>:
+    //     1 → always visible
+    //     2 → hide when viewport ≤ 1280
+    //     3 → hide when viewport ≤ 1080
+    //     4 → hide when viewport ≤  900
+    //     5 → hide when viewport ≤  768
+    // Higher priority numbers drop FIRST (least important).
+    // Drop direction: a column is hidden if its breakpoint ≥ current viewport.
+    const BP = { 2: 1280, 3: 1080, 4: 900, 5: 768 };
+    const vw = window.innerWidth || document.documentElement.clientWidth;
+
+    const candidates = ths
+      .map((th, i) => ({ th, i, prio: parseInt(th.getAttribute('data-priority') || '1', 10) }))
+      .filter(c => c.prio > 1 && BP[c.prio] !== undefined && vw <= BP[c.prio])
+      // hide highest priority numbers first (drop-first), then right-to-left ties
+      .sort((a, b) => b.prio - a.prio || b.i - a.i);
+
+    let hidden = 0;
+    for (const c of candidates) {
+      c.th.classList.add(HIDDEN_CLASS);
+      colIndexCells(table, c.i).forEach(td => td.classList.add(HIDDEN_CLASS));
+      hidden++;
+    }
+
+    if (hidden > 0) {
+      const visible = ths.filter(th => !th.classList.contains(HIDDEN_CLASS));
+      const host = visible[visible.length - 1] || ths[0];
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = PILL_CLASS;
+      pill.textContent = '+' + hidden + ' hidden';
+      pill.title = 'Click to reveal hidden columns';
+      pill.setAttribute('aria-label', hidden + ' columns hidden — click to reveal');
+      pill.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        ev.preventDefault();
+        table[REVEAL_FLAG] = true;
+        clearHidden(table);
+      });
+      host.appendChild(pill);
+    }
+  }
+
+  // Track tables we've wired up so resize triggers re-apply.
+  const wired = new Set();
+  function register(table) {
+    if (!table || wired.has(table)) { apply(table); return; }
+    wired.add(table);
+    if (typeof ResizeObserver !== 'undefined') {
+      const wrap = table.closest('.table-fluid-wrap, .obs-table-scroll, .table-scroll-wrap') || table.parentElement;
+      if (wrap) {
+        const ro = new ResizeObserver(() => {
+          // any container resize clears the reveal flag (new layout opportunity)
+          table[REVEAL_FLAG] = false;
+          apply(table);
+        });
+        ro.observe(wrap);
+      }
+    }
+    apply(table);
+  }
+
+  let _winTimer = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(_winTimer);
+    _winTimer = setTimeout(() => {
+      wired.forEach(t => {
+        if (!t.isConnected) { wired.delete(t); return; }
+        t[REVEAL_FLAG] = false;
+        apply(t);
+      });
+    }, 120);
+  });
+
+  window.TableResponsive = { apply, register };
+})();
+
 (function () {
   let packets = [];
   let hashIndex = new Map(); // hash → packet group for O(1) dedup
@@ -871,14 +1008,14 @@
           <button class="btn btn-icon${showHexHashes ? ' active' : ''}" id="hexHashToggle" title="Show raw hex hash prefixes instead of resolved node names in the path column">Hex Paths</button>
         </div>
       </div>
-      <table class="data-table" id="pktTable">
+      <div class="table-fluid-wrap"><table class="data-table" id="pktTable">
         <thead><tr>
-          <th scope="col"></th><th scope="col" class="col-region" data-sort-key="region">Region</th><th scope="col" class="col-time" data-sort-key="time" data-type="date">Time</th><th scope="col" class="col-hash" data-sort-key="hash">Hash</th><th scope="col" class="col-size" data-sort-key="size" data-type="numeric">Size</th>
-          <th scope="col" class="col-hashsize" data-sort-key="hb" data-type="numeric">HB</th>
-          <th scope="col" class="col-type" data-sort-key="type">Type</th><th scope="col" class="col-observer" data-sort-key="observer">Observer</th><th scope="col" class="col-path" data-sort-key="path">Path</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric">Rpt</th><th scope="col" class="col-details">Details</th>
+          <th scope="col" data-priority="1"></th><th scope="col" class="col-region" data-sort-key="region" data-priority="3">Region</th><th scope="col" class="col-time" data-sort-key="time" data-type="date" data-priority="1">Time</th><th scope="col" class="col-hash" data-sort-key="hash" data-priority="1">Hash</th><th scope="col" class="col-size" data-sort-key="size" data-type="numeric" data-priority="4">Size</th>
+          <th scope="col" class="col-hashsize" data-sort-key="hb" data-type="numeric" data-priority="5">HB</th>
+          <th scope="col" class="col-type" data-sort-key="type" data-priority="1">Type</th><th scope="col" class="col-observer" data-sort-key="observer" data-priority="3">Observer</th><th scope="col" class="col-path" data-sort-key="path" data-priority="2">Path</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric" data-priority="4">Rpt</th><th scope="col" class="col-details" data-priority="2">Details</th>
         </tr></thead>
         <tbody id="pktBody"></tbody>
-      </table>
+      </table></div>
     `;
 
     // Init shared RegionFilter component
@@ -1407,6 +1544,12 @@
 
     renderTableRows();
     makeColumnsResizable('#pktTable', 'meshcore-pkt-col-widths');
+    // #1056: register fluid-column responsive behavior (drops priority>1 cols
+    // when narrow, shows "+N hidden" pill, reveals on click). Idempotent.
+    if (window.TableResponsive) {
+      var _pktTbl = document.getElementById('pktTable');
+      if (_pktTbl) window.TableResponsive.register(_pktTbl);
+    }
 
     // Initialize table sorting (virtual scroll — sort data array, not DOM)
     if (window.TableSort) {

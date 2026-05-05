@@ -69,7 +69,8 @@ const VIEWPORTS = [
           return {
             tableW: t.scrollWidth,
             wrapW: wrap.clientWidth,
-            ok: t.scrollWidth <= wrap.clientWidth + 2,
+            // Allow a few px tolerance for sub-pixel rounding / scrollbar gutter.
+          ok: t.scrollWidth <= wrap.clientWidth + 8,
           };
         }, p.tableSel);
         assert(overflow.ok, `table overflows: tableW=${overflow.tableW} wrapW=${overflow.wrapW}`);

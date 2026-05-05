@@ -140,11 +140,11 @@
         <span class="obs-stat"><span class="health-dot health-red">✕</span> ${offline} Offline</span>
         <span class="obs-stat">📡 ${filtered.length} Total</span>
       </div>
-      <div class="obs-table-scroll"><table class="data-table obs-table" id="obsTable">
+      <div class="obs-table-scroll table-fluid-wrap"><table class="data-table obs-table" id="obsTable">
         <caption class="sr-only">Observer status and statistics</caption>
         <thead><tr>
-          <th scope="col">Status</th><th scope="col">Name</th><th scope="col">Region</th><th scope="col">Last Status</th><th scope="col">Last Packet</th>
-          <th scope="col">Packet Health</th><th scope="col">Total Packets</th><th scope="col">Packets/Hour</th><th scope="col">Clock Offset</th><th scope="col">Uptime</th>
+          <th scope="col" data-priority="1">Status</th><th scope="col" data-priority="1">Name</th><th scope="col" data-priority="3">Region</th><th scope="col" data-priority="2">Last Status</th><th scope="col" data-priority="2">Last Packet</th>
+          <th scope="col" data-priority="3">Packet Health</th><th scope="col" data-priority="4">Total Packets</th><th scope="col" data-priority="3">Packets/Hour</th><th scope="col" data-priority="4">Clock Offset</th><th scope="col" data-priority="4">Uptime</th>
         </tr></thead>
         <tbody>${filtered.map(o => {
           const h = healthStatus(o.last_seen);
@@ -169,6 +169,11 @@
         }).join('')}</tbody>
       </table></div>`;
     makeColumnsResizable('#obsTable', 'meshcore-obs-col-widths');
+    // #1056: fluid columns + +N hidden pill
+    if (window.TableResponsive) {
+      var _obsTbl = document.getElementById('obsTable');
+      if (_obsTbl) window.TableResponsive.register(_obsTbl);
+    }
   }
 
 

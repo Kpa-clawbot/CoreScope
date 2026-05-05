@@ -552,8 +552,16 @@ input[type="week"] {
 .btn-icon:hover { background: var(--row-hover); }
 
 /* === Tables === */
+/* #1056: Primary tables (packets, nodes, observers) are fluid:
+ *  - width:100% — columns share the available width via the browser layout
+ *  - no fixed px widths on individual columns; only min-widths to protect
+ *    legibility, set in `clamp(...)` so they relax on small viewports
+ *  - priority-based column hiding done in JS via .col-hidden + a "+N hidden"
+ *    pill rendered inside thead (clickable to reveal)
+ */
 .data-table {
   width: 100%; border-collapse: collapse; font-size: 12px;
+  table-layout: auto;
 }
 .data-table th {
   text-align: left; padding: 4px 6px; font-weight: 600; font-size: 11px;
@@ -571,7 +579,26 @@ input[type="week"] {
 }
 .data-table td.col-details { white-space: normal; word-break: break-word; }
 .data-table td:has(.spark-bar), .data-table td.col-spark { max-width: none; overflow: visible; min-width: 80px; }
-.data-table .col-time { min-width: 108px; white-space: nowrap; }
+.data-table .col-time { min-width: clamp(72px, 8vw, 108px); white-space: nowrap; }
+
+/* #1056: priority-based column hiding + reveal pill
+ * .col-hidden is toggled by JS (TableResponsive.apply) on both th and td.
+ * The pill is appended into the last visible th in the header row. */
+.data-table th.col-hidden,
+.data-table td.col-hidden { display: none !important; }
+.col-hidden-pill {
+  display: inline-block; margin-left: 6px;
+  padding: 1px 7px; border-radius: 999px;
+  background: var(--accent-bg, rgba(96,165,250,0.18));
+  color: var(--accent, #60a5fa);
+  font-size: 10px; font-weight: 700; letter-spacing: .3px;
+  cursor: pointer; user-select: none; vertical-align: middle;
+  border: 1px solid var(--accent, #60a5fa);
+  text-transform: none;
+}
+.col-hidden-pill:hover { filter: brightness(1.15); }
+.col-hidden-pill:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
+.table-fluid-wrap { width: 100%; }
 .timestamp-future-icon { margin-left: 4px; cursor: help; }
 .data-table tbody tr:nth-child(even) { background: var(--row-stripe); }
 .data-table tbody tr:hover { background: var(--row-hover); cursor: pointer; }
@@ -1985,9 +2012,12 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   .hash-matrix-table td .hash-cell { padding: 0; }
 }
 
-/* #20 — Observers table horizontal scroll on mobile */
+/* #20 — Observers table horizontal scroll on mobile
+ * #1056 — fluid columns + +N hidden pill removes the need for a forced
+ * min-width; keep the wrapper for backward-compat selectors but let the
+ * inner table flex with the viewport. */
 .obs-table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.obs-table-scroll .obs-table { min-width: 720px; }
+.obs-table-scroll .obs-table { min-width: 0; }
 
 /* #206 — Analytics/Compare tables scroll wrappers on mobile */
 .analytics-table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -2734,13 +2764,15 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   }
 }
 
-/* #630-6: Tables — horizontal scroll wrapper */
+/* #630-6: Tables — horizontal scroll wrapper (legacy; #1056 uses fluid cols) */
 .table-scroll-wrap {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
 @media (max-width: 640px) {
-  .data-table { min-width: 480px; }
+  /* #1056: do NOT enforce min-width on primary fluid tables — column hiding
+   * via JS keeps content readable without horizontal scroll. */
+  .data-table { min-width: 0; }
 }
 
 /* Table sorting indicators */
