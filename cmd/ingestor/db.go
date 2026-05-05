@@ -101,7 +101,8 @@ func applySchema(db *sql.DB) error {
 			first_seen TEXT,
 			advert_count INTEGER DEFAULT 0,
 			battery_mv INTEGER,
-			temperature_c REAL
+			temperature_c REAL,
+			foreign_advert INTEGER DEFAULT 0
 		);
 
 		CREATE TABLE IF NOT EXISTS observers (
@@ -135,7 +136,8 @@ func applySchema(db *sql.DB) error {
 			first_seen TEXT,
 			advert_count INTEGER DEFAULT 0,
 			battery_mv INTEGER,
-			temperature_c REAL
+			temperature_c REAL,
+			foreign_advert INTEGER DEFAULT 0
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_inactive_nodes_last_seen ON inactive_nodes(last_seen);
@@ -461,6 +463,25 @@ func applySchema(db *sql.DB) error {
 			log.Printf("[migration] deleted %d legacy packets with empty hash/timestamp", deleted)
 		}
 		db.Exec(`INSERT INTO _migrations (name) VALUES ('cleanup_legacy_null_hash_ts')`)
+	}
+
+	// Migration: foreign_advert column on nodes/inactive_nodes (#730)
+	// Marks nodes whose ADVERT GPS lies outside the configured geofilter polygon.
+	// Default 0; set to 1 by the ingestor when GeoFilter is configured and
+	// PassesFilter() returns false. Allows operators to surface bridged/leaked
+	// adverts without silently dropping them.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'foreign_advert_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding foreign_advert column to nodes/inactive_nodes...")
+		if _, err := db.Exec(`ALTER TABLE nodes ADD COLUMN foreign_advert INTEGER DEFAULT 0`); err != nil {
+			log.Printf("[migration] nodes.foreign_advert: %v (may already exist)", err)
+		}
+		if _, err := db.Exec(`ALTER TABLE inactive_nodes ADD COLUMN foreign_advert INTEGER DEFAULT 0`); err != nil {
+			log.Printf("[migration] inactive_nodes.foreign_advert: %v (may already exist)", err)
+		}
+		db.Exec(`CREATE INDEX IF NOT EXISTS idx_nodes_foreign_advert ON nodes(foreign_advert) WHERE foreign_advert = 1`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('foreign_advert_v1')`)
+		log.Println("[migration] foreign_advert column added")
 	}
 
 	return nil

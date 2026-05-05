@@ -52,7 +52,8 @@ type Config struct {
 	HashChannels    []string          `json:"hashChannels,omitempty"`
 	Retention       *RetentionConfig  `json:"retention,omitempty"`
 	Metrics         *MetricsConfig    `json:"metrics,omitempty"`
-	GeoFilter            *GeoFilterConfig  `json:"geo_filter,omitempty"`
+	GeoFilter            *GeoFilterConfig     `json:"geo_filter,omitempty"`
+	ForeignAdverts       *ForeignAdvertConfig `json:"foreignAdverts,omitempty"`
 	ValidateSignatures   *bool             `json:"validateSignatures,omitempty"`
 	DB                   *DBConfig         `json:"db,omitempty"`
 
@@ -78,6 +79,23 @@ type Config struct {
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
 type GeoFilterConfig = geofilter.Config
+
+// ForeignAdvertConfig controls how the ingestor handles ADVERTs whose GPS lies
+// outside the configured geofilter polygon (#730). Modes:
+//   - "flag" (default): store the advert/node and tag it foreign for visibility.
+//   - "drop":           silently discard the advert (legacy behavior).
+type ForeignAdvertConfig struct {
+	Mode string `json:"mode,omitempty"`
+}
+
+// IsDropMode reports whether the foreign-advert config is set to "drop".
+// Defaults to false ("flag" mode) when nil or unset.
+func (f *ForeignAdvertConfig) IsDropMode() bool {
+	if f == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(f.Mode), "drop")
+}
 
 // RetentionConfig controls how long stale nodes are kept before being moved to inactive_nodes.
 type RetentionConfig struct {
