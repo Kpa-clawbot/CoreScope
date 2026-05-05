@@ -1748,11 +1748,17 @@
     if (!topSpacer) {
       topSpacer = document.createElement('tr');
       topSpacer.id = 'vscroll-top';
+      // aria-hidden + visibility:hidden so Playwright/AT treat the sentinel as invisible
+      // while preserving its layout role (the inner <td> height drives virtual-scroll padding).
+      topSpacer.setAttribute('aria-hidden', 'true');
+      topSpacer.style.visibility = 'hidden';
       topSpacer.innerHTML = '<td colspan="' + colCount + '" style="padding:0;border:0"></td>';
     }
     if (!bottomSpacer) {
       bottomSpacer = document.createElement('tr');
       bottomSpacer.id = 'vscroll-bottom';
+      bottomSpacer.setAttribute('aria-hidden', 'true');
+      bottomSpacer.style.visibility = 'hidden';
       bottomSpacer.innerHTML = '<td colspan="' + colCount + '" style="padding:0;border:0"></td>';
     }
 
