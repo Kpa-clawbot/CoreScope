@@ -42,10 +42,31 @@ function filterPacketsByRoute(packets, mode) {
 
 /**
  * Compute asymmetric overlap statistics between two observer packet sets.
- * Stub — implementation lands in green commit (#671).
+ * Given a comparePacketSets() result, returns:
+ *   - totalA / totalB: unique packet count for each observer
+ *   - shared: packets seen by both
+ *   - onlyA / onlyB: exclusive packet counts
+ *   - aSeesOfB: percentage of B's packets that A also saw (rounded to 0.1%)
+ *   - bSeesOfA: percentage of A's packets that B also saw (rounded to 0.1%)
+ * Returns 0% (not NaN) when a denominator is zero.
  */
 function computeOverlapStats(cmp) {
-  return { totalA: 0, totalB: 0, shared: 0, onlyA: 0, onlyB: 0, aSeesOfB: 0, bSeesOfA: 0 };
+  var onlyA = (cmp && cmp.onlyA && cmp.onlyA.length) || 0;
+  var onlyB = (cmp && cmp.onlyB && cmp.onlyB.length) || 0;
+  var shared = (cmp && cmp.both && cmp.both.length) || 0;
+  var totalA = onlyA + shared;
+  var totalB = onlyB + shared;
+  var aSeesOfB = totalB > 0 ? Math.round((shared / totalB) * 1000) / 10 : 0;
+  var bSeesOfA = totalA > 0 ? Math.round((shared / totalA) * 1000) / 10 : 0;
+  return {
+    totalA: totalA,
+    totalB: totalB,
+    shared: shared,
+    onlyA: onlyA,
+    onlyB: onlyB,
+    aSeesOfB: aSeesOfB,
+    bSeesOfA: bSeesOfA,
+  };
 }
 
 // Expose for testing
@@ -347,12 +368,24 @@ if (typeof window !== 'undefined') {
 
     if (currentView === 'summary') {
       // Textual summary
+      var stats = computeOverlapStats(r);
       var total = r.onlyA.length + r.onlyB.length + r.both.length;
       var overlap = total > 0 ? (r.both.length / total * 100).toFixed(1) : '0.0';
       el.innerHTML =
         '<div class="compare-summary-text">' +
-          '<p>In the last 24 hours, <strong>' + nameA + '</strong> saw <strong>' + (r.onlyA.length + r.both.length).toLocaleString() + '</strong> unique packets ' +
-          'and <strong>' + nameB + '</strong> saw <strong>' + (r.onlyB.length + r.both.length).toLocaleString() + '</strong> unique packets.</p>' +
+          '<p>In the last 24 hours, <strong>' + nameA + '</strong> saw <strong>' + stats.totalA.toLocaleString() + '</strong> unique packets ' +
+          'and <strong>' + nameB + '</strong> saw <strong>' + stats.totalB.toLocaleString() + '</strong> unique packets.</p>' +
+          // #671 — asymmetric reference-observer comparison
+          '<div class="compare-asymmetric" style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0">' +
+            '<div class="compare-asym-card" style="flex:1;min-width:240px;padding:12px;border:1px solid var(--border, #333);border-radius:6px">' +
+              '<div style="font-size:1.6em;font-weight:bold">' + stats.aSeesOfB.toFixed(1) + '%</div>' +
+              '<div class="text-muted">' + nameA + ' saw <strong>' + stats.shared.toLocaleString() + '</strong> of ' + nameB + '\u2019s ' + stats.totalB.toLocaleString() + ' packets</div>' +
+            '</div>' +
+            '<div class="compare-asym-card" style="flex:1;min-width:240px;padding:12px;border:1px solid var(--border, #333);border-radius:6px">' +
+              '<div style="font-size:1.6em;font-weight:bold">' + stats.bSeesOfA.toFixed(1) + '%</div>' +
+              '<div class="text-muted">' + nameB + ' saw <strong>' + stats.shared.toLocaleString() + '</strong> of ' + nameA + '\u2019s ' + stats.totalA.toLocaleString() + ' packets</div>' +
+            '</div>' +
+          '</div>' +
           '<p><strong>' + r.both.length.toLocaleString() + '</strong> packets (' + overlap + '%) were seen by both observers. ' +
           '<strong>' + r.onlyA.length.toLocaleString() + '</strong> were exclusive to ' + nameA + ' and ' +
           '<strong>' + r.onlyB.length.toLocaleString() + '</strong> were exclusive to ' + nameB + '.</p>' +
