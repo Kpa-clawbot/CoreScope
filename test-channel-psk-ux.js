@@ -80,10 +80,10 @@ async function run() {
   console.log('\n=== #1020 PSK UX: channels.js DOM/contract ===');
   const chSrc = fs.readFileSync(path.join(__dirname, 'public/channels.js'), 'utf8');
 
-  // E2E DOM: optional label input in add form
-  assert(chSrc.includes('id="chKeyLabelInput"'),
-    'add form contains chKeyLabelInput element');
-  assert(/placeholder="[^"]*name[^"]*"/i.test(chSrc) || chSrc.includes('chKeyLabelInput'),
+  // E2E DOM: optional label input in add form (now in #1034 modal as #chPskName)
+  assert(chSrc.includes('id="chPskName"') || chSrc.includes('id="chKeyLabelInput"'),
+    'add form contains optional label input (#chPskName in modal, was #chKeyLabelInput)');
+  assert(/placeholder="[^"]*name[^"]*"/i.test(chSrc) || chSrc.includes('chPskName') || chSrc.includes('chKeyLabelInput'),
     'label input has a name-related placeholder');
 
   // E2E DOM: distinct badge class/marker for user-added channels

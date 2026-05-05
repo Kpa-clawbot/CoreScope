@@ -57,17 +57,18 @@ if (removeRule) {
     '.ch-remove-btn must not be opacity:0 by default (was invisible on touch)');
 }
 
-console.log('\n=== "No key" toggle: clearer copy + grouped with controls ===');
-// The ambiguous "🔒 No key" label gets replaced with self-explanatory copy.
-assert(!/>\s*🔒\s*No key\s*</.test(chSrc),
-  'ambiguous "🔒 No key" label has been replaced');
-assert(/Show encrypted/i.test(chSrc) || /Show locked/i.test(chSrc),
-  'toggle label now reads "Show encrypted ..." (self-explanatory)');
-// Tooltip must explain what the toggle does.
-assert(/title="[^"]*encrypted[^"]*no key[^"]*"/i.test(chSrc) ||
-       /title="[^"]*haven['’]t added[^"]*"/i.test(chSrc) ||
-       /title="[^"]*don['’]t have a key[^"]*"/i.test(chSrc),
-  'toggle has a descriptive title attribute explaining its effect');
+console.log('\n=== Encrypted section: header exists and is collapsible (#1037 redesign) ===');
+// #1037 replaced the binary "No key" visibility toggle with a sectioned
+// sidebar — encrypted (no-key) channels live in their own collapsible
+// section grouped with the rest. The old toggle is intentionally gone.
+assert(/ch-section-encrypted/.test(chSrc),
+  'sidebar renders a dedicated Encrypted section');
+assert(/id="chEncryptedToggle"/.test(chSrc),
+  'Encrypted section header is a toggle (button#chEncryptedToggle)');
+assert(/aria-expanded=/.test(chSrc) && /aria-controls="chEncryptedBody"/.test(chSrc),
+  'toggle exposes ARIA collapsible state (aria-expanded + aria-controls)');
+assert(/Encrypted \(\$\{encrypted\.length\}\)/.test(chSrc),
+  'Encrypted header shows live count');
 
 console.log('\n=== Results ===');
 console.log('Passed: ' + passed + ', Failed: ' + failed);

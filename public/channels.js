@@ -631,32 +631,67 @@
       <div class="ch-sidebar" aria-label="Channel list">
         <div class="ch-sidebar-header">
           <div class="ch-sidebar-title"><span class="ch-icon">💬</span> Channels</div>
-          <label class="ch-encrypted-toggle" title="Show encrypted channels you don't have a key for (locked, can't decrypt)">
-            <input type="checkbox" id="chShowEncrypted"> <span class="ch-toggle-label">🔒 Show encrypted (no key)</span>
-          </label>
+          <button type="button" id="chAddChannelBtn" class="ch-add-channel-btn"
+                  aria-label="Add channel" title="Add a channel — generate, paste a key, or monitor a hashtag">+ Add Channel</button>
         </div>
-        <div class="ch-key-input-wrap" style="padding:4px 8px">
-          <form id="chKeyForm" autocomplete="off" class="ch-add-form">
-            <div class="ch-add-row">
-              <input type="text" id="chKeyInput" class="ch-key-input"
-                     placeholder="#channelname"
-                     aria-label="Channel name or hex key" spellcheck="false">
-              <button type="submit" class="ch-add-btn" title="Add channel">+</button>
-            </div>
-            <div class="ch-add-row">
-              <input type="text" id="chKeyLabelInput" class="ch-key-label-input"
-                     placeholder="optional name (e.g. My Crew)"
-                     aria-label="Optional display name for this channel" spellcheck="false">
-            </div>
-            <div class="ch-add-hint">e.g. #LongFast or 32-char hex key — decrypted in your browser.</div>
-            <div id="chAddStatus" class="ch-add-status" style="display:none"></div>
-          </form>
-        </div>
+        <div id="chAddStatus" class="ch-add-status" style="display:none"></div>
         <div id="chRegionFilter" class="region-filter-container" style="padding:0 8px"></div>
         <div class="ch-channel-list" id="chList" role="listbox" aria-label="Channels">
           <div class="ch-loading">Loading channels…</div>
         </div>
         <div class="ch-sidebar-resize" aria-hidden="true"></div>
+      </div>
+      <!-- #1034 PR1: Add Channel modal -->
+      <div id="chAddChannelModal" class="modal-overlay ch-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="chModalTitle" hidden>
+        <div class="modal ch-modal" role="document">
+          <button type="button" class="modal-close ch-modal-close" id="chModalClose" data-action="ch-modal-close" aria-label="Close">✕</button>
+          <h3 id="chModalTitle">Add Channel</h3>
+
+          <section class="ch-modal-section" aria-labelledby="chSecGenTitle">
+            <h4 id="chSecGenTitle" class="ch-modal-section-title">Generate PSK Channel</h4>
+            <p class="ch-modal-section-hint">Create a new private channel with a random key. Share the QR code with others to add it.</p>
+            <div class="ch-modal-row">
+              <input type="text" id="chGenerateName" class="ch-modal-input" placeholder="Channel name (e.g. My Crew)" aria-label="Channel name" spellcheck="false">
+              <button type="button" id="chGenerateBtn" class="btn-primary">Generate &amp; Show QR</button>
+            </div>
+            <div id="qr-output" class="ch-qr-output" aria-live="polite"></div>
+          </section>
+
+          <section class="ch-modal-section" aria-labelledby="chSecPskTitle">
+            <h4 id="chSecPskTitle" class="ch-modal-section-title">Add Private Channel (PSK)</h4>
+            <p class="ch-modal-section-hint">Paste a 32-character hex key someone shared with you, or scan their QR code.</p>
+            <div class="ch-modal-row">
+              <input type="text" id="chPskKey" class="ch-modal-input ch-modal-input--mono"
+                     placeholder="32-char hex key (0-9, a-f)"
+                     pattern="[0-9a-fA-F]{32}"
+                     maxlength="32"
+                     aria-label="32-character hex PSK key" spellcheck="false" autocomplete="off">
+              <button type="button" id="scan-qr-btn" class="ch-modal-btn-secondary" disabled title="QR scanning ships in the next update">📷 Scan QR</button>
+            </div>
+            <div class="ch-modal-row">
+              <input type="text" id="chPskName" class="ch-modal-input" placeholder="Display name (optional)" aria-label="Optional display name" spellcheck="false">
+              <button type="button" id="chPskAddBtn" class="btn-primary">Add</button>
+            </div>
+            <div id="chPskError" class="ch-modal-error" style="display:none" role="alert"></div>
+          </section>
+
+          <section class="ch-modal-section" aria-labelledby="chSecTagTitle">
+            <h4 id="chSecTagTitle" class="ch-modal-section-title">Monitor Hashtag Channel</h4>
+            <p class="ch-modal-section-hint">Decrypt traffic on a public hashtag channel by deriving the key from its name.</p>
+            <div class="ch-modal-row ch-hashtag-row">
+              <span class="ch-hashtag-prefix" aria-hidden="true">#</span>
+              <input type="text" id="chHashtagName" class="ch-modal-input"
+                     placeholder="LongFast"
+                     aria-label="Hashtag channel name (without #)" spellcheck="false" autocomplete="off">
+              <button type="button" id="chHashtagBtn" class="btn-primary">Monitor</button>
+            </div>
+            <div class="ch-modal-warn">⚠ Case-sensitive — <code>#LongFast</code> ≠ <code>#longfast</code></div>
+          </section>
+
+          <div class="ch-modal-footer">
+            🔒 Keys stay in your browser. CoreScope is a passive observer — it monitors and decrypts traffic but cannot transmit over RF. Clear browser data to remove stored keys.
+          </div>
+        </div>
       </div>
       <div class="ch-main" role="region" aria-label="Channel messages">
         <div class="ch-main-header" id="chHeader">
@@ -673,15 +708,10 @@
 
     RegionFilter.init(document.getElementById('chRegionFilter'));
 
-    // Encrypted channels toggle (#727)
-    var showEncryptedCb = document.getElementById('chShowEncrypted');
-    var showEncrypted = localStorage.getItem('channels-show-encrypted') === 'true';
-    showEncryptedCb.checked = showEncrypted;
-    showEncryptedCb.addEventListener('change', function () {
-      showEncrypted = showEncryptedCb.checked;
-      localStorage.setItem('channels-show-encrypted', showEncrypted ? 'true' : 'false');
-      loadChannels(true);
-    });
+    // #1034 PR1: encrypted-channels visibility now driven by sectioned sidebar.
+    // Always include encrypted channels in the API call; the renderer groups them.
+    var showEncrypted = true;
+    try { localStorage.setItem('channels-show-encrypted', 'true'); } catch (e) { /* quota */ }
 
     regionChangeHandler = RegionFilter.onChange(function () {
       loadChannels(true).then(async function () {
@@ -690,36 +720,93 @@
       });
     });
 
-    // Channel key input handler (#725 M2, improved UX #759)
-    var chKeyForm = document.getElementById('chKeyForm');
-    if (chKeyForm) {
-      var submitHandler = async function (e) {
-        e.preventDefault();
-        var input = document.getElementById('chKeyInput');
-        var labelInput = document.getElementById('chKeyLabelInput');
-        var val = (input.value || '').trim();
-        var label = labelInput ? (labelInput.value || '').trim() : '';
-        if (!val) return;
-        input.value = '';
-        if (labelInput) labelInput.value = '';
-        await addUserChannel(val, label);
-      };
-      chKeyForm.addEventListener('submit', submitHandler);
-      var chKeyInput = document.getElementById('chKeyInput');
-      if (chKeyInput) {
-        chKeyInput.addEventListener('focus', function () {
-          var st = document.getElementById('chAddStatus');
-          if (st) { st.style.display = 'none'; clearTimeout(statusTimer); statusTimer = null; }
-        });
-      }
+    // #1034 PR1: Add Channel modal wiring (replaces inline form)
+    var modalEl = document.getElementById('chAddChannelModal');
+    function openAddModal() {
+      if (!modalEl) return;
+      modalEl.classList.remove('hidden');
+      modalEl.removeAttribute('hidden');
+      var first = document.getElementById('chGenerateName');
+      if (first) try { first.focus(); } catch (e) { /* noop */ }
+    }
+    function closeAddModal() {
+      if (!modalEl) return;
+      modalEl.classList.add('hidden');
+      modalEl.setAttribute('hidden', '');
+      var err = document.getElementById('chPskError');
+      if (err) { err.style.display = 'none'; err.textContent = ''; }
+    }
+    var addBtn = document.getElementById('chAddChannelBtn');
+    if (addBtn) addBtn.addEventListener('click', openAddModal);
+    if (modalEl) {
+      modalEl.addEventListener('click', function (e) {
+        // Close on overlay backdrop click or any [data-action=ch-modal-close]
+        var closeEl = e.target.closest('[data-action="ch-modal-close"]');
+        if (closeEl || e.target === modalEl) {
+          e.preventDefault();
+          closeAddModal();
+        }
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !modalEl.classList.contains('hidden')) {
+          closeAddModal();
+        }
+      });
     }
 
-    // Auto-enable encrypted toggle if deep-linking to an encrypted channel
-    if (routeParam && routeParam.startsWith('enc_') && !showEncrypted) {
-      showEncrypted = true;
-      showEncryptedCb.checked = true;
-      localStorage.setItem('channels-show-encrypted', 'true');
-    }
+    // Section 1: Generate PSK
+    var genBtn = document.getElementById('chGenerateBtn');
+    if (genBtn) genBtn.addEventListener('click', async function () {
+      var nameEl = document.getElementById('chGenerateName');
+      var label = nameEl ? (nameEl.value || '').trim() : '';
+      // 16 random bytes -> 32-char hex
+      var bytes = crypto.getRandomValues(new Uint8Array(16));
+      var keyHex = ChannelDecrypt.bytesToHex(bytes);
+      var channelName = 'psk:' + keyHex.substring(0, 8);
+      ChannelDecrypt.storeKey(channelName, keyHex, label);
+      var qrOut = document.getElementById('qr-output');
+      if (qrOut) {
+        // PR #2 will render the actual QR code here. For now, surface the key
+        // so the user can copy/paste it manually.
+        qrOut.textContent = 'Key generated: ' + keyHex + ' (QR code coming in next update)';
+      }
+      mergeUserChannels();
+      renderChannelList();
+      showAddStatus('Generated channel ' + (label || channelName), 'success');
+    });
+
+    // Section 2: Add PSK
+    var pskBtn = document.getElementById('chPskAddBtn');
+    if (pskBtn) pskBtn.addEventListener('click', async function () {
+      var keyEl = document.getElementById('chPskKey');
+      var nameEl = document.getElementById('chPskName');
+      var errEl = document.getElementById('chPskError');
+      var raw = keyEl ? (keyEl.value || '').trim() : '';
+      var label = nameEl ? (nameEl.value || '').trim() : '';
+      if (!isHexKey(raw)) {
+        if (errEl) { errEl.textContent = 'Key must be 32 hex characters (0–9, a–f).'; errEl.style.display = ''; }
+        return;
+      }
+      if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+      closeAddModal();
+      if (keyEl) keyEl.value = '';
+      if (nameEl) nameEl.value = '';
+      await addUserChannel(raw.toLowerCase(), label);
+    });
+
+    // Section 3: Monitor Hashtag
+    var tagBtn = document.getElementById('chHashtagBtn');
+    if (tagBtn) tagBtn.addEventListener('click', async function () {
+      var tagEl = document.getElementById('chHashtagName');
+      var raw = tagEl ? (tagEl.value || '').trim() : '';
+      if (!raw) return;
+      // Strip a leading '#' if the user typed one — the prefix is implicit.
+      if (raw.charAt(0) === '#') raw = raw.substring(1);
+      if (!raw) return;
+      closeAddModal();
+      if (tagEl) tagEl.value = '';
+      await addUserChannel('#' + raw, '');
+    });
 
     loadObserverRegions();
     loadChannels().then(async function () {
@@ -1182,74 +1269,107 @@
     }
   }
 
+  // #1034 PR1: render a single channel row (used by all sidebar sections).
+  function renderChannelRow(ch) {
+    const isEncrypted = ch.encrypted === true;
+    const isUserAdded = ch.userAdded === true;
+    const baseName = isEncrypted ? (ch.name || 'Unknown') : (ch.name || `Channel ${formatHashHex(ch.hash)}`);
+    const name = (isUserAdded && ch.userLabel) ? ch.userLabel : baseName;
+    const color = isEncrypted && !isUserAdded ? 'var(--text-muted, #6b7280)' : getChannelColor(ch.hash);
+    const time = ch.lastActivityMs ? formatSecondsAgo(Math.floor((Date.now() - ch.lastActivityMs) / 1000)) : '';
+    const preview = isUserAdded
+      ? (ch.lastSender && ch.lastMessage
+          ? `${ch.lastSender}: ${truncate(ch.lastMessage, 28)}`
+          : `${ch.messageCount || 0} messages (your key)`)
+      : isEncrypted
+        ? `0x${formatHashHex(ch.hash)} · ${ch.messageCount || 0} packets`
+        : ch.lastSender && ch.lastMessage
+          ? `${ch.lastSender}: ${truncate(ch.lastMessage, 28)}`
+          : `${ch.messageCount || 0} messages`;
+    const sel = selectedHash === ch.hash ? ' selected' : '';
+    const encClass = isUserAdded
+      ? ' ch-user-added'
+      : (isEncrypted ? ' ch-encrypted' : '');
+    const badgeIcon = isUserAdded ? '🔓' : (isEncrypted ? '🔒' : null);
+    const abbr = badgeIcon || (name.startsWith('#') ? name.slice(0, 3) : name.slice(0, 2).toUpperCase());
+    const chColor = window.ChannelColors ? window.ChannelColors.get(ch.hash) : null;
+    const dotStyle = chColor ? ` style="background:${chColor}"` : '';
+    const borderStyle = chColor ? ` style="border-left:3px solid ${chColor}"` : '';
+    // #1033: must NOT be a <button> — outer .ch-item is itself a <button>;
+    // nested <button> is invalid HTML5 and the parser orphans everything
+    // after it. Use <span role="button">; keydown handler on #chList
+    // (Enter/Space) keeps it keyboard-accessible.
+    const removeBtn = isUserAdded ? ' <span class="ch-remove-btn" role="button" tabindex="0" data-remove-channel="' + escapeHtml(ch.hash) + '" title="Remove channel and clear saved key" aria-label="Remove ' + escapeHtml(name) + '">✕</span>' : '';
+    const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key">🔑</span>' : '';
+    const unreadBadge = (ch.unread && ch.unread > 0)
+      ? ' <span class="ch-unread-badge" data-unread-channel="' + escapeHtml(ch.hash) + '" title="' + ch.unread + ' new" aria-label="' + ch.unread + ' unread">' + (ch.unread > 99 ? '99+' : ch.unread) + '</span>'
+      : '';
+
+    return `<button class="ch-item${sel}${encClass}" data-hash="${ch.hash}"${borderStyle} type="button" role="option" aria-selected="${selectedHash === ch.hash ? 'true' : 'false'}" aria-label="${escapeHtml(name)}"${isEncrypted ? ' data-encrypted="true"' : ''}${isUserAdded ? ' data-user-added="true"' : ''}>
+      <div class="ch-badge" style="background:${color}" aria-hidden="true">${badgeIcon ? badgeIcon : escapeHtml(abbr)}</div>
+      <div class="ch-item-body">
+        <div class="ch-item-top">
+          <span class="ch-item-name">${escapeHtml(name)}</span>${userBadge}${unreadBadge}
+          <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="Change channel color" aria-label="Change color for ${escapeHtml(name)}"></span>${chColor ? '<span class="ch-color-clear" data-channel="' + escapeHtml(ch.hash) + '" title="Clear color" aria-label="Clear color for ' + escapeHtml(name) + '">✕</span>' : ''}
+          <span class="ch-item-time" data-channel-hash="${ch.hash}">${time}</span>${removeBtn}
+        </div>
+        <div class="ch-item-preview">${escapeHtml(preview)}</div>
+      </div>
+    </button>`;
+  }
+
+  // #1034 PR1: sectioned sidebar — My Channels / Network / Encrypted (N).
   function renderChannelList() {
     const el = document.getElementById('chList');
     if (!el) return;
     if (channels.length === 0) { el.innerHTML = '<div class="ch-empty">No channels found</div>'; return; }
 
-    // Sort by message count desc
-    const sorted = [...channels].sort((a, b) => {
-      return (b.messageCount || 0) - (a.messageCount || 0);
-    });
+    const sortByActivity = (a, b) => (b.lastActivityMs || 0) - (a.lastActivityMs || 0);
+    const sortByCount = (a, b) => (b.messageCount || 0) - (a.messageCount || 0);
 
-    el.innerHTML = sorted.map(ch => {
-      const isEncrypted = ch.encrypted === true;
-      const isUserAdded = ch.userAdded === true;
-      // #1020: prefer user-supplied label over psk:<hex>
-      const baseName = isEncrypted ? (ch.name || 'Unknown') : (ch.name || `Channel ${formatHashHex(ch.hash)}`);
-      const name = (isUserAdded && ch.userLabel) ? ch.userLabel : baseName;
-      const color = isEncrypted ? 'var(--text-muted, #6b7280)' : getChannelColor(ch.hash);
-      const time = ch.lastActivityMs ? formatSecondsAgo(Math.floor((Date.now() - ch.lastActivityMs) / 1000)) : '';
-      const preview = isUserAdded
-        ? (ch.lastSender && ch.lastMessage
-            ? `${ch.lastSender}: ${truncate(ch.lastMessage, 28)}`
-            : `${ch.messageCount || 0} messages (your key)`)
-        : isEncrypted
-          ? `${ch.messageCount} encrypted messages (no key configured)`
-          : ch.lastSender && ch.lastMessage
-            ? `${ch.lastSender}: ${truncate(ch.lastMessage, 28)}`
-            : `${ch.messageCount} messages`;
-      const sel = selectedHash === ch.hash ? ' selected' : '';
-      // #1020: distinct class so styling/tests can tell user-added apart
-      // from server-known encrypted channels.
-      const encClass = isUserAdded
-        ? ' ch-user-added'
-        : (isEncrypted ? ' ch-encrypted' : '');
-      // #1020: 🔓 marks "I have the key" vs 🔒 "encrypted, no key"
-      const badgeIcon = isUserAdded ? '🔓' : (isEncrypted ? '🔒' : null);
-      const abbr = badgeIcon || (name.startsWith('#') ? name.slice(0, 3) : name.slice(0, 2).toUpperCase());
-      // Channel color dot for color picker (#674)
-      const chColor = window.ChannelColors ? window.ChannelColors.get(ch.hash) : null;
-      const dotStyle = chColor ? ` style="background:${chColor}"` : '';
-      // Left border for assigned color
-      const borderStyle = chColor ? ` style="border-left:3px solid ${chColor}"` : '';
-      // M4 / #1020: Remove affordance for user-added channels.
-      // MUST NOT be a <button> — the outer .ch-item is itself a <button>,
-      // and HTML5 forbids nested <button>; the parser would implicitly
-      // close .ch-item and orphan everything after this node (✕, preview).
-      // Use a <span role="button"> instead. Click delegation keys off
-      // data-remove-channel so behavior is unchanged.
-      const removeBtn = isUserAdded ? ' <span class="ch-remove-btn" role="button" tabindex="0" data-remove-channel="' + escapeHtml(ch.hash) + '" title="Remove channel and clear saved key" aria-label="Remove ' + escapeHtml(name) + '">✕</span>' : '';
-      // #1020: explicit badge marker for "your key" so it's distinguishable
-      // from server-known encrypted rows at a glance and for screen readers.
-      const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key">🔑</span>' : '';
-      // #1029 Unread badge — bumped by live PSK decrypt for channels not currently selected.
-      const unreadBadge = (ch.unread && ch.unread > 0)
-        ? ' <span class="ch-unread-badge" data-unread-channel="' + escapeHtml(ch.hash) + '" title="' + ch.unread + ' new" aria-label="' + ch.unread + ' unread">' + (ch.unread > 99 ? '99+' : ch.unread) + '</span>'
-        : '';
+    const mine = channels.filter(c => c.userAdded === true).sort(sortByActivity);
+    const network = channels.filter(c => c.userAdded !== true && c.encrypted !== true).sort(sortByActivity);
+    const encrypted = channels.filter(c => c.userAdded !== true && c.encrypted === true).sort(sortByCount);
 
-      return `<button class="ch-item${sel}${encClass}" data-hash="${ch.hash}"${borderStyle} type="button" role="option" aria-selected="${selectedHash === ch.hash ? 'true' : 'false'}" aria-label="${escapeHtml(name)}"${isEncrypted ? ' data-encrypted="true"' : ''}${isUserAdded ? ' data-user-added="true"' : ''}>
-        <div class="ch-badge" style="background:${color}" aria-hidden="true">${badgeIcon ? badgeIcon : escapeHtml(abbr)}</div>
-        <div class="ch-item-body">
-          <div class="ch-item-top">
-            <span class="ch-item-name">${escapeHtml(name)}</span>${userBadge}${unreadBadge}
-            <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="Change channel color" aria-label="Change color for ${escapeHtml(name)}"></span>${chColor ? '<span class="ch-color-clear" data-channel="' + escapeHtml(ch.hash) + '" title="Clear color" aria-label="Clear color for ' + escapeHtml(name) + '">✕</span>' : ''}
-            <span class="ch-item-time" data-channel-hash="${ch.hash}">${time}</span>${removeBtn}
-          </div>
-          <div class="ch-item-preview">${escapeHtml(preview)}</div>
+    // Encrypted section collapsed by default; user toggle persisted in localStorage.
+    const collapsed = localStorage.getItem('ch-encrypted-collapsed') !== 'false';
+
+    const sections = [];
+    sections.push(
+      `<div class="ch-section ch-section-mychannels" data-section="mychannels">
+        <div class="ch-section-header">My Channels</div>
+        ${mine.length ? mine.map(renderChannelRow).join('') : '<div class="ch-section-empty">No channels yet — click [+ Add Channel] to add one.</div>'}
+      </div>`
+    );
+    sections.push(
+      `<div class="ch-section ch-section-network" data-section="network">
+        <div class="ch-section-header">Network</div>
+        ${network.length ? network.map(renderChannelRow).join('') : '<div class="ch-section-empty">No public channels reported by the server.</div>'}
+      </div>`
+    );
+    sections.push(
+      `<div class="ch-section ch-section-encrypted" data-section="encrypted" data-encrypted-collapsed="${collapsed ? 'true' : 'false'}">
+        <button type="button" class="ch-section-header ch-section-toggle" id="chEncryptedToggle" aria-expanded="${collapsed ? 'false' : 'true'}" aria-controls="chEncryptedBody">
+          <span class="ch-section-caret" aria-hidden="true">${collapsed ? '▸' : '▾'}</span>
+          Encrypted (${encrypted.length})
+        </button>
+        <div class="ch-section-body" id="chEncryptedBody"${collapsed ? ' hidden' : ''}>
+          ${encrypted.length ? encrypted.map(renderChannelRow).join('') : '<div class="ch-section-empty">No unkeyed encrypted channels seen.</div>'}
         </div>
-      </button>`;
-    }).join('');
+      </div>`
+    );
+    el.innerHTML = sections.join('');
+
+    // Toggle expand/collapse for the Encrypted section.
+    const toggle = document.getElementById('chEncryptedToggle');
+    if (toggle) {
+      toggle.addEventListener('click', function () {
+        const wasCollapsed = localStorage.getItem('ch-encrypted-collapsed') !== 'false';
+        const next = wasCollapsed ? 'false' : 'true';
+        try { localStorage.setItem('ch-encrypted-collapsed', next); } catch (e) { /* quota */ }
+        renderChannelList();
+      });
+    }
   }
 
   async function selectChannel(hash, decryptOpts) {
