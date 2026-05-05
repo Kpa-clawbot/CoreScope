@@ -923,27 +923,11 @@ window.addEventListener('DOMContentLoaded', () => {
   if (navMoreBtn && navMoreMenu) {
     // Build More menu dynamically from non-priority nav links (DRY)
     navMoreMenu.innerHTML = '';
-    document.querySelectorAll('.nav-links > a:not([data-priority="high"]), .nav-links > .nav-dropdown').forEach(function(el) {
-      if (el.classList.contains('nav-dropdown')) {
-        var label = el.querySelector('span.nav-link');
-        if (label) {
-          var header = document.createElement('span');
-          header.className = 'nav-more-group-label';
-          header.textContent = label.textContent.replace('▾', '').trim();
-          navMoreMenu.appendChild(header);
-        }
-        el.querySelectorAll('.dropdown-item').forEach(function(item) {
-          var clone = item.cloneNode(true);
-          clone.setAttribute('role', 'menuitem');
-          clone.addEventListener('click', closeMoreMenu);
-          navMoreMenu.appendChild(clone);
-        });
-      } else {
-        var clone = el.cloneNode(true);
-        clone.setAttribute('role', 'menuitem');
-        clone.addEventListener('click', closeMoreMenu);
-        navMoreMenu.appendChild(clone);
-      }
+    document.querySelectorAll('.nav-links a:not([data-priority="high"])').forEach(function(link) {
+      var clone = link.cloneNode(true);
+      clone.setAttribute('role', 'menuitem');
+      clone.addEventListener('click', closeMoreMenu);
+      navMoreMenu.appendChild(clone);
     });
     navMoreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
