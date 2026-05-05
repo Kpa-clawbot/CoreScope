@@ -122,7 +122,14 @@ if (renderRowSrc) {
     window: {},
     renderChannelRow: null,
   };
+  // #1041 follow-up: renderChannelRow now delegates to channelDisplayName.
+  // Eval the REAL helper (and its module-local PRIVATE_CHANNEL_LABEL)
+  // into the sandbox so this test stays in sync with production behavior
+  // automatically — no hand-rolled duplicate of the psk:* rule.
+  const helperSrc = extractFn(chSrc, 'function channelDisplayName(ch');
+  assert(helperSrc, 'extracted channelDisplayName source for behavior sandbox');
   vm.createContext(sandbox);
+  vm.runInContext('const PRIVATE_CHANNEL_LABEL = "Private Channel";\n' + helperSrc, sandbox);
   vm.runInContext(renderRowSrc, sandbox);
   const userRow = sandbox.renderChannelRow({
     hash: 'user:Crew',
