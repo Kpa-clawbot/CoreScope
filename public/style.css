@@ -1297,9 +1297,11 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .ch-sidebar {
     width: 100%; min-width: 0;
     max-height: 40%;
+    overflow-y: auto;
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
+  .ch-sidebar-resize { display: none; }
   .ch-main { width: 100%; }
 }
 
@@ -1372,9 +1374,11 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .ch-layout { flex-direction: column; position: relative; }
   .ch-sidebar {
     width: 100%; min-width: 0; max-height: 40%; height: auto;
+    overflow-y: auto;
     border-right: none; border-bottom: 1px solid var(--border);
     background: var(--card-bg);
   }
+  .ch-sidebar-resize { display: none; }
   .ch-main {
     width: 100%; flex: 1; min-height: 0;
     background: var(--content-bg);

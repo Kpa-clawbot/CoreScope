@@ -63,8 +63,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     }, sel);
   }
 
-  // Wide viewports — true side-by-side.
-  for (const [w, h] of [[768, 900], [1080, 900], [1440, 900], [1920, 1080]]) {
+  // Wide viewports — true side-by-side. Includes 2560×1440 ultrawide (AC4).
+  for (const [w, h] of [[768, 900], [1080, 900], [1440, 900], [1920, 1080], [2560, 1440]]) {
     await step(`viewport ${w}×${h}: no horizontal scroll`, async () => {
       await loadChannels(w, h);
       assert(await noBodyHScroll(), 'document scrollWidth > clientWidth (horizontal scroll)');

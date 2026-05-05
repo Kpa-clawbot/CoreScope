@@ -91,7 +91,6 @@
     if (header) header.querySelector('.ch-header-text').textContent = 'Select a channel';
     const msgEl = document.getElementById('chMessages');
     if (msgEl) msgEl.innerHTML = '<div class="ch-empty">Choose a channel from the sidebar to view messages</div>';
-    document.querySelector('.ch-layout')?.classList.remove('ch-show-main');
     document.getElementById('chScrollBtn')?.classList.add('hidden');
     return true;
   }
@@ -243,14 +242,6 @@
       _nodePanelTrigger.focus();
       _nodePanelTrigger = null;
     }
-  }
-
-  function chBack() {
-    closeNodeDetail();
-    var layout = document.querySelector('.ch-layout');
-    if (layout) layout.classList.remove('ch-show-main');
-    var sidebar = document.querySelector('.ch-sidebar');
-    if (sidebar) sidebar.style.pointerEvents = '';
   }
 
   // WCAG AA compliant colors — ≥4.5:1 contrast on both white and dark backgrounds
@@ -783,7 +774,6 @@
       </div>
       <div class="ch-main" role="region" aria-label="Channel messages">
         <div class="ch-main-header" id="chHeader">
-          <button class="ch-back-btn" id="chBackBtn" aria-label="Back to channels" data-action="ch-back">←</button>
           <span class="ch-header-text">Select a channel</span>
         </div>
         <div class="ch-messages" id="chMessages">
@@ -1109,25 +1099,12 @@
     });
     _themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
-    // #87: Fix pointer-events during mobile slide transition
-    var chMain = app.querySelector('.ch-main');
-    var chSidebar = app.querySelector('.ch-sidebar');
-    chMain.addEventListener('transitionend', function () {
-      var layout = app.querySelector('.ch-layout');
-      if (layout && layout.classList.contains('ch-show-main')) {
-        chSidebar.style.pointerEvents = 'none';
-      } else {
-        chSidebar.style.pointerEvents = '';
-      }
-    });
-
     // Event delegation for data-action buttons
     app.addEventListener('click', function (e) {
       var btn = e.target.closest('[data-action]');
       if (!btn) return;
       var action = btn.dataset.action;
       if (action === 'ch-close-node') closeNodeDetail();
-      else if (action === 'ch-back') chBack();
     });
 
     // Event delegation for channel selection (touch-friendly)
@@ -1746,9 +1723,6 @@
     const name = ch ? channelDisplayName(ch) : `Channel ${formatHashHex(hash)}`;
     const header = document.getElementById('chHeader');
     header.querySelector('.ch-header-text').textContent = `${name} — ${ch?.messageCount || 0} messages`;
-
-    // On mobile, show the message view
-    document.querySelector('.ch-layout')?.classList.add('ch-show-main');
 
     const msgEl = document.getElementById('chMessages');
 
