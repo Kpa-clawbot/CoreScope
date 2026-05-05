@@ -83,6 +83,7 @@ jobs:
         run: |
           set -e
           node test-packet-filter.js
+          node test-packet-filter-time.js
           node test-channel-decrypt-insecure-context.js
 
       - name: Verify proto syntax

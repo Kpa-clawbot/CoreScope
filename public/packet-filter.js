@@ -25,7 +25,7 @@
     AND: 'AND', OR: 'OR', NOT: 'NOT', LPAREN: 'LPAREN', RPAREN: 'RPAREN'
   };
 
-  var OP_WORDS = { contains: true, starts_with: true, ends_with: true };
+  var OP_WORDS = { contains: true, starts_with: true, ends_with: true, after: true, before: true, between: true };
 
   function lex(input) {
     var tokens = [], i = 0, len = input.length;
