@@ -85,6 +85,7 @@ jobs:
           node test-packet-filter.js
           node test-packet-filter-time.js
           node test-channel-decrypt-insecure-context.js
+          node test-live-region-filter.js
 
       - name: Verify proto syntax
         run: |
