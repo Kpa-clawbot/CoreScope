@@ -759,13 +759,6 @@
                 <button type="button" class="ch-modal-btn-secondary" data-share-copy="key" aria-label="Copy hex key">📋 Copy</button>
               </div>
             </div>
-            <div class="ch-share-field-group">
-              <label class="ch-share-label" for="chShareUrl">meshcore:// URL</label>
-              <div class="ch-share-row">
-                <input type="text" id="chShareUrl" data-share-field="url" class="ch-modal-input ch-modal-input--mono" readonly aria-label="Channel meshcore URL">
-                <button type="button" class="ch-modal-btn-secondary" data-share-copy="url" aria-label="Copy meshcore URL">📋 Copy</button>
-              </div>
-            </div>
             <div class="ch-modal-warn" role="note">
               ⚠ Privacy: only share with trusted people. Anyone with this key can read all messages on this channel.
             </div>
@@ -882,19 +875,19 @@
       if (title) title.textContent = 'Share: ' + safeName;
       var qrHolder = document.getElementById('chShareQr');
       var keyField = document.getElementById('chShareKey');
-      var urlField = document.getElementById('chShareUrl');
       var fieldsWrap = shareModalEl.querySelectorAll('.ch-share-field-group');
       for (var i = 0; i < fieldsWrap.length; i++) fieldsWrap[i].hidden = false;
-      var url = 'meshcore://channel/add?name=' + encodeURIComponent(safeName) +
-                '&secret=' + keyHex;
       if (keyField) keyField.value = keyHex;
-      if (urlField) urlField.value = url;
       if (qrHolder) {
         qrHolder.innerHTML = '';
         if (window.ChannelQR && typeof window.ChannelQR.generate === 'function') {
           // #1087 Bug 2: pass the user-facing displayName, NOT the
           // internal `psk:<hex8>` channelName lookup key.
-          window.ChannelQR.generate(safeName, keyHex, qrHolder);
+          // #1101: qrOnly=true — render JUST the QR image. The Share
+          // modal has its own dedicated hex key field + Copy button
+          // BELOW the QR; an inline URL line + Copy Key button inside
+          // the QR box was redundant and visually overlapping.
+          window.ChannelQR.generate(safeName, keyHex, qrHolder, { qrOnly: true });
         }
       }
       shareModalEl.classList.remove('hidden');
@@ -947,9 +940,9 @@
         if (copyBtn) {
           e.preventDefault();
           var which = copyBtn.getAttribute('data-share-copy');
-          var src = which === 'url'
-            ? document.getElementById('chShareUrl')
-            : document.getElementById('chShareKey');
+          // #1101: only the hex key is copyable from the share modal;
+          // the URL field was removed. Defensive default: 'key'.
+          var src = document.getElementById(which === 'url' ? 'chShareUrl' : 'chShareKey');
           if (src) {
             try { src.select(); } catch (e2) {}
             var doneCopy = function () {

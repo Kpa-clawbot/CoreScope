@@ -75,9 +75,11 @@
    * every Generate click fall through to "[QR library not loaded]".
    * (Issue #1087 bug 1.)
    */
-  function generate(name, secretHex, target) {
+  function generate(name, secretHex, target, opts) {
     if (!_hasDom() || !target) return;
     target.innerHTML = '';
+    opts = opts || {};
+    var qrOnly = !!opts.qrOnly;
 
     const url = buildUrl(name, secretHex);
 
@@ -112,6 +114,12 @@
     } else {
       qrBox.textContent = '[QR library not loaded]';
     }
+
+    // #1101: in qrOnly mode (Share modal), the host renders the hex
+    // key field + Copy button BELOW the QR. Skip the inline URL line
+    // and inline Copy Key button here so the QR box contains JUST the
+    // QR image — no overlap, no redundant affordances.
+    if (qrOnly) return;
 
     const urlLine = document.createElement('div');
     urlLine.className = 'channel-qr-url';
