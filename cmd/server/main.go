@@ -186,6 +186,13 @@ func main() {
 		log.Printf("[store] warning: could not add observers.last_packet_at column: %v", err)
 	}
 
+	// Ensure nodes.foreign_advert column exists (#730 reads it on every /api/nodes
+	// scan; ingestor migration foreign_advert_v1 adds it but server may run against
+	// DBs ingestor never touched, e.g. e2e fixture).
+	if err := ensureForeignAdvertColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add nodes.foreign_advert column: %v", err)
+	}
+
 	// Soft-delete observers that are in the blacklist (mark inactive=1) so
 	// historical data from a prior unblocked window is hidden too.
 	if len(cfg.ObserverBlacklist) > 0 {

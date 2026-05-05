@@ -353,6 +353,52 @@ func ensureLastPacketAtColumn(dbPath string) error {
 	return nil
 }
 
+// ensureForeignAdvertColumn adds the foreign_advert column to nodes/inactive_nodes
+// if missing (#730). The column is added by the ingestor migration foreign_advert_v1
+// — but the server may run against a DB the ingestor has never touched (e2e fixture,
+// fresh installs where the server boots first), in which case scanNodeRow fails
+// with "no such column: foreign_advert" and /api/nodes silently returns nothing.
+func ensureForeignAdvertColumn(dbPath string) error {
+	rw, err := cachedRW(dbPath)
+	if err != nil {
+		return err
+	}
+	for _, table := range []string{"nodes", "inactive_nodes"} {
+		has, err := tableHasColumn(rw, table, "foreign_advert")
+		if err != nil {
+			return fmt.Errorf("inspect %s: %w", table, err)
+		}
+		if has {
+			continue
+		}
+		if _, err := rw.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN foreign_advert INTEGER DEFAULT 0", table)); err != nil {
+			return fmt.Errorf("add foreign_advert to %s: %w", table, err)
+		}
+		log.Printf("[store] Added foreign_advert column to %s", table)
+	}
+	return nil
+}
+
+// tableHasColumn reports whether the named table has the named column.
+func tableHasColumn(rw *sql.DB, table, column string) (bool, error) {
+	rows, err := rw.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == column {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // softDeleteBlacklistedObservers marks observers matching the blacklist as
 // inactive=1 so they are hidden from API responses.  Runs once at startup.
 func softDeleteBlacklistedObservers(dbPath string, blacklist []string) {
