@@ -1066,8 +1066,14 @@
 
     loadObserverRegions();
     loadChannels().then(async function () {
-      // Also load user-added encrypted channels into the sidebar
+      // Also load user-added encrypted channels into the sidebar.
+      // mergeUserChannels() mutates `channels` (marks userAdded, appends
+      // PSK-only entries) AFTER loadChannels() already rendered — so we
+      // MUST re-render here, otherwise the My Channels section never
+      // appears on first load when the route has no specific channel
+      // hash (regression caught by test-channel-issue-1111-e2e.js, case 2).
       mergeUserChannels();
+      renderChannelList();
       if (routeParam) await selectChannel(routeParam);
       if (_pendingNode && _pendingNode.length < 200) await showNodeDetail(_pendingNode);
     });
