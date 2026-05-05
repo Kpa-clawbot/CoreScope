@@ -537,27 +537,22 @@ button.ch-item.selected { background: var(--selected-bg); }
   text-align: center;
   line-height: 1.4;
 }
-.ch-remove-btn {
+/* Shared icon button base for sidebar row controls (remove ✕, share ⤴).
+   WCAG 2.5.5 / Apple HIG: 44x44 CSS px minimum touch target. */
+.ch-icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
   background: none; border: none; color: var(--text-muted);
-  cursor: pointer; font-size: 16px; padding: 4px; margin-left: 2px;
-  /* WCAG 2.5.5 / Apple HIG minimum touch target: 44x44 CSS px. */
+  cursor: pointer; padding: 4px; margin-left: 2px;
   min-width: 44px; min-height: 44px; box-sizing: border-box;
   opacity: 0.55; transition: opacity 0.15s, color 0.15s;
   line-height: 1; user-select: none;
 }
-.ch-share-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  background: none; border: none; color: var(--text-muted);
-  cursor: pointer; font-size: 14px; padding: 4px; margin-left: 2px;
-  min-width: 44px; min-height: 44px; box-sizing: border-box;
-  opacity: 0.55; transition: opacity 0.15s, color 0.15s;
-  line-height: 1; user-select: none;
-}
-button.ch-item:hover .ch-share-btn { opacity: 0.9; }
-.ch-share-btn:hover, .ch-share-btn:focus { opacity: 1 !important; color: var(--accent, #3b82f6); outline: none; }
-button.ch-item:hover .ch-remove-btn { opacity: 0.9; }
-.ch-remove-btn:hover, .ch-remove-btn:focus { opacity: 1 !important; color: var(--danger, #dc2626); outline: none; }
+.ch-remove-btn { font-size: 16px; }
+.ch-share-btn  { font-size: 14px; }
+button.ch-item:hover .ch-icon-btn { opacity: 0.9; }
+.ch-icon-btn:hover, .ch-icon-btn:focus { opacity: 1 !important; outline: none; }
+.ch-remove-btn:hover, .ch-remove-btn:focus { color: var(--danger, #dc2626); }
+.ch-share-btn:hover,  .ch-share-btn:focus  { color: var(--accent, #3b82f6); }
 .ch-user-badge { font-size: 12px; margin-left: 2px; opacity: 0.85; flex-shrink: 0; }
 .ch-item-preview { font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 

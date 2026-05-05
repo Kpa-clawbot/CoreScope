@@ -25,12 +25,12 @@ function assert(cond, msg) {
   else { failed++; console.error('  ✗ ' + msg); }
 }
 
-console.log('\n=== Fix 1: ✕ touch target ≥ 44×44px ===');
-const removeRule = (cssSrc.match(/\.ch-remove-btn\s*\{[^}]*\}/) || [''])[0];
-assert(/min-width:\s*44px/.test(removeRule),
-  '.ch-remove-btn declares min-width: 44px');
-assert(/min-height:\s*44px/.test(removeRule),
-  '.ch-remove-btn declares min-height: 44px');
+console.log('\n=== Fix 1: ✕ touch target ≥ 44×44px (on shared .ch-icon-btn base) ===');
+const iconBtnRule = (cssSrc.match(/\.ch-icon-btn\s*\{[^}]*\}/) || [''])[0];
+assert(/min-width:\s*44px/.test(iconBtnRule),
+  '.ch-icon-btn declares min-width: 44px');
+assert(/min-height:\s*44px/.test(iconBtnRule),
+  '.ch-icon-btn declares min-height: 44px');
 
 console.log('\n=== Fix 2: no "0 messages" in default row ===');
 // renderChannelRow must not emit a literal "0 messages" preview when
@@ -47,10 +47,10 @@ assert(/Use\s+✕\s+to remove individual channels/.test(chSrc),
   'new copy points at the ✕ button for individual key removal');
 
 console.log('\n=== Fix 4: Share/reshare affordance on user-added rows ===');
-assert(/data-share-channel="/.test(chSrc),
-  'user-added rows carry a data-share-channel hook');
-assert(/class="ch-share-btn"/.test(chSrc),
-  'share affordance uses .ch-share-btn class');
+// Source-level: data attribute and helper exist. Behavior-level checks
+// against rendered output are below in the renderChannelRow section.
+assert(/data-share-channel/.test(chSrc),
+  'channels.js wires the data-share-channel hook somewhere in render');
 // Click handler must wire the share button to ChannelQR.generate (or a
 // QR-display fallback). The handler lives in the chListEl click delegation.
 assert(/data-share-channel/.test(chSrc) && /ChannelQR/.test(chSrc),

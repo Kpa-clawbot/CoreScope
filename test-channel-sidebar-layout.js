@@ -43,18 +43,23 @@ assert(!/<button[^>]*class="ch-remove-btn"/.test(chSrc),
 
 // Remove control must still be discoverable (data attribute keeps the
 // existing click handler in `addEventListener('click', ...)`).
-assert(/data-remove-channel="/.test(chSrc),
+// PR #1040 refactored to an iconBtn() helper, so the literal
+// `data-remove-channel="..."` no longer appears verbatim in source —
+// check that the helper is wired with the right data attribute instead.
+assert(/data-remove-channel/.test(chSrc),
   'remove affordance still carries data-remove-channel for click delegation');
 
 console.log('\n=== Sidebar layout: ✕ visible on user-added rows (not opacity:0) ===');
 // Bug compounded: even if the button rendered correctly, opacity:0
 // hide-until-hover made it impossible to discover on touch devices.
 // The user-added (PSK) row should expose ✕ at full visibility.
+// PR #1040: shared base class .ch-icon-btn carries the opacity rule.
+const baseRule = cssSrc.match(/\.ch-icon-btn\s*\{[^}]*\}/);
 const removeRule = cssSrc.match(/\.ch-remove-btn\s*\{[^}]*\}/);
-assert(removeRule, 'found .ch-remove-btn CSS rule');
-if (removeRule) {
-  assert(!/opacity:\s*0\s*[;}]/.test(removeRule[0]),
-    '.ch-remove-btn must not be opacity:0 by default (was invisible on touch)');
+assert(baseRule || removeRule, 'found .ch-icon-btn or .ch-remove-btn CSS rule');
+if (baseRule) {
+  assert(!/opacity:\s*0\s*[;}]/.test(baseRule[0]),
+    '.ch-icon-btn (base for ✕) must not be opacity:0 by default (was invisible on touch)');
 }
 
 console.log('\n=== Encrypted section: header exists and is collapsible (#1037 redesign) ===');

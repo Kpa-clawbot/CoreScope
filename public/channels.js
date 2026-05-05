@@ -870,10 +870,11 @@
 
     // Event delegation for channel selection (touch-friendly)
     var chListEl = document.getElementById('chList');
-    // Keyboard accessibility for the role="button" remove span (Enter/Space).
+    // Keyboard accessibility for the role="button" remove/share spans
+    // (Enter/Space). Single .closest() call with a combined selector.
     chListEl.addEventListener('keydown', function (e) {
       if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
-      var rb = e.target.closest && (e.target.closest('[data-remove-channel]') || e.target.closest('[data-share-channel]'));
+      var rb = e.target.closest && e.target.closest('[data-remove-channel],[data-share-channel]');
       if (!rb) return;
       e.preventDefault();
       e.stopPropagation();
@@ -897,29 +898,28 @@
         if (typeof openAddModal === 'function') openAddModal();
         var sec = document.getElementById('chShareSection');
         var out = document.getElementById('chShareOutput');
-        if (sec) sec.hidden = false;
-        if (out) {
-          out.innerHTML = '';
-          if (!keyHex) {
-            out.textContent = 'No stored key found for "' + sName + '" — cannot share.';
-            return;
-          }
-          var heading = document.createElement('div');
-          heading.className = 'ch-share-heading';
-          heading.textContent = 'Share "' + sName + '"';
-          out.appendChild(heading);
-          var holder = document.createElement('div');
-          out.appendChild(holder);
-          if (window.ChannelQR && typeof window.ChannelQR.generate === 'function') {
-            window.ChannelQR.generate(sName, keyHex, holder);
-          } else {
-            // Fallback: copyable hex + meshcore:// URL.
-            var url = 'meshcore://channel/add?name=' + encodeURIComponent(sName) +
-                      '&secret=' + keyHex;
-            holder.innerHTML =
-              '<div>Key: <code>' + escapeHtml(keyHex) + '</code></div>' +
-              '<div>URL: <code>' + escapeHtml(url) + '</code></div>';
-          }
+        if (!sec || !out) return;
+        sec.hidden = false;
+        out.innerHTML = '';
+        if (!keyHex) {
+          out.textContent = 'No stored key found for "' + sName + '" — cannot share.';
+          return;
+        }
+        var heading = document.createElement('div');
+        heading.className = 'ch-share-heading';
+        heading.textContent = 'Share "' + sName + '"';
+        out.appendChild(heading);
+        var holder = document.createElement('div');
+        out.appendChild(holder);
+        if (window.ChannelQR && typeof window.ChannelQR.generate === 'function') {
+          window.ChannelQR.generate(sName, keyHex, holder);
+        } else {
+          // Fallback: copyable hex + meshcore:// URL.
+          var url = 'meshcore://channel/add?name=' + encodeURIComponent(sName) +
+                    '&secret=' + keyHex;
+          holder.innerHTML =
+            '<div>Key: <code>' + escapeHtml(keyHex) + '</code></div>' +
+            '<div>URL: <code>' + escapeHtml(url) + '</code></div>';
         }
         return;
       }
@@ -1357,8 +1357,24 @@
     // nested <button> is invalid HTML5 and the parser orphans everything
     // after it. Use <span role="button">; keydown handler on #chList
     // (Enter/Space) keeps it keyboard-accessible.
-    const removeBtn = isUserAdded ? ' <span class="ch-remove-btn" role="button" tabindex="0" data-remove-channel="' + escapeHtml(ch.hash) + '" title="Remove channel and clear saved key" aria-label="Remove ' + escapeHtml(name) + '">✕</span>' : '';
-    const shareBtn = isUserAdded ? ' <span class="ch-share-btn" role="button" tabindex="0" data-share-channel="' + escapeHtml(ch.hash) + '" aria-haspopup="dialog" title="Share channel key (QR + URL)" aria-label="Share ' + escapeHtml(name) + '">⤴</span>' : '';
+    // Icon button factory — used for the per-row remove/share controls.
+    // Both share the .ch-icon-btn base class (touch target, opacity); a
+    // modifier class (.ch-remove-btn / .ch-share-btn) supplies size + color.
+    function iconBtn(modClass, dataAttr, hash, name, glyph, title, ariaVerb, extraAttrs) {
+      return ' <span class="ch-icon-btn ' + modClass + '" role="button" tabindex="0"'
+        + ' ' + dataAttr + '="' + escapeHtml(hash) + '"'
+        + (extraAttrs || '')
+        + ' title="' + title + '"'
+        + ' aria-label="' + ariaVerb + ' ' + escapeHtml(name) + '">' + glyph + '</span>';
+    }
+    const removeBtn = isUserAdded
+      ? iconBtn('ch-remove-btn', 'data-remove-channel', ch.hash, name, '✕',
+                'Remove channel and clear saved key', 'Remove', '')
+      : '';
+    const shareBtn = isUserAdded
+      ? iconBtn('ch-share-btn', 'data-share-channel', ch.hash, name, '⤴',
+                'Share channel key (QR + URL)', 'Share', ' aria-haspopup="dialog"')
+      : '';
     const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key">🔑</span>' : '';
     const unreadBadge = (ch.unread && ch.unread > 0)
       ? ' <span class="ch-unread-badge" data-unread-channel="' + escapeHtml(ch.hash) + '" title="' + ch.unread + ' new" aria-label="' + ch.unread + ' unread">' + (ch.unread > 99 ? '99+' : ch.unread) + '</span>'
