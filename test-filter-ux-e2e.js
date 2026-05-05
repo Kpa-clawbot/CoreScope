@@ -113,28 +113,48 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     // Reset filter
     await page.fill('#packetFilterInput', '');
     await page.evaluate(() => document.getElementById('packetFilterInput').dispatchEvent(new Event('input', { bubbles: true })));
-    // Wait for table to populate
-    await page.waitForSelector('#pktBody tr td[data-filter-field="type"]', { timeout: 8000 });
-    // Locate first type cell with a real value (not "—")
-    const cell = await page.$('#pktBody tr td[data-filter-field="type"]');
-    assert(cell, 'no type cell found');
-    const cellValue = await cell.getAttribute('data-filter-value');
-    // Skip if no value
-    if (!cellValue || cellValue === '—' || cellValue === '') {
-      console.log('    (skipped — no type cell with value)');
-      return;
-    }
-    const box = await cell.boundingBox();
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
-    await page.waitForSelector('#filterContextMenu', { timeout: 3000 });
-    // Click the first item (== filter)
-    await page.click('#filterContextMenu .fux-ctx-item');
+    // Widen time window so fixture rows render
+    await page.evaluate(() => {
+      const sel = document.getElementById('fTimeWindow');
+      if (sel) {
+        sel.value = '0';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+    // Wait for the table to populate with cells that have a real value
     await page.waitForFunction(() => {
-      const v = document.getElementById('packetFilterInput').value;
-      return /type\s*(==|!=|contains)\s*/.test(v);
-    }, { timeout: 3000 });
-    const v = await page.inputValue('#packetFilterInput');
-    assert(/type\s*==\s*/.test(v), 'expected type clause appended, got: ' + v);
+      const cells = document.querySelectorAll('#pktBody td[data-filter-field="type"]');
+      for (const c of cells) {
+        const v = c.getAttribute('data-filter-value');
+        if (v && v !== '—' && v !== '') return true;
+      }
+      return false;
+    }, { timeout: 8000 });
+    // Dispatch contextmenu event programmatically (Playwright headless mouse
+    // right-click does not reliably trigger 'contextmenu' DOM events).
+    const result = await page.evaluate(() => {
+      const cell = Array.from(document.querySelectorAll('#pktBody td[data-filter-field="type"]'))
+        .find(c => {
+          const v = c.getAttribute('data-filter-value');
+          return v && v !== '—' && v !== '';
+        });
+      if (!cell) return { error: 'no type cell with value' };
+      const rect = cell.getBoundingClientRect();
+      const ev = new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true, button: 2,
+        clientX: rect.left + 5, clientY: rect.top + 5,
+      });
+      cell.dispatchEvent(ev);
+      const menu = document.getElementById('filterContextMenu');
+      if (!menu) return { error: 'context menu not opened' };
+      const items = Array.from(menu.querySelectorAll('.fux-ctx-item')).map(i => i.textContent);
+      // Click the first item (== filter)
+      menu.querySelector('.fux-ctx-item').click();
+      return { items, inputAfter: document.getElementById('packetFilterInput').value };
+    });
+    assert(!result.error, 'menu open failed: ' + (result.error || ''));
+    assert(result.items.length === 3, 'expected 3 menu items, got: ' + result.items.length);
+    assert(/type\s*==\s*/.test(result.inputAfter), 'expected type clause appended, got: ' + result.inputAfter);
   });
 
   await step('Save current expression persists to localStorage', async () => {
