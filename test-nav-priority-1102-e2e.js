@@ -15,6 +15,13 @@
  *    every link not currently visible inline.
  *  - At 768px (just above hamburger threshold): 5 high-priority links
  *    visible AND More menu non-empty.
+ *
+ * #1105 MINOR 7: at 1080/800px we now assert the visible set is *exactly*
+ * the 5 high-priority links (Home/Packets/Map/Live/Nodes). A buggy queue
+ * that hid Home and showed Lab would still pass the cardinality check.
+ *
+ * #1105 MINOR 9: also asserts that navigating to a route whose link
+ * lives in the More menu lights up #navMoreBtn with .active.
  */
 'use strict';
 
@@ -23,12 +30,14 @@ const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
 
 // [width, expected behavior]
+// requireExactHighPri: when true, asserts the visible set matches HIGH_PRIORITY_HREFS exactly
+const HIGH_PRIORITY_HREFS = ['#/home', '#/packets', '#/map', '#/live', '#/nodes'];
 const CASES = [
-  // viewport, minVisible, moreVisible, label
-  { w: 2560, minVisible: 11, moreVisible: false, label: '2560px — all visible' },
-  { w: 1920, minVisible: 9,  moreVisible: null,  label: '1920px — most visible' },
-  { w: 1080, minVisible: 5,  moreVisible: true,  label: '1080px — collapsed' },
-  { w: 800,  minVisible: 5,  moreVisible: true,  label: '800px — collapsed' },
+  // viewport, minVisible, moreVisible, requireExactHighPri, label
+  { w: 2560, minVisible: 11, moreVisible: false, requireExactHighPri: false, label: '2560px — all visible' },
+  { w: 1920, minVisible: 9,  moreVisible: null,  requireExactHighPri: false, label: '1920px — most visible' },
+  { w: 1080, minVisible: 5,  moreVisible: true,  requireExactHighPri: true,  label: '1080px — collapsed' },
+  { w: 800,  minVisible: 5,  moreVisible: true,  requireExactHighPri: true,  label: '800px — collapsed' },
 ];
 
 const HEIGHT = 900;
@@ -106,6 +115,22 @@ async function main() {
                      `(menu has ${data.moreMenuLinks.length}, expected ${data.hiddenInline.length})`);
       }
     }
+    // #1105 MINOR 7: identity, not just cardinality. The 5 visible links
+    // at the collapsed widths must be EXACTLY the high-priority set
+    // (Home/Packets/Map/Live/Nodes). A buggy queue that hid Home and
+    // showed Lab would still pass `visibleCount >= 5`.
+    if (c.requireExactHighPri) {
+      const missingHighPri = HIGH_PRIORITY_HREFS.filter(h => !data.visibleHrefs.includes(h));
+      if (missingHighPri.length) {
+        reasons.push(`high-priority link(s) NOT visible inline: ${missingHighPri.join(', ')} ` +
+                     `(visible=[${data.visibleHrefs.join(', ')}])`);
+      }
+      const extra = data.visibleHrefs.filter(h => !HIGH_PRIORITY_HREFS.includes(h));
+      if (extra.length) {
+        reasons.push(`unexpected non-high-priority link(s) visible: ${extra.join(', ')} ` +
+                     `(expected exactly [${HIGH_PRIORITY_HREFS.join(', ')}])`);
+      }
+    }
 
     const tag = c.label;
     if (reasons.length === 0) {
@@ -118,8 +143,61 @@ async function main() {
     }
   }
 
+  // #1105 MINOR 9: when at a collapsed width, navigating to a route
+  // whose link overflows into the More menu must light up #navMoreBtn
+  // with .active. Verifies rebuildMoreMenu() correctly mirrors the
+  // active state from the inline (cloned) link to the More button on
+  // each hashchange (applyNavPriority is wired to hashchange and runs
+  // after the route handler's class toggles).
+  await page.setViewportSize({ width: 1080, height: HEIGHT });
+  await page.goto(`${BASE}/#/observers`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.top-nav .nav-links');
+  await page.evaluate(() => document.fonts && document.fonts.ready ? document.fonts.ready : null);
+  // Wait for layout to settle.
+  await page.waitForFunction(() => {
+    const el = document.querySelector('.top-nav .nav-right');
+    if (!el) return false;
+    const r1 = el.getBoundingClientRect();
+    return new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const r2 = el.getBoundingClientRect();
+        resolve(r1.right === r2.right && r1.left === r2.left);
+      }));
+    });
+  }, null, { timeout: 5000 });
+  // Give the hashchange-triggered applyNavPriority a frame to run.
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+  const activeMirror = await page.evaluate(() => {
+    const observersInline = document.querySelector('.nav-links .nav-link[href="#/observers"]');
+    const inlineHidden = observersInline && observersInline.classList.contains('is-overflow');
+    const moreBtn = document.getElementById('navMoreBtn');
+    const moreBtnActive = moreBtn ? moreBtn.classList.contains('active') : false;
+    const moreMenuActiveHrefs = Array.from(document.querySelectorAll('#navMoreMenu .nav-link.active'))
+      .map(a => a.getAttribute('href'));
+    return { inlineHidden, moreBtnActive, moreMenuActiveHrefs };
+  });
+
+  const mirrorReasons = [];
+  if (!activeMirror.inlineHidden) {
+    mirrorReasons.push('precondition: #/observers should be in the More menu at 1080px (not visible inline)');
+  }
+  if (!activeMirror.moreBtnActive) {
+    mirrorReasons.push('navMoreBtn missing .active class while #/observers is the active route');
+  }
+  if (!activeMirror.moreMenuActiveHrefs.includes('#/observers')) {
+    mirrorReasons.push(`More-menu clone of #/observers missing .active (active hrefs in menu: [${activeMirror.moreMenuActiveHrefs.join(', ')}])`);
+  }
+  if (mirrorReasons.length === 0) {
+    passes++;
+    console.log(`  ✅ active-mirror @1080 #/observers: navMoreBtn.active=true, menu .active=#/observers`);
+  } else {
+    failures++;
+    console.log(`  ❌ active-mirror @1080 #/observers: ${mirrorReasons.join(' | ')}`);
+  }
+
   await browser.close();
-  console.log(`\ntest-nav-priority-1102-e2e.js: ${failures === 0 ? 'OK' : 'FAIL'} — ${passes}/${CASES.length} passed`);
+  console.log(`\ntest-nav-priority-1102-e2e.js: ${failures === 0 ? 'OK' : 'FAIL'} — ${passes}/${CASES.length + 1} passed`);
   process.exit(failures === 0 ? 0 : 1);
 }
 
