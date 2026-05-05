@@ -160,3 +160,57 @@ func TestRepeaterRelayActivity_IgnoresAdverts(t *testing.T) {
 		t.Errorf("expected zero relay counts (adverts ignored), got 1h=%d 24h=%d", info.RelayCount1h, info.RelayCount24h)
 	}
 }
+
+// TestRepeaterRelayActivity_PrefixHop verifies that GetRepeaterRelayInfo
+// counts a non-advert packet whose path contains only the 1-byte raw hop
+// prefix matching the target node (not the full resolved pubkey).
+//
+// Reality on prod/staging: many ingested packets only carry raw 1-byte
+// path hops (e.g. ["a3"] from the wire) — resolution to a full pubkey
+// happens later via neighbor affinity for the "Paths seen through node"
+// view. The byPathHop index is populated under BOTH keys (raw hop AND
+// resolved pubkey), but GetRepeaterRelayInfo only looks up the full
+// pubkey, missing all raw-hop-only entries. This is the cause of the
+// "never observed as relay hop" claim on nodes that clearly have paths
+// shown through them. See https://analyzer-stg.00id.net/#/nodes/<pk>.
+func TestRepeaterRelayActivity_PrefixHop(t *testing.T) {
+	db := setupCapabilityTestDB(t)
+	defer db.conn.Close()
+
+	pubkey := "a36a21290d9c25a158130fe7c489541210d5f09f25fab997db5e942fb7680510"
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+		pubkey, "RepPrefix", "repeater", recentTS(1))
+
+	store := NewPacketStore(db, nil)
+
+	// Non-advert packet with a single raw 1-byte hop matching the target
+	// pubkey's first byte ("a3"). Index it the way addTxToPathHopIndex
+	// does — under the raw hop key only, not the full pubkey.
+	pt := 1
+	tx := &StoreTx{
+		RawHex:      "0100",
+		PayloadType: &pt,
+		PathJSON:    `["a3"]`,
+		FirstSeen:   recentTS(2),
+	}
+	store.mu.Lock()
+	tx.ID = len(store.packets) + 1
+	tx.Hash = "test-relay-prefix-1"
+	store.packets = append(store.packets, tx)
+	store.byHash[tx.Hash] = tx
+	store.byTxID[tx.ID] = tx
+	addTxToPathHopIndex(store.byPathHop, tx)
+	store.mu.Unlock()
+
+	info := store.GetRepeaterRelayInfo(pubkey, 24)
+	if info.RelayCount24h < 1 {
+		t.Fatalf("expected RelayCount24h>=1 for node with prefix-matched hop in path, got %d (LastRelayed=%q)",
+			info.RelayCount24h, info.LastRelayed)
+	}
+	if info.LastRelayed == "" {
+		t.Errorf("expected non-empty LastRelayed when prefix hop matched, got empty")
+	}
+	if !info.RelayActive {
+		t.Errorf("expected RelayActive=true within 24h window, got false (LastRelayed=%s)", info.LastRelayed)
+	}
+}
