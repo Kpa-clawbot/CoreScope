@@ -1322,9 +1322,16 @@
     }
   }
 
-  // Stub — implementation lands in green commit.
+  // Display name for a channel — handles PSK channels where the raw
+  // "psk:<hex8>" key prefix shouldn't be shown to users. Falls back to
+  // userLabel, then a friendly placeholder, then the hash.
   function channelDisplayName(ch) {
-    return ch && ch.name ? ch.name : '';
+    if (!ch) return '';
+    var name = ch.name || '';
+    if (ch.userLabel) return ch.userLabel;
+    if (name && name.indexOf('psk:') === 0) return 'Private Channel';
+    if (name) return name;
+    return 'Channel ' + (typeof formatHashHex === 'function' ? formatHashHex(ch.hash) : ch.hash);
   }
 
   // #1034 PR1: render a single channel row (used by all sidebar sections).
@@ -1332,7 +1339,11 @@
     const isEncrypted = ch.encrypted === true;
     const isUserAdded = ch.userAdded === true;
     const baseName = isEncrypted ? (ch.name || 'Unknown') : (ch.name || `Channel ${formatHashHex(ch.hash)}`);
-    const name = (isUserAdded && ch.userLabel) ? ch.userLabel : baseName;
+    // #1041: PSK channels without a user label should not display the raw
+    // "psk:<hex>" key prefix in the sidebar either.
+    const name = (isUserAdded && ch.userLabel)
+      ? ch.userLabel
+      : (typeof baseName === 'string' && baseName.indexOf('psk:') === 0 ? 'Private Channel' : baseName);
     const color = isEncrypted && !isUserAdded ? 'var(--text-muted, #6b7280)' : getChannelColor(ch.hash);
     const time = ch.lastActivityMs ? formatSecondsAgo(Math.floor((Date.now() - ch.lastActivityMs) / 1000)) : '';
     // Preview: show last sender+message when we have one. Otherwise show
@@ -1377,7 +1388,7 @@
                 'Remove channel and clear saved key', 'Remove', '')
       : '';
     const shareBtn = isUserAdded
-      ? iconBtn('ch-share-btn', 'data-share-channel', ch.hash, name, '⤴',
+      ? iconBtn('ch-share-btn', 'data-share-channel', ch.hash, name, '📤 Share',
                 'Share channel key (QR + URL)', 'Share', ' aria-haspopup="dialog"')
       : '';
     const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key">🔑</span>' : '';
@@ -1462,7 +1473,9 @@
     history.replaceState(null, '', `#/channels/${encodeURIComponent(hash)}`);
     renderChannelList();
     const ch = channels.find(c => c.hash === hash);
-    const name = ch?.name || `Channel ${formatHashHex(hash)}`;
+    // #1041: never show raw "psk:<hex>" prefixes in the header — use the
+    // user-supplied label or "Private Channel".
+    const name = ch ? channelDisplayName(ch) : `Channel ${formatHashHex(hash)}`;
     const header = document.getElementById('chHeader');
     header.querySelector('.ch-header-text').textContent = `${name} — ${ch?.messageCount || 0} messages`;
 
