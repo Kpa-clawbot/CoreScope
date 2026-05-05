@@ -1,5 +1,8 @@
 # Build stage always runs natively on the builder's arch ($BUILDPLATFORM)
 # and cross-compiles to $TARGETOS/$TARGETARCH via Go toolchain. No QEMU.
+# BUILDPLATFORM is auto-set by buildx; default to linux/amd64 so plain
+# `docker build` (without buildx) doesn't fail on an empty platform string.
+ARG BUILDPLATFORM=linux/amd64
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
 
 ARG APP_VERSION=unknown
