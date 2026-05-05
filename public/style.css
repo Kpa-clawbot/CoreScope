@@ -370,16 +370,24 @@ input[type="week"] {
 .sort-help:focus .sort-help-tip,
 .sort-help:focus-within .sort-help-tip { display: block; }
 
-/* === Nav === */
+/* === Nav (Issue #1055 — Priority+ at all widths) ===
+   The top-nav uses Priority+ at ALL widths: only links marked
+   data-priority="high" render inline; everything else collapses into
+   the "More ▾" menu. This eliminates the historic 1080–1279px overflow
+   window AND the 1280–1599px overlap window where the full link strip
+   ran underneath .nav-right. Spacing and type use the #1054 fluid
+   clamp() tokens so the bar scales smoothly across viewport widths.
+   The hamburger and stacked mobile layout still take over at <768px. */
 .top-nav {
   display: flex; align-items: center; justify-content: space-between;
-  background: linear-gradient(135deg, var(--nav-bg) 0%, var(--nav-bg2) 100%); color: var(--nav-text); padding: 0 20px; height: 52px;
+  background: linear-gradient(135deg, var(--nav-bg) 0%, var(--nav-bg2) 100%); color: var(--nav-text);
+  padding: 0 var(--gutter); height: 52px;
   position: sticky; top: 0; z-index: 1100;
   box-shadow: 0 2px 8px rgba(0,0,0,.3);
   flex-wrap: nowrap; overflow: hidden; min-width: 0;
 }
-.nav-left { display: flex; align-items: center; gap: 24px; min-width: 0; flex-shrink: 1; overflow: hidden; }
-.nav-brand { display: flex; align-items: center; gap: 8px; text-decoration: none; color: var(--nav-text); font-weight: 700; font-size: 16px; }
+.nav-left { display: flex; align-items: center; gap: var(--space-lg); min-width: 0; flex-shrink: 1; overflow: hidden; }
+.nav-brand { display: flex; align-items: center; gap: var(--space-sm); text-decoration: none; color: var(--nav-text); font-weight: 700; font-size: var(--fs-md); }
 .brand-icon { font-size: 20px; }
 .live-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);
@@ -392,9 +400,10 @@ input[type="week"] {
 }
 .live-dot.connected { background: var(--status-green); animation: pulse-ring 2s ease-out infinite; }
 
-.nav-links { display: flex; align-items: center; gap: 4px; }
+.nav-links { display: flex; align-items: center; gap: var(--space-xs); }
 .nav-link {
-  color: var(--nav-text-muted); text-decoration: none; padding: 14px 12px; font-size: 14px;
+  color: var(--nav-text-muted); text-decoration: none;
+  padding: 14px clamp(8px, 0.6vw + 4px, 14px); font-size: var(--fs-sm);
   border-bottom: 2px solid transparent; transition: all .15s;
   background: none; border-top: none; border-left: none; border-right: none;
   cursor: pointer; font-family: var(--font);
@@ -407,7 +416,7 @@ input[type="week"] {
   background: var(--nav-active-bg); 
   border-radius: 6px; 
   margin: 4px 0;
-  padding: 10px 12px;
+  padding: 10px clamp(8px, 0.6vw + 4px, 14px);
 }
 
 .nav-dropdown { position: relative; }
@@ -422,7 +431,7 @@ input[type="week"] {
 }
 .dropdown-item:hover { background: var(--accent); color: #fff; }
 
-.nav-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.nav-right { display: flex; align-items: center; gap: var(--space-sm); flex-shrink: 0; }
 .nav-btn {
   background: none; border: 1px solid var(--border); color: var(--nav-text-muted); padding: 6px 12px;
   border-radius: 6px; cursor: pointer; font-size: 14px; transition: all .15s;
@@ -1267,18 +1276,19 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .map-controls { width: 180px; font-size: 12px; }
 }
 
-/* === Responsive — Tablet/Mid Priority+ nav (768–1279px) ===
-   At <1280px the full nav-links + nav-stats + nav-right buttons can't fit
-   on one row (they total ~1540px on the home page). Collapse non-priority
-   links into the "More ▾" menu so .nav-right stays inside the viewport. */
-@media (min-width: 768px) and (max-width: 1279px) {
-  .nav-links { display: flex !important; flex-direction: row; gap: 2px; }
+/* === Nav Priority+ — applies at ALL desktop widths (Issue #1055) ===
+   Above the mobile hamburger breakpoint, only data-priority="high" links
+   render inline; the rest collapse into the "More ▾" overflow menu.
+   This guarantees nav-right cannot be pushed off-screen or overlapped by
+   the link strip at any common viewport (768/1024/1280/1440/1920+). */
+@media (min-width: 768px) {
+  .nav-links { display: flex !important; flex-direction: row; gap: var(--space-xs); }
   .nav-links a:not([data-priority="high"]) { display: none; }
   .nav-more-wrap { display: flex; align-items: center; }
   .hamburger { display: none; }
-  .nav-link { padding: 14px 8px; font-size: 13px; }
+  .nav-link { padding: 14px clamp(8px, 0.6vw + 4px, 14px); font-size: var(--fs-sm); }
   .nav-links a[data-priority="high"] { order: -1; }
-  .nav-link.active { background: var(--nav-active-bg); border-radius: 6px; margin: 4px 0; padding: 10px 8px; }
+  .nav-link.active { background: var(--nav-active-bg); border-radius: 6px; margin: 4px 0; padding: 10px clamp(8px, 0.6vw + 4px, 14px); }
 }
 
 /* === Responsive — Hamburger nav (<768px) === */
