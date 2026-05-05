@@ -40,10 +40,19 @@ function filterPacketsByRoute(packets, mode) {
   return packets;
 }
 
+/**
+ * Compute asymmetric overlap statistics between two observer packet sets.
+ * Stub — implementation lands in green commit (#671).
+ */
+function computeOverlapStats(cmp) {
+  return { totalA: 0, totalB: 0, shared: 0, onlyA: 0, onlyB: 0, aSeesOfB: 0, bSeesOfA: 0 };
+}
+
 // Expose for testing
 if (typeof window !== 'undefined') {
   window.comparePacketSets = comparePacketSets;
   window.filterPacketsByRoute = filterPacketsByRoute;
+  window.computeOverlapStats = computeOverlapStats;
 }
 
 (function () {
