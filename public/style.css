@@ -2755,6 +2755,25 @@ th.sort-active { color: var(--accent, #60a5fa); }
 }
 .ch-qr-output { font-size: 11px; font-family: var(--mono, monospace); color: var(--text-muted); word-break: break-all; min-height: 14px; padding: 4px 0; }
 
+/* #1087 polish: dedicated Share modal styling. Mirrors .ch-modal* tokens. */
+.ch-share-modal { max-width: 480px; }
+.ch-share-modal-title { margin: 0 0 12px; font-size: 16px; font-weight: 600; }
+.ch-share-modal-body { display: flex; flex-direction: column; gap: 12px; }
+.ch-share-qr {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 120px; padding: 8px;
+  background: var(--bg-secondary, rgba(0,0,0,0.02));
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.ch-share-field-group { display: flex; flex-direction: column; gap: 4px; }
+.ch-share-label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.ch-share-row { display: flex; gap: 6px; align-items: center; }
+.ch-share-row .ch-modal-input { flex: 1; min-width: 0; }
+.ch-share-error {
+  color: var(--status-red, #dc2626); font-size: 13px; line-height: 1.4;
+  padding: 8px 12px; text-align: center;
+}
+
 .ch-section { margin-bottom: 8px; }
 .ch-section-header {
   display: flex; align-items: center; gap: 6px;
