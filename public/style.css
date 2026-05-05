@@ -1276,6 +1276,21 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .map-controls { width: 180px; font-size: 12px; }
 }
 
+/* === Nav narrow-desktop tightening (Issue #1055 — 1024px overlap fix) ===
+   Between 901px (where the tablet rule above stops hiding nav-stats) and
+   ~1100px the 5 high-priority links + "More ▾" + 4 nav-right buttons +
+   the nav-stats block don't fit on one row, causing the rightmost visible
+   link to overlap nav-right by ~20px. Hide nav-stats and tighten nav-link
+   padding/gap in this band; nav-stats reappears at ≥1101px where there is
+   room for it. */
+@media (min-width: 768px) and (max-width: 1100px) {
+  .nav-stats { display: none; }
+  .nav-links { gap: 0; }
+  .nav-link { padding: 14px 6px; }
+  .nav-link.active { padding: 10px 6px; }
+  .nav-right { gap: 4px; }
+}
+
 /* === Nav Priority+ — applies at ALL desktop widths (Issue #1055) ===
    Above the mobile hamburger breakpoint, only data-priority="high" links
    render inline; the rest collapse into the "More ▾" overflow menu.
