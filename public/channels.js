@@ -1337,11 +1337,11 @@
   // without duplicating the psk:* check.
   function channelDisplayName(ch, fallback) {
     if (!ch) return '';
-    var name = ch.name || '';
+    const name = ch.name || '';
     if (ch.userLabel) return ch.userLabel;
-    if (name && name.indexOf('psk:') === 0) return PRIVATE_CHANNEL_LABEL;
+    if (name.indexOf('psk:') === 0) return PRIVATE_CHANNEL_LABEL;
     if (name) return name;
-    if (typeof fallback === 'string' && fallback) return fallback;
+    if (fallback) return fallback;
     return 'Channel ' + (typeof formatHashHex === 'function' ? formatHashHex(ch.hash) : ch.hash);
   }
 

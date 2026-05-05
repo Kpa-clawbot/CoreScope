@@ -121,19 +121,15 @@ if (renderRowSrc) {
     customColors: {},
     window: {},
     renderChannelRow: null,
-    // #1041 follow-up: renderChannelRow now delegates name resolution to
-    // channelDisplayName(ch, fallback). Provide a faithful stub for the
-    // sandbox so existing assertions keep working.
-    channelDisplayName: (ch, fallback) => {
-      if (!ch) return '';
-      if (ch.userLabel) return ch.userLabel;
-      const n = ch.name || '';
-      if (n.indexOf('psk:') === 0) return 'Private Channel';
-      if (n) return n;
-      return fallback || ('Channel ' + ch.hash);
-    },
   };
+  // #1041 follow-up: renderChannelRow now delegates to channelDisplayName.
+  // Eval the REAL helper (and its module-local PRIVATE_CHANNEL_LABEL)
+  // into the sandbox so this test stays in sync with production behavior
+  // automatically — no hand-rolled duplicate of the psk:* rule.
+  const helperSrc = extractFn(chSrc, 'function channelDisplayName(ch');
+  assert(helperSrc, 'extracted channelDisplayName source for behavior sandbox');
   vm.createContext(sandbox);
+  vm.runInContext('const PRIVATE_CHANNEL_LABEL = "Private Channel";\n' + helperSrc, sandbox);
   vm.runInContext(renderRowSrc, sandbox);
   const userRow = sandbox.renderChannelRow({
     hash: 'user:Crew',
