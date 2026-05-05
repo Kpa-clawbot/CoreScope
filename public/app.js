@@ -507,6 +507,7 @@ function offWS(fn) { wsListeners = wsListeners.filter(f => f !== fn); }
 // Visual indicator pulses during pull; toast confirms result.
 const PULL_THRESHOLD_PX = 80;
 let _pullToast = null;
+let _pullToastTimer = null;
 let _pullIndicator = null;
 
 function _ensurePullIndicator() {
@@ -532,6 +533,7 @@ function _showPullToast(msg, ok) {
   try {
     if (_pullToast && _pullToast.remove) _pullToast.remove();
   } catch (e) {}
+  if (_pullToastTimer) { try { clearTimeout(_pullToastTimer); } catch (e) {} _pullToastTimer = null; }
   const el = document.createElement('div');
   el.className = 'pull-reconnect-toast';
   el.textContent = msg;
@@ -544,7 +546,10 @@ function _showPullToast(msg, ok) {
   ].join(';');
   document.body.appendChild(el);
   _pullToast = el;
-  setTimeout(function () { try { el.remove(); } catch (e) {} }, 1800);
+  _pullToastTimer = setTimeout(function () {
+    _pullToastTimer = null;
+    try { el.remove(); } catch (e) {}
+  }, 1800);
 }
 
 function pullReconnect() {
