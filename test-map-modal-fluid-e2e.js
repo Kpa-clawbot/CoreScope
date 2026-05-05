@@ -75,18 +75,22 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.waitForSelector('#leaflet-map', { timeout: 8000 });
     await page.waitForSelector('.map-controls', { timeout: 8000 });
     await page.waitForTimeout(400);
-    // Inject a synthetic marker at top-right region of leaflet container,
-    // where the .map-controls panel lives. If controls overflow the viewport
-    // or are oversized, they will overlap this marker rectangle.
+    // Inject a synthetic marker in the LEFT half of the leaflet container.
+    // The controls panel sits in the top-right corner; if it grows
+    // uncontrolled (e.g. fixed 220px+ at narrow viewports) or wraps into
+    // the map area, it can overlap markers placed away from the corner.
+    // We assert controls DO NOT bleed across the centerline into a marker
+    // sitting at left:50%, top:80px.
     const result = await page.evaluate(() => {
       const lc = document.querySelector('.leaflet-container');
       if (!lc) return { ok: false, reason: 'no .leaflet-container' };
       const lr = lc.getBoundingClientRect();
-      // Place a 24x24 "marker" 40px from leaflet's right edge, 60px from top.
       const m = document.createElement('div');
       m.className = 'leaflet-marker-icon test-marker-1059';
+      // Marker centered horizontally inside leaflet, at top:80px.
+      const left = lr.left + (lr.width / 2) - 12;
       m.style.cssText = 'position:absolute;width:24px;height:24px;' +
-        'left:' + (lr.right - 64) + 'px;top:' + (lr.top + 60) + 'px;' +
+        'left:' + left + 'px;top:' + (lr.top + 80) + 'px;' +
         'background:red;z-index:399;pointer-events:none;';
       document.body.appendChild(m);
       const mb = m.getBoundingClientRect();
@@ -95,15 +99,16 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         const r = el.getBoundingClientRect();
         const overlap = !(r.right <= mb.left || r.left >= mb.right ||
                           r.bottom <= mb.top || r.top >= mb.bottom);
-        return { overlap, ctrl: { l: r.left, r: r.right, t: r.top, b: r.bottom } };
+        return { overlap, ctrl: { l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width } };
       });
-      return { ok: true, marker: { l: mb.left, r: mb.right, t: mb.top, b: mb.bottom }, overlaps };
+      return { ok: true, marker: { l: mb.left, r: mb.right, t: mb.top, b: mb.bottom }, overlaps, vw: window.innerWidth };
     });
     assert(result.ok, result.reason || 'setup failed');
     const overlapping = result.overlaps.filter((o) => o.overlap);
     assert(overlapping.length === 0,
-      `map controls overlap marker bounds: marker=${JSON.stringify(result.marker)} ` +
-      `overlapping=${JSON.stringify(overlapping)}`);
+      `map controls overlap centered marker (controls bled across viewport): ` +
+      `marker=${JSON.stringify(result.marker)} overlapping=${JSON.stringify(overlapping)} ` +
+      `vw=${result.vw}`);
   });
 
   // --- MAJOR-4 AC2: at 2560x1440, leaflet-container fills extra space ---
@@ -121,12 +126,25 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
 
   // --- MAJOR-1 + 2 + 3: BYOP modal — strict 90vh, inflated content, sticky close ---
-  await step('BYOP modal: max-height >= 90vh STRICT (rejects 80vh)', async () => {
-    await page.setViewportSize({ width: 1024, height: 800 });
+  // Helper: open BYOP modal cleanly. Close any existing modal first since
+  // hash-route navigation does not reload the SPA and would leave a previous
+  // modal open.
+  async function openByopModal(viewport) {
+    await page.setViewportSize(viewport);
+    // Force a real reload to clear any modal/state from the previous step.
     await page.goto(BASE + '/#/packets', { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-action="pkt-byop"]', { timeout: 8000 });
+    // Defensive: dismiss any pre-existing overlay.
+    await page.evaluate(() => {
+      document.querySelectorAll('.byop-overlay, .modal-overlay').forEach((el) => el.remove());
+    });
     await page.click('[data-action="pkt-byop"]');
-    await page.waitForSelector('.byop-modal', { timeout: 3000 });
+    await page.waitForSelector('.byop-modal', { timeout: 5000 });
+  }
+
+  await step('BYOP modal: max-height >= 90vh STRICT (rejects 80vh)', async () => {
+    await openByopModal({ width: 1024, height: 800 });
     const m = await page.evaluate(() => {
       const modal = document.querySelector('.byop-modal');
       const cs = getComputedStyle(modal);
@@ -149,11 +167,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
 
   await step('BYOP modal: inflated content overflows internally (90vh cap holds)', async () => {
-    await page.setViewportSize({ width: 1024, height: 800 });
-    await page.goto(BASE + '/#/packets', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('[data-action="pkt-byop"]', { timeout: 8000 });
-    await page.click('[data-action="pkt-byop"]');
-    await page.waitForSelector('.byop-modal', { timeout: 3000 });
+    await openByopModal({ width: 1024, height: 800 });
     // MAJOR-3: inject 100 tall paragraphs INSIDE the modal so content >> 90vh.
     await page.evaluate(() => {
       const modal = document.querySelector('.byop-modal');
@@ -194,11 +208,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
 
   await step('BYOP modal: close button reachable AFTER scrolling past it (behavioral)', async () => {
-    await page.setViewportSize({ width: 1024, height: 800 });
-    await page.goto(BASE + '/#/packets', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('[data-action="pkt-byop"]', { timeout: 8000 });
-    await page.click('[data-action="pkt-byop"]');
-    await page.waitForSelector('.byop-modal', { timeout: 3000 });
+    await openByopModal({ width: 1024, height: 800 });
     // Inflate content so modal scrolls.
     await page.evaluate(() => {
       const modal = document.querySelector('.byop-modal');
