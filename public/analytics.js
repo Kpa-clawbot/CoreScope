@@ -2055,6 +2055,12 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
 
   // Expose for testing
   if (typeof window !== 'undefined') {
+    // Stub: filled in by the analytics-channels-integration fix.
+    // Returns channels unchanged so callers can opt-in safely.
+    window._analyticsDecorateChannels = window._analyticsDecorateChannels ||
+      function (channels) {
+        return (channels || []).map(function (c) { return Object.assign({}, c); });
+      };
     window._analyticsSortChannels = sortChannels;
     window._analyticsLoadChannelSort = loadChannelSort;
     window._analyticsSaveChannelSort = saveChannelSort;
