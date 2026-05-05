@@ -1963,11 +1963,11 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   /* #1058 — fluid + auto-stacking layout. The grid sizes from its own
      available width (NOT the viewport), so a narrow side-pane on a wide
      screen still stacks. `auto-fit` collapses empty tracks; `minmax()`
-     guarantees a minimum readable column width before wrapping.
-     Also opts in to container queries for fine-grained tweaks below.
-     Uses #1054 spacing tokens. */
+     guarantees a minimum readable column width before wrapping. The
+     `container-type: inline-size` opts in to container queries so
+     descendants (or future tweaks) can size against this element's
+     own width rather than the viewport. Uses #1054 spacing tokens. */
   container-type: inline-size;
-  container-name: analytics-charts;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
   gap: var(--space-sm);
@@ -1975,17 +1975,14 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 }
 .analytics-chart-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: var(--space-sm); min-width: 0; }
 .analytics-chart-card.full { grid-column: 1 / -1; }
-.analytics-chart-card > svg,
-.analytics-chart-card > canvas { max-width: 100%; height: auto; display: block; }
+/* Constrain chart media inside the card (svg/canvas at any depth). The
+   `.analytics-chart-card svg, .analytics-chart-card canvas` descendant
+   selector is robust to wrapper elements (legends, tooltips, axis
+   groups) being added between the card and the chart media. */
+.analytics-chart-card svg,
+.analytics-chart-card canvas { max-width: 100%; height: auto; display: block; }
 .analytics-chart-card h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); margin-bottom: 4px; }
 .analytics-chart-desc { font-size: 10px; color: var(--text-muted); margin-bottom: 8px; font-style: italic; }
-/* Force single-column stack when the analytics column itself is narrow,
-   regardless of viewport width. Uses container query on the grid's own
-   children (the auto-fit minmax already does this for us, but the
-   explicit container-query rule cements the contract for tests). */
-@container analytics-charts (max-width: 800px) {
-  .analytics-chart-card { grid-column: 1 / -1; }
-}
 .analytics-heatmap { display: grid; grid-template-columns: 40px repeat(24, 1fr); gap: 2px; }
 .analytics-heatmap-cell { aspect-ratio: 1; border-radius: 2px; cursor: default; }
 .analytics-heatmap-label { font-size: 10px; color: var(--text-muted); display: flex; align-items: center; }

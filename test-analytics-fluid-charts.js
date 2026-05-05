@@ -152,6 +152,52 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       `horizontal overflow at wide-viewport/narrow-container: scrollW=${o.scrollW} clientW=${o.clientW}`);
   });
 
+  // --- Viewport 1920: large desktop → side-by-side, no overflow --------
+  await step('viewport 1920 / wrapper 1880px → side-by-side (≥2 cols), no overflow', async () => {
+    await load(1880, 1920);
+    const cols = await colCount();
+    assert(cols >= 2, `expected ≥2 columns at wrapper 1880px; got ${cols}`);
+    const o = await overflow();
+    assert(o.scrollW <= o.clientW + 1,
+      `horizontal overflow at 1920: scrollW=${o.scrollW} clientW=${o.clientW}`);
+  });
+
+  // --- Viewport 2560: ultra-wide → side-by-side, no overflow -----------
+  await step('viewport 2560 / wrapper 2520px → side-by-side (≥2 cols), no overflow', async () => {
+    await load(2520, 2560);
+    const cols = await colCount();
+    assert(cols >= 2, `expected ≥2 columns at wrapper 2520px; got ${cols}`);
+    const o = await overflow();
+    assert(o.scrollW <= o.clientW + 1,
+      `horizontal overflow at 2560: scrollW=${o.scrollW} clientW=${o.clientW}`);
+  });
+
+  // --- AC3: charts must redraw/relayout on viewport resize -------------
+  // Open at 1440 wide (side-by-side), then shrink the wrapper to 760
+  // (sub-800 container) and assert the layout actually flips to a
+  // single column. This guards against any future regression where
+  // the grid is computed once and stuck.
+  await step('AC3: layout reflows on resize (1440 side-by-side → 768 stacked)', async () => {
+    await load(1300, 1440);
+    const colsWide = await colCount();
+    assert(colsWide >= 2,
+      `precondition failed: expected ≥2 cols at 1300px; got ${colsWide}`);
+    // Shrink only the wrapper (no full reload) — proves the layout
+    // recomputes from the current container width, not a one-shot value.
+    await page.evaluate(() => {
+      document.getElementById('wrap').style.width = '760px';
+    });
+    await page.setViewportSize({ width: 768, height: 900 });
+    // Give the browser a frame to recompute layout.
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const colsNarrow = await colCount();
+    assert(colsNarrow === 1,
+      `expected layout to reflow to 1 column after shrink; got ${colsNarrow}`);
+    const o = await overflow();
+    assert(o.scrollW <= o.clientW + 1,
+      `horizontal overflow after resize: scrollW=${o.scrollW} clientW=${o.clientW}`);
+  });
+
   await browser.close();
 
   console.log(`\n${passed} passed, ${failed} failed`);
