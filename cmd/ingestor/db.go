@@ -25,6 +25,27 @@ type DBStats struct {
 	ObserverUpserts        atomic.Int64
 	WriteErrors            atomic.Int64
 	SignatureDrops         atomic.Int64
+	GroupCommitFlushes     atomic.Int64
+}
+
+// SetGroupCommit configures group-commit batching for InsertTransmission.
+// When ms > 0, observation/transmission INSERTs are queued inside a single
+// BEGIN/COMMIT and flushed every ms milliseconds (or earlier if the pending
+// row count exceeds maxRows). When ms == 0 every InsertTransmission commits
+// individually (legacy behavior).
+//
+// Stub: real implementation lands in the green commit. This stub exists so
+// the TDD red commit compiles and fails on assertions, not import errors.
+func (s *Store) SetGroupCommit(ms int, maxRows int) {
+	// no-op stub
+	_ = ms
+	_ = maxRows
+}
+
+// FlushGroupTx commits any pending grouped INSERTs immediately.
+// Stub: see SetGroupCommit.
+func (s *Store) FlushGroupTx() error {
+	return nil
 }
 
 // Store wraps the SQLite database for packet ingestion.
