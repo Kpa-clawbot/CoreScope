@@ -1875,6 +1875,47 @@
     return false;
   }
 
+  function packetInvolvesFilterNode(pkt, filterKeys) {
+    if (!filterKeys.length) return true;
+    const hops = (pkt.decoded?.path?.hops) || [];
+    for (const hop of hops) {
+      const h = (hop.id || hop.public_key || hop).toString().toLowerCase();
+      if (filterKeys.some(f => f.toLowerCase().startsWith(h) || h.startsWith(f.toLowerCase()))) return true;
+    }
+    return false;
+  }
+
+  function setNodeFilter(keys) {
+    nodeFilterKeys = keys;
+    nodeFilterTotal = 0;
+    nodeFilterShown = 0;
+    localStorage.setItem('live-node-filter', keys.join(','));
+    updateNodeFilterUI();
+  }
+
+  function updateNodeFilterUI() {
+    const countEl = document.getElementById('liveNodeFilterCount');
+    const clearBtn = document.getElementById('liveNodeFilterClear');
+    const input = document.getElementById('liveNodeFilterInput');
+    if (nodeFilterKeys.length > 0) {
+      if (clearBtn) clearBtn.style.display = '';
+      if (countEl) { countEl.textContent = `Showing ${nodeFilterShown} of ${nodeFilterTotal}`; countEl.classList.remove('hidden'); }
+      if (input && input.value !== nodeFilterKeys.join(', ')) input.value = nodeFilterKeys.join(', ');
+    } else {
+      if (clearBtn) clearBtn.style.display = 'none';
+      if (countEl) countEl.classList.add('hidden');
+    }
+    updateNodeFilterDatalist();
+  }
+
+  function updateNodeFilterDatalist() {
+    const dl = document.getElementById('liveNodeFilterList');
+    if (!dl) return;
+    dl.innerHTML = Object.values(nodeData).map(n =>
+      `<option value="${n.public_key}">${n.name || n.public_key.slice(0, 8)}</option>`
+    ).join('');
+  }
+
   function applyNodeFilter() {
     if (!nodesLayer) return;
     for (const [key, marker] of Object.entries(nodeMarkers)) {
