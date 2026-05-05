@@ -73,7 +73,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     const scanBtn = await page.$('#scan-qr-btn');
     assert(scanBtn, '#scan-qr-btn missing');
     const disabled = await scanBtn.getAttribute('disabled');
-    assert(disabled !== null, '#scan-qr-btn must be disabled placeholder');
+    assert(disabled === null, '#scan-qr-btn must be enabled (wired in #1034 PR3)');
   });
 
   await step('modal renders privacy footer', async () => {

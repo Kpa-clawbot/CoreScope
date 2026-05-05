@@ -671,7 +671,7 @@
                      pattern="[0-9a-fA-F]{32}"
                      maxlength="32"
                      aria-label="32-character hex PSK key" spellcheck="false" autocomplete="off">
-              <button type="button" id="scan-qr-btn" class="ch-modal-btn-secondary" disabled title="QR scanning ships in the next update">📷 Scan QR</button>
+              <button type="button" id="scan-qr-btn" class="ch-modal-btn-secondary" title="Scan a meshcore:// channel QR with your camera">📷 Scan QR</button>
             </div>
             <div class="ch-modal-row">
               <input type="text" id="chPskName" class="ch-modal-input" placeholder="Display name (optional)" aria-label="Optional display name" spellcheck="false">
@@ -779,9 +779,18 @@
       ChannelDecrypt.storeKey(channelName, keyHex, label);
       var qrOut = document.getElementById('qr-output');
       if (qrOut) {
-        // PR #2 will render the actual QR code here. For now, surface the key
-        // so the user can copy/paste it manually.
-        qrOut.textContent = 'Key generated: ' + keyHex + ' (QR code coming in next update)';
+        qrOut.innerHTML = '';
+        // Render the QR + meshcore:// URL + Copy Key inline. The QR
+        // helper handles canvas rendering + accessible copy controls.
+        if (window.ChannelQR && typeof window.ChannelQR.generate === 'function') {
+          // Use the user-supplied label when provided so the scanned
+          // recipient sees a meaningful name; fall back to the
+          // psk:<prefix> auto-name otherwise.
+          window.ChannelQR.generate(label || channelName, keyHex, qrOut);
+        } else {
+          // Fallback when channel-qr.js failed to load.
+          qrOut.textContent = 'Key generated: ' + keyHex;
+        }
       }
       mergeUserChannels();
       renderChannelList();
@@ -805,6 +814,35 @@
       if (keyEl) keyEl.value = '';
       if (nameEl) nameEl.value = '';
       await addUserChannel(raw.toLowerCase(), label);
+    });
+
+    // Section 2 (cont.): Scan QR — populates #chPskKey + #chPskName
+    // from a scanned meshcore://channel/add?... URL. Wiring added in
+    // PR #1034/PR3 against window.ChannelQR (public/channel-qr.js).
+    var scanBtn = document.getElementById('scan-qr-btn');
+    if (scanBtn) scanBtn.addEventListener('click', async function () {
+      var errEl = document.getElementById('chPskError');
+      if (!window.ChannelQR || typeof window.ChannelQR.scan !== 'function') {
+        if (errEl) {
+          errEl.textContent = 'QR scanning is unavailable in this browser.';
+          errEl.style.display = '';
+        }
+        return;
+      }
+      try {
+        var result = await window.ChannelQR.scan();
+        if (!result) return; // user cancelled
+        var keyEl = document.getElementById('chPskKey');
+        var nameEl = document.getElementById('chPskName');
+        if (keyEl && result.secret) keyEl.value = result.secret;
+        if (nameEl && result.name) nameEl.value = result.name;
+        if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+      } catch (err) {
+        if (errEl) {
+          errEl.textContent = 'Scan failed: ' + (err && err.message ? err.message : 'unknown error');
+          errEl.style.display = '';
+        }
+      }
     });
 
     // Section 3: Monitor Hashtag
