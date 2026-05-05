@@ -116,7 +116,139 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 
 /* === Touch Targets === */
-.nav-link { min-height: 44px; display: inline-flex; align-items: center; }
+/* WCAG 2.5.5 / Apple HIG / Material: 48x48 CSS px minimum touch target for
+   all interactive controls. Targets are achieved with min-height/min-width
+   plus inline-flex centering so existing visual styling (font-size, padding,
+   icon size) is preserved on desktop while the *hit area* grows for touch.
+   Issue #1060. */
+.nav-link { min-height: 48px; display: inline-flex; align-items: center; }
+
+/* Generic button surfaces — filter bar, modal buttons, inline .btn usages.
+   inline-flex keeps text/icons centered without changing visible padding much. */
+.btn,
+.filter-bar .btn,
+.filter-group .btn {
+  min-height: 48px;
+  min-width: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.btn-icon {
+  min-height: 48px;
+  min-width: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  touch-action: manipulation;
+}
+
+.nav-btn {
+  min-height: 48px;
+  min-width: 48px;
+  touch-action: manipulation;
+}
+
+.ch-icon-btn,
+.ch-remove-btn,
+.ch-share-btn {
+  min-height: 48px;
+  min-width: 48px;
+  touch-action: manipulation;
+}
+
+.ch-gear-btn {
+  min-height: 48px;
+  min-width: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  touch-action: manipulation;
+}
+
+.panel-close-btn {
+  min-height: 48px;
+  min-width: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  touch-action: manipulation;
+}
+
+.mc-jump-btn {
+  min-height: 48px;
+  min-width: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  touch-action: manipulation;
+}
+
+button.ch-item {
+  min-height: 48px;
+  touch-action: manipulation;
+}
+
+/* Visible :active states — touch devices have no hover, so :active is the
+   primary feedback channel. Use opacity + slight scale + background shift so
+   the press is felt even when the user's finger covers the control. */
+.btn:active,
+.filter-bar .btn:active,
+.filter-group .btn:active {
+  background: var(--row-hover);
+  transform: scale(0.97);
+  opacity: 0.9;
+}
+.btn-icon:active {
+  background: var(--row-hover);
+  transform: scale(0.97);
+}
+.nav-btn:active {
+  background: var(--nav-bg2);
+  transform: scale(0.97);
+  opacity: 0.9;
+}
+.ch-icon-btn:active,
+.ch-remove-btn:active,
+.ch-share-btn:active {
+  opacity: 1;
+  transform: scale(0.92);
+}
+.ch-gear-btn:active,
+.panel-close-btn:active,
+.mc-jump-btn:active {
+  background: var(--row-hover);
+  transform: scale(0.95);
+}
+
+/* Hover→tap conversion. Hover-only feedback (e.g., tooltip reveal) is gated
+   behind @media (hover: hover) so touch devices don't get stuck in a hover
+   state after a tap. The same content is exposed on tap via :focus-within
+   below. */
+@media (hover: hover) {
+  .sort-help:hover .sort-help-tip { display: block; }
+}
+
+/* Tap-to-reveal tooltip: .sort-help becomes keyboard/tap focusable (set
+   tabindex="0" in markup). On focus or focus-within, the tip is shown so a
+   tap on touch devices reveals it without requiring hover. */
+.sort-help { outline: none; }
+.sort-help:focus,
+.sort-help:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.sort-help:focus .sort-help-tip,
+.sort-help:focus-within .sort-help-tip { display: block; }
 
 /* === Nav === */
 .top-nav {
