@@ -1322,6 +1322,11 @@
     }
   }
 
+  // Stub — implementation lands in green commit.
+  function channelDisplayName(ch) {
+    return ch && ch.name ? ch.name : '';
+  }
+
   // #1034 PR1: render a single channel row (used by all sidebar sections).
   function renderChannelRow(ch) {
     const isEncrypted = ch.encrypted === true;
