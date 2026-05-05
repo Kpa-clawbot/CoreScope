@@ -1336,19 +1336,29 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .ch-main { width: 100%; }
 }
 
-/* === Nav Priority+ — applies at ALL desktop widths (Issue #1055) ===
-   Above the mobile hamburger breakpoint, only data-priority="high" links
-   render inline; the rest collapse into the "More ▾" overflow menu.
-   This guarantees nav-right cannot be pushed off-screen or overlapped by
-   the link strip at any common viewport (768/1024/1280/1440/1920+). */
+/* === Nav Priority+ — JS-driven measurement (Issue #1102) ===
+   Above the mobile hamburger breakpoint we render ALL nav links inline
+   by default. A small JS pass in app.js (applyNavPriority) measures the
+   actual fit and adds .is-overflow to whichever links don't fit, then
+   moves them into the "More ▾" overflow menu. Pure CSS can't do this
+   correctly because we want every link visible at 2560px+ but only the
+   high-priority ones at 800px — and the breakpoint where each link
+   drops depends on its label width, the gutters, the active-link
+   padding, and the nav-stats badge. JS measurement is the only correct
+   answer. data-priority="high" links are pinned to the left via
+   order:-1 and are kept inline as long as possible (low-priority links
+   overflow first). Spacing/type still use #1054 fluid clamp() tokens. */
 @media (min-width: 768px) {
   .nav-links { display: flex !important; flex-direction: row; gap: var(--space-xs); }
-  .nav-links a:not([data-priority="high"]) { display: none; }
   .nav-more-wrap { display: flex; align-items: center; }
   .hamburger { display: none; }
   .nav-link { padding: 14px clamp(8px, 0.6vw + 4px, 14px); font-size: var(--fs-sm); }
   .nav-links a[data-priority="high"] { order: -1; }
   .nav-link.active { background: var(--nav-active-bg); border-radius: 6px; margin: 4px 0; padding: 10px clamp(8px, 0.6vw + 4px, 14px); }
+  /* JS-managed: links assigned .is-overflow get hidden inline; the
+     "More ▾" wrap is hidden when nothing overflows. */
+  .nav-links .nav-link.is-overflow { display: none; }
+  .nav-more-wrap.is-hidden { display: none !important; }
 }
 
 /* === Nav narrow-desktop tightening (Issue #1055 — 1024px overlap fix) ===

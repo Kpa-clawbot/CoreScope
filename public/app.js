@@ -917,18 +917,112 @@ window.addEventListener('DOMContentLoaded', () => {
     link.addEventListener('click', closeNav);
   });
 
-  // --- "More" dropdown (tablet Priority+ nav) ---
+  // --- "More" dropdown — JS-driven Priority+ (Issue #1102) ---
   const navMoreBtn = document.getElementById('navMoreBtn');
   const navMoreMenu = document.getElementById('navMoreMenu');
-  if (navMoreBtn && navMoreMenu) {
-    // Build More menu dynamically from non-priority nav links (DRY)
-    navMoreMenu.innerHTML = '';
-    document.querySelectorAll('.nav-links a:not([data-priority="high"])').forEach(function(link) {
-      var clone = link.cloneNode(true);
-      clone.setAttribute('role', 'menuitem');
-      clone.addEventListener('click', closeMoreMenu);
-      navMoreMenu.appendChild(clone);
+  const navMoreWrap = document.querySelector('.nav-more-wrap');
+  if (navMoreBtn && navMoreMenu && navMoreWrap) {
+    // Measure available room and decide which links overflow.
+    // Algorithm: try to fit all links inline. If the link strip doesn't
+    // fit alongside .nav-right + .nav-brand, hide non-priority links one
+    // at a time (right-to-left, lowest priority first) until it does.
+    // Then mirror the hidden links into the "More ▾" menu so nothing
+    // disappears from the user's reach.
+    const navTop  = document.querySelector('.top-nav');
+    const navLeft = document.querySelector('.nav-left');
+    const navRightEl = document.querySelector('.nav-right');
+    const linksContainer = document.querySelector('.nav-links');
+    const allLinks = Array.from(linksContainer.querySelectorAll('.nav-link'));
+    // High-priority links last in the overflow queue (kept visible).
+    // Source order is preserved; only `order:-1` flips render order.
+    const overflowQueue = allLinks.filter(a => a.dataset.priority !== 'high')
+                                  .reverse() // right-to-left
+                                  .concat(allLinks.filter(a => a.dataset.priority === 'high').reverse());
+
+    function rebuildMoreMenu() {
+      navMoreMenu.innerHTML = '';
+      const hidden = allLinks.filter(a => a.classList.contains('is-overflow'));
+      hidden.forEach(function(link) {
+        var clone = link.cloneNode(true);
+        // The clone is in the overflow menu, not the inline strip.
+        clone.classList.remove('is-overflow');
+        clone.setAttribute('role', 'menuitem');
+        clone.addEventListener('click', closeMoreMenu);
+        navMoreMenu.appendChild(clone);
+      });
+      // If nothing overflows, hide the More button entirely so wide
+      // viewports don't show a useless dropdown trigger.
+      navMoreWrap.classList.toggle('is-hidden', hidden.length === 0);
+      // Refresh active state on the More button (a hidden active link
+      // means the More menu currently "is" the active section).
+      var hasActiveMore = navMoreMenu.querySelector('.nav-link.active');
+      navMoreBtn.classList.toggle('active', !!hasActiveMore);
+    }
+
+    function applyNavPriority() {
+      // Skip on mobile (<768px) — hamburger CSS owns that layout.
+      if (window.innerWidth < 768) {
+        allLinks.forEach(a => a.classList.remove('is-overflow'));
+        navMoreWrap.classList.add('is-hidden');
+        return;
+      }
+      // Reset: show everything, then hide as needed.
+      allLinks.forEach(a => a.classList.remove('is-overflow'));
+      navMoreWrap.classList.remove('is-hidden');
+      // Iteratively hide low-priority links until the link strip fits.
+      // .top-nav has overflow:hidden and .nav-left has flex-shrink:1, so
+      // an overflowing strip silently clips rather than pushing
+      // nav-right out — bounding-rect math on .nav-left lies. Instead
+      // measure the *intrinsic* widths of the parts (independent of
+      // current clipping) and compare to the viewport. SAFETY absorbs
+      // the .top-nav side padding + nav-right inner gaps + sub-pixel
+      // rounding (the historic #1055 bug was a 6–20px overlap).
+      const navBrand   = document.querySelector('.nav-brand');
+      const GUTTER     = 24; // matches .nav-left gap (--space-lg)
+      const SAFETY     = 32;
+      function fits() {
+        const visibleLinks = allLinks.filter(a => !a.classList.contains('is-overflow'));
+        let linkW = 0;
+        visibleLinks.forEach(a => { linkW += a.getBoundingClientRect().width; });
+        const gapPx = parseFloat(getComputedStyle(linksContainer).columnGap ||
+                                 getComputedStyle(linksContainer).gap || '0');
+        const linksGap = Math.max(0, visibleLinks.length - 1) * gapPx;
+        const brandW = navBrand ? navBrand.getBoundingClientRect().width : 0;
+        // Always reserve space for the More button if anything could
+        // overflow — measure it as if visible (use offsetWidth which
+        // is 0 when display:none, so we add a fixed reserve fallback).
+        const moreVis = !navMoreWrap.classList.contains('is-hidden');
+        const moreW   = moreVis ? navMoreWrap.getBoundingClientRect().width : 70;
+        const rightW  = navRightEl.scrollWidth; // intrinsic, ignores clipping
+        const needed  = brandW + GUTTER + linkW + linksGap + GUTTER + moreW + GUTTER + rightW + SAFETY;
+        return needed <= window.innerWidth;
+      }
+      let i = 0;
+      while (!fits() && i < overflowQueue.length) {
+        overflowQueue[i].classList.add('is-overflow');
+        i++;
+      }
+      rebuildMoreMenu();
+    }
+
+    // Run once on load, again after fonts settle (label widths shift),
+    // and on resize (debounced via rAF).
+    applyNavPriority();
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(applyNavPriority);
+    }
+    let rafId = 0;
+    window.addEventListener('resize', function() {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(applyNavPriority);
     });
+    // Re-apply on route change too: the active link gets bigger padding
+    // (background pill), so which links fit can shift between pages.
+    window.addEventListener('hashchange', function() {
+      // Defer so the route handler's class toggles run first.
+      requestAnimationFrame(applyNavPriority);
+    });
+
     navMoreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const opening = !navMoreMenu.classList.contains('open');
