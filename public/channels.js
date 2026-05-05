@@ -684,11 +684,11 @@
             <div class="ch-modal-row ch-hashtag-row">
               <span class="ch-hashtag-prefix" aria-hidden="true">#</span>
               <input type="text" id="chHashtagName" class="ch-modal-input"
-                     placeholder="LongFast"
+                     placeholder="meshcore"
                      aria-label="Hashtag channel name (without #)" spellcheck="false" autocomplete="off">
               <button type="button" id="chHashtagBtn" class="btn-primary">Monitor</button>
             </div>
-            <div class="ch-modal-warn">⚠ Case-sensitive — <code>#LongFast</code> ≠ <code>#longfast</code></div>
+            <div class="ch-modal-warn">⚠ Case-sensitive — <code>#meshcore</code> ≠ <code>#MeshCore</code></div>
           </section>
 
           <div class="ch-modal-footer">
