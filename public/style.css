@@ -398,6 +398,7 @@ input[type="week"] {
   border-bottom: 2px solid transparent; transition: all .15s;
   background: none; border-top: none; border-left: none; border-right: none;
   cursor: pointer; font-family: var(--font);
+  white-space: nowrap; /* #1046: never wrap labels — wrapping makes the nav bar grow taller */
 }
 .nav-link:hover { color: var(--nav-text); }
 .nav-link.active { 

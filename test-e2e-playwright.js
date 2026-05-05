@@ -832,6 +832,57 @@ async function run() {
 
   // --- Group: Live page ---
 
+  // Test (issue #1046): Activating the Live nav link MUST NOT cause the
+  // "🔴 Live" label to wrap onto two lines, which makes the whole top
+  // nav bar grow taller and "hop". The label has to stay on one line in
+  // every state, and the nav bar height must be identical with/without
+  // the .active class.
+  await test('Live nav-link does not wrap or change nav height when active (#1046)', async () => {
+    // Use the exact viewport width from the issue screenshots.
+    await page.setViewportSize({ width: 1115, height: 800 });
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('a.nav-link[data-route="live"]');
+
+    const measure = await page.evaluate(() => {
+      const link = document.querySelector('a.nav-link[data-route="live"]');
+      const nav  = document.querySelector('.top-nav');
+      const ws   = getComputedStyle(link).whiteSpace;
+      // Force inactive state.
+      const wasActive = link.classList.contains('active');
+      link.classList.remove('active');
+      const inactive = {
+        navH:  nav.getBoundingClientRect().height,
+        lines: link.getClientRects().length,
+      };
+      // Force active state.
+      link.classList.add('active');
+      const active = {
+        navH:  nav.getBoundingClientRect().height,
+        lines: link.getClientRects().length,
+      };
+      // Restore.
+      link.classList.toggle('active', wasActive);
+      return { ws, inactive, active };
+    });
+
+    assert(
+      ['nowrap', 'pre', 'pre-wrap'].includes(measure.ws),
+      `Live nav-link must not wrap; computed white-space=${measure.ws}`,
+    );
+    assert(
+      measure.inactive.lines === 1,
+      `Live nav-link must render on one line when inactive (got ${measure.inactive.lines})`,
+    );
+    assert(
+      measure.active.lines === 1,
+      `Live nav-link must render on one line when active (got ${measure.active.lines})`,
+    );
+    assert(
+      measure.active.navH === measure.inactive.navH,
+      `Top nav height must not change when Live becomes active (inactive=${measure.inactive.navH}, active=${measure.active.navH})`,
+    );
+  });
+
   // Test: Live page loads with map and stats
   await test('Live page loads with map and stats', async () => {
     await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
