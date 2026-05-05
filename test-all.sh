@@ -10,6 +10,7 @@ echo ""
 # Unit tests (deterministic, fast)
 echo "── Unit Tests ──"
 node test-packet-filter.js
+node test-packet-filter-ux.js
 node test-aging.js
 node test-frontend-helpers.js
 node test-url-state.js

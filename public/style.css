@@ -2765,3 +2765,51 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .ch-section-toggle:hover { color: var(--text); }
 .ch-section-empty { padding: 8px 12px; font-size: 12px; color: var(--text-muted); font-style: italic; }
 .ch-section-caret { display: inline-block; width: 10px; }
+
+/* ── Filter UX (issue #966) ────────────────────────────────────────────── */
+.fux-bar { display: flex; gap: 6px; margin-top: 4px; align-items: center; flex-wrap: wrap; position: relative; }
+.fux-help-btn,
+.fux-saved-trigger { background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
+.fux-help-btn:hover,
+.fux-saved-trigger:hover { background: var(--bg-hover, var(--surface)); }
+
+.fux-popover { position: fixed; top: 60px; right: 24px; width: min(720px, 92vw); max-height: 80vh; overflow: auto; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.35); z-index: 10000; padding: 0; }
+.fux-popover-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
+.fux-popover-close { background: transparent; border: none; color: var(--text-muted); font-size: 16px; cursor: pointer; padding: 0 4px; }
+.fux-popover-close:hover { color: var(--text); }
+.fux-popover-body { padding: 12px 16px; font-size: 13px; }
+.fux-popover-body h3,
+.fux-popover-body h4 { margin: 12px 0 6px; }
+.fux-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 4px 0 12px; }
+.fux-table th,
+.fux-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.fux-table th { color: var(--text-muted); font-weight: 600; }
+.fux-mono { font-family: var(--mono); font-size: 12px; }
+.fux-examples { margin: 4px 0; padding-left: 20px; }
+.fux-examples li { margin: 2px 0; }
+
+.fux-ac-dropdown { position: absolute; left: 0; right: 0; top: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; max-height: 280px; overflow-y: auto; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.25); margin-top: 2px; }
+.fux-ac-item { padding: 4px 10px; display: flex; justify-content: space-between; gap: 12px; cursor: pointer; font-size: 12px; }
+.fux-ac-item:hover,
+.fux-ac-item.active { background: var(--bg-hover, rgba(120,160,255,0.12)); }
+.fux-ac-val { font-family: var(--mono); color: var(--text); }
+.fux-ac-desc { color: var(--text-muted); font-size: 11px; max-width: 60%; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.fux-ctx-menu { position: absolute; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.35); z-index: 10001; min-width: 200px; padding: 4px 0; }
+.fux-ctx-item { display: block; width: 100%; text-align: left; background: transparent; border: none; color: var(--text); padding: 5px 12px; font-size: 12px; cursor: pointer; font-family: var(--mono); }
+.fux-ctx-item:hover { background: var(--bg-hover, rgba(120,160,255,0.12)); }
+
+.fux-saved-menu { position: absolute; top: 100%; left: 0; min-width: 320px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; z-index: 9999; box-shadow: 0 4px 14px rgba(0,0,0,0.3); margin-top: 4px; padding: 4px 0; }
+.fux-saved-menu.hidden { display: none; }
+.fux-saved-header { padding: 6px 10px; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
+.fux-saved-item { display: flex; align-items: center; gap: 8px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
+.fux-saved-item:hover { background: var(--bg-hover, rgba(120,160,255,0.12)); }
+.fux-saved-name { font-weight: 600; min-width: 120px; }
+.fux-saved-expr { color: var(--text-muted); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fux-saved-del { background: transparent; border: none; color: var(--text-muted); font-size: 12px; cursor: pointer; padding: 0 4px; }
+.fux-saved-del:hover { color: var(--status-red, #ef4444); }
+.fux-saved-footer { border-top: 1px solid var(--border); padding: 4px 0; }
+.fux-saved-save { display: block; width: 100%; text-align: left; background: transparent; border: none; color: var(--text); padding: 6px 10px; font-size: 12px; cursor: pointer; }
+.fux-saved-save:hover { background: var(--bg-hover, rgba(120,160,255,0.12)); }
+
+td[data-filter-field] { cursor: context-menu; }
