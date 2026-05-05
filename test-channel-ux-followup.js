@@ -73,7 +73,7 @@ assert(/won't appear on other devices or browsers|won.t appear on other devices/
   'callout warns that channels won\u2019t appear on other devices/browsers');
 
 // Sidebar "My Channels" section header gets a locality marker.
-assert(/My Channels[^<]*\(this browser\)|🖥️[^<]*My Channels|My Channels[^<]*🖥️/.test(chSrc),
+assert(/My Channels[\s\S]{0,200}\(this browser\)|🖥️[\s\S]{0,200}My Channels|My Channels[\s\S]{0,200}🖥️/.test(chSrc),
   'My Channels section header reinforces locality (🖥️ or "(this browser)")');
 
 // Remove confirm prompt explicitly mentions "this browser".

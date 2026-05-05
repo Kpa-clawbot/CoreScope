@@ -540,10 +540,22 @@ button.ch-item.selected { background: var(--selected-bg); }
 .ch-remove-btn {
   display: inline-flex; align-items: center; justify-content: center;
   background: none; border: none; color: var(--text-muted);
-  cursor: pointer; font-size: 13px; padding: 0 4px; margin-left: 4px;
+  cursor: pointer; font-size: 16px; padding: 4px; margin-left: 2px;
+  /* WCAG 2.5.5 / Apple HIG minimum touch target: 44x44 CSS px. */
+  min-width: 44px; min-height: 44px; box-sizing: border-box;
   opacity: 0.55; transition: opacity 0.15s, color 0.15s;
   line-height: 1; user-select: none;
 }
+.ch-share-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 14px; padding: 4px; margin-left: 2px;
+  min-width: 44px; min-height: 44px; box-sizing: border-box;
+  opacity: 0.55; transition: opacity 0.15s, color 0.15s;
+  line-height: 1; user-select: none;
+}
+button.ch-item:hover .ch-share-btn { opacity: 0.9; }
+.ch-share-btn:hover, .ch-share-btn:focus { opacity: 1 !important; color: var(--accent, #3b82f6); outline: none; }
 button.ch-item:hover .ch-remove-btn { opacity: 0.9; }
 .ch-remove-btn:hover, .ch-remove-btn:focus { opacity: 1 !important; color: var(--danger, #dc2626); outline: none; }
 .ch-user-badge { font-size: 12px; margin-left: 2px; opacity: 0.85; flex-shrink: 0; }
@@ -2448,6 +2460,17 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .ch-modal-footer {
   margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);
   font-size: 12px; color: var(--text-muted); line-height: 1.4;
+}
+.ch-modal-callout {
+  margin: 10px 0 14px; padding: 10px 12px; border-radius: 6px;
+  background: var(--warn-bg, #fef3c7); color: var(--warn-text, #92400e);
+  border: 1px solid var(--warn-border, #fcd34d);
+  font-size: 13px; line-height: 1.4;
+}
+.ch-section-locality {
+  font-size: 10px; font-weight: 500; text-transform: none;
+  letter-spacing: 0; color: var(--text-muted); opacity: 0.85;
+  margin-left: 4px;
 }
 .ch-qr-output { font-size: 11px; font-family: var(--mono, monospace); color: var(--text-muted); word-break: break-all; min-height: 14px; padding: 4px 0; }
 
