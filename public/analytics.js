@@ -98,6 +98,7 @@
             <button class="tab-btn" data-tab="neighbor-graph">Neighbor Graph</button>
             <button class="tab-btn" data-tab="rf-health">RF Health</button>
             <button class="tab-btn" data-tab="clock-health">Clock Health</button>
+            <button class="tab-btn" data-tab="roles">Roles</button>
             <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
           </div>
         </div>
@@ -235,6 +236,7 @@
       case 'neighbor-graph': await renderNeighborGraphTab(el); break;
       case 'rf-health': await renderRFHealthTab(el); break;
       case 'clock-health': await renderClockHealthTab(el); break;
+      case 'roles': await renderRolesTab(el); break;
       case 'prefix-tool': await renderPrefixTool(el); break;
     }
     // Auto-apply column resizing to all analytics tables
@@ -3743,6 +3745,82 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       render();
     } catch (err) {
       el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:40px">Failed to load clock health data: ' + esc(String(err)) + '</div>';
+    }
+  }
+
+  // #1085 — Roles tab (folded in from former /#/roles page).
+  // Renders distribution of node roles + per-role clock-skew posture.
+  async function renderRolesTab(el) {
+    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading roles…</div>';
+    try {
+      var resp = await fetch('/api/analytics/roles');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      var data = await resp.json();
+      var roles = (data && data.roles) || [];
+      var total = (data && data.totalNodes) || 0;
+      if (!roles.length) {
+        el.innerHTML = '<div class="text-center text-muted" style="padding:40px">No roles to show.</div>';
+        return;
+      }
+      function roleEmoji(role) {
+        if (window.ROLE_EMOJI && window.ROLE_EMOJI[role]) return window.ROLE_EMOJI[role];
+        return '•';
+      }
+      function fmtSec(v) {
+        if (!v && v !== 0) return '—';
+        var abs = Math.abs(v);
+        if (abs < 1) return v.toFixed(2) + 's';
+        if (abs < 60) return v.toFixed(1) + 's';
+        if (abs < 3600) return (v / 60).toFixed(1) + 'm';
+        if (abs < 86400) return (v / 3600).toFixed(1) + 'h';
+        return (v / 86400).toFixed(1) + 'd';
+      }
+      var maxCount = roles.reduce(function (m, r) { return Math.max(m, r.nodeCount || 0); }, 0) || 1;
+      var rows = roles.map(function (r) {
+        var pct = total > 0 ? ((r.nodeCount / total) * 100).toFixed(1) : '0.0';
+        var barW = Math.round((r.nodeCount / maxCount) * 100);
+        var sevCells =
+          '<span title="OK (skew &lt; 5min)" style="color:var(--color-success,#0a0)">' + (r.okCount || 0) + '</span> / ' +
+          '<span title="Warning (5min – 1h)" style="color:var(--color-warning,#e80)">' + (r.warningCount || 0) + '</span> / ' +
+          '<span title="Critical (1h – 30d)" style="color:var(--color-error,#c00)">' + (r.criticalCount || 0) + '</span> / ' +
+          '<span title="Absurd (&gt; 30d)" style="color:#a0a">' + (r.absurdCount || 0) + '</span> / ' +
+          '<span title="No clock (&gt; 365d)" style="color:#888">' + (r.noClockCount || 0) + '</span>';
+        return '' +
+          '<tr data-role="' + esc(r.role) + '">' +
+            '<td>' + roleEmoji(r.role) + ' <strong>' + esc(r.role) + '</strong></td>' +
+            '<td style="text-align:right">' + r.nodeCount + '</td>' +
+            '<td style="text-align:right">' + pct + '%</td>' +
+            '<td style="min-width:140px">' +
+              '<div style="background:var(--color-surface-2,#eee);height:10px;border-radius:5px;overflow:hidden">' +
+                '<div style="background:var(--color-accent,#06c);width:' + barW + '%;height:100%"></div>' +
+              '</div>' +
+            '</td>' +
+            '<td style="text-align:right">' + (r.withSkew || 0) + '</td>' +
+            '<td style="text-align:right">' + fmtSec(r.medianAbsSkewSec || 0) + '</td>' +
+            '<td style="text-align:right">' + fmtSec(r.meanAbsSkewSec || 0) + '</td>' +
+            '<td style="white-space:nowrap">' + sevCells + '</td>' +
+          '</tr>';
+      }).join('');
+      el.innerHTML =
+        '<p class="text-muted" style="margin:0 0 12px 0">Distribution of node roles across the mesh, with per-role clock-skew posture.</p>' +
+        '<div class="roles-summary" style="margin-bottom:12px;color:var(--color-text-muted,#666)">' +
+          '<strong>' + total + '</strong> nodes across <strong>' + roles.length + '</strong> roles' +
+        '</div>' +
+        '<table id="rolesTable" class="data-table analytics-table" style="width:100%">' +
+          '<thead><tr>' +
+            '<th>Role</th>' +
+            '<th style="text-align:right">Count</th>' +
+            '<th style="text-align:right">Share</th>' +
+            '<th>Distribution</th>' +
+            '<th style="text-align:right" title="Nodes with clock-skew samples">w/ Skew</th>' +
+            '<th style="text-align:right" title="Median absolute skew">Median |skew|</th>' +
+            '<th style="text-align:right" title="Mean absolute skew">Mean |skew|</th>' +
+            '<th title="OK / Warning / Critical / Absurd / No-clock">Severity</th>' +
+          '</tr></thead>' +
+          '<tbody>' + rows + '</tbody>' +
+        '</table>';
+    } catch (err) {
+      el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:40px">Failed to load roles: ' + esc(String(err.message || err)) + '</div>';
     }
   }
 

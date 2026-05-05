@@ -721,6 +721,14 @@ function navigate() {
     return;
   }
 
+  // Backward-compat redirect: #/roles → #/analytics?tab=roles (issue #1085).
+  // The Roles page was folded into the Analytics tab strip; old links and
+  // bookmarks must keep working.
+  if (location.hash === '#/roles' || location.hash.startsWith('#/roles?') || location.hash.startsWith('#/roles/')) {
+    location.hash = '#/analytics?tab=roles';
+    return;
+  }
+
   const hash = location.hash.replace('#/', '') || 'packets';
   const route = hash.split('?')[0];
 
