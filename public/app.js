@@ -921,20 +921,28 @@ window.addEventListener('DOMContentLoaded', () => {
   const navMoreBtn = document.getElementById('navMoreBtn');
   const navMoreMenu = document.getElementById('navMoreMenu');
   const navMoreWrap = document.querySelector('.nav-more-wrap');
-  if (navMoreBtn && navMoreMenu && navMoreWrap) {
+  const navTop  = document.querySelector('.top-nav');
+  const navLeft = document.querySelector('.nav-left');
+  const navRightEl = document.querySelector('.nav-right');
+  const linksContainer = document.querySelector('.nav-links');
+  // Belt-and-braces null guards (#1105 MINOR 4): the outer block measures
+  // and mutates all of these; if any are missing the layout math throws
+  // before we can fall back gracefully.
+  if (navMoreBtn && navMoreMenu && navMoreWrap && navLeft && navRightEl && linksContainer && navTop) {
     // Measure available room and decide which links overflow.
     // Algorithm: try to fit all links inline. If the link strip doesn't
     // fit alongside .nav-right + .nav-brand, hide non-priority links one
     // at a time (right-to-left, lowest priority first) until it does.
     // Then mirror the hidden links into the "More ▾" menu so nothing
     // disappears from the user's reach.
-    const navTop  = document.querySelector('.top-nav');
-    const navLeft = document.querySelector('.nav-left');
-    const navRightEl = document.querySelector('.nav-right');
-    const linksContainer = document.querySelector('.nav-links');
     const allLinks = Array.from(linksContainer.querySelectorAll('.nav-link'));
-    // High-priority links last in the overflow queue (kept visible).
-    // Source order is preserved; only `order:-1` flips render order.
+    // overflowQueue (#1105 MINOR 6): the order links are removed from the
+    // inline strip when space runs out. Built right-to-left from
+    // non-priority links (lowest priority dropped first) and then high-
+    // priority links as a last-resort tail. `data-priority="high"` is the
+    // only signal — if you ever need finer ordering, switch to a numeric
+    // attribute (e.g. data-overflow-order="3") rather than re-shuffling
+    // index in HTML.
     const overflowQueue = allLinks.filter(a => a.dataset.priority !== 'high')
                                   .reverse() // right-to-left
                                   .concat(allLinks.filter(a => a.dataset.priority === 'high').reverse());
@@ -947,6 +955,12 @@ window.addEventListener('DOMContentLoaded', () => {
         // The clone is in the overflow menu, not the inline strip.
         clone.classList.remove('is-overflow');
         clone.setAttribute('role', 'menuitem');
+        // cloneNode(true) preserves DOM but NOT event listeners. The
+        // originals get `closeNav` attached up above (#1105 MINOR 5);
+        // mirror that here so a click on the More-menu clone behaves
+        // identically to a click on the inline link (closes the
+        // hamburger panel + dismisses the More menu).
+        clone.addEventListener('click', closeNav);
         clone.addEventListener('click', closeMoreMenu);
         navMoreMenu.appendChild(clone);
       });
@@ -958,6 +972,13 @@ window.addEventListener('DOMContentLoaded', () => {
       var hasActiveMore = navMoreMenu.querySelector('.nav-link.active');
       navMoreBtn.classList.toggle('active', !!hasActiveMore);
     }
+
+    // #1105 MINOR 1: cached intrinsic width of the More button. Captured
+    // the first time `fits()` sees navMoreWrap rendered (display:flex).
+    // Falls back to MORE_BTN_RESERVE_PX (a conservative initial guess
+    // sized for "More ▾" at default font/padding) until that happens.
+    var cachedMoreW = 0;
+    var MORE_BTN_RESERVE_PX = 70;
 
     function applyNavPriority() {
       // Skip on mobile (<768px) — hamburger CSS owns that layout.
@@ -977,24 +998,47 @@ window.addEventListener('DOMContentLoaded', () => {
       // current clipping) and compare to the viewport. SAFETY absorbs
       // the .top-nav side padding + nav-right inner gaps + sub-pixel
       // rounding (the historic #1055 bug was a 6–20px overlap).
+      //
+      // #1105 MINOR 3: at the 1101px media-query flip `.nav-stats`
+      // toggles from display:none → flex (and vice-versa). The resize
+      // handler is rAF-debounced and runs *after* the layout flip, so
+      // navRightEl.scrollWidth measured here reflects the post-flip
+      // intrinsic width — not stale pre-flip width.
       const navBrand   = document.querySelector('.nav-brand');
-      const GUTTER     = 24; // matches .nav-left gap (--space-lg)
       const SAFETY     = 32;
+      // #1105 MINOR 1+2: read both gap values from CSS rather than a
+      // shared `GUTTER = 24` constant. Today `.nav-left` (gap between
+      // brand/links/more/right cells) and `.nav-links` (gap between
+      // individual link items) both resolve to --space-lg = 24px, but
+      // they're conceptually distinct gaps. If --space-lg or .nav-left's
+      // gap diverges in the future, the fit math must follow.
+      const navLeftGap = parseFloat(getComputedStyle(navLeft).columnGap ||
+                                    getComputedStyle(navLeft).gap || '0') || 0;
+      // #1105 MINOR 1: compute the More-button reserve from its actual
+      // rendered width on first measure, instead of a hard-coded 70px
+      // fallback. Cached so we don't re-measure (offsetWidth is 0 when
+      // display:none; we capture the value the first time it's visible).
       function fits() {
         const visibleLinks = allLinks.filter(a => !a.classList.contains('is-overflow'));
         let linkW = 0;
         visibleLinks.forEach(a => { linkW += a.getBoundingClientRect().width; });
-        const gapPx = parseFloat(getComputedStyle(linksContainer).columnGap ||
-                                 getComputedStyle(linksContainer).gap || '0');
-        const linksGap = Math.max(0, visibleLinks.length - 1) * gapPx;
+        const linkGapPx = parseFloat(getComputedStyle(linksContainer).columnGap ||
+                                     getComputedStyle(linksContainer).gap || '0') || 0;
+        const linksGap = Math.max(0, visibleLinks.length - 1) * linkGapPx;
         const brandW = navBrand ? navBrand.getBoundingClientRect().width : 0;
         // Always reserve space for the More button if anything could
-        // overflow — measure it as if visible (use offsetWidth which
-        // is 0 when display:none, so we add a fixed reserve fallback).
+        // overflow. Measure the live width when visible and cache it
+        // for use when the button is currently hidden (display:none →
+        // getBoundingClientRect() returns 0). MORE_BTN_RESERVE_PX is
+        // the conservative initial fallback used until we get a real
+        // measurement.
         const moreVis = !navMoreWrap.classList.contains('is-hidden');
-        const moreW   = moreVis ? navMoreWrap.getBoundingClientRect().width : 70;
+        const liveMoreW = moreVis ? navMoreWrap.getBoundingClientRect().width : 0;
+        if (liveMoreW > 0) cachedMoreW = liveMoreW;
+        const moreW = liveMoreW > 0 ? liveMoreW
+                    : (cachedMoreW > 0 ? cachedMoreW : MORE_BTN_RESERVE_PX);
         const rightW  = navRightEl.scrollWidth; // intrinsic, ignores clipping
-        const needed  = brandW + GUTTER + linkW + linksGap + GUTTER + moreW + GUTTER + rightW + SAFETY;
+        const needed  = brandW + navLeftGap + linkW + linksGap + navLeftGap + moreW + navLeftGap + rightW + SAFETY;
         return needed <= window.innerWidth;
       }
       let i = 0;
