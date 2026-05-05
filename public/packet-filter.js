@@ -22,10 +22,14 @@
   // ── Lexer ──────────────────────────────────────────────────────────────────
   var TK = {
     FIELD: 'FIELD', OP: 'OP', STRING: 'STRING', NUMBER: 'NUMBER', BOOL: 'BOOL',
+    DURATION: 'DURATION',
     AND: 'AND', OR: 'OR', NOT: 'NOT', LPAREN: 'LPAREN', RPAREN: 'RPAREN'
   };
 
   var OP_WORDS = { contains: true, starts_with: true, ends_with: true, after: true, before: true, between: true };
+
+  // Duration unit → seconds. Used for `age < 1h`-style filters.
+  var DURATION_UNITS = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
 
   function lex(input) {
     var tokens = [], i = 0, len = input.length;
@@ -66,7 +70,19 @@
         if (input[i] === '-') i++;
         while (i < len && /[0-9]/.test(input[i])) i++;
         if (i < len && input[i] === '.') { i++; while (i < len && /[0-9]/.test(input[i])) i++; }
-        tokens.push({ type: TK.NUMBER, value: parseFloat(input.slice(start, i)) });
+        var numStr = input.slice(start, i);
+        // Duration suffix: 1h, 15m, 7d, 30s, 2w. Rejects bare letters/multi-letter units.
+        if (i < len && /[a-zA-Z]/.test(input[i])) {
+          var unitStart = i;
+          while (i < len && /[a-zA-Z]/.test(input[i])) i++;
+          var unit = input.slice(unitStart, i);
+          if (!DURATION_UNITS[unit]) {
+            return { tokens: null, error: "Invalid duration unit '" + unit + "' at position " + unitStart + " (expected s/m/h/d/w)" };
+          }
+          tokens.push({ type: TK.DURATION, value: parseFloat(numStr) * DURATION_UNITS[unit], raw: numStr + unit });
+          continue;
+        }
+        tokens.push({ type: TK.NUMBER, value: parseFloat(numStr) });
         continue;
       }
       // identifier / keyword / bare value
@@ -154,20 +170,41 @@
       }
       var op = advance().value;
 
-      // Parse value
+      // `between` takes two values: `field between <a> <b>`
+      if (op === 'between') {
+        var lo = parseValue(field, op);
+        var hi = parseValue(field, op);
+        validateTimeValue(field, op, lo);
+        validateTimeValue(field, op, hi);
+        return { type: 'comparison', field: field, op: op, value: lo, value2: hi };
+      }
+
+      var value = parseValue(field, op);
+      if (op === 'after' || op === 'before') validateTimeValue(field, op, value);
+      return { type: 'comparison', field: field, op: op, value: value };
+    }
+
+    // Validates that a value supplied to a temporal op parses as a date.
+    function validateTimeValue(field, op, v) {
+      if (typeof v !== 'string') return; // numeric epochs are accepted as-is
+      var ms = Date.parse(v);
+      if (isNaN(ms)) {
+        throw new Error("Invalid datetime '" + v + "' for '" + field + ' ' + op + "'");
+      }
+    }
+
+    function parseValue(field, op) {
       var valTok = peek();
       if (!valTok) throw new Error("Expected value after '" + field + ' ' + op + "'");
-      var value;
-      if (valTok.type === TK.STRING) { value = advance().value; }
-      else if (valTok.type === TK.NUMBER) { value = advance().value; }
-      else if (valTok.type === TK.BOOL) { value = advance().value; }
-      else if (valTok.type === TK.FIELD) {
+      if (valTok.type === TK.STRING) { return advance().value; }
+      if (valTok.type === TK.NUMBER) { return advance().value; }
+      if (valTok.type === TK.BOOL) { return advance().value; }
+      if (valTok.type === TK.DURATION) { return { __duration: true, seconds: advance().value }; }
+      if (valTok.type === TK.FIELD) {
         // Bare word as string value (e.g., ADVERT, FLOOD)
-        value = advance().value;
+        return advance().value;
       }
-      else { throw new Error("Expected value after '" + field + ' ' + op + "'"); }
-
-      return { type: 'comparison', field: field, op: op, value: value };
+      throw new Error("Expected value after '" + field + ' ' + op + "'");
     }
 
     try {
@@ -197,6 +234,22 @@
     if (field === 'observer') return packet.observer_name || '';
     if (field === 'observer_id') return packet.observer_id || '';
     if (field === 'observations') return packet.observation_count || 0;
+    if (field === 'time' || field === 'timestamp') {
+      // Returns ms-since-epoch or null. Falls back to first_seen when timestamp absent
+      // (group rows from /api/packets?groupByHash=true expose first_seen instead).
+      var ts = packet.timestamp || packet.first_seen || packet.latest;
+      if (!ts) return null;
+      var ms = typeof ts === 'number' ? ts : Date.parse(ts);
+      return isNaN(ms) ? null : ms;
+    }
+    if (field === 'age') {
+      // Age in seconds since the packet timestamp (NOW - ts).
+      var ts2 = packet.timestamp || packet.first_seen || packet.latest;
+      if (!ts2) return null;
+      var ms2 = typeof ts2 === 'number' ? ts2 : Date.parse(ts2);
+      if (isNaN(ms2)) return null;
+      return Math.max(0, (Date.now() - ms2) / 1000);
+    }
     if (field === 'path') {
       try { return JSON.parse(packet.path_json || '[]').join(' → '); } catch(e) { return ''; }
     }
@@ -224,6 +277,16 @@
   }
 
   // ── Evaluator ──────────────────────────────────────────────────────────────
+  function parseDateValue(v) {
+    if (v == null) return null;
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') {
+      var ms = Date.parse(v);
+      return isNaN(ms) ? null : ms;
+    }
+    return null;
+  }
+
   function evaluate(ast, packet) {
     if (!ast) return true;
     switch (ast.type) {
@@ -241,10 +304,27 @@
 
         if (fieldVal == null || fieldVal === undefined) return false;
 
+        // Temporal ops: after / before / between operate on epoch-ms.
+        if (op === 'after' || op === 'before' || op === 'between') {
+          var lhsMs = typeof fieldVal === 'number' ? fieldVal : Date.parse(fieldVal);
+          if (isNaN(lhsMs)) return false;
+          var rhs1 = parseDateValue(target);
+          if (rhs1 == null) return false;
+          if (op === 'after') return lhsMs > rhs1;
+          if (op === 'before') return lhsMs < rhs1;
+          var rhs2 = parseDateValue(ast.value2);
+          if (rhs2 == null) return false;
+          var lo = Math.min(rhs1, rhs2), hi = Math.max(rhs1, rhs2);
+          return lhsMs >= lo && lhsMs <= hi;
+        }
+
         // Numeric operators
         if (op === '>' || op === '<' || op === '>=' || op === '<=') {
           var a = typeof fieldVal === 'number' ? fieldVal : parseFloat(fieldVal);
-          var b = typeof target === 'number' ? target : parseFloat(target);
+          // Duration values are pre-converted to seconds at lex time
+          var b = (target && typeof target === 'object' && target.__duration)
+            ? target.seconds
+            : (typeof target === 'number' ? target : parseFloat(target));
           if (isNaN(a) || isNaN(b)) return false;
           if (op === '>') return a > b;
           if (op === '<') return a < b;
