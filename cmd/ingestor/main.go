@@ -422,10 +422,28 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				})
 				return
 			}
+			foreign := false
 			if !NodePassesGeoFilter(decoded.Payload.Lat, decoded.Payload.Lon, cfg.GeoFilter) {
-				return
+				if cfg.ForeignAdverts.IsDropMode() {
+					return
+				}
+				foreign = true
+				lat, lon := 0.0, 0.0
+				if decoded.Payload.Lat != nil {
+					lat = *decoded.Payload.Lat
+				}
+				if decoded.Payload.Lon != nil {
+					lon = *decoded.Payload.Lon
+				}
+				truncPK := decoded.Payload.PubKey
+				if len(truncPK) > 16 {
+					truncPK = truncPK[:16]
+				}
+				log.Printf("MQTT [%s] foreign advert: node=%s name=%s lat=%.4f lon=%.4f observer=%s",
+					tag, truncPK, decoded.Payload.Name, lat, lon, firstNonEmpty(mqttMsg.Origin, observerID))
 			}
 			pktData := BuildPacketData(mqttMsg, decoded, observerID, region)
+			pktData.Foreign = foreign
 			isNew, err := store.InsertTransmission(pktData)
 			if err != nil {
 				log.Printf("MQTT [%s] db insert error: %v", tag, err)
@@ -433,6 +451,11 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			role := advertRole(decoded.Payload.Flags)
 			if err := store.UpsertNode(decoded.Payload.PubKey, decoded.Payload.Name, role, decoded.Payload.Lat, decoded.Payload.Lon, pktData.Timestamp); err != nil {
 				log.Printf("MQTT [%s] node upsert error: %v", tag, err)
+			}
+			if foreign {
+				if err := store.MarkNodeForeign(decoded.Payload.PubKey); err != nil {
+					log.Printf("MQTT [%s] mark foreign error: %v", tag, err)
+				}
 			}
 			if isNew {
 				if err := store.IncrementAdvertCount(decoded.Payload.PubKey); err != nil {

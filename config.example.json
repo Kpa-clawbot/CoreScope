@@ -176,6 +176,10 @@
     "bufferKm": 20,
     "_comment": "Optional. Restricts ingestion and API responses to nodes within the polygon + bufferKm. Polygon is an array of [lat, lon] pairs (minimum 3). Use the GeoFilter Builder (`/geofilter-builder.html`) to draw a polygon, save drafts to localStorage with Save Draft, and export a config snippet with Download — paste the snippet here as the `geo_filter` block. Remove this section to disable filtering. Nodes with no GPS fix are always allowed through."
   },
+  "foreignAdverts": {
+    "mode": "flag",
+    "_comment": "Controls how the ingestor handles ADVERTs whose GPS is OUTSIDE the geo_filter polygon (#730). 'flag' (default): store the advert/node and tag it foreign_advert=1 so operators can see bridged/leaked nodes via the API ('foreign': true on /api/nodes). 'drop': legacy behavior — silently discard the advert (no log, no node row). Only applies when geo_filter is configured; otherwise has no effect."
+  },
   "regions": {
     "SJC": "San Jose, US",
     "SFO": "San Francisco, US",

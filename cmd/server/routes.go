@@ -1117,6 +1117,16 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.GeoFilter != nil {
 		filtered := nodes[:0]
 		for _, node := range nodes {
+			// Foreign-flagged nodes (#730) are kept even when their GPS lies
+			// outside the geofilter polygon — that's the whole point of the
+			// flag: operators need to SEE bridged/leaked nodes, not have them
+			// filtered away. The ingestor sets foreign_advert=1 when its
+			// configured geo_filter rejected the advert; the server must
+			// surface those.
+			if isForeign, _ := node["foreign"].(bool); isForeign {
+				filtered = append(filtered, node)
+				continue
+			}
 			if NodePassesGeoFilter(node["lat"], node["lon"], s.cfg.GeoFilter) {
 				filtered = append(filtered, node)
 			}

@@ -787,7 +787,7 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 	var total int
 	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM nodes %s", w), args...).Scan(&total)
 
-	querySQL := fmt.Sprintf("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
+	querySQL := fmt.Sprintf("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
 	qArgs := append(args, limit, offset)
 
 	rows, err := db.conn.Query(querySQL, qArgs...)
@@ -813,7 +813,7 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := db.conn.Query(`SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c
+	rows, err := db.conn.Query(`SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert
 		FROM nodes WHERE name LIKE ? OR public_key LIKE ? ORDER BY last_seen DESC LIMIT ?`,
 		"%"+query+"%", query+"%", limit)
 	if err != nil {
@@ -852,7 +852,7 @@ func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, erro
 		}
 	}
 	rows, err := db.conn.Query(
-		`SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c
+		`SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert
 		   FROM nodes WHERE public_key LIKE ? LIMIT 2`,
 		prefix+"%",
 	)
@@ -882,7 +882,7 @@ func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, erro
 
 // GetNodeByPubkey returns a single node.
 func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
-	rows, err := db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c FROM nodes WHERE public_key = ?", pubkey)
+	rows, err := db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert FROM nodes WHERE public_key = ?", pubkey)
 	if err != nil {
 		return nil, err
 	}
@@ -1867,8 +1867,9 @@ func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	var advertCount int
 	var batteryMv sql.NullInt64
 	var temperatureC sql.NullFloat64
+	var foreign sql.NullInt64
 
-	if err := rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC); err != nil {
+	if err := rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign); err != nil {
 		return nil
 	}
 	m := map[string]interface{}{
@@ -1883,6 +1884,7 @@ func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 		"last_heard":             nullStr(lastSeen),
 		"hash_size":              nil,
 		"hash_size_inconsistent": false,
+		"foreign":                foreign.Valid && foreign.Int64 != 0,
 	}
 	if batteryMv.Valid {
 		m["battery_mv"] = int(batteryMv.Int64)

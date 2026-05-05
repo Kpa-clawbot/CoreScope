@@ -697,6 +697,21 @@ func (s *Store) IncrementAdvertCount(pubKey string) error {
 	return err
 }
 
+// MarkNodeForeign sets foreign_advert=1 on the node row identified by pubKey.
+// Used when an ADVERT arrives whose GPS lies outside the configured geofilter
+// polygon (#730). Idempotent — safe to call repeatedly. No-op if pubKey is
+// empty.
+func (s *Store) MarkNodeForeign(pubKey string) error {
+	if pubKey == "" {
+		return nil
+	}
+	_, err := s.db.Exec(`UPDATE nodes SET foreign_advert = 1 WHERE public_key = ?`, pubKey)
+	if err != nil {
+		s.Stats.WriteErrors.Add(1)
+	}
+	return err
+}
+
 // UpdateNodeTelemetry updates battery and temperature for a node.
 func (s *Store) UpdateNodeTelemetry(pubKey string, batteryMv *int, temperatureC *float64) error {
 	var bv, tc interface{}
@@ -1127,6 +1142,7 @@ type PacketData struct {
 	DecodedJSON    string
 	ChannelHash    string // grouping key for channel queries (#762)
 	Region         string // observer region: payload > topic > source config (#788)
+	Foreign        bool   // true when ADVERT GPS lies outside configured geofilter (#730)
 }
 
 // nilIfEmpty returns nil for empty strings (for nullable DB columns).
