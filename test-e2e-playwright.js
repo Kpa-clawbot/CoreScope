@@ -2406,18 +2406,20 @@ async function run() {
     assert(/roles/i.test(label), 'Roles tab label must say "Roles", got ' + JSON.stringify(label));
     // Click the tab and verify the same Roles content renders.
     await page.click('#analyticsTabs [data-tab="roles"]');
+    // Wait for the tab to settle on real content: either the populated
+    // table (#rolesTable) or the explicit empty-state. "Loading" and
+    // "Failed to load" are NOT acceptable terminal states (#1085 polish).
     await page.waitForFunction(() => {
       var el = document.getElementById('analyticsContent');
       if (!el) return false;
-      return !!el.querySelector('#rolesTable') || /No roles to show|Failed to load|Loading/i.test(el.textContent);
-    }, { timeout: 10000 });
-    // After settle, must show table or empty-state — never the SPA placeholder.
-    await page.waitForFunction(() => {
-      var el = document.getElementById('analyticsContent');
-      return el && !/Loading…/.test(el.textContent);
+      if (el.querySelector('#rolesTable')) return true;
+      if (/No roles to show/i.test(el.textContent)) return true;
+      return false;
     }, { timeout: 10000 });
     var bodyText = await page.evaluate(() => document.getElementById('analyticsContent').innerText);
     assert(!/Page not yet implemented/i.test(bodyText), 'Roles tab must not show SPA placeholder');
+    assert(!/Failed to load/i.test(bodyText), 'Roles tab must not show "Failed to load" terminal state');
+    assert(!/Loading…/.test(bodyText), 'Roles tab must not be stuck on "Loading…"');
   });
 
   await test('Roles fold-in (#1085): old #/roles URL redirects to #/analytics?tab=roles', async () => {

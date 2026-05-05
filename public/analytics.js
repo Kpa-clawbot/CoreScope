@@ -4,7 +4,29 @@
 (function () {
   let _analyticsData = {};
   const sf = (v, d) => (v != null ? v.toFixed(d) : '–'); // safe toFixed
-  function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
+  function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;') : ''; }
+
+  // #1085 — Roles tab helpers (hoisted from renderRolesTab so they're not
+  // re-allocated per render).
+  function _rolesEmoji(role) {
+    if (window.ROLE_EMOJI && window.ROLE_EMOJI[role]) return window.ROLE_EMOJI[role];
+    return '•';
+  }
+  function _rolesFmtSec(v) {
+    if (!v && v !== 0) return '—';
+    var abs = Math.abs(v);
+    if (abs < 1) return v.toFixed(2) + 's';
+    if (abs < 60) return v.toFixed(1) + 's';
+    if (abs < 3600) return (v / 60).toFixed(1) + 'm';
+    if (abs < 86400) return (v / 3600).toFixed(1) + 'h';
+    return (v / 86400).toFixed(1) + 'd';
+  }
+  // #1085 — auto-refresh timer for the Roles tab. Started when the Roles
+  // tab is rendered, cleared on tab switch and destroy.
+  var _rolesRefreshTimer = null;
+  function _stopRolesRefresh() {
+    if (_rolesRefreshTimer) { clearInterval(_rolesRefreshTimer); _rolesRefreshTimer = null; }
+  }
 
   // --- Status color helpers (read from CSS variables for theme support) ---
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -98,6 +120,9 @@
             <button class="tab-btn" data-tab="neighbor-graph">Neighbor Graph</button>
             <button class="tab-btn" data-tab="rf-health">RF Health</button>
             <button class="tab-btn" data-tab="clock-health">Clock Health</button>
+            <!-- #1085 — Roles tab folded in from former /#/roles standalone page.
+                 Placed after Clock Health (clock-skew posture is shown per-role
+                 inside this tab) and before Prefix Tool (utility tabs trail). -->
             <button class="tab-btn" data-tab="roles">Roles</button>
             <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
           </div>
@@ -134,6 +159,8 @@
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       _currentTab = btn.dataset.tab;
+      // #1085 — Roles tab owns its own 60s auto-refresh; stop it on switch.
+      if (_currentTab !== 'roles') _stopRolesRefresh();
       _updateAnalyticsUrl();
       renderTab(_currentTab);
     });
@@ -2205,7 +2232,7 @@
     }
   }
 
-function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { _stopRolesRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
@@ -3750,30 +3777,30 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
 
   // #1085 — Roles tab (folded in from former /#/roles page).
   // Renders distribution of node roles + per-role clock-skew posture.
+  // Auto-refreshes every 60s while the Roles tab is active (matches the
+  // behavior of the former standalone roles-page.js).
   async function renderRolesTab(el) {
     el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading roles…</div>';
+    await _renderRolesTabBody(el);
+    // (Re)start the 60s auto-refresh.
+    _stopRolesRefresh();
+    _rolesRefreshTimer = setInterval(function () {
+      // Bail if the user navigated away from the Roles tab.
+      if (_currentTab !== 'roles') { _stopRolesRefresh(); return; }
+      var cur = document.getElementById('analyticsContent');
+      if (!cur) { _stopRolesRefresh(); return; }
+      _renderRolesTabBody(cur);
+    }, 60000);
+  }
+
+  async function _renderRolesTabBody(el) {
     try {
-      var resp = await fetch('/api/analytics/roles');
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      var data = await resp.json();
+      var data = await api('/analytics/roles', { ttl: CLIENT_TTL.analyticsRF });
       var roles = (data && data.roles) || [];
       var total = (data && data.totalNodes) || 0;
       if (!roles.length) {
         el.innerHTML = '<div class="text-center text-muted" style="padding:40px">No roles to show.</div>';
         return;
-      }
-      function roleEmoji(role) {
-        if (window.ROLE_EMOJI && window.ROLE_EMOJI[role]) return window.ROLE_EMOJI[role];
-        return '•';
-      }
-      function fmtSec(v) {
-        if (!v && v !== 0) return '—';
-        var abs = Math.abs(v);
-        if (abs < 1) return v.toFixed(2) + 's';
-        if (abs < 60) return v.toFixed(1) + 's';
-        if (abs < 3600) return (v / 60).toFixed(1) + 'm';
-        if (abs < 86400) return (v / 3600).toFixed(1) + 'h';
-        return (v / 86400).toFixed(1) + 'd';
       }
       var maxCount = roles.reduce(function (m, r) { return Math.max(m, r.nodeCount || 0); }, 0) || 1;
       var rows = roles.map(function (r) {
@@ -3787,7 +3814,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
           '<span title="No clock (&gt; 365d)" style="color:#888">' + (r.noClockCount || 0) + '</span>';
         return '' +
           '<tr data-role="' + esc(r.role) + '">' +
-            '<td>' + roleEmoji(r.role) + ' <strong>' + esc(r.role) + '</strong></td>' +
+            '<td>' + _rolesEmoji(r.role) + ' <strong>' + esc(r.role) + '</strong></td>' +
             '<td style="text-align:right">' + r.nodeCount + '</td>' +
             '<td style="text-align:right">' + pct + '%</td>' +
             '<td style="min-width:140px">' +
@@ -3796,8 +3823,8 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
               '</div>' +
             '</td>' +
             '<td style="text-align:right">' + (r.withSkew || 0) + '</td>' +
-            '<td style="text-align:right">' + fmtSec(r.medianAbsSkewSec || 0) + '</td>' +
-            '<td style="text-align:right">' + fmtSec(r.meanAbsSkewSec || 0) + '</td>' +
+            '<td style="text-align:right">' + _rolesFmtSec(r.medianAbsSkewSec || 0) + '</td>' +
+            '<td style="text-align:right">' + _rolesFmtSec(r.meanAbsSkewSec || 0) + '</td>' +
             '<td style="white-space:nowrap">' + sevCells + '</td>' +
           '</tr>';
       }).join('');
