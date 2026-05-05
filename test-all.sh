@@ -17,6 +17,7 @@ node test-url-state.js
 node test-perf-go-runtime.js
 node test-channel-psk-ux.js
 node test-channel-sidebar-layout.js
+node test-channel-fluid-layout.js
 node test-channel-modal-ux.js
 node test-channel-decrypt-insecure-context.js
 node test-channel-qr.js
