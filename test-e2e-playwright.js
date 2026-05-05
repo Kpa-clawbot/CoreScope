@@ -2447,6 +2447,54 @@ async function run() {
     await page.evaluate(() => localStorage.removeItem('geofilter-draft'));
   });
 
+  // --- Group: Fluid scaffolding (#1054) — no horizontal overflow at any viewport ---
+  // Asserts document.documentElement.scrollWidth <= clientWidth across breakpoints.
+  // Deterministic: pure layout assertion, no timing/network dependencies beyond domcontentloaded.
+  {
+    const viewports = [768, 1080, 1440, 1920, 2560];
+    const HEIGHT = 900;
+
+    async function assertNoHOverflow(page, label) {
+      // Wait for layout to settle: ensure body is rendered and any web fonts/CSS applied.
+      await page.waitForSelector('body', { timeout: 10000 });
+      await page.evaluate(() => document.fonts && document.fonts.ready ? document.fonts.ready : null);
+      const m = await page.evaluate(() => ({
+        sw: document.documentElement.scrollWidth,
+        cw: document.documentElement.clientWidth,
+        bsw: document.body.scrollWidth,
+        bcw: document.body.clientWidth,
+      }));
+      assert(m.sw <= m.cw,
+        `${label}: documentElement horizontal overflow — scrollWidth=${m.sw} > clientWidth=${m.cw}`);
+      assert(m.bsw <= m.cw,
+        `${label}: body horizontal overflow — body.scrollWidth=${m.bsw} > documentElement.clientWidth=${m.cw}`);
+    }
+
+    for (const w of viewports) {
+      await test(`No horizontal overflow at ${w}px (home)`, async () => {
+        await page.setViewportSize({ width: w, height: HEIGHT });
+        await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+        await assertNoHOverflow(page, `home @ ${w}x${HEIGHT}`);
+      });
+    }
+
+    // Spot-check a couple other pages at the smallest and largest viewports.
+    const otherPages = [
+      { name: 'packets', hash: '#/packets' },
+      { name: 'nodes', hash: '#/nodes' },
+      { name: 'analytics', hash: '#/analytics' },
+    ];
+    for (const w of [768, 2560]) {
+      for (const p of otherPages) {
+        await test(`No horizontal overflow at ${w}px (${p.name})`, async () => {
+          await page.setViewportSize({ width: w, height: HEIGHT });
+          await page.goto(BASE + '/' + p.hash, { waitUntil: 'domcontentloaded' });
+          await assertNoHOverflow(page, `${p.name} @ ${w}x${HEIGHT}`);
+        });
+      }
+    }
+  }
+
   await browser.close();
 
   // Summary
