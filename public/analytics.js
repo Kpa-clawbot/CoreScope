@@ -109,18 +109,38 @@
     // Tab handling
     const analyticsTabs = document.getElementById('analyticsTabs');
     initTabBar(analyticsTabs);
+    // #749 — keep analytics tab + window in URL for deep-linking.
+    function _updateAnalyticsUrl() {
+      if (!window.URLState) return;
+      var twElNow = document.getElementById('analyticsTimeWindow');
+      var updates = {
+        tab: _currentTab && _currentTab !== 'overview' ? _currentTab : '',
+        window: twElNow && twElNow.value ? twElNow.value : ''
+      };
+      // Drop any subview-specific keys that don't belong to the active tab
+      // so switching tabs gives a clean URL. (rf-health uses 'range', 'observer', 'from', 'to')
+      if (_currentTab !== 'rf-health') {
+        var cleared = ['range', 'observer', 'from', 'to'];
+        for (var i = 0; i < cleared.length; i++) updates[cleared[i]] = '';
+      }
+      var newHash = URLState.updateHashParams(updates, location.hash);
+      if (newHash !== location.hash) history.replaceState(null, '', newHash);
+    }
+
     analyticsTabs.addEventListener('click', e => {
       const btn = e.target.closest('.tab-btn');
       if (!btn) return;
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       _currentTab = btn.dataset.tab;
+      _updateAnalyticsUrl();
       renderTab(_currentTab);
     });
 
-    // Deep-link: #/analytics?tab=collisions
+    // Deep-link: #/analytics?tab=collisions&window=7d
     const hashParams = location.hash.split('?')[1] || '';
-    const urlTab = new URLSearchParams(hashParams).get('tab');
+    const _ap = new URLSearchParams(hashParams);
+    const urlTab = _ap.get('tab');
     if (urlTab) {
       const tabBtn = analyticsTabs.querySelector(`[data-tab="${urlTab}"]`);
       if (tabBtn) {
@@ -129,6 +149,12 @@
         _currentTab = urlTab;
       }
     }
+    // #749 — restore time window from URL.
+    const urlWindow = _ap.get('window');
+    if (urlWindow) {
+      const twInit = document.getElementById('analyticsTimeWindow');
+      if (twInit) twInit.value = urlWindow;
+    }
 
     RegionFilter.init(document.getElementById('analyticsRegionFilter'));
     RegionFilter.onChange(function () { loadAnalytics(); });
@@ -136,7 +162,7 @@
     // Time-window picker (#842) — refresh analytics on change.
     const tw = document.getElementById('analyticsTimeWindow');
     if (tw) {
-      tw.addEventListener('change', function () { loadAnalytics(); });
+      tw.addEventListener('change', function () { _updateAnalyticsUrl(); loadAnalytics(); });
     }
 
     // Delegated click/keyboard handler for clickable table rows

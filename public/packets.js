@@ -53,12 +53,25 @@
     if (filters.observer) parts.push('observer=' + encodeURIComponent(filters.observer));
     if (filters.channel) parts.push('channel=' + encodeURIComponent(filters.channel));
     if (filters._filterExpr) parts.push('filter=' + encodeURIComponent(filters._filterExpr));
+    // Sort state (#749) — encode as 'col[:asc]'; default 'time:desc' is omitted.
+    if (_packetSortColumn) {
+      var sortDefault = _packetSortColumn === 'time' && _packetSortDirection === 'desc';
+      if (!sortDefault && window.URLState) {
+        var sortToken = URLState.serializeSort(_packetSortColumn, _packetSortDirection);
+        if (sortToken) parts.push('sort=' + encodeURIComponent(sortToken));
+      }
+    }
     return parts.length ? '?' + parts.join('&') : '';
   }
   window.buildPacketsQuery = buildPacketsQuery;
 
   function updatePacketsUrl() {
-    history.replaceState(null, '', '#/packets' + buildPacketsQuery(savedTimeWindowMin, RegionFilter.getRegionParam()));
+    // Preserve any subpath after /packets (e.g. #/packets/<hash>).
+    var cur = String(location.hash || '');
+    var subpath = '';
+    var m = cur.match(/^#\/packets(\/[^?]*)?/);
+    if (m && m[1]) subpath = m[1];
+    history.replaceState(null, '', '#/packets' + subpath + buildPacketsQuery(savedTimeWindowMin, RegionFilter.getRegionParam()));
     // Update clear-filters button visibility
     var cb = document.getElementById('clearFiltersBtn');
     if (cb) {
@@ -366,6 +379,17 @@
     if (_urlChannel) filters.channel = _urlChannel;
     var _urlFilterExpr = _initUrlParams.get('filter');
     if (_urlFilterExpr) filters._filterExpr = _urlFilterExpr;
+    // #749 — restore sort state from URL (overrides localStorage).
+    var _urlSort = _initUrlParams.get('sort');
+    if (_urlSort && window.URLState) {
+      var _parsed = URLState.parseSort(_urlSort);
+      if (_parsed) {
+        _packetSortColumn = _parsed.column;
+        _packetSortDirection = _parsed.direction;
+        // Persist so TableSort init picks it up.
+        try { localStorage.setItem('meshcore-packets-sort', JSON.stringify({ column: _parsed.column, direction: _parsed.direction })); } catch {}
+      }
+    }
 
     app.innerHTML = `<div class="split-layout detail-collapsed">
       <div class="panel-left" id="pktLeft" aria-live="polite" aria-relevant="additions removals"></div>
@@ -1393,6 +1417,7 @@
             _packetSortDirection = direction;
             sortPacketsArray();
             renderTableRows();
+            updatePacketsUrl();
           }
         });
         // Apply initial sort state from TableSort

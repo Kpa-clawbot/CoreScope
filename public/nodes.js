@@ -82,12 +82,26 @@
     var parts = [];
     if (tab && tab !== 'all') parts.push('tab=' + encodeURIComponent(tab));
     if (searchStr) parts.push('search=' + encodeURIComponent(searchStr));
+    // #749 — encode current sort state (default 'last_seen:desc' is omitted).
+    if (window.URLState) {
+      var st = _getSortState();
+      var isDefault = st.column === 'last_seen' && st.direction === 'desc';
+      if (!isDefault) {
+        var token = URLState.serializeSort(st.column, st.direction);
+        if (token) parts.push('sort=' + encodeURIComponent(token));
+      }
+    }
     return parts.length ? '?' + parts.join('&') : '';
   }
   window.buildNodesQuery = buildNodesQuery;
 
   function updateNodesUrl() {
-    history.replaceState(null, '', '#/nodes' + buildNodesQuery(activeTab, search));
+    // Preserve subpath (e.g. #/nodes/<pubkey>) so this doesn't break detail deep-links.
+    var cur = String(location.hash || '');
+    var subpath = '';
+    var m = cur.match(/^#\/nodes(\/[^?]*)?/);
+    if (m && m[1]) subpath = m[1];
+    history.replaceState(null, '', '#/nodes' + subpath + buildNodesQuery(activeTab, search));
   }
 
   function renderNodeTimestampHtml(isoString) {
@@ -370,6 +384,15 @@
     const _urlSearch = _listUrlParams.get('search');
     if (_urlTab && TABS.some(function(t) { return t.key === _urlTab; })) activeTab = _urlTab;
     if (_urlSearch) search = _urlSearch;
+    // #749 — restore sort from URL (overrides localStorage persistence).
+    var _urlSort = _listUrlParams.get('sort');
+    if (_urlSort && window.URLState) {
+      var _parsedSort = URLState.parseSort(_urlSort);
+      if (_parsedSort && _parsedSort.column) {
+        try { localStorage.setItem('meshcore-nodes-sort', JSON.stringify(_parsedSort)); } catch {}
+        _fallbackSortState = _parsedSort;
+      }
+    }
 
     app.innerHTML = `<div class="nodes-page">
       <div class="nodes-topbar">
@@ -1091,7 +1114,7 @@
         defaultColumn: 'last_seen',
         defaultDirection: 'desc',
         storageKey: 'meshcore-nodes-sort',
-        onSort: function () { renderRows(); }
+        onSort: function () { renderRows(); updateNodesUrl(); }
       });
     }
 
