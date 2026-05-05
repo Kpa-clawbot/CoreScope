@@ -38,12 +38,12 @@ function extractFn(src, header) {
   }
   return null;
 }
-const helperSrc = extractFn(chSrc, 'function channelDisplayName(ch)');
-assert(helperSrc, 'channelDisplayName(ch) helper exists');
+const helperSrc = extractFn(chSrc, 'function channelDisplayName(ch');
+assert(helperSrc, 'channelDisplayName helper exists');
 if (helperSrc) {
-  const sandbox = { formatHashHex: h => h };
+  const sandbox = { formatHashHex: h => h, PRIVATE_CHANNEL_LABEL: 'Private Channel' };
   vm.createContext(sandbox);
-  vm.runInContext(helperSrc, sandbox);
+  vm.runInContext('const PRIVATE_CHANNEL_LABEL = "Private Channel";\n' + helperSrc, sandbox);
   assert(sandbox.channelDisplayName({ name: 'psk:372a9c93', userLabel: 'My Crew' }) === 'My Crew',
     'psk:* with userLabel returns the userLabel');
   assert(sandbox.channelDisplayName({ name: 'psk:372a9c93' }) === 'Private Channel',
@@ -52,6 +52,10 @@ if (helperSrc) {
     'non-PSK names pass through unchanged');
   assert(sandbox.channelDisplayName({ hash: 'abc', name: '' }) === 'Channel abc',
     'falls back to "Channel <hash>" when name missing');
+  assert(sandbox.channelDisplayName({ hash: 'abc', name: '' }, 'Unknown') === 'Unknown',
+    'caller-supplied fallback overrides "Channel <hash>" default');
+  assert(sandbox.channelDisplayName({ name: 'psk:abc' }, 'Unknown') === 'Private Channel',
+    'fallback does NOT override the psk:* → "Private Channel" rule');
 }
 // Source-level: header rendering must call channelDisplayName, not raw ch.name.
 assert(/channelDisplayName\(ch\)/.test(chSrc),
@@ -60,8 +64,12 @@ assert(/channelDisplayName\(ch\)/.test(chSrc),
 console.log('\n=== Fix 2: share button has recognizable label ===');
 assert(!/'⤴'/.test(chSrc) && !/"⤴"/.test(chSrc),
   'bare ⤴ glyph no longer used as the share button content');
-assert(/📤[^<]*Share|Share[^<]*📤/.test(chSrc),
-  'share button uses "📤 Share" (or "Share 📤") text');
+// Tighten: assert the literal '📤 Share' string is the glyph argument
+// passed into the iconBtn(...) call for ch-share-btn — this catches the
+// case where someone removes the icon from the button content but leaves
+// "Share" in an aria-label or title.
+assert(/iconBtn\(\s*'ch-share-btn'[^)]*'📤 Share'/.test(chSrc),
+  "iconBtn('ch-share-btn', ...) is called with '📤 Share' as the glyph");
 
 console.log('\n=== Fix 3: ✕ delete button is a visibly red destructive button ===');
 const removeRule = (cssSrc.match(/\.ch-remove-btn\s*\{[^}]*\}/) || [''])[0];

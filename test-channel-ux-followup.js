@@ -121,6 +121,17 @@ if (renderRowSrc) {
     customColors: {},
     window: {},
     renderChannelRow: null,
+    // #1041 follow-up: renderChannelRow now delegates name resolution to
+    // channelDisplayName(ch, fallback). Provide a faithful stub for the
+    // sandbox so existing assertions keep working.
+    channelDisplayName: (ch, fallback) => {
+      if (!ch) return '';
+      if (ch.userLabel) return ch.userLabel;
+      const n = ch.name || '';
+      if (n.indexOf('psk:') === 0) return 'Private Channel';
+      if (n) return n;
+      return fallback || ('Channel ' + ch.hash);
+    },
   };
   vm.createContext(sandbox);
   vm.runInContext(renderRowSrc, sandbox);

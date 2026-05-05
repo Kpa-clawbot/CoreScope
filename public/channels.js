@@ -1322,15 +1322,26 @@
     }
   }
 
+  // #1041: single source of truth for the user-facing placeholder shown
+  // when a PSK channel has no user-supplied label. Hoisted so the helper
+  // and any future call sites stay in sync (i18n / branding-friendly).
+  const PRIVATE_CHANNEL_LABEL = 'Private Channel';
+
   // Display name for a channel — handles PSK channels where the raw
   // "psk:<hex8>" key prefix shouldn't be shown to users. Falls back to
-  // userLabel, then a friendly placeholder, then the hash.
-  function channelDisplayName(ch) {
+  // userLabel, then a friendly placeholder, then a caller-supplied
+  // fallback, then `Channel <hash>`.
+  //
+  // `fallback` lets row rendering preserve its existing "Unknown" /
+  // "Channel <hash>" semantics for encrypted-but-not-user-added channels
+  // without duplicating the psk:* check.
+  function channelDisplayName(ch, fallback) {
     if (!ch) return '';
     var name = ch.name || '';
     if (ch.userLabel) return ch.userLabel;
-    if (name && name.indexOf('psk:') === 0) return 'Private Channel';
+    if (name && name.indexOf('psk:') === 0) return PRIVATE_CHANNEL_LABEL;
     if (name) return name;
+    if (typeof fallback === 'string' && fallback) return fallback;
     return 'Channel ' + (typeof formatHashHex === 'function' ? formatHashHex(ch.hash) : ch.hash);
   }
 
@@ -1338,12 +1349,12 @@
   function renderChannelRow(ch) {
     const isEncrypted = ch.encrypted === true;
     const isUserAdded = ch.userAdded === true;
-    const baseName = isEncrypted ? (ch.name || 'Unknown') : (ch.name || `Channel ${formatHashHex(ch.hash)}`);
-    // #1041: PSK channels without a user label should not display the raw
-    // "psk:<hex>" key prefix in the sidebar either.
-    const name = (isUserAdded && ch.userLabel)
-      ? ch.userLabel
-      : (typeof baseName === 'string' && baseName.indexOf('psk:') === 0 ? 'Private Channel' : baseName);
+    // #1041: route through channelDisplayName so the psk:* → "Private
+    // Channel" rule lives in one place. Pass an `encryptedFallback` so
+    // rows for non-user-added encrypted channels keep showing "Unknown"
+    // (their existing behavior) when there's no name at all.
+    const encryptedFallback = isEncrypted ? 'Unknown' : '';
+    const name = channelDisplayName(ch, encryptedFallback);
     const color = isEncrypted && !isUserAdded ? 'var(--text-muted, #6b7280)' : getChannelColor(ch.hash);
     const time = ch.lastActivityMs ? formatSecondsAgo(Math.floor((Date.now() - ch.lastActivityMs) / 1000)) : '';
     // Preview: show last sender+message when we have one. Otherwise show

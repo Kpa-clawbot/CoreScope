@@ -554,8 +554,6 @@ button.ch-item.selected { background: var(--selected-bg); }
   border-radius: 4px;
   padding: 4px 8px;
   font-weight: bold;
-  min-width: 32px;
-  min-height: 32px;
   opacity: 0.9;
 }
 .ch-share-btn  { font-size: 13px; padding: 4px 8px; }
