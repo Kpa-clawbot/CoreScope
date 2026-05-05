@@ -89,6 +89,9 @@ type Config struct {
 
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
+
+	// BatteryThresholds: voltage cutoffs for low/critical alerts (#663).
+	BatteryThresholds *BatteryThresholdsConfig `json:"batteryThresholds,omitempty"`
 }
 
 // weakAPIKeys is the blocklist of known default/example API keys that must be rejected.
