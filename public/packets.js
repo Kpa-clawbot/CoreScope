@@ -106,14 +106,26 @@
 
   // Track tables we've wired up so resize triggers re-apply.
   const wired = new Set();
+  // Track last-seen wrap width per table so we only treat ACTUAL container
+  // resizes as a reason to drop the user's reveal state. Hiding/showing
+  // columns and removing the pill mutate layout and re-trigger ResizeObserver,
+  // which would otherwise immediately stomp on the reveal the user just asked for.
+  const lastWrapW = new WeakMap();
   function register(table) {
     if (!table || wired.has(table)) { apply(table); return; }
     wired.add(table);
     if (typeof ResizeObserver !== 'undefined') {
       const wrap = table.closest('.table-fluid-wrap, .obs-table-scroll, .table-scroll-wrap') || table.parentElement;
       if (wrap) {
+        lastWrapW.set(table, wrap.clientWidth || 0);
         const ro = new ResizeObserver(() => {
-          // any container resize clears the reveal flag (new layout opportunity)
+          const prev = lastWrapW.get(table) || 0;
+          const cur = wrap.clientWidth || 0;
+          // Ignore self-induced layout reflows from apply()/clearHidden() —
+          // they don't change the wrap width. Only real viewport/container
+          // changes (>2px) clear the reveal flag.
+          if (Math.abs(cur - prev) <= 2) return;
+          lastWrapW.set(table, cur);
           table[REVEAL_FLAG] = false;
           apply(table);
         });
