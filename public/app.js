@@ -501,6 +501,13 @@ function connectWS() {
 function onWS(fn) { wsListeners.push(fn); }
 function offWS(fn) { wsListeners = wsListeners.filter(f => f !== fn); }
 
+// --- Pull-to-reconnect (#1063) — stub for red commit; real impl in green commit ---
+function pullReconnect() { /* stub */ }
+function setupPullToReconnect() { /* stub */ }
+window.pullReconnect = pullReconnect;
+window.setupPullToReconnect = setupPullToReconnect;
+window.connectWS = connectWS;
+
 /* Global escapeHtml — used by multiple pages */
 function escapeHtml(s) {
   if (s == null) return '';
