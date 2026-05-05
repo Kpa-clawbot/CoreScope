@@ -68,7 +68,12 @@
 
   /**
    * Render QR + URL + Copy Key button into `target`.
-   * Requires window.QRCode (vendor/qrcode.js) loaded.
+   *
+   * Uses the vendored Kazuhiko Arase qrcode-generator library (lowercase
+   * `qrcode` global) — `public/vendor/qrcode.js`. This was previously
+   * checking for `root.QRCode` (capital), which never existed and made
+   * every Generate click fall through to "[QR library not loaded]".
+   * (Issue #1087 bug 1.)
    */
   function generate(name, secretHex, target) {
     if (!_hasDom() || !target) return;
@@ -81,15 +86,26 @@
     qrBox.style.display = 'inline-block';
     target.appendChild(qrBox);
 
-    if (typeof root.QRCode === 'function') {
+    var qrFactory = (typeof root.qrcode === 'function') ? root.qrcode :
+                    (typeof root.QRCode === 'function') ? root.QRCode : null;
+
+    if (qrFactory) {
       try {
-        // davidshimjs/qrcodejs API: new QRCode(el, {text, width, height, ...})
-        new root.QRCode(qrBox, {
-          text: url,
-          width: 192,
-          height: 192,
-          correctLevel: root.QRCode.CorrectLevel ? root.QRCode.CorrectLevel.M : 0,
-        });
+        // Kazuhiko Arase API: qrcode(typeNumber, errorCorrectionLevel)
+        // typeNumber=0 → auto-detect smallest version that fits.
+        var qr = qrFactory(0, 'M');
+        qr.addData(url);
+        qr.make();
+        // createImgTag(cellSize, margin) → an <img src="data:image/gif;base64,...">.
+        // Cell size 4 with margin 4 yields a ~192px image for short URLs.
+        qrBox.innerHTML = qr.createImgTag(4, 4);
+        var img = qrBox.querySelector('img');
+        if (img) {
+          img.alt = 'QR for ' + name;
+          img.style.display = 'block';
+          img.style.maxWidth = '192px';
+          img.style.height = 'auto';
+        }
       } catch (e) {
         qrBox.textContent = '[QR render failed: ' + (e && e.message || e) + ']';
       }
