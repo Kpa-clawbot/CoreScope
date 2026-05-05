@@ -605,7 +605,20 @@ function setupPullToReconnect() {
     const t = e.touches && e.touches[0];
     if (!t) return;
     const dy = t.clientY - startY;
-    if (dy <= 0) return; // upward swipe — ignore
+    if (dy <= 0) {
+      // Upward swipe / retract. If we were past the commit threshold and the
+      // user retracts back, cancel the gesture so a subsequent touchend does
+      // NOT fire reconnect.
+      if (pulling) {
+        pulling = false;
+        dist = 0;
+        if (_pullIndicator) {
+          _pullIndicator.style.opacity = '0';
+          _pullIndicator.style.transform = 'translate(-50%, -100%)';
+        }
+      }
+      return;
+    }
     dist = dy;
     if (dy > 8) {
       pulling = true;

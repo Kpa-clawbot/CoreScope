@@ -136,7 +136,7 @@ function fire(box, name, y, opts) {
     fn({
       touches: name === 'touchend' ? [] : [{ clientY: y }],
       changedTouches: [{ clientY: y }],
-      preventDefault: opts.preventDefault || function() { box._preventedCount = (box._preventedCount || 0) + 1; },
+      preventDefault: opts.preventDefault || function() {},
       cancelable: true,
       type: name,
     });
@@ -198,7 +198,7 @@ test('Pull from non-zero scrollTop: NO reconnect', () => {
   assert.strictEqual(t.isTriggered(), false, 'pull from scrolled page must NOT trigger');
 });
 
-test('Lift before threshold (only 90px) then later long pull does not retroactively trigger', () => {
+test('Lift before threshold (only 90px) does not trigger reconnect', () => {
   const box = makeSandbox({ scrollTop: 0 });
   loadApp(box);
   const t = setupAndStub(box);
@@ -243,6 +243,19 @@ test('preventDefault is NOT called below threshold (lets natural scroll work)', 
   fireWith('touchend', 180);
   assert.strictEqual(prevented, 0,
     'preventDefault must NOT fire while gesture is below the commit threshold');
+});
+
+test('Pull past 140px then retract dy<=0 below threshold then touchend: NO reconnect (MINOR-1 regression)', () => {
+  const box = makeSandbox({ scrollTop: 0 });
+  loadApp(box);
+  const t = setupAndStub(box);
+  fire(box, 'touchstart', 100);
+  fire(box, 'touchmove', 200); // 100px - below threshold
+  fire(box, 'touchmove', 260); // 160px - past threshold, pulling=true
+  fire(box, 'touchmove', 90);  // dy = -10, retract past threshold back upward
+  fire(box, 'touchend', 90);
+  assert.strictEqual(t.isTriggered(), false,
+    'retracting past-threshold pull (dy<=0) must reset pulling/dist so touchend does NOT fire reconnect');
 });
 
 console.log('\n=== Results: ' + passed + ' passed, ' + failed + ' failed ===\n');
