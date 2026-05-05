@@ -96,6 +96,10 @@ func (s *PacketStore) GetRepeaterRelayInfo(pubkey string, windowHours float64) R
 	txList := s.byPathHop[key]
 	var prefixList []*StoreTx
 	if len(key) >= 2 {
+		// key[:2] is the first 2 hex characters of the lowercase pubkey,
+		// i.e. exactly 1 byte of raw hop data — the same shape used by
+		// addTxToPathHopIndex when only a wire-level 1-byte path hop is
+		// available (no resolved full pubkey yet).
 		prefix := key[:2]
 		if prefix != key {
 			prefixList = s.byPathHop[prefix]
@@ -103,12 +107,29 @@ func (s *PacketStore) GetRepeaterRelayInfo(pubkey string, windowHours float64) R
 	}
 	// Copy only the timestamps + payload types we need so we can release
 	// the read lock before doing parsing/compare work below.
+	//
+	// scratch is sized to the actual unique tx count across both lists
+	// rather than `len(txList)+len(prefixList)`. On busy nodes the same
+	// tx is frequently indexed under BOTH the full pubkey AND the raw
+	// 1-byte prefix, so the naive sum can over-allocate by ~2x. We do a
+	// quick ID-set pass to get the exact size before allocating.
 	type entry struct {
 		ts string
 		pt int
 	}
-	scratch := make([]entry, 0, len(txList)+len(prefixList))
-	seen := make(map[int]bool, len(txList)+len(prefixList))
+	uniq := make(map[int]struct{}, len(txList)+len(prefixList))
+	for _, tx := range txList {
+		if tx != nil {
+			uniq[tx.ID] = struct{}{}
+		}
+	}
+	for _, tx := range prefixList {
+		if tx != nil {
+			uniq[tx.ID] = struct{}{}
+		}
+	}
+	scratch := make([]entry, 0, len(uniq))
+	seen := make(map[int]bool, len(uniq))
 	collect := func(list []*StoreTx) {
 		for _, tx := range list {
 			if tx == nil {

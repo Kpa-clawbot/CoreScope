@@ -214,3 +214,50 @@ func TestRepeaterRelayActivity_PrefixHop(t *testing.T) {
 		t.Errorf("expected RelayActive=true within 24h window, got false (LastRelayed=%s)", info.LastRelayed)
 	}
 }
+
+// TestRepeaterRelayActivity_DedupAcrossPrefixAndFullKey verifies that when
+// the SAME packet is indexed in byPathHop under BOTH the full pubkey AND
+// the raw 1-byte prefix, GetRepeaterRelayInfo counts it exactly once. This
+// gates the `seen[tx.ID]` dedup map: without it, hop counts would double
+// for any tx that resolved-path indexing recorded under both keys.
+func TestRepeaterRelayActivity_DedupAcrossPrefixAndFullKey(t *testing.T) {
+	db := setupCapabilityTestDB(t)
+	defer db.conn.Close()
+
+	pubkey := "a36a21290d9c25a158130fe7c489541210d5f09f25fab997db5e942fb7680510"
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+		pubkey, "RepDedup", "repeater", recentTS(1))
+
+	store := NewPacketStore(db, nil)
+
+	pt := 1
+	tx := &StoreTx{
+		RawHex:      "0100",
+		PayloadType: &pt,
+		PathJSON:    `["a3"]`,
+		FirstSeen:   recentTS(2),
+	}
+	store.mu.Lock()
+	tx.ID = len(store.packets) + 1
+	tx.Hash = "test-relay-dedup-1"
+	store.packets = append(store.packets, tx)
+	store.byHash[tx.Hash] = tx
+	store.byTxID[tx.ID] = tx
+	// Index under BOTH the full pubkey AND the raw 1-byte prefix — this
+	// is the exact double-index case that occurs when wire ingest records
+	// the raw hop and a later resolution pass also records the full key.
+	store.byPathHop[pubkey] = append(store.byPathHop[pubkey], tx)
+	store.byPathHop[pubkey[:2]] = append(store.byPathHop[pubkey[:2]], tx)
+	store.mu.Unlock()
+
+	info := store.GetRepeaterRelayInfo(pubkey, 24)
+	if info.RelayCount24h != 1 {
+		t.Fatalf("expected RelayCount24h=1 (dedup across full+prefix indexing), got %d", info.RelayCount24h)
+	}
+	if info.RelayCount1h != 0 {
+		t.Errorf("expected RelayCount1h=0 (relay was 2h ago, outside 1h window), got %d", info.RelayCount1h)
+	}
+	if !info.RelayActive {
+		t.Errorf("expected RelayActive=true, got false (LastRelayed=%s)", info.LastRelayed)
+	}
+}
