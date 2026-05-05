@@ -675,11 +675,17 @@ input[type="week"] {
 .modal-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 200;
   display: flex; align-items: center; justify-content: center;
+  padding: clamp(8px, 2vw, 24px); /* #1059: viewport-edge breathing room */
 }
 .modal {
-  background: var(--card-bg); border-radius: 12px; padding: 24px; width: 500px;
-  max-width: 90vw; max-height: 80vh; overflow-y: auto;
+  /* #1059: fluid max-width via min(); cap height at 90vh; internal scroll. */
+  background: var(--card-bg); border-radius: 12px; padding: 24px;
+  width: min(90vw, 500px);
+  max-width: min(90vw, 500px);
+  max-height: 90vh; overflow-y: auto;
   box-shadow: 0 16px 48px rgba(0,0,0,.2);
+  /* Sticky-positioned descendants need a positioned ancestor. */
+  position: relative;
 }
 .modal h3 { margin-bottom: 12px; }
 .modal textarea {
@@ -697,11 +703,34 @@ input[type="week"] {
   border-radius: 6px; cursor: pointer; margin-left: 8px; font-size: 14px;
 }
 
+/* === #1059: Sticky close buttons (modal can scroll, close stays reachable) === */
+.byop-modal .byop-header {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--card-bg);
+  margin: -24px -24px 12px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.byop-modal .byop-x {
+  position: sticky; top: 0; z-index: 3;
+  background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 16px;
+  line-height: 1; color: var(--text);
+}
+.byop-modal .byop-x:hover { background: var(--row-hover, rgba(0,0,0,0.05)); }
+
+
 /* === Map Controls Panel === */
 .map-controls {
+  /* #1059: fluid width via clamp() so controls scale with viewport but never
+     exceed available room or go below a usable minimum. */
   position: absolute; top: 12px; right: 12px; z-index: 1000;
   background: var(--card-bg); border-radius: 10px; padding: 14px 16px;
-  box-shadow: 0 4px 16px rgba(0,0,0,.15); width: 220px; font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.15);
+  width: clamp(160px, 18vw, 240px);
+  max-width: calc(100vw - 24px);
+  font-size: 13px;
   max-height: calc(100% - 24px); overflow-y: auto;
 }
 .map-controls h3 { font-size: 15px; margin-bottom: 10px; }
