@@ -865,9 +865,9 @@
             <span id="audioDesc" class="sr-only">Sonify packets — turn raw bytes into generative music</span>
             <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ Favorites</label>
             <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
-            <div class="live-node-filter-wrap">
-              <input type="text" id="liveNodeFilterInput" list="liveNodeFilterList" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input">
-              <datalist id="liveNodeFilterList"></datalist>
+            <div class="live-node-filter-wrap" style="position:relative">
+              <input type="text" id="liveNodeFilterInput" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input" role="combobox" aria-expanded="false" aria-owns="liveNodeFilterDropdown" aria-autocomplete="list" aria-activedescendant="">
+              <div id="liveNodeFilterDropdown" class="live-node-filter-dropdown hidden" role="listbox"></div>
               <button id="liveNodeFilterClear" class="vcr-btn" title="Clear node filter" style="display:none">×</button>
             </div>
             <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
@@ -1057,32 +1057,157 @@
       regionFilterChangeHandler = RegionFilter.onChange(function() { /* selection persisted by RegionFilter; future packets reflect it */ });
     })();
 
-    // Node filter input
+    // Node filter input — autocomplete-as-you-type (#1110)
     const nodeFilterInput = document.getElementById('liveNodeFilterInput');
     const nodeFilterClear = document.getElementById('liveNodeFilterClear');
+    const nodeFilterDropdown = document.getElementById('liveNodeFilterDropdown');
     if (nodeFilterInput) {
       // Restore from URL param or localStorage
       const urlNode = getHashParams && getHashParams().get('node');
       if (urlNode) setNodeFilter(urlNode.split(',').map(s => s.trim()).filter(Boolean));
       else if (nodeFilterKeys.length) updateNodeFilterUI();
 
-      nodeFilterInput.addEventListener('change', (e) => {
-        const val = e.target.value.trim();
-        setNodeFilter(val ? val.split(',').map(s => s.trim()).filter(Boolean) : []);
+      let activeIdx = -1;
+
+      function hideDropdown() {
+        if (!nodeFilterDropdown) return;
+        nodeFilterDropdown.classList.add('hidden');
+        nodeFilterDropdown.innerHTML = '';
+        nodeFilterInput.setAttribute('aria-expanded', 'false');
+        nodeFilterInput.setAttribute('aria-activedescendant', '');
+        activeIdx = -1;
+      }
+
+      function applyFilterFromInput(rawValue) {
+        // Treat input as a single substring query rather than a list of pubkeys.
+        // setNodeFilter accepts pubkeys/prefixes/names; commit raw for live filtering.
+        const val = (rawValue || '').trim();
+        setNodeFilter(val ? [val] : []);
+        // Update URL without triggering hashchange (which would re-init the page).
         const params = getHashParams ? getHashParams() : new URLSearchParams();
-        if (nodeFilterKeys.length) params.set('node', nodeFilterKeys.join(','));
+        if (val) params.set('node', val);
         else params.delete('node');
-        const base = location.hash.split('?')[0];
+        const base = location.hash.split('?')[0] || '#/live';
         const qs = params.toString();
-        location.hash = base + (qs ? '?' + qs : '');
+        const newHash = base + (qs ? '?' + qs : '');
+        const newUrl = location.pathname + location.search + newHash;
+        try { history.replaceState(null, '', newUrl); } catch (_) {}
+      }
+
+      function selectSuggestion(opt) {
+        const key = opt.getAttribute('data-key') || '';
+        const name = opt.getAttribute('data-name') || key;
+        nodeFilterInput.value = name;
+        // Filter by pubkey prefix when available — most precise.
+        setNodeFilter(key ? [key] : (name ? [name] : []));
+        const params = getHashParams ? getHashParams() : new URLSearchParams();
+        if (key) params.set('node', key);
+        else params.delete('node');
+        const base = location.hash.split('?')[0] || '#/live';
+        const qs = params.toString();
+        const newUrl = location.pathname + location.search + base + (qs ? '?' + qs : '');
+        try { history.replaceState(null, '', newUrl); } catch (_) {}
+        hideDropdown();
+      }
+
+      const escapeHtmlLocal = (typeof escapeHtml === 'function') ? escapeHtml : function (s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+          return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+        });
+      };
+
+      async function fetchSuggestions(q) {
+        if (!nodeFilterDropdown) return;
+        if (!q || q.length < 1) { hideDropdown(); return; }
+        try {
+          const resp = await fetch('/api/nodes/search?q=' + encodeURIComponent(q));
+          if (!resp.ok) { hideDropdown(); return; }
+          const data = await resp.json();
+          const nodes = (data && data.nodes) || [];
+          if (!nodes.length) { hideDropdown(); return; }
+          nodeFilterDropdown.innerHTML = nodes.map(function (n, i) {
+            const name = n.name || (n.public_key ? n.public_key.slice(0, 8) : '?');
+            const pkShort = n.public_key ? n.public_key.slice(0, 8) : '';
+            return '<div class="live-node-filter-option" id="liveNodeFilterOpt-' + i +
+              '" role="option" data-key="' + escapeHtmlLocal(n.public_key || '') +
+              '" data-name="' + escapeHtmlLocal(name) + '">' +
+              escapeHtmlLocal(name) +
+              ' <span style="color:var(--text-muted);font-size:0.8em">' + escapeHtmlLocal(pkShort) + '</span></div>';
+          }).join('');
+          nodeFilterDropdown.classList.remove('hidden');
+          nodeFilterInput.setAttribute('aria-expanded', 'true');
+          nodeFilterDropdown.querySelectorAll('.live-node-filter-option').forEach(function (opt) {
+            opt.addEventListener('mousedown', function (ev) {
+              // Use mousedown so we run before blur hides the dropdown.
+              ev.preventDefault();
+              selectSuggestion(opt);
+            });
+          });
+        } catch (_) { hideDropdown(); }
+      }
+
+      const debouncedInput = debounce(function (e) {
+        const v = e.target.value.trim();
+        // Apply live filter immediately as user types (no Enter required).
+        applyFilterFromInput(v);
+        fetchSuggestions(v);
+      }, 200);
+
+      nodeFilterInput.addEventListener('input', debouncedInput);
+
+      nodeFilterInput.addEventListener('keydown', function (e) {
+        const opts = nodeFilterDropdown ? nodeFilterDropdown.querySelectorAll('.live-node-filter-option') : [];
+        if (e.key === 'Enter') {
+          // Critical: prevent any default form submission / navigation behavior.
+          e.preventDefault();
+          if (opts.length && activeIdx >= 0 && opts[activeIdx]) {
+            selectSuggestion(opts[activeIdx]);
+          } else {
+            // Just commit current text as a filter and close the dropdown.
+            applyFilterFromInput(nodeFilterInput.value);
+            hideDropdown();
+          }
+          return;
+        }
+        if (!opts.length || (nodeFilterDropdown && nodeFilterDropdown.classList.contains('hidden'))) return;
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          activeIdx = Math.min(activeIdx + 1, opts.length - 1);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          activeIdx = Math.max(activeIdx - 1, 0);
+        } else if (e.key === 'Escape') {
+          hideDropdown();
+          return;
+        } else {
+          return;
+        }
+        opts.forEach(function (o, i) {
+          o.classList.toggle('live-node-filter-active', i === activeIdx);
+          o.setAttribute('aria-selected', i === activeIdx ? 'true' : 'false');
+        });
+        if (activeIdx >= 0 && opts[activeIdx]) {
+          nodeFilterInput.setAttribute('aria-activedescendant', opts[activeIdx].id);
+          opts[activeIdx].scrollIntoView({ block: 'nearest' });
+        }
+      });
+
+      nodeFilterInput.addEventListener('blur', function () {
+        // Slight delay so click on a suggestion can register first.
+        setTimeout(hideDropdown, 150);
       });
     }
     if (nodeFilterClear) {
       nodeFilterClear.addEventListener('click', () => {
         if (nodeFilterInput) nodeFilterInput.value = '';
         setNodeFilter([]);
-        const base = location.hash.split('?')[0];
-        location.hash = base;
+        // Drop the ?node param without re-running the SPA route handler.
+        const params = getHashParams ? getHashParams() : new URLSearchParams();
+        params.delete('node');
+        const base = location.hash.split('?')[0] || '#/live';
+        const qs = params.toString();
+        const newUrl = location.pathname + location.search + base + (qs ? '?' + qs : '');
+        try { history.replaceState(null, '', newUrl); } catch (_) {}
       });
     }
 
