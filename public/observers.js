@@ -144,7 +144,7 @@
         <caption class="sr-only">Observer status and statistics</caption>
         <thead><tr>
           <th scope="col">Status</th><th scope="col">Name</th><th scope="col">Region</th><th scope="col">Last Status</th><th scope="col">Last Packet</th>
-          <th scope="col">Packets</th><th scope="col">Packets/Hour</th><th scope="col">Clock Offset</th><th scope="col">Uptime</th>
+          <th scope="col">Packet Health</th><th scope="col">Total Packets</th><th scope="col">Packets/Hour</th><th scope="col">Clock Offset</th><th scope="col">Uptime</th>
         </tr></thead>
         <tbody>${filtered.map(o => {
           const h = healthStatus(o.last_seen);
