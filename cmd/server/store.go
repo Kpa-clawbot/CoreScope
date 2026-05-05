@@ -5773,21 +5773,41 @@ func (s *PacketStore) GetAnalyticsHashSizes(region string) map[string]interface{
 
 	result := s.computeAnalyticsHashSizes(region)
 
-	// Add multi-byte capability data (only for unfiltered/global view)
+	// Multi-byte capability is a NODE property (derived from each node's own
+	// adverts), not a function of the observing region. The region filter
+	// should only control which nodes appear in the analytics list, not the
+	// evidence used to classify their capability. Always compute capability
+	// against the GLOBAL advert dataset so a region-filtered view doesn't
+	// downgrade every adopter to "unknown" just because the confirming
+	// advert was heard by an out-of-region observer (#bug: meshat.se/JKG
+	// showed 14 unknown vs 0 unknown unfiltered).
+	globalAdopterHS := make(map[string]int)
 	if region == "" {
-		// Pass adopter hash sizes so capability can cross-reference
-		adopterHS := make(map[string]int)
 		if mbNodes, ok := result["multiByteNodes"].([]map[string]interface{}); ok {
 			for _, n := range mbNodes {
 				pk, _ := n["pubkey"].(string)
 				hs, _ := n["hashSize"].(int)
 				if pk != "" && hs >= 2 {
-					adopterHS[pk] = hs
+					globalAdopterHS[pk] = hs
 				}
 			}
 		}
-		result["multiByteCapability"] = s.computeMultiByteCapability(adopterHS)
+	} else {
+		// Pull the global multiByteNodes set without the region filter.
+		// Use a separate compute call (not the cached path) to avoid
+		// recursive locking on hashCache and to keep this side-effect free.
+		globalRes := s.computeAnalyticsHashSizes("")
+		if mbNodes, ok := globalRes["multiByteNodes"].([]map[string]interface{}); ok {
+			for _, n := range mbNodes {
+				pk, _ := n["pubkey"].(string)
+				hs, _ := n["hashSize"].(int)
+				if pk != "" && hs >= 2 {
+					globalAdopterHS[pk] = hs
+				}
+			}
+		}
 	}
+	result["multiByteCapability"] = s.computeMultiByteCapability(globalAdopterHS)
 
 	s.cacheMu.Lock()
 	s.hashCache[region] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
