@@ -20,6 +20,7 @@ node test-channel-modal-ux.js
 node test-channel-decrypt-insecure-context.js
 node test-channel-qr.js
 node test-analytics-channels-integration.js
+node test-observers-headings.js
 
 echo ""
 echo "═══════════════════════════════════════"
