@@ -737,6 +737,7 @@
   // ===================== CHANNELS =====================
   var _channelSortState = null;
   var _channelData = null;
+  var _channelRenderGen = 0;
   var CHANNEL_SORT_KEY = 'meshcore-channel-sort';
 
   function loadChannelSort() {
@@ -824,7 +825,10 @@
         if (keyName) {
           copy.displayName = lab[keyName] || keyName;
           copy.group = 'mine';
-        } else if (isPlaceholder) {
+        } else if (isPlaceholder || !rawName) {
+          // Placeholder ("chNNN") or empty name → render as opaque encrypted.
+          // Empty-name encrypted rows would otherwise leak through with an
+          // empty <strong> in the row; force the placeholder rendering.
           copy.displayName = !isNaN(hashNum)
             ? '🔒 Encrypted (0x' + hashNum.toString(16).toUpperCase().padStart(2, '0') + ')'
             : '🔒 Encrypted';
@@ -850,7 +854,9 @@
     if (typeof ChannelDecrypt === 'undefined' || !ChannelDecrypt.getStoredKeys) return {};
     var keys = ChannelDecrypt.getStoredKeys();
     var map = {};
-    for (var name in keys) {
+    var names = Object.keys(keys || {});
+    for (var ni = 0; ni < names.length; ni++) {
+      var name = names[ni];
       try {
         var bytes = ChannelDecrypt.hexToBytes(keys[name]);
         var hb = await ChannelDecrypt.computeChannelHash(bytes);
@@ -939,7 +945,12 @@
         : { col: 'messages', dir: 'desc' };
     }
     var ranOnce = false;
+    // Generation token: if renderChannels is called again before
+    // buildHashKeyMap() resolves, the older promise must not clobber the
+    // newer rawChannels / decoration with stale-key data.
+    var myGen = ++_channelRenderGen;
     function applyDecorate(map) {
+      if (myGen !== _channelRenderGen) return; // superseded
       var labels = (typeof ChannelDecrypt !== 'undefined' && ChannelDecrypt.getLabels)
         ? ChannelDecrypt.getLabels() : {};
       _channelData = decorateAnalyticsChannels(rawChannels, map, labels);

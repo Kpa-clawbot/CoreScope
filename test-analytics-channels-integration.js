@@ -71,12 +71,16 @@ assert(typeof decorate === 'function',
 
 // Server response sample — mix of cleartext, rainbow-known encrypted, raw "chNNN".
 const sampleChannels = [
-  { hash: 17,  name: 'public',      messages: 100, senders: 5,  encrypted: false },
-  { hash: 217, name: '#test',       messages: 200, senders: 8,  encrypted: false },
-  { hash: 185, name: 'ch185',       messages: 50,  senders: 0,  encrypted: true  },
-  { hash: 64,  name: 'ch64',        messages: 300, senders: 0,  encrypted: true  },
-  { hash: 30,  name: 'ch30',        messages: 75,  senders: 0,  encrypted: true  },
-  { hash: 99,  name: '#earthquake', messages: 10,  senders: 1,  encrypted: false },
+  { hash: 17,  name: 'public',           messages: 100, senders: 5,  encrypted: false },
+  { hash: 217, name: '#test',            messages: 200, senders: 8,  encrypted: false },
+  { hash: 185, name: 'ch185',            messages: 50,  senders: 0,  encrypted: true  },
+  { hash: 64,  name: 'ch64',             messages: 300, senders: 0,  encrypted: true  },
+  { hash: 30,  name: 'ch30',             messages: 75,  senders: 0,  encrypted: true  },
+  { hash: 99,  name: '#earthquake',      messages: 10,  senders: 1,  encrypted: false },
+  // Rainbow-table hit on an ENCRYPTED channel: server resolved a real name.
+  { hash: 12,  name: 'public-meshcore',  messages: 40,  senders: 2,  encrypted: true  },
+  // Encrypted channel with empty name — must not render an empty <strong>.
+  { hash: 200, name: '',                 messages: 5,   senders: 0,  encrypted: true  },
 ];
 
 // User has two PSK keys locally: one matches hash=185 (named "Levski"),
@@ -115,6 +119,23 @@ assert(pub && pub.group === 'network', 'cleartext public grouped as "network"');
 
 const test = find(217, '#test');
 assert(test && test.group === 'network', 'rainbow-known #test grouped as "network"');
+
+// Rainbow-table hit on an ENCRYPTED channel — actually exercises the
+// "encrypted but server has the real name" branch (was previously dead-untested).
+const rainbow = find(12, 'public-meshcore');
+assert(rainbow && rainbow.encrypted === true,
+  'rainbow row preserves encrypted=true');
+assert(rainbow && rainbow.displayName === 'public-meshcore',
+  'rainbow-decoded encrypted row → displayName = real name');
+assert(rainbow && rainbow.group === 'network',
+  'rainbow-decoded encrypted row → group = "network"');
+
+// Empty-name encrypted: must NOT leak through with displayName = ''.
+const empty = find(200, '');
+assert(empty && empty.displayName === '🔒 Encrypted (0xC8)',
+  'encrypted with empty name → render as opaque encrypted placeholder');
+assert(empty && empty.group === 'encrypted',
+  'encrypted with empty name → group = "encrypted"');
 
 // No "chNNN" leaks into displayName for any row.
 const leak = out.find(c => /^ch(\d+|\?)$/.test(c.displayName));

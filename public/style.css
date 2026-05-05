@@ -1273,6 +1273,18 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .analytics-table th.sort-active { color: var(--accent); }
 .analytics-table th .sort-arrow { font-size: 10px; margin-left: 4px; opacity: 0.7; }
 .analytics-table td { padding: 8px; border-bottom: 1px solid var(--border); }
+.analytics-table .ch-section-row { background: var(--card-bg); }
+.analytics-table .ch-section-row td.ch-section-header {
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  padding: 10px 8px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card-bg);
+}
+.analytics-table .ch-section-row:hover { background: var(--card-bg); cursor: default; }
 .hash-bars { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
 .hash-bar-row { display: flex; align-items: center; gap: 12px; }
 .hash-bar-label { min-width: 160px; font-size: 13px; }
