@@ -31,8 +31,6 @@
   // Region filter (#1045): observer_id → IATA code, populated from /api/observers
   let observerIataMap = {};
   let regionFilterChangeHandler = null;
-  let regionFilterTotal = 0;
-  let regionFilterShown = 0;
 
   /**
    * Returns true if the packet group matches the selected regions.
@@ -1056,11 +1054,7 @@
         setObserverIataMap(m);
       }).catch(function() { /* leave map empty; filter will hide all when active */ });
       RegionFilter.init(rfEl, { dropdown: true });
-      regionFilterChangeHandler = RegionFilter.onChange(function() {
-        // Reset filter counters when selection changes; future packets will reflect new selection.
-        regionFilterTotal = 0;
-        regionFilterShown = 0;
-      });
+      regionFilterChangeHandler = RegionFilter.onChange(function() { /* selection persisted by RegionFilter; future packets reflect it */ });
     })();
 
     // Node filter input
@@ -2110,11 +2104,7 @@
     // --- Region filter (#1045): drop packet if no observation matches selected IATA ---
     if (window.RegionFilter && typeof RegionFilter.getSelected === 'function') {
       var _regionSel = RegionFilter.getSelected();
-      if (_regionSel && _regionSel.length) {
-        regionFilterTotal++;
-        if (!packetMatchesRegion(packets, observerIataMap, _regionSel)) return;
-        regionFilterShown++;
-      }
+      if (_regionSel && _regionSel.length && !packetMatchesRegion(packets, observerIataMap, _regionSel)) return;
     }
 
     // --- Ensure ADVERT nodes appear on map ---
