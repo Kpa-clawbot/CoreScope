@@ -80,6 +80,14 @@ assert(/My Channels[\s\S]{0,200}\(this browser\)|🖥️[\s\S]{0,200}My Channels
 assert(/permanently remove the key from this browser/.test(chSrc),
   'remove confirm says key is permanently removed from this browser');
 
+console.log('\n=== Fix 7: default channel reference is #meshcore, not #LongFast ===');
+// Channels UI must not reference Meshtastic's LongFast as the example
+// channel — meshcore network's analogous default is #meshcore.
+assert(!/LongFast/.test(chSrc),
+  'public/channels.js has no "LongFast" references');
+assert(/#meshcore/.test(chSrc),
+  'public/channels.js uses #meshcore as the example/placeholder');
+
 console.log('\n=== Results ===');
 console.log('Passed: ' + passed + ', Failed: ' + failed);
 process.exit(failed > 0 ? 1 : 0);
