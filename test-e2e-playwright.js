@@ -2631,6 +2631,89 @@ async function run() {
     }
   }
 
+  // === Live page node filter (#1110) ===
+  // Bug: filter input was oversized, white background ignoring dark mode,
+  // no autocomplete dropdown, required Enter to apply, and Enter triggered
+  // a full page reload. Fix wires it to /api/nodes/search with a 200ms
+  // debounce, prevents form submission, and styles via CSS variables.
+
+  await test('#1110 Live node filter input matches toolbar styling (theme-aware bg)', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    // Force dark theme so we catch the "ignored dark mode" regression.
+    await page.evaluate(() => {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    });
+    const bg = await page.$eval('#liveNodeFilterInput', el => getComputedStyle(el).backgroundColor);
+    // Bright white (255,255,255) is the bug. Anything else (transparent,
+    // dark surface, or color-mix from CSS variables) is acceptable.
+    assert(bg !== 'rgb(255, 255, 255)' && bg !== '#ffffff' && bg !== 'white',
+      `Filter bg should not be hardcoded white in dark mode, got ${bg}`);
+    // And it should be roughly the same height as the adjacent checkbox label.
+    const inputH = await page.$eval('#liveNodeFilterInput', el => el.getBoundingClientRect().height);
+    const labelH = await page.$eval('label[for="liveFavoritesToggle"], .live-toggles label', el => el.getBoundingClientRect().height);
+    assert(Math.abs(inputH - labelH) < 12,
+      `Filter input height (${inputH}) should be within 12px of toolbar label height (${labelH})`);
+  });
+
+  await test('#1110 Live node filter shows autocomplete dropdown on input', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    // Clear any persisted filter from prior runs.
+    await page.evaluate(() => { try { localStorage.removeItem('live-node-filter'); } catch (_) {} });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    const input = await page.$('#liveNodeFilterInput');
+    await input.click();
+    await input.type('te', { delay: 30 });
+    // Wait for dropdown of suggestions (the new feature).
+    await page.waitForSelector('#liveNodeFilterDropdown:not(.hidden) .live-node-filter-option', { timeout: 5000 });
+    const count = await page.$$eval('#liveNodeFilterDropdown .live-node-filter-option', els => els.length);
+    assert(count >= 1, `Expected at least 1 suggestion, got ${count}`);
+  });
+
+  await test('#1110 Live node filter applies on suggestion click without page reload', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    await page.evaluate(() => { try { localStorage.removeItem('live-node-filter'); } catch (_) {} });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    // Tag the window so we can detect a full page reload.
+    await page.evaluate(() => { window.__live1110Marker = 'still-here'; });
+    const urlBefore = page.url();
+    await page.fill('#liveNodeFilterInput', '');
+    await page.type('#liveNodeFilterInput', 'te', { delay: 30 });
+    await page.waitForSelector('#liveNodeFilterDropdown:not(.hidden) .live-node-filter-option', { timeout: 5000 });
+    await page.click('#liveNodeFilterDropdown .live-node-filter-option');
+    // Window marker must survive (no reload).
+    const marker = await page.evaluate(() => window.__live1110Marker);
+    assert(marker === 'still-here', 'Page should not have reloaded after selecting a suggestion');
+    // URL should not have navigated away from the live page.
+    const urlAfter = page.url();
+    assert(urlAfter.includes('#/live'), `URL should still target #/live, got ${urlAfter}`);
+    // Filter should be active.
+    const keys = await page.evaluate(() => (window._liveGetNodeFilterKeys ? window._liveGetNodeFilterKeys() : []));
+    assert(Array.isArray(keys) && keys.length >= 1, `Expected an active filter key after click, got ${JSON.stringify(keys)}`);
+  });
+
+  await test('#1110 Live node filter does not navigate or reload on Enter', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    await page.evaluate(() => { try { localStorage.removeItem('live-node-filter'); } catch (_) {} });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    await page.evaluate(() => { window.__live1110Marker2 = 'still-here'; });
+    const urlBefore = page.url();
+    await page.fill('#liveNodeFilterInput', 'te');
+    await page.focus('#liveNodeFilterInput');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+    const marker = await page.evaluate(() => window.__live1110Marker2);
+    assert(marker === 'still-here', 'Enter on filter input must not reload the page');
+    assert(page.url() === urlBefore || page.url().includes('#/live'),
+      `URL should not navigate away, got ${page.url()} (was ${urlBefore})`);
+  });
+
   await browser.close();
 
   // Summary
