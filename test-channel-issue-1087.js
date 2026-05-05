@@ -120,8 +120,8 @@ assert(/id="chShareModalTitle"|class="ch-share-modal-title"|>Share[^<]*</.test(s
   'share modal has its own title element ("Share: <Channel Name>")');
 assert(/id="chShareKey"|data-share-field="key"/.test(shareModalBlock),
   'share modal exposes the hex key field with a copy affordance');
-assert(/id="chShareUrl"|data-share-field="url"/.test(shareModalBlock),
-  'share modal exposes the meshcore:// URL field with a copy affordance');
+// #1101: meshcore:// URL field intentionally REMOVED — QR already
+// encodes the URL, separate field/button was redundant.
 assert(/trusted|privacy|do not share|only share/i.test(shareModalBlock),
   'share modal includes a privacy warning');
 

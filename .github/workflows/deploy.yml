@@ -90,6 +90,7 @@ jobs:
           node test-channel-qr-wiring.js
           node test-channel-modal-ux.js
           node test-channel-issue-1087.js
+          node test-channel-issue-1101.js
           node test-pull-to-reconnect-1091.js
           node test-channel-fluid-layout.js
 

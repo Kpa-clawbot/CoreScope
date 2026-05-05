@@ -160,15 +160,36 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     assert(/share/i.test(shareTitle),
       'Bug 4: share modal title must contain "Share", got: ' + shareTitle);
 
-    // Hex key + URL fields must be present and copyable.
+    // Hex key field must be present and copyable. (#1101: URL field
+    // removed — QR already encodes the URL, a separate Copy URL button
+    // was redundant.)
     const hasFields = await page.evaluate(() => {
       const m = document.getElementById('chShareModal');
       if (!m) return false;
       const k = m.querySelector('#chShareKey, [data-share-field="key"]');
       const u = m.querySelector('#chShareUrl, [data-share-field="url"]');
-      return !!(k && u);
+      return !!k && !u;
     });
-    assert(hasFields, 'Bug 4: share modal must expose hex key + URL fields');
+    assert(hasFields, 'Bug 4 / #1101: share modal exposes ONLY the hex key field (no URL field)');
+
+    // #1101: the QR box must contain ONLY the QR <img> — no URL text
+    // line, no inline Copy Key button overlapping the image.
+    const qrBoxOnlyHasQr = await page.evaluate(() => {
+      const qr = document.getElementById('chShareQr');
+      if (!qr) return { ok: false, reason: 'no #chShareQr' };
+      const imgs = qr.querySelectorAll('img');
+      const urlLine = qr.querySelector('.channel-qr-url');
+      const copyBtn = qr.querySelector('.channel-qr-copy, button');
+      return {
+        ok: imgs.length === 1 && !urlLine && !copyBtn,
+        imgCount: imgs.length,
+        hasUrlLine: !!urlLine,
+        hasCopyBtn: !!copyBtn,
+      };
+    });
+    assert(qrBoxOnlyHasQr.ok,
+      '#1101: #chShareQr contains ONLY the QR image (got ' +
+      JSON.stringify(qrBoxOnlyHasQr) + ')');
   });
 
   console.log('\n=== Results: ' + passed + ' passed, ' + failed + ' failed ===');
