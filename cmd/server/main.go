@@ -108,6 +108,25 @@ func main() {
 		log.Printf("[security] WARNING: API key is weak or a known default — write endpoints are vulnerable")
 	}
 
+	// Apply Go runtime soft memory limit (#836).
+	// Honors GOMEMLIMIT if set; otherwise derives from packetStore.maxMemoryMB.
+	{
+		_, envSet := os.LookupEnv("GOMEMLIMIT")
+		maxMB := 0
+		if cfg.PacketStore != nil {
+			maxMB = cfg.PacketStore.MaxMemoryMB
+		}
+		limit, source := applyMemoryLimit(maxMB, envSet)
+		switch source {
+		case "env":
+			log.Printf("[memlimit] using GOMEMLIMIT from environment (%s)", os.Getenv("GOMEMLIMIT"))
+		case "derived":
+			log.Printf("[memlimit] derived from packetStore.maxMemoryMB=%d → %d MiB (1.5x headroom)", maxMB, limit/(1024*1024))
+		default:
+			log.Printf("[memlimit] no soft memory limit set (GOMEMLIMIT unset, packetStore.maxMemoryMB=0); recommend setting one to avoid container OOM-kill")
+		}
+	}
+
 	// Resolve DB path
 	resolvedDB := cfg.ResolveDBPath(configDir)
 	log.Printf("[config] port=%d db=%s public=%s", cfg.Port, resolvedDB, publicDir)
