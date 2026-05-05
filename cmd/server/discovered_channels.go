@@ -23,11 +23,28 @@ var hashtagRE = regexp.MustCompile(`#[A-Za-z0-9_\-]+`)
 //   extractHashtagsFromText("nothing here")             => nil
 //   extractHashtagsFromText("dup #x and #x again")      => []string{"#x"}
 //
-// NOTE: this is a STUB for the red TDD commit. It returns nil so the
-// associated test fails on its assertion. The real implementation lands in
-// the green commit.
 func extractHashtagsFromText(text string) []string {
-	_ = hashtagRE
-	_ = text
-	return nil
+	if text == "" {
+		return nil
+	}
+	matches := hashtagRE.FindAllString(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(matches))
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		if len(m) < 2 { // bare '#' guard (regex requires 1+ chars but be defensive)
+			continue
+		}
+		if _, ok := seen[m]; ok {
+			continue
+		}
+		seen[m] = struct{}{}
+		out = append(out, m)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

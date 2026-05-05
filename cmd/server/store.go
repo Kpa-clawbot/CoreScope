@@ -3672,6 +3672,51 @@ func (s *PacketStore) GetChannels(region string) []map[string]interface{} {
 		})
 	}
 
+	// #688: scan decoded message text for #hashtag mentions and surface any
+	// previously-unseen channel names as discovered channels. We dedup against
+	// channelMap (matched by name) so a channel that already has traffic does
+	// NOT also appear as discovered.
+	discovered := map[string]string{} // name -> lastActivity
+	for _, snap := range snapshots {
+		if !snap.hasRegion {
+			continue
+		}
+		var decoded decodedGrp
+		if json.Unmarshal([]byte(snap.decodedJSON), &decoded) != nil {
+			continue
+		}
+		if decoded.Type != "CHAN" || decoded.Text == "" {
+			continue
+		}
+		if hasGarbageChars(decoded.Text) {
+			continue
+		}
+		for _, tag := range extractHashtagsFromText(decoded.Text) {
+			// Skip if already a known/decoded channel (by name with or without '#').
+			bare := tag[1:]
+			if _, ok := channelMap[tag]; ok {
+				continue
+			}
+			if _, ok := channelMap[bare]; ok {
+				continue
+			}
+			if existing, ok := discovered[tag]; !ok || snap.firstSeen > existing {
+				discovered[tag] = snap.firstSeen
+			}
+		}
+	}
+	for name, lastActivity := range discovered {
+		channels = append(channels, map[string]interface{}{
+			"hash":         name,
+			"name":         name,
+			"lastMessage":  nil,
+			"lastSender":   nil,
+			"messageCount": 0,
+			"lastActivity": lastActivity,
+			"discovered":   true,
+		})
+	}
+
 	s.channelsCacheMu.Lock()
 	s.channelsCacheRes = channels
 	s.channelsCacheKey = cacheKey
