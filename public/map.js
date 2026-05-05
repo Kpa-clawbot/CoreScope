@@ -9,7 +9,7 @@
   let nodes = [];
   let targetNodeKey = null;
   let observers = [];
-  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clusters: false, hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true' };
+  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clusters: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true' };
   let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
   let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
@@ -139,7 +139,7 @@
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Display</legend>
-            <label for="mcClusters"><input type="checkbox" id="mcClusters"> Show clusters</label>
+            <label for="mcClusters"><input type="checkbox" id="mcClusters"> Cluster markers</label>
             <label for="mcHeatmap"><input type="checkbox" id="mcHeatmap"> Heat map</label>
             <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash prefix labels</label>
             <label for="mcMultiByte"><input type="checkbox" id="mcMultiByte"> Multi-byte support</label>
@@ -239,6 +239,8 @@
     });
 
     markerLayer = L.layerGroup().addTo(map);
+    clusterGroup = createClusterGroup();
+    if (filters.clustering && clusterGroup) clusterGroup.addTo(map);
     routeLayer = L.layerGroup().addTo(map);
 
     // Fix map size on SPA load
@@ -260,7 +262,20 @@
     });
 
     // Bind controls
-    document.getElementById('mcClusters').addEventListener('change', e => { filters.clusters = e.target.checked; renderMarkers(); });
+    var clustersEl = document.getElementById('mcClusters');
+    if (clustersEl) {
+      clustersEl.checked = filters.clustering;
+      clustersEl.addEventListener('change', function (e) {
+        filters.clustering = e.target.checked;
+        localStorage.setItem('meshcore-map-clustering', filters.clustering);
+        if (filters.clustering) {
+          if (clusterGroup && !map.hasLayer(clusterGroup)) clusterGroup.addTo(map);
+        } else {
+          if (clusterGroup && map.hasLayer(clusterGroup)) map.removeLayer(clusterGroup);
+        }
+        renderMarkers();
+      });
+    }
     const heatEl = document.getElementById('mcHeatmap');
     if (localStorage.getItem('meshcore-map-heatmap') === 'true') { heatEl.checked = true; }
     heatEl.addEventListener('change', e => { localStorage.setItem('meshcore-map-heatmap', e.target.checked); toggleHeatmap(e.target.checked); });
@@ -572,13 +587,18 @@
           // Delay popup open slightly — Leaflet needs the map to settle after setView
           setTimeout(() => {
             let found = false;
-            markerLayer.eachLayer(m => {
-              if (found) return;
-              if (m._nodeKey === targetNodeKey && m.openPopup) {
-                m.openPopup();
-                found = true;
-              }
-            });
+            const findIn = function (layer) {
+              if (found || !layer || !layer.eachLayer) return;
+              layer.eachLayer(m => {
+                if (found) return;
+                if (m._nodeKey === targetNodeKey && m.openPopup) {
+                  m.openPopup();
+                  found = true;
+                }
+              });
+            };
+            findIn(markerLayer);
+            if (!found) findIn(clusterGroup);
             if (!found) console.warn('[map] Target node marker not found:', targetNodeKey);
           }, 500);
         }
@@ -801,6 +821,9 @@
    */
   function _repositionMarkers() {
     if (!map || _currentMarkerData.length === 0) return;
+    // Markercluster handles its own re-layout on zoom/move — skip our deconfliction
+    // dance when clustering is on.
+    if (filters.clustering) return;
     map.invalidateSize({ animate: false });
 
     // Re-run deconfliction with current zoom pixel coordinates
@@ -825,6 +848,7 @@
 
   function _renderMarkersInner() {
     markerLayer.clearLayers();
+    if (clusterGroup) clusterGroup.clearLayers();
     _currentMarkerData = [];
 
     const filtered = nodes.filter(n => {
@@ -892,25 +916,37 @@
     // (SPA navigation may render markers before container is fully sized)
     map.invalidateSize({ animate: false });
 
-    // Deconflict ALL markers
-    if (allMarkers.length > 0) {
+    // Deconflict ALL markers — but only when clustering is OFF.
+    // When clustering is ON, markercluster handles overlap collapse and
+    // deconfliction would just waste CPU + draw offset polylines we don't want.
+    if (allMarkers.length > 0 && !filters.clustering) {
       deconflictLabels(allMarkers, map);
     }
 
     // Store marker data for zoom/resize repositioning (avoids full rebuild)
     _currentMarkerData = allMarkers;
 
+    var useCluster = filters.clustering && clusterGroup;
+    var clusterMarkers = [];
     for (const m of allMarkers) {
-      const pos = m.adjustedLatLng || m.latLng;
+      const pos = (useCluster ? m.latLng : (m.adjustedLatLng || m.latLng));
       const marker = L.marker(pos, { icon: m.icon, alt: m.alt });
       marker._nodeKey = m.node.public_key || m.node.id || null;
+      marker._role = (m.node && m.node.role) || 'companion';
       marker.bindPopup(m.popupFn(), { maxWidth: 280 });
-      markerLayer.addLayer(marker);
       m._leafletMarker = marker;
       m._leafletLine = null;
       m._leafletDot = null;
 
-      _updateOffsetIndicator(m, markerLayer);
+      if (useCluster) {
+        clusterMarkers.push(marker);
+      } else {
+        markerLayer.addLayer(marker);
+        _updateOffsetIndicator(m, markerLayer);
+      }
+    }
+    if (useCluster && clusterMarkers.length > 0) {
+      clusterGroup.addLayers(clusterMarkers);
     }
   }
 
@@ -1172,6 +1208,7 @@
       map = null;
     }
     markerLayer = null;
+    clusterGroup = null;
     _currentMarkerData = [];
     routeLayer = null;
     if (heatLayer) { heatLayer = null; }
@@ -1317,18 +1354,78 @@
     }
   });
 
-  // ── Marker clustering (issue #1036) — STUBS for red TDD commit ──
-  // Real implementations land in the green commit. Tests assert on:
-  //   - createClusterGroup() returning an L.MarkerClusterGroup with options
-  //   - makeClusterIcon(cluster) returning a themed L.divIcon
+  // ── Marker clustering (issue #1036) ──
+  // Wraps Leaflet.markercluster with CoreScope-themed cluster icons + sane perf
+  // defaults for large meshes (target: smooth pan/zoom @ 2k nodes on mid mobile).
+  function isMobileForClustering() {
+    try {
+      return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+    } catch (_) { return false; }
+  }
   function createClusterGroup() {
-    // STUB — returns null so tests fail on assertion, not on a missing symbol.
-    return null;
+    if (typeof L === 'undefined' || typeof L.markerClusterGroup !== 'function') {
+      console.warn('[map] L.markerClusterGroup not loaded — clustering disabled');
+      return null;
+    }
+    return L.markerClusterGroup({
+      chunkedLoading: true,
+      chunkInterval: 100,
+      chunkDelay: 25,
+      removeOutsideVisibleBounds: true,
+      maxClusterRadius: 60,
+      spiderfyOnMaxZoom: true,
+      spiderfyDistanceMultiplier: 1.5,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+      disableClusteringAtZoom: 16,
+      animate: !isMobileForClustering(),
+      animateAddingMarkers: false,
+      iconCreateFunction: makeClusterIcon,
+    });
   }
-  function makeClusterIcon(_cluster) {
-    // STUB — returns a bare divIcon with no count/role pills so the assertions fail.
-    return L.divIcon({ html: '', className: '' });
+
+  function makeClusterIcon(cluster) {
+    var markers = cluster.getAllChildMarkers();
+    var counts = { repeater: 0, companion: 0, room: 0, sensor: 0, observer: 0 };
+    for (var i = 0; i < markers.length; i++) {
+      var r = markers[i]._role || 'companion';
+      if (counts[r] == null) counts[r] = 0;
+      counts[r] += 1;
+    }
+    var total = (typeof cluster.getChildCount === 'function') ? cluster.getChildCount() : markers.length;
+    var bucket = total >= 100 ? 'lg' : total >= 30 ? 'md' : 'sm';
+    var roleOrder = ['repeater', 'companion', 'room', 'sensor', 'observer'];
+    var pillsHtml = '';
+    var tooltipParts = [];
+    var pillsShown = 0;
+    var palette = (typeof ROLE_COLORS !== 'undefined') ? ROLE_COLORS : {};
+    for (var j = 0; j < roleOrder.length; j++) {
+      var role = roleOrder[j];
+      var n = counts[role] || 0;
+      if (n <= 0) continue;
+      tooltipParts.push(n + ' ' + role + (n === 1 ? '' : 's'));
+      if (pillsShown < 4) {
+        var bg = palette[role] || '#6b7280';
+        pillsHtml += '<span class="mc-pill" style="background:' + bg + '">' + n + '</span>';
+        pillsShown += 1;
+      }
+    }
+    var html = '<div class="mc-cluster mc-' + bucket + '">' +
+                 '<b class="mc-count">' + total + '</b>' +
+                 '<div class="mc-pills">' + pillsHtml + '</div>' +
+               '</div>';
+    var icon = L.divIcon({
+      html: html,
+      className: 'mc-cluster-wrap mc-' + bucket,
+      iconSize: L.point(48, 48),
+    });
+    // Stash a tooltip string for callers that want to bindTooltip (markercluster
+    // does not natively pipe this through, but it's available via cluster icon
+    // for E2E inspection).
+    icon._tooltip = total + ' nodes — ' + tooltipParts.join(', ');
+    return icon;
   }
+
   if (typeof window !== 'undefined') {
     window.__meshcoreMapInternals = { createClusterGroup: createClusterGroup, makeClusterIcon: makeClusterIcon };
   }

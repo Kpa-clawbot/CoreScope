@@ -2369,3 +2369,31 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .tools-card:hover { border-color: var(--primary); }
 .tools-card h3 { margin: 0 0 4px 0; font-size: 16px; }
 .tools-card p { margin: 0; font-size: 13px; color: var(--text-muted); }
+
+/* ── Map marker clustering (issue #1036) ── */
+.mc-cluster-wrap { background: transparent !important; border: 0 !important; }
+.mc-cluster {
+  width: 48px; height: 48px; border-radius: 50%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font-family: var(--font, system-ui, sans-serif);
+  color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  border: 2px solid rgba(255,255,255,0.85);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  cursor: pointer;
+  transition: transform 120ms ease;
+}
+.mc-cluster:hover { transform: scale(1.06); }
+.mc-cluster.mc-sm { background: var(--info, #2563eb); width: 40px; height: 40px; }
+.mc-cluster.mc-md { background: var(--warning, #d97706); width: 48px; height: 48px; }
+.mc-cluster.mc-lg { background: var(--accent, #dc2626); width: 56px; height: 56px; }
+.mc-cluster .mc-count { font-size: 14px; font-weight: 700; line-height: 1; }
+.mc-cluster.mc-lg .mc-count { font-size: 16px; }
+.mc-cluster .mc-pills {
+  display: flex; gap: 2px; margin-top: 3px;
+}
+.mc-cluster .mc-pill {
+  display: inline-block; min-width: 12px; padding: 0 3px;
+  border-radius: 6px; font-size: 9px; font-weight: 600; line-height: 12px;
+  color: #fff; text-align: center; text-shadow: none;
+  border: 1px solid rgba(255,255,255,0.4);
+}
