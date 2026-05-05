@@ -1420,6 +1420,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   body.nav-open { overflow: hidden; }
 
   /* Flatten the Tools/Nodes nested dropdown — inline items instead of hover sub-menu */
+  .nav-links.open .nav-dropdown { display: block; }
   .nav-dropdown { width: 100%; }
   .nav-dropdown .nav-tools-btn,
   .nav-dropdown .nav-nodes-btn { display: none; }
