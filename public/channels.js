@@ -635,8 +635,7 @@
                   aria-label="Add channel" title="Add a channel — generate, paste a key, or monitor a hashtag">+ Add Channel</button>
         </div>
         <a href="#/analytics" class="ch-analytics-link"
-           title="Open the Analytics page to see channel activity stats"
-           style="display:block;padding:6px 8px;font-size:12px;text-decoration:none;color:var(--text-muted);border-bottom:1px solid var(--border)">📊 Channel Analytics →</a>
+           title="Open the Analytics page to see channel activity stats">📊 Channel Analytics →</a>
         <div id="chAddStatus" class="ch-add-status" style="display:none"></div>
         <div id="chRegionFilter" class="region-filter-container" style="padding:0 8px"></div>
         <div class="ch-channel-list" id="chList" role="listbox" aria-label="Channels">

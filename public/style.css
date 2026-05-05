@@ -1204,6 +1204,15 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .ch-add-btn:hover { opacity: 0.85; }
 .ch-add-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.3; }
 .ch-add-status { font-size: 12px; margin-top: 4px; padding: 4px 6px; border-radius: 4px; }
+.ch-analytics-link {
+  display: block;
+  padding: 6px 8px;
+  font-size: 12px;
+  text-decoration: none;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+.ch-analytics-link:hover { color: var(--accent); }
 .ch-add-status--loading { color: var(--text-muted); }
 .ch-add-status--success { color: var(--success, #22c55e); }
 .ch-add-status--warn { color: var(--warning, #eab308); }

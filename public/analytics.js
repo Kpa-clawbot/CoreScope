@@ -816,7 +816,6 @@
     for (var i = 0; i < (channels || []).length; i++) {
       var c = channels[i];
       var copy = Object.assign({}, c);
-      copy._origName = c.name;
       var hashNum = typeof c.hash === 'number' ? c.hash : parseInt(c.hash, 10);
       var rawName = String(c.name || '');
       var isPlaceholder = /^ch(\d+|\?)$/.test(rawName);

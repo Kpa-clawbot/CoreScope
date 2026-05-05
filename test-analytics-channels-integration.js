@@ -92,9 +92,11 @@ const out = decorate(sampleChannels, myKeyHashToName, labels);
 assert(Array.isArray(out), 'decorate returns an array');
 assert(out.length === sampleChannels.length, 'decorate keeps every channel');
 
-// Find by original hash for assertions.
+// Find by original hash (and optionally original name) for assertions.
+// Decoration preserves c.name as-is and writes the user-facing string to
+// c.displayName, so matching on c.name is unambiguous.
 function find(hash, name) {
-  return out.find(c => c.hash === hash && (name == null || c._origName === name));
+  return out.find(c => c.hash === hash && (name == null || c.name === name));
 }
 
 const mine185 = find(185, 'ch185');
