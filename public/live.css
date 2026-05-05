@@ -292,6 +292,10 @@
 .live-toggles label { display: flex; align-items: center; gap: 3px; cursor: pointer; white-space: nowrap; }
 .live-toggles input { margin: 0; }
 
+/* Region filter (#1045) inline in live header toggles */
+.live-toggles .live-region-filter-container { display: inline-flex; align-items: center; }
+.live-toggles .live-region-filter-container .region-dropdown-trigger { font-size: inherit; padding: 2px 6px; }
+
 /* ---- Leaflet overrides for dark theme ---- */
 .live-page .leaflet-control-zoom a {
   background: color-mix(in srgb, var(--surface-1) 92%, transparent) !important;
