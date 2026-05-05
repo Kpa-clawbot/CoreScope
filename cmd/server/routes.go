@@ -1097,10 +1097,18 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		hashInfo := s.store.GetNodeHashSizeInfo()
 		mbCap := s.store.GetMultiByteCapMap()
+		relayWindow := s.cfg.GetHealthThresholds().RelayActiveHours
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
 				EnrichNodeWithMultiByte(node, mbCap[pk])
+				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
+					info := s.store.GetRepeaterRelayInfo(pk, relayWindow)
+					if info.LastRelayed != "" {
+						node["last_relayed"] = info.LastRelayed
+					}
+					node["relay_active"] = info.RelayActive
+				}
 			}
 		}
 	}
@@ -1197,6 +1205,14 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		EnrichNodeWithHashSize(node, hashInfo[pubkey])
 		mbCap := s.store.GetMultiByteCapMap()
 		EnrichNodeWithMultiByte(node, mbCap[pubkey])
+		if role, _ := node["role"].(string); role == "repeater" || role == "room" {
+			info := s.store.GetRepeaterRelayInfo(pubkey, s.cfg.GetHealthThresholds().RelayActiveHours)
+			if info.LastRelayed != "" {
+				node["last_relayed"] = info.LastRelayed
+			}
+			node["relay_active"] = info.RelayActive
+			node["relay_window_hours"] = info.WindowHours
+		}
 	}
 
 	name := ""

@@ -155,7 +155,8 @@
     "infraSilentHours": 72,
     "nodeDegradedHours": 1,
     "nodeSilentHours": 24,
-    "_comment": "How long (hours) before nodes show as degraded/silent. 'infra' = repeaters & rooms, 'node' = companions & others."
+    "relayActiveHours": 24,
+    "_comment": "How long (hours) before nodes show as degraded/silent. 'infra' = repeaters & rooms, 'node' = companions & others. relayActiveHours: a repeater is shown as 'actively relaying' if its pubkey appeared as a path hop in a non-advert packet within this window (issue #662)."
   },
   "defaultRegion": "SJC",
   "mapDefaults": {

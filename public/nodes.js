@@ -508,6 +508,7 @@
         <table class="node-stats-table" id="node-stats">
           <tr><td>Status</td><td><span title="${si.statusTooltip}">${statusLabel}</span> <span style="font-size:11px;color:var(--text-muted);margin-left:4px">${statusExplanation}</span></td></tr>
           <tr><td>Last Heard</td><td>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</td></tr>
+          ${(n.role === 'repeater' || n.role === 'room') ? `<tr><td title="Last time this repeater appeared as a relay hop in a non-advert packet observed by the network. Distinct from 'Last Heard' (which counts the repeater's own adverts). See issue #662.">Last Relayed</td><td>${n.last_relayed ? renderNodeTimestampHtml(n.last_relayed) + ' ' + (n.relay_active ? '<span style="color:var(--status-green);font-size:11px">🟢 actively relaying</span>' : '<span style="color:var(--status-yellow);font-size:11px">🟡 alive (idle)</span>') : '<span style="color:var(--text-muted)">never observed as relay hop</span> <span style="color:var(--status-yellow);font-size:11px">🟡 alive (idle)</span>'}</td></tr>` : ''}
           <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
           <tr><td>Total Packets</td><td>${stats.totalTransmissions || stats.totalPackets || n.advert_count || 0}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + stats.totalObservations + '×)</span>' : ''}</td></tr>
           <tr><td>Packets Today</td><td>${stats.packetsToday || 0}</td></tr>
