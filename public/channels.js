@@ -631,8 +631,8 @@
       <div class="ch-sidebar" aria-label="Channel list">
         <div class="ch-sidebar-header">
           <div class="ch-sidebar-title"><span class="ch-icon">💬</span> Channels</div>
-          <label class="ch-encrypted-toggle" title="Show encrypted channels (no key configured)">
-            <input type="checkbox" id="chShowEncrypted"> <span class="ch-toggle-label">🔒 No key</span>
+          <label class="ch-encrypted-toggle" title="Show encrypted channels you don't have a key for (locked, can't decrypt)">
+            <input type="checkbox" id="chShowEncrypted"> <span class="ch-toggle-label">🔒 Show encrypted (no key)</span>
           </label>
         </div>
         <div class="ch-key-input-wrap" style="padding:4px 8px">
@@ -771,7 +771,18 @@
     });
 
     // Event delegation for channel selection (touch-friendly)
-    document.getElementById('chList').addEventListener('click', (e) => {
+    var chListEl = document.getElementById('chList');
+    // Keyboard accessibility for the role="button" remove span (Enter/Space).
+    chListEl.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+      var rb = e.target.closest && e.target.closest('[data-remove-channel]');
+      if (!rb) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Re-dispatch as a click so the existing click handler runs.
+      rb.click();
+    });
+    chListEl.addEventListener('click', (e) => {
       // M4: Remove channel button
       const removeBtn = e.target.closest('[data-remove-channel]');
       if (removeBtn) {
@@ -1212,8 +1223,13 @@
       const dotStyle = chColor ? ` style="background:${chColor}"` : '';
       // Left border for assigned color
       const borderStyle = chColor ? ` style="border-left:3px solid ${chColor}"` : '';
-      // M4 / #1020: Remove button for user-added channels
-      const removeBtn = isUserAdded ? ' <button class="ch-remove-btn" data-remove-channel="' + escapeHtml(ch.hash) + '" title="Remove channel and clear saved key" aria-label="Remove ' + escapeHtml(name) + '">✕</button>' : '';
+      // M4 / #1020: Remove affordance for user-added channels.
+      // MUST NOT be a <button> — the outer .ch-item is itself a <button>,
+      // and HTML5 forbids nested <button>; the parser would implicitly
+      // close .ch-item and orphan everything after this node (✕, preview).
+      // Use a <span role="button"> instead. Click delegation keys off
+      // data-remove-channel so behavior is unchanged.
+      const removeBtn = isUserAdded ? ' <span class="ch-remove-btn" role="button" tabindex="0" data-remove-channel="' + escapeHtml(ch.hash) + '" title="Remove channel and clear saved key" aria-label="Remove ' + escapeHtml(name) + '">✕</span>' : '';
       // #1020: explicit badge marker for "your key" so it's distinguishable
       // from server-known encrypted rows at a glance and for screen readers.
       const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key">🔑</span>' : '';
