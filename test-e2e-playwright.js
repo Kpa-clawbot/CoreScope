@@ -257,10 +257,13 @@ async function run() {
   });
 
   // Test: Nodes page has WebSocket auto-update listener (#131)
+  // NOTE: This test verifies the WS *infrastructure* exists on the Nodes page.
+  // It deliberately does NOT wait for `table tbody tr` — that creates a flake
+  // because rows arriving via WS push are timing-dependent in CI. The preceding
+  // "Nodes page loads with data" test already covers initial table population.
   await test('Nodes page has WebSocket auto-update', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
-    await page.waitForSelector('table tbody tr');
     // The live dot in navbar indicates WS connection status
     const liveDot = await page.$('#liveDot');
     assert(liveDot, 'Live dot WebSocket indicator (#liveDot) not found');
@@ -269,7 +272,8 @@ async function run() {
       return typeof onWS === 'function' && typeof offWS === 'function';
     });
     assert(hasWsInfra, 'WebSocket listener infrastructure (onWS/offWS) should be available');
-    // Wait for WS connection and verify liveDot shows connected state
+    // Best-effort: if WS connects within 5s, verify connected state. Don't fail otherwise —
+    // CI may not have a live MQTT feed. Infra-existence assertions above are the contract.
     try {
       await page.waitForFunction(() => {
         const dot = document.getElementById('liveDot');
