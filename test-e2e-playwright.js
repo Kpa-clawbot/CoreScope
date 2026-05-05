@@ -2529,6 +2529,78 @@ async function run() {
       });
     }
 
+    // ── #1034 PR3: QR generate + scan wiring (channel modal) ──
+    await test('#1034 PR3: Generate & Show QR renders QR + Copy Key into #qr-output', async () => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('#chAddChannelBtn', { timeout: 8000 });
+      await page.click('#chAddChannelBtn');
+      await page.waitForSelector('#chAddChannelModal:not(.hidden)', { timeout: 3000 });
+      await page.fill('#chGenerateName', 'wiring-e2e');
+      // Sanity: pre-click, qr-output should be empty.
+      const before = await page.evaluate(() =>
+        (document.getElementById('qr-output').innerHTML || '').trim()
+      );
+      assert(before === '', `#qr-output should start empty, got: ${before.slice(0,60)}`);
+      await page.click('#chGenerateBtn');
+      // ChannelQR.generate writes the meshcore:// URL line + a Copy Key
+      // button regardless of whether QRCode renders as <canvas> or <img>.
+      // Wait for the URL line which is always populated.
+      await page.waitForFunction(() => {
+        const el = document.getElementById('qr-output');
+        return el && /meshcore:\/\/channel\/add/.test(el.textContent || '');
+      }, { timeout: 4000 });
+      const html = await page.innerHTML('#qr-output');
+      assert(/meshcore:\/\/channel\/add/.test(html),
+        '#qr-output must contain meshcore://channel/add URL');
+      assert(/canvas|<img|qr/i.test(html),
+        '#qr-output must contain a QR rendering (canvas/img/QR table)');
+      assert(/Copy Key/.test(html),
+        '#qr-output must contain a Copy Key button');
+      // Close modal for next test.
+      const close = await page.$('[data-action="ch-modal-close"], #chModalClose');
+      if (close) await close.click().catch(() => {});
+    });
+
+    await test('#1034 PR3: scan-qr-btn is enabled (no longer placeholder)', async () => {
+      await page.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('#chAddChannelBtn', { timeout: 8000 });
+      await page.click('#chAddChannelBtn');
+      await page.waitForSelector('#scan-qr-btn', { timeout: 3000 });
+      const disabled = await page.$eval('#scan-qr-btn', (b) => b.hasAttribute('disabled'));
+      assert(!disabled, '#scan-qr-btn must be enabled (wired to ChannelQR.scan)');
+      await page.keyboard.press('Escape').catch(() => {});
+    });
+
+    await test('#1034 PR3: scan handler populates #chPskKey + #chPskName from result', async () => {
+      // Stub ChannelQR.scan to return a deterministic result, then click
+      // the scan button and assert the form fields are populated.
+      await page.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('#chAddChannelBtn', { timeout: 8000 });
+      await page.click('#chAddChannelBtn');
+      await page.waitForSelector('#scan-qr-btn', { timeout: 3000 });
+      await page.evaluate(() => {
+        window.ChannelQR = window.ChannelQR || {};
+        window.ChannelQR.scan = function () {
+          return Promise.resolve({
+            name: 'scanned-e2e',
+            secret: 'a'.repeat(32),
+          });
+        };
+      });
+      await page.click('#scan-qr-btn');
+      // Give the async handler a tick.
+      await page.waitForFunction(() => {
+        const k = document.getElementById('chPskKey');
+        return k && k.value && k.value.length === 32;
+      }, { timeout: 3000 });
+      const key = await page.$eval('#chPskKey', (el) => el.value);
+      const name = await page.$eval('#chPskName', (el) => el.value);
+      assert(key === 'a'.repeat(32), `#chPskKey populated, got: ${key}`);
+      assert(name === 'scanned-e2e', `#chPskName populated, got: ${name}`);
+    });
+
     // Spot-check a couple other pages at the smallest and largest viewports.
     const otherPages = [
       { name: 'packets', hash: '#/packets' },

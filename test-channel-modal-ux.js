@@ -74,8 +74,8 @@ assert(/id="chPskName"/.test(chSrc),
   'PSK section has optional #chPskName input');
 assert(/id="chPskAddBtn"/.test(chSrc),
   'PSK section has #chPskAddBtn');
-assert(/id="scan-qr-btn"[^>]*disabled/.test(chSrc),
-  '#scan-qr-btn placeholder present and disabled (PR #2 wires it)');
+assert(/id="scan-qr-btn"/.test(chSrc),
+  '#scan-qr-btn present (wired in PR3 — see test-channel-qr-wiring.js)');
 assert(/\[0-9a-fA-F\]\{32\}|isHexKey/.test(chSrc),
   'PSK section validates 32-hex format');
 
