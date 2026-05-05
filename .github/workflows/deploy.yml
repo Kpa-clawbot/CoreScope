@@ -90,6 +90,7 @@ jobs:
           node test-channel-qr-wiring.js
           node test-channel-modal-ux.js
           node test-channel-issue-1087.js
+          node test-pull-to-reconnect-1091.js
 
       - name: Verify proto syntax
         run: |
