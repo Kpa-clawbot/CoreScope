@@ -82,24 +82,72 @@ func (s *PacketStore) GetRepeaterRelayInfo(pubkey string, windowHours float64) R
 	key := strings.ToLower(pubkey)
 
 	s.mu.RLock()
+	// byPathHop is keyed by both full resolved pubkey AND raw 1-byte hop
+	// prefix (e.g. "a3"). Many ingested non-advert packets only carry the
+	// raw hop on the wire — resolution to the full pubkey happens later
+	// via neighbor affinity. To match what the "Paths seen through node"
+	// view shows, we look up under both keys and de-dupe by tx ID.
+	//
+	// The 1-byte prefix lookup CAN over-count when multiple nodes share
+	// the same first byte. This trades a possible over-count for clearly
+	// false zeros (issue #662). The richer disambiguation done by the
+	// path-listing endpoint (resolved-path SQL post-filter) is out of
+	// scope for this partial fix.
 	txList := s.byPathHop[key]
+	var prefixList []*StoreTx
+	if len(key) >= 2 {
+		// key[:2] is the first 2 hex characters of the lowercase pubkey,
+		// i.e. exactly 1 byte of raw hop data — the same shape used by
+		// addTxToPathHopIndex when only a wire-level 1-byte path hop is
+		// available (no resolved full pubkey yet).
+		prefix := key[:2]
+		if prefix != key {
+			prefixList = s.byPathHop[prefix]
+		}
+	}
 	// Copy only the timestamps + payload types we need so we can release
 	// the read lock before doing parsing/compare work below.
+	//
+	// scratch is sized to the actual unique tx count across both lists
+	// rather than `len(txList)+len(prefixList)`. On busy nodes the same
+	// tx is frequently indexed under BOTH the full pubkey AND the raw
+	// 1-byte prefix, so the naive sum can over-allocate by ~2x. We do a
+	// quick ID-set pass to get the exact size before allocating.
 	type entry struct {
 		ts string
 		pt int
 	}
-	scratch := make([]entry, 0, len(txList))
+	uniq := make(map[int]struct{}, len(txList)+len(prefixList))
 	for _, tx := range txList {
-		if tx == nil {
-			continue
+		if tx != nil {
+			uniq[tx.ID] = struct{}{}
 		}
-		pt := -1
-		if tx.PayloadType != nil {
-			pt = *tx.PayloadType
-		}
-		scratch = append(scratch, entry{ts: tx.FirstSeen, pt: pt})
 	}
+	for _, tx := range prefixList {
+		if tx != nil {
+			uniq[tx.ID] = struct{}{}
+		}
+	}
+	scratch := make([]entry, 0, len(uniq))
+	seen := make(map[int]bool, len(uniq))
+	collect := func(list []*StoreTx) {
+		for _, tx := range list {
+			if tx == nil {
+				continue
+			}
+			if seen[tx.ID] {
+				continue
+			}
+			seen[tx.ID] = true
+			pt := -1
+			if tx.PayloadType != nil {
+				pt = *tx.PayloadType
+			}
+			scratch = append(scratch, entry{ts: tx.FirstSeen, pt: pt})
+		}
+	}
+	collect(txList)
+	collect(prefixList)
 	s.mu.RUnlock()
 
 	now := time.Now().UTC()
