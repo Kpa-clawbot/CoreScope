@@ -747,6 +747,18 @@
     return { col: 'lastActivity', dir: 'desc' };
   }
 
+  // True when the user has explicitly chosen a sort (saved in localStorage).
+  // Used by the grouped analytics view to decide whether to apply its own
+  // default ("messages desc") instead of the global flat-list default.
+  function hasSavedChannelSort() {
+    try {
+      var s = localStorage.getItem(CHANNEL_SORT_KEY);
+      if (!s) return false;
+      var p = JSON.parse(s);
+      return !!(p && p.col && p.dir);
+    } catch (e) { return false; }
+  }
+
   function saveChannelSort(state) {
     try { localStorage.setItem(CHANNEL_SORT_KEY, JSON.stringify(state)); } catch (e) {}
   }
@@ -918,20 +930,24 @@
     // then upgrade once keys resolve. That keeps first paint fast and avoids
     // blocking on subtle.digest in environments where it's slow.
     var rawChannels = ch.channels || [];
-    _channelData = decorateAnalyticsChannels(rawChannels, {}, {});
+    // Resolve the persisted sort first so the default-fallback below doesn't
+    // shadow what the user previously chose. Default for the grouped view is
+    // messages desc (matches the PR description); only used when nothing saved.
+    if (!_channelSortState) {
+      _channelSortState = hasSavedChannelSort()
+        ? loadChannelSort()
+        : { col: 'messages', dir: 'desc' };
+    }
     var ranOnce = false;
     function applyDecorate(map) {
       var labels = (typeof ChannelDecrypt !== 'undefined' && ChannelDecrypt.getLabels)
         ? ChannelDecrypt.getLabels() : {};
       _channelData = decorateAnalyticsChannels(rawChannels, map, labels);
-      // Default sort for the integrated grouped view: messages desc.
-      if (!_channelSortState) _channelSortState = { col: 'messages', dir: 'desc' };
       if (ranOnce) updateChannelTable();
     }
     applyDecorate({});
     ranOnce = true;
     buildHashKeyMap().then(applyDecorate).catch(function () { /* graceful */ });
-    if (!_channelSortState) _channelSortState = loadChannelSort();
 
     var timelineHtml = renderChannelTimeline(ch.channelTimeline);
     var topSendersHtml = renderTopSenders(ch.topSenders);
@@ -2155,8 +2171,6 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
 
   // Expose for testing
   if (typeof window !== 'undefined') {
-    // Stub: filled in by the analytics-channels-integration fix.
-    // Returns channels unchanged so callers can opt-in safely.
     window._analyticsDecorateChannels = decorateAnalyticsChannels;
     window._analyticsSortChannels = sortChannels;
     window._analyticsLoadChannelSort = loadChannelSort;
