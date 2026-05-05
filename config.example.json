@@ -5,6 +5,10 @@
   "_comment_nodeBlacklist": "Public keys of nodes to hide from all API responses. Use for trolls, offensive names, or nodes reporting false data that operators refuse to fix.",
   "observerIATAWhitelist": [],
   "_comment_observerIATAWhitelist": "Global IATA region whitelist. When non-empty, only observers whose IATA code (from MQTT topic) matches are processed. Case-insensitive. Empty = allow all. Unlike per-source iataFilter, this applies across all MQTT sources.",
+  "groupCommitMs": 1000,
+  "_comment_groupCommitMs": "Ingestor only (#1115 M1). Window in milliseconds for batching observation INSERTs into a single SQLite transaction. Default 1000 (1s). Set to 0 to disable batching and revert to per-packet auto-commit (legacy behavior). Trade-off: up to this many ms of delay before observations are queryable via SQL (live WebSocket broadcast is unaffected). Reduces WAL fsync rate from ~per-packet to ~1/window, eliminating SQLITE_BUSY/obs-persist-skipped log spam at high ingest rates.",
+  "groupCommitMaxRows": 1000,
+  "_comment_groupCommitMaxRows": "Ingestor only (#1115 M1). Safety cap on pending rows in the group-commit queue. When exceeded, the queue flushes immediately even if the time window has not elapsed. Bounds memory use and the crash-loss window. Default 1000.",
   "retention": {
     "nodeDays": 7,
     "observerDays": 14,

@@ -57,6 +57,26 @@ func main() {
 	defer store.Close()
 	log.Printf("SQLite opened: %s", cfg.DBPath)
 
+	// #1115 M1: enable group commit and start a flusher goroutine. When
+	// groupCommitMs == 0 the store falls back to per-call auto-commit and
+	// the ticker is a cheap no-op (FlushGroupTx is a noop with no active tx).
+	gcMs := cfg.GroupCommitMsOrDefault()
+	gcMax := cfg.GroupCommitMaxRowsOrDefault()
+	store.SetGroupCommit(gcMs, gcMax)
+	if gcMs > 0 {
+		log.Printf("group commit: window=%dms maxRows=%d", gcMs, gcMax)
+		gcTicker := time.NewTicker(time.Duration(gcMs) * time.Millisecond)
+		go func() {
+			for range gcTicker.C {
+				if err := store.FlushGroupTx(); err != nil {
+					log.Printf("[db] group commit flush: %v", err)
+				}
+			}
+		}()
+	} else {
+		log.Printf("group commit: disabled (per-packet auto-commit)")
+	}
+
 	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
 	store.BackfillPathJSONAsync()
 

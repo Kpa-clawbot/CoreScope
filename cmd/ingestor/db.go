@@ -34,18 +34,55 @@ type DBStats struct {
 // row count exceeds maxRows). When ms == 0 every InsertTransmission commits
 // individually (legacy behavior).
 //
-// Stub: real implementation lands in the green commit. This stub exists so
-// the TDD red commit compiles and fails on assertions, not import errors.
+// Safe to call at any time; an in-flight transaction is committed before
+// the new mode takes effect.
 func (s *Store) SetGroupCommit(ms int, maxRows int) {
-	// no-op stub
-	_ = ms
-	_ = maxRows
+	if maxRows <= 0 {
+		maxRows = 1000
+	}
+	s.gcMu.Lock()
+	// Flush any open tx under the old config before swapping.
+	if s.activeTx != nil {
+		_ = s.activeTx.Commit()
+		s.activeTx = nil
+		s.pendingRows = 0
+		s.Stats.GroupCommitFlushes.Add(1)
+	}
+	s.groupCommitMs = ms
+	s.groupCommitMaxRows = maxRows
+	s.gcMu.Unlock()
 }
 
-// FlushGroupTx commits any pending grouped INSERTs immediately.
-// Stub: see SetGroupCommit.
+// FlushGroupTx commits any pending grouped INSERTs immediately. Safe to call
+// when group commit is disabled (no-op). Safe to call from a separate
+// goroutine — serialized via gcMu.
 func (s *Store) FlushGroupTx() error {
+	s.gcMu.Lock()
+	defer s.gcMu.Unlock()
+	return s.flushLocked()
+}
+
+// flushLocked commits the active tx if any. Caller must hold gcMu.
+func (s *Store) flushLocked() error {
+	if s.activeTx == nil {
+		return nil
+	}
+	err := s.activeTx.Commit()
+	s.activeTx = nil
+	s.pendingRows = 0
+	s.Stats.GroupCommitFlushes.Add(1)
+	if err != nil {
+		s.Stats.WriteErrors.Add(1)
+		return fmt.Errorf("group commit: %w", err)
+	}
 	return nil
+}
+
+// GroupCommitMs returns the configured flush window in ms (0 = disabled).
+func (s *Store) GroupCommitMs() int {
+	s.gcMu.Lock()
+	defer s.gcMu.Unlock()
+	return s.groupCommitMs
 }
 
 // Store wraps the SQLite database for packet ingestion.
@@ -67,6 +104,17 @@ type Store struct {
 
 	sampleIntervalSec int
 	backfillWg        sync.WaitGroup
+
+	// Group-commit state (#1115 M1). When groupCommitMs > 0, observation
+	// INSERTs are queued inside a single BEGIN/COMMIT and flushed every
+	// groupCommitMs ms (via the ingestor's flusher goroutine) or earlier
+	// when groupCommitMaxRows is exceeded. When groupCommitMs == 0 every
+	// InsertTransmission commits individually (legacy behavior).
+	gcMu               sync.Mutex
+	groupCommitMs      int
+	groupCommitMaxRows int
+	activeTx           *sql.Tx
+	pendingRows        int
 }
 
 // OpenStore opens or creates a SQLite DB at the given path, applying the
@@ -616,6 +664,12 @@ func (s *Store) prepareStatements() error {
 
 // InsertTransmission inserts a decoded packet into transmissions + observations.
 // Returns true if a new transmission was created (not a duplicate hash).
+//
+// When group-commit is enabled (via SetGroupCommit with ms > 0), all writes
+// are issued against an in-flight *sql.Tx that is committed by the ingestor's
+// flusher goroutine (or eagerly when pendingRows exceeds groupCommitMaxRows).
+// When disabled (ms == 0) every call commits immediately via the prepared
+// statements bound to s.db (legacy behavior).
 func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	hash := data.Hash
 	if hash == "" {
@@ -627,29 +681,67 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		now = time.Now().UTC().Format(time.RFC3339)
 	}
 
+	s.gcMu.Lock()
+	defer s.gcMu.Unlock()
+
+	// Stmt resolvers — either bare prepared stmt (auto-commit) or tx-bound.
+	var (
+		stmtGetTx, stmtUpdFS, stmtInsTx, stmtGetObs, stmtUpdObs, stmtInsObs *sql.Stmt
+	)
+	if s.groupCommitMs > 0 {
+		if s.activeTx == nil {
+			tx, err := s.db.Begin()
+			if err != nil {
+				s.Stats.WriteErrors.Add(1)
+				return false, fmt.Errorf("group commit begin: %w", err)
+			}
+			s.activeTx = tx
+			s.pendingRows = 0
+		}
+		stmtGetTx = s.activeTx.Stmt(s.stmtGetTxByHash)
+		stmtUpdFS = s.activeTx.Stmt(s.stmtUpdateTxFirstSeen)
+		stmtInsTx = s.activeTx.Stmt(s.stmtInsertTransmission)
+		stmtGetObs = s.activeTx.Stmt(s.stmtGetObserverRowid)
+		stmtUpdObs = s.activeTx.Stmt(s.stmtUpdateObserverLastSeen)
+		stmtInsObs = s.activeTx.Stmt(s.stmtInsertObservation)
+	} else {
+		stmtGetTx = s.stmtGetTxByHash
+		stmtUpdFS = s.stmtUpdateTxFirstSeen
+		stmtInsTx = s.stmtInsertTransmission
+		stmtGetObs = s.stmtGetObserverRowid
+		stmtUpdObs = s.stmtUpdateObserverLastSeen
+		stmtInsObs = s.stmtInsertObservation
+	}
+
 	var txID int64
 	isNew := false
 
 	// Check for existing transmission
 	var existingID int64
 	var existingFirstSeen string
-	err := s.stmtGetTxByHash.QueryRow(hash).Scan(&existingID, &existingFirstSeen)
+	err := stmtGetTx.QueryRow(hash).Scan(&existingID, &existingFirstSeen)
 	if err == nil {
 		// Existing transmission
 		txID = existingID
 		if now < existingFirstSeen {
-			_, _ = s.stmtUpdateTxFirstSeen.Exec(now, txID)
+			_, _ = stmtUpdFS.Exec(now, txID)
 		}
 	} else {
 		// New transmission
 		isNew = true
-		result, err := s.stmtInsertTransmission.Exec(
+		result, err := stmtInsTx.Exec(
 			data.RawHex, hash, now,
 			data.RouteType, data.PayloadType, data.PayloadVersion,
 			data.DecodedJSON, nilIfEmpty(data.ChannelHash),
 		)
 		if err != nil {
 			s.Stats.WriteErrors.Add(1)
+			// Rollback in-flight tx so we don't leave it dangling.
+			if s.activeTx != nil {
+				_ = s.activeTx.Rollback()
+				s.activeTx = nil
+				s.pendingRows = 0
+			}
 			return false, fmt.Errorf("insert transmission: %w", err)
 		}
 		txID, _ = result.LastInsertId()
@@ -664,12 +756,12 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	var observerIdx *int64
 	if data.ObserverID != "" {
 		var rowid int64
-		err := s.stmtGetObserverRowid.QueryRow(data.ObserverID).Scan(&rowid)
+		err := stmtGetObs.QueryRow(data.ObserverID).Scan(&rowid)
 		if err == nil {
 			observerIdx = &rowid
 			// Update observer last_seen and last_packet_at on every packet to prevent
 			// low-traffic observers from appearing offline (#463)
-			_, _ = s.stmtUpdateObserverLastSeen.Exec(now, now, rowid)
+			_, _ = stmtUpdObs.Exec(now, now, rowid)
 		}
 	}
 
@@ -679,7 +771,7 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		epochTs = t.Unix()
 	}
 
-	_, err = s.stmtInsertObservation.Exec(
+	_, err = stmtInsObs.Exec(
 		txID, observerIdx, data.Direction,
 		data.SNR, data.RSSI, data.Score,
 		data.PathJSON, epochTs, nilIfEmpty(data.RawHex),
@@ -689,6 +781,17 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		log.Printf("[db] observation insert (non-fatal): %v", err)
 	} else {
 		s.Stats.ObservationsInserted.Add(1)
+	}
+
+	// Group-commit accounting: count this insert and flush early if we hit
+	// the row cap. Counts pending rows (transmission + observation pairs).
+	if s.activeTx != nil {
+		s.pendingRows++
+		if s.pendingRows >= s.groupCommitMaxRows {
+			if err := s.flushLocked(); err != nil {
+				log.Printf("[db] group commit (max-rows) flush failed: %v", err)
+			}
+		}
 	}
 
 	return isNew, nil
@@ -814,6 +917,10 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 // Close checkpoints the WAL and closes the database.
 func (s *Store) Close() error {
 	s.backfillWg.Wait()
+	// Flush any pending grouped INSERTs before checkpoint/close (#1115).
+	if err := s.FlushGroupTx(); err != nil {
+		log.Printf("[db] close: group commit flush: %v", err)
+	}
 	s.Checkpoint()
 	return s.db.Close()
 }
