@@ -64,12 +64,12 @@
     //   data-priority on each <th>:
     //     1 → always visible
     //     2 → hide when viewport ≤ 1280
-    //     3 → hide when viewport ≤ 1080
+    //     3 → hide when viewport ≤ 1024  (per AC #1 wording)
     //     4 → hide when viewport ≤  900
     //     5 → hide when viewport ≤  768
     // Higher priority numbers drop FIRST (least important).
     // Drop direction: a column is hidden if its breakpoint ≥ current viewport.
-    const BP = { 2: 1280, 3: 1080, 4: 900, 5: 768 };
+    const BP = { 2: 1280, 3: 1024, 4: 900, 5: 768 };
     const vw = window.innerWidth || document.documentElement.clientWidth;
 
     const candidates = ths
@@ -99,6 +99,29 @@
         ev.preventDefault();
         table[REVEAL_FLAG] = true;
         clearHidden(table);
+        // Add a small "hide again" affordance after reveal so the user isn't stuck.
+        const rehide = document.createElement('button');
+        rehide.type = 'button';
+        rehide.className = PILL_CLASS + ' col-rehide-pill';
+        rehide.textContent = 'hide';
+        rehide.title = 'Re-hide collapsed columns';
+        rehide.setAttribute('aria-label', 'Re-hide previously collapsed columns');
+        rehide.addEventListener('click', function (ev2) {
+          ev2.stopPropagation();
+          ev2.preventDefault();
+          table[REVEAL_FLAG] = false;
+          apply(table);
+        });
+        rehide.addEventListener('keydown', function (ev2) {
+          // Prevent Enter/Space from bubbling up to TableSort handler on the <th>.
+          if (ev2.key === 'Enter' || ev2.key === ' ') ev2.stopPropagation();
+        });
+        host.appendChild(rehide);
+      });
+      // MAJOR-3: prevent Enter/Space keydown on the pill from bubbling to the
+      // <th>'s TableSort keydown handler (which would also trigger a sort).
+      pill.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') ev.stopPropagation();
       });
       host.appendChild(pill);
     }

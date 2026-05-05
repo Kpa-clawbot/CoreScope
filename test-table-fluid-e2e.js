@@ -32,6 +32,7 @@ const VIEWPORTS = [
   { w: 768,  h: 900, expectHidden: true  },
   { w: 1080, h: 900, expectHidden: true  },
   { w: 1440, h: 900, expectHidden: false }, // wide enough — no hide expected (or 0)
+  { w: 1920, h: 900, expectHidden: false }, // AC #5: also exercise 1920px
 ];
 
 (async () => {

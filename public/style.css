@@ -598,7 +598,11 @@ input[type="week"] {
 }
 .col-hidden-pill:hover { filter: brightness(1.15); }
 .col-hidden-pill:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
-.table-fluid-wrap { width: 100%; }
+/* MAJOR-4: re-hide affordance — visually distinct from the +N reveal pill. */
+.col-rehide-pill { background: transparent; color: var(--text-dim, #94a3b8); border-color: var(--border, #334155); margin-left: 4px; }
+/* MAJOR-2: when user-resizable columns push total width past container,
+ * fall back to horizontal scroll on the wrap rather than overflowing the page. */
+.table-fluid-wrap { width: 100%; overflow-x: auto; }
 .timestamp-future-icon { margin-left: 4px; cursor: help; }
 .data-table tbody tr:nth-child(even) { background: var(--row-stripe); }
 .data-table tbody tr:hover { background: var(--row-hover); cursor: pointer; }
