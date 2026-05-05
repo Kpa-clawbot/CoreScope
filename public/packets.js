@@ -837,7 +837,7 @@
             <option value="chrono-asc">Sort: Time ↑ (earliest)</option>
             <option value="chrono-desc">Sort: Time ↓ (latest)</option>
           </select>
-          <span class="sort-help" id="sortHelpIcon">ⓘ</span>
+          <span class="sort-help" id="sortHelpIcon" tabindex="0" role="button" aria-label="Sort help">ⓘ</span>
         </div>
         <div class="filter-group">
           <div class="col-toggle-wrap">

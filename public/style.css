@@ -197,6 +197,69 @@ button.ch-item {
   touch-action: manipulation;
 }
 
+/* Additional button-like controls discovered during PR #1067 review (Issue
+   #1060 follow-up). Same 48x48 minimums + touch-action so all interactive
+   surfaces meet WCAG 2.5.5. */
+.btn-link,
+.col-toggle-btn,
+.filter-toggle-btn,
+.ch-add-channel-btn,
+.ch-back-btn,
+.ch-modal-btn-secondary,
+.ch-scroll-btn,
+.chooser-btn,
+.clock-filter-btn,
+.compare-btn,
+.copy-link-btn,
+.alab-btn {
+  min-height: 48px;
+  min-width: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.btn-link:active,
+.col-toggle-btn:active,
+.filter-toggle-btn:active,
+.ch-add-channel-btn:active,
+.ch-back-btn:active,
+.ch-modal-btn-secondary:active,
+.ch-scroll-btn:active,
+.chooser-btn:active,
+.clock-filter-btn:active,
+.compare-btn:active,
+.copy-link-btn:active,
+.alab-btn:active {
+  background: var(--row-hover);
+  transform: scale(0.97);
+  opacity: 0.9;
+}
+
+/* Form controls: native <select> and text-like <input> need 48px tap targets
+   too. Scoped to interactive input types — checkbox/radio/range keep their
+   own visible size and rely on a wrapping label/parent for hit area. */
+select,
+input[type="text"],
+input[type="search"],
+input[type="number"],
+input[type="email"],
+input[type="password"],
+input[type="tel"],
+input[type="url"],
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"],
+input[type="month"],
+input[type="week"] {
+  min-height: 48px;
+  box-sizing: border-box;
+  touch-action: manipulation;
+}
+
 /* Visible :active states — touch devices have no hover, so :active is the
    primary feedback channel. Use opacity + slight scale + background shift so
    the press is felt even when the user's finger covers the control. */
