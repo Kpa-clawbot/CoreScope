@@ -88,6 +88,91 @@ assert(!/LongFast/.test(chSrc),
 assert(/#meshcore/.test(chSrc),
   'public/channels.js uses #meshcore as the example/placeholder');
 
+console.log('\n=== Behavior: renderChannelRow output structure ===');
+// Extract renderChannelRow and exercise it against synthetic ch records
+// to assert behavior (not just source substring presence).
+const vm = require('vm');
+// Locate renderChannelRow source by walking braces from the function header.
+function extractFn(src, header) {
+  const start = src.indexOf(header);
+  if (start < 0) return null;
+  let depth = 0, i = src.indexOf('{', start);
+  if (i < 0) return null;
+  for (let j = i; j < src.length; j++) {
+    const c = src[j];
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) return src.substring(start, j + 1); }
+  }
+  return null;
+}
+const renderRowSrc = extractFn(chSrc, 'function renderChannelRow(ch)');
+assert(renderRowSrc, 'extracted renderChannelRow source for behavior testing');
+if (renderRowSrc) {
+  // Stub the helpers renderChannelRow depends on, evaluate it in a sandbox.
+  const sandbox = {
+    escapeHtml: s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c])),
+    truncate: (s, n) => (s && s.length > n ? s.substring(0, n) + '…' : s || ''),
+    formatSecondsAgo: () => '5m',
+    formatHashHex: h => h,
+    getChannelColor: () => '#fff',
+    selectedHash: null,
+    customColors: {},
+    window: {},
+    renderChannelRow: null,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(renderRowSrc, sandbox);
+  const userRow = sandbox.renderChannelRow({
+    hash: 'user:Crew',
+    name: 'Crew',
+    userAdded: true,
+    encrypted: true,
+    messageCount: 0,
+    lastActivityMs: Date.now(),
+  });
+  assert(/data-share-channel="user:Crew"/.test(userRow),
+    'renderChannelRow emits a share button for user-added channels');
+  assert(/aria-haspopup="dialog"/.test(userRow),
+    'share button announces it opens a dialog (aria-haspopup="dialog")');
+  assert(/data-remove-channel="user:Crew"/.test(userRow),
+    'renderChannelRow emits a remove button for user-added channels');
+  assert(!/0 messages/.test(userRow) && !/your key/.test(userRow),
+    'user-added preview omits "0 messages" and "your key" when no activity');
+  // Non-user-added encrypted row should NOT carry share/remove.
+  const encRow = sandbox.renderChannelRow({
+    hash: 'abc123', name: 'Net', userAdded: false, encrypted: true,
+    messageCount: 0, lastActivityMs: 0,
+  });
+  assert(!/data-share-channel/.test(encRow),
+    'encrypted (non-user) rows do NOT expose a share button');
+  assert(!/0 packets/.test(encRow),
+    'encrypted preview omits "0 packets" when count is zero');
+}
+
+console.log('\n=== Behavior: share output is a labeled section, not a footer trailer ===');
+// The share output must live inside a labeled section (a11y), not as a
+// dangling div after .ch-modal-footer.
+assert(/id="chShareSection"[\s\S]{0,200}aria-labelledby="chShareHeading"/.test(chSrc),
+  'share output is wrapped in a labeled section (chShareSection / chShareHeading)');
+const footerIdx = chSrc.indexOf('class="ch-modal-footer"');
+const sectionIdx = chSrc.indexOf('id="chShareSection"');
+assert(footerIdx > 0 && sectionIdx > 0 && sectionIdx < footerIdx,
+  'share section is rendered BEFORE .ch-modal-footer (footer stays last)');
+
+console.log('\n=== A11y: locality marker font-size ≥ 11px ===');
+const localityRule = (cssSrc.match(/\.ch-section-locality\s*\{[^}]*\}/) || [''])[0];
+const sizeMatch = localityRule.match(/font-size:\s*(\d+)px/);
+assert(sizeMatch && parseInt(sizeMatch[1], 10) >= 11,
+  '.ch-section-locality font-size is ≥ 11px (got: ' + (sizeMatch ? sizeMatch[1] : 'none') + ')');
+
+console.log('\n=== Share handler: no native alert(), uses inline output ===');
+// Walk the share-handler region and verify it doesn't drop to alert().
+const shareHandlerMatch = chSrc.match(/data-share-channel[\s\S]{0,2000}?return;\n      \}/);
+assert(shareHandlerMatch && !/alert\(/.test(shareHandlerMatch[0]),
+  'share handler does not use native alert() for missing-key error');
+
 console.log('\n=== Results ===');
 console.log('Passed: ' + passed + ', Failed: ' + failed);
 process.exit(failed > 0 ? 1 : 0);

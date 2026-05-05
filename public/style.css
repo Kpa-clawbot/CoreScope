@@ -2468,7 +2468,7 @@ th.sort-active { color: var(--accent, #60a5fa); }
   font-size: 13px; line-height: 1.4;
 }
 .ch-section-locality {
-  font-size: 10px; font-weight: 500; text-transform: none;
+  font-size: 12px; font-weight: 500; text-transform: none;
   letter-spacing: 0; color: var(--text-muted); opacity: 0.85;
   margin-left: 4px;
 }

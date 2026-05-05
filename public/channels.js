@@ -691,10 +691,13 @@
             <div class="ch-modal-warn">⚠ Case-sensitive — <code>#meshcore</code> ≠ <code>#MeshCore</code></div>
           </section>
 
+          <section id="chShareSection" class="ch-modal-section" hidden aria-labelledby="chShareHeading">
+            <h4 id="chShareHeading" class="ch-modal-section-title">Share Channel</h4>
+            <div id="chShareOutput" class="ch-share-output" aria-live="polite"></div>
+          </section>
           <div class="ch-modal-footer">
             🔒 Keys stay in your browser — CoreScope is a passive observer that monitors and decrypts traffic but cannot transmit over RF. Use ✕ to remove individual channels.
           </div>
-          <div id="chShareOutput" class="ch-share-output" hidden aria-live="polite"></div>
         </div>
       </div>
       <div class="ch-main" role="region" aria-label="Channel messages">
@@ -740,7 +743,9 @@
       var err = document.getElementById('chPskError');
       if (err) { err.style.display = 'none'; err.textContent = ''; }
       var shareOut = document.getElementById('chShareOutput');
-      if (shareOut) { shareOut.hidden = true; shareOut.innerHTML = ''; }
+      if (shareOut) { shareOut.innerHTML = ''; }
+      var shareSec = document.getElementById('chShareSection');
+      if (shareSec) { shareSec.hidden = true; }
     }
     var addBtn = document.getElementById('chAddChannelBtn');
     if (addBtn) addBtn.addEventListener('click', openAddModal);
@@ -889,15 +894,16 @@
           : (sCh && sCh.name) || shareHash;
         var keys = ChannelDecrypt.getStoredKeys();
         var keyHex = keys[sName];
-        if (!keyHex) {
-          alert('No stored key found for "' + sName + '" — cannot share.');
-          return;
-        }
         if (typeof openAddModal === 'function') openAddModal();
+        var sec = document.getElementById('chShareSection');
         var out = document.getElementById('chShareOutput');
+        if (sec) sec.hidden = false;
         if (out) {
-          out.hidden = false;
           out.innerHTML = '';
+          if (!keyHex) {
+            out.textContent = 'No stored key found for "' + sName + '" — cannot share.';
+            return;
+          }
           var heading = document.createElement('div');
           heading.className = 'ch-share-heading';
           heading.textContent = 'Share "' + sName + '"';
@@ -1352,7 +1358,7 @@
     // after it. Use <span role="button">; keydown handler on #chList
     // (Enter/Space) keeps it keyboard-accessible.
     const removeBtn = isUserAdded ? ' <span class="ch-remove-btn" role="button" tabindex="0" data-remove-channel="' + escapeHtml(ch.hash) + '" title="Remove channel and clear saved key" aria-label="Remove ' + escapeHtml(name) + '">✕</span>' : '';
-    const shareBtn = isUserAdded ? ' <span class="ch-share-btn" role="button" tabindex="0" data-share-channel="' + escapeHtml(ch.hash) + '" title="Share channel key (QR + URL)" aria-label="Share ' + escapeHtml(name) + '">⤴</span>' : '';
+    const shareBtn = isUserAdded ? ' <span class="ch-share-btn" role="button" tabindex="0" data-share-channel="' + escapeHtml(ch.hash) + '" aria-haspopup="dialog" title="Share channel key (QR + URL)" aria-label="Share ' + escapeHtml(name) + '">⤴</span>' : '';
     const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key">🔑</span>' : '';
     const unreadBadge = (ch.unread && ch.unread > 0)
       ? ' <span class="ch-unread-badge" data-unread-channel="' + escapeHtml(ch.hash) + '" title="' + ch.unread + ' new" aria-label="' + ch.unread + ' unread">' + (ch.unread > 99 ? '99+' : ch.unread) + '</span>'
