@@ -1110,6 +1110,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					node["relay_active"] = info.RelayActive
 					node["relay_count_1h"] = info.RelayCount1h
 					node["relay_count_24h"] = info.RelayCount24h
+					node["usefulness_score"] = s.store.GetRepeaterUsefulnessScore(pk)
 				}
 			}
 		}
@@ -1217,6 +1218,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			node["relay_window_hours"] = info.WindowHours
 			node["relay_count_1h"] = info.RelayCount1h
 			node["relay_count_24h"] = info.RelayCount24h
+			node["usefulness_score"] = s.store.GetRepeaterUsefulnessScore(pubkey)
 		}
 	}
 
