@@ -125,6 +125,12 @@
             <canvas id="hopChart" role="img" aria-label="Hop distribution chart"></canvas>
           </div>
           <div class="analytics-chart-card full">
+            <h4>Battery Voltage <span id="batteryStatusBadge" style="font-size:11px;font-weight:normal;margin-left:8px"></span></h4>
+            <div class="analytics-chart-desc">Battery voltage over time from observer status reports — flat line means full, downward slope means draining</div>
+            <canvas id="batteryChart" role="img" aria-label="Battery voltage trend chart"></canvas>
+            <div id="batteryEmpty" style="display:none;padding:20px;text-align:center;color:var(--text-muted);font-size:12px">No battery telemetry recorded for this node in this window.</div>
+          </div>
+          <div class="analytics-chart-card full">
             <h4>Uptime Heatmap</h4>
             <div class="analytics-chart-desc">Hour-by-hour activity grid — darker = more packets in that slot</div>
             <div id="heatmapGrid" class="analytics-heatmap"></div>
@@ -159,6 +165,7 @@
     buildObserverChart(data);
     buildHopChart(data);
     buildHeatmap(data);
+    loadBatteryChart(pubkey, currentDays);
   }
 
   function buildActivityChart(data) {
@@ -287,6 +294,68 @@
         grid.innerHTML += `<div class="analytics-heatmap-cell" style="background:${bg}" title="${DAY_NAMES[d]} ${h}:00 — ${count} packets"></div>`;
       }
     }
+  }
+
+  async function loadBatteryChart(pubkey, days) {
+    let data;
+    try {
+      data = await api('/nodes/' + encodeURIComponent(pubkey) + '/battery?days=' + days);
+    } catch (e) {
+      const empty = document.getElementById('batteryEmpty');
+      if (empty) { empty.style.display = 'block'; empty.textContent = 'Battery data unavailable: ' + e.message; }
+      return;
+    }
+    const ctx = document.getElementById('batteryChart');
+    const empty = document.getElementById('batteryEmpty');
+    const badge = document.getElementById('batteryStatusBadge');
+    const samples = (data && data.samples) || [];
+    const thr = (data && data.thresholds) || { low_mv: 3300, critical_mv: 3000 };
+
+    if (badge) {
+      const STATUS_COLOR = { ok: '#51cf66', low: '#fcc419', critical: '#ff6b6b', unknown: 'var(--text-muted)' };
+      const label = data && data.status === 'ok' ? '🔋 OK'
+        : data && data.status === 'low' ? '⚠️ Low'
+        : data && data.status === 'critical' ? '🪫 Critical'
+        : 'No data';
+      const mv = data && data.latest_mv ? ' · ' + data.latest_mv + ' mV' : '';
+      badge.textContent = label + mv;
+      badge.style.color = STATUS_COLOR[(data && data.status) || 'unknown'];
+    }
+
+    if (!ctx || samples.length === 0) {
+      if (ctx) ctx.style.display = 'none';
+      if (empty) empty.style.display = 'block';
+      return;
+    }
+    if (empty) empty.style.display = 'none';
+    ctx.style.display = '';
+
+    const labels = samples.map(p => {
+      const d = new Date(p.timestamp);
+      return (typeof formatChartAxisLabel === 'function')
+        ? formatChartAxisLabel(d, days <= 3)
+        : (days <= 3 ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                     : d.toLocaleDateString([], { month: 'short', day: 'numeric' }));
+    });
+    const values = samples.map(p => p.battery_mv);
+
+    const c = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          { label: 'Battery (mV)', data: values, borderColor: '#4a9eff', backgroundColor: 'rgba(74,158,255,0.15)', tension: 0.25, pointRadius: 2, fill: true },
+          { label: 'Low threshold', data: values.map(() => thr.low_mv), borderColor: '#fcc419', borderDash: [6, 4], pointRadius: 0, fill: false },
+          { label: 'Critical', data: values.map(() => thr.critical_mv), borderColor: '#ff6b6b', borderDash: [6, 4], pointRadius: 0, fill: false }
+        ]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: true, position: 'bottom' } },
+        scales: { x: { ticks: { maxTicksAutoSkip: true, maxRotation: 45 } }, y: { title: { display: true, text: 'mV' } } }
+      }
+    });
+    charts.push(c);
   }
 
   function init(container, routeParam) {

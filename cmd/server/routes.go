@@ -151,6 +151,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/{pubkey}/health", s.handleNodeHealth).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/paths", s.handleNodePaths).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/analytics", s.handleNodeAnalytics).Methods("GET")
+	r.HandleFunc("/api/nodes/{pubkey}/battery", s.handleNodeBattery).Methods("GET")
 	r.HandleFunc("/api/nodes/clock-skew", s.handleFleetClockSkew).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/clock-skew", s.handleNodeClockSkew).Methods("GET")
 	r.HandleFunc("/api/observers/clock-skew", s.handleObserverClockSkew).Methods("GET")
