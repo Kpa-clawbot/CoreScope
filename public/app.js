@@ -990,6 +990,25 @@ window.addEventListener('DOMContentLoaded', () => {
       // Reset: show everything, then hide as needed.
       allLinks.forEach(a => a.classList.remove('is-overflow'));
       navMoreWrap.classList.remove('is-hidden');
+      // #1106: in the 768-1100px narrow-desktop band the CSS already
+      // hides .nav-stats and tightens .nav-link padding (see the
+      // "Nav narrow-desktop tightening" media query in style.css).
+      // The design intent of that band is "show exactly the 5 high-
+      // priority links + More". Pure measurement says everything fits
+      // (~981px needed in a 1080px viewport once nav-stats is gone),
+      // but the design contract — locked by test-nav-priority-1102-
+      // e2e.js #1105 MINOR 7 — is exact identity, not "fits". Force-
+      // collapse all non-high-priority links inside this band so the
+      // overflow menu is non-empty and the high-priority set is the
+      // only thing inline. Above 1100px the measurement loop below
+      // owns the decision (and at 2560px nothing overflows).
+      if (window.innerWidth <= 1100) {
+        allLinks.forEach(a => {
+          if (a.dataset.priority !== 'high') a.classList.add('is-overflow');
+        });
+        rebuildMoreMenu();
+        return;
+      }
       // Iteratively hide low-priority links until the link strip fits.
       // .top-nav has overflow:hidden and .nav-left has flex-shrink:1, so
       // an overflowing strip silently clips rather than pushing
