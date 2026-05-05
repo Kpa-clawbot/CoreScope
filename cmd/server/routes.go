@@ -1108,6 +1108,8 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 						node["last_relayed"] = info.LastRelayed
 					}
 					node["relay_active"] = info.RelayActive
+					node["relay_count_1h"] = info.RelayCount1h
+					node["relay_count_24h"] = info.RelayCount24h
 				}
 			}
 		}
@@ -1206,12 +1208,15 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		mbCap := s.store.GetMultiByteCapMap()
 		EnrichNodeWithMultiByte(node, mbCap[pubkey])
 		if role, _ := node["role"].(string); role == "repeater" || role == "room" {
-			info := s.store.GetRepeaterRelayInfo(pubkey, s.cfg.GetHealthThresholds().RelayActiveHours)
+			ht := s.cfg.GetHealthThresholds()
+			info := s.store.GetRepeaterRelayInfo(pubkey, ht.RelayActiveHours)
 			if info.LastRelayed != "" {
 				node["last_relayed"] = info.LastRelayed
 			}
 			node["relay_active"] = info.RelayActive
 			node["relay_window_hours"] = info.WindowHours
+			node["relay_count_1h"] = info.RelayCount1h
+			node["relay_count_24h"] = info.RelayCount24h
 		}
 	}
 

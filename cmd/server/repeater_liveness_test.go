@@ -44,6 +44,12 @@ func TestRepeaterRelayActivity_Active(t *testing.T) {
 	if !info.RelayActive {
 		t.Errorf("expected RelayActive=true within 24h window, got false (LastRelayed=%s)", info.LastRelayed)
 	}
+	if info.RelayCount1h != 0 {
+		t.Errorf("expected RelayCount1h=0 (relay was 2h ago, outside 1h window), got %d", info.RelayCount1h)
+	}
+	if info.RelayCount24h != 1 {
+		t.Errorf("expected RelayCount24h=1 (relay was 2h ago, inside 24h window), got %d", info.RelayCount24h)
+	}
 }
 
 // TestRepeaterRelayActivity_Idle verifies that a repeater whose pubkey
@@ -65,6 +71,9 @@ func TestRepeaterRelayActivity_Idle(t *testing.T) {
 	}
 	if info.RelayActive {
 		t.Errorf("expected RelayActive=false for idle repeater, got true")
+	}
+	if info.RelayCount1h != 0 || info.RelayCount24h != 0 {
+		t.Errorf("expected zero relay counts for idle repeater, got 1h=%d 24h=%d", info.RelayCount1h, info.RelayCount24h)
 	}
 }
 
@@ -105,6 +114,9 @@ func TestRepeaterRelayActivity_Stale(t *testing.T) {
 	if info.RelayActive {
 		t.Errorf("expected RelayActive=false for relay older than window, got true")
 	}
+	if info.RelayCount1h != 0 || info.RelayCount24h != 0 {
+		t.Errorf("expected zero relay counts for stale (>24h) repeater, got 1h=%d 24h=%d", info.RelayCount1h, info.RelayCount24h)
+	}
 }
 
 // TestRepeaterRelayActivity_IgnoresAdverts verifies that adverts originated
@@ -143,5 +155,8 @@ func TestRepeaterRelayActivity_IgnoresAdverts(t *testing.T) {
 	}
 	if info.RelayActive {
 		t.Errorf("expected RelayActive=false (adverts ignored), got true")
+	}
+	if info.RelayCount1h != 0 || info.RelayCount24h != 0 {
+		t.Errorf("expected zero relay counts (adverts ignored), got 1h=%d 24h=%d", info.RelayCount1h, info.RelayCount24h)
 	}
 }
