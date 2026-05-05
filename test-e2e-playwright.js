@@ -2543,12 +2543,20 @@ async function run() {
       );
       assert(before === '', `#qr-output should start empty, got: ${before.slice(0,60)}`);
       await page.click('#chGenerateBtn');
-      // The QR helper renders a canvas + a meshcore:// URL + a Copy Key button.
-      await page.waitForSelector('#qr-output canvas', { timeout: 4000 });
+      // ChannelQR.generate writes the meshcore:// URL line + a Copy Key
+      // button regardless of whether QRCode renders as <canvas> or <img>.
+      // Wait for the URL line which is always populated.
+      await page.waitForFunction(() => {
+        const el = document.getElementById('qr-output');
+        return el && /meshcore:\/\/channel\/add/.test(el.textContent || '');
+      }, { timeout: 4000 });
       const html = await page.innerHTML('#qr-output');
-      assert(/canvas/i.test(html), '#qr-output must contain a <canvas> from ChannelQR.generate');
       assert(/meshcore:\/\/channel\/add/.test(html),
-        '#qr-output must show the meshcore://channel/add URL');
+        '#qr-output must contain meshcore://channel/add URL');
+      assert(/canvas|<img|qr/i.test(html),
+        '#qr-output must contain a QR rendering (canvas/img/QR table)');
+      assert(/Copy Key/.test(html),
+        '#qr-output must contain a Copy Key button');
       // Close modal for next test.
       const close = await page.$('[data-action="ch-modal-close"], #chModalClose');
       if (close) await close.click().catch(() => {});
