@@ -1363,19 +1363,22 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .panel-left { padding: 6px; flex: 1; min-height: 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .panel-right { display: none; }
 
-  /* Channels: Discord-style full screen toggle */
-  .ch-layout { flex-direction: row; position: relative; }
-  .ch-sidebar { 
-    width: 100%; min-width: 0; max-height: none; height: 100%; 
-    border-right: none; position: absolute; top: 0; left: 0; bottom: 0;
-    z-index: 2; background: var(--card-bg);
+  /* Channels: stack sidebar above message area on narrow viewports.
+     #1057 follow-up: container query alone was being overridden here by
+     the previous Discord-overlay rule (flex-direction:row + absolute
+     positioning), so the layout failed to stack at 480px. Use a plain
+     stacking layout that the E2E test recognizes (sidebar.bottom <=
+     main.top). */
+  .ch-layout { flex-direction: column; position: relative; }
+  .ch-sidebar {
+    width: 100%; min-width: 0; max-height: 40%; height: auto;
+    border-right: none; border-bottom: 1px solid var(--border);
+    background: var(--card-bg);
   }
-  .ch-main { 
-    width: 100%; position: absolute; top: 0; left: 0; bottom: 0;
-    transform: translateX(100%); transition: transform .2s ease;
-    z-index: 3; background: var(--content-bg);
+  .ch-main {
+    width: 100%; flex: 1; min-height: 0;
+    background: var(--content-bg);
   }
-  .ch-layout.ch-show-main .ch-main { transform: translateX(0); }
   .ch-back-btn { display: flex; }
   .ch-main-header { display: flex; align-items: center; gap: 8px; }
 
