@@ -1276,21 +1276,6 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .map-controls { width: 180px; font-size: 12px; }
 }
 
-/* === Nav narrow-desktop tightening (Issue #1055 — 1024px overlap fix) ===
-   Between 901px (where the tablet rule above stops hiding nav-stats) and
-   ~1100px the 5 high-priority links + "More ▾" + 4 nav-right buttons +
-   the nav-stats block don't fit on one row, causing the rightmost visible
-   link to overlap nav-right by ~20px. Hide nav-stats and tighten nav-link
-   padding/gap in this band; nav-stats reappears at ≥1101px where there is
-   room for it. */
-@media (min-width: 768px) and (max-width: 1100px) {
-  .nav-stats { display: none; }
-  .nav-links { gap: 0; }
-  .nav-link { padding: 14px 6px; }
-  .nav-link.active { padding: 10px 6px; }
-  .nav-right { gap: 4px; }
-}
-
 /* === Nav Priority+ — applies at ALL desktop widths (Issue #1055) ===
    Above the mobile hamburger breakpoint, only data-priority="high" links
    render inline; the rest collapse into the "More ▾" overflow menu.
@@ -1304,6 +1289,23 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .nav-link { padding: 14px clamp(8px, 0.6vw + 4px, 14px); font-size: var(--fs-sm); }
   .nav-links a[data-priority="high"] { order: -1; }
   .nav-link.active { background: var(--nav-active-bg); border-radius: 6px; margin: 4px 0; padding: 10px clamp(8px, 0.6vw + 4px, 14px); }
+}
+
+/* === Nav narrow-desktop tightening (Issue #1055 — 1024px overlap fix) ===
+   Between 768px and ~1100px, even with Priority+ collapsed to 5 high
+   links + "More ▾" + 4 nav-right buttons + nav-stats, the row doesn't
+   fit and the rightmost visible link overlaps nav-right by ~20px.
+   Hide nav-stats and tighten nav-link padding/gap in this band;
+   nav-stats reappears at ≥1101px where there is room for it.
+   NOTE: this block MUST follow the (min-width: 768px) Priority+ block
+   above so its tighter padding/gap rules win the cascade by source
+   order at 1024px (same specificity). */
+@media (min-width: 768px) and (max-width: 1100px) {
+  .nav-stats { display: none; }
+  .nav-links { gap: 0; }
+  .nav-link { padding: 14px 6px; }
+  .nav-link.active { padding: 10px 6px; }
+  .nav-right { gap: 4px; }
 }
 
 /* === Responsive — Hamburger nav (<768px) === */
