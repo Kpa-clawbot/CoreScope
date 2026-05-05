@@ -1,6 +1,57 @@
 /* === CoreScope — style.css === */
 
+/* ============================================================
+ * FLUID SCAFFOLDING (issue #1054)
+ * ------------------------------------------------------------
+ * Global design tokens for spacing, typography, and container
+ * layout. All values use clamp()/min() so the layout scales
+ * smoothly between ~768px and ~2560px viewports without media
+ * queries. Targets at the historic 1440px design width match
+ * the previous hardcoded px values to within ~1px so existing
+ * pages render identically there.
+ *
+ * Component-specific spacing/typography (nav, tables, charts,
+ * map, packets, analytics, …) lives in its own marked region
+ * further below — DO NOT add component CSS in this region.
+ * ============================================================ */
+
 :root {
+  /* --- Fluid spacing scale ---------------------------------
+   * Targets at 1440px viewport: 4 / 8 / 16 / 24 / 32 / 48 px.
+   * Min/max clamps keep small viewports usable and prevent
+   * runaway growth on ultra-wide displays.
+   */
+  --space-xs:  clamp(3px,  0.15vw + 2px,  6px);
+  --space-sm:  clamp(6px,  0.30vw + 4px, 12px);
+  --space-md:  clamp(10px, 0.50vw + 8px, 20px);
+  --space-lg:  clamp(16px, 0.75vw + 12px, 32px);
+  --space-xl:  clamp(24px, 1.00vw + 16px, 48px);
+  --space-2xl: clamp(32px, 2.00vw + 20px, 64px);
+
+  /* --- Fluid type scale ------------------------------------
+   * Targets at 1440px viewport: 13 / 16 / 18 / 24 / 32 px.
+   * Floors ensure readability at 768px; caps prevent giant
+   * text at 2560px+.
+   */
+  --fs-sm:  clamp(12px, 0.15vw + 11px, 14px);
+  --fs-md:  clamp(14px, 0.20vw + 13px, 17px);
+  --fs-lg:  clamp(15px, 0.30vw + 14px, 20px);
+  --fs-xl:  clamp(18px, 0.50vw + 16px, 28px);
+  --fs-2xl: clamp(22px, 0.75vw + 20px, 36px);
+
+  /* --- Fluid radii ----------------------------------------- */
+  --radius-sm: clamp(3px, 0.1vw + 2px, 6px);
+  --radius-md: clamp(6px, 0.2vw + 5px, 12px);
+  --radius-lg: clamp(10px, 0.3vw + 8px, 18px);
+
+  /* --- Container layout ------------------------------------
+   * --gutter scales the side padding; --content-max caps the
+   * usable content width but always leaves a gutter on each
+   * side at small viewports.
+   */
+  --gutter: clamp(12px, 2vw, 32px);
+  --content-max: min(100% - (2 * var(--gutter)), 1600px);
+
   --nav-bg: #0f0f23;
   --nav-bg2: #1a1a2e;
   --nav-text: #ffffff;
@@ -103,7 +154,13 @@
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { height: 100%; font-family: var(--font); background: var(--content-bg); color: var(--text); }
+html, body { height: 100%; font-family: var(--font); font-size: var(--fs-md); background: var(--content-bg); color: var(--text); }
+
+/* ============================================================
+ * COMPONENT STYLES — page-specific rules below.
+ * (Nav, tables, charts, map, packets, analytics, etc.)
+ * Tasks 1050-3..6 / 1052-* edit sections inside this region.
+ * ============================================================ */
 
 /* === Skip Link === */
 .skip-link { position: absolute; top: -100%; left: 16px; padding: 8px 16px; background: var(--accent); color: #fff; border-radius: 6px; z-index: 999; font-weight: 600; text-decoration: none; }
