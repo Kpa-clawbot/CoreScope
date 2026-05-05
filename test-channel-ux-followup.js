@@ -56,8 +56,11 @@ assert(/data-share-channel/.test(chSrc),
 assert(/data-share-channel/.test(chSrc) && /ChannelQR/.test(chSrc),
   'share handler references ChannelQR for QR rendering');
 // Modal must have a target container for the reshare QR output.
-assert(/id="chShareOutput"/.test(chSrc) || /id="chReshareOutput"/.test(chSrc),
-  'modal has a reshare QR output container');
+// (#1087 polish) The share UX moved to a DEDICATED modal —
+// `#chShareModal` with `#chShareQr` — so the dead `chShareSection` /
+// `chShareOutput` markup was removed from the Add Channel modal.
+assert(/id="chShareModal"/.test(chSrc) && /id="chShareQr"/.test(chSrc),
+  'dedicated share modal exposes a QR output container');
 
 console.log('\n=== Fix 5: "(your key)" suffix removed from preview ===');
 assert(!/\(your key\)/.test(chSrc),
@@ -158,15 +161,14 @@ if (renderRowSrc) {
     'encrypted preview omits "0 packets" when count is zero');
 }
 
-console.log('\n=== Behavior: share output is a labeled section, not a footer trailer ===');
-// The share output must live inside a labeled section (a11y), not as a
-// dangling div after .ch-modal-footer.
-assert(/id="chShareSection"[\s\S]{0,200}aria-labelledby="chShareHeading"/.test(chSrc),
-  'share output is wrapped in a labeled section (chShareSection / chShareHeading)');
-const footerIdx = chSrc.indexOf('class="ch-modal-footer"');
-const sectionIdx = chSrc.indexOf('id="chShareSection"');
-assert(footerIdx > 0 && sectionIdx > 0 && sectionIdx < footerIdx,
-  'share section is rendered BEFORE .ch-modal-footer (footer stays last)');
+console.log('\n=== Behavior: share output lives in a dedicated, labeled modal ===');
+// (#1087 polish) The share UX is no longer a section nested inside the
+// Add Channel modal — it is a dedicated dialog (`#chShareModal`) with
+// its own labeled title (`aria-labelledby="chShareModalTitle"`).
+assert(/id="chShareModal"[\s\S]{0,400}aria-labelledby="chShareModalTitle"/.test(chSrc),
+  'dedicated share modal is labeled (chShareModal / chShareModalTitle)');
+assert(/role="dialog"[\s\S]{0,200}aria-modal="true"/.test(chSrc),
+  'share modal advertises role="dialog" + aria-modal="true"');
 
 console.log('\n=== A11y: locality marker font-size ≥ 11px ===');
 const localityRule = (cssSrc.match(/\.ch-section-locality\s*\{[^}]*\}/) || [''])[0];

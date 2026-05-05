@@ -339,6 +339,53 @@
     }
   }
 
+  // #1087 Bug 3: single canonical persistence helper. Both the Generate
+  // path and the PSK Add path route writes through this function so the
+  // localStorage write happens synchronously inside the submit handler —
+  // not as a side effect of subsequent UI events.
+  //
+  // The previous code spread storeKey() calls across multiple branches,
+  // and the persistence path could be skipped entirely if the modal was
+  // closed before mergeUserChannels() ran. Hence the original symptom:
+  // a freshly-added channel disappeared on refresh, then "reappeared"
+  // when ANOTHER channel was added (because the second add wrote the
+  // entire current state, including #1).
+  //
+  // Returns true iff the key was successfully stored AND a re-read
+  // confirms it landed in localStorage. Returns false on quota / other
+  // storage failure so callers can surface an error.
+  function persistAddedChannel(channelName, keyHex, label) {
+    if (!channelName || !keyHex) return false;
+    try {
+      ChannelDecrypt.storeKey(channelName, keyHex, label);
+    } catch (e) {
+      return false;
+    }
+    // Verify the write by re-reading. localStorage can silently drop
+    // writes under quota pressure, and we want callers to know.
+    try {
+      var keys = (typeof ChannelDecrypt.getStoredKeys === 'function')
+        ? ChannelDecrypt.getStoredKeys()
+        : JSON.parse(localStorage.getItem('corescope_channel_keys') || '{}');
+      if (!keys || keys[channelName] !== keyHex) return false;
+      // Polish MINOR-3: also verify the label round-tripped when one was supplied.
+      // Labels live in a separate storage bucket and could fail independently
+      // of the key write — caller deserves to know if the friendly name didn't land.
+      var trimmed = (typeof label === 'string') ? label.trim() : '';
+      if (trimmed) {
+        var stored = (typeof ChannelDecrypt.getLabel === 'function')
+          ? ChannelDecrypt.getLabel(channelName)
+          : ((typeof ChannelDecrypt.getLabels === 'function')
+              ? (ChannelDecrypt.getLabels()[channelName] || '')
+              : '');
+        if (stored !== trimmed) return false;
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Add a user channel by name (#channelname) or hex key.
   // `label` (#1020) is an optional friendly name shown in the sidebar instead
   // of "psk:<hex8>" — stored alongside the key in localStorage.
@@ -361,8 +408,12 @@
         keyHex = ChannelDecrypt.bytesToHex(keyBytes2);
       }
 
-      // #1020: persist optional user-supplied label alongside the key
-      ChannelDecrypt.storeKey(channelName, keyHex, label);
+      // #1020/#1087: persist optional user-supplied label alongside the key
+      // through the canonical helper (verified read-back).
+      if (!persistAddedChannel(channelName, keyHex, label)) {
+        showAddStatus('Failed to save channel — browser storage may be full', 'error');
+        return;
+      }
 
       // Compute channel hash byte to find matching encrypted channels
       var keyBytes3 = ChannelDecrypt.hexToBytes(keyHex);
@@ -693,12 +744,40 @@
             <div class="ch-modal-warn">⚠ Case-sensitive — <code>#meshcore</code> ≠ <code>#MeshCore</code></div>
           </section>
 
-          <section id="chShareSection" class="ch-modal-section" hidden aria-labelledby="chShareHeading">
-            <h4 id="chShareHeading" class="ch-modal-section-title">Share Channel</h4>
-            <div id="chShareOutput" class="ch-share-output" aria-live="polite"></div>
-          </section>
           <div class="ch-modal-footer">
             🔒 Keys stay in your browser — CoreScope is a passive observer that monitors and decrypts traffic but cannot transmit over RF. Use ✕ to remove individual channels.
+          </div>
+        </div>
+      </div>
+
+      <!-- #1087 Bug 4: dedicated Share modal — separate from the Add
+           Channel modal above. Add = INPUT (paste/scan/generate). Share
+           = OUTPUT (display existing key as QR + URL + copyable text).
+           Reusing the Add modal for Share confused intent and let the
+           QR section bleed into the Add submit flow. -->
+      <div id="chShareModal" class="modal-overlay ch-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="chShareModalTitle" hidden>
+        <div class="modal ch-modal ch-share-modal" role="document">
+          <button type="button" class="modal-close ch-modal-close" id="chShareModalClose" data-action="ch-share-modal-close" aria-label="Close">✕</button>
+          <h3 id="chShareModalTitle" class="ch-share-modal-title">Share Channel</h3>
+          <div class="ch-share-modal-body">
+            <div id="chShareQr" class="ch-share-qr" aria-live="polite"></div>
+            <div class="ch-share-field-group">
+              <label class="ch-share-label" for="chShareKey">Hex Key</label>
+              <div class="ch-share-row">
+                <input type="text" id="chShareKey" data-share-field="key" class="ch-modal-input ch-modal-input--mono" readonly aria-label="Channel hex key">
+                <button type="button" class="ch-modal-btn-secondary" data-share-copy="key" aria-label="Copy hex key">📋 Copy</button>
+              </div>
+            </div>
+            <div class="ch-share-field-group">
+              <label class="ch-share-label" for="chShareUrl">meshcore:// URL</label>
+              <div class="ch-share-row">
+                <input type="text" id="chShareUrl" data-share-field="url" class="ch-modal-input ch-modal-input--mono" readonly aria-label="Channel meshcore URL">
+                <button type="button" class="ch-modal-btn-secondary" data-share-copy="url" aria-label="Copy meshcore URL">📋 Copy</button>
+              </div>
+            </div>
+            <div class="ch-modal-warn" role="note">
+              ⚠ Privacy: only share with trusted people. Anyone with this key can read all messages on this channel.
+            </div>
           </div>
         </div>
       </div>
@@ -744,10 +823,6 @@
       modalEl.setAttribute('hidden', '');
       var err = document.getElementById('chPskError');
       if (err) { err.style.display = 'none'; err.textContent = ''; }
-      var shareOut = document.getElementById('chShareOutput');
-      if (shareOut) { shareOut.innerHTML = ''; }
-      var shareSec = document.getElementById('chShareSection');
-      if (shareSec) { shareSec.hidden = true; }
     }
     var addBtn = document.getElementById('chAddChannelBtn');
     if (addBtn) addBtn.addEventListener('click', openAddModal);
@@ -767,6 +842,153 @@
       });
     }
 
+    // #1087 Bug 4: dedicated Share modal wiring.
+    // Polish follow-up: focus trap on open + restore focus on close (a11y).
+    var shareModalEl = document.getElementById('chShareModal');
+    var _shareModalTrigger = null;
+    var _shareModalKeyHandler = null;
+    // QR capacity bound: qrcode(0,'M') auto-detects smallest version, but
+    // very long display labels can overflow. URL = scheme(~30) + 32-char
+    // secret + encoded(name). Cap encoded label budget to keep total URL
+    // comfortably under the version-10 ECC-M payload (~213 bytes).
+    var SHARE_LABEL_MAX = 64;
+    function _truncateForQr(name) {
+      if (!name) return '';
+      var s = String(name);
+      // Encode first, then trim — encoded length is what QR sees.
+      var enc = encodeURIComponent(s);
+      if (enc.length <= SHARE_LABEL_MAX) return s;
+      // Walk back until encoded fits; preserves UTF-8 boundaries via
+      // encodeURIComponent re-check on each shrink.
+      while (s.length > 0 && encodeURIComponent(s).length > SHARE_LABEL_MAX) {
+        s = s.slice(0, -1);
+      }
+      return s;
+    }
+    function _trapShareModalFocus() {
+      if (!shareModalEl) return;
+      var focusable = shareModalEl.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      if (!focusable.length) return;
+      var first = focusable[0], last = focusable[focusable.length - 1];
+      _shareModalKeyHandler = function (e) {
+        if (e.key !== 'Tab') return;
+        if (e.shiftKey) {
+          if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+        } else {
+          if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      };
+      shareModalEl.addEventListener('keydown', _shareModalKeyHandler);
+    }
+    // Open the share modal in NORMAL (key present) mode. For the
+    // "key not found" path, callers use openShareModalError() — both
+    // routes use this same modal so users never see a native alert().
+    function openShareModal(displayName, channelName, keyHex) {
+      if (!shareModalEl) return;
+      _shareModalTrigger = document.activeElement;
+      var safeName = _truncateForQr(displayName);
+      var title = document.getElementById('chShareModalTitle');
+      if (title) title.textContent = 'Share: ' + safeName;
+      var qrHolder = document.getElementById('chShareQr');
+      var keyField = document.getElementById('chShareKey');
+      var urlField = document.getElementById('chShareUrl');
+      var fieldsWrap = shareModalEl.querySelectorAll('.ch-share-field-group');
+      for (var i = 0; i < fieldsWrap.length; i++) fieldsWrap[i].hidden = false;
+      var url = 'meshcore://channel/add?name=' + encodeURIComponent(safeName) +
+                '&secret=' + keyHex;
+      if (keyField) keyField.value = keyHex;
+      if (urlField) urlField.value = url;
+      if (qrHolder) {
+        qrHolder.innerHTML = '';
+        if (window.ChannelQR && typeof window.ChannelQR.generate === 'function') {
+          // #1087 Bug 2: pass the user-facing displayName, NOT the
+          // internal `psk:<hex8>` channelName lookup key.
+          window.ChannelQR.generate(safeName, keyHex, qrHolder);
+        }
+      }
+      shareModalEl.classList.remove('hidden');
+      shareModalEl.removeAttribute('hidden');
+      _trapShareModalFocus();
+      var closeBtn = document.getElementById('chShareModalClose');
+      if (closeBtn) try { closeBtn.focus(); } catch (e) { /* noop */ }
+    }
+    // Polish: replace native alert() for missing-key share with the
+    // dedicated modal in error mode (no QR/fields, just the message).
+    function openShareModalError(displayName, message) {
+      if (!shareModalEl) return;
+      _shareModalTrigger = document.activeElement;
+      var title = document.getElementById('chShareModalTitle');
+      if (title) title.textContent = 'Share: ' + displayName;
+      var qrHolder = document.getElementById('chShareQr');
+      if (qrHolder) {
+        qrHolder.innerHTML = '';
+        var msg = document.createElement('div');
+        msg.className = 'ch-share-error';
+        msg.setAttribute('role', 'alert');
+        msg.textContent = message;
+        qrHolder.appendChild(msg);
+      }
+      var fieldsWrap = shareModalEl.querySelectorAll('.ch-share-field-group');
+      for (var i = 0; i < fieldsWrap.length; i++) fieldsWrap[i].hidden = true;
+      shareModalEl.classList.remove('hidden');
+      shareModalEl.removeAttribute('hidden');
+      _trapShareModalFocus();
+      var closeBtn = document.getElementById('chShareModalClose');
+      if (closeBtn) try { closeBtn.focus(); } catch (e) { /* noop */ }
+    }
+    function closeShareModal() {
+      if (!shareModalEl) return;
+      shareModalEl.classList.add('hidden');
+      shareModalEl.setAttribute('hidden', '');
+      if (_shareModalKeyHandler) {
+        shareModalEl.removeEventListener('keydown', _shareModalKeyHandler);
+        _shareModalKeyHandler = null;
+      }
+      // Restore focus to the trigger that opened the modal (a11y).
+      if (_shareModalTrigger && typeof _shareModalTrigger.focus === 'function') {
+        try { _shareModalTrigger.focus(); } catch (e) { /* noop */ }
+      }
+      _shareModalTrigger = null;
+    }
+    if (shareModalEl) {
+      shareModalEl.addEventListener('click', function (e) {
+        var copyBtn = e.target.closest && e.target.closest('[data-share-copy]');
+        if (copyBtn) {
+          e.preventDefault();
+          var which = copyBtn.getAttribute('data-share-copy');
+          var src = which === 'url'
+            ? document.getElementById('chShareUrl')
+            : document.getElementById('chShareKey');
+          if (src) {
+            try { src.select(); } catch (e2) {}
+            var doneCopy = function () {
+              var orig = copyBtn.textContent;
+              copyBtn.textContent = '✓ Copied';
+              setTimeout(function () { copyBtn.textContent = orig; }, 1200);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(src.value).then(doneCopy, doneCopy);
+            } else {
+              try { document.execCommand('copy'); } catch (e2) {}
+              doneCopy();
+            }
+          }
+          return;
+        }
+        var closeEl = e.target.closest('[data-action="ch-share-modal-close"]');
+        if (closeEl || e.target === shareModalEl) {
+          e.preventDefault();
+          closeShareModal();
+        }
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !shareModalEl.classList.contains('hidden')) {
+          closeShareModal();
+        }
+      });
+    }
+
     // Section 1: Generate PSK
     var genBtn = document.getElementById('chGenerateBtn');
     if (genBtn) genBtn.addEventListener('click', async function () {
@@ -776,19 +998,19 @@
       var bytes = crypto.getRandomValues(new Uint8Array(16));
       var keyHex = ChannelDecrypt.bytesToHex(bytes);
       var channelName = 'psk:' + keyHex.substring(0, 8);
-      ChannelDecrypt.storeKey(channelName, keyHex, label);
+      // #1087 Bug 3: persist via canonical helper synchronously.
+      if (!persistAddedChannel(channelName, keyHex, label)) {
+        showAddStatus('Failed to save channel — storage full', 'error');
+        return;
+      }
       var qrOut = document.getElementById('qr-output');
       if (qrOut) {
         qrOut.innerHTML = '';
-        // Render the QR + meshcore:// URL + Copy Key inline. The QR
-        // helper handles canvas rendering + accessible copy controls.
+        // Render QR + URL + Copy Key inline.
         if (window.ChannelQR && typeof window.ChannelQR.generate === 'function') {
-          // Use the user-supplied label when provided so the scanned
-          // recipient sees a meaningful name; fall back to the
-          // psk:<prefix> auto-name otherwise.
+          // #1087 Bug 2: pass the user label (not psk:<hex8>).
           window.ChannelQR.generate(label || channelName, keyHex, qrOut);
         } else {
-          // Fallback when channel-qr.js failed to load.
           qrOut.textContent = 'Key generated: ' + keyHex;
         }
       }
@@ -922,44 +1144,39 @@
       rb.click();
     });
     chListEl.addEventListener('click', (e) => {
-      // Share/reshare: open the Add Channel modal and render QR + URL
-      // for the existing key (no re-generation).
+      // #1087 Bug 2 + Bug 4: Share/reshare opens a DEDICATED share modal
+      // (not the Add Channel modal) and resolves the user's display
+      // label via ChannelDecrypt.getLabel — never the raw `psk:<hex8>`
+      // lookup key.
       const shareBtn = e.target.closest('[data-share-channel]');
       if (shareBtn) {
         e.stopPropagation();
         var shareHash = shareBtn.getAttribute('data-share-channel');
         if (!shareHash) return;
         var sCh = channels.find(function (c) { return c.hash === shareHash; });
-        var sName = shareHash.startsWith('user:')
+        var channelName = shareHash.startsWith('user:')
           ? shareHash.substring(5)
           : (sCh && sCh.name) || shareHash;
         var keys = ChannelDecrypt.getStoredKeys();
-        var keyHex = keys[sName];
-        if (typeof openAddModal === 'function') openAddModal();
-        var sec = document.getElementById('chShareSection');
-        var out = document.getElementById('chShareOutput');
-        if (!sec || !out) return;
-        sec.hidden = false;
-        out.innerHTML = '';
+        var keyHex = keys[channelName];
+        // Resolve display label: explicit user label > channel.userLabel
+        // > strip the psk: prefix > raw channelName.
+        var labels = (typeof ChannelDecrypt.getLabels === 'function')
+          ? ChannelDecrypt.getLabels() : {};
+        var labelFromStore = (typeof ChannelDecrypt.getLabel === 'function')
+          ? ChannelDecrypt.getLabel(channelName)
+          : (labels[channelName] || '');
+        var displayName = labelFromStore
+          || (sCh && sCh.userLabel)
+          || (channelName.indexOf('psk:') === 0
+              ? 'Private Channel'
+              : channelName);
         if (!keyHex) {
-          out.textContent = 'No stored key found for "' + sName + '" — cannot share.';
+          openShareModalError(displayName, 'No stored key found for "' + displayName + '" — cannot share.');
           return;
         }
-        var heading = document.createElement('div');
-        heading.className = 'ch-share-heading';
-        heading.textContent = 'Share "' + sName + '"';
-        out.appendChild(heading);
-        var holder = document.createElement('div');
-        out.appendChild(holder);
-        if (window.ChannelQR && typeof window.ChannelQR.generate === 'function') {
-          window.ChannelQR.generate(sName, keyHex, holder);
-        } else {
-          // Fallback: copyable hex + meshcore:// URL.
-          var url = 'meshcore://channel/add?name=' + encodeURIComponent(sName) +
-                    '&secret=' + keyHex;
-          holder.innerHTML =
-            '<div>Key: <code>' + escapeHtml(keyHex) + '</code></div>' +
-            '<div>URL: <code>' + escapeHtml(url) + '</code></div>';
+        if (typeof openShareModal === 'function') {
+          openShareModal(displayName, channelName, keyHex);
         }
         return;
       }
