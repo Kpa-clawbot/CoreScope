@@ -80,7 +80,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       } catch (e) {}
     }, STORAGE_KEY);
 
-    await page.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#chList', { timeout: 8000 });
 
     // Wait for the My Channels section to appear after merge.
