@@ -1316,4 +1316,20 @@
       return destroy();
     }
   });
+
+  // ── Marker clustering (issue #1036) — STUBS for red TDD commit ──
+  // Real implementations land in the green commit. Tests assert on:
+  //   - createClusterGroup() returning an L.MarkerClusterGroup with options
+  //   - makeClusterIcon(cluster) returning a themed L.divIcon
+  function createClusterGroup() {
+    // STUB — returns null so tests fail on assertion, not on a missing symbol.
+    return null;
+  }
+  function makeClusterIcon(_cluster) {
+    // STUB — returns a bare divIcon with no count/role pills so the assertions fail.
+    return L.divIcon({ html: '', className: '' });
+  }
+  if (typeof window !== 'undefined') {
+    window.__meshcoreMapInternals = { createClusterGroup: createClusterGroup, makeClusterIcon: makeClusterIcon };
+  }
 })();
