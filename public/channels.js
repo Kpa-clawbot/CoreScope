@@ -1664,12 +1664,14 @@
     const collapsed = localStorage.getItem('ch-encrypted-collapsed') !== 'false';
 
     const sections = [];
-    sections.push(
-      `<div class="ch-section ch-section-mychannels" data-section="mychannels">
+    if (mine.length > 0) {
+      sections.push(
+        `<div class="ch-section ch-section-mychannels" data-section="mychannels">
         <div class="ch-section-header">My Channels <span class="ch-section-locality" title="Saved only in this browser on this device">🖥️ (this browser)</span></div>
-        ${mine.length ? mine.map(renderChannelRow).join('') : '<div class="ch-section-empty">No channels yet — click [+ Add Channel] to add one.</div>'}
+        ${mine.map(renderChannelRow).join('')}
       </div>`
-    );
+      );
+    }
     sections.push(
       `<div class="ch-section ch-section-network" data-section="network">
         <div class="ch-section-header">Network</div>
