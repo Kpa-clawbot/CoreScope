@@ -18,6 +18,7 @@ node test-channel-sidebar-layout.js
 node test-channel-modal-ux.js
 node test-channel-decrypt-insecure-context.js
 node test-channel-qr.js
+node test-analytics-channels-integration.js
 
 echo ""
 echo "═══════════════════════════════════════"

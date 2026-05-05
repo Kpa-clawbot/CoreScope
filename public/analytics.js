@@ -737,6 +737,7 @@
   // ===================== CHANNELS =====================
   var _channelSortState = null;
   var _channelData = null;
+  var _channelRenderGen = 0;
   var CHANNEL_SORT_KEY = 'meshcore-channel-sort';
 
   function loadChannelSort() {
@@ -745,6 +746,18 @@
       if (s) { var p = JSON.parse(s); if (p.col && p.dir) return p; }
     } catch (e) {}
     return { col: 'lastActivity', dir: 'desc' };
+  }
+
+  // True when the user has explicitly chosen a sort (saved in localStorage).
+  // Used by the grouped analytics view to decide whether to apply its own
+  // default ("messages desc") instead of the global flat-list default.
+  function hasSavedChannelSort() {
+    try {
+      var s = localStorage.getItem(CHANNEL_SORT_KEY);
+      if (!s) return false;
+      var p = JSON.parse(s);
+      return !!(p && p.col && p.dir);
+    } catch (e) { return false; }
   }
 
   function saveChannelSort(state) {
@@ -781,20 +794,107 @@
   }
 
   function channelRowHtml(c) {
+    var name = c.displayName || c.name || 'Unknown';
     return '<tr class="clickable-row" data-action="navigate" data-value="#/channels?ch=' + c.hash + '" tabindex="0" role="row">' +
-      '<td><strong>' + esc(c.name || 'Unknown') + '</strong></td>' +
+      '<td><strong>' + esc(name) + '</strong></td>' +
       '<td class="mono">' + (typeof c.hash === 'number' ? '0x' + c.hash.toString(16).toUpperCase().padStart(2, '0') : c.hash) + '</td>' +
       '<td>' + c.messages + '</td>' +
       '<td>' + c.senders + '</td>' +
       '<td>' + timeAgo(c.lastActivity) + '</td>' +
-      '<td>' + (c.encrypted ? '🔒' : '✅') + '</td>' +
+      '<td>' + (c.encrypted ? (c.group === 'mine' ? '🔑' : '🔒') : '✅') + '</td>' +
     '</tr>';
   }
 
-  function channelTbodyHtml(channels, col, dir) {
+  // ── PSK-aware decoration ──────────────────────────────────────────────────
+  // Server returns raw "chNNN" placeholder names for encrypted channels it
+  // doesn't know. Decorate so the UI shows a useful display name and a
+  // group bucket: mine / network / encrypted. Pure function for testability.
+  function decorateAnalyticsChannels(channels, hashByteToKeyName, labels) {
+    var keyMap = hashByteToKeyName || {};
+    var lab = labels || {};
+    var out = [];
+    for (var i = 0; i < (channels || []).length; i++) {
+      var c = channels[i];
+      var copy = Object.assign({}, c);
+      var hashNum = typeof c.hash === 'number' ? c.hash : parseInt(c.hash, 10);
+      var rawName = String(c.name || '');
+      var isPlaceholder = /^ch(\d+|\?)$/.test(rawName);
+      if (c.encrypted) {
+        var keyName = !isNaN(hashNum) ? keyMap[hashNum] : null;
+        if (keyName) {
+          copy.displayName = lab[keyName] || keyName;
+          copy.group = 'mine';
+        } else if (isPlaceholder || !rawName) {
+          // Placeholder ("chNNN") or empty name → render as opaque encrypted.
+          // Empty-name encrypted rows would otherwise leak through with an
+          // empty <strong> in the row; force the placeholder rendering.
+          copy.displayName = !isNaN(hashNum)
+            ? '🔒 Encrypted (0x' + hashNum.toString(16).toUpperCase().padStart(2, '0') + ')'
+            : '🔒 Encrypted';
+          copy.group = 'encrypted';
+        } else {
+          // Server gave us a real name (rainbow table hit) for an encrypted ch.
+          copy.displayName = rawName;
+          copy.group = 'network';
+        }
+      } else {
+        copy.displayName = rawName || 'Unknown';
+        copy.group = 'network';
+      }
+      out.push(copy);
+    }
+    return out;
+  }
+
+  // Build the (hash byte → key name) map from ChannelDecrypt's stored keys.
+  // Async because computeChannelHash uses subtle.digest. Returns {} if the
+  // module or its keys are unavailable (graceful fallback).
+  async function buildHashKeyMap() {
+    if (typeof ChannelDecrypt === 'undefined' || !ChannelDecrypt.getStoredKeys) return {};
+    var keys = ChannelDecrypt.getStoredKeys();
+    var map = {};
+    var names = Object.keys(keys || {});
+    for (var ni = 0; ni < names.length; ni++) {
+      var name = names[ni];
+      try {
+        var bytes = ChannelDecrypt.hexToBytes(keys[name]);
+        var hb = await ChannelDecrypt.computeChannelHash(bytes);
+        if (typeof hb === 'number') map[hb] = name;
+      } catch (e) { /* skip bad key */ }
+    }
+    return map;
+  }
+
+  function channelTbodyHtml(channels, col, dir, opts) {
     var sorted = sortChannels(channels, col, dir);
     var parts = [];
-    for (var i = 0; i < sorted.length; i++) parts.push(channelRowHtml(sorted[i]));
+    if (opts && opts.grouped) {
+      // Group by .group: mine → network → encrypted. Inside each group keep
+      // the active sort (caller passes col/dir; for the integration we sort
+      // by messages desc by default).
+      var groups = { mine: [], network: [], encrypted: [] };
+      for (var gi = 0; gi < sorted.length; gi++) {
+        var g = sorted[gi].group || (sorted[gi].encrypted ? 'encrypted' : 'network');
+        (groups[g] || (groups[g] = [])).push(sorted[gi]);
+      }
+      var sections = [
+        { key: 'mine', label: '🔑 My Channels' },
+        { key: 'network', label: '📻 Network' },
+        { key: 'encrypted', label: '🔒 Encrypted' },
+      ];
+      for (var si = 0; si < sections.length; si++) {
+        var rows = groups[sections[si].key] || [];
+        if (!rows.length) continue;
+        parts.push(
+          '<tr class="ch-section-row"><td colspan="6" class="ch-section-header">' +
+          esc(sections[si].label) + ' <span class="text-muted">(' + rows.length + ')</span>' +
+          '</td></tr>'
+        );
+        for (var ri = 0; ri < rows.length; ri++) parts.push(channelRowHtml(rows[ri]));
+      }
+    } else {
+      for (var i = 0; i < sorted.length; i++) parts.push(channelRowHtml(sorted[i]));
+    }
     return parts.join('');
   }
 
@@ -825,13 +925,39 @@
     var tbody = document.getElementById('channelsTbody');
     var thead = document.querySelector('#channelsTable thead');
     if (!tbody || !_channelData) return;
-    tbody.innerHTML = channelTbodyHtml(_channelData, _channelSortState.col, _channelSortState.dir);
+    tbody.innerHTML = channelTbodyHtml(_channelData, _channelSortState.col, _channelSortState.dir, { grouped: true });
     if (thead) thead.outerHTML = channelTheadHtml(_channelSortState.col, _channelSortState.dir);
   }
 
   function renderChannels(el, ch) {
-    _channelData = ch.channels;
-    if (!_channelSortState) _channelSortState = loadChannelSort();
+    // Decorate first so grouping/display name reflect locally-stored PSK keys.
+    // buildHashKeyMap is async; render once with a sync best-effort empty map,
+    // then upgrade once keys resolve. That keeps first paint fast and avoids
+    // blocking on subtle.digest in environments where it's slow.
+    var rawChannels = ch.channels || [];
+    // Resolve the persisted sort first so the default-fallback below doesn't
+    // shadow what the user previously chose. Default for the grouped view is
+    // messages desc (matches the PR description); only used when nothing saved.
+    if (!_channelSortState) {
+      _channelSortState = hasSavedChannelSort()
+        ? loadChannelSort()
+        : { col: 'messages', dir: 'desc' };
+    }
+    var ranOnce = false;
+    // Generation token: if renderChannels is called again before
+    // buildHashKeyMap() resolves, the older promise must not clobber the
+    // newer rawChannels / decoration with stale-key data.
+    var myGen = ++_channelRenderGen;
+    function applyDecorate(map) {
+      if (myGen !== _channelRenderGen) return; // superseded
+      var labels = (typeof ChannelDecrypt !== 'undefined' && ChannelDecrypt.getLabels)
+        ? ChannelDecrypt.getLabels() : {};
+      _channelData = decorateAnalyticsChannels(rawChannels, map, labels);
+      if (ranOnce) updateChannelTable();
+    }
+    applyDecorate({});
+    ranOnce = true;
+    buildHashKeyMap().then(applyDecorate).catch(function () { /* graceful */ });
 
     var timelineHtml = renderChannelTimeline(ch.channelTimeline);
     var topSendersHtml = renderTopSenders(ch.topSenders);
@@ -844,7 +970,7 @@
         '<table class="analytics-table" id="channelsTable">' +
           channelTheadHtml(_channelSortState.col, _channelSortState.dir) +
           '<tbody id="channelsTbody">' +
-            channelTbodyHtml(_channelData, _channelSortState.col, _channelSortState.dir) +
+            channelTbodyHtml(_channelData, _channelSortState.col, _channelSortState.dir, { grouped: true }) +
           '</tbody>' +
         '</table>' +
       '</div>' +
@@ -2055,6 +2181,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
 
   // Expose for testing
   if (typeof window !== 'undefined') {
+    window._analyticsDecorateChannels = decorateAnalyticsChannels;
     window._analyticsSortChannels = sortChannels;
     window._analyticsLoadChannelSort = loadChannelSort;
     window._analyticsSaveChannelSort = saveChannelSort;
