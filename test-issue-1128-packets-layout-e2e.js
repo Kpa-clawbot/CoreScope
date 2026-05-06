@@ -125,32 +125,35 @@ function parseAlpha(s) {
       var pill = document.querySelector('#pktBody .path-overflow-pill');
       if (!pill) return { skip: true };
       pill.scrollIntoView({ block: 'center' });
-      pill.click();
       return { skip: false };
     });
     if (found.skip) {
       console.log('    (no +N pill present in fixture — skipping anchor check)');
       return;
     }
-    await page.waitForSelector('.path-popover', { timeout: 3000 });
+    // After scrollIntoView the virtual scroll may rebuild rows; wait then
+    // capture the pill's rect from the *current* DOM, then click it.
+    await page.waitForTimeout(250);
     const result = await page.evaluate(() => {
-      var pop = document.querySelector('.path-popover');
-      var pill = document.querySelector('.path-overflow-pill');
-      if (!pop || !pill) return { error: 'popover or pill missing post-click' };
-      var pr = pop.getBoundingClientRect();
+      var pill = document.querySelector('#pktBody .path-overflow-pill');
+      if (!pill) return { error: 'pill vanished after scroll' };
       var br = pill.getBoundingClientRect();
+      pill.click();
+      var pop = document.querySelector('.path-popover');
+      if (!pop) return { error: 'popover did not appear after pill click' };
+      var pr = pop.getBoundingClientRect();
       var z = parseInt(getComputedStyle(pop).zIndex, 10) || 0;
-      // Anchored: popover top within 8px of pill bottom (below) OR pill top (above-flip)
       var anchoredBelow = Math.abs(pr.top - br.bottom) <= 8;
       var anchoredAbove = Math.abs(pr.bottom - br.top) <= 8;
-      return { z, anchoredBelow, anchoredAbove, pr, br };
+      return { z, anchoredBelow, anchoredAbove,
+               pr: { top: pr.top, bottom: pr.bottom },
+               br: { top: br.top, bottom: br.bottom } };
     });
     assert(!result.error, result.error);
     assert(result.z <= 9000, '+N popover z-index too high (over modal stack): ' + result.z);
     assert(result.anchoredBelow || result.anchoredAbove,
-      '+N popover not anchored to pill: popTop=' + result.pr.top +
-      ' popBottom=' + result.pr.bottom + ' pillTop=' + result.br.top +
-      ' pillBottom=' + result.br.bottom);
+      '+N popover not anchored to pill: pop=' + JSON.stringify(result.pr) +
+      ' pill=' + JSON.stringify(result.br));
   });
 
   await step('Bug 3: .filter-bar row-gap ≥ 10px AND .multi-select-trigger has bounded max-width', async () => {

@@ -1181,13 +1181,20 @@
     }
     function updateTypeTrigger() {
       const total = Object.keys(typeMap).length;
+      // #1128 (Bug 3): trigger has bounded max-width so long selections like
+      // "TRACE,MULTIPART,GRP_TXT" get ellipsised. Always set the full label
+      // as the `title` attribute so the user can recover it via tooltip.
+      const fullList = [...selectedTypes].map(k => typeMap[k] || k).join(', ');
       if (selectedTypes.size === 0 || selectedTypes.size === total) {
         typeTrigger.textContent = 'All Types ▾';
+        typeTrigger.title = 'Filter by packet type';
       } else if (selectedTypes.size === 1) {
         const k = [...selectedTypes][0];
         typeTrigger.textContent = (typeMap[k] || k) + ' ▾';
+        typeTrigger.title = 'Selected: ' + fullList;
       } else {
         typeTrigger.textContent = selectedTypes.size + ' Types ▾';
+        typeTrigger.title = 'Selected: ' + fullList;
       }
     }
     buildTypeMenu();
@@ -1853,6 +1860,12 @@
       }
       if (window.__PERF_LOG_RENDER) console.log('[perf] renderVisibleRows: full rebuild %d entries, %.2fms', endIdx - startIdx, performance.now() - _rvr_t0);
       _finalizePathOverflow(tbody);
+      // #1128 (Bug 1): hop-resolver mutates chip text from hex prefix to a
+      // longer node name AFTER the initial finalize pass — chips that fit at
+      // first measurement overflow once names resolve, but no `+N` pill gets
+      // appended. Cheapest correct fix: re-measure on a delayed pass, after
+      // clearing the per-host `overflowChecked` guard so the recheck runs.
+      _scheduleReFinalizePathOverflow(tbody);
       return;
     }
 
@@ -1887,6 +1900,7 @@
     }
     if (window.__PERF_LOG_RENDER) console.log('[perf] renderVisibleRows: incremental head=%d tail=%d, %.2fms', headRowCount, tailRowCount, performance.now() - _rvr_t0);
     _finalizePathOverflow(tbody);
+    _scheduleReFinalizePathOverflow(tbody);
   }
 
   // #1124 (MAJOR-1): when path chips overflow `.path-hops` (capped at 22px /
@@ -1928,6 +1942,21 @@
     }
   }
 
+  // #1128 (Bug 1): re-run overflow finalize after hop-resolver async pass has
+  // had a chance to mutate chip text. Debounced per-tbody so multiple renders
+  // in quick succession only trigger one extra measurement pass.
+  var _rePathOverflowTimer = null;
+  function _scheduleReFinalizePathOverflow(tbody) {
+    if (!tbody) return;
+    if (_rePathOverflowTimer) clearTimeout(_rePathOverflowTimer);
+    _rePathOverflowTimer = setTimeout(function () {
+      _rePathOverflowTimer = null;
+      var hosts = tbody.querySelectorAll('.path-hops');
+      for (var i = 0; i < hosts.length; i++) hosts[i].dataset.overflowChecked = '';
+      _finalizePathOverflow(tbody);
+    }, 120);
+  }
+
   // Delegated click for path overflow pills — show popover of full path.
   function _wirePathOverflowPopover() {
     if (window.__pathOverflowWired) return;
@@ -1962,8 +1991,18 @@
       pop.innerHTML = inner;
       document.body.appendChild(pop);
       var r = pill.getBoundingClientRect();
-      // Position below the pill, kept inside viewport.
-      var top = window.scrollY + r.bottom + 4;
+      // #1128 (Bug 2): position below by default, but flip ABOVE when there
+      // isn't enough room — keeps the popover anchored to the pill instead of
+      // hanging arbitrarily over adjacent rows / off-screen.
+      var pr0 = pop.getBoundingClientRect();
+      var popH = pr0.height;
+      var roomBelow = window.innerHeight - r.bottom;
+      var top;
+      if (roomBelow < popH + 12 && r.top > popH + 12) {
+        top = window.scrollY + r.top - popH - 4;
+      } else {
+        top = window.scrollY + r.bottom + 4;
+      }
       var left = window.scrollX + r.left;
       pop.style.top = top + 'px';
       pop.style.left = left + 'px';

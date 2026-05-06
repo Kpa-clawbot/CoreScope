@@ -85,10 +85,30 @@
   --surface-1: #ffffff;
   --surface-2: #ffffff;
   --surface-3: #ffffff;
+  /* #1128 (Bug 4): `--surface` was referenced in 8+ rules (.fux-saved-menu,
+   * .fux-popover, .path-popover, .fux-ac-dropdown, .fux-ctx-menu, ...) but
+   * never defined → backgrounds resolved transparent → row content bled
+   * through dropdowns. Alias it to the opaque card surface. */
+  --surface: var(--surface-1);
   --content-bg: var(--surface-0);
   --card-bg: var(--surface-1);
   --hover-bg: rgba(0,0,0, 0.04);
   --trace-ghost-color: #94a3b8;
+
+  /* #1128: documented z-index scale. Use these custom props for any new
+   * stacking context decision. Existing legacy z-index values that work are
+   * left in place to avoid behavioural risk; new code must use these tokens.
+   *   --z-base       0   document base, table cells
+   *   --z-dropdown   100 in-flow dropdowns (multi-select, saved, columns)
+   *   --z-popover    300 popovers anchored to dropdowns / cells
+   *   --z-modal-backdrop 9000 / --z-modal 9100 / --z-tooltip 9200
+   */
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-popover: 300;
+  --z-modal-backdrop: 9000;
+  --z-modal: 9100;
+  --z-tooltip: 9200;
 }
 
 /* ⚠️ DARK THEME VARIABLES — KEEP BOTH BLOCKS IN SYNC
@@ -109,6 +129,7 @@
     --surface-1: #1a1a2e;
     --surface-2: #232340;
     --surface-3: #2d2d50;
+    --surface: var(--surface-1);
     --content-bg: var(--surface-0);
     --card-bg: var(--surface-1);
     --text: #e2e8f0;
@@ -138,6 +159,7 @@
   --surface-1: #1a1a2e;
   --surface-2: #232340;
   --surface-3: #2d2d50;
+  --surface: var(--surface-1);
   --content-bg: var(--surface-0);
   --card-bg: var(--surface-1);
   --text: #e2e8f0;
@@ -523,7 +545,7 @@ input[type="week"] {
  * so the visual seam between groups stays readable even when wrapped. */
 .filter-bar {
   display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; align-items: center;
-  row-gap: 6px;
+  row-gap: 12px;
 }
 .filter-bar input, .filter-bar select {
   padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
@@ -2278,6 +2300,10 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid var(--border);
   background: var(--input-bg); color: var(--text); transition: all 0.15s;
   height: 34px; box-sizing: border-box; white-space: nowrap; line-height: 1;
+  /* #1128 (Bug 3): cap trigger width so a long selection like
+   * "TRACE,MULTIPART,GRP_TXT" doesn't balloon the row and overlap toolbar
+   * buttons. The full label remains accessible via the title tooltip. */
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis;
 }
 .multi-select-trigger:hover { border-color: var(--accent); color: var(--accent); }
 .multi-select-menu {
@@ -3024,11 +3050,11 @@ th.sort-active { color: var(--accent, #60a5fa); }
 }
 .path-overflow-pill:hover { color: var(--text); background: var(--bg-hover, var(--surface)); }
 .path-popover {
-  position: absolute; z-index: 10500;
+  position: absolute; z-index: var(--z-popover);
   background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-  padding: 8px 10px; max-width: 480px; max-height: 60vh; overflow: auto;
+  padding: 8px 10px; max-width: 480px; max-height: 240px; overflow: auto;
   font-family: var(--mono); font-size: 12px;
 }
 .path-popover .path-popover-title { font-family: var(--font); font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
