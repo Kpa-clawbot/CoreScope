@@ -173,22 +173,45 @@
       '<div class="fux-popover-body">' + _buildHelpHtml() + '</div>';
     overlay.appendChild(pop);
     document.body.appendChild(overlay);
-    // #1122/#1124: while the help modal is open, hide the underlying packet
-    // table rows so the centered modal cannot visually overlap them. The
-    // backdrop still dims the rest of the page; restored on close.
-    document.body.classList.add('fux-help-open');
+    // #1124 (MAJOR-2): focus management. Save the trigger so we can restore
+    // focus on close, then move focus to the close button. Trap Tab cycles
+    // inside the modal until it closes.
+    var trigger = document.activeElement;
+    var closeBtn = pop.querySelector('.fux-popover-close');
+    function _focusables() {
+      return Array.prototype.slice.call(pop.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ));
+    }
     function close() {
       overlay.remove();
-      document.body.classList.remove('fux-help-open');
       document.removeEventListener('keydown', onKey);
+      // Restore focus to the original trigger if still in the DOM.
+      if (trigger && typeof trigger.focus === 'function' && document.body.contains(trigger)) {
+        try { trigger.focus(); } catch (e) {}
+      }
     }
-    function onKey(ev) { if (ev.key === 'Escape') { close(); } }
-    pop.querySelector('.fux-popover-close').addEventListener('click', close);
+    function onKey(ev) {
+      if (ev.key === 'Escape') { close(); return; }
+      if (ev.key !== 'Tab') return;
+      var f = _focusables();
+      if (!f.length) { ev.preventDefault(); return; }
+      var first = f[0], last = f[f.length - 1];
+      var active = document.activeElement;
+      if (ev.shiftKey) {
+        if (active === first || !pop.contains(active)) { last.focus(); ev.preventDefault(); }
+      } else {
+        if (active === last || !pop.contains(active)) { first.focus(); ev.preventDefault(); }
+      }
+    }
+    closeBtn.addEventListener('click', close);
     overlay.addEventListener('click', function(ev) {
       // Click on backdrop (not inside the modal) closes
       if (ev.target === overlay) close();
     });
     document.addEventListener('keydown', onKey);
+    // Move focus to the close button (first interactive element).
+    try { closeBtn.focus(); } catch (e) {}
   }
 
   // ── Autocomplete ───────────────────────────────────────────────────────

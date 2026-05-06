@@ -1,12 +1,17 @@
 /**
- * E2E (#1122): Packets page filter UX repairs.
+ * E2E (#1122 / #1124): Packets page filter UX repairs.
  *
  * Asserts:
- *  1. Filter help opens as a centered modal (with backdrop) and DOES NOT
- *     overlap any rendered row of #pktTable.
+ *  1. Filter help opens as a centered modal with a visible backdrop AND modal
+ *     content fully inside the viewport AND packet rows BELOW remain rendered
+ *     (count > 0). The previous "no overlap" assertion was gameable — it
+ *     passed when rows were `display:none`'d. We now assert the honest
+ *     property: backdrop separation + bounded modal + table still populated.
  *  2. Help panel contains exactly ONE "Filter syntax" heading (not two).
  *  3. Path column row height stays bounded (< 60px) regardless of how many
  *     hops are in any rendered packet's path.
+ *  4. Focus management: opening the help moves focus to the close button;
+ *     closing returns focus to the trigger.
  *
  * Usage: BASE_URL=http://localhost:13581 node test-issue-1122-packets-filter-ux-e2e.js
  */
@@ -33,7 +38,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   page.setDefaultTimeout(8000);
   page.on('pageerror', (e) => console.error('[pageerror]', e.message));
 
-  console.log(`\n=== #1122 packets filter UX E2E against ${BASE} ===`);
+  console.log(`\n=== #1122/#1124 packets filter UX E2E against ${BASE} ===`);
 
   await step('navigate to /packets and wait for table', async () => {
     await page.goto(BASE + '/#/packets', { waitUntil: 'domcontentloaded' });
@@ -47,48 +52,75 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.waitForFunction(() => document.querySelectorAll('#pktBody tr').length > 0, { timeout: 8000 });
   });
 
-  await step('Filter help opens as modal that does NOT overlap any packet row', async () => {
+  await step('Filter help: backdrop + modal in viewport + rows still rendered', async () => {
     await page.click('#filterHelpBtn');
     await page.waitForSelector('#filterHelpPopover', { timeout: 3000 });
     const result = await page.evaluate(() => {
       const help = document.getElementById('filterHelpPopover');
       const helpRect = help.getBoundingClientRect();
-      const rows = document.querySelectorAll('#pktBody tr');
-      const overlapping = [];
-      for (const row of rows) {
+      const overlay = document.querySelector('.modal-overlay.fux-help-overlay');
+      const overlayStyle = overlay ? getComputedStyle(overlay) : null;
+      // Visible backdrop: overlay exists, dims (rgba alpha > 0), covers viewport.
+      const backdropVisible = !!(overlay
+        && overlayStyle
+        && overlayStyle.display !== 'none'
+        && overlayStyle.visibility !== 'hidden'
+        && /rgba?\([^)]+,\s*0?\.\d+|rgba?\([^)]+,\s*\d+\)/.test(overlayStyle.backgroundColor || ''));
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const modalFullyInViewport = (
+        helpRect.top >= 0 && helpRect.left >= 0 &&
+        helpRect.right <= vw + 0.5 && helpRect.bottom <= vh + 0.5 &&
+        helpRect.width > 0 && helpRect.height > 0
+      );
+      // Count REAL packet rows (skip vscroll sentinel rows).
+      const allRows = document.querySelectorAll('#pktBody tr');
+      let renderedRows = 0;
+      let renderedRowsWithLayout = 0;
+      for (const row of allRows) {
+        if (row.id === 'vscroll-top' || row.id === 'vscroll-bottom') continue;
+        if (row.getAttribute('aria-hidden') === 'true') continue;
+        renderedRows++;
         const r = row.getBoundingClientRect();
-        if (r.width === 0 || r.height === 0) continue;
-        // Skip rows entirely outside viewport
-        if (r.bottom < 0 || r.top > window.innerHeight) continue;
-        const hOverlap = !(helpRect.right <= r.left || helpRect.left >= r.right);
-        const vOverlap = !(helpRect.bottom <= r.top || helpRect.top >= r.bottom);
-        if (hOverlap && vOverlap) overlapping.push({ top: r.top, left: r.left, w: r.width, h: r.height });
+        // The `body.fux-help-open #pktBody tr { display: none }` hack would
+        // collapse these to 0×0. Fail loudly if that ever returns.
+        if (r.width > 0 && r.height > 0) renderedRowsWithLayout++;
       }
-      // Backdrop check: a modal overlay backdrop should exist behind the help
-      const hasBackdrop = !!document.querySelector('.modal-overlay');
-      return { helpRect: { top: helpRect.top, left: helpRect.left, right: helpRect.right, bottom: helpRect.bottom }, overlapping, hasBackdrop };
+      return { backdropVisible, modalFullyInViewport, helpRect, renderedRows, renderedRowsWithLayout };
     });
-    assert(result.overlapping.length === 0,
-      'Help panel overlaps ' + result.overlapping.length + ' packet rows; helpRect=' + JSON.stringify(result.helpRect));
-    assert(result.hasBackdrop, 'Filter help should be inside a .modal-overlay backdrop');
+    assert(result.backdropVisible, 'modal backdrop missing or transparent');
+    assert(result.modalFullyInViewport, 'modal not fully in viewport: ' + JSON.stringify(result.helpRect));
+    assert(result.renderedRows > 0, 'no packet rows rendered at all (fixture issue?)');
+    assert(result.renderedRowsWithLayout > 0,
+      'rows are display:none while modal is open — the hack is back. rendered=' +
+      result.renderedRows + ' withLayout=' + result.renderedRowsWithLayout);
   });
 
   await step('Filter help contains exactly ONE "Filter syntax" heading', async () => {
     const count = await page.evaluate(() => {
       const help = document.getElementById('filterHelpPopover');
       if (!help) return -1;
-      // Count visible text nodes that exactly match "Filter syntax" (heading or strong)
       const text = help.textContent || '';
-      // Use regex with global, case-sensitive match
       const matches = text.match(/Filter syntax/g) || [];
       return matches.length;
     });
     assert(count === 1, 'Expected exactly 1 "Filter syntax" occurrence, got ' + count);
   });
 
-  await step('close filter help via close button', async () => {
+  await step('Focus moves to close button on open', async () => {
+    const ok = await page.evaluate(() => {
+      const close = document.querySelector('#filterHelpPopover .fux-popover-close');
+      return !!close && document.activeElement === close;
+    });
+    assert(ok, 'close button should be focused after modal opens');
+  });
+
+  await step('close filter help via close button restores focus to trigger', async () => {
     await page.click('#filterHelpPopover .fux-popover-close');
     await page.waitForFunction(() => !document.getElementById('filterHelpPopover'), { timeout: 3000 });
+    const restored = await page.evaluate(() => {
+      return document.activeElement && document.activeElement.id === 'filterHelpBtn';
+    });
+    assert(restored, 'focus should return to #filterHelpBtn after close');
   });
 
   await step('Path column row height stays bounded < 60px regardless of hop count', async () => {

@@ -538,6 +538,9 @@ input[type="week"] {
   font-family: var(--font); color: var(--text); height: 34px; box-sizing: border-box; line-height: 1;
 }
 .filter-group { display: flex; gap: 6px; align-items: center; }
+/* #1124 (MAJOR-3): each grouped cluster wraps as a single unit at narrow
+ * widths instead of letting individual controls reflow across categories. */
+.filter-bar .filter-group { flex-wrap: nowrap; }
 .filter-group .btn { padding: 4px 10px; font-size: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text); cursor: pointer; transition: background 0.15s, color 0.15s; }
 .filter-group .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .filter-group .btn:hover:not(.active) { background: var(--surface-2); }
@@ -3000,10 +3003,36 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .modal-overlay > .fux-popover { position: relative; top: auto; right: auto; left: auto; bottom: auto; padding: 0; max-width: min(720px, 92vw); width: min(720px, 92vw); }
 .modal.fux-popover { padding: 0; }
 .fux-help-overlay { z-index: 10000; }
-/* #1122/#1124: while the filter-help modal is open, collapse packet table
- * rows so the centered modal can never visually overlap them. Backdrop
- * (.modal-overlay) still dims the rest of the page. */
-body.fux-help-open #pktBody tr { display: none; }
+/* #1124: keep the help modal inside the viewport. The backdrop alone is
+ * enough visual separation; rows underneath stay rendered. */
+.modal-overlay > .fux-popover { max-height: 80vh; overflow-y: auto; }
+
+/* #1124 (MAJOR-1): overflow pill rendered when path chips exceed the
+ * row's height cap. Visual style mirrors the #1056 TableResponsive pill. */
+.path-overflow-pill {
+  display: inline-flex; align-items: center;
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 1px 6px;
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  color: var(--text-muted);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.path-overflow-pill:hover { color: var(--text); background: var(--bg-hover, var(--surface)); }
+.path-popover {
+  position: absolute; z-index: 10500;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  padding: 8px 10px; max-width: 480px; max-height: 60vh; overflow: auto;
+  font-family: var(--mono); font-size: 12px;
+}
+.path-popover .path-popover-title { font-family: var(--font); font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+.path-popover .hop, .path-popover .hop-named { white-space: nowrap; }
 .fux-popover-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
 .fux-popover-close { background: transparent; border: none; color: var(--text-muted); font-size: 16px; cursor: pointer; padding: 0 4px; }
 .fux-popover-close:hover { color: var(--text); }

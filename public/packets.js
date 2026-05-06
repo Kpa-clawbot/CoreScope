@@ -987,13 +987,20 @@
       </div>
       <div class="filter-bar" id="pktFilters">
         <button class="btn filter-toggle-btn" id="filterToggleBtn">Filters ▾</button>
-        <button class="btn btn-clear-filters" id="clearFiltersBtn" title="Clear all filters" style="display:none;font-size:12px;padding:2px 8px;color:var(--text-muted);border:1px solid var(--border);border-radius:4px;background:transparent;cursor:pointer">✕ Clear</button>
-        <div class="filter-group">
+        <!-- #1124 (MAJOR-3) Group 1: Filter input + Clear -->
+        <div class="filter-group filter-group-clear">
+          <button class="btn btn-clear-filters" id="clearFiltersBtn" title="Clear all filters" style="display:none;font-size:12px;padding:2px 8px;color:var(--text-muted);border:1px solid var(--border);border-radius:4px;background:transparent;cursor:pointer">✕ Clear</button>
+        </div>
+        <!-- Group 2: Quick filters (hash, node name) -->
+        <div class="filter-group filter-group-quick">
           <input type="text" placeholder="Packet hash…" id="fHash" aria-label="Filter by packet hash" title="Filter packets by hex hash prefix">
           <div class="node-filter-wrap" style="position:relative">
             <input type="text" placeholder="Node name…" id="fNode" autocomplete="off" role="combobox" aria-expanded="false" aria-owns="fNodeDropdown" aria-activedescendant="" aria-autocomplete="list" title="Filter packets involving this node (sender or path)">
             <div class="node-filter-dropdown hidden" id="fNodeDropdown" role="listbox"></div>
           </div>
+        </div>
+        <!-- Group 3: Dropdowns (observers, regions, types, channels) -->
+        <div class="filter-group filter-group-dropdowns">
           <div class="multi-select-wrap" id="observerFilterWrap">
             <button class="multi-select-trigger" id="observerTrigger" title="Show only packets seen by selected observer stations">All Observers ▾</button>
             <div class="multi-select-menu" id="observerMenu"></div>
@@ -1003,17 +1010,14 @@
             <button class="multi-select-trigger" id="typeTrigger" title="Filter by packet type">All Types ▾</button>
             <div class="multi-select-menu" id="typeMenu"></div>
           </div>
-          <div class="filter-group" style="display:inline-flex;align-items:center;gap:4px">
-            <select id="fChannel" class="filter-select" aria-label="Filter by channel" title="Filter Channel Messages (GRP_TXT) by channel">
-              <option value="">All Channels</option>
-            </select>
-          </div>
+          <select id="fChannel" class="filter-select" aria-label="Filter by channel" title="Filter Channel Messages (GRP_TXT) by channel">
+            <option value="">All Channels</option>
+          </select>
         </div>
-        <div class="filter-group">
+        <!-- Group 4: Quick toggles (Group by Hash, My Nodes, time range) -->
+        <div class="filter-group filter-group-toggles">
           <button class="btn ${groupByHash ? 'active' : ''}" id="fGroup" title="Collapse duplicate observations of the same packet into expandable groups">Group by Hash</button>
           <button class="btn" id="fMyNodes" title="Show only packets from your favorited/claimed nodes">★ My Nodes</button>
-        </div>
-        <div class="filter-group">
           <select id="fTimeWindow" class="filter-select" aria-label="Time window filter">
             <option value="15">Last 15 min</option>
             <option value="30">Last 30 min</option>
@@ -1025,7 +1029,8 @@
             ${isMobile ? '' : '<option value="0">All time</option>'}
           </select>
         </div>
-        <div class="filter-group">
+        <!-- Group 5: Sort + Columns -->
+        <div class="filter-group filter-group-sort">
           <select id="fObsSort" aria-label="Observation sort order" title="Controls how observations are ordered within packet groups and which observation appears in the header row. Observer: Groups by observer station, earliest first. Path: Orders by hop count. Time: Orders by observation timestamp.">
             <option value="observer">Sort: Observer</option>
             <option value="path-asc">Sort: Path ↑ (shortest)</option>
@@ -1034,8 +1039,6 @@
             <option value="chrono-desc">Sort: Time ↓ (latest)</option>
           </select>
           <span class="sort-help" id="sortHelpIcon" tabindex="0" role="button" aria-label="Sort help">ⓘ</span>
-        </div>
-        <div class="filter-group">
           <div class="col-toggle-wrap">
             <button class="col-toggle-btn" id="colToggleBtn" title="Show/hide table columns">Columns ▾</button>
             <div class="col-toggle-menu" id="colToggleMenu"></div>
@@ -1117,6 +1120,8 @@
     if (window.FilterUX && typeof window.FilterUX.init === 'function') {
       window.FilterUX.init();
     }
+    // #1124 (MAJOR-1): wire the path overflow popover (delegated; idempotent).
+    _wirePathOverflowPopover();
 
     // --- Observer multi-select ---
     const obsMenu = document.getElementById('observerMenu');
@@ -1847,6 +1852,7 @@
         }
       }
       if (window.__PERF_LOG_RENDER) console.log('[perf] renderVisibleRows: full rebuild %d entries, %.2fms', endIdx - startIdx, performance.now() - _rvr_t0);
+      _finalizePathOverflow(tbody);
       return;
     }
 
@@ -1880,6 +1886,97 @@
       bottomSpacer.insertAdjacentHTML('beforebegin', html);
     }
     if (window.__PERF_LOG_RENDER) console.log('[perf] renderVisibleRows: incremental head=%d tail=%d, %.2fms', headRowCount, tailRowCount, performance.now() - _rvr_t0);
+    _finalizePathOverflow(tbody);
+  }
+
+  // #1124 (MAJOR-1): when path chips overflow `.path-hops` (capped at 22px /
+  // overflow:hidden in CSS), append a `<span class="path-overflow-pill">+N</span>`
+  // showing how many hops are hidden. Click opens a popover listing all hops.
+  function _finalizePathOverflow(tbody) {
+    if (!tbody) return;
+    var hosts = tbody.querySelectorAll('.path-hops');
+    for (var i = 0; i < hosts.length; i++) {
+      var host = hosts[i];
+      // Skip if already finalized for this content
+      if (host.dataset.overflowChecked === '1') continue;
+      var children = Array.prototype.slice.call(host.children);
+      // Strip any leftover pill before measuring
+      var existingPill = host.querySelector('.path-overflow-pill');
+      if (existingPill) existingPill.remove();
+      var hostRight = host.getBoundingClientRect().right;
+      if (!hostRight) continue;
+      var hidden = 0;
+      // Walk pairs of chip + arrow; count chips (not arrows) whose right edge
+      // is past the host's right edge.
+      for (var j = 0; j < children.length; j++) {
+        var ch = children[j];
+        if (ch.classList.contains('arrow')) continue;
+        var r = ch.getBoundingClientRect();
+        if (r.left >= hostRight || r.right > hostRight + 0.5) hidden++;
+      }
+      if (hidden > 0) {
+        var pill = document.createElement('span');
+        pill.className = 'path-overflow-pill';
+        pill.textContent = '+' + hidden;
+        pill.title = hidden + ' more hop' + (hidden === 1 ? '' : 's') + ' — click to view';
+        pill.setAttribute('role', 'button');
+        pill.setAttribute('tabindex', '0');
+        pill.setAttribute('aria-label', hidden + ' more hops');
+        host.appendChild(pill);
+      }
+      host.dataset.overflowChecked = '1';
+    }
+  }
+
+  // Delegated click for path overflow pills — show popover of full path.
+  function _wirePathOverflowPopover() {
+    if (window.__pathOverflowWired) return;
+    window.__pathOverflowWired = true;
+    var existing = null;
+    function dismiss() {
+      if (existing) { existing.remove(); existing = null; }
+      document.removeEventListener('mousedown', onDoc, true);
+      document.removeEventListener('keydown', onKey, true);
+    }
+    function onDoc(ev) {
+      if (existing && !existing.contains(ev.target) && !ev.target.classList.contains('path-overflow-pill')) dismiss();
+    }
+    function onKey(ev) { if (ev.key === 'Escape') dismiss(); }
+    document.addEventListener('click', function(ev) {
+      var pill = ev.target.closest && ev.target.closest('.path-overflow-pill');
+      if (!pill) return;
+      ev.stopPropagation();
+      var host = pill.closest('.path-hops');
+      if (!host) return;
+      dismiss();
+      var pop = document.createElement('div');
+      pop.className = 'path-popover';
+      // Clone all children except the pill, preserving rendered chips/arrows.
+      var inner = '<div class="path-popover-title">Full path (' + (host.children.length) + ' items)</div><div>';
+      var kids = Array.prototype.slice.call(host.children);
+      for (var i = 0; i < kids.length; i++) {
+        if (kids[i].classList.contains('path-overflow-pill')) continue;
+        inner += kids[i].outerHTML;
+      }
+      inner += '</div>';
+      pop.innerHTML = inner;
+      document.body.appendChild(pop);
+      var r = pill.getBoundingClientRect();
+      // Position below the pill, kept inside viewport.
+      var top = window.scrollY + r.bottom + 4;
+      var left = window.scrollX + r.left;
+      pop.style.top = top + 'px';
+      pop.style.left = left + 'px';
+      var pr = pop.getBoundingClientRect();
+      if (pr.right > window.innerWidth - 8) {
+        pop.style.left = Math.max(8, window.scrollX + window.innerWidth - pr.width - 8) + 'px';
+      }
+      existing = pop;
+      setTimeout(function() {
+        document.addEventListener('mousedown', onDoc, true);
+        document.addEventListener('keydown', onKey, true);
+      }, 0);
+    });
   }
 
   // Attach/detach scroll listener for virtual scrolling
