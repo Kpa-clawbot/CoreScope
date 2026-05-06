@@ -842,6 +842,19 @@ async function run() {
     await page.setViewportSize({ width: 1115, height: 800 });
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('a.nav-link[data-route="live"]');
+    // Wait for nav-right to stabilise across two frames so that nav-stats
+    // (populated via async fetch) has landed and applyNavPriority has settled.
+    await page.waitForFunction(() => {
+      const el = document.querySelector('.top-nav .nav-right');
+      if (!el) return false;
+      const r1 = el.getBoundingClientRect();
+      return new Promise(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const r2 = el.getBoundingClientRect();
+          resolve(r1.right === r2.right && r1.left === r2.left);
+        }));
+      });
+    });
 
     const measure = await page.evaluate(() => {
       const link = document.querySelector('a.nav-link[data-route="live"]');
