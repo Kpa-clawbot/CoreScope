@@ -91,16 +91,46 @@
         if (keys.length === 0) {
           html += '<p style="color:var(--text-muted)">No ingestor stats yet (waiting for /tmp/corescope-ingestor-stats.json)</p>';
         } else {
-          html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Source</th><th scope="col">Total</th><th scope="col">Anomaly</th></tr></thead><tbody>';
+          // Anomaly detection (#1123 polish):
+          //   Compare PER-SECOND DELTA RATES, not cumulative counts.
+          //   Cumulative-vs-cumulative was a tautology that fired ⚠️ at startup
+          //   (any backfill_* > 10 when tx_inserted=0 → baseline collapses to 1)
+          //   and false-cleared once tx grew past a one-shot backfill burst.
+          //   Now we cache the previous snapshot + sampleAt and only fire when:
+          //     1) we have a real interval (≥ 0.5s) to compute deltas against
+          //     2) tx_inserted has crossed MIN_SAMPLE so the baseline is meaningful
+          //     3) the per-second backfill rate exceeds 10× the per-second tx rate
+          const MIN_SAMPLE = 100;
+          const prev = window._perfWriteSourcesPrev;
+          let prevSrc = null, dtSec = 0;
+          if (prev && prev.sampleAt && writeSources.sampleAt) {
+            dtSec = (Date.parse(writeSources.sampleAt) - Date.parse(prev.sampleAt)) / 1000;
+            if (dtSec >= 0.5) prevSrc = prev.sources;
+          }
+          const txTotal = src.tx_inserted || 0;
+          const txDelta = prevSrc ? (txTotal - (prevSrc.tx_inserted || 0)) : 0;
+          const txRate = (prevSrc && dtSec > 0) ? (txDelta / dtSec) : 0;
+          html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Source</th><th scope="col">Total</th><th scope="col">Rate/s</th><th scope="col">Anomaly</th></tr></thead><tbody>';
           for (const k of keys) {
-            // Anomaly: any backfill_* > 10× tx_inserted (or > 10K with no traffic)
             const v = src[k] || 0;
             const isBackfill = k.startsWith('backfill_');
-            const baseline = src.tx_inserted || 1;
-            const flag = (isBackfill && v > 10 * baseline) ? ' ⚠️' : '';
-            html += `<tr><td><code>${k}</code></td><td>${v.toLocaleString()}</td><td>${flag}</td></tr>`;
+            let rate = 0;
+            let flag = '';
+            if (prevSrc && dtSec > 0) {
+              const delta = v - (prevSrc[k] || 0);
+              rate = delta / dtSec;
+              // Only flag when tx baseline is statistically meaningful AND
+              // backfill is actively running faster than 10× the live tx rate.
+              if (isBackfill && txTotal >= MIN_SAMPLE && rate > 10 * Math.max(txRate, 1)) {
+                flag = ' ⚠️';
+              }
+            }
+            const rateStr = (prevSrc && dtSec > 0) ? rate.toFixed(1) : '—';
+            html += `<tr><td><code>${k}</code></td><td>${v.toLocaleString()}</td><td>${rateStr}</td><td>${flag}</td></tr>`;
           }
           html += '</tbody></table></div>';
+          // Stash for next tick's delta computation.
+          window._perfWriteSourcesPrev = { sources: { ...src }, sampleAt: writeSources.sampleAt };
           if (writeSources.sampleAt) {
             html += `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Sampled: ${writeSources.sampleAt}</div>`;
           }
