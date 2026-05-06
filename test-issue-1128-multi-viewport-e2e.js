@@ -13,9 +13,10 @@
  *      regression guard — row-gap must be large enough for 34px
  *      controls when the bar wraps.)
  *
- *   B. When the Saved menu / Types multi-select / Columns toggle is
- *      open, its bounding rect does NOT vertically overlap with any
- *      visible toolbar `.filter-group` sitting below it.
+ *   B. (Removed during self-review — was conceptually flawed; see the
+ *      block comment inside the per-viewport loop. Z-scale band check
+ *      C and the check-css-vars lint together gate the actual Bug 4
+ *      regression — dropdowns rendering transparent or behind rows.)
  *
  *   C. Z-scale enforcement (audit Section 2): every dropdown selector
  *      (`.col-toggle-menu`, `.multi-select-menu`,
@@ -136,69 +137,23 @@ async function gotoPackets(page) {
         JSON.stringify(result.offenders[0]));
     });
 
-    // Skip dropdown-overlap sub-tests on tablet — the toolbar collapses
-    // behind a Filters ▾ toggle, so the dropdowns aren't anchored to a
-    // toolbar row.
-    if (vp.w >= 1080) {
-      await step(`[${vp.name}] Saved menu does not overlap toolbar groups below it`, async () => {
-        const result = await page.evaluate(() => {
-          const btn = document.getElementById('filterSavedTrigger');
-          if (!btn) return { skip: true, why: 'no #filterSavedTrigger' };
-          btn.click();
-          const menu = document.getElementById('filterSavedMenu');
-          if (!menu) return { error: 'no #filterSavedMenu after click' };
-          menu.classList.remove('hidden');
-          const mr = menu.getBoundingClientRect();
-          if (mr.width === 0 || mr.height === 0) return { skip: true, why: 'menu zero-sized' };
-          const groups = Array.from(document.querySelectorAll('.filter-bar > .filter-group'))
-            .map(g => g.getBoundingClientRect())
-            .filter(r => r.top >= mr.top); // only groups vertically below menu start
-          const offenders = groups.filter(r => !(mr.bottom <= r.top + 1 || r.bottom <= mr.top + 1));
-          return {
-            mr: { top: mr.top, bottom: mr.bottom, w: mr.width },
-            offendCount: offenders.length,
-            offenders: offenders.map(r => ({ top: r.top, bottom: r.bottom })),
-          };
-        });
-        if (result.skip) { console.log('    (' + result.why + ')'); return; }
-        assert(!result.error, result.error);
-        assert(result.offendCount === 0,
-          `Saved menu overlaps ${result.offendCount} toolbar group(s) below it: ` +
-          JSON.stringify({ menu: result.mr, offenders: result.offenders }));
-        // Close menu for next test.
-        await page.keyboard.press('Escape').catch(() => {});
-        await page.waitForTimeout(150);
-      });
-
-      await step(`[${vp.name}] Types multi-select dropdown does not overlap toolbar groups below it`, async () => {
-        const result = await page.evaluate(() => {
-          const btn = document.getElementById('typeTrigger');
-          if (!btn) return { skip: true, why: 'no #typeTrigger' };
-          btn.click();
-          const menu = document.getElementById('typeMenu');
-          if (!menu) return { error: 'no #typeMenu after click' };
-          menu.classList.remove('hidden');
-          const mr = menu.getBoundingClientRect();
-          if (mr.width === 0 || mr.height === 0) return { skip: true, why: 'menu zero-sized' };
-          const groups = Array.from(document.querySelectorAll('.filter-bar > .filter-group'))
-            .map(g => g.getBoundingClientRect())
-            .filter(r => r.top >= mr.top);
-          const offenders = groups.filter(r => !(mr.bottom <= r.top + 1 || r.bottom <= mr.top + 1));
-          return {
-            offendCount: offenders.length,
-            mr: { top: mr.top, bottom: mr.bottom },
-            offenders: offenders.map(r => ({ top: r.top, bottom: r.bottom })),
-          };
-        });
-        if (result.skip) { console.log('    (' + result.why + ')'); return; }
-        assert(!result.error, result.error);
-        assert(result.offendCount === 0,
-          `Types menu overlaps ${result.offendCount} toolbar group(s) below it: ` +
-          JSON.stringify({ menu: result.mr, offenders: result.offenders }));
-        await page.keyboard.press('Escape').catch(() => {});
-        await page.waitForTimeout(150);
-      });
-    }
+    // NOTE on removed sub-tests (#1128 self-review): earlier drafts had
+    // "[vp] Saved menu does not overlap toolbar groups below it" and
+    // "[vp] Types multi-select dropdown does not overlap toolbar groups
+    // below it". Those sub-tests had a fundamentally wrong premise — a
+    // position:absolute dropdown opened from a wrapped toolbar row will
+    // ALWAYS overlap toolbar rows below it; that's by design. What
+    // matters for #1128 Bug 4 is that the dropdown (a) paints on top
+    // (z-index) and (b) is opaque (no transparent --surface). Both are
+    // already gated independently:
+    //   - z-index band: "Z-scale: dropdown selectors compute z-index in
+    //     [100,199] band" (below)
+    //   - opacity / undefined vars: scripts/check-css-vars.js (CI lint,
+    //     wired in deploy.yml)
+    // Reintroducing a "no rect overlap" assertion would require pinning
+    // the toolbar to a single non-wrapping row, which contradicts the
+    // responsive design the rest of this file exercises.
+    void vp;
 
     await ctx.close();
   }
