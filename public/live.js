@@ -9,7 +9,11 @@
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function statusGreen() { return cssVar('--status-green') || '#22c55e'; }
 
-  let map, ws, nodesLayer, pathsLayer, animLayer, heatLayer, geoFilterLayer;
+  let map, ws, nodesLayer, pathsLayer, animLayer, heatLayer, geoFilterLayer, clickablePathsLayer;
+  let clickablePaths = [];
+  const CLICKABLE_PATH_TTL_MS = 30000;
+  const CLICKABLE_PATH_MAX = 50;
+  const CLICKABLE_POPUP_DISMISS_MS = 20000;
   let nodeMarkers = {};
   let nodeData = {};
   let packetCount = 0;
@@ -421,6 +425,52 @@
 
   function stopReplay() {
     if (VCR.replayTimer) { clearTimeout(VCR.replayTimer); VCR.replayTimer = null; }
+  }
+
+  function buildClickablePathPopupHtml(typeName, color, hopNames, tsMs, hash) {
+    // tsMs is packet receive time — "ago" is relative to when the packet arrived, not when the animation ended
+    const secsAgo = Math.round((Date.now() - tsMs) / 1000);
+    const timeStr = secsAgo < 60 ? secsAgo + 's ago' : Math.round(secsAgo / 60) + 'm ago';
+    const chain = hopNames.join(' → ');
+    const link = hash ? `<a class="lc-path-link" href="#/packets/${hash}" style="color:${color}">full detail →</a>` : '';
+    return `<div class="lc-path-popup">
+      <span class="lc-path-badge" style="background:${color}">${typeName}</span>
+      <div class="lc-path-time">${timeStr}</div>
+      <div class="lc-path-chain">${chain}</div>
+      ${link ? '<div class="lc-path-link-wrap">' + link + '</div>' : ''}
+    </div>`;
+  }
+
+  function pruneClickablePaths(now) {
+    const cutoff = now - CLICKABLE_PATH_TTL_MS;
+    for (let i = clickablePaths.length - 1; i >= 0; i--) {
+      if (clickablePaths[i].addedAt < cutoff) {
+        try { clickablePaths[i].poly.remove(); } catch (_) {}
+        clickablePaths.splice(i, 1);
+      }
+    }
+    while (clickablePaths.length > CLICKABLE_PATH_MAX) {
+      try { clickablePaths[0].poly.remove(); } catch (_) {}
+      clickablePaths.shift();
+    }
+  }
+
+  function registerClickablePath(latLngs, typeName, color, hopNames, tsMs, hash) {
+    if (!clickablePathsLayer) return;
+    const poly = L.polyline(latLngs, { weight: 12, opacity: 0, interactive: true }).addTo(clickablePathsLayer);
+    const entry = { addedAt: Date.now(), poly };
+    clickablePaths.push(entry);
+    pruneClickablePaths(Date.now());
+    let dismissTimer = null;
+    poly.on('click', function(e) {
+      if (dismissTimer) clearTimeout(dismissTimer);
+      const html = buildClickablePathPopupHtml(typeName, color, hopNames, tsMs, hash);
+      L.popup({ maxWidth: 280, className: 'path-info-popup' })
+        .setLatLng(e.latlng)
+        .setContent(html)
+        .openOn(map);
+      dismissTimer = setTimeout(() => { if (map) map.closePopup(); }, CLICKABLE_POPUP_DISMISS_MS);
+    });
   }
 
   function vcrSpeedCycle() {
@@ -975,6 +1025,7 @@
     nodesLayer = L.layerGroup().addTo(map);
     pathsLayer = L.layerGroup().addTo(map);
     animLayer = L.layerGroup().addTo(map);
+    clickablePathsLayer = L.layerGroup().addTo(map);
 
     injectSVGFilters();
     await loadNodes();
@@ -2106,10 +2157,14 @@
     for (var aKey in nodeActivity) {
       if (!(aKey in nodeData)) delete nodeActivity[aKey];
     }
+    pruneClickablePaths(Date.now());
   }
 
   // Expose for testing
   window._livePruneStaleNodes = pruneStaleNodes;
+  window._liveBuildClickablePathPopupHtml = buildClickablePathPopupHtml;
+  window._livePruneClickablePaths = pruneClickablePaths;
+  window._liveClickablePaths = clickablePaths;
   window._liveNodeMarkers = function() { return nodeMarkers; };
   window._liveNodeData = function() { return nodeData; };
   window._liveNodeActivity = function() { return nodeActivity; };
@@ -2330,6 +2385,7 @@
 
     // --- Animate all unique paths simultaneously ---
     // First path gets audio sync hook, rest are visual-only
+    var pktMeta = { hash: first.hash, ts: first._ts || Date.now() };
     var firstPathDone = false;
     for (var ai = 0; ai < allPaths.length; ai++) {
       var onHop = null;
@@ -2348,7 +2404,7 @@
         var completedPositions = allPaths[ai].hopPositions.slice(0, hopsCompleted + 1);
         var remainingPositions = allPaths[ai].hopPositions.slice(hopsCompleted);
         if (completedPositions.length >= 2) {
-          animatePath(completedPositions, typeName, color, allPaths[ai].raw, onHop, first.hash);
+          animatePath(completedPositions, typeName, color, allPaths[ai].raw, onHop, pktMeta);
         } else if (completedPositions.length === 1) {
           pulseNode(completedPositions[0].key, completedPositions[0].pos, typeName);
         }
@@ -2356,7 +2412,7 @@
           drawDashedPath(remainingPositions, color);
         }
       } else {
-        animatePath(allPaths[ai].hopPositions, typeName, color, allPaths[ai].raw, onHop, first.hash);
+        animatePath(allPaths[ai].hopPositions, typeName, color, allPaths[ai].raw, onHop, pktMeta);
       }
     }
   }
@@ -2465,7 +2521,7 @@
     return raw.filter(h => h.pos != null);
   }
 
-  function animatePath(hopPositions, typeName, color, rawHex, onHop, hash) {
+  function animatePath(hopPositions, typeName, color, rawHex, onHop, pktMeta) {
     if (!animLayer || !pathsLayer) return;
     if (activeAnims >= MAX_CONCURRENT_ANIMS) return;
     activeAnims++;
@@ -2477,6 +2533,14 @@
         activeAnims = Math.max(0, activeAnims - 1);
         const countEl = document.getElementById('liveAnimCount');
         if (countEl) countEl.textContent = activeAnims;
+        if (pktMeta && hopPositions.length >= 2) {
+          const latLngs = [], hopNames = [];
+          for (const hp of hopPositions) {
+            latLngs.push(hp.pos);
+            hopNames.push(hp.name || (hp.key ? hp.key.slice(0, 8) : '?'));
+          }
+          registerClickablePath(latLngs, typeName, color, hopNames, pktMeta.ts, pktMeta.hash);
+        }
         return;
       }
       if (!animLayer) return;
@@ -3244,7 +3308,8 @@
       }
       _navCleanup = null;
     }
-    nodesLayer = pathsLayer = animLayer = heatLayer = geoFilterLayer = null;
+    nodesLayer = pathsLayer = animLayer = heatLayer = geoFilterLayer = clickablePathsLayer = null;
+    clickablePaths = [];
     stopMatrixRain();
     nodeMarkers = {}; nodeData = {};
     activeNodeDetailKey = null;

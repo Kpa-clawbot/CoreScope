@@ -956,3 +956,11 @@
     transition: none;
   }
 }
+
+/* Clickable path popup */
+.lc-path-popup { font-size: 12px; line-height: 1.6; min-width: 160px; }
+.lc-path-badge { color: #fff; border-radius: 3px; padding: 1px 5px; font-size: 11px; font-weight: 600; }
+.lc-path-time { margin-top: 4px; color: var(--text-muted); font-size: 11px; }
+.lc-path-chain { margin-top: 4px; word-break: break-word; }
+.lc-path-link-wrap { margin-top: 4px; }
+.lc-path-link { font-size: 11px; }

@@ -225,6 +225,8 @@ async function run() {
   // Test 5: Node detail loads (reuses nodes page from test 2)
   await test('Node detail loads', async () => {
     await page.waitForSelector('table tbody tr:not([id^=vscroll])');
+    // Use page.click() instead of an element handle to avoid detached-element races
+    // when the WebSocket auto-refresh re-renders the table between querySelector and click.
     await page.click('table tbody tr:not([id^=vscroll])');
     // Wait for detail pane to appear
     await page.waitForSelector('.node-detail');
@@ -239,6 +241,7 @@ async function run() {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('table tbody tr:not([id^=vscroll])');
+    // Use page.click() to avoid detached-element race with WebSocket auto-refresh.
     await page.click('table tbody tr:not([id^=vscroll])');
     await page.waitForSelector('.node-detail');
     // Find the Details link in the side panel
