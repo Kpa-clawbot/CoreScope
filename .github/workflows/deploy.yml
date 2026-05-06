@@ -79,6 +79,11 @@ jobs:
           go test ./...
           echo "--- Decrypt CLI tests passed ---"
 
+      - name: Lint CSS variables (issue #1128)
+        run: |
+          set -e
+          node scripts/check-css-vars.js
+
       - name: Run JS unit tests (packet-filter)
         run: |
           set -e
@@ -225,6 +230,7 @@ jobs:
           BASE_URL=http://localhost:13581 node test-table-fluid-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1122-packets-filter-ux-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1128-packets-layout-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1128-multi-viewport-e2e.js 2>&1 | tee -a e2e-output.txt
 
       - name: Collect frontend coverage (parallel)
         if: success() && github.event_name == 'push'
