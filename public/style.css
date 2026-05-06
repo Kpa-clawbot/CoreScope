@@ -435,6 +435,14 @@ input[type="week"] {
 .nav-left { display: flex; align-items: center; gap: var(--space-lg); min-width: 0; flex-shrink: 1; overflow: hidden; }
 .nav-brand { display: flex; align-items: center; gap: var(--space-sm); text-decoration: none; color: var(--nav-text); font-weight: 700; font-size: var(--fs-md); }
 .brand-icon { font-size: 20px; }
+.brand-logo {
+  display: block;
+  height: 36px;
+  width: auto;
+  max-height: 36px;
+  /* The SVG defines its own --logo-* vars with fallbacks to --accent etc.,
+     so it picks up the customizer-driven theme automatically. */
+}
 .live-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);
   display: inline-block; margin-left: 4px; transition: background .3s;
@@ -1383,6 +1391,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .panel-right { width: 320px; min-width: 320px; }
   .nav-stats { display: none; }
   .brand-text { font-size: 14px; }
+  .brand-logo { height: 32px; }
   .nav-link { padding: 14px 8px; font-size: 13px; }
   .map-controls { width: 180px; font-size: 12px; }
 }

@@ -67,6 +67,7 @@
 
     container.innerHTML = `
       <section class="home-hero">
+        <img class="home-hero-logo" src="img/corescope-hero.svg" alt="CoreScope — mesh analyzer" />
         <h1>${hasNodes ? 'My Mesh' : escapeHtml(homeCfg?.heroTitle || siteName)}</h1>
         <p>${hasNodes ? 'Your nodes at a glance. Add more by searching below.' : escapeHtml(homeCfg?.heroSubtitle || 'Find your nodes to start monitoring them.')}</p>
         <div class="home-search-wrap">

@@ -31,6 +31,14 @@
   background: var(--surface-1);
   border-bottom: 1px solid var(--border);
 }
+.home-hero-logo {
+  display: block;
+  width: 100%;
+  max-width: min(720px, 90vw);
+  height: auto;
+  margin: 0 auto 16px;
+  /* SVG inherits theming via its own --logo-* / --accent-derived vars. */
+}
 .home-hero h1 {
   font: 700 1.5rem/1.2 var(--font);
   color: var(--text);
