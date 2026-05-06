@@ -438,10 +438,11 @@ reboot</code></pre>
     const stale = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-yellow').length;
     const offline = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-red').length;
 
-    function sortTh(label, col) {
+    function sortTh(label, col, priority) {
       var active = sortState.col === col;
       var arrow = active ? (sortState.dir === 'asc' ? '▲' : '▼') : '⇅';
-      return `<th scope="col" class="sortable-col${active ? ' sort-active' : ''}" data-sort-col="${col}">${label}<span class="sort-arrow">${arrow}</span></th>`;
+      var pAttr = priority > 1 ? ` data-priority="${priority}"` : '';
+      return `<th scope="col" class="sortable-col${active ? ' sort-active' : ''}" data-sort-col="${col}"${pAttr}>${label}<span class="sort-arrow">${arrow}</span></th>`;
     }
 
     el.innerHTML = `
@@ -454,8 +455,8 @@ reboot</code></pre>
         <div class="obs-table-scroll table-fluid-wrap"><table class="data-table obs-table" id="obsTable">
           <caption class="sr-only">Observer status and statistics</caption>
         <thead><tr>
-          ${sortTh('Status','status')}${sortTh('Name','name')}${sortTh('Region','region')}${sortTh('Last Status','last_seen')}${sortTh('Last Packet','last_packet')}
-          ${sortTh('Packet Health','forwarding')}${sortTh('Total Packets','packets')}${sortTh('Packets/Hour','packets_hr')}${sortTh('Clock Offset','clock_offset')}${sortTh('Uptime','uptime')}
+          ${sortTh('Status','status')}${sortTh('Name','name')}${sortTh('Packet Health','forwarding',2)}${sortTh('Region','region',3)}${sortTh('Last Status','last_seen',3)}
+          ${sortTh('Clock Offset','clock_offset',4)}${sortTh('Uptime','uptime',4)}${sortTh('Total Packets','packets',5)}${sortTh('Packets/Hour','packets_hr',5)}${sortTh('Last Packet','last_packet',5)}
         </tr></thead>
         <tbody>${sorted.map(o => {
           const h = healthStatus(o.last_seen);
@@ -463,12 +464,9 @@ reboot</code></pre>
           return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">
             <td><span class="health-dot ${h.cls}" title="${h.label}">${shape}</span> ${h.label}</td>
             <td class="mono">${o.name || o.id}</td>
+            <td>${packetBadge(o)}</td>
             <td>${o.iata ? `<span class="badge-region">${o.iata}</span>` : '—'}</td>
             <td>${timeAgo(o.last_seen)}</td>
-            <td>${o.last_packet_at ? timeAgo(o.last_packet_at) : '<span class="text-muted">—</span>'}</td>
-            <td>${packetBadge(o)}</td>
-            <td>${(o.packet_count || 0).toLocaleString()}</td>
-            <td>${sparkBar(o.packetsLastHour || 0, maxPktsHr)}</td>
             <td>${(function() {
               var sk = obsSkewMap[o.id];
               if (!sk || sk.samples == null || sk.samples === 0) return '<span class="text-muted">—</span>';
@@ -476,6 +474,9 @@ reboot</code></pre>
               return renderSkewBadge(sev, sk.offsetSec) + ' <span class="text-muted" title="Computed from ' + sk.samples + ' multi-observer packets. Positive = observer ahead of consensus.">(' + sk.samples + ')</span>';
             })()}</td>
             <td>${uptimeStr(o.first_seen)}</td>
+            <td>${(o.packet_count || 0).toLocaleString()}</td>
+            <td>${sparkBar(o.packetsLastHour || 0, maxPktsHr)}</td>
+            <td>${o.last_packet_at ? timeAgo(o.last_packet_at) : '<span class="text-muted">—</span>'}</td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>`;
