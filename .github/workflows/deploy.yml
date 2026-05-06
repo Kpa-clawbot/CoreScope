@@ -83,6 +83,7 @@ jobs:
         run: |
           set -e
           node scripts/check-css-vars.js
+          node scripts/test-check-css-vars.js
 
       - name: Run JS unit tests (packet-filter)
         run: |

@@ -135,6 +135,12 @@
   --text-primary: var(--text);
   --bg-hover: var(--hover-bg);
   --primary: var(--accent);
+  /* #1128 followup M3: extended check-css-vars.js to scan JS/HTML inline
+   * styles (analytics.js, nodes.js) caught these undefined refs.
+   * Aliased to existing tokens — same pattern as --text-primary above. */
+  --bg-secondary: var(--surface-2);
+  --text-secondary: var(--text-muted);
+  --bg: var(--surface);
   --trace-ghost-color: #94a3b8;
 
   /* #1128: documented z-index scale. Use these custom props for any new
