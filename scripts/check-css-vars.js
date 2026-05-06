@@ -46,7 +46,13 @@ const defRe = /(?:^|[^a-zA-Z0-9_-])(--[a-zA-Z0-9_-]+)\s*:/g;
 const useRe = /var\(\s*(--[a-zA-Z0-9_-]+)\s*\)/g;
 
 for (const f of files) {
-  const lines = fs.readFileSync(f, 'utf8').split('\n');
+  // Strip /* ... */ comments before scanning so doc-blocks that mention
+  // var(--name) as prose don't trigger false positives. Replace each
+  // comment span with newlines to keep line numbers stable for any
+  // genuine offender that follows.
+  const raw = fs.readFileSync(f, 'utf8');
+  const stripped = raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+  const lines = stripped.split('\n');
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     let m;
