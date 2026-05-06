@@ -173,8 +173,13 @@
       '<div class="fux-popover-body">' + _buildHelpHtml() + '</div>';
     overlay.appendChild(pop);
     document.body.appendChild(overlay);
+    // #1122/#1124: while the help modal is open, hide the underlying packet
+    // table rows so the centered modal cannot visually overlap them. The
+    // backdrop still dims the rest of the page; restored on close.
+    document.body.classList.add('fux-help-open');
     function close() {
       overlay.remove();
+      document.body.classList.remove('fux-help-open');
       document.removeEventListener('keydown', onKey);
     }
     function onKey(ev) { if (ev.key === 'Escape') { close(); } }

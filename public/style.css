@@ -3000,6 +3000,10 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .modal-overlay > .fux-popover { position: relative; top: auto; right: auto; left: auto; bottom: auto; padding: 0; max-width: min(720px, 92vw); width: min(720px, 92vw); }
 .modal.fux-popover { padding: 0; }
 .fux-help-overlay { z-index: 10000; }
+/* #1122/#1124: while the filter-help modal is open, collapse packet table
+ * rows so the centered modal can never visually overlap them. Backdrop
+ * (.modal-overlay) still dims the rest of the page. */
+body.fux-help-open #pktBody tr { display: none; }
 .fux-popover-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
 .fux-popover-close { background: transparent; border: none; color: var(--text-muted); font-size: 16px; cursor: pointer; padding: 0 4px; }
 .fux-popover-close:hover { color: var(--text); }
