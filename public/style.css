@@ -117,6 +117,13 @@
   --content-bg: var(--surface-0);
   --card-bg: var(--surface-1);
   --hover-bg: rgba(0,0,0, 0.04);
+  /* #1128 followup: caught by scripts/check-css-vars.js — these were
+   * referenced without a fallback in .rf-detail-meta, .rf-detail-close
+   * and .tools-card and would resolve transparent / inherit. Alias them
+   * to existing tokens. */
+  --text-primary: var(--text);
+  --bg-hover: var(--hover-bg);
+  --primary: var(--accent);
   --trace-ghost-color: #94a3b8;
 
   /* #1128: documented z-index scale. Use these custom props for any new
