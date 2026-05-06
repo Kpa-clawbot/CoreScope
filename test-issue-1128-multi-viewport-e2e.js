@@ -149,14 +149,22 @@ async function gotoPackets(page) {
           if (!menu) return { error: 'no #filterSavedMenu after click' };
           menu.classList.remove('hidden');
           const mr = menu.getBoundingClientRect();
+          if (mr.width === 0 || mr.height === 0) return { skip: true, why: 'menu zero-sized' };
           const groups = Array.from(document.querySelectorAll('.filter-bar > .filter-group'))
             .map(g => g.getBoundingClientRect())
             .filter(r => r.top >= mr.top); // only groups vertically below menu start
           const offenders = groups.filter(r => !(mr.bottom <= r.top + 1 || r.bottom <= mr.top + 1));
-          return { mr: { top: mr.top, bottom: mr.bottom, w: mr.width }, offendCount: offenders.length };
+          return {
+            mr: { top: mr.top, bottom: mr.bottom, w: mr.width },
+            offendCount: offenders.length,
+            offenders: offenders.map(r => ({ top: r.top, bottom: r.bottom })),
+          };
         });
         if (result.skip) { console.log('    (' + result.why + ')'); return; }
         assert(!result.error, result.error);
+        assert(result.offendCount === 0,
+          `Saved menu overlaps ${result.offendCount} toolbar group(s) below it: ` +
+          JSON.stringify({ menu: result.mr, offenders: result.offenders }));
         // Close menu for next test.
         await page.keyboard.press('Escape').catch(() => {});
         await page.waitForTimeout(150);
@@ -176,10 +184,17 @@ async function gotoPackets(page) {
             .map(g => g.getBoundingClientRect())
             .filter(r => r.top >= mr.top);
           const offenders = groups.filter(r => !(mr.bottom <= r.top + 1 || r.bottom <= mr.top + 1));
-          return { offendCount: offenders.length, mr: { top: mr.top, bottom: mr.bottom } };
+          return {
+            offendCount: offenders.length,
+            mr: { top: mr.top, bottom: mr.bottom },
+            offenders: offenders.map(r => ({ top: r.top, bottom: r.bottom })),
+          };
         });
         if (result.skip) { console.log('    (' + result.why + ')'); return; }
         assert(!result.error, result.error);
+        assert(result.offendCount === 0,
+          `Types menu overlaps ${result.offendCount} toolbar group(s) below it: ` +
+          JSON.stringify({ menu: result.mr, offenders: result.offenders }));
         await page.keyboard.press('Escape').catch(() => {});
         await page.waitForTimeout(150);
       });
