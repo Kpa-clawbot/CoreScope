@@ -137,6 +137,24 @@ async function gotoPackets(page) {
         JSON.stringify(result.offenders[0]));
     });
 
+    // #1128 Bug 5 — toolbar reorder gate: toggles MUST appear before dropdowns
+    // in document order. packets.js was reordered so the most-frequently-used
+    // toggles (Group/My Nodes/time) sit next to the search input. A revert
+    // would reintroduce the original eye-trail problem; this assertion fails
+    // if the order is swapped back.
+    await step(`[${vp.name}] Bug 5: filter-group-toggles precedes filter-group-dropdowns`, async () => {
+      const order = await page.evaluate(() => {
+        const groups = Array.from(document.querySelectorAll('.filter-bar .filter-group'));
+        const togIdx = groups.findIndex(g => g.classList.contains('filter-group-toggles'));
+        const dropIdx = groups.findIndex(g => g.classList.contains('filter-group-dropdowns'));
+        return { togIdx, dropIdx, total: groups.length };
+      });
+      assert(order.togIdx >= 0, 'no .filter-group-toggles found in toolbar');
+      assert(order.dropIdx >= 0, 'no .filter-group-dropdowns found in toolbar');
+      assert(order.togIdx < order.dropIdx,
+        `toggles (idx ${order.togIdx}) must precede dropdowns (idx ${order.dropIdx})`);
+    });
+
     // NOTE on removed sub-tests (#1128 self-review): earlier drafts had
     // "[vp] Saved menu does not overlap toolbar groups below it" and
     // "[vp] Types multi-select dropdown does not overlap toolbar groups
