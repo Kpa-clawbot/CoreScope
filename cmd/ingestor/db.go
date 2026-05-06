@@ -1092,7 +1092,9 @@ func (s *Store) BackfillPathJSONAsync() {
 				FROM observations o
 				JOIN transmissions t ON o.transmission_id = t.id
 				WHERE o.raw_hex IS NOT NULL AND o.raw_hex != ''
-				AND (o.path_json IS NULL OR o.path_json = '' OR o.path_json = '[]')
+				-- NB: '[]' is the "already attempted, no hops" sentinel; excluded
+				-- to prevent the infinite re-UPDATE loop fixed in #1119.
+				AND (o.path_json IS NULL OR o.path_json = '')
 				AND t.payload_type != 9
 				LIMIT ?`, batchSize)
 			if err != nil {

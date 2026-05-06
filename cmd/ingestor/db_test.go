@@ -2232,11 +2232,13 @@ func TestBackfillPathJsonFromRawHex(t *testing.T) {
 		t.Fatalf("migration not recorded")
 	}
 
-	// Row 1 (was '[]') should now have decoded hops
+	// Row 1 (was '[]') is NOT re-processed by the backfill — '[]' means
+	// "already attempted, no hops" and is excluded by the WHERE to avoid the
+	// infinite-loop bug fixed in #1119. It must remain '[]'.
 	var pj1 string
 	s2.db.QueryRow("SELECT path_json FROM observations WHERE id = 1").Scan(&pj1)
-	if pj1 != `["AABB","CCDD"]` {
-		t.Errorf("row 1 path_json = %q, want %q", pj1, `["AABB","CCDD"]`)
+	if pj1 != "[]" {
+		t.Errorf("row 1 path_json = %q, want %q (must not re-process '[]' rows after #1119)", pj1, "[]")
 	}
 
 	// Row 2 (was NULL) should now have decoded hops
