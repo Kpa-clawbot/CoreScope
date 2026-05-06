@@ -13,7 +13,7 @@ import (
 //
 // NOTE: each field below is sampled with an independent atomic.Load(), so the
 // snapshot is EVENTUALLY-CONSISTENT — invariants like
-// `walCommits >= tx_inserted + groupCommitFlushes` may be momentarily violated
+// `walCommits >= tx_inserted` may be momentarily violated
 // in a single sample. Consumers MUST NOT derive ratios on the assumption these
 // counters were captured at the same instant; treat each field as an
 // independent monotonically-increasing counter and look at deltas across
@@ -28,7 +28,7 @@ type IngestorStatsSnapshot struct {
 	WriteErrors        int64            `json:"write_errors"`
 	SignatureDrops     int64            `json:"sig_drops"`
 	WALCommits         int64            `json:"walCommits"`
-	GroupCommitFlushes int64            `json:"groupCommitFlushes"`
+	GroupCommitFlushes int64            `json:"groupCommitFlushes"` // always 0 — group commit reverted (refs #1129)
 	BackfillUpdates    map[string]int64 `json:"backfillUpdates"`
 }
 
@@ -95,7 +95,7 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 				WriteErrors:        s.Stats.WriteErrors.Load(),
 				SignatureDrops:     s.Stats.SignatureDrops.Load(),
 				WALCommits:         s.Stats.WALCommits.Load(),
-				GroupCommitFlushes: s.Stats.GroupCommitFlushes.Load(),
+				GroupCommitFlushes: 0, // group commit reverted (refs #1129)
 				BackfillUpdates:    s.Stats.SnapshotBackfills(),
 			}
 			b, err := json.Marshal(snap)

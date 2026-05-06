@@ -72,17 +72,6 @@ type Config struct {
 	// no UpsertObserver, no observations, no metrics.
 	ObserverBlacklist []string `json:"observerBlacklist,omitempty"`
 
-	// GroupCommitMs controls observation INSERT batching (#1115 M1). When > 0,
-	// the ingestor wraps pending INSERTs into a single BEGIN/COMMIT and flushes
-	// every GroupCommitMs milliseconds. When 0, every InsertTransmission commits
-	// individually (legacy per-packet behavior). Default applied at runtime: 1000.
-	GroupCommitMs *int `json:"groupCommitMs,omitempty"`
-
-	// GroupCommitMaxRows is a safety cap on pending rows in the group-commit
-	// queue. When exceeded, the queue flushes immediately to bound memory and
-	// the crash window. Default applied at runtime: 1000.
-	GroupCommitMaxRows *int `json:"groupCommitMaxRows,omitempty"`
-
 	// obsBlacklistSetCached is the lazily-built lowercase set for O(1) lookups.
 	obsBlacklistSetCached map[string]bool
 	obsBlacklistOnce      sync.Once
@@ -145,23 +134,6 @@ func (c *Config) MetricsSampleInterval() int {
 		return c.Metrics.SampleIntervalSec
 	}
 	return 300
-}
-
-// GroupCommitMsOrDefault returns the configured groupCommitMs or 1000 if unset.
-// A value of 0 explicitly disables group commit (per-packet auto-commit).
-func (c *Config) GroupCommitMsOrDefault() int {
-	if c == nil || c.GroupCommitMs == nil {
-		return 1000
-	}
-	return *c.GroupCommitMs
-}
-
-// GroupCommitMaxRowsOrDefault returns the configured cap or 1000 if unset.
-func (c *Config) GroupCommitMaxRowsOrDefault() int {
-	if c == nil || c.GroupCommitMaxRows == nil || *c.GroupCommitMaxRows <= 0 {
-		return 1000
-	}
-	return *c.GroupCommitMaxRows
 }
 
 // MetricsRetentionDays returns configured metrics retention or 30 days default.

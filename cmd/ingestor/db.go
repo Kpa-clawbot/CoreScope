@@ -25,9 +25,8 @@ type DBStats struct {
 	ObserverUpserts        atomic.Int64
 	WriteErrors            atomic.Int64
 	SignatureDrops         atomic.Int64
-	GroupCommitFlushes     atomic.Int64
 	// WALCommits tracks every successful tx.Commit() that may have flushed
-	// WAL pages. Incremented by group-commit flushes and any other Commit().
+	// WAL pages.
 	WALCommits atomic.Int64
 	// BackfillUpdates tracks per-named-backfill row write counts so an
 	// infinite-loop backfill (cf #1119) is obvious from the perf page.
@@ -60,64 +59,6 @@ func (s *DBStats) SnapshotBackfills() map[string]int64 {
 	return out
 }
 
-// SetGroupCommit configures group-commit batching for InsertTransmission.
-// When ms > 0, observation/transmission INSERTs are queued inside a single
-// BEGIN/COMMIT and flushed every ms milliseconds (or earlier if the pending
-// row count exceeds maxRows). When ms == 0 every InsertTransmission commits
-// individually (legacy behavior).
-//
-// Safe to call at any time; an in-flight transaction is committed before
-// the new mode takes effect.
-func (s *Store) SetGroupCommit(ms int, maxRows int) {
-	if maxRows <= 0 {
-		maxRows = 1000
-	}
-	s.gcMu.Lock()
-	// Flush any open tx under the old config before swapping.
-	if s.activeTx != nil {
-		_ = s.activeTx.Commit()
-		s.activeTx = nil
-		s.pendingRows = 0
-		s.Stats.GroupCommitFlushes.Add(1)
-	}
-	s.groupCommitMs = ms
-	s.groupCommitMaxRows = maxRows
-	s.gcMu.Unlock()
-}
-
-// FlushGroupTx commits any pending grouped INSERTs immediately. Safe to call
-// when group commit is disabled (no-op). Safe to call from a separate
-// goroutine — serialized via gcMu.
-func (s *Store) FlushGroupTx() error {
-	s.gcMu.Lock()
-	defer s.gcMu.Unlock()
-	return s.flushLocked()
-}
-
-// flushLocked commits the active tx if any. Caller must hold gcMu.
-func (s *Store) flushLocked() error {
-	if s.activeTx == nil {
-		return nil
-	}
-	err := s.activeTx.Commit()
-	s.activeTx = nil
-	s.pendingRows = 0
-	s.Stats.GroupCommitFlushes.Add(1)
-	if err != nil {
-		s.Stats.WriteErrors.Add(1)
-		return fmt.Errorf("group commit: %w", err)
-	}
-	s.Stats.WALCommits.Add(1)
-	return nil
-}
-
-// GroupCommitMs returns the configured flush window in ms (0 = disabled).
-func (s *Store) GroupCommitMs() int {
-	s.gcMu.Lock()
-	defer s.gcMu.Unlock()
-	return s.groupCommitMs
-}
-
 // Store wraps the SQLite database for packet ingestion.
 type Store struct {
 	db    *sql.DB
@@ -137,17 +78,6 @@ type Store struct {
 
 	sampleIntervalSec int
 	backfillWg        sync.WaitGroup
-
-	// Group-commit state (#1115 M1). When groupCommitMs > 0, observation
-	// INSERTs are queued inside a single BEGIN/COMMIT and flushed every
-	// groupCommitMs ms (via the ingestor's flusher goroutine) or earlier
-	// when groupCommitMaxRows is exceeded. When groupCommitMs == 0 every
-	// InsertTransmission commits individually (legacy behavior).
-	gcMu               sync.Mutex
-	groupCommitMs      int
-	groupCommitMaxRows int
-	activeTx           *sql.Tx
-	pendingRows        int
 }
 
 // OpenStore opens or creates a SQLite DB at the given path, applying the
@@ -697,12 +627,6 @@ func (s *Store) prepareStatements() error {
 
 // InsertTransmission inserts a decoded packet into transmissions + observations.
 // Returns true if a new transmission was created (not a duplicate hash).
-//
-// When group-commit is enabled (via SetGroupCommit with ms > 0), all writes
-// are issued against an in-flight *sql.Tx that is committed by the ingestor's
-// flusher goroutine (or eagerly when pendingRows exceeds groupCommitMaxRows).
-// When disabled (ms == 0) every call commits immediately via the prepared
-// statements bound to s.db (legacy behavior).
 func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	hash := data.Hash
 	if hash == "" {
@@ -714,67 +638,29 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		now = time.Now().UTC().Format(time.RFC3339)
 	}
 
-	s.gcMu.Lock()
-	defer s.gcMu.Unlock()
-
-	// Stmt resolvers — either bare prepared stmt (auto-commit) or tx-bound.
-	var (
-		stmtGetTx, stmtUpdFS, stmtInsTx, stmtGetObs, stmtUpdObs, stmtInsObs *sql.Stmt
-	)
-	if s.groupCommitMs > 0 {
-		if s.activeTx == nil {
-			tx, err := s.db.Begin()
-			if err != nil {
-				s.Stats.WriteErrors.Add(1)
-				return false, fmt.Errorf("group commit begin: %w", err)
-			}
-			s.activeTx = tx
-			s.pendingRows = 0
-		}
-		stmtGetTx = s.activeTx.Stmt(s.stmtGetTxByHash)
-		stmtUpdFS = s.activeTx.Stmt(s.stmtUpdateTxFirstSeen)
-		stmtInsTx = s.activeTx.Stmt(s.stmtInsertTransmission)
-		stmtGetObs = s.activeTx.Stmt(s.stmtGetObserverRowid)
-		stmtUpdObs = s.activeTx.Stmt(s.stmtUpdateObserverLastSeen)
-		stmtInsObs = s.activeTx.Stmt(s.stmtInsertObservation)
-	} else {
-		stmtGetTx = s.stmtGetTxByHash
-		stmtUpdFS = s.stmtUpdateTxFirstSeen
-		stmtInsTx = s.stmtInsertTransmission
-		stmtGetObs = s.stmtGetObserverRowid
-		stmtUpdObs = s.stmtUpdateObserverLastSeen
-		stmtInsObs = s.stmtInsertObservation
-	}
-
 	var txID int64
 	isNew := false
 
 	// Check for existing transmission
 	var existingID int64
 	var existingFirstSeen string
-	err := stmtGetTx.QueryRow(hash).Scan(&existingID, &existingFirstSeen)
+	err := s.stmtGetTxByHash.QueryRow(hash).Scan(&existingID, &existingFirstSeen)
 	if err == nil {
 		// Existing transmission
 		txID = existingID
 		if now < existingFirstSeen {
-			_, _ = stmtUpdFS.Exec(now, txID)
+			_, _ = s.stmtUpdateTxFirstSeen.Exec(now, txID)
 		}
 	} else {
 		// New transmission
 		isNew = true
-		result, err := stmtInsTx.Exec(
+		result, err := s.stmtInsertTransmission.Exec(
 			data.RawHex, hash, now,
 			data.RouteType, data.PayloadType, data.PayloadVersion,
 			data.DecodedJSON, nilIfEmpty(data.ChannelHash),
 		)
 		if err != nil {
 			s.Stats.WriteErrors.Add(1)
-			// Rollback in-flight tx so we don't leave it dangling.
-			if s.activeTx != nil {
-				_ = s.activeTx.Rollback()
-				s.activeTx = nil
-				s.pendingRows = 0
-			}
 			return false, fmt.Errorf("insert transmission: %w", err)
 		}
 		txID, _ = result.LastInsertId()
@@ -789,12 +675,12 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	var observerIdx *int64
 	if data.ObserverID != "" {
 		var rowid int64
-		err := stmtGetObs.QueryRow(data.ObserverID).Scan(&rowid)
+		err := s.stmtGetObserverRowid.QueryRow(data.ObserverID).Scan(&rowid)
 		if err == nil {
 			observerIdx = &rowid
 			// Update observer last_seen and last_packet_at on every packet to prevent
 			// low-traffic observers from appearing offline (#463)
-			_, _ = stmtUpdObs.Exec(now, now, rowid)
+			_, _ = s.stmtUpdateObserverLastSeen.Exec(now, now, rowid)
 		}
 	}
 
@@ -804,7 +690,7 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		epochTs = t.Unix()
 	}
 
-	_, err = stmtInsObs.Exec(
+	_, err = s.stmtInsertObservation.Exec(
 		txID, observerIdx, data.Direction,
 		data.SNR, data.RSSI, data.Score,
 		data.PathJSON, epochTs, nilIfEmpty(data.RawHex),
@@ -816,21 +702,9 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		s.Stats.ObservationsInserted.Add(1)
 	}
 
-	// Group-commit accounting: count this insert and flush early if we hit
-	// the row cap. Counts pending rows (transmission + observation pairs).
-	if s.activeTx != nil {
-		s.pendingRows++
-		if s.pendingRows >= s.groupCommitMaxRows {
-			if err := s.flushLocked(); err != nil {
-				log.Printf("[db] group commit (max-rows) flush failed: %v", err)
-			}
-		}
-	} else {
-		// Non-group-commit mode: each prepared-stmt Exec auto-commits.
-		// Count one WAL commit per successful InsertTransmission so the
-		// perf page sees commit pressure even without group-commit batching.
-		s.Stats.WALCommits.Add(1)
-	}
+	// Each prepared-stmt Exec auto-commits. Count one WAL commit per
+	// successful InsertTransmission so the perf page sees commit pressure.
+	s.Stats.WALCommits.Add(1)
 
 	return isNew, nil
 }
@@ -955,10 +829,6 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 // Close checkpoints the WAL and closes the database.
 func (s *Store) Close() error {
 	s.backfillWg.Wait()
-	// Flush any pending grouped INSERTs before checkpoint/close (#1115).
-	if err := s.FlushGroupTx(); err != nil {
-		log.Printf("[db] close: group commit flush: %v", err)
-	}
 	s.Checkpoint()
 	return s.db.Close()
 }
