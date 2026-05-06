@@ -1943,18 +1943,45 @@
   }
 
   // #1128 (Bug 1): re-run overflow finalize after hop-resolver async pass has
-  // had a chance to mutate chip text. Debounced per-tbody so multiple renders
-  // in quick succession only trigger one extra measurement pass.
-  var _rePathOverflowTimer = null;
+  // had a chance to mutate chip text. Per-tbody so concurrent renders in
+  // different tbodies don't cancel each other (#1131 BLOCKER-2). Uses a
+  // MutationObserver bonded to the tbody to detect when hop-resolver finishes
+  // mutating .path-hops chip text, then runs finalize once mutations settle
+  // for 50ms — replaces the previous 120ms blind timeout, which regressed on
+  // slow networks where the resolver took longer than 120ms (#1131 MAJOR-1).
   function _scheduleReFinalizePathOverflow(tbody) {
     if (!tbody) return;
-    if (_rePathOverflowTimer) clearTimeout(_rePathOverflowTimer);
-    _rePathOverflowTimer = setTimeout(function () {
-      _rePathOverflowTimer = null;
+    // If a quiesce timer is already armed for this tbody, leave it; new
+    // mutations will keep extending it. If an observer is already wired,
+    // we're done — it'll fire again on the next mutation.
+    if (tbody._rePathOverflowObserver) return;
+    var quiesceTimer = null;
+    var stopTimer = null;
+    function finalize() {
+      if (tbody._rePathOverflowObserver) {
+        try { tbody._rePathOverflowObserver.disconnect(); } catch (_e) {}
+        tbody._rePathOverflowObserver = null;
+      }
+      if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; }
       var hosts = tbody.querySelectorAll('.path-hops');
       for (var i = 0; i < hosts.length; i++) hosts[i].dataset.overflowChecked = '';
       _finalizePathOverflow(tbody);
-    }, 120);
+    }
+    if (typeof MutationObserver === 'function') {
+      var obs = new MutationObserver(function () {
+        if (quiesceTimer) clearTimeout(quiesceTimer);
+        quiesceTimer = setTimeout(finalize, 50);
+      });
+      obs.observe(tbody, { subtree: true, childList: true, characterData: true });
+      tbody._rePathOverflowObserver = obs;
+      // Hard upper bound — if hop-resolver never mutates (e.g. all chips
+      // already final), still run finalize once after a short delay so the
+      // overflow pill appears.
+      stopTimer = setTimeout(finalize, 1000);
+    } else {
+      // Fallback for environments without MutationObserver.
+      setTimeout(finalize, 120);
+    }
   }
 
   // Delegated click for path overflow pills — show popover of full path.

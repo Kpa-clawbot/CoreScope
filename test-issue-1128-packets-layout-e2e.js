@@ -18,8 +18,8 @@
  *  4. Bug 3 (filter-bar gap + multi-select trigger truncation): the
  *     `.filter-bar` row-gap must be ≥ 10px (controls are 34px tall, 6px gap
  *     allows visual overlap on wrap), and every `.multi-select-trigger` must
- *     have a CSS `max-width` ≤ 200px so a long "TRACE,MULTIPART,..." label
- *     doesn't balloon the row.
+ *     have a CSS `max-width` ≤ 280px (clamp viewport-aware cap) so a long
+ *     "TRACE,MULTIPART,..." label doesn't balloon the row.
  *
  * Usage: BASE_URL=http://localhost:13581 node test-issue-1128-packets-layout-e2e.js
  */
@@ -166,10 +166,10 @@ function parseAlpha(s) {
       var unboundedTrigger = null;
       for (var i = 0; i < triggers.length; i++) {
         var mw = getComputedStyle(triggers[i]).maxWidth;
-        // "none" or empty == unbounded; numeric px > 220 == too loose
+        // "none" or empty == unbounded; numeric px > 280 == too loose
         if (mw === 'none' || mw === '' ) { unboundedTrigger = { idx: i, mw }; break; }
         var px = parseFloat(mw);
-        if (!isFinite(px) || px > 220) { unboundedTrigger = { idx: i, mw }; break; }
+        if (!isFinite(px) || px > 280) { unboundedTrigger = { idx: i, mw }; break; }
       }
       return { rowGap: rg, triggerCount: triggers.length, unboundedTrigger };
     });

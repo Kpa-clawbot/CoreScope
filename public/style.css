@@ -1,6 +1,30 @@
 /* === CoreScope — style.css === */
 
 /* ============================================================
+ * Z-INDEX SCALE (single source of truth — issues #1128, #1131)
+ * ------------------------------------------------------------
+ * Use these tokens for ANY new stacking context. Raw z-index
+ * literals in this file are legacy and being migrated. When
+ * touching a rule with a literal z-index, replace it with the
+ * appropriate token below.
+ *
+ *   --z-base            0     document base, table cells
+ *   --z-dropdown        100   in-flow dropdowns (multi-select,
+ *                             saved-filters, column-toggles)
+ *   --z-popover         300   popovers anchored to a dropdown
+ *                             or table cell (path overflow,
+ *                             autocomplete row detail)
+ *   --z-modal-backdrop  9000  full-viewport modal scrim
+ *   --z-modal           9100  modal panels themselves
+ *   --z-tooltip         9200  tooltips, ctx menus, hover popovers
+ *                             that must float above modals
+ *
+ * Migration policy: do NOT bulk-rewrite legacy values that
+ * currently work — risk/reward is poor. Migrate opportunistically
+ * when editing nearby rules. New rules MUST use the tokens.
+ * ============================================================ */
+
+/* ============================================================
  * FLUID SCAFFOLDING (issue #1054)
  * ------------------------------------------------------------
  * Global design tokens for spacing, typography, and container
@@ -1764,7 +1788,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .hash-cell-possible { background: var(--status-yellow); color: #fff; }
 .hash-cell-collision { color: #fff; }
 .hash-matrix-tooltip {
-  position: fixed; z-index: 9999; background: var(--surface-1); border: 1px solid var(--border);
+  position: fixed; z-index: var(--z-tooltip); background: var(--surface-1); border: 1px solid var(--border);
   border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); padding: 8px 12px;
   font-size: 12px; min-width: 160px; max-width: 260px; pointer-events: none;
 }
@@ -1941,7 +1965,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .hop-conflict-btn { background: var(--status-yellow, #f59e0b); color: #000; border: none; border-radius: 4px; font-size: 11px;
   font-weight: 700; padding: 1px 5px; cursor: pointer; vertical-align: middle; margin-left: 3px; line-height: 1.2; }
 .hop-conflict-btn:hover { background: var(--status-yellow, #d97706); filter: brightness(0.85); }
-.hop-conflict-popover { position: absolute; z-index: 9999; background: var(--surface-1); border: 1px solid var(--border);
+.hop-conflict-popover { position: absolute; z-index: var(--z-tooltip); background: var(--surface-1); border: 1px solid var(--border);
   border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); width: 260px; max-height: 300px; overflow-y: auto; }
 .hop-conflict-header { padding: 10px 12px; font-size: 12px; font-weight: 700; border-bottom: 1px solid var(--border);
   color: var(--text-muted); }
@@ -2302,8 +2326,10 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   height: 34px; box-sizing: border-box; white-space: nowrap; line-height: 1;
   /* #1128 (Bug 3): cap trigger width so a long selection like
    * "TRACE,MULTIPART,GRP_TXT" doesn't balloon the row and overlap toolbar
-   * buttons. The full label remains accessible via the title tooltip. */
-  max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+   * buttons. The full label remains accessible via the title tooltip.
+   * #1131 MAJOR-4: use clamp() so the cap scales with viewport width
+   * instead of being a hard 180px on every screen size. */
+  max-width: clamp(120px, 18vw, 280px); overflow: hidden; text-overflow: ellipsis;
 }
 .multi-select-trigger:hover { border-color: var(--accent); color: var(--accent); }
 .multi-select-menu {
@@ -2438,7 +2464,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .audio-unlock-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10000;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2666,7 +2692,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 /* === Channel Color Picker (#674) === */
 .cc-picker-popover {
   position: fixed;
-  z-index: 9999;
+  z-index: var(--z-tooltip);
   background: var(--bg-secondary, #1e1e1e);
   border: 1px solid var(--border-color, #333);
   border-radius: 8px;
@@ -3022,13 +3048,13 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .fux-help-btn:hover,
 .fux-saved-trigger:hover { background: var(--bg-hover, var(--surface)); }
 
-.fux-popover { position: fixed; top: 60px; right: 24px; width: min(720px, 92vw); max-height: 80vh; overflow: auto; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.35); z-index: 10000; padding: 0; }
+.fux-popover { position: fixed; top: 60px; right: 24px; width: min(720px, 92vw); max-height: 80vh; overflow: auto; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.35); z-index: var(--z-modal); padding: 0; }
 /* #1122: when help is opened inside .modal-overlay (real modal/backdrop),
    reset the absolute positioning so the flex-centered overlay places it.
    Also neutralise .modal default padding so the sticky header sits flush. */
 .modal-overlay > .fux-popover { position: relative; top: auto; right: auto; left: auto; bottom: auto; padding: 0; max-width: min(720px, 92vw); width: min(720px, 92vw); }
 .modal.fux-popover { padding: 0; }
-.fux-help-overlay { z-index: 10000; }
+.fux-help-overlay { z-index: var(--z-modal); }
 /* #1124: keep the help modal inside the viewport. The backdrop alone is
  * enough visual separation; rows underneath stay rendered. */
 .modal-overlay > .fux-popover { max-height: 80vh; overflow-y: auto; }
@@ -3054,7 +3080,7 @@ th.sort-active { color: var(--accent, #60a5fa); }
   background: var(--surface); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-  padding: 8px 10px; max-width: 480px; max-height: 240px; overflow: auto;
+  padding: 8px 10px; max-width: min(360px, calc(100vw - 32px)); max-height: 240px; overflow: auto;
   font-family: var(--mono); font-size: 12px;
 }
 .path-popover .path-popover-title { font-family: var(--font); font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
@@ -3073,18 +3099,18 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .fux-examples { margin: 4px 0; padding-left: 20px; }
 .fux-examples li { margin: 2px 0; }
 
-.fux-ac-dropdown { position: absolute; left: 0; right: 0; top: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; max-height: 280px; overflow-y: auto; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.25); margin-top: 2px; }
+.fux-ac-dropdown { position: absolute; left: 0; right: 0; top: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; max-height: 280px; overflow-y: auto; z-index: var(--z-tooltip); box-shadow: 0 4px 12px rgba(0,0,0,0.25); margin-top: 2px; }
 .fux-ac-item { padding: 4px 10px; display: flex; justify-content: space-between; gap: 12px; cursor: pointer; font-size: 12px; }
 .fux-ac-item:hover,
 .fux-ac-item.active { background: var(--bg-hover, rgba(120,160,255,0.12)); }
 .fux-ac-val { font-family: var(--mono); color: var(--text); }
 .fux-ac-desc { color: var(--text-muted); font-size: 11px; max-width: 60%; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.fux-ctx-menu { position: absolute; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.35); z-index: 10001; min-width: 200px; padding: 4px 0; }
+.fux-ctx-menu { position: absolute; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.35); z-index: var(--z-tooltip); min-width: 200px; padding: 4px 0; }
 .fux-ctx-item { display: block; width: 100%; text-align: left; background: transparent; border: none; color: var(--text); padding: 5px 12px; font-size: 12px; cursor: pointer; font-family: var(--mono); }
 .fux-ctx-item:hover { background: var(--bg-hover, rgba(120,160,255,0.12)); }
 
-.fux-saved-menu { position: absolute; top: 100%; left: 0; min-width: 320px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; z-index: 9999; box-shadow: 0 4px 14px rgba(0,0,0,0.3); margin-top: 4px; padding: 4px 0; }
+.fux-saved-menu { position: absolute; top: 100%; left: 0; min-width: 320px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; z-index: var(--z-tooltip); box-shadow: 0 4px 14px rgba(0,0,0,0.3); margin-top: 4px; padding: 4px 0; }
 .fux-saved-menu.hidden { display: none; }
 .fux-saved-header { padding: 6px 10px; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
 .fux-saved-item { display: flex; align-items: center; gap: 8px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
