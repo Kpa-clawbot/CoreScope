@@ -137,7 +137,8 @@
       'time after "2025-01-01"',
     ].map(function(e) { return '<li class="fux-mono">' + _esc(e) + '</li>'; }).join('');
     return [
-      '<h3>Filter syntax</h3>',
+      // NOTE(#1122): "Filter syntax" heading is provided by the popover header;
+      // do NOT repeat it here or the panel renders the label twice.
       '<p>Wireshark-style boolean expressions over packet fields. Combine with <code>&amp;&amp;</code>, <code>||</code>, <code>!</code>, and parentheses. Strings are case-insensitive. Tip: append <code>?filter=…</code> to the URL to share a filter.</p>',
       '<h4>Fields</h4>',
       '<table class="fux-table"><thead><tr><th>Name</th><th>Description</th></tr></thead><tbody>' + rows + '</tbody></table>',
@@ -156,17 +157,61 @@
 
   function _showHelp() {
     var existing = document.getElementById('filterHelpPopover');
-    if (existing) { existing.remove(); return; }
-    var pop = _h('div', { id: 'filterHelpPopover', class: 'fux-popover', role: 'dialog', 'aria-label': 'Filter syntax help' });
+    if (existing) {
+      // Toggle: also remove the backdrop wrapper if present
+      var wrap = existing.closest('.modal-overlay');
+      (wrap || existing).remove();
+      return;
+    }
+    // #1122: Render as a real centered modal inside .modal-overlay so the
+    // help panel never floats over the packet table rows.
+    var overlay = _h('div', { class: 'modal-overlay fux-help-overlay', role: 'presentation' });
+    var pop = _h('div', { id: 'filterHelpPopover', class: 'modal fux-popover', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Filter syntax help' });
     pop.innerHTML =
       '<div class="fux-popover-header"><strong>Filter syntax</strong>' +
       '<button type="button" class="fux-popover-close" aria-label="Close">✕</button></div>' +
       '<div class="fux-popover-body">' + _buildHelpHtml() + '</div>';
-    document.body.appendChild(pop);
-    pop.querySelector('.fux-popover-close').addEventListener('click', function() { pop.remove(); });
-    document.addEventListener('keydown', function _esc(ev) {
-      if (ev.key === 'Escape') { pop.remove(); document.removeEventListener('keydown', _esc); }
+    overlay.appendChild(pop);
+    document.body.appendChild(overlay);
+    // #1124 (MAJOR-2): focus management. Save the trigger so we can restore
+    // focus on close, then move focus to the close button. Trap Tab cycles
+    // inside the modal until it closes.
+    var trigger = document.activeElement;
+    var closeBtn = pop.querySelector('.fux-popover-close');
+    function _focusables() {
+      return Array.prototype.slice.call(pop.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ));
+    }
+    function close() {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+      // Restore focus to the original trigger if still in the DOM.
+      if (trigger && typeof trigger.focus === 'function' && document.body.contains(trigger)) {
+        try { trigger.focus(); } catch (e) {}
+      }
+    }
+    function onKey(ev) {
+      if (ev.key === 'Escape') { close(); return; }
+      if (ev.key !== 'Tab') return;
+      var f = _focusables();
+      if (!f.length) { ev.preventDefault(); return; }
+      var first = f[0], last = f[f.length - 1];
+      var active = document.activeElement;
+      if (ev.shiftKey) {
+        if (active === first || !pop.contains(active)) { last.focus(); ev.preventDefault(); }
+      } else {
+        if (active === last || !pop.contains(active)) { first.focus(); ev.preventDefault(); }
+      }
+    }
+    closeBtn.addEventListener('click', close);
+    overlay.addEventListener('click', function(ev) {
+      // Click on backdrop (not inside the modal) closes
+      if (ev.target === overlay) close();
     });
+    document.addEventListener('keydown', onKey);
+    // Move focus to the close button (first interactive element).
+    try { closeBtn.focus(); } catch (e) {}
   }
 
   // ── Autocomplete ───────────────────────────────────────────────────────

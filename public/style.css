@@ -513,8 +513,17 @@ input[type="week"] {
 .page-header .count { color: var(--text-muted); font-weight: 400; font-size: 14px; margin-left: 8px; }
 
 /* === Filter Bar === */
+/* === Filter toolbar (#1122)
+ * Toolbar layout is composed of fenced .filter-group clusters:
+ *   1. Quick filters       — text inputs (hash, node, observer, region, type, channel)
+ *   2. Toggles             — Group by Hash, ★ My Nodes
+ *   3. Time window         — last-N selector
+ *   4. Sort & view options — observer sort, columns toggle, hex paths
+ * Adjacent .filter-group + .filter-group siblings get a left divider + padding
+ * so the visual seam between groups stays readable even when wrapped. */
 .filter-bar {
-  display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; align-items: center;
+  display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; align-items: center;
+  row-gap: 6px;
 }
 .filter-bar input, .filter-bar select {
   padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
@@ -529,6 +538,9 @@ input[type="week"] {
   font-family: var(--font); color: var(--text); height: 34px; box-sizing: border-box; line-height: 1;
 }
 .filter-group { display: flex; gap: 6px; align-items: center; }
+/* #1124 (MAJOR-3): each grouped cluster wraps as a single unit at narrow
+ * widths instead of letting individual controls reflow across categories. */
+.filter-bar .filter-group { flex-wrap: nowrap; }
 .filter-group .btn { padding: 4px 10px; font-size: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text); cursor: pointer; transition: background 0.15s, color 0.15s; }
 .filter-group .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .filter-group .btn:hover:not(.active) { background: var(--surface-2); }
@@ -706,10 +718,20 @@ input[type="week"] {
 /* === Path display === */
 .path-hops {
   display: inline-flex; align-items: center; gap: 2px; font-family: var(--mono); font-size: 11px;
+  /* #1122: never wrap; clip so a long hop chain cannot spill into the next row */
+  flex-wrap: nowrap;
+  max-width: 100%;
+  max-height: 22px;
+  overflow: hidden;
+  vertical-align: middle;
 }
 .path-hops .hop { color: var(--accent); }
-.path-hops .hop-named { color: #fff; background: var(--accent); padding: 1px 6px; border-radius: 3px; font-family: var(--font); font-weight: 600; cursor: default; }
-.path-hops .arrow { color: var(--text-muted); }
+.path-hops .hop-named { color: #fff; background: var(--accent); padding: 1px 6px; border-radius: 3px; font-family: var(--font); font-weight: 600; cursor: default; flex: 0 0 auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.path-hops .arrow { color: var(--text-muted); flex: 0 0 auto; }
+/* #1122: bound the row height contributed by the path column. The data-table
+ * td already sets overflow:hidden + max-width:0; this caps the cell height
+ * so chips can never push the row past 28px regardless of hop count. */
+.data-table td.col-path { max-height: 28px; line-height: 22px; }
 
 /* === Modal === */
 .modal-overlay {
@@ -2975,6 +2997,42 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .fux-saved-trigger:hover { background: var(--bg-hover, var(--surface)); }
 
 .fux-popover { position: fixed; top: 60px; right: 24px; width: min(720px, 92vw); max-height: 80vh; overflow: auto; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.35); z-index: 10000; padding: 0; }
+/* #1122: when help is opened inside .modal-overlay (real modal/backdrop),
+   reset the absolute positioning so the flex-centered overlay places it.
+   Also neutralise .modal default padding so the sticky header sits flush. */
+.modal-overlay > .fux-popover { position: relative; top: auto; right: auto; left: auto; bottom: auto; padding: 0; max-width: min(720px, 92vw); width: min(720px, 92vw); }
+.modal.fux-popover { padding: 0; }
+.fux-help-overlay { z-index: 10000; }
+/* #1124: keep the help modal inside the viewport. The backdrop alone is
+ * enough visual separation; rows underneath stay rendered. */
+.modal-overlay > .fux-popover { max-height: 80vh; overflow-y: auto; }
+
+/* #1124 (MAJOR-1): overflow pill rendered when path chips exceed the
+ * row's height cap. Visual style mirrors the #1056 TableResponsive pill. */
+.path-overflow-pill {
+  display: inline-flex; align-items: center;
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 1px 6px;
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  color: var(--text-muted);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.path-overflow-pill:hover { color: var(--text); background: var(--bg-hover, var(--surface)); }
+.path-popover {
+  position: absolute; z-index: 10500;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  padding: 8px 10px; max-width: 480px; max-height: 60vh; overflow: auto;
+  font-family: var(--mono); font-size: 12px;
+}
+.path-popover .path-popover-title { font-family: var(--font); font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+.path-popover .hop, .path-popover .hop-named { white-space: nowrap; }
 .fux-popover-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
 .fux-popover-close { background: transparent; border: none; color: var(--text-muted); font-size: 16px; cursor: pointer; padding: 0 4px; }
 .fux-popover-close:hover { color: var(--text); }
