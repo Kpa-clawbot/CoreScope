@@ -257,14 +257,43 @@ async function gotoPackets(page) {
       const height = parseFloat(cs.height);
       const maxHeight = cs.maxHeight;
       tbl.remove();
-      return { height, maxHeight };
+      // Walk the loaded stylesheets to find the rule(s) that target
+      // .data-table td.col-path and report which physical property
+      // (height vs max-height) is declared. The audit fix REQUIRES
+      // `height: 28px`; `max-height: 28px` is the original Bug 1
+      // regression and must fail this test.
+      const declared = { height: null, maxHeight: null, ruleSrc: null };
+      for (const sheet of document.styleSheets) {
+        let rules;
+        try { rules = sheet.cssRules; } catch (e) { continue; }
+        if (!rules) continue;
+        for (const rule of rules) {
+          if (!rule.selectorText) continue;
+          // Match selectors that include both .data-table and .col-path
+          // (allow combinator variations like ".data-table td.col-path").
+          if (/\.data-table[\s\S]*\.col-path/.test(rule.selectorText)) {
+            const h = rule.style && rule.style.getPropertyValue('height');
+            const mh = rule.style && rule.style.getPropertyValue('max-height');
+            if (h) declared.height = h.trim();
+            if (mh) declared.maxHeight = mh.trim();
+            if (h || mh) declared.ruleSrc = rule.selectorText;
+          }
+        }
+      }
+      return { height, maxHeight, declared };
     });
-    // Either height is set explicitly to 28px, OR (acceptable transitional)
-    // max-height is set to 28px AND height is 28px. Audit's preference:
-    // height: 28px (table cells respect height as min-height; max-height
-    // is widely ignored).
-    assert(result.height > 0 && result.height <= 28.5,
-      '.col-path computed height not in (0, 28]: ' + JSON.stringify(result));
+    // Computed height must be exactly 28px.
+    assert(Math.abs(result.height - 28) < 0.5,
+      '.col-path computed height not 28px: ' + JSON.stringify(result));
+    // Audit fix gate: rule must declare `height: 28px`. If the regression
+    // is reverted to `max-height: 28px`, declared.height is null and this
+    // assertion fails.
+    assert(result.declared.height && /^28px$/.test(result.declared.height),
+      '.col-path rule must declare `height: 28px` (audit fix), got: ' +
+      JSON.stringify(result.declared));
+    assert(!result.declared.maxHeight,
+      '.col-path rule must NOT declare max-height (original Bug 1 regression): ' +
+      JSON.stringify(result.declared));
   });
 
   await ctx.close();
