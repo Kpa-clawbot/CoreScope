@@ -19,7 +19,7 @@
  *
  *   C. Z-scale enforcement (audit Section 2): every dropdown selector
  *      (`.col-toggle-menu`, `.multi-select-menu`,
- *      `.region-filter-options-menu`, `.fux-saved-menu`,
+ *      `.region-dropdown-menu`, `.fux-saved-menu`,
  *      `.fux-ac-dropdown`) must compute a z-index inside the
  *      `--z-dropdown` band [100,199] — NOT 50, 90, or 9200.
  *
@@ -204,7 +204,7 @@ async function gotoPackets(page) {
       const selectors = [
         '.col-toggle-menu',
         '.multi-select-menu',
-        '.region-filter-options-menu',
+        '.region-dropdown-menu',
         '.fux-saved-menu',
         '.fux-ac-dropdown',
       ];
