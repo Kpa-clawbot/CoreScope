@@ -137,6 +137,10 @@ func main() {
 		}
 	}()
 
+	// Per-second stats file writer for the server's /api/perf/write-sources
+	// endpoint (#1120). Best-effort; never fatal.
+	StartStatsFileWriter(store, time.Second)
+
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {
 		log.Printf("Loaded %d channel keys for GRP_TXT decryption", len(channelKeys))

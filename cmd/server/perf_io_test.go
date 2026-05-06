@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -28,6 +29,13 @@ func TestPerfIOEndpoint_ReturnsValidJSON(t *testing.T) {
 		}
 	}
 
+	// /proc/self/io only exists on Linux. When absent (e.g. some test
+	// containers) we still expect well-formed JSON but skip the non-zero
+	// delta assertion.
+	if _, err := os.Stat("/proc/self/io"); err != nil {
+		t.Skip("skip non-zero rate assertion: /proc/self/io unavailable")
+	}
+
 	// Drive a second request so the delta-tracker emits a non-zero rate.
 	// Generate a small read-bytes signal between the two reads.
 	req2 := httptest.NewRequest("GET", "/api/perf/io", nil)
@@ -35,9 +43,6 @@ func TestPerfIOEndpoint_ReturnsValidJSON(t *testing.T) {
 	router.ServeHTTP(w2, req2)
 	var body2 map[string]interface{}
 	json.Unmarshal(w2.Body.Bytes(), &body2)
-	// At least one of the syscalls counters must report > 0 after activity —
-	// the second call definitely happened, so the implementation should track
-	// non-zero IO between samples.
 	any := false
 	for _, k := range []string{"readBytesPerSec", "writeBytesPerSec", "syscallsRead", "syscallsWrite"} {
 		if v, ok := body2[k].(float64); ok && v > 0 {

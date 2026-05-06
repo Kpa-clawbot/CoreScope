@@ -26,6 +26,38 @@ type DBStats struct {
 	WriteErrors            atomic.Int64
 	SignatureDrops         atomic.Int64
 	GroupCommitFlushes     atomic.Int64
+	// WALCommits tracks every successful tx.Commit() that may have flushed
+	// WAL pages. Incremented by group-commit flushes and any other Commit().
+	WALCommits atomic.Int64
+	// BackfillUpdates tracks per-named-backfill row write counts so an
+	// infinite-loop backfill (cf #1119) is obvious from the perf page.
+	BackfillUpdates sync.Map // name (string) -> *atomic.Int64
+}
+
+// IncBackfill increments the backfill counter for the given name, allocating
+// the counter on first use.
+func (s *DBStats) IncBackfill(name string) {
+	v, ok := s.BackfillUpdates.Load(name)
+	if !ok {
+		nc := new(atomic.Int64)
+		actual, loaded := s.BackfillUpdates.LoadOrStore(name, nc)
+		if loaded {
+			v = actual
+		} else {
+			v = nc
+		}
+	}
+	v.(*atomic.Int64).Add(1)
+}
+
+// SnapshotBackfills returns a name->count copy of all backfill counters.
+func (s *DBStats) SnapshotBackfills() map[string]int64 {
+	out := make(map[string]int64)
+	s.BackfillUpdates.Range(func(k, v interface{}) bool {
+		out[k.(string)] = v.(*atomic.Int64).Load()
+		return true
+	})
+	return out
 }
 
 // SetGroupCommit configures group-commit batching for InsertTransmission.
@@ -75,6 +107,7 @@ func (s *Store) flushLocked() error {
 		s.Stats.WriteErrors.Add(1)
 		return fmt.Errorf("group commit: %w", err)
 	}
+	s.Stats.WALCommits.Add(1)
 	return nil
 }
 
@@ -792,6 +825,11 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 				log.Printf("[db] group commit (max-rows) flush failed: %v", err)
 			}
 		}
+	} else {
+		// Non-group-commit mode: each prepared-stmt Exec auto-commits.
+		// Count one WAL commit per successful InsertTransmission so the
+		// perf page sees commit pressure even without group-commit batching.
+		s.Stats.WALCommits.Add(1)
 	}
 
 	return isNew, nil
@@ -1120,6 +1158,8 @@ func (s *Store) BackfillPathJSONAsync() {
 				if err != nil || len(hops) == 0 {
 					if _, execErr := s.db.Exec(`UPDATE observations SET path_json = '[]' WHERE id = ?`, r.id); execErr != nil {
 						log.Printf("[backfill] write error (id=%d): %v", r.id, execErr)
+					} else {
+						s.Stats.IncBackfill("path_json")
 					}
 					continue
 				}
@@ -1128,6 +1168,7 @@ func (s *Store) BackfillPathJSONAsync() {
 					log.Printf("[backfill] write error (id=%d): %v", r.id, execErr)
 				} else {
 					updated++
+					s.Stats.IncBackfill("path_json")
 				}
 			}
 			batchNum++
