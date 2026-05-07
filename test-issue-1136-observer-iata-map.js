@@ -113,12 +113,12 @@ test('skips observers without iata', () => {
 });
 
 test('returns empty map for null/undefined input', () => {
-  assert.deepStrictEqual(build(null), {});
-  assert.deepStrictEqual(build(undefined), {});
+  assert.strictEqual(Object.keys(build(null)).length, 0);
+  assert.strictEqual(Object.keys(build(undefined)).length, 0);
 });
 
 test('returns empty map when observers field is missing', () => {
-  assert.deepStrictEqual(build({ server_time: 'x' }), {});
+  assert.strictEqual(Object.keys(build({ server_time: 'x' })).length, 0);
 });
 
 test('back-compat: also accepts a top-level array (defensive)', () => {

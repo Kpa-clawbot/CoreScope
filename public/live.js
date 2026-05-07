@@ -52,6 +52,28 @@
     return false;
   }
   function setObserverIataMap(m) { observerIataMap = m || {}; }
+
+  /**
+   * Build observer_id → IATA map from the /api/observers response.
+   * The endpoint returns `{ observers: [...], server_time: "..." }`
+   * (cmd/server/types.go ObserverListResponse). Defensive: also accepts
+   * a bare array in case the API shape ever changes back, and ignores
+   * observers without an IATA. Returns a plain object (used as a hash).
+   * Exported for tests via window._liveBuildObserverIataMap.
+   * Fixes #1136 (regression introduced in #1080 which assumed array shape).
+   */
+  function buildObserverIataMap(data) {
+    var list = null;
+    if (Array.isArray(data)) list = data;
+    else if (data && Array.isArray(data.observers)) list = data.observers;
+    var m = {};
+    if (!list) return m;
+    for (var i = 0; i < list.length; i++) {
+      var o = list[i];
+      if (o && o.id != null && o.iata) m[o.id] = o.iata;
+    }
+    return m;
+  }
   let rainCanvas = null, rainCtx = null, rainDrops = [], rainRAF = null;
   const propagationBuffer = new Map(); // hash -> {timer, packets[]}
   let _onResize = null;
@@ -1042,16 +1064,13 @@
     (function initLiveRegionFilter() {
       var rfEl = document.getElementById('liveRegionFilter');
       if (!rfEl || !window.RegionFilter) return;
-      // Fetch observer roster to build observer_id → IATA map
-      fetch('/api/observers').then(function(r) { return r.json(); }).then(function(list) {
-        var m = {};
-        if (Array.isArray(list)) {
-          for (var i = 0; i < list.length; i++) {
-            var o = list[i];
-            if (o && o.id != null && o.iata) m[o.id] = o.iata;
-          }
-        }
-        setObserverIataMap(m);
+      // Fetch observer roster to build observer_id → IATA map.
+      // /api/observers returns `{observers:[...], server_time:"..."}`
+      // (cmd/server/types.go ObserverListResponse) — NOT a top-level array.
+      // Bug #1136: previously parsed as array → map empty → region filter
+      // dropped every packet.
+      fetch('/api/observers').then(function(r) { return r.json(); }).then(function(data) {
+        setObserverIataMap(buildObserverIataMap(data));
       }).catch(function() { /* leave map empty; filter will hide all when active */ });
       RegionFilter.init(rfEl, { dropdown: true });
       regionFilterChangeHandler = RegionFilter.onChange(function() { /* selection persisted by RegionFilter; future packets reflect it */ });
@@ -2127,6 +2146,8 @@
   window._liveGetNodeFilterKeys = function() { return nodeFilterKeys; };
   window._livePacketMatchesRegion = packetMatchesRegion;
   window._liveSetObserverIataMap = setObserverIataMap;
+  window._liveBuildObserverIataMap = buildObserverIataMap;
+  window._liveGetObserverIataMap = function() { return observerIataMap; };
   window._liveSetNodeFilter = setNodeFilter;
   window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
   window._liveResolveHopPositions = resolveHopPositions;
