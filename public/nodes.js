@@ -556,7 +556,38 @@
           <tr><td>Hash Prefix</td><td>${n.hash_size ? '<code style="font-family:var(--mono);font-weight:700">' + n.public_key.slice(0, n.hash_size * 2).toUpperCase() + '</code> (' + n.hash_size + '-byte)' : 'Unknown'}${n.hash_size_inconsistent ? ' <span style="color:var(--status-yellow);cursor:help" title="Seen: ' + (Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : []).join(', ') + '-byte">⚠️ varies</span>' : ''}</td></tr>
         </table>
 
-        <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>
+        <div class="node-full-card" id="node-packets">
+          ${(() => { const validPackets = adverts.filter(p => p.hash && p.timestamp); return `
+          <h4>Recent Packets (${validPackets.length})</h4>
+          <div class="node-activity-list">
+            ${validPackets.length ? validPackets.map(p => {
+              let decoded; try { decoded = JSON.parse(p.decoded_json); } catch {}
+              const typeLabel = p.payload_type === 4 ? '📡 Advert' : p.payload_type === 5 ? '💬 Channel' : p.payload_type === 2 ? '✉️ DM' : '📦 Packet';
+              const detail = decoded?.text ? ': ' + escapeHtml(truncate(decoded.text, 50)) : decoded?.name ? ' — ' + escapeHtml(decoded.name) : '';
+              const obs = p.observer_name || p.observer_id;
+              const snr = p.snr != null ? ` · SNR ${p.snr}dB` : '';
+              const rssi = p.rssi != null ? ` · RSSI ${p.rssi}dBm` : '';
+              const obsBadge = p.observation_count > 1 ? ` <span class="badge badge-obs" title="Seen ${p.observation_count} times">👁 ${p.observation_count}</span>` : '';
+              // Show hash size per advert if inconsistent
+              let hashSizeBadge = '';
+              if (n.hash_size_inconsistent && p.payload_type === 4 && p.raw_hex) {
+                const pb = parseInt(p.raw_hex.slice(2, 4), 16);
+                if ((pb & 0x3F) !== 0) {
+                  const hs = ((pb >> 6) & 0x3) + 1;
+                  const hsColor = hs >= 3 ? '#16a34a' : hs === 2 ? '#86efac' : '#f97316';
+                  const hsFg = hs === 2 ? '#064e3b' : '#fff';
+                  hashSizeBadge = ` <span class="badge" style="background:${hsColor};color:${hsFg};font-size:9px;font-family:var(--mono)">${hs}B</span>`;
+                }
+              }
+              return `<div class="node-activity-item">
+                <span class="node-activity-time">${renderNodeTimestampHtml(p.timestamp)}</span>
+                <span>${typeLabel}${detail}${hashSizeBadge}${obsBadge}${obs ? ' via ' + escapeHtml(obs) : ''}${snr}${rssi}</span>
+                <a href="#/packets/${p.hash}" class="ch-analyze-link" style="margin-left:8px;font-size:0.8em">Analyze →</a>
+              </div>`;
+            }).join('') : '<div class="text-muted">No recent packets</div>'}
+          </div>
+        `; })()}
+        </div>
 
         ${observers.length ? `<div class="node-full-card" id="node-observers">
           ${(() => { const regions = [...new Set(observers.map(o => o.iata).filter(Boolean))]; return regions.length ? `<div style="margin-bottom:8px"><strong>Regions:</strong> ${regions.map(r => '<span class="badge" style="margin:0 2px">' + escapeHtml(r) + '</span>').join(' ')}</div>` : ''; })()}
@@ -598,38 +629,7 @@
           <div id="fullPathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
         </div>
 
-        <div class="node-full-card" id="node-packets">
-          ${(() => { const validPackets = adverts.filter(p => p.hash && p.timestamp); return `
-          <h4>Recent Packets (${validPackets.length})</h4>
-          <div class="node-activity-list">
-            ${validPackets.length ? validPackets.map(p => {
-              let decoded; try { decoded = JSON.parse(p.decoded_json); } catch {}
-              const typeLabel = p.payload_type === 4 ? '📡 Advert' : p.payload_type === 5 ? '💬 Channel' : p.payload_type === 2 ? '✉️ DM' : '📦 Packet';
-              const detail = decoded?.text ? ': ' + escapeHtml(truncate(decoded.text, 50)) : decoded?.name ? ' — ' + escapeHtml(decoded.name) : '';
-              const obs = p.observer_name || p.observer_id;
-              const snr = p.snr != null ? ` · SNR ${p.snr}dB` : '';
-              const rssi = p.rssi != null ? ` · RSSI ${p.rssi}dBm` : '';
-              const obsBadge = p.observation_count > 1 ? ` <span class="badge badge-obs" title="Seen ${p.observation_count} times">👁 ${p.observation_count}</span>` : '';
-              // Show hash size per advert if inconsistent
-              let hashSizeBadge = '';
-              if (n.hash_size_inconsistent && p.payload_type === 4 && p.raw_hex) {
-                const pb = parseInt(p.raw_hex.slice(2, 4), 16);
-                if ((pb & 0x3F) !== 0) {
-                  const hs = ((pb >> 6) & 0x3) + 1;
-                  const hsColor = hs >= 3 ? '#16a34a' : hs === 2 ? '#86efac' : '#f97316';
-                  const hsFg = hs === 2 ? '#064e3b' : '#fff';
-                  hashSizeBadge = ` <span class="badge" style="background:${hsColor};color:${hsFg};font-size:9px;font-family:var(--mono)">${hs}B</span>`;
-                }
-              }
-              return `<div class="node-activity-item">
-                <span class="node-activity-time">${renderNodeTimestampHtml(p.timestamp)}</span>
-                <span>${typeLabel}${detail}${hashSizeBadge}${obsBadge}${obs ? ' via ' + escapeHtml(obs) : ''}${snr}${rssi}</span>
-                <a href="#/packets/${p.hash}" class="ch-analyze-link" style="margin-left:8px;font-size:0.8em">Analyze →</a>
-              </div>`;
-            }).join('') : '<div class="text-muted">No recent packets</div>'}
-          </div>
-        `; })()}
-        </div>`;
+        <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>`;
 
       // Map
       if (hasLoc) {
@@ -1359,29 +1359,6 @@
           </dl>
         </div>
 
-        <div class="node-detail-section skew-detail-section" id="node-clock-skew" style="display:none"></div>
-
-        ${observers.length ? `<div class="node-detail-section">
-          ${(() => { const regions = [...new Set(observers.map(o => o.iata).filter(Boolean))]; return regions.length ? `<div style="margin-bottom:6px;font-size:12px"><strong>Regions:</strong> ${regions.join(', ')}</div>` : ''; })()}
-          <h4>Heard By (${observers.length} observer${observers.length > 1 ? 's' : ''})</h4>
-          <div class="observer-list">
-            ${observers.map(o => `<div class="observer-row" style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">
-              <span style="font-weight:600">${escapeHtml(o.observer_name || o.observer_id)}${o.iata ? ' <span class="badge" style="font-size:10px">' + escapeHtml(o.iata) + '</span>' : ''}</span>
-              <span style="color:var(--text-muted)">${o.packetCount} pkts · ${o.avgSnr != null ? 'SNR ' + Number(o.avgSnr).toFixed(1) + 'dB' : ''}${o.avgRssi != null ? ' · RSSI ' + Number(o.avgRssi).toFixed(0) : ''}</span>
-            </div>`).join('')}
-          </div>
-        </div>` : ''}
-
-        <div class="node-detail-section" id="panelNeighborsSection">
-          <h4 id="panelNeighborsHeader">Neighbors</h4>
-          <div id="panelNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
-        </div>
-
-        <div class="node-detail-section" id="pathsSection">
-          <h4>Paths Through This Node</h4>
-          <div id="pathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
-        </div>
-
         <div class="node-detail-section">
           ${(() => { const validPackets = adverts.filter(a => a.hash && a.timestamp); return `
           <h4>Recent Packets (${validPackets.length})</h4>
@@ -1407,6 +1384,29 @@
           </div>
           `; })()}
         </div>
+
+        ${observers.length ? `<div class="node-detail-section">
+          ${(() => { const regions = [...new Set(observers.map(o => o.iata).filter(Boolean))]; return regions.length ? `<div style="margin-bottom:6px;font-size:12px"><strong>Regions:</strong> ${regions.join(', ')}</div>` : ''; })()}
+          <h4>Heard By (${observers.length} observer${observers.length > 1 ? 's' : ''})</h4>
+          <div class="observer-list">
+            ${observers.map(o => `<div class="observer-row" style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">
+              <span style="font-weight:600">${escapeHtml(o.observer_name || o.observer_id)}${o.iata ? ' <span class="badge" style="font-size:10px">' + escapeHtml(o.iata) + '</span>' : ''}</span>
+              <span style="color:var(--text-muted)">${o.packetCount} pkts · ${o.avgSnr != null ? 'SNR ' + Number(o.avgSnr).toFixed(1) + 'dB' : ''}${o.avgRssi != null ? ' · RSSI ' + Number(o.avgRssi).toFixed(0) : ''}</span>
+            </div>`).join('')}
+          </div>
+        </div>` : ''}
+
+        <div class="node-detail-section" id="panelNeighborsSection">
+          <h4 id="panelNeighborsHeader">Neighbors</h4>
+          <div id="panelNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
+        </div>
+
+        <div class="node-detail-section" id="pathsSection">
+          <h4>Paths Through This Node</h4>
+          <div id="pathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
+        </div>
+
+        <div class="node-detail-section skew-detail-section" id="node-clock-skew" style="display:none"></div>
       </div>`;
 
     // Init map
