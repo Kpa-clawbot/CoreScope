@@ -1006,11 +1006,23 @@
         }
         // Live DOM updates for branding
         if (inp.dataset.key === 'branding.siteName') {
+          // Post-rebrand: the navbar text was replaced by an <img.brand-logo>.
+          // Keep the override path working by mutating the img's alt text +
+          // the document title. Legacy .brand-text fallback retained for
+          // any operator who shipped a custom build.
+          var brandImg = document.querySelector('.nav-brand .brand-logo');
+          if (brandImg) brandImg.setAttribute('alt', inp.value);
           var brandEl = document.querySelector('.brand-text');
           if (brandEl) brandEl.textContent = inp.value;
           document.title = inp.value;
         }
         if (inp.dataset.key === 'branding.logoUrl') {
+          // Swap the navbar logo image src in place. Empty value reverts to
+          // the bundled CoreScope SVG.
+          var brandImg2 = document.querySelector('.nav-brand .brand-logo');
+          if (brandImg2) {
+            brandImg2.setAttribute('src', inp.value || 'img/corescope-logo.svg');
+          }
           var iconEl = document.querySelector('.brand-icon');
           if (iconEl) {
             if (inp.value) { iconEl.innerHTML = '<img src="' + inp.value + '" style="height:24px" onerror="this.style.display=\'none\'">'; }
@@ -1441,11 +1453,15 @@
         const userTheme = JSON.parse(saved);
         if (userTheme.branding) {
           if (userTheme.branding.siteName) {
+            var brandImgInit = document.querySelector('.nav-brand .brand-logo');
+            if (brandImgInit) brandImgInit.setAttribute('alt', userTheme.branding.siteName);
             const brandEl = document.querySelector('.brand-text');
             if (brandEl) brandEl.textContent = userTheme.branding.siteName;
             document.title = userTheme.branding.siteName;
           }
           if (userTheme.branding.logoUrl) {
+            var brandImgInit2 = document.querySelector('.nav-brand .brand-logo');
+            if (brandImgInit2) brandImgInit2.setAttribute('src', userTheme.branding.logoUrl);
             const iconEl = document.querySelector('.brand-icon');
             if (iconEl) iconEl.innerHTML = '<img src="' + userTheme.branding.logoUrl + '" style="height:24px" onerror="this.style.display=\'none\'">';
           }

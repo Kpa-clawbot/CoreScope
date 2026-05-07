@@ -544,10 +544,14 @@
     if (br) {
       if (br.siteName) {
         document.title = br.siteName;
+        var brandImgApply = document.querySelector('.nav-brand .brand-logo');
+        if (brandImgApply) brandImgApply.setAttribute('alt', br.siteName);
         var brandEl = document.querySelector('.brand-text');
         if (brandEl) brandEl.textContent = br.siteName;
       }
       if (br.logoUrl) {
+        var brandImgApply2 = document.querySelector('.nav-brand .brand-logo');
+        if (brandImgApply2) brandImgApply2.setAttribute('src', br.logoUrl);
         var iconEl = document.querySelector('.brand-icon');
         if (iconEl) iconEl.innerHTML = '<img src="' + br.logoUrl + '" style="height:24px" onerror="this.style.display=\'none\'">';
       }
@@ -1360,11 +1364,15 @@
           setOverride(section, key, inp.value);
           // Live branding updates
           if (section === 'branding' && key === 'siteName') {
+            var brandImgLive = document.querySelector('.nav-brand .brand-logo');
+            if (brandImgLive) brandImgLive.setAttribute('alt', inp.value);
             var el = document.querySelector('.brand-text');
             if (el) el.textContent = inp.value;
             document.title = inp.value;
           }
           if (section === 'branding' && key === 'logoUrl') {
+            var brandImgLive2 = document.querySelector('.nav-brand .brand-logo');
+            if (brandImgLive2) brandImgLive2.setAttribute('src', inp.value || 'img/corescope-logo.svg');
             var iconEl = document.querySelector('.brand-icon');
             if (iconEl) {
               if (inp.value) iconEl.innerHTML = '<img src="' + inp.value + '" style="height:24px" onerror="this.style.display=\'none\'">';
@@ -1632,11 +1640,15 @@
     var overrides = readOverrides();
     if (overrides.branding) {
       if (overrides.branding.siteName) {
+        var brandImgBoot = document.querySelector('.nav-brand .brand-logo');
+        if (brandImgBoot) brandImgBoot.setAttribute('alt', overrides.branding.siteName);
         var brandEl = document.querySelector('.brand-text');
         if (brandEl) brandEl.textContent = overrides.branding.siteName;
         document.title = overrides.branding.siteName;
       }
       if (overrides.branding.logoUrl) {
+        var brandImgBoot2 = document.querySelector('.nav-brand .brand-logo');
+        if (brandImgBoot2) brandImgBoot2.setAttribute('src', overrides.branding.logoUrl);
         var iconEl = document.querySelector('.brand-icon');
         if (iconEl) iconEl.innerHTML = '<img src="' + overrides.branding.logoUrl + '" style="height:24px" onerror="this.style.display=\'none\'">';
       }

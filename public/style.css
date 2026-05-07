@@ -440,8 +440,11 @@ input[type="week"] {
   height: 36px;
   width: auto;
   max-height: 36px;
-  /* The SVG defines its own --logo-* vars with fallbacks to --accent etc.,
-     so it picks up the customizer-driven theme automatically. */
+  /* The SVG bakes its CoreScope brand palette in (CORE = #cfd9c9, SCOPE =
+     #2c8c8c). It does NOT inherit the customizer's --accent / --nav-bg vars
+     today — that's a deliberate brand-consistency choice. If you want
+     theme-reactive logo colors, expose --logo-* CSS vars at :root and have
+     the SVG read them directly via CSS (not as inline style attrs). */
 }
 .live-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);

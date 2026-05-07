@@ -37,7 +37,8 @@
   max-width: min(720px, 90vw);
   height: auto;
   margin: 0 auto 16px;
-  /* SVG inherits theming via its own --logo-* / --accent-derived vars. */
+  /* Hero SVG uses the baked CoreScope brand palette — does not theme via
+     --accent. See .brand-logo in style.css for the rationale. */
 }
 .home-hero h1 {
   font: 700 1.5rem/1.2 var(--font);
