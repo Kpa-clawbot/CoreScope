@@ -514,7 +514,7 @@
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   }
 
-  function applyCSS(effectiveConfig) {
+  function applyCSS(effectiveConfig, userOverrides) {
     var dark = isDarkMode();
     var themeSection = dark
       ? Object.assign({}, effectiveConfig.theme || {}, effectiveConfig.themeDark || {})
@@ -528,6 +528,19 @@
         root.setProperty(THEME_CSS_MAP[key], themeSection[key]);
       }
     }
+
+    // Logo brand colors mirror --accent / --accent-hover ONLY when an
+    // operator has actually overridden them via the customizer. We check
+    // userOverrides (not the merged effective config), so the server-default
+    // accent (#4a9eff) does NOT clobber the sage/teal :root brand defaults
+    // out-of-the-box. When an operator picks a theme, customizer writes the
+    // override to localStorage, the override flows through here, and the
+    // wordmark recolors to follow the chosen accent.
+    var ovTheme = (userOverrides && (dark
+      ? Object.assign({}, userOverrides.theme || {}, userOverrides.themeDark || {})
+      : (userOverrides.theme || {}))) || {};
+    if (ovTheme.accent) root.setProperty('--logo-accent', ovTheme.accent);
+    if (ovTheme.accentHover) root.setProperty('--logo-accent-hi', ovTheme.accentHover);
 
     // Derived vars
     if (themeSection.background) root.setProperty('--content-bg', themeSection.contentBg || themeSection.background);
@@ -614,7 +627,7 @@
     var overrides = readOverrides();
     var effective = computeEffective(_serverDefaults || {}, overrides);
     window.SITE_CONFIG = effective;
-    applyCSS(effective);
+    applyCSS(effective, overrides);
   }
 
   // ── setOverride / clearOverride ──
@@ -1392,6 +1405,9 @@
           // Optimistic CSS update (Decision #12)
           var cssVar = THEME_CSS_MAP[key];
           if (cssVar) document.documentElement.style.setProperty(cssVar, inp.value);
+          // Mirror to logo brand vars so the wordmark recolors live too.
+          if (key === 'accent') document.documentElement.style.setProperty('--logo-accent', inp.value);
+          if (key === 'accentHover') document.documentElement.style.setProperty('--logo-accent-hi', inp.value);
           // Update hex display
           var hex = inp.parentElement.querySelector('.cust-hex');
           if (hex) hex.textContent = inp.value;
@@ -1656,6 +1672,13 @@
     for (var key in THEME_CSS_MAP) {
       if (themeSection[key]) root.setProperty(THEME_CSS_MAP[key], themeSection[key]);
     }
+    // Mirror accent → logo brand vars ONLY when present in overrides (so the
+    // server-default accent never clobbers the sage/teal :root brand defaults).
+    var ovTheme = dark
+      ? Object.assign({}, earlyOverrides.theme || {}, earlyOverrides.themeDark || {})
+      : (earlyOverrides.theme || {});
+    if (ovTheme.accent) root.setProperty('--logo-accent', ovTheme.accent);
+    if (ovTheme.accentHover) root.setProperty('--logo-accent-hi', ovTheme.accentHover);
     if (themeSection.background) root.setProperty('--content-bg', themeSection.contentBg || themeSection.background);
     if (themeSection.surface1) root.setProperty('--card-bg', themeSection.cardBg || themeSection.surface1);
     // Apply node/type colors from overrides early

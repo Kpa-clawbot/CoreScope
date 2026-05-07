@@ -543,6 +543,9 @@
     for (var key in THEME_CSS_MAP) {
       if (t[key]) document.documentElement.style.setProperty(THEME_CSS_MAP[key], t[key]);
     }
+    // Mirror accent → logo brand vars so the wordmark follows the theme.
+    if (t.accent) document.documentElement.style.setProperty('--logo-accent', t.accent);
+    if (t.accentHover) document.documentElement.style.setProperty('--logo-accent-hi', t.accentHover);
     // Derived vars that reference other vars — need explicit override
     if (t.background) {
       document.documentElement.style.setProperty('--content-bg', t.background);
@@ -1447,6 +1450,9 @@
         for (const [key, val] of Object.entries(themeData)) {
           if (THEME_CSS_MAP[key]) document.documentElement.style.setProperty(THEME_CSS_MAP[key], val);
         }
+        // Mirror accent → logo brand vars (matches applyThemePreview()).
+        if (themeData.accent) document.documentElement.style.setProperty('--logo-accent', themeData.accent);
+        if (themeData.accentHover) document.documentElement.style.setProperty('--logo-accent-hi', themeData.accentHover);
         // Derived vars
         if (themeData.background) document.documentElement.style.setProperty('--content-bg', themeData.background);
         if (themeData.surface1) document.documentElement.style.setProperty('--card-bg', themeData.surface1);
