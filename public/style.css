@@ -1590,7 +1590,10 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .hamburger { display: inline-flex; }
   .nav-more-wrap { display: none !important; }
   .nav-links {
-    display: none; position: absolute; top: 52px; left: 0; right: 0;
+    /* Issue #1109: position:fixed keeps the mobile dropdown anchored to
+       the viewport instead of the sticky navbar, so it cannot be clipped
+       by navbar overflow constraints while opening below the 52px bar. */
+    display: none; position: fixed; top: 52px; left: 0; right: 0;
     background: var(--nav-bg); flex-direction: column; padding: 8px 0;
     box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 1100;
     max-height: calc(100dvh - 52px); overflow-y: auto;
