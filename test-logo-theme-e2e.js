@@ -58,7 +58,7 @@ async function main() {
   }
 
   let passed = 0;
-  const total = 6;
+  const total = 7;
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
@@ -281,6 +281,42 @@ async function main() {
       fail(`mobile: visible navbar logo right edge ${mobile.visRectRight}px overflows viewport (${mobile.viewportWidth}px)`);
     }
     console.log(`  ✅ mobile (360px): mark-only swap active (full hidden, mark visible, right=${mobile.visRectRight}px ≤ viewport ${mobile.viewportWidth}px)`);
+    passed++;
+
+    // 7. Desktop wordmark must NOT clip — every <text> element's bbox in
+    //    user-space coords must lie fully inside the SVG's viewBox. The
+    //    original navbar SVG ships with viewBox "170 10 860 280" (right
+    //    edge x=1030), but the SCOPE <text> with text-anchor="start" at
+    //    x=773.8 + width≈338 extends to x≈1111 — clipped to "SCOP" at
+    //    every desktop viewport width. Fix: widen the viewBox so the
+    //    wordmark fits.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.evaluate(() => { window.location.hash = '#/'; });
+    await page.waitForFunction(() => location.hash === '#/');
+    await page.waitForSelector('.nav-brand svg.brand-logo', { timeout: 8000 });
+    await page.waitForTimeout(150);
+    const clip = await page.evaluate(() => {
+      const svg = document.querySelector('.nav-brand svg.brand-logo');
+      if (!svg) return { error: '.nav-brand svg.brand-logo missing' };
+      const vb = (svg.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+      if (vb.length !== 4) return { error: 'viewBox malformed: ' + svg.getAttribute('viewBox') };
+      const [vx, vy, vw, vh] = vb;
+      const offenders = [];
+      svg.querySelectorAll('text').forEach((t) => {
+        const tc = (t.textContent || '').trim();
+        if (tc !== 'CORE' && tc !== 'SCOPE') return;
+        const bb = t.getBBox();
+        if (bb.x < vx - 0.5 || bb.x + bb.width > vx + vw + 0.5) {
+          offenders.push({ text: tc, bboxX: bb.x, bboxRight: bb.x + bb.width, vbX: vx, vbRight: vx + vw });
+        }
+      });
+      return { viewBox: vb, offenders };
+    });
+    if (clip.error) fail(clip.error);
+    if (clip.offenders && clip.offenders.length) {
+      fail(`desktop: wordmark <text> overflows SVG viewBox (will be clipped): ${JSON.stringify(clip.offenders)}`);
+    }
+    console.log(`  ✅ desktop (1280px): CORE/SCOPE bboxes fit inside viewBox ${JSON.stringify(clip.viewBox)}`);
     passed++;
 
     await browser.close();

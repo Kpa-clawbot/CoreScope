@@ -497,9 +497,10 @@ input[type="week"] {
   height: 36px;
   /* Width matches the inline SVG's effective content aspect (~3.08:1)
      after cropping to the wordmark+nodes region in the navbar viewBox.
-     Pinned explicitly so layout doesn't shift if the SVG is replaced
-     (issue #1046 1115px viewport regression). */
-  width: 111px;
+       /* Pinned to match the SVG intrinsic width (#1141 followup: viewBox
+     widened to 150 10 970 280 to fit CORE/SCOPE wordmark; intrinsic
+     width 125 keeps the text legible at the same ~36px height). */
+  width: 125px;
   max-height: 36px;
   /* The logo is inlined into the DOM (PR #1137) so it inherits page
      CSS variables; theme via --logo-text / --logo-accent / etc. defined
@@ -1469,7 +1470,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 @media (max-width: 900px) {
   .panel-right { width: 320px; min-width: 320px; }
   .nav-stats { display: none; }
-  .brand-logo { height: 32px; width: 99px; }
+  .brand-logo { height: 32px; width: 112px; }
   .nav-link { padding: 14px 8px; font-size: 13px; }
   .map-controls { width: 180px; font-size: 12px; }
 }

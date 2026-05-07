@@ -74,7 +74,7 @@
       img.className = 'brand-logo';
       img.setAttribute('src', url);
       img.setAttribute('alt', alt || node.getAttribute('aria-label') || 'Brand');
-      img.setAttribute('width', '111');
+      img.setAttribute('width', '125');
       img.setAttribute('height', '36');
       node.parentNode.replaceChild(img, node);
     } else {
