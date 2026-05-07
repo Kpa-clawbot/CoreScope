@@ -1065,6 +1065,28 @@ window.addEventListener('DOMContentLoaded', () => {
         overflowQueue[i].classList.add('is-overflow');
         i++;
       }
+      // #1139 Bug B: floor the More menu at >=2 items. The greedy
+      // fits() loop above is happy to stop after pushing exactly ONE
+      // link into overflow (commonly "🎵 Lab" at ~1600px viewports),
+      // producing a degenerate single-item dropdown. If exactly one
+      // link overflowed, promote one more from the queue so the user
+      // sees a useful menu instead of a one-item fragment. Skip when
+      // nothing overflowed (everything fits inline → More is hidden,
+      // which is the correct UX) and skip when the queue is exhausted.
+      var overflowedCount = allLinks.filter(a => a.classList.contains('is-overflow')).length;
+      if (overflowedCount === 1) {
+        if (i < overflowQueue.length) {
+          overflowQueue[i].classList.add('is-overflow');
+          i++;
+        } else {
+          // Defensive: queue exhausted with exactly 1 overflowed link
+          // means we cannot satisfy the >=2 floor (only one promotable
+          // link existed). Surface it loudly instead of silently
+          // shipping the degenerate single-item dropdown the floor
+          // was added to prevent.
+          console.warn('[nav] More menu floor: overflowQueue exhausted with 1 item; cannot enforce >=2 floor');
+        }
+      }
       rebuildMoreMenu();
     }
 
