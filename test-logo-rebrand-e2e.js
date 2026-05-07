@@ -66,7 +66,7 @@ async function main() {
   }
 
   let passed = 0;
-  const total = 5;
+  const total = 6;
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
@@ -149,6 +149,44 @@ async function main() {
     if (b.status !== 200 || !/svg/i.test(b.ct)) fail(`/img/corescope-hero.svg → status=${b.status} ct=${b.ct}`);
     console.log('  ✅ both /img/corescope-{logo,hero}.svg return 200 with svg content-type');
     passed++;
+
+    // 6. Customizer override path still works after the rebrand. Operators
+    // can override branding.siteName + branding.logoUrl via the user-theme
+    // localStorage key; the old code mutated .brand-text / .brand-icon
+    // (which no longer exist), so a naive removal silently breaks the
+    // override flow. Verify the navbar logo <img> picks up the override.
+    await page.evaluate(() => {
+      try {
+        localStorage.setItem('meshcore-user-theme', JSON.stringify({
+          branding: { siteName: 'OverrideSite', logoUrl: '/img/corescope-logo.svg?override=1' }
+        }));
+      } catch (_) {}
+    });
+    await page.goto(BASE + '/#/', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.nav-brand img', { timeout: 8000 });
+    // Give customize.js a tick to apply the override after DOMContentLoaded.
+    await page.waitForFunction(() => {
+      var img = document.querySelector('.nav-brand img');
+      return img && /override=1/.test(img.getAttribute('src') || '');
+    }, { timeout: 5000 }).catch(() => {});
+    const overrideState = await page.evaluate(() => {
+      var img = document.querySelector('.nav-brand img');
+      return {
+        src: img ? img.getAttribute('src') || '' : null,
+        alt: img ? img.getAttribute('alt') || '' : null,
+        title: document.title,
+      };
+    });
+    if (!overrideState.src || !/override=1/.test(overrideState.src)) {
+      fail(`customizer logoUrl override did not propagate to navbar img (src=${overrideState.src})`);
+    }
+    if (overrideState.title !== 'OverrideSite') {
+      fail(`customizer siteName override did not update document.title (got: ${overrideState.title})`);
+    }
+    console.log('  ✅ customizer branding.siteName + branding.logoUrl overrides still apply post-rebrand');
+    passed++;
+    // Clean up the override so subsequent test runs aren't polluted.
+    await page.evaluate(() => { try { localStorage.removeItem('meshcore-user-theme'); } catch (_) {} });
 
     await browser.close();
     console.log(`\ntest-logo-rebrand-e2e.js: ${passed}/${total} PASS`);
