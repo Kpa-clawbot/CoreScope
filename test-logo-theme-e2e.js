@@ -17,6 +17,11 @@
  *      fog/teal split survives the light-theme rebind.
  *   5. The hero wordmark is also duotone (CORE !== SCOPE) under both
  *      themes.
+ *   6. At mobile width (360x640), the navbar swaps to a mark-only
+ *      .brand-mark-only inline SVG (visible) while the full .brand-logo
+ *      is display:none — preventing the SCOPE→SCOF clip seen with the
+ *      99px mobile pin from #1137. Also asserts the visible navbar logo
+ *      fits within .nav-left's right edge (no horizontal overflow).
  *
  * Designed to FAIL on the pre-fix branch (where the SVGs are loaded as
  * <img>, the wordmark fill is baked to #cfd9c9, and the hero SVG ships a
@@ -53,7 +58,7 @@ async function main() {
   }
 
   let passed = 0;
-  const total = 5;
+  const total = 6;
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
@@ -229,6 +234,53 @@ async function main() {
       fail(`hero (light) wordmark is monotone — CORE=${heroLight.m.CORE} SCOPE=${heroLight.m.SCOPE}; duotone must survive light-theme rebind`);
     }
     console.log(`  ✅ hero duotone preserved (dark: CORE=${heroDark.m.CORE} SCOPE=${heroDark.m.SCOPE}; light: CORE=${heroLight.m.CORE} SCOPE=${heroLight.m.SCOPE})`);
+    passed++;
+
+    // 6. Mobile fit: at 360x640 the full wordmark logo must be hidden and
+    //    a mark-only .brand-mark-only inline SVG must take its place. Also
+    //    asserts the visible logo's right edge does not overflow .nav-left.
+    await page.setViewportSize({ width: 360, height: 640 });
+    await page.evaluate(() => { window.location.hash = '#/'; });
+    await page.waitForFunction(() => location.hash === '#/');
+    await page.waitForSelector('.nav-brand', { timeout: 8000 });
+    // Allow CSS media query to settle.
+    await page.waitForTimeout(100);
+
+    const mobile = await page.evaluate(() => {
+      const brand = document.querySelector('.nav-brand');
+      if (!brand) return { error: '.nav-brand missing' };
+      const full = brand.querySelector('svg.brand-logo');
+      const mark = brand.querySelector('svg.brand-mark-only');
+      const left = document.querySelector('.nav-left');
+      const fullVisible = full ? getComputedStyle(full).display !== 'none' : null;
+      const markVisible = mark ? getComputedStyle(mark).display !== 'none' : null;
+      const visibleSvg = (mark && markVisible) ? mark : (full && fullVisible) ? full : null;
+      const visRect = visibleSvg ? visibleSvg.getBoundingClientRect() : null;
+      const leftRect = left ? left.getBoundingClientRect() : null;
+      return {
+        hasFull: !!full,
+        hasMark: !!mark,
+        fullVisible,
+        markVisible,
+        visRectRight: visRect ? visRect.right : null,
+        leftRectRight: leftRect ? leftRect.right : null,
+        viewportWidth: window.innerWidth,
+      };
+    });
+    if (mobile.error) fail(mobile.error);
+    if (!mobile.hasMark) {
+      fail(`mobile: .brand-mark-only inline SVG missing — required to avoid SCOPE→SCOF clip on ≤400px viewports`);
+    }
+    if (!mobile.markVisible) {
+      fail(`mobile: .brand-mark-only is hidden at 360px — must be display!=none on ≤400px viewports (computed: hidden)`);
+    }
+    if (mobile.fullVisible) {
+      fail(`mobile: .brand-logo (full wordmark SVG) still display!=none at 360px — must be hidden so it cannot clip; visibleRight=${mobile.visRectRight}`);
+    }
+    if (mobile.visRectRight !== null && mobile.viewportWidth > 0 && mobile.visRectRight > mobile.viewportWidth) {
+      fail(`mobile: visible navbar logo right edge ${mobile.visRectRight}px overflows viewport (${mobile.viewportWidth}px)`);
+    }
+    console.log(`  ✅ mobile (360px): mark-only swap active (full hidden, mark visible, right=${mobile.visRectRight}px ≤ viewport ${mobile.viewportWidth}px)`);
     passed++;
 
     await browser.close();
