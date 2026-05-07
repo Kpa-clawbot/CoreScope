@@ -66,8 +66,9 @@ var (
 // removed, that test fails because dispatch becomes synchronous and exceeds
 // the 50ms boot budget.
 func startFromPubkeyBackfill(dbPath string, chunkSize int, yieldDuration time.Duration) {
-	// RED: synchronous — green commit adds `go` to make the test pass.
-	backfillFromPubkeyAsync(dbPath, chunkSize, yieldDuration)
+	// MUST stay `go` — TestBackfillFromPubkey_DoesNotBlockBoot fails if
+	// this becomes synchronous (boot dispatch budget exceeds 50ms).
+	go backfillFromPubkeyAsync(dbPath, chunkSize, yieldDuration)
 }
 
 // backfillFromPubkeyAsync scans transmissions where from_pubkey IS NULL and

@@ -538,7 +538,9 @@ func main() {
 	go backfillResolvedPathsAsync(store, dbPath, 5000, 100*time.Millisecond, cfg.BackfillHours())
 	// #1143: backfill from_pubkey for legacy ADVERT rows. Async so even
 	// 100K+ rows can't block boot; queries handle NULL gracefully.
-	go backfillFromPubkeyAsync(dbPath, 5000, 100*time.Millisecond)
+	// startFromPubkeyBackfill wraps the goroutine dispatch so the async
+	// contract is testable (see TestBackfillFromPubkey_DoesNotBlockBoot).
+	startFromPubkeyBackfill(dbPath, 5000, 100*time.Millisecond)
 
 	// Migrate old content hashes in background (one-time, idempotent).
 	go migrateContentHashesAsync(store, 5000, 100*time.Millisecond)
