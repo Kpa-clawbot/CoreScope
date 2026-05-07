@@ -842,7 +842,40 @@
       });
 
     } catch (e) {
-      body.innerHTML = `<div class="text-muted" style="padding:40px">Failed to load node: ${e.message}</div>`;
+      // #1150: surface a real error state in BOTH the back-row title and the body
+      // when /api/nodes/{pubkey} returns 404 (or any failure). Otherwise the title
+      // stays "Loading…" forever and there's no link back to the Nodes list.
+      const msg = (e && e.message) || '';
+      const is404 = /\b404\b/.test(msg) || /not\s*found/i.test(msg);
+      const titleEl = document.querySelector('.node-full-title');
+      if (titleEl) {
+        titleEl.textContent = is404
+          ? 'Node not found — ' + (pubkey || '').slice(0, 12) + '…'
+          : 'Failed to load node';
+      }
+      const safePubkey = escapeHtml(pubkey || '');
+      const headline = is404 ? 'Node not found' : 'Failed to load node';
+      const detail = is404
+        ? 'No node matched the requested public key on this instance. It may exist on another deployment, or it may have been evicted/blacklisted here.'
+        : 'The node detail API call failed: ' + escapeHtml(msg);
+      body.innerHTML =
+        '<div class="node-full-card" style="padding:24px;margin:16px auto;max-width:560px;text-align:center">' +
+          '<div style="font-size:18px;font-weight:600;margin-bottom:8px">' + headline + '</div>' +
+          '<div class="mono" style="font-size:11px;color:var(--text-muted);word-break:break-all;margin-bottom:12px">' + safePubkey + '</div>' +
+          '<div style="color:var(--text-muted);margin-bottom:16px">' + detail + '</div>' +
+          '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">' +
+            '<a href="#/nodes" class="btn-primary" style="text-decoration:none;padding:6px 14px">← Back to Nodes</a>' +
+            '<button id="nodeRetryBtn" class="btn-primary" style="padding:6px 14px">Try again</button>' +
+          '</div>' +
+        '</div>';
+      const retryBtn = document.getElementById('nodeRetryBtn');
+      if (retryBtn) {
+        retryBtn.addEventListener('click', function () {
+          if (titleEl) titleEl.textContent = 'Loading…';
+          body.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+          loadFullNode(pubkey);
+        });
+      }
     }
   }
 
