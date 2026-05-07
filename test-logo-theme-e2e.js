@@ -12,6 +12,11 @@
  *      reachable via the inline SVG in the home-hero region).
  *   3. The hero wordmark CORE/SCOPE compute-fills also drop the legacy
  *      sage hex when the page theme is Light.
+ *   4. The navbar wordmark is duotone — CORE fill !== SCOPE fill — and
+ *      remains so under both default (dark) and Light themes. Proves the
+ *      fog/teal split survives the light-theme rebind.
+ *   5. The hero wordmark is also duotone (CORE !== SCOPE) under both
+ *      themes.
  *
  * Designed to FAIL on the pre-fix branch (where the SVGs are loaded as
  * <img>, the wordmark fill is baked to #cfd9c9, and the hero SVG ships a
@@ -48,7 +53,7 @@ async function main() {
   }
 
   let passed = 0;
-  const total = 3;
+  const total = 5;
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
@@ -149,6 +154,81 @@ async function main() {
       }
     }
     console.log(`  ✅ hero wordmark fills are theme-reactive (${heroWordmarkFills.out.map((w) => w.tc + '=' + w.fill).join(', ')})`);
+    passed++;
+
+    // 4 & 5. Duotone — CORE fill must differ from SCOPE fill in BOTH navbar
+    //   and hero, under BOTH default (dark) and Light themes. Proves the
+    //   fog/teal split is preserved across theme rebinds.
+    async function fillsByText(rootSelector) {
+      return await page.evaluate((sel) => {
+        const root = document.querySelector(sel);
+        if (!root) return { error: sel + ' missing' };
+        const m = {};
+        root.querySelectorAll('svg text').forEach((t) => {
+          const tc = (t.textContent || '').trim();
+          if (tc === 'CORE' || tc === 'SCOPE') m[tc] = getComputedStyle(t).fill;
+        });
+        return { m };
+      }, rootSelector);
+    }
+    function isNearWhiteOrBlack(rgb) {
+      const m = String(rgb).match(/rgb\((\d+),\s*(\d+),\s*(\d+)/);
+      if (!m) return false;
+      const [r, g, b] = [+m[1], +m[2], +m[3]];
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      // near-white: all >= 235.  near-black: all <= 25 AND low chroma.
+      if (r >= 235 && g >= 235 && b >= 235) return true;
+      if (r <= 25 && g <= 25 && b <= 25) return true;
+      // also flag fully-desaturated greys (chroma < 10)
+      if ((max - min) < 10 && max > 60 && max < 200) return true;
+      return false;
+    }
+
+    // Navigate back to root + force DEFAULT (dark) theme.
+    await page.evaluate(() => { window.location.hash = '#/'; });
+    await page.waitForFunction(() => location.hash === '#/');
+    await page.waitForSelector('.nav-brand', { timeout: 8000 });
+    await page.evaluate(() => { document.documentElement.removeAttribute('data-theme'); });
+
+    const navDark = await fillsByText('.nav-brand');
+    if (navDark.error) fail(navDark.error);
+    if (!navDark.m.CORE || !navDark.m.SCOPE) fail(`navbar (dark) missing CORE/SCOPE: ${JSON.stringify(navDark.m)}`);
+    if (navDark.m.CORE === navDark.m.SCOPE) {
+      fail(`navbar (dark) wordmark is monotone — CORE=${navDark.m.CORE} SCOPE=${navDark.m.SCOPE}; duotone (fog/teal) must be preserved`);
+    }
+    if (isNearWhiteOrBlack(navDark.m.CORE)) fail(`navbar (dark) CORE fill is near-white/black/grey: ${navDark.m.CORE}`);
+    if (isNearWhiteOrBlack(navDark.m.SCOPE)) fail(`navbar (dark) SCOPE fill is near-white/black/grey: ${navDark.m.SCOPE}`);
+
+    // Light theme
+    await page.evaluate(() => { document.documentElement.setAttribute('data-theme', 'light'); });
+    const navLight = await fillsByText('.nav-brand');
+    if (navLight.error) fail(navLight.error);
+    if (navLight.m.CORE === navLight.m.SCOPE) {
+      fail(`navbar (light) wordmark is monotone — CORE=${navLight.m.CORE} SCOPE=${navLight.m.SCOPE}; duotone must survive light-theme rebind`);
+    }
+    console.log(`  ✅ navbar duotone preserved (dark: CORE=${navDark.m.CORE} SCOPE=${navDark.m.SCOPE}; light: CORE=${navLight.m.CORE} SCOPE=${navLight.m.SCOPE})`);
+    passed++;
+
+    // Hero duotone
+    await page.evaluate(() => { window.location.hash = '#/home'; });
+    await page.waitForFunction(() => location.hash === '#/home');
+    await page.waitForSelector('.home-hero', { timeout: 8000 });
+    await page.evaluate(() => { document.documentElement.removeAttribute('data-theme'); });
+    const heroDark = await fillsByText('.home-hero');
+    if (heroDark.error) fail(heroDark.error);
+    if (heroDark.m.CORE === heroDark.m.SCOPE) {
+      fail(`hero (dark) wordmark is monotone — CORE=${heroDark.m.CORE} SCOPE=${heroDark.m.SCOPE}; duotone must be preserved`);
+    }
+    if (isNearWhiteOrBlack(heroDark.m.CORE)) fail(`hero (dark) CORE fill is near-white/black/grey: ${heroDark.m.CORE}`);
+    if (isNearWhiteOrBlack(heroDark.m.SCOPE)) fail(`hero (dark) SCOPE fill is near-white/black/grey: ${heroDark.m.SCOPE}`);
+
+    await page.evaluate(() => { document.documentElement.setAttribute('data-theme', 'light'); });
+    const heroLight = await fillsByText('.home-hero');
+    if (heroLight.error) fail(heroLight.error);
+    if (heroLight.m.CORE === heroLight.m.SCOPE) {
+      fail(`hero (light) wordmark is monotone — CORE=${heroLight.m.CORE} SCOPE=${heroLight.m.SCOPE}; duotone must survive light-theme rebind`);
+    }
+    console.log(`  ✅ hero duotone preserved (dark: CORE=${heroDark.m.CORE} SCOPE=${heroDark.m.SCOPE}; light: CORE=${heroLight.m.CORE} SCOPE=${heroLight.m.SCOPE})`);
     passed++;
 
     await browser.close();
