@@ -64,6 +64,7 @@ func setupTestDB(t *testing.T) *DB {
 			payload_version INTEGER,
 			decoded_json TEXT,
 			channel_hash TEXT DEFAULT NULL,
+			from_pubkey TEXT DEFAULT NULL,
 			created_at TEXT DEFAULT (datetime('now'))
 		);
 
@@ -96,6 +97,29 @@ func setupTestDB(t *testing.T) *DB {
 
 		CREATE INDEX IF NOT EXISTS idx_observer_metrics_timestamp ON observer_metrics(timestamp);
 
+		-- Auto-populate from_pubkey for ADVERT rows so existing test fixtures
+		-- (which only set decoded_json) still attribute correctly under #1143's
+		-- exact-match column. Production migration handles legacy data; the
+		-- ingestor sets the column at write time.
+		--
+		-- m4 alignment: prod ingest leaves from_pubkey NULL when pubKey is
+		-- missing or empty (cmd/ingestor/db.go ~1289 guards PubKey != empty-string).
+		-- The trigger mirrors that: only assign when json_extract yields a
+		-- non-empty string. json_extract returns NULL for missing keys, so
+		-- the explicit IS NOT NULL AND <> empty-string guard catches the empty-string
+		-- case too. UPDATE only when we have something to write.
+		CREATE TRIGGER IF NOT EXISTS test_from_pubkey_advert
+		AFTER INSERT ON transmissions
+		FOR EACH ROW
+		WHEN NEW.from_pubkey IS NULL AND NEW.payload_type = 4 AND NEW.decoded_json IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') <> ''
+		BEGIN
+			UPDATE transmissions
+			SET from_pubkey = json_extract(NEW.decoded_json, '$.pubKey')
+			WHERE id = NEW.id;
+		END;
+		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
@@ -129,13 +153,13 @@ func seedTestData(t *testing.T, db *DB) {
 		VALUES ('1122334455667788', 'TestRoom', 'room', 37.4, -121.9, ?, '2026-01-01T00:00:00Z', 5)`, twoDaysAgo)
 
 	// Seed transmissions
-	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-		VALUES ('AABB', 'abc123def4567890', ?, 1, 4, '{"pubKey":"aabbccdd11223344","name":"TestRepeater","type":"ADVERT","timestamp":1700000000,"timestampISO":"2023-11-14T22:13:20.000Z","signature":"abcdef","flags":{"isRepeater":true},"lat":37.5,"lon":-122.0}', '#test')`, recent)
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash, from_pubkey)
+		VALUES ('AABB', 'abc123def4567890', ?, 1, 4, '{"pubKey":"aabbccdd11223344","name":"TestRepeater","type":"ADVERT","timestamp":1700000000,"timestampISO":"2023-11-14T22:13:20.000Z","signature":"abcdef","flags":{"isRepeater":true},"lat":37.5,"lon":-122.0}', '#test', 'aabbccdd11223344')`, recent)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
 		VALUES ('CCDD', '1234567890abcdef', ?, 1, 5, '{"type":"CHAN","channel":"#test","text":"Hello: World","sender":"TestUser"}', '#test')`, yesterday)
 	// Second ADVERT for same node with different hash_size (raw_hex byte 0x1F → hs=1 vs 0xBB → hs=3)
-	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('AA1F', 'def456abc1230099', ?, 1, 4, '{"pubKey":"aabbccdd11223344","name":"TestRepeater","type":"ADVERT","timestamp":1700000100,"timestampISO":"2023-11-14T22:14:40.000Z","signature":"fedcba","flags":{"isRepeater":true},"lat":37.5,"lon":-122.0}')`, yesterday)
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, from_pubkey)
+		VALUES ('AA1F', 'def456abc1230099', ?, 1, 4, '{"pubKey":"aabbccdd11223344","name":"TestRepeater","type":"ADVERT","timestamp":1700000100,"timestampISO":"2023-11-14T22:14:40.000Z","signature":"fedcba","flags":{"isRepeater":true},"lat":37.5,"lon":-122.0}', 'aabbccdd11223344')`, yesterday)
 
 	// Seed observations (use unix timestamps)
 	// resolved_path contains full pubkeys parallel to path_json hops
@@ -1198,6 +1222,7 @@ func setupTestDBV2(t *testing.T) *DB {
 			payload_version INTEGER,
 			decoded_json TEXT,
 			channel_hash TEXT DEFAULT NULL,
+			from_pubkey TEXT DEFAULT NULL,
 			created_at TEXT DEFAULT (datetime('now'))
 		);
 
@@ -1214,6 +1239,19 @@ func setupTestDBV2(t *testing.T) *DB {
 			timestamp INTEGER NOT NULL,
 			raw_hex TEXT
 		);
+
+		CREATE TRIGGER IF NOT EXISTS test_from_pubkey_advert
+		AFTER INSERT ON transmissions
+		FOR EACH ROW
+		WHEN NEW.from_pubkey IS NULL AND NEW.payload_type = 4 AND NEW.decoded_json IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') <> ''
+		BEGIN
+			UPDATE transmissions
+			SET from_pubkey = json_extract(NEW.decoded_json, '$.pubKey')
+			WHERE id = NEW.id;
+		END;
+		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
