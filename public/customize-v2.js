@@ -529,6 +529,13 @@
       }
     }
 
+    // Logo brand colors mirror --accent / --accent-hover when the operator
+    // picks a theme. Out-of-box, --logo-accent / --logo-accent-hi keep their
+    // sage/teal :root defaults (see public/style.css). When an operator
+    // overrides the accent, the wordmark must follow — so we propagate.
+    if (themeSection.accent) root.setProperty('--logo-accent', themeSection.accent);
+    if (themeSection.accentHover) root.setProperty('--logo-accent-hi', themeSection.accentHover);
+
     // Derived vars
     if (themeSection.background) root.setProperty('--content-bg', themeSection.contentBg || themeSection.background);
     if (themeSection.surface1) root.setProperty('--card-bg', themeSection.cardBg || themeSection.surface1);
@@ -1392,6 +1399,9 @@
           // Optimistic CSS update (Decision #12)
           var cssVar = THEME_CSS_MAP[key];
           if (cssVar) document.documentElement.style.setProperty(cssVar, inp.value);
+          // Mirror to logo brand vars so the wordmark recolors live too.
+          if (key === 'accent') document.documentElement.style.setProperty('--logo-accent', inp.value);
+          if (key === 'accentHover') document.documentElement.style.setProperty('--logo-accent-hi', inp.value);
           // Update hex display
           var hex = inp.parentElement.querySelector('.cust-hex');
           if (hex) hex.textContent = inp.value;
@@ -1656,6 +1666,9 @@
     for (var key in THEME_CSS_MAP) {
       if (themeSection[key]) root.setProperty(THEME_CSS_MAP[key], themeSection[key]);
     }
+    // Mirror accent → logo brand vars on early apply too (matches applyTheme).
+    if (themeSection.accent) root.setProperty('--logo-accent', themeSection.accent);
+    if (themeSection.accentHover) root.setProperty('--logo-accent-hi', themeSection.accentHover);
     if (themeSection.background) root.setProperty('--content-bg', themeSection.contentBg || themeSection.background);
     if (themeSection.surface1) root.setProperty('--card-bg', themeSection.cardBg || themeSection.surface1);
     // Apply node/type colors from overrides early

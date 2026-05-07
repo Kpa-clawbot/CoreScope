@@ -128,25 +128,29 @@
   --input-bg: #fff;
   --selected-bg: #dbeafe;
 
-  /* --- Logo theme tokens (PR #1137) ------------------------
+  /* --- Logo theme tokens (PR #1137 + brand-default follow-up) -----------
    * The CoreScope SVG logos are inlined into the DOM (navbar +
    * home hero), so they inherit page CSS custom properties. The
    * legacy --logo-* names are kept so existing themes / brand
-   * customizations that override them still work; defaults map
-   * to the active theme so wordmark/arc colors track --accent /
-   * --nav-text / --text-muted on light AND dark themes.
+   * customizations that override them still work.
    *   --logo-text   → wordmark "CORE" / "SCOPE" / labels
-   *   --logo-accent → primary node + left-side arcs (default --accent)
-   *   --logo-accent-hi → secondary node + right-side arcs (default --accent-hover)
+   *   --logo-accent → primary node + left-side arcs   (default sage)
+   *   --logo-accent-hi → secondary node + right-side arcs (default teal)
    *   --logo-muted  → tagline + sine wave
-   * No --logo-bg here on purpose — the inlined SVGs MUST be
-   * transparent so they sit on whatever bg the page paints.
-   * --logo-text defaults to --text (the page foreground) so the
-   * hero wordmark is readable on any theme; the navbar scopes it
-   * to --nav-text below so it stays white on the dark navbar. */
+   * Sage (#cfd9c9 — fog) and teal (#2c8c8c — water) are the OUT-OF-BOX
+   * brand identity. They are NOT cascaded from --accent any more, so
+   * changing the app accent color via dev tools alone will NOT recolor
+   * the logo. The customizer (public/customize-v2.js) mirrors --accent
+   * and --accent-hover into --logo-accent / --logo-accent-hi when an
+   * operator picks a theme, preserving full theme-driven recoloring.
+   * No --logo-bg here on purpose — the inlined SVGs MUST be transparent
+   * so they sit on whatever bg the page paints. --logo-text defaults to
+   * --text (the page foreground) so the hero wordmark is readable on
+   * any theme; the navbar scopes it to --nav-text below so it stays
+   * white on the dark navbar. */
   --logo-text: var(--text);
-  --logo-accent: var(--accent);
-  --logo-accent-hi: var(--accent-hover);
+  --logo-accent: #cfd9c9;
+  --logo-accent-hi: #2c8c8c;
   --logo-muted: var(--text-muted);
 
   --surface-0: #f4f5f7;
