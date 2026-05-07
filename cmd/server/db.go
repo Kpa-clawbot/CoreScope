@@ -1776,7 +1776,6 @@ func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, 
 
 	// Build IN(?, ?, ...) on the dedicated from_pubkey column (#1143):
 	// exact match, indexed lookup, no JSON substring scan.
-	var conditions []string
 	var args []interface{}
 	placeholders := make([]string, 0, len(pubkeys))
 	for _, pk := range pubkeys {
@@ -1784,8 +1783,7 @@ func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, 
 		args = append(args, resolved)
 		placeholders = append(placeholders, "?")
 	}
-	conditions = append(conditions, "t.from_pubkey IN ("+strings.Join(placeholders, ",")+")")
-	jsonWhere := "(" + strings.Join(conditions, " OR ") + ")"
+	pkWhere := "t.from_pubkey IN (" + strings.Join(placeholders, ",") + ")"
 
 	var timeFilters []string
 	if since != "" {
@@ -1797,7 +1795,7 @@ func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, 
 		args = append(args, until)
 	}
 
-	w := "WHERE " + jsonWhere
+	w := "WHERE " + pkWhere
 	if len(timeFilters) > 0 {
 		w += " AND " + strings.Join(timeFilters, " AND ")
 	}
