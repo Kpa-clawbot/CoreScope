@@ -22,7 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sync/atomic"
+	"sync"
 	"time"
 )
 
@@ -51,13 +51,57 @@ func ensureFromPubkeyColumn(dbPath string) error {
 	return nil
 }
 
-// fromPubkeyBackfillProgress reports backfill state for /api/healthz
-// (zero-value safe; updated by backfillFromPubkeyAsync).
+// fromPubkeyBackfillProgress reports backfill state for /api/healthz.
+// All three values are read together via fromPubkeyBackfillSnapshot()
+// under a single RWMutex so /api/healthz never sees a torn snapshot
+// (e.g. done=true with processed<total). Updates use the Set/Mark
+// helpers which take the write lock.
+//
+// Cycle-3 m2c: previously these were independent atomic.{Int64,Bool};
+// healthz read each one separately and could observe an interleaved
+// write between Loads. The mutex-guarded snapshot fixes that.
 var (
-	fromPubkeyBackfillTotal     atomic.Int64
-	fromPubkeyBackfillProcessed atomic.Int64
-	fromPubkeyBackfillDone      atomic.Bool
+	fromPubkeyBackfillMu        sync.RWMutex
+	fromPubkeyBackfillTotal     int64
+	fromPubkeyBackfillProcessed int64
+	fromPubkeyBackfillDone      bool
 )
+
+// fromPubkeyBackfillSnapshot returns a consistent snapshot of all three
+// backfill progress fields under a single read lock.
+func fromPubkeyBackfillSnapshot() (total, processed int64, done bool) {
+	fromPubkeyBackfillMu.RLock()
+	defer fromPubkeyBackfillMu.RUnlock()
+	return fromPubkeyBackfillTotal, fromPubkeyBackfillProcessed, fromPubkeyBackfillDone
+}
+
+func fromPubkeyBackfillSetTotal(v int64) {
+	fromPubkeyBackfillMu.Lock()
+	fromPubkeyBackfillTotal = v
+	fromPubkeyBackfillMu.Unlock()
+}
+
+func fromPubkeyBackfillSetProcessed(v int64) {
+	fromPubkeyBackfillMu.Lock()
+	fromPubkeyBackfillProcessed = v
+	fromPubkeyBackfillMu.Unlock()
+}
+
+func fromPubkeyBackfillMarkDone() {
+	fromPubkeyBackfillMu.Lock()
+	fromPubkeyBackfillDone = true
+	fromPubkeyBackfillMu.Unlock()
+}
+
+// fromPubkeyBackfillReset zeroes all three fields atomically. Used by
+// tests; never called from production code.
+func fromPubkeyBackfillReset() {
+	fromPubkeyBackfillMu.Lock()
+	fromPubkeyBackfillTotal = 0
+	fromPubkeyBackfillProcessed = 0
+	fromPubkeyBackfillDone = false
+	fromPubkeyBackfillMu.Unlock()
+}
 
 // startFromPubkeyBackfill is the production entry point used by main.go to
 // launch the backfill so it cannot block startup. It MUST dispatch the
@@ -85,7 +129,7 @@ func backfillFromPubkeyAsync(dbPath string, chunkSize int, yieldDuration time.Du
 		if r := recover(); r != nil {
 			log.Printf("[store] backfillFromPubkeyAsync panic recovered: %v", r)
 		}
-		fromPubkeyBackfillDone.Store(true)
+		fromPubkeyBackfillMarkDone()
 	}()
 
 	if chunkSize <= 0 {
@@ -105,7 +149,7 @@ func backfillFromPubkeyAsync(dbPath string, chunkSize int, yieldDuration time.Du
 		log.Printf("[store] from_pubkey backfill: count error: %v", err)
 		return
 	}
-	fromPubkeyBackfillTotal.Store(total)
+	fromPubkeyBackfillSetTotal(total)
 	if total == 0 {
 		log.Println("[store] from_pubkey backfill: nothing to do")
 		return
@@ -187,7 +231,7 @@ func backfillFromPubkeyAsync(dbPath string, chunkSize int, yieldDuration time.Du
 			return
 		}
 		processed += int64(len(batch))
-		fromPubkeyBackfillProcessed.Store(processed)
+		fromPubkeyBackfillSetProcessed(processed)
 
 		if len(batch) < chunkSize {
 			break

@@ -383,15 +383,9 @@ func TestBackfillFromPubkey_DoesNotBlockBoot(t *testing.T) {
 		t.Fatalf("ensureFromPubkeyColumn: %v", err)
 	}
 
-	// Reset atomics — other tests may have set them.
-	fromPubkeyBackfillTotal.Store(0)
-	fromPubkeyBackfillProcessed.Store(0)
-	fromPubkeyBackfillDone.Store(false)
-	defer func() {
-		fromPubkeyBackfillTotal.Store(0)
-		fromPubkeyBackfillProcessed.Store(0)
-		fromPubkeyBackfillDone.Store(false)
-	}()
+	// Reset all backfill state — other tests may have set it.
+	fromPubkeyBackfillReset()
+	defer fromPubkeyBackfillReset()
 
 	// Dispatch via the production wrapper. startFromPubkeyBackfill is the
 	// same entry point main.go calls at boot; it must launch the backfill
@@ -407,16 +401,16 @@ func TestBackfillFromPubkey_DoesNotBlockBoot(t *testing.T) {
 		t.Fatalf("backfill dispatch took %v (>50ms): not async — would block boot", dispatchElapsed)
 	}
 
-	// (b) Eventual completion via the fromPubkeyBackfillDone atomic.
+	// (b) Eventual completion via the fromPubkeyBackfill snapshot.
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if fromPubkeyBackfillDone.Load() {
+		if _, _, done := fromPubkeyBackfillSnapshot(); done {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if !fromPubkeyBackfillDone.Load() {
-		t.Fatalf("backfill never flipped Done atomic within 30s; dispatched=%v", dispatchElapsed)
+	if _, _, done := fromPubkeyBackfillSnapshot(); !done {
+		t.Fatalf("backfill never flipped Done within 30s; dispatched=%v", dispatchElapsed)
 	}
 
 	// (c) Backfill actually populated rows.
@@ -434,7 +428,7 @@ func TestBackfillFromPubkey_DoesNotBlockBoot(t *testing.T) {
 	if nullCount > 0 {
 		t.Errorf("backfill left %d ADVERT rows with NULL from_pubkey", nullCount)
 	}
-	if got := fromPubkeyBackfillProcessed.Load(); got != int64(N) {
-		t.Errorf("fromPubkeyBackfillProcessed = %d, want %d", got, N)
+	if _, processed, _ := fromPubkeyBackfillSnapshot(); processed != int64(N) {
+		t.Errorf("fromPubkeyBackfillProcessed = %d, want %d", processed, N)
 	}
 }
