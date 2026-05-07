@@ -327,15 +327,17 @@ func TestBackfillFromPubkey_AdvertRowsPopulated(t *testing.T) {
 }
 
 // TestBackfillFromPubkey_DoesNotBlockBoot exercises the async contract:
-// main.go (cmd/server/main.go) launches backfillFromPubkeyAsync via `go ...`
-// AFTER HTTP starts. With N=1000 ADVERT rows and a 100ms inter-chunk yield
-// (chunkSize=100), a synchronous backfill would take >=900ms; the goroutine
-// dispatch must return in <50ms so HTTP/MQTT are never starved.
+// main.go (cmd/server/main.go) calls startFromPubkeyBackfill, which is the
+// SAME entry point used at production startup. The wrapper must dispatch
+// the backfill in a goroutine; if anyone removes the `go` keyword inside
+// startFromPubkeyBackfill, this test fails because the call no longer
+// returns within the 50ms boot dispatch budget. The test does NOT use `go`
+// itself — that would test only the test's own scheduler, not the
+// production code path (cycle-3 M1c).
 //
-// This test mirrors TestBackfillPathJSONAsync (cmd/ingestor/db_test.go:2391).
-// If anyone reverts the `go` keyword in main.go, replicating this dispatch
-// pattern here will catch the regression: the wall-clock dispatch budget
-// fails first, the eventual-completion + atomic-flip assertions fail second.
+// DO NOT t.Parallel — uses package-global atomics
+// (fromPubkeyBackfillTotal/Processed/Done). Concurrent tests would clobber
+// the resets (cycle-3 m1c).
 func TestBackfillFromPubkey_DoesNotBlockBoot(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := dir + "/async_boot.db"
@@ -391,9 +393,13 @@ func TestBackfillFromPubkey_DoesNotBlockBoot(t *testing.T) {
 		fromPubkeyBackfillDone.Store(false)
 	}()
 
-	// Dispatch via goroutine, mirroring main.go's `go backfillFromPubkeyAsync(...)`.
+	// Dispatch via the production wrapper. startFromPubkeyBackfill is the
+	// same entry point main.go calls at boot; it must launch the backfill
+	// in a goroutine internally. We deliberately do NOT prefix `go` here —
+	// if the wrapper is ever made synchronous, the dispatch budget below
+	// fires first.
 	t0 := time.Now()
-	go backfillFromPubkeyAsync(dbPath, 100, 100*time.Millisecond)
+	startFromPubkeyBackfill(dbPath, 100, 100*time.Millisecond)
 	dispatchElapsed := time.Since(t0)
 
 	// (a) Boot-time dispatch budget: must return ~immediately.

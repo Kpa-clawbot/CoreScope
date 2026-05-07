@@ -59,6 +59,17 @@ var (
 	fromPubkeyBackfillDone      atomic.Bool
 )
 
+// startFromPubkeyBackfill is the production entry point used by main.go to
+// launch the backfill so it cannot block startup. It MUST dispatch the
+// backfill in a goroutine; the dispatch path is gated by
+// TestBackfillFromPubkey_DoesNotBlockBoot — if the `go` keyword below is ever
+// removed, that test fails because dispatch becomes synchronous and exceeds
+// the 50ms boot budget.
+func startFromPubkeyBackfill(dbPath string, chunkSize int, yieldDuration time.Duration) {
+	// RED: synchronous — green commit adds `go` to make the test pass.
+	backfillFromPubkeyAsync(dbPath, chunkSize, yieldDuration)
+}
+
 // backfillFromPubkeyAsync scans transmissions where from_pubkey IS NULL and
 // populates from_pubkey by parsing decoded_json. Runs in chunks with a
 // short yield between chunks so it can't starve other writers.
