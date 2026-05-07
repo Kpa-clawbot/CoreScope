@@ -438,7 +438,12 @@ input[type="week"] {
 .brand-logo {
   display: block;
   height: 36px;
-  width: auto;
+  /* The SVG file declares width=1200 height=300 (4:1) but the visible
+     content's effective ratio is ~3.07:1 after the navbar viewBox crop.
+     Pin width explicitly so `width: auto` doesn't compute 4:1 = 144px,
+     which would push nav items into overflow at the issue #1046 1115px
+     viewport (regression caught by test-e2e-playwright.js). */
+  width: 111px;
   max-height: 36px;
   /* The SVG bakes its CoreScope brand palette in (CORE = #cfd9c9, SCOPE =
      #2c8c8c). It does NOT inherit the customizer's --accent / --nav-bg vars
@@ -1394,7 +1399,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .panel-right { width: 320px; min-width: 320px; }
   .nav-stats { display: none; }
   .brand-text { font-size: 14px; }
-  .brand-logo { height: 32px; }
+  .brand-logo { height: 32px; width: 99px; }
   .nav-link { padding: 14px 8px; font-size: 13px; }
   .map-controls { width: 180px; font-size: 12px; }
 }
