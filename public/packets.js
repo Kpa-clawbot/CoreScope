@@ -999,22 +999,10 @@
             <div class="node-filter-dropdown hidden" id="fNodeDropdown" role="listbox"></div>
           </div>
         </div>
-        <!-- Group 3: Dropdowns (observers, regions, types, channels) -->
-        <div class="filter-group filter-group-dropdowns">
-          <div class="multi-select-wrap" id="observerFilterWrap">
-            <button class="multi-select-trigger" id="observerTrigger" title="Show only packets seen by selected observer stations">All Observers ▾</button>
-            <div class="multi-select-menu" id="observerMenu"></div>
-          </div>
-          <div id="packetsRegionFilter" class="region-filter-container" style="display:inline-block;vertical-align:middle"></div>
-          <div class="multi-select-wrap" id="typeFilterWrap">
-            <button class="multi-select-trigger" id="typeTrigger" title="Filter by packet type">All Types ▾</button>
-            <div class="multi-select-menu" id="typeMenu"></div>
-          </div>
-          <select id="fChannel" class="filter-select" aria-label="Filter by channel" title="Filter Channel Messages (GRP_TXT) by channel">
-            <option value="">All Channels</option>
-          </select>
-        </div>
-        <!-- Group 4: Quick toggles (Group by Hash, My Nodes, time range) -->
+        <!-- Group 3: Quick toggles (time range, Group by Hash, ★ My Nodes)
+             — #1128 Bug 5: placed BEFORE the Observer/Region/Type/Channel
+             dropdowns so the most-frequently-used controls sit next to
+             the search input where the eye lands first. -->
         <div class="filter-group filter-group-toggles">
           <button class="btn ${groupByHash ? 'active' : ''}" id="fGroup" title="Collapse duplicate observations of the same packet into expandable groups">Group by Hash</button>
           <button class="btn" id="fMyNodes" title="Show only packets from your favorited/claimed nodes">★ My Nodes</button>
@@ -1027,6 +1015,21 @@
             <option value="720"${isMobile ? ' disabled title="Disabled on mobile to prevent browser crashes"' : ''}>Last 12 hours</option>
             <option value="1440"${isMobile ? ' disabled title="Disabled on mobile to prevent browser crashes"' : ''}>Last 24 hours</option>
             ${isMobile ? '' : '<option value="0">All time</option>'}
+          </select>
+        </div>
+        <!-- Group 4: Dropdowns (observers, regions, types, channels) -->
+        <div class="filter-group filter-group-dropdowns">
+          <div class="multi-select-wrap" id="observerFilterWrap">
+            <button class="multi-select-trigger" id="observerTrigger" title="Show only packets seen by selected observer stations">All Observers ▾</button>
+            <div class="multi-select-menu" id="observerMenu"></div>
+          </div>
+          <div id="packetsRegionFilter" class="region-filter-container" style="display:inline-block;vertical-align:middle"></div>
+          <div class="multi-select-wrap" id="typeFilterWrap">
+            <button class="multi-select-trigger" id="typeTrigger" title="Filter by packet type">All Types ▾</button>
+            <div class="multi-select-menu" id="typeMenu"></div>
+          </div>
+          <select id="fChannel" class="filter-select" aria-label="Filter by channel" title="Filter Channel Messages (GRP_TXT) by channel">
+            <option value="">All Channels</option>
           </select>
         </div>
         <!-- Group 5: Sort + Columns -->

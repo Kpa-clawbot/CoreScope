@@ -1,27 +1,38 @@
 /* === CoreScope — style.css === */
 
 /* ============================================================
- * Z-INDEX SCALE (single source of truth — issues #1128, #1131)
+ * Z-INDEX SCALE (single source of truth — issues #1128, #1131, #1128 followup)
  * ------------------------------------------------------------
  * Use these tokens for ANY new stacking context. Raw z-index
- * literals in this file are legacy and being migrated. When
- * touching a rule with a literal z-index, replace it with the
- * appropriate token below.
+ * literals are legacy and being migrated. When touching a rule
+ * with a literal z-index, replace it with the appropriate token
+ * below.
  *
  *   --z-base            0     document base, table cells
- *   --z-dropdown        100   in-flow dropdowns (multi-select,
- *                             saved-filters, column-toggles)
+ *   --z-dropdown        100   in-flow dropdowns anchored to a
+ *                             toolbar control (multi-select,
+ *                             saved-filter, column-toggle,
+ *                             autocomplete, region dropdown,
+ *                             node-filter dropdown)
  *   --z-popover         300   popovers anchored to a dropdown
- *                             or table cell (path overflow,
- *                             autocomplete row detail)
+ *                             or table cell (path-overflow +N,
+ *                             hop-conflict, autocomplete row
+ *                             detail). Sits ABOVE dropdowns
+ *                             but BELOW modals.
  *   --z-modal-backdrop  9000  full-viewport modal scrim
  *   --z-modal           9100  modal panels themselves
  *   --z-tooltip         9200  tooltips, ctx menus, hover popovers
  *                             that must float above modals
  *
- * Migration policy: do NOT bulk-rewrite legacy values that
- * currently work — risk/reward is poor. Migrate opportunistically
- * when editing nearby rules. New rules MUST use the tokens.
+ * Lint: scripts/check-css-vars.js asserts every var(--name)
+ * reference resolves; CI will fail on undefined custom properties
+ * (see #1128 Bug 4 root cause — `--surface` shipped undefined
+ * and 8 dropdowns rendered transparent).
+ *
+ * Migration policy: legacy literal z-index values that work are
+ * left in place to avoid behavioural risk; new code MUST use
+ * the tokens. The 10 highest-traffic dropdowns/popovers in the
+ * packets toolbar were renumbered in the #1128 followup.
  * ============================================================ */
 
 /* ============================================================
@@ -139,6 +150,19 @@
   --content-bg: var(--surface-0);
   --card-bg: var(--surface-1);
   --hover-bg: rgba(0,0,0, 0.04);
+  /* #1128 followup: caught by scripts/check-css-vars.js — these were
+   * referenced without a fallback in .rf-detail-meta, .rf-detail-close
+   * and .tools-card and would resolve transparent / inherit. Alias them
+   * to existing tokens. */
+  --text-primary: var(--text);
+  --bg-hover: var(--hover-bg);
+  --primary: var(--accent);
+  /* #1128 followup M3: extended check-css-vars.js to scan JS/HTML inline
+   * styles (analytics.js, nodes.js) caught these undefined refs.
+   * Aliased to existing tokens — same pattern as --text-primary above. */
+  --bg-secondary: var(--surface-2);
+  --text-secondary: var(--text-muted);
+  --bg: var(--surface);
   --trace-ghost-color: #94a3b8;
 
   /* #1128: documented z-index scale. Use these custom props for any new
@@ -813,13 +837,15 @@ input[type="week"] {
   overflow: hidden;
   vertical-align: middle;
 }
-.path-hops .hop { color: var(--accent); }
-.path-hops .hop-named { color: #fff; background: var(--accent); padding: 1px 6px; border-radius: 3px; font-family: var(--font); font-weight: 600; cursor: default; flex: 0 0 auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.path-hops .arrow { color: var(--text-muted); flex: 0 0 auto; }
-/* #1122: bound the row height contributed by the path column. The data-table
- * td already sets overflow:hidden + max-width:0; this caps the cell height
- * so chips can never push the row past 28px regardless of hop count. */
-.data-table td.col-path { max-height: 28px; line-height: 22px; }
+.path-hops .hop { color: var(--accent); line-height: 18px; }
+.path-hops .hop-named { color: #fff; background: var(--accent); padding: 1px 6px; border-radius: 3px; font-family: var(--font); font-weight: 600; cursor: default; flex: 0 0 auto; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 18px; }
+.path-hops .arrow { color: var(--text-muted); flex: 0 0 auto; line-height: 18px; }
+/* #1122/#1128: bound the row height contributed by the path column.
+ * `max-height` on a <td> is widely ignored by browsers (table layout
+ * overrides it), so use `height` — table cells respect `height` as
+ * min-height, locking the row to a single line of chip content
+ * regardless of hop count. */
+.data-table td.col-path { height: 28px; line-height: 22px; overflow: hidden; }
 
 /* === Modal === */
 .modal-overlay {
@@ -1936,7 +1962,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
   border-radius: 6px;
   max-height: 200px;
   overflow-y: auto;
-  z-index: 100;
+  z-index: var(--z-dropdown);
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
 }
 .node-filter-dropdown.hidden { display: none; }
@@ -2006,7 +2032,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .hop-conflict-btn { background: var(--status-yellow, #f59e0b); color: #000; border: none; border-radius: 4px; font-size: 11px;
   font-weight: 700; padding: 1px 5px; cursor: pointer; vertical-align: middle; margin-left: 3px; line-height: 1.2; }
 .hop-conflict-btn:hover { background: var(--status-yellow, #d97706); filter: brightness(0.85); }
-.hop-conflict-popover { position: absolute; z-index: var(--z-tooltip); background: var(--surface-1); border: 1px solid var(--border);
+.hop-conflict-popover { position: absolute; z-index: var(--z-popover); background: var(--surface-1); border: 1px solid var(--border);
   border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); width: 260px; max-height: 300px; overflow-y: auto; }
 .hop-conflict-header { padding: 10px 12px; font-size: 12px; font-weight: 700; border-bottom: 1px solid var(--border);
   color: var(--text-muted); }
@@ -2084,7 +2110,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 /* #71 — Column visibility toggle */
 .col-toggle-wrap { position: relative; display: inline-block; }
 .col-toggle-btn { font-size: 13px; padding: 6px 10px; cursor: pointer; background: var(--input-bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); height: 34px; box-sizing: border-box; line-height: 1; }
-.col-toggle-menu { display: none; position: absolute; top: 100%; left: 0; z-index: 50; background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 0; min-width: 150px; box-shadow: 0 4px 12px rgba(0,0,0,.15); }
+.col-toggle-menu { display: none; position: absolute; top: 100%; left: 0; z-index: var(--z-dropdown); background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 0; min-width: 150px; box-shadow: 0 4px 12px rgba(0,0,0,.15); }
 .col-toggle-menu.open { display: block; }
 .col-toggle-menu label { display: flex; align-items: center; gap: 6px; padding: 4px 12px; font-size: .82rem; cursor: pointer; color: var(--text); }
 .col-toggle-menu label input[type="checkbox"] { width: 14px; height: 14px; margin: 0; flex-shrink: 0; }
@@ -2343,7 +2369,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 }
 .region-dropdown-trigger:hover { border-color: var(--accent); color: var(--accent); }
 .region-dropdown-menu {
-  position: absolute; top: 100%; left: 0; z-index: 90;
+  position: absolute; top: 100%; left: 0; z-index: var(--z-dropdown);
   min-width: 220px; width: max-content; max-height: 260px; overflow-y: auto;
   background: var(--card-bg, #fff); border: 1px solid var(--border); border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.12); padding: 4px 0;
@@ -2374,7 +2400,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 }
 .multi-select-trigger:hover { border-color: var(--accent); color: var(--accent); }
 .multi-select-menu {
-  position: absolute; top: 100%; left: 0; z-index: 90;
+  position: absolute; top: 100%; left: 0; z-index: var(--z-dropdown);
   min-width: 220px; max-height: 260px; overflow-y: auto;
   background: var(--card-bg, #fff); border: 1px solid var(--border); border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.12); padding: 4px 0; display: none;
@@ -3140,7 +3166,7 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .fux-examples { margin: 4px 0; padding-left: 20px; }
 .fux-examples li { margin: 2px 0; }
 
-.fux-ac-dropdown { position: absolute; left: 0; right: 0; top: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; max-height: 280px; overflow-y: auto; z-index: var(--z-tooltip); box-shadow: 0 4px 12px rgba(0,0,0,0.25); margin-top: 2px; }
+.fux-ac-dropdown { position: absolute; left: 0; right: 0; top: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; max-height: 280px; overflow-y: auto; z-index: var(--z-dropdown); box-shadow: 0 4px 12px rgba(0,0,0,0.25); margin-top: 2px; }
 .fux-ac-item { padding: 4px 10px; display: flex; justify-content: space-between; gap: 12px; cursor: pointer; font-size: 12px; }
 .fux-ac-item:hover,
 .fux-ac-item.active { background: var(--bg-hover, rgba(120,160,255,0.12)); }
@@ -3151,7 +3177,7 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .fux-ctx-item { display: block; width: 100%; text-align: left; background: transparent; border: none; color: var(--text); padding: 5px 12px; font-size: 12px; cursor: pointer; font-family: var(--mono); }
 .fux-ctx-item:hover { background: var(--bg-hover, rgba(120,160,255,0.12)); }
 
-.fux-saved-menu { position: absolute; top: 100%; left: 0; min-width: 320px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; z-index: var(--z-tooltip); box-shadow: 0 4px 14px rgba(0,0,0,0.3); margin-top: 4px; padding: 4px 0; }
+.fux-saved-menu { position: absolute; top: 100%; left: 0; min-width: 320px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; z-index: var(--z-dropdown); box-shadow: 0 4px 14px rgba(0,0,0,0.3); margin-top: 4px; padding: 4px 0; }
 .fux-saved-menu.hidden { display: none; }
 .fux-saved-header { padding: 6px 10px; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
 .fux-saved-item { display: flex; align-items: center; gap: 8px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
