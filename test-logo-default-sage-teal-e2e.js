@@ -93,7 +93,13 @@ async function main() {
 
     await page1.evaluate(() => { window.location.hash = '#/home'; });
     await page1.waitForFunction(() => location.hash === '#/home');
-    await page1.waitForSelector('.home-hero svg text', { timeout: 8000 });
+    await page1.waitForSelector('.home-hero', { timeout: 8000 });
+    // Hero SVG can render after the route swap; wait for the wordmark text
+    // to actually exist before reading fills.
+    await page1.waitForFunction(() => {
+      const h = document.querySelector('.home-hero');
+      return !!(h && h.querySelector('svg text'));
+    }, null, { timeout: 8000 });
     const heroDefault = await readWordmark(page1, '.home-hero');
     if (heroDefault.error) fail(heroDefault.error);
     if (heroDefault.out.CORE !== SAGE) {
@@ -143,7 +149,11 @@ async function main() {
 
     await page2.evaluate(() => { window.location.hash = '#/home'; });
     await page2.waitForFunction(() => location.hash === '#/home');
-    await page2.waitForSelector('.home-hero svg text', { timeout: 8000 });
+    await page2.waitForSelector('.home-hero', { timeout: 8000 });
+    await page2.waitForFunction(() => {
+      const h = document.querySelector('.home-hero');
+      return !!(h && h.querySelector('svg text'));
+    }, null, { timeout: 8000 });
     const heroOverride = await readWordmark(page2, '.home-hero');
     if (heroOverride.error) fail(heroOverride.error);
     if (heroOverride.out.CORE !== 'rgb(220, 38, 38)' || heroOverride.out.SCOPE !== 'rgb(239, 68, 68)') {
