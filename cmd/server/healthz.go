@@ -34,10 +34,22 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		s.store.mu.RUnlock()
 	}
 
+	// #1143 (M2): expose from_pubkey backfill progress so operators can
+	// see whether the legacy ADVERT backfill is still running. NULL rows
+	// produce empty attribution results during the in-flight window.
+	// Cycle-3 m2c: snapshot all three fields under a single read lock so
+	// /api/healthz never observes a torn state (e.g. done=true with
+	// processed<total).
+	bfTotal, bfProcessed, bfDone := fromPubkeyBackfillSnapshot()
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ready":     true,
 		"loadedTx":  loadedTx,
 		"loadedObs": loadedObs,
+		"from_pubkey_backfill": map[string]interface{}{
+			"total":     bfTotal,
+			"processed": bfProcessed,
+			"done":      bfDone,
+		},
 	})
 }
