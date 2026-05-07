@@ -1074,9 +1074,18 @@ window.addEventListener('DOMContentLoaded', () => {
       // nothing overflowed (everything fits inline → More is hidden,
       // which is the correct UX) and skip when the queue is exhausted.
       var overflowedCount = allLinks.filter(a => a.classList.contains('is-overflow')).length;
-      if (overflowedCount === 1 && i < overflowQueue.length) {
-        overflowQueue[i].classList.add('is-overflow');
-        i++;
+      if (overflowedCount === 1) {
+        if (i < overflowQueue.length) {
+          overflowQueue[i].classList.add('is-overflow');
+          i++;
+        } else {
+          // Defensive: queue exhausted with exactly 1 overflowed link
+          // means we cannot satisfy the >=2 floor (only one promotable
+          // link existed). Surface it loudly instead of silently
+          // shipping the degenerate single-item dropdown the floor
+          // was added to prevent.
+          console.warn('[nav] More menu floor: overflowQueue exhausted with 1 item; cannot enforce >=2 floor');
+        }
       }
       rebuildMoreMenu();
     }
