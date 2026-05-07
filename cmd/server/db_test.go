@@ -101,10 +101,19 @@ func setupTestDB(t *testing.T) *DB {
 		-- (which only set decoded_json) still attribute correctly under #1143's
 		-- exact-match column. Production migration handles legacy data; the
 		-- ingestor sets the column at write time.
+		--
+		-- m4 alignment: prod ingest leaves from_pubkey NULL when pubKey is
+		-- missing or empty (cmd/ingestor/db.go ~1289 guards PubKey != empty-string).
+		-- The trigger mirrors that: only assign when json_extract yields a
+		-- non-empty string. json_extract returns NULL for missing keys, so
+		-- the explicit IS NOT NULL AND <> empty-string guard catches the empty-string
+		-- case too. UPDATE only when we have something to write.
 		CREATE TRIGGER IF NOT EXISTS test_from_pubkey_advert
 		AFTER INSERT ON transmissions
 		FOR EACH ROW
 		WHEN NEW.from_pubkey IS NULL AND NEW.payload_type = 4 AND NEW.decoded_json IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') <> ''
 		BEGIN
 			UPDATE transmissions
 			SET from_pubkey = json_extract(NEW.decoded_json, '$.pubKey')
@@ -1235,6 +1244,8 @@ func setupTestDBV2(t *testing.T) *DB {
 		AFTER INSERT ON transmissions
 		FOR EACH ROW
 		WHEN NEW.from_pubkey IS NULL AND NEW.payload_type = 4 AND NEW.decoded_json IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') <> ''
 		BEGIN
 			UPDATE transmissions
 			SET from_pubkey = json_extract(NEW.decoded_json, '$.pubKey')

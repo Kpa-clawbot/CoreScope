@@ -54,6 +54,8 @@ func setupTestDBv2(t *testing.T) *DB {
 		AFTER INSERT ON transmissions
 		FOR EACH ROW
 		WHEN NEW.from_pubkey IS NULL AND NEW.payload_type = 4 AND NEW.decoded_json IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') <> ''
 		BEGIN
 			UPDATE transmissions
 			SET from_pubkey = json_extract(NEW.decoded_json, '$.pubKey')
