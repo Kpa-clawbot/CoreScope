@@ -92,6 +92,7 @@ jobs:
           node test-packet-filter-time.js
           node test-channel-decrypt-insecure-context.js
           node test-live-region-filter.js
+          node test-issue-1136-observer-iata-map.js
           node test-channel-qr.js
           node test-channel-qr-wiring.js
           node test-channel-modal-ux.js
@@ -232,6 +233,7 @@ jobs:
           BASE_URL=http://localhost:13581 node test-issue-1122-packets-filter-ux-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1128-packets-layout-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1128-multi-viewport-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1136-live-region-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-rebrand-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-theme-e2e.js 2>&1 | tee -a e2e-output.txt
 
