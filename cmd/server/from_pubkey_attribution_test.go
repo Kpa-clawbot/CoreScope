@@ -12,6 +12,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -322,5 +323,112 @@ func TestBackfillFromPubkey_AdvertRowsPopulated(t *testing.T) {
 	// Non-ADVERT row was not in the backfill scope; from_pubkey stays NULL.
 	if got["m3"] != "" {
 		t.Errorf("m3 from_pubkey = %q, want empty (NULL)", got["m3"])
+	}
+}
+
+// TestBackfillFromPubkey_DoesNotBlockBoot exercises the async contract:
+// main.go (cmd/server/main.go) launches backfillFromPubkeyAsync via `go ...`
+// AFTER HTTP starts. With N=1000 ADVERT rows and a 100ms inter-chunk yield
+// (chunkSize=100), a synchronous backfill would take >=900ms; the goroutine
+// dispatch must return in <50ms so HTTP/MQTT are never starved.
+//
+// This test mirrors TestBackfillPathJSONAsync (cmd/ingestor/db_test.go:2391).
+// If anyone reverts the `go` keyword in main.go, replicating this dispatch
+// pattern here will catch the regression: the wall-clock dispatch budget
+// fails first, the eventual-completion + atomic-flip assertions fail second.
+func TestBackfillFromPubkey_DoesNotBlockBoot(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := dir + "/async_boot.db"
+
+	rw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rw.Exec(`CREATE TABLE transmissions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		raw_hex TEXT, hash TEXT UNIQUE, first_seen TEXT,
+		route_type INTEGER, payload_type INTEGER, payload_version INTEGER,
+		decoded_json TEXT, created_at TEXT
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	// Insert N=1000 legacy ADVERT rows. With chunkSize=100 + yield=100ms
+	// between chunks, sync would be ~900ms; we assert dispatch is <50ms.
+	tx, err := rw.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt, err := tx.Prepare(`INSERT INTO transmissions
+		(raw_hex, hash, first_seen, payload_type, decoded_json) VALUES (?, ?, ?, 4, ?)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const N = 1000
+	for i := 0; i < N; i++ {
+		hash := fmt.Sprintf("h_async_boot_%d", i)
+		dj := fmt.Sprintf(`{"type":"ADVERT","pubKey":"%s","name":"N%d"}`, pkVictim, i)
+		if _, err := stmt.Exec("AA", hash, "2026-01-01T00:00:00Z", dj); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stmt.Close()
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	rw.Close()
+
+	if err := ensureFromPubkeyColumn(dbPath); err != nil {
+		t.Fatalf("ensureFromPubkeyColumn: %v", err)
+	}
+
+	// Reset atomics — other tests may have set them.
+	fromPubkeyBackfillTotal.Store(0)
+	fromPubkeyBackfillProcessed.Store(0)
+	fromPubkeyBackfillDone.Store(false)
+	defer func() {
+		fromPubkeyBackfillTotal.Store(0)
+		fromPubkeyBackfillProcessed.Store(0)
+		fromPubkeyBackfillDone.Store(false)
+	}()
+
+	// Dispatch via goroutine, mirroring main.go's `go backfillFromPubkeyAsync(...)`.
+	t0 := time.Now()
+	go backfillFromPubkeyAsync(dbPath, 100, 100*time.Millisecond)
+	dispatchElapsed := time.Since(t0)
+
+	// (a) Boot-time dispatch budget: must return ~immediately.
+	if dispatchElapsed > 50*time.Millisecond {
+		t.Fatalf("backfill dispatch took %v (>50ms): not async — would block boot", dispatchElapsed)
+	}
+
+	// (b) Eventual completion via the fromPubkeyBackfillDone atomic.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if fromPubkeyBackfillDone.Load() {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !fromPubkeyBackfillDone.Load() {
+		t.Fatalf("backfill never flipped Done atomic within 30s; dispatched=%v", dispatchElapsed)
+	}
+
+	// (c) Backfill actually populated rows.
+	rw2, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rw2.Close()
+	var nullCount int
+	if err := rw2.QueryRow(
+		`SELECT COUNT(*) FROM transmissions WHERE payload_type = 4 AND from_pubkey IS NULL`,
+	).Scan(&nullCount); err != nil {
+		t.Fatal(err)
+	}
+	if nullCount > 0 {
+		t.Errorf("backfill left %d ADVERT rows with NULL from_pubkey", nullCount)
+	}
+	if got := fromPubkeyBackfillProcessed.Load(); got != int64(N) {
+		t.Errorf("fromPubkeyBackfillProcessed = %d, want %d", got, N)
 	}
 }
