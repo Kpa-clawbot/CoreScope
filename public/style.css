@@ -105,6 +105,25 @@
   --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
   --input-bg: #fff;
   --selected-bg: #dbeafe;
+
+  /* --- Logo theme tokens (PR #1137) ------------------------
+   * The CoreScope SVG logos are inlined into the DOM (navbar +
+   * home hero), so they inherit page CSS custom properties. The
+   * legacy --logo-* names are kept so existing themes / brand
+   * customizations that override them still work; defaults map
+   * to the active theme so wordmark/arc colors track --accent /
+   * --nav-text / --text-muted on light AND dark themes.
+   *   --logo-text   → wordmark "CORE" / "SCOPE" / labels
+   *   --logo-accent → primary node + left-side arcs (default --accent)
+   *   --logo-accent-hi → secondary node + right-side arcs (default --accent-hover)
+   *   --logo-muted  → tagline + sine wave
+   * No --logo-bg here on purpose — the inlined SVGs MUST be
+   * transparent so they sit on whatever bg the page paints. */
+  --logo-text: var(--nav-text);
+  --logo-accent: var(--accent);
+  --logo-accent-hi: var(--accent-hover);
+  --logo-muted: var(--text-muted);
+
   --surface-0: #f4f5f7;
   --surface-1: #ffffff;
   --surface-2: #ffffff;
@@ -438,18 +457,16 @@ input[type="week"] {
 .brand-logo {
   display: block;
   height: 36px;
-  /* The SVG file declares width=1200 height=300 (4:1) but the visible
-     content's effective ratio is ~3.07:1 after the navbar viewBox crop.
-     Pin width explicitly so `width: auto` doesn't compute 4:1 = 144px,
-     which would push nav items into overflow at the issue #1046 1115px
-     viewport (regression caught by test-e2e-playwright.js). */
+  /* Width matches the inline SVG's effective content aspect (~3.08:1)
+     after cropping to the wordmark+nodes region in the navbar viewBox.
+     Pinned explicitly so layout doesn't shift if the SVG is replaced
+     (issue #1046 1115px viewport regression). */
   width: 111px;
   max-height: 36px;
-  /* The SVG bakes its CoreScope brand palette in (CORE = #cfd9c9, SCOPE =
-     #2c8c8c). It does NOT inherit the customizer's --accent / --nav-bg vars
-     today — that's a deliberate brand-consistency choice. If you want
-     theme-reactive logo colors, expose --logo-* CSS vars at :root and have
-     the SVG read them directly via CSS (not as inline style attrs). */
+  /* The logo is inlined into the DOM (PR #1137) so it inherits page
+     CSS variables; theme via --logo-text / --logo-accent / etc. defined
+     in :root above. Customizer changes to --accent / --nav-text
+     propagate automatically. */
 }
 .live-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);
@@ -1398,7 +1415,6 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 @media (max-width: 900px) {
   .panel-right { width: 320px; min-width: 320px; }
   .nav-stats { display: none; }
-  .brand-text { font-size: 14px; }
   .brand-logo { height: 32px; width: 99px; }
   .nav-link { padding: 14px 8px; font-size: 13px; }
   .map-controls { width: 180px; font-size: 12px; }
@@ -1483,7 +1499,6 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 
 /* === Responsive — Mobile (≤640px) === */
 @media (max-width: 640px) {
-  .brand-text { display: none; }
   .nav-right { gap: 4px; }
 
   /* Layouts: stack instead of side-by-side */

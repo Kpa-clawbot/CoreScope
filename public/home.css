@@ -37,8 +37,10 @@
   max-width: min(720px, 90vw);
   height: auto;
   margin: 0 auto 16px;
-  /* Hero SVG uses the baked CoreScope brand palette — does not theme via
-     --accent. See .brand-logo in style.css for the rationale. */
+  /* Inline SVG (PR #1137): inherits page CSS vars (--logo-text /
+     --logo-accent / --logo-accent-hi / --logo-muted) so it themes with
+     the rest of the UI on light AND dark themes. No baked background
+     rect — the SVG is transparent and sits on .home-hero's surface. */
 }
 .home-hero h1 {
   font: 700 1.5rem/1.2 var(--font);
