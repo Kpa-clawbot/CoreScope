@@ -113,8 +113,13 @@ async function main() {
     console.log('  ✅ .live-dot present, visible, and right of the logo');
     passed++;
 
-    // 4. Home hero image
-    await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
+    // 4. Home hero image — ensure user level is set so we render the hero,
+    // not the new-user chooser screen.
+    await page.evaluate(() => { try { localStorage.setItem('meshcore-user-level', 'experienced'); } catch (_) {} });
+    await page.evaluate(() => { window.location.hash = '#/home'; });
+    await page.waitForFunction(() => location.hash === '#/home');
+    // Reload so the SPA router picks up the route AND localStorage is honored.
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.home-hero', { timeout: 8000 });
     const heroImg = await page.$('.home-hero img.home-hero-logo');
     if (!heroImg) fail('home page .home-hero is missing <img class="home-hero-logo">');
