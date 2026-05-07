@@ -1389,10 +1389,15 @@
           ${(() => { const regions = [...new Set(observers.map(o => o.iata).filter(Boolean))]; return regions.length ? `<div style="margin-bottom:6px;font-size:12px"><strong>Regions:</strong> ${regions.join(', ')}</div>` : ''; })()}
           <h4>Heard By (${observers.length} observer${observers.length > 1 ? 's' : ''})</h4>
           <div class="observer-list">
-            ${observers.map(o => `<div class="observer-row" style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">
+            ${observers.map(o => {
+              const stats = [`${o.packetCount} pkts`];
+              if (o.avgSnr != null) stats.push('SNR ' + Number(o.avgSnr).toFixed(1) + 'dB');
+              if (o.avgRssi != null) stats.push('RSSI ' + Number(o.avgRssi).toFixed(0));
+              return `<div class="observer-row" style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">
               <span style="font-weight:600">${escapeHtml(o.observer_name || o.observer_id)}${o.iata ? ' <span class="badge" style="font-size:10px">' + escapeHtml(o.iata) + '</span>' : ''}</span>
-              <span style="color:var(--text-muted)">${o.packetCount} pkts · ${o.avgSnr != null ? 'SNR ' + Number(o.avgSnr).toFixed(1) + 'dB' : ''}${o.avgRssi != null ? ' · RSSI ' + Number(o.avgRssi).toFixed(0) : ''}</span>
-            </div>`).join('')}
+              <span style="color:var(--text-muted)">${stats.join(' · ')}</span>
+            </div>`;
+            }).join('')}
           </div>
         </div>` : ''}
 
