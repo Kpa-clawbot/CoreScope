@@ -72,10 +72,20 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(stubBody) });
   });
 
-  // Navigate to the nodes page and select the node so the side panel renders.
-  await step('navigate /#/nodes/<pubkey> and wait for side-panel render', async () => {
-    await page.goto(BASE + '/#/nodes/' + encodeURIComponent(pubkey), { waitUntil: 'domcontentloaded' });
-    // The side panel renders into #nodesRight. Wait for the observer rows.
+  // Navigate to the nodes LIST page (not /#/nodes/<pubkey> — that opens the
+  // full-screen view, which uses a different, already null-safe template
+  // with separate <td> cells). The bug lives in the side-panel template
+  // that renders when you click a row on the list page.
+  await step('navigate /#/nodes (list view) and wait for rows', async () => {
+    await page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#nodesBody tr[data-action="select"]', { timeout: 15000 });
+  });
+
+  await step('click target row to open side-panel detail', async () => {
+    const sel = '#nodesBody tr[data-action="select"][data-value="' + pubkey + '"]';
+    await page.waitForSelector(sel, { timeout: 8000 });
+    await page.evaluate((s) => document.querySelector(s).scrollIntoView(), sel);
+    await page.click(sel);
     await page.waitForSelector('#nodesRight .observer-row', { timeout: 15000 });
   });
 
