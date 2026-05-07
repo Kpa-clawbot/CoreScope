@@ -16,6 +16,15 @@ if [ -d public/img ]; then
   mkdir -p public-instrumented/img
   cp -r public/img/. public-instrumented/img/
 fi
+# Copy webfonts (e.g. public/fonts/aldrich-regular.woff2 used by the
+# navbar logo SVG @font-face, #1137 follow-up). Same SPA-fallback gotcha
+# as /img — without this, GET /fonts/aldrich-regular.woff2 returns
+# index.html and the @font-face download fails silently, so the logo
+# falls back to monospace and the Aldrich E2E assertion fails.
+if [ -d public/fonts ]; then
+  mkdir -p public-instrumented/fonts
+  cp -r public/fonts/. public-instrumented/fonts/
+fi
 # Copy vendored libraries unmodified — `nyc instrument` skips subdirectories
 # without a package.json, so vendor/qrcode.js, vendor/jsqr.min.js, etc. are
 # never emitted into public-instrumented/. Without them the SPA fallback
