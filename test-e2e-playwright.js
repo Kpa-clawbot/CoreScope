@@ -56,6 +56,23 @@ async function run() {
     assert(nav, 'Nav bar not found');
   });
 
+  // #1137 follow-up: Aldrich webfont must actually load so the navbar logo SVG
+  // renders in the intended typeface (not the silent monospace fallback).
+  await test('#1137 Aldrich webfont is loaded for navbar logo SVG', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    // Wait for fonts to be ready (FontFaceSet API).
+    await page.evaluate(() => document.fonts.ready);
+    const aldrichLoaded = await page.evaluate(() => document.fonts.check('1em Aldrich'));
+    assert(aldrichLoaded, 'document.fonts.check("1em Aldrich") returned false — Aldrich is not loaded');
+    // Sanity: the inline SVG <text> still declares Aldrich in its font-family.
+    const fontFamily = await page.evaluate(() => {
+      const t = document.querySelector('nav svg text, .navbar svg text, header svg text');
+      return t ? (t.getAttribute('font-family') || getComputedStyle(t).fontFamily) : null;
+    });
+    assert(fontFamily && /aldrich/i.test(fontFamily),
+      `Navbar SVG <text> font-family should include Aldrich, got: ${fontFamily}`);
+  });
+
   // Test 6: Theme customizer opens (reuses home page from test 1)
   await test('Theme customizer opens', async () => {
     // Look for palette/customize button
