@@ -32,7 +32,13 @@
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
-const LEGACY_SAGE = 'rgb(207, 217, 201)';
+// Note: rgb(207, 217, 201) is the brand sage default for --logo-accent
+// (see test-logo-default-sage-teal-e2e.js). It is NO LONGER a failure
+// signal here; the original "must not be sage" assertion was written
+// when sage meant "baked-into-SVG-attr regression" and the wordmark was
+// supposed to follow --accent (then blue). Now sage is the intentional
+// brand identity and the test below asserts theme-reactivity by mutating
+// --logo-accent directly and observing the fill change instead.
 
 function fail(msg) {
   console.error(`test-logo-theme-e2e.js: FAIL — ${msg}`);
@@ -74,8 +80,8 @@ async function main() {
     await page.evaluate(() => { document.documentElement.setAttribute('data-theme', 'light'); });
 
     // 1. Navbar wordmark must be inline-SVG <text> (not <img>) and computed
-    //    fill must NOT be the legacy hardcoded sage. We grep for any <text>
-    //    with textContent CORE or SCOPE inside .nav-brand.
+    //    fill must be theme-reactive: setting --logo-accent / --logo-accent-hi
+    //    on :root must repaint the wordmark.
     const navWordmarkFills = await page.evaluate(() => {
       const out = [];
       const root = document.querySelector('.nav-brand');
@@ -93,12 +99,35 @@ async function main() {
     if (!navWordmarkFills.out || navWordmarkFills.out.length < 2) {
       fail(`navbar inline-SVG wordmark <text> CORE/SCOPE not found (found: ${JSON.stringify(navWordmarkFills.out)}). Navbar logo must be inline <svg> so CSS vars apply.`);
     }
-    for (const w of navWordmarkFills.out) {
-      if (w.fill === LEGACY_SAGE) {
-        fail(`navbar wordmark "${w.tc}" still computes legacy sage fill ${LEGACY_SAGE} — wordmark fill must theme via CSS var`);
-      }
+    // Theme-reactivity probe: override --logo-accent / --logo-accent-hi and
+    // confirm fills change. This replaces the old "must not be legacy sage"
+    // assertion (sage is now the brand default — see test-logo-default-sage-teal-e2e.js).
+    const navReact = await page.evaluate(() => {
+      const root = document.querySelector('.nav-brand');
+      const before = {};
+      root.querySelectorAll('svg text').forEach((t) => {
+        const tc = (t.textContent || '').trim();
+        if (tc === 'CORE' || tc === 'SCOPE') before[tc] = getComputedStyle(t).fill;
+      });
+      document.documentElement.style.setProperty('--logo-accent', '#123456');
+      document.documentElement.style.setProperty('--logo-accent-hi', '#abcdef');
+      const after = {};
+      root.querySelectorAll('svg text').forEach((t) => {
+        const tc = (t.textContent || '').trim();
+        if (tc === 'CORE' || tc === 'SCOPE') after[tc] = getComputedStyle(t).fill;
+      });
+      // Reset so later assertions on default colors aren't polluted.
+      document.documentElement.style.removeProperty('--logo-accent');
+      document.documentElement.style.removeProperty('--logo-accent-hi');
+      return { before, after };
+    });
+    if (navReact.before.CORE === navReact.after.CORE) {
+      fail(`navbar CORE fill did not change when --logo-accent was overridden (${navReact.before.CORE} → ${navReact.after.CORE}); wordmark must theme via --logo-accent`);
     }
-    console.log(`  ✅ navbar wordmark fills are theme-reactive (${navWordmarkFills.out.map((w) => w.tc + '=' + w.fill).join(', ')})`);
+    if (navReact.before.SCOPE === navReact.after.SCOPE) {
+      fail(`navbar SCOPE fill did not change when --logo-accent-hi was overridden (${navReact.before.SCOPE} → ${navReact.after.SCOPE}); wordmark must theme via --logo-accent-hi`);
+    }
+    console.log(`  ✅ navbar wordmark fills are theme-reactive (CORE ${navReact.before.CORE}→${navReact.after.CORE}, SCOPE ${navReact.before.SCOPE}→${navReact.after.SCOPE})`);
     passed++;
 
     // 2. Hero SVG must NOT have a full-canvas opaque background rect.
@@ -136,7 +165,8 @@ async function main() {
     console.log(`  ✅ hero SVG has no full-canvas opaque background rect`);
     passed++;
 
-    // 3. Hero wordmark CORE/SCOPE must not compute legacy sage fill on light theme.
+    // 3. Hero wordmark CORE/SCOPE must be theme-reactive — overriding
+    //    --logo-accent / --logo-accent-hi must repaint the hero wordmark too.
     const heroWordmarkFills = await page.evaluate(() => {
       const hero = document.querySelector('.home-hero');
       if (!hero) return { error: '.home-hero missing' };
@@ -153,12 +183,31 @@ async function main() {
     if (!heroWordmarkFills.out || heroWordmarkFills.out.length < 2) {
       fail(`hero inline-SVG wordmark <text> CORE/SCOPE not found (found: ${JSON.stringify(heroWordmarkFills.out)})`);
     }
-    for (const w of heroWordmarkFills.out) {
-      if (w.fill === LEGACY_SAGE) {
-        fail(`hero wordmark "${w.tc}" still computes legacy sage fill ${LEGACY_SAGE} — invisible on light theme`);
-      }
+    const heroReact = await page.evaluate(() => {
+      const hero = document.querySelector('.home-hero');
+      const before = {};
+      hero.querySelectorAll('svg text').forEach((t) => {
+        const tc = (t.textContent || '').trim();
+        if (tc === 'CORE' || tc === 'SCOPE') before[tc] = getComputedStyle(t).fill;
+      });
+      document.documentElement.style.setProperty('--logo-accent', '#654321');
+      document.documentElement.style.setProperty('--logo-accent-hi', '#fedcba');
+      const after = {};
+      hero.querySelectorAll('svg text').forEach((t) => {
+        const tc = (t.textContent || '').trim();
+        if (tc === 'CORE' || tc === 'SCOPE') after[tc] = getComputedStyle(t).fill;
+      });
+      document.documentElement.style.removeProperty('--logo-accent');
+      document.documentElement.style.removeProperty('--logo-accent-hi');
+      return { before, after };
+    });
+    if (heroReact.before.CORE === heroReact.after.CORE) {
+      fail(`hero CORE fill did not change when --logo-accent was overridden (${heroReact.before.CORE} → ${heroReact.after.CORE})`);
     }
-    console.log(`  ✅ hero wordmark fills are theme-reactive (${heroWordmarkFills.out.map((w) => w.tc + '=' + w.fill).join(', ')})`);
+    if (heroReact.before.SCOPE === heroReact.after.SCOPE) {
+      fail(`hero SCOPE fill did not change when --logo-accent-hi was overridden (${heroReact.before.SCOPE} → ${heroReact.after.SCOPE})`);
+    }
+    console.log(`  ✅ hero wordmark fills are theme-reactive (CORE ${heroReact.before.CORE}→${heroReact.after.CORE}, SCOPE ${heroReact.before.SCOPE}→${heroReact.after.SCOPE})`);
     passed++;
 
     // 4 & 5. Duotone — CORE fill must differ from SCOPE fill in BOTH navbar
