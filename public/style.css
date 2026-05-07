@@ -1566,7 +1566,15 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .hamburger { display: inline-flex; }
   .nav-more-wrap { display: none !important; }
   .nav-links {
-    display: none; position: absolute; top: 52px; left: 0; right: 0;
+    /* Issue #1109: was position:absolute. The containing block becomes
+       .top-nav (the nearest positioned ancestor: position:sticky), which
+       has `overflow:hidden; height:52px` since #1066 to guard against
+       horizontal overflow during the Priority+ measurement pass. That
+       guard clipped this dropdown invisibly below the navbar. Switching
+       to position:fixed escapes any overflow:hidden ancestor (containing
+       block becomes the viewport) without relaxing the #1066 desktop
+       overflow guard. */
+    display: none; position: fixed; top: 52px; left: 0; right: 0;
     background: var(--nav-bg); flex-direction: column; padding: 8px 0;
     box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 1100;
     max-height: calc(100dvh - 52px); overflow-y: auto;
