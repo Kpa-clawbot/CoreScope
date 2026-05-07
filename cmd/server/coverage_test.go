@@ -50,6 +50,16 @@ func setupTestDBv2(t *testing.T) *DB {
 			observer_id TEXT, observer_name TEXT, direction TEXT,
 			snr REAL, rssi REAL, score INTEGER, path_json TEXT, timestamp INTEGER NOT NULL, raw_hex TEXT
 		);
+		CREATE TRIGGER IF NOT EXISTS test_from_pubkey_advert
+		AFTER INSERT ON transmissions
+		FOR EACH ROW
+		WHEN NEW.from_pubkey IS NULL AND NEW.payload_type = 4 AND NEW.decoded_json IS NOT NULL
+		BEGIN
+			UPDATE transmissions
+			SET from_pubkey = json_extract(NEW.decoded_json, '$.pubKey')
+			WHERE id = NEW.id;
+		END;
+		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)

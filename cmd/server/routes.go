@@ -1236,11 +1236,9 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	name := ""
-	if n, ok := node["name"]; ok && n != nil {
-		name = fmt.Sprintf("%v", n)
-	}
-	recentAdverts, _ := s.db.GetRecentTransmissionsForNode(pubkey, name, 20)
+	// #1143: GetRecentTransmissionsForNode no longer accepts a name fallback;
+	// attribution is strict exact-match on the indexed from_pubkey column.
+	recentAdverts, _ := s.db.GetRecentTransmissionsForNode(pubkey, 20)
 
 	writeJSON(w, NodeDetailResponse{
 		Node:          node,

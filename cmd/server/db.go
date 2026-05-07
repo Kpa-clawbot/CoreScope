@@ -579,8 +579,10 @@ func (db *DB) buildPacketWhere(q PacketQuery) ([]string, []interface{}) {
 	}
 	if q.Node != "" {
 		pk := db.resolveNodePubkey(q.Node)
-		where = append(where, "decoded_json LIKE ?")
-		args = append(args, "%"+pk+"%")
+		// #1143: exact-match on the dedicated from_pubkey column instead of
+		// LIKE-on-JSON substring (adversarial spoof + same-name false positives).
+		where = append(where, "from_pubkey = ?")
+		args = append(args, pk)
 	}
 	return where, args
 }
@@ -623,8 +625,9 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 	}
 	if q.Node != "" {
 		pk := db.resolveNodePubkey(q.Node)
-		where = append(where, "t.decoded_json LIKE ?")
-		args = append(args, "%"+pk+"%")
+		// #1143: exact-match on dedicated from_pubkey column.
+		where = append(where, "t.from_pubkey = ?")
+		args = append(args, pk)
 	}
 	if q.Channel != "" {
 		// channel_hash column is indexed for payload_type = 5; filter is exact match.
@@ -894,27 +897,22 @@ func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
 }
 
 
-// GetRecentTransmissionsForNode returns recent transmissions referencing a node (Node.js-compatible shape).
-func (db *DB) GetRecentTransmissionsForNode(pubkey string, name string, limit int) ([]map[string]interface{}, error) {
+// GetRecentTransmissionsForNode returns recent transmissions originated by a
+// node, identified by exact pubkey match on the indexed from_pubkey column
+// (#1143). The legacy `name` substring fallback was removed: it produced
+// same-name false positives and an adversarial spoof path where any node
+// could attribute its transmissions to a victim by naming itself with the
+// victim's pubkey. Pubkey is unique by design — that's the whole point.
+func (db *DB) GetRecentTransmissionsForNode(pubkey string, limit int) ([]map[string]interface{}, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	pk := "%" + pubkey + "%"
-	np := "%" + name + "%"
 
 	selectCols, observerJoin := db.transmissionBaseSQL()
 
-	var querySQL string
-	var args []interface{}
-	if name != "" {
-		querySQL = fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.decoded_json LIKE ? OR t.decoded_json LIKE ? ORDER BY t.first_seen DESC LIMIT ?",
-			selectCols, observerJoin)
-		args = []interface{}{pk, np, limit}
-	} else {
-		querySQL = fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.decoded_json LIKE ? ORDER BY t.first_seen DESC LIMIT ?",
-			selectCols, observerJoin)
-		args = []interface{}{pk, limit}
-	}
+	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.from_pubkey = ? ORDER BY t.first_seen DESC LIMIT ?",
+		selectCols, observerJoin)
+	args := []interface{}{pubkey, limit}
 
 	rows, err := db.conn.Query(querySQL, args...)
 	if err != nil {
@@ -1776,15 +1774,17 @@ func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, 
 		order = "DESC"
 	}
 
-	// Build OR conditions for decoded_json LIKE %pubkey%
+	// Build IN(?, ?, ...) on the dedicated from_pubkey column (#1143):
+	// exact match, indexed lookup, no JSON substring scan.
 	var conditions []string
 	var args []interface{}
+	placeholders := make([]string, 0, len(pubkeys))
 	for _, pk := range pubkeys {
-		// Resolve pubkey to also check by name
 		resolved := db.resolveNodePubkey(pk)
-		conditions = append(conditions, "t.decoded_json LIKE ?")
-		args = append(args, "%"+resolved+"%")
+		args = append(args, resolved)
+		placeholders = append(placeholders, "?")
 	}
+	conditions = append(conditions, "t.from_pubkey IN ("+strings.Join(placeholders, ",")+")")
 	jsonWhere := "(" + strings.Join(conditions, " OR ") + ")"
 
 	var timeFilters []string

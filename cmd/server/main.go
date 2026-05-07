@@ -212,6 +212,13 @@ func main() {
 		log.Printf("[store] warning: could not add nodes.foreign_advert column: %v", err)
 	}
 
+	// Ensure transmissions.from_pubkey column + index exists (#1143). Backfill
+	// for legacy NULL rows runs async after HTTP starts so it can't block boot
+	// even on prod-sized DBs (100K+ transmissions).
+	if err := ensureFromPubkeyColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add transmissions.from_pubkey column: %v", err)
+	}
+
 	// Soft-delete observers that are in the blacklist (mark inactive=1) so
 	// historical data from a prior unblocked window is hidden too.
 	if len(cfg.ObserverBlacklist) > 0 {
@@ -529,6 +536,9 @@ func main() {
 
 	// Start async backfill in background — HTTP is now available.
 	go backfillResolvedPathsAsync(store, dbPath, 5000, 100*time.Millisecond, cfg.BackfillHours())
+	// #1143: backfill from_pubkey for legacy ADVERT rows. Async so even
+	// 100K+ rows can't block boot; queries handle NULL gracefully.
+	go backfillFromPubkeyAsync(dbPath, 5000, 100*time.Millisecond)
 
 	// Migrate old content hashes in background (one-time, idempotent).
 	go migrateContentHashesAsync(store, 5000, 100*time.Millisecond)

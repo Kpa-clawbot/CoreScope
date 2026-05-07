@@ -11,9 +11,12 @@ package main
 //            channel names, message bodies) produces false positives
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 const (
@@ -85,7 +88,7 @@ func TestRecentTransmissions_Hole1_SameNameDifferentPubkey(t *testing.T) {
 	defer db.Close()
 	victim := seedAttribution(t, db)
 
-	got, err := db.GetRecentTransmissionsForNode(victim, "VictimNode", 20)
+	got, err := db.GetRecentTransmissionsForNode(victim, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +106,7 @@ func TestRecentTransmissions_Hole2a_PubkeyAsNameSpoof(t *testing.T) {
 	defer db.Close()
 	victim := seedAttribution(t, db)
 
-	got, err := db.GetRecentTransmissionsForNode(victim, "VictimNode", 20)
+	got, err := db.GetRecentTransmissionsForNode(victim, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +125,7 @@ func TestRecentTransmissions_Hole2b_FreeTextHexFalsePositive(t *testing.T) {
 	defer db.Close()
 	victim := seedAttribution(t, db)
 
-	got, err := db.GetRecentTransmissionsForNode(victim, "VictimNode", 20)
+	got, err := db.GetRecentTransmissionsForNode(victim, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +144,7 @@ func TestRecentTransmissions_LegitimateAdvertReturned(t *testing.T) {
 	defer db.Close()
 	victim := seedAttribution(t, db)
 
-	got, err := db.GetRecentTransmissionsForNode(victim, "VictimNode", 20)
+	got, err := db.GetRecentTransmissionsForNode(victim, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,5 +224,73 @@ func TestFromPubkeyIndexUsed(t *testing.T) {
 	}
 	if !strings.Contains(plan, "idx_transmissions_from_pubkey") {
 		t.Fatalf("expected EXPLAIN QUERY PLAN to use idx_transmissions_from_pubkey, got:\n%s", plan)
+	}
+}
+
+// --- Migration / backfill ---
+
+func TestBackfillFromPubkey_AdvertRowsPopulated(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := dir + "/test.db"
+
+	// Create a legacy-style DB: transmissions table WITHOUT from_pubkey,
+	// then run ensureFromPubkeyColumn to ALTER it in.
+	rw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rw.Exec(`CREATE TABLE transmissions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		raw_hex TEXT, hash TEXT UNIQUE, first_seen TEXT,
+		route_type INTEGER, payload_type INTEGER, payload_version INTEGER,
+		decoded_json TEXT, created_at TEXT
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	// Two ADVERTs (different pubkeys) and a non-ADVERT.
+	if _, err := rw.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type, decoded_json) VALUES
+		('AA','m1','2026-01-01T00:00:00Z',4,'{"type":"ADVERT","pubKey":"`+pkVictim+`","name":"V"}'),
+		('BB','m2','2026-01-01T00:00:00Z',4,'{"type":"ADVERT","pubKey":"`+pkOther+`","name":"O"}'),
+		('CC','m3','2026-01-01T00:00:00Z',5,'{"type":"GRP_TXT","text":"hi"}')`); err != nil {
+		t.Fatal(err)
+	}
+	rw.Close()
+
+	if err := ensureFromPubkeyColumn(dbPath); err != nil {
+		t.Fatalf("ensureFromPubkeyColumn: %v", err)
+	}
+
+	// Run synchronously by calling the function directly.
+	backfillFromPubkeyAsync(dbPath, 100, 0)
+
+	// Verify backfill populated the ADVERT rows.
+	rw2, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rw2.Close()
+	rows, err := rw2.Query("SELECT hash, from_pubkey FROM transmissions ORDER BY hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[string]string{}
+	for rows.Next() {
+		var h string
+		var pk sql.NullString
+		if err := rows.Scan(&h, &pk); err != nil {
+			t.Fatal(err)
+		}
+		got[h] = pk.String
+	}
+	if got["m1"] != pkVictim {
+		t.Errorf("m1 from_pubkey = %q, want %q", got["m1"], pkVictim)
+	}
+	if got["m2"] != pkOther {
+		t.Errorf("m2 from_pubkey = %q, want %q", got["m2"], pkOther)
+	}
+	// Non-ADVERT row was not in the backfill scope; from_pubkey stays NULL.
+	if got["m3"] != "" {
+		t.Errorf("m3 from_pubkey = %q, want empty (NULL)", got["m3"])
 	}
 }
