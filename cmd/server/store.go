@@ -189,6 +189,12 @@ type PacketStore struct {
 	hashSizeInfoCache map[string]*hashSizeNodeInfo
 	hashSizeInfoAt    time.Time
 
+	// Cached relay stats batch result — recomputed at most once every 30s.
+	relayStatsCacheMu     sync.Mutex
+	relayStatsCache       map[string]RepeaterNodeStats
+	relayStatsCacheAt     time.Time
+	relayStatsCacheWindow float64
+
 	// Cached multi-byte capability map (pubkey → entry), recomputed every 15s.
 	multiByteCapCache map[string]*MultiByteCapEntry
 	multiByteCapAt    time.Time

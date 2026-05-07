@@ -1111,7 +1111,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		relayStats := s.store.GetRepeaterNodeStatsBatch(repeaterPKs, relayWindow)
+		relayStats := s.store.GetRepeaterNodeStatsBatchCached(repeaterPKs, relayWindow)
 
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {

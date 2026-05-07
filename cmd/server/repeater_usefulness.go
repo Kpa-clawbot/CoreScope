@@ -209,3 +209,28 @@ func (s *PacketStore) GetRepeaterNodeStatsBatch(pubkeys []string, windowHours fl
 
 	return result
 }
+
+// GetRepeaterNodeStatsBatchCached wraps GetRepeaterNodeStatsBatch with a 30s
+// TTL cache. handleNodes calls this for every map/live/node request; without
+// caching the full batch over ~1900 repeaters takes 20-30s on large datasets.
+func (s *PacketStore) GetRepeaterNodeStatsBatchCached(pubkeys []string, windowHours float64) map[string]RepeaterNodeStats {
+	s.relayStatsCacheMu.Lock()
+	if s.relayStatsCache != nil &&
+		s.relayStatsCacheWindow == windowHours &&
+		time.Since(s.relayStatsCacheAt) < 30*time.Second {
+		cached := s.relayStatsCache
+		s.relayStatsCacheMu.Unlock()
+		return cached
+	}
+	s.relayStatsCacheMu.Unlock()
+
+	result := s.GetRepeaterNodeStatsBatch(pubkeys, windowHours)
+
+	s.relayStatsCacheMu.Lock()
+	s.relayStatsCache = result
+	s.relayStatsCacheAt = time.Now()
+	s.relayStatsCacheWindow = windowHours
+	s.relayStatsCacheMu.Unlock()
+
+	return result
+}
