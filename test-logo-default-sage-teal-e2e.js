@@ -73,6 +73,7 @@ async function main() {
     // Defensive: ensure no customizer overrides leak in.
     await page1.addInitScript(() => {
       try { localStorage.removeItem('cs-theme-overrides'); } catch (_) {}
+      try { localStorage.setItem('meshcore-user-level', 'experienced'); } catch (_) {}
     });
     await page1.goto(BASE + '/#/', { waitUntil: 'domcontentloaded' });
     await page1.waitForSelector('.nav-brand svg.brand-logo text', { timeout: 8000 });
@@ -125,6 +126,7 @@ async function main() {
           theme:     { accent: '#dc2626', accentHover: '#ef4444' },
           themeDark: { accent: '#dc2626', accentHover: '#ef4444' },
         }));
+        localStorage.setItem('meshcore-user-level', 'experienced');
       } catch (_) {}
     });
     await page2.goto(BASE + '/#/', { waitUntil: 'domcontentloaded' });
