@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // GetRepeaterUsefulnessScore returns a 0..1 score representing what
 // fraction of non-advert traffic in the store passes through this
@@ -61,4 +64,148 @@ func (s *PacketStore) GetRepeaterUsefulnessScore(pubkey string) float64 {
 		return 1
 	}
 	return score
+}
+
+// RepeaterNodeStats bundles relay-activity and usefulness data for a single node.
+type RepeaterNodeStats struct {
+	Info  RepeaterRelayInfo
+	Score float64
+}
+
+// GetRepeaterNodeStatsBatch computes relay info and usefulness scores for all given
+// pubkeys in a single read-lock pass, sharing the non-advert denominator across all
+// nodes. Replaces the per-node loop in handleNodes that called GetRepeaterRelayInfo +
+// GetRepeaterUsefulnessScore N times (O(N × byPayloadType) → O(byPayloadType + N)).
+func (s *PacketStore) GetRepeaterNodeStatsBatch(pubkeys []string, windowHours float64) map[string]RepeaterNodeStats {
+	result := make(map[string]RepeaterNodeStats, len(pubkeys))
+	if len(pubkeys) == 0 {
+		return result
+	}
+
+	type nodeSnap struct {
+		txList     []*StoreTx
+		prefixList []*StoreTx
+	}
+
+	s.mu.RLock()
+
+	totalNonAdvert := 0
+	for pt, list := range s.byPayloadType {
+		if pt != payloadTypeAdvert {
+			totalNonAdvert += len(list)
+		}
+	}
+
+	snaps := make(map[string]nodeSnap, len(pubkeys))
+	for _, pk := range pubkeys {
+		key := strings.ToLower(pk)
+		snap := nodeSnap{txList: s.byPathHop[key]}
+		if len(key) >= 2 {
+			if prefix := key[:2]; prefix != key {
+				snap.prefixList = s.byPathHop[prefix]
+			}
+		}
+		snaps[pk] = snap
+	}
+
+	s.mu.RUnlock()
+
+	now := time.Now().UTC()
+	cutoff1h := now.Add(-time.Hour)
+	cutoff24h := now.Add(-24 * time.Hour)
+	var windowCutoff time.Time
+	if windowHours > 0 {
+		windowCutoff = now.Add(-time.Duration(float64(time.Hour) * windowHours))
+	}
+
+	for _, pk := range pubkeys {
+		snap := snaps[pk]
+		info := RepeaterRelayInfo{WindowHours: windowHours}
+
+		type entry struct {
+			ts string
+			pt int
+		}
+		uniq := make(map[int]struct{}, len(snap.txList)+len(snap.prefixList))
+		for _, tx := range snap.txList {
+			if tx != nil {
+				uniq[tx.ID] = struct{}{}
+			}
+		}
+		for _, tx := range snap.prefixList {
+			if tx != nil {
+				uniq[tx.ID] = struct{}{}
+			}
+		}
+		entries := make([]entry, 0, len(uniq))
+		seen := make(map[int]bool, len(uniq))
+		collect := func(list []*StoreTx) {
+			for _, tx := range list {
+				if tx == nil || seen[tx.ID] {
+					continue
+				}
+				seen[tx.ID] = true
+				pt := -1
+				if tx.PayloadType != nil {
+					pt = *tx.PayloadType
+				}
+				entries = append(entries, entry{ts: tx.FirstSeen, pt: pt})
+			}
+		}
+		collect(snap.txList)
+		collect(snap.prefixList)
+
+		var latest time.Time
+		var latestRaw string
+		for _, e := range entries {
+			if e.pt == payloadTypeAdvert {
+				continue
+			}
+			t, ok := parseRelayTS(e.ts)
+			if !ok {
+				continue
+			}
+			if t.After(latest) {
+				latest = t
+				latestRaw = e.ts
+			}
+			if t.After(cutoff24h) {
+				info.RelayCount24h++
+				if t.After(cutoff1h) {
+					info.RelayCount1h++
+				}
+			}
+		}
+		if latestRaw != "" {
+			info.LastRelayed = latestRaw
+			if windowHours > 0 && latest.After(windowCutoff) {
+				info.RelayActive = true
+			}
+		}
+
+		// Usefulness score uses full-key list only (matches GetRepeaterUsefulnessScore).
+		var score float64
+		if totalNonAdvert > 0 {
+			relayed := 0
+			for _, tx := range snap.txList {
+				if tx == nil {
+					continue
+				}
+				if tx.PayloadType != nil && *tx.PayloadType == payloadTypeAdvert {
+					continue
+				}
+				relayed++
+			}
+			if relayed > 0 {
+				score = float64(relayed) / float64(totalNonAdvert)
+				if score > 1 {
+					score = 1
+				}
+			}
+		}
+
+		result[pk] = RepeaterNodeStats{Info: info, Score: score}
+	}
+
+	return result
 }
