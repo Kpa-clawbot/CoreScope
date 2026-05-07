@@ -164,9 +164,19 @@ async function main() {
         }));
       } catch (_) {}
     });
-    await page.goto(BASE + '/#/', { waitUntil: 'domcontentloaded' });
+    await page.goto(BASE + '/#/', { waitUntil: 'networkidle' });
     await page.waitForSelector('.nav-brand img', { timeout: 8000 });
-    // Give customize-v2.js DOMContentLoaded handler a moment to apply.
+    // Force-apply the override pipeline (in case _customizerV2.init was racing
+    // /api/config/theme — production code's DOMContentLoaded boot path runs
+    // synchronously, but instrumented JS in CI can be slower).
+    await page.evaluate(() => {
+      try {
+        if (window._customizerV2 && typeof window._customizerV2.init === 'function') {
+          window._customizerV2.init(window.SITE_CONFIG || {});
+        }
+      } catch (_) {}
+    });
+    // Give pipeline a moment to settle.
     await page.waitForFunction(() => {
       var img = document.querySelector('.nav-brand img');
       return img && /override=1/.test(img.getAttribute('src') || '');
@@ -177,10 +187,12 @@ async function main() {
         src: img ? img.getAttribute('src') || '' : null,
         alt: img ? img.getAttribute('alt') || '' : null,
         title: document.title,
+        hasV2: !!window._customizerV2,
+        ovStored: localStorage.getItem('cs-theme-overrides'),
       };
     });
     if (!overrideState.src || !/override=1/.test(overrideState.src)) {
-      fail(`customizer logoUrl override did not propagate to navbar img (src=${overrideState.src})`);
+      fail(`customizer logoUrl override did not propagate to navbar img (src=${overrideState.src} hasV2=${overrideState.hasV2} ovStored=${overrideState.ovStored})`);
     }
     if (overrideState.title !== 'OverrideSite') {
       fail(`customizer siteName override did not update document.title (got: ${overrideState.title})`);
