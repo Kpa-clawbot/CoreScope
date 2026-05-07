@@ -1232,6 +1232,20 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .node-full-card .data-table td a {
   color: var(--accent);
 }
+/* #1146: "Paths Through This Node" entries render as <div> blocks, not
+   tables, so the rule above doesn't reach them. Without this, the path-hop
+   <a> elements inherit the UA-default rgb(0,0,238) blue, which on the dark
+   card surface (--card-bg: #1a1a2e) computes to ~1.8-3.0:1 — well below
+   the 4.5:1 WCAG AA body-text minimum. Use --accent so the link tracks the
+   active theme (and customizer overrides) like the data-table links do. */
+.node-detail-section #pathsContent a,
+.node-full-card #fullPathsContent a {
+  color: var(--accent);
+}
+.node-detail-section #pathsContent a:hover,
+.node-full-card #fullPathsContent a:hover {
+  color: var(--accent-hover);
+}
 .node-detail-section h4 {
   font-size: 12px; text-transform: uppercase; letter-spacing: .5px;
   color: var(--text-muted); margin-bottom: 8px; padding-bottom: 4px;
