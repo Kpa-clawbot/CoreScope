@@ -5,7 +5,10 @@
  *
  * Asserts (in order):
  *   1. Navbar has an <img> whose src ends with /img/corescope-logo.svg
- *      and is INSIDE the .nav-brand link (so the brand link stays clickable).
+ *      OR an inline <svg class="brand-logo"> (PR #1137 inlined the SVG so
+ *      it can inherit page CSS vars and theme on light/dark).
+ *      The brand element must be INSIDE the .nav-brand link (so the brand
+ *      link stays clickable).
  *   2. Old .brand-icon (🍄) and .brand-text spans are gone.
  *   3. The .live-dot WS-status indicator is still present and visible
  *      and sits to the right of the logo (left edge of dot ≥ right edge of img).
@@ -72,16 +75,30 @@ async function main() {
     const page = await context.newPage();
     page.setDefaultTimeout(10000);
 
-    // 1. Navbar has the logo <img> inside .nav-brand
+    // 1. Navbar has the brand logo inside .nav-brand. Post PR #1137 the
+    //    default is an inline <svg.brand-logo>; if an operator overrode
+    //    branding.logoUrl the customizer swaps it for an <img.brand-logo>.
     await page.goto(BASE + '/#/', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.nav-brand', { timeout: 8000 });
-    const navImg = await page.$('.nav-brand img');
-    if (!navImg) fail('navbar .nav-brand has no <img> child (expected corescope-logo.svg)');
-    const navSrc = await navImg.evaluate((el) => el.getAttribute('src') || '');
-    if (!/corescope-logo\.svg($|\?)/.test(navSrc)) {
-      fail(`navbar img src does not point to corescope-logo.svg (got: ${navSrc})`);
+    const navBrand = await page.evaluate(() => {
+      const el = document.querySelector('.nav-brand .brand-logo');
+      if (!el) return { ok: false, reason: 'no .brand-logo in .nav-brand' };
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'img') {
+        const src = el.getAttribute('src') || '';
+        return { ok: /corescope-logo\.svg($|\?)/.test(src), tag, src };
+      }
+      if (tag === 'svg') {
+        // Inline SVG default — verify it actually renders the brand artwork.
+        const hasText = !!el.querySelector('text');
+        return { ok: hasText, tag, src: '<inline-svg>' };
+      }
+      return { ok: false, reason: 'unexpected .brand-logo tag: ' + tag };
+    });
+    if (!navBrand.ok) {
+      fail(`navbar .brand-logo invalid (${navBrand.reason || 'tag=' + navBrand.tag + ' src=' + navBrand.src})`);
     }
-    console.log('  ✅ navbar contains <img src=".../corescope-logo.svg">');
+    console.log(`  ✅ navbar contains .brand-logo (${navBrand.tag})`);
     passed++;
 
     // 2. Old emoji + brand-text are gone
@@ -91,11 +108,11 @@ async function main() {
     console.log('  ✅ legacy mushroom emoji + "CoreScope" text removed');
     passed++;
 
-    // 3. Live-dot still there, visible, and to the right of the logo image
+    // 3. Live-dot still there, visible, and to the right of the brand logo.
     const dot = await page.$('.nav-brand .live-dot, .nav-brand #liveDot');
     if (!dot) fail('.live-dot is missing from .nav-brand (WS connection indicator must remain)');
     const layout = await page.evaluate(() => {
-      const i = document.querySelector('.nav-brand img');
+      const i = document.querySelector('.nav-brand .brand-logo');
       const d = document.querySelector('.nav-brand .live-dot') || document.querySelector('.nav-brand #liveDot');
       const ir = i ? i.getBoundingClientRect() : null;
       const dr = d ? d.getBoundingClientRect() : null;
@@ -106,11 +123,11 @@ async function main() {
       };
     });
     if (!layout.dotVisible) fail('.live-dot is not visible (display/visibility/opacity)');
-    if (!layout.ir || !layout.dr) fail('could not measure layout of img or live-dot');
+    if (!layout.ir || !layout.dr) fail('could not measure layout of brand-logo or live-dot');
     if (layout.dr.left + 0.5 < layout.ir.right) {
-      fail(`live-dot overlaps the logo image (img.right=${layout.ir.right.toFixed(1)} dot.left=${layout.dr.left.toFixed(1)})`);
+      fail(`live-dot overlaps the brand logo (logo.right=${layout.ir.right.toFixed(1)} dot.left=${layout.dr.left.toFixed(1)})`);
     }
-    console.log('  ✅ .live-dot present, visible, and right of the logo');
+    console.log('  ✅ .live-dot present, visible, and right of the brand logo');
     passed++;
 
     // 4. Home hero image — ensure user level is set so we render the hero,
@@ -121,23 +138,37 @@ async function main() {
     // Reload so the SPA router picks up the route AND localStorage is honored.
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.home-hero', { timeout: 8000 });
-    const heroImg = await page.$('.home-hero img.home-hero-logo');
-    if (!heroImg) fail('home page .home-hero is missing <img class="home-hero-logo">');
-    const heroSrc = await heroImg.evaluate((el) => el.getAttribute('src') || '');
-    if (!/corescope-hero\.svg($|\?)/.test(heroSrc)) {
-      fail(`home hero img src does not point to corescope-hero.svg (got: ${heroSrc})`);
+    const heroBrand = await page.evaluate(() => {
+      const hero = document.querySelector('.home-hero');
+      if (!hero) return { ok: false, reason: '.home-hero missing' };
+      // PR #1137: inline <svg.home-hero-logo> by default; legacy <img> still
+      // valid for any operator who shipped a custom build.
+      const el = hero.querySelector('.home-hero-logo');
+      if (!el) return { ok: false, reason: '.home-hero-logo missing inside .home-hero' };
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'img') {
+        const src = el.getAttribute('src') || '';
+        return { ok: /corescope-hero\.svg($|\?)/.test(src), tag, src };
+      }
+      if (tag === 'svg') {
+        const hasText = !!el.querySelector('text');
+        return { ok: hasText, tag };
+      }
+      return { ok: false, reason: 'unexpected .home-hero-logo tag: ' + tag };
+    });
+    if (!heroBrand.ok) {
+      fail(`home page .home-hero-logo invalid (${heroBrand.reason || 'tag=' + heroBrand.tag})`);
     }
     const order = await page.evaluate(() => {
       const hero = document.querySelector('.home-hero');
       if (!hero) return -1;
-      const img = hero.querySelector('img.home-hero-logo');
+      const img = hero.querySelector('.home-hero-logo');
       const h1 = hero.querySelector('h1');
       if (!img || !h1) return -2;
-      // image should appear before h1 in DOM order
       return (img.compareDocumentPosition(h1) & Node.DOCUMENT_POSITION_FOLLOWING) ? 1 : 0;
     });
-    if (order !== 1) fail(`home-hero <img> must precede the <h1> (compareDocumentPosition=${order})`);
-    console.log('  ✅ home page hero contains <img.home-hero-logo> above the h1');
+    if (order !== 1) fail(`home-hero brand element must precede the <h1> (compareDocumentPosition=${order})`);
+    console.log(`  ✅ home page hero contains .home-hero-logo (${heroBrand.tag}) above the h1`);
     passed++;
 
     // 5. Both assets actually serve
@@ -165,7 +196,9 @@ async function main() {
       } catch (_) {}
     });
     await page.goto(BASE + '/#/', { waitUntil: 'networkidle' });
-    await page.waitForSelector('.nav-brand img', { timeout: 8000 });
+    // PR #1137: default brand is inline <svg>; the override path swaps it
+    // for an <img>. Wait for either tag to be present (boot-time render).
+    await page.waitForSelector('.nav-brand .brand-logo', { timeout: 8000 });
     // Force-apply the override pipeline (in case _customizerV2.init was racing
     // /api/config/theme — production code's DOMContentLoaded boot path runs
     // synchronously, but instrumented JS in CI can be slower).
@@ -176,7 +209,7 @@ async function main() {
         }
       } catch (_) {}
     });
-    // Give pipeline a moment to settle.
+    // Give pipeline a moment to settle: the helper swaps inline-<svg> → <img>.
     await page.waitForFunction(() => {
       var img = document.querySelector('.nav-brand img');
       return img && /override=1/.test(img.getAttribute('src') || '');

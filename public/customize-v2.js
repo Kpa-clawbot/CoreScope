@@ -53,6 +53,52 @@
 
   var THEME_COLOR_KEYS = Object.keys(THEME_CSS_MAP).filter(function (k) { return k !== 'font' && k !== 'mono'; });
 
+  // ── Brand logo swap helper (PR #1137) ──
+  // The default navbar brand logo is an inline <svg class="brand-logo"> so it
+  // inherits page CSS vars (--logo-text / --logo-accent / etc.). When an
+  // operator overrides branding.logoUrl in the customizer they expect a
+  // remote image — swap the inline <svg> for an <img>. Going back to the
+  // default URL or clearing the override swaps the <img> back to the inline
+  // <svg>. Layout dimensions (width=111 height=36) are preserved either way.
+  function _setBrandLogoUrl(url, alt) {
+    var node = document.querySelector('.nav-brand .brand-logo');
+    if (!node) return;
+    if (url) {
+      if (node.tagName.toLowerCase() === 'img') {
+        node.setAttribute('src', url);
+        if (alt != null) node.setAttribute('alt', alt);
+        return;
+      }
+      // swap inline <svg> → <img>
+      var img = document.createElement('img');
+      img.className = 'brand-logo';
+      img.setAttribute('src', url);
+      img.setAttribute('alt', alt || node.getAttribute('aria-label') || 'Brand');
+      img.setAttribute('width', '111');
+      img.setAttribute('height', '36');
+      node.parentNode.replaceChild(img, node);
+    } else {
+      if (node.tagName.toLowerCase() !== 'img') {
+        if (alt != null) node.setAttribute('aria-label', alt);
+        return;
+      }
+      // swap <img> → inline <svg> by clearing the src; here we just keep the
+      // <img> in place because we don't have the SVG markup at runtime
+      // (it lives in index.html). The next page reload restores the inline
+      // SVG. Setting src to the default URL is a graceful intermediate.
+      node.setAttribute('src', 'img/corescope-logo.svg');
+      if (alt != null) node.setAttribute('alt', alt);
+    }
+  }
+  function _setBrandAlt(alt) {
+    var node = document.querySelector('.nav-brand .brand-logo');
+    if (!node) return;
+    if (node.tagName.toLowerCase() === 'img') node.setAttribute('alt', alt);
+    else node.setAttribute('aria-label', alt);
+    var brandLink = document.querySelector('.nav-brand');
+    if (brandLink) brandLink.setAttribute('aria-label', alt + ' home');
+  }
+
   // ── Presets (copied from v1 customize.js) ──
   var PRESETS = {
     default: {
@@ -544,14 +590,12 @@
     if (br) {
       if (br.siteName) {
         document.title = br.siteName;
-        var brandImgApply = document.querySelector('.nav-brand .brand-logo');
-        if (brandImgApply) brandImgApply.setAttribute('alt', br.siteName);
+        _setBrandAlt(br.siteName);
         var brandEl = document.querySelector('.brand-text');
         if (brandEl) brandEl.textContent = br.siteName;
       }
       if (br.logoUrl) {
-        var brandImgApply2 = document.querySelector('.nav-brand .brand-logo');
-        if (brandImgApply2) brandImgApply2.setAttribute('src', br.logoUrl);
+        _setBrandLogoUrl(br.logoUrl, br.siteName || null);
         var iconEl = document.querySelector('.brand-icon');
         if (iconEl) iconEl.innerHTML = '<img src="' + br.logoUrl + '" style="height:24px" onerror="this.style.display=\'none\'">';
       }
@@ -1364,15 +1408,13 @@
           setOverride(section, key, inp.value);
           // Live branding updates
           if (section === 'branding' && key === 'siteName') {
-            var brandImgLive = document.querySelector('.nav-brand .brand-logo');
-            if (brandImgLive) brandImgLive.setAttribute('alt', inp.value);
+            _setBrandAlt(inp.value);
             var el = document.querySelector('.brand-text');
             if (el) el.textContent = inp.value;
             document.title = inp.value;
           }
           if (section === 'branding' && key === 'logoUrl') {
-            var brandImgLive2 = document.querySelector('.nav-brand .brand-logo');
-            if (brandImgLive2) brandImgLive2.setAttribute('src', inp.value || 'img/corescope-logo.svg');
+            _setBrandLogoUrl(inp.value || '', null);
             var iconEl = document.querySelector('.brand-icon');
             if (iconEl) {
               if (inp.value) iconEl.innerHTML = '<img src="' + inp.value + '" style="height:24px" onerror="this.style.display=\'none\'">';
@@ -1640,15 +1682,13 @@
     var overrides = readOverrides();
     if (overrides.branding) {
       if (overrides.branding.siteName) {
-        var brandImgBoot = document.querySelector('.nav-brand .brand-logo');
-        if (brandImgBoot) brandImgBoot.setAttribute('alt', overrides.branding.siteName);
+        _setBrandAlt(overrides.branding.siteName);
         var brandEl = document.querySelector('.brand-text');
         if (brandEl) brandEl.textContent = overrides.branding.siteName;
         document.title = overrides.branding.siteName;
       }
       if (overrides.branding.logoUrl) {
-        var brandImgBoot2 = document.querySelector('.nav-brand .brand-logo');
-        if (brandImgBoot2) brandImgBoot2.setAttribute('src', overrides.branding.logoUrl);
+        _setBrandLogoUrl(overrides.branding.logoUrl, overrides.branding.siteName || null);
         var iconEl = document.querySelector('.brand-icon');
         if (iconEl) iconEl.innerHTML = '<img src="' + overrides.branding.logoUrl + '" style="height:24px" onerror="this.style.display=\'none\'">';
       }

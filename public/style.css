@@ -118,8 +118,11 @@
    *   --logo-accent-hi → secondary node + right-side arcs (default --accent-hover)
    *   --logo-muted  → tagline + sine wave
    * No --logo-bg here on purpose — the inlined SVGs MUST be
-   * transparent so they sit on whatever bg the page paints. */
-  --logo-text: var(--nav-text);
+   * transparent so they sit on whatever bg the page paints.
+   * --logo-text defaults to --text (the page foreground) so the
+   * hero wordmark is readable on any theme; the navbar scopes it
+   * to --nav-text below so it stays white on the dark navbar. */
+  --logo-text: var(--text);
   --logo-accent: var(--accent);
   --logo-accent-hi: var(--accent-hover);
   --logo-muted: var(--text-muted);
@@ -465,8 +468,14 @@ input[type="week"] {
   max-height: 36px;
   /* The logo is inlined into the DOM (PR #1137) so it inherits page
      CSS variables; theme via --logo-text / --logo-accent / etc. defined
-     in :root above. Customizer changes to --accent / --nav-text
-     propagate automatically. */
+     in :root above. The .top-nav scope below overrides --logo-text to
+     --nav-text so the wordmark stays readable on the dark navbar even
+     when the page theme is Light. */
+}
+.top-nav {
+  /* Navbar lives on --nav-bg (typically dark), so the brand wordmark
+     must use --nav-text rather than the page --text default. */
+  --logo-text: var(--nav-text);
 }
 .live-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);
