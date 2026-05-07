@@ -151,20 +151,22 @@ async function main() {
     passed++;
 
     // 6. Customizer override path still works after the rebrand. Operators
-    // can override branding.siteName + branding.logoUrl via the user-theme
-    // localStorage key; the old code mutated .brand-text / .brand-icon
-    // (which no longer exist), so a naive removal silently breaks the
-    // override flow. Verify the navbar logo <img> picks up the override.
+    // can override branding.siteName + branding.logoUrl via the customizer
+    // (cs-theme-overrides localStorage key in customize-v2.js); the old
+    // code mutated .brand-text / .brand-icon (which no longer exist), so
+    // a naive removal silently breaks the override flow. Verify the navbar
+    // logo <img> picks up the override on next load.
     await page.evaluate(() => {
       try {
-        localStorage.setItem('meshcore-user-theme', JSON.stringify({
+        // customize-v2.js storage key for live overrides.
+        localStorage.setItem('cs-theme-overrides', JSON.stringify({
           branding: { siteName: 'OverrideSite', logoUrl: '/img/corescope-logo.svg?override=1' }
         }));
       } catch (_) {}
     });
     await page.goto(BASE + '/#/', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.nav-brand img', { timeout: 8000 });
-    // Give customize.js a tick to apply the override after DOMContentLoaded.
+    // Give customize-v2.js DOMContentLoaded handler a moment to apply.
     await page.waitForFunction(() => {
       var img = document.querySelector('.nav-brand img');
       return img && /override=1/.test(img.getAttribute('src') || '');
@@ -186,7 +188,7 @@ async function main() {
     console.log('  ✅ customizer branding.siteName + branding.logoUrl overrides still apply post-rebrand');
     passed++;
     // Clean up the override so subsequent test runs aren't polluted.
-    await page.evaluate(() => { try { localStorage.removeItem('meshcore-user-theme'); } catch (_) {} });
+    await page.evaluate(() => { try { localStorage.removeItem('cs-theme-overrides'); } catch (_) {} });
 
     await browser.close();
     console.log(`\ntest-logo-rebrand-e2e.js: ${passed}/${total} PASS`);
