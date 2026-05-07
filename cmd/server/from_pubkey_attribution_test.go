@@ -227,6 +227,36 @@ func TestFromPubkeyIndexUsed(t *testing.T) {
 	}
 }
 
+// TestFromPubkeyIndexUsedForInClause verifies the index is used for the
+// IN (?, ?, ...) query path used by QueryMultiNodePackets (db.go ~1787).
+// Coverage extension — the equality path is covered above; this asserts
+// the multi-node path doesn't silently regress to a full scan when the
+// planner can't use the index for set membership.
+func TestFromPubkeyIndexUsedForInClause(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	mustExec(t, db, `CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey)`)
+
+	rows, err := db.conn.Query(
+		`EXPLAIN QUERY PLAN SELECT id FROM transmissions WHERE from_pubkey IN (?, ?)`,
+		pkVictim, pkOther)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	plan := ""
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err == nil {
+			plan += detail + "\n"
+		}
+	}
+	if !strings.Contains(plan, "idx_transmissions_from_pubkey") {
+		t.Fatalf("expected EXPLAIN QUERY PLAN for IN(...) to use idx_transmissions_from_pubkey, got:\n%s", plan)
+	}
+}
+
 // --- Migration / backfill ---
 
 func TestBackfillFromPubkey_AdvertRowsPopulated(t *testing.T) {
