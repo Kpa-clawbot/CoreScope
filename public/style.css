@@ -1,5 +1,16 @@
 /* === CoreScope — style.css === */
 
+/* Aldrich webfont — used by the navbar logo SVG (issue #1137 follow-up).
+ * Self-hosted woff2 (latin subset from Google Fonts, ~16KB). Only weight
+ * available is 400; the SVG's font-weight="700" synthesizes bold. */
+@font-face {
+  font-family: 'Aldrich';
+  src: url('/fonts/aldrich-regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* ============================================================
  * Z-INDEX SCALE (single source of truth — issues #1128, #1131)
  * ------------------------------------------------------------
