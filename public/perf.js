@@ -45,6 +45,7 @@
   let viewMode  = localStorage.getItem('perf-view')      || 'cards';
   let timeframe = localStorage.getItem('perf-timeframe') || '5m';
   let activeCharts = []; // [{ chart: Chart, id: string, datasets: [{key,label,color}] }]
+  let lastWriteSourceSample = null; // { sources, atMs } for per-second graph rates
 
   // Charts grouped by category. Multi-entry datasets render as multi-line charts with a legend.
   const CHART_GROUPS = [
@@ -92,6 +93,37 @@
       ]
     },
     {
+      category: 'I/O',
+      charts: [
+        {
+          id: 'diskio', label: 'Disk Throughput (B/s)',
+          datasets: [
+            { key: 'ioReadBps',  label: 'Read',  color: '#14b8a6' },
+            { key: 'ioWriteBps', label: 'Write', color: '#f97316' },
+          ]
+        },
+        {
+          id: 'iosyscalls', label: 'Disk Syscalls (/s)',
+          datasets: [
+            { key: 'ioSyscallsRead',  label: 'Read',  color: '#06b6d4' },
+            { key: 'ioSyscallsWrite', label: 'Write', color: '#eab308' },
+          ]
+        },
+        { id: 'sqlitewal', label: 'SQLite WAL (MB)', datasets: [{ key: 'sqlitePerfWalMB', label: 'WAL MB', color: '#94a3b8' }] },
+        { id: 'sqlitecache', label: 'SQLite Cache Hit (%)', datasets: [{ key: 'sqliteCacheHitPct', label: 'Hit %', color: '#22c55e' }] },
+        {
+          id: 'writerates', label: 'Write Sources (/s)',
+          datasets: [
+            { key: 'writeTxRate',             label: 'Tx',        color: '#4a9eff' },
+            { key: 'writeObsRate',            label: 'Obs',       color: '#a78bfa' },
+            { key: 'writeNodeUpsertRate',     label: 'Nodes',     color: '#22c55e' },
+            { key: 'writeObserverUpsertRate', label: 'Observers', color: '#eab308' },
+            { key: 'writeErrorRate',          label: 'Errors',    color: '#ef4444' },
+          ]
+        },
+      ]
+    },
+    {
       category: 'Connections',
       charts: [
         {
@@ -109,10 +141,40 @@
   ];
 
   // --- Ring buffer helpers ---
-  function pushSample(server, obs) {
+  function writeSourceRates(writeSources) {
+    const sources = writeSources && writeSources.sources;
+    if (!sources) return {};
+
+    const sampleAt = writeSources.sampleAt || writeSources.sampledAt || '';
+    const parsedAt = sampleAt ? Date.parse(sampleAt) : NaN;
+    const atMs = Number.isFinite(parsedAt) ? parsedAt : Date.now();
+    const prev = lastWriteSourceSample;
+    lastWriteSourceSample = { sources: { ...sources }, atMs: atMs };
+
+    if (!prev || atMs <= prev.atMs) return {};
+    const dtSec = (atMs - prev.atMs) / 1000;
+    if (dtSec < 0.5) return {};
+
+    function rate(key) {
+      const cur = Number(sources[key] || 0);
+      const old = Number(prev.sources[key] || 0);
+      return Math.max(0, cur - old) / dtSec;
+    }
+
+    return {
+      writeTxRate:             rate('tx_inserted'),
+      writeObsRate:            rate('obs_inserted'),
+      writeNodeUpsertRate:     rate('node_upserts'),
+      writeObserverUpsertRate: rate('observer_upserts'),
+      writeErrorRate:          rate('write_errors'),
+    };
+  }
+
+  function pushSample(server, obs, ioStats, sqliteStats, writeSources) {
     const gr = server.goRuntime;
     const ps = server.packetStore;
     const sq = server.sqlite;
+    const wr = writeSourceRates(writeSources);
     const sample = {
       ts:              Date.now(),
       cpuPercent:      gr  ? +gr.cpuPercent                : null,
@@ -133,6 +195,17 @@
       onlineObservers: obs ? obs.online                    : null,
       staleObservers:  obs ? obs.stale                     : null,
       offlineObservers:obs ? obs.offline                   : null,
+      ioReadBps:       ioStats ? +(ioStats.readBytesPerSec || 0)  : null,
+      ioWriteBps:      ioStats ? +(ioStats.writeBytesPerSec || 0) : null,
+      ioSyscallsRead:  ioStats ? +(ioStats.syscallsRead || 0)     : null,
+      ioSyscallsWrite: ioStats ? +(ioStats.syscallsWrite || 0)    : null,
+      sqlitePerfWalMB: sqliteStats ? +(sqliteStats.walSizeMB || 0) : null,
+      sqliteCacheHitPct: sqliteStats && sqliteStats.cacheHitRate != null ? +(sqliteStats.cacheHitRate * 100) : null,
+      writeTxRate:             wr.writeTxRate             != null ? wr.writeTxRate             : null,
+      writeObsRate:            wr.writeObsRate            != null ? wr.writeObsRate            : null,
+      writeNodeUpsertRate:     wr.writeNodeUpsertRate     != null ? wr.writeNodeUpsertRate     : null,
+      writeObserverUpsertRate: wr.writeObserverUpsertRate != null ? wr.writeObserverUpsertRate : null,
+      writeErrorRate:          wr.writeErrorRate          != null ? wr.writeErrorRate          : null,
     };
 
     // Short buffer (5 s resolution, 1 h)
@@ -272,7 +345,7 @@
       ]);
       const health = await fetch('/api/health').then(r => r.json()).catch(() => null);
 
-      pushSample(server, server.observerCounts || null);
+      pushSample(server, server.observerCounts || null, ioStats, sqliteStats, writeSources);
 
       if (viewMode === 'graphs') {
         renderGraphs(el);
