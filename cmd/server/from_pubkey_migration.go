@@ -145,15 +145,25 @@ func backfillFromPubkeyAsync(dbPath string, chunkSize int, yieldDuration time.Du
 		}
 		txStmt := tx.Stmt(updateStmt)
 		for _, b := range batch {
-			// b.pk == "" -> still write empty string to mark "scanned".
-			// We use NULL-vs-empty to distinguish "not yet scanned" from
-			// "scanned, no pubkey extractable". For ADVERTs an empty pubkey
-			// is a malformed/legacy row; downstream queries treat it as no match.
+			// Sentinel convention for transmissions.from_pubkey (#1143, m5):
+			//   NULL — row has not yet been scanned by this backfill.
+			//   ""   — scanned, no extractable pubkey (malformed/legacy ADVERT
+			//          decoded_json, or a JSON shape we don't understand).
+			//   hex  — scanned, pubkey successfully extracted.
+			//
+			// The "" sentinel exists ONLY in this backfill path: it's how we
+			// avoid the #1119 infinite-rescan loop (the WHERE clause is
+			// `from_pubkey IS NULL`, so once we mark a row "" it never matches
+			// again). The ingest write path (cmd/ingestor/db.go ~1289) leaves
+			// from_pubkey NULL when PubKey is empty; the two states are
+			// semantically equivalent ("we have no pubkey for this row") and
+			// all attribution call sites query `from_pubkey = ?` with a real
+			// pubkey, so neither NULL nor "" matches — no UX divergence.
 			var val interface{}
 			if b.pk != "" {
 				val = b.pk
 			} else {
-				val = "" // scanned, no extractable pubkey
+				val = "" // scanned, no extractable pubkey — see comment above
 			}
 			if _, err := txStmt.Exec(val, b.id); err != nil {
 				// non-fatal; log first failure per chunk and keep going
