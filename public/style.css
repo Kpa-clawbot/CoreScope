@@ -116,6 +116,28 @@
   --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
   --input-bg: #fff;
   --selected-bg: #dbeafe;
+
+  /* --- Logo theme tokens (PR #1137) ------------------------
+   * The CoreScope SVG logos are inlined into the DOM (navbar +
+   * home hero), so they inherit page CSS custom properties. The
+   * legacy --logo-* names are kept so existing themes / brand
+   * customizations that override them still work; defaults map
+   * to the active theme so wordmark/arc colors track --accent /
+   * --nav-text / --text-muted on light AND dark themes.
+   *   --logo-text   → wordmark "CORE" / "SCOPE" / labels
+   *   --logo-accent → primary node + left-side arcs (default --accent)
+   *   --logo-accent-hi → secondary node + right-side arcs (default --accent-hover)
+   *   --logo-muted  → tagline + sine wave
+   * No --logo-bg here on purpose — the inlined SVGs MUST be
+   * transparent so they sit on whatever bg the page paints.
+   * --logo-text defaults to --text (the page foreground) so the
+   * hero wordmark is readable on any theme; the navbar scopes it
+   * to --nav-text below so it stays white on the dark navbar. */
+  --logo-text: var(--text);
+  --logo-accent: var(--accent);
+  --logo-accent-hi: var(--accent-hover);
+  --logo-muted: var(--text-muted);
+
   --surface-0: #f4f5f7;
   --surface-1: #ffffff;
   --surface-2: #ffffff;
@@ -459,6 +481,26 @@ input[type="week"] {
 .nav-left { display: flex; align-items: center; gap: var(--space-lg); min-width: 0; flex-shrink: 1; overflow: hidden; }
 .nav-brand { display: flex; align-items: center; gap: var(--space-sm); text-decoration: none; color: var(--nav-text); font-weight: 700; font-size: var(--fs-md); }
 .brand-icon { font-size: 20px; }
+.brand-logo {
+  display: block;
+  height: 36px;
+  /* Width matches the inline SVG's effective content aspect (~3.08:1)
+     after cropping to the wordmark+nodes region in the navbar viewBox.
+     Pinned explicitly so layout doesn't shift if the SVG is replaced
+     (issue #1046 1115px viewport regression). */
+  width: 111px;
+  max-height: 36px;
+  /* The logo is inlined into the DOM (PR #1137) so it inherits page
+     CSS variables; theme via --logo-text / --logo-accent / etc. defined
+     in :root above. The .top-nav scope below overrides --logo-text to
+     --nav-text so the wordmark stays readable on the dark navbar even
+     when the page theme is Light. */
+}
+.top-nav {
+  /* Navbar lives on --nav-bg (typically dark), so the brand wordmark
+     must use --nav-text rather than the page --text default. */
+  --logo-text: var(--nav-text);
+}
 .live-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);
   display: inline-block; margin-left: 4px; transition: background .3s;
@@ -1408,7 +1450,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 @media (max-width: 900px) {
   .panel-right { width: 320px; min-width: 320px; }
   .nav-stats { display: none; }
-  .brand-text { font-size: 14px; }
+  .brand-logo { height: 32px; width: 99px; }
   .nav-link { padding: 14px 8px; font-size: 13px; }
   .map-controls { width: 180px; font-size: 12px; }
 }
@@ -1492,7 +1534,6 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 
 /* === Responsive — Mobile (≤640px) === */
 @media (max-width: 640px) {
-  .brand-text { display: none; }
   .nav-right { gap: 4px; }
 
   /* Layouts: stack instead of side-by-side */
