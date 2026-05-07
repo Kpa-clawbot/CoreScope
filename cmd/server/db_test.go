@@ -64,6 +64,7 @@ func setupTestDB(t *testing.T) *DB {
 			payload_version INTEGER,
 			decoded_json TEXT,
 			channel_hash TEXT DEFAULT NULL,
+			from_pubkey TEXT DEFAULT NULL,
 			created_at TEXT DEFAULT (datetime('now'))
 		);
 
@@ -1198,6 +1199,7 @@ func setupTestDBV2(t *testing.T) *DB {
 			payload_version INTEGER,
 			decoded_json TEXT,
 			channel_hash TEXT DEFAULT NULL,
+			from_pubkey TEXT DEFAULT NULL,
 			created_at TEXT DEFAULT (datetime('now'))
 		);
 

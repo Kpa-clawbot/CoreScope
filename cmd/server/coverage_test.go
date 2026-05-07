@@ -42,7 +42,7 @@ func setupTestDBv2(t *testing.T) *DB {
 			id INTEGER PRIMARY KEY AUTOINCREMENT, raw_hex TEXT NOT NULL,
 			hash TEXT NOT NULL UNIQUE, first_seen TEXT NOT NULL,
 			route_type INTEGER, payload_type INTEGER, payload_version INTEGER,
-			decoded_json TEXT, channel_hash TEXT DEFAULT NULL, created_at TEXT DEFAULT (datetime('now'))
+			decoded_json TEXT, channel_hash TEXT DEFAULT NULL, from_pubkey TEXT DEFAULT NULL, created_at TEXT DEFAULT (datetime('now'))
 		);
 		CREATE TABLE observations (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
