@@ -512,6 +512,14 @@ input[type="week"] {
      must use --nav-text rather than the page --text default. */
   --logo-text: var(--nav-text);
 }
+/* Mark-only navbar logo: hidden by default, swapped in for the full
+   wordmark logo at narrow viewports where SCOPE would otherwise clip
+   (#1137 mobile width pin was 99px → SCOPE→SCOF at ≤390px). */
+.brand-mark-only {
+  display: none;
+  height: 32px;
+  width: auto;
+}
 .live-dot {
   width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);
   display: inline-block; margin-left: 4px; transition: background .3s;
@@ -1464,6 +1472,15 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .brand-logo { height: 32px; width: 99px; }
   .nav-link { padding: 14px 8px; font-size: 13px; }
   .map-controls { width: 180px; font-size: 12px; }
+}
+
+/* === Responsive — Mobile (≤400px) ===
+   At narrow viewports the inline wordmark SVG (intrinsic 111px content)
+   clips when squeezed into the 99px tablet pin (#1137 → SCOPE→SCOF).
+   Swap to the dedicated .brand-mark-only inline SVG (arcs+dots only). */
+@media (max-width: 400px) {
+  .brand-logo { display: none; }
+  .brand-mark-only { display: block; }
 }
 
 /* #1057: Container query — stack the channels layout when the channels
