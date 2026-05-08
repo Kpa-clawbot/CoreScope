@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -124,41 +122,20 @@ func readProcIO() procIOSample {
 
 // parseProcIOInto reads /proc/self/io-shaped key:value lines from sc and
 // populates the byte/syscall fields on s. Returns true iff at least one
-// recognised key was successfully parsed (Carmack must-fix #6 — empty/zero
-// parse must NOT count as a valid sample, otherwise the next request
-// computes a phantom delta against zero counters).
+// recognised key was successfully parsed (Carmack must-fix #6).
+//
+// Implementation delegates to perfio.ParseProcIO — single source of truth
+// shared with the ingestor (Carmack must-fix #7; previously two divergent
+// copies, which is how the empty-key gate was missing on this side).
 func parseProcIOInto(sc *bufio.Scanner, s *procIOSample) bool {
-	parsedAny := false
-	for sc.Scan() {
-		line := sc.Text()
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		val, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
-		if err != nil {
-			continue
-		}
-		switch key {
-		case "read_bytes":
-			s.readBytes = val
-			parsedAny = true
-		case "write_bytes":
-			s.writeBytes = val
-			parsedAny = true
-		case "cancelled_write_bytes":
-			s.cancelledWrite = val
-			parsedAny = true
-		case "syscr":
-			s.syscR = val
-			parsedAny = true
-		case "syscw":
-			s.syscW = val
-			parsedAny = true
-		}
-	}
-	return parsedAny
+	var c perfio.Counters
+	ok := perfio.ParseProcIO(sc, &c)
+	s.readBytes = c.ReadBytes
+	s.writeBytes = c.WriteBytes
+	s.cancelledWrite = c.CancelledWriteBytes
+	s.syscR = c.SyscR
+	s.syscW = c.SyscW
+	return ok
 }
 
 // handlePerfIO returns delta-rate disk I/O for the server process (per-second).

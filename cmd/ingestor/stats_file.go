@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -115,41 +113,19 @@ func readProcSelfIO() procIOSnapshot {
 }
 
 // parseProcSelfIOInto reads /proc/self/io-shaped key:value lines from sc and
-// populates the byte/syscall fields on out. Sets out.ok=true only if at least
-// one expected key was successfully parsed (#1167 must-fix #3 — empty/zero
-// parse must NOT count as a valid sample, otherwise the first published
-// rate is a phantom delta against zero).
+// populates the byte/syscall fields on out. Sets out.ok=true only if at
+// least one expected key was successfully parsed (#1167 must-fix #3).
+//
+// Implementation delegates to perfio.ParseProcIO so the ingestor and the
+// server share exactly one parser (Carmack must-fix #7).
 func parseProcSelfIOInto(sc *bufio.Scanner, out *procIOSnapshot) {
-	parsedAny := false
-	for sc.Scan() {
-		parts := strings.SplitN(sc.Text(), ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		val, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
-		if err != nil {
-			continue
-		}
-		switch key {
-		case "read_bytes":
-			out.readBytes = val
-			parsedAny = true
-		case "write_bytes":
-			out.writeBytes = val
-			parsedAny = true
-		case "cancelled_write_bytes":
-			out.cancelledWrite = val
-			parsedAny = true
-		case "syscr":
-			out.syscR = val
-			parsedAny = true
-		case "syscw":
-			out.syscW = val
-			parsedAny = true
-		}
-	}
-	out.ok = parsedAny
+	var c perfio.Counters
+	out.ok = perfio.ParseProcIO(sc, &c)
+	out.readBytes = c.ReadBytes
+	out.writeBytes = c.WriteBytes
+	out.cancelledWrite = c.CancelledWriteBytes
+	out.syscR = c.SyscR
+	out.syscW = c.SyscW
 }
 
 // procIORate computes a per-second rate sample between two procIOSnapshots
