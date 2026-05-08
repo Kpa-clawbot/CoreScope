@@ -108,26 +108,17 @@ async function main() {
     console.log('  ✅ legacy mushroom emoji + "CoreScope" text removed');
     passed++;
 
-    // 3. Live-dot still there, visible, and to the right of the brand logo.
-    const dot = await page.$('.nav-brand .live-dot, .nav-brand #liveDot');
-    if (!dot) fail('.live-dot is missing from .nav-brand (WS connection indicator must remain)');
-    const layout = await page.evaluate(() => {
-      const i = document.querySelector('.nav-brand .brand-logo');
-      const d = document.querySelector('.nav-brand .live-dot') || document.querySelector('.nav-brand #liveDot');
-      const ir = i ? i.getBoundingClientRect() : null;
-      const dr = d ? d.getBoundingClientRect() : null;
-      const ds = d ? getComputedStyle(d) : null;
-      return {
-        ir, dr,
-        dotVisible: ds ? (ds.display !== 'none' && ds.visibility !== 'hidden' && parseFloat(ds.opacity || '1') > 0) : false,
-      };
+    // 3. WS connection state indicator: #1173 replaced .live-dot with the
+    // packet-driven brand-logo pulse. The state surface is the .brand-logo
+    // SVG itself (gains .logo-disconnected on close, removes it on open),
+    // and the test seam at window.__corescopeLogo.
+    const noLegacyDot = await page.$('.nav-brand .live-dot, .nav-brand #liveDot');
+    if (noLegacyDot) fail('.live-dot / #liveDot still present — should have been removed by #1173');
+    const seam = await page.evaluate(() => {
+      return !!(window.__corescopeLogo && typeof window.__corescopeLogo.setConnected === 'function' && typeof window.__corescopeLogo.pulse === 'function');
     });
-    if (!layout.dotVisible) fail('.live-dot is not visible (display/visibility/opacity)');
-    if (!layout.ir || !layout.dr) fail('could not measure layout of brand-logo or live-dot');
-    if (layout.dr.left + 0.5 < layout.ir.right) {
-      fail(`live-dot overlaps the brand logo (logo.right=${layout.ir.right.toFixed(1)} dot.left=${layout.dr.left.toFixed(1)})`);
-    }
-    console.log('  ✅ .live-dot present, visible, and right of the brand logo');
+    if (!seam) fail('window.__corescopeLogo (setConnected + pulse) is the new WS-state seam — missing');
+    console.log('  ✅ legacy .live-dot removed; brand-logo Logo state seam present');
     passed++;
 
     // 4. Home hero image — ensure user level is set so we render the hero,
