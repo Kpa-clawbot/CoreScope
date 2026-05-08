@@ -359,14 +359,13 @@ const PAGES = [
     await page.waitForSelector('#nodesTable tbody tr[data-value]', { timeout: 8000 });
 
     async function openPanelFromRow() {
-      // Mark the originating row with a stable selector & focus it before
-      // the click so we can re-locate it after close.
+      // Capture the row's data-value (stable across re-renders) and focus it.
+      // We can't use a synthetic id because renderRows() rebuilds the tbody
+      // on close — by then any injected id is gone.
       const rowKey = await page.evaluate(() => {
         const r = document.querySelector('#nodesTable tbody tr[data-value]');
         if (!r) return null;
-        // tabindex=0 is already set by the table renderer; ensure it.
         if (!r.hasAttribute('tabindex')) r.setAttribute('tabindex', '0');
-        r.id = 'slideover-restore-anchor';
         r.focus();
         // Click via dispatch so delegated handlers fire.
         r.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
@@ -377,41 +376,46 @@ const PAGES = [
         const p = document.querySelector('.slide-over-panel');
         return p && !p.hidden;
       }, null, { timeout: 8000 });
+      return rowKey;
     }
 
     await step('focus-restore@800: Escape returns focus to originating row', async () => {
-      await openPanelFromRow();
+      const rowKey = await openPanelFromRow();
       await page.keyboard.press('Escape');
-      await page.waitForTimeout(200);
-      const r = await page.evaluate(() => {
-        const row = document.getElementById('slideover-restore-anchor');
+      await page.waitForTimeout(300);
+      const r = await page.evaluate((key) => {
+        const esc = (window.CSS && CSS.escape) ? CSS.escape(key) : key;
+        const row = document.querySelector('#nodesTable tbody tr[data-value="' + esc + '"]');
         return {
           rowExists: !!row,
           isActive: !!row && document.activeElement === row,
           activeTag: document.activeElement && document.activeElement.tagName,
-          activeId: document.activeElement && document.activeElement.id,
+          activeAttrs: document.activeElement && {
+            id: document.activeElement.id,
+            cls: document.activeElement.className,
+            dv: document.activeElement.getAttribute && document.activeElement.getAttribute('data-value'),
+          },
         };
-      });
-      assert(r.rowExists, 'originating row vanished from DOM (re-render?)');
+      }, rowKey);
+      assert(r.rowExists, 'originating row (data-value=' + rowKey + ') vanished from DOM after re-render');
       assert(r.isActive, 'focus did NOT restore to originating row after Escape: ' + JSON.stringify(r));
     });
 
     await step('focus-restore@800: X-button click returns focus to originating row', async () => {
-      // Re-anchor the row (table may have re-rendered between opens) and reopen.
-      await openPanelFromRow();
+      const rowKey = await openPanelFromRow();
       await page.evaluate(() => {
         const x = document.querySelector('.slide-over-panel .slide-over-close');
         x.click();
       });
-      await page.waitForTimeout(200);
-      const r = await page.evaluate(() => {
-        const row = document.getElementById('slideover-restore-anchor');
+      await page.waitForTimeout(300);
+      const r = await page.evaluate((key) => {
+        const esc = (window.CSS && CSS.escape) ? CSS.escape(key) : key;
+        const row = document.querySelector('#nodesTable tbody tr[data-value="' + esc + '"]');
         return {
           rowExists: !!row,
           isActive: !!row && document.activeElement === row,
-          activeId: document.activeElement && document.activeElement.id,
         };
-      });
+      }, rowKey);
       assert(r.rowExists, 'originating row vanished from DOM');
       assert(r.isActive, 'focus did NOT restore to originating row after X click: ' + JSON.stringify(r));
     });
@@ -500,7 +504,6 @@ const PAGES = [
       const rowKey = await page.evaluate(() => {
         const r = document.querySelector('#nodesTable tbody tr[data-value]');
         if (!r) return null;
-        r.id = 'slideover-resize-anchor';
         r.focus();
         r.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
         return r.getAttribute('data-value');
@@ -514,22 +517,24 @@ const PAGES = [
       await page.setViewportSize({ width: 1440, height: 900 });
       // Resize listener is debounced ~120ms; give it a comfortable window.
       await page.waitForTimeout(500);
-      const after = await page.evaluate(() => {
+      const after = await page.evaluate((key) => {
         function isShown(el) {
           if (!el) return false;
           if (el.hidden) return false;
           const r = el.getBoundingClientRect();
           return r.width > 0 && r.height > 0;
         }
+        const esc = (window.CSS && CSS.escape) ? CSS.escape(key) : key;
+        const row = document.querySelector('#nodesTable tbody tr[data-value="' + esc + '"]');
         return {
           panelGone: !isShown(document.querySelector('.slide-over-panel')),
           backdropGone: !isShown(document.querySelector('.slide-over-backdrop')),
           bodyOverflow: document.body.style.overflow,
-          focusRestored: !!document.getElementById('slideover-resize-anchor')
-            && document.activeElement === document.getElementById('slideover-resize-anchor'),
-          activeId: document.activeElement && document.activeElement.id,
+          rowExists: !!row,
+          focusRestored: !!row && document.activeElement === row,
+          activeTag: document.activeElement && document.activeElement.tagName,
         };
-      });
+      }, rowKey);
       assert(after.panelGone, 'panel still shown after viewport crossed BP: ' + JSON.stringify(after));
       assert(after.backdropGone, 'backdrop still shown after viewport crossed BP');
       assert(after.bodyOverflow !== 'hidden', 'body scroll-lock not released after viewport crossed BP (overflow=' + after.bodyOverflow + ')');
