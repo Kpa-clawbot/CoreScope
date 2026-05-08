@@ -92,7 +92,7 @@
           <div class="home-hero-brand-name">CORNMEISTER.NL</div>
           <div class="home-hero-brand-subtitle">Dutch mesh analyzer</div>
         </div>
-        <h1>${hasNodes ? 'My Mesh' : escapeHtml(homeCfg?.heroTitle || siteName)}</h1>
+        <h1>${hasNodes ? 'My Nodes' : escapeHtml(homeCfg?.heroTitle || siteName)}</h1>
         <p>${hasNodes ? 'Your nodes at a glance. Add more by searching below.' : escapeHtml(homeCfg?.heroSubtitle || 'Find your nodes to start monitoring them.')}</p>
         <div class="home-search-wrap">
           <input type="text" id="homeSearch" placeholder="Search by node name or public key…" autocomplete="off" aria-label="Search nodes" role="combobox" aria-expanded="false" aria-owns="homeSuggest" aria-autocomplete="list" aria-activedescendant="">
