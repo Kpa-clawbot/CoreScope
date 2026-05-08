@@ -207,7 +207,11 @@
     panel.className = 'slide-over-panel';
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-modal', 'true');
-    panel.setAttribute('aria-label', 'Detail');
+    // #1168 must-fix #4: a static aria-label="Detail" would override the
+    // meaningful <h3 id="slideOverTitle"> (e.g. "Packet ab12cd…", node name)
+    // for screen-reader users. Use aria-labelledby so the announced name
+    // is the actual title rendered into the panel.
+    panel.setAttribute('aria-labelledby', 'slideOverTitle');
     panel.hidden = true;
     panel.tabIndex = -1;
     panel.innerHTML =
