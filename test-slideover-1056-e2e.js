@@ -65,16 +65,28 @@ const PAGES = [
         const row = t && t.querySelector('tbody tr');
         if (row) row.click();
       }, p.tableSel);
-      await page.waitForTimeout(250);
+      // Wait up to 5s for the slide-over to appear (packets does async fetch).
+      try {
+        await page.waitForFunction(() => {
+          const panel = document.querySelector('.slide-over-panel');
+          return panel && !panel.hidden;
+        }, null, { timeout: 5000 });
+      } catch (_) { /* fall through to assertion below for clearer message */ }
       const info = await page.evaluate(() => {
+        function isShown(el) {
+          if (!el) return false;
+          if (el.hidden) return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        }
         const panel = document.querySelector('.slide-over-panel');
         const back  = document.querySelector('.slide-over-backdrop');
         const closeBtn = panel && panel.querySelector('.slide-over-close');
         return {
           panelPresent: !!panel,
-          panelVisible: !!(panel && panel.offsetParent !== null && !panel.hidden),
+          panelVisible: isShown(panel),
           backdropPresent: !!back,
-          backdropVisible: !!(back && back.offsetParent !== null && !back.hidden),
+          backdropVisible: isShown(back),
           hasCloseBtn: !!closeBtn,
         };
       });
@@ -89,12 +101,15 @@ const PAGES = [
       await page.keyboard.press('Escape');
       await page.waitForTimeout(200);
       const info = await page.evaluate(() => {
+        function isShown(el) {
+          if (!el) return false;
+          if (el.hidden) return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        }
         const panel = document.querySelector('.slide-over-panel');
         const back  = document.querySelector('.slide-over-backdrop');
-        return {
-          panelGone: !panel || panel.offsetParent === null || panel.hidden,
-          backGone:  !back  || back.offsetParent  === null || back.hidden,
-        };
+        return { panelGone: !isShown(panel), backGone: !isShown(back) };
       });
       assert(info.panelGone, 'slide-over panel still visible after Escape');
       assert(info.backGone, 'slide-over backdrop still visible after Escape');
@@ -106,7 +121,12 @@ const PAGES = [
         const row = t && t.querySelector('tbody tr');
         if (row) row.click();
       }, p.tableSel);
-      await page.waitForTimeout(250);
+      try {
+        await page.waitForFunction(() => {
+          const panel = document.querySelector('.slide-over-panel');
+          return panel && !panel.hidden;
+        }, null, { timeout: 5000 });
+      } catch (_) {}
       // Click the backdrop directly.
       await page.evaluate(() => {
         const b = document.querySelector('.slide-over-backdrop');
@@ -115,7 +135,9 @@ const PAGES = [
       await page.waitForTimeout(200);
       const gone = await page.evaluate(() => {
         const panel = document.querySelector('.slide-over-panel');
-        return !panel || panel.offsetParent === null || panel.hidden;
+        if (!panel || panel.hidden) return true;
+        const r = panel.getBoundingClientRect();
+        return r.width === 0 || r.height === 0;
       });
       assert(gone, 'slide-over still visible after backdrop click');
     });
@@ -126,7 +148,12 @@ const PAGES = [
         const row = t && t.querySelector('tbody tr');
         if (row) row.click();
       }, p.tableSel);
-      await page.waitForTimeout(250);
+      try {
+        await page.waitForFunction(() => {
+          const panel = document.querySelector('.slide-over-panel');
+          return panel && !panel.hidden;
+        }, null, { timeout: 5000 });
+      } catch (_) {}
       await page.evaluate(() => {
         const x = document.querySelector('.slide-over-panel .slide-over-close');
         if (x) x.click();
@@ -134,7 +161,9 @@ const PAGES = [
       await page.waitForTimeout(200);
       const gone = await page.evaluate(() => {
         const panel = document.querySelector('.slide-over-panel');
-        return !panel || panel.offsetParent === null || panel.hidden;
+        if (!panel || panel.hidden) return true;
+        const r = panel.getBoundingClientRect();
+        return r.width === 0 || r.height === 0;
       });
       assert(gone, 'slide-over still visible after X click');
     });
@@ -159,7 +188,9 @@ const PAGES = [
       await page.waitForTimeout(300);
       const slideOverShown = await page.evaluate(() => {
         const p = document.querySelector('.slide-over-panel');
-        return !!(p && p.offsetParent !== null && !p.hidden);
+        if (!p || p.hidden) return false;
+        const r = p.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
       });
       assert(!slideOverShown, 'slide-over should NOT appear at 1440px width');
     });
