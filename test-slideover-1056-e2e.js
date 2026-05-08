@@ -121,6 +121,36 @@ const PAGES = [
       assert(info.hasCloseBtn, 'slide-over panel missing .slide-over-close X button');
     });
 
+    await step(`${tag}: panel anchored to right edge + a11y attrs + body scroll lock`, async () => {
+      const a = await page.evaluate(() => {
+        const panel = document.querySelector('.slide-over-panel');
+        const back  = document.querySelector('.slide-over-backdrop');
+        const x = panel && panel.querySelector('.slide-over-close');
+        const r = panel && panel.getBoundingClientRect();
+        const xr = x && x.getBoundingClientRect();
+        return {
+          // Anchored to right edge — within 1px of viewport right.
+          rightAnchored: r ? Math.abs((r.right) - window.innerWidth) <= 1 : false,
+          panelTop: r ? Math.round(r.top) : null,
+          role: panel && panel.getAttribute('role'),
+          ariaModal: panel && panel.getAttribute('aria-modal'),
+          backdropAriaHidden: back && back.getAttribute('aria-hidden'),
+          xAriaLabel: x && x.getAttribute('aria-label'),
+          xWidth: xr ? xr.width : 0,
+          xHeight: xr ? xr.height : 0,
+          bodyOverflow: document.body.style.overflow,
+        };
+      });
+      assert(a.rightAnchored, 'slide-over panel not anchored to right edge (right=' + JSON.stringify(a) + ')');
+      assert(a.panelTop === 0, 'slide-over panel does not start at top:0 (got ' + a.panelTop + ')');
+      assert(a.role === 'dialog', 'slide-over role!=dialog (got ' + a.role + ')');
+      assert(a.ariaModal === 'true', 'slide-over aria-modal!=true (got ' + a.ariaModal + ')');
+      assert(a.backdropAriaHidden === 'true', 'backdrop aria-hidden!=true (got ' + a.backdropAriaHidden + ')');
+      assert(a.xAriaLabel && a.xAriaLabel.length > 0, 'X button missing aria-label');
+      assert(a.xWidth >= 44 && a.xHeight >= 44, 'X tap target <44px (' + a.xWidth + 'x' + a.xHeight + ')');
+      assert(a.bodyOverflow === 'hidden', 'body scroll not locked while open (overflow=' + a.bodyOverflow + ')');
+    });
+
     await step(`${tag}: Escape closes slide-over`, async () => {
       await page.keyboard.press('Escape');
       await page.waitForTimeout(200);
@@ -133,10 +163,11 @@ const PAGES = [
         }
         const panel = document.querySelector('.slide-over-panel');
         const back  = document.querySelector('.slide-over-backdrop');
-        return { panelGone: !isShown(panel), backGone: !isShown(back) };
+        return { panelGone: !isShown(panel), backGone: !isShown(back), bodyOverflow: document.body.style.overflow };
       });
       assert(info.panelGone, 'slide-over panel still visible after Escape');
       assert(info.backGone, 'slide-over backdrop still visible after Escape');
+      assert(info.bodyOverflow !== 'hidden', 'body scroll lock not released after Escape (overflow=' + info.bodyOverflow + ')');
     });
 
     await step(`${tag}: backdrop click closes slide-over`, async () => {
