@@ -860,17 +860,25 @@
       <div class="live-page">
         <div id="liveMap" style="width:100%;height:100%;position:absolute;top:0;left:0;z-index:1"></div>
         <div class="live-overlay live-header" id="liveHeader">
-          <div class="live-title">
-            <span class="live-beacon"></span>
-            MESH LIVE
+          <button class="live-header-toggle" data-live-header-toggle id="liveHeaderToggle"
+                  aria-expanded="false" aria-controls="liveHeaderBody"
+                  aria-label="Show live stats">📊</button>
+          <div class="live-header-body" data-live-header-body id="liveHeaderBody">
+            <div class="live-title">
+              <span class="live-beacon"></span>
+              MESH LIVE
+            </div>
+            <div class="live-stats-row">
+              <div class="live-stat-pill"><span id="livePktCount">0</span> pkts</div>
+              <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
+              <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
+              <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
+            </div>
           </div>
-          <div class="live-stats-row">
-            <div class="live-stat-pill"><span id="livePktCount">0</span> pkts</div>
-            <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
-            <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
-            <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
-          </div>
-          <div class="live-toggles">
+        </div>
+        <div class="live-overlay live-controls" id="liveControls">
+          <div class="live-controls-body" data-live-controls-body id="liveControlsBody">
+            <div class="live-toggles">
             <label><input type="checkbox" id="liveHeatToggle" checked aria-describedby="heatDesc"> Heat</label>
             <span id="heatDesc" class="sr-only">Overlay a density heat map on the mesh nodes</span>
             <label><input type="checkbox" id="liveGhostToggle" checked aria-describedby="ghostDesc"> Ghosts</label>
@@ -895,12 +903,16 @@
             <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
             <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
             <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="Filter live packets by IATA region"></div>
+            </div>
+            <div class="audio-controls hidden" id="audioControls">
+              <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
+              <label class="audio-slider-label">BPM <input type="range" id="audioBpmSlider" min="40" max="300" value="120" class="audio-slider"><span id="audioBpmVal">120</span></label>
+              <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
+            </div>
           </div>
-          <div class="audio-controls hidden" id="audioControls">
-            <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
-            <label class="audio-slider-label">BPM <input type="range" id="audioBpmSlider" min="40" max="300" value="120" class="audio-slider"><span id="audioBpmVal">120</span></label>
-            <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
-          </div>
+          <button class="live-controls-toggle" data-live-controls-toggle id="liveControlsToggle"
+                  aria-expanded="false" aria-controls="liveControlsBody"
+                  aria-label="Show live controls">⚙</button>
         </div>
         <div class="live-overlay live-feed" id="liveFeed">
           <div class="panel-header">
@@ -1382,6 +1394,70 @@
     // Legend toggle for mobile (#60)
     const legendEl = document.getElementById('liveLegend');
     const legendToggleBtn = document.getElementById('legendToggleBtn');
+
+    // ── Live header / controls toggles (#1178, #1179) ──────────────────────
+    // At narrow viewports (≤768px) the header collapses to a single
+    // toggle button revealing the stats body, and the controls collapse
+    // to a single toggle button revealing the toggles list. CSS gates
+    // visibility of the toggle buttons; JS only flips classes and the
+    // hidden attribute. At wide viewports the bodies are always shown.
+    (function wireLiveCollapseToggles() {
+      var pairs = [
+        { rootId: 'liveHeader',   togId: 'liveHeaderToggle',   bodyId: 'liveHeaderBody',
+          showLabel: 'Show live stats',   hideLabel: 'Hide live stats' },
+        { rootId: 'liveControls', togId: 'liveControlsToggle', bodyId: 'liveControlsBody',
+          showLabel: 'Show live controls', hideLabel: 'Hide live controls' },
+      ];
+      var narrowMql = window.matchMedia('(max-width: 768px)');
+      function setExpanded(p, expanded) {
+        var root = document.getElementById(p.rootId);
+        var tog  = document.getElementById(p.togId);
+        var body = document.getElementById(p.bodyId);
+        if (!root || !tog || !body) return;
+        if (expanded) {
+          root.classList.add('is-expanded'); root.classList.remove('is-collapsed');
+          body.removeAttribute('hidden');
+          tog.setAttribute('aria-expanded', 'true');
+          tog.setAttribute('aria-label', p.hideLabel);
+        } else {
+          root.classList.add('is-collapsed'); root.classList.remove('is-expanded');
+          body.setAttribute('hidden', '');
+          tog.setAttribute('aria-expanded', 'false');
+          tog.setAttribute('aria-label', p.showLabel);
+        }
+      }
+      function applyForViewport() {
+        for (var i = 0; i < pairs.length; i++) {
+          var p = pairs[i];
+          if (narrowMql.matches) {
+            // Default collapsed at narrow viewports
+            setExpanded(p, false);
+          } else {
+            // Always expanded; no hidden attr; no collapse class
+            var root = document.getElementById(p.rootId);
+            var body = document.getElementById(p.bodyId);
+            var tog  = document.getElementById(p.togId);
+            if (body) body.removeAttribute('hidden');
+            if (root) { root.classList.remove('is-collapsed'); root.classList.remove('is-expanded'); }
+            if (tog)  { tog.setAttribute('aria-expanded', 'true'); }
+          }
+        }
+      }
+      pairs.forEach(function (p) {
+        var tog = document.getElementById(p.togId);
+        if (!tog) return;
+        tog.addEventListener('click', function () {
+          var root = document.getElementById(p.rootId);
+          var nowExpanded = !(root && root.classList.contains('is-expanded'));
+          setExpanded(p, nowExpanded);
+        });
+      });
+      applyForViewport();
+      if (narrowMql.addEventListener) narrowMql.addEventListener('change', applyForViewport);
+      else if (narrowMql.addListener) narrowMql.addListener(applyForViewport);
+    })();
+    // ───────────────────────────────────────────────────────────────────────
+
     if (legendToggleBtn && legendEl) {
       // Restore legend collapsed state from localStorage (#279)
       try {
