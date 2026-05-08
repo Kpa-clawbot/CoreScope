@@ -2019,15 +2019,13 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
    side-by-side. Replaces the prior `flex` + `@media (max-width:640px)`
    approach so behavior is driven by available width — not viewport —
    matching #1050's fluid-everywhere mandate. `min(100%, 400px)` keeps
-   the track from overflowing at very narrow widths. `.flex-1` retained
-   on children for legacy callers (harmless on grid items). */
+   the track from overflowing at very narrow widths. */
 .analytics-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
   gap: 16px;
   margin-bottom: 16px;
 }
-.analytics-row .flex-1 { flex: 1; min-width: 0; }
 .rf-stats { display: flex; gap: 16px; flex-wrap: wrap; padding-top: 8px; font-size: 13px; }
 .payload-bars { display: flex; flex-direction: column; gap: 6px; }
 .payload-bar-row { display: flex; align-items: center; gap: 8px; }
@@ -2044,8 +2042,6 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .reach-nodes { flex: 1; font-size: 12px; line-height: 1.6; }
 .reach-count { min-width: 70px; text-align: right; font-size: 12px; color: var(--text-muted); }
 @media (max-width: 640px) {
-  .analytics-row { /* grid auto-fit handles stacking; left here for
-                     historical callers that still rely on flex */ }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .repeater-name { min-width: 80px; }
   .reach-ring { flex-wrap: wrap; }
