@@ -50,8 +50,18 @@ func TestStatsFileWriter_PublishesProcIO(t *testing.T) {
 		t.Fatalf("expected procIO block in stats snapshot, got: %v", snap)
 	}
 	for _, field := range []string{"readBytesPerSec", "writeBytesPerSec", "cancelledWriteBytesPerSec", "syscallsRead", "syscallsWrite"} {
-		if _, ok := pio[field]; !ok {
+		v, present := pio[field]
+		if !present {
 			t.Errorf("procIO missing field %q", field)
+			continue
+		}
+		// #1167 must-fix #5: assert the field actually decodes as a JSON
+		// number, not just that the key exists. An empty PerfIOSample{}
+		// substruct would still serialise the keys since the inner numeric
+		// fields lack omitempty — without this Kind check the test would
+		// silently pass on an empty struct regression.
+		if _, isFloat := v.(float64); !isFloat {
+			t.Errorf("procIO[%q] expected JSON number (float64), got %T (%v)", field, v, v)
 		}
 	}
 }

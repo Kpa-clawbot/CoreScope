@@ -192,6 +192,50 @@ await test('Cache hit ≥90% does NOT fire ⚠️ flag', async () => {
   assert.ok(!/98\.7%[^<]*⚠️/.test(html), 'expected NO ⚠️ next to 98.7% cache hit value');
 });
 
+// === #1167 must-fix #7: threshold boundary cases ===
+
+await test('WAL exactly 100 MB does NOT fire ⚠️ (boundary, strict >)', async () => {
+  const sb = loadPerf();
+  const sql = { ...sqliteData, walSizeMB: 100 };
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sql, sourcesData);
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 100));
+  const html = sb.getHtml();
+  const walIdx = html.indexOf('WAL Size');
+  const slice = html.slice(Math.max(0, walIdx - 200), walIdx);
+  assert.ok(!/100\.0MB[^<]*⚠️/.test(slice), 'expected NO ⚠️ at exactly 100 MB WAL (boundary), slice=' + slice);
+});
+
+await test('WAL infinitesimally over 100 MB DOES fire ⚠️', async () => {
+  const sb = loadPerf();
+  const sql = { ...sqliteData, walSizeMB: 100.01 };
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sql, sourcesData);
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 100));
+  const html = sb.getHtml();
+  assert.ok(/100\.0MB[^<]*⚠️/.test(html), 'expected ⚠️ next to 100.0MB WAL value (just over threshold)');
+});
+
+await test('Cache hit exactly 90% does NOT fire ⚠️ (boundary, strict <)', async () => {
+  const sb = loadPerf();
+  const sql = { ...sqliteData, cacheHitRate: 0.90 };
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sql, sourcesData);
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 100));
+  const html = sb.getHtml();
+  assert.ok(!/90\.0%[^<]*⚠️/.test(html), 'expected NO ⚠️ at exactly 90.0% cache hit (boundary)');
+});
+
+await test('Cache hit infinitesimally below 90% DOES fire ⚠️', async () => {
+  const sb = loadPerf();
+  const sql = { ...sqliteData, cacheHitRate: 0.8999 };
+  stubFetch(sb, { ...basePerf, goRuntime }, goHealth, ioData, sql, sourcesData);
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 100));
+  const html = sb.getHtml();
+  assert.ok(/90\.0%[^<]*⚠️/.test(html), 'expected ⚠️ next to 90.0% cache hit value (just under threshold)');
+});
+
 await test('Backfill anomaly: rate >10× tx-rate WITH baseline tx≥100 fires ⚠️', async () => {
   // Two-phase: prime the previous-snapshot cache, then tick again with
   // a backfill rate >10× the tx rate AND tx_inserted past the baseline gate.

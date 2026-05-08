@@ -109,7 +109,15 @@ func readProcSelfIO() procIOSnapshot {
 		return out
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
+	parseProcSelfIOInto(bufio.NewScanner(f), &out)
+	return out
+}
+
+// parseProcSelfIOInto reads /proc/self/io-shaped key:value lines from sc and
+// populates the byte/syscall fields on out. (Test-extracted helper — body
+// will be tightened in the GREEN commit so empty/zero parse does NOT mark the
+// snapshot as ok=true; #1167 must-fix #3.)
+func parseProcSelfIOInto(sc *bufio.Scanner, out *procIOSnapshot) {
 	for sc.Scan() {
 		parts := strings.SplitN(sc.Text(), ":", 2)
 		if len(parts) != 2 {
@@ -134,7 +142,6 @@ func readProcSelfIO() procIOSnapshot {
 		}
 	}
 	out.ok = true
-	return out
 }
 
 // procIORate computes a per-second rate sample between two procIOSnapshots.
