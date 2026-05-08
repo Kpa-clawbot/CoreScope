@@ -525,13 +525,13 @@ input[type="week"] {
   height: 32px;
   width: auto;
 }
-.live-dot {
-  /* #1173: legacy live-dot indicator removed — WS state is now encoded in the brand-logo
-     itself (.logo-disconnected + packet-driven .logo-pulse-active). This
-     class is intentionally left as a no-op shell so any stale
-     references in extensions/customizer markup don't visually leak. */
-  display: none !important;
-}
+/* #1173: legacy navbar `.live-dot` indicator removed — WS state is now
+   encoded in the brand-logo itself (.logo-disconnected + packet-driven
+   .logo-pulse-active). The navbar element is gone from index.html, so we
+   don't ship a `display: none` shell here — `live.js` reuses `.live-dot`
+   for legend bullets (styled by live.css) and a global no-op rule would
+   wipe those out. If a stale extension/customizer ever injects a navbar
+   `.live-dot`, it's a harmless 0×0 unstyled span. */
 /* #1173: brand-logo packet-pulse animation.
    - Class toggles only — pure CSS animation. JS adds/removes:
      .logo-pulse-active (chained ping, source then destination)
