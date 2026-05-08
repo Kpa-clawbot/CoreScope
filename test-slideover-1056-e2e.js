@@ -65,7 +65,13 @@ const PAGES = [
         const t = document.querySelector(sel);
         if (!t) return { ok: false, why: 'no table' };
         const rows = t.querySelectorAll('tbody tr');
-        const row = t.querySelector('tbody tr[data-action], tbody tr[data-value], tbody tr');
+        // The packets table uses virtual scroll, so the FIRST DOM-order <tr>
+        // is a spacer with no data-* attrs and no click handler. Skip those:
+        // pick the first row that actually carries a delegated action.
+        const candidates = Array.from(rows);
+        const row = candidates.find(r => r.hasAttribute('data-action'))
+                || candidates.find(r => r.hasAttribute('data-value'))
+                || candidates.find(r => r.children.length > 0);
         if (!row) return { ok: false, why: 'no row', rowCount: rows.length };
         // Click a real cell (avoid empty/loading rows)
         const td = row.querySelector('td:not(:empty)') || row;
@@ -136,8 +142,14 @@ const PAGES = [
     await step(`${tag}: backdrop click closes slide-over`, async () => {
       await page.evaluate((sel) => {
         const t = document.querySelector(sel);
-        const row = t && t.querySelector('tbody tr');
-        if (row) row.click();
+        if (!t) return;
+        const rows = Array.from(t.querySelectorAll('tbody tr'));
+        const row = rows.find(r => r.hasAttribute('data-action'))
+                || rows.find(r => r.hasAttribute('data-value'))
+                || rows.find(r => r.children.length > 0);
+        if (!row) return;
+        const td = row.querySelector('td:not(:empty)') || row;
+        td.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
       }, p.tableSel);
       try {
         await page.waitForFunction(() => {
@@ -163,8 +175,14 @@ const PAGES = [
     await step(`${tag}: X button closes slide-over`, async () => {
       await page.evaluate((sel) => {
         const t = document.querySelector(sel);
-        const row = t && t.querySelector('tbody tr');
-        if (row) row.click();
+        if (!t) return;
+        const rows = Array.from(t.querySelectorAll('tbody tr'));
+        const row = rows.find(r => r.hasAttribute('data-action'))
+                || rows.find(r => r.hasAttribute('data-value'))
+                || rows.find(r => r.children.length > 0);
+        if (!row) return;
+        const td = row.querySelector('td:not(:empty)') || row;
+        td.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
       }, p.tableSel);
       try {
         await page.waitForFunction(() => {
