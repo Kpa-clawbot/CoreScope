@@ -122,7 +122,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     page.setDefaultTimeout(8000);
     page.on('pageerror', (e) => console.error('[pageerror]', e.message));
     await page.goto(BASE + '/#/packets', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#pktTable tbody tr', { timeout: 8000 });
+    await page.waitForSelector('#pktTable tbody tr[data-action]', { timeout: 8000 });
 
     await step('hashchange: navigating away closes slide-over + releases scroll-lock', async () => {
       // Open slide-over via SlideOver API directly (page-agnostic).
