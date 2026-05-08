@@ -1,0 +1,132 @@
+/* Issue #1061 — Bottom navigation styles.
+ *
+ * Activates at viewports ≤768px. Uses position:fixed so it does not
+ * trigger layout reflow on the rest of the page, plus
+ * env(safe-area-inset-bottom) padding so the iOS home-indicator does
+ * not overlap the tabs. The matching <meta viewport-fit=cover> already
+ * exists in index.html (verified pre-implementation).
+ *
+ * Tokens reused (defined in BOTH :root and dark @media in style.css):
+ *   --nav-bg, --nav-text, --nav-text-muted, --nav-active-bg, --accent,
+ *   --border, --space-sm.
+ *
+ * Decision: media query (not container query). The rest of the codebase
+ * uses @media exclusively (no @container rules in style.css today), so
+ * a media query keeps things consistent.
+ *
+ * Decision: top-nav suppression = display:none at ≤768px. Spec
+ * forbids duplicate nav UX; the bottom nav covers the 5 high-priority
+ * routes; long-tail routes (Tools/Lab/Perf/Analytics/etc.) remain
+ * reachable by URL. A "More" tab or hamburger fallback is deferred per
+ * the issue body's explicit guidance.
+ */
+
+/* Default: hidden on wide viewports. The bottom-nav element exists in
+ * the DOM at all widths (build runs at DOMContentLoaded) but is only
+ * rendered to the user at ≤768px. */
+.bottom-nav {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .bottom-nav {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1200; /* above nav-links dropdown (1100) */
+    background: var(--nav-bg);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.25);
+    /* env() falls back to 0 outside iOS notch devices. We also keep
+     * a small minimum so the rule resolves to a non-empty value. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-top: 0;
+    /* Distribute 5 tabs evenly. */
+    justify-content: space-around;
+    align-items: stretch;
+    /* No transform — would create a stacking context that traps any
+     * fixed-position descendants (we have none, but cheap insurance). */
+  }
+
+  /* Suppress the desktop top-nav AND the hamburger dropdown when the
+   * bottom nav is active. This satisfies the "no duplicate nav UX"
+   * requirement. The hamburger button itself is hidden too — without
+   * the top nav there's nothing for it to toggle. */
+  .top-nav {
+    display: none !important;
+  }
+
+  /* Reserve space at page bottom so fixed-positioned bottom-nav does
+   * not cover the last row of content. 56px tab + 8px breathing room
+   * + safe-area inset. */
+  body {
+    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Tab — anchor element. Each tab is a column with icon over label, sized
+ * to ≥48px tall (the Apple/Google touch-target floor confirmed by
+ * issue #1060). */
+.bottom-nav-tab {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  /* 56px is a comfortable Material/iOS bottom-bar height; it is also
+   * ≥48px (a11y floor) by 8px so labels render without clipping. */
+  min-height: 56px;
+  padding: 6px 4px;
+  color: var(--nav-text-muted);
+  text-decoration: none;
+  font-size: 11px;
+  line-height: 1.1;
+  border-top: 2px solid transparent;
+  background: transparent;
+  /* Touch-action: manipulation prevents the iOS double-tap zoom delay
+   * on tabs. */
+  touch-action: manipulation;
+  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+
+.bottom-nav-tab:hover,
+.bottom-nav-tab:focus-visible {
+  color: var(--nav-text);
+  outline: none;
+}
+
+.bottom-nav-tab:focus-visible {
+  /* Keyboard a11y — visible focus ring inside the bar. */
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.bottom-nav-tab.active {
+  color: var(--nav-text);
+  background: var(--nav-active-bg);
+  border-top-color: var(--accent);
+}
+
+.bottom-nav-icon {
+  font-size: 20px;
+  line-height: 1;
+  display: block;
+}
+
+.bottom-nav-label {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* Respect reduced-motion preferences — disable the color/border
+ * transition. Existing app already has a reduced-motion block in
+ * style.css; this is the bottom-nav-specific override. */
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav-tab {
+    transition: none;
+  }
+}
