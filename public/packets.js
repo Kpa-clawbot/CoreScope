@@ -173,6 +173,112 @@
   window.TableResponsive = { apply, register };
 })();
 
+/* === #1056 AC#4: SlideOver — narrow-viewport row-detail overlay ============
+ * Singleton backdrop + right-anchored panel injected into <body>. Used by
+ * packets/nodes/observers when window.innerWidth <= SLIDE_OVER_BP (1023,
+ * matching the data-priority="3" breakpoint reused by TableResponsive).
+ *
+ *   SlideOver.shouldUse()   → boolean (current viewport <= breakpoint)
+ *   SlideOver.open(opts)    → returns the inner content element. opts:
+ *     { title?: string, onClose?: function }
+ *   SlideOver.close()       → close + dispatch onClose
+ *   SlideOver.isOpen()      → boolean
+ *
+ * Close affordances: X button (.slide-over-close), backdrop click, Escape.
+ * Reuses `slideInRight` keyframe in style.css.
+ */
+(function () {
+  if (window.SlideOver) return;
+
+  const BP = 1023;
+  let backdrop = null, panel = null, content = null, closeCb = null;
+
+  function ensureNodes() {
+    if (panel && backdrop) return;
+    backdrop = document.createElement('div');
+    backdrop.className = 'slide-over-backdrop';
+    backdrop.hidden = true;
+    backdrop.addEventListener('click', function () { close(); });
+
+    panel = document.createElement('aside');
+    panel.className = 'slide-over-panel';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+    panel.setAttribute('aria-label', 'Detail');
+    panel.hidden = true;
+    panel.tabIndex = -1;
+    panel.innerHTML =
+      '<div class="slide-over-header">' +
+        '<h3 class="slide-over-title" id="slideOverTitle"></h3>' +
+        '<button type="button" class="slide-over-close" aria-label="Close detail (Esc)" title="Close">✕</button>' +
+      '</div>' +
+      '<div class="slide-over-content"></div>';
+    panel.querySelector('.slide-over-close').addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    });
+    document.body.appendChild(backdrop);
+    document.body.appendChild(panel);
+
+    // Single Escape handler shared across all uses.
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && isOpen()) {
+        e.stopPropagation();
+        close();
+      }
+    });
+  }
+
+  function shouldUse() {
+    return (window.innerWidth || document.documentElement.clientWidth) <= BP;
+  }
+
+  function isOpen() {
+    return !!(panel && !panel.hidden);
+  }
+
+  function open(opts) {
+    ensureNodes();
+    opts = opts || {};
+    closeCb = typeof opts.onClose === 'function' ? opts.onClose : null;
+    const title = panel.querySelector('.slide-over-title');
+    title.textContent = opts.title || 'Detail';
+    content = panel.querySelector('.slide-over-content');
+    content.innerHTML = '';
+    backdrop.hidden = false;
+    panel.hidden = false;
+    // Focus the close button so Esc/Enter works without an extra tab.
+    const x = panel.querySelector('.slide-over-close');
+    if (x) try { x.focus(); } catch {}
+    return content;
+  }
+
+  function close() {
+    if (!panel || panel.hidden) return;
+    panel.hidden = true;
+    if (backdrop) backdrop.hidden = true;
+    const cb = closeCb;
+    closeCb = null;
+    if (content) content.innerHTML = '';
+    if (cb) try { cb(); } catch {}
+  }
+
+  // If the viewport grows past the breakpoint while open, close the slide-over
+  // so callers can re-route into the wide-viewport side panel.
+  let _resizeT = null;
+  window.addEventListener('resize', function () {
+    if (!isOpen()) return;
+    clearTimeout(_resizeT);
+    _resizeT = setTimeout(function () {
+      if (isOpen() && !shouldUse()) close();
+    }, 120);
+  });
+
+  window.SlideOver = { open: open, close: close, isOpen: isOpen, shouldUse: shouldUse, BP: BP };
+})();
+
+
 (function () {
   let packets = [];
   let hashIndex = new Map(); // hash → packet group for O(1) dedup
@@ -2268,8 +2374,22 @@
     }
     renderTableRows();
     const isMobileNow = window.innerWidth <= 640;
+    const useSlideOver = !isMobileNow && window.SlideOver && window.SlideOver.shouldUse();
     let panel;
-    if (isMobileNow) {
+    if (useSlideOver) {
+      // #1056 AC#4: narrow viewports (641–1023) — open detail in slide-over
+      // overlay rather than the side panel.
+      panel = window.SlideOver.open({
+        title: hash ? ('Packet ' + String(hash).slice(0, 12)) : 'Packet detail',
+        onClose: function () {
+          selectedId = null;
+          selectedObservationId = null;
+          history.replaceState(null, '', '#/packets');
+          renderTableRows();
+        }
+      });
+      panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+    } else if (isMobileNow) {
       // Use mobile bottom sheet
       let sheet = document.getElementById('mobileDetailSheet');
       if (!sheet) {
@@ -2306,11 +2426,11 @@
         const newHops = hops.filter(h => !(h in hopNameCache));
         if (newHops.length) await resolveHops(newHops);
       } catch {}
-      panel.innerHTML = isMobileNow ? '' : '<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML;
+      panel.innerHTML = isMobileNow ? '' : (useSlideOver ? '' : ('<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML));
       const content = document.createElement('div');
       panel.appendChild(content);
       await renderDetail(content, data, selectedObservationId);
-      if (!isMobileNow) initPanelResize();
+      if (!isMobileNow && !useSlideOver) initPanelResize();
     } catch (e) {
       panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
     }

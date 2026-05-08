@@ -751,6 +751,57 @@ input[type="week"] {
 /* MAJOR-2: when user-resizable columns push total width past container,
  * fall back to horizontal scroll on the wrap rather than overflowing the page. */
 .table-fluid-wrap { width: 100%; overflow-x: auto; }
+
+/* === #1056 AC#4: Slide-over row-detail overlay (narrow viewports) ========
+ * Singleton .slide-over-backdrop + .slide-over-panel injected into <body>
+ * by SlideOver helper in packets.js. Used by Packets/Nodes/Observers row
+ * clicks at viewport <=1023 instead of routing to a separate page.
+ * Reuses the existing slideInRight keyframe defined later in this file.
+ */
+.slide-over-backdrop {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+.slide-over-backdrop[hidden] { display: none; }
+.slide-over-panel {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: min(480px, 90vw);
+  z-index: 1001;
+  background: var(--detail-bg, var(--card-bg, #1f2937));
+  color: var(--text, inherit);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+  overflow-y: auto; overflow-x: hidden;
+  display: flex; flex-direction: column;
+  animation: slideInRight 200ms ease-out;
+}
+.slide-over-panel[hidden] { display: none; }
+.slide-over-header {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 10px 12px;
+  background: var(--card-bg, var(--detail-bg));
+  border-bottom: 1px solid var(--border);
+}
+.slide-over-title {
+  margin: 0; font-size: 14px; font-weight: 600;
+  color: var(--text, inherit);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.slide-over-close {
+  background: none; border: none; cursor: pointer;
+  font-size: 18px; line-height: 1;
+  color: var(--text-muted, #94a3b8);
+  padding: 4px 8px; border-radius: 4px;
+}
+.slide-over-close:hover { color: var(--text, inherit); background: var(--row-hover); }
+.slide-over-close:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
+.slide-over-content { flex: 1; min-height: 0; padding: 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .slide-over-panel { animation: none; }
+}
+
 .timestamp-future-icon { margin-left: 4px; cursor: help; }
 .data-table tbody tr:nth-child(even) { background: var(--row-stripe); }
 .data-table tbody tr:hover { background: var(--row-hover); cursor: pointer; }
