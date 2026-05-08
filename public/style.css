@@ -794,6 +794,9 @@ input[type="week"] {
   font-size: 18px; line-height: 1;
   color: var(--text-muted, #94a3b8);
   padding: 4px 8px; border-radius: 4px;
+  /* WCAG 2.5.5 / Apple HIG — 48px tap target on touch devices. */
+  min-width: 44px; min-height: 44px;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .slide-over-close:hover { color: var(--text, inherit); background: var(--row-hover); }
 .slide-over-close:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
