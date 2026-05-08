@@ -2419,6 +2419,16 @@
     }
     renderTableRows();
     const isMobileNow = window.innerWidth <= 640;
+    // #1168 review note: this branch is intentionally narrower than nodes.js /
+    // observers.js. On packets, ≤640 falls through to the legacy mobile bottom
+    // sheet (`isMobileNow` short-circuits before SlideOver), and SlideOver is
+    // used only for the 641–1023 range. nodes.js and observers.js route into
+    // SlideOver across the full ≤1023 range. Both satisfy AC#4 ("not a
+    // separate page"); the per-page split is deliberate — the packets table
+    // has heavier per-row affordances (hex breakdown, observations grid)
+    // that the bottom sheet handles better at very narrow widths than a
+    // side-anchored slide-over. Do NOT "fix" the inconsistency without
+    // discussing with the issue author.
     const useSlideOver = !isMobileNow && window.SlideOver && window.SlideOver.shouldUse();
     let panel;
     if (useSlideOver) {

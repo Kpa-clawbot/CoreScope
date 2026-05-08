@@ -132,10 +132,15 @@ const PAGES = [
         const x = panel && panel.querySelector('.slide-over-close');
         const cs = panel && getComputedStyle(panel);
         const xr = x && x.getBoundingClientRect();
+        const pr = panel && panel.getBoundingClientRect();
         return {
-          // Anchored to right edge — computed CSS right MUST be 0px.
-          cssRight: cs && cs.right,
-          cssTop: cs && cs.top,
+          // Layout-level anchor check: panel's right edge MUST coincide
+          // with the viewport's right edge in the rendered layout.
+          // (#1168 non-blocker: previous `cssRight === '0px'` re-asserted
+          // a value declared in style.css and proved nothing about
+          // rendering — strengthened to a real layout assertion.)
+          panelRight: pr ? pr.right : null,
+          viewportWidth: window.innerWidth,
           cssPosition: cs && cs.position,
           role: panel && panel.getAttribute('role'),
           ariaModal: panel && panel.getAttribute('aria-modal'),
@@ -154,8 +159,12 @@ const PAGES = [
         };
       });
       assert(a.cssPosition === 'fixed', 'slide-over panel not position:fixed (got ' + a.cssPosition + ')');
-      assert(a.cssRight === '0px', 'slide-over panel not anchored to right:0 (got ' + a.cssRight + ')');
-      assert(a.cssTop === '0px', 'slide-over panel does not start at top:0 (got ' + a.cssTop + ')');
+      // Layout assertion (replaces the prior `cssRight === '0px'` tautology).
+      // The panel's rendered right edge must equal the viewport width — i.e.
+      // it is actually painted flush to the right edge in the live layout,
+      // not merely declared so in CSS.
+      assert(a.panelRight !== null && Math.round(a.panelRight) === a.viewportWidth,
+        'slide-over panel right edge not flush to viewport (panelRight=' + a.panelRight + ', vw=' + a.viewportWidth + ')');
       assert(a.role === 'dialog', 'slide-over role!=dialog (got ' + a.role + ')');
       assert(a.ariaModal === 'true', 'slide-over aria-modal!=true (got ' + a.ariaModal + ')');
       // #1168 must-fix #4: aria-labelledby (pointing to the title h3) wins
@@ -254,6 +263,278 @@ const PAGES = [
         return r.width === 0 || r.height === 0;
       });
       assert(gone, 'slide-over still visible after X click');
+    });
+
+    await ctx.close();
+  }
+
+  // ============================================================
+  // #1168 review must-fix #1: Focus trap — Tab/Shift-Tab cycle
+  // inside the panel. Behavior implemented in commit 76ec12c
+  // ("SlideOver a11y polish — focus trap"); this block adds the
+  // missing assertion so a future refactor that breaks the trap
+  // goes red.
+  // ============================================================
+  {
+    const ctx = await browser.newContext({ viewport: { width: 800, height: 800 } });
+    const page = await ctx.newPage();
+    page.setDefaultTimeout(8000);
+
+    await step('focus-trap@800 nodes: Shift+Tab from first focusable wraps to last', async () => {
+      await page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('#nodesTable tbody tr[data-value]', { timeout: 8000 });
+      await page.evaluate(() => {
+        const r = document.querySelector('#nodesTable tbody tr[data-value]');
+        r.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      });
+      await page.waitForFunction(() => {
+        const p = document.querySelector('.slide-over-panel');
+        return p && !p.hidden;
+      }, null, { timeout: 8000 });
+      // Focus the close (X) button, which is also the first focusable in tab
+      // order inside the panel; Shift+Tab MUST wrap focus to the last
+      // focusable element inside the panel — NOT escape to <body>.
+      await page.evaluate(() => {
+        const x = document.querySelector('.slide-over-panel .slide-over-close');
+        x.focus();
+      });
+      const firstFocused = await page.evaluate(() => {
+        return document.activeElement && document.activeElement.classList.contains('slide-over-close');
+      });
+      assert(firstFocused, 'precondition: X button should be focused');
+      await page.keyboard.press('Shift+Tab');
+      const wrapped = await page.evaluate(() => {
+        const p = document.querySelector('.slide-over-panel');
+        if (!p) return { ok: false, why: 'panel gone' };
+        if (!p.contains(document.activeElement)) {
+          return { ok: false, why: 'focus escaped panel', activeTag: document.activeElement && document.activeElement.tagName };
+        }
+        const focusables = Array.from(p.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ));
+        const last = focusables[focusables.length - 1];
+        return { ok: document.activeElement === last, focusableCount: focusables.length };
+      });
+      assert(wrapped.ok, 'Shift+Tab should wrap to last focusable in panel: ' + JSON.stringify(wrapped));
+    });
+
+    await step('focus-trap@800 nodes: Tab from last focusable wraps back to first', async () => {
+      const setup = await page.evaluate(() => {
+        const p = document.querySelector('.slide-over-panel');
+        if (!p) return { ok: false };
+        const focusables = Array.from(p.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ));
+        if (!focusables.length) return { ok: false, focusableCount: 0 };
+        const last = focusables[focusables.length - 1];
+        last.focus();
+        return { ok: document.activeElement === last, focusableCount: focusables.length };
+      });
+      assert(setup.ok, 'precondition: last focusable should focus: ' + JSON.stringify(setup));
+      await page.keyboard.press('Tab');
+      const wrapped = await page.evaluate(() => {
+        const p = document.querySelector('.slide-over-panel');
+        if (!p || !p.contains(document.activeElement)) return { ok: false };
+        const focusables = Array.from(p.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ));
+        const first = focusables[0];
+        return { ok: document.activeElement === first };
+      });
+      assert(wrapped.ok, 'Tab from last focusable should wrap back to first');
+    });
+
+    await ctx.close();
+  }
+
+  // ============================================================
+  // #1168 review must-fix #2: Focus restore — closing the panel
+  // (Escape and X) returns focus to the row that opened it.
+  // Behavior implemented in commit 76ec12c; assertion added now.
+  // ============================================================
+  {
+    const ctx = await browser.newContext({ viewport: { width: 800, height: 800 } });
+    const page = await ctx.newPage();
+    page.setDefaultTimeout(8000);
+    await page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#nodesTable tbody tr[data-value]', { timeout: 8000 });
+
+    async function openPanelFromRow() {
+      // Mark the originating row with a stable selector & focus it before
+      // the click so we can re-locate it after close.
+      const rowKey = await page.evaluate(() => {
+        const r = document.querySelector('#nodesTable tbody tr[data-value]');
+        if (!r) return null;
+        // tabindex=0 is already set by the table renderer; ensure it.
+        if (!r.hasAttribute('tabindex')) r.setAttribute('tabindex', '0');
+        r.id = 'slideover-restore-anchor';
+        r.focus();
+        // Click via dispatch so delegated handlers fire.
+        r.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        return r.getAttribute('data-value');
+      });
+      assert(rowKey, 'no nodes row found for focus-restore test');
+      await page.waitForFunction(() => {
+        const p = document.querySelector('.slide-over-panel');
+        return p && !p.hidden;
+      }, null, { timeout: 8000 });
+    }
+
+    await step('focus-restore@800: Escape returns focus to originating row', async () => {
+      await openPanelFromRow();
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(200);
+      const r = await page.evaluate(() => {
+        const row = document.getElementById('slideover-restore-anchor');
+        return {
+          rowExists: !!row,
+          isActive: !!row && document.activeElement === row,
+          activeTag: document.activeElement && document.activeElement.tagName,
+          activeId: document.activeElement && document.activeElement.id,
+        };
+      });
+      assert(r.rowExists, 'originating row vanished from DOM (re-render?)');
+      assert(r.isActive, 'focus did NOT restore to originating row after Escape: ' + JSON.stringify(r));
+    });
+
+    await step('focus-restore@800: X-button click returns focus to originating row', async () => {
+      // Re-anchor the row (table may have re-rendered between opens) and reopen.
+      await openPanelFromRow();
+      await page.evaluate(() => {
+        const x = document.querySelector('.slide-over-panel .slide-over-close');
+        x.click();
+      });
+      await page.waitForTimeout(200);
+      const r = await page.evaluate(() => {
+        const row = document.getElementById('slideover-restore-anchor');
+        return {
+          rowExists: !!row,
+          isActive: !!row && document.activeElement === row,
+          activeId: document.activeElement && document.activeElement.id,
+        };
+      });
+      assert(r.rowExists, 'originating row vanished from DOM');
+      assert(r.isActive, 'focus did NOT restore to originating row after X click: ' + JSON.stringify(r));
+    });
+
+    await ctx.close();
+  }
+
+  // ============================================================
+  // #1168 review must-fix #3: Open-2nd-row race — opening row B
+  // while row A's panel is open must (a) keep exactly one
+  // backdrop, (b) reflect row B's content, and (c) fire row A's
+  // onClose proxy exactly once. SlideOver.open() handles this in
+  // commit 7498083 via `if (isOpen()) close();`.
+  // ============================================================
+  {
+    const ctx = await browser.newContext({ viewport: { width: 800, height: 800 } });
+    const page = await ctx.newPage();
+    page.setDefaultTimeout(8000);
+    await page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#nodesTable tbody tr[data-value]', { timeout: 8000 });
+    await page.waitForFunction(() => {
+      return document.querySelectorAll('#nodesTable tbody tr[data-value]').length >= 2;
+    }, null, { timeout: 8000 });
+
+    await step('race@800 nodes: open row A, then row B → single backdrop, row A onClose fired exactly once', async () => {
+      // Drive open() directly via the SlideOver public API so we can install
+      // an onClose proxy and observe call count without relying on a
+      // particular page wiring.
+      const result = await page.evaluate(() => {
+        if (!window.SlideOver) return { ok: false, why: 'no SlideOver' };
+        let aCloseCalls = 0;
+        const aContent = window.SlideOver.open({
+          title: 'Row A',
+          onClose: function () { aCloseCalls++; },
+        });
+        if (!aContent) return { ok: false, why: 'open A returned no content' };
+        aContent.innerHTML = '<p>A body</p>';
+        // Snapshot state mid-A.
+        const backdropsAfterA = document.querySelectorAll('.slide-over-backdrop').length;
+        const panelsAfterA = document.querySelectorAll('.slide-over-panel').length;
+        // Now open B without closing A — this should trigger A's onClose
+        // proxy exactly once and replace the panel content.
+        const bContent = window.SlideOver.open({ title: 'Row B' });
+        bContent.innerHTML = '<p>B body</p>';
+        return {
+          ok: true,
+          backdropsAfterA,
+          panelsAfterA,
+          backdropsAfterB: document.querySelectorAll('.slide-over-backdrop').length,
+          panelsAfterB: document.querySelectorAll('.slide-over-panel').length,
+          titleNow: document.querySelector('.slide-over-title').textContent,
+          bodyNow: document.querySelector('.slide-over-content').textContent,
+          aCloseCalls,
+          bodyOverflow: document.body.style.overflow,
+        };
+      });
+      assert(result.ok, 'race precondition failed: ' + JSON.stringify(result));
+      assert(result.backdropsAfterB === 1, 'expected exactly one backdrop after open(B), got ' + result.backdropsAfterB);
+      assert(result.panelsAfterB === 1, 'expected exactly one panel after open(B), got ' + result.panelsAfterB);
+      assert(result.titleNow === 'Row B', 'title should reflect row B, got: ' + result.titleNow);
+      assert(result.bodyNow.indexOf('B body') !== -1, 'content should reflect row B, got: ' + result.bodyNow);
+      assert(result.aCloseCalls === 1, 'row A onClose should fire exactly once, got ' + result.aCloseCalls);
+      assert(result.bodyOverflow === 'hidden', 'body scroll lock must remain (single lock, not double-restored): ' + result.bodyOverflow);
+      // Cleanup
+      await page.evaluate(() => window.SlideOver.close());
+    });
+
+    await ctx.close();
+  }
+
+  // ============================================================
+  // #1168 review must-fix #4: Resize crossing breakpoint cleans
+  // up. Open at 800w (slide-over branch), then resize to 1440w
+  // (>1023 BP). Debounced resize listener (commit 76ec12c) must
+  // close the panel, hide the backdrop, release the body
+  // scroll-lock, AND restore focus.
+  // ============================================================
+  {
+    const ctx = await browser.newContext({ viewport: { width: 800, height: 800 } });
+    const page = await ctx.newPage();
+    page.setDefaultTimeout(8000);
+    await page.goto(BASE + '/#/nodes', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#nodesTable tbody tr[data-value]', { timeout: 8000 });
+
+    await step('resize@800→1440 nodes: cleanup releases panel, backdrop, scroll-lock, focus', async () => {
+      const rowKey = await page.evaluate(() => {
+        const r = document.querySelector('#nodesTable tbody tr[data-value]');
+        if (!r) return null;
+        r.id = 'slideover-resize-anchor';
+        r.focus();
+        r.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        return r.getAttribute('data-value');
+      });
+      assert(rowKey, 'no nodes row for resize test');
+      await page.waitForFunction(() => {
+        const p = document.querySelector('.slide-over-panel');
+        return p && !p.hidden;
+      }, null, { timeout: 8000 });
+      // Cross the breakpoint upwards.
+      await page.setViewportSize({ width: 1440, height: 900 });
+      // Resize listener is debounced ~120ms; give it a comfortable window.
+      await page.waitForTimeout(500);
+      const after = await page.evaluate(() => {
+        function isShown(el) {
+          if (!el) return false;
+          if (el.hidden) return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        }
+        return {
+          panelGone: !isShown(document.querySelector('.slide-over-panel')),
+          backdropGone: !isShown(document.querySelector('.slide-over-backdrop')),
+          bodyOverflow: document.body.style.overflow,
+          focusRestored: !!document.getElementById('slideover-resize-anchor')
+            && document.activeElement === document.getElementById('slideover-resize-anchor'),
+          activeId: document.activeElement && document.activeElement.id,
+        };
+      });
+      assert(after.panelGone, 'panel still shown after viewport crossed BP: ' + JSON.stringify(after));
+      assert(after.backdropGone, 'backdrop still shown after viewport crossed BP');
+      assert(after.bodyOverflow !== 'hidden', 'body scroll-lock not released after viewport crossed BP (overflow=' + after.bodyOverflow + ')');
+      assert(after.focusRestored, 'focus not restored after viewport-crossing close: ' + JSON.stringify(after));
     });
 
     await ctx.close();
