@@ -758,6 +758,14 @@ input[type="week"] {
  * clicks at viewport <=1023 instead of routing to a separate page.
  * Reuses the existing slideInRight keyframe defined later in this file.
  */
+
+/* #1168 Munger #3: ref-counted scroll-lock. Multiple modal surfaces
+ * (SlideOver, ChannelColorPicker, future modals) acquire/release a
+ * shared count via window.__scrollLock; the class is added on first
+ * acquire and removed on last release. Replaces the previous
+ * body.style.overflow capture-and-restore string approach which
+ * corrupted overflow under last-writer-wins races. */
+body.scroll-locked { overflow: hidden; }
 .slide-over-backdrop {
   position: fixed; inset: 0; z-index: 1000;
   background: rgba(0, 0, 0, 0.5);

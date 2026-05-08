@@ -195,9 +195,46 @@
 (function () {
   if (window.SlideOver) return;
 
+  // #1168 Munger #3: shared, ref-counted scroll-lock helper. Multiple
+  // modal surfaces (SlideOver, ChannelColorPicker, future modals) call
+  // acquire()/release() with their own token; the body keeps the
+  // `scroll-locked` class (CSS supplies overflow:hidden in style.css)
+  // for as long as the count > 0. Last release removes the class.
+  // This replaces the previous capture-and-restore-string approach
+  // which corrupted body.style.overflow under last-writer-wins races.
+  if (!window.__scrollLock) {
+    let count = 0;
+    let next = 1;
+    const live = new Set();
+    function acquire() {
+      const token = next++;
+      live.add(token);
+      count++;
+      if (count === 1) document.body.classList.add('scroll-locked');
+      return token;
+    }
+    function release(token) {
+      if (token == null || !live.has(token)) return;
+      live.delete(token);
+      count--;
+      if (count <= 0) {
+        count = 0;
+        document.body.classList.remove('scroll-locked');
+      }
+    }
+    window.__scrollLock = { acquire: acquire, release: release };
+  }
+
   const BP = 1023;
   let backdrop = null, panel = null, content = null, closeCb = null;
-  let prevFocus = null, prevFocusResolver = null, prevBodyOverflow = null;
+  let prevFocus = null, prevFocusResolver = null;
+  // #1168 Munger #1: openSeq counter so a stale rAF from close() can
+  // detect a newer open() happened in between and skip its focus call.
+  let openSeq = 0;
+  // #1168 Munger #3: ref-counted scroll-lock token held by THIS surface
+  // (multiple SlideOver opens reuse the same token; only paired with a
+  // matching release on close).
+  let scrollLockToken = null;
 
   function ensureNodes() {
     if (panel && backdrop) return;
@@ -266,6 +303,14 @@
         close();
       }
     });
+
+    // #1168 Munger #2: hashchange cleanup. Without this, navigating from
+    // /#/packets to /#/nodes via location.hash leaves panel + backdrop +
+    // scroll-lock dangling across pages. Registered once with the other
+    // singleton listeners.
+    window.addEventListener('hashchange', function () {
+      if (isOpen()) close();
+    });
   }
 
   function shouldUse() {
@@ -282,6 +327,10 @@
     if (isOpen()) close();
     ensureNodes();
     opts = opts || {};
+    // #1168 Munger #1: bump open sequence so any pending rAF from a
+    // prior close() can detect that a newer open has happened and skip
+    // its stale focus-restore.
+    openSeq++;
     closeCb = typeof opts.onClose === 'function' ? opts.onClose : null;
     // If the caller passes restoreFocus(), it owns lookup at close-time —
     // useful when the caller re-renders the row table (which would detach
@@ -290,9 +339,11 @@
     // Remember what was focused so we can restore on close.
     prevFocus = (document.activeElement && document.activeElement !== document.body)
       ? document.activeElement : null;
-    // Lock body scroll so the page underneath doesn't scroll behind backdrop.
-    prevBodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+    // #1168 Munger #3: ref-counted scroll-lock — class-based, not value-restore.
+    // Survives interleaved lockers (other modals can also acquire/release).
+    if (scrollLockToken == null) {
+      scrollLockToken = window.__scrollLock.acquire();
+    }
     const title = panel.querySelector('.slide-over-title');
     title.textContent = opts.title || 'Detail';
     content = panel.querySelector('.slide-over-content');
@@ -309,10 +360,10 @@
     if (!panel || panel.hidden) return;
     panel.hidden = true;
     if (backdrop) backdrop.hidden = true;
-    // Restore body scroll.
-    if (prevBodyOverflow !== null) {
-      document.body.style.overflow = prevBodyOverflow;
-      prevBodyOverflow = null;
+    // #1168 Munger #3: release the ref-counted scroll-lock token.
+    if (scrollLockToken != null) {
+      window.__scrollLock.release(scrollLockToken);
+      scrollLockToken = null;
     }
     const cb = closeCb;
     closeCb = null;
@@ -323,6 +374,12 @@
     const resolver = prevFocusResolver;
     prevFocus = null;
     prevFocusResolver = null;
+    // #1168 Munger #1: capture the open-sequence at close-time. If a NEW
+    // open() happens before our deferred rAF fires, openSeq will have
+    // advanced past this value and the stale rAF must no-op (otherwise
+    // it would steal focus back to row A's originating row AFTER row B
+    // is open — clobbering B's focus).
+    const seqAtClose = openSeq;
     if (cb) try { cb(); } catch {}
     // Resolver runs AFTER cb (cb may re-render the table and reattach the row).
     if (resolver) {
@@ -337,6 +394,8 @@
       // otherwise see focus snap back to <body> as the key event unwinds).
       const target = toFocus;
       const tryFocus = function () {
+        // Munger #1: bail if a newer open() has happened since close-time.
+        if (openSeq !== seqAtClose) return;
         if (document.body.contains(target)) {
           try { target.focus(); } catch {}
         }
