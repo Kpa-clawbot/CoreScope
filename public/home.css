@@ -32,7 +32,7 @@
   border-bottom: 1px solid var(--border);
 }
 .home-hero-brand {
-  margin: 0 0 14px;
+  margin: 0;
 }
 .home-hero-logo {
   display: block;
@@ -50,12 +50,16 @@
   color: var(--text-muted);
   font-size: .85rem;
 }
-.home-hero h1 {
+.home-search-section {
+  text-align: center;
+  padding: 24px 16px 20px;
+}
+.home-search-section h1 {
   font: 700 1.5rem/1.2 var(--font);
   color: var(--text);
   margin: 0 0 4px;
 }
-.home-hero p {
+.home-search-section p {
   color: var(--text-muted);
   margin: 0 0 16px;
   font-size: .85rem;
@@ -521,7 +525,7 @@
 /* Responsive */
 @media (max-width: 640px) {
   .home-hero { padding: 32px 16px 24px; }
-  .home-hero h1 { font-size: 1.5rem; }
+  .home-search-section h1 { font-size: 1.5rem; }
   .home-announcement-modal { margin: 16px 12px 8px; padding: 16px; }
   .home-announcement-head { flex-direction: column; align-items: stretch; }
   .home-announcement-controls { justify-content: space-between; }
