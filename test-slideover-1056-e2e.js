@@ -139,6 +139,13 @@ const PAGES = [
           cssPosition: cs && cs.position,
           role: panel && panel.getAttribute('role'),
           ariaModal: panel && panel.getAttribute('aria-modal'),
+          // #1168 review must-fix #4: panel must use aria-labelledby pointing
+          // at the actual <h3 id="slideOverTitle"> so screen readers announce
+          // the meaningful title, not a generic static "Detail" string.
+          ariaLabelledBy: panel && panel.getAttribute('aria-labelledby'),
+          ariaLabel: panel && panel.getAttribute('aria-label'),
+          titleId: panel && panel.querySelector('.slide-over-title')
+            ? panel.querySelector('.slide-over-title').id : null,
           backdropAriaHidden: back && back.getAttribute('aria-hidden'),
           xAriaLabel: x && x.getAttribute('aria-label'),
           xWidth: xr ? xr.width : 0,
@@ -151,6 +158,14 @@ const PAGES = [
       assert(a.cssTop === '0px', 'slide-over panel does not start at top:0 (got ' + a.cssTop + ')');
       assert(a.role === 'dialog', 'slide-over role!=dialog (got ' + a.role + ')');
       assert(a.ariaModal === 'true', 'slide-over aria-modal!=true (got ' + a.ariaModal + ')');
+      // #1168 must-fix #4: aria-labelledby (pointing to the title h3) wins
+      // over a static aria-label so SRs announce the actual packet/node name.
+      assert(a.ariaLabelledBy === 'slideOverTitle',
+        'slide-over panel must use aria-labelledby="slideOverTitle" (got ' + a.ariaLabelledBy + ')');
+      assert(a.titleId === 'slideOverTitle',
+        'slide-over title must keep id="slideOverTitle" (got ' + a.titleId + ')');
+      assert(!a.ariaLabel,
+        'slide-over panel must NOT carry a static aria-label that shadows the title (got ' + a.ariaLabel + ')');
       assert(a.backdropAriaHidden === 'true', 'backdrop aria-hidden!=true (got ' + a.backdropAriaHidden + ')');
       assert(a.xAriaLabel && a.xAriaLabel.length > 0, 'X button missing aria-label');
       assert(a.xWidth >= 44 && a.xHeight >= 44, 'X tap target <44px (' + a.xWidth + 'x' + a.xHeight + ')');
