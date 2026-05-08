@@ -99,6 +99,12 @@ type procIOSnapshot struct {
 	ok             bool
 }
 
+// readProcSelfIOFn is the package-level hook the writer loop uses to read
+// /proc/self/io. Defaults to readProcSelfIO; tests override it to inject
+// deterministic counter snapshots without depending on a Linux kernel
+// that exposes /proc/self/io (CONFIG_TASK_IO_ACCOUNTING).
+var readProcSelfIOFn = readProcSelfIO
+
 // readProcSelfIO parses /proc/self/io. Returns ok=false on non-Linux hosts or
 // any read/parse failure (caller skips the procIO block in that case).
 func readProcSelfIO() procIOSnapshot {
@@ -169,7 +175,7 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 		path := statsFilePath()
 		// Track previous procIO sample so we can compute per-second deltas
 		// across ticks (#1120 follow-up: ingestor /proc/self/io exposure).
-		prevIO := readProcSelfIO()
+		prevIO := readProcSelfIOFn()
 		// Reuse a single bytes.Buffer + json.Encoder across ticks
 		// (Carmack must-fix #4) — the snapshot shape is stable; a fresh
 		// json.Marshal allocation per second × forever is pure GC waste.
@@ -183,7 +189,7 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 			// timestamp while the consumer renders another.
 			tickAt := time.Now().UTC()
 			stamp := tickAt.Format(time.RFC3339)
-			curIO := readProcSelfIO()
+			curIO := readProcSelfIOFn()
 			ioRate := procIORate(prevIO, curIO, stamp)
 			prevIO = curIO
 			snap := IngestorStatsSnapshot{
