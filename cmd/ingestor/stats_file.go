@@ -161,12 +161,13 @@ func procIORate(prev, cur procIOSnapshot) *PerfIOSample {
 	}
 }
 
-// statsFilePath is read once per writer-loop start; the env var is only
-// re-read on process restart (not per tick).
-
 // StartStatsFileWriter writes the current stats snapshot to disk every
 // `interval` so the server can serve them at /api/perf/write-sources.
 // Failures are logged once-per-interval and never fatal.
+//
+// The stats file path is resolved via statsFilePath() once at writer-loop
+// start; the env var (CORESCOPE_INGESTOR_STATS) is only re-read on process
+// restart, not per tick.
 func StartStatsFileWriter(s *Store, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Second
