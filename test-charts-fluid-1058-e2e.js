@@ -11,7 +11,27 @@
  *   - Re-layout works on viewport resize (no manual handler needed —
  *     CSS does the work; test resizes 1920 → 800 and asserts re-flow).
  *
- * Tested viewports: 768 / 1080 / 1440 / 1920 / 2560.
+ * Boundary math (PR #1175 review follow-up):
+ *   The grid template is `repeat(auto-fit, minmax(min(100%, 400px), 1fr))`
+ *   with `gap: 16px`. Two columns first fit when the row's CONTENT width
+ *   is ≥ (2 × 400) + 16 = 816px.
+ *
+ *   `.analytics-page` has `padding: 16px 24px` → 48px horizontal padding,
+ *   so the row content width ≈ viewport - 48 (ignoring scrollbar, which
+ *   adds a few px in headless Chromium but doesn't shift conclusions
+ *   below).
+ *
+ *   Boundary viewports tested:
+ *     - 859px: content ≈ 811px  → < 816 → MUST stack (1 col)
+ *     - 870px: content ≈ 822px  → ≥ 816 → MUST be side-by-side (2 col)
+ *     - 950px: content ≈ 902px  → clearly ≥ 816 → side-by-side
+ *
+ *   The previous 2560 viewport case was tautological: `.analytics-page`
+ *   is capped at `max-width: 1600px`, so the row is never wider than
+ *   1600 - 48 = 1552 regardless of viewport. The cap is asserted
+ *   directly below to document WHY (see "max-width cap" step).
+ *
+ * Tested viewports: 768 / 859 / 870 / 950 / 1080 / 1440 / 1920.
  *
  * Selector contract:
  *   - `.analytics-row` containers hold the side-by-side chart cards.
@@ -38,10 +58,15 @@ const HASH = '#/analytics';
 
 const VIEWPORTS = [
   { w: 768,  h: 900, expectStacked: true  },
+  // Boundary: just below the 2-col threshold (~816px content needed).
+  { w: 859,  h: 900, expectStacked: true  },
+  // Boundary: just above the 2-col threshold.
+  { w: 870,  h: 900, expectStacked: false },
+  // Comfortably above the threshold.
+  { w: 950,  h: 900, expectStacked: false },
   { w: 1080, h: 900, expectStacked: false },
   { w: 1440, h: 900, expectStacked: false },
   { w: 1920, h: 900, expectStacked: false },
-  { w: 2560, h: 1200, expectStacked: false },
 ];
 
 async function gatherRows(page) {
@@ -167,6 +192,35 @@ async function gatherRows(page) {
     const narrowSame = narrowTops.every(t => Math.abs(t - narrowTops[0]) <= 2);
     assert(!narrowSame,
       `expected re-flow / stacked layout after resize to 800 (tops=${JSON.stringify(narrowTops)})`);
+    await ctx.close();
+  });
+
+  // Max-width cap on .analytics-page documents WHY the previous 2560
+  // viewport case was tautological. The cap exists to keep chart
+  // density readable on ultrawide displays — without it, fluid
+  // grid would spread cards across 2560+px, hurting scannability.
+  // Replaces the dropped 2560 case with a direct assertion of the
+  // architectural contract that made it tautological.
+  // Follow-up: cap-vs-fluid tension is tracked separately; this
+  // test pins the current contract so a regression is caught.
+  await step('analytics-page max-width: 1600px cap is enforced', async () => {
+    const ctx = await browser.newContext({ viewport: { width: 2560, height: 1200 } });
+    const page = await ctx.newPage();
+    page.setDefaultTimeout(10000);
+    await page.goto(BASE + '/' + HASH, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.analytics-page', { timeout: 10000 });
+    const pageWidth = await page.evaluate(() => {
+      const el = document.querySelector('.analytics-page');
+      return el ? el.getBoundingClientRect().width : null;
+    });
+    assert(pageWidth !== null, '.analytics-page not found');
+    assert(pageWidth <= 1600 + 1,
+      `.analytics-page width ${pageWidth} exceeds 1600px cap at 2560 viewport`);
+    // And the cap must actually be ACTIVE at 2560 (i.e. capped, not
+    // viewport-limited). At 2560 viewport, page width should be at
+    // the cap, not the viewport.
+    assert(pageWidth >= 1500,
+      `.analytics-page width ${pageWidth} suspiciously below cap — selector or styles changed?`);
     await ctx.close();
   });
 
