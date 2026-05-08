@@ -168,7 +168,11 @@ const PAGES = [
           xAriaLabel: x && x.getAttribute('aria-label'),
           xWidth: xr ? xr.width : 0,
           xHeight: xr ? xr.height : 0,
-          bodyOverflow: document.body.style.overflow,
+          // #1168 Munger #3: scroll-lock is now class-based + ref-counted.
+          // Assert via getComputedStyle (effective behavior) plus the class
+          // marker, not the inline style attribute (which is no longer set).
+          bodyOverflow: getComputedStyle(document.body).overflow,
+          bodyHasLockClass: document.body.classList.contains('scroll-locked'),
         };
       });
       assert(a.cssPosition === 'fixed', 'slide-over panel not position:fixed (got ' + a.cssPosition + ')');
@@ -191,6 +195,7 @@ const PAGES = [
       assert(a.backdropAriaHidden === 'true', 'backdrop aria-hidden!=true (got ' + a.backdropAriaHidden + ')');
       assert(a.xAriaLabel && a.xAriaLabel.length > 0, 'X button missing aria-label');
       assert(a.xWidth >= 44 && a.xHeight >= 44, 'X tap target <44px (' + a.xWidth + 'x' + a.xHeight + ')');
+      assert(a.bodyHasLockClass, 'body missing scroll-locked class while open');
       assert(a.bodyOverflow === 'hidden', 'body scroll not locked while open (overflow=' + a.bodyOverflow + ')');
     });
 
@@ -206,10 +211,13 @@ const PAGES = [
         }
         const panel = document.querySelector('.slide-over-panel');
         const back  = document.querySelector('.slide-over-backdrop');
-        return { panelGone: !isShown(panel), backGone: !isShown(back), bodyOverflow: document.body.style.overflow };
+        return { panelGone: !isShown(panel), backGone: !isShown(back),
+                 bodyOverflow: getComputedStyle(document.body).overflow,
+                 bodyHasLockClass: document.body.classList.contains('scroll-locked') };
       });
       assert(info.panelGone, 'slide-over panel still visible after Escape');
       assert(info.backGone, 'slide-over backdrop still visible after Escape');
+      assert(!info.bodyHasLockClass, 'scroll-locked class not removed after Escape');
       assert(info.bodyOverflow !== 'hidden', 'body scroll lock not released after Escape (overflow=' + info.bodyOverflow + ')');
     });
 
@@ -497,7 +505,8 @@ const PAGES = [
           titleNow: document.querySelector('.slide-over-title').textContent,
           bodyNow: document.querySelector('.slide-over-content').textContent,
           aCloseCalls,
-          bodyOverflow: document.body.style.overflow,
+          bodyOverflow: getComputedStyle(document.body).overflow,
+          bodyHasLockClass: document.body.classList.contains('scroll-locked'),
         };
       });
       assert(result.ok, 'race precondition failed: ' + JSON.stringify(result));
@@ -506,6 +515,7 @@ const PAGES = [
       assert(result.titleNow === 'Row B', 'title should reflect row B, got: ' + result.titleNow);
       assert(result.bodyNow.indexOf('B body') !== -1, 'content should reflect row B, got: ' + result.bodyNow);
       assert(result.aCloseCalls === 1, 'row A onClose should fire exactly once, got ' + result.aCloseCalls);
+      assert(result.bodyHasLockClass, 'scroll-locked class must remain after open(B) (single ref-count, not released-and-re-locked)');
       assert(result.bodyOverflow === 'hidden', 'body scroll lock must remain (single lock, not double-restored): ' + result.bodyOverflow);
       // Cleanup
       await page.evaluate(() => window.SlideOver.close());
@@ -557,7 +567,8 @@ const PAGES = [
         return {
           panelGone: !isShown(document.querySelector('.slide-over-panel')),
           backdropGone: !isShown(document.querySelector('.slide-over-backdrop')),
-          bodyOverflow: document.body.style.overflow,
+          bodyOverflow: getComputedStyle(document.body).overflow,
+          bodyHasLockClass: document.body.classList.contains('scroll-locked'),
           rowExists: !!row,
           focusRestored: !!row && document.activeElement === row,
           activeTag: document.activeElement && document.activeElement.tagName,
@@ -565,6 +576,7 @@ const PAGES = [
       }, rowKey);
       assert(after.panelGone, 'panel still shown after viewport crossed BP: ' + JSON.stringify(after));
       assert(after.backdropGone, 'backdrop still shown after viewport crossed BP');
+      assert(!after.bodyHasLockClass, 'scroll-locked class still present after viewport crossed BP');
       assert(after.bodyOverflow !== 'hidden', 'body scroll-lock not released after viewport crossed BP (overflow=' + after.bodyOverflow + ')');
       // Focus-restore portion of this scenario is exercised in the
       // skipped step below (tracked in #1172). Soft-warn pattern removed

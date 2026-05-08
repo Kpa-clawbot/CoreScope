@@ -308,8 +308,20 @@
     // /#/packets to /#/nodes via location.hash leaves panel + backdrop +
     // scroll-lock dangling across pages. Registered once with the other
     // singleton listeners.
-    window.addEventListener('hashchange', function () {
-      if (isOpen()) close();
+    //
+    // Scope: only close on PAGE-route changes (first hash segment), not
+    // on within-page detail navigation. Observers (and others) write
+    // /#/observers/<id> when opening a row; that hashchange must NOT
+    // close the slide-over we just opened.
+    window.addEventListener('hashchange', function (e) {
+      if (!isOpen()) return;
+      function pageOf(hash) {
+        var m = String(hash || '').match(/^#?\/?([^\/?#]+)/);
+        return m ? m[1] : '';
+      }
+      var oldPage = pageOf(e && e.oldURL ? e.oldURL.split('#')[1] || '' : '');
+      var newPage = pageOf(e && e.newURL ? e.newURL.split('#')[1] || '' : location.hash);
+      if (oldPage !== newPage) close();
     });
   }
 
