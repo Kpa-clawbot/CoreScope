@@ -298,42 +298,54 @@
 
   function close() {
     if (!panel || panel.hidden) return;
-    panel.hidden = true;
-    if (backdrop) backdrop.hidden = true;
-    // Restore body scroll.
-    if (prevBodyOverflow !== null) {
-      document.body.style.overflow = prevBodyOverflow;
-      prevBodyOverflow = null;
-    }
-    const cb = closeCb;
-    closeCb = null;
-    if (content) content.innerHTML = '';
-    // Restore focus to whatever opened us (typically the table row), so
-    // keyboard users don't get dumped at the top of the document.
+    // Snapshot focus-restore inputs BEFORE we mutate anything. We must move
+    // focus to the originating row BEFORE hiding the panel — otherwise, if
+    // the close was triggered by the X button (which currently has focus),
+    // hiding the panel makes the focused element disappear and Chromium
+    // schedules an implicit blur to <body> that races with (and clobbers)
+    // our subsequent .focus() calls. Order matters: re-render rows first,
+    // resolve and focus the row, THEN hide panel/backdrop.
     let toFocus = prevFocus;
     const resolver = prevFocusResolver;
+    const cb = closeCb;
     prevFocus = null;
     prevFocusResolver = null;
+    closeCb = null;
+
+    // 1. Run caller's onClose (typically re-renders the row table).
     if (cb) try { cb(); } catch {}
-    // Resolver runs AFTER cb (cb may re-render the table and reattach the row).
+    // 2. Resolver runs AFTER cb so it can find the freshly-rendered row.
     if (resolver) {
       try {
         const resolved = resolver();
         if (resolved) toFocus = resolved;
       } catch {}
     }
-    if (toFocus && typeof toFocus.focus === 'function' && document.body.contains(toFocus)) {
-      // Defer to next microtask + rAF so the focus call lands AFTER any
-      // event-handler bookkeeping (e.g. an Escape keydown chain that would
-      // otherwise see focus snap back to <body> as the key event unwinds).
-      const target = toFocus;
-      const tryFocus = function () {
-        if (document.body.contains(target)) {
+    // 3. Move focus to the row BEFORE hiding the panel — this transfers
+    //    focus away from the X button cleanly, with no implicit blur race.
+    const target = (toFocus && typeof toFocus.focus === 'function' && document.body.contains(toFocus))
+      ? toFocus : null;
+    if (target) {
+      try { target.focus(); } catch {}
+    }
+    // 4. Now safely hide the panel + backdrop and clear content.
+    panel.hidden = true;
+    if (backdrop) backdrop.hidden = true;
+    if (content) content.innerHTML = '';
+    // Restore body scroll.
+    if (prevBodyOverflow !== null) {
+      document.body.style.overflow = prevBodyOverflow;
+      prevBodyOverflow = null;
+    }
+    // 5. rAF backup re-focus — defends against any event-loop unwind
+    //    (e.g. the trailing Escape keydown bubble) that would re-snap
+    //    focus to <body> after the synchronous close path completes.
+    if (target) {
+      requestAnimationFrame(function () {
+        if (document.body.contains(target) && document.activeElement !== target) {
           try { target.focus(); } catch {}
         }
-      };
-      tryFocus();
-      requestAnimationFrame(tryFocus);
+      });
     }
   }
 
