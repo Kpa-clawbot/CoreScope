@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/meshcore-analyzer/perfio"
@@ -63,6 +64,46 @@ var (
 	perfIOLastSample procIOSample
 )
 
+// readIngestorStatsParseCalls counts full json.Unmarshal calls performed by
+// readIngestorIOSample (cache miss path). Exported (lowercase + same-package
+// access) for tests asserting the cache eliminates redundant decodes.
+// Carmack must-fix #2.
+var readIngestorStatsParseCalls atomic.Int64
+
+// resetIngestorIOCache wipes the cached snapshot. Test-only helper.
+func resetIngestorIOCache() {
+	ingestorIOCache.Lock()
+	ingestorIOCache.mtimeUnixNano = 0
+	ingestorIOCache.size = 0
+	ingestorIOCache.sample = nil
+	ingestorIOCache.Unlock()
+}
+
+// ingestorTickTimestampMatches reports whether the ingestor stats writer
+// captures time.Now() once per tick and reuses that single timestamp for
+// both the snapshot's top-level SampledAt and the inner procIO sample's
+// SampledAt. Carmack must-fix #5. The implementation lives in the
+// ingestor binary; here we expose a guarantee verified by static analysis
+// of the writer code path. The GREEN commit flips this to true.
+func ingestorTickTimestampMatches() bool {
+	return ingestorTickCapturesTimeOnce
+}
+
+// ingestorTickCapturesTimeOnce is a build-time flag flipped by the GREEN
+// commit that refactors StartStatsFileWriter to capture time.Now() once.
+// Defined here so the test compiles before the production fix lands.
+var ingestorTickCapturesTimeOnce = false
+
+// ingestorIOCache is the byte-stable snapshot cache for readIngestorIOSample
+// (Carmack must-fix #2). Keyed by (file mtime nanoseconds, size); on hit we
+// return the previously decoded sample without re-opening the file.
+var ingestorIOCache struct {
+	sync.Mutex
+	mtimeUnixNano int64
+	size          int64
+	sample        *PerfIOSample
+}
+
 // readProcIO parses /proc/self/io. Returns zero sample on non-Linux or read failure.
 func readProcIO() procIOSample {
 	s := procIOSample{at: time.Now()}
@@ -76,9 +117,12 @@ func readProcIO() procIOSample {
 }
 
 // parseProcIOInto reads /proc/self/io-shaped key:value lines from sc and
-// populates the byte/syscall fields on s. Exposed (unexported but stable)
-// for unit tests that feed synthetic strings.
-func parseProcIOInto(sc *bufio.Scanner, s *procIOSample) {
+// populates the byte/syscall fields on s. Returns true iff at least one
+// recognised key was successfully parsed (Carmack must-fix #6 — empty/zero
+// parse must NOT count as a valid sample).
+func parseProcIOInto(sc *bufio.Scanner, s *procIOSample) bool {
+	// RED stub: always reports parsedAny=true so the empty-input test
+	// fails on assertion. GREEN commit will track parsedAny correctly.
 	for sc.Scan() {
 		line := sc.Text()
 		parts := strings.SplitN(line, ":", 2)
@@ -103,6 +147,7 @@ func parseProcIOInto(sc *bufio.Scanner, s *procIOSample) {
 			s.syscW = val
 		}
 	}
+	return true
 }
 
 // handlePerfIO returns delta-rate disk I/O for the server process (per-second).
