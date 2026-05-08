@@ -192,12 +192,15 @@
 
   const BP = 1023;
   let backdrop = null, panel = null, content = null, closeCb = null;
+  let prevFocus = null, prevBodyOverflow = null;
 
   function ensureNodes() {
     if (panel && backdrop) return;
     backdrop = document.createElement('div');
     backdrop.className = 'slide-over-backdrop';
     backdrop.hidden = true;
+    // Backdrop is decorative — assistive tech should not announce it.
+    backdrop.setAttribute('aria-hidden', 'true');
     backdrop.addEventListener('click', function () { close(); });
 
     panel = document.createElement('aside');
@@ -217,6 +220,23 @@
       e.preventDefault();
       e.stopPropagation();
       close();
+    });
+    // Focus trap: keep Tab cycling inside the panel while open.
+    panel.addEventListener('keydown', function (e) {
+      if (e.key !== 'Tab' || !isOpen()) return;
+      const focusables = panel.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusables.length) return;
+      const first = focusables[0], last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === panel)) {
+        e.preventDefault();
+        try { last.focus(); } catch {}
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        try { first.focus(); } catch {}
+      }
     });
     document.body.appendChild(backdrop);
     document.body.appendChild(panel);
@@ -239,9 +259,18 @@
   }
 
   function open(opts) {
+    // If already open, properly close the prior caller first so its onClose
+    // (which clears `selectedKey`/hash state) fires before we replace it.
+    if (isOpen()) close();
     ensureNodes();
     opts = opts || {};
     closeCb = typeof opts.onClose === 'function' ? opts.onClose : null;
+    // Remember what was focused so we can restore on close.
+    prevFocus = (document.activeElement && document.activeElement !== document.body)
+      ? document.activeElement : null;
+    // Lock body scroll so the page underneath doesn't scroll behind backdrop.
+    prevBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     const title = panel.querySelector('.slide-over-title');
     title.textContent = opts.title || 'Detail';
     content = panel.querySelector('.slide-over-content');
@@ -258,10 +287,22 @@
     if (!panel || panel.hidden) return;
     panel.hidden = true;
     if (backdrop) backdrop.hidden = true;
+    // Restore body scroll.
+    if (prevBodyOverflow !== null) {
+      document.body.style.overflow = prevBodyOverflow;
+      prevBodyOverflow = null;
+    }
     const cb = closeCb;
     closeCb = null;
     if (content) content.innerHTML = '';
+    // Restore focus to whatever opened us (typically the table row), so
+    // keyboard users don't get dumped at the top of the document.
+    const toFocus = prevFocus;
+    prevFocus = null;
     if (cb) try { cb(); } catch {}
+    if (toFocus && typeof toFocus.focus === 'function') {
+      try { toFocus.focus(); } catch {}
+    }
   }
 
   // If the viewport grows past the breakpoint while open, close the slide-over
