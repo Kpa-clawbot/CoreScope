@@ -382,7 +382,12 @@ const PAGES = [
     await step('focus-restore@800: Escape returns focus to originating row', async () => {
       const rowKey = await openPanelFromRow();
       await page.keyboard.press('Escape');
-      await page.waitForTimeout(300);
+      // Wait for renderRows() + post-rAF focus restore to settle.
+      await page.waitForFunction((key) => {
+        const esc = (window.CSS && CSS.escape) ? CSS.escape(key) : key;
+        const row = document.querySelector('#nodesTable tbody tr[data-value="' + esc + '"]');
+        return !!row && document.activeElement === row;
+      }, rowKey, { timeout: 2000 }).catch(() => {});
       const r = await page.evaluate((key) => {
         const esc = (window.CSS && CSS.escape) ? CSS.escape(key) : key;
         const row = document.querySelector('#nodesTable tbody tr[data-value="' + esc + '"]');

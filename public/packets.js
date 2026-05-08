@@ -323,7 +323,17 @@
       } catch {}
     }
     if (toFocus && typeof toFocus.focus === 'function' && document.body.contains(toFocus)) {
-      try { toFocus.focus(); } catch {}
+      // Defer to next microtask + rAF so the focus call lands AFTER any
+      // event-handler bookkeeping (e.g. an Escape keydown chain that would
+      // otherwise see focus snap back to <body> as the key event unwinds).
+      const target = toFocus;
+      const tryFocus = function () {
+        if (document.body.contains(target)) {
+          try { target.focus(); } catch {}
+        }
+      };
+      tryFocus();
+      requestAnimationFrame(tryFocus);
     }
   }
 
