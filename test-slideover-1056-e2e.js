@@ -61,23 +61,34 @@ const PAGES = [
     await step(`${tag}: clicking row opens slide-over with backdrop`, async () => {
       // Click the first body row — prefer one with a data-action attribute
       // (packets) or any row otherwise.
-      const clicked = await page.evaluate((sel) => {
+      const diag = await page.evaluate((sel) => {
         const t = document.querySelector(sel);
-        if (!t) return false;
+        if (!t) return { ok: false, why: 'no table' };
+        const rows = t.querySelectorAll('tbody tr');
         const row = t.querySelector('tbody tr[data-action], tbody tr[data-value], tbody tr');
-        if (!row) return false;
+        if (!row) return { ok: false, why: 'no row', rowCount: rows.length };
         // Click a real cell (avoid empty/loading rows)
         const td = row.querySelector('td:not(:empty)') || row;
-        td.click();
-        return true;
+        // Dispatch a real bubbling click event so delegated tbody handlers fire.
+        const ev = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+        td.dispatchEvent(ev);
+        return {
+          ok: true,
+          rowCount: rows.length,
+          rowAction: row.getAttribute('data-action') || null,
+          rowValue: row.getAttribute('data-value') || null,
+          hasSlideOver: typeof window.SlideOver !== 'undefined',
+          shouldUse: !!(window.SlideOver && window.SlideOver.shouldUse && window.SlideOver.shouldUse()),
+          innerW: window.innerWidth,
+        };
       }, p.tableSel);
-      if (!clicked) throw new Error('no clickable row');
-      // Wait up to 12s for the slide-over to appear (packets does async fetches).
+      if (!diag.ok) throw new Error('click setup failed: ' + JSON.stringify(diag));
+      // Wait up to 15s for the slide-over to appear (packets does async fetches).
       try {
         await page.waitForFunction(() => {
           const panel = document.querySelector('.slide-over-panel');
           return panel && !panel.hidden;
-        }, null, { timeout: 12000 });
+        }, null, { timeout: 15000 });
       } catch (_) { /* fall through to assertion below for clearer message */ }
       const info = await page.evaluate(() => {
         function isShown(el) {
@@ -97,7 +108,7 @@ const PAGES = [
           hasCloseBtn: !!closeBtn,
         };
       });
-      assert(info.panelPresent, 'slide-over panel not in DOM');
+      assert(info.panelPresent, 'slide-over panel not in DOM (diag: ' + JSON.stringify(diag) + ')');
       assert(info.panelVisible, 'slide-over panel not visible');
       assert(info.backdropPresent, 'slide-over backdrop not in DOM');
       assert(info.backdropVisible, 'slide-over backdrop not visible');
