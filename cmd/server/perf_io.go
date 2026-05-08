@@ -77,22 +77,6 @@ func resetIngestorIOCache() {
 	ingestorIOCache.Unlock()
 }
 
-// ingestorTickTimestampMatches reports whether the ingestor stats writer
-// captures time.Now() once per tick and reuses that single timestamp for
-// both the snapshot's top-level SampledAt and the inner procIO sample's
-// SampledAt. Carmack must-fix #5. The implementation lives in the
-// ingestor binary; here we expose a guarantee verified by static analysis
-// of the writer code path. The GREEN commit flips this to true.
-func ingestorTickTimestampMatches() bool {
-	return ingestorTickCapturesTimeOnce
-}
-
-// ingestorTickCapturesTimeOnce is flipped to true by the GREEN commit
-// that refactors StartStatsFileWriter to capture time.Now() once per
-// tick and reuse it for both snapshot.SampledAt and procIO.SampledAt
-// (Carmack must-fix #5).
-var ingestorTickCapturesTimeOnce = true
-
 // ingestorIOCache is the byte-stable snapshot cache for readIngestorIOSample
 // (Carmack must-fix #2). Keyed by (file mtime nanoseconds, size); on hit we
 // return the previously decoded sample without re-opening the file.

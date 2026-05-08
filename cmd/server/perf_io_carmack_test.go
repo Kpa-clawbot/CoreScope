@@ -2,8 +2,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,73 +130,12 @@ func TestReadIngestorIOSample_CacheInvalidatesOnMtimeChange(t *testing.T) {
 	}
 }
 
-// TestPerfIOEndpoint_IngestorTimestampMatchesSnapshot — Carmack must-fix
-// #5: the ingestor calls time.Now() twice per tick (once for
-// IngestorStatsSnapshot.SampledAt, once for the inner procIO.SampledAt).
-// They drift by μs–ms and the freshness guard then claims to validate
-// "the snapshot timestamp" while the consumer renders the inner one.
-// After the fix: single capture, both fields share the exact same RFC3339
-// string.
-func TestPerfIOEndpoint_IngestorTimestampMatchesSnapshot(t *testing.T) {
-	dir := t.TempDir()
-	statsPath := filepath.Join(dir, "ingestor-stats.json")
-	t.Setenv("CORESCOPE_INGESTOR_STATS", statsPath)
+// TestPerfIOEndpoint_IngestorTimestampMatchesSnapshot was removed: it
+// was a hand-flipped-bool tautology. The behaviour it intended to gate
+// (Carmack must-fix #5 — writer captures time.Now() once per tick) is
+// now exercised by TestStatsFileWriter_SampledAtMatchesProcIOSampledAt
+// in cmd/ingestor/stats_file_timestamp_test.go, which drives the real
+// StartStatsFileWriter and asserts byte-equal sampledAt strings on a
+// published stats file. Removed per Kent Beck Gate review
+// pullrequestreview-4254521304.
 
-	// Boot the in-process ingestor stats writer for one tick by calling
-	// the helper directly. Test-only path: build a minimal Store, run
-	// one snapshot synchronously through a helper if available; else
-	// drive via a real StartStatsFileWriter on a 50ms interval and read
-	// the file once it exists.
-	//
-	// We use the public buildIngestorStatsSnapshot helper (added in
-	// the GREEN commit for must-fix #5). RED commit: this symbol does
-	// not exist yet, so the test fails to build... that's a build
-	// error, not an assertion. To respect the "MUST fail on assertion"
-	// rule, write the test against an alternative observable: run
-	// against a freshly-published file from a real writer, then assert
-	// the two timestamp strings are equal.
-	//
-	// Easiest: spin up a tiny StartStatsFileWriter via the ingestor
-	// binary? No — different package. Instead, drive the server-side
-	// flow: use StartStatsFileWriter is not in this package.
-	//
-	// We assert at the level the bug actually manifests: read the
-	// stats file written by an actual ingestor instance run in an
-	// integration-style helper. Lacking that, assert at the level of
-	// helper logic the GREEN commit will introduce: inspect the JSON
-	// shape produced when ProcIO sample is built with SampledAt =
-	// snapshot.SampledAt.
-	//
-	// Concrete failing assertion: build a stub stats file where the
-	// two timestamps DIFFER by a known amount. Confirm the freshness
-	// guard uses st.SampledAt (already the case). Then assert (via a
-	// helper exposed by the GREEN fix) that the writer would produce
-	// identical strings. Helper name: `ingestorTickTimestampMatches`,
-	// returns bool — true if the writer captures time.Now once.
-	if !ingestorTickTimestampMatches() {
-		t.Errorf("ingestor writer must capture time.Now() once per tick and reuse for both snapshot.SampledAt and procIO.SampledAt")
-	}
-	// Also verify the freshness path doesn't lie: when the file is
-	// freshly written, both timestamps should round-trip-equal in the
-	// served JSON.
-	freshAt := time.Now().UTC().Format(time.RFC3339)
-	stub := `{"sampledAt":"` + freshAt + `","tx_inserted":0,"backfillUpdates":{},"procIO":{"readBytesPerSec":1,"writeBytesPerSec":2,"cancelledWriteBytesPerSec":0,"syscallsRead":3,"syscallsWrite":4,"sampledAt":"` + freshAt + `"}}`
-	if err := os.WriteFile(statsPath, []byte(stub), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, router := setupTestServer(t)
-	req := httptest.NewRequest("GET", "/api/perf/io", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	var body map[string]interface{}
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	ing, ok := body["ingestor"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected ingestor block, got: %v", body)
-	}
-	if ing["sampledAt"] != freshAt {
-		t.Errorf("expected ingestor.sampledAt=%s, got %v", freshAt, ing["sampledAt"])
-	}
-}
