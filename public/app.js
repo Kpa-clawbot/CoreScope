@@ -483,6 +483,8 @@ const Logo = (function () {
   let lastPingTs = 0;
   let flip = 0;                 // 0 → A→B, 1 → B→A.
   let lastDirection = null;     // 'a' or 'b' (source circle).
+  let connected = true;         // WS state — gates in-flight chained pulses.
+  let generation = 0;           // bumped on setConnected(false) to cancel scheduled halves.
 
   function reducedMotion() {
     try { return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
@@ -496,12 +498,18 @@ const Logo = (function () {
     });
   }
   function pulseChained(srcSel, dstSel) {
+    const gen = generation;
     // Source half: ~80ms.
     $all(srcSel).forEach((el) => el.classList.add('logo-pulse-active'));
     setTimeout(() => {
       $all(srcSel).forEach((el) => el.classList.remove('logo-pulse-active'));
       // Destination half: scheduled via rAF then ~80ms.
+      // Bail if WS dropped (or another disconnect cycle ran) since this ping started —
+      // otherwise a zombie pulse fires on a logo that's already showing the
+      // .logo-disconnected sustained state.
+      if (gen !== generation || !connected) return;
       requestAnimationFrame(() => {
+        if (gen !== generation || !connected) return;
         $all(dstSel).forEach((el) => el.classList.add('logo-pulse-active'));
         setTimeout(() => {
           $all(dstSel).forEach((el) => el.classList.remove('logo-pulse-active'));
@@ -517,6 +525,7 @@ const Logo = (function () {
     }, 140);
   }
   function pulse(_msg) {
+    if (!connected) { stats.dropped++; return false; }
     const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     if (now - lastPingTs < RATE_GAP_MS) { stats.dropped++; return false; }
     lastPingTs = now;
@@ -535,7 +544,12 @@ const Logo = (function () {
     }
     return true;
   }
-  function setConnected(connected) {
+  function setConnected(isConnected) {
+    connected = !!isConnected;
+    // Bump generation so any in-flight chained-pulse callbacks bail before
+    // toggling classes on the destination circle (otherwise a zombie pulse
+    // briefly fights the .logo-disconnected sustained desaturate state).
+    generation++;
     $all('.brand-logo, .brand-mark-only').forEach((el) => {
       if (connected) el.classList.remove('logo-disconnected');
       else el.classList.add('logo-disconnected');
@@ -543,12 +557,14 @@ const Logo = (function () {
     if (!connected) clearAll();
   }
   // Expose hook for E2E + customizer/devtools introspection.
-  const api = {
+  // Frozen so consumers can't replace .pulse / .setConnected from outside
+  // (the seam is read-only — invocation only).
+  const api = Object.freeze({
     pulse: pulse,
     setConnected: setConnected,
     get lastDirection() { return lastDirection; },
     get stats() { return { triggered: stats.triggered, dropped: stats.dropped }; },
-  };
+  });
   try { window.__corescopeLogo = api; } catch (_) {}
   return api;
 })();
