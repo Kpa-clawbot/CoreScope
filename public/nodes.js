@@ -1299,6 +1299,13 @@
       renderRows();
       const so = window.SlideOver.open({
         title: 'Node detail',
+        // Resolver runs after onClose re-renders rows, so look the row up
+        // by data-key after the new tbody is in place.
+        restoreFocus: function () {
+          return document.querySelector('#nodesTable tbody tr[data-key="'
+            + (window.CSS && CSS.escape ? CSS.escape(pubkey) : pubkey)
+            + '"]');
+        },
         onClose: function () {
           selectedKey = null;
           history.replaceState(null, '', '#/nodes');

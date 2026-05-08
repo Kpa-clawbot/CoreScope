@@ -180,7 +180,12 @@
  *
  *   SlideOver.shouldUse()   → boolean (current viewport <= breakpoint)
  *   SlideOver.open(opts)    → returns the inner content element. opts:
- *     { title?: string, onClose?: function }
+ *     { title?: string, onClose?: function, restoreFocus?: () => Element|null }
+ *     `restoreFocus` (optional) overrides the auto-captured
+ *     `document.activeElement` and is invoked at close time to look up the
+ *     element to focus. Use this when the caller re-renders the originating
+ *     row before/after opening (which would otherwise detach the focused
+ *     row from the DOM and leave nothing for auto-restore to find).
  *   SlideOver.close()       → close + dispatch onClose
  *   SlideOver.isOpen()      → boolean
  *
@@ -192,7 +197,7 @@
 
   const BP = 1023;
   let backdrop = null, panel = null, content = null, closeCb = null;
-  let prevFocus = null, prevBodyOverflow = null;
+  let prevFocus = null, prevFocusResolver = null, prevBodyOverflow = null;
 
   function ensureNodes() {
     if (panel && backdrop) return;
@@ -269,6 +274,10 @@
     ensureNodes();
     opts = opts || {};
     closeCb = typeof opts.onClose === 'function' ? opts.onClose : null;
+    // If the caller passes restoreFocus(), it owns lookup at close-time —
+    // useful when the caller re-renders the row table (which would detach
+    // any auto-captured prevFocus DOM node).
+    prevFocusResolver = typeof opts.restoreFocus === 'function' ? opts.restoreFocus : null;
     // Remember what was focused so we can restore on close.
     prevFocus = (document.activeElement && document.activeElement !== document.body)
       ? document.activeElement : null;
@@ -301,10 +310,19 @@
     if (content) content.innerHTML = '';
     // Restore focus to whatever opened us (typically the table row), so
     // keyboard users don't get dumped at the top of the document.
-    const toFocus = prevFocus;
+    let toFocus = prevFocus;
+    const resolver = prevFocusResolver;
     prevFocus = null;
+    prevFocusResolver = null;
     if (cb) try { cb(); } catch {}
-    if (toFocus && typeof toFocus.focus === 'function') {
+    // Resolver runs AFTER cb (cb may re-render the table and reattach the row).
+    if (resolver) {
+      try {
+        const resolved = resolver();
+        if (resolved) toFocus = resolved;
+      } catch {}
+    }
+    if (toFocus && typeof toFocus.focus === 'function' && document.body.contains(toFocus)) {
       try { toFocus.focus(); } catch {}
     }
   }
@@ -2436,6 +2454,16 @@
       // overlay rather than the side panel.
       panel = window.SlideOver.open({
         title: hash ? ('Packet ' + String(hash).slice(0, 12)) : 'Packet detail',
+        // After close, the rows are re-rendered (see onClose). Use a resolver
+        // to look up the originating row in the post-render DOM by data-hash
+        // / data-id, so keyboard focus restores to the actual table row.
+        restoreFocus: function () {
+          const lookup = hash || id;
+          if (!lookup) return null;
+          const esc = (window.CSS && CSS.escape) ? CSS.escape(String(lookup)) : String(lookup);
+          return document.querySelector('#pktTable tbody tr[data-hash="' + esc + '"]')
+              || document.querySelector('#pktTable tbody tr[data-id="' + esc + '"]');
+        },
         onClose: function () {
           selectedId = null;
           selectedObservationId = null;

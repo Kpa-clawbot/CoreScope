@@ -122,10 +122,9 @@ const PAGES = [
     });
 
     await step(`${tag}: panel anchored to right edge + a11y attrs + body scroll lock`, async () => {
-      // The slideInRight keyframe applies a transient translateX, which shifts
-      // getBoundingClientRect for ~200ms. Wait for it to settle before
-      // asserting, OR rely on computed style (right:0) which reflects layout.
-      await page.waitForTimeout(300);
+      // The slideInRight keyframe applies a transient translateX(20px) → 0
+      // over ~200ms. Wait comfortably past it before measuring layout.
+      await page.waitForTimeout(600);
       const a = await page.evaluate(() => {
         const panel = document.querySelector('.slide-over-panel');
         const back  = document.querySelector('.slide-over-backdrop');
@@ -162,8 +161,8 @@ const PAGES = [
       // Layout assertion (replaces the prior `cssRight === '0px'` tautology).
       // The panel's rendered right edge must equal the viewport width — i.e.
       // it is actually painted flush to the right edge in the live layout,
-      // not merely declared so in CSS.
-      assert(a.panelRight !== null && Math.round(a.panelRight) === a.viewportWidth,
+      // not merely declared so in CSS. Allow ±2px subpixel rounding.
+      assert(a.panelRight !== null && Math.abs(a.panelRight - a.viewportWidth) <= 2,
         'slide-over panel right edge not flush to viewport (panelRight=' + a.panelRight + ', vw=' + a.viewportWidth + ')');
       assert(a.role === 'dialog', 'slide-over role!=dialog (got ' + a.role + ')');
       assert(a.ariaModal === 'true', 'slide-over aria-modal!=true (got ' + a.ariaModal + ')');
