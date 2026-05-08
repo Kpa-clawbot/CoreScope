@@ -1,4 +1,4 @@
-/* === CoreScope — home.js (My Mesh Dashboard) === */
+/* === CoreScope — home.js (My Nodes Dashboard) === */
 'use strict';
 
 (function () {
@@ -279,7 +279,7 @@
                 </div>
                 <div class="suggest-actions">
                   <span class="suggest-role badge-${n.role || 'unknown'}">${n.role || '?'}</span>
-                  <button class="suggest-claim ${claimed ? 'claimed' : ''}" data-key="${n.public_key}" data-name="${escapeAttr(n.name || '')}" title="${claimed ? 'Remove from My Mesh' : 'Add to My Mesh'}">
+                  <button class="suggest-claim ${claimed ? 'claimed' : ''}" data-key="${n.public_key}" data-name="${escapeAttr(n.name || '')}" title="${claimed ? 'Remove from My Nodes' : 'Add to My Nodes'}">
                     ${claimed ? '✓ Mine' : '+ Claim'}
                   </button>
                 </div>
@@ -352,7 +352,7 @@
     const h1 = document.querySelector('.home-hero h1');
     const heroP = document.querySelector('.home-hero p');
     if (myNodes.length) {
-      if (h1) h1.textContent = 'My Mesh';
+      if (h1) h1.textContent = 'My Nodes';
       if (heroP) heroP.textContent = 'Your nodes at a glance. Add more by searching below.';
       // Hide onboarding prompt
       const onboard = document.querySelector('.onboarding-prompt');
@@ -390,7 +390,7 @@
             <div class="mnc-status">${statusDot}</div>
             <div class="mnc-name">${escapeHtml(name)}</div>
             <div class="mnc-role">${node.role || '?'}</div>
-            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove from My Mesh" aria-label="Remove ${escapeAttr(name)} from My Mesh">✕</button>
+            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove from My Nodes" aria-label="Remove ${escapeAttr(name)} from My Nodes">✕</button>
           </div>
           <div class="mnc-status-text">${statusText}${stats.lastHeard ? ' · ' + timeAgo(stats.lastHeard) : ''}</div>
           <div class="mnc-metrics">
@@ -428,7 +428,7 @@
           <div class="mnc-header">
             <div class="mnc-status">${statusIcon}</div>
             <div class="mnc-name">${escapeHtml(mn.name || truncate(mn.pubkey, 12))}</div>
-            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove" aria-label="Remove ${escapeAttr(mn.name || truncate(mn.pubkey, 12))} from My Mesh">✕</button>
+            <button class="mnc-remove" data-key="${mn.pubkey}" title="Remove" aria-label="Remove ${escapeAttr(mn.name || truncate(mn.pubkey, 12))} from My Nodes">✕</button>
           </div>
           <div class="mnc-status-text">${statusMsg}</div>
         </div>`;
@@ -539,7 +539,7 @@
         <div class="health-banner ${color}">
           <span>${status === 'healthy' ? '✅' : status === 'degraded' ? '⚠️' : '❌'}</span>
           <span><strong>${escapeHtml(node.name || truncate(pubkey, 16))}</strong> — ${statusMsg}</span>
-          ${!claimed ? `<button class="health-claim" data-key="${pubkey}" data-name="${escapeAttr(node.name || '')}">+ Add to My Mesh</button>` : ''}
+          ${!claimed ? `<button class="health-claim" data-key="${pubkey}" data-name="${escapeAttr(node.name || '')}">+ Add to My Nodes</button>` : ''}
         </div>
         <div class="health-body">
           <div class="health-metrics">
@@ -579,7 +579,7 @@
         e.target.remove();
         loadMyNodes();
         const h1 = document.querySelector('.home-hero h1');
-        if (h1) h1.textContent = 'My Mesh';
+        if (h1) h1.textContent = 'My Nodes';
       });
 
       // Mini map
