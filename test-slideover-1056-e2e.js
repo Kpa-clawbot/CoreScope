@@ -59,18 +59,25 @@ const PAGES = [
     });
 
     await step(`${tag}: clicking row opens slide-over with backdrop`, async () => {
-      // Click the first body row.
-      await page.evaluate((sel) => {
+      // Click the first body row — prefer one with a data-action attribute
+      // (packets) or any row otherwise.
+      const clicked = await page.evaluate((sel) => {
         const t = document.querySelector(sel);
-        const row = t && t.querySelector('tbody tr');
-        if (row) row.click();
+        if (!t) return false;
+        const row = t.querySelector('tbody tr[data-action], tbody tr[data-value], tbody tr');
+        if (!row) return false;
+        // Click a real cell (avoid empty/loading rows)
+        const td = row.querySelector('td:not(:empty)') || row;
+        td.click();
+        return true;
       }, p.tableSel);
-      // Wait up to 5s for the slide-over to appear (packets does async fetch).
+      if (!clicked) throw new Error('no clickable row');
+      // Wait up to 12s for the slide-over to appear (packets does async fetches).
       try {
         await page.waitForFunction(() => {
           const panel = document.querySelector('.slide-over-panel');
           return panel && !panel.hidden;
-        }, null, { timeout: 5000 });
+        }, null, { timeout: 12000 });
       } catch (_) { /* fall through to assertion below for clearer message */ }
       const info = await page.evaluate(() => {
         function isShown(el) {
