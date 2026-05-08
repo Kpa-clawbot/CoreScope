@@ -526,15 +526,59 @@ input[type="week"] {
   width: auto;
 }
 .live-dot {
-  width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);
-  display: inline-block; margin-left: 4px; transition: background .3s;
+  /* #1173: legacy live-dot indicator removed — WS state is now encoded in the brand-logo
+     itself (.logo-disconnected + packet-driven .logo-pulse-active). This
+     class is intentionally left as a no-op shell so any stale
+     references in extensions/customizer markup don't visually leak. */
+  display: none !important;
 }
-@keyframes pulse-ring {
-  0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6); }
-  70% { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+/* #1173: brand-logo packet-pulse animation.
+   - Class toggles only — pure CSS animation. JS adds/removes:
+     .logo-pulse-active (chained ping, source then destination)
+     .logo-pulse-blip   (reduced-motion fallback, destination only)
+     .logo-disconnected (sustained desaturate while WS down)
+   - All color comes from --logo-accent / --logo-accent-hi tokens.
+     Animation only tweaks filter: brightness() + transform: scale(). */
+.brand-logo circle.logo-node-a,
+.brand-logo circle.logo-node-b,
+.brand-mark-only circle.logo-node-a,
+.brand-mark-only circle.logo-node-b {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: filter .12s ease-out;
+  will-change: filter, transform;
 }
-.live-dot.connected { background: var(--status-green); animation: pulse-ring 2s ease-out infinite; }
+@keyframes logo-pulse-step {
+  0%   { filter: brightness(1);   transform: scale(1); }
+  40%  { filter: brightness(1.6); transform: scale(1.18); }
+  100% { filter: brightness(1);   transform: scale(1); }
+}
+.brand-logo circle.logo-pulse-active,
+.brand-mark-only circle.logo-pulse-active {
+  animation: logo-pulse-step 80ms ease-out;
+}
+@keyframes logo-pulse-blip-step {
+  0%   { opacity: 1; }
+  50%  { opacity: 0.55; }
+  100% { opacity: 1; }
+}
+.brand-logo circle.logo-pulse-blip,
+.brand-mark-only circle.logo-pulse-blip {
+  animation: logo-pulse-blip-step 140ms linear;
+}
+.brand-logo.logo-disconnected,
+.brand-mark-only.logo-disconnected {
+  filter: grayscale(0.6) opacity(0.7);
+  transition: filter .25s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-logo circle.logo-pulse-active,
+  .brand-mark-only circle.logo-pulse-active {
+    /* Defensive: in case anything mistakenly toggles the chained class
+       under reduced-motion, neutralize the scale animation. */
+    animation: none;
+  }
+}
 
 .nav-links { display: flex; align-items: center; gap: var(--space-xs); }
 .nav-link {

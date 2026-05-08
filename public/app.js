@@ -473,16 +473,97 @@ function buildHexLegend(ranges) {
 let ws = null;
 let wsListeners = [];
 
+// --- Brand-logo packet-driven pulse (#1173) ---
+// Replaces the legacy live-dot indicator. Class-toggle only (CSS animations); colors come from
+// --logo-accent / --logo-accent-hi tokens. Test seam at window.__corescopeLogo.
+const Logo = (function () {
+  const RATE_GAP_MS = 66;       // 15/sec (≤16 toggles per second).
+  const HALF_MS = 80;           // each half of a ping ≤80ms.
+  const stats = { triggered: 0, dropped: 0 };
+  let lastPingTs = 0;
+  let flip = 0;                 // 0 → A→B, 1 → B→A.
+  let lastDirection = null;     // 'a' or 'b' (source circle).
+
+  function reducedMotion() {
+    try { return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+    catch (_) { return false; }
+  }
+  function $all(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+  function clearAll() {
+    $all('.brand-logo circle.logo-node-a, .brand-mark-only circle.logo-node-a,' +
+         '.brand-logo circle.logo-node-b, .brand-mark-only circle.logo-node-b').forEach((el) => {
+      el.classList.remove('logo-pulse-active', 'logo-pulse-blip');
+    });
+  }
+  function pulseChained(srcSel, dstSel) {
+    // Source half: ~80ms.
+    $all(srcSel).forEach((el) => el.classList.add('logo-pulse-active'));
+    setTimeout(() => {
+      $all(srcSel).forEach((el) => el.classList.remove('logo-pulse-active'));
+      // Destination half: scheduled via rAF then ~80ms.
+      requestAnimationFrame(() => {
+        $all(dstSel).forEach((el) => el.classList.add('logo-pulse-active'));
+        setTimeout(() => {
+          $all(dstSel).forEach((el) => el.classList.remove('logo-pulse-active'));
+        }, HALF_MS);
+      });
+    }, HALF_MS);
+  }
+  function pulseBlip(dstSel) {
+    // Reduced-motion: single-step opacity blip on destination only.
+    $all(dstSel).forEach((el) => el.classList.add('logo-pulse-blip'));
+    setTimeout(() => {
+      $all(dstSel).forEach((el) => el.classList.remove('logo-pulse-blip'));
+    }, 140);
+  }
+  function pulse(_msg) {
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (now - lastPingTs < RATE_GAP_MS) { stats.dropped++; return false; }
+    lastPingTs = now;
+    stats.triggered++;
+    const aToB = (flip === 0);
+    flip ^= 1;
+    lastDirection = aToB ? 'a' : 'b';
+    const srcSel = aToB ? '.brand-logo circle.logo-node-a, .brand-mark-only circle.logo-node-a'
+                        : '.brand-logo circle.logo-node-b, .brand-mark-only circle.logo-node-b';
+    const dstSel = aToB ? '.brand-logo circle.logo-node-b, .brand-mark-only circle.logo-node-b'
+                        : '.brand-logo circle.logo-node-a, .brand-mark-only circle.logo-node-a';
+    if (reducedMotion()) {
+      pulseBlip(dstSel);
+    } else {
+      pulseChained(srcSel, dstSel);
+    }
+    return true;
+  }
+  function setConnected(connected) {
+    $all('.brand-logo, .brand-mark-only').forEach((el) => {
+      if (connected) el.classList.remove('logo-disconnected');
+      else el.classList.add('logo-disconnected');
+    });
+    if (!connected) clearAll();
+  }
+  // Expose hook for E2E + customizer/devtools introspection.
+  const api = {
+    pulse: pulse,
+    setConnected: setConnected,
+    get lastDirection() { return lastDirection; },
+    get stats() { return { triggered: stats.triggered, dropped: stats.dropped }; },
+  };
+  try { window.__corescopeLogo = api; } catch (_) {}
+  return api;
+})();
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}`);
-  ws.onopen = () => document.getElementById('liveDot')?.classList.add('connected');
+  ws.onopen = () => Logo.setConnected(true);
   ws.onclose = () => {
-    document.getElementById('liveDot')?.classList.remove('connected');
+    Logo.setConnected(false);
     setTimeout(connectWS, 3000);
   };
   ws.onerror = () => ws.close();
   ws.onmessage = (e) => {
+    Logo.pulse(e);
     try {
       const msg = JSON.parse(e.data);
       // Debounce cache invalidation — don't nuke on every packet
