@@ -1,12 +1,27 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
+
+// PerfIOSample mirrors cmd/server.PerfIOSample — kept independent here to
+// avoid a cross-binary import. The server's readIngestorIOSample reads the
+// same JSON shape.
+type PerfIOSample struct {
+	ReadBytesPerSec           float64 `json:"readBytesPerSec"`
+	WriteBytesPerSec          float64 `json:"writeBytesPerSec"`
+	CancelledWriteBytesPerSec float64 `json:"cancelledWriteBytesPerSec"`
+	SyscallsRead              float64 `json:"syscallsRead"`
+	SyscallsWrite             float64 `json:"syscallsWrite"`
+	SampledAt                 string  `json:"sampledAt,omitempty"`
+}
 
 // IngestorStatsSnapshot mirrors the JSON shape consumed by the server's
 // /api/perf/write-sources endpoint (see cmd/server/perf_io.go IngestorStats).
@@ -30,6 +45,10 @@ type IngestorStatsSnapshot struct {
 	WALCommits         int64            `json:"walCommits"`
 	GroupCommitFlushes int64            `json:"groupCommitFlushes"` // always 0 — group commit reverted (refs #1129)
 	BackfillUpdates    map[string]int64 `json:"backfillUpdates"`
+	// ProcIO is the ingestor's own /proc/self/io rate snapshot. Surfaced via
+	// the server's /api/perf/io endpoint under .ingestor (#1120 — "Both
+	// ingestor and server"). Optional; absent on non-Linux hosts.
+	ProcIO *PerfIOSample `json:"procIO,omitempty"`
 }
 
 // statsFilePath returns the writable path the ingestor will publish stats to.
@@ -73,6 +92,78 @@ func writeStatsAtomic(path string, b []byte) error {
 	return nil
 }
 
+// procIOSnapshot is the raw counter snapshot used to compute per-second rates
+// across two consecutive ticks of the stats-file writer.
+type procIOSnapshot struct {
+	at             time.Time
+	readBytes      int64
+	writeBytes     int64
+	cancelledWrite int64
+	syscR          int64
+	syscW          int64
+	ok             bool
+}
+
+// readProcSelfIO parses /proc/self/io. Returns ok=false on non-Linux hosts or
+// any read/parse failure (caller skips the procIO block in that case).
+func readProcSelfIO() procIOSnapshot {
+	out := procIOSnapshot{at: time.Now()}
+	f, err := os.Open("/proc/self/io")
+	if err != nil {
+		return out
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		parts := strings.SplitN(sc.Text(), ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64)
+		if err != nil {
+			continue
+		}
+		switch key {
+		case "read_bytes":
+			out.readBytes = val
+		case "write_bytes":
+			out.writeBytes = val
+		case "cancelled_write_bytes":
+			out.cancelledWrite = val
+		case "syscr":
+			out.syscR = val
+		case "syscw":
+			out.syscW = val
+		}
+	}
+	out.ok = true
+	return out
+}
+
+// procIORate computes a per-second rate sample between two procIOSnapshots.
+// Returns nil if either snapshot is invalid or the interval is zero.
+func procIORate(prev, cur procIOSnapshot) *PerfIOSample {
+	if !prev.ok || !cur.ok {
+		return nil
+	}
+	dt := cur.at.Sub(prev.at).Seconds()
+	if dt < 0.001 {
+		return nil
+	}
+	return &PerfIOSample{
+		ReadBytesPerSec:           float64(cur.readBytes-prev.readBytes) / dt,
+		WriteBytesPerSec:          float64(cur.writeBytes-prev.writeBytes) / dt,
+		CancelledWriteBytesPerSec: float64(cur.cancelledWrite-prev.cancelledWrite) / dt,
+		SyscallsRead:              float64(cur.syscR-prev.syscR) / dt,
+		SyscallsWrite:             float64(cur.syscW-prev.syscW) / dt,
+		SampledAt:                 cur.at.UTC().Format(time.RFC3339),
+	}
+}
+
+// statsFilePath is read once per writer-loop start; the env var is only
+// re-read on process restart (not per tick).
+
 // StartStatsFileWriter writes the current stats snapshot to disk every
 // `interval` so the server can serve them at /api/perf/write-sources.
 // Failures are logged once-per-interval and never fatal.
@@ -84,7 +175,13 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		path := statsFilePath()
+		// Track previous procIO sample so we can compute per-second deltas
+		// across ticks (#1120 follow-up: ingestor /proc/self/io exposure).
+		prevIO := readProcSelfIO()
 		for range t.C {
+			curIO := readProcSelfIO()
+			ioRate := procIORate(prevIO, curIO)
+			prevIO = curIO
 			snap := IngestorStatsSnapshot{
 				SampledAt:          time.Now().UTC().Format(time.RFC3339),
 				TxInserted:         s.Stats.TransmissionsInserted.Load(),
@@ -97,6 +194,7 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 				WALCommits:         s.Stats.WALCommits.Load(),
 				GroupCommitFlushes: 0, // group commit reverted (refs #1129)
 				BackfillUpdates:    s.Stats.SnapshotBackfills(),
+				ProcIO:             ioRate,
 			}
 			b, err := json.Marshal(snap)
 			if err != nil {

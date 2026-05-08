@@ -75,12 +75,33 @@
           return Math.round(bps) + ' B/s';
         };
         const writeWarn = ioStats.writeBytesPerSec > 10 * 1048576 ? ' ⚠️' : '';
+        const cancelled = ioStats.cancelledWriteBytesPerSec || 0;
+        // Cancelled writes warn at >1 MB/s — sustained cancellation usually
+        // means truncate/unlink racing with active writers (#1119-shaped bug).
+        const cancelledWarn = cancelled > 1048576 ? ' ⚠️' : '';
         html += `<h3>Disk I/O (server process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
           <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.readBytesPerSec || 0)}</div><div class="perf-label">Read</div></div>
           <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.writeBytesPerSec || 0)}${writeWarn}</div><div class="perf-label">Write</div></div>
+          <div class="perf-card"><div class="perf-num">${fmtRate(cancelled)}${cancelledWarn}</div><div class="perf-label">Cancelled Write</div></div>
           <div class="perf-card"><div class="perf-num">${Math.round(ioStats.syscallsRead || 0)}/s</div><div class="perf-label">Syscalls Read</div></div>
           <div class="perf-card"><div class="perf-num">${Math.round(ioStats.syscallsWrite || 0)}/s</div><div class="perf-label">Syscalls Write</div></div>
         </div>`;
+
+        // Ingestor row — sourced from ingestor's own /proc/self/io snapshot
+        // surfaced via the stats file (#1120: "Both ingestor and server").
+        if (ioStats.ingestor) {
+          const ing = ioStats.ingestor;
+          const ingWriteWarn = (ing.writeBytesPerSec || 0) > 10 * 1048576 ? ' ⚠️' : '';
+          const ingCancelled = ing.cancelledWriteBytesPerSec || 0;
+          const ingCancelledWarn = ingCancelled > 1048576 ? ' ⚠️' : '';
+          html += `<h3>Disk I/O (Ingestor process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+            <div class="perf-card"><div class="perf-num">${fmtRate(ing.readBytesPerSec || 0)}</div><div class="perf-label">Read</div></div>
+            <div class="perf-card"><div class="perf-num">${fmtRate(ing.writeBytesPerSec || 0)}${ingWriteWarn}</div><div class="perf-label">Write</div></div>
+            <div class="perf-card"><div class="perf-num">${fmtRate(ingCancelled)}${ingCancelledWarn}</div><div class="perf-label">Cancelled Write</div></div>
+            <div class="perf-card"><div class="perf-num">${Math.round(ing.syscallsRead || 0)}/s</div><div class="perf-label">Syscalls Read</div></div>
+            <div class="perf-card"><div class="perf-num">${Math.round(ing.syscallsWrite || 0)}/s</div><div class="perf-label">Syscalls Write</div></div>
+          </div>`;
+        }
       }
 
       // Write Sources (#1120) — per-component counters from ingestor

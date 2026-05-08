@@ -12,6 +12,9 @@ import (
 // stats snapshot includes a `procIO` block with the per-process I/O rate
 // fields required by issue #1120 ("Both ingestor and server").
 func TestStatsFileWriter_PublishesProcIO(t *testing.T) {
+	if _, err := os.Stat("/proc/self/io"); err != nil {
+		t.Skip("skip: /proc/self/io unavailable on this host")
+	}
 	dir := t.TempDir()
 	statsPath := filepath.Join(dir, "ingestor-stats.json")
 	t.Setenv("CORESCOPE_INGESTOR_STATS", statsPath)
