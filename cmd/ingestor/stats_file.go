@@ -9,19 +9,15 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/meshcore-analyzer/perfio"
 )
 
-// PerfIOSample mirrors cmd/server.PerfIOSample — kept independent here to
-// avoid a cross-binary import. The server's readIngestorIOSample reads the
-// same JSON shape.
-type PerfIOSample struct {
-	ReadBytesPerSec           float64 `json:"readBytesPerSec"`
-	WriteBytesPerSec          float64 `json:"writeBytesPerSec"`
-	CancelledWriteBytesPerSec float64 `json:"cancelledWriteBytesPerSec"`
-	SyscallsRead              float64 `json:"syscallsRead"`
-	SyscallsWrite             float64 `json:"syscallsWrite"`
-	SampledAt                 string  `json:"sampledAt,omitempty"`
-}
+// PerfIOSample is the canonical per-process I/O rate sample, sourced from the
+// shared internal/perfio package. The server consumes the same type when it
+// reads this binary's stats file — sharing the type prevents silent JSON
+// contract drift (#1167 follow-up).
+type PerfIOSample = perfio.Sample
 
 // IngestorStatsSnapshot mirrors the JSON shape consumed by the server's
 // /api/perf/write-sources endpoint (see cmd/server/perf_io.go IngestorStats).

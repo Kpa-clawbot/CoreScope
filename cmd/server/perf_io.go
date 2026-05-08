@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/meshcore-analyzer/perfio"
 )
 
 // PerfIOResponse holds per-process disk I/O metrics derived from /proc/self/io.
@@ -30,15 +32,10 @@ type PerfIOResponse struct {
 	Ingestor                  *PerfIOSample `json:"ingestor,omitempty"`
 }
 
-// PerfIOSample is the per-process I/O rate sample reused for the ingestor.
-type PerfIOSample struct {
-	ReadBytesPerSec           float64 `json:"readBytesPerSec"`
-	WriteBytesPerSec          float64 `json:"writeBytesPerSec"`
-	CancelledWriteBytesPerSec float64 `json:"cancelledWriteBytesPerSec"`
-	SyscallsRead              float64 `json:"syscallsRead"`
-	SyscallsWrite             float64 `json:"syscallsWrite"`
-	SampledAt                 string  `json:"sampledAt,omitempty"`
-}
+// PerfIOSample is the canonical per-process I/O rate sample, shared with the
+// ingestor via internal/perfio. Sharing the type prevents silent JSON contract
+// drift between the publisher (ingestor) and the consumer (server) (#1167).
+type PerfIOSample = perfio.Sample
 
 // PerfSqliteResponse holds SQLite-specific perf metrics.
 type PerfSqliteResponse struct {
