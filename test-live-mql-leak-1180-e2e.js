@@ -58,7 +58,7 @@ async function gotoHash(page, hash) {
 
   await step('5 SPA round-trips do NOT accumulate MQL listeners', async () => {
     for (let i = 0; i < 5; i++) {
-      await gotoHash(page, '#/explore');
+      await gotoHash(page, '#/packets');
       await page.waitForTimeout(80);
       await gotoHash(page, '#/live');
       await page.waitForSelector('#liveHeader, .live-header', { timeout: 8000 });
