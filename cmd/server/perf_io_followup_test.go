@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestParseProcIO_CancelledWriteBytes verifies the parser populates
@@ -60,8 +61,12 @@ func TestPerfIOEndpoint_ExposesCancelledWriteBytes(t *testing.T) {
 func TestPerfIOEndpoint_ExposesIngestorBlock(t *testing.T) {
 	dir := t.TempDir()
 	statsPath := filepath.Join(dir, "ingestor-stats.json")
+	// Use a fresh sampledAt — the GREEN commit added a freshness guard
+	// (#1167 must-fix #1) that drops snapshots older than ~5s. A fixed
+	// date string would now incorrectly exercise the stale path.
+	freshAt := time.Now().UTC().Format(time.RFC3339)
 	stub := `{
-		"sampledAt": "2026-01-01T00:00:00Z",
+		"sampledAt": "` + freshAt + `",
 		"tx_inserted": 42,
 		"obs_inserted": 1,
 		"backfillUpdates": {},
@@ -71,7 +76,7 @@ func TestPerfIOEndpoint_ExposesIngestorBlock(t *testing.T) {
 			"cancelledWriteBytesPerSec": 50,
 			"syscallsRead": 5,
 			"syscallsWrite": 6,
-			"sampledAt": "2026-01-01T00:00:00Z"
+			"sampledAt": "` + freshAt + `"
 		}
 	}`
 	if err := os.WriteFile(statsPath, []byte(stub), 0o600); err != nil {

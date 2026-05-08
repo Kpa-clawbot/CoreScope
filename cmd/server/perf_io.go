@@ -137,9 +137,20 @@ func (s *Server) handlePerfIO(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// IngestorStatsStaleThreshold is the maximum age (sampledAt → now) of an
+// ingestor stats snapshot before it is treated as dead and dropped from the
+// /api/perf/io response. Default writer interval is ~1s; 5× that catches a
+// wedged writer goroutine without flapping on a brief tick miss.
+//
+// #1167 must-fix #1: serving stale procIO as live disguises a dead ingestor.
+const IngestorStatsStaleThreshold = 5 * time.Second
+
 // readIngestorIOSample reads the per-process I/O block from the ingestor stats
-// file. Returns nil if the file is missing, malformed, or carries no proc-IO
-// block (older ingestor builds). Never errors — diagnostics only.
+// file. Returns nil if the file is missing, malformed, carries no proc-IO
+// block (older ingestor builds), OR the snapshot is older than
+// IngestorStatsStaleThreshold (#1167 must-fix #1 — operators must not see
+// stale numbers under .ingestor when the ingestor is down). Never errors —
+// diagnostics only.
 func readIngestorIOSample() *PerfIOSample {
 	data, err := os.ReadFile(IngestorStatsPath())
 	if err != nil {
@@ -150,6 +161,25 @@ func readIngestorIOSample() *PerfIOSample {
 		return nil
 	}
 	if st.ProcIO == nil {
+		return nil
+	}
+	// Freshness guard: prefer the top-level snapshot timestamp (which the
+	// ingestor stamps every tick); fall back to the procIO sub-sample's
+	// sampledAt if the top-level field is missing (older builds). No
+	// timestamp at all OR an unparseable one → treat as stale and drop
+	// (rather than serve unverifiable data as live).
+	stamp := st.SampledAt
+	if stamp == "" {
+		stamp = st.ProcIO.SampledAt
+	}
+	if stamp == "" {
+		return nil
+	}
+	ts, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		return nil
+	}
+	if time.Since(ts) > IngestorStatsStaleThreshold {
 		return nil
 	}
 	return st.ProcIO

@@ -114,10 +114,12 @@ func readProcSelfIO() procIOSnapshot {
 }
 
 // parseProcSelfIOInto reads /proc/self/io-shaped key:value lines from sc and
-// populates the byte/syscall fields on out. (Test-extracted helper — body
-// will be tightened in the GREEN commit so empty/zero parse does NOT mark the
-// snapshot as ok=true; #1167 must-fix #3.)
+// populates the byte/syscall fields on out. Sets out.ok=true only if at least
+// one expected key was successfully parsed (#1167 must-fix #3 — empty/zero
+// parse must NOT count as a valid sample, otherwise the first published
+// rate is a phantom delta against zero).
 func parseProcSelfIOInto(sc *bufio.Scanner, out *procIOSnapshot) {
+	parsedAny := false
 	for sc.Scan() {
 		parts := strings.SplitN(sc.Text(), ":", 2)
 		if len(parts) != 2 {
@@ -131,17 +133,22 @@ func parseProcSelfIOInto(sc *bufio.Scanner, out *procIOSnapshot) {
 		switch key {
 		case "read_bytes":
 			out.readBytes = val
+			parsedAny = true
 		case "write_bytes":
 			out.writeBytes = val
+			parsedAny = true
 		case "cancelled_write_bytes":
 			out.cancelledWrite = val
+			parsedAny = true
 		case "syscr":
 			out.syscR = val
+			parsedAny = true
 		case "syscw":
 			out.syscW = val
+			parsedAny = true
 		}
 	}
-	out.ok = true
+	out.ok = parsedAny
 }
 
 // procIORate computes a per-second rate sample between two procIOSnapshots.
