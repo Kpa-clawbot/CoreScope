@@ -94,6 +94,8 @@
         </div>
       </section>
 
+      ${announcementModal()}
+
       <div class="home-search-section">
         <h1>${hasNodes ? 'My Nodes' : escapeHtml(homeCfg?.heroTitle || siteName)}</h1>
         <p>${hasNodes ? 'Your nodes at a glance. Add more by searching below.' : escapeHtml(homeCfg?.heroSubtitle || 'Find your nodes to start monitoring them.')}</p>
@@ -102,8 +104,6 @@
           <div class="home-suggest" id="homeSuggest" role="listbox"></div>
         </div>
       </div>
-
-      ${announcementModal()}
 
       ${hasNodes ? '<div class="my-nodes-grid" id="myNodesGrid"><div class="my-nodes-loading">Loading your nodes…</div></div>' : '<div class="my-nodes-grid" id="myNodesGrid"></div>'}
 
