@@ -1453,8 +1453,16 @@
         });
       });
       applyForViewport();
-      if (narrowMql.addEventListener) narrowMql.addEventListener('change', applyForViewport);
-      else if (narrowMql.addListener) narrowMql.addListener(applyForViewport);
+      // #1180 — bind once across SPA re-mounts. MQL is process-global per
+      // query string; per-init binds accumulate handlers without bound.
+      if (!_liveNarrowMqlBound) {
+        if (narrowMql.addEventListener) narrowMql.addEventListener('change', applyForViewport);
+        else if (narrowMql.addListener) narrowMql.addListener(applyForViewport);
+        _liveNarrowMqlBound = true;
+        try {
+          window.__liveMQLBindCount = (window.__liveMQLBindCount || 0) + 1;
+        } catch (_) { /* sealed window */ }
+      }
     })();
     // ───────────────────────────────────────────────────────────────────────
 
@@ -3353,6 +3361,14 @@
   }
 
   let _themeRefreshHandler = null;
+
+  // #1180 — singleton guard for the wireLiveCollapseToggles() narrow-viewport
+  // MQL listener. MediaQueryList is process-global per query string; without
+  // this gate, every SPA re-mount of /live registers a new 'change' handler.
+  // The handler reads from current DOM each time, so a one-shot bind is safe
+  // across re-mounts. window.__liveMQLBindCount is a debug seam consumed by
+  // test-live-mql-leak-1180-e2e.js and otherwise unused.
+  var _liveNarrowMqlBound = false;
 
   registerPage('live', {
     init: function(app, routeParam) {
