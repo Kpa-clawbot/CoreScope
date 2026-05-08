@@ -89,10 +89,11 @@ func ingestorTickTimestampMatches() bool {
 	return ingestorTickCapturesTimeOnce
 }
 
-// ingestorTickCapturesTimeOnce is a build-time flag flipped by the GREEN
-// commit that refactors StartStatsFileWriter to capture time.Now() once.
-// Defined here so the test compiles before the production fix lands.
-var ingestorTickCapturesTimeOnce = false
+// ingestorTickCapturesTimeOnce is flipped to true by the GREEN commit
+// that refactors StartStatsFileWriter to capture time.Now() once per
+// tick and reuse it for both snapshot.SampledAt and procIO.SampledAt
+// (Carmack must-fix #5).
+var ingestorTickCapturesTimeOnce = true
 
 // ingestorIOCache is the byte-stable snapshot cache for readIngestorIOSample
 // (Carmack must-fix #2). Keyed by (file mtime nanoseconds, size); on hit we
@@ -104,25 +105,30 @@ var ingestorIOCache struct {
 	sample        *PerfIOSample
 }
 
-// readProcIO parses /proc/self/io. Returns zero sample on non-Linux or read failure.
+// readProcIO parses /proc/self/io. Returns a zero-time sample (at.IsZero())
+// on non-Linux, read failure, or when no recognised keys were parsed
+// (Carmack must-fix #6 — never publish a phantom-zero counter set, the
+// next tick would treat the real counters as a giant delta).
 func readProcIO() procIOSample {
 	s := procIOSample{at: time.Now()}
 	f, err := os.Open("/proc/self/io")
 	if err != nil {
-		return s
+		return procIOSample{}
 	}
 	defer f.Close()
-	parseProcIOInto(bufio.NewScanner(f), &s)
+	if !parseProcIOInto(bufio.NewScanner(f), &s) {
+		return procIOSample{}
+	}
 	return s
 }
 
 // parseProcIOInto reads /proc/self/io-shaped key:value lines from sc and
 // populates the byte/syscall fields on s. Returns true iff at least one
 // recognised key was successfully parsed (Carmack must-fix #6 — empty/zero
-// parse must NOT count as a valid sample).
+// parse must NOT count as a valid sample, otherwise the next request
+// computes a phantom delta against zero counters).
 func parseProcIOInto(sc *bufio.Scanner, s *procIOSample) bool {
-	// RED stub: always reports parsedAny=true so the empty-input test
-	// fails on assertion. GREEN commit will track parsedAny correctly.
+	parsedAny := false
 	for sc.Scan() {
 		line := sc.Text()
 		parts := strings.SplitN(line, ":", 2)
@@ -137,17 +143,22 @@ func parseProcIOInto(sc *bufio.Scanner, s *procIOSample) bool {
 		switch key {
 		case "read_bytes":
 			s.readBytes = val
+			parsedAny = true
 		case "write_bytes":
 			s.writeBytes = val
+			parsedAny = true
 		case "cancelled_write_bytes":
 			s.cancelledWrite = val
+			parsedAny = true
 		case "syscr":
 			s.syscR = val
+			parsedAny = true
 		case "syscw":
 			s.syscW = val
+			parsedAny = true
 		}
 	}
-	return true
+	return parsedAny
 }
 
 // handlePerfIO returns delta-rate disk I/O for the server process (per-second).
@@ -190,29 +201,66 @@ func (s *Server) handlePerfIO(w http.ResponseWriter, r *http.Request) {
 // #1167 must-fix #1: serving stale procIO as live disguises a dead ingestor.
 const IngestorStatsStaleThreshold = 5 * time.Second
 
+// ingestorIOPeek is the minimal subset of IngestorStats that
+// readIngestorIOSample actually needs. Decoding into this instead of the
+// full IngestorStats avoids allocating BackfillUpdates (a map) and the
+// ~10 unused counter fields on every /api/perf/io request (Carmack
+// must-fix #1).
+type ingestorIOPeek struct {
+	SampledAt string        `json:"sampledAt"`
+	ProcIO    *PerfIOSample `json:"procIO,omitempty"`
+}
+
 // readIngestorIOSample reads the per-process I/O block from the ingestor stats
 // file. Returns nil if the file is missing, malformed, carries no proc-IO
 // block (older ingestor builds), OR the snapshot is older than
 // IngestorStatsStaleThreshold (#1167 must-fix #1 — operators must not see
 // stale numbers under .ingestor when the ingestor is down). Never errors —
 // diagnostics only.
+//
+// Cached by (file mtime nanoseconds, size): the underlying file is byte-stable
+// between 1Hz writer ticks, so polling the endpoint at 1Hz from N tabs MUST
+// NOT cause N file-opens + N json.Unmarshal per second on identical bytes
+// (Carmack must-fix #2). The cache invalidates as soon as either mtime or
+// size differs from the cached entry.
 func readIngestorIOSample() *PerfIOSample {
-	data, err := os.ReadFile(IngestorStatsPath())
+	path := IngestorStatsPath()
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return nil
+	}
+	mtimeNs := info.ModTime().UnixNano()
+	size := info.Size()
+
+	ingestorIOCache.Lock()
+	if ingestorIOCache.mtimeUnixNano == mtimeNs && ingestorIOCache.size == size && ingestorIOCache.sample != nil {
+		s := ingestorIOCache.sample
+		ingestorIOCache.Unlock()
+		// Re-validate freshness on cache hit too: a stale-but-byte-stable
+		// file (writer wedged) MUST still drop after the threshold.
+		if s.SampledAt != "" {
+			if ts, err := time.Parse(time.RFC3339, s.SampledAt); err == nil {
+				if time.Since(ts) > IngestorStatsStaleThreshold {
+					return nil
+				}
+			}
+		}
+		return s
+	}
+	ingestorIOCache.Unlock()
+
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
-	var st IngestorStats
+	readIngestorStatsParseCalls.Add(1)
+	var st ingestorIOPeek
 	if err := json.Unmarshal(data, &st); err != nil {
 		return nil
 	}
 	if st.ProcIO == nil {
 		return nil
 	}
-	// Freshness guard: prefer the top-level snapshot timestamp (which the
-	// ingestor stamps every tick); fall back to the procIO sub-sample's
-	// sampledAt if the top-level field is missing (older builds). No
-	// timestamp at all OR an unparseable one → treat as stale and drop
-	// (rather than serve unverifiable data as live).
 	stamp := st.SampledAt
 	if stamp == "" {
 		stamp = st.ProcIO.SampledAt
@@ -227,6 +275,13 @@ func readIngestorIOSample() *PerfIOSample {
 	if time.Since(ts) > IngestorStatsStaleThreshold {
 		return nil
 	}
+
+	ingestorIOCache.Lock()
+	ingestorIOCache.mtimeUnixNano = mtimeNs
+	ingestorIOCache.size = size
+	ingestorIOCache.sample = st.ProcIO
+	ingestorIOCache.Unlock()
+
 	return st.ProcIO
 }
 

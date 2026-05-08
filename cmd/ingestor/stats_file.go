@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"log"
 	"os"
@@ -151,9 +152,13 @@ func parseProcSelfIOInto(sc *bufio.Scanner, out *procIOSnapshot) {
 	out.ok = parsedAny
 }
 
-// procIORate computes a per-second rate sample between two procIOSnapshots.
+// procIORate computes a per-second rate sample between two procIOSnapshots
+// using the supplied stamp string for the resulting Sample.SampledAt
+// (Carmack must-fix #5 — the writer captures time.Now() once per tick and
+// passes the same RFC3339 string down so the snapshot top-level SampledAt
+// and the inner procIO SampledAt cannot drift).
 // Returns nil if either snapshot is invalid or the interval is zero.
-func procIORate(prev, cur procIOSnapshot) *PerfIOSample {
+func procIORate(prev, cur procIOSnapshot, stamp string) *PerfIOSample {
 	if !prev.ok || !cur.ok {
 		return nil
 	}
@@ -167,7 +172,7 @@ func procIORate(prev, cur procIOSnapshot) *PerfIOSample {
 		CancelledWriteBytesPerSec: float64(cur.cancelledWrite-prev.cancelledWrite) / dt,
 		SyscallsRead:              float64(cur.syscR-prev.syscR) / dt,
 		SyscallsWrite:             float64(cur.syscW-prev.syscW) / dt,
-		SampledAt:                 cur.at.UTC().Format(time.RFC3339),
+		SampledAt:                 stamp,
 	}
 }
 
@@ -189,12 +194,24 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 		// Track previous procIO sample so we can compute per-second deltas
 		// across ticks (#1120 follow-up: ingestor /proc/self/io exposure).
 		prevIO := readProcSelfIO()
+		// Reuse a single bytes.Buffer + json.Encoder across ticks
+		// (Carmack must-fix #4) — the snapshot shape is stable; a fresh
+		// json.Marshal allocation per second × forever is pure GC waste.
+		// The buffer grows once and stays.
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
 		for range t.C {
+			// Capture time.Now() ONCE per tick (Carmack must-fix #5).
+			// Both snapshot.SampledAt and procIO.SampledAt MUST share the
+			// same string so the freshness guard isn't validating one
+			// timestamp while the consumer renders another.
+			tickAt := time.Now().UTC()
+			stamp := tickAt.Format(time.RFC3339)
 			curIO := readProcSelfIO()
-			ioRate := procIORate(prevIO, curIO)
+			ioRate := procIORate(prevIO, curIO, stamp)
 			prevIO = curIO
 			snap := IngestorStatsSnapshot{
-				SampledAt:          time.Now().UTC().Format(time.RFC3339),
+				SampledAt:          stamp,
 				TxInserted:         s.Stats.TransmissionsInserted.Load(),
 				ObsInserted:        s.Stats.ObservationsInserted.Load(),
 				DuplicateTx:        s.Stats.DuplicateTransmissions.Load(),
@@ -207,10 +224,18 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 				BackfillUpdates:    s.Stats.SnapshotBackfills(),
 				ProcIO:             ioRate,
 			}
-			b, err := json.Marshal(snap)
-			if err != nil {
-				log.Printf("[stats-file] marshal: %v", err)
+			buf.Reset()
+			if err := enc.Encode(&snap); err != nil {
+				log.Printf("[stats-file] encode: %v", err)
 				continue
+			}
+			// json.Encoder.Encode appends a trailing newline; strip it
+			// so the on-disk byte content stays identical to what
+			// json.Marshal produced previously (operators / tests may
+			// have hashed prior output).
+			b := buf.Bytes()
+			if n := len(b); n > 0 && b[n-1] == '\n' {
+				b = b[:n-1]
 			}
 			if err := writeStatsAtomic(path, b); err != nil {
 				log.Printf("[stats-file] write %s: %v", path, err)
