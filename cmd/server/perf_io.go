@@ -12,11 +12,31 @@ import (
 )
 
 // PerfIOResponse holds per-process disk I/O metrics derived from /proc/self/io.
+//
+// `Ingestor` is the same shape as the top-level fields, sourced from the
+// ingestor's own /proc/self/io snapshot (published via the ingestor stats file).
+// Issue #1120 calls for "Both ingestor and server" — this is the ingestor half.
+//
+// CancelledWriteBytesPerSec (issue #1120 follow-up) is added in the GREEN
+// commit — surfaces `cancelled_write_bytes` from /proc/self/io (bytes the
+// kernel discarded before they hit disk). Useful signal when chasing
+// write-amplification anomalies.
 type PerfIOResponse struct {
-	ReadBytesPerSec  float64 `json:"readBytesPerSec"`
-	WriteBytesPerSec float64 `json:"writeBytesPerSec"`
-	SyscallsRead     float64 `json:"syscallsRead"`
-	SyscallsWrite    float64 `json:"syscallsWrite"`
+	ReadBytesPerSec  float64       `json:"readBytesPerSec"`
+	WriteBytesPerSec float64       `json:"writeBytesPerSec"`
+	SyscallsRead     float64       `json:"syscallsRead"`
+	SyscallsWrite    float64       `json:"syscallsWrite"`
+	Ingestor         *PerfIOSample `json:"ingestor,omitempty"`
+}
+
+// PerfIOSample is the per-process I/O rate sample reused for the ingestor.
+type PerfIOSample struct {
+	ReadBytesPerSec           float64 `json:"readBytesPerSec"`
+	WriteBytesPerSec          float64 `json:"writeBytesPerSec"`
+	CancelledWriteBytesPerSec float64 `json:"cancelledWriteBytesPerSec"`
+	SyscallsRead              float64 `json:"syscallsRead"`
+	SyscallsWrite             float64 `json:"syscallsWrite"`
+	SampledAt                 string  `json:"sampledAt,omitempty"`
 }
 
 // PerfSqliteResponse holds SQLite-specific perf metrics.
@@ -31,11 +51,12 @@ type PerfSqliteResponse struct {
 
 // procIOSample is a snapshot of /proc/self/io counters.
 type procIOSample struct {
-	at            time.Time
-	readBytes     int64
-	writeBytes    int64
-	syscR         int64
-	syscW         int64
+	at             time.Time
+	readBytes      int64
+	writeBytes     int64
+	cancelledWrite int64
+	syscR          int64
+	syscW          int64
 }
 
 // perfIOTracker keeps the previous sample so handlePerfIO can compute deltas.
@@ -52,7 +73,14 @@ func readProcIO() procIOSample {
 		return s
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
+	parseProcIOInto(bufio.NewScanner(f), &s)
+	return s
+}
+
+// parseProcIOInto reads /proc/self/io-shaped key:value lines from sc and
+// populates the byte/syscall fields on s. Exposed (unexported but stable)
+// for unit tests that feed synthetic strings.
+func parseProcIOInto(sc *bufio.Scanner, s *procIOSample) {
 	for sc.Scan() {
 		line := sc.Text()
 		parts := strings.SplitN(line, ":", 2)
@@ -69,13 +97,13 @@ func readProcIO() procIOSample {
 			s.readBytes = val
 		case "write_bytes":
 			s.writeBytes = val
+		// case "cancelled_write_bytes": // GREEN COMMIT will add this
 		case "syscr":
 			s.syscR = val
 		case "syscw":
 			s.syscW = val
 		}
 	}
-	return s
 }
 
 // handlePerfIO returns delta-rate disk I/O for the server process (per-second).
@@ -97,10 +125,28 @@ func (s *Server) handlePerfIO(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.ReadBytesPerSec = float64(cur.readBytes-prev.readBytes) / dt
 		resp.WriteBytesPerSec = float64(cur.writeBytes-prev.writeBytes) / dt
+		// CancelledWriteBytesPerSec wired up in GREEN commit (#1120 follow-up).
+		_ = cur.cancelledWrite
 		resp.SyscallsRead = float64(cur.syscR-prev.syscR) / dt
 		resp.SyscallsWrite = float64(cur.syscW-prev.syscW) / dt
 	}
+	// Ingestor block: GREEN commit replaces stub readIngestorIOSample with
+	// real parsing of the ingestor stats file's procIO section (#1120
+	// follow-up — "Both ingestor and server").
+	if ing := readIngestorIOSample(); ing != nil {
+		resp.Ingestor = ing
+	}
 	writeJSON(w, resp)
+}
+
+// readIngestorIOSample reads the per-process I/O block from the ingestor stats
+// file. Returns nil if the file is missing, malformed, or carries no proc-IO
+// block (older ingestor builds). Never errors — diagnostics only.
+//
+// RED-commit stub: always returns nil so TestPerfIOEndpoint_ExposesIngestorBlock
+// fails on assertion. GREEN commit replaces with real parsing.
+func readIngestorIOSample() *PerfIOSample {
+	return nil
 }
 
 // handlePerfSqlite returns SQLite WAL size + cache hit-rate stats.
@@ -151,6 +197,9 @@ type IngestorStats struct {
 	WALCommits          int64            `json:"walCommits"`
 	GroupCommitFlushes  int64            `json:"groupCommitFlushes"`
 	BackfillUpdates     map[string]int64 `json:"backfillUpdates"`
+	// ProcIO is the ingestor's own /proc/self/io rates (since its previous
+	// sample). Optional — older ingestor builds don't publish this. See #1120.
+	ProcIO *PerfIOSample `json:"procIO,omitempty"`
 }
 
 // IngestorStatsPath is the well-known location where the ingestor writes its
