@@ -122,16 +122,21 @@ const PAGES = [
     });
 
     await step(`${tag}: panel anchored to right edge + a11y attrs + body scroll lock`, async () => {
+      // The slideInRight keyframe applies a transient translateX, which shifts
+      // getBoundingClientRect for ~200ms. Wait for it to settle before
+      // asserting, OR rely on computed style (right:0) which reflects layout.
+      await page.waitForTimeout(300);
       const a = await page.evaluate(() => {
         const panel = document.querySelector('.slide-over-panel');
         const back  = document.querySelector('.slide-over-backdrop');
         const x = panel && panel.querySelector('.slide-over-close');
-        const r = panel && panel.getBoundingClientRect();
+        const cs = panel && getComputedStyle(panel);
         const xr = x && x.getBoundingClientRect();
         return {
-          // Anchored to right edge — within 1px of viewport right.
-          rightAnchored: r ? Math.abs((r.right) - window.innerWidth) <= 1 : false,
-          panelTop: r ? Math.round(r.top) : null,
+          // Anchored to right edge — computed CSS right MUST be 0px.
+          cssRight: cs && cs.right,
+          cssTop: cs && cs.top,
+          cssPosition: cs && cs.position,
           role: panel && panel.getAttribute('role'),
           ariaModal: panel && panel.getAttribute('aria-modal'),
           backdropAriaHidden: back && back.getAttribute('aria-hidden'),
@@ -141,8 +146,9 @@ const PAGES = [
           bodyOverflow: document.body.style.overflow,
         };
       });
-      assert(a.rightAnchored, 'slide-over panel not anchored to right edge (right=' + JSON.stringify(a) + ')');
-      assert(a.panelTop === 0, 'slide-over panel does not start at top:0 (got ' + a.panelTop + ')');
+      assert(a.cssPosition === 'fixed', 'slide-over panel not position:fixed (got ' + a.cssPosition + ')');
+      assert(a.cssRight === '0px', 'slide-over panel not anchored to right:0 (got ' + a.cssRight + ')');
+      assert(a.cssTop === '0px', 'slide-over panel does not start at top:0 (got ' + a.cssTop + ')');
       assert(a.role === 'dialog', 'slide-over role!=dialog (got ' + a.role + ')');
       assert(a.ariaModal === 'true', 'slide-over aria-modal!=true (got ' + a.ariaModal + ')');
       assert(a.backdropAriaHidden === 'true', 'backdrop aria-hidden!=true (got ' + a.backdropAriaHidden + ')');
