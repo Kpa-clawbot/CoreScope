@@ -152,10 +152,23 @@ async function main() {
   else fail(`(d) sentinel changed (${sentinelA} → ${afterTap.sentinel}) — page reloaded`);
 
   // ── (e) on #/packets, Packets tab IS active ──
-  const activeOnPackets = await page.evaluate(() => {
-    const el = document.querySelector('[data-bottom-nav-tab="packets"]');
-    return el ? el.classList.contains('active') : null;
-  });
+  // Wait for the hashchange handler to update the active class. The
+  // location.hash === '#/packets' check above resolves the moment the
+  // browser sets the URL, but the hashchange event dispatch is still
+  // in-flight; reading classList immediately races the handler.
+  let activeOnPackets = null;
+  try {
+    await page.waitForFunction(() => {
+      const el = document.querySelector('[data-bottom-nav-tab="packets"]');
+      return el && el.classList.contains('active');
+    }, null, { timeout: 2000 });
+    activeOnPackets = true;
+  } catch (_) {
+    activeOnPackets = await page.evaluate(() => {
+      const el = document.querySelector('[data-bottom-nav-tab="packets"]');
+      return el ? el.classList.contains('active') : null;
+    });
+  }
   if (activeOnPackets === true) pass('(e) Packets tab active on #/packets');
   else fail(`(e) Packets tab NOT active on #/packets (got ${activeOnPackets})`);
 
