@@ -257,20 +257,45 @@ async function main() {
     fail('(f) SlideOver.open() returned not-open — cannot test dismiss');
   }
 
-  // ── (g) vertical scroll preserved ──
+  // ── (g) vertical swipe on a row commits to vertical axis (no horizontal row-action transform) ──
+  // Drives a REAL synthetic vertical pointer drag through the gesture handler (not programmatic
+  // window.scrollBy, which bypasses the handler entirely and proves nothing). After a vertical
+  // gesture, the row's transform must remain empty — axis-lock committed to 'v', releasing the
+  // pointer and letting the browser own scroll. If the handler mistakenly committed to 'h', it
+  // would set translateX(...) on the row.
   await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#pktBody tr[data-hash]', { timeout: 10000 }).catch(() => {});
   await page.waitForTimeout(200);
-  const scrollBefore = await page.evaluate(() => {
-    // Force enough content to scroll — packets pages render lots.
-    return window.scrollY;
+  const rowRectG = await page.evaluate(() => {
+    const r = document.querySelector('#pktBody tr[data-hash]');
+    if (!r) return null;
+    const b = r.getBoundingClientRect();
+    return { x: b.left, y: b.top, w: b.width, h: b.height };
   });
-  // Use real wheel scroll (browser-native — not blocked by gesture handler if axis-lock works).
-  await page.evaluate(() => window.scrollBy(0, 300));
-  await page.waitForTimeout(100);
-  const scrollAfter = await page.evaluate(() => window.scrollY);
-  if (scrollAfter > scrollBefore) pass(`(g) vertical scroll preserved (${scrollBefore} → ${scrollAfter})`);
-  else pass(`(g) page not scrollable in headless fixture (${scrollBefore} → ${scrollAfter}) — accepted, gesture-handler did not throw`);
+  if (!rowRectG) {
+    fail('(g) no packets row available to drive vertical swipe');
+  } else {
+    const scrollBefore = await page.evaluate(() => window.scrollY);
+    const cxG = rowRectG.x + rowRectG.w / 2;
+    const cyG = rowRectG.y + rowRectG.h / 2;
+    // 100px vertical drag — well past AXIS_LOCK_DISTANCE (10px); zero horizontal delta.
+    await synthSwipe(page, cxG, cyG, cxG, cyG + 100);
+    await page.waitForTimeout(150);
+    const after = await page.evaluate(() => {
+      const r = document.querySelector('#pktBody tr[data-hash]');
+      return {
+        scrollY: window.scrollY,
+        rowTransform: r ? (r.style.transform || '') : '<no-row>',
+      };
+    });
+    const noHorizontalTransform = !/translateX/i.test(after.rowTransform);
+    const scrolled = after.scrollY > scrollBefore;
+    if (noHorizontalTransform && (scrolled || after.scrollY === scrollBefore)) {
+      pass(`(g) vertical swipe committed to v-axis — row transform="${after.rowTransform}" scrollY ${scrollBefore}→${after.scrollY}`);
+    } else {
+      fail(`(g) vertical swipe leaked into horizontal row-action — transform="${after.rowTransform}" scrollY ${scrollBefore}→${after.scrollY}`);
+    }
+  }
 
   // ── (h) prefers-reduced-motion ──
   await ctx.close();
