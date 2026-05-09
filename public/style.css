@@ -3502,3 +3502,55 @@ td[data-filter-field] { cursor: context-menu; }
   .nav-drawer-backdrop { transition: none; }
 }
 /* === end #1064 ====================================================== */
+
+/* === #1062 Touch Gestures ============================================
+ * Visual affordances for touch-gestures.js. CSS variables only — no
+ * hardcoded colors. body owns vertical scroll natively (touch-action: pan-y);
+ * the bottom-nav opts out so we manage horizontal swipes on it.
+ * ==================================================================== */
+body { touch-action: pan-y; }
+[data-bottom-nav] { touch-action: none; }
+
+.row-swiping { transition: transform 180ms ease-out; }
+.row-action-overlay {
+  position: fixed;
+  z-index: 1500;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  background: var(--card, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(40px);
+  transition: opacity 180ms ease-out, transform 180ms ease-out;
+  pointer-events: auto;
+}
+.row-action-overlay.row-action-overlay-open {
+  opacity: 1;
+  transform: translateX(0);
+}
+.row-action-overlay[hidden] { display: none; }
+.row-action-btn {
+  flex: 1 1 auto;
+  background: transparent;
+  border: none;
+  color: var(--text, #e7e7e7);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  min-height: 48px;
+  border-right: 1px solid var(--border, #333);
+}
+.row-action-btn:last-child { border-right: none; }
+.row-action-btn:hover { background: var(--bg-hover, rgba(120, 160, 255, 0.12)); }
+.row-action-btn:active { background: var(--accent-bg, rgba(0, 122, 255, 0.18)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .row-swiping,
+  .row-action-overlay { transition-duration: 0s; }
+}
+/* === end #1062 ====================================================== */ (feat(#1062): green — implement gesture system)
