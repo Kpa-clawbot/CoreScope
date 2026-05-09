@@ -402,6 +402,18 @@ func main() {
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
+	// Perf history persistence — create table once, then preload into the ring buffer.
+	if err := ensurePerfHistoryTable(resolvedDB); err != nil {
+		log.Printf("[perf] warning: could not create perf_history table: %v (history will not persist across restarts)", err)
+		srv.dbPath = "" // disable async writes on failure
+	} else if samples := loadPerfHistoryFromDB(resolvedDB); len(samples) > 0 {
+		srv.perfHistoryMu.Lock()
+		srv.perfHistory = samples
+		srv.perfHistoryMu.Unlock()
+		log.Printf("[perf] loaded %d persisted history samples (oldest: %s)",
+			len(samples), time.UnixMilli(samples[0].Ts).Format("2006-01-02 15:04"))
+	}
+
 	// Perf history collector — 1-min resolution, 48 h ring buffer (2880 samples).
 	// Fires immediately so the first sample is available right away, then every minute.
 	go func() {

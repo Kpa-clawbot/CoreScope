@@ -56,6 +56,10 @@ type Server struct {
 	// Server-side perf history ring buffer (1-min resolution, 48 h max)
 	perfHistoryMu sync.Mutex
 	perfHistory   []PerfSample
+
+	// Path to the SQLite DB file — set when persistence is available.
+	// Empty string disables async persistence in storePerfSample.
+	dbPath string
 }
 
 // PerfStats tracks request performance.
@@ -84,7 +88,7 @@ func NewPerfStats() *PerfStats {
 }
 
 func NewServer(db *DB, cfg *Config, hub *Hub) *Server {
-	return &Server{
+	s := &Server{
 		db:        db,
 		cfg:       cfg,
 		hub:       hub,
@@ -94,6 +98,10 @@ func NewServer(db *DB, cfg *Config, hub *Hub) *Server {
 		commit:    resolveCommit(),
 		buildTime: resolveBuildTime(),
 	}
+	if db != nil && db.path != "" && db.path != ":memory:" {
+		s.dbPath = db.path
+	}
+	return s
 }
 
 const memStatsTTL = 5 * time.Second
@@ -840,7 +848,8 @@ func (s *Server) collectPerfSample() PerfSample {
 	return sample
 }
 
-// storePerfSample appends a sample to the server-side ring buffer (max 2880 = 48 h at 1 min).
+// storePerfSample appends a sample to the server-side ring buffer (max 2880 = 48 h at 1 min)
+// and, when a DB path is available, persists it asynchronously so history survives restarts.
 func (s *Server) storePerfSample(sample PerfSample) {
 	const maxSamples = 2880
 	s.perfHistoryMu.Lock()
@@ -848,6 +857,9 @@ func (s *Server) storePerfSample(sample PerfSample) {
 	s.perfHistory = append(s.perfHistory, sample)
 	if len(s.perfHistory) > maxSamples {
 		s.perfHistory = s.perfHistory[1:]
+	}
+	if s.dbPath != "" {
+		asyncSavePerfSample(s.dbPath, sample)
 	}
 }
 
