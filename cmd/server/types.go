@@ -909,6 +909,17 @@ type ObserverListResponse struct {
 	ServerTime string         `json:"server_time"`
 }
 
+type ObserverStatEntry struct {
+	ID             string `json:"id"`
+	PacketsLast24h int    `json:"packetsLast24h"`
+	PacketsLast7d  int    `json:"packetsLast7d"`
+}
+
+type ObserverStatsResponse struct {
+	Observers  []ObserverStatEntry `json:"observers"`
+	ServerTime string              `json:"server_time"`
+}
+
 type SnrDistributionEntry struct {
 	Range string `json:"range"`
 	Count int    `json:"count"`

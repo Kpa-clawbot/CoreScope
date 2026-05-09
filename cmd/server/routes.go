@@ -190,6 +190,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/channels/{hash}/messages", s.handleChannelMessages).Methods("GET")
 	r.HandleFunc("/api/channels", s.handleChannels).Methods("GET")
 	r.HandleFunc("/api/observers/metrics/summary", s.handleMetricsSummary).Methods("GET")
+	r.HandleFunc("/api/observers/stats", s.handleObserversStats).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/metrics", s.handleObserverMetrics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/analytics", s.handleObserverAnalytics).Methods("GET")
 	r.HandleFunc("/api/observers/{id}", s.handleObserverDetail).Methods("GET")
@@ -2123,13 +2124,8 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Batch lookup: packet counts for all three windows in a single query.
-	now := time.Now()
-	pktCounts := s.db.GetObserverAllPacketCounts(
-		now.Add(-1*time.Hour).Unix(),
-		now.Add(-24*time.Hour).Unix(),
-		now.Add(-7*24*time.Hour).Unix(),
-	)
+	// Batch lookup: 1h packet counts only — 24h/7d are served by /api/observers/stats.
+	pktCounts := s.db.GetObserverPacketCounts(time.Now().Add(-1 * time.Hour).Unix())
 
 	// Batch lookup: node locations only for observer IDs (not all nodes)
 	observerIDs := make([]string, len(observers))
@@ -2144,8 +2140,7 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 		if s.cfg != nil && s.cfg.IsObserverBlacklisted(o.ID) {
 			continue
 		}
-		w := pktCounts[o.ID]
-		plh, pl24h, pl7d := w.Hour, w.Day, w.Week
+		plh := pktCounts[o.ID]
 		var lat, lon, nodeRole interface{}
 		if nodeLoc, ok := nodeLocations[strings.ToLower(o.ID)]; ok {
 			lat = nodeLoc["lat"]
@@ -2162,13 +2157,39 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 			BatteryMv: o.BatteryMv, UptimeSecs: o.UptimeSecs,
 			NoiseFloor: o.NoiseFloor,
 			LastPacketAt: o.LastPacketAt,
-			PacketsLastHour: plh, PacketsLast24h: pl24h, PacketsLast7d: pl7d,
+			PacketsLastHour: plh,
 			Lat: lat, Lon: lon, NodeRole: nodeRole,
 		})
 	}
 	writeJSON(w, ObserverListResponse{
 		Observers:  result,
 		ServerTime: time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// handleObserversStats returns per-observer 24h and 7d packet counts for the
+// stats block. Kept separate from /api/observers so the main list stays lean.
+func (s *Server) handleObserversStats(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	counts := s.db.GetObserverAllPacketCounts(
+		now.Add(-1*time.Hour).Unix(),
+		now.Add(-24*time.Hour).Unix(),
+		now.Add(-7*24*time.Hour).Unix(),
+	)
+	result := make([]ObserverStatEntry, 0, len(counts))
+	for id, c := range counts {
+		if s.cfg != nil && s.cfg.IsObserverBlacklisted(id) {
+			continue
+		}
+		result = append(result, ObserverStatEntry{
+			ID:             id,
+			PacketsLast24h: c.Day,
+			PacketsLast7d:  c.Week,
+		})
+	}
+	writeJSON(w, ObserverStatsResponse{
+		Observers:  result,
+		ServerTime: now.UTC().Format(time.RFC3339),
 	})
 }
 

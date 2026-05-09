@@ -3,7 +3,8 @@
 
 (function () {
   let observers = [];
-  let obsSkewMap = {}; // observerID → {offsetSec, samples}
+  let obsSkewMap = {};   // observerID → {offsetSec, samples}
+  let obsStatsData = {}; // observerID → {packetsLast24h, packetsLast7d} — lazy-loaded by stats block
   let refreshTimer = null;
   let regionChangeHandler = null;
   let clickHandler = null;
@@ -219,6 +220,7 @@ reboot</code></pre>
         var tog = app.querySelector('.obs-stats-toggle');
         if (body) body.style.maxHeight = body.scrollHeight + 'px';
         if (tog) tog.textContent = '▼';
+        loadObserverStats();
       }
       statsShowAll = localStorage.getItem(STATS_ALL_KEY) === '1';
       statsTimeRange = localStorage.getItem(STATS_RANGE_KEY) || '24h';
@@ -257,6 +259,7 @@ reboot</code></pre>
         statsBody.style.maxHeight = isOpen ? '0px' : statsBody.scrollHeight + 'px';
         statsTog.textContent = isOpen ? '▶' : '▼';
         try { localStorage.setItem(STATS_OPEN_KEY, isOpen ? '0' : '1'); } catch (e) {}
+        if (!isOpen) loadObserverStats(); // panel just opened — fetch 24h/7d data
       }
       if (btn && btn.dataset.action === 'toggle-hide-stale') {
         hideStale = !hideStale;
@@ -344,6 +347,7 @@ reboot</code></pre>
     clickHandler = changeHandler = inputHandler = keydownHandler = currentApp = null;
     observers = [];
     obsSkewMap = {};
+    obsStatsData = {};
   }
 
   function invalidateObserversCache() {
@@ -351,7 +355,10 @@ reboot</code></pre>
   }
 
   async function loadObservers(force) {
-    if (force) invalidateObserversCache();
+    if (force) {
+      invalidateObserversCache();
+      if (isStatsPanelOpen()) loadObserverStats(true);
+    }
     try {
       const [data, skewData] = await Promise.all([
         api('/observers', { ttl: CLIENT_TTL.observers }),
@@ -367,6 +374,23 @@ reboot</code></pre>
       document.getElementById('obsContent').innerHTML =
         `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">Error loading observers: ${e.message}</div>`;
     }
+  }
+
+  async function loadObserverStats(force) {
+    if (force) invalidateApiCache('/observers/stats');
+    try {
+      const data = await api('/observers/stats', { ttl: 300000 });
+      obsStatsData = {};
+      (data.observers || []).forEach(function(s) {
+        if (s && s.id) obsStatsData[s.id] = s;
+      });
+      render();
+    } catch (e) {}
+  }
+
+  function isStatsPanelOpen() {
+    var body = document.getElementById('obsStatsBody');
+    return body ? body.style.maxHeight !== '0px' : false;
   }
 
   // NOTE: Comparing server timestamps to Date.now() can skew if client/server
@@ -452,12 +476,17 @@ reboot</code></pre>
       b.classList.toggle('active', b.dataset.range === statsTimeRange);
     });
 
-    // Pick the right packet field and label for selected time range
+    // Pick the right packet field and label for selected time range (from lazy-loaded stats)
     var pktField = statsTimeRange === '7d' ? 'packetsLast7d' : 'packetsLast24h';
     var pktLabel = statsTimeRange === '7d' ? 'Packets / 7d' : 'Packets / 24h';
 
-    var byPktsWindow = data.slice().sort(function (a, b) { return (b[pktField] || 0) - (a[pktField] || 0); }).slice(0, limit)
-      .map(function (o) { return { name: o.name || o.id, val: (o[pktField] || 0).toLocaleString() }; });
+    var byPktsWindow = data.slice().sort(function (a, b) {
+      return ((obsStatsData[b.id] && obsStatsData[b.id][pktField]) || 0) -
+             ((obsStatsData[a.id] && obsStatsData[a.id][pktField]) || 0);
+    }).slice(0, limit).map(function (o) {
+      var val = (obsStatsData[o.id] && obsStatsData[o.id][pktField]) || 0;
+      return { name: o.name || o.id, val: val.toLocaleString() };
+    });
 
     var byPacketsTotal = data.slice().sort(function (a, b) { return (b.packet_count || 0) - (a.packet_count || 0); }).slice(0, limit)
       .map(function (o) { return { name: o.name || o.id, val: (o.packet_count || 0).toLocaleString() }; });
