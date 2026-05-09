@@ -75,6 +75,10 @@
           va = a.uptime_secs != null ? a.uptime_secs * 1000 : (a.first_seen ? Date.now() - new Date(a.first_seen).getTime() : 0);
           vb = b.uptime_secs != null ? b.uptime_secs * 1000 : (b.first_seen ? Date.now() - new Date(b.first_seen).getTime() : 0);
           break;
+        case 'sf':
+          va = a.radio ? parseInt(a.radio.split(',')[2]) || 0 : 0;
+          vb = b.radio ? parseInt(b.radio.split(',')[2]) || 0 : 0;
+          break;
         default:
           return 0;
       }
@@ -518,7 +522,7 @@ reboot</code></pre>
         <div class="obs-table-scroll table-fluid-wrap"><table class="data-table obs-table" id="obsTable">
           <caption class="sr-only">Observer status and statistics</caption>
         <thead><tr>
-          ${sortTh('Status','status')}${sortTh('Name','name')}${sortTh('Packet Health','forwarding',2)}${sortTh('Region','region',3)}${sortTh('Last Status','last_seen',3)}
+          ${sortTh('Status','status')}${sortTh('Name','name')}${sortTh('SF','sf',2)}${sortTh('Packet Health','forwarding',2)}${sortTh('Region','region',3)}${sortTh('Last Status','last_seen',3)}
           ${sortTh('Clock Offset','clock_offset',4)}${sortTh('Uptime','uptime',4)}${sortTh('Total Packets','packets',5)}${sortTh('Packets/Hour','packets_hr',5)}${sortTh('Last Packet','last_packet',5)}
         </tr></thead>
         <tbody>${sorted.map(o => {
@@ -527,6 +531,7 @@ reboot</code></pre>
           return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">
             <td><span class="health-dot ${h.cls}" title="${h.label}">${shape}</span> ${h.label}</td>
             <td class="mono">${o.name || o.id}</td>
+            <td>${o.radio ? 'SF' + (o.radio.split(',')[2] || '?') : '<span class="text-muted">—</span>'}</td>
             <td>${packetBadge(o)}</td>
             <td>${o.iata ? `<span class="badge-region">${o.iata}</span>` : '—'}</td>
             <td>${timeAgo(o.last_seen)}</td>
