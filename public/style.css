@@ -1472,6 +1472,9 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .obs-stats-all-btn { font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface-0); color: var(--text-muted); cursor: pointer; line-height: 1.5; }
 .obs-stats-all-btn:hover { color: var(--text); background: var(--hover-bg); }
 .obs-stats-all-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.obs-filter-btn { font-size: 10px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border); background: transparent; color: var(--text-muted); cursor: pointer; line-height: 1.6; vertical-align: middle; }
+.obs-filter-btn:hover { color: var(--text); background: var(--hover-bg); }
+.obs-filter-btn.active { border-style: dashed; color: var(--text); }
 .obs-stats-range-pills { display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
 .obs-stats-range-btn { font-size: 11px; padding: 2px 8px; border: none; border-right: 1px solid var(--border); background: var(--surface-0); color: var(--text-muted); cursor: pointer; line-height: 1.5; }
 .obs-stats-range-btn:last-child { border-right: none; }

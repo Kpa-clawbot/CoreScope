@@ -8,6 +8,8 @@
   let refreshTimer = null;
   let regionChangeHandler = null;
   let sortState = { col: null, dir: 'asc' };
+  let hideStale = false;
+  let hideOffline = false;
 
   var STATS_OPEN_KEY   = 'meshcore-obs-stats-open';
   var STATS_ALL_KEY    = 'meshcore-obs-stats-all';
@@ -33,8 +35,8 @@
       switch (sortState.col) {
         case 'status': {
           var order = { 'health-green': 0, 'health-yellow': 1, 'health-red': 2 };
-          va = order[healthStatus(a.last_seen).cls] ?? 3;
-          vb = order[healthStatus(b.last_seen).cls] ?? 3;
+          va = order[healthStatus(a).cls] ?? 3;
+          vb = order[healthStatus(b).cls] ?? 3;
           break;
         }
         case 'name':
@@ -81,8 +83,16 @@
     });
   }
 
+  function loadVisibilityState() {
+    try {
+      hideStale   = localStorage.getItem('meshcore-obs-hide-stale')   === '1';
+      hideOffline = localStorage.getItem('meshcore-obs-hide-offline') === '1';
+    } catch (e) {}
+  }
+
   function init(app) {
     loadSortState();
+    loadVisibilityState();
     app.innerHTML = `
       <div class="observers-page">
         <div class="page-header">
@@ -239,6 +249,18 @@ reboot</code></pre>
         statsTog.textContent = isOpen ? '▶' : '▼';
         try { localStorage.setItem(STATS_OPEN_KEY, isOpen ? '0' : '1'); } catch (e) {}
       }
+      if (btn && btn.dataset.action === 'toggle-hide-stale') {
+        hideStale = !hideStale;
+        try { localStorage.setItem('meshcore-obs-hide-stale', hideStale ? '1' : '0'); } catch (e) {}
+        render();
+        return;
+      }
+      if (btn && btn.dataset.action === 'toggle-hide-offline') {
+        hideOffline = !hideOffline;
+        try { localStorage.setItem('meshcore-obs-hide-offline', hideOffline ? '1' : '0'); } catch (e) {}
+        render();
+        return;
+      }
       if (btn && btn.dataset.action === 'toggle-help') {
         var content = btn.closest('.help-box').querySelector('.help-content');
         var toggle = btn.querySelector('.help-toggle');
@@ -329,9 +351,15 @@ reboot</code></pre>
 
   // NOTE: Comparing server timestamps to Date.now() can skew if client/server
   // clocks differ. We add ±30s tolerance to thresholds to reduce false positives.
-  function healthStatus(lastSeen) {
-    if (!lastSeen) return { cls: 'health-red', label: 'Unknown' };
-    const ago = Date.now() - new Date(lastSeen).getTime();
+  //
+  // We prefer last_packet_at over last_seen: UpsertObserver stamps last_seen on
+  // every MQTT reconnect (including server-restart stampedes), while last_packet_at
+  // is only written when real observation data arrives.  Using last_packet_at
+  // prevents all observers from flipping to Online the moment the server restarts.
+  function healthStatus(o) {
+    const ts = (o && typeof o === 'object') ? (o.last_packet_at || o.last_seen) : o;
+    if (!ts) return { cls: 'health-red', label: 'Unknown' };
+    const ago = Date.now() - new Date(ts).getTime();
     const tolerance = 30000; // 30s tolerance for clock skew
     if (ago < 600000 + tolerance) return { cls: 'health-green', label: 'Online' };    // < 10 min + tolerance
     if (ago < 3600000 + tolerance) return { cls: 'health-yellow', label: 'Stale' };   // < 1 hour + tolerance
@@ -443,13 +471,20 @@ reboot</code></pre>
       return;
     }
 
-    const sorted = applySortState(filtered);
+    // Apply status visibility toggles (stats panel always uses full filtered set)
+    const visible = filtered.filter(function(o) {
+      if (hideStale && healthStatus(o).cls === 'health-yellow') return false;
+      if (hideOffline && healthStatus(o).cls === 'health-red') return false;
+      return true;
+    });
+
+    const sorted = applySortState(visible);
     const maxPktsHr = Math.max(1, ...filtered.map(o => o.packetsLastHour || 0));
 
-    // Summary counts
-    const online = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-green').length;
-    const stale = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-yellow').length;
-    const offline = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-red').length;
+    // Summary counts (always from full region-filtered set, regardless of visibility toggles)
+    const online = filtered.filter(o => healthStatus(o).cls === 'health-green').length;
+    const stale = filtered.filter(o => healthStatus(o).cls === 'health-yellow').length;
+    const offline = filtered.filter(o => healthStatus(o).cls === 'health-red').length;
 
     function sortTh(label, col, priority) {
       var active = sortState.col === col;
@@ -458,12 +493,15 @@ reboot</code></pre>
       return `<th scope="col" class="sortable-col${active ? ' sort-active' : ''}" data-sort-col="${col}"${pAttr}>${label}<span class="sort-arrow">${arrow}</span></th>`;
     }
 
+    const totalLabel = visible.length < filtered.length
+      ? `${visible.length}/${filtered.length}`
+      : `${filtered.length}`;
     el.innerHTML = `
       <div class="obs-summary">
         <span class="obs-stat"><span class="health-dot health-green">●</span> ${online} Online</span>
-        <span class="obs-stat"><span class="health-dot health-yellow">▲</span> ${stale} Stale</span>
-        <span class="obs-stat"><span class="health-dot health-red">✕</span> ${offline} Offline</span>
-        <span class="obs-stat">📡 ${filtered.length} Total</span>
+        <span class="obs-stat"><span class="health-dot health-yellow">▲</span> ${stale} Stale <button class="obs-filter-btn${hideStale ? ' active' : ''}" data-action="toggle-hide-stale" title="${hideStale ? 'Show stale observers' : 'Hide stale observers'}">${hideStale ? 'show' : 'hide'}</button></span>
+        <span class="obs-stat"><span class="health-dot health-red">✕</span> ${offline} Offline <button class="obs-filter-btn${hideOffline ? ' active' : ''}" data-action="toggle-hide-offline" title="${hideOffline ? 'Show offline observers' : 'Hide offline observers'}">${hideOffline ? 'show' : 'hide'}</button></span>
+        <span class="obs-stat">📡 ${totalLabel} Total</span>
       </div>
         <div class="obs-table-scroll table-fluid-wrap"><table class="data-table obs-table" id="obsTable">
           <caption class="sr-only">Observer status and statistics</caption>
@@ -472,7 +510,7 @@ reboot</code></pre>
           ${sortTh('Clock Offset','clock_offset',4)}${sortTh('Uptime','uptime',4)}${sortTh('Total Packets','packets',5)}${sortTh('Packets/Hour','packets_hr',5)}${sortTh('Last Packet','last_packet',5)}
         </tr></thead>
         <tbody>${sorted.map(o => {
-          const h = healthStatus(o.last_seen);
+          const h = healthStatus(o);
           const shape = h.cls === 'health-green' ? '●' : h.cls === 'health-yellow' ? '▲' : '✕';
           return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">
             <td><span class="health-dot ${h.cls}" title="${h.label}">${shape}</span> ${h.label}</td>
@@ -513,7 +551,7 @@ reboot</code></pre>
     var id = decodeURIComponent(m[1]);
     var o = (observers || []).find(function (x) { return String(x.id) === id; });
     if (!o) return;
-    var h = healthStatus(o.last_seen);
+    var h = healthStatus(o);
     var sk = obsSkewMap[o.id];
     var skewLine = (sk && sk.samples) ? renderSkewBadge(observerSkewSeverity(sk.offsetSec), sk.offsetSec) + ' (' + sk.samples + ' samples)' : '—';
     var pkts = sparkBar(o.packetsLastHour || 0, Math.max(1, o.packetsLastHour || 1));
