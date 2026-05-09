@@ -28,7 +28,11 @@
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
-const EXPECTED_TABS = ['home', 'packets', 'live', 'map', 'channels'];
+const EXPECTED_TABS = ['home', 'packets', 'live', 'map', 'channels', 'more'];
+// #1174: long-tail routes surfaced in the More sheet (the routes NOT in
+// the 5 primary bottom-nav slots). Mirror data-route values from the
+// existing top-nav.
+const EXPECTED_MORE_ROUTES = ['nodes', 'tools', 'observers', 'analytics', 'perf', 'audio-lab'];
 
 function isVisible(rect) {
   return rect && rect.width > 0 && rect.height > 0;
@@ -186,6 +190,131 @@ async function main() {
   }
   if (activeOnPackets === true) pass('(e) Packets tab active on #/packets');
   else fail(`(e) Packets tab NOT active on #/packets (got ${activeOnPackets})`);
+
+  // ── (g) #1174: More tab visible at 360x800 ──
+  const moreTabState = await page.evaluate(() => {
+    const el = document.querySelector('[data-bottom-nav-tab="more"]');
+    if (!el) return { present: false };
+    const r = el.getBoundingClientRect();
+    return {
+      present: true,
+      visible: r.width > 0 && r.height > 0,
+      ariaExpanded: el.getAttribute('aria-expanded'),
+      ariaControls: el.getAttribute('aria-controls'),
+    };
+  });
+  if (!moreTabState.present) fail('(g) [data-bottom-nav-tab="more"] missing');
+  else if (!moreTabState.visible) fail('(g) More tab present but not visible');
+  else pass('(g) More tab visible at 360x800');
+  if (moreTabState.present && moreTabState.ariaExpanded === 'false') {
+    pass('(g) More tab aria-expanded="false" before tap');
+  } else if (moreTabState.present) {
+    fail(`(g) More tab aria-expanded should be 'false' before tap, got ${moreTabState.ariaExpanded}`);
+  }
+
+  // ── (h) #1174: tap More opens a sheet listing 6 long-tail routes ──
+  await page.click('[data-bottom-nav-tab="more"]').catch(() => {});
+  // Wait for sheet to render.
+  await page.waitForSelector('[data-bottom-nav-sheet]', { timeout: 3000 }).catch(() => {});
+  const sheetOpen = await page.evaluate((expected) => {
+    const sheet = document.querySelector('[data-bottom-nav-sheet]');
+    if (!sheet) return { present: false };
+    const cs = getComputedStyle(sheet);
+    const r = sheet.getBoundingClientRect();
+    const items = Array.from(sheet.querySelectorAll('[data-bottom-nav-more-route]'))
+      .map(el => el.getAttribute('data-bottom-nav-more-route'));
+    const moreTab = document.querySelector('[data-bottom-nav-tab="more"]');
+    return {
+      present: true,
+      visible: cs.display !== 'none' && cs.visibility !== 'hidden' && r.width > 0 && r.height > 0,
+      role: sheet.getAttribute('role'),
+      itemRoutes: items,
+      missing: expected.filter(r => !items.includes(r)),
+      moreTabExpanded: moreTab ? moreTab.getAttribute('aria-expanded') : null,
+    };
+  }, EXPECTED_MORE_ROUTES);
+  if (!sheetOpen.present) fail('(h) [data-bottom-nav-sheet] missing after More tap');
+  else if (!sheetOpen.visible) fail('(h) sheet rendered but not visible after More tap');
+  else pass('(h) sheet visible after More tap');
+  if (sheetOpen.present && sheetOpen.role === 'menu') pass('(h) sheet role="menu"');
+  else if (sheetOpen.present) fail(`(h) sheet role should be 'menu', got ${sheetOpen.role}`);
+  if (sheetOpen.present && sheetOpen.missing.length === 0) {
+    pass(`(h) sheet lists all 6 long-tail routes: ${sheetOpen.itemRoutes.join(',')}`);
+  } else if (sheetOpen.present) {
+    fail(`(h) sheet missing routes: ${sheetOpen.missing.join(',')} (got ${sheetOpen.itemRoutes.join(',')})`);
+  }
+  if (sheetOpen.moreTabExpanded === 'true') pass('(h) More tab aria-expanded="true" while open');
+  else fail(`(h) More tab aria-expanded should be 'true' while open, got ${sheetOpen.moreTabExpanded}`);
+
+  // ── (i) #1174: tap a route navigates and closes the sheet ──
+  await page.click('[data-bottom-nav-more-route="tools"]').catch(() => {});
+  await page.waitForFunction(() => location.hash === '#/tools', null, { timeout: 3000 }).catch(() => {});
+  const afterRouteTap = await page.evaluate(() => {
+    const sheet = document.querySelector('[data-bottom-nav-sheet]');
+    const cs = sheet ? getComputedStyle(sheet) : null;
+    const r = sheet ? sheet.getBoundingClientRect() : null;
+    const moreTab = document.querySelector('[data-bottom-nav-tab="more"]');
+    return {
+      hash: location.hash,
+      sheetVisible: !!(sheet && cs && cs.display !== 'none' && cs.visibility !== 'hidden' && r.width > 0 && r.height > 0),
+      moreTabExpanded: moreTab ? moreTab.getAttribute('aria-expanded') : null,
+    };
+  });
+  if (afterRouteTap.hash === '#/tools') pass('(i) tapping Tools navigated to #/tools');
+  else fail(`(i) hash did not change to #/tools (got ${afterRouteTap.hash})`);
+  if (!afterRouteTap.sheetVisible) pass('(i) sheet closed after route tap');
+  else fail('(i) sheet still visible after route tap');
+  if (afterRouteTap.moreTabExpanded === 'false') pass('(i) More tab aria-expanded="false" after close');
+  else fail(`(i) More tab aria-expanded should be 'false' after close, got ${afterRouteTap.moreTabExpanded}`);
+
+  // ── (j) #1174: tap outside closes the sheet ──
+  // Reopen.
+  await page.click('[data-bottom-nav-tab="more"]').catch(() => {});
+  await page.waitForFunction(() => {
+    const s = document.querySelector('[data-bottom-nav-sheet]');
+    if (!s) return false;
+    const cs = getComputedStyle(s);
+    return cs.display !== 'none' && cs.visibility !== 'hidden';
+  }, null, { timeout: 3000 }).catch(() => {});
+  // Click on body somewhere outside the sheet and outside the bottom-nav.
+  // Use a coordinate near the top of the viewport (the page main area).
+  await page.mouse.click(10, 200);
+  // Allow the close handler to run.
+  await page.waitForFunction(() => {
+    const s = document.querySelector('[data-bottom-nav-sheet]');
+    if (!s) return true;
+    const cs = getComputedStyle(s);
+    return cs.display === 'none' || cs.visibility === 'hidden';
+  }, null, { timeout: 3000 }).catch(() => {});
+  const afterOutside = await page.evaluate(() => {
+    const s = document.querySelector('[data-bottom-nav-sheet]');
+    if (!s) return { closed: true };
+    const cs = getComputedStyle(s);
+    const r = s.getBoundingClientRect();
+    return { closed: cs.display === 'none' || cs.visibility === 'hidden' || (r.width === 0 && r.height === 0) };
+  });
+  if (afterOutside.closed) pass('(j) sheet closes on outside click');
+  else fail('(j) sheet still visible after outside click');
+
+  // ── (k) #1174: at 360x800, #hamburger is hidden (More tab replaces it) ──
+  const hamburgerHidden = await page.evaluate(() => {
+    const h = document.getElementById('hamburger');
+    if (!h) return { present: false };
+    const cs = getComputedStyle(h);
+    const r = h.getBoundingClientRect();
+    return {
+      present: true,
+      hidden: cs.display === 'none' || cs.visibility === 'hidden' || (r.width === 0 && r.height === 0),
+      display: cs.display,
+    };
+  });
+  if (!hamburgerHidden.present) {
+    pass('(k) #hamburger removed from DOM (acceptable)');
+  } else if (hamburgerHidden.hidden) {
+    pass(`(k) #hamburger hidden at 360x800 (display=${hamburgerHidden.display})`);
+  } else {
+    fail(`(k) #hamburger still visible at 360x800 (display=${hamburgerHidden.display}) — More tab should replace it`);
+  }
 
   // ── (b) 1440x900: bottom-nav hidden, top-nav visible ──
   await page.setViewportSize({ width: 1440, height: 900 });
