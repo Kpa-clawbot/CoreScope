@@ -3366,3 +3366,132 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .fux-saved-save:hover { background: var(--bg-hover, rgba(120,160,255,0.12)); }
 
 td[data-filter-field] { cursor: context-menu; }
+
+/* === Issue #1064 — Edge-swipe nav drawer ============================
+ * Slide-over from the LEFT edge. Z-index sits ABOVE bottom-nav (1200)
+ * but BELOW modal (var(--z-modal) = 9100). Fenced for parallel-PR
+ * coordination with #1062 (gesture handlers / swipe-affordance section).
+ * --------------------------------------------------------------------- */
+
+/* `pan-y` lets vertical scroll work everywhere; the drawer claims
+ * horizontal swipes inside our viewport. iOS browser back-swipe (system
+ * left-edge gesture) still works — it's at the OS layer, above the page. */
+body { touch-action: pan-y; }
+
+.nav-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 1250; /* above bottom-nav (1200), below modal-backdrop (9000) */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+.nav-drawer-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.nav-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(320px, 86vw);
+  max-width: 360px;
+  background: var(--surface);
+  color: var(--text);
+  border-right: 1px solid var(--border);
+  box-shadow: 4px 0 18px rgba(0, 0, 0, 0.35);
+  z-index: 1260; /* above its backdrop, still below modal */
+  transform: translateX(-100%);
+  transition: transform 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  outline: none;
+}
+.nav-drawer.is-open { transform: translateX(0); }
+
+.nav-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2, var(--surface));
+}
+.nav-drawer-title {
+  font-weight: 700;
+  font-size: var(--fs-md);
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+.nav-drawer-close {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.nav-drawer-close:hover,
+.nav-drawer-close:focus-visible {
+  background: var(--bg-hover, rgba(120, 160, 255, 0.12));
+  outline: none;
+}
+
+.nav-drawer-list {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+.nav-drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: var(--fs-md);
+  min-height: 48px;
+  touch-action: manipulation;
+}
+.nav-drawer-item:hover,
+.nav-drawer-item:focus-visible {
+  background: var(--bg-hover, rgba(120, 160, 255, 0.12));
+  outline: none;
+}
+.nav-drawer-icon {
+  font-size: 18px;
+  line-height: 1;
+  width: 24px;
+  text-align: center;
+  flex: none;
+}
+.nav-drawer-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Option A: drawer is wide-only (>768px). At ≤768px the bottom-nav has
+ * the More tab (PR #1174) — drawer is hidden + script bails on open(). */
+@media (max-width: 768px) {
+  .nav-drawer,
+  .nav-drawer-backdrop { display: none !important; }
+}
+
+/* Reduced motion: instant snap, no transition. */
+@media (prefers-reduced-motion: reduce) {
+  .nav-drawer { transition: none; }
+  .nav-drawer-backdrop { transition: none; }
+}
+/* === end #1064 ====================================================== */
