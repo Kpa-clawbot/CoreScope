@@ -209,6 +209,82 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await ctx.close();
   }
 
+  // ---- Hidden-tab gate (#1177 carmack must-fix #1) ----
+  // When document.hidden=true, pulse() must return false BEFORE updating
+  // lastPingTs and BEFORE scheduling any rAF/setTimeout chain. No circle
+  // class toggles must occur.
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const page = await ctx.newPage();
+    page.setDefaultTimeout(8000);
+    await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.brand-logo', { timeout: 8000 });
+    await page.waitForFunction(() => !!(window.__corescopeLogo && typeof window.__corescopeLogo.pulse === 'function'), null, { timeout: 8000 }).catch(()=>{});
+
+    await step('hidden tab: pulse() returns false and toggles no classes', async () => {
+      const r = await page.evaluate(async () => {
+        Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+        Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+        const before = Object.assign({}, window.__corescopeLogo.stats);
+        const ret = window.__corescopeLogo.pulse({ synthetic: true });
+        await new Promise(r => requestAnimationFrame(() => r()));
+        const a = document.querySelector('.brand-logo circle.logo-node-a');
+        const b = document.querySelector('.brand-logo circle.logo-node-b');
+        const after = Object.assign({}, window.__corescopeLogo.stats);
+        return {
+          ret, before, after,
+          activeA: a.classList.contains('logo-pulse-active'),
+          activeB: b.classList.contains('logo-pulse-active'),
+          blipA: a.classList.contains('logo-pulse-blip'),
+          blipB: b.classList.contains('logo-pulse-blip'),
+        };
+      });
+      assert(r.ret === false, 'pulse() should return false when document.hidden=true (got ' + r.ret + ')');
+      assert(!r.activeA && !r.activeB, 'logo-pulse-active should not toggle in hidden tab');
+      assert(!r.blipA && !r.blipB, 'logo-pulse-blip should not toggle in hidden tab');
+      assert((r.after.triggered || 0) === (r.before.triggered || 0),
+        'stats.triggered must not increment in hidden tab');
+    });
+
+    await ctx.close();
+  }
+
+  // ---- matchMedia caching (#1177 carmack must-fix #2) ----
+  // The reduced-motion query must be cached at module load. 100 pulses
+  // must NOT result in 100 window.matchMedia() calls.
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const page = await ctx.newPage();
+    page.setDefaultTimeout(8000);
+    // Wrap window.matchMedia BEFORE any app script runs.
+    await page.addInitScript(() => {
+      const orig = window.matchMedia;
+      window.__matchMediaCalls = 0;
+      window.matchMedia = function (q) {
+        try { window.__matchMediaCalls = (window.__matchMediaCalls | 0) + 1; } catch (_) {}
+        return orig.call(window, q);
+      };
+    });
+    await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.brand-logo', { timeout: 8000 });
+    await page.waitForFunction(() => !!(window.__corescopeLogo && typeof window.__corescopeLogo.pulse === 'function'), null, { timeout: 8000 }).catch(()=>{});
+
+    await step('matchMedia: cached singleton — 100 pulses do not call window.matchMedia per pulse', async () => {
+      const r = await page.evaluate(async () => {
+        const callsBefore = window.__matchMediaCalls | 0;
+        for (let i = 0; i < 100; i++) window.__corescopeLogo.pulse({ synthetic: true });
+        await new Promise(r => setTimeout(r, 50));
+        const callsAfter = window.__matchMediaCalls | 0;
+        return { callsBefore, callsAfter, delta: callsAfter - callsBefore };
+      });
+      // 100 pulses → matchMedia should NOT be invoked per pulse. Allow 0 (cached).
+      assert(r.delta === 0,
+        'matchMedia called ' + r.delta + ' times during 100 pulses (expected 0 — should be cached at module load)');
+    });
+
+    await ctx.close();
+  }
+
   await browser.close();
 
   console.log(`\n=== #1173 logo-pulse E2E: ${passed} passed, ${failed} failed ===`);
