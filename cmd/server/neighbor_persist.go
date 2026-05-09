@@ -134,25 +134,38 @@ func asyncPersistResolvedPathsAndEdges(dbPath string, obsUpdates []persistObsUpd
 			return
 		}
 
-		if len(obsUpdates) > 0 {
+		// Write obs updates in pages of 200 rows to limit write-lock hold time.
+		const persistPageSize = 200
+		for i := 0; i < len(obsUpdates); i += persistPageSize {
+			end := i + persistPageSize
+			if end > len(obsUpdates) {
+				end = len(obsUpdates)
+			}
+			page := obsUpdates[i:end]
 			sqlTx, err := rw.Begin()
-			if err == nil {
-				stmt, err := sqlTx.Prepare("UPDATE observations SET resolved_path = ? WHERE id = ?")
-				if err == nil {
-					var firstErr error
-					for _, u := range obsUpdates {
-						if _, err := stmt.Exec(u.resolvedPath, u.obsID); err != nil && firstErr == nil {
-							firstErr = err
-						}
-					}
-					stmt.Close()
-					if firstErr != nil {
-						log.Printf("[store] %s resolved_path error (first): %v", logPrefix, firstErr)
-					}
-				} else {
-					log.Printf("[store] %s resolved_path prepare error: %v", logPrefix, err)
+			if err != nil {
+				log.Printf("[store] %s resolved_path begin error: %v", logPrefix, err)
+				break
+			}
+			stmt, err := sqlTx.Prepare("UPDATE observations SET resolved_path = ? WHERE id = ?")
+			if err != nil {
+				log.Printf("[store] %s resolved_path prepare error: %v", logPrefix, err)
+				sqlTx.Rollback()
+				break
+			}
+			var firstErr error
+			for _, u := range page {
+				if _, err := stmt.Exec(u.resolvedPath, u.obsID); err != nil && firstErr == nil {
+					firstErr = err
 				}
-				sqlTx.Commit()
+			}
+			stmt.Close()
+			if firstErr != nil {
+				log.Printf("[store] %s resolved_path error (first): %v", logPrefix, firstErr)
+			}
+			sqlTx.Commit()
+			if end < len(obsUpdates) {
+				time.Sleep(5 * time.Millisecond)
 			}
 		}
 

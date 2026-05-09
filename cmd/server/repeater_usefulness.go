@@ -210,14 +210,16 @@ func (s *PacketStore) GetRepeaterNodeStatsBatch(pubkeys []string, windowHours fl
 	return result
 }
 
-// GetRepeaterNodeStatsBatchCached wraps GetRepeaterNodeStatsBatch with a 30s
+// GetRepeaterNodeStatsBatchCached wraps GetRepeaterNodeStatsBatch with a 5min
 // TTL cache. handleNodes calls this for every map/live/node request; without
 // caching the full batch over ~1900 repeaters takes 20-30s on large datasets.
+// 300s TTL: cold compute (~25s) runs at most once per 5min (~8% duty cycle)
+// vs the previous 30s TTL (~82% duty cycle).
 func (s *PacketStore) GetRepeaterNodeStatsBatchCached(pubkeys []string, windowHours float64) map[string]RepeaterNodeStats {
 	s.relayStatsCacheMu.Lock()
 	if s.relayStatsCache != nil &&
 		s.relayStatsCacheWindow == windowHours &&
-		time.Since(s.relayStatsCacheAt) < 30*time.Second {
+		time.Since(s.relayStatsCacheAt) < 300*time.Second {
 		cached := s.relayStatsCache
 		s.relayStatsCacheMu.Unlock()
 		return cached
