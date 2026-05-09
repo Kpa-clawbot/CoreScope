@@ -3551,6 +3551,6 @@ body { touch-action: pan-y; }
 
 @media (prefers-reduced-motion: reduce) {
   .row-swiping,
-  .row-action-overlay { transition-duration: 0s; }
+  .row-action-overlay { transition: none !important; }
 }
 /* === end #1062 ====================================================== */ (feat(#1062): green — implement gesture system)
