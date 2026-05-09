@@ -5,6 +5,7 @@
   let observers = [];
   let obsSkewMap = {};   // observerID → {offsetSec, samples}
   let obsStatsData = {}; // observerID → {packetsLast24h, packetsLast7d} — lazy-loaded by stats block
+  let wsHandler = null;
   let refreshTimer = null;
   let regionChangeHandler = null;
   let clickHandler = null;
@@ -335,9 +336,14 @@ reboot</code></pre>
     app.addEventListener('keydown', keydownHandler);
     // Auto-refresh every 30s
     refreshTimer = setInterval(function() { loadObservers(true); }, 30000);
+    wsHandler = debouncedOnWS(function (msgs) {
+      if (msgs.some(function (m) { return m.type === 'packet'; })) loadObservers(true);
+    });
   }
 
   function destroy() {
+    if (wsHandler) offWS(wsHandler);
+    wsHandler = null;
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = null;
     if (regionChangeHandler) RegionFilter.offChange(regionChangeHandler);
