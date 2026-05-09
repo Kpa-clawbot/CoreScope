@@ -39,7 +39,7 @@
 
   const DEFAULTS = {
     branding: {
-      siteName: 'CoreScope',
+      siteName: 'CORNMEISTER.NL',
       tagline: 'Real-time MeshCore LoRa mesh network analyzer',
       logoUrl: '',
       faviconUrl: ''
