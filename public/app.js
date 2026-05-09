@@ -473,16 +473,151 @@ function buildHexLegend(ranges) {
 let ws = null;
 let wsListeners = [];
 
+// --- Brand-logo packet-driven pulse (#1173) ---
+// Replaces the legacy live-dot indicator. Class-toggle only (CSS animations); colors come from
+// --logo-accent / --logo-accent-hi tokens. Test seam at window.__corescopeLogo.
+//
+// Cache the prefers-reduced-motion MediaQueryList ONCE at module load (#1177
+// Carmack must-fix #2). Calling window.matchMedia on every pulse() allocates
+// a new MQL + parses the query string — wasteful at 15Hz. The CSS @media rule
+// already handles render-time switching, so we just cache and read .matches.
+var _reducedMotionMQL = null;
+try {
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    _reducedMotionMQL = window.matchMedia('(prefers-reduced-motion: reduce)');
+  }
+} catch (_) { _reducedMotionMQL = null; }
+
+const Logo = (function () {
+  const RATE_GAP_MS = 66;       // 15/sec (≤16 toggles per second).
+  const HALF_MS = 80;           // each half of a ping ≤80ms.
+  const stats = { triggered: 0, dropped: 0 };
+  let lastPingTs = 0;
+  let flip = 0;                 // 0 → A→B, 1 → B→A.
+  let lastDirection = null;     // 'a' or 'b' (source circle).
+  let connected = true;         // WS state — gates in-flight chained pulses.
+  let generation = 0;           // bumped on setConnected(false) / visibilitychange to cancel scheduled halves.
+
+  function reducedMotion() {
+    return _reducedMotionMQL ? !!_reducedMotionMQL.matches : false;
+  }
+  function $all(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+  function clearAll() {
+    $all('.brand-logo circle.logo-node-a, .brand-mark-only circle.logo-node-a,' +
+         '.brand-logo circle.logo-node-b, .brand-mark-only circle.logo-node-b').forEach((el) => {
+      el.classList.remove('logo-pulse-active', 'logo-pulse-blip');
+    });
+  }
+  function pulseChained(srcSel, dstSel) {
+    const gen = generation;
+    // Source half: ~80ms.
+    $all(srcSel).forEach((el) => el.classList.add('logo-pulse-active'));
+    setTimeout(() => {
+      $all(srcSel).forEach((el) => el.classList.remove('logo-pulse-active'));
+      // Destination half: scheduled via rAF then ~80ms.
+      // Bail if WS dropped (or another disconnect cycle ran) since this ping started —
+      // otherwise a zombie pulse fires on a logo that's already showing the
+      // .logo-disconnected sustained state.
+      if (gen !== generation || !connected) return;
+      requestAnimationFrame(() => {
+        if (gen !== generation || !connected) return;
+        $all(dstSel).forEach((el) => el.classList.add('logo-pulse-active'));
+        setTimeout(() => {
+          $all(dstSel).forEach((el) => el.classList.remove('logo-pulse-active'));
+        }, HALF_MS);
+      });
+    }, HALF_MS);
+  }
+  function pulseBlip(dstSel) {
+    // Reduced-motion: single-step opacity blip on destination only.
+    $all(dstSel).forEach((el) => el.classList.add('logo-pulse-blip'));
+    setTimeout(() => {
+      $all(dstSel).forEach((el) => el.classList.remove('logo-pulse-blip'));
+    }, 140);
+  }
+  function pulse(_msg) {
+    // Hidden-tab gate (#1177 Carmack must-fix #1): drop the pulse BEFORE
+    // mutating lastPingTs and BEFORE scheduling any rAF/setTimeout chain.
+    // Background tabs throttle timers but still ran the source-class toggle
+    // and queued a chain that fired in a clump on tab focus — wasted work
+    // and a visible storm. Returning early here makes the gate cost ~1
+    // property read per WS message.
+    if (typeof document !== 'undefined' && document.hidden) {
+      stats.dropped++;
+      return false;
+    }
+    if (!connected) { stats.dropped++; return false; }
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (now - lastPingTs < RATE_GAP_MS) { stats.dropped++; return false; }
+    lastPingTs = now;
+    stats.triggered++;
+    const aToB = (flip === 0);
+    flip ^= 1;
+    lastDirection = aToB ? 'a' : 'b';
+    const srcSel = aToB ? '.brand-logo circle.logo-node-a, .brand-mark-only circle.logo-node-a'
+                        : '.brand-logo circle.logo-node-b, .brand-mark-only circle.logo-node-b';
+    const dstSel = aToB ? '.brand-logo circle.logo-node-b, .brand-mark-only circle.logo-node-b'
+                        : '.brand-logo circle.logo-node-a, .brand-mark-only circle.logo-node-a';
+    if (reducedMotion()) {
+      pulseBlip(dstSel);
+    } else {
+      pulseChained(srcSel, dstSel);
+    }
+    return true;
+  }
+  function setConnected(isConnected) {
+    connected = !!isConnected;
+    // Bump generation so any in-flight chained-pulse callbacks bail before
+    // toggling classes on the destination circle (otherwise a zombie pulse
+    // briefly fights the .logo-disconnected sustained desaturate state).
+    generation++;
+    $all('.brand-logo, .brand-mark-only').forEach((el) => {
+      if (connected) el.classList.remove('logo-disconnected');
+      else el.classList.add('logo-disconnected');
+    });
+    if (!connected) clearAll();
+  }
+  // Expose hook for E2E + customizer/devtools introspection.
+  // Frozen so consumers can't replace .pulse / .setConnected from outside
+  // (the seam is read-only — invocation only).
+  const api = Object.freeze({
+    pulse: pulse,
+    setConnected: setConnected,
+    get lastDirection() { return lastDirection; },
+    get stats() { return { triggered: stats.triggered, dropped: stats.dropped }; },
+  });
+  try { window.__corescopeLogo = api; } catch (_) {}
+
+  // Visibility gate (#1177 Carmack must-fix #1): when the tab becomes
+  // hidden, bump generation so any in-flight chained pulse halves bail
+  // out before they paint, and clear any active pulse classes. The
+  // pulse() entry already early-returns on document.hidden — this handles
+  // pulses already mid-flight at the moment the tab is backgrounded.
+  try {
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) {
+          generation++;
+          clearAll();
+        }
+      });
+    }
+  } catch (_) {}
+
+  return api;
+})();
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}`);
-  ws.onopen = () => document.getElementById('liveDot')?.classList.add('connected');
+  ws.onopen = () => Logo.setConnected(true);
   ws.onclose = () => {
-    document.getElementById('liveDot')?.classList.remove('connected');
+    Logo.setConnected(false);
     setTimeout(connectWS, 3000);
   };
   ws.onerror = () => ws.close();
   ws.onmessage = (e) => {
+    Logo.pulse(e);
     try {
       const msg = JSON.parse(e.data);
       // Debounce cache invalidation — don't nuke on every packet

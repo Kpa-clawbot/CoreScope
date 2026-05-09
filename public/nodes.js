@@ -1292,6 +1292,49 @@
       location.hash = '#/nodes/' + encodeURIComponent(pubkey);
       return;
     }
+    // #1056 AC#4: narrow desktop/tablet (641–1023) — open detail in slide-over.
+    if (window.SlideOver && window.SlideOver.shouldUse()) {
+      selectedKey = pubkey;
+      history.replaceState(null, '', '#/nodes/' + encodeURIComponent(pubkey));
+      renderRows();
+      const so = window.SlideOver.open({
+        title: 'Node detail',
+        // Resolver runs after onClose re-renders rows, so look the row up
+        // by data-key after the new tbody is in place.
+        restoreFocus: function () {
+          return document.querySelector('#nodesTable tbody tr[data-key="'
+            + (window.CSS && CSS.escape ? CSS.escape(pubkey) : pubkey)
+            + '"]');
+        },
+        onClose: function () {
+          selectedKey = null;
+          history.replaceState(null, '', '#/nodes');
+          renderRows();
+        }
+      });
+      so.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+      try {
+        const data = await fetchNodeDetail(pubkey);
+        if (selectedKey !== pubkey) return;
+        const n = (data && data.node) || data || {};
+        const titleEl = document.querySelector('.slide-over-title');
+        if (titleEl) titleEl.textContent = n.advert_name || (n.public_key ? n.public_key.slice(0, 10) : 'Node');
+        var role = (n.role || '').toString();
+        var lastHeard = n.last_heard || n.last_seen;
+        so.innerHTML =
+          '<dl style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px">' +
+            '<dt>Name</dt><dd>' + escapeHtml(n.advert_name || '—') + '</dd>' +
+            '<dt>Role</dt><dd>' + escapeHtml(role || '—') + '</dd>' +
+            '<dt>Public key</dt><dd class="mono" style="word-break:break-all">' + escapeHtml(n.public_key || '—') + '</dd>' +
+            '<dt>Last heard</dt><dd>' + (lastHeard ? timeAgo(lastHeard) : '—') + '</dd>' +
+            '<dt>Adverts</dt><dd>' + (n.advert_count != null ? n.advert_count : '—') + '</dd>' +
+          '</dl>' +
+          '<p style="margin-top:14px"><a class="btn-primary" href="#/nodes/' + encodeURIComponent(pubkey) + '">Open full detail →</a></p>';
+      } catch (e) {
+        so.innerHTML = '<div class="text-muted">Error: ' + (e && e.message ? e.message : String(e)) + '</div>';
+      }
+      return;
+    }
     selectedKey = pubkey;
     history.replaceState(null, '', '#/nodes/' + encodeURIComponent(pubkey));
     renderRows();

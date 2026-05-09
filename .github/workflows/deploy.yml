@@ -231,6 +231,10 @@ jobs:
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-nav-more-floor-1139-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-channel-fluid-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-table-fluid-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-charts-fluid-1058-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-slideover-1056-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-slideover-1168-munger-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-logo-pulse-1173-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1122-packets-filter-ux-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1128-packets-layout-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1128-multi-viewport-e2e.js 2>&1 | tee -a e2e-output.txt
@@ -241,6 +245,8 @@ jobs:
           node test-issue-1151-orphan-separators.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-theme-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1109-hamburger-dropdown-visible-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-live-layout-1178-1179-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-live-mql-leak-1180-e2e.js 2>&1 | tee -a e2e-output.txt
 
       - name: Collect frontend coverage (parallel)
         if: success() && github.event_name == 'push'

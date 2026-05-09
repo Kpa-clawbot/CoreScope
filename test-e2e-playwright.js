@@ -286,23 +286,33 @@ async function run() {
   await test('Nodes page has WebSocket auto-update', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
-    // The live dot in navbar indicates WS connection status
-    const liveDot = await page.$('#liveDot');
-    assert(liveDot, 'Live dot WebSocket indicator (#liveDot) not found');
+    // #1173: #liveDot was replaced by the brand-logo packet-pulse animation.
+    // WS connectivity is now reflected by the .logo-disconnected class on the
+    // SVG (added on close, removed on open). Verify the Logo state machine and
+    // the WS infra exist; actual connection is best-effort.
+    const logoExists = await page.$('.brand-logo');
+    assert(logoExists, 'Brand logo (.brand-logo) not found — needed for WS state surface');
     // Verify WS infrastructure exists (onWS/offWS globals from app.js)
     const hasWsInfra = await page.evaluate(() => {
       return typeof onWS === 'function' && typeof offWS === 'function';
     });
     assert(hasWsInfra, 'WebSocket listener infrastructure (onWS/offWS) should be available');
-    // Best-effort: if WS connects within 5s, verify connected state. Don't fail otherwise —
-    // CI may not have a live MQTT feed. Infra-existence assertions above are the contract.
+    // Verify the Logo connection-state hook exists (#1173). The seam at
+    // window.__corescopeLogo.setConnected exposes the state-toggle for tests.
+    const hasLogoSeam = await page.evaluate(() => {
+      return !!(window.__corescopeLogo && typeof window.__corescopeLogo.setConnected === 'function');
+    });
+    assert(hasLogoSeam, 'Logo state seam (window.__corescopeLogo.setConnected) should be available');
+    // Best-effort: if WS connects within 5s, verify the .logo-disconnected
+    // class is absent. Don't fail otherwise — CI may not have a live MQTT
+    // feed. Infra-existence assertions above are the contract.
     try {
       await page.waitForFunction(() => {
-        const dot = document.getElementById('liveDot');
-        return dot && dot.classList.contains('connected');
+        const lg = document.querySelector('.brand-logo');
+        return lg && !lg.classList.contains('logo-disconnected');
       }, { timeout: 5000 });
     } catch (_) {
-      // WS may not connect against remote — liveDot existence is sufficient
+      // WS may not connect against remote — Logo seam existence is sufficient
     }
   });
 

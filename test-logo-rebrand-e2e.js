@@ -31,6 +31,7 @@ function fail(msg) {
   console.error(`test-logo-rebrand-e2e.js: FAIL — ${msg}`);
   process.exit(1);
 }
+function assert(cond, msg) { if (!cond) fail(msg || 'assertion failed'); }
 
 async function head(url) {
   return new Promise((resolve, reject) => {
@@ -108,26 +109,40 @@ async function main() {
     console.log('  ✅ legacy mushroom emoji + "CoreScope" text removed');
     passed++;
 
-    // 3. Live-dot still there, visible, and to the right of the brand logo.
-    const dot = await page.$('.nav-brand .live-dot, .nav-brand #liveDot');
-    if (!dot) fail('.live-dot is missing from .nav-brand (WS connection indicator must remain)');
-    const layout = await page.evaluate(() => {
+    // 3. WS connection state indicator: #1173 replaced .live-dot with the
+    // packet-driven brand-logo pulse. The state surface is the .brand-logo
+    // SVG itself (gains .logo-disconnected on close, removes it on open),
+    // and the test seam at window.__corescopeLogo.
+    //
+    // Note: the previous version of this test asserted the geometry of
+    // the .live-dot relative to the brand-logo (dot must be to the right
+    // of the SVG). That coverage is replaced with a brand-logo layout
+    // assertion (visible, non-zero box, sensible aspect) so SVG rendering
+    // regressions are still caught — they simply moved targets.
+    const noLegacyDot = await page.$('.nav-brand .live-dot, .nav-brand #liveDot');
+    if (noLegacyDot) fail('.live-dot / #liveDot still present — should have been removed by #1173');
+    const seam = await page.evaluate(() => {
+      return !!(window.__corescopeLogo && typeof window.__corescopeLogo.setConnected === 'function' && typeof window.__corescopeLogo.pulse === 'function');
+    });
+    if (!seam) fail('window.__corescopeLogo (setConnected + pulse) is the new WS-state seam — missing');
+    // Brand-logo layout sanity (replaces the dot-right-of-logo geometry assertion).
+    const brandLayout = await page.evaluate(() => {
       const i = document.querySelector('.nav-brand .brand-logo');
-      const d = document.querySelector('.nav-brand .live-dot') || document.querySelector('.nav-brand #liveDot');
-      const ir = i ? i.getBoundingClientRect() : null;
-      const dr = d ? d.getBoundingClientRect() : null;
-      const ds = d ? getComputedStyle(d) : null;
+      if (!i) return { ok: false, reason: 'no .brand-logo' };
+      const r = i.getBoundingClientRect();
+      const cs = getComputedStyle(i);
       return {
-        ir, dr,
-        dotVisible: ds ? (ds.display !== 'none' && ds.visibility !== 'hidden' && parseFloat(ds.opacity || '1') > 0) : false,
+        ok: true,
+        w: r.width, h: r.height,
+        visible: cs.display !== 'none' && cs.visibility !== 'hidden' && parseFloat(cs.opacity || '1') > 0,
       };
     });
-    if (!layout.dotVisible) fail('.live-dot is not visible (display/visibility/opacity)');
-    if (!layout.ir || !layout.dr) fail('could not measure layout of brand-logo or live-dot');
-    if (layout.dr.left + 0.5 < layout.ir.right) {
-      fail(`live-dot overlaps the brand logo (logo.right=${layout.ir.right.toFixed(1)} dot.left=${layout.dr.left.toFixed(1)})`);
-    }
-    console.log('  ✅ .live-dot present, visible, and right of the brand logo');
+    // assert: brand-logo is visibly rendered with a sensible box.
+    assert(brandLayout.ok, 'brand-logo layout probe failed: ' + brandLayout.reason);
+    assert(brandLayout.visible, 'brand-logo not visible (display/visibility/opacity)');
+    assert(brandLayout.w >= 60 && brandLayout.h >= 16,
+      `brand-logo too small: ${brandLayout.w.toFixed(1)}×${brandLayout.h.toFixed(1)} (expected ≥60×16)`);
+    console.log('  ✅ legacy .live-dot removed; brand-logo Logo state seam present; brand-logo layout sane');
     passed++;
 
     // 4. Home hero image — ensure user level is set so we render the hero,
