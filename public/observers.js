@@ -7,6 +7,11 @@
   let wsHandler = null;
   let refreshTimer = null;
   let regionChangeHandler = null;
+  let clickHandler = null;
+  let changeHandler = null;
+  let inputHandler = null;
+  let keydownHandler = null;
+  let currentApp = null;
   let sortState = { col: null, dir: 'asc' };
   let hideStale = false;
   let hideOffline = false;
@@ -219,9 +224,10 @@ reboot</code></pre>
       statsShowAll = localStorage.getItem(STATS_ALL_KEY) === '1';
       statsTimeRange = localStorage.getItem(STATS_RANGE_KEY) || '24h';
     } catch (e) {}
+    currentApp = app;
     loadObservers();
     // Event delegation for data-action buttons
-    app.addEventListener('click', function (e) {
+    clickHandler = function (e) {
       var th = e.target.closest('th[data-sort-col]');
       if (th) {
         var col = th.dataset.sortCol;
@@ -283,18 +289,20 @@ reboot</code></pre>
         }
         location.hash = row.dataset.value;
       }
-    });
+    };
+    app.addEventListener('click', clickHandler);
     // IATA picker — update code block when a region is selected
-    app.addEventListener('change', function (e) {
+    changeHandler = function (e) {
       if (e.target.id === 'obsIataSelect') {
         var code = e.target.value;
         app.querySelectorAll('.obs-iata-val').forEach(function (span) {
           span.textContent = code;
         });
       }
-    });
+    };
+    app.addEventListener('change', changeHandler);
     // Email input — show/hide and update the mqtt.email line live
-    app.addEventListener('input', function (e) {
+    inputHandler = function (e) {
       if (e.target.id === 'obsEmailInput') {
         var val = e.target.value.trim();
         app.querySelectorAll('.obs-email-val').forEach(function (span) {
@@ -304,9 +312,10 @@ reboot</code></pre>
           span.style.display = val ? 'inline' : 'none';
         });
       }
-    });
+    };
+    app.addEventListener('input', inputHandler);
     // #209 — Keyboard accessibility for observer rows
-    app.addEventListener('keydown', function (e) {
+    keydownHandler = function (e) {
       var row = e.target.closest('tr[data-action="navigate"]');
       if (!row) return;
       if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -316,7 +325,8 @@ reboot</code></pre>
         return;
       }
       location.hash = row.dataset.value;
-    });
+    };
+    app.addEventListener('keydown', keydownHandler);
     // Auto-refresh every 30s
     refreshTimer = setInterval(loadObservers, 30000);
     wsHandler = debouncedOnWS(function (msgs) {
@@ -331,6 +341,13 @@ reboot</code></pre>
     refreshTimer = null;
     if (regionChangeHandler) RegionFilter.offChange(regionChangeHandler);
     regionChangeHandler = null;
+    if (currentApp) {
+      if (clickHandler)   currentApp.removeEventListener('click',   clickHandler);
+      if (changeHandler)  currentApp.removeEventListener('change',  changeHandler);
+      if (inputHandler)   currentApp.removeEventListener('input',   inputHandler);
+      if (keydownHandler) currentApp.removeEventListener('keydown', keydownHandler);
+    }
+    clickHandler = changeHandler = inputHandler = keydownHandler = currentApp = null;
     observers = [];
     obsSkewMap = {};
   }
