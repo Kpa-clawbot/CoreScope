@@ -72,8 +72,8 @@
           vb = obsSkewMap[b.id] && obsSkewMap[b.id].samples ? Math.abs(obsSkewMap[b.id].offsetSec || 0) : Infinity;
           break;
         case 'uptime':
-          va = a.first_seen ? Date.now() - new Date(a.first_seen).getTime() : 0;
-          vb = b.first_seen ? Date.now() - new Date(b.first_seen).getTime() : 0;
+          va = a.uptime_secs != null ? a.uptime_secs * 1000 : (a.first_seen ? Date.now() - new Date(a.first_seen).getTime() : 0);
+          vb = b.uptime_secs != null ? b.uptime_secs * 1000 : (b.first_seen ? Date.now() - new Date(b.first_seen).getTime() : 0);
           break;
         default:
           return 0;
@@ -377,7 +377,19 @@ reboot</code></pre>
     return timeAgo(o.last_packet_at);
   }
 
-  function uptimeStr(firstSeen) {
+  function uptimeStr(o) {
+    // Prefer device-reported uptime_secs: reflects actual node uptime, independent
+    // of when our ingestor first saw the observer or how long the MQTT bridge has run.
+    if (o && o.uptime_secs != null) {
+      const s = o.uptime_secs;
+      const d = Math.floor(s / 86400);
+      const h = Math.floor((s % 86400) / 3600);
+      if (d > 0) return `${d}d ${h}h`;
+      const m = Math.floor((s % 3600) / 60);
+      return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+    // Fall back to time-since-first-seen when device hasn't reported hardware stats
+    const firstSeen = o && typeof o === 'object' ? o.first_seen : o;
     if (!firstSeen) return '—';
     const ms = Date.now() - new Date(firstSeen).getTime();
     const d = Math.floor(ms / 86400000);
@@ -431,10 +443,10 @@ reboot</code></pre>
       .map(function (o) { return { name: o.name || o.id, val: (o.packet_count || 0).toLocaleString() }; });
 
     var byUptime = data.slice().sort(function (a, b) {
-      var ua = a.first_seen ? Date.now() - new Date(a.first_seen).getTime() : 0;
-      var ub = b.first_seen ? Date.now() - new Date(b.first_seen).getTime() : 0;
+      var ua = a.uptime_secs != null ? a.uptime_secs * 1000 : (a.first_seen ? Date.now() - new Date(a.first_seen).getTime() : 0);
+      var ub = b.uptime_secs != null ? b.uptime_secs * 1000 : (b.first_seen ? Date.now() - new Date(b.first_seen).getTime() : 0);
       return ub - ua;
-    }).slice(0, limit).map(function (o) { return { name: o.name || o.id, val: uptimeStr(o.first_seen) }; });
+    }).slice(0, limit).map(function (o) { return { name: o.name || o.id, val: uptimeStr(o) }; });
 
     var regionMap = {};
     data.forEach(function (o) { if (o.iata) regionMap[o.iata] = (regionMap[o.iata] || 0) + 1; });
@@ -524,7 +536,7 @@ reboot</code></pre>
               var sev = observerSkewSeverity(sk.offsetSec);
               return renderSkewBadge(sev, sk.offsetSec) + ' <span class="text-muted" title="Computed from ' + sk.samples + ' multi-observer packets. Positive = observer ahead of consensus.">(' + sk.samples + ')</span>';
             })()}</td>
-            <td>${uptimeStr(o.first_seen)}</td>
+            <td>${uptimeStr(o)}</td>
             <td>${(o.packet_count || 0).toLocaleString()}</td>
             <td>${sparkBar(o.packetsLastHour || 0, maxPktsHr)}</td>
             <td>${o.last_packet_at ? timeAgo(o.last_packet_at) : '<span class="text-muted">—</span>'}</td>
@@ -565,7 +577,7 @@ reboot</code></pre>
         '<dt>Total packets</dt><dd>' + (o.packet_count || 0).toLocaleString() + '</dd>' +
         '<dt>Packets/hr</dt><dd>' + pkts + '</dd>' +
         '<dt>Clock offset</dt><dd>' + skewLine + '</dd>' +
-        '<dt>Uptime</dt><dd>' + uptimeStr(o.first_seen) + '</dd>' +
+        '<dt>Uptime</dt><dd>' + uptimeStr(o) + '</dd>' +
       '</dl>' +
       '<p style="margin-top:14px"><a class="btn-primary" href="' + hashHref + '">Open full detail →</a></p>';
   }
