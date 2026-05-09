@@ -238,7 +238,7 @@ reboot</code></pre>
         return;
       }
       var btn = e.target.closest('[data-action]');
-      if (btn && btn.dataset.action === 'obs-refresh') loadObservers();
+      if (btn && btn.dataset.action === 'obs-refresh') { loadObservers(true); return; }
       if (btn && btn.dataset.action === 'toggle-stats-range') {
         statsTimeRange = btn.dataset.range;
         try { localStorage.setItem(STATS_RANGE_KEY, statsTimeRange); } catch (e) {}
@@ -328,9 +328,9 @@ reboot</code></pre>
     };
     app.addEventListener('keydown', keydownHandler);
     // Auto-refresh every 30s
-    refreshTimer = setInterval(loadObservers, 30000);
+    refreshTimer = setInterval(function() { loadObservers(true); }, 30000);
     wsHandler = debouncedOnWS(function (msgs) {
-      if (msgs.some(function (m) { return m.type === 'packet'; })) loadObservers();
+      if (msgs.some(function (m) { return m.type === 'packet'; })) loadObservers(true);
     });
   }
 
@@ -352,11 +352,11 @@ reboot</code></pre>
     obsSkewMap = {};
   }
 
-  async function loadObservers() {
+  async function loadObservers(force) {
     try {
       const [data, skewData] = await Promise.all([
-        api('/observers', { ttl: CLIENT_TTL.observers }),
-        api('/observers/clock-skew', { ttl: 30000 }).catch(function() { return []; })
+        api('/observers', { ttl: CLIENT_TTL.observers, bust: !!force }),
+        api('/observers/clock-skew', { ttl: 30000, bust: !!force }).catch(function() { return []; })
       ]);
       observers = data.observers || [];
       obsSkewMap = {};
