@@ -239,7 +239,11 @@ reboot</code></pre>
         return;
       }
       var btn = e.target.closest('[data-action]');
-      if (btn && btn.dataset.action === 'obs-refresh') { loadObservers(true); return; }
+      if (btn && btn.dataset.action === 'obs-refresh') {
+        loadObservers(true);
+        if (isStatsPanelOpen()) loadObserverStats(true);
+        return;
+      }
       if (btn && btn.dataset.action === 'toggle-stats-range') {
         statsTimeRange = btn.dataset.range;
         try { localStorage.setItem(STATS_RANGE_KEY, statsTimeRange); } catch (e) {}
@@ -355,10 +359,7 @@ reboot</code></pre>
   }
 
   async function loadObservers(force) {
-    if (force) {
-      invalidateObserversCache();
-      if (isStatsPanelOpen()) loadObserverStats(true);
-    }
+    if (force) invalidateObserversCache();
     try {
       const [data, skewData] = await Promise.all([
         api('/observers', { ttl: CLIENT_TTL.observers }),
