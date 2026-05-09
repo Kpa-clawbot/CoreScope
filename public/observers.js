@@ -358,7 +358,7 @@ reboot</code></pre>
   //
   // We use last_seen (status message recency) as the health signal — it is stamped
   // whenever the device sends a status update (which carries uptime_secs, battery,
-  // etc.), so observers that are alive but forwarding no aircraft packets still
+  // etc.), so observers that are alive but forwarding no mesh packets still
   // show Online.  last_packet_at reflects data forwarding activity, not liveness.
   function healthStatus(o) {
     const ts = (o && typeof o === 'object') ? o.last_seen : o;
