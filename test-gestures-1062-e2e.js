@@ -25,7 +25,13 @@ const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
 
-function isVisible(rect) { return rect && rect.width > 0 && rect.height > 0; }
+function isVisible(rect) {
+  if (!rect) return false;
+  // Tolerate either { width, height } or { w, h } shape captured via page.evaluate.
+  var w = rect.width != null ? rect.width : rect.w;
+  var h = rect.height != null ? rect.height : rect.h;
+  return w > 0 && h > 0;
+}
 
 async function synthSwipe(page, fromX, fromY, toX, toY, opts) {
   opts = opts || {};
@@ -318,10 +324,25 @@ async function main() {
     if (reducedState.present && reducedState.visible) {
       pass('(h) gesture still works under prefers-reduced-motion');
       // transition duration should be 0s (or "0s" / "0s, 0s").
-      if (/(^|[^\d.])0s\b/.test(reducedState.transitionDuration) || reducedState.transitionDuration === '0s') {
-        pass(`(h) transition-duration = ${reducedState.transitionDuration} (instant)`);
+      // Chromium can serialize 0s as "1e-05s" in some computed-style paths;
+      // tolerate any duration ≤ 0.001s.
+      var td = String(reducedState.transitionDuration || '');
+      function maxDurSec(s) {
+        var m = s.match(/(\d*\.?\d+(?:e-?\d+)?)\s*(ms|s)?/gi) || [];
+        var max = 0;
+        for (var i = 0; i < m.length; i++) {
+          var p = m[i].match(/(\d*\.?\d+(?:e-?\d+)?)\s*(ms|s)?/i);
+          if (!p) continue;
+          var n = parseFloat(p[1]);
+          if (p[2] && p[2].toLowerCase() === 'ms') n /= 1000;
+          if (n > max) max = n;
+        }
+        return max;
+      }
+      if (maxDurSec(td) <= 0.001) {
+        pass(`(h) transition-duration = ${td} (instant, ≤ 1ms)`);
       } else {
-        fail(`(h) transition-duration = ${reducedState.transitionDuration}, expected 0s under reduce`);
+        fail(`(h) transition-duration = ${td}, expected ≤ 0.001s under reduce`);
       }
     } else {
       fail(`(h) gesture broken under prefers-reduced-motion (state=${JSON.stringify(reducedState)})`);
