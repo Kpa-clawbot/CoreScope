@@ -194,6 +194,23 @@
   function close() {
     if (!drawerEl) return;
     var wasOpen = drawerEl.classList.contains('is-open');
+    // Decide whether to restore focus BEFORE applying `inert`. Setting
+    // `inert` synchronously moves document.activeElement to <body>, so any
+    // "is focus inside the drawer?" check after that point is useless.
+    // The right invariant: restore if we were open, prevFocus is still in
+    // the DOM, and it isn't a descendant of the drawer itself.
+    var toRestore = null;
+    if (wasOpen && prevFocus && typeof prevFocus.focus === 'function' &&
+        document.body && document.body.contains(prevFocus) &&
+        !drawerEl.contains(prevFocus)) {
+      toRestore = prevFocus;
+    }
+    prevFocus = null;
+    // Restore FIRST so the upcoming `inert` doesn't bump us to <body>.
+    if (toRestore) {
+      try { toRestore.focus({ preventScroll: true }); }
+      catch (_e) { /* element may be gone after SPA nav — ignore */ }
+    }
     drawerEl.classList.remove('is-open');
     drawerEl.setAttribute('inert', '');
     drawerEl.setAttribute('aria-hidden', 'true');
@@ -202,17 +219,6 @@
       backdropEl.classList.remove('is-open');
     }
     clearInlineTransform();
-    // Restore focus to whatever had it before open() — only if we were
-    // actually open AND focus is currently inside the drawer (don't yank
-    // focus from somewhere else the user moved to).
-    if (wasOpen && prevFocus && typeof prevFocus.focus === 'function') {
-      try {
-        if (drawerEl.contains(document.activeElement) && document.contains(prevFocus)) {
-          prevFocus.focus({ preventScroll: true });
-        }
-      } catch (_e) { /* element may be gone after SPA nav — ignore */ }
-    }
-    prevFocus = null;
   }
 
   function toggle() { if (isOpen()) close(); else open(); }
