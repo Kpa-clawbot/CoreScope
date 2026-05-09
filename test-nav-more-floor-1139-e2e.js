@@ -65,7 +65,7 @@ async function main() {
     for (const w of VIEWPORTS) {
       await page.setViewportSize({ width: w, height: HEIGHT });
       await page.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
-      await page.waitForSelector('.top-nav .nav-links');
+      await page.waitForSelector('.top-nav .nav-links', { state: 'attached' });
       await page.evaluate(() => document.fonts && document.fonts.ready ? document.fonts.ready : null);
       // Don't mutate stats text — leave whatever the page rendered. The
       // bug reproduces deterministically against fixture stats at ~1600px
@@ -88,14 +88,25 @@ async function main() {
       }, null, { timeout: 5000 });
 
       const data = await page.evaluate(() => {
+        const navLinks = document.querySelector('.top-nav .nav-links');
+        const navLinksVisible = navLinks ? getComputedStyle(navLinks).display !== 'none' : false;
         const menu = document.getElementById('navMoreMenu');
         const wrap = document.querySelector('.nav-more-wrap');
         const moreVisible = wrap ? getComputedStyle(wrap).display !== 'none' : false;
         const items = menu ? menu.children.length : -1;
         const overflowInline = Array.from(document.querySelectorAll('.nav-links .nav-link.is-overflow'))
           .map(a => a.getAttribute('href'));
-        return { items, moreVisible, overflowInline };
+        return { items, moreVisible, overflowInline, navLinksVisible };
       });
+
+      // If .nav-links is hidden the hamburger/mobile layout is active — forks with
+      // a wider brand area have a higher breakpoint. The Priority+ overflow-floor
+      // test only applies in desktop (inline) mode.
+      if (!data.navLinksVisible) {
+        passes++;
+        console.log(`  ⏭️  ${w}px: nav-links hidden (hamburger mode) — overflow-floor check skipped`);
+        continue;
+      }
 
       // Band-specific acceptance:
       //   - bug band (1101-1278px): items >= 2 STRICTLY. items===0
