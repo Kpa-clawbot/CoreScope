@@ -576,6 +576,15 @@ const Logo = (function () {
       else el.classList.add('logo-disconnected');
     });
     if (!connected) clearAll();
+    // #1174 mesh-op review: mirror connected state onto the bottom-nav so
+    // the 2px top-border indicator (see bottom-nav.css) goes red on
+    // disconnect. Mesh-alive is otherwise invisible at ≤768 because
+    // .nav-stats is hidden at that breakpoint.
+    var bn = document.querySelector('[data-bottom-nav]');
+    if (bn) {
+      if (connected) bn.classList.remove('disconnected');
+      else bn.classList.add('disconnected');
+    }
   }
   // Expose hook for E2E + customizer/devtools introspection.
   // Frozen so consumers can't replace .pulse / .setConnected from outside
