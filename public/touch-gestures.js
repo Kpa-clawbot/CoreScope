@@ -91,6 +91,23 @@
     return target.closest('.slide-over-panel');
   }
 
+  // Locate the open slide-over panel by querying the DOM (not via target
+  // ancestry). Used as a fallback when the pointerdown's hit-test target
+  // is something outside the panel subtree (e.g. a focused button whose
+  // event was retargeted, or a panel mid-animation where elementFromPoint
+  // returned an unrelated element). Pairs the lookup with a coordinate
+  // check so we don't claim slide-over context for taps elsewhere.
+  function findOpenSlideOverAt(x, y) {
+    if (!window.SlideOver || typeof window.SlideOver.isOpen !== 'function') return null;
+    if (!window.SlideOver.isOpen()) return null;
+    var panel = document.querySelector('.slide-over-panel');
+    if (!panel || panel.hidden) return null;
+    var r = panel.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return null;
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return panel;
+    return null;
+  }
+
   // ── Bottom-nav: read TAB order from bottom-nav.js ──
   // The TAB list there is module-private; we re-derive order from the rendered
   // DOM (which IS the source of truth for what the user sees) — primary tabs only,
@@ -183,7 +200,7 @@
 
     var row = findRow(t);
     var nav = findBottomNav(t);
-    var so = findSlideOver(t);
+    var so = findSlideOver(t) || findOpenSlideOverAt(e.clientX, e.clientY);
 
     if (so) gestureContext = 'slide-over';
     else if (nav) gestureContext = 'bottom-nav';
@@ -259,7 +276,7 @@
     } else if (gestureContext === 'slide-over' && axis === 'v') {
       if (dy > 0) {
         // Drag panel down with the finger.
-        var so = findSlideOver(startTarget);
+        var so = findSlideOver(startTarget) || document.querySelector('.slide-over-panel');
         if (so) {
           so.style.transform = 'translateY(' + dy + 'px)';
         }
@@ -297,7 +314,7 @@
           navigateRelative(-1);
         }
       } else if (gestureContext === 'slide-over' && axis === 'v') {
-        var so = findSlideOver(startTarget);
+        var so = findSlideOver(startTarget) || document.querySelector('.slide-over-panel');
         if (so) so.style.transform = '';
         if (dy >= SLIDE_OVER_DISMISS_PX && window.SlideOver && typeof window.SlideOver.close === 'function') {
           try { window.SlideOver.close(); } catch (_) {}
@@ -315,7 +332,7 @@
       activeRow.classList.remove('row-swiping');
       activeRow = null;
     }
-    var so = findSlideOver(startTarget);
+    var so = findSlideOver(startTarget) || document.querySelector('.slide-over-panel');
     if (so) so.style.transform = '';
     releasePointer();
   }
