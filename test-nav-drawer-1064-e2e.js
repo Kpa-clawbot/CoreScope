@@ -152,7 +152,14 @@ async function edgeSwipe(page, x0, y0, x1, y1, steps) {
     await wide.waitForTimeout(150);
     const has = await wide.$('[data-nav-drawer-backdrop]');
     assert(has, '[data-nav-drawer-backdrop] missing');
-    await wide.click('[data-nav-drawer-backdrop]', { position: { x: 5, y: 5 } });
+    // Click far right of viewport: backdrop covers the whole window
+    // (position:fixed; inset:0), but the drawer (z-index 1260) sits on
+    // top of the backdrop (z-index 1250) over the left ~320px. Clicking
+    // at x=5,y=5 hits the drawer, not the backdrop, and Playwright's
+    // actionability check times out. Pick a coordinate clearly outside
+    // the drawer's bounds (viewport is 1024px wide, drawer ≤360px) so
+    // the backdrop is the topmost element receiving the click.
+    await wide.click('[data-nav-drawer-backdrop]', { position: { x: 800, y: 400 } });
     await wide.waitForTimeout(150);
     const open = await wide.evaluate(() => !!(window.__navDrawer && window.__navDrawer.isOpen && window.__navDrawer.isOpen()));
     assert(!open, 'drawer still open after backdrop click');
