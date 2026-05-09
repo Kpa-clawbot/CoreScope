@@ -356,12 +356,12 @@ reboot</code></pre>
   // NOTE: Comparing server timestamps to Date.now() can skew if client/server
   // clocks differ. We add ±30s tolerance to thresholds to reduce false positives.
   //
-  // We prefer last_packet_at over last_seen: UpsertObserver stamps last_seen on
-  // every MQTT reconnect (including server-restart stampedes), while last_packet_at
-  // is only written when real observation data arrives.  Using last_packet_at
-  // prevents all observers from flipping to Online the moment the server restarts.
+  // We use last_seen (status message recency) as the health signal — it is stamped
+  // whenever the device sends a status update (which carries uptime_secs, battery,
+  // etc.), so observers that are alive but forwarding no aircraft packets still
+  // show Online.  last_packet_at reflects data forwarding activity, not liveness.
   function healthStatus(o) {
-    const ts = (o && typeof o === 'object') ? (o.last_packet_at || o.last_seen) : o;
+    const ts = (o && typeof o === 'object') ? o.last_seen : o;
     if (!ts) return { cls: 'health-red', label: 'Unknown' };
     const ago = Date.now() - new Date(ts).getTime();
     const tolerance = 30000; // 30s tolerance for clock skew
