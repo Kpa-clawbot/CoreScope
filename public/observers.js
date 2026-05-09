@@ -352,11 +352,16 @@ reboot</code></pre>
     obsSkewMap = {};
   }
 
+  function invalidateObserversCache() {
+    invalidateApiCache('/observers');
+  }
+
   async function loadObservers(force) {
+    if (force) invalidateObserversCache();
     try {
       const [data, skewData] = await Promise.all([
-        api('/observers', { ttl: CLIENT_TTL.observers, bust: !!force }),
-        api('/observers/clock-skew', { ttl: 30000, bust: !!force }).catch(function() { return []; })
+        api('/observers', { ttl: CLIENT_TTL.observers }),
+        api('/observers/clock-skew', { ttl: 30000 }).catch(function() { return []; })
       ]);
       observers = data.observers || [];
       obsSkewMap = {};
