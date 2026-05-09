@@ -47,6 +47,10 @@
   var drawerWidth = 0;
   var pointerActive = false;
   var narrowMql = null;
+  // Element that had focus before the drawer was opened — restored on close
+  // (same regression class as #1168: closing nav UI must return focus to its
+  // trigger so keyboard users don't get dumped at <body>).
+  var prevFocus = null;
 
   // Long-tail routes mirror PR #1174 / bottom-nav.js MORE_ROUTES exactly.
   // ⚠️ Keep in sync with public/bottom-nav.js MORE_ROUTES.
@@ -164,6 +168,14 @@
     buildDom();
     if (!isWide()) return; // Option A
     if (!drawerWidth) drawerWidth = drawerEl.getBoundingClientRect().width || 320;
+    // Capture the previously-focused element BEFORE we move focus, so close()
+    // can restore it. Guard against opening twice (don't overwrite on re-open).
+    if (!isOpen()) {
+      try {
+        var ae = document.activeElement;
+        prevFocus = (ae && ae !== document.body) ? ae : null;
+      } catch (_e) { prevFocus = null; }
+    }
     drawerEl.classList.add('is-open');
     drawerEl.removeAttribute('inert');
     drawerEl.setAttribute('aria-hidden', 'false');
@@ -181,6 +193,7 @@
 
   function close() {
     if (!drawerEl) return;
+    var wasOpen = drawerEl.classList.contains('is-open');
     drawerEl.classList.remove('is-open');
     drawerEl.setAttribute('inert', '');
     drawerEl.setAttribute('aria-hidden', 'true');
@@ -189,6 +202,17 @@
       backdropEl.classList.remove('is-open');
     }
     clearInlineTransform();
+    // Restore focus to whatever had it before open() — only if we were
+    // actually open AND focus is currently inside the drawer (don't yank
+    // focus from somewhere else the user moved to).
+    if (wasOpen && prevFocus && typeof prevFocus.focus === 'function') {
+      try {
+        if (drawerEl.contains(document.activeElement) && document.contains(prevFocus)) {
+          prevFocus.focus({ preventScroll: true });
+        }
+      } catch (_e) { /* element may be gone after SPA nav — ignore */ }
+    }
+    prevFocus = null;
   }
 
   function toggle() { if (isOpen()) close(); else open(); }
