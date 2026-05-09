@@ -231,6 +231,12 @@ type PacketStore struct {
 	// Empty string means all data is in memory (no limit applied).
 	oldestLoaded string
 
+	// Hot startup: only hotStartupHours of data is loaded synchronously.
+	// 0 = disabled (current behavior). Background loader fills the rest.
+	hotStartupHours        float64
+	backgroundLoadDone     atomic.Bool
+	backgroundLoadProgress atomic.Int64 // 0–100 percent complete
+
 	// Async hash migration state: set after migrateContentHashesAsync completes.
 	hashMigrationComplete atomic.Bool
 
@@ -416,6 +422,14 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		ps.retentionHours = cfg.RetentionHours
 		ps.maxMemoryMB = cfg.MaxMemoryMB
 		ps.maxResolvedPubkeyIndexEntries = cfg.MaxResolvedPubkeyIndexEntries
+		if cfg.HotStartupHours > 0 {
+			h := cfg.HotStartupHours
+			if ps.retentionHours > 0 && h > ps.retentionHours {
+				log.Printf("[store] warning: hotStartupHours (%.0f) > retentionHours (%.0f) — clamping", h, ps.retentionHours)
+				h = ps.retentionHours
+			}
+			ps.hotStartupHours = h
+		}
 	}
 	// Wire cacheTTL config values to server-side cache durations.
 	if len(cacheTTLs) > 0 && cacheTTLs[0] != nil {
