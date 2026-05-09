@@ -347,6 +347,96 @@ async function main() {
     fail(`(b) top-nav not visible at 1440x900 (display=${stateWide.tnDisplay})`);
   }
 
+  // ── (l) #1174 mesh-op review: .live-page bottom must NOT be covered by bottom-nav at ≤768 ──
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.live-page', { timeout: 5000 }).catch(() => {});
+  // Allow layout to settle.
+  await page.waitForFunction(() => !!document.querySelector('.live-page'), null, { timeout: 3000 }).catch(() => {});
+  const liveLayout = await page.evaluate(() => {
+    const lp = document.querySelector('.live-page');
+    if (!lp) return { present: false };
+    const r = lp.getBoundingClientRect();
+    return {
+      present: true,
+      bottom: r.bottom,
+      innerHeight: window.innerHeight,
+    };
+  });
+  if (!liveLayout.present) {
+    fail('(l) .live-page missing on #/live');
+  } else if (liveLayout.bottom > liveLayout.innerHeight - 56 + 1) {
+    // +1 for sub-pixel rounding tolerance.
+    fail(`(l) .live-page bottom (${liveLayout.bottom.toFixed(1)}) > viewport - 56 (${(liveLayout.innerHeight - 56).toFixed(1)}) — bottom-nav covers content`);
+  } else {
+    pass(`(l) .live-page bottom ${liveLayout.bottom.toFixed(1)} ≤ viewport - 56 (${(liveLayout.innerHeight - 56).toFixed(1)})`);
+  }
+
+  // ── (m) #1174 mesh-op review: bottom-nav has a connectivity indicator that toggles on setConnected(false) ──
+  await page.goto(`${BASE}/#/`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-bottom-nav]', { timeout: 5000 });
+  const indicator = await page.evaluate(() => {
+    if (!window.__corescopeLogo || typeof window.__corescopeLogo.setConnected !== 'function') {
+      return { logoApiPresent: false };
+    }
+    window.__corescopeLogo.setConnected(true);
+    const nav = document.querySelector('[data-bottom-nav]');
+    const connectedCls = nav.classList.contains('disconnected');
+    window.__corescopeLogo.setConnected(false);
+    const disconnectedCls = nav.classList.contains('disconnected');
+    // restore
+    window.__corescopeLogo.setConnected(true);
+    return {
+      logoApiPresent: true,
+      onConnected: connectedCls,
+      onDisconnected: disconnectedCls,
+    };
+  });
+  if (!indicator.logoApiPresent) {
+    fail('(m) window.__corescopeLogo.setConnected not exposed');
+  } else if (indicator.onConnected === false && indicator.onDisconnected === true) {
+    pass('(m) bottom-nav .disconnected class toggles with setConnected()');
+  } else {
+    fail(`(m) bottom-nav disconnected class wiring broken (onConnected=${indicator.onConnected}, onDisconnected=${indicator.onDisconnected})`);
+  }
+
+  // ── (n) #1174 mesh-op review: More tab gets .active when on long-tail routes ──
+  await page.goto(`${BASE}/#/tools`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => location.hash === '#/tools', null, { timeout: 3000 }).catch(() => {});
+  let moreActiveOnTools = null;
+  try {
+    await page.waitForFunction(() => {
+      const el = document.querySelector('[data-bottom-nav-tab="more"]');
+      return el && el.classList.contains('active');
+    }, null, { timeout: 2000 });
+    moreActiveOnTools = true;
+  } catch (_) {
+    moreActiveOnTools = await page.evaluate(() => {
+      const el = document.querySelector('[data-bottom-nav-tab="more"]');
+      return el ? el.classList.contains('active') : null;
+    });
+  }
+  if (moreActiveOnTools === true) pass('(n) More tab .active on #/tools (long-tail route)');
+  else fail(`(n) More tab NOT .active on #/tools (got ${moreActiveOnTools})`);
+
+  await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => location.hash === '#/packets', null, { timeout: 3000 }).catch(() => {});
+  let moreActiveOnPackets = null;
+  try {
+    await page.waitForFunction(() => {
+      const el = document.querySelector('[data-bottom-nav-tab="more"]');
+      return el && !el.classList.contains('active');
+    }, null, { timeout: 2000 });
+    moreActiveOnPackets = false;
+  } catch (_) {
+    moreActiveOnPackets = await page.evaluate(() => {
+      const el = document.querySelector('[data-bottom-nav-tab="more"]');
+      return el ? el.classList.contains('active') : null;
+    });
+  }
+  if (moreActiveOnPackets === false) pass('(n) More tab loses .active on primary route #/packets');
+  else fail(`(n) More tab still .active on #/packets (got ${moreActiveOnPackets})`);
+
   await browser.close();
 
   console.log(`\ntest-bottom-nav-1061-e2e.js: ${passes} passed, ${failures} failed`);
