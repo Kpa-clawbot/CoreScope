@@ -50,12 +50,22 @@
      * fixed-position descendants (we have none, but cheap insurance). */
   }
 
-  /* Suppress the desktop top-nav AND the hamburger dropdown when the
-   * bottom nav is active. This satisfies the "no duplicate nav UX"
-   * requirement. The hamburger button itself is hidden too — without
-   * the top nav there's nothing for it to toggle. */
-  .top-nav {
+  /* Suppress the desktop NAV LINKS + right-side cluster when the
+   * bottom nav is active — but KEEP the .nav-brand (logo) visible.
+   * The brand mark is identity, not navigation, so the "no duplicate
+   * nav UX" rule applies only to the link/menu cluster. The existing
+   * #1137 mobile-logo path (.brand-mark-only at ≤400px) continues to
+   * work because .top-nav stays in the layout. */
+  .top-nav .nav-links,
+  .top-nav .nav-more-wrap,
+  .top-nav .nav-right,
+  .top-nav .nav-stats,
+  .top-nav #hamburger {
     display: none !important;
+  }
+  /* Tighten top-nav to brand-only height at narrow widths. */
+  .top-nav {
+    justify-content: flex-start;
   }
 
   /* Reserve space at page bottom so fixed-positioned bottom-nav does

@@ -77,19 +77,29 @@ async function main() {
 
   const stateNarrow = await page.evaluate(() => {
     const bn = document.querySelector('[data-bottom-nav]');
-    const tn = document.querySelector('.top-nav');
+    const navLinks = document.querySelector('.top-nav .nav-links');
+    const navRight = document.querySelector('.top-nav .nav-right');
+    const navBrand = document.querySelector('.top-nav .nav-brand');
     const bnRect = bn ? bn.getBoundingClientRect() : null;
-    const tnRect = tn ? tn.getBoundingClientRect() : null;
     const bnCs = bn ? getComputedStyle(bn) : null;
-    const tnCs = tn ? getComputedStyle(tn) : null;
+    const isHiddenByCss = (el) => {
+      if (!el) return true;
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      return cs.display === 'none' || cs.visibility === 'hidden' || (r.width === 0 && r.height === 0);
+    };
     return {
       bnPresent: !!bn,
-      bnRect, tnRect,
+      bnRect,
       bnDisplay: bnCs ? bnCs.display : null,
       bnVisibility: bnCs ? bnCs.visibility : null,
-      tnDisplay: tnCs ? tnCs.display : null,
-      tnVisibility: tnCs ? tnCs.visibility : null,
       bnPaddingBottom: bnCs ? bnCs.paddingBottom : null,
+      // #1174 fix: top-nav LINKS hidden (no duplicate nav UX), but
+      // .nav-brand stays visible (logo identity, not navigation).
+      navLinksHidden: isHiddenByCss(navLinks),
+      navRightHidden: isHiddenByCss(navRight),
+      navBrandPresent: !!navBrand,
+      navBrandHidden: isHiddenByCss(navBrand),
     };
   });
 
@@ -100,10 +110,15 @@ async function main() {
   } else {
     pass('(a) bottom-nav visible at 360x800');
   }
-  if (stateNarrow.tnDisplay === 'none' || stateNarrow.tnVisibility === 'hidden' || !isVisible(stateNarrow.tnRect)) {
-    pass('(a) top-nav hidden/collapsed at 360x800');
+  if (stateNarrow.navLinksHidden && stateNarrow.navRightHidden) {
+    pass('(a) top-nav LINKS hidden at 360x800 (no duplicate nav UX)');
   } else {
-    fail(`(a) top-nav still visible at 360x800 (display=${stateNarrow.tnDisplay}, rect=${JSON.stringify(stateNarrow.tnRect)}) — duplicate nav UX`);
+    fail(`(a) top-nav links/right still visible at 360x800 (links=${!stateNarrow.navLinksHidden}, right=${!stateNarrow.navRightHidden}) — duplicate nav UX`);
+  }
+  if (stateNarrow.navBrandPresent && !stateNarrow.navBrandHidden) {
+    pass('(a) .nav-brand (logo identity) remains visible at 360x800');
+  } else {
+    fail(`(a) .nav-brand hidden at 360x800 (present=${stateNarrow.navBrandPresent}, hidden=${stateNarrow.navBrandHidden}) — should remain visible per #1137`);
   }
 
   // ── (c) 5 tabs each ≥48px tap target ──
