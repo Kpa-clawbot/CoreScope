@@ -73,15 +73,31 @@
   gap: 10px;
   min-width: 0;
 }
-/* Toggle buttons (#1178, #1179) — hidden at wide viewports, visible at ≤768px */
+/* Critical strip (Mesh-Operator review #1180): beacon + pkt count are
+   always visible even when the collapsible body is hidden at narrow
+   widths. This is the ingest-state cue (red beacon = WS down) + the
+   one number operators check while the header is otherwise collapsed. */
+.live-header-critical {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+/* Toggle buttons (#1178, #1179) — hidden at wide viewports, visible at ≤768px.
+   Mesh-Operator review #1180: tap target ≥48×48 (#1060 floor + AGENTS glove
+   operability rule). Visible glyph stays small (decorative); transparent
+   padding expands the hit area without changing the visual chrome. */
 .live-header-toggle,
 .live-controls-toggle {
   display: none;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
+  min-width: 48px;
+  min-height: 48px;
+  /* Visible chrome stays compact; padding grows the hit area. */
+  width: 48px;
+  height: 48px;
+  padding: 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: color-mix(in srgb, var(--text) 8%, transparent);
@@ -378,7 +394,7 @@
   .live-feed { width: 280px; max-height: 200px; }
   .live-node-detail { width: 260px; }
   .live-legend { font-size: 10px; padding: 8px 10px; }
-  .live-header { gap: 6px; padding: 4px 8px; max-height: 40px; }
+  .live-header { gap: 6px; padding: 4px 8px; max-height: none; min-height: 48px; }
   .live-stat-pill { font-size: 11px; padding: 1px 7px; }
   .live-toggles { font-size: 10px; gap: 6px; }
 

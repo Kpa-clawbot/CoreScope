@@ -860,16 +860,18 @@
       <div class="live-page">
         <div id="liveMap" style="width:100%;height:100%;position:absolute;top:0;left:0;z-index:1"></div>
         <div class="live-overlay live-header" id="liveHeader">
+          <div class="live-header-critical" data-live-header-critical>
+            <span class="live-beacon" aria-label="WebSocket connection beacon"></span>
+            <div class="live-stat-pill live-stat-pill--critical"><span id="livePktCount">0</span> pkts</div>
+          </div>
           <button class="live-header-toggle" data-live-header-toggle id="liveHeaderToggle"
                   aria-expanded="false" aria-controls="liveHeaderBody"
                   aria-label="Show live stats">📊</button>
           <div class="live-header-body" data-live-header-body id="liveHeaderBody">
             <div class="live-title">
-              <span class="live-beacon"></span>
               MESH LIVE
             </div>
             <div class="live-stats-row">
-              <div class="live-stat-pill"><span id="livePktCount">0</span> pkts</div>
               <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
               <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
               <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
