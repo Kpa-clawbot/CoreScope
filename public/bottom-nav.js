@@ -279,6 +279,15 @@
   }
 
   function init() {
+    // Singleton guard: init() may be invoked twice if (a) DOMContentLoaded
+    // fires AND (b) something else re-imports the script later, or if a
+    // future SPA-like re-mount path is added. The internal `build()` is
+    // idempotent (early-returns on existing [data-bottom-nav]), but the
+    // `hashchange` listener and the document-level outside-click /
+    // keydown listeners in wireMoreSheet() would otherwise stack, leaking
+    // handlers exactly like PR #1180's MQL-leak class. Bail on second call.
+    if (window.__bottomNavInitDone) return;
+    window.__bottomNavInitDone = true;
     build();
     syncActive();
     window.addEventListener('hashchange', syncActive);
