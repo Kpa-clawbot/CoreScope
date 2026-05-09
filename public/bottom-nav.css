@@ -50,22 +50,22 @@
      * fixed-position descendants (we have none, but cheap insurance). */
   }
 
-  /* Suppress the desktop NAV LINKS + right-side cluster when the
-   * bottom nav is active — but KEEP the .nav-brand (logo) visible.
-   * The brand mark is identity, not navigation, so the "no duplicate
-   * nav UX" rule applies only to the link/menu cluster. The existing
-   * #1137 mobile-logo path (.brand-mark-only at ≤400px) continues to
-   * work because .top-nav stays in the layout. */
+  /* Suppress the inline link bar and right-side cluster — but KEEP
+   * .nav-brand (logo identity) AND #hamburger visible. The "no duplicate
+   * nav UX" rule applies to the LINK CLUSTER, not the brand or the
+   * hamburger that surfaces long-tail routes (Tools, Lab, Perf, Audio
+   * Lab) the bottom-nav doesn't carry. The existing #1137 mobile-logo
+   * path (.brand-mark-only at ≤400px) continues to work because the
+   * .top-nav stays in the layout. */
   .top-nav .nav-links,
   .top-nav .nav-more-wrap,
   .top-nav .nav-right,
-  .top-nav .nav-stats,
-  .top-nav #hamburger {
+  .top-nav .nav-stats {
     display: none !important;
   }
-  /* Tighten top-nav to brand-only height at narrow widths. */
+  /* Brand on the left, hamburger on the right at narrow widths. */
   .top-nav {
-    justify-content: flex-start;
+    justify-content: space-between;
   }
 
   /* Reserve space at page bottom so fixed-positioned bottom-nav does
