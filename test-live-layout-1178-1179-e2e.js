@@ -92,6 +92,60 @@ async function gotoLive(page) {
     page.on('pageerror', (e) => console.error('[pageerror]', e.message));
     await step('[360x800] navigate to /live', async () => { await gotoLive(page); });
 
+    // (c0) Mesh-Operator review #1180: beacon + pkt count must remain visible
+    //      even when the header body is collapsed at narrow widths.
+    await step('[360x800] beacon + pkt count visible while header body is collapsed', async () => {
+      const r = await page.evaluate(() => {
+        const beacon = document.querySelector('.live-beacon');
+        const pkt = document.querySelector('#livePktCount');
+        const body = document.querySelector('[data-live-header-body]');
+        const bodyHidden = body && (body.hasAttribute('hidden') ||
+                                    getComputedStyle(body).display === 'none');
+        function vis(el) {
+          if (!el) return false;
+          const cs = getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        }
+        return {
+          bodyHidden,
+          beaconVisible: vis(beacon),
+          pktVisible: vis(pkt),
+          // The pill wrapping the count must also be visible (not just the
+          // span hidden inside a collapsed parent with display:none).
+          pktPillVisible: vis(pkt && pkt.closest('.live-stat-pill')),
+        };
+      });
+      assert(r.bodyHidden, 'header body must be collapsed at narrow viewport pre-click');
+      assert(r.beaconVisible, '.live-beacon must remain visible while header body is collapsed');
+      assert(r.pktVisible, '#livePktCount must remain visible while header body is collapsed');
+      assert(r.pktPillVisible, 'pkt-count pill must remain visible while header body is collapsed');
+    });
+
+    // (c1) Mesh-Operator review #1180: toggles ≥48×48 tap target (#1060 floor,
+    //      AGENTS' glove operability rule).
+    await step('[360x800] both toggles ≥48×48 tap target', async () => {
+      const r = await page.evaluate(() => {
+        function box(sel) {
+          const el = document.querySelector(sel);
+          if (!el) return null;
+          const rect = el.getBoundingClientRect();
+          return { w: rect.width, h: rect.height };
+        }
+        return {
+          header:   box('[data-live-header-toggle]'),
+          controls: box('[data-live-controls-toggle]'),
+        };
+      });
+      assert(r.header,   '[data-live-header-toggle] not found');
+      assert(r.controls, '[data-live-controls-toggle] not found');
+      assert(r.header.w >= 48 && r.header.h >= 48,
+        `header toggle must be ≥48×48, got ${r.header.w}×${r.header.h}`);
+      assert(r.controls.w >= 48 && r.controls.h >= 48,
+        `controls toggle must be ≥48×48, got ${r.controls.w}×${r.controls.h}`);
+    });
+
     // (c)
     await step('[360x800] header toggle visible; stats body hidden until click', async () => {
       const r = await page.evaluate(() => {
