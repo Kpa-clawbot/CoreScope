@@ -337,6 +337,22 @@
     releasePointer();
   }
 
+  // Browser may steal pointer capture (e.g. orientation change, parent
+  // scroll start, focus change). When that happens neither pointerup nor
+  // pointercancel are guaranteed — we'd leak state and visuals. Treat
+  // lost-capture identically to cancel.
+  function onPointerLostCapture(e) {
+    if (!pointerActive || e.pointerId !== pointerId) return;
+    if (activeRow) {
+      activeRow.style.transform = '';
+      activeRow.classList.remove('row-swiping');
+      activeRow = null;
+    }
+    var so = findSlideOver(startTarget) || document.querySelector('.slide-over-panel');
+    if (so) so.style.transform = '';
+    releasePointer();
+  }
+
   function releasePointer() {
     try {
       if (capturedEl && pointerId != null && typeof capturedEl.releasePointerCapture === 'function') {
@@ -379,6 +395,7 @@
   document.addEventListener('pointermove', onPointerMove, { passive: false });
   document.addEventListener('pointerup', onPointerUp, { passive: true });
   document.addEventListener('pointercancel', onPointerCancel, { passive: true });
+  document.addEventListener('lostpointercapture', onPointerLostCapture, { passive: true });
   document.addEventListener('click', onClickAction, true);
 
   // Public API used by tests / future callers.

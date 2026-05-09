@@ -3518,7 +3518,7 @@ body { touch-action: pan-y; }
   display: flex;
   align-items: stretch;
   gap: 0;
-  background: var(--card, #1a1a1a);
+  background: var(--card-bg, #1a1a1a);
   border: 1px solid var(--border, #333);
   border-radius: 6px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
