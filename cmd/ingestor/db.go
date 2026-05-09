@@ -542,6 +542,17 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] from_pubkey column + index added")
 	}
 
+	// Migration: covering index on observations(timestamp, observer_idx) for fast
+	// multi-window packet count queries. Allows the COUNT GROUP BY to be answered
+	// entirely from the index without touching main table rows.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'obs_ts_obs_covering_idx_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding covering index observations(timestamp, observer_idx)...")
+		db.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_ts_obs ON observations(timestamp, observer_idx)`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('obs_ts_obs_covering_idx_v1')`)
+		log.Println("[migration] idx_observations_ts_obs created")
+	}
+
 	return nil
 }
 

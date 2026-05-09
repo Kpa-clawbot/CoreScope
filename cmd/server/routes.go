@@ -2123,13 +2123,13 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Batch lookup: packet counts per observer for multiple windows
-	oneHourAgo  := time.Now().Add(-1 * time.Hour).Unix()
-	oneDayAgo   := time.Now().Add(-24 * time.Hour).Unix()
-	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Unix()
-	pktCounts    := s.db.GetObserverPacketCounts(oneHourAgo)
-	pktCounts24h := s.db.GetObserverPacketCounts(oneDayAgo)
-	pktCounts7d  := s.db.GetObserverPacketCounts(sevenDaysAgo)
+	// Batch lookup: packet counts for all three windows in a single query.
+	now := time.Now()
+	pktCounts := s.db.GetObserverAllPacketCounts(
+		now.Add(-1*time.Hour).Unix(),
+		now.Add(-24*time.Hour).Unix(),
+		now.Add(-7*24*time.Hour).Unix(),
+	)
 
 	// Batch lookup: node locations only for observer IDs (not all nodes)
 	observerIDs := make([]string, len(observers))
@@ -2144,18 +2144,8 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 		if s.cfg != nil && s.cfg.IsObserverBlacklisted(o.ID) {
 			continue
 		}
-		plh := 0
-		if c, ok := pktCounts[o.ID]; ok {
-			plh = c
-		}
-		pl24h := 0
-		if c, ok := pktCounts24h[o.ID]; ok {
-			pl24h = c
-		}
-		pl7d := 0
-		if c, ok := pktCounts7d[o.ID]; ok {
-			pl7d = c
-		}
+		w := pktCounts[o.ID]
+		plh, pl24h, pl7d := w.Hour, w.Day, w.Week
 		var lat, lon, nodeRole interface{}
 		if nodeLoc, ok := nodeLocations[strings.ToLower(o.ID)]; ok {
 			lat = nodeLoc["lat"]

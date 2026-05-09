@@ -1770,6 +1770,51 @@ func (db *DB) GetMaxObservationID() int {
 	return maxID
 }
 
+// ObserverPacketWindows holds packet counts for three time windows per observer.
+type ObserverPacketWindows struct{ Hour, Day, Week int }
+
+// GetObserverAllPacketCounts returns packet counts for three time windows in a
+// single query instead of three separate scans. sinceEpoch values must be Unix
+// timestamps in seconds (same unit as observations.timestamp).
+func (db *DB) GetObserverAllPacketCounts(oneHourAgo, oneDayAgo, sevenDaysAgo int64) map[string]ObserverPacketWindows {
+	out := make(map[string]ObserverPacketWindows)
+	var rows *sql.Rows
+	var err error
+	if db.isV3 {
+		rows, err = db.conn.Query(`
+			SELECT obs.id,
+				COUNT(CASE WHEN o.timestamp > ? THEN 1 END),
+				COUNT(CASE WHEN o.timestamp > ? THEN 1 END),
+				COUNT(*)
+			FROM observations o
+			JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE o.timestamp > ?
+			GROUP BY o.observer_idx`,
+			oneHourAgo, oneDayAgo, sevenDaysAgo)
+	} else {
+		rows, err = db.conn.Query(`
+			SELECT o.observer_id,
+				COUNT(CASE WHEN o.timestamp > ? THEN 1 END),
+				COUNT(CASE WHEN o.timestamp > ? THEN 1 END),
+				COUNT(*)
+			FROM observations o
+			WHERE o.observer_id IS NOT NULL AND o.timestamp > ?
+			GROUP BY o.observer_id`,
+			oneHourAgo, oneDayAgo, sevenDaysAgo)
+	}
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var w ObserverPacketWindows
+		rows.Scan(&id, &w.Hour, &w.Day, &w.Week)
+		out[id] = w
+	}
+	return out
+}
+
 // GetObserverPacketCounts returns packetsLastHour for all observers (batch query).
 func (db *DB) GetObserverPacketCounts(sinceEpoch int64) map[string]int {
 	counts := make(map[string]int)
