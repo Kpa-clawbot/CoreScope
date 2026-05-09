@@ -476,6 +476,18 @@ let wsListeners = [];
 // --- Brand-logo packet-driven pulse (#1173) ---
 // Replaces the legacy live-dot indicator. Class-toggle only (CSS animations); colors come from
 // --logo-accent / --logo-accent-hi tokens. Test seam at window.__corescopeLogo.
+//
+// Cache the prefers-reduced-motion MediaQueryList ONCE at module load (#1177
+// Carmack must-fix #2). Calling window.matchMedia on every pulse() allocates
+// a new MQL + parses the query string — wasteful at 15Hz. The CSS @media rule
+// already handles render-time switching, so we just cache and read .matches.
+var _reducedMotionMQL = null;
+try {
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    _reducedMotionMQL = window.matchMedia('(prefers-reduced-motion: reduce)');
+  }
+} catch (_) { _reducedMotionMQL = null; }
+
 const Logo = (function () {
   const RATE_GAP_MS = 66;       // 15/sec (≤16 toggles per second).
   const HALF_MS = 80;           // each half of a ping ≤80ms.
@@ -484,11 +496,10 @@ const Logo = (function () {
   let flip = 0;                 // 0 → A→B, 1 → B→A.
   let lastDirection = null;     // 'a' or 'b' (source circle).
   let connected = true;         // WS state — gates in-flight chained pulses.
-  let generation = 0;           // bumped on setConnected(false) to cancel scheduled halves.
+  let generation = 0;           // bumped on setConnected(false) / visibilitychange to cancel scheduled halves.
 
   function reducedMotion() {
-    try { return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
-    catch (_) { return false; }
+    return _reducedMotionMQL ? !!_reducedMotionMQL.matches : false;
   }
   function $all(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
   function clearAll() {
@@ -525,6 +536,16 @@ const Logo = (function () {
     }, 140);
   }
   function pulse(_msg) {
+    // Hidden-tab gate (#1177 Carmack must-fix #1): drop the pulse BEFORE
+    // mutating lastPingTs and BEFORE scheduling any rAF/setTimeout chain.
+    // Background tabs throttle timers but still ran the source-class toggle
+    // and queued a chain that fired in a clump on tab focus — wasted work
+    // and a visible storm. Returning early here makes the gate cost ~1
+    // property read per WS message.
+    if (typeof document !== 'undefined' && document.hidden) {
+      stats.dropped++;
+      return false;
+    }
     if (!connected) { stats.dropped++; return false; }
     const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     if (now - lastPingTs < RATE_GAP_MS) { stats.dropped++; return false; }
@@ -566,6 +587,23 @@ const Logo = (function () {
     get stats() { return { triggered: stats.triggered, dropped: stats.dropped }; },
   });
   try { window.__corescopeLogo = api; } catch (_) {}
+
+  // Visibility gate (#1177 Carmack must-fix #1): when the tab becomes
+  // hidden, bump generation so any in-flight chained pulse halves bail
+  // out before they paint, and clear any active pulse classes. The
+  // pulse() entry already early-returns on document.hidden — this handles
+  // pulses already mid-flight at the moment the tab is backgrounded.
+  try {
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) {
+          generation++;
+          clearAll();
+        }
+      });
+    }
+  } catch (_) {}
+
   return api;
 })();
 
