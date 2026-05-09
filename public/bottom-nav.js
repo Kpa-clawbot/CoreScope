@@ -55,6 +55,14 @@
   // Long-tail routes surfaced in the More sheet. Mirrors data-route values
   // from the existing top-nav (public/index.html). Order matches what
   // operators expect from the desktop top-nav.
+  //
+  // ⚠️ MANUAL SYNC REQUIRED ⚠️
+  // This list is intentionally hardcoded (not generated from
+  // `.top-nav .nav-link[data-route]`) because the top-nav HTML is in
+  // mid-rewrite and not a reliable single-source-of-truth. If you add a
+  // new top-nav route (e.g. a future "Lab" page), you MUST also append
+  // it here, or it will be unreachable on phones at ≤768px (the
+  // hamburger is hidden at that breakpoint — see bottom-nav.css).
   var MORE_ROUTES = [
     { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     icon: '🖥️' },
     { route: 'tools',     hash: '#/tools',     label: 'Tools',     icon: '🛠️' },
