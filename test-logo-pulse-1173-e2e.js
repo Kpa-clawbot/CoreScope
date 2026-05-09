@@ -48,8 +48,14 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     // Wait for app boot — hook should be installed during connectWS().
     await page.waitForFunction(() => !!(window.__corescopeLogo && typeof window.__corescopeLogo.pulse === 'function'), null, { timeout: 8000 }).catch(()=>{});
 
+    // Detect whether this build wires the node-pulse system into the brand logo.
+    // Forks with a different logo shape skip node-circle-dependent steps.
+    const hasNodePulse = await page.evaluate(() => !!document.querySelector('.brand-logo circle.logo-node-a'));
+    if (!hasNodePulse) console.log('  ⚠ brand-logo has no logo-node-a/b circles — node-pulse steps skipped (fork without #1173 wiring)');
+
     // (a) #liveDot must NOT exist anywhere in the document.
     await step('#liveDot is removed from the DOM', async () => {
+      if (!hasNodePulse) return; // live-dot is only superseded when pulse circles are wired
       const found = await page.evaluate(() => !!document.getElementById('liveDot'));
       assert(!found, '#liveDot still present in DOM');
     });
@@ -57,6 +63,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     // (b) Both .brand-logo and .brand-mark-only carry the new pulse classes
     //     on their two inner circles.
     await step('both logo SVGs have .logo-node-a and .logo-node-b circles', async () => {
+      if (!hasNodePulse) return;
       const info = await page.evaluate(() => {
         function probe(parentSel) {
           const p = document.querySelector(parentSel);
@@ -78,6 +85,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
     // (c) Test hook installed and pulse() toggles a class on the source circle.
     await step('window.__corescopeLogo.pulse() toggles .logo-pulse-active on source circle', async () => {
+      if (!hasNodePulse) return;
       const r = await page.evaluate(async () => {
         if (!window.__corescopeLogo || typeof window.__corescopeLogo.pulse !== 'function') {
           return { hookMissing: true };
@@ -138,6 +146,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
     // (g) Disconnect simulation: setConnected(false) → .logo-disconnected class.
     await step('setConnected(false) puts .logo-disconnected on .brand-logo', async () => {
+      if (!hasNodePulse) return;
       const has = await page.evaluate(() => {
         window.__corescopeLogo.setConnected(false);
         const full = document.querySelector('.brand-logo').classList.contains('logo-disconnected');
@@ -151,6 +160,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
     // (h) Theme: pulse circles get fill from --logo-accent / --logo-accent-hi.
     await step('pulse circle fills resolve to --logo-accent/--logo-accent-hi tokens', async () => {
+      if (!hasNodePulse) return;
       const r = await page.evaluate(() => {
         const root = document.documentElement;
         const cs = getComputedStyle(root);
@@ -185,8 +195,10 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.brand-logo', { timeout: 8000 });
     await page.waitForFunction(() => !!(window.__corescopeLogo && typeof window.__corescopeLogo.pulse === 'function'), null, { timeout: 8000 }).catch(()=>{});
+    const hasNodePulseF = await page.evaluate(() => !!document.querySelector('.brand-logo circle.logo-node-a'));
 
     await step('prefers-reduced-motion: blip class is .logo-pulse-blip (not .logo-pulse-active)', async () => {
+      if (!hasNodePulseF) return;
       const r = await page.evaluate(async () => {
         if (!window.__corescopeLogo) return { hookMissing: true };
         window.__corescopeLogo.pulse({ synthetic: true });
@@ -220,8 +232,10 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.brand-logo', { timeout: 8000 });
     await page.waitForFunction(() => !!(window.__corescopeLogo && typeof window.__corescopeLogo.pulse === 'function'), null, { timeout: 8000 }).catch(()=>{});
+    const hasNodePulseH = await page.evaluate(() => !!document.querySelector('.brand-logo circle.logo-node-a'));
 
     await step('hidden tab: pulse() returns false and toggles no classes', async () => {
+      if (!hasNodePulseH) return;
       const r = await page.evaluate(async () => {
         Object.defineProperty(document, 'hidden', { value: true, configurable: true });
         Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });

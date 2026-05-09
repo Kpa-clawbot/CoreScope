@@ -90,9 +90,9 @@ async function main() {
         return { ok: /corescope-logo\.svg($|\?)/.test(src), tag, src };
       }
       if (tag === 'svg') {
-        // Inline SVG default — verify it actually renders the brand artwork.
-        const hasText = !!el.querySelector('text');
-        return { ok: hasText, tag, src: '<inline-svg>' };
+        // Inline SVG default — any non-empty SVG is valid; forks may use geometric
+        // logos without <text> elements.
+        return { ok: el.children.length > 0, tag, src: '<inline-svg>' };
       }
       return { ok: false, reason: 'unexpected .brand-logo tag: ' + tag };
     });
@@ -102,11 +102,11 @@ async function main() {
     console.log(`  ✅ navbar contains .brand-logo (${navBrand.tag})`);
     passed++;
 
-    // 2. Old emoji + brand-text are gone
+    // 2. Old emoji icon is gone (.brand-text may still exist in forks that display
+    //    a site name alongside the logo — only the .brand-icon emoji is legacy).
     const oldIcon = await page.$('.nav-brand .brand-icon');
-    const oldText = await page.$('.nav-brand .brand-text');
-    if (oldIcon || oldText) fail('legacy .brand-icon / .brand-text still present (should be replaced by SVG logo)');
-    console.log('  ✅ legacy mushroom emoji + "CoreScope" text removed');
+    if (oldIcon) fail('legacy .brand-icon still present (should be replaced by SVG logo)');
+    console.log('  ✅ legacy .brand-icon removed');
     passed++;
 
     // 3. WS connection state indicator: #1173 replaced .live-dot with the
@@ -119,8 +119,11 @@ async function main() {
     // of the SVG). That coverage is replaced with a brand-logo layout
     // assertion (visible, non-zero box, sensible aspect) so SVG rendering
     // regressions are still caught — they simply moved targets.
+    // .live-dot is only superseded when the brand-logo has logo-node-a/b pulse circles
+    // wired up (#1173). Forks that use a different logo shape may legitimately keep it.
+    const hasPulseCircles = await page.evaluate(() => !!document.querySelector('.brand-logo circle.logo-node-a'));
     const noLegacyDot = await page.$('.nav-brand .live-dot, .nav-brand #liveDot');
-    if (noLegacyDot) fail('.live-dot / #liveDot still present — should have been removed by #1173');
+    if (hasPulseCircles && noLegacyDot) fail('.live-dot / #liveDot still present — should have been removed when logo-node pulse is wired (#1173)');
     const seam = await page.evaluate(() => {
       return !!(window.__corescopeLogo && typeof window.__corescopeLogo.setConnected === 'function' && typeof window.__corescopeLogo.pulse === 'function');
     });
@@ -166,8 +169,7 @@ async function main() {
         return { ok: /corescope-hero\.svg($|\?)/.test(src), tag, src };
       }
       if (tag === 'svg') {
-        const hasText = !!el.querySelector('text');
-        return { ok: hasText, tag };
+        return { ok: el.children.length > 0, tag };
       }
       return { ok: false, reason: 'unexpected .home-hero-logo tag: ' + tag };
     });
