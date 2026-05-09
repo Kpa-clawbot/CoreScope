@@ -21,6 +21,15 @@
  * the issue body's explicit guidance.
  */
 
+/* #1174 mesh-op review: --bottom-nav-reserve is the contract page-level
+ * full-viewport rules use to subtract the bottom-nav's height from
+ * 100dvh. 0px at desktop (no nav reserved); 56px + safe-area at ≤768px.
+ * Pages opt-in by referencing it (see public/live.css for /live, and
+ * #app.app-fixed in style.css for the SPA fixed-page container). */
+:root {
+  --bottom-nav-reserve: 0px;
+}
+
 /* Default: hidden on wide viewports. The bottom-nav element exists in
  * the DOM at all widths (build runs at DOMContentLoaded) but is only
  * rendered to the user at ≤768px. */
@@ -29,6 +38,13 @@
 }
 
 @media (max-width: 768px) {
+  /* #1174 mesh-op review: set the reserve token at the breakpoint so
+   * page-level full-viewport rules (e.g. .live-page, #app.app-fixed)
+   * automatically subtract the bottom-nav height. */
+  :root {
+    --bottom-nav-reserve: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+
   .bottom-nav {
     display: flex;
     position: fixed;
@@ -227,6 +243,33 @@
 
 @media (prefers-reduced-motion: reduce) {
   .bottom-nav-sheet-item {
+    transition: none;
+  }
+}
+
+/* ─── #1174 mesh-op review: bottom-nav mesh-alive indicator ───
+ * .nav-stats (top-nav mesh-alive pulse) is hidden at ≤768. Add a thin
+ * 2px top border to the bottom-nav that mirrors the brand-logo's
+ * connected/disconnected state via a class toggled from app.js
+ * (window.__corescopeLogo.setConnected). Cheap, peripheral-vision
+ * visible, no per-tab clutter.
+ *
+ * Default (connected): accent-tinted border. Disconnected: red.
+ * The base bottom-nav rule already declares border-top: 1px solid
+ * var(--border) — we override its color with a slightly heavier
+ * 2px stripe so the connectivity color is the dominant visual.
+ */
+@media (max-width: 768px) {
+  .bottom-nav {
+    border-top: 2px solid var(--accent);
+    transition: border-top-color 200ms ease;
+  }
+  .bottom-nav.disconnected {
+    border-top-color: var(--danger, #ef4444);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav {
     transition: none;
   }
 }

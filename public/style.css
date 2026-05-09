@@ -650,7 +650,11 @@ input[type="week"] {
    a fixed-height container (maps, virtual-scroll, split-panels) add
    .app-fixed via the router so their children can use height:100%. */
 #app { min-height: calc(100vh - 52px); min-height: calc(100dvh - 52px); }
-#app.app-fixed { height: calc(100vh - 52px); height: calc(100dvh - 52px); min-height: 0; overflow: hidden; }
+/* #1174 mesh-op review: subtract --bottom-nav-reserve so /map and the
+ * other fixed-height pages (packets, nodes, channels, audio-lab) do not
+ * have their last 56px covered by the bottom-nav at ≤768. The token is
+ * 0px at desktop so wide-viewport behavior is unchanged. */
+#app.app-fixed { height: calc(100vh - 52px - var(--bottom-nav-reserve, 0px)); height: calc(100dvh - 52px - var(--bottom-nav-reserve, 0px)); min-height: 0; overflow: hidden; }
 
 .split-layout {
   display: flex; height: 100%; overflow: hidden;

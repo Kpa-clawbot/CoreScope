@@ -1,17 +1,21 @@
 /* ========== LIVE TRACE PAGE ========== */
-/* Live page takes full viewport */
+/* Live page takes full viewport.
+ * #1174 mesh-op review: subtract --bottom-nav-reserve (defined in
+ * bottom-nav.css; 0px at desktop, 56px+safe-area at ≤768) so the
+ * bottom-nav does not cover VCR controls / Leaflet zoom / live trace
+ * markers on phones. The 52px term accounts for the top-nav above. */
 .live-page {
   position: relative;
   width: 100%;
-  height: 100vh;
-  height: 100dvh;
+  height: calc(100vh - 52px - var(--bottom-nav-reserve, 0px));
+  height: calc(100dvh - 52px - var(--bottom-nav-reserve, 0px));
   overflow: hidden;
   background: var(--surface-0);
 }
 /* Override #app height constraint on live page */
 #app:has(.live-page) {
-  height: 100vh;
-  height: 100dvh;
+  height: calc(100vh - 52px - var(--bottom-nav-reserve, 0px));
+  height: calc(100dvh - 52px - var(--bottom-nav-reserve, 0px));
   overflow: visible;
 }
 

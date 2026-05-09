@@ -142,13 +142,27 @@
 
   function syncActive() {
     var route = currentRoute();
+    // #1174 mesh-op review: the More tab represents the long-tail
+    // routes; reflect that in the active-class so users on /tools,
+    // /analytics, etc. still see WHICH tab they're under. Without this
+    // every long-tail route lit up zero tabs.
+    var moreRouteSet = {};
+    for (var k = 0; k < MORE_ROUTES.length; k++) moreRouteSet[MORE_ROUTES[k].route] = 1;
+    var routeIsLongTail = !!moreRouteSet[route];
     var tabs = document.querySelectorAll('[data-bottom-nav-tab]');
     for (var i = 0; i < tabs.length; i++) {
       var t = tabs[i];
       var tabRoute = t.getAttribute('data-bottom-nav-tab');
       if (tabRoute === 'more') {
-        // The More tab is highlighted only while its sheet is open;
-        // it never represents a route itself. Skip route-match.
+        // The More tab IS active when the current route belongs to the
+        // long-tail set surfaced by the More sheet. We do NOT add
+        // aria-current here — the tab toggles a sheet, not a single
+        // page, so aria-current="page" would lie. The visual active
+        // class is the user-facing affordance; that's enough.
+        if (routeIsLongTail) t.classList.add('active');
+        else if (!isSheetOpen()) t.classList.remove('active');
+        // If the sheet is open we leave .active alone — openSheet()
+        // owns the class while open.
         continue;
       }
       if (tabRoute === route) {
