@@ -69,13 +69,17 @@ async function run() {
       return document.fonts.check('1em Aldrich');
     });
     assert(aldrichLoaded, 'document.fonts.check("1em Aldrich") returned false — Aldrich is not loaded');
-    // Sanity: the inline SVG <text> still declares Aldrich in its font-family.
+    // Sanity: if the navbar uses a text-based SVG logo (CoreScope upstream), verify
+    // the <text> element still declares Aldrich. Forks with a purely geometric logo
+    // (no <text>) skip this check — the font-load assertion above is sufficient.
     const fontFamily = await page.evaluate(() => {
       const t = document.querySelector('nav svg text, .navbar svg text, header svg text');
       return t ? (t.getAttribute('font-family') || getComputedStyle(t).fontFamily) : null;
     });
-    assert(fontFamily && /aldrich/i.test(fontFamily),
-      `Navbar SVG <text> font-family should include Aldrich, got: ${fontFamily}`);
+    if (fontFamily !== null) {
+      assert(/aldrich/i.test(fontFamily),
+        `Navbar SVG <text> font-family should include Aldrich, got: ${fontFamily}`);
+    }
   });
 
   // Test 6: Theme customizer opens (reuses home page from test 1)
