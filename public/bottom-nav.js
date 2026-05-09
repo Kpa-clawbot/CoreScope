@@ -1,41 +1,70 @@
 /* Issue #1061 — Bottom navigation for narrow viewports.
+ * Issue #1174 — Add 6th "More" tab + bottom-anchored sheet for long-tail routes.
  *
- * Renders 5 primary tabs (Home, Packets, Live, Map, Channels) anchored to
- * the bottom on viewports ≤768px. Tabs are <a href="#/..."> so they reuse
- * the existing hashchange-driven router in app.js (no full reload, no
- * reimplementation of routing logic).
+ * Renders 6 tabs anchored to the bottom on viewports ≤768px:
+ *   1. Home    — primary
+ *   2. Packets — primary
+ *   3. Live    — primary
+ *   4. Map     — primary
+ *   5. Channels — primary
+ *   6. More    — toggles a bottom-anchored sheet listing the long-tail
+ *                routes (Nodes, Tools, Observers, Analytics, Perf, Audio Lab).
+ *                Replaces the hamburger at ≤768px (#1174 design call).
  *
- * Stable selectors for tests / future automation: every tab carries
- *   data-bottom-nav-tab="<route>"
- * The container is <nav data-bottom-nav> (also class="bottom-nav").
+ * Tabs are <a href="#/..."> so they reuse the existing hashchange-driven
+ * router in app.js (no full reload, no reimplementation of routing logic).
+ * The "More" tab is a <button> (not <a>) since it toggles UI rather than
+ * navigating to a hash.
+ *
+ * Stable selectors for tests / future automation:
+ *   [data-bottom-nav]                       — the <nav> container
+ *   [data-bottom-nav-tab="<route>"]         — each tab including "more"
+ *   [data-bottom-nav-sheet]                 — the popover sheet
+ *   [data-bottom-nav-more-route="<route>"]  — each long-tail route in the sheet
  *
  * Active-tab highlight is a class toggle ("active") set on hashchange.
  * Visual treatment lives in bottom-nav.css and respects
  * prefers-reduced-motion (transitions disabled).
  *
- * Top-nav suppression is handled in CSS (display:none at ≤768px). The
- * existing hamburger / nav-more dropdown behavior at ≤767px already
- * covered the long-tail routes (Tools, Lab, Perf, etc.); since the
- * top-nav is fully suppressed, those long-tail routes remain reachable
- * by direct URL (e.g. #/tools). A future follow-up may add a "More"
- * tab or a hamburger fallback (deferred per issue body).
+ * Sheet behavior:
+ *   - tap More → sheet opens, aria-expanded="true"
+ *   - tap More while open → sheet closes (toggle, not push)
+ *   - tap any route inside → in-app router navigates AND sheet closes
+ *   - tap outside (anywhere not the sheet or the More tab) → sheet closes
+ *   - sheet has role="menu" for a11y
+ *
+ * The sheet DOM is built lazily on first open — it's only used at ≤768px
+ * and there's no point sitting in the DOM at desktop widths.
  */
 (function () {
   'use strict';
 
   if (typeof document === 'undefined') return;
 
-  // 5 tabs in spec'd order. Each entry: { route, hash, label, icon }.
-  // Labels are kept short to fit narrow widths; icons are emoji to avoid
-  // shipping an icon font. Routes match the data-route values used by
-  // the existing top-nav so any future router work stays consistent.
+  // 5 primary tabs + the More toggle. Each entry: { route, hash, label, icon }.
+  // For More, hash is null (not a route).
   var TABS = [
     { route: 'home',     hash: '#/home',     label: 'Home',     icon: '🏠' },
     { route: 'packets',  hash: '#/packets',  label: 'Packets',  icon: '📦' },
     { route: 'live',     hash: '#/live',     label: 'Live',     icon: '🔴' },
     { route: 'map',      hash: '#/map',      label: 'Map',      icon: '🗺️' },
     { route: 'channels', hash: '#/channels', label: 'Channels', icon: '💬' },
+    { route: 'more',     hash: null,         label: 'More',     icon: '☰' },
   ];
+
+  // Long-tail routes surfaced in the More sheet. Mirrors data-route values
+  // from the existing top-nav (public/index.html). Order matches what
+  // operators expect from the desktop top-nav.
+  var MORE_ROUTES = [
+    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     icon: '🖥️' },
+    { route: 'tools',     hash: '#/tools',     label: 'Tools',     icon: '🛠️' },
+    { route: 'observers', hash: '#/observers', label: 'Observers', icon: '👁️' },
+    { route: 'analytics', hash: '#/analytics', label: 'Analytics', icon: '📊' },
+    { route: 'perf',      hash: '#/perf',      label: 'Perf',      icon: '⚡' },
+    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', icon: '🎵' },
+  ];
+
+  var SHEET_ID = 'bottomNavMoreSheet';
 
   function currentRoute() {
     // Mirror app.js navigate(): strip "#/" and any trailing "?…" / "/…".
@@ -58,12 +87,22 @@
     nav.setAttribute('aria-label', 'Bottom navigation');
 
     TABS.forEach(function (t) {
-      var a = document.createElement('a');
-      a.className = 'bottom-nav-tab';
-      a.setAttribute('data-bottom-nav-tab', t.route);
-      a.setAttribute('data-route', t.route);
-      a.setAttribute('href', t.hash);
-      a.setAttribute('aria-label', t.label);
+      var el;
+      if (t.route === 'more') {
+        // <button> for the toggle: it does not navigate.
+        el = document.createElement('button');
+        el.setAttribute('type', 'button');
+        el.setAttribute('aria-haspopup', 'menu');
+        el.setAttribute('aria-expanded', 'false');
+        el.setAttribute('aria-controls', SHEET_ID);
+      } else {
+        el = document.createElement('a');
+        el.setAttribute('href', t.hash);
+      }
+      el.className = 'bottom-nav-tab';
+      el.setAttribute('data-bottom-nav-tab', t.route);
+      el.setAttribute('data-route', t.route);
+      el.setAttribute('aria-label', t.label);
 
       var ic = document.createElement('span');
       ic.className = 'bottom-nav-icon';
@@ -74,9 +113,9 @@
       lb.className = 'bottom-nav-label';
       lb.textContent = t.label;
 
-      a.appendChild(ic);
-      a.appendChild(lb);
-      nav.appendChild(a);
+      el.appendChild(ic);
+      el.appendChild(lb);
+      nav.appendChild(el);
     });
 
     // Insert after <main> so it's a sibling at the body level — keeps
@@ -89,6 +128,8 @@
     } else {
       document.body.appendChild(nav);
     }
+
+    wireMoreSheet();
   }
 
   function syncActive() {
@@ -96,7 +137,13 @@
     var tabs = document.querySelectorAll('[data-bottom-nav-tab]');
     for (var i = 0; i < tabs.length; i++) {
       var t = tabs[i];
-      if (t.getAttribute('data-bottom-nav-tab') === route) {
+      var tabRoute = t.getAttribute('data-bottom-nav-tab');
+      if (tabRoute === 'more') {
+        // The More tab is highlighted only while its sheet is open;
+        // it never represents a route itself. Skip route-match.
+        continue;
+      }
+      if (tabRoute === route) {
         t.classList.add('active');
         t.setAttribute('aria-current', 'page');
       } else {
@@ -104,6 +151,131 @@
         t.removeAttribute('aria-current');
       }
     }
+  }
+
+  // ── More sheet ──
+  // Built lazily on first open; lives as a sibling of the <nav> so the
+  // bottom-nav's z-index/stacking is independent of the sheet. The sheet
+  // is anchored above the bottom-nav via CSS (bottom: <nav-height>).
+  function getOrBuildSheet() {
+    var existing = document.getElementById(SHEET_ID);
+    if (existing) return existing;
+
+    var sheet = document.createElement('div');
+    sheet.id = SHEET_ID;
+    sheet.className = 'bottom-nav-sheet';
+    sheet.setAttribute('data-bottom-nav-sheet', '');
+    sheet.setAttribute('role', 'menu');
+    sheet.setAttribute('aria-label', 'More navigation');
+    sheet.hidden = true;
+
+    MORE_ROUTES.forEach(function (r) {
+      var a = document.createElement('a');
+      a.className = 'bottom-nav-sheet-item';
+      a.setAttribute('href', r.hash);
+      a.setAttribute('role', 'menuitem');
+      a.setAttribute('data-bottom-nav-more-route', r.route);
+      a.setAttribute('data-route', r.route);
+
+      var ic = document.createElement('span');
+      ic.className = 'bottom-nav-sheet-icon';
+      ic.setAttribute('aria-hidden', 'true');
+      ic.textContent = r.icon;
+
+      var lb = document.createElement('span');
+      lb.className = 'bottom-nav-sheet-label';
+      lb.textContent = r.label;
+
+      a.appendChild(ic);
+      a.appendChild(lb);
+
+      // Tap a route → close sheet (the <a href> handles navigation via
+      // the existing hashchange router in app.js).
+      a.addEventListener('click', function () { closeSheet(); });
+
+      sheet.appendChild(a);
+    });
+
+    // Sit the sheet next to the nav so they share a stacking context.
+    var nav = document.querySelector('[data-bottom-nav]');
+    if (nav && nav.parentNode) {
+      nav.parentNode.insertBefore(sheet, nav);
+    } else {
+      document.body.appendChild(sheet);
+    }
+    return sheet;
+  }
+
+  function isSheetOpen() {
+    var sheet = document.getElementById(SHEET_ID);
+    return !!(sheet && !sheet.hidden);
+  }
+
+  function openSheet() {
+    var sheet = getOrBuildSheet();
+    sheet.hidden = false;
+    sheet.classList.add('open');
+    var moreTab = document.querySelector('[data-bottom-nav-tab="more"]');
+    if (moreTab) {
+      moreTab.setAttribute('aria-expanded', 'true');
+      moreTab.classList.add('active');
+    }
+  }
+
+  function closeSheet() {
+    var sheet = document.getElementById(SHEET_ID);
+    if (sheet) {
+      sheet.hidden = true;
+      sheet.classList.remove('open');
+    }
+    var moreTab = document.querySelector('[data-bottom-nav-tab="more"]');
+    if (moreTab) {
+      moreTab.setAttribute('aria-expanded', 'false');
+      moreTab.classList.remove('active');
+    }
+  }
+
+  function toggleSheet() {
+    if (isSheetOpen()) closeSheet();
+    else openSheet();
+  }
+
+  function wireMoreSheet() {
+    var moreTab = document.querySelector('[data-bottom-nav-tab="more"]');
+    if (!moreTab) return;
+    // Toggle on tap. Use click — covers mouse and synthesized tap.
+    moreTab.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      toggleSheet();
+    });
+
+    // Outside-click closes the sheet. Listen at document level; ignore
+    // clicks on the sheet itself or on the More tab (handled above).
+    document.addEventListener('click', function (ev) {
+      if (!isSheetOpen()) return;
+      var t = ev.target;
+      var sheet = document.getElementById(SHEET_ID);
+      if (sheet && sheet.contains(t)) return;
+      if (moreTab.contains(t)) return;
+      closeSheet();
+    });
+
+    // Tapping any OTHER bottom-nav tab also closes the sheet.
+    var otherTabs = document.querySelectorAll('[data-bottom-nav-tab]');
+    for (var i = 0; i < otherTabs.length; i++) {
+      var t = otherTabs[i];
+      if (t.getAttribute('data-bottom-nav-tab') === 'more') continue;
+      t.addEventListener('click', function () { closeSheet(); });
+    }
+
+    // Esc closes the sheet (a11y).
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && isSheetOpen()) closeSheet();
+    });
+
+    // Hashchange (any nav) also closes — covers programmatic navigation.
+    window.addEventListener('hashchange', function () { closeSheet(); });
   }
 
   function init() {
