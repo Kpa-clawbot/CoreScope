@@ -607,17 +607,32 @@ const Logo = (function () {
   return api;
 })();
 
+function setLiveDot(color) {
+  const dot = document.getElementById('liveDot');
+  if (dot) dot.style.background = color;
+}
+
+function flashLiveDot() {
+  const dot = document.getElementById('liveDot');
+  if (!dot) return;
+  dot.style.background = '#fff';
+  clearTimeout(dot._flashTimer);
+  dot._flashTimer = setTimeout(() => { dot.style.background = 'var(--status-green)'; }, 120);
+}
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}`);
-  ws.onopen = () => Logo.setConnected(true);
+  ws.onopen = () => { Logo.setConnected(true); setLiveDot('var(--status-green)'); };
   ws.onclose = () => {
     Logo.setConnected(false);
+    setLiveDot('var(--status-red)');
     setTimeout(connectWS, 3000);
   };
   ws.onerror = () => ws.close();
   ws.onmessage = (e) => {
     Logo.pulse(e);
+    flashLiveDot();
     try {
       const msg = JSON.parse(e.data);
       // Debounce cache invalidation — don't nuke on every packet
