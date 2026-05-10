@@ -134,6 +134,11 @@
           <a href="https://bunq.me/CornmeisterNL" target="_blank" rel="noopener" class="home-donate-btn">❤️ Support the project</a>
           <a href="https://discord.gg/HfJVk9J29K" target="_blank" rel="noopener" class="home-discord-btn">💬 Join the Discord</a>
         </div>
+        <div style="display:flex;justify-content:center;margin-top:20px">
+          <a href="https://dutchmeshcore.nl" target="_blank" rel="noopener">
+            <img src="/img/powered-by-dutchmeshcore.png" alt="Powered by Dutch Meshcore" style="max-width:320px;width:100%;height:auto;border-radius:8px" />
+          </a>
+        </div>
       </section>
 
       <section class="home-footer">
