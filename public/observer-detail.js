@@ -165,6 +165,15 @@
     const el = document.getElementById('obsDetailContent');
     if (!el) return;
 
+    // Pre-compute data sets so chart cards can be conditionally rendered in the template.
+    var mSamples = metrics && metrics.metrics ? metrics.metrics : [];
+    var uptimePoints     = mSamples.filter(function(m) { return m.uptime_secs != null; });
+    var batteryPoints    = mSamples.filter(function(m) { return m.battery_mv != null; });
+    var noiseFloorPoints = mSamples.filter(function(m) { return m.noise_floor != null; });
+    var airtimePoints    = mSamples.filter(function(m) { return m.tx_airtime_pct != null || m.rx_airtime_pct != null; });
+    var recvErrorPoints  = mSamples.filter(function(m) { return m.recv_errors != null; });
+    var queueLenPoints   = mSamples.filter(function(m) { return m.queue_len != null; });
+
     const title = document.getElementById('obsTitle');
     if (title) title.textContent = obs.name || obs.id.substring(0, 16) + '…';
 
@@ -265,57 +274,24 @@
         </div>
       </div>` : ''}
       <div class="obs-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:16px">
-        <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">Packets Over Time</h3>
-          <canvas id="obsTimeChart" role="img" aria-label="Packets over time chart"></canvas>
-        </div>
-        <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">Packet Types</h3>
-          <div style="max-width:280px;margin:0 auto"><canvas id="obsTypeChart" role="img" aria-label="Packet types chart"></canvas></div>
-        </div>
-        <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">Unique Nodes Heard</h3>
-          <canvas id="obsNodesChart" role="img" aria-label="Unique nodes heard chart"></canvas>
-        </div>
-        <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">SNR Distribution</h3>
-          <canvas id="obsSnrChart" role="img" aria-label="SNR distribution chart"></canvas>
-        </div>
-        <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">Uptime</h3>
-          <canvas id="obsUptimeChart" role="img" aria-label="Uptime chart"></canvas>
-        </div>
-        <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">Battery</h3>
-          <canvas id="obsBatteryChart" role="img" aria-label="Battery voltage chart"></canvas>
-        </div>
-        <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">Noise Floor</h3>
-          <canvas id="obsNoiseFloorChart" role="img" aria-label="Noise floor chart"></canvas>
-        </div>
-        <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">RSSI (avg per period)</h3>
-          <canvas id="obsRssiChart" role="img" aria-label="RSSI chart"></canvas>
-        </div>
-        <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em" id="obsAirtimeTitle">Airtime Utilization (%)</h3>
-          <canvas id="obsAirtimeChart" role="img" aria-label="Airtime utilization chart"></canvas>
-        </div>
-        <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">Receive Errors</h3>
-          <canvas id="obsRecvErrorsChart" role="img" aria-label="Receive errors chart"></canvas>
-        </div>
-        <div class="chart-card" style="padding:12px">
-          <h3 style="margin:0 0 8px;font-size:0.95em">TX Queue Length</h3>
-          <canvas id="obsQueueLenChart" role="img" aria-label="TX queue length chart"></canvas>
-        </div>
+        ${(analytics.timeline && analytics.timeline.length > 0) ? `<div class="chart-card" style="padding:12px"><h3 style="margin:0 0 8px;font-size:0.95em">Packets Over Time</h3><canvas id="obsTimeChart" role="img" aria-label="Packets over time chart"></canvas></div>` : ''}
+        ${analytics.packetTypes ? `<div class="chart-card" style="padding:12px"><h3 style="margin:0 0 8px;font-size:0.95em">Packet Types</h3><div style="max-width:280px;margin:0 auto"><canvas id="obsTypeChart" role="img" aria-label="Packet types chart"></canvas></div></div>` : ''}
+        ${(analytics.nodesTimeline && analytics.nodesTimeline.length > 0) ? `<div class="chart-card" style="padding:12px"><h3 style="margin:0 0 8px;font-size:0.95em">Unique Nodes Heard</h3><canvas id="obsNodesChart" role="img" aria-label="Unique nodes heard chart"></canvas></div>` : ''}
+        ${(analytics.snrDistribution && analytics.snrDistribution.length > 0) ? `<div class="chart-card" style="padding:12px"><h3 style="margin:0 0 8px;font-size:0.95em">SNR Distribution</h3><canvas id="obsSnrChart" role="img" aria-label="SNR distribution chart"></canvas></div>` : ''}
+        ${uptimePoints.length > 0 ? `<div class="chart-card" style="padding:12px"><h3 style="margin:0 0 8px;font-size:0.95em">Uptime</h3><canvas id="obsUptimeChart" role="img" aria-label="Uptime chart"></canvas></div>` : ''}
+        ${batteryPoints.length > 0 ? `<div class="chart-card" style="padding:12px"><h3 style="margin:0 0 8px;font-size:0.95em">Battery</h3><canvas id="obsBatteryChart" role="img" aria-label="Battery voltage chart"></canvas></div>` : ''}
+        ${noiseFloorPoints.length > 0 ? `<div class="chart-card" style="padding:12px"><h3 style="margin:0 0 8px;font-size:0.95em">Noise Floor</h3><canvas id="obsNoiseFloorChart" role="img" aria-label="Noise floor chart"></canvas></div>` : ''}
+        ${(analytics.rssiTimeline && analytics.rssiTimeline.length > 0) ? `<div class="chart-card" style="padding:12px"><h3 style="margin:0 0 8px;font-size:0.95em">RSSI (avg per period)</h3><canvas id="obsRssiChart" role="img" aria-label="RSSI chart"></canvas></div>` : ''}
+        ${airtimePoints.length > 0 ? `<div class="chart-card" style="padding:12px"><h3 style="margin:0 0 8px;font-size:0.95em" id="obsAirtimeTitle">Airtime Utilization (%)</h3><canvas id="obsAirtimeChart" role="img" aria-label="Airtime utilization chart"></canvas></div>` : ''}
+        ${recvErrorPoints.length > 0 ? `<div class="chart-card" style="padding:12px"><h3 style="margin:0 0 8px;font-size:0.95em">Receive Errors (per interval)</h3><canvas id="obsRecvErrorsChart" role="img" aria-label="Receive errors chart"></canvas></div>` : ''}
+        ${queueLenPoints.length > 0 ? `<div class="chart-card" style="padding:12px"><h3 style="margin:0 0 8px;font-size:0.95em">TX Queue Length</h3><canvas id="obsQueueLenChart" role="img" aria-label="TX queue length chart"></canvas></div>` : ''}
       </div>
       <div style="margin-top:20px">
         <h3 style="font-size:0.95em">Recent Packets</h3>
         <div id="obsRecentPackets"><div class="text-muted">Loading…</div></div>
       </div>`;
 
-    // Render charts
+    // Pre-compute data sets (referenced in template above and render calls below)
     if (analytics.timeline && analytics.timeline.length > 0) {
       renderTimelineChart(analytics.timeline);
     }
@@ -328,30 +304,24 @@
     if (analytics.snrDistribution && analytics.snrDistribution.length > 0) {
       renderSnrChart(analytics.snrDistribution);
     }
-    var uptimePoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.uptime_secs != null; }) : [];
     if (uptimePoints.length > 0) {
       renderUptimeChart(uptimePoints);
     }
-    var batteryPoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.battery_mv != null; }) : [];
     if (batteryPoints.length > 0) {
       renderBatteryChart(batteryPoints);
     }
-    var noiseFloorPoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.noise_floor != null; }) : [];
     if (noiseFloorPoints.length > 0) {
       renderNoiseFloorChart(noiseFloorPoints);
     }
     if (analytics.rssiTimeline && analytics.rssiTimeline.length > 0) {
       renderRssiChart(analytics.rssiTimeline);
     }
-    var airtimePoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.tx_airtime_pct != null || m.rx_airtime_pct != null; }) : [];
     if (airtimePoints.length > 0) {
       renderAirtimeChart(airtimePoints);
     }
-    var recvErrorPoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.recv_errors != null; }) : [];
     if (recvErrorPoints.length > 0) {
       renderRecvErrorsChart(recvErrorPoints);
     }
-    var queueLenPoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.queue_len != null; }) : [];
     if (queueLenPoints.length > 0) {
       renderQueueLenChart(queueLenPoints);
     }
@@ -659,15 +629,15 @@
       return new Date(s.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     });
     const c = new Chart(ctx, {
-      type: 'line',
+      type: 'bar',
       data: {
         labels: labels,
         datasets: [{
-          label: 'Recv Errors',
+          label: 'Errors',
           data: samples.map(function(s) { return s.recv_errors; }),
+          backgroundColor: CHART_COLORS[1] + '80',
           borderColor: CHART_COLORS[1],
-          backgroundColor: CHART_COLORS[1] + '20',
-          fill: true, tension: 0.3, pointRadius: 2, spanGaps: true,
+          borderWidth: 1,
         }]
       },
       options: {
