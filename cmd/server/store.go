@@ -683,7 +683,13 @@ func (s *PacketStore) Load() error {
 	s.buildDistanceIndex()
 
 	// Track oldest loaded timestamp for future SQL fallback queries.
-	if len(s.packets) > 0 {
+	// When hotStartupHours > 0 the load window boundary (cutoff) is the
+	// authoritative lower bound, not the first packet's timestamp (which may be
+	// newer if no packets landed exactly at the boundary).
+	if s.hotStartupHours > 0 {
+		hotCutoffStr := time.Now().UTC().Add(-time.Duration(s.hotStartupHours*3600) * time.Second).Format(time.RFC3339)
+		s.oldestLoaded = hotCutoffStr
+	} else if len(s.packets) > 0 {
 		s.oldestLoaded = s.packets[0].FirstSeen
 	}
 
@@ -1156,6 +1162,22 @@ func (s *PacketStore) untrackAdvertPubkey(tx *StoreTx) {
 
 // QueryPackets returns filtered, paginated packets from memory.
 func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
+	// SQL fallback: if the query window predates the in-memory window, delegate
+	// to the DB layer which covers the full SQLite retention period.
+	s.mu.RLock()
+	oldest := s.oldestLoaded
+	s.mu.RUnlock()
+	if oldest != "" {
+		needsSQL := (q.Since != "" && q.Since < oldest) ||
+			(q.Until != "" && q.Until < oldest)
+		if needsSQL {
+			if result, err := s.db.QueryPackets(q); err == nil {
+				return result
+			} else {
+				log.Printf("[store] QueryPackets SQL fallback failed: %v — using in-memory", err)
+			}
+		}
+	}
 	atomic.AddInt64(&s.queryCount, 1)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1202,6 +1224,20 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 
 // QueryGroupedPackets returns transmissions grouped by hash (already 1:1).
 func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
+	s.mu.RLock()
+	oldest := s.oldestLoaded
+	s.mu.RUnlock()
+	if oldest != "" {
+		needsSQL := (q.Since != "" && q.Since < oldest) ||
+			(q.Until != "" && q.Until < oldest)
+		if needsSQL {
+			if result, err := s.db.QueryGroupedPackets(q); err == nil {
+				return result
+			} else {
+				log.Printf("[store] QueryGroupedPackets SQL fallback failed: %v — using in-memory", err)
+			}
+		}
+	}
 	atomic.AddInt64(&s.queryCount, 1)
 
 	if q.Limit <= 0 {

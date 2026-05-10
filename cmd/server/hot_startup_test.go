@@ -293,3 +293,66 @@ func TestHotStartup_ChunkErrorRecovery(t *testing.T) {
 		t.Error("backgroundLoadDone must be set even when all chunks fail")
 	}
 }
+
+func TestHotStartup_SQLFallback_TriggeredForOldDate(t *testing.T) {
+	// 50 old packets (48h ago), 10 recent (30min ago)
+	dbPath := createTestDBWithAgedPackets(t, 10, 50)
+	defer os.RemoveAll(filepath.Dir(dbPath))
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	// Hot load: only last 1h → 10 recent packets in memory
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  72,
+		HotStartupHours: 1,
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.packets) != 10 {
+		t.Fatalf("setup: expected 10 in-memory packets, got %d", len(store.packets))
+	}
+
+	// Query with Since = 49h ago (before oldestLoaded ~1h ago) → SQL fallback
+	since49h := time.Now().UTC().Add(-49 * time.Hour).Format(time.RFC3339)
+	result := store.QueryPackets(PacketQuery{Since: since49h, Limit: 100, Order: "ASC"})
+
+	// SQL fallback should return the old packets (stored at ~48h ago)
+	if result.Total == 0 {
+		t.Error("expected SQL fallback to return old packets for query before oldestLoaded")
+	}
+}
+
+func TestHotStartup_SQLFallback_NotTriggeredForRecentDate(t *testing.T) {
+	// 50 old packets (48h ago), 10 recent (30min ago)
+	dbPath := createTestDBWithAgedPackets(t, 10, 50)
+	defer os.RemoveAll(filepath.Dir(dbPath))
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	// Hot load: last 1h → 10 recent packets in memory
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  72,
+		HotStartupHours: 1,
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query with Since = 45min ago (after oldestLoaded ~1h ago) → in-memory path
+	since45m := time.Now().UTC().Add(-45 * time.Minute).Format(time.RFC3339)
+	result := store.QueryPackets(PacketQuery{Since: since45m, Limit: 100, Order: "ASC"})
+
+	// In-memory path: returns only the 10 recent packets (all within last 30min)
+	if result.Total != 10 {
+		t.Errorf("expected 10 in-memory packets for recent Since query, got %d", result.Total)
+	}
+}
