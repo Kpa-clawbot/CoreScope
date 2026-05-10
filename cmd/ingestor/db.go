@@ -64,17 +64,18 @@ type Store struct {
 	db    *sql.DB
 	Stats DBStats
 
-	stmtGetTxByHash          *sql.Stmt
-	stmtInsertTransmission   *sql.Stmt
-	stmtUpdateTxFirstSeen    *sql.Stmt
-	stmtInsertObservation    *sql.Stmt
-	stmtUpsertNode           *sql.Stmt
-	stmtIncrementAdvertCount *sql.Stmt
-	stmtUpsertObserver       *sql.Stmt
-	stmtGetObserverRowid       *sql.Stmt
+	stmtGetTxByHash           *sql.Stmt
+	stmtInsertTransmission    *sql.Stmt
+	stmtUpdateTxFirstSeen     *sql.Stmt
+	stmtInsertObservation     *sql.Stmt
+	stmtUpsertNode            *sql.Stmt
+	stmtIncrementAdvertCount  *sql.Stmt
+	stmtUpsertObserver        *sql.Stmt
+	stmtUpsertObserverSource  *sql.Stmt
+	stmtGetObserverRowid      *sql.Stmt
 	stmtUpdateObserverLastSeen *sql.Stmt
-	stmtUpdateNodeTelemetry    *sql.Stmt
-	stmtUpsertMetrics          *sql.Stmt
+	stmtUpdateNodeTelemetry   *sql.Stmt
+	stmtUpsertMetrics         *sql.Stmt
 
 	sampleIntervalSec int
 	backfillWg        sync.WaitGroup
@@ -409,6 +410,15 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] packets_sent/packets_recv columns added")
 	}
 
+	// Migration: add uptime_secs to observer_metrics for time-series uptime charting
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_metrics_uptime_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding uptime_secs column to observer_metrics...")
+		db.Exec(`ALTER TABLE observer_metrics ADD COLUMN uptime_secs INTEGER`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_metrics_uptime_v1')`)
+		log.Println("[migration] uptime_secs column added")
+	}
+
 	// Migration: add channel_hash column for fast channel queries (#762)
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'channel_hash_v1'")
 	if row.Scan(&migDone) != nil {
@@ -553,6 +563,54 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] idx_observations_ts_obs created")
 	}
 
+	// Migration: observer_sources table tracks which MQTT broker hostnames have
+	// relayed data for each observer, with the last relay timestamp.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_sources_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Creating observer_sources table...")
+		_, err := db.Exec(`
+			CREATE TABLE IF NOT EXISTS observer_sources (
+				observer_id TEXT NOT NULL,
+				host        TEXT NOT NULL,
+				name        TEXT NOT NULL DEFAULT '',
+				last_seen   TEXT NOT NULL,
+				PRIMARY KEY (observer_id, host)
+			)
+		`)
+		if err != nil {
+			return fmt.Errorf("observer_sources schema: %w", err)
+		}
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_sources_v1')`)
+		log.Println("[migration] observer_sources table created")
+	}
+
+	// Migration: add name column to observer_sources for friendly broker labels.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_sources_name_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding name column to observer_sources...")
+		db.Exec(`ALTER TABLE observer_sources ADD COLUMN name TEXT NOT NULL DEFAULT ''`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_sources_name_v1')`)
+		log.Println("[migration] observer_sources.name column added")
+	}
+
+	// Migration: add packet_count column to observer_sources.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_sources_packet_count_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding packet_count column to observer_sources...")
+		db.Exec(`ALTER TABLE observer_sources ADD COLUMN packet_count INTEGER NOT NULL DEFAULT 0`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_sources_packet_count_v1')`)
+		log.Println("[migration] observer_sources.packet_count column added")
+	}
+
+	// Migration: add status_count column to observer_sources.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_sources_status_count_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding status_count column to observer_sources...")
+		db.Exec(`ALTER TABLE observer_sources ADD COLUMN status_count INTEGER NOT NULL DEFAULT 0`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_sources_status_count_v1')`)
+		log.Println("[migration] observer_sources.status_count column added")
+	}
+
 	return nil
 }
 
@@ -652,8 +710,21 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtUpsertMetrics, err = s.db.Prepare(`
-		INSERT OR REPLACE INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT OR REPLACE INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, uptime_secs, packets_sent, packets_recv)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+
+	s.stmtUpsertObserverSource, err = s.db.Prepare(`
+		INSERT INTO observer_sources (observer_id, host, name, last_seen, packet_count, status_count)
+		VALUES (?, ?, ?, ?, 1, ?)
+		ON CONFLICT(observer_id, host) DO UPDATE SET
+			name         = excluded.name,
+			last_seen    = excluded.last_seen,
+			packet_count = packet_count + 1,
+			status_count = status_count + excluded.status_count
 	`)
 	if err != nil {
 		return err
@@ -761,6 +832,12 @@ func (s *Store) UpsertNode(pubKey, name, role string, lat, lon *float64, lastSee
 		s.Stats.WriteErrors.Add(1)
 	} else {
 		s.Stats.NodeUpserts.Add(1)
+		// Key rotation: if another active node shares this name, move it to
+		// inactive_nodes so the same device doesn't appear twice.
+		if name != "" {
+			s.db.Exec(`INSERT OR REPLACE INTO inactive_nodes SELECT * FROM nodes WHERE name = ? AND public_key != ?`, name, pubKey)
+			s.db.Exec(`DELETE FROM nodes WHERE name = ? AND public_key != ?`, name, pubKey)
+		}
 	}
 	return err
 }
@@ -861,7 +938,31 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 
 	// Reactivate if this observer was previously marked inactive
 	s.db.Exec(`UPDATE observers SET inactive = 0 WHERE id = ? AND inactive = 1`, id)
+
+	// Key rotation: if another active observer shares this name, retire it so the
+	// same device doesn't appear twice under the old and new MQTT ID.
+	if name != "" {
+		s.db.Exec(`UPDATE observers SET inactive = 1 WHERE name = ? AND id != ? AND (inactive IS NULL OR inactive = 0)`, name, id)
+	}
 	return nil
+}
+
+// UpsertObserverSource records that the given MQTT broker host relayed data for
+// this observer, updating last_seen to now on repeat calls. name is the
+// human-readable source label (e.g. "Cornmeister Dutchmeshcore 1"). isStatus
+// should be true when the triggering message was an observer status packet so
+// the separate status_count is incremented alongside the total packet_count.
+func (s *Store) UpsertObserverSource(observerID, name, host string, isStatus bool) error {
+	if host == "" {
+		return nil
+	}
+	statusInc := 0
+	if isStatus {
+		statusInc = 1
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.stmtUpsertObserverSource.Exec(observerID, host, name, now, statusInc)
+	return err
 }
 
 // Close checkpoints the WAL and closes the database.
@@ -890,6 +991,7 @@ type MetricsData struct {
 	RxAirSecs   *int
 	RecvErrors  *int
 	BatteryMv   *int
+	UptimeSecs  *int
 	PacketsSent *int
 	PacketsRecv *int
 }
@@ -899,7 +1001,7 @@ func (s *Store) InsertMetrics(data *MetricsData) error {
 	ts := RoundToInterval(time.Now().UTC(), s.sampleIntervalSec)
 	tsStr := ts.Format(time.RFC3339)
 
-	var nf, txAir, rxAir, recvErr, batt, pktSent, pktRecv interface{}
+	var nf, txAir, rxAir, recvErr, batt, uptime, pktSent, pktRecv interface{}
 	if data.NoiseFloor != nil {
 		nf = *data.NoiseFloor
 	}
@@ -915,6 +1017,9 @@ func (s *Store) InsertMetrics(data *MetricsData) error {
 	if data.BatteryMv != nil {
 		batt = *data.BatteryMv
 	}
+	if data.UptimeSecs != nil {
+		uptime = *data.UptimeSecs
+	}
 	if data.PacketsSent != nil {
 		pktSent = *data.PacketsSent
 	}
@@ -922,7 +1027,7 @@ func (s *Store) InsertMetrics(data *MetricsData) error {
 		pktRecv = *data.PacketsRecv
 	}
 
-	_, err := s.stmtUpsertMetrics.Exec(data.ObserverID, tsStr, nf, txAir, rxAir, recvErr, batt, pktSent, pktRecv)
+	_, err := s.stmtUpsertMetrics.Exec(data.ObserverID, tsStr, nf, txAir, rxAir, recvErr, batt, uptime, pktSent, pktRecv)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)
 		return fmt.Errorf("insert metrics: %w", err)

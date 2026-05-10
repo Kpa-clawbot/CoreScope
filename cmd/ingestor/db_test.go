@@ -925,6 +925,63 @@ func TestUpsertNodeEmptyLastSeen(t *testing.T) {
 	}
 }
 
+func TestObserverKeyRotation(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.UpsertObserver("obs-old", "Gateway East", "AMS", nil); err != nil {
+		t.Fatal(err)
+	}
+	// Same name, new MQTT ID — simulates key rotation
+	if err := s.UpsertObserver("obs-new", "Gateway East", "AMS", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var inactive int
+	s.db.QueryRow("SELECT COALESCE(inactive, 0) FROM observers WHERE id = 'obs-old'").Scan(&inactive)
+	if inactive != 1 {
+		t.Errorf("old observer inactive=%d, want 1 (should be retired on key rotation)", inactive)
+	}
+	s.db.QueryRow("SELECT COALESCE(inactive, 0) FROM observers WHERE id = 'obs-new'").Scan(&inactive)
+	if inactive != 0 {
+		t.Errorf("new observer inactive=%d, want 0", inactive)
+	}
+}
+
+func TestNodeKeyRotation(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	lat, lon := 52.0, 5.0
+	if err := s.UpsertNode("pubkey-old", "Bedroom Repeater", "repeater", &lat, &lon, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Same name, new public key — simulates key rotation
+	if err := s.UpsertNode("pubkey-new", "Bedroom Repeater", "repeater", &lat, &lon, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	var n int
+	s.db.QueryRow("SELECT COUNT(*) FROM inactive_nodes WHERE public_key = 'pubkey-old'").Scan(&n)
+	if n != 1 {
+		t.Errorf("old node in inactive_nodes: count=%d, want 1", n)
+	}
+	s.db.QueryRow("SELECT COUNT(*) FROM nodes WHERE public_key = 'pubkey-old'").Scan(&n)
+	if n != 0 {
+		t.Errorf("old node still in nodes: count=%d, want 0", n)
+	}
+	s.db.QueryRow("SELECT COUNT(*) FROM nodes WHERE public_key = 'pubkey-new'").Scan(&n)
+	if n != 1 {
+		t.Errorf("new node in nodes: count=%d, want 1", n)
+	}
+}
+
 func TestOpenStoreTwice(t *testing.T) {
 	// Opening same DB twice tests the "observations already exists" path in applySchema
 	path := tempDBPath(t)
