@@ -225,18 +225,28 @@
 
     // Slide-over scroll-discriminator (PR #1185): record where the user is
     // reading from. The slide-over panel itself is the scroller (CSS sets
-    // `.slide-over-panel { overflow-y: auto; }`); fall back to a
-    // `.slide-over-content` child if the markup ever changes.
+    // `.slide-over-panel { overflow-y: auto; }`) — `.slide-over-content` is a
+    // flex child without its own overflow-y, so its scrollTop is always 0.
+    // To be robust against markup/CSS drift, walk every candidate (panel +
+    // any inner `.slide-over-content`) and take the MAX scrollTop. Whichever
+    // element actually scrolls becomes the discriminator source — this
+    // guarantees production reads from the same element a test (or a future
+    // refactor) writes to.
     if (gestureContext === 'slide-over') {
-      slideOverScroller = (so && so.querySelector && so.querySelector('.slide-over-content')) || so;
-      // Prefer the deepest scroll container with non-zero scrollTop so a
-      // mid-scroll inner element (rare today but defensible) wins.
+      var candidates = [];
+      if (so) candidates.push(so);
       var inner = so && so.querySelector && so.querySelector('.slide-over-content');
-      if (inner && inner.scrollTop > 0 && (!slideOverScroller || slideOverScroller.scrollTop === 0)) {
-        slideOverScroller = inner;
+      if (inner) candidates.push(inner);
+      slideOverScroller = so || null;
+      slideOverStartScrollTop = 0;
+      for (var i = 0; i < candidates.length; i++) {
+        var st = (candidates[i] && typeof candidates[i].scrollTop === 'number')
+          ? candidates[i].scrollTop : 0;
+        if (st > slideOverStartScrollTop) {
+          slideOverStartScrollTop = st;
+          slideOverScroller = candidates[i];
+        }
       }
-      slideOverStartScrollTop = (slideOverScroller && typeof slideOverScroller.scrollTop === 'number')
-        ? slideOverScroller.scrollTop : 0;
     } else {
       slideOverScroller = null;
       slideOverStartScrollTop = 0;
