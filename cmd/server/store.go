@@ -922,6 +922,90 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	return nil
 }
 
+// loadBackgroundChunks fills the remaining retentionHours window by loading
+// daily chunks from oldestLoaded back to the retention cutoff. After all
+// chunks are merged it rebuilds analytics indexes once. Chunk errors are
+// handled by advancing past the failed window so the loop always terminates.
+func (s *PacketStore) loadBackgroundChunks() {
+	if s.retentionHours <= 0 {
+		s.backgroundLoadDone.Store(true)
+		return
+	}
+
+	target := time.Now().UTC().Add(-time.Duration(s.retentionHours*3600) * time.Second)
+	totalHours := s.retentionHours - s.hotStartupHours
+	if totalHours <= 0 {
+		s.backgroundLoadDone.Store(true)
+		return
+	}
+
+	var chunksLoaded float64
+	totalChunks := math.Ceil(totalHours / 24)
+
+	for {
+		s.mu.RLock()
+		oldest := s.oldestLoaded
+		s.mu.RUnlock()
+
+		if oldest == "" {
+			break
+		}
+		chunkEnd, err := time.Parse(time.RFC3339, oldest)
+		if err != nil {
+			log.Printf("[store] background loader: bad oldestLoaded %q: %v", oldest, err)
+			break
+		}
+		if !chunkEnd.After(target) {
+			break
+		}
+
+		chunkStart := chunkEnd.Add(-24 * time.Hour)
+		if chunkStart.Before(target) {
+			chunkStart = target
+		}
+
+		chunkStartStr := chunkStart.Format(time.RFC3339)
+		if err := s.loadChunk(chunkStart, chunkEnd); err != nil {
+			log.Printf("[store] background chunk [%s, %s) error: %v — advancing past it",
+				chunkStartStr, chunkEnd.Format(time.RFC3339), err)
+		}
+		// Always advance oldestLoaded to chunkStart so the loop terminates,
+		// even when the chunk was empty (loadChunk skips the update when 0 packets).
+		s.mu.Lock()
+		if s.oldestLoaded > chunkStartStr || s.oldestLoaded == "" {
+			s.oldestLoaded = chunkStartStr
+		}
+		s.mu.Unlock()
+
+		chunksLoaded++
+		if totalChunks > 0 {
+			pct := int64(chunksLoaded / totalChunks * 100)
+			if pct > 100 {
+				pct = 100
+			}
+			s.backgroundLoadProgress.Store(pct)
+		}
+
+		runtime.Gosched()
+	}
+
+	// Rebuild analytics indexes once after all chunks are merged.
+	s.mu.Lock()
+	s.buildSubpathIndex()
+	s.buildPathHopIndex()
+	s.buildDistanceIndex()
+	s.mu.Unlock()
+
+	s.backgroundLoadDone.Store(true)
+	s.backgroundLoadProgress.Store(100)
+
+	s.mu.RLock()
+	totalPkts := len(s.packets)
+	oldest := s.oldestLoaded
+	s.mu.RUnlock()
+	log.Printf("[store] background load complete: %d packets in memory, oldestLoaded=%s", totalPkts, oldest)
+}
+
 // pickBestObservation selects the observation with the longest path
 // and sets it as the transmission's display observation.
 func pickBestObservation(tx *StoreTx) {

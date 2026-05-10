@@ -213,3 +213,83 @@ func TestHotStartup_loadChunk_AddsOlderData(t *testing.T) {
 		t.Errorf("expected byHash len=60, got %d", len(store.byHash))
 	}
 }
+
+func TestHotStartup_BackgroundFillsToRetention(t *testing.T) {
+	// 3 days × 50 tx/day = 150 total
+	dbPath := createTestDBMultiDay(t, 3, 50)
+	defer os.RemoveAll(filepath.Dir(dbPath))
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  72,
+		HotStartupHours: 24,
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	// After hot Load: only ~50 packets (day 1 = last 24h)
+	afterHot := len(store.packets)
+	if afterHot < 1 || afterHot > 60 {
+		t.Errorf("expected ~50 packets after hot Load, got %d", afterHot)
+	}
+
+	// Start background fill
+	go store.loadBackgroundChunks()
+	waitForBackgroundLoad(t, store, 15*time.Second)
+
+	// After background fill: all 150 packets should be loaded
+	store.mu.RLock()
+	total := len(store.packets)
+	store.mu.RUnlock()
+
+	if total < 140 || total > 160 {
+		t.Errorf("expected ~150 packets after background load, got %d", total)
+	}
+	if !store.backgroundLoadDone.Load() {
+		t.Error("backgroundLoadDone must be true after loadBackgroundChunks returns")
+	}
+}
+
+func TestHotStartup_ChunkErrorRecovery(t *testing.T) {
+	dbPath := createTestDBWithAgedPackets(t, 10, 50)
+	defer os.RemoveAll(filepath.Dir(dbPath))
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  72,
+		HotStartupHours: 1,
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Close the DB so all subsequent chunk queries fail.
+	db.conn.Close()
+
+	done := make(chan struct{})
+	go func() {
+		store.loadBackgroundChunks()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Good — completed without hanging.
+	case <-time.After(10 * time.Second):
+		t.Fatal("loadBackgroundChunks hung after DB close")
+	}
+
+	if !store.backgroundLoadDone.Load() {
+		t.Error("backgroundLoadDone must be set even when all chunks fail")
+	}
+}
