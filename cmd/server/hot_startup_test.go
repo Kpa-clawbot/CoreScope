@@ -327,6 +327,37 @@ func TestHotStartup_SQLFallback_TriggeredForOldDate(t *testing.T) {
 	}
 }
 
+func TestHotStartup_PerfStats(t *testing.T) {
+	dbPath := createTestDBWithAgedPackets(t, 10, 50)
+	defer os.RemoveAll(filepath.Dir(dbPath))
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  72,
+		HotStartupHours: 1,
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := store.GetPerfStoreStats()
+
+	if v, ok := stats["hotStartupHours"]; !ok || v.(float64) != 1 {
+		t.Errorf("expected hotStartupHours=1 in stats, got %v", v)
+	}
+	if v, ok := stats["backgroundLoadComplete"]; !ok || v.(bool) != false {
+		t.Errorf("expected backgroundLoadComplete=false in stats, got %v", v)
+	}
+	if _, ok := stats["backgroundLoadProgress"]; !ok {
+		t.Error("expected backgroundLoadProgress in stats")
+	}
+}
+
 func TestHotStartup_SQLFallback_NotTriggeredForRecentDate(t *testing.T) {
 	// 50 old packets (48h ago), 10 recent (30min ago)
 	dbPath := createTestDBWithAgedPackets(t, 10, 50)
