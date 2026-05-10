@@ -52,6 +52,12 @@
   var activeRow = null;
   var rowOverlay = null;
   var capturedEl = null;
+  // PR #1185 mesh-op review: scroll-discriminator for slide-over.
+  // Captured at pointerdown when the slide-over context is selected; if the
+  // panel content is mid-scroll (scrollTop > 0) at gesture start, the gesture
+  // is a normal scroll, NOT a dismiss — we must not close the panel.
+  var slideOverScroller = null;
+  var slideOverStartScrollTop = 0;
 
   function isNarrow() {
     return window.innerWidth <= NARROW_BP;
@@ -217,6 +223,25 @@
     startTarget = t;
     activeRow = (gestureContext === 'row') ? row : null;
 
+    // Slide-over scroll-discriminator (PR #1185): record where the user is
+    // reading from. The slide-over panel itself is the scroller (CSS sets
+    // `.slide-over-panel { overflow-y: auto; }`); fall back to a
+    // `.slide-over-content` child if the markup ever changes.
+    if (gestureContext === 'slide-over') {
+      slideOverScroller = (so && so.querySelector && so.querySelector('.slide-over-content')) || so;
+      // Prefer the deepest scroll container with non-zero scrollTop so a
+      // mid-scroll inner element (rare today but defensible) wins.
+      var inner = so && so.querySelector && so.querySelector('.slide-over-content');
+      if (inner && inner.scrollTop > 0 && (!slideOverScroller || slideOverScroller.scrollTop === 0)) {
+        slideOverScroller = inner;
+      }
+      slideOverStartScrollTop = (slideOverScroller && typeof slideOverScroller.scrollTop === 'number')
+        ? slideOverScroller.scrollTop : 0;
+    } else {
+      slideOverScroller = null;
+      slideOverStartScrollTop = 0;
+    }
+
     // Capture so subsequent move events flow to us regardless of element.
     try {
       var capTarget = (gestureContext === 'bottom-nav') ? nav :
@@ -244,6 +269,13 @@
         axis = (ady > adx) ? 'v' : 'h';
         if (axis !== 'v') {
           // Horizontal on slide-over — release, do nothing.
+          releasePointer();
+          return;
+        }
+        // Scroll-discriminator (PR #1185): if user started mid-scroll, this
+        // gesture belongs to the browser's native scroll. Release immediately
+        // so we never preventDefault / drag the panel / dismiss.
+        if (slideOverStartScrollTop > 0) {
           releasePointer();
           return;
         }
@@ -316,7 +348,12 @@
       } else if (gestureContext === 'slide-over' && axis === 'v') {
         var so = findSlideOver(startTarget) || document.querySelector('.slide-over-panel');
         if (so) so.style.transform = '';
-        if (dy >= SLIDE_OVER_DISMISS_PX && window.SlideOver && typeof window.SlideOver.close === 'function') {
+        // Scroll-discriminator (PR #1185): if the user started mid-scroll,
+        // never dismiss — onPointerMove should already have released, this
+        // is a defense-in-depth guard.
+        if (slideOverStartScrollTop > 0) {
+          // no-op
+        } else if (dy >= SLIDE_OVER_DISMISS_PX && window.SlideOver && typeof window.SlideOver.close === 'function') {
           try { window.SlideOver.close(); } catch (_) {}
         }
       }
@@ -365,6 +402,8 @@
     startTarget = null;
     capturedEl = null;
     gestureContext = null;
+    slideOverScroller = null;
+    slideOverStartScrollTop = 0;
   }
 
   // ── Row-overlay click delegation ──
