@@ -48,6 +48,7 @@
   let timeframe = localStorage.getItem('perf-timeframe') || '5m';
   let activeCharts = []; // [{ chart: Chart, id: string, datasets: [{key,label,color}] }]
   let lastWriteSourceSample = null; // { sources, atMs } for per-second graph rates
+  let lastComputedWriteRates = null; // held between cache refreshes so lines are continuous
   let detailCache = { at: 0, ioStats: null, sqliteStats: null, writeSources: null };
   let healthCache = { at: 0, data: null };
 
@@ -155,9 +156,12 @@
     const prev = lastWriteSourceSample;
     lastWriteSourceSample = { sources: { ...sources }, atMs: atMs };
 
-    if (!prev || atMs <= prev.atMs) return {};
+    // sampleAt hasn't advanced — the detail cache is still serving the same
+    // snapshot. Hold the last computed rates so the chart line stays continuous
+    // instead of breaking into invisible hairlines every 30 s.
+    if (!prev || atMs <= prev.atMs) return lastComputedWriteRates || {};
     const dtSec = (atMs - prev.atMs) / 1000;
-    if (dtSec < 0.5) return {};
+    if (dtSec < 0.5) return lastComputedWriteRates || {};
 
     function rate(key) {
       const cur = Number(sources[key] || 0);
@@ -165,13 +169,14 @@
       return Math.max(0, cur - old) / dtSec;
     }
 
-    return {
+    lastComputedWriteRates = {
       writeTxRate:             rate('tx_inserted'),
       writeObsRate:            rate('obs_inserted'),
       writeNodeUpsertRate:     rate('node_upserts'),
       writeObserverUpsertRate: rate('observer_upserts'),
       writeErrorRate:          rate('write_errors'),
     };
+    return lastComputedWriteRates;
   }
 
   function pushSample(server, obs, ioStats, sqliteStats, writeSources) {
@@ -265,6 +270,23 @@
       }
       if (longHistory.length > 0) lastLongSampleTs = longHistory[longHistory.length - 1].ts;
 
+      // Derive write-source rates from adjacent samples that carry raw cumulative
+      // counters (writeTxCum etc.), mirroring the live writeSourceRates() logic.
+      // Samples without the cum fields (old server builds or session-restored entries)
+      // are skipped — their rate fields remain null and the chart renders a gap.
+      for (var hi = 1; hi < longHistory.length; hi++) {
+        var cur = longHistory[hi], prv = longHistory[hi - 1];
+        if (cur.writeTxCum == null || prv.writeTxCum == null) continue;
+        if (cur.writeTxRate != null) continue; // already computed (live push)
+        var dtSec = (cur.ts - prv.ts) / 1000;
+        if (dtSec < 1) continue;
+        cur.writeTxRate             = Math.max(0, cur.writeTxCum       - prv.writeTxCum)       / dtSec;
+        cur.writeObsRate            = Math.max(0, cur.writeObsCum      - prv.writeObsCum)      / dtSec;
+        cur.writeNodeUpsertRate     = Math.max(0, cur.writeNodeCum     - prv.writeNodeCum)     / dtSec;
+        cur.writeObserverUpsertRate = Math.max(0, cur.writeObserverCum - prv.writeObserverCum) / dtSec;
+        cur.writeErrorRate          = Math.max(0, cur.writeErrCum      - prv.writeErrCum)      / dtSec;
+      }
+
       try { sessionStorage.setItem(HISTORY_KEY,      JSON.stringify(history));     } catch (e) { /* quota */ }
       try { sessionStorage.setItem(LONG_HISTORY_KEY, JSON.stringify(longHistory)); } catch (e) { /* quota */ }
     } catch (e) { /* non-fatal — server may not have history yet */ }
@@ -327,8 +349,10 @@
       document.querySelectorAll('.perf-tf-btn').forEach(function (b) {
         b.classList.toggle('active', b.dataset.tf === timeframe);
       });
-      // Re-slice and push new data into existing charts immediately — no redraw
-      updateChartsInPlace();
+      // Rebuild charts so visibility filtering re-runs against the new timeframe's data.
+      // updateChartsInPlace() would skip the filter and leave stale empty charts visible.
+      destroyCharts();
+      renderGraphs(document.getElementById('perfContent'));
     });
 
     await preloadFromServer();
