@@ -2290,7 +2290,7 @@ func computeDeltas(raw []rawMetricsSample, bucketSizeSec int) ([]MetricsSample, 
 			continue
 		}
 
-		// Detect reboot: any cumulative counter decreased
+		// Detect reboot from cumulative counter decreases (reliable when available).
 		isReboot := false
 		if cur.TxAirSecs != nil && prev.TxAirSecs != nil && *cur.TxAirSecs < *prev.TxAirSecs {
 			isReboot = true
@@ -2306,6 +2306,23 @@ func computeDeltas(raw []rawMetricsSample, bucketSizeSec int) ([]MetricsSample, 
 		}
 		if cur.PacketsRecv != nil && prev.PacketsRecv != nil && *cur.PacketsRecv < *prev.PacketsRecv {
 			isReboot = true
+		}
+		// Fall back to uptime decrease when no cumulative counters are available,
+		// but validate with look-ahead: if the sample after the dip resumes near
+		// the pre-drop trajectory (next > midpoint of prev and cur), treat it as
+		// an anomalous reading rather than a real reboot.
+		if !isReboot && cur.UptimeSecs != nil && prev.UptimeSecs != nil && *cur.UptimeSecs < *prev.UptimeSecs {
+			if i+1 < len(raw) && raw[i+1].UptimeSecs != nil {
+				next := *raw[i+1].UptimeSecs
+				midpoint := (*prev.UptimeSecs+*cur.UptimeSecs)/2 + bucketSizeSec
+				if next <= midpoint {
+					isReboot = true // next sample confirms device stayed at low uptime
+				} else {
+					s.UptimeSecs = nil // bad reading — null out so chart spans across it
+				}
+			} else {
+				isReboot = true // no look-ahead available, assume reboot
+			}
 		}
 
 		if isReboot {

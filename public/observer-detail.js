@@ -285,6 +285,14 @@
           <h3 style="margin:0 0 8px;font-size:0.95em">Battery</h3>
           <canvas id="obsBatteryChart" role="img" aria-label="Battery voltage chart"></canvas>
         </div>
+        <div class="chart-card" style="padding:12px">
+          <h3 style="margin:0 0 8px;font-size:0.95em">Noise Floor</h3>
+          <canvas id="obsNoiseFloorChart" role="img" aria-label="Noise floor chart"></canvas>
+        </div>
+        <div class="chart-card" style="padding:12px">
+          <h3 style="margin:0 0 8px;font-size:0.95em">RSSI (avg per period)</h3>
+          <canvas id="obsRssiChart" role="img" aria-label="RSSI chart"></canvas>
+        </div>
       </div>
       <div style="margin-top:20px">
         <h3 style="font-size:0.95em">Recent Packets</h3>
@@ -311,6 +319,13 @@
     var batteryPoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.battery_mv != null; }) : [];
     if (batteryPoints.length > 0) {
       renderBatteryChart(batteryPoints);
+    }
+    var noiseFloorPoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.noise_floor != null; }) : [];
+    if (noiseFloorPoints.length > 0) {
+      renderNoiseFloorChart(noiseFloorPoints);
+    }
+    if (analytics.rssiTimeline && analytics.rssiTimeline.length > 0) {
+      renderRssiChart(analytics.rssiTimeline);
     }
     if (analytics.recentPackets) {
       renderRecentPackets(analytics.recentPackets);
@@ -421,9 +436,18 @@
   function renderUptimeChart(samples) {
     const ctx = document.getElementById('obsUptimeChart');
     if (!ctx) return;
-    const labels = samples.map(function(s) {
-      const d = new Date(s.timestamp);
-      return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    // For each reboot, push a 0 at the same timestamp first so the line drops
+    // vertically to the baseline before rising again — clean sharkfin shape.
+    const labels = [];
+    const data = [];
+    samples.forEach(function(s) {
+      const lbl = new Date(s.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      if (s.is_reboot_sample) {
+        labels.push(lbl);
+        data.push(0);
+      }
+      labels.push(lbl);
+      data.push(s.uptime_secs);
     });
     const c = new Chart(ctx, {
       type: 'line',
@@ -431,10 +455,10 @@
         labels: labels,
         datasets: [{
           label: 'Uptime',
-          data: samples.map(function(s) { return s.uptime_secs; }),
+          data: data,
           borderColor: CHART_COLORS[2],
           backgroundColor: CHART_COLORS[2] + '20',
-          fill: true, tension: 0.3, pointRadius: 2,
+          fill: true, tension: 0, pointRadius: 0, spanGaps: true,
         }]
       },
       options: {
@@ -477,6 +501,64 @@
         scales: {
           x: { ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } },
           y: { ticks: { callback: function(v) { return v + ' mV'; } } }
+        }
+      }
+    });
+    charts.push(c);
+  }
+
+  function renderNoiseFloorChart(samples) {
+    const ctx = document.getElementById('obsNoiseFloorChart');
+    if (!ctx) return;
+    const labels = samples.map(function(s) {
+      const d = new Date(s.timestamp);
+      return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    });
+    const c = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Noise Floor (dBm)',
+          data: samples.map(function(s) { return s.noise_floor; }),
+          borderColor: CHART_COLORS[4],
+          backgroundColor: CHART_COLORS[4] + '20',
+          fill: true, tension: 0.3, pointRadius: 2,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } },
+          y: { ticks: { callback: function(v) { return v + ' dBm'; } } }
+        }
+      }
+    });
+    charts.push(c);
+  }
+
+  function renderRssiChart(timeline) {
+    const ctx = document.getElementById('obsRssiChart');
+    if (!ctx) return;
+    const c = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: timeline.map(function(t) { return t.label; }),
+        datasets: [{
+          label: 'Avg RSSI (dBm)',
+          data: timeline.map(function(t) { return t.avg; }),
+          borderColor: CHART_COLORS[5],
+          backgroundColor: CHART_COLORS[5] + '20',
+          fill: true, tension: 0.3, pointRadius: 2,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } },
+          y: { ticks: { callback: function(v) { return v + ' dBm'; } } }
         }
       }
     });

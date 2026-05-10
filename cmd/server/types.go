@@ -953,12 +953,18 @@ type SnrDistributionEntry struct {
 	Count int    `json:"count"`
 }
 
+type RssiTimelineEntry struct {
+	Label string  `json:"label"`
+	Avg   float64 `json:"avg"`
+}
+
 type ObserverAnalyticsResponse struct {
 	Timeline        []TimeBucket             `json:"timeline"`
 	PacketTypes     map[string]int           `json:"packetTypes"`
 	NodesTimeline   []TimeBucket             `json:"nodesTimeline"`
 	SnrDistribution []SnrDistributionEntry   `json:"snrDistribution"`
 	UptimeTimeline  []TimeBucket             `json:"uptimeTimeline"`
+	RssiTimeline    []RssiTimelineEntry      `json:"rssiTimeline"`
 	RecentPackets   []map[string]interface{} `json:"recentPackets"`
 }
 
