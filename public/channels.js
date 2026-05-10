@@ -767,6 +767,7 @@
       </div>
       <div class="ch-main" role="region" aria-label="Channel messages">
         <div class="ch-main-header" id="chHeader">
+          <button type="button" class="ch-back-btn" id="chBackBtn" aria-label="Back to channels">←</button>
           <span class="ch-header-text">Select a channel</span>
         </div>
         <div class="ch-messages" id="chMessages">
@@ -1104,6 +1105,18 @@
       if (!btn) return;
       var action = btn.dataset.action;
       if (action === 'ch-close-node') closeNodeDetail();
+    });
+
+    document.getElementById('chBackBtn').addEventListener('click', function () {
+      var layout = app.querySelector('.ch-layout');
+      if (layout) layout.classList.remove('ch-viewing');
+      selectedHash = null;
+      history.replaceState(null, '', '#/channels');
+      renderChannelList();
+      var msgEl2 = document.getElementById('chMessages');
+      if (msgEl2) msgEl2.innerHTML = '<div class="ch-empty">Choose a channel from the sidebar to view messages</div>';
+      var hdr = document.getElementById('chHeader');
+      if (hdr) hdr.querySelector('.ch-header-text').textContent = 'Select a channel';
     });
 
     // Event delegation for channel selection (touch-friendly)
@@ -1717,6 +1730,11 @@
     var __selCh = channels.find(function (c) { return c.hash === hash; });
     if (__selCh && __selCh.unread) { __selCh.unread = 0; }
     history.replaceState(null, '', `#/channels/${encodeURIComponent(hash)}`);
+    // On narrow layouts switch to message view (sidebar hides, main fills screen).
+    var __layout = app.querySelector('.ch-layout');
+    if (__layout && __layout.getBoundingClientRect().width <= 700) {
+      __layout.classList.add('ch-viewing');
+    }
     renderChannelList();
     const ch = channels.find(c => c.hash === hash);
     // #1041: never show raw "psk:<hex>" prefixes in the header — use the

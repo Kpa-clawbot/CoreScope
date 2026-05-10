@@ -1629,15 +1629,15 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
    width and stacks above the message area instead of squeezing it. */
 @container chlayout (max-width: 700px) {
   .ch-layout { flex-direction: column; }
-  .ch-sidebar {
-    width: 100%; min-width: 0;
-    max-height: 40%;
-    overflow-y: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
+  .ch-sidebar { width: 100%; min-width: 0; border-right: none; }
   .ch-sidebar-resize { display: none; }
-  .ch-main { width: 100%; }
+  /* Browsing: channel list fills the screen */
+  .ch-layout:not(.ch-viewing) .ch-sidebar { flex: 1; }
+  .ch-layout:not(.ch-viewing) .ch-main { display: none; }
+  /* Viewing: messages fill the screen, back button visible */
+  .ch-layout.ch-viewing .ch-sidebar { display: none; }
+  .ch-layout.ch-viewing .ch-main { flex: 1; height: 100%; }
+  .ch-layout.ch-viewing .ch-back-btn { display: flex; }
 }
 
 /* === Nav Priority+ — JS-driven measurement (Issue #1102) ===
@@ -1743,19 +1743,17 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
      stacking layout that the E2E test recognizes (sidebar.bottom <=
      main.top). */
   .ch-layout { flex-direction: column; position: relative; }
-  .ch-sidebar {
-    width: 100%; min-width: 0; max-height: 40%; height: auto;
-    overflow-y: auto;
-    border-right: none; border-bottom: 1px solid var(--border);
-    background: var(--card-bg);
-  }
+  .ch-sidebar { width: 100%; min-width: 0; border-right: none; background: var(--card-bg); }
   .ch-sidebar-resize { display: none; }
-  .ch-main {
-    width: 100%; flex: 1; min-height: 0;
-    background: var(--content-bg);
-  }
-  .ch-back-btn { display: flex; }
+  .ch-main { width: 100%; flex: 1; min-height: 0; background: var(--content-bg); }
   .ch-main-header { display: flex; align-items: center; gap: 8px; }
+  /* Browsing: channel list fills the screen */
+  .ch-layout:not(.ch-viewing) .ch-sidebar { flex: 1; }
+  .ch-layout:not(.ch-viewing) .ch-main { display: none; }
+  /* Viewing: messages fill the screen, back button visible */
+  .ch-layout.ch-viewing .ch-sidebar { display: none; }
+  .ch-layout.ch-viewing .ch-main { flex: 1; height: 100%; }
+  .ch-layout.ch-viewing .ch-back-btn { display: flex; }
 
   /* Tables: smaller text for mobile */
   .data-table { font-size: 11px; min-width: 0; }
@@ -1949,7 +1947,9 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .ch-add-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.3; }
 .ch-add-status { font-size: 12px; margin-top: 4px; padding: 4px 6px; border-radius: 4px; }
 .ch-analytics-link {
-  display: block;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
   padding: 6px 8px;
   font-size: 12px;
   text-decoration: none;
