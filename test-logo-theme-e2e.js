@@ -132,7 +132,7 @@ async function main() {
 
     // 2. Hero SVG must NOT have a full-canvas opaque background rect.
     await page.evaluate(() => { window.location.hash = '#/home'; });
-    await page.waitForFunction(() => location.hash === '#/home');
+    await page.waitForFunction(() => location.hash === '#/home' || location.hash === '#/');
     await page.waitForSelector('.home-hero', { timeout: 8000 });
     // Ensure light theme survives reload.
     await page.evaluate(() => { document.documentElement.setAttribute('data-theme', 'light'); });
@@ -265,7 +265,7 @@ async function main() {
 
     // Hero duotone
     await page.evaluate(() => { window.location.hash = '#/home'; });
-    await page.waitForFunction(() => location.hash === '#/home');
+    await page.waitForFunction(() => location.hash === '#/home' || location.hash === '#/');
     await page.waitForSelector('.home-hero', { timeout: 8000 });
     await page.evaluate(() => { document.documentElement.removeAttribute('data-theme'); });
     const heroDark = await fillsByText('.home-hero');
