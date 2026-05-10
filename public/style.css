@@ -3375,8 +3375,15 @@ td[data-filter-field] { cursor: context-menu; }
 
 /* `pan-y` lets vertical scroll work everywhere; the drawer claims
  * horizontal swipes inside our viewport. iOS browser back-swipe (system
- * left-edge gesture) still works — it's at the OS layer, above the page. */
-body { touch-action: pan-y; }
+ * left-edge gesture) still works — it's at the OS layer, above the page.
+ *
+ * Mesh-Op review (PR #1184): scope this to wide viewports only. At
+ * ≤768px the drawer is `display:none` (Option A), so this rule does
+ * nothing useful and would block horizontal panning gestures the future
+ * gesture system (#1185) might want to claim. */
+@media (min-width: 769px) {
+  body { touch-action: pan-y; }
+}
 
 .nav-drawer-backdrop {
   position: fixed;

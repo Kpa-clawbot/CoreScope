@@ -6,8 +6,9 @@
  * At ≤768px the bottom-nav has a "More" tab (PR #1174) that surfaces the
  * same long-tail routes; a left-edge drawer there would compete with it.
  *
- * Inputs (Pointer Events only — no touchstart/mousedown fallbacks):
- *   - pointerdown within the left 20px edge  → start drag-track
+ * Inputs (Pointer Events only — touch + pen, never mouse):
+ *   - pointerdown within the left edge trigger zone [24px, 44px]
+ *     (first 24px reserved for iOS Safari back-swipe — Mesh-Op #1184)
  *   - pointermove                            → drawer translateX follows finger
  *   - pointerup                              → settle open/closed via velocity
  *                                              + position threshold
@@ -63,7 +64,8 @@
     { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', icon: '🎵' },
   ];
 
-  var EDGE_PX = 20;          // pointerdown must start in left N px
+  var EDGE_PX = 44;          // pointerdown must start within left N px (drawer trigger zone)
+  var EDGE_MIN_PX = 24;      // first N px reserved for iOS Safari back-swipe (do not claim)
   var NARROW_MAX = 768;      // Option A: disabled at ≤ this width
   var OPEN_THRESHOLD = 0.5;  // % of drawer width at which open settles
   var VELOCITY_OPEN = 0.4;   // px/ms — fling-right opens regardless of position
@@ -225,8 +227,12 @@
 
   // ── Pointer drag-tracking ───────────────────────────────────────────────
   function onPointerDown(e) {
+    // Mesh-Op review (PR #1184): only respond to touch + pen. Mouse drags
+    // from the left edge must NOT open the drawer (a stray mouse-down at
+    // x<EDGE_PX would otherwise hijack a click). Filter BEFORE any
+    // edge-zone math so the rest of the handler stays touch/pen-only.
+    if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
     if (!isWide()) return;
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
     var x = e.clientX;
     if (isOpen()) {
       // Allow drag-to-close from anywhere inside drawer's left half.
@@ -234,6 +240,11 @@
       var r = drawerEl.getBoundingClientRect();
       if (x > r.right) return;
     } else {
+      // Drawer trigger zone: [EDGE_MIN_PX, EDGE_PX]. The first EDGE_MIN_PX
+      // are reserved for iOS Safari's system back-swipe gesture (Mesh-Op
+      // review on #1184); claiming x < 24 collides with the OS gesture and
+      // leaves iPad users with a flaky double-fire.
+      if (x < EDGE_MIN_PX) return;
       if (x > EDGE_PX) return;
     }
     buildDom();
