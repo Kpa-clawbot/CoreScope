@@ -61,6 +61,7 @@ type StatsResponse struct {
 	TotalNodes         int        `json:"totalNodes"`
 	TotalNodesAllTime  int        `json:"totalNodesAllTime"`
 	TotalObservers     int        `json:"totalObservers"`
+	OnlineObservers    int        `json:"onlineObservers"`
 	PacketsLastHour    int        `json:"packetsLastHour"`
 	PacketsLast24h     int        `json:"packetsLast24h"`
 	Engine             string     `json:"engine"`

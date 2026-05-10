@@ -991,6 +991,7 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 	}
 
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
+	onlineCutoff := time.Now().UTC().Add(-600 * time.Second).Format(time.RFC3339)
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
 	oneDayAgo := time.Now().Add(-24 * time.Hour).Unix()
 
@@ -1005,9 +1006,10 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 			`SELECT
 				(SELECT COUNT(*) FROM nodes WHERE last_seen > ?) AS active_nodes,
 				(SELECT COUNT(*) FROM nodes) AS all_nodes,
-				(SELECT COUNT(*) FROM observers) AS observers`,
-			sevenDaysAgo,
-		).Scan(&st.TotalNodes, &st.TotalNodesAllTime, &st.TotalObservers)
+				(SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0) AS observers,
+				(SELECT COUNT(*) FROM observers WHERE (inactive IS NULL OR inactive = 0) AND last_seen > ?) AS online_observers`,
+			sevenDaysAgo, onlineCutoff,
+		).Scan(&st.TotalNodes, &st.TotalNodesAllTime, &st.TotalObservers, &st.OnlineObservers)
 	}()
 	go func() {
 		defer wg.Done()

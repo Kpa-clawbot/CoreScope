@@ -620,6 +620,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		TotalNodes:         stats.TotalNodes,
 		TotalNodesAllTime:  stats.TotalNodesAllTime,
 		TotalObservers:     stats.TotalObservers,
+		OnlineObservers:    stats.OnlineObservers,
 		PacketsLastHour:    stats.PacketsLastHour,
 		PacketsLast24h:     stats.PacketsLast24h,
 		Engine:             "go",

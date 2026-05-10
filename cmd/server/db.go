@@ -239,6 +239,7 @@ type Stats struct {
 	TotalNodes         int `json:"totalNodes"`
 	TotalNodesAllTime  int `json:"totalNodesAllTime"`
 	TotalObservers     int `json:"totalObservers"`
+	OnlineObservers    int `json:"onlineObservers"`
 	PacketsLastHour    int `json:"packetsLastHour"`
 	PacketsLast24h     int `json:"packetsLast24h"`
 }
@@ -258,6 +259,8 @@ func (db *DB) GetStats() (*Stats, error) {
 	db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE last_seen > ?", sevenDaysAgo).Scan(&s.TotalNodes)
 	db.conn.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&s.TotalNodesAllTime)
 	db.conn.QueryRow("SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0").Scan(&s.TotalObservers)
+	onlineCutoff := time.Now().UTC().Add(-600 * time.Second).Format(time.RFC3339)
+	db.conn.QueryRow("SELECT COUNT(*) FROM observers WHERE (inactive IS NULL OR inactive = 0) AND last_seen > ?", onlineCutoff).Scan(&s.OnlineObservers)
 
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
 	db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneHourAgo).Scan(&s.PacketsLastHour)
