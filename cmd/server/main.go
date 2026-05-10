@@ -175,6 +175,11 @@ func main() {
 	if err := store.Load(); err != nil {
 		log.Fatalf("[store] failed to load: %v", err)
 	}
+	if store.hotStartupHours > 0 {
+		log.Printf("[store] starting background load: filling retentionHours=%.0fh from hotStartupHours=%.0fh",
+			store.retentionHours, store.hotStartupHours)
+		go store.loadBackgroundChunks()
+	}
 
 	// Initialize persisted neighbor graph
 	dbPath = database.path
