@@ -906,7 +906,7 @@ function navigate() {
     return;
   }
 
-  const hash = location.hash.replace('#/', '') || 'packets';
+  const hash = location.hash.replace('#/', '') || 'home';
   const route = hash.split('?')[0];
 
   // Handle parameterized routes: nodes/<pubkey> → nodes page + select
