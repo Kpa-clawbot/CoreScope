@@ -337,6 +337,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				BatteryMv:   meta.BatteryMv,
 				PacketsSent: meta.PacketsSent,
 				PacketsRecv: meta.PacketsRecv,
+				QueueLen:    meta.QueueLen,
 			}
 			if meta.UptimeSecs != nil {
 				v := int(*meta.UptimeSecs)
@@ -851,6 +852,13 @@ func extractObserverMeta(msg map[string]interface{}) *ObserverMeta {
 		if f, ok := toFloat64(v); ok {
 			iv := int(math.Round(f))
 			meta.PacketsRecv = &iv
+			hasData = true
+		}
+	}
+	if v := nestedOrTopLevel(stats, msg, "queue_len"); v != nil {
+		if f, ok := toFloat64(v); ok {
+			iv := int(math.Round(f))
+			meta.QueueLen = &iv
 			hasData = true
 		}
 	}

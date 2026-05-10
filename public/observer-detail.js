@@ -293,6 +293,18 @@
           <h3 style="margin:0 0 8px;font-size:0.95em">RSSI (avg per period)</h3>
           <canvas id="obsRssiChart" role="img" aria-label="RSSI chart"></canvas>
         </div>
+        <div class="chart-card" style="padding:12px">
+          <h3 style="margin:0 0 8px;font-size:0.95em" id="obsAirtimeTitle">Airtime Utilization (%)</h3>
+          <canvas id="obsAirtimeChart" role="img" aria-label="Airtime utilization chart"></canvas>
+        </div>
+        <div class="chart-card" style="padding:12px">
+          <h3 style="margin:0 0 8px;font-size:0.95em">Receive Errors</h3>
+          <canvas id="obsRecvErrorsChart" role="img" aria-label="Receive errors chart"></canvas>
+        </div>
+        <div class="chart-card" style="padding:12px">
+          <h3 style="margin:0 0 8px;font-size:0.95em">TX Queue Length</h3>
+          <canvas id="obsQueueLenChart" role="img" aria-label="TX queue length chart"></canvas>
+        </div>
       </div>
       <div style="margin-top:20px">
         <h3 style="font-size:0.95em">Recent Packets</h3>
@@ -326,6 +338,18 @@
     }
     if (analytics.rssiTimeline && analytics.rssiTimeline.length > 0) {
       renderRssiChart(analytics.rssiTimeline);
+    }
+    var airtimePoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.tx_airtime_pct != null || m.rx_airtime_pct != null; }) : [];
+    if (airtimePoints.length > 0) {
+      renderAirtimeChart(airtimePoints);
+    }
+    var recvErrorPoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.recv_errors != null; }) : [];
+    if (recvErrorPoints.length > 0) {
+      renderRecvErrorsChart(recvErrorPoints);
+    }
+    var queueLenPoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.queue_len != null; }) : [];
+    if (queueLenPoints.length > 0) {
+      renderQueueLenChart(queueLenPoints);
     }
     if (analytics.recentPackets) {
       renderRecentPackets(analytics.recentPackets);
@@ -559,6 +583,122 @@
         scales: {
           x: { ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } },
           y: { ticks: { callback: function(v) { return v + ' dBm'; } } }
+        }
+      }
+    });
+    charts.push(c);
+  }
+
+  function renderAirtimeChart(samples) {
+    const ctx = document.getElementById('obsAirtimeChart');
+    if (!ctx) return;
+    const labels = samples.map(function(s) {
+      return new Date(s.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    });
+    const txVals = samples.map(function(s) { return s.tx_airtime_pct; });
+    const rxVals = samples.map(function(s) { return s.rx_airtime_pct; });
+    const txAvg = (function() {
+      const v = txVals.filter(function(x) { return x != null; });
+      return v.length ? Math.round(v.reduce(function(a, b) { return a + b; }, 0) / v.length * 100) / 100 : null;
+    })();
+    const rxAvg = (function() {
+      const v = rxVals.filter(function(x) { return x != null; });
+      return v.length ? Math.round(v.reduce(function(a, b) { return a + b; }, 0) / v.length * 100) / 100 : null;
+    })();
+    const titleEl = document.getElementById('obsAirtimeTitle');
+    if (titleEl) {
+      var parts = ['Airtime Utilization (%)'];
+      if (txAvg != null) parts.push('TX: ' + txAvg + '% avg');
+      if (rxAvg != null) parts.push('RX: ' + rxAvg + '% avg');
+      titleEl.textContent = parts.join(' — ');
+    }
+    const c = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'TX Airtime %',
+            data: txVals,
+            borderColor: CHART_COLORS[0],
+            backgroundColor: CHART_COLORS[0] + '20',
+            fill: false, tension: 0.3, pointRadius: 2, spanGaps: true,
+          },
+          {
+            label: 'RX Airtime %',
+            data: rxVals,
+            borderColor: CHART_COLORS[1],
+            backgroundColor: CHART_COLORS[1] + '20',
+            fill: false, tension: 0.3, pointRadius: 2, spanGaps: true,
+          },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: true,
+        plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12 } } },
+        scales: {
+          x: { ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } },
+          y: { beginAtZero: true, ticks: { callback: function(v) { return v + '%'; } } }
+        }
+      }
+    });
+    charts.push(c);
+  }
+
+  function renderRecvErrorsChart(samples) {
+    const ctx = document.getElementById('obsRecvErrorsChart');
+    if (!ctx) return;
+    const labels = samples.map(function(s) {
+      return new Date(s.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    });
+    const c = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Recv Errors',
+          data: samples.map(function(s) { return s.recv_errors; }),
+          borderColor: CHART_COLORS[1],
+          backgroundColor: CHART_COLORS[1] + '20',
+          fill: true, tension: 0.3, pointRadius: 2, spanGaps: true,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } },
+          y: { beginAtZero: true, ticks: { precision: 0 } }
+        }
+      }
+    });
+    charts.push(c);
+  }
+
+  function renderQueueLenChart(samples) {
+    const ctx = document.getElementById('obsQueueLenChart');
+    if (!ctx) return;
+    const labels = samples.map(function(s) {
+      return new Date(s.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    });
+    const c = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Queue Length',
+          data: samples.map(function(s) { return s.queue_len; }),
+          backgroundColor: CHART_COLORS[6] + '80',
+          borderColor: CHART_COLORS[6],
+          borderWidth: 1,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } },
+          y: { beginAtZero: true, ticks: { precision: 0 } }
         }
       }
     });
