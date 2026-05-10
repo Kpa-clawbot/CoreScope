@@ -3720,3 +3720,83 @@ body { touch-action: pan-y; }
   .row-action-overlay { transition: none !important; }
 }
 /* === end #1062 ====================================================== */ (feat(#1062): green — implement gesture system)
+
+/* === Issue #1065 — Gesture discoverability hints =================== */
+.gesture-hint {
+  position: fixed;
+  z-index: 9999;
+  max-width: 360px;
+  /* !important guards against any layered cascade enabling pointer-events
+   * (e.g., a future overlay class with higher specificity). The hint
+   * wrapper MUST never capture clicks — only its inner button does. */
+  pointer-events: none !important;
+  opacity: 1;
+  animation-name: gesture-hint-slide-in;
+  animation-duration: 240ms;
+  animation-timing-function: ease-out;
+  animation-fill-mode: both;
+  transition: opacity 320ms ease-out;
+}
+.gesture-hint-bottom {
+  left: 50%;
+  bottom: 80px;
+  transform: translateX(-50%);
+}
+.gesture-hint-top {
+  left: 50%;
+  top: 16px;
+  transform: translateX(-50%);
+}
+.gesture-hint-top-left {
+  left: 16px;
+  top: 80px;
+}
+.gesture-hint-inner {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface-2, #1a1a1a);
+  color: var(--text, #e7e7e7);
+  border: 1px solid var(--border, #333);
+  border-radius: 999px;
+  padding: 8px 8px 8px 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  line-height: 1.3;
+}
+.gesture-hint-text {
+  white-space: normal;
+}
+.gesture-hint-dismiss {
+  pointer-events: auto;
+  background: var(--accent, #4a9eff);
+  color: var(--accent-fg, #fff);
+  border: none;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.gesture-hint-dismiss:hover { filter: brightness(1.1); }
+.gesture-hint-fading { opacity: 0; }
+
+@keyframes gesture-hint-slide-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.gesture-hint-top-left { animation-name: gesture-hint-fade-in; }
+@keyframes gesture-hint-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gesture-hint {
+    animation-name: none !important;
+    animation-duration: 0s !important;
+  }
+}
+/* === end #1065 ====================================================== */
