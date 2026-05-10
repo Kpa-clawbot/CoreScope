@@ -219,6 +219,10 @@
           <div class="stat-value">${obs.noise_floor != null ? obs.noise_floor + ' dBm' : '—'}</div>
         </div>
         <div class="stat-card">
+          <div class="stat-label">Forwarding</div>
+          <div class="stat-value">${obs.repeat != null ? (obs.repeat === 'on' ? '<span class="health-dot health-green">●</span> Enabled' : '<span class="health-dot health-red">●</span> Disabled') : '—'}</div>
+        </div>
+        <div class="stat-card">
           <div class="stat-label">Total Packets</div>
           <div class="stat-value">${(obs.packet_count || 0).toLocaleString()}</div>
         </div>
@@ -607,10 +611,13 @@
     })();
     const titleEl = document.getElementById('obsAirtimeTitle');
     if (titleEl) {
-      var parts = ['Airtime Utilization (%)'];
-      if (txAvg != null) parts.push('TX: ' + txAvg + '% avg');
-      if (rxAvg != null) parts.push('RX: ' + rxAvg + '% avg');
-      titleEl.textContent = parts.join(' — ');
+      var suffix = '';
+      if (txAvg != null || rxAvg != null) {
+        suffix = ' — ' + (txAvg != null ? '(TX: ' + txAvg + '%)' : '') +
+          (txAvg != null && rxAvg != null ? ' - ' : '') +
+          (rxAvg != null ? '(RX: ' + rxAvg + '%)' : '');
+      }
+      titleEl.textContent = 'Airtime Utilization (%)' + suffix;
     }
     const c = new Chart(ctx, {
       type: 'line',

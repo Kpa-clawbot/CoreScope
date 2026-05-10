@@ -22,6 +22,7 @@ type DB struct {
 	hasResolvedPath       bool   // observations table has resolved_path column
 	hasObsRawHex          bool   // observations table has raw_hex column (#881)
 	hasObserverLastPacket bool   // observers table has last_packet_at column (#969)
+	hasObserverRepeat     bool   // observers table has repeat column
 
 	// Channel list cache (60s TTL) — avoids repeated GROUP BY scans (#762)
 	channelsCacheMu  sync.Mutex
@@ -104,6 +105,9 @@ func (db *DB) detectSchema() {
 		if obsRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
 			if colName == "last_packet_at" {
 				db.hasObserverLastPacket = true
+			}
+			if colName == "repeat" {
+				db.hasObserverRepeat = true
 			}
 		}
 	}
@@ -196,6 +200,7 @@ type Observer struct {
 	UptimeSecs    *int64   `json:"uptime_secs"`
 	NoiseFloor    *float64 `json:"noise_floor"`
 	LastPacketAt  *string  `json:"last_packet_at"`
+	Repeat        *string  `json:"repeat"`
 }
 
 // Transmission represents a row from the transmissions table.
@@ -1075,17 +1080,14 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 
 // GetObservers returns active observers (not soft-deleted) sorted by last_seen DESC.
 func (db *DB) GetObservers() ([]Observer, error) {
-	var (
-		query string
-		rows  *sql.Rows
-		err   error
-	)
+	cols := "id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor"
 	if db.hasObserverLastPacket {
-		query = "SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC"
-	} else {
-		query = "SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC"
+		cols += ", last_packet_at"
 	}
-	rows, err = db.conn.Query(query)
+	if db.hasObserverRepeat {
+		cols += ", repeat"
+	}
+	rows, err := db.conn.Query("SELECT " + cols + " FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -1096,13 +1098,14 @@ func (db *DB) GetObservers() ([]Observer, error) {
 		var o Observer
 		var batteryMv, uptimeSecs sql.NullInt64
 		var noiseFloor sql.NullFloat64
-		var scanErr error
+		dest := []interface{}{&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor}
 		if db.hasObserverLastPacket {
-			scanErr = rows.Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt)
-		} else {
-			scanErr = rows.Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor)
+			dest = append(dest, &o.LastPacketAt)
 		}
-		if scanErr != nil {
+		if db.hasObserverRepeat {
+			dest = append(dest, &o.Repeat)
+		}
+		if scanErr := rows.Scan(dest...); scanErr != nil {
 			continue
 		}
 		if batteryMv.Valid {
@@ -1144,14 +1147,21 @@ func (db *DB) GetObserverByID(id string) (*Observer, error) {
 	var o Observer
 	var batteryMv, uptimeSecs sql.NullInt64
 	var noiseFloor sql.NullFloat64
-	var err error
+	cols := "id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor"
 	if db.hasObserverLastPacket {
-		err = db.conn.QueryRow("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at FROM observers WHERE id = ?", id).
-			Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt)
-	} else {
-		err = db.conn.QueryRow("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor FROM observers WHERE id = ?", id).
-			Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor)
+		cols += ", last_packet_at"
 	}
+	if db.hasObserverRepeat {
+		cols += ", repeat"
+	}
+	dest := []interface{}{&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor}
+	if db.hasObserverLastPacket {
+		dest = append(dest, &o.LastPacketAt)
+	}
+	if db.hasObserverRepeat {
+		dest = append(dest, &o.Repeat)
+	}
+	err := db.conn.QueryRow("SELECT "+cols+" FROM observers WHERE id = ?", id).Scan(dest...)
 	if err != nil {
 		return nil, err
 	}
@@ -2364,16 +2374,22 @@ func computeDeltas(raw []rawMetricsSample, bucketSizeSec int) ([]MetricsSample, 
 			s.RxAirtimePct = &result_pct
 		}
 
-		// Compute recv error rate
-		if cur.RecvErrors != nil && prev.RecvErrors != nil &&
-			cur.PacketsRecv != nil && prev.PacketsRecv != nil {
-			deltaErrors := float64(*cur.RecvErrors - *prev.RecvErrors)
-			deltaRecv := float64(*cur.PacketsRecv - *prev.PacketsRecv)
-			total := deltaRecv + deltaErrors
-			if total > 0 {
-				rate := (deltaErrors / total) * 100.0
-				rate = math.Round(rate*100) / 100
-				s.RecvErrorRate = &rate
+		// Compute recv errors delta and error rate
+		if cur.RecvErrors != nil && prev.RecvErrors != nil {
+			delta := *cur.RecvErrors - *prev.RecvErrors
+			if delta < 0 {
+				delta = 0
+			}
+			s.RecvErrors = &delta
+			if cur.PacketsRecv != nil && prev.PacketsRecv != nil {
+				deltaErrors := float64(delta)
+				deltaRecv := float64(*cur.PacketsRecv - *prev.PacketsRecv)
+				total := deltaRecv + deltaErrors
+				if total > 0 {
+					rate := (deltaErrors / total) * 100.0
+					rate = math.Round(rate*100) / 100
+					s.RecvErrorRate = &rate
+				}
 			}
 		}
 

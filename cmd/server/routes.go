@@ -2196,6 +2196,7 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 			LastPacketAt: o.LastPacketAt,
 			PacketsLastHour: plh,
 			Lat: lat, Lon: lon, NodeRole: nodeRole,
+			Repeat: o.Repeat,
 		})
 	}
 	writeJSON(w, ObserverListResponse{
@@ -2265,6 +2266,7 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 		NoiseFloor: obs.NoiseFloor,
 		LastPacketAt: obs.LastPacketAt,
 		PacketsLastHour: plh,
+		Repeat:          obs.Repeat,
 		IngestSources:   ingestSources,
 	})
 }

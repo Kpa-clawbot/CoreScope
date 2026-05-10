@@ -419,6 +419,15 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] uptime_secs column added")
 	}
 
+	// Migration: add repeat column to observers for mesh forwarding status
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observers_repeat_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding repeat column to observers...")
+		db.Exec(`ALTER TABLE observers ADD COLUMN repeat TEXT DEFAULT NULL`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observers_repeat_v1')`)
+		log.Println("[migration] observers.repeat column added")
+	}
+
 	// Migration: add queue_len to observer_metrics for TX queue depth charting
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_metrics_queue_len_v1'")
 	if row.Scan(&migDone) != nil {
@@ -679,8 +688,8 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtUpsertObserver, err = s.db.Prepare(`
-		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor)
-		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, repeat)
+		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = COALESCE(?, name),
 			iata = COALESCE(?, iata),
@@ -692,7 +701,8 @@ func (s *Store) prepareStatements() error {
 			radio = COALESCE(?, radio),
 			battery_mv = COALESCE(?, battery_mv),
 			uptime_secs = COALESCE(?, uptime_secs),
-			noise_floor = COALESCE(?, noise_floor)
+			noise_floor = COALESCE(?, noise_floor),
+			repeat = COALESCE(?, repeat)
 	`)
 	if err != nil {
 		return err
@@ -903,6 +913,7 @@ type ObserverMeta struct {
 	PacketsSent   *int     // cumulative packets sent since boot
 	PacketsRecv   *int     // cumulative packets received since boot
 	QueueLen      *int     // current TX queue depth
+	Repeat        *string  // mesh forwarding enabled: "on" or "off"
 }
 
 // UpsertObserver inserts or updates an observer with optional hardware metadata.
@@ -911,7 +922,7 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 	normalizedIATA := strings.TrimSpace(strings.ToUpper(iata))
 
 	var model, firmware, clientVersion, radio interface{}
-	var batteryMv, uptimeSecs, noiseFloor interface{}
+	var batteryMv, uptimeSecs, noiseFloor, repeat interface{}
 	if meta != nil {
 		if meta.Model != nil {
 			model = *meta.Model
@@ -934,11 +945,14 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 		if meta.NoiseFloor != nil {
 			noiseFloor = *meta.NoiseFloor
 		}
+		if meta.Repeat != nil {
+			repeat = *meta.Repeat
+		}
 	}
 
 	_, err := s.stmtUpsertObserver.Exec(
-		id, name, normalizedIATA, now, now, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor,
-		name, normalizedIATA, now, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor,
+		id, name, normalizedIATA, now, now, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, repeat,
+		name, normalizedIATA, now, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, repeat,
 	)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)

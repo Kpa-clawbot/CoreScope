@@ -862,6 +862,10 @@ func extractObserverMeta(msg map[string]interface{}) *ObserverMeta {
 			hasData = true
 		}
 	}
+	if v, ok := msg["repeat"].(string); ok && (v == "on" || v == "off") {
+		meta.Repeat = &v
+		hasData = true
+	}
 
 	if !hasData {
 		return nil

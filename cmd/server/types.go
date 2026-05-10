@@ -929,6 +929,7 @@ type ObserverResp struct {
 	Lat             interface{}      `json:"lat"`
 	Lon             interface{}      `json:"lon"`
 	NodeRole        interface{}      `json:"nodeRole"`
+	Repeat          interface{}      `json:"repeat,omitempty"`
 	IngestSources   []ObserverSource `json:"ingestSources,omitempty"`
 }
 
