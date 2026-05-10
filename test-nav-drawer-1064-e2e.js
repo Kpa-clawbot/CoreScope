@@ -249,9 +249,9 @@ async function edgeSwipe(page, x0, y0, x1, y1, steps) {
     await wide.evaluate(() => window.__navDrawer && window.__navDrawer.close && window.__navDrawer.close());
     await wide.waitForTimeout(120);
     // Use Playwright's real mouse API — emits PointerEvent with pointerType="mouse".
-    await wide.mouse.move(10, 400);
+    await wide.mouse.move(30, 400); // x=30 is inside the touch trigger zone (24-44) so the only thing rejecting this drag is the pointerType filter
     await wide.mouse.down();
-    await wide.mouse.move(220, 400, { steps: 12 });
+    await wide.mouse.move(240, 400, { steps: 12 });
     await wide.mouse.up();
     await wide.waitForTimeout(200);
     const open = await wide.evaluate(() => !!(window.__navDrawer && window.__navDrawer.isOpen && window.__navDrawer.isOpen()));
