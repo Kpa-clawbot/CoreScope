@@ -899,8 +899,12 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			s.byObsID[k] = v
 		}
 	}
-	for k, obs := range localByObserver {
-		s.byObserver[k] = append(s.byObserver[k], obs...)
+	for observerID, obsList := range localByObserver {
+		for _, o := range obsList {
+			if s.byObsID[o.ID] == nil {
+				s.byObserver[observerID] = append(s.byObserver[observerID], o)
+			}
+		}
 	}
 
 	// Index each local packet into byNode and byPayloadType.
@@ -1405,6 +1409,10 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 	nodeIdx := len(s.byNode)
 	pathHopIdx := len(s.byPathHop)
 	ptIdx := len(s.byPayloadType)
+	oldestLoaded := s.oldestLoaded
+	retentionHours := s.retentionHours
+	maxMemoryMB := s.maxMemoryMB
+	hotStartupHours := s.hotStartupHours
 
 	// Distinct advert pubkey count — precomputed incrementally (see trackAdvertPubkey).
 	advertByObsCount := len(s.advertPubkeys)
@@ -1423,12 +1431,12 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 		"queries":                atomic.LoadInt64(&s.queryCount),
 		"inMemory":               totalLoaded,
 		"sqliteOnly":             false,
-		"retentionHours":         s.retentionHours,
-		"maxMemoryMB":            s.maxMemoryMB,
-		"oldestLoaded":           s.oldestLoaded,
+		"retentionHours":         retentionHours,
+		"maxMemoryMB":            maxMemoryMB,
+		"oldestLoaded":           oldestLoaded,
 		"estimatedMB":            estimatedMB,
 		"trackedMB":              trackedMB,
-		"hotStartupHours":        s.hotStartupHours,
+		"hotStartupHours":        hotStartupHours,
 		"backgroundLoadComplete": s.backgroundLoadDone.Load(),
 		"backgroundLoadProgress": s.backgroundLoadProgress.Load(),
 		"indexes": map[string]interface{}{
