@@ -3560,7 +3560,10 @@ body { touch-action: pan-y; }
   position: fixed;
   z-index: 9999;
   max-width: 360px;
-  pointer-events: none;
+  /* !important guards against any layered cascade enabling pointer-events
+   * (e.g., a future overlay class with higher specificity). The hint
+   * wrapper MUST never capture clicks — only its inner button does. */
+  pointer-events: none !important;
   opacity: 1;
   animation-name: gesture-hint-slide-in;
   animation-duration: 240ms;
