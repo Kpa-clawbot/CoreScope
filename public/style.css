@@ -634,6 +634,8 @@ input[type="week"] {
    a fixed-height container (maps, virtual-scroll, split-panels) add
    .app-fixed via the router so their children can use height:100%. */
 #app { min-height: calc(100vh - 52px); min-height: calc(100dvh - 52px); }
+/* Scrollable (non-fixed) pages: pad bottom so the last row clears the bottom-nav. */
+#app:not(.app-fixed) { padding-bottom: var(--bottom-nav-reserve, 0px); }
 /* #1174 mesh-op review: subtract --bottom-nav-reserve so /map and the
  * other fixed-height pages (packets, nodes, channels, audio-lab) do not
  * have their last 56px covered by the bottom-nav at ≤768. The token is
@@ -805,7 +807,7 @@ body.scroll-locked { overflow: hidden; }
 }
 .slide-over-backdrop[hidden] { display: none; }
 .slide-over-panel {
-  position: fixed; top: 0; right: 0; bottom: 0;
+  position: fixed; top: 0; right: 0; bottom: var(--bottom-nav-reserve, 0px);
   width: min(480px, 90vw);
   z-index: 1001;
   background: var(--detail-bg, var(--card-bg, #1f2937));
@@ -2513,7 +2515,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 /* Mobile detail bottom sheet */
 .mobile-detail-sheet {
   display: none;
-  position: fixed; bottom: 0; left: 0; right: 0;
+  position: fixed; bottom: var(--bottom-nav-reserve, 0px); left: 0; right: 0;
   max-height: 70vh; background: var(--detail-bg);
   border-top-left-radius: 16px; border-top-right-radius: 16px;
   box-shadow: 0 -4px 24px rgba(0,0,0,.3);
@@ -3084,7 +3086,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   }
   .cc-picker-popover {
     position: fixed !important;
-    bottom: 0 !important;
+    bottom: var(--bottom-nav-reserve, 0px) !important;
     left: 0 !important;
     right: 0 !important;
     top: auto !important;
@@ -3138,7 +3140,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
     top: 52px;
     left: 0;
     right: 0;
-    bottom: 0;
+    bottom: var(--bottom-nav-reserve, 0px);
     width: 100%;
     min-width: 0;
     z-index: 150;
