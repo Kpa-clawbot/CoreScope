@@ -3,7 +3,8 @@
  * Issue #1064 — Edge-swipe nav drawer (parent epic #1052).
  *
  * Asserts:
- *   (a) at 1024x800: pointer-down at x=10, drag to x=200 → drawer opens,
+ *   (a) at 1024x800: touch pointer-down at x=30, drag to x=220 → drawer opens
+ *       (24px iOS back-swipe reservation + 24-44px drawer trigger zone),
  *       drawer.getBoundingClientRect().left === 0
  *   (b) drawer items present (long-tail routes from PR #1174)
  *   (c) tap a drawer item → URL hash changes, drawer closes
@@ -98,8 +99,10 @@ async function edgeSwipe(page, x0, y0, x1, y1, steps) {
   await wide.waitForSelector('main#app', { timeout: 8000 });
   await wide.waitForTimeout(300);
 
-  await step('(a) edge-swipe at x=10→200 opens drawer flush at left:0', async () => {
-    await edgeSwipe(wide, 10, 400, 220, 400, 12);
+  await step('(a) edge-swipe at x=30→220 opens drawer flush at left:0 (24-44px trigger zone)', async () => {
+    // Start at x=30: clears the 24px iOS back-swipe reservation zone
+    // and falls inside the 24-44px drawer trigger window.
+    await edgeSwipe(wide, 30, 400, 220, 400, 12);
     await wide.waitForTimeout(250);
     const rect = await wide.evaluate(() => {
       const d = document.querySelector('[data-nav-drawer]');
@@ -241,6 +244,30 @@ async function edgeSwipe(page, x0, y0, x1, y1, steps) {
     assert(wrappedToFirst, 'Tab from last focusable did NOT wrap to first (focus trap broken)');
   });
 
+  await step('(i) mouse-down at left edge does NOT open drawer (pointerType=mouse must be ignored)', async () => {
+    // Ensure drawer is closed before the assertion.
+    await wide.evaluate(() => window.__navDrawer && window.__navDrawer.close && window.__navDrawer.close());
+    await wide.waitForTimeout(120);
+    // Use Playwright's real mouse API — emits PointerEvent with pointerType="mouse".
+    await wide.mouse.move(10, 400);
+    await wide.mouse.down();
+    await wide.mouse.move(220, 400, { steps: 12 });
+    await wide.mouse.up();
+    await wide.waitForTimeout(200);
+    const open = await wide.evaluate(() => !!(window.__navDrawer && window.__navDrawer.isOpen && window.__navDrawer.isOpen()));
+    assert(!open, 'drawer opened on mouse drag from left edge — pointerdown must reject pointerType=mouse');
+  });
+
+  await step('(j) touch swipe from x=10 (inside iOS back-swipe reservation) does NOT open drawer', async () => {
+    await wide.evaluate(() => window.__navDrawer && window.__navDrawer.close && window.__navDrawer.close());
+    await wide.waitForTimeout(120);
+    // x=10 is inside the 24px reservation zone for iOS back-swipe — drawer must NOT open.
+    await edgeSwipe(wide, 10, 400, 220, 400, 12);
+    await wide.waitForTimeout(200);
+    const open = await wide.evaluate(() => !!(window.__navDrawer && window.__navDrawer.isOpen && window.__navDrawer.isOpen()));
+    assert(!open, 'drawer opened on touch swipe from x=10 — first 24px must be reserved for iOS back-swipe');
+  });
+
   await wideCtx.close();
 
   // ── Narrow viewport (Option A): drawer disabled ──
@@ -254,7 +281,7 @@ async function edgeSwipe(page, x0, y0, x1, y1, steps) {
   await narrow.waitForTimeout(300);
 
   await step('(f) narrow viewport: edge-swipe does NOT open drawer (Option A)', async () => {
-    await edgeSwipe(narrow, 10, 400, 220, 400, 12);
+    await edgeSwipe(narrow, 30, 400, 220, 400, 12);
     await narrow.waitForTimeout(250);
     const open = await narrow.evaluate(() => {
       if (!window.__navDrawer || !window.__navDrawer.isOpen) return false;
