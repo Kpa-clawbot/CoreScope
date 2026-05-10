@@ -167,3 +167,49 @@ func TestHotStartup_DisabledWhenZero(t *testing.T) {
 		t.Errorf("expected 60 packets with hotStartupHours=0, got %d", len(store.packets))
 	}
 }
+
+func TestHotStartup_loadChunk_AddsOlderData(t *testing.T) {
+	// 50 old packets (48h ago), 10 recent (30min ago)
+	dbPath := createTestDBWithAgedPackets(t, 10, 50)
+	defer os.RemoveAll(filepath.Dir(dbPath))
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  72,
+		HotStartupHours: 1,
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.packets) != 10 {
+		t.Fatalf("setup: expected 10 packets after hot Load, got %d", len(store.packets))
+	}
+
+	// Load the old chunk (covers the 50 old packets at ~48h ago)
+	chunkEnd := time.Now().UTC().Add(-1 * time.Hour)
+	chunkStart := time.Now().UTC().Add(-72 * time.Hour)
+	if err := store.loadChunk(chunkStart, chunkEnd); err != nil {
+		t.Fatalf("loadChunk failed: %v", err)
+	}
+
+	// Should have 10 recent + 50 old
+	if len(store.packets) != 60 {
+		t.Errorf("expected 60 packets after loadChunk, got %d", len(store.packets))
+	}
+	// Packets must remain sorted ASC by first_seen
+	for i := 1; i < len(store.packets); i++ {
+		if store.packets[i].FirstSeen < store.packets[i-1].FirstSeen {
+			t.Fatalf("packets not in ASC order at index %d: %s < %s",
+				i, store.packets[i].FirstSeen, store.packets[i-1].FirstSeen)
+		}
+	}
+	// byHash must include the old packets
+	if len(store.byHash) != 60 {
+		t.Errorf("expected byHash len=60, got %d", len(store.byHash))
+	}
+}

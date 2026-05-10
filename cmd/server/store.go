@@ -699,6 +699,229 @@ func (s *PacketStore) Load() error {
 	return nil
 }
 
+// loadChunk queries a [from, to) time window from SQLite without holding the
+// write lock, builds local data structures, then merges them into the store
+// under s.mu.Lock(). It is the building block for the background loader.
+//
+// The chunk is assumed to be older than the data already in the store, so
+// localPackets are prepended to s.packets.
+//
+// byPathHop, spIndex, and distHops are NOT updated here — the caller
+// (loadBackgroundChunks) rebuilds those once after all chunks are merged.
+func (s *PacketStore) loadChunk(from, to time.Time) error {
+	fromStr := from.UTC().Format(time.RFC3339)
+	toStr := to.UTC().Format(time.RFC3339)
+
+	// Build the same SQL as Load() but with a [from, to) window.
+	rpCol := ""
+	if s.db.hasResolvedPath {
+		rpCol = ",\n\t\t\t\to.resolved_path"
+	}
+	obsRawHexCol := ""
+	if s.db.hasObsRawHex {
+		obsRawHexCol = ", o.raw_hex"
+	}
+
+	filterClause := fmt.Sprintf("\n\t\t\tWHERE t.first_seen >= '%s' AND t.first_seen < '%s'", fromStr, toStr)
+
+	var chunkSQL string
+	if s.db.isV3 {
+		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
+				t.payload_type, t.payload_version, t.decoded_json,
+				o.id, obs.id, obs.name, o.direction,
+				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + `
+			FROM transmissions t
+			LEFT JOIN observations o ON o.transmission_id = t.id
+			LEFT JOIN observers obs ON obs.rowid = o.observer_idx` + filterClause + `
+			ORDER BY t.first_seen ASC, o.timestamp DESC`
+	} else {
+		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
+				t.payload_type, t.payload_version, t.decoded_json,
+				o.id, o.observer_id, o.observer_name, o.direction,
+				o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRawHexCol + rpCol + `
+			FROM transmissions t
+			LEFT JOIN observations o ON o.transmission_id = t.id` + filterClause + `
+			ORDER BY t.first_seen ASC, o.timestamp DESC`
+	}
+
+	rows, err := s.db.conn.Query(chunkSQL)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	// Local data structures — built without holding the lock.
+	localByHash := make(map[string]*StoreTx)
+	localPackets := make([]*StoreTx, 0)
+	localByTxID := make(map[int]*StoreTx)
+	localByObsID := make(map[int]*StoreObs)
+	localByObserver := make(map[string][]*StoreObs)
+	var localTotalObs int
+	var localTrackedBytes int64
+	var localMaxTxID int
+	var localMaxObsID int
+
+	for rows.Next() {
+		var txID int
+		var rawHex, hash, firstSeen, decodedJSON sql.NullString
+		var routeType, payloadType, payloadVersion sql.NullInt64
+		var obsID sql.NullInt64
+		var observerID, observerName, direction, pathJSON, obsTimestamp sql.NullString
+		var snr, rssi sql.NullFloat64
+		var score sql.NullInt64
+		var obsRawHex sql.NullString
+		var resolvedPathStr sql.NullString
+
+		scanArgs := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
+			&payloadVersion, &decodedJSON,
+			&obsID, &observerID, &observerName, &direction,
+			&snr, &rssi, &score, &pathJSON, &obsTimestamp}
+		if s.db.hasObsRawHex {
+			scanArgs = append(scanArgs, &obsRawHex)
+		}
+		if s.db.hasResolvedPath {
+			scanArgs = append(scanArgs, &resolvedPathStr)
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
+			log.Printf("[store] loadChunk scan error: %v", err)
+			continue
+		}
+
+		hashStr := nullStrVal(hash)
+		tx := localByHash[hashStr]
+		if tx == nil {
+			tx = &StoreTx{
+				ID:          txID,
+				RawHex:      nullStrVal(rawHex),
+				Hash:        hashStr,
+				FirstSeen:   nullStrVal(firstSeen),
+				LatestSeen:  nullStrVal(firstSeen),
+				RouteType:   nullIntPtr(routeType),
+				PayloadType: nullIntPtr(payloadType),
+				DecodedJSON: nullStrVal(decodedJSON),
+				obsKeys:     make(map[string]bool),
+				observerSet: make(map[string]bool),
+			}
+			localByHash[hashStr] = tx
+			localPackets = append(localPackets, tx)
+			localByTxID[txID] = tx
+			if txID > localMaxTxID {
+				localMaxTxID = txID
+			}
+			localTrackedBytes += estimateStoreTxBytes(tx)
+		}
+
+		if obsID.Valid {
+			oid := int(obsID.Int64)
+			obsIDStr := nullStrVal(observerID)
+			obsPJ := nullStrVal(pathJSON)
+
+			dk := obsIDStr + "|" + obsPJ
+			if tx.obsKeys[dk] {
+				continue
+			}
+
+			obs := &StoreObs{
+				ID:             oid,
+				TransmissionID: txID,
+				ObserverID:     obsIDStr,
+				ObserverName:   nullStrVal(observerName),
+				Direction:      nullStrVal(direction),
+				SNR:            nullFloatPtr(snr),
+				RSSI:           nullFloatPtr(rssi),
+				Score:          nullIntPtr(score),
+				PathJSON:       obsPJ,
+				RawHex:         nullStrVal(obsRawHex),
+				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
+			}
+
+			tx.Observations = append(tx.Observations, obs)
+			tx.obsKeys[dk] = true
+			if obs.ObserverID != "" && !tx.observerSet[obs.ObserverID] {
+				tx.observerSet[obs.ObserverID] = true
+				tx.UniqueObserverCount++
+			}
+			tx.ObservationCount++
+			if obs.Timestamp > tx.LatestSeen {
+				tx.LatestSeen = obs.Timestamp
+			}
+
+			localByObsID[oid] = obs
+			if oid > localMaxObsID {
+				localMaxObsID = oid
+			}
+			if obsIDStr != "" {
+				localByObserver[obsIDStr] = append(localByObserver[obsIDStr], obs)
+			}
+			localTotalObs++
+			localTrackedBytes += estimateStoreObsBytes(obs)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// Pick best observation for each local packet before merging.
+	for _, tx := range localPackets {
+		pickBestObservation(tx)
+	}
+
+	if len(localPackets) == 0 {
+		return nil
+	}
+
+	// Merge under write lock.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Prepend: chunk is older than the hot window already in store.
+	s.packets = append(localPackets, s.packets...)
+
+	// Merge indexes.
+	for k, v := range localByHash {
+		if s.byHash[k] == nil {
+			s.byHash[k] = v
+		}
+	}
+	for k, v := range localByTxID {
+		if s.byTxID[k] == nil {
+			s.byTxID[k] = v
+		}
+	}
+	for k, v := range localByObsID {
+		if s.byObsID[k] == nil {
+			s.byObsID[k] = v
+		}
+	}
+	for k, obs := range localByObserver {
+		s.byObserver[k] = append(s.byObserver[k], obs...)
+	}
+
+	// Index each local packet into byNode and byPayloadType.
+	for _, tx := range localPackets {
+		s.indexByNode(tx)
+		if tx.PayloadType != nil {
+			pt := *tx.PayloadType
+			s.byPayloadType[pt] = append(s.byPayloadType[pt], tx)
+		}
+		s.trackAdvertPubkey(tx)
+	}
+
+	// Update counters.
+	s.totalObs += localTotalObs
+	s.trackedBytes += localTrackedBytes
+	if localMaxTxID > s.maxTxID {
+		s.maxTxID = localMaxTxID
+	}
+	if localMaxObsID > s.maxObsID {
+		s.maxObsID = localMaxObsID
+	}
+	s.oldestLoaded = fromStr
+
+	log.Printf("[store] background chunk [%s, %s) merged: %d tx, %d obs", fromStr, toStr, len(localPackets), localTotalObs)
+	return nil
+}
+
 // pickBestObservation selects the observation with the longest path
 // and sets it as the transmission's display observation.
 func pickBestObservation(tx *StoreTx) {
