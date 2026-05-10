@@ -58,9 +58,39 @@ type procIOSample struct {
 
 // perfIOTracker keeps the previous sample so handlePerfIO can compute deltas.
 var (
-	perfIOMu       sync.Mutex
+	perfIOMu         sync.Mutex
 	perfIOLastSample procIOSample
 )
+
+// perfHistoryIOTracker keeps the previous sample for the server-side history
+// collector (runs every minute, independent of the API-call tracker above).
+var (
+	perfHistoryIOMu         sync.Mutex
+	perfHistoryIOLastSample procIOSample
+)
+
+// collectHistoryIODelta reads /proc/self/io and returns per-second I/O rates
+// since the previous history-collector tick. ok is false on the first call or
+// when /proc/self/io is unavailable.
+func collectHistoryIODelta() (readBps, writeBps, syscR, syscW float64, ok bool) {
+	cur := readProcIO()
+	perfHistoryIOMu.Lock()
+	prev := perfHistoryIOLastSample
+	perfHistoryIOLastSample = cur
+	perfHistoryIOMu.Unlock()
+	if prev.at.IsZero() || cur.at.IsZero() {
+		return
+	}
+	dt := cur.at.Sub(prev.at).Seconds()
+	if dt < 0.001 {
+		return
+	}
+	return float64(cur.readBytes-prev.readBytes) / dt,
+		float64(cur.writeBytes-prev.writeBytes) / dt,
+		float64(cur.syscR-prev.syscR) / dt,
+		float64(cur.syscW-prev.syscW) / dt,
+		true
+}
 
 // readIngestorStatsParseCalls counts full json.Unmarshal calls performed by
 // readIngestorIOSample (cache miss path). Exported (lowercase + same-package
@@ -280,23 +310,31 @@ func (s *Server) handlePerfSqlite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// IngestorBrokerInfo describes a single configured MQTT source.
+type IngestorBrokerInfo struct {
+	Name string `json:"name"`
+	Host string `json:"host"`
+}
+
 // IngestorStats is the on-disk JSON shape the ingestor writes periodically
 // for the server to expose via /api/perf/write-sources.
 type IngestorStats struct {
-	SampledAt           string           `json:"sampledAt"`
-	TxInserted          int64            `json:"tx_inserted"`
-	ObsInserted         int64            `json:"obs_inserted"`
-	DuplicateTx         int64            `json:"tx_dupes"`
-	NodeUpserts         int64            `json:"node_upserts"`
-	ObserverUpserts     int64            `json:"observer_upserts"`
-	WriteErrors         int64            `json:"write_errors"`
-	SignatureDrops      int64            `json:"sig_drops"`
-	WALCommits          int64            `json:"walCommits"`
-	GroupCommitFlushes  int64            `json:"groupCommitFlushes"`
-	BackfillUpdates     map[string]int64 `json:"backfillUpdates"`
+	SampledAt           string               `json:"sampledAt"`
+	TxInserted          int64                `json:"tx_inserted"`
+	ObsInserted         int64                `json:"obs_inserted"`
+	DuplicateTx         int64                `json:"tx_dupes"`
+	NodeUpserts         int64                `json:"node_upserts"`
+	ObserverUpserts     int64                `json:"observer_upserts"`
+	WriteErrors         int64                `json:"write_errors"`
+	SignatureDrops      int64                `json:"sig_drops"`
+	WALCommits          int64                `json:"walCommits"`
+	GroupCommitFlushes  int64                `json:"groupCommitFlushes"`
+	BackfillUpdates     map[string]int64     `json:"backfillUpdates"`
 	// ProcIO is the ingestor's own /proc/self/io rates (since its previous
 	// sample). Optional — older ingestor builds don't publish this. See #1120.
-	ProcIO *PerfIOSample `json:"procIO,omitempty"`
+	ProcIO  *PerfIOSample        `json:"procIO,omitempty"`
+	// Brokers lists the MQTT sources the ingestor is configured to connect to.
+	Brokers []IngestorBrokerInfo `json:"brokers,omitempty"`
 }
 
 // IngestorStatsPath is the well-known location where the ingestor writes its

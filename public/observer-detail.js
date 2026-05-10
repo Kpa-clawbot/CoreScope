@@ -5,8 +5,11 @@
   const CHART_COLORS = ['#4a9eff', '#ff6b6b', '#51cf66', '#fcc419', '#cc5de8', '#20c997', '#ff922b', '#845ef7', '#f06595', '#339af0'];
 
   let charts = [];
-  let currentDays = 7;
+  let currentMinutes = parseInt(localStorage.getItem('obs-detail-minutes') || '') || 7 * 1440;
   let currentId = null;
+  let wsHandler = null;
+  let brokerTickTimer = null;
+  let lastObs = null;
 
   function destroyCharts() {
     charts.forEach(c => { try { c.destroy(); } catch {} });
@@ -43,51 +46,122 @@
           <h2 style="margin:0" id="obsTitle">Observer Detail</h2>
           <div style="margin-left:auto;display:flex;gap:8px">
             <select id="obsDaysSelect" class="time-range-select" aria-label="Time range">
-              <option value="1">24 Hours</option>
-              <option value="3">3 Days</option>
-              <option value="7" selected>7 Days</option>
-              <option value="30">30 Days</option>
+              <option value="20">20 Minutes</option>
+              <option value="60">1 Hour</option>
+              <option value="180">3 Hours</option>
+              <option value="1440">24 Hours</option>
+              <option value="4320">3 Days</option>
+              <option value="10080" selected>7 Days</option>
+              <option value="43200">30 Days</option>
             </select>
           </div>
         </div>
         <div id="obsDetailContent"><div class="text-center text-muted" style="padding:40px">Loading…</div></div>
       </div>`;
 
-    document.getElementById('obsDaysSelect').addEventListener('change', function (e) {
-      currentDays = parseInt(e.target.value);
+    var sel = document.getElementById('obsDaysSelect');
+    sel.value = String(currentMinutes);
+    sel.addEventListener('change', function (e) {
+      currentMinutes = parseInt(e.target.value);
+      localStorage.setItem('obs-detail-minutes', String(currentMinutes));
       loadDetail();
     });
 
     loadDetail();
+
+    // Re-fetch broker sources every 30s so status-packet last_seen updates
+    // are reflected even when no raw radio packets arrive (status packets
+    // update observer_sources but don't emit a WS broadcast event).
+    brokerTickTimer = setInterval(function () {
+      if (!currentId) return;
+      api('/observers/' + encodeURIComponent(currentId)).then(function (fresh) {
+        lastObs = fresh;
+        renderBrokerSources(fresh);
+      }).catch(function () {});
+    }, 30000);
+
+    // Re-fetch observer when a packet arrives from this observer so broker
+    // last-seen and packet counts stay current without a full page reload.
+    wsHandler = debouncedOnWS(function (msgs) {
+      if (!currentId) return;
+      var relevant = msgs.some(function (m) {
+        return m.type === 'packet' && m.data && m.data.observer_id === currentId;
+      });
+      if (!relevant) return;
+      api('/observers/' + encodeURIComponent(currentId), { ttl: 0 }).then(function (obs) {
+        lastObs = obs;
+        renderBrokerSources(obs);
+      }).catch(function () {});
+    });
   }
 
   function destroy() {
     destroyCharts();
+    if (wsHandler) { offWS(wsHandler); wsHandler = null; }
+    if (brokerTickTimer) { clearInterval(brokerTickTimer); brokerTickTimer = null; }
     currentId = null;
+    lastObs = null;
   }
 
   async function loadDetail() {
     try {
       destroyCharts();
       chartDefaults();
-      const [obs, analytics, obsSkewArr] = await Promise.all([
+      const since = new Date(Date.now() - currentMinutes * 60000).toISOString();
+      const metricsRes = currentMinutes <= 1440 ? '5m' : currentMinutes <= 10080 ? '1h' : '1d';
+      const [obs, analytics, obsSkewArr, metrics] = await Promise.all([
         api('/observers/' + encodeURIComponent(currentId)),
-        api('/observers/' + encodeURIComponent(currentId) + '/analytics?days=' + currentDays),
+        api('/observers/' + encodeURIComponent(currentId) + '/analytics?minutes=' + currentMinutes),
         api('/observers/clock-skew', { ttl: 30000 }).catch(function() { return []; }),
+        api('/observers/' + encodeURIComponent(currentId) + '/metrics?since=' + encodeURIComponent(since) + '&resolution=' + metricsRes).catch(function() { return null; }),
       ]);
       // Find this observer's calibration data.
       var obsSkew = null;
       (Array.isArray(obsSkewArr) ? obsSkewArr : []).forEach(function(s) {
         if (s && s.observerID === currentId) obsSkew = s;
       });
-      renderDetail(obs, analytics, obsSkew);
+      renderDetail(obs, analytics, obsSkew, metrics);
     } catch (e) {
       document.getElementById('obsDetailContent').innerHTML =
         '<div class="text-muted" style="padding:40px">Error: ' + e.message + '</div>';
     }
   }
 
-  function renderDetail(obs, analytics, obsSkew) {
+  function renderBrokerSources(obs) {
+    var el = document.getElementById('obsBrokerSources');
+    if (!el) return;
+    if (!obs.ingestSources || !obs.ingestSources.length) {
+      el.innerHTML = '';
+      return;
+    }
+    el.innerHTML = `
+      <div class="node-full-card" style="margin-bottom:20px;padding:12px">
+        <h4 style="margin:0 0 8px">Broker Sources</h4>
+        <table style="width:100%;border-collapse:collapse;font-size:0.85em">
+          <thead>
+            <tr style="text-align:left;color:var(--text-muted)">
+              <th style="padding:4px 8px 4px 0;font-weight:600">Broker</th>
+              <th style="padding:4px 8px 4px 0;font-weight:600">Packets</th>
+              <th style="padding:4px 8px 4px 0;font-weight:600">Status</th>
+              <th style="padding:4px 0;font-weight:600">Last Seen</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${obs.ingestSources.map(function(s) {
+              return '<tr>' +
+                '<td style="padding:4px 8px 4px 0">' + (s.name || s.host) + '<br><span style="color:var(--text-muted);font-size:0.82em;font-family:var(--mono)">' + s.host + '</span></td>' +
+                '<td style="padding:4px 8px 4px 0;font-family:var(--mono)">' + (s.packetCount || 0).toLocaleString() + '</td>' +
+                '<td style="padding:4px 8px 4px 0;font-family:var(--mono)">' + (s.statusCount || 0).toLocaleString() + '</td>' +
+                '<td style="padding:4px 0">' + timeAgo(s.last_seen) + '<span style="color:var(--text-muted);font-size:0.85em;margin-left:6px">' + new Date(s.last_seen).toLocaleString() + '</span></td>' +
+                '</tr>';
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  function renderDetail(obs, analytics, obsSkew, metrics) {
+    lastObs = obs;
     const el = document.getElementById('obsDetailContent');
     if (!el) return;
 
@@ -164,10 +238,16 @@
           <div class="stat-label">Last Packet Observation</div>
           <div class="stat-value" style="font-size:0.85em">${obs.last_packet_at ? timeAgo(obs.last_packet_at) + '<br><span style="font-size:0.8em;color:var(--text-muted)">' + new Date(obs.last_packet_at).toLocaleString() + '</span>' : '<span style="color:var(--text-muted)">never</span>'}</div>
         </div>
+        ${obs.ingestSources && obs.ingestSources.length > 0 ? `
+        <div class="stat-card">
+          <div class="stat-label">Brokers</div>
+          <div class="stat-value">${obs.ingestSources.length}</div>
+        </div>` : ''}
       </div>
       <div class="mono" style="font-size:0.75em;color:var(--text-muted);margin-bottom:20px;word-break:break-all">
         ID: ${obs.id}
       </div>
+      <div id="obsBrokerSources"></div>
       ${obsSkew && obsSkew.samples > 0 ? `
       <div class="node-full-card skew-detail-section" style="margin-bottom:20px;padding:12px">
         <h4 style="margin:0 0 6px">⏰ Clock Offset</h4>
@@ -197,6 +277,14 @@
           <h3 style="margin:0 0 8px;font-size:0.95em">SNR Distribution</h3>
           <canvas id="obsSnrChart" role="img" aria-label="SNR distribution chart"></canvas>
         </div>
+        <div class="chart-card" style="padding:12px">
+          <h3 style="margin:0 0 8px;font-size:0.95em">Uptime</h3>
+          <canvas id="obsUptimeChart" role="img" aria-label="Uptime chart"></canvas>
+        </div>
+        <div class="chart-card" style="padding:12px">
+          <h3 style="margin:0 0 8px;font-size:0.95em">Battery</h3>
+          <canvas id="obsBatteryChart" role="img" aria-label="Battery voltage chart"></canvas>
+        </div>
       </div>
       <div style="margin-top:20px">
         <h3 style="font-size:0.95em">Recent Packets</h3>
@@ -216,9 +304,18 @@
     if (analytics.snrDistribution && analytics.snrDistribution.length > 0) {
       renderSnrChart(analytics.snrDistribution);
     }
+    var uptimePoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.uptime_secs != null; }) : [];
+    if (uptimePoints.length > 0) {
+      renderUptimeChart(uptimePoints);
+    }
+    var batteryPoints = metrics && metrics.metrics ? metrics.metrics.filter(function(m) { return m.battery_mv != null; }) : [];
+    if (batteryPoints.length > 0) {
+      renderBatteryChart(batteryPoints);
+    }
     if (analytics.recentPackets) {
       renderRecentPackets(analytics.recentPackets);
     }
+    renderBrokerSources(obs);
   }
 
   function renderTimelineChart(timeline) {
@@ -315,6 +412,71 @@
         scales: {
           x: { title: { display: true, text: 'SNR (dB)' } },
           y: { beginAtZero: true, ticks: { precision: 0 } }
+        }
+      }
+    });
+    charts.push(c);
+  }
+
+  function renderUptimeChart(samples) {
+    const ctx = document.getElementById('obsUptimeChart');
+    if (!ctx) return;
+    const labels = samples.map(function(s) {
+      const d = new Date(s.timestamp);
+      return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    });
+    const c = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Uptime',
+          data: samples.map(function(s) { return s.uptime_secs; }),
+          borderColor: CHART_COLORS[2],
+          backgroundColor: CHART_COLORS[2] + '20',
+          fill: true, tension: 0.3, pointRadius: 2,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: true,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: function(ctx) { return formatDuration(ctx.raw); } } }
+        },
+        scales: {
+          x: { ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } },
+          y: { beginAtZero: true, ticks: { callback: function(v) { return formatDuration(v); } } }
+        }
+      }
+    });
+    charts.push(c);
+  }
+
+  function renderBatteryChart(samples) {
+    const ctx = document.getElementById('obsBatteryChart');
+    if (!ctx) return;
+    const labels = samples.map(function(s) {
+      const d = new Date(s.timestamp);
+      return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    });
+    const c = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Battery (mV)',
+          data: samples.map(function(s) { return s.battery_mv; }),
+          borderColor: CHART_COLORS[3],
+          backgroundColor: CHART_COLORS[3] + '20',
+          fill: true, tension: 0.3, pointRadius: 2,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 12 } },
+          y: { ticks: { callback: function(v) { return v + ' mV'; } } }
         }
       }
     });

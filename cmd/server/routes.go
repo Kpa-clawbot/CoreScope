@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"runtime"
 	"sort"
@@ -344,7 +345,7 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 	theme := LoadTheme(".")
 
 	branding := mergeMap(map[string]interface{}{
-		"siteName": "CoreScope",
+		"siteName": "CORNMEISTER.NL",
 		"tagline":  "Real-time MeshCore LoRa mesh network analyzer",
 	}, s.cfg.Branding, theme.Branding)
 
@@ -843,6 +844,28 @@ func (s *Server) collectPerfSample() PerfSample {
 			sample.OnlineObservers  = &oc.Online
 			sample.StaleObservers   = &oc.Stale
 			sample.OfflineObservers = &oc.Offline
+		}
+	}
+	if rBps, wBps, sR, sW, ok := collectHistoryIODelta(); ok {
+		sample.IoReadBps       = &rBps
+		sample.IoWriteBps      = &wBps
+		sample.IoSyscallsRead  = &sR
+		sample.IoSyscallsWrite = &sW
+	}
+	sample.SqlitePerfWalMB   = walSizeMB
+	sample.SqliteCacheHitPct = cacheHitRate * 100
+
+	// Snapshot raw ingestor cumulative counters so the frontend can diff
+	// adjacent history samples to reconstruct write-source rates historically.
+	if data, err := os.ReadFile(IngestorStatsPath()); err == nil {
+		var st IngestorStats
+		if json.Unmarshal(data, &st) == nil && st.SampledAt != "" {
+			sample.WriteSrcAt       = &st.SampledAt
+			sample.WriteTxCum       = &st.TxInserted
+			sample.WriteObsCum      = &st.ObsInserted
+			sample.WriteNodeCum     = &st.NodeUpserts
+			sample.WriteObserverCum = &st.ObserverUpserts
+			sample.WriteErrCum      = &st.WriteErrors
 		}
 	}
 	return sample
@@ -2228,6 +2251,8 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 		plh = c
 	}
 
+	ingestSources, _ := s.db.GetObserverSources(id)
+
 	writeJSON(w, ObserverResp{
 		ID: obs.ID, Name: obs.Name, IATA: obs.IATA,
 		LastSeen: obs.LastSeen, FirstSeen: obs.FirstSeen,
@@ -2238,24 +2263,37 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 		NoiseFloor: obs.NoiseFloor,
 		LastPacketAt: obs.LastPacketAt,
 		PacketsLastHour: plh,
+		IngestSources:   ingestSources,
 	})
 }
 
 func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
-	days := queryInt(r, "days", 7)
-	if days < 1 {
-		days = 1
-	}
-	if days > 365 {
-		days = 365
-	}
 	if s.store == nil {
 		writeError(w, 503, "Packet store unavailable")
 		return
 	}
 
-	since := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	// minutes takes priority over days for sub-day ranges.
+	var since time.Time
+	totalMinutes := queryInt(r, "minutes", 0)
+	if totalMinutes > 0 {
+		if totalMinutes > 365*24*60 {
+			totalMinutes = 365 * 24 * 60
+		}
+		since = time.Now().Add(-time.Duration(totalMinutes) * time.Minute)
+	} else {
+		days := queryInt(r, "days", 7)
+		if days < 1 {
+			days = 1
+		}
+		if days > 365 {
+			days = 365
+		}
+		totalMinutes = days * 24 * 60
+		since = time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	}
+
 	s.store.mu.RLock()
 	obsList := s.store.byObserver[id]
 	filtered := make([]*StoreObs, 0, len(obsList))
@@ -2279,17 +2317,24 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 	}
 	sort.Slice(filtered, func(i, j int) bool { return filtered[i].Timestamp > filtered[j].Timestamp })
 
-	bucketDur := 24 * time.Hour
-	if days <= 1 {
+	var bucketDur time.Duration
+	switch {
+	case totalMinutes <= 60:
+		bucketDur = 5 * time.Minute
+	case totalMinutes <= 180:
+		bucketDur = 15 * time.Minute
+	case totalMinutes <= 1440:
 		bucketDur = time.Hour
-	} else if days <= 7 {
+	case totalMinutes <= 7*1440:
 		bucketDur = 4 * time.Hour
+	default:
+		bucketDur = 24 * time.Hour
 	}
 	formatLabel := func(t time.Time) string {
-		if days <= 1 {
+		if totalMinutes <= 1440 {
 			return t.UTC().Format("15:04")
 		}
-		if days <= 7 {
+		if totalMinutes <= 7*1440 {
 			return t.UTC().Format("Mon 15:04")
 		}
 		return t.UTC().Format("Jan 02")
@@ -2299,6 +2344,7 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 	timelineCounts := map[int64]int{}
 	nodeBucketSets := map[int64]map[string]struct{}{}
 	snrBuckets := map[int]*SnrDistributionEntry{}
+	activeHourBuckets := map[int64]struct{}{}
 	recentPackets := make([]map[string]interface{}, 0, 20)
 
 	for i, obs := range filtered {
@@ -2314,6 +2360,7 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		}
 		bucketStart := ts.UTC().Truncate(bucketDur).Unix()
 		timelineCounts[bucketStart]++
+		activeHourBuckets[ts.UTC().Truncate(time.Hour).Unix()] = struct{}{}
 		if nodeBucketSets[bucketStart] == nil {
 			nodeBucketSets[bucketStart] = map[string]struct{}{}
 		}
@@ -2381,11 +2428,33 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		snrDistribution = append(snrDistribution, *snrBuckets[k])
 	}
 
+	// Build uptime timeline: enumerate all buckets in the window and compute
+	// what % of 1h sub-slots had any activity.
+	subSlots := int(bucketDur / time.Hour)
+	if subSlots < 1 {
+		subSlots = 1
+	}
+	uptimeStart := since.UTC().Truncate(bucketDur)
+	now := time.Now().UTC()
+	uptimeTimeline := make([]TimeBucket, 0)
+	for b := uptimeStart; !b.After(now); b = b.Add(bucketDur) {
+		active := 0
+		for i := 0; i < subSlots; i++ {
+			if _, ok := activeHourBuckets[b.Add(time.Duration(i)*time.Hour).Unix()]; ok {
+				active++
+			}
+		}
+		pct := active * 100 / subSlots
+		lbl := formatLabel(b)
+		uptimeTimeline = append(uptimeTimeline, TimeBucket{Label: &lbl, Count: pct})
+	}
+
 	writeJSON(w, ObserverAnalyticsResponse{
 		Timeline:        buildTimeline(timelineCounts),
 		PacketTypes:     packetTypes,
 		NodesTimeline:   buildTimeline(nodeCounts),
 		SnrDistribution: snrDistribution,
+		UptimeTimeline:  uptimeTimeline,
 		RecentPackets:   recentPackets,
 	})
 }

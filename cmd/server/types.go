@@ -275,10 +275,27 @@ type PerfSample struct {
 	DbSizeMB        float64 `json:"dbSizeMB"`
 	WalSizeMB       float64 `json:"walSizeMB"`
 	WSClients        int    `json:"wsClients"`
-	TotalObservers   *int   `json:"totalObservers,omitempty"`
-	OnlineObservers  *int   `json:"onlineObservers,omitempty"`
-	StaleObservers   *int   `json:"staleObservers,omitempty"`
-	OfflineObservers *int   `json:"offlineObservers,omitempty"`
+	TotalObservers   *int     `json:"totalObservers,omitempty"`
+	OnlineObservers  *int     `json:"onlineObservers,omitempty"`
+	StaleObservers   *int     `json:"staleObservers,omitempty"`
+	OfflineObservers *int     `json:"offlineObservers,omitempty"`
+	// I/O fields — nil when /proc/self/io is unavailable or on the first collector tick.
+	IoReadBps        *float64 `json:"ioReadBps,omitempty"`
+	IoWriteBps       *float64 `json:"ioWriteBps,omitempty"`
+	IoSyscallsRead   *float64 `json:"ioSyscallsRead,omitempty"`
+	IoSyscallsWrite  *float64 `json:"ioSyscallsWrite,omitempty"`
+	SqlitePerfWalMB  float64  `json:"sqlitePerfWalMB"`
+	SqliteCacheHitPct float64 `json:"sqliteCacheHitPct"`
+	// Raw ingestor cumulative counters — nil when the stats file is unavailable.
+	// The frontend diffs adjacent samples to derive per-second write rates for
+	// the Write Sources graph, mirroring what the live /api/perf/write-sources
+	// path does so that historical data is available on page load.
+	WriteSrcAt          *string `json:"writeSrcAt,omitempty"`
+	WriteTxCum          *int64  `json:"writeTxCum,omitempty"`
+	WriteObsCum         *int64  `json:"writeObsCum,omitempty"`
+	WriteNodeCum        *int64  `json:"writeNodeCum,omitempty"`
+	WriteObserverCum    *int64  `json:"writeObserverCum,omitempty"`
+	WriteErrCum         *int64  `json:"writeErrCum,omitempty"`
 }
 
 // ─── Packets ───────────────────────────────────────────────────────────────────
@@ -881,27 +898,37 @@ type ChannelMessagesResponse struct {
 
 // ─── Observers ─────────────────────────────────────────────────────────────────
 
+// ObserverSource is one MQTT broker host that has relayed data for an observer.
+type ObserverSource struct {
+	Name        string `json:"name"`
+	Host        string `json:"host"`
+	LastSeen    string `json:"last_seen"`
+	PacketCount int64  `json:"packetCount"`
+	StatusCount int64  `json:"statusCount"`
+}
+
 type ObserverResp struct {
-	ID              string      `json:"id"`
-	Name            interface{} `json:"name"`
-	IATA            interface{} `json:"iata"`
-	LastSeen        interface{} `json:"last_seen"`
-	FirstSeen       interface{} `json:"first_seen"`
-	PacketCount     int         `json:"packet_count"`
-	Model           interface{} `json:"model"`
-	Firmware        interface{} `json:"firmware"`
-	ClientVersion   interface{} `json:"client_version"`
-	Radio           interface{} `json:"radio"`
-	BatteryMv       interface{} `json:"battery_mv"`
-	UptimeSecs      interface{} `json:"uptime_secs"`
-	NoiseFloor      interface{} `json:"noise_floor"`
-	LastPacketAt    interface{} `json:"last_packet_at"`
-	PacketsLastHour int         `json:"packetsLastHour"`
-	PacketsLast24h  int         `json:"packetsLast24h"`
-	PacketsLast7d   int         `json:"packetsLast7d"`
-	Lat             interface{} `json:"lat"`
-	Lon             interface{} `json:"lon"`
-	NodeRole        interface{} `json:"nodeRole"`
+	ID              string           `json:"id"`
+	Name            interface{}      `json:"name"`
+	IATA            interface{}      `json:"iata"`
+	LastSeen        interface{}      `json:"last_seen"`
+	FirstSeen       interface{}      `json:"first_seen"`
+	PacketCount     int              `json:"packet_count"`
+	Model           interface{}      `json:"model"`
+	Firmware        interface{}      `json:"firmware"`
+	ClientVersion   interface{}      `json:"client_version"`
+	Radio           interface{}      `json:"radio"`
+	BatteryMv       interface{}      `json:"battery_mv"`
+	UptimeSecs      interface{}      `json:"uptime_secs"`
+	NoiseFloor      interface{}      `json:"noise_floor"`
+	LastPacketAt    interface{}      `json:"last_packet_at"`
+	PacketsLastHour int              `json:"packetsLastHour"`
+	PacketsLast24h  int              `json:"packetsLast24h"`
+	PacketsLast7d   int              `json:"packetsLast7d"`
+	Lat             interface{}      `json:"lat"`
+	Lon             interface{}      `json:"lon"`
+	NodeRole        interface{}      `json:"nodeRole"`
+	IngestSources   []ObserverSource `json:"ingestSources,omitempty"`
 }
 
 type ObserverListResponse struct {
@@ -926,10 +953,11 @@ type SnrDistributionEntry struct {
 }
 
 type ObserverAnalyticsResponse struct {
-	Timeline        []TimeBucket           `json:"timeline"`
-	PacketTypes     map[string]int         `json:"packetTypes"`
-	NodesTimeline   []TimeBucket           `json:"nodesTimeline"`
-	SnrDistribution []SnrDistributionEntry `json:"snrDistribution"`
+	Timeline        []TimeBucket             `json:"timeline"`
+	PacketTypes     map[string]int           `json:"packetTypes"`
+	NodesTimeline   []TimeBucket             `json:"nodesTimeline"`
+	SnrDistribution []SnrDistributionEntry   `json:"snrDistribution"`
+	UptimeTimeline  []TimeBucket             `json:"uptimeTimeline"`
 	RecentPackets   []map[string]interface{} `json:"recentPackets"`
 }
 

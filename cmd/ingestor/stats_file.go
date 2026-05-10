@@ -18,6 +18,12 @@ import (
 // contract drift (#1167 follow-up).
 type PerfIOSample = perfio.Sample
 
+// BrokerInfo describes a single configured MQTT source.
+type BrokerInfo struct {
+	Name string `json:"name"`
+	Host string `json:"host"`
+}
+
 // IngestorStatsSnapshot mirrors the JSON shape consumed by the server's
 // /api/perf/write-sources endpoint (see cmd/server/perf_io.go IngestorStats).
 //
@@ -44,6 +50,8 @@ type IngestorStatsSnapshot struct {
 	// the server's /api/perf/io endpoint under .ingestor (#1120 — "Both
 	// ingestor and server"). Optional; absent on non-Linux hosts.
 	ProcIO *PerfIOSample `json:"procIO,omitempty"`
+	// Brokers lists the MQTT sources the ingestor is configured to connect to.
+	Brokers []BrokerInfo `json:"brokers,omitempty"`
 }
 
 // statsFilePath returns the writable path the ingestor will publish stats to.
@@ -165,7 +173,7 @@ func procIORate(prev, cur procIOSnapshot, stamp string) *PerfIOSample {
 // The stats file path is resolved via statsFilePath() once at writer-loop
 // start; the env var (CORESCOPE_INGESTOR_STATS) is only re-read on process
 // restart, not per tick.
-func StartStatsFileWriter(s *Store, interval time.Duration) {
+func StartStatsFileWriter(s *Store, interval time.Duration, brokers ...BrokerInfo) {
 	if interval <= 0 {
 		interval = time.Second
 	}
@@ -205,6 +213,7 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 				GroupCommitFlushes: 0, // group commit reverted (refs #1129)
 				BackfillUpdates:    s.Stats.SnapshotBackfills(),
 				ProcIO:             ioRate,
+				Brokers:            brokers,
 			}
 			buf.Reset()
 			if err := enc.Encode(&snap); err != nil {

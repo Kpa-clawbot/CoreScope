@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -119,7 +121,15 @@ func main() {
 
 	// Per-second stats file writer for the server's /api/perf/write-sources
 	// endpoint (#1120). Best-effort; never fatal.
-	StartStatsFileWriter(store, time.Second)
+	var brokerInfos []BrokerInfo
+	for _, src := range sources {
+		name := src.Name
+		if name == "" {
+			name = src.Broker
+		}
+		brokerInfos = append(brokerInfos, BrokerInfo{Name: name, Host: brokerHostname(src.Broker)})
+	}
+	StartStatsFileWriter(store, time.Second, brokerInfos...)
 
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {
@@ -228,6 +238,22 @@ func main() {
 	log.Println("Done.")
 }
 
+// brokerHostname extracts the bare hostname (no port) from an MQTT broker URL
+// such as "tcp://broker.example.com:1883" or "ssl://host:8883". Falls back to
+// the raw string if parsing fails.
+func brokerHostname(broker string) string {
+	if u, err := url.Parse(broker); err == nil && u.Host != "" {
+		if h, _, err := net.SplitHostPort(u.Host); err == nil {
+			return h
+		}
+		return u.Host
+	}
+	if h, _, err := net.SplitHostPort(broker); err == nil {
+		return h
+	}
+	return broker
+}
+
 // buildMQTTOpts creates MQTT client options for a source with bounded reconnect
 // backoff, connect timeout, and TLS/auth configuration.
 func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
@@ -299,6 +325,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		if err := store.UpsertObserver(observerID, name, iata, meta); err != nil {
 			log.Printf("MQTT [%s] observer status error: %v", tag, err)
 		}
+		store.UpsertObserverSource(observerID, tag, brokerHostname(source.Broker), true) //nolint:errcheck
 		// Insert metrics sample from status message
 		if meta != nil {
 			metricsData := &MetricsData{
@@ -310,6 +337,10 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				BatteryMv:   meta.BatteryMv,
 				PacketsSent: meta.PacketsSent,
 				PacketsRecv: meta.PacketsRecv,
+			}
+			if meta.UptimeSecs != nil {
+				v := int(*meta.UptimeSecs)
+				metricsData.UptimeSecs = &v
 			}
 			if err := store.InsertMetrics(metricsData); err != nil {
 				log.Printf("MQTT [%s] metrics insert error: %v", tag, err)
@@ -492,6 +523,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			if err := store.UpsertObserver(observerID, origin, effectiveRegion, nil); err != nil {
 				log.Printf("MQTT [%s] observer upsert error: %v", tag, err)
 			}
+			store.UpsertObserverSource(observerID, tag, brokerHostname(source.Broker), false) //nolint:errcheck
 		}
 
 		return
