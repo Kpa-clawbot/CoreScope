@@ -216,10 +216,16 @@
     _onResize = function() {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        // Set live-page height from JS — most reliable across all mobile browsers
+        // Set live-page height from JS — most reliable across all mobile browsers.
+        // Subtract the top-nav and the bottom-nav (when visible) so neither
+        // overlaps the map or pushes the VCR bar off-screen.
         const page = document.querySelector('.live-page');
         const appEl = document.getElementById('app');
-        const h = window.innerHeight;
+        const topNavEl = document.querySelector('.top-nav');
+        const botNavEl = document.querySelector('.bottom-nav');
+        const topH = topNavEl ? topNavEl.offsetHeight : 52;
+        const botH = (botNavEl && getComputedStyle(botNavEl).display !== 'none') ? botNavEl.offsetHeight : 0;
+        const h = window.innerHeight - topH - botH;
         if (page) page.style.height = h + 'px';
         if (appEl) appEl.style.height = h + 'px';
         if (map) {

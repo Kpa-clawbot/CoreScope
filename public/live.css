@@ -368,14 +368,12 @@
  * Pinned to bottom-right, above the VCR bar and the global bottom-nav.
  * Reserves space for both env(safe-area-inset-bottom) and the bottom-nav
  * (#1061, currently in PR #1174). When the bottom-nav lands the layout
- * tracks its custom property (--bottom-nav-height); otherwise the
- * fallback (56px) keeps the cluster clear of the VCR bar / bottom-nav
- * region.
+ * tracks --bottom-nav-reserve (0px on desktop, 56px+safe-area on ≤768px).
  */
 .live-controls {
   position: fixed;
   right: 12px;
-  bottom: calc(78px + var(--bottom-nav-height, 56px) + env(safe-area-inset-bottom, 0px));
+  bottom: calc(78px + var(--bottom-nav-reserve, 0px));
   z-index: 1000;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
   backdrop-filter: blur(12px);
