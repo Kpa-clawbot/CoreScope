@@ -488,9 +488,14 @@ func (s *PacketStore) Load() error {
 	}
 
 	// Build WHERE conditions: retention cutoff (mirrors Evict logic) + optional memory-cap limit.
+	// When hotStartupHours > 0, use it as the initial cutoff (smaller window = fast startup).
 	var loadConditions []string
-	if s.retentionHours > 0 {
-		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours*3600) * time.Second).Format(time.RFC3339)
+	hotCutoffHours := s.retentionHours
+	if s.hotStartupHours > 0 {
+		hotCutoffHours = s.hotStartupHours
+	}
+	if hotCutoffHours > 0 {
+		cutoff := time.Now().UTC().Add(-time.Duration(hotCutoffHours*3600) * time.Second).Format(time.RFC3339)
 		loadConditions = append(loadConditions, fmt.Sprintf("t.first_seen >= '%s'", cutoff))
 	}
 	if maxPackets > 0 {

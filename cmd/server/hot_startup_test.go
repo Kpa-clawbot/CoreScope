@@ -104,3 +104,66 @@ func TestHotStartupConfig_ZeroIsDisabled(t *testing.T) {
 		t.Errorf("expected hotStartupHours=0, got %f", store.hotStartupHours)
 	}
 }
+
+func TestHotStartup_LoadsOnlyHotWindow(t *testing.T) {
+	// 50 old packets (48h ago), 10 recent (30min ago)
+	dbPath := createTestDBWithAgedPackets(t, 10, 50)
+	defer os.RemoveAll(filepath.Dir(dbPath))
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  72,
+		HotStartupHours: 1, // load only last 1 hour
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Only the 10 recent packets should be in memory
+	if len(store.packets) != 10 {
+		t.Errorf("expected 10 recent packets in hot window, got %d", len(store.packets))
+	}
+	// oldestLoaded should be ~1h ago
+	if store.oldestLoaded == "" {
+		t.Fatal("oldestLoaded must be set after Load()")
+	}
+	oldest, _ := time.Parse(time.RFC3339, store.oldestLoaded)
+	diff := time.Since(oldest)
+	if diff < 30*time.Minute || diff > 90*time.Minute {
+		t.Errorf("oldestLoaded %s should be ~1h ago, got diff=%v", store.oldestLoaded, diff)
+	}
+	// backgroundLoadDone must not be set by Load() itself
+	if store.backgroundLoadDone.Load() {
+		t.Error("backgroundLoadDone must not be true after Load()")
+	}
+}
+
+func TestHotStartup_DisabledWhenZero(t *testing.T) {
+	// 50 old (48h ago), 10 recent (30min ago) — all within 72h retention
+	dbPath := createTestDBWithAgedPackets(t, 10, 50)
+	defer os.RemoveAll(filepath.Dir(dbPath))
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  72,
+		HotStartupHours: 0, // disabled → load all retentionHours as before
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	// All 60 packets should be loaded (both old and recent within 72h)
+	if len(store.packets) != 60 {
+		t.Errorf("expected 60 packets with hotStartupHours=0, got %d", len(store.packets))
+	}
+}
