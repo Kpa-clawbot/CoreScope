@@ -34,7 +34,9 @@ const HIGH_PRIORITY_HREFS = ['#/home', '#/packets', '#/map', '#/live', '#/nodes'
 const CASES = [
   // viewport, minVisible, moreVisible, requireBeyondHighPri, label
   { w: 2560, minVisible: 13, moreVisible: false, requireBeyondHighPri: false, label: '2560px — all visible' },
-  { w: 1920, minVisible: 9,  moreVisible: null,  requireBeyondHighPri: false, label: '1920px — most visible' },
+  // CORNMEISTER.NL brand title is wider than the upstream CoreScope default,
+  // so the Priority+ algorithm fits one fewer link at 1920px (8 instead of 9).
+  { w: 1920, minVisible: 8,  moreVisible: null,  requireBeyondHighPri: false, label: '1920px — most visible' },
   { w: 1080, minVisible: 6,  moreVisible: null,  requireBeyondHighPri: true,  label: '1080px — measured fit' },
   { w: 800,  minVisible: 5,  moreVisible: true,  requireBeyondHighPri: false, label: '800px — collapsed' },
 ];

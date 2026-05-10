@@ -267,7 +267,7 @@ func buildOpenAPISpec(router *mux.Router, version string) map[string]interface{}
 	spec := map[string]interface{}{
 		"openapi": "3.0.3",
 		"info": map[string]interface{}{
-			"title":       "CoreScope API",
+			"title":       "Cornmeister.nl API",
 			"description": "MeshCore network analyzer — packet capture, node tracking, and mesh analytics.",
 			"version":     version,
 			"license": map[string]interface{}{
@@ -332,7 +332,7 @@ const swaggerUIHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>CoreScope API — Swagger UI</title>
+  <title>Cornmeister.nl API — Swagger UI</title>
   <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
   <style>
     html { box-sizing: border-box; overflow-y: scroll; }

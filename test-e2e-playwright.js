@@ -51,7 +51,10 @@ async function run() {
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
     const title = await page.title();
-    assert(title.toLowerCase().includes('corescope'), `Title "${title}" doesn't contain CoreScope`);
+    assert(
+      title.toLowerCase().includes('corescope') || title.toLowerCase().includes('cornmeister'),
+      `Title "${title}" doesn't contain CoreScope or Cornmeister`
+    );
     const nav = await page.$('nav, .navbar, .nav, [class*="nav"]');
     assert(nav, 'Nav bar not found');
   });

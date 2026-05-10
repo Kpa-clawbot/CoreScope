@@ -736,7 +736,7 @@
           </section>
 
           <div class="ch-modal-footer">
-            🔒 Keys stay in your browser — CoreScope is a passive observer that monitors and decrypts traffic but cannot transmit over RF. Use ✕ to remove individual channels.
+            🔒 Keys stay in your browser — Cornmeister.nl is a passive observer that monitors and decrypts traffic but cannot transmit over RF. Use ✕ to remove individual channels.
           </div>
         </div>
       </div>

@@ -162,7 +162,7 @@
                 <div style="margin-bottom:12px;padding:10px 12px;background:var(--surface-0);border:1px solid var(--border);border-radius:6px">
                   <strong style="font-size:12px">📍 Your region (IATA code)</strong>
                   <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:8px">
-                    CoreScope groups observers by the IATA airport code nearest to them.
+                    Cornmeister.nl groups observers by the IATA airport code nearest to them.
                     If your observer shows as <strong>Offline</strong> or doesn't appear in the list, you most likely haven't set this yet.
                     Pick your region below — the commands update automatically.
                   </div>

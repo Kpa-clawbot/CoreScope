@@ -27,7 +27,8 @@ const BASE = process.env.BASE_URL || 'http://localhost:13581';
 // Common widths the nav must stay clean at. 1280/1440 are the historic
 // failure window: the Priority+ rule used to stop at 1279px but the full
 // link strip + nav-right buttons don't fit on one row until ~1600px+.
-const VIEWPORTS = [768, 1024, 1280, 1440, 1920];
+// Below 768 the top nav is intentionally display:none (bottom-nav active).
+const VIEWPORTS = [769, 1024, 1280, 1440, 1920];
 // Routes asserted at every viewport. The pre-#1097 version only checked
 // /#/home, but the bug reproduces on every top-level page since they
 // all share the same .top-nav. Cover the four primary routes.

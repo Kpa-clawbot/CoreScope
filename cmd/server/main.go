@@ -245,7 +245,7 @@ func main() {
 	var tableName string
 	err = database.conn.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='transmissions'").Scan(&tableName)
 	if err == sql.ErrNoRows {
-		log.Fatalf("[db] table 'transmissions' not found — is this a CoreScope database?")
+		log.Fatalf("[db] table 'transmissions' not found — is this a Cornmeister.nl database?")
 	}
 
 	stats, err := database.GetStats()
@@ -439,7 +439,7 @@ func main() {
 		router.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/html")
 			w.Write([]byte(`
-# CoreScope
+# Cornmeister.nl
 
 Frontend not found. API available at /api/
 `))
@@ -658,7 +658,7 @@ Frontend not found. API available at /api/
 		log.Println("[server] shutdown complete")
 	}()
 
-	log.Printf("[server] CoreScope (Go) listening on http://localhost:%d", cfg.Port)
+	log.Printf("[server] Cornmeister.nl (Go) listening on http://localhost:%d", cfg.Port)
 
 	// Start async backfill in background — HTTP is now available.
 	go backfillResolvedPathsAsync(store, dbPath, 5000, 100*time.Millisecond, cfg.BackfillHours())
@@ -686,7 +686,7 @@ func spaHandler(root string, fs http.Handler) http.Handler {
 	if err != nil {
 		log.Printf("[static] warning: could not read index.html for cache-bust: %v", err)
 		rawHTML = []byte(`
-# CoreScope
+# Cornmeister.nl
 
 index.html not found
 `)

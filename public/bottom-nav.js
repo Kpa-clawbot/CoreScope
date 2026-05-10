@@ -41,15 +41,15 @@
 
   if (typeof document === 'undefined') return;
 
-  // 5 primary tabs + the More toggle. Each entry: { route, hash, label, icon }.
+  // 5 primary tabs + the More toggle. Each entry: { route, hash, label }.
   // For More, hash is null (not a route).
   var TABS = [
-    { route: 'home',     hash: '#/home',     label: 'Home',     icon: '🏠' },
-    { route: 'packets',  hash: '#/packets',  label: 'Packets',  icon: '📦' },
-    { route: 'live',     hash: '#/live',     label: 'Live',     icon: '🔴' },
-    { route: 'map',      hash: '#/map',      label: 'Map',      icon: '🗺️' },
-    { route: 'channels', hash: '#/channels', label: 'Channels', icon: '💬' },
-    { route: 'more',     hash: null,         label: 'More',     icon: '☰' },
+    { route: 'home',     hash: '#/home',     label: 'Home'     },
+    { route: 'packets',  hash: '#/packets',  label: 'Packets'  },
+    { route: 'live',     hash: '#/live',     label: 'Live'     },
+    { route: 'map',      hash: '#/map',      label: 'Map'      },
+    { route: 'channels', hash: '#/channels', label: 'Channels' },
+    { route: 'more',     hash: null,         label: 'More'     },
   ];
 
   // Long-tail routes surfaced in the More sheet. Mirrors data-route values
@@ -64,12 +64,12 @@
   // it here, or it will be unreachable on phones at ≤768px (the
   // hamburger is hidden at that breakpoint — see bottom-nav.css).
   var MORE_ROUTES = [
-    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     icon: '🖥️' },
-    { route: 'tools',     hash: '#/tools',     label: 'Tools',     icon: '🛠️' },
-    { route: 'observers', hash: '#/observers', label: 'Observers', icon: '👁️' },
-    { route: 'analytics', hash: '#/analytics', label: 'Analytics', icon: '📊' },
-    { route: 'perf',      hash: '#/perf',      label: 'Perf',      icon: '⚡' },
-    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', icon: '🎵' },
+    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes'     },
+    { route: 'tools',     hash: '#/tools',     label: 'Tools'     },
+    { route: 'observers', hash: '#/observers', label: 'Observers' },
+    { route: 'analytics', hash: '#/analytics', label: 'Analytics' },
+    { route: 'perf',      hash: '#/perf',      label: 'Perf'      },
+    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab' },
   ];
 
   var SHEET_ID = 'bottomNavMoreSheet';
@@ -112,16 +112,10 @@
       el.setAttribute('data-route', t.route);
       el.setAttribute('aria-label', t.label);
 
-      var ic = document.createElement('span');
-      ic.className = 'bottom-nav-icon';
-      ic.setAttribute('aria-hidden', 'true');
-      ic.textContent = t.icon;
-
       var lb = document.createElement('span');
       lb.className = 'bottom-nav-label';
       lb.textContent = t.label;
 
-      el.appendChild(ic);
       el.appendChild(lb);
       nav.appendChild(el);
     });
@@ -199,16 +193,10 @@
       a.setAttribute('data-bottom-nav-more-route', r.route);
       a.setAttribute('data-route', r.route);
 
-      var ic = document.createElement('span');
-      ic.className = 'bottom-nav-sheet-icon';
-      ic.setAttribute('aria-hidden', 'true');
-      ic.textContent = r.icon;
-
       var lb = document.createElement('span');
       lb.className = 'bottom-nav-sheet-label';
       lb.textContent = r.label;
 
-      a.appendChild(ic);
       a.appendChild(lb);
 
       // Tap a route → close sheet (the <a href> handles navigation via

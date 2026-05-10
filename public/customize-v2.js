@@ -594,6 +594,10 @@
         var brandEl = document.querySelector('.brand-title') || document.querySelector('.brand-text');
         if (brandEl) brandEl.textContent = br.siteName;
       }
+      if (br.tagline) {
+        var subtitleEl = document.querySelector('.brand-subtitle');
+        if (subtitleEl) subtitleEl.textContent = br.tagline;
+      }
       if (br.logoUrl) {
         _setBrandLogoUrl(br.logoUrl, br.siteName || null);
         var iconEl = document.querySelector('.brand-icon');
@@ -1413,6 +1417,10 @@
             if (el) el.textContent = inp.value;
             document.title = inp.value;
           }
+          if (section === 'branding' && key === 'tagline') {
+            var subtitleEl = document.querySelector('.brand-subtitle');
+            if (subtitleEl) subtitleEl.textContent = inp.value;
+          }
           if (section === 'branding' && key === 'logoUrl') {
             _setBrandLogoUrl(inp.value || '', null);
             var iconEl = document.querySelector('.brand-icon');
@@ -1686,6 +1694,10 @@
         var brandEl = document.querySelector('.brand-title') || document.querySelector('.brand-text');
         if (brandEl) brandEl.textContent = overrides.branding.siteName;
         document.title = overrides.branding.siteName;
+      }
+      if (overrides.branding.tagline) {
+        var subtitleEl = document.querySelector('.brand-subtitle');
+        if (subtitleEl) subtitleEl.textContent = overrides.branding.tagline;
       }
       if (overrides.branding.logoUrl) {
         _setBrandLogoUrl(overrides.branding.logoUrl, overrides.branding.siteName || null);

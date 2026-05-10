@@ -1045,6 +1045,10 @@
           if (brandEl) brandEl.textContent = inp.value;
           document.title = inp.value;
         }
+        if (inp.dataset.key === 'branding.tagline') {
+          var subtitleEl = document.querySelector('.brand-subtitle');
+          if (subtitleEl) subtitleEl.textContent = inp.value;
+        }
         if (inp.dataset.key === 'branding.logoUrl') {
           // Swap the navbar logo: empty → restore inline default; URL → <img>.
           _v1SetBrandLogoUrl(inp.value || '');
@@ -1482,6 +1486,10 @@
             const brandEl = document.querySelector('.brand-title') || document.querySelector('.brand-text');
             if (brandEl) brandEl.textContent = userTheme.branding.siteName;
             document.title = userTheme.branding.siteName;
+          }
+          if (userTheme.branding.tagline) {
+            const subtitleEl = document.querySelector('.brand-subtitle');
+            if (subtitleEl) subtitleEl.textContent = userTheme.branding.tagline;
           }
           if (userTheme.branding.logoUrl) {
             _v1SetBrandLogoUrl(userTheme.branding.logoUrl);
