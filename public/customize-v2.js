@@ -1202,6 +1202,9 @@
           '<option value="km"' + (distUnit === 'km' ? ' selected' : '') + '>Kilometers (km)</option>' +
           '<option value="mi"' + (distUnit === 'mi' ? ' selected' : '') + '>Miles (mi)</option>' +
         '</select></div>' +
+      '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">Gesture Hints</p>' +
+      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Re-show first-visit gesture discoverability hints (swipe rows, swipe tabs, edge-swipe drawer, pull-to-refresh).</p>' +
+      '<button type="button" class="cust-dl-btn" data-cv2-reset-hints data-reset-gesture-hints>↺ Reset gesture hints</button>' +
     '</div>';
   }
 
@@ -1608,6 +1611,19 @@
       localStorage.removeItem(STORAGE_KEY);
       _runPipeline();
       _renderPanel(container);
+    });
+
+    // Reset gesture hints (#1065)
+    var hintsBtn = container.querySelector('[data-cv2-reset-hints]');
+    if (hintsBtn) hintsBtn.addEventListener('click', function () {
+      if (window.GestureHints && typeof window.GestureHints.reset === 'function') {
+        window.GestureHints.reset();
+      } else {
+        // Fallback: clear known keys directly.
+        ['row-swipe', 'tab-swipe', 'edge-drawer', 'pull-refresh'].forEach(function (k) {
+          try { localStorage.removeItem('meshcore-gesture-hints-' + k); } catch (_e) {}
+        });
+      }
     });
   }
 
