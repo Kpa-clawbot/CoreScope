@@ -81,6 +81,10 @@
     var def = HINTS[id];
     var wrap = document.createElement('div');
     wrap.className = 'gesture-hint gesture-hint-' + def.position;
+    // Belt-and-suspenders: inline style guarantees pointer-events:none
+    // regardless of CSS load order or cascade collisions. The hint must
+    // never capture clicks; only the inner button does (via .gesture-hint-inner).
+    wrap.style.pointerEvents = 'none';
     wrap.setAttribute('data-gesture-hint', id);
     wrap.setAttribute('role', 'status');
     wrap.setAttribute('aria-live', 'polite');
