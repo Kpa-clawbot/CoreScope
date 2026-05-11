@@ -187,8 +187,6 @@
               <option value="opentopo">OpenTopo</option>
               <option value="wikimedia">Wikimedia</option>
               <option value="osm">OSM</option>
-              <option value="stadia_dark">Stadia Dark</option>
-              <option value="hillshade_dark">Hillshade Dark</option>
               <option value="hillshade_blend">Hillshade Blend</option>
               <option value="neon_tactical">Neon Tactical</option>
             </select>
@@ -232,7 +230,6 @@
     const _M_CARTO_DARK      = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
     const _M_CARTO_DARK_NL   = 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png';
     const _M_CARTO_LIGHT_LBL = 'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png';
-    const _M_STADIA_DARK     = 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png';
     const _M_SATMAP_CONFIG = {
       positron:        { base: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png' },
       dark_matter:     { base: _M_CARTO_DARK },
@@ -242,8 +239,6 @@
       opentopo:        { base: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', mapMaxZoom: 17 },
       wikimedia:       { base: 'https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}{r}.png' },
       osm:             { base: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' },
-      stadia_dark:     { base: _M_STADIA_DARK },
-      hillshade_dark:  { base: _M_STADIA_DARK,    overlay: _M_ESRI_HILL_DARK,  overlayOpacity: 0.5, mapMaxZoom: 17 },
       hillshade_blend: { base: _M_CARTO_DARK,     overlay: _M_ESRI_HILL_DARK,  overlayOpacity: 0.5, mapMaxZoom: 17 },
       neon_tactical:   { base: _M_CARTO_DARK_NL,
                          overlays: [
