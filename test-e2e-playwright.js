@@ -2052,6 +2052,12 @@ async function run() {
 
   // Test: per-observation raw_hex — hex pane updates when switching observations (#881)
   await test('Packet detail hex pane updates per observation', async () => {
+    // Reset groupbyhash left over from "Expanded group children" test — grouped mode hides child
+    // rows by default, causing waitForSelector to see hidden <tr>s and time out.
+    await page.evaluate(() => {
+      localStorage.removeItem('meshcore-groupbyhash');
+      localStorage.setItem('meshcore-time-window', '525600');
+    });
     await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
     await page.waitForTimeout(500);
