@@ -2052,13 +2052,17 @@ async function run() {
 
   // Test: per-observation raw_hex — hex pane updates when switching observations (#881)
   await test('Packet detail hex pane updates per observation', async () => {
-    // Reset groupbyhash left over from "Expanded group children" test — grouped mode hides child
-    // rows by default, causing waitForSelector to see hidden <tr>s and time out.
+    // The prior "Expanded group children" test leaves groupbyhash=true and the detail pane open.
+    // A simple page.goto is treated as a hash-change (same document), so the SPA closes the
+    // detail pane (hiding its 30+ field/obs table rows) before the main table's API fetch
+    // completes — waitForSelector sees only hidden rows and times out.
+    // Fix: set localStorage, navigate, then reload with 'load' (same pattern the prior test uses).
     await page.evaluate(() => {
       localStorage.removeItem('meshcore-groupbyhash');
       localStorage.setItem('meshcore-time-window', '525600');
     });
-    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'load' });
     await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
     await page.waitForTimeout(500);
 
