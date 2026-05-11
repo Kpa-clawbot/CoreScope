@@ -2490,6 +2490,7 @@ func mapSliceToTransmissions(maps []map[string]interface{}) []TransmissionResp {
 		}
 		tx.ObserverID = m["observer_id"]
 		tx.ObserverName = m["observer_name"]
+		tx.ObserverIATA = m["observer_iata"]
 		tx.SNR = m["snr"]
 		tx.RSSI = m["rssi"]
 		tx.PathJSON = m["path_json"]
@@ -2512,6 +2513,7 @@ func mapSliceToObservations(maps []map[string]interface{}) []ObservationResp {
 		obs.Hash = m["hash"]
 		obs.ObserverID = m["observer_id"]
 		obs.ObserverName = m["observer_name"]
+		obs.ObserverIATA = m["observer_iata"]
 		obs.SNR = m["snr"]
 		obs.RSSI = m["rssi"]
 		obs.PathJSON = m["path_json"]

@@ -89,7 +89,7 @@ func (db *DB) transmissionBaseSQL() (selectCols, observerJoin string) {
 	if db.isV3 {
 		selectCols = `t.id, t.raw_hex, t.hash, t.first_seen, t.route_type, t.payload_type, t.decoded_json,
 			COALESCE((SELECT COUNT(*) FROM observations WHERE transmission_id = t.id), 0) AS observation_count,
-			obs.id AS observer_id, obs.name AS observer_name,
+			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json, o.direction`
 		observerJoin = `LEFT JOIN observations o ON o.id = (
 				SELECT id FROM observations WHERE transmission_id = t.id
@@ -99,12 +99,13 @@ func (db *DB) transmissionBaseSQL() (selectCols, observerJoin string) {
 	} else {
 		selectCols = `t.id, t.raw_hex, t.hash, t.first_seen, t.route_type, t.payload_type, t.decoded_json,
 			COALESCE((SELECT COUNT(*) FROM observations WHERE transmission_id = t.id), 0) AS observation_count,
-			o.observer_id, o.observer_name,
+			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json, o.direction`
 		observerJoin = `LEFT JOIN observations o ON o.id = (
 				SELECT id FROM observations WHERE transmission_id = t.id
 				ORDER BY length(COALESCE(path_json,'')) DESC LIMIT 1
-			)`
+			)
+			LEFT JOIN observers obs2 ON obs2.id = o.observer_id`
 	}
 	return
 }
@@ -113,12 +114,12 @@ func (db *DB) transmissionBaseSQL() (selectCols, observerJoin string) {
 // Returns a map matching the Node.js packet-store transmission shape.
 func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 	var id, observationCount int
-	var rawHex, hash, firstSeen, decodedJSON, observerID, observerName, pathJSON, direction sql.NullString
+	var rawHex, hash, firstSeen, decodedJSON, observerID, observerName, observerIATA, pathJSON, direction sql.NullString
 	var routeType, payloadType sql.NullInt64
 	var snr, rssi sql.NullFloat64
 
 	if err := rows.Scan(&id, &rawHex, &hash, &firstSeen, &routeType, &payloadType, &decodedJSON,
-		&observationCount, &observerID, &observerName, &snr, &rssi, &pathJSON, &direction); err != nil {
+		&observationCount, &observerID, &observerName, &observerIATA, &snr, &rssi, &pathJSON, &direction); err != nil {
 		return nil
 	}
 
@@ -134,6 +135,7 @@ func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 		"observation_count": observationCount,
 		"observer_id":       nullStr(observerID),
 		"observer_name":     nullStr(observerName),
+		"observer_iata":     nullStr(observerIATA),
 		"snr":               nullFloat(snr),
 		"rssi":              nullFloat(rssi),
 		"path_json":         nullStr(pathJSON),
@@ -476,7 +478,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
 			COALESCE((SELECT COUNT(DISTINCT oi.observer_idx) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
 			COALESCE((SELECT MAX(strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', oi.timestamp, 'unixepoch')) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
-			obs.id AS observer_id, obs.name AS observer_name,
+			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
@@ -490,13 +492,14 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
 			COALESCE((SELECT COUNT(DISTINCT oi.observer_id) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
 			COALESCE((SELECT MAX(oi.timestamp) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
-			o.observer_id, o.observer_name,
+			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
 			ORDER BY length(COALESCE(path_json,'')) DESC LIMIT 1
 		)
+		LEFT JOIN observers obs2 ON obs2.id = o.observer_id
 		%s ORDER BY latest DESC LIMIT ? OFFSET ?`, w)
 	}
 
@@ -512,14 +515,14 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 
 	packets := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		var hash, firstSeen, rawHex, decodedJSON, latest, observerID, observerName, pathJSON sql.NullString
+		var hash, firstSeen, rawHex, decodedJSON, latest, observerID, observerName, observerIATA, pathJSON sql.NullString
 		var payloadType, routeType sql.NullInt64
 		var count, observerCount int
 		var snr, rssi sql.NullFloat64
 
 		if err := rows.Scan(&hash, &firstSeen, &rawHex, &decodedJSON, &payloadType, &routeType,
 			&count, &observerCount, &latest,
-			&observerID, &observerName, &snr, &rssi, &pathJSON); err != nil {
+			&observerID, &observerName, &observerIATA, &snr, &rssi, &pathJSON); err != nil {
 			continue
 		}
 
@@ -532,6 +535,7 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			"latest":            nullStr(latest),
 			"observer_id":       nullStr(observerID),
 			"observer_name":     nullStr(observerName),
+			"observer_iata":     nullStr(observerIATA),
 			"path_json":         nullStr(pathJSON),
 			"payload_type":      nullInt(payloadType),
 			"route_type":        nullInt(routeType),
@@ -971,16 +975,17 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 
 	var querySQL string
 	if db.isV3 {
-		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, obs.id AS observer_id, obs.name AS observer_name,
+		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.direction, o.snr, o.rssi, o.path_json, strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', o.timestamp, 'unixepoch') AS obs_timestamp
 			FROM observations o
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
 			WHERE o.transmission_id IN (%s)
 			ORDER BY o.timestamp DESC`, strings.Join(placeholders, ","))
 	} else {
-		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, o.observer_id, o.observer_name,
+		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, o.observer_id, o.observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.direction, o.snr, o.rssi, o.path_json, o.timestamp AS obs_timestamp
 			FROM observations o
+			LEFT JOIN observers obs ON obs.id = o.observer_id
 			WHERE o.transmission_id IN (%s)
 			ORDER BY o.timestamp DESC`, strings.Join(placeholders, ","))
 	}
@@ -993,10 +998,10 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 
 	for rows.Next() {
 		var txID, obsID int
-		var observerID, observerName, direction, pathJSON, obsTimestamp sql.NullString
+		var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
 		var snr, rssi sql.NullFloat64
 
-		if err := rows.Scan(&txID, &obsID, &observerID, &observerName, &direction,
+		if err := rows.Scan(&txID, &obsID, &observerID, &observerName, &observerIATA, &direction,
 			&snr, &rssi, &pathJSON, &obsTimestamp); err != nil {
 			continue
 		}
@@ -1011,6 +1016,7 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 			"transmission_id": txID,
 			"observer_id":     nullStr(observerID),
 			"observer_name":   nullStr(observerName),
+			"observer_iata":   nullStr(observerIATA),
 			"snr":             nullFloat(snr),
 			"rssi":            nullFloat(rssi),
 			"path_json":       nullStr(pathJSON),
