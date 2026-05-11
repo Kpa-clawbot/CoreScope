@@ -256,7 +256,7 @@
     }
     if (field === 'observer') return packet.observer_name || '';
     if (field === 'observer_id') return packet.observer_id || '';
-    if (field === 'observer_iata' || field === 'iata') return '';
+    if (field === 'observer_iata' || field === 'iata') return packet.observer_iata || '';
     if (field === 'observations') return packet.observation_count || 0;
     if (field === 'time' || field === 'timestamp') {
       // Returns ms-since-epoch or null. Falls back to first_seen when timestamp absent
@@ -327,6 +327,16 @@
         var op = ast.op;
 
         if (fieldVal == null || fieldVal === undefined) return false;
+
+        // `in` operator: membership in a list of values (case-insensitive for strings)
+        if (op === 'in') {
+          var list = ast.values || [];
+          var lhs = String(fieldVal).toLowerCase();
+          for (var iv = 0; iv < list.length; iv++) {
+            if (String(list[iv]).toLowerCase() === lhs) return true;
+          }
+          return false;
+        }
 
         // Temporal ops: after / before / between operate on epoch-ms.
         if (op === 'after' || op === 'before' || op === 'between') {
@@ -421,6 +431,8 @@
     { name: 'hops',          desc: 'Number of hops in the path' },
     { name: 'observer',      desc: 'Observer station name' },
     { name: 'observer_id',   desc: 'Observer pubkey/id' },
+    { name: 'observer_iata', desc: 'Observer IATA region code (e.g. SJC, SFO)' },
+    { name: 'iata',          desc: 'Alias of observer_iata' },
     { name: 'observations',  desc: 'Number of observations of this packet' },
     { name: 'path',          desc: 'Hop path (joined with arrows)' },
     { name: 'payload_bytes', desc: 'Payload size in bytes (size - 2 header bytes)' },
@@ -452,6 +464,7 @@
     { op: 'after',       desc: 'Datetime after (ISO or epoch)',                                     example: 'time after "2025-01-01"' },
     { op: 'before',      desc: 'Datetime before',                                                   example: 'time before "2025-12-31"' },
     { op: 'between',     desc: 'Datetime between two values',                                       example: 'time between "2025-01-01" "2025-02-01"' },
+    { op: 'in',          desc: 'Value in a list (case-insensitive for strings)',                   example: 'iata in ("SJC","SFO")' },
   ];
 
   // Canonical type names (firmware payload types)
