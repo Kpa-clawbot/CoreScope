@@ -3366,3 +3366,271 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .fux-saved-save:hover { background: var(--bg-hover, rgba(120,160,255,0.12)); }
 
 td[data-filter-field] { cursor: context-menu; }
+
+/* === Issue #1064 — Edge-swipe nav drawer ============================
+ * Slide-over from the LEFT edge. Z-index sits ABOVE bottom-nav (1200)
+ * but BELOW modal (var(--z-modal) = 9100). Fenced for parallel-PR
+ * coordination with #1062 (gesture handlers / swipe-affordance section).
+ * --------------------------------------------------------------------- */
+
+/* `pan-y` lets vertical scroll work everywhere; the drawer claims
+ * horizontal swipes inside our viewport. iOS browser back-swipe (system
+ * left-edge gesture) still works — it's at the OS layer, above the page.
+ *
+ * Mesh-Op review (PR #1184): scope this to wide viewports only. At
+ * ≤768px the drawer is `display:none` (Option A), so this rule does
+ * nothing useful and would block horizontal panning gestures the future
+ * gesture system (#1185) might want to claim. */
+@media (min-width: 769px) {
+  body { touch-action: pan-y; }
+}
+
+.nav-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 1250; /* above bottom-nav (1200), below modal-backdrop (9000) */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+.nav-drawer-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.nav-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(320px, 86vw);
+  max-width: 360px;
+  background: var(--surface);
+  color: var(--text);
+  border-right: 1px solid var(--border);
+  box-shadow: 4px 0 18px rgba(0, 0, 0, 0.35);
+  z-index: 1260; /* above its backdrop, still below modal */
+  transform: translateX(-100%);
+  transition: transform 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  outline: none;
+}
+.nav-drawer.is-open { transform: translateX(0); }
+
+.nav-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2, var(--surface));
+}
+.nav-drawer-title {
+  font-weight: 700;
+  font-size: var(--fs-md);
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+.nav-drawer-close {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.nav-drawer-close:hover,
+.nav-drawer-close:focus-visible {
+  background: var(--bg-hover, rgba(120, 160, 255, 0.12));
+  outline: none;
+}
+
+.nav-drawer-list {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+.nav-drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: var(--fs-md);
+  min-height: 48px;
+  touch-action: manipulation;
+}
+.nav-drawer-item:hover,
+.nav-drawer-item:focus-visible {
+  background: var(--bg-hover, rgba(120, 160, 255, 0.12));
+  outline: none;
+}
+.nav-drawer-icon {
+  font-size: 18px;
+  line-height: 1;
+  width: 24px;
+  text-align: center;
+  flex: none;
+}
+.nav-drawer-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Option A: drawer is wide-only (>768px). At ≤768px the bottom-nav has
+ * the More tab (PR #1174) — drawer is hidden + script bails on open(). */
+@media (max-width: 768px) {
+  .nav-drawer,
+  .nav-drawer-backdrop { display: none !important; }
+}
+
+/* Reduced motion: instant snap, no transition. */
+@media (prefers-reduced-motion: reduce) {
+  .nav-drawer { transition: none; }
+  .nav-drawer-backdrop { transition: none; }
+}
+/* === end #1064 ====================================================== */
+
+/* === #1062 Touch Gestures ============================================
+ * Visual affordances for touch-gestures.js. CSS variables only — no
+ * hardcoded colors. body owns vertical scroll natively (touch-action: pan-y);
+ * the bottom-nav opts out so we manage horizontal swipes on it.
+ * ==================================================================== */
+body { touch-action: pan-y; }
+[data-bottom-nav] { touch-action: none; }
+
+.row-swiping { transition: transform 180ms ease-out; }
+.row-action-overlay {
+  position: fixed;
+  z-index: 1500;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  background: var(--card-bg, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(40px);
+  transition: opacity 180ms ease-out, transform 180ms ease-out;
+  pointer-events: auto;
+}
+.row-action-overlay.row-action-overlay-open {
+  opacity: 1;
+  transform: translateX(0);
+}
+.row-action-overlay[hidden] { display: none; }
+.row-action-btn {
+  flex: 1 1 auto;
+  background: transparent;
+  border: none;
+  color: var(--text, #e7e7e7);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  min-height: 48px;
+  border-right: 1px solid var(--border, #333);
+}
+.row-action-btn:last-child { border-right: none; }
+.row-action-btn:hover { background: var(--bg-hover, rgba(120, 160, 255, 0.12)); }
+.row-action-btn:active { background: var(--accent-bg, rgba(0, 122, 255, 0.18)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .row-swiping,
+  .row-action-overlay { transition: none !important; }
+}
+/* === end #1062 ====================================================== */ (feat(#1062): green — implement gesture system)
+
+/* === Issue #1065 — Gesture discoverability hints =================== */
+.gesture-hint {
+  position: fixed;
+  z-index: 9999;
+  max-width: 360px;
+  /* !important guards against any layered cascade enabling pointer-events
+   * (e.g., a future overlay class with higher specificity). The hint
+   * wrapper MUST never capture clicks — only its inner button does. */
+  pointer-events: none !important;
+  opacity: 1;
+  animation-name: gesture-hint-slide-in;
+  animation-duration: 240ms;
+  animation-timing-function: ease-out;
+  animation-fill-mode: both;
+  transition: opacity 320ms ease-out;
+}
+.gesture-hint-bottom {
+  left: 50%;
+  bottom: 80px;
+  transform: translateX(-50%);
+}
+.gesture-hint-top {
+  left: 50%;
+  top: 16px;
+  transform: translateX(-50%);
+}
+.gesture-hint-top-left {
+  left: 16px;
+  top: 80px;
+}
+.gesture-hint-inner {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface-2, #1a1a1a);
+  color: var(--text, #e7e7e7);
+  border: 1px solid var(--border, #333);
+  border-radius: 999px;
+  padding: 8px 8px 8px 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  line-height: 1.3;
+}
+.gesture-hint-text {
+  white-space: normal;
+}
+.gesture-hint-dismiss {
+  pointer-events: auto;
+  background: var(--accent, #4a9eff);
+  color: var(--accent-fg, #fff);
+  border: none;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.gesture-hint-dismiss:hover { filter: brightness(1.1); }
+.gesture-hint-fading { opacity: 0; }
+
+@keyframes gesture-hint-slide-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.gesture-hint-top-left { animation-name: gesture-hint-fade-in; }
+@keyframes gesture-hint-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gesture-hint {
+    animation-name: none !important;
+    animation-duration: 0s !important;
+  }
+}
+/* === end #1065 ====================================================== */
