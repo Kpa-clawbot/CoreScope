@@ -106,6 +106,7 @@ type Payload struct {
 	Tag             uint32       `json:"tag,omitempty"`
 	AuthCode        uint32       `json:"authCode,omitempty"`
 	TraceFlags      *int         `json:"traceFlags,omitempty"`
+	SNRValues       []float64    `json:"snrValues,omitempty"`
 	RawHex          string       `json:"raw,omitempty"`
 	Error           string       `json:"error,omitempty"`
 }
@@ -407,6 +408,19 @@ func DecodePacket(hexString string, validateSignatures bool) (*DecodedPacket, er
 		}
 		// The header path hops count represents SNR entries = completed hops
 		hopsCompleted := path.HashCount
+		// Extract per-hop SNR from header path bytes (int8, quarter-dB encoding)
+		if hopsCompleted > 0 && len(path.Hops) >= hopsCompleted {
+			snrVals := make([]float64, 0, hopsCompleted)
+			for i := 0; i < hopsCompleted; i++ {
+				b, err := hex.DecodeString(path.Hops[i])
+				if err == nil && len(b) == 1 {
+					snrVals = append(snrVals, float64(int8(b[0]))/4.0)
+				}
+			}
+			if len(snrVals) > 0 {
+				payload.SNRValues = snrVals
+			}
+		}
 		pathBytes, err := hex.DecodeString(payload.PathData)
 		if err == nil && payload.TraceFlags != nil {
 			// path_sz from flags byte is a power-of-two exponent per firmware:

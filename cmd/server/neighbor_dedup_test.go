@@ -12,9 +12,9 @@ import (
 func TestResolveAmbiguousEdges_GeoProximity(t *testing.T) {
 	// Node A at lat=45, lon=-122. Candidate B1 at lat=45.1, lon=-122.1 (close).
 	// Candidate B2 at lat=10, lon=10 (far away). Prefix "b0" matches both.
-	nodeA := nodeInfo{PublicKey: "aaaa1111", Name: "NodeA", HasGPS: true, Lat: 45.0, Lon: -122.0}
-	nodeB1 := nodeInfo{PublicKey: "b0b1eeee", Name: "CloseNode", HasGPS: true, Lat: 45.1, Lon: -122.1}
-	nodeB2 := nodeInfo{PublicKey: "b0c2ffff", Name: "FarNode", HasGPS: true, Lat: 10.0, Lon: 10.0}
+	nodeA := nodeInfo{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeA", HasGPS: true, Lat: 45.0, Lon: -122.0}
+	nodeB1 := nodeInfo{Role: "repeater", PublicKey: "b0b1eeee", Name: "CloseNode", HasGPS: true, Lat: 45.1, Lon: -122.1}
+	nodeB2 := nodeInfo{Role: "repeater", PublicKey: "b0c2ffff", Name: "FarNode", HasGPS: true, Lat: 10.0, Lon: 10.0}
 
 	pm := buildPrefixMap([]nodeInfo{nodeA, nodeB1, nodeB2})
 
@@ -62,8 +62,8 @@ func TestResolveAmbiguousEdges_GeoProximity(t *testing.T) {
 
 // Test 2: Ambiguous edge merged with existing resolved edge (count accumulation).
 func TestResolveAmbiguousEdges_MergeWithExisting(t *testing.T) {
-	nodeA := nodeInfo{PublicKey: "aaaa1111", Name: "NodeA", HasGPS: true, Lat: 45.0, Lon: -122.0}
-	nodeB := nodeInfo{PublicKey: "b0b1eeee", Name: "NodeB", HasGPS: true, Lat: 45.1, Lon: -122.1}
+	nodeA := nodeInfo{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeA", HasGPS: true, Lat: 45.0, Lon: -122.0}
+	nodeB := nodeInfo{Role: "repeater", PublicKey: "b0b1eeee", Name: "NodeB", HasGPS: true, Lat: 45.1, Lon: -122.1}
 
 	pm := buildPrefixMap([]nodeInfo{nodeA, nodeB})
 
@@ -133,9 +133,9 @@ func TestResolveAmbiguousEdges_MergeWithExisting(t *testing.T) {
 // Test 3: Ambiguous edge left as-is when resolution fails.
 func TestResolveAmbiguousEdges_FailsNoChange(t *testing.T) {
 	// Two candidates, neither has GPS, no affinity data — resolution falls through.
-	nodeA := nodeInfo{PublicKey: "aaaa1111", Name: "NodeA"}
-	nodeB1 := nodeInfo{PublicKey: "b0b1eeee", Name: "B1"}
-	nodeB2 := nodeInfo{PublicKey: "b0c2ffff", Name: "B2"}
+	nodeA := nodeInfo{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeA"}
+	nodeB1 := nodeInfo{Role: "repeater", PublicKey: "b0b1eeee", Name: "B1"}
+	nodeB2 := nodeInfo{Role: "repeater", PublicKey: "b0c2ffff", Name: "B2"}
 
 	pm := buildPrefixMap([]nodeInfo{nodeA, nodeB1, nodeB2})
 
@@ -175,7 +175,7 @@ func TestResolveAmbiguousEdges_FailsNoChange(t *testing.T) {
 
 // Test 3 (corrected): Resolution fails when prefix has no candidates in prefix map.
 func TestResolveAmbiguousEdges_NoMatch(t *testing.T) {
-	nodeA := nodeInfo{PublicKey: "aaaa1111", Name: "NodeA"}
+	nodeA := nodeInfo{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeA"}
 	// pm has no entries matching prefix "zz"
 	pm := buildPrefixMap([]nodeInfo{nodeA})
 
@@ -215,8 +215,8 @@ func TestResolveAmbiguousEdges_NoMatch(t *testing.T) {
 // Test 6: Phase 1 edge collection unchanged (no regression).
 func TestPhase1EdgeCollection_Unchanged(t *testing.T) {
 	// Build a simple graph and verify non-ambiguous edges are not touched.
-	nodeA := nodeInfo{PublicKey: "aaaa1111", Name: "NodeA", HasGPS: true, Lat: 45.0, Lon: -122.0}
-	nodeB := nodeInfo{PublicKey: "bbbb2222", Name: "NodeB", HasGPS: true, Lat: 45.1, Lon: -122.1}
+	nodeA := nodeInfo{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeA", HasGPS: true, Lat: 45.0, Lon: -122.0}
+	nodeB := nodeInfo{Role: "repeater", PublicKey: "bbbb2222", Name: "NodeB", HasGPS: true, Lat: 45.1, Lon: -122.1}
 
 	ts := time.Now().UTC().Format(time.RFC3339)
 	payloadType := 4
@@ -232,7 +232,7 @@ func TestPhase1EdgeCollection_Unchanged(t *testing.T) {
 		Observations: obs,
 	}
 
-	store := ngTestStore([]nodeInfo{nodeA, nodeB, {PublicKey: "cccc3333", Name: "Observer"}}, []*StoreTx{tx})
+	store := ngTestStore([]nodeInfo{nodeA, nodeB, {Role: "repeater", PublicKey: "cccc3333", Name: "Observer"}}, []*StoreTx{tx})
 	graph := BuildFromStore(store)
 
 	edges := graph.Neighbors("aaaa1111")
@@ -255,8 +255,8 @@ func TestPhase1EdgeCollection_Unchanged(t *testing.T) {
 
 // Test 7: Merge preserves higher LastSeen timestamp.
 func TestResolveAmbiguousEdges_PreservesHigherLastSeen(t *testing.T) {
-	nodeA := nodeInfo{PublicKey: "aaaa1111", Name: "NodeA", HasGPS: true, Lat: 45.0, Lon: -122.0}
-	nodeB := nodeInfo{PublicKey: "b0b1eeee", Name: "NodeB", HasGPS: true, Lat: 45.1, Lon: -122.1}
+	nodeA := nodeInfo{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeA", HasGPS: true, Lat: 45.0, Lon: -122.0}
+	nodeB := nodeInfo{Role: "repeater", PublicKey: "b0b1eeee", Name: "NodeB", HasGPS: true, Lat: 45.1, Lon: -122.1}
 	pm := buildPrefixMap([]nodeInfo{nodeA, nodeB})
 
 	graph := NewNeighborGraph()
@@ -307,10 +307,10 @@ func TestResolveAmbiguousEdges_PreservesHigherLastSeen(t *testing.T) {
 
 // Test 5: Integration — node with both 1-byte and 2-byte prefix observations shows single entry.
 func TestIntegration_DualPrefixSingleNeighbor(t *testing.T) {
-	nodeA := nodeInfo{PublicKey: "aaaa1111aaaa1111", Name: "NodeA", HasGPS: true, Lat: 45.0, Lon: -122.0}
-	nodeB := nodeInfo{PublicKey: "b0b1eeeeb0b1eeee", Name: "NodeB", HasGPS: true, Lat: 45.1, Lon: -122.1}
-	nodeB2 := nodeInfo{PublicKey: "b0c2ffffb0c2ffff", Name: "NodeB2", HasGPS: true, Lat: 10.0, Lon: 10.0}
-	observer := nodeInfo{PublicKey: "cccc3333cccc3333", Name: "Observer"}
+	nodeA := nodeInfo{Role: "repeater", PublicKey: "aaaa1111aaaa1111", Name: "NodeA", HasGPS: true, Lat: 45.0, Lon: -122.0}
+	nodeB := nodeInfo{Role: "repeater", PublicKey: "b0b1eeeeb0b1eeee", Name: "NodeB", HasGPS: true, Lat: 45.1, Lon: -122.1}
+	nodeB2 := nodeInfo{Role: "repeater", PublicKey: "b0c2ffffb0c2ffff", Name: "NodeB2", HasGPS: true, Lat: 10.0, Lon: 10.0}
+	observer := nodeInfo{Role: "repeater", PublicKey: "cccc3333cccc3333", Name: "Observer"}
 
 	ts := time.Now().UTC().Format(time.RFC3339)
 	pt := 4

@@ -86,9 +86,9 @@ func TestBuildNeighborGraph_EmptyStore(t *testing.T) {
 func TestBuildNeighborGraph_AdvertSingleHopPath(t *testing.T) {
 	// ADVERT from X, path=["R1_prefix"] → edges: X↔R1 and Observer↔R1
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "r1aabbcc", Name: "R1"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "r1aabbcc", Name: "R1"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 	tx := ngMakeTx(1, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{
 		ngMakeObs("obs00001", `["r1aa"]`, nowStr, ngFloatPtr(-10)),
@@ -132,10 +132,10 @@ func TestBuildNeighborGraph_AdvertSingleHopPath(t *testing.T) {
 func TestBuildNeighborGraph_AdvertMultiHopPath(t *testing.T) {
 	// ADVERT from X, path=["R1","R2"] → X↔R1 and Observer↔R2
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "r1aabbcc", Name: "R1"},
-		{PublicKey: "r2ddeeff", Name: "R2"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "r1aabbcc", Name: "R1"},
+		{Role: "repeater", PublicKey: "r2ddeeff", Name: "R2"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 	tx := ngMakeTx(1, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{
 		ngMakeObs("obs00001", `["r1aa","r2dd"]`, nowStr, nil),
@@ -170,8 +170,8 @@ func TestBuildNeighborGraph_AdvertMultiHopPath(t *testing.T) {
 func TestBuildNeighborGraph_AdvertZeroHop(t *testing.T) {
 	// ADVERT from X, path=[] → X↔Observer direct edge
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 	tx := ngMakeTx(1, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{
 		ngMakeObs("obs00001", `[]`, nowStr, nil),
@@ -195,8 +195,8 @@ func TestBuildNeighborGraph_AdvertZeroHop(t *testing.T) {
 func TestBuildNeighborGraph_NonAdvertEmptyPath(t *testing.T) {
 	// Non-ADVERT, path=[] → no edges
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 	tx := ngMakeTx(1, 2, ngFromNodeJSON("aaaa1111"), []*StoreObs{
 		ngMakeObs("obs00001", `[]`, nowStr, nil),
@@ -212,10 +212,10 @@ func TestBuildNeighborGraph_NonAdvertEmptyPath(t *testing.T) {
 func TestBuildNeighborGraph_NonAdvertOnlyObserverEdge(t *testing.T) {
 	// Non-ADVERT with path=["R1","R2"] → only Observer↔R2, NO originator edge
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "r1aabbcc", Name: "R1"},
-		{PublicKey: "r2ddeeff", Name: "R2"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "r1aabbcc", Name: "R1"},
+		{Role: "repeater", PublicKey: "r2ddeeff", Name: "R2"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 	tx := ngMakeTx(1, 2, ngFromNodeJSON("aaaa1111"), []*StoreObs{
 		ngMakeObs("obs00001", `["r1aa","r2dd"]`, nowStr, nil),
@@ -236,9 +236,9 @@ func TestBuildNeighborGraph_NonAdvertOnlyObserverEdge(t *testing.T) {
 func TestBuildNeighborGraph_NonAdvertSingleHop(t *testing.T) {
 	// Non-ADVERT with path=["R1"] → Observer↔R1 only
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "r1aabbcc", Name: "R1"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "r1aabbcc", Name: "R1"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 	tx := ngMakeTx(1, 2, ngFromNodeJSON("aaaa1111"), []*StoreObs{
 		ngMakeObs("obs00001", `["r1aa"]`, nowStr, nil),
@@ -259,10 +259,10 @@ func TestBuildNeighborGraph_NonAdvertSingleHop(t *testing.T) {
 func TestBuildNeighborGraph_HashCollision(t *testing.T) {
 	// Two nodes share prefix "a3" → ambiguous edge
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "a3bb1111", Name: "CandidateA"},
-		{PublicKey: "a3bb2222", Name: "CandidateB"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "a3bb1111", Name: "CandidateA"},
+		{Role: "repeater", PublicKey: "a3bb2222", Name: "CandidateB"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 	tx := ngMakeTx(1, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{
 		ngMakeObs("obs00001", `["a3bb"]`, nowStr, nil),
@@ -308,13 +308,13 @@ func TestBuildNeighborGraph_ConfidenceAutoResolve(t *testing.T) {
 	// CandidateB has no known neighbors (Jaccard = 0).
 	// An ambiguous edge X↔prefix "a3" with candidates [A, B] should auto-resolve to A.
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "n1111111", Name: "N1"},
-		{PublicKey: "n2222222", Name: "N2"},
-		{PublicKey: "n3333333", Name: "N3"},
-		{PublicKey: "a3001111", Name: "CandidateA"},
-		{PublicKey: "a3002222", Name: "CandidateB"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "n1111111", Name: "N1"},
+		{Role: "repeater", PublicKey: "n2222222", Name: "N2"},
+		{Role: "repeater", PublicKey: "n3333333", Name: "N3"},
+		{Role: "repeater", PublicKey: "a3001111", Name: "CandidateA"},
+		{Role: "repeater", PublicKey: "a3002222", Name: "CandidateB"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 
 	// Create resolved edges: X↔N1, X↔N2, X↔N3, A↔N1, A↔N2, A↔N3
@@ -373,11 +373,11 @@ func TestBuildNeighborGraph_ConfidenceAutoResolve(t *testing.T) {
 func TestBuildNeighborGraph_EqualScoresAmbiguous(t *testing.T) {
 	// Two candidates with identical neighbor sets → should NOT auto-resolve.
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "n1111111", Name: "N1"},
-		{PublicKey: "a3001111", Name: "CandidateA"},
-		{PublicKey: "a3002222", Name: "CandidateB"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "n1111111", Name: "N1"},
+		{Role: "repeater", PublicKey: "a3001111", Name: "CandidateA"},
+		{Role: "repeater", PublicKey: "a3002222", Name: "CandidateB"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 
 	var txs []*StoreTx
@@ -425,8 +425,8 @@ func TestBuildNeighborGraph_EqualScoresAmbiguous(t *testing.T) {
 func TestBuildNeighborGraph_ObserverSelfEdgeGuard(t *testing.T) {
 	// Observer's own prefix in path → should NOT create self-edge.
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 	tx := ngMakeTx(1, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{
 		ngMakeObs("obs00001", `["obs0"]`, nowStr, nil),
@@ -445,8 +445,8 @@ func TestBuildNeighborGraph_ObserverSelfEdgeGuard(t *testing.T) {
 func TestBuildNeighborGraph_OrphanPrefix(t *testing.T) {
 	// Path contains prefix matching zero nodes → edge recorded as unresolved.
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 	tx := ngMakeTx(1, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{
 		ngMakeObs("obs00001", `["ff99"]`, nowStr, nil),
@@ -506,9 +506,9 @@ func TestAffinityScore_StaleAndLow(t *testing.T) {
 
 func TestBuildNeighborGraph_CountAccumulation(t *testing.T) {
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "r1aabbcc", Name: "R1"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "r1aabbcc", Name: "R1"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 
 	var txs []*StoreTx
@@ -535,10 +535,10 @@ func TestBuildNeighborGraph_CountAccumulation(t *testing.T) {
 
 func TestBuildNeighborGraph_MultipleObservers(t *testing.T) {
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "r1aabbcc", Name: "R1"},
-		{PublicKey: "obs00001", Name: "Obs1"},
-		{PublicKey: "obs00002", Name: "Obs2"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "r1aabbcc", Name: "R1"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Obs1"},
+		{Role: "repeater", PublicKey: "obs00002", Name: "Obs2"},
 	}
 
 	tx := ngMakeTx(1, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{
@@ -565,9 +565,9 @@ func TestBuildNeighborGraph_MultipleObservers(t *testing.T) {
 
 func TestBuildNeighborGraph_TimeDecayOldObservations(t *testing.T) {
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "r1aabbcc", Name: "R1"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "r1aabbcc", Name: "R1"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 
 	tx := ngMakeTx(1, 4, ngFromNodeJSON("aaaa1111"), []*StoreObs{
@@ -592,10 +592,10 @@ func TestBuildNeighborGraph_TimeDecayOldObservations(t *testing.T) {
 func TestBuildNeighborGraph_ADVERTOnlyConstraint(t *testing.T) {
 	// Non-ADVERT: should NOT create originator↔path[0] edge, only observer↔path[last].
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeX"},
-		{PublicKey: "r1aabbcc", Name: "R1"},
-		{PublicKey: "r2ddeeff", Name: "R2"},
-		{PublicKey: "obs00001", Name: "Observer"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeX"},
+		{Role: "repeater", PublicKey: "r1aabbcc", Name: "R1"},
+		{Role: "repeater", PublicKey: "r2ddeeff", Name: "R2"},
+		{Role: "repeater", PublicKey: "obs00001", Name: "Observer"},
 	}
 	tx := ngMakeTx(1, 2, ngFromNodeJSON("aaaa1111"), []*StoreObs{
 		ngMakeObs("obs00001", `["r1aa","r2dd"]`, nowStr, nil),
@@ -631,9 +631,9 @@ func ngPubKeyJSON(pubkey string) string {
 func TestBuildNeighborGraph_AdvertPubKeyField(t *testing.T) {
 	// Real ADVERTs use "pubKey", not "from_node". Verify the builder handles it.
 	nodes := []nodeInfo{
-		{PublicKey: "99bf37abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234", Name: "Originator"},
-		{PublicKey: "r1aabbccdd001122334455667788990011223344556677889900112233445566", Name: "R1"},
-		{PublicKey: "obs0000100112233445566778899001122334455667788990011223344556677", Name: "Observer"},
+		{Role: "repeater", PublicKey: "99bf37abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234", Name: "Originator"},
+		{Role: "repeater", PublicKey: "r1aabbccdd001122334455667788990011223344556677889900112233445566", Name: "R1"},
+		{Role: "repeater", PublicKey: "obs0000100112233445566778899001122334455667788990011223344556677", Name: "Observer"},
 	}
 	tx := ngMakeTx(1, 4, ngPubKeyJSON("99bf37abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234"), []*StoreObs{
 		ngMakeObs("obs0000100112233445566778899001122334455667788990011223344556677", `["r1"]`, nowStr, ngFloatPtr(-8.5)),
@@ -666,10 +666,10 @@ func TestBuildNeighborGraph_OneByteHashPrefixes(t *testing.T) {
 	// Real-world scenario: 1-byte hash prefixes with multiple candidates.
 	// Should create edges (possibly ambiguous) rather than empty graph.
 	nodes := []nodeInfo{
-		{PublicKey: "c0dedad400000000000000000000000000000000000000000000000000000001", Name: "NodeC0-1"},
-		{PublicKey: "c0dedad900000000000000000000000000000000000000000000000000000002", Name: "NodeC0-2"},
-		{PublicKey: "a3bbccdd00000000000000000000000000000000000000000000000000000003", Name: "Originator"},
-		{PublicKey: "obs1234500000000000000000000000000000000000000000000000000000004", Name: "Observer"},
+		{Role: "repeater", PublicKey: "c0dedad400000000000000000000000000000000000000000000000000000001", Name: "NodeC0-1"},
+		{Role: "repeater", PublicKey: "c0dedad900000000000000000000000000000000000000000000000000000002", Name: "NodeC0-2"},
+		{Role: "repeater", PublicKey: "a3bbccdd00000000000000000000000000000000000000000000000000000003", Name: "Originator"},
+		{Role: "repeater", PublicKey: "obs1234500000000000000000000000000000000000000000000000000000004", Name: "Observer"},
 	}
 	// ADVERT from Originator with 1-byte path hop "c0"
 	tx := ngMakeTx(1, 4, ngPubKeyJSON("a3bbccdd00000000000000000000000000000000000000000000000000000003"), []*StoreObs{
@@ -809,10 +809,10 @@ func TestExtractFromNode_UsesCachedParse(t *testing.T) {
 func BenchmarkBuildFromStore(b *testing.B) {
 	// Simulate a dataset with many packets and repeated pubkeys
 	nodes := []nodeInfo{
-		{PublicKey: "aaaa1111", Name: "NodeA"},
-		{PublicKey: "bbbb2222", Name: "NodeB"},
-		{PublicKey: "cccc3333", Name: "NodeC"},
-		{PublicKey: "dddd4444", Name: "NodeD"},
+		{Role: "repeater", PublicKey: "aaaa1111", Name: "NodeA"},
+		{Role: "repeater", PublicKey: "bbbb2222", Name: "NodeB"},
+		{Role: "repeater", PublicKey: "cccc3333", Name: "NodeC"},
+		{Role: "repeater", PublicKey: "dddd4444", Name: "NodeD"},
 	}
 	const numPackets = 1000
 	packets := make([]*StoreTx, 0, numPackets)

@@ -20,11 +20,10 @@ var persistSem = make(chan struct{}, 1)
 // ensureNeighborEdgesTable creates the neighbor_edges table if it doesn't exist.
 // Uses a separate read-write connection since the main DB is read-only.
 func ensureNeighborEdgesTable(dbPath string) error {
-	rw, err := openRW(dbPath)
+	rw, err := cachedRW(dbPath)
 	if err != nil {
 		return fmt.Errorf("open rw for neighbor_edges: %w", err)
 	}
-	defer rw.Close()
 
 	_, err = rw.Exec(`CREATE TABLE IF NOT EXISTS neighbor_edges (
 		node_a TEXT NOT NULL,
@@ -129,12 +128,11 @@ func asyncPersistResolvedPathsAndEdges(dbPath string, obsUpdates []persistObsUpd
 	go func() {
 		defer func() { <-persistSem }()
 
-		rw, err := openRW(dbPath)
+		rw, err := cachedRW(dbPath)
 		if err != nil {
 			log.Printf("[store] %s rw open error: %v", logPrefix, err)
 			return
 		}
-		defer rw.Close()
 
 		if len(obsUpdates) > 0 {
 			sqlTx, err := rw.Begin()
@@ -249,11 +247,10 @@ func buildAndPersistEdges(store *PacketStore, rw *sql.DB) int {
 
 // ensureResolvedPathColumn adds the resolved_path column to observations if missing.
 func ensureResolvedPathColumn(dbPath string) error {
-	rw, err := openRW(dbPath)
+	rw, err := cachedRW(dbPath)
 	if err != nil {
 		return err
 	}
-	defer rw.Close()
 
 	// Check if column already exists
 	rows, err := rw.Query("PRAGMA table_info(observations)")
@@ -279,6 +276,161 @@ func ensureResolvedPathColumn(dbPath string) error {
 	}
 	log.Println("[store] Added resolved_path column to observations")
 	return nil
+}
+
+// ensureObserverInactiveColumn adds the inactive column to observers if missing.
+// The column was originally added by ingestor migration (cmd/ingestor/db.go:344) to
+// support soft-delete via RemoveStaleObservers + filtered reads (PR #954). When the
+// server starts against a DB that was never touched by the ingestor (e.g. the e2e
+// fixture), the column is missing and read queries that filter on it (GetObservers,
+// GetStats) silently fail with "no such column: inactive" — leaving /api/observers
+// returning empty.
+func ensureObserverInactiveColumn(dbPath string) error {
+	rw, err := cachedRW(dbPath)
+	if err != nil {
+		return err
+	}
+
+	rows, err := rw.Query("PRAGMA table_info(observers)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == "inactive" {
+			return nil // already exists
+		}
+	}
+
+	_, err = rw.Exec("ALTER TABLE observers ADD COLUMN inactive INTEGER DEFAULT 0")
+	if err != nil {
+		return fmt.Errorf("add inactive column: %w", err)
+	}
+	log.Println("[store] Added inactive column to observers")
+	return nil
+}
+
+// ensureLastPacketAtColumn adds the last_packet_at column to observers if missing.
+// The column was originally added by ingestor migration (observers_last_packet_at_v1)
+// to track the most recent packet observation time separately from status updates.
+// When the server starts against a DB that was never touched by the ingestor (e.g.
+// the e2e fixture), the column is missing and read queries that reference it
+// (GetObservers, GetObserverByID) fail with "no such column: last_packet_at".
+func ensureLastPacketAtColumn(dbPath string) error {
+	rw, err := cachedRW(dbPath)
+	if err != nil {
+		return err
+	}
+
+	rows, err := rw.Query("PRAGMA table_info(observers)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == "last_packet_at" {
+			return nil // already exists
+		}
+	}
+
+	_, err = rw.Exec("ALTER TABLE observers ADD COLUMN last_packet_at TEXT")
+	if err != nil {
+		return fmt.Errorf("add last_packet_at column: %w", err)
+	}
+	log.Println("[store] Added last_packet_at column to observers")
+	return nil
+}
+
+// ensureForeignAdvertColumn adds the foreign_advert column to nodes/inactive_nodes
+// if missing (#730). The column is added by the ingestor migration foreign_advert_v1
+// — but the server may run against a DB the ingestor has never touched (e2e fixture,
+// fresh installs where the server boots first), in which case scanNodeRow fails
+// with "no such column: foreign_advert" and /api/nodes silently returns nothing.
+func ensureForeignAdvertColumn(dbPath string) error {
+	rw, err := cachedRW(dbPath)
+	if err != nil {
+		return err
+	}
+	for _, table := range []string{"nodes", "inactive_nodes"} {
+		has, err := tableHasColumn(rw, table, "foreign_advert")
+		if err != nil {
+			return fmt.Errorf("inspect %s: %w", table, err)
+		}
+		if has {
+			continue
+		}
+		if _, err := rw.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN foreign_advert INTEGER DEFAULT 0", table)); err != nil {
+			return fmt.Errorf("add foreign_advert to %s: %w", table, err)
+		}
+		log.Printf("[store] Added foreign_advert column to %s", table)
+	}
+	return nil
+}
+
+// tableHasColumn reports whether the named table has the named column.
+func tableHasColumn(rw *sql.DB, table, column string) (bool, error) {
+	rows, err := rw.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == column {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// softDeleteBlacklistedObservers marks observers matching the blacklist as
+// inactive=1 so they are hidden from API responses.  Runs once at startup.
+func softDeleteBlacklistedObservers(dbPath string, blacklist []string) {
+	rw, err := cachedRW(dbPath)
+	if err != nil {
+		log.Printf("[observer-blacklist] warning: could not open DB for soft-delete: %v", err)
+		return
+	}
+
+	placeholders := make([]string, 0, len(blacklist))
+	args := make([]interface{}, 0, len(blacklist))
+	for _, pk := range blacklist {
+		trimmed := strings.TrimSpace(pk)
+		if trimmed == "" {
+			continue
+		}
+		placeholders = append(placeholders, "LOWER(?)")
+		args = append(args, trimmed)
+	}
+	if len(placeholders) == 0 {
+		return
+	}
+
+	query := "UPDATE observers SET inactive = 1 WHERE LOWER(id) IN (" + strings.Join(placeholders, ",") + ") AND (inactive IS NULL OR inactive = 0)"
+	result, err := rw.Exec(query, args...)
+	if err != nil {
+		log.Printf("[observer-blacklist] warning: soft-delete failed: %v", err)
+		return
+	}
+	if n, _ := result.RowsAffected(); n > 0 {
+		log.Printf("[observer-blacklist] soft-deleted %d blacklisted observer(s)", n)
+	}
 }
 
 // resolvePathForObs resolves hop prefixes to full pubkeys for an observation.
@@ -416,16 +568,12 @@ func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int
 	var rw *sql.DB
 	if dbPath != "" {
 		var err error
-		rw, err = openRW(dbPath)
+		rw, err = cachedRW(dbPath)
 		if err != nil {
 			log.Printf("[store] async backfill: open rw error: %v", err)
 		}
 	}
-	defer func() {
-		if rw != nil {
-			rw.Close()
-		}
-	}()
+	// rw is cached process-wide; do not close
 
 	totalProcessed := 0
 	for totalProcessed < totalPending {
@@ -650,11 +798,10 @@ func PruneNeighborEdges(dbPath string, graph *NeighborGraph, maxAgeDays int) (in
 
 	// 1. Prune from SQLite using a read-write connection
 	var dbPruned int64
-	rw, err := openRW(dbPath)
+	rw, err := cachedRW(dbPath)
 	if err != nil {
 		return 0, fmt.Errorf("prune neighbor_edges: open rw: %w", err)
 	}
-	defer rw.Close()
 	res, err := rw.Exec("DELETE FROM neighbor_edges WHERE last_seen < ?", cutoff.Format(time.RFC3339))
 	if err != nil {
 		return 0, fmt.Errorf("prune neighbor_edges: %w", err)

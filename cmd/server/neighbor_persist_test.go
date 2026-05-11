@@ -58,8 +58,8 @@ func createTestDBWithSchema(t *testing.T) (*DB, string) {
 func TestResolvePathForObs(t *testing.T) {
 	// Build a prefix map with known nodes
 	nodes := []nodeInfo{
-		{PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
-		{PublicKey: "bbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb11", Name: "Node-BB"},
+		{Role: "repeater", PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
+		{Role: "repeater", PublicKey: "bbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb11", Name: "Node-BB"},
 	}
 	pm := buildPrefixMap(nodes)
 	graph := NewNeighborGraph()
@@ -97,7 +97,7 @@ func TestResolvePathForObs_EmptyPath(t *testing.T) {
 
 func TestResolvePathForObs_Unresolvable(t *testing.T) {
 	nodes := []nodeInfo{
-		{PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
+		{Role: "repeater", PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
 	}
 	pm := buildPrefixMap(nodes)
 
@@ -437,8 +437,8 @@ func TestExtractEdgesFromObs_NonAdvertNoPath(t *testing.T) {
 
 func TestExtractEdgesFromObs_WithPath(t *testing.T) {
 	nodes := []nodeInfo{
-		{PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
-		{PublicKey: "ffgghhii1234567890aabbccddee1234567890aabbccddee1234567890aabb11", Name: "Node-FF"},
+		{Role: "repeater", PublicKey: "aabbccddee1234567890aabbccddee1234567890aabbccddee1234567890aabb", Name: "Node-AA"},
+		{Role: "repeater", PublicKey: "ffgghhii1234567890aabbccddee1234567890aabbccddee1234567890aabb11", Name: "Node-FF"},
 	}
 	pm := buildPrefixMap(nodes)
 
@@ -536,5 +536,64 @@ func TestOpenRW_BusyTimeout(t *testing.T) {
 	}
 	if timeout != 5000 {
 		t.Errorf("expected busy_timeout=5000, got %d", timeout)
+	}
+}
+
+func TestEnsureLastPacketAtColumn(t *testing.T) {
+	// Create a temp DB with observers table missing last_packet_at
+	dir := t.TempDir()
+	dbPath := dir + "/test.db"
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE observers (
+		id TEXT PRIMARY KEY,
+		name TEXT,
+		last_seen TEXT,
+		lat REAL,
+		lon REAL,
+		inactive INTEGER DEFAULT 0
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	// First call: should add the column
+	if err := ensureLastPacketAtColumn(dbPath); err != nil {
+		t.Fatalf("first call failed: %v", err)
+	}
+
+	// Verify column exists
+	db2, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+
+	var found bool
+	rows, err := db2.Query("PRAGMA table_info(observers)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == "last_packet_at" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("last_packet_at column not found after migration")
+	}
+
+	// Idempotency: second call should succeed without error
+	if err := ensureLastPacketAtColumn(dbPath); err != nil {
+		t.Fatalf("idempotent call failed: %v", err)
 	}
 }

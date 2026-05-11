@@ -189,6 +189,7 @@ type Observer struct {
 	BatteryMv     *int     `json:"battery_mv"`
 	UptimeSecs    *int64   `json:"uptime_secs"`
 	NoiseFloor    *float64 `json:"noise_floor"`
+	LastPacketAt  *string  `json:"last_packet_at"`
 }
 
 // Transmission represents a row from the transmissions table.
@@ -250,7 +251,7 @@ func (db *DB) GetStats() (*Stats, error) {
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
 	db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE last_seen > ?", sevenDaysAgo).Scan(&s.TotalNodes)
 	db.conn.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&s.TotalNodesAllTime)
-	db.conn.QueryRow("SELECT COUNT(*) FROM observers").Scan(&s.TotalObservers)
+	db.conn.QueryRow("SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0").Scan(&s.TotalObservers)
 
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
 	db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneHourAgo).Scan(&s.PacketsLastHour)
@@ -597,8 +598,10 @@ func (db *DB) buildPacketWhere(q PacketQuery) ([]string, []interface{}) {
 	}
 	if q.Node != "" {
 		pk := db.resolveNodePubkey(q.Node)
-		where = append(where, "decoded_json LIKE ?")
-		args = append(args, "%"+pk+"%")
+		// #1143: exact-match on the dedicated from_pubkey column instead of
+		// LIKE-on-JSON substring (adversarial spoof + same-name false positives).
+		where = append(where, "from_pubkey = ?")
+		args = append(args, pk)
 	}
 	return where, args
 }
@@ -641,8 +644,9 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 	}
 	if q.Node != "" {
 		pk := db.resolveNodePubkey(q.Node)
-		where = append(where, "t.decoded_json LIKE ?")
-		args = append(args, "%"+pk+"%")
+		// #1143: exact-match on dedicated from_pubkey column.
+		where = append(where, "t.from_pubkey = ?")
+		args = append(args, pk)
 	}
 	if q.Channel != "" {
 		// channel_hash column is indexed for payload_type = 5; filter is exact match.
@@ -805,7 +809,7 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 	var total int
 	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM nodes %s", w), args...).Scan(&total)
 
-	nodeColList := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c"
+	nodeColList := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert"
 	if db.hasMultibyteSupCols {
 		nodeColList += ", multibyte_sup, multibyte_evidence"
 	}
@@ -835,7 +839,7 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 	if limit <= 0 {
 		limit = 10
 	}
-	colList := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c"
+	colList := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert"
 	if db.hasMultibyteSupCols {
 		colList += ", multibyte_sup, multibyte_evidence"
 	}
@@ -857,9 +861,61 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 	return nodes, nil
 }
 
+// GetNodeByPrefix resolves a hex prefix (>=8 chars) to a unique node.
+// Returns (node, ambiguous, error). When multiple nodes share the prefix,
+// returns (nil, true, nil). Used by the short-URL feature (issue #772).
+//
+// Trade-off vs an opaque ID lookup table: prefixes are stable across
+// restarts, self-describing (no allocator needed), and resolve to the
+// authoritative pubkey on the server. Cost: ambiguity grows with the
+// node directory; we mitigate with a hard 8-hex-char (32-bit) minimum
+// and surface 409 Conflict when collisions occur.
+func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, error) {
+	if len(prefix) < 8 {
+		return nil, false, nil
+	}
+	// Validate hex (avoid SQL LIKE wildcards leaking through).
+	for _, c := range prefix {
+		isHex := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+		if !isHex {
+			return nil, false, nil
+		}
+	}
+	prefixColList := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert"
+	if db.hasMultibyteSupCols {
+		prefixColList += ", multibyte_sup, multibyte_evidence"
+	}
+	rows, err := db.conn.Query(
+		fmt.Sprintf("SELECT %s FROM nodes WHERE public_key LIKE ? LIMIT 2", prefixColList),
+		prefix+"%",
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var first map[string]interface{}
+	count := 0
+	for rows.Next() {
+		n := db.scanNodeRow(rows)
+		if n == nil {
+			continue
+		}
+		count++
+		if count == 1 {
+			first = n
+		} else {
+			return nil, true, nil
+		}
+	}
+	if count == 0 {
+		return nil, false, nil
+	}
+	return first, false, nil
+}
+
 // GetNodeByPubkey returns a single node.
 func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
-	colList := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c"
+	colList := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert"
 	if db.hasMultibyteSupCols {
 		colList += ", multibyte_sup, multibyte_evidence"
 	}
@@ -875,27 +931,22 @@ func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
 }
 
 
-// GetRecentTransmissionsForNode returns recent transmissions referencing a node (Node.js-compatible shape).
-func (db *DB) GetRecentTransmissionsForNode(pubkey string, name string, limit int) ([]map[string]interface{}, error) {
+// GetRecentTransmissionsForNode returns recent transmissions originated by a
+// node, identified by exact pubkey match on the indexed from_pubkey column
+// (#1143). The legacy `name` substring fallback was removed: it produced
+// same-name false positives and an adversarial spoof path where any node
+// could attribute its transmissions to a victim by naming itself with the
+// victim's pubkey. Pubkey is unique by design — that's the whole point.
+func (db *DB) GetRecentTransmissionsForNode(pubkey string, limit int) ([]map[string]interface{}, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	pk := "%" + pubkey + "%"
-	np := "%" + name + "%"
 
 	selectCols, observerJoin := db.transmissionBaseSQL()
 
-	var querySQL string
-	var args []interface{}
-	if name != "" {
-		querySQL = fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.decoded_json LIKE ? OR t.decoded_json LIKE ? ORDER BY t.first_seen DESC LIMIT ?",
-			selectCols, observerJoin)
-		args = []interface{}{pk, np, limit}
-	} else {
-		querySQL = fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.decoded_json LIKE ? ORDER BY t.first_seen DESC LIMIT ?",
-			selectCols, observerJoin)
-		args = []interface{}{pk, limit}
-	}
+	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.from_pubkey = ? ORDER BY t.first_seen DESC LIMIT ?",
+		selectCols, observerJoin)
+	args := []interface{}{pubkey, limit}
 
 	rows, err := db.conn.Query(querySQL, args...)
 	if err != nil {
@@ -1001,9 +1052,9 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 	return result
 }
 
-// GetObservers returns all observers sorted by last_seen DESC.
+// GetObservers returns active observers (not soft-deleted) sorted by last_seen DESC.
 func (db *DB) GetObservers() ([]Observer, error) {
-	rows, err := db.conn.Query("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor FROM observers ORDER BY last_seen DESC")
+	rows, err := db.conn.Query("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -1014,7 +1065,7 @@ func (db *DB) GetObservers() ([]Observer, error) {
 		var o Observer
 		var batteryMv, uptimeSecs sql.NullInt64
 		var noiseFloor sql.NullFloat64
-		if err := rows.Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor); err != nil {
+		if err := rows.Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt); err != nil {
 			continue
 		}
 		if batteryMv.Valid {
@@ -1037,8 +1088,8 @@ func (db *DB) GetObserverByID(id string) (*Observer, error) {
 	var o Observer
 	var batteryMv, uptimeSecs sql.NullInt64
 	var noiseFloor sql.NullFloat64
-	err := db.conn.QueryRow("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor FROM observers WHERE id = ?", id).
-		Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor)
+	err := db.conn.QueryRow("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at FROM observers WHERE id = ?", id).
+		Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1086,6 +1137,17 @@ func (db *DB) GetObserverIdsForRegion(regionParam string) ([]string, error) {
 	return ids, nil
 }
 
+// normalizeRegionCodes parses a region query parameter into a list of upper-case
+// IATA codes. Returns nil to signal "no filter" (match all regions).
+//
+// Sentinel handling (issue #770): the frontend region filter dropdown labels its
+// catch-all option "All". When that option is selected the UI may send
+// ?region=All; older code interpreted that literally and tried to match an
+// IATA code "ALL", which never exists, returning an empty result set. Treat
+// "All" / "ALL" / "all" (case-insensitive, optionally surrounded by whitespace
+// or mixed with empty CSV slots) as equivalent to an empty value.
+//
+// Real IATA codes (e.g. "SJC", "PDX") still pass through unchanged.
 func normalizeRegionCodes(regionParam string) []string {
 	if regionParam == "" {
 		return nil
@@ -1094,9 +1156,13 @@ func normalizeRegionCodes(regionParam string) []string {
 	codes := make([]string, 0, len(tokens))
 	for _, token := range tokens {
 		code := strings.TrimSpace(strings.ToUpper(token))
-		if code != "" {
-			codes = append(codes, code)
+		if code == "" || code == "ALL" {
+			continue
 		}
+		codes = append(codes, code)
+	}
+	if len(codes) == 0 {
+		return nil
 	}
 	return codes
 }
@@ -1742,16 +1808,16 @@ func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, 
 		order = "DESC"
 	}
 
-	// Build OR conditions for decoded_json LIKE %pubkey%
-	var conditions []string
+	// Build IN(?, ?, ...) on the dedicated from_pubkey column (#1143):
+	// exact match, indexed lookup, no JSON substring scan.
 	var args []interface{}
+	placeholders := make([]string, 0, len(pubkeys))
 	for _, pk := range pubkeys {
-		// Resolve pubkey to also check by name
 		resolved := db.resolveNodePubkey(pk)
-		conditions = append(conditions, "t.decoded_json LIKE ?")
-		args = append(args, "%"+resolved+"%")
+		args = append(args, resolved)
+		placeholders = append(placeholders, "?")
 	}
-	jsonWhere := "(" + strings.Join(conditions, " OR ") + ")"
+	pkWhere := "t.from_pubkey IN (" + strings.Join(placeholders, ",") + ")"
 
 	var timeFilters []string
 	if since != "" {
@@ -1763,7 +1829,7 @@ func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, 
 		args = append(args, until)
 	}
 
-	w := "WHERE " + jsonWhere
+	w := "WHERE " + pkWhere
 	if len(timeFilters) > 0 {
 		w += " AND " + strings.Join(timeFilters, " AND ")
 	}
@@ -1833,10 +1899,11 @@ func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	var advertCount int
 	var batteryMv sql.NullInt64
 	var temperatureC sql.NullFloat64
+	var foreign sql.NullInt64
 	var multibyteSup sql.NullInt64
 	var multibyteEvidence sql.NullString
 
-	scanArgs := []interface{}{&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC}
+	scanArgs := []interface{}{&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign}
 	if db.hasMultibyteSupCols {
 		scanArgs = append(scanArgs, &multibyteSup, &multibyteEvidence)
 	}
@@ -1855,7 +1922,8 @@ func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 		"last_heard":             nullStr(lastSeen),
 		"hash_size":              nil,
 		"hash_size_inconsistent": false,
-		"multibyte_sup":          int(multibyteSup.Int64), // always present; zero-value when col absent
+		"foreign":                foreign.Valid && foreign.Int64 != 0,
+		"multibyte_sup":          int(multibyteSup.Int64),
 	}
 	if multibyteEvidence.Valid {
 		m["multibyte_evidence"] = multibyteEvidence.String
@@ -1915,11 +1983,10 @@ func nullInt(ni sql.NullInt64) interface{} {
 // Returns the number of transmissions deleted.
 // Opens a separate read-write connection since the main connection is read-only.
 func (db *DB) PruneOldPackets(days int) (int64, error) {
-	rw, err := openRW(db.path)
+	rw, err := cachedRW(db.path)
 	if err != nil {
 		return 0, err
 	}
-	defer rw.Close()
 
 	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
 	tx, err := rw.Begin()
@@ -2262,11 +2329,10 @@ func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
 
 // PruneOldMetrics deletes observer_metrics rows older than retentionDays.
 func (db *DB) PruneOldMetrics(retentionDays int) (int64, error) {
-	rw, err := openRW(db.path)
+	rw, err := cachedRW(db.path)
 	if err != nil {
 		return 0, err
 	}
-	defer rw.Close()
 
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
 	res, err := rw.Exec(`DELETE FROM observer_metrics WHERE timestamp < ?`, cutoff)
@@ -2289,11 +2355,10 @@ func (db *DB) RemoveStaleObservers(observerDays int) (int64, error) {
 	if observerDays <= -1 {
 		return 0, nil // keep forever
 	}
-	rw, err := openRW(db.path)
+	rw, err := cachedRW(db.path)
 	if err != nil {
 		return 0, err
 	}
-	defer rw.Close()
 
 	cutoff := time.Now().UTC().AddDate(0, 0, -observerDays).Format(time.RFC3339)
 	res, err := rw.Exec(`UPDATE observers SET inactive = 1 WHERE last_seen < ? AND (inactive IS NULL OR inactive = 0)`, cutoff)

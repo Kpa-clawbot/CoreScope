@@ -10,9 +10,21 @@ echo ""
 # Unit tests (deterministic, fast)
 echo "── Unit Tests ──"
 node test-packet-filter.js
+node test-packet-filter-ux.js
 node test-aging.js
 node test-frontend-helpers.js
+node test-url-state.js
 node test-perf-go-runtime.js
+node test-channel-psk-ux.js
+node test-channel-sidebar-layout.js
+node test-channel-fluid-layout.js
+node test-channel-modal-ux.js
+node test-channel-decrypt-insecure-context.js
+node test-channel-qr.js
+node test-channel-qr-wiring.js
+node test-channel-issue-1087.js
+node test-analytics-channels-integration.js
+node test-observers-headings.js
 
 echo ""
 echo "═══════════════════════════════════════"

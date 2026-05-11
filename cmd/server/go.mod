@@ -18,6 +18,14 @@ require github.com/meshcore-analyzer/packetpath v0.0.0
 
 replace github.com/meshcore-analyzer/packetpath => ../../internal/packetpath
 
+require github.com/meshcore-analyzer/dbconfig v0.0.0
+
+replace github.com/meshcore-analyzer/dbconfig => ../../internal/dbconfig
+
+require github.com/meshcore-analyzer/perfio v0.0.0
+
+replace github.com/meshcore-analyzer/perfio => ../../internal/perfio
+
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect

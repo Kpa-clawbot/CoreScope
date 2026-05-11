@@ -626,6 +626,61 @@ func TestInsertTransmissionUpdatesObserverLastSeen(t *testing.T) {
 	}
 }
 
+func TestLastPacketAtUpdatedOnPacketOnly(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Insert observer via status path — last_packet_at should be NULL
+	if err := s.UpsertObserver("obs1", "Observer1", "SJC", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var lastPacketAt sql.NullString
+	s.db.QueryRow("SELECT last_packet_at FROM observers WHERE id = ?", "obs1").Scan(&lastPacketAt)
+	if lastPacketAt.Valid {
+		t.Fatalf("expected last_packet_at to be NULL after UpsertObserver, got %s", lastPacketAt.String)
+	}
+
+	// Insert a packet from this observer — last_packet_at should be set
+	data := &PacketData{
+		RawHex:      "0A00D69F",
+		Timestamp:   "2026-04-24T12:00:00Z",
+		ObserverID:  "obs1",
+		Hash:        "lastpackettest123456",
+		RouteType:   2,
+		PayloadType: 2,
+		PathJSON:    "[]",
+		DecodedJSON: `{"type":"TXT_MSG"}`,
+	}
+	if _, err := s.InsertTransmission(data); err != nil {
+		t.Fatal(err)
+	}
+
+	s.db.QueryRow("SELECT last_packet_at FROM observers WHERE id = ?", "obs1").Scan(&lastPacketAt)
+	if !lastPacketAt.Valid {
+		t.Fatal("expected last_packet_at to be non-NULL after InsertTransmission")
+	}
+	// InsertTransmission uses `now = data.Timestamp || time.Now()`, so last_packet_at
+	// should match the packet's Timestamp when provided (same source-of-truth as last_seen).
+	if lastPacketAt.String != "2026-04-24T12:00:00Z" {
+		t.Errorf("expected last_packet_at=2026-04-24T12:00:00Z, got %s", lastPacketAt.String)
+	}
+
+	// UpsertObserver again (status path) — last_packet_at should NOT change
+	if err := s.UpsertObserver("obs1", "Observer1", "SJC", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var lastPacketAtAfterStatus sql.NullString
+	s.db.QueryRow("SELECT last_packet_at FROM observers WHERE id = ?", "obs1").Scan(&lastPacketAtAfterStatus)
+	if !lastPacketAtAfterStatus.Valid || lastPacketAtAfterStatus.String != lastPacketAt.String {
+		t.Errorf("UpsertObserver should not change last_packet_at; expected %s, got %v", lastPacketAt.String, lastPacketAtAfterStatus)
+	}
+}
+
 func TestEndToEndIngest(t *testing.T) {
 	s, err := OpenStore(tempDBPath(t))
 	if err != nil {
@@ -2178,5 +2233,545 @@ func TestBuildPacketData_NonTracePathJSON(t *testing.T) {
 	expectedPathJSON := `["AA","BB"]`
 	if pd.PathJSON != expectedPathJSON {
 		t.Errorf("path_json = %s, want %s", pd.PathJSON, expectedPathJSON)
+	}
+}
+
+// --- Issue #888: Backfill path_json from raw_hex ---
+
+func TestBackfillPathJsonFromRawHex(t *testing.T) {
+	dbPath := tempDBPath(t)
+	s, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert a transmission with payload_type != TRACE (e.g. 0x01)
+	// raw_hex: header 0x05 (route FLOOD, payload 0x01), path byte 0x42 (hash_size=2, count=2),
+	// hops: AABB, CCDD, then some payload bytes
+	rawHex := "0542AABBCCDD0000000000000000000000000000"
+	s.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES (?, 'h1', '2025-01-01T00:00:00Z', 1)`, rawHex)
+
+	// Insert observation with raw_hex but empty path_json
+	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (1, 1000, ?, '[]')`, rawHex)
+	// Insert observation with raw_hex and NULL path_json
+	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (1, 1001, ?, NULL)`, rawHex)
+	// Insert observation with existing path_json (should NOT be overwritten)
+	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (1, 1002, ?, '["XX","YY"]')`, rawHex)
+
+	// Insert a TRACE transmission (payload_type = 0x09) — should be skipped
+	traceRaw := "2604302D0D2359FEE7B100000000006733D63367"
+	s.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES (?, 'h2', '2025-01-01T00:00:00Z', 9)`, traceRaw)
+	s.db.Exec(`INSERT INTO observations (transmission_id, timestamp, raw_hex, path_json) VALUES (2, 1003, ?, '[]')`, traceRaw)
+
+	// Remove the migration marker so it runs again on reopen
+	s.db.Exec(`DELETE FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'`)
+	s.Close()
+
+	// Reopen — backfill is now async, must trigger explicitly
+	s2, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+
+	// Trigger async backfill and wait for completion
+	s2.BackfillPathJSONAsync()
+	deadline := time.Now().Add(10 * time.Second)
+	var migCount int
+	for time.Now().Before(deadline) {
+		s2.db.QueryRow("SELECT COUNT(*) FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'").Scan(&migCount)
+		if migCount == 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if migCount != 1 {
+		t.Fatalf("migration not recorded")
+	}
+
+	// Row 1 (was '[]') is NOT re-processed by the backfill — '[]' means
+	// "already attempted, no hops" and is excluded by the WHERE to avoid the
+	// infinite-loop bug fixed in #1119. It must remain '[]'.
+	var pj1 string
+	s2.db.QueryRow("SELECT path_json FROM observations WHERE id = 1").Scan(&pj1)
+	if pj1 != "[]" {
+		t.Errorf("row 1 path_json = %q, want %q (must not re-process '[]' rows after #1119)", pj1, "[]")
+	}
+
+	// Row 2 (was NULL) should now have decoded hops
+	var pj2 string
+	s2.db.QueryRow("SELECT path_json FROM observations WHERE id = 2").Scan(&pj2)
+	if pj2 != `["AABB","CCDD"]` {
+		t.Errorf("row 2 path_json = %q, want %q", pj2, `["AABB","CCDD"]`)
+	}
+
+	// Row 3 (had existing data) should NOT be overwritten
+	var pj3 string
+	s2.db.QueryRow("SELECT path_json FROM observations WHERE id = 3").Scan(&pj3)
+	if pj3 != `["XX","YY"]` {
+		t.Errorf("row 3 path_json = %q, want %q (should not be overwritten)", pj3, `["XX","YY"]`)
+	}
+
+	// Row 4 (TRACE) should NOT be updated
+	var pj4 string
+	s2.db.QueryRow("SELECT path_json FROM observations WHERE id = 4").Scan(&pj4)
+	if pj4 != "[]" {
+		t.Errorf("row 4 (TRACE) path_json = %q, want %q (should be skipped)", pj4, "[]")
+	}
+}
+
+func TestCleanupLegacyNullHashTimestamp(t *testing.T) {
+	path := tempDBPath(t)
+
+	// Create a bare-bones DB with legacy bad data
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Exec(`CREATE TABLE IF NOT EXISTS transmissions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		raw_hex TEXT NOT NULL,
+		hash TEXT NOT NULL,
+		first_seen TEXT NOT NULL,
+		route_type INTEGER,
+		payload_type INTEGER,
+		payload_version INTEGER,
+		decoded_json TEXT,
+		created_at TEXT DEFAULT (datetime('now')),
+		channel_hash TEXT DEFAULT NULL
+	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS observations (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
+		observer_idx INTEGER,
+		direction TEXT,
+		snr REAL,
+		rssi REAL,
+		score INTEGER,
+		path_json TEXT,
+		timestamp INTEGER NOT NULL
+	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS nodes (public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0, battery_mv INTEGER, temperature_c REAL)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS observers (id TEXT PRIMARY KEY, name TEXT, iata TEXT, last_seen TEXT, first_seen TEXT, packet_count INTEGER DEFAULT 0, model TEXT, firmware TEXT, client_version TEXT, radio TEXT, battery_mv INTEGER, uptime_secs INTEGER, noise_floor REAL, inactive INTEGER DEFAULT 0, last_packet_at TEXT DEFAULT NULL)`)
+
+	// Insert good transmission
+	db.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (1, 'aabb', 'abc123', '2024-01-01T00:00:00Z')`)
+	db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (1, 1, 1704067200)`)
+
+	// Insert bad: empty hash
+	db.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (2, 'ccdd', '', '2024-01-01T00:00:00Z')`)
+	db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (2, 1, 1704067200)`)
+
+	// Insert bad: empty first_seen
+	db.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (3, 'eeff', 'def456', '')`)
+	db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp) VALUES (3, 2, 1704067200)`)
+
+	db.Close()
+
+	// Now open via OpenStore which should run the migration
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Good transmission should remain
+	var count int
+	s.db.QueryRow("SELECT COUNT(*) FROM transmissions WHERE id = 1").Scan(&count)
+	if count != 1 {
+		t.Error("good transmission should not be deleted")
+	}
+
+	// Bad transmissions should be gone
+	s.db.QueryRow("SELECT COUNT(*) FROM transmissions WHERE id = 2").Scan(&count)
+	if count != 0 {
+		t.Errorf("transmission with empty hash should be deleted, got count=%d", count)
+	}
+	s.db.QueryRow("SELECT COUNT(*) FROM transmissions WHERE id = 3").Scan(&count)
+	if count != 0 {
+		t.Errorf("transmission with empty first_seen should be deleted, got count=%d", count)
+	}
+
+	// Observations for bad transmissions should be gone
+	s.db.QueryRow("SELECT COUNT(*) FROM observations WHERE transmission_id IN (2, 3)").Scan(&count)
+	if count != 0 {
+		t.Errorf("observations for bad transmissions should be deleted, got count=%d", count)
+	}
+
+	// Observation for good transmission should remain
+	s.db.QueryRow("SELECT COUNT(*) FROM observations WHERE transmission_id = 1").Scan(&count)
+	if count != 1 {
+		t.Error("observation for good transmission should remain")
+	}
+
+	// Migration marker should exist
+	var migCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM _migrations WHERE name = 'cleanup_legacy_null_hash_ts'").Scan(&migCount)
+	if migCount != 1 {
+		t.Error("migration marker cleanup_legacy_null_hash_ts should be recorded")
+	}
+
+	// Idempotent: opening again should not error
+	s.Close()
+	s2, err := OpenStore(path)
+	if err != nil {
+		t.Fatal("second open should not fail:", err)
+	}
+	s2.Close()
+}
+
+func TestBuildPacketDataRegionFromPayload(t *testing.T) {
+	msg := &MQTTPacketMessage{Raw: "0102030405060708", Region: "PDX"}
+	decoded := &DecodedPacket{
+		Header: Header{RouteType: 1, PayloadType: 3},
+	}
+	pkt := BuildPacketData(msg, decoded, "obs1", "SJC")
+	// When payload has region, it should override the topic-derived region
+	if pkt.Region != "PDX" {
+		t.Fatalf("expected region PDX from payload, got %q", pkt.Region)
+	}
+}
+
+func TestBuildPacketDataRegionFallsBackToTopic(t *testing.T) {
+	msg := &MQTTPacketMessage{Raw: "0102030405060708"}
+	decoded := &DecodedPacket{
+		Header: Header{RouteType: 1, PayloadType: 3},
+	}
+	pkt := BuildPacketData(msg, decoded, "obs1", "SJC")
+	if pkt.Region != "SJC" {
+		t.Fatalf("expected region SJC from topic, got %q", pkt.Region)
+	}
+}
+
+
+// TestBackfillPathJSONAsync verifies that the path_json backfill does NOT block
+// OpenStore from returning. MQTT connect happens immediately after OpenStore;
+// if the backfill is synchronous, MQTT would be delayed indefinitely on large DBs.
+// This test creates pending backfill rows, opens the store, and asserts that
+// OpenStore returns before the migration is recorded — proving async execution.
+func TestBackfillPathJSONAsync(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "async_test.db")
+
+	// Bootstrap schema manually so we can insert test data BEFORE OpenStore
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Create tables manually (minimal schema for this test)
+	_, err = db.Exec(`
+		CREATE TABLE _migrations (name TEXT PRIMARY KEY);
+		CREATE TABLE transmissions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			raw_hex TEXT NOT NULL,
+			hash TEXT NOT NULL UNIQUE,
+			first_seen TEXT NOT NULL,
+			route_type INTEGER,
+			payload_type INTEGER,
+			payload_version INTEGER,
+			decoded_json TEXT,
+			created_at TEXT DEFAULT (datetime('now')),
+			channel_hash TEXT
+		);
+		CREATE TABLE observers (
+			id TEXT PRIMARY KEY,
+			name TEXT,
+			iata TEXT,
+			last_seen TEXT,
+			first_seen TEXT,
+			packet_count INTEGER DEFAULT 0,
+			model TEXT,
+			firmware TEXT,
+			client_version TEXT,
+			radio TEXT,
+			battery_mv INTEGER,
+			uptime_secs INTEGER,
+			noise_floor REAL,
+			inactive INTEGER DEFAULT 0,
+			last_packet_at TEXT
+		);
+		CREATE TABLE nodes (
+			public_key TEXT PRIMARY KEY,
+			name TEXT, role TEXT, lat REAL, lon REAL,
+			last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0,
+			battery_mv INTEGER, temperature_c REAL
+		);
+		CREATE TABLE inactive_nodes (
+			public_key TEXT PRIMARY KEY,
+			name TEXT, role TEXT, lat REAL, lon REAL,
+			last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0,
+			battery_mv INTEGER, temperature_c REAL
+		);
+		CREATE TABLE observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
+			observer_idx INTEGER,
+			direction TEXT,
+			snr REAL, rssi REAL, score INTEGER,
+			path_json TEXT,
+			timestamp INTEGER NOT NULL,
+			raw_hex TEXT
+		);
+		CREATE UNIQUE INDEX idx_observations_dedup ON observations(transmission_id, observer_idx, COALESCE(path_json, ''));
+		CREATE INDEX idx_observations_transmission_id ON observations(transmission_id);
+		CREATE INDEX idx_observations_observer_idx ON observations(observer_idx);
+		CREATE INDEX idx_observations_timestamp ON observations(timestamp);
+		CREATE TABLE observer_metrics (
+			observer_id TEXT NOT NULL,
+			timestamp TEXT NOT NULL,
+			noise_floor REAL, tx_air_secs INTEGER, rx_air_secs INTEGER,
+			recv_errors INTEGER, battery_mv INTEGER,
+			packets_sent INTEGER, packets_recv INTEGER,
+			PRIMARY KEY (observer_id, timestamp)
+		);
+		CREATE TABLE dropped_packets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hash TEXT, raw_hex TEXT, reason TEXT NOT NULL,
+			observer_id TEXT, observer_name TEXT,
+			node_pubkey TEXT, node_name TEXT,
+			dropped_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	`)
+	if err != nil {
+		t.Fatal("bootstrap schema:", err)
+	}
+
+	// Mark all migrations as done EXCEPT the path_json backfill
+	for _, m := range []string{
+		"advert_count_unique_v1", "noise_floor_real_v1", "node_telemetry_v1",
+		"obs_timestamp_index_v1", "observer_metrics_v1", "observer_metrics_ts_idx",
+		"observers_inactive_v1", "observer_metrics_packets_v1", "channel_hash_v1",
+		"dropped_packets_v1", "observations_raw_hex_v1", "observers_last_packet_at_v1",
+		"cleanup_legacy_null_hash_ts",
+	} {
+		db.Exec(`INSERT INTO _migrations (name) VALUES (?)`, m)
+	}
+
+	// Insert a transmission + observations with NULL path_json and valid raw_hex
+	// raw_hex "0102AABBCCDD0000" has 2-hop path decodable by packetpath
+	rawHex := "41020304AABBCCDD05060708"
+	_, err = db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES (?, 'hash1', '2025-01-01T00:00:00Z', 4)`, rawHex)
+	if err != nil {
+		t.Fatal("insert tx:", err)
+	}
+	// Insert 100 observations needing backfill
+	for i := 0; i < 100; i++ {
+		_, err = db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp, raw_hex, path_json) VALUES (1, ?, ?, ?, NULL)`,
+			i+1, 1700000000+i, rawHex)
+		if err != nil {
+			// dedup index might fire — use unique observer_idx
+			t.Fatalf("insert obs %d: %v", i, err)
+		}
+	}
+	db.Close()
+
+	// Now open store via OpenStore — this must return QUICKLY (non-blocking)
+	start := time.Now()
+	store, err := OpenStoreWithInterval(dbPath, 300)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal("OpenStore:", err)
+	}
+	defer store.Close()
+
+	// OpenStore must return in under 2 seconds (backfill is no longer in applySchema)
+	if elapsed > 2*time.Second {
+		t.Fatalf("OpenStore blocked for %v — backfill must not run in applySchema", elapsed)
+	}
+
+	// Backfill must NOT be recorded yet — it hasn't been triggered
+	var done int
+	err = store.db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'").Scan(&done)
+	if err == nil {
+		t.Fatal("migration recorded during OpenStore — backfill must be async via BackfillPathJSONAsync()")
+	}
+
+	// Now trigger the async backfill (simulates what main.go does after OpenStore)
+	store.BackfillPathJSONAsync()
+
+	// Wait for backfill to complete (should be very fast with 100 rows)
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		err = store.db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'").Scan(&done)
+		if err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal("backfill never completed within 10s")
+	}
+
+	// Verify backfill actually worked — observations should have non-NULL path_json
+	var nullCount int
+	store.db.QueryRow("SELECT COUNT(*) FROM observations WHERE path_json IS NULL").Scan(&nullCount)
+	if nullCount > 0 {
+		t.Errorf("backfill left %d observations with NULL path_json", nullCount)
+	}
+}
+
+// TestBackfillPathJSONAsyncMethodExists verifies the async backfill API surface
+// exists — BackfillPathJSONAsync must be callable independently from OpenStore.
+func TestBackfillPathJSONAsyncMethodExists(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "method_test.db")
+	store, err := OpenStoreWithInterval(dbPath, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// BackfillPathJSONAsync must exist as a method on *Store
+	// This is a compile-time check — if the method doesn't exist, the test won't compile.
+	store.BackfillPathJSONAsync()
+}
+
+// TestBackfillPathJSONAsync_BracketRowsTerminate exercises the infinite-loop bug
+// from issue #1119. Observations whose path_json is already '[]' (meaning a prior
+// backfill pass attempted to decode them and found no hops) must NOT be re-selected
+// by the WHERE clause — otherwise the loop rewrites the same '[]' value forever
+// and never records the migration marker.
+//
+// This test seeds N rows with path_json='[]' and a raw_hex that DecodePathFromRawHex
+// resolves to zero hops. With the bug, the backfill loops infinitely re-UPDATEing
+// the same rows back to '[]', batch is never empty, migration marker is never
+// written. With the fix, no rows match → the very first batch is empty → migration
+// is recorded immediately.
+func TestBackfillPathJSONAsync_BracketRowsTerminate(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "bracket_terminate.db")
+
+	// Bootstrap a minimal schema directly so we can seed pre-existing '[]' rows
+	// before OpenStore runs.
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE _migrations (name TEXT PRIMARY KEY);
+		CREATE TABLE transmissions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			raw_hex TEXT NOT NULL,
+			hash TEXT NOT NULL UNIQUE,
+			first_seen TEXT NOT NULL,
+			route_type INTEGER,
+			payload_type INTEGER,
+			payload_version INTEGER,
+			decoded_json TEXT,
+			created_at TEXT DEFAULT (datetime('now')),
+			channel_hash TEXT
+		);
+		CREATE TABLE observers (
+			id TEXT PRIMARY KEY, name TEXT, iata TEXT,
+			last_seen TEXT, first_seen TEXT, packet_count INTEGER DEFAULT 0,
+			model TEXT, firmware TEXT, client_version TEXT, radio TEXT,
+			battery_mv INTEGER, uptime_secs INTEGER, noise_floor REAL,
+			inactive INTEGER DEFAULT 0, last_packet_at TEXT
+		);
+		CREATE TABLE nodes (
+			public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
+			lat REAL, lon REAL, last_seen TEXT, first_seen TEXT,
+			advert_count INTEGER DEFAULT 0, battery_mv INTEGER, temperature_c REAL
+		);
+		CREATE TABLE inactive_nodes (
+			public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
+			lat REAL, lon REAL, last_seen TEXT, first_seen TEXT,
+			advert_count INTEGER DEFAULT 0, battery_mv INTEGER, temperature_c REAL
+		);
+		CREATE TABLE observations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			transmission_id INTEGER NOT NULL REFERENCES transmissions(id),
+			observer_idx INTEGER, direction TEXT,
+			snr REAL, rssi REAL, score INTEGER,
+			path_json TEXT,
+			timestamp INTEGER NOT NULL,
+			raw_hex TEXT
+		);
+		CREATE UNIQUE INDEX idx_observations_dedup ON observations(transmission_id, observer_idx, COALESCE(path_json, ''));
+		CREATE INDEX idx_observations_transmission_id ON observations(transmission_id);
+		CREATE INDEX idx_observations_observer_idx ON observations(observer_idx);
+		CREATE INDEX idx_observations_timestamp ON observations(timestamp);
+		CREATE TABLE observer_metrics (
+			observer_id TEXT NOT NULL, timestamp TEXT NOT NULL,
+			noise_floor REAL, tx_air_secs INTEGER, rx_air_secs INTEGER,
+			recv_errors INTEGER, battery_mv INTEGER,
+			packets_sent INTEGER, packets_recv INTEGER,
+			PRIMARY KEY (observer_id, timestamp)
+		);
+		CREATE TABLE dropped_packets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			hash TEXT, raw_hex TEXT, reason TEXT NOT NULL,
+			observer_id TEXT, observer_name TEXT,
+			node_pubkey TEXT, node_name TEXT,
+			dropped_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	`)
+	if err != nil {
+		t.Fatal("bootstrap schema:", err)
+	}
+
+	// Mark all migrations done EXCEPT backfill_path_json_from_raw_hex_v1.
+	for _, m := range []string{
+		"advert_count_unique_v1", "noise_floor_real_v1", "node_telemetry_v1",
+		"obs_timestamp_index_v1", "observer_metrics_v1", "observer_metrics_ts_idx",
+		"observers_inactive_v1", "observer_metrics_packets_v1", "channel_hash_v1",
+		"dropped_packets_v1", "observations_raw_hex_v1", "observers_last_packet_at_v1",
+		"cleanup_legacy_null_hash_ts",
+	} {
+		db.Exec(`INSERT INTO _migrations (name) VALUES (?)`, m)
+	}
+
+	// raw_hex producing ZERO hops via DecodePathFromRawHex:
+	// DIRECT route (type=2), payload_type=2, version=0 → header 0x0A; path byte 0x00.
+	// (See internal/packetpath/path_test.go: TestDecodePathFromRawHex_ZeroHops.)
+	rawHex := "0A00DEADBEEF"
+	_, err = db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES (?, 'h_brackets', '2025-01-01T00:00:00Z', 2)`, rawHex)
+	if err != nil {
+		t.Fatal("insert tx:", err)
+	}
+	const seedCount = 100
+	for i := 0; i < seedCount; i++ {
+		_, err = db.Exec(`INSERT INTO observations (transmission_id, observer_idx, timestamp, raw_hex, path_json) VALUES (1, ?, ?, ?, '[]')`,
+			i+1, 1700000000+i, rawHex)
+		if err != nil {
+			t.Fatalf("insert obs %d: %v", i, err)
+		}
+	}
+	db.Close()
+
+	store, err := OpenStoreWithInterval(dbPath, 300)
+	if err != nil {
+		t.Fatal("OpenStore:", err)
+	}
+	defer store.Close()
+
+	// Trigger backfill. With the bug, every iteration re-fetches all 100 rows
+	// (because '[]' matches the WHERE), rewrites them to '[]', sleeps 50ms, repeats.
+	// The loop never terminates and the migration marker is never written.
+	store.BackfillPathJSONAsync()
+
+	// Generous deadline: with the fix the marker is written essentially immediately.
+	// With the bug the marker is never written within any bounded time.
+	deadline := time.Now().Add(5 * time.Second)
+	var done int
+	for time.Now().Before(deadline) {
+		err = store.db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'").Scan(&done)
+		if err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("issue #1119: backfill never recorded migration marker within 5s — infinite loop on path_json='[]' rows")
+	}
+
+	// Verify the seeded '[]' rows still have '[]' (sanity — neither bug nor fix
+	// should change their value), and that there are no NULL/empty path_json rows
+	// the backfill should have processed.
+	var bracketCount int
+	store.db.QueryRow("SELECT COUNT(*) FROM observations WHERE path_json = '[]'").Scan(&bracketCount)
+	if bracketCount != seedCount {
+		t.Errorf("expected %d rows with path_json='[]', got %d", seedCount, bracketCount)
 	}
 }

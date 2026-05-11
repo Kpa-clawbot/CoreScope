@@ -512,6 +512,69 @@ test('existing user overrides are NOT pruned by setOverride on other keys', () =
   assert.strictEqual(delta.theme.border, '#00ff00', 'new non-matching override should be stored');
 });
 
+// ── Fix #895: export/import includes favorites and claimed nodes ──
+
+test('readOverrides includes favorites from localStorage', () => {
+  const { api, ls } = loadCustomizer();
+  api.init({});
+  ls.setItem('meshcore-favorites', JSON.stringify(['abc123', 'def456']));
+  const data = api.readOverrides();
+  assert.deepStrictEqual(data.favorites, ['abc123', 'def456'], 'favorites should be included in export');
+});
+
+test('readOverrides includes myNodes from localStorage', () => {
+  const { api, ls } = loadCustomizer();
+  api.init({});
+  ls.setItem('meshcore-my-nodes', JSON.stringify([{pubkey: 'abc123', name: 'Node1', addedAt: 1000}]));
+  const data = api.readOverrides();
+  assert.deepStrictEqual(data.myNodes, [{pubkey: 'abc123', name: 'Node1', addedAt: 1000}], 'myNodes should be included in export');
+});
+
+test('writeOverrides restores favorites to localStorage', () => {
+  const { api, ls } = loadCustomizer();
+  api.init({});
+  api.writeOverrides({ favorites: ['abc123', 'def456'] });
+  const favs = JSON.parse(ls.getItem('meshcore-favorites') || '[]');
+  assert.deepStrictEqual(favs, ['abc123', 'def456'], 'favorites should be written to meshcore-favorites');
+});
+
+test('writeOverrides restores myNodes to localStorage', () => {
+  const { api, ls } = loadCustomizer();
+  api.init({});
+  const nodes = [{pubkey: 'abc123', name: 'Node1', addedAt: 1000}];
+  api.writeOverrides({ myNodes: nodes });
+  const stored = JSON.parse(ls.getItem('meshcore-my-nodes') || '[]');
+  assert.deepStrictEqual(stored, nodes, 'myNodes should be written to meshcore-my-nodes');
+});
+
+test('validateShape accepts favorites array', () => {
+  const { api } = loadCustomizer();
+  api.init({});
+  const result = api.validateShape({ favorites: ['abc123'] });
+  assert.ok(result.valid, 'favorites array should be valid');
+});
+
+test('validateShape accepts myNodes array', () => {
+  const { api } = loadCustomizer();
+  api.init({});
+  const result = api.validateShape({ myNodes: [{pubkey: 'abc', name: 'N', addedAt: 1}] });
+  assert.ok(result.valid, 'myNodes array should be valid');
+});
+
+test('validateShape rejects non-array favorites', () => {
+  const { api } = loadCustomizer();
+  api.init({});
+  const result = api.validateShape({ favorites: 'not-an-array' });
+  assert.ok(!result.valid, 'non-array favorites should be invalid');
+});
+
+test('validateShape rejects non-array myNodes', () => {
+  const { api } = loadCustomizer();
+  api.init({});
+  const result = api.validateShape({ myNodes: 'not-an-array' });
+  assert.ok(!result.valid, 'non-array myNodes should be invalid');
+});
+
 // ── Summary ──
 console.log(`\n${passed + failed} tests: ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
