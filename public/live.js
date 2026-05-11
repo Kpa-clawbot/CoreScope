@@ -2254,10 +2254,12 @@
 
   function setNodeFilter(keys) {
     nodeFilterKeys = keys;
+    nodeFilterText = keys.join(',');
     nodeFilterTotal = 0;
     nodeFilterShown = 0;
     localStorage.setItem('live-node-filter', keys.join(','));
     updateNodeFilterUI();
+    applyNodeFilter();
   }
 
   function updateNodeFilterUI() {
