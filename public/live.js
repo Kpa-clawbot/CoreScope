@@ -79,6 +79,8 @@
   const propagationBuffer = new Map(); // hash -> {timer, packets[]}
   let _onResize = null;
   let _navCleanup = null;
+  let _vcrHideTimer = null;
+  let _headerCompactTimer = null;
   let _timelineRefreshInterval = null;
   let _lcdClockInterval = null;
   let _rateCounterInterval = null;
@@ -867,27 +869,24 @@
       <div class="live-page">
         <div id="liveMap" style="width:100%;height:100%;position:absolute;top:0;left:0;z-index:1"></div>
         <div class="live-overlay live-header" id="liveHeader">
-          <div class="live-header-critical" data-live-header-critical>
-            <span class="live-beacon" aria-label="WebSocket connection beacon"></span>
-            <div class="live-stat-pill live-stat-pill--critical"><span id="livePktCount">0</span> pkts</div>
-          </div>
-          <button class="live-header-toggle" data-live-header-toggle id="liveHeaderToggle"
-                  aria-expanded="false" aria-controls="liveHeaderBody"
-                  aria-label="Show live stats">📊</button>
-          <div class="live-header-body" data-live-header-body id="liveHeaderBody">
+          <div class="panel-header">
             <div class="live-title">
+              <span class="live-beacon" aria-label="WebSocket connection beacon"></span>
               MESH LIVE
+              <button class="live-header-expand-btn" id="liveHeaderExpandBtn" aria-label="Show settings" aria-expanded="false">⚙</button>
             </div>
-            <div class="live-stats-row">
-              <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
-              <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
-              <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
+            <div class="live-header-actions">
+              <button class="live-header-pin-btn" id="liveHeaderPinBtn" title="Pin panel open" aria-pressed="false" aria-label="Pin MESH LIVE panel open">📌</button>
+              <button class="live-header-close-btn" id="liveHeaderCloseBtn" title="Minimise panel" aria-label="Minimise MESH LIVE panel">✕</button>
             </div>
           </div>
-        </div>
-        <div class="live-overlay live-controls" id="liveControls">
-          <div class="live-controls-body" data-live-controls-body id="liveControlsBody">
-            <div class="live-toggles">
+          <div class="live-stats-row">
+            <div class="live-stat-pill"><span id="livePktCount">0</span> pkts</div>
+            <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
+            <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
+            <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
+          </div>
+          <div class="live-toggles">
             <label><input type="checkbox" id="liveHeatToggle" checked aria-describedby="heatDesc"> Heat</label>
             <span id="heatDesc" class="sr-only">Overlay a density heat map on the mesh nodes</span>
             <label><input type="checkbox" id="liveGhostToggle" checked aria-describedby="ghostDesc"> Ghosts</label>
@@ -912,17 +911,31 @@
             <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
             <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
             <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="Filter live packets by IATA region"></div>
-            </div>
-            <div class="audio-controls hidden" id="audioControls">
-              <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
-              <label class="audio-slider-label">BPM <input type="range" id="audioBpmSlider" min="40" max="300" value="120" class="audio-slider"><span id="audioBpmVal">120</span></label>
-              <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
-            </div>
+            <label>Map <select id="liveSatmapSelect" class="live-satmap-select" aria-label="Map tile style">
+              <option value="positron">Positron</option>
+              <option value="dark_matter">Dark Matter</option>
+              <option value="gray_canvas">Gray Canvas</option>
+              <option value="satellite">Satellite</option>
+              <option value="hybrid">Hybrid</option>
+              <option value="opentopo">OpenTopo</option>
+              <option value="wikimedia">Wikimedia</option>
+              <option value="osm">OSM</option>
+              <option value="stadia_dark">Stadia Dark</option>
+              <option value="hillshade">Hillshade</option>
+              <option value="hillshade_dark">Hillshade Dark</option>
+              <option value="hillshade_blend">Hillshade Blend</option>
+              <option value="neon_tactical">Neon Tactical</option>
+              <option value="military_satcom">Military SATCOM</option>
+              <option value="nvg">NVG Green</option>
+            </select></label>
           </div>
-          <button class="live-controls-toggle" data-live-controls-toggle id="liveControlsToggle"
-                  aria-expanded="false" aria-controls="liveControlsBody"
-                  aria-label="Show live controls">⚙</button>
+          <div class="audio-controls hidden" id="audioControls">
+            <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
+            <label class="audio-slider-label">BPM <input type="range" id="audioBpmSlider" min="40" max="300" value="120" class="audio-slider"><span id="audioBpmVal">120</span></label>
+            <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
+          </div>
         </div>
+        <button class="live-header-show-btn hidden" id="liveHeaderShowBtn" title="Show MESH LIVE panel" aria-label="Show MESH LIVE panel">📡 LIVE</button>
         <div class="live-overlay live-feed" id="liveFeed">
           <div class="panel-header">
             <button class="panel-corner-btn" data-panel="liveFeed" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
@@ -943,6 +956,7 @@
         <div class="live-overlay live-legend" id="liveLegend" role="region" aria-label="Map legend">
           <div class="panel-header">
             <button class="panel-corner-btn" data-panel="liveLegend" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
+            <button class="feed-hide-btn" id="legendCloseBtn" title="Hide legend">✕</button>
           </div>
           <div class="panel-content">
           <h3 class="legend-title">PACKET TYPES</h3>
@@ -961,6 +975,7 @@
         <!-- VCR Bar -->
         <div class="sr-only" id="panelPositionAnnounce" aria-live="polite"></div>
         <div class="vcr-bar" id="vcrBar">
+          <button class="vcr-pin-btn" id="vcrPinBtn" title="Pin VCR bar open" aria-pressed="false" aria-label="Pin VCR bar open">📌</button>
           <div class="vcr-controls">
             <button id="vcrRewindBtn" class="vcr-btn" title="Rewind" aria-label="Rewind">⏪</button>
             <button id="vcrPauseBtn" class="vcr-btn" title="Pause/Play" aria-label="Pause">⏸</button>
@@ -1002,18 +1017,77 @@
       zoomAnimation: true, markerZoomAnimation: true
     }).setView(mapCenter, mapZoom);
 
-    const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
-      (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    let tileLayer = L.tileLayer(isDark ? TILE_DARK : TILE_LIGHT, { maxZoom: 19 }).addTo(map);
+    let tileLayer = L.tileLayer(TILE_LIGHT, { maxZoom: 19 }).addTo(map);
 
-    // Swap tiles when theme changes
-    const _themeObs = new MutationObserver(function () {
-      const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
-        (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      tileLayer.setUrl(dark ? TILE_DARK : TILE_LIGHT);
-    });
-    _themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     L.control.zoom({ position: 'topright' }).addTo(map);
+
+    // Satmap provider switching
+    const _ESRI_SAT        = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+    const _ESRI_LABELS     = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
+    const _ESRI_HILLSHADE  = 'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}';
+    const _ESRI_HILL_DARK  = 'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade_Dark/MapServer/tile/{z}/{y}/{x}';
+    const _CARTO_DARK      = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+    const _CARTO_DARK_NL   = 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png';
+    const _CARTO_LIGHT_LBL = 'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png';
+    const _STADIA_DARK     = 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png';
+    const _SATMAP_CONFIG = {
+      positron:         { base: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png' },
+      dark_matter:      { base: _CARTO_DARK },
+      gray_canvas:      { base: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}' },
+      satellite:        { base: _ESRI_SAT },
+      hybrid:           { base: _ESRI_SAT,    overlay: _ESRI_LABELS,   overlayOpacity: 1 },
+      opentopo:         { base: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', mapMaxZoom: 17 },
+      wikimedia:        { base: 'https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}{r}.png' },
+      osm:              { base: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' },
+      stadia_dark:      { base: _STADIA_DARK },
+      hillshade:        { base: _ESRI_HILLSHADE, mapMaxZoom: 17 },
+      hillshade_dark:   { base: _STADIA_DARK,  overlay: _ESRI_HILL_DARK, overlayOpacity: 0.5, mapMaxZoom: 17 },
+      hillshade_blend:  { base: _CARTO_DARK,   overlay: _ESRI_HILL_DARK, overlayOpacity: 0.5, mapMaxZoom: 17 },
+      neon_tactical:    { base: _CARTO_DARK_NL,
+                          overlays: [
+                            { url: _ESRI_HILLSHADE,   opacity: 0.25 },
+                            { url: _CARTO_LIGHT_LBL,  opacity: 0.85 },
+                          ],
+                          filter: 'hue-rotate(180deg) saturate(1.4) contrast(1.1)',
+                          mapMaxZoom: 17 },
+      military_satcom:  { base: _ESRI_SAT,
+                          overlays: [
+                            { url: _ESRI_HILLSHADE,   opacity: 0.45 },
+                            { url: _ESRI_LABELS,      opacity: 0.65 },
+                          ],
+                          filter: 'contrast(1.15) brightness(0.8) saturate(0.85)',
+                          mapMaxZoom: 17 },
+      nvg:              { base: _CARTO_DARK,
+                          filter: 'sepia(1) hue-rotate(85deg) saturate(4) brightness(0.65) contrast(1.2)' },
+    };
+    let _overlayLayers = [];
+
+    function applySatmap(provider) {
+      if (provider === 'default') provider = 'positron'; // migrate legacy value
+      _overlayLayers.forEach(l => map.removeLayer(l));
+      _overlayLayers = [];
+      document.getElementById('liveMap').style.filter = '';
+      document.getElementById('liveLegend').style.filter = '';
+      const cfg = _SATMAP_CONFIG[provider] || _SATMAP_CONFIG.positron;
+      tileLayer.setUrl(cfg.base);
+      // overlays array (new) or single overlay (legacy)
+      const overlays = cfg.overlays || (cfg.overlay ? [{ url: cfg.overlay, opacity: cfg.overlayOpacity ?? 1 }] : []);
+      overlays.forEach(o => {
+        _overlayLayers.push(L.tileLayer(o.url, { maxZoom: 19, opacity: o.opacity }).addTo(map));
+      });
+      if (cfg.filter) {
+        document.getElementById('liveMap').style.filter = cfg.filter;
+        document.getElementById('liveLegend').style.filter = cfg.filter;
+      }
+      map.setMaxZoom(cfg.mapMaxZoom ?? 19);
+      localStorage.setItem('meshcore-live-satmap', provider);
+    }
+
+    const _savedSatmap = localStorage.getItem('meshcore-live-satmap') || 'positron';
+    const _satmapSel = document.getElementById('liveSatmapSelect');
+    _satmapSel.value = _savedSatmap === 'default' ? 'positron' : _savedSatmap;
+    applySatmap(_savedSatmap);
+    _satmapSel.addEventListener('change', (e) => applySatmap(e.target.value));
 
     nodesLayer = L.layerGroup().addTo(map);
     pathsLayer = L.layerGroup().addTo(map);
@@ -1400,80 +1474,70 @@
       localStorage.setItem('live-feed-hidden', 'false');
     });
 
+    // Mobile header collapse toggle
+    const liveHeaderEl = document.getElementById('liveHeader');
+    const liveHeaderExpandBtn = document.getElementById('liveHeaderExpandBtn');
+    if (liveHeaderExpandBtn && liveHeaderEl) {
+      const narrowMq = window.matchMedia('(max-width: 640px)');
+      let expanded = false;
+      try { expanded = localStorage.getItem('live-header-expanded') === 'true'; } catch (_) {}
+      function applyHeaderExpanded(exp) {
+        expanded = exp;
+        liveHeaderEl.classList.toggle('is-expanded', exp);
+        liveHeaderExpandBtn.setAttribute('aria-expanded', String(exp));
+        liveHeaderExpandBtn.setAttribute('aria-label', exp ? 'Hide settings' : 'Show settings');
+        try { localStorage.setItem('live-header-expanded', String(exp)); } catch (_) {}
+      }
+      liveHeaderExpandBtn.addEventListener('click', () => applyHeaderExpanded(!expanded));
+      // On wide viewports reset so desktop always shows everything cleanly
+      narrowMq.addEventListener('change', (e) => { if (!e.matches) liveHeaderEl.classList.remove('is-expanded'); });
+      if (narrowMq.matches) applyHeaderExpanded(expanded);
+    }
+
+    // MESH LIVE header: close → minimise to button, show → restore
+    const liveHeaderShowBtn = document.getElementById('liveHeaderShowBtn');
+    const liveHeaderCloseBtn = document.getElementById('liveHeaderCloseBtn');
+    if (liveHeaderCloseBtn && liveHeaderShowBtn && liveHeaderEl) {
+      if (localStorage.getItem('live-header-hidden') === 'true') {
+        liveHeaderEl.classList.add('hidden');
+        liveHeaderShowBtn.classList.remove('hidden');
+      }
+      liveHeaderCloseBtn.addEventListener('click', () => {
+        liveHeaderEl.classList.add('hidden');
+        liveHeaderShowBtn.classList.remove('hidden');
+        try { localStorage.setItem('live-header-hidden', 'true'); } catch (_) {}
+      });
+      liveHeaderShowBtn.addEventListener('click', () => {
+        liveHeaderEl.classList.remove('hidden');
+        liveHeaderShowBtn.classList.add('hidden');
+        try { localStorage.setItem('live-header-hidden', 'false'); } catch (_) {}
+      });
+    }
+
+    // MESH LIVE header: pin toggle (prevents auto-compact on idle)
+    const liveHeaderPinBtn = document.getElementById('liveHeaderPinBtn');
+    let _headerPinned = false;
+    try { _headerPinned = localStorage.getItem('live-header-pinned') === 'true'; } catch (_) {}
+    function applyHeaderPinned(pinned) {
+      _headerPinned = pinned;
+      if (liveHeaderPinBtn) {
+        liveHeaderPinBtn.classList.toggle('pinned', pinned);
+        liveHeaderPinBtn.setAttribute('aria-pressed', String(pinned));
+      }
+      try { localStorage.setItem('live-header-pinned', String(pinned)); } catch (_) {}
+      if (pinned && liveHeaderEl) liveHeaderEl.classList.remove('is-compact');
+    }
+    if (liveHeaderPinBtn) {
+      applyHeaderPinned(_headerPinned);
+      liveHeaderPinBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        applyHeaderPinned(!_headerPinned);
+      });
+    }
+
     // Legend toggle for mobile (#60)
     const legendEl = document.getElementById('liveLegend');
     const legendToggleBtn = document.getElementById('legendToggleBtn');
-
-    // ── Live header / controls toggles (#1178, #1179) ──────────────────────
-    // At narrow viewports (≤768px) the header collapses to a single
-    // toggle button revealing the stats body, and the controls collapse
-    // to a single toggle button revealing the toggles list. CSS gates
-    // visibility of the toggle buttons; JS only flips classes and the
-    // hidden attribute. At wide viewports the bodies are always shown.
-    (function wireLiveCollapseToggles() {
-      var pairs = [
-        { rootId: 'liveHeader',   togId: 'liveHeaderToggle',   bodyId: 'liveHeaderBody',
-          showLabel: 'Show live stats',   hideLabel: 'Hide live stats' },
-        { rootId: 'liveControls', togId: 'liveControlsToggle', bodyId: 'liveControlsBody',
-          showLabel: 'Show live controls', hideLabel: 'Hide live controls' },
-      ];
-      var narrowMql = window.matchMedia('(max-width: 768px)');
-      function setExpanded(p, expanded) {
-        var root = document.getElementById(p.rootId);
-        var tog  = document.getElementById(p.togId);
-        var body = document.getElementById(p.bodyId);
-        if (!root || !tog || !body) return;
-        if (expanded) {
-          root.classList.add('is-expanded'); root.classList.remove('is-collapsed');
-          body.removeAttribute('hidden');
-          tog.setAttribute('aria-expanded', 'true');
-          tog.setAttribute('aria-label', p.hideLabel);
-        } else {
-          root.classList.add('is-collapsed'); root.classList.remove('is-expanded');
-          body.setAttribute('hidden', '');
-          tog.setAttribute('aria-expanded', 'false');
-          tog.setAttribute('aria-label', p.showLabel);
-        }
-      }
-      function applyForViewport() {
-        for (var i = 0; i < pairs.length; i++) {
-          var p = pairs[i];
-          if (narrowMql.matches) {
-            // Default collapsed at narrow viewports
-            setExpanded(p, false);
-          } else {
-            // Always expanded; no hidden attr; no collapse class
-            var root = document.getElementById(p.rootId);
-            var body = document.getElementById(p.bodyId);
-            var tog  = document.getElementById(p.togId);
-            if (body) body.removeAttribute('hidden');
-            if (root) { root.classList.remove('is-collapsed'); root.classList.remove('is-expanded'); }
-            if (tog)  { tog.setAttribute('aria-expanded', 'true'); }
-          }
-        }
-      }
-      pairs.forEach(function (p) {
-        var tog = document.getElementById(p.togId);
-        if (!tog) return;
-        tog.addEventListener('click', function () {
-          var root = document.getElementById(p.rootId);
-          var nowExpanded = !(root && root.classList.contains('is-expanded'));
-          setExpanded(p, nowExpanded);
-        });
-      });
-      applyForViewport();
-      // #1180 — bind once across SPA re-mounts. MQL is process-global per
-      // query string; per-init binds accumulate handlers without bound.
-      if (!_liveNarrowMqlBound) {
-        if (narrowMql.addEventListener) narrowMql.addEventListener('change', applyForViewport);
-        else if (narrowMql.addListener) narrowMql.addListener(applyForViewport);
-        _liveNarrowMqlBound = true;
-        try {
-          window.__liveMQLBindCount = (window.__liveMQLBindCount || 0) + 1;
-        } catch (_) { /* sealed window */ }
-      }
-    })();
-    // ───────────────────────────────────────────────────────────────────────
 
     if (legendToggleBtn && legendEl) {
       // Restore legend collapsed state from localStorage (#279)
@@ -1484,12 +1548,20 @@
           legendToggleBtn.textContent = '🎨';
         }
       } catch (_) { /* private browsing / storage disabled */ }
+      function hideLegend() {
+        legendEl.classList.add('hidden');
+        legendToggleBtn.setAttribute('aria-label', 'Show legend');
+        legendToggleBtn.textContent = '🎨';
+        try { localStorage.setItem('live-legend-hidden', 'true'); } catch (_) {}
+      }
       legendToggleBtn.addEventListener('click', () => {
         const nowHidden = legendEl.classList.toggle('hidden');
         legendToggleBtn.setAttribute('aria-label', nowHidden ? 'Show legend' : 'Hide legend');
         legendToggleBtn.textContent = nowHidden ? '🎨' : '✕';
-        try { localStorage.setItem('live-legend-hidden', String(nowHidden)); } catch (_) { /* ignore */ }
+        try { localStorage.setItem('live-legend-hidden', String(nowHidden)); } catch (_) {}
       });
+      const legendCloseBtn = document.getElementById('legendCloseBtn');
+      if (legendCloseBtn) legendCloseBtn.addEventListener('click', hideLegend);
     }
 
     // Populate role legend from shared roles.js
@@ -1499,7 +1571,7 @@
     // Initialize DragManager for free-form panel dragging (#608 M1)
     if (window.DragManager) {
       var dragMgr = new DragManager();
-      var dragPanels = ['liveFeed', 'liveLegend', 'liveNodeDetail'];
+      var dragPanels = ['liveFeed', 'liveLegend', 'liveNodeDetail', 'liveHeader'];
       for (var di = 0; di < dragPanels.length; di++) {
         dragMgr.register(document.getElementById(dragPanels[di]));
       }
@@ -1745,7 +1817,7 @@
           _navCleanup.timeout = setTimeout(() => { topNav.classList.add('nav-autohide'); }, 4000);
         }
       });
-      topNav.appendChild(pinBtn);
+      (topNav.querySelector('.nav-right') || topNav).appendChild(pinBtn);
     }
     function showNav() {
       if (topNav) topNav.classList.remove('nav-autohide');
@@ -1754,14 +1826,67 @@
         _navCleanup.timeout = setTimeout(() => { if (topNav) topNav.classList.add('nav-autohide'); }, 4000);
       }
     }
-    _navCleanup.fn = showNav;
+
+    // VCR bar auto-hide + pin toggle
+    const vcrBarEl = document.getElementById('vcrBar');
+    const vcrPinBtn = document.getElementById('vcrPinBtn');
+    let _vcrPinned = false;
+    try { _vcrPinned = localStorage.getItem('live-vcr-pinned') === 'true'; } catch (_) {}
+    function applyVcrPinned(pinned) {
+      _vcrPinned = pinned;
+      if (vcrPinBtn) {
+        vcrPinBtn.classList.toggle('pinned', pinned);
+        vcrPinBtn.setAttribute('aria-pressed', String(pinned));
+      }
+      try { localStorage.setItem('live-vcr-pinned', String(pinned)); } catch (_) {}
+      if (pinned) {
+        clearTimeout(_vcrHideTimer);
+        if (vcrBarEl) vcrBarEl.classList.remove('vcr-autohide');
+      }
+    }
+    function showVcr() {
+      if (!vcrBarEl) return;
+      vcrBarEl.classList.remove('vcr-autohide');
+      clearTimeout(_vcrHideTimer);
+      if (!_vcrPinned) {
+        _vcrHideTimer = setTimeout(() => { if (vcrBarEl) vcrBarEl.classList.add('vcr-autohide'); }, 4000);
+      }
+    }
+    if (vcrPinBtn) {
+      applyVcrPinned(_vcrPinned);
+      vcrPinBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        applyVcrPinned(!_vcrPinned);
+      });
+    }
+
+    // MESH LIVE header auto-compact on idle (desktop only — mobile uses ⚙ expand button)
+    const narrowMqCompact = window.matchMedia('(max-width: 640px)');
+    function showHeader() {
+      if (!liveHeaderEl || liveHeaderEl.classList.contains('hidden')) return;
+      liveHeaderEl.classList.remove('is-compact');
+      clearTimeout(_headerCompactTimer);
+      if (!_headerPinned && !narrowMqCompact.matches) {
+        _headerCompactTimer = setTimeout(() => {
+          if (liveHeaderEl) liveHeaderEl.classList.add('is-compact');
+        }, 4000);
+      }
+    }
+    // On desktop resize into mobile, clear compact state (mobile uses its own ⚙ toggle)
+    narrowMqCompact.addEventListener('change', (e) => {
+      if (e.matches) { clearTimeout(_headerCompactTimer); if (liveHeaderEl) liveHeaderEl.classList.remove('is-compact'); }
+    });
+
+    // Unified activity handler: wakes nav, header, and VCR on any interaction
+    function onLiveActivity() { showNav(); showHeader(); showVcr(); }
+    _navCleanup.fn = onLiveActivity;
     const livePage = document.querySelector('.live-page');
     if (livePage) {
-      livePage.addEventListener('mousemove', showNav);
-      livePage.addEventListener('touchstart', showNav);
-      livePage.addEventListener('click', showNav);
+      livePage.addEventListener('mousemove', onLiveActivity);
+      livePage.addEventListener('touchstart', onLiveActivity);
+      livePage.addEventListener('click', onLiveActivity);
     }
-    showNav();
+    onLiveActivity();
   }
 
   function injectSVGFilters() {
@@ -3421,6 +3546,11 @@
       }
       _navCleanup = null;
     }
+    // VCR and header idle timers
+    if (_vcrHideTimer) { clearTimeout(_vcrHideTimer); _vcrHideTimer = null; }
+    if (_headerCompactTimer) { clearTimeout(_headerCompactTimer); _headerCompactTimer = null; }
+    const vcrBarCleanup = document.getElementById('vcrBar');
+    if (vcrBarCleanup) vcrBarCleanup.classList.remove('vcr-autohide');
     nodesLayer = pathsLayer = animLayer = heatLayer = geoFilterLayer = null;
     stopMatrixRain();
     nodeMarkers = {}; nodeData = {};
@@ -3434,13 +3564,6 @@
 
   let _themeRefreshHandler = null;
 
-  // #1180 — singleton guard for the wireLiveCollapseToggles() narrow-viewport
-  // MQL listener. MediaQueryList is process-global per query string; without
-  // this gate, every SPA re-mount of /live registers a new 'change' handler.
-  // The handler reads from current DOM each time, so a one-shot bind is safe
-  // across re-mounts. window.__liveMQLBindCount is a debug seam consumed by
-  // test-live-mql-leak-1180-e2e.js and otherwise unused.
-  var _liveNarrowMqlBound = false;
 
   registerPage('live', {
     init: function(app, routeParam) {

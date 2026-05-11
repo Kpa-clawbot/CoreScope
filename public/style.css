@@ -599,9 +599,12 @@ input[type="week"] {
 .nav-btn:hover { background: var(--nav-bg2); color: var(--nav-text); }
 /* === Nav action buttons (donate/discord) === */
 .nav-action-btn { padding: 6px 12px; white-space: nowrap; }
-@media (max-width: 900px) { .nav-action-label { display: none; } .nav-action-btn { padding: 6px 10px; } }
-@media (min-width: 768px) and (max-width: 1100px) { .brand-text { display: none; } }
-@media (max-width: 640px) { .nav-action-btn { display: none; } }
+@media (max-width: 1100px) { .nav-action-label { display: none; } .nav-action-btn { padding: 6px 10px; } }
+@media (max-width: 900px) { .nav-action-btn { display: none; } }
+/* Brand text: only hide in the tightest band where links + right buttons need every pixel */
+@media (min-width: 769px) and (max-width: 900px) { .brand-text { display: none; } }
+/* Tighten nav-left gap at medium widths to reclaim space for links */
+@media (min-width: 769px) and (max-width: 1100px) { .nav-left { gap: var(--space-md); } }
 /* === Nav Stats === */
 .nav-stats {
   display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--nav-text-muted);
@@ -2700,16 +2703,16 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .matrix-theme .live-feed .feed-hide-btn { color: #00ff41 !important; }
 
 /* Controls in matrix mode */
-.matrix-theme .live-controls {
+.matrix-theme .live-header {
   background: rgba(0, 10, 0, 0.9) !important;
   border-color: #00ff4130 !important;
   color: #00ff41 !important;
 }
-.matrix-theme .live-controls label,
-.matrix-theme .live-controls span,
-.matrix-theme .live-controls .lcd-display { color: #00ff41 !important; }
-.matrix-theme .live-controls button { color: #00ff41 !important; border-color: #00ff4130 !important; }
-.matrix-theme .live-controls input[type="range"] { accent-color: #00ff41; }
+.matrix-theme .live-header label,
+.matrix-theme .live-header span,
+.matrix-theme .live-header .lcd-display { color: #00ff41 !important; }
+.matrix-theme .live-header button { color: #00ff41 !important; border-color: #00ff4130 !important; }
+.matrix-theme .live-header input[type="range"] { accent-color: #00ff41; }
 
 /* Node detail panel in matrix mode */
 .matrix-theme .live-node-detail {

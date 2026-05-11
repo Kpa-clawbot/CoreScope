@@ -66,21 +66,28 @@
      * fixed-position descendants (we have none, but cheap insurance). */
   }
 
-  /* Suppress the inline link bar and right-side cluster — but KEEP
-   * .nav-brand (logo identity). #1174: also hide #hamburger at narrow
-   * widths — the new "More" tab in the bottom-nav now surfaces the
-   * long-tail routes, so the hamburger is redundant on phones. */
+  /* Suppress the inline link bar, stats, and bulk action buttons — but
+   * KEEP .nav-brand (logo) and the utility cluster (dark mode, customize,
+   * search) which have no equivalent in the bottom-nav. #1174: hamburger
+   * is replaced by the More tab so it stays hidden. */
   .top-nav .nav-links,
   .top-nav .nav-more-wrap,
-  .top-nav .nav-right,
-  .top-nav .nav-stats {
+  .top-nav .nav-stats,
+  .top-nav .nav-action-btn,
+  .top-nav .nav-fav-wrap {
     display: none !important;
   }
   /* #1174: hamburger hidden at ≤768px (replaced by the More tab). */
   #hamburger {
     display: none !important;
   }
-  /* Brand on the left, hamburger on the right at narrow widths. */
+  /* Keep nav-right visible so dark-mode, customize, and search buttons
+   * remain accessible on phones and tablets. */
+  .top-nav .nav-right {
+    display: flex;
+    gap: 2px;
+  }
+  /* Brand on the left, utility buttons on the right at narrow widths. */
   .top-nav {
     justify-content: space-between;
   }

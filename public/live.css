@@ -61,74 +61,23 @@
   left: 12px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
   backdrop-filter: blur(12px);
-  padding: 4px 10px;
-  border-radius: 8px;
+  padding: 8px 16px;
+  border-radius: 10px;
   border: 1px solid var(--border);
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.04);
-  max-height: 40px;
-  box-sizing: border-box;
-}
-.live-header-body {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-/* Critical strip (Mesh-Operator review #1180): beacon + pkt count are
-   always visible even when the collapsible body is hidden at narrow
-   widths. This is the ingest-state cue (red beacon = WS down) + the
-   one number operators check while the header is otherwise collapsed. */
-.live-header-critical {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-/* Toggle buttons (#1178, #1179) — hidden at wide viewports, visible at ≤768px.
-   Mesh-Operator review #1180: tap target ≥48×48 (#1060 floor + AGENTS glove
-   operability rule). Visible glyph stays small (decorative); transparent
-   padding expands the hit area without changing the visual chrome. */
-.live-header-toggle,
-.live-controls-toggle {
-  display: none;
-  align-items: center;
-  justify-content: center;
-  min-width: 48px;
-  min-height: 48px;
-  /* Visible chrome stays compact; padding grows the hit area. */
-  width: 48px;
-  height: 48px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--text) 8%, transparent);
-  color: var(--text);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.live-header-toggle:hover,
-.live-controls-toggle:hover {
-  background: color-mix(in srgb, var(--text) 14%, transparent);
-}
-.live-header-toggle:focus-visible,
-.live-controls-toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 
 .live-title {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 800;
-  letter-spacing: 1.5px;
+  letter-spacing: 2px;
   color: var(--text);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   text-transform: uppercase;
 }
 
@@ -364,38 +313,23 @@
 .live-node-filter::placeholder { color: var(--text-muted); opacity: 0.7; }
 .live-node-filter::-webkit-search-cancel-button { cursor: pointer; }
 
-/* ---- Live controls cluster (#1179) ----
- * Pinned to bottom-right, above the VCR bar and the global bottom-nav.
- * Reserves space for both env(safe-area-inset-bottom) and the bottom-nav
- * (#1061, currently in PR #1174). When the bottom-nav lands the layout
- * tracks --bottom-nav-reserve (0px on desktop, 56px+safe-area on ≤768px).
- */
-.live-controls {
-  position: fixed;
-  right: 12px;
-  bottom: calc(78px + var(--bottom-nav-reserve, 0px));
-  z-index: 1000;
-  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
-  backdrop-filter: blur(12px);
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.04);
-  max-width: min(620px, calc(100vw - 24px));
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.live-controls-body {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
 /* Region filter (#1045) inline in live header toggles */
 .live-toggles .live-region-filter-container { display: inline-flex; align-items: center; }
 .live-toggles .live-region-filter-container .region-dropdown-trigger { font-size: inherit; padding: 2px 6px; }
+
+/* Satmap provider select */
+.live-satmap-select {
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 11px;
+  padding: 2px 4px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.live-satmap-select:focus { border-color: rgba(74,158,255,0.6); }
 
 /* ---- Leaflet overrides for dark theme ---- */
 .live-page .leaflet-control-zoom a {
@@ -408,31 +342,29 @@
   background: rgba(59, 130, 246, 0.2) !important;
 }
 
-/* ---- Medium breakpoint (#279) + collapse toggles (#1178, #1179) ---- */
+/* ---- Header expand button (mobile only) ---- */
+.live-header-expand-btn {
+  display: none;
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.live-header-expand-btn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+
+/* ---- Medium breakpoint (#279) ---- */
 @media (max-width: 768px) {
   .live-feed { width: 280px; max-height: 200px; }
   .live-node-detail { width: 260px; }
   .live-legend { font-size: 10px; padding: 8px 10px; }
-  .live-header { gap: 6px; padding: 4px 8px; max-height: none; min-height: 48px; }
-  .live-stat-pill { font-size: 11px; padding: 1px 7px; }
+  .live-header { gap: 8px; padding: 6px 12px; }
+  .live-stat-pill { font-size: 11px; padding: 2px 8px; }
   .live-toggles { font-size: 10px; gap: 6px; }
-  .live-node-filter { width: 100px; font-size: 10px; }
-  .live-node-filter:focus { width: 140px; }
-
-  /* Show toggle buttons */
-  .live-header-toggle,
-  .live-controls-toggle { display: inline-flex; }
-
-  /* When collapsed, hide the body */
-  .live-header.is-collapsed .live-header-body,
-  .live-controls.is-collapsed .live-controls-body { display: none; }
-  .live-header.is-collapsed { gap: 0; padding: 4px 6px; }
-  .live-controls.is-collapsed { padding: 6px; }
-
-  /* Expanded body on narrow: stack so it never overflows the cluster */
-  .live-controls.is-expanded { max-width: calc(100vw - 24px); }
-  .live-controls.is-expanded .live-controls-body { flex-wrap: wrap; }
-  .live-controls.is-expanded .live-toggles { flex-wrap: wrap; max-height: 50vh; overflow-y: auto; }
 }
 
 /* ---- Responsive ---- */
@@ -445,6 +377,15 @@
     flex-wrap: wrap; gap: 6px; padding: 6px 10px;
     top: 56px; left: 8px; right: 8px; max-width: calc(100vw - 16px);
   }
+  /* Expand button visible; stat pills + toggles hidden until expanded */
+  .live-header-expand-btn { display: inline-flex; align-items: center; }
+  .live-header { align-items: center; }
+  .live-header .live-stats-row,
+  .live-header .live-toggles,
+  .live-header .audio-controls { display: none; }
+  .live-header.is-expanded .live-stats-row,
+  .live-header.is-expanded .live-toggles { display: flex; }
+  .live-header.is-expanded .audio-controls:not(.hidden) { display: flex; }
   .live-stats-row { flex-wrap: wrap; gap: 4px; }
   .live-stat-pill { font-size: 11px; padding: 2px 7px; }
   .live-toggles { font-size: 10px; gap: 6px; margin-left: 0; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; width: 100%; min-width: 0; }
@@ -593,7 +534,7 @@
 .feed-hide-btn:hover { opacity: 1; color: #fff; background: rgba(239,68,68,0.6); }
 
 .feed-show-btn {
-  position: absolute; bottom: 12px; left: 12px; z-index: 500;
+  position: absolute; bottom: 12px; left: 62px; z-index: 500;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent); backdrop-filter: blur(8px);
   border: 1px solid var(--border); border-radius: 8px;
   color: var(--text-muted); font-size: 18px; padding: 8px 10px;
@@ -931,11 +872,12 @@
   border: 0;
 }
 
-/* Legend toggle button — visible at all sizes (#60, #279) */
+/* Legend toggle button — bottom-left, next to feed show button (#60, #279) */
 .legend-toggle-btn {
   position: absolute;
-  bottom: 82px;
-  right: 12px;
+  bottom: 68px;
+  left: 12px;
+  right: auto;
   z-index: 500;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
   backdrop-filter: blur(8px);
@@ -978,16 +920,16 @@
 /* Nav pin button (#62) */
 .nav-pin-btn {
   background: none;
-  border: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
   font-size: 14px;
   cursor: pointer;
   padding: 4px 8px;
   opacity: 0.5;
   transition: opacity 0.2s;
-  margin-left: auto;
 }
 .nav-pin-btn:hover { opacity: 0.8; }
-.nav-pin-btn.pinned { opacity: 1; filter: drop-shadow(0 0 4px rgba(59,130,246,0.5)); }
+.nav-pin-btn.pinned { opacity: 1; color: var(--accent); border-color: var(--accent); }
 
 /* ========== Panel Corner Positioning (#608 M0) ========== */
 /* Corner positions — applied via data-position attribute on .live-overlay panels */
@@ -1073,4 +1015,161 @@
   .live-overlay[data-dragged="true"] {
     transition: none;
   }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   MESH LIVE header — restructured layout
+   Panel is now flex-column so the panel-header bar (title + actions)
+   sits above the stats row and toggles.
+   ══════════════════════════════════════════════════════════════ */
+
+/* Column layout, wider default to hold all content */
+.live-header {
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 8px !important;
+  padding: 10px 14px !important;
+  min-width: 260px;
+}
+
+/* panel-header row: no extra padding — live-header padding covers it */
+.live-header .panel-header {
+  padding: 0;
+  gap: 6px;
+}
+
+/* Title stretches to fill space between beacon and actions */
+.live-header .live-title {
+  flex: 1;
+}
+
+/* Close / pin buttons group */
+.live-header-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.live-header-pin-btn,
+.live-header-close-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 5px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.live-header-pin-btn:hover,
+.live-header-close-btn:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+.live-header-pin-btn.pinned {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── Auto-compact state: title + stats visible, toggles hidden (desktop only) ── */
+@media (min-width: 641px) {
+  .live-header.is-compact .live-toggles,
+  .live-header.is-compact .audio-controls {
+    display: none !important;
+  }
+  .live-header.is-compact .live-stats-row {
+    display: flex;
+  }
+}
+
+/* Hide the header panel when closed via ✕ */
+.live-header.hidden {
+  display: none !important;
+}
+
+/* ── Show-button when header is fully minimised ── */
+.live-header-show-btn {
+  position: absolute;
+  top: 64px;
+  left: 12px;
+  z-index: 1002;
+  background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  padding: 6px 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  transition: background 0.15s;
+}
+.live-header-show-btn:hover {
+  background: color-mix(in srgb, var(--surface-1) 96%, transparent);
+}
+.live-header-show-btn.hidden { display: none; }
+
+/* On mobile, keep show-button below the bottom-nav-reserve top offset */
+@media (max-width: 640px) {
+  .live-header-show-btn { top: 56px; left: 8px; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   VCR bar — auto-hide + pin toggle
+   ══════════════════════════════════════════════════════════════ */
+
+.vcr-bar {
+  transition: transform 0.35s ease, opacity 0.35s ease;
+}
+
+.vcr-bar.vcr-autohide {
+  transform: translateY(100%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Pin button sits above the VCR bar, right-aligned */
+.vcr-pin-btn {
+  position: absolute;
+  top: -30px;
+  right: 10px;
+  background: color-mix(in srgb, var(--surface-1) 90%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  border-bottom: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 3px 8px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: auto;
+}
+
+/* Reveal pin tab on hover over bar or button itself, or when pinned */
+.vcr-bar:hover .vcr-pin-btn,
+.vcr-pin-btn:hover,
+.vcr-pin-btn.pinned {
+  opacity: 1;
+}
+
+.vcr-pin-btn.pinned {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Touch devices: always show pin button (no hover) */
+@media (hover: none) {
+  .vcr-pin-btn { opacity: 1; pointer-events: auto; }
+}
+
+/* Reduced motion: skip slide animation */
+@media (prefers-reduced-motion: reduce) {
+  .vcr-bar { transition: opacity 0.15s ease; }
+  .vcr-bar.vcr-autohide { transform: none; }
 }

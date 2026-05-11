@@ -26,8 +26,9 @@
       key: NS + 'row-swipe',
       text: 'Tip: swipe a row left for quick actions.',
       relevant: function () {
+        if (window.innerWidth > 768) return false;
         var h = location.hash || '';
-        return /^#\/(packets|nodes|live)/.test(h);
+        return /^#\/(packets|nodes)/.test(h);
       },
       position: 'bottom',
     },
@@ -35,7 +36,9 @@
       key: NS + 'tab-swipe',
       text: 'Tip: swipe left or right to switch tabs.',
       relevant: function () {
-        return !!document.querySelector('[data-bottom-nav]');
+        if (window.innerWidth > 768) return false;
+        var h = location.hash || '';
+        return !!document.querySelector('[data-bottom-nav]') && !/^#\/live/.test(h);
       },
       position: 'bottom',
     },

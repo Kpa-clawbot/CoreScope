@@ -98,6 +98,7 @@
         ev.stopPropagation();
         ev.preventDefault();
         table[REVEAL_FLAG] = true;
+        if (table.id) revealById.set(table.id, true);
         clearHidden(table);
         // Add a small "hide again" affordance after reveal so the user isn't stuck.
         const rehide = document.createElement('button');
@@ -109,6 +110,7 @@
         rehide.addEventListener('click', function (ev2) {
           ev2.stopPropagation();
           ev2.preventDefault();
+          if (table.id) revealById.delete(table.id);
           table[REVEAL_FLAG] = false;
           apply(table);
         });
@@ -129,12 +131,18 @@
 
   // Track tables we've wired up so resize triggers re-apply.
   const wired = new Set();
+  // Persist reveal state by table id across re-renders (auto-refresh rebuilds
+  // the DOM, losing the flag stored on the old element). Cleared only on real
+  // viewport-width changes so layout re-evaluates column visibility correctly.
+  const revealById = new Map();
   // Track last-seen wrap width per table so we only treat ACTUAL container
   // resizes as a reason to drop the user's reveal state. Hiding/showing
   // columns and removing the pill mutate layout and re-trigger ResizeObserver,
   // which would otherwise immediately stomp on the reveal the user just asked for.
   const lastWrapW = new WeakMap();
   function register(table) {
+    // Carry reveal state forward when the same table id is re-rendered.
+    if (table && table.id && revealById.get(table.id)) table[REVEAL_FLAG] = true;
     if (!table || wired.has(table)) { apply(table); return; }
     wired.add(table);
     if (typeof ResizeObserver !== 'undefined') {
@@ -149,6 +157,7 @@
           // changes (>2px) clear the reveal flag.
           if (Math.abs(cur - prev) <= 2) return;
           lastWrapW.set(table, cur);
+          if (table.id) revealById.delete(table.id);
           table[REVEAL_FLAG] = false;
           apply(table);
         });
@@ -159,12 +168,22 @@
   }
 
   let _winTimer = null;
+  let _lastVW = window.innerWidth || document.documentElement.clientWidth;
   window.addEventListener('resize', function () {
     clearTimeout(_winTimer);
     _winTimer = setTimeout(() => {
+      const vw = window.innerWidth || document.documentElement.clientWidth;
+      const widthChanged = Math.abs(vw - _lastVW) > 2;
+      _lastVW = vw;
       wired.forEach(t => {
         if (!t.isConnected) { wired.delete(t); return; }
-        t[REVEAL_FLAG] = false;
+        // Only reset reveal on width changes. Mobile browsers fire resize when
+        // the address bar hides/shows (height-only) — don't reset so revealed
+        // columns survive scrolling on mobile.
+        if (widthChanged) {
+          if (t.id) revealById.delete(t.id);
+          t[REVEAL_FLAG] = false;
+        }
         apply(t);
       });
     }, 120);
