@@ -887,6 +887,23 @@
             <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
           </div>
           <div class="live-toggles">
+            <label>Map <select id="liveSatmapSelect" class="live-satmap-select" aria-label="Map tile style">
+              <option value="positron">Positron</option>
+              <option value="dark_matter">Dark Matter</option>
+              <option value="gray_canvas">Gray Canvas</option>
+              <option value="satellite">Satellite</option>
+              <option value="hybrid">Hybrid</option>
+              <option value="opentopo">OpenTopo</option>
+              <option value="wikimedia">Wikimedia</option>
+              <option value="osm">OSM</option>
+              <option value="stadia_dark">Stadia Dark</option>
+              <option value="hillshade">Hillshade</option>
+              <option value="hillshade_dark">Hillshade Dark</option>
+              <option value="hillshade_blend">Hillshade Blend</option>
+              <option value="neon_tactical">Neon Tactical</option>
+              <option value="military_satcom">Military SATCOM</option>
+              <option value="nvg">NVG Green</option>
+            </select></label>
             <label><input type="checkbox" id="liveHeatToggle" checked aria-describedby="heatDesc"> Heat</label>
             <span id="heatDesc" class="sr-only">Overlay a density heat map on the mesh nodes</span>
             <label><input type="checkbox" id="liveGhostToggle" checked aria-describedby="ghostDesc"> Ghosts</label>
@@ -911,23 +928,6 @@
             <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
             <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
             <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="Filter live packets by IATA region"></div>
-            <label>Map <select id="liveSatmapSelect" class="live-satmap-select" aria-label="Map tile style">
-              <option value="positron">Positron</option>
-              <option value="dark_matter">Dark Matter</option>
-              <option value="gray_canvas">Gray Canvas</option>
-              <option value="satellite">Satellite</option>
-              <option value="hybrid">Hybrid</option>
-              <option value="opentopo">OpenTopo</option>
-              <option value="wikimedia">Wikimedia</option>
-              <option value="osm">OSM</option>
-              <option value="stadia_dark">Stadia Dark</option>
-              <option value="hillshade">Hillshade</option>
-              <option value="hillshade_dark">Hillshade Dark</option>
-              <option value="hillshade_blend">Hillshade Blend</option>
-              <option value="neon_tactical">Neon Tactical</option>
-              <option value="military_satcom">Military SATCOM</option>
-              <option value="nvg">NVG Green</option>
-            </select></label>
           </div>
           <div class="audio-controls hidden" id="audioControls">
             <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
