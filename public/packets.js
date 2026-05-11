@@ -465,6 +465,26 @@
     if (!o) return id;
     return o.iata ? `${o.name} (${o.iata})` : o.name;
   }
+  // Compact IATA pill (#1188) — renders next to observer name. Prefers
+  // packet.observer_iata (now joined on the server) and falls back to the
+  // observer lookup map for callers that haven't been updated yet.
+  function obsIataBadge(packet) {
+    if (!packet) return '';
+    let iata = packet.observer_iata;
+    if (!iata) {
+      const o = packet.observer_id ? observerMap.get(packet.observer_id) : null;
+      iata = o && o.iata;
+    }
+    return iata ? `<span class="badge-iata">${escapeHtml(iata)}</span>` : '';
+  }
+  // Plain observer name without the trailing IATA — used when the IATA is
+  // rendered separately as a badge (so the cell doesn't show "Name (SJC) SJC").
+  function obsNameOnly(id) {
+    if (!id) return '—';
+    const o = observerMap.get(id);
+    if (!o) return id;
+    return o.name;
+  }
   let selectedId = null;
   function _isColorByHash() { return localStorage.getItem('meshcore-color-packets-by-hash') !== 'false'; }
   function _currentTheme() { return document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
@@ -1945,7 +1965,7 @@
           <td class="col-size" data-filter-field="size" data-filter-value="${groupSize || ''}">${groupSize ? groupSize + 'B' : '—'}</td>
           <td class="col-hashsize mono">${groupHashBytes}</td>
           <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(groupTypeName || '')}">${p.payload_type != null ? `<span class="badge badge-${groupTypeClass}">${groupTypeName}</span>${transportBadge(p.route_type)}` : '—'}</td>
-          <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsName(headerObserverId) || '')}">${isSingle ? truncate(obsName(headerObserverId), 16) : truncate(obsName(headerObserverId), 10) + (p.observer_count > 1 ? ' +' + (p.observer_count - 1) : '')}</td>
+          <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(headerObserverId) || '')}">${isSingle ? truncate(obsNameOnly(headerObserverId), 16) + obsIataBadge(p) : truncate(obsNameOnly(headerObserverId), 10) + obsIataBadge(p) + (p.observer_count > 1 ? ' +' + (p.observer_count - 1) : '')}</td>
           <td class="col-path"><span class="path-hops">${groupPathStr}</span></td>
           <td class="col-rpt">${p.observation_count > 1 ? '<span class="badge badge-obs" title="Seen ' + p.observation_count + ' times">👁 ' + p.observation_count + '</span>' : (isSingle ? '' : p.count)}</td>
           <td class="col-details">${getDetailPreview(getParsedDecoded(p))}</td>
@@ -1971,7 +1991,7 @@
               <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
               <td class="col-hashsize mono">${childHashBytes}</td>
               <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(c.route_type)}</td>
-              <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsName(c.observer_id) || '')}">${truncate(obsName(c.observer_id), 16)}</td>
+              <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(c.observer_id) || '')}">${truncate(obsNameOnly(c.observer_id), 16)}${obsIataBadge(c)}</td>
               <td class="col-path"><span class="path-hops">${childPathStr}</span></td>
               <td class="col-rpt"></td>
               <td class="col-details">${getDetailPreview(getParsedDecoded(c))}</td>
@@ -2003,7 +2023,7 @@
         <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
         <td class="col-hashsize mono">${hashBytes}</td>
         <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(p.route_type)}</td>
-        <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsName(p.observer_id) || '')}">${truncate(obsName(p.observer_id), 16)}</td>
+        <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(p.observer_id) || '')}">${truncate(obsNameOnly(p.observer_id), 16)}${obsIataBadge(p)}</td>
         <td class="col-path"><span class="path-hops">${pathStr}</span></td>
         <td class="col-rpt"></td>
         <td class="col-details">${detail}</td>
@@ -2823,7 +2843,7 @@
       <div class="detail-hash">${pkt.hash || 'Packet #' + pkt.id}${obsIndicator}</div>
       ${messageHtml}
       <dl class="detail-meta">
-        <dt>Observer</dt><dd>${obsName(effectivePkt.observer_id)}</dd>
+        <dt>Observer</dt><dd>${obsNameOnly(effectivePkt.observer_id)}${obsIataBadge(effectivePkt)}</dd>
         <dt>Location</dt><dd>${locationHtml}</dd>
         <dt>SNR / RSSI</dt><dd>${snr != null ? snr + ' dB' : '—'} / ${rssi != null ? rssi + ' dBm' : '—'}</dd>
         <dt>Route Type</dt><dd>${routeTypeName(pkt.route_type)}</dd>
@@ -2861,7 +2881,7 @@
             const oPath = getParsedPath(o);
             const isCurrent = currentObs && String(o.id) === String(currentObs.id);
             return `<tr class="detail-obs-row${isCurrent ? ' observation-current' : ''}" data-obs-id="${o.id}" style="cursor:pointer;${isCurrent ? 'background:var(--accent-bg, rgba(0,122,255,0.1))' : ''}" title="Click to view this observation">
-              <td style="padding:4px 6px">${obsName(o.observer_id)}</td>
+              <td style="padding:4px 6px">${obsNameOnly(o.observer_id)}${obsIataBadge(o)}</td>
               <td style="padding:4px 6px">${oPath.length}</td>
               <td style="padding:4px 6px">${o.snr != null ? o.snr + ' dB' : '—'}</td>
               <td style="padding:4px 6px">${o.rssi != null ? o.rssi + ' dBm' : '—'}</td>
