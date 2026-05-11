@@ -894,7 +894,6 @@
               <option value="satellite">Satellite</option>
               <option value="hybrid">Hybrid</option>
               <option value="opentopo">OpenTopo</option>
-              <option value="wikimedia">Wikimedia</option>
               <option value="osm">OSM</option>
               <option value="hillshade">Hillshade</option>
               <option value="hillshade_blend">Hillshade Blend</option>
@@ -1034,7 +1033,6 @@
       satellite:        { base: _ESRI_SAT },
       hybrid:           { base: _ESRI_SAT,    overlay: _ESRI_LABELS,   overlayOpacity: 1 },
       opentopo:         { base: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', mapMaxZoom: 17 },
-      wikimedia:        { base: 'https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}{r}.png' },
       osm:              { base: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' },
       hillshade:        { base: _ESRI_HILLSHADE, mapMaxZoom: 17 },
       hillshade_blend:  { base: _CARTO_DARK,   overlay: _ESRI_HILL_DARK, overlayOpacity: 0.5, mapMaxZoom: 17 },
@@ -1078,7 +1076,8 @@
       localStorage.setItem('meshcore-live-satmap', provider);
     }
 
-    const _savedSatmap = localStorage.getItem('meshcore-live-satmap') || 'positron';
+    const _savedSatmap = localStorage.getItem('meshcore-live-satmap') ||
+      (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark_matter' : 'positron');
     const _satmapSel = document.getElementById('liveSatmapSelect');
     _satmapSel.value = _savedSatmap === 'default' ? 'positron' : _savedSatmap;
     applySatmap(_savedSatmap);
