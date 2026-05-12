@@ -1641,7 +1641,7 @@ async function run() {
   // Test: packets timeWindow deep link
   await test('Packets timeWindow deep link restores dropdown', async () => {
     await page.goto(BASE + '#/packets?timeWindow=60', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#fTimeWindow', { timeout: 8000 });
+    await page.waitForSelector('#fTimeWindow', { state: 'attached', timeout: 8000 });
     const val = await page.$eval('#fTimeWindow', el => el.value);
     assert(val === '60', `Expected timeWindow dropdown = 60, got: ${val}`);
     const url = page.url();
@@ -1651,7 +1651,7 @@ async function run() {
   // Test: timeWindow change updates URL
   await test('Packets timeWindow change updates URL', async () => {
     await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#fTimeWindow', { timeout: 8000 });
+    await page.waitForSelector('#fTimeWindow', { state: 'attached', timeout: 8000 });
     await page.selectOption('#fTimeWindow', '30');
     await page.waitForTimeout(300);
     const url = page.url();
