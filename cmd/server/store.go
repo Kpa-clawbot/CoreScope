@@ -5545,6 +5545,9 @@ func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 			continue
 		}
 		hs := int((pathByte>>6)&0x3) + 1
+		if hs > 3 {
+			continue // invalid hash size — MeshCore max is 3 bytes
+		}
 
 		var d map[string]interface{}
 		if json.Unmarshal([]byte(tx.DecodedJSON), &d) != nil {

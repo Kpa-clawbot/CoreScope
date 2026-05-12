@@ -58,6 +58,9 @@ type Server struct {
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
 
+	// Directory to serve firmware download files from (set from data dir at startup)
+	firmwareDir string
+
 	_hmu   sync.Mutex
 	_hfile string
 }
@@ -185,6 +188,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/channels/private/{hashHex}/packets", s.handlePrivateChannelPackets).Methods("GET")
 	r.HandleFunc("/api/channels/{hash}/messages", s.handleChannelMessages).Methods("GET")
 	r.HandleFunc("/api/channels", s.handleChannels).Methods("GET")
+	r.HandleFunc("/api/firmware", s.handleFirmwareList).Methods("GET")
 	r.HandleFunc("/api/observers/top-monthly", s.handleObserverTopMonthly).Methods("GET")
 	r.HandleFunc("/api/observers/metrics/summary", s.handleMetricsSummary).Methods("GET")
 	r.HandleFunc("/api/observers/{id}/metrics", s.handleObserverMetrics).Methods("GET")
@@ -1133,7 +1137,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		queryInt(r, "limit", 50),
 		queryInt(r, "offset", 0),
 		q.Get("role"), q.Get("search"), q.Get("before"),
-		q.Get("lastHeard"), q.Get("sortBy"), q.Get("region"),
+		q.Get("lastHeard"), q.Get("sortBy"), q.Get("region"), q.Get("scope"),
 	)
 	if err != nil {
 		internalError(w, r.URL.Path, err)
@@ -1918,6 +1922,35 @@ func (s *Server) handlePrivateChannelPackets(w http.ResponseWriter, r *http.Requ
 	}
 	// Private channels are client-side only — no DB fallback needed
 	writeJSON(w, map[string]interface{}{"packets": []interface{}{}, "total": 0})
+}
+
+func (s *Server) handleFirmwareList(w http.ResponseWriter, r *http.Request) {
+	type FirmwareFile struct {
+		Name string `json:"name"`
+		Size int64  `json:"size"`
+		URL  string `json:"url"`
+	}
+	files := []FirmwareFile{}
+	if s.firmwareDir != "" {
+		entries, err := os.ReadDir(s.firmwareDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				info, _ := entry.Info()
+				if info == nil {
+					continue
+				}
+				files = append(files, FirmwareFile{
+					Name: entry.Name(),
+					Size: info.Size(),
+					URL:  "/firmware/" + entry.Name(),
+				})
+			}
+		}
+	}
+	writeJSON(w, map[string]interface{}{"files": files})
 }
 
 func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {

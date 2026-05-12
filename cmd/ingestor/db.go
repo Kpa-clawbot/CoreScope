@@ -95,7 +95,8 @@ func applySchema(db *sql.DB) error {
 			first_seen TEXT,
 			advert_count INTEGER DEFAULT 0,
 			battery_mv INTEGER,
-			temperature_c REAL
+			temperature_c REAL,
+			scope TEXT
 		);
 
 		CREATE TABLE IF NOT EXISTS observers (
@@ -346,6 +347,15 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] packets_sent/packets_recv columns added")
 	}
 
+	// Migration: add scope column to nodes table.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'node_scope_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding scope column to nodes...")
+		db.Exec(`ALTER TABLE nodes ADD COLUMN scope TEXT`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('node_scope_v1')`)
+		log.Println("[migration] scope column added")
+	}
+
 	return nil
 }
 
@@ -379,14 +389,15 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtUpsertNode, err = s.db.Prepare(`
-		INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, scope)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(public_key) DO UPDATE SET
 			name = COALESCE(?, name),
 			role = COALESCE(?, role),
 			lat = COALESCE(?, lat),
 			lon = COALESCE(?, lon),
-			last_seen = ?
+			last_seen = ?,
+			scope = COALESCE(NULLIF(?, ''), scope)
 	`)
 	if err != nil {
 		return err
@@ -536,14 +547,15 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 }
 
 // UpsertNode inserts or updates a node, and removes it from inactive_nodes if it was archived.
-func (s *Store) UpsertNode(pubKey, name, role string, lat, lon *float64, lastSeen string) error {
+// scope is optional; a non-empty value overwrites any previously stored scope.
+func (s *Store) UpsertNode(pubKey, name, role string, lat, lon *float64, lastSeen, scope string) error {
 	now := lastSeen
 	if now == "" {
 		now = time.Now().UTC().Format(time.RFC3339)
 	}
 	_, err := s.stmtUpsertNode.Exec(
-		pubKey, name, role, lat, lon, now, now,
-		name, role, lat, lon, now,
+		pubKey, name, role, lat, lon, now, now, scope,
+		name, role, lat, lon, now, scope,
 	)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)

@@ -651,6 +651,59 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   border-radius: 6px; cursor: pointer; margin-left: 8px; font-size: 14px;
 }
 
+/* === Announcement Modal === */
+.announcement-overlay { z-index: 9999; }
+.announcement-modal { max-width: 480px; border: 1px solid rgba(99,179,237,0.4); box-shadow: 0 0 18px rgba(99,179,237,0.25), 0 8px 32px rgba(0,0,0,0.4); }
+.announcement-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.announcement-header h3 { margin: 0; font-size: 16px; font-weight: 700; }
+.announcement-icon { font-size: 22px; line-height: 1; }
+.announcement-body p { font-size: 14px; margin-bottom: 12px; line-height: 1.5; }
+.announcement-body ul { padding-left: 18px; margin: 0 0 4px; }
+.announcement-body li { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 4px; }
+.announcement-body strong { color: var(--text); }
+.announcement-actions { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin-top: 20px; }
+.announcement-close { background: var(--accent); color: #fff; border: none; padding: 9px 28px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; font-family: var(--font); }
+.announcement-close:hover { background: var(--accent-hover); }
+.announcement-howto { font-size: 13px; font-weight: 600; color: var(--accent); text-decoration: none; }
+.announcement-howto:hover { color: var(--accent-hover); text-decoration: underline; }
+
+/* === Regions Page === */
+.regions-page { max-width: 760px; margin: 0 auto; padding: 32px 24px; }
+.regions-hero { margin-bottom: 32px; border-bottom: 1px solid var(--border); padding-bottom: 24px; }
+.regions-title { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+.regions-subtitle { font-size: 14px; color: var(--text-muted); }
+.regions-section { margin-bottom: 36px; }
+.regions-section h2 { font-size: 16px; font-weight: 700; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.regions-section p { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 10px; }
+.regions-section ul { padding-left: 18px; margin-bottom: 10px; }
+.regions-section li { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 4px; }
+.regions-section strong { color: var(--text); }
+.regions-code { font-family: var(--mono); font-size: 12px; background: var(--surface-0); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; color: var(--accent); }
+.regions-link { color: var(--accent); text-decoration: underline; }
+.regions-link:hover { color: var(--accent-hover); }
+.regions-discord { font-family: var(--mono); font-size: 13px; }
+.regions-steps { display: flex; flex-direction: column; gap: 16px; margin-top: 14px; }
+.regions-step { display: flex; gap: 14px; background: var(--surface-0); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+.regions-step-num { flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+.regions-step-title { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+.regions-step-body { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+.regions-screenshot-placeholder { margin-top: 10px; padding: 12px; border: 1px dashed var(--border); border-radius: 6px; font-size: 12px; color: var(--text-muted); text-align: center; }
+.regions-screenshot { display: block; margin-top: 10px; width: 100%; max-width: 320px; border-radius: 8px; border: 1px solid var(--border); }
+.regions-subsection { margin-top: 20px; }
+.regions-subsection h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 12px; }
+.regions-cli-block { background: var(--surface-0); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin: 10px 0; display: flex; flex-direction: column; gap: 8px; }
+.regions-cli-line { display: flex; align-items: center; gap: 12px; }
+.regions-cli-comment { font-size: 12px; color: var(--text-muted); font-style: italic; }
+.regions-note { font-size: 12px; color: var(--text-muted); background: var(--surface-0); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 8px 12px; margin-top: 10px; }
+.regions-role-toggle { display: flex; gap: 10px; margin: 4px 0 20px; }
+.regions-role-btn { display: flex; align-items: center; gap: 7px; padding: 8px 20px; border-radius: 20px; border: 1.5px solid var(--border); background: var(--surface-0); color: var(--text-muted); font-size: 13px; font-weight: 600; cursor: pointer; transition: border-color 0.15s, background 0.15s, color 0.15s; }
+.regions-role-btn:hover { border-color: var(--accent); color: var(--text); }
+.regions-role-btn.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.regions-role-icon { font-size: 15px; line-height: 1; }
+.regions-role-panel { transition: opacity 0.15s; }
+.regions-role-panel--hidden { display: none; }
+@media (max-width: 640px) { .regions-page { padding: 20px 16px; } .regions-title { font-size: 20px; } .regions-role-btn { padding: 7px 14px; font-size: 12px; } }
+
 /* === Map Controls Panel === */
 .map-controls {
   position: absolute; top: 12px; right: 12px; z-index: 1000;
@@ -1330,6 +1383,45 @@ fieldset.mc-section legend.mc-label { padding: 0; }
 .obs-top-bar { height: 100%; background: var(--accent); border-radius: 3px; }
 .obs-top-count { font-size: 11px; color: var(--text-muted); flex-shrink: 0; text-align: right; min-width: 44px; font-family: var(--mono); }
 
+/* === Top Monthly + Firmware side-by-side row === */
+.obs-top-fw-row { display: flex; gap: 16px; align-items: stretch; }
+.obs-top-fw-row > * { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.obs-top-fw-row .obs-top-section,
+.obs-top-fw-row .fw-card { flex: 1; box-sizing: border-box; margin-bottom: 20px; }
+
+/* === Firmware Downloads Card === */
+.fw-card { padding: 16px 20px; display: flex; flex-direction: column; }
+.fw-header { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--text-muted); margin-bottom: 14px; }
+.fw-filters { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.fw-filter-group { display: flex; flex-direction: column; gap: 3px; }
+.fw-filter-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.fw-select { padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; background: var(--input-bg); color: var(--text); font-family: var(--font); cursor: pointer; min-width: 130px; }.fw-list { display: flex; flex-direction: column; gap: 6px; }
+.fw-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 6px; background: var(--surface-0); border: 1px solid var(--border); margin-bottom: 6px; }
+.fw-name { flex: 1; font-family: var(--mono); font-size: 12px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fw-size { font-size: 11px; color: var(--text-muted); flex-shrink: 0; font-family: var(--mono); }
+.fw-dl-btn { flex-shrink: 0; padding: 4px 11px; border-radius: 5px; background: var(--accent); color: #fff; font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.fw-dl-btn:hover { background: var(--accent-hover); }
+.fw-empty { font-size: 12px; color: var(--text-muted); padding: 8px 0; }
+
+.fw-become-observer { margin-top: auto; padding-top: 14px; display: flex; justify-content: center; }
+.fw-become-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; background: none; border: 1px solid var(--accent); border-radius: 20px; padding: 6px 32px 5px; font-size: 12px; font-weight: 600; color: var(--accent); cursor: pointer; font-family: var(--font); line-height: 1; transition: background 0.15s, color 0.15s; }
+.fw-become-btn::before { content: '📡'; position: absolute; left: 12px; font-size: 13px; line-height: 1; }
+.fw-become-btn:hover { background: var(--accent); color: #fff; }
+
+.fw-observer-modal { max-width: 520px; }
+.fw-modal-intro { font-size: 13px; color: var(--text-muted); margin-bottom: 18px; }
+.fw-modal-step { display: flex; gap: 14px; margin-bottom: 18px; }
+.fw-modal-step-num { flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+.fw-modal-step-title { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+.fw-modal-step-body { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+.fw-discord { color: var(--accent); font-family: var(--mono); }
+.fw-modal-link { color: var(--accent); text-decoration: underline; }
+.fw-modal-link:hover { color: var(--accent-hover); }
+.fw-modal-code { display: block; margin-top: 8px; padding: 8px 10px; background: var(--surface-0); border: 1px solid var(--border); border-radius: 6px; font-family: var(--mono); font-size: 11px; word-break: break-all; color: var(--text); }
+.fw-modal-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+.fw-modal-actions .btn-close { background: var(--accent); color: #fff; border: none; padding: 9px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; font-family: var(--font); }
+.fw-modal-actions .btn-close:hover { background: var(--accent-hover); }
+
 /* === Observers — responsive === */
 @media (max-width: 768px) {
   .observers-page { padding: 14px 16px; }
@@ -1337,10 +1429,12 @@ fieldset.mc-section legend.mc-label { padding: 0; }
   .obs-toolbar .region-filter-bar { flex-wrap: wrap; }
   .obs-top-row { gap: 6px; }
   .obs-top-bar-wrap { width: 44px; }
+  .obs-top-fw-row { flex-direction: column; }
 }
 @media (max-width: 640px) {
   .observers-page { padding: 10px 12px; }
   .obs-top-section { padding: 12px 14px; margin-bottom: 14px; }
+  .fw-card { padding: 12px 14px; }
   .obs-top-title { font-size: 11px; margin-bottom: 10px; }
   .obs-top-row { font-size: 12px; gap: 5px; padding: 3px 0; }
   .obs-top-bar-wrap { width: 32px; height: 5px; }

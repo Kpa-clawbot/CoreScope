@@ -22,13 +22,17 @@
             Refresh
           </button>` : ''}
         </div>
-        <div id="obsTopMonthly"></div>
+        <div class="obs-top-fw-row">
+          <div id="obsTopMonthly"></div>
+          <div id="obsFirmware" style="display:none"></div>
+        </div>
         <div id="obsContent"><div class="text-center text-muted" style="padding:40px">Loading…</div></div>
       </div>`;
     RegionFilter.init(document.getElementById('obsRegionFilter'));
     regionChangeHandler = RegionFilter.onChange(function () { render(); });
     loadObservers();
     loadTopMonthly();
+    loadFirmware();
     // Event delegation for data-action buttons and row navigation
     app.addEventListener('click', function (e) {
       var btn = e.target.closest('[data-action]');
@@ -69,7 +73,7 @@
     if (!el) return;
     try {
       // No client-side cache — avoid caching empty results on first load
-      const data = await api('/observers/top-monthly?n=5', { bust: true });
+      const data = await api('/observers/top-monthly?n=4', { bust: true });
       const entries = data.topMonthly || [];
       if (!entries.length) { el.innerHTML = ''; return; }
 
@@ -95,7 +99,7 @@
       }).join('');
 
       el.innerHTML = `<div class="obs-top-section">
-        <div class="obs-top-title">Top 5 Observers — <span style="color:var(--accent)">${monthLabel}</span></div>
+        <div class="obs-top-title">Top Observers — <span style="color:var(--accent)">${monthLabel}</span></div>
         ${rowsHtml}
       </div>`;
     } catch (e) {
@@ -111,6 +115,155 @@
     } catch (e) {
       document.getElementById('obsContent').innerHTML =
         `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">Error loading observers: ${e.message}</div>`;
+    }
+  }
+
+  function _fwDisplayName(name, maxLen = 48) {
+    if (name.length <= maxLen) return name;
+    const dot = name.lastIndexOf('.');
+    const suffix = dot >= 0 ? name.slice(dot) : '';
+    return name.slice(0, maxLen - suffix.length - 1) + '…' + suffix;
+  }
+
+  function _fwHumanize(raw) {
+    return raw.replace(/[_-]/g, ' ').trim().split(/\s+/).map(w => {
+      if (/^\d+dbm$/i.test(w)) return w.replace(/dbm$/i, 'dBm');
+      if (w.toLowerCase() === 'nrf') return 'nRF';
+      return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+    }).join(' ');
+  }
+
+  function _fwParse(files) {
+    return files.map(f => {
+      const m = f.name.match(/_v(\d+\.\d+(?:\.\d+)?)/);
+      const version = m ? m[1] : 'unknown';
+      const variantRaw = m ? f.name.slice(0, m.index) : f.name.replace(/\.[^.]+$/, '');
+      return { ...f, version, variant: _fwHumanize(variantRaw) };
+    });
+  }
+
+  function _fwSortVersions(versions) {
+    return versions.slice().sort((a, b) => {
+      const ap = a.split('.').map(Number), bp = b.split('.').map(Number);
+      for (let i = 0; i < 3; i++) { const d = (bp[i]||0) - (ap[i]||0); if (d) return d; }
+      return 0;
+    });
+  }
+
+  function _fwRender(el, parsed) {
+    const versionSel = el.querySelector('#fwVersionSel');
+    const variantSel = el.querySelector('#fwVariantSel');
+    const listEl     = el.querySelector('#fwFileList');
+    const fmtSize = b => b >= 1048576 ? (b/1048576).toFixed(1)+' MB' : b >= 1024 ? (b/1024).toFixed(1)+' KB' : b+' B';
+
+    function repopulateVariants(selVersion) {
+      const pool = parsed.filter(f => f.version === selVersion);
+      const variants = [...new Set(pool.map(f => f.variant))].sort();
+      const cur = variantSel.value;
+      variantSel.innerHTML = `<option value="">Choose variant</option>` +
+        variants.map(v => `<option value="${escapeHtml(v)}"${v === cur ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('');
+      if (cur && !variants.includes(cur)) variantSel.value = '';
+    }
+
+    function renderList() {
+      const sv = versionSel.value, sd = variantSel.value;
+      if (!sd) { listEl.innerHTML = ''; return; }
+      const hits = parsed.filter(f => f.version === sv && f.variant === sd);
+      if (!hits.length) {
+        listEl.innerHTML = '<div class="fw-empty">No files match the selected filters.</div>';
+        return;
+      }
+      listEl.innerHTML = hits.map(f => `
+        <div class="fw-row">
+          <span class="fw-name" title="${escapeHtml(f.name)}">${escapeHtml(_fwDisplayName(f.name))}</span>
+          <span class="fw-size">${fmtSize(f.size)}</span>
+          <a class="fw-dl-btn" href="${escapeHtml(f.url)}" download="${escapeHtml(f.name)}">Download</a>
+        </div>`).join('');
+    }
+
+    versionSel.addEventListener('change', function() { repopulateVariants(this.value); renderList(); });
+    variantSel.addEventListener('change', renderList);
+    repopulateVariants(versionSel.value);
+    renderList();
+  }
+
+  async function loadFirmware() {
+    const el = document.getElementById('obsFirmware');
+    if (!el) return;
+    try {
+      const data = await api('/firmware', { bust: true });
+      const files = data.files || [];
+      if (!files.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+
+      const parsed   = _fwParse(files);
+      const versions = _fwSortVersions([...new Set(parsed.map(f => f.version))]);
+      const variants = [...new Set(parsed.map(f => f.variant))].sort();
+
+      el.innerHTML = `
+        <div class="data-card fw-card">
+          <div class="fw-header">Observer Firmware Downloads</div>
+          <div class="fw-filters">
+            <label class="fw-filter-group">
+              <span class="fw-filter-label">Version</span>
+              <select id="fwVersionSel" class="fw-select">
+                ${versions.map((v, i) => `<option value="${escapeHtml(v)}"${i === 0 ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('')}
+              </select>
+            </label>
+            <label class="fw-filter-group">
+              <span class="fw-filter-label">Device</span>
+              <select id="fwVariantSel" class="fw-select">
+                <option value="">Choose variant</option>
+                ${variants.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
+              </select>
+            </label>
+          </div>
+          <div id="fwFileList"></div>
+          <div class="fw-become-observer">
+            <button class="fw-become-btn" id="fwBecomeBtn">Become an Observer</button>
+          </div>
+        </div>
+
+        <div class="modal-overlay" id="fwObserverModal" style="display:none">
+          <div class="modal fw-observer-modal">
+            <h3>Become an Observer</h3>
+            <p class="fw-modal-intro">Observers are always-on nodes that receive and forward packets to this network. Here's how to get set up:</p>
+            <div class="fw-modal-step">
+              <div class="fw-modal-step-num">1</div>
+              <div>
+                <div class="fw-modal-step-title">Flash Observer Firmware</div>
+                <div class="fw-modal-step-body">Download the firmware for your device above. The easiest way to flash is the <a href="https://meshcore.io/flasher" target="_blank" rel="noopener" class="fw-modal-link">MeshCore Web Flasher</a> — select <strong>Custom</strong> and upload the downloaded file. For nRF52 devices you can also drag-and-drop the .uf2 file onto the device's USB drive.</div>
+              </div>
+            </div>
+            <div class="fw-modal-step">
+              <div class="fw-modal-step-num">2</div>
+              <div>
+                <div class="fw-modal-step-title">Install MeshCore-to-MQTT</div>
+                <div class="fw-modal-step-body">Run the <strong>meshcore-to-mqtt</strong> bridge on a Raspberry Pi or always-on computer. It connects your observer node via USB serial and publishes packets to the network MQTT broker.<br><br>One-line install:<br><code class="fw-modal-code">curl -fsSL https://raw.githubusercontent.com/Cisien/meshcoretomqtt/main/install.sh | sudo bash</code></div>
+              </div>
+            </div>
+            <div class="fw-modal-step">
+              <div class="fw-modal-step-num">3</div>
+              <div>
+                <div class="fw-modal-step-title">Get in Touch</div>
+                <div class="fw-modal-step-body">Reach out on Discord for MQTT credentials and help getting connected: <a href="https://discord.com/users/1184030791685115935" target="_blank" rel="noopener" class="fw-discord fw-modal-link">jesters_deead</a></div>
+              </div>
+            </div>
+            <div class="fw-modal-actions">
+              <button class="btn-close" id="fwObserverModalClose">Close</button>
+            </div>
+          </div>
+        </div>`;
+
+      el.style.display = '';
+      _fwRender(el, parsed);
+
+      const modal = document.getElementById('fwObserverModal');
+      document.getElementById('fwBecomeBtn').addEventListener('click', () => { modal.style.display = 'flex'; });
+      document.getElementById('fwObserverModalClose').addEventListener('click', () => { modal.style.display = 'none'; });
+      modal.addEventListener('click', e => { if (e.target === modal) modal.style.display = 'none'; });
+    } catch (e) {
+      el.style.display = 'none';
+      el.innerHTML = '';
     }
   }
 

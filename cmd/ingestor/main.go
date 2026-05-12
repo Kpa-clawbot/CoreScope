@@ -110,6 +110,11 @@ func main() {
 		log.Printf("No channel keys loaded — GRP_TXT packets will not be decrypted")
 	}
 
+	scopeKeys := ScopeKeys(cfg.Scopes)
+	if len(scopeKeys) > 0 {
+		log.Printf("Loaded %d scope keys for transport code matching: %v", len(scopeKeys), cfg.Scopes)
+	}
+
 	// Hot-reloadable channel keys — updated atomically on SIGUSR1.
 	var channelKeysAtomic atomic.Value
 	channelKeysAtomic.Store(initialKeys)
@@ -188,7 +193,7 @@ func main() {
 		// Capture source for closure
 		src := source
 		opts.SetDefaultPublishHandler(func(c mqtt.Client, m mqtt.Message) {
-			handleMessage(store, tag, src, m, channelKeysAtomic.Load().(map[string]string), cfg.GeoFilter)
+			handleMessage(store, tag, src, m, channelKeysAtomic.Load().(map[string]string), cfg.GeoFilter, scopeKeys)
 		})
 
 		client := mqtt.NewClient(opts)
@@ -223,7 +228,7 @@ func main() {
 	log.Println("Done.")
 }
 
-func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, channelKeys map[string]string, geoFilter *GeoFilterConfig) {
+func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, channelKeys map[string]string, geoFilter *GeoFilterConfig, scopeKeys map[string][]byte) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("MQTT [%s] panic in handler: %v", tag, r)
@@ -377,7 +382,8 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			}
 			role := advertRole(decoded.Payload.Flags)
 			if decoded.Payload.PubKey != "" {
-				if err := store.UpsertNode(decoded.Payload.PubKey, decoded.Payload.Name, role, decoded.Payload.Lat, decoded.Payload.Lon, pktData.Timestamp); err != nil {
+				scope := MatchScope(mqttMsg.Raw, scopeKeys)
+				if err := store.UpsertNode(decoded.Payload.PubKey, decoded.Payload.Name, role, decoded.Payload.Lat, decoded.Payload.Lon, pktData.Timestamp, scope); err != nil {
 					log.Printf("MQTT [%s] node upsert error: %v", tag, err)
 				}
 			}
@@ -510,7 +516,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		// Upsert sender as a companion node
 		if sender != "" {
 			senderKey := "sender-" + strings.ToLower(sender)
-			if err := store.UpsertNode(senderKey, sender, "companion", nil, nil, now); err != nil {
+			if err := store.UpsertNode(senderKey, sender, "companion", nil, nil, now, ""); err != nil {
 				log.Printf("MQTT [%s] sender node upsert error: %v", tag, err)
 			}
 		}

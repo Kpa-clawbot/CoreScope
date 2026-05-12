@@ -9,7 +9,7 @@
   let nodes = [];
   let targetNodeKey = null;
   let observers = [];
-  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clusters: false, hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all' };
+  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clusters: false, hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', scope: 'all' };
   let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
   let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
@@ -117,6 +117,10 @@
               <button class="btn ${filters.statusFilter==='active'?'active':''}" data-status="active">Active</button>
               <button class="btn ${filters.statusFilter==='stale'?'active':''}" data-status="stale">Stale</button>
             </div>
+          </fieldset>
+          <fieldset class="mc-section" id="mcScopeSection" style="display:none">
+            <legend class="mc-label">Scope</legend>
+            <div class="filter-group" id="mcScopeFilter"></div>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Filters</legend>
@@ -507,6 +511,7 @@
       observers = obsData.observers || [];
 
       buildRoleChecks(data.counts || {});
+      buildScopeFilter(nodes);
       buildJumpButtons();
 
       renderMarkers();
@@ -587,6 +592,30 @@
       });
       el.appendChild(lbl);
     }
+  }
+
+  function buildScopeFilter(nodeList) {
+    const section = document.getElementById('mcScopeSection');
+    const el = document.getElementById('mcScopeFilter');
+    if (!el || !section) return;
+    const scopes = [...new Set(nodeList.map(n => n.scope).filter(Boolean))].sort();
+    if (scopes.length === 0) { section.style.display = 'none'; return; }
+    section.style.display = '';
+    el.innerHTML = '';
+    const makeBtn = (val, label) => {
+      const btn = document.createElement('button');
+      btn.className = 'btn' + (filters.scope === val ? ' active' : '');
+      btn.dataset.scope = val;
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        filters.scope = btn.dataset.scope;
+        el.querySelectorAll('.btn').forEach(b => b.classList.toggle('active', b.dataset.scope === filters.scope));
+        renderMarkers();
+      });
+      return btn;
+    };
+    el.appendChild(makeBtn('all', 'All'));
+    for (const s of scopes) el.appendChild(makeBtn(s, s));
   }
 
   let REGION_NAMES = {};
@@ -758,10 +787,9 @@
     const filtered = nodes.filter(n => {
       if (!n.lat || !n.lon) return false;
       if (!filters[n.role || 'companion']) return false;
-      // Byte size filter (applies only to repeaters)
-      if (filters.byteSize !== 'all' && (n.role || 'companion') === 'repeater') {
-        const hs = n.hash_size || 1;
-        if (String(hs) !== filters.byteSize) return false;
+      // Byte size filter (applies only to repeaters with a known, consistent hash size)
+      if (filters.byteSize !== 'all' && (n.role || 'companion') === 'repeater' && n.hash_size != null && !n.hash_size_inconsistent) {
+        if (String(n.hash_size) !== filters.byteSize) return false;
       }
       // Status filter
       if (filters.statusFilter !== 'all') {
@@ -769,6 +797,10 @@
         const lastMs = (n.last_heard || n.last_seen) ? new Date(n.last_heard || n.last_seen).getTime() : 0;
         const status = getNodeStatus(role, lastMs);
         if (status !== filters.statusFilter) return false;
+      }
+      // Scope filter
+      if (filters.scope !== 'all') {
+        if ((n.scope || '') !== filters.scope) return false;
       }
       // Neighbor filter: show only the reference node and its direct neighbors
       if (filters.neighbors && selectedReferenceNode && neighborPubkeys) {

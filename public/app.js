@@ -700,6 +700,8 @@ function navigate() {
   } else {
     app.innerHTML = `<div style="padding:40px;text-align:center;color:#6b7280"><h2>${route}</h2><p>Page not yet implemented.</p></div>`;
   }
+
+  if (typeof umami !== 'undefined') umami.track('view', { page: basePage });
 }
 
 window.addEventListener('hashchange', navigate);
@@ -1367,3 +1369,54 @@ function makeColumnsResizable(tableSelector, storageKey) {
   });
   } // end addResizeHandles
 }
+
+// ── Site Announcement Modal ────────────────────────────────────────────────────
+(function () {
+  const ANNOUNCEMENT_KEY = 'meshcore-announcement-v2';
+
+  function showAnnouncement() {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay announcement-overlay';
+    overlay.innerHTML = `
+      <div class="modal announcement-modal">
+        <div class="announcement-header">
+          <span class="announcement-icon">📢</span>
+          <h3>Network Announcement</h3>
+        </div>
+        <div class="announcement-body">
+          <p style="font-size:16px;font-weight:700;color:#f59e0b;margin-bottom:14px;">MeshCore Regions testing is complete.</p>
+          <p>Please update your repeater configuration:</p>
+          <ul>
+            <li>Set <span style="white-space:nowrap"><strong>Allow Flood</strong> for <code class="regions-code">*</code></span> to ensure packets without a region scope are not dropped.</li>
+            <li>It is highly recommended to keep region <code class="regions-code">bc</code> set to <span style="white-space:nowrap"><strong>Flood Allowed</strong></span>. If you haven't already done this please follow the how-to guide.</li>
+          </ul>
+          <p style="margin-top:14px;">We are proposing Aug 1st – 31st for the next test of <span style="white-space:nowrap"><strong>Flood Deny <code class="regions-code">*</code></strong></span>, in hopes this provides repeater operators enough time to update firmware and modify their region settings.</p>
+        </div>
+        <div class="announcement-actions">
+          <a href="#/regions" class="announcement-howto">How-to Guide →</a>
+          <button class="announcement-close">Got it</button>
+        </div>
+      </div>`;
+
+    document.body.appendChild(overlay);
+
+    function dismiss() {
+      localStorage.setItem(ANNOUNCEMENT_KEY, '1');
+      overlay.remove();
+    }
+
+    overlay.querySelector('.announcement-close').addEventListener('click', dismiss);
+    overlay.querySelector('.announcement-howto').addEventListener('click', dismiss);
+    overlay.addEventListener('click', e => { if (e.target === overlay) dismiss(); });
+  }
+
+  window.showSiteAnnouncement = showAnnouncement;
+
+  if (!localStorage.getItem(ANNOUNCEMENT_KEY)) {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', showAnnouncement);
+    } else {
+      showAnnouncement();
+    }
+  }
+}());

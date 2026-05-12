@@ -748,6 +748,75 @@ func epochToISO(epoch uint32) string {
 	return t.UTC().Format("2006-01-02T15:04:05.000Z")
 }
 
+// ScopeKeys derives HMAC keys for a list of scope strings.
+// Each scope is hashed as SHA256("#"+scope), taking the first 16 bytes as the key.
+func ScopeKeys(scopes []string) map[string][]byte {
+	keys := make(map[string][]byte, len(scopes))
+	for _, s := range scopes {
+		h := sha256.Sum256([]byte("#" + s))
+		key := make([]byte, 16)
+		copy(key, h[:16])
+		keys[s] = key
+	}
+	return keys
+}
+
+// MatchScope checks whether a TRANSPORT_FLOOD packet's transport code matches
+// any of the provided scope keys. Returns the matching scope name or "".
+// The MeshCore firmware encodes scope as: HMAC-SHA256(key, payloadType||payload)[:2].
+func MatchScope(rawHex string, scopeKeys map[string][]byte) string {
+	if len(scopeKeys) == 0 {
+		return ""
+	}
+	buf, err := hex.DecodeString(rawHex)
+	if err != nil || len(buf) < 6 {
+		return ""
+	}
+
+	header := buf[0]
+	routeType := int(header & 0x03)
+	if routeType != RouteTransportFlood && routeType != RouteTransportDirect {
+		return ""
+	}
+
+	// Transport code is bytes 1-2; bytes 3-4 are reserved (typically 0x0000).
+	tc := buf[1:3]
+	// Unscoped marker: 0x0000 means no scope was set.
+	if tc[0] == 0 && tc[1] == 0 {
+		return ""
+	}
+
+	// Skip header(1) + transport_codes(4) + path_byte(1) + path_data
+	offset := 5
+	pathByte := buf[offset]
+	hashSize := int(pathByte>>6) + 1
+	if hashSize > 3 {
+		return "" // invalid hash size — MeshCore max is 3 bytes
+	}
+	hashCount := int(pathByte & 0x3F)
+	offset++ // past path byte
+	offset += hashSize * hashCount
+	if offset >= len(buf) {
+		return ""
+	}
+
+	payloadType := (header >> 2) & 0x0F
+	payload := buf[offset:]
+	data := make([]byte, 1+len(payload))
+	data[0] = payloadType
+	copy(data[1:], payload)
+
+	for scopeName, key := range scopeKeys {
+		mac := hmac.New(sha256.New, key)
+		mac.Write(data)
+		computed := mac.Sum(nil)
+		if computed[0] == tc[0] && computed[1] == tc[1] {
+			return scopeName
+		}
+	}
+	return ""
+}
+
 // PubKeyCorruptionMatch reports whether incomingKey looks like a bit-corrupted
 // version of existingKey. Both must be lowercase hex strings of the same length.
 // Returns true (likely corruption) when ≥ 75% of decoded bytes match — i.e.

@@ -15,5 +15,10 @@
         Content-Security-Policy "default-src 'self'; script-src 'self' https://unpkg.com https://static.cloudflareinsights.com 'sha256-YtbIy3miZTNYHsbUj8//Vlvbaf9b7c3hwA0/q1YKHeU=' 'sha256-bPRIOhQIdfRlsA2xC9aws3yGCfOggN9wkhem3UXP2QQ=' 'sha256-uPcI67rT4G0Jl0SDZ16NCINIEqsSQwOnlrugeR4Eo1A=' 'sha256-c7aO//ZrRiW9BCNJz/OYu1dpaGb30Y70eFZ3y03BgFo='; style-src 'self' https://unpkg.com 'unsafe-inline'; img-src 'self' data: https://unpkg.com https://*.basemaps.cartocdn.com https://*.tile.openstreetmap.org https://*.tile.opentopomap.org https://raw.githubusercontent.com; connect-src 'self' ws: wss: https://unpkg.com https://cloudflareinsights.com; font-src 'self' data: https://unpkg.com https://*.basemaps.cartocdn.com; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
         -Server
     }
+    # Umami analytics — strip /u prefix and proxy to local Umami instance
+    handle_path /u/* {
+        reverse_proxy host.docker.internal:3002
+    }
+
     reverse_proxy localhost:3000
 }

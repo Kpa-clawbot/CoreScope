@@ -151,6 +151,10 @@ func main() {
 	if err := ensureNeighborEdgesTable(dbPath); err != nil {
 		log.Printf("[neighbor] warning: could not create neighbor_edges table: %v", err)
 	}
+	// Ensure monthly observer snapshot table exists
+	if err := database.EnsureMonthlySnapshotTable(); err != nil {
+		log.Printf("[monthly-snapshot] warning: could not create snapshot table: %v", err)
+	}
 	// Add resolved_path column if missing.
 	// NOTE on startup ordering (review item #10): ensureResolvedPathColumn runs AFTER
 	// OpenDB/detectSchema, so db.hasResolvedPath will be false on first run with a
@@ -234,6 +238,17 @@ func main() {
 	// WebSocket endpoint
 	router.HandleFunc("/ws", hub.ServeWS)
 
+	// Firmware file downloads — served from <data-dir>/firmware/
+	firmwareDir := filepath.Join(filepath.Dir(resolvedDB), "firmware")
+	if err := os.MkdirAll(firmwareDir, 0755); err != nil {
+		log.Printf("[firmware] warning: could not create firmware dir %s: %v", firmwareDir, err)
+	} else {
+		log.Printf("[firmware] serving downloads from %s", firmwareDir)
+	}
+	srv.firmwareDir = firmwareDir
+	fwFS := http.FileServer(http.Dir(firmwareDir))
+	router.PathPrefix("/firmware/").Handler(http.StripPrefix("/firmware/", fwFS))
+
 	// Static files + SPA fallback
 	absPublic, _ := filepath.Abs(publicDir)
 	if _, err := os.Stat(absPublic); err == nil {
@@ -274,6 +289,9 @@ func main() {
 				}
 			}()
 			time.Sleep(1 * time.Minute)
+			if err := database.SnapshotMonthlyObservers(days); err != nil {
+				log.Printf("[monthly-snapshot] error: %v", err)
+			}
 			if n, err := database.PruneOldPackets(days); err != nil {
 				log.Printf("[prune] error: %v", err)
 			} else {
@@ -282,6 +300,9 @@ func main() {
 			for {
 				select {
 				case <-pruneTicker.C:
+					if err := database.SnapshotMonthlyObservers(days); err != nil {
+						log.Printf("[monthly-snapshot] error: %v", err)
+					}
 					if n, err := database.PruneOldPackets(days); err != nil {
 						log.Printf("[prune] error: %v", err)
 					} else {

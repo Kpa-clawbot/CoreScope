@@ -681,7 +681,7 @@ func (db *DB) GetPacketByHash(hash string) (map[string]interface{}, error) {
 
 
 // GetNodes returns filtered, paginated node list.
-func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortBy, region string) ([]map[string]interface{}, int, map[string]int, error) {
+func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortBy, region, scope string) ([]map[string]interface{}, int, map[string]int, error) {
 	var where []string
 	var args []interface{}
 
@@ -735,6 +735,11 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 		}
 	}
 
+	if scope != "" {
+		where = append(where, "scope = ?")
+		args = append(args, scope)
+	}
+
 	w := ""
 	if len(where) > 0 {
 		w = "WHERE " + strings.Join(where, " AND ")
@@ -755,7 +760,7 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 	var total int
 	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM nodes %s", w), args...).Scan(&total)
 
-	querySQL := fmt.Sprintf("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
+	querySQL := fmt.Sprintf("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, scope FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
 	qArgs := append(args, limit, offset)
 
 	rows, err := db.conn.Query(querySQL, qArgs...)
@@ -801,7 +806,7 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 
 // GetNodeByPubkey returns a single node.
 func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
-	rows, err := db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c FROM nodes WHERE public_key = ?", pubkey)
+	rows, err := db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, scope FROM nodes WHERE public_key = ?", pubkey)
 	if err != nil {
 		return nil, err
 	}
@@ -1488,14 +1493,44 @@ type MonthlyObserverEntry struct {
 }
 
 // GetObserverMonthlyTop returns the top N observers for the last completed calendar month.
-// If no completed month exists yet (e.g. the system was set up this month), it falls back
-// to the current month so something is always shown.
+// Reads from observer_monthly_snapshots for past months (survives packet pruning),
+// falling back to live observations for the current month when no snapshot exists.
 func (db *DB) GetObserverMonthlyTop(n int) ([]MonthlyObserverEntry, error) {
-	var rows *sql.Rows
-	var err error
-
-	// targetMonth: last completed month if data exists there, otherwise most recent month.
+	// Prefer last completed month from snapshots.
 	var targetMonth string
+	db.conn.QueryRow(`
+		SELECT MAX(month) FROM observer_monthly_snapshots
+		WHERE month < strftime('%Y-%m', 'now')`).Scan(&targetMonth)
+
+	if targetMonth != "" {
+		rows, err := db.conn.Query(`
+			SELECT month, observer_id, name, packet_count
+			FROM observer_monthly_snapshots
+			WHERE month = ?
+			ORDER BY packet_count DESC
+			LIMIT ?`, targetMonth, n)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var result []MonthlyObserverEntry
+		rank := 0
+		for rows.Next() {
+			var e MonthlyObserverEntry
+			if err := rows.Scan(&e.Month, &e.ObserverID, &e.Name, &e.PacketCount); err != nil {
+				continue
+			}
+			rank++
+			e.Rank = rank
+			result = append(result, e)
+		}
+		if len(result) > 0 {
+			return result, nil
+		}
+	}
+
+	// Fall back to live observations (current month or no snapshots yet).
+	var liveMonth string
 	if db.isV3 {
 		db.conn.QueryRow(`
 			SELECT COALESCE(
@@ -1504,7 +1539,7 @@ func (db *DB) GetObserverMonthlyTop(n int) ([]MonthlyObserverEntry, error) {
 				 WHERE strftime('%Y-%m', datetime(timestamp, 'unixepoch')) < strftime('%Y-%m', 'now')),
 				(SELECT MAX(strftime('%Y-%m', datetime(timestamp, 'unixepoch')))
 				 FROM observations)
-			)`).Scan(&targetMonth)
+			)`).Scan(&liveMonth)
 	} else {
 		db.conn.QueryRow(`
 			SELECT COALESCE(
@@ -1514,9 +1549,9 @@ func (db *DB) GetObserverMonthlyTop(n int) ([]MonthlyObserverEntry, error) {
 				 AND strftime('%Y-%m', datetime(timestamp, 'unixepoch')) < strftime('%Y-%m', 'now')),
 				(SELECT MAX(strftime('%Y-%m', datetime(timestamp, 'unixepoch')))
 				 FROM observations WHERE observer_id IS NOT NULL)
-			)`).Scan(&targetMonth)
+			)`).Scan(&liveMonth)
 	}
-	if targetMonth == "" {
+	if liveMonth == "" {
 		return nil, nil
 	}
 
@@ -1553,21 +1588,23 @@ func (db *DB) GetObserverMonthlyTop(n int) ([]MonthlyObserverEntry, error) {
 		WHERE rnk <= ?
 		ORDER BY cnt DESC`
 
+	var liveRows *sql.Rows
+	var err error
 	if db.isV3 {
-		rows, err = db.conn.Query(query, targetMonth, n)
+		liveRows, err = db.conn.Query(query, liveMonth, n)
 	} else {
-		rows, err = db.conn.Query(queryV2, targetMonth, n)
+		liveRows, err = db.conn.Query(queryV2, liveMonth, n)
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer liveRows.Close()
 
 	var result []MonthlyObserverEntry
 	rankByMonth := make(map[string]int)
-	for rows.Next() {
+	for liveRows.Next() {
 		var e MonthlyObserverEntry
-		if err := rows.Scan(&e.Month, &e.ObserverID, &e.Name, &e.PacketCount); err != nil {
+		if err := liveRows.Scan(&e.Month, &e.ObserverID, &e.Name, &e.PacketCount); err != nil {
 			continue
 		}
 		rankByMonth[e.Month]++
@@ -1730,13 +1767,13 @@ func scanPacketRow(rows *sql.Rows) map[string]interface{} {
 
 func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	var pk string
-	var name, role, lastSeen, firstSeen sql.NullString
+	var name, role, lastSeen, firstSeen, scope sql.NullString
 	var lat, lon sql.NullFloat64
 	var advertCount int
 	var batteryMv sql.NullInt64
 	var temperatureC sql.NullFloat64
 
-	if err := rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC); err != nil {
+	if err := rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &scope); err != nil {
 		return nil
 	}
 	m := map[string]interface{}{
@@ -1751,6 +1788,7 @@ func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 		"last_heard":             nullStr(lastSeen),
 		"hash_size":              nil,
 		"hash_size_inconsistent": false,
+		"scope":                  nullStr(scope),
 	}
 	if batteryMv.Valid {
 		m["battery_mv"] = int(batteryMv.Int64)
@@ -1796,6 +1834,112 @@ func nullFloat(nf sql.NullFloat64) interface{} {
 func nullInt(ni sql.NullInt64) interface{} {
 	if ni.Valid {
 		return int(ni.Int64)
+	}
+	return nil
+}
+
+// EnsureMonthlySnapshotTable creates observer_monthly_snapshots if it doesn't exist.
+func (db *DB) EnsureMonthlySnapshotTable() error {
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=10000", db.path)
+	rw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	rw.SetMaxOpenConns(1)
+	defer rw.Close()
+	_, err = rw.Exec(`CREATE TABLE IF NOT EXISTS observer_monthly_snapshots (
+		month       TEXT NOT NULL,
+		observer_id TEXT NOT NULL,
+		name        TEXT NOT NULL,
+		packet_count INTEGER NOT NULL,
+		PRIMARY KEY (month, observer_id)
+	)`)
+	return err
+}
+
+// SnapshotMonthlyObservers aggregates observation counts for any calendar month
+// whose data is about to be pruned (i.e. older than pruneDays). Existing rows
+// are updated so repeated runs are idempotent.
+func (db *DB) SnapshotMonthlyObservers(pruneDays int) error {
+	cutoffUnix := time.Now().UTC().AddDate(0, 0, -pruneDays).Unix()
+
+	// Find months that have data older than the cutoff — these will be lost on prune.
+	rows, err := db.conn.Query(`
+		SELECT DISTINCT strftime('%Y-%m', datetime(o.timestamp, 'unixepoch')) AS month
+		FROM observations o
+		WHERE o.timestamp < ?
+		AND o.timestamp IS NOT NULL`, cutoffUnix)
+	if err != nil {
+		return err
+	}
+	var months []string
+	for rows.Next() {
+		var m string
+		if rows.Scan(&m) == nil {
+			months = append(months, m)
+		}
+	}
+	rows.Close()
+
+	if len(months) == 0 {
+		return nil
+	}
+
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=10000", db.path)
+	rw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	rw.SetMaxOpenConns(1)
+	defer rw.Close()
+
+	for _, month := range months {
+		var aggRows *sql.Rows
+		if db.isV3 {
+			aggRows, err = db.conn.Query(`
+				SELECT obs.id, COALESCE(obs.name, obs.id), COUNT(*) AS cnt
+				FROM observations o
+				JOIN observers obs ON obs.rowid = o.observer_idx
+				WHERE strftime('%Y-%m', datetime(o.timestamp, 'unixepoch')) = ?
+				GROUP BY obs.id`, month)
+		} else {
+			aggRows, err = db.conn.Query(`
+				SELECT obs.id, COALESCE(obs.name, obs.id), COUNT(*) AS cnt
+				FROM observations o
+				JOIN observers obs ON obs.id = o.observer_id
+				WHERE o.observer_id IS NOT NULL
+				AND strftime('%Y-%m', datetime(o.timestamp, 'unixepoch')) = ?
+				GROUP BY obs.id`, month)
+		}
+		if err != nil {
+			log.Printf("[monthly-snapshot] query error for %s: %v", month, err)
+			continue
+		}
+		tx, err := rw.Begin()
+		if err != nil {
+			aggRows.Close()
+			continue
+		}
+		for aggRows.Next() {
+			var id, name string
+			var cnt int
+			if aggRows.Scan(&id, &name, &cnt) != nil {
+				continue
+			}
+			tx.Exec(`INSERT INTO observer_monthly_snapshots (month, observer_id, name, packet_count)
+				VALUES (?, ?, ?, ?)
+				ON CONFLICT(month, observer_id) DO UPDATE SET
+					name = excluded.name,
+					packet_count = excluded.packet_count`,
+				month, id, name, cnt)
+		}
+		aggRows.Close()
+		if err := tx.Commit(); err != nil {
+			tx.Rollback()
+			log.Printf("[monthly-snapshot] commit error for %s: %v", month, err)
+		} else {
+			log.Printf("[monthly-snapshot] saved snapshot for %s", month)
+		}
 	}
 	return nil
 }

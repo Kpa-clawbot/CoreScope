@@ -76,6 +76,7 @@
           <input type="text" id="homeSearch" placeholder="Search by node name or public key…" autocomplete="off" aria-label="Search nodes" role="combobox" aria-expanded="false" aria-owns="homeSuggest" aria-autocomplete="list" aria-activedescendant="">
           <div class="home-suggest" id="homeSuggest" role="listbox"></div>
         </div>
+        <button class="home-announcement-link" id="homeAnnouncementBtn">📢 Network Announcement</button>
       </section>
 
       <div class="home-section" id="myNodesSection" ${hasNodes ? '' : 'style="display:none"'}>
@@ -118,6 +119,15 @@
     setupSearch(container);
     if (hasNodes) loadMyNodes();
     loadFavorites();
+
+    const announcementBtn = document.getElementById('homeAnnouncementBtn');
+    if (announcementBtn) {
+      if (localStorage.getItem('meshcore-announcement-v1')) announcementBtn.classList.add('seen');
+      announcementBtn.addEventListener('click', () => {
+        announcementBtn.classList.add('seen');
+        if (typeof showSiteAnnouncement === 'function') showSiteAnnouncement();
+      });
+    }
 
     // Theme toggle
     const themeToggle = container.querySelector('#homeThemeToggle');
