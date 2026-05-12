@@ -533,14 +533,15 @@ async function run() {
     });
     if (!hash) { console.log('    ⏭️  Skipped (no undecrypted GRP_TXT packets found)'); return; }
     await page.goto(`${BASE}/#/packets/${hash}`, { waitUntil: 'domcontentloaded' });
-    // Wait for detail to render with actual content (not "Loading…")
+    // Wait for detail overlay to open and render content
     await page.waitForFunction(() => {
-      const panel = document.getElementById('pktRight');
-      if (!panel || panel.classList.contains('empty')) return false;
-      const text = panel.textContent;
+      const overlay = document.getElementById('pktDetailOverlay');
+      const body = document.getElementById('pktDetailBody');
+      if (!overlay || overlay.style.display === 'none') return false;
+      const text = (body || overlay).textContent;
       return text.length > 50 && !text.includes('Loading');
     }, { timeout: 8000 });
-    const detailHtml = await page.$eval('#pktRight', el => el.innerHTML);
+    const detailHtml = await page.$eval('#pktDetailBody, #pktDetailOverlay', el => el.innerHTML);
     const hasChannelHash = detailHtml.includes('Channel Hash') || detailHtml.includes('Ch 0x');
     assert(hasChannelHash, 'Undecrypted GRP_TXT detail should show "Channel Hash"');
   });
