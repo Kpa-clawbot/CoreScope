@@ -370,10 +370,10 @@ async function run() {
     await page.waitForSelector('table tbody tr', { timeout: 15000 });
     const rowsBefore = await page.$$('table tbody tr');
     assert(rowsBefore.length > 0, 'No packets visible');
-    // Use the specific filter input
-    const filterInput = await page.$('#packetFilterInput');
+    // Use the search/filter input
+    const filterInput = await page.$('#pktSearchInput');
     assert(filterInput, 'Packet filter input not found');
-    await filterInput.fill('type == ADVERT');
+    await filterInput.fill('ADVERT');
     // Client-side filter has input debounce (~250ms); wait for it to apply
     await page.waitForTimeout(500);
     // Verify filter was applied (count may differ)
