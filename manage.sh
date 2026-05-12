@@ -1590,7 +1590,7 @@ cmd_e2e() {
 
   # Build the Go server binary — use system go if available, else Docker
   info "Building Go server..."
-  GO_BIN=$(command -v go 2>/dev/null || find _tool/go -name "go" -type f 2>/dev/null | grep "bin/go$" | head -1)
+  GO_BIN=$(command -v go 2>/dev/null || find "$(pwd)/_tool/go" -name "go" -type f 2>/dev/null | grep "bin/go$" | head -1)
   if [ -n "$GO_BIN" ]; then
     (cd cmd/server && "$GO_BIN" build -o ../../corescope-server .) || {
       err "Go build failed."
