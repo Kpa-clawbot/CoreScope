@@ -428,7 +428,12 @@ func TestHandleMessageAdvertGeoFiltered(t *testing.T) {
 		topic:   "meshcore/SJC/obs1/packets",
 		payload: []byte(`{"raw":"` + rawHex + `"}`),
 	}
-	handleMessage(store, "test", source, msg, nil, &Config{GeoFilter: gf})
+	// Legacy silent-drop behavior is now opt-in via ForeignAdverts.Mode="drop"
+	// (#730). The new default — flag — is covered by foreign_advert_test.go.
+	handleMessage(store, "test", source, msg, nil, &Config{
+		GeoFilter:      gf,
+		ForeignAdverts: &ForeignAdvertConfig{Mode: "drop"},
+	})
 
 	// Geo-filtered adverts should not create nodes
 	var nodeCount int
@@ -436,7 +441,7 @@ func TestHandleMessageAdvertGeoFiltered(t *testing.T) {
 		t.Fatal(err)
 	}
 	if nodeCount != 0 {
-		t.Errorf("nodes=%d, want 0 (geo-filtered advert should not create node)", nodeCount)
+		t.Errorf("nodes=%d, want 0 (geo-filtered advert in drop mode should not create node)", nodeCount)
 	}
 }
 

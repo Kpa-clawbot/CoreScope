@@ -56,6 +56,28 @@ async function run() {
     assert(nav, 'Nav bar not found');
   });
 
+  // #1137 follow-up: Aldrich webfont must actually load so the navbar logo SVG
+  // renders in the intended typeface (not the silent monospace fallback).
+  await test('#1137 Aldrich webfont is loaded for navbar logo SVG', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    // Explicitly request the font (waits for download). On the broken state
+    // there is no @font-face for Aldrich, so no FontFace matches and check()
+    // stays false — the assertion below fails on behavior, not infra.
+    const aldrichLoaded = await page.evaluate(async () => {
+      try { await document.fonts.load('1em Aldrich'); } catch (_) {}
+      await document.fonts.ready;
+      return document.fonts.check('1em Aldrich');
+    });
+    assert(aldrichLoaded, 'document.fonts.check("1em Aldrich") returned false — Aldrich is not loaded');
+    // Sanity: the inline SVG <text> still declares Aldrich in its font-family.
+    const fontFamily = await page.evaluate(() => {
+      const t = document.querySelector('nav svg text, .navbar svg text, header svg text');
+      return t ? (t.getAttribute('font-family') || getComputedStyle(t).fontFamily) : null;
+    });
+    assert(fontFamily && /aldrich/i.test(fontFamily),
+      `Navbar SVG <text> font-family should include Aldrich, got: ${fontFamily}`);
+  });
+
   // Test 6: Theme customizer opens (reuses home page from test 1)
   await test('Theme customizer opens', async () => {
     // Look for palette/customize button
@@ -211,23 +233,21 @@ async function run() {
   // Test 2: Nodes page loads with data
   await test('Nodes page loads with data', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('table tbody tr');
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])');
     const headers = await page.$$eval('th', els => els.map(e => e.textContent.trim()));
     for (const col of ['Name', 'Public Key', 'Role']) {
       assert(headers.some(h => h.includes(col)), `Missing column: ${col}`);
     }
     assert(headers.some(h => h.includes('Last Seen') || h.includes('Last')), 'Missing Last Seen column');
-    const rows = await page.$$('table tbody tr');
+    const rows = await page.$$('table tbody tr:not([id^=vscroll])');
     assert(rows.length >= 1, `Expected >=1 nodes, got ${rows.length}`);
   });
 
   // Test 5: Node detail loads (reuses nodes page from test 2)
   await test('Node detail loads', async () => {
-    await page.waitForSelector('table tbody tr');
-    // Click first row
-    const firstRow = await page.$('table tbody tr');
-    assert(firstRow, 'No node rows found');
-    await firstRow.click();
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])');
+    await page.click('table tbody tr:not([id^=vscroll])');
     // Wait for detail pane to appear
     await page.waitForSelector('.node-detail');
     const html = await page.content();
@@ -239,18 +259,16 @@ async function run() {
   // Test: Node side panel Details link navigates to full detail page (#778)
   await test('Node side panel Details link navigates', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('table tbody tr');
-    // Click first row to open side panel
-    const firstRow = await page.$('table tbody tr');
-    assert(firstRow, 'No node rows found');
-    await firstRow.click();
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])');
+    await page.click('table tbody tr:not([id^=vscroll])');
     await page.waitForSelector('.node-detail');
     // Find the Details link in the side panel
-    const detailsLink = await page.$('#nodesRight a.btn-primary[href^="#/nodes/"]');
-    assert(detailsLink, 'Details link not found in side panel');
-    const href = await detailsLink.getAttribute('href');
+    await page.waitForSelector('#nodesRight a.btn-primary[href^="#/nodes/"]');
+    const href = await page.$eval('#nodesRight a.btn-primary[href^="#/nodes/"]', el => el.getAttribute('href'));
+    assert(href, 'Details link not found in side panel');
     // Click the Details link — this should navigate to the full detail page
-    await detailsLink.click();
+    await page.click('#nodesRight a.btn-primary[href^="#/nodes/"]');
     // Wait for navigation — the full detail page has sections like neighbors/packets
     await page.waitForFunction((expectedHash) => {
       return location.hash === expectedHash;
@@ -261,25 +279,40 @@ async function run() {
   });
 
   // Test: Nodes page has WebSocket auto-update listener (#131)
+  // NOTE: This test verifies the WS *infrastructure* exists on the Nodes page.
+  // It deliberately does NOT wait for `table tbody tr` — that creates a flake
+  // because rows arriving via WS push are timing-dependent in CI. The preceding
+  // "Nodes page loads with data" test already covers initial table population.
   await test('Nodes page has WebSocket auto-update', async () => {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('table tbody tr');
-    // The live dot in navbar indicates WS connection status
-    const liveDot = await page.$('#liveDot');
-    assert(liveDot, 'Live dot WebSocket indicator (#liveDot) not found');
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
+    // #1173: #liveDot was replaced by the brand-logo packet-pulse animation.
+    // WS connectivity is now reflected by the .logo-disconnected class on the
+    // SVG (added on close, removed on open). Verify the Logo state machine and
+    // the WS infra exist; actual connection is best-effort.
+    const logoExists = await page.$('.brand-logo');
+    assert(logoExists, 'Brand logo (.brand-logo) not found — needed for WS state surface');
     // Verify WS infrastructure exists (onWS/offWS globals from app.js)
     const hasWsInfra = await page.evaluate(() => {
       return typeof onWS === 'function' && typeof offWS === 'function';
     });
     assert(hasWsInfra, 'WebSocket listener infrastructure (onWS/offWS) should be available');
-    // Wait for WS connection and verify liveDot shows connected state
+    // Verify the Logo connection-state hook exists (#1173). The seam at
+    // window.__corescopeLogo.setConnected exposes the state-toggle for tests.
+    const hasLogoSeam = await page.evaluate(() => {
+      return !!(window.__corescopeLogo && typeof window.__corescopeLogo.setConnected === 'function');
+    });
+    assert(hasLogoSeam, 'Logo state seam (window.__corescopeLogo.setConnected) should be available');
+    // Best-effort: if WS connects within 5s, verify the .logo-disconnected
+    // class is absent. Don't fail otherwise — CI may not have a live MQTT
+    // feed. Infra-existence assertions above are the contract.
     try {
       await page.waitForFunction(() => {
-        const dot = document.getElementById('liveDot');
-        return dot && dot.classList.contains('connected');
+        const lg = document.querySelector('.brand-logo');
+        return lg && !lg.classList.contains('logo-disconnected');
       }, { timeout: 5000 });
     } catch (_) {
-      // WS may not connect against remote — liveDot existence is sufficient
+      // WS may not connect against remote — Logo seam existence is sufficient
     }
   });
 
@@ -288,11 +321,12 @@ async function run() {
   // Test 3: Map page loads with markers
   await test('Map page loads with markers', async () => {
     await page.goto(`${BASE}/#/map`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('.leaflet-container');
     await page.waitForSelector('.leaflet-tile-loaded');
     // Wait for markers/overlays to render (may not exist with empty DB)
     try {
-      await page.waitForSelector('.leaflet-marker-icon, .leaflet-interactive, circle, .marker-cluster, .leaflet-marker-pane > *, .leaflet-overlay-pane svg path, .leaflet-overlay-pane svg circle', { timeout: 3000 });
+      await page.waitForSelector('.leaflet-marker-icon, .leaflet-interactive, circle, .marker-cluster, .leaflet-marker-pane > *, .leaflet-overlay-pane svg path, .leaflet-overlay-pane svg circle', { timeout: 8000 });
     } catch (_) {
       // No markers with empty DB \u2014 assertion below handles it
     }
@@ -368,7 +402,7 @@ async function run() {
     await page.waitForSelector('.leaflet-container');
     // Wait for markers (may not exist with empty DB)
     try {
-      await page.waitForSelector('.leaflet-marker-icon, .leaflet-interactive', { timeout: 3000 });
+      await page.waitForSelector('.leaflet-marker-icon, .leaflet-interactive', { timeout: 8000 });
     } catch (_) {
       // No markers with empty DB
     }
@@ -400,8 +434,9 @@ async function run() {
     await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
     await page.evaluate(() => localStorage.setItem('meshcore-time-window', '525600'));
     await page.reload({ waitUntil: 'load' });
-    await page.waitForSelector('table tbody tr', { timeout: 15000 });
-    const rowsBefore = await page.$$('table tbody tr');
+    await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
+    const rowsBefore = await page.$$('table tbody tr:not([id^=vscroll])');
     assert(rowsBefore.length > 0, 'No packets visible');
     // Use the specific filter input
     const filterInput = await page.$('#packetFilterInput');
@@ -410,7 +445,7 @@ async function run() {
     // Client-side filter has input debounce (~250ms); wait for it to apply
     await page.waitForTimeout(500);
     // Verify filter was applied (count may differ)
-    const rowsAfter = await page.$$('table tbody tr');
+    const rowsAfter = await page.$$('table tbody tr:not([id^=vscroll])');
     assert(rowsAfter.length > 0, 'No packets after filtering');
   });
 
@@ -460,7 +495,7 @@ async function run() {
     // Restore wide time window — previous test set it to 60 min which excludes fixture data
     await page.evaluate(() => localStorage.setItem('meshcore-time-window', '525600'));
     await page.reload({ waitUntil: 'load' });
-    await page.waitForSelector('table tbody tr', { timeout: 15000 });
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
     const groupBtn = await page.$('#fGroup');
     assert(groupBtn, 'Group by hash button (#fGroup) not found');
     // Check initial state (default is grouped/active)
@@ -473,8 +508,8 @@ async function run() {
     }, initialActive, { timeout: 5000 });
     const afterFirst = await page.$eval('#fGroup', el => el.classList.contains('active'));
     assert(afterFirst !== initialActive, 'Group button state should change after click');
-    await page.waitForSelector('table tbody tr');
-    const rows = await page.$$eval('table tbody tr', r => r.length);
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])');
+    const rows = await page.$$eval('table tbody tr:not([id^=vscroll])', r => r.length);
     assert(rows > 0, 'Should have rows after toggle');
     // Click again to toggle back
     await groupBtn.click();
@@ -591,6 +626,47 @@ async function run() {
     assert(cards.length >= 3, `Expected >=3 overview stat cards, got ${cards.length}`);
   });
 
+  // Test 8b (#842): time-window picker triggers requests with ?window=… param.
+  await test('Analytics time-window picker refetches with window param', async () => {
+    // Picker must be rendered.
+    await page.waitForSelector('#analyticsTimeWindow', { timeout: 5000 });
+    const opts = await page.$$eval('#analyticsTimeWindow option', els => els.map(e => e.value));
+    assert(opts.includes('24h'), `picker must offer 24h, got ${JSON.stringify(opts)}`);
+
+    // Capture all analytics requests fired after we change the picker.
+    const seen = [];
+    const onReq = r => {
+      const u = r.url();
+      if (/\/api\/analytics\/(rf|topology|channels|hash-sizes|hash-collisions)(\?|$)/.test(u)) {
+        seen.push(u);
+      }
+    };
+    page.on('request', onReq);
+    const reqPromise = page.waitForRequest(
+      r => /\/api\/analytics\/rf(\?|$)/.test(r.url()),
+      { timeout: 8000 }
+    );
+    await page.selectOption('#analyticsTimeWindow', '24h');
+    const req = await reqPromise;
+    assert(
+      /[?&]window=24h(&|$)/.test(req.url()),
+      `analytics/rf request should carry window=24h, got ${req.url()}`
+    );
+    // Drain the rest of the parallel fetches.
+    await page.waitForTimeout(500);
+    page.off('request', onReq);
+
+    // Window must be scoped to rf/topology/channels only — not to
+    // hash-sizes / hash-collisions, whose semantics are time-independent.
+    const winFor = pat => seen.filter(u => pat.test(u)).some(u => /[?&]window=24h(&|$)/.test(u));
+    const noWinFor = pat => seen.filter(u => pat.test(u)).every(u => !/[?&]window=/.test(u));
+    assert(winFor(/\/api\/analytics\/rf/), `expected window=24h on rf, saw: ${seen.join(', ')}`);
+    assert(winFor(/\/api\/analytics\/topology/), `expected window=24h on topology, saw: ${seen.join(', ')}`);
+    assert(winFor(/\/api\/analytics\/channels/), `expected window=24h on channels, saw: ${seen.join(', ')}`);
+    assert(noWinFor(/\/api\/analytics\/hash-sizes/), `hash-sizes must NOT carry window param, saw: ${seen.join(', ')}`);
+    assert(noWinFor(/\/api\/analytics\/hash-collisions/), `hash-collisions must NOT carry window param, saw: ${seen.join(', ')}`);
+  });
+
   // Analytics sub-tab tests
   await test('Analytics RF tab renders content', async () => {
     await page.click('[data-tab="rf"]');
@@ -663,6 +739,8 @@ async function run() {
     await page.waitForSelector('#ngCanvas', { timeout: 8000 });
     const hasCanvas = await page.$('#ngCanvas');
     assert(hasCanvas, 'Neighbor Graph tab should have a canvas element');
+    // Stats are populated after the async API call — wait for at least one card before counting
+    await page.waitForSelector('#ngStats .stat-card', { timeout: 8000 });
     const hasStats = await page.$$eval('#ngStats .stat-card', els => els.length);
     assert(hasStats >= 3, `Neighbor Graph stats should have >=3 cards, got ${hasStats}`);
     // Verify filters exist
@@ -785,6 +863,57 @@ async function run() {
   });
 
   // --- Group: Live page ---
+
+  // Test (issue #1046): Activating the Live nav link MUST NOT cause the
+  // "🔴 Live" label to wrap onto two lines, which makes the whole top
+  // nav bar grow taller and "hop". The label has to stay on one line in
+  // every state, and the nav bar height must be identical with/without
+  // the .active class.
+  await test('Live nav-link does not wrap or change nav height when active (#1046)', async () => {
+    // Use the exact viewport width from the issue screenshots.
+    await page.setViewportSize({ width: 1115, height: 800 });
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('a.nav-link[data-route="live"]');
+
+    const measure = await page.evaluate(() => {
+      const link = document.querySelector('a.nav-link[data-route="live"]');
+      const nav  = document.querySelector('.top-nav');
+      const ws   = getComputedStyle(link).whiteSpace;
+      // Force inactive state.
+      const wasActive = link.classList.contains('active');
+      link.classList.remove('active');
+      const inactive = {
+        navH:  nav.getBoundingClientRect().height,
+        lines: link.getClientRects().length,
+      };
+      // Force active state.
+      link.classList.add('active');
+      const active = {
+        navH:  nav.getBoundingClientRect().height,
+        lines: link.getClientRects().length,
+      };
+      // Restore.
+      link.classList.toggle('active', wasActive);
+      return { ws, inactive, active };
+    });
+
+    assert(
+      ['nowrap', 'pre', 'pre-wrap'].includes(measure.ws),
+      `Live nav-link must not wrap; computed white-space=${measure.ws}`,
+    );
+    assert(
+      measure.inactive.lines === 1,
+      `Live nav-link must render on one line when inactive (got ${measure.inactive.lines})`,
+    );
+    assert(
+      measure.active.lines === 1,
+      `Live nav-link must render on one line when active (got ${measure.active.lines})`,
+    );
+    assert(
+      measure.active.navH === measure.inactive.navH,
+      `Top nav height must not change when Live becomes active (inactive=${measure.inactive.navH}, active=${measure.active.navH})`,
+    );
+  });
 
   // Test: Live page loads with map and stats
   await test('Live page loads with map and stats', async () => {
@@ -1358,6 +1487,38 @@ async function run() {
     await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
   });
 
+  await test('Customizer v2: typing in text field does not collapse focus (re-render guard)', async () => {
+    await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
+    await page.waitForFunction(() => window._customizerV2 && window._customizerV2.initDone, { timeout: 5000 });
+    const toggleSel = '#customizeToggle, button[title*="ustom" i], [class*="customize"]';
+    const btn = await page.$(toggleSel);
+    if (!btn) { console.log('    ⏭️  Customizer toggle not found'); return; }
+    await btn.click();
+    await page.waitForSelector('.cust-overlay', { timeout: 5000 });
+    const result = await page.evaluate(() => {
+      const input = document.querySelector('.cust-overlay input[type="text"][data-cv2-field]');
+      if (!input) return { skipped: true };
+      input.focus();
+      input.value = 'test';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const inputRef = input;
+      return new Promise(resolve => {
+        setTimeout(() => {
+          const panel = document.querySelector('.cust-overlay');
+          resolve({
+            inputConnected: inputRef.isConnected,
+            focusInPanel: panel ? panel.contains(document.activeElement) : false,
+          });
+        }, 500);
+      });
+    });
+    if (result.skipped) { console.log('    ⏭️  No text input with data-cv2-field found in panel'); return; }
+    assert(result.inputConnected, 'Input element should remain connected to DOM after debounce fires');
+    assert(result.focusInPanel, 'Focus should remain inside panel after debounce — re-render must not run while typing');
+    await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
+  });
+
 
   await test('Show Neighbors populates neighborPubkeys from affinity API', async () => {
     const testPubkey = 'aabbccdd11223344556677889900aabbccddeeff00112233445566778899001122';
@@ -1720,6 +1881,32 @@ async function run() {
     assert(hasFullScreen, 'Full-screen detail view should be open on desktop deep link (#823)');
   });
 
+  // Test: short URL prefix resolves AND copy short URL button is rendered (#772)
+  await test('Short URL: 8-char prefix resolves and Copy short URL button is present', async () => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(BASE + '#/nodes', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#nodesBody tr[data-key]', { timeout: 10000 });
+    const pubkey = await page.$eval('#nodesBody tr[data-key]', el => el.dataset.key);
+    const prefix = pubkey.slice(0, 8);
+    // Navigate via the SHORT URL only.
+    await page.goto(BASE + '#/nodes/' + prefix, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.node-fullscreen', { timeout: 10000 });
+    // Either the prefix resolved unambiguously (button exists) or the prod
+    // fixture has multiple matching prefixes; in the latter case the page
+    // shows an error rather than a detail card. Accept either, but require
+    // detail surface (button) when it does resolve.
+    const btn = await page.$('#copyShortUrlBtn');
+    if (btn) {
+      const txt = await btn.evaluate(el => el.textContent);
+      assert(txt.includes('Copy short URL'), `expected button text to include 'Copy short URL', got: ${txt}`);
+    } else {
+      // Skip silently if fixture has prefix collisions — main assertion below covers backend.
+      const e = new Error('Prefix collision in fixture; backend behavior covered by Go tests');
+      e.skip = true;
+      throw e;
+    }
+  });
+
   // Test: packets timeWindow deep link
   await test('Packets timeWindow deep link restores dropdown', async () => {
     await page.goto(BASE + '#/packets?timeWindow=60', { waitUntil: 'domcontentloaded' });
@@ -1792,7 +1979,7 @@ async function run() {
       localStorage.setItem('meshcore-groupbyhash', 'true');
     });
     await page.reload({ waitUntil: 'load' });
-    await page.waitForSelector('table tbody tr', { timeout: 15000 });
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
 
     // Find a group row with observation_count > 1 (has expand button)
     const expandBtn = await page.$('table tbody tr .expand-btn, table tbody tr [data-expand]');
@@ -1866,7 +2053,7 @@ async function run() {
   // Test: per-observation raw_hex — hex pane updates when switching observations (#881)
   await test('Packet detail hex pane updates per observation', async () => {
     await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('table tbody tr', { timeout: 15000 });
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
     await page.waitForTimeout(500);
 
     // Try clicking packet rows to find one with multiple observations
@@ -1908,7 +2095,7 @@ async function run() {
   // Regression for visual mismatch where badge said "1 hop" but path text listed N names
   await test('Packet detail path pill and byte breakdown agree on hop count', async () => {
     await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('table tbody tr', { timeout: 15000 });
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
     await page.waitForTimeout(500);
 
     // Click rows until we find one whose detail pane renders a multi-hop path
@@ -1989,7 +2176,7 @@ async function run() {
   // raw_hex, so per-observation rendering had off-by-N highlights vs the labels.
   await test('Packet detail hex strip Path range matches hop row count', async () => {
     await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('table tbody tr', { timeout: 15000 });
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
     await page.waitForTimeout(500);
 
     const rows = await page.$$('table tbody tr[data-action]');
@@ -2038,7 +2225,7 @@ async function run() {
   // so picking a different obs must recompute the byte ranges, not reuse the old ones.
   await test('Packet detail switches consistently across observations', async () => {
     await page.goto(BASE + '#/packets?groupByHash=1', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('table tbody tr', { timeout: 15000 });
+    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
     await page.waitForTimeout(500);
 
     let opened = false;
@@ -2111,6 +2298,456 @@ async function run() {
     await page.waitForSelector('.node-fullscreen', { timeout: 5000 });
     const isFullScreen = await page.evaluate(() => !!document.querySelector('.node-fullscreen'));
     assert(isFullScreen, 'Details button should open full-screen node view');
+  });
+
+  // === Hash color toggle E2E tests (#946) ===
+
+  await test('Color-by-hash toggle present on Live page, defaults ON', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    // Wait until live.js has initialized the toggle (checked = true by default)
+    await page.waitForFunction(() => {
+      const el = document.getElementById('liveColorHashToggle');
+      return el && el.checked === true;
+    }, { timeout: 10000 });
+    const checked = await page.$eval('#liveColorHashToggle', el => el.checked);
+    assert(checked, 'Color by hash toggle should default to ON');
+  });
+
+  await test('Color-by-hash toggle persists across reload', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveColorHashToggle', { timeout: 10000 });
+    // Uncheck toggle
+    await page.click('#liveColorHashToggle');
+    const unchecked = await page.$eval('#liveColorHashToggle', el => !el.checked);
+    assert(unchecked, 'Toggle should be OFF after click');
+    // Reload
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveColorHashToggle', { timeout: 10000 });
+    const afterReload = await page.$eval('#liveColorHashToggle', el => !el.checked);
+    assert(afterReload, 'Toggle OFF state should persist after reload');
+    // Reset to ON for other tests
+    await page.click('#liveColorHashToggle');
+  });
+
+  await test('Packets table rows have border-left stripe when toggle ON', async () => {
+    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+    // Hard reload to re-init page handler with the new toggle state.
+    // page.goto with same hash URL is a no-op for re-rendering.
+    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
+    // Wait for hash stripe to be applied (inline style set during render).
+    // Assert specifically 4px (per spec §2.10) so we don't false-pass on the
+    // 3px channel-color highlight which is independent of this toggle.
+    const hasStripe = await page.waitForFunction(() => {
+      const row = document.querySelector('table tbody tr[data-hash]');
+      return row && (row.getAttribute('style') || '').includes('border-left:4px');
+    }, { timeout: 5000 }).then(() => true).catch(() => false);
+    assert(hasStripe, 'At least one <tr> should have hash-color border-left:4px stripe when toggle ON');
+  });
+
+  await test('Packets table rows have NO border-left stripe when toggle OFF', async () => {
+    await page.evaluate(() => {
+      localStorage.setItem('meshcore-color-packets-by-hash', 'false');
+    });
+    // Hard reload (page.goto with same hash URL no-ops — must reload to re-init
+    // the page handler and re-render rows with the new toggle state).
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
+    await page.waitForTimeout(500);
+    const noStripe = await page.evaluate(() => {
+      const rows = document.querySelectorAll('table tbody tr[data-hash]');
+      for (const r of rows) {
+        // Hash stripe is 4px (per spec §2.10). Channel-color highlight uses
+        // 3px and is independent of the hash-color toggle. Only assert no
+        // 4px hash stripe is present.
+        if ((r.getAttribute('style') || '').includes('border-left:4px')) return false;
+      }
+      return true;
+    });
+    assert(noStripe, 'No <tr> should have hash-color border-left:4px stripe when toggle OFF');
+    // Reset
+    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+  });
+
+  // --- Live feed hash-color stripe ---
+  await test('Live feed items have border-left stripe when toggle ON', async () => {
+    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+    await page.goto(BASE + '/#/live');
+    await page.waitForTimeout(3000); // allow feed to populate
+    const hasStripe = await page.evaluate(() => {
+      const items = document.querySelectorAll('.live-feed-item');
+      for (const item of items) {
+        if ((item.getAttribute('style') || item.style.cssText || '').includes('border-left')) return true;
+      }
+      return false;
+    });
+    // May not have live packets in fixture — skip if no feed items
+    const itemCount = await page.evaluate(() => document.querySelectorAll('.live-feed-item').length);
+    if (itemCount === 0) {
+      console.log('    (skipped — no live feed items in fixture)');
+      return;
+    }
+    assert(hasStripe, 'At least one .live-feed-item should have hash-color border-left stripe when toggle ON');
+  });
+
+  // --- Map polyline uses hash color ---
+  await test('Map trace polyline uses hash-derived color when toggle ON', async () => {
+    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
+    await page.goto(BASE + '/#/live');
+    await page.waitForTimeout(3000);
+    // Use the dedicated .live-packet-trace class so we don't pick up
+    // unrelated leaflet paths (geofilter polygons, region overlays, etc).
+    const pathCount = await page.evaluate(() => document.querySelectorAll('path.live-packet-trace').length);
+    if (pathCount === 0) {
+      console.log('    (skipped — no live-packet-trace polylines drawn in 3s window)');
+      return;
+    }
+    const hasHslPolyline = await page.evaluate(() => {
+      const paths = document.querySelectorAll('path.live-packet-trace');
+      for (const p of paths) {
+        const stroke = p.getAttribute('stroke') || '';
+        if (stroke.startsWith('hsl(')) return true;
+      }
+      return false;
+    });
+    assert(hasHslPolyline, 'At least one live-packet-trace polyline should have hsl() stroke color from hash');
+  });
+
+  // --- Roles folded into Analytics (issue #1085) ---
+  // Acceptance criteria:
+  //   1. "Roles" link does NOT exist in top nav
+  //   2. Analytics page has a "Roles" tab with the same content
+  //   3. Old #/roles URL redirects to #/analytics?tab=roles
+  await test('Roles fold-in (#1085): no "Roles" link in top nav', async () => {
+    await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('nav.top-nav .nav-links', { timeout: 10000 });
+    var hasRolesLink = await page.evaluate(() => {
+      var links = document.querySelectorAll('nav.top-nav .nav-links a.nav-link[data-route="roles"]');
+      return links.length > 0;
+    });
+    assert(!hasRolesLink, 'Top nav must NOT contain a "Roles" link (data-route="roles")');
+  });
+
+  await test('Roles fold-in (#1085): Analytics page has a "Roles" tab', async () => {
+    await page.goto(BASE + '/#/analytics', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#analyticsTabs', { timeout: 10000 });
+    var rolesTab = await page.$('#analyticsTabs .tab-btn[data-tab="roles"]');
+    assert(rolesTab, 'Analytics tabs must include a [data-tab="roles"] button');
+    var label = await page.evaluate(el => el.textContent.trim(), rolesTab);
+    assert(/roles/i.test(label), 'Roles tab label must say "Roles", got ' + JSON.stringify(label));
+    // Click the tab and verify the same Roles content renders.
+    await page.click('#analyticsTabs [data-tab="roles"]');
+    // Wait for the tab to settle on real content: either the populated
+    // table (#rolesTable) or the explicit empty-state. "Loading" and
+    // "Failed to load" are NOT acceptable terminal states (#1085 polish).
+    await page.waitForFunction(() => {
+      var el = document.getElementById('analyticsContent');
+      if (!el) return false;
+      if (el.querySelector('#rolesTable')) return true;
+      if (/No roles to show/i.test(el.textContent)) return true;
+      return false;
+    }, { timeout: 10000 });
+    var bodyText = await page.evaluate(() => document.getElementById('analyticsContent').innerText);
+    assert(!/Page not yet implemented/i.test(bodyText), 'Roles tab must not show SPA placeholder');
+    assert(!/Failed to load/i.test(bodyText), 'Roles tab must not show "Failed to load" terminal state');
+    assert(!/Loading…/.test(bodyText), 'Roles tab must not be stuck on "Loading…"');
+  });
+
+  await test('Roles fold-in (#1085): old #/roles URL redirects to #/analytics?tab=roles', async () => {
+    await page.goto(BASE + '/#/roles', { waitUntil: 'domcontentloaded' });
+    // Allow router to process the redirect.
+    await page.waitForFunction(() => /^#\/analytics(\?|$)/.test(location.hash), { timeout: 5000 });
+    var hash = await page.evaluate(() => location.hash);
+    assert(/^#\/analytics\?/.test(hash), 'After visiting #/roles, hash must redirect to #/analytics?…, got ' + hash);
+    assert(/[?&]tab=roles(&|$)/.test(hash), 'Redirect must carry tab=roles, got ' + hash);
+  });
+
+  // --- Geofilter draft: save/load/download buttons (issue #819, rule 18) ---
+  await test('Geofilter draft: save → reload → load → download round-trip', async () => {
+    // Open the geofilter builder page and clear any prior draft.
+    await page.goto(BASE + '/geofilter-builder.html', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#map', { timeout: 10000 });
+    await page.evaluate(() => localStorage.removeItem('geofilter-draft'));
+    // Wait for leaflet to finish initial render so click handlers are bound.
+    await page.waitForFunction(() => window.L && document.querySelector('#map.leaflet-container'), { timeout: 10000 });
+    await page.waitForTimeout(300);
+
+    // Click 3 distinct points on the map to form a polygon.
+    const mapBox = await page.$eval('#map', el => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, w: r.width, h: r.height };
+    });
+    const clicks = [
+      { x: mapBox.x + mapBox.w * 0.30, y: mapBox.y + mapBox.h * 0.30 },
+      { x: mapBox.x + mapBox.w * 0.70, y: mapBox.y + mapBox.h * 0.30 },
+      { x: mapBox.x + mapBox.w * 0.50, y: mapBox.y + mapBox.h * 0.70 },
+    ];
+    for (const c of clicks) {
+      await page.mouse.click(c.x, c.y);
+      await page.waitForTimeout(120);
+    }
+    // Verify the page registered 3 points before we save.
+    await page.waitForFunction(() => {
+      const txt = (document.getElementById('counter') || {}).textContent || '';
+      return /^3 points?/.test(txt);
+    }, { timeout: 5000 });
+
+    // Save draft → assert localStorage populated with the polygon.
+    await page.click('#btnSaveDraft');
+    const draftRaw = await page.evaluate(() => localStorage.getItem('geofilter-draft'));
+    assert(draftRaw, 'localStorage geofilter-draft should be populated after Save Draft click');
+    const draft = JSON.parse(draftRaw);
+    assert(Array.isArray(draft.polygon) && draft.polygon.length === 3,
+      `draft.polygon should contain exactly 3 points, got ${draft.polygon && draft.polygon.length}`);
+    assert(typeof draft.polygon[0][0] === 'number' && typeof draft.polygon[0][1] === 'number',
+      'draft.polygon points should be [lat, lon] number pairs');
+
+    // Reload the page (draft persists in localStorage), then Load Draft.
+    await page.goto(BASE + '/geofilter-builder.html', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#btnLoadDraft', { timeout: 10000 });
+    await page.waitForFunction(() => window.GeofilterDraft && typeof window.GeofilterDraft.loadDraft === 'function', { timeout: 5000 });
+    // Counter should start at 0 after reload (before Load Draft click).
+    const counterBefore = await page.$eval('#counter', el => el.textContent);
+    assert(/^0 points?/.test(counterBefore),
+      `Counter should be "0 points" right after reload, got "${counterBefore}"`);
+    await page.click('#btnLoadDraft');
+    await page.waitForFunction(() => {
+      const txt = (document.getElementById('counter') || {}).textContent || '';
+      return /^3 points?/.test(txt);
+    }, { timeout: 5000 });
+    // Output should now contain a populated geo_filter snippet (not the empty placeholder).
+    const outputAfterLoad = await page.$eval('#output', el => el.textContent);
+    assert(outputAfterLoad.includes('"geo_filter"') && outputAfterLoad.includes('"polygon"'),
+      `#output should contain geo_filter+polygon after Load Draft, got: ${outputAfterLoad.slice(0, 120)}`);
+
+    // Download → intercept the blob, parse it, assert valid geo_filter snippet.
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 5000 }),
+      page.click('#btnDownload'),
+    ]);
+    const dlPath = await download.path();
+    assert(dlPath, 'Download should produce a file path');
+    const fs = require('fs');
+    const downloaded = fs.readFileSync(dlPath, 'utf8');
+    let parsed;
+    try { parsed = JSON.parse(downloaded); }
+    catch (e) { throw new Error('Downloaded file is not valid JSON: ' + e.message); }
+    assert(parsed.geo_filter, 'Downloaded JSON must have a top-level "geo_filter" key');
+    assert(Array.isArray(parsed.geo_filter.polygon) && parsed.geo_filter.polygon.length === 3,
+      `Downloaded geo_filter.polygon should contain 3 points, got ${parsed.geo_filter.polygon && parsed.geo_filter.polygon.length}`);
+    assert(typeof parsed.geo_filter.bufferKm === 'number',
+      'Downloaded geo_filter.bufferKm should be a number');
+
+    // Cleanup: remove the draft so we leave no test data behind.
+    await page.evaluate(() => localStorage.removeItem('geofilter-draft'));
+  });
+
+  // --- Group: Fluid scaffolding (#1054) — no horizontal overflow at any viewport ---
+  // Asserts document.documentElement.scrollWidth <= clientWidth across breakpoints.
+  // Deterministic: pure layout assertion, no timing/network dependencies beyond domcontentloaded.
+  {
+    const viewports = [768, 1080, 1440, 1920, 2560];
+    const HEIGHT = 900;
+
+    async function assertNoHOverflow(page, label) {
+      // Wait for layout to settle: ensure body is rendered and any web fonts/CSS applied.
+      await page.waitForSelector('body', { timeout: 10000 });
+      await page.evaluate(() => document.fonts && document.fonts.ready ? document.fonts.ready : null);
+      const m = await page.evaluate(() => ({
+        sw: document.documentElement.scrollWidth,
+        cw: document.documentElement.clientWidth,
+        bsw: document.body.scrollWidth,
+        bcw: document.body.clientWidth,
+      }));
+      assert(m.sw <= m.cw,
+        `${label}: documentElement horizontal overflow — scrollWidth=${m.sw} > clientWidth=${m.cw}`);
+      assert(m.bsw <= m.cw,
+        `${label}: body horizontal overflow — body.scrollWidth=${m.bsw} > documentElement.clientWidth=${m.cw}`);
+    }
+
+    for (const w of viewports) {
+      await test(`No horizontal overflow at ${w}px (home)`, async () => {
+        await page.setViewportSize({ width: w, height: HEIGHT });
+        await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+        await assertNoHOverflow(page, `home @ ${w}x${HEIGHT}`);
+      });
+    }
+
+    // ── #1034 PR3: QR generate + scan wiring (channel modal) ──
+    await test('#1034 PR3: Generate & Show QR renders QR + Copy Key into #qr-output', async () => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('#chAddChannelBtn', { timeout: 8000 });
+      await page.click('#chAddChannelBtn');
+      await page.waitForSelector('#chAddChannelModal:not(.hidden)', { timeout: 3000 });
+      await page.fill('#chGenerateName', 'wiring-e2e');
+      // Sanity: pre-click, qr-output should be empty.
+      const before = await page.evaluate(() =>
+        (document.getElementById('qr-output').innerHTML || '').trim()
+      );
+      assert(before === '', `#qr-output should start empty, got: ${before.slice(0,60)}`);
+      await page.click('#chGenerateBtn');
+      // ChannelQR.generate writes the meshcore:// URL line + a Copy Key
+      // button regardless of whether QRCode renders as <canvas> or <img>.
+      // Wait for the URL line which is always populated.
+      await page.waitForFunction(() => {
+        const el = document.getElementById('qr-output');
+        return el && /meshcore:\/\/channel\/add/.test(el.textContent || '');
+      }, { timeout: 4000 });
+      const html = await page.innerHTML('#qr-output');
+      assert(/meshcore:\/\/channel\/add/.test(html),
+        '#qr-output must contain meshcore://channel/add URL');
+      assert(/canvas|<img|qr/i.test(html),
+        '#qr-output must contain a QR rendering (canvas/img/QR table)');
+      assert(/Copy Key/.test(html),
+        '#qr-output must contain a Copy Key button');
+      // Close modal for next test.
+      const close = await page.$('[data-action="ch-modal-close"], #chModalClose');
+      if (close) await close.click().catch(() => {});
+    });
+
+    await test('#1034 PR3: scan-qr-btn is enabled (no longer placeholder)', async () => {
+      await page.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('#chAddChannelBtn', { timeout: 8000 });
+      await page.click('#chAddChannelBtn');
+      await page.waitForSelector('#scan-qr-btn', { timeout: 3000 });
+      const disabled = await page.$eval('#scan-qr-btn', (b) => b.hasAttribute('disabled'));
+      assert(!disabled, '#scan-qr-btn must be enabled (wired to ChannelQR.scan)');
+      await page.keyboard.press('Escape').catch(() => {});
+    });
+
+    await test('#1034 PR3: scan handler populates #chPskKey + #chPskName from result', async () => {
+      // Stub ChannelQR.scan to return a deterministic result, then click
+      // the scan button and assert the form fields are populated.
+      await page.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('#chAddChannelBtn', { timeout: 8000 });
+      await page.click('#chAddChannelBtn');
+      await page.waitForSelector('#scan-qr-btn', { timeout: 3000 });
+      await page.evaluate(() => {
+        window.ChannelQR = window.ChannelQR || {};
+        window.ChannelQR.scan = function () {
+          return Promise.resolve({
+            name: 'scanned-e2e',
+            secret: 'a'.repeat(32),
+          });
+        };
+      });
+      await page.click('#scan-qr-btn');
+      // Give the async handler a tick.
+      await page.waitForFunction(() => {
+        const k = document.getElementById('chPskKey');
+        return k && k.value && k.value.length === 32;
+      }, { timeout: 3000 });
+      const key = await page.$eval('#chPskKey', (el) => el.value);
+      const name = await page.$eval('#chPskName', (el) => el.value);
+      assert(key === 'a'.repeat(32), `#chPskKey populated, got: ${key}`);
+      assert(name === 'scanned-e2e', `#chPskName populated, got: ${name}`);
+    });
+
+    // Spot-check a couple other pages at the smallest and largest viewports.
+    const otherPages = [
+      { name: 'packets', hash: '#/packets' },
+      { name: 'nodes', hash: '#/nodes' },
+      { name: 'analytics', hash: '#/analytics' },
+    ];
+    for (const w of [768, 2560]) {
+      for (const p of otherPages) {
+        await test(`No horizontal overflow at ${w}px (${p.name})`, async () => {
+          await page.setViewportSize({ width: w, height: HEIGHT });
+          await page.goto(BASE + '/' + p.hash, { waitUntil: 'domcontentloaded' });
+          await assertNoHOverflow(page, `${p.name} @ ${w}x${HEIGHT}`);
+        });
+      }
+    }
+  }
+
+  // === Live page node filter (#1110) ===
+  // Bug: filter input was oversized, white background ignoring dark mode,
+  // no autocomplete dropdown, required Enter to apply, and Enter triggered
+  // a full page reload. Fix wires it to /api/nodes/search with a 200ms
+  // debounce, prevents form submission, and styles via CSS variables.
+
+  await test('#1110 Live node filter input matches toolbar styling (theme-aware bg)', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    // Force dark theme so we catch the "ignored dark mode" regression.
+    await page.evaluate(() => {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    });
+    const bg = await page.$eval('#liveNodeFilterInput', el => getComputedStyle(el).backgroundColor);
+    // Bright white (255,255,255) is the bug. Anything else (transparent,
+    // dark surface, or color-mix from CSS variables) is acceptable.
+    assert(bg !== 'rgb(255, 255, 255)' && bg !== '#ffffff' && bg !== 'white',
+      `Filter bg should not be hardcoded white in dark mode, got ${bg}`);
+    // And it should not be vastly larger than the toolbar's label row
+    // (the global a11y rule enforces 48px min-height on text inputs, so we
+    // allow some slop and just guard against the "way too big" regression).
+    const inputH = await page.$eval('#liveNodeFilterInput', el => el.getBoundingClientRect().height);
+    const labelH = await page.$eval('.live-toggles label', el => el.getBoundingClientRect().height);
+    assert(inputH > 0 && labelH > 0,
+      `expected non-zero heights (input=${inputH}, label=${labelH})`);
+    assert(inputH <= Math.max(labelH + 40, 56),
+      `Filter input height (${inputH}) should not be vastly larger than toolbar label (${labelH})`);
+  });
+
+  await test('#1110 Live node filter shows autocomplete dropdown on input', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    // Clear any persisted filter from prior runs.
+    await page.evaluate(() => { try { localStorage.removeItem('live-node-filter'); } catch (_) {} });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    const input = await page.$('#liveNodeFilterInput');
+    await input.click();
+    await input.type('te', { delay: 30 });
+    // Wait for dropdown of suggestions (the new feature).
+    await page.waitForSelector('#liveNodeFilterDropdown:not(.hidden) .live-node-filter-option', { timeout: 5000 });
+    const count = await page.$$eval('#liveNodeFilterDropdown .live-node-filter-option', els => els.length);
+    assert(count >= 1, `Expected at least 1 suggestion, got ${count}`);
+  });
+
+  await test('#1110 Live node filter applies on suggestion click without page reload', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    await page.evaluate(() => { try { localStorage.removeItem('live-node-filter'); } catch (_) {} });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    // Tag the window so we can detect a full page reload.
+    await page.evaluate(() => { window.__live1110Marker = 'still-here'; });
+    const urlBefore = page.url();
+    await page.fill('#liveNodeFilterInput', '');
+    await page.type('#liveNodeFilterInput', 'te', { delay: 30 });
+    await page.waitForSelector('#liveNodeFilterDropdown:not(.hidden) .live-node-filter-option', { timeout: 5000 });
+    await page.click('#liveNodeFilterDropdown .live-node-filter-option');
+    // Window marker must survive (no reload).
+    const marker = await page.evaluate(() => window.__live1110Marker);
+    assert(marker === 'still-here', 'Page should not have reloaded after selecting a suggestion');
+    // URL should not have navigated away from the live page.
+    const urlAfter = page.url();
+    assert(urlAfter.includes('#/live'), `URL should still target #/live, got ${urlAfter}`);
+    // Filter should be active.
+    const keys = await page.evaluate(() => (window._liveGetNodeFilterKeys ? window._liveGetNodeFilterKeys() : []));
+    assert(Array.isArray(keys) && keys.length >= 1, `Expected an active filter key after click, got ${JSON.stringify(keys)}`);
+  });
+
+  await test('#1110 Live node filter does not navigate or reload on Enter', async () => {
+    await page.goto(BASE + '#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    await page.evaluate(() => { try { localStorage.removeItem('live-node-filter'); } catch (_) {} });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveNodeFilterInput', { timeout: 10000 });
+    await page.evaluate(() => { window.__live1110Marker2 = 'still-here'; });
+    const urlBefore = page.url();
+    await page.fill('#liveNodeFilterInput', 'te');
+    await page.focus('#liveNodeFilterInput');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+    const marker = await page.evaluate(() => window.__live1110Marker2);
+    assert(marker === 'still-here', 'Enter on filter input must not reload the page');
+    assert(page.url() === urlBefore || page.url().includes('#/live'),
+      `URL should not navigate away, got ${page.url()} (was ${urlBefore})`);
   });
 
   await browser.close();

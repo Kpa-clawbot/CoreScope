@@ -82,12 +82,26 @@
     var parts = [];
     if (tab && tab !== 'all') parts.push('tab=' + encodeURIComponent(tab));
     if (searchStr) parts.push('search=' + encodeURIComponent(searchStr));
+    // #749 — encode current sort state (default 'last_seen:desc' is omitted).
+    if (window.URLState) {
+      var st = _getSortState();
+      var isDefault = st.column === 'last_seen' && st.direction === 'desc';
+      if (!isDefault) {
+        var token = URLState.serializeSort(st.column, st.direction);
+        if (token) parts.push('sort=' + encodeURIComponent(token));
+      }
+    }
     return parts.length ? '?' + parts.join('&') : '';
   }
   window.buildNodesQuery = buildNodesQuery;
 
   function updateNodesUrl() {
-    history.replaceState(null, '', '#/nodes' + buildNodesQuery(activeTab, search));
+    // Preserve subpath (e.g. #/nodes/<pubkey>) so this doesn't break detail deep-links.
+    var cur = String(location.hash || '');
+    var subpath = '';
+    var m = cur.match(/^#\/nodes(\/[^?]*)?/);
+    if (m && m[1]) subpath = m[1];
+    history.replaceState(null, '', '#/nodes' + subpath + buildNodesQuery(activeTab, search));
   }
 
   function renderNodeTimestampHtml(isoString) {
@@ -370,6 +384,15 @@
     const _urlSearch = _listUrlParams.get('search');
     if (_urlTab && TABS.some(function(t) { return t.key === _urlTab; })) activeTab = _urlTab;
     if (_urlSearch) search = _urlSearch;
+    // #749 — restore sort from URL (overrides localStorage persistence).
+    var _urlSort = _listUrlParams.get('sort');
+    if (_urlSort && window.URLState) {
+      var _parsedSort = URLState.parseSort(_urlSort);
+      if (_parsedSort && _parsedSort.column) {
+        try { localStorage.setItem('meshcore-nodes-sort', JSON.stringify(_parsedSort)); } catch {}
+        _fallbackSortState = _parsedSort;
+      }
+    }
 
     app.innerHTML = `<div class="nodes-page">
       <div class="nodes-topbar">
@@ -495,6 +518,7 @@
           <div class="node-detail-key mono" style="font-size:11px;word-break:break-all;margin-bottom:6px">${n.public_key}</div>
           <div>
             <button class="btn-primary" id="copyUrlBtn" style="font-size:12px;padding:4px 10px">📋 Copy URL</button>
+            <button class="btn-primary" id="copyShortUrlBtn" title="Short URL using an 8-char pubkey prefix — easier to send over the mesh (issue #772)" style="font-size:12px;padding:4px 10px;margin-left:6px">📡 Copy short URL</button>
             <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:6px;text-decoration:none;font-size:12px;padding:4px 10px">📊 Analytics</a>
           </div>
         </div>
@@ -510,6 +534,22 @@
         <table class="node-stats-table" id="node-stats">
           <tr><td>Status</td><td><span title="${si.statusTooltip}">${statusLabel}</span> <span style="font-size:11px;color:var(--text-muted);margin-left:4px">${statusExplanation}</span></td></tr>
           <tr><td>Last Heard</td><td>${renderNodeTimestampHtml(lastHeard || n.last_seen)}</td></tr>
+          ${(n.role === 'repeater' || n.role === 'room') ? `<tr><td title="Last time this repeater appeared as a relay hop in a non-advert packet observed by the network. Distinct from 'Last Heard' (which counts the repeater's own adverts). See issue #662.">Last Relayed</td><td>${n.last_relayed ? renderNodeTimestampHtml(n.last_relayed) + ' ' + (n.relay_active ? '<span style="color:var(--status-green);font-size:11px">🟢 actively relaying</span>' : '<span style="color:var(--status-yellow);font-size:11px">🟡 alive (idle)</span>') : '<span style="color:var(--text-muted)">never observed as relay hop</span> <span style="color:var(--status-yellow);font-size:11px">🟡 alive (idle)</span>'}${(n.relay_count_1h != null || n.relay_count_24h != null) ? ` <span style="color:var(--text-muted);font-size:11px;margin-left:4px">(${n.relay_count_1h || 0} relays/hr, ${n.relay_count_24h || 0} relays/24h)</span>` : ''}</td></tr>` : ''}
+          ${(n.role === 'repeater' || n.role === 'room') && n.usefulness_score != null ? (() => {
+            const s = Number(n.usefulness_score) || 0;
+            const pct = (s * 100).toFixed(1);
+            // Visual indicator: width % bar with green→yellow→red color by score.
+            // Per issue #672 classification table: 0.8+ Critical, 0.6+ Valuable,
+            // 0.3+ Moderate, 0.1+ Marginal, else Redundant.
+            let label, color;
+            if (s >= 0.8) { label = 'Critical'; color = 'var(--status-green, #2ecc71)'; }
+            else if (s >= 0.6) { label = 'Valuable'; color = 'var(--status-green, #2ecc71)'; }
+            else if (s >= 0.3) { label = 'Moderate'; color = 'var(--status-yellow, #f1c40f)'; }
+            else if (s >= 0.1) { label = 'Marginal'; color = 'var(--status-orange, #e67e22)'; }
+            else { label = 'Redundant'; color = 'var(--status-red, #e74c3c)'; }
+            const barWidth = Math.max(2, Math.round(s * 100));
+            return `<tr id="row-usefulness-score" data-usefulness-score="${s.toFixed(4)}"><td title="Fraction of non-advert traffic in the network observed by CoreScope that this repeater carries as a relay hop (Traffic axis of issue #672). Range 0–1; higher = forwards more of the mesh's actual traffic.">Usefulness</td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${barWidth}%;height:100%;background:${color}"></span></span><span style="color:${color};font-weight:600">${pct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${label}</span></td></tr>`;
+          })() : ''}
           <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
           <tr><td>Total Packets</td><td>${stats.totalTransmissions || stats.totalPackets || n.advert_count || 0}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + stats.totalObservations + '×)</span>' : ''}</td></tr>
           <tr><td>Packets Today</td><td>${stats.packetsToday || 0}</td></tr>
@@ -519,7 +559,38 @@
           <tr><td>Hash Prefix</td><td>${n.hash_size ? '<code style="font-family:var(--mono);font-weight:700">' + n.public_key.slice(0, n.hash_size * 2).toUpperCase() + '</code> (' + n.hash_size + '-byte)' : 'Unknown'}${n.hash_size_inconsistent ? ' <span style="color:var(--status-yellow);cursor:help" title="Seen: ' + (Array.isArray(n.hash_sizes_seen) ? n.hash_sizes_seen : []).join(', ') + '-byte">⚠️ varies</span>' : ''}</td></tr>
         </table>
 
-        <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>
+        <div class="node-full-card" id="node-packets">
+          ${(() => { const validPackets = adverts.filter(p => p.hash && p.timestamp); return `
+          <h4>Recent Packets (${validPackets.length})</h4>
+          <div class="node-activity-list">
+            ${validPackets.length ? validPackets.map(p => {
+              let decoded; try { decoded = JSON.parse(p.decoded_json); } catch {}
+              const typeLabel = p.payload_type === 4 ? '📡 Advert' : p.payload_type === 5 ? '💬 Channel' : p.payload_type === 2 ? '✉️ DM' : '📦 Packet';
+              const detail = decoded?.text ? ': ' + escapeHtml(truncate(decoded.text, 50)) : decoded?.name ? ' — ' + escapeHtml(decoded.name) : '';
+              const obs = p.observer_name || p.observer_id;
+              const snr = p.snr != null ? ` · SNR ${p.snr}dB` : '';
+              const rssi = p.rssi != null ? ` · RSSI ${p.rssi}dBm` : '';
+              const obsBadge = p.observation_count > 1 ? ` <span class="badge badge-obs" title="Seen ${p.observation_count} times">👁 ${p.observation_count}</span>` : '';
+              // Show hash size per advert if inconsistent
+              let hashSizeBadge = '';
+              if (n.hash_size_inconsistent && p.payload_type === 4 && p.raw_hex) {
+                const pb = parseInt(p.raw_hex.slice(2, 4), 16);
+                if ((pb & 0x3F) !== 0) {
+                  const hs = ((pb >> 6) & 0x3) + 1;
+                  const hsColor = hs >= 3 ? '#16a34a' : hs === 2 ? '#86efac' : '#f97316';
+                  const hsFg = hs === 2 ? '#064e3b' : '#fff';
+                  hashSizeBadge = ` <span class="badge" style="background:${hsColor};color:${hsFg};font-size:9px;font-family:var(--mono)">${hs}B</span>`;
+                }
+              }
+              return `<div class="node-activity-item">
+                <span class="node-activity-time">${renderNodeTimestampHtml(p.timestamp)}</span>
+                <span>${typeLabel}${detail}${hashSizeBadge}${obsBadge}${obs ? ' via ' + escapeHtml(obs) : ''}${snr}${rssi}</span>
+                <a href="#/packets/${p.hash}" class="ch-analyze-link" style="margin-left:8px;font-size:0.8em">Analyze →</a>
+              </div>`;
+            }).join('') : '<div class="text-muted">No recent packets</div>'}
+          </div>
+        `; })()}
+        </div>
 
         ${observers.length ? `<div class="node-full-card" id="node-observers">
           ${(() => { const regions = [...new Set(observers.map(o => o.iata).filter(Boolean))]; return regions.length ? `<div style="margin-bottom:8px"><strong>Regions:</strong> ${regions.map(r => '<span class="badge" style="margin:0 2px">' + escapeHtml(r) + '</span>').join(' ')}</div>` : ''; })()}
@@ -561,38 +632,7 @@
           <div id="fullPathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
         </div>
 
-        <div class="node-full-card" id="node-packets">
-          ${(() => { const validPackets = adverts.filter(p => p.hash && p.timestamp); return `
-          <h4>Recent Packets (${validPackets.length})</h4>
-          <div class="node-activity-list">
-            ${validPackets.length ? validPackets.map(p => {
-              let decoded; try { decoded = JSON.parse(p.decoded_json); } catch {}
-              const typeLabel = p.payload_type === 4 ? '📡 Advert' : p.payload_type === 5 ? '💬 Channel' : p.payload_type === 2 ? '✉️ DM' : '📦 Packet';
-              const detail = decoded?.text ? ': ' + escapeHtml(truncate(decoded.text, 50)) : decoded?.name ? ' — ' + escapeHtml(decoded.name) : '';
-              const obs = p.observer_name || p.observer_id;
-              const snr = p.snr != null ? ` · SNR ${p.snr}dB` : '';
-              const rssi = p.rssi != null ? ` · RSSI ${p.rssi}dBm` : '';
-              const obsBadge = p.observation_count > 1 ? ` <span class="badge badge-obs" title="Seen ${p.observation_count} times">👁 ${p.observation_count}</span>` : '';
-              // Show hash size per advert if inconsistent
-              let hashSizeBadge = '';
-              if (n.hash_size_inconsistent && p.payload_type === 4 && p.raw_hex) {
-                const pb = parseInt(p.raw_hex.slice(2, 4), 16);
-                if ((pb & 0x3F) !== 0) {
-                  const hs = ((pb >> 6) & 0x3) + 1;
-                  const hsColor = hs >= 3 ? '#16a34a' : hs === 2 ? '#86efac' : '#f97316';
-                  const hsFg = hs === 2 ? '#064e3b' : '#fff';
-                  hashSizeBadge = ` <span class="badge" style="background:${hsColor};color:${hsFg};font-size:9px;font-family:var(--mono)">${hs}B</span>`;
-                }
-              }
-              return `<div class="node-activity-item">
-                <span class="node-activity-time">${renderNodeTimestampHtml(p.timestamp)}</span>
-                <span>${typeLabel}${detail}${hashSizeBadge}${obsBadge}${obs ? ' via ' + escapeHtml(obs) : ''}${snr}${rssi}</span>
-                <a href="#/packets/${p.hash}" class="ch-analyze-link" style="margin-left:8px;font-size:0.8em">Analyze →</a>
-              </div>`;
-            }).join('') : '<div class="text-muted">No recent packets</div>'}
-          </div>
-        `; })()}
-        </div>`;
+        <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>`;
 
       // Map
       if (hasLoc) {
@@ -612,6 +652,17 @@
         window.copyToClipboard(nodeUrl, () => {
           btn.textContent = '✅ Copied!';
           setTimeout(() => btn.textContent = '📋 Copy URL', 2000);
+        });
+      });
+
+      // Copy short URL — issue #772. Uses an 8-char pubkey prefix; the
+      // backend resolves it to the canonical pubkey when unambiguous.
+      const shortUrl = location.origin + '#/nodes/' + n.public_key.slice(0, 8);
+      document.getElementById('copyShortUrlBtn')?.addEventListener('click', () => {
+        const btn = document.getElementById('copyShortUrlBtn');
+        window.copyToClipboard(shortUrl, () => {
+          btn.textContent = '✅ Copied!';
+          setTimeout(() => btn.textContent = '📡 Copy short URL', 2000);
         });
       });
 
@@ -794,7 +845,40 @@
       });
 
     } catch (e) {
-      body.innerHTML = `<div class="text-muted" style="padding:40px">Failed to load node: ${e.message}</div>`;
+      // #1150: surface a real error state in BOTH the back-row title and the body
+      // when /api/nodes/{pubkey} returns 404 (or any failure). Otherwise the title
+      // stays "Loading…" forever and there's no link back to the Nodes list.
+      const msg = (e && e.message) || '';
+      const is404 = /\b404\b/.test(msg) || /not\s*found/i.test(msg);
+      const titleEl = document.querySelector('.node-full-title');
+      if (titleEl) {
+        titleEl.textContent = is404
+          ? 'Node not found — ' + (pubkey || '').slice(0, 12) + '…'
+          : 'Failed to load node';
+      }
+      const safePubkey = escapeHtml(pubkey || '');
+      const headline = is404 ? 'Node not found' : 'Failed to load node';
+      const detail = is404
+        ? 'No node matched the requested public key on this instance. It may exist on another deployment, or it may have been evicted/blacklisted here.'
+        : 'The node detail API call failed: ' + escapeHtml(msg);
+      body.innerHTML =
+        '<div class="node-full-card" style="padding:24px;margin:16px auto;max-width:560px;text-align:center">' +
+          '<div style="font-size:18px;font-weight:600;margin-bottom:8px">' + headline + '</div>' +
+          '<div class="mono" style="font-size:11px;color:var(--text-muted);word-break:break-all;margin-bottom:12px">' + safePubkey + '</div>' +
+          '<div style="color:var(--text-muted);margin-bottom:16px">' + detail + '</div>' +
+          '<div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">' +
+            '<a href="#/nodes" class="btn-primary" style="text-decoration:none;padding:6px 14px">← Back to Nodes</a>' +
+            '<button id="nodeRetryBtn" class="btn-primary" style="padding:6px 14px">Try again</button>' +
+          '</div>' +
+        '</div>';
+      const retryBtn = document.getElementById('nodeRetryBtn');
+      if (retryBtn) {
+        retryBtn.addEventListener('click', function () {
+          if (titleEl) titleEl.textContent = 'Loading…';
+          body.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+          loadFullNode(pubkey);
+        });
+      }
     }
   }
 
@@ -818,6 +902,41 @@
    * Shared between the full-screen detail page and the side panel (#813, #690).
    * No-op if the container is missing, the API errors, or the response lacks severity.
    */
+  /** Build collapsible evidence panel for node clock skew card */
+  function buildEvidencePanel(cs) {
+    var evidence = cs.recentHashEvidence;
+    if (!evidence || evidence.length === 0) return '';
+
+    var calSum = cs.calibrationSummary || {};
+    var calLine = calSum.totalSamples
+      ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">Last ' + calSum.totalSamples + ' samples: ' + (calSum.calibratedSamples || 0) + ' corrected via observer calibration, ' + (calSum.uncalibratedSamples || 0) + ' uncorrected (single-observer).</div>'
+      : '';
+
+    // Severity reason.
+    var skewVal = window.currentSkewValue(cs);
+    var sampleCount = (cs.samples || []).length;
+    var sevLabel = SKEW_SEVERITY_LABELS[cs.severity] || cs.severity;
+    var reasonLine = '<div style="font-size:12px;margin-bottom:8px"><strong>Recent ' + sampleCount + ' adverts median ' + formatSkew(skewVal) + ' → ' + sevLabel + '</strong></div>';
+
+    var hashBlocks = evidence.map(function(ev) {
+      var shortHash = (ev.hash || '').substring(0, 8) + '…';
+      var obsCount = ev.observers ? ev.observers.length : 0;
+      var header = '<div style="font-weight:600;font-size:12px;margin-top:6px">Hash ' + shortHash + '  ·  ' + obsCount + ' observer' + (obsCount !== 1 ? 's' : '') + '  ·  median corrected: ' + formatSkew(ev.medianCorrectedSkewSec) + '</div>';
+      var lines = (ev.observers || []).map(function(o) {
+        var name = o.observerName || o.observerID;
+        return '<div style="font-size:11px;padding-left:16px;font-family:var(--mono)">' +
+          name + '   raw=' + formatSkew(o.rawSkewSec) + '  corrected=' + formatSkew(o.correctedSkewSec) + '  (observer offset ' + formatSkew(o.observerOffsetSec) + ')' +
+          '</div>';
+      }).join('');
+      return header + lines;
+    }).join('');
+
+    return '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:var(--text-muted)">Evidence (' + evidence.length + ' hashes)</summary>' +
+      '<div style="margin-top:6px;padding:8px;background:var(--bg-secondary);border-radius:6px">' +
+      reasonLine + calLine + hashBlocks +
+      '</div></details>';
+  }
+
   async function loadClockSkewInto(container, pubkey) {
     if (!container) return;
     try {
@@ -844,7 +963,8 @@
         '</div>' +
         driftHtml +
         (sparkHtml ? '<div class="skew-sparkline-wrap" style="margin-top:8px">' + sparkHtml + '<div style="font-size:10px;color:var(--text-muted)">Skew over time (' + (cs.samples || []).length + ' samples)</div></div>' : '') +
-        bimodalWarning;
+        bimodalWarning +
+        buildEvidencePanel(cs);
     } catch (e) {
       // Non-fatal — section stays hidden
     }
@@ -960,6 +1080,10 @@
       console.error('Failed to load nodes:', e);
       const tbody = document.getElementById('nodesBody');
       if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="padding:24px;color:var(--error,#ef4444)"><div role="alert" aria-live="polite">Failed to load nodes. Please try again.</div></td></tr>';
+    } finally {
+      // Always signal data-loaded — even on error — so E2E tests can proceed.
+      var nodesContainer = document.getElementById('nodesLeft') || document.getElementById('nodesBody');
+      if (nodesContainer) nodesContainer.setAttribute('data-loaded', 'true');
     }
   }
 
@@ -1004,16 +1128,16 @@
           </select>
         </div>
       </div>
-      <table class="data-table" id="nodesTable">
+      <div class="table-fluid-wrap"><table class="data-table" id="nodesTable">
         <thead><tr>
-          <th scope="col" data-sort-key="name">Name</th>
-          <th scope="col" class="col-pubkey" data-sort-key="public_key">Public Key</th>
-          <th scope="col" data-sort-key="role">Role</th>
-          <th scope="col" data-sort-key="last_seen" data-sort-default="desc">Last Seen</th>
-          <th scope="col" data-sort-key="advert_count" data-sort-default="desc">Adverts</th>
+          <th scope="col" data-sort-key="name" data-priority="1">Name</th>
+          <th scope="col" class="col-pubkey" data-sort-key="public_key" data-priority="3">Public Key</th>
+          <th scope="col" data-sort-key="role" data-priority="2">Role</th>
+          <th scope="col" data-sort-key="last_seen" data-sort-default="desc" data-priority="1">Last Seen</th>
+          <th scope="col" data-sort-key="advert_count" data-sort-default="desc" data-priority="2">Adverts</th>
         </tr></thead>
         <tbody id="nodesBody"></tbody>
-      </table>`;
+      </table></div>`;
 
     // Tab clicks
     const nodeTabs = document.getElementById('nodeTabs');
@@ -1044,7 +1168,7 @@
         defaultColumn: 'last_seen',
         defaultDirection: 'desc',
         storageKey: 'meshcore-nodes-sort',
-        onSort: function () { renderRows(); }
+        onSort: function () { renderRows(); updateNodesUrl(); }
       });
     }
 
@@ -1147,6 +1271,11 @@
     }).join('');
     bindFavStars(tbody);
     makeColumnsResizable('#nodesTable', 'meshcore-nodes-col-widths');
+    // #1056: fluid columns + +N hidden pill
+    if (window.TableResponsive) {
+      var _ndTbl = document.getElementById('nodesTable');
+      if (_ndTbl) window.TableResponsive.register(_ndTbl);
+    }
   }
 
   /**
@@ -1166,6 +1295,49 @@
     // On mobile, navigate to full-screen node view
     if (window.innerWidth <= 640) {
       location.hash = '#/nodes/' + encodeURIComponent(pubkey);
+      return;
+    }
+    // #1056 AC#4: narrow desktop/tablet (641–1023) — open detail in slide-over.
+    if (window.SlideOver && window.SlideOver.shouldUse()) {
+      selectedKey = pubkey;
+      history.replaceState(null, '', '#/nodes/' + encodeURIComponent(pubkey));
+      renderRows();
+      const so = window.SlideOver.open({
+        title: 'Node detail',
+        // Resolver runs after onClose re-renders rows, so look the row up
+        // by data-key after the new tbody is in place.
+        restoreFocus: function () {
+          return document.querySelector('#nodesTable tbody tr[data-key="'
+            + (window.CSS && CSS.escape ? CSS.escape(pubkey) : pubkey)
+            + '"]');
+        },
+        onClose: function () {
+          selectedKey = null;
+          history.replaceState(null, '', '#/nodes');
+          renderRows();
+        }
+      });
+      so.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+      try {
+        const data = await fetchNodeDetail(pubkey);
+        if (selectedKey !== pubkey) return;
+        const n = (data && data.node) || data || {};
+        const titleEl = document.querySelector('.slide-over-title');
+        if (titleEl) titleEl.textContent = n.advert_name || (n.public_key ? n.public_key.slice(0, 10) : 'Node');
+        var role = (n.role || '').toString();
+        var lastHeard = n.last_heard || n.last_seen;
+        so.innerHTML =
+          '<dl style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px">' +
+            '<dt>Name</dt><dd>' + escapeHtml(n.advert_name || '—') + '</dd>' +
+            '<dt>Role</dt><dd>' + escapeHtml(role || '—') + '</dd>' +
+            '<dt>Public key</dt><dd class="mono" style="word-break:break-all">' + escapeHtml(n.public_key || '—') + '</dd>' +
+            '<dt>Last heard</dt><dd>' + (lastHeard ? timeAgo(lastHeard) : '—') + '</dd>' +
+            '<dt>Adverts</dt><dd>' + (n.advert_count != null ? n.advert_count : '—') + '</dd>' +
+          '</dl>' +
+          '<p style="margin-top:14px"><a class="btn-primary" href="#/nodes/' + encodeURIComponent(pubkey) + '">Open full detail →</a></p>';
+      } catch (e) {
+        so.innerHTML = '<div class="text-muted">Error: ' + (e && e.message ? e.message : String(e)) + '</div>';
+      }
       return;
     }
     selectedKey = pubkey;
@@ -1235,29 +1407,6 @@
           </dl>
         </div>
 
-        <div class="node-detail-section skew-detail-section" id="node-clock-skew" style="display:none"></div>
-
-        ${observers.length ? `<div class="node-detail-section">
-          ${(() => { const regions = [...new Set(observers.map(o => o.iata).filter(Boolean))]; return regions.length ? `<div style="margin-bottom:6px;font-size:12px"><strong>Regions:</strong> ${regions.join(', ')}</div>` : ''; })()}
-          <h4>Heard By (${observers.length} observer${observers.length > 1 ? 's' : ''})</h4>
-          <div class="observer-list">
-            ${observers.map(o => `<div class="observer-row" style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">
-              <span style="font-weight:600">${escapeHtml(o.observer_name || o.observer_id)}${o.iata ? ' <span class="badge" style="font-size:10px">' + escapeHtml(o.iata) + '</span>' : ''}</span>
-              <span style="color:var(--text-muted)">${o.packetCount} pkts · ${o.avgSnr != null ? 'SNR ' + Number(o.avgSnr).toFixed(1) + 'dB' : ''}${o.avgRssi != null ? ' · RSSI ' + Number(o.avgRssi).toFixed(0) : ''}</span>
-            </div>`).join('')}
-          </div>
-        </div>` : ''}
-
-        <div class="node-detail-section" id="panelNeighborsSection">
-          <h4 id="panelNeighborsHeader">Neighbors</h4>
-          <div id="panelNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
-        </div>
-
-        <div class="node-detail-section" id="pathsSection">
-          <h4>Paths Through This Node</h4>
-          <div id="pathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
-        </div>
-
         <div class="node-detail-section">
           ${(() => { const validPackets = adverts.filter(a => a.hash && a.timestamp); return `
           <h4>Recent Packets (${validPackets.length})</h4>
@@ -1283,6 +1432,34 @@
           </div>
           `; })()}
         </div>
+
+        ${observers.length ? `<div class="node-detail-section">
+          ${(() => { const regions = [...new Set(observers.map(o => o.iata).filter(Boolean))]; return regions.length ? `<div style="margin-bottom:6px;font-size:12px"><strong>Regions:</strong> ${regions.join(', ')}</div>` : ''; })()}
+          <h4>Heard By (${observers.length} observer${observers.length > 1 ? 's' : ''})</h4>
+          <div class="observer-list">
+            ${observers.map(o => {
+              const stats = [`${o.packetCount} pkts`];
+              if (o.avgSnr != null) stats.push('SNR ' + Number(o.avgSnr).toFixed(1) + 'dB');
+              if (o.avgRssi != null) stats.push('RSSI ' + Number(o.avgRssi).toFixed(0));
+              return `<div class="observer-row" style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">
+              <span style="font-weight:600">${escapeHtml(o.observer_name || o.observer_id)}${o.iata ? ' <span class="badge" style="font-size:10px">' + escapeHtml(o.iata) + '</span>' : ''}</span>
+              <span style="color:var(--text-muted)">${stats.join(' · ')}</span>
+            </div>`;
+            }).join('')}
+          </div>
+        </div>` : ''}
+
+        <div class="node-detail-section" id="panelNeighborsSection">
+          <h4 id="panelNeighborsHeader">Neighbors</h4>
+          <div id="panelNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
+        </div>
+
+        <div class="node-detail-section" id="pathsSection">
+          <h4>Paths Through This Node</h4>
+          <div id="pathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
+        </div>
+
+        <div class="node-detail-section skew-detail-section" id="node-clock-skew" style="display:none"></div>
       </div>`;
 
     // Init map

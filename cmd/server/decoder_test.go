@@ -440,3 +440,51 @@ func TestDecodeAdvertSignatureValidation(t *testing.T) {
 		t.Error("expected SignatureValid to be nil when validation disabled")
 	}
 }
+
+func TestDecodePacket_TraceSNRValues(t *testing.T) {
+	// TRACE packet with 3 SNR bytes in header path:
+	// SNR byte 0: 0x14 = int8(20) → 20/4.0 = 5.0 dB
+	// SNR byte 1: 0xF4 = int8(-12) → -12/4.0 = -3.0 dB
+	// SNR byte 2: 0x08 = int8(8) → 8/4.0 = 2.0 dB
+	// header: DIRECT+TRACE = (0<<6)|(9<<2)|2 = 0x26
+	// path_length: hash_size=0b00 (1-byte), hash_count=3 → 0x03
+	hex := "2603" + "14F408" + // header + path_byte + 3 SNR bytes
+		"01000000" + // tag
+		"02000000" + // authCode
+		"00" + // flags=0 → path_sz=1
+		"AABBCCDD" // 4 route hops (1-byte each)
+
+	pkt, err := DecodePacket(hex, false)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if pkt.Payload.SNRValues == nil {
+		t.Fatal("expected SNRValues to be populated")
+	}
+	if len(pkt.Payload.SNRValues) != 3 {
+		t.Fatalf("expected 3 SNR values, got %d", len(pkt.Payload.SNRValues))
+	}
+	expected := []float64{5.0, -3.0, 2.0}
+	for i, want := range expected {
+		if pkt.Payload.SNRValues[i] != want {
+			t.Errorf("SNRValues[%d] = %v, want %v", i, pkt.Payload.SNRValues[i], want)
+		}
+	}
+}
+
+func TestDecodePacket_TraceNoSNRValues(t *testing.T) {
+	// TRACE with 0 SNR bytes → SNRValues should be nil/empty
+	hex := "2600" + // header + path_byte (0 hops)
+		"01000000" + // tag
+		"02000000" + // authCode
+		"00" + // flags
+		"AABB" // 2 route hops
+
+	pkt, err := DecodePacket(hex, false)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if len(pkt.Payload.SNRValues) != 0 {
+		t.Errorf("expected empty SNRValues, got %v", pkt.Payload.SNRValues)
+	}
+}

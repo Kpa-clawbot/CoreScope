@@ -1,5 +1,8 @@
 # Build stage always runs natively on the builder's arch ($BUILDPLATFORM)
 # and cross-compiles to $TARGETOS/$TARGETARCH via Go toolchain. No QEMU.
+# BUILDPLATFORM is auto-set by buildx; default to linux/amd64 so plain
+# `docker build` (without buildx) doesn't fail on an empty platform string.
+ARG BUILDPLATFORM=linux/amd64
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
 
 ARG APP_VERSION=unknown
@@ -15,6 +18,8 @@ COPY cmd/server/go.mod cmd/server/go.sum ./
 COPY internal/geofilter/ ../../internal/geofilter/
 COPY internal/sigvalidate/ ../../internal/sigvalidate/
 COPY internal/packetpath/ ../../internal/packetpath/
+COPY internal/dbconfig/ ../../internal/dbconfig/
+COPY internal/perfio/ ../../internal/perfio/
 RUN go mod download
 COPY cmd/server/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
@@ -26,6 +31,8 @@ COPY cmd/ingestor/go.mod cmd/ingestor/go.sum ./
 COPY internal/geofilter/ ../../internal/geofilter/
 COPY internal/sigvalidate/ ../../internal/sigvalidate/
 COPY internal/packetpath/ ../../internal/packetpath/
+COPY internal/dbconfig/ ../../internal/dbconfig/
+COPY internal/perfio/ ../../internal/perfio/
 RUN go mod download
 COPY cmd/ingestor/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \

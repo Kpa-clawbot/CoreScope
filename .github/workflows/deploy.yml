@@ -79,6 +79,28 @@ jobs:
           go test ./...
           echo "--- Decrypt CLI tests passed ---"
 
+      - name: Lint CSS variables (issue #1128)
+        run: |
+          set -e
+          node scripts/check-css-vars.js
+          node scripts/test-check-css-vars.js
+
+      - name: Run JS unit tests (packet-filter)
+        run: |
+          set -e
+          node test-packet-filter.js
+          node test-packet-filter-time.js
+          node test-channel-decrypt-insecure-context.js
+          node test-live-region-filter.js
+          node test-issue-1136-observer-iata-map.js
+          node test-channel-qr.js
+          node test-channel-qr-wiring.js
+          node test-channel-modal-ux.js
+          node test-channel-issue-1087.js
+          node test-channel-issue-1101.js
+          node test-pull-to-reconnect-1091.js
+          node test-channel-fluid-layout.js
+
       - name: Verify proto syntax
         run: |
           set -e
@@ -135,7 +157,7 @@ jobs:
   e2e-test:
     name: "🎭 Playwright E2E Tests"
     needs: [go-test]
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -144,13 +166,6 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-
-      - name: Free disk space
-        run: |
-          # Prune old runner diagnostic logs (can accumulate 50MB+)
-          find ~/actions-runner/_diag/ -name '*.log' -mtime +3 -delete 2>/dev/null || true
-          # Show available disk space
-          df -h / | tail -1
 
       - name: Set up Node.js 22
         uses: actions/setup-node@v5
@@ -183,6 +198,9 @@ jobs:
       - name: Instrument frontend JS for coverage
         run: sh scripts/instrument-frontend.sh
 
+      - name: Freshen fixture timestamps
+        run: bash tools/freshen-fixture.sh test-fixtures/e2e-fixture.db
+
       - name: Start Go server with fixture DB
         run: |
           fuser -k 13581/tcp 2>/dev/null || true
@@ -190,7 +208,7 @@ jobs:
           ./corescope-server -port 13581 -db test-fixtures/e2e-fixture.db -public public-instrumented &
           echo $! > .server.pid
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:13581/api/stats > /dev/null 2>&1; then
+            if curl -sf http://localhost:13581/api/healthz > /dev/null 2>&1; then
               echo "Server ready after ${i}s"
               break
             fi
@@ -204,6 +222,38 @@ jobs:
       - name: Run Playwright E2E tests (fail-fast)
         run: |
           BASE_URL=http://localhost:13581 node test-e2e-playwright.js 2>&1 | tee e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-filter-ux-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-channel-issue-1087-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-channel-issue-1111-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-map-modal-fluid-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-nav-fluid-1055-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-nav-priority-1102-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-nav-more-floor-1139-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-bottom-nav-1061-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-gestures-1062-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-gestures-1185-scroll-discriminator-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-gesture-hints-1065-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-channel-fluid-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-table-fluid-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-charts-fluid-1058-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-slideover-1056-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-slideover-1168-munger-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-logo-pulse-1173-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1122-packets-filter-ux-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1128-packets-layout-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1128-multi-viewport-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1136-live-region-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1150-404-state-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1146-path-link-contrast-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1147-section-order-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1151-orphan-separators-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-rebrand-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-theme-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-default-sage-teal-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1109-hamburger-dropdown-visible-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-live-layout-1178-1179-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-live-mql-leak-1180-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-nav-drawer-1064-e2e.js 2>&1 | tee -a e2e-output.txt
 
       - name: Collect frontend coverage (parallel)
         if: success() && github.event_name == 'push'
@@ -252,16 +302,10 @@ jobs:
   build-and-publish:
     name: "🏗️ Build & Publish Docker Image"
     needs: [e2e-test]
-    runs-on: [self-hosted, meshcore-runner-2]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-
-      - name: Free disk space
-        run: |
-          docker system prune -af 2>/dev/null || true
-          docker builder prune -af 2>/dev/null || true
-          df -h /
 
       - name: Compute build metadata
         id: meta
@@ -462,7 +506,7 @@ jobs:
     name: "📝 Publish Badges & Summary"
     if: github.event_name == 'push'
     needs: [deploy]
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

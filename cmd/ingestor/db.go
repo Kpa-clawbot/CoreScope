@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +25,38 @@ type DBStats struct {
 	ObserverUpserts        atomic.Int64
 	WriteErrors            atomic.Int64
 	SignatureDrops         atomic.Int64
+	// WALCommits tracks every successful tx.Commit() that may have flushed
+	// WAL pages.
+	WALCommits atomic.Int64
+	// BackfillUpdates tracks per-named-backfill row write counts so an
+	// infinite-loop backfill (cf #1119) is obvious from the perf page.
+	BackfillUpdates sync.Map // name (string) -> *atomic.Int64
+}
+
+// IncBackfill increments the backfill counter for the given name, allocating
+// the counter on first use.
+func (s *DBStats) IncBackfill(name string) {
+	v, ok := s.BackfillUpdates.Load(name)
+	if !ok {
+		nc := new(atomic.Int64)
+		actual, loaded := s.BackfillUpdates.LoadOrStore(name, nc)
+		if loaded {
+			v = actual
+		} else {
+			v = nc
+		}
+	}
+	v.(*atomic.Int64).Add(1)
+}
+
+// SnapshotBackfills returns a name->count copy of all backfill counters.
+func (s *DBStats) SnapshotBackfills() map[string]int64 {
+	out := make(map[string]int64)
+	s.BackfillUpdates.Range(func(k, v interface{}) bool {
+		out[k.(string)] = v.(*atomic.Int64).Load()
+		return true
+	})
+	return out
 }
 
 // Store wraps the SQLite database for packet ingestion.
@@ -44,6 +77,7 @@ type Store struct {
 	stmtUpsertMetrics          *sql.Stmt
 
 	sampleIntervalSec int
+	backfillWg        sync.WaitGroup
 }
 
 // OpenStore opens or creates a SQLite DB at the given path, applying the
@@ -59,7 +93,7 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		return nil, fmt.Errorf("creating data dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=auto_vacuum(INCREMENTAL)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("opening db: %w", err)
 	}
@@ -85,6 +119,9 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 }
 
 func applySchema(db *sql.DB) error {
+	// auto_vacuum=INCREMENTAL is set via DSN pragma (must be before journal_mode).
+	// Logging of current mode is handled by CheckAutoVacuum — no duplicate log here.
+
 	schema := `
 		CREATE TABLE IF NOT EXISTS nodes (
 			public_key TEXT PRIMARY KEY,
@@ -96,7 +133,8 @@ func applySchema(db *sql.DB) error {
 			first_seen TEXT,
 			advert_count INTEGER DEFAULT 0,
 			battery_mv INTEGER,
-			temperature_c REAL
+			temperature_c REAL,
+			foreign_advert INTEGER DEFAULT 0
 		);
 
 		CREATE TABLE IF NOT EXISTS observers (
@@ -113,7 +151,8 @@ func applySchema(db *sql.DB) error {
 			battery_mv INTEGER,
 			uptime_secs INTEGER,
 			noise_floor REAL,
-			inactive INTEGER DEFAULT 0
+			inactive INTEGER DEFAULT 0,
+			last_packet_at TEXT DEFAULT NULL
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes(last_seen);
@@ -129,7 +168,8 @@ func applySchema(db *sql.DB) error {
 			first_seen TEXT,
 			advert_count INTEGER DEFAULT 0,
 			battery_mv INTEGER,
-			temperature_c REAL
+			temperature_c REAL,
+			foreign_advert INTEGER DEFAULT 0
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_inactive_nodes_last_seen ON inactive_nodes(last_seen);
@@ -143,12 +183,15 @@ func applySchema(db *sql.DB) error {
 			payload_type INTEGER,
 			payload_version INTEGER,
 			decoded_json TEXT,
+			from_pubkey TEXT,
 			created_at TEXT DEFAULT (datetime('now'))
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_transmissions_hash ON transmissions(hash);
 		CREATE INDEX IF NOT EXISTS idx_transmissions_first_seen ON transmissions(first_seen);
 		CREATE INDEX IF NOT EXISTS idx_transmissions_payload_type ON transmissions(payload_type);
+		-- idx_transmissions_from_pubkey is created by the from_pubkey_v1
+		-- migration after the column is added on legacy DBs (#1143).
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("base schema: %w", err)
@@ -210,11 +253,16 @@ func applySchema(db *sql.DB) error {
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'advert_count_unique_v1'")
 	if row.Scan(&migDone) != nil {
 		log.Println("[migration] Recalculating advert_count (unique transmissions only)...")
+		// Note: this migration is gated on a one-shot _migrations row, so it
+		// runs at most once per DB. The historical version used a LIKE-on-JSON
+		// substring match (#1143). Switching to from_pubkey here is safe even
+		// though the column may not yet be backfilled on legacy DBs: the
+		// migration is already marked done on those DBs and won't re-run.
 		db.Exec(`
 			UPDATE nodes SET advert_count = (
 				SELECT COUNT(*) FROM transmissions t
 				WHERE t.payload_type = 4
-				  AND t.decoded_json LIKE '%' || nodes.public_key || '%'
+				  AND t.from_pubkey = nodes.public_key
 			)
 		`)
 		db.Exec(`INSERT INTO _migrations (name) VALUES ('advert_count_unique_v1')`)
@@ -418,6 +466,82 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] observations.raw_hex column added")
 	}
 
+	// Migration: add last_packet_at column to observers (#last-packet-at)
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observers_last_packet_at_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding last_packet_at column to observers...")
+		_, alterErr := db.Exec(`ALTER TABLE observers ADD COLUMN last_packet_at TEXT DEFAULT NULL`)
+		if alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column") {
+			return fmt.Errorf("observers last_packet_at ALTER: %w", alterErr)
+		}
+		// Backfill: set last_packet_at = last_seen only for observers that actually have
+		// observation rows (packet_count alone is unreliable — UpsertObserver sets it to 1
+		// on INSERT even for status-only observers).
+		res, err := db.Exec(`UPDATE observers SET last_packet_at = last_seen
+			WHERE last_packet_at IS NULL
+			AND rowid IN (SELECT DISTINCT observer_idx FROM observations WHERE observer_idx IS NOT NULL)`)
+		if err == nil {
+			n, _ := res.RowsAffected()
+			log.Printf("[migration] Backfilled last_packet_at for %d observers with packets", n)
+		}
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observers_last_packet_at_v1')`)
+		log.Println("[migration] observers.last_packet_at column added")
+	}
+
+	// Migration: backfill observations.path_json from raw_hex (#888)
+	// NOTE: This runs ASYNC via BackfillPathJSONAsync() to avoid blocking MQTT startup.
+	// See staging outage where ~502K rows blocked ingest for 15+ hours.
+
+	// One-time cleanup: delete legacy packets with empty hash or empty first_seen (#994)
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'cleanup_legacy_null_hash_ts'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Cleaning up legacy packets with empty hash/timestamp...")
+		db.Exec(`DELETE FROM observations WHERE transmission_id IN (SELECT id FROM transmissions WHERE hash = '' OR first_seen = '')`)
+		res, err := db.Exec(`DELETE FROM transmissions WHERE hash = '' OR first_seen = ''`)
+		if err == nil {
+			deleted, _ := res.RowsAffected()
+			log.Printf("[migration] deleted %d legacy packets with empty hash/timestamp", deleted)
+		}
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('cleanup_legacy_null_hash_ts')`)
+	}
+
+	// Migration: foreign_advert column on nodes/inactive_nodes (#730)
+	// Marks nodes whose ADVERT GPS lies outside the configured geofilter polygon.
+	// Default 0; set to 1 by the ingestor when GeoFilter is configured and
+	// PassesFilter() returns false. Allows operators to surface bridged/leaked
+	// adverts without silently dropping them.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'foreign_advert_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding foreign_advert column to nodes/inactive_nodes...")
+		if _, err := db.Exec(`ALTER TABLE nodes ADD COLUMN foreign_advert INTEGER DEFAULT 0`); err != nil {
+			log.Printf("[migration] nodes.foreign_advert: %v (may already exist)", err)
+		}
+		if _, err := db.Exec(`ALTER TABLE inactive_nodes ADD COLUMN foreign_advert INTEGER DEFAULT 0`); err != nil {
+			log.Printf("[migration] inactive_nodes.foreign_advert: %v (may already exist)", err)
+		}
+		db.Exec(`CREATE INDEX IF NOT EXISTS idx_nodes_foreign_advert ON nodes(foreign_advert) WHERE foreign_advert = 1`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('foreign_advert_v1')`)
+		log.Println("[migration] foreign_advert column added")
+	}
+
+	// Migration: from_pubkey column on transmissions (#1143).
+	// Replaces the unsound `decoded_json LIKE '%pubkey%'` attribution path with
+	// an exact-match indexed column. Synchronously adds the column + index;
+	// row-level backfill is run by the SERVER asynchronously
+	// (cmd/server/from_pubkey_migration.go) so we don't block ingestor boot.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'from_pubkey_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding from_pubkey column + index to transmissions (#1143)...")
+		if _, err := db.Exec(`ALTER TABLE transmissions ADD COLUMN from_pubkey TEXT`); err != nil {
+			log.Printf("[migration] transmissions.from_pubkey: %v (may already exist)", err)
+		}
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey)`); err != nil {
+			log.Printf("[migration] idx_transmissions_from_pubkey: %v", err)
+		}
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('from_pubkey_v1')`)
+		log.Println("[migration] from_pubkey column + index added")
+	}
+
 	return nil
 }
 
@@ -430,8 +554,8 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtInsertTransmission, err = s.db.Prepare(`
-		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, from_pubkey)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -501,7 +625,7 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtUpdateObserverLastSeen, err = s.db.Prepare("UPDATE observers SET last_seen = ? WHERE rowid = ?")
+	s.stmtUpdateObserverLastSeen, err = s.db.Prepare("UPDATE observers SET last_seen = ?, last_packet_at = ? WHERE rowid = ?")
 	if err != nil {
 		return err
 	}
@@ -560,6 +684,7 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 			data.RawHex, hash, now,
 			data.RouteType, data.PayloadType, data.PayloadVersion,
 			data.DecodedJSON, nilIfEmpty(data.ChannelHash),
+			nilIfEmpty(data.FromPubkey),
 		)
 		if err != nil {
 			s.Stats.WriteErrors.Add(1)
@@ -580,9 +705,9 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		err := s.stmtGetObserverRowid.QueryRow(data.ObserverID).Scan(&rowid)
 		if err == nil {
 			observerIdx = &rowid
-			// Update observer last_seen on every packet to prevent
+			// Update observer last_seen and last_packet_at on every packet to prevent
 			// low-traffic observers from appearing offline (#463)
-			_, _ = s.stmtUpdateObserverLastSeen.Exec(now, rowid)
+			_, _ = s.stmtUpdateObserverLastSeen.Exec(now, now, rowid)
 		}
 	}
 
@@ -603,6 +728,10 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	} else {
 		s.Stats.ObservationsInserted.Add(1)
 	}
+
+	// Each prepared-stmt Exec auto-commits. Count one WAL commit per
+	// successful InsertTransmission so the perf page sees commit pressure.
+	s.Stats.WALCommits.Add(1)
 
 	return isNew, nil
 }
@@ -628,6 +757,21 @@ func (s *Store) UpsertNode(pubKey, name, role string, lat, lon *float64, lastSee
 // IncrementAdvertCount increments advert_count for a node by public key.
 func (s *Store) IncrementAdvertCount(pubKey string) error {
 	_, err := s.stmtIncrementAdvertCount.Exec(pubKey)
+	return err
+}
+
+// MarkNodeForeign sets foreign_advert=1 on the node row identified by pubKey.
+// Used when an ADVERT arrives whose GPS lies outside the configured geofilter
+// polygon (#730). Idempotent — safe to call repeatedly. No-op if pubKey is
+// empty.
+func (s *Store) MarkNodeForeign(pubKey string) error {
+	if pubKey == "" {
+		return nil
+	}
+	_, err := s.db.Exec(`UPDATE nodes SET foreign_advert = 1 WHERE public_key = ?`, pubKey)
+	if err != nil {
+		s.Stats.WriteErrors.Add(1)
+	}
 	return err
 }
 
@@ -711,6 +855,7 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 
 // Close checkpoints the WAL and closes the database.
 func (s *Store) Close() error {
+	s.backfillWg.Wait()
 	s.Checkpoint()
 	return s.db.Close()
 }
@@ -788,6 +933,58 @@ func (s *Store) PruneOldMetrics(retentionDays int) (int64, error) {
 	return n, nil
 }
 
+// CheckAutoVacuum inspects the current auto_vacuum mode and logs a warning
+// if not INCREMENTAL. Performs opt-in full VACUUM if db.vacuumOnStartup is set (#919).
+func (s *Store) CheckAutoVacuum(cfg *Config) {
+	var autoVacuum int
+	if err := s.db.QueryRow("PRAGMA auto_vacuum").Scan(&autoVacuum); err != nil {
+		log.Printf("[db] warning: could not read auto_vacuum: %v", err)
+		return
+	}
+
+	if autoVacuum == 2 {
+		log.Printf("[db] auto_vacuum=INCREMENTAL")
+		return
+	}
+
+	modes := map[int]string{0: "NONE", 1: "FULL", 2: "INCREMENTAL"}
+	mode := modes[autoVacuum]
+	if mode == "" {
+		mode = fmt.Sprintf("UNKNOWN(%d)", autoVacuum)
+	}
+
+	log.Printf("[db] auto_vacuum=%s — DB needs one-time VACUUM to enable incremental auto-vacuum. "+
+		"Set db.vacuumOnStartup: true in config to migrate (will block startup for several minutes on large DBs). "+
+		"See https://github.com/Kpa-clawbot/CoreScope/issues/919", mode)
+
+	if cfg.DB != nil && cfg.DB.VacuumOnStartup {
+		// WARNING: Full VACUUM creates a temporary copy of the entire DB file.
+		// Requires ~2× the DB file size in free disk space or it will fail.
+		log.Printf("[db] vacuumOnStartup=true — starting one-time full VACUUM (ensure 2x DB size free disk space)...")
+		start := time.Now()
+
+		if _, err := s.db.Exec("PRAGMA auto_vacuum = INCREMENTAL"); err != nil {
+			log.Printf("[db] VACUUM failed: could not set auto_vacuum: %v", err)
+			return
+		}
+		if _, err := s.db.Exec("VACUUM"); err != nil {
+			log.Printf("[db] VACUUM failed: %v", err)
+			return
+		}
+
+		elapsed := time.Since(start)
+		log.Printf("[db] VACUUM complete in %v — auto_vacuum is now INCREMENTAL", elapsed.Round(time.Millisecond))
+	}
+}
+
+// RunIncrementalVacuum returns free pages to the OS (#919).
+// Safe to call on auto_vacuum=NONE databases (noop).
+func (s *Store) RunIncrementalVacuum(pages int) {
+	if _, err := s.db.Exec(fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)); err != nil {
+		log.Printf("[vacuum] incremental_vacuum error: %v", err)
+	}
+}
+
 // Checkpoint forces a WAL checkpoint to release the WAL lock file,
 // preventing lock contention with a new process starting up.
 func (s *Store) Checkpoint() {
@@ -796,6 +993,97 @@ func (s *Store) Checkpoint() {
 	} else {
 		log.Println("[db] WAL checkpoint complete")
 	}
+}
+
+// BackfillPathJSONAsync launches the path_json backfill in a background goroutine.
+// It processes observations with NULL/empty path_json that have raw_hex available,
+// decoding hop paths and updating the column. Safe to run concurrently with ingest
+// because new observations get path_json at write time; this only touches NULL rows.
+// Idempotent: skips if migration already recorded.
+func (s *Store) BackfillPathJSONAsync() {
+	s.backfillWg.Add(1)
+	go func() {
+		defer s.backfillWg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[backfill] path_json async panic recovered: %v", r)
+			}
+		}()
+
+		var migDone int
+		row := s.db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'backfill_path_json_from_raw_hex_v1'")
+		if row.Scan(&migDone) == nil {
+			return // already done
+		}
+
+		log.Println("[backfill] Starting async path_json backfill from raw_hex...")
+		updated := 0
+		errored := false
+		const batchSize = 1000
+		batchNum := 0
+		for {
+			rows, err := s.db.Query(`
+				SELECT o.id, o.raw_hex
+				FROM observations o
+				JOIN transmissions t ON o.transmission_id = t.id
+				WHERE o.raw_hex IS NOT NULL AND o.raw_hex != ''
+				-- NB: '[]' is the "already attempted, no hops" sentinel; excluded
+				-- to prevent the infinite re-UPDATE loop fixed in #1119.
+				AND (o.path_json IS NULL OR o.path_json = '')
+				AND t.payload_type != 9
+				LIMIT ?`, batchSize)
+			if err != nil {
+				log.Printf("[backfill] path_json query error: %v", err)
+				errored = true
+				break
+			}
+			type pendingRow struct {
+				id     int64
+				rawHex string
+			}
+			var batch []pendingRow
+			for rows.Next() {
+				var r pendingRow
+				if err := rows.Scan(&r.id, &r.rawHex); err == nil {
+					batch = append(batch, r)
+				}
+			}
+			rows.Close()
+			if len(batch) == 0 {
+				break
+			}
+			for _, r := range batch {
+				hops, err := packetpath.DecodePathFromRawHex(r.rawHex)
+				if err != nil || len(hops) == 0 {
+					if _, execErr := s.db.Exec(`UPDATE observations SET path_json = '[]' WHERE id = ?`, r.id); execErr != nil {
+						log.Printf("[backfill] write error (id=%d): %v", r.id, execErr)
+					} else {
+						s.Stats.IncBackfill("path_json")
+					}
+					continue
+				}
+				b, _ := json.Marshal(hops)
+				if _, execErr := s.db.Exec(`UPDATE observations SET path_json = ? WHERE id = ?`, string(b), r.id); execErr != nil {
+					log.Printf("[backfill] write error (id=%d): %v", r.id, execErr)
+				} else {
+					updated++
+					s.Stats.IncBackfill("path_json")
+				}
+			}
+			batchNum++
+			if batchNum%50 == 0 {
+				log.Printf("[backfill] progress: %d observations updated so far (%d batches)", updated, batchNum)
+			}
+			// Throttle: yield to ingest writers between batches
+			time.Sleep(50 * time.Millisecond)
+		}
+		log.Printf("[backfill] Async path_json backfill complete: %d observations updated", updated)
+		if !errored {
+			s.db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_path_json_from_raw_hex_v1')`)
+		} else {
+			log.Printf("[backfill] NOT recording migration due to errors — will retry on next restart")
+		}
+	}()
 }
 
 // LogStats logs current operational metrics.
@@ -921,6 +1209,9 @@ type PacketData struct {
 	PathJSON       string
 	DecodedJSON    string
 	ChannelHash    string // grouping key for channel queries (#762)
+	Region         string // observer region: payload > topic > source config (#788)
+	Foreign        bool   // true when ADVERT GPS lies outside configured geofilter (#730)
+	FromPubkey     string // pubkey of the originating node, for exact-match attribution (#1143)
 }
 
 // nilIfEmpty returns nil for empty strings (for nullable DB columns).
@@ -939,6 +1230,7 @@ type MQTTPacketMessage struct {
 	Score     *float64 `json:"score"`
 	Direction *string  `json:"direction"`
 	Origin    string   `json:"origin"`
+	Region    string   `json:"region,omitempty"` // optional region override (#788)
 }
 
 // BuildPacketData constructs a PacketData from a decoded packet and MQTT message.
@@ -978,6 +1270,13 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		DecodedJSON:    PayloadJSON(&decoded.Payload),
 	}
 
+	// Region priority: payload field > topic-derived parameter (#788)
+	if msg.Region != "" {
+		pd.Region = msg.Region
+	} else {
+		pd.Region = region
+	}
+
 	// Populate channel_hash for fast channel queries (#762)
 	if decoded.Header.PayloadType == PayloadGRP_TXT {
 		if decoded.Payload.Type == "CHAN" && decoded.Payload.Channel != "" {
@@ -985,6 +1284,13 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		} else if decoded.Payload.Type == "GRP_TXT" && decoded.Payload.ChannelHashHex != "" {
 			pd.ChannelHash = "enc_" + decoded.Payload.ChannelHashHex
 		}
+	}
+
+	// Populate from_pubkey at write time (#1143). ADVERTs carry the
+	// originating node's pubkey directly; other packet types stay NULL
+	// (downstream attribution queries handle NULL gracefully).
+	if decoded.Header.PayloadType == PayloadADVERT && decoded.Payload.PubKey != "" {
+		pd.FromPubkey = decoded.Payload.PubKey
 	}
 
 	return pd
