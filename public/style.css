@@ -2535,6 +2535,13 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   font-size: 12px; font-weight: 600; color: var(--text-muted); align-self: center;
   margin-right: 2px; user-select: none;
 }
+.analytics-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.analytics-time-window-select {
+  height: 34px; min-height: 34px; padding: 0 10px; border-radius: 6px; box-sizing: border-box;
+  font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid var(--border);
+  background: var(--input-bg); color: var(--text); transition: border-color 0.15s;
+}
+.analytics-time-window-select:hover { border-color: var(--accent); }
 .region-dropdown-wrap { position: relative; display: inline-flex; align-items: center; }
 .region-dropdown-trigger {
   display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 6px;

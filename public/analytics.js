@@ -96,10 +96,9 @@
         <div class="analytics-header">
           <h2>📊 Mesh Analytics</h2>
           <p class="text-muted">Deep dive into your mesh network data</p>
-          <div id="analyticsRegionFilter" class="region-filter-container"></div>
-          <div class="time-window-filter" style="margin:8px 0">
-            <label for="analyticsTimeWindow" style="font-size:0.9em;color:var(--text-muted);margin-right:6px">Time window:</label>
-            <select id="analyticsTimeWindow" data-testid="analytics-time-window" aria-label="Time window">
+          <div class="analytics-filters">
+            <div id="analyticsRegionFilter" class="region-filter-container"></div>
+            <select id="analyticsTimeWindow" class="analytics-time-window-select" data-testid="analytics-time-window" aria-label="Time window">
               <option value="">All data</option>
               <option value="1h">Last 1 hour</option>
               <option value="24h">Last 24 hours</option>
