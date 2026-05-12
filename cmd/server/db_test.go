@@ -32,7 +32,8 @@ func setupTestDB(t *testing.T) *DB {
 			first_seen TEXT,
 			advert_count INTEGER DEFAULT 0,
 			battery_mv INTEGER,
-			temperature_c REAL
+			temperature_c REAL,
+			scope TEXT
 		);
 
 		CREATE TABLE observers (
@@ -1098,7 +1099,8 @@ func setupTestDBV2(t *testing.T) *DB {
 			first_seen TEXT,
 			advert_count INTEGER DEFAULT 0,
 			battery_mv INTEGER,
-			temperature_c REAL
+			temperature_c REAL,
+			scope TEXT
 		);
 
 		CREATE TABLE observers (
