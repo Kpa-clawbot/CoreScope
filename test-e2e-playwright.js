@@ -1571,39 +1571,28 @@ async function run() {
 
   // ─── Mobile filter dropdown tests (#534) ──────────────────────────────────
 
-  await test('Mobile: filter toggle expands filter bar on packets page (#534)', async () => {
+  await test('Mobile: filter button opens filters modal on packets page (#534)', async () => {
     // Use a mobile viewport
     await page.setViewportSize({ width: 480, height: 800 });
     await page.goto(`${BASE}/#/packets`);
     await page.waitForTimeout(500);
 
-    const filterBar = await page.$('.filter-bar');
-    assert(filterBar, 'Filter bar should exist on packets page');
+    // Filters are now in a modal opened by #pktFiltersBtn
+    const filtersBtn = await page.$('#pktFiltersBtn');
+    assert(filtersBtn, 'Filters button (#pktFiltersBtn) should exist on packets page');
 
-    // Before clicking toggle, filter inputs should be hidden
-    const toggleBtn = await page.$('.filter-toggle-btn');
-    assert(toggleBtn, 'Filter toggle button should exist on mobile');
+    // Overlay should be hidden before click
+    const overlayBefore = await page.$eval('#pktFiltersOverlay', el => el.style.display);
+    assert(overlayBefore === 'none' || overlayBefore === '', 'Filters overlay should be hidden before click');
 
-    await toggleBtn.click();
-    await page.waitForTimeout(300);
+    await filtersBtn.click();
+    await page.waitForSelector('#pktFiltersOverlay', { state: 'visible', timeout: 3000 });
 
-    // After clicking, .filters-expanded should be on the filter bar
-    const expanded = await filterBar.evaluate(el => el.classList.contains('filters-expanded'));
-    assert(expanded, 'Filter bar should have filters-expanded class after toggle');
+    const overlayAfter = await page.$eval('#pktFiltersOverlay', el => el.style.display);
+    assert(overlayAfter !== 'none', 'Filters overlay should be visible after clicking filters button');
 
-    // Filter inputs should now be visible
-    const filterInput = await page.$('.filter-bar input');
-    if (filterInput) {
-      const display = await filterInput.evaluate(el => getComputedStyle(el).display);
-      assert(display !== 'none', `Filter input should be visible when expanded, got display: ${display}`);
-    }
-
-    const filterSelect = await page.$('.filter-bar select');
-    if (filterSelect) {
-      const display = await filterSelect.evaluate(el => getComputedStyle(el).display);
-      assert(display !== 'none', `Filter select should be visible when expanded, got display: ${display}`);
-    }
-
+    // Close modal
+    await page.click('#pktFMClose');
     // Reset viewport
     await page.setViewportSize({ width: 1280, height: 720 });
   });
