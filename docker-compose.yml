@@ -66,6 +66,33 @@ services:
       timeout: 5s
       retries: 5
 
+  prod:
+    image: corescope:latest
+    container_name: corescope-prod
+    restart: unless-stopped
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy-config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-config/maintenance.html:/srv/maintenance.html:ro
+      - ${PROD_DATA_DIR:-~/meshcore-data}:/app/data
+      - caddy-data-prod:/data/caddy
+    environment:
+      - NODE_ENV=production
+      - MESHCORE_API_KEY=${MESHCORE_API_KEY}
+      - DISABLE_MOSQUITTO=true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/stats"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: corescope-mosquitto
@@ -82,3 +109,4 @@ volumes:
   # Named volumes for Caddy TLS certificates (not user data — managed by Caddy internally)
   mosquitto-data:
   caddy-data-dev:
+  caddy-data-prod:
