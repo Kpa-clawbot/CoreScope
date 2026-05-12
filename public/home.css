@@ -606,6 +606,8 @@
   animation: none;
 }
 .home-announcement-link.seen { animation: none; }
+.home-announcement-link.search-open { opacity: 0; pointer-events: none; transition: opacity 0.15s; }
+.home-announcement-link { transition: opacity 0.15s; }
 @keyframes announcePulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(74,158,255,0.35); }
   50% { box-shadow: 0 0 0 7px rgba(74,158,255,0); }

@@ -211,6 +211,7 @@
           suggest.classList.add('open');
           input.setAttribute('aria-expanded', 'true');
           input.setAttribute('aria-activedescendant', '');
+          document.getElementById('homeAnnouncementBtn')?.classList.add('search-open');
 
           // Claim buttons
           suggest.querySelectorAll('.suggest-claim').forEach(btn => {
@@ -230,7 +231,7 @@
               loadMyNodes();
             });
           });
-        } catch { suggest.classList.remove('open'); input.setAttribute('aria-expanded', 'false'); }
+        } catch { suggest.classList.remove('open'); input.setAttribute('aria-expanded', 'false'); document.getElementById('homeAnnouncementBtn')?.classList.remove('search-open'); }
       }, 200);
     });
 
@@ -240,6 +241,7 @@
       suggest.classList.remove('open');
       input.setAttribute('aria-expanded', 'false');
       input.value = '';
+      document.getElementById('homeAnnouncementBtn')?.classList.remove('search-open');
       loadHealth(item.dataset.key);
     });
 
@@ -255,6 +257,7 @@
     if (suggest && !e.target.closest('.home-search-wrap')) {
       suggest.classList.remove('open');
       if (input) { input.setAttribute('aria-expanded', 'false'); input.setAttribute('aria-activedescendant', ''); }
+      document.getElementById('homeAnnouncementBtn')?.classList.remove('search-open');
     }
   }
 
