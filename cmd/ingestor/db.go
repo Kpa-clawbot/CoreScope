@@ -555,8 +555,9 @@ func applySchema(db *sql.DB) error {
 	// Migration: add default_scope column to nodes (#899 Feature 3)
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'nodes_default_scope_v1'")
 	if row.Scan(&migDone) != nil {
-		log.Println("[migration] Adding default_scope column to nodes...")
+		log.Println("[migration] Adding default_scope column to nodes/inactive_nodes...")
 		db.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`)
+		db.Exec(`ALTER TABLE inactive_nodes ADD COLUMN default_scope TEXT DEFAULT NULL`)
 		db.Exec(`UPDATE nodes SET default_scope = (
 			SELECT t.scope_name FROM transmissions t
 			WHERE t.from_pubkey = nodes.public_key
@@ -570,7 +571,7 @@ func applySchema(db *sql.DB) error {
 			  AND t.scope_name IS NOT NULL AND t.scope_name != ''
 		)`)
 		db.Exec(`INSERT INTO _migrations (name) VALUES ('nodes_default_scope_v1')`)
-		log.Println("[migration] default_scope column added to nodes")
+		log.Println("[migration] default_scope column added to nodes/inactive_nodes")
 	}
 
 	return nil
