@@ -23,8 +23,58 @@ function comparePacketSets(hashesA, hashesB) {
   return { onlyA: onlyA, onlyB: onlyB, both: both };
 }
 
+/**
+ * Filter packets by route type.
+ * mode: 'all' | 'flood' | 'direct'
+ * Flood = route_type 0 (TransportFlood) or 1 (Flood)
+ * Direct = route_type 2 (Direct) or 3 (TransportDirect)
+ */
+function filterPacketsByRoute(packets, mode) {
+  if (!packets || mode === 'all') return packets || [];
+  if (mode === 'flood') {
+    return packets.filter(function (p) { return p.route_type === 0 || p.route_type === 1; });
+  }
+  if (mode === 'direct') {
+    return packets.filter(function (p) { return p.route_type === 2 || p.route_type === 3; });
+  }
+  return packets;
+}
+
+/**
+ * Compute asymmetric overlap statistics between two observer packet sets.
+ * Given a comparePacketSets() result, returns:
+ *   - totalA / totalB: unique packet count for each observer
+ *   - shared: packets seen by both
+ *   - onlyA / onlyB: exclusive packet counts
+ *   - aSeesOfB: percentage of B's packets that A also saw (rounded to 0.1%)
+ *   - bSeesOfA: percentage of A's packets that B also saw (rounded to 0.1%)
+ * Returns 0% (not NaN) when a denominator is zero.
+ */
+function computeOverlapStats(cmp) {
+  var onlyA = (cmp && cmp.onlyA && cmp.onlyA.length) || 0;
+  var onlyB = (cmp && cmp.onlyB && cmp.onlyB.length) || 0;
+  var shared = (cmp && cmp.both && cmp.both.length) || 0;
+  var totalA = onlyA + shared;
+  var totalB = onlyB + shared;
+  var aSeesOfB = totalB > 0 ? Math.round((shared / totalB) * 1000) / 10 : 0;
+  var bSeesOfA = totalA > 0 ? Math.round((shared / totalA) * 1000) / 10 : 0;
+  return {
+    totalA: totalA,
+    totalB: totalB,
+    shared: shared,
+    onlyA: onlyA,
+    onlyB: onlyB,
+    aSeesOfB: aSeesOfB,
+    bSeesOfA: bSeesOfA,
+  };
+}
+
 // Expose for testing
-if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
+if (typeof window !== 'undefined') {
+  window.comparePacketSets = comparePacketSets;
+  window.filterPacketsByRoute = filterPacketsByRoute;
+  window.computeOverlapStats = computeOverlapStats;
+}
 
 (function () {
   var PAYLOAD_LABELS = { 0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert', 5: 'Channel Msg', 7: 'Anon Req', 8: 'Path', 9: 'Trace', 11: 'Control' };
@@ -36,6 +86,7 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
   var packetsA = [];
   var packetsB = [];
   var currentView = 'summary';
+  var routeFilter = 'all';
 
   function init(app, routeParam) {
     // Parse preselected observers from URL: #/compare?a=ID1&b=ID2
@@ -47,6 +98,7 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
     packetsA = [];
     packetsB = [];
     currentView = 'summary';
+    routeFilter = 'all';
 
     app.innerHTML = '<div class="compare-page" style="padding:16px">' +
       '<div class="page-header" style="display:flex;align-items:center;gap:12px;margin-bottom:16px">' +
@@ -76,6 +128,7 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
     comparisonResult = null;
     packetsA = [];
     packetsB = [];
+    routeFilter = 'all';
   }
 
   async function loadObservers() {
@@ -115,6 +168,14 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
           '<select id="compareObsB" class="compare-select">' + optionsHtml + '</select>' +
         '</div>' +
         '<button id="compareBtn" class="compare-btn" disabled>Compare</button>' +
+        '<div class="compare-select-group">' +
+          '<label for="compareRouteFilter">Packet Type</label>' +
+          '<select id="compareRouteFilter" class="compare-select">' +
+            '<option value="all">All packets</option>' +
+            '<option value="flood">Flood only</option>' +
+            '<option value="direct">Direct only</option>' +
+          '</select>' +
+        '</div>' +
       '</div>';
 
     var ddA = document.getElementById('compareObsA');
@@ -123,6 +184,13 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
 
     if (selA) ddA.value = selA;
     if (selB) ddB.value = selB;
+
+    var ddRoute = document.getElementById('compareRouteFilter');
+    ddRoute.value = routeFilter;
+    ddRoute.addEventListener('change', function () {
+      routeFilter = ddRoute.value;
+      if (comparisonResult) runComparison();
+    });
 
     function updateBtn() {
       selA = ddA.value || null;
@@ -162,16 +230,20 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
       packetsA = results[0].packets || [];
       packetsB = results[1].packets || [];
 
-      var hashesA = new Set(packetsA.map(function (p) { return p.hash; }));
-      var hashesB = new Set(packetsB.map(function (p) { return p.hash; }));
+      // Apply flood/direct filter (#928)
+      var filteredA = filterPacketsByRoute(packetsA, routeFilter);
+      var filteredB = filterPacketsByRoute(packetsB, routeFilter);
+
+      var hashesA = new Set(filteredA.map(function (p) { return p.hash; }));
+      var hashesB = new Set(filteredB.map(function (p) { return p.hash; }));
 
       comparisonResult = comparePacketSets(hashesA, hashesB);
 
       // Build hash→packet lookups for detail rendering
       comparisonResult.packetMapA = new Map();
       comparisonResult.packetMapB = new Map();
-      packetsA.forEach(function (p) { comparisonResult.packetMapA.set(p.hash, p); });
-      packetsB.forEach(function (p) { comparisonResult.packetMapB.set(p.hash, p); });
+      filteredA.forEach(function (p) { comparisonResult.packetMapA.set(p.hash, p); });
+      filteredB.forEach(function (p) { comparisonResult.packetMapB.set(p.hash, p); });
 
       currentView = 'summary';
       renderComparison();
@@ -296,12 +368,24 @@ if (typeof window !== 'undefined') window.comparePacketSets = comparePacketSets;
 
     if (currentView === 'summary') {
       // Textual summary
+      var stats = computeOverlapStats(r);
       var total = r.onlyA.length + r.onlyB.length + r.both.length;
       var overlap = total > 0 ? (r.both.length / total * 100).toFixed(1) : '0.0';
       el.innerHTML =
         '<div class="compare-summary-text">' +
-          '<p>In the last 24 hours, <strong>' + nameA + '</strong> saw <strong>' + (r.onlyA.length + r.both.length).toLocaleString() + '</strong> unique packets ' +
-          'and <strong>' + nameB + '</strong> saw <strong>' + (r.onlyB.length + r.both.length).toLocaleString() + '</strong> unique packets.</p>' +
+          '<p>In the last 24 hours, <strong>' + nameA + '</strong> saw <strong>' + stats.totalA.toLocaleString() + '</strong> unique packets ' +
+          'and <strong>' + nameB + '</strong> saw <strong>' + stats.totalB.toLocaleString() + '</strong> unique packets.</p>' +
+          // #671 — asymmetric reference-observer comparison
+          '<div class="compare-asymmetric" style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0">' +
+            '<div class="compare-asym-card" style="flex:1;min-width:240px;padding:12px;border:1px solid var(--border, #333);border-radius:6px">' +
+              '<div style="font-size:1.6em;font-weight:bold">' + stats.aSeesOfB.toFixed(1) + '%</div>' +
+              '<div class="text-muted">' + nameA + ' saw <strong>' + stats.shared.toLocaleString() + '</strong> of ' + nameB + '\u2019s ' + stats.totalB.toLocaleString() + ' packets</div>' +
+            '</div>' +
+            '<div class="compare-asym-card" style="flex:1;min-width:240px;padding:12px;border:1px solid var(--border, #333);border-radius:6px">' +
+              '<div style="font-size:1.6em;font-weight:bold">' + stats.bSeesOfA.toFixed(1) + '%</div>' +
+              '<div class="text-muted">' + nameB + ' saw <strong>' + stats.shared.toLocaleString() + '</strong> of ' + nameA + '\u2019s ' + stats.totalA.toLocaleString() + ' packets</div>' +
+            '</div>' +
+          '</div>' +
           '<p><strong>' + r.both.length.toLocaleString() + '</strong> packets (' + overlap + '%) were seen by both observers. ' +
           '<strong>' + r.onlyA.length.toLocaleString() + '</strong> were exclusive to ' + nameA + ' and ' +
           '<strong>' + r.onlyB.length.toLocaleString() + '</strong> were exclusive to ' + nameB + '.</p>' +

@@ -7,7 +7,9 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
 )
 
@@ -20,6 +22,17 @@ type MQTTSource struct {
 	RejectUnauthorized *bool    `json:"rejectUnauthorized,omitempty"`
 	Topics             []string `json:"topics"`
 	IATAFilter         []string `json:"iataFilter,omitempty"`
+	ConnectTimeoutSec  int      `json:"connectTimeoutSec,omitempty"`
+	Region             string   `json:"region,omitempty"`
+}
+
+// ConnectTimeoutOrDefault returns the per-source connect timeout in seconds,
+// or 30 if not set (matching the WaitTimeout default from #926).
+func (s MQTTSource) ConnectTimeoutOrDefault() int {
+	if s.ConnectTimeoutSec > 0 {
+		return s.ConnectTimeoutSec
+	}
+	return 30
 }
 
 // MQTTLegacy is the old single-broker config format.
@@ -40,12 +53,50 @@ type Config struct {
 	HashRegions     []string          `json:"hashRegions,omitempty"`
 	Retention       *RetentionConfig  `json:"retention,omitempty"`
 	Metrics         *MetricsConfig    `json:"metrics,omitempty"`
-	GeoFilter            *GeoFilterConfig  `json:"geo_filter,omitempty"`
+	GeoFilter            *GeoFilterConfig     `json:"geo_filter,omitempty"`
+	ForeignAdverts       *ForeignAdvertConfig `json:"foreignAdverts,omitempty"`
 	ValidateSignatures   *bool             `json:"validateSignatures,omitempty"`
+	DB                   *DBConfig         `json:"db,omitempty"`
+
+	// ObserverIATAWhitelist restricts which observer IATA regions are processed.
+	// When non-empty, only observers whose IATA code (from the MQTT topic) matches
+	// one of these entries are accepted. Case-insensitive. An empty list means all
+	// IATA codes are allowed. This applies globally, unlike the per-source iataFilter.
+	ObserverIATAWhitelist []string `json:"observerIATAWhitelist,omitempty"`
+
+	// obsIATAWhitelistCached is the lazily-built uppercase set for O(1) lookups.
+	obsIATAWhitelistCached map[string]bool
+	obsIATAWhitelistOnce   sync.Once
+
+	// ObserverBlacklist is a list of observer public keys to drop at ingest.
+	// Messages from blacklisted observers are silently discarded — no DB writes,
+	// no UpsertObserver, no observations, no metrics.
+	ObserverBlacklist []string `json:"observerBlacklist,omitempty"`
+
+	// obsBlacklistSetCached is the lazily-built lowercase set for O(1) lookups.
+	obsBlacklistSetCached map[string]bool
+	obsBlacklistOnce      sync.Once
 }
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
 type GeoFilterConfig = geofilter.Config
+
+// ForeignAdvertConfig controls how the ingestor handles ADVERTs whose GPS lies
+// outside the configured geofilter polygon (#730). Modes:
+//   - "flag" (default): store the advert/node and tag it foreign for visibility.
+//   - "drop":           silently discard the advert (legacy behavior).
+type ForeignAdvertConfig struct {
+	Mode string `json:"mode,omitempty"`
+}
+
+// IsDropMode reports whether the foreign-advert config is set to "drop".
+// Defaults to false ("flag" mode) when nil or unset.
+func (f *ForeignAdvertConfig) IsDropMode() bool {
+	if f == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(f.Mode), "drop")
+}
 
 // RetentionConfig controls how long stale nodes are kept before being moved to inactive_nodes.
 type RetentionConfig struct {
@@ -57,6 +108,17 @@ type RetentionConfig struct {
 // MetricsConfig controls observer metrics collection.
 type MetricsConfig struct {
 	SampleIntervalSec int `json:"sampleIntervalSec"`
+}
+
+// DBConfig is the shared SQLite vacuum/maintenance config (#919, #921).
+type DBConfig = dbconfig.DBConfig
+
+// IncrementalVacuumPages returns the configured pages per vacuum or 1024 default.
+func (c *Config) IncrementalVacuumPages() int {
+	if c.DB != nil && c.DB.IncrementalVacuumPages > 0 {
+		return c.DB.IncrementalVacuumPages
+	}
+	return 1024
 }
 
 // ShouldValidateSignatures returns true (default) unless explicitly disabled.
@@ -98,6 +160,43 @@ func (c *Config) ObserverDaysOrDefault() int {
 		return c.Retention.ObserverDays
 	}
 	return 14
+}
+
+// IsObserverBlacklisted returns true if the given observer ID is in the observerBlacklist.
+func (c *Config) IsObserverBlacklisted(id string) bool {
+	if c == nil || len(c.ObserverBlacklist) == 0 {
+		return false
+	}
+	c.obsBlacklistOnce.Do(func() {
+		m := make(map[string]bool, len(c.ObserverBlacklist))
+		for _, pk := range c.ObserverBlacklist {
+			trimmed := strings.ToLower(strings.TrimSpace(pk))
+			if trimmed != "" {
+				m[trimmed] = true
+			}
+		}
+		c.obsBlacklistSetCached = m
+	})
+	return c.obsBlacklistSetCached[strings.ToLower(strings.TrimSpace(id))]
+}
+
+// IsObserverIATAAllowed returns true if the given IATA code is permitted.
+// When ObserverIATAWhitelist is empty, all codes are allowed.
+func (c *Config) IsObserverIATAAllowed(iata string) bool {
+	if c == nil || len(c.ObserverIATAWhitelist) == 0 {
+		return true
+	}
+	c.obsIATAWhitelistOnce.Do(func() {
+		m := make(map[string]bool, len(c.ObserverIATAWhitelist))
+		for _, code := range c.ObserverIATAWhitelist {
+			trimmed := strings.ToUpper(strings.TrimSpace(code))
+			if trimmed != "" {
+				m[trimmed] = true
+			}
+		}
+		c.obsIATAWhitelistCached = m
+	})
+	return c.obsIATAWhitelistCached[strings.ToUpper(strings.TrimSpace(iata))]
 }
 
 // LoadConfig reads configuration from a JSON file, with env var overrides.

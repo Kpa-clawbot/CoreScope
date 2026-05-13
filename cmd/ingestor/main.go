@@ -58,6 +58,12 @@ func main() {
 	defer store.Close()
 	log.Printf("SQLite opened: %s", cfg.DBPath)
 
+	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
+	store.BackfillPathJSONAsync()
+
+	// Check auto_vacuum mode and optionally migrate (#919)
+	store.CheckAutoVacuum(cfg)
+
 	// Node retention: move stale nodes to inactive_nodes on startup
 	nodeDays := cfg.NodeDaysOrDefault()
 	store.MoveStaleNodes(nodeDays)
@@ -70,12 +76,15 @@ func main() {
 	metricsDays := cfg.MetricsRetentionDays()
 	store.PruneOldMetrics(metricsDays)
 	store.PruneDroppedPackets(metricsDays)
+	vacuumPages := cfg.IncrementalVacuumPages()
+	store.RunIncrementalVacuum(vacuumPages)
 
 	// Daily ticker for node retention
 	retentionTicker := time.NewTicker(1 * time.Hour)
 	go func() {
 		for range retentionTicker.C {
 			store.MoveStaleNodes(nodeDays)
+			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()
 
@@ -84,8 +93,10 @@ func main() {
 	go func() {
 		time.Sleep(90 * time.Second) // stagger after metrics prune
 		store.RemoveStaleObservers(observerDays)
+		store.RunIncrementalVacuum(vacuumPages)
 		for range observerRetentionTicker.C {
 			store.RemoveStaleObservers(observerDays)
+			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()
 
@@ -95,6 +106,7 @@ func main() {
 		for range metricsRetentionTicker.C {
 			store.PruneOldMetrics(metricsDays)
 			store.PruneDroppedPackets(metricsDays)
+			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()
 
@@ -105,6 +117,10 @@ func main() {
 			store.LogStats()
 		}
 	}()
+
+	// Per-second stats file writer for the server's /api/perf/write-sources
+	// endpoint (#1120). Best-effort; never fatal.
+	StartStatsFileWriter(store, time.Second)
 
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {
@@ -117,29 +133,16 @@ func main() {
 
 	// Connect to each MQTT source
 	var clients []mqtt.Client
+	connectedCount := 0
 	for _, source := range sources {
 		tag := source.Name
 		if tag == "" {
 			tag = source.Broker
 		}
 
-		opts := mqtt.NewClientOptions().
-			AddBroker(source.Broker).
-			SetAutoReconnect(true).
-			SetConnectRetry(true).
-			SetOrderMatters(true)
-
-		if source.Username != "" {
-			opts.SetUsername(source.Username)
-		}
-		if source.Password != "" {
-			opts.SetPassword(source.Password)
-		}
-		if source.RejectUnauthorized != nil && !*source.RejectUnauthorized {
-			opts.SetTLSConfig(&tls.Config{InsecureSkipVerify: true})
-		} else if strings.HasPrefix(source.Broker, "ssl://") {
-			opts.SetTLSConfig(&tls.Config{})
-		}
+		opts := buildMQTTOpts(source)
+		connectTimeout := source.ConnectTimeoutOrDefault()
+		log.Printf("MQTT [%s] connect timeout: %ds", tag, connectTimeout)
 
 		opts.SetOnConnectHandler(func(c mqtt.Client) {
 			log.Printf("MQTT [%s] connected to %s", tag, source.Broker)
@@ -159,7 +162,11 @@ func main() {
 		})
 
 		opts.SetConnectionLostHandler(func(c mqtt.Client, err error) {
-			log.Printf("MQTT [%s] disconnected: %v", tag, err)
+			log.Printf("MQTT [%s] disconnected from %s: %v", tag, source.Broker, err)
+		})
+
+		opts.SetReconnectingHandler(func(c mqtt.Client, options *mqtt.ClientOptions) {
+			log.Printf("MQTT [%s] reconnecting to %s", tag, source.Broker)
 		})
 
 		// Capture source for closure
@@ -170,19 +177,43 @@ func main() {
 
 		client := mqtt.NewClient(opts)
 		token := client.Connect()
-		token.Wait()
-		if token.Error() != nil {
-			log.Printf("MQTT [%s] connection failed (non-fatal): %v", tag, token.Error())
+		// With ConnectRetry=true, token.Wait() blocks forever for unreachable brokers.
+		// WaitTimeout lets startup proceed; the client keeps retrying in the background
+		// and OnConnect fires (subscribing) when it eventually connects (#910).
+		if !token.WaitTimeout(time.Duration(connectTimeout) * time.Second) {
+			log.Printf("MQTT [%s] initial connection timed out — retrying in background", tag)
+			clients = append(clients, client)
 			continue
 		}
+		if token.Error() != nil {
+			log.Printf("MQTT [%s] connection failed (non-fatal): %v", tag, token.Error())
+			// BL1 fix: Disconnect to stop Paho's internal retry goroutines.
+			// With ConnectRetry=true, Connect() spawns background goroutines
+			// that leak if the client is simply discarded.
+			client.Disconnect(0)
+			continue
+		}
+		connectedCount++
 		clients = append(clients, client)
 	}
 
-	if len(clients) == 0 {
-		log.Fatal("no MQTT connections established — check broker is running (default: mqtt://localhost:1883). Set MQTT_BROKER env var or configure mqttSources in config.json")
+	// BL2 fix: require at least one immediately-connected source. Timed-out
+	// clients are retrying in background (tracked in clients) but don't count
+	// as "connected" — a single unreachable broker must not silently run with
+	// zero active connections.
+	if connectedCount == 0 {
+		// Clean up any timed-out clients still retrying
+		for _, c := range clients {
+			c.Disconnect(0)
+		}
+		log.Fatal("no MQTT sources connected — all timed out or failed. Check broker is running (default: mqtt://localhost:1883). Set MQTT_BROKER env var or configure mqttSources in config.json")
 	}
 
-	log.Printf("Running — %d MQTT source(s) connected", len(clients))
+	if connectedCount < len(clients) {
+		log.Printf("Running — %d MQTT source(s) connected, %d retrying in background", connectedCount, len(clients)-connectedCount)
+	} else {
+		log.Printf("Running — %d MQTT source(s) connected", connectedCount)
+	}
 
 	// Wait for shutdown signal
 	sig := make(chan os.Signal, 1)
@@ -198,6 +229,32 @@ func main() {
 		c.Disconnect(5000) // 5s to allow in-flight messages to drain
 	}
 	log.Println("Done.")
+}
+
+// buildMQTTOpts creates MQTT client options for a source with bounded reconnect
+// backoff, connect timeout, and TLS/auth configuration.
+func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
+	opts := mqtt.NewClientOptions().
+		AddBroker(source.Broker).
+		SetAutoReconnect(true).
+		SetConnectRetry(true).
+		SetOrderMatters(true).
+		SetMaxReconnectInterval(30 * time.Second).
+		SetConnectTimeout(10 * time.Second).
+		SetWriteTimeout(10 * time.Second)
+
+	if source.Username != "" {
+		opts.SetUsername(source.Username)
+	}
+	if source.Password != "" {
+		opts.SetPassword(source.Password)
+	}
+	if source.RejectUnauthorized != nil && !*source.RejectUnauthorized {
+		opts.SetTLSConfig(&tls.Config{InsecureSkipVerify: true})
+	} else if strings.HasPrefix(source.Broker, "ssl://") {
+		opts.SetTLSConfig(&tls.Config{})
+	}
+	return opts
 }
 
 func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, channelKeys map[string]string, regionKeys map[string][]byte, cfg *Config) {
@@ -220,8 +277,21 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		return
 	}
 
+	// Observer blacklist: drop ALL messages from blacklisted observers before any
+	// DB writes (status, metrics, packets). Trumps IATA filter.
+	if len(parts) > 2 && cfg.IsObserverBlacklisted(parts[2]) {
+		log.Printf("MQTT [%s] observer %.8s blacklisted, dropping", tag, parts[2])
+		return
+	}
+
+	// Global observer IATA whitelist: if configured, drop messages from observers
+	// in non-whitelisted IATA regions. Applies to ALL message types (status + packets).
+	if len(parts) > 1 && !cfg.IsObserverIATAAllowed(parts[1]) {
+		return
+	}
+
 	// Status topic: meshcore/<region>/<observer_id>/status
-	// IATA filter does NOT apply here — observer metadata (noise_floor, battery, etc.)
+	// Per-source IATA filter does NOT apply here — observer metadata (noise_floor, battery, etc.)
 	// is region-independent and should be accepted from all observers regardless of
 	// which IATA regions are configured for packet ingestion.
 	if len(parts) >= 4 && parts[3] == "status" {
@@ -285,8 +355,16 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		if len(parts) > 1 {
 			region = parts[1]
 		}
+		// Fallback to source-level region config when topic has no region (#788)
+		if region == "" && source.Region != "" {
+			region = source.Region
+		}
 
 		mqttMsg := &MQTTPacketMessage{Raw: rawHex}
+		// Parse optional region from JSON payload (#788)
+		if v, ok := msg["region"].(string); ok && v != "" {
+			mqttMsg.Region = v
+		}
 		if v, ok := msg["SNR"]; ok {
 			if f, ok := toFloat64(v); ok {
 				mqttMsg.SNR = &f
@@ -351,10 +429,28 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				})
 				return
 			}
+			foreign := false
 			if !NodePassesGeoFilter(decoded.Payload.Lat, decoded.Payload.Lon, cfg.GeoFilter) {
-				return
+				if cfg.ForeignAdverts.IsDropMode() {
+					return
+				}
+				foreign = true
+				lat, lon := 0.0, 0.0
+				if decoded.Payload.Lat != nil {
+					lat = *decoded.Payload.Lat
+				}
+				if decoded.Payload.Lon != nil {
+					lon = *decoded.Payload.Lon
+				}
+				truncPK := decoded.Payload.PubKey
+				if len(truncPK) > 16 {
+					truncPK = truncPK[:16]
+				}
+				log.Printf("MQTT [%s] foreign advert: node=%s name=%s lat=%.4f lon=%.4f observer=%s",
+					tag, truncPK, decoded.Payload.Name, lat, lon, firstNonEmpty(mqttMsg.Origin, observerID))
 			}
 			pktData := BuildPacketData(mqttMsg, decoded, observerID, region, regionKeys)
+			pktData.Foreign = foreign
 			isNew, err := store.InsertTransmission(pktData)
 			if err != nil {
 				log.Printf("MQTT [%s] db insert error: %v", tag, err)
@@ -362,6 +458,11 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			role := advertRole(decoded.Payload.Flags)
 			if err := store.UpsertNode(decoded.Payload.PubKey, decoded.Payload.Name, role, decoded.Payload.Lat, decoded.Payload.Lon, pktData.Timestamp); err != nil {
 				log.Printf("MQTT [%s] node upsert error: %v", tag, err)
+			}
+			if foreign {
+				if err := store.MarkNodeForeign(decoded.Payload.PubKey); err != nil {
+					log.Printf("MQTT [%s] mark foreign error: %v", tag, err)
+				}
 			}
 			if isNew {
 				if err := store.IncrementAdvertCount(decoded.Payload.PubKey); err != nil {
@@ -372,6 +473,12 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			if decoded.Payload.BatteryMv != nil || decoded.Payload.TemperatureC != nil {
 				if err := store.UpdateNodeTelemetry(decoded.Payload.PubKey, decoded.Payload.BatteryMv, decoded.Payload.TemperatureC); err != nil {
 					log.Printf("MQTT [%s] node telemetry update error: %v", tag, err)
+				}
+			}
+			// Update default_scope when advert carries a matched transport scope (#899)
+			if pktData.ScopeName != "" {
+				if err := store.UpdateNodeDefaultScope(decoded.Payload.PubKey, pktData.ScopeName); err != nil {
+					log.Printf("MQTT [%s] node default_scope update error: %v", tag, err)
 				}
 			}
 		} else {
@@ -386,7 +493,12 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		// Upsert observer
 		if observerID != "" {
 			origin, _ := msg["origin"].(string)
-			if err := store.UpsertObserver(observerID, origin, region, nil); err != nil {
+			// Use effective region: payload > topic > source config (#788)
+			effectiveRegion := region
+			if mqttMsg.Region != "" {
+				effectiveRegion = mqttMsg.Region
+			}
+			if err := store.UpsertObserver(observerID, origin, effectiveRegion, nil); err != nil {
 				log.Printf("MQTT [%s] observer upsert error: %v", tag, err)
 			}
 		}

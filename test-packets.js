@@ -844,6 +844,199 @@ console.log('\n=== packets.js: _invalidateRowCounts / _refreshRowCountsIfDirty (
   });
 }
 
+console.log('\n=== packets.js: buildPacketsParams ===');
+{
+  const ctx = loadPacketsSandbox();
+  const api = ctx._packetsTestAPI;
+  assert(typeof api.buildPacketsParams === 'function', 'buildPacketsParams must be exported');
+
+  test('hash filter suppresses region — direct hash links work regardless of saved region', () => {
+    // This is the bug from URL https://analyzer.../#/packets?hash=178525e9f693aa7e
+    // when the user's saved RegionFilter excludes the packet's observer region.
+    // The hash is an exact identifier; ALL other filters must be ignored.
+    const p = api.buildPacketsParams({
+      filters: { hash: 'abc123' },
+      regionParam: 'SJC,SFO,OAK,MRY',
+      windowMin: 60,
+      groupByHash: false,
+      limit: 200,
+    });
+    assert.strictEqual(p.get('hash'), 'abc123');
+    assert.strictEqual(p.get('region'), null, 'region must NOT be set when hash is present');
+    assert.strictEqual(p.get('since'), null, 'since must NOT be set when hash is present');
+  });
+
+  test('hash filter suppresses ALL other filters — observer, node, channel too', () => {
+    const p = api.buildPacketsParams({
+      filters: { hash: 'h', node: 'n', observer: 'o', channel: 'c' },
+      regionParam: 'SJC',
+      windowMin: 60,
+      groupByHash: false,
+      limit: 200,
+    });
+    assert.strictEqual(p.get('hash'), 'h');
+    assert.strictEqual(p.get('node'), null);
+    assert.strictEqual(p.get('observer'), null);
+    assert.strictEqual(p.get('channel'), null);
+    assert.strictEqual(p.get('region'), null);
+    assert.strictEqual(p.get('since'), null);
+  });
+
+  test('hash filter suppresses region with default windowMin=0', () => {
+    const p = api.buildPacketsParams({
+      filters: { hash: 'deadbeef' },
+      regionParam: 'COA',
+      windowMin: 0,
+      groupByHash: false,
+      limit: 50,
+    });
+    assert.strictEqual(p.get('hash'), 'deadbeef');
+    assert.strictEqual(p.get('region'), null);
+  });
+
+  test('region applied normally when hash filter is absent', () => {
+    const p = api.buildPacketsParams({
+      filters: {},
+      regionParam: 'SJC,SFO',
+      windowMin: 60,
+      groupByHash: false,
+      limit: 200,
+    });
+    assert.strictEqual(p.get('region'), 'SJC,SFO', 'region must apply when no hash');
+    assert.strictEqual(p.get('hash'), null);
+    assert(p.get('since'), 'since must apply when no hash and windowMin>0');
+  });
+
+  test('observer/node/channel pass through normally when no hash', () => {
+    const p = api.buildPacketsParams({
+      filters: { observer: 'obs1', node: 'node1', channel: '#test' },
+      regionParam: '',
+      windowMin: 0,
+      groupByHash: false,
+      limit: 50,
+    });
+    assert.strictEqual(p.get('observer'), 'obs1');
+    assert.strictEqual(p.get('node'), 'node1');
+    assert.strictEqual(p.get('channel'), '#test');
+  });
+
+  test('region absent when regionParam empty — no spurious empty region= param', () => {
+    const p = api.buildPacketsParams({
+      filters: {},
+      regionParam: '',
+      windowMin: 0,
+      groupByHash: false,
+      limit: 50,
+    });
+    assert.strictEqual(p.get('region'), null);
+  });
+
+  test('groupByHash=true with hash sets groupByHash and omits expand', () => {
+    const p = api.buildPacketsParams({
+      filters: { hash: 'h' }, regionParam: '', windowMin: 0, groupByHash: true, limit: 50,
+    });
+    assert.strictEqual(p.get('groupByHash'), 'true');
+    assert.strictEqual(p.get('expand'), null);
+    assert.strictEqual(p.get('hash'), 'h');
+  });
+
+  test('groupByHash=false with hash sets expand=observations', () => {
+    const p = api.buildPacketsParams({
+      filters: { hash: 'h' }, regionParam: '', windowMin: 0, groupByHash: false, limit: 50,
+    });
+    assert.strictEqual(p.get('expand'), 'observations');
+    assert.strictEqual(p.get('groupByHash'), null);
+    assert.strictEqual(p.get('hash'), 'h');
+  });
+
+  test('groupByHash=false without hash sets expand=observations', () => {
+    const p = api.buildPacketsParams({
+      filters: {}, regionParam: '', windowMin: 0, groupByHash: false, limit: 50,
+    });
+    assert.strictEqual(p.get('expand'), 'observations');
+    assert.strictEqual(p.get('groupByHash'), null);
+  });
+}
+
+console.log('\n=== packets.js: scroll position preserved across renderTableRows (#431) ===');
+{
+  // Build a richer sandbox with DOM elements that renderTableRows needs
+  const ctx = makeSandbox();
+  // Mock DOM elements needed by renderTableRows and renderVisibleRows
+  let pktLeftScrollTop = 500;
+  const pktBody = {
+    tagName: 'TBODY', id: 'pktBody', _innerHTML: '', children: [],
+    get innerHTML() { return this._innerHTML; },
+    set innerHTML(v) { this._innerHTML = v; pktLeftScrollTop = 0; }, // Simulate browser scroll reset on DOM rebuild
+    appendChild: () => {}, insertBefore: () => {}, removeChild: () => {},
+    querySelectorAll: () => [], querySelector: () => null,
+    style: {},
+  };
+  const pktLeft = {
+    tagName: 'DIV', id: 'pktLeft', className: '',
+    get scrollTop() { return pktLeftScrollTop; },
+    set scrollTop(v) { pktLeftScrollTop = v; },
+    clientHeight: 800,
+    offsetHeight: 800,
+    querySelector: (sel) => {
+      if (sel === 'thead') return { offsetHeight: 40 };
+      if (sel === '.count' || sel === '#pktLeft .count') return { textContent: '' };
+      return null;
+    },
+    querySelectorAll: () => [],
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    style: {},
+  };
+  const origGetById = ctx.document.getElementById;
+  ctx.document.getElementById = (id) => {
+    if (id === 'pktBody') return pktBody;
+    if (id === 'pktLeft') return pktLeft;
+    if (id === 'fGroup') return { classList: { toggle: () => {}, add: () => {}, remove: () => {}, contains: () => false } };
+    if (id === 'packetFilterCount') return { style: {}, textContent: '' };
+    if (id === 'vscroll-top') return null;
+    if (id === 'vscroll-bottom') return null;
+    return null;
+  };
+  ctx.document.querySelector = (sel) => {
+    if (sel === '#pktLeft .count') return { textContent: '', set textContent(v) {} };
+    if (sel === '#pktLeft') return pktLeft;
+    return null;
+  };
+
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  loadInCtx(ctx, 'public/packet-helpers.js');
+  vm.runInContext(`
+    window.HopDisplay = {
+      renderHop: function(h, entry, opts) { return '<span>' + h + '</span>'; },
+      _showFromBtn: function() {}
+    };
+  `, ctx);
+  loadInCtx(ctx, 'public/packets.js');
+
+  const api = ctx._packetsTestAPI;
+
+  test('scroll position preserved after renderTableRows (#431)', () => {
+    // Inject packets that will ALL be filtered out by type filter,
+    // triggering the empty-state path which sets tbody.innerHTML (resetting scroll in browser)
+    api._setPackets([
+      { id: 1, hash: 'aaa', payload_type: 4, timestamp: '2024-01-01T00:00:00Z', observer_id: 'obs1', path_len: 2, decoded_json: '{}' },
+      { id: 2, hash: 'bbb', payload_type: 4, timestamp: '2024-01-01T00:01:00Z', observer_id: 'obs1', path_len: 1, decoded_json: '{}' },
+    ]);
+
+    // Set scroll position to 500
+    pktLeftScrollTop = 500;
+
+    // Filter by type 99 (no packets match) — this triggers tbody.innerHTML assignment
+    api._setFilter('type', '99');
+    try { api.renderTableRows(); } catch(e) { /* swallow DOM stub errors */ }
+
+    // scrollTop must be preserved (not reset to 0)
+    assert.strictEqual(pktLeftScrollTop, 500, 'scrollTop should be preserved after renderTableRows, got ' + pktLeftScrollTop);
+  });
+}
+
 // ===== SUMMARY =====
 console.log(`\n${'='.repeat(40)}`);
 console.log(`packets.js tests: ${passed} passed, ${failed} failed`);

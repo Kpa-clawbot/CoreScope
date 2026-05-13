@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
 )
 
@@ -62,16 +63,35 @@ type Config struct {
 
 	Retention *RetentionConfig `json:"retention,omitempty"`
 
+	DB *DBConfig `json:"db,omitempty"`
+
 	PacketStore *PacketStoreConfig `json:"packetStore,omitempty"`
 
 	GeoFilter *GeoFilterConfig `json:"geo_filter,omitempty"`
 
 	Timestamps *TimestampConfig `json:"timestamps,omitempty"`
 
+	// CORSAllowedOrigins is the list of origins permitted to make cross-origin
+	// requests. When empty (default), no Access-Control-* headers are sent,
+	// so browsers enforce same-origin policy. Set to ["*"] to allow all origins.
+	CORSAllowedOrigins []string `json:"corsAllowedOrigins,omitempty"`
+
 	DebugAffinity bool `json:"debugAffinity,omitempty"`
+
+	// ObserverBlacklist is a list of observer public keys to exclude from API
+	// responses (defense in depth — ingestor drops at ingest, server filters
+	// any that slipped through from a prior unblocked window).
+	ObserverBlacklist []string `json:"observerBlacklist,omitempty"`
+
+	// obsBlacklistSetCached is the lazily-built set version of ObserverBlacklist.
+	obsBlacklistSetCached map[string]bool
+	obsBlacklistOnce      sync.Once
 
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
+
+	// BatteryThresholds: voltage cutoffs for low/critical alerts (#663).
+	BatteryThresholds *BatteryThresholdsConfig `json:"batteryThresholds,omitempty"`
 }
 
 // weakAPIKeys is the blocklist of known default/example API keys that must be rejected.
@@ -127,6 +147,17 @@ type RetentionConfig struct {
 	ObserverDays  int `json:"observerDays"`
 	PacketDays    int `json:"packetDays"`
 	MetricsDays   int `json:"metricsDays"`
+}
+
+// DBConfig is the shared SQLite vacuum/maintenance config (#919, #921).
+type DBConfig = dbconfig.DBConfig
+
+// IncrementalVacuumPages returns the configured pages per vacuum or 1024 default.
+func (c *Config) IncrementalVacuumPages() int {
+	if c.DB != nil && c.DB.IncrementalVacuumPages > 0 {
+		return c.DB.IncrementalVacuumPages
+	}
+	return 1024
 }
 
 // MetricsRetentionDays returns configured metrics retention or 30 days default.
@@ -193,6 +224,10 @@ type HealthThresholds struct {
 	InfraSilentHours   float64 `json:"infraSilentHours"`
 	NodeDegradedHours  float64 `json:"nodeDegradedHours"`
 	NodeSilentHours    float64 `json:"nodeSilentHours"`
+	// RelayActiveHours: how recent a path-hop appearance must be for a
+	// repeater to be considered "actively relaying" vs only "alive
+	// (advert-only)". See issue #662. Defaults to 24h.
+	RelayActiveHours float64 `json:"relayActiveHours"`
 }
 
 // ThemeFile mirrors theme.json overlay.
@@ -261,6 +296,7 @@ func (c *Config) GetHealthThresholds() HealthThresholds {
 		InfraSilentHours:   72,
 		NodeDegradedHours:  1,
 		NodeSilentHours:    24,
+		RelayActiveHours:   24,
 	}
 	if c.HealthThresholds != nil {
 		if c.HealthThresholds.InfraDegradedHours > 0 {
@@ -274,6 +310,9 @@ func (c *Config) GetHealthThresholds() HealthThresholds {
 		}
 		if c.HealthThresholds.NodeSilentHours > 0 {
 			h.NodeSilentHours = c.HealthThresholds.NodeSilentHours
+		}
+		if c.HealthThresholds.RelayActiveHours > 0 {
+			h.RelayActiveHours = c.HealthThresholds.RelayActiveHours
 		}
 	}
 	return h
@@ -387,4 +426,30 @@ func (c *Config) IsBlacklisted(pubkey string) bool {
 		return false
 	}
 	return c.blacklistSet()[strings.ToLower(strings.TrimSpace(pubkey))]
+}
+
+// obsBlacklistSet lazily builds and caches the observerBlacklist as a set for O(1) lookups.
+func (c *Config) obsBlacklistSet() map[string]bool {
+	c.obsBlacklistOnce.Do(func() {
+		if len(c.ObserverBlacklist) == 0 {
+			return
+		}
+		m := make(map[string]bool, len(c.ObserverBlacklist))
+		for _, pk := range c.ObserverBlacklist {
+			trimmed := strings.ToLower(strings.TrimSpace(pk))
+			if trimmed != "" {
+				m[trimmed] = true
+			}
+		}
+		c.obsBlacklistSetCached = m
+	})
+	return c.obsBlacklistSetCached
+}
+
+// IsObserverBlacklisted returns true if the given observer ID is in the observerBlacklist.
+func (c *Config) IsObserverBlacklisted(id string) bool {
+	if c == nil || len(c.ObserverBlacklist) == 0 {
+		return false
+	}
+	return c.obsBlacklistSet()[strings.ToLower(strings.TrimSpace(id))]
 }

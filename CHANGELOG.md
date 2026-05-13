@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.7.2] — 2026-05-06
+
+Hotfix release branched from `v3.7.1`. Cherry-picks PR #1121 only — no other changes.
+
+### 🐛 Bug Fixes
+- **Ingestor: backfill infinite loop on `path_json='[]'` rows** (#1119, #1121) — `BackfillPathJSONAsync` re-selected observations whose `path_json` was already `'[]'`, rewrote them to `'[]'`, and looped forever. The migration marker was never recorded and the ingestor sustained 2–3 MB/s WAL writes at idle (~76% CPU in `sqlite.Exec`). Fix: drop `'[]'` from the WHERE clause so the loop terminates after one full pass and the `backfill_path_json_from_raw_hex_v1` marker is written.
+
 ## [2.5.0] "Digital Rain" — 2026-03-22
 
 ### ✨ Matrix Mode — Full Cyberpunk Map Theme

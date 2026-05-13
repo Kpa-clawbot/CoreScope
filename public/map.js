@@ -9,7 +9,7 @@
   let nodes = [];
   let targetNodeKey = null;
   let observers = [];
-  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clusters: false, hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all' };
+  let filters = { repeater: true, companion: true, room: true, sensor: true, observer: true, lastHeard: '30d', neighbors: false, clustering: localStorage.getItem('meshcore-map-clustering') !== 'false', hashLabels: localStorage.getItem('meshcore-map-hash-labels') !== 'false', statusFilter: localStorage.getItem('meshcore-map-status-filter') || 'all', byteSize: localStorage.getItem('meshcore-map-byte-filter') || 'all', multiByteOverlay: localStorage.getItem('meshcore-map-multibyte-overlay') === 'true' };
   let selectedReferenceNode = null;  // pubkey of the reference node for neighbor filtering
   let neighborPubkeys = null;        // Set of pubkeys that are direct neighbors of selected node
   let wsHandler = null;
@@ -25,20 +25,24 @@
 
   // Roles loaded from shared roles.js (ROLE_STYLE, ROLE_LABELS, ROLE_COLORS globals)
 
-  function makeMarkerIcon(role, isStale, isAlsoObserver) {
+  // Multi-byte support overlay colors
+  var MB_COLORS = { confirmed: '#27ae60', suspected: '#f39c12', unknown: '#e74c3c' };
+
+  function makeMarkerIcon(role, isStale, isAlsoObserver, colorOverride) {
     const s = ROLE_STYLE[role] || ROLE_STYLE.companion;
+    const fillColor = colorOverride || s.color;
     const size = s.radius * 2 + 4;
     const c = size / 2;
     let path;
     switch (s.shape) {
       case 'diamond':
-        path = `<polygon points="${c},2 ${size-2},${c} ${c},${size-2} 2,${c}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+        path = `<polygon points="${c},2 ${size-2},${c} ${c},${size-2} 2,${c}" fill="${fillColor}" stroke="#fff" stroke-width="2"/>`;
         break;
       case 'square':
-        path = `<rect x="3" y="3" width="${size-6}" height="${size-6}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+        path = `<rect x="3" y="3" width="${size-6}" height="${size-6}" fill="${fillColor}" stroke="#fff" stroke-width="2"/>`;
         break;
       case 'triangle':
-        path = `<polygon points="${c},2 ${size-2},${size-2} 2,${size-2}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+        path = `<polygon points="${c},2 ${size-2},${size-2} 2,${size-2}" fill="${fillColor}" stroke="#fff" stroke-width="2"/>`;
         break;
       case 'star': {
         // 5-pointed star
@@ -50,11 +54,11 @@
           pts += `${cx + outer * Math.cos(aOuter)},${cy + outer * Math.sin(aOuter)} `;
           pts += `${cx + inner * Math.cos(aInner)},${cy + inner * Math.sin(aInner)} `;
         }
-        path = `<polygon points="${pts.trim()}" fill="${s.color}" stroke="#fff" stroke-width="1.5"/>`;
+        path = `<polygon points="${pts.trim()}" fill="${fillColor}" stroke="#fff" stroke-width="1.5"/>`;
         break;
       }
       default: // circle
-        path = `<circle cx="${c}" cy="${c}" r="${c-2}" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
+        path = `<circle cx="${c}" cy="${c}" r="${c-2}" fill="${fillColor}" stroke="#fff" stroke-width="2"/>`;
     }
     // If this node is also an observer, add a small star overlay
     let obsOverlay = '';
@@ -81,12 +85,12 @@
     });
   }
 
-  function makeRepeaterLabelIcon(node, isStale, isAlsoObserver) {
+  function makeRepeaterLabelIcon(node, isStale, isAlsoObserver, colorOverride) {
     var s = ROLE_STYLE['repeater'] || ROLE_STYLE.companion;
     var hs = node.hash_size || 1;
     // Show the short mesh hash ID (first N bytes of pubkey, uppercased)
     var shortHash = node.public_key ? node.public_key.slice(0, hs * 2).toUpperCase() : '??';
-    var bgColor = s.color;
+    var bgColor = colorOverride || s.color;
     // If this repeater is also an observer, show a star indicator inside the label
     var obsIndicator = isAlsoObserver ? ' <span style="color:' + (ROLE_COLORS.observer || '#f1c40f') + ';font-size:13px;line-height:1;" title="Also an observer">★</span>' : '';
     var html = '<div style="background:' + bgColor + ';color:#fff;font-weight:bold;font-size:11px;padding:2px 5px;border-radius:3px;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.4);text-align:center;line-height:1.2;white-space:nowrap;">' +
@@ -102,8 +106,21 @@
 
   async function init(container) {
     container.innerHTML = `
-      <div id="map-wrap" style="position:relative;width:100%;height:100%;">
-        <div id="leaflet-map" style="width:100%;height:100%;"></div>
+      <div id="map-wrap" style="position:relative;width:100%;height:100%;display:flex;">
+        <div id="leaflet-map" style="flex:1 1 0%;height:100%;"></div>
+        <div class="map-side-pane" id="mapSidePane">
+          <div class="pane-toggle" id="mapPaneToggle" title="Path Inspector">◀</div>
+          <div class="pane-content">
+            <h3 style="margin:0 0 8px 0;font-size:14px;">Path Inspector</h3>
+            <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px 0;">Hex prefixes (1-3 bytes), comma or space separated.</p>
+            <div style="display:flex;gap:4px;margin-bottom:8px;">
+              <input type="text" id="mapPiInput" class="input" placeholder="2C,A1,F4" style="flex:1;">
+              <button id="mapPiSubmit" class="btn btn-primary btn-sm">Go</button>
+            </div>
+            <div id="mapPiError" class="path-inspector-error"></div>
+            <div id="mapPiResults"></div>
+          </div>
+        </div>
         <button class="map-controls-toggle" id="mapControlsToggle" aria-label="Toggle map controls" aria-expanded="true">⚙️</button>
         <div class="map-controls" id="mapControls" role="region" aria-label="Map controls">
           <h3>🗺️ Map Controls</h3>
@@ -122,9 +139,10 @@
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Display</legend>
-            <label for="mcClusters"><input type="checkbox" id="mcClusters"> Show clusters</label>
+            <label for="mcClusters"><input type="checkbox" id="mcClusters"> Cluster markers</label>
             <label for="mcHeatmap"><input type="checkbox" id="mcHeatmap"> Heat map</label>
             <label for="mcHashLabels"><input type="checkbox" id="mcHashLabels"> Hash prefix labels</label>
+            <label for="mcMultiByte"><input type="checkbox" id="mcMultiByte"> Multi-byte support</label>
             <label id="mcGeoFilterLabel" for="mcGeoFilter" style="display:none"><input type="checkbox" id="mcGeoFilter"> Mesh live area</label>
           </fieldset>
           <fieldset class="mc-section">
@@ -221,6 +239,8 @@
     });
 
     markerLayer = L.layerGroup().addTo(map);
+    clusterGroup = createClusterGroup();
+    if (filters.clustering && clusterGroup) clusterGroup.addTo(map);
     routeLayer = L.layerGroup().addTo(map);
 
     // Fix map size on SPA load
@@ -242,7 +262,20 @@
     });
 
     // Bind controls
-    document.getElementById('mcClusters').addEventListener('change', e => { filters.clusters = e.target.checked; renderMarkers(); });
+    var clustersEl = document.getElementById('mcClusters');
+    if (clustersEl) {
+      clustersEl.checked = filters.clustering;
+      clustersEl.addEventListener('change', function (e) {
+        filters.clustering = e.target.checked;
+        localStorage.setItem('meshcore-map-clustering', filters.clustering);
+        if (filters.clustering) {
+          if (clusterGroup && !map.hasLayer(clusterGroup)) clusterGroup.addTo(map);
+        } else {
+          if (clusterGroup && map.hasLayer(clusterGroup)) map.removeLayer(clusterGroup);
+        }
+        renderMarkers();
+      });
+    }
     const heatEl = document.getElementById('mcHeatmap');
     if (localStorage.getItem('meshcore-map-heatmap') === 'true') { heatEl.checked = true; }
     heatEl.addEventListener('change', e => { localStorage.setItem('meshcore-map-heatmap', e.target.checked); toggleHeatmap(e.target.checked); });
@@ -281,6 +314,11 @@
     if (hashLabelEl) {
       hashLabelEl.checked = filters.hashLabels;
       hashLabelEl.addEventListener('change', e => { filters.hashLabels = e.target.checked; localStorage.setItem('meshcore-map-hash-labels', filters.hashLabels); renderMarkers(); });
+    }
+    const multiByteEl = document.getElementById('mcMultiByte');
+    if (multiByteEl) {
+      multiByteEl.checked = filters.multiByteOverlay;
+      multiByteEl.addEventListener('change', e => { filters.multiByteOverlay = e.target.checked; localStorage.setItem('meshcore-map-multibyte-overlay', e.target.checked); renderMarkers(); });
     }
     document.getElementById('mcLastHeard').addEventListener('change', e => { filters.lastHeard = e.target.value; loadNodes(); });
 
@@ -375,6 +413,14 @@
   }
 
   function drawPacketRoute(hopKeys, origin) {
+    // Defensive: origin must be an object with pubkey/lat/lon/name. A bare
+    // string slips through both branches at lines below and silently no-ops
+    // the originator marker (caused PR #950's bug). Coerce string → object
+    // and warn so callers get a clear signal.
+    if (typeof origin === 'string') {
+      console.warn('drawPacketRoute: origin should be an object {pubkey,lat,lon,name}, got string. Coercing.');
+      origin = { pubkey: origin };
+    }
     // Hide default markers so only the route is visible
     if (markerLayer) map.removeLayer(markerLayer);
     if (clusterGroup) map.removeLayer(clusterGroup);
@@ -541,22 +587,49 @@
           // Delay popup open slightly — Leaflet needs the map to settle after setView
           setTimeout(() => {
             let found = false;
-            markerLayer.eachLayer(m => {
-              if (found) return;
-              if (m._nodeKey === targetNodeKey && m.openPopup) {
-                m.openPopup();
-                found = true;
-              }
-            });
+            const findIn = function (layer) {
+              if (found || !layer || !layer.eachLayer) return;
+              layer.eachLayer(m => {
+                if (found) return;
+                if (m._nodeKey === targetNodeKey && m.openPopup) {
+                  m.openPopup();
+                  found = true;
+                }
+              });
+            };
+            findIn(markerLayer);
+            if (!found) findIn(clusterGroup);
             if (!found) console.warn('[map] Target node marker not found:', targetNodeKey);
           }, 500);
         }
       }
 
+      // Check for pending path inspector route (cross-page navigation from Path Inspector).
+      if (window._pendingPathInspectorRoute) {
+        var pending = window._pendingPathInspectorRoute;
+        delete window._pendingPathInspectorRoute;
+        if (pending.path && pending.path.length > 0) {
+          if (window.routeLayer) window.routeLayer.clearLayers();
+          // Pass full path as hopKeys; null origin (origin is already the first
+          // hop). slice(1) + path[0] string was wrong — drawPacketRoute expects
+          // origin to be an OBJECT with pubkey/lat/lon, and stripping the head
+          // hid the originating node from the route polyline.
+          drawPacketRoute(pending.path, null);
+        }
+      }
+
+      // Wire up map side pane (Path Inspector embedded - spec §2.7).
+      initMapSidePane();
+
       // Don't fitBounds on initial load — respect the Bay Area default or saved view
       // Only fitBounds on subsequent data refreshes if user hasn't manually panned
     } catch (e) {
       console.error('Map load error:', e);
+    } finally {
+      // Always signal data-loaded — even on error — so E2E tests can proceed.
+      // Otherwise an api() failure leaves the test waiting forever.
+      var mapContainer = document.getElementById('leaflet-map');
+      if (mapContainer) mapContainer.setAttribute('data-loaded', 'true');
     }
   }
 
@@ -748,6 +821,9 @@
    */
   function _repositionMarkers() {
     if (!map || _currentMarkerData.length === 0) return;
+    // Markercluster handles its own re-layout on zoom/move — skip our deconfliction
+    // dance when clustering is on.
+    if (filters.clustering) return;
     map.invalidateSize({ animate: false });
 
     // Re-run deconfliction with current zoom pixel coordinates
@@ -772,6 +848,7 @@
 
   function _renderMarkersInner() {
     markerLayer.clearLayers();
+    if (clusterGroup) clusterGroup.clearLayers();
     _currentMarkerData = [];
 
     const filtered = nodes.filter(n => {
@@ -811,7 +888,12 @@
       const pk = (node.public_key || '').toLowerCase();
       const isAlsoObserver = _observerByPubkey.has(pk);
       const useLabel = node.role === 'repeater' && filters.hashLabels;
-      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver);
+      // Multi-byte overlay: color repeaters by multi_byte_status
+      var mbColor = null;
+      if (filters.multiByteOverlay && node.role === 'repeater') {
+        mbColor = MB_COLORS[node.multi_byte_status] || MB_COLORS.unknown;
+      }
+      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbColor) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor);
       const latLng = L.latLng(node.lat, node.lon);
       allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' });
     }
@@ -834,25 +916,37 @@
     // (SPA navigation may render markers before container is fully sized)
     map.invalidateSize({ animate: false });
 
-    // Deconflict ALL markers
-    if (allMarkers.length > 0) {
+    // Deconflict ALL markers — but only when clustering is OFF.
+    // When clustering is ON, markercluster handles overlap collapse and
+    // deconfliction would just waste CPU + draw offset polylines we don't want.
+    if (allMarkers.length > 0 && !filters.clustering) {
       deconflictLabels(allMarkers, map);
     }
 
     // Store marker data for zoom/resize repositioning (avoids full rebuild)
     _currentMarkerData = allMarkers;
 
+    var useCluster = filters.clustering && clusterGroup;
+    var clusterMarkers = [];
     for (const m of allMarkers) {
-      const pos = m.adjustedLatLng || m.latLng;
+      const pos = (useCluster ? m.latLng : (m.adjustedLatLng || m.latLng));
       const marker = L.marker(pos, { icon: m.icon, alt: m.alt });
       marker._nodeKey = m.node.public_key || m.node.id || null;
+      marker._role = (m.node && m.node.role) || 'companion';
       marker.bindPopup(m.popupFn(), { maxWidth: 280 });
-      markerLayer.addLayer(marker);
       m._leafletMarker = marker;
       m._leafletLine = null;
       m._leafletDot = null;
 
-      _updateOffsetIndicator(m, markerLayer);
+      if (useCluster) {
+        clusterMarkers.push(marker);
+      } else {
+        markerLayer.addLayer(marker);
+        _updateOffsetIndicator(m, markerLayer);
+      }
+    }
+    if (useCluster && clusterMarkers.length > 0) {
+      clusterGroup.addLayers(clusterMarkers);
     }
   }
 
@@ -947,6 +1041,14 @@
     const hashPrefix = node.public_key ? node.public_key.slice(0, hs * 2).toUpperCase() : '—';
     const hashPrefixRow = `<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Hash Prefix</dt>
           <dd style="font-family:var(--mono);font-size:11px;font-weight:700;margin-left:88px;padding:2px 0;">${safeEsc(hashPrefix)} <span style="font-weight:400;color:var(--text-muted);">(${hs}B)</span></dd>`;
+    // Multi-byte support indicator for repeaters
+    var mbRow = '';
+    if (node.role === 'repeater' && node.multi_byte_status) {
+      var mbLabel = { confirmed: '✅ Confirmed', suspected: '⚠️ Suspected', unknown: '❌ Unknown' }[node.multi_byte_status] || node.multi_byte_status;
+      var mbEvidence = node.multi_byte_evidence ? ' (' + node.multi_byte_evidence + ')' : '';
+      mbRow = '<dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Multi-byte</dt>' +
+        '<dd style="margin-left:88px;padding:2px 0;font-size:12px;">' + mbLabel + mbEvidence + '</dd>';
+    }
 
     return `
       <div class="map-popup" style="font-family:var(--font);min-width:180px;">
@@ -954,6 +1056,7 @@
         ${roleBadge}${obsBadge}
         <dl style="margin-top:8px;font-size:12px;">
           ${hashPrefixRow}
+          ${mbRow}
           <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Key</dt>
           <dd style="font-family:var(--mono);font-size:11px;margin-left:88px;padding:2px 0;">${safeEsc(key)}</dd>
           <dt style="color:var(--text-muted);float:left;clear:left;width:80px;padding:2px 0;">Location</dt>
@@ -981,6 +1084,122 @@
     map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
   }
 
+  // === Map Side Pane — Path Inspector (spec §2.7) ===
+  function initMapSidePane() {
+    var pane = document.getElementById('mapSidePane');
+    var toggle = document.getElementById('mapPaneToggle');
+    var input = document.getElementById('mapPiInput');
+    var btn = document.getElementById('mapPiSubmit');
+    if (!pane || !toggle) return;
+
+    toggle.addEventListener('click', function () {
+      pane.classList.toggle('expanded');
+      toggle.textContent = pane.classList.contains('expanded') ? '▶' : '◀';
+      // Invalidate map size after transition.
+      setTimeout(function () { if (map) map.invalidateSize(); }, 220);
+    });
+
+    if (btn && input) {
+      btn.addEventListener('click', function () { mapPiSubmit(input.value); });
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') mapPiSubmit(input.value);
+      });
+    }
+
+    // Auto-open if URL has prefixes param while on map.
+    var params = new URLSearchParams(location.hash.split('?')[1] || '');
+    var prefixParam = params.get('prefixes');
+    if (prefixParam && input) {
+      pane.classList.add('expanded');
+      toggle.textContent = '▶';
+      input.value = prefixParam;
+      setTimeout(function () { if (map) map.invalidateSize(); }, 220);
+      mapPiSubmit(prefixParam);
+    }
+  }
+
+  function mapPiSubmit(raw) {
+    var errDiv = document.getElementById('mapPiError');
+    var resultsDiv = document.getElementById('mapPiResults');
+    if (!errDiv || !resultsDiv) return;
+    errDiv.textContent = '';
+    resultsDiv.innerHTML = '';
+
+    // Reuse PathInspector validation if available.
+    var prefixes = raw.trim().split(/[\s,]+/).filter(function (s) { return s.length > 0; }).map(function (s) { return s.toLowerCase(); });
+    var err = (window.PathInspector && window.PathInspector.validatePrefixes) ? window.PathInspector.validatePrefixes(prefixes) : null;
+    if (!err && prefixes.length === 0) err = 'Enter at least one prefix.';
+    if (err) { errDiv.textContent = err; return; }
+
+    resultsDiv.innerHTML = '<p style="font-size:12px;">Loading...</p>';
+    fetch('/api/paths/inspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefixes: prefixes })
+    })
+      .then(function (r) {
+        if (r.status === 503) return r.json().then(function () { throw new Error('Service warming up, retry shortly.'); });
+        if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || 'Request failed'); });
+        return r.json();
+      })
+      .then(function (data) { renderMapPiResults(data, resultsDiv); })
+      .catch(function (e) { resultsDiv.innerHTML = ''; errDiv.textContent = e.message; });
+  }
+
+  function renderMapPiResults(data, div) {
+    if (!data.candidates || data.candidates.length === 0) {
+      div.innerHTML = '<p style="font-size:12px;color:var(--text-muted);">No candidates found.</p>';
+      return;
+    }
+    var html = '<table class="path-inspector-table" style="font-size:11px;width:100%;"><thead><tr><th>#</th><th>Score</th><th>Path</th><th></th></tr></thead><tbody>';
+    for (var i = 0; i < data.candidates.length; i++) {
+      var c = data.candidates[i];
+      var rowClass = c.speculative ? 'speculative-row' : '';
+      html += '<tr class="' + rowClass + '">';
+      html += '<td>' + (i + 1) + '</td>';
+      html += '<td class="' + (c.speculative ? 'speculative-warning' : '') + '">' + c.score.toFixed(2) + (c.speculative ? ' ⚠' : '') + '</td>';
+      html += '<td title="' + safeEsc(c.names.join(' → ')) + '">' + safeEsc(c.names.slice(0, 3).join('→')) + (c.names.length > 3 ? '…' : '') + '</td>';
+      html += '<td><button class="btn btn-sm" data-idx="' + i + '" title="Show on Map">📍</button></td>';
+      html += '</tr>';
+      // Per-hop evidence (collapsed).
+      html += '<tr class="evidence-row collapsed" data-evidence="' + i + '"><td colspan="4"><div class="evidence-detail" style="font-size:10px;">';
+      if (c.evidence && c.evidence.perHop) {
+        for (var j = 0; j < c.evidence.perHop.length; j++) {
+          var h = c.evidence.perHop[j];
+          html += '<div>Hop ' + (j+1) + ': ' + h.prefix + ' (×' + h.candidatesConsidered + ') w=' + h.edgeWeight.toFixed(2);
+          if (h.alternatives && h.alternatives.length > 0) {
+            html += ' <span style="color:var(--text-muted);">[+' + h.alternatives.length + ' alt]</span>';
+          }
+          html += '</div>';
+        }
+      }
+      html += '</div></td></tr>';
+    }
+    html += '</tbody></table>';
+    div.innerHTML = html;
+
+    // Wire buttons.
+    div.querySelectorAll('button[data-idx]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var idx = parseInt(btn.dataset.idx);
+        var cand = data.candidates[idx];
+        if (routeLayer) routeLayer.clearLayers();
+        drawPacketRoute(cand.path, null);
+      });
+    });
+    // Expand evidence on row click.
+    div.querySelectorAll('.path-inspector-table tbody tr:not(.evidence-row)').forEach(function (row) {
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', function (e) {
+        if (e.target.tagName === 'BUTTON') return;
+        var b = row.querySelector('button[data-idx]');
+        if (!b) return;
+        var ev = div.querySelector('tr[data-evidence="' + b.dataset.idx + '"]');
+        if (ev) ev.classList.toggle('collapsed');
+      });
+    });
+  }
+
   function destroy() {
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
@@ -989,6 +1208,7 @@
       map = null;
     }
     markerLayer = null;
+    clusterGroup = null;
     _currentMarkerData = [];
     routeLayer = null;
     if (heatLayer) { heatLayer = null; }
@@ -1133,4 +1353,80 @@
       return destroy();
     }
   });
+
+  // ── Marker clustering (issue #1036) ──
+  // Wraps Leaflet.markercluster with CoreScope-themed cluster icons + sane perf
+  // defaults for large meshes (target: smooth pan/zoom @ 2k nodes on mid mobile).
+  function isMobileForClustering() {
+    try {
+      return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+    } catch (_) { return false; }
+  }
+  function createClusterGroup() {
+    if (typeof L === 'undefined' || typeof L.markerClusterGroup !== 'function') {
+      console.warn('[map] L.markerClusterGroup not loaded — clustering disabled');
+      return null;
+    }
+    return L.markerClusterGroup({
+      chunkedLoading: true,
+      chunkInterval: 100,
+      chunkDelay: 25,
+      removeOutsideVisibleBounds: true,
+      maxClusterRadius: 60,
+      spiderfyOnMaxZoom: true,
+      spiderfyDistanceMultiplier: 1.5,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+      disableClusteringAtZoom: 16,
+      animate: !isMobileForClustering(),
+      animateAddingMarkers: false,
+      iconCreateFunction: makeClusterIcon,
+    });
+  }
+
+  function makeClusterIcon(cluster) {
+    var markers = cluster.getAllChildMarkers();
+    var counts = { repeater: 0, companion: 0, room: 0, sensor: 0, observer: 0 };
+    for (var i = 0; i < markers.length; i++) {
+      var r = markers[i]._role || 'companion';
+      if (counts[r] == null) counts[r] = 0;
+      counts[r] += 1;
+    }
+    var total = (typeof cluster.getChildCount === 'function') ? cluster.getChildCount() : markers.length;
+    var bucket = total >= 100 ? 'lg' : total >= 30 ? 'md' : 'sm';
+    var roleOrder = ['repeater', 'companion', 'room', 'sensor', 'observer'];
+    var pillsHtml = '';
+    var tooltipParts = [];
+    var pillsShown = 0;
+    var palette = (typeof ROLE_COLORS !== 'undefined') ? ROLE_COLORS : {};
+    for (var j = 0; j < roleOrder.length; j++) {
+      var role = roleOrder[j];
+      var n = counts[role] || 0;
+      if (n <= 0) continue;
+      tooltipParts.push(n + ' ' + role + (n === 1 ? '' : 's'));
+      if (pillsShown < 4) {
+        var bg = palette[role] || '#6b7280';
+        pillsHtml += '<span class="mc-pill" style="background:' + bg + '">' + n + '</span>';
+        pillsShown += 1;
+      }
+    }
+    var html = '<div class="mc-cluster mc-' + bucket + '">' +
+                 '<b class="mc-count">' + total + '</b>' +
+                 '<div class="mc-pills">' + pillsHtml + '</div>' +
+               '</div>';
+    var icon = L.divIcon({
+      html: html,
+      className: 'mc-cluster-wrap mc-' + bucket,
+      iconSize: L.point(48, 48),
+    });
+    // Stash a tooltip string for callers that want to bindTooltip (markercluster
+    // does not natively pipe this through, but it's available via cluster icon
+    // for E2E inspection).
+    icon._tooltip = total + ' nodes — ' + tooltipParts.join(', ');
+    return icon;
+  }
+
+  if (typeof window !== 'undefined') {
+    window.__meshcoreMapInternals = { createClusterGroup: createClusterGroup, makeClusterIcon: makeClusterIcon };
+  }
 })();

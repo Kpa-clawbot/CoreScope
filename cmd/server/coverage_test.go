@@ -35,13 +35,14 @@ func setupTestDBv2(t *testing.T) *DB {
 		CREATE TABLE observers (
 			id TEXT PRIMARY KEY, name TEXT, iata TEXT, last_seen TEXT, first_seen TEXT,
 			packet_count INTEGER DEFAULT 0, model TEXT, firmware TEXT,
-			client_version TEXT, radio TEXT, battery_mv INTEGER, uptime_secs INTEGER, noise_floor REAL
+			client_version TEXT, radio TEXT, battery_mv INTEGER, uptime_secs INTEGER, noise_floor REAL,
+			inactive INTEGER DEFAULT 0
 		);
 		CREATE TABLE transmissions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT, raw_hex TEXT NOT NULL,
 			hash TEXT NOT NULL UNIQUE, first_seen TEXT NOT NULL,
 			route_type INTEGER, payload_type INTEGER, payload_version INTEGER,
-			decoded_json TEXT, channel_hash TEXT DEFAULT NULL, created_at TEXT DEFAULT (datetime('now'))
+			decoded_json TEXT, channel_hash TEXT DEFAULT NULL, from_pubkey TEXT DEFAULT NULL, created_at TEXT DEFAULT (datetime('now'))
 		);
 		CREATE TABLE observations (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +50,18 @@ func setupTestDBv2(t *testing.T) *DB {
 			observer_id TEXT, observer_name TEXT, direction TEXT,
 			snr REAL, rssi REAL, score INTEGER, path_json TEXT, timestamp INTEGER NOT NULL, raw_hex TEXT
 		);
+		CREATE TRIGGER IF NOT EXISTS test_from_pubkey_advert
+		AFTER INSERT ON transmissions
+		FOR EACH ROW
+		WHEN NEW.from_pubkey IS NULL AND NEW.payload_type = 4 AND NEW.decoded_json IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') <> ''
+		BEGIN
+			UPDATE transmissions
+			SET from_pubkey = json_extract(NEW.decoded_json, '$.pubKey')
+			WHERE id = NEW.id;
+		END;
+		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
@@ -763,9 +776,9 @@ func TestGetChannelsFromStore(t *testing.T) {
 
 func TestPrefixMapResolve(t *testing.T) {
 	nodes := []nodeInfo{
-		{PublicKey: "aabbccdd11223344", Name: "NodeA", HasGPS: true, Lat: 37.5, Lon: -122.0},
-		{PublicKey: "aabbccdd55667788", Name: "NodeB", HasGPS: false},
-		{PublicKey: "eeff0011aabbccdd", Name: "NodeC", HasGPS: true, Lat: 38.0, Lon: -121.0},
+		{Role: "repeater", PublicKey: "aabbccdd11223344", Name: "NodeA", HasGPS: true, Lat: 37.5, Lon: -122.0},
+		{Role: "repeater", PublicKey: "aabbccdd55667788", Name: "NodeB", HasGPS: false},
+		{Role: "repeater", PublicKey: "eeff0011aabbccdd", Name: "NodeC", HasGPS: true, Lat: 38.0, Lon: -121.0},
 	}
 	pm := buildPrefixMap(nodes)
 
@@ -805,8 +818,8 @@ func TestPrefixMapResolve(t *testing.T) {
 
 	t.Run("multiple candidates no GPS", func(t *testing.T) {
 		noGPSNodes := []nodeInfo{
-			{PublicKey: "aa11bb22", Name: "X", HasGPS: false},
-			{PublicKey: "aa11cc33", Name: "Y", HasGPS: false},
+			{Role: "repeater", PublicKey: "aa11bb22", Name: "X", HasGPS: false},
+			{Role: "repeater", PublicKey: "aa11cc33", Name: "Y", HasGPS: false},
 		}
 		pm2 := buildPrefixMap(noGPSNodes)
 		n := pm2.resolve("aa11")
@@ -820,8 +833,8 @@ func TestPrefixMapResolve(t *testing.T) {
 func TestPrefixMapCap(t *testing.T) {
 	// 16-char pubkey — longer than maxPrefixLen
 	nodes := []nodeInfo{
-		{PublicKey: "aabbccdd11223344", Name: "LongKey"},
-		{PublicKey: "eeff0011", Name: "ShortKey"}, // exactly 8 chars
+		{Role: "repeater", PublicKey: "aabbccdd11223344", Name: "LongKey"},
+		{Role: "repeater", PublicKey: "eeff0011", Name: "ShortKey"}, // exactly 8 chars
 	}
 	pm := buildPrefixMap(nodes)
 
@@ -2497,9 +2510,9 @@ func TestStoreGetAnalyticsChannelsNumericHash(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (5, 1, 10.0, -90, '[]', ?)`, recentEpoch)
 
-	// Also a decrypted CHAN with numeric channelHash
+	// Also a decrypted CHAN with numeric channelHash — use hash 198 which is the real hash for #general
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('DD03', 'chan_num_hash_3', ?, 1, 5, '{"type":"CHAN","channel":"general","channelHash":97,"channelHashHex":"61","text":"hello","sender":"Alice"}')`, recent)
+		VALUES ('DD03', 'chan_num_hash_3', ?, 1, 5, '{"type":"CHAN","channel":"general","channelHash":198,"channelHashHex":"C6","text":"hello","sender":"Alice"}')`, recent)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (6, 1, 12.0, -88, '[]', ?)`, recentEpoch)
 
@@ -2508,8 +2521,8 @@ func TestStoreGetAnalyticsChannelsNumericHash(t *testing.T) {
 	result := store.GetAnalyticsChannels("")
 
 	channels := result["channels"].([]map[string]interface{})
-	if len(channels) < 2 {
-		t.Errorf("expected at least 2 channels (hash 97 + hash 42), got %d", len(channels))
+	if len(channels) < 3 {
+		t.Errorf("expected at least 3 channels (hash 97 + hash 42 + hash 198), got %d", len(channels))
 	}
 
 	// Verify the numeric-hash channels we inserted have proper hashes (not "?")
@@ -2530,13 +2543,13 @@ func TestStoreGetAnalyticsChannelsNumericHash(t *testing.T) {
 		t.Error("expected to find channel with hash '42' (numeric channelHash parsing)")
 	}
 
-	// Verify the decrypted CHAN channel has the correct name
+	// Verify the decrypted CHAN channel has the correct name (now at hash 198)
 	foundGeneral := false
 	for _, ch := range channels {
 		if ch["name"] == "general" {
 			foundGeneral = true
-			if ch["hash"] != "97" {
-				t.Errorf("expected hash '97' for general channel, got %v", ch["hash"])
+			if ch["hash"] != "198" {
+				t.Errorf("expected hash '198' for general channel, got %v", ch["hash"])
 			}
 		}
 	}

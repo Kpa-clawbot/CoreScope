@@ -49,6 +49,49 @@ test('type == request is false', () => { assert(!PF.compile('type == request').f
 test('route == FLOOD', () => { assert(PF.compile('route == FLOOD').filter(pkt)); });
 test('route == DIRECT is false', () => { assert(!PF.compile('route == DIRECT').filter(pkt)); });
 
+// --- Transport route filters (issue #339) ---
+const tFloodPkt   = { ...pkt, route_type: 0 }; // TRANSPORT_FLOOD
+const floodPkt    = { ...pkt, route_type: 1 }; // FLOOD
+const directPkt   = { ...pkt, route_type: 2 }; // DIRECT
+const tDirectPkt  = { ...pkt, route_type: 3 }; // TRANSPORT_DIRECT
+
+test('route == TRANSPORT_FLOOD matches route_type 0', () => {
+  assert(PF.compile('route == TRANSPORT_FLOOD').filter(tFloodPkt));
+  assert(!PF.compile('route == TRANSPORT_FLOOD').filter(floodPkt));
+});
+test('route == TRANSPORT_DIRECT matches route_type 3', () => {
+  assert(PF.compile('route == TRANSPORT_DIRECT').filter(tDirectPkt));
+  assert(!PF.compile('route == TRANSPORT_DIRECT').filter(directPkt));
+});
+test('route == T_FLOOD alias matches route_type 0', () => {
+  assert(PF.compile('route == T_FLOOD').filter(tFloodPkt));
+  assert(!PF.compile('route == T_FLOOD').filter(floodPkt));
+  assert(!PF.compile('route == T_FLOOD').filter(directPkt));
+});
+test('route == T_DIRECT alias matches route_type 3', () => {
+  assert(PF.compile('route == T_DIRECT').filter(tDirectPkt));
+  assert(!PF.compile('route == T_DIRECT').filter(directPkt));
+  assert(!PF.compile('route == T_DIRECT').filter(tFloodPkt));
+});
+test('transport == true matches TRANSPORT_FLOOD and TRANSPORT_DIRECT', () => {
+  assert(PF.compile('transport == true').filter(tFloodPkt));
+  assert(PF.compile('transport == true').filter(tDirectPkt));
+  assert(!PF.compile('transport == true').filter(floodPkt));
+  assert(!PF.compile('transport == true').filter(directPkt));
+});
+test('transport == false matches non-transported FLOOD and DIRECT', () => {
+  assert(PF.compile('transport == false').filter(floodPkt));
+  assert(PF.compile('transport == false').filter(directPkt));
+  assert(!PF.compile('transport == false').filter(tFloodPkt));
+  assert(!PF.compile('transport == false').filter(tDirectPkt));
+});
+test('bare transport (truthy) matches transported packets', () => {
+  assert(PF.compile('transport').filter(tFloodPkt));
+  assert(PF.compile('transport').filter(tDirectPkt));
+  assert(!PF.compile('transport').filter(floodPkt));
+  assert(!PF.compile('transport').filter(directPkt));
+});
+
 // --- Hash ---
 test('hash == abc123def456', () => { assert(PF.compile('hash == abc123def456').filter(pkt)); });
 test('hash contains abc', () => { assert(PF.compile('hash contains abc').filter(pkt)); });

@@ -4,7 +4,29 @@
 (function () {
   let _analyticsData = {};
   const sf = (v, d) => (v != null ? v.toFixed(d) : '–'); // safe toFixed
-  function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : ''; }
+  function esc(s) { return s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;') : ''; }
+
+  // #1085 — Roles tab helpers (hoisted from renderRolesTab so they're not
+  // re-allocated per render).
+  function _rolesEmoji(role) {
+    if (window.ROLE_EMOJI && window.ROLE_EMOJI[role]) return window.ROLE_EMOJI[role];
+    return '•';
+  }
+  function _rolesFmtSec(v) {
+    if (!v && v !== 0) return '—';
+    var abs = Math.abs(v);
+    if (abs < 1) return v.toFixed(2) + 's';
+    if (abs < 60) return v.toFixed(1) + 's';
+    if (abs < 3600) return (v / 60).toFixed(1) + 'm';
+    if (abs < 86400) return (v / 3600).toFixed(1) + 'h';
+    return (v / 86400).toFixed(1) + 'd';
+  }
+  // #1085 — auto-refresh timer for the Roles tab. Started when the Roles
+  // tab is rendered, cleared on tab switch and destroy.
+  var _rolesRefreshTimer = null;
+  function _stopRolesRefresh() {
+    if (_rolesRefreshTimer) { clearInterval(_rolesRefreshTimer); _rolesRefreshTimer = null; }
+  }
 
   // --- Status color helpers (read from CSS variables for theme support) ---
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -75,6 +97,16 @@
           <h2>📊 Mesh Analytics</h2>
           <p class="text-muted">Deep dive into your mesh network data</p>
           <div id="analyticsRegionFilter" class="region-filter-container"></div>
+          <div class="time-window-filter" style="margin:8px 0">
+            <label for="analyticsTimeWindow" style="font-size:0.9em;color:var(--text-muted);margin-right:6px">Time window:</label>
+            <select id="analyticsTimeWindow" data-testid="analytics-time-window" aria-label="Time window">
+              <option value="">All data</option>
+              <option value="1h">Last 1 hour</option>
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+            </select>
+          </div>
           <div class="analytics-tabs" id="analyticsTabs" role="tablist" aria-label="Analytics tabs">
             <button class="tab-btn active" data-tab="overview">Overview</button>
             <button class="tab-btn" data-tab="rf">RF / Signal</button>
@@ -88,6 +120,10 @@
             <button class="tab-btn" data-tab="neighbor-graph">Neighbor Graph</button>
             <button class="tab-btn" data-tab="rf-health">RF Health</button>
             <button class="tab-btn" data-tab="clock-health">Clock Health</button>
+            <!-- #1085 — Roles tab folded in from former /#/roles standalone page.
+                 Placed after Clock Health (clock-skew posture is shown per-role
+                 inside this tab) and before Prefix Tool (utility tabs trail). -->
+            <button class="tab-btn" data-tab="roles">Roles</button>
             <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
             <button class="tab-btn" data-tab="scopes">Scopes</button>
           </div>
@@ -100,18 +136,40 @@
     // Tab handling
     const analyticsTabs = document.getElementById('analyticsTabs');
     initTabBar(analyticsTabs);
+    // #749 — keep analytics tab + window in URL for deep-linking.
+    function _updateAnalyticsUrl() {
+      if (!window.URLState) return;
+      var twElNow = document.getElementById('analyticsTimeWindow');
+      var updates = {
+        tab: _currentTab && _currentTab !== 'overview' ? _currentTab : '',
+        window: twElNow && twElNow.value ? twElNow.value : ''
+      };
+      // Drop any subview-specific keys that don't belong to the active tab
+      // so switching tabs gives a clean URL. (rf-health uses 'range', 'observer', 'from', 'to')
+      if (_currentTab !== 'rf-health') {
+        var cleared = ['range', 'observer', 'from', 'to'];
+        for (var i = 0; i < cleared.length; i++) updates[cleared[i]] = '';
+      }
+      var newHash = URLState.updateHashParams(updates, location.hash);
+      if (newHash !== location.hash) history.replaceState(null, '', newHash);
+    }
+
     analyticsTabs.addEventListener('click', e => {
       const btn = e.target.closest('.tab-btn');
       if (!btn) return;
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       _currentTab = btn.dataset.tab;
+      // #1085 — Roles tab owns its own 60s auto-refresh; stop it on switch.
+      if (_currentTab !== 'roles') _stopRolesRefresh();
+      _updateAnalyticsUrl();
       renderTab(_currentTab);
     });
 
-    // Deep-link: #/analytics?tab=collisions
+    // Deep-link: #/analytics?tab=collisions&window=7d
     const hashParams = location.hash.split('?')[1] || '';
-    const urlTab = new URLSearchParams(hashParams).get('tab');
+    const _ap = new URLSearchParams(hashParams);
+    const urlTab = _ap.get('tab');
     if (urlTab) {
       const tabBtn = analyticsTabs.querySelector(`[data-tab="${urlTab}"]`);
       if (tabBtn) {
@@ -120,9 +178,21 @@
         _currentTab = urlTab;
       }
     }
+    // #749 — restore time window from URL.
+    const urlWindow = _ap.get('window');
+    if (urlWindow) {
+      const twInit = document.getElementById('analyticsTimeWindow');
+      if (twInit) twInit.value = urlWindow;
+    }
 
     RegionFilter.init(document.getElementById('analyticsRegionFilter'));
     RegionFilter.onChange(function () { loadAnalytics(); });
+
+    // Time-window picker (#842) — refresh analytics on change.
+    const tw = document.getElementById('analyticsTimeWindow');
+    if (tw) {
+      tw.addEventListener('change', function () { _updateAnalyticsUrl(); loadAnalytics(); });
+    }
 
     // Delegated click/keyboard handler for clickable table rows
     const analyticsContent = document.getElementById('analyticsContent');
@@ -151,14 +221,24 @@
   async function loadAnalytics() {
     try {
       _analyticsData = {};
-      const rqs = RegionFilter.regionQueryString();
-      const sep = rqs ? '?' + rqs.slice(1) : '';
+      const rqs = RegionFilter.regionQueryString(); // "&region=..." or ""
+      // Time window picker (#842) — append &window=… when set.
+      // NOTE: only the three window-aware endpoints (rf/topology/channels)
+      // receive ?window=…; hash-sizes and hash-collisions are about node
+      // identity / hash-byte distribution and intentionally span all data.
+      const twEl = document.getElementById('analyticsTimeWindow');
+      const twVal = twEl ? twEl.value : '';
+      const tws = twVal ? '&window=' + encodeURIComponent(twVal) : '';
+      const baseQS = rqs.slice(1); // drop leading '&', "" or "region=…"
+      const sepBase = baseQS ? '?' + baseQS : '';
+      const windowedQS = (rqs + tws).slice(1);
+      const sepWin = windowedQS ? '?' + windowedQS : '';
       const [hashData, rfData, topoData, chanData, collisionData] = await Promise.all([
-        api('/analytics/hash-sizes' + sep, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/rf' + sep, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/topology' + sep, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/channels' + sep, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/hash-collisions' + sep, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/hash-sizes' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/rf' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/topology' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/channels' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/hash-collisions' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
       ]);
       _analyticsData = { hashData, rfData, topoData, chanData, collisionData };
       renderTab(_currentTab);
@@ -184,6 +264,7 @@
       case 'neighbor-graph': await renderNeighborGraphTab(el); break;
       case 'rf-health': await renderRFHealthTab(el); break;
       case 'clock-health': await renderClockHealthTab(el); break;
+      case 'roles': await renderRolesTab(el); break;
       case 'prefix-tool': await renderPrefixTool(el); break;
       case 'scopes': await renderScopesTab(el); break;
     }
@@ -713,6 +794,7 @@
   // ===================== CHANNELS =====================
   var _channelSortState = null;
   var _channelData = null;
+  var _channelRenderGen = 0;
   var CHANNEL_SORT_KEY = 'meshcore-channel-sort';
 
   function loadChannelSort() {
@@ -721,6 +803,18 @@
       if (s) { var p = JSON.parse(s); if (p.col && p.dir) return p; }
     } catch (e) {}
     return { col: 'lastActivity', dir: 'desc' };
+  }
+
+  // True when the user has explicitly chosen a sort (saved in localStorage).
+  // Used by the grouped analytics view to decide whether to apply its own
+  // default ("messages desc") instead of the global flat-list default.
+  function hasSavedChannelSort() {
+    try {
+      var s = localStorage.getItem(CHANNEL_SORT_KEY);
+      if (!s) return false;
+      var p = JSON.parse(s);
+      return !!(p && p.col && p.dir);
+    } catch (e) { return false; }
   }
 
   function saveChannelSort(state) {
@@ -757,20 +851,107 @@
   }
 
   function channelRowHtml(c) {
+    var name = c.displayName || c.name || 'Unknown';
     return '<tr class="clickable-row" data-action="navigate" data-value="#/channels?ch=' + c.hash + '" tabindex="0" role="row">' +
-      '<td><strong>' + esc(c.name || 'Unknown') + '</strong></td>' +
+      '<td><strong>' + esc(name) + '</strong></td>' +
       '<td class="mono">' + (typeof c.hash === 'number' ? '0x' + c.hash.toString(16).toUpperCase().padStart(2, '0') : c.hash) + '</td>' +
       '<td>' + c.messages + '</td>' +
       '<td>' + c.senders + '</td>' +
       '<td>' + timeAgo(c.lastActivity) + '</td>' +
-      '<td>' + (c.encrypted ? '🔒' : '✅') + '</td>' +
+      '<td>' + (c.encrypted ? (c.group === 'mine' ? '🔑' : '🔒') : '✅') + '</td>' +
     '</tr>';
   }
 
-  function channelTbodyHtml(channels, col, dir) {
+  // ── PSK-aware decoration ──────────────────────────────────────────────────
+  // Server returns raw "chNNN" placeholder names for encrypted channels it
+  // doesn't know. Decorate so the UI shows a useful display name and a
+  // group bucket: mine / network / encrypted. Pure function for testability.
+  function decorateAnalyticsChannels(channels, hashByteToKeyName, labels) {
+    var keyMap = hashByteToKeyName || {};
+    var lab = labels || {};
+    var out = [];
+    for (var i = 0; i < (channels || []).length; i++) {
+      var c = channels[i];
+      var copy = Object.assign({}, c);
+      var hashNum = typeof c.hash === 'number' ? c.hash : parseInt(c.hash, 10);
+      var rawName = String(c.name || '');
+      var isPlaceholder = /^ch(\d+|\?)$/.test(rawName);
+      if (c.encrypted) {
+        var keyName = !isNaN(hashNum) ? keyMap[hashNum] : null;
+        if (keyName) {
+          copy.displayName = lab[keyName] || keyName;
+          copy.group = 'mine';
+        } else if (isPlaceholder || !rawName) {
+          // Placeholder ("chNNN") or empty name → render as opaque encrypted.
+          // Empty-name encrypted rows would otherwise leak through with an
+          // empty <strong> in the row; force the placeholder rendering.
+          copy.displayName = !isNaN(hashNum)
+            ? '🔒 Encrypted (0x' + hashNum.toString(16).toUpperCase().padStart(2, '0') + ')'
+            : '🔒 Encrypted';
+          copy.group = 'encrypted';
+        } else {
+          // Server gave us a real name (rainbow table hit) for an encrypted ch.
+          copy.displayName = rawName;
+          copy.group = 'network';
+        }
+      } else {
+        copy.displayName = rawName || 'Unknown';
+        copy.group = 'network';
+      }
+      out.push(copy);
+    }
+    return out;
+  }
+
+  // Build the (hash byte → key name) map from ChannelDecrypt's stored keys.
+  // Async because computeChannelHash uses subtle.digest. Returns {} if the
+  // module or its keys are unavailable (graceful fallback).
+  async function buildHashKeyMap() {
+    if (typeof ChannelDecrypt === 'undefined' || !ChannelDecrypt.getStoredKeys) return {};
+    var keys = ChannelDecrypt.getStoredKeys();
+    var map = {};
+    var names = Object.keys(keys || {});
+    for (var ni = 0; ni < names.length; ni++) {
+      var name = names[ni];
+      try {
+        var bytes = ChannelDecrypt.hexToBytes(keys[name]);
+        var hb = await ChannelDecrypt.computeChannelHash(bytes);
+        if (typeof hb === 'number') map[hb] = name;
+      } catch (e) { /* skip bad key */ }
+    }
+    return map;
+  }
+
+  function channelTbodyHtml(channels, col, dir, opts) {
     var sorted = sortChannels(channels, col, dir);
     var parts = [];
-    for (var i = 0; i < sorted.length; i++) parts.push(channelRowHtml(sorted[i]));
+    if (opts && opts.grouped) {
+      // Group by .group: mine → network → encrypted. Inside each group keep
+      // the active sort (caller passes col/dir; for the integration we sort
+      // by messages desc by default).
+      var groups = { mine: [], network: [], encrypted: [] };
+      for (var gi = 0; gi < sorted.length; gi++) {
+        var g = sorted[gi].group || (sorted[gi].encrypted ? 'encrypted' : 'network');
+        (groups[g] || (groups[g] = [])).push(sorted[gi]);
+      }
+      var sections = [
+        { key: 'mine', label: '🔑 My Channels' },
+        { key: 'network', label: '📻 Network' },
+        { key: 'encrypted', label: '🔒 Encrypted' },
+      ];
+      for (var si = 0; si < sections.length; si++) {
+        var rows = groups[sections[si].key] || [];
+        if (!rows.length) continue;
+        parts.push(
+          '<tr class="ch-section-row"><td colspan="6" class="ch-section-header">' +
+          esc(sections[si].label) + ' <span class="text-muted">(' + rows.length + ')</span>' +
+          '</td></tr>'
+        );
+        for (var ri = 0; ri < rows.length; ri++) parts.push(channelRowHtml(rows[ri]));
+      }
+    } else {
+      for (var i = 0; i < sorted.length; i++) parts.push(channelRowHtml(sorted[i]));
+    }
     return parts.join('');
   }
 
@@ -801,13 +982,39 @@
     var tbody = document.getElementById('channelsTbody');
     var thead = document.querySelector('#channelsTable thead');
     if (!tbody || !_channelData) return;
-    tbody.innerHTML = channelTbodyHtml(_channelData, _channelSortState.col, _channelSortState.dir);
+    tbody.innerHTML = channelTbodyHtml(_channelData, _channelSortState.col, _channelSortState.dir, { grouped: true });
     if (thead) thead.outerHTML = channelTheadHtml(_channelSortState.col, _channelSortState.dir);
   }
 
   function renderChannels(el, ch) {
-    _channelData = ch.channels;
-    if (!_channelSortState) _channelSortState = loadChannelSort();
+    // Decorate first so grouping/display name reflect locally-stored PSK keys.
+    // buildHashKeyMap is async; render once with a sync best-effort empty map,
+    // then upgrade once keys resolve. That keeps first paint fast and avoids
+    // blocking on subtle.digest in environments where it's slow.
+    var rawChannels = ch.channels || [];
+    // Resolve the persisted sort first so the default-fallback below doesn't
+    // shadow what the user previously chose. Default for the grouped view is
+    // messages desc (matches the PR description); only used when nothing saved.
+    if (!_channelSortState) {
+      _channelSortState = hasSavedChannelSort()
+        ? loadChannelSort()
+        : { col: 'messages', dir: 'desc' };
+    }
+    var ranOnce = false;
+    // Generation token: if renderChannels is called again before
+    // buildHashKeyMap() resolves, the older promise must not clobber the
+    // newer rawChannels / decoration with stale-key data.
+    var myGen = ++_channelRenderGen;
+    function applyDecorate(map) {
+      if (myGen !== _channelRenderGen) return; // superseded
+      var labels = (typeof ChannelDecrypt !== 'undefined' && ChannelDecrypt.getLabels)
+        ? ChannelDecrypt.getLabels() : {};
+      _channelData = decorateAnalyticsChannels(rawChannels, map, labels);
+      if (ranOnce) updateChannelTable();
+    }
+    applyDecorate({});
+    ranOnce = true;
+    buildHashKeyMap().then(applyDecorate).catch(function () { /* graceful */ });
 
     var timelineHtml = renderChannelTimeline(ch.channelTimeline);
     var topSendersHtml = renderTopSenders(ch.topSenders);
@@ -820,7 +1027,7 @@
         '<table class="analytics-table" id="channelsTable">' +
           channelTheadHtml(_channelSortState.col, _channelSortState.dir) +
           '<tbody id="channelsTbody">' +
-            channelTbodyHtml(_channelData, _channelSortState.col, _channelSortState.dir) +
+            channelTbodyHtml(_channelData, _channelSortState.col, _channelSortState.dir, { grouped: true }) +
           '</tbody>' +
         '</table>' +
       '</div>' +
@@ -1734,8 +1941,8 @@
 
         <div class="subpath-section">
           <h5>⏱️ Timeline</h5>
-          <div>First seen: ${data.firstSeen ? new Date(data.firstSeen).toLocaleString() : '—'}</div>
-          <div>Last seen: ${data.lastSeen ? new Date(data.lastSeen).toLocaleString() : '—'}</div>
+          <div>First seen: ${data.firstSeen ? (typeof formatAbsoluteTimestamp === 'function' ? formatAbsoluteTimestamp(data.firstSeen) : new Date(data.firstSeen).toLocaleString()) : '—'}</div>
+          <div>Last seen: ${data.lastSeen ? (typeof formatAbsoluteTimestamp === 'function' ? formatAbsoluteTimestamp(data.lastSeen) : new Date(data.lastSeen).toLocaleString()) : '—'}</div>
         </div>
 
         ${data.observers.length ? `
@@ -2027,10 +2234,11 @@
     }
   }
 
-function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { _stopRolesRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
+    window._analyticsDecorateChannels = decorateAnalyticsChannels;
     window._analyticsSortChannels = sortChannels;
     window._analyticsLoadChannelSort = loadChannelSort;
     window._analyticsSaveChannelSort = saveChannelSort;
@@ -2662,7 +2870,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       const name = esc(n.name || n.public_key.slice(0, 12));
       const role = n.role ? `<span class="text-muted" style="font-size:0.82em">${esc(n.role)}</span>` : '';
       const hs = n.hash_size ? ` <span class="text-muted" style="font-size:0.78em;opacity:0.7">${n.hash_size}B hash</span>` : '';
-      const when = n.last_seen ? ` <span class="text-muted" style="font-size:0.8em">${new Date(n.last_seen).toLocaleDateString()}</span>` : '';
+      const when = n.last_seen ? ` <span class="text-muted" style="font-size:0.8em">${(typeof formatAbsoluteTimestamp === 'function') ? formatAbsoluteTimestamp(n.last_seen) : new Date(n.last_seen).toLocaleDateString()}</span>` : '';
       return `<div style="padding:3px 0"><a href="#/nodes/${encodeURIComponent(n.public_key)}" class="analytics-link">${name}</a> ${role}${hs}${when}</div>`;
     }
 
@@ -3160,7 +3368,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       const t = new Date(d.t);
       const x = sx(t.getTime());
       const y = sy(d.v);
-      const ts = t.toISOString().replace('T', ' ').replace(/\.\d+Z/, ' UTC');
+      const ts = (typeof formatAbsoluteTimestamp === 'function') ? formatAbsoluteTimestamp(d.t) : t.toISOString().replace('T', ' ').replace(/\.\d+Z/, ' UTC');
       const tip = `${label}: ${formatV(d.v)}${unit}\n${ts}`;
       svg += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="8" fill="transparent" stroke="none" pointer-events="all"><title>${tip}</title></circle>`;
     });
@@ -3174,7 +3382,7 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
       const idx = Math.floor(i * (data.length - 1) / Math.max(xTicks - 1, 1));
       const t = new Date(data[idx].t);
       const x = sx(t.getTime());
-      const label = t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const label = (typeof formatChartAxisLabel === 'function') ? formatChartAxisLabel(t, true) : t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       svg += `<text x="${x.toFixed(1)}" y="${h - 5}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${label}</text>`;
     }
     return svg;
@@ -3693,6 +3901,82 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
     }
 
     load(selectedWindow);
+  }
+
+  // #1085 — Roles tab (folded in from former /#/roles page).
+  // Renders distribution of node roles + per-role clock-skew posture.
+  // Auto-refreshes every 60s while the Roles tab is active (matches the
+  // behavior of the former standalone roles-page.js).
+  async function renderRolesTab(el) {
+    el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading roles…</div>';
+    await _renderRolesTabBody(el);
+    // (Re)start the 60s auto-refresh.
+    _stopRolesRefresh();
+    _rolesRefreshTimer = setInterval(function () {
+      // Bail if the user navigated away from the Roles tab.
+      if (_currentTab !== 'roles') { _stopRolesRefresh(); return; }
+      var cur = document.getElementById('analyticsContent');
+      if (!cur) { _stopRolesRefresh(); return; }
+      _renderRolesTabBody(cur);
+    }, 60000);
+  }
+
+  async function _renderRolesTabBody(el) {
+    try {
+      var data = await api('/analytics/roles', { ttl: CLIENT_TTL.analyticsRF });
+      var roles = (data && data.roles) || [];
+      var total = (data && data.totalNodes) || 0;
+      if (!roles.length) {
+        el.innerHTML = '<div class="text-center text-muted" style="padding:40px">No roles to show.</div>';
+        return;
+      }
+      var maxCount = roles.reduce(function (m, r) { return Math.max(m, r.nodeCount || 0); }, 0) || 1;
+      var rows = roles.map(function (r) {
+        var pct = total > 0 ? ((r.nodeCount / total) * 100).toFixed(1) : '0.0';
+        var barW = Math.round((r.nodeCount / maxCount) * 100);
+        var sevCells =
+          '<span title="OK (skew &lt; 5min)" style="color:var(--color-success,#0a0)">' + (r.okCount || 0) + '</span> / ' +
+          '<span title="Warning (5min – 1h)" style="color:var(--color-warning,#e80)">' + (r.warningCount || 0) + '</span> / ' +
+          '<span title="Critical (1h – 30d)" style="color:var(--color-error,#c00)">' + (r.criticalCount || 0) + '</span> / ' +
+          '<span title="Absurd (&gt; 30d)" style="color:#a0a">' + (r.absurdCount || 0) + '</span> / ' +
+          '<span title="No clock (&gt; 365d)" style="color:#888">' + (r.noClockCount || 0) + '</span>';
+        return '' +
+          '<tr data-role="' + esc(r.role) + '">' +
+            '<td>' + _rolesEmoji(r.role) + ' <strong>' + esc(r.role) + '</strong></td>' +
+            '<td style="text-align:right">' + r.nodeCount + '</td>' +
+            '<td style="text-align:right">' + pct + '%</td>' +
+            '<td style="min-width:140px">' +
+              '<div style="background:var(--color-surface-2,#eee);height:10px;border-radius:5px;overflow:hidden">' +
+                '<div style="background:var(--color-accent,#06c);width:' + barW + '%;height:100%"></div>' +
+              '</div>' +
+            '</td>' +
+            '<td style="text-align:right">' + (r.withSkew || 0) + '</td>' +
+            '<td style="text-align:right">' + _rolesFmtSec(r.medianAbsSkewSec || 0) + '</td>' +
+            '<td style="text-align:right">' + _rolesFmtSec(r.meanAbsSkewSec || 0) + '</td>' +
+            '<td style="white-space:nowrap">' + sevCells + '</td>' +
+          '</tr>';
+      }).join('');
+      el.innerHTML =
+        '<p class="text-muted" style="margin:0 0 12px 0">Distribution of node roles across the mesh, with per-role clock-skew posture.</p>' +
+        '<div class="roles-summary" style="margin-bottom:12px;color:var(--color-text-muted,#666)">' +
+          '<strong>' + total + '</strong> nodes across <strong>' + roles.length + '</strong> roles' +
+        '</div>' +
+        '<table id="rolesTable" class="data-table analytics-table" style="width:100%">' +
+          '<thead><tr>' +
+            '<th>Role</th>' +
+            '<th style="text-align:right">Count</th>' +
+            '<th style="text-align:right">Share</th>' +
+            '<th>Distribution</th>' +
+            '<th style="text-align:right" title="Nodes with clock-skew samples">w/ Skew</th>' +
+            '<th style="text-align:right" title="Median absolute skew">Median |skew|</th>' +
+            '<th style="text-align:right" title="Mean absolute skew">Mean |skew|</th>' +
+            '<th title="OK / Warning / Critical / Absurd / No-clock">Severity</th>' +
+          '</tr></thead>' +
+          '<tbody>' + rows + '</tbody>' +
+        '</table>';
+    } catch (err) {
+      el.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:40px">Failed to load roles: ' + esc(String(err.message || err)) + '</div>';
+    }
   }
 
   registerPage('analytics', { init, destroy });
