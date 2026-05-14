@@ -2333,12 +2333,9 @@ async function run() {
   });
 
   await test('Packets table rows have border-left stripe when toggle ON', async () => {
+    // Set toggle before gotoPackets so the SPA picks it up on the reload.
     await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
-    // Hard reload to re-init page handler with the new toggle state.
-    // page.goto with same hash URL is a no-op for re-rendering.
-    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
+    await gotoPackets(page);  // full reload from scratch; waits for visible rows
     // Wait for hash stripe to be applied (inline style set during render).
     // Assert specifically 4px (per spec §2.10) so we don't false-pass on the
     // 3px channel-color highlight which is independent of this toggle.
