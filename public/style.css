@@ -1062,7 +1062,7 @@ body.scroll-locked { overflow: hidden; }
 .mc-section { margin-bottom: 10px; }
 .mc-label { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .3px; color: var(--text-muted); margin-bottom: 4px; }
 .mc-section label { display: block; padding: 2px 0; cursor: pointer; }
-.mc-section select { width: 100%; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+.mc-section select { width: 100%; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; touch-action: manipulation; min-height: 32px; }
 .mc-jumps { display: flex; flex-wrap: wrap; gap: 4px; }
 .mc-jump-btn {
   padding: 3px 10px; border: 1px solid var(--border); border-radius: 4px;
@@ -2420,6 +2420,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   align-items: center;
   justify-content: center;
   box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  touch-action: manipulation;
 }
 .map-controls.collapsed {
   display: none;

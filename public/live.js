@@ -887,7 +887,7 @@
             <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
           </div>
           <div class="live-toggles">
-            <label>Map <select id="liveSatmapSelect" class="live-satmap-select" aria-label="Map tile style">
+            <label>Map style <select id="liveSatmapSelect" class="live-satmap-select" aria-label="Map tile style">
               <option value="positron">Positron</option>
               <option value="dark_matter">Dark Matter</option>
               <option value="gray_canvas">Gray Canvas</option>
