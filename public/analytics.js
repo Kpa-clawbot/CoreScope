@@ -1063,6 +1063,7 @@
         }
       });
     }
+  }
 
   var CHANNEL_TIMELINE_MAX_SERIES = 8;
 
