@@ -1213,6 +1213,13 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 }
 .ch-back-btn:hover { background: var(--row-hover); }
 .ch-header-text { flex: 1; }
+.ch-header-qr-btn {
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 10px; font-size: 13px; cursor: pointer; color: var(--text);
+  min-width: 44px; min-height: 36px; white-space: nowrap;
+}
+.ch-header-qr-btn:hover { background: var(--row-hover); }
+.ch-header-qr-btn.hidden { display: none; }
 .ch-messages {
   flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 16px;
   background: var(--content-bg);

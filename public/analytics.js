@@ -1044,24 +1044,25 @@
         histoHtml +
       '</div>';
 
-    // Attach sort handler via delegation on the table
+    // Attach sort + QR handler via delegation on the table
     var table = document.getElementById('channelsTable');
     if (table) {
       table.addEventListener('click', function (e) {
         var th = e.target.closest('th[data-sort-col]');
-        if (!th) return;
-        var col = th.dataset.sortCol;
-        if (_channelSortState.col === col) {
-          _channelSortState.dir = _channelSortState.dir === 'asc' ? 'desc' : 'asc';
-        } else {
-          _channelSortState.col = col;
-          _channelSortState.dir = col === 'name' || col === 'hash' ? 'asc' : 'desc';
+        if (th) {
+          var col = th.dataset.sortCol;
+          if (_channelSortState.col === col) {
+            _channelSortState.dir = _channelSortState.dir === 'asc' ? 'desc' : 'asc';
+          } else {
+            _channelSortState.col = col;
+            _channelSortState.dir = col === 'name' || col === 'hash' ? 'asc' : 'desc';
+          }
+          saveChannelSort(_channelSortState);
+          updateChannelTable();
+          return;
         }
-        saveChannelSort(_channelSortState);
-        updateChannelTable();
       });
     }
-  }
 
   var CHANNEL_TIMELINE_MAX_SERIES = 8;
 

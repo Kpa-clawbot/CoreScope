@@ -13,6 +13,15 @@
   let observerIataByName = {};
   let observerSfByName = {};
   let messageRequestId = 0;
+  let _serverChannelKeys = null;
+
+  function getServerChannelKeys() {
+    if (_serverChannelKeys !== null) return Promise.resolve(_serverChannelKeys);
+    return fetch('/api/config/channel-keys')
+      .then(function (r) { return r.ok ? r.json() : {}; })
+      .then(function (keys) { _serverChannelKeys = keys || {}; return _serverChannelKeys; })
+      .catch(function () { _serverChannelKeys = {}; return {}; });
+  }
   var _nodeCacheTTL = 5 * 60 * 1000; // 5 minutes
 
   function getSelectedRegionsSnapshot() {
@@ -790,6 +799,7 @@
         <div class="ch-main-header" id="chHeader">
           <button type="button" class="ch-back-btn" id="chBackBtn" aria-label="Back to channels">←</button>
           <span class="ch-header-text">Select a channel</span>
+          <button type="button" class="ch-header-qr-btn hidden" id="chHeaderQrBtn" aria-label="Share channel" aria-haspopup="dialog" title="Share channel QR">📤</button>
         </div>
         <div class="ch-messages" id="chMessages">
           <div class="ch-empty">Choose a channel from the sidebar to view messages</div>
@@ -1138,7 +1148,30 @@
       if (msgEl2) msgEl2.innerHTML = '<div class="ch-empty">Choose a channel from the sidebar to view messages</div>';
       var hdr = document.getElementById('chHeader');
       if (hdr) hdr.querySelector('.ch-header-text').textContent = 'Select a channel';
+      var hdrQrBtn = document.getElementById('chHeaderQrBtn');
+      if (hdrQrBtn) { hdrQrBtn.classList.add('hidden'); hdrQrBtn.removeAttribute('data-share-channel'); hdrQrBtn.removeAttribute('data-share-channel-server'); }
     });
+
+    var headerQrBtn = document.getElementById('chHeaderQrBtn');
+    if (headerQrBtn) {
+      headerQrBtn.addEventListener('click', function () {
+        var shareHash = headerQrBtn.getAttribute('data-share-channel');
+        if (!shareHash) return;
+        var sCh = channels.find(function (c) { return c.hash === shareHash; });
+        var channelName = shareHash.startsWith('user:') ? shareHash.substring(5) : (sCh && sCh.name) || shareHash;
+        var labels = typeof ChannelDecrypt.getLabels === 'function' ? ChannelDecrypt.getLabels() : {};
+        var labelFromStore = typeof ChannelDecrypt.getLabel === 'function' ? ChannelDecrypt.getLabel(channelName) : (labels[channelName] || '');
+        var displayName = labelFromStore || channelName;
+        var keys = ChannelDecrypt.getStoredKeys();
+        var keyHex = keys[channelName];
+        if (keyHex) { openShareModal(displayName, channelName, keyHex); return; }
+        // Fall back to server-provided key
+        var srvKeys = _serverChannelKeys || {};
+        var srvKeyHex = srvKeys[channelName];
+        if (srvKeyHex) { openShareModal(displayName, channelName, srvKeyHex); return; }
+        openShareModalError(displayName, 'No key found for this channel.');
+      });
+    }
 
     // Event delegation for channel selection (touch-friendly)
     var chListEl = document.getElementById('chList');
@@ -1763,6 +1796,27 @@
     const name = ch ? channelDisplayName(ch) : `Channel ${formatHashHex(hash)}`;
     const header = document.getElementById('chHeader');
     header.querySelector('.ch-header-text').textContent = `${name} — ${ch?.messageCount || 0} messages`;
+    var _hdrQrBtn = document.getElementById('chHeaderQrBtn');
+    if (_hdrQrBtn) {
+      var _chKeyName = hash.startsWith('user:') ? hash.substring(5) : hash;
+      var _hasLocalKey = typeof ChannelDecrypt !== 'undefined' && !!ChannelDecrypt.getStoredKeys()[_chKeyName];
+      if (_hasLocalKey) {
+        _hdrQrBtn.setAttribute('data-share-channel', hash);
+        _hdrQrBtn.classList.remove('hidden');
+      } else {
+        // Check server keys (async); show button if the server knows the PSK.
+        _hdrQrBtn.removeAttribute('data-share-channel');
+        _hdrQrBtn.classList.add('hidden');
+        getServerChannelKeys().then(function (srvKeys) {
+          if (selectedHash !== hash) return; // channel changed while fetching
+          if (srvKeys[_chKeyName]) {
+            _hdrQrBtn.setAttribute('data-share-channel', hash);
+            _hdrQrBtn.setAttribute('data-share-channel-server', '1');
+            _hdrQrBtn.classList.remove('hidden');
+          }
+        });
+      }
+    }
 
     const msgEl = document.getElementById('chMessages');
 

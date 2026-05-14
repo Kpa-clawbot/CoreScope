@@ -92,6 +92,12 @@ type Config struct {
 
 	// BatteryThresholds: voltage cutoffs for low/critical alerts (#663).
 	BatteryThresholds *BatteryThresholdsConfig `json:"batteryThresholds,omitempty"`
+
+	// Channel decryption keys — same fields as the ingestor so a shared config.json
+	// can drive both processes.
+	ChannelKeysPath string            `json:"channelKeysPath,omitempty"`
+	ChannelKeys     map[string]string `json:"channelKeys,omitempty"`
+	HashChannels    []string          `json:"hashChannels,omitempty"`
 }
 
 // weakAPIKeys is the blocklist of known default/example API keys that must be rejected.

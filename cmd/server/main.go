@@ -398,6 +398,7 @@ func main() {
 	// HTTP server
 	srv := NewServer(database, cfg, hub)
 	srv.store = store
+	srv.channelKeys = loadServerChannelKeys(cfg, configDir)
 
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
