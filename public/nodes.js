@@ -1266,6 +1266,7 @@
         <td>${favStar(n.public_key, 'node-fav')}${isClaimed ? '<span class="claimed-badge" title="My Mesh">★</span> ' : ''}<strong>${n.name || '(unnamed)'}</strong>${dupNameBadge(n.name, n.public_key, dupMap)}${skewBadgeHtml}</td>
         <td class="mono col-pubkey">${truncate(n.public_key, 16)}</td>
         <td><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span></td>
+        <td style="font-family:var(--mono);font-size:12px">${n.default_scope ? escapeHtml(n.default_scope) : ''}</td>
         <td class="${lastSeenClass}">${renderNodeTimestampHtml(n.last_heard || n.last_seen)}</td>
         <td>${n.advert_count || 0}</td>
       </tr>`;
