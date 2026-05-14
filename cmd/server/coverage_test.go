@@ -1334,8 +1334,8 @@ func TestBuildTransmissionWhereRFC3339(t *testing.T) {
 		if len(args) != 1 {
 			t.Errorf("expected 1 arg, got %d", len(args))
 		}
-		if !strings.Contains(where[0], "observations") {
-			t.Error("expected observations subquery for RFC3339 since")
+		if !strings.Contains(where[0], "first_seen") {
+			t.Error("expected first_seen comparison for since filter")
 		}
 	})
 
@@ -1348,6 +1348,9 @@ func TestBuildTransmissionWhereRFC3339(t *testing.T) {
 		if len(args) != 1 {
 			t.Errorf("expected 1 arg, got %d", len(args))
 		}
+		if !strings.Contains(where[0], "first_seen") {
+			t.Error("expected first_seen comparison for until filter")
+		}
 	})
 
 	t.Run("non-RFC3339 since", func(t *testing.T) {
@@ -1356,8 +1359,8 @@ func TestBuildTransmissionWhereRFC3339(t *testing.T) {
 		if len(where) != 1 {
 			t.Errorf("expected 1 clause, got %d", len(where))
 		}
-		if strings.Contains(where[0], "observations") {
-			t.Error("expected direct first_seen comparison for non-RFC3339")
+		if !strings.Contains(where[0], "first_seen") {
+			t.Error("expected first_seen comparison for non-RFC3339 since")
 		}
 	})
 
