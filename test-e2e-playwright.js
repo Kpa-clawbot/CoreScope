@@ -2193,7 +2193,13 @@ async function run() {
   // Regression #891: server-supplied breakdown was computed once from top-level
   // raw_hex, so per-observation rendering had off-by-N highlights vs the labels.
   await test('Packet detail hex strip Path range matches hop row count', async () => {
-    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    // Same stale-state issue: preceding test leaves detail pane open. Full reload clears it.
+    await page.evaluate(() => {
+      localStorage.removeItem('meshcore-groupbyhash');
+      localStorage.setItem('meshcore-time-window', '525600');
+    });
+    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'load' });
     await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
     await page.waitForTimeout(500);
 
@@ -2242,7 +2248,13 @@ async function run() {
   // Regression: observations of the same packet hash have different raw_hex (#882),
   // so picking a different obs must recompute the byte ranges, not reuse the old ones.
   await test('Packet detail switches consistently across observations', async () => {
-    await page.goto(BASE + '#/packets?groupByHash=1', { waitUntil: 'domcontentloaded' });
+    // Same stale-state issue: preceding test leaves detail pane open. Full reload clears it.
+    // SPA defaults groupByHash=true so no URL param needed; time-window ensures data is visible.
+    await page.evaluate(() => {
+      localStorage.setItem('meshcore-time-window', '525600');
+    });
+    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'load' });
     await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
     await page.waitForTimeout(500);
 
