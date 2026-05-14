@@ -606,22 +606,12 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 		args = append(args, strings.ToLower(q.Hash))
 	}
 	if q.Since != "" {
-		if t, err := time.Parse(time.RFC3339Nano, q.Since); err == nil {
-			where = append(where, "t.id IN (SELECT DISTINCT transmission_id FROM observations WHERE timestamp >= ?)")
-			args = append(args, t.Unix())
-		} else {
-			where = append(where, "t.first_seen > ?")
-			args = append(args, q.Since)
-		}
+		where = append(where, "t.first_seen > ?")
+		args = append(args, q.Since)
 	}
 	if q.Until != "" {
-		if t, err := time.Parse(time.RFC3339Nano, q.Until); err == nil {
-			where = append(where, "t.id IN (SELECT DISTINCT transmission_id FROM observations WHERE timestamp <= ?)")
-			args = append(args, t.Unix())
-		} else {
-			where = append(where, "t.first_seen < ?")
-			args = append(args, q.Until)
-		}
+		where = append(where, "t.first_seen < ?")
+		args = append(args, q.Until)
 	}
 	if q.Node != "" {
 		pk := db.resolveNodePubkey(q.Node)

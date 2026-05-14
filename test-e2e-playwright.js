@@ -42,7 +42,7 @@ async function gotoPackets(page) {
   });
   await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
+  await page.waitForSelector('table tbody tr[data-hash]', { timeout: 15000 });
 }
 
 async function run() {
@@ -2336,6 +2336,22 @@ async function run() {
     // Set toggle before gotoPackets so the SPA picks it up on the reload.
     await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
     await gotoPackets(page);  // full reload from scratch; waits for visible rows
+    // Diagnostic: capture actual DOM/LS state before asserting.
+    const stripeDebug = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('table tbody tr[data-hash]')];
+      return {
+        rowCount: rows.length,
+        hashColorDefined: !!window.HashColor,
+        colorLS: localStorage.getItem('meshcore-color-packets-by-hash'),
+        timeWindowLS: localStorage.getItem('meshcore-time-window'),
+        sampleRows: rows.slice(0, 3).map(r => ({
+          dataHash: r.getAttribute('data-hash'),
+          styleAttr: r.getAttribute('style') || '',
+          borderLeftWidth: r.style.borderLeftWidth,
+        })),
+      };
+    });
+    console.log('  [stripe-debug]', JSON.stringify(stripeDebug));
     // Wait for hash stripe to be applied (inline style set during render).
     // Use style.borderLeftWidth (parsed value) not getAttribute('style') — Chromium
     // normalizes the raw attribute string (e.g. adds spaces) making string-match unreliable.
