@@ -5,7 +5,7 @@
 (function () {
   let styleEl = null;
   let originalValues = {};
-  let activeTab = 'branding';
+  let activeTab = 'theme';
 
   // ── Brand logo swap helpers (PR #1137) ──
   // Default brand logo is an inline <svg.brand-logo>; an operator override
@@ -692,10 +692,8 @@
 
   function renderTabs() {
     var tabs = [
-      { id: 'branding', label: '🏷️', title: 'Branding' },
       { id: 'theme', label: '🎨', title: 'Theme Colors' },
       { id: 'nodes', label: '🎯', title: 'Colors' },
-      { id: 'home', label: '🏠', title: 'Home Page' },
       { id: 'display', label: '🖥️', title: 'Display' },
       { id: 'export', label: '📤', title: 'Export / Save' }
     ];
@@ -703,17 +701,6 @@
       tabs.map(function (t) {
         return '<button class="cust-tab' + (t.id === activeTab ? ' active' : '') + '" data-tab="' + t.id + '" title="' + t.title + '">' + t.label + ' <span class="cust-tab-text">' + t.title + '</span></button>';
       }).join('') + '</div>';
-  }
-
-  function renderBranding() {
-    var b = state.branding;
-    var logoPreview = b.logoUrl ? '<img class="cust-preview-img" src="' + escAttr(b.logoUrl) + '" alt="Logo preview" onerror="this.style.display=\'none\'">' : '';
-    return '<div class="cust-panel' + (activeTab === 'branding' ? ' active' : '') + '" data-panel="branding">' +
-      '<div class="cust-field"><label for="cust-siteName">Site Name</label><input type="text" id="cust-siteName" data-key="branding.siteName" value="' + escAttr(b.siteName) + '"></div>' +
-      '<div class="cust-field"><label for="cust-tagline">Tagline</label><input type="text" id="cust-tagline" data-key="branding.tagline" value="' + escAttr(b.tagline) + '"></div>' +
-      '<div class="cust-field"><label for="cust-logoUrl">Logo URL</label><input type="text" id="cust-logoUrl" data-key="branding.logoUrl" value="' + escAttr(b.logoUrl) + '" placeholder="https://...">' + logoPreview + '</div>' +
-      '<div class="cust-field"><label for="cust-faviconUrl">Favicon URL</label><input type="text" id="cust-faviconUrl" data-key="branding.faviconUrl" value="' + escAttr(b.faviconUrl) + '" placeholder="https://..."></div>' +
-    '</div>';
   }
 
   function renderDisplay() {
@@ -863,55 +850,6 @@
     '</div>';
   }
 
-  function renderHome() {
-    var h = state.home;
-    var stepsHtml = h.steps.map(function (s, i) {
-      return '<div class="cust-list-item" data-step="' + i + '">' +
-        '<div class="cust-list-row">' +
-          '<input class="cust-emoji-input" data-step-field="emoji" data-idx="' + i + '" value="' + escAttr(s.emoji) + '" placeholder="📡" aria-label="Step ' + (i + 1) + ' emoji">' +
-          '<input data-step-field="title" data-idx="' + i + '" value="' + escAttr(s.title) + '" placeholder="Title" aria-label="Step ' + (i + 1) + ' title">' +
-          '<button class="cust-list-btn" data-move-step="' + i + '" data-dir="up" title="Move up">↑</button>' +
-          '<button class="cust-list-btn" data-move-step="' + i + '" data-dir="down" title="Move down">↓</button>' +
-          '<button class="cust-list-btn danger" data-rm-step="' + i + '" title="Remove">✕</button>' +
-        '</div>' +
-        '<textarea data-step-field="description" data-idx="' + i + '" placeholder="Description" rows="2" aria-label="Step ' + (i + 1) + ' description">' + esc(s.description) + '</textarea>' +
-        '<div class="cust-md-hint">Markdown: <code>**bold**</code> <code>*italic*</code> <code>`code`</code> <code>[text](url)</code> <code>- list</code></div>' +
-      '</div>';
-    }).join('');
-
-    var checkHtml = h.checklist.map(function (c, i) {
-      return '<div class="cust-list-item" data-check="' + i + '">' +
-        '<div class="cust-list-row">' +
-          '<input data-check-field="question" data-idx="' + i + '" value="' + escAttr(c.question) + '" placeholder="Question" aria-label="Checklist item ' + (i + 1) + ' question">' +
-          '<button class="cust-list-btn danger" data-rm-check="' + i + '" title="Remove">✕</button>' +
-        '</div>' +
-        '<textarea data-check-field="answer" data-idx="' + i + '" placeholder="Answer" rows="2" aria-label="Checklist item ' + (i + 1) + ' answer">' + esc(c.answer) + '</textarea>' +
-        '<div class="cust-md-hint">Markdown: <code>**bold**</code> <code>*italic*</code> <code>`code`</code> <code>[text](url)</code> <code>- list</code></div>' +
-      '</div>';
-    }).join('');
-
-    var linksHtml = h.footerLinks.map(function (l, i) {
-      return '<div class="cust-list-item" data-link="' + i + '">' +
-        '<div class="cust-list-row">' +
-          '<input data-link-field="label" data-idx="' + i + '" value="' + escAttr(l.label) + '" placeholder="Label" aria-label="Footer link ' + (i + 1) + ' label">' +
-          '<button class="cust-list-btn danger" data-rm-link="' + i + '" title="Remove">✕</button>' +
-        '</div>' +
-        '<input data-link-field="url" data-idx="' + i + '" value="' + escAttr(l.url) + '" placeholder="URL" aria-label="Footer link ' + (i + 1) + ' URL">' +
-      '</div>';
-    }).join('');
-
-    return '<div class="cust-panel' + (activeTab === 'home' ? ' active' : '') + '" data-panel="home">' +
-      '<div class="cust-field"><label for="cust-heroTitle">Hero Title</label><input type="text" id="cust-heroTitle" data-key="home.heroTitle" value="' + escAttr(h.heroTitle) + '"></div>' +
-      '<div class="cust-field"><label for="cust-heroSubtitle">Hero Subtitle</label><input type="text" id="cust-heroSubtitle" data-key="home.heroSubtitle" value="' + escAttr(h.heroSubtitle) + '"></div>' +
-      '<p class="cust-section-title" style="margin-top:20px">Steps</p>' + stepsHtml +
-      '<button class="cust-add-btn" id="addStep">+ Add Step</button>' +
-      '<p class="cust-section-title" style="margin-top:24px">FAQ / Checklist</p>' + checkHtml +
-      '<button class="cust-add-btn" id="addCheck">+ Add Question</button>' +
-      '<p class="cust-section-title" style="margin-top:24px">Footer Links</p>' + linksHtml +
-      '<button class="cust-add-btn" id="addLink">+ Add Link</button>' +
-    '</div>';
-  }
-
   function buildExport() {
     var out = {};
     // Branding — only changed values
@@ -1000,10 +938,8 @@
     container.innerHTML =
       renderTabs() +
       '<div class="cust-body">' +
-      renderBranding() +
       renderTheme() +
       renderNodes() +
-      renderHome() +
       renderDisplay() +
       renderExport() +
       '</div>';

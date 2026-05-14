@@ -866,7 +866,7 @@
   // ── Customizer panel UI ──
 
   var _panelEl = null;
-  var _activeTab = 'branding';
+  var _activeTab = 'theme';
   var _styleEl = null;
 
   function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
@@ -990,10 +990,8 @@
 
   function _renderTabs() {
     var tabs = [
-      { id: 'branding', label: '🏷️', title: 'Branding', badge: _tabBadge('branding') },
       { id: 'theme', label: '🎨', title: 'Theme', badge: _tabBadge(isDarkMode() ? 'themeDark' : 'theme') },
       { id: 'nodes', label: '🎯', title: 'Colors', badge: (function () { var n = _countOverrides('nodeColors') + _countOverrides('typeColors'); return n ? ' <span class="cv2-tab-badge">' + n + '</span>' : ''; })() },
-      { id: 'home', label: '🏠', title: 'Home', badge: _tabBadge('home') },
       { id: 'display', label: '🖥️', title: 'Display', badge: (function () { var n = _countOverrides('timestamps') + (_isOverridden(null, 'distanceUnit') ? 1 : 0); return n ? ' <span class="cv2-tab-badge">' + n + '</span>' : ''; })() },
       { id: 'export', label: '📤', title: 'Export' }
     ];
@@ -1063,18 +1061,6 @@
     }
     html += '</div></div>';
     return html;
-  }
-
-  function _renderBranding() {
-    var eff = _getEffective();
-    var b = eff.branding || {};
-    var logoPreview = b.logoUrl ? '<img class="cust-preview-img" src="' + escAttr(b.logoUrl) + '" alt="Logo preview" onerror="this.style.display=\'none\'">' : '';
-    return '<div class="cust-panel' + (_activeTab === 'branding' ? ' active' : '') + '" data-panel="branding">' +
-      '<div class="cust-field"><label>Site Name' + _overrideDot('branding', 'siteName') + '</label><input type="text" data-cv2-field="branding.siteName" value="' + escAttr(b.siteName || '') + '"></div>' +
-      '<div class="cust-field"><label>Tagline' + _overrideDot('branding', 'tagline') + '</label><input type="text" data-cv2-field="branding.tagline" value="' + escAttr(b.tagline || '') + '"></div>' +
-      '<div class="cust-field"><label>Logo URL' + _overrideDot('branding', 'logoUrl') + '</label><input type="text" data-cv2-field="branding.logoUrl" value="' + escAttr(b.logoUrl || '') + '" placeholder="https://...">' + logoPreview + '</div>' +
-      '<div class="cust-field"><label>Favicon URL' + _overrideDot('branding', 'faviconUrl') + '</label><input type="text" data-cv2-field="branding.faviconUrl" value="' + escAttr(b.faviconUrl || '') + '" placeholder="https://..."></div>' +
-    '</div>';
   }
 
   function _renderTheme() {
@@ -1199,54 +1185,6 @@
     '</div>';
   }
 
-  function _renderHome() {
-    var eff = _getEffective();
-    var h = eff.home || {};
-    var steps = h.steps || [];
-    var checklist = h.checklist || [];
-    var footerLinks = h.footerLinks || [];
-
-    var stepsHtml = steps.map(function (s, i) {
-      return '<div class="cust-list-item">' +
-        '<div class="cust-list-row">' +
-          '<input class="cust-emoji-input" data-cv2-home="steps.' + i + '.emoji" value="' + escAttr(s.emoji) + '" placeholder="📡">' +
-          '<input data-cv2-home="steps.' + i + '.title" value="' + escAttr(s.title) + '" placeholder="Title">' +
-          '<button class="cust-list-btn" data-cv2-move="steps.' + i + '.up">↑</button>' +
-          '<button class="cust-list-btn" data-cv2-move="steps.' + i + '.down">↓</button>' +
-          '<button class="cust-list-btn danger" data-cv2-rm="steps.' + i + '">✕</button>' +
-        '</div>' +
-        '<textarea data-cv2-home="steps.' + i + '.description" placeholder="Description" rows="2">' + esc(s.description) + '</textarea>' +
-        '<div class="cust-md-hint">Markdown: <code>**bold**</code> <code>*italic*</code> <code>`code`</code> <code>[text](url)</code></div></div>';
-    }).join('');
-
-    var checkHtml = checklist.map(function (c, i) {
-      return '<div class="cust-list-item">' +
-        '<div class="cust-list-row"><input data-cv2-home="checklist.' + i + '.question" value="' + escAttr(c.question) + '" placeholder="Question">' +
-          '<button class="cust-list-btn danger" data-cv2-rm="checklist.' + i + '">✕</button></div>' +
-        '<textarea data-cv2-home="checklist.' + i + '.answer" placeholder="Answer" rows="2">' + esc(c.answer) + '</textarea></div>';
-    }).join('');
-
-    var linksHtml = footerLinks.map(function (l, i) {
-      return '<div class="cust-list-item">' +
-        '<div class="cust-list-row"><input data-cv2-home="footerLinks.' + i + '.label" value="' + escAttr(l.label) + '" placeholder="Label">' +
-          '<button class="cust-list-btn danger" data-cv2-rm="footerLinks.' + i + '">✕</button></div>' +
-        '<input data-cv2-home="footerLinks.' + i + '.url" value="' + escAttr(l.url) + '" placeholder="URL"></div>';
-    }).join('');
-
-    return '<div class="cust-panel' + (_activeTab === 'home' ? ' active' : '') + '" data-panel="home">' +
-      '<div class="cust-field"><label>Hero Title' + _overrideDot('home', 'heroTitle') + '</label>' +
-        '<input type="text" data-cv2-field="home.heroTitle" value="' + escAttr(h.heroTitle || '') + '"></div>' +
-      '<div class="cust-field"><label>Hero Subtitle' + _overrideDot('home', 'heroSubtitle') + '</label>' +
-        '<input type="text" data-cv2-field="home.heroSubtitle" value="' + escAttr(h.heroSubtitle || '') + '"></div>' +
-      '<p class="cust-section-title" style="margin-top:20px">Steps</p>' + stepsHtml +
-      '<button class="cust-add-btn" data-cv2-add="steps">+ Add Step</button>' +
-      '<p class="cust-section-title" style="margin-top:24px">FAQ / Checklist</p>' + checkHtml +
-      '<button class="cust-add-btn" data-cv2-add="checklist">+ Add Question</button>' +
-      '<p class="cust-section-title" style="margin-top:24px">Footer Links</p>' + linksHtml +
-      '<button class="cust-add-btn" data-cv2-add="footerLinks">+ Add Link</button>' +
-    '</div>';
-  }
-
   function _renderExport() {
     var delta = readOverrides();
     var json = JSON.stringify(delta, null, 2);
@@ -1265,10 +1203,6 @@
       '<details style="margin-top:12px"><summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text-muted)">Raw JSON</summary>' +
         '<textarea id="cv2ExportJson" style="width:100%;min-height:200px;font-family:var(--mono);font-size:12px;background:var(--surface-1);border:1px solid var(--border);border-radius:6px;padding:12px;color:var(--text);resize:vertical;box-sizing:border-box;margin-top:8px">' + esc(json) + '</textarea>' +
       '</details>' +
-      '<p class="cust-section-title" style="margin-top:20px">Tools</p>' +
-      '<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Server-side configuration helpers.</p>' +
-      '<a href="/geofilter-builder.html" target="_blank" style="display:inline-block;padding:7px 14px;background:var(--surface-1);border:1px solid var(--border);border-radius:6px;color:var(--accent);font-size:13px;text-decoration:none;font-weight:500">🗺️ GeoFilter Builder →</a>' +
-      '<p style="font-size:11px;color:var(--text-muted);margin-top:6px">Draw a polygon on the map to generate a <code style="font-family:var(--mono)">geo_filter</code> block for <code style="font-family:var(--mono)">config.json</code>.</p>' +
     '</div>';
   }
 
@@ -1276,10 +1210,8 @@
     container.innerHTML =
       _renderTabs() +
       '<div class="cust-body">' +
-        _renderBranding() +
         _renderTheme() +
         _renderNodes() +
-        _renderHome() +
         _renderDisplay() +
         _renderExport() +
       '</div>';
