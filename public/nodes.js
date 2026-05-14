@@ -53,6 +53,11 @@
       } else if (col === 'role') {
         va = (a.role || '').toLowerCase(); vb = (b.role || '').toLowerCase();
         return va < vb ? -dir : va > vb ? dir : 0;
+      } else if (col === 'default_scope') {
+        va = (a.default_scope || '').toLowerCase(); vb = (b.default_scope || '').toLowerCase();
+        if (!a.default_scope && b.default_scope) return 1;
+        if (a.default_scope && !b.default_scope) return -1;
+        return va < vb ? -dir : va > vb ? dir : 0;
       } else if (col === 'last_seen') {
         va = a.last_heard ? new Date(a.last_heard).getTime() : a.last_seen ? new Date(a.last_seen).getTime() : 0;
         vb = b.last_heard ? new Date(b.last_heard).getTime() : b.last_seen ? new Date(b.last_seen).getTime() : 0;
