@@ -11,6 +11,7 @@
   let selectedNode = null;
   let observerIataById = {};
   let observerIataByName = {};
+  let observerSfByName = {};
   let messageRequestId = 0;
   var _nodeCacheTTL = 5 * 60 * 1000; // 5 minutes
 
@@ -45,6 +46,20 @@
     return selectedRegions.indexOf(observerRegion) !== -1;
   }
 
+  function resolveObserverSfs(msgs) {
+    for (var i = 0; i < msgs.length; i++) {
+      var obs = msgs[i].observers;
+      if (!obs) continue;
+      for (var j = 0; j < obs.length; j++) {
+        if (typeof obs[j] === 'string') {
+          obs[j] = { name: obs[j], sf: observerSfByName[obs[j]] || null };
+        } else if (obs[j].sf == null && obs[j].name) {
+          obs[j].sf = observerSfByName[obs[j].name] || null;
+        }
+      }
+    }
+  }
+
   async function loadObserverRegions() {
     try {
       var data = await api('/observers', { ttl: CLIENT_TTL.observers });
@@ -55,6 +70,10 @@
         var o = list[i];
         var id = o.id || o.observer_id;
         var name = o.name || o.observer_name;
+        if (name && o.radio) {
+          var sf = parseInt(o.radio.split(',')[2], 10);
+          if (!isNaN(sf)) observerSfByName[name] = sf;
+        }
         if (!o.iata) continue;
         if (id) byId[id] = o.iata;
         if (name) {
@@ -65,6 +84,8 @@
       }
       observerIataById = byId;
       observerIataByName = byName;
+      // Backfill SF into any messages already on screen
+      if (messages.length) { resolveObserverSfs(messages); renderMessages(); }
     } catch {}
   }
 
@@ -613,7 +634,7 @@
           sender_timestamp: d.sender_timestamp || null,
           packetHash: c.packet.hash, packetId: c.packet.id,
           hops: d.path_len || 0, snr: c.packet.snr || null,
-          observers: c.packet.observer_name ? [c.packet.observer_name] : [],
+          observers: c.packet.observer_name ? [{ name: c.packet.observer_name, sf: observerSfByName[c.packet.observer_name] || null }] : [],
           repeats: 1
         });
         continue;
@@ -629,7 +650,7 @@
           sender_timestamp: result.timestamp || null,
           packetHash: c.packet.hash, packetId: c.packet.id,
           hops: 0, snr: c.packet.snr || null,
-          observers: c.packet.observer_name ? [c.packet.observer_name] : [],
+          observers: c.packet.observer_name ? [{ name: c.packet.observer_name, sf: observerSfByName[c.packet.observer_name] || null }] : [],
           repeats: 1
         });
       } else {
@@ -1386,8 +1407,8 @@
           var existing = pktHash ? messages.find(function (msg) { return msg.packetHash === pktHash; }) : null;
           if (existing) {
             existing.repeats = (existing.repeats || 1) + 1;
-            if (observer && existing.observers && existing.observers.indexOf(observer) === -1) {
-              existing.observers.push(observer);
+            if (observer && existing.observers && !existing.observers.find(function (o) { return o.name === observer; })) {
+              existing.observers.push({ name: observer, sf: observerSfByName[observer] || null });
             }
           } else {
             messages.push({
@@ -1398,7 +1419,7 @@
               packetId: pktId,
               packetHash: pktHash,
               repeats: 1,
-              observers: observer ? [observer] : [],
+              observers: observer ? [{ name: observer, sf: observerSfByName[observer] || null }] : [],
               hops: payload.path_len || 0,
               snr: snr,
             });
@@ -1769,6 +1790,7 @@
         return { error: result.error, messageCount: 0 };
       }
       messages = result.messages || [];
+      resolveObserverSfs(messages);
       if (messages.length === 0) {
         msgEl.innerHTML = '<div class="ch-empty">No encrypted messages found for this channel</div>';
       } else {
@@ -1854,6 +1876,7 @@
       const data = await api(`/channels/${encodeURIComponent(hash)}/messages?limit=200${regionQs}`, { ttl: CLIENT_TTL.channelMessages });
       if (isStaleMessageRequest(request)) return;
       messages = data.messages || [];
+      resolveObserverSfs(messages);
       if (messages.length === 0 && rp) {
         msgEl.innerHTML = '<div class="ch-empty">Channel not available in selected region</div>';
       } else {
@@ -1924,6 +1947,10 @@
       meta.push(date + ' ' + time);
       if (msg.repeats > 1) meta.push(`${msg.repeats}× heard`);
       if (msg.observers?.length > 1) meta.push(`${msg.observers.length} observers`);
+      if (msg.observers?.length > 0) {
+        const sfs = [...new Set(msg.observers.map(o => o.sf).filter(sf => sf != null))].sort((a, b) => a - b);
+        if (sfs.length > 0) meta.push('SF' + sfs.join('-SF'));
+      }
       if (msg.hops > 0) meta.push(`${msg.hops} hops`);
       if (msg.snr !== null && msg.snr !== undefined) meta.push(`SNR ${msg.snr}`);
 
