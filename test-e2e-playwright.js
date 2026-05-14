@@ -2337,11 +2337,12 @@ async function run() {
     await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
     await gotoPackets(page);  // full reload from scratch; waits for visible rows
     // Wait for hash stripe to be applied (inline style set during render).
-    // Assert specifically 4px (per spec §2.10) so we don't false-pass on the
-    // 3px channel-color highlight which is independent of this toggle.
+    // Use style.borderLeftWidth (parsed value) not getAttribute('style') — Chromium
+    // normalizes the raw attribute string (e.g. adds spaces) making string-match unreliable.
+    // Check ALL rows, not just the first, since a row with empty data-hash has no stripe.
     const hasStripe = await page.waitForFunction(() => {
-      const row = document.querySelector('table tbody tr[data-hash]');
-      return row && (row.getAttribute('style') || '').includes('border-left:4px');
+      const rows = document.querySelectorAll('table tbody tr[data-hash]');
+      return Array.from(rows).some(r => r.style.borderLeftWidth === '4px');
     }, { timeout: 5000 }).then(() => true).catch(() => false);
     assert(hasStripe, 'At least one <tr> should have hash-color border-left:4px stripe when toggle ON');
   });
@@ -2357,13 +2358,11 @@ async function run() {
     await page.waitForTimeout(500);
     const noStripe = await page.evaluate(() => {
       const rows = document.querySelectorAll('table tbody tr[data-hash]');
-      for (const r of rows) {
-        // Hash stripe is 4px (per spec §2.10). Channel-color highlight uses
-        // 3px and is independent of the hash-color toggle. Only assert no
-        // 4px hash stripe is present.
-        if ((r.getAttribute('style') || '').includes('border-left:4px')) return false;
-      }
-      return true;
+      // Hash stripe is 4px (per spec §2.10). Channel-color highlight uses
+      // 3px and is independent of the hash-color toggle. Only assert no
+      // 4px hash stripe is present. Use style.borderLeftWidth (parsed value)
+      // not getAttribute('style') — Chromium normalizes the attribute string.
+      return !Array.from(rows).some(r => r.style.borderLeftWidth === '4px');
     });
     assert(noStripe, 'No <tr> should have hash-color border-left:4px stripe when toggle OFF');
     // Reset
