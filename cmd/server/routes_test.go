@@ -2155,8 +2155,8 @@ pk := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'TestNode', 'repeater')", pk)
 
 decoded := `{"name":"TestNode","pubKey":"` + pk + `"}`
-raw1 := "04" + "00" + "aabb"
-raw2 := "04" + "40" + "aabb"
+raw1 := "05" + "00" + "aabb" // header 0x05 → routeType=1 (Flood), pathByte at offset 1
+raw2 := "05" + "40" + "aabb"
 
 payloadType := 4
 for i := 0; i < 3; i++ {
@@ -2203,8 +2203,8 @@ pk := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'Repeater2B', 'repeater')", pk)
 
 decoded := `{"name":"Repeater2B","pubKey":"` + pk + `"}`
-raw1byte := "04" + "00" + "aabb" // pathByte=0x00 → hashSize=1 (direct send, no hops)
-raw2byte := "04" + "40" + "aabb" // pathByte=0x40 → hashSize=2
+raw1byte := "05" + "00" + "aabb" // routeType=1 (Flood), pathByte=0x00 → hashSize=1
+raw2byte := "05" + "40" + "aabb" // routeType=1 (Flood), pathByte=0x40 → hashSize=2
 
 payloadType := 4
 // 1 packet with hashSize=1, 4 packets with hashSize=2 (latest is 2-byte)
@@ -2246,8 +2246,8 @@ func TestGetNodeHashSizeInfoLatestWins(t *testing.T) {
 	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'LatestWins', 'repeater')", pk)
 
 	decoded := `{"name":"LatestWins","pubKey":"` + pk + `"}`
-	raw1byte := "04" + "00" + "aabb" // pathByte=0x00 → hashSize=1
-	raw2byte := "04" + "40" + "aabb" // pathByte=0x40 → hashSize=2
+	raw1byte := "05" + "00" + "aabb" // routeType=1 (Flood), pathByte=0x00 → hashSize=1
+	raw2byte := "05" + "40" + "aabb" // routeType=1 (Flood), pathByte=0x40 → hashSize=2
 
 	payloadType := 4
 	// 4 historical 1-byte adverts, then 1 recent 2-byte advert (latest).
