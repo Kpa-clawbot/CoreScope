@@ -31,6 +31,20 @@ function assert(condition, msg) {
   if (!condition) throw new Error(msg || 'Assertion failed');
 }
 
+// Use this instead of page.goto(BASE + '#/packets') for any test that waits on packet rows.
+// A bare hash-change goto keeps the prior test's open detail pane in the DOM (hidden rows),
+// which causes waitForSelector('table tbody tr:not([id^=vscroll])') to time out in CI.
+// This helper always does a full reload so SPA state is clean before the test body runs.
+async function gotoPackets(page) {
+  await page.evaluate(() => {
+    localStorage.removeItem('meshcore-groupbyhash');
+    localStorage.setItem('meshcore-time-window', '525600');
+  });
+  await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
+}
+
 async function run() {
   console.log('Launching Chromium...');
   const browser = await chromium.launch({
@@ -1972,14 +1986,7 @@ async function run() {
 
   // Test: Expanded group children have unique observation ids (#866)
   await test('Expanded group children update detail pane per-observation', async () => {
-    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
-    // Ensure grouped mode and wide time window
-    await page.evaluate(() => {
-      localStorage.setItem('meshcore-time-window', '525600');
-      localStorage.setItem('meshcore-groupbyhash', 'true');
-    });
-    await page.reload({ waitUntil: 'load' });
-    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
+    await gotoPackets(page);
 
     // Find a group row with observation_count > 1 (has expand button)
     const expandBtn = await page.$('table tbody tr .expand-btn, table tbody tr [data-expand]');
@@ -2052,18 +2059,7 @@ async function run() {
 
   // Test: per-observation raw_hex — hex pane updates when switching observations (#881)
   await test('Packet detail hex pane updates per observation', async () => {
-    // The prior "Expanded group children" test leaves groupbyhash=true and the detail pane open.
-    // A simple page.goto is treated as a hash-change (same document), so the SPA closes the
-    // detail pane (hiding its 30+ field/obs table rows) before the main table's API fetch
-    // completes — waitForSelector sees only hidden rows and times out.
-    // Fix: set localStorage, navigate, then reload with 'load' (same pattern the prior test uses).
-    await page.evaluate(() => {
-      localStorage.removeItem('meshcore-groupbyhash');
-      localStorage.setItem('meshcore-time-window', '525600');
-    });
-    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
-    await page.reload({ waitUntil: 'load' });
-    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
+    await gotoPackets(page);
     await page.waitForTimeout(500);
 
     // Try clicking packet rows to find one with multiple observations
@@ -2104,16 +2100,7 @@ async function run() {
   // Test: path pill (top) and byte breakdown (bottom) agree on hop count
   // Regression for visual mismatch where badge said "1 hop" but path text listed N names
   await test('Packet detail path pill and byte breakdown agree on hop count', async () => {
-    // Same issue as hex pane test above: preceding test leaves detail pane open (30+ hidden rows).
-    // page.goto with hash change is treated as same-document navigation by the SPA, so
-    // waitForSelector finds only hidden rows and times out. Full reload clears this.
-    await page.evaluate(() => {
-      localStorage.removeItem('meshcore-groupbyhash');
-      localStorage.setItem('meshcore-time-window', '525600');
-    });
-    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
-    await page.reload({ waitUntil: 'load' });
-    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
+    await gotoPackets(page);
     await page.waitForTimeout(500);
 
     // Click rows until we find one whose detail pane renders a multi-hop path
@@ -2193,14 +2180,7 @@ async function run() {
   // Regression #891: server-supplied breakdown was computed once from top-level
   // raw_hex, so per-observation rendering had off-by-N highlights vs the labels.
   await test('Packet detail hex strip Path range matches hop row count', async () => {
-    // Same stale-state issue: preceding test leaves detail pane open. Full reload clears it.
-    await page.evaluate(() => {
-      localStorage.removeItem('meshcore-groupbyhash');
-      localStorage.setItem('meshcore-time-window', '525600');
-    });
-    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
-    await page.reload({ waitUntil: 'load' });
-    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
+    await gotoPackets(page);
     await page.waitForTimeout(500);
 
     const rows = await page.$$('table tbody tr[data-action]');
@@ -2248,14 +2228,7 @@ async function run() {
   // Regression: observations of the same packet hash have different raw_hex (#882),
   // so picking a different obs must recompute the byte ranges, not reuse the old ones.
   await test('Packet detail switches consistently across observations', async () => {
-    // Same stale-state issue: preceding test leaves detail pane open. Full reload clears it.
-    // SPA defaults groupByHash=true so no URL param needed; time-window ensures data is visible.
-    await page.evaluate(() => {
-      localStorage.setItem('meshcore-time-window', '525600');
-    });
-    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
-    await page.reload({ waitUntil: 'load' });
-    await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
+    await gotoPackets(page);
     await page.waitForTimeout(500);
 
     let opened = false;
