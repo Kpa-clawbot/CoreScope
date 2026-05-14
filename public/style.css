@@ -2028,6 +2028,8 @@ fieldset.mc-section legend.mc-label { padding: 0; }
 .trends-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 16px; }
 .trends-card { margin-bottom: 0 !important; }
 .trends-card--wide { grid-column: 1 / -1; }
+.trends-chart-hour { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.trends-chart-hour svg { width: auto !important; height: 300px !important; max-height: none !important; }
 .trends-card-title { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
 .trends-card-sub { font-size: 11px; color: var(--text-muted); margin-bottom: 10px; }
 .trends-range-btn { padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface-1, var(--card-bg)); color: var(--text-muted); cursor: pointer; font-size: 12px; }

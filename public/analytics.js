@@ -26,10 +26,11 @@
     return `<svg viewBox="0 0 ${w} ${h}" style="width:${w}px;height:${h}px" role="img" aria-label="Sparkline showing trend of ${data.length} data points"><title>Sparkline showing trend of ${data.length} data points</title><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>`;
   }
 
-  function barChart(data, labels, colors, w = 800, h = 220, pad = 40) {
+  function barChart(data, labels, colors, w = 800, h = 220, pad = 40, rotateLabels = false) {
+    const bottomPad = rotateLabels ? pad + 30 : pad;
     const max = Math.max(...data, 1);
     const barW = Math.min((w - pad * 2) / data.length - 2, 30);
-    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Bar chart showing data distribution"><title>Bar chart showing data distribution</title>`;
+    let svg = `<svg viewBox="0 0 ${w} ${h + (rotateLabels ? 30 : 0)}" style="width:100%;max-height:${h}px" role="img" aria-label="Bar chart showing data distribution"><title>Bar chart showing data distribution</title>`;
     // Grid
     for (let i = 0; i <= 4; i++) {
       const y = pad + (h - pad * 2) * i / 4;
@@ -43,7 +44,15 @@
       const y = h - pad - bh;
       const c = typeof colors === 'string' ? colors : colors[i % colors.length];
       svg += `<rect x="${x}" y="${y}" width="${barW}" height="${bh}" fill="${c}" rx="2"/>`;
-      if (labels[i]) svg += `<text x="${x + barW/2}" y="${h - pad + 14}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${labels[i]}</text>`;
+      if (labels[i]) {
+        const lx = x + barW / 2;
+        const ly = h - pad + 12;
+        if (rotateLabels) {
+          svg += `<text x="${lx}" y="${ly}" text-anchor="end" font-size="9" fill="var(--text-muted)" transform="rotate(-45,${lx},${ly})">${labels[i]}</text>`;
+        } else {
+          svg += `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${labels[i]}</text>`;
+        }
+      }
     });
     svg += '</svg>';
     return svg;
@@ -3453,8 +3462,10 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
         ${rfData && rfData.packetsPerHour && rfData.packetsPerHour.length ? `
         <div class="analytics-card trends-card trends-card--wide">
           <div class="trends-card-title">Packets / Hour</div>
-          <div class="trends-card-sub">Observations received per clock hour (last ~30h)</div>
-          ${barChart(rfData.packetsPerHour.map(h=>h.count), rfData.packetsPerHour.map(h=>h.hour.slice(11)+'h'), 'var(--accent)')}
+          <div class="trends-card-sub">Observations received per clock hour (last 24h)</div>
+          <div class="trends-chart-hour">
+            ${(() => { const ph = rfData.packetsPerHour.slice(-24); return barChart(ph.map(h=>h.count), ph.map(h=>h.hour.slice(11)+'h'), 'var(--accent)', 800, 220, 40, true); })()}
+          </div>
         </div>` : ''}
         <div class="analytics-card trends-card">
           <div class="trends-card-title">Unique Packets</div>

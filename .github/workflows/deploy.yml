@@ -425,8 +425,9 @@ jobs:
       - name: Install SSH key and known hosts
         run: |
           mkdir -p ~/.ssh
-          printf '%s' "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/prod_deploy_key
+          echo "${{ secrets.PROD_SSH_KEY }}" | tr -d '\r' > ~/.ssh/prod_deploy_key
           chmod 600 ~/.ssh/prod_deploy_key
+          ssh-keygen -l -f ~/.ssh/prod_deploy_key
           ssh-keyscan -H "${{ secrets.PROD_HOST }}" >> ~/.ssh/known_hosts
 
       - name: Deploy to production server
