@@ -61,10 +61,8 @@
     { route: 'observers', hash: '#/observers', label: 'Observers', icon: '👁️' },
     { route: 'analytics', hash: '#/analytics', label: 'Analytics', icon: '📊' },
     { route: 'perf',      hash: '#/perf',      label: 'Perf',      icon: '⚡' },
-    { route: 'audio-lab', hash: '#/audio-lab',           label: 'Audio Lab',      icon: '🎵' },
-    { route: 'mc-keygen', hash: '#/mc-keygen',           label: 'MC-Keygen',      icon: '🔑' },
-    { route: 'tools',     hash: '#/tools/path-inspector', label: 'Path Inspector', icon: '🔍' },
-    { route: 'tools',     hash: '#/tools/trace/',         label: 'Trace Viewer',   icon: '📡' },
+    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', icon: '🎵' },
+    { route: 'mc-keygen', hash: '#/mc-keygen', label: 'MC-Keygen', icon: '🔑' },
   ];
 
   var EDGE_PX = 44;          // pointerdown must start within left N px (drawer trigger zone)
