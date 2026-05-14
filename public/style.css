@@ -599,8 +599,12 @@ input[type="week"] {
 .nav-btn:hover { background: var(--nav-bg2); color: var(--nav-text); }
 /* === Nav action buttons (donate/discord) === */
 .nav-action-btn { padding: 6px 12px; white-space: nowrap; }
-@media (max-width: 1100px) { .nav-action-label { display: none; } .nav-action-btn { padding: 6px 10px; } }
-@media (max-width: 900px) { .nav-action-btn { display: none; } }
+/* .top-nav scope raises specificity above .home-donate-btn/.home-discord-btn (home.css)
+   which also sets display:inline-block and would otherwise win the cascade.
+   Breakpoints: icon-only ≤1400px, hide entirely ≤1200px (covers 170% zoom on 1080p/1440p
+   where effective viewport ~1129px and buttons + nav-stats fight for space). */
+@media (max-width: 1400px) { .top-nav .nav-action-label { display: none; } .top-nav .nav-action-btn { padding: 6px 10px; } }
+@media (max-width: 1200px) { .top-nav .nav-action-btn { display: none; } }
 /* Brand text: only hide in the tightest band where links + right buttons need every pixel */
 @media (min-width: 769px) and (max-width: 900px) { .brand-text { display: none; } }
 /* Tighten nav-left gap at medium widths to reclaim space for links */
