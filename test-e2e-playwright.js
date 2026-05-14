@@ -2104,7 +2104,15 @@ async function run() {
   // Test: path pill (top) and byte breakdown (bottom) agree on hop count
   // Regression for visual mismatch where badge said "1 hop" but path text listed N names
   await test('Packet detail path pill and byte breakdown agree on hop count', async () => {
-    await page.goto(BASE + '#/packets', { waitUntil: 'domcontentloaded' });
+    // Same issue as hex pane test above: preceding test leaves detail pane open (30+ hidden rows).
+    // page.goto with hash change is treated as same-document navigation by the SPA, so
+    // waitForSelector finds only hidden rows and times out. Full reload clears this.
+    await page.evaluate(() => {
+      localStorage.removeItem('meshcore-groupbyhash');
+      localStorage.setItem('meshcore-time-window', '525600');
+    });
+    await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'load' });
     await page.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
     await page.waitForTimeout(500);
 
