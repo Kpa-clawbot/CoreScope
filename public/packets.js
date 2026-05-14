@@ -53,9 +53,29 @@
     if (table[REVEAL_FLAG]) {
       // user explicitly requested reveal — clear hidden state and skip
       clearHidden(table);
+      // Switch off fixed-layout so revealed columns size by content rather
+      // than being crammed into percentage slices of the container width.
+      // makeColumnsResizable sets tableLayout:fixed + width:100%, which
+      // squeezes all columns into the viewport; auto layout lets the
+      // container scroll horizontally instead.
+      if (table.dataset.resizable) {
+        table.style.tableLayout = 'auto';
+        table.style.width = 'auto';
+      }
+      // Re-anchor the wrap-width baseline after revealing columns. Without
+      // this, showing all columns may shift a scrollbar (changing clientWidth)
+      // which the ResizeObserver would misread as a real container resize and
+      // immediately re-hide the columns the user just expanded.
+      var _rw = table.closest('.table-fluid-wrap, .obs-table-scroll, .table-scroll-wrap') || table.parentElement;
+      if (_rw) lastWrapW.set(table, _rw.clientWidth || 0);
       return;
     }
     clearHidden(table);
+    // Restore fixed-layout if it was released during a previous reveal.
+    if (table.dataset.resizable) {
+      table.style.tableLayout = 'fixed';
+      table.style.width = '100%';
+    }
 
     const ths = thsOf(table);
     if (ths.length === 0) return;
@@ -100,6 +120,15 @@
         table[REVEAL_FLAG] = true;
         if (table.id) revealById.set(table.id, true);
         clearHidden(table);
+        if (table.dataset.resizable) {
+          table.style.tableLayout = 'auto';
+          table.style.width = 'auto';
+        }
+        // Re-anchor the wrap-width baseline now that columns are revealed, so
+        // the ResizeObserver doesn't mistake the scrollbar shift for a real
+        // container resize and immediately re-hide the columns.
+        var _rw = table.closest('.table-fluid-wrap, .obs-table-scroll, .table-scroll-wrap') || table.parentElement;
+        if (_rw) lastWrapW.set(table, _rw.clientWidth || 0);
         // Add a small "hide again" affordance after reveal so the user isn't stuck.
         const rehide = document.createElement('button');
         rehide.type = 'button';
@@ -150,15 +179,19 @@
       if (wrap) {
         lastWrapW.set(table, wrap.clientWidth || 0);
         const ro = new ResizeObserver(() => {
+          // Bail for detached wraps — a disconnected element reports
+          // clientWidth=0, which would cause a false-positive diff.
+          if (!wrap.isConnected) { ro.disconnect(); return; }
           const prev = lastWrapW.get(table) || 0;
           const cur = wrap.clientWidth || 0;
-          // Ignore self-induced layout reflows from apply()/clearHidden() —
-          // they don't change the wrap width. Only real viewport/container
-          // changes (>2px) clear the reveal flag.
           if (Math.abs(cur - prev) <= 2) return;
           lastWrapW.set(table, cur);
-          if (table.id) revealById.delete(table.id);
-          table[REVEAL_FLAG] = false;
+          // Re-evaluate column visibility for the new container width, but
+          // intentionally do NOT clear REVEAL_FLAG or revealById here.
+          // Scrollbar appearance, sidebar toggles, and layout reflows all
+          // change clientWidth and would otherwise undo the user's explicit
+          // expand. Only a real viewport-width change (handled by the
+          // window-resize listener below) should un-reveal columns.
           apply(table);
         });
         ro.observe(wrap);

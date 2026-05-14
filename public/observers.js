@@ -564,23 +564,17 @@ reboot</code></pre>
     const totalLabel = visible.length < filtered.length
       ? `${visible.length}/${filtered.length}`
       : `${filtered.length}`;
-    el.innerHTML = `
-      <div class="obs-summary">
+
+    const summaryHtml = `
         <span class="obs-stat"><span class="health-dot health-green">●</span> ${online} Online</span>
         <span class="obs-stat"><span class="health-dot health-yellow">▲</span> ${stale} Stale <button class="obs-filter-btn${hideStale ? ' active' : ''}" data-action="toggle-hide-stale" title="${hideStale ? 'Show stale observers' : 'Hide stale observers'}">${hideStale ? 'show' : 'hide'}</button></span>
         <span class="obs-stat"><span class="health-dot health-red">✕</span> ${offline} Offline <button class="obs-filter-btn${hideOffline ? ' active' : ''}" data-action="toggle-hide-offline" title="${hideOffline ? 'Show offline observers' : 'Hide offline observers'}">${hideOffline ? 'show' : 'hide'}</button></span>
-        <span class="obs-stat">📡 ${totalLabel} Total</span>
-      </div>
-        <div class="obs-table-scroll table-fluid-wrap"><table class="data-table obs-table" id="obsTable">
-          <caption class="sr-only">Observer status and statistics</caption>
-        <thead><tr>
-          ${sortTh('Status','status')}${sortTh('Name','name')}${sortTh('SF','sf',2)}${sortTh('Packet Health','forwarding',2)}${sortTh('Region','region',3)}${sortTh('Last Status','last_seen',3)}
-          ${sortTh('Clock Offset','clock_offset',4)}${sortTh('Uptime','uptime',4)}${sortTh('Total Packets','packets',5)}${sortTh('Packets/Hour','packets_hr',5)}${sortTh('Last Packet','last_packet',5)}
-        </tr></thead>
-        <tbody>${sorted.map(o => {
-          const h = healthStatus(o);
-          const shape = h.cls === 'health-green' ? '●' : h.cls === 'health-yellow' ? '▲' : '✕';
-          return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">
+        <span class="obs-stat">📡 ${totalLabel} Total</span>`;
+
+    const tbodyHtml = sorted.map(o => {
+      const h = healthStatus(o);
+      const shape = h.cls === 'health-green' ? '●' : h.cls === 'health-yellow' ? '▲' : '✕';
+      return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">
             <td><span class="health-dot ${h.cls}" title="${h.label}">${shape}</span> ${h.label}</td>
             <td class="mono">${o.name || o.id}</td>
             <td>${o.radio ? 'SF' + (o.radio.split(',')[2] || '?') : '<span class="text-muted">—</span>'}</td>
@@ -598,9 +592,39 @@ reboot</code></pre>
             <td>${sparkBar(o.packetsLastHour || 0, maxPktsHr)}</td>
             <td>${o.last_packet_at ? timeAgo(o.last_packet_at) : '<span class="text-muted">—</span>'}</td>
           </tr>`;
-        }).join('')}</tbody>
+    }).join('');
+
+    const existingTable = el.querySelector('#obsTable');
+    if (existingTable) {
+      // Partial update — keep .obs-table-scroll intact so scroll position
+      // (and any active touch-scroll) is never interrupted by a re-render.
+      var summaryEl = el.querySelector('.obs-summary');
+      if (summaryEl) summaryEl.innerHTML = summaryHtml;
+      // Update sort indicators in-place without replacing <th> elements
+      // (replacing ths would destroy the column-resize handles).
+      el.querySelectorAll('#obsTable thead th[data-sort-col]').forEach(function(th) {
+        var col = th.dataset.sortCol;
+        var active = sortState.col === col;
+        th.classList.toggle('sort-active', active);
+        var arrowSpan = th.querySelector('.sort-arrow');
+        if (arrowSpan) arrowSpan.textContent = active ? (sortState.dir === 'asc' ? '▲' : '▼') : '⇅';
+      });
+      existingTable.querySelector('tbody').innerHTML = tbodyHtml;
+    } else {
+      // Full render — first load or recovering from the "no observers" state.
+      el.innerHTML = `
+      <div class="obs-summary">${summaryHtml}
+      </div>
+        <div class="obs-table-scroll table-fluid-wrap"><table class="data-table obs-table" id="obsTable">
+          <caption class="sr-only">Observer status and statistics</caption>
+        <thead><tr>
+          ${sortTh('Status','status')}${sortTh('Name','name')}${sortTh('SF','sf',2)}${sortTh('Packet Health','forwarding',2)}${sortTh('Region','region',3)}${sortTh('Last Status','last_seen',3)}
+          ${sortTh('Clock Offset','clock_offset',4)}${sortTh('Uptime','uptime',4)}${sortTh('Total Packets','packets',5)}${sortTh('Packets/Hour','packets_hr',5)}${sortTh('Last Packet','last_packet',5)}
+        </tr></thead>
+        <tbody>${tbodyHtml}</tbody>
       </table></div>`;
-    makeColumnsResizable('#obsTable', 'meshcore-obs-col-widths');
+      makeColumnsResizable('#obsTable', 'meshcore-obs-col-widths');
+    }
     // #1056: fluid columns + +N hidden pill
     if (window.TableResponsive) {
       var _obsTbl = document.getElementById('obsTable');
