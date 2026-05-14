@@ -1133,6 +1133,7 @@
           <th scope="col" data-sort-key="name" data-priority="1">Name</th>
           <th scope="col" class="col-pubkey" data-sort-key="public_key" data-priority="3">Public Key</th>
           <th scope="col" data-sort-key="role" data-priority="2">Role</th>
+          <th scope="col" data-sort-key="default_scope" data-priority="3">Scope</th>
           <th scope="col" data-sort-key="last_seen" data-sort-default="desc" data-priority="1">Last Seen</th>
           <th scope="col" data-sort-key="advert_count" data-sort-default="desc" data-priority="2">Adverts</th>
         </tr></thead>
@@ -1233,7 +1234,7 @@
     if (!tbody) return;
 
     if (!nodes.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted" style="padding:24px">No nodes found</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted" style="padding:24px">No nodes found</td></tr>';
       return;
     }
 
