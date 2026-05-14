@@ -69,8 +69,10 @@
     { route: 'observers', hash: '#/observers', label: 'Observers' },
     { route: 'analytics', hash: '#/analytics', label: 'Analytics' },
     { route: 'perf',      hash: '#/perf',      label: 'Perf'      },
-    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab' },
-    { route: 'mc-keygen', hash: '#/mc-keygen', label: 'MC-Keygen' },
+    { route: 'audio-lab', hash: '#/audio-lab',          label: 'Audio Lab'      },
+    { route: 'mc-keygen', hash: '#/mc-keygen',          label: 'MC-Keygen'      },
+    { route: 'tools',     hash: '#/tools/path-inspector', label: 'Path Inspector' },
+    { route: 'tools',     hash: '#/tools/trace/',        label: 'Trace Viewer'   },
   ];
 
   var SHEET_ID = 'bottomNavMoreSheet';
