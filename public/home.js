@@ -5,6 +5,7 @@
   let searchTimeout = null;
   let miniMap = null;
   let searchAbort = null; // AbortController for document-level listeners
+  let _themeRefreshHandler = null;
 
   const PREF_KEY = 'meshcore-user-level';
   const MY_NODES_KEY = 'meshcore-my-nodes'; // [{pubkey, name, addedAt}]
@@ -30,6 +31,9 @@
 
   function init(container) {
     renderHome(container);
+    // Re-render once config arrives so branding/hero text isn't blank on direct load.
+    _themeRefreshHandler = () => renderHome(container);
+    window.addEventListener('theme-refresh', _themeRefreshHandler);
     // iOS Safari: position:fixed elements mis-position after large content renders.
     // Micro-scroll forces the browser to reposition fixed elements correctly.
     setTimeout(function() {
@@ -265,6 +269,10 @@
     clearTimeout(searchTimeout);
     if (searchAbort) { searchAbort.abort(); searchAbort = null; }
     if (miniMap) { miniMap.remove(); miniMap = null; }
+    if (_themeRefreshHandler) {
+      window.removeEventListener('theme-refresh', _themeRefreshHandler);
+      _themeRefreshHandler = null;
+    }
   }
 
   // ==================== MY NODES DASHBOARD ====================

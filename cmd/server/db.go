@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -2352,4 +2353,172 @@ func (db *DB) PruneOldMetrics(retentionDays int) (int64, error) {
 		log.Printf("[metrics] Pruned %d observer_metrics rows older than %d days", n, retentionDays)
 	}
 	return n, nil
+}
+
+// PruneStaleObservers removes observers not seen in the last staleDays days.
+// observer_metrics rows are intentionally preserved for historical reporting.
+func (db *DB) PruneStaleObservers(staleDays int) (int64, error) {
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=10000", db.path)
+	rw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return 0, err
+	}
+	rw.SetMaxOpenConns(1)
+	defer rw.Close()
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -staleDays).Format(time.RFC3339)
+	res, err := rw.Exec(`DELETE FROM observers WHERE last_seen < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		log.Printf("[prune] removed %d stale observer(s) not seen in %d days", n, staleDays)
+	}
+	return n, nil
+}
+
+// ─── Daily Stats ───────────────────────────────────────────────────────────────
+
+func (db *DB) EnsureDailyStatsTable() error {
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=10000", db.path)
+	rw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	rw.SetMaxOpenConns(1)
+	defer rw.Close()
+	_, err = rw.Exec(`CREATE TABLE IF NOT EXISTS daily_stats (
+		date                TEXT PRIMARY KEY,
+		unique_packets      INTEGER DEFAULT 0,
+		total_observations  INTEGER DEFAULT 0,
+		active_observers    INTEGER DEFAULT 0,
+		nodes_companion     INTEGER DEFAULT 0,
+		nodes_repeater      INTEGER DEFAULT 0,
+		nodes_room          INTEGER DEFAULT 0,
+		nodes_other         INTEGER DEFAULT 0,
+		public_messages     INTEGER DEFAULT 0,
+		payload_type_counts TEXT DEFAULT '{}',
+		avg_snr             REAL,
+		avg_rssi            REAL
+	)`)
+	return err
+}
+
+// AggregateDailyStats computes and upserts stats for the given YYYY-MM-DD date.
+// Idempotent — safe to run multiple times for the same date.
+func (db *DB) AggregateDailyStats(date string) error {
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=10000", db.path)
+	rw, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	rw.SetMaxOpenConns(1)
+	defer rw.Close()
+
+	var uniquePackets, totalObs, activeObservers, publicMessages int
+	var avgSNR, avgRSSI sql.NullFloat64
+
+	rw.QueryRow(`SELECT COUNT(DISTINCT hash) FROM transmissions WHERE date(first_seen) = ?`, date).
+		Scan(&uniquePackets)
+
+	rw.QueryRow(`SELECT COUNT(*), COUNT(DISTINCT observer_idx), AVG(snr), AVG(rssi)
+		FROM observations WHERE date(timestamp, 'unixepoch') = ?`, date).
+		Scan(&totalObs, &activeObservers, &avgSNR, &avgRSSI)
+
+	rw.QueryRow(`SELECT COUNT(DISTINCT hash) FROM transmissions
+		WHERE payload_type = 5 AND date(first_seen) = ?`, date).
+		Scan(&publicMessages)
+
+	// Payload type counts
+	ptRows, _ := rw.Query(`SELECT COALESCE(payload_type, -1), COUNT(DISTINCT hash)
+		FROM transmissions WHERE date(first_seen) = ? GROUP BY payload_type`, date)
+	typeCounts := map[string]int{}
+	if ptRows != nil {
+		for ptRows.Next() {
+			var pt, cnt int
+			ptRows.Scan(&pt, &cnt)
+			typeCounts[strconv.Itoa(pt)] = cnt
+		}
+		ptRows.Close()
+	}
+	typeJSON, _ := json.Marshal(typeCounts)
+
+	// Node counts by role from ADVERT packets joined to nodes table
+	var nodesCompanion, nodesRepeater, nodesRoom, nodesOther int
+	nodeRows, _ := rw.Query(`
+		SELECT COALESCE(n.role, 'unknown'), COUNT(DISTINCT json_extract(t.decoded_json, '$.pubKey'))
+		FROM transmissions t
+		LEFT JOIN nodes n ON json_extract(t.decoded_json, '$.pubKey') = n.public_key
+		WHERE t.payload_type = 4 AND date(t.first_seen) = ?
+		  AND json_extract(t.decoded_json, '$.pubKey') IS NOT NULL
+		GROUP BY COALESCE(n.role, 'unknown')`, date)
+	if nodeRows != nil {
+		for nodeRows.Next() {
+			var role string
+			var cnt int
+			nodeRows.Scan(&role, &cnt)
+			switch role {
+			case "companion":
+				nodesCompanion = cnt
+			case "repeater":
+				nodesRepeater = cnt
+			case "room":
+				nodesRoom = cnt
+			default:
+				nodesOther += cnt
+			}
+		}
+		nodeRows.Close()
+	}
+
+	_, err = rw.Exec(`INSERT OR REPLACE INTO daily_stats
+		(date, unique_packets, total_observations, active_observers,
+		 nodes_companion, nodes_repeater, nodes_room, nodes_other,
+		 public_messages, payload_type_counts, avg_snr, avg_rssi)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		date, uniquePackets, totalObs, activeObservers,
+		nodesCompanion, nodesRepeater, nodesRoom, nodesOther,
+		publicMessages, string(typeJSON), avgSNR, avgRSSI)
+	if err != nil {
+		return fmt.Errorf("daily_stats insert: %w", err)
+	}
+	log.Printf("[daily-stats] aggregated %s: %d packets, %d obs, %d observers",
+		date, uniquePackets, totalObs, activeObservers)
+	return nil
+}
+
+func (db *DB) GetDailyStats(days int) ([]DailyStatRow, error) {
+	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02")
+	rows, err := db.conn.Query(`
+		SELECT date, unique_packets, total_observations, active_observers,
+		       nodes_companion, nodes_repeater, nodes_room, nodes_other,
+		       public_messages, payload_type_counts, avg_snr, avg_rssi
+		FROM daily_stats
+		WHERE date >= ?
+		ORDER BY date ASC`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []DailyStatRow
+	for rows.Next() {
+		var r DailyStatRow
+		var avgSNR, avgRSSI sql.NullFloat64
+		if err := rows.Scan(&r.Date, &r.UniquePackets, &r.TotalObservations, &r.ActiveObservers,
+			&r.NodesCompanion, &r.NodesRepeater, &r.NodesRoom, &r.NodesOther,
+			&r.PublicMessages, &r.PayloadTypeCounts, &avgSNR, &avgRSSI); err != nil {
+			continue
+		}
+		if avgSNR.Valid {
+			v := avgSNR.Float64
+			r.AvgSNR = &v
+		}
+		if avgRSSI.Valid {
+			v := avgRSSI.Float64
+			r.AvgRSSI = &v
+		}
+		result = append(result, r)
+	}
+	return result, nil
 }

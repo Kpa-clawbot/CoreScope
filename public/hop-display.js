@@ -73,16 +73,18 @@ window.HopDisplay = (function() {
     const unreliable = entry.unreliable || false;
     const display = opts.hexMode ? h : (name ? escapeHtml(opts.truncate ? name.slice(0, opts.truncate) : name) : h);
 
-    // Simple title for the hop link itself
-    let title = h;
-    if (unreliable) title += ' — unreliable';
+    // Tooltip: known node → "Name (HEX)"; unknown with pubkey → first 16 chars of pubkey; else just hex
+    let tooltipText = name
+      ? (opts.hexMode ? `${name} (${h})` : name)
+      : (pubkey && pubkey !== h ? pubkey.slice(0, 16) : h);
+    if (unreliable) tooltipText += ' — unreliable';
 
     // Badge — only count regional conflicts
     const regionalConflicts = conflicts.filter(c => c.regional);
     const badgeCount = regionalConflicts.length > 0 ? regionalConflicts.length : (globalFallback ? conflicts.length : 0);
     const conflictData = escapeHtml(JSON.stringify({ h, conflicts, globalFallback }));
     const warnBadge = badgeCount > 1
-      ? ` <button class="hop-conflict-btn" data-conflict='${conflictData}' onclick="event.preventDefault();event.stopPropagation();HopDisplay._showFromBtn(this)" title="${badgeCount} candidates — click for details">⚠${badgeCount}</button>`
+      ? ` <button class="hop-conflict-btn" data-conflict='${conflictData}' onclick="event.preventDefault();event.stopPropagation();HopDisplay._showFromBtn(this)" data-tooltip="${badgeCount} candidates — click for details">⚠${badgeCount}</button>`
       : '';
 
     const cls = [
@@ -94,9 +96,9 @@ window.HopDisplay = (function() {
     ].filter(Boolean).join(' ');
 
     if (opts.link !== false) {
-      return `<a class="${cls} hop-link" href="#/nodes/${encodeURIComponent(pubkey)}" title="${escapeHtml(title)}" data-hop-link="true">${display}</a>${warnBadge}`;
+      return `<a class="${cls} hop-link" href="#/nodes/${encodeURIComponent(pubkey)}" data-tooltip="${escapeHtml(tooltipText)}" data-hop-link="true">${display}</a>${warnBadge}`;
     }
-    return `<span class="${cls}" title="${escapeHtml(title)}">${display}</span>${warnBadge}`;
+    return `<span class="${cls}" data-tooltip="${escapeHtml(tooltipText)}">${display}</span>${warnBadge}`;
   }
 
   /**

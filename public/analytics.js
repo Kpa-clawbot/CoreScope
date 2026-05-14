@@ -77,6 +77,7 @@
           <div id="analyticsRegionFilter" class="region-filter-container"></div>
           <div class="analytics-tabs" id="analyticsTabs" role="tablist" aria-label="Analytics tabs">
             <button class="tab-btn active" data-tab="overview">Overview</button>
+            <button class="tab-btn" data-tab="trends">Trends</button>
             <button class="tab-btn" data-tab="rf">RF / Signal</button>
             <button class="tab-btn" data-tab="topology">Topology</button>
             <button class="tab-btn" data-tab="channels">Channels</button>
@@ -182,6 +183,7 @@
       case 'neighbor-graph': await renderNeighborGraphTab(el); break;
       case 'rf-health': await renderRFHealthTab(el); break;
       case 'prefix-tool': await renderPrefixTool(el); break;
+      case 'trends': await renderTrendsTab(el); break;
     }
     // Auto-apply column resizing to all analytics tables
     requestAnimationFrame(() => {
@@ -3316,6 +3318,171 @@ function destroy() { _analyticsData = {}; _channelData = null; if (_ngState && _
 
     svg += '</svg>';
     return svg;
+  }
+
+  // ── Stacked bar chart (for trends) ──────────────────────────────────────────
+  function stackedBarChart(labels, series, w = 800, h = 260, pad = { top: 12, right: 12, bottom: 36, left: 54 }) {
+    if (!labels.length) return '<p class="text-muted" style="text-align:center;padding:20px 0">No data yet</p>';
+    const iw = w - pad.left - pad.right;
+    const ih = h - pad.top - pad.bottom;
+    const barW = Math.max(2, Math.min(iw / labels.length - 2, 32));
+    const step = iw / labels.length;
+
+    // Compute stacked totals
+    const totals = labels.map((_, i) => series.reduce((sum, s) => sum + (s.values[i] || 0), 0));
+    const maxVal = Math.max(...totals, 1);
+
+    let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;max-height:${h}px" role="img" aria-label="Stacked bar chart">`;
+
+    // Grid lines
+    const gridLines = 4;
+    for (let i = 0; i <= gridLines; i++) {
+      const y = pad.top + ih * i / gridLines;
+      const val = Math.round(maxVal * (gridLines - i) / gridLines);
+      svg += `<line x1="${pad.left}" y1="${y}" x2="${w - pad.right}" y2="${y}" stroke="var(--border)" stroke-dasharray="2" stroke-width="0.5"/>`;
+      svg += `<text x="${pad.left - 5}" y="${y + 4}" text-anchor="end" font-size="11" fill="var(--text-muted)">${val >= 1000 ? (val / 1000).toFixed(val >= 10000 ? 0 : 1) + 'k' : val}</text>`;
+    }
+
+    // Bars
+    const multiSeries = series.length > 1;
+    labels.forEach((label, i) => {
+      const x = pad.left + i * step + (step - barW) / 2;
+      let yOffset = h - pad.bottom;
+      const total = totals[i];
+      series.forEach(s => {
+        const val = s.values[i] || 0;
+        if (!val) return;
+        const bh = (val / maxVal) * ih;
+        yOffset -= bh;
+        const tip = multiSeries
+          ? `${label} — ${s.label}: ${val.toLocaleString()} (total: ${total.toLocaleString()})`
+          : `${label}: ${val.toLocaleString()}`;
+        svg += `<rect x="${x}" y="${yOffset}" width="${barW}" height="${bh}" fill="${s.color}" rx="1" data-tooltip="${tip}"/>`;
+      });
+      // x-axis label (every Nth to avoid overlap)
+      const every = Math.ceil(labels.length / 18);
+      if (i % every === 0 || i === labels.length - 1) {
+        const short = label.length > 5 ? label.slice(5) : label; // strip year for daily dates
+        svg += `<text x="${x + barW / 2}" y="${h - pad.bottom + 16}" text-anchor="middle" font-size="11" fill="var(--text-muted)">${short}</text>`;
+      }
+    });
+
+    svg += '</svg>';
+    return svg;
+  }
+
+  function trendsLegend(series) {
+    return '<div style="display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:8px;font-size:11px">' +
+      series.map(s => `<span style="display:flex;align-items:center;gap:5px">
+        <span style="width:10px;height:10px;border-radius:2px;background:${s.color};display:inline-block"></span>
+        <span style="color:var(--text-muted)">${s.label}</span>
+      </span>`).join('') +
+      '</div>';
+  }
+
+  // Payload type name map (mirrors server-side payloadTypeNames)
+  const PT_NAMES = { '1':'PING', '2':'ACK', '3':'PATH', '4':'ADVERT', '5':'APP_DATA', '6':'CMD', '7':'CMD_RESP', '8':'ANNOUNCE', '9':'TRACE_REQ', '10':'TRACE_RESP', '11':'CHAN_DATA' };
+  const PT_COLORS = ['#4a9eff','#22c55e','#f59e0b','#8b5cf6','#ef4444','#06b6d4','#f97316','#a3e635','#ec4899','#64748b','#10b981'];
+
+  // ── Trends tab ───────────────────────────────────────────────────────────────
+  let _trendsDays = 30;
+  let _trendsData = null;
+
+  async function renderTrendsTab(el) {
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px">
+        <span style="font-size:13px;color:var(--text-muted)">Time range:</span>
+        <div class="trends-range-btns" style="display:flex;gap:4px">
+          <button class="trends-range-btn${_trendsDays===7?' active':''}" data-days="7">7 days</button>
+          <button class="trends-range-btn${_trendsDays===30?' active':''}" data-days="30">30 days</button>
+          <button class="trends-range-btn${_trendsDays===90?' active':''}" data-days="90">90 days</button>
+        </div>
+      </div>
+      <div id="trendsCharts"><div class="text-muted" style="text-align:center;padding:40px">Loading…</div></div>`;
+
+    el.querySelectorAll('.trends-range-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        _trendsDays = parseInt(btn.dataset.days, 10);
+        _trendsData = null;
+        renderTrendsTab(el);
+      });
+    });
+
+    if (!_trendsData) {
+      try {
+        _trendsData = await api(`/analytics/trends?days=${_trendsDays}`, { ttl: 300000 });
+      } catch (e) {
+        document.getElementById('trendsCharts').innerHTML =
+          `<div class="text-muted" style="text-align:center;padding:40px">Failed to load trends: ${e.message}</div>`;
+        return;
+      }
+    }
+
+    const rows = (_trendsData && _trendsData.rows) || [];
+    if (!rows.length) {
+      document.getElementById('trendsCharts').innerHTML =
+        `<div class="text-muted" style="text-align:center;padding:40px">
+          No trend data yet — daily stats are aggregated once per day. Check back tomorrow.
+        </div>`;
+      return;
+    }
+
+    const labels = rows.map(r => r.date);
+
+    // Parse payload type counts per row
+    const allPtKeys = new Set();
+    rows.forEach(r => {
+      try { Object.keys(JSON.parse(r.payloadTypeCounts)).forEach(k => allPtKeys.add(k)); } catch {}
+    });
+    const ptSeries = Array.from(allPtKeys).sort().map((k, i) => ({
+      label: PT_NAMES[k] || `Type ${k}`,
+      color: PT_COLORS[i % PT_COLORS.length],
+      values: rows.map(r => { try { return JSON.parse(r.payloadTypeCounts)[k] || 0; } catch { return 0; } }),
+    }));
+
+    const nodeSeries = [
+      { label: 'Companions', color: '#4a9eff',  values: rows.map(r => r.nodesCompanion) },
+      { label: 'Repeaters',  color: '#22c55e',  values: rows.map(r => r.nodesRepeater) },
+      { label: 'Room Svrs',  color: '#f59e0b',  values: rows.map(r => r.nodesRoom) },
+      { label: 'Other',      color: '#94a3b8',  values: rows.map(r => r.nodesOther) },
+    ].filter(s => s.values.some(v => v > 0));
+
+    const charts = document.getElementById('trendsCharts');
+    charts.innerHTML = `
+      <div class="trends-grid">
+        <div class="analytics-card trends-card">
+          <div class="trends-card-title">Unique Packets</div>
+          <div class="trends-card-sub">Daily unique transmissions</div>
+          ${stackedBarChart(labels, [{ label: 'Packets', color: 'var(--accent)', values: rows.map(r => r.uniquePackets) }])}
+        </div>
+        <div class="analytics-card trends-card">
+          <div class="trends-card-title">Node Types</div>
+          <div class="trends-card-sub">Unique nodes seen per day (by role)</div>
+          ${stackedBarChart(labels, nodeSeries)}
+          ${trendsLegend(nodeSeries)}
+        </div>
+        <div class="analytics-card trends-card">
+          <div class="trends-card-title">Active Observers</div>
+          <div class="trends-card-sub">Unique observer stations per day</div>
+          ${stackedBarChart(labels, [{ label: 'Observers', color: '#8b5cf6', values: rows.map(r => r.activeObservers) }])}
+        </div>
+        <div class="analytics-card trends-card">
+          <div class="trends-card-title">Packets by Type</div>
+          <div class="trends-card-sub">Unique transmissions by payload type</div>
+          ${stackedBarChart(labels, ptSeries)}
+          ${trendsLegend(ptSeries)}
+        </div>
+        <div class="analytics-card trends-card">
+          <div class="trends-card-title">Channel Messages</div>
+          <div class="trends-card-sub">Channel text messages per day (all channels)</div>
+          ${stackedBarChart(labels, [{ label: 'Messages', color: '#22c55e', values: rows.map(r => r.publicMessages) }])}
+        </div>
+        <div class="analytics-card trends-card">
+          <div class="trends-card-title">Total Observations</div>
+          <div class="trends-card-sub">All observer receptions per day</div>
+          ${stackedBarChart(labels, [{ label: 'Observations', color: '#f59e0b', values: rows.map(r => r.totalObservations) }])}
+        </div>
+      </div>`;
   }
 
   registerPage('analytics', { init, destroy });

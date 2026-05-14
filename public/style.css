@@ -616,6 +616,12 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 }
 .col-path { white-space: normal; }
 .path-hops .hop { color: var(--accent); }
+.path-hops .hop:not(.hop-named) {
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
+  font-family: var(--mono);
+  font-size: 11px;
+  opacity: 0.75;
+}
 .path-hops .hop-named {
   background: color-mix(in srgb, var(--accent) 12%, var(--input-bg));
   color: var(--accent);
@@ -2017,6 +2023,14 @@ fieldset.mc-section legend.mc-label { padding: 0; }
 .analytics-header h2 { margin: 0 0 4px; }
 .analytics-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
 .analytics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 16px; margin-bottom: 16px; }
+
+/* Trends tab */
+.trends-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 16px; }
+.trends-card { margin-bottom: 0 !important; }
+.trends-card-title { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+.trends-card-sub { font-size: 11px; color: var(--text-muted); margin-bottom: 10px; }
+.trends-range-btn { padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface-1, var(--card-bg)); color: var(--text-muted); cursor: pointer; font-size: 12px; }
+.trends-range-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .analytics-grid .analytics-card { margin-bottom: 0; }
 .analytics-full { grid-column: 1 / -1; }
 .analytics-card h3 { margin: 0 0 8px; font-size: 15px; }
@@ -2095,6 +2109,9 @@ fieldset.mc-section legend.mc-label { padding: 0; }
 .reach-hop { min-width: 70px; font-weight: 700; font-size: 13px; }
 .reach-nodes { flex: 1; font-size: 12px; line-height: 1.6; }
 .reach-count { min-width: 70px; text-align: right; font-size: 12px; color: var(--text-muted); }
+@media (max-width: 700px) {
+  .trends-grid { grid-template-columns: 1fr; }
+}
 @media (max-width: 640px) {
   .analytics-row { flex-direction: column; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }

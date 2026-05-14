@@ -177,6 +177,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/analytics/distance", s.handleAnalyticsDistance).Methods("GET")
 	r.HandleFunc("/api/analytics/hash-sizes", s.handleAnalyticsHashSizes).Methods("GET")
 	r.HandleFunc("/api/analytics/hash-collisions", s.handleAnalyticsHashCollisions).Methods("GET")
+	r.HandleFunc("/api/analytics/trends", s.handleAnalyticsTrends).Methods("GET")
 	r.HandleFunc("/api/analytics/subpaths", s.handleAnalyticsSubpaths).Methods("GET")
 	r.HandleFunc("/api/analytics/subpaths-bulk", s.handleAnalyticsSubpathsBulk).Methods("GET")
 	r.HandleFunc("/api/analytics/subpath-detail", s.handleAnalyticsSubpathDetail).Methods("GET")
@@ -697,8 +698,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			Companions: counts["companions"],
 			Sensors:    counts["sensors"],
 		},
-		Backfilling:      backfilling,
-		BackfillProgress: backfillProgress,
+		Backfilling:           backfilling,
+		BackfillProgress:      backfillProgress,
+		HashMigrationComplete: s.store != nil && s.store.hashMigrationComplete.Load(),
 	}
 
 	s.statsMu.Lock()
@@ -2731,4 +2733,20 @@ func (s *Server) handleMetricsHit(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"count": count})
+}
+
+func (s *Server) handleAnalyticsTrends(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if d, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && d >= 1 && d <= 365 {
+		days = d
+	}
+	rows, err := s.db.GetDailyStats(days)
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []DailyStatRow{}
+	}
+	writeJSON(w, map[string]interface{}{"days": days, "rows": rows})
 }

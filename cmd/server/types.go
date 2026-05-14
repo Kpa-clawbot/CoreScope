@@ -68,8 +68,9 @@ type StatsResponse struct {
 	Commit             string     `json:"commit"`
 	BuildTime          string     `json:"buildTime"`
 	Counts             RoleCounts `json:"counts"`
-	Backfilling        bool       `json:"backfilling"`
-	BackfillProgress   float64    `json:"backfillProgress"`
+	Backfilling           bool       `json:"backfilling"`
+	BackfillProgress      float64    `json:"backfillProgress"`
+	HashMigrationComplete bool       `json:"hashMigrationComplete"`
 }
 
 // ─── Health ────────────────────────────────────────────────────────────────────
@@ -957,6 +958,23 @@ type AudioLabPacket struct {
 
 type AudioLabBucketsResponse struct {
 	Buckets map[string][]AudioLabPacket `json:"buckets"`
+}
+
+// ─── Daily Trends ──────────────────────────────────────────────────────────────
+
+type DailyStatRow struct {
+	Date              string   `json:"date"`
+	UniquePackets     int      `json:"uniquePackets"`
+	TotalObservations int      `json:"totalObservations"`
+	ActiveObservers   int      `json:"activeObservers"`
+	NodesCompanion    int      `json:"nodesCompanion"`
+	NodesRepeater     int      `json:"nodesRepeater"`
+	NodesRoom         int      `json:"nodesRoom"`
+	NodesOther        int      `json:"nodesOther"`
+	PublicMessages    int      `json:"publicMessages"`
+	PayloadTypeCounts string   `json:"payloadTypeCounts"`
+	AvgSNR            *float64 `json:"avgSnr"`
+	AvgRSSI           *float64 `json:"avgRssi"`
 }
 
 // ─── WebSocket ─────────────────────────────────────────────────────────────────

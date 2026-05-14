@@ -412,3 +412,31 @@ jobs:
           echo "## Staging Deployed ✓" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** \`$(git rev-parse --short HEAD)\` — $(git log -1 --format=%s)" >> $GITHUB_STEP_SUMMARY
+
+  # ───────────────────────────────────────────────────────────────
+  # 6. Deploy Production (master push only)
+  # ───────────────────────────────────────────────────────────────
+  deploy-prod:
+    name: "🚀 Deploy Production"
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [publish]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to production server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/CoreScope
+            git pull origin master
+            docker build -t corescope:latest .
+            docker compose up -d --force-recreate master
+            echo "Production deploy complete: $(git rev-parse --short HEAD)"
+
+      - name: Post production summary
+        run: |
+          echo "## Production Deployed ✓" >> $GITHUB_STEP_SUMMARY
+          echo "**Host:** ${{ secrets.PROD_HOST }}" >> $GITHUB_STEP_SUMMARY

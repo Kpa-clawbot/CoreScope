@@ -202,6 +202,9 @@ type PacketStore struct {
 	backfillTotal     atomic.Int64 // set once at start of async backfill
 	backfillProcessed atomic.Int64
 
+	// Async hash migration state: set after migrateContentHashesAsync completes.
+	hashMigrationComplete atomic.Bool
+
 	// Eviction config and stats
 	retentionHours   float64        // 0 = unlimited
 	maxMemoryMB      int            // 0 = unlimited
@@ -1883,6 +1886,20 @@ func (s *PacketStore) filterPackets(q PacketQuery) []*StoreTx {
 			return indexed
 		}
 	}
+
+	// Build a pointer set from the byNode index so the filter below can do
+	// O(1) membership checks instead of string-searching DecodedJSON.
+	// String search causes false positives when a chat message mentions a pubkey.
+	var nodeSet map[*StoreTx]struct{}
+	if hasNode {
+		if indexed, ok := s.byNode[nodePK]; ok {
+			nodeSet = make(map[*StoreTx]struct{}, len(indexed))
+			for _, t := range indexed {
+				nodeSet[t] = struct{}{}
+			}
+		}
+	}
+
 	// Single-pass filter: apply all predicates in one scan.
 	results := filterTxSlice(source, func(tx *StoreTx) bool {
 		if hasType && (tx.PayloadType == nil || *tx.PayloadType != filterType) {
@@ -1925,11 +1942,18 @@ func (s *PacketStore) filterPackets(q PacketQuery) []*StoreTx {
 			}
 		}
 		if hasNode {
-			if tx.DecodedJSON == "" {
-				return false
-			}
-			if !strings.Contains(tx.DecodedJSON, nodePK) && !strings.Contains(tx.DecodedJSON, q.Node) {
-				return false
+			if nodeSet != nil {
+				if _, ok := nodeSet[tx]; !ok {
+					return false
+				}
+			} else {
+				// byNode index not built yet; fall back to JSON text search.
+				if tx.DecodedJSON == "" {
+					return false
+				}
+				if !strings.Contains(tx.DecodedJSON, nodePK) && !strings.Contains(tx.DecodedJSON, q.Node) {
+					return false
+				}
 			}
 		}
 		return true
@@ -5007,7 +5031,13 @@ func (s *PacketStore) computeAnalyticsHashSizes(region string) map[string]interf
 						}
 					}
 					byNode[pk]["packets"] = byNode[pk]["packets"].(int) + 1
-					byNode[pk]["hashSize"] = hashSize
+					// Only update hashSize from non-zero-hop adverts — zero-hop
+					// direct/transport-direct have unreliable path bytes and would
+					// overwrite a correctly-detected 2-byte or 3-byte hash size.
+					isZeroHopDirect := (routeType == 2 || routeType == 3) && (actualPathByte&0x3F) == 0
+					if !isZeroHopDirect {
+						byNode[pk]["hashSize"] = hashSize
+					}
 					byNode[pk]["lastSeen"] = tx.FirstSeen
 				}
 			}
@@ -5535,13 +5565,24 @@ func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 			continue
 		}
 		routeType := int(header & 0x03)
-		pathByte, err := strconv.ParseUint(tx.RawHex[2:4], 16, 8)
+		// Transport routes (TRANSPORT_FLOOD=0, TRANSPORT_DIRECT=3) have 4 extra
+		// transport-code bytes before the path byte, shifting it to offset 5.
+		pathByteIdx := 1
+		if routeType == RouteTransportFlood || routeType == RouteTransportDirect {
+			pathByteIdx = 5
+		}
+		hexStart := pathByteIdx * 2
+		hexEnd := hexStart + 2
+		if hexEnd > len(tx.RawHex) {
+			continue
+		}
+		pathByte, err := strconv.ParseUint(tx.RawHex[hexStart:hexEnd], 16, 8)
 		if err != nil {
 			continue
 		}
-		// DIRECT zero-hop adverts use path byte 0x00 locally and can misreport
-		// multibyte repeater hash mode as 1-byte.
-		if routeType == RouteDirect && (pathByte&0x3F) == 0 {
+		// Zero-hop adverts from DIRECT and TRANSPORT_DIRECT routes have locally-
+		// generated path bytes with unreliable hash_size bits — skip both.
+		if (routeType == RouteDirect || routeType == RouteTransportDirect) && (pathByte&0x3F) == 0 {
 			continue
 		}
 		hs := int((pathByte>>6)&0x3) + 1

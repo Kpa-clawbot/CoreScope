@@ -315,7 +315,7 @@ window.HopResolver = (function() {
       // O(1) lookup via pubkeyIdx built during init()
       var node = pubkeyIdx[pubkey.toLowerCase()] || null;
       result[hop] = {
-        name: node ? node.name : pubkey.slice(0, 8),
+        name: node ? node.name : null,
         pubkey: pubkey,
         candidates: node ? [{ name: node.name, pubkey: pubkey, lat: node.lat, lon: node.lon }] : [],
         conflicts: []

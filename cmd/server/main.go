@@ -155,6 +155,10 @@ func main() {
 	if err := database.EnsureMonthlySnapshotTable(); err != nil {
 		log.Printf("[monthly-snapshot] warning: could not create snapshot table: %v", err)
 	}
+	// Ensure daily stats table exists
+	if err := database.EnsureDailyStatsTable(); err != nil {
+		log.Printf("[daily-stats] warning: could not create table: %v", err)
+	}
 	// Add resolved_path column if missing.
 	// NOTE on startup ordering (review item #10): ensureResolvedPathColumn runs AFTER
 	// OpenDB/detectSchema, so db.hasResolvedPath will be false on first run with a
@@ -289,6 +293,13 @@ func main() {
 				}
 			}()
 			time.Sleep(1 * time.Minute)
+			// Aggregate daily stats for all days within retention before pruning
+			for offset := 1; offset <= days; offset++ {
+				date := time.Now().UTC().AddDate(0, 0, -offset).Format("2006-01-02")
+				if err := database.AggregateDailyStats(date); err != nil {
+					log.Printf("[daily-stats] aggregate %s error: %v", date, err)
+				}
+			}
 			if err := database.SnapshotMonthlyObservers(days); err != nil {
 				log.Printf("[monthly-snapshot] error: %v", err)
 			}
@@ -297,9 +308,17 @@ func main() {
 			} else {
 				log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
 			}
+			if _, err := database.PruneStaleObservers(3); err != nil {
+				log.Printf("[prune] stale observers error: %v", err)
+			}
 			for {
 				select {
 				case <-pruneTicker.C:
+					// Aggregate yesterday before pruning
+					yesterday := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+					if err := database.AggregateDailyStats(yesterday); err != nil {
+						log.Printf("[daily-stats] aggregate %s error: %v", yesterday, err)
+					}
 					if err := database.SnapshotMonthlyObservers(days); err != nil {
 						log.Printf("[monthly-snapshot] error: %v", err)
 					}
@@ -307,6 +326,9 @@ func main() {
 						log.Printf("[prune] error: %v", err)
 					} else {
 						log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
+					}
+					if _, err := database.PruneStaleObservers(3); err != nil {
+						log.Printf("[prune] stale observers error: %v", err)
 					}
 				case <-pruneDone:
 					return
@@ -432,6 +454,9 @@ func main() {
 
 	// Start async backfill in background — HTTP is now available.
 	go backfillResolvedPathsAsync(store, dbPath, 5000, 100*time.Millisecond, cfg.BackfillHours())
+
+	// Migrate old content hashes in background (one-time, idempotent).
+	go migrateContentHashesAsync(store, 5000, 100*time.Millisecond)
 
 	if err := httpServer.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("[server] %v", err)
