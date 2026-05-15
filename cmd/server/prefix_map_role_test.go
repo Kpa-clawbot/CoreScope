@@ -264,6 +264,44 @@ func TestBuildHopContextPubkeys_IncludesSenderAndUnambiguousAnchors(t *testing.T
 	}
 }
 
+func TestResolveWithContext_Tier3_TiebreakDeterministicByPubkey(t *testing.T) {
+	// Two candidates with identical observation counts. Result must be
+	// deterministic regardless of slice insertion order: lexicographically
+	// smallest PublicKey wins.
+	a := nodeInfo{PublicKey: "abcd11111111", Role: "repeater", Name: "A", Lat: 37.0, Lon: -122.0, HasGPS: true, ObservationCount: 100}
+	b := nodeInfo{PublicKey: "abcd22222222", Role: "repeater", Name: "B", Lat: 38.0, Lon: -123.0, HasGPS: true, ObservationCount: 100}
+
+	pm1 := buildPrefixMap([]nodeInfo{a, b})
+	r1, _, _ := pm1.resolveWithContext("abcd", nil, nil)
+	pm2 := buildPrefixMap([]nodeInfo{b, a}) // reversed insertion order
+	r2, _, _ := pm2.resolveWithContext("abcd", nil, nil)
+	if r1 == nil || r2 == nil {
+		t.Fatal("expected non-nil results")
+	}
+	if r1.PublicKey != r2.PublicKey {
+		t.Fatalf("tiebreak not deterministic: order1 picked %s, order2 picked %s", r1.PublicKey, r2.PublicKey)
+	}
+	if r1.PublicKey != "abcd11111111" {
+		t.Fatalf("expected lex-smallest pubkey abcd11111111, got %s", r1.PublicKey)
+	}
+}
+
+func TestResolveWithContext_Tier3_TiebreakNoGPS(t *testing.T) {
+	// Same as above but no GPS — exercises the priority-4 path.
+	a := nodeInfo{PublicKey: "ee11", Role: "repeater", Name: "A", ObservationCount: 7}
+	b := nodeInfo{PublicKey: "ee22", Role: "repeater", Name: "B", ObservationCount: 7}
+	pm1 := buildPrefixMap([]nodeInfo{a, b})
+	r1, _, _ := pm1.resolveWithContext("ee", nil, nil)
+	pm2 := buildPrefixMap([]nodeInfo{b, a})
+	r2, _, _ := pm2.resolveWithContext("ee", nil, nil)
+	if r1 == nil || r2 == nil {
+		t.Fatal("expected non-nil results")
+	}
+	if r1.PublicKey != r2.PublicKey || r1.PublicKey != "ee11" {
+		t.Fatalf("non-deterministic priority-4 tiebreak: r1=%s r2=%s want ee11", r1.PublicKey, r2.PublicKey)
+	}
+}
+
 func TestResolveWithContext_Tier2_PicksGeographicallyCloserCandidate(t *testing.T) {
 	// Two GPS-having candidates for a prefix; a context pubkey near one of
 	// them. Tier 2 (geo proximity) must pick the closer one — verifies tier 2

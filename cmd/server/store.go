@@ -2958,7 +2958,8 @@ func (s *PacketStore) updateDistanceIndexForTxs(txs []*StoreTx) {
 		if txPath != nil {
 			s.distPaths = append(s.distPaths, *txPath)
 		}
-	}}
+	}
+}
 
 // buildDistanceIndex precomputes haversine distances for all packets.
 // Must be called with s.mu held (Lock).
@@ -5115,13 +5116,21 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 
 	// Priority 3: GPS preference. Among GPS-having candidates, prefer the one
 	// with the highest observation count (recent/active evidence) rather than
-	// slice/DB-insertion order. See #1197.
+	// slice/DB-insertion order. Ties on count are broken by lexicographically
+	// smallest PublicKey for full determinism. See #1197.
 	bestGPSIdx := -1
 	for i := range candidates {
 		if !candidates[i].HasGPS {
 			continue
 		}
-		if bestGPSIdx < 0 || candidates[i].ObservationCount > candidates[bestGPSIdx].ObservationCount {
+		if bestGPSIdx < 0 {
+			bestGPSIdx = i
+			continue
+		}
+		ci := candidates[i]
+		cb := candidates[bestGPSIdx]
+		if ci.ObservationCount > cb.ObservationCount ||
+			(ci.ObservationCount == cb.ObservationCount && ci.PublicKey < cb.PublicKey) {
 			bestGPSIdx = i
 		}
 	}
@@ -5131,9 +5140,13 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 
 	// Priority 4: Fallback — pick the candidate with the highest observation
 	// count (no GPS available on any candidate). Avoids slice-order arbitrariness.
+	// Ties on count are broken by lexicographically smallest PublicKey.
 	bestIdx := 0
-	for i := range candidates {
-		if candidates[i].ObservationCount > candidates[bestIdx].ObservationCount {
+	for i := 1; i < len(candidates); i++ {
+		ci := candidates[i]
+		cb := candidates[bestIdx]
+		if ci.ObservationCount > cb.ObservationCount ||
+			(ci.ObservationCount == cb.ObservationCount && ci.PublicKey < cb.PublicKey) {
 			bestIdx = i
 		}
 	}
