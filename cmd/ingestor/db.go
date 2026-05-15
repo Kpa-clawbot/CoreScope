@@ -1306,12 +1306,14 @@ func nilIfEmpty(s string) interface{} {
 }
 
 // scopeNameForDB encodes PacketData scope semantics for DB storage:
-// non-transport-scoped → NULL; transport-scoped → ScopeName (may be "" for unknown).
-func scopeNameForDB(data *PacketData) interface{} {
+// non-transport-scoped → nil (SQL NULL); transport-scoped → pointer to ScopeName
+// (may be "" for unknown region, "#name" for matched region).
+func scopeNameForDB(data *PacketData) *string {
 	if !data.IsTransportScoped {
 		return nil
 	}
-	return data.ScopeName // "" or "#regionname"
+	s := data.ScopeName
+	return &s
 }
 
 // UpdateNodeDefaultScope records the most-recently observed region scope for a
@@ -1399,7 +1401,7 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 
 	if decoded.TransportCodes != nil && decoded.TransportCodes.Code1 != "0000" {
 		pd.IsTransportScoped = true
-		pd.ScopeName = matchScope(regionKeys, byte(decoded.Header.PayloadType), decoded.PayloadRaw, decoded.TransportCodes.Code1)
+		pd.ScopeName = matchScope(regionKeys, byte(decoded.Header.PayloadType), decoded.payloadRaw, decoded.TransportCodes.Code1)
 	}
 
 	// Populate from_pubkey at write time (#1143). ADVERTs carry the
