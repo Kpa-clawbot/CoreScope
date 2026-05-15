@@ -177,7 +177,7 @@
               <div style="margin-bottom:16px">
                 <strong style="font-size:12px">⌨️ Step 3 — Paste into your device console</strong>
                 <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:8px">
-                  Requires the <a href="https://dutchmeshcore.nl/firmware" target="_blank" rel="noopener" style="color:var(--accent)">DutchMeshcore.nl MQTT Bridge firmware</a> (Heltec, LilyGO, T-Beam, RAK and more).
+                  Requires the <a href="https://dutch-meshcore.github.io/Dutch-Meshcore-Toolbox/#/firmware" target="_blank" rel="noopener" style="color:var(--accent)">DutchMeshcore.nl MQTT Bridge firmware</a> (Heltec, LilyGO, T-Beam, RAK and more).
                 </div>
                 <div style="background:var(--surface-1,#1a1a2e);border:1px solid var(--border);border-radius:6px;overflow:hidden">
                   <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-bottom:1px solid var(--border);background:var(--surface-0)">
