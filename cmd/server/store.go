@@ -3500,6 +3500,34 @@ func buildHopContextPubkeys(tx *StoreTx, pm *prefixMap) []string {
 	return out
 }
 
+// buildAggregateHopContextPubkeys gathers context across many txs for hot
+// loops that resolve hops outside any per-tx scope (subpath/topology
+// aggregations). Caller passes the slice of txs to consider; we union the
+// per-tx contexts with de-dup. Used by call sites that read from precomputed
+// indices (s.spIndex, s.spTxIndex) or that resolve user-supplied hops.
+//
+// Result is order-independent in semantics; iteration order is deterministic
+// only modulo Go's map iteration (acceptable — the resolver's tier-2 averages
+// GPS positions and tier-3 picks the lex-smallest pubkey on ties, so context
+// order does not affect the chosen candidate).
+func buildAggregateHopContextPubkeys(txs []*StoreTx, pm *prefixMap) []string {
+	if len(txs) == 0 || pm == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, 32)
+	var out []string
+	for _, tx := range txs {
+		for _, pk := range buildHopContextPubkeys(tx, pm) {
+			if _, ok := seen[pk]; ok {
+				continue
+			}
+			seen[pk] = struct{}{}
+			out = append(out, pk)
+		}
+	}
+	return out
+}
+
 func computeDistancesForTx(tx *StoreTx, nodeByPk map[string]*nodeInfo, repeaterSet map[string]bool, resolveHop func(string) *nodeInfo) ([]distHopRecord, *distPathRecord) {
 	pathHops := txGetParsedPath(tx)
 	if len(pathHops) == 0 {
@@ -7685,6 +7713,10 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 	// Single scan: bucket by hop length into per-group accumulators.
 	s.mu.RLock()
 	_, pm := s.getCachedNodesAndPM()
+	// Aggregate hop-disambiguation context across all packets so the
+	// resolver's tiers 1 and 2 light up even on this bulk-aggregate path
+	// (the index iterates raw subpath strings, not per-tx). See #1197.
+	contextPubkeys := buildAggregateHopContextPubkeys(s.packets, pm)
 	hopCache := make(map[string]*nodeInfo)
 	resolveHop := func(hop string) string {
 		if cached, ok := hopCache[hop]; ok {
@@ -7693,7 +7725,7 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 			}
 			return hop
 		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
 		hopCache[hop] = r
 		if r != nil {
 			return r.Name
@@ -7765,6 +7797,9 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 	defer s.mu.RUnlock()
 
 	_, pm := s.getCachedNodesAndPM()
+	// Aggregate hop-disambiguation context across all packets — bulk
+	// aggregator over s.spIndex / per-tx fallback both need it. See #1197.
+	contextPubkeys := buildAggregateHopContextPubkeys(s.packets, pm)
 	hopCache := make(map[string]*nodeInfo)
 	resolveHop := func(hop string) string {
 		if cached, ok := hopCache[hop]; ok {
@@ -7773,7 +7808,7 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 			}
 			return hop
 		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
 		hopCache[hop] = r
 		if r != nil {
 			return r.Name
@@ -7907,10 +7942,21 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 
 	_, pm := s.getCachedNodesAndPM()
 
+	// Build the subpath key the same way the index does (lowercase, comma-joined)
+	spKey := strings.ToLower(strings.Join(rawHops, ","))
+
+	// Direct lookup instead of scanning all packets
+	matchedTxs := s.spTxIndex[spKey]
+
+	// Hop-disambiguation context: union over the matched txs that produced
+	// this subpath. This is the right scope — those are the packets that
+	// witnessed the requested hop sequence. See #1197.
+	contextPubkeys := buildAggregateHopContextPubkeys(matchedTxs, pm)
+
 	// Resolve the requested hops
 	nodes := make([]map[string]interface{}, len(rawHops))
 	for i, hop := range rawHops {
-		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
 		entry := map[string]interface{}{"hop": hop, "name": hop, "lat": nil, "lon": nil, "pubkey": nil}
 		if r != nil {
 			entry["name"] = r.Name
@@ -7922,12 +7968,6 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 		}
 		nodes[i] = entry
 	}
-
-	// Build the subpath key the same way the index does (lowercase, comma-joined)
-	spKey := strings.ToLower(strings.Join(rawHops, ","))
-
-	// Direct lookup instead of scanning all packets
-	matchedTxs := s.spTxIndex[spKey]
 
 	hourBuckets := make([]int, 24)
 	var snrSum, rssiSum float64
@@ -7966,11 +8006,13 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 			observers[tx.ObserverName]++
 		}
 
-		// Full parent path (resolved)
+		// Full parent path (resolved). Per-tx context so the resolver picks
+		// the right candidate when prefixes are ambiguous. See #1197.
+		txCtx := buildHopContextPubkeys(tx, pm)
 		hops := txGetParsedPath(tx)
 		resolved := make([]string, len(hops))
 		for i, h := range hops {
-			r, _, _ := pm.resolveWithContext(h, nil, s.graph)
+			r, _, _ := pm.resolveWithContext(h, txCtx, s.graph)
 			if r != nil {
 				resolved[i] = r.Name
 			} else {
