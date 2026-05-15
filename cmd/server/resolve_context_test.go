@@ -108,8 +108,8 @@ func TestResolveWithContext_FirstMatchFallback(t *testing.T) {
 	if ni == nil || ni.Name != "First" {
 		t.Fatalf("expected First, got %v", ni)
 	}
-	if confidence != "first_match" {
-		t.Fatalf("expected first_match, got %s", confidence)
+	if confidence != "observation_count_fallback" {
+		t.Fatalf("expected observation_count_fallback, got %s", confidence)
 	}
 }
 

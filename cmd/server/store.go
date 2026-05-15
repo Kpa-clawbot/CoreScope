@@ -173,6 +173,9 @@ type PacketStore struct {
 	nodeCache     []nodeInfo
 	nodePM        *prefixMap
 	nodeCacheTime time.Time
+	// Per-store dedupe set for one-shot schema-degradation warnings. Field
+	// (not package-level) so each test gets a fresh state — see #1199 item 5.
+	schemaDegradationLogged sync.Map
 	// Precomputed subpath index: raw comma-joined hops → occurrence count.
 	// Built during Load(), incrementally updated on ingest. Avoids full
 	// packet iteration at query time (O(unique_subpaths) vs O(total_packets)).
@@ -1698,16 +1701,13 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				repeaterSet[n.PublicKey] = true
 			}
 		}
-		hopCache := make(map[string]*nodeInfo)
-		resolveHop := func(hop string) *nodeInfo {
-			if cached, ok := hopCache[hop]; ok {
-				return cached
-			}
-			r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
-			hopCache[hop] = r
-			return r
-		}
+		// Per-tx hop resolver: cache reused across txs, context rebound per
+		// tx via setContext (#1197 perf fix).
+		resolveHop, setContext := s.hopResolverPerTx(pm)
 		for _, tx := range broadcastTxs {
+			// Per-tx context (sender + observer + unambiguous-prefix anchors)
+			// so resolveWithContext tiers 1 and 2 light up. See #1197.
+			setContext(buildHopContextPubkeys(tx, pm))
 			txHops, txPath := computeDistancesForTx(tx, nodeByPk, repeaterSet, resolveHop)
 			if len(txHops) > 0 {
 				s.distHops = append(s.distHops, txHops...)
@@ -2935,18 +2935,12 @@ func (s *PacketStore) updateDistanceIndexForTxs(txs []*StoreTx) {
 			repeaterSet[nd.PublicKey] = true
 		}
 	}
-	hopCache := make(map[string]*nodeInfo)
-	resolveHop := func(hop string) *nodeInfo {
-		if cached, ok := hopCache[hop]; ok {
-			return cached
-		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
-		hopCache[hop] = r
-		return r
-	}
-
+	// Per-tx hop resolver shared across the recompute loop (#1197 perf).
+	resolveHop, setContext := s.hopResolverPerTx(pm)
 	// Recompute distance records for each changed tx.
 	for _, tx := range txs {
+		// Per-tx context for hop disambiguation (#1197).
+		setContext(buildHopContextPubkeys(tx, pm))
 		txHops, txPath := computeDistancesForTx(tx, nodeByPk, repeaterSet, resolveHop)
 		if len(txHops) > 0 {
 			s.distHops = append(s.distHops, txHops...)
@@ -2971,20 +2965,14 @@ func (s *PacketStore) buildDistanceIndex() {
 		}
 	}
 
-	hopCache := make(map[string]*nodeInfo)
-	resolveHop := func(hop string) *nodeInfo {
-		if cached, ok := hopCache[hop]; ok {
-			return cached
-		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
-		hopCache[hop] = r
-		return r
-	}
-
 	hops := make([]distHopRecord, 0, len(s.packets))
 	paths := make([]distPathRecord, 0, len(s.packets)/2)
 
+	// Per-tx hop resolver shared across the per-tx loop (#1197 perf).
+	resolveHop, setContext := s.hopResolverPerTx(pm)
 	for _, tx := range s.packets {
+		// Per-tx context for hop disambiguation (#1197).
+		setContext(buildHopContextPubkeys(tx, pm))
 		txHops, txPath := computeDistancesForTx(tx, nodeByPk, repeaterSet, resolveHop)
 		if len(txHops) > 0 {
 			hops = append(hops, txHops...)
@@ -3444,6 +3432,140 @@ func (s *PacketStore) StartEvictionTicker() func() {
 }
 
 // computeDistancesForTx computes distance records for a single transmission.
+// buildHopContextPubkeys collects context pubkeys for hop disambiguation:
+// the originator/sender pubkey plus any unambiguous-prefix anchors in the
+// path (single-candidate prefixes — strong context). Used by callers of
+// pm.resolveWithContext to light up tiers 1 and 2 of the resolver. See #1197.
+//
+// Returned pubkeys are de-duplicated and lowercased.
+func buildHopContextPubkeys(tx *StoreTx, pm *prefixMap) []string {
+	if tx == nil || pm == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, 16)
+	out := make([]string, 0, 16)
+	add := func(pk string) {
+		if pk == "" {
+			return
+		}
+		l := strings.ToLower(pk)
+		if _, ok := seen[l]; ok {
+			return
+		}
+		seen[l] = struct{}{}
+		out = append(out, l)
+	}
+
+	// Sender / originator pubkey from decoded payload. Use the cached
+	// ParsedDecoded() (sync.Once-gated) instead of re-unmarshaling — the
+	// helper is hot (3 distance sites + analytics topology, all 30k+ tx
+	// loops). See #1197 (carmack/adversarial r1).
+	if dec := tx.ParsedDecoded(); dec != nil {
+		if pk, ok := dec["pubKey"].(string); ok {
+			add(pk)
+		}
+	}
+
+	// Observer pubkey, where available. ObserverID is the observers.id PRIMARY
+	// KEY from the MQTT topic — it is NOT guaranteed to be a node pubkey hex
+	// (some observers register with arbitrary string ids like "myobserver").
+	// Guard against polluting the context with non-pubkey strings: include
+	// only when it parses as hex AND is long enough to plausibly be a pubkey
+	// prefix. The full prefix-map lookup would also be acceptable, but the
+	// hex+length check is O(len) and avoids one map probe per tx on a hot
+	// path. See #1197 (adversarial r1 #4).
+	if obs := tx.ObserverID; obs != "" && len(obs) >= 4 && isHexLower(strings.ToLower(obs)) {
+		add(obs)
+	}
+
+	// Unambiguous-prefix anchors: any hop in the path whose prefix has exactly
+	// one candidate is a strong context signal.
+	for _, hop := range txGetParsedPath(tx) {
+		h := strings.ToLower(hop)
+		if cands, ok := pm.m[h]; ok && len(cands) == 1 {
+			add(cands[0].PublicKey)
+		}
+	}
+
+	return out
+}
+
+// isHexLower reports whether s consists only of [0-9a-f] (assumes already
+// lowercased by caller). Used to guard ObserverID before adding it to the
+// hop-disambiguation context, since ObserverID is a free-form observers.id
+// and may not be a node pubkey hex.
+func isHexLower(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+// buildAggregateHopContextPubkeys gathers context across many txs for hot
+// loops that resolve hops outside any per-tx scope (subpath/topology
+// aggregations). Caller passes the slice of txs to consider; we union the
+// per-tx contexts with de-dup. Used by call sites that read from precomputed
+// indices (s.spIndex, s.spTxIndex) or that resolve user-supplied hops.
+//
+// Result is order-independent in semantics; iteration order is deterministic
+// only modulo Go's map iteration (acceptable — the resolver's tier-2 averages
+// GPS positions and tier-3 picks the lex-smallest pubkey on ties, so context
+// order does not affect the chosen candidate).
+func buildAggregateHopContextPubkeys(txs []*StoreTx, pm *prefixMap) []string {
+	if len(txs) == 0 || pm == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, 32)
+	var out []string
+	for _, tx := range txs {
+		for _, pk := range buildHopContextPubkeys(tx, pm) {
+			if _, ok := seen[pk]; ok {
+				continue
+			}
+			seen[pk] = struct{}{}
+			out = append(out, pk)
+		}
+	}
+	return out
+}
+
+// hopResolverPerTx returns (resolveHop, setContext). The cache is allocated
+// once and cleared between txs; setContext rebinds the per-tx context. Used
+// by all per-tx distance/topology loops to avoid 4× duplicate closure
+// definitions and per-tx map allocation. See #1197 (adversarial r1 #7,
+// carmack r1 #3).
+//
+// CONCURRENCY: NOT safe for concurrent use. The returned closures share
+// mutable captured state — `contextPubkeys` is reassigned by setContext and
+// read by resolveHop, and `hopCache` is mutated by both (resolveHop writes
+// on miss, setContext clears wholesale). Callers MUST invoke both functions
+// from a single goroutine for the lifetime of the (resolveHop, setContext)
+// pair. If a future caller fans out per-tx work across goroutines, allocate
+// a fresh resolver pair per goroutine. See #1199 item 4.
+func (s *PacketStore) hopResolverPerTx(pm *prefixMap) (resolveHop func(string) *nodeInfo, setContext func([]string)) {
+	hopCache := make(map[string]*nodeInfo, 16)
+	var contextPubkeys []string
+	resolveHop = func(hop string) *nodeInfo {
+		if cached, ok := hopCache[hop]; ok {
+			return cached
+		}
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		hopCache[hop] = r
+		return r
+	}
+	setContext = func(ctx []string) {
+		contextPubkeys = ctx
+		clear(hopCache)
+	}
+	return resolveHop, setContext
+}
+
 func computeDistancesForTx(tx *StoreTx, nodeByPk map[string]*nodeInfo, repeaterSet map[string]bool, resolveHop func(string) *nodeInfo) ([]distHopRecord, *distPathRecord) {
 	pathHops := txGetParsedPath(tx)
 	if len(pathHops) == 0 {
@@ -4787,24 +4909,45 @@ func (s *PacketStore) computeAnalyticsRF(region string, window TimeWindow) map[s
 // --- Topology Analytics ---
 
 type nodeInfo struct {
-	PublicKey string
-	Name      string
-	Role      string
-	Lat       float64
-	Lon       float64
-	HasGPS    bool
-	LastSeen  time.Time
+	PublicKey        string
+	Name             string
+	Role             string
+	Lat              float64
+	Lon              float64
+	HasGPS           bool
+	LastSeen         time.Time
+	ObservationCount int // count of advertisements/observations; used for tier-3 tiebreak in resolveWithContext
+}
+
+// schemaDegradationLogged is now a PacketStore field (see type definition) so
+// each store/test instance has a fresh dedupe set. Issue #1199 item 5: the
+// prior package-level sync.Map silently suppressed re-emission across tests.
+
+func (s *PacketStore) logSchemaDegradationOnce(msg string) {
+	if _, loaded := s.schemaDegradationLogged.LoadOrStore(msg, true); !loaded {
+		log.Printf("[store] schema-degradation: %s", msg)
+	}
 }
 
 func (s *PacketStore) getAllNodes() []nodeInfo {
-	// Try with last_seen first; fall back to without if column doesn't exist.
-	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen FROM nodes")
+	// Schema probe: try richest → leanest. Logs a one-shot warning when we
+	// fall back to a thinner schema so operators see that a column is
+	// missing and the new tiebreak features are degraded. See #1197
+	// (adversarial r1 #10).
+	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, COALESCE(advert_count, 0) FROM nodes")
 	hasLastSeen := true
+	hasAdvertCount := true
 	if err != nil {
-		rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes")
-		hasLastSeen = false
+		s.logSchemaDegradationOnce("nodes.advert_count missing — tier-3/4 ObservationCount tiebreak degraded; resolveWithContext will fall back to lex-pubkey order")
+		rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen FROM nodes")
+		hasAdvertCount = false
 		if err != nil {
-			return nil
+			s.logSchemaDegradationOnce("nodes.last_seen missing — node freshness signal unavailable")
+			rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes")
+			hasLastSeen = false
+			if err != nil {
+				return nil
+			}
 		}
 	}
 	defer rows.Close()
@@ -4814,7 +4957,10 @@ func (s *PacketStore) getAllNodes() []nodeInfo {
 		var name, role sql.NullString
 		var lat, lon sql.NullFloat64
 		var lastSeen sql.NullString
-		if hasLastSeen {
+		var advertCount sql.NullInt64
+		if hasAdvertCount {
+			rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &advertCount)
+		} else if hasLastSeen {
 			rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen)
 		} else {
 			rows.Scan(&pk, &name, &role, &lat, &lon)
@@ -4831,6 +4977,9 @@ func (s *PacketStore) getAllNodes() []nodeInfo {
 			} else if t, err := time.Parse("2006-01-02 15:04:05", lastSeen.String); err == nil {
 				n.LastSeen = t
 			}
+		}
+		if hasAdvertCount && advertCount.Valid {
+			n.ObservationCount = int(advertCount.Int64)
 		}
 		nodes = append(nodes, n)
 	}
@@ -4929,12 +5078,27 @@ func (pm *prefixMap) resolve(hop string) *nodeInfo {
 
 // resolveWithContext resolves a hop prefix using the neighbor affinity graph
 // for disambiguation when multiple candidates match. It applies a 4-tier
-// priority: (1) affinity graph score, (2) geographic proximity to context
-// nodes, (3) GPS preference, (4) first match fallback.
+// priority:
+//
+//	(1) "neighbor_affinity"           — graph score vs context nodes,
+//	                                    requires affinity ≥3× runner-up and
+//	                                    affinityMinObservations
+//	(2) "geo_proximity"               — geographic proximity to GPS context
+//	                                    centroid (only fires when at least
+//	                                    one context node has GPS)
+//	(3) "gps_preference"              — among GPS-having candidates, pick
+//	                                    highest ObservationCount; lex-pubkey
+//	                                    tiebreak for determinism
+//	(4) "observation_count_fallback"  — no GPS available; pick highest
+//	                                    ObservationCount; lex-pubkey tiebreak
+//
+// (Pre-PR #1197/#1198 the tier-3 step was first-GPS-wins and tier-4 was
+// first-slice-element. Both now use observation count + lex tiebreak; the
+// returned method label was renamed accordingly.)
 //
 // contextPubkeys are pubkeys of nodes that provide context for disambiguation
 // (e.g., the originator, observer, or adjacent hops in the path).
-// graph may be nil, in which case it falls back to the existing resolve().
+// graph may be nil, in which case tier-1 is skipped.
 func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, graph *NeighborGraph) (*nodeInfo, string, float64) {
 	h := strings.ToLower(hop)
 	candidates := pm.m[h]
@@ -5046,15 +5210,48 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 		}
 	}
 
-	// Priority 3: GPS preference
+	// Priority 3: GPS preference. Among GPS-having candidates, prefer the one
+	// with the highest observation count (recent/active evidence) rather than
+	// slice/DB-insertion order. Ties on count are broken by lexicographically
+	// smallest PublicKey for full determinism. See #1197.
+	bestGPSIdx := -1
 	for i := range candidates {
-		if candidates[i].HasGPS {
-			return &candidates[i], "gps_preference", 0
+		if !candidates[i].HasGPS {
+			continue
+		}
+		if bestGPSIdx < 0 || betterByObsCount(&candidates[i], &candidates[bestGPSIdx]) {
+			bestGPSIdx = i
 		}
 	}
+	if bestGPSIdx >= 0 {
+		return &candidates[bestGPSIdx], "gps_preference", 0
+	}
 
-	// Priority 4: First match fallback
-	return &candidates[0], "first_match", 0
+	// Priority 4: Fallback — pick the candidate with the highest observation
+	// count (no GPS available on any candidate). Avoids slice-order
+	// arbitrariness. Ties on count are broken by lexicographically smallest
+	// PublicKey. Method label "observation_count_fallback" — the previous
+	// "first_match" was misleading after the tier-4 algorithm changed in
+	// PR #1198 (adversarial r1 #2).
+	bestIdx := 0
+	for i := 1; i < len(candidates); i++ {
+		if betterByObsCount(&candidates[i], &candidates[bestIdx]) {
+			bestIdx = i
+		}
+	}
+	return &candidates[bestIdx], "observation_count_fallback", 0
+}
+
+// betterByObsCount reports whether candidate a should beat b under the
+// tier-3/4 selection rule: higher ObservationCount wins; ties go to the
+// lexicographically smaller PublicKey for determinism. Pointer receivers
+// avoid value-copying nodeInfo (string + 2 floats + time.Time + int) on
+// the hot resolve path. See #1197 (adversarial r1 #6, carmack r1 #4).
+func betterByObsCount(a, b *nodeInfo) bool {
+	if a.ObservationCount != b.ObservationCount {
+		return a.ObservationCount > b.ObservationCount
+	}
+	return a.PublicKey < b.PublicKey
 }
 
 // geoDistApprox returns an approximate distance between two lat/lon points
@@ -5115,31 +5312,15 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 
 	allNodes, pm := s.getCachedNodesAndPM()
 	_ = allNodes // only pm is needed for topology
-	hopCache := make(map[string]*nodeInfo)
 
-	resolveHop := func(hop string) *nodeInfo {
-		if cached, ok := hopCache[hop]; ok {
-			return cached
-		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
-		hopCache[hop] = r
-		return r
-	}
-
-	hopCounts := map[int]int{}
-	var allHopsList []int
-	hopSnr := map[int][]float64{}
-	hopFreq := map[string]int{}
-	pairFreq := map[string]int{}
-	observerMap := map[string]string{} // observer_id → observer_name
-	perObserver := map[string]map[string]*struct{ minDist, maxDist, count int }{}
-
+	// Materialize the filtered tx slice ONCE — both the context-build pass
+	// and the main aggregation pass need the same window+region predicate.
+	// Two scans of s.packets re-running identical predicates is wasteful at
+	// the 30k+ packet hot-path scale (#1199 item 2). One filter, two passes
+	// over the result.
+	filteredTxs := make([]*StoreTx, 0, len(s.packets))
 	for _, tx := range s.packets {
 		if !window.Includes(tx.FirstSeen) {
-			continue
-		}
-		hops := txGetParsedPath(tx)
-		if len(hops) == 0 {
 			continue
 		}
 		if regionObs != nil {
@@ -5153,6 +5334,54 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 			if !match {
 				continue
 			}
+		}
+		filteredTxs = append(filteredTxs, tx)
+	}
+
+	// Pre-pass: build the full hop-disambiguation context from all in-window
+	// txs BEFORE any resolveHop call. The earlier shape — populating
+	// contextPubkeys lazily during the main scan and reading it from a
+	// closure — was correct only because the current code never calls
+	// resolveHop inside the scan loop. A future maintainer who adds such a
+	// call inside the loop would silently get partial context AND a
+	// stale-cached result for any hop seen before the context grew. Two
+	// explicit passes remove the hazard. See #1197 (carmack/adversarial r1).
+	var contextPubkeys []string
+	{
+		seen := make(map[string]struct{}, 64)
+		for _, tx := range filteredTxs {
+			for _, pk := range buildHopContextPubkeys(tx, pm) {
+				if _, ok := seen[pk]; ok {
+					continue
+				}
+				seen[pk] = struct{}{}
+				contextPubkeys = append(contextPubkeys, pk)
+			}
+		}
+	}
+
+	hopCache := make(map[string]*nodeInfo)
+	resolveHop := func(hop string) *nodeInfo {
+		if cached, ok := hopCache[hop]; ok {
+			return cached
+		}
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		hopCache[hop] = r
+		return r
+	}
+
+	hopCounts := map[int]int{}
+	var allHopsList []int
+	hopSnr := map[int][]float64{}
+	hopFreq := map[string]int{}
+	pairFreq := map[string]int{}
+	observerMap := map[string]string{} // observer_id → observer_name
+	perObserver := map[string]map[string]*struct{ minDist, maxDist, count int }{}
+
+	for _, tx := range filteredTxs {
+		hops := txGetParsedPath(tx)
+		if len(hops) == 0 {
+			continue
 		}
 
 		n := len(hops)
@@ -7575,6 +7804,10 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 	// Single scan: bucket by hop length into per-group accumulators.
 	s.mu.RLock()
 	_, pm := s.getCachedNodesAndPM()
+	// Aggregate hop-disambiguation context across all packets so the
+	// resolver's tiers 1 and 2 light up even on this bulk-aggregate path
+	// (the index iterates raw subpath strings, not per-tx). See #1197.
+	contextPubkeys := buildAggregateHopContextPubkeys(s.packets, pm)
 	hopCache := make(map[string]*nodeInfo)
 	resolveHop := func(hop string) string {
 		if cached, ok := hopCache[hop]; ok {
@@ -7583,7 +7816,7 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 			}
 			return hop
 		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
 		hopCache[hop] = r
 		if r != nil {
 			return r.Name
@@ -7655,6 +7888,9 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 	defer s.mu.RUnlock()
 
 	_, pm := s.getCachedNodesAndPM()
+	// Aggregate hop-disambiguation context across all packets — bulk
+	// aggregator over s.spIndex / per-tx fallback both need it. See #1197.
+	contextPubkeys := buildAggregateHopContextPubkeys(s.packets, pm)
 	hopCache := make(map[string]*nodeInfo)
 	resolveHop := func(hop string) string {
 		if cached, ok := hopCache[hop]; ok {
@@ -7663,7 +7899,7 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 			}
 			return hop
 		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
 		hopCache[hop] = r
 		if r != nil {
 			return r.Name
@@ -7797,10 +8033,21 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 
 	_, pm := s.getCachedNodesAndPM()
 
+	// Build the subpath key the same way the index does (lowercase, comma-joined)
+	spKey := strings.ToLower(strings.Join(rawHops, ","))
+
+	// Direct lookup instead of scanning all packets
+	matchedTxs := s.spTxIndex[spKey]
+
+	// Hop-disambiguation context: union over the matched txs that produced
+	// this subpath. This is the right scope — those are the packets that
+	// witnessed the requested hop sequence. See #1197.
+	contextPubkeys := buildAggregateHopContextPubkeys(matchedTxs, pm)
+
 	// Resolve the requested hops
 	nodes := make([]map[string]interface{}, len(rawHops))
 	for i, hop := range rawHops {
-		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
 		entry := map[string]interface{}{"hop": hop, "name": hop, "lat": nil, "lon": nil, "pubkey": nil}
 		if r != nil {
 			entry["name"] = r.Name
@@ -7812,12 +8059,6 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 		}
 		nodes[i] = entry
 	}
-
-	// Build the subpath key the same way the index does (lowercase, comma-joined)
-	spKey := strings.ToLower(strings.Join(rawHops, ","))
-
-	// Direct lookup instead of scanning all packets
-	matchedTxs := s.spTxIndex[spKey]
 
 	hourBuckets := make([]int, 24)
 	var snrSum, rssiSum float64
@@ -7856,11 +8097,13 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 			observers[tx.ObserverName]++
 		}
 
-		// Full parent path (resolved)
+		// Full parent path (resolved). Per-tx context so the resolver picks
+		// the right candidate when prefixes are ambiguous. See #1197.
+		txCtx := buildHopContextPubkeys(tx, pm)
 		hops := txGetParsedPath(tx)
 		resolved := make([]string, len(hops))
 		for i, h := range hops {
-			r, _, _ := pm.resolveWithContext(h, nil, s.graph)
+			r, _, _ := pm.resolveWithContext(h, txCtx, s.graph)
 			if r != nil {
 				resolved[i] = r.Name
 			} else {
