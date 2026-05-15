@@ -114,6 +114,25 @@ func TestBuildAggregateHopContextPubkeysSmoke(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 deduped pubkeys, got %d (%v)", len(got), got)
 	}
+	// Content assertion — proves dedup actually keeps the right pubkeys
+	// (not just any 2). Without this the test would pass even if dedup
+	// returned, e.g., one pubkey twice or two unrelated pubkeys. See
+	// #1199 r1 review (adv #1).
+	wantSet := map[string]bool{"1111111111": true, "2222222222": true}
+	gotSet := map[string]bool{}
+	for _, pk := range got {
+		gotSet[pk] = true
+	}
+	for pk := range wantSet {
+		if !gotSet[pk] {
+			t.Fatalf("expected pubkey %q in deduped result, got %v", pk, got)
+		}
+	}
+	for pk := range gotSet {
+		if !wantSet[pk] {
+			t.Fatalf("unexpected pubkey %q in deduped result, got %v", pk, got)
+		}
+	}
 	if buildAggregateHopContextPubkeys(nil, pm) != nil {
 		t.Fatalf("nil tx slice must yield nil")
 	}
