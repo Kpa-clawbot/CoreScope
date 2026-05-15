@@ -4798,14 +4798,19 @@ type nodeInfo struct {
 }
 
 func (s *PacketStore) getAllNodes() []nodeInfo {
-	// Try with last_seen first; fall back to without if column doesn't exist.
-	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen FROM nodes")
+	// Try with last_seen + advert_count first; fall back if columns missing.
+	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, COALESCE(advert_count, 0) FROM nodes")
 	hasLastSeen := true
+	hasAdvertCount := true
 	if err != nil {
-		rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes")
-		hasLastSeen = false
+		rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen FROM nodes")
+		hasAdvertCount = false
 		if err != nil {
-			return nil
+			rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes")
+			hasLastSeen = false
+			if err != nil {
+				return nil
+			}
 		}
 	}
 	defer rows.Close()
@@ -4815,7 +4820,10 @@ func (s *PacketStore) getAllNodes() []nodeInfo {
 		var name, role sql.NullString
 		var lat, lon sql.NullFloat64
 		var lastSeen sql.NullString
-		if hasLastSeen {
+		var advertCount sql.NullInt64
+		if hasAdvertCount {
+			rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &advertCount)
+		} else if hasLastSeen {
 			rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen)
 		} else {
 			rows.Scan(&pk, &name, &role, &lat, &lon)
@@ -4832,6 +4840,9 @@ func (s *PacketStore) getAllNodes() []nodeInfo {
 			} else if t, err := time.Parse("2006-01-02 15:04:05", lastSeen.String); err == nil {
 				n.LastSeen = t
 			}
+		}
+		if hasAdvertCount && advertCount.Valid {
+			n.ObservationCount = int(advertCount.Int64)
 		}
 		nodes = append(nodes, n)
 	}
@@ -5047,15 +5058,31 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 		}
 	}
 
-	// Priority 3: GPS preference
+	// Priority 3: GPS preference. Among GPS-having candidates, prefer the one
+	// with the highest observation count (recent/active evidence) rather than
+	// slice/DB-insertion order. See #1197.
+	bestGPSIdx := -1
 	for i := range candidates {
-		if candidates[i].HasGPS {
-			return &candidates[i], "gps_preference", 0
+		if !candidates[i].HasGPS {
+			continue
+		}
+		if bestGPSIdx < 0 || candidates[i].ObservationCount > candidates[bestGPSIdx].ObservationCount {
+			bestGPSIdx = i
 		}
 	}
+	if bestGPSIdx >= 0 {
+		return &candidates[bestGPSIdx], "gps_preference", 0
+	}
 
-	// Priority 4: First match fallback
-	return &candidates[0], "first_match", 0
+	// Priority 4: Fallback — pick the candidate with the highest observation
+	// count (no GPS available on any candidate). Avoids slice-order arbitrariness.
+	bestIdx := 0
+	for i := range candidates {
+		if candidates[i].ObservationCount > candidates[bestIdx].ObservationCount {
+			bestIdx = i
+		}
+	}
+	return &candidates[bestIdx], "first_match", 0
 }
 
 // geoDistApprox returns an approximate distance between two lat/lon points
