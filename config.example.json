@@ -224,8 +224,8 @@
     "maxMemoryMB": 1024,
     "estimatedPacketBytes": 450,
     "retentionHours": 168,
-    "hotStartupHours": 24,
-    "_comment": "In-memory packet store. maxMemoryMB caps RAM usage. retentionHours: only packets younger than this are kept in memory (0 = unlimited). hotStartupHours: hours loaded synchronously at startup; background loader fills the remaining retentionHours window. Recommended for large DBs to reduce startup time; set to 0 to disable (loads full retentionHours at startup, legacy behavior).",
+    "hotStartupHours": 0,
+    "_comment": "In-memory packet store. maxMemoryMB caps RAM usage. retentionHours: only packets younger than this are kept in memory (0 = unlimited). hotStartupHours: hours loaded synchronously at startup; background loader fills the remaining retentionHours window. 0 = disabled (loads full retentionHours synchronously, legacy behavior). Set to a positive value (e.g. 24) to reduce startup time on large DBs.",
     "_comment_gomemlimit": "On startup the server reads GOMEMLIMIT from the environment if set; otherwise it derives a Go runtime soft memory limit of maxMemoryMB * 1.5 and applies it via debug.SetMemoryLimit. This forces aggressive GC under cgroup pressure so the process self-throttles before the kernel SIGKILLs it. To override, set GOMEMLIMIT explicitly (e.g. GOMEMLIMIT=850MiB). See issue #836."
   },
   "resolvedPath": {

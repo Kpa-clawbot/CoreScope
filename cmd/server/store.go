@@ -1005,6 +1005,10 @@ func (s *PacketStore) loadBackgroundChunks() {
 			s.backgroundLoadProgress.Store(pct)
 		}
 
+		// Yield between chunks so ingest goroutines can acquire s.mu.Lock()
+		// without being starved. The chosen tradeoff is brief lock-holds per
+		// chunk rather than a configurable sleep; background fill is
+		// best-effort and queries fall back to SQL while it runs.
 		runtime.Gosched()
 	}
 
