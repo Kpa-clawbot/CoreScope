@@ -74,6 +74,7 @@ func TestGraphPruneOlderThan(t *testing.T) {
 
 func TestPruneNeighborEdgesDB(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Cleanup(closeRWCache) // close cached WAL connections before TempDir removal (LIFO order)
 	dbPath := filepath.Join(tmpDir, "test.db")
 	db, err := sql.Open("sqlite", "file:"+dbPath+"?_journal_mode=WAL")
 	if err != nil {

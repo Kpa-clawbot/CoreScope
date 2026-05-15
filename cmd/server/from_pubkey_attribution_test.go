@@ -262,6 +262,7 @@ func TestFromPubkeyIndexUsedForInClause(t *testing.T) {
 
 func TestBackfillFromPubkey_AdvertRowsPopulated(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(closeRWCache) // close cached WAL connections before TempDir removal (LIFO order)
 	dbPath := dir + "/test.db"
 
 	// Create a legacy-style DB: transmissions table WITHOUT from_pubkey,
@@ -340,6 +341,7 @@ func TestBackfillFromPubkey_AdvertRowsPopulated(t *testing.T) {
 // the resets (cycle-3 m1c).
 func TestBackfillFromPubkey_DoesNotBlockBoot(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(closeRWCache) // close cached WAL connections before TempDir removal (LIFO order)
 	dbPath := dir + "/async_boot.db"
 
 	rw, err := sql.Open("sqlite", dbPath)

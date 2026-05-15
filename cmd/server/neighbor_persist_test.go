@@ -153,6 +153,7 @@ func TestUnmarshalResolvedPath_Invalid(t *testing.T) {
 
 func TestEnsureNeighborEdgesTable(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(closeRWCache) // close cached WAL connections before TempDir removal (LIFO order)
 	dbPath := filepath.Join(dir, "test.db")
 
 	// Create initial DB
@@ -259,6 +260,7 @@ func TestResolvedPathOmittedWhenNil(t *testing.T) {
 
 func TestEnsureResolvedPathColumn(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(closeRWCache) // close cached WAL connections before TempDir removal (LIFO order)
 	dbPath := filepath.Join(dir, "test.db")
 
 	conn, _ := sql.Open("sqlite", "file:"+dbPath+"?_journal_mode=WAL")
@@ -542,6 +544,7 @@ func TestOpenRW_BusyTimeout(t *testing.T) {
 func TestEnsureLastPacketAtColumn(t *testing.T) {
 	// Create a temp DB with observers table missing last_packet_at
 	dir := t.TempDir()
+	t.Cleanup(closeRWCache) // close cached WAL connections before TempDir removal (LIFO order)
 	dbPath := dir + "/test.db"
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {

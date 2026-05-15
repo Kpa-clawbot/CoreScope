@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -753,8 +755,13 @@ func TestDecodeAdvertSensorNoName(t *testing.T) {
 // --- db.go: OpenStore error path (invalid dir) ---
 
 func TestOpenStoreInvalidPath(t *testing.T) {
-	// Path under /dev/null can't create directory
-	_, err := OpenStore("/dev/null/impossible/path/db.sqlite")
+	// Create a regular file then try to open a DB inside it — impossible on all platforms.
+	f, err := os.CreateTemp(t.TempDir(), "not-a-dir")
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	f.Close()
+	_, err = OpenStore(filepath.Join(f.Name(), "db.sqlite"))
 	if err == nil {
 		t.Error("should error on impossible path")
 	}
