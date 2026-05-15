@@ -173,6 +173,9 @@ type PacketStore struct {
 	nodeCache     []nodeInfo
 	nodePM        *prefixMap
 	nodeCacheTime time.Time
+	// Per-store dedupe set for one-shot schema-degradation warnings. Field
+	// (not package-level) so each test gets a fresh state — see #1199 item 5.
+	schemaDegradationLogged sync.Map
 	// Precomputed subpath index: raw comma-joined hops → occurrence count.
 	// Built during Load(), incrementally updated on ingest. Avoids full
 	// packet iteration at query time (O(unique_subpaths) vs O(total_packets)).
@@ -4908,13 +4911,12 @@ type nodeInfo struct {
 	ObservationCount int // count of advertisements/observations; used for tier-3 tiebreak in resolveWithContext
 }
 
-// schemaDegradationLogged tracks one-shot schema degradation warnings so we
-// don't spam the log on every getAllNodes() call. See #1197 (adversarial r1
-// #10).
-var schemaDegradationLogged sync.Map
+// schemaDegradationLogged is now a PacketStore field (see type definition) so
+// each store/test instance has a fresh dedupe set. Issue #1199 item 5: the
+// prior package-level sync.Map silently suppressed re-emission across tests.
 
 func (s *PacketStore) logSchemaDegradationOnce(msg string) {
-	if _, loaded := schemaDegradationLogged.LoadOrStore(msg, true); !loaded {
+	if _, loaded := s.schemaDegradationLogged.LoadOrStore(msg, true); !loaded {
 		log.Printf("[store] schema-degradation: %s", msg)
 	}
 }
