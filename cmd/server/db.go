@@ -16,10 +16,10 @@ import (
 
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
-	conn             *sql.DB
-	path             string // filesystem path to the database file
-	isV3             bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
-	hasResolvedPath  bool   // observations table has resolved_path column
+	conn                *sql.DB
+	path                string // filesystem path to the database file
+	isV3                bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
+	hasResolvedPath     bool   // observations table has resolved_path column
 	hasObsRawHex        bool   // observations table has raw_hex column (#881)
 	hasMultibyteSupCols bool   // nodes table has multibyte_sup/multibyte_evidence columns (#903)
 
@@ -86,6 +86,7 @@ func (db *DB) detectSchema() {
 
 	nodeRows, err := db.conn.Query("PRAGMA table_info(nodes)")
 	if err != nil {
+		log.Printf("[schema] PRAGMA table_info(nodes) failed: %v", err)
 		return
 	}
 	defer nodeRows.Close()
@@ -162,7 +163,7 @@ func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 
 // Node represents a row from the nodes table.
 type Node struct {
-	PublicKey     string   `json:"public_key"`
+	PublicKey    string   `json:"public_key"`
 	Name         *string  `json:"name"`
 	Role         *string  `json:"role"`
 	Lat          *float64 `json:"lat"`
@@ -398,19 +399,19 @@ func (db *DB) GetAllRoleCounts() map[string]int {
 
 // PacketQuery holds filter params for packet listing.
 type PacketQuery struct {
-	Limit    int
-	Offset   int
-	Type     *int
-	Route    *int
-	Observer string
-	Hash     string
-	Since    string
-	Until    string
-	Region   string
-	Node     string
-	Channel  string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
-	Order               string // ASC or DESC
-	ExpandObservations  bool   // when true, include observation sub-maps in txToMap output
+	Limit              int
+	Offset             int
+	Type               *int
+	Route              *int
+	Observer           string
+	Hash               string
+	Since              string
+	Until              string
+	Region             string
+	Node               string
+	Channel            string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
+	Order              string // ASC or DESC
+	ExpandObservations bool   // when true, include observation sub-maps in txToMap output
 }
 
 // PacketResult wraps paginated packet list.
@@ -686,7 +687,6 @@ func (db *DB) resolveNodePubkey(nodeIDOrName string) string {
 	return pk
 }
 
-
 // GetTransmissionByID fetches from transmissions table with observer data.
 func (db *DB) GetTransmissionByID(id int) (map[string]interface{}, error) {
 	selectCols, observerJoin := db.transmissionBaseSQL()
@@ -732,7 +732,6 @@ func (db *DB) GetObservationsForHash(hash string) []map[string]interface{} {
 	obsByTx := db.getObservationsForTransmissions([]int{txID})
 	return obsByTx[txID]
 }
-
 
 // GetNodes returns filtered, paginated node list.
 func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortBy, region string) ([]map[string]interface{}, int, map[string]int, error) {
@@ -929,7 +928,6 @@ func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
 	}
 	return nil, nil
 }
-
 
 // GetRecentTransmissionsForNode returns recent transmissions originated by a
 // node, identified by exact pubkey match on the indexed from_pubkey column
@@ -1182,7 +1180,6 @@ func (db *DB) GetDistinctIATAs() ([]string, error) {
 	}
 	return codes, nil
 }
-
 
 // GetNetworkStatus returns overall network health status.
 func (db *DB) GetNetworkStatus(healthThresholds HealthThresholds) (map[string]interface{}, error) {
@@ -1663,8 +1660,6 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	return messages, msgTotal, nil
 }
 
-
-
 // GetNewTransmissionsSince returns new transmissions after a given ID for WebSocket polling.
 func (db *DB) GetNewTransmissionsSince(lastID int, limit int) ([]map[string]interface{}, error) {
 	if limit <= 0 {
@@ -1922,13 +1917,15 @@ func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 		"last_heard":             nullStr(lastSeen),
 		"hash_size":              nil,
 		"hash_size_inconsistent": false,
-		"foreign":                foreign.Valid && foreign.Int64 != 0,
-		"multibyte_sup":          int(multibyteSup.Int64),
+		"foreign": foreign.Valid && foreign.Int64 != 0,
 	}
-	if multibyteEvidence.Valid {
-		m["multibyte_evidence"] = multibyteEvidence.String
-	} else {
-		m["multibyte_evidence"] = nil
+	if db.hasMultibyteSupCols {
+		m["multibyte_sup"] = int(multibyteSup.Int64)
+		if multibyteEvidence.Valid {
+			m["multibyte_evidence"] = multibyteEvidence.String
+		} else {
+			m["multibyte_evidence"] = nil
+		}
 	}
 	if batteryMv.Valid {
 		m["battery_mv"] = int(batteryMv.Int64)

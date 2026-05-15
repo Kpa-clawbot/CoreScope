@@ -1100,12 +1100,13 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.store != nil {
 		hashInfo := s.store.GetNodeHashSizeInfo()
-		mbCap := s.store.GetMultibyteCapMap()
 		relayWindow := s.cfg.GetHealthThresholds().RelayActiveHours
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
-				enrichNodeWithMultibyte(node, mbCap[pk])
+				if e, ok := s.store.GetMultibyteCapFor(pk); ok {
+					enrichNodeWithMultibyte(node, e)
+				}
 				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
 					info := s.store.GetRepeaterRelayInfo(pk, relayWindow)
 					if info.LastRelayed != "" {
@@ -1220,7 +1221,9 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		hashInfo := s.store.GetNodeHashSizeInfo()
 		EnrichNodeWithHashSize(node, hashInfo[pubkey])
-		enrichNodeWithMultibyte(node, s.store.GetMultibyteCapMap()[pubkey])
+		if e, ok := s.store.GetMultibyteCapFor(pubkey); ok {
+			enrichNodeWithMultibyte(node, e)
+		}
 		if role, _ := node["role"].(string); role == "repeater" || role == "room" {
 			ht := s.cfg.GetHealthThresholds()
 			info := s.store.GetRepeaterRelayInfo(pubkey, ht.RelayActiveHours)
@@ -2379,21 +2382,6 @@ func (s *Server) handleAudioLabBuckets(w http.ResponseWriter, r *http.Request) {
 
 // --- Helpers ---
 
-// enrichNodeWithMultibyte sets multibyte_sup and multibyte_evidence on a node map
-// from the in-memory analytics cache (avoids the need for DB writes from a ro connection).
-func enrichNodeWithMultibyte(node map[string]interface{}, e MultiByteCapEntry) {
-	sup := 0
-	switch e.Status {
-	case "confirmed":
-		sup = 2
-	case "suspected":
-		sup = 1
-	}
-	if sup > 0 {
-		node["multibyte_sup"] = sup
-		node["multibyte_evidence"] = e.Evidence
-	}
-}
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")

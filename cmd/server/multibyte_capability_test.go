@@ -171,10 +171,11 @@ func TestMultiByteCapability_Unknown(t *testing.T) {
 	}
 }
 
-// TestMultiByteCapability_PrefixCollision tests that when two repeaters
-// share the same 2-byte prefix, one confirmed via advert, the other gets
-// suspected (not confirmed) from path data alone.
-func TestMultiByteCapability_PrefixCollision(t *testing.T) {
+// TestMultiByteCapability_SuspectedFromPath tests that a repeater whose
+// 2-byte prefix appears as a hop in a hs=2 packet is classified as "suspected"
+// when it has no confirming advert, while another node confirmed via advert
+// remains "confirmed" even though the two share no prefix overlap.
+func TestMultiByteCapability_SuspectedFromPath(t *testing.T) {
 	db := setupCapabilityTestDB(t)
 	defer db.conn.Close()
 
@@ -386,35 +387,28 @@ func TestMultiByteCapability_RoleColumnPopulated(t *testing.T) {
 	}
 }
 
-func TestGetMultibyteCapMap_Confirmed(t *testing.T) {
-	db := setupCapabilityTestDB(t)
-	defer db.conn.Close()
+// TestGetMultibyteCapMap_PopulatedByAnalyticsCycle verifies that calling
+// GetAnalyticsHashSizes populates mbCapSnapshot and that GetMultibyteCapMap
+// then returns the expected entries — exercising the full analytics → publish path.
+func TestGetMultibyteCapMap_PopulatedByAnalyticsCycle(t *testing.T) {
+	db := setupRichTestDB(t)
+	defer db.Close()
 
 	store := NewPacketStore(db, nil)
-	store.cacheMu.Lock()
-	store.mbCapSnapshot = []MultiByteCapEntry{
-		{PublicKey: "aabbccdd11223344", Status: "confirmed", Evidence: "advert"},
-		{PublicKey: "1122334455667788", Status: "suspected", Evidence: "path"},
-	}
-	store.cacheMu.Unlock()
+	store.Load()
+
+	// GetAnalyticsHashSizes triggers computeMultiByteCapability and publishes mbCapSnapshot.
+	store.GetAnalyticsHashSizes("")
 
 	m := store.GetMultibyteCapMap()
-	if e, ok := m["aabbccdd11223344"]; !ok || e.Status != "confirmed" || e.Evidence != "advert" {
-		t.Errorf("confirmed entry: got %+v, want confirmed/advert", e)
+	// Rich test DB has a repeater (aabbccdd11223344) with hash_size=2 adverts,
+	// so it must appear as "confirmed" after the analytics cycle.
+	e, ok := m["aabbccdd11223344"]
+	if !ok {
+		t.Fatal("expected aabbccdd11223344 in snapshot after analytics cycle")
 	}
-	if e, ok := m["1122334455667788"]; !ok || e.Status != "suspected" || e.Evidence != "path" {
-		t.Errorf("suspected entry: got %+v, want suspected/path", e)
-	}
-}
-
-func TestGetMultibyteCapMap_EmptyWhenNoSnapshot(t *testing.T) {
-	db := setupCapabilityTestDB(t)
-	defer db.conn.Close()
-
-	store := NewPacketStore(db, nil)
-	m := store.GetMultibyteCapMap()
-	if len(m) != 0 {
-		t.Errorf("expected empty map before any analytics cycle, got %d entries", len(m))
+	if e.Status != "confirmed" {
+		t.Errorf("status = %q, want confirmed", e.Status)
 	}
 }
 
@@ -438,6 +432,9 @@ func TestEnrichNodeWithMultibyte_Suspected(t *testing.T) {
 }
 
 func TestEnrichNodeWithMultibyte_ZeroEntryNoChange(t *testing.T) {
+	// Contract: a zero-status entry (Status=="") must be a no-op so that confirmed
+	// values written by the DB layer are not clobbered when the in-memory snapshot
+	// is missing the pubkey (e.g. immediately after cold start before the first cycle).
 	node := map[string]interface{}{"public_key": "aabb", "multibyte_sup": 0}
 	enrichNodeWithMultibyte(node, MultiByteCapEntry{}) // zero-value = unknown, no pubkey
 	if node["multibyte_sup"] != 0 {
@@ -450,8 +447,8 @@ func TestEnrichNodeWithMultibyte_ZeroEntryNoChange(t *testing.T) {
 
 // TestMultiByteCapability_HopLengthMismatch tests that a 1-byte hop stored
 // in a hs=2 packet (pre-#886 ingestor data) does NOT trigger suspected.
-// The 1-byte prefix of a node must not match a malformed single-byte entry
-// from a path that was incorrectly split into individual bytes.
+// The guard at store.go (len(pfx)/2 != hs) rejects hops whose byte length
+// disagrees with the path_byte hash_size — without it this test would produce "suspected".
 func TestMultiByteCapability_HopLengthMismatch(t *testing.T) {
 	db := setupCapabilityTestDB(t)
 	defer db.conn.Close()
