@@ -3,8 +3,8 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,8 +45,12 @@ func createTestDBMultiDay(t *testing.T, numDays, txPerDay int) string {
 		for i := 0; i < txPerDay; i++ {
 			ts := base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339)
 			hash := fmt.Sprintf("hash%06d", id)
-			conn.Exec("INSERT INTO transmissions VALUES (?,?,?,?,0,4,1,?)", id, "aa", hash, ts, `{}`)
-			conn.Exec("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,?,?)", id, id, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `[]`, ts, "")
+			if _, err := conn.Exec("INSERT INTO transmissions VALUES (?,?,?,?,0,4,1,?)", id, "aa", hash, ts, `{}`); err != nil {
+				t.Fatalf("createTestDBMultiDay insert tx: %v", err)
+			}
+			if _, err := conn.Exec("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,?,?)", id, id, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `[]`, ts, ""); err != nil {
+				t.Fatalf("createTestDBMultiDay insert obs: %v", err)
+			}
 			id++
 		}
 	}
@@ -68,7 +72,6 @@ func waitForBackgroundLoad(t *testing.T, store *PacketStore, timeout time.Durati
 
 func TestHotStartupConfig_Clamp(t *testing.T) {
 	dbPath := createTestDB(t, 10)
-	defer os.RemoveAll(filepath.Dir(dbPath))
 
 	db, err := OpenDB(dbPath)
 	if err != nil {
@@ -88,7 +91,6 @@ func TestHotStartupConfig_Clamp(t *testing.T) {
 
 func TestHotStartupConfig_ZeroIsDisabled(t *testing.T) {
 	dbPath := createTestDB(t, 10)
-	defer os.RemoveAll(filepath.Dir(dbPath))
 
 	db, err := OpenDB(dbPath)
 	if err != nil {
@@ -108,7 +110,6 @@ func TestHotStartupConfig_ZeroIsDisabled(t *testing.T) {
 func TestHotStartup_LoadsOnlyHotWindow(t *testing.T) {
 	// 50 old packets (48h ago), 10 recent (30min ago)
 	dbPath := createTestDBWithAgedPackets(t, 10, 50)
-	defer os.RemoveAll(filepath.Dir(dbPath))
 
 	db, err := OpenDB(dbPath)
 	if err != nil {
@@ -146,7 +147,6 @@ func TestHotStartup_LoadsOnlyHotWindow(t *testing.T) {
 func TestHotStartup_DisabledWhenZero(t *testing.T) {
 	// 50 old (48h ago), 10 recent (30min ago) — all within 72h retention
 	dbPath := createTestDBWithAgedPackets(t, 10, 50)
-	defer os.RemoveAll(filepath.Dir(dbPath))
 
 	db, err := OpenDB(dbPath)
 	if err != nil {
@@ -171,7 +171,6 @@ func TestHotStartup_DisabledWhenZero(t *testing.T) {
 func TestHotStartup_loadChunk_AddsOlderData(t *testing.T) {
 	// 50 old packets (48h ago), 10 recent (30min ago)
 	dbPath := createTestDBWithAgedPackets(t, 10, 50)
-	defer os.RemoveAll(filepath.Dir(dbPath))
 
 	db, err := OpenDB(dbPath)
 	if err != nil {
@@ -212,12 +211,15 @@ func TestHotStartup_loadChunk_AddsOlderData(t *testing.T) {
 	if len(store.byHash) != 60 {
 		t.Errorf("expected byHash len=60, got %d", len(store.byHash))
 	}
+	// byObserver must reflect all 60 observations for obs1
+	if len(store.byObserver["obs1"]) != 60 {
+		t.Errorf("expected byObserver[obs1] len=60, got %d", len(store.byObserver["obs1"]))
+	}
 }
 
 func TestHotStartup_BackgroundFillsToRetention(t *testing.T) {
 	// 3 days × 50 tx/day = 150 total
 	dbPath := createTestDBMultiDay(t, 3, 50)
-	defer os.RemoveAll(filepath.Dir(dbPath))
 
 	db, err := OpenDB(dbPath)
 	if err != nil {
@@ -248,8 +250,8 @@ func TestHotStartup_BackgroundFillsToRetention(t *testing.T) {
 	total := len(store.packets)
 	store.mu.RUnlock()
 
-	if total < 140 || total > 160 {
-		t.Errorf("expected ~150 packets after background load, got %d", total)
+	if total != 150 {
+		t.Errorf("expected 150 packets after background load, got %d", total)
 	}
 	if !store.backgroundLoadDone.Load() {
 		t.Error("backgroundLoadDone must be true after loadBackgroundChunks returns")
@@ -258,7 +260,6 @@ func TestHotStartup_BackgroundFillsToRetention(t *testing.T) {
 
 func TestHotStartup_ChunkErrorRecovery(t *testing.T) {
 	dbPath := createTestDBWithAgedPackets(t, 10, 50)
-	defer os.RemoveAll(filepath.Dir(dbPath))
 
 	db, err := OpenDB(dbPath)
 	if err != nil {
@@ -273,7 +274,7 @@ func TestHotStartup_ChunkErrorRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Close the DB so all subsequent chunk queries fail.
+	// intentional: closed early to simulate chunk-load failures; no defer
 	db.conn.Close()
 
 	done := make(chan struct{})
@@ -297,7 +298,6 @@ func TestHotStartup_ChunkErrorRecovery(t *testing.T) {
 func TestHotStartup_SQLFallback_TriggeredForOldDate(t *testing.T) {
 	// 50 old packets (48h ago), 10 recent (30min ago)
 	dbPath := createTestDBWithAgedPackets(t, 10, 50)
-	defer os.RemoveAll(filepath.Dir(dbPath))
 
 	db, err := OpenDB(dbPath)
 	if err != nil {
@@ -321,15 +321,14 @@ func TestHotStartup_SQLFallback_TriggeredForOldDate(t *testing.T) {
 	since49h := time.Now().UTC().Add(-49 * time.Hour).Format(time.RFC3339)
 	result := store.QueryPackets(PacketQuery{Since: since49h, Limit: 100, Order: "ASC"})
 
-	// SQL fallback should return the old packets (stored at ~48h ago)
-	if result.Total == 0 {
-		t.Error("expected SQL fallback to return old packets for query before oldestLoaded")
+	// SQL fallback returns all packets newer than Since: 50 old (48h ago) + 10 recent (30min ago) = 60
+	if result.Total != 60 {
+		t.Errorf("expected SQL fallback to return 60 packets for Since=49h ago, got %d", result.Total)
 	}
 }
 
 func TestHotStartup_PerfStats(t *testing.T) {
 	dbPath := createTestDBWithAgedPackets(t, 10, 50)
-	defer os.RemoveAll(filepath.Dir(dbPath))
 
 	db, err := OpenDB(dbPath)
 	if err != nil {
@@ -361,7 +360,6 @@ func TestHotStartup_PerfStats(t *testing.T) {
 func TestHotStartup_SQLFallback_NotTriggeredForRecentDate(t *testing.T) {
 	// 50 old packets (48h ago), 10 recent (30min ago)
 	dbPath := createTestDBWithAgedPackets(t, 10, 50)
-	defer os.RemoveAll(filepath.Dir(dbPath))
 
 	db, err := OpenDB(dbPath)
 	if err != nil {
@@ -385,5 +383,87 @@ func TestHotStartup_SQLFallback_NotTriggeredForRecentDate(t *testing.T) {
 	// In-memory path: returns only the 10 recent packets (all within last 30min)
 	if result.Total != 10 {
 		t.Errorf("expected 10 in-memory packets for recent Since query, got %d", result.Total)
+	}
+}
+
+func TestHotStartup_SQLFallback_Until(t *testing.T) {
+	// 50 old packets (48h ago), 10 recent (30min ago)
+	dbPath := createTestDBWithAgedPackets(t, 10, 50)
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	// Hot load: only last 1h → 10 recent in memory, oldestLoaded ~1h ago
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  72,
+		HotStartupHours: 1,
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.packets) != 10 {
+		t.Fatalf("setup: expected 10 in-memory packets, got %d", len(store.packets))
+	}
+
+	// Until = 2h ago (before oldestLoaded ~1h ago) → SQL fallback
+	until2h := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
+	result := store.QueryPackets(PacketQuery{Until: until2h, Limit: 100, Order: "ASC"})
+
+	// SQL fallback returns the 50 old packets (stored at ~48h ago, all before Until)
+	if result.Total != 50 {
+		t.Errorf("expected SQL fallback to return 50 old packets for Until before oldestLoaded, got %d", result.Total)
+	}
+}
+
+func TestHotStartup_ConcurrentQueryDuringBackgroundLoad(t *testing.T) {
+	// 3 days × 50 tx/day = 150 total
+	dbPath := createTestDBMultiDay(t, 3, 50)
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	// Hot load: only last 24h → ~50 packets in memory
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  72,
+		HotStartupHours: 24,
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	preLen := len(store.packets)
+
+	// Start background fill
+	go store.loadBackgroundChunks()
+
+	// Fire 50 concurrent queries while background fill runs
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result := store.QueryPackets(PacketQuery{Limit: 10, Order: "DESC"})
+			if result.Total < 0 {
+				t.Errorf("QueryPackets returned negative Total: %d", result.Total)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Wait for background fill to complete
+	waitForBackgroundLoad(t, store, 15*time.Second)
+
+	store.mu.RLock()
+	postLen := len(store.packets)
+	store.mu.RUnlock()
+
+	if postLen < preLen {
+		t.Errorf("expected packet count after background load (%d) >= pre-background (%d)", postLen, preLen)
 	}
 }
