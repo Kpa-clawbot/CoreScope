@@ -133,78 +133,103 @@
             </div>
 
             <div class="help-content" style="overflow:hidden;transition:max-height 0.3s ease;max-height:0px">
-              <div class="text-muted" style="font-size:12px;margin-bottom:12px">
-                Connect your node to the DutchMeshcore.nl MQTT broker to share raw packets.
+              <div class="text-muted" style="font-size:12px;margin-bottom:16px">
+                Connect your node to the DutchMeshcore.nl MQTT ingestors to share raw packets with Cornmeister.nl.
               </div>
 
-              <strong style="font-size:12px">Broker 1</strong>
-              <table class="help-table" style="margin-top:6px;margin-bottom:12px">
-                <tr><td>Server:</td><td><code>collector1.dutchmeshcore.nl</code></td></tr>
-                <tr><td>Port (TLS):</td><td><code>443</code></td></tr>
-                <tr><td>Transport:</td><td><code>TCP</code></td></tr>
-              </table>
+              <!-- Step 1: IATA -->
+              <div style="margin-bottom:12px;padding:10px 12px;background:var(--surface-0);border:1px solid var(--border);border-radius:6px">
+                <strong style="font-size:12px">📍 Step 1 — Your region (IATA code)</strong>
+                <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:8px">
+                  Cornmeister.nl groups observers by the IATA airport code nearest to them.
+                  If your observer shows as <strong>Offline</strong> or doesn't appear in the list, you most likely haven't set this yet.
+                  Pick your region below — the commands update automatically.
+                </div>
+                <select id="obsIataSelect" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;cursor:pointer">
+                  <option value="AMS">AMS – Schiphol Airport</option>
+                  <option value="DHR">DHR – Den Helder Airport</option>
+                  <option value="EIN">EIN – Eindhoven Airport</option>
+                  <option value="ENS">ENS – Enschede Airport</option>
+                  <option value="GLZ">GLZ – Gilze-Rijen Airbase</option>
+                  <option value="GRQ">GRQ – Eelde Airport</option>
+                  <option value="LEY">LEY – Lelystad Airport</option>
+                  <option value="LID">LID – Valkenburg Airbase (Closed)</option>
+                  <option value="LWR">LWR – Leeuwarden Airbase</option>
+                  <option value="MST">MST – Maastricht Airport</option>
+                  <option value="QAR">QAR – Deelen Airbase</option>
+                  <option value="RTM">RTM – Rotterdam Airport</option>
+                  <option value="UDE">UDE – Volkel Airbase</option>
+                  <option value="UTC">UTC – Soesterberg Airbase (Closed)</option>
+                  <option value="WOE">WOE – Woensdrecht Airbase</option>
+                </select>
+              </div>
 
-              <strong style="font-size:12px">Broker 2</strong>
-              <table class="help-table" style="margin-top:6px;margin-bottom:12px">
-                <tr><td>Server:</td><td><code>collector2.dutchmeshcore.nl</code></td></tr>
-                <tr><td>Port (TLS):</td><td><code>443</code></td></tr>
-                <tr><td>Transport:</td><td><code>TCP</code></td></tr>
-              </table>
+              <!-- Step 2: Email -->
+              <div style="margin-bottom:16px;padding:10px 12px;background:var(--surface-0);border:1px solid var(--border);border-radius:6px">
+                <strong style="font-size:12px">✉️ Step 2 — Owner email address (optional)</strong>
+                <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:8px">
+                  Used for ownership verification or observer notifications.
+                </div>
+                <input id="obsEmailInput" type="email" placeholder="name@example.nl" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;box-sizing:border-box" />
+              </div>
 
-              <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
-
+              <!-- Step 3: Commands -->
               <div style="margin-bottom:16px">
-                <strong>Dutch Meshcore MQTT Bridge Firmware Commands</strong>
-                <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:12px">
-                  When using the fw builds provided by DutchMeshcore.nl - Paste into your device console:
+                <strong style="font-size:12px">⌨️ Step 3 — Paste into your device console</strong>
+                <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:8px">
+                  Requires the <a href="https://dutchmeshcore.nl/firmware" target="_blank" rel="noopener" style="color:var(--accent)">DutchMeshcore.nl MQTT Bridge firmware</a> (Heltec, LilyGO, T-Beam, RAK and more).
                 </div>
-
-                <div style="margin-bottom:12px;padding:10px 12px;background:var(--surface-0);border:1px solid var(--border);border-radius:6px">
-                  <strong style="font-size:12px">📍 Your region (IATA code)</strong>
-                  <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:8px">
-                    Cornmeister.nl groups observers by the IATA airport code nearest to them.
-                    If your observer shows as <strong>Offline</strong> or doesn't appear in the list, you most likely haven't set this yet.
-                    Pick your region below — the commands update automatically.
+                <div style="background:var(--surface-1,#1a1a2e);border:1px solid var(--border);border-radius:6px;overflow:hidden">
+                  <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-bottom:1px solid var(--border);background:var(--surface-0)">
+                    <span style="font-size:11px;color:var(--text-muted)">MeshCore console</span>
+                    <button data-action="copy-commands" style="font-size:11px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);cursor:pointer">📋 Copy</button>
                   </div>
-                  <select id="obsIataSelect" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;cursor:pointer">
-                    <option value="AMS">AMS – Schiphol Airport</option>
-					<option value="DHR">DHR – Den Helder Airport</option>
-					<option value="EIN">EIN – Eindhoven Airport</option>
-					<option value="ENS">ENS – Enschede Airport</option>
-					<option value="GLZ">GLZ – Gilze-Rijen Airbase</option>
-					<option value="GRQ">GRQ – Eelde Airport</option>
-					<option value="LEY">LEY – Lelystad Airport</option>
-					<option value="LID">LID – Valkenburg Airbase (Closed)</option>
-					<option value="LWR">LWR – Leeuwarden Airbase</option>
-					<option value="MST">MST – Maastricht Airport</option>
-					<option value="QAR">QAR – Deelen Airbase</option>
-					<option value="RTM">RTM – Rotterdam Airport</option>
-					<option value="UDE">UDE – Volkel Airbase</option>
-					<option value="UTC">UTC – Soesterberg Airbase (Closed)</option>
-					<option value="WOE">WOE – Woensdrecht Airbase</option>
-                  </select>
-                </div>
-
-                <div style="margin-bottom:12px;padding:10px 12px;background:var(--surface-0);border:1px solid var(--border);border-radius:6px">
-                  <strong style="font-size:12px">✉️ Owner email address</strong>
-                  <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:8px">
-                    Optional. Used for ownership verification or observer notifications.
-                  </div>
-                  <input id="obsEmailInput" type="email" placeholder="name@example.nl" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;box-sizing:border-box" />
-                </div>
-
-                <div style="margin-bottom:12px">
-                  <pre class="help-code"><code>set mqtt.iata <span class="obs-iata-val">AMS</span>
+                  <pre class="help-code" style="margin:0;padding:10px 12px;border-radius:0"><code id="obsCommandBlock">set mqtt.iata <span class="obs-iata-val">AMS</span>
 <span class="obs-email-line" style="display:none">set mqtt.email <span class="obs-email-val"></span>
 </span>set mqtt1.preset dutchmeshcore-1
 set mqtt2.preset dutchmeshcore-2
 reboot</code></pre>
                 </div>
+                <div style="margin-top:8px;padding:8px 10px;background:color-mix(in srgb,var(--accent) 10%,transparent);border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);border-radius:6px;font-size:12px">
+                  <strong>⚡ Both ingestors required for high availability.</strong>
+                  <span class="text-muted"> If one goes down your observer stays connected via the other.
+                  <code>mqtt1.preset</code> → Ingestor 1 &nbsp;·&nbsp; <code>mqtt2.preset</code> → Ingestor 2.</span>
+                </div>
               </div>
 
               <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
 
-              
+              <!-- Manual config reference -->
+              <div style="margin-bottom:12px">
+                <strong style="font-size:12px">🔧 Manual configuration (reference)</strong>
+                <div class="text-muted" style="font-size:12px;margin-top:4px;margin-bottom:10px">
+                  For custom firmware builds, generic MQTT clients, or anyone integrating directly without using the preset commands above.
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                  <div>
+                    <strong style="font-size:12px">Ingestor 1</strong>
+                    <table class="help-table" style="margin-top:6px">
+                      <tr><td>Server:</td><td><code>collector1.dutchmeshcore.nl</code></td></tr>
+                      <tr><td>Port:</td><td><code>443</code></td></tr>
+                      <tr><td>Transport:</td><td><code>WebSockets (TLS)</code></td></tr>
+                    </table>
+                  </div>
+                  <div>
+                    <strong style="font-size:12px">Ingestor 2</strong>
+                    <table class="help-table" style="margin-top:6px">
+                      <tr><td>Server:</td><td><code>collector2.dutchmeshcore.nl</code></td></tr>
+                      <tr><td>Port:</td><td><code>443</code></td></tr>
+                      <tr><td>Transport:</td><td><code>WebSockets (TLS)</code></td></tr>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
+
+              <div style="font-size:12px;color:var(--text-muted)">
+                Missing the info for your specific device? Take a look at the DutchMeshcore.nl <a href="https://toolbox.dutchmeshcore.nl" target="_blank" rel="noopener" style="color:var(--accent)">toolbox</a>.
+              </div>
             </div>
           </div>
         </div>
@@ -282,8 +307,22 @@ reboot</code></pre>
         var content = btn.closest('.help-box').querySelector('.help-content');
         var toggle = btn.querySelector('.help-toggle');
         var isCollapsed = toggle.textContent === '▶';
-        content.style.maxHeight = isCollapsed ? '2000px' : '0px';
+        content.style.maxHeight = isCollapsed ? '4000px' : '0px';
         toggle.textContent = isCollapsed ? '▼' : '▶';
+      }
+      if (btn && btn.dataset.action === 'copy-commands') {
+        var block = document.getElementById('obsCommandBlock');
+        if (block) {
+          var text = block.innerText || block.textContent;
+          navigator.clipboard.writeText(text.trim()).then(function () {
+            btn.textContent = '✅ Copied';
+            setTimeout(function () { btn.textContent = '📋 Copy'; }, 2000);
+          }).catch(function () {
+            btn.textContent = '❌ Failed';
+            setTimeout(function () { btn.textContent = '📋 Copy'; }, 2000);
+          });
+        }
+        return;
       }
       var row = e.target.closest('tr[data-action="navigate"]');
       if (row) {
