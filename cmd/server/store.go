@@ -1698,19 +1698,13 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				repeaterSet[n.PublicKey] = true
 			}
 		}
+		// Per-tx hop resolver: cache reused across txs, context rebound per
+		// tx via setContext (#1197 perf fix).
+		resolveHop, setContext := s.hopResolverPerTx(pm)
 		for _, tx := range broadcastTxs {
 			// Per-tx context (sender + observer + unambiguous-prefix anchors)
 			// so resolveWithContext tiers 1 and 2 light up. See #1197.
-			contextPubkeys := buildHopContextPubkeys(tx, pm)
-			hopCache := make(map[string]*nodeInfo)
-			resolveHop := func(hop string) *nodeInfo {
-				if cached, ok := hopCache[hop]; ok {
-					return cached
-				}
-				r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
-				hopCache[hop] = r
-				return r
-			}
+			setContext(buildHopContextPubkeys(tx, pm))
 			txHops, txPath := computeDistancesForTx(tx, nodeByPk, repeaterSet, resolveHop)
 			if len(txHops) > 0 {
 				s.distHops = append(s.distHops, txHops...)
@@ -2938,19 +2932,12 @@ func (s *PacketStore) updateDistanceIndexForTxs(txs []*StoreTx) {
 			repeaterSet[nd.PublicKey] = true
 		}
 	}
+	// Per-tx hop resolver shared across the recompute loop (#1197 perf).
+	resolveHop, setContext := s.hopResolverPerTx(pm)
 	// Recompute distance records for each changed tx.
 	for _, tx := range txs {
 		// Per-tx context for hop disambiguation (#1197).
-		contextPubkeys := buildHopContextPubkeys(tx, pm)
-		hopCache := make(map[string]*nodeInfo)
-		resolveHop := func(hop string) *nodeInfo {
-			if cached, ok := hopCache[hop]; ok {
-				return cached
-			}
-			r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
-			hopCache[hop] = r
-			return r
-		}
+		setContext(buildHopContextPubkeys(tx, pm))
 		txHops, txPath := computeDistancesForTx(tx, nodeByPk, repeaterSet, resolveHop)
 		if len(txHops) > 0 {
 			s.distHops = append(s.distHops, txHops...)
@@ -2978,18 +2965,11 @@ func (s *PacketStore) buildDistanceIndex() {
 	hops := make([]distHopRecord, 0, len(s.packets))
 	paths := make([]distPathRecord, 0, len(s.packets)/2)
 
+	// Per-tx hop resolver shared across the per-tx loop (#1197 perf).
+	resolveHop, setContext := s.hopResolverPerTx(pm)
 	for _, tx := range s.packets {
 		// Per-tx context for hop disambiguation (#1197).
-		contextPubkeys := buildHopContextPubkeys(tx, pm)
-		hopCache := make(map[string]*nodeInfo)
-		resolveHop := func(hop string) *nodeInfo {
-			if cached, ok := hopCache[hop]; ok {
-				return cached
-			}
-			r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
-			hopCache[hop] = r
-			return r
-		}
+		setContext(buildHopContextPubkeys(tx, pm))
 		txHops, txPath := computeDistancesForTx(tx, nodeByPk, repeaterSet, resolveHop)
 		if len(txHops) > 0 {
 			hops = append(hops, txHops...)
@@ -3459,7 +3439,7 @@ func buildHopContextPubkeys(tx *StoreTx, pm *prefixMap) []string {
 	if tx == nil || pm == nil {
 		return nil
 	}
-	seen := make(map[string]struct{}, 4)
+	seen := make(map[string]struct{}, 16)
 	var out []string
 	add := func(pk string) {
 		if pk == "" {
@@ -3473,13 +3453,13 @@ func buildHopContextPubkeys(tx *StoreTx, pm *prefixMap) []string {
 		out = append(out, l)
 	}
 
-	// Sender / originator pubkey from decoded payload.
-	if tx.DecodedJSON != "" {
-		var dec map[string]interface{}
-		if json.Unmarshal([]byte(tx.DecodedJSON), &dec) == nil {
-			if pk, ok := dec["pubKey"].(string); ok {
-				add(pk)
-			}
+	// Sender / originator pubkey from decoded payload. Use the cached
+	// ParsedDecoded() (sync.Once-gated) instead of re-unmarshaling — the
+	// helper is hot (3 distance sites + analytics topology, all 30k+ tx
+	// loops). See #1197 (carmack/adversarial r1).
+	if dec := tx.ParsedDecoded(); dec != nil {
+		if pk, ok := dec["pubKey"].(string); ok {
+			add(pk)
 		}
 	}
 
@@ -3550,6 +3530,29 @@ func buildAggregateHopContextPubkeys(txs []*StoreTx, pm *prefixMap) []string {
 		}
 	}
 	return out
+}
+
+// hopResolverPerTx returns (resolveHop, setContext). The cache is allocated
+// once and cleared between txs; setContext rebinds the per-tx context. Used
+// by all per-tx distance/topology loops to avoid 4× duplicate closure
+// definitions and per-tx map allocation. See #1197 (adversarial r1 #7,
+// carmack r1 #3).
+func (s *PacketStore) hopResolverPerTx(pm *prefixMap) (resolveHop func(string) *nodeInfo, setContext func([]string)) {
+	hopCache := make(map[string]*nodeInfo, 16)
+	var contextPubkeys []string
+	resolveHop = func(hop string) *nodeInfo {
+		if cached, ok := hopCache[hop]; ok {
+			return cached
+		}
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		hopCache[hop] = r
+		return r
+	}
+	setContext = func(ctx []string) {
+		contextPubkeys = ctx
+		clear(hopCache)
+	}
+	return resolveHop, setContext
 }
 
 func computeDistancesForTx(tx *StoreTx, nodeByPk map[string]*nodeInfo, repeaterSet map[string]bool, resolveHop func(string) *nodeInfo) ([]distHopRecord, *distPathRecord) {
@@ -4905,15 +4908,31 @@ type nodeInfo struct {
 	ObservationCount int // count of advertisements/observations; used for tier-3 tiebreak in resolveWithContext
 }
 
+// schemaDegradationLogged tracks one-shot schema degradation warnings so we
+// don't spam the log on every getAllNodes() call. See #1197 (adversarial r1
+// #10).
+var schemaDegradationLogged sync.Map
+
+func (s *PacketStore) logSchemaDegradationOnce(msg string) {
+	if _, loaded := schemaDegradationLogged.LoadOrStore(msg, true); !loaded {
+		log.Printf("[store] schema-degradation: %s", msg)
+	}
+}
+
 func (s *PacketStore) getAllNodes() []nodeInfo {
-	// Try with last_seen + advert_count first; fall back if columns missing.
+	// Schema probe: try richest → leanest. Logs a one-shot warning when we
+	// fall back to a thinner schema so operators see that a column is
+	// missing and the new tiebreak features are degraded. See #1197
+	// (adversarial r1 #10).
 	rows, err := s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, COALESCE(advert_count, 0) FROM nodes")
 	hasLastSeen := true
 	hasAdvertCount := true
 	if err != nil {
+		s.logSchemaDegradationOnce("nodes.advert_count missing — tier-3/4 ObservationCount tiebreak degraded; resolveWithContext will fall back to lex-pubkey order")
 		rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen FROM nodes")
 		hasAdvertCount = false
 		if err != nil {
+			s.logSchemaDegradationOnce("nodes.last_seen missing — node freshness signal unavailable")
 			rows, err = s.db.conn.Query("SELECT public_key, name, role, lat, lon FROM nodes")
 			hasLastSeen = false
 			if err != nil {
@@ -5049,12 +5068,27 @@ func (pm *prefixMap) resolve(hop string) *nodeInfo {
 
 // resolveWithContext resolves a hop prefix using the neighbor affinity graph
 // for disambiguation when multiple candidates match. It applies a 4-tier
-// priority: (1) affinity graph score, (2) geographic proximity to context
-// nodes, (3) GPS preference, (4) first match fallback.
+// priority:
+//
+//	(1) "neighbor_affinity"           — graph score vs context nodes,
+//	                                    requires affinity ≥3× runner-up and
+//	                                    affinityMinObservations
+//	(2) "geo_proximity"               — geographic proximity to GPS context
+//	                                    centroid (only fires when at least
+//	                                    one context node has GPS)
+//	(3) "gps_preference"              — among GPS-having candidates, pick
+//	                                    highest ObservationCount; lex-pubkey
+//	                                    tiebreak for determinism
+//	(4) "observation_count_fallback"  — no GPS available; pick highest
+//	                                    ObservationCount; lex-pubkey tiebreak
+//
+// (Pre-PR #1197/#1198 the tier-3 step was first-GPS-wins and tier-4 was
+// first-slice-element. Both now use observation count + lex tiebreak; the
+// returned method label was renamed accordingly.)
 //
 // contextPubkeys are pubkeys of nodes that provide context for disambiguation
 // (e.g., the originator, observer, or adjacent hops in the path).
-// graph may be nil, in which case it falls back to the existing resolve().
+// graph may be nil, in which case tier-1 is skipped.
 func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, graph *NeighborGraph) (*nodeInfo, string, float64) {
 	h := strings.ToLower(hop)
 	candidates := pm.m[h]
@@ -5175,14 +5209,7 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 		if !candidates[i].HasGPS {
 			continue
 		}
-		if bestGPSIdx < 0 {
-			bestGPSIdx = i
-			continue
-		}
-		ci := candidates[i]
-		cb := candidates[bestGPSIdx]
-		if ci.ObservationCount > cb.ObservationCount ||
-			(ci.ObservationCount == cb.ObservationCount && ci.PublicKey < cb.PublicKey) {
+		if bestGPSIdx < 0 || betterByObsCount(&candidates[i], &candidates[bestGPSIdx]) {
 			bestGPSIdx = i
 		}
 	}
@@ -5191,18 +5218,30 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 	}
 
 	// Priority 4: Fallback — pick the candidate with the highest observation
-	// count (no GPS available on any candidate). Avoids slice-order arbitrariness.
-	// Ties on count are broken by lexicographically smallest PublicKey.
+	// count (no GPS available on any candidate). Avoids slice-order
+	// arbitrariness. Ties on count are broken by lexicographically smallest
+	// PublicKey. Method label "observation_count_fallback" — the previous
+	// "first_match" was misleading after the tier-4 algorithm changed in
+	// PR #1198 (adversarial r1 #2).
 	bestIdx := 0
 	for i := 1; i < len(candidates); i++ {
-		ci := candidates[i]
-		cb := candidates[bestIdx]
-		if ci.ObservationCount > cb.ObservationCount ||
-			(ci.ObservationCount == cb.ObservationCount && ci.PublicKey < cb.PublicKey) {
+		if betterByObsCount(&candidates[i], &candidates[bestIdx]) {
 			bestIdx = i
 		}
 	}
-	return &candidates[bestIdx], "first_match", 0
+	return &candidates[bestIdx], "observation_count_fallback", 0
+}
+
+// betterByObsCount reports whether candidate a should beat b under the
+// tier-3/4 selection rule: higher ObservationCount wins; ties go to the
+// lexicographically smaller PublicKey for determinism. Pointer receivers
+// avoid value-copying nodeInfo (string + 2 floats + time.Time + int) on
+// the hot resolve path. See #1197 (adversarial r1 #6, carmack r1 #4).
+func betterByObsCount(a, b *nodeInfo) bool {
+	if a.ObservationCount != b.ObservationCount {
+		return a.ObservationCount > b.ObservationCount
+	}
+	return a.PublicKey < b.PublicKey
 }
 
 // geoDistApprox returns an approximate distance between two lat/lon points
