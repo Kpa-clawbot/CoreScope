@@ -176,7 +176,7 @@ func main() {
 		log.Fatalf("[store] failed to load: %v", err)
 	}
 	if store.hotStartupHours > 0 {
-		log.Printf("[store] starting background load: filling retentionHours=%.0fh from hotStartupHours=%.0fh",
+		log.Printf("[store] starting background load: filling retentionHours=%gh from hotStartupHours=%gh",
 			store.retentionHours, store.hotStartupHours)
 		go store.loadBackgroundChunks()
 	}

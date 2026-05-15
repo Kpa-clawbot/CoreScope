@@ -425,7 +425,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		if cfg.HotStartupHours > 0 {
 			h := cfg.HotStartupHours
 			if ps.retentionHours > 0 && h > ps.retentionHours {
-				log.Printf("[store] warning: hotStartupHours (%.0f) > retentionHours (%.0f) — clamping", h, ps.retentionHours)
+				log.Printf("[store] warning: hotStartupHours (%g) > retentionHours (%g) — clamping", h, ps.retentionHours)
 				h = ps.retentionHours
 			}
 			ps.hotStartupHours = h
@@ -495,7 +495,7 @@ func (s *PacketStore) Load() error {
 		hotCutoffHours = s.hotStartupHours
 	}
 	if hotCutoffHours > 0 {
-		cutoff := time.Now().UTC().Add(-time.Duration(hotCutoffHours*3600) * time.Second).Format(time.RFC3339)
+		cutoff := time.Now().UTC().Add(-time.Duration(hotCutoffHours * float64(time.Hour))).Format(time.RFC3339)
 		loadConditions = append(loadConditions, fmt.Sprintf("t.first_seen >= '%s'", cutoff))
 	}
 	if maxPackets > 0 {
@@ -687,7 +687,7 @@ func (s *PacketStore) Load() error {
 	// authoritative lower bound, not the first packet's timestamp (which may be
 	// newer if no packets landed exactly at the boundary).
 	if s.hotStartupHours > 0 {
-		hotCutoffStr := time.Now().UTC().Add(-time.Duration(s.hotStartupHours*3600) * time.Second).Format(time.RFC3339)
+		hotCutoffStr := time.Now().UTC().Add(-time.Duration(s.hotStartupHours * float64(time.Hour))).Format(time.RFC3339)
 		s.oldestLoaded = hotCutoffStr
 	} else if len(s.packets) > 0 {
 		s.oldestLoaded = s.packets[0].FirstSeen
@@ -712,8 +712,9 @@ func (s *PacketStore) Load() error {
 // The chunk is assumed to be older than the data already in the store, so
 // localPackets are prepended to s.packets.
 //
-// byPathHop, spIndex, and distHops are NOT updated here — the caller
-// (loadBackgroundChunks) rebuilds those once after all chunks are merged.
+// byPayloadType is updated here incrementally. byPathHop, spIndex, and
+// distHops are NOT updated here — the caller (loadBackgroundChunks) rebuilds
+// those once after all chunks are merged.
 func (s *PacketStore) loadChunk(from, to time.Time) error {
 	fromStr := from.UTC().Format(time.RFC3339)
 	toStr := to.UTC().Format(time.RFC3339)
@@ -728,7 +729,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		obsRawHexCol = ", o.raw_hex"
 	}
 
-	filterClause := fmt.Sprintf("\n\t\t\tWHERE t.first_seen >= '%s' AND t.first_seen < '%s'", fromStr, toStr)
+	const filterClause = "\n\t\t\tWHERE t.first_seen >= ? AND t.first_seen < ?"
 
 	var chunkSQL string
 	if s.db.isV3 {
@@ -750,7 +751,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			ORDER BY t.first_seen ASC, o.timestamp DESC`
 	}
 
-	rows, err := s.db.conn.Query(chunkSQL)
+	rows, err := s.db.conn.Query(chunkSQL, fromStr, toStr)
 	if err != nil {
 		return err
 	}
@@ -883,6 +884,15 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	// Prepend: chunk is older than the hot window already in store.
 	s.packets = append(localPackets, s.packets...)
 
+	// Collect newly inserted obs IDs before merging byObsID, so Loop B
+	// can detect "new" entries without being defeated by Loop A's writes.
+	newObsIDs := make(map[int]bool, len(localByObsID))
+	for k := range localByObsID {
+		if s.byObsID[k] == nil {
+			newObsIDs[k] = true
+		}
+	}
+
 	// Merge indexes.
 	for k, v := range localByHash {
 		if s.byHash[k] == nil {
@@ -895,13 +905,13 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		}
 	}
 	for k, v := range localByObsID {
-		if s.byObsID[k] == nil {
+		if newObsIDs[k] {
 			s.byObsID[k] = v
 		}
 	}
 	for observerID, obsList := range localByObserver {
 		for _, o := range obsList {
-			if s.byObsID[o.ID] == nil {
+			if newObsIDs[o.ID] {
 				s.byObserver[observerID] = append(s.byObserver[observerID], o)
 			}
 		}
@@ -926,7 +936,6 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	if localMaxObsID > s.maxObsID {
 		s.maxObsID = localMaxObsID
 	}
-	s.oldestLoaded = fromStr
 
 	log.Printf("[store] background chunk [%s, %s) merged: %d tx, %d obs", fromStr, toStr, len(localPackets), localTotalObs)
 	return nil
@@ -942,7 +951,7 @@ func (s *PacketStore) loadBackgroundChunks() {
 		return
 	}
 
-	target := time.Now().UTC().Add(-time.Duration(s.retentionHours*3600) * time.Second)
+	target := time.Now().UTC().Add(-time.Duration(s.retentionHours * float64(time.Hour)))
 	totalHours := s.retentionHours - s.hotStartupHours
 	if totalHours <= 0 {
 		s.backgroundLoadDone.Store(true)
@@ -3480,7 +3489,7 @@ func (s *PacketStore) evictionCandidateTxIDs() []int {
 	}
 	cutoffIdx := 0
 	if s.retentionHours > 0 {
-		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours*3600) * time.Second).Format(time.RFC3339)
+		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours * float64(time.Hour))).Format(time.RFC3339)
 		for cutoffIdx < len(s.packets) && s.packets[cutoffIdx].FirstSeen < cutoff {
 			cutoffIdx++
 		}
@@ -3544,7 +3553,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 
 	// Time-based eviction: find how many packets from the head are too old
 	if s.retentionHours > 0 {
-		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours*3600) * time.Second).Format(time.RFC3339)
+		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours * float64(time.Hour))).Format(time.RFC3339)
 		for cutoffIdx < len(s.packets) && s.packets[cutoffIdx].FirstSeen < cutoff {
 			cutoffIdx++
 		}
