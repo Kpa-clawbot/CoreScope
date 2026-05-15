@@ -9,6 +9,8 @@
   var DEAD_ZONE = 5;      // px — disambiguate click vs drag
   var SNAP_THRESHOLD = 20; // px — snap to edge on release
   var SNAP_MARGIN = 12;    // px — margin when snapped
+  var TOP_CHROME = 64;    // px — live-header height; keep panel header reachable
+  var BOT_CHROME = 58;    // px — vcr-bar height; keep panel header reachable
 
   function DragManager() {
     this.state = 'IDLE';
@@ -136,13 +138,13 @@
     var vh = window.innerHeight;
 
     var x = Math.max(0, Math.min(rect.left, vw - 40));
-    var y = Math.max(0, Math.min(rect.top, vh - 40));
+    var y = Math.max(TOP_CHROME, Math.min(rect.top, vh - BOT_CHROME - 40));
 
-    // Snap to edge
+    // Snap to edge (top/bottom respect UI chrome so the panel header stays reachable)
     if (x < SNAP_THRESHOLD) x = SNAP_MARGIN;
-    if (y < SNAP_THRESHOLD) y = SNAP_MARGIN;
+    if (y < TOP_CHROME + SNAP_THRESHOLD) y = TOP_CHROME + SNAP_MARGIN;
     if (x + rect.width > vw - SNAP_THRESHOLD) x = vw - rect.width - SNAP_MARGIN;
-    if (y + rect.height > vh - SNAP_THRESHOLD) y = vh - rect.height - SNAP_MARGIN;
+    if (y + rect.height > vh - BOT_CHROME - SNAP_THRESHOLD) y = vh - BOT_CHROME - rect.height - SNAP_MARGIN;
 
     panel.style.top = y + 'px';
     panel.style.left = x + 'px';
@@ -200,9 +202,9 @@
       var vh = window.innerHeight;
       var x = rect.left, y = rect.top, moved = false;
       if (rect.right > vw) { x = vw - rect.width - SNAP_MARGIN; moved = true; }
-      if (rect.bottom > vh) { y = vh - rect.height - SNAP_MARGIN; moved = true; }
+      if (rect.bottom > vh - BOT_CHROME) { y = vh - BOT_CHROME - rect.height - SNAP_MARGIN; moved = true; }
       if (x < 0) { x = SNAP_MARGIN; moved = true; }
-      if (y < 0) { y = SNAP_MARGIN; moved = true; }
+      if (y < TOP_CHROME) { y = TOP_CHROME + SNAP_MARGIN; moved = true; }
       if (moved) {
         panel.style.left = x + 'px';
         panel.style.top = y + 'px';

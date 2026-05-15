@@ -1934,9 +1934,13 @@
             <span class="${statusDot}" style="font-size:18px" aria-hidden="true">●</span>
             <h3 style="margin:0;font-size:16px;font-weight:700;">${escapeHtml(n.name || 'Unknown')}</h3>
           </div>
-          <div style="margin-bottom:12px;">
+          <div style="margin-bottom:8px;">
             <span style="display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600;background:${roleColor};color:#fff;">${roleLabel.toUpperCase()}</span>
             <span style="color:var(--text-muted);font-size:12px;margin-left:8px;">${statusLabel}</span>
+          </div>
+          <div style="margin-bottom:12px;display:flex;gap:12px;">
+            <a href="#/nodes/${encodeURIComponent(n.public_key)}" style="font-size:12px;color:var(--accent);">Full Detail →</a>
+            <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" style="font-size:12px;color:var(--accent);">📊 Analytics</a>
           </div>
           <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">
             <code style="font-size:10px;word-break:break-all;">${escapeHtml(n.public_key)}</code>
@@ -1970,10 +1974,7 @@
 
       html += `<div id="liveNodePaths" style="margin-top:8px;"><div style="font-size:11px;color:var(--text-muted);padding:4px 0;"><span class="spinner" style="font-size:10px"></span> Loading paths…</div></div>`;
 
-      html += `<div style="margin-top:12px;display:flex;gap:8px;">
-        <a href="#/nodes/${encodeURIComponent(n.public_key)}" style="font-size:12px;color:var(--accent);">Full Detail →</a>
-        <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" style="font-size:12px;color:var(--accent);">📊 Analytics</a>
-      </div></div>`;
+      html += `</div>`;
 
       content.innerHTML = html;
 
