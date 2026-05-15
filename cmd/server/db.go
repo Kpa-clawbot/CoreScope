@@ -14,6 +14,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// routeTypeTransport covers FLOOD (0) and DIRECT (3) route types — packets
+// that carry transport-level scoping via Code1.
+const routeTypeTransportSQL = "route_type IN (0, 3)"
+
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
 	conn             *sql.DB
@@ -2471,7 +2475,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 			COALESCE(SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END), 0) AS unscoped,
 			COALESCE(SUM(CASE WHEN scope_name = '' THEN 1 ELSE 0 END), 0) AS unknown_scope
 		FROM transmissions
-		WHERE route_type IN (0, 3) AND first_seen >= ?
+		WHERE ` + routeTypeTransportSQL + ` AND first_seen >= ?
 	`, since)
 	if err := row.Scan(
 		&resp.Summary.TransportTotal,
@@ -2486,7 +2490,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 	rows, err := db.conn.Query(`
 		SELECT scope_name, COUNT(*) AS cnt
 		FROM transmissions
-		WHERE route_type IN (0, 3) AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
+		WHERE ` + routeTypeTransportSQL + ` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
 		GROUP BY scope_name
 		ORDER BY cnt DESC
 	`, since)
@@ -2513,7 +2517,7 @@ func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
 			COUNT(scope_name) AS scoped,
 			SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END) AS unscoped
 		FROM transmissions
-		WHERE route_type IN (0, 3) AND first_seen >= ?
+		WHERE ` + routeTypeTransportSQL + ` AND first_seen >= ?
 		GROUP BY bucket
 		ORDER BY bucket
 	`, bucketExpr)
