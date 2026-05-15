@@ -3444,6 +3444,17 @@ func (s *PacketStore) StartEvictionTicker() func() {
 }
 
 // computeDistancesForTx computes distance records for a single transmission.
+// buildHopContextPubkeys collects context pubkeys for hop disambiguation:
+// the originator/sender pubkey plus any unambiguous-prefix anchors in the
+// path (single-candidate prefixes — strong context). Used by callers of
+// pm.resolveWithContext to light up tiers 1 and 2 of the resolver. See #1197.
+//
+// Returned pubkeys are de-duplicated and lowercased.
+func buildHopContextPubkeys(tx *StoreTx, pm *prefixMap) []string {
+	// TODO(#1197): real implementation lands in the green follow-up commit.
+	return nil
+}
+
 func computeDistancesForTx(tx *StoreTx, nodeByPk map[string]*nodeInfo, repeaterSet map[string]bool, resolveHop func(string) *nodeInfo) ([]distHopRecord, *distPathRecord) {
 	pathHops := txGetParsedPath(tx)
 	if len(pathHops) == 0 {

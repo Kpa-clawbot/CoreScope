@@ -228,3 +228,58 @@ func TestResolveWithContext_Tier3_PicksHigherObservationCount(t *testing.T) {
 		t.Fatalf("tier-3 tiebreak should pick higher observation count; got %s (obs=%d), want ActiveLate (obs=250)", r.Name, r.ObservationCount)
 	}
 }
+
+func TestBuildHopContextPubkeys_IncludesSenderAndUnambiguousAnchors(t *testing.T) {
+	// Sender + unambiguous anchor "bb" (single candidate) should both end up
+	// in the context list. Ambiguous prefix "ab" (multiple candidates) should
+	// NOT be added — only unambiguous prefixes count as anchors.
+	nodes := []nodeInfo{
+		{PublicKey: "ab1111111111", Role: "repeater", Name: "AmbA", Lat: 37.0, Lon: -122.0, HasGPS: true, ObservationCount: 5},
+		{PublicKey: "ab2222222222", Role: "repeater", Name: "AmbB", Lat: 38.0, Lon: -123.0, HasGPS: true, ObservationCount: 5},
+		{PublicKey: "bb3333333333", Role: "repeater", Name: "Anchor", Lat: 37.5, Lon: -122.5, HasGPS: true, ObservationCount: 10},
+	}
+	pm := buildPrefixMap(nodes)
+	senderPK := "cc4444444444"
+	pathJSON, _ := json.Marshal([]string{"ab", "bb"})
+	decoded, _ := json.Marshal(map[string]interface{}{"pubKey": senderPK})
+	tx := &StoreTx{PathJSON: string(pathJSON), DecodedJSON: string(decoded)}
+
+	got := buildHopContextPubkeys(tx, pm)
+
+	hasSender := false
+	hasAnchor := false
+	for _, pk := range got {
+		if pk == senderPK {
+			hasSender = true
+		}
+		if pk == "bb3333333333" {
+			hasAnchor = true
+		}
+	}
+	if !hasSender {
+		t.Errorf("expected sender pubkey %s in context, got %v", senderPK, got)
+	}
+	if !hasAnchor {
+		t.Errorf("expected unambiguous-prefix anchor bb3333333333 in context, got %v", got)
+	}
+}
+
+func TestResolveWithContext_Tier2_PicksGeographicallyCloserCandidate(t *testing.T) {
+	// Two GPS-having candidates for a prefix; a context pubkey near one of
+	// them. Tier 2 (geo proximity) must pick the closer one — verifies tier 2
+	// is not dead code on distance paths.
+	nodes := []nodeInfo{
+		{PublicKey: "ee1111111111", Role: "repeater", Name: "Far", Lat: 47.6, Lon: -122.3, HasGPS: true, ObservationCount: 5},
+		{PublicKey: "ee2222222222", Role: "repeater", Name: "Near", Lat: 34.05, Lon: -118.25, HasGPS: true, ObservationCount: 5},
+		// Context anchor near "Near" (Los Angeles)
+		{PublicKey: "ff9999999999", Role: "repeater", Name: "LAAnchor", Lat: 34.1, Lon: -118.3, HasGPS: true, ObservationCount: 50},
+	}
+	pm := buildPrefixMap(nodes)
+	r, method, _ := pm.resolveWithContext("ee", []string{"ff9999999999"}, nil)
+	if r == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if r.Name != "Near" {
+		t.Fatalf("tier-2 geo proximity should pick Near (LA); got %s via method=%s", r.Name, method)
+	}
+}
