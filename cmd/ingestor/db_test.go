@@ -2188,26 +2188,52 @@ func TestScopeNameMigration(t *testing.T) {
 	}
 	defer store.Close()
 
-	// Verify scope_name column exists
+	// Verify column exists
 	rows, err := store.db.Query("PRAGMA table_info(transmissions)")
 	if err != nil {
 		t.Fatalf("PRAGMA: %v", err)
 	}
-	defer rows.Close()
 	found := false
 	for rows.Next() {
 		var cid int
 		var colName, colType string
 		var notNull, pk int
 		var dflt interface{}
-		if err := rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk); err == nil {
-			if colName == "scope_name" {
-				found = true
-			}
+		if err := rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk); err == nil && colName == "scope_name" {
+			found = true
 		}
 	}
+	rows.Close()
 	if !found {
-		t.Error("scope_name column not found in transmissions")
+		t.Fatal("scope_name column not found in transmissions")
+	}
+
+	// Verify column actually stores and retrieves values (NULL and non-NULL).
+	_, err = store.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, scope_name)
+		VALUES ('aabb', 'hash1', '2026-01-01T00:00:00Z', 0, 5, '#belgium')`)
+	if err != nil {
+		t.Fatalf("insert scoped row: %v", err)
+	}
+	_, err = store.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, scope_name)
+		VALUES ('ccdd', 'hash2', '2026-01-01T00:00:01Z', 0, 5, NULL)`)
+	if err != nil {
+		t.Fatalf("insert unscoped row: %v", err)
+	}
+
+	var name string
+	if err := store.db.QueryRow(`SELECT scope_name FROM transmissions WHERE hash = 'hash1'`).Scan(&name); err != nil {
+		t.Fatalf("read scope_name: %v", err)
+	}
+	if name != "#belgium" {
+		t.Errorf("scope_name = %q, want #belgium", name)
+	}
+
+	var nullScope interface{}
+	if err := store.db.QueryRow(`SELECT scope_name FROM transmissions WHERE hash = 'hash2'`).Scan(&nullScope); err != nil {
+		t.Fatalf("read null scope_name: %v", err)
+	}
+	if nullScope != nil {
+		t.Errorf("scope_name for unscoped = %v, want nil", nullScope)
 	}
 }
 

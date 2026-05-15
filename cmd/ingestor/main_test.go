@@ -851,6 +851,19 @@ func TestMatchScope(t *testing.T) {
 	if got := matchScope(regionKeys, payloadType, payloadRaw, "BEEF"); got != "" {
 		t.Errorf("no match: matchScope = %q, want empty", got)
 	}
+
+	// Fixed known-answer vector: pre-computed for "#belgium"/payloadType=5/payloadRaw="hello".
+	// If matchScope's HMAC construction or byte encoding changes, this test fails
+	// even if both implementation and computed vectors change together.
+	const belgiumCode1 = "4A75"
+	belgiumKey := sha256.Sum256([]byte("#belgium"))
+	belgiumKeys := map[string][]byte{"#belgium": belgiumKey[:16]}
+	if got := matchScope(belgiumKeys, 5, []byte("hello"), belgiumCode1); got != "#belgium" {
+		t.Errorf("fixed-vector: matchScope = %q, want #belgium", got)
+	}
+	if got := matchScope(belgiumKeys, 5, []byte("hello"), "0000"); got != "" {
+		t.Errorf("fixed-vector unscoped: matchScope = %q, want empty", got)
+	}
 }
 
 func TestBuildPacketDataScopeMatching(t *testing.T) {
