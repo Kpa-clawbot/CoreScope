@@ -470,9 +470,15 @@ func applySchema(db *sql.DB) error {
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'scope_name_v1'")
 	if row.Scan(&migDone) != nil {
 		log.Println("[migration] Adding scope_name column to transmissions...")
-		db.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`)
-		db.Exec(`CREATE INDEX IF NOT EXISTS idx_tx_scope_name ON transmissions(scope_name) WHERE scope_name IS NOT NULL`)
-		db.Exec(`INSERT INTO _migrations (name) VALUES ('scope_name_v1')`)
+		if _, err := db.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+			log.Printf("[migration] transmissions.scope_name: %v (may already exist)", err)
+		}
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tx_scope_name ON transmissions(scope_name) WHERE scope_name IS NOT NULL`); err != nil {
+			log.Printf("[migration] idx_tx_scope_name: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO _migrations (name) VALUES ('scope_name_v1')`); err != nil {
+			return fmt.Errorf("recording scope_name_v1 migration: %w", err)
+		}
 		log.Println("[migration] scope_name column added")
 	}
 
@@ -556,21 +562,15 @@ func applySchema(db *sql.DB) error {
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'nodes_default_scope_v1'")
 	if row.Scan(&migDone) != nil {
 		log.Println("[migration] Adding default_scope column to nodes/inactive_nodes...")
-		db.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`)
-		db.Exec(`ALTER TABLE inactive_nodes ADD COLUMN default_scope TEXT DEFAULT NULL`)
-		db.Exec(`UPDATE nodes SET default_scope = (
-			SELECT t.scope_name FROM transmissions t
-			WHERE t.from_pubkey = nodes.public_key
-			  AND t.payload_type = 4
-			  AND t.scope_name IS NOT NULL AND t.scope_name != ''
-			ORDER BY t.first_seen DESC LIMIT 1
-		) WHERE EXISTS (
-			SELECT 1 FROM transmissions t
-			WHERE t.from_pubkey = nodes.public_key
-			  AND t.payload_type = 4
-			  AND t.scope_name IS NOT NULL AND t.scope_name != ''
-		)`)
-		db.Exec(`INSERT INTO _migrations (name) VALUES ('nodes_default_scope_v1')`)
+		if _, err := db.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
+			log.Printf("[migration] nodes.default_scope: %v (may already exist)", err)
+		}
+		if _, err := db.Exec(`ALTER TABLE inactive_nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
+			log.Printf("[migration] inactive_nodes.default_scope: %v (may already exist)", err)
+		}
+		if _, err := db.Exec(`INSERT INTO _migrations (name) VALUES ('nodes_default_scope_v1')`); err != nil {
+			return fmt.Errorf("recording nodes_default_scope_v1 migration: %w", err)
+		}
 		log.Println("[migration] default_scope column added to nodes/inactive_nodes")
 	}
 
@@ -1116,6 +1116,40 @@ func (s *Store) BackfillPathJSONAsync() {
 		} else {
 			log.Printf("[backfill] NOT recording migration due to errors — will retry on next restart")
 		}
+	}()
+}
+
+// BackfillDefaultScopeAsync populates default_scope for existing nodes that have
+// transport-scoped ADVERT rows (scope_name IS NOT NULL AND scope_name != '').
+// Runs in a background goroutine so it does not block MQTT startup.
+// Uses the from_pubkey index — O(nodes × indexed lookup), not a full table scan.
+func (s *Store) BackfillDefaultScopeAsync(regionKeys map[string][]byte) {
+	if len(regionKeys) == 0 {
+		return
+	}
+	s.backfillWg.Add(1)
+	go func() {
+		defer s.backfillWg.Done()
+		res, err := s.db.Exec(`
+			UPDATE nodes SET default_scope = (
+				SELECT t.scope_name FROM transmissions t
+				WHERE t.from_pubkey = nodes.public_key
+				  AND t.payload_type = 4
+				  AND t.scope_name IS NOT NULL AND t.scope_name != ''
+				ORDER BY t.first_seen DESC LIMIT 1  -- most-recently observed scope wins; first_seen is insertion time
+			) WHERE EXISTS (
+				SELECT 1 FROM transmissions t
+				WHERE t.from_pubkey = nodes.public_key
+				  AND t.payload_type = 4
+				  AND t.scope_name IS NOT NULL AND t.scope_name != ''
+			)`)
+		if err != nil {
+			log.Printf("[backfill] default_scope: %v", err)
+			return
+		}
+		n, _ := res.RowsAffected()
+		s.Stats.IncBackfill("default_scope")
+		log.Printf("[backfill] default_scope populated for %d nodes", n)
 	}()
 }
 
