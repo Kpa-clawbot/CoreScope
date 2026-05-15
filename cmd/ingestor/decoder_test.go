@@ -464,8 +464,8 @@ func TestDecodePacketPayloadRaw(t *testing.T) {
 	if decoded.TransportCodes == nil {
 		t.Fatal("expected TransportCodes, got nil")
 	}
-	if string(decoded.PayloadRaw) != string(payload) {
-		t.Errorf("PayloadRaw = %v, want %v", decoded.PayloadRaw, payload)
+	if string(decoded.payloadRaw) != string(payload) {
+		t.Errorf("payloadRaw = %v, want %v", decoded.payloadRaw, payload)
 	}
 }
 
