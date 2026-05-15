@@ -64,13 +64,13 @@ type Store struct {
 	db    *sql.DB
 	Stats DBStats
 
-	stmtGetTxByHash          *sql.Stmt
-	stmtInsertTransmission   *sql.Stmt
-	stmtUpdateTxFirstSeen    *sql.Stmt
-	stmtInsertObservation    *sql.Stmt
-	stmtUpsertNode           *sql.Stmt
-	stmtIncrementAdvertCount *sql.Stmt
-	stmtUpsertObserver       *sql.Stmt
+	stmtGetTxByHash            *sql.Stmt
+	stmtInsertTransmission     *sql.Stmt
+	stmtUpdateTxFirstSeen      *sql.Stmt
+	stmtInsertObservation      *sql.Stmt
+	stmtUpsertNode             *sql.Stmt
+	stmtIncrementAdvertCount   *sql.Stmt
+	stmtUpsertObserver         *sql.Stmt
 	stmtGetObserverRowid       *sql.Stmt
 	stmtUpdateObserverLastSeen *sql.Stmt
 	stmtUpdateNodeTelemetry    *sql.Stmt
@@ -1120,7 +1120,7 @@ func (s *Store) BackfillPathJSONAsync() {
 }
 
 // BackfillDefaultScopeAsync populates default_scope for existing nodes that have
-// transport-scoped ADVERT rows (scope_name IS NOT NULL AND scope_name != '').
+// transport-scoped ADVERT rows (scope_name IS NOT NULL AND scope_name != ”).
 // Runs in a background goroutine so it does not block MQTT startup.
 // Uses the from_pubkey index — O(nodes × indexed lookup), not a full table scan.
 func (s *Store) BackfillDefaultScopeAsync(regionKeys map[string][]byte) {
@@ -1271,7 +1271,6 @@ func (s *Store) PruneDroppedPackets(retentionDays int) (int64, error) {
 	}
 	return n, nil
 }
-
 
 // PacketData holds the data needed to insert a packet into the DB.
 type PacketData struct {

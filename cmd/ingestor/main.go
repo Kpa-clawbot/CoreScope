@@ -931,12 +931,14 @@ func loadRegionKeys(cfg *Config) map[string][]byte {
 	for _, raw := range cfg.HashRegions {
 		name := strings.TrimSpace(raw)
 		if name == "" {
+			log.Printf("[regions] skipping empty hashRegions entry")
 			continue
 		}
 		if !strings.HasPrefix(name, "#") {
 			name = "#" + name
 		}
 		if _, exists := keys[name]; exists {
+			log.Printf("[regions] duplicate region %q ignored", name)
 			continue
 		}
 		h := sha256.Sum256([]byte(name))
@@ -948,6 +950,8 @@ func loadRegionKeys(cfg *Config) map[string][]byte {
 	return keys
 }
 
+// matchScope performs one HMAC-SHA256 per configured region. Expected
+// len(regionKeys) ≤ 50; beyond that, consider a pre-indexed lookup table.
 func matchScope(regionKeys map[string][]byte, payloadType byte, payloadRaw []byte, code1 string) string {
 	if code1 == "0000" || len(regionKeys) == 0 || len(payloadRaw) == 0 {
 		return ""
