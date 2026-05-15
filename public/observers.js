@@ -228,7 +228,7 @@ reboot</code></pre>
               <hr style="margin:16px 0;border:none;border-top:1px solid var(--border)">
 
               <div style="font-size:12px;color:var(--text-muted)">
-                Missing the info for your specific device? Take a look at the DutchMeshcore.nl <a href="https://toolbox.dutchmeshcore.nl" target="_blank" rel="noopener" style="color:var(--accent)">toolbox</a>.
+                Missing the info for your specific device? Take a look at the DutchMeshcore.nl <a href="https://dutch-meshcore.github.io/Dutch-Meshcore-Toolbox/" target="_blank" rel="noopener" style="color:var(--accent)">toolbox</a>.
               </div>
             </div>
           </div>
