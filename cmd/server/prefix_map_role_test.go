@@ -210,3 +210,21 @@ func TestComputeDistancesForTx_CompanionNeverInResolvedChain(t *testing.T) {
 		t.Fatal("expected GoodRepeater (7a5678901234) in pathRec.Hops but not found")
 	}
 }
+
+func TestResolveWithContext_Tier3_PicksHigherObservationCount(t *testing.T) {
+	// Two GPS-having repeater candidates for the same prefix, no useful context.
+	// Tier 3 should pick the one with higher observation count rather than
+	// slice/insertion order.
+	nodes := []nodeInfo{
+		{PublicKey: "abcd11111111", Role: "repeater", Name: "StaleEarly", Lat: 37.0, Lon: -122.0, HasGPS: true, ObservationCount: 3},
+		{PublicKey: "abcd22222222", Role: "repeater", Name: "ActiveLate", Lat: 38.0, Lon: -123.0, HasGPS: true, ObservationCount: 250},
+	}
+	pm := buildPrefixMap(nodes)
+	r, _, _ := pm.resolveWithContext("abcd", nil, nil)
+	if r == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if r.Name != "ActiveLate" {
+		t.Fatalf("tier-3 tiebreak should pick higher observation count; got %s (obs=%d), want ActiveLate (obs=250)", r.Name, r.ObservationCount)
+	}
+}

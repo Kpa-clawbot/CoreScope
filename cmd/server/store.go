@@ -4787,13 +4787,14 @@ func (s *PacketStore) computeAnalyticsRF(region string, window TimeWindow) map[s
 // --- Topology Analytics ---
 
 type nodeInfo struct {
-	PublicKey string
-	Name      string
-	Role      string
-	Lat       float64
-	Lon       float64
-	HasGPS    bool
-	LastSeen  time.Time
+	PublicKey        string
+	Name             string
+	Role             string
+	Lat              float64
+	Lon              float64
+	HasGPS           bool
+	LastSeen         time.Time
+	ObservationCount int // count of advertisements/observations; used for tier-3 tiebreak in resolveWithContext
 }
 
 func (s *PacketStore) getAllNodes() []nodeInfo {
