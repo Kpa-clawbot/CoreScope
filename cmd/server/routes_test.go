@@ -3975,11 +3975,35 @@ func TestPacketDetailPrefersStoreOverDB(t *testing.T) {
 
 func TestHandleScopeStats(t *testing.T) {
 	srv, _ := setupTestServer(t)
-	// Add scope_name column and mark hasScopeName on the test DB
 	if _, err := srv.db.conn.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
 		t.Fatalf("add scope_name column: %v", err)
 	}
 	srv.db.hasScopeName = true
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	// 2 scoped (known region), 1 unknown-scoped (empty string), 1 unscoped (NULL)
+	rows := []struct {
+		hash  string
+		scope string
+		route int
+	}{
+		{"h1", "#belgium", 0},
+		{"h2", "#belgium", 3},
+		{"h3", "", 0},    // transport-scoped, no region match
+		{"h4_null", "", 0}, // will be inserted with NULL scope_name
+	}
+	for i, r := range rows {
+		var scopeArg interface{} = r.scope
+		if i == 3 {
+			scopeArg = nil // unscoped (NULL)
+		}
+		if _, err := srv.db.conn.Exec(
+			`INSERT INTO transmissions (raw_hex,hash,first_seen,route_type,payload_type,scope_name) VALUES (?,?,?,?,5,?)`,
+			"aa", r.hash, now, r.route, scopeArg,
+		); err != nil {
+			t.Fatalf("seed row %d: %v", i, err)
+		}
+	}
 
 	req := httptest.NewRequest("GET", "/api/scope-stats?window=24h", nil)
 	w := httptest.NewRecorder()
@@ -3995,12 +4019,23 @@ func TestHandleScopeStats(t *testing.T) {
 	if resp.Window != "24h" {
 		t.Errorf("window = %q, want 24h", resp.Window)
 	}
-	// TimeSeries and ByRegion are always non-nil slices
-	if resp.TimeSeries == nil {
-		t.Error("timeSeries is nil, want empty slice")
+	if resp.Summary.TransportTotal != 4 {
+		t.Errorf("transportTotal = %d, want 4", resp.Summary.TransportTotal)
 	}
-	if resp.ByRegion == nil {
-		t.Error("byRegion is nil, want empty slice")
+	if resp.Summary.Scoped != 3 { // 2 named + 1 unknown-scoped (empty string, non-NULL)
+		t.Errorf("scoped = %d, want 3", resp.Summary.Scoped)
+	}
+	if resp.Summary.Unscoped != 1 {
+		t.Errorf("unscoped = %d, want 1", resp.Summary.Unscoped)
+	}
+	if resp.Summary.UnknownScope != 1 {
+		t.Errorf("unknownScope = %d, want 1", resp.Summary.UnknownScope)
+	}
+	if len(resp.ByRegion) != 1 || resp.ByRegion[0].Name != "#belgium" || resp.ByRegion[0].Count != 2 {
+		t.Errorf("byRegion = %v, want [{#belgium 2}]", resp.ByRegion)
+	}
+	if resp.TimeSeries == nil {
+		t.Error("timeSeries is nil")
 	}
 }
 
