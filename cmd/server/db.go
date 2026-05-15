@@ -26,6 +26,7 @@ type DB struct {
 	hasResolvedPath  bool   // observations table has resolved_path column
 	hasObsRawHex     bool   // observations table has raw_hex column (#881)
 	hasScopeName     bool   // transmissions.scope_name column exists (#899)
+	hasDefaultScope  bool   // nodes.default_scope column exists (#899)
 
 	// Channel list cache (60s TTL) — avoids repeated GROUP BY scans (#762)
 	channelsCacheMu  sync.Mutex
@@ -105,6 +106,34 @@ func (db *DB) detectSchema() {
 			}
 		}
 	}
+
+	nodeRows, err := db.conn.Query("PRAGMA table_info(nodes)")
+	if err != nil {
+		return
+	}
+	defer nodeRows.Close()
+	for nodeRows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if nodeRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
+			if colName == "default_scope" {
+				db.hasDefaultScope = true
+			}
+		}
+	}
+}
+
+// nodeSelectCols returns the SELECT column list for nodes queries.
+// When hasDefaultScope is true, default_scope is appended as the last column.
+func (db *DB) nodeSelectCols() string {
+	cols := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert"
+	if db.hasDefaultScope {
+		cols += ", default_scope"
+	}
+	return cols
 }
 
 // transmissionBaseSQL returns the SELECT columns and JOIN clause for transmission-centric queries.
@@ -825,7 +854,7 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 	var total int
 	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM nodes %s", w), args...).Scan(&total)
 
-	querySQL := fmt.Sprintf("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
+	querySQL := fmt.Sprintf("SELECT %s FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", db.nodeSelectCols(), w, order)
 	qArgs := append(args, limit, offset)
 
 	rows, err := db.conn.Query(querySQL, qArgs...)
@@ -836,7 +865,7 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 
 	nodes := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		n := scanNodeRow(rows)
+		n := db.scanNodeRow(rows)
 		if n != nil {
 			nodes = append(nodes, n)
 		}
@@ -851,8 +880,7 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := db.conn.Query(`SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert
-		FROM nodes WHERE name LIKE ? OR public_key LIKE ? ORDER BY last_seen DESC LIMIT ?`,
+	rows, err := db.conn.Query(fmt.Sprintf("SELECT %s FROM nodes WHERE name LIKE ? OR public_key LIKE ? ORDER BY last_seen DESC LIMIT ?", db.nodeSelectCols()),
 		"%"+query+"%", query+"%", limit)
 	if err != nil {
 		return nil, err
@@ -861,7 +889,7 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 
 	nodes := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		n := scanNodeRow(rows)
+		n := db.scanNodeRow(rows)
 		if n != nil {
 			nodes = append(nodes, n)
 		}
@@ -890,8 +918,7 @@ func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, erro
 		}
 	}
 	rows, err := db.conn.Query(
-		`SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert
-		   FROM nodes WHERE public_key LIKE ? LIMIT 2`,
+		fmt.Sprintf("SELECT %s FROM nodes WHERE public_key LIKE ? LIMIT 2", db.nodeSelectCols()),
 		prefix+"%",
 	)
 	if err != nil {
@@ -901,7 +928,7 @@ func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, erro
 	var first map[string]interface{}
 	count := 0
 	for rows.Next() {
-		n := scanNodeRow(rows)
+		n := db.scanNodeRow(rows)
 		if n == nil {
 			continue
 		}
@@ -920,13 +947,13 @@ func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, erro
 
 // GetNodeByPubkey returns a single node.
 func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
-	rows, err := db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert FROM nodes WHERE public_key = ?", pubkey)
+	rows, err := db.conn.Query(fmt.Sprintf("SELECT %s FROM nodes WHERE public_key = ?", db.nodeSelectCols()), pubkey)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	if rows.Next() {
-		return scanNodeRow(rows), nil
+		return db.scanNodeRow(rows), nil
 	}
 	return nil, nil
 }
@@ -1893,7 +1920,9 @@ func scanPacketRow(rows *sql.Rows) map[string]interface{} {
 	}
 }
 
-func scanNodeRow(rows *sql.Rows) map[string]interface{} {
+// scanNodeRow scans a node row. When hasDefaultScope is true the SELECT must
+// include default_scope as the last column.
+func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	var pk string
 	var name, role, lastSeen, firstSeen sql.NullString
 	var lat, lon sql.NullFloat64
@@ -1901,8 +1930,13 @@ func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	var batteryMv sql.NullInt64
 	var temperatureC sql.NullFloat64
 	var foreign sql.NullInt64
+	var defaultScope sql.NullString
 
-	if err := rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign); err != nil {
+	scanArgs := []interface{}{&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign}
+	if db.hasDefaultScope {
+		scanArgs = append(scanArgs, &defaultScope)
+	}
+	if err := rows.Scan(scanArgs...); err != nil {
 		return nil
 	}
 	m := map[string]interface{}{
@@ -1928,6 +1962,9 @@ func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 		m["temperature_c"] = temperatureC.Float64
 	} else {
 		m["temperature_c"] = nil
+	}
+	if db.hasDefaultScope {
+		m["default_scope"] = nullStr(defaultScope)
 	}
 	return m
 }
