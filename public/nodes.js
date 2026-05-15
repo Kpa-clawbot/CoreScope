@@ -1380,10 +1380,8 @@
         </div>
         ${renderStatusExplanation(n)}
 
-        ${hasLoc ? `<div class="node-map-qr-wrap">
-          <div class="node-map-container node-detail-map" id="nodeMap" style="border-radius:8px;overflow:hidden;"></div>
-          <div class="node-map-qr-overlay node-qr" id="nodeQrCode"></div>
-        </div>` : `<div class="node-qr" id="nodeQrCode" style="margin:8px 0"></div>`}
+        ${hasLoc ? `<div class="node-map-container node-detail-map" id="nodeMap" style="border-radius:8px;overflow:hidden;margin-bottom:8px;"></div>` : ''}
+        <div class="node-qr" id="nodeQrCode" style="margin:8px 0"></div>
 
         <div class="node-detail-section">
           <div class="node-detail-key mono" style="font-size:11px;word-break:break-all;margin-bottom:4px">${n.public_key}</div>
