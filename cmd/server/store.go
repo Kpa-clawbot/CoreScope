@@ -5305,6 +5305,31 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 	allNodes, pm := s.getCachedNodesAndPM()
 	_ = allNodes // only pm is needed for topology
 
+	// Materialize the filtered tx slice ONCE — both the context-build pass
+	// and the main aggregation pass need the same window+region predicate.
+	// Two scans of s.packets re-running identical predicates is wasteful at
+	// the 30k+ packet hot-path scale (#1199 item 2). One filter, two passes
+	// over the result.
+	filteredTxs := make([]*StoreTx, 0, len(s.packets))
+	for _, tx := range s.packets {
+		if !window.Includes(tx.FirstSeen) {
+			continue
+		}
+		if regionObs != nil {
+			match := false
+			for _, obs := range tx.Observations {
+				if regionObs[obs.ObserverID] {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		filteredTxs = append(filteredTxs, tx)
+	}
+
 	// Pre-pass: build the full hop-disambiguation context from all in-window
 	// txs BEFORE any resolveHop call. The earlier shape — populating
 	// contextPubkeys lazily during the main scan and reading it from a
@@ -5316,22 +5341,7 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 	var contextPubkeys []string
 	{
 		seen := make(map[string]struct{}, 64)
-		for _, tx := range s.packets {
-			if !window.Includes(tx.FirstSeen) {
-				continue
-			}
-			if regionObs != nil {
-				match := false
-				for _, obs := range tx.Observations {
-					if regionObs[obs.ObserverID] {
-						match = true
-						break
-					}
-				}
-				if !match {
-					continue
-				}
-			}
+		for _, tx := range filteredTxs {
 			for _, pk := range buildHopContextPubkeys(tx, pm) {
 				if _, ok := seen[pk]; ok {
 					continue
@@ -5360,28 +5370,11 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 	observerMap := map[string]string{} // observer_id → observer_name
 	perObserver := map[string]map[string]*struct{ minDist, maxDist, count int }{}
 
-	for _, tx := range s.packets {
-		if !window.Includes(tx.FirstSeen) {
-			continue
-		}
+	for _, tx := range filteredTxs {
 		hops := txGetParsedPath(tx)
 		if len(hops) == 0 {
 			continue
 		}
-		if regionObs != nil {
-			match := false
-			for _, obs := range tx.Observations {
-				if regionObs[obs.ObserverID] {
-					match = true
-					break
-				}
-			}
-			if !match {
-				continue
-			}
-		}
-
-		// Hop-disambiguation context was assembled in the pre-pass above (#1197).
 
 		n := len(hops)
 		hopCounts[n]++
