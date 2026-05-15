@@ -1124,12 +1124,24 @@ func (s *Store) BackfillPathJSONAsync() {
 // Runs in a background goroutine so it does not block MQTT startup.
 // Uses the from_pubkey index — O(nodes × indexed lookup), not a full table scan.
 func (s *Store) BackfillDefaultScopeAsync(regionKeys map[string][]byte) {
+	// No region keys configured — all scope_name values will be NULL, nothing to backfill.
 	if len(regionKeys) == 0 {
 		return
 	}
 	s.backfillWg.Add(1)
 	go func() {
 		defer s.backfillWg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[backfill] default_scope async panic recovered: %v", r)
+			}
+		}()
+
+		var done int
+		if s.db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'backfill_default_scope_v1'").Scan(&done) == nil {
+			return // already ran
+		}
+
 		res, err := s.db.Exec(`
 			UPDATE nodes SET default_scope = (
 				SELECT t.scope_name FROM transmissions t
@@ -1150,6 +1162,7 @@ func (s *Store) BackfillDefaultScopeAsync(regionKeys map[string][]byte) {
 		n, _ := res.RowsAffected()
 		s.Stats.IncBackfill("default_scope")
 		log.Printf("[backfill] default_scope populated for %d nodes", n)
+		s.db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_default_scope_v1')`)
 	}()
 }
 
