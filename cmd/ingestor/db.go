@@ -1314,9 +1314,22 @@ func scopeNameForDB(data *PacketData) interface{} {
 	return data.ScopeName // "" or "#regionname"
 }
 
-// UpdateNodeDefaultScope sets the most-recently observed default scope for a node.
+// UpdateNodeDefaultScope records the most-recently observed region scope for a
+// node. Skips the UPDATE when the stored value already matches to avoid
+// redundant writes on the hot MQTT ingest path. Updates both nodes and
+// inactive_nodes to stay consistent.
 func (s *Store) UpdateNodeDefaultScope(pubkey, scope string) error {
-	_, err := s.db.Exec(`UPDATE nodes SET default_scope = ? WHERE public_key = ?`, scope, pubkey)
+	// Short-circuit: skip if already stored.
+	var cur sql.NullString
+	row := s.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = ?`, pubkey)
+	if row.Scan(&cur) == nil && cur.Valid && cur.String == scope {
+		return nil
+	}
+	if _, err := s.db.Exec(`UPDATE nodes SET default_scope = ? WHERE public_key = ?`, scope, pubkey); err != nil {
+		return err
+	}
+	// Mirror to inactive_nodes (node may be there if recently moved by retention).
+	_, err := s.db.Exec(`UPDATE inactive_nodes SET default_scope = ? WHERE public_key = ?`, scope, pubkey)
 	return err
 }
 

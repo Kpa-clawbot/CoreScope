@@ -477,7 +477,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				}
 			}
 			// Update default_scope when advert carries a matched transport scope (#899)
-			if pktData.ScopeName != "" {
+			if pktData.IsTransportScoped {
 				if err := store.UpdateNodeDefaultScope(decoded.Payload.PubKey, pktData.ScopeName); err != nil {
 					log.Printf("MQTT [%s] node default_scope update error: %v", tag, err)
 				}
