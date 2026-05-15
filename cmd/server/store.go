@@ -3483,9 +3483,16 @@ func buildHopContextPubkeys(tx *StoreTx, pm *prefixMap) []string {
 		}
 	}
 
-	// Observer pubkey, where available (ObserverID is the observer's pubkey-ish id).
-	if tx.ObserverID != "" {
-		add(tx.ObserverID)
+	// Observer pubkey, where available. ObserverID is the observers.id PRIMARY
+	// KEY from the MQTT topic — it is NOT guaranteed to be a node pubkey hex
+	// (some observers register with arbitrary string ids like "myobserver").
+	// Guard against polluting the context with non-pubkey strings: include
+	// only when it parses as hex AND is long enough to plausibly be a pubkey
+	// prefix. The full prefix-map lookup would also be acceptable, but the
+	// hex+length check is O(len) and avoids one map probe per tx on a hot
+	// path. See #1197 (adversarial r1 #4).
+	if obs := tx.ObserverID; obs != "" && len(obs) >= 4 && isHexLower(strings.ToLower(obs)) {
+		add(obs)
 	}
 
 	// Unambiguous-prefix anchors: any hop in the path whose prefix has exactly
@@ -3498,6 +3505,23 @@ func buildHopContextPubkeys(tx *StoreTx, pm *prefixMap) []string {
 	}
 
 	return out
+}
+
+// isHexLower reports whether s consists only of [0-9a-f] (assumes already
+// lowercased by caller). Used to guard ObserverID before adding it to the
+// hop-disambiguation context, since ObserverID is a free-form observers.id
+// and may not be a node pubkey hex.
+func isHexLower(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // buildAggregateHopContextPubkeys gathers context across many txs for hot
@@ -5239,14 +5263,45 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 
 	allNodes, pm := s.getCachedNodesAndPM()
 	_ = allNodes // only pm is needed for topology
-	hopCache := make(map[string]*nodeInfo)
 
-	// Aggregate hop-disambiguation context across the analytics scan: senders
-	// + observer pubkeys + unambiguous-prefix anchors. Populated lazily during
-	// the per-tx loop below; resolveHop reads it (closure capture by ref). See #1197.
-	contextSet := make(map[string]struct{})
+	// Pre-pass: build the full hop-disambiguation context from all in-window
+	// txs BEFORE any resolveHop call. The earlier shape — populating
+	// contextPubkeys lazily during the main scan and reading it from a
+	// closure — was correct only because the current code never calls
+	// resolveHop inside the scan loop. A future maintainer who adds such a
+	// call inside the loop would silently get partial context AND a
+	// stale-cached result for any hop seen before the context grew. Two
+	// explicit passes remove the hazard. See #1197 (carmack/adversarial r1).
 	var contextPubkeys []string
+	{
+		seen := make(map[string]struct{}, 64)
+		for _, tx := range s.packets {
+			if !window.Includes(tx.FirstSeen) {
+				continue
+			}
+			if regionObs != nil {
+				match := false
+				for _, obs := range tx.Observations {
+					if regionObs[obs.ObserverID] {
+						match = true
+						break
+					}
+				}
+				if !match {
+					continue
+				}
+			}
+			for _, pk := range buildHopContextPubkeys(tx, pm) {
+				if _, ok := seen[pk]; ok {
+					continue
+				}
+				seen[pk] = struct{}{}
+				contextPubkeys = append(contextPubkeys, pk)
+			}
+		}
+	}
 
+	hopCache := make(map[string]*nodeInfo)
 	resolveHop := func(hop string) *nodeInfo {
 		if cached, ok := hopCache[hop]; ok {
 			return cached
@@ -5285,13 +5340,7 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 			}
 		}
 
-		// Accumulate hop-disambiguation context (#1197).
-		for _, pk := range buildHopContextPubkeys(tx, pm) {
-			if _, ok := contextSet[pk]; !ok {
-				contextSet[pk] = struct{}{}
-				contextPubkeys = append(contextPubkeys, pk)
-			}
-		}
+		// Hop-disambiguation context was assembled in the pre-pass above (#1197).
 
 		n := len(hops)
 		hopCounts[n]++
