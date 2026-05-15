@@ -2,12 +2,16 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gorilla/mux"
 	_ "modernc.org/sqlite"
 )
 
@@ -415,6 +419,53 @@ func TestHotStartup_SQLFallback_Until(t *testing.T) {
 	// SQL fallback returns the 50 old packets (stored at ~48h ago, all before Until)
 	if result.Total != 50 {
 		t.Errorf("expected SQL fallback to return 50 old packets for Until before oldestLoaded, got %d", result.Total)
+	}
+}
+
+func TestHotStartup_PerfStoreHTTP(t *testing.T) {
+	dbPath := createTestDBWithAgedPackets(t, 10, 50)
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  72,
+		HotStartupHours: 1,
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer(db, &Config{Port: 3000}, NewHub())
+	srv.store = store
+	router := mux.NewRouter()
+	srv.RegisterRoutes(router)
+
+	req := httptest.NewRequest("GET", "/api/perf", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	ps, ok := body["packetStore"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing packetStore in /api/perf response")
+	}
+	for _, field := range []string{"hotStartupHours", "backgroundLoadComplete", "backgroundLoadProgress"} {
+		if _, ok := ps[field]; !ok {
+			t.Errorf("missing field %q in packetStore", field)
+		}
+	}
+	if v, ok := ps["hotStartupHours"].(float64); !ok || v != 1 {
+		t.Errorf("expected hotStartupHours=1, got %v", ps["hotStartupHours"])
 	}
 }
 

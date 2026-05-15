@@ -1618,24 +1618,27 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 	}
 
 	return PerfPacketStoreStats{
-		TotalLoaded:       totalLoaded,
-		TotalObservations: totalObs,
-		Evicted:           int(atomic.LoadInt64(&s.evicted)),
-		Inserts:           atomic.LoadInt64(&s.insertCount),
-		Queries:           atomic.LoadInt64(&s.queryCount),
-		InMemory:          totalLoaded,
-		SqliteOnly:        false,
-		MaxPackets:        2386092,
-		EstimatedMB:       estimatedMB,
-		TrackedMB:         trackedMB,
-		AvgBytesPerPacket: avgBytesPerPacket,
-		MaxMB:             s.maxMemoryMB,
+		TotalLoaded:              totalLoaded,
+		TotalObservations:        totalObs,
+		Evicted:                  int(atomic.LoadInt64(&s.evicted)),
+		Inserts:                  atomic.LoadInt64(&s.insertCount),
+		Queries:                  atomic.LoadInt64(&s.queryCount),
+		InMemory:                 totalLoaded,
+		SqliteOnly:               false,
+		MaxPackets:               2386092,
+		EstimatedMB:              estimatedMB,
+		TrackedMB:                trackedMB,
+		AvgBytesPerPacket:        avgBytesPerPacket,
+		MaxMB:                    s.maxMemoryMB,
 		Indexes: PacketStoreIndexes{
 			ByHash:           hashIdx,
 			ByObserver:       observerIdx,
 			ByNode:           nodeIdx,
 			AdvertByObserver: advertByObsCount,
 		},
+		HotStartupHours:        s.hotStartupHours,
+		BackgroundLoadComplete: s.backgroundLoadDone.Load(),
+		BackgroundLoadProgress: s.backgroundLoadProgress.Load(),
 	}
 }
 
