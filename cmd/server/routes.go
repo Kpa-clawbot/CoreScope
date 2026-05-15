@@ -176,6 +176,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/nodes/bulk-health", s.handleBulkHealth).Methods("GET")
 	r.HandleFunc("/api/nodes/network-status", s.handleNetworkStatus).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/health", s.handleNodeHealth).Methods("GET")
+	r.HandleFunc("/api/nodes/{pubkey}/direct-packets", s.handleNodeDirectPackets).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/paths", s.handleNodePaths).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/analytics", s.handleNodeAnalytics).Methods("GET")
 	r.HandleFunc("/api/nodes/{pubkey}/battery", s.handleNodeBattery).Methods("GET")
@@ -1399,6 +1400,37 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, NodeDetailResponse{
 		Node:          node,
 		RecentAdverts: recentAdverts,
+	})
+}
+
+func (s *Server) handleNodeDirectPackets(w http.ResponseWriter, r *http.Request) {
+	pubkey := mux.Vars(r)["pubkey"]
+	if s.cfg.IsBlacklisted(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
+
+	limit := 20
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	sinceHours := 0
+	if v := r.URL.Query().Get("since"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			sinceHours = n
+		}
+	}
+
+	packets, err := s.db.GetRecentDirectPacketsForNode(pubkey, limit, sinceHours)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, map[string]interface{}{
+		"packets":   packets,
+		"truncated": len(packets) == limit,
 	})
 }
 

@@ -612,6 +612,11 @@
           </table>
         </div>` : ''}
 
+        <div class="node-full-card" id="fullDirectPacketsSection">
+          <h4 id="fullDirectPacketsHeader">Directly Heard Packets</h4>
+          <div id="fullDirectPacketsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading…</div></div>
+        </div>
+
         <div class="node-full-card" id="node-neighbors">
           <h4 id="fullNeighborsHeader">Neighbors</h4>
           <div id="fullNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
@@ -696,6 +701,81 @@
           defaultDirection: 'desc'
         });
       }
+
+      // Direct packets section (full-screen view)
+      (function loadDirectPackets(sinceHours, limit) {
+        const content = document.getElementById('fullDirectPacketsContent');
+        const header = document.getElementById('fullDirectPacketsHeader');
+        if (!content) return;
+        content.innerHTML = '<div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading…</div>';
+        const qs = '?limit=' + (limit || 20) + (sinceHours ? '&since=' + sinceHours : '');
+        api('/nodes/' + encodeURIComponent(n.public_key) + '/direct-packets' + qs, { ttl: 30 }).then(res => {
+          const pkts = (res && res.packets) || [];
+          const truncated = !!(res && res.truncated);
+          const timeframes = [
+            { label: '1h',  hours: 1   },
+            { label: '6h',  hours: 6   },
+            { label: '24h', hours: 24  },
+            { label: '7d',  hours: 168 },
+          ];
+          const TYPE_LABELS = { 0:'📦 Request', 1:'📦 Response', 2:'✉️ DM', 3:'📦 ACK', 4:'📡 Advert', 5:'💬 Channel', 7:'📦 Anon', 8:'📦 Path', 9:'📦 Trace' };
+          const typeCounts = {};
+          pkts.forEach(p => { typeCounts[p.payload_type] = (typeCounts[p.payload_type] || 0) + 1; });
+          const uniqueTypes = Object.keys(typeCounts).map(Number);
+          const activeTypes = new Set(uniqueTypes);
+
+          const activeSince = sinceHours || 0;
+          const timeRow = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;font-size:12px;">
+            <span style="color:var(--text-muted);align-self:center;">Show all in:</span>
+            ${timeframes.map(tf => `<button data-since="${tf.hours}" style="padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:${activeSince===tf.hours?'var(--accent)':'var(--surface-2)'};color:${activeSince===tf.hours?'#fff':'var(--text)'};cursor:pointer;font-size:11px;">${tf.label}</button>`).join('')}
+          </div>`;
+          const typeRow = uniqueTypes.length > 1 ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;font-size:12px;">
+            <span style="color:var(--text-muted);align-self:center;">Filter:</span>
+            ${uniqueTypes.map(t => `<button data-ptype-filter="${t}" style="padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:var(--accent);color:#fff;cursor:pointer;font-size:11px;">${TYPE_LABELS[t] || '📦 Packet'} (${typeCounts[t]})</button>`).join('')}
+          </div>` : '';
+          const truncatedRow = truncated ? `<div style="margin-bottom:8px;padding:6px 10px;background:color-mix(in srgb,var(--status-yellow,#f59e0b) 12%,transparent);border:1px solid color-mix(in srgb,var(--status-yellow,#f59e0b) 35%,transparent);border-radius:6px;font-size:12px;color:var(--text-muted);">⚠️ Showing first ${pkts.length} packets — use a shorter timeframe to see all.</div>` : '';
+
+          const updateHeader = () => {
+            if (!header) return;
+            let vis = 0; activeTypes.forEach(t => { vis += typeCounts[t] || 0; });
+            header.textContent = 'Directly Heard Packets' + (pkts.length ? ' (' + (activeTypes.size === uniqueTypes.length ? pkts.length : vis + ' of ' + pkts.length) + (truncated ? '+' : '') + ')' : '');
+          };
+
+          if (header) header.textContent = 'Directly Heard Packets' + (pkts.length ? ' (' + pkts.length + (truncated ? '+' : '') + ')' : '');
+          if (!pkts.length) {
+            content.innerHTML = timeRow + '<div class="text-muted">No packets directly heard by this node' + (sinceHours ? ' in the last ' + timeframes.find(t => t.hours === sinceHours)?.label : '') + '</div>';
+          } else {
+            content.innerHTML = timeRow + typeRow + truncatedRow + '<div class="node-activity-list">' + pkts.map(p => {
+              let decoded; try { decoded = JSON.parse(p.decoded_json); } catch {}
+              const typeLabel = TYPE_LABELS[p.payload_type] || '📦 Packet';
+              const detail = decoded?.text ? ': ' + escapeHtml(truncate(decoded.text, 50)) : decoded?.name ? ' — ' + escapeHtml(decoded.name) : '';
+              const obs = p.observer_name || p.observer_id;
+              const obsBadge = p.observation_count > 1 ? ` <span class="badge badge-obs" title="Seen ${p.observation_count} times">👁 ${p.observation_count}</span>` : '';
+              return `<div class="node-activity-item" data-ptype="${p.payload_type}">
+                <span class="node-activity-time">${renderNodeTimestampHtml(p.timestamp)}</span>
+                <span>${typeLabel}${detail}${obsBadge}${obs ? ' via ' + escapeHtml(obs) : ''}${p.snr != null ? ' · SNR ' + p.snr + 'dB' : ''}${p.rssi != null ? ' · RSSI ' + p.rssi + 'dBm' : ''}</span>
+                <a href="#/packets/${p.hash}" class="ch-analyze-link" style="margin-left:8px;font-size:0.8em">Analyze →</a>
+              </div>`;
+            }).join('') + '</div>';
+          }
+          content.querySelectorAll('button[data-since]').forEach(btn => {
+            btn.addEventListener('click', () => loadDirectPackets(parseInt(btn.dataset.since), 2000));
+          });
+          content.querySelectorAll('button[data-ptype-filter]').forEach(btn => {
+            btn.addEventListener('click', () => {
+              const t = parseInt(btn.dataset.ptypeFilter);
+              if (activeTypes.has(t)) { activeTypes.delete(t); btn.style.background = 'var(--surface-2)'; btn.style.color = 'var(--text)'; }
+              else { activeTypes.add(t); btn.style.background = 'var(--accent)'; btn.style.color = '#fff'; }
+              content.querySelectorAll('[data-ptype]').forEach(row => {
+                row.style.display = activeTypes.has(parseInt(row.dataset.ptype)) ? '' : 'none';
+              });
+              updateHeader();
+            });
+          });
+        }).catch(() => {
+          if (content) content.innerHTML = '<div class="text-muted">Failed to load direct packets</div>';
+        });
+      })(0, 20);
 
       // Fetch neighbors for this node (full-screen view)
       fetchAndRenderNeighbors(n.public_key, 'fullNeighborsContent', {
@@ -1426,6 +1506,11 @@
           `; })()}
         </div>
 
+        <div class="node-detail-section" id="directPacketsSection">
+          <h4 id="directPacketsHeader">Directly Heard Packets</h4>
+          <div id="directPacketsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading…</div></div>
+        </div>
+
         ${observers.length ? `<div class="node-detail-section">
           ${(() => { const regions = [...new Set(observers.map(o => o.iata).filter(Boolean))]; return regions.length ? `<div style="margin-bottom:6px;font-size:12px"><strong>Regions:</strong> ${regions.join(', ')}</div>` : ''; })()}
           <h4>Heard By (${observers.length} observer${observers.length > 1 ? 's' : ''})</h4>
@@ -1502,6 +1587,86 @@
         navigateToNode(decodeURIComponent(detailBtn.getAttribute('data-pubkey')));
       });
     }
+
+    // Direct packets section
+    (function loadDirectPackets(sinceHours, limit) {
+      const content = document.getElementById('directPacketsContent');
+      const header = document.getElementById('directPacketsHeader');
+      if (!content) return;
+      content.innerHTML = '<div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading…</div>';
+      const qs = '?limit=' + (limit || 20) + (sinceHours ? '&since=' + sinceHours : '');
+      api('/nodes/' + encodeURIComponent(n.public_key) + '/direct-packets' + qs, { ttl: 30 }).then(res => {
+        const pkts = (res && res.packets) || [];
+        const truncated = !!(res && res.truncated);
+        const timeframes = [
+          { label: '1h',  hours: 1   },
+          { label: '6h',  hours: 6   },
+          { label: '24h', hours: 24  },
+          { label: '7d',  hours: 168 },
+        ];
+        const TYPE_LABELS = { 0:'📦 Request', 1:'📦 Response', 2:'✉️ DM', 3:'📦 ACK', 4:'📡 Advert', 5:'💬 Channel', 7:'📦 Anon', 8:'📦 Path', 9:'📦 Trace' };
+        const typeCounts = {};
+        pkts.forEach(p => { typeCounts[p.payload_type] = (typeCounts[p.payload_type] || 0) + 1; });
+        const uniqueTypes = Object.keys(typeCounts).map(Number);
+        const activeTypes = new Set(uniqueTypes);
+
+        const activeSince = sinceHours || 0;
+        const timeRow = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;font-size:12px;">
+          <span style="color:var(--text-muted);align-self:center;">Show all in:</span>
+          ${timeframes.map(tf => `<button data-since="${tf.hours}" style="padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:${activeSince===tf.hours?'var(--accent)':'var(--surface-2)'};color:${activeSince===tf.hours?'#fff':'var(--text)'};cursor:pointer;font-size:11px;">${tf.label}</button>`).join('')}
+        </div>`;
+        const typeRow = uniqueTypes.length > 1 ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;font-size:12px;">
+          <span style="color:var(--text-muted);align-self:center;">Filter:</span>
+          ${uniqueTypes.map(t => `<button data-ptype-filter="${t}" style="padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:var(--accent);color:#fff;cursor:pointer;font-size:11px;">${TYPE_LABELS[t] || '📦 Packet'} (${typeCounts[t]})</button>`).join('')}
+        </div>` : '';
+        const truncatedRow = truncated ? `<div style="margin-bottom:8px;padding:6px 10px;background:color-mix(in srgb,var(--status-yellow,#f59e0b) 12%,transparent);border:1px solid color-mix(in srgb,var(--status-yellow,#f59e0b) 35%,transparent);border-radius:6px;font-size:12px;color:var(--text-muted);">⚠️ Showing first ${pkts.length} packets — use a shorter timeframe to see all.</div>` : '';
+
+        const updateHeader = () => {
+          if (!header) return;
+          let vis = 0; activeTypes.forEach(t => { vis += typeCounts[t] || 0; });
+          header.textContent = 'Directly Heard Packets' + (pkts.length ? ' (' + (activeTypes.size === uniqueTypes.length ? pkts.length : vis + ' of ' + pkts.length) + (truncated ? '+' : '') + ')' : '');
+        };
+
+        if (header) header.textContent = 'Directly Heard Packets' + (pkts.length ? ' (' + pkts.length + (truncated ? '+' : '') + ')' : '');
+        if (!pkts.length) {
+          content.innerHTML = timeRow + '<div class="text-muted" style="padding:8px">No packets directly heard by this node' + (sinceHours ? ' in the last ' + timeframes.find(t=>t.hours===sinceHours)?.label : '') + '</div>';
+        } else {
+          content.innerHTML = timeRow + typeRow + truncatedRow + pkts.map(a => {
+            let decoded; try { decoded = JSON.parse(a.decoded_json); } catch {}
+            const icon = a.payload_type === 4 ? '📡' : a.payload_type === 5 ? '💬' : a.payload_type === 2 ? '✉️' : '📦';
+            const pType = PAYLOAD_TYPES[a.payload_type] || 'Packet';
+            const detail = decoded?.text ? ': ' + escapeHtml(truncate(decoded.text, 50)) : decoded?.name ? ' — ' + escapeHtml(decoded.name) : '';
+            const obs = a.observer_name || a.observer_id;
+            return `<div class="advert-entry" data-ptype="${a.payload_type}">
+              <span class="advert-dot" style="background:${roleColor}"></span>
+              <div class="advert-info">
+                <strong>${renderNodeTimestampHtml(a.timestamp)}</strong> ${icon} ${pType}${detail}
+                ${a.observation_count > 1 ? ' <span class="badge badge-obs">👁 ' + a.observation_count + '</span>' : ''}
+                ${obs ? ' via ' + escapeHtml(obs) : ''}
+                ${a.snr != null ? ` · SNR ${a.snr}dB` : ''}${a.rssi != null ? ` · RSSI ${a.rssi}dBm` : ''}
+                <br><a href="#/packets/${a.hash}" class="ch-analyze-link">Analyze →</a>
+              </div>
+            </div>`;
+          }).join('');
+        }
+        content.querySelectorAll('button[data-since]').forEach(btn => {
+          btn.addEventListener('click', () => loadDirectPackets(parseInt(btn.dataset.since), 2000));
+        });
+        content.querySelectorAll('button[data-ptype-filter]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const t = parseInt(btn.dataset.ptypeFilter);
+            if (activeTypes.has(t)) { activeTypes.delete(t); btn.style.background = 'var(--surface-2)'; btn.style.color = 'var(--text)'; }
+            else { activeTypes.add(t); btn.style.background = 'var(--accent)'; btn.style.color = '#fff'; }
+            content.querySelectorAll('[data-ptype]').forEach(row => {
+              row.style.display = activeTypes.has(parseInt(row.dataset.ptype)) ? '' : 'none';
+            });
+            updateHeader();
+          });
+        });
+      }).catch(() => {
+        if (content) content.innerHTML = '<div class="text-muted" style="padding:8px">Failed to load direct packets</div>';
+      });
+    })(0, 20);
 
     // Fetch neighbors for this node (condensed panel — top 5)
     fetchAndRenderNeighbors(n.public_key, 'panelNeighborsContent', {
