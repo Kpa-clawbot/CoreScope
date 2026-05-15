@@ -384,7 +384,7 @@ func resolveAmbiguousEdges(pm *prefixMap, graph *NeighborGraph) {
 	var resolutions []resolution
 	for _, ae := range ambiguous {
 		resolved, confidence, _ := pm.resolveWithContext(ae.prefix, []string{ae.knownNode}, graph)
-		if resolved == nil || confidence == "no_match" || confidence == "first_match" || confidence == "gps_preference" {
+		if resolved == nil || confidence == "no_match" || confidence == "observation_count_fallback" || confidence == "gps_preference" {
 			continue
 		}
 		rpk := strings.ToLower(resolved.PublicKey)

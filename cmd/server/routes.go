@@ -1577,11 +1577,17 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	pathGroups := map[string]*pathAgg{}
 	totalTransmissions := 0
 	hopCache := make(map[string]*nodeInfo)
+	// Anchor the resolver with the node being queried so tier-1/2 hop-context
+	// resolution lights up when a hop prefix matches the destination node
+	// (handleNodePaths aggregates paths terminating at lowerPK). Passing nil
+	// here re-introduced regression #1197 in production. See
+	// resolve_context_callsites_test.go.
+	hopContext := []string{lowerPK}
 	resolveHop := func(hop string) *nodeInfo {
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.store.graph)
+		r, _, _ := pm.resolveWithContext(hop, hopContext, s.store.graph)
 		hopCache[hop] = r
 		return r
 	}
@@ -2099,7 +2105,7 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 				pk := best.PublicKey
 				hr.BestCandidate = &pk
 				hr.Confidence = "neighbor_affinity"
-			} else if (confidence == "geo_proximity" || confidence == "gps_preference" || confidence == "first_match") && best != nil {
+			} else if (confidence == "geo_proximity" || confidence == "gps_preference" || confidence == "observation_count_fallback") && best != nil {
 				// Propagate lower-priority tiers so the API reflects the actual
 				// resolution strategy used, rather than collapsing everything to "ambiguous".
 				hr.Confidence = confidence

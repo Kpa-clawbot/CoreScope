@@ -223,7 +223,7 @@ func (s *Server) handleDebugAffinity(w http.ResponseWriter, r *http.Request) {
 
 // buildResolutions generates per-prefix resolution decision logs.
 // It uses resolveWithContext (M4) to show the actual 4-tier fallback path
-// (affinity → geo → GPS → first_match) for each prefix resolution.
+// (affinity → geo → GPS → observation_count_fallback) for each prefix resolution.
 func (s *Server) buildResolutions(graph *NeighborGraph, nodeMap map[string]nodeInfo, prefixFilter, nodeFilter string) []DebugResolution {
 	graph.mu.RLock()
 	defer graph.mu.RUnlock()
