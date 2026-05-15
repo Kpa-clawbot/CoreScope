@@ -1698,16 +1698,19 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 				repeaterSet[n.PublicKey] = true
 			}
 		}
-		hopCache := make(map[string]*nodeInfo)
-		resolveHop := func(hop string) *nodeInfo {
-			if cached, ok := hopCache[hop]; ok {
-				return cached
-			}
-			r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
-			hopCache[hop] = r
-			return r
-		}
 		for _, tx := range broadcastTxs {
+			// Per-tx context (sender + observer + unambiguous-prefix anchors)
+			// so resolveWithContext tiers 1 and 2 light up. See #1197.
+			contextPubkeys := buildHopContextPubkeys(tx, pm)
+			hopCache := make(map[string]*nodeInfo)
+			resolveHop := func(hop string) *nodeInfo {
+				if cached, ok := hopCache[hop]; ok {
+					return cached
+				}
+				r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+				hopCache[hop] = r
+				return r
+			}
 			txHops, txPath := computeDistancesForTx(tx, nodeByPk, repeaterSet, resolveHop)
 			if len(txHops) > 0 {
 				s.distHops = append(s.distHops, txHops...)
@@ -2935,18 +2938,19 @@ func (s *PacketStore) updateDistanceIndexForTxs(txs []*StoreTx) {
 			repeaterSet[nd.PublicKey] = true
 		}
 	}
-	hopCache := make(map[string]*nodeInfo)
-	resolveHop := func(hop string) *nodeInfo {
-		if cached, ok := hopCache[hop]; ok {
-			return cached
-		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
-		hopCache[hop] = r
-		return r
-	}
-
 	// Recompute distance records for each changed tx.
 	for _, tx := range txs {
+		// Per-tx context for hop disambiguation (#1197).
+		contextPubkeys := buildHopContextPubkeys(tx, pm)
+		hopCache := make(map[string]*nodeInfo)
+		resolveHop := func(hop string) *nodeInfo {
+			if cached, ok := hopCache[hop]; ok {
+				return cached
+			}
+			r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+			hopCache[hop] = r
+			return r
+		}
 		txHops, txPath := computeDistancesForTx(tx, nodeByPk, repeaterSet, resolveHop)
 		if len(txHops) > 0 {
 			s.distHops = append(s.distHops, txHops...)
@@ -2954,8 +2958,7 @@ func (s *PacketStore) updateDistanceIndexForTxs(txs []*StoreTx) {
 		if txPath != nil {
 			s.distPaths = append(s.distPaths, *txPath)
 		}
-	}
-}
+	}}
 
 // buildDistanceIndex precomputes haversine distances for all packets.
 // Must be called with s.mu held (Lock).
@@ -2971,20 +2974,21 @@ func (s *PacketStore) buildDistanceIndex() {
 		}
 	}
 
-	hopCache := make(map[string]*nodeInfo)
-	resolveHop := func(hop string) *nodeInfo {
-		if cached, ok := hopCache[hop]; ok {
-			return cached
-		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
-		hopCache[hop] = r
-		return r
-	}
-
 	hops := make([]distHopRecord, 0, len(s.packets))
 	paths := make([]distPathRecord, 0, len(s.packets)/2)
 
 	for _, tx := range s.packets {
+		// Per-tx context for hop disambiguation (#1197).
+		contextPubkeys := buildHopContextPubkeys(tx, pm)
+		hopCache := make(map[string]*nodeInfo)
+		resolveHop := func(hop string) *nodeInfo {
+			if cached, ok := hopCache[hop]; ok {
+				return cached
+			}
+			r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+			hopCache[hop] = r
+			return r
+		}
 		txHops, txPath := computeDistancesForTx(tx, nodeByPk, repeaterSet, resolveHop)
 		if len(txHops) > 0 {
 			hops = append(hops, txHops...)
@@ -3451,8 +3455,48 @@ func (s *PacketStore) StartEvictionTicker() func() {
 //
 // Returned pubkeys are de-duplicated and lowercased.
 func buildHopContextPubkeys(tx *StoreTx, pm *prefixMap) []string {
-	// TODO(#1197): real implementation lands in the green follow-up commit.
-	return nil
+	if tx == nil || pm == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, 4)
+	var out []string
+	add := func(pk string) {
+		if pk == "" {
+			return
+		}
+		l := strings.ToLower(pk)
+		if _, ok := seen[l]; ok {
+			return
+		}
+		seen[l] = struct{}{}
+		out = append(out, l)
+	}
+
+	// Sender / originator pubkey from decoded payload.
+	if tx.DecodedJSON != "" {
+		var dec map[string]interface{}
+		if json.Unmarshal([]byte(tx.DecodedJSON), &dec) == nil {
+			if pk, ok := dec["pubKey"].(string); ok {
+				add(pk)
+			}
+		}
+	}
+
+	// Observer pubkey, where available (ObserverID is the observer's pubkey-ish id).
+	if tx.ObserverID != "" {
+		add(tx.ObserverID)
+	}
+
+	// Unambiguous-prefix anchors: any hop in the path whose prefix has exactly
+	// one candidate is a strong context signal.
+	for _, hop := range txGetParsedPath(tx) {
+		h := strings.ToLower(hop)
+		if cands, ok := pm.m[h]; ok && len(cands) == 1 {
+			add(cands[0].PublicKey)
+		}
+	}
+
+	return out
 }
 
 func computeDistancesForTx(tx *StoreTx, nodeByPk map[string]*nodeInfo, repeaterSet map[string]bool, resolveHop func(string) *nodeInfo) ([]distHopRecord, *distPathRecord) {
@@ -5156,11 +5200,17 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 	_ = allNodes // only pm is needed for topology
 	hopCache := make(map[string]*nodeInfo)
 
+	// Aggregate hop-disambiguation context across the analytics scan: senders
+	// + observer pubkeys + unambiguous-prefix anchors. Populated lazily during
+	// the per-tx loop below; resolveHop reads it (closure capture by ref). See #1197.
+	contextSet := make(map[string]struct{})
+	var contextPubkeys []string
+
 	resolveHop := func(hop string) *nodeInfo {
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
 		hopCache[hop] = r
 		return r
 	}
@@ -5191,6 +5241,14 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 			}
 			if !match {
 				continue
+			}
+		}
+
+		// Accumulate hop-disambiguation context (#1197).
+		for _, pk := range buildHopContextPubkeys(tx, pm) {
+			if _, ok := contextSet[pk]; !ok {
+				contextSet[pk] = struct{}{}
+				contextPubkeys = append(contextPubkeys, pk)
 			}
 		}
 
