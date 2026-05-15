@@ -162,9 +162,9 @@ func TestResolveAmbiguousEdges_FailsNoChange(t *testing.T) {
 	graph.mu.RLock()
 	defer graph.mu.RUnlock()
 
-	// Edge should still be ambiguous — resolution falls to first_match which
+	// Edge should still be ambiguous — resolution falls to observation_count_fallback which
 	// does resolve (it always picks something), but that's fine. Let's verify
-	// if it resolved or stayed. Actually, resolveWithContext returns first_match
+	// if it resolved or stayed. Actually, resolveWithContext returns observation_count_fallback
 	// as fallback, so it WILL resolve. Let me adjust — the spec says "left as-is
 	// when resolution fails." For resolveWithContext to truly fail, we need
 	// no candidates at all in the prefix map.
