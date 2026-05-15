@@ -282,24 +282,29 @@ func TestBuildHopContextPubkeys_IncludesSenderAndUnambiguousAnchors(t *testing.T
 }
 
 func TestResolveWithContext_Tier3_TiebreakDeterministicByPubkey(t *testing.T) {
-	// Two candidates with identical observation counts. Result must be
+	// Three candidates with identical observation counts. Result must be
 	// deterministic regardless of slice insertion order: lexicographically
-	// smallest PublicKey wins.
+	// smallest PublicKey wins. Three candidates (rather than two reversed)
+	// so map iteration / slice order in buildPrefixMap can't accidentally
+	// match the assertion. See #1197 (adversarial r1 #8).
 	a := nodeInfo{PublicKey: "abcd11111111", Role: "repeater", Name: "A", Lat: 37.0, Lon: -122.0, HasGPS: true, ObservationCount: 100}
 	b := nodeInfo{PublicKey: "abcd22222222", Role: "repeater", Name: "B", Lat: 38.0, Lon: -123.0, HasGPS: true, ObservationCount: 100}
+	c := nodeInfo{PublicKey: "abcd33333333", Role: "repeater", Name: "C", Lat: 39.0, Lon: -124.0, HasGPS: true, ObservationCount: 100}
 
-	pm1 := buildPrefixMap([]nodeInfo{a, b})
-	r1, _, _ := pm1.resolveWithContext("abcd", nil, nil)
-	pm2 := buildPrefixMap([]nodeInfo{b, a}) // reversed insertion order
-	r2, _, _ := pm2.resolveWithContext("abcd", nil, nil)
-	if r1 == nil || r2 == nil {
-		t.Fatal("expected non-nil results")
+	// Property: across every permutation of insertion order, the resolver
+	// must pick the lex-smallest pubkey.
+	perms := [][]nodeInfo{
+		{a, b, c}, {a, c, b}, {b, a, c}, {b, c, a}, {c, a, b}, {c, b, a},
 	}
-	if r1.PublicKey != r2.PublicKey {
-		t.Fatalf("tiebreak not deterministic: order1 picked %s, order2 picked %s", r1.PublicKey, r2.PublicKey)
-	}
-	if r1.PublicKey != "abcd11111111" {
-		t.Fatalf("expected lex-smallest pubkey abcd11111111, got %s", r1.PublicKey)
+	for i, p := range perms {
+		pm := buildPrefixMap(p)
+		r, _, _ := pm.resolveWithContext("abcd", nil, nil)
+		if r == nil {
+			t.Fatalf("perm %d: expected non-nil result", i)
+		}
+		if r.PublicKey != "abcd11111111" {
+			t.Fatalf("perm %d (%v): expected lex-smallest abcd11111111, got %s", i, p, r.PublicKey)
+		}
 	}
 }
 
