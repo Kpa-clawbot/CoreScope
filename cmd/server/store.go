@@ -3540,6 +3540,14 @@ func buildAggregateHopContextPubkeys(txs []*StoreTx, pm *prefixMap) []string {
 // by all per-tx distance/topology loops to avoid 4× duplicate closure
 // definitions and per-tx map allocation. See #1197 (adversarial r1 #7,
 // carmack r1 #3).
+//
+// CONCURRENCY: NOT safe for concurrent use. The returned closures share
+// mutable captured state — `contextPubkeys` is reassigned by setContext and
+// read by resolveHop, and `hopCache` is mutated by both (resolveHop writes
+// on miss, setContext clears wholesale). Callers MUST invoke both functions
+// from a single goroutine for the lifetime of the (resolveHop, setContext)
+// pair. If a future caller fans out per-tx work across goroutines, allocate
+// a fresh resolver pair per goroutine. See #1199 item 4.
 func (s *PacketStore) hopResolverPerTx(pm *prefixMap) (resolveHop func(string) *nodeInfo, setContext func([]string)) {
 	hopCache := make(map[string]*nodeInfo, 16)
 	var contextPubkeys []string
