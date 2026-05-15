@@ -1818,6 +1818,11 @@
           <table style="font-size:12px;width:100%;border-collapse:collapse;">
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Last Seen</td><td>${lastSeen}</td></tr>
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Adverts</td><td>${n.advert_count || 0}</td></tr>
+            ${'default_scope' in n ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Scope</td><td>${
+  n.default_scope === null ? '<span style="color:var(--text-muted)">—</span>'
+  : n.default_scope === '' ? '<span style="color:var(--text-muted)">unknown scope</span>'
+  : `<code style="color:var(--accent)">${escapeHtml(n.default_scope)}</code>`
+}</td></tr>` : ''}
             ${hasLoc ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Location</td><td>${n.lat.toFixed(5)}, ${n.lon.toFixed(5)}</td></tr>` : ''}
             ${stats.avgSnr != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Avg SNR</td><td>${stats.avgSnr.toFixed(1)} dB</td></tr>` : ''}
             ${stats.avgHops != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Avg Hops</td><td>${stats.avgHops.toFixed(1)}</td></tr>` : ''}
