@@ -3443,7 +3443,7 @@ func buildHopContextPubkeys(tx *StoreTx, pm *prefixMap) []string {
 		return nil
 	}
 	seen := make(map[string]struct{}, 16)
-	var out []string
+	out := make([]string, 0, 16)
 	add := func(pk string) {
 		if pk == "" {
 			return
