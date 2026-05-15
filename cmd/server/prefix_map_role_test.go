@@ -240,14 +240,20 @@ func TestBuildHopContextPubkeys_IncludesSenderAndUnambiguousAnchors(t *testing.T
 	}
 	pm := buildPrefixMap(nodes)
 	senderPK := "cc4444444444"
+	observerPK := "dd5555555555"
 	pathJSON, _ := json.Marshal([]string{"ab", "bb"})
 	decoded, _ := json.Marshal(map[string]interface{}{"pubKey": senderPK})
-	tx := &StoreTx{PathJSON: string(pathJSON), DecodedJSON: string(decoded)}
+	tx := &StoreTx{
+		PathJSON:    string(pathJSON),
+		DecodedJSON: string(decoded),
+		ObserverID:  observerPK,
+	}
 
 	got := buildHopContextPubkeys(tx, pm)
 
 	hasSender := false
 	hasAnchor := false
+	hasObserver := false
 	for _, pk := range got {
 		if pk == senderPK {
 			hasSender = true
@@ -255,12 +261,23 @@ func TestBuildHopContextPubkeys_IncludesSenderAndUnambiguousAnchors(t *testing.T
 		if pk == "bb3333333333" {
 			hasAnchor = true
 		}
+		if pk == observerPK {
+			hasObserver = true
+		}
+		// Ambiguous-prefix candidates must NOT leak into context — only
+		// unambiguous (single-candidate) prefixes count as anchors.
+		if pk == "ab1111111111" || pk == "ab2222222222" {
+			t.Errorf("ambiguous-prefix candidate leaked into context: %s (full=%v)", pk, got)
+		}
 	}
 	if !hasSender {
 		t.Errorf("expected sender pubkey %s in context, got %v", senderPK, got)
 	}
 	if !hasAnchor {
 		t.Errorf("expected unambiguous-prefix anchor bb3333333333 in context, got %v", got)
+	}
+	if !hasObserver {
+		t.Errorf("expected observer pubkey %s in context, got %v", observerPK, got)
 	}
 }
 
