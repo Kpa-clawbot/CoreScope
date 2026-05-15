@@ -1,25 +1,32 @@
 package main
 
 import (
-	"os"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"path/filepath"
-	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
 
-// TestAllResolveWithContextCallSitesPassNonNilContext is a static grep gate
-// against #1197: every call to pm.resolveWithContext(...) in production code
-// (any non-test *.go file under cmd/server/) must pass a non-nil context
-// argument. Reverting any one call site to `nil` would silently re-introduce
-// the regression #1197 is meant to prevent.
+// TestAllResolveWithContextCallSitesPassNonNilContext is a static AST-based
+// gate against #1197/#1199: every call to pm.resolveWithContext(...) in
+// production code (any non-test *.go file under cmd/server/) must pass a
+// non-nil context as the second argument. Reverting any one call site to
+// `nil` would silently re-introduce the regression #1197 is meant to prevent.
 //
-// Scope rationale: the original gate only scanned store.go and missed
-// routes.go:1428 (handleNodePaths) which still passed `nil`. Extending the
-// scope to all production *.go files in cmd/server/ closes that hole.
+// History: the original gate (issue #1197) was a regex grep that split on
+// the first comma. Issue #1199 (item 1) showed that input like
+// `pm.resolveWithContext(getHop(a, b), nil, graph)` slipped past — the regex
+// captured `b)` as arg2. Same hazard for any gofmt-induced multi-line
+// reflow. This test now uses go/parser to walk the AST: arg2 is the SECOND
+// formal argument by position, robust against nesting and formatting.
 //
 // Allowed exceptions: callers that must pass nil (currently none in
-// production code) should be enumerated in `allowedNilCallers` below.
+// production code) should be enumerated in `allowedNilCallers` below by
+// "<file>:<line>".
 func TestAllResolveWithContextCallSitesPassNonNilContext(t *testing.T) {
 	allowedNilCallers := map[string]bool{
 		// "<file>:<line>": true,
@@ -30,39 +37,54 @@ func TestAllResolveWithContextCallSitesPassNonNilContext(t *testing.T) {
 		t.Fatalf("glob *.go: %v", err)
 	}
 
-	// Match: resolveWithContext(<arg1>, <arg2>, ...) — capture arg2.
-	re := regexp.MustCompile(`resolveWithContext\s*\(\s*([^,]+?)\s*,\s*([^,]+?)\s*,`)
+	type callSite struct {
+		file string
+		line int
+		text string
+	}
 
-	var offenders []string
+	var offenders []callSite
 	totalCallSites := 0
 	scannedFiles := 0
+	fset := token.NewFileSet()
 	for _, f := range files {
 		// Skip *_test.go (unit tests legitimately pass nil for fixture-driven
 		// behavior) and the test scaffold itself.
 		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
-		body, err := os.ReadFile(f)
+		af, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
 		if err != nil {
-			t.Fatalf("read %s: %v", f, err)
+			t.Fatalf("parse %s: %v", f, err)
 		}
 		scannedFiles++
-		src := string(body)
-		matches := re.FindAllStringSubmatchIndex(src, -1)
-		for _, m := range matches {
+		ast.Inspect(af, func(n ast.Node) bool {
+			ce, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := ce.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil || sel.Sel.Name != "resolveWithContext" {
+				return true
+			}
+			if len(ce.Args) < 2 {
+				return true
+			}
 			totalCallSites++
-			full := src[m[0]:m[1]]
-			arg2 := strings.TrimSpace(src[m[4]:m[5]])
-			if arg2 != "nil" {
-				continue
+			arg2 := ce.Args[1]
+			id, ok := arg2.(*ast.Ident)
+			if !ok || id.Name != "nil" {
+				return true
 			}
-			line := 1 + strings.Count(src[:m[0]], "\n")
-			site := f + ":" + itoa(line)
-			if allowedNilCallers[site] {
-				continue
+			pos := fset.Position(ce.Pos())
+			site := callSite{file: f, line: pos.Line, text: exprText(arg2)}
+			key := fmt.Sprintf("%s:%d", f, pos.Line)
+			if allowedNilCallers[key] {
+				return true
 			}
-			offenders = append(offenders, site+" — "+full)
-		}
+			offenders = append(offenders, site)
+			return true
+		})
 	}
 
 	if scannedFiles == 0 {
@@ -72,22 +94,25 @@ func TestAllResolveWithContextCallSitesPassNonNilContext(t *testing.T) {
 		t.Fatalf("no resolveWithContext call sites found across %d files — test scaffold broken", scannedFiles)
 	}
 	if len(offenders) > 0 {
+		sort.Slice(offenders, func(i, j int) bool {
+			if offenders[i].file != offenders[j].file {
+				return offenders[i].file < offenders[j].file
+			}
+			return offenders[i].line < offenders[j].line
+		})
+		var lines []string
+		for _, o := range offenders {
+			lines = append(lines, fmt.Sprintf("%s:%d — arg2=%s", o.file, o.line, o.text))
+		}
 		t.Fatalf("found %d call site(s) of pm.resolveWithContext that pass nil context "+
 			"(re-introduces regression #1197 — must pass non-nil contextPubkeys):\n  %s",
-			len(offenders), strings.Join(offenders, "\n  "))
+			len(offenders), strings.Join(lines, "\n  "))
 	}
 }
 
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
+func exprText(e ast.Expr) string {
+	if id, ok := e.(*ast.Ident); ok {
+		return id.Name
 	}
-	var b [20]byte
-	pos := len(b)
-	for i > 0 {
-		pos--
-		b[pos] = byte('0' + i%10)
-		i /= 10
-	}
-	return string(b[pos:])
+	return fmt.Sprintf("%T", e)
 }
