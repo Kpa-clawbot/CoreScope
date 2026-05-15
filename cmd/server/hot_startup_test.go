@@ -45,7 +45,10 @@ func createTestDBMultiDay(t *testing.T, numDays, txPerDay int) string {
 	id := 1
 	now := time.Now().UTC()
 	for day := numDays; day >= 1; day-- {
-		base := now.Add(-time.Duration(day) * 24 * time.Hour)
+		// Offset by +30 minutes so day boundaries don't coincide exactly with
+		// hotStartupHours/retentionHours cutoffs, preventing timing-boundary flakiness.
+		// E.g. for numDays=3: day3 starts at now-71.5h, day2 at now-47.5h, day1 at now-23.5h.
+		base := now.Add(-time.Duration(day)*24*time.Hour + 30*time.Minute)
 		for i := 0; i < txPerDay; i++ {
 			ts := base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339)
 			hash := fmt.Sprintf("hash%06d", id)
