@@ -249,6 +249,11 @@
   // accumulate observers forever — same leak class as #1180).
   var _vcrHeightCleanup = null;
   function initVCRHeightTracker() {
+    // #1206 r1 (adversarial should-fix): guard against double-init —
+    // if a prior tracker is still active (re-mount race, dev hot-reload),
+    // tear it down BEFORE overwriting _vcrHeightCleanup so the previous
+    // ResizeObserver/listeners aren't orphaned.
+    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
     var bar = document.getElementById('vcrBar');
     var page = document.querySelector('.live-page');
     if (!bar || !page) return;

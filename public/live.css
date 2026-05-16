@@ -289,7 +289,11 @@
 
 /* ---- Legend ---- */
 .live-legend {
-  bottom: 58px;
+  /* #1206: track --vcr-bar-height (set by JS ResizeObserver on .vcr-bar)
+   * the same way .live-feed does — hard-coded bottom offsets get
+   * occluded by the bar on mobile two-row + safe-area-inset layouts.
+   */
+  bottom: calc(var(--vcr-bar-height, 58px) + 10px);
   right: 12px;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
   backdrop-filter: blur(12px);
@@ -633,7 +637,12 @@
   .vcr-bar { padding-bottom: calc(8px + env(safe-area-inset-bottom, 34px)); }
   /* Inherit --vcr-bar-height (set by JS); no hard-coded bottom here so the
    * feed/legend keep tracking the live VCR height including the safe area.
+   * #1206 r1: restore explicit iOS legend override (deleted in original
+   * fix) — even with --vcr-bar-height, callers that read computed style
+   * before JS runs benefit from a sane fallback that already accounts
+   * for the safe-area inset.
    */
+  .live-legend { bottom: calc(var(--vcr-bar-height, 78px) + env(safe-area-inset-bottom, 34px)); }
 }
 .vcr-bar > .vcr-controls {
   display: flex; align-items: center; gap: 4px; flex-shrink: 0;
