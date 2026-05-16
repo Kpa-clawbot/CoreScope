@@ -359,7 +359,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		name, _ := msg["origin"].(string)
 		iata := parts[1]
 		meta := extractObserverMeta(msg)
-		if err := store.UpsertObserver(observerID, name, iata, meta); err != nil {
+		if err := store.UpsertObserverAt(observerID, name, iata, meta, resolveRxTime(msg, tag)); err != nil {
 			log.Printf("MQTT [%s] observer status error: %v", tag, err)
 		}
 		// Insert metrics sample from status message
@@ -575,7 +575,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			if mqttMsg.Region != "" {
 				effectiveRegion = mqttMsg.Region
 			}
-			if err := store.UpsertObserver(observerID, origin, effectiveRegion, nil); err != nil {
+			if err := store.UpsertObserverAt(observerID, origin, effectiveRegion, nil, mqttMsg.Timestamp); err != nil {
 				log.Printf("MQTT [%s] observer upsert error: %v", tag, err)
 			}
 		}
@@ -959,8 +959,20 @@ func resolveRxTime(msg map[string]interface{}, tag string) string {
 		log.Printf("MQTT [%s] unparseable timestamp %q, using ingest time", tag, raw)
 		return now.Format(time.RFC3339)
 	}
-	if t.After(now.Add(1 * time.Hour)) {
+	// Hard reject: > 14h ahead is a genuine clock error (UTC+14 is the maximum
+	// standard offset, so nothing valid should be further ahead than that).
+	if t.After(now.Add(14 * time.Hour)) {
 		log.Printf("MQTT [%s] future timestamp %q, using ingest time", tag, raw)
+		return now.Format(time.RFC3339)
+	}
+	// Soft clamp: naive local-clock timestamps from UTC+N observers are parsed
+	// as-if UTC, making them appear N hours in the future. A UTC+2 observer's
+	// live packet looks 2h ahead, but it is NOT a buffered packet — the whole
+	// point of using rxTime is to preserve the past timestamp for packets that
+	// were buffered offline. If rxTime is ahead of now, the packet is live and
+	// ingest time is the correct value. This also prevents storing future
+	// timestamps that would show ⚠️ in the UI for every packet from UTC+N nodes.
+	if t.After(now) {
 		return now.Format(time.RFC3339)
 	}
 	return t.UTC().Format(time.RFC3339)
