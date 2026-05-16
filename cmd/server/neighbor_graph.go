@@ -115,6 +115,27 @@ func (g *NeighborGraph) AllEdges() []*NeighborEdge {
 	return out
 }
 
+// MarkAmbiguous flips the Ambiguous flag on the edge between pubkeyA and
+// pubkeyB (key direction-agnostic) to the supplied value. Returns true if
+// the edge existed and was updated.
+//
+// This helper exists so tests don't have to mutate *NeighborEdge fields
+// returned from AllEdges()/Neighbors() — those mutations work today only
+// because the map stores pointers, which is a hidden coupling. Routing
+// the flip through a method makes the intent explicit and lets the graph
+// take its own write-lock.
+func (g *NeighborGraph) MarkAmbiguous(pubkeyA, pubkeyB string, ambiguous bool) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	key := makeEdgeKey(strings.ToLower(pubkeyA), strings.ToLower(pubkeyB))
+	e, ok := g.edges[key]
+	if !ok {
+		return false
+	}
+	e.Ambiguous = ambiguous
+	return true
+}
+
 // IsStale returns true if the graph cache has expired.
 func (g *NeighborGraph) IsStale() bool {
 	g.mu.RLock()

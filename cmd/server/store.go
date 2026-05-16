@@ -215,7 +215,18 @@ type PacketStore struct {
 	lruMu                 sync.RWMutex     // guards apiResolvedPathLRU + lruOrder
 
 	// Persisted neighbor graph for hop resolution at ingest time.
-	graph *NeighborGraph
+	// Accessed via atomic.Pointer because async rebuilds (path_inspect.go
+	// ensureNeighborGraph) and ingest-time readers race on the pointer
+	// (issue #1203 sub-fix).
+	graph atomic.Pointer[NeighborGraph]
+
+	// Singleflight state for ensureNeighborGraph. These were package-globals
+	// in #1203 r0 — moved to per-store fields (PR #1208 review) so parallel
+	// tests with independent *PacketStore values don't share rebuild state
+	// (cross-store deadlock/skip risk under -race).
+	rebuildMu    sync.Mutex
+	rebuildInFlt chan struct{} // nil when no rebuild is in flight
+
 
 	// Path inspector score cache (issue #944).
 	inspectMu    sync.RWMutex
@@ -233,6 +244,29 @@ type PacketStore struct {
 	// Bounded cold load: oldest packet timestamp loaded into memory.
 	// Empty string means all data is in memory (no limit applied).
 	oldestLoaded string
+
+	// Hot startup atomic gates — see contract below.
+	//
+	// Contract / ordering invariant (PR #1187):
+	//   * hashMigrationComplete (set by migrateContentHashesAsync) gates
+	//     content-hash–dependent code paths (e.g. dedup correctness on the
+	//     write side). Set true ONLY after the migration loop finishes.
+	//   * backgroundLoadDone is set true exactly once, after
+	//     loadBackgroundChunks finishes its loop AND its post-load index
+	//     rebuild. It gates "hot startup has finished filling
+	//     retentionHours of data into memory" (used by /api/perf and the
+	//     UI's hot-load banner). It says nothing about success — see
+	//     backgroundLoadFailed for the success/failure signal.
+	//   * backgroundLoadFailed is set true ONLY if at least one chunk
+	//     errored during background load. /api/perf surfaces it so
+	//     operators can distinguish "done & full" from "done & partial".
+	//     Read order MUST be: load backgroundLoadDone first; only if true
+	//     is backgroundLoadFailed meaningful.
+	// 0 = disabled (current behavior). Background loader fills the rest.
+	hotStartupHours        float64
+	backgroundLoadDone     atomic.Bool
+	backgroundLoadFailed   atomic.Bool
+	backgroundLoadProgress atomic.Int64 // 0–100 percent complete
 
 	// Async hash migration state: set after migrateContentHashesAsync completes.
 	hashMigrationComplete atomic.Bool
@@ -419,6 +453,14 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		ps.retentionHours = cfg.RetentionHours
 		ps.maxMemoryMB = cfg.MaxMemoryMB
 		ps.maxResolvedPubkeyIndexEntries = cfg.MaxResolvedPubkeyIndexEntries
+		if cfg.HotStartupHours > 0 {
+			h := cfg.HotStartupHours
+			if ps.retentionHours > 0 && h > ps.retentionHours {
+				log.Printf("[store] warning: hotStartupHours (%g) > retentionHours (%g) — clamping", h, ps.retentionHours)
+				h = ps.retentionHours
+			}
+			ps.hotStartupHours = h
+		}
 	}
 	// Wire cacheTTL config values to server-side cache durations.
 	if len(cacheTTLs) > 0 && cacheTTLs[0] != nil {
@@ -477,10 +519,21 @@ func (s *PacketStore) Load() error {
 	}
 
 	// Build WHERE conditions: retention cutoff (mirrors Evict logic) + optional memory-cap limit.
+	// When hotStartupHours > 0, use it as the initial cutoff (smaller window = fast startup).
+	//
+	// PR #1187 r2 #7: compute the hot cutoff ONCE here and reuse the same
+	// string for both the SQL filter below AND for s.oldestLoaded later.
+	// Two separate time.Now().UTC() calls produced microsecond skew at chunk
+	// borders, so the SQL window and oldestLoaded could disagree.
 	var loadConditions []string
-	if s.retentionHours > 0 {
-		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours*3600) * time.Second).Format(time.RFC3339)
-		loadConditions = append(loadConditions, fmt.Sprintf("t.first_seen >= '%s'", cutoff))
+	hotCutoffHours := s.retentionHours
+	if s.hotStartupHours > 0 {
+		hotCutoffHours = s.hotStartupHours
+	}
+	var hotCutoffStr string
+	if hotCutoffHours > 0 {
+		hotCutoffStr = time.Now().UTC().Add(-time.Duration(hotCutoffHours * float64(time.Hour))).Format(time.RFC3339)
+		loadConditions = append(loadConditions, fmt.Sprintf("t.first_seen >= '%s'", hotCutoffStr))
 	}
 	if maxPackets > 0 {
 		loadConditions = append(loadConditions, fmt.Sprintf(
@@ -667,7 +720,12 @@ func (s *PacketStore) Load() error {
 	s.buildDistanceIndex()
 
 	// Track oldest loaded timestamp for future SQL fallback queries.
-	if len(s.packets) > 0 {
+	// When hotStartupHours > 0 use the SAME cutoff string that was used in
+	// the load SQL (PR #1187 r2 #7) — recomputing time.Now().UTC() here
+	// produced microsecond skew vs. the SQL filter at chunk boundaries.
+	if s.hotStartupHours > 0 {
+		s.oldestLoaded = hotCutoffStr
+	} else if len(s.packets) > 0 {
 		s.oldestLoaded = s.packets[0].FirstSeen
 	}
 
@@ -681,6 +739,382 @@ func (s *PacketStore) Load() error {
 			len(s.packets), s.totalObs, elapsed, s.trackedMemoryMB(), s.estimatedMemoryMB())
 	}
 	return nil
+}
+
+// loadChunk queries a [from, to) time window from SQLite without holding the
+// write lock, builds local data structures, then merges them into the store
+// under s.mu.Lock(). It is the building block for the background loader.
+//
+// The chunk is assumed to be older than the data already in the store, so
+// localPackets are prepended to s.packets.
+//
+// byPayloadType is updated here incrementally. byPathHop, spIndex, and
+// distHops are NOT updated here — the caller (loadBackgroundChunks) rebuilds
+// those once after all chunks are merged.
+func (s *PacketStore) loadChunk(from, to time.Time) error {
+	fromStr := from.UTC().Format(time.RFC3339)
+	toStr := to.UTC().Format(time.RFC3339)
+
+	// Build the same SQL as Load() but with a [from, to) window.
+	rpCol := ""
+	if s.db.hasResolvedPath {
+		rpCol = ",\n\t\t\t\to.resolved_path"
+	}
+	obsRawHexCol := ""
+	if s.db.hasObsRawHex {
+		obsRawHexCol = ", o.raw_hex"
+	}
+
+	const filterClause = "\n\t\t\tWHERE t.first_seen >= ? AND t.first_seen < ?"
+
+	var chunkSQL string
+	if s.db.isV3 {
+		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
+				t.payload_type, t.payload_version, t.decoded_json,
+				o.id, obs.id, obs.name, o.direction,
+				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + `
+			FROM transmissions t
+			LEFT JOIN observations o ON o.transmission_id = t.id
+			LEFT JOIN observers obs ON obs.rowid = o.observer_idx` + filterClause + `
+			ORDER BY t.first_seen ASC, o.timestamp DESC`
+	} else {
+		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
+				t.payload_type, t.payload_version, t.decoded_json,
+				o.id, o.observer_id, o.observer_name, o.direction,
+				o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRawHexCol + rpCol + `
+			FROM transmissions t
+			LEFT JOIN observations o ON o.transmission_id = t.id` + filterClause + `
+			ORDER BY t.first_seen ASC, o.timestamp DESC`
+	}
+
+	rows, err := s.db.conn.Query(chunkSQL, fromStr, toStr)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	// Local data structures — built without holding the lock.
+	localByHash := make(map[string]*StoreTx)
+	localPackets := make([]*StoreTx, 0)
+	localByTxID := make(map[int]*StoreTx)
+	localByObsID := make(map[int]*StoreObs)
+	localByObserver := make(map[string][]*StoreObs)
+	var localTotalObs int
+	var localTrackedBytes int64
+	var localMaxTxID int
+	var localMaxObsID int
+
+	for rows.Next() {
+		var txID int
+		var rawHex, hash, firstSeen, decodedJSON sql.NullString
+		var routeType, payloadType, payloadVersion sql.NullInt64
+		var obsID sql.NullInt64
+		var observerID, observerName, direction, pathJSON, obsTimestamp sql.NullString
+		var snr, rssi sql.NullFloat64
+		var score sql.NullInt64
+		var obsRawHex sql.NullString
+		var resolvedPathStr sql.NullString
+
+		scanArgs := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
+			&payloadVersion, &decodedJSON,
+			&obsID, &observerID, &observerName, &direction,
+			&snr, &rssi, &score, &pathJSON, &obsTimestamp}
+		if s.db.hasObsRawHex {
+			scanArgs = append(scanArgs, &obsRawHex)
+		}
+		if s.db.hasResolvedPath {
+			scanArgs = append(scanArgs, &resolvedPathStr)
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
+			log.Printf("[store] loadChunk scan error: %v", err)
+			continue
+		}
+
+		hashStr := nullStrVal(hash)
+		tx := localByHash[hashStr]
+		if tx == nil {
+			tx = &StoreTx{
+				ID:          txID,
+				RawHex:      nullStrVal(rawHex),
+				Hash:        hashStr,
+				FirstSeen:   nullStrVal(firstSeen),
+				LatestSeen:  nullStrVal(firstSeen),
+				RouteType:   nullIntPtr(routeType),
+				PayloadType: nullIntPtr(payloadType),
+				DecodedJSON: nullStrVal(decodedJSON),
+				obsKeys:     make(map[string]bool),
+				observerSet: make(map[string]bool),
+			}
+			localByHash[hashStr] = tx
+			localPackets = append(localPackets, tx)
+			localByTxID[txID] = tx
+			if txID > localMaxTxID {
+				localMaxTxID = txID
+			}
+			localTrackedBytes += estimateStoreTxBytes(tx)
+		}
+
+		if obsID.Valid {
+			oid := int(obsID.Int64)
+			obsIDStr := nullStrVal(observerID)
+			obsPJ := nullStrVal(pathJSON)
+
+			dk := obsIDStr + "|" + obsPJ
+			if tx.obsKeys[dk] {
+				continue
+			}
+
+			obs := &StoreObs{
+				ID:             oid,
+				TransmissionID: txID,
+				ObserverID:     obsIDStr,
+				ObserverName:   nullStrVal(observerName),
+				Direction:      nullStrVal(direction),
+				SNR:            nullFloatPtr(snr),
+				RSSI:           nullFloatPtr(rssi),
+				Score:          nullIntPtr(score),
+				PathJSON:       obsPJ,
+				RawHex:         nullStrVal(obsRawHex),
+				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
+			}
+
+			tx.Observations = append(tx.Observations, obs)
+			tx.obsKeys[dk] = true
+			if obs.ObserverID != "" && !tx.observerSet[obs.ObserverID] {
+				tx.observerSet[obs.ObserverID] = true
+				tx.UniqueObserverCount++
+			}
+			tx.ObservationCount++
+			if obs.Timestamp > tx.LatestSeen {
+				tx.LatestSeen = obs.Timestamp
+			}
+
+			localByObsID[oid] = obs
+			if oid > localMaxObsID {
+				localMaxObsID = oid
+			}
+			if obsIDStr != "" {
+				localByObserver[obsIDStr] = append(localByObserver[obsIDStr], obs)
+			}
+			localTotalObs++
+			localTrackedBytes += estimateStoreObsBytes(obs)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	// Pick best observation for each local packet before merging.
+	for _, tx := range localPackets {
+		pickBestObservation(tx)
+	}
+
+	if len(localPackets) == 0 {
+		return nil
+	}
+
+	// PR #1187 r3 MUST-FIX 1: index↔slice consistency.
+	//
+	// The previous (r2 #6, commit 2ec762aa) merge order was:
+	//   1) prepend s.packets in one critical section
+	//   2) populate s.byHash/byTxID/byObsID/byObserver/byNode/byPayloadType
+	//      in separate per-batch critical sections
+	//   3) bump counters in a third section
+	//
+	// Any RLock-holding reader between steps observed packets present in
+	// s.packets but missing from s.byHash → silent partial data loss in
+	// GetPacketByHash and the QueryPackets hash/node fast-paths.
+	//
+	// We invert the order: build the indexes FIRST in bounded per-batch
+	// critical sections, then under a SINGLE final critical section
+	// prepend s.packets AND bump counters AND advance maxIDs. The
+	// invariant "every tx in s.packets is in s.byHash/s.byTxID" holds at
+	// every RLock instant — readers either see the old state, or an
+	// intermediate state where indexes contain a superset of s.packets
+	// (which is harmless: nothing in s.packets dangles), or the fully
+	// merged new state.
+	const mergeBatchSize = 500
+
+	for batchStart := 0; batchStart < len(localPackets); batchStart += mergeBatchSize {
+		batchEnd := batchStart + mergeBatchSize
+		if batchEnd > len(localPackets) {
+			batchEnd = len(localPackets)
+		}
+		batch := localPackets[batchStart:batchEnd]
+
+		// Build the per-batch index views outside the lock so the
+		// critical section below is O(batch), not O(total local).
+		batchHashes := make(map[string]*StoreTx, len(batch))
+		batchTxIDs := make(map[int]*StoreTx, len(batch))
+		batchObsIDs := make(map[int]*StoreObs)
+		batchByObserver := make(map[string][]*StoreObs)
+		for _, tx := range batch {
+			batchHashes[tx.Hash] = tx
+			batchTxIDs[tx.ID] = tx
+			for _, o := range tx.Observations {
+				batchObsIDs[o.ID] = o
+				if o.ObserverID != "" {
+					batchByObserver[o.ObserverID] = append(batchByObserver[o.ObserverID], o)
+				}
+			}
+		}
+
+		s.mu.Lock()
+		newObsIDs := make(map[int]bool, len(batchObsIDs))
+		for k := range batchObsIDs {
+			if s.byObsID[k] == nil {
+				newObsIDs[k] = true
+			}
+		}
+		for k, v := range batchHashes {
+			if s.byHash[k] == nil {
+				s.byHash[k] = v
+			}
+		}
+		for k, v := range batchTxIDs {
+			if s.byTxID[k] == nil {
+				s.byTxID[k] = v
+			}
+		}
+		for k, v := range batchObsIDs {
+			if newObsIDs[k] {
+				s.byObsID[k] = v
+			}
+		}
+		for observerID, obsList := range batchByObserver {
+			for _, o := range obsList {
+				if newObsIDs[o.ID] {
+					s.byObserver[observerID] = append(s.byObserver[observerID], o)
+				}
+			}
+		}
+		for _, tx := range batch {
+			s.indexByNode(tx)
+			if tx.PayloadType != nil {
+				pt := *tx.PayloadType
+				s.byPayloadType[pt] = append(s.byPayloadType[pt], tx)
+			}
+			s.trackAdvertPubkey(tx)
+		}
+		s.mu.Unlock()
+		runtime.Gosched()
+	}
+
+	// Final atomic step: now that every tx in localPackets is fully
+	// indexed, publish it into s.packets and bump counters in one short
+	// critical section. After this point the new state is fully visible;
+	// before it readers see the old slice (which is still fully indexed).
+	s.mu.Lock()
+	s.packets = append(localPackets, s.packets...)
+	s.totalObs += localTotalObs
+	s.trackedBytes += localTrackedBytes
+	if localMaxTxID > s.maxTxID {
+		s.maxTxID = localMaxTxID
+	}
+	if localMaxObsID > s.maxObsID {
+		s.maxObsID = localMaxObsID
+	}
+	s.mu.Unlock()
+
+	log.Printf("[store] background chunk [%s, %s) merged: %d tx, %d obs", fromStr, toStr, len(localPackets), localTotalObs)
+	return nil
+}
+
+// loadBackgroundChunks fills the remaining retentionHours window by loading
+// daily chunks from oldestLoaded back to the retention cutoff. After all
+// chunks are merged it rebuilds analytics indexes once. Chunk errors are
+// handled by advancing past the failed window so the loop always terminates.
+func (s *PacketStore) loadBackgroundChunks() {
+	if s.retentionHours <= 0 {
+		s.backgroundLoadDone.Store(true)
+		return
+	}
+
+	target := time.Now().UTC().Add(-time.Duration(s.retentionHours * float64(time.Hour)))
+	totalHours := s.retentionHours - s.hotStartupHours
+	if totalHours <= 0 {
+		s.backgroundLoadDone.Store(true)
+		return
+	}
+
+	var chunksLoaded float64
+	var chunkErrors int
+	totalChunks := math.Ceil(totalHours / 24)
+
+	for {
+		s.mu.RLock()
+		oldest := s.oldestLoaded
+		s.mu.RUnlock()
+
+		if oldest == "" {
+			break
+		}
+		chunkEnd, err := time.Parse(time.RFC3339, oldest)
+		if err != nil {
+			log.Printf("[store] background loader: bad oldestLoaded %q: %v", oldest, err)
+			break
+		}
+		if !chunkEnd.After(target) {
+			break
+		}
+
+		chunkStart := chunkEnd.Add(-24 * time.Hour)
+		if chunkStart.Before(target) {
+			chunkStart = target
+		}
+
+		chunkStartStr := chunkStart.Format(time.RFC3339)
+		if err := s.loadChunk(chunkStart, chunkEnd); err != nil {
+			chunkErrors++
+			log.Printf("[store] background chunk [%s, %s) error: %v — advancing past it",
+				chunkStartStr, chunkEnd.Format(time.RFC3339), err)
+		}
+		// Always advance oldestLoaded to chunkStart so the loop terminates,
+		// even when the chunk was empty (loadChunk skips the update when 0 packets).
+		s.mu.Lock()
+		if s.oldestLoaded > chunkStartStr || s.oldestLoaded == "" {
+			s.oldestLoaded = chunkStartStr
+		}
+		s.mu.Unlock()
+
+		chunksLoaded++
+		if totalChunks > 0 {
+			pct := int64(chunksLoaded / totalChunks * 100)
+			if pct > 100 {
+				pct = 100
+			}
+			s.backgroundLoadProgress.Store(pct)
+		}
+
+		// Yield between chunks so ingest goroutines can acquire s.mu.Lock()
+		// without being starved. The chosen tradeoff is brief lock-holds per
+		// chunk rather than a configurable sleep; background fill is
+		// best-effort and queries fall back to SQL while it runs.
+		runtime.Gosched()
+	}
+
+	// Rebuild analytics indexes once after all chunks are merged.
+	s.mu.Lock()
+	s.buildSubpathIndex()
+	s.buildPathHopIndex()
+	s.buildDistanceIndex()
+	s.mu.Unlock()
+
+	s.backgroundLoadDone.Store(true)
+	if chunkErrors > 0 {
+		s.backgroundLoadFailed.Store(true)
+	}
+	s.backgroundLoadProgress.Store(100)
+
+	s.mu.RLock()
+	totalPkts := len(s.packets)
+	oldest := s.oldestLoaded
+	s.mu.RUnlock()
+	if chunkErrors > 0 {
+		log.Printf("[store] background load done with %d chunk error(s): %d packets in memory, oldestLoaded=%s", chunkErrors, totalPkts, oldest)
+	} else {
+		log.Printf("[store] background load complete: %d packets in memory, oldestLoaded=%s", totalPkts, oldest)
+	}
 }
 
 // pickBestObservation selects the observation with the longest path
@@ -833,6 +1267,22 @@ func (s *PacketStore) untrackAdvertPubkey(tx *StoreTx) {
 
 // QueryPackets returns filtered, paginated packets from memory.
 func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
+	// SQL fallback: if the query window predates the in-memory window, delegate
+	// to the DB layer which covers the full SQLite retention period.
+	s.mu.RLock()
+	oldest := s.oldestLoaded
+	s.mu.RUnlock()
+	if oldest != "" {
+		needsSQL := (q.Since != "" && q.Since < oldest) ||
+			(q.Until != "" && q.Until < oldest)
+		if needsSQL {
+			if result, err := s.db.QueryPackets(q); err == nil {
+				return result
+			} else {
+				log.Printf("[store] QueryPackets SQL fallback failed: %v — using in-memory", err)
+			}
+		}
+	}
 	atomic.AddInt64(&s.queryCount, 1)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -879,6 +1329,20 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 
 // QueryGroupedPackets returns transmissions grouped by hash (already 1:1).
 func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
+	s.mu.RLock()
+	oldest := s.oldestLoaded
+	s.mu.RUnlock()
+	if oldest != "" {
+		needsSQL := (q.Since != "" && q.Since < oldest) ||
+			(q.Until != "" && q.Until < oldest)
+		if needsSQL {
+			if result, err := s.db.QueryGroupedPackets(q); err == nil {
+				return result
+			} else {
+				log.Printf("[store] QueryGroupedPackets SQL fallback failed: %v — using in-memory", err)
+			}
+		}
+	}
 	atomic.AddInt64(&s.queryCount, 1)
 
 	if q.Limit <= 0 {
@@ -1048,6 +1512,10 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 	nodeIdx := len(s.byNode)
 	pathHopIdx := len(s.byPathHop)
 	ptIdx := len(s.byPayloadType)
+	oldestLoaded := s.oldestLoaded
+	retentionHours := s.retentionHours
+	maxMemoryMB := s.maxMemoryMB
+	hotStartupHours := s.hotStartupHours
 
 	// Distinct advert pubkey count — precomputed incrementally (see trackAdvertPubkey).
 	advertByObsCount := len(s.advertPubkeys)
@@ -1059,18 +1527,22 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 	evicted := atomic.LoadInt64(&s.evicted)
 
 	return map[string]interface{}{
-		"totalLoaded":       totalLoaded,
-		"totalObservations": totalObs,
-		"evicted":           evicted,
-		"inserts":           atomic.LoadInt64(&s.insertCount),
-		"queries":           atomic.LoadInt64(&s.queryCount),
-		"inMemory":          totalLoaded,
-		"sqliteOnly":        false,
-		"retentionHours":    s.retentionHours,
-		"maxMemoryMB":       s.maxMemoryMB,
-		"oldestLoaded":      s.oldestLoaded,
-		"estimatedMB":       estimatedMB,
-		"trackedMB":         trackedMB,
+		"totalLoaded":            totalLoaded,
+		"totalObservations":      totalObs,
+		"evicted":                evicted,
+		"inserts":                atomic.LoadInt64(&s.insertCount),
+		"queries":                atomic.LoadInt64(&s.queryCount),
+		"inMemory":               totalLoaded,
+		"sqliteOnly":             false,
+		"retentionHours":         retentionHours,
+		"maxMemoryMB":            maxMemoryMB,
+		"oldestLoaded":           oldestLoaded,
+		"estimatedMB":            estimatedMB,
+		"trackedMB":              trackedMB,
+		"hotStartupHours":        hotStartupHours,
+		"backgroundLoadComplete": s.backgroundLoadDone.Load(),
+		"backgroundLoadFailed":   s.backgroundLoadFailed.Load(),
+		"backgroundLoadProgress": s.backgroundLoadProgress.Load(),
 		"indexes": map[string]interface{}{
 			"byHash":           hashIdx,
 			"byTxID":           txIdx,
@@ -1241,24 +1713,28 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 	}
 
 	return PerfPacketStoreStats{
-		TotalLoaded:       totalLoaded,
-		TotalObservations: totalObs,
-		Evicted:           int(atomic.LoadInt64(&s.evicted)),
-		Inserts:           atomic.LoadInt64(&s.insertCount),
-		Queries:           atomic.LoadInt64(&s.queryCount),
-		InMemory:          totalLoaded,
-		SqliteOnly:        false,
-		MaxPackets:        2386092,
-		EstimatedMB:       estimatedMB,
-		TrackedMB:         trackedMB,
-		AvgBytesPerPacket: avgBytesPerPacket,
-		MaxMB:             s.maxMemoryMB,
+		TotalLoaded:              totalLoaded,
+		TotalObservations:        totalObs,
+		Evicted:                  int(atomic.LoadInt64(&s.evicted)),
+		Inserts:                  atomic.LoadInt64(&s.insertCount),
+		Queries:                  atomic.LoadInt64(&s.queryCount),
+		InMemory:                 totalLoaded,
+		SqliteOnly:               false,
+		MaxPackets:               2386092,
+		EstimatedMB:              estimatedMB,
+		TrackedMB:                trackedMB,
+		AvgBytesPerPacket:        avgBytesPerPacket,
+		MaxMB:                    s.maxMemoryMB,
 		Indexes: PacketStoreIndexes{
 			ByHash:           hashIdx,
 			ByObserver:       observerIdx,
 			ByNode:           nodeIdx,
 			AdvertByObserver: advertByObsCount,
 		},
+		HotStartupHours:        s.hotStartupHours,
+		BackgroundLoadComplete: s.backgroundLoadDone.Load(),
+		BackgroundLoadFailed:   s.backgroundLoadFailed.Load(),
+		BackgroundLoadProgress: s.backgroundLoadProgress.Load(),
 	}
 }
 
@@ -1535,6 +2011,9 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	// Hoist getCachedNodesAndPM() once before the observation loop to avoid
 	// per-observation function calls (review item #1).
 	_, cachedPM := s.getCachedNodesAndPM()
+	// Hoist atomic graph.Load() out of the per-row loop too (PR #1208
+	// carmack #1) — one Load per ingest call, not one per row.
+	cachedGraph := s.graph.Load()
 
 	// Decode-window tracking: resolved pubkeys per-tx for touchRelayLastSeen,
 	// and resolved paths per-obs for broadcast/persist.
@@ -1617,7 +2096,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			var resolvedPubkeys []string
 			var rpForBroadcast []*string
 			if r.pathJSON != "" && r.pathJSON != "[]" && cachedPM != nil {
-				rpForBroadcast = resolvePathForObs(r.pathJSON, r.observerID, tx, cachedPM, s.graph)
+				rpForBroadcast = resolvePathForObs(r.pathJSON, r.observerID, tx, cachedPM, cachedGraph)
 				resolvedPubkeys = extractResolvedPubkeys(rpForBroadcast)
 				// Feed decode-window consumers: addToByNode + resolvedPubkeyIndex
 				for _, pk := range resolvedPubkeys {
@@ -1810,9 +2289,12 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		var edgeUpdates []persistEdgeUpdate
 
 		_, pm := s.getCachedNodesAndPM()
-		// Read graph ref under lock (it's set during startup and not replaced after,
-		// but reading under lock is safer — review item #5).
-		graphRef := s.graph
+		// graph is *atomic.Pointer[NeighborGraph]; the Load itself is
+		// lock-free. (Earlier comment claimed "set during startup, not
+		// replaced after" — that's no longer true: #1203 made rebuilds
+		// async via ensureNeighborGraph. Dropping the dead s.mu RLock
+		// wrap — review PR #1208.)
+		graphRef := s.graph.Load()
 		for _, tx := range broadcastTxs {
 			for _, obs := range tx.Observations {
 				// Use decode-window resolved path for persist
@@ -1937,7 +2419,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 
 	// Hoist getCachedNodesAndPM() before the loop — same pattern as IngestNewFromDB (review fix #1).
 	_, pm := s.getCachedNodesAndPM()
-	graphRef := s.graph
+	graphRef := s.graph.Load()
 
 	hopsSeen := make(map[string]bool) // reused across observations; cleared per use
 
@@ -1981,7 +2463,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		var obsResolvedPath []*string
 		if r.pathJSON != "" && r.pathJSON != "[]" {
 			if pm != nil {
-				obsResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, s.graph)
+				obsResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, graphRef)
 				pks := extractResolvedPubkeys(obsResolvedPath)
 				for _, pk := range pks {
 					s.addToByNode(tx, pk)
@@ -3097,7 +3579,7 @@ func (s *PacketStore) evictionCandidateTxIDs() []int {
 	}
 	cutoffIdx := 0
 	if s.retentionHours > 0 {
-		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours*3600) * time.Second).Format(time.RFC3339)
+		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours * float64(time.Hour))).Format(time.RFC3339)
 		for cutoffIdx < len(s.packets) && s.packets[cutoffIdx].FirstSeen < cutoff {
 			cutoffIdx++
 		}
@@ -3161,7 +3643,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 
 	// Time-based eviction: find how many packets from the head are too old
 	if s.retentionHours > 0 {
-		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours*3600) * time.Second).Format(time.RFC3339)
+		cutoff := time.Now().UTC().Add(-time.Duration(s.retentionHours * float64(time.Hour))).Format(time.RFC3339)
 		for cutoffIdx < len(s.packets) && s.packets[cutoffIdx].FirstSeen < cutoff {
 			cutoffIdx++
 		}
@@ -3553,11 +4035,17 @@ func buildAggregateHopContextPubkeys(txs []*StoreTx, pm *prefixMap) []string {
 func (s *PacketStore) hopResolverPerTx(pm *prefixMap) (resolveHop func(string) *nodeInfo, setContext func([]string)) {
 	hopCache := make(map[string]*nodeInfo, 16)
 	var contextPubkeys []string
+	// Hoist the atomic graph.Load() out of the per-hop closure body so we do
+	// one Load per resolver instance, not one per resolveHop call (PR #1208
+	// carmack #1). Pair (resolveHop, setContext) is documented single-
+	// goroutine, single-request scope — pinning the graph here matches that
+	// lifetime.
+	graph := s.graph.Load()
 	resolveHop = func(hop string) *nodeInfo {
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, graph)
 		hopCache[hop] = r
 		return r
 	}
@@ -5363,11 +5851,12 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 	}
 
 	hopCache := make(map[string]*nodeInfo)
+	graph := s.graph.Load() // hoist out of resolver closure (PR #1208 carmack #1)
 	resolveHop := func(hop string) *nodeInfo {
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, graph)
 		hopCache[hop] = r
 		return r
 	}
@@ -7811,6 +8300,7 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 	// (the index iterates raw subpath strings, not per-tx). See #1197.
 	contextPubkeys := buildAggregateHopContextPubkeys(s.packets, pm)
 	hopCache := make(map[string]*nodeInfo)
+	graph := s.graph.Load() // hoist out of resolver closure (PR #1208 carmack #1)
 	resolveHop := func(hop string) string {
 		if cached, ok := hopCache[hop]; ok {
 			if cached != nil {
@@ -7818,7 +8308,7 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 			}
 			return hop
 		}
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, graph)
 		hopCache[hop] = r
 		if r != nil {
 			return r.Name
@@ -7894,6 +8384,7 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 	// aggregator over s.spIndex / per-tx fallback both need it. See #1197.
 	contextPubkeys := buildAggregateHopContextPubkeys(s.packets, pm)
 	hopCache := make(map[string]*nodeInfo)
+	graph := s.graph.Load() // hoist out of resolver closure (PR #1208 carmack #1)
 	resolveHop := func(hop string) string {
 		if cached, ok := hopCache[hop]; ok {
 			if cached != nil {
@@ -7901,7 +8392,7 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 			}
 			return hop
 		}
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, graph)
 		hopCache[hop] = r
 		if r != nil {
 			return r.Name
@@ -8045,11 +8536,14 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 	// this subpath. This is the right scope — those are the packets that
 	// witnessed the requested hop sequence. See #1197.
 	contextPubkeys := buildAggregateHopContextPubkeys(matchedTxs, pm)
+	// Hoist atomic graph.Load() once for the whole request (PR #1208
+	// carmack #1) — used by the rawHops loop AND the matched-tx loop below.
+	graph := s.graph.Load()
 
 	// Resolve the requested hops
 	nodes := make([]map[string]interface{}, len(rawHops))
 	for i, hop := range rawHops {
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, graph)
 		entry := map[string]interface{}{"hop": hop, "name": hop, "lat": nil, "lon": nil, "pubkey": nil}
 		if r != nil {
 			entry["name"] = r.Name
@@ -8105,7 +8599,7 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 		hops := txGetParsedPath(tx)
 		resolved := make([]string, len(hops))
 		for i, h := range hops {
-			r, _, _ := pm.resolveWithContext(h, txCtx, s.graph)
+			r, _, _ := pm.resolveWithContext(h, txCtx, graph)
 			if r != nil {
 				resolved[i] = r.Name
 			} else {

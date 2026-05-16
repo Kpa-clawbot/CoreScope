@@ -49,6 +49,21 @@
   gap: 1px;
 }
 
+/* #1207: empty-state placeholder fills the feed body so the panel never
+   renders as orphan chrome (✕ + ◫ buttons with no content). The placeholder
+   is always in the DOM; CSS hides it when the feed has live-feed-item
+   siblings. This way the panel body is never empty, even between packets,
+   on first paint, or after a feed clear. */
+.live-feed-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 12px 8px;
+  text-align: center;
+}
+.live-feed .panel-content:has(.live-feed-item) .live-feed-empty {
+  display: none;
+}
+
 .live-legend .panel-content {
   display: flex;
   flex-direction: column;
@@ -59,15 +74,80 @@
 .live-header {
   top: 64px;
   left: 12px;
+  /* #1205 — toggles re-anchored as a child row; allow wrap + max-width.
+     NOTE: #liveHeader intentionally no longer carries `.live-overlay`
+     (which set flex-direction:column). With direction defaulting to row
+     here, #liveControls is forced onto its own line via `flex: 0 0 100%`
+     and flex-wrap, so the header lays out: [title row] then [toggles
+     row]. At ≤640px the wrap keeps both rows reachable. */
   display: flex;
+  /* #1204: .live-overlay sets flex-direction: column for all overlay panels
+   * (feed/legend/node-detail need that for header+content stacking). The
+   * header is horizontal — critical strip + toggle + body lay out inline,
+   * not stacked. Without this override the "0 pkts" critical strip stacks
+   * above MESH LIVE title and the stats row gets clipped. */
+  flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
+  row-gap: 6px;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
   backdrop-filter: blur(12px);
   padding: 8px 16px;
   border-radius: 10px;
   border: 1px solid var(--border);
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.04);
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+}
+.live-header-body {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+/* Critical strip (Mesh-Operator review #1180): beacon + pkt count are
+   always visible even when the collapsible body is hidden at narrow
+   widths. This is the ingest-state cue (red beacon = WS down) + the
+   one number operators check while the header is otherwise collapsed. */
+.live-header-critical {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+/* Toggle buttons (#1178, #1179) — hidden at wide viewports, visible at ≤768px.
+   Mesh-Operator review #1180: tap target ≥48×48 (#1060 floor + AGENTS glove
+   operability rule). Visible glyph stays small (decorative); transparent
+   padding expands the hit area without changing the visual chrome. */
+.live-header-toggle,
+.live-controls-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  min-height: 48px;
+  /* Visible chrome stays compact; padding grows the hit area. */
+  width: 48px;
+  height: 48px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.live-header-toggle:hover,
+.live-controls-toggle:hover {
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+}
+.live-header-toggle:focus-visible,
+.live-controls-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .live-title {
@@ -217,7 +297,11 @@
 
 /* ---- Legend ---- */
 .live-legend {
-  bottom: 58px;
+  /* #1206: track --vcr-bar-height (set by JS ResizeObserver on .vcr-bar)
+   * the same way .live-feed does — hard-coded bottom offsets get
+   * occluded by the bar on mobile two-row + safe-area-inset layouts.
+   */
+  bottom: calc(var(--vcr-bar-height, 58px) + 10px);
   right: 12px;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
   backdrop-filter: blur(12px);
@@ -294,21 +378,37 @@
   flex-wrap: wrap;
 }
 .live-toggles label { display: flex; align-items: center; gap: 3px; cursor: pointer; white-space: nowrap; }
-.live-toggles input[type="checkbox"] { margin: 0; }
-.live-node-filter {
-  background: rgba(0,0,0,0.35);
-  border: 1px solid rgba(255,255,255,0.15);
-  border-radius: 4px;
-  color: var(--text);
-  font-size: 11px;
-  padding: 2px 7px;
-  width: 130px;
-  outline: none;
-  transition: border-color 0.15s, width 0.2s;
+.live-toggles input { margin: 0; }
+
+/* ---- Live controls cluster (#1205 — re-anchored inside MESH LIVE panel)
+ * History: PR #1180 detached the toggles into a `position:fixed` overlay
+ * (`.live-overlay.live-controls`) pinned bottom-right. On many viewports
+ * the row visually orphaned away from any panel (issue #1205). PR #1209
+ * tried parking inside #liveLegend; rejected on UX grounds (inverted
+ * hierarchy). Correct restoration: toggles are a child of #liveHeader
+ * (the MESH LIVE panel) so they share its chrome and the existing
+ * header-collapse semantics.
+ */
+.live-controls {
+  /* In-flow inside #liveHeader. No position:fixed, no own background
+     (header already supplies blur + border + padding). */
+  position: static;
+  background: transparent;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  flex: 0 0 100%;          /* break onto its own row inside flex-wrap header */
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
-.live-node-filter:focus {
-  border-color: rgba(74,158,255,0.6);
-  width: 180px;
+.live-controls-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 .live-node-filter::placeholder { color: var(--text-muted); opacity: 0.7; }
 .live-node-filter::-webkit-search-cancel-button { cursor: pointer; }
@@ -367,6 +467,41 @@
   .live-header { gap: 8px; padding: 6px 12px; }
   .live-stat-pill { font-size: 11px; padding: 2px 8px; }
   .live-toggles { font-size: 10px; gap: 6px; }
+
+  /* Show toggle buttons */
+  .live-header-toggle,
+  .live-controls-toggle { display: inline-flex; }
+
+  /* When collapsed, hide the body */
+  .live-header.is-collapsed .live-header-body,
+  .live-controls.is-collapsed .live-controls-body { display: none; }
+  .live-header.is-collapsed { gap: 0; padding: 4px 6px; }
+  /* #1220 — when the controls row collapses to just the gear toggle, do NOT
+     force it onto its own full-width row inside the header's flex-wrap. The
+     wide-viewport `flex: 0 0 100%` rule (which lets the controls wrap below
+     the title on tablet) leaves ~60px of empty chrome below the critical
+     strip on mobile when both bodies are hidden. Inline the gear with the
+     count badge + 📊 toggle so the collapsed panel is a single ~48-56px
+     strip. Expanded controls still get their own wrapped row via the
+     `.is-expanded` override below. */
+  .live-controls.is-collapsed {
+    padding: 0;
+    flex: 0 0 auto;
+    width: auto;
+  }
+  /* #1220 — both panels collapsed = single-row strip. Drop the header's
+     vertical padding so the panel hugs the 48px toggle buttons (chrome ≈
+     toggle height + border). Without this, the 4px top/bottom padding
+     plus the 6px padding around the gear container pushed total height
+     to 70px, dangerously close to looking like empty chrome again. */
+  .live-header.is-collapsed:has(.live-controls.is-collapsed) {
+    padding: 0 6px;
+  }
+
+  /* Expanded body on narrow: stack so it never overflows the cluster */
+  .live-controls.is-expanded { max-width: calc(100vw - 24px); }
+  .live-controls.is-expanded .live-controls-body { flex-wrap: wrap; }
+  .live-controls.is-expanded .live-toggles { flex-wrap: wrap; max-height: 50vh; overflow-y: auto; }
 }
 
 /* ---- Responsive ---- */
@@ -570,9 +705,13 @@
 
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .vcr-bar { padding-bottom: calc(8px + env(safe-area-inset-bottom, 34px)); }
-  .live-feed { bottom: calc(78px + env(safe-area-inset-bottom, 34px)); }
-  .feed-show-btn { bottom: calc(88px + env(safe-area-inset-bottom, 34px)) !important; }
-  .live-legend { bottom: calc(78px + env(safe-area-inset-bottom, 34px)); }
+  /* Inherit --vcr-bar-height (set by JS); no hard-coded bottom here so the
+   * feed/legend keep tracking the live VCR height including the safe area.
+   * #1206 r2: removed .live-legend override — it double-added the
+   * safe-area inset (already baked into --vcr-bar-height via .vcr-bar
+   * padding-bottom above) and used a 78px fallback inconsistent with
+   * the base rule's 58px. Base rule at .live-legend handles both.
+   */
 }
 .vcr-bar > .vcr-controls {
   display: flex; align-items: center; gap: 4px; flex-shrink: 0;
@@ -804,9 +943,19 @@
 }
 .vcr-prompt-btn:hover { background: rgba(59,130,246,0.3); }
 
-/* Adjust feed position to not overlap VCR bar */
-.live-feed { bottom: 68px; }
-.feed-show-btn { bottom: 68px !important; }
+/* Adjust feed position to not overlap VCR bar (#1206)
+ * --vcr-bar-height is set by JS via ResizeObserver on .vcr-bar so the feed
+ * (and other bottom-pinned overlays) always clear the bar regardless of
+ * how tall it grows (mobile two-row layout, safe-area-inset, etc.).
+ */
+.live-feed { bottom: calc(var(--vcr-bar-height, 58px) + 10px); }
+.feed-show-btn { bottom: calc(var(--vcr-bar-height, 58px) + 10px) !important; }
+/* Cap the feed's height so its scrollable content never extends below the
+ * VCR bar top edge, even when the feed is pinned to a bottom corner.
+ */
+.live-feed {
+  max-height: min(340px, calc(100dvh - 64px - var(--vcr-bar-height, 58px) - 24px));
+}
 
 /* Backdrop for mobile tap-outside-to-close (#797) */
 .node-detail-backdrop {
@@ -830,13 +979,24 @@
     gap: 4px;
     overflow: visible;
   }
-  /* Row 1: controls + scope + LCD, all in one line */
+  /* #1221: LCD clock shares row with playback controls (not floating
+   * bottom-right). Scope buttons wrap to row 2; timeline to row 3.
+   * LCD is scaled ~70% of desktop so it fits next to the touch-target
+   * buttons without clipping at 375px viewport. */
   .vcr-controls { order: 1; flex-shrink: 0; gap: 4px; }
-  .vcr-scope-btns { order: 2; flex-shrink: 0; gap: 1px; }
-  .vcr-lcd { order: 3; display: flex; margin-left: auto; min-width: 90px; padding: 2px 6px; }
-  .vcr-lcd-canvas { width: 100px; height: 22px; }
+  .vcr-lcd {
+    order: 2;
+    margin-left: auto;
+    min-width: 70px;
+    padding: 2px 4px;
+    flex-shrink: 0;
+  }
+  .vcr-lcd-canvas { width: 78px; height: 18px; }
+  .vcr-lcd-mode { font-size: 0.55rem; letter-spacing: 1px; }
+  .vcr-lcd-pkts { font-size: 0.5rem; letter-spacing: 1px; }
+  .vcr-scope-btns { order: 3; flex-shrink: 0; gap: 1px; }
   .vcr-mode { display: none; }
-  /* Row 2: timeline takes full width */
+  /* Timeline takes full width on its own row */
   .vcr-timeline-container { order: 4; width: 100%; flex: none; height: 20px; }
   /* #207 — 44px touch targets for VCR buttons */
   .vcr-btn { padding: 4px 8px; font-size: 0.75rem; min-height: 44px; min-width: 44px; }
@@ -937,8 +1097,8 @@
 /* Corner positions — applied via data-position attribute on .live-overlay panels */
 .live-overlay[data-position="tl"] { top: 64px; left: 12px; bottom: auto; right: auto; }
 .live-overlay[data-position="tr"] { top: 64px; right: 12px; bottom: auto; left: auto; }
-.live-overlay[data-position="bl"] { bottom: 58px; left: 12px; top: auto; right: auto; }
-.live-overlay[data-position="br"] { bottom: 58px; right: 12px; top: auto; left: auto; }
+.live-overlay[data-position="bl"] { bottom: calc(var(--vcr-bar-height, 58px) + 10px); left: 12px; top: auto; right: auto; }
+.live-overlay[data-position="br"] { bottom: calc(var(--vcr-bar-height, 58px) + 10px); right: 12px; top: auto; left: auto; }
 
 /* Override hide animations for positioned panels — slide toward nearest edge */
 .live-overlay[data-position="tl"].hidden,

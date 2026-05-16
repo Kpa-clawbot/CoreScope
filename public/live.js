@@ -249,6 +249,45 @@
 
   // === VCR Controls ===
 
+  // #1206: publish the VCR bar's measured height as --vcr-bar-height on the
+  // .live-page root so bottom-pinned overlays (feed, legend, corner panels)
+  // can reserve the right amount of space and never get occluded by the bar.
+  // Cleanup state is captured in module-scoped _vcrHeightCleanup so destroy()
+  // can disconnect the ResizeObserver + remove the resize/visualViewport
+  // listeners on SPA page navigation (otherwise re-mounts of /live would
+  // accumulate observers forever — same leak class as #1180).
+  var _vcrHeightCleanup = null;
+  function initVCRHeightTracker() {
+    // #1206 r1 (adversarial should-fix): guard against double-init —
+    // if a prior tracker is still active (re-mount race, dev hot-reload),
+    // tear it down BEFORE overwriting _vcrHeightCleanup so the previous
+    // ResizeObserver/listeners aren't orphaned.
+    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
+    var bar = document.getElementById('vcrBar');
+    var page = document.querySelector('.live-page');
+    if (!bar || !page) return;
+    function publish() {
+      var h = Math.ceil(bar.getBoundingClientRect().height) || 58;
+      page.style.setProperty('--vcr-bar-height', h + 'px');
+    }
+    publish();
+    var ro = null;
+    if (typeof ResizeObserver === 'function') {
+      try { ro = new ResizeObserver(publish); ro.observe(bar); } catch (_) { ro = null; }
+    }
+    window.addEventListener('resize', publish);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', publish);
+    }
+    _vcrHeightCleanup = function() {
+      if (ro) { try { ro.disconnect(); } catch (_) {} ro = null; }
+      window.removeEventListener('resize', publish);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', publish);
+      }
+    };
+  }
+
   function vcrSetMode(mode) {
     VCR.mode = mode;
     if (mode !== 'LIVE' && !VCR.frozenNow) VCR.frozenNow = Date.now();
@@ -886,7 +925,12 @@
             <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
             <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
           </div>
-          <div class="live-toggles">
+        <!-- #1205: settings toggles are children of the MESH LIVE panel
+             (#liveHeader), not a free-floating .live-overlay. PR #1180
+             detached them; this restores the pre-regression structure. -->
+        <div class="live-controls" id="liveControls">
+          <div class="live-controls-body" data-live-controls-body id="liveControlsBody">
+            <div class="live-toggles">
             <label>Map style <select id="liveSatmapSelect" class="live-satmap-select" aria-label="Map tile style">
               <option value="positron">Positron</option>
               <option value="dark_matter">Dark Matter</option>
@@ -932,13 +976,20 @@
             <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
           </div>
         </div>
+          <button class="live-controls-toggle" data-live-controls-toggle id="liveControlsToggle"
+                  aria-expanded="false" aria-controls="liveControlsBody"
+                  aria-label="Show live controls">⚙</button>
+        </div>
+        </div><!-- /#liveHeader -->
         <button class="live-header-show-btn hidden" id="liveHeaderShowBtn" title="Show MESH LIVE panel" aria-label="Show MESH LIVE panel">📡 LIVE</button>
         <div class="live-overlay live-feed" id="liveFeed">
           <div class="panel-header">
             <button class="panel-corner-btn" data-panel="liveFeed" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
             <button class="feed-hide-btn" id="feedHideBtn" title="Hide feed">✕</button>
           </div>
-          <div class="panel-content" aria-live="polite" aria-relevant="additions" role="log"></div>
+          <div class="panel-content" aria-live="polite" aria-relevant="additions" role="log">
+            <div class="live-feed-empty" aria-hidden="true">Waiting for packets…</div>
+          </div>
         </div>
         <button class="feed-show-btn hidden" id="feedShowBtn" title="Show feed">📋</button>
         <div id="nodeDetailBackdrop" class="node-detail-backdrop"></div>
@@ -1092,6 +1143,7 @@
     showHeatMap();
     connectWS();
     initResizeHandler();
+    initVCRHeightTracker();
     startRateCounter();
 
     // Check for packet replay from packets page (single or array of observations)
@@ -2115,6 +2167,15 @@
     if (!feedContent) return;
     feedContent.querySelectorAll('.live-feed-item').forEach(el => el.remove());
     feedDedup.clear();
+    // #1207: ensure empty-state placeholder is present (re-add if a prior
+    // rebuild wiped everything). CSS hides it when items exist.
+    if (!feedContent.querySelector('.live-feed-empty')) {
+      var _ph = document.createElement('div');
+      _ph.className = 'live-feed-empty';
+      _ph.setAttribute('aria-hidden', 'true');
+      _ph.textContent = 'Waiting for packets…';
+      feedContent.appendChild(_ph);
+    }
 
     // Aggregate VCR buffer by hash, then create one feed item per unique hash
     const byHash = new Map();
@@ -2438,6 +2499,12 @@
   window._liveVcrPause = vcrPause;
   window._liveVcrResumeLive = vcrResumeLive;
   window._liveVcrSetMode = vcrSetMode;
+  // #1207 test seams: expose production feed mutators so E2E can exercise
+  // the real eviction guard / placeholder re-add path (not a test-local copy).
+  window._liveAddFeedItem = function(icon, typeName, payload, hops, color, pkt) {
+    return addFeedItem(icon, typeName, payload, hops, color, pkt);
+  };
+  window._liveRebuildFeedList = function() { return rebuildFeedList(); };
 
   async function replayRecent() {
     try {
@@ -3442,7 +3509,11 @@
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.prepend(item);
     requestAnimationFrame(() => requestAnimationFrame(() => item.classList.remove('live-feed-enter')));
-    while (feed.children.length > 25) feed.removeChild(feed.lastChild);
+    // #1207: trim to 25 items, but never evict the empty-state placeholder.
+    while (feed.querySelectorAll('.live-feed-item').length > 25) {
+      var _items = feed.querySelectorAll('.live-feed-item');
+      feed.removeChild(_items[_items.length - 1]);
+    }
 
     // Register
     if (hash) {
@@ -3526,6 +3597,7 @@
       window.removeEventListener('orientationchange', _onResize);
       if (window.visualViewport) window.visualViewport.removeEventListener('resize', _onResize);
     }
+    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
     // Restore #app height to CSS default
     const appEl = document.getElementById('app');
     if (appEl) appEl.style.height = '';

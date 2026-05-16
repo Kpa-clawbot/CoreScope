@@ -1104,11 +1104,17 @@ fieldset.mc-section legend.mc-label { padding: 0; }
   border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden;
 }
 .ch-sidebar-header {
-  padding: 14px 16px; border-bottom: 1px solid var(--border);
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
 }
 .ch-sidebar-title {
-  display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 15px; font-weight: 700;
+  flex: 1 1 auto; min-width: 0;
+  /* Name dominates; no longer push other controls onto a new row */
+  margin: 0;
 }
+.ch-header-region { margin: 0; padding: 0; flex: 0 0 auto; }
 .ch-encrypted-toggle {
   display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-muted);
   cursor: pointer; user-select: none; margin-bottom: 4px;
@@ -1771,6 +1777,39 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .ch-layout.ch-viewing .ch-main { flex: 1; height: 100%; }
   .ch-layout.ch-viewing .ch-back-btn { display: flex; }
 
+  /* #1224 Channels mobile UX: compact header, dominant channel name,
+     icon-only row actions, smaller empty state. */
+  .ch-sidebar-header {
+    padding: 6px 10px; gap: 6px;
+    max-height: 56px;
+  }
+  .ch-sidebar-title { font-size: 14px; }
+  .ch-sidebar-title .ch-icon { font-size: 16px; }
+  .ch-add-channel-btn { padding: 4px 8px; font-size: 12px; }
+  .ch-analytics-link { padding: 3px 7px; font-size: 13px; }
+  /* Region filter shows just its compact pills/dropdown trigger in the header. */
+  .ch-header-region .region-filter-bar { padding: 0; gap: 4px; }
+  .ch-header-region .region-pill { padding: 2px 6px; font-size: 11px; }
+  .ch-header-region .region-dropdown-trigger { padding: 3px 6px; font-size: 11px; }
+
+  /* Channel list row: name must dominate. The inline share/remove icons
+     were eating >88px because of their 44x44 touch target — push them
+     onto a per-row reveal pattern: show a single ⋮ trigger that toggles
+     the action set. Until then, shrink them to icon-only and let the
+     name grow via flex:1. */
+  #chList .ch-item { padding: 10px 12px; gap: 10px; }
+  #chList .ch-item-name { flex: 1 1 auto; min-width: 0; }
+  #chList .ch-item-top { gap: 6px; }
+  #chList .ch-icon-btn { min-width: 32px; min-height: 32px; padding: 2px 4px; }
+  #chList .ch-share-btn { font-size: 0; }
+  #chList .ch-share-btn::before { content: '📤'; font-size: 13px; }
+  #chList .ch-remove-btn { font-size: 12px; padding: 2px 6px; }
+  /* Hide the analytics-style time on mobile rows to free width for the name. */
+  #chList .ch-item-time { font-size: 10px; }
+
+  /* Empty state must not dominate. */
+  .ch-empty { padding: 12px; font-size: 13px; max-height: 30vh; }
+
   /* Tables: smaller text for mobile */
   .data-table { font-size: 11px; min-width: 0; }
   .data-table td { padding: 5px 4px; max-width: 100px; }
@@ -1963,14 +2002,14 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .ch-add-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.3; }
 .ch-add-status { font-size: 12px; margin-top: 4px; padding: 4px 6px; border-radius: 4px; }
 .ch-analytics-link {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 6px 8px;
-  font-size: 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 4px 8px;
+  font-size: 14px;
   text-decoration: none;
   color: var(--text-muted);
-  border-bottom: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  flex: 0 0 auto;
 }
 .ch-analytics-link:hover { color: var(--accent); }
 .ch-add-status--loading { color: var(--text-muted); }
@@ -2714,10 +2753,14 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .matrix-theme .live-feed .live-feed-item:hover { background: rgba(0,255,65,0.08) !important; }
 .matrix-theme .live-feed .feed-hide-btn { color: #00ff41 !important; }
 
-/* Controls in matrix mode */
-.matrix-theme .live-header {
-  background: rgba(0, 10, 0, 0.9) !important;
-  border-color: #00ff4130 !important;
+/* Controls in matrix mode (#1205 R1) — keep matrix text/accent color
+   only. Background + border are owned by the parent #liveHeader (MESH
+   LIVE panel) now that .live-controls is in-flow and transparent;
+   re-painting an opaque box here would orphan a nested chrome rect
+   inside the header for matrix-theme users. */
+.matrix-theme .live-controls {
+  background: transparent !important;
+  border: 0 !important;
   color: #00ff41 !important;
 }
 .matrix-theme .live-header label,

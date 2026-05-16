@@ -159,35 +159,43 @@
   }
 
   // Track tables we've wired up so resize triggers re-apply.
-  const wired = new Set();
-  // Persist reveal state by table id across re-renders (auto-refresh rebuilds
-  // the DOM, losing the flag stored on the old element). Cleared only on real
-  // viewport-width changes so layout re-evaluates column visibility correctly.
-  const revealById = new Map();
+  // Map<table, ResizeObserver|null> — we need the RO ref so SPA remounts can
+  // disconnect the orphaned observer when its <table> leaves the DOM.
+  // Pre-#1213 fix this was a Set and each /nodes (or /packets/observers)
+  // remount registered a fresh RO against a freshly-rendered table while the
+  // previous table+RO sat detached but observed → 1 leaked RO per remount.
+  const wired = new Map();
   // Track last-seen wrap width per table so we only treat ACTUAL container
   // resizes as a reason to drop the user's reveal state. Hiding/showing
   // columns and removing the pill mutate layout and re-trigger ResizeObserver,
   // which would otherwise immediately stomp on the reveal the user just asked for.
   const lastWrapW = new WeakMap();
+  // Sweep tables that have been detached from the DOM (e.g. SPA destroyed
+  // their page) and release their ResizeObserver. Called opportunistically on
+  // every register() — cheap O(n) over wired tables, n is tiny in practice.
+  function sweepDetached() {
+    wired.forEach((ro, t) => {
+      if (!t || !t.isConnected) {
+        if (ro) { try { ro.disconnect(); } catch (_) {} }
+        wired.delete(t);
+      }
+    });
+  }
   function register(table) {
-    // Carry reveal state forward when the same table id is re-rendered.
-    if (table && table.id && revealById.get(table.id)) table[REVEAL_FLAG] = true;
+    sweepDetached();
     if (!table || wired.has(table)) { apply(table); return; }
-    wired.add(table);
+    let ro = null;
     if (typeof ResizeObserver !== 'undefined') {
       const wrap = table.closest('.table-fluid-wrap, .obs-table-scroll, .table-scroll-wrap') || table.parentElement;
       if (wrap) {
         lastWrapW.set(table, wrap.clientWidth || 0);
-        const ro = new ResizeObserver(() => {
-          // Bail for detached wraps — a disconnected element reports
-          // clientWidth=0, which would cause a false-positive diff.
-          if (!wrap.isConnected) { ro.disconnect(); return; }
+        ro = new ResizeObserver(() => {
           const prev = lastWrapW.get(table) || 0;
           const cur = wrap.clientWidth || 0;
           if (Math.abs(cur - prev) <= 2) return;
           lastWrapW.set(table, cur);
           // Re-evaluate column visibility for the new container width, but
-          // intentionally do NOT clear REVEAL_FLAG or revealById here.
+          // intentionally do NOT clear REVEAL_FLAG here.
           // Scrollbar appearance, sidebar toggles, and layout reflows all
           // change clientWidth and would otherwise undo the user's explicit
           // expand. Only a real viewport-width change (handled by the
@@ -197,6 +205,7 @@
         ro.observe(wrap);
       }
     }
+    wired.set(table, ro);
     apply(table);
   }
 
@@ -205,24 +214,19 @@
   window.addEventListener('resize', function () {
     clearTimeout(_winTimer);
     _winTimer = setTimeout(() => {
-      const vw = window.innerWidth || document.documentElement.clientWidth;
-      const widthChanged = Math.abs(vw - _lastVW) > 2;
-      _lastVW = vw;
-      wired.forEach(t => {
-        if (!t.isConnected) { wired.delete(t); return; }
-        // Only reset reveal on width changes. Mobile browsers fire resize when
-        // the address bar hides/shows (height-only) — don't reset so revealed
-        // columns survive scrolling on mobile.
-        if (widthChanged) {
-          if (t.id) revealById.delete(t.id);
-          t[REVEAL_FLAG] = false;
+      wired.forEach((ro, t) => {
+        if (!t.isConnected) {
+          if (ro) { try { ro.disconnect(); } catch (_) {} }
+          wired.delete(t);
+          return;
         }
+        t[REVEAL_FLAG] = false;
         apply(t);
       });
     }, 120);
   });
 
-  window.TableResponsive = { apply, register };
+  window.TableResponsive = { apply, register, sweep: sweepDetached };
 })();
 
 /* === #1056 AC#4: SlideOver — narrow-viewport row-detail overlay ============

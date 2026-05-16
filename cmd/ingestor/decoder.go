@@ -172,9 +172,35 @@ func decodeHeader(b byte) Header {
 	}
 }
 
-func decodePath(pathByte byte, buf []byte, offset int) (Path, int) {
+// Firmware-derived limits — see firmware/src/MeshCore.h:19,21.
+const (
+	maxPathSize      = 64  // MAX_PATH_SIZE — total path bytes allowed
+	maxPacketPayload = 184 // MAX_PACKET_PAYLOAD — max raw payload bytes
+)
+
+// isValidPathLen mirrors firmware Packet::isValidPathLen
+// (firmware/src/Packet.cpp:13-18). hash_size==4 is reserved; total path bytes
+// must fit within MAX_PATH_SIZE.
+func isValidPathLen(pathByte byte) bool {
+	hashCount := int(pathByte & 0x3F)
+	hashSize := int(pathByte>>6) + 1
+	if hashSize == 4 {
+		return false // reserved
+	}
+	return hashCount*hashSize <= maxPathSize
+}
+
+func decodePath(pathByte byte, buf []byte, offset int) (Path, int, error) {
 	hashSize := int(pathByte>>6) + 1
 	hashCount := int(pathByte & 0x3F)
+	// Exact mirror of firmware Packet::isValidPathLen (Packet.cpp:13-18).
+	// hash_size==4 is reserved and is rejected by firmware regardless of
+	// hash_count, so we must reject 0xC0 etc even on zero-hop packets —
+	// firmware never emits them, so an on-wire pathByte with the upper
+	// 2 bits set to 11 is by definition malformed/adversarial.
+	if !isValidPathLen(pathByte) {
+		return Path{}, 0, fmt.Errorf("invalid path encoding: pathByte 0x%02X (hash_size=%d hash_count=%d) violates firmware validity (Packet.cpp:13-18, MAX_PATH_SIZE=%d)", pathByte, hashSize, hashCount, maxPathSize)
+	}
 	totalBytes := hashSize * hashCount
 	hops := make([]string, 0, hashCount)
 
@@ -191,7 +217,7 @@ func decodePath(pathByte byte, buf []byte, offset int) (Path, int) {
 		HashSize:  hashSize,
 		HashCount: hashCount,
 		Hops:      hops,
-	}, totalBytes
+	}, totalBytes, nil
 }
 
 // isTransportRoute delegates to packetpath.IsTransportRoute.
@@ -300,6 +326,13 @@ func decodeAdvert(buf []byte, validateSignatures bool) Payload {
 			}
 			name := string(appdata[off:nameEnd])
 			name = sanitizeName(name)
+			// Firmware writes the node name into a 32-byte buffer
+			// (MAX_ADVERT_DATA_SIZE, firmware/src/MeshCore.h:11). Truncate
+			// here so adversarial on-wire adverts can't pollute Payload.Name
+			// with bytes firmware would never emit.
+			if len(name) > 32 {
+				name = name[:32]
+			}
 			p.Name = name
 			off = nameEnd
 			// Skip null terminator(s)
@@ -584,10 +617,26 @@ func DecodePacket(hexString string, channelKeys map[string]string, validateSigna
 	pathByte := buf[offset]
 	offset++
 
-	path, bytesConsumed := decodePath(pathByte, buf, offset)
+	path, bytesConsumed, decodeErr := decodePath(pathByte, buf, offset)
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
 	offset += bytesConsumed
 
+	// Bounds check: pathByte is wire-supplied (hash_size in upper 2 bits,
+	// hash_count in lower 6 bits → up to 4*63=252 claimed path bytes). A
+	// malformed packet can claim more bytes than the buffer holds — without
+	// this guard `buf[offset:]` panics with `slice bounds out of range
+	// [offset:len(buf)]`. See issue #1211 (prod observed [218:15]).
+	if offset > len(buf) {
+		return nil, fmt.Errorf("packet path length (%d bytes claimed by pathByte 0x%02X) exceeds buffer (%d bytes)", bytesConsumed, pathByte, len(buf))
+	}
+
 	payloadBuf := buf[offset:]
+	// Firmware caps payload at MAX_PACKET_PAYLOAD=184 (firmware/src/MeshCore.h:19).
+	if len(payloadBuf) > maxPacketPayload {
+		return nil, fmt.Errorf("packet payload (%d bytes) exceeds firmware MAX_PACKET_PAYLOAD=%d (MeshCore.h:19)", len(payloadBuf), maxPacketPayload)
+	}
 	payload := decodePayload(header.PayloadType, payloadBuf, channelKeys, validateSignatures)
 
 	// TRACE packets store hop IDs in the payload (buf[9:]) rather than the header

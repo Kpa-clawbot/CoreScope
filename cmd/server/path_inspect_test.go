@@ -216,8 +216,9 @@ func TestHandlePathInspect_ValidRequest(t *testing.T) {
 	}
 	srv.store.nodePM = buildPrefixMap(srv.store.nodeCache)
 	srv.store.nodeCacheTime = time.Now()
-	srv.store.graph = NewNeighborGraph()
-	srv.store.graph.builtAt = time.Now()
+	g := NewNeighborGraph()
+	g.builtAt = time.Now()
+	srv.store.graph.Store(g)
 
 	body := `{"prefixes":["aa","cc"]}`
 	rr := doInspectRequest(srv, body)
@@ -245,8 +246,9 @@ func newTestServerForInspect(t *testing.T) *Server {
 	store := &PacketStore{
 		inspectCache: make(map[string]*inspectCachedResult),
 	}
-	store.graph = NewNeighborGraph()
-	store.graph.builtAt = time.Now()
+	g := NewNeighborGraph()
+	g.builtAt = time.Now()
+	store.graph.Store(g)
 	return &Server{store: store}
 }
 

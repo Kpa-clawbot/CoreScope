@@ -185,19 +185,23 @@ type PacketStoreIndexes struct {
 }
 
 type PerfPacketStoreStats struct {
-	TotalLoaded       int                `json:"totalLoaded"`
-	TotalObservations int                `json:"totalObservations"`
-	Evicted           int                `json:"evicted"`
-	Inserts           int64              `json:"inserts"`
-	Queries           int64              `json:"queries"`
-	InMemory          int                `json:"inMemory"`
-	SqliteOnly        bool               `json:"sqliteOnly"`
-	MaxPackets        int                `json:"maxPackets"`
-	EstimatedMB       float64            `json:"estimatedMB"`
-	TrackedMB         float64            `json:"trackedMB"`
-	AvgBytesPerPacket int64              `json:"avgBytesPerPacket"`
-	MaxMB             int                `json:"maxMB"`
-	Indexes           PacketStoreIndexes `json:"indexes"`
+	TotalLoaded              int                `json:"totalLoaded"`
+	TotalObservations        int                `json:"totalObservations"`
+	Evicted                  int                `json:"evicted"`
+	Inserts                  int64              `json:"inserts"`
+	Queries                  int64              `json:"queries"`
+	InMemory                 int                `json:"inMemory"`
+	SqliteOnly               bool               `json:"sqliteOnly"`
+	MaxPackets               int                `json:"maxPackets"`
+	EstimatedMB              float64            `json:"estimatedMB"`
+	TrackedMB                float64            `json:"trackedMB"`
+	AvgBytesPerPacket        int64              `json:"avgBytesPerPacket"`
+	MaxMB                    int                `json:"maxMB"`
+	Indexes                  PacketStoreIndexes `json:"indexes"`
+	HotStartupHours          float64            `json:"hotStartupHours"`
+	BackgroundLoadComplete   bool               `json:"backgroundLoadComplete"`
+	BackgroundLoadFailed     bool               `json:"backgroundLoadFailed"`
+	BackgroundLoadProgress   int64              `json:"backgroundLoadProgress"`
 }
 
 type WalPages struct {

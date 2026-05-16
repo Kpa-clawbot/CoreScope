@@ -52,33 +52,29 @@ async function gotoLive(page) {
     page.on('pageerror', (e) => console.error('[pageerror]', e.message));
     await step('[1440x900] navigate to /live', async () => { await gotoLive(page); });
 
-    // (a)
-    await step('[1440x900] .live-header bounding-rect height ≤ 40px', async () => {
-      const h = await page.$eval('.live-header', el => el.getBoundingClientRect().height);
+    // (a) #1178 critical row (beacon + pkt count) stays compact ≤ 40px.
+    //     The header itself wraps post-#1205 to host #liveControls as a
+    //     second flex row, so we assert on the critical strip instead of
+    //     the whole header bounding rect.
+    await step('[1440x900] .live-header-critical bounding-rect height ≤ 40px', async () => {
+      const h = await page.$eval('.live-header-critical', el => el.getBoundingClientRect().height);
       assert(h <= 40, `expected ≤40px, got ${h}px`);
     });
 
-    // (b)
-    await step('[1440x900] .live-controls fixed/absolute, right ≤ 24px, bottom > 0', async () => {
+    // (b) #1205 retired the "fixed/absolute bottom-right" contract.
+    //     New contract: .live-controls is a static child of #liveHeader.
+    await step('[1440x900] .live-controls is in-flow inside #liveHeader (#1205)', async () => {
       const info = await page.evaluate(() => {
         const el = document.querySelector('.live-controls');
-        if (!el) return null;
+        const hdr = document.getElementById('liveHeader');
+        if (!el || !hdr) return null;
         const cs = getComputedStyle(el);
-        const r = el.getBoundingClientRect();
-        return {
-          position: cs.position,
-          right: parseFloat(cs.right),
-          bottom: parseFloat(cs.bottom),
-          rectRight: r.right,
-          vw: window.innerWidth,
-        };
+        return { position: cs.position, inHeader: hdr.contains(el) };
       });
-      assert(info, '.live-controls element not found');
-      assert(info.position === 'fixed' || info.position === 'absolute',
-        `.live-controls position must be fixed/absolute, got ${info.position}`);
-      assert(info.right <= 24, `.live-controls right must be ≤24px, got ${info.right}px`);
-      assert(info.bottom > 0,
-        `.live-controls bottom must reserve space for safe-area/nav, got ${info.bottom}px`);
+      assert(info, '.live-controls or #liveHeader not found');
+      assert(info.position === 'static',
+        `.live-controls position must be 'static' after #1205, got ${info.position}`);
+      assert(info.inHeader, '.live-controls must be a descendant of #liveHeader (#1205)');
     });
 
     await ctx.close();
