@@ -1259,19 +1259,31 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		hashInfo := s.store.GetNodeHashSizeInfo()
 		mbCap := s.store.GetMultiByteCapMap()
 		relayWindow := s.cfg.GetHealthThresholds().RelayActiveHours
+
+		// Collect pubkeys for repeater/room nodes so we can fetch relay+usefulness
+		// data in one lock acquisition instead of once per node.
+		var relayKeys []string
+		for _, node := range nodes {
+			if pk, ok := node["public_key"].(string); ok {
+				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
+					relayKeys = append(relayKeys, pk)
+				}
+			}
+		}
+		batchInfo := s.store.GetRepeaterBatchInfo(relayKeys, relayWindow)
+
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
 				EnrichNodeWithMultiByte(node, mbCap[pk])
-				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
-					info := s.store.GetRepeaterRelayInfo(pk, relayWindow)
+				if info, found := batchInfo[pk]; found {
 					if info.LastRelayed != "" {
 						node["last_relayed"] = info.LastRelayed
 					}
 					node["relay_active"] = info.RelayActive
 					node["relay_count_1h"] = info.RelayCount1h
 					node["relay_count_24h"] = info.RelayCount24h
-					node["usefulness_score"] = s.store.GetRepeaterUsefulnessScore(pk)
+					node["usefulness_score"] = info.UsefulnessScore
 				}
 			}
 		}

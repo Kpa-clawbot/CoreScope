@@ -1,6 +1,152 @@
 package main
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
+
+// RepeaterNodeInfo is the combined relay+usefulness data for one node,
+// returned by GetRepeaterBatchInfo.
+type RepeaterNodeInfo struct {
+	RepeaterRelayInfo
+	UsefulnessScore float64 `json:"usefulnessScore"`
+}
+
+// GetRepeaterBatchInfo enriches a set of pubkeys with relay and usefulness
+// data in a single lock acquisition. It is equivalent to calling
+// GetRepeaterRelayInfo + GetRepeaterUsefulnessScore per node but acquires
+// the store read lock once and computes the shared totalNonAdvert denominator
+// once, making the per-node cost O(len(byPathHop[key])) instead of
+// O(len(byPayloadType)+len(byPathHop[key])) repeated N times.
+func (s *PacketStore) GetRepeaterBatchInfo(pubkeys []string, windowHours float64) map[string]RepeaterNodeInfo {
+	result := make(map[string]RepeaterNodeInfo, len(pubkeys))
+	if len(pubkeys) == 0 {
+		return result
+	}
+
+	type entry struct {
+		ts string
+		pt int
+	}
+	type keyEntries struct {
+		key    string
+		orig   string
+		prefix string
+		list   []entry
+	}
+
+	s.mu.RLock()
+
+	// Compute shared denominator once.
+	totalNonAdvert := 0
+	for pt, list := range s.byPayloadType {
+		if pt != payloadTypeAdvert {
+			totalNonAdvert += len(list)
+		}
+	}
+
+	// Collect per-key entries while the lock is held.
+	perKey := make([]keyEntries, 0, len(pubkeys))
+	for _, orig := range pubkeys {
+		if orig == "" {
+			continue
+		}
+		key := strings.ToLower(orig)
+		txList := s.byPathHop[key]
+		var prefixList []*StoreTx
+		if len(key) >= 2 {
+			prefix := key[:2]
+			if prefix != key {
+				prefixList = s.byPathHop[prefix]
+			}
+		}
+
+		// De-dupe by tx ID and copy out the fields we need.
+		uniq := make(map[int]struct{}, len(txList)+len(prefixList))
+		for _, tx := range txList {
+			if tx != nil {
+				uniq[tx.ID] = struct{}{}
+			}
+		}
+		for _, tx := range prefixList {
+			if tx != nil {
+				uniq[tx.ID] = struct{}{}
+			}
+		}
+		scratch := make([]entry, 0, len(uniq))
+		seen := make(map[int]bool, len(uniq))
+		collect := func(list []*StoreTx) {
+			for _, tx := range list {
+				if tx == nil || seen[tx.ID] {
+					continue
+				}
+				seen[tx.ID] = true
+				pt := -1
+				if tx.PayloadType != nil {
+					pt = *tx.PayloadType
+				}
+				scratch = append(scratch, entry{ts: tx.FirstSeen, pt: pt})
+			}
+		}
+		collect(txList)
+		collect(prefixList)
+		perKey = append(perKey, keyEntries{key: key, orig: orig, list: scratch})
+	}
+
+	s.mu.RUnlock()
+
+	now := time.Now().UTC()
+	cutoff1h := now.Add(-1 * time.Hour)
+	cutoff24h := now.Add(-24 * time.Hour)
+	var windowCutoff time.Time
+	if windowHours > 0 {
+		windowCutoff = now.Add(-time.Duration(windowHours * float64(time.Hour)))
+	}
+
+	for _, ke := range perKey {
+		info := RepeaterRelayInfo{WindowHours: windowHours}
+		relayed := 0
+
+		var latest time.Time
+		var latestRaw string
+		for _, e := range ke.list {
+			if e.pt == payloadTypeAdvert {
+				continue
+			}
+			relayed++
+			t, ok := parseRelayTS(e.ts)
+			if !ok {
+				continue
+			}
+			if t.After(latest) {
+				latest = t
+				latestRaw = e.ts
+			}
+			if t.After(cutoff24h) {
+				info.RelayCount24h++
+				if t.After(cutoff1h) {
+					info.RelayCount1h++
+				}
+			}
+		}
+		if latestRaw != "" {
+			info.LastRelayed = latestRaw
+			if windowHours > 0 && latest.After(windowCutoff) {
+				info.RelayActive = true
+			}
+		}
+
+		score := 0.0
+		if totalNonAdvert > 0 && relayed > 0 {
+			score = float64(relayed) / float64(totalNonAdvert)
+			if score > 1 {
+				score = 1
+			}
+		}
+		result[ke.orig] = RepeaterNodeInfo{RepeaterRelayInfo: info, UsefulnessScore: score}
+	}
+	return result
+}
 
 // GetRepeaterUsefulnessScore returns a 0..1 score representing what
 // fraction of non-advert traffic in the store passes through this
