@@ -87,6 +87,16 @@ type NeighborGraph struct {
 	byNode  map[string][]*NeighborEdge // pubkey → edges involving this node
 	builtAt time.Time
 	logFn   func(prefix, msg string) // optional structured logging callback
+
+	// RejectedEdgesGeoFar counts edges dropped at build time because both
+	// endpoints had GPS and their haversine distance exceeded the
+	// configurable threshold (NeighborGraphConfig.MaxEdgeKm, default 500).
+	// Accessed via sync/atomic. See issue #1228.
+	RejectedEdgesGeoFar uint64
+
+	// maxEdgeKm is the geo-sanity threshold copied from config at build
+	// time. 0 means "no limit" / filter disabled.
+	maxEdgeKm float64
 }
 
 // NewNeighborGraph creates an empty graph.
