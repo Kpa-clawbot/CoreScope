@@ -106,19 +106,28 @@ async function gotoLive(page) {
       `bug repros as stats clipped by max-height with column flex`);
   });
 
-  // (d) feed panel-content is a scrollable column container — rows can render
-  await step('[1440x900] .live-feed .panel-content exists and is a column', async () => {
+  // (d) feed panel-content exists and a programmatically-injected feed row
+  // mounts visibly. Proves rows can actually render when WS delivers packets
+  // — flex:1 + min-height:0 in a header+content column is the contract
+  // addFeedItem relies on.
+  await step('[1440x900] .live-feed .panel-content renders an injected row', async () => {
     const r = await page.evaluate(() => {
       const pc = document.querySelector('.live-feed .panel-content');
       if (!pc) return { found: false };
       const cs = getComputedStyle(pc);
+      const row = document.createElement('div');
+      row.className = 'live-feed-item';
+      row.textContent = 'row-1204';
+      pc.prepend(row);
       const rect = pc.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
       return {
         found: true,
         display: cs.display,
         flexDirection: cs.flexDirection,
-        overflowY: cs.overflowY,
-        h: rect.height,
+        pcH: rect.height,
+        rowH: rowRect.height,
+        rowVisible: rowRect.width > 0 && rowRect.height > 0,
       };
     });
     assert(r.found, '.live-feed .panel-content missing — feed rows have nowhere to mount');
@@ -126,7 +135,9 @@ async function gotoLive(page) {
       `.live-feed .panel-content must be flex (got ${r.display})`);
     assert(r.flexDirection === 'column',
       `.live-feed .panel-content must be flex-direction column (got ${r.flexDirection})`);
-    assert(r.h > 0, `.live-feed .panel-content must have nonzero height (got ${r.h})`);
+    assert(r.rowVisible, `injected feed row not visible (h=${r.rowH})`);
+    assert(r.pcH >= r.rowH,
+      `panel-content must grow to fit injected row (panel h=${r.pcH}, row h=${r.rowH})`);
   });
 
   await ctx.close();

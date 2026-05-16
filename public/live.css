@@ -60,6 +60,12 @@
   top: 64px;
   left: 12px;
   display: flex;
+  /* #1204: .live-overlay sets flex-direction: column for all overlay panels
+   * (feed/legend/node-detail need that for header+content stacking). The
+   * header is horizontal — critical strip + toggle + body lay out inline,
+   * not stacked. Without this override the "0 pkts" critical strip stacks
+   * above MESH LIVE title and the stats row gets clipped. */
+  flex-direction: row;
   align-items: center;
   gap: 10px;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
