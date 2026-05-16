@@ -606,12 +606,26 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 		args = append(args, strings.ToLower(q.Hash))
 	}
 	if q.Since != "" {
-		where = append(where, "t.first_seen > ?")
-		args = append(args, q.Since)
+		// RFC3339 since/until use an observations.timestamp subquery so that
+		// re-observed packets (whose t.first_seen is older than the window
+		// but which have observations inside the window) are still included.
+		// Non-RFC3339 falls back to t.first_seen string compare.
+		if ts, err := time.Parse(time.RFC3339Nano, q.Since); err == nil {
+			where = append(where, "t.id IN (SELECT DISTINCT transmission_id FROM observations WHERE timestamp >= ?)")
+			args = append(args, ts.Unix())
+		} else {
+			where = append(where, "t.first_seen > ?")
+			args = append(args, q.Since)
+		}
 	}
 	if q.Until != "" {
-		where = append(where, "t.first_seen < ?")
-		args = append(args, q.Until)
+		if ts, err := time.Parse(time.RFC3339Nano, q.Until); err == nil {
+			where = append(where, "t.id IN (SELECT DISTINCT transmission_id FROM observations WHERE timestamp <= ?)")
+			args = append(args, ts.Unix())
+		} else {
+			where = append(where, "t.first_seen < ?")
+			args = append(args, q.Until)
+		}
 	}
 	if q.Node != "" {
 		pk := db.resolveNodePubkey(q.Node)
