@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -272,8 +273,9 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 			continue
 		}
 		if err := json.Unmarshal(data, cfg); err != nil {
-			continue
+			return nil, fmt.Errorf("parsing config %s: %w", p, err)
 		}
+		log.Printf("[config] loaded %s", p)
 		cfg.NormalizeTimestampConfig()
 		return cfg, nil
 	}
