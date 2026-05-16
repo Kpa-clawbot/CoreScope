@@ -60,6 +60,9 @@ type pathInspectResponse struct {
 	Candidates []pathCandidate        `json:"candidates"`
 	Input      map[string]interface{} `json:"input"`
 	Stats      map[string]interface{} `json:"stats"`
+	// Stale is true when the response was served from a stale neighbor graph
+	// while a background rebuild is in progress (issue #1203).
+	Stale bool `json:"stale,omitempty"`
 }
 
 // beamEntry represents a partial path being extended during beam search.
@@ -164,29 +167,25 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 		nodeByPK[strings.ToLower(nodes[i].PublicKey)] = &nodes[i]
 	}
 
-	// Get neighbor graph; handle cold start.
+	// Get neighbor graph (issue #1203): stale-while-revalidate.
+	//   - cold start (nil): return 503 + kick off async rebuild for next request.
+	//   - stale non-nil: serve it immediately with stale:true + async rebuild.
+	//   - fresh: serve normally.
 	graph := s.store.graph
-	if graph == nil || graph.IsStale() {
-		rebuilt := make(chan struct{})
-		go func() {
-			s.store.ensureNeighborGraph()
-			close(rebuilt)
-		}()
-		select {
-		case <-rebuilt:
-			graph = s.store.graph
-		case <-time.After(2 * time.Second):
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]interface{}{"retry": true})
-			return
-		}
-		if graph == nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]interface{}{"retry": true})
-			return
-		}
+	stale := false
+	if graph == nil {
+		// Cold start — kick off rebuild so the next request lands warm,
+		// then return 503 immediately. Singleflight in ensureNeighborGraph
+		// dedups overlapping kicks.
+		go s.store.ensureNeighborGraph()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]interface{}{"retry": true})
+		return
+	}
+	if graph.IsStale() {
+		stale = true
+		go s.store.ensureNeighborGraph()
 	}
 
 	now := time.Now()
@@ -258,6 +257,7 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 	elapsed := time.Since(start).Milliseconds()
 	resp := pathInspectResponse{
 		Candidates: candidates,
+		Stale:      stale,
 		Input: map[string]interface{}{
 			"prefixes": req.Prefixes,
 			"hops":     len(req.Prefixes),
@@ -269,22 +269,27 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// Cache result (and evict stale entries).
-	s.store.inspectMu.Lock()
-	if s.store.inspectCache == nil {
-		s.store.inspectCache = make(map[string]*inspectCachedResult)
-	}
-	now2 := time.Now()
-	for k, v := range s.store.inspectCache {
-		if now2.After(v.expiresAt) {
-			delete(s.store.inspectCache, k)
+	// Cache result (and evict stale entries). Don't cache when the response
+	// itself is stale — the rebuild kicked off above will land a fresh graph
+	// shortly and we don't want to pin a stale answer for inspectCacheTTL
+	// (issue #1203).
+	if !stale {
+		s.store.inspectMu.Lock()
+		if s.store.inspectCache == nil {
+			s.store.inspectCache = make(map[string]*inspectCachedResult)
 		}
+		now2 := time.Now()
+		for k, v := range s.store.inspectCache {
+			if now2.After(v.expiresAt) {
+				delete(s.store.inspectCache, k)
+			}
+		}
+		s.store.inspectCache[cacheKey] = &inspectCachedResult{
+			data:      resp,
+			expiresAt: now2.Add(inspectCacheTTL),
+		}
+		s.store.inspectMu.Unlock()
 	}
-	s.store.inspectCache[cacheKey] = &inspectCachedResult{
-		data:      resp,
-		expiresAt: now2.Add(inspectCacheTTL),
-	}
-	s.store.inspectMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
