@@ -74,6 +74,7 @@
 .live-header {
   top: 64px;
   left: 12px;
+  /* #1205 — toggles re-anchored as a child row; allow wrap + max-width. */
   display: flex;
   /* #1204: .live-overlay sets flex-direction: column for all overlay panels
    * (feed/legend/node-detail need that for header+content stacking). The
@@ -81,15 +82,17 @@
    * not stacked. Without this override the "0 pkts" critical strip stacks
    * above MESH LIVE title and the stats row gets clipped. */
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  row-gap: 6px;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
   backdrop-filter: blur(12px);
   padding: 4px 10px;
   border-radius: 8px;
   border: 1px solid var(--border);
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.04);
-  max-height: 40px;
+  max-width: calc(100vw - 24px);
   box-sizing: border-box;
 }
 .live-header-body {
@@ -368,35 +371,35 @@
 .live-toggles label { display: flex; align-items: center; gap: 3px; cursor: pointer; white-space: nowrap; }
 .live-toggles input { margin: 0; }
 
-/* ---- Live controls cluster (#1179) ----
- * Pinned to bottom-right, above the VCR bar and the global bottom-nav.
- * Reserves space for both env(safe-area-inset-bottom) and the bottom-nav
- * (#1061, currently in PR #1174). When the bottom-nav lands the layout
- * tracks its custom property (--bottom-nav-height); otherwise the
- * fallback (56px) keeps the cluster clear of the VCR bar / bottom-nav
- * region.
+/* ---- Live controls cluster (#1205 — re-anchored inside MESH LIVE panel)
+ * History: PR #1180 detached the toggles into a `position:fixed` overlay
+ * (`.live-overlay.live-controls`) pinned bottom-right. On many viewports
+ * the row visually orphaned away from any panel (issue #1205). PR #1209
+ * tried parking inside #liveLegend; rejected on UX grounds (inverted
+ * hierarchy). Correct restoration: toggles are a child of #liveHeader
+ * (the MESH LIVE panel) so they share its chrome and the existing
+ * header-collapse semantics.
  */
 .live-controls {
-  position: fixed;
-  right: 12px;
-  bottom: calc(78px + var(--bottom-nav-height, 56px) + env(safe-area-inset-bottom, 0px));
-  z-index: 1000;
-  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
-  backdrop-filter: blur(12px);
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.04);
-  max-width: min(620px, calc(100vw - 24px));
+  /* In-flow inside #liveHeader. No position:fixed, no own background
+     (header already supplies blur + border + padding). */
+  position: static;
+  background: transparent;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  flex: 0 0 100%;          /* break onto its own row inside flex-wrap header */
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 .live-controls-body {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 /* Region filter (#1045) inline in live header toggles */

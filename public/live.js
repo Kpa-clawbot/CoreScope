@@ -877,8 +877,10 @@
               <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
             </div>
           </div>
-        </div>
-        <div class="live-overlay live-controls" id="liveControls">
+        <!-- #1205: settings toggles are children of the MESH LIVE panel
+             (#liveHeader), not a free-floating .live-overlay. PR #1180
+             detached them; this restores the pre-regression structure. -->
+        <div class="live-controls" id="liveControls">
           <div class="live-controls-body" data-live-controls-body id="liveControlsBody">
             <div class="live-toggles">
             <label><input type="checkbox" id="liveHeatToggle" checked aria-describedby="heatDesc"> Heat</label>
@@ -916,6 +918,7 @@
                   aria-expanded="false" aria-controls="liveControlsBody"
                   aria-label="Show live controls">⚙</button>
         </div>
+        </div><!-- /#liveHeader -->
         <div class="live-overlay live-feed" id="liveFeed">
           <div class="panel-header">
             <button class="panel-corner-btn" data-panel="liveFeed" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
