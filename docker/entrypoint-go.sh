@@ -14,9 +14,11 @@ if [ -f /app/data/theme.json ]; then
   ln -sf /app/data/theme.json /app/theme.json
 fi
 
-# Mosquitto password file is bind-mounted; mosquitto 2.0 refuses a file
-# with group/world write bits, so tighten perms before the broker starts.
-if [ -f /etc/mosquitto/passwd ]; then
+# Mosquitto password file: written from the MOSQUITTO_PASSWD_B64 env var.
+# base64-encoded so the hash's '$' chars survive env/compose interpolation.
+# mosquitto 2.0 also requires tight perms on the file.
+if [ -n "$MOSQUITTO_PASSWD_B64" ]; then
+  echo "$MOSQUITTO_PASSWD_B64" | base64 -d > /etc/mosquitto/passwd
   chmod 600 /etc/mosquitto/passwd
 fi
 
