@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -422,11 +423,48 @@ func sortBeam(beam []beamEntry) {
 // wrapper. Default is BuildFromStore.
 var buildGraphFn = func(s *PacketStore) *NeighborGraph { return BuildFromStore(s) }
 
-// ensureNeighborGraph triggers a graph rebuild if nil or stale.
+// rebuildFlight is the hand-rolled singleflight state for ensureNeighborGraph.
+// When a rebuild is in progress, concurrent callers attach to the same
+// in-flight `done` channel instead of spawning their own BuildFromStore.
+// We avoid adding the golang.org/x/sync/singleflight dep (not in cmd/server's
+// go.mod today) — a single channel + mutex is enough for our 1-arg, 1-return
+// case (issue #1203 sub-fix A).
+var (
+	rebuildMu     sync.Mutex
+	rebuildInFlt  chan struct{} // nil when no rebuild is in flight
+)
+
+// ensureNeighborGraph triggers a graph rebuild if nil or stale. Concurrent
+// callers share a single in-flight build (singleflight) so the store doesn't
+// churn N parallel BuildFromStore goroutines under load.
 func (s *PacketStore) ensureNeighborGraph() {
 	if s.graph != nil && !s.graph.IsStale() {
 		return
 	}
+	rebuildMu.Lock()
+	// Re-check under lock to avoid racing two callers past the cheap check.
+	if s.graph != nil && !s.graph.IsStale() {
+		rebuildMu.Unlock()
+		return
+	}
+	if rebuildInFlt != nil {
+		// Another caller is rebuilding — wait for it.
+		ch := rebuildInFlt
+		rebuildMu.Unlock()
+		<-ch
+		return
+	}
+	// We're the leader. Publish the channel before unlocking so late
+	// arrivals can attach.
+	done := make(chan struct{})
+	rebuildInFlt = done
+	rebuildMu.Unlock()
+
 	g := buildGraphFn(s)
+
+	rebuildMu.Lock()
 	s.graph = g
+	rebuildInFlt = nil
+	rebuildMu.Unlock()
+	close(done)
 }
