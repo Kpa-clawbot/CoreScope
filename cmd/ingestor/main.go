@@ -226,7 +226,7 @@ func main() {
 	// where the client reports connected but no messages have flowed. Logs
 	// a WARN line every minute for any source silent for >5m. Scan every
 	// 60s so detection latency is bounded.
-	watchdogTicker := runLivenessWatchdog(60*time.Second, 5*time.Minute)
+	stopWatchdog := runLivenessWatchdog(60*time.Second, 5*time.Minute)
 
 	// Wait for shutdown signal
 	sig := make(chan os.Signal, 1)
@@ -237,7 +237,7 @@ func main() {
 	retentionTicker.Stop()
 	metricsRetentionTicker.Stop()
 	statsTicker.Stop()
-	watchdogTicker.Stop()
+	stopWatchdog()
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
 		c.Disconnect(5000) // 5s to allow in-flight messages to drain

@@ -89,13 +89,33 @@ func markLivenessForTag(tag string, now time.Time) {
 
 // runLivenessWatchdog starts a goroutine that scans the registry every
 // `interval` and logs a warning for any source that has been silent while
-// connected for more than `threshold`. Returns the *time.Ticker so callers
-// can stop it on shutdown. interval should be a fraction of threshold (e.g.
-// threshold/5) so the latency of detection is bounded.
-func runLivenessWatchdog(interval, threshold time.Duration) *time.Ticker {
+// connected for more than `threshold`. Returns a stop function that halts
+// the ticker AND signals the goroutine to exit (time.Ticker.Stop does NOT
+// close the channel, so a naive `for range t.C` would leak). interval
+// should be a fraction of threshold (e.g. threshold/5) so detection
+// latency is bounded.
+func runLivenessWatchdog(interval, threshold time.Duration) (stop func()) {
 	t := time.NewTicker(interval)
-	go func() {
-		for now := range t.C {
+	done := make(chan struct{})
+	go runLivenessWatchdogLoop(t.C, done, threshold, log.Print)
+	return func() {
+		t.Stop()
+		close(done)
+	}
+}
+
+// runLivenessWatchdogLoop is the goroutine body, extracted so tests can
+// drive it with a synthetic tick channel and capture log output without
+// racing on the real ticker.
+func runLivenessWatchdogLoop(tick <-chan time.Time, done <-chan struct{}, threshold time.Duration, emit func(...any)) {
+	for {
+		select {
+		case <-done:
+			return
+		case now, ok := <-tick:
+			if !ok {
+				return
+			}
 			livenessRegistryMu.RLock()
 			states := make([]*SourceLivenessState, 0, len(livenessRegistry))
 			for _, s := range livenessRegistry {
@@ -104,10 +124,9 @@ func runLivenessWatchdog(interval, threshold time.Duration) *time.Ticker {
 			livenessRegistryMu.RUnlock()
 			for _, s := range states {
 				if msg, stalled := checkSourceLiveness(s, threshold, now); stalled {
-					log.Print(msg)
+					emit(msg)
 				}
 			}
 		}
-	}()
-	return t
+	}
 }
