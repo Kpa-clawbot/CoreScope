@@ -610,7 +610,14 @@
       if (br.logoUrl) {
         _setBrandLogoUrl(br.logoUrl, br.siteName || null);
         var iconEl = document.querySelector('.brand-icon');
-        if (iconEl) iconEl.innerHTML = '<img src="' + br.logoUrl + '" style="height:24px" onerror="this.style.display=\'none\'">';
+        if (iconEl) {
+          iconEl.textContent = '';
+          var logoImg = document.createElement('img');
+          logoImg.style.height = '24px';
+          logoImg.onerror = function () { this.style.display = 'none'; };
+          logoImg.src = br.logoUrl;
+          iconEl.appendChild(logoImg);
+        }
       }
       if (br.faviconUrl) {
         var fav = document.querySelector('link[rel="icon"]');
@@ -1436,7 +1443,14 @@
             _setBrandLogoUrl(inp.value || '', null);
             var iconEl = document.querySelector('.brand-icon');
             if (iconEl) {
-              if (inp.value) iconEl.innerHTML = '<img src="' + inp.value + '" style="height:24px" onerror="this.style.display=\'none\'">';
+              if (inp.value) {
+                iconEl.textContent = '';
+                var liveLogoImg = document.createElement('img');
+                liveLogoImg.style.height = '24px';
+                liveLogoImg.onerror = function () { this.style.display = 'none'; };
+                liveLogoImg.src = inp.value;
+                iconEl.appendChild(liveLogoImg);
+              }
               else iconEl.textContent = '📡';
             }
           }
