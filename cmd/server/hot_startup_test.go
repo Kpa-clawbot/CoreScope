@@ -550,16 +550,12 @@ func TestHotStartup_BackgroundLoadFailureSurfacesInPerf(t *testing.T) {
 	store.loadBackgroundChunks()
 
 	perf := store.GetPerfStoreStats()
-	complete, _ := perf["backgroundLoadComplete"].(bool)
 	failed, hasFailedKey := perf["backgroundLoadFailed"].(bool)
 
 	if !hasFailedKey {
 		t.Fatalf("expected backgroundLoadFailed key in /api/perf payload, got keys: %v", perf)
 	}
 	if !failed {
-		t.Errorf("expected backgroundLoadFailed=true after every chunk errored, got false")
-	}
-	if complete {
-		t.Errorf("expected backgroundLoadComplete=false on full-failure path, got true (observability lying)")
+		t.Errorf("expected backgroundLoadFailed=true after every chunk errored, got false (observability lying)")
 	}
 }

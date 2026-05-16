@@ -172,16 +172,20 @@ func createTestDBWithAgedPackets(t *testing.T, numRecent, numOld int) string {
 	id := 1
 	// Insert old packets (48 hours ago)
 	for i := 0; i < numOld; i++ {
-		ts := now.Add(-48 * time.Hour).Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		oldT := now.Add(-48 * time.Hour).Add(time.Duration(i) * time.Second)
+		ts := oldT.Format(time.RFC3339)
 		conn.Exec("INSERT INTO transmissions VALUES (?,?,?,?,0,4,1,?)", id, "aa", fmt.Sprintf("old%d", i), ts, `{}`)
-		conn.Exec("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,?,?)", id, id, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `[]`, ts, "")
+		// observations.timestamp is INTEGER (unix seconds) in production schema
+		// — keep the fixture consistent so the RFC3339 subquery matches.
+		conn.Exec("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,?,?)", id, id, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `[]`, oldT.Unix(), "")
 		id++
 	}
 	// Insert recent packets (within last hour)
 	for i := 0; i < numRecent; i++ {
-		ts := now.Add(-30 * time.Minute).Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		newT := now.Add(-30 * time.Minute).Add(time.Duration(i) * time.Second)
+		ts := newT.Format(time.RFC3339)
 		conn.Exec("INSERT INTO transmissions VALUES (?,?,?,?,0,4,1,?)", id, "bb", fmt.Sprintf("new%d", i), ts, `{}`)
-		conn.Exec("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,?,?)", id, id, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `[]`, ts, "")
+		conn.Exec("INSERT INTO observations VALUES (?,?,?,?,?,?,?,?,?,?,?)", id, id, "obs1", "Obs1", "RX", -10.0, -80.0, 5, `[]`, newT.Unix(), "")
 		id++
 	}
 	return dbPath

@@ -234,10 +234,27 @@ type PacketStore struct {
 	// Empty string means all data is in memory (no limit applied).
 	oldestLoaded string
 
-	// Hot startup: only hotStartupHours of data is loaded synchronously.
+	// Hot startup atomic gates — see contract below.
+	//
+	// Contract / ordering invariant (PR #1187):
+	//   * hashMigrationComplete (set by migrateContentHashesAsync) gates
+	//     content-hash–dependent code paths (e.g. dedup correctness on the
+	//     write side). Set true ONLY after the migration loop finishes.
+	//   * backgroundLoadDone is set true exactly once, after
+	//     loadBackgroundChunks finishes its loop AND its post-load index
+	//     rebuild. It gates "hot startup has finished filling
+	//     retentionHours of data into memory" (used by /api/perf and the
+	//     UI's hot-load banner). It says nothing about success — see
+	//     backgroundLoadFailed for the success/failure signal.
+	//   * backgroundLoadFailed is set true ONLY if at least one chunk
+	//     errored during background load. /api/perf surfaces it so
+	//     operators can distinguish "done & full" from "done & partial".
+	//     Read order MUST be: load backgroundLoadDone first; only if true
+	//     is backgroundLoadFailed meaningful.
 	// 0 = disabled (current behavior). Background loader fills the rest.
 	hotStartupHours        float64
 	backgroundLoadDone     atomic.Bool
+	backgroundLoadFailed   atomic.Bool
 	backgroundLoadProgress atomic.Int64 // 0–100 percent complete
 
 	// Async hash migration state: set after migrateContentHashesAsync completes.
@@ -492,14 +509,20 @@ func (s *PacketStore) Load() error {
 
 	// Build WHERE conditions: retention cutoff (mirrors Evict logic) + optional memory-cap limit.
 	// When hotStartupHours > 0, use it as the initial cutoff (smaller window = fast startup).
+	//
+	// PR #1187 r2 #7: compute the hot cutoff ONCE here and reuse the same
+	// string for both the SQL filter below AND for s.oldestLoaded later.
+	// Two separate time.Now().UTC() calls produced microsecond skew at chunk
+	// borders, so the SQL window and oldestLoaded could disagree.
 	var loadConditions []string
 	hotCutoffHours := s.retentionHours
 	if s.hotStartupHours > 0 {
 		hotCutoffHours = s.hotStartupHours
 	}
+	var hotCutoffStr string
 	if hotCutoffHours > 0 {
-		cutoff := time.Now().UTC().Add(-time.Duration(hotCutoffHours * float64(time.Hour))).Format(time.RFC3339)
-		loadConditions = append(loadConditions, fmt.Sprintf("t.first_seen >= '%s'", cutoff))
+		hotCutoffStr = time.Now().UTC().Add(-time.Duration(hotCutoffHours * float64(time.Hour))).Format(time.RFC3339)
+		loadConditions = append(loadConditions, fmt.Sprintf("t.first_seen >= '%s'", hotCutoffStr))
 	}
 	if maxPackets > 0 {
 		loadConditions = append(loadConditions, fmt.Sprintf(
@@ -686,11 +709,10 @@ func (s *PacketStore) Load() error {
 	s.buildDistanceIndex()
 
 	// Track oldest loaded timestamp for future SQL fallback queries.
-	// When hotStartupHours > 0 the load window boundary (cutoff) is the
-	// authoritative lower bound, not the first packet's timestamp (which may be
-	// newer if no packets landed exactly at the boundary).
+	// When hotStartupHours > 0 use the SAME cutoff string that was used in
+	// the load SQL (PR #1187 r2 #7) — recomputing time.Now().UTC() here
+	// produced microsecond skew vs. the SQL filter at chunk boundaries.
 	if s.hotStartupHours > 0 {
-		hotCutoffStr := time.Now().UTC().Add(-time.Duration(s.hotStartupHours * float64(time.Hour))).Format(time.RFC3339)
 		s.oldestLoaded = hotCutoffStr
 	} else if len(s.packets) > 0 {
 		s.oldestLoaded = s.packets[0].FirstSeen
@@ -880,57 +902,87 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		return nil
 	}
 
-	// Merge under write lock.
+	// PR #1187 r2 #6: merge in small batches to keep lock hold time bounded.
+	// The previous implementation held s.mu.Lock() across the entire merge
+	// (hundreds of ms for big chunks); runtime.Gosched between chunks didn't
+	// help readers/ingest that arrived mid-chunk. We now release+reacquire
+	// the lock every mergeBatchSize packets so other writers can interleave.
+	const mergeBatchSize = 500
+
+	// Prepend the whole local packet slice ONCE under the lock — this is
+	// the "merge primitive" that must be atomic w.r.t. ordering.
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Prepend: chunk is older than the hot window already in store.
 	s.packets = append(localPackets, s.packets...)
+	s.mu.Unlock()
 
-	// Collect newly inserted obs IDs before merging byObsID, so Loop B
-	// can detect "new" entries without being defeated by Loop A's writes.
-	newObsIDs := make(map[int]bool, len(localByObsID))
-	for k := range localByObsID {
-		if s.byObsID[k] == nil {
-			newObsIDs[k] = true
+	for batchStart := 0; batchStart < len(localPackets); batchStart += mergeBatchSize {
+		batchEnd := batchStart + mergeBatchSize
+		if batchEnd > len(localPackets) {
+			batchEnd = len(localPackets)
 		}
-	}
+		batch := localPackets[batchStart:batchEnd]
 
-	// Merge indexes.
-	for k, v := range localByHash {
-		if s.byHash[k] == nil {
-			s.byHash[k] = v
-		}
-	}
-	for k, v := range localByTxID {
-		if s.byTxID[k] == nil {
-			s.byTxID[k] = v
-		}
-	}
-	for k, v := range localByObsID {
-		if newObsIDs[k] {
-			s.byObsID[k] = v
-		}
-	}
-	for observerID, obsList := range localByObserver {
-		for _, o := range obsList {
-			if newObsIDs[o.ID] {
-				s.byObserver[observerID] = append(s.byObserver[observerID], o)
+		// Build the per-batch index views from the local maps. Doing this
+		// outside the lock means the critical section below is O(batch),
+		// not O(total local).
+		batchHashes := make(map[string]*StoreTx, len(batch))
+		batchTxIDs := make(map[int]*StoreTx, len(batch))
+		batchObsIDs := make(map[int]*StoreObs)
+		batchByObserver := make(map[string][]*StoreObs)
+		for _, tx := range batch {
+			batchHashes[tx.Hash] = tx
+			batchTxIDs[tx.ID] = tx
+			for _, o := range tx.Observations {
+				batchObsIDs[o.ID] = o
+				if o.ObserverID != "" {
+					batchByObserver[o.ObserverID] = append(batchByObserver[o.ObserverID], o)
+				}
 			}
 		}
-	}
 
-	// Index each local packet into byNode and byPayloadType.
-	for _, tx := range localPackets {
-		s.indexByNode(tx)
-		if tx.PayloadType != nil {
-			pt := *tx.PayloadType
-			s.byPayloadType[pt] = append(s.byPayloadType[pt], tx)
+		s.mu.Lock()
+		newObsIDs := make(map[int]bool, len(batchObsIDs))
+		for k := range batchObsIDs {
+			if s.byObsID[k] == nil {
+				newObsIDs[k] = true
+			}
 		}
-		s.trackAdvertPubkey(tx)
+		for k, v := range batchHashes {
+			if s.byHash[k] == nil {
+				s.byHash[k] = v
+			}
+		}
+		for k, v := range batchTxIDs {
+			if s.byTxID[k] == nil {
+				s.byTxID[k] = v
+			}
+		}
+		for k, v := range batchObsIDs {
+			if newObsIDs[k] {
+				s.byObsID[k] = v
+			}
+		}
+		for observerID, obsList := range batchByObserver {
+			for _, o := range obsList {
+				if newObsIDs[o.ID] {
+					s.byObserver[observerID] = append(s.byObserver[observerID], o)
+				}
+			}
+		}
+		for _, tx := range batch {
+			s.indexByNode(tx)
+			if tx.PayloadType != nil {
+				pt := *tx.PayloadType
+				s.byPayloadType[pt] = append(s.byPayloadType[pt], tx)
+			}
+			s.trackAdvertPubkey(tx)
+		}
+		s.mu.Unlock()
+		runtime.Gosched()
 	}
 
-	// Update counters.
+	// Final counter update — one short critical section.
+	s.mu.Lock()
 	s.totalObs += localTotalObs
 	s.trackedBytes += localTrackedBytes
 	if localMaxTxID > s.maxTxID {
@@ -939,6 +991,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	if localMaxObsID > s.maxObsID {
 		s.maxObsID = localMaxObsID
 	}
+	s.mu.Unlock()
 
 	log.Printf("[store] background chunk [%s, %s) merged: %d tx, %d obs", fromStr, toStr, len(localPackets), localTotalObs)
 	return nil
@@ -962,6 +1015,7 @@ func (s *PacketStore) loadBackgroundChunks() {
 	}
 
 	var chunksLoaded float64
+	var chunkErrors int
 	totalChunks := math.Ceil(totalHours / 24)
 
 	for {
@@ -988,6 +1042,7 @@ func (s *PacketStore) loadBackgroundChunks() {
 
 		chunkStartStr := chunkStart.Format(time.RFC3339)
 		if err := s.loadChunk(chunkStart, chunkEnd); err != nil {
+			chunkErrors++
 			log.Printf("[store] background chunk [%s, %s) error: %v — advancing past it",
 				chunkStartStr, chunkEnd.Format(time.RFC3339), err)
 		}
@@ -1023,13 +1078,20 @@ func (s *PacketStore) loadBackgroundChunks() {
 	s.mu.Unlock()
 
 	s.backgroundLoadDone.Store(true)
+	if chunkErrors > 0 {
+		s.backgroundLoadFailed.Store(true)
+	}
 	s.backgroundLoadProgress.Store(100)
 
 	s.mu.RLock()
 	totalPkts := len(s.packets)
 	oldest := s.oldestLoaded
 	s.mu.RUnlock()
-	log.Printf("[store] background load complete: %d packets in memory, oldestLoaded=%s", totalPkts, oldest)
+	if chunkErrors > 0 {
+		log.Printf("[store] background load done with %d chunk error(s): %d packets in memory, oldestLoaded=%s", chunkErrors, totalPkts, oldest)
+	} else {
+		log.Printf("[store] background load complete: %d packets in memory, oldestLoaded=%s", totalPkts, oldest)
+	}
 }
 
 // pickBestObservation selects the observation with the longest path
@@ -1454,6 +1516,7 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 		"trackedMB":              trackedMB,
 		"hotStartupHours":        hotStartupHours,
 		"backgroundLoadComplete": s.backgroundLoadDone.Load(),
+		"backgroundLoadFailed":   s.backgroundLoadFailed.Load(),
 		"backgroundLoadProgress": s.backgroundLoadProgress.Load(),
 		"indexes": map[string]interface{}{
 			"byHash":           hashIdx,
@@ -1645,6 +1708,7 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 		},
 		HotStartupHours:        s.hotStartupHours,
 		BackgroundLoadComplete: s.backgroundLoadDone.Load(),
+		BackgroundLoadFailed:   s.backgroundLoadFailed.Load(),
 		BackgroundLoadProgress: s.backgroundLoadProgress.Load(),
 	}
 }

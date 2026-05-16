@@ -199,6 +199,7 @@ type PerfPacketStoreStats struct {
 	Indexes                  PacketStoreIndexes `json:"indexes"`
 	HotStartupHours          float64            `json:"hotStartupHours"`
 	BackgroundLoadComplete   bool               `json:"backgroundLoadComplete"`
+	BackgroundLoadFailed     bool               `json:"backgroundLoadFailed"`
 	BackgroundLoadProgress   int64              `json:"backgroundLoadProgress"`
 }
 
