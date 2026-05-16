@@ -326,6 +326,13 @@ func decodeAdvert(buf []byte, validateSignatures bool) Payload {
 			}
 			name := string(appdata[off:nameEnd])
 			name = sanitizeName(name)
+			// Firmware writes the node name into a 32-byte buffer
+			// (MAX_ADVERT_DATA_SIZE, firmware/src/MeshCore.h:11). Truncate
+			// here so adversarial on-wire adverts can't pollute Payload.Name
+			// with bytes firmware would never emit.
+			if len(name) > 32 {
+				name = name[:32]
+			}
 			p.Name = name
 			off = nameEnd
 			// Skip null terminator(s)
