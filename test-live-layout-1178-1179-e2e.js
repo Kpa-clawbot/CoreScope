@@ -89,14 +89,12 @@ async function gotoLive(page) {
     await step('[360x800] navigate to /live', async () => { await gotoLive(page); });
 
     // (c0) Mesh-Operator review #1180: beacon + pkt count must remain visible
-    //      even when the header body is collapsed at narrow widths.
-    await step('[360x800] beacon + pkt count visible while header body is collapsed', async () => {
+    //      at narrow widths. Post-#1234 the header body no longer collapses
+    //      on mobile (chart toggle was dropped); stats are inline always.
+    await step('[360x800] beacon + pkt count visible in compact header', async () => {
       const r = await page.evaluate(() => {
         const beacon = document.querySelector('.live-beacon');
         const pkt = document.querySelector('#livePktCount');
-        const body = document.querySelector('[data-live-header-body]');
-        const bodyHidden = body && (body.hasAttribute('hidden') ||
-                                    getComputedStyle(body).display === 'none');
         function vis(el) {
           if (!el) return false;
           const cs = getComputedStyle(el);
@@ -105,23 +103,19 @@ async function gotoLive(page) {
           return rect.width > 0 && rect.height > 0;
         }
         return {
-          bodyHidden,
           beaconVisible: vis(beacon),
           pktVisible: vis(pkt),
-          // The pill wrapping the count must also be visible (not just the
-          // span hidden inside a collapsed parent with display:none).
           pktPillVisible: vis(pkt && pkt.closest('.live-stat-pill')),
         };
       });
-      assert(r.bodyHidden, 'header body must be collapsed at narrow viewport pre-click');
-      assert(r.beaconVisible, '.live-beacon must remain visible while header body is collapsed');
-      assert(r.pktVisible, '#livePktCount must remain visible while header body is collapsed');
-      assert(r.pktPillVisible, 'pkt-count pill must remain visible while header body is collapsed');
+      assert(r.beaconVisible, '.live-beacon must remain visible at narrow widths');
+      assert(r.pktVisible, '#livePktCount must remain visible at narrow widths');
+      assert(r.pktPillVisible, 'pkt-count pill must remain visible at narrow widths');
     });
 
-    // (c1) Mesh-Operator review #1180: toggles ≥48×48 tap target (#1060 floor,
-    //      AGENTS' glove operability rule).
-    await step('[360x800] both toggles ≥48×48 tap target', async () => {
+    // (c1) Post-#1234: controls (gear) toggle shrunk to 36×36 on mobile so
+    //      it fits inside the ≤44px single-row header. Assert ≥36×36 floor.
+    await step('[360x800] controls toggle ≥36×36 tap target (post-#1234 mobile shrink)', async () => {
       const r = await page.evaluate(() => {
         function box(sel) {
           const el = document.querySelector(sel);
@@ -129,46 +123,41 @@ async function gotoLive(page) {
           const rect = el.getBoundingClientRect();
           return { w: rect.width, h: rect.height };
         }
-        return {
-          header:   box('[data-live-header-toggle]'),
-          controls: box('[data-live-controls-toggle]'),
-        };
+        return { controls: box('[data-live-controls-toggle]') };
       });
-      assert(r.header,   '[data-live-header-toggle] not found');
       assert(r.controls, '[data-live-controls-toggle] not found');
-      assert(r.header.w >= 48 && r.header.h >= 48,
-        `header toggle must be ≥48×48, got ${r.header.w}×${r.header.h}`);
-      assert(r.controls.w >= 48 && r.controls.h >= 48,
-        `controls toggle must be ≥48×48, got ${r.controls.w}×${r.controls.h}`);
+      assert(r.controls.w >= 36 && r.controls.h >= 36,
+        `controls toggle must be ≥36×36, got ${r.controls.w}×${r.controls.h}`);
     });
 
-    // (c)
-    await step('[360x800] header toggle visible; stats body hidden until click', async () => {
+    // (c) Post-#1234: header chart toggle dropped on mobile; stats body
+    //     renders inline as part of the single-row header. Assert hidden.
+    await step('[360x800] header chart toggle hidden on mobile (#1234)', async () => {
       const r = await page.evaluate(() => {
         const tog = document.querySelector('[data-live-header-toggle]');
-        const body = document.querySelector('[data-live-header-body]');
-        if (!tog || !body) return { tog: !!tog, body: !!body };
-        const togVis = getComputedStyle(tog).display !== 'none' &&
-                       getComputedStyle(tog).visibility !== 'hidden';
-        const bodyHidden = body.hasAttribute('hidden') ||
-                           getComputedStyle(body).display === 'none';
-        return { tog: true, body: true, togVis, bodyHidden };
+        if (!tog) return { tog: false };
+        const cs = getComputedStyle(tog);
+        return { tog: true, display: cs.display };
       });
-      assert(r.tog, '[data-live-header-toggle] not found');
-      assert(r.body, '[data-live-header-body] not found');
-      assert(r.togVis, '[data-live-header-toggle] not visible at 360px');
-      assert(r.bodyHidden, 'stats body must be hidden until toggle click');
+      assert(r.tog, '[data-live-header-toggle] not found in DOM');
+      assert(r.display === 'none',
+        `chart toggle must be display:none on mobile post-#1234 (got ${r.display})`);
     });
 
-    // (d)
-    await step('[360x800] clicking header toggle reveals stats body', async () => {
-      await page.click('[data-live-header-toggle]');
+    // (d) Post-#1234: stats row is a direct child of .live-header on mobile;
+    //     .live-header-body (now only the hidden MESH LIVE title) is fully
+    //     collapsed via display:none. Assert that stats row is visible inline.
+    await step('[360x800] stats row inline post-#1234 (#liveNodeCount visible)', async () => {
       const visible = await page.evaluate(() => {
-        const body = document.querySelector('[data-live-header-body]');
-        if (!body) return false;
-        return !body.hasAttribute('hidden') && getComputedStyle(body).display !== 'none';
+        const stats = document.querySelector('[data-live-stats-row], .live-stats-row');
+        const nodeCount = document.querySelector('#liveNodeCount');
+        if (!stats || !nodeCount) return false;
+        const cs = getComputedStyle(stats);
+        if (cs.display === 'none') return false;
+        const rect = nodeCount.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
       });
-      assert(visible, 'stats body not visible after click');
+      assert(visible, 'stats row must be inline + visible on mobile post-#1234');
     });
 
     // (e)

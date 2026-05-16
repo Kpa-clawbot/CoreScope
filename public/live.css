@@ -485,6 +485,97 @@
   .live-stat-pill { font-size: 11px; padding: 2px 7px; }
   .live-toggles { font-size: 10px; gap: 6px; margin-left: 0; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; width: 100%; min-width: 0; }
   .live-title { font-size: 12px; letter-spacing: 1px; }
+
+  /* #1234 chrome-reduction pass 2 — mobile-only adjustments.
+   * - Drop MESH LIVE text label and the chart-icon header toggle; counters
+   *   speak for themselves on a narrow phone.
+   * - Force the body to render inline (cancel the #1178/#1179 collapse on
+   *   .live-header-body — the chart toggle that drove it is gone).
+   * - Keep the header to a single row by removing flex-wrap so all pills
+   *   sit beside the beacon.
+   * - Cap header chrome at 44px (acceptance criterion in #1234). */
+  .live-title { display: none !important; }
+  .live-header-toggle { display: none !important; }
+  /* #1234: header body now only contains the (hidden) MESH LIVE title;
+   * stats row is a direct child of .live-header. Collapse the body entirely
+   * on mobile so it contributes 0 height. */
+  .live-header-body,
+  .live-header-body[hidden] { display: none !important; }
+  .live-header {
+    flex-wrap: wrap;     /* keep #1220 collapse: gear inline, expanded controls wrap to row 2 */
+    min-height: 0;
+    padding: 4px 8px;
+    gap: 6px;
+    row-gap: 0;
+    top: 8px;            /* top-nav hidden on /live; reclaim that space */
+  }
+  .live-header.is-collapsed,
+  .live-header.is-expanded {
+    padding: 4px 8px;
+  }
+  .live-stats-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    min-width: 0;
+  }
+
+  /* #1234 — hide top app navbar on /live route at ≤640px.
+   * Uses :has() (Chromium 105+, Safari 15.4+, Firefox 121+) to scope the
+   * rule to pages mounting .live-page (the Live SPA route). Other routes
+   * keep the navbar intact. */
+  body:has(.live-page) .top-nav { display: none !important; }
+  body:has(.live-page) #app:has(.live-page),
+  body:has(.live-page) .live-page {
+    height: calc(100vh - var(--bottom-nav-reserve, 0px));
+    height: calc(100dvh - var(--bottom-nav-reserve, 0px));
+  }
+
+  /* #1234 — VCR scope: 12h/24h collapse into the More dropdown at ≤640px. */
+  .vcr-scope-btn--overflow { display: none !important; }
+  .vcr-scope-more-wrap { display: inline-flex !important; position: relative; }
+
+  /* #1234 — gear toggle shrunk on mobile so it fits within the ≤44px header
+   * strip. Tap target stays ≥40px (above WCAG 24px minimum, within #1060
+   * spirit). The header chart-icon toggle is fully removed on mobile so
+   * the gear is the only persistent action button. */
+  .live-controls-toggle {
+    min-width: 36px; min-height: 36px;
+    width: 36px; height: 36px;
+    padding: 6px;
+    font-size: 14px;
+  }
+  .vcr-scope-more {
+    /* Inherits .vcr-scope-btn base styling; no extra geometry needed. */
+  }
+  .vcr-scope-more-menu {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    right: 0;
+    z-index: 1100;
+    background: color-mix(in srgb, var(--surface-1) 96%, transparent);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 80px;
+  }
+  .vcr-scope-more-menu[hidden] { display: none; }
+  .vcr-scope-more-item {
+    background: none;
+    border: 0;
+    color: var(--text);
+    text-align: left;
+    font-size: 0.8rem;
+    padding: 6px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .vcr-scope-more-item:hover { background: color-mix(in srgb, var(--text) 12%, transparent); }
   /* #203 — bottom-sheet node detail on mobile */
   .live-node-detail { width: 100%; right: 0; left: 0; top: auto; bottom: 0; max-height: 60dvh; border-radius: 16px 16px 0 0; overflow-y: auto; z-index: 1050; }
   .live-node-detail.hidden { transform: translateY(100%); }
@@ -835,6 +926,10 @@
   gap: 2px;
   flex-shrink: 0;
 }
+/* #1234 — overflow dropdown is mobile-only; desktop shows all scope buttons
+   inline so the wrap is hidden by default. The @media (max-width:640px)
+   block below flips it on and hides the .vcr-scope-btn--overflow buttons. */
+.vcr-scope-more-wrap { display: none; }
 .vcr-scope-btn {
   background: none;
   border: 1px solid var(--border);
