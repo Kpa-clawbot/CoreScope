@@ -631,9 +631,9 @@
 
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
   .vcr-bar { padding-bottom: calc(8px + env(safe-area-inset-bottom, 34px)); }
-  .live-feed { bottom: calc(78px + env(safe-area-inset-bottom, 34px)); }
-  .feed-show-btn { bottom: calc(88px + env(safe-area-inset-bottom, 34px)) !important; }
-  .live-legend { bottom: calc(78px + env(safe-area-inset-bottom, 34px)); }
+  /* Inherit --vcr-bar-height (set by JS); no hard-coded bottom here so the
+   * feed/legend keep tracking the live VCR height including the safe area.
+   */
 }
 .vcr-bar > .vcr-controls {
   display: flex; align-items: center; gap: 4px; flex-shrink: 0;
@@ -865,9 +865,19 @@
 }
 .vcr-prompt-btn:hover { background: rgba(59,130,246,0.3); }
 
-/* Adjust feed position to not overlap VCR bar */
-.live-feed { bottom: 68px; }
-.feed-show-btn { bottom: 68px !important; }
+/* Adjust feed position to not overlap VCR bar (#1206)
+ * --vcr-bar-height is set by JS via ResizeObserver on .vcr-bar so the feed
+ * (and other bottom-pinned overlays) always clear the bar regardless of
+ * how tall it grows (mobile two-row layout, safe-area-inset, etc.).
+ */
+.live-feed { bottom: calc(var(--vcr-bar-height, 58px) + 10px); }
+.feed-show-btn { bottom: calc(var(--vcr-bar-height, 58px) + 10px) !important; }
+/* Cap the feed's height so its scrollable content never extends below the
+ * VCR bar top edge, even when the feed is pinned to a bottom corner.
+ */
+.live-feed {
+  max-height: min(340px, calc(100dvh - 64px - var(--vcr-bar-height, 58px) - 24px));
+}
 
 /* Backdrop for mobile tap-outside-to-close (#797) */
 .node-detail-backdrop {
@@ -997,8 +1007,8 @@
 /* Corner positions — applied via data-position attribute on .live-overlay panels */
 .live-overlay[data-position="tl"] { top: 64px; left: 12px; bottom: auto; right: auto; }
 .live-overlay[data-position="tr"] { top: 64px; right: 12px; bottom: auto; left: auto; }
-.live-overlay[data-position="bl"] { bottom: 58px; left: 12px; top: auto; right: auto; }
-.live-overlay[data-position="br"] { bottom: 58px; right: 12px; top: auto; left: auto; }
+.live-overlay[data-position="bl"] { bottom: calc(var(--vcr-bar-height, 58px) + 10px); left: 12px; top: auto; right: auto; }
+.live-overlay[data-position="br"] { bottom: calc(var(--vcr-bar-height, 58px) + 10px); right: 12px; top: auto; left: auto; }
 
 /* Override hide animations for positioned panels — slide toward nearest edge */
 .live-overlay[data-position="tl"].hidden,

@@ -240,6 +240,27 @@
 
   // === VCR Controls ===
 
+  // #1206: publish the VCR bar's measured height as --vcr-bar-height on the
+  // .live-page root so bottom-pinned overlays (feed, legend, corner panels)
+  // can reserve the right amount of space and never get occluded by the bar.
+  function initVCRHeightTracker() {
+    var bar = document.getElementById('vcrBar');
+    var page = document.querySelector('.live-page');
+    if (!bar || !page) return;
+    function publish() {
+      var h = Math.ceil(bar.getBoundingClientRect().height) || 58;
+      page.style.setProperty('--vcr-bar-height', h + 'px');
+    }
+    publish();
+    if (typeof ResizeObserver === 'function') {
+      try { new ResizeObserver(publish).observe(bar); } catch (_) { /* ignore */ }
+    }
+    window.addEventListener('resize', publish);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', publish);
+    }
+  }
+
   function vcrSetMode(mode) {
     VCR.mode = mode;
     if (mode !== 'LIVE' && !VCR.frozenNow) VCR.frozenNow = Date.now();
@@ -1019,6 +1040,7 @@
     showHeatMap();
     connectWS();
     initResizeHandler();
+    initVCRHeightTracker();
     startRateCounter();
 
     // Check for packet replay from packets page (single or array of observations)
