@@ -220,6 +220,14 @@ type PacketStore struct {
 	// (issue #1203 sub-fix).
 	graph atomic.Pointer[NeighborGraph]
 
+	// Singleflight state for ensureNeighborGraph. These were package-globals
+	// in #1203 r0 — moved to per-store fields (PR #1208 review) so parallel
+	// tests with independent *PacketStore values don't share rebuild state
+	// (cross-store deadlock/skip risk under -race).
+	rebuildMu    sync.Mutex
+	rebuildInFlt chan struct{} // nil when no rebuild is in flight
+
+
 	// Path inspector score cache (issue #944).
 	inspectMu    sync.RWMutex
 	inspectCache map[string]*inspectCachedResult
@@ -1811,8 +1819,11 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		var edgeUpdates []persistEdgeUpdate
 
 		_, pm := s.getCachedNodesAndPM()
-		// Read graph ref under lock (it's set during startup and not replaced after,
-		// but reading under lock is safer — review item #5).
+		// graph is *atomic.Pointer[NeighborGraph]; the Load itself is
+		// lock-free. (Earlier comment claimed "set during startup, not
+		// replaced after" — that's no longer true: #1203 made rebuilds
+		// async via ensureNeighborGraph. Dropping the dead s.mu RLock
+		// wrap — review PR #1208.)
 		graphRef := s.graph.Load()
 		for _, tx := range broadcastTxs {
 			for _, obs := range tx.Observations {

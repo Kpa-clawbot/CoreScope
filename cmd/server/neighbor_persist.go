@@ -583,12 +583,11 @@ func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int
 		}
 		chunk := allPending[totalProcessed:end]
 
-		// Re-read graph under RLock at the start of each chunk so we pick up
-		// a freshly-built graph once the background build goroutine completes,
-		// instead of using the potentially-empty graph captured at cold start.
-		store.mu.RLock()
+		// Re-read graph at the start of each chunk so we pick up a freshly-
+		// built graph once the background build goroutine completes, instead
+		// of using the potentially-empty graph captured at cold start.
+		// (Dead RLock wrap removed PR #1208: store.graph is atomic.Pointer.)
 		graph := store.graph.Load()
-		store.mu.RUnlock()
 
 		// Resolve paths outside any lock.
 		type resolved struct {
