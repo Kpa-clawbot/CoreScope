@@ -345,7 +345,8 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			if len(parts) > 2 {
 				obs = parts[2]
 			}
-			log.Printf("MQTT [%s] decode error: %v (topic=%s observer=%s rawHexLen=%d)", tag, err, topic, obs, len(rawHex))
+			// observer truncated to 8-char prefix to avoid logging full ID (matches blacklist-log pattern at line 280).
+			log.Printf("MQTT [%s] decode error: %v (topic=%s observer=%.8s rawHexLen=%d)", tag, err, topic, obs, len(rawHex))
 			return
 		}
 
