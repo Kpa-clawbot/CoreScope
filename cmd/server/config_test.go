@@ -106,12 +106,11 @@ func TestLoadConfigInvalidJSON(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "config.json"), []byte("{invalid"), 0644)
 
 	cfg, err := LoadConfig(dir)
-	if err != nil {
-		t.Fatal(err)
+	if cfg != nil {
+		t.Fatal("expected nil config for invalid JSON")
 	}
-	// Should return defaults when JSON is invalid
-	if cfg.Port != 3000 {
-		t.Errorf("expected default port 3000, got %d", cfg.Port)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
 	}
 }
 

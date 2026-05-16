@@ -65,7 +65,7 @@ func main() {
 		}
 		go func() {
 			log.Printf("[pprof] profiling UI at http://localhost:%s/debug/pprof/", pprofPort)
-			if err := http.ListenAndServe(":"+pprofPort, nil); err != nil {
+			if err := http.ListenAndServe("127.0.0.1:"+pprofPort, nil); err != nil {
 				log.Printf("[pprof] failed to start: %v (non-fatal)", err)
 			}
 		}()
