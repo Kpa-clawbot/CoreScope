@@ -11,12 +11,16 @@ import (
 // observation set. Regression guard for issue #1225 where the query loaded
 // every observation row for the channel and deduped/paginated in Go memory.
 //
-// Dataset: 200 transmissions in #perf, each with 50 observations (10K obs
-// total). Realistic ratio for staging where #wardriving had ~5.7K tx and
-// ~275K obs.
+// Dataset: 1500 transmissions in #perf, each with 50 observations
+// (75K obs total). Same shape as staging where #wardriving had ~5.7K tx
+// and ~275K obs — fewer rows are enough to demonstrate that the broken
+// impl (which loads/dedups every observation in Go) blows the budget,
+// while keeping setup fast enough for slower CI runners.
 //
-// On the broken implementation this takes ~5–30s. With SQL-level pagination
-// over transmissions it must complete in well under 500ms.
+// On the broken implementation this takes multiple seconds (>2s on dev,
+// ~6–9s on GitHub-hosted CI). With SQL-level pagination over
+// transmissions it must complete well under the 1.5s budget
+// (~sub-100ms observed on dev).
 func TestGetChannelMessagesPerfLargeChannel(t *testing.T) {
 	if testing.Short() {
 		t.Skip("perf test")
@@ -30,7 +34,7 @@ func TestGetChannelMessagesPerfLargeChannel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const numTx = 3000
+	const numTx = 1500
 	const obsPerTx = 50
 
 	tx, err := db.conn.Begin()
@@ -84,7 +88,7 @@ func TestGetChannelMessagesPerfLargeChannel(t *testing.T) {
 	if len(msgs) != 50 {
 		t.Errorf("page size: got %d want 50", len(msgs))
 	}
-	const budget = 500 * time.Millisecond
+	const budget = 1500 * time.Millisecond
 	if elapsed > budget {
 		t.Fatalf("GetChannelMessages too slow for #1225: %v (budget %v) on %d tx × %d obs",
 			elapsed, budget, numTx, obsPerTx)
