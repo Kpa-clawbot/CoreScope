@@ -14,6 +14,12 @@ if [ -f /app/data/theme.json ]; then
   ln -sf /app/data/theme.json /app/theme.json
 fi
 
+# Mosquitto password file is bind-mounted; mosquitto 2.0 refuses a file
+# with group/world write bits, so tighten perms before the broker starts.
+if [ -f /etc/mosquitto/passwd ]; then
+  chmod 600 /etc/mosquitto/passwd
+fi
+
 # Source .env from data volume if present (works with any launch method)
 if [ -f /app/data/.env ]; then
   set -a
