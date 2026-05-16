@@ -123,8 +123,8 @@ func TestMQTTStallWatchdog_QuietWhenDisconnected(t *testing.T) {
 	state.IsConnectedFn = func() bool { return false }
 
 	_, kind := checkSourceLiveness(state, 5*time.Minute, time.Now())
-	if kind != LivenessOK {
-		t.Fatal("watchdog should NOT flag stall when client is disconnected — paho's reconnect logging covers that case")
+	if kind != LivenessDisconnected {
+		t.Fatalf("watchdog must classify a !IsConnected source as LivenessDisconnected (silent state), not LivenessOK — r2 item 1 prevents disconnect→recovery mis-classification; got kind=%v", kind)
 	}
 }
 

@@ -24,6 +24,14 @@ const (
 	LivenessNeverReceived
 	LivenessRecovered
 	LivenessHeartbeat
+	// LivenessDisconnected (PR #1216 r2 item 1): paho reports !IsConnected.
+	// Distinct from LivenessOK so processLivenessTransition does NOT
+	// interpret a TCP drop as recovery and fire a spurious "messages
+	// flowing again" INFO when the source actually went from silently
+	// broken to overtly broken. paho's own reconnect logging already
+	// covers the disconnect — this kind exists solely to keep the
+	// transition engine from mis-classifying it.
+	LivenessDisconnected
 )
 
 // SourceLivenessState tracks per-source last-message timestamp and connection
@@ -31,18 +39,30 @@ const (
 // message handler via atomic store; the watchdog reads it via atomic load.
 //
 // PR #1216 r1 added:
-//   - StartedAt: cold-start grace clock; lets the watchdog distinguish
-//     "never received since registration" (alarming) from "just registered,
-//     paho hasn't subscribed yet" (normal).
+//   - StartedAt: re-stamped on reconnect to suppress transient-stall WARNs
+//     during paho's reconnect window.
 //   - LastAlertUnix: edge-trigger cooldown; prevents 60-per-hour re-emits
 //     of the same WARN.
+//
+// PR #1216 r2 added:
+//   - FirstConnectedAt: stamped ONCE at registration, never reset. The
+//     cold-start "NEVER received" alarm uses this so a broker that flaps
+//     in CONNECT → SUBSCRIBE-deny cannot indefinitely re-arm the grace
+//     window. r1's StartedAt-as-grace-clock conflated transient-stall
+//     suppression with cold-start grace; r2 separates them.
 type SourceLivenessState struct {
-	Tag             string
-	Broker          string
+	Tag    string
+	Broker string
 	LastMessageUnix int64 // atomic; unix seconds of last successfully received MQTT message
-	StartedAt       int64 // atomic; unix seconds when the source was registered / last reconnected
-	LastAlertUnix   int64 // atomic; unix seconds of last emit (WARN or heartbeat); 0 means quiet
-	IsConnectedFn   func() bool
+	// FirstConnectedAt (PR #1216 r2 item 2) is stamped ONCE at
+	// registerLivenessState time and never reset. Cold-start grace
+	// checks against this so a flapping broker (CONNECT ok, SUBSCRIBE
+	// ACL-denied — the #1212 shape) can no longer suppress the
+	// "NEVER received" alarm by re-stamping StartedAt on every reconnect.
+	FirstConnectedAt int64 // atomic; unix seconds of first registration
+	StartedAt        int64 // atomic; unix seconds when the source was registered / last reconnected (transient-stall tracking)
+	LastAlertUnix    int64 // atomic; unix seconds of last emit (WARN or heartbeat); 0 means quiet
+	IsConnectedFn    func() bool
 	// AttemptCount is incremented on every TCP/TLS connection attempt. Used
 	// by ConnectionAttemptHandler to log attempt # independent of paho's
 	// internal reconnect-loop state. atomic.
@@ -58,8 +78,16 @@ func (s *SourceLivenessState) MarkMessage(now time.Time) {
 // MarkReconnected clears stale liveness state so the watchdog does not
 // false-alarm on a pre-outage timestamp after paho re-establishes the
 // connection (PR #1216 r1 item 2). Resets LastMessageUnix, re-stamps
-// StartedAt (cold-start grace window restarts), and clears LastAlertUnix
+// StartedAt (transient-stall window restarts), and clears LastAlertUnix
 // (edge-trigger re-arms).
+//
+// PR #1216 r2 item 2: FirstConnectedAt is INTENTIONALLY not touched here.
+// Under broker flap (CONNECT ok, SUBSCRIBE ACL-denied — exact #1212
+// class) r1 reset StartedAt on every reconnect, indefinitely re-arming
+// the cold-start grace and silencing the headline "NEVER received"
+// alarm. Cold-start grace now reads FirstConnectedAt instead, so the
+// alarm fires after the FIRST grace window regardless of reconnect
+// churn.
 func (s *SourceLivenessState) MarkReconnected(now time.Time) {
 	atomic.StoreInt64(&s.LastMessageUnix, 0)
 	atomic.StoreInt64(&s.StartedAt, now.Unix())
@@ -67,36 +95,43 @@ func (s *SourceLivenessState) MarkReconnected(now time.Time) {
 }
 
 // checkSourceLiveness returns (message, kind) describing the source's
-// liveness state. kind==LivenessOK means quiet/healthy; any other kind
-// indicates the caller may want to emit (subject to edge-trigger).
+// liveness state. kind==LivenessOK means quiet/healthy; kind==
+// LivenessDisconnected means paho is not connected (silent state — no
+// emit, no recovery). Any other kind indicates the caller may want to
+// emit (subject to edge-trigger).
 //
-// Cold-start (PR #1216 r1 item 1): when LastMessageUnix==0, the source
-// has never published a single message. If StartedAt was stamped at
-// registration and more than `threshold` has elapsed, this is the
-// #1212 failure class — wrong channel hash, ACL drops SUBSCRIBE,
-// half-open TCP after CONNECT. We emit a DISTINCT "NEVER received"
-// alarm so operators can grep for it independently of generic stalls.
+// Cold-start (PR #1216 r1 item 1, r2 item 2): when LastMessageUnix==0,
+// the source has never published a single message. If FirstConnectedAt
+// was stamped at registration and more than `threshold` has elapsed,
+// this is the #1212 failure class — wrong channel hash, ACL drops
+// SUBSCRIBE, half-open TCP after CONNECT, or a broker that loops
+// CONNECT-then-disconnect. We emit a DISTINCT "NEVER received" alarm
+// so operators can grep for it independently of generic stalls. Using
+// FirstConnectedAt (not the reconnect-reset StartedAt) ensures broker
+// flap cannot silence this alarm.
 func checkSourceLiveness(s *SourceLivenessState, threshold time.Duration, now time.Time) (string, LivenessKind) {
 	if s == nil || s.IsConnectedFn == nil {
 		return "", LivenessOK
 	}
 	if !s.IsConnectedFn() {
-		// paho's reconnect handler covers the disconnected case.
-		return "", LivenessOK
+		// paho's reconnect handler covers the disconnected case. Return
+		// a DISTINCT kind so the transition engine does not mis-classify
+		// disconnect as recovery (PR #1216 r2 item 1).
+		return "", LivenessDisconnected
 	}
 	last := atomic.LoadInt64(&s.LastMessageUnix)
 	if last == 0 {
-		started := atomic.LoadInt64(&s.StartedAt)
-		if started == 0 {
-			// Registration didn't stamp StartedAt — conservative: stay quiet.
+		firstConnected := atomic.LoadInt64(&s.FirstConnectedAt)
+		if firstConnected == 0 {
+			// Registration didn't stamp FirstConnectedAt — conservative: stay quiet.
 			return "", LivenessOK
 		}
-		sinceStart := now.Sub(time.Unix(started, 0))
-		if sinceStart < threshold {
+		sinceFirst := now.Sub(time.Unix(firstConnected, 0))
+		if sinceFirst < threshold {
 			return "", LivenessOK
 		}
 		msg := fmt.Sprintf("MQTT [%s] WATCHDOG: client reports connected to %s but has NEVER received a message in %s (threshold %s) — check channel hash / subscribe ACL / half-open TCP",
-			s.Tag, s.Broker, sinceStart.Round(time.Second), threshold)
+			s.Tag, s.Broker, sinceFirst.Round(time.Second), threshold)
 		return msg, LivenessNeverReceived
 	}
 	silentFor := now.Sub(time.Unix(last, 0))
@@ -126,19 +161,39 @@ var (
 // to fatal or just log and skip. The first registration remains
 // authoritative — we do NOT overwrite.
 //
-// Also stamps StartedAt so the cold-start watchdog knows when the
-// grace clock starts.
+// Also stamps StartedAt (transient-stall window) and FirstConnectedAt
+// (cold-start grace anchor — never reset; see r2 item 2 in
+// MarkReconnected) so the cold-start watchdog has its clocks.
 func registerLivenessState(s *SourceLivenessState) error {
 	livenessRegistryMu.Lock()
 	defer livenessRegistryMu.Unlock()
 	if existing, ok := livenessRegistry[s.Tag]; ok {
 		return fmt.Errorf("liveness registry: duplicate tag %q (existing broker=%s, new broker=%s) — fix config so each MQTT source has a unique Name", s.Tag, existing.Broker, s.Broker)
 	}
+	nowUnix := time.Now().Unix()
 	if atomic.LoadInt64(&s.StartedAt) == 0 {
-		atomic.StoreInt64(&s.StartedAt, time.Now().Unix())
+		atomic.StoreInt64(&s.StartedAt, nowUnix)
+	}
+	if atomic.LoadInt64(&s.FirstConnectedAt) == 0 {
+		atomic.StoreInt64(&s.FirstConnectedAt, nowUnix)
 	}
 	livenessRegistry[s.Tag] = s
 	return nil
+}
+
+// registerLivenessOrSkip (PR #1216 r2 item 3) is the main-callsite wrapper
+// that replaces the previous log.Fatalf on tag collision. Fatal at
+// startup over a config typo would kill the entire ingestor and recreate
+// the #1212 total-ingest-stop class this PR exists to prevent. On
+// collision we log ERROR + skip — the MQTT source still attempts to
+// connect, it just won't be tracked by the liveness watchdog. Returns
+// true iff the source was registered.
+func registerLivenessOrSkip(s *SourceLivenessState) bool {
+	if err := registerLivenessState(s); err != nil {
+		log.Printf("[ingestor] ERROR: source tag collision %q — skipping duplicate liveness registration, this source will connect but will not be tracked by the watchdog (%v)", s.Tag, err)
+		return false
+	}
+	return true
 }
 
 // markLivenessForTag is the hot-path entry point: O(1) map lookup +
@@ -230,15 +285,12 @@ func processLivenessTransition(s *SourceLivenessState, kind LivenessKind, msg st
 			emit(fmt.Sprintf("MQTT [%s] WATCHDOG INFO: messages flowing again (recovered)", s.Tag))
 			atomic.StoreInt64(&s.LastAlertUnix, 0)
 		}
+	case LivenessDisconnected:
+		// PR #1216 r2 item 1: disconnect is NOT recovery. Stay completely
+		// silent — paho's reconnect handler already logs the drop — and
+		// preserve LastAlertUnix so the WARN edge can re-fire if/when
+		// the source comes back stalled. Clearing the cooldown here
+		// would mean a flapping source spams the WARN every cycle.
 	}
 }
 
-// registerLivenessOrSkip is a no-op stub introduced for the PR #1216 r2
-// RED test commit. The r2 GREEN commit replaces this with the real
-// implementation (log ERROR + skip on collision, return false). Returning
-// false unconditionally makes the RED test fail on the assertion that the
-// FIRST registration succeeds — which is exactly the behaviour we need
-// to gate on.
-func registerLivenessOrSkip(_ *SourceLivenessState) bool {
-	return false
-}

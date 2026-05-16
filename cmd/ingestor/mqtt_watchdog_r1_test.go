@@ -48,6 +48,7 @@ func TestMQTTStallWatchdog_FiresOnSilentFromStart(t *testing.T) {
 		IsConnectedFn: func() bool { return true },
 	}
 	atomic.StoreInt64(&state.StartedAt, now.Add(-10*time.Minute).Unix())
+	atomic.StoreInt64(&state.FirstConnectedAt, now.Add(-10*time.Minute).Unix())
 	// LastMessageUnix stays 0 — never received anything.
 
 	msg, kind := checkSourceLiveness(state, 5*time.Minute, now)
@@ -70,6 +71,7 @@ func TestMQTTStallWatchdog_QuietDuringColdStartGrace(t *testing.T) {
 		IsConnectedFn: func() bool { return true },
 	}
 	atomic.StoreInt64(&state.StartedAt, now.Add(-30*time.Second).Unix())
+	atomic.StoreInt64(&state.FirstConnectedAt, now.Add(-30*time.Second).Unix())
 
 	_, kind := checkSourceLiveness(state, 5*time.Minute, now)
 	if kind != LivenessOK {

@@ -192,13 +192,14 @@ func main() {
 		// Registration BEFORE Connect so the attempt counter is available
 		// to OnConnectAttempt on the very first dial.
 		liveness.IsConnectedFn = client.IsConnected
-		if err := registerLivenessState(liveness); err != nil {
-			// PR #1216 r1 item 4: tag collisions previously silently
-			// clobbered an earlier source's AttemptCount/LastMessageUnix.
-			// Fatal at startup forces the operator to fix the config —
-			// it's strictly better than running blind in production.
-			log.Fatalf("MQTT [%s] liveness registration failed: %v", tag, err)
-		}
+		// PR #1216 r2 item 3: tag collisions used to log.Fatalf, which
+		// killed the entire ingestor over one config typo and recreated
+		// the #1212 total-ingest-stop class this PR exists to prevent.
+		// registerLivenessOrSkip logs ERROR + skips liveness registration
+		// for the duplicate; the MQTT source still attempts to connect,
+		// it just isn't tracked by the watchdog. First registration
+		// remains authoritative.
+		registerLivenessOrSkip(liveness)
 		token := client.Connect()
 		// With ConnectRetry=true, token.Wait() blocks forever for unreachable brokers.
 		// WaitTimeout lets startup proceed; the client keeps retrying in the background
