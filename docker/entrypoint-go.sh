@@ -19,6 +19,9 @@ fi
 # mosquitto 2.0 also requires tight perms on the file.
 if [ -n "$MOSQUITTO_PASSWD_B64" ]; then
   echo "$MOSQUITTO_PASSWD_B64" | base64 -d > /etc/mosquitto/passwd
+  # mosquitto drops privileges to the mosquitto user, so it must own the
+  # file; 600 then satisfies mosquitto 2.0's no-group/world-access check.
+  chown mosquitto:mosquitto /etc/mosquitto/passwd
   chmod 600 /etc/mosquitto/passwd
 fi
 
