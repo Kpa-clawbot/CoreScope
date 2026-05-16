@@ -1374,7 +1374,8 @@ type MQTTPacketMessage struct {
 	Score     *float64 `json:"score"`
 	Direction *string  `json:"direction"`
 	Origin    string   `json:"origin"`
-	Region    string   `json:"region,omitempty"` // optional region override (#788)
+	Region    string   `json:"region,omitempty"`    // optional region override (#788)
+	Timestamp string   `json:"timestamp,omitempty"` // observer receive time, resolved by handler
 }
 
 // BuildPacketData constructs a PacketData from a decoded packet and MQTT message.
@@ -1382,7 +1383,6 @@ type MQTTPacketMessage struct {
 // to guarantee the stored path always matches the raw bytes. This matters for
 // TRACE packets where decoded.Path.Hops is overwritten with payload hops (#886).
 func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID, region string) *PacketData {
-	now := time.Now().UTC().Format(time.RFC3339)
 	pathJSON := "[]"
 	// For TRACE packets, path_json must be the payload-decoded route hops
 	// (decoded.Path.Hops), NOT the raw_hex header bytes which are SNR values.
@@ -1399,7 +1399,7 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 
 	pd := &PacketData{
 		RawHex:         msg.Raw,
-		Timestamp:      now,
+		Timestamp:      msg.Timestamp,
 		ObserverID:     observerID,
 		ObserverName:   msg.Origin,
 		SNR:            msg.SNR,
