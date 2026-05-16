@@ -5606,6 +5606,16 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 	// highest-affinity candidate among them. Raw score is appropriate because
 	// it reflects both observation frequency and recency, which are the right
 	// signals for "which candidate is this hop most likely referring to."
+	//
+	// Issue #1229 (Option C): the raw score is further multiplied by
+	// e.Confidence() — a source-diversity factor in (0,1] derived from the
+	// number of distinct observers that contributed to the edge. Edges seen
+	// by a single observer are discounted to 1/3 weight; edges seen by ≥3
+	// observers saturate at full weight. This stacks with the geo-rejection
+	// filter merged for #1228 to give two independent lines of defense
+	// against cross-region prefix-collision pollution. Backward-compatible
+	// with the persistence format: legacy edges with empty Observers sets
+	// fall back to single-observer weight.
 	if graph != nil && len(contextPubkeys) > 0 {
 		type scored struct {
 			idx   int
@@ -5629,7 +5639,7 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 						otherPK = e.NodeB
 					}
 					if strings.EqualFold(otherPK, candPK) {
-						s := e.Score(now)
+						s := e.Score(now) * e.Confidence()
 						if s > bestScore {
 							bestScore = s
 							bestCount = e.Count
