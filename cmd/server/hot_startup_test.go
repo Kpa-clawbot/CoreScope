@@ -521,3 +521,45 @@ func TestHotStartup_ConcurrentQueryDuringBackgroundLoad(t *testing.T) {
 		t.Errorf("expected packet count after background load (%d) >= pre-background (%d)", postLen, preLen)
 	}
 }
+
+// TestHotStartup_BackgroundLoadFailureSurfacesInPerf asserts that when every
+// background chunk errors, the store does NOT report backgroundLoadComplete=true
+// — instead it surfaces backgroundLoadFailed=true via GetPerfStoreStats so
+// operators see a visible failure rather than silent data loss. Munger r2 #3.
+func TestHotStartup_BackgroundLoadFailureSurfacesInPerf(t *testing.T) {
+	dbPath := createTestDBMultiDay(t, 3, 50)
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  72,
+		HotStartupHours: 24,
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force every loadChunk call to fail by closing the read connection.
+	// loadBackgroundChunks must then NOT report "complete" — it must report failed.
+	if err := db.conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store.loadBackgroundChunks()
+
+	perf := store.GetPerfStoreStats()
+	complete, _ := perf["backgroundLoadComplete"].(bool)
+	failed, hasFailedKey := perf["backgroundLoadFailed"].(bool)
+
+	if !hasFailedKey {
+		t.Fatalf("expected backgroundLoadFailed key in /api/perf payload, got keys: %v", perf)
+	}
+	if !failed {
+		t.Errorf("expected backgroundLoadFailed=true after every chunk errored, got false")
+	}
+	if complete {
+		t.Errorf("expected backgroundLoadComplete=false on full-failure path, got true (observability lying)")
+	}
+}
