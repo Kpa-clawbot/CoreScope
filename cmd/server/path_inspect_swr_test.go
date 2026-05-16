@@ -16,7 +16,7 @@ import (
 // Anti-tautology: revert the SWR branch and this test fails (sees 503).
 func TestHandlePathInspect_StaleWhileRevalidate(t *testing.T) {
 	srv := newTestServerForInspect(t)
-	srv.store.graph.builtAt = time.Now().Add(-1 * time.Hour) // stale
+	srv.store.graph.Load().builtAt = time.Now().Add(-1 * time.Hour) // stale
 
 	// Seed nodes so beamSearch returns a candidate (prefix "aa").
 	pk := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

@@ -18,7 +18,7 @@ import (
 // request would still be 503 and this test would fail.
 func TestHandlePathInspect_ColdStartKicksRebuild(t *testing.T) {
 	srv := newTestServerForInspect(t)
-	srv.store.graph = nil
+	srv.store.graph.Store(nil)
 
 	var built int32
 	origBuild := buildGraphFn
@@ -55,7 +55,7 @@ func TestHandlePathInspect_ColdStartKicksRebuild(t *testing.T) {
 	// Wait for rebuild to land.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if atomic.LoadInt32(&built) >= 1 && srv.store.graph != nil && !srv.store.graph.IsStale() {
+		if atomic.LoadInt32(&built) >= 1 && srv.store.graph.Load() != nil && !srv.store.graph.Load().IsStale() {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)

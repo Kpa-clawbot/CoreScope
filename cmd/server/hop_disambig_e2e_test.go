@@ -166,7 +166,7 @@ func TestTopHopsRespectsContextAcrossAllCallSites(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		g.upsertEdge(t1201Sender, t1201_72dd, "72", t1201Observer, nil, now.Add(-time.Duration(i)*time.Hour))
 	}
-	store.graph = g
+	store.graph.Store(g)
 
 	if err := store.Load(); err != nil {
 		t.Fatalf("Load: %v", err)

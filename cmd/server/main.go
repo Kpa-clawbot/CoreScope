@@ -230,11 +230,11 @@ func main() {
 
 	// Load or build neighbor graph
 	if neighborEdgesTableExists(database.conn) {
-		store.graph = loadNeighborEdgesFromDB(database.conn)
+		store.graph.Store(loadNeighborEdgesFromDB(database.conn))
 		log.Printf("[neighbor] loaded persisted neighbor graph")
 	} else {
 		log.Printf("[neighbor] no persisted edges found, will build in background...")
-		store.graph = NewNeighborGraph() // empty graph — gets populated by background goroutine
+		store.graph.Store(NewNeighborGraph()) // empty graph — gets populated by background goroutine
 		initWg.Add(1)
 		go func() {
 			defer initWg.Done()
@@ -249,9 +249,7 @@ func main() {
 				log.Printf("[neighbor] persisted %d edges", edgeCount)
 			}
 			built := BuildFromStore(store)
-			store.mu.Lock()
-			store.graph = built
-			store.mu.Unlock()
+			store.graph.Store(built)
 			log.Printf("[neighbor] graph build complete")
 		}()
 	}
@@ -462,17 +460,13 @@ func main() {
 				}
 			}()
 			time.Sleep(4 * time.Minute) // stagger after metrics prune
-			store.mu.RLock()
-			g := store.graph
-			store.mu.RUnlock()
+			g := store.graph.Load()
 			PruneNeighborEdges(dbPath, g, maxAgeDays)
 			runIncrementalVacuum(resolvedDB, vacuumPages)
 			for {
 				select {
 				case <-edgePruneTicker.C:
-					store.mu.RLock()
-					g := store.graph
-					store.mu.RUnlock()
+					g := store.graph.Load()
 					PruneNeighborEdges(dbPath, g, maxAgeDays)
 					runIncrementalVacuum(resolvedDB, vacuumPages)
 				case <-edgePruneDone:

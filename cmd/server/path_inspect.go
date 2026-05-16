@@ -171,7 +171,7 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 	//   - cold start (nil): return 503 + kick off async rebuild for next request.
 	//   - stale non-nil: serve it immediately with stale:true + async rebuild.
 	//   - fresh: serve normally.
-	graph := s.store.graph
+	graph := s.store.graph.Load()
 	stale := false
 	if graph == nil {
 		// Cold start — kick off rebuild so the next request lands warm,
@@ -443,12 +443,12 @@ var (
 // callers share a single in-flight build (singleflight) so the store doesn't
 // churn N parallel BuildFromStore goroutines under load.
 func (s *PacketStore) ensureNeighborGraph() {
-	if s.graph != nil && !s.graph.IsStale() {
+	if g := s.graph.Load(); g != nil && !g.IsStale() {
 		return
 	}
 	rebuildMu.Lock()
 	// Re-check under lock to avoid racing two callers past the cheap check.
-	if s.graph != nil && !s.graph.IsStale() {
+	if g := s.graph.Load(); g != nil && !g.IsStale() {
 		rebuildMu.Unlock()
 		return
 	}
@@ -465,11 +465,18 @@ func (s *PacketStore) ensureNeighborGraph() {
 	rebuildInFlt = done
 	rebuildMu.Unlock()
 
-	g := buildGraphFn(s)
+	// Defer cleanup so a panic in buildGraphFn doesn't leak the in-flight
+	// channel (which would deadlock every future waiter).
+	var g *NeighborGraph
+	defer func() {
+		if g != nil {
+			s.graph.Store(g)
+		}
+		rebuildMu.Lock()
+		rebuildInFlt = nil
+		rebuildMu.Unlock()
+		close(done)
+	}()
 
-	rebuildMu.Lock()
-	s.graph = g
-	rebuildInFlt = nil
-	rebuildMu.Unlock()
-	close(done)
+	g = buildGraphFn(s)
 }

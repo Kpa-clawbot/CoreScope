@@ -587,7 +587,7 @@ func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int
 		// a freshly-built graph once the background build goroutine completes,
 		// instead of using the potentially-empty graph captured at cold start.
 		store.mu.RLock()
-		graph := store.graph
+		graph := store.graph.Load()
 		store.mu.RUnlock()
 
 		// Resolve paths outside any lock.

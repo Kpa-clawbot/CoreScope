@@ -215,7 +215,10 @@ type PacketStore struct {
 	lruMu                 sync.RWMutex     // guards apiResolvedPathLRU + lruOrder
 
 	// Persisted neighbor graph for hop resolution at ingest time.
-	graph *NeighborGraph
+	// Accessed via atomic.Pointer because async rebuilds (path_inspect.go
+	// ensureNeighborGraph) and ingest-time readers race on the pointer
+	// (issue #1203 sub-fix).
+	graph atomic.Pointer[NeighborGraph]
 
 	// Path inspector score cache (issue #944).
 	inspectMu    sync.RWMutex
@@ -1615,7 +1618,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			var resolvedPubkeys []string
 			var rpForBroadcast []*string
 			if r.pathJSON != "" && r.pathJSON != "[]" && cachedPM != nil {
-				rpForBroadcast = resolvePathForObs(r.pathJSON, r.observerID, tx, cachedPM, s.graph)
+				rpForBroadcast = resolvePathForObs(r.pathJSON, r.observerID, tx, cachedPM, s.graph.Load())
 				resolvedPubkeys = extractResolvedPubkeys(rpForBroadcast)
 				// Feed decode-window consumers: addToByNode + resolvedPubkeyIndex
 				for _, pk := range resolvedPubkeys {
@@ -1810,7 +1813,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		_, pm := s.getCachedNodesAndPM()
 		// Read graph ref under lock (it's set during startup and not replaced after,
 		// but reading under lock is safer — review item #5).
-		graphRef := s.graph
+		graphRef := s.graph.Load()
 		for _, tx := range broadcastTxs {
 			for _, obs := range tx.Observations {
 				// Use decode-window resolved path for persist
@@ -1935,7 +1938,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 
 	// Hoist getCachedNodesAndPM() before the loop — same pattern as IngestNewFromDB (review fix #1).
 	_, pm := s.getCachedNodesAndPM()
-	graphRef := s.graph
+	graphRef := s.graph.Load()
 
 	hopsSeen := make(map[string]bool) // reused across observations; cleared per use
 
@@ -1979,7 +1982,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		var obsResolvedPath []*string
 		if r.pathJSON != "" && r.pathJSON != "[]" {
 			if pm != nil {
-				obsResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, s.graph)
+				obsResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, s.graph.Load())
 				pks := extractResolvedPubkeys(obsResolvedPath)
 				for _, pk := range pks {
 					s.addToByNode(tx, pk)
@@ -3555,7 +3558,7 @@ func (s *PacketStore) hopResolverPerTx(pm *prefixMap) (resolveHop func(string) *
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph.Load())
 		hopCache[hop] = r
 		return r
 	}
@@ -5365,7 +5368,7 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph.Load())
 		hopCache[hop] = r
 		return r
 	}
@@ -7816,7 +7819,7 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 			}
 			return hop
 		}
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph.Load())
 		hopCache[hop] = r
 		if r != nil {
 			return r.Name
@@ -7899,7 +7902,7 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 			}
 			return hop
 		}
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph.Load())
 		hopCache[hop] = r
 		if r != nil {
 			return r.Name
@@ -8047,7 +8050,7 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 	// Resolve the requested hops
 	nodes := make([]map[string]interface{}, len(rawHops))
 	for i, hop := range rawHops {
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph)
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph.Load())
 		entry := map[string]interface{}{"hop": hop, "name": hop, "lat": nil, "lon": nil, "pubkey": nil}
 		if r != nil {
 			entry["name"] = r.Name
@@ -8103,7 +8106,7 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 		hops := txGetParsedPath(tx)
 		resolved := make([]string, len(hops))
 		for i, h := range hops {
-			r, _, _ := pm.resolveWithContext(h, txCtx, s.graph)
+			r, _, _ := pm.resolveWithContext(h, txCtx, s.graph.Load())
 			if r != nil {
 				resolved[i] = r.Name
 			} else {

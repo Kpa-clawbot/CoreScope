@@ -1431,7 +1431,7 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r, _, _ := pm.resolveWithContext(hop, hopContext, s.store.graph)
+		r, _, _ := pm.resolveWithContext(hop, hopContext, s.store.graph.Load())
 		hopCache[hop] = r
 		return r
 	}

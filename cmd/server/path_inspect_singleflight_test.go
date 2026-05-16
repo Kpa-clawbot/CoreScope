@@ -17,7 +17,7 @@ func TestEnsureNeighborGraph_Singleflight(t *testing.T) {
 	store := &PacketStore{}
 	stale := NewNeighborGraph()
 	stale.builtAt = time.Now().Add(-1 * time.Hour) // stale by TTL
-	store.graph = stale
+	store.graph.Store(stale)
 
 	var count int32
 	origBuild := buildGraphFn
