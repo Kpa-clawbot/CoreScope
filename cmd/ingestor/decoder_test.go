@@ -1708,15 +1708,15 @@ func TestZeroHopTransportDirectHashSize(t *testing.T) {
 }
 
 func TestZeroHopTransportDirectHashSizeWithNonZeroUpperBits(t *testing.T) {
-	// TRANSPORT_DIRECT (RouteType=3) + REQ (PayloadType=0) → header byte = 0x03
-	// 4 bytes transport codes + pathByte=0xC0 → hash_count=0, hash_size bits=11 → should still get HashSize=0
+	// pathByte=0xC0 → hash_size bits=11 (4, reserved per firmware Packet.cpp:13-18).
+	// Firmware Packet::isValidPathLen rejects this regardless of hash_count,
+	// because hash_size==4 is reserved. Go decoder must mirror that — even
+	// when hash_count==0, an attacker-emitted 0xC0 byte should not be
+	// silently accepted; firmware never emits hash_size==4.
 	hex := "03" + "11223344" + "C0" + repeatHex("AA", 20)
-	pkt, err := DecodePacket(hex, nil, false)
-	if err != nil {
-		t.Fatalf("DecodePacket failed: %v", err)
-	}
-	if pkt.Path.HashSize != 0 {
-		t.Errorf("TRANSPORT_DIRECT zero-hop with hash_size bits set: want HashSize=0, got %d", pkt.Path.HashSize)
+	_, err := DecodePacket(hex, nil, false)
+	if err == nil {
+		t.Fatalf("DecodePacket(pathByte=0xC0) succeeded; want error mirroring firmware Packet.cpp:13-18 (hash_size==4 reserved)")
 	}
 }
 
