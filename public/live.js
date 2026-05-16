@@ -15,7 +15,9 @@
   let packetCount = 0;
   let activeAnims = 0;
   const MAX_CONCURRENT_ANIMS = 20;
-  const LIVE_RF_SEGMENT_MAX_KM = 500;
+  const LIVE_RF_SEGMENT_MAX_KM = (window.HopResolver && window.HopResolver.rfSegmentMaxKm) || 500;
+  let showSuspiciousLinks = localStorage.getItem('live-show-suspicious-links') === 'true';
+  let suppressedPathCount = 0;
   let nodeActivity = {};
   let recentPaths = [];
   let showGhostHops = localStorage.getItem('live-ghost-hops') !== 'false';
@@ -940,6 +942,7 @@
             <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
             <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
             <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
+            <div class="live-stat-pill" id="liveSuppressedPill" title="Implausible RF paths hidden"><span id="liveSuppressedCount">0</span> suppressed</div>
           </div>
           <button class="live-header-toggle" data-live-header-toggle id="liveHeaderToggle"
                   aria-expanded="false" aria-controls="liveHeaderBody"
@@ -960,6 +963,8 @@
             <label><input type="checkbox" id="liveGhostToggle" checked aria-describedby="ghostDesc"> Ghosts</label>
             <span id="ghostDesc" class="sr-only">Show interpolated ghost markers for unknown hops</span>
             <label><input type="checkbox" id="liveRealisticToggle" aria-describedby="realisticDesc"> Realistic</label>
+            <label><input type="checkbox" id="liveSuspiciousToggle" aria-describedby="suspiciousDesc"> Suspicious</label>
+            <span id="suspiciousDesc" class="sr-only">Show implausible links instead of suppressing them</span>
             <span id="realisticDesc" class="sr-only">Buffer packets by hash and animate all paths simultaneously</span>
             <label><input type="checkbox" id="liveColorHashToggle" aria-describedby="colorHashDesc"> Color by hash</label>
             <span id="colorHashDesc" class="sr-only">Color flying-packet dots and contrails by packet hash for propagation tracing</span>
@@ -1135,6 +1140,15 @@
     ghostToggle.addEventListener('change', (e) => {
       showGhostHops = e.target.checked;
       localStorage.setItem('live-ghost-hops', showGhostHops);
+    });
+
+    updateSuppressedBadge();
+
+    const suspiciousToggle = document.getElementById('liveSuspiciousToggle');
+    suspiciousToggle.checked = showSuspiciousLinks;
+    suspiciousToggle.addEventListener('change', (e) => {
+      showSuspiciousLinks = e.target.checked;
+      localStorage.setItem('live-show-suspicious-links', showSuspiciousLinks);
     });
 
     const realisticToggle = document.getElementById('liveRealisticToggle');
@@ -2563,7 +2577,7 @@
       var hopPositions = resolveHopPositions(hops, qp, window.getResolvedPath ? getResolvedPath(qpkt) : null, qpkt);
       if (hopPositions.length >= 2) {
         var pathReport = pathPlausibilityReport(hopPositions);
-        if (pathReport.plausible) {
+        if (pathReport.plausible || showSuspiciousLinks) {
           allPaths.push({ hopPositions: hopPositions, raw: qpkt.raw || first.raw });
         } else {
           traceSuppressedPath(pathReport, qpkt.hash || first.hash);
@@ -2579,7 +2593,7 @@
       var fallbackPositions = resolveHopPositions(fallbackHops, payload, window.getResolvedPath ? getResolvedPath(first) : null, first);
       if (fallbackPositions.length >= 2) {
         var fallbackReport = pathPlausibilityReport(fallbackPositions);
-        if (fallbackReport.plausible) {
+        if (fallbackReport.plausible || showSuspiciousLinks) {
           allPaths.push({ hopPositions: fallbackPositions, raw: first.raw });
         } else {
           traceSuppressedPath(fallbackReport, first.hash);
@@ -2656,7 +2670,13 @@
     }
   }
 
+  function updateSuppressedBadge() {
+    var el = document.getElementById('liveSuppressedCount');
+    if (el) el.textContent = String(suppressedPathCount);
+  }
+
   function liveHaversineKm(from, to) {
+    if (window.HopResolver && window.HopResolver.haversineKm) return window.HopResolver.haversineKm(from[0], from[1], to[0], to[1]);
     var R = 6371;
     var dLat = (to[0] - from[0]) * Math.PI / 180;
     var dLon = (to[1] - from[1]) * Math.PI / 180;
@@ -2697,7 +2717,10 @@
   }
 
   function traceSuppressedPath(report, hash) {
-    if (!report || report.plausible || typeof console === 'undefined' || !console.debug) return;
+    if (!report || report.plausible) return;
+    suppressedPathCount += 1;
+    updateSuppressedBadge();
+    if (typeof console === 'undefined' || !console.debug) return;
     try {
       console.debug('[live] suppressed implausible RF path', {
         hash: hash || null,
@@ -2749,14 +2772,14 @@
         // Look up coordinates from nodeData (HopResolver resolves name/pubkey but doesn't return lat/lon directly)
         const node = nodeData[r.pubkey];
         if (node && node.lat != null && node.lon != null && !(node.lat === 0 && node.lon === 0)) {
-          if (!nodeFitsObserverRegion(node, observerId)) {
-            return { key: 'hop-' + hop, pos: null, name: hop, known: false };
+          if (!(r.serverResolved && r.serverResolved === true) && !nodeFitsObserverRegion(node, observerId)) {
+            return { key: r.pubkey, pos: null, name: r.name, known: false };
           }
           return { key: r.pubkey, pos: [node.lat, node.lon], name: r.name, known: true };
         }
         return { key: r.pubkey, pos: null, name: r.name, known: false };
       }
-      return { key: 'hop-' + hop, pos: null, name: hop, known: false };
+      return { key: (r && r.pubkey) ? r.pubkey : ('hop-' + hop), pos: null, name: (r && r.name) ? r.name : hop, known: false };
     });
 
     // Add sender position as anchor if available

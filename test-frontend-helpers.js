@@ -688,6 +688,19 @@ console.log('\n=== haversineKm (hop-resolver.js) ===');
     // Haversine should give ~415km, Euclidean ~627km (wrong because dLon*85 is wrong at 60° latitude)
     assert.ok(Math.abs(haversine - euclidean) > 50, `Expected significant difference, haversine=${haversine.toFixed(1)}, euclidean=${euclidean.toFixed(1)}`);
   });
+  test('rfSegmentMaxKm is exported', () => {
+    assert.strictEqual(HR.rfSegmentMaxKm, 500);
+  });
+
+  test('2-byte mismatch without nearby anchor is unreliable, 3-byte is not', () => {
+    const nodes = [{ public_key: 'aa11aa11aa11aa11', name: 'FarNode', role: 'repeater', lat: 55.0, lon: 10.0 }];
+    HR.init(nodes, { observers: [{ id: 'obs1', iata: 'SEA' }], iataCoords: { SEA: { lat: 47.45, lon: -122.31 } } });
+    const r2 = HR.resolve(['aa11'], null, null, null, null, 'obs1');
+    assert.strictEqual(r2['aa11'].unreliable, true);
+    const r3 = HR.resolve(['aa11aa'], null, null, null, null, 'obs1');
+    assert.strictEqual(r3['aa11aa'].unreliable, false);
+  });
+
 }
 
 // ===== pickByAffinity — neighbor-graph + centroid scoring (#874) =====
