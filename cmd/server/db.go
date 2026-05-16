@@ -38,8 +38,10 @@ type DB struct {
 const sqliteStatsCacheTTL = 15 * time.Second
 
 // OpenDB opens a read-only SQLite connection with WAL mode.
+// cache_size is set to 128 MiB per connection (negative value = KiB) so the
+// server's read-heavy workload doesn't thrash the default 8 MiB SQLite cache.
 func OpenDB(path string) (*DB, error) {
-	dsn := fmt.Sprintf("file:%s?mode=ro&_journal_mode=WAL&_busy_timeout=5000", path)
+	dsn := fmt.Sprintf("file:%s?mode=ro&_journal_mode=WAL&_busy_timeout=5000&_pragma=cache_size(-131072)", path)
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
