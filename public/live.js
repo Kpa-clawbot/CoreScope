@@ -878,44 +878,6 @@
             </div>
           </div>
         </div>
-        <div class="live-overlay live-controls" id="liveControls">
-          <div class="live-controls-body" data-live-controls-body id="liveControlsBody">
-            <div class="live-toggles">
-            <label><input type="checkbox" id="liveHeatToggle" checked aria-describedby="heatDesc"> Heat</label>
-            <span id="heatDesc" class="sr-only">Overlay a density heat map on the mesh nodes</span>
-            <label><input type="checkbox" id="liveGhostToggle" checked aria-describedby="ghostDesc"> Ghosts</label>
-            <span id="ghostDesc" class="sr-only">Show interpolated ghost markers for unknown hops</span>
-            <label><input type="checkbox" id="liveRealisticToggle" aria-describedby="realisticDesc"> Realistic</label>
-            <span id="realisticDesc" class="sr-only">Buffer packets by hash and animate all paths simultaneously</span>
-            <label><input type="checkbox" id="liveColorHashToggle" aria-describedby="colorHashDesc"> Color by hash</label>
-            <span id="colorHashDesc" class="sr-only">Color flying-packet dots and contrails by packet hash for propagation tracing</span>
-            <label><input type="checkbox" id="liveMatrixToggle" aria-describedby="matrixDesc"> Matrix</label>
-            <span id="matrixDesc" class="sr-only">Animate packet hex bytes flowing along paths like the Matrix</span>
-            <label><input type="checkbox" id="liveMatrixRainToggle" aria-describedby="rainDesc"> Rain</label>
-            <span id="rainDesc" class="sr-only">Matrix rain overlay — packets fall as hex columns</span>
-            <label><input type="checkbox" id="liveAudioToggle" aria-describedby="audioDesc"> 🎵 Audio</label>
-            <span id="audioDesc" class="sr-only">Sonify packets — turn raw bytes into generative music</span>
-            <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ Favorites</label>
-            <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
-            <div class="live-node-filter-wrap" style="position:relative">
-              <input type="text" id="liveNodeFilterInput" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input" role="combobox" aria-expanded="false" aria-owns="liveNodeFilterDropdown" aria-autocomplete="list" aria-activedescendant="">
-              <div id="liveNodeFilterDropdown" class="live-node-filter-dropdown hidden" role="listbox"></div>
-              <button id="liveNodeFilterClear" class="vcr-btn" title="Clear node filter" style="display:none">×</button>
-            </div>
-            <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
-            <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
-            <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="Filter live packets by IATA region"></div>
-            </div>
-            <div class="audio-controls hidden" id="audioControls">
-              <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
-              <label class="audio-slider-label">BPM <input type="range" id="audioBpmSlider" min="40" max="300" value="120" class="audio-slider"><span id="audioBpmVal">120</span></label>
-              <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
-            </div>
-          </div>
-          <button class="live-controls-toggle" data-live-controls-toggle id="liveControlsToggle"
-                  aria-expanded="false" aria-controls="liveControlsBody"
-                  aria-label="Show live controls">⚙</button>
-        </div>
         <div class="live-overlay live-feed" id="liveFeed">
           <div class="panel-header">
             <button class="panel-corner-btn" data-panel="liveFeed" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
@@ -938,6 +900,45 @@
             <button class="panel-corner-btn" data-panel="liveLegend" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
           </div>
           <div class="panel-content">
+          <!-- #1205: settings toggle row re-anchored INSIDE the legend panel -->
+          <div class="live-controls" id="liveControls">
+            <div class="live-controls-body" data-live-controls-body id="liveControlsBody">
+              <div class="live-toggles">
+              <label><input type="checkbox" id="liveHeatToggle" checked aria-describedby="heatDesc"> Heat</label>
+              <span id="heatDesc" class="sr-only">Overlay a density heat map on the mesh nodes</span>
+              <label><input type="checkbox" id="liveGhostToggle" checked aria-describedby="ghostDesc"> Ghosts</label>
+              <span id="ghostDesc" class="sr-only">Show interpolated ghost markers for unknown hops</span>
+              <label><input type="checkbox" id="liveRealisticToggle" aria-describedby="realisticDesc"> Realistic</label>
+              <span id="realisticDesc" class="sr-only">Buffer packets by hash and animate all paths simultaneously</span>
+              <label><input type="checkbox" id="liveColorHashToggle" aria-describedby="colorHashDesc"> Color by hash</label>
+              <span id="colorHashDesc" class="sr-only">Color flying-packet dots and contrails by packet hash for propagation tracing</span>
+              <label><input type="checkbox" id="liveMatrixToggle" aria-describedby="matrixDesc"> Matrix</label>
+              <span id="matrixDesc" class="sr-only">Animate packet hex bytes flowing along paths like the Matrix</span>
+              <label><input type="checkbox" id="liveMatrixRainToggle" aria-describedby="rainDesc"> Rain</label>
+              <span id="rainDesc" class="sr-only">Matrix rain overlay — packets fall as hex columns</span>
+              <label><input type="checkbox" id="liveAudioToggle" aria-describedby="audioDesc"> 🎵 Audio</label>
+              <span id="audioDesc" class="sr-only">Sonify packets — turn raw bytes into generative music</span>
+              <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ Favorites</label>
+              <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
+              <div class="live-node-filter-wrap" style="position:relative">
+                <input type="text" id="liveNodeFilterInput" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input" role="combobox" aria-expanded="false" aria-owns="liveNodeFilterDropdown" aria-autocomplete="list" aria-activedescendant="">
+                <div id="liveNodeFilterDropdown" class="live-node-filter-dropdown hidden" role="listbox"></div>
+                <button id="liveNodeFilterClear" class="vcr-btn" title="Clear node filter" style="display:none">×</button>
+              </div>
+              <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
+              <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
+              <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="Filter live packets by IATA region"></div>
+              </div>
+              <div class="audio-controls hidden" id="audioControls">
+                <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
+                <label class="audio-slider-label">BPM <input type="range" id="audioBpmSlider" min="40" max="300" value="120" class="audio-slider"><span id="audioBpmVal">120</span></label>
+                <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
+              </div>
+            </div>
+            <button class="live-controls-toggle" data-live-controls-toggle id="liveControlsToggle"
+                    aria-expanded="false" aria-controls="liveControlsBody"
+                    aria-label="Show live controls">⚙</button>
+          </div>
           <h3 class="legend-title">PACKET TYPES</h3>
           <ul class="legend-list">
             <li><span class="live-dot" style="background:${TYPE_COLORS.ADVERT}" aria-hidden="true"></span> Advert — Node advertisement</li>

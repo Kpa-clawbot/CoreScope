@@ -58,27 +58,33 @@ async function gotoLive(page) {
       assert(h <= 40, `expected ≤40px, got ${h}px`);
     });
 
-    // (b)
-    await step('[1440x900] .live-controls fixed/absolute, right ≤ 24px, bottom > 0', async () => {
+    // (b) #1205 supersedes the original "fixed bottom-right" contract:
+    //     the toggle row is now DOM-anchored INSIDE #liveLegend (the
+    //     right-edge legend panel) instead of being a free-floating
+    //     overlay. Assert containment + that the rect sits inside the
+    //     legend's bounding box at the right edge.
+    await step('[1440x900] .live-controls anchored inside #liveLegend at right edge', async () => {
       const info = await page.evaluate(() => {
         const el = document.querySelector('.live-controls');
-        if (!el) return null;
-        const cs = getComputedStyle(el);
+        const legend = document.getElementById('liveLegend');
+        if (!el || !legend) return null;
         const r = el.getBoundingClientRect();
+        const l = legend.getBoundingClientRect();
         return {
-          position: cs.position,
-          right: parseFloat(cs.right),
-          bottom: parseFloat(cs.bottom),
-          rectRight: r.right,
+          containedInLegend: legend.contains(el),
+          rectFitsLegend: r.left >= l.left - 2 && r.right <= l.right + 2 &&
+                          r.top  >= l.top  - 2 && r.bottom <= l.bottom + 2,
+          legendRight: l.right,
           vw: window.innerWidth,
         };
       });
-      assert(info, '.live-controls element not found');
-      assert(info.position === 'fixed' || info.position === 'absolute',
-        `.live-controls position must be fixed/absolute, got ${info.position}`);
-      assert(info.right <= 24, `.live-controls right must be ≤24px, got ${info.right}px`);
-      assert(info.bottom > 0,
-        `.live-controls bottom must reserve space for safe-area/nav, got ${info.bottom}px`);
+      assert(info, '.live-controls or #liveLegend not found');
+      assert(info.containedInLegend,
+        '.live-controls must be a DOM descendant of #liveLegend (#1205)');
+      assert(info.rectFitsLegend,
+        '.live-controls bounding rect must lie inside #liveLegend rect (#1205)');
+      assert(info.vw - info.legendRight <= 24,
+        `legend (and therefore controls) must be ≤24px from right edge, got ${info.vw - info.legendRight}px`);
     });
 
     await ctx.close();
