@@ -2629,10 +2629,14 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .matrix-theme .live-feed .live-feed-item:hover { background: rgba(0,255,65,0.08) !important; }
 .matrix-theme .live-feed .feed-hide-btn { color: #00ff41 !important; }
 
-/* Controls in matrix mode */
+/* Controls in matrix mode (#1205 R1) — keep matrix text/accent color
+   only. Background + border are owned by the parent #liveHeader (MESH
+   LIVE panel) now that .live-controls is in-flow and transparent;
+   re-painting an opaque box here would orphan a nested chrome rect
+   inside the header for matrix-theme users. */
 .matrix-theme .live-controls {
-  background: rgba(0, 10, 0, 0.9) !important;
-  border-color: #00ff4130 !important;
+  background: transparent !important;
+  border: 0 !important;
   color: #00ff41 !important;
 }
 .matrix-theme .live-controls label,

@@ -118,6 +118,31 @@ async function assertReachable(page, label) {
   });
 }
 
+async function assertMatrixThemeTransparent(page, label) {
+  await step(label + ' matrix theme: .live-controls background stays transparent (no nested chrome box)', async () => {
+    const r = await page.evaluate(() => {
+      // Apply matrix theme the way the runtime toggles it.
+      document.documentElement.classList.add('matrix-theme');
+      document.body.classList.add('matrix-theme');
+      const ctrl = document.getElementById('liveControls');
+      const cs = getComputedStyle(ctrl);
+      return {
+        bg: cs.backgroundColor,
+        borderTopWidth: cs.borderTopWidth,
+        borderRightWidth: cs.borderRightWidth,
+        borderBottomWidth: cs.borderBottomWidth,
+        borderLeftWidth: cs.borderLeftWidth,
+      };
+    });
+    // Accept any rgba with alpha 0 OR the literal 'transparent' / rgba(0,0,0,0).
+    const transparent = /rgba?\([^)]*,\s*0\s*\)$/i.test(r.bg) || r.bg === 'transparent' || r.bg === 'rgba(0, 0, 0, 0)';
+    assert(transparent, `matrix .live-controls background must be transparent; got "${r.bg}"`);
+    const noBorder = ['borderTopWidth','borderRightWidth','borderBottomWidth','borderLeftWidth']
+      .every((k) => r[k] === '0px');
+    assert(noBorder, `matrix .live-controls borders must be 0; got ${JSON.stringify(r)}`);
+  });
+}
+
 (async () => {
   const browser = await chromium.launch({
     headless: true,
@@ -139,6 +164,7 @@ async function assertReachable(page, label) {
     await step(vp.tag + ' navigate to /live', async () => { await gotoLive(page); });
     await assertAnchoredToMeshLive(page, vp.tag);
     await assertReachable(page, vp.tag);
+    await assertMatrixThemeTransparent(page, vp.tag);
     await ctx.close();
   }
 

@@ -74,7 +74,12 @@
 .live-header {
   top: 64px;
   left: 12px;
-  /* #1205 — toggles re-anchored as a child row; allow wrap + max-width. */
+  /* #1205 — toggles re-anchored as a child row; allow wrap + max-width.
+     NOTE: #liveHeader intentionally no longer carries `.live-overlay`
+     (which set flex-direction:column). With direction defaulting to row
+     here, #liveControls is forced onto its own line via `flex: 0 0 100%`
+     and flex-wrap, so the header lays out: [title row] then [toggles
+     row]. At ≤640px the wrap keeps both rows reachable. */
   display: flex;
   /* #1204: .live-overlay sets flex-direction: column for all overlay panels
    * (feed/legend/node-detail need that for header+content stacking). The
