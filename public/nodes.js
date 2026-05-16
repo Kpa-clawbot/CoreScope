@@ -1078,7 +1078,9 @@
     } finally {
       // Always signal data-loaded — even on error — so E2E tests can proceed.
       var nodesContainer = document.getElementById('nodesLeft') || document.getElementById('nodesBody');
-      if (nodesContainer) nodesContainer.setAttribute('data-loaded', 'true');
+      if (nodesContainer && typeof nodesContainer.setAttribute === 'function') {
+        nodesContainer.setAttribute('data-loaded', 'true');
+      }
     }
   }
 

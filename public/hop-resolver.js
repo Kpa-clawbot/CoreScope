@@ -12,9 +12,9 @@ window.HopResolver = (function() {
   // Only repeaters and room servers can appear as path hops per protocol.
   // Companions/sensors originate but never relay packets.
   function canAppearInPath(role) {
-    if (!role) return false;
+    if (!role) return true;
     var r = String(role).toLowerCase();
-    return r.indexOf('repeater') >= 0 || r.indexOf('room_server') >= 0 || r === 'room';
+    return r.indexOf('repeater') >= 0 || r.indexOf('room_server') >= 0 || r.indexOf('room-server') >= 0 || r.indexOf('room server') >= 0 || r === 'room';
   }
   let prefixIdx = {};   // lowercase hex prefix → [node, ...]
   let pubkeyIdx = {};   // full lowercase pubkey → node (O(1) lookup)
