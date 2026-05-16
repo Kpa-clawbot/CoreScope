@@ -2516,6 +2516,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 @media (max-width: 900px) { .obs-stats-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 480px) { .obs-stats-grid { grid-template-columns: 1fr; } }
 
+
 /* #206 — Analytics/Compare tables scroll wrappers on mobile */
 .analytics-table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .analytics-table-scroll .analytics-table,

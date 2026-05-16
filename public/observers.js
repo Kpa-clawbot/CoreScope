@@ -37,8 +37,8 @@
       switch (sortState.col) {
         case 'status': {
           var order = { 'health-green': 0, 'health-yellow': 1, 'health-red': 2 };
-          va = order[healthStatus(a).cls] ?? 3;
-          vb = order[healthStatus(b).cls] ?? 3;
+          va = order[healthStatus(a.last_seen).cls] ?? 3;
+          vb = order[healthStatus(b.last_seen).cls] ?? 3;
           break;
         }
         case 'name':
@@ -56,10 +56,6 @@
         case 'last_packet':
           va = a.last_packet_at ? new Date(a.last_packet_at).getTime() : 0;
           vb = b.last_packet_at ? new Date(b.last_packet_at).getTime() : 0;
-          break;
-        case 'forwarding':
-          va = a.last_packet_at ? Date.now() - new Date(a.last_packet_at).getTime() : Infinity;
-          vb = b.last_packet_at ? Date.now() - new Date(b.last_packet_at).getTime() : Infinity;
           break;
         case 'packets':
           va = a.packet_count || 0;
