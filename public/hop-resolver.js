@@ -7,7 +7,7 @@ window.HopResolver = (function() {
 
   const MAX_HOP_DIST = 1.8; // ~200km in degrees
   const REGION_RADIUS_KM = 300;
-  const MAX_RF_SEGMENT_KM = 500;
+  const RF_SEGMENT_MAX_KM = 500;
 
   // Only repeaters and room servers can appear as path hops per protocol.
   // Companions/sensors originate but never relay packets.
@@ -44,11 +44,11 @@ window.HopResolver = (function() {
   function hasNearbyAnchor(candidate, originLat, originLon, observerLat, observerLon) {
     if (!hasValidGps(candidate)) return false;
     if (originLat != null && originLon != null &&
-      haversineKm(candidate.lat, candidate.lon, originLat, originLon) <= MAX_RF_SEGMENT_KM) {
+      haversineKm(candidate.lat, candidate.lon, originLat, originLon) <= RF_SEGMENT_MAX_KM) {
       return true;
     }
     if (observerLat != null && observerLon != null &&
-      haversineKm(candidate.lat, candidate.lon, observerLat, observerLon) <= MAX_RF_SEGMENT_KM) {
+      haversineKm(candidate.lat, candidate.lon, observerLat, observerLon) <= RF_SEGMENT_MAX_KM) {
       return true;
     }
     return false;
@@ -216,7 +216,7 @@ window.HopResolver = (function() {
         const regionCheck = packetIata ? nodeInRegion(c, packetIata) : null;
         const hopBytes = Math.ceil(h.length / 2);
         const regionMismatch = !!(packetIata && regionCheck && !regionCheck.near);
-        const unreliable = regionMismatch && hopBytes <= 3 &&
+        const unreliable = regionMismatch && hopBytes <= 2 &&
           !hasNearbyAnchor(c, originLat, originLon, observerLat, observerLon);
         resolved[hop] = { name: c.name, pubkey: c.public_key,
           candidates: [{ name: c.name, pubkey: c.public_key, lat: c.lat, lon: c.lon, regional: regionCheck ? regionCheck.near : false, filterMethod: regionCheck ? regionCheck.method : 'none', distKm: regionCheck ? regionCheck.distKm : undefined }],
@@ -239,7 +239,7 @@ window.HopResolver = (function() {
 
         if (candidates.length === 1) {
           const hopBytes = Math.ceil(h.length / 2);
-          const unreliable = globalFallback && hopBytes <= 3 &&
+          const unreliable = globalFallback && hopBytes <= 2 &&
             !hasNearbyAnchor(candidates[0], originLat, originLon, observerLat, observerLon);
           resolved[hop] = { name: candidates[0].name, pubkey: candidates[0].public_key,
             candidates: conflicts, conflicts, globalFallback, hopBytes, unreliable };
@@ -388,5 +388,5 @@ window.HopResolver = (function() {
     return result;
   }
 
-  return { init: init, resolve: resolve, resolveFromServer: resolveFromServer, ready: ready, haversineKm: haversineKm, setAffinity: setAffinity, getAffinity: getAffinity };
+  return { init: init, resolve: resolve, resolveFromServer: resolveFromServer, ready: ready, haversineKm: haversineKm, rfSegmentMaxKm: RF_SEGMENT_MAX_KM, setAffinity: setAffinity, getAffinity: getAffinity };
 })();

@@ -19,12 +19,15 @@
   let affinityData = null;
   let userHasMoved = false;
   let controlsCollapsed = false;
-  const MAP_ROUTE_RF_SEGMENT_MAX_KM = 500;
+  const MAP_ROUTE_RF_SEGMENT_MAX_KM = (window.HopResolver && window.HopResolver.rfSegmentMaxKm) || 500;
 
   // Safe escape — falls back to identity if app.js hasn't loaded yet
   const safeEsc = (typeof esc === 'function') ? esc : function (s) { return s; };
 
   function routeHaversineKm(a, b) {
+    if (window.HopResolver && window.HopResolver.haversineKm) {
+      return window.HopResolver.haversineKm(a.lat, a.lon, b.lat, b.lon);
+    }
     const R = 6371;
     const dLat = (b.lat - a.lat) * Math.PI / 180;
     const dLon = (b.lon - a.lon) * Math.PI / 180;
