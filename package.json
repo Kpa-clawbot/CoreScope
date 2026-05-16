@@ -1,7 +1,7 @@
 {
   "name": "meshcore-analyzer",
   "version": "0.0.0-use-git-tags",
-  "description": "Community-run alternative to the closed-source `analyzer.letsmesh.net`. MQTT packet collection + open-source web analyzer for the Bay Area MeshCore mesh.",
+  "description": "MeshCore Canada Live analyzer and observer verification portal for MeshCore.ca.",
   "main": "index.js",
   "scripts": {
     "test": "npx c8 --reporter=text --reporter=text-summary sh test-all.sh",
@@ -11,7 +11,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "GPL-3.0-only",
   "dependencies": {
     "@michaelhart/meshcore-decoder": "^0.2.7",
     "better-sqlite3": "^12.8.0",
