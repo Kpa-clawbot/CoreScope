@@ -193,9 +193,12 @@ func isValidPathLen(pathByte byte) bool {
 func decodePath(pathByte byte, buf []byte, offset int) (Path, int, error) {
 	hashSize := int(pathByte>>6) + 1
 	hashCount := int(pathByte & 0x3F)
-	// Only enforce firmware validity when path bytes are actually consumed.
-	// See cmd/server/decoder.go for rationale (zero-hop DIRECT tolerance).
-	if hashCount > 0 && !isValidPathLen(pathByte) {
+	// Exact mirror of firmware Packet::isValidPathLen (Packet.cpp:13-18).
+	// hash_size==4 is reserved and is rejected by firmware regardless of
+	// hash_count, so we must reject 0xC0 etc even on zero-hop packets —
+	// firmware never emits them, so an on-wire pathByte with the upper
+	// 2 bits set to 11 is by definition malformed/adversarial.
+	if !isValidPathLen(pathByte) {
 		return Path{}, 0, fmt.Errorf("invalid path encoding: pathByte 0x%02X (hash_size=%d hash_count=%d) violates firmware validity (Packet.cpp:13-18, MAX_PATH_SIZE=%d)", pathByte, hashSize, hashCount, maxPathSize)
 	}
 	totalBytes := hashSize * hashCount
