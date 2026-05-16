@@ -16,9 +16,12 @@ import (
 // context.
 //
 // Mutation-test sentinel: this test MUST fail if any call site that feeds
-// per-tx context to the hop resolver is reverted to `nil`. Manually verified
-// by reverting cmd/server/store.go:2975 (buildDistanceIndex's setContext) to
-// `setContext(nil)` — see PR body for the mutation log.
+// per-tx context to the hop resolver is reverted to `nil`. Reproduce by
+// replacing the `setContext(buildHopContextPubkeys(tx, pm))` call inside
+// buildDistanceIndex (cmd/server/store.go, in the per-tx loop) with
+// `setContext(nil)` and re-running this test — it fails with a "CA↔CA hop
+// missing, saw 72dddd→8acccc (Berlin↔Berlin)" assertion. See PR body for
+// the full mutation log.
 //
 // Fixture layout (no real handles — generic placeholders only):
 //   Prefix "72" (4 candidates, all repeaters with GPS):

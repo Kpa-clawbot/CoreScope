@@ -82,8 +82,9 @@ func TestResolveWithContext_Tier1_StrongAffinityPicksY(t *testing.T) {
 }
 
 // TestResolveWithContext_Tier1_AmbiguousEdgeSkipsToTier2 verifies that
-// ambiguous edges are skipped in the tier-1 scan (store.go:4972 guards
-// `if e.Ambiguous { continue }`) and the resolver falls through to tier 2.
+// ambiguous edges are skipped in the tier-1 scan of resolveWithContext
+// (the `if e.Ambiguous { continue }` guard inside the tier-1 candidate
+// loop) and the resolver falls through to tier 2.
 func TestResolveWithContext_Tier1_AmbiguousEdgeSkipsToTier2(t *testing.T) {
 	// Two candidates for "72". Geo proximity will pick candY (close to anchor).
 	nodes := []nodeInfo{
@@ -204,7 +205,8 @@ func TestResolveWithContext_Tier1_NilGraphFallsThrough(t *testing.T) {
 }
 
 // TestResolveWithContext_Tier1_ScoresTooCloseFallsThrough: best.score is
-// below affinityConfidenceRatio × runner-up.score (store.go:5169-5171).
+// below affinityConfidenceRatio × runner-up.score (the ratio guard at the
+// end of the tier-1 block in resolveWithContext).
 // Resolver must fall through to tier 2.
 func TestResolveWithContext_Tier1_ScoresTooCloseFallsThrough(t *testing.T) {
 	nodes := []nodeInfo{
