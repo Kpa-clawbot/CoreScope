@@ -37,12 +37,14 @@ async function measure(page) {
   return page.evaluate(() => {
     var feed = document.getElementById('liveFeed');
     var vcr = document.getElementById('vcrBar');
+    var legend = document.getElementById('liveLegend');
     var content = feed ? feed.querySelector('.panel-content') : null;
     if (!feed || !vcr || !content) return null;
     var rows = content.children;
     var lastRow = rows.length ? rows[rows.length - 1] : null;
     var feedRect = feed.getBoundingClientRect();
     var vcrRect = vcr.getBoundingClientRect();
+    var legendRect = legend ? legend.getBoundingClientRect() : null;
     return {
       feedBottom: feedRect.bottom,
       vcrTop: vcrRect.top,
@@ -51,8 +53,26 @@ async function measure(page) {
       rowCount: rows.length,
       feedVisible: feedRect.width > 0 && feedRect.height > 0,
       vcrVisible: vcrRect.width > 0 && vcrRect.height > 0,
+      legendBottom: legendRect ? legendRect.bottom : null,
+      legendVisible: legendRect ? (legendRect.width > 0 && legendRect.height > 0) : false,
     };
   });
+}
+
+// Force the VCR bar to a tall height to simulate real-world conditions
+// (mobile two-row layout, safe-area-inset). Bottom-pinned overlays MUST
+// track --vcr-bar-height (set by ResizeObserver on .vcr-bar) — anything
+// using a hard-coded offset will overlap once the bar grows.
+async function inflateVCR(page, heightPx) {
+  await page.evaluate((h) => {
+    var bar = document.getElementById('vcrBar');
+    if (bar) {
+      bar.style.minHeight = h + 'px';
+      bar.style.height = h + 'px';
+    }
+  }, heightPx);
+  // Allow ResizeObserver + frame
+  await page.waitForTimeout(120);
 }
 
 (async () => {
@@ -93,6 +113,26 @@ async function measure(page) {
       }
       assert(m.lastRowBottom <= m.vcrTop + 0.5,
         'last packet row bottom (' + m.lastRowBottom + ') must be <= vcr top (' + m.vcrTop + ')');
+    });
+
+    await step('[1280x800] legend bottom <= VCR top (no overlap, default height)', async () => {
+      const m = await measure(page);
+      if (!m.legendVisible) return; // legend hidden = no overlap to test
+      assert(m.legendBottom <= m.vcrTop + 0.5,
+        'legend bottom (' + m.legendBottom + ') must be <= vcr top (' + m.vcrTop + ')');
+    });
+
+    await step('[1280x800] inflate VCR to 120px — feed AND legend still clear bar', async () => {
+      await inflateVCR(page, 120);
+      const m = await measure(page);
+      assert(m.vcrHeight >= 100, 'inflate failed, vcr height = ' + m.vcrHeight);
+      assert(m.feedBottom <= m.vcrTop + 0.5,
+        'feed bottom (' + m.feedBottom + ') must be <= vcr top (' + m.vcrTop + ') after inflate');
+      if (m.legendVisible) {
+        assert(m.legendBottom <= m.vcrTop + 0.5,
+          'legend bottom (' + m.legendBottom + ') must be <= vcr top (' + m.vcrTop + ') after inflate — ' +
+          'legend is not tracking --vcr-bar-height');
+      }
     });
 
     await ctx.close();
