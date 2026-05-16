@@ -2974,6 +2974,42 @@ async function run() {
       `URL should not navigate away, got ${page.url()} (was ${urlBefore})`);
   });
 
+  // Issue #1221: VCR LED clock must sit in-row with VCR playback controls
+  // (same flex container) and must be fully visible — not clipped — on a
+  // 375x800 mobile viewport. It must also be visibly smaller than desktop.
+  await test('#1221 VCR LED clock in-row with controls and unclipped on mobile', async () => {
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.goto(BASE + '/#/live', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#vcrBar', { timeout: 10000 });
+    await page.waitForSelector('#vcrLcdCanvas', { timeout: 10000 });
+    const m = await page.evaluate(() => {
+      const bar  = document.getElementById('vcrBar');
+      const lcd  = document.querySelector('.vcr-lcd');
+      const ctrl = document.querySelector('.vcr-controls');
+      const lcdR = lcd.getBoundingClientRect();
+      const ctrlR = ctrl.getBoundingClientRect();
+      return {
+        lcdInBar: bar.contains(lcd),
+        sharedParent: lcd.parentElement === ctrl.parentElement,
+        lcd:  { left: lcdR.left, right: lcdR.right, top: lcdR.top, bottom: lcdR.bottom, width: lcdR.width },
+        ctrl: { top: ctrlR.top, bottom: ctrlR.bottom },
+        vw: window.innerWidth, vh: window.innerHeight,
+      };
+    });
+    assert(m.lcdInBar, '#1221: LCD clock must live inside .vcr-bar');
+    assert(m.sharedParent, '#1221: LCD clock and .vcr-controls must share a parent (one flex row container)');
+    assert(m.lcd.left >= 0, `#1221: LCD clipped on left (left=${m.lcd.left})`);
+    assert(m.lcd.right <= m.vw, `#1221: LCD clipped on right (right=${m.lcd.right}, vw=${m.vw})`);
+    assert(m.lcd.top  >= 0, `#1221: LCD clipped on top (top=${m.lcd.top})`);
+    assert(m.lcd.bottom <= m.vh, `#1221: LCD clipped on bottom (bottom=${m.lcd.bottom}, vh=${m.vh})`);
+    // In-row check: LCD and controls must vertically overlap (same row in the flex layout).
+    const overlaps = !(m.lcd.bottom <= m.ctrl.top || m.lcd.top >= m.ctrl.bottom);
+    assert(overlaps, `#1221: LCD not in same row as controls (lcd y=[${m.lcd.top},${m.lcd.bottom}], ctrl y=[${m.ctrl.top},${m.ctrl.bottom}])`);
+    // Mobile scale: LCD must be smaller than desktop baseline (.vcr-lcd min-width is 110px on desktop).
+    assert(m.lcd.width < 100, `#1221: LCD should be scaled down on mobile (got ${m.lcd.width}px, expected <100)`);
+    await page.setViewportSize({ width: 1280, height: 800 });
+  });
+
   await browser.close();
 
   // Summary
