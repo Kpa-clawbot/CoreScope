@@ -1471,9 +1471,20 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 // GetChannelMessages returns messages for a specific channel.
 // Uses transmission-level ordering (first_seen) to ensure correct message
 // sequence even when observations arrive out of order.
+//
+// Pagination is applied at the SQL level on the transmissions table (not on
+// observations). The transmission.hash UNIQUE constraint means each
+// transmission is one logical message; multiple observations of the same
+// transmission collapse into one row with `repeats` = observation count.
+// This avoids loading every observation row for a channel into Go memory
+// before paginating (issue #1225: 5703 tx × ~50 obs ≈ 275K rows → ~30s
+// for limit=50).
 func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region ...string) ([]map[string]interface{}, int, error) {
 	if limit <= 0 {
 		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
 	}
 
 	regionParam := ""
@@ -1492,39 +1503,106 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		regionPlaceholders = strings.Join(placeholders, ",")
 	}
 
-	// Fetch messages with channel_hash filter (pagination applied in Go after dedup)
-	var querySQL string
-	args := []interface{}{channelHash}
+	// regionFilter: a transmission is included only if at least one of its
+	// observations has an observer in one of the requested regions.
+	regionFilter := ""
+	if len(regionCodes) > 0 {
+		if db.isV3 {
+			regionFilter = fmt.Sprintf(` AND EXISTS (
+				SELECT 1 FROM observations o
+				JOIN observers obs ON obs.rowid = o.observer_idx
+				WHERE o.transmission_id = t.id
+				  AND UPPER(TRIM(obs.iata)) IN (%s))`, regionPlaceholders)
+		} else {
+			regionFilter = fmt.Sprintf(` AND EXISTS (
+				SELECT 1 FROM observations o
+				JOIN observers obs ON obs.id = o.observer_id
+				WHERE o.transmission_id = t.id
+				  AND UPPER(TRIM(obs.iata)) IN (%s))`, regionPlaceholders)
+		}
+	}
+
+	// 1) Total count (after region filter, before pagination).
+	countSQL := `SELECT COUNT(*) FROM transmissions t
+		WHERE t.channel_hash = ? AND t.payload_type = 5` + regionFilter
+	countArgs := []interface{}{channelHash}
+	countArgs = append(countArgs, regionArgs...)
+	var total int
+	if err := db.conn.QueryRow(countSQL, countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	// 2) Page of transmission IDs — newest LIMIT msgs minus OFFSET, returned
+	//    in ASC order to match prior API contract (tail of message log).
+	pageSQL := `SELECT t.id FROM (
+			SELECT id FROM transmissions
+			WHERE channel_hash = ? AND payload_type = 5
+			ORDER BY first_seen DESC
+			LIMIT ? OFFSET ?
+		) t`
+	// When a region filter is in play, we must filter on the inner subquery
+	// against the transmissions table — re-use the same EXISTS form but
+	// wrap so we still get DESC-then-ASC pagination.
+	if len(regionCodes) > 0 {
+		pageSQL = `SELECT id FROM (
+				SELECT t.id, t.first_seen FROM transmissions t
+				WHERE t.channel_hash = ? AND t.payload_type = 5` + regionFilter + `
+				ORDER BY t.first_seen DESC
+				LIMIT ? OFFSET ?
+			) sub
+			ORDER BY first_seen ASC`
+	} else {
+		pageSQL += ` ORDER BY (SELECT first_seen FROM transmissions WHERE id = t.id) ASC`
+	}
+	pageArgs := []interface{}{channelHash}
+	pageArgs = append(pageArgs, regionArgs...)
+	pageArgs = append(pageArgs, limit, offset)
+
+	idRows, err := db.conn.Query(pageSQL, pageArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	pageIDs := make([]int, 0, limit)
+	for idRows.Next() {
+		var id int
+		if err := idRows.Scan(&id); err == nil {
+			pageIDs = append(pageIDs, id)
+		}
+	}
+	idRows.Close()
+
+	if len(pageIDs) == 0 {
+		return []map[string]interface{}{}, total, nil
+	}
+
+	// 3) Fetch observations for just this page of transmissions. We keep
+	//    the original "first observation wins" semantic for hops/snr/observer
+	//    by ordering observations by id ASC and breaking after first per tx.
+	idPlaceholders := make([]string, len(pageIDs))
+	obsArgs := make([]interface{}, len(pageIDs))
+	for i, id := range pageIDs {
+		idPlaceholders[i] = "?"
+		obsArgs[i] = id
+	}
+	var obsSQL string
 	if db.isV3 {
-		querySQL = `SELECT o.id, t.hash, t.decoded_json, t.first_seen,
+		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
 				obs.id, obs.name, o.snr, o.path_json
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-			WHERE t.channel_hash = ? AND t.payload_type = 5`
-		if len(regionCodes) > 0 {
-			querySQL += fmt.Sprintf(" AND obs.rowid IS NOT NULL AND UPPER(TRIM(obs.iata)) IN (%s)", regionPlaceholders)
-			args = append(args, regionArgs...)
-		}
-		querySQL += `
-			ORDER BY t.first_seen ASC`
+			WHERE t.id IN (` + strings.Join(idPlaceholders, ",") + `)
+			ORDER BY o.id ASC`
 	} else {
-		querySQL = `SELECT o.id, t.hash, t.decoded_json, t.first_seen,
+		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
 				o.observer_id, o.observer_name, o.snr, o.path_json
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
-			WHERE t.channel_hash = ? AND t.payload_type = 5`
-		if len(regionCodes) > 0 {
-			querySQL += fmt.Sprintf(` AND EXISTS (
-				SELECT 1 FROM observers obs WHERE obs.id = o.observer_id
-				AND UPPER(TRIM(obs.iata)) IN (%s))`, regionPlaceholders)
-			args = append(args, regionArgs...)
-		}
-		querySQL += `
-			ORDER BY t.first_seen ASC`
+			WHERE t.id IN (` + strings.Join(idPlaceholders, ",") + `)
+			ORDER BY o.id ASC`
 	}
 
-	rows, err := db.conn.Query(querySQL, args...)
+	rows, err := db.conn.Query(obsSQL, obsArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1534,103 +1612,84 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		Data    map[string]interface{}
 		Repeats int
 	}
-	msgMap := map[string]*msg{}
-	var msgOrder []string
+	msgMap := make(map[int]*msg, len(pageIDs))
 
 	for rows.Next() {
-		var pktID int
+		var pktID, txID int
 		var pktHash, dj, fs, obsID, obsName, pathJSON sql.NullString
 		var snr sql.NullFloat64
-		rows.Scan(&pktID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON)
+		rows.Scan(&pktID, &txID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON)
 		if !dj.Valid {
+			continue
+		}
+		if existing, ok := msgMap[txID]; ok {
+			existing.Repeats++
 			continue
 		}
 		var decoded map[string]interface{}
 		if json.Unmarshal([]byte(dj.String), &decoded) != nil {
 			continue
 		}
-
 		text, _ := decoded["text"].(string)
 		sender, _ := decoded["sender"].(string)
 		if sender == "" && text != "" {
-			idx := strings.Index(text, ": ")
-			if idx > 0 && idx < 50 {
+			if idx := strings.Index(text, ": "); idx > 0 && idx < 50 {
 				sender = text[:idx]
 			}
 		}
-
-		dedupeKey := fmt.Sprintf("%s:%s", sender, nullStr(pktHash))
-
-		if existing, ok := msgMap[dedupeKey]; ok {
-			existing.Repeats++
-		} else {
-			displaySender := sender
-			displayText := text
-			if text != "" {
-				idx := strings.Index(text, ": ")
-				if idx > 0 && idx < 50 {
-					displaySender = text[:idx]
-					displayText = text[idx+2:]
-				}
+		displaySender := sender
+		displayText := text
+		if text != "" {
+			if idx := strings.Index(text, ": "); idx > 0 && idx < 50 {
+				displaySender = text[:idx]
+				displayText = text[idx+2:]
 			}
-
-			var hops int
-			if pathJSON.Valid {
-				var h []interface{}
-				if json.Unmarshal([]byte(pathJSON.String), &h) == nil {
-					hops = len(h)
-				}
-			}
-
-			senderTs, _ := decoded["sender_timestamp"]
-			m := &msg{
-				Data: map[string]interface{}{
-					"sender":           displaySender,
-					"text":             displayText,
-					"timestamp":        nullStr(fs),
-					"sender_timestamp": senderTs,
-					"packetId":         pktID,
-					"packetHash":       nullStr(pktHash),
-					"repeats":          1,
-					"observers":        []string{},
-					"hops":             hops,
-					"snr":              nullFloat(snr),
-				},
-				Repeats: 1,
-			}
-			if obsName.Valid {
-				m.Data["observers"] = []string{obsName.String}
-			} else if obsID.Valid {
-				m.Data["observers"] = []string{obsID.String}
-			}
-			msgMap[dedupeKey] = m
-			msgOrder = append(msgOrder, dedupeKey)
 		}
+		var hops int
+		if pathJSON.Valid {
+			var h []interface{}
+			if json.Unmarshal([]byte(pathJSON.String), &h) == nil {
+				hops = len(h)
+			}
+		}
+		senderTs := decoded["sender_timestamp"]
+		m := &msg{
+			Data: map[string]interface{}{
+				"sender":           displaySender,
+				"text":             displayText,
+				"timestamp":        nullStr(fs),
+				"sender_timestamp": senderTs,
+				"packetId":         pktID,
+				"packetHash":       nullStr(pktHash),
+				"repeats":          1,
+				"observers":        []string{},
+				"hops":             hops,
+				"snr":              nullFloat(snr),
+			},
+			Repeats: 1,
+		}
+		if obsName.Valid {
+			m.Data["observers"] = []string{obsName.String}
+		} else if obsID.Valid {
+			m.Data["observers"] = []string{obsID.String}
+		}
+		msgMap[txID] = m
 	}
 
-	// Return latest messages (tail) with pagination
-	msgTotal := len(msgOrder)
-	start := msgTotal - limit - offset
-	if start < 0 {
-		start = 0
-	}
-	end := msgTotal - offset
-	if end < 0 {
-		end = 0
-	}
-	if end > msgTotal {
-		end = msgTotal
-	}
-
-	messages := make([]map[string]interface{}, 0)
-	for i := start; i < end; i++ {
-		key := msgOrder[i]
-		m := msgMap[key]
+	messages := make([]map[string]interface{}, 0, len(pageIDs))
+	for _, id := range pageIDs {
+		m, ok := msgMap[id]
+		if !ok {
+			// Transmission had no observations (shouldn't happen via normal
+			// ingest) or decoded_json was NULL/invalid — skip silently to
+			// preserve prior behavior.
+			continue
+		}
 		m.Data["repeats"] = m.Repeats
 		messages = append(messages, m.Data)
 	}
 
-	return messages, msgTotal, nil
+	return messages, total, nil
 }
 
 
