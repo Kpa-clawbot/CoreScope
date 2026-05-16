@@ -1882,3 +1882,144 @@ func TestExtractObserverMetaNewFields(t *testing.T) {
 		t.Errorf("RecvErrors = %v, want 3", meta.RecvErrors)
 	}
 }
+
+func TestNodeKeysWithCountByName(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+	s.UpsertNode("aabbccdd", "TestNode", "companion", nil, nil, ts, "")
+	s.db.Exec(`UPDATE nodes SET advert_count = 10 WHERE public_key = 'aabbccdd'`)
+	s.UpsertNode("aabbccee", "testnode", "companion", nil, nil, ts, "") // same name, different case
+	s.db.Exec(`UPDATE nodes SET advert_count = 2 WHERE public_key = 'aabbccee'`)
+
+	kcs, err := s.NodeKeysWithCountByName("TestNode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kcs) != 2 {
+		t.Fatalf("want 2 results, got %d", len(kcs))
+	}
+	byKey := map[string]int{}
+	for _, kc := range kcs {
+		byKey[kc.Key] = kc.AdvertCount
+	}
+	if byKey["aabbccdd"] != 10 {
+		t.Errorf("aabbccdd advert_count = %d, want 10", byKey["aabbccdd"])
+	}
+	if byKey["aabbccee"] != 2 {
+		t.Errorf("aabbccee advert_count = %d, want 2", byKey["aabbccee"])
+	}
+
+	// Archived nodes must not appear — only active nodes are relevant for corruption detection.
+	s.ArchiveNode("aabbccee")
+	kcs2, err := s.NodeKeysWithCountByName("TestNode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kcs2) != 1 {
+		t.Errorf("want 1 result after archive, got %d", len(kcs2))
+	}
+	if kcs2[0].Key != "aabbccdd" {
+		t.Errorf("expected active key aabbccdd, got %s", kcs2[0].Key)
+	}
+}
+
+func TestArchiveNode(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+	s.UpsertNode("deadbeef01", "ArchiveMe", "companion", nil, nil, ts, "")
+
+	if err := s.ArchiveNode("deadbeef01"); err != nil {
+		t.Fatalf("ArchiveNode: %v", err)
+	}
+
+	var count int
+	s.db.QueryRow(`SELECT COUNT(*) FROM nodes WHERE public_key = 'deadbeef01'`).Scan(&count)
+	if count != 0 {
+		t.Errorf("node still in nodes table after archive")
+	}
+	s.db.QueryRow(`SELECT COUNT(*) FROM inactive_nodes WHERE public_key = 'deadbeef01'`).Scan(&count)
+	if count != 1 {
+		t.Errorf("node not found in inactive_nodes after archive")
+	}
+}
+
+func TestSweepCorruptionGhosts(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+	// Dominant node (high advert count)
+	dominant := "1f817069cfadc5f55fe2c3955eb0cd096aa04bfb6003d11488330a70c6620223"
+	// Ghost: 4 bytes corrupted vs dominant, advert_count=1 → should be swept
+	ghost := "1f817069cfadc5f55fe2c3955eb0cd096aa04bfb6003d1142aa6b109c6620223"
+	// Unrelated node with completely different key and same name → should NOT be swept
+	unrelated := "deadbeef00000000000000000000000000000000000000000000000000000001"
+
+	s.UpsertNode(dominant, "Uncle Lit T Pager", "companion", nil, nil, ts, "")
+	s.db.Exec(`UPDATE nodes SET advert_count = 684 WHERE public_key = ?`, dominant)
+	s.UpsertNode(ghost, "Uncle Lit T Pager", "companion", nil, nil, ts, "")
+	s.db.Exec(`UPDATE nodes SET advert_count = 1 WHERE public_key = ?`, ghost)
+	s.UpsertNode(unrelated, "Uncle Lit T Pager", "companion", nil, nil, ts, "")
+	s.db.Exec(`UPDATE nodes SET advert_count = 1 WHERE public_key = ?`, unrelated)
+
+	n, err := s.SweepCorruptionGhosts()
+	if err != nil {
+		t.Fatalf("SweepCorruptionGhosts: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("SweepCorruptionGhosts archived %d, want 1", n)
+	}
+
+	// Ghost should be in inactive_nodes
+	var cnt int
+	s.db.QueryRow(`SELECT COUNT(*) FROM inactive_nodes WHERE public_key = ?`, ghost).Scan(&cnt)
+	if cnt != 1 {
+		t.Errorf("ghost not in inactive_nodes")
+	}
+	// Dominant and unrelated should remain in nodes
+	for _, key := range []string{dominant, unrelated} {
+		s.db.QueryRow(`SELECT COUNT(*) FROM nodes WHERE public_key = ?`, key).Scan(&cnt)
+		if cnt != 1 {
+			t.Errorf("node %s...: want in nodes table, got count=%d", key[:8], cnt)
+		}
+	}
+}
+
+func TestSweepCorruptionGhostsSkipsHighCount(t *testing.T) {
+	s, err := OpenStore(tempDBPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	ts := time.Now().UTC().Format(time.RFC3339)
+	dominant := "1f817069cfadc5f55fe2c3955eb0cd096aa04bfb6003d11488330a70c6620223"
+	// Similar key but advert_count above threshold → must NOT be swept
+	established := "1f817069cfadc5f55fe2c3955eb0cd096aa04bfb6003d1142aa6b109c6620223"
+
+	s.UpsertNode(dominant, "TestNode", "companion", nil, nil, ts, "")
+	s.db.Exec(`UPDATE nodes SET advert_count = 100 WHERE public_key = ?`, dominant)
+	s.UpsertNode(established, "TestNode", "companion", nil, nil, ts, "")
+	s.db.Exec(`UPDATE nodes SET advert_count = 50 WHERE public_key = ?`, established)
+
+	n, err := s.SweepCorruptionGhosts()
+	if err != nil {
+		t.Fatalf("SweepCorruptionGhosts: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("SweepCorruptionGhosts archived %d, want 0 (both above threshold)", n)
+	}
+}

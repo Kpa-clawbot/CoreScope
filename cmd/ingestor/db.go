@@ -366,6 +366,17 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] inactive_nodes scope column added")
 	}
 
+	// Migration: add from_pubkey column to transmissions for indexed ADVERT attribution.
+	// Replaces unreliable decoded_json LIKE '%pubkey%' substring matching.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'from_pubkey_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding from_pubkey column to transmissions...")
+		db.Exec(`ALTER TABLE transmissions ADD COLUMN from_pubkey TEXT`)
+		db.Exec(`CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey)`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('from_pubkey_v1')`)
+		log.Println("[migration] from_pubkey column added")
+	}
+
 	return nil
 }
 
@@ -378,8 +389,8 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtInsertTransmission, err = s.db.Prepare(`
-		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, from_pubkey)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -505,10 +516,14 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	} else {
 		// New transmission
 		isNew = true
+		var fromPubkey interface{}
+		if data.FromPubkey != "" {
+			fromPubkey = data.FromPubkey
+		}
 		result, err := s.stmtInsertTransmission.Exec(
 			data.RawHex, hash, now,
 			data.RouteType, data.PayloadType, data.PayloadVersion,
-			data.DecodedJSON,
+			data.DecodedJSON, fromPubkey,
 		)
 		if err != nil {
 			s.Stats.WriteErrors.Add(1)
@@ -577,27 +592,141 @@ func (s *Store) UpsertNode(pubKey, name, role string, lat, lon *float64, lastSee
 	return nil
 }
 
-// NodeKeysByName returns all public keys of nodes whose name matches (case-insensitive).
-// Used to detect near-duplicate keys from corrupted ADVERT packets.
-func (s *Store) NodeKeysByName(name string) ([]string, error) {
+// NodeKeyCount pairs a public key with its advert count.
+type NodeKeyCount struct {
+	Key         string
+	AdvertCount int
+}
+
+// NodeKeysWithCountByName returns the public key and advert_count for active
+// nodes whose name matches (case-insensitive). Used to detect near-duplicate
+// keys from corrupted ADVERT packets. Only active nodes are considered —
+// already-archived keys are ignored to avoid re-archiving them on every ADVERT.
+func (s *Store) NodeKeysWithCountByName(name string) ([]NodeKeyCount, error) {
 	rows, err := s.db.Query(
-		`SELECT public_key FROM nodes WHERE lower(name) = lower(?)
-		 UNION ALL
-		 SELECT public_key FROM inactive_nodes WHERE lower(name) = lower(?)`,
-		name, name,
+		`SELECT public_key, advert_count FROM nodes WHERE lower(name) = lower(?)`,
+		name,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var keys []string
+	var result []NodeKeyCount
 	for rows.Next() {
-		var k string
-		if err := rows.Scan(&k); err == nil {
-			keys = append(keys, k)
+		var kc NodeKeyCount
+		if err := rows.Scan(&kc.Key, &kc.AdvertCount); err == nil {
+			result = append(result, kc)
 		}
 	}
-	return keys, rows.Err()
+	return result, rows.Err()
+}
+
+// ArchiveNode moves a single node from nodes to inactive_nodes.
+func (s *Store) ArchiveNode(pubKey string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO inactive_nodes SELECT * FROM nodes WHERE public_key = ?`, pubKey); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM nodes WHERE public_key = ?`, pubKey); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// GhostAdvertThreshold is the maximum advert_count at which a node is still
+// considered a potential corruption ghost. A node seen this many times or fewer
+// that closely matches a higher-count peer with the same name is archived.
+const GhostAdvertThreshold = 5
+
+// SweepCorruptionGhosts archives active nodes that appear to be bit-corrupted
+// duplicates of a higher-advert-count node with the same name. For each name
+// group with multiple entries the node with the highest advert_count is treated
+// as canonical; any peer with advert_count ≤ GhostAdvertThreshold that scores
+// ≥ 75% byte similarity via PubKeyCorruptionMatch is moved to inactive_nodes.
+//
+// Returns the number of ghost nodes archived.
+func (s *Store) SweepCorruptionGhosts() (int, error) {
+	rows, err := s.db.Query(`
+		SELECT public_key, lower(name), advert_count
+		FROM nodes
+		WHERE name != '' AND name IS NOT NULL
+		ORDER BY lower(name), advert_count DESC
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("sweep query: %w", err)
+	}
+
+	type nodeRow struct {
+		key         string
+		nameLower   string
+		advertCount int
+	}
+	var all []nodeRow
+	for rows.Next() {
+		var n nodeRow
+		if err := rows.Scan(&n.key, &n.nameLower, &n.advertCount); err == nil {
+			all = append(all, n)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	var ghostKeys []string
+	for i := 0; i < len(all); {
+		j := i + 1
+		for j < len(all) && all[j].nameLower == all[i].nameLower {
+			j++
+		}
+		group := all[i:j]
+		if len(group) > 1 {
+			dominant := group[0] // highest advert_count (ORDER BY ... DESC)
+			for _, candidate := range group[1:] {
+				if candidate.advertCount <= GhostAdvertThreshold &&
+					PubKeyCorruptionMatch(strings.ToLower(candidate.key), strings.ToLower(dominant.key)) {
+					ghostKeys = append(ghostKeys, candidate.key)
+				}
+			}
+		}
+		i = j
+	}
+
+	if len(ghostKeys) == 0 {
+		return 0, nil
+	}
+
+	archived := 0
+	for _, key := range ghostKeys {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return archived, fmt.Errorf("begin tx for %s: %w", key[:16], err)
+		}
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO inactive_nodes SELECT * FROM nodes WHERE public_key = ?`, key); err != nil {
+			tx.Rollback()
+			log.Printf("SweepCorruptionGhosts: skipping ghost %s…: archive failed: %v", key[:16], err)
+			continue
+		}
+		if _, err := tx.Exec(`DELETE FROM nodes WHERE public_key = ?`, key); err != nil {
+			tx.Rollback()
+			log.Printf("SweepCorruptionGhosts: skipping ghost %s…: delete failed: %v", key[:16], err)
+			continue
+		}
+		if err := tx.Commit(); err != nil {
+			log.Printf("SweepCorruptionGhosts: skipping ghost %s…: commit failed: %v", key[:16], err)
+			continue
+		}
+		archived++
+	}
+
+	if archived > 0 {
+		log.Printf("SweepCorruptionGhosts: archived %d/%d ghost node(s)", archived, len(ghostKeys))
+	}
+	return archived, nil
 }
 
 // IncrementAdvertCount increments advert_count for a node by public key.
@@ -859,6 +988,7 @@ type PacketData struct {
 	PayloadVersion int
 	PathJSON       string
 	DecodedJSON    string
+	FromPubkey     string // populated for ADVERT packets only; empty for all other types
 }
 
 // MQTTPacketMessage is the JSON payload from an MQTT raw packet message.
@@ -880,6 +1010,11 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		pathJSON = string(b)
 	}
 
+	fromPubkey := ""
+	if decoded.Header.PayloadType == PayloadADVERT && decoded.Payload.PubKey != "" {
+		fromPubkey = strings.ToLower(decoded.Payload.PubKey)
+	}
+
 	return &PacketData{
 		RawHex:         msg.Raw,
 		Timestamp:      now,
@@ -895,5 +1030,6 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		PayloadVersion: decoded.Header.PayloadVersion,
 		PathJSON:       pathJSON,
 		DecodedJSON:    PayloadJSON(&decoded.Payload),
+		FromPubkey:     fromPubkey,
 	}
 }

@@ -129,6 +129,7 @@ type Payload struct {
 	Tag           uint32       `json:"tag,omitempty"`
 	AuthCode      uint32       `json:"authCode,omitempty"`
 	TraceFlags    *int         `json:"traceFlags,omitempty"`
+	SNRValues     []float64    `json:"snrValues,omitempty"`
 	RawHex        string       `json:"raw,omitempty"`
 	Error         string       `json:"error,omitempty"`
 }
@@ -575,6 +576,20 @@ func DecodePacket(hexString string, channelKeys map[string]string) (*DecodedPack
 	// TRACE packets store hop IDs in the payload (buf[9:]) rather than the header
 	// path field. The header path byte still encodes hashSize in bits 6-7, which
 	// we use to split the payload path data into individual hop prefixes.
+	// The header path bytes encode per-hop SNR in int8 quarter-dB units — extract
+	// them before the path.Hops slice is overwritten with node IDs below.
+	if header.PayloadType == PayloadTRACE && len(path.Hops) > 0 {
+		snrs := make([]float64, 0, len(path.Hops))
+		for _, h := range path.Hops {
+			b, err := hex.DecodeString(h)
+			if err == nil && len(b) == 1 {
+				snrs = append(snrs, float64(int8(b[0]))/4.0)
+			}
+		}
+		if len(snrs) > 0 {
+			payload.SNRValues = snrs
+		}
+	}
 	if header.PayloadType == PayloadTRACE && payload.PathData != "" {
 		pathBytes, err := hex.DecodeString(payload.PathData)
 		if err == nil && path.HashSize > 0 {

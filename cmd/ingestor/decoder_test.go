@@ -1628,3 +1628,25 @@ func TestZeroHopTransportDirectHashSizeWithNonZeroUpperBits(t *testing.T) {
 		t.Errorf("TRANSPORT_DIRECT zero-hop with hash_size bits set: want HashSize=0, got %d", pkt.Path.HashSize)
 	}
 }
+
+func TestDecodeTraceExtractsSNRValues(t *testing.T) {
+	// TRACE packet with 2 header path bytes (1-byte hops): 0x2F and 0xF8
+	// 0x2F = 47 as int8 → 47/4 = 11.75 dB
+	// 0xF8 = 248 as uint8 = -8 as int8 → -8/4 = -2.0 dB
+	// Hex: header=0x26 (TRACE+RouteDirect), pathByte=0x02 (hashSize=1, hashCount=2),
+	//      SNR bytes=0x2F 0xF8, then TRACE payload: tag(4)+authCode(4)+flags(1)+pathData(6)
+	pkt, err := DecodePacket("26022FF8116A23A80000000001C0DE1000DEDE", nil)
+	if err != nil {
+		t.Fatalf("DecodePacket failed: %v", err)
+	}
+	snrs := pkt.Payload.SNRValues
+	if len(snrs) != 2 {
+		t.Fatalf("expected 2 SNR values, got %d", len(snrs))
+	}
+	if snrs[0] != 11.75 {
+		t.Errorf("expected snrs[0]=11.75, got %f", snrs[0])
+	}
+	if snrs[1] != -2.0 {
+		t.Errorf("expected snrs[1]=-2.0, got %f", snrs[1])
+	}
+}

@@ -108,6 +108,11 @@ func main() {
 		log.Printf("[security] WARNING: API key is weak or a known default — write endpoints are vulnerable")
 	}
 
+	// Apply Go runtime soft memory limit (avoids OOM kills under cgroup pressure)
+	if limitBytes, src := applyMemoryLimit(cfg); src != "none" {
+		log.Printf("[memlimit] memory limit applied: %d MB (source: %s)", limitBytes/(1<<20), src)
+	}
+
 	// Resolve DB path
 	resolvedDB := cfg.ResolveDBPath(configDir)
 	log.Printf("[config] port=%d db=%s public=%s", cfg.Port, resolvedDB, publicDir)
@@ -169,6 +174,13 @@ func main() {
 		log.Printf("[store] warning: could not add resolved_path column: %v", err)
 	} else {
 		database.hasResolvedPath = true // detectSchema ran before column was added; fix the flag
+	}
+
+	// Add from_pubkey column and index if missing.
+	if err := ensureFromPubkeyColumn(dbPath); err != nil {
+		log.Printf("[from_pubkey] warning: could not add from_pubkey column: %v", err)
+	} else {
+		database.hasFromPubkey = true
 	}
 
 	// Load or build neighbor graph
@@ -454,6 +466,7 @@ func main() {
 
 	// Start async backfill in background — HTTP is now available.
 	go backfillResolvedPathsAsync(store, dbPath, 5000, 100*time.Millisecond, cfg.BackfillHours())
+	go backfillFromPubkeyAsync(dbPath, 500, 50*time.Millisecond)
 
 	// Migrate old content hashes in background (one-time, idempotent).
 	go migrateContentHashesAsync(store, 5000, 100*time.Millisecond)

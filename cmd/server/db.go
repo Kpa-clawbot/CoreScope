@@ -20,6 +20,7 @@ type DB struct {
 	path             string // filesystem path to the database file
 	isV3             bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
 	hasResolvedPath  bool   // observations table has resolved_path column
+	hasFromPubkey    bool   // transmissions table has from_pubkey column
 }
 
 // OpenDB opens a read-only SQLite connection with WAL mode.
@@ -69,6 +70,25 @@ func (db *DB) detectSchema() {
 			}
 			if colName == "resolved_path" {
 				db.hasResolvedPath = true
+			}
+		}
+	}
+
+	// Check transmissions table for from_pubkey column
+	txRows, err := db.conn.Query("PRAGMA table_info(transmissions)")
+	if err != nil {
+		return
+	}
+	defer txRows.Close()
+	for txRows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if txRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
+			if colName == "from_pubkey" {
+				db.hasFromPubkey = true
 			}
 		}
 	}
@@ -567,8 +587,13 @@ func (db *DB) buildPacketWhere(q PacketQuery) ([]string, []interface{}) {
 	}
 	if q.Node != "" {
 		pk := db.resolveNodePubkey(q.Node)
-		where = append(where, "decoded_json LIKE ?")
-		args = append(args, "%"+pk+"%")
+		if db.hasFromPubkey {
+			where = append(where, "from_pubkey = ?")
+			args = append(args, pk)
+		} else {
+			where = append(where, "decoded_json LIKE ?")
+			args = append(args, "%"+pk+"%")
+		}
 	}
 	return where, args
 }
@@ -611,8 +636,13 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 	}
 	if q.Node != "" {
 		pk := db.resolveNodePubkey(q.Node)
-		where = append(where, "t.decoded_json LIKE ?")
-		args = append(args, "%"+pk+"%")
+		if db.hasFromPubkey {
+			where = append(where, "t.from_pubkey = ?")
+			args = append(args, pk)
+		} else {
+			where = append(where, "t.decoded_json LIKE ?")
+			args = append(args, "%"+pk+"%")
+		}
 	}
 	if q.Observer != "" {
 		ids := strings.Split(q.Observer, ",")
@@ -824,18 +854,25 @@ func (db *DB) GetRecentTransmissionsForNode(pubkey string, name string, limit in
 	if limit <= 0 {
 		limit = 20
 	}
-	pk := "%" + pubkey + "%"
-	np := "%" + name + "%"
 
 	selectCols, observerJoin := db.transmissionBaseSQL()
 
 	var querySQL string
 	var args []interface{}
-	if name != "" {
+
+	if db.hasFromPubkey {
+		// Exact-match via indexed from_pubkey column — avoids LIKE substring false positives
+		querySQL = fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.from_pubkey = ? ORDER BY t.first_seen DESC LIMIT ?",
+			selectCols, observerJoin)
+		args = []interface{}{strings.ToLower(pubkey), limit}
+	} else if name != "" {
+		pk := "%" + pubkey + "%"
+		np := "%" + name + "%"
 		querySQL = fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.decoded_json LIKE ? OR t.decoded_json LIKE ? ORDER BY t.first_seen DESC LIMIT ?",
 			selectCols, observerJoin)
 		args = []interface{}{pk, np, limit}
 	} else {
+		pk := "%" + pubkey + "%"
 		querySQL = fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.decoded_json LIKE ? ORDER BY t.first_seen DESC LIMIT ?",
 			selectCols, observerJoin)
 		args = []interface{}{pk, limit}
@@ -1682,14 +1719,18 @@ func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, 
 		order = "DESC"
 	}
 
-	// Build OR conditions for decoded_json LIKE %pubkey%
+	// Build OR conditions for pubkey attribution
 	var conditions []string
 	var args []interface{}
 	for _, pk := range pubkeys {
-		// Resolve pubkey to also check by name
 		resolved := db.resolveNodePubkey(pk)
-		conditions = append(conditions, "t.decoded_json LIKE ?")
-		args = append(args, "%"+resolved+"%")
+		if db.hasFromPubkey {
+			conditions = append(conditions, "t.from_pubkey = ?")
+			args = append(args, strings.ToLower(resolved))
+		} else {
+			conditions = append(conditions, "t.decoded_json LIKE ?")
+			args = append(args, "%"+resolved+"%")
+		}
 	}
 	jsonWhere := "(" + strings.Join(conditions, " OR ") + ")"
 

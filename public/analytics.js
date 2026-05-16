@@ -85,6 +85,16 @@
           <h2>📊 Mesh Analytics</h2>
           <p class="text-muted">Deep dive into your mesh network data</p>
           <div id="analyticsRegionFilter" class="region-filter-container"></div>
+          <div class="analytics-controls" style="display:flex;align-items:center;gap:8px;margin:4px 0 2px;">
+            <label for="analyticsWindowPicker" class="text-muted" style="font-size:0.85em;white-space:nowrap;">Time window:</label>
+            <select id="analyticsWindowPicker" class="input-sm" style="font-size:0.85em;padding:2px 6px;">
+              <option value="">All data</option>
+              <option value="1h">Last 1 hour</option>
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+            </select>
+          </div>
           <div class="analytics-tabs" id="analyticsTabs" role="tablist" aria-label="Analytics tabs">
             <button class="tab-btn active" data-tab="overview">Overview</button>
             <button class="tab-btn" data-tab="trends">Trends</button>
@@ -133,6 +143,14 @@
     RegionFilter.init(document.getElementById('analyticsRegionFilter'));
     RegionFilter.onChange(function () { loadAnalytics(); });
 
+    const windowPicker = document.getElementById('analyticsWindowPicker');
+    if (windowPicker) {
+      windowPicker.addEventListener('change', function () {
+        _selectedWindow = windowPicker.value;
+        loadAnalytics();
+      });
+    }
+
     // Delegated click/keyboard handler for clickable table rows
     const analyticsContent = document.getElementById('analyticsContent');
     if (analyticsContent) {
@@ -156,17 +174,25 @@
 
   var _themeRefreshHandler = null;
   let _currentTab = 'overview';
+  let _selectedWindow = '';
 
   async function loadAnalytics() {
     try {
       _analyticsData = {};
       const rqs = RegionFilter.regionQueryString();
       const sep = rqs ? '?' + rqs.slice(1) : '';
+      // Build windowed query string for rf/topology/channels (not hash-sizes or collisions)
+      const windowedSep = (() => {
+        const params = new URLSearchParams((sep || '?').slice(1));
+        if (_selectedWindow) params.set('window', _selectedWindow);
+        const s = params.toString();
+        return s ? '?' + s : '';
+      })();
       const [hashData, rfData, topoData, chanData, collisionData, statsData] = await Promise.all([
         api('/analytics/hash-sizes' + sep, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/rf' + sep, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/topology' + sep, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/channels' + sep, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/rf' + windowedSep, { ttl: _selectedWindow ? 10000 : CLIENT_TTL.analyticsRF }),
+        api('/analytics/topology' + windowedSep, { ttl: _selectedWindow ? 10000 : CLIENT_TTL.analyticsRF }),
+        api('/analytics/channels' + windowedSep, { ttl: _selectedWindow ? 10000 : CLIENT_TTL.analyticsRF }),
         api('/analytics/hash-collisions' + sep, { ttl: CLIENT_TTL.analyticsRF }),
         api('/stats', { ttl: 30000 }),
       ]);

@@ -147,6 +147,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.Handle("/api/perf/reset", s.requireAPIKey(http.HandlerFunc(s.handlePerfReset))).Methods("POST")
 	r.Handle("/api/admin/prune", s.requireAPIKey(http.HandlerFunc(s.handleAdminPrune))).Methods("POST")
 	r.Handle("/api/admin/nodes/delete-by-bounds", s.requireAPIKey(http.HandlerFunc(s.handleAdminDeleteNodesByBounds))).Methods("POST")
+	r.Handle("/api/backup", s.requireAPIKey(http.HandlerFunc(s.handleBackup))).Methods("GET")
 	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
 
 	// Packet endpoints
@@ -1399,12 +1400,14 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	}
 	pathGroups := map[string]*pathAgg{}
 	totalTransmissions := 0
+	// Anchor the resolver with the queried node so tiers 1–2 can use it.
+	hopContext := []string{lowerPK}
 	hopCache := make(map[string]*nodeInfo)
 	resolveHop := func(hop string) *nodeInfo {
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.store.graph)
+		r, _, _ := pm.resolveWithContext(hop, hopContext, s.store.graph)
 		hopCache[hop] = r
 		return r
 	}
@@ -1543,8 +1546,9 @@ func (s *Server) handleNodeAnalytics(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAnalyticsRF(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
+	window := ParseTimeWindow(r)
 	if s.store != nil {
-		writeJSON(w, s.store.GetAnalyticsRF(region))
+		writeJSON(w, s.store.GetAnalyticsRFWithWindow(region, window))
 		return
 	}
 	writeJSON(w, RFAnalyticsResponse{
@@ -1564,8 +1568,9 @@ func (s *Server) handleAnalyticsRF(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAnalyticsTopology(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
+	window := ParseTimeWindow(r)
 	if s.store != nil {
-		writeJSON(w, s.store.GetAnalyticsTopology(region))
+		writeJSON(w, s.store.GetAnalyticsTopologyWithWindow(region, window))
 		return
 	}
 	writeJSON(w, TopologyResponse{
@@ -1583,7 +1588,8 @@ func (s *Server) handleAnalyticsTopology(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleAnalyticsChannels(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		region := r.URL.Query().Get("region")
-		writeJSON(w, s.store.GetAnalyticsChannels(region))
+		window := ParseTimeWindow(r)
+		writeJSON(w, s.store.GetAnalyticsChannelsWithWindow(region, window))
 		return
 	}
 	channels, _ := s.db.GetChannels()
@@ -1867,7 +1873,7 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 				pk := best.PublicKey
 				hr.BestCandidate = &pk
 				hr.Confidence = "neighbor_affinity"
-			} else if (confidence == "geo_proximity" || confidence == "gps_preference" || confidence == "first_match") && best != nil {
+			} else if (confidence == "geo_proximity" || confidence == "gps_preference" || confidence == "observation_count_fallback") && best != nil {
 				// Propagate lower-priority tiers so the API reflects the actual
 				// resolution strategy used, rather than collapsing everything to "ambiguous".
 				hr.Confidence = confidence

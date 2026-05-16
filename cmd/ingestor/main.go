@@ -41,6 +41,7 @@ func main() {
 
 	configPath := flag.String("config", "config.json", "path to config file")
 	dataDir := flag.String("data-dir", "", "path to data directory for user-channels.json (defaults to config directory)")
+	sweepGhosts := flag.Bool("sweep-ghosts", false, "scan DB for corruption ghost nodes, archive them, and exit")
 	flag.Parse()
 
 	resolvedDataDir := *dataDir
@@ -54,6 +55,20 @@ func main() {
 	cfg, err := LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	if *sweepGhosts {
+		store, err := OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
+		if err != nil {
+			log.Fatalf("db: %v", err)
+		}
+		defer store.Close()
+		n, err := store.SweepCorruptionGhosts()
+		if err != nil {
+			log.Fatalf("sweep-ghosts: %v", err)
+		}
+		fmt.Printf("Swept %d corruption ghost(s) from %s\n", n, cfg.DBPath)
+		return
 	}
 
 	sources := cfg.ResolvedSources()
@@ -71,15 +86,23 @@ func main() {
 	ghostDays := cfg.GhostNodeDaysOrDefault()
 	store.MoveStaleNodes(infraDays, nodeDays, ghostDays)
 
+	// Ghost sweep: archive corruption-duplicate nodes on startup
+	if n, err := store.SweepCorruptionGhosts(); err != nil {
+		log.Printf("SweepCorruptionGhosts error: %v", err)
+	} else if n > 0 {
+		log.Printf("Startup ghost sweep: archived %d corruption ghost(s)", n)
+	}
+
 	// Metrics retention: prune old metrics on startup
 	metricsDays := cfg.MetricsRetentionDays()
 	store.PruneOldMetrics(metricsDays)
 
-	// Hourly ticker for node retention
+	// Hourly ticker for node retention and ghost sweep
 	retentionTicker := time.NewTicker(1 * time.Hour)
 	go func() {
 		for range retentionTicker.C {
 			store.MoveStaleNodes(infraDays, nodeDays, ghostDays)
+			store.SweepCorruptionGhosts()
 		}
 	}()
 
@@ -121,6 +144,21 @@ func main() {
 
 	// channelKeysMu guards writes to the atomic value (one writer at a time).
 	var channelKeysMu sync.Mutex
+
+	// SIGUSR2 → run corruption ghost sweep immediately.
+	usr2 := make(chan os.Signal, 1)
+	signal.Notify(usr2, syscall.SIGUSR2)
+	go func() {
+		for range usr2 {
+			log.Printf("[ingestor] SIGUSR2: running ghost sweep...")
+			n, err := store.SweepCorruptionGhosts()
+			if err != nil {
+				log.Printf("[ingestor] SIGUSR2 ghost sweep error: %v", err)
+			} else {
+				log.Printf("[ingestor] SIGUSR2 ghost sweep: archived %d ghost(s)", n)
+			}
+		}
+	}()
 
 	// SIGUSR1 → reload user-channels.json and merge into live keys.
 	usr1 := make(chan os.Signal, 1)
@@ -358,19 +396,38 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			if !NodePassesGeoFilter(decoded.Payload.Lat, decoded.Payload.Lon, geoFilter) {
 				return
 			}
-			// Corruption guard: if this public key is new but looks like a
-			// bit-flipped version of an existing node with the same name,
-			// drop the node upsert (but still record the packet transmission).
+			// Corruption guard: if this public key looks like a bit-flipped version
+			// of an existing node with the same name, resolve which is canonical:
+			//   - established peer (advert_count > GhostAdvertThreshold): suppress incoming
+			//   - low-count peer (≤ GhostAdvertThreshold): it likely arrived first from a
+			//     corrupted packet; archive it so the real key can take its place.
 			incomingKey := strings.ToLower(decoded.Payload.PubKey)
 			if decoded.Payload.Name != "" {
-				existingKeys, kerr := store.NodeKeysByName(decoded.Payload.Name)
+				existingKCs, kerr := store.NodeKeysWithCountByName(decoded.Payload.Name)
 				if kerr == nil {
-					for _, ek := range existingKeys {
-						if strings.ToLower(ek) != incomingKey && PubKeyCorruptionMatch(incomingKey, strings.ToLower(ek)) {
-							log.Printf("MQTT [%s] suppressing ghost node: ADVERT key %s looks like corrupted version of %s (name=%q)",
-								tag, incomingKey[:16]+"…", ek[:16]+"…", decoded.Payload.Name)
-							decoded.Payload.PubKey = "" // prevent node upsert below
-							break
+					var establishedMatch string
+					var ghostMatch string
+					for _, kc := range existingKCs {
+						ekLower := strings.ToLower(kc.Key)
+						if ekLower != incomingKey && PubKeyCorruptionMatch(incomingKey, ekLower) {
+							if kc.AdvertCount > GhostAdvertThreshold {
+								establishedMatch = ekLower
+							} else {
+								ghostMatch = kc.Key // preserve original case for ArchiveNode
+							}
+						}
+					}
+					if establishedMatch != "" {
+						log.Printf("MQTT [%s] suppressing ghost node: ADVERT key %s looks like corrupted version of %s (name=%q)",
+							tag, incomingKey[:16]+"…", establishedMatch[:16]+"…", decoded.Payload.Name)
+						decoded.Payload.PubKey = "" // prevent node upsert below
+					} else if ghostMatch != "" {
+						// Ghost arrived first; archive it so the incoming (real) key wins.
+						if err := store.ArchiveNode(ghostMatch); err != nil {
+							log.Printf("MQTT [%s] failed to archive ghost-first node %s: %v", tag, ghostMatch[:16]+"…", err)
+						} else {
+							log.Printf("MQTT [%s] archived ghost-first node %s; accepting real key %s (name=%q)",
+								tag, strings.ToLower(ghostMatch)[:16]+"…", incomingKey[:16]+"…", decoded.Payload.Name)
 						}
 					}
 				}
