@@ -340,7 +340,12 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		validateSigs := cfg.ShouldValidateSignatures()
 		decoded, err := DecodePacket(rawHex, channelKeys, validateSigs)
 		if err != nil {
-			log.Printf("MQTT [%s] decode error: %v", tag, err)
+			// Per #1211: include enough context to repro malformed-packet drops.
+			obs := ""
+			if len(parts) > 2 {
+				obs = parts[2]
+			}
+			log.Printf("MQTT [%s] decode error: %v (topic=%s observer=%s rawHexLen=%d)", tag, err, topic, obs, len(rawHex))
 			return
 		}
 

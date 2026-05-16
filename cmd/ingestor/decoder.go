@@ -587,6 +587,15 @@ func DecodePacket(hexString string, channelKeys map[string]string, validateSigna
 	path, bytesConsumed := decodePath(pathByte, buf, offset)
 	offset += bytesConsumed
 
+	// Bounds check: pathByte is wire-supplied (hash_size in upper 2 bits,
+	// hash_count in lower 6 bits → up to 4*63=252 claimed path bytes). A
+	// malformed packet can claim more bytes than the buffer holds — without
+	// this guard `buf[offset:]` panics with `slice bounds out of range
+	// [offset:len(buf)]`. See issue #1211 (prod observed [218:15]).
+	if offset > len(buf) {
+		return nil, fmt.Errorf("packet path length (%d bytes claimed by pathByte 0x%02X) exceeds buffer (%d bytes)", bytesConsumed, pathByte, len(buf))
+	}
+
 	payloadBuf := buf[offset:]
 	payload := decodePayload(header.PayloadType, payloadBuf, channelKeys, validateSignatures)
 

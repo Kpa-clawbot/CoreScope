@@ -388,6 +388,11 @@ func DecodePacket(hexString string, validateSignatures bool) (*DecodedPacket, er
 	path, bytesConsumed := decodePath(pathByte, buf, offset)
 	offset += bytesConsumed
 
+	// Bounds check — see cmd/ingestor/decoder.go for full rationale (#1211).
+	if offset > len(buf) {
+		return nil, fmt.Errorf("packet path length (%d bytes claimed by pathByte 0x%02X) exceeds buffer (%d bytes)", bytesConsumed, pathByte, len(buf))
+	}
+
 	payloadBuf := buf[offset:]
 	payload := decodePayload(header.PayloadType, payloadBuf, validateSignatures)
 
