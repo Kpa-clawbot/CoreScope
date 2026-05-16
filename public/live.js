@@ -15,6 +15,7 @@
   let packetCount = 0;
   let activeAnims = 0;
   const MAX_CONCURRENT_ANIMS = 20;
+  const LIVE_RF_SEGMENT_MAX_KM = 500;
   let nodeActivity = {};
   let recentPaths = [];
   let showGhostHops = localStorage.getItem('live-ghost-hops') !== 'false';
@@ -30,6 +31,9 @@
   let nodeFilterShown = 0;
   // Region filter (#1045): observer_id → IATA code, populated from /api/observers
   let observerIataMap = {};
+  let hopResolverNodes = [];
+  let hopResolverObservers = [];
+  let hopResolverIataCoords = {};
   let regionFilterChangeHandler = null;
 
   /**
@@ -52,6 +56,30 @@
     return false;
   }
   function setObserverIataMap(m) { observerIataMap = m || {}; }
+
+  function refreshHopResolver(nodes) {
+    if (!window.HopResolver) return;
+    if (Array.isArray(nodes)) hopResolverNodes = nodes;
+    HopResolver.init(hopResolverNodes, {
+      observers: hopResolverObservers,
+      iataCoords: hopResolverIataCoords
+    });
+  }
+
+  function loadObserverRegionContext() {
+    return Promise.all([
+      fetch('/api/observers').then(function(r) { return r.json(); }),
+      fetch('/api/iata-coords').then(function(r) { return r.json(); }).catch(function() { return { coords: {} }; })
+    ]).then(function(results) {
+      var observerData = results[0] || {};
+      var coordData = results[1] || {};
+      hopResolverObservers = observerData.observers || observerData || [];
+      hopResolverIataCoords = coordData.coords || {};
+      setObserverIataMap(buildObserverIataMap(observerData));
+      refreshHopResolver();
+      return observerData;
+    });
+  }
 
   /**
    * Build observer_id → IATA map from the /api/observers response.
@@ -638,7 +666,8 @@
       resolved_path: pkt.resolved_path,
       _ts: new Date(pkt.timestamp || pkt.created_at).getTime(),
       decoded: { header: { payloadTypeName: typeName }, payload: raw, path: { hops } },
-      snr: pkt.snr, rssi: pkt.rssi, observer: pkt.observer_name
+      snr: pkt.snr, rssi: pkt.rssi, observer_id: pkt.observer_id,
+      observer_name: pkt.observer_name, observer: pkt.observer_name
     };
   }
 
@@ -1140,9 +1169,7 @@
       // (cmd/server/types.go ObserverListResponse) — NOT a top-level array.
       // Bug #1136: previously parsed as array → map empty → region filter
       // dropped every packet.
-      fetch('/api/observers').then(function(r) { return r.json(); }).then(function(data) {
-        setObserverIataMap(buildObserverIataMap(data));
-      }).catch(function() { /* leave map empty; filter will hide all when active */ });
+      loadObserverRegionContext().catch(function() { /* leave map empty; filter will hide all when active */ });
       RegionFilter.init(rfEl, { dropdown: true });
       regionFilterChangeHandler = RegionFilter.onChange(function() { /* selection persisted by RegionFilter; future packets reflect it */ });
     })();
@@ -2008,7 +2035,7 @@
       });
       const _el2 = document.getElementById('liveNodeCount'); if (_el2) _el2.textContent = Object.keys(nodeMarkers).length;
       // Initialize shared HopResolver with loaded nodes
-      if (window.HopResolver) HopResolver.init(list);
+      refreshHopResolver(list);
       // Fetch affinity data for hop disambiguation
       fetchAffinityData();
       startAffinityRefresh();
@@ -2038,7 +2065,7 @@
     nodeMarkers = {};
     nodeData = {};
     nodeActivity = {};
-    if (window.HopResolver) HopResolver.init([]);
+    refreshHopResolver([]);
     if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
   }
 
@@ -2314,7 +2341,7 @@
     if (pruned) {
       var _el2 = document.getElementById('liveNodeCount');
       if (_el2) _el2.textContent = Object.keys(nodeMarkers).length;
-      if (window.HopResolver) HopResolver.init(Object.values(nodeData));
+      refreshHopResolver(Object.values(nodeData));
     }
     // Prune orphaned nodeActivity entries (nodes removed above or never tracked)
     for (var aKey in nodeActivity) {
@@ -2346,6 +2373,8 @@
   window._liveSetNodeFilter = setNodeFilter;
   window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
   window._liveResolveHopPositions = resolveHopPositions;
+  window._livePathPlausibilityReport = pathPlausibilityReport;
+  window._liveShouldDrawRfPath = shouldDrawRfPath;
   window._liveVcrSpeedCycle = vcrSpeedCycle;
   window._liveVcrPause = vcrPause;
   window._liveVcrResumeLive = vcrResumeLive;
@@ -2466,7 +2495,7 @@
           var n = { public_key: key, name: p.name || key.slice(0,8), role: p.role || 'unknown', lat: p.lat, lon: p.lon, _liveSeen: Date.now() };
           nodeData[key] = n;
           addNodeMarker(n);
-          if (window.HopResolver) HopResolver.init(Object.values(nodeData));
+          refreshHopResolver(Object.values(nodeData));
         } else if (nodeData[key]) {
           nodeData[key]._liveSeen = Date.now();
         }
@@ -2531,9 +2560,14 @@
       var pathKey = hops.join(',');
       if (seenPathKeys.has(pathKey)) continue;
       seenPathKeys.add(pathKey);
-      var hopPositions = resolveHopPositions(hops, qp, window.getResolvedPath ? getResolvedPath(qpkt) : null);
+      var hopPositions = resolveHopPositions(hops, qp, window.getResolvedPath ? getResolvedPath(qpkt) : null, qpkt);
       if (hopPositions.length >= 2) {
-        allPaths.push({ hopPositions: hopPositions, raw: qpkt.raw || first.raw });
+        var pathReport = pathPlausibilityReport(hopPositions);
+        if (pathReport.plausible) {
+          allPaths.push({ hopPositions: hopPositions, raw: qpkt.raw || first.raw });
+        } else {
+          traceSuppressedPath(pathReport, qpkt.hash || first.hash);
+        }
       } else if (hopPositions.length === 1) {
         pulseNode(hopPositions[0].key, hopPositions[0].pos, typeName);
       }
@@ -2542,9 +2576,14 @@
     // If no multi-hop paths found, try the decoded path as fallback
     if (allPaths.length === 0) {
       var fallbackHops = decoded.path?.hops || [];
-      var fallbackPositions = resolveHopPositions(fallbackHops, payload);
+      var fallbackPositions = resolveHopPositions(fallbackHops, payload, window.getResolvedPath ? getResolvedPath(first) : null, first);
       if (fallbackPositions.length >= 2) {
-        allPaths.push({ hopPositions: fallbackPositions, raw: first.raw });
+        var fallbackReport = pathPlausibilityReport(fallbackPositions);
+        if (fallbackReport.plausible) {
+          allPaths.push({ hopPositions: fallbackPositions, raw: first.raw });
+        } else {
+          traceSuppressedPath(fallbackReport, first.hash);
+        }
       } else if (fallbackPositions.length === 1) {
         pulseNode(fallbackPositions[0].key, fallbackPositions[0].pos, typeName);
       }
@@ -2617,12 +2656,73 @@
     }
   }
 
-  function resolveHopPositions(hops, payload, resolvedPath) {
+  function liveHaversineKm(from, to) {
+    var R = 6371;
+    var dLat = (to[0] - from[0]) * Math.PI / 180;
+    var dLon = (to[1] - from[1]) * Math.PI / 180;
+    var lat1 = from[0] * Math.PI / 180;
+    var lat2 = to[0] * Math.PI / 180;
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1) * Math.cos(lat2) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function pathPlausibilityReport(hopPositions) {
+    var report = { plausible: true, maxSegmentKm: 0, badSegments: [] };
+    if (!hopPositions || hopPositions.length < 2) return report;
+    var previous = null;
+    for (var i = 0; i < hopPositions.length; i++) {
+      var current = hopPositions[i];
+      if (!current || !current.pos || current.ghost || !current.known) continue;
+      if (previous) {
+        var km = liveHaversineKm(previous.pos, current.pos);
+        if (km > report.maxSegmentKm) report.maxSegmentKm = km;
+        if (km > LIVE_RF_SEGMENT_MAX_KM) {
+          report.plausible = false;
+          report.badSegments.push({
+            from: previous.key || previous.name || '',
+            to: current.key || current.name || '',
+            distanceKm: Math.round(km)
+          });
+        }
+      }
+      previous = current;
+    }
+    return report;
+  }
+
+  function shouldDrawRfPath(hopPositions) {
+    return pathPlausibilityReport(hopPositions).plausible;
+  }
+
+  function traceSuppressedPath(report, hash) {
+    if (!report || report.plausible || typeof console === 'undefined' || !console.debug) return;
+    try {
+      console.debug('[live] suppressed implausible RF path', {
+        hash: hash || null,
+        maxSegmentKm: Math.round(report.maxSegmentKm || 0),
+        badSegments: report.badSegments || []
+      });
+    } catch {}
+  }
+
+  function nodeFitsObserverRegion(node, observerId) {
+    if (!node || !observerId || node.lat == null || node.lon == null || (node.lat === 0 && node.lon === 0)) return true;
+    var iata = observerIataMap && observerIataMap[observerId];
+    if (!iata) return true;
+    var center = hopResolverIataCoords[iata] || (window.IATA_COORDS_GEO && window.IATA_COORDS_GEO[iata]);
+    if (!center || center.lat == null || center.lon == null) return true;
+    return liveHaversineKm([node.lat, node.lon], [center.lat, center.lon]) <= LIVE_RF_SEGMENT_MAX_KM;
+  }
+
+  function resolveHopPositions(hops, payload, resolvedPath, packet) {
     // Hoist sender GPS guard once — reject (0,0) as "no GPS"
     const hasValidGps = payload.lat != null && payload.lon != null
       && !(payload.lat === 0 && payload.lon === 0);
     const senderLat = hasValidGps ? payload.lat : null;
     const senderLon = hasValidGps ? payload.lon : null;
+    const observerId = packet && packet.observer_id ? packet.observer_id : null;
 
     // Prefer server-side resolved_path when available
     var resolvedMap;
@@ -2631,14 +2731,14 @@
       // Fill in any null entries from client-side fallback, preserving sender GPS context
       var nullHops = hops.filter(function(h, i) { return !resolvedPath[i] && !resolvedMap[h]; });
       if (nullHops.length) {
-        var fallback = HopResolver.resolve(nullHops, senderLat, senderLon, null, null, null);
+        var fallback = HopResolver.resolve(nullHops, senderLat, senderLon, null, null, observerId);
         for (var k in fallback) resolvedMap[k] = fallback[k];
       }
     } else {
       // Delegate to shared HopResolver (from hop-resolver.js) instead of reimplementing
       // Use HopResolver if available and initialized, otherwise fall back to simple lookup
       resolvedMap = (window.HopResolver && HopResolver.ready())
-        ? HopResolver.resolve(hops, senderLat, senderLon, null, null, null)
+        ? HopResolver.resolve(hops, senderLat, senderLon, null, null, observerId)
         : {};
     }
 
@@ -2649,6 +2749,9 @@
         // Look up coordinates from nodeData (HopResolver resolves name/pubkey but doesn't return lat/lon directly)
         const node = nodeData[r.pubkey];
         if (node && node.lat != null && node.lon != null && !(node.lat === 0 && node.lon === 0)) {
+          if (!nodeFitsObserverRegion(node, observerId)) {
+            return { key: 'hop-' + hop, pos: null, name: hop, known: false };
+          }
           return { key: r.pubkey, pos: [node.lat, node.lon], name: r.name, known: true };
         }
         return { key: r.pubkey, pos: null, name: r.name, known: false };

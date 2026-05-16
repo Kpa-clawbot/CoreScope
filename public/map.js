@@ -19,9 +19,30 @@
   let affinityData = null;
   let userHasMoved = false;
   let controlsCollapsed = false;
+  const MAP_ROUTE_RF_SEGMENT_MAX_KM = 500;
 
   // Safe escape — falls back to identity if app.js hasn't loaded yet
   const safeEsc = (typeof esc === 'function') ? esc : function (s) { return s; };
+
+  function routeHaversineKm(a, b) {
+    const R = 6371;
+    const dLat = (b.lat - a.lat) * Math.PI / 180;
+    const dLon = (b.lon - a.lon) * Math.PI / 180;
+    const lat1 = a.lat * Math.PI / 180;
+    const lat2 = b.lat * Math.PI / 180;
+    const x = Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1) * Math.cos(lat2) *
+      Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  }
+
+  function routeSegmentsArePlausible(positions) {
+    if (!positions || positions.length < 2) return true;
+    for (let i = 0; i < positions.length - 1; i++) {
+      if (routeHaversineKm(positions[i], positions[i + 1]) > MAP_ROUTE_RF_SEGMENT_MAX_KM) return false;
+    }
+    return true;
+  }
 
   // Roles loaded from shared roles.js (ROLE_STYLE, ROLE_LABELS, ROLE_COLORS globals)
 
@@ -500,7 +521,7 @@
 
     const coords = positions.map(p => [p.lat, p.lon]);
 
-    if (positions.length >= 2) {
+    if (positions.length >= 2 && routeSegmentsArePlausible(positions)) {
       L.polyline(coords, {
         color: '#f59e0b', weight: 3, opacity: 0.8, dashArray: '8 4'
       }).addTo(routeLayer);

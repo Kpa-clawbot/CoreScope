@@ -149,6 +149,7 @@ function makeLiveSandbox({ withAppJs = false } = {}) {
   addLiveGlobals(ctx);
 
   loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/packet-helpers.js');
   if (withAppJs) loadInCtx(ctx, 'public/app.js');
   try { loadInCtx(ctx, 'public/live.js'); } catch (e) {
     console.error('live.js load error:', e.message);
@@ -171,7 +172,7 @@ console.log('\n=== live.js: dbPacketToLive ===');
       path_json: '["hop1","hop2"]',
       decoded_json: '{"type":"GRP_TXT","text":"hello"}',
       timestamp: '2024-06-15T12:00:00Z',
-      snr: 7.5, rssi: -85, observer_name: 'ObsA',
+      snr: 7.5, rssi: -85, observer_id: 'obs-a', observer_name: 'ObsA',
     };
     const result = dbPacketToLive(pkt);
     assert.strictEqual(result.id, 42);
@@ -179,6 +180,7 @@ console.log('\n=== live.js: dbPacketToLive ===');
     assert.strictEqual(result.raw, 'deadbeef');
     assert.strictEqual(result.snr, 7.5);
     assert.strictEqual(result.rssi, -85);
+    assert.strictEqual(result.observer_id, 'obs-a');
     assert.strictEqual(result.observer, 'ObsA');
     assert.strictEqual(result.decoded.header.payloadTypeName, 'GRP_TXT');
     assert.strictEqual(result.decoded.payload.text, 'hello');
@@ -190,7 +192,7 @@ console.log('\n=== live.js: dbPacketToLive ===');
     const pkt = { id: 1, hash: 'x', decoded_json: null, path_json: null, timestamp: '2024-01-01T00:00:00Z' };
     const result = dbPacketToLive(pkt);
     assert.strictEqual(result.decoded.header.payloadTypeName, 'UNKNOWN');
-    assert.deepStrictEqual(result.decoded.path.hops, []);
+    assert.strictEqual(result.decoded.path.hops.length, 0);
   });
 
   test('uses payload_type_name as fallback', () => {
@@ -715,6 +717,76 @@ console.log('\n=== live.js: resolveHopPositions ===');
     delete nodeData['n1'];
     delete nodeData['n2'];
   });
+
+  test('passes observer_id into HopResolver for IATA-aware disambiguation', () => {
+    nodeData['n1'] = { public_key: 'n1', name: 'N1', lat: 49.28, lon: -123.12 };
+    let seenObserver = null;
+    const mockResolver = {
+      init() {},
+      ready() { return true; },
+      resolve(hops, originLat, originLon, observerLat, observerLon, observerId) {
+        seenObserver = observerId;
+        return { h1: { name: 'N1', pubkey: 'n1' } };
+      },
+    };
+    ctx.HopResolver = mockResolver;
+    ctx.window.HopResolver = mockResolver;
+    const result = resolve(['h1'], {}, null, { observer_id: 'obs-yvr' });
+    assert.strictEqual(seenObserver, 'obs-yvr');
+    assert.strictEqual(result[0].key, 'n1');
+    delete nodeData['n1'];
+  });
+
+  test('drops resolved nodes outside observer IATA trust radius', () => {
+    ctx.window._liveSetObserverIataMap({ 'obs-yyz': 'YYZ' });
+    ctx.window.IATA_COORDS_GEO = { YYZ: { lat: 43.6777, lon: -79.6248 } };
+    ctx.IATA_COORDS_GEO = ctx.window.IATA_COORDS_GEO;
+    nodeData['remote'] = { public_key: 'remote', name: 'RemoteWest', lat: 49.2827, lon: -123.1207 };
+    const mockResolver = {
+      init() {},
+      ready() { return true; },
+      resolve() { return { aa: { name: 'RemoteWest', pubkey: 'remote' } }; },
+    };
+    ctx.HopResolver = mockResolver;
+    ctx.window.HopResolver = mockResolver;
+    const result = resolve(['aa'], {}, null, { observer_id: 'obs-yyz' });
+    assert.strictEqual(result.length, 0, 'remote out-of-region resolved pubkey should not become a map point');
+    delete nodeData['remote'];
+    ctx.window._liveSetObserverIataMap({});
+  });
+
+  test('path plausibility suppresses cross-country RF segments', () => {
+    const report = ctx.window._livePathPlausibilityReport([
+      { key: 'toronto', known: true, pos: [43.6532, -79.3832] },
+      { key: 'vancouver', known: true, pos: [49.2827, -123.1207] },
+    ]);
+    assert.strictEqual(report.plausible, false);
+    assert.ok(report.maxSegmentKm > 3000, `expected cross-country segment, got ${report.maxSegmentKm}`);
+    assert.strictEqual(ctx.window._liveShouldDrawRfPath([
+      { key: 'toronto', known: true, pos: [43.6532, -79.3832] },
+      { key: 'vancouver', known: true, pos: [49.2827, -123.1207] },
+    ]), false);
+  });
+
+  test('path plausibility keeps nearby cross-IATA boundary links', () => {
+    const report = ctx.window._livePathPlausibilityReport([
+      { key: 'seattle', known: true, pos: [47.6062, -122.3321] },
+      { key: 'victoria', known: true, pos: [48.4284, -123.3656] },
+    ]);
+    assert.strictEqual(report.plausible, true);
+    assert.ok(report.maxSegmentKm > 100 && report.maxSegmentKm < 200,
+      `expected plausible 100km+ boundary segment, got ${report.maxSegmentKm}`);
+  });
+
+  test('ghost hops cannot hide an impossible known-node jump', () => {
+    const report = ctx.window._livePathPlausibilityReport([
+      { key: 'toronto', known: true, pos: [43.6532, -79.3832] },
+      { key: 'ghost-mid', known: false, ghost: true, pos: [46.0, -100.0] },
+      { key: 'vancouver', known: true, pos: [49.2827, -123.1207] },
+    ]);
+    assert.strictEqual(report.plausible, false);
+    assert.strictEqual(report.badSegments.length, 1);
+  });
 }
 
 // ===== bufferPacket and VCR buffer management =====
@@ -892,7 +964,7 @@ console.log('\n=== live.js: source-level safety checks ===');
   });
 
   test('clearNodeMarkers resets HopResolver', () => {
-    assert.ok(src.includes('if (window.HopResolver) HopResolver.init([])'),
+    assert.ok(src.includes('refreshHopResolver([])'),
       'clearNodeMarkers should reset HopResolver');
   });
 
