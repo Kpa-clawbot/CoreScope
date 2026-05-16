@@ -232,3 +232,13 @@ func processLivenessTransition(s *SourceLivenessState, kind LivenessKind, msg st
 		}
 	}
 }
+
+// registerLivenessOrSkip is a no-op stub introduced for the PR #1216 r2
+// RED test commit. The r2 GREEN commit replaces this with the real
+// implementation (log ERROR + skip on collision, return false). Returning
+// false unconditionally makes the RED test fail on the assertion that the
+// FIRST registration succeeds — which is exactly the behaviour we need
+// to gate on.
+func registerLivenessOrSkip(_ *SourceLivenessState) bool {
+	return false
+}
