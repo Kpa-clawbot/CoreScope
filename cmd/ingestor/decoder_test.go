@@ -2002,14 +2002,28 @@ func TestDecodePacketBoundsFromWire_Issue1211(t *testing.T) {
 	}
 }
 
-// TestDecodePacketFuzzTruncated — fuzz the decoder with random truncated
-// payloads. Zero panics is the acceptance bar.
+// TestDecodePacketFuzzTruncated — sweep the decoder with truncated payloads.
+// Zero panics is the acceptance bar.
+//
+// Adv M2: the original loop ran 256*256*20 = 1.3M iterations on every
+// `go test` (in both packages, so 2.6M total). That is not "fuzzing" — it
+// is an expensive deterministic sweep that runs in the default unit-test
+// path with no opt-in. We now:
+//
+//   - gate the exhaustive sweep on !testing.Short() so `go test -short`
+//     skips it (CI's unit gate runs short)
+//   - keep the full sweep under `go test ./...` to preserve coverage
+//   - prefer `go test -fuzz=FuzzDecodePacketTruncated` for actual
+//     randomized fuzzing (see FuzzDecodePacketTruncated below)
 func TestDecodePacketFuzzTruncated_Issue1211(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
 			t.Fatalf("DecodePacket panicked during fuzz: %v", r)
 		}
 	}()
+	if testing.Short() {
+		t.Skip("skipping exhaustive sweep in -short mode; use FuzzDecodePacketTruncated")
+	}
 	// Sweep every pathByte value with a short tail.
 	for hdr := 0; hdr < 256; hdr++ {
 		for pb := 0; pb < 256; pb++ {
@@ -2019,4 +2033,28 @@ func TestDecodePacketFuzzTruncated_Issue1211(t *testing.T) {
 			}
 		}
 	}
+}
+
+// FuzzDecodePacketTruncated — native go fuzz target. Run with:
+//
+//	go test -fuzz=FuzzDecodePacketTruncated -fuzztime=30s ./cmd/ingestor
+//
+// Zero panics regardless of input is the acceptance bar.
+func FuzzDecodePacketTruncated(f *testing.F) {
+	seeds := [][]byte{
+		{0x12, 0xF6, 0xAA, 0xAA, 0xAA},
+		{0x12, 0x00},
+		{0x03, 0x11, 0x22, 0x33, 0x44, 0xC0, 0xAA, 0xAA, 0xAA},
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("DecodePacket panicked on input %x: %v", data, r)
+			}
+		}()
+		_, _ = DecodePacket(hex.EncodeToString(data), nil, false)
+	})
 }

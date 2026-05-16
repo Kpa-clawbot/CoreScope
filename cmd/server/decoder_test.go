@@ -508,12 +508,17 @@ func TestDecodePacketBoundsFromWire_Issue1211(t *testing.T) {
 	}
 }
 
+// Adv M2: see cmd/ingestor/decoder_test.go — sweep gated on !testing.Short();
+// FuzzDecodePacketTruncated below is the real fuzzing target.
 func TestDecodePacketFuzzTruncated_Issue1211(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
 			t.Fatalf("DecodePacket panicked during fuzz: %v", r)
 		}
 	}()
+	if testing.Short() {
+		t.Skip("skipping exhaustive sweep in -short mode; use FuzzDecodePacketTruncated")
+	}
 	for hdr := 0; hdr < 256; hdr++ {
 		for pb := 0; pb < 256; pb++ {
 			for tail := 0; tail < 20; tail++ {
@@ -525,4 +530,25 @@ func TestDecodePacketFuzzTruncated_Issue1211(t *testing.T) {
 			}
 		}
 	}
+}
+
+// FuzzDecodePacketTruncated — native go fuzz target. Zero panics required.
+// Run with: go test -fuzz=FuzzDecodePacketTruncated -fuzztime=30s ./cmd/server
+func FuzzDecodePacketTruncated(f *testing.F) {
+	seeds := [][]byte{
+		{0x12, 0xF6, 0xAA, 0xAA, 0xAA},
+		{0x12, 0x00},
+		{0x03, 0x11, 0x22, 0x33, 0x44, 0xC0, 0xAA, 0xAA, 0xAA},
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("DecodePacket panicked on input %x: %v", data, r)
+			}
+		}()
+		_, _ = DecodePacket(hex.EncodeToString(data), false)
+	})
 }
