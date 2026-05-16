@@ -55,7 +55,9 @@ jobs:
           set -e -o pipefail
           cd cmd/server
           go build .
-          go test -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
+          # -race gates PR #1208's atomic.Pointer migration: the race-detector
+          # is what makes path_inspect_atomic_race_test.go actually assert.
+          go test -race -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
           echo "--- Go Server Coverage ---"
           go tool cover -func=server-coverage.out | tail -1
 

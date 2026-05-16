@@ -42,7 +42,11 @@ func TestEnsureNeighborGraph_Singleflight(t *testing.T) {
 	wg.Wait()
 
 	got := atomic.LoadInt32(&count)
-	if got > 1 {
-		t.Fatalf("expected ≤1 buildGraphFn invocation under singleflight, got %d", got)
+	if got != 1 {
+		// Singleflight must produce EXACTLY 1 build call. got==0 means the
+		// builder was silently skipped (a wrong impl that still passes
+		// `got <= 1`). got>1 means singleflight is missing/broken. Both
+		// are mutation-detected with `got != 1`.
+		t.Fatalf("expected exactly 1 buildGraphFn invocation under singleflight, got %d", got)
 	}
 }
