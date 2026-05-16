@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -66,10 +67,11 @@ type GraphEdge struct {
 }
 
 type GraphStats struct {
-	TotalNodes     int     `json:"total_nodes"`
-	TotalEdges     int     `json:"total_edges"`
-	AmbiguousEdges int     `json:"ambiguous_edges"`
-	AvgClusterSize float64 `json:"avg_cluster_size"`
+	TotalNodes          int     `json:"total_nodes"`
+	TotalEdges          int     `json:"total_edges"`
+	AmbiguousEdges      int     `json:"ambiguous_edges"`
+	AvgClusterSize      float64 `json:"avg_cluster_size"`
+	RejectedEdgesGeoFar uint64  `json:"rejected_edges_geo_far"` // edges dropped at build time by the geo-implausibility filter (#1228)
 }
 
 // ─── Graph accessor on Server ──────────────────────────────────────────────────
@@ -85,8 +87,12 @@ func (s *Server) getNeighborGraph() *NeighborGraph {
 		s.neighborMu.Lock()
 		if s.neighborGraph == nil {
 			if s.store != nil {
-				debugLog := s.cfg != nil && s.cfg.DebugAffinity
-				s.neighborGraph = BuildFromStoreWithLog(s.store, debugLog)
+				opts := BuildOptions{MaxEdgeKm: DefaultMaxEdgeKm}
+				if s.cfg != nil {
+					opts.EnableLog = s.cfg.DebugAffinity
+					opts.MaxEdgeKm = s.cfg.NeighborMaxEdgeKm()
+				}
+				s.neighborGraph = BuildFromStoreWithOptions(s.store, opts)
 			} else {
 				s.neighborGraph = NewNeighborGraph()
 			}
@@ -104,8 +110,12 @@ func (s *Server) getNeighborGraph() *NeighborGraph {
 			defer s.neighborRebuilding.Store(false)
 			var built *NeighborGraph
 			if s.store != nil {
-				debugLog := s.cfg != nil && s.cfg.DebugAffinity
-				built = BuildFromStoreWithLog(s.store, debugLog)
+				opts := BuildOptions{MaxEdgeKm: DefaultMaxEdgeKm}
+				if s.cfg != nil {
+					opts.EnableLog = s.cfg.DebugAffinity
+					opts.MaxEdgeKm = s.cfg.NeighborMaxEdgeKm()
+				}
+				built = BuildFromStoreWithOptions(s.store, opts)
 			} else {
 				built = NewNeighborGraph()
 			}
@@ -375,10 +385,11 @@ func (s *Server) handleNeighborGraph(w http.ResponseWriter, r *http.Request) {
 		Nodes: nodes,
 		Edges: filteredEdges,
 		Stats: GraphStats{
-			TotalNodes:     len(nodes),
-			TotalEdges:     len(filteredEdges),
-			AmbiguousEdges: ambiguousCount,
-			AvgClusterSize: avgCluster,
+			TotalNodes:          len(nodes),
+			TotalEdges:          len(filteredEdges),
+			AmbiguousEdges:      ambiguousCount,
+			AvgClusterSize:      avgCluster,
+			RejectedEdgesGeoFar: atomic.LoadUint64(&graph.RejectedEdgesGeoFar),
 		},
 	}
 

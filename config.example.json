@@ -198,6 +198,7 @@
     "channels": 15,
     "channelMessages": 10,
     "analyticsRF": 1800,
+    "_comment_analyticsRF": "TTL (seconds) for the shared analytics result cache. Backs /api/analytics/rf, /api/analytics/topology, /api/analytics/distance, /api/analytics/hash-sizes, /api/analytics/channels, /api/analytics/subpaths. Default 60s if unset (#1239) — distance analytics is viewed live during active analysis, so the default smooths cold-miss churn without freezing data. Lower with care; sub-15s values can cause repeated multi-second cold computes during heavy ingest.",
     "analyticsTopology": 1800,
     "analyticsChannels": 1800,
     "analyticsHashSizes": 3600,
@@ -234,7 +235,8 @@
   },
   "neighborGraph": {
     "maxAgeDays": 5,
-    "_comment": "Neighbor edges older than this many days are pruned on startup and daily. Default: 5."
+    "maxEdgeKm": 500,
+    "_comment": "maxAgeDays: neighbor edges older than this many days are pruned on startup and daily. Default 5. maxEdgeKm: geo-implausibility filter — when both endpoints have GPS, edges with haversine distance > maxEdgeKm are rejected at build time to prevent disambiguator self-reinforcement on wide-geo MQTT deployments. Default 500 km (well above any plausible terrestrial LoRa hop). 0 ⇒ use default; set negative to disable the filter. Rejected count surfaces in /api/analytics/neighbor-graph stats. Issue #1228."
   },
   "batteryThresholds": {
     "lowMv": 3300,

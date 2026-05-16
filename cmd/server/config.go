@@ -135,7 +135,8 @@ type ResolvedPathConfig struct {
 
 // NeighborGraphConfig controls neighbor edge pruning.
 type NeighborGraphConfig struct {
-	MaxAgeDays int `json:"maxAgeDays"` // edges older than this are pruned (default 5)
+	MaxAgeDays int     `json:"maxAgeDays"` // edges older than this are pruned (default 5)
+	MaxEdgeKm  float64 `json:"maxEdgeKm"`  // geo-implausibility threshold (km); 0 = default 500; negative disables (#1228)
 }
 
 // PacketStoreConfig controls in-memory packet store limits.
@@ -189,6 +190,19 @@ func (c *Config) NeighborMaxAgeDays() int {
 		return c.NeighborGraph.MaxAgeDays
 	}
 	return 5
+}
+
+// NeighborMaxEdgeKm returns the geo-implausibility threshold in km.
+// 0 (unset) → DefaultMaxEdgeKm (500). Negative → 0 (filter disabled).
+// See issue #1228.
+func (c *Config) NeighborMaxEdgeKm() float64 {
+	if c == nil || c.NeighborGraph == nil || c.NeighborGraph.MaxEdgeKm == 0 {
+		return DefaultMaxEdgeKm
+	}
+	if c.NeighborGraph.MaxEdgeKm < 0 {
+		return 0
+	}
+	return c.NeighborGraph.MaxEdgeKm
 }
 
 type TimestampConfig struct {

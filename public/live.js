@@ -908,15 +908,27 @@
       <div class="live-page">
         <div id="liveMap" style="width:100%;height:100%;position:absolute;top:0;left:0;z-index:1"></div>
         <div class="live-overlay live-header" id="liveHeader">
-          <div class="panel-header">
+          <div class="live-header-critical" data-live-header-critical>
+            <span class="live-beacon" aria-label="WebSocket connection beacon"></span>
+            <div class="live-stat-pill live-stat-pill--critical"><span id="livePktCount">0</span> pkts</div>
+          </div>
+          <!-- #1234: stats row promoted to a direct child of .live-header so
+               the counters are always visible inline on mobile (single-row
+               header, no MESH LIVE label, no chart toggle). At desktop
+               this also flows inline next to the title via flex. -->
+          <div class="live-stats-row" data-live-stats-row>
+            <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
+            <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
+            <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
+          </div>
+          <button class="live-header-toggle" data-live-header-toggle id="liveHeaderToggle"
+                  aria-expanded="false" aria-controls="liveHeaderBody"
+                  aria-label="Show live stats">📊</button>
+          <div class="live-header-body" data-live-header-body id="liveHeaderBody">
             <div class="live-title">
               <span class="live-beacon" aria-label="WebSocket connection beacon"></span>
               MESH LIVE
               <button class="live-header-expand-btn" id="liveHeaderExpandBtn" aria-label="Show settings" aria-expanded="false">⚙</button>
-            </div>
-            <div class="live-header-actions">
-              <button class="live-header-pin-btn" id="liveHeaderPinBtn" title="Pin panel open" aria-pressed="false" aria-label="Pin MESH LIVE panel open">📌</button>
-              <button class="live-header-close-btn" id="liveHeaderCloseBtn" title="Minimise panel" aria-label="Minimise MESH LIVE panel">✕</button>
             </div>
           </div>
           <div class="live-stats-row">
@@ -1031,8 +1043,16 @@
           <div class="vcr-scope-btns" role="radiogroup" aria-label="Timeline scope">
             <button class="vcr-scope-btn active" data-scope="3600000" role="radio" aria-checked="true" aria-label="Scope 1 hour">1h</button>
             <button class="vcr-scope-btn" data-scope="21600000" role="radio" aria-checked="false" aria-label="Scope 6 hours">6h</button>
-            <button class="vcr-scope-btn" data-scope="43200000" role="radio" aria-checked="false" aria-label="Scope 12 hours">12h</button>
-            <button class="vcr-scope-btn" data-scope="86400000" role="radio" aria-checked="false" aria-label="Scope 24 hours">24h</button>
+            <button class="vcr-scope-btn vcr-scope-btn--overflow" data-scope="43200000" role="radio" aria-checked="false" aria-label="Scope 12 hours">12h</button>
+            <button class="vcr-scope-btn vcr-scope-btn--overflow" data-scope="86400000" role="radio" aria-checked="false" aria-label="Scope 24 hours">24h</button>
+            <!-- #1234: at ≤640px buttons marked .vcr-scope-btn--overflow are
+                 hidden and surfaced via this More dropdown instead. -->
+            <div class="vcr-scope-more-wrap" data-vcr-scope-more-wrap>
+              <button type="button" class="vcr-scope-btn vcr-scope-more" data-vcr-scope-more
+                      aria-haspopup="true" aria-expanded="false" aria-controls="vcrScopeMoreMenu"
+                      aria-label="More timeline scopes">More ▾</button>
+              <div class="vcr-scope-more-menu" id="vcrScopeMoreMenu" role="menu" hidden></div>
+            </div>
           </div>
           <div class="vcr-timeline-container">
             <canvas id="vcrTimeline" class="vcr-timeline"></canvas>
@@ -1718,16 +1738,59 @@
       vcrRewind(VCR.timelineScope);
     });
 
-    // Scope buttons
-    document.querySelectorAll('.vcr-scope-btn').forEach(btn => {
+    // Scope buttons (#1234: exclude .vcr-scope-more which is the dropdown trigger)
+    document.querySelectorAll('.vcr-scope-btn[data-scope]').forEach(btn => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('.vcr-scope-btn').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-checked', 'false'); });
+        document.querySelectorAll('.vcr-scope-btn[data-scope]').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-checked', 'false'); });
         btn.classList.add('active');
         btn.setAttribute('aria-checked', 'true');
         VCR.timelineScope = parseInt(btn.dataset.scope);
         fetchTimelineTimestamps().then(() => updateTimeline());
       });
     });
+
+    // #1234: VCR scope "More ▾" overflow dropdown. At ≤640px, scope buttons
+    // tagged .vcr-scope-btn--overflow (12h, 24h) are hidden via CSS and
+    // surfaced through this menu. Clicking a menu item proxies the click
+    // to the underlying hidden button so the existing scope handler runs.
+    (function wireVcrScopeMore() {
+      var moreBtn = document.querySelector('[data-vcr-scope-more]');
+      var menu = document.getElementById('vcrScopeMoreMenu');
+      if (!moreBtn || !menu) return;
+      var overflowBtns = Array.from(document.querySelectorAll('.vcr-scope-btn--overflow'));
+      // Populate menu from overflow buttons (preserves label + scope).
+      menu.innerHTML = '';
+      overflowBtns.forEach(function (src) {
+        var item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'vcr-scope-more-item';
+        item.setAttribute('role', 'menuitem');
+        item.setAttribute('data-scope', src.dataset.scope);
+        item.textContent = src.textContent;
+        item.addEventListener('click', function () {
+          src.click(); // delegate to original handler — keeps single source of truth
+          menu.setAttribute('hidden', '');
+          moreBtn.setAttribute('aria-expanded', 'false');
+          // Reflect the chosen scope on the More button label so the user sees feedback.
+          moreBtn.textContent = item.textContent + ' ▾';
+        });
+        menu.appendChild(item);
+      });
+      moreBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var open = !menu.hasAttribute('hidden');
+        if (open) { menu.setAttribute('hidden', ''); moreBtn.setAttribute('aria-expanded', 'false'); }
+        else      { menu.removeAttribute('hidden');  moreBtn.setAttribute('aria-expanded', 'true');  }
+      });
+      // Click outside closes the menu.
+      document.addEventListener('click', function (e) {
+        if (menu.hasAttribute('hidden')) return;
+        if (e.target === moreBtn || moreBtn.contains(e.target) ||
+            e.target === menu   || menu.contains(e.target)) return;
+        menu.setAttribute('hidden', '');
+        moreBtn.setAttribute('aria-expanded', 'false');
+      });
+    })();
 
     // Timeline click to scrub
     // Timeline click handled by drag (mousedown+mouseup)

@@ -438,7 +438,15 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		chanCache:     make(map[string]*cachedResult),
 		distCache:     make(map[string]*cachedResult),
 		subpathCache:  make(map[string]*cachedResult),
-		rfCacheTTL:         15 * time.Second,
+		// #1239: 60 seconds by default. rfCacheTTL is the shared TTL for
+		// the RF, topology, distance, hash-sizes, subpath, and channel
+		// analytics caches. Distance analytics IS viewed live during
+		// active analysis sessions (operators won't tolerate a 5-min
+		// lag), so the bump from 15s → 60s smooths the most-frequent
+		// cold-miss churn during heavy ingest without freezing data.
+		// Override via cacheTTL.analyticsRF in config.json (also
+		// propagates to distance / topology / hash-sizes / etc.).
+		rfCacheTTL: 60 * time.Second,
 		collisionCacheTTL: 3600 * time.Second,
 		invCooldown:       300 * time.Second,
 		spIndex:       make(map[string]int, 4096),
@@ -5608,6 +5616,16 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 	// highest-affinity candidate among them. Raw score is appropriate because
 	// it reflects both observation frequency and recency, which are the right
 	// signals for "which candidate is this hop most likely referring to."
+	//
+	// Issue #1229 (Option C): the raw score is further multiplied by
+	// e.Confidence() — a source-diversity factor in (0,1] derived from the
+	// number of distinct observers that contributed to the edge. Edges seen
+	// by a single observer are discounted to 1/3 weight; edges seen by ≥3
+	// observers saturate at full weight. This stacks with the geo-rejection
+	// filter merged for #1228 to give two independent lines of defense
+	// against cross-region prefix-collision pollution. Backward-compatible
+	// with the persistence format: legacy edges with empty Observers sets
+	// fall back to single-observer weight.
 	if graph != nil && len(contextPubkeys) > 0 {
 		type scored struct {
 			idx   int
@@ -5631,7 +5649,7 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 						otherPK = e.NodeB
 					}
 					if strings.EqualFold(otherPK, candPK) {
-						s := e.Score(now)
+						s := e.Score(now) * e.Confidence()
 						if s > bestScore {
 							bestScore = s
 							bestCount = e.Count
@@ -6296,22 +6314,42 @@ func (s *PacketStore) GetAnalyticsDistance(region string) map[string]interface{}
 }
 
 func (s *PacketStore) computeAnalyticsDistance(region string) map[string]interface{} {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+	// #1239: hold s.mu.RLock() only long enough to (a) snapshot the
+	// distHops/distPaths slice headers and (b) build the region match
+	// set (which reads tx.Observations, a field mutated by ingest under
+	// s.mu.Lock). All filtering, sorting, deduping, histogram building
+	// and category stats run on locally-captured slices OUTSIDE the
+	// lock so concurrent ingest writers are not blocked by readers.
+	//
+	// Safety: snapshot slice headers are O(1). distHops/distPaths are
+	// append-only via re-slice in buildDistanceIndex / updateDistanceIndexForTxs
+	// under s.mu.Lock; if the backing array is reallocated after we
+	// release the RLock, our snapshot still points at the prior backing
+	// array (kept alive by GC) and observes the consistent length we
+	// captured. The distHopRecord / distPathRecord values themselves
+	// are value types (not pointers to live records) so we cannot read
+	// torn writes from them post-release.
 	var regionObs map[string]bool
 	if region != "" {
+		// resolveRegionObservers uses its own mutex (regionObsMu)
+		// and is safe to call without s.mu held.
 		regionObs = s.resolveRegionObservers(region)
 	}
 
-	// Build region match set using precomputed tx pointers
+	s.mu.RLock()
+	hopsSnap := s.distHops
+	pathsSnap := s.distPaths
+
+	// Build region match set INSIDE the lock — touches tx.Observations
+	// (slice header mutated by ingest). For non-region calls (the common
+	// cold path) we skip this entirely and the RLock hold is microseconds.
 	var matchSet map[*StoreTx]bool
 	if regionObs != nil {
 		matchSet = make(map[*StoreTx]bool)
 		seen := make(map[*StoreTx]bool)
-		for i := range s.distHops {
-			tx := s.distHops[i].tx
-			if seen[tx] {
+		for i := range hopsSnap {
+			tx := hopsSnap[i].tx
+			if tx == nil || seen[tx] {
 				continue
 			}
 			seen[tx] = true
@@ -6322,9 +6360,9 @@ func (s *PacketStore) computeAnalyticsDistance(region string) map[string]interfa
 				}
 			}
 		}
-		for i := range s.distPaths {
-			tx := s.distPaths[i].tx
-			if seen[tx] {
+		for i := range pathsSnap {
+			tx := pathsSnap[i].tx
+			if tx == nil || seen[tx] {
 				continue
 			}
 			seen[tx] = true
@@ -6336,20 +6374,25 @@ func (s *PacketStore) computeAnalyticsDistance(region string) map[string]interfa
 			}
 		}
 	}
+	s.mu.RUnlock()
+
+	// Everything below operates on hopsSnap / pathsSnap / matchSet —
+	// no s.mu, no s.distHops / s.distPaths access. Safe to run while
+	// ingest writers reallocate the underlying store-owned slices.
 
 	// Filter precomputed hop records (copy to avoid mutating precomputed data during sort)
-	filteredHops := make([]distHopRecord, 0, len(s.distHops))
-	for i := range s.distHops {
-		if matchSet == nil || matchSet[s.distHops[i].tx] {
-			filteredHops = append(filteredHops, s.distHops[i])
+	filteredHops := make([]distHopRecord, 0, len(hopsSnap))
+	for i := range hopsSnap {
+		if matchSet == nil || matchSet[hopsSnap[i].tx] {
+			filteredHops = append(filteredHops, hopsSnap[i])
 		}
 	}
 
 	// Filter precomputed path records
-	filteredPaths := make([]distPathRecord, 0, len(s.distPaths))
-	for i := range s.distPaths {
-		if matchSet == nil || matchSet[s.distPaths[i].tx] {
-			filteredPaths = append(filteredPaths, s.distPaths[i])
+	filteredPaths := make([]distPathRecord, 0, len(pathsSnap))
+	for i := range pathsSnap {
+		if matchSet == nil || matchSet[pathsSnap[i].tx] {
+			filteredPaths = append(filteredPaths, pathsSnap[i])
 		}
 	}
 
