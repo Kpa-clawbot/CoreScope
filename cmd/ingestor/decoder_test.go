@@ -2058,3 +2058,25 @@ func FuzzDecodePacketTruncated(f *testing.F) {
 		_, _ = DecodePacket(hex.EncodeToString(data), nil, false)
 	})
 }
+
+// TestDecodeAdvertOversizedNameTruncated asserts decodeAdvert truncates the
+// advert name to firmware's MAX_ADVERT_DATA_SIZE=32 (firmware/src/MeshCore.h:11).
+// Firmware writes the node name into a 32-byte buffer, so any on-wire advert
+// carrying >32 bytes of name data is adversarial — the Go decoder must not
+// surface attacker-controlled bytes beyond what firmware would ever emit.
+func TestDecodeAdvertOversizedNameTruncated(t *testing.T) {
+	pubkey := repeatHex("AA", 32)
+	timestamp := "78563412"
+	signature := repeatHex("BB", 64)
+	flags := "81" // chat(1) | hasName(0x80), no location, no feat1/2
+	// 64-byte ASCII 'X' name with no null terminator (firmware buffer is 32 bytes).
+	name := repeatHex("58", 64)
+	hex := "1200" + pubkey + timestamp + signature + flags + name
+	pkt, err := DecodePacket(hex, nil, false)
+	if err != nil {
+		t.Fatalf("DecodePacket: %v", err)
+	}
+	if got := len(pkt.Payload.Name); got > 32 {
+		t.Errorf("name length=%d, want <=32 (MAX_ADVERT_DATA_SIZE firmware/src/MeshCore.h:11)", got)
+	}
+}
