@@ -2252,6 +2252,12 @@
   window._liveVcrPause = vcrPause;
   window._liveVcrResumeLive = vcrResumeLive;
   window._liveVcrSetMode = vcrSetMode;
+  // #1207 test seams: expose production feed mutators so E2E can exercise
+  // the real eviction guard / placeholder re-add path (not a test-local copy).
+  window._liveAddFeedItem = function(icon, typeName, payload, hops, color, pkt) {
+    return addFeedItem(icon, typeName, payload, hops, color, pkt);
+  };
+  window._liveRebuildFeedList = function() { return rebuildFeedList(); };
 
   async function replayRecent() {
     try {

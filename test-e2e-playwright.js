@@ -998,67 +998,75 @@ async function run() {
   await test('#1207 eviction loop never trims the empty-state placeholder', async () => {
     await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#liveFeed .panel-content', { timeout: 10000 });
+    // Drive the REAL production addFeedItem (exposed as window._liveAddFeedItem)
+    // 30 times so the production eviction guard inside addFeedItem fires past
+    // the cap of 25. If production reverts to feed.children.length, the
+    // placeholder counts as a child and either under-evicts (26 items) or
+    // gets trimmed itself — both observable failures below.
     const result = await page.evaluate(() => {
+      if (typeof window._liveAddFeedItem !== 'function') {
+        return { ok: false, reason: 'window._liveAddFeedItem not exposed (test seam missing)' };
+      }
       const feed = document.querySelector('#liveFeed .panel-content');
       if (!feed) return { ok: false, reason: 'no .panel-content' };
-      // Ensure placeholder is present (re-add if a real packet wiped it via
-      // a rebuild path that didn't restore it — defensive for the test).
+      // Clean slate: remove any pre-existing items the page may have rendered.
+      feed.querySelectorAll('.live-feed-item').forEach((el) => el.remove());
+      // Re-add placeholder if a prior packet wiped it.
       if (!feed.querySelector('.live-feed-empty')) {
         const ph = document.createElement('div');
         ph.className = 'live-feed-empty';
+        ph.setAttribute('aria-hidden', 'true');
         ph.textContent = 'Waiting for packets…';
         feed.appendChild(ph);
       }
-      // Fill with 30 synthetic items so eviction kicks in (>25).
+      const placeholderBefore = !!feed.querySelector('.live-feed-empty');
+
+      // Fire 30 distinct packets through PRODUCTION addFeedItem.
+      // Unique hashes prevent dedup; minimal pkt shape mirrors what
+      // renderPacketTree passes through.
       for (let i = 0; i < 30; i++) {
-        const it = document.createElement('div');
-        it.className = 'live-feed-item';
-        it.textContent = `synthetic-${i}`;
-        feed.prepend(it);
-      }
-      // Simulate the production eviction guard from addFeedItem().
-      while (feed.querySelectorAll('.live-feed-item').length > 25) {
-        const items = feed.querySelectorAll('.live-feed-item');
-        feed.removeChild(items[items.length - 1]);
+        const hash = 'evict-test-' + i.toString(16).padStart(8, '0');
+        const pkt = {
+          hash,
+          _ts: Date.now() + i,
+          route_type: 0,
+          observation_count: 1,
+          decoded: { header: { payloadTypeName: 'TXT_MSG' }, payload: { text: 'evict-' + i }, path: { hops: [] } },
+        };
+        window._liveAddFeedItem('💬', 'TXT_MSG', { text: 'evict-' + i }, [], '#888', pkt);
       }
       const itemsAfterEvict = feed.querySelectorAll('.live-feed-item').length;
       const placeholderAfterEvict = !!feed.querySelector('.live-feed-empty');
-      // Now strip all items back to zero → placeholder MUST still be there.
-      feed.querySelectorAll('.live-feed-item').forEach((el) => el.remove());
-      const placeholder = feed.querySelector('.live-feed-empty');
-      const itemsAfterStrip = feed.querySelectorAll('.live-feed-item').length;
-      const placeholderVisible = placeholder
-        ? getComputedStyle(placeholder).display !== 'none'
-        : false;
-      const placeholderText = placeholder ? (placeholder.textContent || '').trim() : '';
+      const childrenAfterEvict = feed.children.length;
       return {
         ok: true,
+        placeholderBefore,
         itemsAfterEvict,
         placeholderAfterEvict,
-        itemsAfterStrip,
-        placeholderPresent: !!placeholder,
-        placeholderVisible,
-        placeholderText,
+        childrenAfterEvict,
       };
     });
     assert(result.ok, `setup failed: ${result.reason || ''}`);
+    assert(result.placeholderBefore, 'placeholder must be present before firing packets');
+    // The production guard `while (feed.querySelectorAll('.live-feed-item').length > 25)`
+    // MUST cap items at exactly 25. A buggy `feed.children.length` form caps at 25
+    // total children (24 items + 1 placeholder) → itemsAfterEvict === 24 → fails here.
     assert(
       result.itemsAfterEvict === 25,
-      `eviction guard must cap at 25 items (got ${result.itemsAfterEvict})`,
+      `eviction guard must cap at 25 .live-feed-item (got ${result.itemsAfterEvict}). ` +
+        `If 24: production is using feed.children.length (placeholder counted as child).`,
     );
+    // And the placeholder must SURVIVE the eviction loop. A buggy form that
+    // does removeChild on the last child would yank the placeholder once it's
+    // appended last.
     assert(
       result.placeholderAfterEvict,
-      'eviction must not remove .live-feed-empty placeholder',
+      'eviction must NOT remove .live-feed-empty placeholder',
     );
-    assert(result.itemsAfterStrip === 0, 'all .live-feed-item should be stripped');
-    assert(result.placeholderPresent, '.live-feed-empty must survive a full strip');
+    // Total children == 25 items + 1 placeholder.
     assert(
-      result.placeholderVisible,
-      '.live-feed-empty must be visible (display !== none) when no items present',
-    );
-    assert(
-      /Waiting for packets/i.test(result.placeholderText),
-      `placeholder copy must match. Got: ${JSON.stringify(result.placeholderText)}`,
+      result.childrenAfterEvict === 26,
+      `feed.children.length should be 26 (25 items + 1 placeholder), got ${result.childrenAfterEvict}`,
     );
   });
 
@@ -1099,6 +1107,56 @@ async function run() {
     assert(
       result.displayAfter === 'none',
       `:has(.live-feed-item) rule must hide placeholder (got display=${result.displayAfter})`,
+    );
+  });
+
+  // Issue #1207 (kent #4): rebuildFeedList() must re-add the empty-state
+  // placeholder when it was previously removed. Without this, a sequence of
+  // (live packets render → user navigates / state rebuilds → placeholder gone)
+  // leaves the panel as orphan chrome. Drive the REAL production
+  // rebuildFeedList (via window._liveRebuildFeedList) AFTER explicitly
+  // removing the placeholder; assert it comes back.
+  await test('#1207 rebuildFeedList re-adds placeholder when missing', async () => {
+    await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveFeed .panel-content', { timeout: 10000 });
+    const result = await page.evaluate(() => {
+      if (typeof window._liveRebuildFeedList !== 'function') {
+        return { ok: false, reason: 'window._liveRebuildFeedList not exposed (test seam missing)' };
+      }
+      const feed = document.querySelector('#liveFeed .panel-content');
+      if (!feed) return { ok: false, reason: 'no .panel-content' };
+      // Simulate: ingest wiped the placeholder out (e.g. innerHTML replace,
+      // or a future code path that forgot to preserve it).
+      feed.querySelectorAll('.live-feed-empty').forEach((el) => el.remove());
+      feed.querySelectorAll('.live-feed-item').forEach((el) => el.remove());
+      const placeholderBefore = !!feed.querySelector('.live-feed-empty');
+      // Call production rebuild.
+      window._liveRebuildFeedList();
+      const placeholderAfter = feed.querySelector('.live-feed-empty');
+      return {
+        ok: true,
+        placeholderBefore,
+        placeholderPresent: !!placeholderAfter,
+        placeholderText: placeholderAfter ? (placeholderAfter.textContent || '').trim() : '',
+        ariaHidden: placeholderAfter ? placeholderAfter.getAttribute('aria-hidden') : null,
+      };
+    });
+    assert(result.ok, `setup failed: ${result.reason || ''}`);
+    assert(
+      result.placeholderBefore === false,
+      'precondition: placeholder must be removed before rebuildFeedList()',
+    );
+    assert(
+      result.placeholderPresent,
+      'rebuildFeedList MUST re-add .live-feed-empty placeholder when missing',
+    );
+    assert(
+      /Waiting for packets/i.test(result.placeholderText),
+      `re-added placeholder copy must match. Got: ${JSON.stringify(result.placeholderText)}`,
+    );
+    assert(
+      result.ariaHidden === 'true',
+      `re-added placeholder must have aria-hidden="true" (got ${JSON.stringify(result.ariaHidden)})`,
     );
   });
 
