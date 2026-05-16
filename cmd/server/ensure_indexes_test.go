@@ -27,7 +27,9 @@ func TestEnsureServerIndexes_CreatesObservationsIndexes(t *testing.T) {
 	// Minimal legacy server-only schema: tables present, no extra indexes.
 	stmts := []string{
 		`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, raw_hex TEXT, hash TEXT, first_seen TEXT, route_type INTEGER, payload_type INTEGER, payload_version INTEGER, decoded_json TEXT)`,
-		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_id TEXT, observer_name TEXT, direction TEXT, snr REAL, rssi REAL, score INTEGER, path_json TEXT, timestamp TEXT, raw_hex TEXT)`,
+		// v3 schema (observer_idx) — matches the ingestor-created shape
+		// and the path that 63cc1bc3 / hot-startup loadChunk traverse.
+		`CREATE TABLE observations (id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_idx INTEGER, direction TEXT, snr REAL, rssi REAL, score INTEGER, path_json TEXT, timestamp TEXT, raw_hex TEXT)`,
 		`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT)`,
 		`CREATE TABLE nodes (pubkey TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL, last_seen TEXT, first_seen TEXT, frequency REAL)`,
 		`CREATE TABLE schema_version (version INTEGER)`,

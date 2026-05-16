@@ -902,18 +902,27 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		return nil
 	}
 
-	// PR #1187 r2 #6: merge in small batches to keep lock hold time bounded.
-	// The previous implementation held s.mu.Lock() across the entire merge
-	// (hundreds of ms for big chunks); runtime.Gosched between chunks didn't
-	// help readers/ingest that arrived mid-chunk. We now release+reacquire
-	// the lock every mergeBatchSize packets so other writers can interleave.
+	// PR #1187 r3 MUST-FIX 1: index↔slice consistency.
+	//
+	// The previous (r2 #6, commit 2ec762aa) merge order was:
+	//   1) prepend s.packets in one critical section
+	//   2) populate s.byHash/byTxID/byObsID/byObserver/byNode/byPayloadType
+	//      in separate per-batch critical sections
+	//   3) bump counters in a third section
+	//
+	// Any RLock-holding reader between steps observed packets present in
+	// s.packets but missing from s.byHash → silent partial data loss in
+	// GetPacketByHash and the QueryPackets hash/node fast-paths.
+	//
+	// We invert the order: build the indexes FIRST in bounded per-batch
+	// critical sections, then under a SINGLE final critical section
+	// prepend s.packets AND bump counters AND advance maxIDs. The
+	// invariant "every tx in s.packets is in s.byHash/s.byTxID" holds at
+	// every RLock instant — readers either see the old state, or an
+	// intermediate state where indexes contain a superset of s.packets
+	// (which is harmless: nothing in s.packets dangles), or the fully
+	// merged new state.
 	const mergeBatchSize = 500
-
-	// Prepend the whole local packet slice ONCE under the lock — this is
-	// the "merge primitive" that must be atomic w.r.t. ordering.
-	s.mu.Lock()
-	s.packets = append(localPackets, s.packets...)
-	s.mu.Unlock()
 
 	for batchStart := 0; batchStart < len(localPackets); batchStart += mergeBatchSize {
 		batchEnd := batchStart + mergeBatchSize
@@ -922,9 +931,8 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		}
 		batch := localPackets[batchStart:batchEnd]
 
-		// Build the per-batch index views from the local maps. Doing this
-		// outside the lock means the critical section below is O(batch),
-		// not O(total local).
+		// Build the per-batch index views outside the lock so the
+		// critical section below is O(batch), not O(total local).
 		batchHashes := make(map[string]*StoreTx, len(batch))
 		batchTxIDs := make(map[int]*StoreTx, len(batch))
 		batchObsIDs := make(map[int]*StoreObs)
@@ -981,8 +989,12 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		runtime.Gosched()
 	}
 
-	// Final counter update — one short critical section.
+	// Final atomic step: now that every tx in localPackets is fully
+	// indexed, publish it into s.packets and bump counters in one short
+	// critical section. After this point the new state is fully visible;
+	// before it readers see the old slice (which is still fully indexed).
 	s.mu.Lock()
+	s.packets = append(localPackets, s.packets...)
 	s.totalObs += localTotalObs
 	s.trackedBytes += localTrackedBytes
 	if localMaxTxID > s.maxTxID {
