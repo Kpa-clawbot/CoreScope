@@ -27,205 +27,172 @@ func seedAffinity(g *NeighborGraph, obsPK, candPK, prefix, observer string, n in
 	}
 }
 
-// ─── sub-task 1: tier-1 explicit tests ─────────────────────────────────────────
-
-// TestResolveWithContext_Tier1_StrongAffinityPicksX seeds a strong edge to X
-// and a weak (below threshold) edge to Y. Tier 1 must pick X.
-func TestResolveWithContext_Tier1_StrongAffinityPicksX(t *testing.T) {
-	nodes := []nodeInfo{
-		{PublicKey: "72aaaaaaaaaa", Role: "repeater", Name: "candX", HasGPS: true, Lat: 35.3, Lon: -120.7},
-		{PublicKey: "72bbbbbbbbbb", Role: "repeater", Name: "candY", HasGPS: true, Lat: 34.0, Lon: -118.2},
-	}
-	pm := buildPrefixMap(nodes)
-
-	ctxPK := "ccccccccccc1" // anchor / context pubkey
-	g := NewNeighborGraph()
-	seedAffinity(g, ctxPK, "72aaaaaaaaaa", "72", "obs1", 100) // strong X
-	seedAffinity(g, ctxPK, "72bbbbbbbbbb", "72", "obs1", 1)   // below affinityMinObservations
-
-	r, method, score := pm.resolveWithContext("72", []string{ctxPK}, g)
-	if r == nil {
-		t.Fatal("expected non-nil candidate")
-	}
-	if r.Name != "candX" {
-		t.Fatalf("tier-1 should pick candX (strong affinity); got %s via %s score=%f", r.Name, method, score)
-	}
-	if method != "neighbor_affinity" {
-		t.Fatalf("expected neighbor_affinity, got %s", method)
-	}
+// Standard fixture shared by most tier-1 tests: two "72" candidates and
+// (when needed) an anchor pubkey co-located with candY. candX is far
+// (Seattle), candY is near LA — so geo proximity to anchor picks candY
+// unless tier-1 fires for candX.
+var tier1StdNodes = []nodeInfo{
+	{PublicKey: "72aaaaaaaaaa", Role: "repeater", Name: "candX", HasGPS: true, Lat: 47.6, Lon: -122.3},   // Seattle (far)
+	{PublicKey: "72bbbbbbbbbb", Role: "repeater", Name: "candY", HasGPS: true, Lat: 34.05, Lon: -118.25}, // LA (near anchor)
+	{PublicKey: "ffeeeeeeeeee", Role: "repeater", Name: "anchor", HasGPS: true, Lat: 34.1, Lon: -118.3},
 }
 
-// TestResolveWithContext_Tier1_StrongAffinityPicksY reverses the weights to
-// prove the score is actually consulted (not a constant returning X).
-func TestResolveWithContext_Tier1_StrongAffinityPicksY(t *testing.T) {
-	nodes := []nodeInfo{
-		{PublicKey: "72aaaaaaaaaa", Role: "repeater", Name: "candX", HasGPS: true, Lat: 35.3, Lon: -120.7},
-		{PublicKey: "72bbbbbbbbbb", Role: "repeater", Name: "candY", HasGPS: true, Lat: 34.0, Lon: -118.2},
-	}
-	pm := buildPrefixMap(nodes)
+const tier1Anchor = "ffeeeeeeeeee"
 
-	ctxPK := "ccccccccccc1"
-	g := NewNeighborGraph()
-	seedAffinity(g, ctxPK, "72aaaaaaaaaa", "72", "obs1", 1)   // weak X
-	seedAffinity(g, ctxPK, "72bbbbbbbbbb", "72", "obs1", 100) // strong Y
+// ─── sub-task 1: tier-1 explicit tests (table-driven) ──────────────────────────
 
-	r, method, _ := pm.resolveWithContext("72", []string{ctxPK}, g)
-	if r == nil {
-		t.Fatal("expected non-nil candidate")
+// TestResolveWithContext_Tier1 collapses what were five near-identical
+// per-branch functions into one table-driven test. Each row exercises
+// exactly one tier-1 branch (strong-pick X, strong-pick Y, ambiguous-skip,
+// tier-1-beats-tier-2, fall-throughs). Adding a new tier-1 case is a
+// one-line addition.
+//
+// Mirror-pair rows (StrongAffinityPicksX / PicksY) prevent a "tier-1 always
+// returns first candidate" tautology — the score MUST be consulted because
+// flipping the weights flips the winner.
+func TestResolveWithContext_Tier1(t *testing.T) {
+	type seed struct {
+		obsPK, candPK, prefix string
+		count                 int
 	}
-	if r.Name != "candY" {
-		t.Fatalf("tier-1 should pick candY (strong affinity); got %s via %s", r.Name, method)
+	cases := []struct {
+		name           string
+		nodes          []nodeInfo
+		ctxPK          string
+		useNilGraph    bool      // skip graph entirely (tests `graph != nil` guard)
+		seeds          []seed    // tier-1 affinity seeds
+		markAmbiguous  [2]string // if non-empty pair, mark that edge ambiguous
+		extraGraphSeed *seed     // seed unrelated to ctxPK (empty-for-context fixture)
+		wantName       string
+		wantMethod     string
+	}{
+		{
+			name:       "StrongAffinityPicksX",
+			nodes:      []nodeInfo{{PublicKey: "72aaaaaaaaaa", Role: "repeater", Name: "candX", HasGPS: true, Lat: 35.3, Lon: -120.7}, {PublicKey: "72bbbbbbbbbb", Role: "repeater", Name: "candY", HasGPS: true, Lat: 34.0, Lon: -118.2}},
+			ctxPK:      "ccccccccccc1",
+			seeds:      []seed{{"ccccccccccc1", "72aaaaaaaaaa", "72", 100}, {"ccccccccccc1", "72bbbbbbbbbb", "72", 1}},
+			wantName:   "candX",
+			wantMethod: "neighbor_affinity",
+		},
+		{
+			name:       "StrongAffinityPicksY",
+			nodes:      []nodeInfo{{PublicKey: "72aaaaaaaaaa", Role: "repeater", Name: "candX", HasGPS: true, Lat: 35.3, Lon: -120.7}, {PublicKey: "72bbbbbbbbbb", Role: "repeater", Name: "candY", HasGPS: true, Lat: 34.0, Lon: -118.2}},
+			ctxPK:      "ccccccccccc1",
+			seeds:      []seed{{"ccccccccccc1", "72aaaaaaaaaa", "72", 1}, {"ccccccccccc1", "72bbbbbbbbbb", "72", 100}},
+			wantName:   "candY",
+			wantMethod: "neighbor_affinity",
+		},
+		{
+			// Strong edge to candX exists but is flagged Ambiguous → tier 1
+			// must skip it and tier 2 (geo) picks candY (near anchor).
+			name:          "AmbiguousEdgeSkipsToTier2",
+			nodes:         tier1StdNodes,
+			ctxPK:         tier1Anchor,
+			seeds:         []seed{{tier1Anchor, "72aaaaaaaaaa", "72", 100}},
+			markAmbiguous: [2]string{tier1Anchor, "72aaaaaaaaaa"},
+			wantName:      "candY",
+			wantMethod:    "geo_proximity",
+		},
+		{
+			// candX is far (affinity), candY is geo-close. Tier 1 firing
+			// → candX wins. Sentinel for "geo branch hit first" regressions.
+			name:       "BeatsTier2WhenBothSignal",
+			nodes:      tier1StdNodes,
+			ctxPK:      tier1Anchor,
+			seeds:      []seed{{tier1Anchor, "72aaaaaaaaaa", "72", 100}},
+			wantName:   "candX",
+			wantMethod: "neighbor_affinity",
+		},
+		{
+			// Graph is non-nil but has no edges involving the context.
+			// Tier 1 must short-circuit; tier 2 picks candY.
+			name:           "EmptyGraphFallsThrough",
+			nodes:          tier1StdNodes,
+			ctxPK:          tier1Anchor,
+			extraGraphSeed: &seed{"aaaaaaaaaaa1", "aaaaaaaaaaa2", "aa", 10},
+			wantName:       "candY",
+			wantMethod:     "geo_proximity",
+		},
+		{
+			// Graph is nil — `graph != nil` short-circuit; tier 2 decides.
+			name:        "NilGraphFallsThrough",
+			nodes:       tier1StdNodes,
+			ctxPK:       tier1Anchor,
+			useNilGraph: true,
+			wantName:    "candY",
+			wantMethod:  "geo_proximity",
+		},
 	}
-	if method != "neighbor_affinity" {
-		t.Fatalf("expected neighbor_affinity, got %s", method)
-	}
-}
 
-// TestResolveWithContext_Tier1_AmbiguousEdgeSkipsToTier2 verifies that
-// ambiguous edges are skipped in the tier-1 scan of resolveWithContext
-// (the `if e.Ambiguous { continue }` guard inside the tier-1 candidate
-// loop) and the resolver falls through to tier 2.
-func TestResolveWithContext_Tier1_AmbiguousEdgeSkipsToTier2(t *testing.T) {
-	// Two candidates for "72". Geo proximity will pick candY (close to anchor).
-	nodes := []nodeInfo{
-		{PublicKey: "72aaaaaaaaaa", Role: "repeater", Name: "candX", HasGPS: true, Lat: 47.6, Lon: -122.3}, // Seattle (far)
-		{PublicKey: "72bbbbbbbbbb", Role: "repeater", Name: "candY", HasGPS: true, Lat: 34.05, Lon: -118.25}, // LA (near anchor)
-		{PublicKey: "ffeeeeeeeeee", Role: "repeater", Name: "anchor", HasGPS: true, Lat: 34.1, Lon: -118.3}, // anchor in LA
-	}
-	pm := buildPrefixMap(nodes)
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			pm := buildPrefixMap(tc.nodes)
+			var g *NeighborGraph
+			if !tc.useNilGraph {
+				g = NewNeighborGraph()
+				for _, s := range tc.seeds {
+					seedAffinity(g, s.obsPK, s.candPK, s.prefix, "obs1", s.count)
+				}
+				if tc.extraGraphSeed != nil {
+					s := *tc.extraGraphSeed
+					seedAffinity(g, s.obsPK, s.candPK, s.prefix, "obs1", s.count)
+				}
+				if tc.markAmbiguous[0] != "" {
+					// Use the public helper rather than mutating
+					// *NeighborEdge fields returned from AllEdges() —
+					// hardens the test against any future change that
+					// makes AllEdges() return copies.
+					if !g.MarkAmbiguous(tc.markAmbiguous[0], tc.markAmbiguous[1], true) {
+						t.Fatalf("MarkAmbiguous(%s,%s): edge not found", tc.markAmbiguous[0], tc.markAmbiguous[1])
+					}
+				}
+			}
 
-	ctxPK := "ffeeeeeeeeee"
-	g := NewNeighborGraph()
-	// Seed a strong edge that WOULD pick candX (Seattle) under tier 1, but
-	// mark it Ambiguous → tier 1 must skip it.
-	seedAffinity(g, ctxPK, "72aaaaaaaaaa", "72", "obs1", 100)
-	for _, e := range g.AllEdges() {
-		e.Ambiguous = true
-	}
-
-	r, method, _ := pm.resolveWithContext("72", []string{ctxPK}, g)
-	if r == nil {
-		t.Fatal("expected non-nil candidate")
-	}
-	if method == "neighbor_affinity" {
-		t.Fatalf("tier 1 must skip ambiguous edges; got method=%s pubkey=%s", method, r.PublicKey)
-	}
-	if r.Name != "candY" {
-		t.Fatalf("expected tier-2 to pick candY (geo-near anchor); got %s via %s", r.Name, method)
-	}
-	if method != "geo_proximity" {
-		t.Fatalf("expected fall-through to geo_proximity, got %s", method)
-	}
-}
-
-// ─── sub-task 2: tier ordering ─────────────────────────────────────────────────
-
-// TestResolveWithContext_Tier1_BeatsTier2WhenBothSignal constructs a
-// scenario where tier 1 (affinity) and tier 2 (geo) point at DIFFERENT
-// candidates. Tier 1 must win. Catches any refactor that reorders priorities
-// or accidentally hits the geo branch first.
-func TestResolveWithContext_Tier1_BeatsTier2WhenBothSignal(t *testing.T) {
-	// candX is far from the anchor but has strong graph affinity.
-	// candY is geographically close to the anchor but has no graph affinity.
-	// Tier 1 must pick candX.
-	nodes := []nodeInfo{
-		{PublicKey: "72aaaaaaaaaa", Role: "repeater", Name: "candX", HasGPS: true, Lat: 47.6, Lon: -122.3},  // Seattle
-		{PublicKey: "72bbbbbbbbbb", Role: "repeater", Name: "candY", HasGPS: true, Lat: 34.05, Lon: -118.25}, // LA (near anchor)
-		{PublicKey: "ffeeeeeeeeee", Role: "repeater", Name: "anchor", HasGPS: true, Lat: 34.1, Lon: -118.3},  // LA
-	}
-	pm := buildPrefixMap(nodes)
-
-	ctxPK := "ffeeeeeeeeee"
-	g := NewNeighborGraph()
-	seedAffinity(g, ctxPK, "72aaaaaaaaaa", "72", "obs1", 100) // strong affinity to Seattle candidate
-
-	r, method, _ := pm.resolveWithContext("72", []string{ctxPK}, g)
-	if r == nil {
-		t.Fatal("expected non-nil candidate")
-	}
-	if r.Name != "candX" {
-		t.Fatalf("tier 1 must beat tier 2 when both signal; expected candX (affinity), got %s via %s", r.Name, method)
-	}
-	if method != "neighbor_affinity" {
-		t.Fatalf("expected neighbor_affinity, got %s", method)
-	}
-}
-
-// ─── sub-task 3: tier-1 fallbacks ──────────────────────────────────────────────
-
-// TestResolveWithContext_Tier1_EmptyGraphFallsThrough: s.graph is non-nil
-// but has NO edges involving the context pubkey. Tier 1 must quietly skip
-// and tier 2 (geo) must decide.
-func TestResolveWithContext_Tier1_EmptyGraphFallsThrough(t *testing.T) {
-	nodes := []nodeInfo{
-		{PublicKey: "72aaaaaaaaaa", Role: "repeater", Name: "candX", HasGPS: true, Lat: 47.6, Lon: -122.3},  // Seattle (far)
-		{PublicKey: "72bbbbbbbbbb", Role: "repeater", Name: "candY", HasGPS: true, Lat: 34.05, Lon: -118.25}, // LA (near anchor)
-		{PublicKey: "ffeeeeeeeeee", Role: "repeater", Name: "anchor", HasGPS: true, Lat: 34.1, Lon: -118.3},
-	}
-	pm := buildPrefixMap(nodes)
-
-	ctxPK := "ffeeeeeeeeee"
-	g := NewNeighborGraph() // empty
-	// Add an unrelated edge so the graph isn't strictly empty, but no edge
-	// for the context pubkey.
-	seedAffinity(g, "aaaaaaaaaaa1", "aaaaaaaaaaa2", "aa", "obs1", 10)
-
-	r, method, _ := pm.resolveWithContext("72", []string{ctxPK}, g)
-	if r == nil {
-		t.Fatal("expected non-nil candidate")
-	}
-	if method == "neighbor_affinity" {
-		t.Fatalf("tier 1 must skip when graph has no edges for context; got method=%s", method)
-	}
-	if r.Name != "candY" {
-		t.Fatalf("expected tier-2 geo to pick candY; got %s via %s", r.Name, method)
-	}
-}
-
-// TestResolveWithContext_Tier1_NilGraphFallsThrough: graph is nil entirely.
-// Tier 1 is short-circuited (`if graph != nil`) and tier 2 decides.
-func TestResolveWithContext_Tier1_NilGraphFallsThrough(t *testing.T) {
-	nodes := []nodeInfo{
-		{PublicKey: "72aaaaaaaaaa", Role: "repeater", Name: "candX", HasGPS: true, Lat: 47.6, Lon: -122.3},
-		{PublicKey: "72bbbbbbbbbb", Role: "repeater", Name: "candY", HasGPS: true, Lat: 34.05, Lon: -118.25},
-		{PublicKey: "ffeeeeeeeeee", Role: "repeater", Name: "anchor", HasGPS: true, Lat: 34.1, Lon: -118.3},
-	}
-	pm := buildPrefixMap(nodes)
-
-	r, method, _ := pm.resolveWithContext("72", []string{"ffeeeeeeeeee"}, nil)
-	if r == nil {
-		t.Fatal("expected non-nil candidate")
-	}
-	if method == "neighbor_affinity" {
-		t.Fatalf("tier 1 must skip when graph is nil; got method=%s", method)
-	}
-	if r.Name != "candY" {
-		t.Fatalf("expected tier-2 geo to pick candY; got %s via %s", r.Name, method)
+			r, method, _ := pm.resolveWithContext("72", []string{tc.ctxPK}, g)
+			if r == nil {
+				t.Fatal("expected non-nil candidate")
+			}
+			if r.Name != tc.wantName {
+				t.Fatalf("name: want %s got %s (method=%s)", tc.wantName, r.Name, method)
+			}
+			if method != tc.wantMethod {
+				t.Fatalf("method: want %s got %s", tc.wantMethod, method)
+			}
+		})
 	}
 }
 
 // TestResolveWithContext_Tier1_ScoresTooCloseFallsThrough: best.score is
 // below affinityConfidenceRatio × runner-up.score (the ratio guard at the
-// end of the tier-1 block in resolveWithContext).
-// Resolver must fall through to tier 2.
+// end of the tier-1 block in resolveWithContext). Resolver must fall
+// through to tier 2.
+//
+// This case is kept SEPARATE from the table above because it asserts an
+// extra invariant the others don't: the returned `score` field MUST be 0
+// (tier-2 geo path returns score=0 in store.go). Pinning score==0 makes
+// the test fail loudly if affinityConfidenceRatio is ever lowered to a
+// value (≤1.25) where the 10/8 count ratio would actually clear tier 1 —
+// at that point the resolver would return a non-zero affinity score and
+// this assertion catches it, even before the wantMethod string check.
 func TestResolveWithContext_Tier1_ScoresTooCloseFallsThrough(t *testing.T) {
-	nodes := []nodeInfo{
-		{PublicKey: "72aaaaaaaaaa", Role: "repeater", Name: "candX", HasGPS: true, Lat: 47.6, Lon: -122.3},   // Seattle
-		{PublicKey: "72bbbbbbbbbb", Role: "repeater", Name: "candY", HasGPS: true, Lat: 34.05, Lon: -118.25}, // LA (near anchor)
-		{PublicKey: "ffeeeeeeeeee", Role: "repeater", Name: "anchor", HasGPS: true, Lat: 34.1, Lon: -118.3},
-	}
-	pm := buildPrefixMap(nodes)
-
-	ctxPK := "ffeeeeeeeeee"
+	pm := buildPrefixMap(tier1StdNodes)
 	g := NewNeighborGraph()
 	// Both above affinityMinObservations, but within 3× of each other →
 	// ratio guard fails, fall-through expected.
-	seedAffinity(g, ctxPK, "72aaaaaaaaaa", "72", "obs1", 10)
-	seedAffinity(g, ctxPK, "72bbbbbbbbbb", "72", "obs1", 8)
+	seedAffinity(g, tier1Anchor, "72aaaaaaaaaa", "72", "obs1", 10)
+	seedAffinity(g, tier1Anchor, "72bbbbbbbbbb", "72", "obs1", 8)
 
-	r, method, _ := pm.resolveWithContext("72", []string{ctxPK}, g)
+	r, method, score := pm.resolveWithContext("72", []string{tier1Anchor}, g)
 	if r == nil {
 		t.Fatal("expected non-nil candidate")
+	}
+	// Direct pin on score==0: catches a lowered affinityConfidenceRatio
+	// constant that would let 10/8 clear the ratio guard and return a
+	// non-zero affinity score.
+	if score != 0 {
+		t.Fatalf("expected tier-2 fall-through (score==0); got score=%f via %s — affinityConfidenceRatio (%v) may have been lowered to admit a 1.25× ratio",
+			score, method, affinityConfidenceRatio)
 	}
 	if method == "neighbor_affinity" {
 		t.Fatalf("tier 1 must fall through when scores are too close (< %v ratio); got method=%s",
