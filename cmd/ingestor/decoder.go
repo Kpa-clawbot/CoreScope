@@ -172,7 +172,7 @@ func decodeHeader(b byte) Header {
 	}
 }
 
-func decodePath(pathByte byte, buf []byte, offset int) (Path, int) {
+func decodePath(pathByte byte, buf []byte, offset int) (Path, int, error) {
 	hashSize := int(pathByte>>6) + 1
 	hashCount := int(pathByte & 0x3F)
 	totalBytes := hashSize * hashCount
@@ -187,11 +187,12 @@ func decodePath(pathByte byte, buf []byte, offset int) (Path, int) {
 		hops = append(hops, strings.ToUpper(hex.EncodeToString(buf[start:end])))
 	}
 
+	// RED stub — firmware validity check added in GREEN commit (#1211 r1).
 	return Path{
 		HashSize:  hashSize,
 		HashCount: hashCount,
 		Hops:      hops,
-	}, totalBytes
+	}, totalBytes, nil
 }
 
 // isTransportRoute delegates to packetpath.IsTransportRoute.
@@ -584,7 +585,10 @@ func DecodePacket(hexString string, channelKeys map[string]string, validateSigna
 	pathByte := buf[offset]
 	offset++
 
-	path, bytesConsumed := decodePath(pathByte, buf, offset)
+	path, bytesConsumed, decodeErr := decodePath(pathByte, buf, offset)
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
 	offset += bytesConsumed
 
 	// Bounds check: pathByte is wire-supplied (hash_size in upper 2 bits,

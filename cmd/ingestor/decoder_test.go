@@ -1114,7 +1114,7 @@ func TestDecodePayloadControl(t *testing.T) {
 
 func TestDecodePathTruncatedBuffer(t *testing.T) {
 	// path byte claims 5 hops of 2 bytes = 10 bytes, but only 4 available
-	path, consumed := decodePath(0x45, []byte{0xAA, 0x11, 0xBB, 0x22}, 0)
+	path, consumed, _ := decodePath(0x45, []byte{0xAA, 0x11, 0xBB, 0x22}, 0)
 	if path.HashCount != 5 {
 		t.Errorf("hashCount=%d, want 5", path.HashCount)
 	}
