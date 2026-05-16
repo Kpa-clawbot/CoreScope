@@ -1844,7 +1844,7 @@
       }
     } catch (e) {
       if (isStaleMessageRequest(request)) return;
-      msgEl.innerHTML = `<div class="ch-empty">Failed to load messages: ${e.message}</div>`;
+      msgEl.innerHTML = '<div class="ch-empty">Failed to load messages: ' + escapeHtml((e && e.message) || 'Unknown error') + '</div>';
     }
   }
 
