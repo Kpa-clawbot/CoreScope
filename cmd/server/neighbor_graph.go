@@ -71,6 +71,23 @@ func (e *NeighborEdge) Score(now time.Time) float64 {
 	return countFactor * decay
 }
 
+// Confidence returns a source-diversity multiplier in (0, 1] derived from the
+// number of distinct observers that have contributed to this edge. Issue #1229
+// (Option C): edges corroborated by multiple independent observers should
+// outrank edges seen by a single observer at the same raw score.
+//
+// Formula: min(1.0, max(1, |Observers|) / affinityObserverSaturation).
+// With saturation=3, a single observer yields 1/3, two observers 2/3, and
+// three-or-more observers saturate at 1.0 — full historical weight.
+//
+// STUB: real implementation lands in the GREEN commit. Returning 1.0 here
+// keeps the resolver behavior identical so the RED test fails on the
+// behavioral assertion (resolver picks the wrong candidate), not on a
+// missing method.
+func (e *NeighborEdge) Confidence() float64 {
+	return 1.0
+}
+
 // AvgSNR returns the average SNR, or 0 if no samples.
 func (e *NeighborEdge) AvgSNR() float64 {
 	if e.SNRCount == 0 {
