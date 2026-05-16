@@ -417,11 +417,16 @@ func sortBeam(beam []beamEntry) {
 	})
 }
 
+// buildGraphFn is the function used by ensureNeighborGraph to rebuild the
+// neighbor graph. It's a package-level var so tests can swap it for a counter
+// wrapper. Default is BuildFromStore.
+var buildGraphFn = func(s *PacketStore) *NeighborGraph { return BuildFromStore(s) }
+
 // ensureNeighborGraph triggers a graph rebuild if nil or stale.
 func (s *PacketStore) ensureNeighborGraph() {
 	if s.graph != nil && !s.graph.IsStale() {
 		return
 	}
-	g := BuildFromStore(s)
+	g := buildGraphFn(s)
 	s.graph = g
 }
