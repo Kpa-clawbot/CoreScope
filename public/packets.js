@@ -118,7 +118,6 @@
         ev.stopPropagation();
         ev.preventDefault();
         table[REVEAL_FLAG] = true;
-        if (table.id) revealById.set(table.id, true);
         clearHidden(table);
         if (table.dataset.resizable) {
           table.style.tableLayout = 'auto';
@@ -139,7 +138,6 @@
         rehide.addEventListener('click', function (ev2) {
           ev2.stopPropagation();
           ev2.preventDefault();
-          if (table.id) revealById.delete(table.id);
           table[REVEAL_FLAG] = false;
           apply(table);
         });

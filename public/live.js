@@ -976,9 +976,6 @@
             <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
           </div>
         </div>
-          <button class="live-controls-toggle" data-live-controls-toggle id="liveControlsToggle"
-                  aria-expanded="false" aria-controls="liveControlsBody"
-                  aria-label="Show live controls">⚙</button>
         </div>
         </div><!-- /#liveHeader -->
         <button class="live-header-show-btn hidden" id="liveHeaderShowBtn" title="Show MESH LIVE panel" aria-label="Show MESH LIVE panel">📡 LIVE</button>
