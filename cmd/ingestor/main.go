@@ -11,11 +11,13 @@ import (
 	"math"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -173,6 +175,14 @@ func main() {
 		})
 
 		client := mqtt.NewClient(opts)
+		// Register liveness state BEFORE Connect so the attempt counter is
+		// available to OnConnectAttempt on the very first dial.
+		liveness := &SourceLivenessState{
+			Tag:           tag,
+			Broker:        source.Broker,
+			IsConnectedFn: client.IsConnected,
+		}
+		registerLivenessState(liveness)
 		token := client.Connect()
 		// With ConnectRetry=true, token.Wait() blocks forever for unreachable brokers.
 		// WaitTimeout lets startup proceed; the client keeps retrying in the background
@@ -212,6 +222,12 @@ func main() {
 		log.Printf("Running — %d MQTT source(s) connected", connectedCount)
 	}
 
+	// #1212: per-source stall watchdog. Detects "silently dead" sources
+	// where the client reports connected but no messages have flowed. Logs
+	// a WARN line every minute for any source silent for >5m. Scan every
+	// 60s so detection latency is bounded.
+	watchdogTicker := runLivenessWatchdog(60*time.Second, 5*time.Minute)
+
 	// Wait for shutdown signal
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -221,6 +237,7 @@ func main() {
 	retentionTicker.Stop()
 	metricsRetentionTicker.Stop()
 	statsTicker.Stop()
+	watchdogTicker.Stop()
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
 		c.Disconnect(5000) // 5s to allow in-flight messages to drain
@@ -230,7 +247,18 @@ func main() {
 
 // buildMQTTOpts creates MQTT client options for a source with bounded reconnect
 // backoff, connect timeout, and TLS/auth configuration.
+//
+// Logs every TCP/TLS dial via OnConnectAttempt. Unlike SetReconnectingHandler
+// (which only fires inside paho's reconnect goroutine and can be silent if
+// that loop never iterates), OnConnectAttempt fires on every attempt — the
+// initial Connect() and every reconnect. This is the observability fix for
+// #1212 (prod outage on 2026-05-15 where the disconnect was logged but no
+// reconnect activity was ever visible).
 func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
+	tag := source.Name
+	if tag == "" {
+		tag = source.Broker
+	}
 	opts := mqtt.NewClientOptions().
 		AddBroker(source.Broker).
 		SetAutoReconnect(true).
@@ -239,6 +267,21 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 		SetMaxReconnectInterval(30 * time.Second).
 		SetConnectTimeout(10 * time.Second).
 		SetWriteTimeout(10 * time.Second)
+
+	opts.SetConnectionAttemptHandler(func(broker *url.URL, tlsCfg *tls.Config) *tls.Config {
+		// Look up the per-source liveness state (registered in main) so we
+		// can attach an attempt counter. If not yet registered (first dial
+		// from Connect()), fall through with attempt=1.
+		var attempt int64 = 1
+		livenessRegistryMu.RLock()
+		s := livenessRegistry[tag]
+		livenessRegistryMu.RUnlock()
+		if s != nil {
+			attempt = atomic.AddInt64(&s.AttemptCount, 1)
+		}
+		log.Printf("MQTT [%s] connection attempt #%d to %s", tag, attempt, broker.String())
+		return tlsCfg
+	})
 
 	if source.Username != "" {
 		opts.SetUsername(source.Username)
@@ -255,6 +298,9 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 }
 
 func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, channelKeys map[string]string, cfg *Config) {
+	// Liveness watchdog (#1212): record receipt before any processing so a
+	// slow handler still counts as "source is alive". Cheap atomic store.
+	markLivenessForTag(tag, time.Now())
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("MQTT [%s] panic in handler: %v", tag, r)
