@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -473,8 +474,9 @@ func TestHotStartup_PerfStoreHTTP(t *testing.T) {
 }
 
 func TestHotStartup_ConcurrentQueryDuringBackgroundLoad(t *testing.T) {
-	// 3 days × 50 tx/day = 150 total
-	dbPath := createTestDBMultiDay(t, 3, 50)
+	// 5 days × 200 tx/day = 1000 total — small enough to run in CI fast,
+	// large enough to give pollers >=1 query during the background fill.
+	dbPath := createTestDBMultiDay(t, 5, 200)
 
 	db, err := OpenDB(dbPath)
 	if err != nil {
@@ -482,9 +484,9 @@ func TestHotStartup_ConcurrentQueryDuringBackgroundLoad(t *testing.T) {
 	}
 	defer db.conn.Close()
 
-	// Hot load: only last 24h → ~50 packets in memory
+	// Hot load: only last 24h → ~200 packets in memory
 	store := NewPacketStore(db, &PacketStoreConfig{
-		RetentionHours:  72,
+		RetentionHours:  120,
 		HotStartupHours: 24,
 	})
 	if err := store.Load(); err != nil {
@@ -493,25 +495,58 @@ func TestHotStartup_ConcurrentQueryDuringBackgroundLoad(t *testing.T) {
 
 	preLen := len(store.packets)
 
-	// Start background fill
+	// Real invariant (Munger r2 #5): while background fill is running,
+	// the result set for a fixed [since, until] window must be monotonic
+	// in TIME — rows only appear, never disappear. The query window must
+	// straddle the moving oldestLoaded boundary so we exercise both the
+	// SQL fallback (since < oldestLoaded) and the in-memory path
+	// (oldestLoaded shrinks below since as chunks merge).
+	//
+	// since=200h ago covers everything; as oldestLoaded retreats from
+	// 24h ago to 120h ago, the answer source switches from SQL fallback
+	// to in-memory; Total must never decrease across that switch.
+	since := time.Now().UTC().Add(-200 * time.Hour).Format(time.RFC3339)
+	q := PacketQuery{Since: since, Limit: 5000, Order: "ASC"}
+
+	// Start background fill.
 	go store.loadBackgroundChunks()
 
-	// Fire 50 concurrent queries while background fill runs
+	// Pollers: each goroutine keeps querying until the loader is done,
+	// asserting that within its own series Total only grows or stays equal.
+	// A shrink — even by one row — is a real-invariant violation that
+	// the trivial Total>=0 / postLen>=preLen tests could not catch.
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	pollers := 8
+	totalSamples := atomicSamples{}
+	for i := 0; i < pollers; i++ {
 		wg.Add(1)
-		go func() {
+		go func(i int) {
 			defer wg.Done()
-			result := store.QueryPackets(PacketQuery{Limit: 10, Order: "DESC"})
-			if result.Total < 0 {
-				t.Errorf("QueryPackets returned negative Total: %d", result.Total)
+			lastTotal := -1
+			for !store.backgroundLoadDone.Load() {
+				r := store.QueryPackets(q)
+				if r == nil {
+					continue
+				}
+				if lastTotal >= 0 && r.Total < lastTotal {
+					t.Errorf("poller %d: result set shrank (%d → %d) — non-monotonic across moving oldestLoaded boundary",
+						i, lastTotal, r.Total)
+				}
+				lastTotal = r.Total
+				totalSamples.inc()
 			}
-		}()
+			r := store.QueryPackets(q)
+			if r != nil {
+				if lastTotal >= 0 && r.Total < lastTotal {
+					t.Errorf("poller %d: post-load result set shrank (%d → %d)", i, lastTotal, r.Total)
+				}
+				totalSamples.inc()
+			}
+		}(i)
 	}
 	wg.Wait()
 
-	// Wait for background fill to complete
-	waitForBackgroundLoad(t, store, 15*time.Second)
+	waitForBackgroundLoad(t, store, 60*time.Second)
 
 	store.mu.RLock()
 	postLen := len(store.packets)
@@ -520,6 +555,18 @@ func TestHotStartup_ConcurrentQueryDuringBackgroundLoad(t *testing.T) {
 	if postLen < preLen {
 		t.Errorf("expected packet count after background load (%d) >= pre-background (%d)", postLen, preLen)
 	}
+	if totalSamples.get() == 0 {
+		t.Error("pollers observed zero samples — test did not actually exercise the invariant")
+	}
+}
+
+type atomicSamples struct {
+	n int64
+}
+
+func (a *atomicSamples) inc() { atomic.AddInt64(&a.n, 1) }
+func (a *atomicSamples) get() int64 {
+	return atomic.LoadInt64(&a.n)
 }
 
 // TestHotStartup_BackgroundLoadFailureSurfacesInPerf asserts that when every
