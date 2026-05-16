@@ -951,6 +951,43 @@ async function run() {
   });
 
 
+  // Issue #1207: Live Feed panel (bottom-left) must NOT render as orphan
+  // chrome (only header buttons ✕ + ◫) when there are no feed items yet.
+  // Either content (live-feed-item) renders, or an explicit empty-state
+  // placeholder fills the panel-content body. The bug is the panel showing
+  // its header chrome with an empty body on first paint / cold load.
+  await test('#1207 Live Feed panel never renders as empty chrome', async () => {
+    await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveFeed', { timeout: 10000 });
+    // Force the empty state: clear any feed items that may have arrived,
+    // then verify the panel still has meaningful body content.
+    const state = await page.evaluate(() => {
+      const feed = document.getElementById('liveFeed');
+      if (!feed) return { found: false };
+      const content = feed.querySelector('.panel-content');
+      if (!content) return { found: true, hasContent: false };
+      // Wipe item children to simulate first-paint / no-traffic state.
+      content.querySelectorAll('.live-feed-item').forEach((el) => el.remove());
+      const visibleText = (content.innerText || '').trim();
+      const childCount = content.children.length;
+      return {
+        found: true,
+        hasContent: true,
+        feedHidden: feed.classList.contains('hidden'),
+        visibleText,
+        childCount,
+      };
+    });
+    assert(state.found, '#liveFeed should be present on Live page');
+    assert(state.hasContent, '#liveFeed must have a .panel-content body');
+    if (state.feedHidden) return; // user hid the feed → header chrome gone too
+    assert(
+      state.visibleText.length > 0 || state.childCount > 0,
+      `#1207: Live Feed renders as empty chrome (no content body). ` +
+        `visibleText=${JSON.stringify(state.visibleText)}, childCount=${state.childCount}`,
+    );
+  });
+
   // Test 11: Live page heat checkbox disabled by matrix/ghosts mode
   await test('Live heat disabled when ghosts mode active', async () => {
     await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
