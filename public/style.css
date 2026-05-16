@@ -1068,8 +1068,24 @@ body.scroll-locked { overflow: hidden; }
   max-width: calc(100vw - 24px);
   font-size: 13px;
   max-height: calc(100% - 24px); overflow-y: auto;
+  /* #1236: keep the scrollbar gutter reserved so the scroll affordance is
+     visible even when content briefly fits — users get a consistent visual
+     cue that the panel is scrollable. */
+  scrollbar-gutter: stable;
 }
-.map-controls h3 { font-size: 15px; margin-bottom: 10px; }
+/* #1236: sticky panel title so the scroll affordance is always visible at the
+   top of the scroll container when content overflows on small viewports. */
+.map-controls h3 {
+  font-size: 15px;
+  margin: -14px -16px 10px -16px;
+  padding: 10px 16px;
+  position: sticky;
+  top: -14px;
+  background: var(--card-bg);
+  z-index: 2;
+  border-bottom: 1px solid var(--border);
+  border-radius: 10px 10px 0 0;
+}
 .mc-section { margin-bottom: 10px; }
 .mc-label { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .3px; color: var(--text-muted); margin-bottom: 4px; }
 .mc-section label { display: block; padding: 2px 0; cursor: pointer; }
@@ -3203,6 +3219,13 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .map-side-pane .pane-toggle { cursor: pointer; padding: 8px; font-size: 14px; text-align: center; }
 .map-side-pane .pane-content { display: none; }
 .map-side-pane.expanded .pane-content { display: block; }
+/* #1236: on mobile the path-inspector side pane was eating 32px of horizontal
+   width (flex:0 0 32px) inside #map-wrap, leaving an unused gutter on the
+   right of the leaflet canvas. Path Inspector is a desktop-only convenience;
+   hide the pane on narrow viewports so the map fills 100% of the viewport. */
+@media (max-width: 640px) {
+  .map-side-pane { display: none; }
+}
 
 /* Tools landing page */
 .tools-landing { padding: 24px; max-width: 600px; }
