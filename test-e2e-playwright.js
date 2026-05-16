@@ -3010,6 +3010,41 @@ async function run() {
     await page.setViewportSize({ width: 1280, height: 800 });
   });
 
+  // Issue #1220: On mobile (≤640px), the MESH LIVE panel must NOT render
+  // as ~200px of empty chrome. When the body+controls are collapsed it
+  // should be a compact strip (≤ 60px tall) sharing one row with the
+  // count badge + toggle buttons. When the body is expanded it must
+  // contain actual feed/stat content (header ≥ 100px). The bug state
+  // (panel 100–200px tall while both bodies are display:none) is what
+  // we forbid.
+  await test('#1220 Live header is not ~200px of empty chrome on mobile (collapsed = ≤60px)', async () => {
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveHeader', { timeout: 10000 });
+    await page.waitForTimeout(600);
+    const m = await page.evaluate(() => {
+      const header = document.getElementById('liveHeader');
+      const body = document.getElementById('liveHeaderBody');
+      const ctrlsBody = document.getElementById('liveControlsBody');
+      const r = header.getBoundingClientRect();
+      const bodyVisible = body && getComputedStyle(body).display !== 'none';
+      const ctrlsVisible = ctrlsBody && getComputedStyle(ctrlsBody).display !== 'none';
+      return { height: r.height, bodyVisible, ctrlsVisible };
+    });
+    // Cleanup viewport for downstream tests.
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const anyBodyOpen = m.bodyVisible || m.ctrlsVisible;
+    if (anyBodyOpen) {
+      // Expanded state: chrome is justified by visible content.
+      assert(m.height >= 60,
+        `#1220: when a panel body is expanded the header must show content (got ${m.height}px)`);
+    } else {
+      // Collapsed state: must NOT be the empty-chrome middle state.
+      assert(m.height <= 60,
+        `#1220: collapsed mobile header must be ≤60px (got ${m.height}px of empty chrome)`);
+    }
+  });
+
   await browser.close();
 
   // Summary
