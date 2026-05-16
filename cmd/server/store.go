@@ -1544,6 +1544,9 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	// Hoist getCachedNodesAndPM() once before the observation loop to avoid
 	// per-observation function calls (review item #1).
 	_, cachedPM := s.getCachedNodesAndPM()
+	// Hoist atomic graph.Load() out of the per-row loop too (PR #1208
+	// carmack #1) — one Load per ingest call, not one per row.
+	cachedGraph := s.graph.Load()
 
 	// Decode-window tracking: resolved pubkeys per-tx for touchRelayLastSeen,
 	// and resolved paths per-obs for broadcast/persist.
@@ -1626,7 +1629,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			var resolvedPubkeys []string
 			var rpForBroadcast []*string
 			if r.pathJSON != "" && r.pathJSON != "[]" && cachedPM != nil {
-				rpForBroadcast = resolvePathForObs(r.pathJSON, r.observerID, tx, cachedPM, s.graph.Load())
+				rpForBroadcast = resolvePathForObs(r.pathJSON, r.observerID, tx, cachedPM, cachedGraph)
 				resolvedPubkeys = extractResolvedPubkeys(rpForBroadcast)
 				// Feed decode-window consumers: addToByNode + resolvedPubkeyIndex
 				for _, pk := range resolvedPubkeys {
@@ -1993,7 +1996,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		var obsResolvedPath []*string
 		if r.pathJSON != "" && r.pathJSON != "[]" {
 			if pm != nil {
-				obsResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, s.graph.Load())
+				obsResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, graphRef)
 				pks := extractResolvedPubkeys(obsResolvedPath)
 				for _, pk := range pks {
 					s.addToByNode(tx, pk)
@@ -3565,11 +3568,17 @@ func buildAggregateHopContextPubkeys(txs []*StoreTx, pm *prefixMap) []string {
 func (s *PacketStore) hopResolverPerTx(pm *prefixMap) (resolveHop func(string) *nodeInfo, setContext func([]string)) {
 	hopCache := make(map[string]*nodeInfo, 16)
 	var contextPubkeys []string
+	// Hoist the atomic graph.Load() out of the per-hop closure body so we do
+	// one Load per resolver instance, not one per resolveHop call (PR #1208
+	// carmack #1). Pair (resolveHop, setContext) is documented single-
+	// goroutine, single-request scope — pinning the graph here matches that
+	// lifetime.
+	graph := s.graph.Load()
 	resolveHop = func(hop string) *nodeInfo {
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph.Load())
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, graph)
 		hopCache[hop] = r
 		return r
 	}
@@ -5375,11 +5384,12 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 	}
 
 	hopCache := make(map[string]*nodeInfo)
+	graph := s.graph.Load() // hoist out of resolver closure (PR #1208 carmack #1)
 	resolveHop := func(hop string) *nodeInfo {
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph.Load())
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, graph)
 		hopCache[hop] = r
 		return r
 	}
@@ -7823,6 +7833,7 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 	// (the index iterates raw subpath strings, not per-tx). See #1197.
 	contextPubkeys := buildAggregateHopContextPubkeys(s.packets, pm)
 	hopCache := make(map[string]*nodeInfo)
+	graph := s.graph.Load() // hoist out of resolver closure (PR #1208 carmack #1)
 	resolveHop := func(hop string) string {
 		if cached, ok := hopCache[hop]; ok {
 			if cached != nil {
@@ -7830,7 +7841,7 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 			}
 			return hop
 		}
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph.Load())
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, graph)
 		hopCache[hop] = r
 		if r != nil {
 			return r.Name
@@ -7906,6 +7917,7 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 	// aggregator over s.spIndex / per-tx fallback both need it. See #1197.
 	contextPubkeys := buildAggregateHopContextPubkeys(s.packets, pm)
 	hopCache := make(map[string]*nodeInfo)
+	graph := s.graph.Load() // hoist out of resolver closure (PR #1208 carmack #1)
 	resolveHop := func(hop string) string {
 		if cached, ok := hopCache[hop]; ok {
 			if cached != nil {
@@ -7913,7 +7925,7 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 			}
 			return hop
 		}
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph.Load())
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, graph)
 		hopCache[hop] = r
 		if r != nil {
 			return r.Name
@@ -8057,11 +8069,14 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 	// this subpath. This is the right scope — those are the packets that
 	// witnessed the requested hop sequence. See #1197.
 	contextPubkeys := buildAggregateHopContextPubkeys(matchedTxs, pm)
+	// Hoist atomic graph.Load() once for the whole request (PR #1208
+	// carmack #1) — used by the rawHops loop AND the matched-tx loop below.
+	graph := s.graph.Load()
 
 	// Resolve the requested hops
 	nodes := make([]map[string]interface{}, len(rawHops))
 	for i, hop := range rawHops {
-		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, s.graph.Load())
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, graph)
 		entry := map[string]interface{}{"hop": hop, "name": hop, "lat": nil, "lon": nil, "pubkey": nil}
 		if r != nil {
 			entry["name"] = r.Name
@@ -8117,7 +8132,7 @@ func (s *PacketStore) GetSubpathDetail(rawHops []string) map[string]interface{} 
 		hops := txGetParsedPath(tx)
 		resolved := make([]string, len(hops))
 		for i, h := range hops {
-			r, _, _ := pm.resolveWithContext(h, txCtx, s.graph.Load())
+			r, _, _ := pm.resolveWithContext(h, txCtx, graph)
 			if r != nil {
 				resolved[i] = r.Name
 			} else {
