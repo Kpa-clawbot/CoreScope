@@ -399,8 +399,10 @@ func TestCacheTTLDefaults(t *testing.T) {
 	if store.collisionCacheTTL != 3600*time.Second {
 		t.Fatalf("expected default collisionCacheTTL=3600s, got %v", store.collisionCacheTTL)
 	}
-	if store.rfCacheTTL != 15*time.Second {
-		t.Fatalf("expected default rfCacheTTL=15s, got %v", store.rfCacheTTL)
+	// #1239: default bumped 15s → 60s to smooth cold-miss churn on
+	// /api/analytics/distance and friends under heavy ingest.
+	if store.rfCacheTTL != 60*time.Second {
+		t.Fatalf("expected default rfCacheTTL=60s, got %v", store.rfCacheTTL)
 	}
 }
 

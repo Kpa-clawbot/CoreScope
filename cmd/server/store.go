@@ -438,7 +438,15 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		chanCache:     make(map[string]*cachedResult),
 		distCache:     make(map[string]*cachedResult),
 		subpathCache:  make(map[string]*cachedResult),
-		rfCacheTTL:         15 * time.Second,
+		// #1239: 60 seconds by default. rfCacheTTL is the shared TTL for
+		// the RF, topology, distance, hash-sizes, subpath, and channel
+		// analytics caches. Distance analytics IS viewed live during
+		// active analysis sessions (operators won't tolerate a 5-min
+		// lag), so the bump from 15s → 60s smooths the most-frequent
+		// cold-miss churn during heavy ingest without freezing data.
+		// Override via cacheTTL.analyticsRF in config.json (also
+		// propagates to distance / topology / hash-sizes / etc.).
+		rfCacheTTL: 60 * time.Second,
 		collisionCacheTTL: 3600 * time.Second,
 		invCooldown:       300 * time.Second,
 		spIndex:       make(map[string]int, 4096),
