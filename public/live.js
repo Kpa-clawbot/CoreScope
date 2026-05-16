@@ -243,6 +243,11 @@
   // #1206: publish the VCR bar's measured height as --vcr-bar-height on the
   // .live-page root so bottom-pinned overlays (feed, legend, corner panels)
   // can reserve the right amount of space and never get occluded by the bar.
+  // Cleanup state is captured in module-scoped _vcrHeightCleanup so destroy()
+  // can disconnect the ResizeObserver + remove the resize/visualViewport
+  // listeners on SPA page navigation (otherwise re-mounts of /live would
+  // accumulate observers forever — same leak class as #1180).
+  var _vcrHeightCleanup = null;
   function initVCRHeightTracker() {
     var bar = document.getElementById('vcrBar');
     var page = document.querySelector('.live-page');
@@ -252,13 +257,21 @@
       page.style.setProperty('--vcr-bar-height', h + 'px');
     }
     publish();
+    var ro = null;
     if (typeof ResizeObserver === 'function') {
-      try { new ResizeObserver(publish).observe(bar); } catch (_) { /* ignore */ }
+      try { ro = new ResizeObserver(publish); ro.observe(bar); } catch (_) { ro = null; }
     }
     window.addEventListener('resize', publish);
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', publish);
     }
+    _vcrHeightCleanup = function() {
+      if (ro) { try { ro.disconnect(); } catch (_) {} ro = null; }
+      window.removeEventListener('resize', publish);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', publish);
+      }
+    };
   }
 
   function vcrSetMode(mode) {
@@ -3377,6 +3390,7 @@
       window.removeEventListener('orientationchange', _onResize);
       if (window.visualViewport) window.visualViewport.removeEventListener('resize', _onResize);
     }
+    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
     // Restore #app height to CSS default
     const appEl = document.getElementById('app');
     if (appEl) appEl.style.height = '';
