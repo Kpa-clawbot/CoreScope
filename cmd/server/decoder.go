@@ -144,9 +144,35 @@ func decodeHeader(b byte) Header {
 	}
 }
 
+// Firmware-derived limits — see firmware/src/MeshCore.h:19,21.
+const (
+	maxPathSize      = 64  // MAX_PATH_SIZE — total path bytes allowed
+	maxPacketPayload = 184 // MAX_PACKET_PAYLOAD — max raw payload bytes
+)
+
+// isValidPathLen mirrors firmware Packet::isValidPathLen
+// (firmware/src/Packet.cpp:13-18). hash_size==4 is reserved; total path bytes
+// must fit within MAX_PATH_SIZE.
+func isValidPathLen(pathByte byte) bool {
+	hashCount := int(pathByte & 0x3F)
+	hashSize := int(pathByte>>6) + 1
+	if hashSize == 4 {
+		return false // reserved
+	}
+	return hashCount*hashSize <= maxPathSize
+}
+
 func decodePath(pathByte byte, buf []byte, offset int) (Path, int, error) {
 	hashSize := int(pathByte>>6) + 1
 	hashCount := int(pathByte & 0x3F)
+	// Only enforce firmware validity when path bytes are actually consumed.
+	// hash_count==0 means no path bytes regardless of hash_size, so the
+	// reserved-hash_size and over-MAX_PATH_SIZE checks cannot harm the
+	// buffer; the existing decoder tolerates pathByte=0xC0 etc on
+	// zero-hop DIRECT packets (TestZeroHopTransportDirectHashSizeWithNonZeroUpperBits).
+	if hashCount > 0 && !isValidPathLen(pathByte) {
+		return Path{}, 0, fmt.Errorf("invalid path encoding: pathByte 0x%02X (hash_size=%d hash_count=%d) violates firmware validity (Packet.cpp:13-18, MAX_PATH_SIZE=%d)", pathByte, hashSize, hashCount, maxPathSize)
+	}
 	totalBytes := hashSize * hashCount
 	hops := make([]string, 0, hashCount)
 
@@ -159,7 +185,6 @@ func decodePath(pathByte byte, buf []byte, offset int) (Path, int, error) {
 		hops = append(hops, strings.ToUpper(hex.EncodeToString(buf[start:end])))
 	}
 
-	// RED stub — firmware validity check added in GREEN commit (#1211 r1).
 	return Path{
 		HashSize:  hashSize,
 		HashCount: hashCount,
@@ -398,6 +423,11 @@ func DecodePacket(hexString string, validateSignatures bool) (*DecodedPacket, er
 	}
 
 	payloadBuf := buf[offset:]
+	// Firmware caps payload at MAX_PACKET_PAYLOAD=184 (firmware/src/MeshCore.h:19).
+	// Anything larger cannot be a valid wire packet — drop it.
+	if len(payloadBuf) > maxPacketPayload {
+		return nil, fmt.Errorf("packet payload (%d bytes) exceeds firmware MAX_PACKET_PAYLOAD=%d (MeshCore.h:19)", len(payloadBuf), maxPacketPayload)
+	}
 	payload := decodePayload(header.PayloadType, payloadBuf, validateSignatures)
 
 	// TRACE packets store hop IDs in the payload (buf[9:]) rather than the header

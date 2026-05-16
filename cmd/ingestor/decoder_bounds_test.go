@@ -78,9 +78,10 @@ func TestDecodePath_AcceptsValidEncodings_Issue1211(t *testing.T) {
 }
 
 // Kent #1 — pin tautological assertion: error MUST mention "path length"
-// AND "exceeds buffer", not just non-nil.
+// AND "exceeds buffer", not just non-nil. Uses firmware-valid pathByte
+// that exhausts a small buffer, so the OOB guard fires (not validity).
 func TestDecodePacketBoundsFromWireErrorPhrasing_Issue1211(t *testing.T) {
-	raw := "12F6" + strings.Repeat("AA", 13)
+	raw := "120A" + strings.Repeat("AA", 5)
 	_, err := DecodePacket(raw, nil, false)
 	if err == nil {
 		t.Fatalf("expected error, got nil")

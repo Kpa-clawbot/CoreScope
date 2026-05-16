@@ -340,13 +340,29 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		validateSigs := cfg.ShouldValidateSignatures()
 		decoded, err := DecodePacket(rawHex, channelKeys, validateSigs)
 		if err != nil {
-			// Per #1211: include enough context to repro malformed-packet drops.
+			// Per #1211: include enough context to repro malformed-packet drops,
+			// but NEVER log the full observer ID (PII / fingerprinting risk).
+			// We log:
+			//   - topic prefix (with observer segment elided)
+			//   - 8-char observer prefix
+			//   - payload length, claimed length (rawHex len)
 			obs := ""
 			if len(parts) > 2 {
 				obs = parts[2]
 			}
-			// observer truncated to 8-char prefix to avoid logging full ID (matches blacklist-log pattern at line 280).
-			log.Printf("MQTT [%s] decode error: %v (topic=%s observer=%.8s rawHexLen=%d)", tag, err, topic, obs, len(rawHex))
+			// Build a redacted topic that replaces parts[2] (the observer id)
+			// with the 8-char prefix, so the rest of the topic is preserved
+			// for debugging without leaking the full identifier.
+			redactedTopic := topic
+			if len(parts) > 2 {
+				redactedParts := make([]string, len(parts))
+				copy(redactedParts, parts)
+				if len(parts[2]) > 8 {
+					redactedParts[2] = parts[2][:8]
+				}
+				redactedTopic = strings.Join(redactedParts, "/")
+			}
+			log.Printf("MQTT [%s] decode error: %v (topic=%s observer=%.8s rawHexLen=%d)", tag, err, redactedTopic, obs, len(rawHex))
 			return
 		}
 

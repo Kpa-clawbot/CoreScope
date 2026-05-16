@@ -118,8 +118,12 @@ func TestDecodePath_AcceptsValidEncodings_Issue1211(t *testing.T) {
 // (Kent #1) — `TestDecodePacketBoundsFromWire_Issue1211` used to assert only
 // `err != nil`; a generic recover would have passed. Now must contain
 // "path length" AND "exceeds buffer".
+//
+// Use pathByte=0x0A (hash_size=1, hash_count=10) — firmware-VALID encoding
+// that claims 10 path bytes; buffer only has 5 → the OOB guard fires (not
+// the validity check). This pins the OOB error string specifically.
 func TestDecodePacketBoundsFromWireErrorPhrasing_Issue1211(t *testing.T) {
-	raw := "12F6" + strings.Repeat("AA", 13)
+	raw := "120A" + strings.Repeat("AA", 5)
 	_, err := DecodePacket(raw, false)
 	if err == nil {
 		t.Fatalf("expected error, got nil")
