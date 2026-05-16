@@ -92,7 +92,7 @@ async function gotoLive(page) {
           const rect = el.getBoundingClientRect();
           return rect.width > 0 && rect.height > 0;
         }
-        const scopeBtns = Array.from(container.querySelectorAll('.vcr-scope-btn'));
+        const scopeBtns = Array.from(container.querySelectorAll('.vcr-scope-btn[data-scope]'));
         const more = container.querySelector('.vcr-scope-more, [data-vcr-scope-more]');
         const inlineScopes = scopeBtns.filter(vis).map(b => b.dataset.scope);
         return {
@@ -135,7 +135,7 @@ async function gotoLive(page) {
 
     await step('[1280x800] all 4 VCR scopes visible inline on desktop', async () => {
       const r = await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('.vcr-scope-btns .vcr-scope-btn'));
+        const btns = Array.from(document.querySelectorAll('.vcr-scope-btns .vcr-scope-btn[data-scope]'));
         function vis(el) {
           const cs = getComputedStyle(el);
           if (cs.display === 'none' || cs.visibility === 'hidden') return false;
