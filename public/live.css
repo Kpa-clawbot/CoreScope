@@ -49,6 +49,23 @@
   gap: 1px;
 }
 
+/* #1207: empty-state placeholder fills the feed body so the panel never
+   renders as orphan chrome (✕ + ◫ buttons with no content). The placeholder
+   is always in the DOM; CSS hides it when the feed has live-feed-item
+   siblings. This way the panel body is never empty, even between packets,
+   on first paint, or after a feed clear. */
+.live-feed-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: italic;
+  padding: 12px 8px;
+  text-align: center;
+  opacity: 0.7;
+}
+.live-feed .panel-content:has(.live-feed-item) .live-feed-empty {
+  display: none;
+}
+
 .live-legend .panel-content {
   display: flex;
   flex-direction: column;

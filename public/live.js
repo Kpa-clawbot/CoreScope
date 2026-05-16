@@ -921,7 +921,9 @@
             <button class="panel-corner-btn" data-panel="liveFeed" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
             <button class="feed-hide-btn" id="feedHideBtn" title="Hide feed">✕</button>
           </div>
-          <div class="panel-content" aria-live="polite" aria-relevant="additions" role="log"></div>
+          <div class="panel-content" aria-live="polite" aria-relevant="additions" role="log">
+            <div class="live-feed-empty" aria-hidden="true">Waiting for packets…</div>
+          </div>
         </div>
         <button class="feed-show-btn hidden" id="feedShowBtn" title="Show feed">📋</button>
         <div id="nodeDetailBackdrop" class="node-detail-backdrop"></div>
@@ -2029,6 +2031,15 @@
     if (!feedContent) return;
     feedContent.querySelectorAll('.live-feed-item').forEach(el => el.remove());
     feedDedup.clear();
+    // #1207: ensure empty-state placeholder is present (re-add if a prior
+    // rebuild wiped everything). CSS hides it when items exist.
+    if (!feedContent.querySelector('.live-feed-empty')) {
+      var _ph = document.createElement('div');
+      _ph.className = 'live-feed-empty';
+      _ph.setAttribute('aria-hidden', 'true');
+      _ph.textContent = 'Waiting for packets…';
+      feedContent.appendChild(_ph);
+    }
 
     // Aggregate VCR buffer by hash, then create one feed item per unique hash
     const byHash = new Map();
@@ -3250,7 +3261,11 @@
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.prepend(item);
     requestAnimationFrame(() => requestAnimationFrame(() => item.classList.remove('live-feed-enter')));
-    while (feed.children.length > 25) feed.removeChild(feed.lastChild);
+    // #1207: trim to 25 items, but never evict the empty-state placeholder.
+    while (feed.querySelectorAll('.live-feed-item').length > 25) {
+      var _items = feed.querySelectorAll('.live-feed-item');
+      feed.removeChild(_items[_items.length - 1]);
+    }
 
     // Register
     if (hash) {
