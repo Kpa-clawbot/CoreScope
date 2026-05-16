@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -43,9 +44,11 @@ type Server struct {
 	statsCache   *StatsResponse
 	statsCachedAt time.Time
 
-	// Neighbor affinity graph (lazy-built, cached with TTL)
-	neighborMu    sync.Mutex
-	neighborGraph *NeighborGraph
+	// Neighbor affinity graph (lazy-built, cached with TTL).
+	// neighborRebuilding guards against concurrent background rebuilds.
+	neighborMu        sync.RWMutex
+	neighborGraph     *NeighborGraph
+	neighborRebuilding atomic.Bool
 
 	// Channel PSK keys loaded at startup from rainbow file + config.
 	channelKeys map[string]string

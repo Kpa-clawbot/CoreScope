@@ -76,18 +76,46 @@ type GraphStats struct {
 
 // getNeighborGraph returns the current neighbor graph, rebuilding if stale.
 func (s *Server) getNeighborGraph() *NeighborGraph {
-	s.neighborMu.Lock()
-	defer s.neighborMu.Unlock()
+	s.neighborMu.RLock()
+	g := s.neighborGraph
+	s.neighborMu.RUnlock()
 
-	if s.neighborGraph == nil || s.neighborGraph.IsStale() {
-		if s.store != nil {
-			debugLog := s.cfg != nil && s.cfg.DebugAffinity
-			s.neighborGraph = BuildFromStoreWithLog(s.store, debugLog)
-		} else {
-			s.neighborGraph = NewNeighborGraph()
+	if g == nil {
+		// First call — block once so callers never receive nil.
+		s.neighborMu.Lock()
+		if s.neighborGraph == nil {
+			if s.store != nil {
+				debugLog := s.cfg != nil && s.cfg.DebugAffinity
+				s.neighborGraph = BuildFromStoreWithLog(s.store, debugLog)
+			} else {
+				s.neighborGraph = NewNeighborGraph()
+			}
 		}
+		g = s.neighborGraph
+		s.neighborMu.Unlock()
+		return g
 	}
-	return s.neighborGraph
+
+	// Stale: kick off one background rebuild and return the stale graph
+	// immediately so concurrent callers (e.g. 100 WS clients) are never
+	// queued behind the rebuild.
+	if g.IsStale() && s.neighborRebuilding.CompareAndSwap(false, true) {
+		go func() {
+			defer s.neighborRebuilding.Store(false)
+			var built *NeighborGraph
+			if s.store != nil {
+				debugLog := s.cfg != nil && s.cfg.DebugAffinity
+				built = BuildFromStoreWithLog(s.store, debugLog)
+			} else {
+				built = NewNeighborGraph()
+			}
+			s.neighborMu.Lock()
+			s.neighborGraph = built
+			s.neighborMu.Unlock()
+		}()
+	}
+
+	return g
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────────
