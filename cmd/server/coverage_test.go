@@ -1334,8 +1334,11 @@ func TestBuildTransmissionWhereRFC3339(t *testing.T) {
 		if len(args) != 1 {
 			t.Errorf("expected 1 arg, got %d", len(args))
 		}
-		if !strings.Contains(where[0], "first_seen") {
-			t.Error("expected first_seen comparison for since filter")
+		// PR #1187 r2: RFC3339 since/until MUST use observations.timestamp
+		// subquery so re-observed packets (older first_seen but recent
+		// observation) are still included. Anything else breaks semantics.
+		if !strings.Contains(where[0], "observations") || !strings.Contains(where[0], "timestamp >= ?") {
+			t.Errorf("expected observations.timestamp subquery for RFC3339 since, got %q", where[0])
 		}
 	})
 
@@ -1348,8 +1351,8 @@ func TestBuildTransmissionWhereRFC3339(t *testing.T) {
 		if len(args) != 1 {
 			t.Errorf("expected 1 arg, got %d", len(args))
 		}
-		if !strings.Contains(where[0], "first_seen") {
-			t.Error("expected first_seen comparison for until filter")
+		if !strings.Contains(where[0], "observations") || !strings.Contains(where[0], "timestamp <= ?") {
+			t.Errorf("expected observations.timestamp subquery for RFC3339 until, got %q", where[0])
 		}
 	})
 
