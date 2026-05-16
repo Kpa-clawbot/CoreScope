@@ -474,6 +474,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 
 		mqttMsg := &MQTTPacketMessage{Raw: rawHex}
+		mqttMsg.Timestamp = resolveRxTime(msg, tag)
 		// Parse optional region from JSON payload (#788)
 		if v, ok := msg["region"].(string); ok && v != "" {
 			mqttMsg.Region = v
@@ -650,8 +651,9 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 
 		decodedJSON, _ := json.Marshal(channelMsg)
 
-		now := time.Now().UTC().Format(time.RFC3339)
-		hashInput := fmt.Sprintf("ch:%s:%s:%s", channelIdx, text, now)
+		ingestNow := time.Now().UTC().Format(time.RFC3339)
+		rxTime := resolveRxTime(msg, tag)
+		hashInput := fmt.Sprintf("ch:%s:%s:%s", channelIdx, text, ingestNow)
 		h := sha256.Sum256([]byte(hashInput))
 		hash := hex.EncodeToString(h[:])[:16]
 
@@ -691,7 +693,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 
 		pktData := &PacketData{
-			Timestamp:    now,
+			Timestamp:    rxTime,
 			ObserverID:   "companion",
 			ObserverName: "L1 Pro (BLE)",
 			SNR:          snr,
@@ -743,8 +745,9 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 
 		decodedJSON, _ := json.Marshal(dm)
 
-		now := time.Now().UTC().Format(time.RFC3339)
-		hashInput := fmt.Sprintf("dm:%s:%s", text, now)
+		ingestNow := time.Now().UTC().Format(time.RFC3339)
+		rxTime := resolveRxTime(msg, tag)
+		hashInput := fmt.Sprintf("dm:%s:%s", text, ingestNow)
 		h := sha256.Sum256([]byte(hashInput))
 		hash := hex.EncodeToString(h[:])[:16]
 
@@ -784,7 +787,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 
 		pktData := &PacketData{
-			Timestamp:    now,
+			Timestamp:    rxTime,
 			ObserverID:   "companion",
 			ObserverName: "L1 Pro (BLE)",
 			SNR:          snr,
@@ -977,6 +980,51 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// resolveRxTime returns the observer receive-time for a packet, taken from
+// the MQTT envelope's "timestamp" field. Falls back to ingest time only when
+// the field is missing, unparseable, or implausibly in the future (a
+// clock-skewed observer). Result is always RFC3339 UTC.
+//
+// The envelope timestamp is stamped by the uploader when the radio receives
+// the frame, not when the MQTT message is published — so a buffered packet
+// uploaded hours late still carries its true receive time. Using ingest time
+// (time.Now()) here mis-dated such packets by the upload delay.
+func resolveRxTime(msg map[string]interface{}, tag string) string {
+	now := time.Now().UTC()
+	raw, _ := msg["timestamp"].(string)
+	if raw == "" {
+		return now.Format(time.RFC3339)
+	}
+	t, err := parseEnvelopeTime(raw)
+	if err != nil {
+		log.Printf("MQTT [%s] unparseable timestamp %q, using ingest time", tag, raw)
+		return now.Format(time.RFC3339)
+	}
+	if t.After(now.Add(1 * time.Hour)) {
+		log.Printf("MQTT [%s] future timestamp %q, using ingest time", tag, raw)
+		return now.Format(time.RFC3339)
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// parseEnvelopeTime parses the MQTT envelope timestamp. Two on-wire forms
+// occur: zone-aware ISO8601 (RFC3339), and a naive local-clock ISO string
+// with no zone (python datetime.isoformat()). Zone-aware layouts are tried
+// first; naive layouts are assumed UTC, leaving a bounded residual offset
+// equal to the observer's UTC offset for naive-timestamp uploaders.
+func parseEnvelopeTime(s string) (time.Time, error) {
+	for _, layout := range []string{
+		time.RFC3339,                 // 2026-05-16T10:00:00Z / +02:00
+		"2006-01-02T15:04:05.999999", // python isoformat w/ microseconds
+		"2006-01-02T15:04:05",        // naive ISO
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unrecognized timestamp layout: %q", s)
 }
 
 // deriveHashtagChannelKey derives an AES-128 key from a channel name.
