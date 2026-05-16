@@ -57,10 +57,8 @@
 .live-feed-empty {
   color: var(--text-muted);
   font-size: 12px;
-  font-style: italic;
   padding: 12px 8px;
   text-align: center;
-  opacity: 0.7;
 }
 .live-feed .panel-content:has(.live-feed-item) .live-feed-empty {
   display: none;

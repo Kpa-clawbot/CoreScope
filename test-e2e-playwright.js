@@ -954,13 +954,14 @@ async function run() {
   // Issue #1207: Live Feed panel (bottom-left) must NOT render as orphan
   // chrome (only header buttons ✕ + ◫) when there are no feed items yet.
   // Either content (live-feed-item) renders, or an explicit empty-state
-  // placeholder fills the panel-content body. The bug is the panel showing
-  // its header chrome with an empty body on first paint / cold load.
+  // placeholder with the "Waiting for packets…" copy fills the panel-content
+  // body. The bug is the panel showing its header chrome with an empty body
+  // on first paint / cold load.
   await test('#1207 Live Feed panel never renders as empty chrome', async () => {
     await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#liveFeed', { timeout: 10000 });
     // Force the empty state: clear any feed items that may have arrived,
-    // then verify the panel still has meaningful body content.
+    // then verify the placeholder copy is rendered in the panel body.
     const state = await page.evaluate(() => {
       const feed = document.getElementById('liveFeed');
       if (!feed) return { found: false };
@@ -969,22 +970,135 @@ async function run() {
       // Wipe item children to simulate first-paint / no-traffic state.
       content.querySelectorAll('.live-feed-item').forEach((el) => el.remove());
       const visibleText = (content.innerText || '').trim();
-      const childCount = content.children.length;
       return {
         found: true,
         hasContent: true,
         feedHidden: feed.classList.contains('hidden'),
         visibleText,
-        childCount,
       };
     });
     assert(state.found, '#liveFeed should be present on Live page');
     assert(state.hasContent, '#liveFeed must have a .panel-content body');
     if (state.feedHidden) return; // user hid the feed → header chrome gone too
+    // Pin to the actual placeholder copy — a non-empty div with no recognisable
+    // text would still be orphan chrome.
     assert(
-      state.visibleText.length > 0 || state.childCount > 0,
-      `#1207: Live Feed renders as empty chrome (no content body). ` +
-        `visibleText=${JSON.stringify(state.visibleText)}, childCount=${state.childCount}`,
+      /Waiting for packets/i.test(state.visibleText),
+      `#1207: Live Feed body must contain placeholder copy "Waiting for packets…". ` +
+        `Got: ${JSON.stringify(state.visibleText)}`,
+    );
+  });
+
+  // Issue #1207 (kent #2): the eviction loop in addFeedItem must use
+  // querySelectorAll('.live-feed-item').length, NOT feed.children.length —
+  // otherwise the placeholder div counts as a "child" and gets trimmed
+  // (or items are under-evicted) once the feed is full. Fill the feed with
+  // synthetic items, run the eviction guard, then strip items back to zero
+  // and assert the placeholder survives.
+  await test('#1207 eviction loop never trims the empty-state placeholder', async () => {
+    await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveFeed .panel-content', { timeout: 10000 });
+    const result = await page.evaluate(() => {
+      const feed = document.querySelector('#liveFeed .panel-content');
+      if (!feed) return { ok: false, reason: 'no .panel-content' };
+      // Ensure placeholder is present (re-add if a real packet wiped it via
+      // a rebuild path that didn't restore it — defensive for the test).
+      if (!feed.querySelector('.live-feed-empty')) {
+        const ph = document.createElement('div');
+        ph.className = 'live-feed-empty';
+        ph.textContent = 'Waiting for packets…';
+        feed.appendChild(ph);
+      }
+      // Fill with 30 synthetic items so eviction kicks in (>25).
+      for (let i = 0; i < 30; i++) {
+        const it = document.createElement('div');
+        it.className = 'live-feed-item';
+        it.textContent = `synthetic-${i}`;
+        feed.prepend(it);
+      }
+      // Simulate the production eviction guard from addFeedItem().
+      while (feed.querySelectorAll('.live-feed-item').length > 25) {
+        const items = feed.querySelectorAll('.live-feed-item');
+        feed.removeChild(items[items.length - 1]);
+      }
+      const itemsAfterEvict = feed.querySelectorAll('.live-feed-item').length;
+      const placeholderAfterEvict = !!feed.querySelector('.live-feed-empty');
+      // Now strip all items back to zero → placeholder MUST still be there.
+      feed.querySelectorAll('.live-feed-item').forEach((el) => el.remove());
+      const placeholder = feed.querySelector('.live-feed-empty');
+      const itemsAfterStrip = feed.querySelectorAll('.live-feed-item').length;
+      const placeholderVisible = placeholder
+        ? getComputedStyle(placeholder).display !== 'none'
+        : false;
+      const placeholderText = placeholder ? (placeholder.textContent || '').trim() : '';
+      return {
+        ok: true,
+        itemsAfterEvict,
+        placeholderAfterEvict,
+        itemsAfterStrip,
+        placeholderPresent: !!placeholder,
+        placeholderVisible,
+        placeholderText,
+      };
+    });
+    assert(result.ok, `setup failed: ${result.reason || ''}`);
+    assert(
+      result.itemsAfterEvict === 25,
+      `eviction guard must cap at 25 items (got ${result.itemsAfterEvict})`,
+    );
+    assert(
+      result.placeholderAfterEvict,
+      'eviction must not remove .live-feed-empty placeholder',
+    );
+    assert(result.itemsAfterStrip === 0, 'all .live-feed-item should be stripped');
+    assert(result.placeholderPresent, '.live-feed-empty must survive a full strip');
+    assert(
+      result.placeholderVisible,
+      '.live-feed-empty must be visible (display !== none) when no items present',
+    );
+    assert(
+      /Waiting for packets/i.test(result.placeholderText),
+      `placeholder copy must match. Got: ${JSON.stringify(result.placeholderText)}`,
+    );
+  });
+
+  // Issue #1207 (kent #3): CSS rule
+  //   .live-feed .panel-content:has(.live-feed-item) .live-feed-empty { display: none }
+  // must hide the placeholder when at least one item is present. Inject an
+  // item and assert getComputedStyle(empty).display === 'none'.
+  await test('#1207 :has() rule hides placeholder when items present', async () => {
+    await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#liveFeed .panel-content', { timeout: 10000 });
+    const result = await page.evaluate(() => {
+      const feed = document.querySelector('#liveFeed .panel-content');
+      if (!feed) return { ok: false, reason: 'no .panel-content' };
+      // Strip any pre-existing items to isolate the test.
+      feed.querySelectorAll('.live-feed-item').forEach((el) => el.remove());
+      // Ensure placeholder exists.
+      if (!feed.querySelector('.live-feed-empty')) {
+        const ph = document.createElement('div');
+        ph.className = 'live-feed-empty';
+        ph.textContent = 'Waiting for packets…';
+        feed.appendChild(ph);
+      }
+      const ph = feed.querySelector('.live-feed-empty');
+      const displayBefore = getComputedStyle(ph).display;
+      // Inject a real .live-feed-item child of .panel-content (sibling of ph).
+      const item = document.createElement('div');
+      item.className = 'live-feed-item';
+      item.textContent = 'injected';
+      feed.prepend(item);
+      const displayAfter = getComputedStyle(ph).display;
+      return { ok: true, displayBefore, displayAfter };
+    });
+    assert(result.ok, `setup failed: ${result.reason || ''}`);
+    assert(
+      result.displayBefore !== 'none',
+      `placeholder must be visible with no items (got display=${result.displayBefore})`,
+    );
+    assert(
+      result.displayAfter === 'none',
+      `:has(.live-feed-item) rule must hide placeholder (got display=${result.displayAfter})`,
     );
   });
 
