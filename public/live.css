@@ -917,13 +917,24 @@
     gap: 4px;
     overflow: visible;
   }
-  /* Row 1: controls + scope + LCD, all in one line */
+  /* #1221: LCD clock shares row with playback controls (not floating
+   * bottom-right). Scope buttons wrap to row 2; timeline to row 3.
+   * LCD is scaled ~70% of desktop so it fits next to the touch-target
+   * buttons without clipping at 375px viewport. */
   .vcr-controls { order: 1; flex-shrink: 0; gap: 4px; }
-  .vcr-scope-btns { order: 2; flex-shrink: 0; gap: 1px; }
-  .vcr-lcd { order: 3; display: flex; margin-left: auto; min-width: 90px; padding: 2px 6px; }
-  .vcr-lcd-canvas { width: 100px; height: 22px; }
+  .vcr-lcd {
+    order: 2;
+    margin-left: auto;
+    min-width: 70px;
+    padding: 2px 4px;
+    flex-shrink: 0;
+  }
+  .vcr-lcd-canvas { width: 78px; height: 18px; }
+  .vcr-lcd-mode { font-size: 0.55rem; letter-spacing: 1px; }
+  .vcr-lcd-pkts { font-size: 0.5rem; letter-spacing: 1px; }
+  .vcr-scope-btns { order: 3; flex-shrink: 0; gap: 1px; }
   .vcr-mode { display: none; }
-  /* Row 2: timeline takes full width */
+  /* Timeline takes full width on its own row */
   .vcr-timeline-container { order: 4; width: 100%; flex: none; height: 20px; }
   /* #207 — 44px touch targets for VCR buttons */
   .vcr-btn { padding: 4px 8px; font-size: 0.75rem; min-height: 44px; min-width: 44px; }
