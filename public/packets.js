@@ -128,20 +128,37 @@
   }
 
   // Track tables we've wired up so resize triggers re-apply.
-  const wired = new Set();
+  // Map<table, ResizeObserver|null> — we need the RO ref so SPA remounts can
+  // disconnect the orphaned observer when its <table> leaves the DOM.
+  // Pre-#1213 fix this was a Set and each /nodes (or /packets/observers)
+  // remount registered a fresh RO against a freshly-rendered table while the
+  // previous table+RO sat detached but observed → 1 leaked RO per remount.
+  const wired = new Map();
   // Track last-seen wrap width per table so we only treat ACTUAL container
   // resizes as a reason to drop the user's reveal state. Hiding/showing
   // columns and removing the pill mutate layout and re-trigger ResizeObserver,
   // which would otherwise immediately stomp on the reveal the user just asked for.
   const lastWrapW = new WeakMap();
+  // Sweep tables that have been detached from the DOM (e.g. SPA destroyed
+  // their page) and release their ResizeObserver. Called opportunistically on
+  // every register() — cheap O(n) over wired tables, n is tiny in practice.
+  function sweepDetached() {
+    wired.forEach((ro, t) => {
+      if (!t || !t.isConnected) {
+        if (ro) { try { ro.disconnect(); } catch (_) {} }
+        wired.delete(t);
+      }
+    });
+  }
   function register(table) {
+    sweepDetached();
     if (!table || wired.has(table)) { apply(table); return; }
-    wired.add(table);
+    let ro = null;
     if (typeof ResizeObserver !== 'undefined') {
       const wrap = table.closest('.table-fluid-wrap, .obs-table-scroll, .table-scroll-wrap') || table.parentElement;
       if (wrap) {
         lastWrapW.set(table, wrap.clientWidth || 0);
-        const ro = new ResizeObserver(() => {
+        ro = new ResizeObserver(() => {
           const prev = lastWrapW.get(table) || 0;
           const cur = wrap.clientWidth || 0;
           // Ignore self-induced layout reflows from apply()/clearHidden() —
@@ -155,6 +172,7 @@
         ro.observe(wrap);
       }
     }
+    wired.set(table, ro);
     apply(table);
   }
 
@@ -162,15 +180,19 @@
   window.addEventListener('resize', function () {
     clearTimeout(_winTimer);
     _winTimer = setTimeout(() => {
-      wired.forEach(t => {
-        if (!t.isConnected) { wired.delete(t); return; }
+      wired.forEach((ro, t) => {
+        if (!t.isConnected) {
+          if (ro) { try { ro.disconnect(); } catch (_) {} }
+          wired.delete(t);
+          return;
+        }
         t[REVEAL_FLAG] = false;
         apply(t);
       });
     }, 120);
   });
 
-  window.TableResponsive = { apply, register };
+  window.TableResponsive = { apply, register, sweep: sweepDetached };
 })();
 
 /* === #1056 AC#4: SlideOver — narrow-viewport row-detail overlay ============
