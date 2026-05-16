@@ -143,8 +143,21 @@ func main() {
 		connectTimeout := source.ConnectTimeoutOrDefault()
 		log.Printf("MQTT [%s] connect timeout: %ds", tag, connectTimeout)
 
+		// Pre-allocate the liveness pointer so OnConnect can reset its
+		// stale-message clock on reconnect (PR #1216 r1 item 2). IsConnectedFn
+		// is wired below once the client exists.
+		liveness := &SourceLivenessState{
+			Tag:    tag,
+			Broker: source.Broker,
+		}
+
 		opts.SetOnConnectHandler(func(c mqtt.Client) {
 			log.Printf("MQTT [%s] connected to %s", tag, source.Broker)
+			// PR #1216 r1 item 2: clear the stale LastMessageUnix from
+			// before the outage so the watchdog doesn't immediately scream
+			// "stalled for 2h". Also restarts the cold-start grace window
+			// and clears the alert cooldown so a fresh stall edge can fire.
+			liveness.MarkReconnected(time.Now())
 			topics := source.Topics
 			if len(topics) == 0 {
 				topics = []string{"meshcore/#"}
@@ -175,14 +188,17 @@ func main() {
 		})
 
 		client := mqtt.NewClient(opts)
-		// Register liveness state BEFORE Connect so the attempt counter is
-		// available to OnConnectAttempt on the very first dial.
-		liveness := &SourceLivenessState{
-			Tag:           tag,
-			Broker:        source.Broker,
-			IsConnectedFn: client.IsConnected,
+		// Wire IsConnectedFn now that the client exists, then register.
+		// Registration BEFORE Connect so the attempt counter is available
+		// to OnConnectAttempt on the very first dial.
+		liveness.IsConnectedFn = client.IsConnected
+		if err := registerLivenessState(liveness); err != nil {
+			// PR #1216 r1 item 4: tag collisions previously silently
+			// clobbered an earlier source's AttemptCount/LastMessageUnix.
+			// Fatal at startup forces the operator to fix the config —
+			// it's strictly better than running blind in production.
+			log.Fatalf("MQTT [%s] liveness registration failed: %v", tag, err)
 		}
-		registerLivenessState(liveness) //nolint:errcheck // error handling lands in GREEN commit (PR #1216 r1 item 4)
 		token := client.Connect()
 		// With ConnectRetry=true, token.Wait() blocks forever for unreachable brokers.
 		// WaitTimeout lets startup proceed; the client keeps retrying in the background

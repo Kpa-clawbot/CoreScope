@@ -14,6 +14,26 @@ import (
 //   - Item 3: log flood — every-60s rescan re-emits same WARN forever.
 //   - Item 4: tag collision in registerLivenessState silently overwrites prior state.
 
+// waitFor polls until emits reaches `want` items or the deadline elapses.
+// Used to serialize "drain this tick before mutating state" in goroutine
+// tests so we observe deterministic edge transitions.
+func waitFor(t *testing.T, mu *sync.Mutex, emits *[]string, want int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(*emits)
+		mu.Unlock()
+		if n >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	t.Fatalf("timeout waiting for %d emits; got %d: %v", want, len(*emits), *emits)
+}
+
 // Item 1 (RED): a source that connects but never receives a message is
 // invisible to the current watchdog (LastMessageUnix==0 → skip). This is
 // the exact #1212 failure class — wrong channel hash, ACL drops SUBSCRIBE,
@@ -174,7 +194,7 @@ func TestMQTTStallWatchdog_RecoveryEmitOnce(t *testing.T) {
 
 	now := time.Now()
 	s := &SourceLivenessState{
-		Tag:           "recovering",
+		Tag:           "src-b",
 		Broker:        "tcp://x:1883",
 		IsConnectedFn: func() bool { return true },
 	}
@@ -203,22 +223,19 @@ func TestMQTTStallWatchdog_RecoveryEmitOnce(t *testing.T) {
 	}()
 
 	tick <- now // → WARN
+	// Wait for the goroutine to drain that tick and record the WARN edge
+	// before we mutate state — otherwise we race the loop and the first
+	// emit observes the "recovered" timestamp instead of the stall.
+	waitFor(t, &mu, &emits, 1, 2*time.Second)
 	// Source recovers: a recent message arrives.
 	atomic.StoreInt64(&s.LastMessageUnix, now.Add(30*time.Second).Unix())
 	tick <- now.Add(60 * time.Second)  // → recovery INFO
+	waitFor(t, &mu, &emits, 2, 2*time.Second)
 	tick <- now.Add(120 * time.Second) // → silent
 	tick <- now.Add(180 * time.Second) // → silent
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		mu.Lock()
-		n := len(emits)
-		mu.Unlock()
-		if n >= 2 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// Brief settle so any (incorrect) extra emits land before we count.
+	time.Sleep(100 * time.Millisecond)
 	close(done)
 	<-exited
 
@@ -228,7 +245,8 @@ func TestMQTTStallWatchdog_RecoveryEmitOnce(t *testing.T) {
 
 	infos := 0
 	for _, e := range got {
-		if strings.Contains(strings.ToUpper(e), "RECOVER") || strings.Contains(strings.ToUpper(e), "FLOWING") || strings.Contains(strings.ToUpper(e), "INFO") {
+		upper := strings.ToUpper(e)
+		if strings.Contains(upper, "RECOVER") || strings.Contains(upper, "FLOWING") {
 			infos++
 		}
 	}
