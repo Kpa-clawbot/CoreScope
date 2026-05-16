@@ -1976,3 +1976,47 @@ func TestDecodeTraceExtractsSNRValues(t *testing.T) {
 		t.Errorf("SNRValues[1]=%v, want -2.0", pkt.Payload.SNRValues[1])
 	}
 }
+
+// TestDecodePacketBoundsFromWire — regression for issue #1211.
+//
+// A malformed packet on the wire claimed pathByte=0xF6 (hash_size=4, hash_count=54
+// → 216 path bytes) inside a 15-byte buffer. decodePath() returned bytesConsumed=216
+// without bounds-check, causing the outer slice `payloadBuf := buf[offset:]` to
+// blow up with `slice bounds out of range [218:15]`.
+//
+// Expected behaviour: DecodePacket MUST NOT panic on any input. If the path
+// length claimed by the wire byte exceeds the buffer, it should return a
+// clean error.
+func TestDecodePacketBoundsFromWire_Issue1211(t *testing.T) {
+	// 15-byte buffer: header=0x12 (rt=DIRECT, pt=ADVERT), pathByte=0xF6
+	// (hash_size=4, hash_count=54 → claims 216 path bytes), + 13 garbage bytes.
+	raw := "12F6" + strings.Repeat("AA", 13)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("DecodePacket panicked on malformed input: %v", r)
+		}
+	}()
+	pkt, err := DecodePacket(raw, nil, false)
+	if err == nil {
+		t.Fatalf("expected error for malformed packet (path claims 216 bytes in 15-byte buf), got nil; pkt=%+v", pkt)
+	}
+}
+
+// TestDecodePacketFuzzTruncated — fuzz the decoder with random truncated
+// payloads. Zero panics is the acceptance bar.
+func TestDecodePacketFuzzTruncated_Issue1211(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("DecodePacket panicked during fuzz: %v", r)
+		}
+	}()
+	// Sweep every pathByte value with a short tail.
+	for hdr := 0; hdr < 256; hdr++ {
+		for pb := 0; pb < 256; pb++ {
+			for tail := 0; tail < 20; tail++ {
+				raw := hex.EncodeToString([]byte{byte(hdr), byte(pb)}) + strings.Repeat("00", tail)
+				_, _ = DecodePacket(raw, nil, false)
+			}
+		}
+	}
+}

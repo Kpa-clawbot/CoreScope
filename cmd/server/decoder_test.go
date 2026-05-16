@@ -488,3 +488,41 @@ func TestDecodePacket_TraceNoSNRValues(t *testing.T) {
 		t.Errorf("expected empty SNRValues, got %v", pkt.Payload.SNRValues)
 	}
 }
+
+// TestDecodePacketBoundsFromWire_Issue1211 — mirror of ingestor test.
+// Malformed pathByte=0xF6 inside a 15-byte buffer triggered
+// `slice bounds out of range [218:15]`.
+func TestDecodePacketBoundsFromWire_Issue1211(t *testing.T) {
+	raw := "12F6"
+	for i := 0; i < 13; i++ {
+		raw += "AA"
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("DecodePacket panicked on malformed input: %v", r)
+		}
+	}()
+	pkt, err := DecodePacket(raw, false)
+	if err == nil {
+		t.Fatalf("expected error for malformed packet, got nil; pkt=%+v", pkt)
+	}
+}
+
+func TestDecodePacketFuzzTruncated_Issue1211(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("DecodePacket panicked during fuzz: %v", r)
+		}
+	}()
+	for hdr := 0; hdr < 256; hdr++ {
+		for pb := 0; pb < 256; pb++ {
+			for tail := 0; tail < 20; tail++ {
+				raw := hex.EncodeToString([]byte{byte(hdr), byte(pb)})
+				for i := 0; i < tail; i++ {
+					raw += "00"
+				}
+				_, _ = DecodePacket(raw, false)
+			}
+		}
+	}
+}
