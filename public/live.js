@@ -2105,7 +2105,7 @@
 
   function startAffinityRefresh() {
     if (_affinityInterval) clearInterval(_affinityInterval);
-    _affinityInterval = setInterval(fetchAffinityData, 60000);
+    _affinityInterval = setInterval(fetchAffinityData, 300000);
   }
 
   function clearNodeMarkers() {
