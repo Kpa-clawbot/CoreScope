@@ -8,6 +8,18 @@ import (
 	"time"
 )
 
+// LivenessKind enumerates the watchdog verdicts for a source. Edge-triggered
+// transitions use this to decide whether to emit (and what severity).
+type LivenessKind int
+
+const (
+	LivenessOK LivenessKind = iota
+	LivenessStalled
+	LivenessNeverReceived
+	LivenessRecovered
+	LivenessHeartbeat
+)
+
 // SourceLivenessState tracks per-source last-message timestamp and connection
 // state for the stall watchdog (#1212). LastMessageUnix is updated by the
 // message handler via atomic store; the watchdog reads it via atomic load.
@@ -15,6 +27,8 @@ type SourceLivenessState struct {
 	Tag             string
 	Broker          string
 	LastMessageUnix int64 // atomic; unix seconds of last successfully received MQTT message
+	StartedAt       int64 // atomic; unix seconds when the source was registered / last reconnected (for cold-start detection)
+	LastAlertUnix   int64 // atomic; unix seconds of last WARN/heartbeat emit (edge-trigger cooldown)
 	IsConnectedFn   func() bool
 	// AttemptCount is incremented on every TCP/TLS connection attempt. Used
 	// by ConnectionAttemptHandler to log attempt # independent of paho's
@@ -28,35 +42,39 @@ func (s *SourceLivenessState) MarkMessage(now time.Time) {
 	atomic.StoreInt64(&s.LastMessageUnix, now.Unix())
 }
 
-// checkSourceLiveness returns (message, stalled). stalled=true means the
-// client reports connected but no MQTT message has arrived for at least
-// `threshold`. When stalled=true, callers should log a warning so operators
-// see "silently dead" sockets (half-open TCP, broker accepted CONNECT but
-// stopped publishing). When the client is disconnected, this returns
-// stalled=false — paho's reconnect logging covers that case.
-func checkSourceLiveness(s *SourceLivenessState, threshold time.Duration, now time.Time) (string, bool) {
+// MarkReconnected clears stale liveness state so the watchdog does not
+// false-alarm on a pre-outage timestamp after paho re-establishes the
+// connection. Resets LastMessageUnix, re-stamps StartedAt (cold-start
+// grace window restarts), and clears LastAlertUnix (edge-trigger re-arms).
+//
+// RED stub — implemented in the GREEN commit.
+func (s *SourceLivenessState) MarkReconnected(now time.Time) {
+	_ = now
+}
+
+// checkSourceLiveness returns (message, kind) describing the source's
+// liveness state. kind==LivenessOK means quiet/healthy; any other kind
+// indicates the caller may want to emit (subject to edge-trigger).
+func checkSourceLiveness(s *SourceLivenessState, threshold time.Duration, now time.Time) (string, LivenessKind) {
 	if s == nil || s.IsConnectedFn == nil {
-		return "", false
+		return "", LivenessOK
 	}
 	if !s.IsConnectedFn() {
 		// paho's reconnect handler covers the disconnected case.
-		return "", false
+		return "", LivenessOK
 	}
 	last := atomic.LoadInt64(&s.LastMessageUnix)
 	if last == 0 {
-		// Never received a message; treat as stalled only after the threshold
-		// has elapsed since the watchdog process started (we can't
-		// distinguish startup from silence here without an extra timestamp,
-		// so be conservative and skip).
-		return "", false
+		// RED stub: cold-start blind spot not yet fixed.
+		return "", LivenessOK
 	}
 	silentFor := now.Sub(time.Unix(last, 0))
 	if silentFor < threshold {
-		return "", false
+		return "", LivenessOK
 	}
 	msg := fmt.Sprintf("MQTT [%s] WATCHDOG: client reports connected to %s but no messages received for %s (threshold %s) — possible half-open socket or upstream stall",
 		s.Tag, s.Broker, silentFor.Round(time.Second), threshold)
-	return msg, true
+	return msg, LivenessStalled
 }
 
 // livenessRegistry is a package-level lookup so handleMessage (called with
@@ -68,12 +86,15 @@ var (
 	livenessRegistryMu sync.RWMutex
 )
 
-// registerLivenessState publishes a state to the registry by tag. Called
-// once per source in main() after the client is constructed.
-func registerLivenessState(s *SourceLivenessState) {
+// registerLivenessState publishes a state to the registry by tag. Returns
+// an error on tag collision so operators see a startup misconfiguration
+// instead of silently losing AttemptCount/LastMessageUnix for the
+// clobbered source. RED stub — always returns nil.
+func registerLivenessState(s *SourceLivenessState) error {
 	livenessRegistryMu.Lock()
 	livenessRegistry[s.Tag] = s
 	livenessRegistryMu.Unlock()
+	return nil
 }
 
 // markLivenessForTag is the hot-path entry point: O(1) map lookup +
@@ -123,7 +144,7 @@ func runLivenessWatchdogLoop(tick <-chan time.Time, done <-chan struct{}, thresh
 			}
 			livenessRegistryMu.RUnlock()
 			for _, s := range states {
-				if msg, stalled := checkSourceLiveness(s, threshold, now); stalled {
+				if msg, kind := checkSourceLiveness(s, threshold, now); kind != LivenessOK {
 					emit(msg)
 				}
 			}

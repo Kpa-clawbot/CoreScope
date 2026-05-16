@@ -33,9 +33,9 @@ func TestMQTTStallWatchdog_FiresOnSilentSource(t *testing.T) {
 	atomic.StoreInt64(&state.LastMessageUnix, time.Now().Add(-10*time.Minute).Unix())
 	state.IsConnectedFn = func() bool { return true }
 
-	msg, stalled := checkSourceLiveness(state, 5*time.Minute, time.Now())
-	if !stalled {
-		t.Fatalf("watchdog should flag stall when source connected but no message for 10m (threshold 5m); got msg=%q", msg)
+	msg, kind := checkSourceLiveness(state, 5*time.Minute, time.Now())
+	if kind != LivenessStalled {
+		t.Fatalf("watchdog should flag stall when source connected but no message for 10m (threshold 5m); got kind=%v msg=%q", kind, msg)
 	}
 	if !strings.Contains(msg, "no messages") {
 		t.Errorf("stall message should mention 'no messages'; got %q", msg)
@@ -50,8 +50,8 @@ func TestMQTTStallWatchdog_QuietWhenRecent(t *testing.T) {
 	atomic.StoreInt64(&state.LastMessageUnix, time.Now().Add(-30*time.Second).Unix())
 	state.IsConnectedFn = func() bool { return true }
 
-	_, stalled := checkSourceLiveness(state, 5*time.Minute, time.Now())
-	if stalled {
+	_, kind := checkSourceLiveness(state, 5*time.Minute, time.Now())
+	if kind != LivenessOK {
 		t.Fatal("watchdog should NOT flag stall when last message was 30s ago and threshold is 5m")
 	}
 }
@@ -63,8 +63,8 @@ func TestMQTTStallWatchdog_QuietWhenDisconnected(t *testing.T) {
 	atomic.StoreInt64(&state.LastMessageUnix, time.Now().Add(-1*time.Hour).Unix())
 	state.IsConnectedFn = func() bool { return false }
 
-	_, stalled := checkSourceLiveness(state, 5*time.Minute, time.Now())
-	if stalled {
+	_, kind := checkSourceLiveness(state, 5*time.Minute, time.Now())
+	if kind != LivenessOK {
 		t.Fatal("watchdog should NOT flag stall when client is disconnected — paho's reconnect logging covers that case")
 	}
 }

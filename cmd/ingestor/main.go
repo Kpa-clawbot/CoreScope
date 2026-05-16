@@ -182,7 +182,7 @@ func main() {
 			Broker:        source.Broker,
 			IsConnectedFn: client.IsConnected,
 		}
-		registerLivenessState(liveness)
+		registerLivenessState(liveness) //nolint:errcheck // error handling lands in GREEN commit (PR #1216 r1 item 4)
 		token := client.Connect()
 		// With ConnectRetry=true, token.Wait() blocks forever for unreachable brokers.
 		// WaitTimeout lets startup proceed; the client keeps retrying in the background
