@@ -170,6 +170,12 @@ func main() {
 	// Check auto_vacuum mode and optionally migrate (#919)
 	checkAutoVacuum(database, cfg, resolvedDB)
 
+	// Ensure indexes the server's SQL fallback path depends on
+	// (mirrors ingestor schema for DBs created by old server-only builds).
+	if err := ensureServerIndexes(resolvedDB); err != nil {
+		log.Printf("[db] warning: could not ensure server indexes: %v", err)
+	}
+
 	// In-memory packet store
 	store := NewPacketStore(database, cfg.PacketStore, cfg.CacheTTL)
 	if err := store.Load(); err != nil {
