@@ -1,6 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"crypto/tls"
+	"log"
+	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -8,19 +13,73 @@ import (
 	"time"
 )
 
-// RED: per-attempt observability is required. Issue #1212 reported a prod
-// outage where the broker disconnect was logged but NO subsequent reconnect
-// activity was ever logged. paho's SetReconnectingHandler only fires inside
-// the reconnect loop; if the loop never executes (status race, internal
-// abort), operators have zero visibility. ConnectionAttemptHandler fires on
-// EVERY TCP/TLS dial — both the initial Connect() and every reconnect — and
-// gives an attempt counter for operators to gauge backoff progress.
+// PR #1216 r1 item 5 (kent #1 / adv MAJOR-2): the original assertion was
+// tautological — it only checked OnConnectAttempt != nil, which passes
+// even if the handler is a no-op. This version invokes the wired handler,
+// captures log output, and asserts the OBSERVABLE behaviour operators
+// rely on during a #1212-class outage:
+//   - the configured source tag appears in the log line
+//   - the broker URL appears in the log line
+//   - the per-source AttemptCount increments on every invocation (proving
+//     the handler is wired to the right state, not just a stub)
+//   - the tlsCfg passed in is returned unchanged (no surprise TLS rewrite)
 func TestBuildMQTTOpts_InstrumentsConnectionAttempt(t *testing.T) {
-	source := MQTTSource{Broker: "tcp://localhost:1883", Name: "test"}
+	defer snapshotAndResetRegistry(t)()
+
+	source := MQTTSource{Broker: "tcp://localhost:1883", Name: "obs-tag"}
 	opts := buildMQTTOpts(source)
 
 	if opts.OnConnectAttempt == nil {
-		t.Fatal("OnConnectAttempt must be wired in buildMQTTOpts so every TCP/TLS dial is logged with attempt #, independent of paho's internal reconnect-loop state (#1212)")
+		t.Fatal("OnConnectAttempt must be wired in buildMQTTOpts (#1212 / PR #1216 r1)")
+	}
+
+	// Register the liveness state so the handler can find it and increment
+	// the attempt counter (same wiring main.go does).
+	liveness := &SourceLivenessState{Tag: "obs-tag", Broker: source.Broker}
+	if err := registerLivenessState(liveness); err != nil {
+		t.Fatalf("test setup: registerLivenessState: %v", err)
+	}
+
+	// Capture log output via log.SetOutput. Save/restore so other tests
+	// running serially don't lose their writer.
+	var buf bytes.Buffer
+	origOut := log.Writer()
+	origFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(origOut)
+		log.SetFlags(origFlags)
+	}()
+
+	brokerURL, err := url.Parse(source.Broker)
+	if err != nil {
+		t.Fatalf("test setup: parse broker url: %v", err)
+	}
+	tlsIn := &tls.Config{ServerName: "sentinel.test"}
+
+	// Invoke the handler twice — operators need to see attempt # increment
+	// per dial to gauge backoff progress.
+	tlsOut1 := opts.OnConnectAttempt(brokerURL, tlsIn)
+	tlsOut2 := opts.OnConnectAttempt(brokerURL, tlsIn)
+
+	if tlsOut1 != tlsIn || tlsOut2 != tlsIn {
+		t.Errorf("OnConnectAttempt must pass tlsCfg through unchanged (got %p, %p; want %p)", tlsOut1, tlsOut2, tlsIn)
+	}
+
+	logOut := buf.String()
+	if !strings.Contains(logOut, "obs-tag") {
+		t.Errorf("log output must include the source tag for operator grep; got %q", logOut)
+	}
+	if !strings.Contains(logOut, source.Broker) {
+		t.Errorf("log output must include the broker URL so operators can correlate against config; got %q", logOut)
+	}
+	if !strings.Contains(logOut, "#1") || !strings.Contains(logOut, "#2") {
+		t.Errorf("log output must show attempt #1 and #2 across the two invocations (per-source counter); got %q", logOut)
+	}
+
+	if got := atomic.LoadInt64(&liveness.AttemptCount); got != 2 {
+		t.Errorf("AttemptCount must increment per dial (got %d after 2 invocations, want 2)", got)
 	}
 }
 
@@ -151,16 +210,39 @@ func TestMQTTStallWatchdog_LoopEmitsAndStopsCleanly(t *testing.T) {
 	}
 }
 
+// PR #1216 r1 item 6 (kent #2 / adv MAJOR-3): the original test had no
+// assertions gating behaviour — it called stop() and trusted `-race` to
+// catch leaks. `-race` does NOT detect goroutine leaks. This version
+// captures runtime.NumGoroutine() before/after and asserts the watchdog's
+// goroutine actually exited. Allows ±1 slack for unrelated runtime
+// bookkeeping (gc, finalizer).
 func TestMQTTStallWatchdog_RunStopsCleanly(t *testing.T) {
-	// runLivenessWatchdog returns a stop func; calling it must halt the
-	// goroutine. We can't easily observe the goroutine directly here, but
-	// the very fact that we can call stop() without panic AND the package
-	// test suite finishes without `-race` complaints is the contract.
 	defer snapshotAndResetRegistry(t)()
+
+	// Settle: let any prior-test goroutines finish before sampling baseline.
+	runtime.GC()
+	time.Sleep(50 * time.Millisecond)
+	before := runtime.NumGoroutine()
+
 	stop := runLivenessWatchdog(10*time.Millisecond, 5*time.Minute)
-	time.Sleep(30 * time.Millisecond)
+	// Let the watchdog run a few ticks so we're sure it's truly spawned.
+	time.Sleep(50 * time.Millisecond)
+	if mid := runtime.NumGoroutine(); mid <= before {
+		t.Fatalf("watchdog goroutine did not spawn: before=%d mid=%d", before, mid)
+	}
+
 	stop()
-	// A second stop on a stopped ticker would panic — confirm the closure
-	// is single-shot in practice by NOT calling it twice. We just assert
-	// stop returned.
+
+	// Poll for the goroutine count to return to baseline (±1 slack).
+	deadline := time.Now().Add(2 * time.Second)
+	var after int
+	for time.Now().Before(deadline) {
+		runtime.Gosched()
+		after = runtime.NumGoroutine()
+		if after <= before+1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("watchdog goroutine leaked: before=%d after=%d (delta %d) — stop() did not signal the loop to exit", before, after, after-before)
 }
