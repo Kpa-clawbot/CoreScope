@@ -198,6 +198,7 @@
     "channels": 15,
     "channelMessages": 10,
     "analyticsRF": 1800,
+    "_comment_analyticsRF": "TTL (seconds) for the shared analytics result cache. Backs /api/analytics/rf, /api/analytics/topology, /api/analytics/distance, /api/analytics/hash-sizes, /api/analytics/channels, /api/analytics/subpaths. Default 60s if unset (#1239) — distance analytics is viewed live during active analysis, so the default smooths cold-miss churn without freezing data. Lower with care; sub-15s values can cause repeated multi-second cold computes during heavy ingest.",
     "analyticsTopology": 1800,
     "analyticsChannels": 1800,
     "analyticsHashSizes": 3600,

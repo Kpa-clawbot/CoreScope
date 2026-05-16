@@ -24,6 +24,10 @@ const (
 	affinityConfidenceRatio = 3.0
 	// Minimum observation count to auto-resolve.
 	affinityMinObservations = 3
+	// Source-diversity saturation: edges contributed by this many distinct
+	// observers (or more) earn full confidence weight (multiplier 1.0).
+	// Fewer observers earn a proportional fraction. Issue #1229 (Option C).
+	affinityObserverSaturation = 3.0
 )
 
 // affinityLambda = ln(2) / half-life-hours, precomputed.
@@ -69,6 +73,29 @@ func (e *NeighborEdge) Score(now time.Time) float64 {
 	}
 	decay := math.Exp(-affinityLambda * hoursSince)
 	return countFactor * decay
+}
+
+// Confidence returns a source-diversity multiplier in (0, 1] derived from the
+// number of distinct observers that have contributed to this edge. Issue #1229
+// (Option C): edges corroborated by multiple independent observers should
+// outrank edges seen by a single observer at the same raw score.
+//
+// Formula: min(1.0, max(1, |Observers|) / affinityObserverSaturation).
+// With saturation=3, a single observer yields 1/3, two observers 2/3, and
+// three-or-more observers saturate at 1.0 — full historical weight. Edges
+// with an empty observer set (legacy persisted rows lacking the column;
+// see neighbor_persist.go backward-compat) default to a count of 1 so they
+// behave like single-observer edges rather than disappearing — defensive.
+func (e *NeighborEdge) Confidence() float64 {
+	n := float64(len(e.Observers))
+	if n < 1 {
+		n = 1
+	}
+	c := n / affinityObserverSaturation
+	if c > 1.0 {
+		c = 1.0
+	}
+	return c
 }
 
 // AvgSNR returns the average SNR, or 0 if no samples.
