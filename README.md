@@ -1,10 +1,10 @@
 # CoreScope
 
-[![Go Server Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/.badges/go-server-coverage.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
-[![Go Ingestor Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/.badges/go-ingestor-coverage.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
-[![E2E Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/.badges/e2e-tests.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
-[![Frontend Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/.badges/frontend-coverage.json)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
-[![Deploy](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml/badge.svg)](https://github.com/Kpa-clawbot/CoreScope/actions/workflows/deploy.yml)
+[![Go Server Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/MeshCore-ca/CoreScope/master/.badges/go-server-coverage.json)](https://github.com/MeshCore-ca/CoreScope/actions/workflows/deploy.yml)
+[![Go Ingestor Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/MeshCore-ca/CoreScope/master/.badges/go-ingestor-coverage.json)](https://github.com/MeshCore-ca/CoreScope/actions/workflows/deploy.yml)
+[![E2E Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/MeshCore-ca/CoreScope/master/.badges/e2e-tests.json)](https://github.com/MeshCore-ca/CoreScope/actions/workflows/deploy.yml)
+[![Frontend Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/MeshCore-ca/CoreScope/master/.badges/frontend-coverage.json)](https://github.com/MeshCore-ca/CoreScope/actions/workflows/deploy.yml)
+[![Deploy](https://github.com/MeshCore-ca/CoreScope/actions/workflows/deploy.yml/badge.svg)](https://github.com/MeshCore-ca/CoreScope/actions/workflows/deploy.yml)
 
 > High-performance mesh network analyzer powered by Go. Sub-millisecond packet queries, ~300 MB memory for 56K+ packets, real-time WebSocket broadcast, full channel decryption.
 
@@ -104,7 +104,7 @@ Disable built-in services with `-e DISABLE_MOSQUITTO=true` or `-e DISABLE_CADDY=
 ### Build from Source
 
 ```bash
-git clone https://github.com/Kpa-clawbot/CoreScope.git
+git clone https://github.com/MeshCore-ca/CoreScope.git
 cd CoreScope
 ./manage.sh setup
 ```
@@ -263,10 +263,10 @@ If you're running an existing Node.js deployment, see [docs/go-migration.md](doc
 
 Contributions welcome. Please read [AGENTS.md](AGENTS.md) for coding conventions, testing requirements, and engineering principles before submitting a PR.
 
-**Live instance:** [analyzer.00id.net](https://analyzer.00id.net) — all API endpoints are public, no auth required.
+**Live instance:** [live.meshcore.ca](https://live.meshcore.ca) — all API endpoints are public, no auth required.
 
-**API Documentation:** CoreScope auto-generates an OpenAPI 3.0 spec. Browse the interactive Swagger UI at [`/api/docs`](https://analyzer.00id.net/api/docs) or fetch the machine-readable spec at [`/api/spec`](https://analyzer.00id.net/api/spec).
+**API Documentation:** CoreScope auto-generates an OpenAPI 3.0 spec. Browse the interactive Swagger UI at [`/api/docs`](https://live.meshcore.ca/api/docs) or fetch the machine-readable spec at [`/api/spec`](https://live.meshcore.ca/api/spec).
 
 ## License
 
-MIT
+GPL-3.0-only
