@@ -443,7 +443,27 @@
   .live-header.is-collapsed .live-header-body,
   .live-controls.is-collapsed .live-controls-body { display: none; }
   .live-header.is-collapsed { gap: 0; padding: 4px 6px; }
-  .live-controls.is-collapsed { padding: 6px; }
+  /* #1220 — when the controls row collapses to just the gear toggle, do NOT
+     force it onto its own full-width row inside the header's flex-wrap. The
+     wide-viewport `flex: 0 0 100%` rule (which lets the controls wrap below
+     the title on tablet) leaves ~60px of empty chrome below the critical
+     strip on mobile when both bodies are hidden. Inline the gear with the
+     count badge + 📊 toggle so the collapsed panel is a single ~48-56px
+     strip. Expanded controls still get their own wrapped row via the
+     `.is-expanded` override below. */
+  .live-controls.is-collapsed {
+    padding: 0;
+    flex: 0 0 auto;
+    width: auto;
+  }
+  /* #1220 — both panels collapsed = single-row strip. Drop the header's
+     vertical padding so the panel hugs the 48px toggle buttons (chrome ≈
+     toggle height + border). Without this, the 4px top/bottom padding
+     plus the 6px padding around the gear container pushed total height
+     to 70px, dangerously close to looking like empty chrome again. */
+  .live-header.is-collapsed:has(.live-controls.is-collapsed) {
+    padding: 0 6px;
+  }
 
   /* Expanded body on narrow: stack so it never overflows the cluster */
   .live-controls.is-expanded { max-width: calc(100vw - 24px); }
