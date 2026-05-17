@@ -10,7 +10,7 @@ High-performance MeshCore packet analyzer with a **Go backend** and **vanilla JS
 
 CoreScope ingests packets from MQTT, decodes/stores them in Postgres or SQLite, serves REST APIs + WebSocket updates from an in-memory store, and provides a browser UI for live packet analysis, maps, node analytics, and channel activity.
 
-## Current project state (May 2026)
+## Current project state (0.5 Alpha, May 2026)
 
 - **Backend architecture is Go-only.** The deprecated Node.js backend server (`server.js`) has been removed.
 - **Two Go binaries are active:**
@@ -19,9 +19,22 @@ CoreScope ingests packets from MQTT, decodes/stores them in Postgres or SQLite, 
 - **Frontend is active and framework-free** in `public/` (one file per page/feature).
 - **Postgres is the primary deployment backend; SQLite remains a compatibility and rollback fallback.**
 - **In-memory indexes still power the hottest API reads**, so `/api/perf` and `/api/perf/db` should be used to identify whether a dashboard path is database-bound or memory-bound.
-- **MeshCore Canada branding is the default** for this deployment branch: bundled MeshCore logo, blue MeshCore.ca theme defaults, and `Canada Meshcore Corescope` home copy.
+- **MeshCore Canada 0.5 Alpha UI is active** for this deployment branch: bundled MeshCore Canada logo, dark navy/blue/red operator-console theme defaults, inline SVG chrome icons, and `Canada Meshcore Corescope` home copy.
+- **Live RF filtering suppresses impossible RF paths from map lines and animations only.** Feed entries, counters, packet detail, and diagnostics remain visible; the debug toggle renders suppressed links as warning/dashed inspection paths.
 - **Cache-busting is automatic** at server startup by replacing `__BUST__` in `public/index.html`.
 - **Test suite is mixed-language:** Go tests for backend + Node-based test harnesses for frontend/route/behavior coverage.
+
+## Screenshots
+
+These dark-mode screenshots are captured from the local Docker-backed 0.5 Alpha system on `localhost:3330`; map views are framed on the Ottawa/Toronto operating corridor.
+
+| Home | Map |
+|------|-----|
+| ![0.5 Alpha home](docs/screenshots/0.5-alpha-home.png) | ![0.5 Alpha map](docs/screenshots/0.5-alpha-map.png) |
+
+| Live | Mobile |
+|------|--------|
+| ![0.5 Alpha live](docs/screenshots/0.5-alpha-live.png) | ![0.5 Alpha mobile](docs/screenshots/0.5-alpha-mobile.png) |
 
 ## Features
 
@@ -96,9 +109,10 @@ go run . -sqlite ../../data/meshcore.db -postgres "$DATABASE_URL"
 ```
 
 The Docker image also includes `/app/corescope-migrate-postgres`. Use
-`docker-compose.dev.yml` for a live-style side-by-side dev deployment: it starts
-a separate Postgres container and exposes the dev UI on port `8443` without
-reusing the live SQLite or Caddy data directories.
+`docker-compose.dev.yml` for a live.meshcore.ca-style side-by-side dev
+deployment: it starts a separate Postgres container and exposes the dev UI on
+port `8443` without reusing the live SQLite, Caddy, or Postgres data
+directories.
 
 MeshCore.ca production-readiness notes and validation results are tracked in
 `docs/review/meshcore-ca-production-readiness.md`.

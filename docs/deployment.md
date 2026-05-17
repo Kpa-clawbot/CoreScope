@@ -2,6 +2,10 @@
 
 Comprehensive guide to deploying and operating CoreScope. For a quick start, see [DEPLOY.md](../DEPLOY.md).
 
+> 0.5 Alpha status: new deployments should prefer Postgres through
+> `DB_DRIVER=postgres` and `DATABASE_URL`. SQLite remains supported for
+> compatibility, rollback, and one-shot migration validation.
+
 ## Table of Contents
 
 - [System Requirements](#system-requirements)

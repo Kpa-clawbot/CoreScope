@@ -755,6 +755,31 @@ console.log('\n=== live.js: resolveHopPositions ===');
     ctx.window._liveSetObserverIataMap({});
   });
 
+  test('server-resolved known anchors still suppress impossible RF segments', () => {
+    nodeData['tor'] = { public_key: 'tor', name: 'Toronto', lat: 43.6532, lon: -79.3832 };
+    nodeData['van'] = { public_key: 'van', name: 'Vancouver', lat: 49.2827, lon: -123.1207 };
+    const mockResolver = {
+      init() {},
+      ready() { return true; },
+      resolveFromServer() {
+        return {
+          aa: { name: 'Toronto', pubkey: 'tor', serverResolved: true },
+          bb: { name: 'Vancouver', pubkey: 'van', serverResolved: true },
+        };
+      },
+      resolve() { return {}; },
+    };
+    ctx.HopResolver = mockResolver;
+    ctx.window.HopResolver = mockResolver;
+    const result = resolve(['aa', 'bb'], {}, ['tor', 'van'], { observer_id: 'obs-yvr' });
+    assert.strictEqual(result.length, 2);
+    const report = ctx.window._livePathPlausibilityReport(result);
+    assert.strictEqual(report.plausible, false);
+    assert.strictEqual(report.status, 'suppressed');
+    delete nodeData['tor'];
+    delete nodeData['van'];
+  });
+
   test('path plausibility suppresses cross-country RF segments', () => {
     const report = ctx.window._livePathPlausibilityReport([
       { key: 'toronto', known: true, pos: [43.6532, -79.3832] },
@@ -768,6 +793,16 @@ console.log('\n=== live.js: resolveHopPositions ===');
       { key: 'toronto', known: true, pos: [43.6532, -79.3832] },
       { key: 'vancouver', known: true, pos: [49.2827, -123.1207] },
     ]), false);
+  });
+
+  test('suspicious debug toggle renders suppressed paths as debug-only mode', () => {
+    const report = ctx.window._livePathPlausibilityReport([
+      { key: 'toronto', known: true, pos: [43.6532, -79.3832] },
+      { key: 'vancouver', known: true, pos: [49.2827, -123.1207] },
+    ]);
+    assert.strictEqual(ctx.window._livePathRenderMode(report, false), 'suppressed');
+    assert.strictEqual(ctx.window._livePathRenderMode(report, true), 'debug-suppressed');
+    assert.strictEqual(ctx.window._livePathRenderMode({ plausible: true, status: 'plausible' }, true), 'normal');
   });
 
   test('path plausibility keeps nearby cross-IATA boundary links', () => {

@@ -4712,18 +4712,20 @@ console.log('\n=== app.js: favorites ===');
     assert.deepStrictEqual(ctx.getFavorites(), ['pk2']);
   });
 
-  test('favStar returns filled star for favorite', () => {
+  test('favStar returns active SVG star button for favorite', () => {
     ctx.localStorage.setItem('meshcore-favorites', '["pk1"]');
     const html = ctx.favStar('pk1');
-    assert.ok(html.includes('★'));
+    assert.ok(html.includes('fav-star-icon'));
+    assert.ok(html.includes('aria-pressed="true"'));
     assert.ok(html.includes('on'));
     assert.ok(html.includes('Remove from favorites'));
   });
 
-  test('favStar returns empty star for non-favorite', () => {
+  test('favStar returns inactive SVG star button for non-favorite', () => {
     ctx.localStorage.setItem('meshcore-favorites', '[]');
     const html = ctx.favStar('pk1');
-    assert.ok(html.includes('☆'));
+    assert.ok(html.includes('fav-star-icon'));
+    assert.ok(html.includes('aria-pressed="false"'));
     assert.ok(!html.includes(' on'));
     assert.ok(html.includes('Add to favorites'));
   });

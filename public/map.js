@@ -23,6 +23,9 @@
 
   // Safe escape — falls back to identity if app.js hasn't loaded yet
   const safeEsc = (typeof esc === 'function') ? esc : function (s) { return s; };
+  const chromeIcon = function (name) {
+    return window.UIIcon ? UIIcon.svg(name) : '';
+  };
 
   function routeHaversineKm(a, b) {
     if (window.HopResolver && window.HopResolver.haversineKm) {
@@ -133,7 +136,7 @@
       <div id="map-wrap" style="position:relative;width:100%;height:100%;display:flex;">
         <div id="leaflet-map" style="flex:1 1 0%;height:100%;"></div>
         <div class="map-side-pane" id="mapSidePane">
-          <div class="pane-toggle" id="mapPaneToggle" title="Path Inspector">◀</div>
+          <div class="pane-toggle" id="mapPaneToggle" title="Path Inspector">${chromeIcon('chevronLeft')}</div>
           <div class="pane-content">
             <h3 style="margin:0 0 8px 0;font-size:14px;">Path Inspector</h3>
             <p style="font-size:11px;color:var(--text-muted);margin:0 0 8px 0;">Hex prefixes (1-3 bytes), comma or space separated.</p>
@@ -145,9 +148,9 @@
             <div id="mapPiResults"></div>
           </div>
         </div>
-        <button class="map-controls-toggle" id="mapControlsToggle" aria-label="Toggle map controls" aria-expanded="true">⚙️</button>
+        <button class="map-controls-toggle" id="mapControlsToggle" aria-label="Toggle map controls" aria-expanded="true">${chromeIcon('settings')}</button>
         <div class="map-controls" id="mapControls" role="region" aria-label="Map controls">
-          <h3>🗺️ Map Controls</h3>
+          <h3><span class="section-title-icon">${chromeIcon('map')}</span><span>Map Controls</span></h3>
           <fieldset class="mc-section">
             <legend class="mc-label">Node Types</legend>
             <div id="mcRoleChecks"></div>
@@ -182,7 +185,7 @@
             <label for="mcNeighbors"><input type="checkbox" id="mcNeighbors"> Show direct neighbors</label>
             <div id="mcNeighborRef" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Ref: <span id="mcNeighborRefName">—</span></div>
             <div id="mcNeighborHint" style="display:none;font-size:11px;color:var(--text-muted);margin-top:2px;padding-left:20px;">Click a node marker to set the reference node</div>
-            <label id="mcAffinityDebugLabel" for="mcAffinityDebug" style="display:none"><input type="checkbox" id="mcAffinityDebug"> 🔍 Affinity Debug</label>
+            <label id="mcAffinityDebugLabel" for="mcAffinityDebug" style="display:none"><input type="checkbox" id="mcAffinityDebug"> Affinity Debug</label>
           </fieldset>
           <fieldset class="mc-section">
             <legend class="mc-label">Last Heard</legend>
@@ -1118,7 +1121,7 @@
 
     toggle.addEventListener('click', function () {
       pane.classList.toggle('expanded');
-      toggle.textContent = pane.classList.contains('expanded') ? '▶' : '◀';
+      toggle.innerHTML = pane.classList.contains('expanded') ? chromeIcon('chevronRight') : chromeIcon('chevronLeft');
       // Invalidate map size after transition.
       setTimeout(function () { if (map) map.invalidateSize(); }, 220);
     });
@@ -1135,7 +1138,7 @@
     var prefixParam = params.get('prefixes');
     if (prefixParam && input) {
       pane.classList.add('expanded');
-      toggle.textContent = '▶';
+      toggle.innerHTML = chromeIcon('chevronRight');
       input.value = prefixParam;
       setTimeout(function () { if (map) map.invalidateSize(); }, 220);
       mapPiSubmit(prefixParam);
