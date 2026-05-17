@@ -101,11 +101,7 @@ self.onmessage = async (event) => {
       if (this.initialized) return;
       let libraryUrl = null;
       const cdnUrls = [
-        'https://unpkg.com/noble-ed25519@latest',
-        'https://cdn.jsdelivr.net/npm/noble-ed25519@latest',
-        'https://esm.sh/noble-ed25519@latest',
-        'https://cdn.skypack.dev/noble-ed25519',
-        './noble-ed25519-offline-simple.js'
+        './vendor/noble-ed25519.js'
       ];
       for (const url of cdnUrls) {
         try { nobleEd25519 = await import(url); libraryUrl = url; break; }
@@ -471,11 +467,10 @@ self.onmessage = async (event) => {
         } else if (this.generationMode === 'js-fallback') {
           matched = await this._startJsFallback(prefix);
         } else {
-          try { matched = await this._startWorkerSearch(prefix); }
-          catch (e) {
-            await this._loadJsFallback('WASM search failed: ' + e.message);
-            matched = await this._startJsFallback(prefix);
-          }
+          // WASM path disabled: WASM-derived keys fail validateKeypair's
+          // derive-check due to a clamping/scalar mismatch in the worker.
+          await this._loadJsFallback('WASM path disabled');
+          matched = await this._startJsFallback(prefix);
         }
 
         if (!matched) return null;
@@ -819,12 +814,9 @@ self.onmessage = async (event) => {
       resultEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
-    // Probe GPU availability (non-blocking)
-    generator.detectGpu().then(avail => {
-      if (!avail) return;
-      gpuRow.style.display = 'block';
-      gpuHint.textContent = 'GPU detected — loads a ~2 MB WebGPU module and autotunes on first use.';
-    }).catch(() => {});
+    // GPU path disabled: WebGPU-derived keys fail validateKeypair's derive-check
+    // due to an integration mismatch between the GPU scalar output and noble-ed25519.
+    void gpuRow; void gpuToggle; void gpuHint;
 
     // Popup button — opens the SPA in a separate window; generation is independent
     $('kgn-popup-btn').addEventListener('click', () => {
