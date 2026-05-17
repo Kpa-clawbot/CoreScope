@@ -53,3 +53,30 @@ func TestBackupReturnsValidSQLiteSnapshot(t *testing.T) {
 		t.Fatalf("expected SQLite magic header %q, got %q", sqliteMagic, got)
 	}
 }
+
+// A second backup within backupMinInterval of the first must be rejected with
+// 429, so the expensive VACUUM INTO cannot be hammered.
+func TestBackupRateLimited(t *testing.T) {
+	const apiKey = "test-secret-key-strong-enough"
+	_, router := setupTestServerWithAPIKey(t, apiKey)
+
+	doBackup := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/api/backup", nil)
+		req.Header.Set("X-API-Key", apiKey)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	if first := doBackup(); first.Code != http.StatusOK {
+		t.Fatalf("first backup: expected 200, got %d (body: %s)", first.Code, first.Body.String())
+	}
+
+	second := doBackup()
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second backup within cooldown: expected 429, got %d (body: %s)", second.Code, second.Body.String())
+	}
+	if ra := second.Header().Get("Retry-After"); ra == "" {
+		t.Errorf("expected a Retry-After header on the 429 response, got none")
+	}
+}

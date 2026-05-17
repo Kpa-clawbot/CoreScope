@@ -30,10 +30,55 @@ import (
 //
 // The temp file is removed after the response is fully written, regardless
 // of whether the client successfully consumed the stream.
+//
+// Hardening: backups are serialized (one at a time) and spaced by
+// backupMinInterval, and a database larger than backupMaxBytes is refused —
+// VACUUM INTO is disk/CPU-heavy and the response is otherwise unbounded.
+const (
+	// backupMaxBytes caps the database size this endpoint will back up.
+	backupMaxBytes = 2 << 30 // 2 GiB
+	// backupMinInterval is the minimum gap between two backups.
+	backupMinInterval = 10 * time.Second
+)
+
 func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	if s.db == nil || s.db.conn == nil {
 		writeError(w, http.StatusServiceUnavailable, "database unavailable")
 		return
+	}
+
+	// Rate limit + single-flight. VACUUM INTO is expensive; rapid or
+	// concurrent calls would thrash the database.
+	s.backupMu.Lock()
+	if s.backupRunning {
+		s.backupMu.Unlock()
+		writeError(w, http.StatusTooManyRequests, "a backup is already in progress")
+		return
+	}
+	if !s.backupLastDone.IsZero() {
+		if wait := backupMinInterval - time.Since(s.backupLastDone); wait > 0 {
+			s.backupMu.Unlock()
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())+1))
+			writeError(w, http.StatusTooManyRequests, "backup requested too soon; try again shortly")
+			return
+		}
+	}
+	s.backupRunning = true
+	s.backupMu.Unlock()
+	defer func() {
+		s.backupMu.Lock()
+		s.backupRunning = false
+		s.backupLastDone = time.Now()
+		s.backupMu.Unlock()
+	}()
+
+	// Size guard — refuse to back up an oversized database before paying the
+	// cost of VACUUM INTO.
+	if s.db.path != "" {
+		if st, statErr := os.Stat(s.db.path); statErr == nil && st.Size() > backupMaxBytes {
+			writeError(w, http.StatusRequestEntityTooLarge, "database too large to back up via this endpoint")
+			return
+		}
 	}
 
 	ts := time.Now().UTC().Unix()
@@ -74,9 +119,15 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 
 	stat, err := f.Stat()
-	if err == nil {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
+	if err != nil {
+		writeInternalError(w, "handleBackup stat snapshot", err)
+		return
 	}
+	if stat.Size() > backupMaxBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "backup snapshot too large to stream")
+		return
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", stat.Size()))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"corescope-backup-%d.db\"", ts))
 	w.Header().Set("X-Content-Type-Options", "nosniff")

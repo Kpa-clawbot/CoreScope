@@ -53,6 +53,16 @@ type Server struct {
 	// Channel PSK keys loaded at startup from rainbow file + config.
 	channelKeys map[string]string
 
+	// Per-IP rate limiters applied to /api/ routes (DoS protection).
+	limiters *rateLimiters
+
+	// /api/backup rate-limit state — VACUUM INTO is disk/CPU-heavy, so
+	// backups are serialized (one at a time) and spaced by a minimum interval.
+	backupMu       sync.Mutex
+	backupRunning  bool
+	backupLastDone time.Time
+
+
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
 
