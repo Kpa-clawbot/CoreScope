@@ -35,9 +35,9 @@ assert(/id="chAddChannelBtn"/.test(chSrc),
   'sidebar exposes #chAddChannelBtn (replaces inline form)');
 assert(/\+ Add Channel/.test(chSrc) || /Add Channel/.test(chSrc),
   '[+ Add Channel] button label present');
-// Old "No key" toggle must be GONE.
-assert(!/No key/.test(chSrc),
-  'old "No key" checkbox removed from sidebar');
+// Old "Show encrypted (no key)" toggle must be GONE.
+assert(!/Show encrypted \(no key\)/.test(chSrc),
+  'old "Show encrypted (no key)" checkbox removed from sidebar');
 assert(!/id="chShowEncrypted"/.test(chSrc),
   'old #chShowEncrypted toggle removed');
 

@@ -29,7 +29,9 @@ console.log('── Observers table headings (#1039) ──');
 
 test('thead column count equals tbody row column count', () => {
   const thead = extractBlock(src, /<thead><tr>/, /<\/tr><\/thead>/);
-  const thCount = (thead.match(/<th\b/g) || []).length;
+  // Columns are emitted either as literal `<th>` or via `sortTh(...)` calls.
+  const thCount = (thead.match(/<th\b/g) || []).length +
+                  (thead.match(/sortTh\(/g) || []).length;
 
   // tbody row template lives inside a backtick-template `<tr ...>...</tr>`.
   // Grab from the first `<tr ` after `tbody>` up to the first `</tr>`.
@@ -54,10 +56,11 @@ test('thead column count equals tbody row column count', () => {
 test('expected headings present and ordered', () => {
   const thead = extractBlock(src, /<thead><tr>/, /<\/tr><\/thead>/);
   const labels = [];
-  const re = /<th[^>]*>([^<]+)<\/th>/g;
+  // Columns are either literal `<th>Label</th>` or `sortTh('Label', ...)` calls.
+  const re = /sortTh\('([^']+)'|<th[^>]*>([^<]+)<\/th>/g;
   let m;
-  while ((m = re.exec(thead)) !== null) labels.push(m[1].trim());
-  const expected = ['Status', 'Name', 'Region', 'Last Status', 'Last Packet',
+  while ((m = re.exec(thead)) !== null) labels.push((m[1] || m[2]).trim());
+  const expected = ['Status', 'Name', 'SF', 'Region', 'Last Status', 'Last Packet',
                     'Packet Health', 'Total Packets', 'Packets/Hour', 'Clock Offset', 'Uptime'];
   assert.deepStrictEqual(labels, expected,
     `Headings out of sync.\nGot:      ${JSON.stringify(labels)}\nExpected: ${JSON.stringify(expected)}`);
