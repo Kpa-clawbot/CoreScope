@@ -9,7 +9,7 @@
   // Long : 1 min resolution, 48 h max (2880 samples) → 6h / 12h / 24h / 48h views
   const MAX_SAMPLES      = 720;
   const MAX_LONG_SAMPLES = 2880;
-  const REFRESH_MS       = 5000;
+  const REFRESH_MS       = 10000;
   const DETAIL_REFRESH_MS = 30000;
   const HISTORY_KEY      = 'cs-perf-history';
   const LONG_HISTORY_KEY = 'cs-perf-history-long';
@@ -17,8 +17,8 @@
   const longHistory      = [];
   let   lastLongSampleTs = 0;
 
-  const TIMEFRAME_SAMPLES      = { '5m': 60, '15m': 180, '30m': 360, '1h': 720 };
-  const LONG_TIMEFRAME_SAMPLES = { '6h': 360, '12h': 720, '24h': 1440, '48h': 2880 };
+  const TIMEFRAME_MS      = { '5m': 300000, '15m': 900000, '30m': 1800000, '1h': 3600000 };
+  const LONG_TIMEFRAME_MS = { '6h': 21600000, '12h': 43200000, '24h': 86400000, '48h': 172800000 };
 
   // Restore both buffers from sessionStorage on load; prune stale entries.
   (function restoreHistory() {
@@ -232,10 +232,13 @@
   }
 
   function getSlice() {
-    if (timeframe in LONG_TIMEFRAME_SAMPLES) {
-      return longHistory.slice(-(LONG_TIMEFRAME_SAMPLES[timeframe]));
+    const now = Date.now();
+    if (timeframe in LONG_TIMEFRAME_MS) {
+      const cutoff = now - LONG_TIMEFRAME_MS[timeframe];
+      return longHistory.filter(function (s) { return s.ts >= cutoff; });
     }
-    return history.slice(-(TIMEFRAME_SAMPLES[timeframe] || 60));
+    const cutoff = now - (TIMEFRAME_MS[timeframe] || 300000);
+    return history.filter(function (s) { return s.ts >= cutoff; });
   }
 
   // --- Server-side history preload ---
@@ -496,7 +499,7 @@
       </div>`;
     }
 
-    // SQLite stats
+    // SQLite stats (merged with WAL + cache hit)
     if (server.sqlite && !server.sqlite.error) {
       const sq = server.sqlite;
       const walColor      = sq.walSizeMB > 50  ? 'var(--status-red)'    : sq.walSizeMB > 10  ? 'var(--status-yellow)' : 'var(--status-green)';
@@ -504,8 +507,16 @@
       html += `<h3>SQLite</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
         <div class="perf-card"><div class="perf-num">${sq.dbSizeMB}MB</div><div class="perf-label">DB Size</div></div>
         <div class="perf-card"><div class="perf-num" style="color:${walColor}">${sq.walSizeMB}MB</div><div class="perf-label">WAL Size</div></div>
-        <div class="perf-card"><div class="perf-num" style="color:${freelistColor}">${sq.freelistMB}MB</div><div class="perf-label">Freelist</div></div>
-        <div class="perf-card"><div class="perf-num">${(sq.rows.transmissions || 0).toLocaleString()}</div><div class="perf-label">Transmissions</div></div>
+        <div class="perf-card"><div class="perf-num" style="color:${freelistColor}">${sq.freelistMB}MB</div><div class="perf-label">Freelist</div></div>`;
+      if (sqliteStats) {
+        const hitRate = (sqliteStats.cacheHitRate || 0) * 100;
+        const hitColor = hitRate > 0 && hitRate < 90 ? 'var(--status-yellow)' : 'var(--status-green)';
+        const hitFlag  = hitRate > 0 && hitRate < 90 ? ' ⚠️' : '';
+        html += `<div class="perf-card"><div class="perf-num" style="color:${hitColor}">${hitRate.toFixed(1)}%${hitFlag}</div><div class="perf-label">Cache Hit Rate</div></div>
+        <div class="perf-card"><div class="perf-num">${(sqliteStats.pageCount || 0).toLocaleString()}</div><div class="perf-label">Page Count</div></div>
+        <div class="perf-card"><div class="perf-num">${sqliteStats.pageSize || 0}</div><div class="perf-label">Page Size</div></div>`;
+      }
+      html += `<div class="perf-card"><div class="perf-num">${(sq.rows.transmissions || 0).toLocaleString()}</div><div class="perf-label">Transmissions</div></div>
         <div class="perf-card"><div class="perf-num">${(sq.rows.observations || 0).toLocaleString()}</div><div class="perf-label">Observations</div></div>
         <div class="perf-card"><div class="perf-num">${sq.rows.nodes || 0}</div><div class="perf-label">Nodes</div></div>
         <div class="perf-card"><div class="perf-num">${sq.rows.observers || 0}</div><div class="perf-label">Observers</div></div>`;
@@ -573,19 +584,6 @@
       }
     }
 
-    // SQLite perf (WAL + cache hit) (#1120)
-    if (sqliteStats) {
-      const walMB = sqliteStats.walSizeMB || 0;
-      const walFlag = walMB > 100 ? ' ⚠️' : '';
-      const hitRate = (sqliteStats.cacheHitRate || 0) * 100;
-      const hitFlag = hitRate > 0 && hitRate < 90 ? ' ⚠️' : '';
-      html += `<h3>SQLite (WAL + Cache Hit)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-        <div class="perf-card"><div class="perf-num">${walMB.toFixed(1)}MB${walFlag}</div><div class="perf-label">WAL Size</div></div>
-        <div class="perf-card"><div class="perf-num">${(sqliteStats.pageCount || 0).toLocaleString()}</div><div class="perf-label">Page Count</div></div>
-        <div class="perf-card"><div class="perf-num">${sqliteStats.pageSize || 0}</div><div class="perf-label">Page Size</div></div>
-        <div class="perf-card"><div class="perf-num">${hitRate.toFixed(1)}%${hitFlag}</div><div class="perf-label">Cache Hit Rate</div></div>
-      </div>`;
-    }
 
     // Server endpoints table
     const eps = Object.entries(server.endpoints);
