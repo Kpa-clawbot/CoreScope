@@ -420,10 +420,17 @@ func cloneSqliteStats(in SqliteStats) SqliteStats {
 func (db *DB) GetRoleCounts() map[string]int {
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
 	counts := map[string]int{}
-	for _, role := range []string{"repeater", "room", "companion", "sensor"} {
+	rows, err := db.conn.Query("SELECT role, COUNT(*) FROM nodes WHERE last_seen > ? GROUP BY role", sevenDaysAgo)
+	if err != nil {
+		return counts
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var role string
 		var c int
-		db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE role = ? AND last_seen > ?", role, sevenDaysAgo).Scan(&c)
-		counts[role+"s"] = c
+		if rows.Scan(&role, &c) == nil {
+			counts[role+"s"] = c
+		}
 	}
 	return counts
 }
@@ -431,10 +438,17 @@ func (db *DB) GetRoleCounts() map[string]int {
 // GetAllRoleCounts returns count per role (all nodes, no time filter — matching Node.js /api/nodes).
 func (db *DB) GetAllRoleCounts() map[string]int {
 	counts := map[string]int{}
-	for _, role := range []string{"repeater", "room", "companion", "sensor"} {
+	rows, err := db.conn.Query("SELECT role, COUNT(*) FROM nodes GROUP BY role")
+	if err != nil {
+		return counts
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var role string
 		var c int
-		db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE role = ?", role).Scan(&c)
-		counts[role+"s"] = c
+		if rows.Scan(&role, &c) == nil {
+			counts[role+"s"] = c
+		}
 	}
 	return counts
 }
@@ -853,10 +867,9 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 		limit = 50
 	}
 
-	var total int
-	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM nodes %s", w), args...).Scan(&total)
-
-	querySQL := fmt.Sprintf("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
+	// COUNT(*) OVER() gives the pre-LIMIT total in each returned row, eliminating
+	// a second round-trip through the same WHERE clause.
+	querySQL := fmt.Sprintf("SELECT COUNT(*) OVER() AS total, public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
 	qArgs := append(args, limit, offset)
 
 	rows, err := db.conn.Query(querySQL, qArgs...)
@@ -865,9 +878,10 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 	}
 	defer rows.Close()
 
+	var total int
 	nodes := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		n := scanNodeRow(rows)
+		n := scanNodeRowWithTotal(rows, &total)
 		if n != nil {
 			nodes = append(nodes, n)
 		}
@@ -2179,6 +2193,49 @@ func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	if err := rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign); err != nil {
 		return nil
 	}
+	m := map[string]interface{}{
+		"public_key":             pk,
+		"name":                   nullStr(name),
+		"role":                   nullStr(role),
+		"lat":                    nullFloat(lat),
+		"lon":                    nullFloat(lon),
+		"last_seen":              nullStr(lastSeen),
+		"first_seen":             nullStr(firstSeen),
+		"advert_count":           advertCount,
+		"last_heard":             nullStr(lastSeen),
+		"hash_size":              nil,
+		"hash_size_inconsistent": false,
+		"foreign":                foreign.Valid && foreign.Int64 != 0,
+	}
+	if batteryMv.Valid {
+		m["battery_mv"] = int(batteryMv.Int64)
+	} else {
+		m["battery_mv"] = nil
+	}
+	if temperatureC.Valid {
+		m["temperature_c"] = temperatureC.Float64
+	} else {
+		m["temperature_c"] = nil
+	}
+	return m
+}
+
+// scanNodeRowWithTotal scans a row that has COUNT(*) OVER() as its first column,
+// storing the total into *total and returning the node map.
+func scanNodeRowWithTotal(rows *sql.Rows, total *int) map[string]interface{} {
+	var rowTotal int
+	var pk string
+	var name, role, lastSeen, firstSeen sql.NullString
+	var lat, lon sql.NullFloat64
+	var advertCount int
+	var batteryMv sql.NullInt64
+	var temperatureC sql.NullFloat64
+	var foreign sql.NullInt64
+
+	if err := rows.Scan(&rowTotal, &pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign); err != nil {
+		return nil
+	}
+	*total = rowTotal
 	m := map[string]interface{}{
 		"public_key":             pk,
 		"name":                   nullStr(name),

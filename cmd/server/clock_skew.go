@@ -173,6 +173,11 @@ type ClockSkewEngine struct {
 	hashEvidence     map[string][]hashEvidenceEntry // hash → per-observer raw/corrected data
 	lastComputed     time.Time
 	computeInterval  time.Duration
+
+	// fleet response cache — avoids re-computing for every /api/nodes/clock-skew call
+	fleetCacheMu  sync.Mutex
+	fleetCache    []*NodeClockSkew
+	fleetCachedAt time.Time
 }
 
 // hashEvidenceEntry stores raw evidence per observer per hash, cached during Recompute.
@@ -697,15 +702,25 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 // GetFleetClockSkew returns clock skew data for all nodes that have skew data.
 // Must NOT be called with s.mu held.
 func (s *PacketStore) GetFleetClockSkew() []*NodeClockSkew {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	// Fast path: return cached result if still fresh (TTL matches compute interval).
+	s.clockSkew.fleetCacheMu.Lock()
+	if s.clockSkew.fleetCache != nil && time.Since(s.clockSkew.fleetCachedAt) < 30*time.Second {
+		result := s.clockSkew.fleetCache
+		s.clockSkew.fleetCacheMu.Unlock()
+		return result
+	}
+	s.clockSkew.fleetCacheMu.Unlock()
 
-	// Build name/role lookup from DB cache (requires s.mu held).
+	// Build name/role lookup BEFORE acquiring store lock so that getCachedNodesAndPM
+	// cannot block on a DB query while holding s.mu (which would delay all writes).
 	allNodes, _ := s.getCachedNodesAndPM()
 	nameMap := make(map[string]nodeInfo, len(allNodes))
 	for _, ni := range allNodes {
 		nameMap[ni.PublicKey] = ni
 	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	var results []*NodeClockSkew
 	for pubkey := range s.byNode {
@@ -724,6 +739,12 @@ func (s *PacketStore) GetFleetClockSkew() []*NodeClockSkew {
 		cs.CalibrationSummary = nil
 		results = append(results, cs)
 	}
+
+	s.clockSkew.fleetCacheMu.Lock()
+	s.clockSkew.fleetCache = results
+	s.clockSkew.fleetCachedAt = time.Now()
+	s.clockSkew.fleetCacheMu.Unlock()
+
 	return results
 }
 

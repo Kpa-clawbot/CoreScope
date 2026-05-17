@@ -29,6 +29,13 @@ func ensureServerIndexes(dbPath string) error {
 		// already creates them; see cmd/ingestor/db.go applySchema).
 		`CREATE INDEX IF NOT EXISTS idx_observations_timestamp ON observations(timestamp)`,
 		`CREATE INDEX IF NOT EXISTS idx_observations_transmission_id ON observations(transmission_id)`,
+		// nodes table: role and last_seen are both used in GetNodes ORDER BY / WHERE
+		// and in GetAllRoleCounts / GetRoleCounts GROUP BY. Without these indexes
+		// every query does a full table scan even though the table is small.
+		`CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes(last_seen)`,
+		`CREATE INDEX IF NOT EXISTS idx_nodes_role ON nodes(role)`,
+		// observers: queried with last_seen > ? filter in GetStoreStats.
+		`CREATE INDEX IF NOT EXISTS idx_observers_last_seen ON observers(last_seen)`,
 	}
 	for _, s := range stmts {
 		if _, err := rw.Exec(s); err != nil {

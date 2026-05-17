@@ -593,7 +593,8 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, cached)
 		return
 	}
-	s.statsMu.Unlock()
+	// Hold the lock while computing so concurrent cache-misses queue here instead of
+	// all issuing DB queries simultaneously (thundering-herd prevention).
 
 	var stats *Stats
 	var err error
@@ -603,6 +604,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		stats, err = s.db.GetStats()
 	}
 	if err != nil {
+		s.statsMu.Unlock()
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -662,7 +664,6 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		GoSysMB:       mem.GoSysMB,
 	}
 
-	s.statsMu.Lock()
 	s.statsCache = resp
 	s.statsCachedAt = time.Now()
 	s.statsMu.Unlock()
