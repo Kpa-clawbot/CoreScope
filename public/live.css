@@ -102,25 +102,15 @@
 }
 .live-header-body {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px 10px;
+  flex: 0 0 100%;
   min-width: 0;
 }
-/* Critical strip (Mesh-Operator review #1180): beacon + pkt count are
-   always visible even when the collapsible body is hidden at narrow
-   widths. This is the ingest-state cue (red beacon = WS down) + the
-   one number operators check while the header is otherwise collapsed. */
-.live-header-critical {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
+.live-header-body .live-stats-row {
+  flex: 0 0 100%;
 }
-/* Toggle buttons (#1178, #1179) — hidden at wide viewports, visible at ≤768px.
-   Mesh-Operator review #1180: tap target ≥48×48 (#1060 floor + AGENTS glove
-   operability rule). Visible glyph stays small (decorative); transparent
-   padding expands the hit area without changing the visual chrome. */
-.live-header-toggle,
 .live-controls-toggle {
   display: none;
   align-items: center;
@@ -140,11 +130,9 @@
   cursor: pointer;
   flex-shrink: 0;
 }
-.live-header-toggle:hover,
 .live-controls-toggle:hover {
   background: color-mix(in srgb, var(--text) 14%, transparent);
 }
-.live-header-toggle:focus-visible,
 .live-controls-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -468,8 +456,7 @@
   .live-stat-pill { font-size: 11px; padding: 2px 8px; }
   .live-toggles { font-size: 10px; gap: 6px; }
 
-  /* Show toggle buttons */
-  .live-header-toggle,
+  /* Show controls toggle button */
   .live-controls-toggle { display: inline-flex; }
 
   /* When collapsed, hide the body */
@@ -537,9 +524,7 @@
    *   sit beside the beacon.
    * - Cap header chrome at 44px (acceptance criterion in #1234). */
   .live-title { display: none !important; }
-  .live-header-toggle { display: none !important; }
-  /* #1234: header body now only contains the (hidden) MESH LIVE title;
-   * stats row is a direct child of .live-header. Collapse the body entirely
+  /* stats row is inside .live-header-body; collapse the body entirely
    * on mobile so it contributes 0 height. */
   .live-header-body,
   .live-header-body[hidden] { display: none !important; }
@@ -1275,25 +1260,10 @@
 }
 
 /* ══════════════════════════════════════════════════════════════
-   MESH LIVE header — restructured layout
-   Panel is now flex-column so the panel-header bar (title + actions)
-   sits above the stats row and toggles.
+   MESH LIVE header — desktop layout
+   Row layout: critical strip + stats + body inline; controls wrap
+   to next row via flex: 0 0 100% on .live-controls.
    ══════════════════════════════════════════════════════════════ */
-
-/* Column layout, wider default to hold all content */
-.live-header {
-  flex-direction: column !important;
-  align-items: stretch !important;
-  gap: 8px !important;
-  padding: 10px 14px !important;
-  min-width: 260px;
-}
-
-/* panel-header row: no extra padding — live-header padding covers it */
-.live-header .panel-header {
-  padding: 0;
-  gap: 6px;
-}
 
 /* Title stretches to fill space between beacon and actions */
 .live-header .live-title {

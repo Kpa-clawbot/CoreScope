@@ -908,22 +908,6 @@
       <div class="live-page">
         <div id="liveMap" style="width:100%;height:100%;position:absolute;top:0;left:0;z-index:1"></div>
         <div class="live-overlay live-header" id="liveHeader">
-          <div class="live-header-critical" data-live-header-critical>
-            <span class="live-beacon" aria-label="WebSocket connection beacon"></span>
-            <div class="live-stat-pill live-stat-pill--critical"><span id="livePktCount">0</span> pkts</div>
-          </div>
-          <!-- #1234: stats row promoted to a direct child of .live-header so
-               the counters are always visible inline on mobile (single-row
-               header, no MESH LIVE label, no chart toggle). At desktop
-               this also flows inline next to the title via flex. -->
-          <div class="live-stats-row" data-live-stats-row>
-            <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
-            <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
-            <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
-          </div>
-          <button class="live-header-toggle" data-live-header-toggle id="liveHeaderToggle"
-                  aria-expanded="false" aria-controls="liveHeaderBody"
-                  aria-label="Show live stats">📊</button>
           <div class="live-header-body" data-live-header-body id="liveHeaderBody">
             <div class="live-title">
               <span class="live-beacon" aria-label="WebSocket connection beacon"></span>
@@ -933,6 +917,12 @@
             <div class="live-header-actions">
               <button class="live-header-pin-btn" id="liveHeaderPinBtn" title="Pin panel open" aria-pressed="false" aria-label="Pin MESH LIVE panel open">📌</button>
               <button class="live-header-close-btn" id="liveHeaderCloseBtn" title="Minimise panel" aria-label="Minimise MESH LIVE panel">✕</button>
+            </div>
+            <div class="live-stats-row" data-live-stats-row>
+              <div class="live-stat-pill live-stat-pill--critical"><span id="livePktCount">0</span> pkts</div>
+              <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
+              <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
+              <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
             </div>
           </div>
         <!-- #1205: settings toggles are children of the MESH LIVE panel
