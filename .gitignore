@@ -33,3 +33,5 @@ corescope-server
 cmd/server/server
 /.claude
 _wt-*
+cmd/ingestor/ingestor
+cmd/decrypt/decrypt
