@@ -1188,6 +1188,7 @@
       });
     }
 
+
     // Event delegation for channel selection (touch-friendly)
     var chListEl = document.getElementById('chList');
     // Keyboard accessibility for the role="button" remove/share spans
@@ -1803,7 +1804,7 @@
     if (__selCh && __selCh.unread) { __selCh.unread = 0; }
     history.replaceState(null, '', `#/channels/${encodeURIComponent(hash)}`);
     // On narrow layouts switch to message view (sidebar hides, main fills screen).
-    var __layout = document.querySelector('.ch-layout');
+    var __layout = app.querySelector('.ch-layout');
     if (__layout && __layout.getBoundingClientRect().width <= 700) {
       __layout.classList.add('ch-viewing');
     }
