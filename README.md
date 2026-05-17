@@ -8,16 +8,18 @@
 
 High-performance MeshCore packet analyzer with a **Go backend** and **vanilla JS frontend** (no build step, no framework).
 
-CoreScope ingests packets from MQTT, decodes/stores them in SQLite, serves REST APIs + WebSocket updates from an in-memory store, and provides a browser UI for live packet analysis, maps, node analytics, and channel activity.
+CoreScope ingests packets from MQTT, decodes/stores them in Postgres or SQLite, serves REST APIs + WebSocket updates from an in-memory store, and provides a browser UI for live packet analysis, maps, node analytics, and channel activity.
 
 ## Current project state (May 2026)
 
 - **Backend architecture is Go-only.** The deprecated Node.js backend server (`server.js`) has been removed.
 - **Two Go binaries are active:**
-  - `cmd/ingestor`: MQTT ingestion + decode + SQLite writes
+  - `cmd/ingestor`: MQTT ingestion + decode + configured database writes
   - `cmd/server`: REST API + WebSocket + static frontend serving
 - **Frontend is active and framework-free** in `public/` (one file per page/feature).
-- **SQLite is persistence; in-memory indexes power fast API reads.**
+- **Postgres is the primary deployment backend; SQLite remains a compatibility and rollback fallback.**
+- **In-memory indexes still power the hottest API reads**, so `/api/perf` and `/api/perf/db` should be used to identify whether a dashboard path is database-bound or memory-bound.
+- **MeshCore Canada branding is the default** for this deployment branch: bundled MeshCore logo, blue MeshCore.ca theme defaults, and `Canada Meshcore Corescope` home copy.
 - **Cache-busting is automatic** at server startup by replacing `__BUST__` in `public/index.html`.
 - **Test suite is mixed-language:** Go tests for backend + Node-based test harnesses for frontend/route/behavior coverage.
 
@@ -34,7 +36,7 @@ CoreScope ingests packets from MQTT, decodes/stores them in SQLite, serves REST 
 ## Architecture
 
 1. MQTT packet streams arrive at **Go ingestor** (`cmd/ingestor/`).
-2. Ingestor decodes packets and writes to SQLite.
+2. Ingestor decodes packets and writes to Postgres or SQLite through the configured database driver.
 3. **Go server** (`cmd/server/`) polls/loads data and maintains in-memory query structures.
 4. Server exposes `/api/*`, broadcasts live updates via WebSocket, and serves `public/` assets.
 
@@ -97,6 +99,9 @@ The Docker image also includes `/app/corescope-migrate-postgres`. Use
 `docker-compose.dev.yml` for a live-style side-by-side dev deployment: it starts
 a separate Postgres container and exposes the dev UI on port `8443` without
 reusing the live SQLite or Caddy data directories.
+
+MeshCore.ca production-readiness notes and validation results are tracked in
+`docs/review/meshcore-ca-production-readiness.md`.
 
 ## Testing
 

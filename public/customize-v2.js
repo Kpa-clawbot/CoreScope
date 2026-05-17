@@ -7,7 +7,7 @@
   // ── Constants ──
 
   var DEFAULT_HOME = {
-    heroTitle: 'CoreScope',
+    heroTitle: 'Canada Meshcore Corescope',
     heroSubtitle: 'Real-time MeshCore LoRa mesh network analyzer',
     steps: [
       { emoji: '🔵', title: 'Connect via Bluetooth', description: 'Flash **BLE companion** firmware from [MeshCore Flasher](https://flasher.meshcore.co.uk/).\n- Screenless devices: default PIN `123456`\n- Screen devices: random PIN shown on display\n- If pairing fails: forget device, reboot, re-pair' },
@@ -52,6 +52,7 @@
   };
 
   var THEME_COLOR_KEYS = Object.keys(THEME_CSS_MAP).filter(function (k) { return k !== 'font' && k !== 'mono'; });
+  var DEFAULT_BRAND_LOGO_URL = 'img/meshcore-canada-logo.png';
 
   // ── Brand logo swap helper (PR #1137) ──
   // The default navbar brand logo is an inline <svg class="brand-logo"> so it
@@ -86,7 +87,7 @@
       // <img> in place because we don't have the SVG markup at runtime
       // (it lives in index.html). The next page reload restores the inline
       // SVG. Setting src to the default URL is a graceful intermediate.
-      node.setAttribute('src', 'img/corescope-logo.svg');
+      node.setAttribute('src', DEFAULT_BRAND_LOGO_URL);
       if (alt != null) node.setAttribute('alt', alt);
     }
   }
@@ -102,23 +103,23 @@
   // ── Presets (copied from v1 customize.js) ──
   var PRESETS = {
     default: {
-      name: 'Default', desc: 'MeshCore blue',
-      preview: ['#4a9eff', '#0f0f23', '#f4f5f7', '#1a1a2e', '#22c55e'],
+      name: 'Default', desc: 'MeshCore.ca indigo',
+      preview: ['#448aff', '#1a237e', '#f5f7fb', '#182032', '#22c55e'],
       theme: {
-        accent: '#4a9eff', navBg: '#0f0f23', navText: '#ffffff', background: '#f4f5f7', text: '#1a1a2e',
+        accent: '#448aff', navBg: '#1a237e', navText: '#ffffff', background: '#f5f7fb', text: '#101828',
         statusGreen: '#22c55e', statusYellow: '#eab308', statusRed: '#ef4444',
-        accentHover: '#6db3ff', navBg2: '#1a1a2e', navTextMuted: '#cbd5e1', textMuted: '#5b6370', border: '#e2e5ea',
-        surface1: '#ffffff', surface2: '#ffffff', cardBg: '#ffffff', contentBg: '#f4f5f7',
-        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f9fafb', rowHover: '#eef2ff', selectedBg: '#dbeafe',
-        surface3: '#ffffff', sectionBg: '#eef2ff'
+        accentHover: '#82b1ff', navBg2: '#0d47a1', navTextMuted: '#d8e3ff', textMuted: '#526071', border: '#d8dee9',
+        surface1: '#ffffff', surface2: '#ffffff', cardBg: '#ffffff', contentBg: '#f5f7fb',
+        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f8faff', rowHover: '#e8f0ff', selectedBg: '#dbe8ff',
+        surface3: '#ffffff', sectionBg: '#e8f0ff'
       },
       themeDark: {
-        accent: '#4a9eff', navBg: '#0f0f23', navText: '#ffffff', background: '#0f0f23', text: '#e2e8f0',
+        accent: '#448aff', navBg: '#0b1020', navText: '#ffffff', background: '#111827', text: '#e6edf7',
         statusGreen: '#22c55e', statusYellow: '#eab308', statusRed: '#ef4444',
-        accentHover: '#6db3ff', navBg2: '#1a1a2e', navTextMuted: '#cbd5e1', textMuted: '#a8b8cc', border: '#334155',
-        surface1: '#1a1a2e', surface2: '#232340', cardBg: '#1a1a2e', contentBg: '#0f0f23',
-        detailBg: '#232340', inputBg: '#1e1e34', rowStripe: '#1e1e34', rowHover: '#2d2d50', selectedBg: '#1e3a5f',
-        surface3: '#2d2d50', sectionBg: '#1e1e34'
+        accentHover: '#82b1ff', navBg2: '#1a237e', navTextMuted: '#d8e3ff', textMuted: '#b8c4d6', border: '#344258',
+        surface1: '#182032', surface2: '#202b40', cardBg: '#182032', contentBg: '#111827',
+        detailBg: '#202b40', inputBg: '#151e2d', rowStripe: '#151e2d', rowHover: '#26344d', selectedBg: '#1e3a8a',
+        surface3: '#26344d', sectionBg: '#151e2d'
       }
     },
     ocean: {
@@ -532,7 +533,7 @@
     // Logo brand colors mirror --accent / --accent-hover ONLY when an
     // operator has actually overridden them via the customizer. We check
     // userOverrides (not the merged effective config), so the server-default
-    // accent (#4a9eff) does NOT clobber the sage/teal :root brand defaults
+    // accent (#448aff) does NOT clobber the default logo brand colors
     // out-of-the-box. When an operator picks a theme, customizer writes the
     // override to localStorage, the override flows through here, and the
     // wordmark recolors to follow the chosen accent.

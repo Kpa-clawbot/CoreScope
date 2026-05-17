@@ -8,6 +8,9 @@
 
   const PREF_KEY = 'meshcore-user-level';
   const MY_NODES_KEY = 'meshcore-my-nodes'; // [{pubkey, name, addedAt}]
+  const DEFAULT_SITE_NAME = 'MeshCore Canada Live';
+  const DEFAULT_HOME_TITLE = 'Canada Meshcore Corescope';
+  const DEFAULT_LOGO_URL = 'img/meshcore-canada-logo.png';
 
   function getMyNodes() {
     try { return JSON.parse(localStorage.getItem(MY_NODES_KEY)) || []; } catch { return []; }
@@ -39,7 +42,7 @@
   function showChooser(container) {
     container.innerHTML = `
       <section class="home-chooser">
-        <h1>Welcome to ${escapeHtml(window.SITE_CONFIG?.branding?.siteName || 'CoreScope')}</h1>
+        <h1>Welcome to ${escapeHtml(window.SITE_CONFIG?.home?.heroTitle || DEFAULT_HOME_TITLE)}</h1>
         <p>How familiar are you with MeshCore?</p>
         <div class="chooser-options">
           <button class="chooser-btn new" id="chooseNew">
@@ -63,11 +66,13 @@
     const myNodes = getMyNodes();
     const hasNodes = myNodes.length > 0;
     const homeCfg = window.SITE_CONFIG?.home || null;
-    const siteName = window.SITE_CONFIG?.branding?.siteName || 'CoreScope';
+    const siteName = window.SITE_CONFIG?.branding?.siteName || DEFAULT_SITE_NAME;
+    const logoUrl = window.SITE_CONFIG?.branding?.logoUrl || DEFAULT_LOGO_URL;
 
     container.innerHTML = `
       <section class="home-hero">
-        <svg class="home-hero-logo" xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" aria-hidden="true" focusable="false"><path d="M540 100 A 30 30 0 1 0 540 160" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="1.00"/>
+        <img class="home-hero-logo" src="${escapeAttr(logoUrl)}" alt="" width="112" height="124">
+        <svg class="home-hero-logo home-hero-logo-legacy" xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" aria-hidden="true" focusable="false"><path d="M540 100 A 30 30 0 1 0 540 160" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="1.00"/>
 <path d="M540 73 A 57 57 0 1 0 540 187" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="0.82"/>
 <path d="M540 46 A 84 84 0 1 0 540 214" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="0.64"/>
 <path d="M540 19 A 111 111 0 1 0 540 241" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="0.46"/>
@@ -342,7 +347,7 @@
         loadMyNodes();
         // Update title if no nodes left
         const h1 = document.querySelector('.home-hero h1');
-        if (h1 && !getMyNodes().length) h1.textContent = 'CoreScope';
+        if (h1 && !getMyNodes().length) h1.textContent = window.SITE_CONFIG?.home?.heroTitle || DEFAULT_HOME_TITLE;
       });
     });
 

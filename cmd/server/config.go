@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,9 +16,9 @@ import (
 
 // Config mirrors the Node.js config.json structure (read-only fields).
 type Config struct {
-	Port    int    `json:"port"`
-	APIKey  string `json:"apiKey"`
-	DBPath  string `json:"dbPath"`
+	Port   int    `json:"port"`
+	APIKey string `json:"apiKey"`
+	DBPath string `json:"dbPath"`
 
 	// NodeBlacklist is a list of public keys to exclude from all API responses.
 	// Blacklisted nodes are hidden from node lists, search, detail, map, and stats.
@@ -146,10 +147,10 @@ type PacketStoreConfig struct {
 type GeoFilterConfig = geofilter.Config
 
 type RetentionConfig struct {
-	NodeDays      int `json:"nodeDays"`
-	ObserverDays  int `json:"observerDays"`
-	PacketDays    int `json:"packetDays"`
-	MetricsDays   int `json:"metricsDays"`
+	NodeDays     int `json:"nodeDays"`
+	ObserverDays int `json:"observerDays"`
+	PacketDays   int `json:"packetDays"`
+	MetricsDays  int `json:"metricsDays"`
 }
 
 // DBConfig is the shared SQLite vacuum/maintenance config (#919, #921).
@@ -272,6 +273,7 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 		if err != nil {
 			continue
 		}
+		data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 		if err := json.Unmarshal(data, cfg); err != nil {
 			return nil, fmt.Errorf("parsing config %s: %w", p, err)
 		}
@@ -298,6 +300,7 @@ func LoadTheme(baseDirs ...string) *ThemeFile {
 					continue
 				}
 			}
+			data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 			var t ThemeFile
 			if json.Unmarshal(data, &t) == nil {
 				return &t
@@ -369,7 +372,6 @@ func (c *Config) DBSettings(baseDir string) dbconfig.Settings {
 	legacyPath := c.ResolveDBPath(baseDir)
 	return dbconfig.Resolve(c.DB, legacyPath)
 }
-
 
 func (c *Config) NormalizeTimestampConfig() {
 	defaults := defaultTimestampConfig()

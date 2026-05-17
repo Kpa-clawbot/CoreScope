@@ -86,6 +86,20 @@ func TestLoadConfigFromDataSubdir(t *testing.T) {
 	}
 }
 
+func TestLoadConfigWithUTF8BOM(t *testing.T) {
+	dir := t.TempDir()
+	data := append([]byte{0xEF, 0xBB, 0xBF}, []byte(`{"port": 8181}`)...)
+	os.WriteFile(filepath.Join(dir, "config.json"), data, 0644)
+
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Port != 8181 {
+		t.Errorf("expected port 8181, got %d", cfg.Port)
+	}
+}
+
 func TestLoadConfigNoFiles(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := LoadConfig(dir)
@@ -198,6 +212,20 @@ func TestLoadThemeFromDataSubdir(t *testing.T) {
 	}
 	if theme.Branding["siteName"] != "DataTheme" {
 		t.Errorf("expected DataTheme, got %v", theme.Branding["siteName"])
+	}
+}
+
+func TestLoadThemeWithUTF8BOM(t *testing.T) {
+	dir := t.TempDir()
+	data := append([]byte{0xEF, 0xBB, 0xBF}, []byte(`{"branding":{"siteName":"BOMTheme"}}`)...)
+	os.WriteFile(filepath.Join(dir, "theme.json"), data, 0644)
+
+	theme := LoadTheme(dir)
+	if theme.Branding == nil {
+		t.Fatal("expected branding")
+	}
+	if theme.Branding["siteName"] != "BOMTheme" {
+		t.Errorf("expected BOMTheme, got %v", theme.Branding["siteName"])
 	}
 }
 

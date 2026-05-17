@@ -9,7 +9,7 @@
   padding: 0 20px;
   text-align: center;
 }
-.home-chooser h1 { font-size: 1.5rem; margin-bottom: 8px; }
+.home-chooser h1 { font-size: 1.5rem; line-height: 1.2; margin-bottom: 8px; }
 .home-chooser p { color: var(--text-muted); margin-bottom: 32px; }
 .chooser-options { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
 .chooser-btn {
@@ -33,15 +33,12 @@
 }
 .home-hero-logo {
   display: block;
-  width: 100%;
-  max-width: min(720px, 90vw);
+  width: min(112px, 38vw);
+  max-width: 112px;
   height: auto;
   margin: 0 auto 16px;
-  /* Inline SVG (PR #1137): inherits page CSS vars (--logo-text /
-     --logo-accent / --logo-accent-hi / --logo-muted) so it themes with
-     the rest of the UI on light AND dark themes. No baked background
-     rect — the SVG is transparent and sits on .home-hero's surface. */
 }
+.home-hero-logo-legacy { display: none; }
 .home-hero h1 {
   font: 700 1.5rem/1.2 var(--font);
   color: var(--text);

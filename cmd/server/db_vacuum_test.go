@@ -241,6 +241,29 @@ func TestCheckAutoVacuumLogs(t *testing.T) {
 	dbConn2.Close()
 }
 
+func TestIsPostgresDataSource(t *testing.T) {
+	tests := []struct {
+		name string
+		dsn  string
+		want bool
+	}{
+		{name: "postgres URL", dsn: "postgres://user:pass@localhost/corescope", want: true},
+		{name: "postgresql URL", dsn: "postgresql://user:pass@localhost/corescope", want: true},
+		{name: "mixed case with space", dsn: "  PostgreSQL://user:pass@localhost/corescope  ", want: true},
+		{name: "SQLite file URI", dsn: "file:///var/lib/meshcore.db?mode=rwc", want: false},
+		{name: "SQLite relative path", dsn: "data/meshcore.db", want: false},
+		{name: "empty", dsn: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isPostgresDataSource(tt.dsn); got != tt.want {
+				t.Fatalf("isPostgresDataSource(%q) = %v, want %v", tt.dsn, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfigIncrementalVacuumPages(t *testing.T) {
 	// Default
 	cfg := &Config{}

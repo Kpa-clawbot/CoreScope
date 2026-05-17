@@ -4,9 +4,9 @@
   "description": "MeshCore Canada Live analyzer and observer verification portal for MeshCore.ca.",
   "main": "index.js",
   "scripts": {
-    "test": "npx c8 --reporter=text --reporter=text-summary sh test-all.sh",
+    "test": "npx c8 --reporter=text --reporter=text-summary node scripts/run-tests.js",
     "test:unit": "node test-packet-filter.js && node test-aging.js && node test-frontend-helpers.js && node test-hop-resolver-affinity.js && node test-live.js",
-    "test:coverage": "npx c8 --reporter=text --reporter=html sh test-all.sh",
+    "test:coverage": "npx c8 --reporter=text --reporter=html node scripts/run-tests.js",
     "test:full-coverage": "sh scripts/combined-coverage.sh"
   },
   "keywords": [],

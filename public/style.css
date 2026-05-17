@@ -98,12 +98,12 @@
   --gutter: clamp(12px, 2vw, 32px);
   --content-max: min(100% - (2 * var(--gutter)), 1600px);
 
-  --nav-bg: #0f0f23;
-  --nav-bg2: #1a1a2e;
+  --nav-bg: #1a237e;
+  --nav-bg2: #0d47a1;
   --nav-text: #ffffff;
-  --nav-text-muted: #cbd5e1;
-  --nav-active-bg: rgba(74, 158, 255, 0.15);
-  --accent: #4a9eff;
+  --nav-text-muted: #d8e3ff;
+  --nav-active-bg: rgba(68, 138, 255, 0.18);
+  --accent: #448aff;
   --geo-filter-color: #3b82f6;
   --status-green: #22c55e;
   --status-yellow: #eab308;
@@ -115,18 +115,18 @@
   --status-amber-text: #92400e;
   --path-inspector-speculative: #d97706;
   --role-observer: #8b5cf6;
-  --accent-hover: #6db3ff;
-  --text: #1a1a2e;
-  --text-muted: #5b6370;
-  --border: #e2e5ea;
-  --row-stripe: #f9fafb;
-  --row-hover: #eef2ff;
+  --accent-hover: #82b1ff;
+  --text: #101828;
+  --text-muted: #526071;
+  --border: #d8dee9;
+  --row-stripe: #f8faff;
+  --row-hover: #e8f0ff;
   --detail-bg: #ffffff;
   --badge-radius: 12px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
   --input-bg: #fff;
-  --selected-bg: #dbeafe;
+  --selected-bg: #dbe8ff;
 
   /* --- Logo theme tokens (PR #1137 + brand-default follow-up) -----------
    * The CoreScope SVG logos are inlined into the DOM (navbar +
@@ -149,11 +149,11 @@
    * any theme; the navbar scopes it to --nav-text below so it stays
    * white on the dark navbar. */
   --logo-text: var(--text);
-  --logo-accent: #cfd9c9;
-  --logo-accent-hi: #2c8c8c;
+  --logo-accent: #448aff;
+  --logo-accent-hi: #82b1ff;
   --logo-muted: var(--text-muted);
 
-  --surface-0: #f4f5f7;
+  --surface-0: #f5f7fb;
   --surface-1: #ffffff;
   --surface-2: #ffffff;
   --surface-3: #ffffff;
@@ -210,24 +210,24 @@
     --status-amber-light: #422006;
     --status-amber-text: #fcd34d;
     --path-inspector-speculative: #f59e0b;
-    --surface-0: #0f0f23;
-    --surface-1: #1a1a2e;
-    --surface-2: #232340;
-    --surface-3: #2d2d50;
+    --surface-0: #111827;
+    --surface-1: #182032;
+    --surface-2: #202b40;
+    --surface-3: #26344d;
     --surface: var(--surface-1);
     --content-bg: var(--surface-0);
     --card-bg: var(--surface-1);
-    --text: #e2e8f0;
-    --text-muted: #a8b8cc;
-    --border: #334155;
-    --row-stripe: #1e1e34;
-    --row-hover: #2d2d50;
-    --detail-bg: #232340;
-    --input-bg: #1e1e34;
-    --selected-bg: #1e3a5f;
+    --text: #e6edf7;
+    --text-muted: #b8c4d6;
+    --border: #344258;
+    --row-stripe: #151e2d;
+    --row-hover: #26344d;
+    --detail-bg: #202b40;
+    --input-bg: #151e2d;
+    --selected-bg: #1e3a8a;
     --hover-bg: rgba(255,255,255, 0.06);
     --trace-ghost-color: #94a3b8;
-    --section-bg: #1e1e34;
+    --section-bg: #151e2d;
   }
 }
 /* ⚠️ DARK THEME VARIABLES — KEEP IN SYNC with @media block above */
@@ -240,24 +240,24 @@
   --status-amber: #f59e0b;
   --status-amber-light: #422006;
   --status-amber-text: #fcd34d;
-  --surface-0: #0f0f23;
-  --surface-1: #1a1a2e;
-  --surface-2: #232340;
-  --surface-3: #2d2d50;
+  --surface-0: #111827;
+  --surface-1: #182032;
+  --surface-2: #202b40;
+  --surface-3: #26344d;
   --surface: var(--surface-1);
   --content-bg: var(--surface-0);
   --card-bg: var(--surface-1);
-  --text: #e2e8f0;
-  --text-muted: #a8b8cc;
-  --border: #334155;
-  --row-stripe: #1e1e34;
-  --row-hover: #2d2d50;
-  --detail-bg: #232340;
-  --input-bg: #1e1e34;
-  --selected-bg: #1e3a5f;
+  --text: #e6edf7;
+  --text-muted: #b8c4d6;
+  --border: #344258;
+  --row-stripe: #151e2d;
+  --row-hover: #26344d;
+  --detail-bg: #202b40;
+  --input-bg: #151e2d;
+  --selected-bg: #1e3a8a;
   --hover-bg: rgba(255,255,255, 0.06);
   --trace-ghost-color: #94a3b8;
-  --section-bg: #1e1e34;
+  --section-bg: #151e2d;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -504,13 +504,25 @@ input[type="week"] {
        /* Pinned to match the SVG intrinsic width (#1141 followup: viewBox
      widened to 150 10 970 280 to fit CORE/SCOPE wordmark; intrinsic
      width 125 keeps the text legible at the same ~36px height). */
-  width: 125px;
+  width: auto;
+  object-fit: contain;
   max-height: 36px;
   /* The logo is inlined into the DOM (PR #1137) so it inherits page
      CSS variables; theme via --logo-text / --logo-accent / etc. defined
      in :root above. The .top-nav scope below overrides --logo-text to
      --nav-text so the wordmark stays readable on the dark navbar even
      when the page theme is Light. */
+}
+.nav-brand > svg.brand-logo,
+.brand-mark-only {
+  display: none;
+}
+.brand-text {
+  color: var(--nav-text);
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1.05;
+  white-space: nowrap;
 }
 .top-nav {
   /* Navbar lives on --nav-bg (typically dark), so the brand wordmark
@@ -1620,7 +1632,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 @media (max-width: 900px) {
   .panel-right { width: 320px; min-width: 320px; }
   .nav-stats { display: none; }
-  .brand-logo { height: 32px; width: 112px; }
+  .brand-logo { height: 32px; width: auto; }
   .nav-link { padding: 14px 8px; font-size: 13px; }
   .map-controls { width: 180px; font-size: 12px; }
 }
@@ -1630,8 +1642,10 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
    clips when squeezed into the 99px tablet pin (#1137 → SCOPE→SCOF).
    Swap to the dedicated .brand-mark-only inline SVG (arcs+dots only). */
 @media (max-width: 400px) {
-  .brand-logo { display: none; }
-  .brand-mark-only { display: block; }
+  .brand-text { display: none; }
+  .nav-brand > svg.brand-logo,
+  .brand-mark-only { display: none; }
+  .meshcore-brand-logo { display: block; }
 }
 
 /* #1057: Container query — stack the channels layout when the channels
