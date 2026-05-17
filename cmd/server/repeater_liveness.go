@@ -28,11 +28,21 @@ type RepeaterRelayInfo struct {
 	RelayCount24h int `json:"relayCount24h"`
 }
 
+type RepeaterEnrichment struct {
+	RelayInfo       RepeaterRelayInfo
+	UsefulnessScore float64
+}
+
 // payloadTypeAdvert is the MeshCore payload type for ADVERT packets.
 // See firmware/src/Mesh.h. Adverts are NOT considered relay activity:
 // a repeater that only sends adverts proves it is alive, not that it
 // is forwarding traffic for other nodes.
 const payloadTypeAdvert = 4
+
+type repeaterRelayEntry struct {
+	ts string
+	pt int
+}
 
 // parseRelayTS attempts to parse a packet first-seen timestamp using the
 // formats CoreScope writes in practice. Returns zero time and false on
@@ -75,117 +85,184 @@ func parseRelayTS(ts string) (time.Time, bool) {
 // relay hops (the firmware doesn't originate user traffic), so this is
 // the right approximation for issue #662.
 func (s *PacketStore) GetRepeaterRelayInfo(pubkey string, windowHours float64) RepeaterRelayInfo {
-	info := RepeaterRelayInfo{WindowHours: windowHours}
 	if pubkey == "" {
-		return info
+		return RepeaterRelayInfo{WindowHours: windowHours}
 	}
-	key := strings.ToLower(pubkey)
+	return s.GetRepeaterEnrichment([]string{pubkey}, windowHours)[pubkey].RelayInfo
+}
 
+// GetRepeaterEnrichment returns relay liveness and usefulness data for a
+// batch of repeaters. /api/nodes calls this once for the visible page instead
+// of acquiring the packet-store lock and rescanning traffic indexes per node.
+func (s *PacketStore) GetRepeaterEnrichment(pubkeys []string, windowHours float64) map[string]RepeaterEnrichment {
+	results := make(map[string]RepeaterEnrichment, len(pubkeys))
+	if len(pubkeys) == 0 {
+		return results
+	}
+
+	type scratchData struct {
+		entries []repeaterRelayEntry
+		relayed int
+	}
+	scratch := make(map[string]scratchData, len(pubkeys))
+	ordered := make([]string, 0, len(pubkeys))
+	seenPubkeys := make(map[string]string, len(pubkeys))
+	for _, pubkey := range pubkeys {
+		results[pubkey] = RepeaterEnrichment{
+			RelayInfo: RepeaterRelayInfo{WindowHours: windowHours},
+		}
+		if pubkey == "" {
+			continue
+		}
+		key := strings.ToLower(pubkey)
+		if _, ok := seenPubkeys[key]; ok {
+			continue
+		}
+		seenPubkeys[key] = pubkey
+		ordered = append(ordered, key)
+	}
+	if len(ordered) == 0 {
+		return results
+	}
+
+	totalNonAdvert := 0
 	s.mu.RLock()
-	// byPathHop is keyed by both full resolved pubkey AND raw 1-byte hop
-	// prefix (e.g. "a3"). Many ingested non-advert packets only carry the
-	// raw hop on the wire — resolution to the full pubkey happens later
-	// via neighbor affinity. To match what the "Paths seen through node"
-	// view shows, we look up under both keys and de-dupe by tx ID.
-	//
-	// The 1-byte prefix lookup CAN over-count when multiple nodes share
-	// the same first byte. This trades a possible over-count for clearly
-	// false zeros (issue #662). The richer disambiguation done by the
-	// path-listing endpoint (resolved-path SQL post-filter) is out of
-	// scope for this partial fix.
-	txList := s.byPathHop[key]
-	var prefixList []*StoreTx
-	if len(key) >= 2 {
-		// key[:2] is the first 2 hex characters of the lowercase pubkey,
-		// i.e. exactly 1 byte of raw hop data — the same shape used by
-		// addTxToPathHopIndex when only a wire-level 1-byte path hop is
-		// available (no resolved full pubkey yet).
-		prefix := key[:2]
-		if prefix != key {
-			prefixList = s.byPathHop[prefix]
+	for pt, list := range s.byPayloadType {
+		if pt == payloadTypeAdvert {
+			continue
 		}
+		totalNonAdvert += len(list)
 	}
-	// Copy only the timestamps + payload types we need so we can release
-	// the read lock before doing parsing/compare work below.
-	//
-	// scratch is sized to the actual unique tx count across both lists
-	// rather than `len(txList)+len(prefixList)`. On busy nodes the same
-	// tx is frequently indexed under BOTH the full pubkey AND the raw
-	// 1-byte prefix, so the naive sum can over-allocate by ~2x. We do a
-	// quick ID-set pass to get the exact size before allocating.
-	type entry struct {
-		ts string
-		pt int
-	}
-	uniq := make(map[int]struct{}, len(txList)+len(prefixList))
-	for _, tx := range txList {
-		if tx != nil {
-			uniq[tx.ID] = struct{}{}
+
+	for _, key := range ordered {
+		// byPathHop is keyed by both full resolved pubkey AND raw 1-byte hop
+		// prefix (e.g. "a3"). Many ingested non-advert packets only carry the
+		// raw hop on the wire — resolution to the full pubkey happens later
+		// via neighbor affinity. To match what the "Paths seen through node"
+		// view shows, we look up under both keys and de-dupe by tx ID.
+		//
+		// The 1-byte prefix lookup CAN over-count when multiple nodes share
+		// the same first byte. This trades a possible over-count for clearly
+		// false zeros (issue #662). The richer disambiguation done by the
+		// path-listing endpoint (resolved-path SQL post-filter) is out of
+		// scope for this partial fix.
+		txList := s.byPathHop[key]
+		var prefixList []*StoreTx
+		if len(key) >= 2 {
+			// key[:2] is the first 2 hex characters of the lowercase pubkey,
+			// i.e. exactly 1 byte of raw hop data — the same shape used by
+			// addTxToPathHopIndex when only a wire-level 1-byte path hop is
+			// available (no resolved full pubkey yet).
+			prefix := key[:2]
+			if prefix != key {
+				prefixList = s.byPathHop[prefix]
+			}
 		}
-	}
-	for _, tx := range prefixList {
-		if tx != nil {
-			uniq[tx.ID] = struct{}{}
-		}
-	}
-	scratch := make([]entry, 0, len(uniq))
-	seen := make(map[int]bool, len(uniq))
-	collect := func(list []*StoreTx) {
-		for _, tx := range list {
+
+		relayed := 0
+		for _, tx := range txList {
 			if tx == nil {
 				continue
 			}
-			if seen[tx.ID] {
+			if tx.PayloadType != nil && *tx.PayloadType == payloadTypeAdvert {
 				continue
 			}
-			seen[tx.ID] = true
-			pt := -1
-			if tx.PayloadType != nil {
-				pt = *tx.PayloadType
-			}
-			scratch = append(scratch, entry{ts: tx.FirstSeen, pt: pt})
+			relayed++
 		}
+
+		// Copy only the timestamps + payload types we need so we can release
+		// the read lock before doing parsing/compare work below.
+		//
+		// entries is sized to the actual unique tx count across both lists
+		// rather than `len(txList)+len(prefixList)`. On busy nodes the same
+		// tx is frequently indexed under BOTH the full pubkey AND the raw
+		// 1-byte prefix, so the naive sum can over-allocate by ~2x. We do a
+		// quick ID-set pass to get the exact size before allocating.
+		uniq := make(map[int]struct{}, len(txList)+len(prefixList))
+		for _, tx := range txList {
+			if tx != nil {
+				uniq[tx.ID] = struct{}{}
+			}
+		}
+		for _, tx := range prefixList {
+			if tx != nil {
+				uniq[tx.ID] = struct{}{}
+			}
+		}
+		entries := make([]repeaterRelayEntry, 0, len(uniq))
+		seen := make(map[int]bool, len(uniq))
+		collect := func(list []*StoreTx) {
+			for _, tx := range list {
+				if tx == nil {
+					continue
+				}
+				if seen[tx.ID] {
+					continue
+				}
+				seen[tx.ID] = true
+				pt := -1
+				if tx.PayloadType != nil {
+					pt = *tx.PayloadType
+				}
+				entries = append(entries, repeaterRelayEntry{ts: tx.FirstSeen, pt: pt})
+			}
+		}
+		collect(txList)
+		collect(prefixList)
+		scratch[key] = scratchData{entries: entries, relayed: relayed}
 	}
-	collect(txList)
-	collect(prefixList)
 	s.mu.RUnlock()
 
 	now := time.Now().UTC()
 	cutoff1h := now.Add(-1 * time.Hour)
 	cutoff24h := now.Add(-24 * time.Hour)
 
-	var latest time.Time
-	var latestRaw string
-	for _, e := range scratch {
-		// Self-originated adverts are not relay activity (see header comment).
-		if e.pt == payloadTypeAdvert {
-			continue
-		}
-		t, ok := parseRelayTS(e.ts)
-		if !ok {
-			continue
-		}
-		if t.After(latest) {
-			latest = t
-			latestRaw = e.ts
-		}
-		if t.After(cutoff24h) {
-			info.RelayCount24h++
-			if t.After(cutoff1h) {
-				info.RelayCount1h++
+	for _, key := range ordered {
+		pubkey := seenPubkeys[key]
+		data := scratch[key]
+		info := RepeaterRelayInfo{WindowHours: windowHours}
+
+		var latest time.Time
+		var latestRaw string
+		for _, e := range data.entries {
+			// Self-originated adverts are not relay activity (see header comment).
+			if e.pt == payloadTypeAdvert {
+				continue
+			}
+			t, ok := parseRelayTS(e.ts)
+			if !ok {
+				continue
+			}
+			if t.After(latest) {
+				latest = t
+				latestRaw = e.ts
+			}
+			if t.After(cutoff24h) {
+				info.RelayCount24h++
+				if t.After(cutoff1h) {
+					info.RelayCount1h++
+				}
 			}
 		}
-	}
-	if latestRaw == "" {
-		return info
-	}
-	info.LastRelayed = latestRaw
+		if latestRaw != "" {
+			info.LastRelayed = latestRaw
 
-	if windowHours > 0 {
-		cutoff := now.Add(-time.Duration(windowHours * float64(time.Hour)))
-		if latest.After(cutoff) {
-			info.RelayActive = true
+			if windowHours > 0 {
+				cutoff := now.Add(-time.Duration(windowHours * float64(time.Hour)))
+				if latest.After(cutoff) {
+					info.RelayActive = true
+				}
+			}
 		}
+
+		score := 0.0
+		if totalNonAdvert > 0 {
+			score = float64(data.relayed) / float64(totalNonAdvert)
+			if score > 1 {
+				score = 1
+			}
+		}
+		results[pubkey] = RepeaterEnrichment{RelayInfo: info, UsefulnessScore: score}
 	}
-	return info
+	return results
 }

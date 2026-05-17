@@ -1111,19 +1111,29 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		hashInfo := s.store.GetNodeHashSizeInfo()
 		mbCap := s.store.GetMultiByteCapMap()
 		relayWindow := s.cfg.GetHealthThresholds().RelayActiveHours
+		repeaterPubkeys := make([]string, 0, len(nodes))
+		for _, node := range nodes {
+			if pk, ok := node["public_key"].(string); ok {
+				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
+					repeaterPubkeys = append(repeaterPubkeys, pk)
+				}
+			}
+		}
+		repeaterEnrichment := s.store.GetRepeaterEnrichment(repeaterPubkeys, relayWindow)
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
 				EnrichNodeWithMultiByte(node, mbCap[pk])
 				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
-					info := s.store.GetRepeaterRelayInfo(pk, relayWindow)
+					enrichment := repeaterEnrichment[pk]
+					info := enrichment.RelayInfo
 					if info.LastRelayed != "" {
 						node["last_relayed"] = info.LastRelayed
 					}
 					node["relay_active"] = info.RelayActive
 					node["relay_count_1h"] = info.RelayCount1h
 					node["relay_count_24h"] = info.RelayCount24h
-					node["usefulness_score"] = s.store.GetRepeaterUsefulnessScore(pk)
+					node["usefulness_score"] = enrichment.UsefulnessScore
 				}
 			}
 		}
@@ -1233,7 +1243,8 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		EnrichNodeWithMultiByte(node, mbCap[pubkey])
 		if role, _ := node["role"].(string); role == "repeater" || role == "room" {
 			ht := s.cfg.GetHealthThresholds()
-			info := s.store.GetRepeaterRelayInfo(pubkey, ht.RelayActiveHours)
+			enrichment := s.store.GetRepeaterEnrichment([]string{pubkey}, ht.RelayActiveHours)[pubkey]
+			info := enrichment.RelayInfo
 			if info.LastRelayed != "" {
 				node["last_relayed"] = info.LastRelayed
 			}
@@ -1241,7 +1252,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			node["relay_window_hours"] = info.WindowHours
 			node["relay_count_1h"] = info.RelayCount1h
 			node["relay_count_24h"] = info.RelayCount24h
-			node["usefulness_score"] = s.store.GetRepeaterUsefulnessScore(pubkey)
+			node["usefulness_score"] = enrichment.UsefulnessScore
 		}
 	}
 

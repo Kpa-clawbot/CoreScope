@@ -22,6 +22,7 @@ func ensureServerIndexes(dbPath string) error {
 		`CREATE INDEX IF NOT EXISTS idx_transmissions_first_seen ON transmissions(first_seen)`,
 		`CREATE INDEX IF NOT EXISTS idx_transmissions_hash ON transmissions(hash)`,
 		`CREATE INDEX IF NOT EXISTS idx_transmissions_payload_type ON transmissions(payload_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_nodes_role_last_seen ON nodes(role, last_seen)`,
 		// PR #1187 r3: commit 63cc1bc3 restored the RFC3339 since/until path
 		// to a SELECT … FROM observations WHERE timestamp >= ? subquery in
 		// buildTransmissionWhere. Without these indexes the subquery

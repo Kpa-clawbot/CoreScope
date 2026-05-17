@@ -34,6 +34,7 @@ func ApplyPostgresSchema(db *sql.DB) error {
 			foreign_advert INTEGER DEFAULT 0
 		);
 		CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes(last_seen);
+		CREATE INDEX IF NOT EXISTS idx_nodes_role_last_seen ON nodes(role, last_seen DESC);
 		CREATE INDEX IF NOT EXISTS idx_nodes_foreign_advert ON nodes(foreign_advert) WHERE foreign_advert = 1;
 
 		CREATE TABLE IF NOT EXISTS inactive_nodes (
