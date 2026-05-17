@@ -1406,7 +1406,7 @@
         <thead><tr>
           <th scope="col" data-priority="1"></th><th scope="col" class="col-region" data-sort-key="region" data-priority="3">Region</th><th scope="col" class="col-time" data-sort-key="time" data-type="date" data-priority="1">Time</th><th scope="col" class="col-hash" data-sort-key="hash" data-priority="1">Hash</th><th scope="col" class="col-size" data-sort-key="size" data-type="numeric" data-priority="4">Size</th>
           <th scope="col" class="col-hashsize" data-sort-key="hb" data-type="numeric" data-priority="5">HB</th>
-          <th scope="col" class="col-type" data-sort-key="type" data-priority="1">Type</th><th scope="col" class="col-observer" data-sort-key="observer" data-priority="3">Observer</th><th scope="col" class="col-path" data-sort-key="path" data-priority="2">Path</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric" data-priority="4">Rpt</th><th scope="col" class="col-details" data-priority="2">Details</th>
+          <th scope="col" class="col-type" data-sort-key="type" data-priority="1">Type</th><th scope="col" class="col-observer" data-sort-key="observer" data-priority="1">Observer</th><th scope="col" class="col-path" data-sort-key="path" data-priority="2">Path</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric" data-priority="4">Rpt</th><th scope="col" class="col-details" data-priority="2">Details</th>
         </tr></thead>
         <tbody id="pktBody"></tbody>
       </table></div>
@@ -1787,7 +1787,10 @@
       { key: 'details', label: 'Details' },
     ];
     const isNarrow = window.innerWidth <= 640;
-    const defaultHidden = isNarrow ? ['region', 'hash', 'observer', 'path', 'rpt', 'size'] : ['region'];
+    // #1249: observer column must stay visible at narrow widths so the IATA
+    // badge (#1188) renders on mobile. Without observer in scope the user
+    // can't see who heard the packet at all.
+    const defaultHidden = isNarrow ? ['region', 'hash', 'path', 'rpt', 'size'] : ['region'];
     let visibleCols;
     try {
       visibleCols = JSON.parse(localStorage.getItem('packets-visible-cols'));
