@@ -1,9 +1,20 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cd "$DEPLOY_DIR"
+
+# Guard: `git reset --hard` below discards everything in the working tree.
+# Abort if there are uncommitted local changes so deploys never silently
+# destroy work on the deploy host. Commit/stash manually, then re-run.
+if [ -n "$(git status --porcelain)" ]; then
+  echo "[staging] ERROR: working tree at $DEPLOY_DIR is dirty." >&2
+  echo "[staging] Refusing to 'git reset --hard' over uncommitted changes." >&2
+  echo "[staging] Commit, stash, or discard them, then re-run this script." >&2
+  git status --short >&2
+  exit 1
+fi
 
 echo "[staging] Fetching latest from origin..."
 git fetch origin

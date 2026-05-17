@@ -46,9 +46,16 @@ COPY docker/supervisord-go-no-mosquitto-no-caddy.conf /etc/supervisor/conf.d/sup
 COPY docker/mosquitto.conf /etc/mosquitto/mosquitto.conf
 COPY docker/Caddyfile /etc/caddy/Caddyfile
 
+# Non-root application user. The supervised Go processes (ingestor/server)
+# run as this user via supervisord's per-program `user=` directive — see
+# docker/supervisord-go*.conf. /app/data is chown'd so it can write the
+# SQLite DB without root.
+RUN addgroup -S app && adduser -S -G app -u 10001 app
+
 # Data directory
 RUN mkdir -p /app/data /var/lib/mosquitto /data/caddy && \
-    chown -R mosquitto:mosquitto /var/lib/mosquitto
+    chown -R mosquitto:mosquitto /var/lib/mosquitto && \
+    chown -R app:app /app/data
 
 # Entrypoint
 COPY docker/entrypoint-go.sh /entrypoint.sh
@@ -57,5 +64,12 @@ RUN chmod +x /entrypoint.sh
 EXPOSE 80 443 1883
 
 VOLUME ["/app/data", "/data/caddy"]
+
+# NOTE: PID 1 (entrypoint + supervisord) intentionally stays root. This image
+# bundles multiple services under supervisord: Caddy binds privileged ports
+# 80/443, the entrypoint chown/chmods /etc/mosquitto/passwd at startup, and
+# mosquitto/caddy each drop their own privileges. Supervisord then launches
+# the application Go processes as the non-root `app` user (user= directive).
+# A blanket USER app here would break port binding and the startup chown.
 
 ENTRYPOINT ["/entrypoint.sh"]

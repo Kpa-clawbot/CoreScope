@@ -12,3 +12,20 @@ benchmark*.js
 PERFORMANCE.md
 docs/
 .gitignore
+
+# Test scaffolding and dev-only artifacts — never needed in the image
+test-*.js
+qa/
+reviews/
+.squad/
+
+# Planning / release docs — not part of the build
+*-PLAN.md
+*_PLAN.md
+RELEASE-*.md
+CHANGELOG.md
+DEDUP-DESIGN.md
+DEDUP-MIGRATION-PLAN.md
+AGENTS.md
+NEW_USER_SPEC.md
+AUDIO-WORKBENCH.md
