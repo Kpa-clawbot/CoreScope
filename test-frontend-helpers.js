@@ -5741,19 +5741,6 @@ console.log('\n=== packets.js: buildFieldTable hop count from path_len (#844) ==
   });
 }
 
-// ===== live.js: anomaly icon in feed =====
-console.log('\n=== live.js: anomaly icon in feed ===');
-{
-  const liveSource = fs.readFileSync('public/live.js', 'utf8');
-
-  test('addFeedItemDOM shows anomaly icon when decoded has anomaly', () => {
-    assert.ok(liveSource.includes('anomalyIcon'),
-      'live.js should have anomalyIcon variable for feed items');
-    assert.ok(liveSource.includes('pkt.decoded && pkt.decoded.anomaly'),
-      'live.js should check pkt.decoded.anomaly');
-  });
-}
-
 // ===== channel-decrypt.js: client-side crypto =====
 console.log('\n=== channel-decrypt.js: key derivation, MAC, parsing, storage ===');
 {

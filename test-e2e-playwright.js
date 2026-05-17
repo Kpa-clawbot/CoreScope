@@ -1276,13 +1276,13 @@ async function run() {
   await test('Customizer has separate map and live opacity sliders', async () => {
     // Verify by checking JS source \u2014 avoids heavy page reloads that crash ARM chromium
     const custJs = await page.evaluate(async () => {
-      const res = await fetch('/customize.js?_=' + Date.now());
+      const res = await fetch('/customize-v2.js?_=' + Date.now());
       return res.text();
     });
-    assert(custJs.includes('custHeatOpacity'), 'customize.js should have map opacity slider (custHeatOpacity)');
-    assert(custJs.includes('custLiveHeatOpacity'), 'customize.js should have live opacity slider (custLiveHeatOpacity)');
-    assert(custJs.includes('meshcore-heatmap-opacity'), 'customize.js should use meshcore-heatmap-opacity key');
-    assert(custJs.includes('meshcore-live-heatmap-opacity'), 'customize.js should use meshcore-live-heatmap-opacity key');
+    assert(custJs.includes('heatmapOpacity'), 'customize-v2.js should have map opacity slider (heatmapOpacity)');
+    assert(custJs.includes('liveHeatmapOpacity'), 'customize-v2.js should have live opacity slider (liveHeatmapOpacity)');
+    assert(custJs.includes('meshcore-heatmap-opacity'), 'customize-v2.js should use meshcore-heatmap-opacity key');
+    assert(custJs.includes('meshcore-live-heatmap-opacity'), 'customize-v2.js should use meshcore-live-heatmap-opacity key');
     // Verify labels are distinct
     assert(custJs.includes('Nodes Map') || custJs.includes('nodes map') || custJs.includes('\ud83d\uddfa'), 'Map slider should have map-related label');
     assert(custJs.includes('Live Map') || custJs.includes('live map') || custJs.includes('\ud83d\udce1'), 'Live slider should have live-related label');

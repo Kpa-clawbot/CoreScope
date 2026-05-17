@@ -27,9 +27,9 @@ message DecodedTransportCodes {
 
 // Parsed packet header (first byte).
 message DecodedHeader {
-  // Route type: 0=DIRECT, 1=FLOOD, 2=reserved, 3=TRANSPORT.
+  // Route type: 0=TRANSPORT_FLOOD, 1=FLOOD, 2=DIRECT, 3=TRANSPORT_DIRECT.
   int32 route_type = 1 [json_name = "routeType"];
-  // Human-readable route type name: "DIRECT", "FLOOD", "TRANSPORT".
+  // Human-readable route type name: "TRANSPORT_FLOOD", "FLOOD", "DIRECT", "TRANSPORT_DIRECT".
   optional string route_type_name = 5 [json_name = "routeTypeName"];
   // Payload type: 0=REQ .. 11=CONTROL (see Payload Type Reference).
   int32 payload_type = 2 [json_name = "payloadType"];

@@ -22,7 +22,7 @@ message Transmission {
   string first_seen = 4 [json_name = "first_seen"];
   // Display timestamp, same as first_seen (ISO 8601).
   string timestamp = 5;
-  // Route type: 0=DIRECT, 1=FLOOD, 2=reserved, 3=TRANSPORT.
+  // Route type: 0=TRANSPORT_FLOOD, 1=FLOOD, 2=DIRECT, 3=TRANSPORT_DIRECT.
   int32 route_type = 6 [json_name = "route_type"];
   // Payload type: 0=REQ .. 11=CONTROL.
   int32 payload_type = 7 [json_name = "payload_type"];
