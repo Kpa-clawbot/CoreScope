@@ -120,7 +120,7 @@
     const header = document.getElementById('chHeader');
     if (header) header.querySelector('.ch-header-text').textContent = 'Select a channel';
     const msgEl = document.getElementById('chMessages');
-    if (msgEl) msgEl.innerHTML = '<div class="ch-empty">Choose a channel from the sidebar to view messages</div>';
+    if (msgEl) msgEl.innerHTML = PageState.empty({ icon: '📡', title: 'Choose a channel', hint: 'Pick a channel from the sidebar to view its messages' });
     document.getElementById('chScrollBtn')?.classList.add('hidden');
     return true;
   }
@@ -221,7 +221,7 @@
           <button class="ch-node-close" data-action="ch-close-node" aria-label="Close">✕</button>
         </div>
         <div class="ch-node-panel-body">
-          <div class="ch-node-field" style="color:var(--text-muted)">No node record found — this sender has only been seen in channel messages, not via adverts.</div>
+          ${PageState.empty({ title: 'No node record found', hint: 'This sender has only been seen in channel messages, not via adverts.', compact: true })}
         </div>`;
       _focusTrapCleanup = trapFocus(panel);
       panel.querySelector('.ch-node-close')?.focus();
@@ -255,7 +255,7 @@
       _focusTrapCleanup = trapFocus(panel);
       panel.querySelector('.ch-node-close')?.focus();
     } catch (e) {
-      panel.innerHTML = `<div class="ch-node-panel-header"><strong>${escapeHtml(name)}</strong><button class="ch-node-close" data-action="ch-close-node">✕</button></div><div class="ch-node-panel-body ch-empty">Failed to load</div>`;
+      panel.innerHTML = `<div class="ch-node-panel-header"><strong>${escapeHtml(name)}</strong><button class="ch-node-close" data-action="ch-close-node">✕</button></div><div class="ch-node-panel-body">${PageState.errorText('Failed to load', { compact: true })}</div>`;
       _focusTrapCleanup = trapFocus(panel);
       panel.querySelector('.ch-node-close')?.focus();
     }
@@ -711,7 +711,7 @@
         </div>
         <div id="chAddStatus" class="ch-add-status" style="display:none"></div>
         <div class="ch-channel-list" id="chList" role="listbox" aria-label="Channels">
-          <div class="ch-loading">Loading channels…</div>
+          ${PageState.loading('Loading channels…', { compact: true })}
         </div>
         <div class="ch-sidebar-resize" aria-hidden="true"></div>
       </div>
@@ -802,7 +802,7 @@
           <button type="button" class="ch-header-qr-btn hidden" id="chHeaderQrBtn" aria-label="Share channel" aria-haspopup="dialog" title="Share channel QR">📤</button>
         </div>
         <div class="ch-messages" id="chMessages">
-          <div class="ch-empty">Choose a channel from the sidebar to view messages</div>
+          ${PageState.empty({ icon: '📡', title: 'Choose a channel', hint: 'Pick a channel from the sidebar to view its messages' })}
         </div>
         <span id="chAriaLive" class="sr-only" aria-live="polite"></span>
         <button class="ch-scroll-btn hidden" id="chScrollBtn">↓ New messages</button>
@@ -1145,7 +1145,7 @@
       history.replaceState(null, '', '#/channels');
       renderChannelList();
       var msgEl2 = document.getElementById('chMessages');
-      if (msgEl2) msgEl2.innerHTML = '<div class="ch-empty">Choose a channel from the sidebar to view messages</div>';
+      if (msgEl2) msgEl2.innerHTML = PageState.empty({ icon: '📡', title: 'Choose a channel', hint: 'Pick a channel from the sidebar to view its messages' });
       var hdr = document.getElementById('chHeader');
       if (hdr) hdr.querySelector('.ch-header-text').textContent = 'Select a channel';
       var hdrQrBtn = document.getElementById('chHeaderQrBtn');
@@ -1246,7 +1246,7 @@
             messages = [];
             history.replaceState(null, '', '#/channels');
             var msgEl2 = document.getElementById('chMessages');
-            if (msgEl2) msgEl2.innerHTML = '<div class="ch-empty">Choose a channel from the sidebar to view messages</div>';
+            if (msgEl2) msgEl2.innerHTML = PageState.empty({ icon: '📡', title: 'Choose a channel', hint: 'Pick a channel from the sidebar to view its messages' });
             var header2 = document.getElementById('chHeader');
             if (header2) header2.querySelector('.ch-header-text').textContent = 'Select a channel';
           }
@@ -1259,7 +1259,7 @@
           if (selectedHash === channelHash) {
             messages = [];
             var msgEl2 = document.getElementById('chMessages');
-            if (msgEl2) msgEl2.innerHTML = '<div class="ch-empty">Key removed — add a key to decrypt messages</div>';
+            if (msgEl2) msgEl2.innerHTML = PageState.empty({ icon: '🔑', title: 'Key removed', hint: 'Add a key to decrypt messages' });
           }
         }
         renderChannelList();
@@ -1617,7 +1617,7 @@
     } catch (e) {
       if (!silent) {
         const el = document.getElementById('chList');
-        if (el) el.innerHTML = `<div class="ch-empty">Failed to load channels</div>`;
+        if (el) PageState.error(el, e, function () { loadChannels(); }, { compact: true });
       }
     }
   }
@@ -1724,7 +1724,7 @@
   function renderChannelList() {
     const el = document.getElementById('chList');
     if (!el) return;
-    if (channels.length === 0) { el.innerHTML = '<div class="ch-empty">No channels found</div>'; return; }
+    if (channels.length === 0) { el.innerHTML = PageState.empty({ title: 'No channels found', compact: true }); return; }
 
     const sortByActivity = (a, b) => (b.lastActivityMs || 0) - (a.lastActivityMs || 0);
     const sortByCount = (a, b) => (b.messageCount || 0) - (a.messageCount || 0);
@@ -1822,7 +1822,7 @@
 
     // Shared helper: fetch, decrypt, and render messages for a channel key (M5: cache-first)
     async function decryptAndRender(keyHex, channelHashByte, channelName) {
-      msgEl.innerHTML = '<div class="ch-loading">Decrypting messages…</div>';
+      msgEl.innerHTML = PageState.loading('Decrypting messages…');
       var result = await fetchAndDecryptChannel(keyHex, channelHashByte, channelName, {
         onCacheHit: function (cachedMsgs) {
           // M5: Render cached messages immediately while delta fetch runs
@@ -1836,17 +1836,17 @@
       });
       if (isStaleMessageRequest(request)) return { stale: true };
       if (result.wrongKey) {
-        msgEl.innerHTML = '<div class="ch-empty ch-wrong-key">🔒 Key does not match — no messages could be decrypted</div>';
+        msgEl.innerHTML = PageState.empty({ icon: '🔑', title: 'Key does not match', hint: 'The configured key cannot decrypt this channel' });
         return { wrongKey: true, messageCount: 0 };
       }
       if (result.error) {
-        msgEl.innerHTML = '<div class="ch-empty">' + escapeHtml(result.error) + '</div>';
+        msgEl.innerHTML = PageState.errorText(result.error);
         return { error: result.error, messageCount: 0 };
       }
       messages = result.messages || [];
       resolveObserverSfs(messages);
       if (messages.length === 0) {
-        msgEl.innerHTML = '<div class="ch-empty">No encrypted messages found for this channel</div>';
+        msgEl.innerHTML = PageState.empty({ title: 'No encrypted messages found for this channel' });
       } else {
         header.querySelector('.ch-header-text').textContent = `${name} — ${messages.length} messages (decrypted)`;
         renderMessages();
@@ -1887,7 +1887,7 @@
         }
       }
       // #781: No matching key found — show lock message instead of fetching gibberish
-      msgEl.innerHTML = '<div class="ch-empty">🔒 This channel is encrypted and no decryption key is configured</div>';
+      msgEl.innerHTML = PageState.empty({ icon: '🔒', title: 'Encrypted and no key configured', hint: 'Add a decryption key for this channel to view its messages' });
       return;
     }
 
@@ -1907,7 +1907,7 @@
       // before assuming a lock state. Conservative on error — fall through.
       // Show a loading affordance so cold deep links don't display stale content
       // for the duration of the metadata RTT (cached 15s thereafter).
-      msgEl.innerHTML = '<div class="ch-loading">Loading messages…</div>';
+      msgEl.innerHTML = PageState.loading('Loading messages…');
       try {
         var rpInc = RegionFilter.getRegionParam();
         var paramsInc = ['includeEncrypted=true'];
@@ -1916,7 +1916,7 @@
         if (isStaleMessageRequest(request)) return;
         var foundCh = (allCh.channels || []).find(function (c) { return c.hash === hash; });
         if (foundCh && foundCh.encrypted === true) {
-          msgEl.innerHTML = '<div class="ch-empty">🔒 This channel is encrypted and no decryption key is configured</div>';
+          msgEl.innerHTML = PageState.empty({ icon: '🔒', title: 'Encrypted and no key configured', hint: 'Add a decryption key for this channel to view its messages' });
           return;
         }
         // Unencrypted (or unknown) — fall through to the REST fetch below.
@@ -1925,7 +1925,7 @@
       }
     }
 
-    msgEl.innerHTML = '<div class="ch-loading">Loading messages…</div>';
+    msgEl.innerHTML = PageState.loading('Loading messages…');
 
     try {
       const regionQs = rp ? '&region=' + encodeURIComponent(rp) : '';
@@ -1934,14 +1934,14 @@
       messages = data.messages || [];
       resolveObserverSfs(messages);
       if (messages.length === 0 && rp) {
-        msgEl.innerHTML = '<div class="ch-empty">Channel not available in selected region</div>';
+        msgEl.innerHTML = PageState.empty({ title: 'Channel not available in selected region' });
       } else {
         renderMessages();
         scrollToBottom();
       }
     } catch (e) {
       if (isStaleMessageRequest(request)) return;
-      msgEl.innerHTML = `<div class="ch-empty">Failed to load messages: ${e.message}</div>`;
+      msgEl.innerHTML = PageState.errorText('Failed to load messages: ' + e.message);
     }
   }
 
@@ -1964,7 +1964,7 @@
       const newMsgs = data.messages || [];
       if (opts.regionSwitch && rp && newMsgs.length === 0) {
         messages = [];
-        msgEl.innerHTML = '<div class="ch-empty">Channel not available in selected region</div>';
+        msgEl.innerHTML = PageState.empty({ title: 'Channel not available in selected region' });
         document.getElementById('chScrollBtn')?.classList.add('hidden');
         return;
       }
@@ -1986,7 +1986,7 @@
   function renderMessages() {
     const msgEl = document.getElementById('chMessages');
     if (!msgEl) return;
-    if (messages.length === 0) { msgEl.innerHTML = '<div class="ch-empty">No messages in this channel yet</div>'; return; }
+    if (messages.length === 0) { msgEl.innerHTML = PageState.empty({ icon: '💬', title: 'No messages in this channel yet' }); return; }
 
     msgEl.innerHTML = messages.map(msg => {
       const sender = msg.sender || 'Unknown';
