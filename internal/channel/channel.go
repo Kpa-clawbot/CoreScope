@@ -6,6 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/binary"
 	"fmt"
 	"strings"
@@ -42,7 +43,7 @@ func Decrypt(key []byte, mac []byte, ciphertext []byte) ([]byte, bool) {
 	h := hmac.New(sha256.New, channelSecret)
 	h.Write(ciphertext)
 	calculatedMac := h.Sum(nil)
-	if calculatedMac[0] != mac[0] || calculatedMac[1] != mac[1] {
+	if subtle.ConstantTimeCompare(calculatedMac[:2], mac) != 1 {
 		return nil, false
 	}
 

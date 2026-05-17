@@ -761,6 +761,8 @@ func (s *Store) prepareStatements() error {
 
 // InsertTransmission inserts a decoded packet into transmissions + observations.
 // Returns true if a new transmission was created (not a duplicate hash).
+// All writes are wrapped in a single explicit transaction, reducing WAL
+// transaction overhead from 3 implicit commits to 1 per call.
 func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	hash := data.Hash
 	if hash == "" {
@@ -773,23 +775,29 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		rxTime = ingestNow
 	}
 
+	dbtx, err := s.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("begin tx: %w", err)
+	}
+	defer dbtx.Rollback() //nolint:errcheck
+
 	var txID int64
 	isNew := false
 
 	// Check for existing transmission
 	var existingID int64
 	var existingFirstSeen string
-	err := s.stmtGetTxByHash.QueryRow(hash).Scan(&existingID, &existingFirstSeen)
+	err = dbtx.Stmt(s.stmtGetTxByHash).QueryRow(hash).Scan(&existingID, &existingFirstSeen)
 	if err == nil {
 		// Existing transmission
 		txID = existingID
 		if rxTime < existingFirstSeen {
-			_, _ = s.stmtUpdateTxFirstSeen.Exec(rxTime, txID)
+			_, _ = dbtx.Stmt(s.stmtUpdateTxFirstSeen).Exec(rxTime, txID)
 		}
 	} else {
 		// New transmission
 		isNew = true
-		result, err := s.stmtInsertTransmission.Exec(
+		result, err := dbtx.Stmt(s.stmtInsertTransmission).Exec(
 			data.RawHex, hash, rxTime,
 			data.RouteType, data.PayloadType, data.PayloadVersion,
 			data.DecodedJSON, nilIfEmpty(data.ChannelHash),
@@ -811,12 +819,12 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	var observerIdx *int64
 	if data.ObserverID != "" {
 		var rowid int64
-		err := s.stmtGetObserverRowid.QueryRow(data.ObserverID).Scan(&rowid)
+		err := dbtx.Stmt(s.stmtGetObserverRowid).QueryRow(data.ObserverID).Scan(&rowid)
 		if err == nil {
 			observerIdx = &rowid
 			// Update observer last_seen and last_packet_at on every packet to prevent
 			// low-traffic observers from appearing offline (#463)
-			_, _ = s.stmtUpdateObserverLastSeen.Exec(ingestNow, rxTime, ingestNow, rxTime, rowid)
+			_, _ = dbtx.Stmt(s.stmtUpdateObserverLastSeen).Exec(ingestNow, rxTime, ingestNow, rxTime, rowid)
 		}
 	}
 
@@ -826,7 +834,7 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		epochTs = t.Unix()
 	}
 
-	_, err = s.stmtInsertObservation.Exec(
+	_, err = dbtx.Stmt(s.stmtInsertObservation).Exec(
 		txID, observerIdx, data.Direction,
 		data.SNR, data.RSSI, data.Score,
 		data.PathJSON, epochTs, nilIfEmpty(data.RawHex),
@@ -838,8 +846,9 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		s.Stats.ObservationsInserted.Add(1)
 	}
 
-	// Each prepared-stmt Exec auto-commits. Count one WAL commit per
-	// successful InsertTransmission so the perf page sees commit pressure.
+	if err := dbtx.Commit(); err != nil {
+		return false, fmt.Errorf("commit tx: %w", err)
+	}
 	s.Stats.WALCommits.Add(1)
 
 	return isNew, nil

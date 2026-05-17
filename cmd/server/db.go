@@ -481,6 +481,12 @@ func (db *DB) QueryPackets(q PacketQuery) (*PacketResult, error) {
 	if q.Limit <= 0 {
 		q.Limit = 50
 	}
+	if q.Limit > 500 {
+		q.Limit = 500
+	}
+	if q.Offset < 0 {
+		q.Offset = 0
+	}
 	if q.Order == "" {
 		q.Order = "DESC"
 	}
@@ -529,6 +535,12 @@ func (db *DB) QueryPackets(q PacketQuery) (*PacketResult, error) {
 func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 	if q.Limit <= 0 {
 		q.Limit = 50
+	}
+	if q.Limit > 500 {
+		q.Limit = 500
+	}
+	if q.Offset < 0 {
+		q.Offset = 0
 	}
 
 	where, args := db.buildTransmissionWhere(q)
