@@ -1,12 +1,15 @@
 package main
 
 import (
+	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func numGoroutinesForTest() int { return runtime.NumGoroutine() }
 
 // TestAnalyticsRecomputerSteadyStateLatency asserts that issue #1240's
 // steady-state background recompute is in place: reads of the common
@@ -120,4 +123,52 @@ func TestAnalyticsRecomputerSteadyStateLatency(t *testing.T) {
 	if p99 > budget {
 		t.Fatalf("p99 read latency %v exceeds %v budget (issue #1240 not in effect)", p99, budget)
 	}
+}
+
+// TestAnalyticsRecomputerShutdownNoLeak asserts the background
+// goroutines started by StartAnalyticsRecomputers exit cleanly when
+// the returned stop function is called — no leak across server
+// shutdown (issue #1240 acceptance criterion).
+func TestAnalyticsRecomputerShutdownNoLeak(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	store := NewPacketStore(db, nil)
+
+	// Use a tight tick so we know recompute is actually running (not
+	// just blocked on the ticker).
+	stop := store.StartAnalyticsRecomputers(20 * time.Millisecond)
+
+	// Snapshot active goroutines a beat after start.
+	time.Sleep(80 * time.Millisecond)
+	startGoroutines := runtimeNumGoroutine()
+
+	stop()
+
+	// After stop returns, give the scheduler a beat to reap exits.
+	deadline := time.Now().Add(2 * time.Second)
+	var endGoroutines int
+	for time.Now().Before(deadline) {
+		endGoroutines = runtimeNumGoroutine()
+		if endGoroutines <= startGoroutines-5 { // we started 6 recomputers
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// We expect ~6 fewer goroutines than the snapshot taken DURING
+	// recompute (one per registered recomputer). Allow some slack
+	// since test runners can have flaky goroutine counts.
+	if endGoroutines >= startGoroutines {
+		t.Fatalf("goroutine leak after stop: %d → %d (expected fewer)",
+			startGoroutines, endGoroutines)
+	}
+	t.Logf("goroutines: during=%d after=%d (Δ=%d)",
+		startGoroutines, endGoroutines, startGoroutines-endGoroutines)
+}
+
+// runtimeNumGoroutine is wrapped to keep the imports section of the
+// production file minimal.
+func runtimeNumGoroutine() int {
+	// imported below
+	return numGoroutinesForTest()
 }

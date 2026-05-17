@@ -350,6 +350,17 @@ func main() {
 	stopEviction := store.StartEvictionTicker()
 	defer stopEviction()
 
+	// Steady-state analytics recomputers (issue #1240). Replaces the
+	// on-request compute-then-cache pattern for the default (region="",
+	// zero-window) analytics queries with a background refresh loop so
+	// reads always hit cache in <1ms.
+	stopAnalyticsRecomp := store.StartAnalyticsRecomputers(
+		cfg.AnalyticsDefaultRecomputeInterval(),
+		cfg.AnalyticsRecomputeIntervals(),
+	)
+	defer stopAnalyticsRecomp()
+	log.Printf("[analytics-recompute] background recompute enabled (default=%s)", cfg.AnalyticsDefaultRecomputeInterval())
+
 	// Auto-prune old packets if retention.packetDays is configured
 	vacuumPages := cfg.IncrementalVacuumPages()
 	var stopPrune func()
@@ -527,6 +538,13 @@ func main() {
 		}
 		if stopEdgePrune != nil {
 			stopEdgePrune()
+		}
+
+		// 1c. Stop steady-state analytics recomputers (issue #1240).
+		// Must happen before dbClose so any in-flight compute that
+		// reaches into SQLite has finished.
+		if stopAnalyticsRecomp != nil {
+			stopAnalyticsRecomp()
 		}
 
 		// 2. Gracefully drain HTTP connections (up to 15s)

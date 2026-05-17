@@ -248,5 +248,18 @@
   "_comment_hashChannels": "Channel names whose keys are derived via SHA256. Key = SHA256(name)[:16]. Listed here so the ingestor can auto-derive keys.",
   "_comment_defaultRegion": "IATA code shown by default in region filters.",
   "_comment_mapDefaults": "Initial map center [lat, lon] and zoom level.",
-  "_comment_regions": "IATA code → display name mapping for the region filter UI. Each key is a 3-letter IATA code that an observer is tagged with (resolved priority: MQTT payload `region` field > topic-derived region > mqttSources.region). Observers without an IATA tag will not appear under any region filter — only under 'All Regions'. The region filter dropdown shows one entry per code listed here PLUS any extra IATA codes the server discovers from observers at runtime (so you can omit codes here and they will still be selectable, just labelled with the bare IATA code instead of a friendly name). Selecting 'All Regions' (or no region) returns results from every observer including those with no IATA tag; selecting one or more codes restricts results to packets observed by observers tagged with those codes. The reserved value 'All' (case-insensitive) is treated as 'no filter' on the server, so the URL ?region=All behaves identically to omitting the param. Issue #770."
+  "_comment_regions": "IATA code → display name mapping for the region filter UI. Each key is a 3-letter IATA code that an observer is tagged with (resolved priority: MQTT payload `region` field > topic-derived region > mqttSources.region). Observers without an IATA tag will not appear under any region filter — only under 'All Regions'. The region filter dropdown shows one entry per code listed here PLUS any extra IATA codes the server discovers from observers at runtime (so you can omit codes here and they will still be selectable, just labelled with the bare IATA code instead of a friendly name). Selecting 'All Regions' (or no region) returns results from every observer including those with no IATA tag; selecting one or more codes restricts results to packets observed by observers tagged with those codes. The reserved value 'All' (case-insensitive) is treated as 'no filter' on the server, so the URL ?region=All behaves identically to omitting the param. Issue #770.",
+
+  "analytics": {
+    "defaultIntervalSeconds": 300,
+    "recomputeIntervalSeconds": {
+      "topology": 300,
+      "rf": 300,
+      "distance": 300,
+      "channels": 300,
+      "hashCollisions": 300,
+      "hashSizes": 300
+    }
+  },
+  "_comment_analytics": "Issue #1240. Each analytics endpoint (topology, rf, distance, channels, hashCollisions, hashSizes) is recomputed in the background on the configured interval and served from an atomic-pointer cache. Reads never block on compute. Default 300s (5 min) per endpoint reflects the operator principle: serving slightly stale data quickly beats real-time data slowly. Lower values = fresher data at higher CPU cost. Only the default query (no region/window) is precomputed; region- and window-filtered requests fall back to the legacy on-request compute + 60s TTL cache."
 }

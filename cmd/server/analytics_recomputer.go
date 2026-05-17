@@ -142,16 +142,96 @@ func (r *analyticsRecomputer) ComputeRuns() int64 {
 	return r.computeRuns.Load()
 }
 
-// StartAnalyticsRecomputers wires the registered analytics endpoints
-// (topology, rf, distance, channels, hash-collisions, hash-sizes) to
-// background recompute goroutines on the given default interval.
-// Returns a stop function that signals all goroutines and waits for
-// clean exit. Safe to call once per PacketStore.
+// AnalyticsRecomputeIntervals lets callers (main.go) override the
+// per-endpoint recompute interval from config.json. Zero values fall
+// back to the defaultInterval passed to StartAnalyticsRecomputers.
+type AnalyticsRecomputeIntervals struct {
+	Topology       time.Duration
+	RF             time.Duration
+	Distance       time.Duration
+	Channels       time.Duration
+	HashCollisions time.Duration
+	HashSizes      time.Duration
+}
+
+func pickInterval(override, def time.Duration) time.Duration {
+	if override > 0 {
+		return override
+	}
+	return def
+}
+
+// StartAnalyticsRecomputers wires each analytics endpoint to a
+// background recompute goroutine. Each runs an initial compute
+// synchronously (so the first read after startup is a cache hit, never
+// cold) and then refreshes on a ticker.
 //
-// RED COMMIT STUB: returns a no-op stop closure without wiring any
-// recompute. The latency test in analytics_recomputer_test.go must
-// FAIL on this stub (proving the test gates the implementation). The
-// GREEN commit replaces this with real wiring.
-func (s *PacketStore) StartAnalyticsRecomputers(_ time.Duration) func() {
-	return func() {}
+// All recomputers serve the DEFAULT query shape only: region="" and
+// zero-window (no ?since= / ?until= params). Region-keyed or windowed
+// queries continue to use the legacy on-request compute + TTL cache —
+// the recomputer count would explode if we maintained one per
+// (endpoint × region × window) combination, and region filtering is
+// fast read-time work anyway.
+//
+// Returns a stop closure that signals all goroutines and blocks until
+// they exit. Safe to call once per PacketStore. Idempotent if called
+// multiple times (subsequent calls return the first stop closure).
+func (s *PacketStore) StartAnalyticsRecomputers(defaultInterval time.Duration, overrides ...AnalyticsRecomputeIntervals) func() {
+	if defaultInterval <= 0 {
+		defaultInterval = 5 * time.Minute
+	}
+	var ov AnalyticsRecomputeIntervals
+	if len(overrides) > 0 {
+		ov = overrides[0]
+	}
+
+	s.analyticsRecomputerMu.Lock()
+	if s.recompTopology != nil {
+		// Already started; return a no-op so the caller's defer is harmless.
+		s.analyticsRecomputerMu.Unlock()
+		return func() {}
+	}
+
+	// Each recomputer wraps the underlying compute* function with the
+	// default arguments. We use computeAnalytics* (not GetAnalytics*) to
+	// bypass the legacy TTL cache layer — the recomputer IS the cache.
+	s.recompTopology = newAnalyticsRecomputer(
+		"topology", pickInterval(ov.Topology, defaultInterval),
+		func() interface{} { return s.computeAnalyticsTopology("", TimeWindow{}) },
+	)
+	s.recompRF = newAnalyticsRecomputer(
+		"rf", pickInterval(ov.RF, defaultInterval),
+		func() interface{} { return s.computeAnalyticsRF("", TimeWindow{}) },
+	)
+	s.recompDistance = newAnalyticsRecomputer(
+		"distance", pickInterval(ov.Distance, defaultInterval),
+		func() interface{} { return s.computeAnalyticsDistance("") },
+	)
+	s.recompChannels = newAnalyticsRecomputer(
+		"channels", pickInterval(ov.Channels, defaultInterval),
+		func() interface{} { return s.computeAnalyticsChannels("", TimeWindow{}) },
+	)
+	s.recompHashCollisions = newAnalyticsRecomputer(
+		"hash-collisions", pickInterval(ov.HashCollisions, defaultInterval),
+		func() interface{} { return s.computeHashCollisions("") },
+	)
+	s.recompHashSizes = newAnalyticsRecomputer(
+		"hash-sizes", pickInterval(ov.HashSizes, defaultInterval),
+		func() interface{} { return s.computeAnalyticsHashSizesWithCapability("") },
+	)
+	all := []*analyticsRecomputer{
+		s.recompTopology, s.recompRF, s.recompDistance,
+		s.recompChannels, s.recompHashCollisions, s.recompHashSizes,
+	}
+	s.analyticsRecomputerMu.Unlock()
+
+	for _, rc := range all {
+		rc.Start()
+	}
+
+	return func() {
+		for _, rc := range all {
+			rc.Stop()
+		}
+	}
 }

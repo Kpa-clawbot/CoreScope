@@ -150,6 +150,20 @@ type PacketStore struct {
 	subpathCache map[string]*cachedResult // params → cached subpaths result
 	rfCacheTTL        time.Duration
 	collisionCacheTTL time.Duration
+	// Steady-state analytics recomputers (issue #1240). Each holds the
+	// latest snapshot for the default region="" / zero-window query of
+	// an analytics endpoint in an atomic.Value, refreshed by a
+	// background goroutine on a fixed interval. When set, the matching
+	// GetAnalytics* function serves from Load() instead of running the
+	// on-request compute path. Region/window variants still go through
+	// the legacy TTL cache (compute-on-miss).
+	analyticsRecomputerMu sync.RWMutex
+	recompTopology        *analyticsRecomputer
+	recompRF              *analyticsRecomputer
+	recompDistance        *analyticsRecomputer
+	recompChannels        *analyticsRecomputer
+	recompHashCollisions  *analyticsRecomputer
+	recompHashSizes       *analyticsRecomputer
 	cacheHits    int64
 	cacheMisses  int64
 	// Rate-limited invalidation (fixes #533: caches cleared faster than hit)
@@ -4649,6 +4663,21 @@ func (s *PacketStore) GetAnalyticsChannels(region string) map[string]interface{}
 // GetAnalyticsChannelsWithWindow returns channel analytics for the given region,
 // optionally bounded to a time window (issue #842). Zero TimeWindow = all data.
 func (s *PacketStore) GetAnalyticsChannelsWithWindow(region string, window TimeWindow) map[string]interface{} {
+	if region == "" && window.IsZero() {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompChannels
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					s.cacheMu.Lock()
+					s.cacheHits++
+					s.cacheMu.Unlock()
+					return m
+				}
+			}
+		}
+	}
 	cacheKey := region
 	if !window.IsZero() {
 		cacheKey = region + "|" + window.CacheKey()
@@ -4896,6 +4925,21 @@ func (s *PacketStore) GetAnalyticsRF(region string) map[string]interface{} {
 // GetAnalyticsRFWithWindow returns RF analytics bounded by an optional
 // time window (issue #842). Zero TimeWindow = all data (backwards compatible).
 func (s *PacketStore) GetAnalyticsRFWithWindow(region string, window TimeWindow) map[string]interface{} {
+	if region == "" && window.IsZero() {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompRF
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					s.cacheMu.Lock()
+					s.cacheHits++
+					s.cacheMu.Unlock()
+					return m
+				}
+			}
+		}
+	}
 	cacheKey := region
 	if !window.IsZero() {
 		cacheKey = region + "|" + window.CacheKey()
@@ -5834,7 +5878,24 @@ func (s *PacketStore) GetAnalyticsTopology(region string) map[string]interface{}
 }
 
 // GetAnalyticsTopologyWithWindow — see issue #842.
+// For default (region="", zero window), prefer the steady-state
+// recomputer snapshot if registered (issue #1240).
 func (s *PacketStore) GetAnalyticsTopologyWithWindow(region string, window TimeWindow) map[string]interface{} {
+	if region == "" && window.IsZero() {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompTopology
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					s.cacheMu.Lock()
+					s.cacheHits++
+					s.cacheMu.Unlock()
+					return m
+				}
+			}
+		}
+	}
 	cacheKey := region
 	if !window.IsZero() {
 		cacheKey = region + "|" + window.CacheKey()
@@ -6342,7 +6403,26 @@ func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 	return R * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
+// GetAnalyticsDistance returns the distance analytics map. For the
+// default (region="") query, prefer the steady-state recomputer
+// snapshot if one is registered (issue #1240). Region-keyed variants
+// continue to use the legacy TTL cache + on-request compute.
 func (s *PacketStore) GetAnalyticsDistance(region string) map[string]interface{} {
+	if region == "" {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompDistance
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					s.cacheMu.Lock()
+					s.cacheHits++
+					s.cacheMu.Unlock()
+					return m
+				}
+			}
+		}
+	}
 	s.cacheMu.Lock()
 	if cached, ok := s.distCache[region]; ok && time.Now().Before(cached.expiresAt) {
 		s.cacheHits++
@@ -6618,6 +6698,21 @@ func (s *PacketStore) computeAnalyticsDistance(region string) map[string]interfa
 // --- Hash Sizes Analytics ---
 
 func (s *PacketStore) GetAnalyticsHashSizes(region string) map[string]interface{} {
+	if region == "" {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompHashSizes
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					s.cacheMu.Lock()
+					s.cacheHits++
+					s.cacheMu.Unlock()
+					return m
+				}
+			}
+		}
+	}
 	s.cacheMu.Lock()
 	if cached, ok := s.hashCache[region]; ok && time.Now().Before(cached.expiresAt) {
 		s.cacheHits++
@@ -6627,16 +6722,21 @@ func (s *PacketStore) GetAnalyticsHashSizes(region string) map[string]interface{
 	s.cacheMisses++
 	s.cacheMu.Unlock()
 
-	result := s.computeAnalyticsHashSizes(region)
+	result := s.computeAnalyticsHashSizesWithCapability(region)
 
-	// Multi-byte capability is a NODE property (derived from each node's own
-	// adverts), not a function of the observing region. The region filter
-	// should only control which nodes appear in the analytics list, not the
-	// evidence used to classify their capability. Always compute capability
-	// against the GLOBAL advert dataset so a region-filtered view doesn't
-	// downgrade every adopter to "unknown" just because the confirming
-	// advert was heard by an out-of-region observer (#bug: meshat.se/JKG
-	// showed 14 unknown vs 0 unknown unfiltered).
+	s.cacheMu.Lock()
+	s.hashCache[region] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
+	s.cacheMu.Unlock()
+
+	return result
+}
+
+// computeAnalyticsHashSizesWithCapability runs computeAnalyticsHashSizes
+// then layers in the multiByteCapability augmentation. Extracted so the
+// steady-state recomputer (issue #1240) produces the same shape as the
+// cached GetAnalyticsHashSizes call.
+func (s *PacketStore) computeAnalyticsHashSizesWithCapability(region string) map[string]interface{} {
+	result := s.computeAnalyticsHashSizes(region)
 	globalAdopterHS := make(map[string]int)
 	if region == "" {
 		if mbNodes, ok := result["multiByteNodes"].([]map[string]interface{}); ok {
@@ -6649,9 +6749,6 @@ func (s *PacketStore) GetAnalyticsHashSizes(region string) map[string]interface{
 			}
 		}
 	} else {
-		// Pull the global multiByteNodes set without the region filter.
-		// Use a separate compute call (not the cached path) to avoid
-		// recursive locking on hashCache and to keep this side-effect free.
 		globalRes := s.computeAnalyticsHashSizes("")
 		if mbNodes, ok := globalRes["multiByteNodes"].([]map[string]interface{}); ok {
 			for _, n := range mbNodes {
@@ -6664,11 +6761,6 @@ func (s *PacketStore) GetAnalyticsHashSizes(region string) map[string]interface{
 		}
 	}
 	result["multiByteCapability"] = s.computeMultiByteCapability(globalAdopterHS)
-
-	s.cacheMu.Lock()
-	s.hashCache[region] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
-	s.cacheMu.Unlock()
-
 	return result
 }
 
@@ -6959,6 +7051,21 @@ type hashSizeNodeInfo struct {
 // GetAnalyticsHashCollisions returns pre-computed hash collision analysis.
 // This moves the O(n²) distance computation from the frontend to the server.
 func (s *PacketStore) GetAnalyticsHashCollisions(region string) map[string]interface{} {
+	if region == "" {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompHashCollisions
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					s.cacheMu.Lock()
+					s.cacheHits++
+					s.cacheMu.Unlock()
+					return m
+				}
+			}
+		}
+	}
 	s.cacheMu.Lock()
 	if cached, ok := s.collisionCache[region]; ok && time.Now().Before(cached.expiresAt) {
 		s.cacheHits++
