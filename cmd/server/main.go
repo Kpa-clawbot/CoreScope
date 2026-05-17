@@ -216,6 +216,15 @@ func main() {
 		log.Printf("[store] warning: could not add observers.last_packet_at column: %v", err)
 	}
 
+	// Ensure observers.iata column exists (#1188 read paths COALESCE(obs.iata, '')
+	// in Store.Load() / IngestNewFromDB / IngestNewObservations; ingestor migration
+	// adds it but server may run against DBs ingestor never touched (e2e fixture)
+	// OR pre-iata operator DBs upgraded to this build — without this migration
+	// the first SELECT crashes with "no such column: obs.iata" (#1189 R1).
+	if err := ensureObserverIATAColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add observers.iata column: %v", err)
+	}
+
 	// Ensure nodes.foreign_advert column exists (#730 reads it on every /api/nodes
 	// scan; ingestor migration foreign_advert_v1 adds it but server may run against
 	// DBs ingestor never touched, e.g. e2e fixture).
