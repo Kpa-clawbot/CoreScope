@@ -35,7 +35,7 @@
   function init(app, routeParam) {
     currentId = routeParam;
     if (!currentId) {
-      app.innerHTML = '<div class="text-center text-muted" style="padding:40px">No observer ID specified.</div>';
+      app.innerHTML = PageState.empty({ title: 'No observer ID specified' });
       return;
     }
 
@@ -684,7 +684,7 @@
 
   function renderRecentPackets(packets) {
     const el = document.getElementById('obsRecentPackets');
-    if (!el || !packets.length) { if (el) el.innerHTML = '<div class="text-muted">No recent packets.</div>'; return; }
+    if (!el || !packets.length) { if (el) el.innerHTML = PageState.empty({ title: 'No recent packets' }); return; }
     el.innerHTML = `<table class="data-table" style="font-size:0.85em">
       <thead><tr><th scope="col">Time</th><th scope="col">Type</th><th scope="col">Hash</th><th scope="col">SNR</th><th scope="col">RSSI</th><th scope="col">Hops</th></tr></thead>
       <tbody>${packets.map(p => {

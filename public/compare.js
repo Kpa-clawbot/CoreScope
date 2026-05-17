@@ -397,7 +397,7 @@ if (typeof window !== 'undefined') {
 
     var hashes = r[currentView] || [];
     if (hashes.length === 0) {
-      el.innerHTML = '<div class="text-muted" style="padding:20px">No packets in this category.</div>';
+      el.innerHTML = PageState.empty({ title: 'No packets in this category' });
       return;
     }
 
