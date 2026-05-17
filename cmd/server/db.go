@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -90,7 +91,7 @@ func (db *DB) transmissionBaseSQL() (selectCols, observerJoin string) {
 	if db.isV3 {
 		selectCols = `t.id, t.raw_hex, t.hash, t.first_seen, t.route_type, t.payload_type, t.decoded_json,
 			COALESCE((SELECT COUNT(*) FROM observations WHERE transmission_id = t.id), 0) AS observation_count,
-			obs.id AS observer_id, obs.name AS observer_name,
+			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json, o.direction`
 		observerJoin = `LEFT JOIN observations o ON o.id = (
 				SELECT id FROM observations WHERE transmission_id = t.id
@@ -100,12 +101,13 @@ func (db *DB) transmissionBaseSQL() (selectCols, observerJoin string) {
 	} else {
 		selectCols = `t.id, t.raw_hex, t.hash, t.first_seen, t.route_type, t.payload_type, t.decoded_json,
 			COALESCE((SELECT COUNT(*) FROM observations WHERE transmission_id = t.id), 0) AS observation_count,
-			o.observer_id, o.observer_name,
+			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json, o.direction`
 		observerJoin = `LEFT JOIN observations o ON o.id = (
 				SELECT id FROM observations WHERE transmission_id = t.id
 				ORDER BY length(COALESCE(path_json,'')) DESC LIMIT 1
-			)`
+			)
+			LEFT JOIN observers obs2 ON obs2.id = o.observer_id`
 	}
 	return
 }
@@ -114,12 +116,12 @@ func (db *DB) transmissionBaseSQL() (selectCols, observerJoin string) {
 // Returns a map matching the Node.js packet-store transmission shape.
 func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 	var id, observationCount int
-	var rawHex, hash, firstSeen, decodedJSON, observerID, observerName, pathJSON, direction sql.NullString
+	var rawHex, hash, firstSeen, decodedJSON, observerID, observerName, observerIATA, pathJSON, direction sql.NullString
 	var routeType, payloadType sql.NullInt64
 	var snr, rssi sql.NullFloat64
 
 	if err := rows.Scan(&id, &rawHex, &hash, &firstSeen, &routeType, &payloadType, &decodedJSON,
-		&observationCount, &observerID, &observerName, &snr, &rssi, &pathJSON, &direction); err != nil {
+		&observationCount, &observerID, &observerName, &observerIATA, &snr, &rssi, &pathJSON, &direction); err != nil {
 		return nil
 	}
 
@@ -135,6 +137,7 @@ func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 		"observation_count": observationCount,
 		"observer_id":       nullStr(observerID),
 		"observer_name":     nullStr(observerName),
+		"observer_iata":     nullStr(observerIATA),
 		"snr":               nullFloat(snr),
 		"rssi":              nullFloat(rssi),
 		"path_json":         nullStr(pathJSON),
@@ -471,15 +474,20 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 		db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM transmissions t %s", w), args...).Scan(&total)
 	}
 
-	// Build grouped query using transmissions table with correlated subqueries
+	// Build grouped query using transmissions table with correlated subqueries.
+	// #1189 R2: distinct_iatas is a NEW column — comma-separated DISTINCT IATA
+	// codes across all observers of the transmission, with empty/NULL IATAs
+	// excluded. Frontend needs this on the DEFAULT COLLAPSED VIEW (where
+	// p._children is empty), so we compute it server-side.
 	var querySQL string
 	if db.isV3 {
 		querySQL = fmt.Sprintf(`SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
 			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
 			COALESCE((SELECT COUNT(DISTINCT oi.observer_idx) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
 			COALESCE((SELECT MAX(strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', oi.timestamp, 'unixepoch')) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
-			obs.id AS observer_id, obs.name AS observer_name,
-			o.snr, o.rssi, o.path_json
+			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
+			o.snr, o.rssi, o.path_json,
+			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
@@ -492,13 +500,15 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
 			COALESCE((SELECT COUNT(DISTINCT oi.observer_id) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
 			COALESCE((SELECT MAX(oi.timestamp) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
-			o.observer_id, o.observer_name,
-			o.snr, o.rssi, o.path_json
+			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
+			o.snr, o.rssi, o.path_json,
+			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
 			ORDER BY length(COALESCE(path_json,'')) DESC LIMIT 1
 		)
+		LEFT JOIN observers obs2 ON obs2.id = o.observer_id
 		%s ORDER BY latest DESC LIMIT ? OFFSET ?`, w)
 	}
 
@@ -514,14 +524,14 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 
 	packets := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		var hash, firstSeen, rawHex, decodedJSON, latest, observerID, observerName, pathJSON sql.NullString
+		var hash, firstSeen, rawHex, decodedJSON, latest, observerID, observerName, observerIATA, pathJSON, distinctIatasCSV sql.NullString
 		var payloadType, routeType sql.NullInt64
 		var count, observerCount int
 		var snr, rssi sql.NullFloat64
 
 		if err := rows.Scan(&hash, &firstSeen, &rawHex, &decodedJSON, &payloadType, &routeType,
 			&count, &observerCount, &latest,
-			&observerID, &observerName, &snr, &rssi, &pathJSON); err != nil {
+			&observerID, &observerName, &observerIATA, &snr, &rssi, &pathJSON, &distinctIatasCSV); err != nil {
 			continue
 		}
 
@@ -534,6 +544,8 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			"latest":            nullStr(latest),
 			"observer_id":       nullStr(observerID),
 			"observer_name":     nullStr(observerName),
+			"observer_iata":     nullStr(observerIATA),
+			"distinct_iatas":    parseDistinctIatasCSV(nullStr(distinctIatasCSV)),
 			"path_json":         nullStr(pathJSON),
 			"payload_type":      nullInt(payloadType),
 			"route_type":        nullInt(routeType),
@@ -545,6 +557,29 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 	}
 
 	return &PacketResult{Packets: packets, Total: total}, nil
+}
+
+// parseDistinctIatasCSV turns SQLite GROUP_CONCAT output ("SJC,SFO,OAK") into
+// a sorted, deduped []string. Returns an empty (non-nil) slice when the input
+// is empty/nil so JSON serialization stays consistent (`[]` not `null`).
+func parseDistinctIatasCSV(v interface{}) []string {
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return []string{}
+	}
+	parts := strings.Split(s, ",")
+	seen := make(map[string]bool, len(parts))
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		code := strings.TrimSpace(p)
+		if code == "" || seen[code] {
+			continue
+		}
+		seen[code] = true
+		out = append(out, code)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (db *DB) buildPacketWhere(q PacketQuery) ([]string, []interface{}) {
@@ -608,18 +643,22 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 		args = append(args, strings.ToLower(q.Hash))
 	}
 	if q.Since != "" {
-		if t, err := time.Parse(time.RFC3339Nano, q.Since); err == nil {
+		// RFC3339 since/until use an observations.timestamp subquery so that
+		// re-observed packets (whose t.first_seen is older than the window
+		// but which have observations inside the window) are still included.
+		// Non-RFC3339 falls back to t.first_seen string compare.
+		if ts, err := time.Parse(time.RFC3339Nano, q.Since); err == nil {
 			where = append(where, "t.id IN (SELECT DISTINCT transmission_id FROM observations WHERE timestamp >= ?)")
-			args = append(args, t.Unix())
+			args = append(args, ts.Unix())
 		} else {
 			where = append(where, "t.first_seen > ?")
 			args = append(args, q.Since)
 		}
 	}
 	if q.Until != "" {
-		if t, err := time.Parse(time.RFC3339Nano, q.Until); err == nil {
+		if ts, err := time.Parse(time.RFC3339Nano, q.Until); err == nil {
 			where = append(where, "t.id IN (SELECT DISTINCT transmission_id FROM observations WHERE timestamp <= ?)")
-			args = append(args, t.Unix())
+			args = append(args, ts.Unix())
 		} else {
 			where = append(where, "t.first_seen < ?")
 			args = append(args, q.Until)
@@ -969,16 +1008,17 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 
 	var querySQL string
 	if db.isV3 {
-		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, obs.id AS observer_id, obs.name AS observer_name,
+		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.direction, o.snr, o.rssi, o.path_json, strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', o.timestamp, 'unixepoch') AS obs_timestamp
 			FROM observations o
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
 			WHERE o.transmission_id IN (%s)
 			ORDER BY o.timestamp DESC`, strings.Join(placeholders, ","))
 	} else {
-		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, o.observer_id, o.observer_name,
+		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, o.observer_id, o.observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.direction, o.snr, o.rssi, o.path_json, o.timestamp AS obs_timestamp
 			FROM observations o
+			LEFT JOIN observers obs ON obs.id = o.observer_id
 			WHERE o.transmission_id IN (%s)
 			ORDER BY o.timestamp DESC`, strings.Join(placeholders, ","))
 	}
@@ -991,10 +1031,10 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 
 	for rows.Next() {
 		var txID, obsID int
-		var observerID, observerName, direction, pathJSON, obsTimestamp sql.NullString
+		var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
 		var snr, rssi sql.NullFloat64
 
-		if err := rows.Scan(&txID, &obsID, &observerID, &observerName, &direction,
+		if err := rows.Scan(&txID, &obsID, &observerID, &observerName, &observerIATA, &direction,
 			&snr, &rssi, &pathJSON, &obsTimestamp); err != nil {
 			continue
 		}
@@ -1009,6 +1049,7 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 			"transmission_id": txID,
 			"observer_id":     nullStr(observerID),
 			"observer_name":   nullStr(observerName),
+			"observer_iata":   nullStr(observerIATA),
 			"snr":             nullFloat(snr),
 			"rssi":            nullFloat(rssi),
 			"path_json":       nullStr(pathJSON),
@@ -1469,9 +1510,20 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 // GetChannelMessages returns messages for a specific channel.
 // Uses transmission-level ordering (first_seen) to ensure correct message
 // sequence even when observations arrive out of order.
+//
+// Pagination is applied at the SQL level on the transmissions table (not on
+// observations). The transmission.hash UNIQUE constraint means each
+// transmission is one logical message; multiple observations of the same
+// transmission collapse into one row with `repeats` = observation count.
+// This avoids loading every observation row for a channel into Go memory
+// before paginating (issue #1225: 5703 tx × ~50 obs ≈ 275K rows → ~30s
+// for limit=50).
 func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region ...string) ([]map[string]interface{}, int, error) {
 	if limit <= 0 {
 		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
 	}
 
 	regionParam := ""
@@ -1490,39 +1542,106 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		regionPlaceholders = strings.Join(placeholders, ",")
 	}
 
-	// Fetch messages with channel_hash filter (pagination applied in Go after dedup)
-	var querySQL string
-	args := []interface{}{channelHash}
+	// regionFilter: a transmission is included only if at least one of its
+	// observations has an observer in one of the requested regions.
+	regionFilter := ""
+	if len(regionCodes) > 0 {
+		if db.isV3 {
+			regionFilter = fmt.Sprintf(` AND EXISTS (
+				SELECT 1 FROM observations o
+				JOIN observers obs ON obs.rowid = o.observer_idx
+				WHERE o.transmission_id = t.id
+				  AND UPPER(TRIM(obs.iata)) IN (%s))`, regionPlaceholders)
+		} else {
+			regionFilter = fmt.Sprintf(` AND EXISTS (
+				SELECT 1 FROM observations o
+				JOIN observers obs ON obs.id = o.observer_id
+				WHERE o.transmission_id = t.id
+				  AND UPPER(TRIM(obs.iata)) IN (%s))`, regionPlaceholders)
+		}
+	}
+
+	// 1) Total count (after region filter, before pagination).
+	countSQL := `SELECT COUNT(*) FROM transmissions t
+		WHERE t.channel_hash = ? AND t.payload_type = 5` + regionFilter
+	countArgs := []interface{}{channelHash}
+	countArgs = append(countArgs, regionArgs...)
+	var total int
+	if err := db.conn.QueryRow(countSQL, countArgs...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	// 2) Page of transmission IDs — newest LIMIT msgs minus OFFSET, returned
+	//    in ASC order to match prior API contract (tail of message log).
+	pageSQL := `SELECT t.id FROM (
+			SELECT id FROM transmissions
+			WHERE channel_hash = ? AND payload_type = 5
+			ORDER BY first_seen DESC
+			LIMIT ? OFFSET ?
+		) t`
+	// When a region filter is in play, we must filter on the inner subquery
+	// against the transmissions table — re-use the same EXISTS form but
+	// wrap so we still get DESC-then-ASC pagination.
+	if len(regionCodes) > 0 {
+		pageSQL = `SELECT id FROM (
+				SELECT t.id, t.first_seen FROM transmissions t
+				WHERE t.channel_hash = ? AND t.payload_type = 5` + regionFilter + `
+				ORDER BY t.first_seen DESC
+				LIMIT ? OFFSET ?
+			) sub
+			ORDER BY first_seen ASC`
+	} else {
+		pageSQL += ` ORDER BY (SELECT first_seen FROM transmissions WHERE id = t.id) ASC`
+	}
+	pageArgs := []interface{}{channelHash}
+	pageArgs = append(pageArgs, regionArgs...)
+	pageArgs = append(pageArgs, limit, offset)
+
+	idRows, err := db.conn.Query(pageSQL, pageArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	pageIDs := make([]int, 0, limit)
+	for idRows.Next() {
+		var id int
+		if err := idRows.Scan(&id); err == nil {
+			pageIDs = append(pageIDs, id)
+		}
+	}
+	idRows.Close()
+
+	if len(pageIDs) == 0 {
+		return []map[string]interface{}{}, total, nil
+	}
+
+	// 3) Fetch observations for just this page of transmissions. We keep
+	//    the original "first observation wins" semantic for hops/snr/observer
+	//    by ordering observations by id ASC and breaking after first per tx.
+	idPlaceholders := make([]string, len(pageIDs))
+	obsArgs := make([]interface{}, len(pageIDs))
+	for i, id := range pageIDs {
+		idPlaceholders[i] = "?"
+		obsArgs[i] = id
+	}
+	var obsSQL string
 	if db.isV3 {
-		querySQL = `SELECT o.id, t.hash, t.decoded_json, t.first_seen,
+		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
 				obs.id, obs.name, o.snr, o.path_json
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-			WHERE t.channel_hash = ? AND t.payload_type = 5`
-		if len(regionCodes) > 0 {
-			querySQL += fmt.Sprintf(" AND obs.rowid IS NOT NULL AND UPPER(TRIM(obs.iata)) IN (%s)", regionPlaceholders)
-			args = append(args, regionArgs...)
-		}
-		querySQL += `
-			ORDER BY t.first_seen ASC`
+			WHERE t.id IN (` + strings.Join(idPlaceholders, ",") + `)
+			ORDER BY o.id ASC`
 	} else {
-		querySQL = `SELECT o.id, t.hash, t.decoded_json, t.first_seen,
+		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
 				o.observer_id, o.observer_name, o.snr, o.path_json
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
-			WHERE t.channel_hash = ? AND t.payload_type = 5`
-		if len(regionCodes) > 0 {
-			querySQL += fmt.Sprintf(` AND EXISTS (
-				SELECT 1 FROM observers obs WHERE obs.id = o.observer_id
-				AND UPPER(TRIM(obs.iata)) IN (%s))`, regionPlaceholders)
-			args = append(args, regionArgs...)
-		}
-		querySQL += `
-			ORDER BY t.first_seen ASC`
+			WHERE t.id IN (` + strings.Join(idPlaceholders, ",") + `)
+			ORDER BY o.id ASC`
 	}
 
-	rows, err := db.conn.Query(querySQL, args...)
+	rows, err := db.conn.Query(obsSQL, obsArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1532,103 +1651,84 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		Data    map[string]interface{}
 		Repeats int
 	}
-	msgMap := map[string]*msg{}
-	var msgOrder []string
+	msgMap := make(map[int]*msg, len(pageIDs))
 
 	for rows.Next() {
-		var pktID int
+		var pktID, txID int
 		var pktHash, dj, fs, obsID, obsName, pathJSON sql.NullString
 		var snr sql.NullFloat64
-		rows.Scan(&pktID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON)
+		rows.Scan(&pktID, &txID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON)
 		if !dj.Valid {
+			continue
+		}
+		if existing, ok := msgMap[txID]; ok {
+			existing.Repeats++
 			continue
 		}
 		var decoded map[string]interface{}
 		if json.Unmarshal([]byte(dj.String), &decoded) != nil {
 			continue
 		}
-
 		text, _ := decoded["text"].(string)
 		sender, _ := decoded["sender"].(string)
 		if sender == "" && text != "" {
-			idx := strings.Index(text, ": ")
-			if idx > 0 && idx < 50 {
+			if idx := strings.Index(text, ": "); idx > 0 && idx < 50 {
 				sender = text[:idx]
 			}
 		}
-
-		dedupeKey := fmt.Sprintf("%s:%s", sender, nullStr(pktHash))
-
-		if existing, ok := msgMap[dedupeKey]; ok {
-			existing.Repeats++
-		} else {
-			displaySender := sender
-			displayText := text
-			if text != "" {
-				idx := strings.Index(text, ": ")
-				if idx > 0 && idx < 50 {
-					displaySender = text[:idx]
-					displayText = text[idx+2:]
-				}
+		displaySender := sender
+		displayText := text
+		if text != "" {
+			if idx := strings.Index(text, ": "); idx > 0 && idx < 50 {
+				displaySender = text[:idx]
+				displayText = text[idx+2:]
 			}
-
-			var hops int
-			if pathJSON.Valid {
-				var h []interface{}
-				if json.Unmarshal([]byte(pathJSON.String), &h) == nil {
-					hops = len(h)
-				}
-			}
-
-			senderTs, _ := decoded["sender_timestamp"]
-			m := &msg{
-				Data: map[string]interface{}{
-					"sender":           displaySender,
-					"text":             displayText,
-					"timestamp":        nullStr(fs),
-					"sender_timestamp": senderTs,
-					"packetId":         pktID,
-					"packetHash":       nullStr(pktHash),
-					"repeats":          1,
-					"observers":        []string{},
-					"hops":             hops,
-					"snr":              nullFloat(snr),
-				},
-				Repeats: 1,
-			}
-			if obsName.Valid {
-				m.Data["observers"] = []string{obsName.String}
-			} else if obsID.Valid {
-				m.Data["observers"] = []string{obsID.String}
-			}
-			msgMap[dedupeKey] = m
-			msgOrder = append(msgOrder, dedupeKey)
 		}
+		var hops int
+		if pathJSON.Valid {
+			var h []interface{}
+			if json.Unmarshal([]byte(pathJSON.String), &h) == nil {
+				hops = len(h)
+			}
+		}
+		senderTs := decoded["sender_timestamp"]
+		m := &msg{
+			Data: map[string]interface{}{
+				"sender":           displaySender,
+				"text":             displayText,
+				"timestamp":        nullStr(fs),
+				"sender_timestamp": senderTs,
+				"packetId":         pktID,
+				"packetHash":       nullStr(pktHash),
+				"repeats":          1,
+				"observers":        []string{},
+				"hops":             hops,
+				"snr":              nullFloat(snr),
+			},
+			Repeats: 1,
+		}
+		if obsName.Valid {
+			m.Data["observers"] = []string{obsName.String}
+		} else if obsID.Valid {
+			m.Data["observers"] = []string{obsID.String}
+		}
+		msgMap[txID] = m
 	}
 
-	// Return latest messages (tail) with pagination
-	msgTotal := len(msgOrder)
-	start := msgTotal - limit - offset
-	if start < 0 {
-		start = 0
-	}
-	end := msgTotal - offset
-	if end < 0 {
-		end = 0
-	}
-	if end > msgTotal {
-		end = msgTotal
-	}
-
-	messages := make([]map[string]interface{}, 0)
-	for i := start; i < end; i++ {
-		key := msgOrder[i]
-		m := msgMap[key]
+	messages := make([]map[string]interface{}, 0, len(pageIDs))
+	for _, id := range pageIDs {
+		m, ok := msgMap[id]
+		if !ok {
+			// Transmission had no observations (shouldn't happen via normal
+			// ingest) or decoded_json was NULL/invalid — skip silently to
+			// preserve prior behavior.
+			continue
+		}
 		m.Data["repeats"] = m.Repeats
 		messages = append(messages, m.Data)
 	}
 
-	return messages, msgTotal, nil
+	return messages, total, nil
 }
 
 

@@ -217,6 +217,7 @@
     "channels": 15,
     "channelMessages": 10,
     "analyticsRF": 1800,
+    "_comment_analyticsRF": "TTL (seconds) for the shared analytics result cache. Backs /api/analytics/rf, /api/analytics/topology, /api/analytics/distance, /api/analytics/hash-sizes, /api/analytics/channels, /api/analytics/subpaths. Default 60s if unset (#1239) — distance analytics is viewed live during active analysis, so the default smooths cold-miss churn without freezing data. Lower with care; sub-15s values can cause repeated multi-second cold computes during heavy ingest.",
     "analyticsTopology": 1800,
     "analyticsChannels": 1800,
     "analyticsHashSizes": 3600,
@@ -243,7 +244,8 @@
     "maxMemoryMB": 1024,
     "estimatedPacketBytes": 450,
     "retentionHours": 168,
-    "_comment": "In-memory packet store. maxMemoryMB caps RAM usage. retentionHours: only packets younger than this are loaded on startup and kept in memory (0 = unlimited, not recommended for large DBs — causes OOM on cold start). 168 = 7 days. Must be ≤ retention.packetDays * 24.",
+    "hotStartupHours": 0,
+    "_comment": "In-memory packet store. maxMemoryMB caps RAM usage. retentionHours: only packets younger than this are kept in memory (0 = unlimited). hotStartupHours: hours loaded synchronously at startup; background loader fills the remaining retentionHours window. 0 = disabled (loads full retentionHours synchronously, legacy behavior). Set to a positive value (e.g. 24) to reduce startup time on large DBs.",
     "_comment_gomemlimit": "On startup the server reads GOMEMLIMIT from the environment if set; otherwise it derives a Go runtime soft memory limit of maxMemoryMB * 1.5 and applies it via debug.SetMemoryLimit. This forces aggressive GC under cgroup pressure so the process self-throttles before the kernel SIGKILLs it. To override, set GOMEMLIMIT explicitly (e.g. GOMEMLIMIT=850MiB). See issue #836."
   },
   "resolvedPath": {
@@ -252,7 +254,8 @@
   },
   "neighborGraph": {
     "maxAgeDays": 5,
-    "_comment": "Neighbor edges older than this many days are pruned on startup and daily. Default: 5."
+    "maxEdgeKm": 500,
+    "_comment": "maxAgeDays: neighbor edges older than this many days are pruned on startup and daily. Default 5. maxEdgeKm: geo-implausibility filter — when both endpoints have GPS, edges with haversine distance > maxEdgeKm are rejected at build time to prevent disambiguator self-reinforcement on wide-geo MQTT deployments. Default 500 km (well above any plausible terrestrial LoRa hop). 0 ⇒ use default; set negative to disable the filter. Rejected count surfaces in /api/analytics/neighbor-graph stats. Issue #1228."
   },
   "batteryThresholds": {
     "lowMv": 3300,
@@ -264,5 +267,18 @@
   "_comment_hashChannels": "Channel names whose keys are derived via SHA256. Key = SHA256(name)[:16]. Listed here so the ingestor can auto-derive keys.",
   "_comment_defaultRegion": "IATA code shown by default in region filters.",
   "_comment_mapDefaults": "Initial map center [lat, lon] and zoom level.",
-  "_comment_regions": "IATA code → display name mapping for the region filter UI. Each key is a 3-letter IATA code that an observer is tagged with (resolved priority: MQTT payload `region` field > topic-derived region > mqttSources.region). Observers without an IATA tag will not appear under any region filter — only under 'All Regions'. The region filter dropdown shows one entry per code listed here PLUS any extra IATA codes the server discovers from observers at runtime (so you can omit codes here and they will still be selectable, just labelled with the bare IATA code instead of a friendly name). Selecting 'All Regions' (or no region) returns results from every observer including those with no IATA tag; selecting one or more codes restricts results to packets observed by observers tagged with those codes. The reserved value 'All' (case-insensitive) is treated as 'no filter' on the server, so the URL ?region=All behaves identically to omitting the param. Issue #770."
+  "_comment_regions": "IATA code → display name mapping for the region filter UI. Each key is a 3-letter IATA code that an observer is tagged with (resolved priority: MQTT payload `region` field > topic-derived region > mqttSources.region). Observers without an IATA tag will not appear under any region filter — only under 'All Regions'. The region filter dropdown shows one entry per code listed here PLUS any extra IATA codes the server discovers from observers at runtime (so you can omit codes here and they will still be selectable, just labelled with the bare IATA code instead of a friendly name). Selecting 'All Regions' (or no region) returns results from every observer including those with no IATA tag; selecting one or more codes restricts results to packets observed by observers tagged with those codes. The reserved value 'All' (case-insensitive) is treated as 'no filter' on the server, so the URL ?region=All behaves identically to omitting the param. Issue #770.",
+
+  "analytics": {
+    "defaultIntervalSeconds": 300,
+    "recomputeIntervalSeconds": {
+      "topology": 300,
+      "rf": 300,
+      "distance": 300,
+      "channels": 300,
+      "hashCollisions": 300,
+      "hashSizes": 300
+    }
+  },
+  "_comment_analytics": "Issue #1240. Each analytics endpoint (topology, rf, distance, channels, hashCollisions, hashSizes) is recomputed in the background on the configured interval and served from an atomic-pointer cache. Reads never block on compute. Default 300s (5 min) per endpoint reflects the operator principle: serving slightly stale data quickly beats real-time data slowly. Lower values = fresher data at higher CPU cost. Only the default query (no region/window) is precomputed; region- and window-filtered requests fall back to the legacy on-request compute + 60s TTL cache."
 }

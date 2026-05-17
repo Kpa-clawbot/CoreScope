@@ -128,20 +128,37 @@
   }
 
   // Track tables we've wired up so resize triggers re-apply.
-  const wired = new Set();
+  // Map<table, ResizeObserver|null> — we need the RO ref so SPA remounts can
+  // disconnect the orphaned observer when its <table> leaves the DOM.
+  // Pre-#1213 fix this was a Set and each /nodes (or /packets/observers)
+  // remount registered a fresh RO against a freshly-rendered table while the
+  // previous table+RO sat detached but observed → 1 leaked RO per remount.
+  const wired = new Map();
   // Track last-seen wrap width per table so we only treat ACTUAL container
   // resizes as a reason to drop the user's reveal state. Hiding/showing
   // columns and removing the pill mutate layout and re-trigger ResizeObserver,
   // which would otherwise immediately stomp on the reveal the user just asked for.
   const lastWrapW = new WeakMap();
+  // Sweep tables that have been detached from the DOM (e.g. SPA destroyed
+  // their page) and release their ResizeObserver. Called opportunistically on
+  // every register() — cheap O(n) over wired tables, n is tiny in practice.
+  function sweepDetached() {
+    wired.forEach((ro, t) => {
+      if (!t || !t.isConnected) {
+        if (ro) { try { ro.disconnect(); } catch (_) {} }
+        wired.delete(t);
+      }
+    });
+  }
   function register(table) {
+    sweepDetached();
     if (!table || wired.has(table)) { apply(table); return; }
-    wired.add(table);
+    let ro = null;
     if (typeof ResizeObserver !== 'undefined') {
       const wrap = table.closest('.table-fluid-wrap, .obs-table-scroll, .table-scroll-wrap') || table.parentElement;
       if (wrap) {
         lastWrapW.set(table, wrap.clientWidth || 0);
-        const ro = new ResizeObserver(() => {
+        ro = new ResizeObserver(() => {
           const prev = lastWrapW.get(table) || 0;
           const cur = wrap.clientWidth || 0;
           // Ignore self-induced layout reflows from apply()/clearHidden() —
@@ -155,6 +172,7 @@
         ro.observe(wrap);
       }
     }
+    wired.set(table, ro);
     apply(table);
   }
 
@@ -162,15 +180,19 @@
   window.addEventListener('resize', function () {
     clearTimeout(_winTimer);
     _winTimer = setTimeout(() => {
-      wired.forEach(t => {
-        if (!t.isConnected) { wired.delete(t); return; }
+      wired.forEach((ro, t) => {
+        if (!t.isConnected) {
+          if (ro) { try { ro.disconnect(); } catch (_) {} }
+          wired.delete(t);
+          return;
+        }
         t[REVEAL_FLAG] = false;
         apply(t);
       });
     }, 120);
   });
 
-  window.TableResponsive = { apply, register };
+  window.TableResponsive = { apply, register, sweep: sweepDetached };
 })();
 
 /* === #1056 AC#4: SlideOver — narrow-viewport row-detail overlay ============
@@ -442,6 +464,75 @@
     const o = observerMap.get(id);
     if (!o) return id;
     return o.iata ? `${o.name} (${o.iata})` : o.name;
+  }
+  // Compact IATA pill (#1188) — renders next to observer name. Prefers
+  // packet.observer_iata (now joined on the server) and falls back to the
+  // observer lookup map for callers that haven't been updated yet.
+  function obsIataBadge(packet) {
+    if (!packet) return '';
+    let iata = packet.observer_iata;
+    if (!iata) {
+      const o = packet.observer_id ? observerMap.get(packet.observer_id) : null;
+      iata = o && o.iata;
+    }
+    return iata ? `<span class="badge-iata">${escapeHtml(iata)}</span>` : '';
+  }
+  // Plain observer name without the trailing IATA — used when the IATA is
+  // rendered separately as a badge (so the cell doesn't show "Name (SJC) SJC").
+  function obsNameOnly(id) {
+    if (!id) return '—';
+    const o = observerMap.get(id);
+    if (!o) return id;
+    return o.name;
+  }
+  // #1189 R1 mesh-operator feedback: in a grouped row the old cell showed ONE
+  // observer's IATA + `+N` — operators couldn't tell whether the N additional
+  // observers were SAME-region (redundant copies) or CROSS-region (interesting
+  // multi-site reception). This helper returns the cell's badge HTML showing
+  // the DISTINCT IATA set: `<badge>SJC</badge>` or `<badge>SJC</badge><badge>SFO</badge>+1`
+  // (capped at 2 visible, remainder rolled into +N of distinct-region count).
+  // Returns '' when no observer in the group carries any IATA.
+  //
+  // #1189 R2: source of truth is `p.distinct_iatas` from the server
+  // (added to /api/packets?groupByHash=true so the default collapsed view
+  // works without needing to expand a row). Falls back to walking
+  // p._children + observerMap for legacy callers and for client-side groups
+  // synthesised by the websocket appender.
+  function groupedObserverIataBadgesHtml(p) {
+    if (!p) return '';
+    const seen = new Set();
+    // R2 happy path: server-provided distinct_iatas.
+    if (Array.isArray(p.distinct_iatas)) {
+      for (const code of p.distinct_iatas) {
+        if (code) seen.add(String(code).toUpperCase());
+      }
+    }
+    // Fallback / supplement: walk header + children (covers in-memory groups
+    // built client-side from websocket events before any server round-trip).
+    if (!seen.size) {
+      const pushIata = (rec) => {
+        if (!rec) return;
+        let iata = rec.observer_iata;
+        if (!iata && rec.observer_id) {
+          const o = observerMap.get(rec.observer_id);
+          iata = o && o.iata;
+        }
+        if (iata) seen.add(String(iata).toUpperCase());
+      };
+      pushIata(p);
+      if (p._children && p._children.length) {
+        for (const c of p._children) pushIata(c);
+      }
+    }
+    if (!seen.size) return '';
+    const list = Array.from(seen).sort();
+    const visible = list.slice(0, 2);
+    const extra = list.length - visible.length;
+    let html = visible
+      .map(code => `<span class="badge-iata">${escapeHtml(code)}</span>`)
+      .join('');
+    if (extra > 0) html += ` +${extra}`;
+    return html;
   }
   let selectedId = null;
   function _isColorByHash() { return localStorage.getItem('meshcore-color-packets-by-hash') !== 'false'; }
@@ -1928,7 +2019,7 @@
           <td class="col-size" data-filter-field="size" data-filter-value="${groupSize || ''}">${groupSize ? groupSize + 'B' : '—'}</td>
           <td class="col-hashsize mono">${groupHashBytes}</td>
           <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(groupTypeName || '')}">${p.payload_type != null ? `<span class="badge badge-${groupTypeClass}">${groupTypeName}</span>${transportBadge(p.route_type)}` : '—'}</td>
-          <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsName(headerObserverId) || '')}">${isSingle ? truncate(obsName(headerObserverId), 16) : truncate(obsName(headerObserverId), 10) + (p.observer_count > 1 ? ' +' + (p.observer_count - 1) : '')}</td>
+          <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(headerObserverId) || '')}">${isSingle ? truncate(obsNameOnly(headerObserverId), 16) + obsIataBadge(p) : truncate(obsNameOnly(headerObserverId), 10) + groupedObserverIataBadgesHtml(p)}</td>
           <td class="col-path"><span class="path-hops">${groupPathStr}</span></td>
           <td class="col-rpt">${p.observation_count > 1 ? '<span class="badge badge-obs" title="Seen ' + p.observation_count + ' times">👁 ' + p.observation_count + '</span>' : (isSingle ? '' : p.count)}</td>
           <td class="col-details">${getDetailPreview(getParsedDecoded(p))}</td>
@@ -1954,7 +2045,7 @@
               <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
               <td class="col-hashsize mono">${childHashBytes}</td>
               <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(c.route_type)}</td>
-              <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsName(c.observer_id) || '')}">${truncate(obsName(c.observer_id), 16)}</td>
+              <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(c.observer_id) || '')}">${truncate(obsNameOnly(c.observer_id), 16)}${obsIataBadge(c)}</td>
               <td class="col-path"><span class="path-hops">${childPathStr}</span></td>
               <td class="col-rpt"></td>
               <td class="col-details">${getDetailPreview(getParsedDecoded(c))}</td>
@@ -1986,7 +2077,7 @@
         <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
         <td class="col-hashsize mono">${hashBytes}</td>
         <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(p.route_type)}</td>
-        <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsName(p.observer_id) || '')}">${truncate(obsName(p.observer_id), 16)}</td>
+        <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(p.observer_id) || '')}">${truncate(obsNameOnly(p.observer_id), 16)}${obsIataBadge(p)}</td>
         <td class="col-path"><span class="path-hops">${pathStr}</span></td>
         <td class="col-rpt"></td>
         <td class="col-details">${detail}</td>
@@ -2806,7 +2897,7 @@
       <div class="detail-hash">${pkt.hash || 'Packet #' + pkt.id}${obsIndicator}</div>
       ${messageHtml}
       <dl class="detail-meta">
-        <dt>Observer</dt><dd>${obsName(effectivePkt.observer_id)}</dd>
+        <dt>Observer</dt><dd>${obsNameOnly(effectivePkt.observer_id)}${obsIataBadge(effectivePkt)}</dd>
         <dt>Location</dt><dd>${locationHtml}</dd>
         <dt>SNR / RSSI</dt><dd>${snr != null ? snr + ' dB' : '—'} / ${rssi != null ? rssi + ' dBm' : '—'}</dd>
         <dt>Route Type</dt><dd>${routeTypeName(pkt.route_type)}</dd>
@@ -2844,7 +2935,7 @@
             const oPath = getParsedPath(o);
             const isCurrent = currentObs && String(o.id) === String(currentObs.id);
             return `<tr class="detail-obs-row${isCurrent ? ' observation-current' : ''}" data-obs-id="${o.id}" style="cursor:pointer;${isCurrent ? 'background:var(--accent-bg, rgba(0,122,255,0.1))' : ''}" title="Click to view this observation">
-              <td style="padding:4px 6px">${obsName(o.observer_id)}</td>
+              <td style="padding:4px 6px">${obsNameOnly(o.observer_id)}${obsIataBadge(o)}</td>
               <td style="padding:4px 6px">${oPath.length}</td>
               <td style="padding:4px 6px">${o.snr != null ? o.snr + ' dB' : '—'}</td>
               <td style="padding:4px 6px">${o.rssi != null ? o.rssi + ' dBm' : '—'}</td>
