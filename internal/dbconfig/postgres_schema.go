@@ -1,10 +1,24 @@
 package dbconfig
 
-import "database/sql"
+import (
+	"context"
+	"database/sql"
+)
 
 // ApplyPostgresSchema creates the CoreScope tables, indexes, and compatibility
 // view used by both the ingestor and server when Postgres is selected.
 func ApplyPostgresSchema(db *sql.DB) error {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext('corescope_schema_v1'))`); err != nil {
+		return err
+	}
+	defer conn.ExecContext(ctx, `SELECT pg_advisory_unlock(hashtext('corescope_schema_v1'))`)
+
 	schema := `
 		CREATE TABLE IF NOT EXISTS nodes (
 			public_key TEXT PRIMARY KEY,
@@ -133,13 +147,13 @@ func ApplyPostgresSchema(db *sql.DB) error {
 
 		CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY);
 	`
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := conn.ExecContext(ctx, schema); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`DROP VIEW IF EXISTS packets_v`); err != nil {
+	if _, err := conn.ExecContext(ctx, `DROP VIEW IF EXISTS packets_v`); err != nil {
 		return err
 	}
-	_, err := db.Exec(`
+	_, err = conn.ExecContext(ctx, `
 		CREATE VIEW packets_v AS
 			SELECT o.id, COALESCE(o.raw_hex, t.raw_hex) AS raw_hex,
 				   to_char(to_timestamp(o.timestamp) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS timestamp,

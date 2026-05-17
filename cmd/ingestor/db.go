@@ -650,7 +650,7 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtUpsertNode, err = s.db.Prepare(`
+	upsertNodeSQL := `
 		INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(public_key) DO UPDATE SET
@@ -659,7 +659,20 @@ func (s *Store) prepareStatements() error {
 			lat = COALESCE(?, lat),
 			lon = COALESCE(?, lon),
 			last_seen = ?
-	`)
+	`
+	if s.IsPostgres() {
+		upsertNodeSQL = `
+			INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(public_key) DO UPDATE SET
+				name = COALESCE(?, nodes.name),
+				role = COALESCE(?, nodes.role),
+				lat = COALESCE(?, nodes.lat),
+				lon = COALESCE(?, nodes.lon),
+				last_seen = ?
+		`
+	}
+	s.stmtUpsertNode, err = s.db.Prepare(upsertNodeSQL)
 	if err != nil {
 		return err
 	}
@@ -671,7 +684,7 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtUpsertObserver, err = s.db.Prepare(`
+	upsertObserverSQL := `
 		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor)
 		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
@@ -686,7 +699,26 @@ func (s *Store) prepareStatements() error {
 			battery_mv = COALESCE(?, battery_mv),
 			uptime_secs = COALESCE(?, uptime_secs),
 			noise_floor = COALESCE(?, noise_floor)
-	`)
+	`
+	if s.IsPostgres() {
+		upsertObserverSQL = `
+			INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor)
+			VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				name = COALESCE(?, observers.name),
+				iata = COALESCE(?, observers.iata),
+				last_seen = ?,
+				packet_count = observers.packet_count + 1,
+				model = COALESCE(?, observers.model),
+				firmware = COALESCE(?, observers.firmware),
+				client_version = COALESCE(?, observers.client_version),
+				radio = COALESCE(?, observers.radio),
+				battery_mv = COALESCE(?, observers.battery_mv),
+				uptime_secs = COALESCE(?, observers.uptime_secs),
+				noise_floor = COALESCE(?, observers.noise_floor)
+		`
+	}
+	s.stmtUpsertObserver, err = s.db.Prepare(upsertObserverSQL)
 	if err != nil {
 		return err
 	}
