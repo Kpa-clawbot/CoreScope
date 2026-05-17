@@ -988,7 +988,7 @@
             <div class="live-feed-empty" aria-hidden="true">Waiting for packets…</div>
           </div>
         </div>
-        <button class="feed-show-btn hidden" id="feedShowBtn" title="Show feed">📋</button>
+        <button class="feed-show-btn" id="feedShowBtn" title="Hide feed" aria-label="Hide feed">✕</button>
         <div id="nodeDetailBackdrop" class="node-detail-backdrop"></div>
         <div class="live-overlay live-node-detail hidden" id="liveNodeDetail">
           <div class="panel-header">
@@ -1512,18 +1512,27 @@
     });
     const feedHideBtn = document.getElementById('feedHideBtn');
     const feedShowBtn = document.getElementById('feedShowBtn');
-    if (localStorage.getItem('live-feed-hidden') === 'true') {
+    function hideFeed() {
       feedEl.classList.add('hidden');
-      feedShowBtn.classList.remove('hidden');
+      feedShowBtn.textContent = '📋';
+      feedShowBtn.title = 'Show feed';
+      feedShowBtn.setAttribute('aria-label', 'Show feed');
+      try { localStorage.setItem('live-feed-hidden', 'true'); } catch (_) {}
     }
-    feedHideBtn.addEventListener('click', () => {
-      feedEl.classList.add('hidden'); feedShowBtn.classList.remove('hidden');
-      localStorage.setItem('live-feed-hidden', 'true');
-    });
+    function showFeed() {
+      feedEl.classList.remove('hidden');
+      feedShowBtn.textContent = '✕';
+      feedShowBtn.title = 'Hide feed';
+      feedShowBtn.setAttribute('aria-label', 'Hide feed');
+      try { localStorage.setItem('live-feed-hidden', 'false'); } catch (_) {}
+    }
+    if (localStorage.getItem('live-feed-hidden') === 'true') {
+      hideFeed();
+    }
     feedShowBtn.addEventListener('click', () => {
-      feedEl.classList.remove('hidden'); feedShowBtn.classList.add('hidden');
-      localStorage.setItem('live-feed-hidden', 'false');
+      if (feedEl.classList.contains('hidden')) showFeed(); else hideFeed();
     });
+    feedHideBtn.addEventListener('click', hideFeed);
 
     // Mobile header collapse toggle
     const liveHeaderEl = document.getElementById('liveHeader');
