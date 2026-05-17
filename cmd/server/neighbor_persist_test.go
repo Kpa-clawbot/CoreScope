@@ -600,3 +600,91 @@ func TestEnsureLastPacketAtColumn(t *testing.T) {
 		t.Fatalf("idempotent call failed: %v", err)
 	}
 }
+
+// TestEnsureObserverIATAColumn validates the #1189 R1 fix: an operator with
+// a pre-iata observers schema (no `iata TEXT` column) must not panic on
+// startup. The migration must idempotently ALTER TABLE ADD COLUMN, and
+// queries that COALESCE(obs.iata, '') must succeed after the migration runs.
+func TestEnsureObserverIATAColumn(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := dir + "/test.db"
+
+	// Pre-iata schema (matches what shipped before #1188 landed).
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE observers (
+		id TEXT PRIMARY KEY,
+		name TEXT,
+		last_seen TEXT,
+		first_seen TEXT,
+		packet_count INTEGER DEFAULT 0,
+		inactive INTEGER DEFAULT 0,
+		last_packet_at TEXT DEFAULT NULL
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO observers (id, name) VALUES ('obs1', 'Observer One')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	// Prove the bug exists pre-migration: a SELECT that COALESCEs obs.iata must fail.
+	db0, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probe string
+	preErr := db0.QueryRow(`SELECT COALESCE(iata, '') FROM observers WHERE id='obs1'`).Scan(&probe)
+	db0.Close()
+	if preErr == nil {
+		t.Fatal("expected SELECT on missing iata column to fail BEFORE migration; got success")
+	}
+
+	// First call: should add the column.
+	if err := ensureObserverIATAColumn(dbPath); err != nil {
+		t.Fatalf("first call failed: %v", err)
+	}
+
+	// Verify column exists.
+	db2, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+
+	var found bool
+	rows, err := db2.Query("PRAGMA table_info(observers)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == "iata" {
+			found = true
+		}
+	}
+	rows.Close()
+	if !found {
+		t.Fatal("iata column not found after migration")
+	}
+
+	// The query that previously panicked must now succeed (empty string default).
+	if err := db2.QueryRow(`SELECT COALESCE(iata, '') FROM observers WHERE id='obs1'`).Scan(&probe); err != nil {
+		t.Fatalf("post-migration SELECT failed: %v", err)
+	}
+	if probe != "" {
+		t.Fatalf("expected empty iata for legacy row, got %q", probe)
+	}
+
+	// Idempotency: second call must succeed.
+	if err := ensureObserverIATAColumn(dbPath); err != nil {
+		t.Fatalf("idempotent call failed: %v", err)
+	}
+}

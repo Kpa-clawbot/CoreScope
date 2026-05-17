@@ -239,7 +239,7 @@ async function main() {
     }
 
     // Navigate back to root + force DEFAULT (dark) theme.
-    await page.evaluate(() => { window.location.hash = '#/'; });
+    await page.evaluate(() => { window.location.hash = '#/home'; });
     await page.waitForFunction(() => location.hash === '#/home' || location.hash === '#/');
     await page.waitForSelector('.nav-brand', { timeout: 8000 });
     await page.evaluate(() => { document.documentElement.removeAttribute('data-theme'); });
@@ -289,7 +289,7 @@ async function main() {
     //    a mark-only .brand-mark-only inline SVG must take its place. Also
     //    asserts the visible logo's right edge does not overflow .nav-left.
     await page.setViewportSize({ width: 360, height: 640 });
-    await page.evaluate(() => { window.location.hash = '#/'; });
+    await page.evaluate(() => { window.location.hash = '#/home'; });
     await page.waitForFunction(() => location.hash === '#/home' || location.hash === '#/');
     await page.waitForSelector('.nav-brand', { timeout: 8000 });
     // Allow CSS media query to settle.
@@ -340,7 +340,7 @@ async function main() {
     //    every desktop viewport width. Fix: widen the viewBox so the
     //    wordmark fits.
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.evaluate(() => { window.location.hash = '#/'; });
+    await page.evaluate(() => { window.location.hash = '#/home'; });
     await page.waitForFunction(() => location.hash === '#/home' || location.hash === '#/');
     await page.waitForSelector('.nav-brand svg.brand-logo', { timeout: 8000 });
     await page.waitForTimeout(150);

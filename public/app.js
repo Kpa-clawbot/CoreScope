@@ -963,6 +963,14 @@ function navigate() {
     const ms = performance.now() - t0;
     if (ms > 100) console.warn(`[SLOW PAGE] ${basePage} init took ${Math.round(ms)}ms`);
     app.classList.remove('page-enter'); void app.offsetWidth; app.classList.add('page-enter');
+    // #1206 followup: sweep TableResponsive ResizeObservers whose tables were
+    // detached when the prior page's destroy ran (its <table> was wired in
+    // TableResponsive.register; on SPA nav app.innerHTML is rebuilt by the
+    // next init, so the previous table is now detached). Without this, the
+    // last-rendered table on each remountable page leaks 1 RO per remount.
+    if (window.TableResponsive && typeof window.TableResponsive.sweep === 'function') {
+      try { window.TableResponsive.sweep(); } catch (_) {}
+    }
     // #630-7: SPA focus management — move focus to first heading or main content
     requestAnimationFrame(function() {
       var heading = app.querySelector('h1, h2, h3, [role="heading"]');
