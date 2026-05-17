@@ -820,7 +820,10 @@ window.pullReconnect = pullReconnect;
 window.setupPullToReconnect = setupPullToReconnect;
 window.connectWS = connectWS;
 
-/* Global escapeHtml — used by multiple pages */
+/* Global escapeHtml — self-contained. Must NOT delegate to window.escapeHtml:
+   this top-level declaration in a classic script IS window.escapeHtml, so a
+   delegating body would call itself and infinitely recurse. packet-helpers.js
+   defines an equivalent canonical escaper; both escape the same characters. */
 function escapeHtml(s) {
   if (s == null) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
