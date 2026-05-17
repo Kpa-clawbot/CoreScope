@@ -53,7 +53,7 @@
     currentHash = hash;
 
     const results = document.getElementById('traceResults');
-    results.innerHTML = '<div class="text-center text-muted" style="padding:40px">Tracing…</div>';
+    results.innerHTML = PageState.loading('Tracing…');
 
     try {
       const [traceResp, pktResp] = await Promise.all([
@@ -68,7 +68,7 @@
         results.innerHTML = PageState.empty({
           icon: '📡',
           title: 'No observations found',
-          hint: 'Try a different packet hash'
+          hint: 'Adjust your filters and try again'
         });
         return;
       }
@@ -100,7 +100,7 @@
 
       renderResults(results, allPaths, decoded);
     } catch (e) {
-      results.innerHTML = `<div class="trace-empty" style="color:#ef4444">Error: ${e.message}</div>`;
+      PageState.error(results, e, doTrace);
     }
   }
 
