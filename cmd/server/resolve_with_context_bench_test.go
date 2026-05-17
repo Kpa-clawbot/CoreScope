@@ -104,9 +104,17 @@ func TestResolveWithContextTier1Floor(t *testing.T) {
 	}
 	elapsed := time.Since(t0)
 	perCall := elapsed / iters
-	// 100 µs/call ≈ 2× the post-fix steady-state ceiling and 2× UNDER
-	// the regressed master baseline (~200 µs/op on this shape).
-	const ceiling = 100 * time.Microsecond
+	// 500 µs/call is the CI-floor-safe ceiling.  Rationale:
+	//   - Post-fix steady-state on arm64 dev hardware: ~50 µs/call.
+	//   - x86_64 GitHub-hosted runners measure ~340 µs/call on this
+	//     microbenchmark (≈5–7× slower than the arm64 dev box due to
+	//     shared-tenant CPU contention and cache behavior on this shape).
+	//   - Pre-fix regressed master measured ~1500 µs/call+ on the same
+	//     runners, so 500 µs still catches the regression class with
+	//     ~3× headroom and avoids CI-flake from runner variance.
+	// If a future change reintroduces the per-(cand, ctx) Neighbors
+	// lookup or the EqualFold tax, this test still fails loudly.
+	const ceiling = 500 * time.Microsecond
 	if perCall > ceiling {
 		t.Fatalf("resolveWithContext tier-1 perf regressed: %v/call (>%v ceiling); see #1247", perCall, ceiling)
 	}
