@@ -1,0 +1,67 @@
+# Side-by-side dev deployment for live.meshcore.ca-style hosts.
+# Intended to run next to the live Compose project:
+#   live:  /opt/corescope/docker-compose.yml on host ports 80/443
+#   dev:   this file on host port 8443 with its own data and Postgres
+#
+# Usage from a fork checkout:
+#   docker compose -f docker-compose.dev.yml up -d --build
+
+name: corescope-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: corescope-dev-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DEV_POSTGRES_DB:-corescope_dev}
+      POSTGRES_USER: ${DEV_POSTGRES_USER:-corescope}
+      POSTGRES_PASSWORD: ${DEV_POSTGRES_PASSWORD:-corescope}
+    volumes:
+      - ${DEV_POSTGRES_DATA_DIR:-/opt/corescope/data-dev/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DEV_POSTGRES_USER:-corescope} -d ${DEV_POSTGRES_DB:-corescope_dev}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  corescope-dev:
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    image: ${DEV_IMAGE:-corescope:dev}
+    container_name: corescope-dev
+    restart: unless-stopped
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${DEV_HTTPS_PORT:-8443}:443"
+    environment:
+      NODE_ENV: production
+      TZ: ${TZ:-America/Toronto}
+      DB_DRIVER: postgres
+      DATABASE_URL: ${DEV_DATABASE_URL:-postgres://corescope:corescope@postgres:5432/corescope_dev?sslmode=disable}
+      DB_PATH: ${DEV_DB_PATH:-/app/data/meshcore.db}
+      DISABLE_MOSQUITTO: ${DEV_DISABLE_MOSQUITTO:-true}
+      DISABLE_CADDY: ${DEV_DISABLE_CADDY:-false}
+    volumes:
+      - ${DEV_CADDYFILE:-/opt/corescope/data-dev/caddy/config/Caddyfile}:/etc/caddy/Caddyfile:ro
+      - ${DEV_DATA_DIR:-/opt/corescope/data-dev/corescope/data}:/app/data
+      - ${DEV_CONFIG_FILE:-/opt/corescope/data-dev/corescope/config.json}:/app/config.json:ro
+      - ${DEV_CADDY_DATA_DIR:-/opt/corescope/data-dev/caddy/app}:/data/caddy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/stats"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

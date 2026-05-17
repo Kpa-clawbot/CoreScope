@@ -10,6 +10,10 @@ import (
 // if it's not INCREMENTAL. Optionally performs a one-time full VACUUM if
 // the operator has set db.vacuumOnStartup: true in config (#919).
 func checkAutoVacuum(db *DB, cfg *Config, dbPath string) {
+	if db != nil && db.IsPostgres() {
+		log.Printf("[db] postgres backend: SQLite auto_vacuum check skipped")
+		return
+	}
 	var autoVacuum int
 	if err := db.conn.QueryRow("PRAGMA auto_vacuum").Scan(&autoVacuum); err != nil {
 		log.Printf("[db] warning: could not read auto_vacuum: %v", err)
@@ -70,6 +74,9 @@ func checkAutoVacuum(db *DB, cfg *Config, dbPath string) {
 // runIncrementalVacuum runs PRAGMA incremental_vacuum(N) on a read-write
 // connection. Safe to call on auto_vacuum=NONE databases (noop).
 func runIncrementalVacuum(dbPath string, pages int) {
+	if dbPath == "" {
+		return
+	}
 	rw, err := cachedRW(dbPath)
 	if err != nil {
 		log.Printf("[vacuum] could not open RW connection: %v", err)

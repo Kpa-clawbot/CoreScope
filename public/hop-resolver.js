@@ -381,6 +381,7 @@ window.HopResolver = (function() {
       result[hop] = {
         name: node ? node.name : pubkey.slice(0, 8),
         pubkey: pubkey,
+        serverResolved: true,
         candidates: node ? [{ name: node.name, pubkey: pubkey, lat: node.lat, lon: node.lon }] : [],
         conflicts: []
       };

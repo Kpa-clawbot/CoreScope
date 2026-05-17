@@ -262,6 +262,7 @@ func TestFromPubkeyIndexUsedForInClause(t *testing.T) {
 
 func TestBackfillFromPubkey_AdvertRowsPopulated(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(closeRWCache)
 	dbPath := dir + "/test.db"
 
 	// Create a legacy-style DB: transmissions table WITHOUT from_pubkey,
@@ -280,8 +281,8 @@ func TestBackfillFromPubkey_AdvertRowsPopulated(t *testing.T) {
 	}
 	// Two ADVERTs (different pubkeys) and a non-ADVERT.
 	if _, err := rw.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type, decoded_json) VALUES
-		('AA','m1','2026-01-01T00:00:00Z',4,'{"type":"ADVERT","pubKey":"`+pkVictim+`","name":"V"}'),
-		('BB','m2','2026-01-01T00:00:00Z',4,'{"type":"ADVERT","pubKey":"`+pkOther+`","name":"O"}'),
+		('AA','m1','2026-01-01T00:00:00Z',4,'{"type":"ADVERT","pubKey":"` + pkVictim + `","name":"V"}'),
+		('BB','m2','2026-01-01T00:00:00Z',4,'{"type":"ADVERT","pubKey":"` + pkOther + `","name":"O"}'),
 		('CC','m3','2026-01-01T00:00:00Z',5,'{"type":"GRP_TXT","text":"hi"}')`); err != nil {
 		t.Fatal(err)
 	}
@@ -340,6 +341,7 @@ func TestBackfillFromPubkey_AdvertRowsPopulated(t *testing.T) {
 // the resets (cycle-3 m1c).
 func TestBackfillFromPubkey_DoesNotBlockBoot(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(closeRWCache)
 	dbPath := dir + "/async_boot.db"
 
 	rw, err := sql.Open("sqlite", dbPath)

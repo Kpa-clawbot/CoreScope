@@ -2389,6 +2389,7 @@
   window._liveResolveHopPositions = resolveHopPositions;
   window._livePathPlausibilityReport = pathPlausibilityReport;
   window._liveShouldDrawRfPath = shouldDrawRfPath;
+  window._liveGetSuppressedPathCount = function() { return suppressedPathCount; };
   window._liveVcrSpeedCycle = vcrSpeedCycle;
   window._liveVcrPause = vcrPause;
   window._liveVcrResumeLive = vcrResumeLive;
@@ -2689,12 +2690,13 @@
   }
 
   function pathPlausibilityReport(hopPositions) {
-    var report = { plausible: true, maxSegmentKm: 0, badSegments: [] };
+    var report = { plausible: true, status: 'plausible', knownAnchors: 0, maxSegmentKm: 0, badSegments: [] };
     if (!hopPositions || hopPositions.length < 2) return report;
     var previous = null;
     for (var i = 0; i < hopPositions.length; i++) {
       var current = hopPositions[i];
       if (!current || !current.pos || current.ghost || !current.known) continue;
+      report.knownAnchors += 1;
       if (previous) {
         var km = liveHaversineKm(previous.pos, current.pos);
         if (km > report.maxSegmentKm) report.maxSegmentKm = km;
@@ -2708,6 +2710,11 @@
         }
       }
       previous = current;
+    }
+    if (report.badSegments.length > 0) {
+      report.status = 'suppressed';
+    } else if (report.knownAnchors < 2) {
+      report.status = 'insufficient-known-anchors';
     }
     return report;
   }
@@ -2724,6 +2731,8 @@
     try {
       console.debug('[live] suppressed implausible RF path', {
         hash: hash || null,
+        status: report.status || 'suppressed',
+        knownAnchors: report.knownAnchors || 0,
         maxSegmentKm: Math.round(report.maxSegmentKm || 0),
         badSegments: report.badSegments || []
       });

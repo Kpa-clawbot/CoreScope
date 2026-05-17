@@ -52,12 +52,13 @@ func main() {
 
 	sources := cfg.ResolvedSources()
 
-	store, err := OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
+	dbSettings := cfg.DBSettings()
+	store, err := OpenStoreWithSettings(dbSettings, cfg.MetricsSampleInterval())
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
 	defer store.Close()
-	log.Printf("SQLite opened: %s", cfg.DBPath)
+	log.Printf("%s opened", dbSettings.Label())
 
 	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
 	store.BackfillPathJSONAsync()

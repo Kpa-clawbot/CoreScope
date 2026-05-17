@@ -3,6 +3,18 @@
 **Dataset:** 28,014 packets, ~650 nodes, 2 observers  
 **Hardware:** ARM64 (MikroTik CCR2116), single-core Node.js
 
+## Database Backend Notes
+
+CoreScope now supports Postgres and SQLite. Postgres should improve concurrent
+read/write behavior and cold database queries, but it is not automatically a
+dashboard speed win because many dashboard paths are served from the in-memory
+packet store and TTL cache.
+
+Use `/api/perf/db` for engine, row counts, DB size, and pool waits. Use
+`/api/perf` for endpoint latency, slow paths, startup load behavior, and packet
+store memory stats. Treat a Postgres migration as successful only when those
+measurements improve for the workload being tested.
+
 ## A/B Benchmark: v2.0.1 (before) vs v2.1.0 (after)
 
 All times are averages over 3 runs. "Cached" = warm TTL cache hit.

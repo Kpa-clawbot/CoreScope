@@ -365,6 +365,11 @@ func (c *Config) ResolveDBPath(baseDir string) string {
 	return filepath.Join(baseDir, "data", "meshcore.db")
 }
 
+func (c *Config) DBSettings(baseDir string) dbconfig.Settings {
+	legacyPath := c.ResolveDBPath(baseDir)
+	return dbconfig.Resolve(c.DB, legacyPath)
+}
+
 
 func (c *Config) NormalizeTimestampConfig() {
 	defaults := defaultTimestampConfig()

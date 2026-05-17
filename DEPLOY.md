@@ -24,6 +24,11 @@ curl -sL https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/docker-c
 docker compose up -d
 ```
 
+For a live-style dev server beside an existing CoreScope container, use
+`docker-compose.dev.yml`. It runs a separate CoreScope dev container on host
+port `8443` and a separate Postgres container, leaving live ports `80`/`443`
+untouched.
+
 ## Image Tags
 
 | Tag | Description |

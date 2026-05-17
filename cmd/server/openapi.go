@@ -12,10 +12,10 @@ import (
 
 // routeMeta holds metadata for a single API route.
 type routeMeta struct {
-	Summary     string   `json:"summary"`
-	Description string   `json:"description,omitempty"`
-	Tag         string   `json:"tag"`
-	Auth        bool     `json:"auth,omitempty"`
+	Summary     string      `json:"summary"`
+	Description string      `json:"description,omitempty"`
+	Tag         string      `json:"tag"`
+	Auth        bool        `json:"auth,omitempty"`
 	QueryParams []paramMeta `json:"queryParams,omitempty"`
 }
 
@@ -39,13 +39,14 @@ func routeDescriptions() map[string]routeMeta {
 		"GET /api/config/geo-filter": {Summary: "Get geo-filter configuration", Tag: "config"},
 
 		// Admin / system
-		"GET /api/health":     {Summary: "Health check", Description: "Returns server health, uptime, and memory stats.", Tag: "admin"},
-		"GET /api/stats":      {Summary: "Network statistics", Description: "Returns aggregate stats (node counts, packet counts, observer counts). Cached for 10s.", Tag: "admin"},
-		"GET /api/perf":       {Summary: "Performance statistics", Description: "Returns per-endpoint request timing and slow query log.", Tag: "admin"},
-		"POST /api/perf/reset": {Summary: "Reset performance stats", Tag: "admin", Auth: true},
-		"POST /api/admin/prune": {Summary: "Prune old data", Description: "Deletes packets and nodes older than the configured retention period.", Tag: "admin", Auth: true},
+		"GET /api/health":         {Summary: "Health check", Description: "Returns server health, uptime, and memory stats.", Tag: "admin"},
+		"GET /api/stats":          {Summary: "Network statistics", Description: "Returns aggregate stats (node counts, packet counts, observer counts). Cached for 10s.", Tag: "admin"},
+		"GET /api/perf":           {Summary: "Performance statistics", Description: "Returns per-endpoint request timing and slow query log.", Tag: "admin"},
+		"GET /api/perf/db":        {Summary: "Database performance statistics", Description: "Returns database engine, row counts, pool stats, and SQLite compatibility fields when applicable.", Tag: "admin"},
+		"POST /api/perf/reset":    {Summary: "Reset performance stats", Tag: "admin", Auth: true},
+		"POST /api/admin/prune":   {Summary: "Prune old data", Description: "Deletes packets and nodes older than the configured retention period.", Tag: "admin", Auth: true},
 		"GET /api/debug/affinity": {Summary: "Debug neighbor affinity scores", Tag: "admin", Auth: true},
-		"GET /api/backup": {Summary: "Download SQLite backup", Description: "Streams a consistent SQLite snapshot of the analyzer DB (VACUUM INTO). Response is application/octet-stream with attachment filename corescope-backup-<unix>.db.", Tag: "admin", Auth: true},
+		"GET /api/backup":         {Summary: "Download SQLite backup", Description: "Streams a consistent SQLite snapshot of the analyzer DB (VACUUM INTO). Response is application/octet-stream with attachment filename corescope-backup-<unix>.db.", Tag: "admin", Auth: true},
 
 		// Packets
 		"GET /api/packets": {Summary: "List packets", Description: "Returns decoded packets with filtering, sorting, and pagination.", Tag: "packets",
@@ -74,37 +75,37 @@ func routeDescriptions() map[string]routeMeta {
 				{Name: "role", Description: "Filter by node role", Type: "string"},
 				{Name: "status", Description: "Filter by status (active/stale/offline)", Type: "string"},
 			}},
-		"GET /api/nodes/search":           {Summary: "Search nodes", Description: "Search nodes by name or public key prefix.", Tag: "nodes", QueryParams: []paramMeta{{Name: "q", Description: "Search query", Type: "string", Required: true}}},
-		"GET /api/nodes/bulk-health":       {Summary: "Bulk node health", Description: "Returns health status for all nodes in one call.", Tag: "nodes"},
-		"GET /api/nodes/network-status":    {Summary: "Network status summary", Description: "Returns counts of active, stale, and offline nodes.", Tag: "nodes"},
-		"GET /api/nodes/{pubkey}":          {Summary: "Get node detail", Description: "Returns full detail for a single node by public key.", Tag: "nodes"},
-		"GET /api/nodes/{pubkey}/health":   {Summary: "Get node health", Tag: "nodes"},
-		"GET /api/nodes/{pubkey}/paths":    {Summary: "Get node routing paths", Tag: "nodes"},
+		"GET /api/nodes/search":             {Summary: "Search nodes", Description: "Search nodes by name or public key prefix.", Tag: "nodes", QueryParams: []paramMeta{{Name: "q", Description: "Search query", Type: "string", Required: true}}},
+		"GET /api/nodes/bulk-health":        {Summary: "Bulk node health", Description: "Returns health status for all nodes in one call.", Tag: "nodes"},
+		"GET /api/nodes/network-status":     {Summary: "Network status summary", Description: "Returns counts of active, stale, and offline nodes.", Tag: "nodes"},
+		"GET /api/nodes/{pubkey}":           {Summary: "Get node detail", Description: "Returns full detail for a single node by public key.", Tag: "nodes"},
+		"GET /api/nodes/{pubkey}/health":    {Summary: "Get node health", Tag: "nodes"},
+		"GET /api/nodes/{pubkey}/paths":     {Summary: "Get node routing paths", Tag: "nodes"},
 		"GET /api/nodes/{pubkey}/analytics": {Summary: "Get node analytics", Description: "Per-node packet counts, timing, and RF stats.", Tag: "nodes"},
 		"GET /api/nodes/{pubkey}/neighbors": {Summary: "Get node neighbors", Description: "Returns neighbor nodes with affinity scores.", Tag: "nodes"},
 
 		// Analytics
-		"GET /api/analytics/rf":               {Summary: "RF analytics", Description: "SNR/RSSI distributions and statistics.", Tag: "analytics"},
-		"GET /api/analytics/topology":          {Summary: "Network topology", Description: "Hop-count distribution and route analysis.", Tag: "analytics"},
-		"GET /api/analytics/channels":          {Summary: "Channel analytics", Description: "Message counts and activity per channel.", Tag: "analytics"},
-		"GET /api/analytics/distance":          {Summary: "Distance analytics", Description: "Geographic distance calculations between nodes.", Tag: "analytics"},
-		"GET /api/analytics/hash-sizes":        {Summary: "Hash size analysis", Description: "Distribution of hash prefix sizes across the network.", Tag: "analytics"},
-		"GET /api/analytics/hash-collisions":   {Summary: "Hash collision detection", Description: "Identifies nodes sharing hash prefixes.", Tag: "analytics"},
-		"GET /api/analytics/subpaths":          {Summary: "Subpath analysis", Description: "Common routing subpaths through the mesh.", Tag: "analytics"},
-		"GET /api/analytics/subpaths-bulk":     {Summary: "Bulk subpath analysis", Tag: "analytics"},
-		"GET /api/analytics/subpath-detail":    {Summary: "Subpath detail", Tag: "analytics"},
-		"GET /api/analytics/neighbor-graph":    {Summary: "Neighbor graph", Description: "Full neighbor affinity graph for visualization.", Tag: "analytics"},
+		"GET /api/analytics/rf":              {Summary: "RF analytics", Description: "SNR/RSSI distributions and statistics.", Tag: "analytics"},
+		"GET /api/analytics/topology":        {Summary: "Network topology", Description: "Hop-count distribution and route analysis.", Tag: "analytics"},
+		"GET /api/analytics/channels":        {Summary: "Channel analytics", Description: "Message counts and activity per channel.", Tag: "analytics"},
+		"GET /api/analytics/distance":        {Summary: "Distance analytics", Description: "Geographic distance calculations between nodes.", Tag: "analytics"},
+		"GET /api/analytics/hash-sizes":      {Summary: "Hash size analysis", Description: "Distribution of hash prefix sizes across the network.", Tag: "analytics"},
+		"GET /api/analytics/hash-collisions": {Summary: "Hash collision detection", Description: "Identifies nodes sharing hash prefixes.", Tag: "analytics"},
+		"GET /api/analytics/subpaths":        {Summary: "Subpath analysis", Description: "Common routing subpaths through the mesh.", Tag: "analytics"},
+		"GET /api/analytics/subpaths-bulk":   {Summary: "Bulk subpath analysis", Tag: "analytics"},
+		"GET /api/analytics/subpath-detail":  {Summary: "Subpath detail", Tag: "analytics"},
+		"GET /api/analytics/neighbor-graph":  {Summary: "Neighbor graph", Description: "Full neighbor affinity graph for visualization.", Tag: "analytics"},
 
 		// Channels
 		"GET /api/channels":                 {Summary: "List channels", Description: "Returns known mesh channels with message counts.", Tag: "channels"},
 		"GET /api/channels/{hash}/messages": {Summary: "Get channel messages", Description: "Returns messages for a specific channel.", Tag: "channels"},
 
 		// Observers
-		"GET /api/observers":                    {Summary: "List observers", Description: "Returns all known packet observers/gateways.", Tag: "observers"},
-		"GET /api/observers/{id}":               {Summary: "Get observer detail", Tag: "observers"},
-		"GET /api/observers/{id}/metrics":       {Summary: "Get observer metrics", Description: "Packet rates, uptime, and performance metrics.", Tag: "observers"},
-		"GET /api/observers/{id}/analytics":     {Summary: "Get observer analytics", Tag: "observers"},
-		"GET /api/observers/metrics/summary":    {Summary: "Observer metrics summary", Description: "Aggregate metrics across all observers.", Tag: "observers"},
+		"GET /api/observers":                 {Summary: "List observers", Description: "Returns all known packet observers/gateways.", Tag: "observers"},
+		"GET /api/observers/{id}":            {Summary: "Get observer detail", Tag: "observers"},
+		"GET /api/observers/{id}/metrics":    {Summary: "Get observer metrics", Description: "Packet rates, uptime, and performance metrics.", Tag: "observers"},
+		"GET /api/observers/{id}/analytics":  {Summary: "Get observer analytics", Tag: "observers"},
+		"GET /api/observers/metrics/summary": {Summary: "Observer metrics summary", Description: "Aggregate metrics across all observers.", Tag: "observers"},
 
 		// Misc
 		"GET /api/resolve-hops":      {Summary: "Resolve hop path", Description: "Resolves hash prefixes in a hop path to node names. Returns affinity scores and best candidates.", Tag: "nodes", QueryParams: []paramMeta{{Name: "hops", Description: "Comma-separated hop hash prefixes", Type: "string", Required: true}}},

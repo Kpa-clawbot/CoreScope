@@ -55,23 +55,23 @@ type TimeBucket struct {
 // ─── Stats ─────────────────────────────────────────────────────────────────────
 
 type StatsResponse struct {
-	TotalPackets       int        `json:"totalPackets"`
-	TotalTransmissions *int       `json:"totalTransmissions"`
-	TotalObservations  int        `json:"totalObservations"`
-	TotalNodes         int        `json:"totalNodes"`
-	TotalNodesAllTime  int        `json:"totalNodesAllTime"`
-	TotalObservers     int        `json:"totalObservers"`
-	PacketsLastHour    int        `json:"packetsLastHour"`
-	PacketsLast24h     int        `json:"packetsLast24h"`
-	Engine             string     `json:"engine"`
-	Version            string     `json:"version"`
-	Commit             string     `json:"commit"`
-	BuildTime          string     `json:"buildTime"`
-	Counts             RoleCounts `json:"counts"`
-	Backfilling            bool       `json:"backfilling"`
-	BackfillProgress       float64    `json:"backfillProgress"`
-	SignatureDrops         int64      `json:"signatureDrops,omitempty"`
-	HashMigrationComplete  bool       `json:"hashMigrationComplete"`
+	TotalPackets          int        `json:"totalPackets"`
+	TotalTransmissions    *int       `json:"totalTransmissions"`
+	TotalObservations     int        `json:"totalObservations"`
+	TotalNodes            int        `json:"totalNodes"`
+	TotalNodesAllTime     int        `json:"totalNodesAllTime"`
+	TotalObservers        int        `json:"totalObservers"`
+	PacketsLastHour       int        `json:"packetsLastHour"`
+	PacketsLast24h        int        `json:"packetsLast24h"`
+	Engine                string     `json:"engine"`
+	Version               string     `json:"version"`
+	Commit                string     `json:"commit"`
+	BuildTime             string     `json:"buildTime"`
+	Counts                RoleCounts `json:"counts"`
+	Backfilling           bool       `json:"backfilling"`
+	BackfillProgress      float64    `json:"backfillProgress"`
+	SignatureDrops        int64      `json:"signatureDrops,omitempty"`
+	HashMigrationComplete bool       `json:"hashMigrationComplete"`
 
 	// Memory accounting (issue #832). All values in MB.
 	//
@@ -177,30 +177,30 @@ type EndpointStatsResp struct {
 }
 
 type PacketStoreIndexes struct {
-	ByHash          int `json:"byHash"`
-	ByObserver      int `json:"byObserver"`
-	ByNode          int `json:"byNode"`
+	ByHash           int `json:"byHash"`
+	ByObserver       int `json:"byObserver"`
+	ByNode           int `json:"byNode"`
 	AdvertByObserver int `json:"advertByObserver"`
 }
 
 type PerfPacketStoreStats struct {
-	TotalLoaded              int                `json:"totalLoaded"`
-	TotalObservations        int                `json:"totalObservations"`
-	Evicted                  int                `json:"evicted"`
-	Inserts                  int64              `json:"inserts"`
-	Queries                  int64              `json:"queries"`
-	InMemory                 int                `json:"inMemory"`
-	SqliteOnly               bool               `json:"sqliteOnly"`
-	MaxPackets               int                `json:"maxPackets"`
-	EstimatedMB              float64            `json:"estimatedMB"`
-	TrackedMB                float64            `json:"trackedMB"`
-	AvgBytesPerPacket        int64              `json:"avgBytesPerPacket"`
-	MaxMB                    int                `json:"maxMB"`
-	Indexes                  PacketStoreIndexes `json:"indexes"`
-	HotStartupHours          float64            `json:"hotStartupHours"`
-	BackgroundLoadComplete   bool               `json:"backgroundLoadComplete"`
-	BackgroundLoadFailed     bool               `json:"backgroundLoadFailed"`
-	BackgroundLoadProgress   int64              `json:"backgroundLoadProgress"`
+	TotalLoaded            int                `json:"totalLoaded"`
+	TotalObservations      int                `json:"totalObservations"`
+	Evicted                int                `json:"evicted"`
+	Inserts                int64              `json:"inserts"`
+	Queries                int64              `json:"queries"`
+	InMemory               int                `json:"inMemory"`
+	SqliteOnly             bool               `json:"sqliteOnly"`
+	MaxPackets             int                `json:"maxPackets"`
+	EstimatedMB            float64            `json:"estimatedMB"`
+	TrackedMB              float64            `json:"trackedMB"`
+	AvgBytesPerPacket      int64              `json:"avgBytesPerPacket"`
+	MaxMB                  int                `json:"maxMB"`
+	Indexes                PacketStoreIndexes `json:"indexes"`
+	HotStartupHours        float64            `json:"hotStartupHours"`
+	BackgroundLoadComplete bool               `json:"backgroundLoadComplete"`
+	BackgroundLoadFailed   bool               `json:"backgroundLoadFailed"`
+	BackgroundLoadProgress int64              `json:"backgroundLoadProgress"`
 }
 
 type WalPages struct {
@@ -224,6 +224,27 @@ type SqliteStats struct {
 	Rows       *SqliteRowCounts `json:"rows"`
 }
 
+type DBPoolStats struct {
+	MaxOpenConnections int     `json:"maxOpenConnections"`
+	OpenConnections    int     `json:"openConnections"`
+	InUse              int     `json:"inUse"`
+	Idle               int     `json:"idle"`
+	WaitCount          int64   `json:"waitCount"`
+	WaitDurationMs     float64 `json:"waitDurationMs"`
+	MaxIdleClosed      int64   `json:"maxIdleClosed"`
+	MaxLifetimeClosed  int64   `json:"maxLifetimeClosed"`
+}
+
+type DBPerfStats struct {
+	Engine     string           `json:"engine"`
+	DbSizeMB   float64          `json:"dbSizeMB"`
+	WalSizeMB  float64          `json:"walSizeMB,omitempty"`
+	FreelistMB float64          `json:"freelistMB,omitempty"`
+	WalPages   *WalPages        `json:"walPages,omitempty"`
+	Rows       *SqliteRowCounts `json:"rows"`
+	Pool       *DBPoolStats     `json:"pool,omitempty"`
+}
+
 type PerfResponse struct {
 	Uptime        int                           `json:"uptime"`
 	TotalRequests int64                         `json:"totalRequests"`
@@ -232,6 +253,7 @@ type PerfResponse struct {
 	SlowQueries   []SlowQuery                   `json:"slowQueries"`
 	Cache         PerfCacheStats                `json:"cache"`
 	PacketStore   *PerfPacketStoreStats         `json:"packetStore"`
+	DB            *DBPerfStats                  `json:"db"`
 	Sqlite        *SqliteStats                  `json:"sqlite"`
 	GoRuntime     *GoRuntimeStats               `json:"goRuntime,omitempty"`
 }
@@ -252,23 +274,23 @@ type GoRuntimeStats struct {
 // ─── Packets ───────────────────────────────────────────────────────────────────
 
 type TransmissionResp struct {
-	ID               int              `json:"id"`
-	RawHex           interface{}      `json:"raw_hex"`
-	Hash             string           `json:"hash"`
-	FirstSeen        string           `json:"first_seen"`
-	Timestamp        string           `json:"timestamp"`
-	RouteType        interface{}      `json:"route_type"`
-	PayloadType      interface{}      `json:"payload_type"`
-	PayloadVersion   interface{}      `json:"payload_version,omitempty"`
-	DecodedJSON      interface{}      `json:"decoded_json"`
-	ObservationCount int              `json:"observation_count"`
-	ObserverID       interface{}      `json:"observer_id"`
-	ObserverName     interface{}      `json:"observer_name"`
-	SNR              interface{}      `json:"snr"`
-	RSSI             interface{}      `json:"rssi"`
-	PathJSON         interface{}      `json:"path_json"`
-	Direction        interface{}      `json:"direction"`
-	Score            interface{}      `json:"score,omitempty"`
+	ID               int               `json:"id"`
+	RawHex           interface{}       `json:"raw_hex"`
+	Hash             string            `json:"hash"`
+	FirstSeen        string            `json:"first_seen"`
+	Timestamp        string            `json:"timestamp"`
+	RouteType        interface{}       `json:"route_type"`
+	PayloadType      interface{}       `json:"payload_type"`
+	PayloadVersion   interface{}       `json:"payload_version,omitempty"`
+	DecodedJSON      interface{}       `json:"decoded_json"`
+	ObservationCount int               `json:"observation_count"`
+	ObserverID       interface{}       `json:"observer_id"`
+	ObserverName     interface{}       `json:"observer_name"`
+	SNR              interface{}       `json:"snr"`
+	RSSI             interface{}       `json:"rssi"`
+	PathJSON         interface{}       `json:"path_json"`
+	Direction        interface{}       `json:"direction"`
+	Score            interface{}       `json:"score,omitempty"`
 	Observations     []ObservationResp `json:"observations,omitempty"`
 }
 
@@ -335,18 +357,18 @@ type DecodeResponse struct {
 // ─── Nodes ─────────────────────────────────────────────────────────────────────
 
 type NodeResp struct {
-	PublicKey           string      `json:"public_key"`
-	Name                interface{} `json:"name"`
-	Role                interface{} `json:"role"`
-	Lat                 interface{} `json:"lat"`
-	Lon                 interface{} `json:"lon"`
-	LastSeen            interface{} `json:"last_seen"`
-	FirstSeen           interface{} `json:"first_seen"`
-	AdvertCount         int         `json:"advert_count"`
-	HashSize            interface{} `json:"hash_size,omitempty"`
-	HashSizeInconsistent bool       `json:"hash_size_inconsistent,omitempty"`
-	HashSizesSeen       []int       `json:"hash_sizes_seen,omitempty"`
-	LastHeard           interface{} `json:"last_heard,omitempty"`
+	PublicKey            string      `json:"public_key"`
+	Name                 interface{} `json:"name"`
+	Role                 interface{} `json:"role"`
+	Lat                  interface{} `json:"lat"`
+	Lon                  interface{} `json:"lon"`
+	LastSeen             interface{} `json:"last_seen"`
+	FirstSeen            interface{} `json:"first_seen"`
+	AdvertCount          int         `json:"advert_count"`
+	HashSize             interface{} `json:"hash_size,omitempty"`
+	HashSizeInconsistent bool        `json:"hash_size_inconsistent,omitempty"`
+	HashSizesSeen        []int       `json:"hash_sizes_seen,omitempty"`
+	LastHeard            interface{} `json:"last_heard,omitempty"`
 }
 
 type NodeListResponse struct {
@@ -630,7 +652,7 @@ type TopologyResponse struct {
 	HopDistribution  []TopologyHopDist         `json:"hopDistribution"`
 	TopRepeaters     []TopRepeater             `json:"topRepeaters"`
 	TopPairs         []TopPair                 `json:"topPairs"`
-	HopsVsSnr        []HopsVsSnr              `json:"hopsVsSnr"`
+	HopsVsSnr        []HopsVsSnr               `json:"hopsVsSnr"`
 	Observers        []ObserverRef             `json:"observers"`
 	PerObserverReach map[string]*ObserverReach `json:"perObserverReach"`
 	MultiObsNodes    []MultiObsNode            `json:"multiObsNodes"`
@@ -722,12 +744,12 @@ type DistOverTimeEntry struct {
 }
 
 type DistanceAnalyticsResponse struct {
-	Summary       DistanceSummary                `json:"summary"`
-	TopHops       []DistanceHop                  `json:"topHops"`
-	TopPaths      []DistancePath                 `json:"topPaths"`
-	CatStats      map[string]*CategoryDistStats  `json:"catStats"`
-	DistHistogram *Histogram                     `json:"distHistogram"`
-	DistOverTime  []DistOverTimeEntry            `json:"distOverTime"`
+	Summary       DistanceSummary               `json:"summary"`
+	TopHops       []DistanceHop                 `json:"topHops"`
+	TopPaths      []DistancePath                `json:"topPaths"`
+	CatStats      map[string]*CategoryDistStats `json:"catStats"`
+	DistHistogram *Histogram                    `json:"distHistogram"`
+	DistOverTime  []DistOverTimeEntry           `json:"distOverTime"`
 }
 
 // ─── Analytics — Hash Sizes ────────────────────────────────────────────────────
@@ -756,11 +778,11 @@ type MultiByteNode struct {
 }
 
 type HashSizeAnalyticsResponse struct {
-	Total          int               `json:"total"`
-	Distribution   map[string]int    `json:"distribution"`
-	Hourly         []HashSizeHourly  `json:"hourly"`
-	TopHops        []HashSizeHop     `json:"topHops"`
-	MultiByteNodes []MultiByteNode   `json:"multiByteNodes"`
+	Total          int              `json:"total"`
+	Distribution   map[string]int   `json:"distribution"`
+	Hourly         []HashSizeHourly `json:"hourly"`
+	TopHops        []HashSizeHop    `json:"topHops"`
+	MultiByteNodes []MultiByteNode  `json:"multiByteNodes"`
 }
 
 // ─── Analytics — Subpaths ──────────────────────────────────────────────────────
@@ -881,10 +903,10 @@ type SnrDistributionEntry struct {
 }
 
 type ObserverAnalyticsResponse struct {
-	Timeline        []TimeBucket           `json:"timeline"`
-	PacketTypes     map[string]int         `json:"packetTypes"`
-	NodesTimeline   []TimeBucket           `json:"nodesTimeline"`
-	SnrDistribution []SnrDistributionEntry `json:"snrDistribution"`
+	Timeline        []TimeBucket             `json:"timeline"`
+	PacketTypes     map[string]int           `json:"packetTypes"`
+	NodesTimeline   []TimeBucket             `json:"nodesTimeline"`
+	SnrDistribution []SnrDistributionEntry   `json:"snrDistribution"`
 	RecentPackets   []map[string]interface{} `json:"recentPackets"`
 }
 
@@ -944,17 +966,17 @@ type MapConfigResponse struct {
 }
 
 type ClientConfigResponse struct {
-	Roles              interface{} `json:"roles"`
-	HealthThresholds   interface{} `json:"healthThresholds"`
-	Tiles              interface{} `json:"tiles"`
-	SnrThresholds      interface{} `json:"snrThresholds"`
-	DistThresholds     interface{} `json:"distThresholds"`
-	MaxHopDist         interface{} `json:"maxHopDist"`
-	Limits             interface{} `json:"limits"`
-	PerfSlowMs         interface{} `json:"perfSlowMs"`
-	WsReconnectMs      interface{} `json:"wsReconnectMs"`
-	CacheInvalidateMs  interface{} `json:"cacheInvalidateMs"`
-	ExternalUrls       interface{} `json:"externalUrls"`
+	Roles               interface{}     `json:"roles"`
+	HealthThresholds    interface{}     `json:"healthThresholds"`
+	Tiles               interface{}     `json:"tiles"`
+	SnrThresholds       interface{}     `json:"snrThresholds"`
+	DistThresholds      interface{}     `json:"distThresholds"`
+	MaxHopDist          interface{}     `json:"maxHopDist"`
+	Limits              interface{}     `json:"limits"`
+	PerfSlowMs          interface{}     `json:"perfSlowMs"`
+	WsReconnectMs       interface{}     `json:"wsReconnectMs"`
+	CacheInvalidateMs   interface{}     `json:"cacheInvalidateMs"`
+	ExternalUrls        interface{}     `json:"externalUrls"`
 	PropagationBufferMs float64         `json:"propagationBufferMs"`
 	Timestamps          TimestampConfig `json:"timestamps"`
 	DebugAffinity       bool            `json:"debugAffinity,omitempty"`

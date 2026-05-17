@@ -50,6 +50,7 @@ function stubFetch(sb, perfData, healthData, ioData, sqliteData, sourcesData) {
     if (url === '/api/perf') return Promise.resolve({ json: () => Promise.resolve(perfData) });
     if (url === '/api/health') return Promise.resolve({ json: () => Promise.resolve(healthData) });
     if (url === '/api/perf/io') return Promise.resolve({ json: () => Promise.resolve(ioData) });
+    if (url === '/api/perf/db') return Promise.resolve({ json: () => Promise.resolve(perfData.db || { engine: 'sqlite', dbSizeMB: 12.3, rows: { transmissions: 10, observations: 20, nodes: 3, observers: 2 } }) });
     if (url === '/api/perf/sqlite') return Promise.resolve({ json: () => Promise.resolve(sqliteData) });
     if (url === '/api/perf/write-sources') return Promise.resolve({ json: () => Promise.resolve(sourcesData) });
     return Promise.resolve({ json: () => Promise.resolve({}) });

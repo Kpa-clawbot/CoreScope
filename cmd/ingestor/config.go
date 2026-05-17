@@ -43,19 +43,19 @@ type MQTTLegacy struct {
 
 // Config holds the ingestor configuration, compatible with the Node.js config.json format.
 type Config struct {
-	DBPath          string            `json:"dbPath"`
-	MQTT            *MQTTLegacy       `json:"mqtt,omitempty"`
-	MQTTSources     []MQTTSource      `json:"mqttSources,omitempty"`
-	LogLevel        string            `json:"logLevel,omitempty"`
-	ChannelKeysPath string            `json:"channelKeysPath,omitempty"`
-	ChannelKeys     map[string]string `json:"channelKeys,omitempty"`
-	HashChannels    []string          `json:"hashChannels,omitempty"`
-	Retention       *RetentionConfig  `json:"retention,omitempty"`
-	Metrics         *MetricsConfig    `json:"metrics,omitempty"`
-	GeoFilter            *GeoFilterConfig     `json:"geo_filter,omitempty"`
-	ForeignAdverts       *ForeignAdvertConfig `json:"foreignAdverts,omitempty"`
-	ValidateSignatures   *bool             `json:"validateSignatures,omitempty"`
-	DB                   *DBConfig         `json:"db,omitempty"`
+	DBPath             string               `json:"dbPath"`
+	MQTT               *MQTTLegacy          `json:"mqtt,omitempty"`
+	MQTTSources        []MQTTSource         `json:"mqttSources,omitempty"`
+	LogLevel           string               `json:"logLevel,omitempty"`
+	ChannelKeysPath    string               `json:"channelKeysPath,omitempty"`
+	ChannelKeys        map[string]string    `json:"channelKeys,omitempty"`
+	HashChannels       []string             `json:"hashChannels,omitempty"`
+	Retention          *RetentionConfig     `json:"retention,omitempty"`
+	Metrics            *MetricsConfig       `json:"metrics,omitempty"`
+	GeoFilter          *GeoFilterConfig     `json:"geo_filter,omitempty"`
+	ForeignAdverts     *ForeignAdvertConfig `json:"foreignAdverts,omitempty"`
+	ValidateSignatures *bool                `json:"validateSignatures,omitempty"`
+	DB                 *DBConfig            `json:"db,omitempty"`
 
 	// ObserverIATAWhitelist restricts which observer IATA regions are processed.
 	// When non-empty, only observers whose IATA code (from the MQTT topic) matches
@@ -99,9 +99,9 @@ func (f *ForeignAdvertConfig) IsDropMode() bool {
 
 // RetentionConfig controls how long stale nodes are kept before being moved to inactive_nodes.
 type RetentionConfig struct {
-	NodeDays      int `json:"nodeDays"`
-	ObserverDays  int `json:"observerDays"`
-	MetricsDays   int `json:"metricsDays"`
+	NodeDays     int `json:"nodeDays"`
+	ObserverDays int `json:"observerDays"`
+	MetricsDays  int `json:"metricsDays"`
 }
 
 // MetricsConfig controls observer metrics collection.
@@ -220,6 +220,18 @@ func LoadConfig(path string) (*Config, error) {
 	if v := os.Getenv("DB_PATH"); v != "" {
 		cfg.DBPath = v
 	}
+	if v := os.Getenv("DB_DRIVER"); v != "" {
+		if cfg.DB == nil {
+			cfg.DB = &DBConfig{}
+		}
+		cfg.DB.Driver = v
+	}
+	if v := os.Getenv("DATABASE_URL"); v != "" {
+		if cfg.DB == nil {
+			cfg.DB = &DBConfig{}
+		}
+		cfg.DB.URL = v
+	}
 	if v := os.Getenv("MQTT_BROKER"); v != "" {
 		// Single broker from env — create a source
 		topic := os.Getenv("MQTT_TOPIC")
@@ -258,6 +270,10 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func (c *Config) DBSettings() dbconfig.Settings {
+	return dbconfig.Resolve(c.DB, c.DBPath)
 }
 
 // ResolvedSources returns the final list of MQTT sources to connect to.

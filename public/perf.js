@@ -13,10 +13,11 @@
     const el = document.getElementById('perfContent');
     if (!el) return;
     try {
-      const [server, client, ioStats, sqliteStats, writeSources] = await Promise.all([
+      const [server, client, ioStats, dbStats, sqliteStats, writeSources] = await Promise.all([
         fetch('/api/perf').then(r => r.json()),
         Promise.resolve(window.apiPerf ? window.apiPerf() : null),
         fetch('/api/perf/io').then(r => r.json()).catch(() => null),
+        fetch('/api/perf/db').then(r => r.json()).catch(() => null),
         fetch('/api/perf/sqlite').then(r => r.json()).catch(() => null),
         fetch('/api/perf/write-sources').then(r => r.json()).catch(() => null)
       ]);
@@ -159,6 +160,23 @@
       }
 
       // SQLite perf (separate from existing SQLite block — focused on WAL + cache hit) (#1120)
+      if (dbStats && dbStats.engine) {
+        const rows = dbStats.rows || {};
+        const pool = dbStats.pool || null;
+        html += `<h3>Database (${dbStats.engine})</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+          <div class="perf-card"><div class="perf-num">${(+dbStats.dbSizeMB || 0).toFixed(1)}MB</div><div class="perf-label">DB Size</div></div>
+          <div class="perf-card"><div class="perf-num">${(rows.transmissions || 0).toLocaleString()}</div><div class="perf-label">Transmissions</div></div>
+          <div class="perf-card"><div class="perf-num">${(rows.observations || 0).toLocaleString()}</div><div class="perf-label">Observations</div></div>
+          <div class="perf-card"><div class="perf-num">${rows.nodes || 0}</div><div class="perf-label">Nodes</div></div>
+          <div class="perf-card"><div class="perf-num">${rows.observers || 0}</div><div class="perf-label">Observers</div></div>`;
+        if (pool) {
+          html += `<div class="perf-card"><div class="perf-num">${pool.openConnections || 0}/${pool.maxOpenConnections || 0}</div><div class="perf-label">Pool Open</div></div>
+            <div class="perf-card"><div class="perf-num">${pool.inUse || 0}</div><div class="perf-label">Pool In Use</div></div>
+            <div class="perf-card"><div class="perf-num">${pool.waitCount || 0}</div><div class="perf-label">Pool Waits</div></div>`;
+        }
+        html += '</div>';
+      }
+
       if (sqliteStats) {
         const walMB = sqliteStats.walSizeMB || 0;
         const walFlag = walMB > 100 ? ' ⚠️' : '';

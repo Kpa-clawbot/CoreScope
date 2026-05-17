@@ -1,9 +1,68 @@
 # Database
 
-CoreScope uses SQLite in WAL (Write-Ahead Log) mode for both the server
-(read-only) and ingestor (read-write).
+CoreScope can run against Postgres or SQLite. New Docker Compose deployments
+default to Postgres when `DATABASE_URL` is set; SQLite remains supported for
+single-host deployments and rollback.
 
-## WAL mode
+## Backend Selection
+
+Configuration precedence is environment first, then `config.json`, then the
+legacy `dbPath` fallback:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `DB_DRIVER` / `db.driver` | `sqlite` | `postgres` or `sqlite`. `DATABASE_URL` selects Postgres unless `DB_DRIVER` is set. |
+| `DATABASE_URL` / `db.url` | empty | Postgres URL, for example `postgres://corescope:corescope@postgres:5432/corescope?sslmode=disable`. |
+| `DB_PATH` / `db.path` / `dbPath` | `data/meshcore.db` | SQLite database path and rollback fallback. |
+| `db.maxOpenConns` | server `16`, ingestor `8` | Postgres pool max when greater than zero. |
+| `db.maxIdleConns` | server `4`, ingestor `2` | Postgres idle pool max when greater than zero. |
+
+Both the server and ingestor initialize the Postgres schema on startup. The
+schema keeps explicit observer row IDs so existing packet and observation joins
+remain compatible with SQLite-era data.
+
+## SQLite To Postgres Migration
+
+Stop CoreScope before migrating, then run:
+
+```bash
+cd cmd/migrate-postgres
+go run . -sqlite ../../data/meshcore.db -postgres "$DATABASE_URL"
+```
+
+The tool preserves table IDs, copies the core tables, resets Postgres
+sequences, and validates row counts. Use `-truncate` only when intentionally
+reloading an existing Postgres database.
+
+Docker images also include `/app/corescope-migrate-postgres` so operators do
+not need Go installed on deployment hosts. For a side-by-side dev copy, start
+the dev Postgres service first, then run the migration through Compose:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d postgres
+docker compose -f docker-compose.dev.yml run --rm --no-deps \
+  --entrypoint /app/corescope-migrate-postgres \
+  corescope-dev \
+  -sqlite /app/data/meshcore.db \
+  -postgres "postgres://corescope:corescope@postgres:5432/corescope_dev?sslmode=disable" \
+  -truncate
+```
+
+Keep live SQLite and dev Postgres on separate data directories. The live
+database can be copied into the dev data directory before this command, but two
+containers must not write to the same SQLite file. For WAL-mode SQLite, copy
+`meshcore.db`, `meshcore.db-wal`, and `meshcore.db-shm` together or migrate
+from a stopped-container backup.
+
+## Performance Evidence
+
+Postgres is not assumed to make the dashboard faster by itself. Use
+`/api/perf/db` for engine-neutral row counts, DB size, and pool stats, and use
+`/api/perf` for endpoint latency and packet-store behavior. If a dashboard path
+is served from the in-memory packet store or TTL cache, the database engine may
+not be the bottleneck.
+
+## SQLite WAL Mode
 
 WAL mode allows concurrent reads while writes happen. It is set automatically
 at connection time via `PRAGMA journal_mode=WAL`. No operator action needed.

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/packetpath"
 	_ "modernc.org/sqlite"
 )
@@ -61,16 +62,17 @@ func (s *DBStats) SnapshotBackfills() map[string]int64 {
 
 // Store wraps the SQLite database for packet ingestion.
 type Store struct {
-	db    *sql.DB
-	Stats DBStats
+	db     *sql.DB
+	driver string
+	Stats  DBStats
 
-	stmtGetTxByHash          *sql.Stmt
-	stmtInsertTransmission   *sql.Stmt
-	stmtUpdateTxFirstSeen    *sql.Stmt
-	stmtInsertObservation    *sql.Stmt
-	stmtUpsertNode           *sql.Stmt
-	stmtIncrementAdvertCount *sql.Stmt
-	stmtUpsertObserver       *sql.Stmt
+	stmtGetTxByHash            *sql.Stmt
+	stmtInsertTransmission     *sql.Stmt
+	stmtUpdateTxFirstSeen      *sql.Stmt
+	stmtInsertObservation      *sql.Stmt
+	stmtUpsertNode             *sql.Stmt
+	stmtIncrementAdvertCount   *sql.Stmt
+	stmtUpsertObserver         *sql.Stmt
 	stmtGetObserverRowid       *sql.Stmt
 	stmtUpdateObserverLastSeen *sql.Stmt
 	stmtUpdateNodeTelemetry    *sql.Stmt
@@ -88,6 +90,21 @@ func OpenStore(dbPath string) (*Store, error) {
 
 // OpenStoreWithInterval opens or creates a SQLite DB with a configurable sample interval.
 func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error) {
+	return OpenStoreWithSettings(dbconfig.Settings{Driver: dbconfig.DriverSQLite, Path: dbPath}, sampleIntervalSec)
+}
+
+func OpenStoreWithSettings(settings dbconfig.Settings, sampleIntervalSec int) (*Store, error) {
+	if settings.IsPostgres() {
+		return openPostgresStore(settings, sampleIntervalSec)
+	}
+	return openSQLiteStore(settings.Path, sampleIntervalSec)
+}
+
+func openSQLiteStore(dbPath string, sampleIntervalSec int) (*Store, error) {
+	if strings.TrimSpace(dbPath) == "" {
+		return nil, fmt.Errorf("sqlite db path is required")
+	}
+
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating data dir: %w", err)
@@ -110,13 +127,51 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		return nil, fmt.Errorf("applying schema: %w", err)
 	}
 
-	s := &Store{db: db, sampleIntervalSec: sampleIntervalSec}
+	s := &Store{db: db, driver: dbconfig.DriverSQLite, sampleIntervalSec: sampleIntervalSec}
 	if err := s.prepareStatements(); err != nil {
 		return nil, fmt.Errorf("preparing statements: %w", err)
 	}
 
 	return s, nil
 }
+
+func openPostgresStore(settings dbconfig.Settings, sampleIntervalSec int) (*Store, error) {
+	if settings.URL == "" {
+		return nil, fmt.Errorf("DATABASE_URL or db.url is required for postgres")
+	}
+	db, err := sql.Open(settings.SQLDriverName(), settings.URL)
+	if err != nil {
+		return nil, fmt.Errorf("opening postgres: %w", err)
+	}
+	maxOpen := settings.MaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = 8
+	}
+	maxIdle := settings.MaxIdleConns
+	if maxIdle <= 0 {
+		maxIdle = 2
+	}
+	db.SetMaxOpenConns(maxOpen)
+	db.SetMaxIdleConns(maxIdle)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("pinging postgres: %w", err)
+	}
+	log.Printf("Postgres config: max_open_conns=%d, max_idle_conns=%d", maxOpen, maxIdle)
+	if err := dbconfig.ApplyPostgresSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("applying postgres schema: %w", err)
+	}
+	s := &Store{db: db, driver: dbconfig.DriverPostgres, sampleIntervalSec: sampleIntervalSec}
+	if err := s.prepareStatements(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("preparing statements: %w", err)
+	}
+	return s, nil
+}
+
+func (s *Store) IsPostgres() bool { return s != nil && s.driver == dbconfig.DriverPostgres }
 
 func applySchema(db *sql.DB) error {
 	// auto_vacuum=INCREMENTAL is set via DSN pragma (must be before journal_mode).
@@ -553,10 +608,14 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtInsertTransmission, err = s.db.Prepare(`
+	insertTransmissionSQL := `
 		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, from_pubkey)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`)
+	`
+	if s.IsPostgres() {
+		insertTransmissionSQL += ` RETURNING id`
+	}
+	s.stmtInsertTransmission, err = s.db.Prepare(insertTransmissionSQL)
 	if err != nil {
 		return err
 	}
@@ -566,7 +625,7 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtInsertObservation, err = s.db.Prepare(`
+	insertObservationSQL := `
 		INSERT INTO observations (transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp, raw_hex)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(transmission_id, observer_idx, COALESCE(path_json, '')) DO UPDATE SET
@@ -574,7 +633,19 @@ func (s *Store) prepareStatements() error {
 			rssi    = COALESCE(excluded.rssi,    rssi),
 			score   = COALESCE(excluded.score,   score),
 			raw_hex = COALESCE(excluded.raw_hex, raw_hex)
-	`)
+	`
+	if s.IsPostgres() {
+		insertObservationSQL = `
+			INSERT INTO observations (transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp, raw_hex)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(transmission_id, observer_idx, (COALESCE(path_json, ''))) DO UPDATE SET
+				snr     = COALESCE(excluded.snr,     observations.snr),
+				rssi    = COALESCE(excluded.rssi,    observations.rssi),
+				score   = COALESCE(excluded.score,   observations.score),
+				raw_hex = COALESCE(excluded.raw_hex, observations.raw_hex)
+		`
+	}
+	s.stmtInsertObservation, err = s.db.Prepare(insertObservationSQL)
 	if err != nil {
 		return err
 	}
@@ -640,10 +711,25 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtUpsertMetrics, err = s.db.Prepare(`
+	upsertMetricsSQL := `
 		INSERT OR REPLACE INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`)
+	`
+	if s.IsPostgres() {
+		upsertMetricsSQL = `
+			INSERT INTO observer_metrics (observer_id, timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(observer_id, timestamp) DO UPDATE SET
+				noise_floor = excluded.noise_floor,
+				tx_air_secs = excluded.tx_air_secs,
+				rx_air_secs = excluded.rx_air_secs,
+				recv_errors = excluded.recv_errors,
+				battery_mv = excluded.battery_mv,
+				packets_sent = excluded.packets_sent,
+				packets_recv = excluded.packets_recv
+		`
+	}
+	s.stmtUpsertMetrics, err = s.db.Prepare(upsertMetricsSQL)
 	if err != nil {
 		return err
 	}
@@ -680,17 +766,30 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	} else {
 		// New transmission
 		isNew = true
-		result, err := s.stmtInsertTransmission.Exec(
-			data.RawHex, hash, now,
-			data.RouteType, data.PayloadType, data.PayloadVersion,
-			data.DecodedJSON, nilIfEmpty(data.ChannelHash),
-			nilIfEmpty(data.FromPubkey),
-		)
-		if err != nil {
-			s.Stats.WriteErrors.Add(1)
-			return false, fmt.Errorf("insert transmission: %w", err)
+		if s.IsPostgres() {
+			err := s.stmtInsertTransmission.QueryRow(
+				data.RawHex, hash, now,
+				data.RouteType, data.PayloadType, data.PayloadVersion,
+				data.DecodedJSON, nilIfEmpty(data.ChannelHash),
+				nilIfEmpty(data.FromPubkey),
+			).Scan(&txID)
+			if err != nil {
+				s.Stats.WriteErrors.Add(1)
+				return false, fmt.Errorf("insert transmission: %w", err)
+			}
+		} else {
+			result, err := s.stmtInsertTransmission.Exec(
+				data.RawHex, hash, now,
+				data.RouteType, data.PayloadType, data.PayloadVersion,
+				data.DecodedJSON, nilIfEmpty(data.ChannelHash),
+				nilIfEmpty(data.FromPubkey),
+			)
+			if err != nil {
+				s.Stats.WriteErrors.Add(1)
+				return false, fmt.Errorf("insert transmission: %w", err)
+			}
+			txID, _ = result.LastInsertId()
 		}
-		txID, _ = result.LastInsertId()
 		s.Stats.TransmissionsInserted.Add(1)
 	}
 
@@ -936,6 +1035,10 @@ func (s *Store) PruneOldMetrics(retentionDays int) (int64, error) {
 // CheckAutoVacuum inspects the current auto_vacuum mode and logs a warning
 // if not INCREMENTAL. Performs opt-in full VACUUM if db.vacuumOnStartup is set (#919).
 func (s *Store) CheckAutoVacuum(cfg *Config) {
+	if s.IsPostgres() {
+		log.Printf("[db] postgres backend: SQLite auto_vacuum check skipped")
+		return
+	}
 	var autoVacuum int
 	if err := s.db.QueryRow("PRAGMA auto_vacuum").Scan(&autoVacuum); err != nil {
 		log.Printf("[db] warning: could not read auto_vacuum: %v", err)
@@ -980,6 +1083,9 @@ func (s *Store) CheckAutoVacuum(cfg *Config) {
 // RunIncrementalVacuum returns free pages to the OS (#919).
 // Safe to call on auto_vacuum=NONE databases (noop).
 func (s *Store) RunIncrementalVacuum(pages int) {
+	if s.IsPostgres() {
+		return
+	}
 	if _, err := s.db.Exec(fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)); err != nil {
 		log.Printf("[vacuum] incremental_vacuum error: %v", err)
 	}
@@ -988,6 +1094,9 @@ func (s *Store) RunIncrementalVacuum(pages int) {
 // Checkpoint forces a WAL checkpoint to release the WAL lock file,
 // preventing lock contention with a new process starting up.
 func (s *Store) Checkpoint() {
+	if s.IsPostgres() {
+		return
+	}
 	if _, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		log.Printf("[db] WAL checkpoint error: %v", err)
 	} else {
@@ -1109,7 +1218,23 @@ func (s *Store) MoveStaleNodes(nodeDays int) (int64, error) {
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec(`INSERT OR REPLACE INTO inactive_nodes SELECT * FROM nodes WHERE last_seen < ?`, cutoff)
+	insertInactiveSQL := `INSERT OR REPLACE INTO inactive_nodes SELECT * FROM nodes WHERE last_seen < ?`
+	if s.IsPostgres() {
+		insertInactiveSQL = `INSERT INTO inactive_nodes
+			SELECT * FROM nodes WHERE last_seen < ?
+			ON CONFLICT(public_key) DO UPDATE SET
+				name = excluded.name,
+				role = excluded.role,
+				lat = excluded.lat,
+				lon = excluded.lon,
+				last_seen = excluded.last_seen,
+				first_seen = excluded.first_seen,
+				advert_count = excluded.advert_count,
+				battery_mv = excluded.battery_mv,
+				temperature_c = excluded.temperature_c,
+				foreign_advert = excluded.foreign_advert`
+	}
+	_, err = tx.Exec(insertInactiveSQL, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("insert inactive: %w", err)
 	}
