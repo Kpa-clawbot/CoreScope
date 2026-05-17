@@ -2021,6 +2021,12 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
     font-size: 14px;
   }
   .ch-avatar.ch-tappable { min-width: 44px; min-height: 44px; width: 44px; height: 44px; }
+  /* #1253: trim .badge-iata h-padding + margin-left on narrow viewports so
+   * the observer cell + IATA pill fits within a 375px viewport. Without this
+   * the badge right edge overflows by ~1.25px at 375px (same class of fix
+   * as #1250/#1251 VCR LCD-clip). Badge stays fully visible — only padding
+   * and side margin shrink; font-size, colors (via vars) unchanged. */
+  .badge-iata { padding: 1px 3px; margin-left: 2px; }
 }
 
 /* Full-screen node detail */
