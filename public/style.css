@@ -2464,7 +2464,36 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
     height: 200px;
     min-height: 160px;
   }
+  /* #1243 — On mobile, mirror the desktop split-pane behavior used by the
+     compact node detail (.node-map-qr-wrap): overlay the QR on the map
+     instead of stacking a 250px-tall QR panel below it. Desktop (≥768px)
+     keeps the side-by-side flex layout untouched. */
+  .node-top-row { position: relative; }
+  .node-top-row .node-map-wrap { flex: 1 1 100%; }
+  .node-top-row .node-qr-wrap {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    z-index: 400;
+    flex: 0 0 auto;
+    min-width: 0;
+    max-width: 96px;
+    padding: 4px;
+    background: var(--card-bg-translucent, rgba(255, 255, 255, 0.85));
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    line-height: 0;
+    margin: 0;
+  }
+  .node-top-row .node-qr-wrap .node-qr svg { max-width: 72px; }
+  /* Hide the redundant pubkey caption inside the overlay QR — it's already
+     shown in the card above and would push the overlay too large. */
+  .node-top-row .node-qr-wrap .mono { display: none; }
+  [data-theme="dark"] .node-top-row .node-qr-wrap {
+    background: var(--card-bg-translucent-dark, rgba(255, 255, 255, 0.4));
+  }
 }
+
 .detail-back-btn {
   background: none;
   border: 1px solid var(--border, #333);
