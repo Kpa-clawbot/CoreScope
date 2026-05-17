@@ -170,10 +170,21 @@ func main() {
 	// Check auto_vacuum mode and optionally migrate (#919)
 	checkAutoVacuum(database, cfg, resolvedDB)
 
+	// Ensure indexes the server's SQL fallback path depends on
+	// (mirrors ingestor schema for DBs created by old server-only builds).
+	if err := ensureServerIndexes(resolvedDB); err != nil {
+		log.Printf("[db] warning: could not ensure server indexes: %v", err)
+	}
+
 	// In-memory packet store
 	store := NewPacketStore(database, cfg.PacketStore, cfg.CacheTTL)
 	if err := store.Load(); err != nil {
 		log.Fatalf("[store] failed to load: %v", err)
+	}
+	if store.hotStartupHours > 0 {
+		log.Printf("[store] starting background load: filling retentionHours=%gh from hotStartupHours=%gh",
+			store.retentionHours, store.hotStartupHours)
+		go store.loadBackgroundChunks()
 	}
 
 	// Initialize persisted neighbor graph
@@ -205,6 +216,15 @@ func main() {
 		log.Printf("[store] warning: could not add observers.last_packet_at column: %v", err)
 	}
 
+	// Ensure observers.iata column exists (#1188 read paths COALESCE(obs.iata, '')
+	// in Store.Load() / IngestNewFromDB / IngestNewObservations; ingestor migration
+	// adds it but server may run against DBs ingestor never touched (e2e fixture)
+	// OR pre-iata operator DBs upgraded to this build — without this migration
+	// the first SELECT crashes with "no such column: obs.iata" (#1189 R1).
+	if err := ensureObserverIATAColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add observers.iata column: %v", err)
+	}
+
 	// Ensure nodes.foreign_advert column exists (#730 reads it on every /api/nodes
 	// scan; ingestor migration foreign_advert_v1 adds it but server may run against
 	// DBs ingestor never touched, e.g. e2e fixture).
@@ -230,11 +250,11 @@ func main() {
 
 	// Load or build neighbor graph
 	if neighborEdgesTableExists(database.conn) {
-		store.graph = loadNeighborEdgesFromDB(database.conn)
+		store.graph.Store(loadNeighborEdgesFromDB(database.conn))
 		log.Printf("[neighbor] loaded persisted neighbor graph")
 	} else {
 		log.Printf("[neighbor] no persisted edges found, will build in background...")
-		store.graph = NewNeighborGraph() // empty graph — gets populated by background goroutine
+		store.graph.Store(NewNeighborGraph()) // empty graph — gets populated by background goroutine
 		initWg.Add(1)
 		go func() {
 			defer initWg.Done()
@@ -249,9 +269,7 @@ func main() {
 				log.Printf("[neighbor] persisted %d edges", edgeCount)
 			}
 			built := BuildFromStore(store)
-			store.mu.Lock()
-			store.graph = built
-			store.mu.Unlock()
+			store.graph.Store(built)
 			log.Printf("[neighbor] graph build complete")
 		}()
 	}
@@ -331,6 +349,17 @@ func main() {
 	// Start periodic eviction
 	stopEviction := store.StartEvictionTicker()
 	defer stopEviction()
+
+	// Steady-state analytics recomputers (issue #1240). Replaces the
+	// on-request compute-then-cache pattern for the default (region="",
+	// zero-window) analytics queries with a background refresh loop so
+	// reads always hit cache in <1ms.
+	stopAnalyticsRecomp := store.StartAnalyticsRecomputers(
+		cfg.AnalyticsDefaultRecomputeInterval(),
+		cfg.AnalyticsRecomputeIntervals(),
+	)
+	defer stopAnalyticsRecomp()
+	log.Printf("[analytics-recompute] background recompute enabled (default=%s)", cfg.AnalyticsDefaultRecomputeInterval())
 
 	// Auto-prune old packets if retention.packetDays is configured
 	vacuumPages := cfg.IncrementalVacuumPages()
@@ -462,17 +491,13 @@ func main() {
 				}
 			}()
 			time.Sleep(4 * time.Minute) // stagger after metrics prune
-			store.mu.RLock()
-			g := store.graph
-			store.mu.RUnlock()
+			g := store.graph.Load()
 			PruneNeighborEdges(dbPath, g, maxAgeDays)
 			runIncrementalVacuum(resolvedDB, vacuumPages)
 			for {
 				select {
 				case <-edgePruneTicker.C:
-					store.mu.RLock()
-					g := store.graph
-					store.mu.RUnlock()
+					g := store.graph.Load()
 					PruneNeighborEdges(dbPath, g, maxAgeDays)
 					runIncrementalVacuum(resolvedDB, vacuumPages)
 				case <-edgePruneDone:
@@ -513,6 +538,13 @@ func main() {
 		}
 		if stopEdgePrune != nil {
 			stopEdgePrune()
+		}
+
+		// 1c. Stop steady-state analytics recomputers (issue #1240).
+		// Must happen before dbClose so any in-flight compute that
+		// reaches into SQLite has finished.
+		if stopAnalyticsRecomp != nil {
+			stopAnalyticsRecomp()
 		}
 
 		// 2. Gracefully drain HTTP connections (up to 15s)

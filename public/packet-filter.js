@@ -23,10 +23,10 @@
   var TK = {
     FIELD: 'FIELD', OP: 'OP', STRING: 'STRING', NUMBER: 'NUMBER', BOOL: 'BOOL',
     DURATION: 'DURATION',
-    AND: 'AND', OR: 'OR', NOT: 'NOT', LPAREN: 'LPAREN', RPAREN: 'RPAREN'
+    AND: 'AND', OR: 'OR', NOT: 'NOT', LPAREN: 'LPAREN', RPAREN: 'RPAREN', COMMA: 'COMMA'
   };
 
-  var OP_WORDS = { contains: true, starts_with: true, ends_with: true, after: true, before: true, between: true };
+  var OP_WORDS = { contains: true, starts_with: true, ends_with: true, after: true, before: true, between: true, in: true };
 
   // Duration unit → seconds. Used for `age < 1h`-style filters.
   var DURATION_UNITS = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
@@ -50,6 +50,7 @@
       if (input[i] === '!') { tokens.push({ type: TK.NOT, value: '!' }); i++; continue; }
       if (input[i] === '(') { tokens.push({ type: TK.LPAREN }); i++; continue; }
       if (input[i] === ')') { tokens.push({ type: TK.RPAREN }); i++; continue; }
+      if (input[i] === ',') { tokens.push({ type: TK.COMMA, value: ',' }); i++; continue; }
       // quoted string
       if (input[i] === '"') {
         var j = i + 1;
@@ -179,6 +180,28 @@
         return { type: 'comparison', field: field, op: op, value: lo, value2: hi };
       }
 
+      // `in` takes a parenthesized list of values: `field in (a, b, c)`
+      if (op === 'in') {
+        if (!peek() || peek().type !== TK.LPAREN) {
+          throw new Error("Expected '(' after 'in'");
+        }
+        advance(); // consume '('
+        var values = [];
+        if (!peek() || peek().type === TK.RPAREN) {
+          throw new Error("Empty value list for 'in'");
+        }
+        values.push(parseValue(field, op));
+        while (peek() && peek().type === TK.COMMA) {
+          advance(); // consume ','
+          values.push(parseValue(field, op));
+        }
+        if (!peek() || peek().type !== TK.RPAREN) {
+          throw new Error("Expected ')' or ',' in 'in' list");
+        }
+        advance(); // consume ')'
+        return { type: 'comparison', field: field, op: op, values: values };
+      }
+
       var value = parseValue(field, op);
       if (op === 'after' || op === 'before') validateTimeValue(field, op, value);
       return { type: 'comparison', field: field, op: op, value: value };
@@ -233,6 +256,7 @@
     }
     if (field === 'observer') return packet.observer_name || '';
     if (field === 'observer_id') return packet.observer_id || '';
+    if (field === 'observer_iata' || field === 'iata') return packet.observer_iata || '';
     if (field === 'observations') return packet.observation_count || 0;
     if (field === 'time' || field === 'timestamp') {
       // Returns ms-since-epoch or null. Falls back to first_seen when timestamp absent
@@ -303,6 +327,16 @@
         var op = ast.op;
 
         if (fieldVal == null || fieldVal === undefined) return false;
+
+        // `in` operator: membership in a list of values (case-insensitive for strings)
+        if (op === 'in') {
+          var list = ast.values || [];
+          var lhs = String(fieldVal).toLowerCase();
+          for (var iv = 0; iv < list.length; iv++) {
+            if (String(list[iv]).toLowerCase() === lhs) return true;
+          }
+          return false;
+        }
 
         // Temporal ops: after / before / between operate on epoch-ms.
         if (op === 'after' || op === 'before' || op === 'between') {
@@ -397,6 +431,8 @@
     { name: 'hops',          desc: 'Number of hops in the path' },
     { name: 'observer',      desc: 'Observer station name' },
     { name: 'observer_id',   desc: 'Observer pubkey/id' },
+    { name: 'observer_iata', desc: 'Observer IATA region code (e.g. SJC, SFO)' },
+    { name: 'iata',          desc: 'Alias of observer_iata' },
     { name: 'observations',  desc: 'Number of observations of this packet' },
     { name: 'path',          desc: 'Hop path (joined with arrows)' },
     { name: 'payload_bytes', desc: 'Payload size in bytes (size - 2 header bytes)' },
@@ -428,6 +464,7 @@
     { op: 'after',       desc: 'Datetime after (ISO or epoch)',                                     example: 'time after "2025-01-01"' },
     { op: 'before',      desc: 'Datetime before',                                                   example: 'time before "2025-12-31"' },
     { op: 'between',     desc: 'Datetime between two values',                                       example: 'time between "2025-01-01" "2025-02-01"' },
+    { op: 'in',          desc: 'Value in a list (case-insensitive for strings)',                   example: 'iata in ("SJC","SFO")' },
   ];
 
   // Canonical type names (firmware payload types)
@@ -610,6 +647,18 @@
     // Observer
     c = compile('observer == "kpabap"');
     assert(c.filter({ observer_name: 'kpabap' }), 'observer');
+
+    // Observer IATA (#1188)
+    c = compile('observer_iata == "SJC"');
+    assert(c.filter({ observer_iata: 'SJC' }), 'observer_iata ==');
+    assert(!c.filter({ observer_iata: 'SFO' }), 'observer_iata != mismatch');
+    c = compile('iata == "SJC"');
+    assert(c.filter({ observer_iata: 'SJC' }), 'iata alias');
+    c = compile('iata in ("SJC","SFO")');
+    assert(c.filter({ observer_iata: 'SFO' }), 'iata in (...)');
+    assert(!c.filter({ observer_iata: 'LAX' }), 'iata in (...) mismatch');
+    c = compile('observer_iata contains "S"');
+    assert(c.filter({ observer_iata: 'SJC' }), 'observer_iata contains');
 
     console.log('\nAll tests passed!');
     module.exports = { parse: parse, evaluate: evaluate, compile: compile };

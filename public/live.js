@@ -53,6 +53,24 @@
   }
   function setObserverIataMap(m) { observerIataMap = m || {}; }
 
+  // #1189 R2 mesh-operator fix: live feed must show the observer's IATA pill
+  // alongside the existing 👁 N badge so operators on /live can tell SAME-
+  // region from CROSS-region reception at a glance (same affordance as the
+  // /packets table). Mirrors `obsIataBadge` in public/packets.js — kept as a
+  // local helper for now (live.js and packets.js are separate IIFEs with no
+  // shared module). TODO: extract `obsIataBadge` into shared packet-helpers.js
+  // and have both surfaces import it.
+  function obsIataBadgeHtml(pkt) {
+    if (!pkt) return '';
+    var iata = pkt.observer_iata;
+    if (!iata && pkt.observer_id) iata = observerIataMap && observerIataMap[pkt.observer_id];
+    if (!iata) return '';
+    var esc = (typeof escapeHtml === 'function')
+      ? escapeHtml(iata)
+      : String(iata).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    return '<span class="badge-iata" style="font-size:10px;margin-left:4px">' + esc + '</span>';
+  }
+
   /**
    * Build observer_id → IATA map from the /api/observers response.
    * The endpoint returns `{ observers: [...], server_time: "..." }`
@@ -239,6 +257,45 @@
   }
 
   // === VCR Controls ===
+
+  // #1206: publish the VCR bar's measured height as --vcr-bar-height on the
+  // .live-page root so bottom-pinned overlays (feed, legend, corner panels)
+  // can reserve the right amount of space and never get occluded by the bar.
+  // Cleanup state is captured in module-scoped _vcrHeightCleanup so destroy()
+  // can disconnect the ResizeObserver + remove the resize/visualViewport
+  // listeners on SPA page navigation (otherwise re-mounts of /live would
+  // accumulate observers forever — same leak class as #1180).
+  var _vcrHeightCleanup = null;
+  function initVCRHeightTracker() {
+    // #1206 r1 (adversarial should-fix): guard against double-init —
+    // if a prior tracker is still active (re-mount race, dev hot-reload),
+    // tear it down BEFORE overwriting _vcrHeightCleanup so the previous
+    // ResizeObserver/listeners aren't orphaned.
+    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
+    var bar = document.getElementById('vcrBar');
+    var page = document.querySelector('.live-page');
+    if (!bar || !page) return;
+    function publish() {
+      var h = Math.ceil(bar.getBoundingClientRect().height) || 58;
+      page.style.setProperty('--vcr-bar-height', h + 'px');
+    }
+    publish();
+    var ro = null;
+    if (typeof ResizeObserver === 'function') {
+      try { ro = new ResizeObserver(publish); ro.observe(bar); } catch (_) { ro = null; }
+    }
+    window.addEventListener('resize', publish);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', publish);
+    }
+    _vcrHeightCleanup = function() {
+      if (ro) { try { ro.disconnect(); } catch (_) {} ro = null; }
+      window.removeEventListener('resize', publish);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', publish);
+      }
+    };
+  }
 
   function vcrSetMode(mode) {
     VCR.mode = mode;
@@ -864,6 +921,15 @@
             <span class="live-beacon" aria-label="WebSocket connection beacon"></span>
             <div class="live-stat-pill live-stat-pill--critical"><span id="livePktCount">0</span> pkts</div>
           </div>
+          <!-- #1234: stats row promoted to a direct child of .live-header so
+               the counters are always visible inline on mobile (single-row
+               header, no MESH LIVE label, no chart toggle). At desktop
+               this also flows inline next to the title via flex. -->
+          <div class="live-stats-row" data-live-stats-row>
+            <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
+            <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
+            <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
+          </div>
           <button class="live-header-toggle" data-live-header-toggle id="liveHeaderToggle"
                   aria-expanded="false" aria-controls="liveHeaderBody"
                   aria-label="Show live stats">📊</button>
@@ -871,14 +937,11 @@
             <div class="live-title">
               MESH LIVE
             </div>
-            <div class="live-stats-row">
-              <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
-              <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
-              <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
-            </div>
           </div>
-        </div>
-        <div class="live-overlay live-controls" id="liveControls">
+        <!-- #1205: settings toggles are children of the MESH LIVE panel
+             (#liveHeader), not a free-floating .live-overlay. PR #1180
+             detached them; this restores the pre-regression structure. -->
+        <div class="live-controls" id="liveControls">
           <div class="live-controls-body" data-live-controls-body id="liveControlsBody">
             <div class="live-toggles">
             <label><input type="checkbox" id="liveHeatToggle" checked aria-describedby="heatDesc"> Heat</label>
@@ -916,12 +979,15 @@
                   aria-expanded="false" aria-controls="liveControlsBody"
                   aria-label="Show live controls">⚙</button>
         </div>
+        </div><!-- /#liveHeader -->
         <div class="live-overlay live-feed" id="liveFeed">
           <div class="panel-header">
             <button class="panel-corner-btn" data-panel="liveFeed" title="Move panel to next corner" aria-label="Move panel to next corner">◫</button>
             <button class="feed-hide-btn" id="feedHideBtn" title="Hide feed">✕</button>
           </div>
-          <div class="panel-content" aria-live="polite" aria-relevant="additions" role="log"></div>
+          <div class="panel-content" aria-live="polite" aria-relevant="additions" role="log">
+            <div class="live-feed-empty" aria-hidden="true">Waiting for packets…</div>
+          </div>
         </div>
         <button class="feed-show-btn hidden" id="feedShowBtn" title="Show feed">📋</button>
         <div id="nodeDetailBackdrop" class="node-detail-backdrop"></div>
@@ -964,8 +1030,16 @@
           <div class="vcr-scope-btns" role="radiogroup" aria-label="Timeline scope">
             <button class="vcr-scope-btn active" data-scope="3600000" role="radio" aria-checked="true" aria-label="Scope 1 hour">1h</button>
             <button class="vcr-scope-btn" data-scope="21600000" role="radio" aria-checked="false" aria-label="Scope 6 hours">6h</button>
-            <button class="vcr-scope-btn" data-scope="43200000" role="radio" aria-checked="false" aria-label="Scope 12 hours">12h</button>
-            <button class="vcr-scope-btn" data-scope="86400000" role="radio" aria-checked="false" aria-label="Scope 24 hours">24h</button>
+            <button class="vcr-scope-btn vcr-scope-btn--overflow" data-scope="43200000" role="radio" aria-checked="false" aria-label="Scope 12 hours">12h</button>
+            <button class="vcr-scope-btn vcr-scope-btn--overflow" data-scope="86400000" role="radio" aria-checked="false" aria-label="Scope 24 hours">24h</button>
+            <!-- #1234: at ≤640px buttons marked .vcr-scope-btn--overflow are
+                 hidden and surfaced via this More dropdown instead. -->
+            <div class="vcr-scope-more-wrap" data-vcr-scope-more-wrap>
+              <button type="button" class="vcr-scope-btn vcr-scope-more" data-vcr-scope-more
+                      aria-haspopup="true" aria-expanded="false" aria-controls="vcrScopeMoreMenu"
+                      aria-label="More timeline scopes">More ▾</button>
+              <div class="vcr-scope-more-menu" id="vcrScopeMoreMenu" role="menu" hidden></div>
+            </div>
           </div>
           <div class="vcr-timeline-container">
             <canvas id="vcrTimeline" class="vcr-timeline"></canvas>
@@ -1017,6 +1091,7 @@
     showHeatMap();
     connectWS();
     initResizeHandler();
+    initVCRHeightTracker();
     startRateCounter();
 
     // Check for packet replay from packets page (single or array of observations)
@@ -1596,16 +1671,59 @@
       vcrRewind(VCR.timelineScope);
     });
 
-    // Scope buttons
-    document.querySelectorAll('.vcr-scope-btn').forEach(btn => {
+    // Scope buttons (#1234: exclude .vcr-scope-more which is the dropdown trigger)
+    document.querySelectorAll('.vcr-scope-btn[data-scope]').forEach(btn => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('.vcr-scope-btn').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-checked', 'false'); });
+        document.querySelectorAll('.vcr-scope-btn[data-scope]').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-checked', 'false'); });
         btn.classList.add('active');
         btn.setAttribute('aria-checked', 'true');
         VCR.timelineScope = parseInt(btn.dataset.scope);
         fetchTimelineTimestamps().then(() => updateTimeline());
       });
     });
+
+    // #1234: VCR scope "More ▾" overflow dropdown. At ≤640px, scope buttons
+    // tagged .vcr-scope-btn--overflow (12h, 24h) are hidden via CSS and
+    // surfaced through this menu. Clicking a menu item proxies the click
+    // to the underlying hidden button so the existing scope handler runs.
+    (function wireVcrScopeMore() {
+      var moreBtn = document.querySelector('[data-vcr-scope-more]');
+      var menu = document.getElementById('vcrScopeMoreMenu');
+      if (!moreBtn || !menu) return;
+      var overflowBtns = Array.from(document.querySelectorAll('.vcr-scope-btn--overflow'));
+      // Populate menu from overflow buttons (preserves label + scope).
+      menu.innerHTML = '';
+      overflowBtns.forEach(function (src) {
+        var item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'vcr-scope-more-item';
+        item.setAttribute('role', 'menuitem');
+        item.setAttribute('data-scope', src.dataset.scope);
+        item.textContent = src.textContent;
+        item.addEventListener('click', function () {
+          src.click(); // delegate to original handler — keeps single source of truth
+          menu.setAttribute('hidden', '');
+          moreBtn.setAttribute('aria-expanded', 'false');
+          // Reflect the chosen scope on the More button label so the user sees feedback.
+          moreBtn.textContent = item.textContent + ' ▾';
+        });
+        menu.appendChild(item);
+      });
+      moreBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var open = !menu.hasAttribute('hidden');
+        if (open) { menu.setAttribute('hidden', ''); moreBtn.setAttribute('aria-expanded', 'false'); }
+        else      { menu.removeAttribute('hidden');  moreBtn.setAttribute('aria-expanded', 'true');  }
+      });
+      // Click outside closes the menu.
+      document.addEventListener('click', function (e) {
+        if (menu.hasAttribute('hidden')) return;
+        if (e.target === moreBtn || moreBtn.contains(e.target) ||
+            e.target === menu   || menu.contains(e.target)) return;
+        menu.setAttribute('hidden', '');
+        moreBtn.setAttribute('aria-expanded', 'false');
+      });
+    })();
 
     // Timeline click to scrub
     // Timeline click handled by drag (mousedown+mouseup)
@@ -2029,6 +2147,15 @@
     if (!feedContent) return;
     feedContent.querySelectorAll('.live-feed-item').forEach(el => el.remove());
     feedDedup.clear();
+    // #1207: ensure empty-state placeholder is present (re-add if a prior
+    // rebuild wiped everything). CSS hides it when items exist.
+    if (!feedContent.querySelector('.live-feed-empty')) {
+      var _ph = document.createElement('div');
+      _ph.className = 'live-feed-empty';
+      _ph.setAttribute('aria-hidden', 'true');
+      _ph.textContent = 'Waiting for packets…';
+      feedContent.appendChild(_ph);
+    }
 
     // Aggregate VCR buffer by hash, then create one feed item per unique hash
     const byHash = new Map();
@@ -2074,6 +2201,7 @@
       const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
       const hopStr = longestHops.length ? `<span class="feed-hops">${longestHops.length}⇢</span>` : '';
       const obsBadge = group.count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${group.count}</span>` : '';
+      const iataBadge = obsIataBadgeHtml(pkt);
 
       var _ccPayload = (pkt.decoded || {}).payload || {};
       var _ccChan1 = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload.channel || null) : null;
@@ -2088,7 +2216,7 @@
       item.innerHTML = `
         <span class="feed-icon" style="color:${color}">${icon}</span>
         <span class="feed-type" style="color:${color}">${typeName}</span>
-        ${dotHtml1}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+        ${dotHtml1}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}
         <span class="feed-text">${escapeHtml(preview)}</span>
         <span class="feed-time" data-ts="${group.latestTs || Date.now()}">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
       `;
@@ -2241,6 +2369,12 @@
   window._liveVcrPause = vcrPause;
   window._liveVcrResumeLive = vcrResumeLive;
   window._liveVcrSetMode = vcrSetMode;
+  // #1207 test seams: expose production feed mutators so E2E can exercise
+  // the real eviction guard / placeholder re-add path (not a test-local copy).
+  window._liveAddFeedItem = function(icon, typeName, payload, hops, color, pkt) {
+    return addFeedItem(icon, typeName, payload, hops, color, pkt);
+  };
+  window._liveRebuildFeedList = function() { return rebuildFeedList(); };
 
   async function replayRecent() {
     try {
@@ -3136,6 +3270,7 @@
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = pkt.observation_count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${pkt.observation_count}</span>` : '';
+    const iataBadge = obsIataBadgeHtml(pkt);
     const anomalyIcon = (pkt.decoded && pkt.decoded.anomaly) ? '<span title="Anomaly detected" style="margin-left:4px">⚠️</span>' : '';
     var _ccPayload2 = (pkt.decoded || {}).payload || {};
     var _ccChan = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload2.channel || null) : null;
@@ -3155,7 +3290,7 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${anomalyIcon}
+      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}${anomalyIcon}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
@@ -3222,6 +3357,7 @@
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = incomingObs > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${incomingObs}</span>` : '';
+    const iataBadge = obsIataBadgeHtml(pkt);
     var _ccPayload3 = (pkt.decoded || {}).payload || {};
     var _ccChan3 = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload3.channel || null) : null;
     var dotHtml3 = _ccChan3 ? _feedColorDot(_ccChan3) : '';
@@ -3242,7 +3378,7 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${dotHtml3}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+      ${dotHtml3}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
@@ -3250,7 +3386,11 @@
     item.addEventListener('click', () => showFeedCard(item, pkt, color));
     feed.prepend(item);
     requestAnimationFrame(() => requestAnimationFrame(() => item.classList.remove('live-feed-enter')));
-    while (feed.children.length > 25) feed.removeChild(feed.lastChild);
+    // #1207: trim to 25 items, but never evict the empty-state placeholder.
+    while (feed.querySelectorAll('.live-feed-item').length > 25) {
+      var _items = feed.querySelectorAll('.live-feed-item');
+      feed.removeChild(_items[_items.length - 1]);
+    }
 
     // Register
     if (hash) {
@@ -3334,6 +3474,7 @@
       window.removeEventListener('orientationchange', _onResize);
       if (window.visualViewport) window.visualViewport.removeEventListener('resize', _onResize);
     }
+    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
     // Restore #app height to CSS default
     const appEl = document.getElementById('app');
     if (appEl) appEl.style.height = '';

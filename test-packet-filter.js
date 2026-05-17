@@ -188,5 +188,49 @@ test('unclosed quote → error', () => {
   assert(c.error !== null, 'should have error');
 });
 
+// --- Observer IATA filter field (#1188) ---
+const iataPkt = { ...pkt, observer_iata: 'SJC' };
+const sfoPkt  = { ...pkt, observer_iata: 'SFO' };
+const noIataPkt = { ...pkt, observer_iata: null };
+
+test('observer_iata == "SJC" matches', () => {
+  assert(PF.compile('observer_iata == "SJC"').filter(iataPkt));
+});
+test('observer_iata == "SJC" case-insensitive', () => {
+  assert(PF.compile('observer_iata == "sjc"').filter(iataPkt));
+});
+test('observer_iata == "SFO" does not match SJC packet', () => {
+  assert(!PF.compile('observer_iata == "SFO"').filter(iataPkt));
+});
+test('iata alias works like observer_iata', () => {
+  assert(PF.compile('iata == "SJC"').filter(iataPkt));
+  assert(!PF.compile('iata == "LAX"').filter(iataPkt));
+});
+test('observer_iata in ("SJC","SFO") matches both', () => {
+  assert(PF.compile('observer_iata in ("SJC","SFO")').filter(iataPkt));
+  assert(PF.compile('observer_iata in ("SJC","SFO")').filter(sfoPkt));
+});
+test('iata in ("LAX","OAK") does not match SJC', () => {
+  assert(!PF.compile('iata in ("LAX","OAK")').filter(iataPkt));
+});
+test('observer_iata contains "S"', () => {
+  assert(PF.compile('observer_iata contains "S"').filter(iataPkt));
+  assert(!PF.compile('observer_iata contains "Z"').filter(iataPkt));
+});
+test('missing observer_iata → no match (not parse error)', () => {
+  const c = PF.compile('observer_iata == "SJC"');
+  assert(c.error === null, 'should parse with no error');
+  assert(!c.filter(noIataPkt), 'should not match when iata absent');
+});
+test('combined: type == ADVERT && iata == "SJC"', () => {
+  const advIataPkt = { ...iataPkt, payload_type: 4 };
+  assert(PF.compile('type == ADVERT && iata == "SJC"').filter(advIataPkt));
+});
+test('observer_iata and iata appear in suggest field list', () => {
+  const names = PF.FIELDS.map(f => f.name);
+  assert(names.indexOf('observer_iata') !== -1, 'observer_iata in FIELDS');
+  assert(names.indexOf('iata') !== -1, 'iata in FIELDS');
+});
+
 console.log(`\n=== Results: ${pass} passed, ${fail} failed ===`);
 process.exit(fail > 0 ? 1 : 0);
