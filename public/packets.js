@@ -1167,6 +1167,18 @@
 
   async function loadPackets() {
     try {
+      // Show a skeleton while the table body refreshes. On reloads/filter
+      // changes the table already exists, so seed #pktBody directly. On the
+      // first load the table is built only after the fetch resolves, so seed
+      // the page container (#pktLeft) with a loading state instead — this
+      // paints before the fetch resolves and renderLeft() replaces it.
+      const _loadingBody = document.getElementById('pktBody');
+      if (_loadingBody) {
+        _loadingBody.innerHTML = PageState.skeleton({ rows: 8, cols: _getColCount(), table: true });
+      } else {
+        const _loadingLeft = document.getElementById('pktLeft');
+        if (_loadingLeft) _loadingLeft.innerHTML = PageState.loading('Loading packets…');
+      }
       const selectedWindow = Number(document.getElementById('fTimeWindow')?.value);
       const windowMin = Number.isFinite(selectedWindow) ? selectedWindow : savedTimeWindowMin;
       const params = buildPacketsParams({
