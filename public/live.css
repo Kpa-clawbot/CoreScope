@@ -1030,7 +1030,14 @@
    * Fix: `flex-wrap: nowrap`, the timeline gets `flex: 1 1 0` so it
    * absorbs leftover width, and scope buttons shrink (1/6/More) to fit. */
   .vcr-bar {
-    padding: 4px 8px;
+    /* #1250: shaved horizontal padding from 8px → 4px. At 375px viewport the
+     * row of flex-shrink:0 children (controls + scope-btns + lcd) overflowed
+     * the padding box by 0.83px even though .vcr-timeline-container is
+     * flex:1 1 0 — its min-width:40px floor leaves the rest to absorb the
+     * overflow. 4px headroom on each side is well above the 0.83px clip and
+     * keeps the LCD's right edge ≤ viewport width. Desktop is unaffected
+     * (this rule is inside @media (max-width: 640px)). */
+    padding: 4px 4px;
     padding-bottom: calc(4px + env(safe-area-inset-bottom, 20px));
     flex-wrap: nowrap;
     gap: 4px;
