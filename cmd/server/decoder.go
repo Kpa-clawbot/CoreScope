@@ -383,11 +383,21 @@ func decodePayload(payloadType int, buf []byte, validateSignatures bool) Payload
 	}
 }
 
+// maxDecodeHexLen caps the hex-string length DecodePacket will accept before
+// allocating via hex.DecodeString. A MeshCore packet is at most a few hundred
+// bytes; 16 KB of hex (8 KB decoded) is a generous ceiling that bounds memory
+// use even if a caller bypasses the HTTP-layer body limit.
+const maxDecodeHexLen = 16 << 10 // 16 KB
+
 // DecodePacket decodes a hex-encoded MeshCore packet.
 func DecodePacket(hexString string, validateSignatures bool) (*DecodedPacket, error) {
 	hexString = strings.ReplaceAll(hexString, " ", "")
 	hexString = strings.ReplaceAll(hexString, "\n", "")
 	hexString = strings.ReplaceAll(hexString, "\r", "")
+
+	if len(hexString) > maxDecodeHexLen {
+		return nil, fmt.Errorf("hex input too large (max %d chars)", maxDecodeHexLen)
+	}
 
 	buf, err := hex.DecodeString(hexString)
 	if err != nil {

@@ -11,16 +11,31 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
-}
-
 // Hub manages WebSocket clients and broadcasts.
 type Hub struct {
 	mu      sync.RWMutex
 	clients map[*Client]bool
+
+	// allowedOrigins is the CORS allowlist used to validate the Origin header
+	// of incoming WebSocket upgrade requests (prevents cross-site WebSocket
+	// hijacking). Same-origin requests are always permitted; cross-site
+	// requests are denied unless the Origin appears in this list.
+	allowedOrigins []string
+
+	// upgrader is created per-Hub so CheckOrigin can consult allowedOrigins.
+	upgrader websocket.Upgrader
+}
+
+// checkOrigin validates the Origin header of a WebSocket upgrade request.
+// Same-origin (or no Origin header) is allowed; cross-site is allowed only if
+// the Origin is in the configured allowlist. Default-deny when the allowlist
+// is empty.
+func (h *Hub) checkOrigin(r *http.Request) bool {
+	if isSameOriginWS(r) {
+		return true
+	}
+	allowed, _ := originAllowed(h.allowedOrigins, r.Header.Get("Origin"))
+	return allowed
 }
 
 // Client is a single WebSocket connection.
@@ -31,9 +46,15 @@ type Client struct {
 }
 
 func NewHub() *Hub {
-	return &Hub{
+	h := &Hub{
 		clients: make(map[*Client]bool),
 	}
+	h.upgrader = websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 4096,
+		CheckOrigin:     h.checkOrigin,
+	}
+	return h
 }
 
 func (h *Hub) ClientCount() int {
@@ -95,7 +116,7 @@ func (h *Hub) Broadcast(msg interface{}) {
 
 // ServeWS handles the WebSocket upgrade and runs the client.
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[ws] upgrade error: %v", err)
 		return

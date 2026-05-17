@@ -98,6 +98,24 @@ type Config struct {
 	ChannelKeysPath string            `json:"channelKeysPath,omitempty"`
 	ChannelKeys     map[string]string `json:"channelKeys,omitempty"`
 	HashChannels    []string          `json:"hashChannels,omitempty"`
+
+	// RateLimit tunes the per-client-IP token-bucket rate limiter applied to
+	// /api/ routes. Omitted/zero fields fall back to the defaults documented
+	// on RateLimitConfig.
+	RateLimit *RateLimitConfig `json:"rateLimit,omitempty"`
+}
+
+// RateLimitConfig configures the per-IP token-bucket rate limiter. All limits
+// are generous enough not to interfere with normal dashboard use — the goal is
+// DoS protection, not throttling. Zero values select the defaults.
+type RateLimitConfig struct {
+	// GeneralRPS / GeneralBurst govern all /api/ routes.
+	GeneralRPS   float64 `json:"generalRps,omitempty"`   // sustained requests/sec per IP (default 50)
+	GeneralBurst int     `json:"generalBurst,omitempty"` // burst capacity per IP (default 100)
+	// ExpensiveRPS / ExpensiveBurst govern the costly endpoints
+	// (/api/analytics/*, /api/decode, /api/paths/inspect).
+	ExpensiveRPS   float64 `json:"expensiveRps,omitempty"`   // sustained requests/sec per IP (default 5)
+	ExpensiveBurst int     `json:"expensiveBurst,omitempty"` // burst capacity per IP (default 15)
 }
 
 // weakAPIKeys is the blocklist of known default/example API keys that must be rejected.
@@ -281,10 +299,36 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 			continue
 		}
 		cfg.NormalizeTimestampConfig()
+		cfg.sanitizeCORS()
 		return cfg, nil
 	}
 	cfg.NormalizeTimestampConfig()
+	cfg.sanitizeCORS()
 	return cfg, nil // defaults
+}
+
+// sanitizeCORS rejects an unsafe CORS configuration. A "*" wildcard origin
+// would cause the server to reflect Access-Control-Allow-Origin: * — combined
+// with the credential-bearing X-API-Key header this lets any website make
+// authenticated cross-origin requests. We drop "*" entries and log a warning;
+// operators must list explicit origins instead.
+func (c *Config) sanitizeCORS() {
+	if len(c.CORSAllowedOrigins) == 0 {
+		return
+	}
+	cleaned := c.CORSAllowedOrigins[:0]
+	dropped := false
+	for _, o := range c.CORSAllowedOrigins {
+		if strings.TrimSpace(o) == "*" {
+			dropped = true
+			continue
+		}
+		cleaned = append(cleaned, o)
+	}
+	c.CORSAllowedOrigins = cleaned
+	if dropped {
+		log.Printf("[config] WARNING: corsAllowedOrigins contained \"*\" — rejected (would expose X-API-Key cross-origin); list explicit origins instead")
+	}
 }
 
 func LoadTheme(baseDirs ...string) *ThemeFile {

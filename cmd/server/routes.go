@@ -62,7 +62,6 @@ type Server struct {
 	backupRunning  bool
 	backupLastDone time.Time
 
-
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
 
@@ -79,6 +78,17 @@ type Server struct {
 	// Empty string disables async persistence in storePerfSample.
 	dbPath string
 }
+
+// maxJSONBodyBytes caps the size of JSON request bodies on POST endpoints.
+// 64 KB is far larger than any legitimate request (the biggest is a 200-hash
+// batch) but small enough to prevent memory-exhaustion DoS from oversized
+// uploads. Enforced via http.MaxBytesReader.
+const maxJSONBodyBytes = 64 << 10 // 64 KB
+
+// maxHexInputLen caps the length of a hex string accepted by packet-decode
+// endpoints before hex.DecodeString allocates. A MeshCore packet is at most a
+// few hundred bytes; 16 KB of hex (8 KB decoded) is a generous ceiling.
+const maxHexInputLen = 16 << 10 // 16 KB
 
 // PerfStats tracks request performance.
 type PerfStats struct {
@@ -106,6 +116,10 @@ func NewPerfStats() *PerfStats {
 }
 
 func NewServer(db *DB, cfg *Config, hub *Hub) *Server {
+	var rlCfg *RateLimitConfig
+	if cfg != nil {
+		rlCfg = cfg.RateLimit
+	}
 	s := &Server{
 		db:        db,
 		cfg:       cfg,
@@ -115,6 +129,7 @@ func NewServer(db *DB, cfg *Config, hub *Hub) *Server {
 		version:   resolveVersion(),
 		commit:    resolveCommit(),
 		buildTime: resolveBuildTime(),
+		limiters:  newRateLimiters(rlCfg),
 	}
 	if db != nil && db.path != "" && db.path != ":memory:" {
 		s.dbPath = db.path
@@ -141,6 +156,10 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	s.router = r
 	// CORS middleware (must run before route handlers)
 	r.Use(s.corsMiddleware)
+
+	// Per-IP rate limiting (DoS protection) — runs after CORS so cross-origin
+	// preflight rejection happens first, before route handlers.
+	r.Use(s.rateLimitMiddleware)
 
 	// Performance instrumentation middleware
 	r.Use(s.perfMiddleware)
@@ -490,11 +509,36 @@ func (s *Server) handleConfigGeoFilter(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigChannelKeys(w http.ResponseWriter, r *http.Request) {
+	// This endpoint is intentionally unauthenticated so the frontend can
+	// drive hashtag QR-share without an API key. Hashtag-channel keys are
+	// publicly derivable (SHA-256 of the channel name) and safe to serve.
+	// Explicitly-configured keys for private (non-#) channels are real
+	// secrets, so callers without a valid API key only receive the
+	// derivable hashtag-channel subset; authenticated callers get the
+	// full merged map.
 	keys := s.channelKeys
 	if keys == nil {
 		keys = map[string]string{}
 	}
-	writeJSON(w, keys)
+	if s.requestAuthorized(r) {
+		writeJSON(w, keys)
+		return
+	}
+	writeJSON(w, publicChannelKeys(keys))
+}
+
+// requestAuthorized reports whether the request carries a valid, non-weak
+// X-API-Key matching the configured key. Returns false when no API key is
+// configured (write endpoints disabled).
+func (s *Server) requestAuthorized(r *http.Request) bool {
+	if s.cfg == nil || s.cfg.APIKey == "" {
+		return false
+	}
+	key := r.Header.Get("X-API-Key")
+	if !constantTimeEqual(key, s.cfg.APIKey) {
+		return false
+	}
+	return !IsWeakAPIKey(key)
 }
 
 // --- System Handlers ---
@@ -614,8 +658,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		stats, err = s.db.GetStats()
 	}
 	if err != nil {
-		s.statsMu.Unlock()
-		writeError(w, 500, err.Error())
+		writeInternalError(w, "handleStats GetStats", err)
 		return
 	}
 	counts := s.db.GetRoleCounts()
@@ -954,7 +997,7 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 				order, r.URL.Query().Get("since"), r.URL.Query().Get("until"))
 		}
 		if err != nil {
-			writeError(w, 500, err.Error())
+			writeInternalError(w, "handlePackets QueryMultiNodePackets", err)
 			return
 		}
 		writeJSON(w, PacketListResponse{
@@ -1000,7 +1043,7 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 			result, err = s.db.QueryGroupedPackets(q)
 		}
 		if err != nil {
-			writeError(w, 500, err.Error())
+			writeInternalError(w, "handlePackets QueryGroupedPackets", err)
 			return
 		}
 		writeJSON(w, result)
@@ -1015,7 +1058,7 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		result, err = s.db.QueryPackets(q)
 	}
 	if err != nil {
-		writeError(w, 500, err.Error())
+		writeInternalError(w, "handlePackets QueryPackets", err)
 		return
 	}
 
@@ -1048,6 +1091,7 @@ var perfHexFallback = regexp.MustCompile(`[0-9a-f]{8,}`)
 // Response: {"results": {"abc123": [...observations...], "def456": [...], ...}}
 // Limited to 200 hashes per request to prevent abuse.
 func (s *Server) handleBatchObservations(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	var body struct {
 		Hashes []string `json:"hashes"`
 	}
@@ -1151,6 +1195,7 @@ func (s *Server) handlePacketDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDecode(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	var body struct {
 		Hex string `json:"hex"`
 	}
@@ -1161,6 +1206,10 @@ func (s *Server) handleDecode(w http.ResponseWriter, r *http.Request) {
 	hexStr := strings.TrimSpace(body.Hex)
 	if hexStr == "" {
 		writeError(w, 400, "hex is required")
+		return
+	}
+	if len(hexStr) > maxHexInputLen {
+		writeError(w, 400, "hex input too large")
 		return
 	}
 	decoded, err := DecodePacket(hexStr, true)
@@ -1178,6 +1227,7 @@ func (s *Server) handleDecode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePostPacket(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	var body struct {
 		Hex      string   `json:"hex"`
 		Observer *string  `json:"observer"`
@@ -1193,6 +1243,10 @@ func (s *Server) handlePostPacket(w http.ResponseWriter, r *http.Request) {
 	hexStr := strings.TrimSpace(body.Hex)
 	if hexStr == "" {
 		writeError(w, 400, "hex is required")
+		return
+	}
+	if len(hexStr) > maxHexInputLen {
+		writeError(w, 400, "hex input too large")
 		return
 	}
 	decoded, err := DecodePacket(hexStr, false)
@@ -1266,7 +1320,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		q.Get("lastHeard"), q.Get("sortBy"), q.Get("region"),
 	)
 	if err != nil {
-		writeError(w, 500, err.Error())
+		writeInternalError(w, "handleNodes GetNodes", err)
 		return
 	}
 	if s.store != nil {
@@ -1344,7 +1398,7 @@ func (s *Server) handleNodeSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	nodes, err := s.db.SearchNodes(strings.TrimSpace(q), 10)
 	if err != nil {
-		writeError(w, 500, err.Error())
+		writeInternalError(w, "handleNodeSearch SearchNodes", err)
 		return
 	}
 	// Filter blacklisted nodes from search results
@@ -1368,7 +1422,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	node, err := s.db.GetNodeByPubkey(pubkey)
 	if err != nil {
-		writeError(w, 500, err.Error())
+		writeInternalError(w, "handleNodeDetail GetNodeByPubkey", err)
 		return
 	}
 	// Issue #772: short-URL fallback. If exact pubkey lookup misses and the
@@ -1376,7 +1430,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 	if node == nil && len(pubkey) >= 8 && len(pubkey) < 64 {
 		resolved, ambiguous, perr := s.db.GetNodeByPrefix(pubkey)
 		if perr != nil {
-			writeError(w, 500, perr.Error())
+			writeInternalError(w, "handleNodeDetail GetNodeByPrefix", perr)
 			return
 		}
 		if ambiguous {
@@ -1509,7 +1563,7 @@ func (s *Server) handleNetworkStatus(w http.ResponseWriter, r *http.Request) {
 	ht := s.cfg.GetHealthThresholds()
 	result, err := s.db.GetNetworkStatus(ht)
 	if err != nil {
-		writeError(w, 500, err.Error())
+		writeInternalError(w, "handleNetworkStatus GetNetworkStatus", err)
 		return
 	}
 	writeJSON(w, result)
@@ -2182,7 +2236,7 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	if s.db != nil {
 		channels, err := s.db.GetChannels(region)
 		if err != nil {
-			writeError(w, 500, err.Error())
+			writeInternalError(w, "handleChannels GetChannels", err)
 			return
 		}
 		if includeEncrypted {
@@ -2216,7 +2270,7 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 	if s.db != nil {
 		messages, total, err := s.db.GetChannelMessages(hash, limit, offset, region)
 		if err != nil {
-			writeError(w, 500, err.Error())
+			writeInternalError(w, "handleChannelMessages GetChannelMessages", err)
 			return
 		}
 		writeJSON(w, ChannelMessagesResponse{Messages: messages, Total: total})
@@ -2233,7 +2287,7 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 	observers, err := s.db.GetObservers()
 	if err != nil {
-		writeError(w, 500, err.Error())
+		writeInternalError(w, "handleObservers GetObservers", err)
 		return
 	}
 
@@ -2564,7 +2618,7 @@ func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {
 	hash := mux.Vars(r)["hash"]
 	traces, err := s.db.GetTraces(hash)
 	if err != nil {
-		writeError(w, 500, err.Error())
+		writeInternalError(w, "handleTraces GetTraces", err)
 		return
 	}
 	writeJSON(w, TraceResponse{Traces: traces})
@@ -2709,6 +2763,15 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// writeInternalError logs the detailed error server-side and returns a generic
+// "internal error" message to the client. Raw error strings from SQLite or the
+// filesystem leak internal schema/path detail and must never reach clients.
+// `context` identifies the failing operation in the server log.
+func writeInternalError(w http.ResponseWriter, context string, err error) {
+	log.Printf("[routes] %s: %v", context, err)
+	writeError(w, http.StatusInternalServerError, "internal error")
 }
 
 func queryInt(r *http.Request, key string, def int) int {
@@ -2891,7 +2954,7 @@ func (s *Server) handleObserverMetrics(w http.ResponseWriter, r *http.Request) {
 
 	metrics, reboots, err := s.db.GetObserverMetrics(id, since, until, resolution, sampleInterval)
 	if err != nil {
-		writeError(w, 500, err.Error())
+		writeInternalError(w, "handleObserverMetrics GetObserverMetrics", err)
 		return
 	}
 	if metrics == nil {
@@ -2933,7 +2996,7 @@ func (s *Server) handleMetricsSummary(w http.ResponseWriter, r *http.Request) {
 	since := time.Now().UTC().Add(-dur).Format(time.RFC3339)
 	summary, err := s.db.GetMetricsSummary(since)
 	if err != nil {
-		writeError(w, 500, err.Error())
+		writeInternalError(w, "handleMetricsSummary GetMetricsSummary", err)
 		return
 	}
 	if summary == nil {
@@ -2987,7 +3050,7 @@ func (s *Server) handleAdminPrune(w http.ResponseWriter, r *http.Request) {
 	// Prune old packets
 	n, err := s.db.PruneOldPackets(days)
 	if err != nil {
-		writeError(w, 500, err.Error())
+		writeInternalError(w, "handleAdminPrune PruneOldPackets", err)
 		return
 	}
 	log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
@@ -3140,7 +3203,7 @@ func (s *Server) handleDroppedPackets(w http.ResponseWriter, r *http.Request) {
 
 	results, err := s.db.GetDroppedPackets(limit, observerID, nodePubkey)
 	if err != nil {
-		writeError(w, 500, err.Error())
+		writeInternalError(w, "handleDroppedPackets GetDroppedPackets", err)
 		return
 	}
 	writeJSON(w, results)

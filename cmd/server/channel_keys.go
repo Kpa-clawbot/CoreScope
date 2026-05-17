@@ -67,3 +67,26 @@ func loadServerChannelKeys(cfg *Config, configDir string) map[string]string {
 
 	return keys
 }
+
+// publicChannelKeys returns the subset of channel keys that are safe to serve
+// to UNAUTHENTICATED callers: hashtag-channel keys only, and always the
+// publicly-derivable SHA-256 derivation — never an operator-configured value.
+//
+// Rationale (#security-audit): hashtag-channel PSKs are SHA-256(channelName)
+// and therefore not secret — anyone who knows the channel name can derive
+// them, so serving them keeps hashtag QR-share working. Explicitly-configured
+// keys for private (non-#) channels are real secrets and are omitted here; if
+// an operator configured a *different* key for a #-channel we still only
+// expose the derivable value, so a private override is never leaked.
+func publicChannelKeys(allKeys map[string]string) map[string]string {
+	pub := make(map[string]string)
+	for name := range allKeys {
+		if !strings.HasPrefix(name, "#") {
+			continue // private channel — never served unauthenticated
+		}
+		// Recompute the derivation rather than echoing the stored value,
+		// so a configured override for a #-channel is not exposed.
+		pub[name] = deriveHashtagChannelKey(name)
+	}
+	return pub
+}

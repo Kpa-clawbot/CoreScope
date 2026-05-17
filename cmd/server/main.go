@@ -147,9 +147,13 @@ func main() {
 		if pprofPort == "" {
 			pprofPort = "6060"
 		}
+		// Bind to loopback only — the pprof endpoints expose heap/goroutine
+		// dumps and must never be reachable from outside the host. Operators
+		// who need remote access should tunnel (e.g. SSH port-forward).
+		pprofAddr := "127.0.0.1:" + pprofPort
 		go func() {
-			log.Printf("[pprof] profiling UI at http://localhost:%s/debug/pprof/", pprofPort)
-			if err := http.ListenAndServe(":"+pprofPort, nil); err != nil {
+			log.Printf("[pprof] profiling UI at http://%s/debug/pprof/", pprofAddr)
+			if err := http.ListenAndServe(pprofAddr, nil); err != nil {
 				log.Printf("[pprof] failed to start: %v (non-fatal)", err)
 			}
 		}()
@@ -403,6 +407,9 @@ func main() {
 
 	// WebSocket hub
 	hub := NewHub()
+	// Validate WebSocket upgrade Origin against the same allowlist used for
+	// CORS — prevents cross-site WebSocket hijacking (same-origin still works).
+	hub.allowedOrigins = cfg.CORSAllowedOrigins
 
 	// HTTP server
 	srv := NewServer(database, cfg, hub)

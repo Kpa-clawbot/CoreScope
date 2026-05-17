@@ -633,6 +633,7 @@ func (s *PacketStore) Load() error {
 			}
 			s.trackAdvertPubkey(tx)
 			s.trackedBytes += estimateStoreTxBytes(tx)
+			atomic.AddInt64(&s.insertCount, 1)
 		}
 
 		if obsID.Valid {
@@ -739,12 +740,15 @@ func (s *PacketStore) Load() error {
 
 	s.loaded = true
 	elapsed := time.Since(t0)
+	// s.mu.Lock is held here (Load holds it for its whole body), so read
+	// trackedBytes directly via the lock-free converter — calling
+	// trackedMemoryMB() would re-acquire RLock and deadlock.
 	if maxPackets > 0 && totalInDB > len(s.packets) {
 		log.Printf("[store] Loaded %d/%d transmissions (%d observations) in %v — bounded by %dMB budget (tracked ~%.0fMB, heap ~%.0fMB)",
-			len(s.packets), totalInDB, s.totalObs, elapsed, s.maxMemoryMB, s.trackedMemoryMB(), s.estimatedMemoryMB())
+			len(s.packets), totalInDB, s.totalObs, elapsed, s.maxMemoryMB, trackedBytesToMB(s.trackedBytes), s.estimatedMemoryMB())
 	} else {
 		log.Printf("[store] Loaded %d transmissions (%d observations) in %v (tracked ~%.0fMB, heap ~%.0fMB)",
-			len(s.packets), s.totalObs, elapsed, s.trackedMemoryMB(), s.estimatedMemoryMB())
+			len(s.packets), s.totalObs, elapsed, trackedBytesToMB(s.trackedBytes), s.estimatedMemoryMB())
 	}
 	return nil
 }
@@ -1016,6 +1020,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	s.packets = append(localPackets, s.packets...)
 	s.totalObs += localTotalObs
 	s.trackedBytes += localTrackedBytes
+	atomic.AddInt64(&s.insertCount, int64(len(localPackets)))
 	if localMaxTxID > s.maxTxID {
 		s.maxTxID = localMaxTxID
 	}
@@ -1527,10 +1532,13 @@ func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
 
 	// Distinct advert pubkey count — precomputed incrementally (see trackAdvertPubkey).
 	advertByObsCount := len(s.advertPubkeys)
+	// Snapshot trackedBytes under the lock — ingest writers mutate it under
+	// s.mu.Lock, so reading it after RUnlock would be a data race (#8).
+	trackedBytes := s.trackedBytes
 	s.mu.RUnlock()
 
 	estimatedMB := math.Round(s.estimatedMemoryMB()*10) / 10
-	trackedMB := math.Round(s.trackedMemoryMB()*10) / 10
+	trackedMB := math.Round(trackedBytesToMB(trackedBytes)*10) / 10
 
 	evicted := atomic.LoadInt64(&s.evicted)
 
@@ -1710,14 +1718,19 @@ func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
 	nodeIdx := len(s.byNode)
 
 	advertByObsCount := len(s.advertPubkeys)
+	// Snapshot trackedBytes under the lock — ingest writers mutate it under
+	// s.mu.Lock, so reading it after RUnlock would be a data race (#8). This
+	// aligns GetPerfStoreStatsTyped with the snapshot-under-lock pattern used
+	// by GetStoreStats / GetPerfStoreStats.
+	trackedBytes := s.trackedBytes
 	s.mu.RUnlock()
 
 	estimatedMB := math.Round(s.estimatedMemoryMB()*10) / 10
-	trackedMB := math.Round(s.trackedMemoryMB()*10) / 10
+	trackedMB := math.Round(trackedBytesToMB(trackedBytes)*10) / 10
 
 	var avgBytesPerPacket int64
 	if totalLoaded > 0 {
-		avgBytesPerPacket = s.trackedBytes / int64(totalLoaded)
+		avgBytesPerPacket = trackedBytes / int64(totalLoaded)
 	}
 
 	return PerfPacketStoreStats{
@@ -2066,6 +2079,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			}
 			s.trackAdvertPubkey(tx)
 			s.trackedBytes += estimateStoreTxBytes(tx)
+			atomic.AddInt64(&s.insertCount, 1)
 
 			if _, exists := broadcastTxs[r.txID]; !exists {
 				broadcastTxs[r.txID] = tx
@@ -3572,8 +3586,21 @@ func (s *PacketStore) estimatedMemoryMB() float64 {
 }
 
 // trackedMemoryMB returns the self-accounted packet store memory in MB.
+// It reads s.trackedBytes under s.mu.RLock — callers must NOT already hold
+// s.mu. Callers that already hold the lock should snapshot s.trackedBytes
+// into a local and use trackedBytesToMB instead, to avoid a data race with
+// ingest writers that mutate s.trackedBytes under s.mu.Lock.
 func (s *PacketStore) trackedMemoryMB() float64 {
-	return float64(s.trackedBytes) / 1048576.0
+	s.mu.RLock()
+	tb := s.trackedBytes
+	s.mu.RUnlock()
+	return trackedBytesToMB(tb)
+}
+
+// trackedBytesToMB converts a pre-read trackedBytes value to MB. Pure function
+// — safe to call with the lock held using a snapshotted value.
+func trackedBytesToMB(trackedBytes int64) float64 {
+	return float64(trackedBytes) / 1048576.0
 }
 
 // EvictStale removes packets older than the retention window and/or exceeding
@@ -3860,8 +3887,10 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 	if s.trackedBytes < 0 {
 		s.trackedBytes = 0
 	}
+	// s.mu.Lock is held here; use the lock-free converter on the snapshotted
+	// s.trackedBytes — trackedMemoryMB() would re-acquire RLock and deadlock.
 	log.Printf("[store] Evicted %d packets (%d obs, freed ~%.1fMB, tracked ~%.1fMB)",
-		evictCount, evictedObs, float64(evictedBytes)/1048576.0, s.trackedMemoryMB())
+		evictCount, evictedObs, float64(evictedBytes)/1048576.0, trackedBytesToMB(s.trackedBytes))
 
 	// Eviction removes data — all caches may be affected
 	s.invalidateCachesFor(cacheInvalidation{eviction: true})
@@ -7937,6 +7966,11 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	fromTime := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	fromISO := fromTime.Format(time.RFC3339)
 	toISO := time.Now().Format(time.RFC3339)
+
+	// Recompute clock skew BEFORE taking the store RLock — getNodeClockSkewLocked
+	// (called later under the lock) only reads cached skew data; the heavy
+	// O(n²) compute must not run under the lock (#10).
+	s.clockSkew.Recompute(s)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -92,7 +92,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	// directory (avoids confusing operators / accidental WAL clobber).
 	tmpDir, err := os.MkdirTemp("", "corescope-backup-")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "tempdir failed: "+err.Error())
+		writeInternalError(w, "handleBackup MkdirTemp", err)
 		return
 	}
 	defer func() {
@@ -107,13 +107,13 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	// (mkdtemp output won't contain quotes, but be paranoid for future-proofing.)
 	escaped := strings.ReplaceAll(snapshotPath, "'", "''")
 	if _, err := s.db.conn.ExecContext(r.Context(), fmt.Sprintf("VACUUM INTO '%s'", escaped)); err != nil {
-		writeError(w, http.StatusInternalServerError, "snapshot failed: "+err.Error())
+		writeInternalError(w, "handleBackup VACUUM INTO", err)
 		return
 	}
 
 	f, err := os.Open(snapshotPath)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "open snapshot failed: "+err.Error())
+		writeInternalError(w, "handleBackup open snapshot", err)
 		return
 	}
 	defer f.Close()
