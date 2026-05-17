@@ -1024,36 +1024,44 @@
 
 /* Mobile VCR */
 @media (max-width: 640px) {
-  /* Mobile VCR: two-row stacked layout */
+  /* #1244: SINGLE-ROW layout. PR #1234 was meant to put all VCR controls
+   * on one row but `flex-wrap: wrap` here + `width: 100%` on the timeline
+   * forced a 2-row layout (controls/LCD on row 1, scope+scrubber on row 2).
+   * Fix: `flex-wrap: nowrap`, the timeline gets `flex: 1 1 0` so it
+   * absorbs leftover width, and scope buttons shrink (1/6/More) to fit. */
   .vcr-bar {
     padding: 4px 8px;
     padding-bottom: calc(4px + env(safe-area-inset-bottom, 20px));
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 4px;
     overflow: visible;
   }
   /* #1221: LCD clock shares row with playback controls (not floating
-   * bottom-right). Scope buttons wrap to row 2; timeline to row 3.
-   * LCD is scaled ~70% of desktop so it fits next to the touch-target
-   * buttons without clipping at 375px viewport. */
-  .vcr-controls { order: 1; flex-shrink: 0; gap: 4px; }
+   * bottom-right). LCD is scaled ~70% of desktop so it fits next to the
+   * touch-target buttons without clipping at 375px viewport. */
+  .vcr-controls { order: 1; flex-shrink: 0; gap: 2px; }
   .vcr-lcd {
-    order: 2;
-    margin-left: auto;
-    min-width: 70px;
+    order: 4;
+    /* #1244: no auto margin in a no-wrap row — let the timeline absorb
+     * free space via flex:1 instead. */
+    margin-left: 0;
+    min-width: 0;
     padding: 2px 4px;
     flex-shrink: 0;
   }
   .vcr-lcd-canvas { width: 78px; height: 18px; }
   .vcr-lcd-mode { font-size: 0.55rem; letter-spacing: 1px; }
   .vcr-lcd-pkts { font-size: 0.5rem; letter-spacing: 1px; }
-  .vcr-scope-btns { order: 3; flex-shrink: 0; gap: 1px; }
+  .vcr-scope-btns { order: 2; flex-shrink: 0; gap: 1px; }
   .vcr-mode { display: none; }
-  /* Timeline takes full width on its own row */
-  .vcr-timeline-container { order: 4; width: 100%; flex: none; height: 20px; }
-  /* #207 — 44px touch targets for VCR buttons */
-  .vcr-btn { padding: 4px 8px; font-size: 0.75rem; min-height: 44px; min-width: 44px; }
-  .vcr-scope-btn { font-size: 0.6rem; padding: 2px 6px; min-height: 44px; min-width: 44px; }
+  /* #1244: timeline absorbs remaining width on the single row. */
+  .vcr-timeline-container { order: 3; flex: 1 1 0; min-width: 40px; height: 28px; width: auto; }
+  /* #207 — touch targets shrunk to fit single row at 375px. WCAG 2.5.5
+   * Level AAA recommends 44px but Level AA accepts 24px; here we keep
+   * 32px which still meets AA on mobile while letting all controls
+   * occupy one row at the 375px breakpoint called out in #1244. */
+  .vcr-btn { padding: 4px 6px; font-size: 0.7rem; min-height: 32px; min-width: 32px; }
+  .vcr-scope-btn { font-size: 0.6rem; padding: 2px 5px; min-height: 32px; min-width: 0; }
   .vcr-prompt { order: 5; width: 100%; font-size: 0.7rem; }
 }
 
