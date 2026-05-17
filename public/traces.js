@@ -65,7 +65,11 @@
       const packets = pktResp.packets || [];
 
       if (traceData.length === 0 && packets.length === 0) {
-        results.innerHTML = '<div class="trace-empty">No observations found for this packet hash.</div>';
+        results.innerHTML = PageState.empty({
+          icon: '📡',
+          title: 'No observations found',
+          hint: 'Try a different packet hash'
+        });
         return;
       }
 

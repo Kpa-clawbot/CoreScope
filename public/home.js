@@ -105,7 +105,7 @@
         </div>
       </div>
 
-      ${hasNodes ? '<div class="my-nodes-grid" id="myNodesGrid"><div class="my-nodes-loading">Loading your nodes…</div></div>' : '<div class="my-nodes-grid" id="myNodesGrid"></div>'}
+      ${hasNodes ? '<div class="my-nodes-grid" id="myNodesGrid"><div style="grid-column:1/-1">' + PageState.loading('Loading your nodes…') + '</div></div>' : '<div class="my-nodes-grid" id="myNodesGrid"></div>'}
 
       ${!hasNodes ? `
         <div class="onboarding-prompt">
