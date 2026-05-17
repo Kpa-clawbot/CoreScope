@@ -199,6 +199,7 @@ async function run() {
   // Load AES + ChannelDecrypt + channels.js
   loadInCtx(ctx, 'public/vendor/aes-ecb.js');
   loadInCtx(ctx, 'public/channel-decrypt.js');
+  loadInCtx(ctx, 'public/page-state.js');
   loadInCtx(ctx, 'public/channels.js');
 
   const CD = ctx.window.ChannelDecrypt;

@@ -146,20 +146,19 @@ test('getRowStyle returns empty string for null channel', function() {
   assert.strictEqual(ctx.window.ChannelColors.getRowStyle('GRP_TXT', null), '');
 });
 
-test('getRowStyle returns border + background for assigned GRP_TXT channel', function() {
+test('getRowStyle returns left border for assigned GRP_TXT channel', function() {
   const ctx = makeSandbox();
   ctx.window.ChannelColors.set('#sf', '#ef4444');
   const style = ctx.window.ChannelColors.getRowStyle('GRP_TXT', '#sf');
-  assert.ok(style.includes('border-left:4px solid #ef4444'), 'should have left border');
-  assert.ok(style.includes('background:#ef44441a'), 'should have 10% opacity background');
+  // #675: minimal Tufte-style encoding — 3px left border only, no background tint.
+  assert.ok(style.includes('border-left:3px solid #ef4444'), 'should have left border');
 });
 
 test('getRowStyle works with CHAN type (alias for GRP_TXT)', function() {
   const ctx = makeSandbox();
   ctx.window.ChannelColors.set('#mesh', '#3b82f6');
   const style = ctx.window.ChannelColors.getRowStyle('CHAN', '#mesh');
-  assert.ok(style.includes('border-left:4px solid #3b82f6'), 'should have left border');
-  assert.ok(style.includes('background:#3b82f61a'), 'should have background tint');
+  assert.ok(style.includes('border-left:3px solid #3b82f6'), 'should have left border');
 });
 
 test('getRowStyle returns empty when channel has no assigned color', function() {
