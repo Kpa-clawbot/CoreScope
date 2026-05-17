@@ -69,6 +69,9 @@ type Server struct {
 	perfHistoryMu sync.Mutex
 	perfHistory   []PerfSample
 
+	// Channel PSK keys loaded at startup from rainbow file + config.
+	channelKeys map[string]string
+
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
 

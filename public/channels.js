@@ -1188,7 +1188,6 @@
       });
     }
 
-
     // Event delegation for channel selection (touch-friendly)
     var chListEl = document.getElementById('chList');
     // Keyboard accessibility for the role="button" remove/share spans
