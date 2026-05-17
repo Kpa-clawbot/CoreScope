@@ -1433,6 +1433,11 @@ func groupedTxsToPage(txs []*StoreTx, total, offset, limit int) *PacketResult {
 
 	packets := make([]map[string]interface{}, len(page))
 	for i, tx := range page {
+		// #1189 R2: compute distinct IATA set across all observations.
+		// Frontend uses this in the default collapsed view to show CROSS-region
+		// reception at a glance — see groupedObserverIataBadgesHtml in
+		// public/packets.js.
+		distinctIatas := storeTxDistinctIatas(tx)
 		m := map[string]interface{}{
 			"hash":              strOrNil(tx.Hash),
 			"first_seen":        strOrNil(tx.FirstSeen),
@@ -1443,6 +1448,7 @@ func groupedTxsToPage(txs []*StoreTx, total, offset, limit int) *PacketResult {
 			"observer_id":       strOrNil(tx.ObserverID),
 			"observer_name":     strOrNil(tx.ObserverName),
 			"observer_iata":     strOrNil(tx.ObserverIATA),
+			"distinct_iatas":    distinctIatas,
 			"path_json":         strOrNil(tx.PathJSON),
 			"payload_type":      intPtrOrNil(tx.PayloadType),
 			"route_type":        intPtrOrNil(tx.RouteType),
@@ -1456,6 +1462,34 @@ func groupedTxsToPage(txs []*StoreTx, total, offset, limit int) *PacketResult {
 	}
 
 	return &PacketResult{Packets: packets, Total: total}
+}
+
+// storeTxDistinctIatas (#1189 R2) returns a sorted, deduped list of observer
+// IATA codes for a StoreTx, excluding empty values. Returns an empty
+// (non-nil) []string when the tx has no IATA'd observations so JSON
+// serialization stays consistent across the in-memory store and SQL
+// fallback paths (db.go's parseDistinctIatasCSV does the same).
+func storeTxDistinctIatas(tx *StoreTx) []string {
+	if tx == nil {
+		return []string{}
+	}
+	seen := make(map[string]bool)
+	// Include the header observer's IATA (some hot-path StoreTx records the
+	// chosen observer fields directly without re-populating Observations).
+	if tx.ObserverIATA != "" {
+		seen[tx.ObserverIATA] = true
+	}
+	for _, o := range tx.Observations {
+		if o != nil && o.ObserverIATA != "" {
+			seen[o.ObserverIATA] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // GetStoreStats returns aggregate counts (packet data from memory, node/observer from DB).

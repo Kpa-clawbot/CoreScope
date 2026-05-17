@@ -174,5 +174,31 @@ if (typeof obsIataBadge !== 'function') {
     'no IATA known anywhere → empty string, got: ' + html);
 }
 
+// #1189 R2: default collapsed view (no _children) must use server-provided
+// distinct_iatas. This is the regression that R1 didn't fix.
+{
+  ctx.observerMap.clear();
+  // Group as it arrives in /api/packets?groupByHash=true — _children is
+  // EMPTY (not populated until the user expands the row).
+  const p = { observer_iata: 'SJC', distinct_iatas: ['SJC', 'SFO'] };
+  const html = groupedObserverIataBadgesHtml(p);
+  assert(html.includes('SJC') && html.includes('SFO'),
+    'collapsed view with distinct_iatas=[SJC,SFO] renders both badges, got: ' + html);
+}
+{
+  ctx.observerMap.clear();
+  const p = { observer_iata: 'SJC', distinct_iatas: ['SJC', 'SFO', 'OAK', 'MRY'] };
+  const html = groupedObserverIataBadgesHtml(p);
+  assert(/\+2$/.test(html.trim()),
+    'collapsed view with 4 distinct IATAs renders 2 visible + "+2", got: ' + html);
+}
+{
+  ctx.observerMap.clear();
+  const p = { observer_iata: 'SJC', distinct_iatas: ['SJC'] };
+  const html = groupedObserverIataBadgesHtml(p);
+  assert(html === '<span class="badge-iata">SJC</span>',
+    'all-same-region collapsed view renders ONE badge with no +N, got: ' + html);
+}
+
 console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
 process.exit(failed > 0 ? 1 : 0);

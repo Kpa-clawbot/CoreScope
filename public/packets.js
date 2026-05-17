@@ -492,21 +492,37 @@
   // the DISTINCT IATA set: `<badge>SJC</badge>` or `<badge>SJC</badge><badge>SFO</badge>+1`
   // (capped at 2 visible, remainder rolled into +N of distinct-region count).
   // Returns '' when no observer in the group carries any IATA.
+  //
+  // #1189 R2: source of truth is `p.distinct_iatas` from the server
+  // (added to /api/packets?groupByHash=true so the default collapsed view
+  // works without needing to expand a row). Falls back to walking
+  // p._children + observerMap for legacy callers and for client-side groups
+  // synthesised by the websocket appender.
   function groupedObserverIataBadgesHtml(p) {
     if (!p) return '';
     const seen = new Set();
-    const pushIata = (rec) => {
-      if (!rec) return;
-      let iata = rec.observer_iata;
-      if (!iata && rec.observer_id) {
-        const o = observerMap.get(rec.observer_id);
-        iata = o && o.iata;
+    // R2 happy path: server-provided distinct_iatas.
+    if (Array.isArray(p.distinct_iatas)) {
+      for (const code of p.distinct_iatas) {
+        if (code) seen.add(String(code).toUpperCase());
       }
-      if (iata) seen.add(String(iata).toUpperCase());
-    };
-    pushIata(p);
-    if (p._children && p._children.length) {
-      for (const c of p._children) pushIata(c);
+    }
+    // Fallback / supplement: walk header + children (covers in-memory groups
+    // built client-side from websocket events before any server round-trip).
+    if (!seen.size) {
+      const pushIata = (rec) => {
+        if (!rec) return;
+        let iata = rec.observer_iata;
+        if (!iata && rec.observer_id) {
+          const o = observerMap.get(rec.observer_id);
+          iata = o && o.iata;
+        }
+        if (iata) seen.add(String(iata).toUpperCase());
+      };
+      pushIata(p);
+      if (p._children && p._children.length) {
+        for (const c of p._children) pushIata(c);
+      }
     }
     if (!seen.size) return '';
     const list = Array.from(seen).sort();
