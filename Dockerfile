@@ -47,6 +47,15 @@ COPY cmd/decrypt/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags="-s -w" -o /corescope-decrypt .
 
+# Build SQLite-to-Postgres migration CLI
+WORKDIR /build/migrate-postgres
+COPY cmd/migrate-postgres/go.mod cmd/migrate-postgres/go.sum ./
+COPY internal/dbconfig/ ../../internal/dbconfig/
+RUN go mod download
+COPY cmd/migrate-postgres/ ./
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w" -o /corescope-migrate-postgres .
+
 # Runtime image
 FROM alpine:3.20
 
@@ -55,7 +64,7 @@ RUN apk add --no-cache mosquitto mosquitto-clients supervisor caddy wget
 WORKDIR /app
 
 # Go binaries
-COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /app/
+COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /corescope-migrate-postgres /app/
 
 # Frontend assets + config
 COPY public/ ./public/

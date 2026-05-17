@@ -111,6 +111,70 @@ docker compose up -d
 | `DISABLE_MOSQUITTO` | `false` | Set `true` to use an external MQTT broker |
 | `DISABLE_CADDY` | `false` | Set `true` to skip the built-in Caddy proxy |
 
+### Side-by-side dev on a live host
+
+The `docker-compose.dev.yml` file is for the live.meshcore.ca deployment model:
+one existing live Compose service owns host ports `80` and `443`, while a dev
+CoreScope container and a dev Postgres container run beside it. The dev web UI
+binds host port `8443` to the container's Caddy port `443`.
+
+Observed live layout:
+
+| Path | Purpose |
+|------|---------|
+| `/opt/corescope/docker-compose.yml` | live Compose file |
+| `/opt/corescope/data/corescope/config.json` | live config mounted at `/app/config.json` |
+| `/opt/corescope/data/corescope/data/meshcore.db` | live SQLite database |
+| `/opt/corescope/data/caddy/config/Caddyfile` | live Caddyfile |
+| `/opt/corescope/data/caddy/app` | live Caddy storage |
+
+Prepare a separate dev copy. Do not share the writable SQLite DB, Caddy storage,
+or Postgres directory between live and dev:
+
+```bash
+sudo mkdir -p \
+  /opt/corescope/data-dev/corescope/data \
+  /opt/corescope/data-dev/corescope \
+  /opt/corescope/data-dev/caddy/config \
+  /opt/corescope/data-dev/caddy/app \
+  /opt/corescope/data-dev/postgres
+
+sudo cp /opt/corescope/data/corescope/config.json /opt/corescope/data-dev/corescope/config.json
+sudo cp /opt/corescope/data/corescope/data/meshcore.db* /opt/corescope/data-dev/corescope/data/
+sudo cp /opt/corescope/data/caddy/config/Caddyfile /opt/corescope/data-dev/caddy/config/Caddyfile
+sudo rsync -a /opt/corescope/data/caddy/app/ /opt/corescope/data-dev/caddy/app/
+```
+
+When the live SQLite database is in WAL mode, copy `meshcore.db`,
+`meshcore.db-wal`, and `meshcore.db-shm` together. A stopped live container or a
+known clean backup is the most consistent source for a migration snapshot.
+
+The Caddy storage copy matters for HTTPS on `8443`: ACME issuance normally
+expects ports `80`/`443`, which the live container already owns. For a public
+browser-trusted dev URL on the same hostname, use copied/provided certificates
+instead of asking the dev container to issue fresh ones.
+
+Start dev from the fork checkout:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build postgres
+docker compose -f docker-compose.dev.yml run --rm --no-deps \
+  --entrypoint /app/corescope-migrate-postgres \
+  corescope-dev \
+  -sqlite /app/data/meshcore.db \
+  -postgres "postgres://corescope:corescope@postgres:5432/corescope_dev?sslmode=disable" \
+  -truncate
+docker compose -f docker-compose.dev.yml up -d --build corescope-dev
+```
+
+Verify dev without touching live:
+
+```bash
+curl -k https://live.meshcore.ca:8443/api/stats
+curl -k https://live.meshcore.ca:8443/api/perf/db
+docker compose -f docker-compose.dev.yml ps
+```
+
 ### manage.sh (legacy alternative)
 
 The `manage.sh` wrapper script provides a setup wizard and convenience commands. It uses Docker Compose internally. See [DEPLOY.md](../DEPLOY.md) for usage. New deployments should prefer bare `docker run`.
