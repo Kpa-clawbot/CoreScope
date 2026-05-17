@@ -1167,18 +1167,10 @@
 
   async function loadPackets() {
     try {
-      // Show a skeleton while the table body refreshes. On reloads/filter
-      // changes the table already exists, so seed #pktBody directly. On the
-      // first load the table is built only after the fetch resolves, so seed
-      // the page container (#pktLeft) with a loading state instead — this
-      // paints before the fetch resolves and renderLeft() replaces it.
+      // Show a skeleton while the table body refreshes (subsequent loads —
+      // on first load the table is built only after the fetch resolves).
       const _loadingBody = document.getElementById('pktBody');
-      if (_loadingBody) {
-        _loadingBody.innerHTML = PageState.skeleton({ rows: 8, cols: _getColCount(), table: true });
-      } else {
-        const _loadingLeft = document.getElementById('pktLeft');
-        if (_loadingLeft) _loadingLeft.innerHTML = PageState.loading('Loading packets…');
-      }
+      if (_loadingBody) _loadingBody.innerHTML = PageState.skeleton({ rows: 8, cols: _getColCount(), table: true });
       const selectedWindow = Number(document.getElementById('fTimeWindow')?.value);
       const windowMin = Number.isFinite(selectedWindow) ? selectedWindow : savedTimeWindowMin;
       const params = buildPacketsParams({
@@ -1274,7 +1266,7 @@
     } catch (e) {
       console.error('Failed to load packets:', e);
       const tbody = document.getElementById('pktBody');
-      if (tbody) tbody.innerHTML = '<tr><td colspan="' + _getColCount() + '" class="text-center" style="padding:24px;color:var(--error,#ef4444)"><div role="alert" aria-live="polite">Failed to load packets. Please try again.</div></td></tr>';
+      if (tbody) tbody.innerHTML = PageState.row(_getColCount(), PageState.errorText('Failed to load packets. Please try again.'));
     } finally {
       // Always signal data-loaded — even on error — so E2E tests can proceed.
       var pktContainer = document.getElementById('pktLeft') || document.getElementById('pktBody');
@@ -1383,6 +1375,11 @@
         <tbody id="pktBody"></tbody>
       </table></div>
     `;
+
+    // Seed the freshly-built table body with a loading skeleton; renderTableRows()
+    // (called below) replaces it with real rows once data is ready.
+    var _pktBodySkel = document.getElementById('pktBody');
+    if (_pktBodySkel) _pktBodySkel.innerHTML = PageState.skeleton({ rows: 8, cols: _getColCount(), table: true });
 
     // Init shared RegionFilter component
     RegionFilter.init(document.getElementById('packetsRegionFilter'), { dropdown: true });
@@ -2521,7 +2518,9 @@
       _lastVisibleEnd = -1;
       detachVScrollListener();
       const colCount = _getColCount();
-      tbody.innerHTML = '<tr><td colspan="' + colCount + '" class="text-center text-muted" style="padding:24px">' + (filters.myNodes ? 'No packets from your claimed/favorited nodes' : 'No packets found') + '</td></tr>';
+      tbody.innerHTML = PageState.row(colCount, PageState.empty({
+        title: filters.myNodes ? 'No packets from your claimed/favorited nodes' : 'No packets found'
+      }));
       // Restore scroll position after DOM rebuild (#431)
       if (scrollContainer) scrollContainer.scrollTop = savedScrollTop;
       return;
@@ -2627,7 +2626,7 @@
           renderTableRows();
         }
       });
-      panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+      panel.innerHTML = PageState.loading('Loading…');
     } else if (isMobileNow) {
       // Use mobile bottom sheet
       let sheet = document.getElementById('mobileDetailSheet');
@@ -2645,14 +2644,14 @@
         });
       }
       panel = sheet.querySelector('.mobile-sheet-content');
-      panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+      panel.innerHTML = PageState.loading('Loading…');
       sheet.classList.add('open');
     } else {
       panel = document.getElementById('pktRight');
       panel.classList.remove('empty');
       var layout = panel.closest('.split-layout');
       if (layout) layout.classList.remove('detail-collapsed');
-      panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML + '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+      panel.innerHTML = '<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML + PageState.loading('Loading…');
       initPanelResize();
     }
 
@@ -2671,7 +2670,7 @@
       await renderDetail(content, data, selectedObservationId);
       if (!isMobileNow && !useSlideOver) initPanelResize();
     } catch (e) {
-      panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
+      panel.innerHTML = PageState.errorText('Error: ' + e.message);
     }
   }
 
@@ -3460,11 +3459,11 @@
   registerPage('packet-detail', {
     init: async (app, routeParam) => {
       const param = routeParam;
-      app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:20px"><div class="text-center text-muted" style="padding:40px">Loading packet…</div></div>`;
+      app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:20px">${PageState.loading('Loading packet…')}</div>`;
       try {
         await loadObservers();
         const data = await api(`/packets/${param}`);
-        if (!data?.packet) { app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:40px;text-align:center"><h2>Packet not found</h2><p>Packet ${param} doesn't exist.</p><a href="#/packets">← Back to packets</a></div>`; return; }
+        if (!data?.packet) { app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:40px;text-align:center">${PageState.empty({ title: 'Packet not found', hint: `Packet ${param} doesn't exist.` })}<a href="#/packets">← Back to packets</a></div>`; return; }
         const hops = [];
         try { hops.push(...getParsedPath(data.packet)); } catch {}
         const newHops = hops.filter(h => !(h in hopNameCache));
@@ -3478,7 +3477,7 @@
         app.innerHTML = '';
         app.appendChild(container);
       } catch (e) {
-        app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:40px;text-align:center"><h2>Error</h2><p>${e.message}</p><a href="#/packets">← Back to packets</a></div>`;
+        app.innerHTML = `<div style="max-width:800px;margin:0 auto;padding:40px;text-align:center">${PageState.errorText(e.message)}<a href="#/packets">← Back to packets</a></div>`;
       }
     },
     destroy: () => {}
