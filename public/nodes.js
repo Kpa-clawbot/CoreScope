@@ -266,7 +266,7 @@
 
     // Always set spinner as initial DOM state (synchronous) so tests can observe it
     var spinnerEl = document.getElementById(containerId);
-    if (spinnerEl) spinnerEl.innerHTML = '<div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div>';
+    if (spinnerEl) spinnerEl.innerHTML = PageState.loading('Loading neighbors…');
 
     // Check cache
     var cached = _neighborCache[pubkey];
@@ -280,7 +280,7 @@
       renderNeighborData(data, containerId, limit, headerSelector, viewAllPubkey);
     }).catch(function() {
       var el = document.getElementById(containerId);
-      if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">Could not load neighbor data</div>';
+      if (el) el.innerHTML = PageState.errorText('Could not load neighbor data');
     });
   }
 
@@ -288,7 +288,7 @@
     var el = document.getElementById(containerId);
     if (!el) return;
     if (!data || !data.neighbors || !data.neighbors.length) {
-      el.innerHTML = '<div class="text-muted" style="padding:8px">No neighbor data available yet. Neighbor relationships are built from observed packet paths over time.</div>';
+      el.innerHTML = PageState.empty({ title: 'No neighbor data available yet', hint: 'Neighbor relationships are built from observed packet paths over time.' });
       if (headerSelector) {
         var h = document.querySelector(headerSelector);
         if (h) h.textContent = 'Neighbors (0)';
@@ -361,7 +361,7 @@
           <span class="node-full-title">Loading…</span>
         </div>
         <div class="node-full-body" id="nodeFullBody">
-          <div class="text-center text-muted" style="padding:40px">Loading…</div>
+          ${PageState.loading('Loading…')}
         </div>
       </div>`;
       document.getElementById('nodeBackBtn').addEventListener('click', () => { location.hash = '#/nodes'; });
@@ -619,19 +619,19 @@
 
         <div class="node-full-card" id="node-neighbors">
           <h4 id="fullNeighborsHeader">Neighbors</h4>
-          <div id="fullNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
+          <div id="fullNeighborsContent">${PageState.loading('Loading neighbors…')}</div>
         </div>
 
         <div class="node-full-card" id="node-affinity-debug" style="display:none">
           <h4 style="cursor:pointer" onclick="this.parentElement.querySelector('.affinity-debug-body').style.display=this.parentElement.querySelector('.affinity-debug-body').style.display==='none'?'block':'none'; this.querySelector('.toggle-icon').textContent=this.parentElement.querySelector('.affinity-debug-body').style.display==='none'?'▶':'▼'"><span class="toggle-icon">▶</span> 🔍 Affinity Debug</h4>
           <div class="affinity-debug-body" style="display:none">
-            <div id="affinityDebugContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading debug data…</div></div>
+            <div id="affinityDebugContent">${PageState.loading('Loading debug data…')}</div>
           </div>
         </div>
 
         <div class="node-full-card" id="fullPathsSection">
           <h4>Paths Through This Node</h4>
-          <div id="fullPathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
+          <div id="fullPathsContent">${PageState.loading('Loading paths…')}</div>
         </div>
 
         <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>`;
@@ -816,7 +816,7 @@
               });
               html += '</tbody></table>';
             } else {
-              html += '<div class="text-muted" style="padding:8px">No affinity edges for this node</div>';
+              html += PageState.empty({ title: 'No affinity edges for this node' });
             }
 
             // Resolutions
@@ -874,7 +874,7 @@
           })
           .catch(function (err) {
             var el = document.getElementById('affinityDebugContent');
-            if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">Failed to load debug data: ' + escapeHtml(err.message) + '</div>';
+            if (el) el.innerHTML = PageState.errorText('Failed to load debug data: ' + err.message);
           });
       })();
 
@@ -883,7 +883,7 @@
         const el = document.getElementById('fullPathsContent');
         if (!el) return;
         if (!pathData || !pathData.paths || !pathData.paths.length) {
-          el.innerHTML = '<div class="text-muted" style="padding:8px">No paths observed through this node</div>';
+          el.innerHTML = PageState.empty({ title: 'No paths observed through this node' });
           return;
         }
         document.querySelector('#fullPathsSection h4').textContent = `Paths Through This Node (${pathData.totalPaths} unique, ${pathData.totalTransmissions} transmissions)`;
@@ -918,7 +918,7 @@
         }
       }).catch(() => {
         const el = document.getElementById('fullPathsContent');
-        if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">Failed to load paths</div>';
+        if (el) el.innerHTML = PageState.errorText('Failed to load paths');
       });
 
     } catch (e) {
@@ -952,7 +952,7 @@
       if (retryBtn) {
         retryBtn.addEventListener('click', function () {
           if (titleEl) titleEl.textContent = 'Loading…';
-          body.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+          body.innerHTML = PageState.loading('Loading…');
           loadFullNode(pubkey);
         });
       }
@@ -1154,7 +1154,7 @@
     } catch (e) {
       console.error('Failed to load nodes:', e);
       const tbody = document.getElementById('nodesBody');
-      if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="text-center" style="padding:24px;color:var(--error,#ef4444)"><div role="alert" aria-live="polite">Failed to load nodes. Please try again.</div></td></tr>';
+      if (tbody) tbody.innerHTML = PageState.row(5, PageState.errorText('Failed to load nodes. Please try again.'));
     } finally {
       // Always signal data-loaded — even on error — so E2E tests can proceed.
       var nodesContainer = document.getElementById('nodesLeft') || document.getElementById('nodesBody');
@@ -1308,7 +1308,7 @@
     if (!tbody) return;
 
     if (!nodes.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted" style="padding:24px">No nodes found</td></tr>';
+      tbody.innerHTML = PageState.row(5, PageState.empty({ title: 'No nodes found' }));
       return;
     }
 
@@ -1392,7 +1392,7 @@
           renderRows();
         }
       });
-      so.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+      so.innerHTML = PageState.loading('Loading…');
       try {
         const data = await fetchNodeDetail(pubkey);
         if (selectedKey !== pubkey) return;
@@ -1411,7 +1411,7 @@
           '</dl>' +
           '<p style="margin-top:14px"><a class="btn-primary" href="#/nodes/' + encodeURIComponent(pubkey) + '">Open full detail →</a></p>';
       } catch (e) {
-        so.innerHTML = '<div class="text-muted">Error: ' + (e && e.message ? e.message : String(e)) + '</div>';
+        so.innerHTML = PageState.errorText(e && e.message ? e.message : String(e));
       }
       return;
     }
@@ -1420,13 +1420,13 @@
     renderRows();
     const panel = document.getElementById('nodesRight');
     panel.classList.remove('empty');
-    panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+    panel.innerHTML = PageState.loading('Loading…');
 
     try {
       const data = await fetchNodeDetail(pubkey);
       renderDetail(panel, data);
     } catch (e) {
-      panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
+      panel.innerHTML = PageState.errorText(e.message);
     }
   }
 
@@ -1529,12 +1529,12 @@
 
         <div class="node-detail-section" id="panelNeighborsSection">
           <h4 id="panelNeighborsHeader">Neighbors</h4>
-          <div id="panelNeighborsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading neighbors…</div></div>
+          <div id="panelNeighborsContent">${PageState.loading('Loading neighbors…')}</div>
         </div>
 
         <div class="node-detail-section" id="pathsSection">
           <h4>Paths Through This Node</h4>
-          <div id="pathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
+          <div id="pathsContent">${PageState.loading('Loading paths…')}</div>
         </div>
 
         <div class="node-detail-section skew-detail-section" id="node-clock-skew" style="display:none"></div>
@@ -1684,7 +1684,7 @@
       const el = document.getElementById('pathsContent');
       if (!el) return;
       if (!pathData || !pathData.paths || !pathData.paths.length) {
-        el.innerHTML = '<div class="text-muted" style="padding:8px">No paths observed through this node</div>';
+        el.innerHTML = PageState.empty({ title: 'No paths observed through this node' });
         document.querySelector('#pathsSection h4').textContent = 'Paths Through This Node';
         return;
       }
@@ -1716,7 +1716,7 @@
       }
     }).catch(() => {
       const el = document.getElementById('pathsContent');
-      if (el) el.innerHTML = '<div class="text-muted" style="padding:8px">Failed to load paths</div>';
+      if (el) el.innerHTML = PageState.errorText('Failed to load paths');
     });
   }
 
