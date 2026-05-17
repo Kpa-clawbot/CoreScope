@@ -109,7 +109,7 @@
     container.innerHTML = `
       <div id="map-wrap" style="position:relative;width:100%;height:100%;display:flex;">
         <div id="leaflet-map" style="flex:1 1 0%;height:100%;"></div>
-        <div id="mapLoadError" style="display:none;position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;background:var(--surface-1);border:1px solid var(--border);border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,.25);"></div>
+        <div id="mapLoadError" style="display:none;position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;"></div>
         <div class="map-side-pane" id="mapSidePane">
           <div class="pane-toggle" id="mapPaneToggle" title="Path Inspector">◀</div>
           <div class="pane-content">
@@ -636,7 +636,7 @@
       // without re-running init() (which would re-create the Leaflet map).
       if (loadErrEl) {
         loadErrEl.style.display = '';
-        PageState.error(loadErrEl, e, loadNodes, { compact: true });
+        PageState.error(loadErrEl, e, loadNodes);
       }
     } finally {
       // Always signal data-loaded — even on error — so E2E tests can proceed.
@@ -1142,9 +1142,9 @@
     var prefixes = raw.trim().split(/[\s,]+/).filter(function (s) { return s.length > 0; }).map(function (s) { return s.toLowerCase(); });
     var err = (window.PathInspector && window.PathInspector.validatePrefixes) ? window.PathInspector.validatePrefixes(prefixes) : null;
     if (!err && prefixes.length === 0) err = 'Enter at least one prefix.';
-    if (err) { errDiv.innerHTML = PageState.errorText(err, { compact: true }); return; }
+    if (err) { errDiv.innerHTML = PageState.errorText(err); return; }
 
-    resultsDiv.innerHTML = PageState.loading('Loading paths…', { compact: true });
+    resultsDiv.innerHTML = PageState.loading('Loading paths…');
     fetch('/api/paths/inspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1156,12 +1156,12 @@
         return r.json();
       })
       .then(function (data) { renderMapPiResults(data, resultsDiv); })
-      .catch(function (e) { resultsDiv.innerHTML = ''; errDiv.innerHTML = PageState.errorText(e.message, { compact: true }); });
+      .catch(function (e) { resultsDiv.innerHTML = ''; errDiv.innerHTML = PageState.errorText(e.message); });
   }
 
   function renderMapPiResults(data, div) {
     if (!data.candidates || data.candidates.length === 0) {
-      div.innerHTML = PageState.empty({ title: 'No candidates found', compact: true });
+      div.innerHTML = PageState.empty({ title: 'No candidates found' });
       return;
     }
     var html = '<table class="path-inspector-table" style="font-size:11px;width:100%;"><thead><tr><th>#</th><th>Score</th><th>Path</th><th></th></tr></thead><tbody>';
