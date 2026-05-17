@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <link rel="icon" href="favicon.ico" type="image/x-icon">
@@ -64,14 +64,14 @@
         <a href="#/home" class="nav-link" data-route="home" data-priority="high">Home</a>
         <a href="#/packets" class="nav-link" data-route="packets" data-priority="high">Packets</a>
         <a href="#/map" class="nav-link" data-route="map" data-priority="high">Map</a>
-        <a href="#/live" class="nav-link" data-route="live" data-priority="high">🔴 Live</a>
+        <a href="#/live" class="nav-link nav-link-with-icon" data-route="live" data-priority="high"><span class="nav-link-icon" data-ui-icon="live"></span><span>Live</span></a>
         <a href="#/channels" class="nav-link" data-route="channels">Channels</a>
         <a href="#/nodes" class="nav-link" data-route="nodes" data-priority="high">Nodes</a>
         <a href="#/tools" class="nav-link" data-route="tools">Tools</a>
         <a href="#/observers" class="nav-link" data-route="observers">Observers</a>
         <a href="#/analytics" class="nav-link" data-route="analytics">Analytics</a>
-        <a href="#/perf" class="nav-link" data-route="perf">⚡ Perf</a>
-        <a href="#/audio-lab" class="nav-link" data-route="audio-lab">🎵 Lab</a>
+        <a href="#/perf" class="nav-link nav-link-with-icon" data-route="perf"><span class="nav-link-icon" data-ui-icon="perf"></span><span>Perf</span></a>
+        <a href="#/audio-lab" class="nav-link nav-link-with-icon" data-route="audio-lab"><span class="nav-link-icon" data-ui-icon="lab"></span><span>Lab</span></a>
       </div>
       <div class="nav-more-wrap">
         <button class="nav-btn nav-more-btn" id="navMoreBtn" aria-haspopup="true" aria-expanded="false" aria-controls="navMoreMenu" title="More pages">More ▾</button>
@@ -81,13 +81,13 @@
     <div class="nav-right">
       <div class="nav-stats" id="navStats" title="Live stats"></div>
       <div class="nav-fav-wrap">
-        <button class="nav-btn" id="favToggle" title="Favorites">⭐</button>
+      <button class="nav-btn" id="favToggle" title="Favorites" aria-label="Favorites"><span data-ui-icon="star"></span></button>
         <div class="nav-fav-dropdown" id="favDropdown"></div>
       </div>
-      <button class="nav-btn" id="searchToggle" title="Search (Ctrl+K)">🔍</button>
-      <button class="nav-btn" id="customizeToggle" title="Customize theme & branding">🎨</button>
-      <button class="nav-btn" id="darkModeToggle" title="Toggle dark mode">☀️</button>
-      <button class="nav-btn hamburger" id="hamburger" title="Menu" aria-label="Toggle navigation menu">☰</button>
+      <button class="nav-btn" id="searchToggle" title="Search (Ctrl+K)" aria-label="Search"><span data-ui-icon="search"></span></button>
+      <button class="nav-btn" id="customizeToggle" title="Customize theme & branding" aria-label="Customize theme and branding"><span data-ui-icon="palette"></span></button>
+      <button class="nav-btn" id="darkModeToggle" title="Toggle dark mode" aria-label="Toggle dark mode"><span data-ui-icon="sun"></span></button>
+      <button class="nav-btn hamburger" id="hamburger" title="Menu" aria-label="Toggle navigation menu"><span data-ui-icon="menu"></span></button>
     </div>
   </nav>
 
@@ -103,6 +103,7 @@
 
   <script src="vendor/qrcode.js"></script>
   <script src="roles.js?v=__BUST__"></script>
+  <script src="ui-icons.js?v=__BUST__"></script>
   <script src="customize-v2.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script src="region-filter.js?v=__BUST__"></script>
   <script src="hop-resolver.js?v=__BUST__"></script>

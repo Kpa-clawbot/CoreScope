@@ -1230,3 +1230,106 @@
     transition: none;
   }
 }
+
+/* === 0.5 Alpha MeshCore Canada live polish ========================= */
+.live-header {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+  box-shadow: var(--mesh-shadow-sm, 0 4px 8px rgba(0, 0, 0, 0.18));
+}
+.live-title,
+.legend-title,
+.feed-type,
+.live-filter-count,
+.vcr-lcd-row,
+.vcr-lcd-mode,
+.vcr-lcd-pkts {
+  letter-spacing: 0;
+}
+.live-title {
+  font-weight: 700;
+  text-transform: none;
+}
+.live-stat-pill {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+}
+.live-stat-pill.suppressed-pill span {
+  color: var(--mesh-red-400, var(--status-red));
+}
+.live-toggles {
+  gap: 8px;
+}
+.live-toggles label {
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+}
+.live-toggles label:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.live-header-toggle,
+.live-controls-toggle,
+.vcr-btn {
+  border-radius: 8px;
+}
+.live-header-toggle .ui-icon,
+.live-controls-toggle .ui-icon {
+  width: 18px;
+  height: 18px;
+}
+.live-feed {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+}
+.live-feed-item {
+  border-radius: 6px;
+}
+.live-suspicious-debug-path {
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--status-amber, #f59e0b) 70%, transparent));
+}
+
+@media (max-width: 380px) {
+  .vcr-lcd-mode,
+  .vcr-lcd-pkts {
+    letter-spacing: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .live-controls:not(.is-expanded) {
+    flex: 0 0 auto;
+    width: auto;
+  }
+  .live-controls:not(.is-expanded) .live-controls-body {
+    display: none;
+  }
+  .live-controls.is-expanded {
+    width: 100%;
+    flex: 1 1 100%;
+    align-items: flex-start;
+  }
+  .live-controls.is-expanded .live-controls-body {
+    flex: 1 1 calc(100% - 44px);
+    max-width: calc(100% - 44px);
+  }
+  .live-controls.is-expanded .live-toggles {
+    width: auto;
+    flex-wrap: wrap;
+    overflow-x: visible;
+    max-height: 40vh;
+  }
+  .live-controls.is-expanded .live-node-filter-wrap {
+    flex: 1 1 180px;
+    min-width: min(180px, 100%);
+  }
+  .live-controls.is-expanded .live-node-filter-input {
+    width: 100%;
+  }
+}

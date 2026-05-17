@@ -8,6 +8,7 @@
   // Status color helpers (read from CSS variables for theme support)
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function statusGreen() { return cssVar('--status-green') || '#22c55e'; }
+  function liveIcon(name) { return window.UIIcon ? UIIcon.svg(name) : ''; }
 
   let map, ws, nodesLayer, pathsLayer, animLayer, heatLayer, geoFilterLayer;
   let nodeMarkers = {};
@@ -942,11 +943,11 @@
             <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
             <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
             <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
-            <div class="live-stat-pill" id="liveSuppressedPill" title="Implausible RF paths hidden"><span id="liveSuppressedCount">0</span> suppressed</div>
+            <div class="live-stat-pill suppressed-pill" id="liveSuppressedPill" title="RF paths over 500 km are suppressed from map lines and animations; feed entries remain visible."><span id="liveSuppressedCount">0</span> RF suppressed</div>
           </div>
           <button class="live-header-toggle" data-live-header-toggle id="liveHeaderToggle"
                   aria-expanded="false" aria-controls="liveHeaderBody"
-                  aria-label="Show live stats">📊</button>
+                  aria-label="Show live stats">${liveIcon('analytics')}</button>
           <div class="live-header-body" data-live-header-body id="liveHeaderBody">
             <div class="live-title">
               MESH LIVE
@@ -963,8 +964,8 @@
             <label><input type="checkbox" id="liveGhostToggle" checked aria-describedby="ghostDesc"> Ghosts</label>
             <span id="ghostDesc" class="sr-only">Show interpolated ghost markers for unknown hops</span>
             <label><input type="checkbox" id="liveRealisticToggle" aria-describedby="realisticDesc"> Realistic</label>
-            <label><input type="checkbox" id="liveSuspiciousToggle" aria-describedby="suspiciousDesc"> Suspicious</label>
-            <span id="suspiciousDesc" class="sr-only">Show implausible links instead of suppressing them</span>
+            <label><input type="checkbox" id="liveSuspiciousToggle" aria-describedby="suspiciousDesc"> Show suppressed paths</label>
+            <span id="suspiciousDesc" class="sr-only">Render implausible RF links as warning dashed debug paths while keeping them out of normal map animations</span>
             <span id="realisticDesc" class="sr-only">Buffer packets by hash and animate all paths simultaneously</span>
             <label><input type="checkbox" id="liveColorHashToggle" aria-describedby="colorHashDesc"> Color by hash</label>
             <span id="colorHashDesc" class="sr-only">Color flying-packet dots and contrails by packet hash for propagation tracing</span>
@@ -972,9 +973,9 @@
             <span id="matrixDesc" class="sr-only">Animate packet hex bytes flowing along paths like the Matrix</span>
             <label><input type="checkbox" id="liveMatrixRainToggle" aria-describedby="rainDesc"> Rain</label>
             <span id="rainDesc" class="sr-only">Matrix rain overlay — packets fall as hex columns</span>
-            <label><input type="checkbox" id="liveAudioToggle" aria-describedby="audioDesc"> 🎵 Audio</label>
+            <label><input type="checkbox" id="liveAudioToggle" aria-describedby="audioDesc"> Audio</label>
             <span id="audioDesc" class="sr-only">Sonify packets — turn raw bytes into generative music</span>
-            <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ Favorites</label>
+            <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> Favorites</label>
             <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
             <div class="live-node-filter-wrap" style="position:relative">
               <input type="text" id="liveNodeFilterInput" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input" role="combobox" aria-expanded="false" aria-owns="liveNodeFilterDropdown" aria-autocomplete="list" aria-activedescendant="">
@@ -993,7 +994,7 @@
           </div>
           <button class="live-controls-toggle" data-live-controls-toggle id="liveControlsToggle"
                   aria-expanded="false" aria-controls="liveControlsBody"
-                  aria-label="Show live controls">⚙</button>
+                  aria-label="Show live controls">${liveIcon('settings')}</button>
         </div>
         </div><!-- /#liveHeader -->
         <div class="live-overlay live-feed" id="liveFeed">
@@ -2389,6 +2390,7 @@
   window._liveResolveHopPositions = resolveHopPositions;
   window._livePathPlausibilityReport = pathPlausibilityReport;
   window._liveShouldDrawRfPath = shouldDrawRfPath;
+  window._livePathRenderMode = pathRenderMode;
   window._liveGetSuppressedPathCount = function() { return suppressedPathCount; };
   window._liveVcrSpeedCycle = vcrSpeedCycle;
   window._liveVcrPause = vcrPause;
@@ -2578,8 +2580,12 @@
       var hopPositions = resolveHopPositions(hops, qp, window.getResolvedPath ? getResolvedPath(qpkt) : null, qpkt);
       if (hopPositions.length >= 2) {
         var pathReport = pathPlausibilityReport(hopPositions);
-        if (pathReport.plausible || showSuspiciousLinks) {
-          allPaths.push({ hopPositions: hopPositions, raw: qpkt.raw || first.raw });
+        var pathMode = pathRenderMode(pathReport, showSuspiciousLinks);
+        if (pathMode === 'normal') {
+          allPaths.push({ hopPositions: hopPositions, raw: qpkt.raw || first.raw, mode: pathMode });
+        } else if (pathMode === 'debug-suppressed') {
+          traceSuppressedPath(pathReport, qpkt.hash || first.hash);
+          allPaths.push({ hopPositions: hopPositions, raw: qpkt.raw || first.raw, mode: pathMode, report: pathReport, hash: qpkt.hash || first.hash });
         } else {
           traceSuppressedPath(pathReport, qpkt.hash || first.hash);
         }
@@ -2594,8 +2600,12 @@
       var fallbackPositions = resolveHopPositions(fallbackHops, payload, window.getResolvedPath ? getResolvedPath(first) : null, first);
       if (fallbackPositions.length >= 2) {
         var fallbackReport = pathPlausibilityReport(fallbackPositions);
-        if (fallbackReport.plausible || showSuspiciousLinks) {
-          allPaths.push({ hopPositions: fallbackPositions, raw: first.raw });
+        var fallbackMode = pathRenderMode(fallbackReport, showSuspiciousLinks);
+        if (fallbackMode === 'normal') {
+          allPaths.push({ hopPositions: fallbackPositions, raw: first.raw, mode: fallbackMode });
+        } else if (fallbackMode === 'debug-suppressed') {
+          traceSuppressedPath(fallbackReport, first.hash);
+          allPaths.push({ hopPositions: fallbackPositions, raw: first.raw, mode: fallbackMode, report: fallbackReport, hash: first.hash });
         } else {
           traceSuppressedPath(fallbackReport, first.hash);
         }
@@ -2608,6 +2618,10 @@
     // First path gets audio sync hook, rest are visual-only
     var firstPathDone = false;
     for (var ai = 0; ai < allPaths.length; ai++) {
+      if (allPaths[ai].mode === 'debug-suppressed') {
+        drawSuspiciousPath(allPaths[ai].hopPositions, allPaths[ai].report, allPaths[ai].hash);
+        continue;
+      }
       var onHop = null;
       if (!firstPathDone && obsCount === 1 && window.MeshAudio) {
         // For single observation, try sync voice on the first path
@@ -2723,6 +2737,11 @@
     return pathPlausibilityReport(hopPositions).plausible;
   }
 
+  function pathRenderMode(report, showDebug) {
+    if (!report || report.plausible) return 'normal';
+    return showDebug ? 'debug-suppressed' : 'suppressed';
+  }
+
   function traceSuppressedPath(report, hash) {
     if (!report || report.plausible) return;
     suppressedPathCount += 1;
@@ -2737,6 +2756,29 @@
         badSegments: report.badSegments || []
       });
     } catch {}
+  }
+
+  function drawSuspiciousPath(hopPositions, report, hash) {
+    var DEBUG_TIMEOUT_MS = 10000;
+    if (!pathsLayer || !hopPositions || hopPositions.length < 2) return;
+    var color = cssVar('--status-amber') || '#f59e0b';
+    var label = 'Suppressed RF debug path';
+    if (report && report.maxSegmentKm) label += ' - max ' + Math.round(report.maxSegmentKm) + ' km';
+    if (hash) label += ' - ' + String(hash).slice(0, 10);
+    for (var i = 0; i < hopPositions.length - 1; i++) {
+      var from = hopPositions[i].pos;
+      var to = hopPositions[i + 1].pos;
+      if (!from || !to) continue;
+      var line = L.polyline([from, to], {
+        color: color,
+        weight: 3,
+        opacity: 0.72,
+        dashArray: '3, 8',
+        className: 'live-suspicious-debug-path'
+      }).addTo(pathsLayer);
+      if (line.bindTooltip) line.bindTooltip(label, { sticky: true });
+      setTimeout((function(l) { return function() { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), DEBUG_TIMEOUT_MS);
+    }
   }
 
   function nodeFitsObserverRegion(node, observerId) {

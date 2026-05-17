@@ -56,12 +56,12 @@
   // Long-tail routes mirror PR #1174 / bottom-nav.js MORE_ROUTES exactly.
   // ⚠️ Keep in sync with public/bottom-nav.js MORE_ROUTES.
   var ROUTES = [
-    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     icon: '🖥️' },
-    { route: 'tools',     hash: '#/tools',     label: 'Tools',     icon: '🛠️' },
-    { route: 'observers', hash: '#/observers', label: 'Observers', icon: '👁️' },
-    { route: 'analytics', hash: '#/analytics', label: 'Analytics', icon: '📊' },
-    { route: 'perf',      hash: '#/perf',      label: 'Perf',      icon: '⚡' },
-    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', icon: '🎵' },
+    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     icon: 'nodes' },
+    { route: 'tools',     hash: '#/tools',     label: 'Tools',     icon: 'tools' },
+    { route: 'observers', hash: '#/observers', label: 'Observers', icon: 'observers' },
+    { route: 'analytics', hash: '#/analytics', label: 'Analytics', icon: 'analytics' },
+    { route: 'perf',      hash: '#/perf',      label: 'Perf',      icon: 'perf' },
+    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', icon: 'lab' },
   ];
 
   var EDGE_PX = 44;          // pointerdown must start within left N px (drawer trigger zone)
@@ -130,7 +130,7 @@
       var ic = document.createElement('span');
       ic.className = 'nav-drawer-icon';
       ic.setAttribute('aria-hidden', 'true');
-      ic.textContent = r.icon;
+      ic.innerHTML = window.UIIcon ? UIIcon.svg(r.icon) : '';
 
       var lb = document.createElement('span');
       lb.className = 'nav-drawer-label';

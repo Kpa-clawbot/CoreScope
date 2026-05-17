@@ -24,6 +24,11 @@ long as the dev instance uses its own ports and database:
 - live SQLite data: read-only backup source only
 - dev data: separate Postgres container and separate Docker volumes
 
+For 0.5 Alpha verification, build from the candidate branch, run the dev
+Compose project on `8443`, migrate from a copied SQLite backup into the dev
+Postgres container, then point only the dev config at the MQTT broker. Keep
+credentials in the mounted dev config or environment file; do not commit them.
+
 Do not bind both containers to the same SQLite file. For a live-shaped test,
 copy or back up the live SQLite database, restore it into dev Postgres with
 `/app/corescope-migrate-postgres`, then start the dev container with the live
