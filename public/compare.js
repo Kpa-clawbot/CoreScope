@@ -105,7 +105,7 @@ if (typeof window !== 'undefined') {
         '<a href="#/observers" class="btn-icon" title="Back to Observers" aria-label="Back">\u2190</a>' +
         '<h2 style="margin:0">\uD83D\uDD0D Observer Comparison</h2>' +
       '</div>' +
-      '<div id="compareControls" class="compare-controls"><div class="text-center text-muted" style="padding:20px">Loading observers\u2026</div></div>' +
+      '<div id="compareControls" class="compare-controls">' + PageState.loading('Loading observers\u2026') + '</div>' +
       '<div id="compareContent"></div>' +
     '</div>';
 
@@ -140,8 +140,7 @@ if (typeof window !== 'undefined') {
       renderControls();
       if (selA && selB) runComparison();
     } catch (e) {
-      document.getElementById('compareControls').innerHTML =
-        '<div class="text-muted" style="padding:20px">Error loading observers: ' + escapeHtml(e.message) + '</div>';
+      PageState.error(document.getElementById('compareControls'), e, loadObservers);
     }
   }
 
@@ -248,7 +247,7 @@ if (typeof window !== 'undefined') {
       currentView = 'summary';
       renderComparison();
     } catch (e) {
-      content.innerHTML = '<div class="text-muted" style="padding:40px">Error: ' + escapeHtml(e.message) + '</div>';
+      PageState.error(content, e, runComparison);
     }
   }
 
