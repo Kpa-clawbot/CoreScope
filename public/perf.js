@@ -243,9 +243,12 @@
 
   // --- Server-side history preload ---
   // Fetches the server-side ring buffer on page load and merges it into the local
-  // buffers.  Deduplication is by timestamp: only samples newer than the most recent
-  // entry already in each buffer are appended, so a simple page refresh never adds
-  // duplicates.
+  // buffers. Deduplication is by timestamp (Set lookup), so:
+  //   - A simple page refresh adds only the few samples collected since last load.
+  //   - A fresh load (empty sessionStorage) or a load after a long absence fills
+  //     the full 48 h of server history, including samples OLDER than what was in
+  //     sessionStorage — the previous "append-only" logic silently dropped those
+  //     and left 6 h / 12 h views with far less data than expected.
   async function preloadFromServer() {
     try {
       const res = await fetch('/api/perf/history');
@@ -254,24 +257,35 @@
       const samples = data.samples;
       if (!samples || samples.length === 0) return;
 
-      const lastLongTs  = longHistory.length > 0 ? longHistory[longHistory.length - 1].ts : 0;
-      const lastShortTs = history.length     > 0 ? history[history.length - 1].ts         : 0;
-      const oneHourAgo  = Date.now() - 3600000;
-
-      for (const s of samples) {
-        // Long history — everything we don't already have
-        if (s.ts > lastLongTs) {
+      // Long history — merge all server samples not already present (by ts).
+      // Server sends oldest-first; after dedup we re-sort so that samples
+      // older than the current sessionStorage tail are correctly prepended.
+      const existingTs = new Set(longHistory.map(function(s) { return s.ts; }));
+      var longAdded = false;
+      for (var si = 0; si < samples.length; si++) {
+        var s = samples[si];
+        if (!existingTs.has(s.ts)) {
           longHistory.push(s);
-          if (longHistory.length > MAX_LONG_SAMPLES) longHistory.shift();
+          longAdded = true;
         }
-        // Short history — last-hour samples (1-min resolution is sparse but useful
-        // for the 1h graph on a fresh load before 5 s ticks accumulate)
-        if (s.ts > oneHourAgo && s.ts > lastShortTs) {
-          history.push(s);
+      }
+      if (longAdded) {
+        longHistory.sort(function(a, b) { return a.ts - b.ts; });
+        while (longHistory.length > MAX_LONG_SAMPLES) longHistory.shift();
+      }
+      if (longHistory.length > 0) lastLongSampleTs = longHistory[longHistory.length - 1].ts;
+
+      // Short history — append server samples from the last hour that are
+      // newer than the most recent local entry (sparse 1-min fill on fresh load).
+      const lastShortTs = history.length > 0 ? history[history.length - 1].ts : 0;
+      const oneHourAgo  = Date.now() - 3600000;
+      for (var si2 = 0; si2 < samples.length; si2++) {
+        var s2 = samples[si2];
+        if (s2.ts > oneHourAgo && s2.ts > lastShortTs) {
+          history.push(s2);
           if (history.length > MAX_SAMPLES) history.shift();
         }
       }
-      if (longHistory.length > 0) lastLongSampleTs = longHistory[longHistory.length - 1].ts;
 
       // Derive write-source rates from adjacent samples that carry raw cumulative
       // counters (writeTxCum etc.), mirroring the live writeSourceRates() logic.
