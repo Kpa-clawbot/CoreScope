@@ -6,7 +6,9 @@ services:
         APP_VERSION: ${APP_VERSION:-unknown}
         GIT_COMMIT: ${GIT_COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-unknown}
-    image: corescope:latest
+    # GHCR image: `docker compose pull` fetches the pre-built multi-arch
+    # release; `docker compose build` rebuilds and tags it locally.
+    image: ghcr.io/cornmeister/corescope:latest
     container_name: corescope-prod
     restart: unless-stopped
     stop_grace_period: 30s

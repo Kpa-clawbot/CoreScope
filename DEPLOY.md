@@ -11,7 +11,7 @@ docker run -d --name corescope \
   -p 80:80 \
   -v corescope-data:/app/data \
   -e DISABLE_CADDY=true \
-  ghcr.io/kpa-clawbot/corescope:latest
+  ghcr.io/cornmeister/corescope:latest
 ```
 
 Open `http://localhost` — done.
@@ -19,7 +19,7 @@ Open `http://localhost` — done.
 ### Docker Compose
 
 ```bash
-curl -sL https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/docker-compose.example.yml \
+curl -sL https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/docker-compose.simple.yml \
   -o docker-compose.yml
 docker compose up -d
 ```
@@ -97,9 +97,9 @@ Pre-built images skip the build step entirely — faster updates, no Go toolchai
 
 2. Your data is in `~/meshcore-data/` (or whatever `PROD_DATA_DIR` is set to). It's untouched — the database, config, and theme files persist.
 
-3. Copy `docker-compose.example.yml` to where you want to run from:
+3. Copy `docker-compose.simple.yml` to where you want to run from:
    ```bash
-   cp docker-compose.example.yml ~/docker-compose.yml
+   cp docker-compose.simple.yml ~/docker-compose.yml
    ```
 
 4. Start with the pre-built image:
@@ -126,6 +126,6 @@ docker compose pull && docker compose up -d
 | `./manage.sh start` | `docker compose up -d` |
 | `./manage.sh logs` | `docker compose logs -f` |
 | `./manage.sh status` | `docker compose ps` |
-| `./manage.sh setup` | Copy `docker-compose.example.yml`, edit env vars |
+| `./manage.sh setup` | Copy `docker-compose.simple.yml`, edit env vars |
 
 `manage.sh` remains available for advanced use cases (building from source, custom patches, development). Pre-built images are recommended for most production deployments.
