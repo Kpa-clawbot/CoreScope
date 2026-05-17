@@ -1049,7 +1049,7 @@
     padding: 2px 4px;
     flex-shrink: 0;
   }
-  .vcr-lcd-canvas { width: 78px; height: 18px; }
+  .vcr-lcd-canvas { width: 74px; height: 18px; }
   .vcr-lcd-mode { font-size: 0.55rem; letter-spacing: 1px; }
   .vcr-lcd-pkts { font-size: 0.5rem; letter-spacing: 1px; }
   .vcr-scope-btns { order: 2; flex-shrink: 0; gap: 1px; }
