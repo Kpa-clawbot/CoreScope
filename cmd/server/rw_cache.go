@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -27,7 +28,7 @@ func cachedRW(dbPath string) (*sql.DB, error) {
 		return db, nil
 	}
 
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL", dbPath)
+	dsn := sqliteRWDSN(dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -56,4 +57,23 @@ func rwCacheLen() int {
 	rwCache.mu.Lock()
 	defer rwCache.mu.Unlock()
 	return len(rwCache.conns)
+}
+
+func sqliteRWDSN(dbPath string) string {
+	path := strings.TrimSpace(dbPath)
+	if strings.HasPrefix(strings.ToLower(path), "file:") {
+		return appendSQLiteQueryParam(path, "_journal_mode=WAL")
+	}
+	return fmt.Sprintf("file:%s?_journal_mode=WAL", path)
+}
+
+func appendSQLiteQueryParam(dsn, param string) string {
+	switch {
+	case strings.HasSuffix(dsn, "?"), strings.HasSuffix(dsn, "&"):
+		return dsn + param
+	case strings.Contains(dsn, "?"):
+		return dsn + "&" + param
+	default:
+		return dsn + "?" + param
+	}
 }
