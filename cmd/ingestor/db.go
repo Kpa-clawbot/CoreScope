@@ -211,6 +211,7 @@ func applySchema(db *sql.DB) error {
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes(last_seen);
+		CREATE INDEX IF NOT EXISTS idx_nodes_role_last_seen ON nodes(role, last_seen);
 		CREATE INDEX IF NOT EXISTS idx_observers_last_seen ON observers(last_seen);
 
 		CREATE TABLE IF NOT EXISTS inactive_nodes (

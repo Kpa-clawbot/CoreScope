@@ -526,24 +526,64 @@ func (db *DB) getRowCounts() *SqliteRowCounts {
 // GetRoleCounts returns count per role (7-day active, matching Node.js /api/stats).
 func (db *DB) GetRoleCounts() map[string]int {
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
-	counts := map[string]int{}
-	for _, role := range []string{"repeater", "room", "companion", "sensor"} {
-		var c int
-		db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE role = ? AND last_seen > ?", role, sevenDaysAgo).Scan(&c)
-		counts[role+"s"] = c
+	counts := emptyRoleCounts()
+	rows, err := db.conn.Query("SELECT role, COUNT(*) FROM nodes WHERE role IN ('repeater', 'room', 'companion', 'sensor') AND last_seen > ? GROUP BY role", sevenDaysAgo)
+	if err != nil {
+		return counts
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var role sql.NullString
+		var count int
+		if err := rows.Scan(&role, &count); err != nil {
+			continue
+		}
+		if role.Valid {
+			if key, ok := roleCountKeys[role.String]; ok {
+				counts[key] = count
+			}
+		}
 	}
 	return counts
 }
 
 // GetAllRoleCounts returns count per role (all nodes, no time filter — matching Node.js /api/nodes).
 func (db *DB) GetAllRoleCounts() map[string]int {
-	counts := map[string]int{}
-	for _, role := range []string{"repeater", "room", "companion", "sensor"} {
-		var c int
-		db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE role = ?", role).Scan(&c)
-		counts[role+"s"] = c
+	counts := emptyRoleCounts()
+	rows, err := db.conn.Query("SELECT role, COUNT(*) FROM nodes WHERE role IN ('repeater', 'room', 'companion', 'sensor') GROUP BY role")
+	if err != nil {
+		return counts
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var role sql.NullString
+		var count int
+		if err := rows.Scan(&role, &count); err != nil {
+			continue
+		}
+		if role.Valid {
+			if key, ok := roleCountKeys[role.String]; ok {
+				counts[key] = count
+			}
+		}
 	}
 	return counts
+}
+
+var roleCountKeys = map[string]string{
+	"repeater":  "repeaters",
+	"room":      "rooms",
+	"companion": "companions",
+	"sensor":    "sensors",
+}
+
+func emptyRoleCounts() map[string]int {
+	return map[string]int{
+		"repeaters":  0,
+		"rooms":      0,
+		"companions": 0,
+		"sensors":    0,
+	}
 }
 
 // PacketQuery holds filter params for packet listing.

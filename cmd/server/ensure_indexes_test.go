@@ -58,6 +58,7 @@ func TestEnsureServerIndexes_CreatesObservationsIndexes(t *testing.T) {
 		"idx_transmissions_first_seen",
 		"idx_transmissions_hash",
 		"idx_transmissions_payload_type",
+		"idx_nodes_role_last_seen",
 		"idx_observations_timestamp",
 		"idx_observations_transmission_id",
 		"idx_observations_observer_idx",
