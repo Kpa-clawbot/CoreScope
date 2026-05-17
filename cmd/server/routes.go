@@ -383,6 +383,13 @@ func (s *Server) handleConfigRegions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, s.buildThemeResponse())
+}
+
+// buildThemeResponse merges built-in defaults with operator config and the
+// optional theme.json file. Used by the /api/config/theme endpoint and by the
+// SPA handler, which inlines the theme into index.html to avoid a color flash.
+func (s *Server) buildThemeResponse() ThemeResponse {
 	theme := LoadTheme(".")
 
 	branding := mergeMap(map[string]interface{}{
@@ -480,14 +487,14 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 	}
 	home := mergeMap(defaultHome, s.cfg.Home, theme.Home)
 
-	writeJSON(w, ThemeResponse{
+	return ThemeResponse{
 		Branding:   branding,
 		Theme:      themeColors,
 		ThemeDark:  themeDark,
 		NodeColors: nodeColors,
 		TypeColors: typeColors,
 		Home:       home,
-	})
+	}
 }
 
 func (s *Server) handleConfigMap(w http.ResponseWriter, r *http.Request) {

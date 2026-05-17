@@ -449,7 +449,7 @@ func main() {
 	absPublic, _ := filepath.Abs(publicDir)
 	if _, err := os.Stat(absPublic); err == nil {
 		fs := http.FileServer(http.Dir(absPublic))
-		router.PathPrefix("/").Handler(wsOrStatic(hub, spaHandler(absPublic, fs)))
+		router.PathPrefix("/").Handler(wsOrStatic(hub, srv.spaHandler(absPublic, fs)))
 		log.Printf("[static] serving %s", absPublic)
 	} else {
 		log.Printf("[static] directory %s not found — API-only mode", absPublic)
@@ -689,10 +689,77 @@ Frontend not found. API available at /api/
 	}
 }
 
+// themeCSSMap mirrors THEME_CSS_MAP in public/customize-v2.js — a theme config
+// key → CSS custom property. Used to inline the server theme into index.html so
+// the page paints correct colors before the JS theme pipeline runs.
+var themeCSSMap = [][2]string{
+	{"accent", "--accent"}, {"accentHover", "--accent-hover"},
+	{"navBg", "--nav-bg"}, {"navBg2", "--nav-bg2"}, {"navText", "--nav-text"}, {"navTextMuted", "--nav-text-muted"},
+	{"background", "--surface-0"}, {"text", "--text"}, {"textMuted", "--text-muted"}, {"border", "--border"},
+	{"statusGreen", "--status-green"}, {"statusYellow", "--status-yellow"}, {"statusRed", "--status-red"},
+	{"surface1", "--surface-1"}, {"surface2", "--surface-2"}, {"surface3", "--surface-3"},
+	{"sectionBg", "--section-bg"},
+	{"cardBg", "--card-bg"}, {"contentBg", "--content-bg"}, {"detailBg", "--detail-bg"},
+	{"inputBg", "--input-bg"}, {"rowStripe", "--row-stripe"}, {"rowHover", "--row-hover"}, {"selectedBg", "--selected-bg"},
+	{"font", "--font"}, {"mono", "--mono"},
+}
+
+// themeVarsBlock emits "--var:value;" declarations for a theme map, skipping
+// values containing characters that could break out of the <style> context.
+func themeVarsBlock(theme map[string]interface{}) string {
+	var b strings.Builder
+	for _, kv := range themeCSSMap {
+		raw, ok := theme[kv[0]]
+		if !ok {
+			continue
+		}
+		val, ok := raw.(string)
+		if !ok || val == "" || strings.ContainsAny(val, "<>{};\n\r") {
+			continue
+		}
+		b.WriteString(kv[1])
+		b.WriteByte(':')
+		b.WriteString(val)
+		b.WriteByte(';')
+	}
+	return b.String()
+}
+
+// buildThemeStyleTag renders an inline <style> block setting the server theme's
+// CSS variables for light, manual-dark, and OS-dark scopes — matching the
+// cascade in style.css and isDarkMode() in customize-v2.js. This eliminates the
+// color flash that occurred while app.js fetched /api/config/theme.
+func buildThemeStyleTag(tr ThemeResponse) string {
+	light := themeVarsBlock(tr.Theme)
+	darkMerged := map[string]interface{}{}
+	for k, v := range tr.Theme {
+		darkMerged[k] = v
+	}
+	for k, v := range tr.ThemeDark {
+		darkMerged[k] = v
+	}
+	dark := themeVarsBlock(darkMerged)
+	if light == "" && dark == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(`<style id="server-theme">`)
+	if light != "" {
+		b.WriteString(":root{" + light + "}")
+	}
+	if dark != "" {
+		b.WriteString(`[data-theme="dark"]{` + dark + "}")
+		b.WriteString(`@media (prefers-color-scheme:dark){:root:not([data-theme="light"]):not([data-theme="dark"]){` + dark + "}}")
+	}
+	b.WriteString("</style>")
+	return b.String()
+}
+
 // spaHandler serves static files, falling back to index.html for SPA routes.
 // It reads index.html once at creation time and replaces the __BUST__ placeholder
-// with a Unix timestamp so browsers fetch fresh JS/CSS after each server restart.
-func spaHandler(root string, fs http.Handler) http.Handler {
+// with a Unix timestamp so browsers fetch fresh JS/CSS after each server restart,
+// and the __THEME_STYLE__ placeholder with the inlined server theme.
+func (s *Server) spaHandler(root string, fs http.Handler) http.Handler {
 	// Pre-process index.html: replace __BUST__ with a cache-bust timestamp
 	indexPath := filepath.Join(root, "index.html")
 	rawHTML, err := os.ReadFile(indexPath)
@@ -705,7 +772,9 @@ index.html not found
 `)
 	}
 	bustValue := fmt.Sprintf("%d", time.Now().Unix())
-	indexHTML := []byte(strings.ReplaceAll(string(rawHTML), "__BUST__", bustValue))
+	processed := strings.ReplaceAll(string(rawHTML), "__BUST__", bustValue)
+	processed = strings.ReplaceAll(processed, "__THEME_STYLE__", buildThemeStyleTag(s.buildThemeResponse()))
+	indexHTML := []byte(processed)
 	log.Printf("[static] cache-bust value: %s", bustValue)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

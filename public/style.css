@@ -527,7 +527,7 @@ input[type="week"] {
    The hamburger and stacked mobile layout still take over at <768px. */
 .top-nav {
   display: flex; align-items: center; justify-content: space-between;
-  background: linear-gradient(135deg, var(--nav-bg) 0%, var(--nav-bg2) 100%); color: var(--nav-text);
+  background: linear-gradient(135deg, var(--nav-bg) 0%, var(--nav-bg2) 50%, var(--nav-bg) 100%); color: var(--nav-text);
   padding: 0 var(--gutter); height: 52px;
   position: sticky; top: 0; z-index: 1100;
   box-shadow: 0 2px 8px rgba(0,0,0,.3);

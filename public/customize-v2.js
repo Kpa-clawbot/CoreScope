@@ -577,13 +577,9 @@
       localStorage.setItem('meshcore-distance-unit', effectiveConfig.distanceUnit);
     }
 
-    // Nav gradient
-    if (themeSection.navBg) {
-      var nav = document.querySelector('.top-nav');
-      if (nav) {
-        nav.style.background = 'linear-gradient(135deg, ' + themeSection.navBg + ' 0%, ' + (themeSection.navBg2 || themeSection.navBg) + ' 50%, ' + themeSection.navBg + ' 100%)';
-      }
-    }
+    // Nav gradient is driven entirely by the --nav-bg / --nav-bg2 CSS vars
+    // set above (style.css .top-nav uses them). No inline style — an inline
+    // background would shadow CSS-var updates and lag a pipeline tick.
 
     // Branding
     var br = effectiveConfig.branding;

@@ -297,6 +297,53 @@ func TestLastN(t *testing.T) {
 	})
 }
 
+func TestBuildThemeStyleTag(t *testing.T) {
+	t.Run("emits light, dark, and OS-dark scopes", func(t *testing.T) {
+		tr := ThemeResponse{
+			Theme:     map[string]interface{}{"navBg": "#111111", "navBg2": "#222222", "accent": "#abcdef"},
+			ThemeDark: map[string]interface{}{"navBg": "#000000"},
+		}
+		got := buildThemeStyleTag(tr)
+		for _, want := range []string{
+			`<style id="server-theme">`,
+			":root{",
+			"--nav-bg:#111111;",
+			"--nav-bg2:#222222;",
+			"--accent:#abcdef;",
+			`[data-theme="dark"]{`,
+			"--nav-bg:#000000;", // themeDark overrides theme
+			"@media (prefers-color-scheme:dark)",
+			`:root:not([data-theme="light"]):not([data-theme="dark"])`,
+			"</style>",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("expected output to contain %q, got: %s", want, got)
+			}
+		}
+	})
+
+	t.Run("skips values that could break out of the style context", func(t *testing.T) {
+		tr := ThemeResponse{Theme: map[string]interface{}{
+			"accent": "#fff",
+			"navBg":  "</style><script>alert(1)</script>",
+			"navBg2": "red;}body{display:none",
+		}}
+		got := buildThemeStyleTag(tr)
+		if strings.Contains(got, "</style><script>") || strings.Contains(got, "display:none") {
+			t.Errorf("injection value was not sanitized: %s", got)
+		}
+		if !strings.Contains(got, "--accent:#fff;") {
+			t.Errorf("safe value was dropped: %s", got)
+		}
+	})
+
+	t.Run("empty theme yields empty string", func(t *testing.T) {
+		if got := buildThemeStyleTag(ThemeResponse{}); got != "" {
+			t.Errorf("expected empty string, got: %s", got)
+		}
+	})
+}
+
 func TestSpaHandler(t *testing.T) {
 	// Create a temp directory with test files
 	dir := t.TempDir()
@@ -305,7 +352,7 @@ func TestSpaHandler(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "style.css"), []byte("body{}"), 0644)
 
 	fs := http.FileServer(http.Dir(dir))
-	handler := spaHandler(dir, fs)
+	handler := (&Server{cfg: &Config{}}).spaHandler(dir, fs)
 
 	t.Run("existing JS file with cache control", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/app.js", nil)
@@ -407,7 +454,7 @@ func TestSpaHandlerCacheBust(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "index.html"), []byte(htmlWithBust), 0644)
 
 	fs := http.FileServer(http.Dir(dir))
-	handler := spaHandler(dir, fs)
+	handler := (&Server{cfg: &Config{}}).spaHandler(dir, fs)
 
 	t.Run("__BUST__ is replaced with a Unix timestamp", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/", nil)

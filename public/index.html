@@ -39,6 +39,9 @@
     crossorigin="anonymous">
   <link rel="stylesheet" href="vendor/MarkerCluster.css?v=__BUST__">
   <link rel="stylesheet" href="vendor/MarkerCluster.Default.css?v=__BUST__">
+  <!-- Server theme inlined here (after stylesheets) so the page paints with the
+       operator's theme before app.js fetches /api/config/theme — no color flash. -->
+  __THEME_STYLE__
   <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin="anonymous"></script>
