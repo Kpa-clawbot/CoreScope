@@ -128,7 +128,7 @@
             <h4>Battery Voltage <span id="batteryStatusBadge" style="font-size:11px;font-weight:normal;margin-left:8px"></span></h4>
             <div class="analytics-chart-desc">Battery voltage over time from observer status reports — flat line means full, downward slope means draining</div>
             <canvas id="batteryChart" role="img" aria-label="Battery voltage trend chart"></canvas>
-            <div id="batteryEmpty" style="display:none;padding:20px;text-align:center;color:var(--text-muted);font-size:12px">No battery telemetry recorded for this node in this window.</div>
+            <div id="batteryEmpty" style="display:none">${PageState.empty({ title: 'No battery telemetry for this node', hint: 'No data in the selected time range' })}</div>
           </div>
           <div class="analytics-chart-card full">
             <h4>Uptime Heatmap</h4>
