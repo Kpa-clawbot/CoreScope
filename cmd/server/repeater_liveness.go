@@ -106,7 +106,7 @@ func (s *PacketStore) GetRepeaterEnrichment(pubkeys []string, windowHours float6
 	}
 	scratch := make(map[string]scratchData, len(pubkeys))
 	ordered := make([]string, 0, len(pubkeys))
-	seenPubkeys := make(map[string]string, len(pubkeys))
+	pubkeysByLower := make(map[string][]string, len(pubkeys))
 	for _, pubkey := range pubkeys {
 		results[pubkey] = RepeaterEnrichment{
 			RelayInfo: RepeaterRelayInfo{WindowHours: windowHours},
@@ -115,11 +115,10 @@ func (s *PacketStore) GetRepeaterEnrichment(pubkeys []string, windowHours float6
 			continue
 		}
 		key := strings.ToLower(pubkey)
-		if _, ok := seenPubkeys[key]; ok {
-			continue
+		if _, ok := pubkeysByLower[key]; !ok {
+			ordered = append(ordered, key)
 		}
-		seenPubkeys[key] = pubkey
-		ordered = append(ordered, key)
+		pubkeysByLower[key] = append(pubkeysByLower[key], pubkey)
 	}
 	if len(ordered) == 0 {
 		return results
@@ -218,7 +217,6 @@ func (s *PacketStore) GetRepeaterEnrichment(pubkeys []string, windowHours float6
 	cutoff24h := now.Add(-24 * time.Hour)
 
 	for _, key := range ordered {
-		pubkey := seenPubkeys[key]
 		data := scratch[key]
 		info := RepeaterRelayInfo{WindowHours: windowHours}
 
@@ -262,7 +260,10 @@ func (s *PacketStore) GetRepeaterEnrichment(pubkeys []string, windowHours float6
 				score = 1
 			}
 		}
-		results[pubkey] = RepeaterEnrichment{RelayInfo: info, UsefulnessScore: score}
+		enrichment := RepeaterEnrichment{RelayInfo: info, UsefulnessScore: score}
+		for _, pubkey := range pubkeysByLower[key] {
+			results[pubkey] = enrichment
+		}
 	}
 	return results
 }

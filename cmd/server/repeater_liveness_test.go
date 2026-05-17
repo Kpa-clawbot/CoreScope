@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -297,7 +298,8 @@ func TestRepeaterEnrichmentBatchDedupAndUsefulness(t *testing.T) {
 	advert := &StoreTx{RawHex: "0400", PayloadType: &advertPT, PathJSON: `["a3"]`, FirstSeen: recentTS(0)}
 	addTestPacket(store, advert)
 
-	enriched := store.GetRepeaterEnrichment([]string{fullAndPrefix, prefixOnly}, 24)
+	upperFullAndPrefix := strings.ToUpper(fullAndPrefix)
+	enriched := store.GetRepeaterEnrichment([]string{upperFullAndPrefix, fullAndPrefix, prefixOnly}, 24)
 
 	full := enriched[fullAndPrefix]
 	if full.RelayInfo.RelayCount24h != 1 {
@@ -308,6 +310,16 @@ func TestRepeaterEnrichmentBatchDedupAndUsefulness(t *testing.T) {
 	}
 	if full.UsefulnessScore < 0.24 || full.UsefulnessScore > 0.26 {
 		t.Fatalf("full+prefix usefulness = %f, want ~0.25", full.UsefulnessScore)
+	}
+	upperFull := enriched[upperFullAndPrefix]
+	if upperFull.RelayInfo.RelayCount24h != full.RelayInfo.RelayCount24h {
+		t.Fatalf("upper-case relay count = %d, want %d", upperFull.RelayInfo.RelayCount24h, full.RelayInfo.RelayCount24h)
+	}
+	if upperFull.RelayInfo.RelayActive != full.RelayInfo.RelayActive {
+		t.Fatalf("upper-case relay active = %v, want %v", upperFull.RelayInfo.RelayActive, full.RelayInfo.RelayActive)
+	}
+	if upperFull.UsefulnessScore != full.UsefulnessScore {
+		t.Fatalf("upper-case usefulness = %f, want %f", upperFull.UsefulnessScore, full.UsefulnessScore)
 	}
 
 	prefix := enriched[prefixOnly]
