@@ -88,6 +88,48 @@ func TestOpenAPISpecEndpoint(t *testing.T) {
 	}
 }
 
+func TestOpenAPISpecAllRoutesHaveMetadata(t *testing.T) {
+	_, r := setupTestServer(t)
+
+	req := httptest.NewRequest("GET", "/api/spec", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var spec map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &spec); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	paths, ok := spec["paths"].(map[string]interface{})
+	if !ok {
+		t.Fatal("missing paths object")
+	}
+
+	for path, rawPathItem := range paths {
+		pathItem, ok := rawPathItem.(map[string]interface{})
+		if !ok {
+			t.Fatalf("path %s has invalid path item", path)
+		}
+		for method, rawOperation := range pathItem {
+			operation, ok := rawOperation.(map[string]interface{})
+			if !ok {
+				t.Fatalf("%s %s has invalid operation", method, path)
+			}
+			summary, _ := operation["summary"].(string)
+			if summary == "" || summary == path {
+				t.Errorf("%s %s has fallback or empty summary %q", method, path, summary)
+			}
+			tags, ok := operation["tags"].([]interface{})
+			if !ok || len(tags) == 0 {
+				t.Errorf("%s %s is missing tags", method, path)
+			}
+		}
+	}
+}
+
 func TestSwaggerUIEndpoint(t *testing.T) {
 	_, r := setupTestServer(t)
 
@@ -138,5 +180,3 @@ func TestExtractPathParams(t *testing.T) {
 		}
 	}
 }
-
-

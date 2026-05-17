@@ -587,6 +587,11 @@ func main() {
 	// contract is testable (see TestBackfillFromPubkey_DoesNotBlockBoot).
 	if database.IsSQLite() {
 		startFromPubkeyBackfill(dbPath, 5000, 100*time.Millisecond)
+	} else {
+		// from_pubkey legacy backfill is SQLite-only; Postgres schema writes
+		// from_pubkey at ingest/migration time, so mark this healthz subtask
+		// complete without relying on the default zero-value state.
+		fromPubkeyBackfillMarkDone()
 	}
 
 	// Migrate old content hashes in background (one-time, idempotent).

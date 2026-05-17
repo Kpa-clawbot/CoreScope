@@ -96,6 +96,32 @@ function loadInCtx(ctx, file) {
   }
 }
 
+// ===== INDEX.HTML STATIC/METADATA TESTS =====
+console.log('\n=== index.html: metadata and scripts ===');
+{
+  const html = fs.readFileSync('public/index.html', 'utf8');
+  const scriptSrcs = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g)].map(m => m[1]);
+  const normalized = scriptSrcs.map(src => src.replace(/\?v=__BUST__$/, ''));
+  const duplicates = normalized.filter((src, idx) => normalized.indexOf(src) !== idx);
+  const ogImage = html.match(/<meta property="og:image" content="([^"]+)"/);
+  const twitterImage = html.match(/<meta name="twitter:image" content="([^"]+)"/);
+
+  test('script src list has no duplicates after cache-bust normalization', () => {
+    assert.deepStrictEqual([...new Set(duplicates)], []);
+  });
+  test('Open Graph image uses live.meshcore.ca static asset', () => {
+    assert.ok(ogImage, 'missing og:image');
+    assert.strictEqual(ogImage[1], 'https://live.meshcore.ca/og-image.png');
+  });
+  test('Twitter image uses live.meshcore.ca static asset', () => {
+    assert.ok(twitterImage, 'missing twitter:image');
+    assert.strictEqual(twitterImage[1], 'https://live.meshcore.ca/og-image.png');
+  });
+  test('metadata does not reference raw GitHub URLs with spaces', () => {
+    assert.ok(!/raw\.githubusercontent\.com\/[^\"]* /.test(html));
+  });
+}
+
 // ===== APP.JS TESTS =====
 console.log('\n=== app.js: timeAgo ===');
 {
