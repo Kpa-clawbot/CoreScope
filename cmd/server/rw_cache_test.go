@@ -53,3 +53,19 @@ func TestCachedRW_100Calls_SingleConnection(t *testing.T) {
 		t.Fatalf("expected 1 cached connection, got %d", rwCacheLen())
 	}
 }
+
+func TestSQLiteRWDSNPreservesFileURI(t *testing.T) {
+	got := sqliteRWDSN("file:///var/lib/meshcore.db?mode=rwc")
+	want := "file:///var/lib/meshcore.db?mode=rwc&_journal_mode=WAL"
+	if got != want {
+		t.Fatalf("sqliteRWDSN file URI = %q, want %q", got, want)
+	}
+}
+
+func TestSQLiteRWDSNPlainPath(t *testing.T) {
+	got := sqliteRWDSN("data/meshcore.db")
+	want := "file:data/meshcore.db?_journal_mode=WAL"
+	if got != want {
+		t.Fatalf("sqliteRWDSN plain path = %q, want %q", got, want)
+	}
+}

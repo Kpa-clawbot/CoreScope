@@ -2,6 +2,10 @@
 
 Comprehensive guide to deploying and operating CoreScope. For a quick start, see [DEPLOY.md](../DEPLOY.md).
 
+> 0.5 Alpha status: new deployments should prefer Postgres through
+> `DB_DRIVER=postgres` and `DATABASE_URL`. SQLite remains supported for
+> compatibility, rollback, and one-shot migration validation.
+
 ## Table of Contents
 
 - [System Requirements](#system-requirements)
@@ -46,7 +50,8 @@ No `config.json` is required. The server starts with sensible defaults:
 - HTTP on port 3000 (Caddy proxies port 80 → 3000 internally)
 - Internal Mosquitto MQTT broker on port 1883
 - Ingestor connects to `mqtt://localhost:1883` automatically
-- SQLite database at `/app/data/meshcore.db`
+- SQLite database at `/app/data/meshcore.db` for single-container `docker run`
+- Postgres for Docker Compose deployments when `DATABASE_URL` is configured
 
 ### Full `docker run` Reference (recommended)
 
@@ -71,7 +76,7 @@ docker run -d --name corescope \
 | `-p 80:80` | Yes | HTTP web UI |
 | `-p 443:443` | No | HTTPS (only if using built-in Caddy with a domain) |
 | `-p 1883:1883` | No | MQTT broker (expose if external gateways connect directly) |
-| `-v /your/data:/app/data` | Yes | Persistent data: SQLite DB, config.json, theme.json |
+| `-v /your/data:/app/data` | Yes | Persistent data: SQLite fallback DB, config.json, theme.json |
 | `-v /your/Caddyfile:/etc/caddy/Caddyfile:ro` | No | Custom Caddyfile for HTTPS |
 | `-v /your/caddy-data:/data/caddy` | No | Caddy TLS certificate storage |
 | `-e DISABLE_MOSQUITTO=true` | No | Skip the internal Mosquitto broker (use your own) |
@@ -109,6 +114,70 @@ docker compose up -d
 | `DATA_DIR` | `./data` | Host path for persistent data |
 | `DISABLE_MOSQUITTO` | `false` | Set `true` to use an external MQTT broker |
 | `DISABLE_CADDY` | `false` | Set `true` to skip the built-in Caddy proxy |
+
+### Side-by-side dev on a live host
+
+The `docker-compose.dev.yml` file is for the live.meshcore.ca deployment model:
+one existing live Compose service owns host ports `80` and `443`, while a dev
+CoreScope container and a dev Postgres container run beside it. The dev web UI
+binds host port `8443` to the container's Caddy port `443`.
+
+Observed live layout:
+
+| Path | Purpose |
+|------|---------|
+| `/opt/corescope/docker-compose.yml` | live Compose file |
+| `/opt/corescope/data/corescope/config.json` | live config mounted at `/app/config.json` |
+| `/opt/corescope/data/corescope/data/meshcore.db` | live SQLite database |
+| `/opt/corescope/data/caddy/config/Caddyfile` | live Caddyfile |
+| `/opt/corescope/data/caddy/app` | live Caddy storage |
+
+Prepare a separate dev copy. Do not share the writable SQLite DB, Caddy storage,
+or Postgres directory between live and dev:
+
+```bash
+sudo mkdir -p \
+  /opt/corescope/data-dev/corescope/data \
+  /opt/corescope/data-dev/corescope \
+  /opt/corescope/data-dev/caddy/config \
+  /opt/corescope/data-dev/caddy/app \
+  /opt/corescope/data-dev/postgres
+
+sudo cp /opt/corescope/data/corescope/config.json /opt/corescope/data-dev/corescope/config.json
+sudo cp /opt/corescope/data/corescope/data/meshcore.db* /opt/corescope/data-dev/corescope/data/
+sudo cp /opt/corescope/data/caddy/config/Caddyfile /opt/corescope/data-dev/caddy/config/Caddyfile
+sudo rsync -a /opt/corescope/data/caddy/app/ /opt/corescope/data-dev/caddy/app/
+```
+
+When the live SQLite database is in WAL mode, copy `meshcore.db`,
+`meshcore.db-wal`, and `meshcore.db-shm` together. A stopped live container or a
+known clean backup is the most consistent source for a migration snapshot.
+
+The Caddy storage copy matters for HTTPS on `8443`: ACME issuance normally
+expects ports `80`/`443`, which the live container already owns. For a public
+browser-trusted dev URL on the same hostname, use copied/provided certificates
+instead of asking the dev container to issue fresh ones.
+
+Start dev from the fork checkout:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build postgres
+docker compose -f docker-compose.dev.yml run --rm --no-deps \
+  --entrypoint /app/corescope-migrate-postgres \
+  corescope-dev \
+  -sqlite /app/data/meshcore.db \
+  -postgres "postgres://corescope:corescope@postgres:5432/corescope_dev?sslmode=disable" \
+  -truncate
+docker compose -f docker-compose.dev.yml up -d --build corescope-dev
+```
+
+Verify dev without touching live:
+
+```bash
+curl -k https://live.meshcore.ca:8443/api/stats
+curl -k https://live.meshcore.ca:8443/api/perf/db
+docker compose -f docker-compose.dev.yml ps
+```
 
 ### manage.sh (legacy alternative)
 
@@ -157,7 +226,9 @@ CoreScope uses a layered configuration system (highest priority wins):
 |----------|---------|-------------|
 | `MQTT_BROKER` | `mqtt://localhost:1883` | MQTT broker URL (overrides config file) |
 | `MQTT_TOPIC` | `meshcore/#` | MQTT topic subscription pattern |
-| `DB_PATH` | `data/meshcore.db` | SQLite database path |
+| `DB_DRIVER` | `sqlite` | Database driver: `sqlite` or `postgres` |
+| `DATABASE_URL` | empty | Postgres connection URL; selects Postgres unless `DB_DRIVER` is set |
+| `DB_PATH` | `data/meshcore.db` | SQLite database path and rollback fallback |
 | `DISABLE_MOSQUITTO` | `false` | Skip the internal Mosquitto broker |
 | `DISABLE_CADDY` | `false` | Skip the built-in Caddy reverse proxy |
 
@@ -399,7 +470,8 @@ docker stats corescope
 
 ### Backup
 
-All persistent data lives in `/app/data`. The critical file is the SQLite database:
+For SQLite deployments, all persistent data lives in `/app/data`. The critical
+file is the SQLite database:
 
 ```bash
 # Copy from the Docker volume
@@ -412,6 +484,10 @@ cp ./data/meshcore.db ./backup-$(date +%Y%m%d).db
 Optional files to back up:
 - `config.json` — custom configuration
 - `theme.json` — custom theme/branding
+
+For Postgres deployments, back up the Postgres database with `pg_dump` or your
+managed database snapshot tooling, and keep `/app/data/config.json` and
+`theme.json` with the backup set.
 
 ### Restore
 
@@ -481,6 +557,10 @@ The in-memory packet store grows with retained packets. Configure retention limi
 ### Database locked errors
 
 SQLite doesn't support concurrent writers well. Ensure only one CoreScope instance accesses the database file. If running multiple containers, each needs its own database.
+
+Postgres deployments should not see SQLite lock errors. If the dashboard is
+slow on Postgres, check `/api/perf/db` for pool waits and `/api/perf` for
+endpoint latency before assuming the database is the bottleneck.
 
 ### Container unhealthy
 

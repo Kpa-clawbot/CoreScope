@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -259,5 +261,126 @@ func TestRepeaterRelayActivity_DedupAcrossPrefixAndFullKey(t *testing.T) {
 	}
 	if !info.RelayActive {
 		t.Errorf("expected RelayActive=true, got false (LastRelayed=%s)", info.LastRelayed)
+	}
+}
+
+func TestRepeaterEnrichmentBatchDedupAndUsefulness(t *testing.T) {
+	db := setupCapabilityTestDB(t)
+	defer db.conn.Close()
+
+	fullAndPrefix := "a36a21290d9c25a158130fe7c489541210d5f09f25fab997db5e942fb7680510"
+	prefixOnly := "b46a21290d9c25a158130fe7c489541210d5f09f25fab997db5e942fb7680510"
+	store := NewPacketStore(db, nil)
+
+	pt := 1
+	txFullAndPrefix := &StoreTx{
+		ID:          1,
+		RawHex:      "0100",
+		Hash:        "batch-hit-full-prefix",
+		PayloadType: &pt,
+		FirstSeen:   recentTS(0),
+	}
+	store.mu.Lock()
+	store.packets = append(store.packets, txFullAndPrefix)
+	store.byHash[txFullAndPrefix.Hash] = txFullAndPrefix
+	store.byTxID[txFullAndPrefix.ID] = txFullAndPrefix
+	store.byPayloadType[pt] = append(store.byPayloadType[pt], txFullAndPrefix)
+	store.byPathHop[fullAndPrefix] = append(store.byPathHop[fullAndPrefix], txFullAndPrefix)
+	store.byPathHop[fullAndPrefix[:2]] = append(store.byPathHop[fullAndPrefix[:2]], txFullAndPrefix)
+	store.mu.Unlock()
+
+	txPrefixOnly := &StoreTx{RawHex: "0101", PayloadType: &pt, PathJSON: `["b4"]`, FirstSeen: recentTS(2)}
+	addTestPacket(store, txPrefixOnly)
+	addTestPacket(store, &StoreTx{RawHex: "0102", PayloadType: &pt, FirstSeen: recentTS(0)})
+	addTestPacket(store, &StoreTx{RawHex: "0103", PayloadType: &pt, FirstSeen: recentTS(0)})
+
+	advertPT := payloadTypeAdvert
+	advert := &StoreTx{RawHex: "0400", PayloadType: &advertPT, PathJSON: `["a3"]`, FirstSeen: recentTS(0)}
+	addTestPacket(store, advert)
+
+	upperFullAndPrefix := strings.ToUpper(fullAndPrefix)
+	enriched := store.GetRepeaterEnrichment([]string{upperFullAndPrefix, fullAndPrefix, prefixOnly}, 24)
+
+	full := enriched[fullAndPrefix]
+	if full.RelayInfo.RelayCount24h != 1 {
+		t.Fatalf("full+prefix relay count = %d, want 1", full.RelayInfo.RelayCount24h)
+	}
+	if !full.RelayInfo.RelayActive {
+		t.Fatalf("full+prefix relay should be active")
+	}
+	if full.UsefulnessScore < 0.24 || full.UsefulnessScore > 0.26 {
+		t.Fatalf("full+prefix usefulness = %f, want ~0.25", full.UsefulnessScore)
+	}
+	upperFull := enriched[upperFullAndPrefix]
+	if upperFull.RelayInfo.RelayCount24h != full.RelayInfo.RelayCount24h {
+		t.Fatalf("upper-case relay count = %d, want %d", upperFull.RelayInfo.RelayCount24h, full.RelayInfo.RelayCount24h)
+	}
+	if upperFull.RelayInfo.RelayActive != full.RelayInfo.RelayActive {
+		t.Fatalf("upper-case relay active = %v, want %v", upperFull.RelayInfo.RelayActive, full.RelayInfo.RelayActive)
+	}
+	if upperFull.UsefulnessScore != full.UsefulnessScore {
+		t.Fatalf("upper-case usefulness = %f, want %f", upperFull.UsefulnessScore, full.UsefulnessScore)
+	}
+
+	prefix := enriched[prefixOnly]
+	if prefix.RelayInfo.RelayCount24h != 1 {
+		t.Fatalf("prefix-only relay count = %d, want 1", prefix.RelayInfo.RelayCount24h)
+	}
+	if prefix.RelayInfo.RelayCount1h != 0 {
+		t.Fatalf("prefix-only 1h relay count = %d, want 0", prefix.RelayInfo.RelayCount1h)
+	}
+	if prefix.UsefulnessScore != 0 {
+		t.Fatalf("prefix-only usefulness = %f, want 0 because usefulness keeps full-key semantics", prefix.UsefulnessScore)
+	}
+}
+
+func buildRepeaterBenchmarkStore() (*PacketStore, []string) {
+	const repeaterCount = 100
+	const packetCount = 5000
+
+	store := NewPacketStore(nil, nil)
+	pubkeys := make([]string, 0, repeaterCount)
+	for i := 0; i < repeaterCount; i++ {
+		pubkeys = append(pubkeys, fmt.Sprintf("%02x%062x", i%256, i))
+	}
+
+	pt := 1
+	for i := 0; i < packetCount; i++ {
+		pk := pubkeys[i%len(pubkeys)]
+		tx := &StoreTx{
+			RawHex:      "0100",
+			PayloadType: &pt,
+			PathJSON:    fmt.Sprintf(`["%s"]`, pk[:2]),
+			FirstSeen:   recentTS(i % 24),
+		}
+		addTestPacket(store, tx)
+		if i%10 == 0 {
+			store.mu.Lock()
+			store.byPathHop[pk] = append(store.byPathHop[pk], tx)
+			store.mu.Unlock()
+		}
+	}
+	return store, pubkeys
+}
+
+func BenchmarkRepeaterEnrichmentBatch(b *testing.B) {
+	store, pubkeys := buildRepeaterBenchmarkStore()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		enriched := store.GetRepeaterEnrichment(pubkeys, 24)
+		if len(enriched) != len(pubkeys) {
+			b.Fatalf("got %d entries, want %d", len(enriched), len(pubkeys))
+		}
+	}
+}
+
+func BenchmarkRepeaterEnrichmentSingleHelpers(b *testing.B) {
+	store, pubkeys := buildRepeaterBenchmarkStore()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, pk := range pubkeys {
+			_ = store.GetRepeaterRelayInfo(pk, 24)
+			_ = store.GetRepeaterUsefulnessScore(pk)
+		}
 	}
 }

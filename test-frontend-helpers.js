@@ -96,6 +96,32 @@ function loadInCtx(ctx, file) {
   }
 }
 
+// ===== INDEX.HTML STATIC/METADATA TESTS =====
+console.log('\n=== index.html: metadata and scripts ===');
+{
+  const html = fs.readFileSync('public/index.html', 'utf8');
+  const scriptSrcs = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g)].map(m => m[1]);
+  const normalized = scriptSrcs.map(src => src.replace(/\?v=__BUST__$/, ''));
+  const duplicates = normalized.filter((src, idx) => normalized.indexOf(src) !== idx);
+  const ogImage = html.match(/<meta property="og:image" content="([^"]+)"/);
+  const twitterImage = html.match(/<meta name="twitter:image" content="([^"]+)"/);
+
+  test('script src list has no duplicates after cache-bust normalization', () => {
+    assert.deepStrictEqual([...new Set(duplicates)], []);
+  });
+  test('Open Graph image uses live.meshcore.ca static asset', () => {
+    assert.ok(ogImage, 'missing og:image');
+    assert.strictEqual(ogImage[1], 'https://live.meshcore.ca/og-image.png');
+  });
+  test('Twitter image uses live.meshcore.ca static asset', () => {
+    assert.ok(twitterImage, 'missing twitter:image');
+    assert.strictEqual(twitterImage[1], 'https://live.meshcore.ca/og-image.png');
+  });
+  test('metadata does not reference raw GitHub URLs with spaces', () => {
+    assert.ok(!/raw\.githubusercontent\.com\/[^\"]* /.test(html));
+  });
+}
+
 // ===== APP.JS TESTS =====
 console.log('\n=== app.js: timeAgo ===');
 {
@@ -688,6 +714,19 @@ console.log('\n=== haversineKm (hop-resolver.js) ===');
     // Haversine should give ~415km, Euclidean ~627km (wrong because dLon*85 is wrong at 60° latitude)
     assert.ok(Math.abs(haversine - euclidean) > 50, `Expected significant difference, haversine=${haversine.toFixed(1)}, euclidean=${euclidean.toFixed(1)}`);
   });
+  test('rfSegmentMaxKm is exported', () => {
+    assert.strictEqual(HR.rfSegmentMaxKm, 500);
+  });
+
+  test('2-byte mismatch without nearby anchor is unreliable, 3-byte is not', () => {
+    const nodes = [{ public_key: 'aa11aa11aa11aa11', name: 'FarNode', role: 'repeater', lat: 55.0, lon: 10.0 }];
+    HR.init(nodes, { observers: [{ id: 'obs1', iata: 'SEA' }], iataCoords: { SEA: { lat: 47.45, lon: -122.31 } } });
+    const r2 = HR.resolve(['aa11'], null, null, null, null, 'obs1');
+    assert.strictEqual(r2['aa11'].unreliable, true);
+    const r3 = HR.resolve(['aa11aa'], null, null, null, null, 'obs1');
+    assert.strictEqual(r3['aa11aa'].unreliable, false);
+  });
+
 }
 
 // ===== pickByAffinity — neighbor-graph + centroid scoring (#874) =====
@@ -2486,7 +2525,7 @@ console.log('\n=== customize-v2.js: core behavior ===');
     const server = { theme: { accent: '#111111' }, home: null };
     const effective = v2.computeEffective(server, {});
     assert.ok(effective.home, 'home should not be null');
-    assert.strictEqual(effective.home.heroTitle, 'CoreScope');
+    assert.strictEqual(effective.home.heroTitle, 'Canada Meshcore Corescope');
     assert.ok(Array.isArray(effective.home.steps), 'steps should be an array');
     assert.ok(effective.home.steps.length > 0, 'steps should not be empty');
     assert.ok(Array.isArray(effective.home.footerLinks), 'footerLinks should be an array');
@@ -4292,7 +4331,7 @@ console.log('\n=== app.js: payloadTypeColor ===');
   test('payloadTypeColor(99) = unknown', () => assert.strictEqual(payloadTypeColor(99), 'unknown'));
   test('payloadTypeColor(null) = unknown', () => assert.strictEqual(payloadTypeColor(null), 'unknown'));
   test('payloadTypeColor(undefined) = unknown', () => assert.strictEqual(payloadTypeColor(undefined), 'unknown'));
-  test('payloadTypeColor(6) = unknown (no mapping for 6)', () => assert.strictEqual(payloadTypeColor(6), 'unknown'));
+  test('payloadTypeColor(6) = grp-data', () => assert.strictEqual(payloadTypeColor(6), 'grp-data'));
   test('all defined payload types return a non-unknown string', () => {
     const definedTypes = [0, 1, 2, 3, 4, 5, 7, 8, 9];
     for (const t of definedTypes) {
@@ -4699,18 +4738,20 @@ console.log('\n=== app.js: favorites ===');
     assert.deepStrictEqual(ctx.getFavorites(), ['pk2']);
   });
 
-  test('favStar returns filled star for favorite', () => {
+  test('favStar returns active SVG star button for favorite', () => {
     ctx.localStorage.setItem('meshcore-favorites', '["pk1"]');
     const html = ctx.favStar('pk1');
-    assert.ok(html.includes('★'));
+    assert.ok(html.includes('fav-star-icon'));
+    assert.ok(html.includes('aria-pressed="true"'));
     assert.ok(html.includes('on'));
     assert.ok(html.includes('Remove from favorites'));
   });
 
-  test('favStar returns empty star for non-favorite', () => {
+  test('favStar returns inactive SVG star button for non-favorite', () => {
     ctx.localStorage.setItem('meshcore-favorites', '[]');
     const html = ctx.favStar('pk1');
-    assert.ok(html.includes('☆'));
+    assert.ok(html.includes('fav-star-icon'));
+    assert.ok(html.includes('aria-pressed="false"'));
     assert.ok(!html.includes(' on'));
     assert.ok(html.includes('Add to favorites'));
   });

@@ -44,12 +44,12 @@
   // 5 primary tabs + the More toggle. Each entry: { route, hash, label, icon }.
   // For More, hash is null (not a route).
   var TABS = [
-    { route: 'home',     hash: '#/home',     label: 'Home',     icon: '🏠' },
-    { route: 'packets',  hash: '#/packets',  label: 'Packets',  icon: '📦' },
-    { route: 'live',     hash: '#/live',     label: 'Live',     icon: '🔴' },
-    { route: 'map',      hash: '#/map',      label: 'Map',      icon: '🗺️' },
-    { route: 'channels', hash: '#/channels', label: 'Channels', icon: '💬' },
-    { route: 'more',     hash: null,         label: 'More',     icon: '☰' },
+    { route: 'home',     hash: '#/home',     label: 'Home',     icon: 'home' },
+    { route: 'packets',  hash: '#/packets',  label: 'Packets',  icon: 'packets' },
+    { route: 'live',     hash: '#/live',     label: 'Live',     icon: 'live' },
+    { route: 'map',      hash: '#/map',      label: 'Map',      icon: 'map' },
+    { route: 'channels', hash: '#/channels', label: 'Channels', icon: 'channels' },
+    { route: 'more',     hash: null,         label: 'More',     icon: 'menu' },
   ];
 
   // Long-tail routes surfaced in the More sheet. Mirrors data-route values
@@ -64,12 +64,12 @@
   // it here, or it will be unreachable on phones at ≤768px (the
   // hamburger is hidden at that breakpoint — see bottom-nav.css).
   var MORE_ROUTES = [
-    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     icon: '🖥️' },
-    { route: 'tools',     hash: '#/tools',     label: 'Tools',     icon: '🛠️' },
-    { route: 'observers', hash: '#/observers', label: 'Observers', icon: '👁️' },
-    { route: 'analytics', hash: '#/analytics', label: 'Analytics', icon: '📊' },
-    { route: 'perf',      hash: '#/perf',      label: 'Perf',      icon: '⚡' },
-    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', icon: '🎵' },
+    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     icon: 'nodes' },
+    { route: 'tools',     hash: '#/tools',     label: 'Tools',     icon: 'tools' },
+    { route: 'observers', hash: '#/observers', label: 'Observers', icon: 'observers' },
+    { route: 'analytics', hash: '#/analytics', label: 'Analytics', icon: 'analytics' },
+    { route: 'perf',      hash: '#/perf',      label: 'Perf',      icon: 'perf' },
+    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', icon: 'lab' },
   ];
 
   var SHEET_ID = 'bottomNavMoreSheet';
@@ -115,7 +115,7 @@
       var ic = document.createElement('span');
       ic.className = 'bottom-nav-icon';
       ic.setAttribute('aria-hidden', 'true');
-      ic.textContent = t.icon;
+      ic.innerHTML = window.UIIcon ? UIIcon.svg(t.icon) : '';
 
       var lb = document.createElement('span');
       lb.className = 'bottom-nav-label';
@@ -202,7 +202,7 @@
       var ic = document.createElement('span');
       ic.className = 'bottom-nav-sheet-icon';
       ic.setAttribute('aria-hidden', 'true');
-      ic.textContent = r.icon;
+      ic.innerHTML = window.UIIcon ? UIIcon.svg(r.icon) : '';
 
       var lb = document.createElement('span');
       lb.className = 'bottom-nav-sheet-label';

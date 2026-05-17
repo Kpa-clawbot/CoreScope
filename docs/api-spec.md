@@ -14,6 +14,7 @@
 - [GET /api/stats](#get-apistats)
 - [GET /api/health](#get-apihealth)
 - [GET /api/perf](#get-apiperf)
+- [GET /api/perf/db](#get-apiperfdb)
 - [POST /api/perf/reset](#post-apiperfreset)
 - [GET /api/nodes](#get-apinodes)
 - [GET /api/nodes/search](#get-apinodessearch)
@@ -234,6 +235,23 @@ Detailed performance metrics per endpoint.
       "advertByObserver":  number
     }
   },
+  "db": {
+    "engine":       "sqlite" | "postgres",
+    "dbSizeMB":     number,
+    "rows": {
+      "transmissions": number,
+      "observations":  number,
+      "nodes":         number,
+      "observers":     number
+    },
+    "pool": {
+      "openConnections": number,
+      "inUse":           number,
+      "idle":            number,
+      "waitCount":       number,
+      "waitDurationMs":  number
+    }
+  },
   "sqlite": {
     "dbSizeMB":    number,
     "walSizeMB":   number,
@@ -252,6 +270,36 @@ Detailed performance metrics per endpoint.
     "numGoroutine": number,         // active goroutines
     "numGC":        number,         // completed GC cycles
     "gcPauseMs":    number          // last GC pause in ms
+  }
+}
+```
+
+---
+
+## GET /api/perf/db
+
+Engine-neutral database performance summary. When SQLite is active, the
+response also includes SQLite compatibility fields such as WAL and freelist
+stats. When Postgres is active, pool stats are populated from `database/sql`.
+
+### Response `200`
+
+```jsonc
+{
+  "engine":   "sqlite" | "postgres",
+  "dbSizeMB": number,
+  "rows": {
+    "transmissions": number,
+    "observations":  number,
+    "nodes":         number,
+    "observers":     number
+  },
+  "pool": {
+    "openConnections": number,
+    "inUse":           number,
+    "idle":            number,
+    "waitCount":       number,
+    "waitDurationMs":  number
   }
 }
 ```
@@ -1547,12 +1595,12 @@ Theme and branding configuration (merged from config.json + theme.json).
 ```jsonc
 {
   "branding": {
-    "siteName": string,          // default: "CoreScope"
+    "siteName": string,          // default: "MeshCore Canada Live"
     "tagline":  string           // default: "Real-time MeshCore LoRa mesh network analyzer"
     // ... additional branding keys from config/theme files
   },
   "theme": {
-    "accent":      string,       // hex color, default "#4a9eff"
+    "accent":      string,       // hex color, default "#448aff"
     "accentHover": string,
     "navBg":       string,
     "navBg2":      string

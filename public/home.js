@@ -8,6 +8,14 @@
 
   const PREF_KEY = 'meshcore-user-level';
   const MY_NODES_KEY = 'meshcore-my-nodes'; // [{pubkey, name, addedAt}]
+  const DEFAULT_SITE_NAME = 'MeshCore Canada Live';
+  const DEFAULT_HOME_TITLE = 'Canada Meshcore Corescope';
+  const DEFAULT_LOGO_URL = 'img/meshcore-canada-logo.png';
+  const ALPHA_LABEL = '0.5 Alpha';
+
+  function icon(name, className) {
+    return window.UIIcon ? UIIcon.svg(name, className || 'ui-icon') : '';
+  }
 
   function getMyNodes() {
     try { return JSON.parse(localStorage.getItem(MY_NODES_KEY)) || []; } catch { return []; }
@@ -39,16 +47,17 @@
   function showChooser(container) {
     container.innerHTML = `
       <section class="home-chooser">
-        <h1>Welcome to ${escapeHtml(window.SITE_CONFIG?.branding?.siteName || 'CoreScope')}</h1>
+        <div class="home-alpha-badge">${ALPHA_LABEL}</div>
+        <h1>Welcome to ${escapeHtml(window.SITE_CONFIG?.home?.heroTitle || DEFAULT_HOME_TITLE)}</h1>
         <p>How familiar are you with MeshCore?</p>
         <div class="chooser-options">
           <button class="chooser-btn new" id="chooseNew">
-            <span class="chooser-icon">🌱</span>
+            <span class="chooser-icon">${icon('spark')}</span>
             <strong>I\u2019m new</strong>
             <span>Show me setup guides and tips</span>
           </button>
           <button class="chooser-btn exp" id="chooseExp">
-            <span class="chooser-icon">⚡</span>
+            <span class="chooser-icon">${icon('perf')}</span>
             <strong>I know what I\u2019m doing</strong>
             <span>Just the analyzer, skip the guides</span>
           </button>
@@ -63,11 +72,14 @@
     const myNodes = getMyNodes();
     const hasNodes = myNodes.length > 0;
     const homeCfg = window.SITE_CONFIG?.home || null;
-    const siteName = window.SITE_CONFIG?.branding?.siteName || 'CoreScope';
+    const siteName = window.SITE_CONFIG?.branding?.siteName || DEFAULT_SITE_NAME;
+    const logoUrl = window.SITE_CONFIG?.branding?.logoUrl || DEFAULT_LOGO_URL;
 
     container.innerHTML = `
       <section class="home-hero">
-        <svg class="home-hero-logo" xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" aria-hidden="true" focusable="false"><path d="M540 100 A 30 30 0 1 0 540 160" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="1.00"/>
+        <div class="home-alpha-badge">${ALPHA_LABEL}</div>
+        <img class="home-hero-logo" src="${escapeAttr(logoUrl)}" alt="" width="112" height="124">
+        <svg class="home-hero-logo home-hero-logo-legacy" xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" aria-hidden="true" focusable="false"><path d="M540 100 A 30 30 0 1 0 540 160" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="1.00"/>
 <path d="M540 73 A 57 57 0 1 0 540 187" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="0.82"/>
 <path d="M540 46 A 84 84 0 1 0 540 214" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="0.64"/>
 <path d="M540 19 A 111 111 0 1 0 540 241" fill="none" stroke="var(--logo-accent)" stroke-width="8" opacity="0.46"/>
@@ -92,7 +104,7 @@
 
       ${!hasNodes ? `
         <div class="onboarding-prompt">
-          <div class="onboard-icon">📡</div>
+          <div class="onboard-icon">${icon('nodes')}</div>
           <h2>Claim your first node</h2>
           <p>Search for your node above, or paste your public key. Once claimed, you'll see live status, signal quality, and who's hearing you.</p>
         </div>
@@ -107,18 +119,18 @@
 
       ${exp ? '' : `
       <section class="home-checklist">
-        <h2>🚀 Getting on the mesh${homeCfg?.steps ? '' : ' — SF Bay Area'}</h2>
+        <h2>Getting on the mesh${homeCfg?.steps ? '' : ' — SF Bay Area'}</h2>
         ${checklist(homeCfg)}
       </section>`}
 
       <section class="home-footer">
         <div class="home-footer-links">
           ${homeCfg?.footerLinks ? homeCfg.footerLinks.map(l => `<a href="${escapeAttr(l.url)}" class="home-footer-link" target="_blank" rel="noopener">${escapeHtml(l.label)}</a>`).join('') : `
-          <a href="#/packets" class="home-footer-link">📦 Packets</a>
-          <a href="#/map" class="home-footer-link">🗺️ Network Map</a>
-          <a href="#/live" class="home-footer-link">🔴 Live</a>
-          <a href="#/nodes" class="home-footer-link">📡 All Nodes</a>
-          <a href="#/channels" class="home-footer-link">💬 Channels</a>`}
+          <a href="#/packets" class="home-footer-link">${icon('packets')}<span>Packets</span></a>
+          <a href="#/map" class="home-footer-link">${icon('map')}<span>Network Map</span></a>
+          <a href="#/live" class="home-footer-link">${icon('live')}<span>Live</span></a>
+          <a href="#/nodes" class="home-footer-link">${icon('nodes')}<span>All Nodes</span></a>
+          <a href="#/channels" class="home-footer-link">${icon('channels')}<span>Channels</span></a>`}
         </div>
         <div class="home-level-toggle">
           <small>${exp ? 'Want setup guides? ' : 'Already know MeshCore? '}
@@ -342,7 +354,7 @@
         loadMyNodes();
         // Update title if no nodes left
         const h1 = document.querySelector('.home-hero h1');
-        if (h1 && !getMyNodes().length) h1.textContent = 'CoreScope';
+        if (h1 && !getMyNodes().length) h1.textContent = window.SITE_CONFIG?.home?.heroTitle || DEFAULT_HOME_TITLE;
       });
     });
 

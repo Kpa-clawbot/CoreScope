@@ -17,6 +17,7 @@ import (
 // chunk loader and RFC3339 since/until path don't full-scan observations.
 func TestEnsureServerIndexes_CreatesObservationsIndexes(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(closeRWCache)
 	dbPath := filepath.Join(dir, "schema_only.db")
 
 	conn, err := sql.Open("sqlite", dbPath)
@@ -57,6 +58,7 @@ func TestEnsureServerIndexes_CreatesObservationsIndexes(t *testing.T) {
 		"idx_transmissions_first_seen",
 		"idx_transmissions_hash",
 		"idx_transmissions_payload_type",
+		"idx_nodes_role_last_seen",
 		"idx_observations_timestamp",
 		"idx_observations_transmission_id",
 		"idx_observations_observer_idx",

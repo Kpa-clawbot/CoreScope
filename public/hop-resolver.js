@@ -7,13 +7,14 @@ window.HopResolver = (function() {
 
   const MAX_HOP_DIST = 1.8; // ~200km in degrees
   const REGION_RADIUS_KM = 300;
+  const RF_SEGMENT_MAX_KM = 500;
 
   // Only repeaters and room servers can appear as path hops per protocol.
   // Companions/sensors originate but never relay packets.
   function canAppearInPath(role) {
-    if (!role) return false;
+    if (!role) return true;
     var r = String(role).toLowerCase();
-    return r.indexOf('repeater') >= 0 || r.indexOf('room_server') >= 0 || r === 'room';
+    return r.indexOf('repeater') >= 0 || r.indexOf('room_server') >= 0 || r.indexOf('room-server') >= 0 || r.indexOf('room server') >= 0 || r === 'room';
   }
   let prefixIdx = {};   // lowercase hex prefix → [node, ...]
   let pubkeyIdx = {};   // full lowercase pubkey → node (O(1) lookup)
@@ -34,6 +35,23 @@ window.HopResolver = (function() {
       Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
       Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function hasValidGps(node) {
+    return node && node.lat != null && node.lon != null && !(node.lat === 0 && node.lon === 0);
+  }
+
+  function hasNearbyAnchor(candidate, originLat, originLon, observerLat, observerLon) {
+    if (!hasValidGps(candidate)) return false;
+    if (originLat != null && originLon != null &&
+      haversineKm(candidate.lat, candidate.lon, originLat, originLon) <= RF_SEGMENT_MAX_KM) {
+      return true;
+    }
+    if (observerLat != null && observerLon != null &&
+      haversineKm(candidate.lat, candidate.lon, observerLat, observerLon) <= RF_SEGMENT_MAX_KM) {
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -196,9 +214,13 @@ window.HopResolver = (function() {
       } else if (allCandidates.length === 1) {
         const c = allCandidates[0];
         const regionCheck = packetIata ? nodeInRegion(c, packetIata) : null;
+        const hopBytes = Math.ceil(h.length / 2);
+        const regionMismatch = !!(packetIata && regionCheck && !regionCheck.near);
+        const unreliable = regionMismatch && hopBytes <= 2 &&
+          !hasNearbyAnchor(c, originLat, originLon, observerLat, observerLon);
         resolved[hop] = { name: c.name, pubkey: c.public_key,
           candidates: [{ name: c.name, pubkey: c.public_key, lat: c.lat, lon: c.lon, regional: regionCheck ? regionCheck.near : false, filterMethod: regionCheck ? regionCheck.method : 'none', distKm: regionCheck ? regionCheck.distKm : undefined }],
-          conflicts: [] };
+          conflicts: [], hopBytes, unreliable };
       } else {
         // Multiple candidates — apply geo regional filtering
         const checked = allCandidates.map(c => {
@@ -216,8 +238,11 @@ window.HopResolver = (function() {
         }));
 
         if (candidates.length === 1) {
+          const hopBytes = Math.ceil(h.length / 2);
+          const unreliable = globalFallback && hopBytes <= 2 &&
+            !hasNearbyAnchor(candidates[0], originLat, originLon, observerLat, observerLon);
           resolved[hop] = { name: candidates[0].name, pubkey: candidates[0].public_key,
-            candidates: conflicts, conflicts, globalFallback };
+            candidates: conflicts, conflicts, globalFallback, hopBytes, unreliable };
         } else {
           resolved[hop] = { name: candidates[0].name, pubkey: candidates[0].public_key,
             ambiguous: true, candidates: conflicts, conflicts, globalFallback,
@@ -356,6 +381,7 @@ window.HopResolver = (function() {
       result[hop] = {
         name: node ? node.name : pubkey.slice(0, 8),
         pubkey: pubkey,
+        serverResolved: true,
         candidates: node ? [{ name: node.name, pubkey: pubkey, lat: node.lat, lon: node.lon }] : [],
         conflicts: []
       };
@@ -363,5 +389,5 @@ window.HopResolver = (function() {
     return result;
   }
 
-  return { init: init, resolve: resolve, resolveFromServer: resolveFromServer, ready: ready, haversineKm: haversineKm, setAffinity: setAffinity, getAffinity: getAffinity };
+  return { init: init, resolve: resolve, resolveFromServer: resolveFromServer, ready: ready, haversineKm: haversineKm, rfSegmentMaxKm: RF_SEGMENT_MAX_KM, setAffinity: setAffinity, getAffinity: getAffinity };
 })();

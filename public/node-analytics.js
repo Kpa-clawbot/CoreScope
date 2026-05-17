@@ -42,7 +42,7 @@
     try {
       data = await api('/nodes/' + encodeURIComponent(pubkey) + '/analytics?days=' + days, { ttl: CLIENT_TTL.nodeAnalytics });
     } catch (e) {
-      container.innerHTML = '<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load analytics: ' + escapeHtml(e.message) + '</div>';
+      container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--danger, #ff6b6b)">Failed to load analytics: ' + escapeHtml(e.message) + '</div>';
       return;
     }
 
@@ -280,20 +280,21 @@
     });
 
     // Header row
-    grid.innerHTML = '<div class="analytics-heatmap-label"></div>';
+    let html = '<div class="analytics-heatmap-label"></div>';
     for (let h = 0; h < 24; h++) {
-      grid.innerHTML += `<div class="analytics-heatmap-label" style="justify-content:center;font-size:9px">${h}</div>`;
+      html += `<div class="analytics-heatmap-label" style="justify-content:center;font-size:9px">${h}</div>`;
     }
     // Day rows
     for (let d = 0; d < 7; d++) {
-      grid.innerHTML += `<div class="analytics-heatmap-label">${DAY_NAMES[d]}</div>`;
+      html += `<div class="analytics-heatmap-label">${DAY_NAMES[d]}</div>`;
       for (let h = 0; h < 24; h++) {
         const count = lookup[d + '-' + h] || 0;
         const intensity = count / maxCount;
         const bg = count === 0 ? 'var(--card-bg)' : `rgba(74,158,255,${0.15 + intensity * 0.85})`;
-        grid.innerHTML += `<div class="analytics-heatmap-cell" style="background:${bg}" title="${DAY_NAMES[d]} ${h}:00 — ${count} packets"></div>`;
+        html += `<div class="analytics-heatmap-cell" style="background:${bg}" title="${DAY_NAMES[d]} ${h}:00 — ${count} packets"></div>`;
       }
     }
+    grid.innerHTML = html;
   }
 
   async function loadBatteryChart(pubkey, days) {

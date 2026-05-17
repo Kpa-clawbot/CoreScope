@@ -24,8 +24,8 @@
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
-const SAGE = 'rgb(207, 217, 201)';
-const TEAL = 'rgb(44, 140, 140)';
+const SAGE = 'rgb(68, 138, 255)';
+const TEAL = 'rgb(130, 177, 255)';
 
 function fail(msg) {
   console.error(`test-logo-default-sage-teal-e2e.js: FAIL — ${msg}`);
@@ -76,7 +76,7 @@ async function main() {
       try { localStorage.setItem('meshcore-user-level', 'experienced'); } catch (_) {}
     });
     await page1.goto(BASE + '/#/', { waitUntil: 'domcontentloaded' });
-    await page1.waitForSelector('.nav-brand svg.brand-logo text', { timeout: 8000 });
+    await page1.waitForSelector('.nav-brand svg.brand-logo text', { timeout: 8000, state: 'attached' });
 
     const navDefault = await readWordmark(page1, '.nav-brand');
     if (navDefault.error) fail(navDefault.error);
@@ -130,7 +130,7 @@ async function main() {
       } catch (_) {}
     });
     await page2.goto(BASE + '/#/', { waitUntil: 'domcontentloaded' });
-    await page2.waitForSelector('.nav-brand svg.brand-logo text', { timeout: 8000 });
+    await page2.waitForSelector('.nav-brand svg.brand-logo text', { timeout: 8000, state: 'attached' });
     // Settle one frame for early-apply to run.
     await page2.waitForTimeout(200);
 

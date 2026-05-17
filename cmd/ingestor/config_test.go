@@ -31,6 +31,32 @@ func TestLoadConfigValidJSON(t *testing.T) {
 	}
 }
 
+func TestLoadConfigWithUTF8BOM(t *testing.T) {
+	t.Setenv("DB_PATH", "")
+	t.Setenv("MQTT_BROKER", "")
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	data := append([]byte{0xEF, 0xBB, 0xBF}, []byte(`{
+		"dbPath": "/tmp/bom.db",
+		"mqttSources": [
+			{"name": "bom", "broker": "tcp://localhost:1883", "topics": ["meshcore/#"]}
+		]
+	}`)...)
+	os.WriteFile(cfgPath, data, 0o644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DBPath != "/tmp/bom.db" {
+		t.Errorf("dbPath=%s, want /tmp/bom.db", cfg.DBPath)
+	}
+	if got := cfg.MQTTSources[0].Name; got != "bom" {
+		t.Errorf("source name=%s, want bom", got)
+	}
+}
+
 func TestLoadConfigMissingFile(t *testing.T) {
 	t.Setenv("DB_PATH", "")
 	t.Setenv("MQTT_BROKER", "")

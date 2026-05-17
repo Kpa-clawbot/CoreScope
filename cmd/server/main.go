@@ -56,6 +56,17 @@ func resolveBuildTime() string {
 	return "unknown"
 }
 
+func maskDBSource(source string) string {
+	if i := strings.Index(source, "://"); i >= 0 {
+		scheme := source[:i+3]
+		rest := source[i+3:]
+		if at := strings.LastIndex(rest, "@"); at >= 0 {
+			return scheme + "***@" + rest[at+1:]
+		}
+	}
+	return source
+}
+
 func main() {
 	// pprof profiling — off by default, enable with ENABLE_PPROF=true
 	if os.Getenv("ENABLE_PPROF") == "true" {
@@ -65,18 +76,18 @@ func main() {
 		}
 		go func() {
 			log.Printf("[pprof] profiling UI at http://localhost:%s/debug/pprof/", pprofPort)
-			if err := http.ListenAndServe(":"+pprofPort, nil); err != nil {
+			if err := http.ListenAndServe("127.0.0.1:"+pprofPort, nil); err != nil {
 				log.Printf("[pprof] failed to start: %v (non-fatal)", err)
 			}
 		}()
 	}
 
 	var (
-		configDir  string
-		port       int
-		dbPath     string
-		publicDir  string
-		pollMs     int
+		configDir string
+		port      int
+		dbPath    string
+		publicDir string
+		pollMs    int
 	)
 
 	flag.StringVar(&configDir, "config-dir", ".", "Directory containing config.json")
@@ -128,8 +139,9 @@ func main() {
 	}
 
 	// Resolve DB path
-	resolvedDB := cfg.ResolveDBPath(configDir)
-	log.Printf("[config] port=%d db=%s public=%s", cfg.Port, resolvedDB, publicDir)
+	dbSettings := cfg.DBSettings(configDir)
+	resolvedDB := dbSettings.DataSource()
+	log.Printf("[config] port=%d dbDriver=%s db=%s public=%s", cfg.Port, dbSettings.Label(), maskDBSource(resolvedDB), publicDir)
 	if len(cfg.NodeBlacklist) > 0 {
 		log.Printf("[config] nodeBlacklist: %d node(s) will be hidden from API", len(cfg.NodeBlacklist))
 		for _, pk := range cfg.NodeBlacklist {
@@ -140,9 +152,9 @@ func main() {
 	}
 
 	// Open database
-	database, err := OpenDB(resolvedDB)
+	database, err := OpenDBWithSettings(dbSettings)
 	if err != nil {
-		log.Fatalf("[db] failed to open %s: %v", resolvedDB, err)
+		log.Fatalf("[db] failed to open %s: %v", dbSettings.Label(), err)
 	}
 	var dbCloseOnce sync.Once
 	dbClose := func() error {
@@ -153,9 +165,7 @@ func main() {
 	defer dbClose()
 
 	// Verify DB has expected tables
-	var tableName string
-	err = database.conn.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='transmissions'").Scan(&tableName)
-	if err == sql.ErrNoRows {
+	if !database.tableExists("transmissions") {
 		log.Fatalf("[db] table 'transmissions' not found — is this a CoreScope database?")
 	}
 
@@ -172,8 +182,10 @@ func main() {
 
 	// Ensure indexes the server's SQL fallback path depends on
 	// (mirrors ingestor schema for DBs created by old server-only builds).
-	if err := ensureServerIndexes(resolvedDB); err != nil {
-		log.Printf("[db] warning: could not ensure server indexes: %v", err)
+	if database.IsSQLite() {
+		if err := ensureServerIndexes(resolvedDB); err != nil {
+			log.Printf("[db] warning: could not ensure server indexes: %v", err)
+		}
 	}
 
 	// In-memory packet store
@@ -189,8 +201,10 @@ func main() {
 
 	// Initialize persisted neighbor graph
 	dbPath = database.path
-	if err := ensureNeighborEdgesTable(dbPath); err != nil {
-		log.Printf("[neighbor] warning: could not create neighbor_edges table: %v", err)
+	if database.IsSQLite() {
+		if err := ensureNeighborEdgesTable(dbPath); err != nil {
+			log.Printf("[neighbor] warning: could not create neighbor_edges table: %v", err)
+		}
 	}
 	// Add resolved_path column if missing.
 	// NOTE on startup ordering (review item #10): ensureResolvedPathColumn runs AFTER
@@ -198,41 +212,53 @@ func main() {
 	// pre-existing DB. This means Load() won't SELECT resolved_path from SQLite.
 	// Async backfill runs after HTTP starts (see backfillResolvedPathsAsync below)
 	// AND to SQLite. On next restart, detectSchema finds the column and Load() reads it.
-	if err := ensureResolvedPathColumn(dbPath); err != nil {
-		log.Printf("[store] warning: could not add resolved_path column: %v", err)
+	if database.IsSQLite() {
+		if err := ensureResolvedPathColumn(dbPath); err != nil {
+			log.Printf("[store] warning: could not add resolved_path column: %v", err)
+		} else {
+			database.hasResolvedPath = true // detectSchema ran before column was added; fix the flag
+		}
 	} else {
-		database.hasResolvedPath = true // detectSchema ran before column was added; fix the flag
+		database.hasResolvedPath = true
 	}
 
 	// Ensure observers.inactive column exists (PR #954 filters on it; ingestor migration
 	// adds it but server may run against DBs ingestor never touched, e.g. e2e fixture).
-	if err := ensureObserverInactiveColumn(dbPath); err != nil {
-		log.Printf("[store] warning: could not add observers.inactive column: %v", err)
+	if database.IsSQLite() {
+		if err := ensureObserverInactiveColumn(dbPath); err != nil {
+			log.Printf("[store] warning: could not add observers.inactive column: %v", err)
+		}
 	}
 
 	// Ensure observers.last_packet_at column exists (PR #905 reads it; ingestor migration
 	// adds it but server may run against DBs ingestor never touched, e.g. e2e fixture).
-	if err := ensureLastPacketAtColumn(dbPath); err != nil {
-		log.Printf("[store] warning: could not add observers.last_packet_at column: %v", err)
+	if database.IsSQLite() {
+		if err := ensureLastPacketAtColumn(dbPath); err != nil {
+			log.Printf("[store] warning: could not add observers.last_packet_at column: %v", err)
+		}
 	}
 
 	// Ensure nodes.foreign_advert column exists (#730 reads it on every /api/nodes
 	// scan; ingestor migration foreign_advert_v1 adds it but server may run against
 	// DBs ingestor never touched, e.g. e2e fixture).
-	if err := ensureForeignAdvertColumn(dbPath); err != nil {
-		log.Printf("[store] warning: could not add nodes.foreign_advert column: %v", err)
+	if database.IsSQLite() {
+		if err := ensureForeignAdvertColumn(dbPath); err != nil {
+			log.Printf("[store] warning: could not add nodes.foreign_advert column: %v", err)
+		}
 	}
 
 	// Ensure transmissions.from_pubkey column + index exists (#1143). Backfill
 	// for legacy NULL rows runs async after HTTP starts so it can't block boot
 	// even on prod-sized DBs (100K+ transmissions).
-	if err := ensureFromPubkeyColumn(dbPath); err != nil {
-		log.Printf("[store] warning: could not add transmissions.from_pubkey column: %v", err)
+	if database.IsSQLite() {
+		if err := ensureFromPubkeyColumn(dbPath); err != nil {
+			log.Printf("[store] warning: could not add transmissions.from_pubkey column: %v", err)
+		}
 	}
 
 	// Soft-delete observers that are in the blacklist (mark inactive=1) so
 	// historical data from a prior unblocked window is hidden too.
-	if len(cfg.ObserverBlacklist) > 0 {
+	if len(cfg.ObserverBlacklist) > 0 && database.IsSQLite() {
 		softDeleteBlacklistedObservers(dbPath, cfg.ObserverBlacklist)
 	}
 
@@ -254,7 +280,13 @@ func main() {
 					log.Printf("[neighbor] graph build panic recovered: %v", r)
 				}
 			}()
-			rw, rwErr := cachedRW(dbPath)
+			var rw *sql.DB
+			var rwErr error
+			if database.IsSQLite() {
+				rw, rwErr = cachedRW(dbPath)
+			} else {
+				rw = database.conn
+			}
 			if rwErr == nil {
 				edgeCount := buildAndPersistEdges(store, rw)
 				log.Printf("[neighbor] persisted %d edges", edgeCount)
@@ -472,13 +504,21 @@ func main() {
 			}()
 			time.Sleep(4 * time.Minute) // stagger after metrics prune
 			g := store.graph.Load()
-			PruneNeighborEdges(dbPath, g, maxAgeDays)
+			if database.IsSQLite() {
+				PruneNeighborEdges(dbPath, g, maxAgeDays)
+			} else {
+				pruneNeighborEdgesWithConn(database.conn, g, maxAgeDays)
+			}
 			runIncrementalVacuum(resolvedDB, vacuumPages)
 			for {
 				select {
 				case <-edgePruneTicker.C:
 					g := store.graph.Load()
-					PruneNeighborEdges(dbPath, g, maxAgeDays)
+					if database.IsSQLite() {
+						PruneNeighborEdges(dbPath, g, maxAgeDays)
+					} else {
+						pruneNeighborEdgesWithConn(database.conn, g, maxAgeDays)
+					}
 					runIncrementalVacuum(resolvedDB, vacuumPages)
 				case <-edgePruneDone:
 					return
@@ -545,7 +585,14 @@ func main() {
 	// 100K+ rows can't block boot; queries handle NULL gracefully.
 	// startFromPubkeyBackfill wraps the goroutine dispatch so the async
 	// contract is testable (see TestBackfillFromPubkey_DoesNotBlockBoot).
-	startFromPubkeyBackfill(dbPath, 5000, 100*time.Millisecond)
+	if database.IsSQLite() {
+		startFromPubkeyBackfill(dbPath, 5000, 100*time.Millisecond)
+	} else {
+		// from_pubkey legacy backfill is SQLite-only; Postgres schema writes
+		// from_pubkey at ingest/migration time, so mark this healthz subtask
+		// complete without relying on the default zero-value state.
+		fromPubkeyBackfillMarkDone()
+	}
 
 	// Migrate old content hashes in background (one-time, idempotent).
 	go migrateContentHashesAsync(store, 5000, 100*time.Millisecond)

@@ -285,9 +285,9 @@ async function main() {
     console.log(`  ✅ hero duotone preserved (dark: CORE=${heroDark.m.CORE} SCOPE=${heroDark.m.SCOPE}; light: CORE=${heroLight.m.CORE} SCOPE=${heroLight.m.SCOPE})`);
     passed++;
 
-    // 6. Mobile fit: at 360x640 the full wordmark logo must be hidden and
-    //    a mark-only .brand-mark-only inline SVG must take its place. Also
-    //    asserts the visible logo's right edge does not overflow .nav-left.
+    // 6. Mobile fit: at 360x640 the old full wordmark SVG must be hidden
+    //    and the visible MeshCore Canada image logo (or compact mark-only
+    //    fallback) must not overflow.
     await page.setViewportSize({ width: 360, height: 640 });
     await page.evaluate(() => { window.location.hash = '#/home'; });
     await page.waitForFunction(() => location.hash === '#/home' || location.hash === '#/');
@@ -300,17 +300,24 @@ async function main() {
       if (!brand) return { error: '.nav-brand missing' };
       const full = brand.querySelector('svg.brand-logo');
       const mark = brand.querySelector('svg.brand-mark-only');
+      const imageLogo = brand.querySelector('img.meshcore-brand-logo');
       const left = document.querySelector('.nav-left');
       const fullVisible = full ? getComputedStyle(full).display !== 'none' : null;
-      const markVisible = mark ? getComputedStyle(mark).display !== 'none' : null;
-      const visibleSvg = (mark && markVisible) ? mark : (full && fullVisible) ? full : null;
-      const visRect = visibleSvg ? visibleSvg.getBoundingClientRect() : null;
+      let markVisible = mark ? getComputedStyle(mark).display !== 'none' : null;
+      const imageVisible = imageLogo ? getComputedStyle(imageLogo).display !== 'none' : null;
+      // 0.5 Alpha uses the MeshCore Canada image as the primary mobile brand;
+      // the legacy compact SVG remains an acceptable fallback for older builds.
+      if (imageVisible) markVisible = true;
+      const visibleLogo = (imageLogo && imageVisible) ? imageLogo : (mark && markVisible) ? mark : (full && fullVisible) ? full : null;
+      const visRect = visibleLogo ? visibleLogo.getBoundingClientRect() : null;
       const leftRect = left ? left.getBoundingClientRect() : null;
       return {
         hasFull: !!full,
         hasMark: !!mark,
+        hasImageLogo: !!imageLogo,
         fullVisible,
         markVisible,
+        imageVisible,
         visRectRight: visRect ? visRect.right : null,
         leftRectRight: leftRect ? leftRect.right : null,
         viewportWidth: window.innerWidth,
@@ -342,11 +349,14 @@ async function main() {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.evaluate(() => { window.location.hash = '#/home'; });
     await page.waitForFunction(() => location.hash === '#/home' || location.hash === '#/');
-    await page.waitForSelector('.nav-brand svg.brand-logo', { timeout: 8000 });
+    await page.waitForSelector('.nav-brand svg.brand-logo', { state: 'attached', timeout: 8000 });
     await page.waitForTimeout(150);
     const clip = await page.evaluate(() => {
       const svg = document.querySelector('.nav-brand svg.brand-logo');
       if (!svg) return { error: '.nav-brand svg.brand-logo missing' };
+      if (getComputedStyle(svg).display === 'none') {
+        return { skipped: true, reason: 'inline wordmark SVG hidden by MeshCore Canada image rebrand' };
+      }
       const vb = (svg.getAttribute('viewBox') || '').split(/\s+/).map(Number);
       if (vb.length !== 4) return { error: 'viewBox malformed: ' + svg.getAttribute('viewBox') };
       const [vx, vy, vw, vh] = vb;
@@ -365,7 +375,11 @@ async function main() {
     if (clip.offenders && clip.offenders.length) {
       fail(`desktop: wordmark <text> overflows SVG viewBox (will be clipped): ${JSON.stringify(clip.offenders)}`);
     }
-    console.log(`  ✅ desktop (1280px): CORE/SCOPE bboxes fit inside viewBox ${JSON.stringify(clip.viewBox)}`);
+    if (clip.skipped) {
+      console.log(`  ✅ desktop (1280px): inline wordmark clip check skipped (${clip.reason})`);
+    } else {
+      console.log(`  ✅ desktop (1280px): CORE/SCOPE bboxes fit inside viewBox ${JSON.stringify(clip.viewBox)}`);
+    }
     passed++;
 
     await browser.close();

@@ -3,13 +3,33 @@
 # Docs:  https://github.com/Kpa-clawbot/CoreScope/blob/master/DEPLOY.md
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-corescope}
+      POSTGRES_USER: ${POSTGRES_USER:-corescope}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-corescope}
+    volumes:
+      - ${POSTGRES_DATA_DIR:-./postgres-data}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-corescope} -d ${POSTGRES_DB:-corescope}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   corescope:
     image: ghcr.io/kpa-clawbot/corescope:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "${HTTP_PORT:-80}:80"
     volumes:
       - ${DATA_DIR:-./data}:/app/data
     environment:
+      - DB_DRIVER=${DB_DRIVER:-postgres}
+      - DATABASE_URL=${DATABASE_URL:-postgres://corescope:corescope@postgres:5432/corescope?sslmode=disable}
+      - DB_PATH=${DB_PATH:-/app/data/meshcore.db}
       - DISABLE_CADDY=${DISABLE_CADDY:-true}
       - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-false}
     restart: unless-stopped

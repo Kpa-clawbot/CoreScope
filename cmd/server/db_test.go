@@ -214,6 +214,26 @@ func TestGetRoleCounts(t *testing.T) {
 	}
 }
 
+func TestGetAllRoleCounts(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+
+	counts := db.GetAllRoleCounts()
+	if counts["repeaters"] != 1 {
+		t.Errorf("expected 1 repeater, got %d", counts["repeaters"])
+	}
+	if counts["companions"] != 1 {
+		t.Errorf("expected 1 companion, got %d", counts["companions"])
+	}
+	if counts["rooms"] != 1 {
+		t.Errorf("expected 1 room, got %d", counts["rooms"])
+	}
+	if counts["sensors"] != 0 {
+		t.Errorf("expected 0 sensors, got %d", counts["sensors"])
+	}
+}
+
 func TestGetDBSizeStats(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

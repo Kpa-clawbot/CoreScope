@@ -391,7 +391,8 @@ function toggleFavorite(pubkey) {
 }
 function favStar(pubkey, cls) {
   const on = isFavorite(pubkey);
-  return '<button class="fav-star ' + (cls || '') + (on ? ' on' : '') + '" data-fav="' + pubkey + '" title="' + (on ? 'Remove from favorites' : 'Add to favorites') + '">' + (on ? '★' : '☆') + '</button>';
+  const icon = window.UIIcon ? UIIcon.svg('star', 'ui-icon fav-star-icon') : '<span class="ui-icon fav-star-icon" aria-hidden="true"></span>';
+  return '<button class="fav-star ' + (cls || '') + (on ? ' on' : '') + '" data-fav="' + pubkey + '" title="' + (on ? 'Remove from favorites' : 'Add to favorites') + '" aria-label="' + (on ? 'Remove from favorites' : 'Add to favorites') + '" aria-pressed="' + (on ? 'true' : 'false') + '">' + icon + '</button>';
 }
 function bindFavStars(container, onToggle) {
   container.querySelectorAll('.fav-star').forEach(btn => {
@@ -399,9 +400,10 @@ function bindFavStars(container, onToggle) {
       e.stopPropagation();
       const pk = btn.dataset.fav;
       const nowOn = toggleFavorite(pk);
-      btn.textContent = nowOn ? '★' : '☆';
       btn.classList.toggle('on', nowOn);
       btn.title = nowOn ? 'Remove from favorites' : 'Add to favorites';
+      btn.setAttribute('aria-label', btn.title);
+      btn.setAttribute('aria-pressed', nowOn ? 'true' : 'false');
       if (onToggle) onToggle(pk, nowOn);
     });
   });
@@ -1003,7 +1005,12 @@ window.addEventListener('DOMContentLoaded', () => {
   const savedTheme = localStorage.getItem('meshcore-theme');
   function applyTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
-    darkToggle.textContent = theme === 'dark' ? '🌙' : '☀️';
+    if (window.UIIcon) {
+      darkToggle.innerHTML = UIIcon.svg(theme === 'dark' ? 'moon' : 'sun');
+    } else {
+      darkToggle.textContent = theme === 'dark' ? 'Dark' : 'Light';
+    }
+    darkToggle.setAttribute('aria-label', theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
     localStorage.setItem('meshcore-theme', theme);
     // Re-apply user theme CSS vars for the correct mode (light/dark)
     reapplyUserThemeVars(theme === 'dark');
@@ -1043,13 +1050,12 @@ window.addEventListener('DOMContentLoaded', () => {
       }
     } catch (e) { console.error('[theme] reapply error:', e); }
   }
-  // On load: respect saved pref, else OS pref, else light
+  // On load: respect saved pref, otherwise default to the MeshCore Canada
+  // dark operator theme. Light mode remains available through the toggle.
   if (savedTheme) {
     applyTheme(savedTheme);
-  } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    applyTheme('dark');
   } else {
-    applyTheme('light');
+    applyTheme('dark');
   }
   darkToggle.addEventListener('click', () => {
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -1317,7 +1323,7 @@ window.addEventListener('DOMContentLoaded', () => {
   async function renderFavDropdown() {
     const favs = getFavorites();
     if (!favs.length) {
-      favDropdown.innerHTML = '<div class="fav-dd-empty">No favorites yet.<br><small>Click ☆ on any node to add it.</small></div>';
+      favDropdown.innerHTML = '<div class="fav-dd-empty">No favorites yet.<br><small>Use the favorite button on a node to pin it here.</small></div>';
       return;
     }
     favDropdown.innerHTML = '<div class="fav-dd-loading">Loading...</div>';

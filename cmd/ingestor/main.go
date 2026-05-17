@@ -33,7 +33,7 @@ func main() {
 		}
 		go func() {
 			log.Printf("[pprof] ingestor profiling at http://localhost:%s/debug/pprof/", pprofPort)
-			if err := http.ListenAndServe(":"+pprofPort, nil); err != nil {
+			if err := http.ListenAndServe("127.0.0.1:"+pprofPort, nil); err != nil {
 				log.Printf("[pprof] failed to start: %v (non-fatal)", err)
 			}
 		}()
@@ -52,12 +52,13 @@ func main() {
 
 	sources := cfg.ResolvedSources()
 
-	store, err := OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
+	dbSettings := cfg.DBSettings()
+	store, err := OpenStoreWithSettings(dbSettings, cfg.MetricsSampleInterval())
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
 	defer store.Close()
-	log.Printf("SQLite opened: %s", cfg.DBPath)
+	log.Printf("%s opened", dbSettings.Label())
 
 	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
 	store.BackfillPathJSONAsync()

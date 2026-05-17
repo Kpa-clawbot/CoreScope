@@ -9,7 +9,7 @@
   padding: 0 20px;
   text-align: center;
 }
-.home-chooser h1 { font-size: 1.5rem; margin-bottom: 8px; }
+.home-chooser h1 { font-size: 1.5rem; line-height: 1.2; margin-bottom: 8px; }
 .home-chooser p { color: var(--text-muted); margin-bottom: 32px; }
 .chooser-options { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
 .chooser-btn {
@@ -33,15 +33,12 @@
 }
 .home-hero-logo {
   display: block;
-  width: 100%;
-  max-width: min(720px, 90vw);
+  width: min(112px, 38vw);
+  max-width: 112px;
   height: auto;
   margin: 0 auto 16px;
-  /* Inline SVG (PR #1137): inherits page CSS vars (--logo-text /
-     --logo-accent / --logo-accent-hi / --logo-muted) so it themes with
-     the rest of the UI on light AND dark themes. No baked background
-     rect — the SVG is transparent and sits on .home-hero's surface. */
 }
+.home-hero-logo-legacy { display: none; }
 .home-hero h1 {
   font: 700 1.5rem/1.2 var(--font);
   color: var(--text);
@@ -498,4 +495,164 @@
   .my-nodes-grid { grid-template-columns: 1fr; padding: 0 12px 16px; }
   .mnc-metrics { grid-template-columns: repeat(2, 1fr); }
   .mnc-remove { opacity: 1; }
+}
+
+/* === 0.5 Alpha MeshCore Canada home polish ========================= */
+.home-alpha-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 3px 10px;
+  margin: 0 auto 12px;
+  border: 1px solid color-mix(in srgb, var(--mesh-red-500, #ee3429) 52%, var(--border));
+  border-radius: 999px;
+  color: var(--mesh-red-400, #ff665d);
+  background: color-mix(in srgb, var(--mesh-red-500, #ee3429) 12%, transparent);
+  font: 700 0.76rem/1 var(--font);
+}
+
+.home-chooser {
+  max-width: 640px;
+  margin-top: clamp(72px, 12vh, 140px);
+}
+.home-chooser h1,
+.home-hero h1 {
+  font-size: clamp(1.45rem, 2vw, 2rem);
+  letter-spacing: 0;
+}
+.home-chooser p,
+.home-hero p {
+  color: var(--text-muted);
+}
+.chooser-options {
+  gap: 14px;
+}
+.chooser-btn {
+  min-width: min(100%, 228px);
+  border-width: 1px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 78%, transparent), var(--surface-1));
+  box-shadow: none;
+}
+.chooser-btn:hover,
+.chooser-btn:focus-visible {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+  outline: none;
+}
+.chooser-icon {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 1.25rem;
+}
+.chooser-icon .ui-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.home-hero {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  background:
+    radial-gradient(circle at 50% 0, color-mix(in srgb, var(--accent) 16%, transparent), transparent 42%),
+    var(--surface-0);
+}
+.home-hero-logo {
+  width: min(96px, 32vw);
+  max-width: 96px;
+  margin-bottom: 12px;
+}
+.home-search-wrap input {
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px transparent;
+}
+.home-search-wrap input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.home-stats {
+  max-width: 980px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+}
+.home-stat {
+  border-radius: 8px;
+  padding: 16px;
+  text-align: left;
+  box-shadow: none;
+}
+.home-stat .val {
+  color: var(--text);
+  font-size: 1.45rem;
+}
+.home-stat .lbl {
+  color: var(--text-muted);
+}
+
+.onboarding-prompt {
+  border: 1px dashed color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-1) 72%, transparent);
+}
+.onboard-icon {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  color: var(--mesh-red-400, #ff665d);
+  background: color-mix(in srgb, var(--mesh-red-500, #ee3429) 12%, transparent);
+  font-size: 1.35rem;
+}
+.onboard-icon .ui-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.home-footer-link {
+  min-height: 38px;
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface-1);
+}
+.home-footer-link .ui-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+
+.my-node-card,
+.health-body,
+.journey-node,
+.checklist-item {
+  border-radius: 8px;
+}
+.mnc-remove {
+  min-width: 30px;
+  min-height: 30px;
+}
+
+@media (max-width: 740px) {
+  .home-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .home-chooser {
+    margin-top: 72px;
+  }
+}
+
+@media (max-width: 420px) {
+  .home-stats {
+    grid-template-columns: 1fr;
+  }
 }

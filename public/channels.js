@@ -1781,6 +1781,13 @@
 
     // Also check if an encrypted channel hash matches a stored key
     if (ch && ch.encrypted) {
+      if (storedKeys[hash]) {
+        var namedKeyHex = storedKeys[hash];
+        var namedKeyBytes = ChannelDecrypt.hexToBytes(namedKeyHex);
+        var namedHashByte = await ChannelDecrypt.computeChannelHash(namedKeyBytes);
+        await decryptAndRender(namedKeyHex, namedHashByte, hash);
+        return;
+      }
       for (var kn in storedKeys) {
         var kh = storedKeys[kn];
         var kb = ChannelDecrypt.hexToBytes(kh);
@@ -1844,7 +1851,7 @@
       }
     } catch (e) {
       if (isStaleMessageRequest(request)) return;
-      msgEl.innerHTML = `<div class="ch-empty">Failed to load messages: ${e.message}</div>`;
+      msgEl.innerHTML = '<div class="ch-empty">Failed to load messages: ' + escapeHtml((e && e.message) || 'Unknown error') + '</div>';
     }
   }
 

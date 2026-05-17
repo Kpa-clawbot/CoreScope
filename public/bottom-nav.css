@@ -152,8 +152,13 @@
 
 .bottom-nav-label {
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
   white-space: nowrap;
+}
+.bottom-nav-icon .ui-icon,
+.bottom-nav-sheet-icon .ui-icon {
+  width: 20px;
+  height: 20px;
 }
 
 /* Respect reduced-motion preferences — disable the color/border

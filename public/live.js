@@ -8,6 +8,7 @@
   // Status color helpers (read from CSS variables for theme support)
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function statusGreen() { return cssVar('--status-green') || '#22c55e'; }
+  function liveIcon(name) { return window.UIIcon ? UIIcon.svg(name) : ''; }
 
   let map, ws, nodesLayer, pathsLayer, animLayer, heatLayer, geoFilterLayer;
   let nodeMarkers = {};
@@ -15,6 +16,9 @@
   let packetCount = 0;
   let activeAnims = 0;
   const MAX_CONCURRENT_ANIMS = 20;
+  const LIVE_RF_SEGMENT_MAX_KM = (window.HopResolver && window.HopResolver.rfSegmentMaxKm) || 500;
+  let showSuspiciousLinks = localStorage.getItem('live-show-suspicious-links') === 'true';
+  let suppressedPathCount = 0;
   let nodeActivity = {};
   let recentPaths = [];
   let showGhostHops = localStorage.getItem('live-ghost-hops') !== 'false';
@@ -30,6 +34,9 @@
   let nodeFilterShown = 0;
   // Region filter (#1045): observer_id → IATA code, populated from /api/observers
   let observerIataMap = {};
+  let hopResolverNodes = [];
+  let hopResolverObservers = [];
+  let hopResolverIataCoords = {};
   let regionFilterChangeHandler = null;
 
   /**
@@ -52,6 +59,30 @@
     return false;
   }
   function setObserverIataMap(m) { observerIataMap = m || {}; }
+
+  function refreshHopResolver(nodes) {
+    if (!window.HopResolver) return;
+    if (Array.isArray(nodes)) hopResolverNodes = nodes;
+    HopResolver.init(hopResolverNodes, {
+      observers: hopResolverObservers,
+      iataCoords: hopResolverIataCoords
+    });
+  }
+
+  function loadObserverRegionContext() {
+    return Promise.all([
+      fetch('/api/observers').then(function(r) { return r.json(); }),
+      fetch('/api/iata-coords').then(function(r) { return r.json(); }).catch(function() { return { coords: {} }; })
+    ]).then(function(results) {
+      var observerData = results[0] || {};
+      var coordData = results[1] || {};
+      hopResolverObservers = observerData.observers || observerData || [];
+      hopResolverIataCoords = coordData.coords || {};
+      setObserverIataMap(buildObserverIataMap(observerData));
+      refreshHopResolver();
+      return observerData;
+    });
+  }
 
   /**
    * Build observer_id → IATA map from the /api/observers response.
@@ -638,7 +669,8 @@
       resolved_path: pkt.resolved_path,
       _ts: new Date(pkt.timestamp || pkt.created_at).getTime(),
       decoded: { header: { payloadTypeName: typeName }, payload: raw, path: { hops } },
-      snr: pkt.snr, rssi: pkt.rssi, observer: pkt.observer_name
+      snr: pkt.snr, rssi: pkt.rssi, observer_id: pkt.observer_id,
+      observer_name: pkt.observer_name, observer: pkt.observer_name
     };
   }
 
@@ -911,10 +943,11 @@
             <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
             <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
             <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
+            <div class="live-stat-pill suppressed-pill" id="liveSuppressedPill" title="RF paths over 500 km are suppressed from map lines and animations; feed entries remain visible."><span id="liveSuppressedCount">0</span> RF suppressed</div>
           </div>
           <button class="live-header-toggle" data-live-header-toggle id="liveHeaderToggle"
                   aria-expanded="false" aria-controls="liveHeaderBody"
-                  aria-label="Show live stats">📊</button>
+                  aria-label="Show live stats">${liveIcon('analytics')}</button>
           <div class="live-header-body" data-live-header-body id="liveHeaderBody">
             <div class="live-title">
               MESH LIVE
@@ -931,6 +964,8 @@
             <label><input type="checkbox" id="liveGhostToggle" checked aria-describedby="ghostDesc"> Ghosts</label>
             <span id="ghostDesc" class="sr-only">Show interpolated ghost markers for unknown hops</span>
             <label><input type="checkbox" id="liveRealisticToggle" aria-describedby="realisticDesc"> Realistic</label>
+            <label><input type="checkbox" id="liveSuspiciousToggle" aria-describedby="suspiciousDesc"> Show suppressed paths</label>
+            <span id="suspiciousDesc" class="sr-only">Render implausible RF links as warning dashed debug paths while keeping them out of normal map animations</span>
             <span id="realisticDesc" class="sr-only">Buffer packets by hash and animate all paths simultaneously</span>
             <label><input type="checkbox" id="liveColorHashToggle" aria-describedby="colorHashDesc"> Color by hash</label>
             <span id="colorHashDesc" class="sr-only">Color flying-packet dots and contrails by packet hash for propagation tracing</span>
@@ -938,9 +973,9 @@
             <span id="matrixDesc" class="sr-only">Animate packet hex bytes flowing along paths like the Matrix</span>
             <label><input type="checkbox" id="liveMatrixRainToggle" aria-describedby="rainDesc"> Rain</label>
             <span id="rainDesc" class="sr-only">Matrix rain overlay — packets fall as hex columns</span>
-            <label><input type="checkbox" id="liveAudioToggle" aria-describedby="audioDesc"> 🎵 Audio</label>
+            <label><input type="checkbox" id="liveAudioToggle" aria-describedby="audioDesc"> Audio</label>
             <span id="audioDesc" class="sr-only">Sonify packets — turn raw bytes into generative music</span>
-            <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ Favorites</label>
+            <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> Favorites</label>
             <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
             <div class="live-node-filter-wrap" style="position:relative">
               <input type="text" id="liveNodeFilterInput" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input" role="combobox" aria-expanded="false" aria-owns="liveNodeFilterDropdown" aria-autocomplete="list" aria-activedescendant="">
@@ -959,7 +994,7 @@
           </div>
           <button class="live-controls-toggle" data-live-controls-toggle id="liveControlsToggle"
                   aria-expanded="false" aria-controls="liveControlsBody"
-                  aria-label="Show live controls">⚙</button>
+                  aria-label="Show live controls">${liveIcon('settings')}</button>
         </div>
         </div><!-- /#liveHeader -->
         <div class="live-overlay live-feed" id="liveFeed">
@@ -1108,6 +1143,15 @@
       localStorage.setItem('live-ghost-hops', showGhostHops);
     });
 
+    updateSuppressedBadge();
+
+    const suspiciousToggle = document.getElementById('liveSuspiciousToggle');
+    suspiciousToggle.checked = showSuspiciousLinks;
+    suspiciousToggle.addEventListener('change', (e) => {
+      showSuspiciousLinks = e.target.checked;
+      localStorage.setItem('live-show-suspicious-links', showSuspiciousLinks);
+    });
+
     const realisticToggle = document.getElementById('liveRealisticToggle');
     realisticToggle.checked = realisticPropagation;
     realisticToggle.addEventListener('change', (e) => {
@@ -1140,9 +1184,7 @@
       // (cmd/server/types.go ObserverListResponse) — NOT a top-level array.
       // Bug #1136: previously parsed as array → map empty → region filter
       // dropped every packet.
-      fetch('/api/observers').then(function(r) { return r.json(); }).then(function(data) {
-        setObserverIataMap(buildObserverIataMap(data));
-      }).catch(function() { /* leave map empty; filter will hide all when active */ });
+      loadObserverRegionContext().catch(function() { /* leave map empty; filter will hide all when active */ });
       RegionFilter.init(rfEl, { dropdown: true });
       regionFilterChangeHandler = RegionFilter.onChange(function() { /* selection persisted by RegionFilter; future packets reflect it */ });
     })();
@@ -2008,7 +2050,7 @@
       });
       const _el2 = document.getElementById('liveNodeCount'); if (_el2) _el2.textContent = Object.keys(nodeMarkers).length;
       // Initialize shared HopResolver with loaded nodes
-      if (window.HopResolver) HopResolver.init(list);
+      refreshHopResolver(list);
       // Fetch affinity data for hop disambiguation
       fetchAffinityData();
       startAffinityRefresh();
@@ -2038,7 +2080,7 @@
     nodeMarkers = {};
     nodeData = {};
     nodeActivity = {};
-    if (window.HopResolver) HopResolver.init([]);
+    refreshHopResolver([]);
     if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
   }
 
@@ -2314,7 +2356,7 @@
     if (pruned) {
       var _el2 = document.getElementById('liveNodeCount');
       if (_el2) _el2.textContent = Object.keys(nodeMarkers).length;
-      if (window.HopResolver) HopResolver.init(Object.values(nodeData));
+      refreshHopResolver(Object.values(nodeData));
     }
     // Prune orphaned nodeActivity entries (nodes removed above or never tracked)
     for (var aKey in nodeActivity) {
@@ -2346,6 +2388,10 @@
   window._liveSetNodeFilter = setNodeFilter;
   window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
   window._liveResolveHopPositions = resolveHopPositions;
+  window._livePathPlausibilityReport = pathPlausibilityReport;
+  window._liveShouldDrawRfPath = shouldDrawRfPath;
+  window._livePathRenderMode = pathRenderMode;
+  window._liveGetSuppressedPathCount = function() { return suppressedPathCount; };
   window._liveVcrSpeedCycle = vcrSpeedCycle;
   window._liveVcrPause = vcrPause;
   window._liveVcrResumeLive = vcrResumeLive;
@@ -2466,7 +2512,7 @@
           var n = { public_key: key, name: p.name || key.slice(0,8), role: p.role || 'unknown', lat: p.lat, lon: p.lon, _liveSeen: Date.now() };
           nodeData[key] = n;
           addNodeMarker(n);
-          if (window.HopResolver) HopResolver.init(Object.values(nodeData));
+          refreshHopResolver(Object.values(nodeData));
         } else if (nodeData[key]) {
           nodeData[key]._liveSeen = Date.now();
         }
@@ -2531,9 +2577,18 @@
       var pathKey = hops.join(',');
       if (seenPathKeys.has(pathKey)) continue;
       seenPathKeys.add(pathKey);
-      var hopPositions = resolveHopPositions(hops, qp, window.getResolvedPath ? getResolvedPath(qpkt) : null);
+      var hopPositions = resolveHopPositions(hops, qp, window.getResolvedPath ? getResolvedPath(qpkt) : null, qpkt);
       if (hopPositions.length >= 2) {
-        allPaths.push({ hopPositions: hopPositions, raw: qpkt.raw || first.raw });
+        var pathReport = pathPlausibilityReport(hopPositions);
+        var pathMode = pathRenderMode(pathReport, showSuspiciousLinks);
+        if (pathMode === 'normal') {
+          allPaths.push({ hopPositions: hopPositions, raw: qpkt.raw || first.raw, mode: pathMode });
+        } else if (pathMode === 'debug-suppressed') {
+          traceSuppressedPath(pathReport, qpkt.hash || first.hash);
+          allPaths.push({ hopPositions: hopPositions, raw: qpkt.raw || first.raw, mode: pathMode, report: pathReport, hash: qpkt.hash || first.hash });
+        } else {
+          traceSuppressedPath(pathReport, qpkt.hash || first.hash);
+        }
       } else if (hopPositions.length === 1) {
         pulseNode(hopPositions[0].key, hopPositions[0].pos, typeName);
       }
@@ -2542,9 +2597,18 @@
     // If no multi-hop paths found, try the decoded path as fallback
     if (allPaths.length === 0) {
       var fallbackHops = decoded.path?.hops || [];
-      var fallbackPositions = resolveHopPositions(fallbackHops, payload);
+      var fallbackPositions = resolveHopPositions(fallbackHops, payload, window.getResolvedPath ? getResolvedPath(first) : null, first);
       if (fallbackPositions.length >= 2) {
-        allPaths.push({ hopPositions: fallbackPositions, raw: first.raw });
+        var fallbackReport = pathPlausibilityReport(fallbackPositions);
+        var fallbackMode = pathRenderMode(fallbackReport, showSuspiciousLinks);
+        if (fallbackMode === 'normal') {
+          allPaths.push({ hopPositions: fallbackPositions, raw: first.raw, mode: fallbackMode });
+        } else if (fallbackMode === 'debug-suppressed') {
+          traceSuppressedPath(fallbackReport, first.hash);
+          allPaths.push({ hopPositions: fallbackPositions, raw: first.raw, mode: fallbackMode, report: fallbackReport, hash: first.hash });
+        } else {
+          traceSuppressedPath(fallbackReport, first.hash);
+        }
       } else if (fallbackPositions.length === 1) {
         pulseNode(fallbackPositions[0].key, fallbackPositions[0].pos, typeName);
       }
@@ -2554,6 +2618,10 @@
     // First path gets audio sync hook, rest are visual-only
     var firstPathDone = false;
     for (var ai = 0; ai < allPaths.length; ai++) {
+      if (allPaths[ai].mode === 'debug-suppressed') {
+        drawSuspiciousPath(allPaths[ai].hopPositions, allPaths[ai].report, allPaths[ai].hash);
+        continue;
+      }
       var onHop = null;
       if (!firstPathDone && obsCount === 1 && window.MeshAudio) {
         // For single observation, try sync voice on the first path
@@ -2617,12 +2685,118 @@
     }
   }
 
-  function resolveHopPositions(hops, payload, resolvedPath) {
+  function updateSuppressedBadge() {
+    var el = document.getElementById('liveSuppressedCount');
+    if (el) el.textContent = String(suppressedPathCount);
+  }
+
+  function liveHaversineKm(from, to) {
+    if (window.HopResolver && window.HopResolver.haversineKm) return window.HopResolver.haversineKm(from[0], from[1], to[0], to[1]);
+    var R = 6371;
+    var dLat = (to[0] - from[0]) * Math.PI / 180;
+    var dLon = (to[1] - from[1]) * Math.PI / 180;
+    var lat1 = from[0] * Math.PI / 180;
+    var lat2 = to[0] * Math.PI / 180;
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1) * Math.cos(lat2) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function pathPlausibilityReport(hopPositions) {
+    var report = { plausible: true, status: 'plausible', knownAnchors: 0, maxSegmentKm: 0, badSegments: [] };
+    if (!hopPositions || hopPositions.length < 2) return report;
+    var previous = null;
+    for (var i = 0; i < hopPositions.length; i++) {
+      var current = hopPositions[i];
+      if (!current || !current.pos || current.ghost || !current.known) continue;
+      report.knownAnchors += 1;
+      if (previous) {
+        var km = liveHaversineKm(previous.pos, current.pos);
+        if (km > report.maxSegmentKm) report.maxSegmentKm = km;
+        if (km > LIVE_RF_SEGMENT_MAX_KM) {
+          report.plausible = false;
+          report.badSegments.push({
+            from: previous.key || previous.name || '',
+            to: current.key || current.name || '',
+            distanceKm: Math.round(km)
+          });
+        }
+      }
+      previous = current;
+    }
+    if (report.badSegments.length > 0) {
+      report.status = 'suppressed';
+    } else if (report.knownAnchors < 2) {
+      report.status = 'insufficient-known-anchors';
+    }
+    return report;
+  }
+
+  function shouldDrawRfPath(hopPositions) {
+    return pathPlausibilityReport(hopPositions).plausible;
+  }
+
+  function pathRenderMode(report, showDebug) {
+    if (!report || report.plausible) return 'normal';
+    return showDebug ? 'debug-suppressed' : 'suppressed';
+  }
+
+  function traceSuppressedPath(report, hash) {
+    if (!report || report.plausible) return;
+    suppressedPathCount += 1;
+    updateSuppressedBadge();
+    if (typeof console === 'undefined' || !console.debug) return;
+    try {
+      console.debug('[live] suppressed implausible RF path', {
+        hash: hash || null,
+        status: report.status || 'suppressed',
+        knownAnchors: report.knownAnchors || 0,
+        maxSegmentKm: Math.round(report.maxSegmentKm || 0),
+        badSegments: report.badSegments || []
+      });
+    } catch {}
+  }
+
+  function drawSuspiciousPath(hopPositions, report, hash) {
+    var DEBUG_TIMEOUT_MS = 10000;
+    if (!pathsLayer || !hopPositions || hopPositions.length < 2) return;
+    var color = cssVar('--status-amber') || '#f59e0b';
+    var label = 'Suppressed RF debug path';
+    if (report && report.maxSegmentKm) label += ' - max ' + Math.round(report.maxSegmentKm) + ' km';
+    if (hash) label += ' - ' + String(hash).slice(0, 10);
+    for (var i = 0; i < hopPositions.length - 1; i++) {
+      var from = hopPositions[i].pos;
+      var to = hopPositions[i + 1].pos;
+      if (!from || !to) continue;
+      var line = L.polyline([from, to], {
+        color: color,
+        weight: 3,
+        opacity: 0.72,
+        dashArray: '3, 8',
+        className: 'live-suspicious-debug-path'
+      }).addTo(pathsLayer);
+      if (line.bindTooltip) line.bindTooltip(label, { sticky: true });
+      setTimeout((function(l) { return function() { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), DEBUG_TIMEOUT_MS);
+    }
+  }
+
+  function nodeFitsObserverRegion(node, observerId) {
+    if (!node || !observerId || node.lat == null || node.lon == null || (node.lat === 0 && node.lon === 0)) return true;
+    var iata = observerIataMap && observerIataMap[observerId];
+    if (!iata) return true;
+    var center = hopResolverIataCoords[iata] || (window.IATA_COORDS_GEO && window.IATA_COORDS_GEO[iata]);
+    if (!center || center.lat == null || center.lon == null) return true;
+    return liveHaversineKm([node.lat, node.lon], [center.lat, center.lon]) <= LIVE_RF_SEGMENT_MAX_KM;
+  }
+
+  function resolveHopPositions(hops, payload, resolvedPath, packet) {
     // Hoist sender GPS guard once — reject (0,0) as "no GPS"
     const hasValidGps = payload.lat != null && payload.lon != null
       && !(payload.lat === 0 && payload.lon === 0);
     const senderLat = hasValidGps ? payload.lat : null;
     const senderLon = hasValidGps ? payload.lon : null;
+    const observerId = packet && packet.observer_id ? packet.observer_id : null;
 
     // Prefer server-side resolved_path when available
     var resolvedMap;
@@ -2631,14 +2805,14 @@
       // Fill in any null entries from client-side fallback, preserving sender GPS context
       var nullHops = hops.filter(function(h, i) { return !resolvedPath[i] && !resolvedMap[h]; });
       if (nullHops.length) {
-        var fallback = HopResolver.resolve(nullHops, senderLat, senderLon, null, null, null);
+        var fallback = HopResolver.resolve(nullHops, senderLat, senderLon, null, null, observerId);
         for (var k in fallback) resolvedMap[k] = fallback[k];
       }
     } else {
       // Delegate to shared HopResolver (from hop-resolver.js) instead of reimplementing
       // Use HopResolver if available and initialized, otherwise fall back to simple lookup
       resolvedMap = (window.HopResolver && HopResolver.ready())
-        ? HopResolver.resolve(hops, senderLat, senderLon, null, null, null)
+        ? HopResolver.resolve(hops, senderLat, senderLon, null, null, observerId)
         : {};
     }
 
@@ -2649,11 +2823,14 @@
         // Look up coordinates from nodeData (HopResolver resolves name/pubkey but doesn't return lat/lon directly)
         const node = nodeData[r.pubkey];
         if (node && node.lat != null && node.lon != null && !(node.lat === 0 && node.lon === 0)) {
+          if (!(r.serverResolved && r.serverResolved === true) && !nodeFitsObserverRegion(node, observerId)) {
+            return { key: r.pubkey, pos: null, name: r.name, known: false };
+          }
           return { key: r.pubkey, pos: [node.lat, node.lon], name: r.name, known: true };
         }
         return { key: r.pubkey, pos: null, name: r.name, known: false };
       }
-      return { key: 'hop-' + hop, pos: null, name: hop, known: false };
+      return { key: (r && r.pubkey) ? r.pubkey : ('hop-' + hop), pos: null, name: (r && r.name) ? r.name : hop, known: false };
     });
 
     // Add sender position as anchor if available

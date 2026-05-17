@@ -24,7 +24,7 @@ function assert(condition, msg) {
 // Two nodes share the same 1-byte prefix "ab"
 const nodeA = { public_key: 'ab1111', name: 'NodeA', role: 'repeater', lat: 37.0, lon: -122.0 };
 const nodeB = { public_key: 'ab2222', name: 'NodeB', role: 'repeater', lat: 38.0, lon: -123.0 };
-const nodeC = { public_key: 'cd3333', name: 'NodeC', role: 'repeater', lat: 37.5, lon: -122.5 };
+const nodeC = { public_key: 'cd3333', name: 'NodeC', role: 'repeater', lat: 37.2, lon: -122.2 };
 
 console.log('\n=== HopResolver Affinity Tests ===\n');
 
@@ -95,6 +95,31 @@ const result6 = HopResolver.resolve(['ee44'], null, null, null, null, null);
 assert(result6['ee44'].name === 'NodeD', 'Unique prefix resolves directly — got: ' + result6['ee44'].name);
 assert(!result6['ee44'].ambiguous, 'Should not be marked ambiguous');
 
+// Test 6b: unique short prefix outside observer IATA is marked unreliable
+console.log('\nTest 6b: Unique short prefix outside observer IATA is unreliable');
+const torontoObserver = { id: 'obs-yyz', iata: 'YYZ' };
+const remoteWestNode = { public_key: 'aa1234', name: 'RemoteWest', role: 'repeater', lat: 49.2827, lon: -123.1207 };
+HopResolver.init([remoteWestNode], {
+  observers: [torontoObserver],
+  iataCoords: { YYZ: { lat: 43.6777, lon: -79.6248 } }
+});
+HopResolver.setAffinity({});
+const result6b = HopResolver.resolve(['aa'], null, null, null, null, 'obs-yyz');
+assert(result6b['aa'].name === 'RemoteWest', 'Unique prefix still reports candidate for diagnostics');
+assert(result6b['aa'].unreliable === true, 'Out-of-IATA 1-byte unique prefix should be unreliable');
+
+// Test 6c: nearby cross-boundary short prefix remains usable
+console.log('\nTest 6c: Nearby cross-boundary short prefix remains reliable');
+const victoriaNode = { public_key: 'bb1234', name: 'Victoria', role: 'repeater', lat: 48.4284, lon: -123.3656 };
+HopResolver.init([victoriaNode], {
+  observers: [{ id: 'obs-sea', iata: 'SEA' }],
+  iataCoords: { SEA: { lat: 47.4502, lon: -122.3088 } }
+});
+HopResolver.setAffinity({});
+const result6c = HopResolver.resolve(['bb'], null, null, null, null, 'obs-sea');
+assert(result6c['bb'].name === 'Victoria', 'Nearby boundary prefix resolves');
+assert(result6c['bb'].unreliable !== true, 'Nearby cross-boundary prefix should remain reliable');
+
 // Test 7: lat=0 / lon=0 candidates are NOT excluded (equator/prime-meridian bug fix)
 console.log('\nTest 7: lat=0 / lon=0 candidates are included in geo scoring');
 const nodeEquator = { public_key: 'ab5555', name: 'EquatorNode', role: 'repeater', lat: 0, lon: 10 };
@@ -147,6 +172,9 @@ console.log('\nTest: pubkeyIdx still includes all roles');
 const fromServer = HopResolver.resolveFromServer(['ab99'], [companion.public_key]);
 assert(fromServer['ab99'] && fromServer['ab99'].name === 'Companion1',
   'resolveFromServer finds companion by full pubkey — got: ' + (fromServer['ab99'] && fromServer['ab99'].name));
+
+assert(fromServer['ab99'].serverResolved === true,
+  'resolveFromServer marks entries as serverResolved for live diagnostics');
 
 console.log('\n' + (passed + failed) + ' tests, ' + passed + ' passed, ' + failed + ' failed\n');
 process.exit(failed > 0 ? 1 : 0);

@@ -6,6 +6,7 @@
   let styleEl = null;
   let originalValues = {};
   let activeTab = 'branding';
+  const DEFAULT_BRAND_LOGO_URL = 'img/meshcore-canada-logo.png';
 
   // ── Brand logo swap helpers (PR #1137) ──
   // Default brand logo is an inline <svg.brand-logo>; an operator override
@@ -25,7 +26,7 @@
       img.setAttribute('height', '36');
       node.parentNode.replaceChild(img, node);
     } else if (node.tagName.toLowerCase() === 'img') {
-      node.setAttribute('src', 'img/corescope-logo.svg');
+      node.setAttribute('src', DEFAULT_BRAND_LOGO_URL);
     }
   }
   function _v1SetBrandAlt(alt) {
@@ -39,26 +40,26 @@
 
   const DEFAULTS = {
     branding: {
-      siteName: 'CoreScope',
+      siteName: 'MeshCore Canada Live',
       tagline: 'Real-time MeshCore LoRa mesh network analyzer',
-      logoUrl: '',
-      faviconUrl: ''
+      logoUrl: DEFAULT_BRAND_LOGO_URL,
+      faviconUrl: DEFAULT_BRAND_LOGO_URL
     },
     theme: {
-      accent: '#4a9eff', navBg: '#0f0f23', navText: '#ffffff', background: '#f4f5f7', text: '#1a1a2e',
+      accent: '#448aff', navBg: '#1a237e', navText: '#ffffff', background: '#f5f7fb', text: '#101828',
       statusGreen: '#22c55e', statusYellow: '#eab308', statusRed: '#ef4444',
-      accentHover: '#6db3ff', navBg2: '#1a1a2e', navTextMuted: '#cbd5e1', textMuted: '#5b6370', border: '#e2e5ea',
-      surface1: '#ffffff', surface2: '#ffffff', cardBg: '#ffffff', contentBg: '#f4f5f7',
-      detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f9fafb', rowHover: '#eef2ff', selectedBg: '#dbeafe',
+      accentHover: '#82b1ff', navBg2: '#0d47a1', navTextMuted: '#d8e3ff', textMuted: '#526071', border: '#d8dee9',
+      surface1: '#ffffff', surface2: '#ffffff', cardBg: '#ffffff', contentBg: '#f5f7fb',
+      detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f8faff', rowHover: '#e8f0ff', selectedBg: '#dbe8ff',
       font: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       mono: '"SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace',
     },
     themeDark: {
-      accent: '#4a9eff', navBg: '#0f0f23', navText: '#ffffff', background: '#0f0f23', text: '#e2e8f0',
+      accent: '#448aff', navBg: '#0b1020', navText: '#ffffff', background: '#111827', text: '#e6edf7',
       statusGreen: '#22c55e', statusYellow: '#eab308', statusRed: '#ef4444',
-      accentHover: '#6db3ff', navBg2: '#1a1a2e', navTextMuted: '#cbd5e1', textMuted: '#a8b8cc', border: '#334155',
-      surface1: '#1a1a2e', surface2: '#232340', cardBg: '#1a1a2e', contentBg: '#0f0f23',
-      detailBg: '#232340', inputBg: '#1e1e34', rowStripe: '#1e1e34', rowHover: '#2d2d50', selectedBg: '#1e3a5f',
+      accentHover: '#82b1ff', navBg2: '#1a237e', navTextMuted: '#d8e3ff', textMuted: '#b8c4d6', border: '#344258',
+      surface1: '#182032', surface2: '#202b40', cardBg: '#182032', contentBg: '#111827',
+      detailBg: '#202b40', inputBg: '#151e2d', rowStripe: '#151e2d', rowHover: '#26344d', selectedBg: '#1e3a8a',
       font: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       mono: '"SF Mono", "Fira Code", "Cascadia Code", Consolas, monospace',
     },
@@ -75,7 +76,7 @@
       ANON_REQ: '#f43f5e'
     },
     home: {
-      heroTitle: 'CoreScope',
+      heroTitle: 'Canada Meshcore Corescope',
       heroSubtitle: 'Find your nodes to start monitoring them.',
       steps: [
         { emoji: '💬', title: 'Join the Bay Area MeshCore Discord', description: 'The community Discord is the best place to get help and find local mesh enthusiasts.' },
@@ -139,21 +140,21 @@
 
   const PRESETS = {
     default: {
-      name: 'Default', desc: 'MeshCore blue',
-      preview: ['#4a9eff', '#0f0f23', '#f4f5f7', '#1a1a2e', '#22c55e'],
+      name: 'Default', desc: 'MeshCore.ca indigo',
+      preview: ['#448aff', '#1a237e', '#f5f7fb', '#182032', '#22c55e'],
       light: {
-        accent: '#4a9eff', navBg: '#0f0f23', navText: '#ffffff', background: '#f4f5f7', text: '#1a1a2e',
+        accent: '#448aff', navBg: '#1a237e', navText: '#ffffff', background: '#f5f7fb', text: '#101828',
         statusGreen: '#22c55e', statusYellow: '#eab308', statusRed: '#ef4444',
-        accentHover: '#6db3ff', navBg2: '#1a1a2e', navTextMuted: '#cbd5e1', textMuted: '#5b6370', border: '#e2e5ea',
-        surface1: '#ffffff', surface2: '#ffffff', cardBg: '#ffffff', contentBg: '#f4f5f7',
-        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f9fafb', rowHover: '#eef2ff', selectedBg: '#dbeafe',
+        accentHover: '#82b1ff', navBg2: '#0d47a1', navTextMuted: '#d8e3ff', textMuted: '#526071', border: '#d8dee9',
+        surface1: '#ffffff', surface2: '#ffffff', cardBg: '#ffffff', contentBg: '#f5f7fb',
+        detailBg: '#ffffff', inputBg: '#ffffff', rowStripe: '#f8faff', rowHover: '#e8f0ff', selectedBg: '#dbe8ff',
       },
       dark: {
-        accent: '#4a9eff', navBg: '#0f0f23', navText: '#ffffff', background: '#0f0f23', text: '#e2e8f0',
+        accent: '#448aff', navBg: '#0b1020', navText: '#ffffff', background: '#111827', text: '#e6edf7',
         statusGreen: '#22c55e', statusYellow: '#eab308', statusRed: '#ef4444',
-        accentHover: '#6db3ff', navBg2: '#1a1a2e', navTextMuted: '#cbd5e1', textMuted: '#a8b8cc', border: '#334155',
-        surface1: '#1a1a2e', surface2: '#232340', cardBg: '#1a1a2e', contentBg: '#0f0f23',
-        detailBg: '#232340', inputBg: '#1e1e34', rowStripe: '#1e1e34', rowHover: '#2d2d50', selectedBg: '#1e3a5f',
+        accentHover: '#82b1ff', navBg2: '#1a237e', navTextMuted: '#d8e3ff', textMuted: '#b8c4d6', border: '#344258',
+        surface1: '#182032', surface2: '#202b40', cardBg: '#182032', contentBg: '#111827',
+        detailBg: '#202b40', inputBg: '#151e2d', rowStripe: '#151e2d', rowHover: '#26344d', selectedBg: '#1e3a8a',
       }
     },
     ocean: {
