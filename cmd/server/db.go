@@ -18,11 +18,9 @@ import (
 type DB struct {
 	conn             *sql.DB
 	path             string // filesystem path to the database file
-	isV3                  bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
-	hasResolvedPath       bool   // observations table has resolved_path column
-	hasObsRawHex          bool   // observations table has raw_hex column (#881)
-	hasObserverLastPacket bool   // observers table has last_packet_at column (#969)
-	hasObserverRepeat     bool   // observers table has repeat column
+	isV3             bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
+	hasResolvedPath  bool   // observations table has resolved_path column
+	hasObsRawHex     bool   // observations table has raw_hex column (#881)
 
 	// Channel list cache (60s TTL) — avoids repeated GROUP BY scans (#762)
 	channelsCacheMu  sync.Mutex
@@ -30,27 +28,12 @@ type DB struct {
 	channelsCacheRes []map[string]interface{}
 	channelsCacheExp time.Time
 
-	sqliteStatsCacheMu  sync.Mutex
-	sqliteStatsCache    SqliteStats
-	sqliteStatsCacheExp time.Time
-
 	// Prepared statements for the hottest repeated single-row lookups
 	// (review item #5). Prepared lazily on first use; nil means "fall back
 	// to conn.QueryRow". stmtMu guards (re)assignment.
 	stmtMu               sync.Mutex
 	resolvedPathByObsPrepared bool
 	resolvedPathByObsStmt     *sql.Stmt
-}
-
-const sqliteStatsCacheTTL = 15 * time.Second
-
-// sqlPlaceholders returns a comma-separated list of n `?` SQL bind
-// placeholders — e.g. sqlPlaceholders(3) == "?,?,?". Returns "" for n <= 0.
-func sqlPlaceholders(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
 
 // resolvedPathByObsStatement returns a cached prepared statement for the
@@ -76,10 +59,8 @@ func (db *DB) resolvedPathByObsStatement() *sql.Stmt {
 }
 
 // OpenDB opens a read-only SQLite connection with WAL mode.
-// cache_size is set to 128 MiB per connection (negative value = KiB) so the
-// server's read-heavy workload doesn't thrash the default 8 MiB SQLite cache.
 func OpenDB(path string) (*DB, error) {
-	dsn := fmt.Sprintf("file:%s?mode=ro&_journal_mode=WAL&_busy_timeout=5000&_pragma=cache_size(-131072)", path)
+	dsn := fmt.Sprintf("file:%s?mode=ro&_journal_mode=WAL&_busy_timeout=5000", path)
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -96,6 +77,13 @@ func OpenDB(path string) (*DB, error) {
 }
 
 func (db *DB) Close() error {
+	// Release prepared statements before closing the connection.
+	db.stmtMu.Lock()
+	if db.resolvedPathByObsStmt != nil {
+		db.resolvedPathByObsStmt.Close()
+		db.resolvedPathByObsStmt = nil
+	}
+	db.stmtMu.Unlock()
 	// Checkpoint WAL before closing to release lock cleanly for new processes
 	if _, err := db.conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
 		log.Printf("[db] WAL checkpoint error: %v", err)
@@ -127,27 +115,6 @@ func (db *DB) detectSchema() {
 			}
 			if colName == "raw_hex" {
 				db.hasObsRawHex = true
-			}
-		}
-	}
-
-	obsRows, err := db.conn.Query("PRAGMA table_info(observers)")
-	if err != nil {
-		return
-	}
-	defer obsRows.Close()
-	for obsRows.Next() {
-		var cid int
-		var colName string
-		var colType sql.NullString
-		var notNull, pk int
-		var dflt sql.NullString
-		if obsRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
-			if colName == "last_packet_at" {
-				db.hasObserverLastPacket = true
-			}
-			if colName == "repeat" {
-				db.hasObserverRepeat = true
 			}
 		}
 	}
@@ -240,7 +207,6 @@ type Observer struct {
 	UptimeSecs    *int64   `json:"uptime_secs"`
 	NoiseFloor    *float64 `json:"noise_floor"`
 	LastPacketAt  *string  `json:"last_packet_at"`
-	Repeat        *string  `json:"repeat"`
 }
 
 // Transmission represents a row from the transmissions table.
@@ -284,7 +250,6 @@ type Stats struct {
 	TotalNodes         int `json:"totalNodes"`
 	TotalNodesAllTime  int `json:"totalNodesAllTime"`
 	TotalObservers     int `json:"totalObservers"`
-	OnlineObservers    int `json:"onlineObservers"`
 	PacketsLastHour    int `json:"packetsLastHour"`
 	PacketsLast24h     int `json:"packetsLast24h"`
 }
@@ -304,8 +269,6 @@ func (db *DB) GetStats() (*Stats, error) {
 	db.conn.QueryRow("SELECT COUNT(*) FROM nodes WHERE last_seen > ?", sevenDaysAgo).Scan(&s.TotalNodes)
 	db.conn.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&s.TotalNodesAllTime)
 	db.conn.QueryRow("SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0").Scan(&s.TotalObservers)
-	onlineCutoff := time.Now().UTC().Add(-600 * time.Second).Format(time.RFC3339)
-	db.conn.QueryRow("SELECT COUNT(*) FROM observers WHERE (inactive IS NULL OR inactive = 0) AND last_seen > ?", onlineCutoff).Scan(&s.OnlineObservers)
 
 	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
 	db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneHourAgo).Scan(&s.PacketsLastHour)
@@ -376,15 +339,6 @@ func (db *DB) GetDBSizeStats() map[string]interface{} {
 
 // GetDBSizeStatsTyped returns SQLite file sizes and row counts as a typed struct.
 func (db *DB) GetDBSizeStatsTyped() SqliteStats {
-	now := time.Now()
-	db.sqliteStatsCacheMu.Lock()
-	if now.Before(db.sqliteStatsCacheExp) {
-		cached := cloneSqliteStats(db.sqliteStatsCache)
-		db.sqliteStatsCacheMu.Unlock()
-		return cached
-	}
-	db.sqliteStatsCacheMu.Unlock()
-
 	result := SqliteStats{}
 
 	if db.path != "" && db.path != ":memory:" {
@@ -433,32 +387,22 @@ func (db *DB) GetDBSizeStatsTyped() SqliteStats {
 	}
 	result.Rows = rows
 
-	db.sqliteStatsCacheMu.Lock()
-	db.sqliteStatsCache = cloneSqliteStats(result)
-	db.sqliteStatsCacheExp = now.Add(sqliteStatsCacheTTL)
-	db.sqliteStatsCacheMu.Unlock()
-
 	return result
 }
 
-func cloneSqliteStats(in SqliteStats) SqliteStats {
-	out := in
-	if in.WalPages != nil {
-		wp := *in.WalPages
-		out.WalPages = &wp
-	}
-	if in.Rows != nil {
-		rows := *in.Rows
-		out.Rows = &rows
-	}
-	return out
-}
+// roleCountRoles is the fixed set of roles surfaced by the role-count helpers.
+var roleCountRoles = []string{"repeater", "room", "companion", "sensor"}
 
 // GetRoleCounts returns count per role (7-day active, matching Node.js /api/stats).
+// Uses a single GROUP BY query instead of one COUNT(*) per role (review item #5).
 func (db *DB) GetRoleCounts() map[string]int {
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
 	counts := map[string]int{}
-	rows, err := db.conn.Query("SELECT role, COUNT(*) FROM nodes WHERE last_seen > ? GROUP BY role", sevenDaysAgo)
+	for _, role := range roleCountRoles {
+		counts[role+"s"] = 0
+	}
+	rows, err := db.conn.Query(
+		"SELECT role, COUNT(*) FROM nodes WHERE last_seen > ? GROUP BY role", sevenDaysAgo)
 	if err != nil {
 		return counts
 	}
@@ -466,7 +410,10 @@ func (db *DB) GetRoleCounts() map[string]int {
 	for rows.Next() {
 		var role string
 		var c int
-		if rows.Scan(&role, &c) == nil {
+		if err := rows.Scan(&role, &c); err != nil {
+			continue
+		}
+		if _, ok := counts[role+"s"]; ok {
 			counts[role+"s"] = c
 		}
 	}
@@ -474,8 +421,12 @@ func (db *DB) GetRoleCounts() map[string]int {
 }
 
 // GetAllRoleCounts returns count per role (all nodes, no time filter — matching Node.js /api/nodes).
+// Uses a single GROUP BY query instead of one COUNT(*) per role (review item #5).
 func (db *DB) GetAllRoleCounts() map[string]int {
 	counts := map[string]int{}
+	for _, role := range roleCountRoles {
+		counts[role+"s"] = 0
+	}
 	rows, err := db.conn.Query("SELECT role, COUNT(*) FROM nodes GROUP BY role")
 	if err != nil {
 		return counts
@@ -484,7 +435,10 @@ func (db *DB) GetAllRoleCounts() map[string]int {
 	for rows.Next() {
 		var role string
 		var c int
-		if rows.Scan(&role, &c) == nil {
+		if err := rows.Scan(&role, &c); err != nil {
+			continue
+		}
+		if _, ok := counts[role+"s"]; ok {
 			counts[role+"s"] = c
 		}
 	}
@@ -506,6 +460,13 @@ type PacketQuery struct {
 	Channel  string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
 	Order               string // ASC or DESC
 	ExpandObservations  bool   // when true, include observation sub-maps in txToMap output
+
+	// regionObserversResolved, when non-nil, holds the observer-ID set for
+	// Region pre-resolved by the caller BEFORE acquiring s.mu. filterPackets
+	// uses it instead of calling resolveRegionObservers (which runs SQL on a
+	// cache miss) while a read lock is held. SQL path in db.go ignores it.
+	regionObserversResolved    map[string]bool
+	regionObserversResolvedSet bool
 }
 
 // PacketResult wraps paginated packet list.
@@ -518,12 +479,6 @@ type PacketResult struct {
 func (db *DB) QueryPackets(q PacketQuery) (*PacketResult, error) {
 	if q.Limit <= 0 {
 		q.Limit = 50
-	}
-	if q.Limit > 500 {
-		q.Limit = 500
-	}
-	if q.Offset < 0 {
-		q.Offset = 0
 	}
 	if q.Order == "" {
 		q.Order = "DESC"
@@ -573,12 +528,6 @@ func (db *DB) QueryPackets(q PacketQuery) (*PacketResult, error) {
 func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 	if q.Limit <= 0 {
 		q.Limit = 50
-	}
-	if q.Limit > 500 {
-		q.Limit = 500
-	}
-	if q.Offset < 0 {
-		q.Offset = 0
 	}
 
 	where, args := db.buildTransmissionWhere(q)
@@ -766,7 +715,8 @@ func (db *DB) buildTransmissionWhere(q PacketQuery) ([]string, []interface{}) {
 	}
 	if q.Observer != "" {
 		ids := strings.Split(q.Observer, ",")
-		placeholders := sqlPlaceholders(len(ids))
+		placeholders := strings.Repeat("?,", len(ids))
+		placeholders = placeholders[:len(placeholders)-1]
 		if db.isV3 {
 			where = append(where, "EXISTS (SELECT 1 FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.id IN ("+placeholders+"))")
 		} else {
@@ -876,9 +826,10 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 	if region != "" {
 		codes := normalizeRegionCodes(region)
 		if len(codes) > 0 {
-			placeholders := sqlPlaceholders(len(codes))
+			placeholders := make([]string, len(codes))
 			regionArgs := make([]interface{}, len(codes))
 			for i, c := range codes {
+				placeholders[i] = "?"
 				regionArgs[i] = c
 			}
 			joinCond := "obs.rowid = o.observer_idx"
@@ -892,7 +843,7 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 				JOIN observers obs ON %s
 				WHERE t.payload_type = 4
 				AND UPPER(TRIM(obs.iata)) IN (%s)
-			)`, joinCond, placeholders)
+			)`, joinCond, strings.Join(placeholders, ","))
 			where = append(where, subq)
 			args = append(args, regionArgs...)
 		}
@@ -915,9 +866,10 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 		limit = 50
 	}
 
-	// COUNT(*) OVER() gives the pre-LIMIT total in each returned row, eliminating
-	// a second round-trip through the same WHERE clause.
-	querySQL := fmt.Sprintf("SELECT COUNT(*) OVER() AS total, public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
+	var total int
+	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM nodes %s", w), args...).Scan(&total)
+
+	querySQL := fmt.Sprintf("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
 	qArgs := append(args, limit, offset)
 
 	rows, err := db.conn.Query(querySQL, qArgs...)
@@ -926,10 +878,9 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 	}
 	defer rows.Close()
 
-	var total int
 	nodes := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		n := scanNodeRowWithTotal(rows, &total)
+		n := scanNodeRow(rows)
 		if n != nil {
 			nodes = append(nodes, n)
 		}
@@ -1077,73 +1028,6 @@ func (db *DB) GetRecentTransmissionsForNode(pubkey string, limit int) ([]map[str
 	return packets, nil
 }
 
-// GetRecentDirectPacketsForNode returns transmissions that this node directly received —
-// identified by the node's pubkey prefix appearing as the first element of path_json in at
-// least one observation. First-in-path means the node heard the original transmission
-// directly (0 relay hops from sender) and forwarded it; this works for repeaters, room
-// servers, and any other node type without requiring it to be a registered observer.
-// sinceHours=0 means no time filter. limit=0 defaults to 20, max 2000.
-func (db *DB) GetRecentDirectPacketsForNode(pubkey string, limit int, sinceHours int) ([]map[string]interface{}, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 2000 {
-		limit = 2000
-	}
-
-	selectCols, observerJoin := db.transmissionBaseSQL()
-
-	// The first element of path_json is the first relay hop. If it is a prefix of this node's
-	// pubkey (or the pubkey starts with it), the node heard the packet directly from the sender.
-	// We use "? LIKE first_hop || '%'" so varying prefix lengths all match correctly.
-	directCond := "EXISTS (SELECT 1 FROM observations o2 WHERE o2.transmission_id = t.id AND json_extract(o2.path_json, '$[0]') IS NOT NULL AND json_extract(o2.path_json, '$[0]') != '' AND ? LIKE json_extract(o2.path_json, '$[0]') || '%')"
-
-	var querySQL string
-	var args []interface{}
-	if sinceHours > 0 {
-		querySQL = fmt.Sprintf(
-			"SELECT %s FROM transmissions t %s WHERE %s AND t.first_seen >= datetime('now','-%d hours') ORDER BY t.first_seen DESC LIMIT ?",
-			selectCols, observerJoin, directCond, sinceHours)
-	} else {
-		querySQL = fmt.Sprintf(
-			"SELECT %s FROM transmissions t %s WHERE %s ORDER BY t.first_seen DESC LIMIT ?",
-			selectCols, observerJoin, directCond)
-	}
-	args = []interface{}{pubkey, limit}
-
-	rows, err := db.conn.Query(querySQL, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	packets := make([]map[string]interface{}, 0)
-	var txIDs []int
-	for rows.Next() {
-		p := db.scanTransmissionRow(rows)
-		if p != nil {
-			p["observations"] = []map[string]interface{}{}
-			if id, ok := p["id"].(int); ok {
-				txIDs = append(txIDs, id)
-			}
-			packets = append(packets, p)
-		}
-	}
-
-	if len(txIDs) > 0 {
-		obsMap := db.getObservationsForTransmissions(txIDs)
-		for _, p := range packets {
-			if id, ok := p["id"].(int); ok {
-				if obs, found := obsMap[id]; found {
-					p["observations"] = obs
-				}
-			}
-		}
-	}
-
-	return packets, nil
-}
-
 // getObservationsForTransmissions fetches all observations for a set of transmission IDs,
 // returning a map of txID → []observation maps (matching Node.js recentAdverts shape).
 func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]interface{} {
@@ -1153,9 +1037,10 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 	}
 
 	// Build IN clause
-	placeholders := sqlPlaceholders(len(txIDs))
+	placeholders := make([]string, len(txIDs))
 	args := make([]interface{}, len(txIDs))
 	for i, id := range txIDs {
+		placeholders[i] = "?"
 		args[i] = id
 	}
 
@@ -1166,13 +1051,13 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 			FROM observations o
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
 			WHERE o.transmission_id IN (%s)
-			ORDER BY o.timestamp DESC`, placeholders)
+			ORDER BY o.timestamp DESC`, strings.Join(placeholders, ","))
 	} else {
 		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, o.observer_id, o.observer_name,
 			o.direction, o.snr, o.rssi, o.path_json, o.timestamp AS obs_timestamp
 			FROM observations o
 			WHERE o.transmission_id IN (%s)
-			ORDER BY o.timestamp DESC`, placeholders)
+			ORDER BY o.timestamp DESC`, strings.Join(placeholders, ","))
 	}
 
 	rows, err := db.conn.Query(querySQL, args...)
@@ -1214,14 +1099,7 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 
 // GetObservers returns active observers (not soft-deleted) sorted by last_seen DESC.
 func (db *DB) GetObservers() ([]Observer, error) {
-	cols := "id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor"
-	if db.hasObserverLastPacket {
-		cols += ", last_packet_at"
-	}
-	if db.hasObserverRepeat {
-		cols += ", repeat"
-	}
-	rows, err := db.conn.Query("SELECT " + cols + " FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC")
+	rows, err := db.conn.Query("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -1232,14 +1110,7 @@ func (db *DB) GetObservers() ([]Observer, error) {
 		var o Observer
 		var batteryMv, uptimeSecs sql.NullInt64
 		var noiseFloor sql.NullFloat64
-		dest := []interface{}{&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor}
-		if db.hasObserverLastPacket {
-			dest = append(dest, &o.LastPacketAt)
-		}
-		if db.hasObserverRepeat {
-			dest = append(dest, &o.Repeat)
-		}
-		if scanErr := rows.Scan(dest...); scanErr != nil {
+		if err := rows.Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt); err != nil {
 			continue
 		}
 		if batteryMv.Valid {
@@ -1257,45 +1128,13 @@ func (db *DB) GetObservers() ([]Observer, error) {
 	return observers, nil
 }
 
-// GetObserverCounts returns a single-row aggregate of observer status counts.
-// Online: last_seen within 600 s, stale: 600–3600 s, offline: >3600 s or NULL.
-func (db *DB) GetObserverCounts() (*ObserverCounts, error) {
-	var c ObserverCounts
-	err := db.conn.QueryRow(`
-		SELECT
-			COUNT(*),
-			SUM(CASE WHEN last_seen > datetime('now', '-600 seconds')  THEN 1 ELSE 0 END),
-			SUM(CASE WHEN last_seen <= datetime('now', '-600 seconds')
-			          AND last_seen >  datetime('now', '-3600 seconds') THEN 1 ELSE 0 END),
-			SUM(CASE WHEN last_seen IS NULL
-			          OR  last_seen <= datetime('now', '-3600 seconds') THEN 1 ELSE 0 END)
-		FROM observers`).Scan(&c.Total, &c.Online, &c.Stale, &c.Offline)
-	if err != nil {
-		return nil, err
-	}
-	return &c, nil
-}
-
 // GetObserverByID returns a single observer.
 func (db *DB) GetObserverByID(id string) (*Observer, error) {
 	var o Observer
 	var batteryMv, uptimeSecs sql.NullInt64
 	var noiseFloor sql.NullFloat64
-	cols := "id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor"
-	if db.hasObserverLastPacket {
-		cols += ", last_packet_at"
-	}
-	if db.hasObserverRepeat {
-		cols += ", repeat"
-	}
-	dest := []interface{}{&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor}
-	if db.hasObserverLastPacket {
-		dest = append(dest, &o.LastPacketAt)
-	}
-	if db.hasObserverRepeat {
-		dest = append(dest, &o.Repeat)
-	}
-	err := db.conn.QueryRow("SELECT "+cols+" FROM observers WHERE id = ?", id).Scan(dest...)
+	err := db.conn.QueryRow("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at FROM observers WHERE id = ?", id).
+		Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1312,44 +1151,19 @@ func (db *DB) GetObserverByID(id string) (*Observer, error) {
 	return &o, nil
 }
 
-// GetObserverSources returns the MQTT broker hosts that have relayed data for
-// the given observer, ordered by most-recently-seen first. Only rows with a
-// non-empty name (populated by ingestor builds that track friendly broker names)
-// are returned; rows from older ingestor builds that predate the name column
-// are omitted so callers always get clean, labelled entries.
-func (db *DB) GetObserverSources(id string) ([]ObserverSource, error) {
-	rows, err := db.conn.Query(
-		`SELECT host, name, last_seen, packet_count, status_count FROM observer_sources
-		 WHERE observer_id = ? AND name != '' ORDER BY last_seen DESC`,
-		id,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []ObserverSource
-	for rows.Next() {
-		var s ObserverSource
-		if err := rows.Scan(&s.Host, &s.Name, &s.LastSeen, &s.PacketCount, &s.StatusCount); err != nil {
-			continue
-		}
-		out = append(out, s)
-	}
-	return out, nil
-}
-
 // GetObserverIdsForRegion returns observer IDs for given IATA codes.
 func (db *DB) GetObserverIdsForRegion(regionParam string) ([]string, error) {
 	codes := normalizeRegionCodes(regionParam)
 	if len(codes) == 0 {
 		return nil, nil
 	}
-	placeholders := sqlPlaceholders(len(codes))
+	placeholders := make([]string, len(codes))
 	args := make([]interface{}, len(codes))
 	for i, c := range codes {
+		placeholders[i] = "?"
 		args[i] = c
 	}
-	rows, err := db.conn.Query(fmt.Sprintf("SELECT id FROM observers WHERE UPPER(TRIM(iata)) IN (%s)", placeholders), args...)
+	rows, err := db.conn.Query(fmt.Sprintf("SELECT id FROM observers WHERE UPPER(TRIM(iata)) IN (%s)", strings.Join(placeholders, ",")), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1533,10 +1347,12 @@ func (db *DB) GetChannels(region ...string) ([]map[string]interface{}, error) {
 	args := make([]interface{}, 0, len(regionCodes))
 
 	if len(regionCodes) > 0 {
-		for _, code := range regionCodes {
+		placeholders := make([]string, len(regionCodes))
+		for i, code := range regionCodes {
+			placeholders[i] = "?"
 			args = append(args, code)
 		}
-		regionPlaceholder := sqlPlaceholders(len(regionCodes))
+		regionPlaceholder := strings.Join(placeholders, ",")
 		if db.isV3 {
 			querySQL = fmt.Sprintf(`SELECT t.channel_hash,
 					COUNT(*) AS msg_count,
@@ -1654,10 +1470,12 @@ func (db *DB) GetEncryptedChannels(region ...string) ([]map[string]interface{}, 
 	args := make([]interface{}, 0, len(regionCodes))
 
 	if len(regionCodes) > 0 {
-		for _, code := range regionCodes {
+		placeholders := make([]string, len(regionCodes))
+		for i, code := range regionCodes {
+			placeholders[i] = "?"
 			args = append(args, code)
 		}
-		regionPlaceholder := sqlPlaceholders(len(regionCodes))
+		regionPlaceholder := strings.Join(placeholders, ",")
 		if db.isV3 {
 			querySQL = fmt.Sprintf(`SELECT t.channel_hash,
 					COUNT(*) AS msg_count,
@@ -1752,10 +1570,12 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	regionArgs := make([]interface{}, 0, len(regionCodes))
 	regionPlaceholders := ""
 	if len(regionCodes) > 0 {
-		for _, code := range regionCodes {
+		placeholders := make([]string, len(regionCodes))
+		for i, code := range regionCodes {
+			placeholders[i] = "?"
 			regionArgs = append(regionArgs, code)
 		}
-		regionPlaceholders = sqlPlaceholders(len(regionCodes))
+		regionPlaceholders = strings.Join(placeholders, ",")
 	}
 
 	// regionFilter: a transmission is included only if at least one of its
@@ -1833,9 +1653,10 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	// 3) Fetch observations for just this page of transmissions. We keep
 	//    the original "first observation wins" semantic for hops/snr/observer
 	//    by ordering observations by id ASC and breaking after first per tx.
-	idPlaceholders := sqlPlaceholders(len(pageIDs))
+	idPlaceholders := make([]string, len(pageIDs))
 	obsArgs := make([]interface{}, len(pageIDs))
 	for i, id := range pageIDs {
+		idPlaceholders[i] = "?"
 		obsArgs[i] = id
 	}
 	var obsSQL string
@@ -1845,14 +1666,14 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-			WHERE t.id IN (` + idPlaceholders + `)
+			WHERE t.id IN (` + strings.Join(idPlaceholders, ",") + `)
 			ORDER BY o.id ASC`
 	} else {
 		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
 				o.observer_id, o.observer_name, o.snr, o.path_json
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
-			WHERE t.id IN (` + idPlaceholders + `)
+			WHERE t.id IN (` + strings.Join(idPlaceholders, ",") + `)
 			ORDER BY o.id ASC`
 	}
 
@@ -1994,51 +1815,6 @@ func (db *DB) GetMaxObservationID() int {
 	return maxID
 }
 
-// ObserverPacketWindows holds packet counts for three time windows per observer.
-type ObserverPacketWindows struct{ Hour, Day, Week int }
-
-// GetObserverAllPacketCounts returns packet counts for three time windows in a
-// single query instead of three separate scans. sinceEpoch values must be Unix
-// timestamps in seconds (same unit as observations.timestamp).
-func (db *DB) GetObserverAllPacketCounts(oneHourAgo, oneDayAgo, sevenDaysAgo int64) map[string]ObserverPacketWindows {
-	out := make(map[string]ObserverPacketWindows)
-	var rows *sql.Rows
-	var err error
-	if db.isV3 {
-		rows, err = db.conn.Query(`
-			SELECT obs.id,
-				COUNT(CASE WHEN o.timestamp > ? THEN 1 END),
-				COUNT(CASE WHEN o.timestamp > ? THEN 1 END),
-				COUNT(*)
-			FROM observations o
-			JOIN observers obs ON obs.rowid = o.observer_idx
-			WHERE o.timestamp > ?
-			GROUP BY o.observer_idx`,
-			oneHourAgo, oneDayAgo, sevenDaysAgo)
-	} else {
-		rows, err = db.conn.Query(`
-			SELECT o.observer_id,
-				COUNT(CASE WHEN o.timestamp > ? THEN 1 END),
-				COUNT(CASE WHEN o.timestamp > ? THEN 1 END),
-				COUNT(*)
-			FROM observations o
-			WHERE o.observer_id IS NOT NULL AND o.timestamp > ?
-			GROUP BY o.observer_id`,
-			oneHourAgo, oneDayAgo, sevenDaysAgo)
-	}
-	if err != nil {
-		return out
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		var w ObserverPacketWindows
-		rows.Scan(&id, &w.Hour, &w.Day, &w.Week)
-		out[id] = w
-	}
-	return out
-}
-
 // GetObserverPacketCounts returns packetsLastHour for all observers (batch query).
 func (db *DB) GetObserverPacketCounts(sinceEpoch int64) map[string]int {
 	counts := make(map[string]int)
@@ -2098,12 +1874,13 @@ func (db *DB) GetNodeLocationsByKeys(keys []string) map[string]map[string]interf
 	if len(keys) == 0 {
 		return result
 	}
-	placeholders := sqlPlaceholders(len(keys))
+	placeholders := make([]string, len(keys))
 	args := make([]interface{}, len(keys))
 	for i, k := range keys {
+		placeholders[i] = "?"
 		args[i] = strings.ToLower(k)
 	}
-	query := "SELECT public_key, lat, lon, role FROM nodes WHERE LOWER(public_key) IN (" + placeholders + ")"
+	query := "SELECT public_key, lat, lon, role FROM nodes WHERE LOWER(public_key) IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return result
@@ -2138,11 +1915,13 @@ func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, 
 	// Build IN(?, ?, ...) on the dedicated from_pubkey column (#1143):
 	// exact match, indexed lookup, no JSON substring scan.
 	var args []interface{}
+	placeholders := make([]string, 0, len(pubkeys))
 	for _, pk := range pubkeys {
 		resolved := db.resolveNodePubkey(pk)
 		args = append(args, resolved)
+		placeholders = append(placeholders, "?")
 	}
-	pkWhere := "t.from_pubkey IN (" + sqlPlaceholders(len(pubkeys)) + ")"
+	pkWhere := "t.from_pubkey IN (" + strings.Join(placeholders, ",") + ")"
 
 	var timeFilters []string
 	if since != "" {
@@ -2256,49 +2035,6 @@ func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	return m
 }
 
-// scanNodeRowWithTotal scans a row that has COUNT(*) OVER() as its first column,
-// storing the total into *total and returning the node map.
-func scanNodeRowWithTotal(rows *sql.Rows, total *int) map[string]interface{} {
-	var rowTotal int
-	var pk string
-	var name, role, lastSeen, firstSeen sql.NullString
-	var lat, lon sql.NullFloat64
-	var advertCount int
-	var batteryMv sql.NullInt64
-	var temperatureC sql.NullFloat64
-	var foreign sql.NullInt64
-
-	if err := rows.Scan(&rowTotal, &pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign); err != nil {
-		return nil
-	}
-	*total = rowTotal
-	m := map[string]interface{}{
-		"public_key":             pk,
-		"name":                   nullStr(name),
-		"role":                   nullStr(role),
-		"lat":                    nullFloat(lat),
-		"lon":                    nullFloat(lon),
-		"last_seen":              nullStr(lastSeen),
-		"first_seen":             nullStr(firstSeen),
-		"advert_count":           advertCount,
-		"last_heard":             nullStr(lastSeen),
-		"hash_size":              nil,
-		"hash_size_inconsistent": false,
-		"foreign":                foreign.Valid && foreign.Int64 != 0,
-	}
-	if batteryMv.Valid {
-		m["battery_mv"] = int(batteryMv.Int64)
-	} else {
-		m["battery_mv"] = nil
-	}
-	if temperatureC.Valid {
-		m["temperature_c"] = temperatureC.Float64
-	} else {
-		m["temperature_c"] = nil
-	}
-	return m
-}
-
 func nullStr(ns sql.NullString) interface{} {
 	if ns.Valid {
 		return ns.String
@@ -2375,10 +2111,8 @@ type MetricsSample struct {
 	RxAirSecs     *int     `json:"rx_air_secs,omitempty"`
 	RecvErrors    *int     `json:"recv_errors,omitempty"`
 	BatteryMv     *int     `json:"battery_mv"`
-	UptimeSecs    *int     `json:"uptime_secs"`
 	PacketsSent   *int     `json:"packets_sent,omitempty"`
 	PacketsRecv   *int     `json:"packets_recv,omitempty"`
-	QueueLen      *int     `json:"queue_len,omitempty"`
 	TxAirtimePct  *float64 `json:"tx_airtime_pct"`
 	RxAirtimePct  *float64 `json:"rx_airtime_pct"`
 	RecvErrorRate *float64 `json:"recv_error_rate"`
@@ -2393,10 +2127,8 @@ type rawMetricsSample struct {
 	RxAirSecs   *int
 	RecvErrors  *int
 	BatteryMv   *int
-	UptimeSecs  *int
 	PacketsSent *int
 	PacketsRecv *int
-	QueueLen    *int
 }
 
 // GetObserverMetrics returns time-series metrics with server-side delta computation.
@@ -2421,22 +2153,22 @@ func (db *DB) GetObserverMetrics(observerID, since, until, resolution string, sa
 		// Use LAST value per bucket (latest timestamp) instead of MAX to preserve
 		// reboot semantics: if a device reboots mid-bucket, the last sample is the
 		// post-reboot baseline, not the pre-reboot high-water mark.
-		query = `SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, uptime_secs, packets_sent, packets_recv, queue_len FROM (
+		query = `SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv FROM (
 			SELECT
 				strftime('%Y-%m-%dT%H:00:00Z', timestamp) as ts,
-				noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, uptime_secs, packets_sent, packets_recv, queue_len,
+				noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv,
 				ROW_NUMBER() OVER (PARTITION BY observer_id, strftime('%Y-%m-%dT%H:00:00Z', timestamp) ORDER BY timestamp DESC) as rn
 			FROM observer_metrics WHERE observer_id = ?`
 	case "1d":
 		bucketSizeSec = 86400
-		query = `SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, uptime_secs, packets_sent, packets_recv, queue_len FROM (
+		query = `SELECT ts, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv FROM (
 			SELECT
 				strftime('%Y-%m-%dT00:00:00Z', timestamp) as ts,
-				noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, uptime_secs, packets_sent, packets_recv, queue_len,
+				noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv,
 				ROW_NUMBER() OVER (PARTITION BY observer_id, strftime('%Y-%m-%dT00:00:00Z', timestamp) ORDER BY timestamp DESC) as rn
 			FROM observer_metrics WHERE observer_id = ?`
 	default: // "5m" or raw
-		query = `SELECT timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, uptime_secs, packets_sent, packets_recv, queue_len
+		query = `SELECT timestamp, noise_floor, tx_air_secs, rx_air_secs, recv_errors, battery_mv, packets_sent, packets_recv
 			FROM observer_metrics WHERE observer_id = ?`
 	}
 
@@ -2465,7 +2197,7 @@ func (db *DB) GetObserverMetrics(observerID, since, until, resolution string, sa
 	var raw []rawMetricsSample
 	for rows.Next() {
 		var s rawMetricsSample
-		if err := rows.Scan(&s.Timestamp, &s.NoiseFloor, &s.TxAirSecs, &s.RxAirSecs, &s.RecvErrors, &s.BatteryMv, &s.UptimeSecs, &s.PacketsSent, &s.PacketsRecv, &s.QueueLen); err != nil {
+		if err := rows.Scan(&s.Timestamp, &s.NoiseFloor, &s.TxAirSecs, &s.RxAirSecs, &s.RecvErrors, &s.BatteryMv, &s.PacketsSent, &s.PacketsRecv); err != nil {
 			return nil, nil, err
 		}
 		raw = append(raw, s)
@@ -2498,8 +2230,6 @@ func computeDeltas(raw []rawMetricsSample, bucketSizeSec int) ([]MetricsSample, 
 			Timestamp:  cur.Timestamp,
 			NoiseFloor: cur.NoiseFloor,
 			BatteryMv:  cur.BatteryMv,
-			UptimeSecs: cur.UptimeSecs,
-			QueueLen:   cur.QueueLen,
 		}
 
 		if i == 0 {
@@ -2528,7 +2258,7 @@ func computeDeltas(raw []rawMetricsSample, bucketSizeSec int) ([]MetricsSample, 
 			continue
 		}
 
-		// Detect reboot from cumulative counter decreases (reliable when available).
+		// Detect reboot: any cumulative counter decreased
 		isReboot := false
 		if cur.TxAirSecs != nil && prev.TxAirSecs != nil && *cur.TxAirSecs < *prev.TxAirSecs {
 			isReboot = true
@@ -2544,23 +2274,6 @@ func computeDeltas(raw []rawMetricsSample, bucketSizeSec int) ([]MetricsSample, 
 		}
 		if cur.PacketsRecv != nil && prev.PacketsRecv != nil && *cur.PacketsRecv < *prev.PacketsRecv {
 			isReboot = true
-		}
-		// Fall back to uptime decrease when no cumulative counters are available,
-		// but validate with look-ahead: if the sample after the dip resumes near
-		// the pre-drop trajectory (next > midpoint of prev and cur), treat it as
-		// an anomalous reading rather than a real reboot.
-		if !isReboot && cur.UptimeSecs != nil && prev.UptimeSecs != nil && *cur.UptimeSecs < *prev.UptimeSecs {
-			if i+1 < len(raw) && raw[i+1].UptimeSecs != nil {
-				next := *raw[i+1].UptimeSecs
-				midpoint := (*prev.UptimeSecs+*cur.UptimeSecs)/2 + bucketSizeSec
-				if next <= midpoint {
-					isReboot = true // next sample confirms device stayed at low uptime
-				} else {
-					s.UptimeSecs = nil // bad reading — null out so chart spans across it
-				}
-			} else {
-				isReboot = true // no look-ahead available, assume reboot
-			}
 		}
 
 		if isReboot {
@@ -2599,22 +2312,16 @@ func computeDeltas(raw []rawMetricsSample, bucketSizeSec int) ([]MetricsSample, 
 			s.RxAirtimePct = &result_pct
 		}
 
-		// Compute recv errors delta and error rate
-		if cur.RecvErrors != nil && prev.RecvErrors != nil {
-			delta := *cur.RecvErrors - *prev.RecvErrors
-			if delta < 0 {
-				delta = 0
-			}
-			s.RecvErrors = &delta
-			if cur.PacketsRecv != nil && prev.PacketsRecv != nil {
-				deltaErrors := float64(delta)
-				deltaRecv := float64(*cur.PacketsRecv - *prev.PacketsRecv)
-				total := deltaRecv + deltaErrors
-				if total > 0 {
-					rate := (deltaErrors / total) * 100.0
-					rate = math.Round(rate*100) / 100
-					s.RecvErrorRate = &rate
-				}
+		// Compute recv error rate
+		if cur.RecvErrors != nil && prev.RecvErrors != nil &&
+			cur.PacketsRecv != nil && prev.PacketsRecv != nil {
+			deltaErrors := float64(*cur.RecvErrors - *prev.RecvErrors)
+			deltaRecv := float64(*cur.PacketsRecv - *prev.PacketsRecv)
+			total := deltaRecv + deltaErrors
+			if total > 0 {
+				rate := (deltaErrors / total) * 100.0
+				rate = math.Round(rate*100) / 100
+				s.RecvErrorRate = &rate
 			}
 		}
 

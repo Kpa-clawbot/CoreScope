@@ -200,10 +200,10 @@ func (s *PacketStore) fetchResolvedPathsForTx(txID int) map[int][]*string {
 
 // prefetchResolvedPathsForTxs fetches resolved_path for every observation of
 // every transmission in txIDs using a single chunked `transmission_id IN (...)`
-// query, eliminating the N+1 SQL pattern in the packet-list hot path. The
-// result is keyed txID → obsID → resolved path. Fetched paths are also written
-// into the LRU so a subsequent fetchResolvedPathForObs hits the cache.
-// MUST be called WITHOUT holding s.mu (it takes lruMu internally).
+// query, eliminating the N+1 SQL pattern in the packet-list hot path (review
+// item #3). The result is keyed txID → obsID → resolved path. Fetched paths
+// are also written into the LRU so a subsequent fetchResolvedPathForObs hits
+// the cache. MUST be called WITHOUT holding s.mu (it takes lruMu internally).
 func (s *PacketStore) prefetchResolvedPathsForTxs(txIDs []int) map[int]map[int][]*string {
 	result := make(map[int]map[int][]*string, len(txIDs))
 	if len(txIDs) == 0 || s.db == nil || s.db.conn == nil {
@@ -307,10 +307,17 @@ func (s *PacketStore) fetchResolvedPathForObs(obsID int) []*string {
 	}
 	s.lruMu.RUnlock()
 
+	// Use the cached prepared statement when available (review item #5);
+	// fall back to a plain QueryRow if preparation failed.
 	var rpJSON sql.NullString
-	err := s.db.conn.QueryRow(
-		`SELECT resolved_path FROM observations WHERE id = ?`, obsID,
-	).Scan(&rpJSON)
+	var err error
+	if stmt := s.db.resolvedPathByObsStatement(); stmt != nil {
+		err = stmt.QueryRow(obsID).Scan(&rpJSON)
+	} else {
+		err = s.db.conn.QueryRow(
+			`SELECT resolved_path FROM observations WHERE id = ?`, obsID,
+		).Scan(&rpJSON)
+	}
 	if err != nil || !rpJSON.Valid {
 		return nil
 	}
