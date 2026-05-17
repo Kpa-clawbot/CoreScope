@@ -36,13 +36,13 @@
     destroyCharts();
     chartDefaults();
 
-    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading analytics…</div>';
+    container.innerHTML = PageState.loading('Loading analytics…');
 
     let data;
     try {
       data = await api('/nodes/' + encodeURIComponent(pubkey) + '/analytics?days=' + days, { ttl: CLIENT_TTL.nodeAnalytics });
     } catch (e) {
-      container.innerHTML = '<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load analytics: ' + escapeHtml(e.message) + '</div>';
+      PageState.error(container, new Error('Failed to load analytics: ' + e.message), () => loadAnalytics(container, pubkey, days));
       return;
     }
 
@@ -128,7 +128,7 @@
             <h4>Battery Voltage <span id="batteryStatusBadge" style="font-size:11px;font-weight:normal;margin-left:8px"></span></h4>
             <div class="analytics-chart-desc">Battery voltage over time from observer status reports — flat line means full, downward slope means draining</div>
             <canvas id="batteryChart" role="img" aria-label="Battery voltage trend chart"></canvas>
-            <div id="batteryEmpty" style="display:none">${PageState.empty({ title: 'No battery telemetry for this node', hint: 'No data in the selected time range' })}</div>
+            <div id="batteryEmpty" style="display:none">${PageState.empty({ title: 'No battery telemetry for this node' })}</div>
           </div>
           <div class="analytics-chart-card full">
             <h4>Uptime Heatmap</h4>
@@ -302,7 +302,7 @@
       data = await api('/nodes/' + encodeURIComponent(pubkey) + '/battery?days=' + days);
     } catch (e) {
       const empty = document.getElementById('batteryEmpty');
-      if (empty) { empty.style.display = 'block'; empty.textContent = 'Battery data unavailable: ' + e.message; }
+      if (empty) { empty.style.display = 'block'; empty.innerHTML = PageState.errorText('Battery data unavailable: ' + e.message); }
       return;
     }
     const ctx = document.getElementById('batteryChart');
@@ -361,7 +361,7 @@
   function init(container, routeParam) {
     // routeParam is "PUBKEY/analytics"
     if (!routeParam || !routeParam.endsWith('/analytics')) {
-      container.innerHTML = '<div style="padding:40px;text-align:center">Invalid analytics URL</div>';
+      container.innerHTML = PageState.errorText('Invalid analytics URL');
       return;
     }
     const pubkey = routeParam.slice(0, -'/analytics'.length);
