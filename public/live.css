@@ -74,23 +74,9 @@
 .live-header {
   top: 64px;
   left: 12px;
-  /* #1205 — toggles re-anchored as a child row; allow wrap + max-width.
-     NOTE: #liveHeader intentionally no longer carries `.live-overlay`
-     (which set flex-direction:column). With direction defaulting to row
-     here, #liveControls is forced onto its own line via `flex: 0 0 100%`
-     and flex-wrap, so the header lays out: [title row] then [toggles
-     row]. At ≤640px the wrap keeps both rows reachable. */
   display: flex;
-  /* #1204: .live-overlay sets flex-direction: column for all overlay panels
-   * (feed/legend/node-detail need that for header+content stacking). The
-   * header is horizontal — critical strip + toggle + body lay out inline,
-   * not stacked. Without this override the "0 pkts" critical strip stacks
-   * above MESH LIVE title and the stats row gets clipped. */
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  row-gap: 6px;
+  flex-direction: column;
+  gap: 6px;
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
   backdrop-filter: blur(12px);
   padding: 8px 16px;
@@ -104,12 +90,14 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: 6px 10px;
-  flex: 0 0 100%;
+  width: 100%;
   min-width: 0;
 }
 .live-header-body .live-stats-row {
   flex: 0 0 100%;
+  justify-content: center;
 }
 .live-controls-toggle {
   display: none;
@@ -385,7 +373,6 @@
   padding: 0;
   border: 0;
   box-shadow: none;
-  flex: 0 0 100%;          /* break onto its own row inside flex-wrap header */
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1270,11 +1257,13 @@
   flex: 1;
 }
 
-/* Close / pin buttons group */
+/* Close / pin buttons — anchored to the panel's top-right corner */
 .live-header-actions {
+  position: absolute;
+  right: 8px;
+  top: 8px;
   display: flex;
   gap: 4px;
-  flex-shrink: 0;
   align-items: center;
 }
 

@@ -908,15 +908,15 @@
       <div class="live-page">
         <div id="liveMap" style="width:100%;height:100%;position:absolute;top:0;left:0;z-index:1"></div>
         <div class="live-overlay live-header" id="liveHeader">
+          <div class="live-header-actions">
+            <button class="live-header-pin-btn" id="liveHeaderPinBtn" title="Pin panel open" aria-pressed="false" aria-label="Pin MESH LIVE panel open">📌</button>
+            <button class="live-header-close-btn" id="liveHeaderCloseBtn" title="Minimise panel" aria-label="Minimise MESH LIVE panel">✕</button>
+          </div>
           <div class="live-header-body" data-live-header-body id="liveHeaderBody">
             <div class="live-title">
               <span class="live-beacon" aria-label="WebSocket connection beacon"></span>
               MESH LIVE
               <button class="live-header-expand-btn" id="liveHeaderExpandBtn" aria-label="Show settings" aria-expanded="false">⚙</button>
-            </div>
-            <div class="live-header-actions">
-              <button class="live-header-pin-btn" id="liveHeaderPinBtn" title="Pin panel open" aria-pressed="false" aria-label="Pin MESH LIVE panel open">📌</button>
-              <button class="live-header-close-btn" id="liveHeaderCloseBtn" title="Minimise panel" aria-label="Minimise MESH LIVE panel">✕</button>
             </div>
             <div class="live-stats-row" data-live-stats-row>
               <div class="live-stat-pill live-stat-pill--critical"><span id="livePktCount">0</span> pkts</div>
