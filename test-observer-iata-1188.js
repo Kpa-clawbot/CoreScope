@@ -40,6 +40,7 @@ function extractFn(name) {
 }
 
 const badgeSrc = extractFn('obsIataBadge');
+const groupedSrc = extractFn('groupedObserverIataBadgesHtml');
 
 // Sandbox: provide the helpers the function depends on (escapeHtml,
 // observerMap). escapeHtml mirrors the real one in public/app.js.
@@ -54,10 +55,12 @@ const ctx = {
       .replace(/'/g, '&#39;');
   },
   obsIataBadge: null,
+  groupedObserverIataBadgesHtml: null,
 };
 vm.createContext(ctx);
-vm.runInContext(badgeSrc + '\nobsIataBadge = obsIataBadge;', ctx);
+vm.runInContext(badgeSrc + '\n' + groupedSrc + '\nobsIataBadge = obsIataBadge;\ngroupedObserverIataBadgesHtml = groupedObserverIataBadgesHtml;', ctx);
 const obsIataBadge = ctx.obsIataBadge;
+const groupedObserverIataBadgesHtml = ctx.groupedObserverIataBadgesHtml;
 if (typeof obsIataBadge !== 'function') {
   console.error('  \u274c failed to load obsIataBadge into sandbox');
   process.exit(1);
@@ -112,6 +115,63 @@ if (typeof obsIataBadge !== 'function') {
     'raw <script> not present in output (escapeHtml applied), got: ' + html);
   assert(html.includes('&lt;script&gt;'),
     'output contains the escaped form &lt;script&gt;');
+}
+
+// ── groupedObserverIataBadgesHtml (#1189 R1 UX): distinct-IATA set ──
+// Mesh-operator finding: grouped row must distinguish same-region (redundant)
+// from cross-region (interesting). Header pill now shows the DISTINCT IATA set.
+
+// All same region: single badge, no +N
+{
+  const p = { observer_iata: 'SJC', _children: [
+    { observer_iata: 'SJC' }, { observer_iata: 'SJC' }, { observer_iata: 'SJC' },
+  ]};
+  const html = groupedObserverIataBadgesHtml(p);
+  assert(html === '<span class="badge-iata">SJC</span>',
+    'all-same-region group renders ONE badge with no +N, got: ' + html);
+}
+
+// Two distinct regions: both badges visible
+{
+  const p = { observer_iata: 'SJC', _children: [
+    { observer_iata: 'SFO' }, { observer_iata: 'SJC' },
+  ]};
+  const html = groupedObserverIataBadgesHtml(p);
+  assert(html.includes('SJC') && html.includes('SFO'),
+    'two-region group renders both IATAs, got: ' + html);
+  assert(!/\+\d/.test(html),
+    'no +N suffix when all distinct IATAs fit in 2 visible slots, got: ' + html);
+}
+
+// Three+ distinct regions: first 2 + +N of distinct-region count
+{
+  const p = { observer_iata: 'SJC', _children: [
+    { observer_iata: 'SFO' }, { observer_iata: 'OAK' }, { observer_iata: 'MRY' },
+  ]};
+  const html = groupedObserverIataBadgesHtml(p);
+  const badges = (html.match(/badge-iata/g) || []).length;
+  assert(badges === 2, 'shows 2 visible badges when distinct-region count > 2, got: ' + badges);
+  assert(/\+2$/.test(html.trim()),
+    'trailing +2 reflects distinct-region overflow count, got: ' + html);
+}
+
+// Falls back to observerMap when packets lack observer_iata field
+{
+  ctx.observerMap.clear();
+  ctx.observerMap.set('obs-a', { name: 'A', iata: 'SJC' });
+  ctx.observerMap.set('obs-b', { name: 'B', iata: 'SFO' });
+  const p = { observer_id: 'obs-a', _children: [{ observer_id: 'obs-b' }] };
+  const html = groupedObserverIataBadgesHtml(p);
+  assert(html.includes('SJC') && html.includes('SFO'),
+    'falls back to observerMap for missing observer_iata, got: ' + html);
+}
+
+// No IATA anywhere → empty string
+{
+  ctx.observerMap.clear();
+  const html = groupedObserverIataBadgesHtml({ observer_id: 'unknown', _children: [{ observer_id: 'unknown2' }] });
+  assert(html === '',
+    'no IATA known anywhere → empty string, got: ' + html);
 }
 
 console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);

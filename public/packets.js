@@ -485,6 +485,39 @@
     if (!o) return id;
     return o.name;
   }
+  // #1189 R1 mesh-operator feedback: in a grouped row the old cell showed ONE
+  // observer's IATA + `+N` — operators couldn't tell whether the N additional
+  // observers were SAME-region (redundant copies) or CROSS-region (interesting
+  // multi-site reception). This helper returns the cell's badge HTML showing
+  // the DISTINCT IATA set: `<badge>SJC</badge>` or `<badge>SJC</badge><badge>SFO</badge>+1`
+  // (capped at 2 visible, remainder rolled into +N of distinct-region count).
+  // Returns '' when no observer in the group carries any IATA.
+  function groupedObserverIataBadgesHtml(p) {
+    if (!p) return '';
+    const seen = new Set();
+    const pushIata = (rec) => {
+      if (!rec) return;
+      let iata = rec.observer_iata;
+      if (!iata && rec.observer_id) {
+        const o = observerMap.get(rec.observer_id);
+        iata = o && o.iata;
+      }
+      if (iata) seen.add(String(iata).toUpperCase());
+    };
+    pushIata(p);
+    if (p._children && p._children.length) {
+      for (const c of p._children) pushIata(c);
+    }
+    if (!seen.size) return '';
+    const list = Array.from(seen).sort();
+    const visible = list.slice(0, 2);
+    const extra = list.length - visible.length;
+    let html = visible
+      .map(code => `<span class="badge-iata">${escapeHtml(code)}</span>`)
+      .join('');
+    if (extra > 0) html += ` +${extra}`;
+    return html;
+  }
   let selectedId = null;
   function _isColorByHash() { return localStorage.getItem('meshcore-color-packets-by-hash') !== 'false'; }
   function _currentTheme() { return document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
@@ -1965,7 +1998,7 @@
           <td class="col-size" data-filter-field="size" data-filter-value="${groupSize || ''}">${groupSize ? groupSize + 'B' : '—'}</td>
           <td class="col-hashsize mono">${groupHashBytes}</td>
           <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(groupTypeName || '')}">${p.payload_type != null ? `<span class="badge badge-${groupTypeClass}">${groupTypeName}</span>${transportBadge(p.route_type)}` : '—'}</td>
-          <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(headerObserverId) || '')}">${isSingle ? truncate(obsNameOnly(headerObserverId), 16) + obsIataBadge(p) : truncate(obsNameOnly(headerObserverId), 10) + obsIataBadge(p) + (p.observer_count > 1 ? ' +' + (p.observer_count - 1) : '')}</td>
+          <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(headerObserverId) || '')}">${isSingle ? truncate(obsNameOnly(headerObserverId), 16) + obsIataBadge(p) : truncate(obsNameOnly(headerObserverId), 10) + groupedObserverIataBadgesHtml(p) + (p.observer_count > 1 ? ' +' + (p.observer_count - 1) : '')}</td>
           <td class="col-path"><span class="path-hops">${groupPathStr}</span></td>
           <td class="col-rpt">${p.observation_count > 1 ? '<span class="badge badge-obs" title="Seen ' + p.observation_count + ' times">👁 ' + p.observation_count + '</span>' : (isSingle ? '' : p.count)}</td>
           <td class="col-details">${getDetailPreview(getParsedDecoded(p))}</td>
