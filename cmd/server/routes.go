@@ -32,13 +32,13 @@ type Server struct {
 	buildTime string
 
 	// Cached runtime.MemStats to avoid stop-the-world pauses on every health check
-	memStatsMu   sync.Mutex
-	memStatsCache runtime.MemStats
+	memStatsMu       sync.Mutex
+	memStatsCache    runtime.MemStats
 	memStatsCachedAt time.Time
 
 	// Cached /api/stats response — recomputed at most once every 10s
-	statsMu      sync.Mutex
-	statsCache   *StatsResponse
+	statsMu       sync.Mutex
+	statsCache    *StatsResponse
 	statsCachedAt time.Time
 
 	// Neighbor affinity graph (lazy-built, cached with TTL)
@@ -128,6 +128,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/health", s.handleHealth).Methods("GET")
 	r.HandleFunc("/api/stats", s.handleStats).Methods("GET")
 	r.HandleFunc("/api/perf", s.handlePerf).Methods("GET")
+	r.HandleFunc("/api/perf/db", s.handlePerfDB).Methods("GET")
 	r.HandleFunc("/api/perf/io", s.handlePerfIO).Methods("GET")
 	r.HandleFunc("/api/perf/sqlite", s.handlePerfSqlite).Methods("GET")
 	r.HandleFunc("/api/perf/write-sources", s.handlePerfWriteSources).Methods("GET")
@@ -330,30 +331,30 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 	}, s.cfg.Branding, theme.Branding)
 
 	themeColors := mergeMap(map[string]interface{}{
-		"accent":      "#4a9eff",
-		"accentHover": "#6db3ff",
-		"navBg":       "#0f0f23",
-		"navBg2":      "#1a1a2e",
-		"navText":     "#ffffff",
+		"accent":       "#4a9eff",
+		"accentHover":  "#6db3ff",
+		"navBg":        "#0f0f23",
+		"navBg2":       "#1a1a2e",
+		"navText":      "#ffffff",
 		"navTextMuted": "#cbd5e1",
-		"background":  "#f4f5f7",
-		"text":        "#1a1a2e",
-		"textMuted":   "#5b6370",
-		"border":      "#e2e5ea",
-		"surface1":    "#ffffff",
-		"surface2":    "#ffffff",
-		"surface3":    "#ffffff",
-		"sectionBg":   "#eef2ff",
-		"cardBg":      "#ffffff",
-		"contentBg":   "#f4f5f7",
-		"detailBg":    "#ffffff",
-		"inputBg":     "#ffffff",
-		"rowStripe":   "#f9fafb",
-		"rowHover":    "#eef2ff",
-		"selectedBg":  "#dbeafe",
-		"statusGreen": "#22c55e",
+		"background":   "#f4f5f7",
+		"text":         "#1a1a2e",
+		"textMuted":    "#5b6370",
+		"border":       "#e2e5ea",
+		"surface1":     "#ffffff",
+		"surface2":     "#ffffff",
+		"surface3":     "#ffffff",
+		"sectionBg":    "#eef2ff",
+		"cardBg":       "#ffffff",
+		"contentBg":    "#f4f5f7",
+		"detailBg":     "#ffffff",
+		"inputBg":      "#ffffff",
+		"rowStripe":    "#f9fafb",
+		"rowHover":     "#eef2ff",
+		"selectedBg":   "#dbeafe",
+		"statusGreen":  "#22c55e",
 		"statusYellow": "#eab308",
-		"statusRed":   "#ef4444",
+		"statusRed":    "#ef4444",
 	}, s.cfg.Theme, theme.Theme)
 
 	nodeColors := mergeMap(map[string]interface{}{
@@ -365,30 +366,30 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 	}, s.cfg.NodeColors, theme.NodeColors)
 
 	themeDark := mergeMap(map[string]interface{}{
-		"accent":      "#4a9eff",
-		"accentHover": "#6db3ff",
-		"navBg":       "#0f0f23",
-		"navBg2":      "#1a1a2e",
-		"navText":     "#ffffff",
+		"accent":       "#4a9eff",
+		"accentHover":  "#6db3ff",
+		"navBg":        "#0f0f23",
+		"navBg2":       "#1a1a2e",
+		"navText":      "#ffffff",
 		"navTextMuted": "#cbd5e1",
-		"background":  "#0f0f23",
-		"text":        "#e2e8f0",
-		"textMuted":   "#a8b8cc",
-		"border":      "#334155",
-		"surface1":    "#1a1a2e",
-		"surface2":    "#232340",
-		"cardBg":      "#1a1a2e",
-		"contentBg":   "#0f0f23",
-		"detailBg":    "#232340",
-		"inputBg":     "#1e1e34",
-		"rowStripe":   "#1e1e34",
-		"rowHover":    "#2d2d50",
-		"selectedBg":  "#1e3a5f",
-		"statusGreen": "#22c55e",
+		"background":   "#0f0f23",
+		"text":         "#e2e8f0",
+		"textMuted":    "#a8b8cc",
+		"border":       "#334155",
+		"surface1":     "#1a1a2e",
+		"surface2":     "#232340",
+		"cardBg":       "#1a1a2e",
+		"contentBg":    "#0f0f23",
+		"detailBg":     "#232340",
+		"inputBg":      "#1e1e34",
+		"rowStripe":    "#1e1e34",
+		"rowHover":     "#2d2d50",
+		"selectedBg":   "#1e3a5f",
+		"statusGreen":  "#22c55e",
 		"statusYellow": "#eab308",
-		"statusRed":   "#ef4444",
-		"surface3":    "#2d2d50",
-		"sectionBg":   "#1e1e34",
+		"statusRed":    "#ef4444",
+		"surface3":     "#2d2d50",
+		"sectionBg":    "#1e1e34",
 	}, s.cfg.ThemeDark, theme.ThemeDark)
 	typeColors := mergeMap(map[string]interface{}{
 		"ADVERT":   "#22c55e",
@@ -712,7 +713,12 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 
 	// SQLite stats
 	var sqliteStats *SqliteStats
+	var dbStats *DBPerfStats
 	if s.db != nil {
+		ds := s.db.GetDBPerfStatsTyped()
+		dbStats = &ds
+	}
+	if s.db != nil && s.db.IsSQLite() {
 		ss := s.db.GetDBSizeStatsTyped()
 		sqliteStats = &ss
 	}
@@ -725,6 +731,7 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 		SlowQueries:   slowQueries,
 		Cache:         perfCS,
 		PacketStore:   pktStoreStats,
+		DB:            dbStats,
 		Sqlite:        sqliteStats,
 		GoRuntime: func() *GoRuntimeStats {
 			ms := s.getMemStats()
@@ -796,15 +803,15 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := PacketQuery{
-		Limit:    queryInt(r, "limit", 50),
-		Offset:   queryInt(r, "offset", 0),
-		Observer: r.URL.Query().Get("observer"),
-		Hash:     r.URL.Query().Get("hash"),
-		Since:    r.URL.Query().Get("since"),
-		Until:    r.URL.Query().Get("until"),
-		Region:   r.URL.Query().Get("region"),
-		Node:     r.URL.Query().Get("node"),
-		Channel:  r.URL.Query().Get("channel"),
+		Limit:              queryInt(r, "limit", 50),
+		Offset:             queryInt(r, "offset", 0),
+		Observer:           r.URL.Query().Get("observer"),
+		Hash:               r.URL.Query().Get("hash"),
+		Since:              r.URL.Query().Get("since"),
+		Until:              r.URL.Query().Get("until"),
+		Region:             r.URL.Query().Get("region"),
+		Node:               r.URL.Query().Get("node"),
+		Channel:            r.URL.Query().Get("channel"),
 		Order:              "DESC",
 		ExpandObservations: r.URL.Query().Get("expand") == "observations",
 	}
@@ -1682,7 +1689,7 @@ func (s *Server) handleAnalyticsHashSizes(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, map[string]interface{}{
-		"total":                    0,
+		"total":                   0,
 		"distribution":            map[string]int{"1": 0, "2": 0, "3": 0},
 		"distributionByRepeaters": map[string]int{"1": 0, "2": 0, "3": 0},
 		"hourly":                  []HashSizeHourly{},
@@ -1727,7 +1734,8 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 
 // handleAnalyticsSubpathsBulk returns multiple length-range buckets in a single
 // response, avoiding repeated scans of the same packet data. Query format:
-//   ?groups=2-2:50,3-3:30,4-4:20,5-8:15   (minLen-maxLen:limit per group)
+//
+//	?groups=2-2:50,3-3:30,4-4:20,5-8:15   (minLen-maxLen:limit per group)
 func (s *Server) handleAnalyticsSubpathsBulk(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	groupsParam := r.URL.Query().Get("groups")
@@ -2055,13 +2063,13 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 			ID: o.ID, Name: o.Name, IATA: o.IATA,
 			LastSeen: o.LastSeen, FirstSeen: o.FirstSeen,
 			PacketCount: o.PacketCount,
-			Model: o.Model, Firmware: o.Firmware,
+			Model:       o.Model, Firmware: o.Firmware,
 			ClientVersion: o.ClientVersion, Radio: o.Radio,
 			BatteryMv: o.BatteryMv, UptimeSecs: o.UptimeSecs,
-			NoiseFloor: o.NoiseFloor,
-			LastPacketAt: o.LastPacketAt,
+			NoiseFloor:      o.NoiseFloor,
+			LastPacketAt:    o.LastPacketAt,
 			PacketsLastHour: plh,
-			Lat: lat, Lon: lon, NodeRole: nodeRole,
+			Lat:             lat, Lon: lon, NodeRole: nodeRole,
 		})
 	}
 	writeJSON(w, ObserverListResponse{
@@ -2097,11 +2105,11 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 		ID: obs.ID, Name: obs.Name, IATA: obs.IATA,
 		LastSeen: obs.LastSeen, FirstSeen: obs.FirstSeen,
 		PacketCount: obs.PacketCount,
-		Model: obs.Model, Firmware: obs.Firmware,
+		Model:       obs.Model, Firmware: obs.Firmware,
 		ClientVersion: obs.ClientVersion, Radio: obs.Radio,
 		BatteryMv: obs.BatteryMv, UptimeSecs: obs.UptimeSecs,
-		NoiseFloor: obs.NoiseFloor,
-		LastPacketAt: obs.LastPacketAt,
+		NoiseFloor:      obs.NoiseFloor,
+		LastPacketAt:    obs.LastPacketAt,
 		PacketsLastHour: plh,
 	})
 }

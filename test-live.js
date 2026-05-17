@@ -761,6 +761,8 @@ console.log('\n=== live.js: resolveHopPositions ===');
       { key: 'vancouver', known: true, pos: [49.2827, -123.1207] },
     ]);
     assert.strictEqual(report.plausible, false);
+    assert.strictEqual(report.status, 'suppressed');
+    assert.strictEqual(report.knownAnchors, 2);
     assert.ok(report.maxSegmentKm > 3000, `expected cross-country segment, got ${report.maxSegmentKm}`);
     assert.strictEqual(ctx.window._liveShouldDrawRfPath([
       { key: 'toronto', known: true, pos: [43.6532, -79.3832] },
@@ -774,6 +776,8 @@ console.log('\n=== live.js: resolveHopPositions ===');
       { key: 'victoria', known: true, pos: [48.4284, -123.3656] },
     ]);
     assert.strictEqual(report.plausible, true);
+    assert.strictEqual(report.status, 'plausible');
+    assert.strictEqual(report.knownAnchors, 2);
     assert.ok(report.maxSegmentKm > 100 && report.maxSegmentKm < 200,
       `expected plausible 100km+ boundary segment, got ${report.maxSegmentKm}`);
   });
@@ -785,7 +789,19 @@ console.log('\n=== live.js: resolveHopPositions ===');
       { key: 'vancouver', known: true, pos: [49.2827, -123.1207] },
     ]);
     assert.strictEqual(report.plausible, false);
+    assert.strictEqual(report.status, 'suppressed');
+    assert.strictEqual(report.knownAnchors, 2);
     assert.strictEqual(report.badSegments.length, 1);
+  });
+
+  test('single known anchor is diagnostic-only and does not suppress feed/map pulse', () => {
+    const report = ctx.window._livePathPlausibilityReport([
+      { key: 'known', known: true, pos: [43.6532, -79.3832] },
+      { key: 'ghost', known: false, ghost: true, pos: [44.0, -80.0] },
+    ]);
+    assert.strictEqual(report.plausible, true);
+    assert.strictEqual(report.status, 'insufficient-known-anchors');
+    assert.strictEqual(report.knownAnchors, 1);
   });
 }
 

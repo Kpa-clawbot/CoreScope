@@ -52,6 +52,7 @@ function stubFetch(sb, perfData, healthData) {
   sb.ctx.fetch = (url) => {
     if (url === '/api/perf') return Promise.resolve({ json: () => Promise.resolve(perfData) });
     if (url === '/api/health') return Promise.resolve({ json: () => Promise.resolve(healthData) });
+    if (url === '/api/perf/db') return Promise.resolve({ json: () => Promise.resolve(perfData.db || { engine: 'sqlite', dbSizeMB: 0, rows: {} }) });
     return Promise.resolve({ json: () => Promise.resolve({}) });
   };
 }

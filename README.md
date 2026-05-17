@@ -76,13 +76,22 @@ cd CoreScope
 Primary runtime config is `config.json` (copy from `config.example.json`). Common fields include:
 
 - `port`
-- `dbPath`
+- `dbPath` or `db` (`driver`, `url`, `path`, pool limits)
 - `mqtt` (local broker/topic)
 - `mqttSources` (additional brokers)
 - `channelKeys`
 - `defaultRegion`
 
-Environment overrides include `PORT` and `DB_PATH`.
+Environment overrides include `PORT`, `DB_DRIVER`, `DATABASE_URL`, and `DB_PATH`.
+Docker Compose starts Postgres by default; set `DB_DRIVER=sqlite` and unset
+`DATABASE_URL` to keep using the legacy SQLite file at `DB_PATH`.
+
+SQLite to Postgres migration is a one-shot tool:
+
+```bash
+cd cmd/migrate-postgres
+go run . -sqlite ../../data/meshcore.db -postgres "$DATABASE_URL"
+```
 
 ## Testing
 

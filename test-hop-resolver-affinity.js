@@ -173,5 +173,8 @@ const fromServer = HopResolver.resolveFromServer(['ab99'], [companion.public_key
 assert(fromServer['ab99'] && fromServer['ab99'].name === 'Companion1',
   'resolveFromServer finds companion by full pubkey — got: ' + (fromServer['ab99'] && fromServer['ab99'].name));
 
+assert(fromServer['ab99'].serverResolved === true,
+  'resolveFromServer marks entries as serverResolved for live diagnostics');
+
 console.log('\n' + (passed + failed) + ' tests, ' + passed + ' passed, ' + failed + ' failed\n');
 process.exit(failed > 0 ? 1 : 0);

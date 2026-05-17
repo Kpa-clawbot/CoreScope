@@ -112,6 +112,10 @@ type persistEdgeUpdate struct {
 // edge upserts to SQLite in a background goroutine. Shared between
 // IngestNewFromDB and IngestNewObservations to avoid DRY violation.
 func asyncPersistResolvedPathsAndEdges(dbPath string, obsUpdates []persistObsUpdate, edgeUpdates []persistEdgeUpdate, logPrefix string) {
+	asyncPersistResolvedPathsAndEdgesWithDB(nil, dbPath, obsUpdates, edgeUpdates, logPrefix)
+}
+
+func asyncPersistResolvedPathsAndEdgesWithDB(db *DB, dbPath string, obsUpdates []persistObsUpdate, edgeUpdates []persistEdgeUpdate, logPrefix string) {
 	if len(obsUpdates) == 0 && len(edgeUpdates) == 0 {
 		return
 	}
@@ -128,10 +132,16 @@ func asyncPersistResolvedPathsAndEdges(dbPath string, obsUpdates []persistObsUpd
 	go func() {
 		defer func() { <-persistSem }()
 
-		rw, err := cachedRW(dbPath)
-		if err != nil {
-			log.Printf("[store] %s rw open error: %v", logPrefix, err)
-			return
+		var rw *sql.DB
+		var err error
+		if db != nil && db.IsPostgres() {
+			rw = db.conn
+		} else {
+			rw, err = cachedRW(dbPath)
+			if err != nil {
+				log.Printf("[store] %s rw open error: %v", logPrefix, err)
+				return
+			}
 		}
 
 		if len(obsUpdates) > 0 {
@@ -162,7 +172,8 @@ func asyncPersistResolvedPathsAndEdges(dbPath string, obsUpdates []persistObsUpd
 				stmt, err := sqlTx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
 					VALUES (?, ?, 1, ?)
 					ON CONFLICT(node_a, node_b) DO UPDATE SET
-					count = count + 1, last_seen = MAX(last_seen, excluded.last_seen)`)
+					count = neighbor_edges.count + 1,
+					last_seen = CASE WHEN neighbor_edges.last_seen > excluded.last_seen THEN neighbor_edges.last_seen ELSE excluded.last_seen END`)
 				if err == nil {
 					var firstErr error
 					for _, e := range edgeUpdates {
@@ -213,7 +224,8 @@ func buildAndPersistEdges(store *PacketStore, rw *sql.DB) int {
 	stmt, err := tx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
 		VALUES (?, ?, 1, ?)
 		ON CONFLICT(node_a, node_b) DO UPDATE SET
-		count = count + 1, last_seen = MAX(last_seen, excluded.last_seen)`)
+		count = neighbor_edges.count + 1,
+		last_seen = CASE WHEN neighbor_edges.last_seen > excluded.last_seen THEN neighbor_edges.last_seen ELSE excluded.last_seen END`)
 	if err != nil {
 		log.Printf("[neighbor] prepare stmt error: %v", err)
 		return 0
@@ -495,7 +507,6 @@ func unmarshalResolvedPath(s string) []*string {
 	return result
 }
 
-
 // backfillResolvedPathsAsync processes observations with NULL resolved_path in
 // chunks, yielding between batches so HTTP handlers remain responsive. It sets
 // store.backfillComplete when finished and re-picks best observations for any
@@ -572,6 +583,8 @@ func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int
 		if err != nil {
 			log.Printf("[store] async backfill: open rw error: %v", err)
 		}
+	} else if store != nil && store.db != nil && store.db.IsPostgres() {
+		rw = store.db.conn
 	}
 	// rw is cached process-wide; do not close
 
@@ -793,14 +806,18 @@ func openRW(dbPath string) (*sql.DB, error) {
 // the in-memory graph. Uses openRW internally because the shared database.conn
 // is opened with mode=ro and DELETEs would silently fail.
 func PruneNeighborEdges(dbPath string, graph *NeighborGraph, maxAgeDays int) (int, error) {
-	cutoff := time.Now().UTC().Add(-time.Duration(maxAgeDays) * 24 * time.Hour)
-
-	// 1. Prune from SQLite using a read-write connection
-	var dbPruned int64
-	rw, err := cachedRW(dbPath)
+	rw, err := openRW(dbPath)
 	if err != nil {
 		return 0, fmt.Errorf("prune neighbor_edges: open rw: %w", err)
 	}
+	defer rw.Close()
+	return pruneNeighborEdgesWithConn(rw, graph, maxAgeDays)
+}
+
+func pruneNeighborEdgesWithConn(rw *sql.DB, graph *NeighborGraph, maxAgeDays int) (int, error) {
+	cutoff := time.Now().UTC().Add(-time.Duration(maxAgeDays) * 24 * time.Hour)
+
+	var dbPruned int64
 	res, err := rw.Exec("DELETE FROM neighbor_edges WHERE last_seen < ?", cutoff.Format(time.RFC3339))
 	if err != nil {
 		return 0, fmt.Errorf("prune neighbor_edges: %w", err)

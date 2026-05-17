@@ -46,7 +46,8 @@ No `config.json` is required. The server starts with sensible defaults:
 - HTTP on port 3000 (Caddy proxies port 80 → 3000 internally)
 - Internal Mosquitto MQTT broker on port 1883
 - Ingestor connects to `mqtt://localhost:1883` automatically
-- SQLite database at `/app/data/meshcore.db`
+- SQLite database at `/app/data/meshcore.db` for single-container `docker run`
+- Postgres for Docker Compose deployments when `DATABASE_URL` is configured
 
 ### Full `docker run` Reference (recommended)
 
@@ -71,7 +72,7 @@ docker run -d --name corescope \
 | `-p 80:80` | Yes | HTTP web UI |
 | `-p 443:443` | No | HTTPS (only if using built-in Caddy with a domain) |
 | `-p 1883:1883` | No | MQTT broker (expose if external gateways connect directly) |
-| `-v /your/data:/app/data` | Yes | Persistent data: SQLite DB, config.json, theme.json |
+| `-v /your/data:/app/data` | Yes | Persistent data: SQLite fallback DB, config.json, theme.json |
 | `-v /your/Caddyfile:/etc/caddy/Caddyfile:ro` | No | Custom Caddyfile for HTTPS |
 | `-v /your/caddy-data:/data/caddy` | No | Caddy TLS certificate storage |
 | `-e DISABLE_MOSQUITTO=true` | No | Skip the internal Mosquitto broker (use your own) |
@@ -157,7 +158,9 @@ CoreScope uses a layered configuration system (highest priority wins):
 |----------|---------|-------------|
 | `MQTT_BROKER` | `mqtt://localhost:1883` | MQTT broker URL (overrides config file) |
 | `MQTT_TOPIC` | `meshcore/#` | MQTT topic subscription pattern |
-| `DB_PATH` | `data/meshcore.db` | SQLite database path |
+| `DB_DRIVER` | `sqlite` | Database driver: `sqlite` or `postgres` |
+| `DATABASE_URL` | empty | Postgres connection URL; selects Postgres unless `DB_DRIVER` is set |
+| `DB_PATH` | `data/meshcore.db` | SQLite database path and rollback fallback |
 | `DISABLE_MOSQUITTO` | `false` | Skip the internal Mosquitto broker |
 | `DISABLE_CADDY` | `false` | Skip the built-in Caddy reverse proxy |
 
@@ -399,7 +402,8 @@ docker stats corescope
 
 ### Backup
 
-All persistent data lives in `/app/data`. The critical file is the SQLite database:
+For SQLite deployments, all persistent data lives in `/app/data`. The critical
+file is the SQLite database:
 
 ```bash
 # Copy from the Docker volume
@@ -412,6 +416,10 @@ cp ./data/meshcore.db ./backup-$(date +%Y%m%d).db
 Optional files to back up:
 - `config.json` — custom configuration
 - `theme.json` — custom theme/branding
+
+For Postgres deployments, back up the Postgres database with `pg_dump` or your
+managed database snapshot tooling, and keep `/app/data/config.json` and
+`theme.json` with the backup set.
 
 ### Restore
 
@@ -481,6 +489,10 @@ The in-memory packet store grows with retained packets. Configure retention limi
 ### Database locked errors
 
 SQLite doesn't support concurrent writers well. Ensure only one CoreScope instance accesses the database file. If running multiple containers, each needs its own database.
+
+Postgres deployments should not see SQLite lock errors. If the dashboard is
+slow on Postgres, check `/api/perf/db` for pool waits and `/api/perf` for
+endpoint latency before assuming the database is the bottleneck.
 
 ### Container unhealthy
 

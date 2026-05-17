@@ -4,6 +4,22 @@
 # This ensures the DB and theme are visible on the host filesystem for backup.
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: corescope-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-corescope}
+      POSTGRES_USER: ${POSTGRES_USER:-corescope}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-corescope}
+    volumes:
+      - ${PROD_POSTGRES_DATA_DIR:-~/meshcore-postgres-data}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-corescope} -d ${POSTGRES_DB:-corescope}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   prod:
     build:
       context: .
@@ -16,6 +32,9 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     stop_signal: SIGTERM
+    depends_on:
+      postgres:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -28,6 +47,9 @@ services:
       - caddy-data:/data/caddy
     environment:
       - NODE_ENV=production
+      - DB_DRIVER=${DB_DRIVER:-postgres}
+      - DATABASE_URL=${DATABASE_URL:-postgres://corescope:corescope@postgres:5432/corescope?sslmode=disable}
+      - DB_PATH=${DB_PATH:-/app/data/meshcore.db}
       - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-false}
       - DISABLE_CADDY=${DISABLE_CADDY:-false}
     healthcheck:

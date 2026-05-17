@@ -17,6 +17,7 @@ import (
 // chunk loader and RFC3339 since/until path don't full-scan observations.
 func TestEnsureServerIndexes_CreatesObservationsIndexes(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(closeRWCache)
 	dbPath := filepath.Join(dir, "schema_only.db")
 
 	conn, err := sql.Open("sqlite", dbPath)

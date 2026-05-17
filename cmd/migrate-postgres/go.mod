@@ -1,31 +1,11 @@
-module github.com/corescope/server
+module github.com/corescope/migrate-postgres
 
 go 1.22
 
 require (
-	github.com/gorilla/mux v1.8.1
-	github.com/gorilla/websocket v1.5.3
-	github.com/meshcore-analyzer/geofilter v0.0.0
-	github.com/meshcore-analyzer/sigvalidate v0.0.0
+	github.com/meshcore-analyzer/dbconfig v0.0.0
 	modernc.org/sqlite v1.34.5
 )
-
-replace github.com/meshcore-analyzer/geofilter => ../../internal/geofilter
-
-replace github.com/meshcore-analyzer/sigvalidate => ../../internal/sigvalidate
-
-require github.com/meshcore-analyzer/packetpath v0.0.0
-
-replace github.com/meshcore-analyzer/packetpath => ../../internal/packetpath
-
-replace github.com/meshcore-analyzer/dbconfig => ../../internal/dbconfig
-
-require (
-	github.com/meshcore-analyzer/dbconfig v0.0.0
-	github.com/meshcore-analyzer/perfio v0.0.0
-)
-
-replace github.com/meshcore-analyzer/perfio => ../../internal/perfio
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -45,3 +25,5 @@ require (
 	modernc.org/mathutil v1.6.0 // indirect
 	modernc.org/memory v1.8.0 // indirect
 )
+
+replace github.com/meshcore-analyzer/dbconfig => ../../internal/dbconfig

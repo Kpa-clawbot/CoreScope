@@ -153,6 +153,7 @@ func TestUnmarshalResolvedPath_Invalid(t *testing.T) {
 
 func TestEnsureNeighborEdgesTable(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(closeRWCache)
 	dbPath := filepath.Join(dir, "test.db")
 
 	// Create initial DB
@@ -215,8 +216,8 @@ func TestStoreObsResolvedPathInBroadcast(t *testing.T) {
 	}
 
 	tx := &StoreTx{
-		ID:   1,
-		Hash: "abc123",
+		ID:           1,
+		Hash:         "abc123",
 		Observations: []*StoreObs{obs},
 	}
 	pickBestObservation(tx)
@@ -259,6 +260,7 @@ func TestResolvedPathOmittedWhenNil(t *testing.T) {
 
 func TestEnsureResolvedPathColumn(t *testing.T) {
 	dir := t.TempDir()
+	t.Cleanup(closeRWCache)
 	dbPath := filepath.Join(dir, "test.db")
 
 	conn, _ := sql.Open("sqlite", "file:"+dbPath+"?_journal_mode=WAL")
@@ -475,8 +477,6 @@ func TestExtractEdgesFromObs_SameNodeNoEdge(t *testing.T) {
 	}
 }
 
-
-
 func TestPersistSemaphoreTryAcquireSkipsBatch(t *testing.T) {
 	// Verify that persistSem is a buffered channel of size 1.
 	if cap(persistSem) != 1 {
@@ -542,6 +542,7 @@ func TestOpenRW_BusyTimeout(t *testing.T) {
 func TestEnsureLastPacketAtColumn(t *testing.T) {
 	// Create a temp DB with observers table missing last_packet_at
 	dir := t.TempDir()
+	t.Cleanup(closeRWCache)
 	dbPath := dir + "/test.db"
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
