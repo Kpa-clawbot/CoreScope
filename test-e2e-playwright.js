@@ -3045,6 +3045,63 @@ async function run() {
     }
   });
 
+  // Issue #1243: On mobile (≤640px), the QR code on the node detail page must
+  // overlay the map semi-transparently (matching desktop behavior), not render
+  // as its own ~250px-tall panel below the map.
+  await test('#1243 Node detail mobile QR overlays map semi-transparently (desktop parity)', async () => {
+    await page.setViewportSize({ width: 375, height: 800 });
+    // Find a node with location data so the map renders.
+    await page.goto(BASE + '#/nodes', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#nodesBody tr[data-key]', { timeout: 10000 });
+    // Fetch nodes JSON to pick one with lat/lon.
+    const pubkey = await page.evaluate(async () => {
+      const r = await fetch('/api/nodes');
+      const j = await r.json();
+      const arr = Array.isArray(j) ? j : (j.nodes || []);
+      const withLoc = arr.find(n => n.lat != null && n.lon != null && n.public_key);
+      return withLoc ? withLoc.public_key : null;
+    });
+    assert(pubkey, '#1243: need at least one node with lat/lon in fixture/api');
+    await page.goto(BASE + '#/nodes/' + encodeURIComponent(pubkey), { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.node-fullscreen', { timeout: 10000 });
+    await page.waitForSelector('#nodeFullQrCode svg', { timeout: 10000 });
+    await page.waitForTimeout(400); // let leaflet + qr settle
+    const m = await page.evaluate(() => {
+      const qrWrap = document.querySelector('.node-qr-wrap');
+      const mapWrap = document.querySelector('.node-map-wrap');
+      if (!qrWrap || !mapWrap) return { err: 'missing wrap elements' };
+      const qrR = qrWrap.getBoundingClientRect();
+      const mapR = mapWrap.getBoundingClientRect();
+      const cs = getComputedStyle(qrWrap);
+      // Parse bg-color alpha (rgba(r,g,b,a) or rgb(r,g,b))
+      let alpha = 1;
+      const bg = cs.backgroundColor || '';
+      const m1 = bg.match(/rgba?\(([^)]+)\)/);
+      if (m1) {
+        const parts = m1[1].split(',').map(s => s.trim());
+        if (parts.length === 4) alpha = parseFloat(parts[3]);
+        else if (parts.length === 3) alpha = 1;
+      }
+      const overlaps = !(qrR.right <= mapR.left || qrR.left >= mapR.right ||
+                        qrR.bottom <= mapR.top || qrR.top >= mapR.bottom);
+      return {
+        position: cs.position,
+        bg, alpha,
+        qr: { l: qrR.left, t: qrR.top, r: qrR.right, b: qrR.bottom, w: qrR.width, h: qrR.height },
+        map: { l: mapR.left, t: mapR.top, r: mapR.right, b: mapR.bottom, w: mapR.width, h: mapR.height },
+        overlaps,
+      };
+    });
+    assert(!m.err, '#1243: ' + m.err);
+    assert(m.position === 'absolute' || m.position === 'fixed',
+      `#1243: QR wrap must be position:absolute|fixed on mobile (got ${m.position}); qr=${JSON.stringify(m.qr)} map=${JSON.stringify(m.map)}`);
+    assert(m.overlaps,
+      `#1243: QR must overlap map canvas on mobile; qr=${JSON.stringify(m.qr)} map=${JSON.stringify(m.map)}`);
+    assert(m.alpha < 1,
+      `#1243: QR background must be semi-transparent (alpha<1) on mobile; bg=${m.bg}`);
+    await page.setViewportSize({ width: 1280, height: 800 });
+  });
+
   await browser.close();
 
   // Summary
