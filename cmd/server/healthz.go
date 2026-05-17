@@ -41,6 +41,9 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	// /api/healthz never observes a torn state (e.g. done=true with
 	// processed<total).
 	bfTotal, bfProcessed, bfDone := fromPubkeyBackfillSnapshot()
+	if bfTotal == 0 && bfProcessed == 0 {
+		bfDone = true
+	}
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ready":     true,

@@ -4,6 +4,58 @@
 (function () {
   let interval = null;
 
+  function perfEscape(value) {
+    const s = value == null ? '' : String(value);
+    if (typeof escapeHtml === 'function') return escapeHtml(s);
+    return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function perfCard(value, label, color) {
+    const style = color ? ` style="color:${color}"` : '';
+    return `<div class="perf-card"><div class="perf-num"${style}>${value}</div><div class="perf-label">${perfEscape(label)}</div></div>`;
+  }
+
+  function pickTopSlowQuery(server) {
+    const slow = server && Array.isArray(server.slowQueries) ? server.slowQueries : [];
+    if (!slow.length) return null;
+    return slow.reduce((best, q) => !best || (q.ms || 0) > (best.ms || 0) ? q : best, null);
+  }
+
+  function renderReliabilityStrip(server, health, healthz, dbStats) {
+    const readyData = healthz && healthz.data ? healthz.data : null;
+    const readyKnown = !!readyData;
+    const ready = readyData && readyData.ready === true;
+    const readyReason = readyData && readyData.reason ? ` (${readyData.reason})` : '';
+    const buildFields = ['version', 'commit', 'buildTime'];
+    const unknownBuildFields = buildFields.filter(k => !health || !health[k] || health[k] === 'unknown');
+    const dbEngine = dbStats && dbStats.engine ? dbStats.engine : 'unknown';
+    const pool = dbStats && dbStats.pool ? dbStats.pool : null;
+    const poolLabel = pool
+      ? `Pool ${pool.openConnections || 0}/${pool.maxOpenConnections || 0}, waits ${pool.waitCount || 0}`
+      : 'Pool unavailable';
+    const ps = health && health.packetStore ? health.packetStore : null;
+    const wsClients = health && health.websocket ? health.websocket.clients : 0;
+    const topSlow = pickTopSlowQuery(server);
+
+    let html = '<h3>Reliability</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">';
+    html += perfCard(readyKnown ? (ready ? 'Ready' : `Not ready${perfEscape(readyReason)}`) : 'Unknown', 'Readiness', ready ? 'var(--status-green)' : 'var(--status-yellow)');
+    html += perfCard(
+      unknownBuildFields.length ? `${unknownBuildFields.length} unknown` : perfEscape((health.commit || '').slice(0, 7) || health.version),
+      'Build identity',
+      unknownBuildFields.length ? 'var(--status-yellow)' : 'var(--status-green)'
+    );
+    html += perfCard(perfEscape(dbEngine), poolLabel, pool && pool.waitCount > 0 ? 'var(--status-yellow)' : 'var(--status-green)');
+    html += perfCard(ps ? `${ps.trackedMB}MB` : 'unknown', 'Packet store tracked', ps ? '' : 'var(--status-yellow)');
+    html += perfCard(wsClients == null ? '0' : wsClients, 'WebSocket clients');
+    if (topSlow) {
+      html += perfCard(`<code style="font-size:12px;word-break:break-all">${perfEscape(topSlow.path || 'unknown')}</code>`, `${topSlow.ms || 0}ms slow endpoint`, 'var(--status-red)');
+    } else {
+      html += perfCard('None', 'Recent slow endpoint', 'var(--status-green)');
+    }
+    html += '</div>';
+    return html;
+  }
+
   async function render(app) {
     app.innerHTML = '<div id="perfWrapper" style="padding:16px 24px;"><h2>⚡ Performance Dashboard</h2><div id="perfContent">Loading...</div></div>';
     await refresh();
@@ -13,17 +65,16 @@
     const el = document.getElementById('perfContent');
     if (!el) return;
     try {
-      const [server, client, ioStats, dbStats, sqliteStats, writeSources] = await Promise.all([
+      const [server, client, ioStats, dbStats, sqliteStats, writeSources, health, healthz] = await Promise.all([
         fetch('/api/perf').then(r => r.json()),
         Promise.resolve(window.apiPerf ? window.apiPerf() : null),
         fetch('/api/perf/io').then(r => r.json()).catch(() => null),
         fetch('/api/perf/db').then(r => r.json()).catch(() => null),
         fetch('/api/perf/sqlite').then(r => r.json()).catch(() => null),
-        fetch('/api/perf/write-sources').then(r => r.json()).catch(() => null)
+        fetch('/api/perf/write-sources').then(r => r.json()).catch(() => null),
+        fetch('/api/health').then(r => r.json()).catch(() => null),
+        fetch('/api/healthz').then(r => r.json().then(data => ({ ok: r.ok, status: r.status, data }))).catch(() => null)
       ]);
-
-      // Also fetch health telemetry
-      const health = await fetch('/api/health').then(r => r.json()).catch(() => null);
 
       let html = '';
 
@@ -34,6 +85,8 @@
         <div class="perf-card"><div class="perf-num">${health ? health.uptimeHuman : Math.round(server.uptime / 60) + 'm'}</div><div class="perf-label">Uptime</div></div>
         <div class="perf-card"><div class="perf-num">${server.slowQueries.length}</div><div class="perf-label">Slow (&gt;100ms)</div></div>
       </div>`;
+
+      html += renderReliabilityStrip(server, health, healthz, dbStats);
 
       // System health (memory, event loop / go runtime, WS)
       if (health) {

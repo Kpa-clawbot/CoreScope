@@ -66,6 +66,40 @@ func TestHealthzReady(t *testing.T) {
 	}
 }
 
+func TestHealthzZeroWorkBackfillIsDone(t *testing.T) {
+	readiness.Store(1)
+	defer readiness.Store(0)
+	fromPubkeyBackfillReset()
+	defer fromPubkeyBackfillReset()
+
+	srv := &Server{store: &PacketStore{}}
+	req := httptest.NewRequest("GET", "/api/healthz", nil)
+	w := httptest.NewRecorder()
+
+	srv.handleHealthz(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	bf, ok := resp["from_pubkey_backfill"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing from_pubkey_backfill object in healthz response: %v", resp)
+	}
+	if got, want := bf["total"], float64(0); got != want {
+		t.Errorf("from_pubkey_backfill.total = %v, want %v", got, want)
+	}
+	if got, want := bf["processed"], float64(0); got != want {
+		t.Errorf("from_pubkey_backfill.processed = %v, want %v", got, want)
+	}
+	if got, want := bf["done"], true; got != want {
+		t.Errorf("from_pubkey_backfill.done = %v, want %v", got, want)
+	}
+}
+
 func TestHealthzAntiTautology(t *testing.T) {
 	// When readiness is 0, must NOT return 200
 	readiness.Store(0)
