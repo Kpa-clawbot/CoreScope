@@ -403,6 +403,7 @@ self.onmessage = async (event) => {
         try {
           let scalar = 0n;
           for (let i = 0; i < 32; i++) scalar += BigInt(clamped[i]) << BigInt(8 * i);
+          scalar %= ED25519_ORDER;
           derived = nobleEd25519.Point.BASE.multiply(scalar);
         } catch {
           try { derived = await nobleEd25519.getPublicKey(clamped); }
@@ -814,9 +815,10 @@ self.onmessage = async (event) => {
       resultEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
-    // GPU path disabled: WebGPU-derived keys fail validateKeypair's derive-check
-    // due to an integration mismatch between the GPU scalar output and noble-ed25519.
-    void gpuRow; void gpuToggle; void gpuHint;
+    generator.detectGpu().then(avail => {
+      if (!avail) return;
+      gpuRow.style.display = 'block';
+    }).catch(() => {});
 
     // Popup button — opens the SPA in a separate window; generation is independent
     $('kgn-popup-btn').addEventListener('click', () => {
