@@ -233,12 +233,21 @@
 
   function getSlice() {
     const now = Date.now();
+    let cutoff, data;
     if (timeframe in LONG_TIMEFRAME_MS) {
-      const cutoff = now - LONG_TIMEFRAME_MS[timeframe];
-      return longHistory.filter(function (s) { return s.ts >= cutoff; });
+      cutoff = now - LONG_TIMEFRAME_MS[timeframe];
+      data = longHistory.filter(function (s) { return s.ts >= cutoff; });
+    } else {
+      cutoff = now - (TIMEFRAME_MS[timeframe] || 300000);
+      data = history.filter(function (s) { return s.ts >= cutoff; });
     }
-    const cutoff = now - (TIMEFRAME_MS[timeframe] || 300000);
-    return history.filter(function (s) { return s.ts >= cutoff; });
+    // Prepend a synthetic anchor so the x-axis always spans the full requested
+    // window even when data is sparse. The anchor has only a ts field; all data
+    // keys are undefined so chart visibility filtering and gap rendering work correctly.
+    if (data.length === 0 || data[0].ts > cutoff + 60000) {
+      return [{ ts: cutoff }].concat(data);
+    }
+    return data;
   }
 
   // --- Server-side history preload ---
