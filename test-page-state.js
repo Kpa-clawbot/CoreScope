@@ -120,5 +120,6 @@ test('error() with compact:true renders ps-compact on the .ps div', () => {
   assert.ok(!html.includes('ps-compact'));
 });
 
+
 console.log(`\n  ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);
