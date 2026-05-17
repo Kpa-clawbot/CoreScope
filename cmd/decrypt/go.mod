@@ -1,6 +1,6 @@
 module github.com/corescope/decrypt
 
-go 1.22
+go 1.25
 
 require (
 	github.com/meshcore-analyzer/channel v0.0.0

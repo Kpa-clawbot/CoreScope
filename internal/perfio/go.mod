@@ -1,3 +1,3 @@
 module github.com/meshcore-analyzer/perfio
 
-go 1.22
+go 1.25
