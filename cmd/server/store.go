@@ -1171,6 +1171,12 @@ func (s *PacketStore) untrackAdvertPubkey(tx *StoreTx) {
 	}
 }
 
+// maxQueryLimit caps the page size any caller can request. The desktop
+// packets table legitimately asks for 50000; anything larger is abuse and
+// would amplify memory (one map built per row). Offset/limit clamping below
+// uses this as the hard ceiling.
+const maxQueryLimit = 50000
+
 // QueryPackets returns filtered, paginated packets from memory.
 func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	// SQL fallback: if the query window predates the in-memory window, delegate
@@ -1195,6 +1201,12 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 
 	if q.Limit <= 0 {
 		q.Limit = 50
+	}
+	if q.Limit > maxQueryLimit {
+		q.Limit = maxQueryLimit
+	}
+	if q.Offset < 0 {
+		q.Offset = 0
 	}
 	if q.Order == "" {
 		q.Order = "DESC"
@@ -1253,6 +1265,12 @@ func (s *PacketStore) QueryGroupedPackets(q PacketQuery) *PacketResult {
 
 	if q.Limit <= 0 {
 		q.Limit = 50
+	}
+	if q.Limit > maxQueryLimit {
+		q.Limit = maxQueryLimit
+	}
+	if q.Offset < 0 {
+		q.Offset = 0
 	}
 
 	// Cache key covers all filter dimensions. Empty key = no filters.
