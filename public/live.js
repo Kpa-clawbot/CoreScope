@@ -53,6 +53,24 @@
   }
   function setObserverIataMap(m) { observerIataMap = m || {}; }
 
+  // #1189 R2 mesh-operator fix: live feed must show the observer's IATA pill
+  // alongside the existing 👁 N badge so operators on /live can tell SAME-
+  // region from CROSS-region reception at a glance (same affordance as the
+  // /packets table). Mirrors `obsIataBadge` in public/packets.js — kept as a
+  // local helper for now (live.js and packets.js are separate IIFEs with no
+  // shared module). TODO: extract `obsIataBadge` into shared packet-helpers.js
+  // and have both surfaces import it.
+  function obsIataBadgeHtml(pkt) {
+    if (!pkt) return '';
+    var iata = pkt.observer_iata;
+    if (!iata && pkt.observer_id) iata = observerIataMap && observerIataMap[pkt.observer_id];
+    if (!iata) return '';
+    var esc = (typeof escapeHtml === 'function')
+      ? escapeHtml(iata)
+      : String(iata).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    return '<span class="badge-iata" style="font-size:10px;margin-left:4px">' + esc + '</span>';
+  }
+
   /**
    * Build observer_id → IATA map from the /api/observers response.
    * The endpoint returns `{ observers: [...], server_time: "..." }`
@@ -2183,6 +2201,7 @@
       const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
       const hopStr = longestHops.length ? `<span class="feed-hops">${longestHops.length}⇢</span>` : '';
       const obsBadge = group.count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${group.count}</span>` : '';
+      const iataBadge = obsIataBadgeHtml(pkt);
 
       var _ccPayload = (pkt.decoded || {}).payload || {};
       var _ccChan1 = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload.channel || null) : null;
@@ -2197,7 +2216,7 @@
       item.innerHTML = `
         <span class="feed-icon" style="color:${color}">${icon}</span>
         <span class="feed-type" style="color:${color}">${typeName}</span>
-        ${dotHtml1}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+        ${dotHtml1}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}
         <span class="feed-text">${escapeHtml(preview)}</span>
         <span class="feed-time" data-ts="${group.latestTs || Date.now()}">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
       `;
@@ -3251,6 +3270,7 @@
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = pkt.observation_count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${pkt.observation_count}</span>` : '';
+    const iataBadge = obsIataBadgeHtml(pkt);
     const anomalyIcon = (pkt.decoded && pkt.decoded.anomaly) ? '<span title="Anomaly detected" style="margin-left:4px">⚠️</span>' : '';
     var _ccPayload2 = (pkt.decoded || {}).payload || {};
     var _ccChan = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload2.channel || null) : null;
@@ -3270,7 +3290,7 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${anomalyIcon}
+      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}${anomalyIcon}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
@@ -3337,6 +3357,7 @@
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = incomingObs > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${incomingObs}</span>` : '';
+    const iataBadge = obsIataBadgeHtml(pkt);
     var _ccPayload3 = (pkt.decoded || {}).payload || {};
     var _ccChan3 = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload3.channel || null) : null;
     var dotHtml3 = _ccChan3 ? _feedColorDot(_ccChan3) : '';
@@ -3357,7 +3378,7 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${dotHtml3}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+      ${dotHtml3}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
