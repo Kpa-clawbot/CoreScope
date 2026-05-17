@@ -4061,6 +4061,21 @@ func isHexLower(s string) bool {
 	return true
 }
 
+// hasUpperASCII reports whether s contains any uppercase ASCII letter.
+// Used by resolveWithContext tier-1 to skip the strings.ToLower allocation
+// when the context pubkeys are already lowercased (the common case — see
+// buildHopContextPubkeys / buildAggregateHopContextPubkeys, which lowercase
+// on the way in). #1247.
+func hasUpperASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			return true
+		}
+	}
+	return false
+}
+
 // buildAggregateHopContextPubkeys gathers context across many txs for hot
 // loops that resolve hops outside any per-tx scope (subpath/topology
 // aggregations). Caller passes the slice of txs to consider; we union the
@@ -5725,32 +5740,84 @@ func (pm *prefixMap) resolveWithContext(hop string, contextPubkeys []string, gra
 			count int // observation count of the best-scoring edge
 		}
 		now := time.Now()
-		var scores []scored
-		for i, cand := range candidates {
-			candPK := strings.ToLower(cand.PublicKey)
-			bestScore := 0.0
-			bestCount := 0
-			for _, ctxPK := range contextPubkeys {
-				edges := graph.Neighbors(strings.ToLower(ctxPK))
-				for _, e := range edges {
-					if e.Ambiguous {
-						continue
-					}
-					otherPK := e.NodeA
-					if strings.EqualFold(otherPK, ctxPK) {
-						otherPK = e.NodeB
-					}
-					if strings.EqualFold(otherPK, candPK) {
-						s := e.Score(now) * e.Confidence()
-						if s > bestScore {
-							bestScore = s
-							bestCount = e.Count
-						}
-					}
+		// PERF (#1247): hoist per-context work out of the candidate loop.
+		// The previous shape ran graph.Neighbors(ToLower(ctxPK)) and
+		// re-lowercased candPK on every (cand, ctxPK) pair, then used
+		// strings.EqualFold to compare two already-lowercased pubkeys.
+		// At analytics scale (5k+ contextPubkeys, ~30k resolveHop calls)
+		// this dominated computeAnalyticsTopology / computeAnalyticsRF
+		// CPU time (37% / 55% of those endpoints respectively per
+		// pprof). The new shape:
+		//   1. Lowercases ctx pubkeys at most once per call (skipped
+		//      entirely when the input is already lowercased — the
+		//      common case for analytics callers that go through
+		//      buildHopContextPubkeys).
+		//   2. Lowercases candidate pubkeys at most once per call and
+		//      uses raw == comparisons against NeighborEdge.NodeA/NodeB
+		//      (which makeEdgeKey already lowercases).
+		//   3. Loops outer-ctx / inner-edge / matched-cand-lookup. The
+		//      previous shape was outer-cand / inner-ctx / inner-edge,
+		//      which called graph.Neighbors(ctxPK) — taking the graph
+		//      RLock each time — once per (cand, ctx) pair instead of
+		//      once per ctx.
+		lowerCtx := contextPubkeys
+		needLower := false
+		for _, p := range contextPubkeys {
+			if hasUpperASCII(p) {
+				needLower = true
+				break
+			}
+		}
+		if needLower {
+			lowerCtx = make([]string, len(contextPubkeys))
+			for i, p := range contextPubkeys {
+				lowerCtx[i] = strings.ToLower(p)
+			}
+		}
+		candPKs := make([]string, len(candidates))
+		bestScores := make([]float64, len(candidates))
+		bestCounts := make([]int, len(candidates))
+		needLowerCand := false
+		for i, c := range candidates {
+			if hasUpperASCII(c.PublicKey) {
+				needLowerCand = true
+				break
+			}
+			candPKs[i] = c.PublicKey
+		}
+		if needLowerCand {
+			for i, c := range candidates {
+				candPKs[i] = strings.ToLower(c.PublicKey)
+			}
+		}
+		candByPK := make(map[string]int, len(candidates))
+		for i, pk := range candPKs {
+			candByPK[pk] = i
+		}
+		for _, ctxPK := range lowerCtx {
+			for _, e := range graph.Neighbors(ctxPK) {
+				if e.Ambiguous {
+					continue
+				}
+				otherPK := e.NodeA
+				if otherPK == ctxPK {
+					otherPK = e.NodeB
+				}
+				ci, ok := candByPK[otherPK]
+				if !ok {
+					continue
+				}
+				s := e.Score(now) * e.Confidence()
+				if s > bestScores[ci] {
+					bestScores[ci] = s
+					bestCounts[ci] = e.Count
 				}
 			}
-			if bestScore > 0 {
-				scores = append(scores, scored{i, bestScore, bestCount})
+		}
+		var scores []scored
+		for i, s := range bestScores {
+			if s > 0 {
+				scores = append(scores, scored{i, s, bestCounts[i]})
 			}
 		}
 
