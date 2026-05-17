@@ -7,8 +7,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Cornmeister.nl</title>
 
-  <!-- Warm the connection to the unpkg CDN early: Leaflet CSS/JS,
-       leaflet-heat and Chart.js are loaded from it on the critical path. -->
+  <!-- Warm the connection to the unpkg CDN early: Leaflet CSS/JS and
+       Chart.js are loaded from it on the critical path. -->
   <link rel="preconnect" href="https://unpkg.com" crossorigin>
   <!-- Preload the one critical above-the-fold font (navbar logo wordmark).
        Path matches the @font-face url() in style.css so the preload and the
@@ -46,7 +46,7 @@
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin="anonymous"></script>
   <script defer src="vendor/leaflet.markercluster.js?v=__BUST__"></script>
-  <script defer src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+  <script defer src="vendor/leaflet-heat.js?v=__BUST__"></script>
   <script defer src="https://unpkg.com/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
 <body>
