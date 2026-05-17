@@ -19,7 +19,7 @@
   let affinityData = null;
   let userHasMoved = false;
   let controlsCollapsed = false;
-  var _popupClosedByUser = false;
+  let _mapThemeObs = null;  // theme MutationObserver — hoisted so destroy() can disconnect it
 
   // Safe escape — falls back to identity if app.js hasn't loaded yet
   const safeEsc = (typeof esc === 'function') ? esc : function (s) { return s; };
@@ -109,6 +109,7 @@
     container.innerHTML = `
       <div id="map-wrap" style="position:relative;width:100%;height:100%;display:flex;">
         <div id="leaflet-map" style="flex:1 1 0%;height:100%;"></div>
+        <div id="mapLoadError" style="display:none;position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;background:var(--surface-1);border:1px solid var(--border);border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,.25);"></div>
         <div class="map-side-pane" id="mapSidePane">
           <div class="pane-toggle" id="mapPaneToggle" title="Path Inspector">◀</div>
           <div class="pane-content">
@@ -176,20 +177,6 @@
             <legend class="mc-label">Quick Jump</legend>
             <div class="mc-jumps" id="mcJumps" role="group" aria-label="Jump to region"></div>
           </fieldset>
-          <fieldset class="mc-section">
-            <legend class="mc-label">Map Style</legend>
-            <select id="mcSatmap" aria-label="Map tile style" style="width:100%">
-              <option value="positron">Positron</option>
-              <option value="dark_matter">Dark Matter</option>
-              <option value="gray_canvas">Gray Canvas</option>
-              <option value="satellite">Satellite</option>
-              <option value="hybrid">Hybrid</option>
-              <option value="opentopo">OpenTopo</option>
-              <option value="osm">OSM</option>
-              <option value="hillshade_blend">Hillshade Blend</option>
-              <option value="neon_tactical">Neon Tactical</option>
-            </select>
-          </fieldset>
         </div>
       </div>`;
 
@@ -219,57 +206,19 @@
     // If navigated with ?node=PUBKEY, highlight that node after markers load
     targetNodeKey = urlParams.get('node') || null;
 
-    const tileLayer = L.tileLayer(TILE_LIGHT, { maxZoom: 19 }).addTo(map);
-
-    // Satmap provider switching
-    const _M_ESRI_SAT        = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-    const _M_ESRI_LABELS     = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
-    const _M_ESRI_HILLSHADE  = 'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}';
-    const _M_ESRI_HILL_DARK  = 'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade_Dark/MapServer/tile/{z}/{y}/{x}';
-    const _M_CARTO_DARK      = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-    const _M_CARTO_DARK_NL   = 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png';
-    const _M_CARTO_LIGHT_LBL = 'https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png';
-    const _M_SATMAP_CONFIG = {
-      positron:        { base: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png' },
-      dark_matter:     { base: _M_CARTO_DARK },
-      gray_canvas:     { base: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}' },
-      satellite:       { base: _M_ESRI_SAT },
-      hybrid:          { base: _M_ESRI_SAT,      overlay: _M_ESRI_LABELS,    overlayOpacity: 1 },
-      opentopo:        { base: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', mapMaxZoom: 17 },
-      osm:             { base: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' },
-      hillshade_blend: { base: _M_CARTO_DARK,     overlay: _M_ESRI_HILL_DARK,  overlayOpacity: 0.5, mapMaxZoom: 17 },
-      neon_tactical:   { base: _M_CARTO_DARK_NL,
-                         overlays: [
-                           { url: _M_ESRI_HILLSHADE,    opacity: 0.25 },
-                           { url: _M_CARTO_LIGHT_LBL,   opacity: 0.85 },
-                         ],
-                         filter: 'hue-rotate(180deg) saturate(1.4) contrast(1.1)',
-                         mapMaxZoom: 17 },
-    };
-    let _mOverlayLayers = [];
-
-    function applyMapSatmap(provider) {
-      if (provider === 'default') provider = 'positron';
-      _mOverlayLayers.forEach(l => map.removeLayer(l));
-      _mOverlayLayers = [];
-      document.getElementById('leaflet-map').style.filter = '';
-      const cfg = _M_SATMAP_CONFIG[provider] || _M_SATMAP_CONFIG.positron;
-      tileLayer.setUrl(cfg.base);
-      const overlays = cfg.overlays || (cfg.overlay ? [{ url: cfg.overlay, opacity: cfg.overlayOpacity ?? 1 }] : []);
-      overlays.forEach(o => {
-        _mOverlayLayers.push(L.tileLayer(o.url, { maxZoom: 19, opacity: o.opacity }).addTo(map));
-      });
-      if (cfg.filter) document.getElementById('leaflet-map').style.filter = cfg.filter;
-      map.setMaxZoom(cfg.mapMaxZoom ?? 19);
-      localStorage.setItem('meshcore-map-satmap', provider);
-    }
-
-    const _savedMapSatmap = localStorage.getItem('meshcore-map-satmap') ||
-      (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark_matter' : 'positron');
-    const _mcSatmapSel = document.getElementById('mcSatmap');
-    _mcSatmapSel.value = _savedMapSatmap === 'default' ? 'positron' : _savedMapSatmap;
-    applyMapSatmap(_savedMapSatmap);
-    _mcSatmapSel.addEventListener('change', (e) => applyMapSatmap(e.target.value));
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+      (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const tileLayer = L.tileLayer(isDark ? TILE_DARK : TILE_LIGHT, {
+      attribution: '© OpenStreetMap © CartoDB',
+      maxZoom: 19,
+    }).addTo(map);
+    if (_mapThemeObs) _mapThemeObs.disconnect();
+    _mapThemeObs = new MutationObserver(function () {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+        (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      tileLayer.setUrl(dark ? TILE_DARK : TILE_LIGHT);
+    });
+    _mapThemeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
     // Save position on move
     map.on('moveend', () => {
@@ -290,13 +239,6 @@
       _zoomResizeTimer = setTimeout(() => {
         if (!_renderingMarkers) _repositionMarkers();
       }, 150);
-    });
-
-    map.on('popupclose', function () {
-      if (!_renderingMarkers) _popupClosedByUser = true;
-    });
-    map.on('popupopen', function () {
-      if (!_renderingMarkers) _popupClosedByUser = false;
     });
 
     markerLayer = L.layerGroup().addTo(map);
@@ -619,6 +561,7 @@
   }
 
   async function loadNodes() {
+    var loadErrEl = document.getElementById('mapLoadError');
     try {
       // Load regions from config + observed IATAs
       try { REGION_NAMES = await api('/config/regions', { ttl: 3600 }); } catch {}
@@ -684,8 +627,17 @@
 
       // Don't fitBounds on initial load — respect the Bay Area default or saved view
       // Only fitBounds on subsequent data refreshes if user hasn't manually panned
+
+      // Clear any error overlay from a previous failed load.
+      if (loadErrEl) { loadErrEl.style.display = 'none'; loadErrEl.innerHTML = ''; }
     } catch (e) {
       console.error('Map load error:', e);
+      // Surface a visible, retryable error — loadNodes() re-fetches and re-renders
+      // without re-running init() (which would re-create the Leaflet map).
+      if (loadErrEl) {
+        loadErrEl.style.display = '';
+        PageState.error(loadErrEl, e, loadNodes, { compact: true });
+      }
     } finally {
       // Always signal data-loaded — even on error — so E2E tests can proceed.
       // Otherwise an api() failure leaves the test waiting forever.
@@ -904,46 +856,7 @@
   function renderMarkers() {
     if (_renderingMarkers) return;
     _renderingMarkers = true;
-    try {
-      var popupState = _popupClosedByUser ? null : _captureOpenMarkerPopup(map);
-      _renderMarkersInner();
-      _restoreOpenMarkerPopup(popupState, markerLayer, clusterGroup);
-    } finally {
-      _popupClosedByUser = false;
-      _renderingMarkers = false;
-    }
-  }
-
-  function _captureOpenMarkerPopup(mapRef) {
-    if (!mapRef || !mapRef._popup || !mapRef._popup._source) return null;
-    var source = mapRef._popup._source;
-    var key = source._nodeKey || null;
-    if (!key) return null;
-    return { nodeKey: key };
-  }
-
-  function _restoreOpenMarkerPopup(state, plainLayer, clusteredLayer) {
-    if (!state || !state.nodeKey) return false;
-    var targetKey = state.nodeKey;
-    var found = false;
-    var tryMarker = function (m) {
-      if (found || !m) return;
-      if (m._nodeKey === targetKey && m.openPopup) {
-        m.openPopup();
-        found = true;
-      }
-    };
-    var findIn = function (layer) {
-      if (found || !layer) return;
-      if (layer.eachLayer) layer.eachLayer(tryMarker);
-      if (!found && layer.getLayers) {
-        var layers = layer.getLayers();
-        for (var i = 0; i < layers.length && !found; i++) tryMarker(layers[i]);
-      }
-    };
-    findIn(plainLayer);
-    findIn(clusteredLayer);
-    return found;
+    try { _renderMarkersInner(); } finally { _renderingMarkers = false; }
   }
 
   function _renderMarkersInner() {
@@ -1229,9 +1142,9 @@
     var prefixes = raw.trim().split(/[\s,]+/).filter(function (s) { return s.length > 0; }).map(function (s) { return s.toLowerCase(); });
     var err = (window.PathInspector && window.PathInspector.validatePrefixes) ? window.PathInspector.validatePrefixes(prefixes) : null;
     if (!err && prefixes.length === 0) err = 'Enter at least one prefix.';
-    if (err) { errDiv.textContent = err; return; }
+    if (err) { errDiv.innerHTML = PageState.errorText(err, { compact: true }); return; }
 
-    resultsDiv.innerHTML = '<p style="font-size:12px;">Loading...</p>';
+    resultsDiv.innerHTML = PageState.loading('Loading paths…', { compact: true });
     fetch('/api/paths/inspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1243,12 +1156,12 @@
         return r.json();
       })
       .then(function (data) { renderMapPiResults(data, resultsDiv); })
-      .catch(function (e) { resultsDiv.innerHTML = ''; errDiv.textContent = e.message; });
+      .catch(function (e) { resultsDiv.innerHTML = ''; errDiv.innerHTML = PageState.errorText(e.message, { compact: true }); });
   }
 
   function renderMapPiResults(data, div) {
     if (!data.candidates || data.candidates.length === 0) {
-      div.innerHTML = '<p style="font-size:12px;color:var(--text-muted);">No candidates found.</p>';
+      div.innerHTML = PageState.empty({ title: 'No candidates found', compact: true });
       return;
     }
     var html = '<table class="path-inspector-table" style="font-size:11px;width:100%;"><thead><tr><th>#</th><th>Score</th><th>Path</th><th></th></tr></thead><tbody>';
@@ -1303,6 +1216,7 @@
   function destroy() {
     if (wsHandler) offWS(wsHandler);
     wsHandler = null;
+    if (_mapThemeObs) { _mapThemeObs.disconnect(); _mapThemeObs = null; }
     if (map) {
       map.remove();
       map = null;
@@ -1527,11 +1441,6 @@
   }
 
   if (typeof window !== 'undefined') {
-    window.__meshcoreMapInternals = {
-      createClusterGroup: createClusterGroup,
-      makeClusterIcon: makeClusterIcon,
-      captureOpenMarkerPopup: _captureOpenMarkerPopup,
-      restoreOpenMarkerPopup: _restoreOpenMarkerPopup,
-    };
+    window.__meshcoreMapInternals = { createClusterGroup: createClusterGroup, makeClusterIcon: makeClusterIcon };
   }
 })();
