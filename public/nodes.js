@@ -278,9 +278,11 @@
     api('/nodes/' + encodeURIComponent(pubkey) + '/neighbors', { ttl: CLIENT_TTL.nodeDetail }).then(function(data) {
       _neighborCache[pubkey] = { data: data, ts: Date.now() };
       renderNeighborData(data, containerId, limit, headerSelector, viewAllPubkey);
-    }).catch(function() {
+    }).catch(function(err) {
       var el = document.getElementById(containerId);
-      if (el) el.innerHTML = PageState.errorText('Could not load neighbor data');
+      if (el) PageState.error(el, err, function() {
+        fetchAndRenderNeighbors(pubkey, containerId, opts);
+      });
     });
   }
 
