@@ -69,7 +69,11 @@ func TestStatsFileWriter_SampledAtMatchesProcIOSampledAt(t *testing.T) {
 		}
 	}
 
-	StartStatsFileWriter(store, 50*time.Millisecond)
+	stopWriter := StartStatsFileWriter(store, 50*time.Millisecond)
+	// Stop the writer before the readProcSelfIOFn cleanup runs (cleanups are
+	// LIFO; this one is registered later so it executes first) — otherwise
+	// the writer goroutine races the restore of the readProcSelfIOFn var.
+	t.Cleanup(stopWriter)
 
 	// Wait for the file to land with a populated procIO block.
 	deadline := time.Now().Add(3 * time.Second)

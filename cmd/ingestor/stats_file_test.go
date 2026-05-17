@@ -25,7 +25,10 @@ func TestStatsFileWriter_PublishesProcIO(t *testing.T) {
 	}
 	defer store.Close()
 
-	StartStatsFileWriter(store, 50*time.Millisecond)
+	stopWriter := StartStatsFileWriter(store, 50*time.Millisecond)
+	// Stop the writer goroutine on cleanup so it doesn't outlive the test's
+	// temp dir (which would spam "no such file" write errors).
+	t.Cleanup(stopWriter)
 
 	// Wait for at least 2 ticks so the writer has had a chance to populate
 	// procIO rates from a delta.

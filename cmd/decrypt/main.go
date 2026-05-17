@@ -228,7 +228,8 @@ LIMITATIONS
 	}
 
 	if *output != "" {
-		if err := os.WriteFile(*output, out, 0644); err != nil {
+		// 0600: output may contain decrypted private messages — restrict to owner.
+		if err := os.WriteFile(*output, out, 0600); err != nil {
 			log.Fatalf("Write file: %v", err)
 		}
 		log.Printf("Written to %s", *output)
@@ -298,7 +299,7 @@ func getObservers(db *sql.DB, txID int) []Observer {
 	rows, err := db.Query(`
 		SELECT o.name, obs.snr, obs.rssi, obs.timestamp
 		FROM observations obs
-		LEFT JOIN observers o ON o.id = CAST(obs.observer_idx AS TEXT)
+		LEFT JOIN observers o ON o.rowid = obs.observer_idx
 		WHERE obs.transmission_id = ?
 		ORDER BY obs.timestamp
 	`, txID)

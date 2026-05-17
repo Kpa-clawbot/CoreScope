@@ -263,7 +263,7 @@ func decodeAdvert(buf []byte, validateSignatures bool) Payload {
 		Type:         "ADVERT",
 		PubKey:       pubKey,
 		Timestamp:    timestamp,
-		TimestampISO: fmt.Sprintf("%s", epochToISO(timestamp)),
+		TimestampISO: epochToISO(timestamp),
 		Signature:    signature,
 	}
 
@@ -755,7 +755,14 @@ func ComputeContentHash(rawHex string) string {
 	// Using the full header caused different hashes for the same logical packet
 	// when route type or version bits differed. See issue #786.
 	payloadType := (headerByte >> 2) & 0x0F
-	toHash := []byte{payloadType}
+	// Pre-size the buffer to its final length (1 type byte + 2 path_len bytes
+	// for TRACE + payload) so the appends below don't reallocate.
+	knownLen := 1 + len(payload)
+	if int(payloadType) == PayloadTRACE {
+		knownLen += 2
+	}
+	toHash := make([]byte, 0, knownLen)
+	toHash = append(toHash, payloadType)
 	if int(payloadType) == PayloadTRACE {
 		// Firmware uses uint16_t path_len (2 bytes, little-endian)
 		toHash = append(toHash, pathByte, 0x00)

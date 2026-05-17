@@ -36,7 +36,10 @@ func TestNodeDaysOrDefault(t *testing.T) {
 		{"custom nodeDays", Config{Retention: &RetentionConfig{NodeDays: 14}}, 14},
 		{"one day", Config{Retention: &RetentionConfig{NodeDays: 1}}, 1},
 	}
-	for _, tt := range tests {
+	// Range by index: Config embeds a sync.Once, so a value-copy range var
+	// would trip `go vet`'s copylocks check.
+	for i := range tests {
+		tt := &tests[i]
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.cfg.NodeDaysOrDefault()
 			if got != tt.want {

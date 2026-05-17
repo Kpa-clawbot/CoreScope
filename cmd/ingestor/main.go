@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"net/url"
@@ -81,56 +80,78 @@ func main() {
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
+	// Shared done-channel: closed on shutdown so all retention/stats ticker
+	// goroutines exit cleanly instead of leaking (mirrors the watchdog's
+	// stop pattern).
+	tickerDone := make(chan struct{})
+
 	// Daily ticker for node retention
 	retentionTicker := time.NewTicker(1 * time.Hour)
 	go func() {
-		for range retentionTicker.C {
-			store.MoveStaleNodes(nodeDays)
-			store.RunIncrementalVacuum(vacuumPages)
+		for {
+			select {
+			case <-tickerDone:
+				return
+			case <-retentionTicker.C:
+				store.MoveStaleNodes(nodeDays)
+				store.RunIncrementalVacuum(vacuumPages)
+			}
 		}
 	}()
 
 	// Daily ticker for observer retention (every 24h, staggered 90s after startup)
 	observerRetentionTicker := time.NewTicker(24 * time.Hour)
 	go func() {
-		time.Sleep(90 * time.Second) // stagger after metrics prune
+		// Staggered first run; abort early if shutdown happens during the wait.
+		select {
+		case <-tickerDone:
+			return
+		case <-time.After(90 * time.Second): // stagger after metrics prune
+		}
 		store.RemoveStaleObservers(observerDays)
 		store.RunIncrementalVacuum(vacuumPages)
-		for range observerRetentionTicker.C {
-			store.RemoveStaleObservers(observerDays)
-			store.RunIncrementalVacuum(vacuumPages)
+		for {
+			select {
+			case <-tickerDone:
+				return
+			case <-observerRetentionTicker.C:
+				store.RemoveStaleObservers(observerDays)
+				store.RunIncrementalVacuum(vacuumPages)
+			}
 		}
 	}()
 
 	// Daily ticker for metrics retention (every 24h)
 	metricsRetentionTicker := time.NewTicker(24 * time.Hour)
 	go func() {
-		for range metricsRetentionTicker.C {
-			store.PruneOldMetrics(metricsDays)
-			store.PruneDroppedPackets(metricsDays)
-			store.RunIncrementalVacuum(vacuumPages)
+		for {
+			select {
+			case <-tickerDone:
+				return
+			case <-metricsRetentionTicker.C:
+				store.PruneOldMetrics(metricsDays)
+				store.PruneDroppedPackets(metricsDays)
+				store.RunIncrementalVacuum(vacuumPages)
+			}
 		}
 	}()
 
 	// Periodic stats logging (every 5 minutes)
 	statsTicker := time.NewTicker(5 * time.Minute)
 	go func() {
-		for range statsTicker.C {
-			store.LogStats()
+		for {
+			select {
+			case <-tickerDone:
+				return
+			case <-statsTicker.C:
+				store.LogStats()
+			}
 		}
 	}()
 
 	// Per-second stats file writer for the server's /api/perf/write-sources
 	// endpoint (#1120). Best-effort; never fatal.
-	var brokerInfos []BrokerInfo
-	for _, src := range sources {
-		name := src.Name
-		if name == "" {
-			name = src.Broker
-		}
-		brokerInfos = append(brokerInfos, BrokerInfo{Name: name, Host: brokerHostname(src.Broker)})
-	}
-	StartStatsFileWriter(store, time.Second, brokerInfos...)
+	stopStatsFileWriter := StartStatsFileWriter(store, time.Second)
 
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {
@@ -260,31 +281,18 @@ func main() {
 	<-sig
 
 	log.Println("Shutting down...")
+	close(tickerDone) // signal all retention/stats ticker goroutines to exit
 	retentionTicker.Stop()
+	observerRetentionTicker.Stop()
 	metricsRetentionTicker.Stop()
 	statsTicker.Stop()
+	stopStatsFileWriter()
 	stopWatchdog()
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
 		c.Disconnect(5000) // 5s to allow in-flight messages to drain
 	}
 	log.Println("Done.")
-}
-
-// brokerHostname extracts the bare hostname (no port) from an MQTT broker URL
-// such as "tcp://broker.example.com:1883" or "ssl://host:8883". Falls back to
-// the raw string if parsing fails.
-func brokerHostname(broker string) string {
-	if u, err := url.Parse(broker); err == nil && u.Host != "" {
-		if h, _, err := net.SplitHostPort(u.Host); err == nil {
-			return h
-		}
-		return u.Host
-	}
-	if h, _, err := net.SplitHostPort(broker); err == nil {
-		return h
-	}
-	return broker
 }
 
 // buildMQTTOpts creates MQTT client options for a source with bounded reconnect
@@ -384,10 +392,9 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		name, _ := msg["origin"].(string)
 		iata := parts[1]
 		meta := extractObserverMeta(msg)
-		if err := store.UpsertObserverAt(observerID, name, iata, meta, resolveRxTime(msg, tag)); err != nil {
+		if err := store.UpsertObserver(observerID, name, iata, meta); err != nil {
 			log.Printf("MQTT [%s] observer status error: %v", tag, err)
 		}
-		store.UpsertObserverSource(observerID, tag, brokerHostname(source.Broker), true) //nolint:errcheck
 		// Insert metrics sample from status message
 		if meta != nil {
 			metricsData := &MetricsData{
@@ -399,11 +406,6 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				BatteryMv:   meta.BatteryMv,
 				PacketsSent: meta.PacketsSent,
 				PacketsRecv: meta.PacketsRecv,
-				QueueLen:    meta.QueueLen,
-			}
-			if meta.UptimeSecs != nil {
-				v := int(*meta.UptimeSecs)
-				metricsData.UptimeSecs = &v
 			}
 			if err := store.InsertMetrics(metricsData); err != nil {
 				log.Printf("MQTT [%s] metrics insert error: %v", tag, err)
@@ -474,7 +476,6 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 
 		mqttMsg := &MQTTPacketMessage{Raw: rawHex}
-		mqttMsg.Timestamp = resolveRxTime(msg, tag)
 		// Parse optional region from JSON payload (#788)
 		if v, ok := msg["region"].(string); ok && v != "" {
 			mqttMsg.Region = v
@@ -606,10 +607,9 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			if mqttMsg.Region != "" {
 				effectiveRegion = mqttMsg.Region
 			}
-			if err := store.UpsertObserverAt(observerID, origin, effectiveRegion, nil, mqttMsg.Timestamp); err != nil {
+			if err := store.UpsertObserver(observerID, origin, effectiveRegion, nil); err != nil {
 				log.Printf("MQTT [%s] observer upsert error: %v", tag, err)
 			}
-			store.UpsertObserverSource(observerID, tag, brokerHostname(source.Broker), false) //nolint:errcheck
 		}
 
 		return
@@ -651,9 +651,8 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 
 		decodedJSON, _ := json.Marshal(channelMsg)
 
-		ingestNow := time.Now().UTC().Format(time.RFC3339)
-		rxTime := resolveRxTime(msg, tag)
-		hashInput := fmt.Sprintf("ch:%s:%s:%s", channelIdx, text, ingestNow)
+		now := time.Now().UTC().Format(time.RFC3339)
+		hashInput := fmt.Sprintf("ch:%s:%s:%s", channelIdx, text, now)
 		h := sha256.Sum256([]byte(hashInput))
 		hash := hex.EncodeToString(h[:])[:16]
 
@@ -693,7 +692,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 
 		pktData := &PacketData{
-			Timestamp:    rxTime,
+			Timestamp:    now,
 			ObserverID:   "companion",
 			ObserverName: "L1 Pro (BLE)",
 			SNR:          snr,
@@ -745,9 +744,8 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 
 		decodedJSON, _ := json.Marshal(dm)
 
-		ingestNow := time.Now().UTC().Format(time.RFC3339)
-		rxTime := resolveRxTime(msg, tag)
-		hashInput := fmt.Sprintf("dm:%s:%s", text, ingestNow)
+		now := time.Now().UTC().Format(time.RFC3339)
+		hashInput := fmt.Sprintf("dm:%s:%s", text, now)
 		h := sha256.Sum256([]byte(hashInput))
 		hash := hex.EncodeToString(h[:])[:16]
 
@@ -787,7 +785,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 
 		pktData := &PacketData{
-			Timestamp:    rxTime,
+			Timestamp:    now,
 			ObserverID:   "companion",
 			ObserverName: "L1 Pro (BLE)",
 			SNR:          snr,
@@ -942,17 +940,6 @@ func extractObserverMeta(msg map[string]interface{}) *ObserverMeta {
 			hasData = true
 		}
 	}
-	if v := nestedOrTopLevel(stats, msg, "queue_len"); v != nil {
-		if f, ok := toFloat64(v); ok {
-			iv := int(math.Round(f))
-			meta.QueueLen = &iv
-			hasData = true
-		}
-	}
-	if v, ok := msg["repeat"].(string); ok && (v == "on" || v == "off") {
-		meta.Repeat = &v
-		hasData = true
-	}
 
 	if !hasData {
 		return nil
@@ -980,63 +967,6 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-// resolveRxTime returns the observer receive-time for a packet, taken from
-// the MQTT envelope's "timestamp" field. Falls back to ingest time only when
-// the field is missing, unparseable, or implausibly in the future (a
-// clock-skewed observer). Result is always RFC3339 UTC.
-//
-// The envelope timestamp is stamped by the uploader when the radio receives
-// the frame, not when the MQTT message is published — so a buffered packet
-// uploaded hours late still carries its true receive time. Using ingest time
-// (time.Now()) here mis-dated such packets by the upload delay.
-func resolveRxTime(msg map[string]interface{}, tag string) string {
-	now := time.Now().UTC()
-	raw, _ := msg["timestamp"].(string)
-	if raw == "" {
-		return now.Format(time.RFC3339)
-	}
-	t, err := parseEnvelopeTime(raw)
-	if err != nil {
-		log.Printf("MQTT [%s] unparseable timestamp %q, using ingest time", tag, raw)
-		return now.Format(time.RFC3339)
-	}
-	// Hard reject: > 14h ahead is a genuine clock error (UTC+14 is the maximum
-	// standard offset, so nothing valid should be further ahead than that).
-	if t.After(now.Add(14 * time.Hour)) {
-		log.Printf("MQTT [%s] future timestamp %q, using ingest time", tag, raw)
-		return now.Format(time.RFC3339)
-	}
-	// Soft clamp: naive local-clock timestamps from UTC+N observers are parsed
-	// as-if UTC, making them appear N hours in the future. A UTC+2 observer's
-	// live packet looks 2h ahead, but it is NOT a buffered packet — the whole
-	// point of using rxTime is to preserve the past timestamp for packets that
-	// were buffered offline. If rxTime is ahead of now, the packet is live and
-	// ingest time is the correct value. This also prevents storing future
-	// timestamps that would show ⚠️ in the UI for every packet from UTC+N nodes.
-	if t.After(now) {
-		return now.Format(time.RFC3339)
-	}
-	return t.UTC().Format(time.RFC3339)
-}
-
-// parseEnvelopeTime parses the MQTT envelope timestamp. Two on-wire forms
-// occur: zone-aware ISO8601 (RFC3339), and a naive local-clock ISO string
-// with no zone (python datetime.isoformat()). Zone-aware layouts are tried
-// first; naive layouts are assumed UTC, leaving a bounded residual offset
-// equal to the observer's UTC offset for naive-timestamp uploaders.
-func parseEnvelopeTime(s string) (time.Time, error) {
-	for _, layout := range []string{
-		time.RFC3339,                 // 2026-05-16T10:00:00Z / +02:00
-		"2006-01-02T15:04:05.999999", // python isoformat w/ microseconds
-		"2006-01-02T15:04:05",        // naive ISO
-	} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("unrecognized timestamp layout: %q", s)
 }
 
 // deriveHashtagChannelKey derives an AES-128 key from a channel name.

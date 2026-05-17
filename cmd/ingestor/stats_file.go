@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"sync"
 	"syscall"
 	"time"
 
@@ -17,12 +18,6 @@ import (
 // reads this binary's stats file — sharing the type prevents silent JSON
 // contract drift (#1167 follow-up).
 type PerfIOSample = perfio.Sample
-
-// BrokerInfo describes a single configured MQTT source.
-type BrokerInfo struct {
-	Name string `json:"name"`
-	Host string `json:"host"`
-}
 
 // IngestorStatsSnapshot mirrors the JSON shape consumed by the server's
 // /api/perf/write-sources endpoint (see cmd/server/perf_io.go IngestorStats).
@@ -50,8 +45,6 @@ type IngestorStatsSnapshot struct {
 	// the server's /api/perf/io endpoint under .ingestor (#1120 — "Both
 	// ingestor and server"). Optional; absent on non-Linux hosts.
 	ProcIO *PerfIOSample `json:"procIO,omitempty"`
-	// Brokers lists the MQTT sources the ingestor is configured to connect to.
-	Brokers []BrokerInfo `json:"brokers,omitempty"`
 }
 
 // statsFilePath returns the writable path the ingestor will publish stats to.
@@ -173,10 +166,15 @@ func procIORate(prev, cur procIOSnapshot, stamp string) *PerfIOSample {
 // The stats file path is resolved via statsFilePath() once at writer-loop
 // start; the env var (CORESCOPE_INGESTOR_STATS) is only re-read on process
 // restart, not per tick.
-func StartStatsFileWriter(s *Store, interval time.Duration, brokers ...BrokerInfo) {
+//
+// Returns a stop function that terminates the writer goroutine; callers that
+// don't need clean shutdown may ignore it.
+func StartStatsFileWriter(s *Store, interval time.Duration) (stop func()) {
 	if interval <= 0 {
 		interval = time.Second
 	}
+	done := make(chan struct{})
+	var stopOnce sync.Once
 	go func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
@@ -190,7 +188,12 @@ func StartStatsFileWriter(s *Store, interval time.Duration, brokers ...BrokerInf
 		// The buffer grows once and stays.
 		var buf bytes.Buffer
 		enc := json.NewEncoder(&buf)
-		for range t.C {
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+			}
 			// Capture time.Now() ONCE per tick (Carmack must-fix #5).
 			// Both snapshot.SampledAt and procIO.SampledAt MUST share the
 			// same string so the freshness guard isn't validating one
@@ -213,7 +216,6 @@ func StartStatsFileWriter(s *Store, interval time.Duration, brokers ...BrokerInf
 				GroupCommitFlushes: 0, // group commit reverted (refs #1129)
 				BackfillUpdates:    s.Stats.SnapshotBackfills(),
 				ProcIO:             ioRate,
-				Brokers:            brokers,
 			}
 			buf.Reset()
 			if err := enc.Encode(&snap); err != nil {
@@ -233,4 +235,7 @@ func StartStatsFileWriter(s *Store, interval time.Duration, brokers ...BrokerInf
 			}
 		}
 	}()
+	return func() {
+		stopOnce.Do(func() { close(done) })
+	}
 }
