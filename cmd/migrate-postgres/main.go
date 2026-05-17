@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/meshcore-analyzer/dbconfig"
 	_ "modernc.org/sqlite"
@@ -56,6 +57,10 @@ func main() {
 	}
 	if err := dst.Ping(); err != nil {
 		log.Fatalf("ping postgres: %v", err)
+	}
+
+	if err := dbconfig.ApplyPostgresSchema(dst); err != nil {
+		log.Fatalf("apply postgres schema: %v", err)
 	}
 
 	if *truncate {
@@ -123,6 +128,11 @@ func copyTable(src, dst *sql.DB, spec tableSpec) (int, error) {
 		}
 		if err := rows.Scan(ptrs...); err != nil {
 			return count, err
+		}
+		for i, v := range values {
+			if ts, ok := v.(time.Time); ok {
+				values[i] = ts.UTC().Format("2006-01-02T15:04:05Z")
+			}
 		}
 		if _, err := stmt.Exec(values...); err != nil {
 			return count, err
