@@ -212,7 +212,7 @@ if (typeof window !== 'undefined') {
     var content = document.getElementById('compareContent');
     if (!content) return;
 
-    content.innerHTML = '<div class="text-center text-muted" style="padding:40px">Fetching packets\u2026</div>';
+    content.innerHTML = PageState.loading('Fetching packets\u2026');
 
     // Update URL for shareability
     var base = '#/compare?a=' + encodeURIComponent(selA) + '&b=' + encodeURIComponent(selB);
