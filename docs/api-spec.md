@@ -1595,12 +1595,12 @@ Theme and branding configuration (merged from config.json + theme.json).
 ```jsonc
 {
   "branding": {
-    "siteName": string,          // default: "CoreScope"
+    "siteName": string,          // default: "MeshCore Canada Live"
     "tagline":  string           // default: "Real-time MeshCore LoRa mesh network analyzer"
     // ... additional branding keys from config/theme files
   },
   "theme": {
-    "accent":      string,       // hex color, default "#4a9eff"
+    "accent":      string,       // hex color, default "#448aff"
     "accentHover": string,
     "navBg":       string,
     "navBg2":      string

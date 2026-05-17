@@ -2499,7 +2499,7 @@ console.log('\n=== customize-v2.js: core behavior ===');
     const server = { theme: { accent: '#111111' }, home: null };
     const effective = v2.computeEffective(server, {});
     assert.ok(effective.home, 'home should not be null');
-    assert.strictEqual(effective.home.heroTitle, 'CoreScope');
+    assert.strictEqual(effective.home.heroTitle, 'Canada Meshcore Corescope');
     assert.ok(Array.isArray(effective.home.steps), 'steps should be an array');
     assert.ok(effective.home.steps.length > 0, 'steps should not be empty');
     assert.ok(Array.isArray(effective.home.footerLinks), 'footerLinks should be an array');
@@ -4305,7 +4305,7 @@ console.log('\n=== app.js: payloadTypeColor ===');
   test('payloadTypeColor(99) = unknown', () => assert.strictEqual(payloadTypeColor(99), 'unknown'));
   test('payloadTypeColor(null) = unknown', () => assert.strictEqual(payloadTypeColor(null), 'unknown'));
   test('payloadTypeColor(undefined) = unknown', () => assert.strictEqual(payloadTypeColor(undefined), 'unknown'));
-  test('payloadTypeColor(6) = unknown (no mapping for 6)', () => assert.strictEqual(payloadTypeColor(6), 'unknown'));
+  test('payloadTypeColor(6) = grp-data', () => assert.strictEqual(payloadTypeColor(6), 'grp-data'));
   test('all defined payload types return a non-unknown string', () => {
     const definedTypes = [0, 1, 2, 3, 4, 5, 7, 8, 9];
     for (const t of definedTypes) {

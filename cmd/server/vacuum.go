@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -74,7 +75,7 @@ func checkAutoVacuum(db *DB, cfg *Config, dbPath string) {
 // runIncrementalVacuum runs PRAGMA incremental_vacuum(N) on a read-write
 // connection. Safe to call on auto_vacuum=NONE databases (noop).
 func runIncrementalVacuum(dbPath string, pages int) {
-	if dbPath == "" {
+	if dbPath == "" || strings.Contains(dbPath, "://") {
 		return
 	}
 	rw, err := cachedRW(dbPath)

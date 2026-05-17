@@ -28,17 +28,17 @@
     "_comment": "TLS cert/key paths for direct HTTPS. Most deployments use Caddy (included in Docker) for auto-TLS instead."
   },
   "branding": {
-    "siteName": "CoreScope",
+    "siteName": "MeshCore Canada Live",
     "tagline": "Real-time MeshCore LoRa mesh network analyzer",
-    "logoUrl": null,
-    "faviconUrl": null,
+    "logoUrl": "img/meshcore-canada-logo.png",
+    "faviconUrl": "img/meshcore-canada-logo.png",
     "_comment": "Customize site name, tagline, logo, and favicon. logoUrl/faviconUrl can be absolute URLs or relative paths."
   },
   "theme": {
-    "accent": "#4a9eff",
-    "accentHover": "#6db3ff",
-    "navBg": "#0f0f23",
-    "navBg2": "#1a1a2e",
+    "accent": "#448aff",
+    "accentHover": "#82b1ff",
+    "navBg": "#1a237e",
+    "navBg2": "#0d47a1",
     "statusGreen": "#45644c",
     "statusYellow": "#b08b2d",
     "statusRed": "#b54a4a",
@@ -53,7 +53,7 @@
     "_comment": "Marker/badge colors per node role. Used on map, nodes list, and live feed."
   },
   "home": {
-    "heroTitle": "CoreScope",
+    "heroTitle": "Canada Meshcore Corescope",
     "heroSubtitle": "Find your nodes to start monitoring them.",
     "steps": [
       {

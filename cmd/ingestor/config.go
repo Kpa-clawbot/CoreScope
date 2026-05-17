@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -211,6 +212,7 @@ func LoadConfig(path string) (*Config, error) {
 		// Config file doesn't exist — use defaults (zero-config mode)
 		log.Printf("config file %s not found, using sensible defaults", path)
 	} else {
+		data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 		if err := json.Unmarshal(data, &cfg); err != nil {
 			return nil, fmt.Errorf("parsing config %s: %w", path, err)
 		}

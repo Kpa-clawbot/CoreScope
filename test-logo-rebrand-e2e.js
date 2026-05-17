@@ -4,16 +4,16 @@
  * homepage renders a hero version of the logo above the H1.
  *
  * Asserts (in order):
- *   1. Navbar has an <img> whose src ends with /img/corescope-logo.svg
+ *   1. Navbar has an <img> whose src ends with /img/meshcore-canada-logo.png
  *      OR an inline <svg class="brand-logo"> (PR #1137 inlined the SVG so
  *      it can inherit page CSS vars and theme on light/dark).
  *      The brand element must be INSIDE the .nav-brand link (so the brand
  *      link stays clickable).
- *   2. Old .brand-icon (🍄) and .brand-text spans are gone.
+ *   2. Old .brand-icon is gone and the visible brand text is MeshCore Canada.
  *   3. The .live-dot WS-status indicator is still present and visible
  *      and sits to the right of the logo (left edge of dot ≥ right edge of img).
  *   4. The home page (#/home) renders an <img.home-hero-logo> whose src
- *      ends with /img/corescope-hero.svg, ABOVE the .home-hero h1.
+ *      ends with /img/meshcore-canada-logo.png, ABOVE the .home-hero h1.
  *   5. Both SVG assets resolve with HTTP 200 and content-type contains
  *      "svg" (catches a missing file regression cleanly).
  *
@@ -87,7 +87,7 @@ async function main() {
       const tag = el.tagName.toLowerCase();
       if (tag === 'img') {
         const src = el.getAttribute('src') || '';
-        return { ok: /corescope-logo\.svg($|\?)/.test(src), tag, src };
+        return { ok: /meshcore-canada-logo\.png($|\?)/.test(src), tag, src };
       }
       if (tag === 'svg') {
         // Inline SVG default — verify it actually renders the brand artwork.
@@ -104,9 +104,10 @@ async function main() {
 
     // 2. Old emoji + brand-text are gone
     const oldIcon = await page.$('.nav-brand .brand-icon');
-    const oldText = await page.$('.nav-brand .brand-text');
-    if (oldIcon || oldText) fail('legacy .brand-icon / .brand-text still present (should be replaced by SVG logo)');
-    console.log('  ✅ legacy mushroom emoji + "CoreScope" text removed');
+    const brandText = await page.textContent('.nav-brand .brand-text');
+    if (oldIcon) fail('legacy .brand-icon still present');
+    if (!/^MeshCore Canada/.test((brandText || '').trim())) fail(`brand text = ${brandText}; expected MeshCore Canada`);
+    console.log('  ✅ navbar brand text is MeshCore Canada');
     passed++;
 
     // 3. WS connection state indicator: #1173 replaced .live-dot with the
@@ -140,8 +141,8 @@ async function main() {
     // assert: brand-logo is visibly rendered with a sensible box.
     assert(brandLayout.ok, 'brand-logo layout probe failed: ' + brandLayout.reason);
     assert(brandLayout.visible, 'brand-logo not visible (display/visibility/opacity)');
-    assert(brandLayout.w >= 60 && brandLayout.h >= 16,
-      `brand-logo too small: ${brandLayout.w.toFixed(1)}×${brandLayout.h.toFixed(1)} (expected ≥60×16)`);
+    assert(brandLayout.w >= 28 && brandLayout.h >= 28,
+      `brand-logo too small: ${brandLayout.w.toFixed(1)}×${brandLayout.h.toFixed(1)} (expected >=28x28)`);
     console.log('  ✅ legacy .live-dot removed; brand-logo Logo state seam present; brand-logo layout sane');
     passed++;
 
@@ -163,7 +164,7 @@ async function main() {
       const tag = el.tagName.toLowerCase();
       if (tag === 'img') {
         const src = el.getAttribute('src') || '';
-        return { ok: /corescope-hero\.svg($|\?)/.test(src), tag, src };
+        return { ok: /meshcore-canada-logo\.png($|\?)/.test(src), tag, src };
       }
       if (tag === 'svg') {
         const hasText = !!el.querySelector('text');
@@ -186,33 +187,26 @@ async function main() {
     console.log(`  ✅ home page hero contains .home-hero-logo (${heroBrand.tag}) above the h1`);
     passed++;
 
-    // 5. Both assets actually serve
-    const [a, b] = await Promise.all([
-      head(BASE + '/img/corescope-logo.svg'),
-      head(BASE + '/img/corescope-hero.svg'),
-    ]);
-    if (a.status !== 200 || !/svg/i.test(a.ct)) fail(`/img/corescope-logo.svg → status=${a.status} ct=${a.ct}`);
-    if (b.status !== 200 || !/svg/i.test(b.ct)) fail(`/img/corescope-hero.svg → status=${b.status} ct=${b.ct}`);
-    console.log('  ✅ both /img/corescope-{logo,hero}.svg return 200 with svg content-type');
+    // 5. Default MeshCore Canada logo asset actually serves
+    const a = await head(BASE + '/img/meshcore-canada-logo.png');
+    if (a.status !== 200 || !/image/i.test(a.ct)) fail(`/img/meshcore-canada-logo.png -> status=${a.status} ct=${a.ct}`);
+    console.log('  ✅ /img/meshcore-canada-logo.png returns 200 with image content-type');
     passed++;
 
     // 6. Customizer override path still works after the rebrand. Operators
     // can override branding.siteName + branding.logoUrl via the customizer
-    // (cs-theme-overrides localStorage key in customize-v2.js); the old
-    // code mutated .brand-text / .brand-icon (which no longer exist), so
-    // a naive removal silently breaks the override flow. Verify the navbar
-    // logo <img> picks up the override on next load.
+    // (cs-theme-overrides localStorage key in customize-v2.js). Verify the
+    // navbar logo <img> picks up the override on next load.
     await page.evaluate(() => {
       try {
         // customize-v2.js storage key for live overrides.
         localStorage.setItem('cs-theme-overrides', JSON.stringify({
-          branding: { siteName: 'OverrideSite', logoUrl: '/img/corescope-logo.svg?override=1' }
+          branding: { siteName: 'OverrideSite', logoUrl: '/img/meshcore-canada-logo.png?override=1' }
         }));
       } catch (_) {}
     });
     await page.goto(BASE + '/#/', { waitUntil: 'networkidle' });
-    // PR #1137: default brand is inline <svg>; the override path swaps it
-    // for an <img>. Wait for either tag to be present (boot-time render).
+    // Wait for the boot-time branding render before forcing the override path.
     await page.waitForSelector('.nav-brand .brand-logo', { timeout: 8000 });
     // Force-apply the override pipeline (in case _customizerV2.init was racing
     // /api/config/theme — production code's DOMContentLoaded boot path runs
@@ -224,7 +218,7 @@ async function main() {
         }
       } catch (_) {}
     });
-    // Give pipeline a moment to settle: the helper swaps inline-<svg> → <img>.
+    // Give the override pipeline a moment to settle.
     await page.waitForFunction(() => {
       var img = document.querySelector('.nav-brand img');
       return img && /override=1/.test(img.getAttribute('src') || '');

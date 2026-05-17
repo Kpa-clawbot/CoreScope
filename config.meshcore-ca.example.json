@@ -28,14 +28,16 @@
     "_comment": "TLS cert/key paths for direct HTTPS. Most deployments use Caddy (included in Docker) for auto-TLS instead."
   },
   "branding": {
-    "title": "MeshCore Canada Live",
-    "subtitle": "Observer verification and network health for MeshCore.ca"
+    "siteName": "MeshCore Canada Live",
+    "tagline": "Observer verification and network health for MeshCore.ca",
+    "logoUrl": "img/meshcore-canada-logo.png",
+    "faviconUrl": "img/meshcore-canada-logo.png"
   },
   "theme": {
-    "accent": "#4a9eff",
-    "accentHover": "#6db3ff",
-    "navBg": "#0f0f23",
-    "navBg2": "#1a1a2e",
+    "accent": "#448aff",
+    "accentHover": "#82b1ff",
+    "navBg": "#1a237e",
+    "navBg2": "#0d47a1",
     "statusGreen": "#45644c",
     "statusYellow": "#b08b2d",
     "statusRed": "#b54a4a",
@@ -50,9 +52,9 @@
     "_comment": "Marker/badge colors per node role. Used on map, nodes list, and live feed."
   },
   "home": {
-    "title": "MeshCore Canada Live",
-    "intro": "Verify observers and monitor public mesh health across Canada.",
-    "links": [
+    "heroTitle": "Canada Meshcore Corescope",
+    "heroSubtitle": "Verify observers and monitor public mesh health across Canada.",
+    "footerLinks": [
       {
         "label": "MeshCore.ca Onboarding",
         "url": "https://meshcore.ca"
