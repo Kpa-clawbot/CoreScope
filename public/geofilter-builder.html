@@ -21,11 +21,17 @@
   #map { flex: 1; }
   #output-panel { background: #fff; border-top: 1px solid #ddd; padding: 12px 16px; display: flex; gap: 12px; align-items: flex-start; }
   #output-panel label { font-size: 0.75rem; color: #888; white-space: nowrap; padding-top: 6px; }
-  #output { flex: 1; background: #f0f4f8; border: 1px solid #ccd; border-radius: 6px; padding: 10px 12px; font-family: monospace; font-size: 0.78rem; color: #1a6abf; white-space: pre; overflow-x: auto; min-height: 54px; max-height: 140px; overflow-y: auto; cursor: text; }
-  #output.empty { color: #aaa; font-style: italic; }
-  #btnCopy { padding: 6px 14px; background: #1a6abf; color: #fff; border-radius: 6px; border: none; cursor: pointer; font-size: 0.85rem; white-space: nowrap; align-self: flex-end; }
-  #btnCopy:hover { background: #1558a0; }
-  #btnCopy.copied { background: #1a7a3a; color: #fff; }
+  #output { flex: 1; background: #111; border: 1px solid #333; border-radius: 6px; padding: 10px 12px; font-family: monospace; font-size: 0.78rem; color: #7ec8e3; white-space: pre; overflow-x: auto; min-height: 54px; max-height: 140px; overflow-y: auto; cursor: text; }
+  #output.empty { color: #555; font-style: italic; }
+  #btnCopy { padding: 6px 14px; background: #1a4a7a; color: #7ec8e3; border-radius: 6px; border: none; cursor: pointer; font-size: 0.85rem; white-space: nowrap; align-self: flex-end; }
+  #btnCopy:hover { background: #2a6aaa; }
+  #btnCopy.copied { background: #1a6a3a; color: #7effa0; }
+  #btnSaveDraft { background: #1a5a3a; color: #7effa0; }
+  #btnSaveDraft:hover { background: #2a7a4a; }
+  #btnLoadDraft { background: #3a3a1a; color: #ffe07e; }
+  #btnLoadDraft:hover { background: #5a5a2a; }
+  #btnDownload { background: #1a4a7a; color: #7ec8e3; }
+  #btnDownload:hover { background: #2a6aaa; }
   #counter { font-size: 0.8rem; color: #888; padding-top: 6px; white-space: nowrap; }
   .bufferRow { display: flex; align-items: center; gap: 8px; }
   .bufferRow label { font-size: 0.85rem; color: #555; }
@@ -45,6 +51,8 @@
   <div class="controls">
     <button id="btnUndo">↩ Undo</button>
     <button id="btnClear">✕ Clear</button>
+    <button id="btnSaveDraft">💾 Save Draft</button>
+    <button id="btnLoadDraft">📂 Load Draft</button>
   </div>
   <div class="bufferRow">
     <label for="bufferKm">Buffer km:</label>
@@ -63,16 +71,18 @@
   <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
     <span id="counter">0 points</span>
     <button id="btnCopy">Copy</button>
+    <button id="btnDownload">⬇ Download</button>
   </div>
 </div>
 
 <!-- Instructions: paste the output into config.json as a top-level "geo_filter" key, then restart the server -->
 <div id="help-bar">
-  Copy the JSON above → paste as a top-level key in <code>config.json</code> → restart the server.
+  <strong>Save Draft</strong> preserves your polygon across sessions. <strong>Download</strong> exports a JSON snippet → paste as a top-level key in <code>config.json</code> → restart the server.
   Nodes with no GPS fix always pass through. Remove the <code>geo_filter</code> block to disable filtering.
   &nbsp;·&nbsp; <a href="https://github.com/Kpa-clawbot/CoreScope/blob/master/docs/user-guide/geofilter.md" target="_blank">Documentation ↗</a>
 </div>
 
+<script src="geofilter-draft.js"></script>
 <script>
 const map = L.map('map').setView([50.5, 4.4], 8);
 
@@ -164,6 +174,40 @@ document.getElementById('btnCopy').addEventListener('click', function() {
     btn.classList.add('copied');
     setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
   });
+});
+
+document.getElementById('btnSaveDraft').addEventListener('click', function() {
+  if (points.length < 3) return;
+  const bufferKm = parseFloat(document.getElementById('bufferKm').value) || 0;
+  GeofilterDraft.saveDraft(points, bufferKm);
+  const btn = document.getElementById('btnSaveDraft');
+  btn.textContent = '✓ Saved';
+  setTimeout(() => { btn.textContent = '💾 Save Draft'; }, 2000);
+});
+
+document.getElementById('btnLoadDraft').addEventListener('click', function() {
+  const draft = GeofilterDraft.loadDraft();
+  if (!draft || !draft.polygon || draft.polygon.length < 3) return;
+  // Clear current
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  points = draft.polygon.slice();
+  if (draft.bufferKm != null) document.getElementById('bufferKm').value = draft.bufferKm;
+  // Recreate markers
+  points.forEach(function(pt, i) {
+    const marker = L.circleMarker([pt[0], pt[1]], {
+      radius: 6, color: '#4a9eff', weight: 2, fillColor: '#4a9eff', fillOpacity: 0.9
+    }).addTo(map).bindTooltip(String(i + 1), { permanent: true, direction: 'top', offset: [0, -8], className: 'pt-label' });
+    markers.push(marker);
+  });
+  render();
+  map.fitBounds(L.polygon(points).getBounds().pad(0.2));
+});
+
+document.getElementById('btnDownload').addEventListener('click', function() {
+  if (points.length < 3) return;
+  const bufferKm = parseFloat(document.getElementById('bufferKm').value) || 0;
+  GeofilterDraft.downloadConfig(points, bufferKm);
 });
 </script>
 </body>

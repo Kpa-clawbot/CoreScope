@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
 )
 
@@ -71,10 +73,30 @@ type Config struct {
 
 	Timestamps *TimestampConfig `json:"timestamps,omitempty"`
 
+	// CORSAllowedOrigins is the list of origins permitted to make cross-origin
+	// requests. When empty (default), no Access-Control-* headers are sent,
+	// so browsers enforce same-origin policy. Set to ["*"] to allow all origins.
+	CORSAllowedOrigins []string `json:"corsAllowedOrigins,omitempty"`
+
 	DebugAffinity bool `json:"debugAffinity,omitempty"`
+
+	// ObserverBlacklist is a list of observer public keys to exclude from API
+	// responses (defense in depth — ingestor drops at ingest, server filters
+	// any that slipped through from a prior unblocked window).
+	ObserverBlacklist []string `json:"observerBlacklist,omitempty"`
+
+	// obsBlacklistSetCached is the lazily-built set version of ObserverBlacklist.
+	obsBlacklistSetCached map[string]bool
+	obsBlacklistOnce      sync.Once
 
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
+
+	// Analytics steady-state background recompute (issue #1240).
+	Analytics *AnalyticsConfig `json:"analytics,omitempty"`
+
+	// BatteryThresholds: voltage cutoffs for low/critical alerts (#663).
+	BatteryThresholds *BatteryThresholdsConfig `json:"batteryThresholds,omitempty"`
 }
 
 // weakAPIKeys is the blocklist of known default/example API keys that must be rejected.
@@ -112,14 +134,16 @@ type ResolvedPathConfig struct {
 
 // NeighborGraphConfig controls neighbor edge pruning.
 type NeighborGraphConfig struct {
-	MaxAgeDays int `json:"maxAgeDays"` // edges older than this are pruned (default 5)
+	MaxAgeDays int     `json:"maxAgeDays"` // edges older than this are pruned (default 5)
+	MaxEdgeKm  float64 `json:"maxEdgeKm"`  // geo-implausibility threshold (km); 0 = default 500; negative disables (#1228)
 }
 
 // PacketStoreConfig controls in-memory packet store limits.
 type PacketStoreConfig struct {
-	RetentionHours float64 `json:"retentionHours"` // max age of packets in hours (0 = unlimited)
-	MaxMemoryMB                    int `json:"maxMemoryMB"`                    // hard memory ceiling in MB (0 = unlimited)
-	MaxResolvedPubkeyIndexEntries  int `json:"maxResolvedPubkeyIndexEntries"`  // warning threshold for index size (0 = 5M default)
+	RetentionHours                float64 `json:"retentionHours"`                // max age of packets in hours (0 = unlimited)
+	MaxMemoryMB                   int     `json:"maxMemoryMB"`                   // hard memory ceiling in MB (0 = unlimited)
+	MaxResolvedPubkeyIndexEntries int     `json:"maxResolvedPubkeyIndexEntries"` // warning threshold for index size (0 = 5M default)
+	HotStartupHours               float64 `json:"hotStartupHours"`               // load only this many hours synchronously; 0 = disabled
 }
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
@@ -132,11 +156,8 @@ type RetentionConfig struct {
 	MetricsDays   int `json:"metricsDays"`
 }
 
-// DBConfig controls SQLite vacuum and maintenance behavior (#919).
-type DBConfig struct {
-	VacuumOnStartup        bool `json:"vacuumOnStartup"`        // one-time full VACUUM on startup if auto_vacuum is not INCREMENTAL
-	IncrementalVacuumPages int  `json:"incrementalVacuumPages"` // pages returned to OS per reaper cycle (default 1024)
-}
+// DBConfig is the shared SQLite vacuum/maintenance config (#919, #921).
+type DBConfig = dbconfig.DBConfig
 
 // IncrementalVacuumPages returns the configured pages per vacuum or 1024 default.
 func (c *Config) IncrementalVacuumPages() int {
@@ -168,6 +189,19 @@ func (c *Config) NeighborMaxAgeDays() int {
 		return c.NeighborGraph.MaxAgeDays
 	}
 	return 5
+}
+
+// NeighborMaxEdgeKm returns the geo-implausibility threshold in km.
+// 0 (unset) → DefaultMaxEdgeKm (500). Negative → 0 (filter disabled).
+// See issue #1228.
+func (c *Config) NeighborMaxEdgeKm() float64 {
+	if c == nil || c.NeighborGraph == nil || c.NeighborGraph.MaxEdgeKm == 0 {
+		return DefaultMaxEdgeKm
+	}
+	if c.NeighborGraph.MaxEdgeKm < 0 {
+		return 0
+	}
+	return c.NeighborGraph.MaxEdgeKm
 }
 
 type TimestampConfig struct {
@@ -210,6 +244,10 @@ type HealthThresholds struct {
 	InfraSilentHours   float64 `json:"infraSilentHours"`
 	NodeDegradedHours  float64 `json:"nodeDegradedHours"`
 	NodeSilentHours    float64 `json:"nodeSilentHours"`
+	// RelayActiveHours: how recent a path-hop appearance must be for a
+	// repeater to be considered "actively relaying" vs only "alive
+	// (advert-only)". See issue #662. Defaults to 24h.
+	RelayActiveHours float64 `json:"relayActiveHours"`
 }
 
 // ThemeFile mirrors theme.json overlay.
@@ -278,6 +316,7 @@ func (c *Config) GetHealthThresholds() HealthThresholds {
 		InfraSilentHours:   72,
 		NodeDegradedHours:  1,
 		NodeSilentHours:    24,
+		RelayActiveHours:   24,
 	}
 	if c.HealthThresholds != nil {
 		if c.HealthThresholds.InfraDegradedHours > 0 {
@@ -291,6 +330,9 @@ func (c *Config) GetHealthThresholds() HealthThresholds {
 		}
 		if c.HealthThresholds.NodeSilentHours > 0 {
 			h.NodeSilentHours = c.HealthThresholds.NodeSilentHours
+		}
+		if c.HealthThresholds.RelayActiveHours > 0 {
+			h.RelayActiveHours = c.HealthThresholds.RelayActiveHours
 		}
 	}
 	return h
@@ -460,4 +502,80 @@ func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
 		return fmt.Errorf("rename config: %w", err)
 	}
 	return nil
+}
+
+// obsBlacklistSet lazily builds and caches the observerBlacklist as a set for O(1) lookups.
+func (c *Config) obsBlacklistSet() map[string]bool {
+	c.obsBlacklistOnce.Do(func() {
+		if len(c.ObserverBlacklist) == 0 {
+			return
+		}
+		m := make(map[string]bool, len(c.ObserverBlacklist))
+		for _, pk := range c.ObserverBlacklist {
+			trimmed := strings.ToLower(strings.TrimSpace(pk))
+			if trimmed != "" {
+				m[trimmed] = true
+			}
+		}
+		c.obsBlacklistSetCached = m
+	})
+	return c.obsBlacklistSetCached
+}
+
+// IsObserverBlacklisted returns true if the given observer ID is in the observerBlacklist.
+func (c *Config) IsObserverBlacklisted(id string) bool {
+	if c == nil || len(c.ObserverBlacklist) == 0 {
+		return false
+	}
+	return c.obsBlacklistSet()[strings.ToLower(strings.TrimSpace(id))]
+}
+
+// AnalyticsConfig controls steady-state background recompute of
+// analytics endpoints (issue #1240).
+//
+// DefaultIntervalSeconds applies to every endpoint that does not have
+// an explicit per-endpoint override in RecomputeIntervalSeconds. The
+// project default is 300 (5 minutes): the operator's guiding principle
+// is "serving slightly stale data quickly is better than real-time
+// data slowly." Lower values give fresher data at higher CPU cost.
+//
+// RecomputeIntervalSeconds keys (all optional):
+//
+//	topology, rf, distance, channels, hashCollisions, hashSizes
+type AnalyticsConfig struct {
+	DefaultIntervalSeconds   int            `json:"defaultIntervalSeconds,omitempty"`
+	RecomputeIntervalSeconds map[string]int `json:"recomputeIntervalSeconds,omitempty"`
+}
+
+// AnalyticsDefaultRecomputeInterval returns the configured default
+// recompute interval, or 5 minutes if unset/invalid.
+func (c *Config) AnalyticsDefaultRecomputeInterval() time.Duration {
+	if c != nil && c.Analytics != nil && c.Analytics.DefaultIntervalSeconds > 0 {
+		return time.Duration(c.Analytics.DefaultIntervalSeconds) * time.Second
+	}
+	return 5 * time.Minute
+}
+
+// AnalyticsRecomputeIntervals returns the per-endpoint override map.
+// Returns the zero value (all defaults) if the analytics block is
+// absent or empty.
+func (c *Config) AnalyticsRecomputeIntervals() AnalyticsRecomputeIntervals {
+	out := AnalyticsRecomputeIntervals{}
+	if c == nil || c.Analytics == nil || c.Analytics.RecomputeIntervalSeconds == nil {
+		return out
+	}
+	get := func(key string) time.Duration {
+		v, ok := c.Analytics.RecomputeIntervalSeconds[key]
+		if !ok || v <= 0 {
+			return 0
+		}
+		return time.Duration(v) * time.Second
+	}
+	out.Topology = get("topology")
+	out.RF = get("rf")
+	out.Distance = get("distance")
+	out.Channels = get("channels")
+	out.HashCollisions = get("hashCollisions")
+	out.HashSizes = get("hashSizes")
+	return out
 }

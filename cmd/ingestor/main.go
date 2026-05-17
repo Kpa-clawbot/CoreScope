@@ -11,11 +11,13 @@ import (
 	"math"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -56,6 +58,9 @@ func main() {
 	}
 	defer store.Close()
 	log.Printf("SQLite opened: %s", cfg.DBPath)
+
+	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
+	store.BackfillPathJSONAsync()
 
 	// Check auto_vacuum mode and optionally migrate (#919)
 	store.CheckAutoVacuum(cfg)
@@ -114,6 +119,10 @@ func main() {
 		}
 	}()
 
+	// Per-second stats file writer for the server's /api/perf/write-sources
+	// endpoint (#1120). Best-effort; never fatal.
+	StartStatsFileWriter(store, time.Second)
+
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {
 		log.Printf("Loaded %d channel keys for GRP_TXT decryption", len(channelKeys))
@@ -123,6 +132,7 @@ func main() {
 
 	// Connect to each MQTT source
 	var clients []mqtt.Client
+	connectedCount := 0
 	for _, source := range sources {
 		tag := source.Name
 		if tag == "" {
@@ -130,9 +140,24 @@ func main() {
 		}
 
 		opts := buildMQTTOpts(source)
+		connectTimeout := source.ConnectTimeoutOrDefault()
+		log.Printf("MQTT [%s] connect timeout: %ds", tag, connectTimeout)
+
+		// Pre-allocate the liveness pointer so OnConnect can reset its
+		// stale-message clock on reconnect (PR #1216 r1 item 2). IsConnectedFn
+		// is wired below once the client exists.
+		liveness := &SourceLivenessState{
+			Tag:    tag,
+			Broker: source.Broker,
+		}
 
 		opts.SetOnConnectHandler(func(c mqtt.Client) {
 			log.Printf("MQTT [%s] connected to %s", tag, source.Broker)
+			// PR #1216 r1 item 2: clear the stale LastMessageUnix from
+			// before the outage so the watchdog doesn't immediately scream
+			// "stalled for 2h". Also restarts the cold-start grace window
+			// and clears the alert cooldown so a fresh stall edge can fire.
+			liveness.MarkReconnected(time.Now())
 			topics := source.Topics
 			if len(topics) == 0 {
 				topics = []string{"meshcore/#"}
@@ -163,20 +188,62 @@ func main() {
 		})
 
 		client := mqtt.NewClient(opts)
+		// Wire IsConnectedFn now that the client exists, then register.
+		// Registration BEFORE Connect so the attempt counter is available
+		// to OnConnectAttempt on the very first dial.
+		liveness.IsConnectedFn = client.IsConnected
+		// PR #1216 r2 item 3: tag collisions used to log.Fatalf, which
+		// killed the entire ingestor over one config typo and recreated
+		// the #1212 total-ingest-stop class this PR exists to prevent.
+		// registerLivenessOrSkip logs ERROR + skips liveness registration
+		// for the duplicate; the MQTT source still attempts to connect,
+		// it just isn't tracked by the watchdog. First registration
+		// remains authoritative.
+		registerLivenessOrSkip(liveness)
 		token := client.Connect()
-		token.Wait()
-		if token.Error() != nil {
-			log.Printf("MQTT [%s] connection failed (non-fatal): %v", tag, token.Error())
+		// With ConnectRetry=true, token.Wait() blocks forever for unreachable brokers.
+		// WaitTimeout lets startup proceed; the client keeps retrying in the background
+		// and OnConnect fires (subscribing) when it eventually connects (#910).
+		if !token.WaitTimeout(time.Duration(connectTimeout) * time.Second) {
+			log.Printf("MQTT [%s] initial connection timed out — retrying in background", tag)
+			clients = append(clients, client)
 			continue
 		}
+		if token.Error() != nil {
+			log.Printf("MQTT [%s] connection failed (non-fatal): %v", tag, token.Error())
+			// BL1 fix: Disconnect to stop Paho's internal retry goroutines.
+			// With ConnectRetry=true, Connect() spawns background goroutines
+			// that leak if the client is simply discarded.
+			client.Disconnect(0)
+			continue
+		}
+		connectedCount++
 		clients = append(clients, client)
 	}
 
-	if len(clients) == 0 {
-		log.Fatal("no MQTT connections established — check broker is running (default: mqtt://localhost:1883). Set MQTT_BROKER env var or configure mqttSources in config.json")
+	// BL2 fix: require at least one immediately-connected source. Timed-out
+	// clients are retrying in background (tracked in clients) but don't count
+	// as "connected" — a single unreachable broker must not silently run with
+	// zero active connections.
+	if connectedCount == 0 {
+		// Clean up any timed-out clients still retrying
+		for _, c := range clients {
+			c.Disconnect(0)
+		}
+		log.Fatal("no MQTT sources connected — all timed out or failed. Check broker is running (default: mqtt://localhost:1883). Set MQTT_BROKER env var or configure mqttSources in config.json")
 	}
 
-	log.Printf("Running — %d MQTT source(s) connected", len(clients))
+	if connectedCount < len(clients) {
+		log.Printf("Running — %d MQTT source(s) connected, %d retrying in background", connectedCount, len(clients)-connectedCount)
+	} else {
+		log.Printf("Running — %d MQTT source(s) connected", connectedCount)
+	}
+
+	// #1212: per-source stall watchdog. Detects "silently dead" sources
+	// where the client reports connected but no messages have flowed. Logs
+	// a WARN line every minute for any source silent for >5m. Scan every
+	// 60s so detection latency is bounded.
+	stopWatchdog := runLivenessWatchdog(60*time.Second, 5*time.Minute)
 
 	// Wait for shutdown signal
 	sig := make(chan os.Signal, 1)
@@ -187,6 +254,7 @@ func main() {
 	retentionTicker.Stop()
 	metricsRetentionTicker.Stop()
 	statsTicker.Stop()
+	stopWatchdog()
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
 		c.Disconnect(5000) // 5s to allow in-flight messages to drain
@@ -196,7 +264,18 @@ func main() {
 
 // buildMQTTOpts creates MQTT client options for a source with bounded reconnect
 // backoff, connect timeout, and TLS/auth configuration.
+//
+// Logs every TCP/TLS dial via OnConnectAttempt. Unlike SetReconnectingHandler
+// (which only fires inside paho's reconnect goroutine and can be silent if
+// that loop never iterates), OnConnectAttempt fires on every attempt — the
+// initial Connect() and every reconnect. This is the observability fix for
+// #1212 (prod outage on 2026-05-15 where the disconnect was logged but no
+// reconnect activity was ever visible).
 func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
+	tag := source.Name
+	if tag == "" {
+		tag = source.Broker
+	}
 	opts := mqtt.NewClientOptions().
 		AddBroker(source.Broker).
 		SetAutoReconnect(true).
@@ -205,6 +284,21 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 		SetMaxReconnectInterval(30 * time.Second).
 		SetConnectTimeout(10 * time.Second).
 		SetWriteTimeout(10 * time.Second)
+
+	opts.SetConnectionAttemptHandler(func(broker *url.URL, tlsCfg *tls.Config) *tls.Config {
+		// Look up the per-source liveness state (registered in main) so we
+		// can attach an attempt counter. If not yet registered (first dial
+		// from Connect()), fall through with attempt=1.
+		var attempt int64 = 1
+		livenessRegistryMu.RLock()
+		s := livenessRegistry[tag]
+		livenessRegistryMu.RUnlock()
+		if s != nil {
+			attempt = atomic.AddInt64(&s.AttemptCount, 1)
+		}
+		log.Printf("MQTT [%s] connection attempt #%d to %s", tag, attempt, broker.String())
+		return tlsCfg
+	})
 
 	if source.Username != "" {
 		opts.SetUsername(source.Username)
@@ -221,6 +315,9 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 }
 
 func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, channelKeys map[string]string, cfg *Config) {
+	// Liveness watchdog (#1212): record receipt before any processing so a
+	// slow handler still counts as "source is alive". Cheap atomic store.
+	markLivenessForTag(tag, time.Now())
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("MQTT [%s] panic in handler: %v", tag, r)
@@ -240,8 +337,21 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		return
 	}
 
+	// Observer blacklist: drop ALL messages from blacklisted observers before any
+	// DB writes (status, metrics, packets). Trumps IATA filter.
+	if len(parts) > 2 && cfg.IsObserverBlacklisted(parts[2]) {
+		log.Printf("MQTT [%s] observer %.8s blacklisted, dropping", tag, parts[2])
+		return
+	}
+
+	// Global observer IATA whitelist: if configured, drop messages from observers
+	// in non-whitelisted IATA regions. Applies to ALL message types (status + packets).
+	if len(parts) > 1 && !cfg.IsObserverIATAAllowed(parts[1]) {
+		return
+	}
+
 	// Status topic: meshcore/<region>/<observer_id>/status
-	// IATA filter does NOT apply here — observer metadata (noise_floor, battery, etc.)
+	// Per-source IATA filter does NOT apply here — observer metadata (noise_floor, battery, etc.)
 	// is region-independent and should be accepted from all observers regardless of
 	// which IATA regions are configured for packet ingestion.
 	if len(parts) >= 4 && parts[3] == "status" {
@@ -293,7 +403,29 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		validateSigs := cfg.ShouldValidateSignatures()
 		decoded, err := DecodePacket(rawHex, channelKeys, validateSigs)
 		if err != nil {
-			log.Printf("MQTT [%s] decode error: %v", tag, err)
+			// Per #1211: include enough context to repro malformed-packet drops,
+			// but NEVER log the full observer ID (PII / fingerprinting risk).
+			// We log:
+			//   - topic prefix (with observer segment elided)
+			//   - 8-char observer prefix
+			//   - payload length, claimed length (rawHex len)
+			obs := ""
+			if len(parts) > 2 {
+				obs = parts[2]
+			}
+			// Build a redacted topic that replaces parts[2] (the observer id)
+			// with the 8-char prefix, so the rest of the topic is preserved
+			// for debugging without leaking the full identifier.
+			redactedTopic := topic
+			if len(parts) > 2 {
+				redactedParts := make([]string, len(parts))
+				copy(redactedParts, parts)
+				if len(parts[2]) > 8 {
+					redactedParts[2] = parts[2][:8]
+				}
+				redactedTopic = strings.Join(redactedParts, "/")
+			}
+			log.Printf("MQTT [%s] decode error: %v (topic=%s observer=%.8s rawHexLen=%d)", tag, err, redactedTopic, obs, len(rawHex))
 			return
 		}
 
@@ -305,8 +437,16 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		if len(parts) > 1 {
 			region = parts[1]
 		}
+		// Fallback to source-level region config when topic has no region (#788)
+		if region == "" && source.Region != "" {
+			region = source.Region
+		}
 
 		mqttMsg := &MQTTPacketMessage{Raw: rawHex}
+		// Parse optional region from JSON payload (#788)
+		if v, ok := msg["region"].(string); ok && v != "" {
+			mqttMsg.Region = v
+		}
 		if v, ok := msg["SNR"]; ok {
 			if f, ok := toFloat64(v); ok {
 				mqttMsg.SNR = &f
@@ -371,10 +511,28 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				})
 				return
 			}
+			foreign := false
 			if !NodePassesGeoFilter(decoded.Payload.Lat, decoded.Payload.Lon, cfg.GeoFilter) {
-				return
+				if cfg.ForeignAdverts.IsDropMode() {
+					return
+				}
+				foreign = true
+				lat, lon := 0.0, 0.0
+				if decoded.Payload.Lat != nil {
+					lat = *decoded.Payload.Lat
+				}
+				if decoded.Payload.Lon != nil {
+					lon = *decoded.Payload.Lon
+				}
+				truncPK := decoded.Payload.PubKey
+				if len(truncPK) > 16 {
+					truncPK = truncPK[:16]
+				}
+				log.Printf("MQTT [%s] foreign advert: node=%s name=%s lat=%.4f lon=%.4f observer=%s",
+					tag, truncPK, decoded.Payload.Name, lat, lon, firstNonEmpty(mqttMsg.Origin, observerID))
 			}
 			pktData := BuildPacketData(mqttMsg, decoded, observerID, region)
+			pktData.Foreign = foreign
 			isNew, err := store.InsertTransmission(pktData)
 			if err != nil {
 				log.Printf("MQTT [%s] db insert error: %v", tag, err)
@@ -382,6 +540,11 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			role := advertRole(decoded.Payload.Flags)
 			if err := store.UpsertNode(decoded.Payload.PubKey, decoded.Payload.Name, role, decoded.Payload.Lat, decoded.Payload.Lon, pktData.Timestamp); err != nil {
 				log.Printf("MQTT [%s] node upsert error: %v", tag, err)
+			}
+			if foreign {
+				if err := store.MarkNodeForeign(decoded.Payload.PubKey); err != nil {
+					log.Printf("MQTT [%s] mark foreign error: %v", tag, err)
+				}
 			}
 			if isNew {
 				if err := store.IncrementAdvertCount(decoded.Payload.PubKey); err != nil {
@@ -406,7 +569,12 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		// Upsert observer
 		if observerID != "" {
 			origin, _ := msg["origin"].(string)
-			if err := store.UpsertObserver(observerID, origin, region, nil); err != nil {
+			// Use effective region: payload > topic > source config (#788)
+			effectiveRegion := region
+			if mqttMsg.Region != "" {
+				effectiveRegion = mqttMsg.Region
+			}
+			if err := store.UpsertObserver(observerID, origin, effectiveRegion, nil); err != nil {
 				log.Printf("MQTT [%s] observer upsert error: %v", tag, err)
 			}
 		}

@@ -108,6 +108,25 @@ func main() {
 		log.Printf("[security] WARNING: API key is weak or a known default — write endpoints are vulnerable")
 	}
 
+	// Apply Go runtime soft memory limit (#836).
+	// Honors GOMEMLIMIT if set; otherwise derives from packetStore.maxMemoryMB.
+	{
+		_, envSet := os.LookupEnv("GOMEMLIMIT")
+		maxMB := 0
+		if cfg.PacketStore != nil {
+			maxMB = cfg.PacketStore.MaxMemoryMB
+		}
+		limit, source := applyMemoryLimit(maxMB, envSet)
+		switch source {
+		case "env":
+			log.Printf("[memlimit] using GOMEMLIMIT from environment (%s)", os.Getenv("GOMEMLIMIT"))
+		case "derived":
+			log.Printf("[memlimit] derived from packetStore.maxMemoryMB=%d → %d MiB (1.5x headroom)", maxMB, limit/(1024*1024))
+		default:
+			log.Printf("[memlimit] no soft memory limit set (GOMEMLIMIT unset, packetStore.maxMemoryMB=0); recommend setting one to avoid container OOM-kill")
+		}
+	}
+
 	// Resolve DB path
 	resolvedDB := cfg.ResolveDBPath(configDir)
 	log.Printf("[config] port=%d db=%s public=%s", cfg.Port, resolvedDB, publicDir)
@@ -151,10 +170,21 @@ func main() {
 	// Check auto_vacuum mode and optionally migrate (#919)
 	checkAutoVacuum(database, cfg, resolvedDB)
 
+	// Ensure indexes the server's SQL fallback path depends on
+	// (mirrors ingestor schema for DBs created by old server-only builds).
+	if err := ensureServerIndexes(resolvedDB); err != nil {
+		log.Printf("[db] warning: could not ensure server indexes: %v", err)
+	}
+
 	// In-memory packet store
 	store := NewPacketStore(database, cfg.PacketStore, cfg.CacheTTL)
 	if err := store.Load(); err != nil {
 		log.Fatalf("[store] failed to load: %v", err)
+	}
+	if store.hotStartupHours > 0 {
+		log.Printf("[store] starting background load: filling retentionHours=%gh from hotStartupHours=%gh",
+			store.retentionHours, store.hotStartupHours)
+		go store.loadBackgroundChunks()
 	}
 
 	// Initialize persisted neighbor graph
@@ -174,29 +204,72 @@ func main() {
 		database.hasResolvedPath = true // detectSchema ran before column was added; fix the flag
 	}
 
+	// Ensure observers.inactive column exists (PR #954 filters on it; ingestor migration
+	// adds it but server may run against DBs ingestor never touched, e.g. e2e fixture).
+	if err := ensureObserverInactiveColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add observers.inactive column: %v", err)
+	}
+
+	// Ensure observers.last_packet_at column exists (PR #905 reads it; ingestor migration
+	// adds it but server may run against DBs ingestor never touched, e.g. e2e fixture).
+	if err := ensureLastPacketAtColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add observers.last_packet_at column: %v", err)
+	}
+
+	// Ensure observers.iata column exists (#1188 read paths COALESCE(obs.iata, '')
+	// in Store.Load() / IngestNewFromDB / IngestNewObservations; ingestor migration
+	// adds it but server may run against DBs ingestor never touched (e2e fixture)
+	// OR pre-iata operator DBs upgraded to this build — without this migration
+	// the first SELECT crashes with "no such column: obs.iata" (#1189 R1).
+	if err := ensureObserverIATAColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add observers.iata column: %v", err)
+	}
+
+	// Ensure nodes.foreign_advert column exists (#730 reads it on every /api/nodes
+	// scan; ingestor migration foreign_advert_v1 adds it but server may run against
+	// DBs ingestor never touched, e.g. e2e fixture).
+	if err := ensureForeignAdvertColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add nodes.foreign_advert column: %v", err)
+	}
+
+	// Ensure transmissions.from_pubkey column + index exists (#1143). Backfill
+	// for legacy NULL rows runs async after HTTP starts so it can't block boot
+	// even on prod-sized DBs (100K+ transmissions).
+	if err := ensureFromPubkeyColumn(dbPath); err != nil {
+		log.Printf("[store] warning: could not add transmissions.from_pubkey column: %v", err)
+	}
+
+	// Soft-delete observers that are in the blacklist (mark inactive=1) so
+	// historical data from a prior unblocked window is hidden too.
+	if len(cfg.ObserverBlacklist) > 0 {
+		softDeleteBlacklistedObservers(dbPath, cfg.ObserverBlacklist)
+	}
+
+	// WaitGroup for background init steps that gate /api/healthz readiness.
+	var initWg sync.WaitGroup
+
 	// Load or build neighbor graph
 	if neighborEdgesTableExists(database.conn) {
-		store.graph = loadNeighborEdgesFromDB(database.conn)
+		store.graph.Store(loadNeighborEdgesFromDB(database.conn))
 		log.Printf("[neighbor] loaded persisted neighbor graph")
 	} else {
 		log.Printf("[neighbor] no persisted edges found, will build in background...")
-		store.graph = NewNeighborGraph() // empty graph — gets populated by background goroutine
+		store.graph.Store(NewNeighborGraph()) // empty graph — gets populated by background goroutine
+		initWg.Add(1)
 		go func() {
+			defer initWg.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("[neighbor] graph build panic recovered: %v", r)
 				}
 			}()
-			rw, rwErr := openRW(dbPath)
+			rw, rwErr := cachedRW(dbPath)
 			if rwErr == nil {
 				edgeCount := buildAndPersistEdges(store, rw)
-				rw.Close()
 				log.Printf("[neighbor] persisted %d edges", edgeCount)
 			}
 			built := BuildFromStore(store)
-			store.mu.Lock()
-			store.graph = built
-			store.mu.Unlock()
+			store.graph.Store(built)
 			log.Printf("[neighbor] graph build complete")
 		}()
 	}
@@ -205,7 +278,9 @@ func main() {
 	// API serves best-effort data until this completes (~10s for 100K txs).
 	// Processes in chunks of 5000, releasing the lock between chunks so API
 	// handlers remain responsive.
+	initWg.Add(1)
 	go func() {
+		defer initWg.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[store] pickBestObservation panic recovered: %v", r)
@@ -231,6 +306,13 @@ func main() {
 			}
 		}
 		log.Printf("[store] initial pickBestObservation complete (%d transmissions)", totalPackets)
+	}()
+
+	// Mark server ready once all background init completes.
+	go func() {
+		initWg.Wait()
+		readiness.Store(1)
+		log.Printf("[server] readiness: ready=true (background init complete)")
 	}()
 
 	// WebSocket hub
@@ -268,6 +350,17 @@ func main() {
 	// Start periodic eviction
 	stopEviction := store.StartEvictionTicker()
 	defer stopEviction()
+
+	// Steady-state analytics recomputers (issue #1240). Replaces the
+	// on-request compute-then-cache pattern for the default (region="",
+	// zero-window) analytics queries with a background refresh loop so
+	// reads always hit cache in <1ms.
+	stopAnalyticsRecomp := store.StartAnalyticsRecomputers(
+		cfg.AnalyticsDefaultRecomputeInterval(),
+		cfg.AnalyticsRecomputeIntervals(),
+	)
+	defer stopAnalyticsRecomp()
+	log.Printf("[analytics-recompute] background recompute enabled (default=%s)", cfg.AnalyticsDefaultRecomputeInterval())
 
 	// Auto-prune old packets if retention.packetDays is configured
 	vacuumPages := cfg.IncrementalVacuumPages()
@@ -399,17 +492,13 @@ func main() {
 				}
 			}()
 			time.Sleep(4 * time.Minute) // stagger after metrics prune
-			store.mu.RLock()
-			g := store.graph
-			store.mu.RUnlock()
+			g := store.graph.Load()
 			PruneNeighborEdges(dbPath, g, maxAgeDays)
 			runIncrementalVacuum(resolvedDB, vacuumPages)
 			for {
 				select {
 				case <-edgePruneTicker.C:
-					store.mu.RLock()
-					g := store.graph
-					store.mu.RUnlock()
+					g := store.graph.Load()
 					PruneNeighborEdges(dbPath, g, maxAgeDays)
 					runIncrementalVacuum(resolvedDB, vacuumPages)
 				case <-edgePruneDone:
@@ -452,6 +541,13 @@ func main() {
 			stopEdgePrune()
 		}
 
+		// 1c. Stop steady-state analytics recomputers (issue #1240).
+		// Must happen before dbClose so any in-flight compute that
+		// reaches into SQLite has finished.
+		if stopAnalyticsRecomp != nil {
+			stopAnalyticsRecomp()
+		}
+
 		// 2. Gracefully drain HTTP connections (up to 15s)
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -473,6 +569,11 @@ func main() {
 
 	// Start async backfill in background — HTTP is now available.
 	go backfillResolvedPathsAsync(store, dbPath, 5000, 100*time.Millisecond, cfg.BackfillHours())
+	// #1143: backfill from_pubkey for legacy ADVERT rows. Async so even
+	// 100K+ rows can't block boot; queries handle NULL gracefully.
+	// startFromPubkeyBackfill wraps the goroutine dispatch so the async
+	// contract is testable (see TestBackfillFromPubkey_DoesNotBlockBoot).
+	startFromPubkeyBackfill(dbPath, 5000, 100*time.Millisecond)
 
 	// Migrate old content hashes in background (one-time, idempotent).
 	go migrateContentHashesAsync(store, 5000, 100*time.Millisecond)

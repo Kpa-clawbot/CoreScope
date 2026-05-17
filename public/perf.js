@@ -13,9 +13,12 @@
     const el = document.getElementById('perfContent');
     if (!el) return;
     try {
-      const [server, client] = await Promise.all([
+      const [server, client, ioStats, sqliteStats, writeSources] = await Promise.all([
         fetch('/api/perf').then(r => r.json()),
-        Promise.resolve(window.apiPerf ? window.apiPerf() : null)
+        Promise.resolve(window.apiPerf ? window.apiPerf() : null),
+        fetch('/api/perf/io').then(r => r.json()).catch(() => null),
+        fetch('/api/perf/sqlite').then(r => r.json()).catch(() => null),
+        fetch('/api/perf/write-sources').then(r => r.json()).catch(() => null)
       ]);
 
       // Also fetch health telemetry
@@ -62,6 +65,111 @@
             <div class="perf-card"><div class="perf-num">${health.websocket.clients}</div><div class="perf-label">WS Clients</div></div>
           </div>`;
         }
+      }
+
+      // Disk I/O (#1120)
+      if (ioStats) {
+        const fmtRate = (bps) => {
+          if (bps >= 1048576) return (bps / 1048576).toFixed(1) + ' MB/s';
+          if (bps >= 1024) return (bps / 1024).toFixed(1) + ' KB/s';
+          return Math.round(bps) + ' B/s';
+        };
+        const writeWarn = ioStats.writeBytesPerSec > 10 * 1048576 ? ' ⚠️' : '';
+        const cancelled = ioStats.cancelledWriteBytesPerSec || 0;
+        // Cancelled writes warn at >1 MB/s — sustained cancellation usually
+        // means truncate/unlink racing with active writers (#1119-shaped bug).
+        const cancelledWarn = cancelled > 1048576 ? ' ⚠️' : '';
+        html += `<h3>Disk I/O (server process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+          <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.readBytesPerSec || 0)}</div><div class="perf-label">Read</div></div>
+          <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.writeBytesPerSec || 0)}${writeWarn}</div><div class="perf-label">Write</div></div>
+          <div class="perf-card"><div class="perf-num">${fmtRate(cancelled)}${cancelledWarn}</div><div class="perf-label">Cancelled Write</div></div>
+          <div class="perf-card"><div class="perf-num">${Math.round(ioStats.syscallsRead || 0)}/s</div><div class="perf-label">Syscalls Read</div></div>
+          <div class="perf-card"><div class="perf-num">${Math.round(ioStats.syscallsWrite || 0)}/s</div><div class="perf-label">Syscalls Write</div></div>
+        </div>`;
+
+        // Ingestor row — sourced from ingestor's own /proc/self/io snapshot
+        // surfaced via the stats file (#1120: "Both ingestor and server").
+        if (ioStats.ingestor) {
+          const ing = ioStats.ingestor;
+          const ingWriteWarn = (ing.writeBytesPerSec || 0) > 10 * 1048576 ? ' ⚠️' : '';
+          const ingCancelled = ing.cancelledWriteBytesPerSec || 0;
+          const ingCancelledWarn = ingCancelled > 1048576 ? ' ⚠️' : '';
+          html += `<h3>Disk I/O (Ingestor process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+            <div class="perf-card"><div class="perf-num">${fmtRate(ing.readBytesPerSec || 0)}</div><div class="perf-label">Read</div></div>
+            <div class="perf-card"><div class="perf-num">${fmtRate(ing.writeBytesPerSec || 0)}${ingWriteWarn}</div><div class="perf-label">Write</div></div>
+            <div class="perf-card"><div class="perf-num">${fmtRate(ingCancelled)}${ingCancelledWarn}</div><div class="perf-label">Cancelled Write</div></div>
+            <div class="perf-card"><div class="perf-num">${Math.round(ing.syscallsRead || 0)}/s</div><div class="perf-label">Syscalls Read</div></div>
+            <div class="perf-card"><div class="perf-num">${Math.round(ing.syscallsWrite || 0)}/s</div><div class="perf-label">Syscalls Write</div></div>
+          </div>`;
+        }
+      }
+
+      // Write Sources (#1120) — per-component counters from ingestor
+      if (writeSources && writeSources.sources) {
+        const src = writeSources.sources;
+        const keys = Object.keys(src).sort((a, b) => (src[b] || 0) - (src[a] || 0));
+        html += '<h3>Write Sources</h3>';
+        if (keys.length === 0) {
+          html += '<p style="color:var(--text-muted)">No ingestor stats yet (waiting for /tmp/corescope-ingestor-stats.json)</p>';
+        } else {
+          // Anomaly detection (#1123 polish):
+          //   Compare PER-SECOND DELTA RATES, not cumulative counts.
+          //   Cumulative-vs-cumulative was a tautology that fired ⚠️ at startup
+          //   (any backfill_* > 10 when tx_inserted=0 → baseline collapses to 1)
+          //   and false-cleared once tx grew past a one-shot backfill burst.
+          //   Now we cache the previous snapshot + sampleAt and only fire when:
+          //     1) we have a real interval (≥ 0.5s) to compute deltas against
+          //     2) tx_inserted has crossed MIN_SAMPLE so the baseline is meaningful
+          //     3) the per-second backfill rate exceeds 10× the per-second tx rate
+          const MIN_SAMPLE = 100;
+          const prev = window._perfWriteSourcesPrev;
+          let prevSrc = null, dtSec = 0;
+          if (prev && prev.sampleAt && writeSources.sampleAt) {
+            dtSec = (Date.parse(writeSources.sampleAt) - Date.parse(prev.sampleAt)) / 1000;
+            if (dtSec >= 0.5) prevSrc = prev.sources;
+          }
+          const txTotal = src.tx_inserted || 0;
+          const txDelta = prevSrc ? (txTotal - (prevSrc.tx_inserted || 0)) : 0;
+          const txRate = (prevSrc && dtSec > 0) ? (txDelta / dtSec) : 0;
+          html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Source</th><th scope="col">Total</th><th scope="col">Rate/s</th><th scope="col">Anomaly</th></tr></thead><tbody>';
+          for (const k of keys) {
+            const v = src[k] || 0;
+            const isBackfill = k.startsWith('backfill_');
+            let rate = 0;
+            let flag = '';
+            if (prevSrc && dtSec > 0) {
+              const delta = v - (prevSrc[k] || 0);
+              rate = delta / dtSec;
+              // Only flag when tx baseline is statistically meaningful AND
+              // backfill is actively running faster than 10× the live tx rate.
+              if (isBackfill && txTotal >= MIN_SAMPLE && rate > 10 * Math.max(txRate, 1)) {
+                flag = ' ⚠️';
+              }
+            }
+            const rateStr = (prevSrc && dtSec > 0) ? rate.toFixed(1) : '—';
+            html += `<tr><td><code>${k}</code></td><td>${v.toLocaleString()}</td><td>${rateStr}</td><td>${flag}</td></tr>`;
+          }
+          html += '</tbody></table></div>';
+          // Stash for next tick's delta computation.
+          window._perfWriteSourcesPrev = { sources: { ...src }, sampleAt: writeSources.sampleAt };
+          if (writeSources.sampleAt) {
+            html += `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Sampled: ${writeSources.sampleAt}</div>`;
+          }
+        }
+      }
+
+      // SQLite perf (separate from existing SQLite block — focused on WAL + cache hit) (#1120)
+      if (sqliteStats) {
+        const walMB = sqliteStats.walSizeMB || 0;
+        const walFlag = walMB > 100 ? ' ⚠️' : '';
+        const hitRate = (sqliteStats.cacheHitRate || 0) * 100;
+        const hitFlag = hitRate > 0 && hitRate < 90 ? ' ⚠️' : '';
+        html += `<h3>SQLite (WAL + Cache Hit)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+          <div class="perf-card"><div class="perf-num">${walMB.toFixed(1)}MB${walFlag}</div><div class="perf-label">WAL Size</div></div>
+          <div class="perf-card"><div class="perf-num">${(sqliteStats.pageCount || 0).toLocaleString()}</div><div class="perf-label">Page Count</div></div>
+          <div class="perf-card"><div class="perf-num">${sqliteStats.pageSize || 0}</div><div class="perf-label">Page Size</div></div>
+          <div class="perf-card"><div class="perf-num">${hitRate.toFixed(1)}%${hitFlag}</div><div class="perf-label">Cache Hit Rate</div></div>
+        </div>`;
       }
 
       // Cache stats

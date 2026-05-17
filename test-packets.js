@@ -958,6 +958,85 @@ console.log('\n=== packets.js: buildPacketsParams ===');
   });
 }
 
+console.log('\n=== packets.js: scroll position preserved across renderTableRows (#431) ===');
+{
+  // Build a richer sandbox with DOM elements that renderTableRows needs
+  const ctx = makeSandbox();
+  // Mock DOM elements needed by renderTableRows and renderVisibleRows
+  let pktLeftScrollTop = 500;
+  const pktBody = {
+    tagName: 'TBODY', id: 'pktBody', _innerHTML: '', children: [],
+    get innerHTML() { return this._innerHTML; },
+    set innerHTML(v) { this._innerHTML = v; pktLeftScrollTop = 0; }, // Simulate browser scroll reset on DOM rebuild
+    appendChild: () => {}, insertBefore: () => {}, removeChild: () => {},
+    querySelectorAll: () => [], querySelector: () => null,
+    style: {},
+  };
+  const pktLeft = {
+    tagName: 'DIV', id: 'pktLeft', className: '',
+    get scrollTop() { return pktLeftScrollTop; },
+    set scrollTop(v) { pktLeftScrollTop = v; },
+    clientHeight: 800,
+    offsetHeight: 800,
+    querySelector: (sel) => {
+      if (sel === 'thead') return { offsetHeight: 40 };
+      if (sel === '.count' || sel === '#pktLeft .count') return { textContent: '' };
+      return null;
+    },
+    querySelectorAll: () => [],
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    style: {},
+  };
+  const origGetById = ctx.document.getElementById;
+  ctx.document.getElementById = (id) => {
+    if (id === 'pktBody') return pktBody;
+    if (id === 'pktLeft') return pktLeft;
+    if (id === 'fGroup') return { classList: { toggle: () => {}, add: () => {}, remove: () => {}, contains: () => false } };
+    if (id === 'packetFilterCount') return { style: {}, textContent: '' };
+    if (id === 'vscroll-top') return null;
+    if (id === 'vscroll-bottom') return null;
+    return null;
+  };
+  ctx.document.querySelector = (sel) => {
+    if (sel === '#pktLeft .count') return { textContent: '', set textContent(v) {} };
+    if (sel === '#pktLeft') return pktLeft;
+    return null;
+  };
+
+  loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/app.js');
+  loadInCtx(ctx, 'public/packet-helpers.js');
+  vm.runInContext(`
+    window.HopDisplay = {
+      renderHop: function(h, entry, opts) { return '<span>' + h + '</span>'; },
+      _showFromBtn: function() {}
+    };
+  `, ctx);
+  loadInCtx(ctx, 'public/packets.js');
+
+  const api = ctx._packetsTestAPI;
+
+  test('scroll position preserved after renderTableRows (#431)', () => {
+    // Inject packets that will ALL be filtered out by type filter,
+    // triggering the empty-state path which sets tbody.innerHTML (resetting scroll in browser)
+    api._setPackets([
+      { id: 1, hash: 'aaa', payload_type: 4, timestamp: '2024-01-01T00:00:00Z', observer_id: 'obs1', path_len: 2, decoded_json: '{}' },
+      { id: 2, hash: 'bbb', payload_type: 4, timestamp: '2024-01-01T00:01:00Z', observer_id: 'obs1', path_len: 1, decoded_json: '{}' },
+    ]);
+
+    // Set scroll position to 500
+    pktLeftScrollTop = 500;
+
+    // Filter by type 99 (no packets match) — this triggers tbody.innerHTML assignment
+    api._setFilter('type', '99');
+    try { api.renderTableRows(); } catch(e) { /* swallow DOM stub errors */ }
+
+    // scrollTop must be preserved (not reset to 0)
+    assert.strictEqual(pktLeftScrollTop, 500, 'scrollTop should be preserved after renderTableRows, got ' + pktLeftScrollTop);
+  });
+}
+
 // ===== SUMMARY =====
 console.log(`\n${'='.repeat(40)}`);
 console.log(`packets.js tests: ${passed} passed, ${failed} failed`);

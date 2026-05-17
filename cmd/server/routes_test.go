@@ -3298,8 +3298,9 @@ func TestHashCollisionsCacheTTL(t *testing.T) {
 	if store.collisionCacheTTL != 3600*time.Second {
 		t.Errorf("expected collisionCacheTTL=3600s, got %v", store.collisionCacheTTL)
 	}
-	if store.rfCacheTTL != 15*time.Second {
-		t.Errorf("expected rfCacheTTL=15s, got %v", store.rfCacheTTL)
+	// #1239: default bumped 15s → 60s.
+	if store.rfCacheTTL != 60*time.Second {
+		t.Errorf("expected rfCacheTTL=60s, got %v", store.rfCacheTTL)
 	}
 }
 

@@ -32,7 +32,8 @@ func setupTestDB(t *testing.T) *DB {
 			first_seen TEXT,
 			advert_count INTEGER DEFAULT 0,
 			battery_mv INTEGER,
-			temperature_c REAL
+			temperature_c REAL,
+			foreign_advert INTEGER DEFAULT 0
 		);
 
 		CREATE TABLE observers (
@@ -48,7 +49,9 @@ func setupTestDB(t *testing.T) *DB {
 			radio TEXT,
 			battery_mv INTEGER,
 			uptime_secs INTEGER,
-			noise_floor REAL
+			noise_floor REAL,
+			inactive INTEGER DEFAULT 0,
+			last_packet_at TEXT DEFAULT NULL
 		);
 
 		CREATE TABLE transmissions (
@@ -61,6 +64,7 @@ func setupTestDB(t *testing.T) *DB {
 			payload_version INTEGER,
 			decoded_json TEXT,
 			channel_hash TEXT DEFAULT NULL,
+			from_pubkey TEXT DEFAULT NULL,
 			created_at TEXT DEFAULT (datetime('now'))
 		);
 
@@ -93,6 +97,29 @@ func setupTestDB(t *testing.T) *DB {
 
 		CREATE INDEX IF NOT EXISTS idx_observer_metrics_timestamp ON observer_metrics(timestamp);
 
+		-- Auto-populate from_pubkey for ADVERT rows so existing test fixtures
+		-- (which only set decoded_json) still attribute correctly under #1143's
+		-- exact-match column. Production migration handles legacy data; the
+		-- ingestor sets the column at write time.
+		--
+		-- m4 alignment: prod ingest leaves from_pubkey NULL when pubKey is
+		-- missing or empty (cmd/ingestor/db.go ~1289 guards PubKey != empty-string).
+		-- The trigger mirrors that: only assign when json_extract yields a
+		-- non-empty string. json_extract returns NULL for missing keys, so
+		-- the explicit IS NOT NULL AND <> empty-string guard catches the empty-string
+		-- case too. UPDATE only when we have something to write.
+		CREATE TRIGGER IF NOT EXISTS test_from_pubkey_advert
+		AFTER INSERT ON transmissions
+		FOR EACH ROW
+		WHEN NEW.from_pubkey IS NULL AND NEW.payload_type = 4 AND NEW.decoded_json IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') <> ''
+		BEGIN
+			UPDATE transmissions
+			SET from_pubkey = json_extract(NEW.decoded_json, '$.pubKey')
+			WHERE id = NEW.id;
+		END;
+		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
@@ -126,13 +153,13 @@ func seedTestData(t *testing.T, db *DB) {
 		VALUES ('1122334455667788', 'TestRoom', 'room', 37.4, -121.9, ?, '2026-01-01T00:00:00Z', 5)`, twoDaysAgo)
 
 	// Seed transmissions
-	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
-		VALUES ('AABB', 'abc123def4567890', ?, 1, 4, '{"pubKey":"aabbccdd11223344","name":"TestRepeater","type":"ADVERT","timestamp":1700000000,"timestampISO":"2023-11-14T22:13:20.000Z","signature":"abcdef","flags":{"isRepeater":true},"lat":37.5,"lon":-122.0}', '#test')`, recent)
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash, from_pubkey)
+		VALUES ('AABB', 'abc123def4567890', ?, 1, 4, '{"pubKey":"aabbccdd11223344","name":"TestRepeater","type":"ADVERT","timestamp":1700000000,"timestampISO":"2023-11-14T22:13:20.000Z","signature":"abcdef","flags":{"isRepeater":true},"lat":37.5,"lon":-122.0}', '#test', 'aabbccdd11223344')`, recent)
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
 		VALUES ('CCDD', '1234567890abcdef', ?, 1, 5, '{"type":"CHAN","channel":"#test","text":"Hello: World","sender":"TestUser"}', '#test')`, yesterday)
 	// Second ADVERT for same node with different hash_size (raw_hex byte 0x1F → hs=1 vs 0xBB → hs=3)
-	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('AA1F', 'def456abc1230099', ?, 1, 4, '{"pubKey":"aabbccdd11223344","name":"TestRepeater","type":"ADVERT","timestamp":1700000100,"timestampISO":"2023-11-14T22:14:40.000Z","signature":"fedcba","flags":{"isRepeater":true},"lat":37.5,"lon":-122.0}')`, yesterday)
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, from_pubkey)
+		VALUES ('AA1F', 'def456abc1230099', ?, 1, 4, '{"pubKey":"aabbccdd11223344","name":"TestRepeater","type":"ADVERT","timestamp":1700000100,"timestampISO":"2023-11-14T22:14:40.000Z","signature":"fedcba","flags":{"isRepeater":true},"lat":37.5,"lon":-122.0}', 'aabbccdd11223344')`, yesterday)
 
 	// Seed observations (use unix timestamps)
 	// resolved_path contains full pubkeys parallel to path_json hops
@@ -355,6 +382,35 @@ func TestGetObservers(t *testing.T) {
 	if observers[0].ID != "obs1" {
 		t.Errorf("expected obs1 first (most recent), got %s", observers[0].ID)
 	}
+	// last_packet_at should be nil since seedTestData doesn't set it
+	if observers[0].LastPacketAt != nil {
+		t.Errorf("expected nil LastPacketAt for obs1 from seed, got %v", *observers[0].LastPacketAt)
+	}
+}
+
+// Regression: GetObservers must exclude soft-deleted (inactive=1) rows.
+// Stale observers were appearing in /api/observers despite the auto-prune
+// marking them inactive, because the SELECT query had no WHERE filter.
+func TestGetObservers_ExcludesInactive(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+	// Mark obs2 inactive — soft delete simulating a stale-observer prune.
+	if _, err := db.conn.Exec(`UPDATE observers SET inactive = 1 WHERE id = ?`, "obs2"); err != nil {
+		t.Fatalf("update inactive: %v", err)
+	}
+	observers, err := db.GetObservers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observers) != 1 {
+		t.Errorf("expected 1 observer (obs1) after marking obs2 inactive, got %d", len(observers))
+	}
+	for _, o := range observers {
+		if o.ID == "obs2" {
+			t.Errorf("inactive observer obs2 should be excluded")
+		}
+	}
 }
 
 func TestGetObserverByID(t *testing.T) {
@@ -368,6 +424,48 @@ func TestGetObserverByID(t *testing.T) {
 	}
 	if obs.ID != "obs1" {
 		t.Errorf("expected obs1, got %s", obs.ID)
+	}
+	// Verify last_packet_at is nil by default
+	if obs.LastPacketAt != nil {
+		t.Errorf("expected nil LastPacketAt, got %v", *obs.LastPacketAt)
+	}
+}
+
+func TestGetObserverLastPacketAt(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+
+	// Set last_packet_at for obs1
+	ts := "2026-04-24T12:00:00Z"
+	db.conn.Exec(`UPDATE observers SET last_packet_at = ? WHERE id = ?`, ts, "obs1")
+
+	// Verify via GetObservers
+	observers, err := db.GetObservers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var obs1 *Observer
+	for i := range observers {
+		if observers[i].ID == "obs1" {
+			obs1 = &observers[i]
+			break
+		}
+	}
+	if obs1 == nil {
+		t.Fatal("obs1 not found")
+	}
+	if obs1.LastPacketAt == nil || *obs1.LastPacketAt != ts {
+		t.Errorf("expected LastPacketAt=%s via GetObservers, got %v", ts, obs1.LastPacketAt)
+	}
+
+	// Verify via GetObserverByID
+	obs, err := db.GetObserverByID("obs1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.LastPacketAt == nil || *obs.LastPacketAt != ts {
+		t.Errorf("expected LastPacketAt=%s via GetObserverByID, got %v", ts, obs.LastPacketAt)
 	}
 }
 
@@ -1100,7 +1198,8 @@ func setupTestDBV2(t *testing.T) *DB {
 			first_seen TEXT,
 			advert_count INTEGER DEFAULT 0,
 			battery_mv INTEGER,
-			temperature_c REAL
+			temperature_c REAL,
+			foreign_advert INTEGER DEFAULT 0
 		);
 
 		CREATE TABLE observers (
@@ -1109,7 +1208,8 @@ func setupTestDBV2(t *testing.T) *DB {
 			iata TEXT,
 			last_seen TEXT,
 			first_seen TEXT,
-			packet_count INTEGER DEFAULT 0
+			packet_count INTEGER DEFAULT 0,
+			last_packet_at TEXT DEFAULT NULL
 		);
 
 		CREATE TABLE transmissions (
@@ -1122,6 +1222,7 @@ func setupTestDBV2(t *testing.T) *DB {
 			payload_version INTEGER,
 			decoded_json TEXT,
 			channel_hash TEXT DEFAULT NULL,
+			from_pubkey TEXT DEFAULT NULL,
 			created_at TEXT DEFAULT (datetime('now'))
 		);
 
@@ -1138,6 +1239,19 @@ func setupTestDBV2(t *testing.T) *DB {
 			timestamp INTEGER NOT NULL,
 			raw_hex TEXT
 		);
+
+		CREATE TRIGGER IF NOT EXISTS test_from_pubkey_advert
+		AFTER INSERT ON transmissions
+		FOR EACH ROW
+		WHEN NEW.from_pubkey IS NULL AND NEW.payload_type = 4 AND NEW.decoded_json IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') <> ''
+		BEGIN
+			UPDATE transmissions
+			SET from_pubkey = json_extract(NEW.decoded_json, '$.pubKey')
+			WHERE id = NEW.id;
+		END;
+		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)

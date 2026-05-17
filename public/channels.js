@@ -91,7 +91,6 @@
     if (header) header.querySelector('.ch-header-text').textContent = 'Select a channel';
     const msgEl = document.getElementById('chMessages');
     if (msgEl) msgEl.innerHTML = '<div class="ch-empty">Choose a channel from the sidebar to view messages</div>';
-    document.querySelector('.ch-layout')?.classList.remove('ch-show-main');
     document.getElementById('chScrollBtn')?.classList.add('hidden');
     return true;
   }
@@ -245,14 +244,6 @@
     }
   }
 
-  function chBack() {
-    closeNodeDetail();
-    var layout = document.querySelector('.ch-layout');
-    if (layout) layout.classList.remove('ch-show-main');
-    var sidebar = document.querySelector('.ch-sidebar');
-    if (sidebar) sidebar.style.pointerEvents = '';
-  }
-
   // WCAG AA compliant colors — ≥4.5:1 contrast on both white and dark backgrounds
   // Channel badge colors (white text on colored background)
   const CHANNEL_COLORS = [
@@ -339,8 +330,57 @@
     }
   }
 
-  // Add a user channel by name (#channelname) or hex key
-  async function addUserChannel(val) {
+  // #1087 Bug 3: single canonical persistence helper. Both the Generate
+  // path and the PSK Add path route writes through this function so the
+  // localStorage write happens synchronously inside the submit handler —
+  // not as a side effect of subsequent UI events.
+  //
+  // The previous code spread storeKey() calls across multiple branches,
+  // and the persistence path could be skipped entirely if the modal was
+  // closed before mergeUserChannels() ran. Hence the original symptom:
+  // a freshly-added channel disappeared on refresh, then "reappeared"
+  // when ANOTHER channel was added (because the second add wrote the
+  // entire current state, including #1).
+  //
+  // Returns true iff the key was successfully stored AND a re-read
+  // confirms it landed in localStorage. Returns false on quota / other
+  // storage failure so callers can surface an error.
+  function persistAddedChannel(channelName, keyHex, label) {
+    if (!channelName || !keyHex) return false;
+    try {
+      ChannelDecrypt.storeKey(channelName, keyHex, label);
+    } catch (e) {
+      return false;
+    }
+    // Verify the write by re-reading. localStorage can silently drop
+    // writes under quota pressure, and we want callers to know.
+    try {
+      var keys = (typeof ChannelDecrypt.getStoredKeys === 'function')
+        ? ChannelDecrypt.getStoredKeys()
+        : JSON.parse(localStorage.getItem('corescope_channel_keys') || '{}');
+      if (!keys || keys[channelName] !== keyHex) return false;
+      // Polish MINOR-3: also verify the label round-tripped when one was supplied.
+      // Labels live in a separate storage bucket and could fail independently
+      // of the key write — caller deserves to know if the friendly name didn't land.
+      var trimmed = (typeof label === 'string') ? label.trim() : '';
+      if (trimmed) {
+        var stored = (typeof ChannelDecrypt.getLabel === 'function')
+          ? ChannelDecrypt.getLabel(channelName)
+          : ((typeof ChannelDecrypt.getLabels === 'function')
+              ? (ChannelDecrypt.getLabels()[channelName] || '')
+              : '');
+        if (stored !== trimmed) return false;
+      }
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Add a user channel by name (#channelname) or hex key.
+  // `label` (#1020) is an optional friendly name shown in the sidebar instead
+  // of "psk:<hex8>" — stored alongside the key in localStorage.
+  async function addUserChannel(val, label) {
     var displayName = val.startsWith('#') ? val : (isHexKey(val) ? val.substring(0, 8) + '…' : '#' + val);
     showAddStatus('Decrypting ' + displayName + ' messages…', 'loading');
     var channelName, keyHex;
@@ -359,7 +399,12 @@
         keyHex = ChannelDecrypt.bytesToHex(keyBytes2);
       }
 
-      ChannelDecrypt.storeKey(channelName, keyHex);
+      // #1020/#1087: persist optional user-supplied label alongside the key
+      // through the canonical helper (verified read-back).
+      if (!persistAddedChannel(channelName, keyHex, label)) {
+        showAddStatus('Failed to save channel — browser storage may be full', 'error');
+        return;
+      }
 
       // Compute channel hash byte to find matching encrypted channels
       var keyBytes3 = ChannelDecrypt.hexToBytes(keyHex);
@@ -378,15 +423,21 @@
       if (existingEncrypted) {
         targetHash = existingEncrypted.hash;
       }
-      await selectChannel(targetHash, { userKey: keyHex, channelHashByte: hashByte, channelName: channelName });
+      var selectResult = await selectChannel(targetHash, { userKey: keyHex, channelHashByte: hashByte, channelName: channelName });
 
-      // Show success feedback (#759)
-      var msgCount = document.querySelectorAll('#chMessages .ch-msg').length;
-      var userDisplay = channelName.startsWith('psk:') ? 'Custom channel (' + channelName.substring(4) + ')' : channelName;
-      if (msgCount > 0) {
-        showAddStatus('Added ' + userDisplay + ' — ' + msgCount + ' messages decrypted', 'success');
+      // #1020: derive count from selectChannel's reported result, not from a
+      // DOM scrape that can race with rendering.
+      var msgCount = (selectResult && typeof selectResult.messageCount === 'number')
+        ? selectResult.messageCount
+        : (Array.isArray(messages) ? messages.length : 0);
+      var displayLabel = (typeof label === 'string' && label.trim()) ? label.trim() :
+        (channelName.startsWith('psk:') ? 'Custom channel (' + channelName.substring(4) + ')' : channelName);
+      if (selectResult && selectResult.wrongKey) {
+        showAddStatus('Key does not match any packets for ' + displayLabel, 'error');
+      } else if (msgCount > 0) {
+        showAddStatus('Added ' + displayLabel + ' — ' + msgCount + ' messages decrypted', 'success');
       } else {
-        showAddStatus('No messages found for ' + userDisplay, 'warn');
+        showAddStatus('Added ' + displayLabel + ' — no messages found yet', 'warn');
       }
     } catch (err) {
       showAddStatus('Failed to decrypt', 'error');
@@ -399,14 +450,17 @@
   // remove a key they added but that the server already knows about.
   function mergeUserChannels() {
     var keys = ChannelDecrypt.getStoredKeys();
+    var labels = (typeof ChannelDecrypt.getLabels === 'function') ? ChannelDecrypt.getLabels() : {};
     var names = Object.keys(keys);
     for (var i = 0; i < names.length; i++) {
       var name = names[i];
+      var label = labels[name] || '';
       var matched = false;
       for (var j = 0; j < channels.length; j++) {
         var ch = channels[j];
         if (ch.name === name || ch.hash === name || ch.hash === ('user:' + name)) {
           ch.userAdded = true;
+          if (label) ch.userLabel = label;
           matched = true;
           break;
         }
@@ -415,6 +469,7 @@
         channels.push({
           hash: 'user:' + name,
           name: name,
+          userLabel: label,
           messageCount: 0,
           lastActivityMs: 0,
           lastSender: '',
@@ -618,31 +673,100 @@
       <div class="ch-sidebar" aria-label="Channel list">
         <div class="ch-sidebar-header">
           <div class="ch-sidebar-title"><span class="ch-icon">💬</span> Channels</div>
-          <label class="ch-encrypted-toggle" title="Show encrypted channels (no key configured)">
-            <input type="checkbox" id="chShowEncrypted"> <span class="ch-toggle-label">🔒 No key</span>
-          </label>
+          <div id="chRegionFilter" class="region-filter-container ch-header-region"></div>
+          <button type="button" id="chAddChannelBtn" class="ch-add-channel-btn"
+                  aria-label="Add channel" title="Add a channel — generate, paste a key, or monitor a hashtag">+ Add</button>
+          <a href="#/analytics" class="ch-analytics-link"
+             title="Open the Analytics page to see channel activity stats" aria-label="Channel Analytics">📊</a>
         </div>
-        <div class="ch-key-input-wrap" style="padding:4px 8px">
-          <form id="chKeyForm" autocomplete="off" class="ch-add-form">
-            <div class="ch-add-row">
-              <input type="text" id="chKeyInput" class="ch-key-input"
-                     placeholder="#channelname"
-                     aria-label="Channel name or hex key" spellcheck="false">
-              <button type="submit" class="ch-add-btn" title="Add channel">+</button>
-            </div>
-            <div class="ch-add-hint">e.g. #LongFast or 32-char hex key — decrypted in your browser.</div>
-            <div id="chAddStatus" class="ch-add-status" style="display:none"></div>
-          </form>
-        </div>
-        <div id="chRegionFilter" class="region-filter-container" style="padding:0 8px"></div>
+        <div id="chAddStatus" class="ch-add-status" style="display:none"></div>
         <div class="ch-channel-list" id="chList" role="listbox" aria-label="Channels">
           <div class="ch-loading">Loading channels…</div>
         </div>
         <div class="ch-sidebar-resize" aria-hidden="true"></div>
       </div>
+      <!-- #1034 PR1: Add Channel modal -->
+      <div id="chAddChannelModal" class="modal-overlay ch-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="chModalTitle" hidden>
+        <div class="modal ch-modal" role="document">
+          <button type="button" class="modal-close ch-modal-close" id="chModalClose" data-action="ch-modal-close" aria-label="Close">✕</button>
+          <h3 id="chModalTitle">Add Channel</h3>
+          <div class="ch-modal-callout" role="note">
+            ⚠️ Channels are saved to <strong>THIS browser only</strong>. They won't appear on other devices or browsers, and clearing browser data will remove them.
+          </div>
+
+          <section class="ch-modal-section" aria-labelledby="chSecGenTitle">
+            <h4 id="chSecGenTitle" class="ch-modal-section-title">Generate PSK Channel</h4>
+            <p class="ch-modal-section-hint">Create a new private channel with a random key. Share the QR code with others to add it.</p>
+            <div class="ch-modal-row">
+              <input type="text" id="chGenerateName" class="ch-modal-input" placeholder="Channel name (e.g. My Crew)" aria-label="Channel name" spellcheck="false">
+              <button type="button" id="chGenerateBtn" class="btn-primary">Generate &amp; Show QR</button>
+            </div>
+            <div id="qr-output" class="ch-qr-output" aria-live="polite"></div>
+          </section>
+
+          <section class="ch-modal-section" aria-labelledby="chSecPskTitle">
+            <h4 id="chSecPskTitle" class="ch-modal-section-title">Add Private Channel (PSK)</h4>
+            <p class="ch-modal-section-hint">Paste a 32-character hex key someone shared with you, or scan their QR code.</p>
+            <div class="ch-modal-row">
+              <input type="text" id="chPskKey" class="ch-modal-input ch-modal-input--mono"
+                     placeholder="32-char hex key (0-9, a-f)"
+                     pattern="[0-9a-fA-F]{32}"
+                     maxlength="32"
+                     aria-label="32-character hex PSK key" spellcheck="false" autocomplete="off">
+              <button type="button" id="scan-qr-btn" class="ch-modal-btn-secondary" title="Scan a meshcore:// channel QR with your camera">📷 Scan QR</button>
+            </div>
+            <div class="ch-modal-row">
+              <input type="text" id="chPskName" class="ch-modal-input" placeholder="Display name (optional)" aria-label="Optional display name" spellcheck="false">
+              <button type="button" id="chPskAddBtn" class="btn-primary">Add</button>
+            </div>
+            <div id="chPskError" class="ch-modal-error" style="display:none" role="alert"></div>
+          </section>
+
+          <section class="ch-modal-section" aria-labelledby="chSecTagTitle">
+            <h4 id="chSecTagTitle" class="ch-modal-section-title">Monitor Hashtag Channel</h4>
+            <p class="ch-modal-section-hint">Decrypt traffic on a public hashtag channel by deriving the key from its name.</p>
+            <div class="ch-modal-row ch-hashtag-row">
+              <span class="ch-hashtag-prefix" aria-hidden="true">#</span>
+              <input type="text" id="chHashtagName" class="ch-modal-input"
+                     placeholder="meshcore"
+                     aria-label="Hashtag channel name (without #)" spellcheck="false" autocomplete="off">
+              <button type="button" id="chHashtagBtn" class="btn-primary">Monitor</button>
+            </div>
+            <div class="ch-modal-warn">⚠ Case-sensitive — <code>#meshcore</code> ≠ <code>#MeshCore</code></div>
+          </section>
+
+          <div class="ch-modal-footer">
+            🔒 Keys stay in your browser — CoreScope is a passive observer that monitors and decrypts traffic but cannot transmit over RF. Use ✕ to remove individual channels.
+          </div>
+        </div>
+      </div>
+
+      <!-- #1087 Bug 4: dedicated Share modal — separate from the Add
+           Channel modal above. Add = INPUT (paste/scan/generate). Share
+           = OUTPUT (display existing key as QR + URL + copyable text).
+           Reusing the Add modal for Share confused intent and let the
+           QR section bleed into the Add submit flow. -->
+      <div id="chShareModal" class="modal-overlay ch-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="chShareModalTitle" hidden>
+        <div class="modal ch-modal ch-share-modal" role="document">
+          <button type="button" class="modal-close ch-modal-close" id="chShareModalClose" data-action="ch-share-modal-close" aria-label="Close">✕</button>
+          <h3 id="chShareModalTitle" class="ch-share-modal-title">Share Channel</h3>
+          <div class="ch-share-modal-body">
+            <div id="chShareQr" class="ch-share-qr" aria-live="polite"></div>
+            <div class="ch-share-field-group">
+              <label class="ch-share-label" for="chShareKey">Hex Key</label>
+              <div class="ch-share-row">
+                <input type="text" id="chShareKey" data-share-field="key" class="ch-modal-input ch-modal-input--mono" readonly aria-label="Channel hex key">
+                <button type="button" class="ch-modal-btn-secondary" data-share-copy="key" aria-label="Copy hex key">📋 Copy</button>
+              </div>
+            </div>
+            <div class="ch-modal-warn" role="note">
+              ⚠ Privacy: only share with trusted people. Anyone with this key can read all messages on this channel.
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="ch-main" role="region" aria-label="Channel messages">
         <div class="ch-main-header" id="chHeader">
-          <button class="ch-back-btn" id="chBackBtn" aria-label="Back to channels" data-action="ch-back">←</button>
           <span class="ch-header-text">Select a channel</span>
         </div>
         <div class="ch-messages" id="chMessages">
@@ -655,15 +779,10 @@
 
     RegionFilter.init(document.getElementById('chRegionFilter'));
 
-    // Encrypted channels toggle (#727)
-    var showEncryptedCb = document.getElementById('chShowEncrypted');
-    var showEncrypted = localStorage.getItem('channels-show-encrypted') === 'true';
-    showEncryptedCb.checked = showEncrypted;
-    showEncryptedCb.addEventListener('change', function () {
-      showEncrypted = showEncryptedCb.checked;
-      localStorage.setItem('channels-show-encrypted', showEncrypted ? 'true' : 'false');
-      loadChannels(true);
-    });
+    // #1034 PR1: encrypted-channels visibility now driven by sectioned sidebar.
+    // Always include encrypted channels in the API call; the renderer groups them.
+    var showEncrypted = true;
+    try { localStorage.setItem('channels-show-encrypted', 'true'); } catch (e) { /* quota */ }
 
     regionChangeHandler = RegionFilter.onChange(function () {
       loadChannels(true).then(async function () {
@@ -672,38 +791,289 @@
       });
     });
 
-    // Channel key input handler (#725 M2, improved UX #759)
-    var chKeyForm = document.getElementById('chKeyForm');
-    if (chKeyForm) {
-      var submitHandler = async function (e) {
-        e.preventDefault();
-        var input = document.getElementById('chKeyInput');
-        var val = (input.value || '').trim();
-        if (!val) return;
-        input.value = '';
-        await addUserChannel(val);
-      };
-      chKeyForm.addEventListener('submit', submitHandler);
-      var chKeyInput = document.getElementById('chKeyInput');
-      if (chKeyInput) {
-        chKeyInput.addEventListener('focus', function () {
-          var st = document.getElementById('chAddStatus');
-          if (st) { st.style.display = 'none'; clearTimeout(statusTimer); statusTimer = null; }
-        });
-      }
+    // #1034 PR1: Add Channel modal wiring (replaces inline form)
+    var modalEl = document.getElementById('chAddChannelModal');
+    function openAddModal() {
+      if (!modalEl) return;
+      modalEl.classList.remove('hidden');
+      modalEl.removeAttribute('hidden');
+      var first = document.getElementById('chGenerateName');
+      if (first) try { first.focus(); } catch (e) { /* noop */ }
+    }
+    function closeAddModal() {
+      if (!modalEl) return;
+      modalEl.classList.add('hidden');
+      modalEl.setAttribute('hidden', '');
+      var err = document.getElementById('chPskError');
+      if (err) { err.style.display = 'none'; err.textContent = ''; }
+    }
+    var addBtn = document.getElementById('chAddChannelBtn');
+    if (addBtn) addBtn.addEventListener('click', openAddModal);
+    if (modalEl) {
+      modalEl.addEventListener('click', function (e) {
+        // Close on overlay backdrop click or any [data-action=ch-modal-close]
+        var closeEl = e.target.closest('[data-action="ch-modal-close"]');
+        if (closeEl || e.target === modalEl) {
+          e.preventDefault();
+          closeAddModal();
+        }
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !modalEl.classList.contains('hidden')) {
+          closeAddModal();
+        }
+      });
     }
 
-    // Auto-enable encrypted toggle if deep-linking to an encrypted channel
-    if (routeParam && routeParam.startsWith('enc_') && !showEncrypted) {
-      showEncrypted = true;
-      showEncryptedCb.checked = true;
-      localStorage.setItem('channels-show-encrypted', 'true');
+    // #1087 Bug 4: dedicated Share modal wiring.
+    // Polish follow-up: focus trap on open + restore focus on close (a11y).
+    var shareModalEl = document.getElementById('chShareModal');
+    var _shareModalTrigger = null;
+    var _shareModalKeyHandler = null;
+    // QR capacity bound: qrcode(0,'M') auto-detects smallest version, but
+    // very long display labels can overflow. URL = scheme(~30) + 32-char
+    // secret + encoded(name). Cap encoded label budget to keep total URL
+    // comfortably under the version-10 ECC-M payload (~213 bytes).
+    var SHARE_LABEL_MAX = 64;
+    function _truncateForQr(name) {
+      if (!name) return '';
+      var s = String(name);
+      // Encode first, then trim — encoded length is what QR sees.
+      var enc = encodeURIComponent(s);
+      if (enc.length <= SHARE_LABEL_MAX) return s;
+      // Walk back until encoded fits; preserves UTF-8 boundaries via
+      // encodeURIComponent re-check on each shrink.
+      while (s.length > 0 && encodeURIComponent(s).length > SHARE_LABEL_MAX) {
+        s = s.slice(0, -1);
+      }
+      return s;
     }
+    function _trapShareModalFocus() {
+      if (!shareModalEl) return;
+      var focusable = shareModalEl.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      if (!focusable.length) return;
+      var first = focusable[0], last = focusable[focusable.length - 1];
+      _shareModalKeyHandler = function (e) {
+        if (e.key !== 'Tab') return;
+        if (e.shiftKey) {
+          if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+        } else {
+          if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      };
+      shareModalEl.addEventListener('keydown', _shareModalKeyHandler);
+    }
+    // Open the share modal in NORMAL (key present) mode. For the
+    // "key not found" path, callers use openShareModalError() — both
+    // routes use this same modal so users never see a native alert().
+    function openShareModal(displayName, channelName, keyHex) {
+      if (!shareModalEl) return;
+      _shareModalTrigger = document.activeElement;
+      var safeName = _truncateForQr(displayName);
+      var title = document.getElementById('chShareModalTitle');
+      if (title) title.textContent = 'Share: ' + safeName;
+      var qrHolder = document.getElementById('chShareQr');
+      var keyField = document.getElementById('chShareKey');
+      var fieldsWrap = shareModalEl.querySelectorAll('.ch-share-field-group');
+      for (var i = 0; i < fieldsWrap.length; i++) fieldsWrap[i].hidden = false;
+      if (keyField) keyField.value = keyHex;
+      if (qrHolder) {
+        qrHolder.innerHTML = '';
+        if (window.ChannelQR && typeof window.ChannelQR.generate === 'function') {
+          // #1087 Bug 2: pass the user-facing displayName, NOT the
+          // internal `psk:<hex8>` channelName lookup key.
+          // #1101: qrOnly=true — render JUST the QR image. The Share
+          // modal has its own dedicated hex key field + Copy button
+          // BELOW the QR; an inline URL line + Copy Key button inside
+          // the QR box was redundant and visually overlapping.
+          window.ChannelQR.generate(safeName, keyHex, qrHolder, { qrOnly: true });
+        }
+      }
+      shareModalEl.classList.remove('hidden');
+      shareModalEl.removeAttribute('hidden');
+      _trapShareModalFocus();
+      var closeBtn = document.getElementById('chShareModalClose');
+      if (closeBtn) try { closeBtn.focus(); } catch (e) { /* noop */ }
+    }
+    // Polish: replace native alert() for missing-key share with the
+    // dedicated modal in error mode (no QR/fields, just the message).
+    function openShareModalError(displayName, message) {
+      if (!shareModalEl) return;
+      _shareModalTrigger = document.activeElement;
+      var title = document.getElementById('chShareModalTitle');
+      if (title) title.textContent = 'Share: ' + displayName;
+      var qrHolder = document.getElementById('chShareQr');
+      if (qrHolder) {
+        qrHolder.innerHTML = '';
+        var msg = document.createElement('div');
+        msg.className = 'ch-share-error';
+        msg.setAttribute('role', 'alert');
+        msg.textContent = message;
+        qrHolder.appendChild(msg);
+      }
+      var fieldsWrap = shareModalEl.querySelectorAll('.ch-share-field-group');
+      for (var i = 0; i < fieldsWrap.length; i++) fieldsWrap[i].hidden = true;
+      shareModalEl.classList.remove('hidden');
+      shareModalEl.removeAttribute('hidden');
+      _trapShareModalFocus();
+      var closeBtn = document.getElementById('chShareModalClose');
+      if (closeBtn) try { closeBtn.focus(); } catch (e) { /* noop */ }
+    }
+    function closeShareModal() {
+      if (!shareModalEl) return;
+      shareModalEl.classList.add('hidden');
+      shareModalEl.setAttribute('hidden', '');
+      if (_shareModalKeyHandler) {
+        shareModalEl.removeEventListener('keydown', _shareModalKeyHandler);
+        _shareModalKeyHandler = null;
+      }
+      // Restore focus to the trigger that opened the modal (a11y).
+      if (_shareModalTrigger && typeof _shareModalTrigger.focus === 'function') {
+        try { _shareModalTrigger.focus(); } catch (e) { /* noop */ }
+      }
+      _shareModalTrigger = null;
+    }
+    if (shareModalEl) {
+      shareModalEl.addEventListener('click', function (e) {
+        var copyBtn = e.target.closest && e.target.closest('[data-share-copy]');
+        if (copyBtn) {
+          e.preventDefault();
+          // #1101: only the hex key is copyable from the share modal;
+          // the URL field was removed, so the data-share-copy attribute
+          // is informational only — the source is always #chShareKey.
+          var src = document.getElementById('chShareKey');
+          if (src) {
+            try { src.select(); } catch (e2) {}
+            var doneCopy = function () {
+              var orig = copyBtn.textContent;
+              copyBtn.textContent = '✓ Copied';
+              setTimeout(function () { copyBtn.textContent = orig; }, 1200);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(src.value).then(doneCopy, doneCopy);
+            } else {
+              try { document.execCommand('copy'); } catch (e2) {}
+              doneCopy();
+            }
+          }
+          return;
+        }
+        var closeEl = e.target.closest('[data-action="ch-share-modal-close"]');
+        if (closeEl || e.target === shareModalEl) {
+          e.preventDefault();
+          closeShareModal();
+        }
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !shareModalEl.classList.contains('hidden')) {
+          closeShareModal();
+        }
+      });
+    }
+
+    // Section 1: Generate PSK
+    var genBtn = document.getElementById('chGenerateBtn');
+    if (genBtn) genBtn.addEventListener('click', async function () {
+      var nameEl = document.getElementById('chGenerateName');
+      var label = nameEl ? (nameEl.value || '').trim() : '';
+      // 16 random bytes -> 32-char hex
+      var bytes = crypto.getRandomValues(new Uint8Array(16));
+      var keyHex = ChannelDecrypt.bytesToHex(bytes);
+      var channelName = 'psk:' + keyHex.substring(0, 8);
+      // #1087 Bug 3: persist via canonical helper synchronously.
+      if (!persistAddedChannel(channelName, keyHex, label)) {
+        showAddStatus('Failed to save channel — storage full', 'error');
+        return;
+      }
+      var qrOut = document.getElementById('qr-output');
+      if (qrOut) {
+        qrOut.innerHTML = '';
+        // Render QR + URL + Copy Key inline.
+        if (window.ChannelQR && typeof window.ChannelQR.generate === 'function') {
+          // #1087 Bug 2: pass the user label (not psk:<hex8>).
+          window.ChannelQR.generate(label || channelName, keyHex, qrOut);
+        } else {
+          qrOut.textContent = 'Key generated: ' + keyHex;
+        }
+      }
+      mergeUserChannels();
+      renderChannelList();
+      showAddStatus('Generated channel ' + (label || channelName), 'success');
+    });
+
+    // Section 2: Add PSK
+    var pskBtn = document.getElementById('chPskAddBtn');
+    if (pskBtn) pskBtn.addEventListener('click', async function () {
+      var keyEl = document.getElementById('chPskKey');
+      var nameEl = document.getElementById('chPskName');
+      var errEl = document.getElementById('chPskError');
+      var raw = keyEl ? (keyEl.value || '').trim() : '';
+      var label = nameEl ? (nameEl.value || '').trim() : '';
+      if (!isHexKey(raw)) {
+        if (errEl) { errEl.textContent = 'Key must be 32 hex characters (0–9, a–f).'; errEl.style.display = ''; }
+        return;
+      }
+      if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+      closeAddModal();
+      if (keyEl) keyEl.value = '';
+      if (nameEl) nameEl.value = '';
+      await addUserChannel(raw.toLowerCase(), label);
+    });
+
+    // Section 2 (cont.): Scan QR — populates #chPskKey + #chPskName
+    // from a scanned meshcore://channel/add?... URL. Wiring added in
+    // PR #1034/PR3 against window.ChannelQR (public/channel-qr.js).
+    var scanBtn = document.getElementById('scan-qr-btn');
+    if (scanBtn) scanBtn.addEventListener('click', async function () {
+      var errEl = document.getElementById('chPskError');
+      if (!window.ChannelQR || typeof window.ChannelQR.scan !== 'function') {
+        if (errEl) {
+          errEl.textContent = 'QR scanning is unavailable in this browser.';
+          errEl.style.display = '';
+        }
+        return;
+      }
+      try {
+        var result = await window.ChannelQR.scan();
+        if (!result) return; // user cancelled
+        var keyEl = document.getElementById('chPskKey');
+        var nameEl = document.getElementById('chPskName');
+        if (keyEl && result.secret) keyEl.value = result.secret;
+        if (nameEl && result.name) nameEl.value = result.name;
+        if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
+      } catch (err) {
+        if (errEl) {
+          errEl.textContent = 'Scan failed: ' + (err && err.message ? err.message : 'unknown error');
+          errEl.style.display = '';
+        }
+      }
+    });
+
+    // Section 3: Monitor Hashtag
+    var tagBtn = document.getElementById('chHashtagBtn');
+    if (tagBtn) tagBtn.addEventListener('click', async function () {
+      var tagEl = document.getElementById('chHashtagName');
+      var raw = tagEl ? (tagEl.value || '').trim() : '';
+      if (!raw) return;
+      // Strip a leading '#' if the user typed one — the prefix is implicit.
+      if (raw.charAt(0) === '#') raw = raw.substring(1);
+      if (!raw) return;
+      closeAddModal();
+      if (tagEl) tagEl.value = '';
+      await addUserChannel('#' + raw, '');
+    });
 
     loadObserverRegions();
     loadChannels().then(async function () {
-      // Also load user-added encrypted channels into the sidebar
+      // Also load user-added encrypted channels into the sidebar.
+      // mergeUserChannels() mutates `channels` (marks userAdded, appends
+      // PSK-only entries) AFTER loadChannels() already rendered — so we
+      // MUST re-render here, otherwise the My Channels section never
+      // appears on first load when the route has no specific channel
+      // hash (regression caught by test-channel-issue-1111-e2e.js, case 2).
       mergeUserChannels();
+      renderChannelList();
       if (routeParam) await selectChannel(routeParam);
       if (_pendingNode && _pendingNode.length < 200) await showNodeDetail(_pendingNode);
     });
@@ -728,29 +1098,64 @@
     });
     _themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
-    // #87: Fix pointer-events during mobile slide transition
-    var chMain = app.querySelector('.ch-main');
-    var chSidebar = app.querySelector('.ch-sidebar');
-    chMain.addEventListener('transitionend', function () {
-      var layout = app.querySelector('.ch-layout');
-      if (layout && layout.classList.contains('ch-show-main')) {
-        chSidebar.style.pointerEvents = 'none';
-      } else {
-        chSidebar.style.pointerEvents = '';
-      }
-    });
-
     // Event delegation for data-action buttons
     app.addEventListener('click', function (e) {
       var btn = e.target.closest('[data-action]');
       if (!btn) return;
       var action = btn.dataset.action;
       if (action === 'ch-close-node') closeNodeDetail();
-      else if (action === 'ch-back') chBack();
     });
 
     // Event delegation for channel selection (touch-friendly)
-    document.getElementById('chList').addEventListener('click', (e) => {
+    var chListEl = document.getElementById('chList');
+    // Keyboard accessibility for the role="button" remove/share spans
+    // (Enter/Space). Single .closest() call with a combined selector.
+    chListEl.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+      var rb = e.target.closest && e.target.closest('[data-remove-channel],[data-share-channel]');
+      if (!rb) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Re-dispatch as a click so the existing click handler runs.
+      rb.click();
+    });
+    chListEl.addEventListener('click', (e) => {
+      // #1087 Bug 2 + Bug 4: Share/reshare opens a DEDICATED share modal
+      // (not the Add Channel modal) and resolves the user's display
+      // label via ChannelDecrypt.getLabel — never the raw `psk:<hex8>`
+      // lookup key.
+      const shareBtn = e.target.closest('[data-share-channel]');
+      if (shareBtn) {
+        e.stopPropagation();
+        var shareHash = shareBtn.getAttribute('data-share-channel');
+        if (!shareHash) return;
+        var sCh = channels.find(function (c) { return c.hash === shareHash; });
+        var channelName = shareHash.startsWith('user:')
+          ? shareHash.substring(5)
+          : (sCh && sCh.name) || shareHash;
+        var keys = ChannelDecrypt.getStoredKeys();
+        var keyHex = keys[channelName];
+        // Resolve display label: explicit user label > channel.userLabel
+        // > strip the psk: prefix > raw channelName.
+        var labels = (typeof ChannelDecrypt.getLabels === 'function')
+          ? ChannelDecrypt.getLabels() : {};
+        var labelFromStore = (typeof ChannelDecrypt.getLabel === 'function')
+          ? ChannelDecrypt.getLabel(channelName)
+          : (labels[channelName] || '');
+        var displayName = labelFromStore
+          || (sCh && sCh.userLabel)
+          || (channelName.indexOf('psk:') === 0
+              ? 'Private Channel'
+              : channelName);
+        if (!keyHex) {
+          openShareModalError(displayName, 'No stored key found for "' + displayName + '" — cannot share.');
+          return;
+        }
+        if (typeof openShareModal === 'function') {
+          openShareModal(displayName, channelName, keyHex);
+        }
+        return;
+      }
       // M4: Remove channel button
       const removeBtn = e.target.closest('[data-remove-channel]');
       if (removeBtn) {
@@ -764,7 +1169,7 @@
         var chName = channelHash.startsWith('user:')
           ? channelHash.substring(5)
           : (ch && ch.name) || channelHash;
-        if (!confirm('Remove channel "' + chName + '"? This will clear saved keys and cached messages.')) return;
+        if (!confirm('Remove channel "' + chName + '"?\n\nThis will permanently remove the key from this browser and clear cached messages. You will need to re-enter the key to decrypt this channel again.')) return;
         ChannelDecrypt.removeKey(chName);
         if (channelHash.startsWith('user:')) {
           // Pure user-added channel — drop from the list entirely.
@@ -791,6 +1196,14 @@
           }
         }
         renderChannelList();
+        return;
+      }
+      // Color clear button — remove color without opening picker (#681)
+      const clearBtn = e.target.closest('.ch-color-clear');
+      if (clearBtn && window.ChannelColors) {
+        e.stopPropagation();
+        var clearCh = clearBtn.getAttribute('data-channel');
+        if (clearCh) { window.ChannelColors.remove(clearCh); renderChannelList(); }
         return;
       }
       // Color dot click — open picker, don't select channel
@@ -900,6 +1313,11 @@
         if (!payload) continue;
 
         var channelName = payload.channel || 'unknown';
+        // For live-decrypted user-added (PSK) channels, decryptLivePSKBatch
+        // also stamps payload.channelKey ("user:<name>") so we route the
+        // message to the correct sidebar row and to the open chat view.
+        // Falls back to channelName for server-known CHAN packets.
+        var channelKey = payload.channelKey || channelName;
         var rawText = payload.text || '';
         var sender = payload.sender || null;
         var displayText = rawText;
@@ -926,10 +1344,10 @@
         var observer = m.data?.packet?.observer_name || m.data?.observer || null;
 
         // Update channel list entry — only once per unique packet hash
-        var isFirstObservation = pktHash && !seenHashes.has(pktHash + ':' + channelName);
-        if (pktHash) seenHashes.add(pktHash + ':' + channelName);
+        var isFirstObservation = pktHash && !seenHashes.has(pktHash + ':' + channelKey);
+        if (pktHash) seenHashes.add(pktHash + ':' + channelKey);
 
-        var ch = channels.find(function (c) { return c.hash === channelName; });
+        var ch = channels.find(function (c) { return c.hash === channelKey; });
         if (ch) {
           if (isFirstObservation) ch.messageCount = (ch.messageCount || 0) + 1;
           ch.lastActivityMs = Date.now();
@@ -939,7 +1357,7 @@
         } else if (isFirstObservation) {
           // New channel we haven't seen
           channels.push({
-            hash: channelName,
+            hash: channelKey,
             name: channelName,
             messageCount: 1,
             lastActivityMs: Date.now(),
@@ -950,7 +1368,7 @@
         }
 
         // If this message is for the selected channel, append to messages
-        if (selectedHash && channelName === selectedHash) {
+        if (selectedHash && channelKey === selectedHash) {
           // Deduplicate by packet hash — same message seen by multiple observers
           var existing = pktHash ? messages.find(function (msg) { return msg.packetHash === pktHash; }) : null;
           if (existing) {
@@ -1003,8 +1421,83 @@
       processWSBatch(msgs, selectedRegions);
     }
 
+    // Pre-pass: rewrite encrypted GRP_TXT live packets into decrypted form
+    // when a stored PSK key matches their channel hash byte (#1029 — live
+    // PSK decrypt). Without this, users viewing a PSK-decrypted channel
+    // had to refresh the page to see new messages.
+    async function decryptLivePSKBatch(msgs) {
+      if (typeof ChannelDecrypt === 'undefined' ||
+          typeof ChannelDecrypt.tryDecryptLive !== 'function') {
+        return;
+      }
+      // Quick scan: do any messages look like encrypted GRP_TXT?
+      var anyEncrypted = false;
+      for (var i = 0; i < msgs.length; i++) {
+        var p = msgs[i] && msgs[i].data && msgs[i].data.decoded && msgs[i].data.decoded.payload;
+        if (p && p.type === 'GRP_TXT' && p.encryptedData && p.mac) { anyEncrypted = true; break; }
+      }
+      if (!anyEncrypted) return;
+      var keyMap;
+      try { keyMap = await ChannelDecrypt.buildKeyMap(); } catch (e) { return; }
+      if (!keyMap || keyMap.size === 0) return;
+      for (var j = 0; j < msgs.length; j++) {
+        var m = msgs[j];
+        var payload = m && m.data && m.data.decoded && m.data.decoded.payload;
+        if (!payload || payload.type !== 'GRP_TXT' || !payload.encryptedData || !payload.mac) continue;
+        var dec;
+        try { dec = await ChannelDecrypt.tryDecryptLive(payload, keyMap); } catch (e) { dec = null; }
+        if (!dec) continue;
+        // Rewrite payload into a CHAN-like shape so processWSBatch picks it
+        // up as a real message instead of an encrypted blob. Keep the original
+        // hash byte for any downstream consumer that wants it.
+        payload.channel = dec.channelName;
+        // For user-added PSK channels the sidebar entry & selectedHash use a
+        // "user:<name>" key (see addUserChannel). Stamp the canonical key on
+        // the payload so processWSBatch routes the live message to the
+        // correct sidebar row and to the open chat view instead of dropping
+        // it / creating a duplicate plain entry. Falls back to the raw name
+        // for non-user channels (server-known CHAN paths still work).
+        var userKey = 'user:' + dec.channelName;
+        var hasUserCh = false;
+        for (var ck = 0; ck < channels.length; ck++) {
+          if (channels[ck].hash === userKey) { hasUserCh = true; break; }
+        }
+        payload.channelKey = hasUserCh ? userKey : dec.channelName;
+        payload.sender = dec.sender;
+        payload.text = dec.sender ? (dec.sender + ': ' + dec.text) : dec.text;
+        payload.decryptedLocally = true;
+        if (m.data.decoded.header) {
+          // Leave payloadTypeName as GRP_TXT — processWSBatch already
+          // accepts both 'message' and GRP_TXT-typed packet messages.
+        }
+      }
+    }
+
     wsHandler = debouncedOnWS(function (msgs) {
-      handleWSBatch(msgs);
+      var selectedRegions = getSelectedRegionsSnapshot();
+      var prior = selectedHash;
+      decryptLivePSKBatch(msgs).then(function () {
+        // Bump unread for live-decrypted channels the user is NOT viewing.
+        // Done here (not inside processWSBatch) so the count reflects ONLY
+        // newly-decrypted live packets, not historical-fetch path.
+        var bumped = false;
+        for (var i = 0; i < msgs.length; i++) {
+          var p = msgs[i] && msgs[i].data && msgs[i].data.decoded && msgs[i].data.decoded.payload;
+          if (!p || !p.decryptedLocally) continue;
+          // Use the canonical sidebar key stamped by decryptLivePSKBatch so
+          // the comparison against `prior` (= selectedHash) actually matches
+          // for user-added (user:*-prefixed) channels.
+          var chKey = p.channelKey || p.channel;
+          if (!chKey || chKey === prior) continue;
+          var ch = channels.find(function (c) { return c.hash === chKey || c.name === chKey || c.hash === ('user:' + chKey); });
+          if (ch) {
+            ch.unread = (ch.unread || 0) + 1;
+            bumped = true;
+          }
+        }
+        processWSBatch(msgs, selectedRegions);
+        if (bumped) renderChannelList();
+      });
     });
     window._channelsHandleWSBatchForTest = handleWSBatch;
     window._channelsProcessWSBatchForTest = processWSBatch;
@@ -1062,64 +1555,175 @@
     }
   }
 
+  // #1041: single source of truth for the user-facing placeholder shown
+  // when a PSK channel has no user-supplied label. Hoisted so the helper
+  // and any future call sites stay in sync (i18n / branding-friendly).
+  const PRIVATE_CHANNEL_LABEL = 'Private Channel';
+
+  // Display name for a channel — handles PSK channels where the raw
+  // "psk:<hex8>" key prefix shouldn't be shown to users. Falls back to
+  // userLabel, then a friendly placeholder, then a caller-supplied
+  // fallback, then `Channel <hash>`.
+  //
+  // `fallback` lets row rendering preserve its existing "Unknown" /
+  // "Channel <hash>" semantics for encrypted-but-not-user-added channels
+  // without duplicating the psk:* check.
+  function channelDisplayName(ch, fallback) {
+    if (!ch) return '';
+    const name = ch.name || '';
+    if (ch.userLabel) return ch.userLabel;
+    if (name.indexOf('psk:') === 0) return PRIVATE_CHANNEL_LABEL;
+    if (name) return name;
+    if (fallback) return fallback;
+    return 'Channel ' + (typeof formatHashHex === 'function' ? formatHashHex(ch.hash) : ch.hash);
+  }
+
+  // #1034 PR1: render a single channel row (used by all sidebar sections).
+  function renderChannelRow(ch) {
+    const isEncrypted = ch.encrypted === true;
+    const isUserAdded = ch.userAdded === true;
+    // #1041: route through channelDisplayName so the psk:* → "Private
+    // Channel" rule lives in one place. Pass an `encryptedFallback` so
+    // rows for non-user-added encrypted channels keep showing "Unknown"
+    // (their existing behavior) when there's no name at all.
+    const encryptedFallback = isEncrypted ? 'Unknown' : '';
+    const name = channelDisplayName(ch, encryptedFallback);
+    const color = isEncrypted && !isUserAdded ? 'var(--text-muted, #6b7280)' : getChannelColor(ch.hash);
+    const time = ch.lastActivityMs ? formatSecondsAgo(Math.floor((Date.now() - ch.lastActivityMs) / 1000)) : '';
+    // Preview: show last sender+message when we have one. Otherwise show
+    // nothing rather than "0 messages" — the count is misleading for
+    // user-added (PSK) channels where messageCount only reflects
+    // server-known activity, not actually-decrypted messages.
+    let preview;
+    if (ch.lastSender && ch.lastMessage) {
+      preview = `${ch.lastSender}: ${truncate(ch.lastMessage, 28)}`;
+    } else if (isEncrypted && !isUserAdded) {
+      preview = `0x${formatHashHex(ch.hash)}`;
+    } else if (typeof ch.messageCount === 'number' && ch.messageCount > 0) {
+      preview = `${ch.messageCount} messages`;
+    } else {
+      preview = '';
+    }
+    const sel = selectedHash === ch.hash ? ' selected' : '';
+    const encClass = isUserAdded
+      ? ' ch-user-added'
+      : (isEncrypted ? ' ch-encrypted' : '');
+    const badgeIcon = isUserAdded ? '🔓' : (isEncrypted ? '🔒' : null);
+    const abbr = badgeIcon || (name.startsWith('#') ? name.slice(0, 3) : name.slice(0, 2).toUpperCase());
+    const chColor = window.ChannelColors ? window.ChannelColors.get(ch.hash) : null;
+    const dotStyle = chColor ? ` style="background:${chColor}"` : '';
+    const borderStyle = chColor ? ` style="border-left:3px solid ${chColor}"` : '';
+    // #1033: must NOT be a <button> — outer .ch-item is itself a <button>;
+    // nested <button> is invalid HTML5 and the parser orphans everything
+    // after it. Use <span role="button">; keydown handler on #chList
+    // (Enter/Space) keeps it keyboard-accessible.
+    // Icon button factory — used for the per-row remove/share controls.
+    // Both share the .ch-icon-btn base class (touch target, opacity); a
+    // modifier class (.ch-remove-btn / .ch-share-btn) supplies size + color.
+    function iconBtn(modClass, dataAttr, hash, name, glyph, title, ariaVerb, extraAttrs) {
+      return ' <span class="ch-icon-btn ' + modClass + '" role="button" tabindex="0"'
+        + ' ' + dataAttr + '="' + escapeHtml(hash) + '"'
+        + (extraAttrs || '')
+        + ' title="' + title + '"'
+        + ' aria-label="' + ariaVerb + ' ' + escapeHtml(name) + '">' + glyph + '</span>';
+    }
+    const removeBtn = isUserAdded
+      ? iconBtn('ch-remove-btn', 'data-remove-channel', ch.hash, name, '✕',
+                'Remove channel and clear saved key', 'Remove', '')
+      : '';
+    const shareBtn = isUserAdded
+      ? iconBtn('ch-share-btn', 'data-share-channel', ch.hash, name, '📤 Share',
+                'Share channel key (QR + URL)', 'Share', ' aria-haspopup="dialog"')
+      : '';
+    const userBadge = isUserAdded ? ' <span class="ch-user-badge" title="You added this key" aria-label="Your key">🔑</span>' : '';
+    const unreadBadge = (ch.unread && ch.unread > 0)
+      ? ' <span class="ch-unread-badge" data-unread-channel="' + escapeHtml(ch.hash) + '" title="' + ch.unread + ' new" aria-label="' + ch.unread + ' unread">' + (ch.unread > 99 ? '99+' : ch.unread) + '</span>'
+      : '';
+
+    return `<button class="ch-item${sel}${encClass}" data-hash="${ch.hash}"${borderStyle} type="button" role="option" aria-selected="${selectedHash === ch.hash ? 'true' : 'false'}" aria-label="${escapeHtml(name)}"${isEncrypted ? ' data-encrypted="true"' : ''}${isUserAdded ? ' data-user-added="true"' : ''}>
+      <div class="ch-badge" style="background:${color}" aria-hidden="true">${badgeIcon ? badgeIcon : escapeHtml(abbr)}</div>
+      <div class="ch-item-body">
+        <div class="ch-item-top">
+          <span class="ch-item-name">${escapeHtml(name)}</span>${userBadge}${unreadBadge}
+          <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="Change channel color" aria-label="Change color for ${escapeHtml(name)}"></span>${chColor ? '<span class="ch-color-clear" data-channel="' + escapeHtml(ch.hash) + '" title="Clear color" aria-label="Clear color for ' + escapeHtml(name) + '">✕</span>' : ''}
+          <span class="ch-item-time" data-channel-hash="${ch.hash}">${time}</span>${shareBtn}${removeBtn}
+        </div>
+        <div class="ch-item-preview">${escapeHtml(preview)}</div>
+      </div>
+    </button>`;
+  }
+
+  // #1034 PR1: sectioned sidebar — My Channels / Network / Encrypted (N).
   function renderChannelList() {
     const el = document.getElementById('chList');
     if (!el) return;
     if (channels.length === 0) { el.innerHTML = '<div class="ch-empty">No channels found</div>'; return; }
 
-    // Sort by message count desc
-    const sorted = [...channels].sort((a, b) => {
-      return (b.messageCount || 0) - (a.messageCount || 0);
-    });
+    const sortByActivity = (a, b) => (b.lastActivityMs || 0) - (a.lastActivityMs || 0);
+    const sortByCount = (a, b) => (b.messageCount || 0) - (a.messageCount || 0);
 
-    el.innerHTML = sorted.map(ch => {
-      const isEncrypted = ch.encrypted === true;
-      const name = isEncrypted ? (ch.name || 'Unknown') : (ch.name || `Channel ${formatHashHex(ch.hash)}`);
-      const color = isEncrypted ? 'var(--text-muted, #6b7280)' : getChannelColor(ch.hash);
-      const time = ch.lastActivityMs ? formatSecondsAgo(Math.floor((Date.now() - ch.lastActivityMs) / 1000)) : '';
-      const preview = isEncrypted
-        ? `${ch.messageCount} encrypted messages (no key configured)`
-        : ch.lastSender && ch.lastMessage
-          ? `${ch.lastSender}: ${truncate(ch.lastMessage, 28)}`
-          : `${ch.messageCount} messages`;
-      const sel = selectedHash === ch.hash ? ' selected' : '';
-      const encClass = isEncrypted ? ' ch-encrypted' : '';
-      const abbr = isEncrypted ? '🔒' : (name.startsWith('#') ? name.slice(0, 3) : name.slice(0, 2).toUpperCase());
-      // Channel color dot for color picker (#674)
-      const chColor = window.ChannelColors ? window.ChannelColors.get(ch.hash) : null;
-      const dotStyle = chColor ? ` style="background:${chColor}"` : '';
-      // Left border for assigned color
-      const borderStyle = chColor ? ` style="border-left:3px solid ${chColor}"` : '';
-      // M4: Remove button for user-added channels
-      const removeBtn = ch.userAdded ? ' <button class="ch-remove-btn" data-remove-channel="' + escapeHtml(ch.hash) + '" title="Remove channel" aria-label="Remove ' + escapeHtml(name) + '">✕</button>' : '';
+    const mine = channels.filter(c => c.userAdded === true).sort(sortByActivity);
+    const network = channels.filter(c => c.userAdded !== true && c.encrypted !== true).sort(sortByActivity);
+    const encrypted = channels.filter(c => c.userAdded !== true && c.encrypted === true).sort(sortByCount);
 
-      return `<button class="ch-item${sel}${encClass}" data-hash="${ch.hash}"${borderStyle} type="button" role="option" aria-selected="${selectedHash === ch.hash ? 'true' : 'false'}" aria-label="${escapeHtml(name)}"${isEncrypted ? ' data-encrypted="true"' : ''}>
-        <div class="ch-badge" style="background:${color}" aria-hidden="true">${isEncrypted ? '🔒' : escapeHtml(abbr)}</div>
-        <div class="ch-item-body">
-          <div class="ch-item-top">
-            <span class="ch-item-name">${escapeHtml(name)}</span>
-            <span class="ch-color-dot" data-channel="${escapeHtml(ch.hash)}"${dotStyle} title="Change channel color" aria-label="Change color for ${escapeHtml(name)}"></span>
-            <span class="ch-item-time" data-channel-hash="${ch.hash}">${time}</span>${removeBtn}
-          </div>
-          <div class="ch-item-preview">${escapeHtml(preview)}</div>
+    // Encrypted section collapsed by default; user toggle persisted in localStorage.
+    const collapsed = localStorage.getItem('ch-encrypted-collapsed') !== 'false';
+
+    const sections = [];
+    if (mine.length > 0) {
+      sections.push(
+        `<div class="ch-section ch-section-mychannels" data-section="mychannels">
+        <div class="ch-section-header">My Channels <span class="ch-section-locality" title="Saved only in this browser on this device">🖥️ (this browser)</span></div>
+        ${mine.map(renderChannelRow).join('')}
+      </div>`
+      );
+    }
+    sections.push(
+      `<div class="ch-section ch-section-network" data-section="network">
+        <div class="ch-section-header">Network</div>
+        ${network.length ? network.map(renderChannelRow).join('') : '<div class="ch-section-empty">No public channels reported by the server.</div>'}
+      </div>`
+    );
+    sections.push(
+      `<div class="ch-section ch-section-encrypted" data-section="encrypted" data-encrypted-collapsed="${collapsed ? 'true' : 'false'}">
+        <button type="button" class="ch-section-header ch-section-toggle" id="chEncryptedToggle" aria-expanded="${collapsed ? 'false' : 'true'}" aria-controls="chEncryptedBody">
+          <span class="ch-section-caret" aria-hidden="true">${collapsed ? '▸' : '▾'}</span>
+          Encrypted (${encrypted.length})
+        </button>
+        <div class="ch-section-body" id="chEncryptedBody"${collapsed ? ' hidden' : ''}>
+          ${encrypted.length ? encrypted.map(renderChannelRow).join('') : '<div class="ch-section-empty">No unkeyed encrypted channels seen.</div>'}
         </div>
-      </button>`;
-    }).join('');
+      </div>`
+    );
+    el.innerHTML = sections.join('');
+
+    // Toggle expand/collapse for the Encrypted section.
+    const toggle = document.getElementById('chEncryptedToggle');
+    if (toggle) {
+      toggle.addEventListener('click', function () {
+        const wasCollapsed = localStorage.getItem('ch-encrypted-collapsed') !== 'false';
+        const next = wasCollapsed ? 'false' : 'true';
+        try { localStorage.setItem('ch-encrypted-collapsed', next); } catch (e) { /* quota */ }
+        renderChannelList();
+      });
+    }
   }
 
   async function selectChannel(hash, decryptOpts) {
     const rp = RegionFilter.getRegionParam() || '';
     const request = beginMessageRequest(hash, rp);
     selectedHash = hash;
+    // Clear unread badge on the channel we're about to view (#1029).
+    var __selCh = channels.find(function (c) { return c.hash === hash; });
+    if (__selCh && __selCh.unread) { __selCh.unread = 0; }
     history.replaceState(null, '', `#/channels/${encodeURIComponent(hash)}`);
     renderChannelList();
     const ch = channels.find(c => c.hash === hash);
-    const name = ch?.name || `Channel ${formatHashHex(hash)}`;
+    // #1041: never show raw "psk:<hex>" prefixes in the header — use the
+    // user-supplied label or "Private Channel".
+    const name = ch ? channelDisplayName(ch) : `Channel ${formatHashHex(hash)}`;
     const header = document.getElementById('chHeader');
     header.querySelector('.ch-header-text').textContent = `${name} — ${ch?.messageCount || 0} messages`;
-
-    // On mobile, show the message view
-    document.querySelector('.ch-layout')?.classList.add('ch-show-main');
 
     const msgEl = document.getElementById('chMessages');
 
@@ -1137,14 +1741,14 @@
           }
         }
       });
-      if (isStaleMessageRequest(request)) return true;
+      if (isStaleMessageRequest(request)) return { stale: true };
       if (result.wrongKey) {
         msgEl.innerHTML = '<div class="ch-empty ch-wrong-key">🔒 Key does not match — no messages could be decrypted</div>';
-        return true;
+        return { wrongKey: true, messageCount: 0 };
       }
       if (result.error) {
         msgEl.innerHTML = '<div class="ch-empty">' + escapeHtml(result.error) + '</div>';
-        return true;
+        return { error: result.error, messageCount: 0 };
       }
       messages = result.messages || [];
       if (messages.length === 0) {
@@ -1154,13 +1758,12 @@
         renderMessages();
         scrollToBottom();
       }
-      return true;
+      return { messageCount: messages.length };
     }
 
     // Client-side decryption path (#725 M2)
     if (decryptOpts && decryptOpts.userKey) {
-      await decryptAndRender(decryptOpts.userKey, decryptOpts.channelHashByte, decryptOpts.channelName);
-      return;
+      return await decryptAndRender(decryptOpts.userKey, decryptOpts.channelHashByte, decryptOpts.channelName);
     }
 
     // Check if this is a user-added channel that needs decryption

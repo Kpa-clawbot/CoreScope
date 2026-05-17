@@ -1,0 +1,275 @@
+/* Issue #1061 — Bottom navigation styles.
+ *
+ * Activates at viewports ≤768px. Uses position:fixed so it does not
+ * trigger layout reflow on the rest of the page, plus
+ * env(safe-area-inset-bottom) padding so the iOS home-indicator does
+ * not overlap the tabs. The matching <meta viewport-fit=cover> already
+ * exists in index.html (verified pre-implementation).
+ *
+ * Tokens reused (defined in BOTH :root and dark @media in style.css):
+ *   --nav-bg, --nav-text, --nav-text-muted, --nav-active-bg, --accent,
+ *   --border, --space-sm.
+ *
+ * Decision: media query (not container query). The rest of the codebase
+ * uses @media exclusively (no @container rules in style.css today), so
+ * a media query keeps things consistent.
+ *
+ * Decision: top-nav suppression = display:none at ≤768px. Spec
+ * forbids duplicate nav UX; the bottom nav covers the 5 high-priority
+ * routes; long-tail routes (Tools/Lab/Perf/Analytics/etc.) remain
+ * reachable by URL. A "More" tab or hamburger fallback is deferred per
+ * the issue body's explicit guidance.
+ */
+
+/* #1174 mesh-op review: --bottom-nav-reserve is the contract page-level
+ * full-viewport rules use to subtract the bottom-nav's height from
+ * 100dvh. 0px at desktop (no nav reserved); 56px + safe-area at ≤768px.
+ * Pages opt-in by referencing it (see public/live.css for /live, and
+ * #app.app-fixed in style.css for the SPA fixed-page container). */
+:root {
+  --bottom-nav-reserve: 0px;
+}
+
+/* Default: hidden on wide viewports. The bottom-nav element exists in
+ * the DOM at all widths (build runs at DOMContentLoaded) but is only
+ * rendered to the user at ≤768px. */
+.bottom-nav {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  /* #1174 mesh-op review: set the reserve token at the breakpoint so
+   * page-level full-viewport rules (e.g. .live-page, #app.app-fixed)
+   * automatically subtract the bottom-nav height. */
+  :root {
+    --bottom-nav-reserve: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .bottom-nav {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1200; /* above nav-links dropdown (1100) */
+    background: var(--nav-bg);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.25);
+    /* env() falls back to 0 outside iOS notch devices. We also keep
+     * a small minimum so the rule resolves to a non-empty value. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-top: 0;
+    /* Distribute 5 tabs evenly. */
+    justify-content: space-around;
+    align-items: stretch;
+    /* No transform — would create a stacking context that traps any
+     * fixed-position descendants (we have none, but cheap insurance). */
+  }
+
+  /* Suppress the inline link bar and right-side cluster — but KEEP
+   * .nav-brand (logo identity). #1174: also hide #hamburger at narrow
+   * widths — the new "More" tab in the bottom-nav now surfaces the
+   * long-tail routes, so the hamburger is redundant on phones. */
+  .top-nav .nav-links,
+  .top-nav .nav-more-wrap,
+  .top-nav .nav-right,
+  .top-nav .nav-stats {
+    display: none !important;
+  }
+  /* #1174: hamburger hidden at ≤768px (replaced by the More tab). */
+  #hamburger {
+    display: none !important;
+  }
+  /* Brand on the left, hamburger on the right at narrow widths. */
+  .top-nav {
+    justify-content: space-between;
+  }
+
+  /* Reserve space at page bottom so fixed-positioned bottom-nav does
+   * not cover the last row of content. 56px tab + 8px breathing room
+   * + safe-area inset. */
+  body {
+    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Tab — anchor element. Each tab is a column with icon over label, sized
+ * to ≥48px tall (the Apple/Google touch-target floor confirmed by
+ * issue #1060). */
+.bottom-nav-tab {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  /* 56px is a comfortable Material/iOS bottom-bar height; it is also
+   * ≥48px (a11y floor) by 8px so labels render without clipping. */
+  min-height: 56px;
+  padding: 6px 4px;
+  color: var(--nav-text-muted);
+  text-decoration: none;
+  font-size: 11px;
+  line-height: 1.1;
+  border-top: 2px solid transparent;
+  /* Reset <button> defaults — the More tab is a <button>; its native
+   * background/border/font would otherwise clash with the <a> tabs. */
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+  /* Touch-action: manipulation prevents the iOS double-tap zoom delay
+   * on tabs. */
+  touch-action: manipulation;
+  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+
+.bottom-nav-tab:hover,
+.bottom-nav-tab:focus-visible {
+  color: var(--nav-text);
+  outline: none;
+}
+
+.bottom-nav-tab:focus-visible {
+  /* Keyboard a11y — visible focus ring inside the bar. */
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.bottom-nav-tab.active {
+  color: var(--nav-text);
+  background: var(--nav-active-bg);
+  border-top-color: var(--accent);
+}
+
+.bottom-nav-icon {
+  font-size: 20px;
+  line-height: 1;
+  display: block;
+}
+
+.bottom-nav-label {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* Respect reduced-motion preferences — disable the color/border
+ * transition. Existing app already has a reduced-motion block in
+ * style.css; this is the bottom-nav-specific override. */
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav-tab {
+    transition: none;
+  }
+}
+
+/* ─── #1174: More sheet ───
+ * Bottom-anchored popover that surfaces the long-tail routes (Nodes,
+ * Tools, Observers, Analytics, Perf, Audio Lab). Anchored ABOVE the
+ * bottom-nav (bottom: 56px + safe-area), z-index between the nav and
+ * any modal layer.
+ */
+.bottom-nav-sheet {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .bottom-nav-sheet {
+    /* The element uses the `hidden` attribute to be CSS-display none by
+     * default; when we drop `hidden`, we want it to render as a grid. */
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    /* Sit above the 56px tabs + breathing room + safe-area inset. */
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 8px);
+    z-index: 1250; /* above bottom-nav (1200), below modals if any */
+    background: var(--nav-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    padding: 8px;
+    max-height: 60vh;
+    overflow-y: auto;
+    /* Display only when not [hidden]. */
+  }
+  .bottom-nav-sheet[hidden] {
+    display: none !important;
+  }
+  .bottom-nav-sheet:not([hidden]) {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+}
+
+.bottom-nav-sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--nav-text);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid transparent;
+  touch-action: manipulation;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.bottom-nav-sheet-item:hover,
+.bottom-nav-sheet-item:focus-visible {
+  background: var(--nav-active-bg);
+  outline: none;
+}
+
+.bottom-nav-sheet-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.bottom-nav-sheet-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.bottom-nav-sheet-label {
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav-sheet-item {
+    transition: none;
+  }
+}
+
+/* ─── #1174 mesh-op review: bottom-nav mesh-alive indicator ───
+ * .nav-stats (top-nav mesh-alive pulse) is hidden at ≤768. Add a thin
+ * 2px top border to the bottom-nav that mirrors the brand-logo's
+ * connected/disconnected state via a class toggled from app.js
+ * (window.__corescopeLogo.setConnected). Cheap, peripheral-vision
+ * visible, no per-tab clutter.
+ *
+ * Default (connected): accent-tinted border. Disconnected: red.
+ * The base bottom-nav rule already declares border-top: 1px solid
+ * var(--border) — we override its color with a slightly heavier
+ * 2px stripe so the connectivity color is the dominant visual.
+ */
+@media (max-width: 768px) {
+  .bottom-nav {
+    border-top: 2px solid var(--accent);
+    transition: border-top-color 200ms ease;
+  }
+  .bottom-nav.disconnected {
+    border-top-color: var(--danger, #ef4444);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bottom-nav {
+    transition: none;
+  }
+}
