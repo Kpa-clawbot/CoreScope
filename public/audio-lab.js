@@ -89,7 +89,6 @@
       .alab-note-play:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
       .alab-note-clickable { cursor: pointer; }
       .alab-note-clickable:hover { background: var(--hover-bg); }
-      .alab-empty { text-align: center; padding: 60px 20px; color: var(--text-muted); font-size: 15px; }
       .alab-slider-group { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
       .alab-slider-group input[type=range] { width: 80px; }
       .alab-slider-group select { font-size: 12px; padding: 2px 4px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
@@ -187,7 +186,7 @@
 
   function renderDetail(pkt, app) {
     const m = computeMapping(pkt);
-    if (!m) { document.getElementById('alabDetail').innerHTML = '<div class="alab-empty">No raw hex data for this packet</div>'; return; }
+    if (!m) { document.getElementById('alabDetail').innerHTML = PageState.empty({ title: 'No raw hex data for this packet' }); return; }
 
     // Hex dump with sampled bytes highlighted
     const sampledSet = new Set(m.sampledIndices);
@@ -433,7 +432,7 @@
 
     app.innerHTML = `
       <div class="alab">
-        <div class="alab-sidebar" id="alabSidebar"><div style="color:var(--text-muted);font-size:13px;padding:8px">Loading packets...</div></div>
+        <div class="alab-sidebar" id="alabSidebar">${PageState.loading('Loading packets…')}</div>
         <div class="alab-main">
           <div class="alab-controls" id="alabControls">
             <button class="alab-btn" id="alabPlay" title="Play selected packet">▶ Play</button>
@@ -460,7 +459,7 @@
               ).join('')}</select>
             </div>
           </div>
-          <div id="alabDetail"><div class="alab-empty">← Select a packet from the sidebar to explore its sound</div></div>
+          <div id="alabDetail">${PageState.empty({ icon: '🔊', title: 'Select a packet from the sidebar' })}</div>
         </div>
       </div>
     `;
@@ -507,7 +506,7 @@
       const data = await api('/audio-lab/buckets');
       const sidebar = document.getElementById('alabSidebar');
       if (!data.buckets || Object.keys(data.buckets).length === 0) {
-        sidebar.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px">No packets in memory yet</div>';
+        sidebar.innerHTML = PageState.empty({ title: 'No packets in memory yet' });
         return;
       }
 
@@ -547,7 +546,7 @@
         }
       });
     } catch (err) {
-      document.getElementById('alabSidebar').innerHTML = `<div style="color:var(--text-muted);padding:8px">Error loading packets: ${err.message}</div>`;
+      document.getElementById('alabSidebar').innerHTML = PageState.errorText('Error loading packets: ' + err.message);
     }
   }
 
