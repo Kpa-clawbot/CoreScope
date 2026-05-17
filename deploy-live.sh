@@ -20,8 +20,8 @@ fi
 echo "[deploy] Fetching latest from origin..."
 git fetch origin
 
-echo "[deploy] Resetting to origin/master..."
-git reset --hard origin/master
+echo "[deploy] Resetting to origin/main..."
+git reset --hard origin/main
 
 echo "[deploy] Building Docker image..."
 docker build -t meshcore-analyzer .

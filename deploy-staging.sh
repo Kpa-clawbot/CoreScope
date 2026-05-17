@@ -19,7 +19,7 @@ fi
 echo "[staging] Fetching latest from origin..."
 git fetch origin
 
-BRANCH="${1:-master}"
+BRANCH="${1:-main}"
 echo "[staging] Checking out $BRANCH..."
 git reset --hard "origin/$BRANCH"
 
