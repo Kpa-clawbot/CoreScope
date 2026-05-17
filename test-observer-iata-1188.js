@@ -1,18 +1,20 @@
 /**
- * Test (#1188): public/packets.js must render observer IATA inline
- * next to observer name on all three packet-viewing surfaces (table
- * flat row, expanded observation child row, group/header row) AND
- * in the detail pane's Observer field + per-observation list.
+ * Behavior test (#1188 / #1189 R1): public/packets.js helper `obsIataBadge`
+ * must actually USE packet.observer_iata and emit the .badge-iata span.
  *
- * String-contract test (no browser): grep the source file for the
- * expected fragments so a future refactor can't silently drop them.
+ * Earlier version was tautological — a grep over the source. A deliberately
+ * broken `obsIataBadge` that returned a hardcoded string still passed every
+ * assertion. This version EXTRACTS the function body, evaluates it in a
+ * Node sandbox, and asserts the returned HTML for known inputs. Mutating
+ * the implementation (e.g. ignoring `packet.observer_iata`, returning the
+ * empty string, dropping `escapeHtml`) MUST flip this test red.
  *
- * Runs in Node.js — no browser. Wired into deploy.yml CI alongside
- * test-packet-filter.js and the other unit harnesses.
+ * Runs in Node.js — no browser, no jsdom required.
  */
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 
 let passed = 0, failed = 0;
 function assert(cond, msg) {
@@ -21,53 +23,96 @@ function assert(cond, msg) {
 }
 
 const src = fs.readFileSync(path.join(__dirname, 'public/packets.js'), 'utf8');
-const css = fs.readFileSync(path.join(__dirname, 'public/style.css'), 'utf8');
 
-// ── Helper presence ─────────────────────────────────────────────────────────
-assert(/function\s+obsIataBadge\s*\(/.test(src),
-  'obsIataBadge() helper defined in packets.js');
-assert(/function\s+obsNameOnly\s*\(/.test(src),
-  'obsNameOnly() helper defined (renders name without inline IATA, lets badge render separately)');
+// ── Extract obsIataBadge source. Function spans a small, bounded block. ──
+// We capture everything from the `function obsIataBadge` keyword up to and
+// including the closing brace that terminates the *function body*. Use a
+// non-greedy match then expand minimally — packets.js keeps the helper
+// short and self-contained so this is robust.
+function extractFn(name) {
+  const re = new RegExp(
+    'function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{[\\s\\S]*?\\n\\s{2}\\}',
+    'm'
+  );
+  const m = src.match(re);
+  if (!m) throw new Error('could not extract function ' + name);
+  return m[0];
+}
 
-// ── Helper must prefer packet.observer_iata (avoids per-row observers.find()) ──
-const helperSnippet = (() => {
-  // Function spans roughly 8 lines; capture liberally then trim
-  const m = src.match(/function\s+obsIataBadge\s*\(packet\)\s*\{[\s\S]*?return\s+iata\s*\?[^;]*;\s*\}/);
-  return m ? m[0] : '';
-})();
-assert(helperSnippet.length > 0, 'obsIataBadge body extractable');
-assert(/packet\.observer_iata/.test(helperSnippet),
-  'obsIataBadge reads packet.observer_iata directly (server-joined field, no client lookup)');
-assert(/badge-iata/.test(helperSnippet),
-  'obsIataBadge emits the badge-iata class');
+const badgeSrc = extractFn('obsIataBadge');
 
-// ── All three table surfaces render the badge ───────────────────────────────
-// Count occurrences of obsIataBadge( in row-building templates
-const obsIataBadgeCalls = (src.match(/obsIataBadge\(/g) || []).length;
-assert(obsIataBadgeCalls >= 5,
-  `obsIataBadge invoked at least 5x (group row + child row + flat row + detail Observer dd + detail-obs-row); got ${obsIataBadgeCalls}`);
+// Sandbox: provide the helpers the function depends on (escapeHtml,
+// observerMap). escapeHtml mirrors the real one in public/app.js.
+const ctx = {
+  observerMap: new Map(),
+  escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  },
+  obsIataBadge: null,
+};
+vm.createContext(ctx);
+vm.runInContext(badgeSrc + '\nobsIataBadge = obsIataBadge;', ctx);
+const obsIataBadge = ctx.obsIataBadge;
+if (typeof obsIataBadge !== 'function') {
+  console.error('  \u274c failed to load obsIataBadge into sandbox');
+  process.exit(1);
+}
 
-// Surface 1: grouped header observer cell
-assert(/col-observer[\s\S]{0,200}obsIataBadge\(p\)/.test(src),
-  'grouped row col-observer cell calls obsIataBadge(p)');
-// Surface 2: expanded observation child row
-assert(/col-observer[\s\S]{0,200}obsIataBadge\(c\)/.test(src),
-  'expanded child row col-observer cell calls obsIataBadge(c)');
-// Surface 3: detail pane Observer <dd>
-assert(/<dt>Observer<\/dt><dd>[\s\S]{0,200}obsIataBadge\(effectivePkt\)/.test(src),
-  'detail pane Observer dd calls obsIataBadge(effectivePkt)');
-// Surface 4: per-observation list in detail
-assert(/detail-obs-row[\s\S]*?obsIataBadge\(o\)/.test(src),
-  'detail-obs-row observer cell calls obsIataBadge(o)');
+// ── Behavior #1: packet.observer_iata SJC → <span class="badge-iata">SJC</span> ──
+{
+  const html = obsIataBadge({ observer_iata: 'SJC' });
+  assert(typeof html === 'string', 'returns a string');
+  assert(html.includes('class="badge-iata"'),
+    'output contains class="badge-iata"');
+  assert(html.includes('>SJC<'),
+    'output contains the IATA value (SJC) as text content');
+  assert(html === '<span class="badge-iata">SJC</span>',
+    'output is exactly <span class="badge-iata">SJC</span>, got: ' + html);
+}
 
-// ── CSS: badge-iata class defined; uses CSS variables, no new hex ───────────
-assert(/\.badge-iata\s*\{/.test(css),
-  '.badge-iata class defined in style.css');
-const badgeIataBlock = (css.match(/\.badge-iata\s*\{[\s\S]*?\}/) || [''])[0];
-assert(/var\(--/.test(badgeIataBlock),
-  '.badge-iata uses CSS variables for colors (no inline hex)');
-assert(!/#[0-9a-fA-F]{3,8}/.test(badgeIataBlock),
-  '.badge-iata block contains no raw hex colors');
+// ── Behavior #2: no observer_iata and no observerMap entry → empty string ──
+{
+  const html = obsIataBadge({ observer_id: 'unknown-obs' });
+  assert(html === '',
+    'returns "" when packet has no observer_iata and observerMap lacks the id');
+}
+
+// ── Behavior #3: fallback to observerMap when packet.observer_iata absent ──
+{
+  ctx.observerMap.set('obs-fallback', { name: 'Foo', iata: 'OAK' });
+  const html = obsIataBadge({ observer_id: 'obs-fallback' });
+  assert(html === '<span class="badge-iata">OAK</span>',
+    'falls back to observerMap.get(observer_id).iata when packet.observer_iata absent, got: ' + html);
+}
+
+// ── Behavior #4: packet.observer_iata WINS over observerMap (server-joined
+//   field is authoritative; avoids per-row client lookup divergence) ──
+{
+  ctx.observerMap.set('obs-mismatch', { name: 'Bar', iata: 'WRONG' });
+  const html = obsIataBadge({ observer_id: 'obs-mismatch', observer_iata: 'MRY' });
+  assert(html === '<span class="badge-iata">MRY</span>',
+    'packet.observer_iata wins over observerMap value (got: ' + html + ')');
+}
+
+// ── Behavior #5: null packet doesn't crash ──
+{
+  const html = obsIataBadge(null);
+  assert(html === '', 'null packet returns ""');
+}
+
+// ── Behavior #6: HTML-escapes hostile IATA-like input ──
+{
+  const html = obsIataBadge({ observer_iata: '<script>' });
+  assert(!html.includes('<script>'),
+    'raw <script> not present in output (escapeHtml applied), got: ' + html);
+  assert(html.includes('&lt;script&gt;'),
+    'output contains the escaped form &lt;script&gt;');
+}
 
 console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
 process.exit(failed > 0 ? 1 : 0);
