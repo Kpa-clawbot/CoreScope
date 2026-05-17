@@ -1340,6 +1340,17 @@
   }
 }
 
+/* ── Idle fade: legend + feed-show button fade with the rest of the UI chrome ── */
+.legend-toggle-btn,
+.feed-show-btn {
+  transition: opacity 0.3s ease;
+}
+.live-page.ui-idle .legend-toggle-btn,
+.live-page.ui-idle .feed-show-btn:not(.hidden) {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* Hide the header panel when closed via ✕ */
 .live-header.hidden {
   display: none !important;

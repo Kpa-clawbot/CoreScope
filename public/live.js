@@ -930,12 +930,10 @@
               MESH LIVE
               <button class="live-header-expand-btn" id="liveHeaderExpandBtn" aria-label="Show settings" aria-expanded="false">⚙</button>
             </div>
-          </div>
-          <div class="live-stats-row">
-            <div class="live-stat-pill"><span id="livePktCount">0</span> pkts</div>
-            <div class="live-stat-pill"><span id="liveNodeCount">0</span> nodes</div>
-            <div class="live-stat-pill anim-pill"><span id="liveAnimCount">0</span> active</div>
-            <div class="live-stat-pill rate-pill"><span id="livePktRate">0</span>/min</div>
+            <div class="live-header-actions">
+              <button class="live-header-pin-btn" id="liveHeaderPinBtn" title="Pin panel open" aria-pressed="false" aria-label="Pin MESH LIVE panel open">📌</button>
+              <button class="live-header-close-btn" id="liveHeaderCloseBtn" title="Minimise panel" aria-label="Minimise MESH LIVE panel">✕</button>
+            </div>
           </div>
         <!-- #1205: settings toggles are children of the MESH LIVE panel
              (#liveHeader), not a free-floating .live-overlay. PR #1180
@@ -1557,6 +1555,21 @@
       if (narrowMq.matches) applyHeaderExpanded(expanded);
     }
 
+    // MESH LIVE header: 📊 toggle → collapse/expand body on tablet (≤768px)
+    const liveHeaderToggleBtn = document.getElementById('liveHeaderToggle');
+    if (liveHeaderToggleBtn && liveHeaderEl) {
+      let collapsed = false;
+      try { collapsed = localStorage.getItem('live-header-collapsed') === 'true'; } catch (_) {}
+      function applyHeaderCollapsed(c) {
+        collapsed = c;
+        liveHeaderEl.classList.toggle('is-collapsed', c);
+        liveHeaderToggleBtn.setAttribute('aria-expanded', String(!c));
+        try { localStorage.setItem('live-header-collapsed', String(c)); } catch (_) {}
+      }
+      liveHeaderToggleBtn.addEventListener('click', () => applyHeaderCollapsed(!collapsed));
+      applyHeaderCollapsed(collapsed);
+    }
+
     // MESH LIVE header: close → minimise to button, show → restore
     const liveHeaderShowBtn = document.getElementById('liveHeaderShowBtn');
     const liveHeaderCloseBtn = document.getElementById('liveHeaderCloseBtn');
@@ -1971,10 +1984,12 @@
     function showHeader() {
       if (!liveHeaderEl || liveHeaderEl.classList.contains('hidden')) return;
       liveHeaderEl.classList.remove('is-compact');
+      if (livePage) livePage.classList.remove('ui-idle');
       clearTimeout(_headerCompactTimer);
       if (!_headerPinned && !narrowMqCompact.matches) {
         _headerCompactTimer = setTimeout(() => {
           if (liveHeaderEl) liveHeaderEl.classList.add('is-compact');
+          if (livePage) livePage.classList.add('ui-idle');
         }, 4000);
       }
     }
