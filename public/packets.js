@@ -2408,11 +2408,11 @@
       case 'size': accessor = function(p) { return p.packet_size || 0; }; break;
       case 'hb': accessor = function(p) { return p.hash_byte_count != null ? p.hash_byte_count : (p.hash_size || 0); }; break;
       case 'rpt': accessor = function(p) {
-        try { var pj = typeof p.path_json === 'string' ? JSON.parse(p.path_json) : p.path_json; return Array.isArray(pj) ? pj.length : 0; } catch(e) { return 0; }
+        try { return getParsedPath(p).length; } catch(e) { return 0; }
       }; break;
       case 'region': accessor = function(p) { return (regionMap && regionMap[p.observer_id]) || ''; }; break;
       case 'path': accessor = function(p) {
-        try { var pj = typeof p.path_json === 'string' ? JSON.parse(p.path_json) : p.path_json; return Array.isArray(pj) ? pj.join(',') : ''; } catch(e) { return ''; }
+        try { return getParsedPath(p).join(','); } catch(e) { return ''; }
       }; break;
       default: return; // unsortable column
     }

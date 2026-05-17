@@ -635,7 +635,14 @@
   }
 
   // ==================== HELPERS ====================
-  function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  // Delegates to canonical window.escapeHtml (packet-helpers.js); inline
+  // fallback covers isolated unit-test sandboxes that load this file alone.
+  // The fallback now escapes " and ' too — closes a prior XSS gap (issue #387).
+  function escapeHtml(s) {
+    if (typeof window !== 'undefined' && window.escapeHtml) return window.escapeHtml(s);
+    if (s == null) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
   function escapeAttr(s) { return String(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
   function timeSinceMs(d) { return Date.now() - d.getTime(); }
 

@@ -196,8 +196,12 @@
     return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   }
 
+  // Delegates to canonical window.escapeHtml (packet-helpers.js); inline
+  // fallback covers isolated unit-test sandboxes that load this file alone.
   function escapeHtml(s) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (typeof window !== 'undefined' && window.escapeHtml) return window.escapeHtml(s);
+    if (s == null) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
 
   window.PathInspector = { init: init, destroy: destroy, parsePrefixes: parsePrefixes, validatePrefixes: validatePrefixes };

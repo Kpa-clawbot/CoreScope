@@ -3,8 +3,12 @@
 'use strict';
 
 window.HopDisplay = (function() {
+  // Delegates to canonical window.escapeHtml (packet-helpers.js); inline
+  // fallback covers isolated unit-test sandboxes that load this file alone.
   function escapeHtml(s) {
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    if (typeof window !== 'undefined' && window.escapeHtml) return window.escapeHtml(s);
+    if (s == null) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
 
   // Dismiss any open conflict popover

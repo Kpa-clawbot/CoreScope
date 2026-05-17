@@ -24,6 +24,11 @@
   }
   var _nodeCacheTTL = 5 * 60 * 1000; // 5 minutes
 
+  // Listener/observer refs hoisted so destroy() can clean them up (leak fix)
+  let _themeObserver = null;
+  let _sidebarMouseMove = null;
+  let _sidebarMouseUp = null;
+
   function getSelectedRegionsSnapshot() {
     var rp = RegionFilter.getRegionParam();
     return rp ? rp.split(',').filter(Boolean) : null;
@@ -311,9 +316,13 @@
     return palette[hashCode(String(name)) % palette.length];
   }
 
+  /* escapeHtml: delegate to canonical window.escapeHtml (packet-helpers.js).
+     Falls back to an inline implementation only if packet-helpers.js is not
+     loaded (e.g. isolated unit-test sandboxes). */
   function escapeHtml(str) {
-    if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    if (typeof window !== 'undefined' && window.escapeHtml) return window.escapeHtml(str);
+    if (str == null) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   function truncate(str, len) {
@@ -1118,12 +1127,18 @@
       if (saved) { var w = parseInt(saved, 10); if (w >= 180 && w <= 600) { sidebar.style.width = w + 'px'; sidebar.style.minWidth = w + 'px'; } }
       var dragging = false, startX, startW;
       handle.addEventListener('mousedown', function (e) { dragging = true; startX = e.clientX; startW = sidebar.getBoundingClientRect().width; e.preventDefault(); });
-      document.addEventListener('mousemove', function (e) { if (!dragging) return; var w = Math.max(180, Math.min(600, startW + e.clientX - startX)); sidebar.style.width = w + 'px'; sidebar.style.minWidth = w + 'px'; });
-      document.addEventListener('mouseup', function () { if (!dragging) return; dragging = false; localStorage.setItem('channels-sidebar-width', parseInt(sidebar.style.width, 10)); });
+      // Remove any stale handlers from a prior mount before re-registering (dedupe guard).
+      if (_sidebarMouseMove) document.removeEventListener('mousemove', _sidebarMouseMove);
+      if (_sidebarMouseUp) document.removeEventListener('mouseup', _sidebarMouseUp);
+      _sidebarMouseMove = function (e) { if (!dragging) return; var w = Math.max(180, Math.min(600, startW + e.clientX - startX)); sidebar.style.width = w + 'px'; sidebar.style.minWidth = w + 'px'; };
+      _sidebarMouseUp = function () { if (!dragging) return; dragging = false; localStorage.setItem('channels-sidebar-width', parseInt(sidebar.style.width, 10)); };
+      document.addEventListener('mousemove', _sidebarMouseMove);
+      document.addEventListener('mouseup', _sidebarMouseUp);
     })();
 
     // #90: Theme change observer — re-render messages on theme toggle
-    var _themeObserver = new MutationObserver(function (muts) {
+    if (_themeObserver) _themeObserver.disconnect();
+    _themeObserver = new MutationObserver(function (muts) {
       for (var i = 0; i < muts.length; i++) {
         if (muts[i].attributeName === 'data-theme') { if (selectedHash) renderMessages(); break; }
       }
@@ -1590,6 +1605,9 @@
     timeAgoTimer = null;
     if (regionChangeHandler) RegionFilter.offChange(regionChangeHandler);
     regionChangeHandler = null;
+    if (_themeObserver) { _themeObserver.disconnect(); _themeObserver = null; }
+    if (_sidebarMouseMove) { document.removeEventListener('mousemove', _sidebarMouseMove); _sidebarMouseMove = null; }
+    if (_sidebarMouseUp) { document.removeEventListener('mouseup', _sidebarMouseUp); _sidebarMouseUp = null; }
     channels = [];
     messages = [];
     selectedHash = null;

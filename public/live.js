@@ -33,6 +33,19 @@
   let observerIataMap = {};
   let regionFilterChangeHandler = null;
 
+  // Listener/observer refs hoisted so destroy() can clean them up (leak fix)
+  let _themeObs = null;
+  let _visibilityHandler = null;
+  let _dragResizeHandler = null;
+  let _dragMqlHandler = null;
+  let _dragMql = null;
+  let _feedResizeMouseMove = null;
+  let _feedResizeMouseUp = null;
+  let _scrubMouseMove = null;
+  let _scrubMouseUp = null;
+  // rAF coalescing for timeline redraws (mirrors packets.js scheduleWSRender)
+  let _timelineRafId = null;
+
   /**
    * Returns true if the packet group matches the selected regions.
    * - selected null/empty → no filter active, always true.
@@ -716,7 +729,8 @@
 
   // Buffer a packet from WS
   let _tabHidden = false;
-  document.addEventListener('visibilitychange', () => {
+  // Named so init() can register and destroy() can remove it (leak fix).
+  function _onVisibilityChange() {
     if (document.hidden) {
       _tabHidden = true;
     } else {
@@ -730,7 +744,7 @@
       // Batch-update timeline once on restore instead of per-packet while hidden
       updateTimeline();
     }
-  });
+  }
 
   function packetTimestamp(pkt) {
     return new Date(pkt.timestamp || pkt.created_at || Date.now()).getTime();
@@ -795,7 +809,18 @@
     } catch(e) { /* ignore */ }
   }
 
+  // Coalesce timeline redraws into one per animation frame (mirrors
+  // packets.js scheduleWSRender). updateTimeline() may be called once per
+  // WebSocket packet; without this each call triggers a full canvas redraw.
   function updateTimeline() {
+    if (_timelineRafId) return;  // already scheduled
+    _timelineRafId = requestAnimationFrame(function () {
+      _timelineRafId = null;
+      updateTimelineNow();
+    });
+  }
+
+  function updateTimelineNow() {
     const canvas = document.getElementById('vcrTimeline');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -1072,6 +1097,22 @@
 
     let tileLayer = L.tileLayer(TILE_LIGHT, { maxZoom: 19 }).addTo(map);
 
+    // Swap tiles when theme changes
+    if (_themeObs) _themeObs.disconnect();
+    _themeObs = new MutationObserver(function () {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+        (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      tileLayer.setUrl(dark ? TILE_DARK : TILE_LIGHT);
+    });
+    _themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    // visibilitychange handler — registered here (not at module load) so it
+    // can be removed in destroy(). Dedupe-guarded against re-mount.
+    if (_visibilityHandler) document.removeEventListener('visibilitychange', _visibilityHandler);
+    _visibilityHandler = _onVisibilityChange;
+    document.addEventListener('visibilitychange', _visibilityHandler);
+
+
     L.control.zoom({ position: 'topright' }).addTo(map);
 
     // Satmap provider switching
@@ -1161,9 +1202,8 @@
         vcrPause(); // suppress live packets
         setTimeout(() => renderPacketTree(packets, true), 1500);
       } catch {}
-    } else {
-      // replayRecent(); // disabled — live page starts empty, fills from WS
     }
+    // Live page otherwise starts empty and fills from the WebSocket feed.
 
     map.on('zoomend', rescaleMarkers);
 
@@ -1653,8 +1693,11 @@
       dragMgr.restorePositions();
 
       // Responsive gate: disable drag below medium breakpoint or on touch
-      var dragMql = window.matchMedia('(pointer: fine) and (min-width: 768px)');
-      function onDragMediaChange(e) {
+      // Clean up any refs from a prior mount before re-registering (dedupe guard).
+      if (_dragMql && _dragMqlHandler) _dragMql.removeEventListener('change', _dragMqlHandler);
+      if (_dragResizeHandler) window.removeEventListener('resize', _dragResizeHandler);
+      _dragMql = window.matchMedia('(pointer: fine) and (min-width: 768px)');
+      _dragMqlHandler = function onDragMediaChange(e) {
         if (!e.matches) {
           // Revert dragged panels to corner positions
           document.querySelectorAll('.live-overlay[data-dragged="true"]').forEach(function (p) {
@@ -1671,17 +1714,18 @@
           dragMgr.enable();
           dragMgr.restorePositions();
         }
-      }
-      dragMql.addEventListener('change', onDragMediaChange);
+      };
+      _dragMql.addEventListener('change', _dragMqlHandler);
       // Initial check
-      if (!dragMql.matches) dragMgr.disable();
+      if (!_dragMql.matches) dragMgr.disable();
 
       // Resize clamping (debounced)
       var resizeTimer = null;
-      window.addEventListener('resize', function () {
+      _dragResizeHandler = function () {
         clearTimeout(resizeTimer);
         resizeTimer = setTimeout(function () { dragMgr.handleResize(); }, 200);
-      });
+      };
+      window.addEventListener('resize', _dragResizeHandler);
     }
 
     const roleLegendList = document.getElementById('roleLegendList');
@@ -1716,16 +1760,21 @@
     resizeHandle.addEventListener('mousedown', (e) => {
       feedResizing = true; e.preventDefault();
     });
-    document.addEventListener('mousemove', (e) => {
+    // Remove stale handlers from a prior mount before re-registering (dedupe guard).
+    if (_feedResizeMouseMove) document.removeEventListener('mousemove', _feedResizeMouseMove);
+    if (_feedResizeMouseUp) document.removeEventListener('mouseup', _feedResizeMouseUp);
+    _feedResizeMouseMove = (e) => {
       if (!feedResizing) return;
       const newWidth = Math.max(200, Math.min(800, e.clientX - feedEl.getBoundingClientRect().left));
       feedEl.style.width = newWidth + 'px';
-    });
-    document.addEventListener('mouseup', () => {
+    };
+    _feedResizeMouseUp = () => {
       if (!feedResizing) return;
       feedResizing = false;
       localStorage.setItem('live-feed-width', parseInt(feedEl.style.width));
-    });
+    };
+    document.addEventListener('mousemove', _feedResizeMouseMove);
+    document.addEventListener('mouseup', _feedResizeMouseUp);
 
     // Save/restore map view
     const savedView = localStorage.getItem('live-map-view');
@@ -1864,14 +1913,19 @@
       scrubVisual(e.clientX);
       e.preventDefault();
     });
-    document.addEventListener('mousemove', (e) => {
+    // Remove stale handlers from a prior mount before re-registering (dedupe guard).
+    if (_scrubMouseMove) document.removeEventListener('mousemove', _scrubMouseMove);
+    if (_scrubMouseUp) document.removeEventListener('mouseup', _scrubMouseUp);
+    _scrubMouseMove = (e) => {
       if (!VCR.dragging) return;
       scrubVisual(e.clientX);
-    });
-    document.addEventListener('mouseup', () => {
+    };
+    _scrubMouseUp = () => {
       if (!VCR.dragging) return;
       scrubRelease();
-    });
+    };
+    document.addEventListener('mousemove', _scrubMouseMove);
+    document.addEventListener('mouseup', _scrubMouseUp);
     timelineEl.addEventListener('touchstart', (e) => {
       VCR.dragging = true;
       VCR.scrubTs = null;
@@ -2242,6 +2296,39 @@
     return getFavoritePubkeys().some(f => f === pubkey);
   }
 
+  function packetInvolvesFilterNode(pkt, filterKeys) {
+    if (!filterKeys.length) return true;
+    const hops = (pkt.decoded?.path?.hops) || [];
+    for (const hop of hops) {
+      const h = (hop.id || hop.public_key || hop).toString().toLowerCase();
+      if (filterKeys.some(f => f.toLowerCase().startsWith(h) || h.startsWith(f.toLowerCase()))) return true;
+    }
+    return false;
+  }
+
+  function setNodeFilter(keys) {
+    nodeFilterKeys = keys;
+    nodeFilterTotal = 0;
+    nodeFilterShown = 0;
+    localStorage.setItem('live-node-filter', keys.join(','));
+    updateNodeFilterUI();
+  }
+
+  function updateNodeFilterUI() {
+    const countEl = document.getElementById('liveNodeFilterCount');
+    const clearBtn = document.getElementById('liveNodeFilterClear');
+    const input = document.getElementById('liveNodeFilterInput');
+    if (nodeFilterKeys.length > 0) {
+      if (clearBtn) clearBtn.style.display = '';
+      if (countEl) { countEl.textContent = `Showing ${nodeFilterShown} of ${nodeFilterTotal}`; countEl.classList.remove('hidden'); }
+      if (input && input.value !== nodeFilterKeys.join(', ')) input.value = nodeFilterKeys.join(', ');
+    } else {
+      if (clearBtn) clearBtn.style.display = 'none';
+      if (countEl) countEl.classList.add('hidden');
+    }
+  }
+
+
   function rebuildFeedList() {
     const feed = document.getElementById('liveFeed');
     if (!feed) return;
@@ -2588,51 +2675,6 @@
   };
   window._liveRebuildFeedList = function() { return rebuildFeedList(); };
 
-  async function replayRecent() {
-    try {
-      // Single bulk fetch with expand=observations — no N+1 calls
-      const resp = await fetch('/api/packets?limit=8&expand=observations');
-      const data = await resp.json();
-      const groups = (data.packets || []).reverse();
-
-      const allGroups = groups.map((group) => {
-        const observations = group.observations || [];
-
-        const livePackets = observations.map(obs => {
-          const livePkt = dbPacketToLive(Object.assign({}, group, obs, {
-            hash: group.hash,
-            raw_hex: group.raw_hex,
-            decoded_json: group.decoded_json,
-          }));
-          livePkt._ts = new Date(obs.timestamp || group.first_seen || Date.now()).getTime();
-          return livePkt;
-        });
-
-        if (livePackets.length === 0) {
-          const livePkt = dbPacketToLive(group);
-          livePkt._ts = new Date(group.first_seen || group.latest || Date.now()).getTime();
-          livePackets.push(livePkt);
-        }
-
-        livePackets.forEach(lp => VCR.buffer.push({ ts: lp._ts, pkt: lp }));
-        return livePackets;
-      });
-
-      // Render with real timing gaps between packets
-      // Sort by earliest timestamp
-      allGroups.sort((a, b) => (a[0]?._ts || 0) - (b[0]?._ts || 0));
-      let lastTs = allGroups[0]?.[0]?._ts || Date.now();
-      for (let i = 0; i < allGroups.length; i++) {
-        const groupTs = allGroups[i][0]?._ts || lastTs;
-        // Real gap between this packet and the previous, capped at 3s for UX
-        const gap = i === 0 ? 0 : Math.min(3000, Math.max(200, groupTs - lastTs));
-        await new Promise(resolve => setTimeout(resolve, gap));
-        renderPacketTree(allGroups[i]);
-        lastTs = groupTs;
-      }
-      updateTimeline();
-    } catch {}
-  }
 
   function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -3471,39 +3513,6 @@
     return '<span class="feed-color-dot" data-channel="' + escapeHtml(channel) + '" style="display:inline-block;width:18px;height:18px;border-radius:50%;' + style + ';cursor:pointer;vertical-align:middle;margin-left:4px;flex-shrink:0" title="Set color for ' + escapeHtml(channel) + '"></span>';
   }
 
-  function addFeedItemDOM(icon, typeName, payload, hops, color, pkt, feed) {
-    const text = payload.text || payload.name || '';
-    const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
-    const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
-    const obsBadge = pkt.observation_count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${pkt.observation_count}</span>` : '';
-    const anomalyIcon = (pkt.decoded && pkt.decoded.anomaly) ? '<span title="Anomaly detected" style="margin-left:4px">⚠️</span>' : '';
-    var _ccPayload2 = (pkt.decoded || {}).payload || {};
-    var _ccChan = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload2.channel || null) : null;
-    var dotHtml = _ccChan ? _feedColorDot(_ccChan) : '';
-    const item = document.createElement('div');
-    item.className = 'live-feed-item';
-    item.setAttribute('tabindex', '0');
-    item.setAttribute('role', 'button');
-    item.style.cursor = 'pointer';
-    // Hash-color stripe for feed items (mirrors packets table border-left)
-    if (colorByHash && pkt.hash && window.HashColor) {
-      item.style.borderLeft = '4px solid ' + HashColor.hashToHsl(pkt.hash, _liveTheme());
-    }
-    // Channel color highlighting for GRP_TXT packets (#271)
-    var _cs = _getChannelStyle(pkt);
-    if (_cs) item.style.cssText += _cs;
-    item.innerHTML = `
-      <span class="feed-icon" style="color:${color}">${icon}</span>
-      <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${anomalyIcon}
-      <span class="feed-text">${escapeHtml(preview)}</span>
-      <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
-    `;
-    if (_ccChan) item._ccChannel = _ccChan; // channel color picker (#674)
-    item.addEventListener('click', () => showFeedCard(item, pkt, color));
-    feed.appendChild(item);
-  }
-
   // Dedup: hash → {element, count, pkt, packets[], createdAt}
   // First packet with hash A creates a feed item.
   // Any packet with hash A arriving within 30s updates that item's count.
@@ -3702,6 +3711,16 @@
     if (_headerCompactTimer) { clearTimeout(_headerCompactTimer); _headerCompactTimer = null; }
     const vcrBarCleanup = document.getElementById('vcrBar');
     if (vcrBarCleanup) vcrBarCleanup.classList.remove('vcr-autohide');
+    if (_themeObs) { _themeObs.disconnect(); _themeObs = null; }
+    if (_visibilityHandler) { document.removeEventListener('visibilitychange', _visibilityHandler); _visibilityHandler = null; }
+    if (_dragMql && _dragMqlHandler) { _dragMql.removeEventListener('change', _dragMqlHandler); }
+    _dragMql = null; _dragMqlHandler = null;
+    if (_dragResizeHandler) { window.removeEventListener('resize', _dragResizeHandler); _dragResizeHandler = null; }
+    if (_feedResizeMouseMove) { document.removeEventListener('mousemove', _feedResizeMouseMove); _feedResizeMouseMove = null; }
+    if (_feedResizeMouseUp) { document.removeEventListener('mouseup', _feedResizeMouseUp); _feedResizeMouseUp = null; }
+    if (_scrubMouseMove) { document.removeEventListener('mousemove', _scrubMouseMove); _scrubMouseMove = null; }
+    if (_scrubMouseUp) { document.removeEventListener('mouseup', _scrubMouseUp); _scrubMouseUp = null; }
+    if (_timelineRafId) { cancelAnimationFrame(_timelineRafId); _timelineRafId = null; }
     nodesLayer = pathsLayer = animLayer = heatLayer = geoFilterLayer = null;
     stopMatrixRain();
     nodeMarkers = {}; nodeData = {};

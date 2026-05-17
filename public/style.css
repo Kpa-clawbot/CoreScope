@@ -179,68 +179,125 @@
   --z-tooltip: 9200;
 }
 
-/* ⚠️ DARK THEME VARIABLES — KEEP BOTH BLOCKS IN SYNC
-   The media query handles OS-level dark mode (auto); [data-theme="dark"] handles manual toggle.
-   When changing dark theme variables, update BOTH blocks below. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --status-green: #22c55e;
-    --status-yellow: #eab308;
-    --status-red: #ef4444;
-    --status-orange: #f97316;
-    --status-purple: #a855f7;
-    --status-amber: #f59e0b;
-    --status-amber-light: #422006;
-    --status-amber-text: #fcd34d;
-    --path-inspector-speculative: #f59e0b;
-    --surface-0: #0f0f23;
-    --surface-1: #1a1a2e;
-    --surface-2: #232340;
-    --surface-3: #2d2d50;
-    --surface: var(--surface-1);
-    --content-bg: var(--surface-0);
-    --card-bg: var(--surface-1);
-    --text: #e2e8f0;
-    --text-muted: #a8b8cc;
-    --border: #334155;
-    --row-stripe: #1e1e34;
-    --row-hover: #2d2d50;
-    --detail-bg: #232340;
-    --input-bg: #1e1e34;
-    --selected-bg: #1e3a5f;
-    --hover-bg: rgba(255,255,255, 0.06);
-    --trace-ghost-color: #94a3b8;
-    --section-bg: #1e1e34;
-  }
+/* DARK THEME VARIABLES — single source of truth (deduplicated).
+ *
+ * Previously two ~identical 27-line blocks (the @media auto-dark block
+ * and the [data-theme="dark"] manual-toggle block) had to be hand-kept
+ * in sync — and had already drifted (auto-dark also set
+ * --path-inspector-speculative; manual dark did not).
+ *
+ * The dark color VALUES now live exactly ONCE, in the --dark-* helper
+ * custom properties on :root below. The two activation rules that
+ * follow contain no color literals — only mechanical
+ * `--token: var(--dark-token)` indirections — so the palette has a
+ * single source of truth and cannot drift.
+ *
+ * Activation:
+ *   - [data-theme="dark"]                                  → manual
+ *     toggle, applies under any OS color scheme.
+ *   - @media (prefers-color-scheme: dark) on
+ *     :root:not([data-theme="light"]):not([data-theme="dark"])
+ *                                                           → OS
+ *     auto-dark, only when the operator has made NO explicit choice.
+ *
+ * --path-inspector-speculative (#f59e0b) is published ONLY in the
+ * @media auto-dark arm, exactly as before: under manual dark it falls
+ * through to the :root default (#d97706). That asymmetry is preserved. */
+:root {
+  --dark-status-green: #22c55e;
+  --dark-status-yellow: #eab308;
+  --dark-status-red: #ef4444;
+  --dark-status-orange: #f97316;
+  --dark-status-purple: #a855f7;
+  --dark-status-amber: #f59e0b;
+  --dark-status-amber-light: #422006;
+  --dark-status-amber-text: #fcd34d;
+  --dark-surface-0: #0f0f23;
+  --dark-surface-1: #1a1a2e;
+  --dark-surface-2: #232340;
+  --dark-surface-3: #2d2d50;
+  --dark-text: #e2e8f0;
+  --dark-text-muted: #a8b8cc;
+  --dark-border: #334155;
+  --dark-row-stripe: #1e1e34;
+  --dark-row-hover: #2d2d50;
+  --dark-detail-bg: #232340;
+  --dark-input-bg: #1e1e34;
+  --dark-selected-bg: #1e3a5f;
+  --dark-hover-bg: rgba(255,255,255, 0.06);
+  --dark-trace-ghost-color: #94a3b8;
+  --dark-section-bg: #1e1e34;
+  --dark-path-inspector-speculative: #f59e0b;
 }
-/* ⚠️ DARK THEME VARIABLES — KEEP IN SYNC with @media block above */
+
+/* Manual dark toggle — applies regardless of the OS color scheme. */
 [data-theme="dark"] {
-  --status-green: #22c55e;
-  --status-yellow: #eab308;
-  --status-red: #ef4444;
-  --status-orange: #f97316;
-  --status-purple: #a855f7;
-  --status-amber: #f59e0b;
-  --status-amber-light: #422006;
-  --status-amber-text: #fcd34d;
-  --surface-0: #0f0f23;
-  --surface-1: #1a1a2e;
-  --surface-2: #232340;
-  --surface-3: #2d2d50;
+  --status-green: var(--dark-status-green);
+  --status-yellow: var(--dark-status-yellow);
+  --status-red: var(--dark-status-red);
+  --status-orange: var(--dark-status-orange);
+  --status-purple: var(--dark-status-purple);
+  --status-amber: var(--dark-status-amber);
+  --status-amber-light: var(--dark-status-amber-light);
+  --status-amber-text: var(--dark-status-amber-text);
+  --surface-0: var(--dark-surface-0);
+  --surface-1: var(--dark-surface-1);
+  --surface-2: var(--dark-surface-2);
+  --surface-3: var(--dark-surface-3);
   --surface: var(--surface-1);
   --content-bg: var(--surface-0);
   --card-bg: var(--surface-1);
-  --text: #e2e8f0;
-  --text-muted: #a8b8cc;
-  --border: #334155;
-  --row-stripe: #1e1e34;
-  --row-hover: #2d2d50;
-  --detail-bg: #232340;
-  --input-bg: #1e1e34;
-  --selected-bg: #1e3a5f;
-  --hover-bg: rgba(255,255,255, 0.06);
-  --trace-ghost-color: #94a3b8;
-  --section-bg: #1e1e34;
+  --text: var(--dark-text);
+  --text-muted: var(--dark-text-muted);
+  --border: var(--dark-border);
+  --row-stripe: var(--dark-row-stripe);
+  --row-hover: var(--dark-row-hover);
+  --detail-bg: var(--dark-detail-bg);
+  --input-bg: var(--dark-input-bg);
+  --selected-bg: var(--dark-selected-bg);
+  --hover-bg: var(--dark-hover-bg);
+  --trace-ghost-color: var(--dark-trace-ghost-color);
+  --section-bg: var(--dark-section-bg);
+}
+
+/* OS auto-dark — only when the operator has made no explicit choice.
+ * The shared-token rule excludes [data-theme="dark"] because the manual
+ * block above already publishes identical values for that case.
+ * --path-inspector-speculative keeps the ORIGINAL, broader selector
+ * (:not([data-theme="light"]) only) so that — exactly as before — it is
+ * also applied when [data-theme="dark"] is set under an OS-dark scheme. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    --status-green: var(--dark-status-green);
+    --status-yellow: var(--dark-status-yellow);
+    --status-red: var(--dark-status-red);
+    --status-orange: var(--dark-status-orange);
+    --status-purple: var(--dark-status-purple);
+    --status-amber: var(--dark-status-amber);
+    --status-amber-light: var(--dark-status-amber-light);
+    --status-amber-text: var(--dark-status-amber-text);
+    --surface-0: var(--dark-surface-0);
+    --surface-1: var(--dark-surface-1);
+    --surface-2: var(--dark-surface-2);
+    --surface-3: var(--dark-surface-3);
+    --surface: var(--surface-1);
+    --content-bg: var(--surface-0);
+    --card-bg: var(--surface-1);
+    --text: var(--dark-text);
+    --text-muted: var(--dark-text-muted);
+    --border: var(--dark-border);
+    --row-stripe: var(--dark-row-stripe);
+    --row-hover: var(--dark-row-hover);
+    --detail-bg: var(--dark-detail-bg);
+    --input-bg: var(--dark-input-bg);
+    --selected-bg: var(--dark-selected-bg);
+    --hover-bg: var(--dark-hover-bg);
+    --trace-ghost-color: var(--dark-trace-ghost-color);
+    --section-bg: var(--dark-section-bg);
+  }
+  :root:not([data-theme="light"]) {
+    --path-inspector-speculative: var(--dark-path-inspector-speculative);
+  }
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }

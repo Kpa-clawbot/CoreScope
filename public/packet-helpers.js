@@ -9,6 +9,21 @@
  * Handles pre-parsed objects (non-string values) gracefully — returns them as-is.
  */
 
+/**
+ * Canonical HTML-escape helper. Escapes & < > " ' so a string can be
+ * safely interpolated into both element text and attribute values.
+ * Page modules delegate to this instead of re-implementing it (issue #387).
+ */
+window.escapeHtml = function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
 window.getParsedPath = function getParsedPath(p) {
   if (p._parsedPath !== undefined) return p._parsedPath || [];
   var raw = p.path_json;
