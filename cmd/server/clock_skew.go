@@ -694,9 +694,27 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 	}
 }
 
-// GetFleetClockSkew returns clock skew data for all nodes that have skew data.
-// Must NOT be called with s.mu held.
+// GetFleetClockSkew returns clock skew data for all nodes, preferring
+// the steady-state recomputer snapshot (issue #1265). Falls back to an
+// on-request compute if the recomputer is not yet running.
 func (s *PacketStore) GetFleetClockSkew() []*NodeClockSkew {
+	s.analyticsRecomputerMu.RLock()
+	rc := s.recompNodesClockSkew
+	s.analyticsRecomputerMu.RUnlock()
+	if rc != nil {
+		if v := rc.Load(); v != nil {
+			if r, ok := v.([]*NodeClockSkew); ok {
+				return r
+			}
+		}
+	}
+	return s.computeFleetClockSkew()
+}
+
+// computeFleetClockSkew is the underlying compute used by the
+// recomputer and the on-request fallback. Must NOT be called with
+// s.mu held.
+func (s *PacketStore) computeFleetClockSkew() []*NodeClockSkew {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -707,7 +725,7 @@ func (s *PacketStore) GetFleetClockSkew() []*NodeClockSkew {
 		nameMap[ni.PublicKey] = ni
 	}
 
-	var results []*NodeClockSkew
+	var results = []*NodeClockSkew{}
 	for pubkey := range s.byNode {
 		cs := s.getNodeClockSkewLocked(pubkey)
 		if cs == nil {
@@ -727,8 +745,26 @@ func (s *PacketStore) GetFleetClockSkew() []*NodeClockSkew {
 	return results
 }
 
-// GetObserverCalibrations returns the current observer clock offsets.
+// GetObserverCalibrations returns the current observer clock offsets,
+// preferring the steady-state recomputer snapshot (issue #1265). Falls
+// back to an on-request compute when the recomputer is not running.
 func (s *PacketStore) GetObserverCalibrations() []ObserverCalibration {
+	s.analyticsRecomputerMu.RLock()
+	rc := s.recompObserversClockSkew
+	s.analyticsRecomputerMu.RUnlock()
+	if rc != nil {
+		if v := rc.Load(); v != nil {
+			if r, ok := v.([]ObserverCalibration); ok {
+				return r
+			}
+		}
+	}
+	return s.computeObserverCalibrations()
+}
+
+// computeObserverCalibrations is the underlying compute used by the
+// recomputer and on-request fallback. Must NOT be called with s.mu held.
+func (s *PacketStore) computeObserverCalibrations() []ObserverCalibration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
