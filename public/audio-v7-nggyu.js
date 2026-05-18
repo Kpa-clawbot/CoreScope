@@ -7,25 +7,40 @@
 
   const { midiToFreq, mapRange } = MeshAudio.helpers;
 
-  // Chorus melody: A major (A4=69 B4=71 C#5=73 D5=74 E5=76 F#5=78)
+  // A major: A4=69 B4=71 C#5=73 D5=74 E5=76 F#5=78
+  // B major (+2 semitones): B4=71 C#5=73 D#5=75 E5=76 F#5=78 G#5=80
   // 0 = rest
   const MELODY = [
-    // "Never gonna give you up"
+    // --- Chorus 1 (A major) ---
     69, 71, 74, 71, 78, 78, 76,
-    // "Never gonna let you down"
     69, 71, 74, 71, 76, 74,
-    // "Never gonna run around and desert you"
     69, 71, 74, 71, 74, 73, 71, 69, 0, 0,
-    // "Never gonna make you cry"
     69, 71, 74, 71, 78, 76,
-    // "Never gonna say goodbye"
     69, 71, 74, 71, 76, 74,
-    // "Never gonna tell a lie and hurt you"
     69, 71, 74, 71, 73, 71, 78, 76,
+    // --- key-change pickup ---
+    0, 0, 71, 73,
+    // --- Chorus 2 (+2 semitones, B major) ---
+    71, 73, 76, 73, 80, 80, 78,
+    71, 73, 76, 73, 78, 76,
+    71, 73, 76, 73, 76, 75, 73, 71, 0, 0,
+    71, 73, 76, 73, 80, 78,
+    71, 73, 76, 73, 78, 76,
+    71, 73, 76, 73, 75, 73, 80, 78,
   ];
 
   // Duration multiplier per note: 1 = base, 2 = held
   const DURS = [
+    // Chorus 1
+    1, 1, 1, 1, 1.5, 1, 2,
+    1, 1, 1, 1, 1.5, 2,
+    1, 1, 1, 1, 1,   1, 1, 1, 1, 2,
+    1, 1, 1, 1, 1,   2,
+    1, 1, 1, 1, 1,   2,
+    1, 1, 1, 1, 1,   1, 1, 2,
+    // pickup
+    1, 1, 1, 1,
+    // Chorus 2 (same rhythm)
     1, 1, 1, 1, 1.5, 1, 2,
     1, 1, 1, 1, 1.5, 2,
     1, 1, 1, 1, 1,   1, 1, 1, 1, 2,
