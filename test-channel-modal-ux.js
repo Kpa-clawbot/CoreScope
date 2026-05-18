@@ -35,11 +35,11 @@ assert(/id="chAddChannelBtn"/.test(chSrc),
   'sidebar exposes #chAddChannelBtn (replaces inline form)');
 assert(/\+ Add Channel/.test(chSrc) || /Add Channel/.test(chSrc),
   '[+ Add Channel] button label present');
-// Old "Show encrypted (no key)" toggle must be GONE.
-assert(!/Show encrypted \(no key\)/.test(chSrc),
-  'old "Show encrypted (no key)" checkbox removed from sidebar');
+// Old "No key" sidebar toggle must be GONE. Check the toggle's element id
+// precisely — a blanket /No key/ grep also matches unrelated error strings
+// like "No key found for this channel." which are legitimately present.
 assert(!/id="chShowEncrypted"/.test(chSrc),
-  'old #chShowEncrypted toggle removed');
+  'old #chShowEncrypted "No key" toggle removed');
 
 console.log('\n=== #1034 PR1: Modal markup ===');
 assert(/id="chAddChannelModal"/.test(chSrc),

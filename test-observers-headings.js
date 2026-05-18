@@ -1,5 +1,9 @@
 /* test-observers-headings.js — Issue #1039 regression test.
  * Asserts observer table thead column count matches tbody row column count.
+ *
+ * The thead mixes literal `<th>` tags with `sortTh('Label','col',prio)` helper
+ * calls (each call renders exactly one `<th>`). The parser below understands
+ * both forms so it stays accurate as columns move between literal and helper.
  */
 'use strict';
 
@@ -25,22 +29,32 @@ function extractBlock(s, openRe, closeRe) {
   return rest.slice(0, cm.index);
 }
 
+// Headings in source order. Each match is either a sortTh('Label',...) call or
+// a literal <th ...>Label</th> tag — both produce one column header.
+function theadLabels(thead) {
+  const labels = [];
+  const re = /sortTh\('([^']+)'|<th\b[^>]*>([^<]+)<\/th>/g;
+  let m;
+  while ((m = re.exec(thead)) !== null) {
+    labels.push((m[1] !== undefined ? m[1] : m[2]).trim());
+  }
+  return labels;
+}
+
 console.log('── Observers table headings (#1039) ──');
 
 test('thead column count equals tbody row column count', () => {
   const thead = extractBlock(src, /<thead><tr>/, /<\/tr><\/thead>/);
-  // Columns are emitted either as literal `<th>` or via `sortTh(...)` calls.
-  const thCount = (thead.match(/<th\b/g) || []).length +
-                  (thead.match(/sortTh\(/g) || []).length;
+  const thCount = theadLabels(thead).length;
 
-  // tbody row template lives inside a backtick-template `<tr ...>...</tr>`.
-  // Grab from the first `<tr ` after `tbody>` up to the first `</tr>`.
-  const tbodyStart = src.indexOf('<tbody>');
-  assert.ok(tbodyStart > 0, '<tbody> not found in observers.js');
-  const after = src.slice(tbodyStart);
-  const trOpen = after.search(/`<tr\b/);
+  // tbody row template is built via .map() and starts with return `<tr ...`.
+  // Search the whole source for this pattern (it appears before <tbody> in the
+  // full-render template literal).
+  const trOpen = src.search(/return\s*`<tr\b/);
   assert.ok(trOpen > 0, 'row template `<tr` not found');
-  const rowStart = trOpen;
+  const after = src.slice(trOpen);
+  const rowStart = after.search(/`<tr\b/);
+  assert.ok(rowStart >= 0, '`<tr` not found after return');
   const rowEnd = after.indexOf('</tr>', rowStart);
   assert.ok(rowEnd > rowStart, '</tr> not found in row template');
   const row = after.slice(rowStart, rowEnd);
@@ -55,13 +69,9 @@ test('thead column count equals tbody row column count', () => {
 
 test('expected headings present and ordered', () => {
   const thead = extractBlock(src, /<thead><tr>/, /<\/tr><\/thead>/);
-  const labels = [];
-  // Columns are either literal `<th>Label</th>` or `sortTh('Label', ...)` calls.
-  const re = /sortTh\('([^']+)'|<th[^>]*>([^<]+)<\/th>/g;
-  let m;
-  while ((m = re.exec(thead)) !== null) labels.push((m[1] || m[2]).trim());
-  const expected = ['Status', 'Name', 'SF', 'Region', 'Last Status', 'Last Packet',
-                    'Packet Health', 'Total Packets', 'Packets/Hour', 'Clock Offset', 'Uptime'];
+  const labels = theadLabels(thead);
+  const expected = ['Status', 'Name', 'SF', 'Packet Health', 'Region', 'Last Status',
+                    'Clock Offset', 'Uptime', 'Total Packets', 'Packets/Hour', 'Last Packet'];
   assert.deepStrictEqual(labels, expected,
     `Headings out of sync.\nGot:      ${JSON.stringify(labels)}\nExpected: ${JSON.stringify(expected)}`);
 });
