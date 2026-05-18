@@ -67,7 +67,9 @@
   let timeframe = localStorage.getItem('perf-timeframe') || '5m';
   let activeCharts = []; // [{ chart, id, datasets }]
   let lastWriteSourceSample  = null; // { sources, atMs } for per-second graph rates
+  let lastIngestorSample = null;
   let lastComputedWriteRates = null; // held between cache refreshes so lines stay continuous
+  let lastIngestorRates = {};
   let detailCache = { at: 0, ioStats: null, sqliteStats: null, writeSources: null };
   let healthCache = { at: 0, data: null };
 
@@ -166,6 +168,33 @@
         { id: 'wsclients', label: 'WS Clients', datasets: [{ key: 'wsClients', label: 'Clients', color: '#06b6d4' }] },
       ]
     },
+    {
+      category: 'Ingestor',
+      charts: [
+        {
+          id: 'ingestor-throughput', label: 'Ingestor Throughput (B/s)',
+          datasets: [
+            { key: 'ingestorReadBps',  label: 'Read',  color: '#22c55e' },
+            { key: 'ingestorWriteBps', label: 'Write', color: '#f97316' },
+          ]
+        },
+        {
+          id: 'ingestor-syscalls', label: 'Ingestor Syscalls (/s)',
+          datasets: [
+            { key: 'ingestorSyscR', label: 'Syscalls Read',  color: '#4a9eff' },
+            { key: 'ingestorSyscW', label: 'Syscalls Write', color: '#a78bfa' },
+          ]
+        },
+        {
+          id: 'ingestor-write-sources', label: 'Ingestor Write Sources (/s)',
+          datasets: [
+            { key: 'writeTxRate',  label: 'Tx/s',         color: '#06b6d4' },
+            { key: 'writeObsRate', label: 'Obs/s',         color: '#f43f5e' },
+            { key: 'writeWalRate', label: 'WAL commits/s', color: '#eab308' },
+          ]
+        },
+      ]
+    },
   ];
 
   // --- Write-source per-second rates ---
@@ -197,8 +226,37 @@
       writeNodeUpsertRate:     rate('node_upserts'),
       writeObserverUpsertRate: rate('observer_upserts'),
       writeErrorRate:          rate('write_errors'),
+      writeWalRate:            rate('walCommits'),
     };
     return lastComputedWriteRates;
+  }
+
+  function ingestorIORates(ingestor) {
+    if (!ingestor || !ingestor.sampledAt) {
+      lastIngestorSample = null;
+      return { ingestorReadBps: null, ingestorWriteBps: null, ingestorSyscR: null, ingestorSyscW: null };
+    }
+    const prev = lastIngestorSample;
+    lastIngestorSample = { readBytes: +ingestor.readBytes, writeBytes: +ingestor.writeBytes,
+                           syscR: +ingestor.syscR, syscW: +ingestor.syscW, sampledAt: ingestor.sampledAt };
+    if (!prev) {
+      return { ingestorReadBps: 0, ingestorWriteBps: 0, ingestorSyscR: 0, ingestorSyscW: 0 };
+    }
+    const parsedAt = Date.parse(ingestor.sampledAt);
+    const prevAt   = Date.parse(prev.sampledAt);
+    if (!Number.isFinite(parsedAt) || !Number.isFinite(prevAt)) {
+      return { ingestorReadBps: 0, ingestorWriteBps: 0, ingestorSyscR: 0, ingestorSyscW: 0 };
+    }
+    const dtSec = (parsedAt - prevAt) / 1000;
+    if (dtSec < 0.5) {
+      return { ingestorReadBps: 0, ingestorWriteBps: 0, ingestorSyscR: 0, ingestorSyscW: 0 };
+    }
+    return {
+      ingestorReadBps:  Math.max(0, lastIngestorSample.readBytes  - prev.readBytes)  / dtSec,
+      ingestorWriteBps: Math.max(0, lastIngestorSample.writeBytes - prev.writeBytes) / dtSec,
+      ingestorSyscR:    Math.max(0, lastIngestorSample.syscR      - prev.syscR)      / dtSec,
+      ingestorSyscW:    Math.max(0, lastIngestorSample.syscW      - prev.syscW)      / dtSec,
+    };
   }
 
   // --- Sample accumulation ---
@@ -210,6 +268,8 @@
     const ps = server.packetStore;
     const sq = server.sqlite;
     const wr = writeSourceRates(writeSources);
+    const ir = ingestorIORates(ioStats ? ioStats.ingestor : null);
+    lastIngestorRates = ir;
     const sample = {
       ts:               Date.now(),
       cpuPercent:       gr ? +gr.cpuPercent  : null,
@@ -242,6 +302,11 @@
       writeNodeUpsertRate:     wr.writeNodeUpsertRate     != null ? wr.writeNodeUpsertRate     : null,
       writeObserverUpsertRate: wr.writeObserverUpsertRate != null ? wr.writeObserverUpsertRate : null,
       writeErrorRate:          wr.writeErrorRate          != null ? wr.writeErrorRate          : null,
+      writeWalRate:            wr.writeWalRate            != null ? wr.writeWalRate            : null,
+      ingestorReadBps:  ir.ingestorReadBps  != null ? ir.ingestorReadBps  : null,
+      ingestorWriteBps: ir.ingestorWriteBps != null ? ir.ingestorWriteBps : null,
+      ingestorSyscR:    ir.ingestorSyscR    != null ? ir.ingestorSyscR    : null,
+      ingestorSyscW:    ir.ingestorSyscW    != null ? ir.ingestorSyscW    : null,
     };
 
     // Short buffer (5 s resolution, 1 h)
@@ -687,6 +752,14 @@
         '<div class="perf-card"><div class="perf-num">' + Math.round(ioStats.syscallsRead || 0) + '/s</div><div class="perf-label">Syscalls Read</div></div>' +
         '<div class="perf-card"><div class="perf-num">' + Math.round(ioStats.syscallsWrite || 0) + '/s</div><div class="perf-label">Syscalls Write</div></div>' +
       '</div>';
+      if (ioStats.ingestor) {
+        html += '<h3>Ingestor I/O (ingestor process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">' +
+          '<div class="perf-card"><div class="perf-num">' + fmtRate(lastIngestorRates.ingestorReadBps || 0) + '</div><div class="perf-label">Read</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + fmtRate(lastIngestorRates.ingestorWriteBps || 0) + '</div><div class="perf-label">Write</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + Math.round(lastIngestorRates.ingestorSyscR || 0) + '/s</div><div class="perf-label">Syscalls Read</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + Math.round(lastIngestorRates.ingestorSyscW || 0) + '</div><div class="perf-label">Syscalls Write</div></div>' +
+        '</div>';
+      }
     }
 
     // Write Sources — per-component counters from ingestor
