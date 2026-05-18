@@ -239,13 +239,6 @@ type PerfResponse struct {
 	WebSocketClients int                           `json:"webSocketClients"`
 }
 
-type ObserverCounts struct {
-	Total   int `json:"total"`
-	Online  int `json:"online"`
-	Stale   int `json:"stale"`
-	Offline int `json:"offline"`
-}
-
 // GoRuntimeStats holds Go runtime metrics for the perf endpoint.
 type GoRuntimeStats struct {
 	Goroutines   int     `json:"goroutines"`
@@ -258,14 +251,27 @@ type GoRuntimeStats struct {
 	HeapIdleMB   float64 `json:"heapIdleMB"`
 	NumCPU       int     `json:"numCPU"`
 	CpuPercent   float64 `json:"cpuPercent"`
-	TotalSysMB   float64 `json:"totalSysMB"`
+	// TotalSysMB is runtime.MemStats.Sys — total memory obtained from the OS
+	// for the Go runtime (heap + stacks + everything Go-managed), in MB.
+	TotalSysMB float64 `json:"totalSysMB"`
+}
+
+// ObserverCounts is the observer health breakdown surfaced on /api/perf.
+// Online/stale/offline use the SAME last_seen thresholds as the observers
+// page (public/observers.js healthStatus): online < 10 min, stale < 1 hour,
+// offline ≥ 1 hour. Only non-soft-deleted observers are counted.
+type ObserverCounts struct {
+	Total   int `json:"total"`
+	Online  int `json:"online"`
+	Stale   int `json:"stale"`
+	Offline int `json:"offline"`
 }
 
 // PerfSample is one minute-resolution snapshot stored in the server-side ring
 // buffer and served by GET /api/perf/history.  Field names mirror the keys used
 // by the frontend ring buffer so the JS can consume them directly.
 type PerfSample struct {
-	Ts              int64   `json:"ts"`
+	Ts              int64   `json:"ts"` // unix milliseconds
 	CpuPercent      float64 `json:"cpuPercent"`
 	TotalSysMB      float64 `json:"totalSysMB"`
 	HeapAllocMB     float64 `json:"heapAllocMB"`

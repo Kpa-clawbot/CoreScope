@@ -62,6 +62,13 @@ type Server struct {
 	backupRunning  bool
 	backupLastDone time.Time
 
+	// In-memory perf-metrics ring buffer for /api/perf/history. Populated by
+	// a background goroutine (one sample per minute) and capped at
+	// perfHistoryCap. Not persisted — the server DB is opened read-only, so
+	// history resets on restart by design.
+	perfHistoryMu sync.Mutex
+	perfHistory   []PerfSample
+
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
 
@@ -69,10 +76,6 @@ type Server struct {
 	cpuMu        sync.Mutex
 	cpuLastWall  time.Time
 	cpuLastCPUNs int64
-
-	// Server-side perf history ring buffer (1-min resolution, 48 h max)
-	perfHistoryMu sync.Mutex
-	perfHistory   []PerfSample
 
 	// Path to the SQLite DB file — set when persistence is available.
 	// Empty string disables async persistence in storePerfSample.
@@ -819,11 +822,13 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 		sqliteStats = &ss
 	}
 
-	// Observer counts (single aggregate query — no full row scan)
+	// Observer health breakdown — same last_seen thresholds as the observers page.
 	var observerCounts *ObserverCounts
 	if s.db != nil {
-		observerCounts, _ = s.db.GetObserverCounts()
+		observerCounts = s.db.GetObserverCounts()
 	}
+
+
 	wsClients := 0
 	if s.hub != nil {
 		wsClients = s.hub.ClientCount()
@@ -921,7 +926,7 @@ func (s *Server) collectPerfSample() PerfSample {
 		sample.WSClients = s.hub.ClientCount()
 	}
 	if s.db != nil {
-		if oc, err := s.db.GetObserverCounts(); err == nil {
+		if oc := s.db.GetObserverCounts(); oc != nil {
 			sample.TotalObservers   = &oc.Total
 			sample.OnlineObservers  = &oc.Online
 			sample.StaleObservers   = &oc.Stale
@@ -953,19 +958,29 @@ func (s *Server) collectPerfSample() PerfSample {
 	return sample
 }
 
-// storePerfSample appends a sample to the server-side ring buffer (max 2880 = 48 h at 1 min)
-// and, when a DB path is available, persists it asynchronously so history survives restarts.
+// storePerfSample appends a sample to the server-side ring buffer capped at
+// perfHistoryCap entries, and when a DB path is available persists it
+// asynchronously so history survives restarts.
 func (s *Server) storePerfSample(sample PerfSample) {
-	const maxSamples = 2880
 	s.perfHistoryMu.Lock()
 	defer s.perfHistoryMu.Unlock()
 	s.perfHistory = append(s.perfHistory, sample)
-	if len(s.perfHistory) > maxSamples {
-		s.perfHistory = s.perfHistory[1:]
+	if len(s.perfHistory) > perfHistoryCap {
+		trimmed := make([]PerfSample, perfHistoryCap)
+		copy(trimmed, s.perfHistory[len(s.perfHistory)-perfHistoryCap:])
+		s.perfHistory = trimmed
 	}
 	if s.dbPath != "" {
 		asyncSavePerfSample(s.dbPath, sample)
 	}
+}
+
+// perfHistoryCap bounds the in-memory perf-history ring buffer (48 h at 1-min resolution).
+const perfHistoryCap = 2880
+
+// PerfHistoryResponse is the /api/perf/history payload.
+type PerfHistoryResponse struct {
+	Samples []PerfSample `json:"samples"`
 }
 
 // handlePerfHistory returns the server-side perf ring buffer as JSON.
@@ -975,7 +990,36 @@ func (s *Server) handlePerfHistory(w http.ResponseWriter, r *http.Request) {
 	samples := make([]PerfSample, len(s.perfHistory))
 	copy(samples, s.perfHistory)
 	s.perfHistoryMu.Unlock()
-	writeJSON(w, map[string]interface{}{"samples": samples})
+	writeJSON(w, PerfHistoryResponse{Samples: samples})
+}
+
+// startPerfHistoryCollector launches the background goroutine that snapshots
+// perf metrics into the ring buffer every minute. It returns a stop function
+// the caller invokes on shutdown.
+func (s *Server) startPerfHistoryCollector() func() {
+	const interval = 60 * time.Second
+	ticker := time.NewTicker(interval)
+	done := make(chan struct{})
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// Diagnostics only — a panic here must not crash the server.
+			}
+		}()
+		// Seed one sample immediately so /api/perf/history isn't empty for
+		// the first minute after startup.
+		s.storePerfSample(s.collectPerfSample())
+		for {
+			select {
+			case <-ticker.C:
+				s.storePerfSample(s.collectPerfSample())
+			case <-done:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 // --- Packet Handlers ---

@@ -1,15 +1,34 @@
-/* === CoreScope — perf.js === */
+/* === CoreScope — perf.js ===
+ *
+ * Live time-series Performance dashboard. Classic-script IIFE module registered
+ * via registerPage('perf', …) like the other SPA pages.
+ *
+ * Data model:
+ *   - Two sessionStorage-backed ring buffers:
+ *       short  — 5 s resolution, 1 h window  (720 samples)  → 5m/15m/30m/1h views
+ *       long   — 1 min resolution, 48 h window (2880 samples) → 6h/12h/24h/48h views
+ *   - preloadFromServer() fetches GET /api/perf/history once on page load and
+ *     merges the server-side 48 h ring buffer into the local buffers.
+ *   - refresh() polls /api/perf every 10 s; the detail endpoints
+ *     (/api/perf/io, /api/perf/sqlite, /api/perf/write-sources) every 30 s.
+ *
+ * Server field-name note (this server diverged from the fork): the history
+ * PerfSample emits only 17 fields — ts, cpuPercent, goroutines, lastPauseMs,
+ * heapAllocMB, heapInuseMB, heapSysMB, totalSysMB, avgMs, cacheHitRate,
+ * packetsInRAM, trackedMB, dbSizeMB, walSizeMB, wsClients, totalObservers,
+ * onlineObservers. I/O, SQLite-perf, write-source and stale/offline-observer
+ * metrics are NOT in the history payload — those charts fill live only.
+ */
 'use strict';
 
 (function () {
-  let interval = null;
+  let interval       = null; // /api/perf poll (REFRESH_MS)
+  let detailInterval = null; // detail endpoints poll (DETAIL_REFRESH_MS)
 
   // --- History ring buffers ---
-  // Short: 5 s resolution, 1 h max  (720 samples)  → 5m / 15m / 30m / 1h views
-  // Long : 1 min resolution, 48 h max (2880 samples) → 6h / 12h / 24h / 48h views
-  const MAX_SAMPLES      = 720;
-  const MAX_LONG_SAMPLES = 2880;
-  const REFRESH_MS       = 10000;
+  const MAX_SAMPLES      = 720;   // short: 5 s × 720  = 1 h
+  const MAX_LONG_SAMPLES = 2880;  // long : 60 s × 2880 = 48 h
+  const REFRESH_MS        = 10000;
   const DETAIL_REFRESH_MS = 30000;
   const HISTORY_KEY      = 'cs-perf-history';
   const LONG_HISTORY_KEY = 'cs-perf-history-long';
@@ -44,22 +63,22 @@
   }());
 
   // --- View state (persisted across navigations) ---
-  let viewMode  = localStorage.getItem('perf-view')      || 'cards';
+  let viewMode  = localStorage.getItem('perf-view')      || 'graphs';
   let timeframe = localStorage.getItem('perf-timeframe') || '5m';
-  let activeCharts = []; // [{ chart: Chart, id: string, datasets: [{key,label,color}] }]
-  let lastWriteSourceSample = null; // { sources, atMs } for per-second graph rates
-  let lastComputedWriteRates = null; // held between cache refreshes so lines are continuous
+  let activeCharts = []; // [{ chart, id, datasets }]
+  let lastWriteSourceSample  = null; // { sources, atMs } for per-second graph rates
+  let lastComputedWriteRates = null; // held between cache refreshes so lines stay continuous
   let detailCache = { at: 0, ioStats: null, sqliteStats: null, writeSources: null };
   let healthCache = { at: 0, data: null };
 
-  // Charts grouped by category. Multi-entry datasets render as multi-line charts with a legend.
+  // Charts grouped by category. Multi-entry datasets render as multi-line charts.
   const CHART_GROUPS = [
     {
       category: 'Runtime',
       charts: [
-        { id: 'cpu',       label: 'CPU Usage (%)',     datasets: [{ key: 'cpuPercent',  label: 'CPU %',     color: '#f43f5e' }] },
-        { id: 'goroutines',label: 'Goroutines',        datasets: [{ key: 'goroutines',  label: 'Goroutines',color: '#eab308' }] },
-        { id: 'gcpause',   label: 'GC Last Pause (ms)',datasets: [{ key: 'lastPauseMs', label: 'Pause ms',  color: '#a78bfa' }] },
+        { id: 'cpu',        label: 'CPU Usage (%)',      datasets: [{ key: 'cpuPercent',  label: 'CPU %',      color: '#f43f5e' }] },
+        { id: 'goroutines', label: 'Goroutines',         datasets: [{ key: 'goroutines',  label: 'Goroutines', color: '#eab308' }] },
+        { id: 'gcpause',    label: 'GC Last Pause (ms)', datasets: [{ key: 'lastPauseMs', label: 'Pause ms',   color: '#a78bfa' }] },
       ]
     },
     {
@@ -79,15 +98,15 @@
     {
       category: 'API & Cache',
       charts: [
-        { id: 'avgms',   label: 'Avg Response (ms)',  datasets: [{ key: 'avgMs',       label: 'Avg ms',    color: '#ef4444' }] },
-        { id: 'hitrate', label: 'Cache Hit Rate (%)', datasets: [{ key: 'cacheHitRate',label: 'Hit Rate %',color: '#f97316' }] },
+        { id: 'avgms',   label: 'Avg Response (ms)',  datasets: [{ key: 'avgMs',        label: 'Avg ms',     color: '#ef4444' }] },
+        { id: 'hitrate', label: 'Cache Hit Rate (%)', datasets: [{ key: 'cacheHitRate', label: 'Hit Rate %', color: '#f97316' }] },
       ]
     },
     {
       category: 'Storage',
       charts: [
-        { id: 'packets',  label: 'Packets in RAM',         datasets: [{ key: 'packetsInRAM', label: 'Packets',    color: '#a855f7' }] },
-        { id: 'packetmb', label: 'Packet Store RAM (MB)',  datasets: [{ key: 'trackedMB',    label: 'Tracked MB', color: '#8b5cf6' }] },
+        { id: 'packets',  label: 'Packets in RAM',        datasets: [{ key: 'packetsInRAM', label: 'Packets',    color: '#a855f7' }] },
+        { id: 'packetmb', label: 'Packet Store RAM (MB)', datasets: [{ key: 'trackedMB',    label: 'Tracked MB', color: '#8b5cf6' }] },
         {
           id: 'sqlite', label: 'SQLite (MB)',
           datasets: [
@@ -98,6 +117,8 @@
       ]
     },
     {
+      // I/O metrics are NOT in /api/perf/history — these charts fill live only
+      // (from the /api/perf/io + /api/perf/sqlite + /api/perf/write-sources polls).
       category: 'I/O',
       charts: [
         {
@@ -114,8 +135,8 @@
             { key: 'ioSyscallsWrite', label: 'Write', color: '#eab308' },
           ]
         },
-        { id: 'sqlitewal', label: 'SQLite WAL (MB)', datasets: [{ key: 'sqlitePerfWalMB', label: 'WAL MB', color: '#94a3b8' }] },
-        { id: 'sqlitecache', label: 'SQLite Cache Hit (%)', datasets: [{ key: 'sqliteCacheHitPct', label: 'Hit %', color: '#22c55e' }] },
+        { id: 'sqlitewal',   label: 'SQLite Perf WAL (MB)',  datasets: [{ key: 'sqlitePerfWalMB',   label: 'WAL MB', color: '#94a3b8' }] },
+        { id: 'sqlitecache', label: 'SQLite Cache Hit (%)',  datasets: [{ key: 'sqliteCacheHitPct', label: 'Hit %',  color: '#22c55e' }] },
         {
           id: 'writerates', label: 'Write Sources (/s)',
           datasets: [
@@ -132,6 +153,8 @@
       category: 'Connections',
       charts: [
         {
+          // staleObservers / offlineObservers come from /api/perf live only —
+          // the history PerfSample carries only total + online.
           id: 'observers', label: 'Observers',
           datasets: [
             { key: 'totalObservers',   label: 'Total',   color: '#a78bfa' },
@@ -145,7 +168,9 @@
     },
   ];
 
-  // --- Ring buffer helpers ---
+  // --- Write-source per-second rates ---
+  // The detail cache serves the same write-sources snapshot for 30 s. We hold
+  // the last computed rate so the chart line stays continuous between refreshes.
   function writeSourceRates(writeSources) {
     const sources = writeSources && writeSources.sources;
     if (!sources) return {};
@@ -154,11 +179,8 @@
     const parsedAt = sampleAt ? Date.parse(sampleAt) : NaN;
     const atMs = Number.isFinite(parsedAt) ? parsedAt : Date.now();
     const prev = lastWriteSourceSample;
-    lastWriteSourceSample = { sources: { ...sources }, atMs: atMs };
+    lastWriteSourceSample = { sources: Object.assign({}, sources), atMs: atMs };
 
-    // sampleAt hasn't advanced — the detail cache is still serving the same
-    // snapshot. Hold the last computed rates so the chart line stays continuous
-    // instead of breaking into invisible hairlines every 30 s.
     if (!prev || atMs <= prev.atMs) return lastComputedWriteRates || {};
     const dtSec = (atMs - prev.atMs) / 1000;
     if (dtSec < 0.5) return lastComputedWriteRates || {};
@@ -179,37 +201,42 @@
     return lastComputedWriteRates;
   }
 
+  // --- Sample accumulation ---
+  // Builds a flat sample from the /api/perf response (+ detail polls) and pushes
+  // it into both ring buffers. Field names mirror the server PerfSample so that
+  // server-history samples and live samples share the same shape.
   function pushSample(server, obs, ioStats, sqliteStats, writeSources) {
     const gr = server.goRuntime;
     const ps = server.packetStore;
     const sq = server.sqlite;
     const wr = writeSourceRates(writeSources);
     const sample = {
-      ts:              Date.now(),
-      cpuPercent:      gr  ? +gr.cpuPercent                : null,
-      totalSysMB:      gr  ? +gr.totalSysMB                : null,
-      heapAllocMB:     gr  ? +gr.heapAllocMB               : null,
-      heapInuseMB:     gr  ? +gr.heapInuseMB               : null,
-      heapSysMB:       gr  ? +gr.heapSysMB                 : null,
-      lastPauseMs:     gr  ? +gr.lastPauseMs               : null,
-      goroutines:      gr  ? gr.goroutines                 : null,
-      packetsInRAM:    ps  ? ps.inMemory                   : null,
-      trackedMB:       ps  ? +ps.trackedMB                 : null,
-      cacheHitRate:    server.cache ? server.cache.hitRate  : null,
-      avgMs:           server.avgMs || null,
-      dbSizeMB:        sq  ? +sq.dbSizeMB                  : null,
-      walSizeMB:       sq  ? +sq.walSizeMB                 : null,
-      wsClients:       server.webSocketClients != null ? server.webSocketClients : null,
-      totalObservers:  obs ? obs.total                     : null,
-      onlineObservers: obs ? obs.online                    : null,
-      staleObservers:  obs ? obs.stale                     : null,
-      offlineObservers:obs ? obs.offline                   : null,
-      ioReadBps:       ioStats ? +(ioStats.readBytesPerSec || 0)  : null,
-      ioWriteBps:      ioStats ? +(ioStats.writeBytesPerSec || 0) : null,
-      ioSyscallsRead:  ioStats ? +(ioStats.syscallsRead || 0)     : null,
-      ioSyscallsWrite: ioStats ? +(ioStats.syscallsWrite || 0)    : null,
-      sqlitePerfWalMB: sqliteStats ? +(sqliteStats.walSizeMB || 0) : null,
-      sqliteCacheHitPct: sqliteStats && sqliteStats.cacheHitRate != null ? +(sqliteStats.cacheHitRate * 100) : null,
+      ts:               Date.now(),
+      cpuPercent:       gr ? +gr.cpuPercent  : null,
+      totalSysMB:       gr ? +gr.totalSysMB  : null,
+      heapAllocMB:      gr ? +gr.heapAllocMB : null,
+      heapInuseMB:      gr ? +gr.heapInuseMB : null,
+      heapSysMB:        gr ? +gr.heapSysMB   : null,
+      lastPauseMs:      gr ? +gr.lastPauseMs : null,
+      goroutines:       gr ? gr.goroutines   : null,
+      packetsInRAM:     ps ? ps.inMemory     : null,
+      trackedMB:        ps ? +ps.trackedMB   : null,
+      cacheHitRate:     server.cache ? server.cache.hitRate : null,
+      avgMs:            server.avgMs != null ? server.avgMs : null,
+      dbSizeMB:         sq ? +sq.dbSizeMB    : null,
+      walSizeMB:        sq ? +sq.walSizeMB   : null,
+      wsClients:        server.webSocketClients != null ? server.webSocketClients : null,
+      totalObservers:   obs ? obs.total      : null,
+      onlineObservers:  obs ? obs.online     : null,
+      staleObservers:   obs ? obs.stale      : null,
+      offlineObservers: obs ? obs.offline    : null,
+      ioReadBps:        ioStats ? +(ioStats.readBytesPerSec  || 0) : null,
+      ioWriteBps:       ioStats ? +(ioStats.writeBytesPerSec || 0) : null,
+      ioSyscallsRead:   ioStats ? +(ioStats.syscallsRead  || 0)    : null,
+      ioSyscallsWrite:  ioStats ? +(ioStats.syscallsWrite || 0)    : null,
+      sqlitePerfWalMB:  sqliteStats ? +(sqliteStats.walSizeMB || 0) : null,
+      sqliteCacheHitPct: sqliteStats && sqliteStats.cacheHitRate != null
+        ? +(sqliteStats.cacheHitRate * 100) : null,
       writeTxRate:             wr.writeTxRate             != null ? wr.writeTxRate             : null,
       writeObsRate:            wr.writeObsRate            != null ? wr.writeObsRate            : null,
       writeNodeUpsertRate:     wr.writeNodeUpsertRate     != null ? wr.writeNodeUpsertRate     : null,
@@ -231,6 +258,9 @@
     }
   }
 
+  // Returns the slice of samples covering the current timeframe. A synthetic
+  // anchor (ts only) is prepended when data is sparse so the x-axis always
+  // spans the full requested window.
   function getSlice() {
     const now = Date.now();
     let cutoff, data;
@@ -241,9 +271,6 @@
       cutoff = now - (TIMEFRAME_MS[timeframe] || 300000);
       data = history.filter(function (s) { return s.ts >= cutoff; });
     }
-    // Prepend a synthetic anchor so the x-axis always spans the full requested
-    // window even when data is sparse. The anchor has only a ts field; all data
-    // keys are undefined so chart visibility filtering and gap rendering work correctly.
     if (data.length === 0 || data[0].ts > cutoff + 60000) {
       return [{ ts: cutoff }].concat(data);
     }
@@ -251,13 +278,11 @@
   }
 
   // --- Server-side history preload ---
-  // Fetches the server-side ring buffer on page load and merges it into the local
-  // buffers. Deduplication is by timestamp (Set lookup), so:
-  //   - A simple page refresh adds only the few samples collected since last load.
-  //   - A fresh load (empty sessionStorage) or a load after a long absence fills
-  //     the full 48 h of server history, including samples OLDER than what was in
-  //     sessionStorage — the previous "append-only" logic silently dropped those
-  //     and left 6 h / 12 h views with far less data than expected.
+  // Fetches /api/perf/history once on load and merges it into the local
+  // buffers, deduplicating by timestamp. The server only emits 17 fields per
+  // sample (no I/O / write-source / stale-offline data) — those chart keys
+  // stay undefined for history samples and render as gaps until live polling
+  // fills them. Degrades gracefully when history is empty (fresh server).
   async function preloadFromServer() {
     try {
       const res = await fetch('/api/perf/history');
@@ -267,9 +292,7 @@
       if (!samples || samples.length === 0) return;
 
       // Long history — merge all server samples not already present (by ts).
-      // Server sends oldest-first; after dedup we re-sort so that samples
-      // older than the current sessionStorage tail are correctly prepended.
-      const existingTs = new Set(longHistory.map(function(s) { return s.ts; }));
+      const existingTs = new Set(longHistory.map(function (s) { return s.ts; }));
       var longAdded = false;
       for (var si = 0; si < samples.length; si++) {
         var s = samples[si];
@@ -279,13 +302,13 @@
         }
       }
       if (longAdded) {
-        longHistory.sort(function(a, b) { return a.ts - b.ts; });
+        longHistory.sort(function (a, b) { return a.ts - b.ts; });
         while (longHistory.length > MAX_LONG_SAMPLES) longHistory.shift();
       }
       if (longHistory.length > 0) lastLongSampleTs = longHistory[longHistory.length - 1].ts;
 
-      // Short history — append server samples from the last hour that are
-      // newer than the most recent local entry (sparse 1-min fill on fresh load).
+      // Short history — append server samples from the last hour newer than the
+      // most recent local entry (sparse 1-min fill on a fresh load).
       const lastShortTs = history.length > 0 ? history[history.length - 1].ts : 0;
       const oneHourAgo  = Date.now() - 3600000;
       for (var si2 = 0; si2 < samples.length; si2++) {
@@ -296,23 +319,6 @@
         }
       }
 
-      // Derive write-source rates from adjacent samples that carry raw cumulative
-      // counters (writeTxCum etc.), mirroring the live writeSourceRates() logic.
-      // Samples without the cum fields (old server builds or session-restored entries)
-      // are skipped — their rate fields remain null and the chart renders a gap.
-      for (var hi = 1; hi < longHistory.length; hi++) {
-        var cur = longHistory[hi], prv = longHistory[hi - 1];
-        if (cur.writeTxCum == null || prv.writeTxCum == null) continue;
-        if (cur.writeTxRate != null) continue; // already computed (live push)
-        var dtSec = (cur.ts - prv.ts) / 1000;
-        if (dtSec < 1) continue;
-        cur.writeTxRate             = Math.max(0, cur.writeTxCum       - prv.writeTxCum)       / dtSec;
-        cur.writeObsRate            = Math.max(0, cur.writeObsCum      - prv.writeObsCum)      / dtSec;
-        cur.writeNodeUpsertRate     = Math.max(0, cur.writeNodeCum     - prv.writeNodeCum)     / dtSec;
-        cur.writeObserverUpsertRate = Math.max(0, cur.writeObserverCum - prv.writeObserverCum) / dtSec;
-        cur.writeErrorRate          = Math.max(0, cur.writeErrCum      - prv.writeErrCum)      / dtSec;
-      }
-
       try { sessionStorage.setItem(HISTORY_KEY,      JSON.stringify(history));     } catch (e) { /* quota */ }
       try { sessionStorage.setItem(LONG_HISTORY_KEY, JSON.stringify(longHistory)); } catch (e) { /* quota */ }
     } catch (e) { /* non-fatal — server may not have history yet */ }
@@ -320,7 +326,9 @@
 
   // --- Chart lifecycle ---
   function destroyCharts() {
-    activeCharts.forEach(function (c) { c.chart.destroy(); });
+    activeCharts.forEach(function (c) {
+      try { c.chart.destroy(); } catch (e) { /* already gone */ }
+    });
     activeCharts = [];
   }
 
@@ -340,29 +348,34 @@
     return true;
   }
 
-  // --- Init: builds page chrome once per navigation ---
+  // --- Page chrome (built once per navigation) ---
   async function render(app) {
-    app.innerHTML = `
-      <div id="perfWrapper" style="padding:16px 24px">
-        <div class="perf-header">
-          <h2 style="margin:0">⚡ Performance Dashboard</h2>
-          <div class="perf-header-controls">
-            <button id="perfViewToggle" class="perf-view-btn">${viewMode === 'graphs' ? '📋 Cards' : '📊 Graphs'}</button>
-            <div id="perfTfBar" class="perf-tf-bar" style="display:${viewMode === 'graphs' ? 'flex' : 'none'}">
-              ${['5m', '15m', '30m', '1h', '6h', '12h', '24h', '48h'].map(function (t) {
-                return `<button class="perf-tf-btn${t === timeframe ? ' active' : ''}" data-tf="${t}">${t}</button>`;
-              }).join('')}
-            </div>
-          </div>
-        </div>
-        <div id="perfContent">Loading…</div>
-      </div>`;
+    app.innerHTML =
+      '<div id="perfWrapper" style="padding:16px 24px">' +
+        '<div class="perf-header">' +
+          '<h2 style="margin:0">⚡ Performance Dashboard</h2>' +
+          '<div class="perf-header-controls">' +
+            '<button id="perfViewToggle" class="perf-view-btn">' +
+              (viewMode === 'graphs' ? '📋 Cards' : '📊 Graphs') + '</button>' +
+            '<div id="perfTfBar" class="perf-tf-bar" style="display:' +
+              (viewMode === 'graphs' ? 'flex' : 'none') + '">' +
+              ['5m', '15m', '30m', '1h', '6h', '12h', '24h', '48h'].map(function (t) {
+                return '<button class="perf-tf-btn' + (t === timeframe ? ' active' : '') +
+                  '" data-tf="' + t + '">' + t + '</button>';
+              }).join('') +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div id="perfContent">' + PageState.loading('Loading performance metrics…') + '</div>' +
+      '</div>';
 
     document.getElementById('perfViewToggle').addEventListener('click', function () {
       viewMode = viewMode === 'graphs' ? 'cards' : 'graphs';
       localStorage.setItem('perf-view', viewMode);
-      document.getElementById('perfViewToggle').textContent = viewMode === 'graphs' ? '📋 Cards' : '📊 Graphs';
-      document.getElementById('perfTfBar').style.display = viewMode === 'graphs' ? 'flex' : 'none';
+      document.getElementById('perfViewToggle').textContent =
+        viewMode === 'graphs' ? '📋 Cards' : '📊 Graphs';
+      document.getElementById('perfTfBar').style.display =
+        viewMode === 'graphs' ? 'flex' : 'none';
       if (viewMode === 'cards') destroyCharts();
       refresh();
     });
@@ -375,48 +388,52 @@
       document.querySelectorAll('.perf-tf-btn').forEach(function (b) {
         b.classList.toggle('active', b.dataset.tf === timeframe);
       });
-      // Rebuild charts so visibility filtering re-runs against the new timeframe's data.
-      // updateChartsInPlace() would skip the filter and leave stale empty charts visible.
+      // Rebuild charts so visibility filtering re-runs against the new window.
       destroyCharts();
-      renderGraphs(document.getElementById('perfContent'));
+      var el = document.getElementById('perfContent');
+      if (el) renderGraphs(el);
     });
 
     await preloadFromServer();
     await refresh();
   }
 
-  // --- Polling refresh ---
+  // --- Detail polling (30 s cache) ---
   async function loadPerfDetails() {
     const now = Date.now();
-    if (now - detailCache.at < DETAIL_REFRESH_MS) return detailCache;
-    const [ioStats, sqliteStats, writeSources] = await Promise.all([
-      fetch('/api/perf/io').then(r => r.json()).catch(() => null),
-      fetch('/api/perf/sqlite').then(r => r.json()).catch(() => null),
-      fetch('/api/perf/write-sources').then(r => r.json()).catch(() => null)
+    if (now - detailCache.at < DETAIL_REFRESH_MS && detailCache.at !== 0) return detailCache;
+    const results = await Promise.all([
+      fetch('/api/perf/io').then(function (r) { return r.json(); }).catch(function () { return null; }),
+      fetch('/api/perf/sqlite').then(function (r) { return r.json(); }).catch(function () { return null; }),
+      fetch('/api/perf/write-sources').then(function (r) { return r.json(); }).catch(function () { return null; })
     ]);
-    detailCache = { at: now, ioStats: ioStats, sqliteStats: sqliteStats, writeSources: writeSources };
+    detailCache = { at: now, ioStats: results[0], sqliteStats: results[1], writeSources: results[2] };
     return detailCache;
   }
 
   async function loadHealthForCards() {
     const now = Date.now();
-    if (now - healthCache.at < DETAIL_REFRESH_MS) return healthCache.data;
-    const data = await fetch('/api/health').then(r => r.json()).catch(() => null);
+    if (now - healthCache.at < DETAIL_REFRESH_MS && healthCache.at !== 0) return healthCache.data;
+    const data = await fetch('/api/health').then(function (r) { return r.json(); }).catch(function () { return null; });
     healthCache = { at: now, data: data };
     return data;
   }
 
+  // --- Polling refresh ---
   async function refresh() {
     var el = document.getElementById('perfContent');
     if (!el) return;
     try {
-      const [server, client, details] = await Promise.all([
-        fetch('/api/perf').then(r => r.json()),
+      const results = await Promise.all([
+        fetch('/api/perf').then(function (r) { return r.json(); }),
         Promise.resolve(window.apiPerf ? window.apiPerf() : null),
         loadPerfDetails()
       ]);
-      const ioStats = details.ioStats;
-      const sqliteStats = details.sqliteStats;
+      const server  = results[0];
+      const client  = results[1];
+      const details = results[2];
+      const ioStats      = details.ioStats;
+      const sqliteStats  = details.sqliteStats;
       const writeSources = details.writeSources;
       const health = viewMode === 'cards' ? await loadHealthForCards() : healthCache.data;
 
@@ -428,229 +445,9 @@
         renderCards(el, server, health, client, ioStats, sqliteStats, writeSources);
       }
     } catch (err) {
-      el.innerHTML = `<p style="color:red">Error: ${err.message}</p>`;
+      destroyCharts();
+      PageState.error(el, err, refresh);
     }
-  }
-
-  // --- Cards view (original rendering, unchanged) ---
-  function renderCards(el, server, health, client, ioStats, sqliteStats, writeSources) {
-    destroyCharts();
-    let html = '';
-
-    // Server overview
-    const gr0 = server.goRuntime;
-    const cpuColor = gr0 && gr0.cpuPercent > 80 ? 'var(--status-red)' : gr0 && gr0.cpuPercent > 40 ? 'var(--status-yellow)' : 'var(--status-green)';
-    html += `<div style="display:flex;gap:16px;flex-wrap:wrap;margin:16px 0;">
-      <div class="perf-card"><div class="perf-num">${server.totalRequests}</div><div class="perf-label">Total Requests</div></div>
-      <div class="perf-card"><div class="perf-num">${server.avgMs}ms</div><div class="perf-label">Avg Response</div></div>
-      <div class="perf-card"><div class="perf-num">${health ? health.uptimeHuman : Math.round(server.uptime / 60) + 'm'}</div><div class="perf-label">Uptime</div></div>
-      <div class="perf-card"><div class="perf-num">${server.slowQueries.length}</div><div class="perf-label">Slow (&gt;100ms)</div></div>
-      ${gr0 ? `<div class="perf-card"><div class="perf-num" style="color:${cpuColor}">${(+gr0.cpuPercent).toFixed(1)}%</div><div class="perf-label">CPU Usage</div></div>` : ''}
-      ${gr0 ? `<div class="perf-card"><div class="perf-num">${(+gr0.totalSysMB).toFixed(0)}MB</div><div class="perf-label">Server RAM</div></div>` : ''}
-      ${server.sqlite ? `<div class="perf-card"><div class="perf-num">${server.sqlite.dbSizeMB}MB</div><div class="perf-label">Dataset Size</div></div>` : ''}
-    </div>`;
-
-    // System health
-    if (health) {
-      const isGo = health.engine === 'go';
-      if (isGo && server.goRuntime) {
-        const gr = server.goRuntime;
-        const gcColor = gr.lastPauseMs > 5 ? 'var(--status-red)' : gr.lastPauseMs > 1 ? 'var(--status-yellow)' : 'var(--status-green)';
-        html += `<h3>🔧 Go Runtime</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-          <div class="perf-card"><div class="perf-num">${gr.goroutines}</div><div class="perf-label">Goroutines</div></div>
-          <div class="perf-card"><div class="perf-num">${gr.numGC}</div><div class="perf-label">GC Collections</div></div>
-          <div class="perf-card"><div class="perf-num" style="color:${gcColor}">${(+gr.pauseTotalMs).toFixed(1)}ms</div><div class="perf-label">GC Pause Total</div></div>
-          <div class="perf-card"><div class="perf-num">${(+gr.lastPauseMs).toFixed(1)}ms</div><div class="perf-label">Last GC Pause</div></div>
-          <div class="perf-card"><div class="perf-num">${(+gr.heapAllocMB).toFixed(1)}MB</div><div class="perf-label">Heap Alloc</div></div>
-          <div class="perf-card"><div class="perf-num">${(+gr.heapSysMB).toFixed(1)}MB</div><div class="perf-label">Heap Sys</div></div>
-          <div class="perf-card"><div class="perf-num">${(+gr.heapInuseMB).toFixed(1)}MB</div><div class="perf-label">Heap Inuse</div></div>
-          <div class="perf-card"><div class="perf-num">${(+gr.heapIdleMB).toFixed(1)}MB</div><div class="perf-label">Heap Idle</div></div>
-          <div class="perf-card"><div class="perf-num">${gr.numCPU}</div><div class="perf-label">CPUs</div></div>
-          <div class="perf-card"><div class="perf-num">${health.websocket.clients}</div><div class="perf-label">WS Clients</div></div>
-        </div>`;
-      } else {
-        const m = health.memory, evl = health.eventLoop;
-        const elColor  = evl.p95Ms > 500 ? 'var(--status-red)' : evl.p95Ms > 100 ? 'var(--status-yellow)' : 'var(--status-green)';
-        const memColor = m.heapUsed > m.heapTotal * 0.85 ? 'var(--status-red)' : m.heapUsed > m.heapTotal * 0.7 ? 'var(--status-yellow)' : 'var(--status-green)';
-        html += `<h3>System Health</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-          <div class="perf-card"><div class="perf-num" style="color:${memColor}">${m.heapUsed}MB</div><div class="perf-label">Heap Used / ${m.heapTotal}MB</div></div>
-          <div class="perf-card"><div class="perf-num">${m.rss}MB</div><div class="perf-label">RSS</div></div>
-          <div class="perf-card"><div class="perf-num" style="color:${elColor}">${evl.p95Ms}ms</div><div class="perf-label">Event Loop p95</div></div>
-          <div class="perf-card"><div class="perf-num">${evl.maxLagMs}ms</div><div class="perf-label">EL Max Lag</div></div>
-          <div class="perf-card"><div class="perf-num">${evl.currentLagMs}ms</div><div class="perf-label">EL Current</div></div>
-          <div class="perf-card"><div class="perf-num">${health.websocket.clients}</div><div class="perf-label">WS Clients</div></div>
-        </div>`;
-      }
-    }
-
-    // Cache stats
-    if (server.cache) {
-      const c = server.cache;
-      const clientCache = typeof _apiCache !== 'undefined' ? _apiCache.size : 0;
-      html += `<h3>Cache</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-        <div class="perf-card"><div class="perf-num">${c.size}</div><div class="perf-label">Server Entries</div></div>
-        <div class="perf-card"><div class="perf-num">${c.hits}</div><div class="perf-label">Server Hits</div></div>
-        <div class="perf-card"><div class="perf-num">${c.misses}</div><div class="perf-label">Server Misses</div></div>
-        <div class="perf-card"><div class="perf-num" style="color:${c.hitRate > 50 ? 'var(--status-green)' : c.hitRate > 20 ? 'var(--status-yellow)' : 'var(--status-red)'}">${c.hitRate}%</div><div class="perf-label">Server Hit Rate</div></div>
-        <div class="perf-card"><div class="perf-num">${c.staleHits || 0}</div><div class="perf-label">Stale Hits (SWR)</div></div>
-        <div class="perf-card"><div class="perf-num">${c.recomputes || 0}</div><div class="perf-label">Recomputes</div></div>
-        <div class="perf-card"><div class="perf-num">${clientCache}</div><div class="perf-label">Client Entries</div></div>
-      </div>`;
-      if (client) {
-        html += `<div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-          <div class="perf-card"><div class="perf-num">${client.cacheHits || 0}</div><div class="perf-label">Client Hits</div></div>
-          <div class="perf-card"><div class="perf-num">${client.cacheMisses || 0}</div><div class="perf-label">Client Misses</div></div>
-          <div class="perf-card"><div class="perf-num" style="color:${(client.cacheHitRate || 0) > 50 ? 'var(--status-green)' : 'var(--status-yellow)'}">${client.cacheHitRate || 0}%</div><div class="perf-label">Client Hit Rate</div></div>
-        </div>`;
-      }
-    }
-
-    // Packet Store stats
-    if (server.packetStore) {
-      const ps = server.packetStore;
-      html += `<h3>In-Memory Packet Store</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-        <div class="perf-card"><div class="perf-num">${ps.inMemory.toLocaleString()}</div><div class="perf-label">Packets in RAM</div></div>
-        <div class="perf-card"><div class="perf-num">${ps.trackedMB}MB</div><div class="perf-label">Tracked Memory</div></div>
-        <div class="perf-card"><div class="perf-num">${ps.maxMB}MB</div><div class="perf-label">Memory Limit</div></div>
-        <div class="perf-card"><div class="perf-num">${ps.estimatedMB}MB</div><div class="perf-label">Heap (debug)</div></div>
-        <div class="perf-card"><div class="perf-num">${ps.queries.toLocaleString()}</div><div class="perf-label">Queries Served</div></div>
-        <div class="perf-card"><div class="perf-num">${ps.inserts.toLocaleString()}</div><div class="perf-label">Live Inserts</div></div>
-        <div class="perf-card"><div class="perf-num">${ps.evicted.toLocaleString()}</div><div class="perf-label">Evicted</div></div>
-        <div class="perf-card"><div class="perf-num">${ps.indexes.byHash.toLocaleString()}</div><div class="perf-label">Unique Hashes</div></div>
-        <div class="perf-card"><div class="perf-num">${ps.indexes.byObserver}</div><div class="perf-label">Observers</div></div>
-        <div class="perf-card"><div class="perf-num">${ps.indexes.byNode.toLocaleString()}</div><div class="perf-label">Indexed Nodes</div></div>
-      </div>`;
-    }
-
-    // SQLite stats (merged with WAL + cache hit)
-    if (server.sqlite && !server.sqlite.error) {
-      const sq = server.sqlite;
-      const walColor      = sq.walSizeMB > 50  ? 'var(--status-red)'    : sq.walSizeMB > 10  ? 'var(--status-yellow)' : 'var(--status-green)';
-      const freelistColor = sq.freelistMB > 10 ? 'var(--status-yellow)' : 'var(--status-green)';
-      html += `<h3>SQLite</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-        <div class="perf-card"><div class="perf-num">${sq.dbSizeMB}MB</div><div class="perf-label">DB Size</div></div>
-        <div class="perf-card"><div class="perf-num" style="color:${walColor}">${sq.walSizeMB}MB</div><div class="perf-label">WAL Size</div></div>
-        <div class="perf-card"><div class="perf-num" style="color:${freelistColor}">${sq.freelistMB}MB</div><div class="perf-label">Freelist</div></div>`;
-      if (sqliteStats) {
-        const hitRate = (sqliteStats.cacheHitRate || 0) * 100;
-        const hitColor = hitRate > 0 && hitRate < 90 ? 'var(--status-yellow)' : 'var(--status-green)';
-        const hitFlag  = hitRate > 0 && hitRate < 90 ? ' ⚠️' : '';
-        html += `<div class="perf-card"><div class="perf-num" style="color:${hitColor}">${hitRate.toFixed(1)}%${hitFlag}</div><div class="perf-label">Cache Hit Rate</div></div>
-        <div class="perf-card"><div class="perf-num">${(sqliteStats.pageCount || 0).toLocaleString()}</div><div class="perf-label">Page Count</div></div>
-        <div class="perf-card"><div class="perf-num">${sqliteStats.pageSize || 0}</div><div class="perf-label">Page Size</div></div>`;
-      }
-      html += `<div class="perf-card"><div class="perf-num">${(sq.rows.transmissions || 0).toLocaleString()}</div><div class="perf-label">Transmissions</div></div>
-        <div class="perf-card"><div class="perf-num">${(sq.rows.observations || 0).toLocaleString()}</div><div class="perf-label">Observations</div></div>
-        <div class="perf-card"><div class="perf-num">${sq.rows.nodes || 0}</div><div class="perf-label">Nodes</div></div>
-        <div class="perf-card"><div class="perf-num">${sq.rows.observers || 0}</div><div class="perf-label">Observers</div></div>`;
-      if (sq.walPages) {
-        html += `<div class="perf-card"><div class="perf-num">${sq.walPages.busy}</div><div class="perf-label">WAL Busy Pages</div></div>`;
-      }
-      html += `</div>`;
-    }
-
-    // Disk I/O (#1120)
-    if (ioStats) {
-      const fmtRate = (bps) => {
-        if (bps >= 1048576) return (bps / 1048576).toFixed(1) + ' MB/s';
-        if (bps >= 1024) return (bps / 1024).toFixed(1) + ' KB/s';
-        return Math.round(bps) + ' B/s';
-      };
-      const writeWarn = ioStats.writeBytesPerSec > 10 * 1048576 ? ' ⚠️' : '';
-      html += `<h3>Disk I/O (server process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
-        <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.readBytesPerSec || 0)}</div><div class="perf-label">Read</div></div>
-        <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.writeBytesPerSec || 0)}${writeWarn}</div><div class="perf-label">Write</div></div>
-        <div class="perf-card"><div class="perf-num">${Math.round(ioStats.syscallsRead || 0)}/s</div><div class="perf-label">Syscalls Read</div></div>
-        <div class="perf-card"><div class="perf-num">${Math.round(ioStats.syscallsWrite || 0)}/s</div><div class="perf-label">Syscalls Write</div></div>
-      </div>`;
-    }
-
-    // Write Sources (#1120) — per-component counters from ingestor
-    if (writeSources && writeSources.sources) {
-      const src = writeSources.sources;
-      const keys = Object.keys(src).sort((a, b) => (src[b] || 0) - (src[a] || 0));
-      html += '<h3>Write Sources</h3>';
-      if (keys.length === 0) {
-        html += '<p style="color:var(--text-muted)">No ingestor stats yet (waiting for /tmp/corescope-ingestor-stats.json)</p>';
-      } else {
-        const MIN_SAMPLE = 100;
-        const prev = window._perfWriteSourcesPrev;
-        let prevSrc = null, dtSec = 0;
-        if (prev && prev.sampleAt && writeSources.sampleAt) {
-          dtSec = (Date.parse(writeSources.sampleAt) - Date.parse(prev.sampleAt)) / 1000;
-          if (dtSec >= 0.5) prevSrc = prev.sources;
-        }
-        const txTotal = src.tx_inserted || 0;
-        const txDelta = prevSrc ? (txTotal - (prevSrc.tx_inserted || 0)) : 0;
-        const txRate = (prevSrc && dtSec > 0) ? (txDelta / dtSec) : 0;
-        html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Source</th><th scope="col">Total</th><th scope="col">Rate/s</th><th scope="col">Anomaly</th></tr></thead><tbody>';
-        for (const k of keys) {
-          const v = src[k] || 0;
-          const isBackfill = k.startsWith('backfill_');
-          let rate = 0;
-          let flag = '';
-          if (prevSrc && dtSec > 0) {
-            const delta = v - (prevSrc[k] || 0);
-            rate = delta / dtSec;
-            if (isBackfill && txTotal >= MIN_SAMPLE && rate > 10 * Math.max(txRate, 1)) {
-              flag = ' ⚠️';
-            }
-          }
-          const rateStr = (prevSrc && dtSec > 0) ? rate.toFixed(1) : '—';
-          html += `<tr><td><code>${k}</code></td><td>${v.toLocaleString()}</td><td>${rateStr}</td><td>${flag}</td></tr>`;
-        }
-        html += '</tbody></table></div>';
-        window._perfWriteSourcesPrev = { sources: { ...src }, sampleAt: writeSources.sampleAt };
-        if (writeSources.sampleAt) {
-          html += `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Sampled: ${writeSources.sampleAt}</div>`;
-        }
-      }
-    }
-
-
-    // Server endpoints table
-    const eps = Object.entries(server.endpoints);
-    if (eps.length) {
-      html += '<h3>Server Endpoints (sorted by total time)</h3>';
-      html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Endpoint</th><th scope="col">Count</th><th scope="col">Avg</th><th scope="col">P50</th><th scope="col">P95</th><th scope="col">Max</th><th scope="col">Total</th></tr></thead><tbody>';
-      for (const [path, s] of eps) {
-        const total = Math.round(s.count * s.avgMs);
-        const cls = s.p95Ms > 200 ? ' class="perf-slow"' : s.p95Ms > 50 ? ' class="perf-warn"' : '';
-        html += `<tr${cls}><td><code>${path}</code></td><td>${s.count}</td><td>${s.avgMs}ms</td><td>${s.p50Ms}ms</td><td>${s.p95Ms}ms</td><td>${s.maxMs}ms</td><td>${total}ms</td></tr>`;
-      }
-      html += '</tbody></table></div>';
-    }
-
-    // Client API calls
-    if (client && client.endpoints.length) {
-      html += '<h3>Client API Calls (this session)</h3>';
-      html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Endpoint</th><th scope="col">Count</th><th scope="col">Avg</th><th scope="col">Max</th><th scope="col">Total</th></tr></thead><tbody>';
-      for (const s of client.endpoints) {
-        const cls = s.maxMs > 500 ? ' class="perf-slow"' : s.avgMs > 200 ? ' class="perf-warn"' : '';
-        html += `<tr${cls}><td><code>${s.path}</code></td><td>${s.count}</td><td>${s.avgMs}ms</td><td>${s.maxMs}ms</td><td>${s.totalMs}ms</td></tr>`;
-      }
-      html += '</tbody></table></div>';
-    }
-
-    // Slow queries
-    if (server.slowQueries.length) {
-      html += '<h3>Recent Slow Queries (&gt;100ms)</h3>';
-      html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Time</th><th scope="col">Path</th><th scope="col">Duration</th><th scope="col">Status</th></tr></thead><tbody>';
-      for (const q of server.slowQueries.slice().reverse()) {
-        html += `<tr class="perf-slow"><td>${new Date(q.time).toLocaleTimeString()}</td><td><code>${q.path}</code></td><td>${q.ms}ms</td><td>${q.status}</td></tr>`;
-      }
-      html += '</tbody></table></div>';
-    }
-
-    html += `<div style="margin-top:16px"><button id="perfReset" style="padding:8px 16px;cursor:pointer">Reset Stats</button> <button id="perfRefresh" style="padding:8px 16px;cursor:pointer">Refresh</button></div>`;
-    el.innerHTML = html;
-
-    document.getElementById('perfReset')?.addEventListener('click', async () => {
-      await fetch('/api/perf/reset', { method: 'POST' });
-      if (window._apiPerf) { window._apiPerf = { calls: 0, totalMs: 0, log: [] }; }
-      refresh();
-    });
-    document.getElementById('perfRefresh')?.addEventListener('click', refresh);
   }
 
   // --- Graphs view ---
@@ -659,17 +456,18 @@
 
     if (slice.length < 2) {
       if (activeCharts.length === 0) {
-        el.innerHTML = '<div class="text-muted text-center" style="padding:40px">Collecting data… check back in a few seconds.</div>';
+        el.innerHTML = '<div class="perf-graphs-empty">Collecting data… ' +
+          'charts fill in as polling accumulates samples.</div>';
       }
       return;
     }
 
-    // Charts already exist — update data in place, no DOM rebuild
+    // Charts already exist — update data in place, no DOM rebuild.
     if (updateChartsInPlace()) return;
 
-    // First render — build DOM with category sections, then create Chart instances
     const isDark = document.documentElement.dataset.theme === 'dark' ||
-      (!document.documentElement.dataset.theme && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      (!document.documentElement.dataset.theme &&
+       window.matchMedia('(prefers-color-scheme: dark)').matches);
     const gridColor = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)';
     const tickColor = isDark ? '#a8b8cc' : '#5b6370';
     const labels    = slice.map(function (s) { return new Date(s.ts).toLocaleTimeString(); });
@@ -681,17 +479,17 @@
         });
       });
       if (visible.length === 0) return '';
-      return `<div class="perf-graphs-category">
-        <h3 class="perf-graphs-cat-title">${group.category}</h3>
-        <div class="perf-graphs-grid">${
+      return '<div class="perf-graphs-category">' +
+        '<h3 class="perf-graphs-cat-title">' + group.category + '</h3>' +
+        '<div class="perf-graphs-grid">' +
           visible.map(function (c) {
-            return `<div class="perf-graph-card">
-              <div class="perf-graph-title">${c.label}</div>
-              <div style="position:relative;height:160px"><canvas id="pgc-${c.id}"></canvas></div>
-            </div>`;
-          }).join('')
-        }</div>
-      </div>`;
+            return '<div class="perf-graph-card">' +
+              '<div class="perf-graph-title">' + c.label + '</div>' +
+              '<div class="perf-graph-canvas-wrap"><canvas id="pgc-' + c.id + '"></canvas></div>' +
+            '</div>';
+          }).join('') +
+        '</div>' +
+      '</div>';
     }).join('');
 
     CHART_GROUPS.forEach(function (group) {
@@ -713,6 +511,7 @@
                 pointRadius:     0,
                 tension:         0.3,
                 fill:            !multi,
+                spanGaps:        true,
               };
             })
           },
@@ -745,14 +544,257 @@
     });
   }
 
+  // --- Cards view (number-card fallback) ---
+  function renderCards(el, server, health, client, ioStats, sqliteStats, writeSources) {
+    destroyCharts();
+    let html = '';
+
+    // Server overview
+    const gr0 = server.goRuntime;
+    const cpuColor = gr0 && gr0.cpuPercent > 80 ? 'var(--status-red)'
+      : gr0 && gr0.cpuPercent > 40 ? 'var(--status-yellow)' : 'var(--status-green)';
+    html += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin:16px 0;">' +
+      '<div class="perf-card"><div class="perf-num">' + server.totalRequests + '</div><div class="perf-label">Total Requests</div></div>' +
+      '<div class="perf-card"><div class="perf-num">' + server.avgMs + 'ms</div><div class="perf-label">Avg Response</div></div>' +
+      '<div class="perf-card"><div class="perf-num">' + (health ? health.uptimeHuman : Math.round(server.uptime / 60) + 'm') + '</div><div class="perf-label">Uptime</div></div>' +
+      '<div class="perf-card"><div class="perf-num">' + server.slowQueries.length + '</div><div class="perf-label">Slow (&gt;100ms)</div></div>' +
+      (gr0 ? '<div class="perf-card"><div class="perf-num" style="color:' + cpuColor + '">' + (+gr0.cpuPercent).toFixed(1) + '%</div><div class="perf-label">CPU Usage</div></div>' : '') +
+      (gr0 ? '<div class="perf-card"><div class="perf-num">' + (+gr0.totalSysMB).toFixed(0) + 'MB</div><div class="perf-label">Server RAM</div></div>' : '') +
+      (server.sqlite ? '<div class="perf-card"><div class="perf-num">' + server.sqlite.dbSizeMB + 'MB</div><div class="perf-label">Dataset Size</div></div>' : '') +
+      '</div>';
+
+    // System health
+    if (health) {
+      const isGo = health.engine === 'go';
+      if (isGo && server.goRuntime) {
+        const gr = server.goRuntime;
+        const gcColor = gr.lastPauseMs > 5 ? 'var(--status-red)' : gr.lastPauseMs > 1 ? 'var(--status-yellow)' : 'var(--status-green)';
+        html += '<h3>🔧 Go Runtime</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">' +
+          '<div class="perf-card"><div class="perf-num">' + gr.goroutines + '</div><div class="perf-label">Goroutines</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + gr.numGC + '</div><div class="perf-label">GC Collections</div></div>' +
+          '<div class="perf-card"><div class="perf-num" style="color:' + gcColor + '">' + (+gr.pauseTotalMs).toFixed(1) + 'ms</div><div class="perf-label">GC Pause Total</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + (+gr.lastPauseMs).toFixed(1) + 'ms</div><div class="perf-label">Last GC Pause</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + (+gr.heapAllocMB).toFixed(1) + 'MB</div><div class="perf-label">Heap Alloc</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + (+gr.heapSysMB).toFixed(1) + 'MB</div><div class="perf-label">Heap Sys</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + (+gr.heapInuseMB).toFixed(1) + 'MB</div><div class="perf-label">Heap Inuse</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + (+gr.heapIdleMB).toFixed(1) + 'MB</div><div class="perf-label">Heap Idle</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + gr.numCPU + '</div><div class="perf-label">CPUs</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + health.websocket.clients + '</div><div class="perf-label">WS Clients</div></div>' +
+        '</div>';
+      } else if (health.memory && health.eventLoop) {
+        const m = health.memory, evl = health.eventLoop;
+        const elColor  = evl.p95Ms > 500 ? 'var(--status-red)' : evl.p95Ms > 100 ? 'var(--status-yellow)' : 'var(--status-green)';
+        const memColor = m.heapUsed > m.heapTotal * 0.85 ? 'var(--status-red)' : m.heapUsed > m.heapTotal * 0.7 ? 'var(--status-yellow)' : 'var(--status-green)';
+        html += '<h3>System Health</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">' +
+          '<div class="perf-card"><div class="perf-num" style="color:' + memColor + '">' + m.heapUsed + 'MB</div><div class="perf-label">Heap Used / ' + m.heapTotal + 'MB</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + m.rss + 'MB</div><div class="perf-label">RSS</div></div>' +
+          '<div class="perf-card"><div class="perf-num" style="color:' + elColor + '">' + evl.p95Ms + 'ms</div><div class="perf-label">Event Loop p95</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + evl.maxLagMs + 'ms</div><div class="perf-label">EL Max Lag</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + evl.currentLagMs + 'ms</div><div class="perf-label">EL Current</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + health.websocket.clients + '</div><div class="perf-label">WS Clients</div></div>' +
+        '</div>';
+      }
+    }
+
+    // Observer counts (from /api/perf)
+    if (server.observerCounts) {
+      const oc = server.observerCounts;
+      html += '<h3>Observers</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">' +
+        '<div class="perf-card"><div class="perf-num">' + oc.total + '</div><div class="perf-label">Total</div></div>' +
+        '<div class="perf-card"><div class="perf-num" style="color:var(--status-green)">' + oc.online + '</div><div class="perf-label">Online</div></div>' +
+        '<div class="perf-card"><div class="perf-num" style="color:var(--status-yellow)">' + oc.stale + '</div><div class="perf-label">Stale</div></div>' +
+        '<div class="perf-card"><div class="perf-num" style="color:var(--status-red)">' + oc.offline + '</div><div class="perf-label">Offline</div></div>' +
+      '</div>';
+    }
+
+    // Cache stats
+    if (server.cache) {
+      const c = server.cache;
+      const clientCache = (typeof _apiCache !== 'undefined' && _apiCache) ? _apiCache.size : 0;
+      html += '<h3>Cache</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">' +
+        '<div class="perf-card"><div class="perf-num">' + c.size + '</div><div class="perf-label">Server Entries</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + c.hits + '</div><div class="perf-label">Server Hits</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + c.misses + '</div><div class="perf-label">Server Misses</div></div>' +
+        '<div class="perf-card"><div class="perf-num" style="color:' + (c.hitRate > 50 ? 'var(--status-green)' : c.hitRate > 20 ? 'var(--status-yellow)' : 'var(--status-red)') + '">' + c.hitRate + '%</div><div class="perf-label">Server Hit Rate</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + (c.staleHits || 0) + '</div><div class="perf-label">Stale Hits (SWR)</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + (c.recomputes || 0) + '</div><div class="perf-label">Recomputes</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + clientCache + '</div><div class="perf-label">Client Entries</div></div>' +
+      '</div>';
+      if (client) {
+        html += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">' +
+          '<div class="perf-card"><div class="perf-num">' + (client.cacheHits || 0) + '</div><div class="perf-label">Client Hits</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + (client.cacheMisses || 0) + '</div><div class="perf-label">Client Misses</div></div>' +
+          '<div class="perf-card"><div class="perf-num" style="color:' + ((client.cacheHitRate || 0) > 50 ? 'var(--status-green)' : 'var(--status-yellow)') + '">' + (client.cacheHitRate || 0) + '%</div><div class="perf-label">Client Hit Rate</div></div>' +
+        '</div>';
+      }
+    }
+
+    // Packet Store stats
+    if (server.packetStore) {
+      const ps = server.packetStore;
+      html += '<h3>In-Memory Packet Store</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">' +
+        '<div class="perf-card"><div class="perf-num">' + ps.inMemory.toLocaleString() + '</div><div class="perf-label">Packets in RAM</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + ps.trackedMB + 'MB</div><div class="perf-label">Tracked Memory</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + ps.maxMB + 'MB</div><div class="perf-label">Memory Limit</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + ps.estimatedMB + 'MB</div><div class="perf-label">Heap (debug)</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + ps.queries.toLocaleString() + '</div><div class="perf-label">Queries Served</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + ps.inserts.toLocaleString() + '</div><div class="perf-label">Live Inserts</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + ps.evicted.toLocaleString() + '</div><div class="perf-label">Evicted</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + ps.indexes.byHash.toLocaleString() + '</div><div class="perf-label">Unique Hashes</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + ps.indexes.byObserver + '</div><div class="perf-label">Observers</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + ps.indexes.byNode.toLocaleString() + '</div><div class="perf-label">Indexed Nodes</div></div>' +
+      '</div>';
+    }
+
+    // SQLite stats
+    if (server.sqlite && !server.sqlite.error) {
+      const sq = server.sqlite;
+      const walColor      = sq.walSizeMB > 50  ? 'var(--status-red)'    : sq.walSizeMB > 10  ? 'var(--status-yellow)' : 'var(--status-green)';
+      const freelistColor = sq.freelistMB > 10 ? 'var(--status-yellow)' : 'var(--status-green)';
+      html += '<h3>SQLite</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">' +
+        '<div class="perf-card"><div class="perf-num">' + sq.dbSizeMB + 'MB</div><div class="perf-label">DB Size</div></div>' +
+        '<div class="perf-card"><div class="perf-num" style="color:' + walColor + '">' + sq.walSizeMB + 'MB</div><div class="perf-label">WAL Size</div></div>' +
+        '<div class="perf-card"><div class="perf-num" style="color:' + freelistColor + '">' + sq.freelistMB + 'MB</div><div class="perf-label">Freelist</div></div>';
+      if (sqliteStats) {
+        const hitRate = (sqliteStats.cacheHitRate || 0) * 100;
+        const hitColor = hitRate > 0 && hitRate < 90 ? 'var(--status-yellow)' : 'var(--status-green)';
+        const hitFlag  = hitRate > 0 && hitRate < 90 ? ' ⚠️' : '';
+        html += '<div class="perf-card"><div class="perf-num" style="color:' + hitColor + '">' + hitRate.toFixed(1) + '%' + hitFlag + '</div><div class="perf-label">Cache Hit Rate</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + (sqliteStats.pageCount || 0).toLocaleString() + '</div><div class="perf-label">Page Count</div></div>' +
+          '<div class="perf-card"><div class="perf-num">' + (sqliteStats.pageSize || 0) + '</div><div class="perf-label">Page Size</div></div>';
+      }
+      html += '<div class="perf-card"><div class="perf-num">' + (sq.rows.transmissions || 0).toLocaleString() + '</div><div class="perf-label">Transmissions</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + (sq.rows.observations || 0).toLocaleString() + '</div><div class="perf-label">Observations</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + (sq.rows.nodes || 0) + '</div><div class="perf-label">Nodes</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + (sq.rows.observers || 0) + '</div><div class="perf-label">Observers</div></div>';
+      if (sq.walPages) {
+        html += '<div class="perf-card"><div class="perf-num">' + sq.walPages.busy + '</div><div class="perf-label">WAL Busy Pages</div></div>';
+      }
+      html += '</div>';
+    }
+
+    // Disk I/O
+    if (ioStats) {
+      const fmtRate = function (bps) {
+        if (bps >= 1048576) return (bps / 1048576).toFixed(1) + ' MB/s';
+        if (bps >= 1024) return (bps / 1024).toFixed(1) + ' KB/s';
+        return Math.round(bps) + ' B/s';
+      };
+      const writeWarn = ioStats.writeBytesPerSec > 10 * 1048576 ? ' ⚠️' : '';
+      html += '<h3>Disk I/O (server process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">' +
+        '<div class="perf-card"><div class="perf-num">' + fmtRate(ioStats.readBytesPerSec || 0) + '</div><div class="perf-label">Read</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + fmtRate(ioStats.writeBytesPerSec || 0) + writeWarn + '</div><div class="perf-label">Write</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + Math.round(ioStats.syscallsRead || 0) + '/s</div><div class="perf-label">Syscalls Read</div></div>' +
+        '<div class="perf-card"><div class="perf-num">' + Math.round(ioStats.syscallsWrite || 0) + '/s</div><div class="perf-label">Syscalls Write</div></div>' +
+      '</div>';
+    }
+
+    // Write Sources — per-component counters from ingestor
+    if (writeSources && writeSources.sources) {
+      const src = writeSources.sources;
+      const keys = Object.keys(src).sort(function (a, b) { return (src[b] || 0) - (src[a] || 0); });
+      html += '<h3>Write Sources</h3>';
+      if (keys.length === 0) {
+        html += '<p style="color:var(--text-muted)">No ingestor stats yet (waiting for /tmp/corescope-ingestor-stats.json)</p>';
+      } else {
+        const MIN_SAMPLE = 100;
+        const prev = window._perfWriteSourcesPrev;
+        let prevSrc = null, dtSec = 0;
+        if (prev && prev.sampleAt && writeSources.sampleAt) {
+          dtSec = (Date.parse(writeSources.sampleAt) - Date.parse(prev.sampleAt)) / 1000;
+          if (dtSec >= 0.5) prevSrc = prev.sources;
+        }
+        const txTotal = src.tx_inserted || 0;
+        const txDelta = prevSrc ? (txTotal - (prevSrc.tx_inserted || 0)) : 0;
+        const txRate = (prevSrc && dtSec > 0) ? (txDelta / dtSec) : 0;
+        html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Source</th><th scope="col">Total</th><th scope="col">Rate/s</th><th scope="col">Anomaly</th></tr></thead><tbody>';
+        for (var ki = 0; ki < keys.length; ki++) {
+          var k = keys[ki];
+          var v = src[k] || 0;
+          var isBackfill = k.indexOf('backfill_') === 0;
+          var rate = 0, flag = '';
+          if (prevSrc && dtSec > 0) {
+            var delta = v - (prevSrc[k] || 0);
+            rate = delta / dtSec;
+            if (isBackfill && txTotal >= MIN_SAMPLE && rate > 10 * Math.max(txRate, 1)) flag = ' ⚠️';
+          }
+          var rateStr = (prevSrc && dtSec > 0) ? rate.toFixed(1) : '—';
+          html += '<tr><td><code>' + k + '</code></td><td>' + v.toLocaleString() + '</td><td>' + rateStr + '</td><td>' + flag + '</td></tr>';
+        }
+        html += '</tbody></table></div>';
+        window._perfWriteSourcesPrev = { sources: Object.assign({}, src), sampleAt: writeSources.sampleAt };
+        if (writeSources.sampleAt) {
+          html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Sampled: ' + writeSources.sampleAt + '</div>';
+        }
+      }
+    }
+
+    // Server endpoints table
+    const eps = Object.entries(server.endpoints);
+    if (eps.length) {
+      html += '<h3>Server Endpoints (sorted by total time)</h3>';
+      html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Endpoint</th><th scope="col">Count</th><th scope="col">Avg</th><th scope="col">P50</th><th scope="col">P95</th><th scope="col">Max</th><th scope="col">Total</th></tr></thead><tbody>';
+      for (var ei = 0; ei < eps.length; ei++) {
+        var epath = eps[ei][0], es = eps[ei][1];
+        var etotal = Math.round(es.count * es.avgMs);
+        var ecls = es.p95Ms > 200 ? ' class="perf-slow"' : es.p95Ms > 50 ? ' class="perf-warn"' : '';
+        html += '<tr' + ecls + '><td><code>' + epath + '</code></td><td>' + es.count + '</td><td>' + es.avgMs + 'ms</td><td>' + es.p50Ms + 'ms</td><td>' + es.p95Ms + 'ms</td><td>' + es.maxMs + 'ms</td><td>' + etotal + 'ms</td></tr>';
+      }
+      html += '</tbody></table></div>';
+    }
+
+    // Client API calls
+    if (client && client.endpoints && client.endpoints.length) {
+      html += '<h3>Client API Calls (this session)</h3>';
+      html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Endpoint</th><th scope="col">Count</th><th scope="col">Avg</th><th scope="col">Max</th><th scope="col">Total</th></tr></thead><tbody>';
+      for (var ci = 0; ci < client.endpoints.length; ci++) {
+        var cs = client.endpoints[ci];
+        var ccls = cs.maxMs > 500 ? ' class="perf-slow"' : cs.avgMs > 200 ? ' class="perf-warn"' : '';
+        html += '<tr' + ccls + '><td><code>' + cs.path + '</code></td><td>' + cs.count + '</td><td>' + cs.avgMs + 'ms</td><td>' + cs.maxMs + 'ms</td><td>' + cs.totalMs + 'ms</td></tr>';
+      }
+      html += '</tbody></table></div>';
+    }
+
+    // Slow queries
+    if (server.slowQueries.length) {
+      html += '<h3>Recent Slow Queries (&gt;100ms)</h3>';
+      html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Time</th><th scope="col">Path</th><th scope="col">Duration</th><th scope="col">Status</th></tr></thead><tbody>';
+      var sq2 = server.slowQueries.slice().reverse();
+      for (var qi = 0; qi < sq2.length; qi++) {
+        var q = sq2[qi];
+        html += '<tr class="perf-slow"><td>' + new Date(q.time).toLocaleTimeString() + '</td><td><code>' + q.path + '</code></td><td>' + q.ms + 'ms</td><td>' + q.status + '</td></tr>';
+      }
+      html += '</tbody></table></div>';
+    }
+
+    html += '<div style="margin-top:16px"><button id="perfReset" class="perf-action-btn">Reset Stats</button> ' +
+      '<button id="perfRefresh" class="perf-action-btn">Refresh</button></div>';
+    el.innerHTML = html;
+
+    var resetBtn = document.getElementById('perfReset');
+    if (resetBtn) {
+      resetBtn.addEventListener('click', async function () {
+        await fetch('/api/perf/reset', { method: 'POST' });
+        if (window._apiPerf) { window._apiPerf = { calls: 0, totalMs: 0, log: [] }; }
+        refresh();
+      });
+    }
+    var refreshBtn = document.getElementById('perfRefresh');
+    if (refreshBtn) refreshBtn.addEventListener('click', refresh);
+  }
+
   registerPage('perf', {
     init(app) {
       render(app);
       interval = setInterval(refresh, REFRESH_MS);
+      // Detail endpoints poll less often; loadPerfDetails() caches for
+      // DETAIL_REFRESH_MS so this just bumps the cache between perf polls.
+      detailInterval = setInterval(loadPerfDetails, DETAIL_REFRESH_MS);
     },
     destroy() {
       destroyCharts();
-      if (interval) { clearInterval(interval); interval = null; }
+      if (interval)       { clearInterval(interval);       interval = null; }
+      if (detailInterval) { clearInterval(detailInterval); detailInterval = null; }
     }
   });
 })();
