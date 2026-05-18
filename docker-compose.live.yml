@@ -1,10 +1,12 @@
-# All container config lives here. manage.sh is just a wrapper around docker compose.
-# Override defaults via .env or environment variables.
-# CRITICAL: All data mounts use bind mounts, NOT named volumes.
-# This keeps the DB and theme visible on the host filesystem for backup.
+# Production compose for live.meshcore.ca.
 #
-# live.meshcore.ca uses docker-compose.live.yml so it can preserve the existing
-# host paths and "corescope" container name without breaking manage.sh.
+# This mirrors the current live host layout:
+# - the public app container is named "corescope"
+# - host ports 80 and 443 are owned by this service
+# - the live MQTT config is mounted at /app/config.json
+# - the legacy SQLite DB remains mounted at /app/data/meshcore.db for
+#   migration and rollback
+# - Postgres runs beside the app and keeps its data under the same host tree
 
 services:
   postgres:
@@ -14,24 +16,24 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-corescope}
       POSTGRES_USER: ${POSTGRES_USER:-corescope}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-corescope}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-corescope-change-me}
     volumes:
-      - ${PROD_POSTGRES_DATA_DIR:-~/meshcore-postgres-data}:/var/lib/postgresql/data
+      - ${PROD_POSTGRES_DATA_DIR:-/opt/docker/corescope/data/postgres}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-corescope} -d ${POSTGRES_DB:-corescope}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  prod:
+  corescope:
     build:
       context: .
       args:
         APP_VERSION: ${APP_VERSION:-unknown}
         GIT_COMMIT: ${GIT_COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-unknown}
-    image: corescope:latest
-    container_name: corescope-prod
+    image: ${CORESCOPE_IMAGE:-corescope:latest}
+    container_name: corescope
     restart: unless-stopped
     stop_grace_period: 30s
     stop_signal: SIGTERM
@@ -43,23 +45,20 @@ services:
     ports:
       - "${PROD_HTTP_PORT:-80}:80"
       - "${PROD_HTTPS_PORT:-443}:443"
-      - "${PROD_MQTT_PORT:-1883}:1883"
     volumes:
-      - ./caddy-config/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${PROD_DATA_DIR:-~/meshcore-data}:/app/data
-      - caddy-data:/data/caddy
+      - ${PROD_CONFIG_FILE:-/opt/docker/corescope/data/corescope/config.json}:/app/config.json:ro
+      - ${PROD_DATA_DIR:-/opt/docker/corescope/data/corescope/data}:/app/data
+      - ${PROD_CADDYFILE:-/opt/docker/corescope/data/caddy/config/Caddyfile}:/etc/caddy/Caddyfile:ro
+      - ${PROD_CADDY_DATA_DIR:-/opt/docker/corescope/data/caddy/app}:/data/caddy
     environment:
       - NODE_ENV=production
       - DB_DRIVER=${DB_DRIVER:-postgres}
-      - DATABASE_URL=${DATABASE_URL:-postgres://corescope:corescope@postgres:5432/corescope?sslmode=disable}
+      - DATABASE_URL=${DATABASE_URL:-postgres://corescope:corescope-change-me@postgres:5432/corescope?sslmode=disable}
       - DB_PATH=${DB_PATH:-/app/data/meshcore.db}
-      - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-false}
+      - DISABLE_MOSQUITTO=${DISABLE_MOSQUITTO:-true}
       - DISABLE_CADDY=${DISABLE_CADDY:-false}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/stats"]
       interval: 30s
       timeout: 5s
       retries: 3
-
-volumes:
-  caddy-data:

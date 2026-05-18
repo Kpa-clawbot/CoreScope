@@ -108,7 +108,8 @@ func ApplyPostgresSchema(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_observations_transmission_id ON observations(transmission_id);
 		CREATE INDEX IF NOT EXISTS idx_observations_observer_idx ON observations(observer_idx);
 		CREATE INDEX IF NOT EXISTS idx_observations_timestamp ON observations(timestamp);
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_observations_dedup ON observations(transmission_id, observer_idx, (COALESCE(path_json, '')));
+		DROP INDEX IF EXISTS idx_observations_dedup;
+		CREATE INDEX IF NOT EXISTS idx_observations_dedup_lookup ON observations(transmission_id, observer_idx, (COALESCE(path_json, '')));
 
 		CREATE TABLE IF NOT EXISTS observer_metrics (
 			observer_id TEXT NOT NULL,

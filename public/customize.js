@@ -40,7 +40,7 @@
 
   const DEFAULTS = {
     branding: {
-      siteName: 'MeshCore Canada Live',
+      siteName: 'MeshCore Canada CoreScope Live',
       tagline: 'Real-time MeshCore LoRa mesh network analyzer',
       logoUrl: DEFAULT_BRAND_LOGO_URL,
       faviconUrl: DEFAULT_BRAND_LOGO_URL

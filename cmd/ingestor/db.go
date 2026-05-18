@@ -637,13 +637,20 @@ func (s *Store) prepareStatements() error {
 	`
 	if s.IsPostgres() {
 		insertObservationSQL = `
+			WITH updated AS (
+				UPDATE observations
+				SET snr     = COALESCE($4, observations.snr),
+					rssi    = COALESCE($5, observations.rssi),
+					score   = COALESCE($6, observations.score),
+					raw_hex = COALESCE($9, observations.raw_hex)
+				WHERE transmission_id = $1
+					AND observer_idx IS NOT DISTINCT FROM $2
+					AND COALESCE(path_json, '') = COALESCE($7, '')
+				RETURNING id
+			)
 			INSERT INTO observations (transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp, raw_hex)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(transmission_id, observer_idx, (COALESCE(path_json, ''))) DO UPDATE SET
-				snr     = COALESCE(excluded.snr,     observations.snr),
-				rssi    = COALESCE(excluded.rssi,    observations.rssi),
-				score   = COALESCE(excluded.score,   observations.score),
-				raw_hex = COALESCE(excluded.raw_hex, observations.raw_hex)
+			SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+			WHERE NOT EXISTS (SELECT 1 FROM updated)
 		`
 	}
 	s.stmtInsertObservation, err = s.db.Prepare(insertObservationSQL)

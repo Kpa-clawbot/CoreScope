@@ -3755,8 +3755,6 @@ body { touch-action: pan-y; }
   --selected-bg: rgba(47, 141, 252, 0.22);
   --text: #edf5ff;
   --text-muted: #9fb6d4;
-  --logo-accent: var(--mesh-red-500);
-  --logo-accent-hi: var(--mesh-red-400);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -3776,8 +3774,6 @@ body { touch-action: pan-y; }
     --selected-bg: rgba(47, 141, 252, 0.22);
     --text: #edf5ff;
     --text-muted: #9fb6d4;
-    --logo-accent: var(--mesh-red-500);
-    --logo-accent-hi: var(--mesh-red-400);
   }
 }
 

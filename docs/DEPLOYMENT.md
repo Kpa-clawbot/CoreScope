@@ -41,7 +41,7 @@ CoreScope runs well on Raspberry Pi 4/5 (ARM64). The Go server uses ~300 MB RAM 
 docker run -d --name corescope \
   -p 80:80 \
   -v corescope-data:/app/data \
-  ghcr.io/kpa-clawbot/corescope:latest
+  ghcr.io/meshcore-ca/corescope:latest
 ```
 
 Open `http://localhost` — you'll see an empty dashboard ready to receive packets.
@@ -66,7 +66,7 @@ docker run -d --name corescope \
   -v /your/data:/app/data \
   -v /your/Caddyfile:/etc/caddy/Caddyfile:ro \
   -v /your/caddy-data:/data/caddy \
-  ghcr.io/kpa-clawbot/corescope:latest
+  ghcr.io/meshcore-ca/corescope:latest
 ```
 
 #### Parameters
@@ -96,12 +96,14 @@ MQTT_BROKER=mqtt://my-broker:1883
 
 The entrypoint sources this file before starting services. This works with any launch method (`docker run`, compose, or manage.sh).
 
-### Docker Compose (legacy alternative)
+### Docker Compose
 
-Docker Compose files are maintained for backward compatibility but are no longer the recommended approach.
+Use `docker-compose.live.yml` for the MeshCore Canada live production shape.
+Use `docker-compose.example.yml` for a generic single-host install that does
+not need the live `/opt/docker/corescope/...` bind mounts.
 
 ```bash
-curl -sL https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/docker-compose.example.yml \
+curl -sL https://raw.githubusercontent.com/MeshCore-ca/CoreScope/master/docker-compose.example.yml \
   -o docker-compose.yml
 docker compose up -d
 ```
@@ -115,69 +117,54 @@ docker compose up -d
 | `DISABLE_MOSQUITTO` | `false` | Set `true` to use an external MQTT broker |
 | `DISABLE_CADDY` | `false` | Set `true` to skip the built-in Caddy proxy |
 
-### Side-by-side dev on a live host
+### live.meshcore.ca production cutover
 
-The `docker-compose.dev.yml` file is for the live.meshcore.ca deployment model:
-one existing live Compose service owns host ports `80` and `443`, while a dev
-CoreScope container and a dev Postgres container run beside it. The dev web UI
-binds host port `8443` to the container's Caddy port `443`.
+The live MeshCore Canada deployment replaces the existing `corescope` container
+on host ports `80` and `443`. It is not a side-by-side dev container; this
+CoreScope service becomes the live service after approval.
 
 Observed live layout:
 
 | Path | Purpose |
 |------|---------|
-| `/opt/corescope/docker-compose.yml` | live Compose file |
-| `/opt/corescope/data/corescope/config.json` | live config mounted at `/app/config.json` |
-| `/opt/corescope/data/corescope/data/meshcore.db` | live SQLite database |
-| `/opt/corescope/data/caddy/config/Caddyfile` | live Caddyfile |
-| `/opt/corescope/data/caddy/app` | live Caddy storage |
+| `/opt/docker/corescope/data/corescope/config.json` | live config mounted at `/app/config.json` |
+| `/opt/docker/corescope/data/corescope/data/meshcore.db` | live SQLite database |
+| `/opt/docker/corescope/data/caddy/config/Caddyfile` | live Caddyfile |
+| `/opt/docker/corescope/data/caddy/app` | live Caddy storage |
+| `/opt/docker/corescope/data/postgres` | target Postgres data directory |
 
-Prepare a separate dev copy. Do not share the writable SQLite DB, Caddy storage,
-or Postgres directory between live and dev:
+Create a private `.env` from `.env.example`, set a real Postgres password, and
+keep the existing mounted MQTT config as the source of truth. During cutover,
+stop and rename the old SQLite-backed container before starting the new
+Postgres-backed one:
 
 ```bash
-sudo mkdir -p \
-  /opt/corescope/data-dev/corescope/data \
-  /opt/corescope/data-dev/corescope \
-  /opt/corescope/data-dev/caddy/config \
-  /opt/corescope/data-dev/caddy/app \
-  /opt/corescope/data-dev/postgres
-
-sudo cp /opt/corescope/data/corescope/config.json /opt/corescope/data-dev/corescope/config.json
-sudo cp /opt/corescope/data/corescope/data/meshcore.db* /opt/corescope/data-dev/corescope/data/
-sudo cp /opt/corescope/data/caddy/config/Caddyfile /opt/corescope/data-dev/caddy/config/Caddyfile
-sudo rsync -a /opt/corescope/data/caddy/app/ /opt/corescope/data-dev/caddy/app/
+docker stop corescope
+docker rename corescope corescope-sqlite-rollback-$(date -u +%Y%m%d%H%M%S)
+docker compose -f docker-compose.live.yml up -d postgres
+docker compose -f docker-compose.live.yml run --rm --no-deps \
+  --entrypoint /app/corescope-migrate-postgres \
+  corescope \
+  -sqlite /app/data/meshcore.db \
+  -postgres "$DATABASE_URL" \
+  -truncate
+docker compose -f docker-compose.live.yml up -d --build corescope
 ```
 
 When the live SQLite database is in WAL mode, copy `meshcore.db`,
 `meshcore.db-wal`, and `meshcore.db-shm` together. A stopped live container or a
 known clean backup is the most consistent source for a migration snapshot.
 
-The Caddy storage copy matters for HTTPS on `8443`: ACME issuance normally
-expects ports `80`/`443`, which the live container already owns. For a public
-browser-trusted dev URL on the same hostname, use copied/provided certificates
-instead of asking the dev container to issue fresh ones.
-
-Start dev from the fork checkout:
+Verify the production service:
 
 ```bash
-docker compose -f docker-compose.dev.yml up -d --build postgres
-docker compose -f docker-compose.dev.yml run --rm --no-deps \
-  --entrypoint /app/corescope-migrate-postgres \
-  corescope-dev \
-  -sqlite /app/data/meshcore.db \
-  -postgres "postgres://corescope:corescope@postgres:5432/corescope_dev?sslmode=disable" \
-  -truncate
-docker compose -f docker-compose.dev.yml up -d --build corescope-dev
+curl -fsS https://live.meshcore.ca/api/stats
+curl -fsS https://live.meshcore.ca/api/perf/db
+docker compose -f docker-compose.live.yml ps
 ```
 
-Verify dev without touching live:
-
-```bash
-curl -k https://live.meshcore.ca:8443/api/stats
-curl -k https://live.meshcore.ca:8443/api/perf/db
-docker compose -f docker-compose.dev.yml ps
-```
+See [live.meshcore.ca Deployment Runbook](deployment-live-meshcore-ca.md) for
+the full rollback and validation procedure.
 
 ### manage.sh (legacy alternative)
 
@@ -203,7 +190,7 @@ docker compose up -d
 For `docker run` users:
 
 ```bash
-docker pull ghcr.io/kpa-clawbot/corescope:latest
+docker pull ghcr.io/meshcore-ca/corescope:latest
 docker stop corescope && docker rm corescope
 docker run -d --name corescope ... # same flags as before
 ```
@@ -241,7 +228,7 @@ docker run -d --name corescope \
   -p 80:80 \
   -v corescope-data:/app/data \
   -v ./config.json:/app/data/config.json:ro \
-  ghcr.io/kpa-clawbot/corescope:latest
+  ghcr.io/meshcore-ca/corescope:latest
 ```
 
 See `config.example.json` in the repository for all available options including:
@@ -268,7 +255,7 @@ The built-in Mosquitto broker listens on port 1883 inside the container. Point y
 docker run -d --name corescope \
   -p 80:80 -p 1883:1883 \
   -v corescope-data:/app/data \
-  ghcr.io/kpa-clawbot/corescope:latest
+  ghcr.io/meshcore-ca/corescope:latest
 ```
 
 ### External broker
@@ -374,7 +361,7 @@ The container includes Caddy for automatic Let's Encrypt certificates:
      -v corescope-data:/app/data \
      -v caddy-certs:/data/caddy \
      -v ./Caddyfile:/etc/caddy/Caddyfile:ro \
-     ghcr.io/kpa-clawbot/corescope:latest
+     ghcr.io/meshcore-ca/corescope:latest
    ```
 
 Caddy handles certificate issuance and renewal automatically.
