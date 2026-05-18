@@ -182,6 +182,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// System endpoints
 	r.HandleFunc("/api/health", s.handleHealth).Methods("GET")
 	r.HandleFunc("/api/stats", s.handleStats).Methods("GET")
+	// Prometheus scrape endpoint. Uses the conventional /metrics path (not
+	// /api/metrics) and is intentionally unauthenticated — see handleMetrics.
+	r.HandleFunc("/metrics", s.handleMetrics).Methods("GET")
 	r.HandleFunc("/api/perf", s.handlePerf).Methods("GET")
 	r.HandleFunc("/api/perf/history", s.handlePerfHistory).Methods("GET")
 	r.HandleFunc("/api/perf/io", s.handlePerfIO).Methods("GET")
