@@ -694,9 +694,35 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 	}
 }
 
-// GetFleetClockSkew returns clock skew data for all nodes that have skew data.
-// Must NOT be called with s.mu held.
+// GetFleetClockSkew returns clock skew data for all nodes, optionally
+// filtered to area. With no area, prefers the steady-state recomputer
+// snapshot (issue #1265). Must NOT be called with s.mu held.
 func (s *PacketStore) GetFleetClockSkew(area string) []*NodeClockSkew {
+	if area == "" {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompNodesClockSkew
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if r, ok := v.([]*NodeClockSkew); ok {
+					return r
+				}
+			}
+		}
+	}
+	return s.computeFleetClockSkewForArea(area)
+}
+
+// computeFleetClockSkew wraps computeFleetClockSkewForArea with no area
+// filter; called by the steady-state recomputer. Must NOT be called with
+// s.mu held.
+func (s *PacketStore) computeFleetClockSkew() []*NodeClockSkew {
+	return s.computeFleetClockSkewForArea("")
+}
+
+// computeFleetClockSkewForArea is the underlying compute. Must NOT be
+// called with s.mu held.
+func (s *PacketStore) computeFleetClockSkewForArea(area string) []*NodeClockSkew {
 	var areaNodes map[string]bool
 	if area != "" {
 		areaNodes = s.resolveAreaNodes(area)
@@ -712,7 +738,7 @@ func (s *PacketStore) GetFleetClockSkew(area string) []*NodeClockSkew {
 		nameMap[ni.PublicKey] = ni
 	}
 
-	var results []*NodeClockSkew
+	var results = []*NodeClockSkew{}
 	for pubkey := range s.byNode {
 		if areaNodes != nil && !areaNodes[pubkey] {
 			continue
@@ -735,8 +761,26 @@ func (s *PacketStore) GetFleetClockSkew(area string) []*NodeClockSkew {
 	return results
 }
 
-// GetObserverCalibrations returns the current observer clock offsets.
+// GetObserverCalibrations returns the current observer clock offsets,
+// preferring the steady-state recomputer snapshot (issue #1265). Falls
+// back to an on-request compute when the recomputer is not running.
 func (s *PacketStore) GetObserverCalibrations() []ObserverCalibration {
+	s.analyticsRecomputerMu.RLock()
+	rc := s.recompObserversClockSkew
+	s.analyticsRecomputerMu.RUnlock()
+	if rc != nil {
+		if v := rc.Load(); v != nil {
+			if r, ok := v.([]ObserverCalibration); ok {
+				return r
+			}
+		}
+	}
+	return s.computeObserverCalibrations()
+}
+
+// computeObserverCalibrations is the underlying compute used by the
+// recomputer and on-request fallback. Must NOT be called with s.mu held.
+func (s *PacketStore) computeObserverCalibrations() []ObserverCalibration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

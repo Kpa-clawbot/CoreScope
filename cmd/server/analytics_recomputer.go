@@ -146,13 +146,15 @@ func (r *analyticsRecomputer) ComputeRuns() int64 {
 // per-endpoint recompute interval from config.json. Zero values fall
 // back to the defaultInterval passed to StartAnalyticsRecomputers.
 type AnalyticsRecomputeIntervals struct {
-	Topology       time.Duration
-	RF             time.Duration
-	Distance       time.Duration
-	Channels       time.Duration
-	HashCollisions time.Duration
-	HashSizes      time.Duration
-	Roles          time.Duration
+	Topology             time.Duration
+	RF                   time.Duration
+	Distance             time.Duration
+	Channels             time.Duration
+	HashCollisions       time.Duration
+	HashSizes            time.Duration
+	Roles                time.Duration
+	ObserversClockSkew   time.Duration
+	NodesClockSkew       time.Duration
 }
 
 func pickInterval(override, def time.Duration) time.Duration {
@@ -224,10 +226,19 @@ func (s *PacketStore) StartAnalyticsRecomputers(defaultInterval time.Duration, o
 		"roles", pickInterval(ov.Roles, defaultInterval),
 		func() interface{} { return s.computeAnalyticsRoles() },
 	)
+	s.recompObserversClockSkew = newAnalyticsRecomputer(
+		"observers-clock-skew", pickInterval(ov.ObserversClockSkew, defaultInterval),
+		func() interface{} { return s.computeObserverCalibrations() },
+	)
+	s.recompNodesClockSkew = newAnalyticsRecomputer(
+		"nodes-clock-skew", pickInterval(ov.NodesClockSkew, defaultInterval),
+		func() interface{} { return s.computeFleetClockSkew() },
+	)
 	all := []*analyticsRecomputer{
 		s.recompTopology, s.recompRF, s.recompDistance,
 		s.recompChannels, s.recompHashCollisions, s.recompHashSizes,
 		s.recompRoles,
+		s.recompObserversClockSkew, s.recompNodesClockSkew,
 	}
 	s.analyticsRecomputerMu.Unlock()
 

@@ -165,6 +165,8 @@ type PacketStore struct {
 	recompHashCollisions  *analyticsRecomputer
 	recompHashSizes       *analyticsRecomputer
 	recompRoles           *analyticsRecomputer
+	recompObserversClockSkew *analyticsRecomputer
+	recompNodesClockSkew     *analyticsRecomputer
 	cacheHits    int64
 	cacheMisses  int64
 	// Rate-limited invalidation (fixes #533: caches cleared faster than hit)
