@@ -152,6 +152,7 @@ type AnalyticsRecomputeIntervals struct {
 	Channels       time.Duration
 	HashCollisions time.Duration
 	HashSizes      time.Duration
+	Roles          time.Duration
 }
 
 func pickInterval(override, def time.Duration) time.Duration {
@@ -219,9 +220,14 @@ func (s *PacketStore) StartAnalyticsRecomputers(defaultInterval time.Duration, o
 		"hash-sizes", pickInterval(ov.HashSizes, defaultInterval),
 		func() interface{} { return s.computeAnalyticsHashSizesWithCapability("", "") },
 	)
+	s.recompRoles = newAnalyticsRecomputer(
+		"roles", pickInterval(ov.Roles, defaultInterval),
+		func() interface{} { return s.computeAnalyticsRoles() },
+	)
 	all := []*analyticsRecomputer{
 		s.recompTopology, s.recompRF, s.recompDistance,
 		s.recompChannels, s.recompHashCollisions, s.recompHashSizes,
+		s.recompRoles,
 	}
 	s.analyticsRecomputerMu.Unlock()
 

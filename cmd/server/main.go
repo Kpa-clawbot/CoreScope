@@ -362,6 +362,21 @@ func main() {
 	defer stopAnalyticsRecomp()
 	log.Printf("[analytics-recompute] background recompute enabled (default=%s)", cfg.AnalyticsDefaultRecomputeInterval())
 
+	// Steady-state repeater-enrichment recomputer (issue #1262).
+	// Prewarms the bulk caches feeding handleNodes so the very first
+	// /api/nodes?limit=2000 from live.js's SPA bootstrap hits a
+	// populated cache instead of paying a 15.7s on-thread rebuild.
+	// Uses the configured RelayActiveHours window and the same
+	// default recompute interval as the other analytics caches.
+	relayWindowHours := cfg.GetHealthThresholds().RelayActiveHours
+	stopRepeaterEnrichRecomp := store.StartRepeaterEnrichmentRecomputer(
+		relayWindowHours,
+		cfg.AnalyticsDefaultRecomputeInterval(),
+	)
+	defer stopRepeaterEnrichRecomp()
+	log.Printf("[repeater-enrich-recompute] background recompute enabled (window=%.1fh, interval=%s)",
+		relayWindowHours, cfg.AnalyticsDefaultRecomputeInterval())
+
 	// Auto-prune old packets if retention.packetDays is configured
 	vacuumPages := cfg.IncrementalVacuumPages()
 	var stopPrune func()

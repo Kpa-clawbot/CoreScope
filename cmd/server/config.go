@@ -495,7 +495,7 @@ func (c *Config) IsObserverBlacklisted(id string) bool {
 // data slowly." Lower values give fresher data at higher CPU cost.
 //
 // RecomputeIntervalSeconds keys (all optional):
-//   topology, rf, distance, channels, hashCollisions, hashSizes
+//   topology, rf, distance, channels, hashCollisions, hashSizes, roles
 type AnalyticsConfig struct {
 	DefaultIntervalSeconds    int            `json:"defaultIntervalSeconds,omitempty"`
 	RecomputeIntervalSeconds  map[string]int `json:"recomputeIntervalSeconds,omitempty"`
@@ -531,5 +531,6 @@ func (c *Config) AnalyticsRecomputeIntervals() AnalyticsRecomputeIntervals {
 	out.Channels = get("channels")
 	out.HashCollisions = get("hashCollisions")
 	out.HashSizes = get("hashSizes")
+	out.Roles = get("roles")
 	return out
 }
