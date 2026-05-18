@@ -1101,6 +1101,24 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		hashInfo := s.store.GetNodeHashSizeInfo()
 		relayWindow := s.cfg.GetHealthThresholds().RelayActiveHours
+		// #1257: bulk-compute relay info + usefulness scores ONCE per
+		// request (cached 15s) instead of calling the per-node helpers
+		// inside the loop. The per-node calls each grabbed their own
+		// RLock and walked byPathHop[pk] + byPayloadType, blowing
+		// /api/nodes up to 30+s on busy networks.
+		var relayMap map[string]RepeaterRelayInfo
+		var usefulMap map[string]float64
+		needsRelay := false
+		for _, node := range nodes {
+			if role, _ := node["role"].(string); role == "repeater" || role == "room" {
+				needsRelay = true
+				break
+			}
+		}
+		if needsRelay {
+			relayMap = s.store.GetRepeaterRelayInfoMap(relayWindow)
+			usefulMap = s.store.GetRepeaterUsefulnessScoreMap()
+		}
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
@@ -1108,14 +1126,15 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					enrichNodeWithMultibyte(node, e)
 				}
 				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
-					info := s.store.GetRepeaterRelayInfo(pk, relayWindow)
+					info, _ := lookupRelayInfo(relayMap, pk)
+					info.WindowHours = relayWindow
 					if info.LastRelayed != "" {
 						node["last_relayed"] = info.LastRelayed
 					}
 					node["relay_active"] = info.RelayActive
 					node["relay_count_1h"] = info.RelayCount1h
 					node["relay_count_24h"] = info.RelayCount24h
-					node["usefulness_score"] = s.store.GetRepeaterUsefulnessScore(pk)
+					node["usefulness_score"] = lookupUsefulnessScore(usefulMap, pk)
 				}
 			}
 		}
