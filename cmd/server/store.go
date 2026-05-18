@@ -3596,6 +3596,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		}
 	}
 	s.distPaths = newDistPaths
+	s.rebuildDistIndexMaps()
 
 	// Trim packets slice
 	n := copy(s.packets, s.packets[cutoffIdx:])
