@@ -1,6 +1,19 @@
 package main
 
-import "time"
+import (
+	"sync"
+	"time"
+)
+
+// repeaterEnrichmentRecomputerInterval is the default tick interval
+// for the steady-state recompute of the repeater enrichment bulk
+// caches. The on-request 15s-TTL fallback in repeater_enrich_bulk.go
+// is kept as a safety net — the recomputer just makes sure the cache
+// is populated before any request arrives.
+//
+// 5min mirrors the analytics_recomputer default from #1240 and is
+// plenty fresh for an at-a-glance status column.
+const repeaterEnrichmentRecomputerDefaultInterval = 5 * time.Minute
 
 // StartRepeaterEnrichmentRecomputer is the steady-state background
 // recompute loop for the repeater enrichment bulk caches consumed by
@@ -12,19 +25,80 @@ import "time"
 // (75k tx, 600 nodes) that cold rebuild took 15.7s and was triggered
 // by every cold SPA load via live.js's /api/nodes?limit=2000 call.
 //
-// Calling Start does an initial synchronous compute (so the next
+// On Start this does an initial synchronous compute (so the next
 // request hits cache) and then ticks every `interval` to keep the
 // snapshot fresh — same pattern as analytics_recomputer.go (#1240).
 //
-// Returns a stop closure that signals the goroutine and waits for it.
+// Returns a stop closure that signals the goroutine and waits for it
+// to exit (with a 5s defensive timeout).
 //
-// NOTE: this is a NO-OP STUB. The accompanying perf test
-// (TestHandleNodesLimit2000ColdMiss) deliberately exercises the
-// cold-rebuild path on /api/nodes?limit=2000 and fails on master so
-// the failure is assertion-shaped, not a missing-symbol compile error.
-// The GREEN commit replaces this stub with a real prewarm + ticker.
+// Safe to call multiple times: subsequent calls are no-ops and return
+// a no-op stop closure (the original goroutine retains ownership).
 func (s *PacketStore) StartRepeaterEnrichmentRecomputer(windowHours float64, interval time.Duration) func() {
-	_ = windowHours
-	_ = interval
-	return func() {}
+	if interval <= 0 {
+		interval = repeaterEnrichmentRecomputerDefaultInterval
+	}
+
+	s.repeaterEnrichRecompMu.Lock()
+	if s.repeaterEnrichRecompStarted {
+		s.repeaterEnrichRecompMu.Unlock()
+		return func() {}
+	}
+	s.repeaterEnrichRecompStarted = true
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	s.repeaterEnrichRecompStop = stop
+	s.repeaterEnrichRecompDone = done
+	s.repeaterEnrichRecompMu.Unlock()
+
+	// Initial synchronous prewarm — the entire point of this recomputer
+	// is to make sure the very first /api/nodes?limit=2000 from
+	// live.js's SPA bootstrap (issue #1262) hits a populated cache
+	// instead of paying the on-thread rebuild cost.
+	recomputeRepeaterEnrichmentSafe(s, windowHours)
+
+	var stopOnce sync.Once
+	go func() {
+		defer close(done)
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				recomputeRepeaterEnrichmentSafe(s, windowHours)
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	return func() {
+		stopOnce.Do(func() {
+			close(stop)
+		})
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+// recomputeRepeaterEnrichmentSafe runs both bulk-cache compute paths
+// behind a panic recover — a panic in compute must not kill the
+// background goroutine (the previous snapshot remains valid).
+func recomputeRepeaterEnrichmentSafe(s *PacketStore, windowHours float64) {
+	defer func() { _ = recover() }()
+	// Bypass the 15s-TTL gate by forcing a fresh recompute and
+	// installing the result. The public Get* helpers would return the
+	// existing cache when within TTL; we want to refresh proactively.
+	relay := s.computeRepeaterRelayInfoMap(windowHours)
+	useful := s.computeRepeaterUsefulnessScoreMap()
+	now := time.Now()
+	s.repeaterEnrichMu.Lock()
+	s.repeaterRelayCache = relay
+	s.repeaterRelayCacheWin = windowHours
+	s.repeaterRelayAt = now
+	s.repeaterUsefulCache = useful
+	s.repeaterUsefulAt = now
+	s.repeaterEnrichMu.Unlock()
 }
