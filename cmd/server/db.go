@@ -18,9 +18,11 @@ import (
 type DB struct {
 	conn             *sql.DB
 	path             string // filesystem path to the database file
-	isV3             bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
-	hasResolvedPath  bool   // observations table has resolved_path column
-	hasObsRawHex     bool   // observations table has raw_hex column (#881)
+	isV3                  bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
+	hasResolvedPath       bool   // observations table has resolved_path column
+	hasObsRawHex          bool   // observations table has raw_hex column (#881)
+	hasObserverLastPacket bool   // observers table has last_packet_at column (#969)
+	hasObserverRepeat     bool   // observers table has repeat column
 
 	// Channel list cache (60s TTL) — avoids repeated GROUP BY scans (#762)
 	channelsCacheMu  sync.Mutex
@@ -28,12 +30,27 @@ type DB struct {
 	channelsCacheRes []map[string]interface{}
 	channelsCacheExp time.Time
 
+	sqliteStatsCacheMu  sync.Mutex
+	sqliteStatsCache    SqliteStats
+	sqliteStatsCacheExp time.Time
+
 	// Prepared statements for the hottest repeated single-row lookups
 	// (review item #5). Prepared lazily on first use; nil means "fall back
 	// to conn.QueryRow". stmtMu guards (re)assignment.
 	stmtMu               sync.Mutex
 	resolvedPathByObsPrepared bool
 	resolvedPathByObsStmt     *sql.Stmt
+}
+
+const sqliteStatsCacheTTL = 15 * time.Second
+
+// sqlPlaceholders returns a comma-separated list of n `?` SQL bind
+// placeholders — e.g. sqlPlaceholders(3) == "?,?,?". Returns "" for n <= 0.
+func sqlPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
 
 // resolvedPathByObsStatement returns a cached prepared statement for the
@@ -115,6 +132,27 @@ func (db *DB) detectSchema() {
 			}
 			if colName == "raw_hex" {
 				db.hasObsRawHex = true
+			}
+		}
+	}
+
+	obsRows, err := db.conn.Query("PRAGMA table_info(observers)")
+	if err != nil {
+		return
+	}
+	defer obsRows.Close()
+	for obsRows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if obsRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
+			if colName == "last_packet_at" {
+				db.hasObserverLastPacket = true
+			}
+			if colName == "repeat" {
+				db.hasObserverRepeat = true
 			}
 		}
 	}
@@ -207,6 +245,7 @@ type Observer struct {
 	UptimeSecs    *int64   `json:"uptime_secs"`
 	NoiseFloor    *float64 `json:"noise_floor"`
 	LastPacketAt  *string  `json:"last_packet_at"`
+	Repeat        *string  `json:"repeat"`
 }
 
 // Transmission represents a row from the transmissions table.
@@ -250,6 +289,7 @@ type Stats struct {
 	TotalNodes         int `json:"totalNodes"`
 	TotalNodesAllTime  int `json:"totalNodesAllTime"`
 	TotalObservers     int `json:"totalObservers"`
+	OnlineObservers    int `json:"onlineObservers"`
 	PacketsLastHour    int `json:"packetsLastHour"`
 	PacketsLast24h     int `json:"packetsLast24h"`
 }
@@ -339,6 +379,15 @@ func (db *DB) GetDBSizeStats() map[string]interface{} {
 
 // GetDBSizeStatsTyped returns SQLite file sizes and row counts as a typed struct.
 func (db *DB) GetDBSizeStatsTyped() SqliteStats {
+	now := time.Now()
+	db.sqliteStatsCacheMu.Lock()
+	if now.Before(db.sqliteStatsCacheExp) {
+		cached := cloneSqliteStats(db.sqliteStatsCache)
+		db.sqliteStatsCacheMu.Unlock()
+		return cached
+	}
+	db.sqliteStatsCacheMu.Unlock()
+
 	result := SqliteStats{}
 
 	if db.path != "" && db.path != ":memory:" {
@@ -387,7 +436,25 @@ func (db *DB) GetDBSizeStatsTyped() SqliteStats {
 	}
 	result.Rows = rows
 
+	db.sqliteStatsCacheMu.Lock()
+	db.sqliteStatsCache = cloneSqliteStats(result)
+	db.sqliteStatsCacheExp = now.Add(sqliteStatsCacheTTL)
+	db.sqliteStatsCacheMu.Unlock()
+
 	return result
+}
+
+func cloneSqliteStats(in SqliteStats) SqliteStats {
+	out := in
+	if in.WalPages != nil {
+		wp := *in.WalPages
+		out.WalPages = &wp
+	}
+	if in.Rows != nil {
+		r := *in.Rows
+		out.Rows = &r
+	}
+	return out
 }
 
 // roleCountRoles is the fixed set of roles surfaced by the role-count helpers.
@@ -1099,7 +1166,14 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 
 // GetObservers returns active observers (not soft-deleted) sorted by last_seen DESC.
 func (db *DB) GetObservers() ([]Observer, error) {
-	rows, err := db.conn.Query("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC")
+	cols := "id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor"
+	if db.hasObserverLastPacket {
+		cols += ", last_packet_at"
+	}
+	if db.hasObserverRepeat {
+		cols += ", repeat"
+	}
+	rows, err := db.conn.Query("SELECT " + cols + " FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -1110,7 +1184,14 @@ func (db *DB) GetObservers() ([]Observer, error) {
 		var o Observer
 		var batteryMv, uptimeSecs sql.NullInt64
 		var noiseFloor sql.NullFloat64
-		if err := rows.Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt); err != nil {
+		dest := []interface{}{&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor}
+		if db.hasObserverLastPacket {
+			dest = append(dest, &o.LastPacketAt)
+		}
+		if db.hasObserverRepeat {
+			dest = append(dest, &o.Repeat)
+		}
+		if scanErr := rows.Scan(dest...); scanErr != nil {
 			continue
 		}
 		if batteryMv.Valid {
@@ -1128,13 +1209,45 @@ func (db *DB) GetObservers() ([]Observer, error) {
 	return observers, nil
 }
 
+// GetObserverCounts returns a single-row aggregate of observer status counts.
+// Online: last_seen within 600 s, stale: 600–3600 s, offline: >3600 s or NULL.
+func (db *DB) GetObserverCounts() (*ObserverCounts, error) {
+	var c ObserverCounts
+	err := db.conn.QueryRow(`
+		SELECT
+			COUNT(*),
+			SUM(CASE WHEN last_seen > datetime('now', '-600 seconds')  THEN 1 ELSE 0 END),
+			SUM(CASE WHEN last_seen <= datetime('now', '-600 seconds')
+			          AND last_seen >  datetime('now', '-3600 seconds') THEN 1 ELSE 0 END),
+			SUM(CASE WHEN last_seen IS NULL
+			          OR  last_seen <= datetime('now', '-3600 seconds') THEN 1 ELSE 0 END)
+		FROM observers`).Scan(&c.Total, &c.Online, &c.Stale, &c.Offline)
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
 // GetObserverByID returns a single observer.
 func (db *DB) GetObserverByID(id string) (*Observer, error) {
 	var o Observer
 	var batteryMv, uptimeSecs sql.NullInt64
 	var noiseFloor sql.NullFloat64
-	err := db.conn.QueryRow("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at FROM observers WHERE id = ?", id).
-		Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt)
+	cols := "id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor"
+	if db.hasObserverLastPacket {
+		cols += ", last_packet_at"
+	}
+	if db.hasObserverRepeat {
+		cols += ", repeat"
+	}
+	dest := []interface{}{&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor}
+	if db.hasObserverLastPacket {
+		dest = append(dest, &o.LastPacketAt)
+	}
+	if db.hasObserverRepeat {
+		dest = append(dest, &o.Repeat)
+	}
+	err := db.conn.QueryRow("SELECT "+cols+" FROM observers WHERE id = ?", id).Scan(dest...)
 	if err != nil {
 		return nil, err
 	}
@@ -1149,6 +1262,32 @@ func (db *DB) GetObserverByID(id string) (*Observer, error) {
 		o.NoiseFloor = &noiseFloor.Float64
 	}
 	return &o, nil
+}
+
+// GetObserverSources returns the MQTT broker hosts that have relayed data for
+// the given observer, ordered by most-recently-seen first. Only rows with a
+// non-empty name (populated by ingestor builds that track friendly broker names)
+// are returned; rows from older ingestor builds that predate the name column
+// are omitted so callers always get clean, labelled entries.
+func (db *DB) GetObserverSources(id string) ([]ObserverSource, error) {
+	rows, err := db.conn.Query(
+		`SELECT host, name, last_seen, packet_count, status_count FROM observer_sources
+		 WHERE observer_id = ? AND name != '' ORDER BY last_seen DESC`,
+		id,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ObserverSource
+	for rows.Next() {
+		var s ObserverSource
+		if err := rows.Scan(&s.Host, &s.Name, &s.LastSeen, &s.PacketCount, &s.StatusCount); err != nil {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 // GetObserverIdsForRegion returns observer IDs for given IATA codes.
@@ -1843,6 +1982,118 @@ func (db *DB) GetObserverPacketCounts(sinceEpoch int64) map[string]int {
 		counts[id] = cnt
 	}
 	return counts
+}
+
+// ObserverPacketWindows holds packet counts for three time windows per observer.
+type ObserverPacketWindows struct{ Hour, Day, Week int }
+
+// GetObserverAllPacketCounts returns packet counts for three time windows in a
+// single query instead of three separate scans. sinceEpoch values must be Unix
+// timestamps in seconds (same unit as observations.timestamp).
+func (db *DB) GetObserverAllPacketCounts(oneHourAgo, oneDayAgo, sevenDaysAgo int64) map[string]ObserverPacketWindows {
+	out := make(map[string]ObserverPacketWindows)
+	var rows *sql.Rows
+	var err error
+	if db.isV3 {
+		rows, err = db.conn.Query(`
+			SELECT obs.id,
+				COUNT(CASE WHEN o.timestamp > ? THEN 1 END),
+				COUNT(CASE WHEN o.timestamp > ? THEN 1 END),
+				COUNT(*)
+			FROM observations o
+			JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE o.timestamp > ?
+			GROUP BY o.observer_idx`,
+			oneHourAgo, oneDayAgo, sevenDaysAgo)
+	} else {
+		rows, err = db.conn.Query(`
+			SELECT o.observer_id,
+				COUNT(CASE WHEN o.timestamp > ? THEN 1 END),
+				COUNT(CASE WHEN o.timestamp > ? THEN 1 END),
+				COUNT(*)
+			FROM observations o
+			WHERE o.observer_id IS NOT NULL AND o.timestamp > ?
+			GROUP BY o.observer_id`,
+			oneHourAgo, oneDayAgo, sevenDaysAgo)
+	}
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var w ObserverPacketWindows
+		rows.Scan(&id, &w.Hour, &w.Day, &w.Week)
+		out[id] = w
+	}
+	return out
+}
+
+// GetRecentDirectPacketsForNode returns transmissions that this node directly received —
+// identified by the node's pubkey prefix appearing as the first element of path_json in at
+// least one observation. First-in-path means the node heard the original transmission
+// directly (0 relay hops from sender) and forwarded it; this works for repeaters, room
+// servers, and any other node type without requiring it to be a registered observer.
+// sinceHours=0 means no time filter. limit=0 defaults to 20, max 2000.
+func (db *DB) GetRecentDirectPacketsForNode(pubkey string, limit int, sinceHours int) ([]map[string]interface{}, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+
+	selectCols, observerJoin := db.transmissionBaseSQL()
+
+	// The first element of path_json is the first relay hop. If it is a prefix of this node's
+	// pubkey (or the pubkey starts with it), the node heard the packet directly from the sender.
+	// We use "? LIKE first_hop || '%'" so varying prefix lengths all match correctly.
+	directCond := "EXISTS (SELECT 1 FROM observations o2 WHERE o2.transmission_id = t.id AND json_extract(o2.path_json, '$[0]') IS NOT NULL AND json_extract(o2.path_json, '$[0]') != '' AND ? LIKE json_extract(o2.path_json, '$[0]') || '%')"
+
+	var querySQL string
+	var args []interface{}
+	if sinceHours > 0 {
+		querySQL = fmt.Sprintf(
+			"SELECT %s FROM transmissions t %s WHERE %s AND t.first_seen >= datetime('now','-%d hours') ORDER BY t.first_seen DESC LIMIT ?",
+			selectCols, observerJoin, directCond, sinceHours)
+	} else {
+		querySQL = fmt.Sprintf(
+			"SELECT %s FROM transmissions t %s WHERE %s ORDER BY t.first_seen DESC LIMIT ?",
+			selectCols, observerJoin, directCond)
+	}
+	args = []interface{}{pubkey, limit}
+
+	rows, err := db.conn.Query(querySQL, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	packets := make([]map[string]interface{}, 0)
+	var txIDs []int
+	for rows.Next() {
+		p := db.scanTransmissionRow(rows)
+		if p != nil {
+			p["observations"] = []map[string]interface{}{}
+			if id, ok := p["id"].(int); ok {
+				txIDs = append(txIDs, id)
+			}
+			packets = append(packets, p)
+		}
+	}
+
+	if len(txIDs) > 0 {
+		obsMap := db.getObservationsForTransmissions(txIDs)
+		for _, p := range packets {
+			if id, ok := p["id"].(int); ok {
+				if obs, found := obsMap[id]; found {
+					p["observations"] = obs
+				}
+			}
+		}
+	}
+
+	return packets, nil
 }
 
 // GetNodeLocations returns a map of lowercase public_key → {lat, lon, role} for node geo lookups.
