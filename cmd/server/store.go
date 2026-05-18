@@ -225,6 +225,15 @@ type PacketStore struct {
 	repeaterUsefulCache    map[string]float64
 	repeaterUsefulAt       time.Time
 
+	// Steady-state recomputer for the two caches above (#1262). When
+	// started, an initial sync compute prewarms the caches so the very
+	// first /api/nodes?limit=2000 from live.js's SPA bootstrap hits a
+	// populated cache instead of paying the 15.7s on-thread rebuild.
+	repeaterEnrichRecompMu      sync.Mutex
+	repeaterEnrichRecompStarted bool
+	repeaterEnrichRecompStop    chan struct{}
+	repeaterEnrichRecompDone    chan struct{}
+
 	// Precomputed distinct advert pubkey count (refcounted for eviction correctness).
 	// Updated incrementally during Load/Ingest/Evict — avoids JSON parsing in GetPerfStoreStats.
 	advertPubkeys map[string]int // pubkey → number of advert packets referencing it
