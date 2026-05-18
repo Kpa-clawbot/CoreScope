@@ -53,17 +53,10 @@
   // trigger so keyboard users don't get dumped at <body>).
   var prevFocus = null;
 
-  // Long-tail routes mirror PR #1174 / bottom-nav.js MORE_ROUTES exactly.
-  // ⚠️ Keep in sync with public/bottom-nav.js MORE_ROUTES.
-  var ROUTES = [
-    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes',     icon: '🖥️' },
-    { route: 'tools',     hash: '#/tools',     label: 'Tools',     icon: '🛠️' },
-    { route: 'observers', hash: '#/observers', label: 'Observers', icon: '👁️' },
-    { route: 'analytics', hash: '#/analytics', label: 'Analytics', icon: '📊' },
-    { route: 'perf',      hash: '#/perf',      label: 'Perf',      icon: '⚡' },
-    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab', icon: '🎵' },
-    { route: 'mc-keygen', hash: '#/mc-keygen', label: 'MC-Keygen', icon: '🔑' },
-  ];
+  // Long-tail routes sourced from the shared single-source-of-truth list in
+  // nav-routes.js (window.NAV_MORE_ROUTES), also consumed by bottom-nav.js.
+  // nav-routes.js is loaded before this script via `defer` in index.html.
+  var ROUTES = window.NAV_MORE_ROUTES;
 
   var EDGE_PX = 44;          // pointerdown must start within left N px (drawer trigger zone)
   var EDGE_MIN_PX = 24;      // first N px reserved for iOS Safari back-swipe (do not claim)

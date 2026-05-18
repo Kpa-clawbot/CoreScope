@@ -106,56 +106,57 @@
 
   <main id="app" role="main"></main>
 
-  <script src="vendor/qrcode.js"></script>
-  <script src="roles.js?v=__BUST__"></script>
-  <script src="customize-v2.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="region-filter.js?v=__BUST__"></script>
-  <script src="hop-resolver.js?v=__BUST__"></script>
-  <script src="hop-display.js?v=__BUST__"></script>
-  <script src="app.js?v=__BUST__"></script>
-  <script src="bottom-nav.js?v=__BUST__"></script>
-  <script src="nav-drawer.js?v=__BUST__"></script>
-  <script src="touch-gestures.js?v=__BUST__"></script>
-  <script src="gesture-hints.js?v=__BUST__"></script>
-  <script src="url-state.js?v=__BUST__"></script>
-  <script src="home.js?v=__BUST__"></script>
-  <script src="table-sort.js?v=__BUST__"></script>
-  <script src="packet-filter.js?v=__BUST__"></script>
-  <script src="filter-ux.js?v=__BUST__"></script>
-  <script src="hash-color.js?v=__BUST__"></script>
-  <script src="packet-helpers.js?v=__BUST__"></script>
-  <script src="vendor/aes-ecb.js?v=__BUST__"></script>
-  <script src="vendor/sha256-hmac.js?v=__BUST__"></script>
-  <script src="channel-decrypt.js?v=__BUST__"></script>
-  <script src="vendor/jsqr.min.js"></script>
-  <script src="channel-qr.js?v=__BUST__"></script>
-  <script src="channel-colors.js?v=__BUST__"></script>
-  <script src="channel-color-picker.js?v=__BUST__"></script>
-  <script src="packets.js?v=__BUST__"></script>
-  <script src="geo-filter-overlay.js?v=__BUST__"></script>
-  <script src="map.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="channels.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="table-sort.js?v=__BUST__"></script>
-  <script src="nodes.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="traces.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="path-inspector.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="analytics.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="audio.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="audio-v1-constellation.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="audio-v2-pulse.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="audio-v3-drone.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="audio-v4-chiptune.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="audio-v5-blaster.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="audio-v6-warzone.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="audio-lab.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="drag-manager.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="live.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="observers.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="observer-detail.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="compare.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="node-analytics.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="perf.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="mc-keygen.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script src="bottom-nav.js?v=__BUST__"></script>
+  <!-- All external app + vendor scripts use `defer` so they no longer
+       block HTML parsing / first paint, and execute (in source order)
+       only after the DOM is fully parsed. Order is preserved across the
+       head vendor scripts (Leaflet, Chart.js, …) and these app scripts,
+       so dependents always run after their dependencies. -->
+  <script defer src="vendor/qrcode.js"></script>
+  <script defer src="packet-helpers.js?v=__BUST__"></script>
+  <script defer src="chart-constants.js?v=__BUST__"></script>
+  <script defer src="roles.js?v=__BUST__"></script>
+  <script defer src="customize-v2.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="region-filter.js?v=__BUST__"></script>
+  <script defer src="hop-resolver.js?v=__BUST__"></script>
+  <script defer src="hop-display.js?v=__BUST__"></script>
+  <script defer src="page-state.js?v=__BUST__"></script>
+  <script defer src="app.js?v=__BUST__"></script>
+  <script defer src="nav-routes.js?v=__BUST__"></script>
+  <script defer src="bottom-nav.js?v=__BUST__"></script>
+  <script defer src="nav-drawer.js?v=__BUST__"></script>
+  <script defer src="touch-gestures.js?v=__BUST__"></script>
+  <script defer src="gesture-hints.js?v=__BUST__"></script>
+  <script defer src="url-state.js?v=__BUST__"></script>
+  <script defer src="home.js?v=__BUST__"></script>
+  <script defer src="table-sort.js?v=__BUST__"></script>
+  <script defer src="packet-filter.js?v=__BUST__"></script>
+  <script defer src="filter-ux.js?v=__BUST__"></script>
+  <script defer src="hash-color.js?v=__BUST__"></script>
+  <script defer src="vendor/aes-ecb.js?v=__BUST__"></script>
+  <script defer src="vendor/sha256-hmac.js?v=__BUST__"></script>
+  <script defer src="channel-decrypt.js?v=__BUST__"></script>
+  <script defer src="vendor/jsqr.min.js"></script>
+  <script defer src="channel-qr.js?v=__BUST__"></script>
+  <script defer src="channel-colors.js?v=__BUST__"></script>
+  <script defer src="channel-color-picker.js?v=__BUST__"></script>
+  <script defer src="packets.js?v=__BUST__"></script>
+  <script defer src="geo-filter-overlay.js?v=__BUST__"></script>
+  <script defer src="map.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="channels.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="nodes.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="traces.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="path-inspector.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="analytics.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="audio.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="audio-v1-constellation.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="audio-lab.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="drag-manager.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="live.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="observers.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="observer-detail.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="compare.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="node-analytics.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="perf.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <script defer src="mc-keygen.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
 </body>
 </html>

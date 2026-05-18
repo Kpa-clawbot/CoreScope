@@ -52,26 +52,11 @@
     { route: 'more',     hash: null,         label: 'More'     },
   ];
 
-  // Long-tail routes surfaced in the More sheet. Mirrors data-route values
-  // from the existing top-nav (public/index.html). Order matches what
-  // operators expect from the desktop top-nav.
-  //
-  // ⚠️ MANUAL SYNC REQUIRED ⚠️
-  // This list is intentionally hardcoded (not generated from
-  // `.top-nav .nav-link[data-route]`) because the top-nav HTML is in
-  // mid-rewrite and not a reliable single-source-of-truth. If you add a
-  // new top-nav route (e.g. a future "Lab" page), you MUST also append
-  // it here, or it will be unreachable on phones at ≤768px (the
-  // hamburger is hidden at that breakpoint — see bottom-nav.css).
-  var MORE_ROUTES = [
-    { route: 'nodes',     hash: '#/nodes',     label: 'Nodes'     },
-    { route: 'tools',     hash: '#/tools',     label: 'Tools'     },
-    { route: 'observers', hash: '#/observers', label: 'Observers' },
-    { route: 'analytics', hash: '#/analytics', label: 'Analytics' },
-    { route: 'perf',      hash: '#/perf',      label: 'Perf'      },
-    { route: 'audio-lab', hash: '#/audio-lab', label: 'Audio Lab' },
-    { route: 'mc-keygen', hash: '#/mc-keygen', label: 'MC-Keygen' },
-  ];
+  // Long-tail routes surfaced in the More sheet. Sourced from the shared
+  // single-source-of-truth list in nav-routes.js (window.NAV_MORE_ROUTES),
+  // which is also consumed by nav-drawer.js. nav-routes.js is loaded before
+  // this script via `defer` in index.html, so the global is always defined.
+  var MORE_ROUTES = window.NAV_MORE_ROUTES;
 
   var SHEET_ID = 'bottomNavMoreSheet';
 
