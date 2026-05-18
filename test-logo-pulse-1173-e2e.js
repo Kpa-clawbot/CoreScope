@@ -44,7 +44,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     page.setDefaultTimeout(8000);
     page.on('pageerror', (e) => console.error('[pageerror]', e.message));
     await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('.brand-logo', { timeout: 8000 });
+    await page.waitForSelector('svg.brand-logo', { state: 'attached', timeout: 8000 });
     // Wait for app boot — hook should be installed during connectWS().
     await page.waitForFunction(() => !!(window.__corescopeLogo && typeof window.__corescopeLogo.pulse === 'function'), null, { timeout: 8000 }).catch(()=>{});
 
@@ -54,7 +54,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       assert(!found, '#liveDot still present in DOM');
     });
 
-    // (b) Both .brand-logo and .brand-mark-only carry the new pulse classes
+    // (b) Both svg.brand-logo and .brand-mark-only carry the new pulse classes
     //     on their two inner circles.
     await step('both logo SVGs have .logo-node-a and .logo-node-b circles', async () => {
       const info = await page.evaluate(() => {
@@ -66,10 +66,10 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
           return { exists: true, hasA: !!a, hasB: !!b,
             aCx: a && a.getAttribute('cx'), bCx: b && b.getAttribute('cx') };
         }
-        return { full: probe('.brand-logo'), mark: probe('.brand-mark-only') };
+        return { full: probe('svg.brand-logo'), mark: probe('.brand-mark-only') };
       });
       assert(info.full.exists && info.full.hasA && info.full.hasB,
-        '.brand-logo missing pulse classes: ' + JSON.stringify(info.full));
+        'svg.brand-logo missing pulse classes: ' + JSON.stringify(info.full));
       assert(info.mark.exists && info.mark.hasA && info.mark.hasB,
         '.brand-mark-only missing pulse classes: ' + JSON.stringify(info.mark));
       assert(info.full.aCx === '540' && info.full.bCx === '660',
@@ -82,8 +82,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         if (!window.__corescopeLogo || typeof window.__corescopeLogo.pulse !== 'function') {
           return { hookMissing: true };
         }
-        const a = document.querySelector('.brand-logo circle.logo-node-a');
-        const b = document.querySelector('.brand-logo circle.logo-node-b');
+        const a = document.querySelector('svg.brand-logo circle.logo-node-a');
+        const b = document.querySelector('svg.brand-logo circle.logo-node-b');
         const before = { a: a.classList.contains('logo-pulse-active'),
                          b: b.classList.contains('logo-pulse-active') };
         window.__corescopeLogo.pulse({ synthetic: true });
@@ -137,10 +137,10 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     });
 
     // (g) Disconnect simulation: setConnected(false) → .logo-disconnected class.
-    await step('setConnected(false) puts .logo-disconnected on .brand-logo', async () => {
+    await step('setConnected(false) puts .logo-disconnected on svg.brand-logo', async () => {
       const has = await page.evaluate(() => {
         window.__corescopeLogo.setConnected(false);
-        const full = document.querySelector('.brand-logo').classList.contains('logo-disconnected');
+        const full = document.querySelector('svg.brand-logo').classList.contains('logo-disconnected');
         const mark = document.querySelector('.brand-mark-only').classList.contains('logo-disconnected');
         // restore for next steps
         window.__corescopeLogo.setConnected(true);
@@ -156,8 +156,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         const cs = getComputedStyle(root);
         const accent = cs.getPropertyValue('--logo-accent').trim();
         const accentHi = cs.getPropertyValue('--logo-accent-hi').trim();
-        const a = document.querySelector('.brand-logo circle.logo-node-a');
-        const b = document.querySelector('.brand-logo circle.logo-node-b');
+        const a = document.querySelector('svg.brand-logo circle.logo-node-a');
+        const b = document.querySelector('svg.brand-logo circle.logo-node-b');
         return {
           accent, accentHi,
           aFill: getComputedStyle(a).fill,
@@ -183,7 +183,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     const page = await ctx.newPage();
     page.setDefaultTimeout(8000);
     await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('.brand-logo', { timeout: 8000 });
+    await page.waitForSelector('svg.brand-logo', { state: 'attached', timeout: 8000 });
     await page.waitForFunction(() => !!(window.__corescopeLogo && typeof window.__corescopeLogo.pulse === 'function'), null, { timeout: 8000 }).catch(()=>{});
 
     await step('prefers-reduced-motion: blip class is .logo-pulse-blip (not .logo-pulse-active)', async () => {
@@ -191,8 +191,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         if (!window.__corescopeLogo) return { hookMissing: true };
         window.__corescopeLogo.pulse({ synthetic: true });
         await new Promise(r => requestAnimationFrame(() => r()));
-        const a = document.querySelector('.brand-logo circle.logo-node-a');
-        const b = document.querySelector('.brand-logo circle.logo-node-b');
+        const a = document.querySelector('svg.brand-logo circle.logo-node-a');
+        const b = document.querySelector('svg.brand-logo circle.logo-node-b');
         return {
           hookMissing: false,
           activeA: a.classList.contains('logo-pulse-active'),
@@ -218,7 +218,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     const page = await ctx.newPage();
     page.setDefaultTimeout(8000);
     await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('.brand-logo', { timeout: 8000 });
+    await page.waitForSelector('svg.brand-logo', { state: 'attached', timeout: 8000 });
     await page.waitForFunction(() => !!(window.__corescopeLogo && typeof window.__corescopeLogo.pulse === 'function'), null, { timeout: 8000 }).catch(()=>{});
 
     await step('hidden tab: pulse() returns false and toggles no classes', async () => {
@@ -228,8 +228,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         const before = Object.assign({}, window.__corescopeLogo.stats);
         const ret = window.__corescopeLogo.pulse({ synthetic: true });
         await new Promise(r => requestAnimationFrame(() => r()));
-        const a = document.querySelector('.brand-logo circle.logo-node-a');
-        const b = document.querySelector('.brand-logo circle.logo-node-b');
+        const a = document.querySelector('svg.brand-logo circle.logo-node-a');
+        const b = document.querySelector('svg.brand-logo circle.logo-node-b');
         const after = Object.assign({}, window.__corescopeLogo.stats);
         return {
           ret, before, after,
@@ -266,7 +266,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       };
     });
     await page.goto(BASE + '/#/home', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('.brand-logo', { timeout: 8000 });
+    await page.waitForSelector('svg.brand-logo', { state: 'attached', timeout: 8000 });
     await page.waitForFunction(() => !!(window.__corescopeLogo && typeof window.__corescopeLogo.pulse === 'function'), null, { timeout: 8000 }).catch(()=>{});
 
     await step('matchMedia: cached singleton — 100 pulses do not call window.matchMedia per pulse', async () => {

@@ -53,6 +53,9 @@
 
   var THEME_COLOR_KEYS = Object.keys(THEME_CSS_MAP).filter(function (k) { return k !== 'font' && k !== 'mono'; });
   var DEFAULT_BRAND_LOGO_URL = 'img/meshcore-canada-logo.png';
+  function _isBundledBrandLogo(url) {
+    return String(url || '').replace(/^\.\//, '').replace(/^\//, '') === DEFAULT_BRAND_LOGO_URL;
+  }
 
   // ── Brand logo swap helper (PR #1137) ──
   // The default navbar brand logo is an inline <svg class="brand-logo"> so it
@@ -608,7 +611,7 @@
         var brandEl = document.querySelector('.brand-text');
         if (brandEl) brandEl.textContent = br.siteName;
       }
-      if (br.logoUrl) {
+      if (br.logoUrl && !_isBundledBrandLogo(br.logoUrl)) {
         _setBrandLogoUrl(br.logoUrl, br.siteName || null);
         var iconEl = document.querySelector('.brand-icon');
         if (iconEl) {
@@ -1741,7 +1744,7 @@
         if (brandEl) brandEl.textContent = overrides.branding.siteName;
         document.title = overrides.branding.siteName;
       }
-      if (overrides.branding.logoUrl) {
+      if (overrides.branding.logoUrl && !_isBundledBrandLogo(overrides.branding.logoUrl)) {
         _setBrandLogoUrl(overrides.branding.logoUrl, overrides.branding.siteName || null);
         var iconEl = document.querySelector('.brand-icon');
         if (iconEl) iconEl.innerHTML = '<img src="' + overrides.branding.logoUrl + '" style="height:24px" onerror="this.style.display=\'none\'">';
