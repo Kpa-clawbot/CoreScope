@@ -131,3 +131,45 @@ func (s *Server) handleAnalyticsRoles(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, computeRoleAnalytics(roles, skewMap))
 }
+
+// GetAnalyticsRoles returns the role-distribution analytics, preferring
+// the steady-state recomputer snapshot (issue #1256). Falls back to an
+// on-request compute path if the recomputer is not yet running (e.g.
+// during the brief startup window before the initial compute completes
+// — Start runs it synchronously, so this fallback is effectively only
+// hit in tests that skip the recomputer entirely).
+func (s *PacketStore) GetAnalyticsRoles() RoleAnalyticsResponse {
+	s.analyticsRecomputerMu.RLock()
+	rc := s.recompRoles
+	s.analyticsRecomputerMu.RUnlock()
+	if rc != nil {
+		if v := rc.Load(); v != nil {
+			if r, ok := v.(RoleAnalyticsResponse); ok {
+				s.cacheMu.Lock()
+				s.cacheHits++
+				s.cacheMu.Unlock()
+				return r
+			}
+		}
+	}
+	return s.computeAnalyticsRoles()
+}
+
+// computeAnalyticsRoles runs the actual role aggregation. Used by the
+// background recomputer (issue #1256) and as a fallback for callers
+// arriving before the snapshot is populated.
+func (s *PacketStore) computeAnalyticsRoles() RoleAnalyticsResponse {
+	nodes, _ := s.getCachedNodesAndPM()
+	roles := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		roles[n.PublicKey] = n.Role
+	}
+	skewMap := make(map[string]*NodeClockSkew)
+	for _, cs := range s.GetFleetClockSkew() {
+		if cs == nil {
+			continue
+		}
+		skewMap[cs.Pubkey] = cs
+	}
+	return computeRoleAnalytics(roles, skewMap)
+}
