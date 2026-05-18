@@ -212,6 +212,18 @@ type PacketStore struct {
 	multiByteCapCache map[string]*MultiByteCapEntry
 	multiByteCapAt    time.Time
 
+	// Cached per-pubkey relay info + usefulness score maps (#1257). These
+	// fold the previously per-node GetRepeaterRelayInfo /
+	// GetRepeaterUsefulnessScore loop in handleNodes into one O(N) pass
+	// per 15s TTL window — eliminating N RLock acquisitions and N×
+	// timestamp parses of the same byPathHop entries per request.
+	repeaterEnrichMu       sync.Mutex
+	repeaterRelayCache     map[string]RepeaterRelayInfo
+	repeaterRelayCacheWin  float64
+	repeaterRelayAt        time.Time
+	repeaterUsefulCache    map[string]float64
+	repeaterUsefulAt       time.Time
+
 	// Precomputed distinct advert pubkey count (refcounted for eviction correctness).
 	// Updated incrementally during Load/Ingest/Evict — avoids JSON parsing in GetPerfStoreStats.
 	advertPubkeys map[string]int // pubkey → number of advert packets referencing it
