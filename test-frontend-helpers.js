@@ -2690,6 +2690,7 @@ console.log('\n=== channels.js: WS batch + region snapshot integration ===');
     loadInCtx(ctx, 'public/channel-decrypt.js');
     loadInCtx(ctx, 'public/page-state.js');
     loadInCtx(ctx, 'public/channels.js');
+    ctx.app = appEl;
     ctx._pageHandlers.init(appEl);
     return { ctx, dom };
   }
@@ -2812,6 +2813,7 @@ console.log('\n=== channels.js: WS batch + region snapshot integration ===');
     loadInCtx(ctx, 'public/channel-decrypt.js');
     loadInCtx(ctx, 'public/page-state.js');
     loadInCtx(ctx, 'public/channels.js');
+    ctx.app = appEl;
     ctx._pageHandlers.init(appEl);
     await Promise.resolve();
     const selectPromise = ctx.window._channelsSelectChannelForTest('general');
@@ -2910,6 +2912,7 @@ console.log('\n=== channels.js: WS batch + region snapshot integration ===');
     loadInCtx(ctx, 'public/channel-decrypt.js');
     loadInCtx(ctx, 'public/page-state.js');
     loadInCtx(ctx, 'public/channels.js');
+    ctx.app = appEl;
     ctx._pageHandlers.init(appEl);
     await Promise.resolve();
     await ctx.window._channelsSelectChannelForTest('general');
@@ -3013,6 +3016,7 @@ console.log('\n=== channels.js: encrypted channel without key shows lock message
     loadInCtx(ctx, 'public/channel-decrypt.js');
     loadInCtx(ctx, 'public/page-state.js');
     loadInCtx(ctx, 'public/channels.js');
+    ctx.app = appEl;
     ctx._pageHandlers.init(appEl);
     // Wait for loadChannels() to resolve (async in init)
     for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -3107,6 +3111,7 @@ console.log('\n=== channels.js: encrypted channel without key shows lock message
     loadInCtx(ctx, 'public/channel-decrypt.js');
     loadInCtx(ctx, 'public/page-state.js');
     loadInCtx(ctx, 'public/channels.js');
+    ctx.app = appEl;
     if (opts.storedKey) {
       ctx.ChannelDecrypt.saveKey(opts.storedKey.name, opts.storedKey.hex);
     }
