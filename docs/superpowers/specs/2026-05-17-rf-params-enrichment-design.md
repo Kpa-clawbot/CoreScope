@@ -86,12 +86,15 @@ A single new sortable column **"LoRa"** added to the nodes overview table.
 | 917.375 / SF11 / BW250 / CR5 | New Zealand |
 | 917.375 / SF7 / BW62.5 / CR5 | New Zealand (Narrow) |
 | 433.375 / SF9 / BW62.5 / CR6 | Portugal 433 |
+| 869.618 / SF7 / BW62.5 / CR5 | Netherlands (Narrow) |
 | 869.618 / SF7 / BW62.5 / CR6 | Portugal 868 |
 | 910.525 / SF7 / BW62.5 / CR5 | USA/Canada (Recommended) |
 | 920.250 / SF8 / BW62.5 / CR5 | Vietnam (Narrow) |
 | 920.250 / SF11 / BW250 / CR5 | Vietnam (Deprecated) |
 
-Note: Switzerland and EU/UK (Narrow) share identical params; they are merged into one label.
+Notes:
+- Switzerland and EU/UK (Narrow) share identical params; they are merged into one label.
+- Netherlands (Narrow) (869.618/SF7/BW62.5/CR5) is a custom addition not in the official app preset list.
 
 **Preset key construction (avoid float equality bugs):**
 Build a string key from the params: `` `${freq.toFixed(3)}/${sf}/${bw.toFixed(1)}/${cr}` ``
