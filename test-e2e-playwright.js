@@ -188,9 +188,14 @@ async function run() {
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('nav, .navbar, .nav, [class*="nav"]');
     const themeBefore = await page.$eval('html', el => el.getAttribute('data-theme'));
-    // Find toggle button
-    const allButtons = await page.$$('button');
     let toggled = false;
+    const toggleButton = await page.$('#darkModeToggle, button[aria-label*="dark" i], button[aria-label*="light" i]');
+    if (toggleButton) {
+      await toggleButton.click();
+      toggled = true;
+    }
+    // Legacy fallback for older emoji-only builds.
+    const allButtons = toggled ? [] : await page.$$('button');
     for (const b of allButtons) {
       const text = await b.textContent();
       if (text.includes('\u2600') || text.includes('\ud83c\udf19') || text.includes('\ud83c\udf11') || text.includes('\ud83c\udf15')) {

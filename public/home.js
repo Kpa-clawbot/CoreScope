@@ -8,7 +8,7 @@
 
   const PREF_KEY = 'meshcore-user-level';
   const MY_NODES_KEY = 'meshcore-my-nodes'; // [{pubkey, name, addedAt}]
-  const DEFAULT_SITE_NAME = 'MeshCore Canada Live';
+  const DEFAULT_SITE_NAME = 'MeshCore Canada CoreScope Live';
   const DEFAULT_HOME_TITLE = 'Canada Meshcore Corescope';
   const DEFAULT_LOGO_URL = 'img/meshcore-canada-logo.png';
   const ALPHA_LABEL = '0.5 Alpha';
