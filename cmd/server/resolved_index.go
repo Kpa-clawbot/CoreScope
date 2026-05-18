@@ -198,6 +198,98 @@ func (s *PacketStore) fetchResolvedPathsForTx(txID int) map[int][]*string {
 	return result
 }
 
+// prefetchResolvedPathsForTxs fetches resolved_path for every observation of
+// every transmission in txIDs using a single chunked `transmission_id IN (...)`
+// query, eliminating the N+1 SQL pattern in the packet-list hot path. The
+// result is keyed txID → obsID → resolved path. Fetched paths are also written
+// into the LRU so a subsequent fetchResolvedPathForObs hits the cache.
+// MUST be called WITHOUT holding s.mu (it takes lruMu internally).
+func (s *PacketStore) prefetchResolvedPathsForTxs(txIDs []int) map[int]map[int][]*string {
+	result := make(map[int]map[int][]*string, len(txIDs))
+	if len(txIDs) == 0 || s.db == nil || s.db.conn == nil {
+		return result
+	}
+
+	const chunkSize = 499 // stay under SQLite's variable limit
+	for start := 0; start < len(txIDs); start += chunkSize {
+		end := start + chunkSize
+		if end > len(txIDs) {
+			end = len(txIDs)
+		}
+		chunk := txIDs[start:end]
+
+		placeholders := make([]byte, 0, len(chunk)*2)
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			if i > 0 {
+				placeholders = append(placeholders, ',')
+			}
+			placeholders = append(placeholders, '?')
+			args[i] = id
+		}
+
+		query := "SELECT id, transmission_id, resolved_path FROM observations WHERE transmission_id IN (" +
+			string(placeholders) + ") AND resolved_path IS NOT NULL"
+
+		rows, err := s.db.conn.Query(query, args...)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var obsID, txID int
+			var rpJSON sql.NullString
+			if err := rows.Scan(&obsID, &txID, &rpJSON); err != nil {
+				continue
+			}
+			if !rpJSON.Valid || rpJSON.String == "" {
+				continue
+			}
+			rp := unmarshalResolvedPath(rpJSON.String)
+			byObs := result[txID]
+			if byObs == nil {
+				byObs = make(map[int][]*string)
+				result[txID] = byObs
+			}
+			byObs[obsID] = rp
+		}
+		rows.Close()
+	}
+
+	// Populate the LRU so single-obs lookups for these IDs hit the cache.
+	s.lruMu.Lock()
+	for _, byObs := range result {
+		for obsID, rp := range byObs {
+			s.lruPut(obsID, rp)
+		}
+	}
+	s.lruMu.Unlock()
+
+	return result
+}
+
+// resolvedPathForTxBestFromCache mirrors fetchResolvedPathForTxBest's "best"
+// selection (longest path_json among observations that have a stored
+// resolved_path) but reads from a pre-fetched per-tx map instead of issuing
+// SQL. Returns nil when no observation has a stored resolved_path.
+func resolvedPathForTxBestFromCache(tx *StoreTx, byObs map[int][]*string) []*string {
+	if tx == nil || len(byObs) == 0 {
+		return nil
+	}
+	var bestRP []*string
+	bestLen := -1
+	for _, obs := range tx.Observations {
+		rp, ok := byObs[obs.ID]
+		if !ok || rp == nil {
+			continue
+		}
+		if l := pathLen(obs.PathJSON); l > bestLen {
+			bestLen = l
+			bestRP = rp
+		}
+	}
+	return bestRP
+}
+
 // fetchResolvedPathForObs fetches resolved_path for a single observation,
 // using the LRU cache.
 func (s *PacketStore) fetchResolvedPathForObs(obsID int) []*string {
