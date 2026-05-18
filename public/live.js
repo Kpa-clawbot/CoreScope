@@ -236,7 +236,32 @@
         // Set live-page height from JS — most reliable across all mobile browsers
         const page = document.querySelector('.live-page');
         const appEl = document.getElementById('app');
-        const h = window.innerHeight;
+        // #1267: the CSS rule for .live-page subtracts --bottom-nav-reserve
+        // (0px desktop, 56px+safe-area at ≤768px) so the fixed .bottom-nav
+        // (z-index 1200) does not occlude the VCR bar (position:absolute;
+        // bottom:0; z-index 1000). Mirror that subtraction here — otherwise
+        // this JS override clobbers the CSS height with raw window.innerHeight
+        // and the VCR bar slides under the bottom-nav (issue #1267).
+        // Prefer the bottom-nav's measured rendered height so we also cover
+        // the 1px top border and any visual chrome the --bottom-nav-reserve
+        // token doesn't account for; fall back to the token-resolved value.
+        const reserve = (() => {
+          const bn = document.querySelector('.bottom-nav');
+          if (bn) {
+            const cs = getComputedStyle(bn);
+            if (cs.display !== 'none') {
+              const r = bn.getBoundingClientRect().height;
+              if (r > 0) return r;
+            }
+          }
+          const probe = document.createElement('div');
+          probe.style.cssText = 'position:absolute;visibility:hidden;height:var(--bottom-nav-reserve,0px);pointer-events:none;';
+          (document.body || document.documentElement).appendChild(probe);
+          const px = probe.getBoundingClientRect().height || 0;
+          probe.remove();
+          return px;
+        })();
+        const h = Math.max(0, window.innerHeight - reserve);
         if (page) page.style.height = h + 'px';
         if (appEl) appEl.style.height = h + 'px';
         if (map) {
