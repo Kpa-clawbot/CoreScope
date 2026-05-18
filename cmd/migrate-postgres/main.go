@@ -40,6 +40,8 @@ func main() {
 		log.Fatal("usage: migrate-postgres -sqlite data/meshcore.db -postgres postgres://user:pass@host/db?sslmode=disable [-truncate]")
 	}
 
+	warnSQLiteSidecars(*sqlitePath)
+
 	src, err := sql.Open("sqlite", *sqlitePath+"?mode=ro")
 	if err != nil {
 		log.Fatalf("open sqlite: %v", err)
@@ -82,7 +84,21 @@ func main() {
 	if err := validateCounts(src, dst); err != nil {
 		log.Fatalf("validate: %v", err)
 	}
+	if err := validateTransmissionHashes(src, dst, 32); err != nil {
+		log.Fatalf("validate hashes: %v", err)
+	}
 	log.Println("migration complete")
+}
+
+func warnSQLiteSidecars(sqlitePath string) {
+	walPath := sqlitePath + "-wal"
+	shmPath := sqlitePath + "-shm"
+	if _, err := os.Stat(walPath); err == nil {
+		log.Printf("found SQLite WAL sidecar %s; keep it beside %s for hot snapshots", walPath, sqlitePath)
+		if _, err := os.Stat(shmPath); os.IsNotExist(err) {
+			log.Printf("warning: SQLite WAL sidecar exists but %s is missing; copy meshcore.db, meshcore.db-wal, and meshcore.db-shm together or stop the source container before copying", shmPath)
+		}
+	}
 }
 
 func copyTable(src, dst *sql.DB, spec tableSpec) (int, error) {
@@ -97,7 +113,8 @@ func copyTable(src, dst *sql.DB, spec tableSpec) (int, error) {
 	if spec.name == "observers" && contains(cols, "rowid") {
 		selectCols = append([]string{"rowid"}, without(cols, "rowid")...)
 	}
-	rows, err := src.Query("SELECT " + strings.Join(selectCols, ", ") + " FROM " + spec.name)
+	selectExprs := sqliteSelectExpressions(spec.name, selectCols)
+	rows, err := src.Query("SELECT " + strings.Join(selectExprs, ", ") + " FROM " + spec.name)
 	if err != nil {
 		return 0, err
 	}
@@ -145,6 +162,24 @@ func copyTable(src, dst *sql.DB, spec tableSpec) (int, error) {
 	return count, tx.Commit()
 }
 
+func sqliteSelectExpressions(table string, cols []string) []string {
+	exprs := make([]string, len(cols))
+	copy(exprs, cols)
+	if table != "observations" {
+		return exprs
+	}
+	for i, col := range exprs {
+		if col == "observer_idx" {
+			exprs[i] = `CASE
+				WHEN observer_idx IS NULL OR TRIM(CAST(observer_idx AS TEXT)) = '' THEN NULL
+				WHEN typeof(observer_idx) IN ('integer', 'real') THEN observer_idx
+				ELSE (SELECT rowid FROM observers WHERE observers.id = observations.observer_idx)
+			END AS observer_idx`
+		}
+	}
+	return exprs
+}
+
 func sqliteTableExists(db *sql.DB, name string) bool {
 	var one int
 	return db.QueryRow("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&one) == nil
@@ -177,14 +212,21 @@ func existingSQLiteColumns(db *sql.DB, table string, desired []string) []string 
 }
 
 func resetSequences(db *sql.DB) error {
-	stmts := []string{
-		`SELECT setval(pg_get_serial_sequence('transmissions','id'), COALESCE((SELECT MAX(id) FROM transmissions), 1), true)`,
-		`SELECT setval(pg_get_serial_sequence('observations','id'), COALESCE((SELECT MAX(id) FROM observations), 1), true)`,
-		`SELECT setval(pg_get_serial_sequence('observers','rowid'), COALESCE((SELECT MAX(rowid) FROM observers), 1), true)`,
-		`SELECT setval(pg_get_serial_sequence('dropped_packets','id'), COALESCE((SELECT MAX(id) FROM dropped_packets), 1), true)`,
+	specs := []struct {
+		table  string
+		column string
+	}{
+		{"transmissions", "id"},
+		{"observations", "id"},
+		{"observers", "rowid"},
+		{"dropped_packets", "id"},
 	}
-	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
+	for _, spec := range specs {
+		stmt := fmt.Sprintf(
+			`SELECT setval(pg_get_serial_sequence('%s','%s'), COALESCE((SELECT MAX(%s) FROM %s), 1), (SELECT MAX(%s) IS NOT NULL FROM %s))`,
+			spec.table, spec.column, spec.column, spec.table, spec.column, spec.table,
+		)
+		if _, err := db.Exec(stmt); err != nil {
 			return err
 		}
 	}
@@ -208,6 +250,64 @@ func validateCounts(src, dst *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+type hashSample struct {
+	id   int64
+	hash string
+}
+
+func validateTransmissionHashes(src, dst *sql.DB, limit int) error {
+	if limit <= 0 || !sqliteTableExists(src, "transmissions") {
+		return nil
+	}
+	samples, err := transmissionHashSamples(src, limit)
+	if err != nil {
+		return err
+	}
+	for _, sample := range samples {
+		var dstHash sql.NullString
+		if err := dst.QueryRow("SELECT hash FROM transmissions WHERE id=?", sample.id).Scan(&dstHash); err != nil {
+			return fmt.Errorf("transmissions id %d hash sample missing in postgres: %w", sample.id, err)
+		}
+		if !dstHash.Valid || dstHash.String != sample.hash {
+			return fmt.Errorf("transmissions id %d hash mismatch: sqlite=%q postgres=%q", sample.id, sample.hash, dstHash.String)
+		}
+	}
+	log.Printf("validated %d transmission hash samples", len(samples))
+	return nil
+}
+
+func transmissionHashSamples(src *sql.DB, limit int) ([]hashSample, error) {
+	seen := make(map[int64]bool)
+	samples := make([]hashSample, 0, limit*2)
+	queries := []string{
+		"SELECT id, hash FROM transmissions WHERE hash IS NOT NULL AND hash <> '' ORDER BY id ASC LIMIT ?",
+		"SELECT id, hash FROM transmissions WHERE hash IS NOT NULL AND hash <> '' ORDER BY id DESC LIMIT ?",
+	}
+	for _, query := range queries {
+		rows, err := src.Query(query, limit)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var sample hashSample
+			if err := rows.Scan(&sample.id, &sample.hash); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if !seen[sample.id] {
+				seen[sample.id] = true
+				samples = append(samples, sample)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return samples, nil
 }
 
 func contains(values []string, needle string) bool {

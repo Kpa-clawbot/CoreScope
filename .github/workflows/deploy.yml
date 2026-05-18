@@ -5,7 +5,7 @@ on:
     branches: [master]
     tags: ['v*']
   pull_request:
-    branches: [master]
+    branches: [master, dev]
   workflow_dispatch:
 
 permissions:
@@ -360,7 +360,7 @@ jobs:
         id: docker-meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/kpa-clawbot/corescope
+          images: ghcr.io/${{ github.repository_owner }}/corescope
           tags: |
             type=semver,pattern=v{{version}}
             type=semver,pattern=v{{major}}.{{minor}}
@@ -435,8 +435,8 @@ jobs:
       - name: Pull latest image from GHCR
         run: |
           # Try to pull the edge image from GHCR and tag for docker-compose compatibility
-          if docker pull ghcr.io/kpa-clawbot/corescope:edge; then
-            docker tag ghcr.io/kpa-clawbot/corescope:edge corescope-go:latest
+          if docker pull ghcr.io/${{ github.repository_owner }}/corescope:edge; then
+            docker tag ghcr.io/${{ github.repository_owner }}/corescope:edge corescope-go:latest
             echo "Pulled and tagged GHCR edge image ✅"
           else
             echo "⚠️ GHCR pull failed — falling back to locally built image"

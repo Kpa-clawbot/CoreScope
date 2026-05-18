@@ -11,7 +11,7 @@ docker run -d --name corescope \
   -p 80:80 \
   -v corescope-data:/app/data \
   -e DISABLE_CADDY=true \
-  ghcr.io/kpa-clawbot/corescope:latest
+  ghcr.io/meshcore-ca/corescope:latest
 ```
 
 Open `http://localhost` — done.
@@ -19,15 +19,16 @@ Open `http://localhost` — done.
 ### Docker Compose
 
 ```bash
-curl -sL https://raw.githubusercontent.com/Kpa-clawbot/CoreScope/master/docker-compose.example.yml \
+curl -sL https://raw.githubusercontent.com/MeshCore-ca/CoreScope/master/docker-compose.example.yml \
   -o docker-compose.yml
 docker compose up -d
 ```
 
-For a live-style dev server beside an existing CoreScope container, use
-`docker-compose.dev.yml`. It runs a separate CoreScope dev container on host
-port `8443` and a separate Postgres container, leaving live ports `80`/`443`
-untouched.
+For `live.meshcore.ca`, use the production runbook in
+`docs/deployment-live-meshcore-ca.md` with `docker-compose.live.yml`. That
+deployment replaces the existing `corescope` container on ports `80` and `443`,
+preserves the mounted MQTT config, and adds Postgres beside the app for the
+migrated database.
 
 ## Image Tags
 

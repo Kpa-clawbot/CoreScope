@@ -1,59 +1,162 @@
-# Deploying live.meshcore.ca
+# live.meshcore.ca Deployment Runbook
 
-## Recommended baseline
+This runbook is for replacing the current live CoreScope service with this
+repository after the production-readiness PR is approved. It is not the
+side-by-side dev deployment; this service owns the public live ports `80` and
+`443`.
+
+## Observed Live Baseline
+
+Read-only inspection on May 17, 2026 showed:
+
+| Item | Current live value |
+|------|--------------------|
+| Container name | `corescope` |
+| Current image | `ghcr.io/kpa-clawbot/corescope:edge` |
+| Public ports | host `80 -> 80`, host `443 -> 443` |
+| Internal MQTT | disabled by `supervisord-no-mosquitto.conf` |
+| Caddy | `/etc/caddy/Caddyfile`, proxying to `localhost:3000` |
+| Runtime config | `/app/config.json`, mounted read-only |
+| SQLite DB | `/app/data/meshcore.db` |
+| Host config | `/opt/docker/corescope/data/corescope/config.json` |
+| Host data | `/opt/docker/corescope/data/corescope/data` |
+| Host Caddyfile | `/opt/docker/corescope/data/caddy/config/Caddyfile` |
+| Host Caddy data | `/opt/docker/corescope/data/caddy/app` |
+
+The live MQTT broker credentials stay in the mounted config file. Do not copy
+them into repo-tracked files, PR descriptions, logs, or screenshots.
+
+## Production Compose Target
+
+The repository `docker-compose.live.yml` mirrors the live layout:
+
+- app service and container name: `corescope`
+- Postgres service and container name: `corescope-postgres`
+- app binds host ports `80` and `443`
+- no host `1883` publish for production
 - `DISABLE_MOSQUITTO=true`
-- Do **not** publish port 1883 publicly for production.
-- Use external MQTT brokers (`mqtt1.meshcore.ca`, `mqtt2.meshcore.ca`) via WSS/TLS on 443.
-- Use Postgres for new production deployments:
-  - `DB_DRIVER=postgres`
-  - `DATABASE_URL=postgres://...`
-  - keep SQLite available only as the rollback source until the cutover is accepted.
+- Caddy remains enabled and uses the existing mounted Caddyfile
+- `/app/config.json` remains the external MQTT config source
+- `/app/data/meshcore.db` remains mounted for migration and rollback
+- Postgres data defaults to `/opt/docker/corescope/data/postgres`
 
-## Caddy / reverse proxy
-- Route public HTTPS traffic to the Go server service.
-- Prefer Cloudflare Tunnel or equivalent reverse-proxy ingress.
-- Keep Caddyfile generated/mounted from `caddy-config/` for environment-specific hostnames.
+Create a private `.env` on the host before cutover. Use a real generated
+Postgres password and keep `DATABASE_URL` in sync with it:
 
-## Side-by-side dev validation
+```bash
+CORESCOPE_IMAGE=corescope:live-candidate
 
-The live host can run the dev CoreScope container next to the live service as
-long as the dev instance uses its own ports and database:
+PROD_HTTP_PORT=80
+PROD_HTTPS_PORT=443
+PROD_CONFIG_FILE=/opt/docker/corescope/data/corescope/config.json
+PROD_DATA_DIR=/opt/docker/corescope/data/corescope/data
+PROD_CADDYFILE=/opt/docker/corescope/data/caddy/config/Caddyfile
+PROD_CADDY_DATA_DIR=/opt/docker/corescope/data/caddy/app
+PROD_POSTGRES_DATA_DIR=/opt/docker/corescope/data/postgres
 
-- live public service: port `443`
-- dev public service: port `8443`
-- live SQLite data: read-only backup source only
-- dev data: separate Postgres container and separate Docker volumes
+DISABLE_MOSQUITTO=true
+DISABLE_CADDY=false
+DB_DRIVER=postgres
+DB_PATH=/app/data/meshcore.db
+POSTGRES_DB=corescope
+POSTGRES_USER=corescope
+POSTGRES_PASSWORD=replace-with-a-real-password
+DATABASE_URL=postgres://corescope:replace-with-a-real-password@postgres:5432/corescope?sslmode=disable
+```
 
-For 0.5 Alpha verification, build from the candidate branch, run the dev
-Compose project on `8443`, migrate from a copied SQLite backup into the dev
-Postgres container, then point only the dev config at the MQTT broker. Keep
-credentials in the mounted dev config or environment file; do not commit them.
+## Local Migration Rehearsal
 
-Do not bind both containers to the same SQLite file. For a live-shaped test,
-copy or back up the live SQLite database, restore it into dev Postgres with
-`/app/corescope-migrate-postgres`, then start the dev container with the live
-MQTT broker credentials mounted through its own config file.
+Rehearse with a copied live SQLite snapshot before the real cutover. For a WAL
+mode database, copy the DB and sidecars together:
 
-## SQLite to Postgres cutover
+```bash
+meshcore.db
+meshcore.db-wal
+meshcore.db-shm
+```
 
-1. Stop the target CoreScope container or take an application-level backup.
-2. Preserve the SQLite database and WAL sidecar files together if the container
-   is still using WAL mode.
-3. Start the Postgres service.
-4. Run the migration tool from the same image that will run CoreScope:
+A stopped container is the safest source. If the old live container is still
+writing, a plain file copy can miss uncheckpointed WAL data.
+
+Run the rehearsal against local Docker Postgres:
+
+```bash
+docker compose -f docker-compose.live.yml up -d postgres
+docker compose -f docker-compose.live.yml build corescope
+docker compose -f docker-compose.live.yml run --rm --no-deps \
+  --entrypoint /app/corescope-migrate-postgres \
+  corescope \
+  -sqlite /app/data/meshcore.db \
+  -postgres "$DATABASE_URL" \
+  -truncate
+```
+
+The migration validates row counts and transmission hash samples. Keep the
+SQLite source mounted read-only for rehearsals where possible.
+
+## Live Cutover
+
+Use an approved maintenance window.
+
+1. Build or pull the approved image for this repository.
+2. Stop the old live container:
    ```bash
-   /app/corescope-migrate-postgres \
-     -sqlite /path/to/meshcore.db \
+   docker stop corescope
+   ```
+3. Preserve rollback by renaming the stopped old container:
+   ```bash
+   docker rename corescope corescope-sqlite-rollback-$(date -u +%Y%m%d%H%M%S)
+   ```
+4. Back up the SQLite DB and WAL sidecars:
+   ```bash
+   backup_dir=/opt/docker/corescope/backups/$(date -u +%Y%m%d%H%M%S)
+   mkdir -p "$backup_dir"
+   cp -a /opt/docker/corescope/data/corescope/data/meshcore.db* \
+     "$backup_dir"/
+   ```
+5. Start Postgres:
+   ```bash
+   docker compose -f docker-compose.live.yml up -d postgres
+   ```
+6. Build the approved app image locally if `CORESCOPE_IMAGE` is not already
+   pulled:
+   ```bash
+   docker compose -f docker-compose.live.yml build corescope
+   ```
+7. Run the one-shot migration:
+   ```bash
+   docker compose -f docker-compose.live.yml run --rm --no-deps \
+     --entrypoint /app/corescope-migrate-postgres \
+     corescope \
+     -sqlite /app/data/meshcore.db \
      -postgres "$DATABASE_URL" \
      -truncate
    ```
-5. Confirm row counts for the core tables:
-   `transmissions`, `observations`, `observers`, `nodes`,
-   `observer_metrics`, `dropped_packets`, and `neighbor_edges`.
-6. Start CoreScope with `DB_DRIVER=postgres` and the same `DATABASE_URL`.
-7. Verify `/api/perf/db`, `/api/stats`, `/api/packets`, live WebSocket
-   broadcasts, and MQTT subscription logs before switching traffic.
+8. Start the Postgres-backed live app on the same public ports:
+   ```bash
+   docker compose -f docker-compose.live.yml up -d corescope
+   ```
+9. Verify:
+   ```bash
+   curl -fsS https://live.meshcore.ca/api/stats
+   curl -fsS https://live.meshcore.ca/api/perf/db
+   docker logs corescope --tail 200
+   docker logs corescope-postgres --tail 100
+   ```
 
-Rollback is to stop the Postgres-backed container and restart the previous
-SQLite-backed container against the preserved SQLite data. Do not run both
-writers at the same time.
+Also verify the browser dashboard, WebSocket live feed, MQTT subscription logs,
+map, packets, nodes, channels, and Perf page before declaring the cutover done.
+
+## Rollback
+
+Rollback leaves the SQLite data untouched:
+
+```bash
+docker compose -f docker-compose.live.yml down
+docker rename corescope-sqlite-rollback-YYYYMMDDHHMMSS corescope
+docker start corescope
+```
+
+If the rollback container was removed, re-run the previous image with the same
+mounts from the baseline section. Do not run the SQLite-backed app and the
+Postgres-backed app as simultaneous writers.

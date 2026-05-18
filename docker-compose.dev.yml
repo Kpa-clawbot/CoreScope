@@ -1,7 +1,7 @@
-# Side-by-side dev deployment for live.meshcore.ca-style hosts.
-# Intended to run next to the live Compose project:
-#   live:  /opt/corescope/docker-compose.yml on host ports 80/443
-#   dev:   this file on host port 8443 with its own data and Postgres
+# Isolated local development compose file.
+# This is not the live.meshcore.ca production deployment target. Production
+# uses docker-compose.live.yml and replaces the live "corescope" container on
+# ports 80/443 after approval.
 #
 # Usage from a fork checkout:
 #   docker compose -f docker-compose.dev.yml up -d --build
@@ -18,7 +18,7 @@ services:
       POSTGRES_USER: ${DEV_POSTGRES_USER:-corescope}
       POSTGRES_PASSWORD: ${DEV_POSTGRES_PASSWORD:-corescope}
     volumes:
-      - ${DEV_POSTGRES_DATA_DIR:-/opt/corescope/data-dev/postgres}:/var/lib/postgresql/data
+      - ${DEV_POSTGRES_DATA_DIR:-./data-dev/postgres}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DEV_POSTGRES_USER:-corescope} -d ${DEV_POSTGRES_DB:-corescope_dev}"]
       interval: 10s
@@ -41,7 +41,8 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "${DEV_HTTPS_PORT:-8443}:443"
+      - "${DEV_HTTP_PORT:-3330}:80"
+      - "${DEV_HTTPS_PORT:-3443}:443"
     environment:
       NODE_ENV: production
       TZ: ${TZ:-America/Toronto}
@@ -51,10 +52,10 @@ services:
       DISABLE_MOSQUITTO: ${DEV_DISABLE_MOSQUITTO:-true}
       DISABLE_CADDY: ${DEV_DISABLE_CADDY:-false}
     volumes:
-      - ${DEV_CADDYFILE:-/opt/corescope/data-dev/caddy/config/Caddyfile}:/etc/caddy/Caddyfile:ro
-      - ${DEV_DATA_DIR:-/opt/corescope/data-dev/corescope/data}:/app/data
-      - ${DEV_CONFIG_FILE:-/opt/corescope/data-dev/corescope/config.json}:/app/config.json:ro
-      - ${DEV_CADDY_DATA_DIR:-/opt/corescope/data-dev/caddy/app}:/data/caddy
+      - ${DEV_CADDYFILE:-./data-dev/caddy/config/Caddyfile}:/etc/caddy/Caddyfile:ro
+      - ${DEV_DATA_DIR:-./data-dev/corescope/data}:/app/data
+      - ${DEV_CONFIG_FILE:-./data-dev/corescope/config.json}:/app/config.json:ro
+      - ${DEV_CADDY_DATA_DIR:-./data-dev/caddy/app}:/data/caddy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/stats"]
       interval: 30s

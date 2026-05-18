@@ -71,9 +71,9 @@ docs/              Deployment, guides, specs, and migration notes
 ```bash
 docker run -d --name corescope \
   --restart=unless-stopped \
-  -p 80:80 -p 1883:1883 \
+  -p 80:80 \
   -v /your/data:/app/data \
-  ghcr.io/kpa-clawbot/corescope:latest
+  ghcr.io/meshcore-ca/corescope:latest
 ```
 
 See full deployment options in `docs/deployment.md`.
@@ -109,10 +109,11 @@ go run . -sqlite ../../data/meshcore.db -postgres "$DATABASE_URL"
 ```
 
 The Docker image also includes `/app/corescope-migrate-postgres`. Use
-`docker-compose.dev.yml` for a live.meshcore.ca-style side-by-side dev
-deployment: it starts a separate Postgres container and exposes the dev UI on
-port `8443` without reusing the live SQLite, Caddy, or Postgres data
-directories.
+`docs/deployment-live-meshcore-ca.md` for the live runbook. The
+`docker-compose.live.yml` target replaces the existing `corescope` container on
+ports `80/443`, keeps the mounted live MQTT config at `/app/config.json`,
+starts Postgres beside the app, and leaves SQLite mounted for migration and
+rollback.
 
 MeshCore.ca production-readiness notes and validation results are tracked in
 `docs/review/meshcore-ca-production-readiness.md`.

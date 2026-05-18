@@ -59,20 +59,23 @@ Verified endpoints and surfaces:
 
 ## Production cutover posture
 
-The intended live rollout is side-by-side:
+The intended live rollout is an in-place replacement of the existing
+`corescope` container, not a side-by-side dev deployment:
 
-1. Keep the existing live service on port `443`.
-2. Start the dev service on port `8443` with its own Postgres container and
-   data volume.
-3. Migrate from a live SQLite backup into dev Postgres.
-4. Verify dashboard pages, `/api/perf/db`, MQTT ingestion, and WebSocket live
-   updates.
-5. Promote the tested Postgres-backed service after approval.
+1. Rehearse migration locally from a copied live SQLite backup.
+2. Stop the current live `corescope` container during the maintenance window.
+3. Rename the stopped SQLite-backed container for rollback.
+4. Back up `meshcore.db`, `meshcore.db-wal`, and `meshcore.db-shm` together.
+5. Start `corescope-postgres` beside the app under
+   `/opt/docker/corescope/data/postgres`.
+6. Run `/app/corescope-migrate-postgres` against `/app/data/meshcore.db`.
+7. Start the new Postgres-backed `corescope` container on live ports `80/443`.
+8. Verify dashboard pages, `/api/perf/db`, MQTT ingestion, and WebSocket live
+   updates before accepting the cutover.
 
-Do not run the live SQLite-backed service and the dev service as writers
-against the same SQLite database. Rollback should stop the Postgres-backed
-container and restart the previous SQLite-backed container against the preserved
-SQLite data.
+Do not run the SQLite-backed and Postgres-backed app containers as simultaneous
+writers. Rollback should stop the Postgres-backed compose project and restart
+the renamed SQLite-backed container against the preserved SQLite data.
 
 ## Validation commands
 
