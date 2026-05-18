@@ -111,25 +111,16 @@ func computeRoleAnalytics(nodesByPubkey map[string]string, skewByPubkey map[stri
 	return resp
 }
 
-// handleAnalyticsRoles serves /api/analytics/roles.
+// handleAnalyticsRoles serves /api/analytics/roles. Reads from the
+// steady-state recomputer snapshot (issue #1256) so the request never
+// holds s.mu.RLock for a full clock-skew recompute over the advert
+// transmissions — that path hung >60s on staging with 78k tx.
 func (s *Server) handleAnalyticsRoles(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil {
 		writeJSON(w, RoleAnalyticsResponse{Roles: []RoleStats{}})
 		return
 	}
-	nodes, _ := s.store.getCachedNodesAndPM()
-	roles := make(map[string]string, len(nodes))
-	for _, n := range nodes {
-		roles[n.PublicKey] = n.Role
-	}
-	skewMap := make(map[string]*NodeClockSkew)
-	for _, cs := range s.store.GetFleetClockSkew() {
-		if cs == nil {
-			continue
-		}
-		skewMap[cs.Pubkey] = cs
-	}
-	writeJSON(w, computeRoleAnalytics(roles, skewMap))
+	writeJSON(w, s.store.GetAnalyticsRoles())
 }
 
 // GetAnalyticsRoles returns the role-distribution analytics, preferring
