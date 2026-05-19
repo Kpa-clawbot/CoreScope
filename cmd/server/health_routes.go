@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -28,39 +29,127 @@ func (s *Server) registerHealthRoutes(r *mux.Router) {
 }
 
 // GET /api/health/bootstrap
-// Returns the observer directory (built from live MQTT traffic), Turnstile
-// config, MQTT status, and default observer target — matching the source
-// project's /api/bootstrap response shape.
+// Returns the observer directory, Turnstile config, MQTT status, and default
+// observer target. Observer data is sourced from the main CoreScope DB (names,
+// coordinates, regions) and enriched with live-MQTT activity from the registry.
 func (s *Server) handleHealthBootstrap(w http.ResponseWriter, r *http.Request) {
 	if s.cfg == nil || s.cfg.HealthCheck == nil {
 		http.Error(w, "health check not available", http.StatusServiceUnavailable)
 		return
 	}
 	hcfg := s.cfg.HealthCheck
+	activeWindowMs := int64(hcfg.ObserverActiveWindowSeconds) * 1000
 
-	// Build serialised observer directory from the live registry.
 	var observerDirectory []map[string]interface{}
 	var activeObservers []map[string]interface{}
 	var defaultObserverKeys []string
 
+	// Primary source: the CoreScope observer table — already has names, IATA
+	// regions, and coordinates ingested from packet traffic.
+	if s.db != nil {
+		dbObservers, err := s.db.GetObservers()
+		if err == nil && len(dbObservers) > 0 {
+			ids := make([]string, len(dbObservers))
+			for i, o := range dbObservers {
+				ids[i] = o.ID
+			}
+			nodeLocations := s.db.GetNodeLocationsByKeys(ids)
+
+			observerDirectory = make([]map[string]interface{}, 0, len(dbObservers))
+			for _, o := range dbObservers {
+				if s.cfg != nil && s.cfg.IsObserverBlacklisted(o.ID) {
+					continue
+				}
+				var lat, lon *float64
+				if nodeLoc, ok := nodeLocations[strings.ToLower(o.ID)]; ok {
+					if v, _ := nodeLoc["lat"]; v != nil {
+						if f, ok := v.(float64); ok {
+							lat = &f
+						}
+					}
+					if v, _ := nodeLoc["lon"]; v != nil {
+						if f, ok := v.(float64); ok {
+							lon = &f
+						}
+					}
+				}
+				name := ""
+				if o.Name != nil {
+					name = *o.Name
+				}
+				region := ""
+				if o.IATA != nil {
+					region = *o.IATA
+				}
+				hasLocation := lat != nil && lon != nil
+				shortKey := observerShortKey(o.ID)
+
+				// isActive: prefer registry (health-check MQTT activity); fall
+				// back to CoreScope last_seen within the active window.
+				isActive := false
+				if s.healthObs != nil {
+					rec := s.healthObs.Get(o.ID)
+					if rec != nil {
+						isActive = rec.IsActive(activeWindowMs)
+					}
+				}
+
+				entry := map[string]interface{}{
+					"key":         o.ID,
+					"shortKey":    shortKey,
+					"name":        name,
+					"label":       name,
+					"region":      region,
+					"hasLocation": hasLocation,
+					"lat":         nil,
+					"lon":         nil,
+					"packetCount": o.PacketCount,
+					"isActive":    isActive,
+				}
+				if hasLocation {
+					entry["lat"] = *lat
+					entry["lon"] = *lon
+				}
+				if name == "" {
+					entry["label"] = shortKey
+				}
+				observerDirectory = append(observerDirectory, entry)
+				if isActive {
+					activeObservers = append(activeObservers, entry)
+				}
+			}
+		}
+	}
+
+	// Fallback / supplement: observers from the live registry that are not yet
+	// in the DB (e.g. KnownObservers that haven't sent a packet through the
+	// ingestor yet, or health-check-only deployments without a DB).
 	if s.healthObs != nil {
-		recs := s.healthObs.Directory()
-		observerDirectory = make([]map[string]interface{}, 0, len(recs))
-		for _, rec := range recs {
+		dbKeys := make(map[string]bool, len(observerDirectory))
+		for _, e := range observerDirectory {
+			if k, ok := e["key"].(string); ok {
+				dbKeys[strings.ToLower(k)] = true
+			}
+		}
+		for _, rec := range s.healthObs.Directory() {
+			if dbKeys[strings.ToLower(rec.Key)] {
+				continue // already present from DB
+			}
 			entry := s.healthObs.SerializeObserver(rec)
 			observerDirectory = append(observerDirectory, entry)
-			if rec.IsActive(int64(hcfg.ObserverActiveWindowSeconds) * 1000) {
+			if rec.IsActive(activeWindowMs) {
 				activeObservers = append(activeObservers, entry)
 			}
 		}
-
-		// Default scoring target: KnownObservers list if configured, else active.
-		if len(hcfg.KnownObservers) > 0 {
-			defaultObserverKeys = hcfg.KnownObservers
-		} else {
-			defaultObserverKeys = s.healthObs.ActiveKeys()
-		}
 	}
+
+	// Default scoring target: KnownObservers if configured, else active keys.
+	if len(hcfg.KnownObservers) > 0 {
+		defaultObserverKeys = hcfg.KnownObservers
+	} else if s.healthObs != nil {
+		defaultObserverKeys = s.healthObs.ActiveKeys()
+	}
+
 	if observerDirectory == nil {
 		observerDirectory = []map[string]interface{}{}
 	}

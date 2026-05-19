@@ -82,11 +82,17 @@
     const channelName = testChannel.name || 'test';
     const mqttOk = bootstrap.mqtt && bootstrap.mqtt.connected;
 
+    // Tear down any previous map before replacing innerHTML.
+    if (mapThemeObs) { mapThemeObs.disconnect(); mapThemeObs = null; }
+    if (map) { map.remove(); map = null; }
+    markers = {};
+
     app.innerHTML = `
       <div class="hc-wrap">
         <h2>Mesh Health Check</h2>
         <p class="hc-intro">Generate a test code, broadcast it to <strong>#${escHtml(channelName)}</strong>, and see which observers received it.</p>
         ${!mqttOk ? '<div class="hc-warn">⚠ MQTT not connected — packets will not be received until the broker is reachable.</div>' : ''}
+        <div id="hc-map" style="height:260px;border-radius:4px;overflow:hidden;margin-bottom:1rem;"></div>
         <div class="hc-create">
           ${regions.length > 0 ? `<div class="hc-field">
             <label>Region filter</label>
@@ -115,6 +121,14 @@
     if (turnstile.enabled) {
       loadTurnstile(turnstile.siteKey);
     }
+
+    // Show all known observers on the preview map (scope = directory, no session).
+    mapScope = 'directory';
+    initMap();
+    requestAnimationFrame(function () {
+      if (map) map.invalidateSize();
+      refreshMapMarkers();
+    });
   }
 
   function renderObsList(region) {
@@ -212,6 +226,11 @@
   // ── LIVE STATE ─────────────────────────────────────────────────────────────
   function renderLiveState(app) {
     if (!app) return;
+    // Tear down the create-form map before replacing innerHTML.
+    if (mapThemeObs) { mapThemeObs.disconnect(); mapThemeObs = null; }
+    if (map) { map.remove(); map = null; }
+    markers = {};
+
     const testChannel = bootstrap.testChannel || {};
     const channelName = testChannel.name || 'test';
 
