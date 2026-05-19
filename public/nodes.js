@@ -936,7 +936,25 @@
     var hashBlocks = evidence.map(function(ev) {
       var shortHash = (ev.hash || '').substring(0, 8) + '…';
       var obsCount = ev.observers ? ev.observers.length : 0;
-      var header = '<div style="font-weight:600;font-size:12px;margin-top:6px">Hash ' + shortHash + '  ·  ' + obsCount + ' observer' + (obsCount !== 1 ? 's' : '') + '  ·  median corrected: ' + formatSkew(ev.medianCorrectedSkewSec) + '</div>';
+      // #1285: per-hash median is server-side filtered to exclude RTC-reset
+      // outliers (|corrected skew| > 24h). Compute the same on the client so
+      // we can label hashes whose observers ALL saw a reset-shaped advert as
+      // "insufficient data — N outliers excluded" instead of rendering 0 or
+      // a misleading post-filter value.
+      var OUTLIER_SEC = 86400;
+      var outlierObs = 0;
+      (ev.observers || []).forEach(function(o) {
+        if (Math.abs(o.correctedSkewSec || 0) > OUTLIER_SEC) outlierObs++;
+      });
+      var medianLabel;
+      if (outlierObs > 0 && outlierObs === obsCount) {
+        medianLabel = 'insufficient data (' + outlierObs + ' RTC-reset outlier' + (outlierObs !== 1 ? 's' : '') + ' excluded)';
+      } else if (outlierObs > 0) {
+        medianLabel = formatSkew(ev.medianCorrectedSkewSec) + ' (' + outlierObs + ' RTC-reset outlier' + (outlierObs !== 1 ? 's' : '') + ' excluded)';
+      } else {
+        medianLabel = formatSkew(ev.medianCorrectedSkewSec);
+      }
+      var header = '<div style="font-weight:600;font-size:12px;margin-top:6px">Hash ' + shortHash + '  ·  ' + obsCount + ' observer' + (obsCount !== 1 ? 's' : '') + '  ·  median corrected: ' + medianLabel + '</div>';
       var lines = (ev.observers || []).map(function(o) {
         var name = o.observerName || o.observerID;
         return '<div style="font-size:11px;padding-left:16px;font-family:var(--mono)">' +
