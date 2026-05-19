@@ -376,6 +376,17 @@ func main() {
 	log.Printf("[repeater-enrich-recompute] background recompute enabled (window=%.1fh, interval=%s)",
 		relayWindowHours, cfg.AnalyticsDefaultRecomputeInterval())
 
+	// Steady-state bridge-centrality recomputer (issue #672 axis 2).
+	// Computes betweenness centrality over the in-memory neighbor
+	// graph and stores the per-pubkey score map atomically. Read by
+	// handleNodes via a single atomic load.
+	stopBridgeRecomp := store.StartBridgeScoreRecomputer(
+		cfg.AnalyticsDefaultRecomputeInterval(),
+	)
+	defer stopBridgeRecomp()
+	log.Printf("[bridge-recompute] background recompute enabled (interval=%s)",
+		cfg.AnalyticsDefaultRecomputeInterval())
+
 	// Auto-prune old packets if retention.packetDays is configured
 	vacuumPages := cfg.IncrementalVacuumPages()
 	var stopPrune func()

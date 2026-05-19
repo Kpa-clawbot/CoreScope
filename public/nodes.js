@@ -547,6 +547,24 @@
             const barWidth = Math.max(2, Math.round(s * 100));
             return `<tr id="row-usefulness-score" data-usefulness-score="${s.toFixed(4)}"><td title="Fraction of non-advert traffic in the network observed by CoreScope that this repeater carries as a relay hop (Traffic axis of issue #672). Range 0–1; higher = forwards more of the mesh's actual traffic.">Usefulness</td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${barWidth}%;height:100%;background:${color}"></span></span><span style="color:${color};font-weight:600">${pct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${label}</span></td></tr>`;
           })() : ''}
+          ${(n.role === 'repeater' || n.role === 'room') && n.bridge_score != null ? (() => {
+            // Bridge axis (issue #672 axis 2 of 4): normalized betweenness
+            // centrality from the neighbor-edges graph. Distinct from the
+            // Traffic-based Usefulness score above — bridge measures
+            // STRUCTURAL importance (how many shortest paths between
+            // other node pairs go through this one) regardless of
+            // current traffic.
+            const b = Number(n.bridge_score) || 0;
+            const bpct = (b * 100).toFixed(1);
+            let blabel, bcolor;
+            if (b >= 0.5) { blabel = 'Critical bridge'; bcolor = 'var(--status-green, #2ecc71)'; }
+            else if (b >= 0.2) { blabel = 'Important'; bcolor = 'var(--status-green, #2ecc71)'; }
+            else if (b >= 0.05) { blabel = 'Some role'; bcolor = 'var(--status-yellow, #f1c40f)'; }
+            else if (b > 0) { blabel = 'Marginal'; bcolor = 'var(--status-orange, #e67e22)'; }
+            else { blabel = 'No bridge role'; bcolor = 'var(--text-muted)'; }
+            const bbarWidth = Math.max(2, Math.round(b * 100));
+            return `<tr id="row-bridge-score" data-bridge-score="${b.toFixed(4)}"><td title="Structural importance of this repeater as a path between other nodes — normalized betweenness centrality on the neighbor-edges graph (Bridge axis of issue #672, axis 2 of 4). Higher = more pairs of nodes route shortest paths through this one. Independent of current traffic.">Bridge</td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${bbarWidth}%;height:100%;background:${bcolor}"></span></span><span style="color:${bcolor};font-weight:600">${bpct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${blabel}</span></td></tr>`;
+          })() : ''}
           <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
           <tr><td>Total Packets</td><td>${stats.totalTransmissions || stats.totalPackets || n.advert_count || 0}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + stats.totalObservations + '×)</span>' : ''}</td></tr>
           <tr><td>Packets Today</td><td>${stats.packetsToday || 0}</td></tr>

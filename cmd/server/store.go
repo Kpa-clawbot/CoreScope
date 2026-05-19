@@ -236,6 +236,14 @@ type PacketStore struct {
 	repeaterEnrichRecompStop    chan struct{}
 	repeaterEnrichRecompDone    chan struct{}
 
+	// Bridge axis (issue #672 axis 2 of 4): atomic snapshot of pubkey
+	// → 0..1 betweenness-centrality score over the current neighbor
+	// graph. Populated by the bridge recomputer (bridge_recomputer.go);
+	// nil until the first compute lands. Read path is a single atomic
+	// pointer load — no lock contention with the per-request enrichment
+	// path in handleNodes (same discipline as #1248).
+	bridgeScoreMap atomic.Pointer[map[string]float64]
+
 	// Precomputed distinct advert pubkey count (refcounted for eviction correctness).
 	// Updated incrementally during Load/Ingest/Evict — avoids JSON parsing in GetPerfStoreStats.
 	advertPubkeys map[string]int // pubkey → number of advert packets referencing it

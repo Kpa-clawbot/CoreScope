@@ -1120,6 +1120,10 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			relayMap = s.store.GetRepeaterRelayInfoMap(relayWindow)
 			usefulMap = s.store.GetRepeaterUsefulnessScoreMap()
 		}
+		// Bridge axis (#672 axis 2 of 4). Snapshot is an atomic load
+		// — safe to call regardless of needsRelay, and we want the
+		// score on repeater rows specifically.
+		bridgeMap := s.store.GetBridgeScoreMap()
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
@@ -1134,6 +1138,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					node["relay_count_1h"] = info.RelayCount1h
 					node["relay_count_24h"] = info.RelayCount24h
 					node["usefulness_score"] = lookupUsefulnessScore(usefulMap, pk)
+					node["bridge_score"] = lookupUsefulnessScore(bridgeMap, pk)
 				}
 			}
 		}
@@ -1252,6 +1257,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			node["relay_count_1h"] = info.RelayCount1h
 			node["relay_count_24h"] = info.RelayCount24h
 			node["usefulness_score"] = s.store.GetRepeaterUsefulnessScore(pubkey)
+			node["bridge_score"] = s.store.GetBridgeScore(pubkey)
 		}
 	}
 
