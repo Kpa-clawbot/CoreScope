@@ -535,23 +535,161 @@ func decodeGrpTxt(buf []byte, channelKeys map[string]string) Payload {
 // the decrypted inner is parsed per firmware/src/helpers/BaseChatMesh.cpp:382-385
 // as data_type(uint16 LE) + data_len(1) + blob(data_len).
 func decodeGrpData(buf []byte, channelKeys map[string]string) Payload {
-	// STUB — implemented in green commit.
-	return Payload{Type: "GRP_DATA"}
+	if len(buf) < 3 {
+		return Payload{Type: "GRP_DATA", Error: "too short", RawHex: hex.EncodeToString(buf)}
+	}
+	channelHash := int(buf[0])
+	channelHashHex := fmt.Sprintf("%02X", buf[0])
+	mac := hex.EncodeToString(buf[1:3])
+	encryptedData := hex.EncodeToString(buf[3:])
+
+	hasKeys := len(channelKeys) > 0
+	if hasKeys && len(encryptedData) >= 10 {
+		for name, key := range channelKeys {
+			plain, err := decryptChannelBlock(encryptedData, mac, key)
+			if err != nil {
+				continue
+			}
+			// Inner: data_type(uint16 LE) + data_len(1) + blob (firmware:382-385).
+			if len(plain) < 3 {
+				return Payload{
+					Type:             "GRP_DATA",
+					Channel:          name,
+					ChannelHash:      channelHash,
+					ChannelHashHex:   channelHashHex,
+					DecryptionStatus: "decrypted",
+					Error:            "inner too short",
+				}
+			}
+			dataType := int(binary.LittleEndian.Uint16(plain[0:2]))
+			dataLen := int(plain[2])
+			if 3+dataLen > len(plain) {
+				return Payload{
+					Type:             "GRP_DATA",
+					Channel:          name,
+					ChannelHash:      channelHash,
+					ChannelHashHex:   channelHashHex,
+					DecryptionStatus: "decrypted",
+					DataType:         &dataType,
+					DataLen:          &dataLen,
+					Error:            "inner data_len exceeds buffer",
+				}
+			}
+			blob := hex.EncodeToString(plain[3 : 3+dataLen])
+			return Payload{
+				Type:             "GRP_DATA",
+				Channel:          name,
+				ChannelHash:      channelHash,
+				ChannelHashHex:   channelHashHex,
+				DecryptionStatus: "decrypted",
+				DataType:         &dataType,
+				DataLen:          &dataLen,
+				DecryptedBlob:    blob,
+			}
+		}
+		return Payload{
+			Type:             "GRP_DATA",
+			ChannelHash:      channelHash,
+			ChannelHashHex:   channelHashHex,
+			DecryptionStatus: "decryption_failed",
+			MAC:              mac,
+			EncryptedData:    encryptedData,
+		}
+	}
+
+	return Payload{
+		Type:             "GRP_DATA",
+		ChannelHash:      channelHash,
+		ChannelHashHex:   channelHashHex,
+		DecryptionStatus: "no_key",
+		MAC:              mac,
+		EncryptedData:    encryptedData,
+	}
 }
 
 // decodeMultipart decodes PAYLOAD_TYPE_MULTIPART (0x0A) per
 // firmware/src/Mesh.cpp:287-310. byte0 = (remaining<<4) | inner_type;
 // when inner_type == PAYLOAD_TYPE_ACK the next 4 bytes are an ack_crc.
 func decodeMultipart(buf []byte) Payload {
-	// STUB — implemented in green commit.
-	return Payload{Type: "MULTIPART"}
+	if len(buf) < 1 {
+		return Payload{Type: "MULTIPART", Error: "too short", RawHex: hex.EncodeToString(buf)}
+	}
+	remaining := int(buf[0] >> 4)
+	innerType := int(buf[0] & 0x0F)
+	innerName := payloadTypeNames[innerType]
+	if innerName == "" {
+		innerName = "UNKNOWN"
+	}
+	p := Payload{
+		Type:          "MULTIPART",
+		Remaining:     &remaining,
+		InnerType:     &innerType,
+		InnerTypeName: innerName,
+	}
+	if innerType == PayloadACK && len(buf) >= 5 {
+		// ack_crc is little-endian; surface as canonical big-endian hex
+		// to match decodeAck's extraHash convention.
+		crc := binary.LittleEndian.Uint32(buf[1:5])
+		p.InnerAckCrc = fmt.Sprintf("%08x", crc)
+	} else if len(buf) > 1 {
+		p.InnerPayload = hex.EncodeToString(buf[1:])
+	}
+	return p
 }
 
 // decodeControl decodes PAYLOAD_TYPE_CONTROL (0x0B) byte0 flags per
 // firmware/src/Mesh.cpp:69 (high-bit set ⇒ zero-hop direct subset).
 func decodeControl(buf []byte) Payload {
-	// STUB — implemented in green commit.
-	return Payload{Type: "CONTROL"}
+	if len(buf) < 1 {
+		return Payload{Type: "CONTROL", Error: "too short", RawHex: hex.EncodeToString(buf)}
+	}
+	zeroHop := buf[0]&0x80 != 0
+	length := len(buf)
+	return Payload{
+		Type:        "CONTROL",
+		CtrlFlags:   fmt.Sprintf("%02x", buf[0]),
+		CtrlZeroHop: &zeroHop,
+		CtrlLength:  &length,
+		RawHex:      hex.EncodeToString(buf),
+	}
+}
+
+// decryptChannelBlock performs the MAC verify + AES-128-ECB decrypt step shared
+// by GRP_TXT and GRP_DATA, returning the raw plaintext block (no further
+// parsing). See firmware/src/helpers/BaseChatMesh.cpp:376-391.
+func decryptChannelBlock(ciphertextHex, macHex, channelKeyHex string) ([]byte, error) {
+	channelKey, err := hex.DecodeString(channelKeyHex)
+	if err != nil || len(channelKey) != 16 {
+		return nil, fmt.Errorf("invalid channel key")
+	}
+	macBytes, err := hex.DecodeString(macHex)
+	if err != nil || len(macBytes) != 2 {
+		return nil, fmt.Errorf("invalid MAC")
+	}
+	ciphertext, err := hex.DecodeString(ciphertextHex)
+	if err != nil || len(ciphertext) == 0 {
+		return nil, fmt.Errorf("invalid ciphertext")
+	}
+	channelSecret := make([]byte, 32)
+	copy(channelSecret, channelKey)
+	h := hmac.New(sha256.New, channelSecret)
+	h.Write(ciphertext)
+	calc := h.Sum(nil)
+	if calc[0] != macBytes[0] || calc[1] != macBytes[1] {
+		return nil, fmt.Errorf("MAC verification failed")
+	}
+	if len(ciphertext)%aes.BlockSize != 0 {
+		return nil, fmt.Errorf("ciphertext not aligned to AES block size")
+	}
+	block, err := aes.NewCipher(channelKey)
+	if err != nil {
+		return nil, err
+	}
+	plain := make([]byte, len(ciphertext))
+	for i := 0; i < len(ciphertext); i += aes.BlockSize {
+		block.Decrypt(plain[i:i+aes.BlockSize], ciphertext[i:i+aes.BlockSize])
+	}
+	return plain, nil
 }
 
 func decodeAnonReq(buf []byte) Payload {
@@ -872,8 +1010,13 @@ func ValidateAdvert(p *Payload) (bool, string) {
 
 	if p.Flags != nil {
 		role := advertRole(p.Flags)
-		validRoles := map[string]bool{"repeater": true, "companion": true, "room": true, "sensor": true}
-		if !validRoles[role] {
+		// Accept canonical labels plus "none" (ADV_TYPE_NONE=0) and the
+		// "type-N" placeholders we now return for ADV_TYPE 5-15 (FUTURE)
+		// — see firmware/src/helpers/AdvertDataHelpers.h:7-12.
+		validRoles := map[string]bool{
+			"repeater": true, "companion": true, "room": true, "sensor": true, "none": true,
+		}
+		if !validRoles[role] && !strings.HasPrefix(role, "type-") {
 			return false, fmt.Sprintf("unknown role: %s", role)
 		}
 	}
@@ -893,19 +1036,29 @@ func sanitizeName(s string) string {
 	return b.String()
 }
 
-// advertRole returns a role label for an advert. Currently coerces unknown/
-// reserved types to "companion" — fixed in green commit for issue #1279 P1 #3.
+// advertRole returns a stable role label for an advert. Follows firmware
+// ADV_TYPE_* constants in firmware/src/helpers/AdvertDataHelpers.h:7-12:
+//   0 NONE, 1 CHAT, 2 REPEATER, 3 ROOM, 4 SENSOR, 5-15 FUTURE.
+// Previously this coerced both 0 (NONE) and 5-15 (FUTURE) to "companion",
+// silently relabelling unknown/reserved types — see issue #1279 P1 #3.
 func advertRole(f *AdvertFlags) string {
-	if f.Repeater {
+	if f == nil {
+		return "companion"
+	}
+	switch f.Type {
+	case 0:
+		return "none"
+	case 1:
+		return "companion"
+	case 2:
 		return "repeater"
-	}
-	if f.Room {
+	case 3:
 		return "room"
-	}
-	if f.Sensor {
+	case 4:
 		return "sensor"
+	default:
+		return fmt.Sprintf("type-%d", f.Type)
 	}
-	return "companion"
 }
 
 func epochToISO(epoch uint32) string {
