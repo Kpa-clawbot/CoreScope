@@ -130,6 +130,11 @@ type Payload struct {
 	CtrlFlags   string `json:"ctrlFlags,omitempty"`
 	CtrlZeroHop *bool  `json:"ctrlZeroHop,omitempty"`
 	CtrlLength  *int   `json:"ctrlLength,omitempty"`
+	// RAW_CUSTOM (PAYLOAD_TYPE_RAW_CUSTOM=0x0F) — application-defined per
+	// firmware/src/Mesh.cpp:577 (createRawData). We expose the bare envelope
+	// shape so consumers can triage by length + leading tag byte.
+	RawLength    *int   `json:"rawLength,omitempty"`
+	FirstByteTag string `json:"firstByteTag,omitempty"`
 }
 
 // DecodedPacket is the full decoded result.
