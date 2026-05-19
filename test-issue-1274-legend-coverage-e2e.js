@@ -19,7 +19,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
 async function gotoLive(page) {
   await page.goto(BASE + '/#/live', { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('#liveLegend', { timeout: 8000 });
+  await page.waitForSelector('#liveLegend', { timeout: 8000, state: 'attached' });
   await page.waitForTimeout(400);
   // Ensure the legend is expanded (it persists collapsed state via localStorage).
   const hidden = await page.evaluate(() => {

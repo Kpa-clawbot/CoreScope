@@ -1035,10 +1035,18 @@
             <li><span class="live-dot" style="background:${TYPE_COLORS.GRP_TXT}" aria-hidden="true"></span> Message — Group text</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.TXT_MSG}" aria-hidden="true"></span> Direct — Direct message</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.REQUEST}" aria-hidden="true"></span> Request — Data request</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.RESPONSE}" aria-hidden="true"></span> Response — Data response</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.TRACE}" aria-hidden="true"></span> Trace — Route trace</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.PATH}" aria-hidden="true"></span> Path — Path discovery</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.ACK}" aria-hidden="true"></span> Ack / Other — Acknowledgment or unknown type</li>
           </ul>
           <h3 class="legend-title" style="margin-top:8px">NODE ROLES</h3>
           <ul class="legend-list" id="roleLegendList"></ul>
+          <h3 class="legend-title" style="margin-top:8px">MARKER STYLES</h3>
+          <ul class="legend-list">
+            <li><span class="live-ring live-ring--repeater" aria-hidden="true"></span> Bright white ring — repeater</li>
+            <li><span class="live-ring live-ring--other" aria-hidden="true"></span> Faded ring — companion / sensor / room</li>
+          </ul>
           </div>
         </div>
 
