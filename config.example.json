@@ -251,14 +251,24 @@
   "_comment_regions": "IATA code → display name mapping for the region filter UI. Each key is a 3-letter IATA code that an observer is tagged with (resolved priority: MQTT payload `region` field > topic-derived region > mqttSources.region). Observers without an IATA tag will not appear under any region filter — only under 'All Regions'. The region filter dropdown shows one entry per code listed here PLUS any extra IATA codes the server discovers from observers at runtime (so you can omit codes here and they will still be selectable, just labelled with the bare IATA code instead of a friendly name). Selecting 'All Regions' (or no region) returns results from every observer including those with no IATA tag; selecting one or more codes restricts results to packets observed by observers tagged with those codes. The reserved value 'All' (case-insensitive) is treated as 'no filter' on the server, so the URL ?region=All behaves identically to omitting the param. Issue #770.",
   "cornscope_healthCheck": {
     "_comment": "Active mesh coverage testing. Generate a code, broadcast it to testChannelName, score observer coverage.",
-    "testChannelName": "MeshCore Health",
-    "testChannelSecret": "your-channel-secret-here",
+    "testChannelName": "test",
+    "_comment_testChannelName": "Channel name shown in the UI prompt. Defaults to 'test' if omitted.",
+    "testChannelSecret": "your-hex-encoded-channel-secret-here",
+    "_comment_testChannelSecret": "Hex-encoded channel secret (same value as in your MeshCore channel config). AES key = first 16 raw bytes; channel-hash filter byte = SHA-256(rawBytes)[0].",
+    "codePrefix": "MHC",
+    "_comment_codePrefix": "Prefix prepended to generated codes, e.g. 'MHC' → 'MHC-A3F7Z2'. Set to '' for bare 6-char codes. Defaults to 'MHC' if omitted.",
     "sessionTTLSeconds": 600,
+    "_comment_sessionTTLSeconds": "How long (seconds) a session stays open waiting for receipts. Default 600 (10 min).",
     "maxUsesPerSession": 5,
+    "_comment_maxUsesPerSession": "Maximum times the same code can be re-broadcast before the session is exhausted. Default 5.",
     "resultRetentionSeconds": 604800,
+    "_comment_resultRetentionSeconds": "How long (seconds) session results are kept after expiry. Default 604800 (7 days).",
+    "observerActiveWindowSeconds": 900,
+    "_comment_observerActiveWindowSeconds": "An observer is shown as 'active' if it sent a health-check packet within this window. Default 900 (15 min).",
     "observerRetentionSeconds": 14400,
+    "_comment_observerRetentionSeconds": "Auto-discovered observers are dropped from the in-memory registry after this idle period. Default 14400 (4 h). 0 = keep forever.",
     "rateLimit": {
-      "_comment": "Per-IP limit on POST /api/health/sessions",
+      "_comment": "Per-IP limit on POST /api/health/sessions.",
       "windowSeconds": 60,
       "maxRequests": 5
     },
@@ -268,6 +278,7 @@
       "siteKey": "",
       "secretKey": ""
     },
-    "knownObservers": []
+    "knownObservers": [],
+    "_comment_knownObservers": "Optional list of observer public keys to always include in the directory and use as the default scoring target, even before any MQTT traffic arrives."
   }
 }
