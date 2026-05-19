@@ -2378,41 +2378,13 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		s.invalidateCachesFor(inv)
 	}
 
-	// Persist resolved paths and neighbor edges asynchronously (don't block ingest).
-	if len(broadcastTxs) > 0 && s.db != nil {
-		dbPath := s.db.path
-		var obsUpdates []persistObsUpdate
-		var edgeUpdates []persistEdgeUpdate
-
-		_, pm := s.getCachedNodesAndPM()
-		// graph is *atomic.Pointer[NeighborGraph]; the Load itself is
-		// lock-free. (Earlier comment claimed "set during startup, not
-		// replaced after" — that's no longer true: #1203 made rebuilds
-		// async via ensureNeighborGraph. Dropping the dead s.mu RLock
-		// wrap — review PR #1208.)
-		graphRef := s.graph.Load()
-		for _, tx := range broadcastTxs {
-			for _, obs := range tx.Observations {
-				// Use decode-window resolved path for persist
-				if broadcastRP != nil {
-					if rp, ok := broadcastRP[obs.ID]; ok && rp != nil {
-						rpJSON := marshalResolvedPath(rp)
-						if rpJSON != "" {
-							obsUpdates = append(obsUpdates, persistObsUpdate{obs.ID, rpJSON})
-						}
-					}
-				}
-				for _, ec := range extractEdgesFromObs(obs, tx, pm) {
-					edgeUpdates = append(edgeUpdates, persistEdgeUpdate{ec.A, ec.B, ec.Timestamp})
-					if graphRef != nil {
-						graphRef.upsertEdge(ec.A, ec.B, "", obs.ObserverID, obs.SNR, parseTimestamp(ec.Timestamp))
-					}
-				}
-			}
-		}
-
-		asyncPersistResolvedPathsAndEdges(dbPath, obsUpdates, edgeUpdates, "persist")
-	}
+		// Per #1287 (Option 4): the server NEVER writes to the DB and
+	// NEVER mutates the in-memory neighbor graph incrementally. The
+	// ingestor owns neighbor_edges; recompNeighborGraph re-reads the
+	// snapshot every 60s and atomic-swaps it into s.graph. We also no
+	// longer persist resolved_path here — the ingestor (which already
+	// sees every observation) owns that write too.
+	_ = broadcastRP // resolved path is still computed in-memory (above) for live broadcast; no SQL write.
 
 	return result, newMaxID
 }
@@ -2725,38 +2697,14 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		})
 	}
 
-	// Persist resolved paths and neighbor edges asynchronously (review fix #3).
-	// Only process NEW observations — not all observations of each updated tx —
-	// to avoid edge count inflation and unnecessary UPDATEs for pre-existing data.
-	if len(newObs) > 0 && s.db != nil {
-		dbPath := s.db.path
-		var obsUpdates []persistObsUpdate
-		var edgeUpdates []persistEdgeUpdate
-
-		for _, obs := range newObs {
-			tx := s.byTxID[obs.TransmissionID]
-			if tx == nil {
-				continue
-			}
-			// Use decode-window resolved path for persist
-			if obsRPMap != nil {
-				if rp, ok := obsRPMap[obs.ID]; ok && rp != nil {
-					rpJSON := marshalResolvedPath(rp)
-					if rpJSON != "" {
-						obsUpdates = append(obsUpdates, persistObsUpdate{obs.ID, rpJSON})
-					}
-				}
-			}
-			for _, ec := range extractEdgesFromObs(obs, tx, pm) {
-				edgeUpdates = append(edgeUpdates, persistEdgeUpdate{ec.A, ec.B, ec.Timestamp})
-				if graphRef != nil {
-					graphRef.upsertEdge(ec.A, ec.B, "", obs.ObserverID, obs.SNR, parseTimestamp(ec.Timestamp))
-				}
-			}
-		}
-
-		asyncPersistResolvedPathsAndEdges(dbPath, obsUpdates, edgeUpdates, "obs-persist")
-	}
+	// Per #1287 (Option 4): server never writes to the DB and never
+	// mutates the in-memory neighbor graph incrementally — the
+	// ingestor owns both. recompNeighborGraph re-reads the snapshot
+	// every 60s and atomic-swaps into s.graph.
+	_ = obsRPMap // resolved path stays in-memory for broadcast; no SQL write.
+	_ = newObs
+	_ = pm
+	_ = graphRef
 
 	return broadcastMaps
 }
