@@ -167,8 +167,8 @@ func main() {
 			stats.TotalTransmissions, stats.TotalObservations, stats.TotalNodes, stats.TotalObservers)
 	}
 
-	// Check auto_vacuum mode and optionally migrate (#919)
-	checkAutoVacuum(database, cfg, resolvedDB)
+	// auto_vacuum is checked + migrated by the ingestor (#1283). The
+	// server is read-only and must not race the writer for the lock.
 
 	// Ensure indexes the server's SQL fallback path depends on
 	// (mirrors ingestor schema for DBs created by old server-only builds).
@@ -377,120 +377,21 @@ func main() {
 	log.Printf("[repeater-enrich-recompute] background recompute enabled (window=%.1fh, interval=%s)",
 		relayWindowHours, cfg.AnalyticsDefaultRecomputeInterval())
 
-	// Auto-prune old packets if retention.packetDays is configured
-	vacuumPages := cfg.IncrementalVacuumPages()
-	var stopPrune func()
-	if cfg.Retention != nil && cfg.Retention.PacketDays > 0 {
-		days := cfg.Retention.PacketDays
-		pruneTicker := time.NewTicker(24 * time.Hour)
-		pruneDone := make(chan struct{})
-		stopPrune = func() {
-			pruneTicker.Stop()
-			close(pruneDone)
-		}
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[prune] panic recovered: %v", r)
-				}
-			}()
-			time.Sleep(1 * time.Minute)
-			if n, err := database.PruneOldPackets(days); err != nil {
-				log.Printf("[prune] error: %v", err)
-			} else {
-				log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
-				if n > 0 {
-					runIncrementalVacuum(resolvedDB, vacuumPages)
-				}
-			}
-			for {
-				select {
-				case <-pruneTicker.C:
-					if n, err := database.PruneOldPackets(days); err != nil {
-						log.Printf("[prune] error: %v", err)
-					} else {
-						log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
-						if n > 0 {
-							runIncrementalVacuum(resolvedDB, vacuumPages)
-						}
-					}
-				case <-pruneDone:
-					return
-				}
-			}
-		}()
-		log.Printf("[prune] auto-prune enabled: packets older than %d days will be removed daily", days)
-	}
+	// Steady-state bridge-centrality recomputer (issue #672 axis 2).
+	// Computes betweenness centrality over the in-memory neighbor
+	// graph and stores the per-pubkey score map atomically. Read by
+	// handleNodes via a single atomic load.
+	stopBridgeRecomp := store.StartBridgeScoreRecomputer(
+		cfg.AnalyticsDefaultRecomputeInterval(),
+	)
+	defer stopBridgeRecomp()
+	log.Printf("[bridge-recompute] background recompute enabled (interval=%s)",
+		cfg.AnalyticsDefaultRecomputeInterval())
 
-	// Auto-prune old metrics
-	var stopMetricsPrune func()
-	{
-		metricsDays := cfg.MetricsRetentionDays()
-		metricsPruneTicker := time.NewTicker(24 * time.Hour)
-		metricsPruneDone := make(chan struct{})
-		stopMetricsPrune = func() {
-			metricsPruneTicker.Stop()
-			close(metricsPruneDone)
-		}
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[metrics-prune] panic recovered: %v", r)
-				}
-			}()
-			time.Sleep(2 * time.Minute) // stagger after packet prune
-			database.PruneOldMetrics(metricsDays)
-			runIncrementalVacuum(resolvedDB, vacuumPages)
-			for {
-				select {
-				case <-metricsPruneTicker.C:
-					database.PruneOldMetrics(metricsDays)
-					runIncrementalVacuum(resolvedDB, vacuumPages)
-				case <-metricsPruneDone:
-					return
-				}
-			}
-		}()
-		log.Printf("[metrics-prune] auto-prune enabled: metrics older than %d days", metricsDays)
-	}
-
-	// Auto-prune stale observers
-	var stopObserverPrune func()
-	{
-		observerDays := cfg.ObserverDaysOrDefault()
-		if observerDays <= -1 {
-			// -1 means keep forever, skip
-		} else {
-			observerPruneTicker := time.NewTicker(24 * time.Hour)
-			observerPruneDone := make(chan struct{})
-			stopObserverPrune = func() {
-				observerPruneTicker.Stop()
-				close(observerPruneDone)
-			}
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Printf("[observer-prune] panic recovered: %v", r)
-					}
-				}()
-				time.Sleep(3 * time.Minute) // stagger after metrics prune
-				database.RemoveStaleObservers(observerDays)
-				runIncrementalVacuum(resolvedDB, vacuumPages)
-				for {
-					select {
-					case <-observerPruneTicker.C:
-						database.RemoveStaleObservers(observerDays)
-						runIncrementalVacuum(resolvedDB, vacuumPages)
-					case <-observerPruneDone:
-						return
-					}
-				}
-			}()
-			log.Printf("[observer-prune] auto-prune enabled: observers not seen in %d days will be removed", observerDays)
-		}
-	}
-
-	// Auto-prune old neighbor edges
+	// Packet / metrics / observer retention moved to the ingestor in
+	// #1283 (writes only belong on the writer process). The server no
+	// longer schedules any of these; the ingestor's tickers handle them.
+	_ = cfg.IncrementalVacuumPages() // kept reachable for config validation; not used here
 	var stopEdgePrune func()
 	{
 		maxAgeDays := cfg.NeighborMaxAgeDays()
@@ -509,13 +410,11 @@ func main() {
 			time.Sleep(4 * time.Minute) // stagger after metrics prune
 			g := store.graph.Load()
 			PruneNeighborEdges(dbPath, g, maxAgeDays)
-			runIncrementalVacuum(resolvedDB, vacuumPages)
 			for {
 				select {
 				case <-edgePruneTicker.C:
 					g := store.graph.Load()
 					PruneNeighborEdges(dbPath, g, maxAgeDays)
-					runIncrementalVacuum(resolvedDB, vacuumPages)
 				case <-edgePruneDone:
 					return
 				}
@@ -542,16 +441,8 @@ func main() {
 		// 1. Stop accepting new WebSocket/poll data
 		poller.Stop()
 
-		// 1b. Stop auto-prune ticker
-		if stopPrune != nil {
-			stopPrune()
-		}
-		if stopMetricsPrune != nil {
-			stopMetricsPrune()
-		}
-		if stopObserverPrune != nil {
-			stopObserverPrune()
-		}
+		// 1b. Stop auto-prune ticker (server-side packet/metrics/observer
+		// prunes were removed in #1283; only neighbor-edge prune remains.)
 		if stopEdgePrune != nil {
 			stopEdgePrune()
 		}
