@@ -18,15 +18,15 @@ func TestScoreSession(t *testing.T) {
 		wantPct          float64
 	}{
 		{
-			name:             "VERY HEALTHY — 80%+ with allowlist",
-			seenKeys:         []string{"a", "b", "c", "d"},
+			name:             "VERY HEALTHY — 85%+ with allowlist",
+			seenKeys:         []string{"a", "b", "c", "d", "e", "f"},
 			allowlistEnabled: true,
-			expectedKeys:     []string{"a", "b", "c", "d", "e"},
+			expectedKeys:     []string{"a", "b", "c", "d", "e", "f", "g"},
 			wantLabel:        "VERY HEALTHY",
-			wantPct:          80.0,
+			wantPct:          float64(6) / float64(7) * 100,
 		},
 		{
-			name:             "GOOD — 60–79%",
+			name:             "GOOD — 60–84%",
 			seenKeys:         []string{"a", "b", "c"},
 			allowlistEnabled: true,
 			expectedKeys:     []string{"a", "b", "c", "d", "e"},
@@ -34,15 +34,15 @@ func TestScoreSession(t *testing.T) {
 			wantPct:          60.0,
 		},
 		{
-			name:             "FAIR — 30–59%",
-			seenKeys:         []string{"a"},
+			name:             "FAIR — 35–59%",
+			seenKeys:         []string{"a", "b"},
 			allowlistEnabled: true,
-			expectedKeys:     []string{"a", "b", "c"},
+			expectedKeys:     []string{"a", "b", "c", "d", "e"},
 			wantLabel:        "FAIR",
-			wantPct:          float64(1) / float64(3) * 100,
+			wantPct:          40.0,
 		},
 		{
-			name:             "POOR — under 30%",
+			name:             "POOR — under 35%",
 			seenKeys:         []string{"a"},
 			allowlistEnabled: true,
 			expectedKeys:     []string{"a", "b", "c", "d", "e", "f"},
@@ -51,11 +51,11 @@ func TestScoreSession(t *testing.T) {
 		},
 		{
 			name:             "no allowlist — uses active observers",
-			seenKeys:         []string{"a", "b", "c", "d"},
+			seenKeys:         []string{"a", "b", "c", "d", "e", "f"},
 			allowlistEnabled: false,
-			activeObs:        []string{"a", "b", "c", "d", "e"},
+			activeObs:        []string{"a", "b", "c", "d", "e", "f", "g"},
 			wantLabel:        "VERY HEALTHY",
-			wantPct:          80.0,
+			wantPct:          float64(6) / float64(7) * 100,
 		},
 		{
 			name:             "zero expected — returns POOR with 0%",

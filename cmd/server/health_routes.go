@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -20,89 +19,71 @@ func (s *Server) registerHealthRoutes(r *mux.Router) {
 }
 
 // GET /api/health/bootstrap
+// Returns the observer directory (built from live MQTT traffic), Turnstile
+// config, MQTT status, and default observer target — matching the source
+// project's /api/bootstrap response shape.
 func (s *Server) handleHealthBootstrap(w http.ResponseWriter, r *http.Request) {
 	if s.cfg == nil || s.cfg.HealthCheck == nil {
 		http.Error(w, "health check not available", http.StatusServiceUnavailable)
 		return
 	}
+	hcfg := s.cfg.HealthCheck
 
-	type observerEntry struct {
-		Key    string  `json:"key"`
-		Name   string  `json:"name,omitempty"`
-		Lat    float64 `json:"lat,omitempty"`
-		Lon    float64 `json:"lon,omitempty"`
-		Region string  `json:"region,omitempty"`
-	}
+	// Build serialised observer directory from the live registry.
+	var observerDirectory []map[string]interface{}
+	var activeObservers []map[string]interface{}
+	var defaultObserverKeys []string
 
-	var observers []observerEntry
-	if s.db != nil {
-		dbObservers, err := s.db.GetObservers()
-		if err == nil && len(dbObservers) > 0 {
-			// Batch lookup of lat/lon via node locations table
-			ids := make([]string, len(dbObservers))
-			for i, o := range dbObservers {
-				ids[i] = o.ID
-			}
-			nodeLocations := s.db.GetNodeLocationsByKeys(ids)
-
-			for _, o := range dbObservers {
-				if s.cfg != nil && s.cfg.IsObserverBlacklisted(o.ID) {
-					continue
-				}
-				var lat, lon float64
-				if nodeLoc, ok := nodeLocations[strings.ToLower(o.ID)]; ok {
-					if v, ok := nodeLoc["lat"]; ok && v != nil {
-						if f, ok := v.(float64); ok {
-							lat = f
-						}
-					}
-					if v, ok := nodeLoc["lon"]; ok && v != nil {
-						if f, ok := v.(float64); ok {
-							lon = f
-						}
-					}
-				}
-				// Only include observers that have coordinates
-				if lat == 0 && lon == 0 {
-					continue
-				}
-				name := ""
-				if o.Name != nil {
-					name = *o.Name
-				}
-				region := ""
-				if o.IATA != nil {
-					region = *o.IATA
-				}
-				observers = append(observers, observerEntry{
-					Key:    o.ID,
-					Name:   name,
-					Lat:    lat,
-					Lon:    lon,
-					Region: region,
-				})
+	if s.healthObs != nil {
+		recs := s.healthObs.Directory()
+		observerDirectory = make([]map[string]interface{}, 0, len(recs))
+		for _, rec := range recs {
+			entry := s.healthObs.SerializeObserver(rec)
+			observerDirectory = append(observerDirectory, entry)
+			if rec.IsActive(int64(hcfg.ObserverActiveWindowSeconds) * 1000) {
+				activeObservers = append(activeObservers, entry)
 			}
 		}
+
+		// Default scoring target: KnownObservers list if configured, else active.
+		if len(hcfg.KnownObservers) > 0 {
+			defaultObserverKeys = hcfg.KnownObservers
+		} else {
+			defaultObserverKeys = s.healthObs.ActiveKeys()
+		}
 	}
-	if observers == nil {
-		observers = []observerEntry{}
+	if observerDirectory == nil {
+		observerDirectory = []map[string]interface{}{}
+	}
+	if activeObservers == nil {
+		activeObservers = []map[string]interface{}{}
+	}
+	if defaultObserverKeys == nil {
+		defaultObserverKeys = []string{}
 	}
 
-	type bootstrapResp struct {
-		Observers           []observerEntry        `json:"observers"`
-		Turnstile           map[string]interface{} `json:"turnstile"`
-		ActiveWindowSeconds int                    `json:"activeWindowSeconds"`
-		TestChannelName     string                 `json:"testChannelName"`
-	}
+	mqttConnected := s.healthMQTT != nil && s.healthMQTT.client != nil && s.healthMQTT.client.IsConnected()
 
-	resp := bootstrapResp{
-		Observers: observers,
-		Turnstile: map[string]interface{}{
-			"enabled": s.cfg.HealthCheck.Turnstile.Enabled,
-			"siteKey": s.cfg.HealthCheck.Turnstile.SiteKey,
+	resp := map[string]interface{}{
+		"observerDirectory":   observerDirectory,
+		"activeObservers":     activeObservers,
+		"defaultObserverKeys": defaultObserverKeys,
+		"observerStats": map[string]interface{}{
+			"configuredCount":  len(hcfg.KnownObservers),
+			"activeCount":      len(activeObservers),
+			"windowSeconds":    hcfg.ObserverActiveWindowSeconds,
+			"retentionSeconds": hcfg.ObserverRetentionSeconds,
 		},
-		ActiveWindowSeconds: s.cfg.HealthCheck.ObserverRetentionSeconds,
-		TestChannelName:     s.cfg.HealthCheck.TestChannelName,
+		"mqtt": map[string]interface{}{
+			"connected": mqttConnected,
+		},
+		"turnstile": map[string]interface{}{
+			"enabled": hcfg.Turnstile.Enabled,
+			"siteKey": hcfg.Turnstile.SiteKey,
+		},
+		"testChannel": map[string]interface{}{
+			"name": hcfg.TestChannelName,
+		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -196,7 +177,19 @@ func (s *Server) handleHealthCreateSession(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	sess, err := s.healthDB.CreateSession(s.cfg.HealthCheck, body.AllowlistEnabled, body.ExpectedObserverKeys)
+	// When no explicit allowlist is provided, snapshot the current active
+	// observers as the expected set (same behaviour as the source project).
+	expectedKeys := body.ExpectedObserverKeys
+	allowlist := body.AllowlistEnabled
+	if !allowlist && len(expectedKeys) == 0 && s.healthObs != nil {
+		if len(s.cfg.HealthCheck.KnownObservers) > 0 {
+			expectedKeys = s.cfg.HealthCheck.KnownObservers
+		} else {
+			expectedKeys = s.healthObs.ActiveKeys()
+		}
+	}
+
+	sess, err := s.healthDB.CreateSession(s.cfg.HealthCheck, allowlist, expectedKeys)
 	if err != nil {
 		http.Error(w, "failed to create session", http.StatusInternalServerError)
 		return

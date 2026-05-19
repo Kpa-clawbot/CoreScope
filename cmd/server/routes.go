@@ -91,6 +91,7 @@ type Server struct {
 	healthRL     *HealthRateLimiter
 	healthTokens *HealthTokenStore
 	healthMQTT   *HealthMQTTClient
+	healthObs    *ObserverRegistry // in-memory observer directory, shared with healthMQTT
 }
 
 // maxJSONBodyBytes caps the size of JSON request bodies on POST endpoints.

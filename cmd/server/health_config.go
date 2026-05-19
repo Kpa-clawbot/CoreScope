@@ -1,15 +1,23 @@
 package main
 
 type HealthCheckConfig struct {
-	TestChannelName       string                `json:"testChannelName"`
-	TestChannelSecret     string                `json:"testChannelSecret"`
-	SessionTTLSeconds     int                   `json:"sessionTTLSeconds"`
-	MaxUsesPerSession     int                   `json:"maxUsesPerSession"`
-	ResultRetentionSeconds   int                   `json:"resultRetentionSeconds"`
-	ObserverRetentionSeconds int                   `json:"observerRetentionSeconds"`
-	RateLimit             HealthRateLimitConfig `json:"rateLimit"`
-	Turnstile             HealthTurnstileConfig `json:"turnstile"`
-	KnownObservers        []string              `json:"knownObservers"`
+	TestChannelName      string                `json:"testChannelName"`
+	// TestChannelSecret is the hex-encoded channel secret (same value as
+	// TEST_CHANNEL_SECRET in the source project). The AES key is the first
+	// 16 raw bytes; the channel-hash filter byte is SHA-256(rawBytes)[0].
+	TestChannelSecret    string                `json:"testChannelSecret"`
+	SessionTTLSeconds    int                   `json:"sessionTTLSeconds"`
+	MaxUsesPerSession    int                   `json:"maxUsesPerSession"`
+	ResultRetentionSeconds  int               `json:"resultRetentionSeconds"`
+	// ObserverActiveWindowSeconds: an observer is "active" if it sent a
+	// packet within this window (default 900 s = 15 min).
+	ObserverActiveWindowSeconds int            `json:"observerActiveWindowSeconds"`
+	// ObserverRetentionSeconds: drop observers from the directory after this
+	// idle period. 0 = keep forever (default 14400 s = 4 h).
+	ObserverRetentionSeconds    int            `json:"observerRetentionSeconds"`
+	RateLimit            HealthRateLimitConfig `json:"rateLimit"`
+	Turnstile            HealthTurnstileConfig `json:"turnstile"`
+	KnownObservers       []string              `json:"knownObservers"`
 }
 
 type HealthRateLimitConfig struct {
@@ -32,6 +40,9 @@ func (c *HealthCheckConfig) applyDefaults() {
 	}
 	if c.ResultRetentionSeconds == 0 {
 		c.ResultRetentionSeconds = 604800
+	}
+	if c.ObserverActiveWindowSeconds == 0 {
+		c.ObserverActiveWindowSeconds = 900
 	}
 	if c.ObserverRetentionSeconds == 0 {
 		c.ObserverRetentionSeconds = 14400

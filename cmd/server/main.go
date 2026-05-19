@@ -430,7 +430,23 @@ func main() {
 			srv.healthDB = hdb
 			srv.healthRL = NewHealthRateLimiter(cfg.HealthCheck.RateLimit.WindowSeconds, cfg.HealthCheck.RateLimit.MaxRequests)
 			srv.healthTokens = NewHealthTokenStore()
-			srv.healthMQTT = NewHealthMQTTClient(cfg.HealthCheck, hdb, hub)
+
+			// Build the in-memory observer registry (seeded from KnownObservers).
+			srv.healthObs = NewObserverRegistry(cfg.HealthCheck)
+
+			// Derive channel key from the hex secret (nil-safe — logs warning if absent).
+			var chanKey *ChannelKey
+			if cfg.HealthCheck.TestChannelSecret != "" {
+				var ckErr error
+				chanKey, ckErr = NewChannelKey(cfg.HealthCheck.TestChannelSecret)
+				if ckErr != nil {
+					log.Printf("[health] warning: invalid testChannelSecret (%v) — decryption disabled", ckErr)
+				}
+			} else {
+				log.Printf("[health] warning: testChannelSecret not configured — health check will not decrypt packets")
+			}
+
+			srv.healthMQTT = NewHealthMQTTClient(cfg.HealthCheck, hdb, hub, srv.healthObs, chanKey)
 			go srv.healthMQTT.Start(firstBrokerURL(cfg))
 			purgeTicker := time.NewTicker(time.Hour)
 			purgeDone := make(chan struct{})

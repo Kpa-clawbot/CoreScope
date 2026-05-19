@@ -203,11 +203,13 @@ func (h *HealthDB) UpsertReceipt(sessionID string, r HealthReceipt, msgHash stri
 		INSERT INTO health_receipts (session_id, observer_key, observer_name, first_seen_at, last_seen_at, count, message_hash, rssi, snr, duration, path)
 		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id, observer_key) DO UPDATE SET
-			last_seen_at = excluded.last_seen_at,
-			count        = count + 1,
-			rssi         = excluded.rssi,
-			snr          = excluded.snr,
-			duration     = excluded.duration`,
+			last_seen_at  = excluded.last_seen_at,
+			count         = count + 1,
+			rssi          = excluded.rssi,
+			snr           = excluded.snr,
+			duration      = excluded.duration,
+			path          = excluded.path,
+			observer_name = excluded.observer_name`,
 		sessionID, r.ObserverKey, r.ObserverName, now, now, msgHash,
 		r.RSSI, r.SNR, r.Duration, string(pathJSON),
 	)
@@ -289,6 +291,34 @@ func (h *HealthDB) PurgeExpired() error {
 		return err
 	}
 	_, err = h.db.Exec(`DELETE FROM health_sessions WHERE result_retained_until < ?`, now)
+	return err
+}
+
+// ClearReceipts deletes all receipts for a session and resets its use_count to
+// 0 and status to waiting. Called when the same code is re-broadcast (new use).
+func (h *HealthDB) ClearReceipts(sessionID string) error {
+	_, err := h.db.Exec(`DELETE FROM health_receipts WHERE session_id = ?`, sessionID)
+	if err != nil {
+		return err
+	}
+	_, err = h.db.Exec(`UPDATE health_sessions SET use_count = 0, status = 'waiting', message_hash = NULL, matched_at = NULL WHERE id = ?`, sessionID)
+	return err
+}
+
+// IncrementUseCount increments the use_count for a session by 1.
+func (h *HealthDB) IncrementUseCount(sessionID string) error {
+	_, err := h.db.Exec(`UPDATE health_sessions SET use_count = use_count + 1 WHERE id = ?`, sessionID)
+	return err
+}
+
+// SetMessageHash stores the message hash and sender for a session (called once
+// when the first matching packet for a new use is seen).
+func (h *HealthDB) SetMessageHash(sessionID, msgHash, sender string) error {
+	now := time.Now().Unix()
+	_, err := h.db.Exec(`
+		UPDATE health_sessions SET message_hash = ?, sender = ?, matched_at = ?, status = 'active'
+		WHERE id = ? AND (message_hash IS NULL OR message_hash = '')`,
+		msgHash, sender, now, sessionID)
 	return err
 }
 

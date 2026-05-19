@@ -24,13 +24,14 @@ func ScoreSession(session *HealthSession, receipts []HealthReceipt, activeObserv
 		pct = float64(seenCount) / float64(expectedCount) * 100
 	}
 
+	// Thresholds match the source project (yellowcooln/meshcore-health-check).
 	label := "POOR"
 	switch {
-	case pct >= 80:
+	case pct >= 85:
 		label = "VERY HEALTHY"
 	case pct >= 60:
 		label = "GOOD"
-	case pct >= 30:
+	case pct >= 35:
 		label = "FAIR"
 	}
 

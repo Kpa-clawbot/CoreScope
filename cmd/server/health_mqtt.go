@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bytes"
-	"crypto/aes"
-	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -15,53 +13,89 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-// HealthMQTTClient subscribes to the MeshCore test channel and matches
-// incoming group-text packets against active health-check sessions.
+// mqttEnvelope is the JSON wrapper that the MeshCore→MQTT bridge publishes.
+// Format: {"raw":"aabbcc...","rssi":-95.5,"snr":4.5,"hash":"abcd1234"}
+// The "raw" field is the hex-encoded raw packet bytes.
+type mqttEnvelope struct {
+	Raw  string   `json:"raw"`
+	RSSI *float64 `json:"rssi,omitempty"`
+	SNR  *float64 `json:"snr,omitempty"`
+	Hash string   `json:"hash,omitempty"` // optional pre-computed message hash
+}
+
+// parseEnvelope attempts to unmarshal the MQTT payload as a JSON envelope.
+// If that fails it tries to treat the raw bytes directly as hex.
+func parseEnvelope(payload []byte) (*mqttEnvelope, bool) {
+	// Try JSON envelope first (most common format from meshcoretomqtt bridge).
+	if len(payload) > 0 && payload[0] == '{' {
+		var env mqttEnvelope
+		if err := json.Unmarshal(payload, &env); err == nil && env.Raw != "" {
+			return &env, true
+		}
+	}
+	// Fallback: entire payload is the raw hex string.
+	s := strings.TrimSpace(string(payload))
+	if s != "" {
+		return &mqttEnvelope{Raw: s}, true
+	}
+	return nil, false
+}
+
+// HealthMQTTClient subscribes to the MeshCore channel and matches incoming
+// group-text packets against active health-check sessions. It also maintains
+// the ObserverRegistry by processing every MQTT packet (not just health-check
+// ones), so the bootstrap observer directory stays current.
 type HealthMQTTClient struct {
 	cfg      *HealthCheckConfig
 	hdb      *HealthDB
 	hub      *Hub
+	obs      *ObserverRegistry
+	chanKey  *ChannelKey // nil if secret not configured
 	client   mqtt.Client
-	mu       sync.RWMutex
-	sessions map[string]*HealthSession // code → session (active cache)
-	done     chan struct{}
+
+	mu          sync.Mutex
+	sessions    map[string]*HealthSession // code → session (active cache)
+	hashToCode  map[string]string         // messageHash → session code (dedup)
+	done        chan struct{}
 }
 
-// NewHealthMQTTClient creates a new client. Call Start to connect.
-func NewHealthMQTTClient(cfg *HealthCheckConfig, hdb *HealthDB, hub *Hub) *HealthMQTTClient {
+// NewHealthMQTTClient creates a client. Call Start to connect.
+// obs is the shared ObserverRegistry; chanKey may be nil if secret is absent.
+func NewHealthMQTTClient(cfg *HealthCheckConfig, hdb *HealthDB, hub *Hub, obs *ObserverRegistry, chanKey *ChannelKey) *HealthMQTTClient {
 	return &HealthMQTTClient{
-		cfg:      cfg,
-		hdb:      hdb,
-		hub:      hub,
-		sessions: make(map[string]*HealthSession),
-		done:     make(chan struct{}),
+		cfg:        cfg,
+		hdb:        hdb,
+		hub:        hub,
+		obs:        obs,
+		chanKey:    chanKey,
+		sessions:   make(map[string]*HealthSession),
+		hashToCode: make(map[string]string),
+		done:       make(chan struct{}),
 	}
 }
 
-// RegisterSession adds (or refreshes) a session in the in-memory cache so
-// newly-created sessions are matched immediately without waiting for the
-// next expiry/refresh tick.
+// RegisterSession adds (or refreshes) a session in the cache immediately after
+// creation so packets can be matched before the next 30 s refresh tick.
 func (h *HealthMQTTClient) RegisterSession(sess *HealthSession) {
 	h.mu.Lock()
 	h.sessions[sess.Code] = sess
 	h.mu.Unlock()
 }
 
-// Start connects to the MQTT broker and begins listening. It blocks until the
-// initial connection succeeds, then returns; the subscription handler and the
-// expiry loop continue running in background goroutines.
+// Start connects to the MQTT broker and starts the subscription. Blocks until
+// the initial connection attempt completes, then returns.
 func (h *HealthMQTTClient) Start(brokerURL string) {
 	opts := mqtt.NewClientOptions().
 		AddBroker(brokerURL).
-		SetClientID("corescope-health-" + fmt.Sprintf("%d", time.Now().UnixNano())).
+		SetClientID(fmt.Sprintf("corescope-health-%d", time.Now().UnixNano())).
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
 		SetConnectRetryInterval(5 * time.Second).
 		SetOnConnectHandler(func(c mqtt.Client) {
 			log.Printf("[health-mqtt] connected to %s", brokerURL)
-			token := c.Subscribe("meshcore/#", 0, h.handleMessage)
-			token.Wait()
-			if err := token.Error(); err != nil {
+			tok := c.Subscribe("meshcore/#", 0, h.handleMessage)
+			tok.Wait()
+			if err := tok.Error(); err != nil {
 				log.Printf("[health-mqtt] subscribe error: %v", err)
 			} else {
 				log.Printf("[health-mqtt] subscribed to meshcore/#")
@@ -72,22 +106,29 @@ func (h *HealthMQTTClient) Start(brokerURL string) {
 		})
 
 	h.client = mqtt.NewClient(opts)
-
-	token := h.client.Connect()
-	token.Wait()
-	if err := token.Error(); err != nil {
+	tok := h.client.Connect()
+	tok.Wait()
+	if err := tok.Error(); err != nil {
 		log.Printf("[health-mqtt] initial connect to %s failed: %v", brokerURL, err)
 	}
 
-	// Seed the session cache.
 	h.refreshSessions()
-
-	// Background: expire stale sessions and refresh the in-memory cache every 30s.
 	go h.expiryLoop()
 }
 
-// expiryLoop periodically expires stale sessions and refreshes the in-memory
-// cache. It stops when Disconnect closes h.done.
+// Disconnect stops background goroutines and disconnects the MQTT client.
+func (h *HealthMQTTClient) Disconnect() {
+	select {
+	case <-h.done:
+	default:
+		close(h.done)
+	}
+	if h.client != nil && h.client.IsConnected() {
+		h.client.Disconnect(500)
+	}
+}
+
+// expiryLoop periodically expires stale sessions and refreshes the cache.
 func (h *HealthMQTTClient) expiryLoop() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -97,31 +138,17 @@ func (h *HealthMQTTClient) expiryLoop() {
 			return
 		case <-ticker.C:
 			if err := h.hdb.ExpireStale(); err != nil {
-				log.Printf("[health-mqtt] ExpireStale error: %v", err)
+				log.Printf("[health-mqtt] ExpireStale: %v", err)
 			}
 			h.refreshSessions()
 		}
 	}
 }
 
-// Disconnect stops the expiry goroutine and disconnects the MQTT client.
-func (h *HealthMQTTClient) Disconnect() {
-	select {
-	case <-h.done:
-		// already closed
-	default:
-		close(h.done)
-	}
-	if h.client != nil && h.client.IsConnected() {
-		h.client.Disconnect(500) // 500ms quiesce
-	}
-}
-
-// refreshSessions reloads active sessions from the DB into the in-memory cache.
 func (h *HealthMQTTClient) refreshSessions() {
 	sessions, err := h.hdb.LoadActiveSessions()
 	if err != nil {
-		log.Printf("[health-mqtt] LoadActiveSessions error: %v", err)
+		log.Printf("[health-mqtt] LoadActiveSessions: %v", err)
 		return
 	}
 	h.mu.Lock()
@@ -132,86 +159,210 @@ func (h *HealthMQTTClient) refreshSessions() {
 	h.mu.Unlock()
 }
 
-// handleMessage is the paho subscription callback for every meshcore/# message.
+// handleMessage is the paho callback for every meshcore/# MQTT message.
 func (h *HealthMQTTClient) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 	topic := msg.Topic()
 	observerKey := observerKeyFromTopic(topic)
 
-	// Convert raw bytes → hex → decode.
-	raw := msg.Payload()
-	hexStr := hex.EncodeToString(raw)
-	pkt, err := DecodePacket(hexStr, false)
+	env, ok := parseEnvelope(msg.Payload())
+	if !ok || env.Raw == "" {
+		// No usable packet — may be a pure-JSON metadata message.
+		h.handleMetadataMessage(topic, observerKey, msg.Payload())
+		return
+	}
+
+	// Touch the observer (creates record if first time seen).
+	h.obs.Touch(observerKey)
+
+	rawHex := strings.TrimSpace(env.Raw)
+
+	// Decode packet using the existing CoreScope decoder.
+	pkt, err := DecodePacket(rawHex, false)
 	if err != nil {
 		return
 	}
 
-	// Only care about GRP_TXT packets (payload type 5).
+	// Learn observer location/name from packet if it carries a public key
+	// matching the observer (ADVERT, etc.).  We do this regardless of payload
+	// type so the directory stays up to date.
+	h.learnFromPacket(pkt, observerKey)
+
+	// Only group-text packets (payload type 5) carry health-check codes.
 	if pkt.Header.PayloadType != PayloadGRP_TXT {
 		return
 	}
 
-	// EncryptedData holds the ciphertext (hex-encoded, without the channel-hash
-	// and MAC prefix bytes that decodeGrpTxt strips off).
-	cipherHex := pkt.Payload.EncryptedData
-	if cipherHex == "" {
+	// Channel hash filter — only process messages for our test channel.
+	if h.chanKey != nil && !h.chanKey.MatchesChannelHash(pkt.Payload.ChannelHash) {
 		return
 	}
-	cipherBytes, err := hex.DecodeString(cipherHex)
+
+	// Need ciphertext to proceed.
+	if pkt.Payload.EncryptedData == "" {
+		return
+	}
+	cipherBytes, err := hex.DecodeString(pkt.Payload.EncryptedData)
 	if err != nil || len(cipherBytes) == 0 {
 		return
 	}
 
-	// Decrypt with AES-128-ECB using key = first 16 bytes of SHA-256(testChannelSecret).
-	plaintext, err := decryptGroupText(cipherBytes, h.cfg.TestChannelSecret)
-	if err != nil {
+	// HMAC validation — reject corrupted / wrong-channel packets.
+	if h.chanKey != nil && !h.chanKey.ValidateMAC(pkt.Payload.MAC, cipherBytes) {
 		return
 	}
 
-	// Match against active sessions.
-	h.mu.RLock()
-	var matched *HealthSession
-	for code, sess := range h.sessions {
-		if strings.Contains(plaintext, code) {
-			matched = sess
+	// Decrypt.
+	if h.chanKey == nil {
+		return
+	}
+	sender, messageBody, valid := h.chanKey.ParseGroupTextMessage(cipherBytes)
+	if !valid || messageBody == "" {
+		return
+	}
+
+	// Determine message hash (for deduplication and re-use detection).
+	msgHash := env.Hash
+	if msgHash == "" {
+		msgHash = ComputeContentHash(strings.ToUpper(rawHex))
+	}
+
+	// Signal metrics from the JSON envelope (zero when absent).
+	var rssi, snr float64
+	if env.RSSI != nil {
+		rssi = *env.RSSI
+	}
+	if env.SNR != nil {
+		snr = *env.SNR
+	}
+
+	// Extract relay path from the decoded packet.
+	var path []string
+	if len(pkt.Path.Hops) > 0 {
+		path = append(path, pkt.Path.Hops...)
+	}
+
+	h.matchAndRecord(observerKey, messageBody, sender, msgHash, rssi, snr, path)
+}
+
+// handleMetadataMessage processes observer status / metadata JSON messages
+// (those without a "raw" packet field) to learn names and coordinates.
+func (h *HealthMQTTClient) handleMetadataMessage(topic, observerKey string, payload []byte) {
+	var meta map[string]interface{}
+	if err := json.Unmarshal(payload, &meta); err != nil {
+		return
+	}
+
+	// Name fields used by various MeshCore bridges.
+	for _, field := range []string{"name", "device_name", "deviceName", "node_name", "nodeName", "callsign", "label"} {
+		if v, ok := meta[field].(string); ok && strings.TrimSpace(v) != "" {
+			h.obs.UpdateName(observerKey, strings.TrimSpace(v))
 			break
 		}
 	}
-	h.mu.RUnlock()
+
+	// Coordinates — try direct fields then nested objects.
+	lat, lon, found := extractCoordinates(meta)
+	if found {
+		h.obs.UpdateLocation(observerKey, lat, lon)
+	}
+
+	_ = topic // reserved for future IATA/region extraction
+}
+
+// learnFromPacket extracts name/coordinate hints from decoded ADVERT packets.
+func (h *HealthMQTTClient) learnFromPacket(pkt *DecodedPacket, observerKey string) {
+	if pkt == nil || pkt.Payload.Type != "ADVERT" {
+		return
+	}
+	if pkt.Payload.Name != "" {
+		h.obs.UpdateName(observerKey, pkt.Payload.Name)
+	}
+}
+
+// matchAndRecord finds the session matching messageBody and upserts a receipt.
+func (h *HealthMQTTClient) matchAndRecord(observerKey, messageBody, sender, msgHash string, rssi, snr float64, path []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Fast path: already know which session this hash belongs to.
+	var matched *HealthSession
+	if msgHash != "" {
+		if code, ok := h.hashToCode[msgHash]; ok {
+			matched = h.sessions[code]
+		}
+	}
+
+	// Slow path: scan session codes against message body.
+	if matched == nil {
+		for code, sess := range h.sessions {
+			if matchesCode(messageBody, code) {
+				matched = sess
+				break
+			}
+		}
+		if matched == nil {
+			return
+		}
+
+		// Determine if this is a new use or same transmission.
+		isNewUse := matched.MessageHash != "" && matched.MessageHash != msgHash
+		if isNewUse {
+			// New broadcast of the same code — reset receipts, increment use.
+			if err := h.hdb.ClearReceipts(matched.ID); err != nil {
+				log.Printf("[health-mqtt] ClearReceipts: %v", err)
+			}
+			if err := h.hdb.IncrementUseCount(matched.ID); err != nil {
+				log.Printf("[health-mqtt] IncrementUseCount: %v", err)
+			}
+			// Remove stale hash mappings for this session.
+			for h2, c := range h.hashToCode {
+				if c == matched.Code {
+					delete(h.hashToCode, h2)
+				}
+			}
+		}
+
+		// Link this hash to the session.
+		if msgHash != "" {
+			h.hashToCode[msgHash] = matched.Code
+		}
+		if matched.MessageHash == "" || isNewUse {
+			if err := h.hdb.SetMessageHash(matched.ID, msgHash, sender); err != nil {
+				log.Printf("[health-mqtt] SetMessageHash: %v", err)
+			}
+			matched.MessageHash = msgHash
+			matched.Sender = sender
+		}
+	}
 
 	if matched == nil {
 		return
 	}
 
-	// Build a receipt and persist it.
-	msgHash := ComputeContentHash(strings.ToUpper(hexStr))
 	receipt := HealthReceipt{
 		SessionID:   matched.ID,
 		ObserverKey: observerKey,
+		ObserverName: h.obs.Label(observerKey),
 		MessageHash: msgHash,
-		// RSSI and SNR are not present in the raw packet bytes at this layer;
-		// the ingestor attaches them from the MQTT observation envelope. We
-		// leave them zero here — callers that have RSSI/SNR can call
-		// UpsertReceipt directly with populated values.
+		RSSI:        rssi,
+		SNR:         snr,
+		Path:        path,
 	}
 
 	if err := h.hdb.UpsertReceipt(matched.ID, receipt, msgHash); err != nil {
-		log.Printf("[health-mqtt] UpsertReceipt error for session %s: %v", matched.ID, err)
+		log.Printf("[health-mqtt] UpsertReceipt: %v", err)
 		return
 	}
 
-	// Re-read the updated session for status.
+	// Re-read for accurate status and receipts.
 	updated, err := h.hdb.GetSession(matched.ID)
 	if err != nil || updated == nil {
 		updated = matched
 	}
-
-	// Update the in-memory cache entry.
-	h.mu.Lock()
 	h.sessions[matched.Code] = updated
-	h.mu.Unlock()
 
-	// Broadcast to connected WebSocket clients.
-	score := ScoreSession(updated, updated.Receipts, nil)
+	// Broadcast update with current score.
+	score := ScoreSession(updated, updated.Receipts, h.obs.ActiveKeys())
 	h.hub.Broadcast(WSMessage{
 		Type: "health_receipt",
 		Data: map[string]interface{}{
@@ -222,53 +373,80 @@ func (h *HealthMQTTClient) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 		},
 	})
 
-	log.Printf("[health-mqtt] matched session %s (code %s) via observer %s, status=%s",
-		matched.ID, matched.Code, observerKey, updated.Status)
+	log.Printf("[health-mqtt] session %s (%s) receipt from %s hash=%s status=%s",
+		matched.Code, matched.ID[:8], observerShortKey(observerKey), msgHash, updated.Status)
 }
 
-// decryptGroupText decrypts an AES-128-ECB ciphertext using a key derived
-// from channelSecret: key = SHA-256(channelSecret)[:16].
-func decryptGroupText(ciphertext []byte, channelSecret string) (string, error) {
-	h256 := sha256.Sum256([]byte(channelSecret))
-	key := h256[:16]
-	// AES-128-ECB is mandated by the MeshCore group-text protocol; this is not a design choice.
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
+// matchesCode returns true when body contains the session code as a whole word.
+func matchesCode(body, code string) bool {
+	upper := strings.ToUpper(body)
+	code = strings.ToUpper(code)
+	idx := strings.Index(upper, code)
+	if idx < 0 {
+		return false
 	}
-	if len(ciphertext) == 0 || len(ciphertext)%aes.BlockSize != 0 {
-		return "", fmt.Errorf("invalid ciphertext length %d", len(ciphertext))
-	}
-	plaintext := make([]byte, len(ciphertext))
-	for i := 0; i < len(ciphertext); i += aes.BlockSize {
-		block.Decrypt(plaintext[i:i+aes.BlockSize], ciphertext[i:i+aes.BlockSize])
-	}
-	return string(bytes.TrimRight(plaintext, "\x00")), nil
+	// Ensure it's a word boundary (not surrounded by alphanumeric).
+	before := idx > 0 && isAlphanumeric(upper[idx-1])
+	after := idx+len(code) < len(upper) && isAlphanumeric(upper[idx+len(code)])
+	return !before && !after
 }
 
-// observerKeyFromTopic extracts the observer key from an MQTT topic of the form:
+func isAlphanumeric(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+// extractCoordinates tries to find lat/lon from a generic JSON map.
+func extractCoordinates(m map[string]interface{}) (lat, lon float64, ok bool) {
+	lat, ok1 := toCoord(m, "lat", "latitude")
+	lon, ok2 := toCoord(m, "lon", "lng", "longitude")
+	if ok1 && ok2 && !(lat == 0 && lon == 0) {
+		return lat, lon, true
+	}
+	// Recurse into nested objects one level deep.
+	for _, v := range m {
+		if nested, ok := v.(map[string]interface{}); ok {
+			if lat, lon, found := extractCoordinates(nested); found {
+				return lat, lon, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+func toCoord(m map[string]interface{}, keys ...string) (float64, bool) {
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			switch fv := v.(type) {
+			case float64:
+				return fv, true
+			case int:
+				return float64(fv), true
+			}
+		}
+	}
+	return 0, false
+}
+
+// observerKeyFromTopic extracts the observer public key from an MQTT topic.
+// Expected formats:
 //
 //	meshcore/<region>/<observerKey>/packets
 //	meshcore/<observerKey>/packets
 //
-// The observer key is the segment immediately before the last segment.
+// The observer key is the segment immediately before the last path segment.
 func observerKeyFromTopic(topic string) string {
 	parts := strings.Split(topic, "/")
-	// Need at least "meshcore", <observerKey>, <suffix> → 3 segments.
 	if len(parts) < 3 {
 		return topic
 	}
 	return parts[len(parts)-2]
 }
 
-// firstBrokerURL returns the MQTT broker URL to use for the health check
-// subscription. The server Config struct has no MQTT fields (that lives in
-// the ingestor config), so we check:
-//  1. MQTT_BROKER environment variable
-//  2. Fall back to mqtt://localhost:1883
+// firstBrokerURL returns the MQTT broker URL for the health subscription.
+// The server Config has no MQTT fields (owned by the ingestor), so we use the
+// MQTT_BROKER environment variable with a fallback to localhost.
 func firstBrokerURL(_ *Config) string {
 	if v := os.Getenv("MQTT_BROKER"); v != "" {
-		// Normalise mqtt:// → tcp:// for paho compatibility.
 		if strings.HasPrefix(v, "mqtt://") {
 			return "tcp://" + v[7:]
 		}
