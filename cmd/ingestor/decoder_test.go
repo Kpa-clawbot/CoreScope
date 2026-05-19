@@ -631,21 +631,28 @@ func TestDecodeEncryptedPayloadValid(t *testing.T) {
 }
 
 func TestDecodePayloadGRPData(t *testing.T) {
+	// GRP_DATA (0x06) decoder added for #1279 P0 #1 — envelope only when no
+	// channel key matches (firmware/src/helpers/BaseChatMesh.cpp:500).
 	buf := []byte{0x01, 0x02, 0x03}
 	p := decodePayload(PayloadGRP_DATA, buf, nil, false)
-	if p.Type != "UNKNOWN" {
-		t.Errorf("type=%s, want UNKNOWN", p.Type)
-	}
-	if p.RawHex != "010203" {
-		t.Errorf("rawHex=%s, want 010203", p.RawHex)
+	if p.Type != "GRP_DATA" {
+		t.Errorf("type=%s, want GRP_DATA", p.Type)
 	}
 }
 
 func TestDecodePayloadRAWCustom(t *testing.T) {
+	// #1279 P2 #5: RAW_CUSTOM (0x0F) now exposes envelope shape (length +
+	// first-byte tag) per firmware/src/Mesh.cpp:577 (createRawData).
 	buf := []byte{0xFF, 0xFE}
 	p := decodePayload(PayloadRAW_CUSTOM, buf, nil, false)
-	if p.Type != "UNKNOWN" {
-		t.Errorf("type=%s, want UNKNOWN", p.Type)
+	if p.Type != "RAW_CUSTOM" {
+		t.Errorf("type=%s, want RAW_CUSTOM", p.Type)
+	}
+	if p.RawLength == nil || *p.RawLength != 2 {
+		t.Errorf("rawLength missing or wrong, want 2")
+	}
+	if p.FirstByteTag != "FF" {
+		t.Errorf("firstByteTag=%q, want FF", p.FirstByteTag)
 	}
 }
 
@@ -1097,18 +1104,18 @@ func TestDecodeHeaderUnknownTypes(t *testing.T) {
 }
 
 func TestDecodePayloadMultipart(t *testing.T) {
-	// MULTIPART (0x0A) falls through to default → UNKNOWN
+	// MULTIPART (0x0A) now decoded — #1279 P0 #2 (firmware/src/Mesh.cpp:289).
 	p := decodePayload(PayloadMULTIPART, []byte{0x01, 0x02}, nil, false)
-	if p.Type != "UNKNOWN" {
-		t.Errorf("MULTIPART type=%s, want UNKNOWN", p.Type)
+	if p.Type != "MULTIPART" {
+		t.Errorf("MULTIPART type=%s, want MULTIPART", p.Type)
 	}
 }
 
 func TestDecodePayloadControl(t *testing.T) {
-	// CONTROL (0x0B) falls through to default → UNKNOWN
+	// CONTROL (0x0B) now decoded — #1279 P1 #4 (firmware/src/Mesh.cpp:69).
 	p := decodePayload(PayloadCONTROL, []byte{0x01, 0x02}, nil, false)
-	if p.Type != "UNKNOWN" {
-		t.Errorf("CONTROL type=%s, want UNKNOWN", p.Type)
+	if p.Type != "CONTROL" {
+		t.Errorf("CONTROL type=%s, want CONTROL", p.Type)
 	}
 }
 

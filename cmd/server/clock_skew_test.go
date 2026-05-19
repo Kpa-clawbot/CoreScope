@@ -708,9 +708,9 @@ func TestBimodalClock_845(t *testing.T) {
 
 	baseObs := int64(1700000000)
 	var txs []*StoreTx
-	// 6 good samples (-5s each), 4 bad samples (-50000000s each) = 60% good
+	// 6 good samples (-5s each), 4 bad samples (-7200s each) = 60% good
 	// Interleave so the recent window (last 5) captures both good and bad.
-	skews := []int64{-5, -5, -50000000, -5, -50000000, -5, -50000000, -5, -50000000, -5}
+	skews := []int64{-5, -5, -7200, -5, -7200, -5, -7200, -5, -7200, -5}
 	for i := 0; i < 10; i++ {
 		obsTS := baseObs + int64(i)*60
 		advTS := obsTS + skews[i]
@@ -794,14 +794,14 @@ func TestMostlyGood_OK_845(t *testing.T) {
 
 	baseObs := int64(1700000000)
 	var txs []*StoreTx
-	// 9 good at -5s, 1 bad at -50000000s
+	// 9 good at -5s, 1 bad at -7200s
 	for i := 0; i < 10; i++ {
 		obsTS := baseObs + int64(i)*60
 		var skew int64
 		if i < 9 {
 			skew = -5
 		} else {
-			skew = -50000000
+			skew = -7200
 		}
 		advTS := obsTS + skew
 		tx := &StoreTx{
@@ -882,7 +882,7 @@ func TestFiftyFifty_Bimodal_845(t *testing.T) {
 		if i%2 == 0 {
 			skew = -10
 		} else {
-			skew = -50000000
+			skew = -7200
 		}
 		tx := &StoreTx{
 			Hash:        fmt.Sprintf("fifty-%04d", i),

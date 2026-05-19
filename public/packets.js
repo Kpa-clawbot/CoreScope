@@ -2846,15 +2846,18 @@
       }
     }
 
-    // Location: from ADVERT lat/lon, or from known node via pubkey/sender name
-    let locationHtml = '—';
+    // Location: from ADVERT lat/lon, or from known node via pubkey/sender name.
+    // Issue #1281: only render the row when we actually have transmitter GPS.
+    // Non-ADVERT packets don't carry GPS in the unencrypted payload, so the row
+    // would otherwise render as "—" and waste a slot on ~90% of packet types.
+    let locationHtml = '';
     let locationNodeKey = null;
     if (decoded.lat != null && decoded.lon != null && !(decoded.lat === 0 && decoded.lon === 0)) {
       locationNodeKey = decoded.pubKey || decoded.srcPubKey || '';
       const nodeName = decoded.name || '';
       locationHtml = `${decoded.lat.toFixed(5)}, ${decoded.lon.toFixed(5)}`;
       if (nodeName) locationHtml = `${escapeHtml(nodeName)} — ${locationHtml}`;
-      if (locationNodeKey) locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" style="font-size:0.85em">📍map</a>`;
+      if (locationNodeKey) locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link">📍map</a>`;
     } else {
       // Try to resolve sender node location from nodes list
       const senderKey = decoded.pubKey || decoded.srcPubKey;
@@ -2866,7 +2869,7 @@
             locationNodeKey = nodeData.node.public_key;
             locationHtml = `${nodeData.node.lat.toFixed(5)}, ${nodeData.node.lon.toFixed(5)}`;
             if (nodeData.node.name) locationHtml = `${escapeHtml(nodeData.node.name)} — ${locationHtml}`;
-            locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" style="font-size:0.85em">📍map</a>`;
+            locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link">📍map</a>`;
           } else if (senderName && !senderKey) {
             // Search by name
             const searchData = await api(`/nodes/search?q=${encodeURIComponent(senderName)}`, { ttl: 30000 }).catch(() => null);
@@ -2875,7 +2878,7 @@
               locationNodeKey = match.public_key;
               locationHtml = `${match.lat.toFixed(5)}, ${match.lon.toFixed(5)}`;
               locationHtml = `${escapeHtml(match.name)} — ${locationHtml}`;
-              locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" style="font-size:0.85em">📍map</a>`;
+              locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link">📍map</a>`;
             }
           }
         } catch {}
@@ -2894,6 +2897,27 @@
       ? `<span style="font-size:0.8em;color:var(--text-muted);margin-left:6px">(observation ${observations.indexOf(currentObs) + 1} of ${observations.length})</span>`
       : '';
 
+    // #1279 P2 #3 — Transport codes detail row (firmware/src/Packet.h:46,
+    // parsed at cmd/server/decoder.go:492-498). Present on TRANSPORT_FLOOD/
+    // TRANSPORT_DIRECT routes only.
+    var tcCode1 = '—', tcCode2 = '—', tcShow = false;
+    if (decoded.transportCodes) {
+      tcShow = true;
+      if (decoded.transportCodes.code1) tcCode1 = String(decoded.transportCodes.code1).toUpperCase();
+      if (decoded.transportCodes.code2) tcCode2 = String(decoded.transportCodes.code2).toUpperCase();
+    }
+    var transportCodesRow = tcShow
+      ? `<dt>Transport Codes</dt><dd class="transport-codes">Code1: <code>${escapeHtml(tcCode1)}</code> · Code2: <code>${escapeHtml(tcCode2)}</code></dd>`
+      : '';
+
+    // #1279 P2 #5 — RAW_CUSTOM detail row (firmware/src/Mesh.cpp:577).
+    var rawCustomRow = '';
+    if (pkt.payload_type === 15 && decoded.type === 'RAW_CUSTOM') {
+      var rl = decoded.rawLength != null ? decoded.rawLength + ' byte' + (decoded.rawLength === 1 ? '' : 's') : '—';
+      var ft = decoded.firstByteTag ? String(decoded.firstByteTag).toUpperCase() : '—';
+      rawCustomRow = `<dt>Raw Custom</dt><dd class="raw-custom-detail">Length: <code>${escapeHtml(rl)}</code> · First byte tag: <code>${escapeHtml(ft)}</code></dd>`;
+    }
+
     panel.innerHTML = `
       ${anomalyBanner}
       <div class="detail-title">${hasRawHex ? `Packet Byte Breakdown (${size} bytes)` : typeName + ' Packet'}</div>
@@ -2901,7 +2925,7 @@
       ${messageHtml}
       <dl class="detail-meta">
         <dt>Observer</dt><dd>${obsNameOnly(effectivePkt.observer_id)}${obsIataBadge(effectivePkt)}</dd>
-        <dt>Location</dt><dd>${locationHtml}</dd>
+        ${locationHtml ? `<dt>Location</dt><dd>${locationHtml}</dd>` : ''}
         <dt>SNR / RSSI</dt><dd>${snr != null ? snr + ' dB' : '—'} / ${rssi != null ? rssi + ' dBm' : '—'}</dd>
         <dt>Route Type</dt><dd>${routeTypeName(pkt.route_type)}</dd>
         <dt>Payload Type</dt><dd><span class="badge badge-${payloadTypeColor(pkt.payload_type)}">${typeName}</span></dd>
@@ -2909,6 +2933,8 @@
         <dt>Timestamp</dt><dd>${renderTimestampCell(effectivePkt.timestamp)}</dd>
         <dt>Propagation</dt><dd>${propagationHtml}</dd>
         <dt>Path</dt><dd>${displayHopCount > 0 ? `<span class="badge badge-info">${displayHopCount} hop${displayHopCount !== 1 ? 's' : ''}</span> ` + renderPath(pathHops, effectivePkt.observer_id) : '— (direct)'}</dd>
+        ${transportCodesRow}
+        ${rawCustomRow}
         ${effectivePkt.direction ? `<dt>Direction</dt><dd>${escapeHtml(effectivePkt.direction)}</dd>` : ''}
       </dl>
       <div class="detail-actions">

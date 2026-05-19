@@ -121,7 +121,9 @@
 
   const TYPE_COLORS = window.TYPE_COLORS || {
     ADVERT: '#22c55e', GRP_TXT: '#3b82f6', TXT_MSG: '#f59e0b', ACK: '#6b7280',
-    REQUEST: '#a855f7', RESPONSE: '#06b6d4', TRACE: '#ec4899', PATH: '#14b8a6'
+    REQUEST: '#a855f7', RESPONSE: '#06b6d4', TRACE: '#ec4899', PATH: '#14b8a6',
+    ANON_REQ: '#f43f5e', GRP_DATA: '#8b5cf6', MULTIPART: '#0d9488',
+    CONTROL: '#b45309', RAW_CUSTOM: '#c026d3'
   };
 
   const PAYLOAD_ICONS = {
@@ -236,7 +238,32 @@
         // Set live-page height from JS — most reliable across all mobile browsers
         const page = document.querySelector('.live-page');
         const appEl = document.getElementById('app');
-        const h = window.innerHeight;
+        // #1267: the CSS rule for .live-page subtracts --bottom-nav-reserve
+        // (0px desktop, 56px+safe-area at ≤768px) so the fixed .bottom-nav
+        // (z-index 1200) does not occlude the VCR bar (position:absolute;
+        // bottom:0; z-index 1000). Mirror that subtraction here — otherwise
+        // this JS override clobbers the CSS height with raw window.innerHeight
+        // and the VCR bar slides under the bottom-nav (issue #1267).
+        // Prefer the bottom-nav's measured rendered height so we also cover
+        // the 1px top border and any visual chrome the --bottom-nav-reserve
+        // token doesn't account for; fall back to the token-resolved value.
+        const reserve = (() => {
+          const bn = document.querySelector('.bottom-nav');
+          if (bn) {
+            const cs = getComputedStyle(bn);
+            if (cs.display !== 'none') {
+              const r = bn.getBoundingClientRect().height;
+              if (r > 0) return r;
+            }
+          }
+          const probe = document.createElement('div');
+          probe.style.cssText = 'position:absolute;visibility:hidden;height:var(--bottom-nav-reserve,0px);pointer-events:none;';
+          (document.body || document.documentElement).appendChild(probe);
+          const px = probe.getBoundingClientRect().height || 0;
+          probe.remove();
+          return px;
+        })();
+        const h = Math.max(0, window.innerHeight - reserve);
         if (page) page.style.height = h + 'px';
         if (appEl) appEl.style.height = h + 'px';
         if (map) {
@@ -1011,10 +1038,23 @@
             <li><span class="live-dot" style="background:${TYPE_COLORS.GRP_TXT}" aria-hidden="true"></span> Message — Group text</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.TXT_MSG}" aria-hidden="true"></span> Direct — Direct message</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.REQUEST}" aria-hidden="true"></span> Request — Data request</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.RESPONSE}" aria-hidden="true"></span> Response — Data response</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.TRACE}" aria-hidden="true"></span> Trace — Route trace</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.PATH}" aria-hidden="true"></span> Path — Path discovery</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.ANON_REQ}" aria-hidden="true"></span> Anon Req — Anonymous request</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.GRP_DATA}" aria-hidden="true"></span> Grp Data — Group datagram</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.MULTIPART}" aria-hidden="true"></span> Multipart — Multi-fragment payload</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.CONTROL}" aria-hidden="true"></span> Control — Control plane</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.RAW_CUSTOM}" aria-hidden="true"></span> Raw Custom — Application-defined payload</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.ACK}" aria-hidden="true"></span> Ack / Other — Acknowledgment or unknown type</li>
           </ul>
           <h3 class="legend-title" style="margin-top:8px">NODE ROLES</h3>
           <ul class="legend-list" id="roleLegendList"></ul>
+          <h3 class="legend-title" style="margin-top:8px">MARKER STYLES</h3>
+          <ul class="legend-list">
+            <li><span class="live-ring live-ring--repeater" aria-hidden="true"></span> Bright white ring — repeater</li>
+            <li><span class="live-ring live-ring--other" aria-hidden="true"></span> Faded ring — companion / sensor / room</li>
+          </ul>
           </div>
         </div>
 
