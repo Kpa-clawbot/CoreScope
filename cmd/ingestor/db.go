@@ -587,7 +587,7 @@ func (s *Store) prepareStatements() error {
 			role = COALESCE(?, role),
 			lat = COALESCE(?, lat),
 			lon = COALESCE(?, lon),
-			last_seen = ?
+			last_seen = MAX(MIN(COALESCE(last_seen, ''), ?), ?)
 	`)
 	if err != nil {
 		return err
@@ -606,7 +606,7 @@ func (s *Store) prepareStatements() error {
 		ON CONFLICT(id) DO UPDATE SET
 			name = COALESCE(?, name),
 			iata = COALESCE(?, iata),
-			last_seen = ?,
+			last_seen = MAX(MIN(COALESCE(last_seen, ''), ?), ?),
 			packet_count = packet_count + 1,
 			model = COALESCE(?, model),
 			firmware = COALESCE(?, firmware),
@@ -625,7 +625,14 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
-	s.stmtUpdateObserverLastSeen, err = s.db.Prepare("UPDATE observers SET last_seen = ?, last_packet_at = ? WHERE rowid = ?")
+	// Args: ingestNow, rxTime, ingestNow, rxTime, rowid
+	// MIN(existing, ingestNow) clamps any future value already in the DB before
+	// taking MAX with rxTime, so the guard never locks in a past bug's stale future.
+	s.stmtUpdateObserverLastSeen, err = s.db.Prepare(`
+		UPDATE observers SET
+			last_seen      = MAX(MIN(COALESCE(last_seen, ''), ?), ?),
+			last_packet_at = MAX(MIN(COALESCE(last_packet_at, ''), ?), ?)
+		WHERE rowid = ?`)
 	if err != nil {
 		return err
 	}
@@ -659,9 +666,10 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		return false, nil
 	}
 
-	now := data.Timestamp
-	if now == "" {
-		now = time.Now().UTC().Format(time.RFC3339)
+	rxTime := data.Timestamp
+	ingestNow := time.Now().UTC().Format(time.RFC3339)
+	if rxTime == "" {
+		rxTime = ingestNow
 	}
 
 	var txID int64
@@ -674,14 +682,14 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 	if err == nil {
 		// Existing transmission
 		txID = existingID
-		if now < existingFirstSeen {
-			_, _ = s.stmtUpdateTxFirstSeen.Exec(now, txID)
+		if rxTime < existingFirstSeen {
+			_, _ = s.stmtUpdateTxFirstSeen.Exec(rxTime, txID)
 		}
 	} else {
 		// New transmission
 		isNew = true
 		result, err := s.stmtInsertTransmission.Exec(
-			data.RawHex, hash, now,
+			data.RawHex, hash, rxTime,
 			data.RouteType, data.PayloadType, data.PayloadVersion,
 			data.DecodedJSON, nilIfEmpty(data.ChannelHash),
 			nilIfEmpty(data.FromPubkey),
@@ -707,13 +715,13 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 			observerIdx = &rowid
 			// Update observer last_seen and last_packet_at on every packet to prevent
 			// low-traffic observers from appearing offline (#463)
-			_, _ = s.stmtUpdateObserverLastSeen.Exec(now, now, rowid)
+			_, _ = s.stmtUpdateObserverLastSeen.Exec(ingestNow, rxTime, ingestNow, rxTime, rowid)
 		}
 	}
 
 	// Insert observation
 	epochTs := time.Now().Unix()
-	if t, err := time.Parse(time.RFC3339, now); err == nil {
+	if t, err := time.Parse(time.RFC3339, rxTime); err == nil {
 		epochTs = t.Unix()
 	}
 
@@ -738,13 +746,14 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 
 // UpsertNode inserts or updates a node.
 func (s *Store) UpsertNode(pubKey, name, role string, lat, lon *float64, lastSeen string) error {
+	ingestNow := time.Now().UTC().Format(time.RFC3339)
 	now := lastSeen
 	if now == "" {
-		now = time.Now().UTC().Format(time.RFC3339)
+		now = ingestNow
 	}
 	_, err := s.stmtUpsertNode.Exec(
 		pubKey, name, role, lat, lon, now, now,
-		name, role, lat, lon, now,
+		name, role, lat, lon, ingestNow, now,
 	)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)
@@ -807,9 +816,23 @@ type ObserverMeta struct {
 	PacketsRecv   *int     // cumulative packets received since boot
 }
 
-// UpsertObserver inserts or updates an observer with optional hardware metadata.
+// UpsertObserver inserts or updates an observer using the current wall-clock
+// time as last_seen. Use UpsertObserverAt when the message envelope provides
+// an observer receive-time (e.g. MQTT status and data packet handlers).
 func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error {
-	now := time.Now().UTC().Format(time.RFC3339)
+	return s.UpsertObserverAt(id, name, iata, meta, time.Now().UTC().Format(time.RFC3339))
+}
+
+// UpsertObserverAt inserts or updates an observer with an explicit lastSeen
+// timestamp (typically the observer receive-time from the MQTT envelope). The
+// SQL uses MAX so last_seen never moves backwards — a retained or replayed
+// message whose rxTime pre-dates the existing last_seen is a no-op for that
+// field, preventing offline observers from flashing as Online on reconnect.
+func (s *Store) UpsertObserverAt(id, name, iata string, meta *ObserverMeta, lastSeen string) error {
+	ingestNow := time.Now().UTC().Format(time.RFC3339)
+	if lastSeen == "" {
+		lastSeen = ingestNow
+	}
 	normalizedIATA := strings.TrimSpace(strings.ToUpper(iata))
 
 	var model, firmware, clientVersion, radio interface{}
@@ -839,8 +862,8 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 	}
 
 	_, err := s.stmtUpsertObserver.Exec(
-		id, name, normalizedIATA, now, now, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor,
-		name, normalizedIATA, now, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor,
+		id, name, normalizedIATA, lastSeen, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor,
+		name, normalizedIATA, ingestNow, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor,
 	)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)
@@ -1230,7 +1253,8 @@ type MQTTPacketMessage struct {
 	Score     *float64 `json:"score"`
 	Direction *string  `json:"direction"`
 	Origin    string   `json:"origin"`
-	Region    string   `json:"region,omitempty"` // optional region override (#788)
+	Region    string   `json:"region,omitempty"`    // optional region override (#788)
+	Timestamp string   `json:"timestamp,omitempty"` // observer receive time, resolved by handler
 }
 
 // BuildPacketData constructs a PacketData from a decoded packet and MQTT message.
@@ -1238,7 +1262,6 @@ type MQTTPacketMessage struct {
 // to guarantee the stored path always matches the raw bytes. This matters for
 // TRACE packets where decoded.Path.Hops is overwritten with payload hops (#886).
 func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID, region string) *PacketData {
-	now := time.Now().UTC().Format(time.RFC3339)
 	pathJSON := "[]"
 	// For TRACE packets, path_json must be the payload-decoded route hops
 	// (decoded.Path.Hops), NOT the raw_hex header bytes which are SNR values.
@@ -1255,7 +1278,7 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 
 	pd := &PacketData{
 		RawHex:         msg.Raw,
-		Timestamp:      now,
+		Timestamp:      msg.Timestamp,
 		ObserverID:     observerID,
 		ObserverName:   msg.Origin,
 		SNR:            msg.SNR,

@@ -830,10 +830,11 @@ func TestBuildPacketData(t *testing.T) {
 	snr := 5.0
 	rssi := -100.0
 	msg := &MQTTPacketMessage{
-		Raw:    rawHex,
-		SNR:    &snr,
-		RSSI:   &rssi,
-		Origin: "test-observer",
+		Raw:       rawHex,
+		SNR:       &snr,
+		RSSI:      &rssi,
+		Origin:    "test-observer",
+		Timestamp: "2026-05-16T10:00:00Z",
 	}
 
 	pkt := BuildPacketData(msg, decoded, "obs123", "SJC")
@@ -865,8 +866,8 @@ func TestBuildPacketData(t *testing.T) {
 	if pkt.PayloadType != decoded.Header.PayloadType {
 		t.Errorf("payloadType mismatch")
 	}
-	if pkt.Timestamp == "" {
-		t.Error("timestamp should be set")
+	if pkt.Timestamp != "2026-05-16T10:00:00Z" {
+		t.Errorf("timestamp=%s, want 2026-05-16T10:00:00Z", pkt.Timestamp)
 	}
 	if pkt.DecodedJSON == "" || pkt.DecodedJSON == "{}" {
 		t.Error("decodedJSON should be populated")
