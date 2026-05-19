@@ -8,10 +8,17 @@
   let map = null;
   let markers = {};
   let mapTileLayer = null;
+  let mapThemeObs = null;      // MutationObserver for auto dark/light tile swap
   let mapScope = 'expected';
-  let useDark = document.documentElement.dataset.theme === 'dark';
   let wsHandler = null;
   let currentApp = null;
+
+  function isDarkTheme() {
+    const t = document.documentElement.getAttribute('data-theme');
+    if (t === 'dark') return true;
+    if (t === 'light') return false;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
 
   // ── init ───────────────────────────────────────────────────────────────────
   async function init(app) {
@@ -41,6 +48,7 @@
 
   function destroy() {
     if (wsHandler) { offWS(wsHandler); wsHandler = null; }
+    if (mapThemeObs) { mapThemeObs.disconnect(); mapThemeObs = null; }
     if (map) { map.remove(); map = null; }
     currentApp = null;
     currentSession = null;
@@ -222,7 +230,6 @@
         <div class="hc-map-controls">
           <label><input type="radio" name="hc-scope" value="expected" ${currentSession.allowlistEnabled ? 'checked' : ''}> Expected only</label>
           <label><input type="radio" name="hc-scope" value="directory" ${!currentSession.allowlistEnabled ? 'checked' : ''}> All known</label>
-          <button id="hc-basemap-toggle" class="btn btn-sm">${useDark ? 'Light map' : 'Dark map'}</button>
         </div>
         <div id="hc-map" style="height:320px;border-radius:4px;overflow:hidden;margin-bottom:1rem;"></div>
 
@@ -248,8 +255,6 @@
         refreshMapMarkers();
       });
     });
-
-    app.querySelector('#hc-basemap-toggle').addEventListener('click', toggleBasemap);
 
     app.querySelector('#hc-share').addEventListener('click', function () {
       if (!currentSession || !currentSession.id) return;
@@ -278,20 +283,17 @@
     const el = currentApp.querySelector('#hc-map');
     if (!el) return;
     map = L.map(el, { zoomControl: true }).setView([20, 0], 2);
-    mapTileLayer = L.tileLayer(useDark ? TILE_DARK : TILE_LIGHT, {
+    mapTileLayer = L.tileLayer(isDarkTheme() ? TILE_DARK : TILE_LIGHT, {
       maxZoom: 18, attribution: TILE_ATTR,
     }).addTo(map);
-  }
 
-  function toggleBasemap() {
-    if (!map) return;
-    useDark = !useDark;
-    map.removeLayer(mapTileLayer);
-    mapTileLayer = L.tileLayer(useDark ? TILE_DARK : TILE_LIGHT, {
-      maxZoom: 18, attribution: TILE_ATTR,
-    }).addTo(map);
-    const btn = currentApp && currentApp.querySelector('#hc-basemap-toggle');
-    if (btn) btn.textContent = useDark ? 'Light map' : 'Dark map';
+    // Auto-swap tile layer when the app theme changes.
+    mapThemeObs = new MutationObserver(function () {
+      if (mapTileLayer) {
+        mapTileLayer.setUrl(isDarkTheme() ? TILE_DARK : TILE_LIGHT);
+      }
+    });
+    mapThemeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   }
 
   function refreshMapMarkers() {

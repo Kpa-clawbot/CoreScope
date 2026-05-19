@@ -19,6 +19,9 @@ type ObserverRecord struct {
 	FirstSeenAt  int64    `json:"firstSeenAt"`
 	LastPacketAt int64    `json:"lastPacketAt"`
 	PacketCount  int      `json:"packetCount"`
+	// IsSeeded marks observers pre-populated from KnownObservers config; they
+	// are always included in the directory regardless of retention window.
+	IsSeeded     bool     `json:"-"`
 }
 
 // HasLocation returns true when this observer has valid GPS coordinates.
@@ -73,7 +76,7 @@ func NewObserverRegistry(cfg *HealthCheckConfig) *ObserverRegistry {
 	// directory even before any MQTT traffic arrives.
 	for _, k := range cfg.KnownObservers {
 		if k != "" {
-			r.records[k] = &ObserverRecord{Key: k, ShortKey: observerShortKey(k)}
+			r.records[k] = &ObserverRecord{Key: k, ShortKey: observerShortKey(k), IsSeeded: true}
 		}
 	}
 	return r
@@ -179,21 +182,22 @@ func (r *ObserverRegistry) ActiveKeys() []string {
 }
 
 // Directory returns all observer records that are within the retention window,
-// sorted by label then key. Records with no packet activity are included only
-// when they came from the KnownObservers seed (LastPacketAt == 0 AND retention
-// is not zero means keep forever, so we include them when retention==0).
+// sorted by label then key. KnownObservers-seeded records are always included
+// regardless of the retention window (they have never expired semantics).
+// Auto-discovered observers are included only while within the retention window.
 func (r *ObserverRegistry) Directory() []*ObserverRecord {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	now := time.Now().UnixMilli()
 	var out []*ObserverRecord
 	for _, rec := range r.records {
-		if rec.LastPacketAt == 0 {
-			// Seeded but never seen: include only when retention is disabled.
-			if r.retentionMs > 0 {
-				continue
-			}
+		if rec.IsSeeded {
+			// Configured observers always appear in the directory.
+		} else if rec.LastPacketAt == 0 {
+			// Auto-discovered but never actually seen — skip.
+			continue
 		} else if r.retentionMs > 0 && now-rec.LastPacketAt > r.retentionMs {
+			// Auto-discovered and outside retention window — drop.
 			continue
 		}
 		cp := *rec
