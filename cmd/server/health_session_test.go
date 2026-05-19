@@ -38,9 +38,10 @@ func TestHealthDBMigrate(t *testing.T) {
 }
 
 func TestGenerateCode(t *testing.T) {
+	// Default prefix "MHC"
 	codes := make(map[string]bool)
 	for i := 0; i < 100; i++ {
-		code, err := generateHealthCode()
+		code, err := generateHealthCode("MHC")
 		if err != nil {
 			t.Fatalf("generateHealthCode: %v", err)
 		}
@@ -54,6 +55,22 @@ func TestGenerateCode(t *testing.T) {
 	}
 	if len(codes) < 90 {
 		t.Errorf("too many collisions in 100 codes: only %d unique", len(codes))
+	}
+	// Custom prefix
+	code, err := generateHealthCode("TEST")
+	if err != nil {
+		t.Fatalf("generateHealthCode custom prefix: %v", err)
+	}
+	if !strings.HasPrefix(code, "TEST-") {
+		t.Errorf("code %q missing TEST- prefix", code)
+	}
+	// Empty prefix — no separator
+	code, err = generateHealthCode("")
+	if err != nil {
+		t.Fatalf("generateHealthCode empty prefix: %v", err)
+	}
+	if len(code) != 6 {
+		t.Errorf("code %q with empty prefix should be 6 chars, got %d", code, len(code))
 	}
 }
 

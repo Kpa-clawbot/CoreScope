@@ -87,7 +87,9 @@ func (h *HealthDB) Close() error {
 
 const codeChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-func generateHealthCode() (string, error) {
+// generateHealthCode returns a random 6-char alphanumeric code, optionally
+// prefixed by prefix + "-". Pass prefix="" for no prefix (e.g. "A3F7Z2").
+func generateHealthCode(prefix string) (string, error) {
 	b := make([]byte, 6)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -95,7 +97,10 @@ func generateHealthCode() (string, error) {
 	for i := range b {
 		b[i] = codeChars[int(b[i])%len(codeChars)]
 	}
-	return "MHC-" + string(b), nil
+	if prefix == "" {
+		return string(b), nil
+	}
+	return prefix + "-" + string(b), nil
 }
 
 func newHealthID() string {
@@ -108,7 +113,11 @@ func newHealthID() string {
 
 func (h *HealthDB) CreateSession(cfg *HealthCheckConfig, allowlistEnabled bool, expectedKeys []string) (*HealthSession, error) {
 	now := time.Now().Unix()
-	code, err := generateHealthCode()
+	prefix := cfg.CodePrefix
+	if prefix == "" {
+		prefix = "MHC"
+	}
+	code, err := generateHealthCode(prefix)
 	if err != nil {
 		return nil, err
 	}
