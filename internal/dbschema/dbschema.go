@@ -37,6 +37,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureNeighborEdgesTable(rw); err != nil {
 		return fmt.Errorf("ensure neighbor_edges: %w", err)
 	}
+	if err := ensureInactiveNodesTable(rw); err != nil {
+		return fmt.Errorf("ensure inactive_nodes: %w", err)
+	}
 	if err := ensureResolvedPathColumn(rw, logf); err != nil {
 		return fmt.Errorf("ensure resolved_path: %w", err)
 	}
@@ -170,6 +173,33 @@ func ensureNeighborEdgesTable(rw *sql.DB) error {
 		last_seen TEXT,
 		PRIMARY KEY (node_a, node_b)
 	)`)
+	return err
+}
+
+// ensureInactiveNodesTable creates the inactive_nodes table if missing.
+// The ingestor's applySchema also creates this table — duplicating it
+// here makes dbschema.Apply self-sufficient when called against a
+// fixture DB that pre-dates the soft-delete feature (e.g. CI's
+// test-fixtures/e2e-fixture.db, which never had any inactive rows).
+// Schema kept in sync with cmd/ingestor/db.go:applySchema.
+func ensureInactiveNodesTable(rw *sql.DB) error {
+	_, err := rw.Exec(`CREATE TABLE IF NOT EXISTS inactive_nodes (
+		public_key TEXT PRIMARY KEY,
+		name TEXT,
+		role TEXT,
+		lat REAL,
+		lon REAL,
+		last_seen TEXT,
+		first_seen TEXT,
+		advert_count INTEGER DEFAULT 0,
+		battery_mv INTEGER,
+		temperature_c REAL,
+		foreign_advert INTEGER DEFAULT 0
+	)`)
+	if err != nil {
+		return err
+	}
+	_, err = rw.Exec(`CREATE INDEX IF NOT EXISTS idx_inactive_nodes_last_seen ON inactive_nodes(last_seen)`)
 	return err
 }
 

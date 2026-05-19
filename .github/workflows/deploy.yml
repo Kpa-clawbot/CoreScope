@@ -190,6 +190,12 @@ jobs:
           go build -o ../../corescope-server .
           echo "Go server built successfully"
 
+      - name: Build Go migrate tool
+        run: |
+          cd cmd/migrate
+          go build -o ../../corescope-migrate .
+          echo "Go migrate tool built successfully"
+
       - name: Install npm dependencies
         run: npm ci --production=false
 
@@ -203,6 +209,15 @@ jobs:
 
       - name: Freshen fixture timestamps
         run: bash tools/freshen-fixture.sh test-fixtures/e2e-fixture.db
+
+      - name: Migrate fixture DB to current schema (#1287)
+        # Server now ASSERTs schema is migrated and refuses to start
+        # otherwise (cmd/server/main.go: dbschema.AssertReady). In prod
+        # the ingestor owns dbschema.Apply, but CI starts only the
+        # server against the committed e2e fixture — so we run the
+        # standalone migrate tool here to bring the fixture up to the
+        # required shape before the server boots.
+        run: ./corescope-migrate -db test-fixtures/e2e-fixture.db
 
       - name: Start Go server with fixture DB
         run: |
