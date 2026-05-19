@@ -917,6 +917,10 @@ body.scroll-locked { overflow: hidden; }
 }
 .detail-meta dt { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .3px; }
 .detail-meta dd { font-weight: 500; margin-bottom: 4px; }
+/* #1281: 📍map link inside detail-meta — UA-default blue is unreadable on
+ * dark backgrounds. Force theme-aware color via --accent. */
+.loc-map-link { color: var(--accent); font-size: 0.85em; text-decoration: none; }
+.loc-map-link:hover { text-decoration: underline; }
 .observation-current { background: var(--accent-bg, rgba(0,122,255,0.1)); font-weight: 600; }
 .detail-obs-row:hover { background: var(--hover-bg, rgba(255,255,255,0.05)); }
 .detail-obs-table th { font-size: 0.8em; text-transform: uppercase; color: var(--text-muted); }
