@@ -283,6 +283,16 @@
     if (field === 'payload_hex') {
       return packet.raw_hex ? packet.raw_hex.slice(4) : '';
     }
+    // TransportCodes fields surfaced from decoded_json.transportCodes
+    // (firmware/src/Packet.h:46, parsed at cmd/server/decoder.go:492-498).
+    if (field === 'code1' || field === 'code2') {
+      try {
+        var dc = typeof packet.decoded_json === 'string' ? JSON.parse(packet.decoded_json) : packet.decoded_json;
+        if (!dc || !dc.transportCodes) return null;
+        var v = field === 'code1' ? dc.transportCodes.code1 : dc.transportCodes.code2;
+        return v ? String(v).toUpperCase() : null;
+      } catch (e) { return null; }
+    }
     // Decoded payload fields (dot notation)
     if (field.startsWith('payload.')) {
       try {
@@ -449,6 +459,8 @@
     { name: 'payload.flags.repeater',    desc: 'Decoded payload: advert flag (repeater role)' },
     { name: 'payload.flags.room',        desc: 'Decoded payload: advert flag (room server)' },
     { name: 'payload.flags.hasLocation', desc: 'Decoded payload: advert has location' },
+    { name: 'code1',                desc: 'Transport route Code1 (hex, e.g. AABB) — present on TRANSPORT_FLOOD/DIRECT' },
+    { name: 'code2',                desc: 'Transport route Code2 (hex, e.g. CCDD) — present on TRANSPORT_FLOOD/DIRECT' },
   ];
 
   var OPERATORS = [

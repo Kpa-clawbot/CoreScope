@@ -351,6 +351,28 @@
   box-shadow: 0 0 4px currentColor;
 }
 
+/* #1274: marker-style swatches — mirror the live map circleMarker ring
+ * convention (bright white ring = repeater, faded ring = other roles).
+ * Background uses --role-repeater / --text-muted via CSS variables so
+ * theming remains consistent. */
+.live-ring {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--text-muted);
+}
+.live-ring--repeater {
+  border: 1.5px solid #fff;
+  opacity: 0.95;
+}
+.live-ring--other {
+  border: 1px solid #fff;
+  opacity: 0.45;
+}
+
 /* ---- Tooltip ---- */
 .live-tooltip {
   background: color-mix(in srgb, var(--surface-1) 95%, transparent) !important;

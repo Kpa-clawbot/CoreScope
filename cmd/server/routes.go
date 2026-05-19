@@ -132,7 +132,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/perf/sqlite", s.handlePerfSqlite).Methods("GET")
 	r.HandleFunc("/api/perf/write-sources", s.handlePerfWriteSources).Methods("GET")
 	r.Handle("/api/perf/reset", s.requireAPIKey(http.HandlerFunc(s.handlePerfReset))).Methods("POST")
-	r.Handle("/api/admin/prune", s.requireAPIKey(http.HandlerFunc(s.handleAdminPrune))).Methods("POST")
+	// /api/admin/prune removed in #1283 — pruning is owned by the
+	// ingestor process (scheduled tickers + startup pass). Operators
+	// who want an ad-hoc prune can restart the ingestor.
 	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
 	r.Handle("/api/dropped-packets", s.requireAPIKey(http.HandlerFunc(s.handleDroppedPackets))).Methods("GET")
 	r.Handle("/api/backup", s.requireAPIKey(http.HandlerFunc(s.handleBackup))).Methods("GET")
@@ -1119,6 +1121,10 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			relayMap = s.store.GetRepeaterRelayInfoMap(relayWindow)
 			usefulMap = s.store.GetRepeaterUsefulnessScoreMap()
 		}
+		// Bridge axis (#672 axis 2 of 4). Snapshot is an atomic load
+		// — safe to call regardless of needsRelay, and we want the
+		// score on repeater rows specifically.
+		bridgeMap := s.store.GetBridgeScoreMap()
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
@@ -1135,6 +1141,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 					node["relay_count_1h"] = info.RelayCount1h
 					node["relay_count_24h"] = info.RelayCount24h
 					node["usefulness_score"] = lookupUsefulnessScore(usefulMap, pk)
+					node["bridge_score"] = lookupUsefulnessScore(bridgeMap, pk)
 				}
 			}
 		}
@@ -1254,6 +1261,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			node["relay_count_1h"] = info.RelayCount1h
 			node["relay_count_24h"] = info.RelayCount24h
 			node["usefulness_score"] = s.store.GetRepeaterUsefulnessScore(pubkey)
+			node["bridge_score"] = s.store.GetBridgeScore(pubkey)
 		}
 	}
 
@@ -1430,6 +1438,27 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	}
 	candidates = filtered
 
+	// #1278: Read the CANONICAL persisted resolved_path for each surviving
+	// candidate OUTSIDE s.mu (fetchResolvedPathForTxBest takes lruMu; the
+	// lock-ordering contract forbids acquiring lruMu under s.mu).
+	//
+	// Option A from the issue: the packets page renders each tx via
+	// fetchResolvedPathForTxBest. For /api/nodes/{pk}/paths to stay
+	// CONSISTENT with the packets page, BOTH the containsTarget membership
+	// decision AND the displayed hop names must come from that same
+	// canonical resolved_path — not a re-resolution biased by passing the
+	// queried node as hopContext anchor.
+	//
+	// Falls back to biased re-resolve only when a tx has no persisted
+	// resolved_path (older data / async backfill incomplete); in that case
+	// there's no canonical answer to be consistent with.
+	canonicalRP := make(map[int][]*string, len(candidates))
+	for _, tx := range candidates {
+		if rp := s.store.fetchResolvedPathForTxBest(tx); rp != nil {
+			canonicalRP[tx.ID] = rp
+		}
+	}
+
 	// Re-acquire read lock for the aggregation phase that reads store data.
 	s.store.mu.RLock()
 
@@ -1447,6 +1476,11 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// (handleNodePaths aggregates paths terminating at lowerPK). Passing nil
 	// here re-introduced regression #1197 in production. See
 	// resolve_context_callsites_test.go.
+	//
+	// NOTE (#1278): this biased resolver is only consulted for the FALLBACK
+	// path — txs with no persisted resolved_path. Txs with a canonical
+	// resolved_path use the persisted pubkeys directly (see canonicalRP),
+	// which keeps results consistent with the packets page.
 	hopContext := []string{lowerPK}
 	resolveHop := func(hop string) *nodeInfo {
 		if cached, ok := hopCache[hop]; ok {
@@ -1456,38 +1490,96 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		hopCache[hop] = r
 		return r
 	}
+	// nodeByPK caches pubkey → *nodeInfo lookups when rendering canonical
+	// resolved_path entries. Cheap O(1) hit against pm.m (the prefix map
+	// stores the full pubkey as a key for pubkeys >= maxPrefixLen).
+	nodeByPK := make(map[string]*nodeInfo)
+	lookupNode := func(pk string) *nodeInfo {
+		key := strings.ToLower(pk)
+		if cached, ok := nodeByPK[key]; ok {
+			return cached
+		}
+		// Use plain resolve(); we have the full pubkey, no ambiguity.
+		n := pm.resolve(key)
+		if n == nil || !strings.EqualFold(n.PublicKey, key) {
+			// Full pubkey may not be present in pm (role filter, eviction).
+			// Fall through with nil; caller renders prefix-only entry.
+			nodeByPK[key] = nil
+			return nil
+		}
+		nodeByPK[key] = n
+		return n
+	}
 	for _, tx := range candidates {
 		hops := txGetParsedPath(tx)
 		resolvedHops := make([]PathHopResp, len(hops))
 		sigParts := make([]string, len(hops))
-		// For candidates not confirmed via full-pubkey index or SQL, verify that at
-		// least one hop actually resolves to the target. This catches prefix collisions
-		// (e.g. two nodes sharing a "7a" 1-byte prefix) that slipped through the
-		// conservative resolved_path fallback.
-		containsTarget := confirmedByFullKey[tx.ID] || confirmedBySQL[tx.ID]
-		for i, hop := range hops {
-			resolved := resolveHop(hop)
-			entry := PathHopResp{Prefix: hop, Name: hop}
-			if resolved != nil {
-				entry.Name = resolved.Name
-				entry.Pubkey = resolved.PublicKey
-				if resolved.HasGPS {
-					entry.Lat = resolved.Lat
-					entry.Lon = resolved.Lon
+		containsTarget := false
+
+		if rp, ok := canonicalRP[tx.ID]; ok {
+			// Option A: render hops + decide membership from the CANONICAL
+			// persisted resolved_path. resolved_path is parallel to the
+			// best-obs path_json which may be longer than tx.PathJSON used by
+			// txGetParsedPath; align by the shorter length.
+			rpLen := len(rp)
+			for i, hop := range hops {
+				entry := PathHopResp{Prefix: hop, Name: hop}
+				var resolvedPK string
+				if i < rpLen && rp[i] != nil {
+					resolvedPK = strings.ToLower(*rp[i])
 				}
-				sigParts[i] = resolved.PublicKey
-				if strings.ToLower(resolved.PublicKey) == lowerPK {
-					containsTarget = true
+				if resolvedPK != "" {
+					if n := lookupNode(resolvedPK); n != nil {
+						entry.Name = n.Name
+						entry.Pubkey = n.PublicKey
+						if n.HasGPS {
+							entry.Lat = n.Lat
+							entry.Lon = n.Lon
+						}
+						sigParts[i] = n.PublicKey
+					} else {
+						entry.Pubkey = resolvedPK
+						sigParts[i] = resolvedPK
+					}
+					if resolvedPK == lowerPK {
+						containsTarget = true
+					}
+				} else {
+					sigParts[i] = hop
 				}
-			} else {
-				sigParts[i] = hop
-				// Unresolvable hop: keep conservative if prefix could be the target.
-				if strings.HasPrefix(lowerPK, strings.ToLower(hop)) {
-					containsTarget = true
-				}
+				resolvedHops[i] = entry
 			}
-			resolvedHops[i] = entry
+		} else {
+			// Fallback: no canonical resolved_path persisted (older data /
+			// async backfill incomplete). Use biased re-resolve and the
+			// legacy containsTarget heuristics (preserves #1197 behavior
+			// and the #929 prefix-collision exclusion test).
+			containsTarget = confirmedByFullKey[tx.ID] || confirmedBySQL[tx.ID]
+			for i, hop := range hops {
+				resolved := resolveHop(hop)
+				entry := PathHopResp{Prefix: hop, Name: hop}
+				if resolved != nil {
+					entry.Name = resolved.Name
+					entry.Pubkey = resolved.PublicKey
+					if resolved.HasGPS {
+						entry.Lat = resolved.Lat
+						entry.Lon = resolved.Lon
+					}
+					sigParts[i] = resolved.PublicKey
+					if strings.ToLower(resolved.PublicKey) == lowerPK {
+						containsTarget = true
+					}
+				} else {
+					sigParts[i] = hop
+					// Unresolvable hop: keep conservative if prefix could be the target.
+					if strings.HasPrefix(lowerPK, strings.ToLower(hop)) {
+						containsTarget = true
+					}
+				}
+				resolvedHops[i] = entry
+			}
 		}
+
 		if !containsTarget {
 			continue
 		}
@@ -2681,45 +2773,8 @@ func parseWindowDuration(window string) (time.Duration, error) {
 	return time.ParseDuration(window)
 }
 
-func (s *Server) handleAdminPrune(w http.ResponseWriter, r *http.Request) {
-	days := 0
-	if d := r.URL.Query().Get("days"); d != "" {
-		fmt.Sscanf(d, "%d", &days)
-	}
-	if days <= 0 && s.cfg.Retention != nil {
-		days = s.cfg.Retention.PacketDays
-	}
-	if days <= 0 {
-		writeError(w, 400, "days parameter required (or set retention.packetDays in config)")
-		return
-	}
-
-	results := map[string]interface{}{}
-
-	// Prune old packets
-	n, err := s.db.PruneOldPackets(days)
-	if err != nil {
-		writeError(w, 500, err.Error())
-		return
-	}
-	log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
-	results["packets_deleted"] = n
-	results["deleted"] = n // legacy alias
-
-	// Also mark stale observers as inactive if observerDays is configured
-	observerDays := s.cfg.ObserverDaysOrDefault()
-	if observerDays > 0 {
-		obsN, obsErr := s.db.RemoveStaleObservers(observerDays)
-		if obsErr != nil {
-			log.Printf("[prune] observer prune error: %v", obsErr)
-		} else {
-			results["observers_inactive"] = obsN
-		}
-	}
-
-	results["days"] = days
-	writeJSON(w, results)
-}
+// handleAdminPrune was removed in #1283. Prune now runs in the ingestor
+// process (server is read-only). The function and route are gone.
 
 // constantTimeEqual compares two strings in constant time to prevent timing attacks.
 func constantTimeEqual(a, b string) bool {

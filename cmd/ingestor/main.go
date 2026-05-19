@@ -77,6 +77,19 @@ func main() {
 	metricsDays := cfg.MetricsRetentionDays()
 	store.PruneOldMetrics(metricsDays)
 	store.PruneDroppedPackets(metricsDays)
+
+	// Packet (transmissions) retention: previously lived in cmd/server,
+	// moved to ingestor in #1283 to eliminate cross-process write
+	// contention (SQLITE_BUSY). 0 = disabled.
+	packetDays := cfg.PacketDaysOrZero()
+	if packetDays > 0 {
+		if n, err := store.PruneOldPackets(packetDays); err != nil {
+			log.Printf("[prune] error: %v", err)
+		} else if n > 0 {
+			log.Printf("[prune] startup pruned %d transmissions older than %d days", n, packetDays)
+		}
+	}
+
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
@@ -110,6 +123,22 @@ func main() {
 			store.RunIncrementalVacuum(vacuumPages)
 		}
 	}()
+
+	// Daily ticker for transmission retention (#1283).
+	var packetRetentionTicker *time.Ticker
+	if packetDays > 0 {
+		packetRetentionTicker = time.NewTicker(24 * time.Hour)
+		go func() {
+			for range packetRetentionTicker.C {
+				if n, err := store.PruneOldPackets(packetDays); err != nil {
+					log.Printf("[prune] error: %v", err)
+				} else if n > 0 {
+					store.RunIncrementalVacuum(vacuumPages)
+				}
+			}
+		}()
+		log.Printf("[prune] auto-prune enabled: packets older than %d days will be removed daily", packetDays)
+	}
 
 	// Periodic stats logging (every 5 minutes)
 	statsTicker := time.NewTicker(5 * time.Minute)
@@ -253,6 +282,9 @@ func main() {
 	log.Println("Shutting down...")
 	retentionTicker.Stop()
 	metricsRetentionTicker.Stop()
+	if packetRetentionTicker != nil {
+		packetRetentionTicker.Stop()
+	}
 	statsTicker.Stop()
 	stopWatchdog()
 	store.LogStats() // final stats on shutdown

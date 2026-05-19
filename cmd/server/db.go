@@ -2075,38 +2075,10 @@ func nullInt(ni sql.NullInt64) interface{} {
 	return nil
 }
 
-// PruneOldPackets deletes transmissions and their observations older than the
-// given number of days. Nodes and observers are never touched.
-// Returns the number of transmissions deleted.
-// Opens a separate read-write connection since the main connection is read-only.
-func (db *DB) PruneOldPackets(days int) (int64, error) {
-	rw, err := cachedRW(db.path)
-	if err != nil {
-		return 0, err
-	}
-
-	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
-	tx, err := rw.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
-	// Delete observations linked to old transmissions first (no CASCADE in SQLite)
-	_, err = tx.Exec(`DELETE FROM observations WHERE transmission_id IN (
-		SELECT id FROM transmissions WHERE first_seen < ?
-	)`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-
-	res, err := tx.Exec(`DELETE FROM transmissions WHERE first_seen < ?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return n, tx.Commit()
-}
+// PruneOldPackets, PruneOldMetrics, and RemoveStaleObservers were
+// removed in #1283 — they are write operations and now live on the
+// ingestor's *Store (cmd/ingestor/maintenance.go and cmd/ingestor/db.go).
+// The server is the read path; it must not hold the SQLite write lock.
 
 // MetricsSample represents a single row from observer_metrics with computed deltas.
 type MetricsSample struct {
@@ -2424,52 +2396,8 @@ func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
 	return result, nil
 }
 
-// PruneOldMetrics deletes observer_metrics rows older than retentionDays.
-func (db *DB) PruneOldMetrics(retentionDays int) (int64, error) {
-	rw, err := cachedRW(db.path)
-	if err != nil {
-		return 0, err
-	}
-
-	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
-	res, err := rw.Exec(`DELETE FROM observer_metrics WHERE timestamp < ?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	if n > 0 {
-		log.Printf("[metrics] Pruned %d observer_metrics rows older than %d days", n, retentionDays)
-	}
-	return n, nil
-}
-
-// RemoveStaleObservers marks observers that have not actively sent data in observerDays
-// as inactive (soft-delete). This preserves JOIN integrity for observations.observer_idx
-// and observer_metrics.observer_id — historical data still references the correct observer.
-// An observer must actively send data to stay listed — being seen by another node does not count.
-// observerDays <= -1 means never remove (keep forever).
-func (db *DB) RemoveStaleObservers(observerDays int) (int64, error) {
-	if observerDays <= -1 {
-		return 0, nil // keep forever
-	}
-	rw, err := cachedRW(db.path)
-	if err != nil {
-		return 0, err
-	}
-
-	cutoff := time.Now().UTC().AddDate(0, 0, -observerDays).Format(time.RFC3339)
-	res, err := rw.Exec(`UPDATE observers SET inactive = 1 WHERE last_seen < ? AND (inactive IS NULL OR inactive = 0)`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	if n > 0 {
-		// Clean up orphaned metrics for now-inactive observers
-		rw.Exec(`DELETE FROM observer_metrics WHERE observer_id IN (SELECT id FROM observers WHERE inactive = 1)`)
-		log.Printf("[observers] Marked %d observer(s) as inactive (not seen in %d days)", n, observerDays)
-	}
-	return n, nil
-}
+// (PruneOldMetrics / RemoveStaleObservers removed in #1283 — see note
+// above the MetricsSample type. Ingestor owns these writes now.)
 
 // TouchNodeLastSeen updates last_seen for a node identified by full public key.
 // Only updates if the new timestamp is newer than the existing value (or NULL).
