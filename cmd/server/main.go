@@ -419,6 +419,43 @@ func main() {
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
+	// Health check subsystem
+	var stopHealthPurge func()
+	if cfg.HealthCheck != nil {
+		hdbPath := healthDBPath(srv.dbPath)
+		hdb, hdbErr := OpenHealthDB(hdbPath)
+		if hdbErr != nil {
+			log.Printf("[health] warning: could not open health DB at %s: %v (health check disabled)", hdbPath, hdbErr)
+		} else {
+			srv.healthDB = hdb
+			srv.healthRL = NewHealthRateLimiter(cfg.HealthCheck.RateLimit.WindowSeconds, cfg.HealthCheck.RateLimit.MaxRequests)
+			srv.healthTokens = NewHealthTokenStore()
+			srv.healthMQTT = NewHealthMQTTClient(cfg.HealthCheck, hdb, hub)
+			go srv.healthMQTT.Start(firstBrokerURL(cfg))
+			purgeTicker := time.NewTicker(time.Hour)
+			purgeDone := make(chan struct{})
+			stopHealthPurge = func() {
+				purgeTicker.Stop()
+				close(purgeDone)
+			}
+			go func() {
+				for {
+					select {
+					case <-purgeDone:
+						return
+					case <-purgeTicker.C:
+						if err := hdb.PurgeExpired(); err != nil {
+							log.Printf("[health] purge error: %v", err)
+						}
+					}
+				}
+			}()
+			defer hdb.Close()
+			log.Printf("[health] health check DB: %s", hdbPath)
+		}
+		srv.registerHealthRoutes(router)
+	}
+
 	// Perf history persistence — create table once, then preload into the ring buffer.
 	if err := ensurePerfHistoryTable(resolvedDB); err != nil {
 		log.Printf("[perf] warning: could not create perf_history table: %v (history will not persist across restarts)", err)
@@ -447,6 +484,7 @@ func main() {
 
 	// Static files + SPA fallback
 	absPublic, _ := filepath.Abs(publicDir)
+	srv.publicDir = absPublic
 	if _, err := os.Stat(absPublic); err == nil {
 		fs := http.FileServer(http.Dir(absPublic))
 		router.PathPrefix("/").Handler(wsOrStatic(hub, srv.spaHandler(absPublic, fs)))
@@ -656,6 +694,20 @@ Frontend not found. API available at /api/
 		}
 		if stopEdgePrune != nil {
 			stopEdgePrune()
+		}
+
+		// 1c. Stop health check subsystem
+		if stopHealthPurge != nil {
+			stopHealthPurge()
+		}
+		if srv.healthMQTT != nil {
+			srv.healthMQTT.Disconnect()
+		}
+		if srv.healthRL != nil {
+			srv.healthRL.Stop()
+		}
+		if srv.healthTokens != nil {
+			srv.healthTokens.Stop()
 		}
 
 		// 2. Gracefully drain HTTP connections (up to 15s)

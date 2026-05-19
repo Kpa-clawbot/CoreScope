@@ -131,6 +131,9 @@ func newRateLimiters(cfg *RateLimitConfig) *rateLimiters {
 // clientIP extracts the best-effort client IP for rate-limiting purposes. It
 // trusts the first X-Forwarded-For entry when present (the analyzer typically
 // runs behind a reverse proxy), falling back to the connection RemoteAddr.
+// NOTE: X-Forwarded-For is trusted unconditionally; the deployment must be
+// behind a trusted reverse proxy that strips or overwrites this header before
+// forwarding, otherwise clients can spoof their IP and bypass rate limiting.
 func clientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		// First entry is the original client.

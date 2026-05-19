@@ -103,6 +103,8 @@ type Config struct {
 	// /api/ routes. Omitted/zero fields fall back to the defaults documented
 	// on RateLimitConfig.
 	RateLimit *RateLimitConfig `json:"rateLimit,omitempty"`
+
+	HealthCheck *HealthCheckConfig `json:"cornscope_healthCheck,omitempty"`
 }
 
 // RateLimitConfig configures the per-IP token-bucket rate limiter. All limits
@@ -300,10 +302,18 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 		}
 		cfg.NormalizeTimestampConfig()
 		cfg.sanitizeCORS()
+		if cfg.HealthCheck == nil {
+			cfg.HealthCheck = &HealthCheckConfig{}
+		}
+		cfg.HealthCheck.applyDefaults()
 		return cfg, nil
 	}
 	cfg.NormalizeTimestampConfig()
 	cfg.sanitizeCORS()
+	if cfg.HealthCheck == nil {
+		cfg.HealthCheck = &HealthCheckConfig{}
+	}
+	cfg.HealthCheck.applyDefaults()
 	return cfg, nil // defaults
 }
 

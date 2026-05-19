@@ -80,6 +80,17 @@ type Server struct {
 	// Path to the SQLite DB file — set when persistence is available.
 	// Empty string disables async persistence in storePerfSample.
 	dbPath string
+
+	// Absolute path to the public/static directory — set after filepath.Abs resolves
+	// the -public flag. Used by handleHealthShare to locate share.html without
+	// relying on a hard-coded relative path.
+	publicDir string
+
+	// Health check subsystem
+	healthDB     *HealthDB
+	healthRL     *HealthRateLimiter
+	healthTokens *HealthTokenStore
+	healthMQTT   *HealthMQTTClient
 }
 
 // maxJSONBodyBytes caps the size of JSON request bodies on POST endpoints.
