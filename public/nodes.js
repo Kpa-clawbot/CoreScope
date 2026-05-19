@@ -176,6 +176,13 @@
     if (n.hash_size) {
       html += ` <span class="badge" style="background:var(--nav-bg);color:var(--nav-text);font-family:var(--mono)">${n.public_key.slice(0, n.hash_size * 2).toUpperCase()}</span>`;
     }
+    // #1279 P2 #4: multibyte capability badge — surfaced from the observable
+    // multibyte hash_size (firmware Feat1/Feat2 carry the wire capability bits
+    // per AdvertDataHelpers.h:14-16, but Feat1/Feat2 aren't persisted per-node
+    // in CoreScope today; hash_size is the observed effective capability).
+    if (n.hash_size && Number(n.hash_size) >= 2) {
+      html += ` <span class="badge multibyte-badge" title="Node advertises multibyte hash path (firmware Feat1/Feat2)" style="background:var(--accent-bg, rgba(20,184,166,0.2));color:var(--accent, #14b8a6);font-size:10px">Multibyte: ${Number(n.hash_size)}-byte</span>`;
+    }
     if (n.hash_size_inconsistent) {
       html += ` <a href="#/nodes/${encodeURIComponent(n.public_key)}?section=node-packets" class="badge" style="background:var(--status-yellow);color:#000;font-size:10px;cursor:pointer;text-decoration:none">⚠️ variable hash size</a>`;
     }

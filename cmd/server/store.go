@@ -18,10 +18,12 @@ import (
 )
 
 // payloadTypeNames maps payload_type int → human-readable name (firmware-standard).
+// Must stay in sync with the canonical map in cmd/ingestor/decoder.go and
+// cmd/server/decoder.go. Source of truth: firmware/src/Packet.h:19-32.
 var payloadTypeNames = map[int]string{
 	0: "REQ", 1: "RESPONSE", 2: "TXT_MSG", 3: "ACK", 4: "ADVERT",
 	5: "GRP_TXT", 6: "GRP_DATA", 7: "ANON_REQ", 8: "PATH", 9: "TRACE",
-	10: "MULTIPART", 11: "CONTROL",
+	10: "MULTIPART", 11: "CONTROL", 15: "RAW_CUSTOM",
 }
 
 // StoreTx is an in-memory transmission with embedded observations.

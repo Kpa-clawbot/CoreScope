@@ -641,10 +641,18 @@ func TestDecodePayloadGRPData(t *testing.T) {
 }
 
 func TestDecodePayloadRAWCustom(t *testing.T) {
+	// #1279 P2 #5: RAW_CUSTOM (0x0F) now exposes envelope shape (length +
+	// first-byte tag) per firmware/src/Mesh.cpp:577 (createRawData).
 	buf := []byte{0xFF, 0xFE}
 	p := decodePayload(PayloadRAW_CUSTOM, buf, nil, false)
-	if p.Type != "UNKNOWN" {
-		t.Errorf("type=%s, want UNKNOWN", p.Type)
+	if p.Type != "RAW_CUSTOM" {
+		t.Errorf("type=%s, want RAW_CUSTOM", p.Type)
+	}
+	if p.RawLength == nil || *p.RawLength != 2 {
+		t.Errorf("rawLength missing or wrong, want 2")
+	}
+	if p.FirstByteTag != "FF" {
+		t.Errorf("firstByteTag=%q, want FF", p.FirstByteTag)
 	}
 }
 

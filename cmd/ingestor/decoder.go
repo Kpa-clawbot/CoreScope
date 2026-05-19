@@ -365,6 +365,17 @@ func decodeAdvert(buf []byte, validateSignatures bool) Payload {
 
 		// Telemetry bytes after name: battery_mv(2 LE) + temperature_c(2 LE, signed, /100)
 		// Only sensor nodes (advType=4) carry telemetry bytes.
+		//
+		// Firmware derivation (see firmware/src/helpers/SensorMesh.h and the
+		// SensorHost::handleAdvert path in firmware/src/helpers/SensorMesh.cpp:
+		// the sensor builds appdata as <flags+adv_type><pubkey?><name\0>
+		// followed by two little-endian uint16 fields appended verbatim:
+		//   appdata[name_end+0..1] = battery voltage in millivolts (uint16 LE,
+		//                            valid 0 < mv ≤ 10000)
+		//   appdata[name_end+2..3] = temperature × 100 (int16 LE, divide by 100
+		//                            for °C; valid raw -5000..10000 → -50..100 °C)
+		// We accept only adverts whose flags.Sensor bit is set (firmware
+		// AdvertDataHelpers.h:7-12, ADV_TYPE_SENSOR=4) before parsing telemetry.
 		if p.Flags.Sensor && off+4 <= len(appdata) {
 			batteryMv := int(binary.LittleEndian.Uint16(appdata[off : off+2]))
 			tempRaw := int16(binary.LittleEndian.Uint16(appdata[off+2 : off+4]))
@@ -659,6 +670,22 @@ func decodeControl(buf []byte) Payload {
 	}
 }
 
+// decodeRawCustom decodes PAYLOAD_TYPE_RAW_CUSTOM (0x0F). Application-defined
+// payload per firmware/src/Mesh.cpp:577 (createRawData); we only surface the
+// envelope shape (total length + leading tag byte).
+func decodeRawCustom(buf []byte) Payload {
+	length := len(buf)
+	p := Payload{
+		Type:      "RAW_CUSTOM",
+		RawLength: &length,
+		RawHex:    hex.EncodeToString(buf),
+	}
+	if length > 0 {
+		p.FirstByteTag = fmt.Sprintf("%02X", buf[0])
+	}
+	return p
+}
+
 // decryptChannelBlock performs the MAC verify + AES-128-ECB decrypt step shared
 // by GRP_TXT and GRP_DATA, returning the raw plaintext block (no further
 // parsing). See firmware/src/helpers/BaseChatMesh.cpp:376-391.
@@ -768,6 +795,8 @@ func decodePayload(payloadType int, buf []byte, channelKeys map[string]string, v
 		return decodeMultipart(buf)
 	case PayloadCONTROL:
 		return decodeControl(buf)
+	case PayloadRAW_CUSTOM:
+		return decodeRawCustom(buf)
 	default:
 		return Payload{Type: "UNKNOWN", RawHex: hex.EncodeToString(buf)}
 	}

@@ -2892,6 +2892,27 @@
       ? `<span style="font-size:0.8em;color:var(--text-muted);margin-left:6px">(observation ${observations.indexOf(currentObs) + 1} of ${observations.length})</span>`
       : '';
 
+    // #1279 P2 #3 — Transport codes detail row (firmware/src/Packet.h:46,
+    // parsed at cmd/server/decoder.go:492-498). Present on TRANSPORT_FLOOD/
+    // TRANSPORT_DIRECT routes only.
+    var tcCode1 = '—', tcCode2 = '—', tcShow = false;
+    if (decoded.transportCodes) {
+      tcShow = true;
+      if (decoded.transportCodes.code1) tcCode1 = String(decoded.transportCodes.code1).toUpperCase();
+      if (decoded.transportCodes.code2) tcCode2 = String(decoded.transportCodes.code2).toUpperCase();
+    }
+    var transportCodesRow = tcShow
+      ? `<dt>Transport Codes</dt><dd class="transport-codes">Code1: <code>${escapeHtml(tcCode1)}</code> · Code2: <code>${escapeHtml(tcCode2)}</code></dd>`
+      : '';
+
+    // #1279 P2 #5 — RAW_CUSTOM detail row (firmware/src/Mesh.cpp:577).
+    var rawCustomRow = '';
+    if (pkt.payload_type === 15 && decoded.type === 'RAW_CUSTOM') {
+      var rl = decoded.rawLength != null ? decoded.rawLength + ' byte' + (decoded.rawLength === 1 ? '' : 's') : '—';
+      var ft = decoded.firstByteTag ? String(decoded.firstByteTag).toUpperCase() : '—';
+      rawCustomRow = `<dt>Raw Custom</dt><dd class="raw-custom-detail">Length: <code>${escapeHtml(rl)}</code> · First byte tag: <code>${escapeHtml(ft)}</code></dd>`;
+    }
+
     panel.innerHTML = `
       ${anomalyBanner}
       <div class="detail-title">${hasRawHex ? `Packet Byte Breakdown (${size} bytes)` : typeName + ' Packet'}</div>
@@ -2907,6 +2928,8 @@
         <dt>Timestamp</dt><dd>${renderTimestampCell(effectivePkt.timestamp)}</dd>
         <dt>Propagation</dt><dd>${propagationHtml}</dd>
         <dt>Path</dt><dd>${displayHopCount > 0 ? `<span class="badge badge-info">${displayHopCount} hop${displayHopCount !== 1 ? 's' : ''}</span> ` + renderPath(pathHops, effectivePkt.observer_id) : '— (direct)'}</dd>
+        ${transportCodesRow}
+        ${rawCustomRow}
         ${effectivePkt.direction ? `<dt>Direction</dt><dd>${escapeHtml(effectivePkt.direction)}</dd>` : ''}
       </dl>
       <div class="detail-actions">

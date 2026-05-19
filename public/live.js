@@ -121,7 +121,9 @@
 
   const TYPE_COLORS = window.TYPE_COLORS || {
     ADVERT: '#22c55e', GRP_TXT: '#3b82f6', TXT_MSG: '#f59e0b', ACK: '#6b7280',
-    REQUEST: '#a855f7', RESPONSE: '#06b6d4', TRACE: '#ec4899', PATH: '#14b8a6'
+    REQUEST: '#a855f7', RESPONSE: '#06b6d4', TRACE: '#ec4899', PATH: '#14b8a6',
+    ANON_REQ: '#f43f5e', GRP_DATA: '#8b5cf6', MULTIPART: '#0d9488',
+    CONTROL: '#b45309', RAW_CUSTOM: '#c026d3'
   };
 
   const PAYLOAD_ICONS = {
@@ -1038,6 +1040,11 @@
             <li><span class="live-dot" style="background:${TYPE_COLORS.RESPONSE}" aria-hidden="true"></span> Response — Data response</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.TRACE}" aria-hidden="true"></span> Trace — Route trace</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.PATH}" aria-hidden="true"></span> Path — Path discovery</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.ANON_REQ}" aria-hidden="true"></span> Anon Req — Anonymous request</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.GRP_DATA}" aria-hidden="true"></span> Grp Data — Group datagram</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.MULTIPART}" aria-hidden="true"></span> Multipart — Multi-fragment payload</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.CONTROL}" aria-hidden="true"></span> Control — Control plane</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.RAW_CUSTOM}" aria-hidden="true"></span> Raw Custom — Application-defined payload</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.ACK}" aria-hidden="true"></span> Ack / Other — Acknowledgment or unknown type</li>
           </ul>
           <h3 class="legend-title" style="margin-top:8px">NODE ROLES</h3>

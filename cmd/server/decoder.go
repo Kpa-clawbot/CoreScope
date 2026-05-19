@@ -401,6 +401,23 @@ func decodeControl(buf []byte) Payload {
 	}
 }
 
+// decodeRawCustom decodes PAYLOAD_TYPE_RAW_CUSTOM (0x0F). The payload bytes
+// are application-defined per firmware/src/Mesh.cpp:577 (createRawData), so
+// we only surface the bare envelope shape: total length plus the leading
+// byte, which apps commonly use as a tag/type discriminator.
+func decodeRawCustom(buf []byte) Payload {
+	length := len(buf)
+	p := Payload{
+		Type:      "RAW_CUSTOM",
+		RawLength: &length,
+		RawHex:    hex.EncodeToString(buf),
+	}
+	if length > 0 {
+		p.FirstByteTag = fmt.Sprintf("%02X", buf[0])
+	}
+	return p
+}
+
 func decodeAnonReq(buf []byte) Payload {
 	if len(buf) < 35 {
 		return Payload{Type: "ANON_REQ", Error: "too short", RawHex: hex.EncodeToString(buf)}
@@ -472,6 +489,8 @@ func decodePayload(payloadType int, buf []byte, validateSignatures bool) Payload
 		return decodeMultipart(buf)
 	case PayloadCONTROL:
 		return decodeControl(buf)
+	case PayloadRAW_CUSTOM:
+		return decodeRawCustom(buf)
 	default:
 		return Payload{Type: "UNKNOWN", RawHex: hex.EncodeToString(buf)}
 	}
