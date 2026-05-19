@@ -126,6 +126,11 @@ type Payload struct {
 	ChannelHashHex   string    `json:"channelHashHex,omitempty"`
 	DecryptionStatus string    `json:"decryptionStatus,omitempty"`
 	Channel          string    `json:"channel,omitempty"`
+	// GRP_DATA (PAYLOAD_TYPE_GRP_DATA=0x06) inner fields, decoded after
+	// channel decrypt per firmware/src/helpers/BaseChatMesh.cpp:382-385.
+	DataType         *int      `json:"dataType,omitempty"`
+	DataLen          *int      `json:"dataLen,omitempty"`
+	DecryptedBlob    string    `json:"decryptedBlob,omitempty"`
 	Text             string    `json:"text,omitempty"`
 	Sender           string    `json:"sender,omitempty"`
 	SenderTimestamp  uint32    `json:"sender_timestamp,omitempty"`
@@ -137,6 +142,18 @@ type Payload struct {
 	TraceFlags    *int         `json:"traceFlags,omitempty"`
 	RawHex        string       `json:"raw,omitempty"`
 	Error         string       `json:"error,omitempty"`
+	// MULTIPART (PAYLOAD_TYPE_MULTIPART=0x0A) inner fields, decoded per
+	// firmware/src/Mesh.cpp:289 — byte0 = (remaining<<4) | inner_type.
+	Remaining     *int    `json:"remaining,omitempty"`
+	InnerType     *int    `json:"innerType,omitempty"`
+	InnerTypeName string  `json:"innerTypeName,omitempty"`
+	InnerAckCrc   string  `json:"innerAckCrc,omitempty"`
+	InnerPayload  string  `json:"innerPayload,omitempty"`
+	// CONTROL (PAYLOAD_TYPE_CONTROL=0x0B) byte0 flags, per
+	// firmware/src/Mesh.cpp:69 — byte0 high-bit marks zero-hop direct subset.
+	CtrlFlags     string  `json:"ctrlFlags,omitempty"`
+	CtrlZeroHop   *bool   `json:"ctrlZeroHop,omitempty"`
+	CtrlLength    *int    `json:"ctrlLength,omitempty"`
 }
 
 // DecodedPacket is the full decoded result.
@@ -512,6 +529,31 @@ func decodeGrpTxt(buf []byte, channelKeys map[string]string) Payload {
 	}
 }
 
+// decodeGrpData decodes PAYLOAD_TYPE_GRP_DATA (0x06). Outer envelope is the
+// same shape as GRP_TXT (channel_hash(1)+MAC(2)+ciphertext) — see
+// firmware/src/helpers/BaseChatMesh.cpp:476,500. When the channel key matches,
+// the decrypted inner is parsed per firmware/src/helpers/BaseChatMesh.cpp:382-385
+// as data_type(uint16 LE) + data_len(1) + blob(data_len).
+func decodeGrpData(buf []byte, channelKeys map[string]string) Payload {
+	// STUB — implemented in green commit.
+	return Payload{Type: "GRP_DATA"}
+}
+
+// decodeMultipart decodes PAYLOAD_TYPE_MULTIPART (0x0A) per
+// firmware/src/Mesh.cpp:287-310. byte0 = (remaining<<4) | inner_type;
+// when inner_type == PAYLOAD_TYPE_ACK the next 4 bytes are an ack_crc.
+func decodeMultipart(buf []byte) Payload {
+	// STUB — implemented in green commit.
+	return Payload{Type: "MULTIPART"}
+}
+
+// decodeControl decodes PAYLOAD_TYPE_CONTROL (0x0B) byte0 flags per
+// firmware/src/Mesh.cpp:69 (high-bit set ⇒ zero-hop direct subset).
+func decodeControl(buf []byte) Payload {
+	// STUB — implemented in green commit.
+	return Payload{Type: "CONTROL"}
+}
+
 func decodeAnonReq(buf []byte) Payload {
 	if len(buf) < 35 {
 		return Payload{Type: "ANON_REQ", Error: "too short", RawHex: hex.EncodeToString(buf)}
@@ -571,12 +613,18 @@ func decodePayload(payloadType int, buf []byte, channelKeys map[string]string, v
 		return decodeAdvert(buf, validateSignatures)
 	case PayloadGRP_TXT:
 		return decodeGrpTxt(buf, channelKeys)
+	case PayloadGRP_DATA:
+		return decodeGrpData(buf, channelKeys)
 	case PayloadANON_REQ:
 		return decodeAnonReq(buf)
 	case PayloadPATH:
 		return decodePathPayload(buf)
 	case PayloadTRACE:
 		return decodeTrace(buf)
+	case PayloadMULTIPART:
+		return decodeMultipart(buf)
+	case PayloadCONTROL:
+		return decodeControl(buf)
 	default:
 		return Payload{Type: "UNKNOWN", RawHex: hex.EncodeToString(buf)}
 	}
@@ -845,6 +893,8 @@ func sanitizeName(s string) string {
 	return b.String()
 }
 
+// advertRole returns a role label for an advert. Currently coerces unknown/
+// reserved types to "companion" — fixed in green commit for issue #1279 P1 #3.
 func advertRole(f *AdvertFlags) string {
 	if f.Repeater {
 		return "repeater"

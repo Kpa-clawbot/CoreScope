@@ -20,7 +20,8 @@ import (
 // payloadTypeNames maps payload_type int → human-readable name (firmware-standard).
 var payloadTypeNames = map[int]string{
 	0: "REQ", 1: "RESPONSE", 2: "TXT_MSG", 3: "ACK", 4: "ADVERT",
-	5: "GRP_TXT", 7: "ANON_REQ", 8: "PATH", 9: "TRACE", 11: "CONTROL",
+	5: "GRP_TXT", 6: "GRP_DATA", 7: "ANON_REQ", 8: "PATH", 9: "TRACE",
+	10: "MULTIPART", 11: "CONTROL",
 }
 
 // StoreTx is an in-memory transmission with embedded observations.
