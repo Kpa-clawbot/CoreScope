@@ -10,6 +10,15 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// effectiveCodePrefix returns the code prefix that will be used for new sessions,
+// applying the same "MHC" fallback logic as CreateSession.
+func effectiveCodePrefix(cfg *HealthCheckConfig) string {
+	if cfg.CodePrefix == "" {
+		return "MHC"
+	}
+	return cfg.CodePrefix
+}
+
 func (s *Server) registerHealthRoutes(r *mux.Router) {
 	r.HandleFunc("/api/health/bootstrap", s.handleHealthBootstrap).Methods("GET", "OPTIONS")
 	r.HandleFunc("/api/health/verify-turnstile", s.handleHealthVerifyTurnstile).Methods("POST", "OPTIONS")
@@ -82,7 +91,8 @@ func (s *Server) handleHealthBootstrap(w http.ResponseWriter, r *http.Request) {
 			"siteKey": hcfg.Turnstile.SiteKey,
 		},
 		"testChannel": map[string]interface{}{
-			"name": hcfg.TestChannelName,
+			"name":       hcfg.TestChannelName,
+			"codePrefix": effectiveCodePrefix(hcfg),
 		},
 	}
 

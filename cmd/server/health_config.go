@@ -36,6 +36,9 @@ type HealthTurnstileConfig struct {
 }
 
 func (c *HealthCheckConfig) applyDefaults() {
+	if c.TestChannelName == "" {
+		c.TestChannelName = "test"
+	}
 	if c.SessionTTLSeconds == 0 {
 		c.SessionTTLSeconds = 600
 	}

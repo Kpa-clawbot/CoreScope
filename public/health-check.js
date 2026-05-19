@@ -78,7 +78,8 @@
     const regions = [...new Set(directory.map(o => o.region).filter(Boolean))].sort();
 
     const turnstile = bootstrap.turnstile || {};
-    const channelName = (bootstrap.testChannel && bootstrap.testChannel.name) || 'test channel';
+    const testChannel = bootstrap.testChannel || {};
+    const channelName = testChannel.name || 'test';
     const mqttOk = bootstrap.mqtt && bootstrap.mqtt.connected;
 
     app.innerHTML = `
@@ -211,7 +212,8 @@
   // ── LIVE STATE ─────────────────────────────────────────────────────────────
   function renderLiveState(app) {
     if (!app) return;
-    const channelName = (bootstrap.testChannel && bootstrap.testChannel.name) || 'test channel';
+    const testChannel = bootstrap.testChannel || {};
+    const channelName = testChannel.name || 'test';
 
     app.innerHTML = `
       <div class="hc-wrap">
