@@ -189,11 +189,13 @@ type PacketStore struct {
 	hashSizeInfoCache map[string]*hashSizeNodeInfo
 	hashSizeInfoAt    time.Time
 
-	// Cached relay stats batch result — recomputed at most once every 30s.
+	// Cached relay stats batch result — recomputed at most once every 300s
+	// or when byPathHop changes (see invalidateRelayStatsCache).
 	relayStatsCacheMu     sync.Mutex
 	relayStatsCache       map[string]RepeaterNodeStats
 	relayStatsCacheAt     time.Time
 	relayStatsCacheWindow float64
+	relayStatsCacheSig    string
 
 	// Cached multi-byte capability map (pubkey → entry), recomputed every 15s.
 	multiByteCapCache map[string]*MultiByteCapEntry
@@ -1691,6 +1693,9 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		}
 		addTxToPathHopIndex(s.byPathHop, tx)
 	}
+	if len(broadcastTxs) > 0 {
+		s.invalidateRelayStatsCache()
+	}
 
 	// Incrementally update precomputed distance index with new transmissions
 	if len(broadcastTxs) > 0 {
@@ -2121,6 +2126,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				s.spTotalPaths++
 			}
 			addTxToPathHopIndex(s.byPathHop, tx)
+			s.invalidateRelayStatsCache()
 		}
 	}
 
@@ -2889,6 +2895,17 @@ func removeTxFromPathHopIndex(idx map[string][]*StoreTx, tx *StoreTx) {
 	}
 }
 
+// invalidateRelayStatsCache drops the cached batch relay-stats result so
+// the next call to GetRepeaterNodeStatsBatchCached recomputes from scratch.
+// Call this whenever byPathHop changes (add or remove). Safe to call while
+// holding s.mu — relayStatsCacheMu is never acquired while holding relayStatsCacheMu,
+// so there is no lock-ordering cycle.
+func (s *PacketStore) invalidateRelayStatsCache() {
+	s.relayStatsCacheMu.Lock()
+	s.relayStatsCache = nil
+	s.relayStatsCacheMu.Unlock()
+}
+
 // removeTxFromSlice removes tx from idx[key] by ID, deleting the key if empty.
 func removeTxFromSlice(idx map[string][]*StoreTx, key string, tx *StoreTx) {
 	list := idx[key]
@@ -3305,6 +3322,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		// Remove from path-hop index
 		removeTxFromPathHopIndex(s.byPathHop, tx)
 	}
+	s.invalidateRelayStatsCache()
 
 	// Batch-remove from byObserver: single pass per affected observer slice
 	for obsID := range affectedObservers {

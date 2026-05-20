@@ -56,67 +56,42 @@ func parseRelayTS(ts string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// GetRepeaterRelayInfo returns relay-activity information for a node by
-// scanning the byPathHop index for non-advert packets that name the
-// pubkey as a hop. It computes the most recent appearance timestamp,
-// 1h/24h hop counts, and whether the latest appearance falls within
-// windowHours.
-//
-// Cost: O(N) over the indexed entries for `pubkey`. The byPathHop index
-// is bounded by store eviction; on real data this is small per-node.
-//
-// Note on self-as-source: byPathHop is keyed by every hop in a packet's
-// resolved path, including the originator. For ADVERT packets that's the
-// node itself, which is filtered above by the payloadTypeAdvert check.
-// For non-advert packets a node "originates" rather than "relays" only
-// when it is the source; we don't currently have a clean signal for that
-// distinction, so the count here is *path-hop appearances in non-advert
-// packets*. In practice for a repeater nearly all such appearances are
-// relay hops (the firmware doesn't originate user traffic), so this is
-// the right approximation for issue #662.
-func (s *PacketStore) GetRepeaterRelayInfo(pubkey string, windowHours float64) RepeaterRelayInfo {
-	info := RepeaterRelayInfo{WindowHours: windowHours}
-	if pubkey == "" {
-		return info
-	}
-	key := strings.ToLower(pubkey)
+// relayEntry is a minimal snapshot of a StoreTx taken while the store
+// read-lock is held. Copying only the fields we need lets us release the
+// lock before doing timestamp parsing and comparison work.
+type relayEntry struct {
+	ts string
+	pt int
+}
 
-	s.mu.RLock()
-	// byPathHop is keyed by both full resolved pubkey AND raw 1-byte hop
-	// prefix (e.g. "a3"). Many ingested non-advert packets only carry the
-	// raw hop on the wire — resolution to the full pubkey happens later
-	// via neighbor affinity. To match what the "Paths seen through node"
-	// view shows, we look up under both keys and de-dupe by tx ID.
-	//
-	// The 1-byte prefix lookup CAN over-count when multiple nodes share
-	// the same first byte. This trades a possible over-count for clearly
-	// false zeros (issue #662). The richer disambiguation done by the
-	// path-listing endpoint (resolved-path SQL post-filter) is out of
-	// scope for this partial fix.
+// collectRelayEntriesLocked returns deduplicated relayEntry snapshots for
+// all StoreTx entries indexed under key (full pubkey) and its 1-byte wire
+// prefix. Caller MUST hold s.mu at least for reading.
+//
+// byPathHop is keyed by both full resolved pubkey AND raw 1-byte hop
+// prefix (e.g. "a3"). Many ingested non-advert packets only carry the
+// raw hop on the wire — resolution to the full pubkey happens later via
+// neighbor affinity. Looking up both keys and de-duping by tx ID matches
+// what the "Paths seen through node" view shows.
+//
+// The 1-byte prefix lookup CAN over-count when multiple nodes share the
+// same first byte. This trades a possible over-count for clearly false
+// zeros (issue #662).
+func (s *PacketStore) collectRelayEntriesLocked(key string) []relayEntry {
 	txList := s.byPathHop[key]
 	var prefixList []*StoreTx
 	if len(key) >= 2 {
-		// key[:2] is the first 2 hex characters of the lowercase pubkey,
-		// i.e. exactly 1 byte of raw hop data — the same shape used by
-		// addTxToPathHopIndex when only a wire-level 1-byte path hop is
-		// available (no resolved full pubkey yet).
+		// key[:2] is the first 2 hex characters — exactly 1 byte of raw
+		// hop data, matching addTxToPathHopIndex for wire-level hops.
 		prefix := key[:2]
 		if prefix != key {
 			prefixList = s.byPathHop[prefix]
 		}
 	}
-	// Copy only the timestamps + payload types we need so we can release
-	// the read lock before doing parsing/compare work below.
-	//
-	// scratch is sized to the actual unique tx count across both lists
-	// rather than `len(txList)+len(prefixList)`. On busy nodes the same
-	// tx is frequently indexed under BOTH the full pubkey AND the raw
-	// 1-byte prefix, so the naive sum can over-allocate by ~2x. We do a
-	// quick ID-set pass to get the exact size before allocating.
-	type entry struct {
-		ts string
-		pt int
-	}
+
+	// Size to unique tx count: on busy nodes the same tx is frequently
+	// indexed under BOTH the full pubkey AND the raw prefix, so the naive
+	// sum can over-allocate by ~2x.
 	uniq := make(map[int]struct{}, len(txList)+len(prefixList))
 	for _, tx := range txList {
 		if tx != nil {
@@ -128,14 +103,12 @@ func (s *PacketStore) GetRepeaterRelayInfo(pubkey string, windowHours float64) R
 			uniq[tx.ID] = struct{}{}
 		}
 	}
-	scratch := make([]entry, 0, len(uniq))
+
+	entries := make([]relayEntry, 0, len(uniq))
 	seen := make(map[int]bool, len(uniq))
 	collect := func(list []*StoreTx) {
 		for _, tx := range list {
-			if tx == nil {
-				continue
-			}
-			if seen[tx.ID] {
+			if tx == nil || seen[tx.ID] {
 				continue
 			}
 			seen[tx.ID] = true
@@ -143,21 +116,27 @@ func (s *PacketStore) GetRepeaterRelayInfo(pubkey string, windowHours float64) R
 			if tx.PayloadType != nil {
 				pt = *tx.PayloadType
 			}
-			scratch = append(scratch, entry{ts: tx.FirstSeen, pt: pt})
+			entries = append(entries, relayEntry{ts: tx.FirstSeen, pt: pt})
 		}
 	}
 	collect(txList)
 	collect(prefixList)
-	s.mu.RUnlock()
+	return entries
+}
+
+// computeRelayInfoFromEntries derives RepeaterRelayInfo from pre-snapshotted
+// relayEntry values. Safe to call without any lock held.
+func computeRelayInfoFromEntries(entries []relayEntry, windowHours float64) RepeaterRelayInfo {
+	info := RepeaterRelayInfo{WindowHours: windowHours}
 
 	now := time.Now().UTC()
-	cutoff1h := now.Add(-1 * time.Hour)
+	cutoff1h := now.Add(-time.Hour)
 	cutoff24h := now.Add(-24 * time.Hour)
 
 	var latest time.Time
 	var latestRaw string
-	for _, e := range scratch {
-		// Self-originated adverts are not relay activity (see header comment).
+	for _, e := range entries {
+		// Self-originated adverts are not relay activity.
 		if e.pt == payloadTypeAdvert {
 			continue
 		}
@@ -188,4 +167,35 @@ func (s *PacketStore) GetRepeaterRelayInfo(pubkey string, windowHours float64) R
 		}
 	}
 	return info
+}
+
+// GetRepeaterRelayInfo returns relay-activity information for a node by
+// scanning the byPathHop index for non-advert packets that name the
+// pubkey as a hop. It computes the most recent appearance timestamp,
+// 1h/24h hop counts, and whether the latest appearance falls within
+// windowHours.
+//
+// Cost: O(N) over the indexed entries for `pubkey`. The byPathHop index
+// is bounded by store eviction; on real data this is small per-node.
+//
+// Note on self-as-source: byPathHop is keyed by every hop in a packet's
+// resolved path, including the originator. For ADVERT packets that's the
+// node itself, which is filtered above by the payloadTypeAdvert check.
+// For non-advert packets a node "originates" rather than "relays" only
+// when it is the source; we don't currently have a clean signal for that
+// distinction, so the count here is *path-hop appearances in non-advert
+// packets*. In practice for a repeater nearly all such appearances are
+// relay hops (the firmware doesn't originate user traffic), so this is
+// the right approximation for issue #662.
+func (s *PacketStore) GetRepeaterRelayInfo(pubkey string, windowHours float64) RepeaterRelayInfo {
+	if pubkey == "" {
+		return RepeaterRelayInfo{WindowHours: windowHours}
+	}
+	key := strings.ToLower(pubkey)
+
+	s.mu.RLock()
+	entries := s.collectRelayEntriesLocked(key)
+	s.mu.RUnlock()
+
+	return computeRelayInfoFromEntries(entries, windowHours)
 }
