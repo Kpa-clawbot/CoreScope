@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/packetpath"
 	_ "modernc.org/sqlite"
 )
@@ -108,6 +109,13 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 
 	if err := applySchema(db); err != nil {
 		return nil, fmt.Errorf("applying schema: %w", err)
+	}
+
+	// Apply the additional server-originated migrations (now owned by
+	// the ingestor per #1287). Adds the indexes/columns that used to live
+	// in cmd/server/ensure_*.go: server now ASSERTS these exist.
+	if err := dbschema.Apply(db, log.Printf); err != nil {
+		return nil, fmt.Errorf("dbschema.Apply: %w", err)
 	}
 
 	s := &Store{db: db, sampleIntervalSec: sampleIntervalSec}

@@ -149,7 +149,6 @@ type PacketStore struct {
 	hashCache         map[string]*cachedResult // region → cached hash-sizes result
 	mbCapSnapshot  []MultiByteCapEntry          // latest computeMultiByteCapability result, under cacheMu
 	mbCapIndex     map[string]MultiByteCapEntry // O(1) pubkey lookup, rebuilt with mbCapSnapshot, under cacheMu
-	mbPersistMu    sync.Mutex                   // ensures at most one persistMultibyteCapability runs at a time
 	collisionCache    map[string]*cachedResult // cached hash-collisions result keyed by region ("" = global)
 	chanCache         map[string]*cachedResult // region → cached channels result
 	distCache         map[string]*cachedResult // region → cached distance result
@@ -2384,41 +2383,13 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		s.invalidateCachesFor(inv)
 	}
 
-	// Persist resolved paths and neighbor edges asynchronously (don't block ingest).
-	if len(broadcastTxs) > 0 && s.db != nil {
-		dbPath := s.db.path
-		var obsUpdates []persistObsUpdate
-		var edgeUpdates []persistEdgeUpdate
-
-		_, pm := s.getCachedNodesAndPM()
-		// graph is *atomic.Pointer[NeighborGraph]; the Load itself is
-		// lock-free. (Earlier comment claimed "set during startup, not
-		// replaced after" — that's no longer true: #1203 made rebuilds
-		// async via ensureNeighborGraph. Dropping the dead s.mu RLock
-		// wrap — review PR #1208.)
-		graphRef := s.graph.Load()
-		for _, tx := range broadcastTxs {
-			for _, obs := range tx.Observations {
-				// Use decode-window resolved path for persist
-				if broadcastRP != nil {
-					if rp, ok := broadcastRP[obs.ID]; ok && rp != nil {
-						rpJSON := marshalResolvedPath(rp)
-						if rpJSON != "" {
-							obsUpdates = append(obsUpdates, persistObsUpdate{obs.ID, rpJSON})
-						}
-					}
-				}
-				for _, ec := range extractEdgesFromObs(obs, tx, pm) {
-					edgeUpdates = append(edgeUpdates, persistEdgeUpdate{ec.A, ec.B, ec.Timestamp})
-					if graphRef != nil {
-						graphRef.upsertEdge(ec.A, ec.B, "", obs.ObserverID, obs.SNR, parseTimestamp(ec.Timestamp))
-					}
-				}
-			}
-		}
-
-		asyncPersistResolvedPathsAndEdges(dbPath, obsUpdates, edgeUpdates, "persist")
-	}
+		// Per #1287 (Option 4): the server NEVER writes to the DB and
+	// NEVER mutates the in-memory neighbor graph incrementally. The
+	// ingestor owns neighbor_edges; recompNeighborGraph re-reads the
+	// snapshot every 60s and atomic-swaps it into s.graph. We also no
+	// longer persist resolved_path here — the ingestor (which already
+	// sees every observation) owns that write too.
+	_ = broadcastRP // resolved path is still computed in-memory (above) for live broadcast; no SQL write.
 
 	return result, newMaxID
 }
@@ -2731,38 +2702,14 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		})
 	}
 
-	// Persist resolved paths and neighbor edges asynchronously (review fix #3).
-	// Only process NEW observations — not all observations of each updated tx —
-	// to avoid edge count inflation and unnecessary UPDATEs for pre-existing data.
-	if len(newObs) > 0 && s.db != nil {
-		dbPath := s.db.path
-		var obsUpdates []persistObsUpdate
-		var edgeUpdates []persistEdgeUpdate
-
-		for _, obs := range newObs {
-			tx := s.byTxID[obs.TransmissionID]
-			if tx == nil {
-				continue
-			}
-			// Use decode-window resolved path for persist
-			if obsRPMap != nil {
-				if rp, ok := obsRPMap[obs.ID]; ok && rp != nil {
-					rpJSON := marshalResolvedPath(rp)
-					if rpJSON != "" {
-						obsUpdates = append(obsUpdates, persistObsUpdate{obs.ID, rpJSON})
-					}
-				}
-			}
-			for _, ec := range extractEdgesFromObs(obs, tx, pm) {
-				edgeUpdates = append(edgeUpdates, persistEdgeUpdate{ec.A, ec.B, ec.Timestamp})
-				if graphRef != nil {
-					graphRef.upsertEdge(ec.A, ec.B, "", obs.ObserverID, obs.SNR, parseTimestamp(ec.Timestamp))
-				}
-			}
-		}
-
-		asyncPersistResolvedPathsAndEdges(dbPath, obsUpdates, edgeUpdates, "obs-persist")
-	}
+	// Per #1287 (Option 4): server never writes to the DB and never
+	// mutates the in-memory neighbor graph incrementally — the
+	// ingestor owns both. recompNeighborGraph re-reads the snapshot
+	// every 60s and atomic-swaps into s.graph.
+	_ = obsRPMap // resolved path stays in-memory for broadcast; no SQL write.
+	_ = newObs
+	_ = pm
+	_ = graphRef
 
 	return broadcastMaps
 }
@@ -6876,7 +6823,6 @@ func (s *PacketStore) computeAnalyticsHashSizesWithCapability(region string) map
 	}
 	s.mbCapIndex = mbIdx
 	s.cacheMu.Unlock()
-	s.maybePersistMultibyteCapability(mbEntries)
 
 
 	return result
@@ -7865,68 +7811,6 @@ func multibyteStatusToInt(status string) int {
 	}
 }
 
-// maybePersistMultibyteCapability launches a background persist if none is already
-// in flight. Concurrent calls are coalesced — the in-flight persist holds a snapshot
-// close to the current one.
-func (s *PacketStore) maybePersistMultibyteCapability(entries []MultiByteCapEntry) {
-	if !s.mbPersistMu.TryLock() {
-		return // persist already in flight; this cycle's snapshot will be close enough
-	}
-	go func() {
-		defer s.mbPersistMu.Unlock()
-		s.persistMultibyteCapability(entries)
-	}()
-}
-
-// persistMultibyteCapability writes the capability snapshot to the nodes and inactive_nodes
-// DB columns so the values survive a server restart (cold start serves last-known capability
-// before the first analytics cycle completes).
-func (s *PacketStore) persistMultibyteCapability(entries []MultiByteCapEntry) {
-	if !s.db.hasMultibyteSupCols || len(entries) == 0 {
-		return
-	}
-	rw, err := cachedRW(s.db.path)
-	if err != nil {
-		log.Printf("[multibyte] persist open rw: %v", err)
-		return
-	}
-	tx, err := rw.Begin()
-	if err != nil {
-		log.Printf("[multibyte] persist begin tx: %v", err)
-		return
-	}
-	defer tx.Rollback()
-
-	stmtNodes, err := tx.Prepare(`UPDATE nodes SET multibyte_sup=?, multibyte_evidence=? WHERE public_key=?`)
-	if err != nil {
-		log.Printf("[multibyte] persist prepare nodes: %v", err)
-		return
-	}
-	defer stmtNodes.Close()
-
-	stmtInactive, err := tx.Prepare(`UPDATE inactive_nodes SET multibyte_sup=?, multibyte_evidence=? WHERE public_key=?`)
-	if err != nil {
-		log.Printf("[multibyte] persist prepare inactive_nodes: %v", err)
-		return
-	}
-	defer stmtInactive.Close()
-
-	for _, e := range entries {
-		sup := multibyteStatusToInt(e.Status)
-		if sup == 0 {
-			continue // never overwrite persisted confirmed/suspected with unknown
-		}
-		var evid interface{}
-		if e.Evidence != "" {
-			evid = e.Evidence
-		}
-		stmtNodes.Exec(sup, evid, e.PublicKey)    //nolint:errcheck — UPDATE miss is not an error
-		stmtInactive.Exec(sup, evid, e.PublicKey) //nolint:errcheck — UPDATE miss is not an error
-	}
-	if err := tx.Commit(); err != nil {
-		log.Printf("[multibyte] persist commit: %v", err)
-	}
-}
 
 // loadMultibyteCapFromDB reads persisted capability values from the nodes table and
 // pre-populates mbCapSnapshot so cold start serves last-known capability immediately.
