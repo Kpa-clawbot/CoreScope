@@ -43,6 +43,17 @@ scripts/           — Tooling (coverage collector, fixture capture, frontend in
 2. Go server (`cmd/server/`) polls SQLite for new packets, broadcasts via WebSocket
 3. Frontend fetches via REST API (`/api/*`), filters/sorts client-side
 
+### Read/Write Separation Invariant (#1283)
+- **All DB writes live in `cmd/ingestor/`.** INSERT / UPDATE / DELETE / VACUUM /
+  schema migrations / retention all run in the ingestor process.
+- **`cmd/server/` is read-only.** It opens SQLite with `mode=ro` and must not
+  acquire a write lock. Adding a write-side helper (e.g. a `cachedRW`-style
+  RW connection) regresses this invariant and races the ingestor → SQLITE_BUSY.
+- Enforcement: `cmd/server/readonly_invariant_test.go` reflect-asserts that
+  `PruneOldPackets`, `PruneOldMetrics`, and `RemoveStaleObservers` are NOT
+  methods on the server's `*DB`. If you need a new write, add it to
+  `cmd/ingestor/`.
+
 ### What's Deprecated (DO NOT TOUCH)
 The following were part of the old Node.js backend and have been removed:
 - `server.js`, `db.js`, `decoder.js`, `server-helpers.js`, `packet-store.js`, `iata-coords.js`

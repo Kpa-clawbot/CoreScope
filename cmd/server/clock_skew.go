@@ -54,6 +54,20 @@ const (
 	// drift rarely exceeds 1 hour, while epoch-0 RTCs produce ~1.7B sec.
 	bimodalSkewThresholdSec = 3600.0
 
+	// rtcResetOutlierThresholdSec is the absolute skew above which a
+	// sample is treated as obvious sensor garbage — an RTC-reset advert
+	// where the firmware emitted its factory timestamp (typically off by
+	// months/years). These samples are excluded from the recent-window
+	// "good/bad" split (bug #1285 — single RTC-reset advert among 30
+	// healthy adverts must not flip a node to bimodal_clock) and from the
+	// per-hash evidence median (a 700-day median is not actionable for
+	// operators). They remain in the raw sample stream and the RTC-reset
+	// badge logic which surfaces them separately. 24h is a generous floor:
+	// real drift is fractions of a sec/advert, real clock-skew tops out
+	// in the hours range; anything above a day is structurally not a
+	// drift signal.
+	rtcResetOutlierThresholdSec = 24 * 3600.0
+
 	// maxPlausibleSkewJumpSec is the largest skew change between
 	// consecutive samples that we treat as physical drift. Anything larger
 	// (e.g. a GPS sync that jumps the clock by minutes/days) is rejected
@@ -560,13 +574,25 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 	//   no_clock       — goodFraction < 0.10 (essentially no real clock)
 	//   bimodal_clock  — 0.10 <= goodFraction < 0.80 AND badCount > 0
 	//   ok/warn/etc.   — goodFraction >= 0.80 (normal, outliers filtered)
+	//
+	// RTC-reset outliers (|skew| > 24h — single advert where the firmware
+	// emitted its factory timestamp) are EXCLUDED from this split (bug
+	// #1285): they're not "bimodal-bad real-but-large skew" but obvious
+	// sensor garbage, surfaced separately via the RTC-reset badge. Counting
+	// them as bimodal-bad produces a false-alarm warning ("3 of last 5
+	// adverts had nonsense timestamps") on otherwise-healthy nodes.
 	var goodSamples []float64
+	var rtcResetCount int
 	for _, v := range recentVals {
-		if math.Abs(v) <= bimodalSkewThresholdSec {
+		absV := math.Abs(v)
+		switch {
+		case absV > rtcResetOutlierThresholdSec:
+			rtcResetCount++ // ignored for good/bad classification
+		case absV <= bimodalSkewThresholdSec:
 			goodSamples = append(goodSamples, v)
 		}
 	}
-	recentSampleCount := len(recentVals)
+	recentSampleCount := len(recentVals) - rtcResetCount
 	recentBadCount := recentSampleCount - len(goodSamples)
 	var goodFraction float64
 	if recentSampleCount > 0 {
@@ -586,8 +612,9 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 		}
 	} else {
 		// Normal path: if there are good samples, use their median
-		// (filters out rare outliers in ≥80% good case).
-		if len(goodSamples) > 0 && recentBadCount > 0 {
+		// (filters out rare outliers in ≥80% good case, and rejects
+		// RTC-reset outliers regardless of bimodal/bad counts — #1285).
+		if len(goodSamples) > 0 {
 			recentSkew = median(goodSamples)
 		}
 		severity = classifySkew(math.Abs(recentSkew))
@@ -668,7 +695,7 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 		recentEvidence = append(recentEvidence, HashEvidence{
 			Hash:                   eh.hash,
 			Observers:              observers,
-			MedianCorrectedSkewSec: round(median(corrSkews), 1),
+			MedianCorrectedSkewSec: round(hashEvidenceMedian(corrSkews), 1),
 			Timestamp:              eh.ts,
 		})
 	}
@@ -818,6 +845,23 @@ func median(vals []float64) float64 {
 		return (sorted[n/2-1] + sorted[n/2]) / 2
 	}
 	return sorted[n/2]
+}
+
+// hashEvidenceMedian returns the median corrected skew for a single
+// transmission hash, filtering out RTC-reset outliers (|skew| > 24h —
+// firmware emitting factory timestamp). Issue #1285: a single outlier
+// observer was dragging the displayed median to ~-704d on an otherwise
+// healthy node. If filtering leaves zero usable samples (every observer
+// of this hash saw a reset-shaped advert), return 0 so the UI can render
+// "insufficient data" rather than the garbage outlier value.
+func hashEvidenceMedian(vals []float64) float64 {
+	clean := vals[:0:0]
+	for _, v := range vals {
+		if math.Abs(v) <= rtcResetOutlierThresholdSec {
+			clean = append(clean, v)
+		}
+	}
+	return median(clean)
 }
 
 func mean(vals []float64) float64 {

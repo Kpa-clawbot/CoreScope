@@ -3102,6 +3102,55 @@ async function run() {
     await page.setViewportSize({ width: 1280, height: 800 });
   });
 
+  // Issue #1270: The Prefix Tool's Network Overview must report
+  // CONFIGURED-hash-size repeater counts (the operational truth) as the
+  // primary number for each tier, agreeing with the Hash Stats tab's
+  // "By Repeaters" panel. The math-only "unique slices of every pubkey"
+  // number is allowed only as a secondary/educational stat. Before the
+  // fix, Prefix Tool showed "168 / 65536" for 2-byte while Hash Stats
+  // showed only 20 repeaters actually configured for 2-byte hashing.
+  await test('#1270 Prefix Tool primary counts match Hash Stats By Repeaters', async () => {
+    // 1) Read configured-by-hash-size counts straight from the API
+    //    (this is what the Hash Stats tab renders).
+    const distByRepeaters = await page.evaluate(async () => {
+      const r = await fetch('/api/analytics/hash-sizes');
+      const j = await r.json();
+      return j.distributionByRepeaters || {};
+    });
+    const expected = {
+      1: Number(distByRepeaters['1'] || 0),
+      2: Number(distByRepeaters['2'] || 0),
+      3: Number(distByRepeaters['3'] || 0),
+    };
+
+    // 2) Visit the Prefix Tool tab, open Network Overview, scrape
+    //    the primary stat values for each tier.
+    await page.goto(`${BASE}/#/analytics?tab=prefix-tool`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#ptOverview', { timeout: 15000 });
+    // Open the overview accordion if collapsed.
+    await page.evaluate(() => {
+      const body = document.getElementById('ptOverviewBody');
+      if (body && getComputedStyle(body).display === 'none') {
+        document.getElementById('ptOverviewToggle').click();
+      }
+    });
+    await page.waitForSelector('[data-pt-configured="1"]', { timeout: 5000 });
+    const got = await page.evaluate(() => {
+      const read = (b) => {
+        const el = document.querySelector(`[data-pt-configured="${b}"]`);
+        return el ? Number(el.getAttribute('data-value')) : null;
+      };
+      return { 1: read(1), 2: read(2), 3: read(3) };
+    });
+
+    assert(got[1] === expected[1],
+      `#1270 1-byte: prefix-tool shows ${got[1]}, hash-sizes API shows ${expected[1]}`);
+    assert(got[2] === expected[2],
+      `#1270 2-byte: prefix-tool shows ${got[2]}, hash-sizes API shows ${expected[2]}`);
+    assert(got[3] === expected[3],
+      `#1270 3-byte: prefix-tool shows ${got[3]}, hash-sizes API shows ${expected[3]}`);
+  });
+
   await browser.close();
 
   // Summary
