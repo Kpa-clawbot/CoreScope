@@ -6207,6 +6207,22 @@ func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeW
 			continue
 		}
 
+		// Area filter: skip this tx entirely from hop-count stats if none of its
+		// hops belong to an area node — keeps hopCounts histogram consistent with
+		// hopFreq, which already filters per-hop.
+		if areaNodes != nil {
+			hasAreaHop := false
+			for _, h := range hops {
+				r := resolveHop(h)
+				if r != nil && areaNodes[r.PublicKey] {
+					hasAreaHop = true
+					break
+				}
+			}
+			if !hasAreaHop {
+				continue
+			}
+		}
 
 		n := len(hops)
 		hopCounts[n]++
