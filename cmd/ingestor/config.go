@@ -75,6 +75,18 @@ type Config struct {
 	// obsBlacklistSetCached is the lazily-built lowercase set for O(1) lookups.
 	obsBlacklistSetCached map[string]bool
 	obsBlacklistOnce      sync.Once
+
+	// NeighborEdgesMaxAgeDays controls neighbor_edges row retention
+	// (#1287 — moved from cmd/server). 0 = default 5.
+	NeighborEdgesMaxAgeDays int `json:"neighborEdgesMaxAgeDays,omitempty"`
+}
+
+// NeighborEdgesDaysOrDefault returns the configured pruning window or 5.
+func (c *Config) NeighborEdgesDaysOrDefault() int {
+	if c == nil || c.NeighborEdgesMaxAgeDays <= 0 {
+		return 5
+	}
+	return c.NeighborEdgesMaxAgeDays
 }
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.

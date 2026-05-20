@@ -191,6 +191,12 @@ jobs:
           go build -o ../../corescope-server .
           echo "Go server built successfully"
 
+      - name: Build Go migrate tool
+        run: |
+          cd cmd/migrate
+          go build -o ../../corescope-migrate .
+          echo "Go migrate tool built successfully"
+
       - name: Install npm dependencies
         run: npm ci --production=false
 
@@ -204,6 +210,15 @@ jobs:
 
       - name: Freshen fixture timestamps
         run: bash tools/freshen-fixture.sh test-fixtures/e2e-fixture.db
+
+      - name: Migrate fixture DB to current schema (#1287)
+        # Server now ASSERTs schema is migrated and refuses to start
+        # otherwise (cmd/server/main.go: dbschema.AssertReady). In prod
+        # the ingestor owns dbschema.Apply, but CI starts only the
+        # server against the committed e2e fixture — so we run the
+        # standalone migrate tool here to bring the fixture up to the
+        # required shape before the server boots.
+        run: ./corescope-migrate -db test-fixtures/e2e-fixture.db
 
       - name: Start Go server with fixture DB
         run: |
@@ -268,8 +283,12 @@ jobs:
           BASE_URL=http://localhost:13581 node test-issue-1273-qr-overlay-height-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1281-location-row-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1279-legend-p2-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-home-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-path-inspector-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1206-resize-observer-leak-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-nav-drawer-1064-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-audio-live-1297-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-audio-lab-1297-e2e.js 2>&1 | tee -a e2e-output.txt
 
       - name: Collect frontend coverage (parallel)
         if: success() && github.event_name == 'push'
