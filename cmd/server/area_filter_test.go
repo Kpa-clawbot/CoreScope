@@ -94,8 +94,9 @@ func newTestStoreWithDB(t *testing.T, db *DB, cfg *Config) *PacketStore {
 		chanCache:      make(map[string]*cachedResult),
 		distCache:      make(map[string]*cachedResult),
 		subpathCache:   make(map[string]*cachedResult),
-		regionObsCache: make(map[string]map[string]bool),
-		areaNodeCache:  make(map[string]map[string]bool),
+		regionObsCache:     make(map[string]map[string]bool),
+		areaNodeCache:      make(map[string]map[string]bool),
+		areaNodeCacheTimes: make(map[string]time.Time),
 		rfCacheTTL:     15 * time.Second,
 	}
 }
@@ -291,4 +292,40 @@ func TestResolveAreaNodes_CalledBeforeRLock(t *testing.T) {
 		}()
 	}
 	wg.Wait() // must not deadlock
+}
+
+func TestResolveAreaNodes_PerKeyTTL(t *testing.T) {
+	db := setupTestDBv2(t)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key, lat, lon) VALUES ('bel-node', 50.85, 4.35)`)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key, lat, lon) VALUES ('nl-node', 52.4, 4.9)`)
+
+	cfg := &Config{Areas: map[string]AreaEntry{
+		"BEL": {Label: "Belgium", Polygon: [][2]float64{{50.0, 2.5}, {51.5, 2.5}, {51.5, 6.4}, {50.0, 6.4}}},
+		"NL":  {Label: "Netherlands", Polygon: [][2]float64{{51.5, 3.4}, {53.6, 3.4}, {53.6, 7.2}, {51.5, 7.2}}},
+	}}
+	s := newTestStoreWithDB(t, db, cfg)
+
+	// Populate both keys into cache.
+	r1 := s.resolveAreaNodes("BEL")
+	if !r1["bel-node"] {
+		t.Fatal("bel-node should be in BEL")
+	}
+	r2 := s.resolveAreaNodes("NL")
+	if !r2["nl-node"] {
+		t.Fatal("nl-node should be in NL")
+	}
+
+	// Delete both nodes from DB to prove cache still serves them.
+	mustExecDB(t, db, `DELETE FROM nodes`)
+
+	// BEL cache should still be warm (not evicted by NL query).
+	r3 := s.resolveAreaNodes("BEL")
+	if !r3["bel-node"] {
+		t.Error("BEL cache was evicted by NL query (global TTL bug)")
+	}
+	// NL cache should still be warm too.
+	r4 := s.resolveAreaNodes("NL")
+	if !r4["nl-node"] {
+		t.Error("NL cache was evicted unexpectedly")
+	}
 }

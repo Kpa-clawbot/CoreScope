@@ -188,10 +188,10 @@ type PacketStore struct {
 	regionObsMu        sync.Mutex
 	regionObsCache     map[string]map[string]bool
 	regionObsCacheTime time.Time
-	// Cached area key → node pubkey set (30s TTL)
-	areaNodeMu        sync.Mutex
-	areaNodeCache     map[string]map[string]bool
-	areaNodeCacheTime time.Time
+	// Cached area key → node pubkey set (30s per-key TTL)
+	areaNodeMu         sync.RWMutex
+	areaNodeCache      map[string]map[string]bool
+	areaNodeCacheTimes map[string]time.Time
 	// Full server config — needed for Areas map in resolveAreaNodes.
 	config *Config
 	// Cached node list + prefix map (rebuilt on demand, shared across analytics)
@@ -501,7 +501,8 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		lastSeenTouched: make(map[string]time.Time),
 		clockSkew:       NewClockSkewEngine(),
 		useResolvedPathIndex: true,
-		areaNodeCache:   make(map[string]map[string]bool),
+		areaNodeCache:      make(map[string]map[string]bool),
+		areaNodeCacheTimes: make(map[string]time.Time),
 	}
 	ps.initResolvedPathIndex()
 	if cfg != nil {
@@ -3049,8 +3050,8 @@ func (s *PacketStore) fetchAndCacheRegionObs(region string) map[string]bool {
 
 // resolveAreaNodes returns a set of node pubkeys whose GPS coordinates fall
 // inside the named area polygon. Returns nil if the area key is not in config.
-// Results are cached for 30 seconds. Uses its own mutex so callers holding
-// s.mu won't deadlock.
+// Results are cached per-key for 30 seconds. Uses its own RWMutex so callers
+// holding s.mu won't deadlock.
 func (s *PacketStore) resolveAreaNodes(areaKey string) map[string]bool {
 	if s.config == nil || s.config.Areas == nil {
 		return nil
@@ -3060,28 +3061,34 @@ func (s *PacketStore) resolveAreaNodes(areaKey string) map[string]bool {
 		return nil
 	}
 
-	s.areaNodeMu.Lock()
-	defer s.areaNodeMu.Unlock()
-
-	if s.areaNodeCache != nil && time.Since(s.areaNodeCacheTime) < 30*time.Second {
-		if m, ok := s.areaNodeCache[areaKey]; ok {
-			return m
-		}
-	} else {
-		s.areaNodeCache = make(map[string]map[string]bool)
-		s.areaNodeCacheTime = time.Now()
+	// Fast path: serve from cache if the per-key TTL is still valid.
+	s.areaNodeMu.RLock()
+	if t, ok := s.areaNodeCacheTimes[areaKey]; ok && time.Since(t) < 30*time.Second {
+		m := s.areaNodeCache[areaKey]
+		s.areaNodeMu.RUnlock()
+		return m
 	}
+	s.areaNodeMu.RUnlock()
 
+	// Slow path: query the DB outside any lock, then write back under Lock.
 	pks, err := s.db.GetNodePubkeysInArea(entry)
-	if err != nil || len(pks) == 0 {
-		s.areaNodeCache[areaKey] = nil
-		return nil
+	var m map[string]bool
+	if err == nil && len(pks) > 0 {
+		m = make(map[string]bool, len(pks))
+		for _, pk := range pks {
+			m[pk] = true
+		}
 	}
-	m := make(map[string]bool, len(pks))
-	for _, pk := range pks {
-		m[pk] = true
+
+	s.areaNodeMu.Lock()
+	// Re-check in case another goroutine already refreshed while we queried.
+	if t, ok := s.areaNodeCacheTimes[areaKey]; !ok || time.Since(t) >= 30*time.Second {
+		s.areaNodeCache[areaKey] = m
+		s.areaNodeCacheTimes[areaKey] = time.Now()
+	} else {
+		m = s.areaNodeCache[areaKey]
 	}
-	s.areaNodeCache[areaKey] = m
+	s.areaNodeMu.Unlock()
 	return m
 }
 
