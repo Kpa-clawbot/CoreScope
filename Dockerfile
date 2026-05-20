@@ -20,6 +20,7 @@ COPY internal/sigvalidate/ ../../internal/sigvalidate/
 COPY internal/packetpath/ ../../internal/packetpath/
 COPY internal/dbconfig/ ../../internal/dbconfig/
 COPY internal/perfio/ ../../internal/perfio/
+COPY internal/dbschema/ ../../internal/dbschema/
 RUN go mod download
 COPY cmd/server/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
@@ -33,6 +34,7 @@ COPY internal/sigvalidate/ ../../internal/sigvalidate/
 COPY internal/packetpath/ ../../internal/packetpath/
 COPY internal/dbconfig/ ../../internal/dbconfig/
 COPY internal/perfio/ ../../internal/perfio/
+COPY internal/dbschema/ ../../internal/dbschema/
 RUN go mod download
 COPY cmd/ingestor/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
