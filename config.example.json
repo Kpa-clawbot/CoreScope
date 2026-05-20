@@ -255,7 +255,7 @@
     "_comment_testChannelName": "Channel name shown in the UI prompt. Defaults to 'test' if omitted.",
     "testChannelSecret": "your-hex-encoded-channel-secret-here",
     "_comment_testChannelSecret": "Hex-encoded channel secret (same value as in your MeshCore channel config). AES key = first 16 raw bytes; channel-hash filter byte = SHA-256(rawBytes)[0].",
-    "codePrefix": "MHC",
+    "codePrefix": "CHC",
     "_comment_codePrefix": "Prefix prepended to generated codes, e.g. 'MHC' → 'MHC-A3F7Z2'. Set to '' for bare 6-char codes. Defaults to 'MHC' if omitted.",
     "sessionTTLSeconds": 600,
     "_comment_sessionTTLSeconds": "How long (seconds) a session stays open waiting for receipts. Default 600 (10 min).",
