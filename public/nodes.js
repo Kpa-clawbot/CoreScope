@@ -181,6 +181,13 @@
     if (n.hash_size) {
       html += ` <span class="badge" style="background:var(--nav-bg);color:var(--nav-text);font-family:var(--mono)">${n.public_key.slice(0, n.hash_size * 2).toUpperCase()}</span>`;
     }
+    // #1279 P2 #4: multibyte capability badge — surfaced from the observable
+    // multibyte hash_size (firmware Feat1/Feat2 carry the wire capability bits
+    // per AdvertDataHelpers.h:14-16, but Feat1/Feat2 aren't persisted per-node
+    // in CoreScope today; hash_size is the observed effective capability).
+    if (n.hash_size && Number(n.hash_size) >= 2) {
+      html += ` <span class="badge multibyte-badge" title="Node advertises multibyte hash path (firmware Feat1/Feat2)" style="background:var(--accent-bg, rgba(20,184,166,0.2));color:var(--accent, #14b8a6);font-size:10px">Multibyte: ${Number(n.hash_size)}-byte</span>`;
+    }
     if (n.hash_size_inconsistent) {
       html += ` <a href="#/nodes/${encodeURIComponent(n.public_key)}?section=node-packets" class="badge" style="background:var(--status-yellow);color:#000;font-size:10px;cursor:pointer;text-decoration:none">⚠️ variable hash size</a>`;
     }
@@ -551,6 +558,24 @@
             else { label = 'Redundant'; color = 'var(--status-red, #e74c3c)'; }
             const barWidth = Math.max(2, Math.round(s * 100));
             return `<tr id="row-usefulness-score" data-usefulness-score="${s.toFixed(4)}"><td title="Fraction of non-advert traffic in the network observed by CoreScope that this repeater carries as a relay hop (Traffic axis of issue #672). Range 0–1; higher = forwards more of the mesh's actual traffic.">Usefulness</td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${barWidth}%;height:100%;background:${color}"></span></span><span style="color:${color};font-weight:600">${pct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${label}</span></td></tr>`;
+          })() : ''}
+          ${(n.role === 'repeater' || n.role === 'room') && n.bridge_score != null ? (() => {
+            // Bridge axis (issue #672 axis 2 of 4): normalized betweenness
+            // centrality from the neighbor-edges graph. Distinct from the
+            // Traffic-based Usefulness score above — bridge measures
+            // STRUCTURAL importance (how many shortest paths between
+            // other node pairs go through this one) regardless of
+            // current traffic.
+            const b = Number(n.bridge_score) || 0;
+            const bpct = (b * 100).toFixed(1);
+            let blabel, bcolor;
+            if (b >= 0.5) { blabel = 'Critical bridge'; bcolor = 'var(--status-green, #2ecc71)'; }
+            else if (b >= 0.2) { blabel = 'Important'; bcolor = 'var(--status-green, #2ecc71)'; }
+            else if (b >= 0.05) { blabel = 'Some role'; bcolor = 'var(--status-yellow, #f1c40f)'; }
+            else if (b > 0) { blabel = 'Marginal'; bcolor = 'var(--status-orange, #e67e22)'; }
+            else { blabel = 'No bridge role'; bcolor = 'var(--text-muted)'; }
+            const bbarWidth = Math.max(2, Math.round(b * 100));
+            return `<tr id="row-bridge-score" data-bridge-score="${b.toFixed(4)}"><td title="Structural importance of this repeater as a path between other nodes — normalized betweenness centrality on the neighbor-edges graph (Bridge axis of issue #672, axis 2 of 4). Higher = more pairs of nodes route shortest paths through this one. Independent of current traffic.">Bridge</td><td><span style="display:inline-block;vertical-align:middle;width:80px;height:8px;background:var(--bg-secondary,#333);border-radius:4px;overflow:hidden;margin-right:6px"><span style="display:block;width:${bbarWidth}%;height:100%;background:${bcolor}"></span></span><span style="color:${bcolor};font-weight:600">${bpct}%</span> <span style="color:var(--text-muted);font-size:11px;margin-left:4px">${blabel}</span></td></tr>`;
           })() : ''}
           <tr><td>First Seen</td><td>${renderNodeTimestampHtml(n.first_seen)}</td></tr>
           <tr><td>Total Packets</td><td>${stats.totalTransmissions || stats.totalPackets || n.advert_count || 0}${stats.totalObservations && stats.totalObservations !== (stats.totalTransmissions || stats.totalPackets) ? ' <span class="text-muted" style="font-size:0.85em">(seen ' + stats.totalObservations + '×)</span>' : ''}</td></tr>
@@ -923,7 +948,25 @@
     var hashBlocks = evidence.map(function(ev) {
       var shortHash = (ev.hash || '').substring(0, 8) + '…';
       var obsCount = ev.observers ? ev.observers.length : 0;
-      var header = '<div style="font-weight:600;font-size:12px;margin-top:6px">Hash ' + shortHash + '  ·  ' + obsCount + ' observer' + (obsCount !== 1 ? 's' : '') + '  ·  median corrected: ' + formatSkew(ev.medianCorrectedSkewSec) + '</div>';
+      // #1285: per-hash median is server-side filtered to exclude RTC-reset
+      // outliers (|corrected skew| > 24h). Compute the same on the client so
+      // we can label hashes whose observers ALL saw a reset-shaped advert as
+      // "insufficient data — N outliers excluded" instead of rendering 0 or
+      // a misleading post-filter value.
+      var OUTLIER_SEC = 86400;
+      var outlierObs = 0;
+      (ev.observers || []).forEach(function(o) {
+        if (Math.abs(o.correctedSkewSec || 0) > OUTLIER_SEC) outlierObs++;
+      });
+      var medianLabel;
+      if (outlierObs > 0 && outlierObs === obsCount) {
+        medianLabel = 'insufficient data (' + outlierObs + ' RTC-reset outlier' + (outlierObs !== 1 ? 's' : '') + ' excluded)';
+      } else if (outlierObs > 0) {
+        medianLabel = formatSkew(ev.medianCorrectedSkewSec) + ' (' + outlierObs + ' RTC-reset outlier' + (outlierObs !== 1 ? 's' : '') + ' excluded)';
+      } else {
+        medianLabel = formatSkew(ev.medianCorrectedSkewSec);
+      }
+      var header = '<div style="font-weight:600;font-size:12px;margin-top:6px">Hash ' + shortHash + '  ·  ' + obsCount + ' observer' + (obsCount !== 1 ? 's' : '') + '  ·  median corrected: ' + medianLabel + '</div>';
       var lines = (ev.observers || []).map(function(o) {
         var name = o.observerName || o.observerID;
         return '<div style="font-size:11px;padding-left:16px;font-family:var(--mono)">' +

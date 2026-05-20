@@ -23,6 +23,13 @@ UPDATE transmissions SET first_seen = strftime('%Y-%m-%dT%H:%M:%SZ', first_seen,
   (SELECT printf('+%d seconds', CAST((julianday('now') - julianday(MAX(first_seen))) * 86400 AS INTEGER)) FROM transmissions)
 ) WHERE first_seen IS NOT NULL;
 
+-- Sync observations.timestamp (Unix seconds) to match their transmission's freshened first_seen.
+-- Observations with timestamp=0 break the SQL since-filter in buildTransmissionWhere.
+UPDATE observations SET timestamp = CAST(strftime('%s',
+  (SELECT first_seen FROM transmissions WHERE id = transmission_id)
+) AS INTEGER)
+WHERE timestamp = 0 OR timestamp IS NULL;
+
 -- Observers: shift last_seen too so they don't get auto-pruned by RemoveStaleObservers
 -- on server startup (default 14d threshold marks all >14d observers inactive=1, which
 -- the /api/observers filter then excludes — leaving the map page with no observer markers).

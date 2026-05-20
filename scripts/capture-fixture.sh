@@ -114,6 +114,13 @@ import json, sys, sqlite3
 data = json.load(sys.stdin)
 packets = data.get('packets', data) if isinstance(data, dict) else data
 db = sqlite3.connect('$DB_PATH')
+# Build observer_id (text hash) -> rowid map. The v3 join in cmd/server uses
+# 'observers.rowid = observations.observer_idx', so we MUST store the integer
+# rowid here — NOT the text observer hash. Storing the hash silently breaks
+# the join (returns NULL observer_name / observer_iata) and was the root
+# cause of issue #1249 (E2E IATA badge never rendered on the fixture).
+obs_rowid = {row[0]: row[1] for row in db.execute('SELECT id, rowid FROM observers')}
+unmapped = 0
 for p in packets:
     try:
         cur = db.execute('INSERT OR IGNORE INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json) VALUES (?,?,?,?,?,?,?)',
@@ -121,9 +128,14 @@ for p in packets:
              p.get('route_type'), p.get('payload_type'), p.get('payload_version'),
              p.get('decoded_json')))
         tid = cur.lastrowid
-        if tid and p.get('observer_id'):
+        oid = p.get('observer_id')
+        if tid and oid:
+            rid = obs_rowid.get(oid)
+            if rid is None:
+                unmapped += 1
+                continue  # observer not in fixture — skip rather than poison join
             db.execute('INSERT INTO observations (transmission_id, observer_idx, direction, snr, rssi, score, path_json, timestamp) VALUES (?,?,?,?,?,?,?,?)',
-                (tid, p.get('observer_id'), p.get('direction'),
+                (tid, rid, p.get('direction'),
                  p.get('snr'), p.get('rssi'), None,
                  p.get('path_json'),
                  int(p.get('timestamp','0')) if p.get('timestamp','').isdigit() else 0))
@@ -131,6 +143,8 @@ for p in packets:
         pass  # Skip duplicates
 db.commit()
 print(f'  Inserted {len(packets)} transmissions')
+if unmapped:
+    print(f'  Skipped {unmapped} observations: observer_id not present in observers table')
 db.close()
 "
 

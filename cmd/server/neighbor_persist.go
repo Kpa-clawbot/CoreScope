@@ -353,6 +353,44 @@ func ensureLastPacketAtColumn(dbPath string) error {
 	return nil
 }
 
+// ensureObserverIATAColumn adds the iata column to observers if missing.
+// The column was originally added by ingestor migration (cmd/ingestor/db.go) to
+// label each observer with a 3-letter regional IATA code. When the server starts
+// against a DB that was never touched by the ingestor (e.g. the e2e fixture,
+// or a pre-iata operator DB upgraded to this build), every SELECT that joins
+// COALESCE(obs.iata, '') panics with "no such column: obs.iata" — crashing
+// Store.Load() / IngestNewFromDB / IngestNewObservations on startup (#1189 R1).
+func ensureObserverIATAColumn(dbPath string) error {
+	rw, err := cachedRW(dbPath)
+	if err != nil {
+		return err
+	}
+
+	rows, err := rw.Query("PRAGMA table_info(observers)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == "iata" {
+			return nil // already exists
+		}
+	}
+
+	_, err = rw.Exec("ALTER TABLE observers ADD COLUMN iata TEXT")
+	if err != nil {
+		return fmt.Errorf("add iata column: %w", err)
+	}
+	log.Println("[store] Added iata column to observers")
+	return nil
+}
+
 // ensureForeignAdvertColumn adds the foreign_advert column to nodes/inactive_nodes
 // if missing (#730). The column is added by the ingestor migration foreign_advert_v1
 // — but the server may run against a DB the ingestor has never touched (e2e fixture,
@@ -583,12 +621,11 @@ func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int
 		}
 		chunk := allPending[totalProcessed:end]
 
-		// Re-read graph under RLock at the start of each chunk so we pick up
-		// a freshly-built graph once the background build goroutine completes,
-		// instead of using the potentially-empty graph captured at cold start.
-		store.mu.RLock()
-		graph := store.graph
-		store.mu.RUnlock()
+		// Re-read graph at the start of each chunk so we pick up a freshly-
+		// built graph once the background build goroutine completes, instead
+		// of using the potentially-empty graph captured at cold start.
+		// (Dead RLock wrap removed PR #1208: store.graph is atomic.Pointer.)
+		graph := store.graph.Load()
 
 		// Resolve paths outside any lock.
 		type resolved struct {
