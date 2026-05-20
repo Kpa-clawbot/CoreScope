@@ -270,6 +270,8 @@ jobs:
           BASE_URL=http://localhost:13581 node test-issue-1279-legend-p2-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1206-resize-observer-leak-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-nav-drawer-1064-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-audio-live-1297-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-audio-lab-1297-e2e.js 2>&1 | tee -a e2e-output.txt
 
       - name: Collect frontend coverage (parallel)
         if: success() && github.event_name == 'push'
