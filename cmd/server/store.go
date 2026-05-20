@@ -147,7 +147,9 @@ type PacketStore struct {
 	rfCache           map[string]*cachedResult // region → cached RF result
 	topoCache         map[string]*cachedResult // region → cached topology result
 	hashCache         map[string]*cachedResult // region → cached hash-sizes result
-	mbCapSnapshot     []MultiByteCapEntry      // latest computeMultiByteCapability result, under cacheMu
+	mbCapSnapshot  []MultiByteCapEntry          // latest computeMultiByteCapability result, under cacheMu
+	mbCapIndex     map[string]MultiByteCapEntry // O(1) pubkey lookup, rebuilt with mbCapSnapshot, under cacheMu
+	mbPersistMu    sync.Mutex                   // ensures at most one persistMultibyteCapability runs at a time
 	collisionCache    map[string]*cachedResult // cached hash-collisions result keyed by region ("" = global)
 	chanCache         map[string]*cachedResult // region → cached channels result
 	distCache         map[string]*cachedResult // region → cached distance result
@@ -6868,8 +6870,13 @@ func (s *PacketStore) computeAnalyticsHashSizesWithCapability(region string) map
 	result["multiByteCapability"] = mbEntries
 	s.cacheMu.Lock()
 	s.mbCapSnapshot = mbEntries
+	mbIdx := make(map[string]MultiByteCapEntry, len(mbEntries))
+	for _, e := range mbEntries {
+		mbIdx[e.PublicKey] = e
+	}
+	s.mbCapIndex = mbIdx
 	s.cacheMu.Unlock()
-	go s.persistMultibyteCapability(mbEntries)
+	s.maybePersistMultibyteCapability(mbEntries)
 
 
 	return result
@@ -7858,6 +7865,19 @@ func multibyteStatusToInt(status string) int {
 	}
 }
 
+// maybePersistMultibyteCapability launches a background persist if none is already
+// in flight. Concurrent calls are coalesced — the in-flight persist holds a snapshot
+// close to the current one.
+func (s *PacketStore) maybePersistMultibyteCapability(entries []MultiByteCapEntry) {
+	if !s.mbPersistMu.TryLock() {
+		return // persist already in flight; this cycle's snapshot will be close enough
+	}
+	go func() {
+		defer s.mbPersistMu.Unlock()
+		s.persistMultibyteCapability(entries)
+	}()
+}
+
 // persistMultibyteCapability writes the capability snapshot to the nodes and inactive_nodes
 // DB columns so the values survive a server restart (cold start serves last-known capability
 // before the first analytics cycle completes).
@@ -7893,12 +7913,15 @@ func (s *PacketStore) persistMultibyteCapability(entries []MultiByteCapEntry) {
 
 	for _, e := range entries {
 		sup := multibyteStatusToInt(e.Status)
+		if sup == 0 {
+			continue // never overwrite persisted confirmed/suspected with unknown
+		}
 		var evid interface{}
 		if e.Evidence != "" {
 			evid = e.Evidence
 		}
-		stmtNodes.Exec(sup, evid, e.PublicKey)     //nolint:errcheck — UPDATE miss is not an error
-		stmtInactive.Exec(sup, evid, e.PublicKey)  //nolint:errcheck — UPDATE miss is not an error
+		stmtNodes.Exec(sup, evid, e.PublicKey)    //nolint:errcheck — UPDATE miss is not an error
+		stmtInactive.Exec(sup, evid, e.PublicKey) //nolint:errcheck — UPDATE miss is not an error
 	}
 	if err := tx.Commit(); err != nil {
 		log.Printf("[multibyte] persist commit: %v", err)
@@ -7948,23 +7971,22 @@ func (s *PacketStore) loadMultibyteCapFromDB() {
 	}
 	s.cacheMu.Lock()
 	s.mbCapSnapshot = entries
+	idx := make(map[string]MultiByteCapEntry, len(entries))
+	for _, e := range entries {
+		idx[e.PublicKey] = e
+	}
+	s.mbCapIndex = idx
 	s.cacheMu.Unlock()
 	log.Printf("[multibyte] loaded %d capability entries from DB", len(entries))
 }
 
-// GetMultibyteCapFor returns the capability entry for a single pubkey without
-// materializing the full map. O(n) scan over the snapshot slice; suitable for
-// single-node lookups (detail page, per-row enrichment).
+// GetMultibyteCapFor returns the capability entry for a single pubkey.
+// O(1) lookup via mbCapIndex (rebuilt alongside mbCapSnapshot).
 func (s *PacketStore) GetMultibyteCapFor(pk string) (MultiByteCapEntry, bool) {
 	s.cacheMu.Lock()
-	snap := s.mbCapSnapshot // slice header copied under lock; slice is immutable once published
+	e, ok := s.mbCapIndex[pk]
 	s.cacheMu.Unlock()
-	for _, e := range snap {
-		if e.PublicKey == pk {
-			return e, true
-		}
-	}
-	return MultiByteCapEntry{}, false
+	return e, ok
 }
 
 // GetMultibyteCapMap returns a pubkey→entry map built from the last analytics snapshot.

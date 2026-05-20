@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -529,5 +531,197 @@ func TestMultiByteCapability_AdopterEvidenceTakesPrecedence(t *testing.T) {
 	}
 	if capByName["RepAdopter"].Evidence != "advert" {
 		t.Errorf("with adopter data: expected advert evidence, got %s", capByName["RepAdopter"].Evidence)
+	}
+}
+
+// setupMultibyteFileTestDB creates a file-based SQLite DB with multibyte columns
+// so persistMultibyteCapability can open a write connection via cachedRW.
+// The cleanup also evicts the cachedRW entry to release the file lock on Windows.
+func setupMultibyteFileTestDB(t *testing.T) *DB {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	conn, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.SetMaxOpenConns(1)
+	if _, err := conn.Exec(`
+		CREATE TABLE nodes (
+			public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
+			lat REAL, lon REAL, last_seen TEXT, first_seen TEXT,
+			advert_count INTEGER DEFAULT 0, battery_mv INTEGER, temperature_c REAL,
+			multibyte_sup INTEGER DEFAULT 0, multibyte_evidence TEXT
+		);
+		CREATE TABLE inactive_nodes (
+			public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
+			last_seen TEXT, first_seen TEXT, advert_count INTEGER DEFAULT 0,
+			multibyte_sup INTEGER DEFAULT 0, multibyte_evidence TEXT
+		)`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		conn.Close()
+		// Release the cachedRW connection so Windows can delete the temp file.
+		rwCache.mu.Lock()
+		if rw, ok := rwCache.conns[dbPath]; ok {
+			rw.Close()
+			delete(rwCache.conns, dbPath)
+		}
+		rwCache.mu.Unlock()
+	})
+	return &DB{conn: conn, path: dbPath, hasMultibyteSupCols: true}
+}
+
+// TestPersistMultibyteCap_DoesNotWipeConfirmed verifies that persisting a snapshot
+// where a node has status "unknown" does not overwrite a previously confirmed DB value.
+func TestPersistMultibyteCap_DoesNotWipeConfirmed(t *testing.T) {
+	db := setupMultibyteFileTestDB(t)
+	db.conn.Exec(`INSERT INTO nodes (public_key, multibyte_sup, multibyte_evidence) VALUES ('confirmed-pk', 2, 'advert')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, multibyte_sup, multibyte_evidence) VALUES ('unknown-pk', 0, NULL)`)
+
+	s := NewPacketStore(db, nil)
+	s.db.hasMultibyteSupCols = true
+
+	entries := []MultiByteCapEntry{
+		{PublicKey: "confirmed-pk", Status: "unknown"},
+		{PublicKey: "unknown-pk", Status: "unknown"},
+	}
+	s.persistMultibyteCapability(entries)
+
+	var sup int
+	if err := db.conn.QueryRow(`SELECT multibyte_sup FROM nodes WHERE public_key='confirmed-pk'`).Scan(&sup); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if sup != 2 {
+		t.Errorf("confirmed-pk was overwritten: want sup=2, got %d (data destruction bug)", sup)
+	}
+}
+
+// TestPersistMultibyteCap_ConcurrentSafe verifies that concurrent calls to
+// maybePersistMultibyteCapability do not panic, deadlock, or corrupt data.
+func TestPersistMultibyteCap_ConcurrentSafe(t *testing.T) {
+	db := setupMultibyteFileTestDB(t)
+	db.conn.Exec(`INSERT INTO nodes (public_key, multibyte_sup) VALUES ('pk1', 0)`)
+
+	s := NewPacketStore(db, nil)
+	s.db.hasMultibyteSupCols = true
+
+	entries := []MultiByteCapEntry{{PublicKey: "pk1", Status: "confirmed", Evidence: "advert"}}
+
+	const n = 20
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.maybePersistMultibyteCapability(entries)
+		}()
+	}
+	wg.Wait()
+}
+
+// TestGetMultibyteCapFor_O1Lookup verifies O(1) index lookup for GetMultibyteCapFor.
+func TestGetMultibyteCapFor_O1Lookup(t *testing.T) {
+	s := &PacketStore{}
+	entries := []MultiByteCapEntry{
+		{PublicKey: "pk1", Status: "confirmed", Evidence: "advert"},
+		{PublicKey: "pk2", Status: "suspected"},
+	}
+	s.cacheMu.Lock()
+	s.mbCapSnapshot = entries
+	idx := make(map[string]MultiByteCapEntry, len(entries))
+	for _, e := range entries {
+		idx[e.PublicKey] = e
+	}
+	s.mbCapIndex = idx
+	s.cacheMu.Unlock()
+
+	e1, ok1 := s.GetMultibyteCapFor("pk1")
+	if !ok1 || e1.Status != "confirmed" {
+		t.Errorf("pk1: want confirmed, got %v ok=%v", e1.Status, ok1)
+	}
+	_, ok2 := s.GetMultibyteCapFor("missing")
+	if ok2 {
+		t.Error("missing key should return ok=false")
+	}
+}
+
+// TestMultibyteCapPersistLoadRoundTrip verifies that values written by
+// persistMultibyteCapability can be read back by loadMultibyteCapFromDB,
+// and that unknown-status entries (sup=0) are not persisted.
+func TestMultibyteCapPersistLoadRoundTrip(t *testing.T) {
+	db := setupMultibyteFileTestDB(t)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen) VALUES ('pk-conf', 'Conf', 'repeater', '2026-01-01T00:00:00Z')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen) VALUES ('pk-susp', 'Susp', 'repeater', '2026-01-01T00:00:00Z')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen) VALUES ('pk-unkn', 'Unkn', 'repeater', '2026-01-01T00:00:00Z')`)
+
+	s := NewPacketStore(db, nil)
+	s.db.hasMultibyteSupCols = true
+
+	entries := []MultiByteCapEntry{
+		{PublicKey: "pk-conf", Status: "confirmed", Evidence: "advert"},
+		{PublicKey: "pk-susp", Status: "suspected", Evidence: "path"},
+		{PublicKey: "pk-unkn", Status: "unknown"},
+	}
+	s.persistMultibyteCapability(entries)
+
+	// Cold-start: fresh store with the same DB file.
+	s2 := NewPacketStore(db, nil)
+	s2.db.hasMultibyteSupCols = true
+	s2.loadMultibyteCapFromDB()
+
+	s2.cacheMu.Lock()
+	snap := s2.mbCapSnapshot
+	s2.cacheMu.Unlock()
+
+	if len(snap) == 0 {
+		t.Fatal("mbCapSnapshot empty after loadMultibyteCapFromDB — cold-start benefit broken")
+	}
+
+	byPK := make(map[string]MultiByteCapEntry, len(snap))
+	for _, e := range snap {
+		byPK[e.PublicKey] = e
+	}
+
+	if e, ok := byPK["pk-conf"]; !ok || e.Status != "confirmed" {
+		t.Errorf("pk-conf: want confirmed, got %v ok=%v", e.Status, ok)
+	}
+	if e, ok := byPK["pk-susp"]; !ok || e.Status != "suspected" {
+		t.Errorf("pk-susp: want suspected, got %v ok=%v", e.Status, ok)
+	}
+	if _, ok := byPK["pk-unkn"]; ok {
+		t.Error("pk-unkn should not appear in cold-start snapshot (sup=0 was not persisted)")
+	}
+}
+
+// TestMultibyteCapPersist_SmallerSnapshotDoesNotWipePrior verifies that re-running
+// persist with a smaller snapshot (where some nodes became "unknown") does not
+// overwrite their previously persisted confirmed/suspected values.
+func TestMultibyteCapPersist_SmallerSnapshotDoesNotWipePrior(t *testing.T) {
+	db := setupMultibyteFileTestDB(t)
+	db.conn.Exec(`INSERT INTO nodes (public_key) VALUES ('pk-a')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key) VALUES ('pk-b')`)
+
+	s := NewPacketStore(db, nil)
+	s.db.hasMultibyteSupCols = true
+
+	s.persistMultibyteCapability([]MultiByteCapEntry{
+		{PublicKey: "pk-a", Status: "confirmed", Evidence: "advert"},
+		{PublicKey: "pk-b", Status: "confirmed", Evidence: "advert"},
+	})
+
+	s.persistMultibyteCapability([]MultiByteCapEntry{
+		{PublicKey: "pk-a", Status: "confirmed", Evidence: "advert"},
+		{PublicKey: "pk-b", Status: "unknown"},
+	})
+
+	var supB int
+	if err := db.conn.QueryRow(`SELECT multibyte_sup FROM nodes WHERE public_key='pk-b'`).Scan(&supB); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if supB != 2 {
+		t.Errorf("pk-b: want confirmed (sup=2) preserved, got sup=%d", supB)
 	}
 }
