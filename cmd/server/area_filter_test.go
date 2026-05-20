@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -124,12 +125,15 @@ func TestResolveAreaNodes_CacheHit(t *testing.T) {
 
 	r1 := s.resolveAreaNodes("BEL")
 	if !r1["pk1"] {
-		t.Fatal("pk1 should be in area BEL")
+		t.Fatal("pk1 should be in area BEL on first call")
 	}
+
+	// Delete node so a live DB query would return nothing — second call must use cache.
+	mustExecDB(t, db, `DELETE FROM nodes WHERE public_key = 'pk1'`)
 
 	r2 := s.resolveAreaNodes("BEL")
 	if !r2["pk1"] {
-		t.Fatal("cache hit should still contain pk1")
+		t.Fatal("cache hit should still return pk1 after DB delete")
 	}
 }
 
@@ -172,27 +176,70 @@ func TestFilterPacketsByArea(t *testing.T) {
 func TestAnalyticsRFAreaFilter(t *testing.T) {
 	db := setupTestDBv2(t)
 	mustExecDB(t, db, `INSERT INTO nodes (public_key, lat, lon) VALUES ('inside-node', 50.85, 4.35)`)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key, lat, lon) VALUES ('outside-node', 48.0, 4.35)`)
 
 	cfg := &Config{Areas: map[string]AreaEntry{
 		"BEL": {Label: "Belgium", Polygon: [][2]float64{{50.0, 2.5}, {51.5, 2.5}, {51.5, 6.4}, {50.0, 6.4}}},
 	}}
 	s := newTestStoreWithDB(t, db, cfg)
+
+	ingestAdvert(t, s, "hash-rf-in", `{"public_key":"inside-node","name":"Inside"}`)
+	ingestAdvert(t, s, "hash-rf-out", `{"public_key":"outside-node","name":"Outside"}`)
 
 	result := s.GetAnalyticsRF("", "BEL")
 	if result == nil {
 		t.Fatal("GetAnalyticsRF returned nil")
 	}
+	total, _ := result["totalTransmissions"].(int)
+	if total != 1 {
+		t.Errorf("want totalTransmissions=1 for BEL, got %d", total)
+	}
+}
+
+// ingestChanMsg adds a synthetic GRP_TXT packet with the given sender pubkey and channel hash.
+func ingestChanMsg(t *testing.T, s *PacketStore, hash, senderPK string, chanHash int) {
+	t.Helper()
+	pt := PayloadGRP_TXT
+	decodedJSON := fmt.Sprintf(`{"public_key":%q,"channelHash":%d}`, senderPK, chanHash)
+	tx := &StoreTx{
+		Hash:        hash,
+		FirstSeen:   "2026-01-01T00:00:00Z",
+		PayloadType: &pt,
+		DecodedJSON: decodedJSON,
+	}
+	s.mu.Lock()
+	s.packets = append(s.packets, tx)
+	s.byHash[hash] = tx
+	s.byPayloadType[PayloadGRP_TXT] = append(s.byPayloadType[PayloadGRP_TXT], tx)
+	s.mu.Unlock()
 }
 
 func TestAnalyticsChannelsAreaFilter(t *testing.T) {
 	db := setupTestDBv2(t)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key, lat, lon) VALUES ('inside-node', 50.85, 4.35)`)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key, lat, lon) VALUES ('outside-node', 48.0, 4.35)`)
+
 	cfg := &Config{Areas: map[string]AreaEntry{
 		"BEL": {Label: "Belgium", Polygon: [][2]float64{{50.0, 2.5}, {51.5, 2.5}, {51.5, 6.4}, {50.0, 6.4}}},
 	}}
 	s := newTestStoreWithDB(t, db, cfg)
-	result := s.GetAnalyticsChannels("", "BEL")
-	if result == nil {
+
+	// inside-node sends on channel hash 42, outside-node on channel hash 99.
+	ingestChanMsg(t, s, "ch-in", "inside-node", 42)
+	ingestChanMsg(t, s, "ch-out", "outside-node", 99)
+
+	unfiltered := s.GetAnalyticsChannels("", "")
+	filtered := s.GetAnalyticsChannels("", "BEL")
+	if filtered == nil {
 		t.Fatal("GetAnalyticsChannels returned nil")
+	}
+	unfilteredCount, _ := unfiltered["activeChannels"].(int)
+	filteredCount, _ := filtered["activeChannels"].(int)
+	if unfilteredCount != 2 {
+		t.Errorf("want 2 active channels unfiltered, got %d", unfilteredCount)
+	}
+	if filteredCount != 1 {
+		t.Errorf("want 1 active channel for BEL, got %d", filteredCount)
 	}
 }
 
@@ -327,5 +374,27 @@ func TestResolveAreaNodes_PerKeyTTL(t *testing.T) {
 	r4 := s.resolveAreaNodes("NL")
 	if !r4["nl-node"] {
 		t.Error("NL cache was evicted unexpectedly")
+	}
+}
+
+func TestGetBulkHealth_AreaBypassesCap(t *testing.T) {
+	db := setupTestDBv2(t)
+
+	// Insert 510 nodes inside BEL — all at 50.85, 4.35.
+	for i := 0; i < 510; i++ {
+		mustExecDB(t, db, fmt.Sprintf(
+			`INSERT INTO nodes (public_key, lat, lon) VALUES ('node-%d', 50.85, 4.35)`, i,
+		))
+	}
+
+	cfg := &Config{Areas: map[string]AreaEntry{
+		"BEL": {Label: "Belgium", Polygon: [][2]float64{{50.0, 2.5}, {51.5, 2.5}, {51.5, 6.4}, {50.0, 6.4}}},
+	}}
+	s := newTestStoreWithDB(t, db, cfg)
+
+	// With limit=10 but area filter active, all 510 in-area nodes must be returned.
+	result := s.GetBulkHealth(10, "", "BEL")
+	if len(result) != 510 {
+		t.Errorf("want 510 nodes from area BEL, got %d", len(result))
 	}
 }
