@@ -48,10 +48,6 @@ The `label` field controls what appears in the filter pill bar in the UI.
 
 Remove the `areas` block to disable the area filter entirely — the pill bar disappears automatically.
 
-### Nodes without GPS
-
-Nodes with no GPS fix (`lat=0, lon=0` or missing coordinates) are always allowed through regardless of the active area filter. This prevents nodes that haven't advertised a position yet from being hidden.
-
 ## Using the area filter
 
 When `areas` is configured, a pill bar appears below the main navigation on:
