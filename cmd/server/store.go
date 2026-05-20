@@ -4836,16 +4836,17 @@ func isPlaceholderName(name string) bool {
 }
 
 func (s *PacketStore) computeAnalyticsChannels(region, area string, window TimeWindow) map[string]interface{} {
+	var areaNodes map[string]bool
+	if area != "" {
+		areaNodes = s.resolveAreaNodes(area)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var regionObs map[string]bool
 	if region != "" {
 		regionObs = s.resolveRegionObservers(region)
-	}
-	var areaNodes map[string]bool
-	if area != "" {
-		areaNodes = s.resolveAreaNodes(area)
 	}
 
 	type decodedGrp struct {
@@ -5085,6 +5086,11 @@ func (s *PacketStore) GetAnalyticsRFWithWindow(region, area string, window TimeW
 }
 
 func (s *PacketStore) computeAnalyticsRF(region, area string, window TimeWindow) map[string]interface{} {
+	var areaNodes map[string]bool
+	if area != "" {
+		areaNodes = s.resolveAreaNodes(area)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -5093,10 +5099,6 @@ func (s *PacketStore) computeAnalyticsRF(region, area string, window TimeWindow)
 	var regionObs map[string]bool
 	if region != "" {
 		regionObs = s.resolveRegionObservers(region)
-	}
-	var areaNodes map[string]bool
-	if area != "" {
-		areaNodes = s.resolveAreaNodes(area)
 	}
 
 	// Collect all observations matching the region
@@ -6117,16 +6119,17 @@ func (s *PacketStore) GetAnalyticsTopologyWithWindow(region, area string, window
 }
 
 func (s *PacketStore) computeAnalyticsTopology(region, area string, window TimeWindow) map[string]interface{} {
+	var areaNodes map[string]bool
+	if area != "" {
+		areaNodes = s.resolveAreaNodes(area)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var regionObs map[string]bool
 	if region != "" {
 		regionObs = s.resolveRegionObservers(region)
-	}
-	var areaNodes map[string]bool
-	if area != "" {
-		areaNodes = s.resolveAreaNodes(area)
 	}
 
 	allNodes, pm := s.getCachedNodesAndPM()
@@ -8070,6 +8073,11 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 // --- Bulk Health (in-memory) ---
 
 func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string]interface{} {
+	var areaNodes map[string]bool
+	if area != "" {
+		areaNodes = s.resolveAreaNodes(area)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -8098,12 +8106,6 @@ func (s *PacketStore) GetBulkHealth(limit int, region, area string) []map[string
 				}
 			}
 		}
-	}
-
-	// Area filtering — resolveAreaNodes requires the lock to already be held
-	var areaNodes map[string]bool
-	if area != "" {
-		areaNodes = s.resolveAreaNodes(area)
 	}
 
 	// Get nodes from DB — fetch more when filtering so we don't under-fill after exclusions

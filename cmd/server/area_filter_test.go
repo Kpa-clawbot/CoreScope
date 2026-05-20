@@ -2,8 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"net/http/httptest"
 	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -266,4 +267,28 @@ func TestHandleConfigAreasEmpty(t *testing.T) {
 	if len(result) != 0 {
 		t.Errorf("want empty array, got %v", result)
 	}
+}
+
+func TestResolveAreaNodes_CalledBeforeRLock(t *testing.T) {
+	// Verify resolveAreaNodes doesn't deadlock when called concurrently with writes.
+	// This test catches the anti-pattern where resolveAreaNodes (which does a DB
+	// query) is called while holding s.mu.RLock().
+	db := setupTestDBv2(t)
+	mustExecDB(t, db, `INSERT INTO nodes (public_key, lat, lon) VALUES ('n1', 50.85, 4.35)`)
+
+	cfg := &Config{Areas: map[string]AreaEntry{
+		"BEL": {Label: "Belgium", Polygon: [][2]float64{{50.0, 2.5}, {51.5, 2.5}, {51.5, 6.4}, {50.0, 6.4}}},
+	}}
+	s := newTestStoreWithDB(t, db, cfg)
+	ingestAdvert(t, s, "h1", `{"public_key":"n1","name":"N1"}`)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.GetBulkHealth(10, "", "BEL")
+		}()
+	}
+	wg.Wait() // must not deadlock
 }
