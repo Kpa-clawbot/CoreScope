@@ -150,17 +150,34 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
 
   await step('sidebar resize handle persists width to localStorage', async () => {
+    // The previous "empty state" step performs a hash-route bounce
+    // (/#/nodes → /#/channels) which re-renders the sidebar markup. The
+    // #89 init IIFE wired `mousedown` to the OLD .ch-sidebar-resize node
+    // and the new one has no listener — so a drag here would no-op and
+    // localStorage would never be written. Do a full reload so init
+    // runs against the live handle.
+    await page.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.ch-sidebar-resize');
-    const sidebar = await page.$('.ch-sidebar');
-    const box = await sidebar.boundingBox();
-    // Simulate drag on the resize handle.
+    // Clear any value from a prior test run so the assertion proves THIS
+    // drag wrote the key (not a stale leftover).
+    await page.evaluate(() => { try { localStorage.removeItem('channels-sidebar-width'); } catch (e) {} });
     const handle = await page.$('.ch-sidebar-resize');
     const hb = await handle.boundingBox();
-    await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+    const startX = hb.x + hb.width / 2;
+    const startY = hb.y + hb.height / 2;
+    // Proper Playwright drag: hover → down → multi-step move (with small
+    // delays so each mousemove dispatches separately) → up.
+    await page.mouse.move(startX, startY);
     await page.mouse.down();
-    await page.mouse.move(hb.x + 60, hb.y + hb.height / 2, { steps: 5 });
+    // Move in several small steps; Playwright's `steps:` handles
+    // interpolation, but we also add a tiny delay between segments so
+    // listeners attached to `document` reliably observe each event.
+    for (let i = 1; i <= 10; i++) {
+      await page.mouse.move(startX + i * 8, startY, { steps: 2 });
+      await page.waitForTimeout(10);
+    }
     await page.mouse.up();
-    await page.waitForTimeout(150);
+    await page.waitForTimeout(200);
     const stored = await page.evaluate(
       () => localStorage.getItem('channels-sidebar-width'));
     assert(stored !== null, 'sidebar width should be persisted, got: ' + stored);
