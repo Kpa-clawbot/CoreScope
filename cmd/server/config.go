@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
@@ -90,6 +91,9 @@ type Config struct {
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
 
+	// Analytics steady-state background recompute (issue #1240).
+	Analytics *AnalyticsConfig `json:"analytics,omitempty"`
+
 	// BatteryThresholds: voltage cutoffs for low/critical alerts (#663).
 	BatteryThresholds *BatteryThresholdsConfig `json:"batteryThresholds,omitempty"`
 }
@@ -129,14 +133,16 @@ type ResolvedPathConfig struct {
 
 // NeighborGraphConfig controls neighbor edge pruning.
 type NeighborGraphConfig struct {
-	MaxAgeDays int `json:"maxAgeDays"` // edges older than this are pruned (default 5)
+	MaxAgeDays int     `json:"maxAgeDays"` // edges older than this are pruned (default 5)
+	MaxEdgeKm  float64 `json:"maxEdgeKm"`  // geo-implausibility threshold (km); 0 = default 500; negative disables (#1228)
 }
 
 // PacketStoreConfig controls in-memory packet store limits.
 type PacketStoreConfig struct {
-	RetentionHours float64 `json:"retentionHours"` // max age of packets in hours (0 = unlimited)
-	MaxMemoryMB                    int `json:"maxMemoryMB"`                    // hard memory ceiling in MB (0 = unlimited)
-	MaxResolvedPubkeyIndexEntries  int `json:"maxResolvedPubkeyIndexEntries"`  // warning threshold for index size (0 = 5M default)
+	RetentionHours                float64 `json:"retentionHours"`                // max age of packets in hours (0 = unlimited)
+	MaxMemoryMB                   int     `json:"maxMemoryMB"`                   // hard memory ceiling in MB (0 = unlimited)
+	MaxResolvedPubkeyIndexEntries int     `json:"maxResolvedPubkeyIndexEntries"` // warning threshold for index size (0 = 5M default)
+	HotStartupHours               float64 `json:"hotStartupHours"`               // load only this many hours synchronously; 0 = disabled
 }
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
@@ -182,6 +188,19 @@ func (c *Config) NeighborMaxAgeDays() int {
 		return c.NeighborGraph.MaxAgeDays
 	}
 	return 5
+}
+
+// NeighborMaxEdgeKm returns the geo-implausibility threshold in km.
+// 0 (unset) → DefaultMaxEdgeKm (500). Negative → 0 (filter disabled).
+// See issue #1228.
+func (c *Config) NeighborMaxEdgeKm() float64 {
+	if c == nil || c.NeighborGraph == nil || c.NeighborGraph.MaxEdgeKm == 0 {
+		return DefaultMaxEdgeKm
+	}
+	if c.NeighborGraph.MaxEdgeKm < 0 {
+		return 0
+	}
+	return c.NeighborGraph.MaxEdgeKm
 }
 
 type TimestampConfig struct {
@@ -452,4 +471,56 @@ func (c *Config) IsObserverBlacklisted(id string) bool {
 		return false
 	}
 	return c.obsBlacklistSet()[strings.ToLower(strings.TrimSpace(id))]
+}
+
+// AnalyticsConfig controls steady-state background recompute of
+// analytics endpoints (issue #1240).
+//
+// DefaultIntervalSeconds applies to every endpoint that does not have
+// an explicit per-endpoint override in RecomputeIntervalSeconds. The
+// project default is 300 (5 minutes): the operator's guiding principle
+// is "serving slightly stale data quickly is better than real-time
+// data slowly." Lower values give fresher data at higher CPU cost.
+//
+// RecomputeIntervalSeconds keys (all optional):
+//   topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew
+type AnalyticsConfig struct {
+	DefaultIntervalSeconds    int            `json:"defaultIntervalSeconds,omitempty"`
+	RecomputeIntervalSeconds  map[string]int `json:"recomputeIntervalSeconds,omitempty"`
+}
+
+// AnalyticsDefaultRecomputeInterval returns the configured default
+// recompute interval, or 5 minutes if unset/invalid.
+func (c *Config) AnalyticsDefaultRecomputeInterval() time.Duration {
+	if c != nil && c.Analytics != nil && c.Analytics.DefaultIntervalSeconds > 0 {
+		return time.Duration(c.Analytics.DefaultIntervalSeconds) * time.Second
+	}
+	return 5 * time.Minute
+}
+
+// AnalyticsRecomputeIntervals returns the per-endpoint override map.
+// Returns the zero value (all defaults) if the analytics block is
+// absent or empty.
+func (c *Config) AnalyticsRecomputeIntervals() AnalyticsRecomputeIntervals {
+	out := AnalyticsRecomputeIntervals{}
+	if c == nil || c.Analytics == nil || c.Analytics.RecomputeIntervalSeconds == nil {
+		return out
+	}
+	get := func(key string) time.Duration {
+		v, ok := c.Analytics.RecomputeIntervalSeconds[key]
+		if !ok || v <= 0 {
+			return 0
+		}
+		return time.Duration(v) * time.Second
+	}
+	out.Topology = get("topology")
+	out.RF = get("rf")
+	out.Distance = get("distance")
+	out.Channels = get("channels")
+	out.HashCollisions = get("hashCollisions")
+	out.HashSizes = get("hashSizes")
+	out.Roles = get("roles")
+	out.ObserversClockSkew = get("observersClockSkew")
+	out.NodesClockSkew = get("nodesClockSkew")
+	return out
 }

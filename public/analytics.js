@@ -2719,9 +2719,15 @@ function destroy() { _stopRolesRefresh(); _analyticsData = {}; _channelData = nu
     const rq = RegionFilter.regionQueryString();
     const regionLabel = rq ? (new URLSearchParams(rq.slice(1)).get('region') || '') : '';
 
-    let nodesResp;
+    let nodesResp, hashSizesResp;
     try {
-      nodesResp = await api('/nodes?limit=10000&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList });
+      [nodesResp, hashSizesResp] = await Promise.all([
+        api('/nodes?limit=10000&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
+        // #1270: fetch CONFIGURED-hash-size counts so the Network Overview
+        // tells the operational story (matching Hash Stats "By Repeaters"),
+        // not just a math-only count of unique pubkey slices.
+        api('/analytics/hash-sizes' + rq, { ttl: CLIENT_TTL.analyticsRF }).catch(() => null),
+      ]);
     } catch (e) {
       el.innerHTML = `<div class="text-muted" role="alert" style="padding:40px">Failed to load: ${esc(e.message)}</div>`;
       return;
@@ -2765,6 +2771,34 @@ function destroy() { _stopRolesRefresh(); _analyticsData = {}; _channelData = nu
       };
     });
 
+    // #1270: CONFIGURED-hash-size counts (operational truth) from
+    // /api/analytics/hash-sizes — same source the Hash Stats tab uses.
+    // distributionByRepeaters keys are stringified ints ("1","2","3").
+    // "0" = no adverts observed yet, so the configured size is unknown
+    // and that node doesn't count for any tier.
+    const distByRepeaters = (hashSizesResp && hashSizesResp.distributionByRepeaters) || {};
+    const configuredCount = {
+      1: Number(distByRepeaters['1'] || 0),
+      2: Number(distByRepeaters['2'] || 0),
+      3: Number(distByRepeaters['3'] || 0),
+    };
+    const totalConfigured = configuredCount[1] + configuredCount[2] + configuredCount[3];
+
+    // Operational collisions per tier: only consider repeaters CONFIGURED
+    // for this hash size — same definition the Hash Issues tab uses.
+    // n.hash_size is enriched on the /nodes payload from GetNodeHashSizeInfo.
+    const opCollisions = { 1: 0, 2: 0, 3: 0 };
+    [1, 2, 3].forEach(b => {
+      const sub = new Map();
+      nodes.forEach(n => {
+        if (n.hash_size !== b) return;
+        const p = n.public_key.toUpperCase().slice(0, b * 2);
+        if (!sub.has(p)) sub.set(p, 0);
+        sub.set(p, sub.get(p) + 1);
+      });
+      opCollisions[b] = [...sub.values()].filter(c => c > 1).length;
+    });
+
     // Recommendation by network size
     const totalNodes = nodes.length;
     let rec, recDetail;
@@ -2797,29 +2831,45 @@ function destroy() { _stopRolesRefresh(); _analyticsData = {}; _channelData = nu
             <div class="analytics-stat-card" style="flex:1;min-width:110px">
               <div class="analytics-stat-label">Total repeaters</div>
               <div class="analytics-stat-value">${totalNodes.toLocaleString()}</div>
+              <div class="text-muted" style="font-size:0.78em;margin-top:4px">
+                ${totalConfigured.toLocaleString()} with known hash size
+              </div>
             </div>
-            ${[1, 2, 3].map(b => `
-            <div class="analytics-stat-card" style="flex:1;min-width:150px;border-color:${stats[b].collidingPrefixes > 0 ? 'var(--status-red)' : 'var(--border)'}">
+            ${[1, 2, 3].map(b => {
+              // #1270: PRIMARY = configured-for-this-size repeater count
+              // (operational truth, matches Hash Stats "By Repeaters").
+              // SECONDARY = math fact (unique pubkey slices). OPERATIONAL
+              // COLLISIONS = colliding slices among configured-for-this-size repeaters only.
+              const cfg = configuredCount[b];
+              const opC = opCollisions[b];
+              const borderVar = opC > 0 ? 'var(--status-red)' : 'var(--border)';
+              const opLine = opC === 0
+                ? `<span style="color:var(--status-green)">✅ No operational collisions</span>`
+                : `<span style="color:var(--status-red)">⚠️ ${opC} operational collision${opC !== 1 ? 's' : ''}</span>`;
+              return `
+            <div class="analytics-stat-card" style="flex:1;min-width:170px;border-color:${borderVar}">
               <div class="analytics-stat-label">${b}-byte prefixes</div>
-              <div class="analytics-stat-value" style="font-size:1em">
-                ${stats[b].usedPrefixes.toLocaleString()}
-                <span class="text-muted" style="font-size:0.7em"> / ${spaceSizes[b].toLocaleString()}</span>
+              <div class="analytics-stat-value" style="font-size:1em"
+                   data-pt-configured="${b}" data-value="${cfg}">
+                ${cfg.toLocaleString()}
+                <span class="text-muted" style="font-size:0.7em"> of ${totalNodes.toLocaleString()} repeaters configured</span>
               </div>
-              <div style="font-size:0.82em;margin-top:4px;color:${stats[b].collidingPrefixes > 0 ? 'var(--status-red)' : 'var(--status-green)'}">
-                ${stats[b].collidingPrefixes === 0
-                  ? '✅ No collisions'
-                  : `⚠️ ${stats[b].collidingPrefixes} prefix${stats[b].collidingPrefixes !== 1 ? 'es' : ''} collide`}
+              <div style="font-size:0.82em;margin-top:4px">${opLine}</div>
+              <div class="text-muted" style="font-size:0.72em;margin-top:6px;border-top:1px dashed var(--border);padding-top:4px">
+                <em>Theoretical:</em> ${stats[b].usedPrefixes.toLocaleString()} unique ${b}-byte slice${stats[b].usedPrefixes !== 1 ? 's' : ''}
+                across all repeater pubkeys (of ${spaceSizes[b].toLocaleString()} possible)
               </div>
-            </div>`).join('')}
+            </div>`;
+            }).join('')}
           </div>
           <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:12px">
             <strong>Recommendation: ${rec} prefixes</strong> — ${recDetail}
             <span class="text-muted" style="font-size:0.8em;display:block;margin-top:4px">Hash size is configured per-node in firmware. Changing requires reflashing.</span>
           </div>
           <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:0.85em">
-            <strong>ℹ️ About these numbers:</strong> This tool checks <em>repeater</em> public key prefixes regardless of their configured hash size. Only repeaters are included because they are the nodes that relay packets using hash-based addressing.
-            The <a href="#/analytics?tab=collisions" style="color:var(--accent)">Hash Issues</a> tab shows only <em>operational</em> collisions — nodes that actually use the same hash size and are repeaters.
-            A collision shown here may not appear in Hash Issues if the nodes use a different hash size.
+            <strong>ℹ️ About these numbers:</strong> The primary count is how many repeaters are <em>configured</em> for each hash size (their advertised path hash byte length), matching the
+            <a href="#/analytics?tab=hashsizes" style="color:var(--accent)">Hash Stats</a> tab. Operational collisions count only repeaters configured for the same hash size whose actual prefix slices collide — same definition the
+            <a href="#/analytics?tab=collisions" style="color:var(--accent)">Hash Issues</a> tab uses. The <em>theoretical</em> line shows the math fact: how many distinct slices appear when every repeater pubkey is truncated to N bytes, regardless of configured hash size.
           </div>
         </div>
       </div>

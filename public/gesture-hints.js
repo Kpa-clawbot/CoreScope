@@ -21,13 +21,24 @@
   window.__gestureHints1065Init = 1;
 
   var NS = 'meshcore-gesture-hints-';
+  // #1244: gesture hints are bottom-anchored pills. On /live they get
+  // buried below the absolute-positioned VCR bar (+ safe-area inset),
+  // appearing as orphan "Got it" litter visible only after scrolling.
+  // Option (a) from #1244 — disable hints on /live entirely. Swipe-nav
+  // discoverability doesn't apply on Live anyway (map drag, VCR
+  // controls, and feed all own touch).
+  function onLiveRoute() {
+    var h = location.hash || '';
+    return /^#\/live(\/|$|\?)/.test(h);
+  }
   var HINTS = {
     'row-swipe': {
       key: NS + 'row-swipe',
       text: 'Tip: swipe a row left for quick actions.',
       relevant: function () {
+        if (onLiveRoute()) return false; // #1244
         var h = location.hash || '';
-        return /^#\/(packets|nodes|live)/.test(h);
+        return /^#\/(packets|nodes)/.test(h);
       },
       position: 'bottom',
     },
@@ -35,6 +46,7 @@
       key: NS + 'tab-swipe',
       text: 'Tip: swipe left or right to switch tabs.',
       relevant: function () {
+        if (onLiveRoute()) return false; // #1244
         return !!document.querySelector('[data-bottom-nav]');
       },
       position: 'bottom',
@@ -43,6 +55,7 @@
       key: NS + 'edge-drawer',
       text: 'Tip: swipe in from the left edge to open navigation.',
       relevant: function () {
+        if (onLiveRoute()) return false; // #1244
         return window.innerWidth > 768 && !!document.querySelector('.nav-drawer, [data-nav-drawer]');
       },
       position: 'top-left',
@@ -51,6 +64,7 @@
       key: NS + 'pull-refresh',
       text: 'Tip: pull down to refresh the connection.',
       relevant: function () {
+        if (onLiveRoute()) return false; // #1244
         return !!document.querySelector('.pull-to-reconnect');
       },
       position: 'top',
