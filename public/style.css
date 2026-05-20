@@ -917,6 +917,10 @@ body.scroll-locked { overflow: hidden; }
 }
 .detail-meta dt { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .3px; }
 .detail-meta dd { font-weight: 500; margin-bottom: 4px; }
+/* #1281: 📍map link inside detail-meta — UA-default blue is unreadable on
+ * dark backgrounds. Force theme-aware color via --accent. */
+.loc-map-link { color: var(--accent); font-size: 0.85em; text-decoration: none; }
+.loc-map-link:hover { text-decoration: underline; }
 .observation-current { background: var(--accent-bg, rgba(0,122,255,0.1)); font-weight: 600; }
 .detail-obs-row:hover { background: var(--hover-bg, rgba(255,255,255,0.05)); }
 .detail-obs-table th { font-size: 0.8em; text-transform: uppercase; color: var(--text-muted); }
@@ -2170,12 +2174,12 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 }
 .observer-selector { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
 .node-qr { text-align: center; margin-top: 8px; }
-.node-qr svg { max-width: 100px; border-radius: 4px; }
+.node-qr svg { max-width: 100px; height: auto; border-radius: 4px; }
 [data-theme="dark"] .node-qr svg rect[fill="#ffffff"] { fill: var(--card-bg); }
 [data-theme="dark"] .node-qr svg rect[fill="#000000"] { fill: var(--text); }
 .node-map-qr-wrap { position: relative; }
 .node-map-qr-overlay { position: absolute; bottom: 8px; right: 8px; z-index: 400; background: rgba(255,255,255,0.5); border-radius: 4px; padding: 4px; line-height: 0; margin: 0; text-align: center; }
-.node-map-qr-overlay svg { max-width: 56px !important; display: block; margin: 0; }
+.node-map-qr-overlay svg { max-width: 56px !important; height: auto; display: block; margin: 0; }
 [data-theme="dark"] .node-map-qr-overlay { background: rgba(255,255,255,0.4); }
 
 /* Replay on Live Map button in packet detail */
@@ -2462,7 +2466,8 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .node-top-row { display: flex; gap: 16px; margin-bottom: 12px; }
 .node-top-row .node-map-wrap { flex: 3; min-height: 200px; border-radius: 8px; overflow: hidden; }
 .node-top-row .node-map-wrap .node-detail-map { height: 100%; }
-.node-top-row .node-qr-wrap { flex: 1; min-width: 120px; max-width: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.node-top-row .node-qr-wrap { flex: 1; align-self: flex-start; min-width: 120px; max-width: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+.node-top-row .node-qr-wrap .node-qr { margin-top: 0; }
 .node-qr-wrap--full { max-width: 240px; margin: 0 auto; }
 .node-stats-table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
 .node-stats-table td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
@@ -2500,7 +2505,7 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
     line-height: 0;
     margin: 0;
   }
-  .node-top-row .node-qr-wrap .node-qr svg { max-width: 72px; }
+  .node-top-row .node-qr-wrap .node-qr svg { max-width: 72px; height: auto; }
   /* Hide the redundant pubkey caption inside the overlay QR — it's already
      shown in the card above and would push the overlay too large. */
   .node-top-row .node-qr-wrap .mono { display: none; }

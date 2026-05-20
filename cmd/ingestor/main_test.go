@@ -482,18 +482,20 @@ func TestEpochToISO(t *testing.T) {
 }
 
 func TestAdvertRole(t *testing.T) {
+	// advertRole now keys off AdvertFlags.Type (firmware ADV_TYPE_*) — see
+	// firmware/src/helpers/AdvertDataHelpers.h:7-12 and issue #1279 P1 #3.
 	tests := []struct {
 		name  string
 		flags *AdvertFlags
 		want  string
 	}{
-		{"repeater", &AdvertFlags{Repeater: true}, "repeater"},
-		{"room", &AdvertFlags{Room: true}, "room"},
-		{"sensor", &AdvertFlags{Sensor: true}, "sensor"},
-		{"companion (default)", &AdvertFlags{Chat: true}, "companion"},
-		{"companion (no flags)", &AdvertFlags{}, "companion"},
-		{"repeater takes priority", &AdvertFlags{Repeater: true, Room: true}, "repeater"},
-		{"room before sensor", &AdvertFlags{Room: true, Sensor: true}, "room"},
+		{"none (type 0)", &AdvertFlags{Type: 0}, "none"},
+		{"companion (type 1)", &AdvertFlags{Type: 1, Chat: true}, "companion"},
+		{"repeater (type 2)", &AdvertFlags{Type: 2, Repeater: true}, "repeater"},
+		{"room (type 3)", &AdvertFlags{Type: 3, Room: true}, "room"},
+		{"sensor (type 4)", &AdvertFlags{Type: 4, Sensor: true}, "sensor"},
+		{"future type-5", &AdvertFlags{Type: 5}, "type-5"},
+		{"nil flags falls back to companion", nil, "companion"},
 	}
 
 	for _, tt := range tests {

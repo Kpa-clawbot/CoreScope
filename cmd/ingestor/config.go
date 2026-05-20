@@ -76,6 +76,18 @@ type Config struct {
 	// obsBlacklistSetCached is the lazily-built lowercase set for O(1) lookups.
 	obsBlacklistSetCached map[string]bool
 	obsBlacklistOnce      sync.Once
+
+	// NeighborEdgesMaxAgeDays controls neighbor_edges row retention
+	// (#1287 — moved from cmd/server). 0 = default 5.
+	NeighborEdgesMaxAgeDays int `json:"neighborEdgesMaxAgeDays,omitempty"`
+}
+
+// NeighborEdgesDaysOrDefault returns the configured pruning window or 5.
+func (c *Config) NeighborEdgesDaysOrDefault() int {
+	if c == nil || c.NeighborEdgesMaxAgeDays <= 0 {
+		return 5
+	}
+	return c.NeighborEdgesMaxAgeDays
 }
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
@@ -100,9 +112,21 @@ func (f *ForeignAdvertConfig) IsDropMode() bool {
 
 // RetentionConfig controls how long stale nodes are kept before being moved to inactive_nodes.
 type RetentionConfig struct {
-	NodeDays      int `json:"nodeDays"`
-	ObserverDays  int `json:"observerDays"`
-	MetricsDays   int `json:"metricsDays"`
+	NodeDays     int `json:"nodeDays"`
+	ObserverDays int `json:"observerDays"`
+	MetricsDays  int `json:"metricsDays"`
+	// PacketDays is the retention window for transmissions (#1283).
+	// Ownership moved from cmd/server to cmd/ingestor; 0 disables.
+	PacketDays int `json:"packetDays"`
+}
+
+// PacketDaysOrZero returns the configured retention.packetDays or 0
+// (disabled) if not set.
+func (c *Config) PacketDaysOrZero() int {
+	if c.Retention != nil && c.Retention.PacketDays > 0 {
+		return c.Retention.PacketDays
+	}
+	return 0
 }
 
 // MetricsConfig controls observer metrics collection.

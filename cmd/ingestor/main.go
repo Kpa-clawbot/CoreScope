@@ -63,6 +63,15 @@ func main() {
 	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
 	store.BackfillPathJSONAsync()
 
+	// Soft-delete blacklisted observers (#1287 — moved from cmd/server).
+	if len(cfg.ObserverBlacklist) > 0 {
+		store.SoftDeleteBlacklistedObservers(cfg.ObserverBlacklist)
+	}
+
+	// Async backfill: from_pubkey for legacy ADVERT rows (#1143).
+	// Moved from cmd/server in #1287. Best-effort; must not block MQTT.
+	go store.BackfillFromPubkey(5000, 100*time.Millisecond, nil)
+
 	// Check auto_vacuum mode and optionally migrate (#919)
 	store.CheckAutoVacuum(cfg)
 
@@ -78,6 +87,19 @@ func main() {
 	metricsDays := cfg.MetricsRetentionDays()
 	store.PruneOldMetrics(metricsDays)
 	store.PruneDroppedPackets(metricsDays)
+
+	// Packet (transmissions) retention: previously lived in cmd/server,
+	// moved to ingestor in #1283 to eliminate cross-process write
+	// contention (SQLITE_BUSY). 0 = disabled.
+	packetDays := cfg.PacketDaysOrZero()
+	if packetDays > 0 {
+		if n, err := store.PruneOldPackets(packetDays); err != nil {
+			log.Printf("[prune] error: %v", err)
+		} else if n > 0 {
+			log.Printf("[prune] startup pruned %d transmissions older than %d days", n, packetDays)
+		}
+	}
+
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
@@ -112,6 +134,44 @@ func main() {
 		}
 	}()
 
+	// Daily ticker for transmission retention (#1283).
+	var packetRetentionTicker *time.Ticker
+	if packetDays > 0 {
+		packetRetentionTicker = time.NewTicker(24 * time.Hour)
+		go func() {
+			for range packetRetentionTicker.C {
+				if n, err := store.PruneOldPackets(packetDays); err != nil {
+					log.Printf("[prune] error: %v", err)
+				} else if n > 0 {
+					store.RunIncrementalVacuum(vacuumPages)
+				}
+			}
+		}()
+		log.Printf("[prune] auto-prune enabled: packets older than %d days will be removed daily", packetDays)
+	}
+
+	// Daily neighbor_edges retention (#1287 — moved from cmd/server).
+	{
+		nDays := cfg.NeighborEdgesDaysOrDefault()
+		neighborPruneTicker := time.NewTicker(24 * time.Hour)
+		go func() {
+			time.Sleep(4 * time.Minute) // stagger
+			if n, err := store.PruneNeighborEdges(nDays); err != nil {
+				log.Printf("[neighbor-prune] error: %v", err)
+			} else if n > 0 {
+				log.Printf("[neighbor-prune] startup pruned %d edges older than %d days", n, nDays)
+			}
+			for range neighborPruneTicker.C {
+				if n, err := store.PruneNeighborEdges(nDays); err != nil {
+					log.Printf("[neighbor-prune] error: %v", err)
+				} else if n > 0 {
+					log.Printf("[neighbor-prune] pruned %d edges older than %d days", n, nDays)
+				}
+			}
+		}()
+		log.Printf("[neighbor-prune] auto-prune enabled: edges older than %d days", nDays)
+	}
+
 	// Periodic stats logging (every 5 minutes)
 	statsTicker := time.NewTicker(5 * time.Minute)
 	go func() {
@@ -123,6 +183,13 @@ func main() {
 	// Per-second stats file writer for the server's /api/perf/write-sources
 	// endpoint (#1120). Best-effort; never fatal.
 	StartStatsFileWriter(store, time.Second)
+
+	// Neighbor-edges builder (#1287 — Option 4): ingestor owns
+	// neighbor_edges writes. Runs every 60s. Server reads the snapshot
+	// via cmd/server/neighbor_recomputer.go on the same cadence.
+	stopNeighborBuilder := store.StartNeighborEdgesBuilder(NeighborEdgesBuilderInterval)
+	defer stopNeighborBuilder()
+	log.Printf("[neighbor-build] enabled (interval=%s)", NeighborEdgesBuilderInterval)
 
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {
@@ -257,6 +324,9 @@ func main() {
 	log.Println("Shutting down...")
 	retentionTicker.Stop()
 	metricsRetentionTicker.Stop()
+	if packetRetentionTicker != nil {
+		packetRetentionTicker.Stop()
+	}
 	statsTicker.Stop()
 	stopWatchdog()
 	store.LogStats() // final stats on shutdown
