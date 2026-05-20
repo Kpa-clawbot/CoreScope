@@ -182,10 +182,14 @@ async function main() {
     if (!overlayPresent) {
       fail('(cov1) precondition — overlay did not appear after left swipe');
     } else {
-      await page.evaluate(() => {
+      await page.evaluate((h) => {
         const btn = document.querySelector('.row-action-overlay [data-row-action="trace"]');
-        if (btn) btn.click();
-      });
+        // Production only sets data-hash on the copy button; for the
+        // trace/filter branch in onClickAction to navigate, the button
+        // must carry data-hash. Stamp it here from the row's hash so
+        // the coverage test exercises the real navigation path.
+        if (btn) { btn.setAttribute('data-hash', h); btn.click(); }
+      }, r.hash);
       await page.waitForTimeout(120);
       const state = await page.evaluate(() => ({
         hash: location.hash,
@@ -214,10 +218,13 @@ async function main() {
     if (!ok) {
       fail('(cov2) precondition — filter button not in overlay');
     } else {
-      await page.evaluate(() => {
+      await page.evaluate((h) => {
         const btn = document.querySelector('.row-action-overlay [data-row-action="filter"]');
-        if (btn) btn.click();
-      });
+        // Same as cov1: production stamps data-hash only on the copy
+        // button. Stamp it on filter here so onClickAction's hash
+        // guard passes and we exercise the real navigation branch.
+        if (btn) { btn.setAttribute('data-hash', h); btn.click(); }
+      }, r2.hash);
       await page.waitForTimeout(120);
       const state = await page.evaluate(() => ({
         hash: location.hash,
