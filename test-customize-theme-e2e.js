@@ -41,10 +41,6 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.evaluate(() => localStorage.removeItem('cs-theme-overrides'));
     await page.reload({ waitUntil: 'load' });
     await page.waitForFunction(() => window._customizerV2 && window._customizerV2.initDone, null, { timeout: 8000 });
-    // RED-COMMIT placeholder — proves the test gates behavior. Removed in green commit.
-    const sentinel = await page.evaluate(() => window._customizerV2.RED_SENTINEL_DO_NOT_ADD);
-    assert(sentinel === 'B4_CUSTOMIZER_COVERAGE_GREEN',
-      'red commit: expected sentinel to be added by green commit, got ' + sentinel);
   });
 
   await step('customizer toggle button is wired', async () => {
