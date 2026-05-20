@@ -2237,6 +2237,73 @@ func TestScopeNameMigration(t *testing.T) {
 	}
 }
 
+// --- Feature 3: default_scope column on nodes (#899) ---
+
+func TestUpdateNodeDefaultScope(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	store, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	// Insert a node into nodes and inactive_nodes so both tables can be updated.
+	if _, err := store.db.Exec(`INSERT INTO nodes (public_key, name) VALUES ('pk1', 'Node1')`); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO inactive_nodes (public_key, name) VALUES ('pk1', 'Node1')`); err != nil {
+		t.Fatalf("insert inactive node: %v", err)
+	}
+
+	// First call: writes scope to both tables.
+	if err := store.UpdateNodeDefaultScope("pk1", "#belgium"); err != nil {
+		t.Fatalf("UpdateNodeDefaultScope: %v", err)
+	}
+	var got string
+	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = 'pk1'`).Scan(&got); err != nil {
+		t.Fatalf("read nodes.default_scope: %v", err)
+	}
+	if got != "#belgium" {
+		t.Errorf("nodes.default_scope = %q, want #belgium", got)
+	}
+	var gotInactive string
+	if err := store.db.QueryRow(`SELECT default_scope FROM inactive_nodes WHERE public_key = 'pk1'`).Scan(&gotInactive); err != nil {
+		t.Fatalf("read inactive_nodes.default_scope: %v", err)
+	}
+	if gotInactive != "#belgium" {
+		t.Errorf("inactive_nodes.default_scope = %q, want #belgium", gotInactive)
+	}
+
+	// Second call with same value: short-circuit, no redundant UPDATE (verify no error and value stable).
+	if err := store.UpdateNodeDefaultScope("pk1", "#belgium"); err != nil {
+		t.Fatalf("UpdateNodeDefaultScope short-circuit: %v", err)
+	}
+	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = 'pk1'`).Scan(&got); err != nil {
+		t.Fatalf("read after short-circuit: %v", err)
+	}
+	if got != "#belgium" {
+		t.Errorf("after short-circuit nodes.default_scope = %q, want #belgium", got)
+	}
+
+	// Third call with different value: updates both tables.
+	if err := store.UpdateNodeDefaultScope("pk1", "#eu"); err != nil {
+		t.Fatalf("UpdateNodeDefaultScope update: %v", err)
+	}
+	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = 'pk1'`).Scan(&got); err != nil {
+		t.Fatalf("read after update: %v", err)
+	}
+	if got != "#eu" {
+		t.Errorf("after update nodes.default_scope = %q, want #eu", got)
+	}
+	if err := store.db.QueryRow(`SELECT default_scope FROM inactive_nodes WHERE public_key = 'pk1'`).Scan(&gotInactive); err != nil {
+		t.Fatalf("read inactive after update: %v", err)
+	}
+	if gotInactive != "#eu" {
+		t.Errorf("after update inactive_nodes.default_scope = %q, want #eu", gotInactive)
+	}
+}
+
 // --- Issue #888: Backfill path_json from raw_hex ---
 
 func TestBackfillPathJsonFromRawHex(t *testing.T) {

@@ -2,15 +2,12 @@ package main
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -797,11 +794,12 @@ func TestLoadRegionKeys(t *testing.T) {
 	if len(keys) != 3 {
 		t.Fatalf("len(keys) = %d, want 3", len(keys))
 	}
-	// "#belgium" key = SHA256("#belgium")[:16]
-	h := sha256.Sum256([]byte("#belgium"))
-	want := h[:16]
-	if got := keys["#belgium"]; !bytes.Equal(got, want) {
-		t.Errorf("#belgium key mismatch: got %x, want %x", got, want)
+	// Pre-computed: SHA256("#belgium")[:16]. Hardcoded so a change to the key
+	// derivation algorithm (hash function, truncation length) breaks this test
+	// even if both sides were updated together.
+	wantBelgium, _ := hex.DecodeString("7085b78ed010599094f8c8e7d1aa0e27")
+	if got := keys["#belgium"]; !bytes.Equal(got, wantBelgium) {
+		t.Errorf("#belgium key mismatch: got %x, want %x", got, wantBelgium)
 	}
 	// "eu" should be normalized to "#eu"
 	if _, ok := keys["#eu"]; !ok {
@@ -814,87 +812,45 @@ func TestLoadRegionKeys(t *testing.T) {
 }
 
 func TestMatchScope(t *testing.T) {
-	// Build a known Code1 for region "#test" and payload type 5, payload "hello"
-	name := "#test"
-	h := sha256.Sum256([]byte(name))
-	key := h[:16]
+	// Fixed known-answer vectors only — no in-test HMAC computation.
+	// Keys and Code1 values are pre-computed externally so a wrong algorithm
+	// that produces consistent wrong results on both sides would still fail.
 
-	payloadType := byte(0x05)
-	payloadRaw := []byte("hello")
-
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte{payloadType})
-	mac.Write(payloadRaw)
-	hmacBytes := mac.Sum(nil)
-	code := uint16(hmacBytes[0]) | uint16(hmacBytes[1])<<8
-	if code == 0 {
-		code = 1
-	} else if code == 0xFFFF {
-		code = 0xFFFE
-	}
-	code1Bytes := [2]byte{byte(code & 0xFF), byte(code >> 8)}
-	code1 := strings.ToUpper(hex.EncodeToString(code1Bytes[:]))
-
-	regionKeys := map[string][]byte{name: key}
-
-	got := matchScope(regionKeys, payloadType, payloadRaw, code1)
-	if got != name {
-		t.Errorf("matchScope = %q, want %q", got, name)
+	// Vector 1: "#test"/payloadType=5/"hello" → Code1=2AB5
+	// Key = SHA256("#test")[:16] = 9cd8fcf22a47333b591d96a2b848b73f
+	testKey, _ := hex.DecodeString("9cd8fcf22a47333b591d96a2b848b73f")
+	testKeys := map[string][]byte{"#test": testKey}
+	if got := matchScope(testKeys, 5, []byte("hello"), "2AB5"); got != "#test" {
+		t.Errorf("#test vector: matchScope = %q, want #test", got)
 	}
 
-	// Unscoped (Code1 = 0000) → empty
-	if got := matchScope(regionKeys, payloadType, payloadRaw, "0000"); got != "" {
+	// Vector 2: "#belgium"/payloadType=5/"hello" → Code1=4A75
+	// Key = SHA256("#belgium")[:16] = 7085b78ed010599094f8c8e7d1aa0e27
+	belgiumKey, _ := hex.DecodeString("7085b78ed010599094f8c8e7d1aa0e27")
+	belgiumKeys := map[string][]byte{"#belgium": belgiumKey}
+	if got := matchScope(belgiumKeys, 5, []byte("hello"), "4A75"); got != "#belgium" {
+		t.Errorf("#belgium vector: matchScope = %q, want #belgium", got)
+	}
+
+	// Code1=0000 (unscoped transport) → no region matched
+	if got := matchScope(belgiumKeys, 5, []byte("hello"), "0000"); got != "" {
 		t.Errorf("unscoped: matchScope = %q, want empty", got)
 	}
 
-	// Scoped but no match → empty string sentinel
-	if got := matchScope(regionKeys, payloadType, payloadRaw, "BEEF"); got != "" {
+	// Code1 present but matches no configured region → empty string
+	if got := matchScope(belgiumKeys, 5, []byte("hello"), "BEEF"); got != "" {
 		t.Errorf("no match: matchScope = %q, want empty", got)
-	}
-
-	// Fixed known-answer vector: pre-computed for "#belgium"/payloadType=5/payloadRaw="hello".
-	// If matchScope's HMAC construction or byte encoding changes, this test fails
-	// even if both implementation and computed vectors change together.
-	const belgiumCode1 = "4A75"
-	belgiumKey := sha256.Sum256([]byte("#belgium"))
-	belgiumKeys := map[string][]byte{"#belgium": belgiumKey[:16]}
-	if got := matchScope(belgiumKeys, 5, []byte("hello"), belgiumCode1); got != "#belgium" {
-		t.Errorf("fixed-vector: matchScope = %q, want #belgium", got)
-	}
-	if got := matchScope(belgiumKeys, 5, []byte("hello"), "0000"); got != "" {
-		t.Errorf("fixed-vector unscoped: matchScope = %q, want empty", got)
 	}
 }
 
 func TestBuildPacketDataScopeMatching(t *testing.T) {
-	// Build region key for "#test"
-	regionName := "#test"
-	h := sha256.Sum256([]byte(regionName))
-	key := h[:16]
-
-	payloadType := byte(0x05)
-	payloadRaw := []byte("hello")
-
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte{payloadType})
-	mac.Write(payloadRaw)
-	hmacBytes := mac.Sum(nil)
-	code := uint16(hmacBytes[0]) | uint16(hmacBytes[1])<<8
-	if code == 0 {
-		code = 1
-	} else if code == 0xFFFF {
-		code = 0xFFFE
-	}
-	codeBytes := [2]byte{byte(code & 0xFF), byte(code >> 8)}
-
-	// TRANSPORT_FLOOD header with payloadType in bits 2-5
-	header := byte(0x00) | (payloadType << 2)
-	raw := []byte{header}
-	raw = append(raw, codeBytes[:]...)
-	raw = append(raw, 0x00, 0x00) // Code2
-	raw = append(raw, 0x00)       // path_len
-	raw = append(raw, payloadRaw...)
-	rawHex := strings.ToUpper(hex.EncodeToString(raw))
+	// Fixed known-answer packet: TRANSPORT_FLOOD, payloadType=5, payload="hello",
+	// Code1=2AB5 (pre-computed for region "#test").
+	// header=0x14 (route_type=0 FLOOD, payloadType=5 → 5<<2), Code1=[0x2A,0xB5],
+	// Code2=[0,0], path_len=0, payload="hello" (68 65 6C 6C 6F).
+	const rawHex = "142AB500000068656C6C6F"
+	key, _ := hex.DecodeString("9cd8fcf22a47333b591d96a2b848b73f") // SHA256("#test")[:16]
+	regionKeys := map[string][]byte{"#test": key}
 
 	decoded, err := DecodePacket(rawHex, nil, false)
 	if err != nil {
@@ -902,11 +858,9 @@ func TestBuildPacketDataScopeMatching(t *testing.T) {
 	}
 
 	msg := &MQTTPacketMessage{Raw: rawHex}
-	regionKeys := map[string][]byte{regionName: key}
-
 	pktData := BuildPacketData(msg, decoded, "obs1", "region1", regionKeys)
-	if pktData.ScopeName != regionName {
-		t.Errorf("ScopeName = %q, want %q", pktData.ScopeName, regionName)
+	if pktData.ScopeName != "#test" {
+		t.Errorf("ScopeName = %q, want #test", pktData.ScopeName)
 	}
 	if !pktData.IsTransportScoped {
 		t.Error("IsTransportScoped should be true")

@@ -1120,9 +1120,14 @@ func (s *Store) BackfillPathJSONAsync() {
 }
 
 // BackfillDefaultScopeAsync populates default_scope for existing nodes that have
-// transport-scoped ADVERT rows (scope_name IS NOT NULL AND scope_name != ”).
+// transport-scoped ADVERT rows (scope_name IS NOT NULL AND scope_name != “).
 // Runs in a background goroutine so it does not block MQTT startup.
 // Uses the from_pubkey index — O(nodes × indexed lookup), not a full table scan.
+//
+// Concurrency: the store uses SetMaxOpenConns(1) so all DB writes — including
+// MQTT packet inserts and any concurrent backfill goroutines — serialize through
+// the single connection pool. busy_timeout(5000) handles transient cross-process
+// contention with the read-only server process. No additional locking is needed.
 func (s *Store) BackfillDefaultScopeAsync(regionKeys map[string][]byte) {
 	// No region keys configured — all scope_name values will be NULL, nothing to backfill.
 	if len(regionKeys) == 0 {

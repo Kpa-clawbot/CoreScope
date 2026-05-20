@@ -1469,6 +1469,73 @@ func TestOpenDBInvalidPath(t *testing.T) {
 	}
 }
 
+// TestDetectSchemaScopeName verifies that OpenDB sets hasScopeName and
+// hasDefaultScope via the real detectSchema path when the columns are present.
+// The existing ScopeStats tests set these flags manually — this test ensures
+// the flag-setting code itself is covered.
+func TestDetectSchemaScopeName(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "detect.db")
+
+	// Create file-based DB with the scope_name and default_scope columns.
+	conn, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.SetMaxOpenConns(1)
+	if _, err := conn.Exec(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, hash TEXT, scope_name TEXT)`); err != nil {
+		conn.Close()
+		t.Fatalf("create transmissions: %v", err)
+	}
+	if _, err := conn.Exec(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY, default_scope TEXT)`); err != nil {
+		conn.Close()
+		t.Fatalf("create nodes: %v", err)
+	}
+	if _, err := conn.Exec(`CREATE TABLE observations (id INTEGER PRIMARY KEY)`); err != nil {
+		conn.Close()
+		t.Fatalf("create observations: %v", err)
+	}
+	conn.Close()
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	if !db.hasScopeName {
+		t.Error("hasScopeName should be true when scope_name column exists")
+	}
+	if !db.hasDefaultScope {
+		t.Error("hasDefaultScope should be true when default_scope column exists")
+	}
+
+	// Verify the flags stay false when the columns are absent.
+	dbPath2 := filepath.Join(dir, "detect2.db")
+	conn2, err := sql.Open("sqlite", dbPath2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn2.SetMaxOpenConns(1)
+	conn2.Exec(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, hash TEXT)`)
+	conn2.Exec(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY)`)
+	conn2.Exec(`CREATE TABLE observations (id INTEGER PRIMARY KEY)`)
+	conn2.Close()
+
+	db2, err := OpenDB(dbPath2)
+	if err != nil {
+		t.Fatalf("OpenDB2: %v", err)
+	}
+	defer db2.Close()
+
+	if db2.hasScopeName {
+		t.Error("hasScopeName should be false when scope_name column is absent")
+	}
+	if db2.hasDefaultScope {
+		t.Error("hasDefaultScope should be false when default_scope column is absent")
+	}
+}
+
 func TestGetChannelMessagesObserverFallback(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
