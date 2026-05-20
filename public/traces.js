@@ -81,13 +81,7 @@
           if (hops.length > 0) allPathsRaw.push({ hops, observer: obsLabel(t) });
         } catch {}
       }
-      const allPaths = allPathsRaw.filter(({ hops }) => {
-        const sig = hops.join(',');
-        return !allPathsRaw.some(other => {
-          if (other.hops.length <= hops.length) return false;
-          return other.hops.slice(0, hops.length).join(',') === sig;
-        });
-      });
+      const allPaths = dedupePrefixPaths(allPathsRaw);
       // Fallback to packet-level path
       if (allPaths.length === 0) {
         for (const p of packets) {
@@ -105,13 +99,13 @@
         try { decoded = JSON.parse(packetMeta.decoded_json); } catch {}
       }
 
-      renderResults(results, allPaths, decoded);
+      renderResults(results, allPaths, allPathsRaw, decoded);
     } catch (e) {
       results.innerHTML = `<div class="trace-empty" style="color:#ef4444">Error: ${e.message}</div>`;
     }
   }
 
-  function renderResults(container, allPaths, decoded) {
+  function renderResults(container, allPaths, allPathsRaw, decoded) {
     const uniqueObservers = [...new Set(traceData.map(t => t.observer))];
     const typeName = packetMeta ? payloadTypeName(packetMeta.payload_type) : '—';
     const typeClass = packetMeta ? payloadTypeColor(packetMeta.payload_type) : 'unknown';
@@ -147,12 +141,12 @@
         </div>
       </div>
 
-      ${allPaths.length > 0 ? renderPathGraph(allPaths) : ''}
+      ${allPaths.length > 0 ? renderPathGraph(allPaths, allPathsRaw) : ''}
       ${traceData.length > 0 ? renderTimeline(t0, spreadMs) : ''}
     `;
   }
 
-  function renderPathGraph(allPaths) {
+  function renderPathGraph(allPaths, allPathsRaw) {
     // Collect unique nodes and edges across all observed paths
     const nodeSet = new Set();
     const edgeMap = new Map(); // "from→to" => Set of observer labels
@@ -167,6 +161,20 @@
         const key = chain[i] + '→' + chain[i + 1];
         if (!edgeMap.has(key)) edgeMap.set(key, new Set());
         edgeMap.get(key).add(observer);
+      }
+    }
+
+    // Attribute prefix observers to the edges they witnessed.
+    // Prefix paths are dropped from allPaths to avoid spurious layout edges, but
+    // their observers still corroborated the shared prefix segment — credit them
+    // to the edges that exist in the full-path graph.
+    const allPathsSet = new Set(allPaths);
+    for (const entry of allPathsRaw) {
+      if (allPathsSet.has(entry)) continue;
+      const chain = ['Origin', ...entry.hops]; // no 'Dest': prefix stopped here
+      for (let i = 0; i < chain.length - 1; i++) {
+        const key = chain[i] + '→' + chain[i + 1];
+        if (edgeMap.has(key)) edgeMap.get(key).add(entry.observer);
       }
     }
 
@@ -308,6 +316,20 @@
         </div>
         ${rows.join('')}
       </div>`;
+  }
+
+  function dedupePrefixPaths(rawPaths) {
+    return rawPaths.filter(({ hops }) => {
+      const sig = JSON.stringify(hops);
+      return !rawPaths.some(other => {
+        if (other.hops.length <= hops.length) return false;
+        return JSON.stringify(other.hops.slice(0, hops.length)) === sig;
+      });
+    });
+  }
+
+  if (typeof window !== 'undefined') {
+    window.TracesHelpers = { dedupePrefixPaths };
   }
 
   registerPage('traces', { init, destroy });
