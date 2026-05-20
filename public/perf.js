@@ -13,16 +13,16 @@
     const el = document.getElementById('perfContent');
     if (!el) return;
     try {
-      const [server, client, ioStats, sqliteStats, writeSources] = await Promise.all([
+      // #1258: /api/health was awaited AFTER Promise.all, adding a full RTT
+      // (~50-200ms) on every 5s refresh. Issue it in parallel with the rest.
+      const [server, client, ioStats, sqliteStats, writeSources, health] = await Promise.all([
         fetch('/api/perf').then(r => r.json()),
         Promise.resolve(window.apiPerf ? window.apiPerf() : null),
         fetch('/api/perf/io').then(r => r.json()).catch(() => null),
         fetch('/api/perf/sqlite').then(r => r.json()).catch(() => null),
-        fetch('/api/perf/write-sources').then(r => r.json()).catch(() => null)
+        fetch('/api/perf/write-sources').then(r => r.json()).catch(() => null),
+        fetch('/api/health').then(r => r.json()).catch(() => null)
       ]);
-
-      // Also fetch health telemetry
-      const health = await fetch('/api/health').then(r => r.json()).catch(() => null);
 
       let html = '';
 
@@ -75,12 +75,33 @@
           return Math.round(bps) + ' B/s';
         };
         const writeWarn = ioStats.writeBytesPerSec > 10 * 1048576 ? ' ⚠️' : '';
+        const cancelled = ioStats.cancelledWriteBytesPerSec || 0;
+        // Cancelled writes warn at >1 MB/s — sustained cancellation usually
+        // means truncate/unlink racing with active writers (#1119-shaped bug).
+        const cancelledWarn = cancelled > 1048576 ? ' ⚠️' : '';
         html += `<h3>Disk I/O (server process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
           <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.readBytesPerSec || 0)}</div><div class="perf-label">Read</div></div>
           <div class="perf-card"><div class="perf-num">${fmtRate(ioStats.writeBytesPerSec || 0)}${writeWarn}</div><div class="perf-label">Write</div></div>
+          <div class="perf-card"><div class="perf-num">${fmtRate(cancelled)}${cancelledWarn}</div><div class="perf-label">Cancelled Write</div></div>
           <div class="perf-card"><div class="perf-num">${Math.round(ioStats.syscallsRead || 0)}/s</div><div class="perf-label">Syscalls Read</div></div>
           <div class="perf-card"><div class="perf-num">${Math.round(ioStats.syscallsWrite || 0)}/s</div><div class="perf-label">Syscalls Write</div></div>
         </div>`;
+
+        // Ingestor row — sourced from ingestor's own /proc/self/io snapshot
+        // surfaced via the stats file (#1120: "Both ingestor and server").
+        if (ioStats.ingestor) {
+          const ing = ioStats.ingestor;
+          const ingWriteWarn = (ing.writeBytesPerSec || 0) > 10 * 1048576 ? ' ⚠️' : '';
+          const ingCancelled = ing.cancelledWriteBytesPerSec || 0;
+          const ingCancelledWarn = ingCancelled > 1048576 ? ' ⚠️' : '';
+          html += `<h3>Disk I/O (Ingestor process)</h3><div style="display:flex;gap:16px;flex-wrap:wrap;margin:8px 0;">
+            <div class="perf-card"><div class="perf-num">${fmtRate(ing.readBytesPerSec || 0)}</div><div class="perf-label">Read</div></div>
+            <div class="perf-card"><div class="perf-num">${fmtRate(ing.writeBytesPerSec || 0)}${ingWriteWarn}</div><div class="perf-label">Write</div></div>
+            <div class="perf-card"><div class="perf-num">${fmtRate(ingCancelled)}${ingCancelledWarn}</div><div class="perf-label">Cancelled Write</div></div>
+            <div class="perf-card"><div class="perf-num">${Math.round(ing.syscallsRead || 0)}/s</div><div class="perf-label">Syscalls Read</div></div>
+            <div class="perf-card"><div class="perf-num">${Math.round(ing.syscallsWrite || 0)}/s</div><div class="perf-label">Syscalls Write</div></div>
+          </div>`;
+        }
       }
 
       // Write Sources (#1120) — per-component counters from ingestor
@@ -209,8 +230,15 @@
         html += `</div>`;
       }
 
-      // Server endpoints table
-      const eps = Object.entries(server.endpoints);
+      // Server endpoints table — sort by total time (count * avg) DESC.
+      // #1258: header claimed "sorted by total time" but JSON map order is
+      // undefined and the frontend was not sorting. Slow endpoints could
+      // appear anywhere in the table, defeating the section's whole purpose.
+      const eps = Object.entries(server.endpoints).sort((a, b) => {
+        const ta = (a[1].count || 0) * (a[1].avgMs || 0);
+        const tb = (b[1].count || 0) * (b[1].avgMs || 0);
+        return tb - ta;
+      });
       if (eps.length) {
         html += '<h3>Server Endpoints (sorted by total time)</h3>';
         html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Endpoint</th><th scope="col">Count</th><th scope="col">Avg</th><th scope="col">P50</th><th scope="col">P95</th><th scope="col">Max</th><th scope="col">Total</th></tr></thead><tbody>';
@@ -260,10 +288,28 @@
   registerPage('perf', {
     init(app) {
       render(app);
-      interval = setInterval(refresh, 5000);
+      // #1258: don't burn CPU/network rebuilding the page (and its many cards
+      // + 3 large tables) every 5s while the tab is hidden. Pause polling on
+      // visibilitychange and resume on focus. Reduces background fetch traffic
+      // to zero and prevents a returning user from seeing a 100+ms thrash as
+      // a backlog of refreshes flush.
+      const tick = () => {
+        if (document.hidden) return;
+        refresh();
+      };
+      interval = setInterval(tick, 5000);
+      const onVis = () => {
+        if (!document.hidden) refresh();
+      };
+      document.addEventListener('visibilitychange', onVis);
+      this._onVis = onVis;
     },
     destroy() {
       if (interval) { clearInterval(interval); interval = null; }
+      if (this._onVis) {
+        document.removeEventListener('visibilitychange', this._onVis);
+        this._onVis = null;
+      }
     }
   });
 })();

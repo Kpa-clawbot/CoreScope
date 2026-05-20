@@ -128,20 +128,37 @@
   }
 
   // Track tables we've wired up so resize triggers re-apply.
-  const wired = new Set();
+  // Map<table, ResizeObserver|null> — we need the RO ref so SPA remounts can
+  // disconnect the orphaned observer when its <table> leaves the DOM.
+  // Pre-#1213 fix this was a Set and each /nodes (or /packets/observers)
+  // remount registered a fresh RO against a freshly-rendered table while the
+  // previous table+RO sat detached but observed → 1 leaked RO per remount.
+  const wired = new Map();
   // Track last-seen wrap width per table so we only treat ACTUAL container
   // resizes as a reason to drop the user's reveal state. Hiding/showing
   // columns and removing the pill mutate layout and re-trigger ResizeObserver,
   // which would otherwise immediately stomp on the reveal the user just asked for.
   const lastWrapW = new WeakMap();
+  // Sweep tables that have been detached from the DOM (e.g. SPA destroyed
+  // their page) and release their ResizeObserver. Called opportunistically on
+  // every register() — cheap O(n) over wired tables, n is tiny in practice.
+  function sweepDetached() {
+    wired.forEach((ro, t) => {
+      if (!t || !t.isConnected) {
+        if (ro) { try { ro.disconnect(); } catch (_) {} }
+        wired.delete(t);
+      }
+    });
+  }
   function register(table) {
+    sweepDetached();
     if (!table || wired.has(table)) { apply(table); return; }
-    wired.add(table);
+    let ro = null;
     if (typeof ResizeObserver !== 'undefined') {
       const wrap = table.closest('.table-fluid-wrap, .obs-table-scroll, .table-scroll-wrap') || table.parentElement;
       if (wrap) {
         lastWrapW.set(table, wrap.clientWidth || 0);
-        const ro = new ResizeObserver(() => {
+        ro = new ResizeObserver(() => {
           const prev = lastWrapW.get(table) || 0;
           const cur = wrap.clientWidth || 0;
           // Ignore self-induced layout reflows from apply()/clearHidden() —
@@ -155,6 +172,7 @@
         ro.observe(wrap);
       }
     }
+    wired.set(table, ro);
     apply(table);
   }
 
@@ -162,16 +180,279 @@
   window.addEventListener('resize', function () {
     clearTimeout(_winTimer);
     _winTimer = setTimeout(() => {
-      wired.forEach(t => {
-        if (!t.isConnected) { wired.delete(t); return; }
+      wired.forEach((ro, t) => {
+        if (!t.isConnected) {
+          if (ro) { try { ro.disconnect(); } catch (_) {} }
+          wired.delete(t);
+          return;
+        }
         t[REVEAL_FLAG] = false;
         apply(t);
       });
     }, 120);
   });
 
-  window.TableResponsive = { apply, register };
+  window.TableResponsive = { apply, register, sweep: sweepDetached };
 })();
+
+/* === #1056 AC#4: SlideOver — narrow-viewport row-detail overlay ============
+ * Singleton backdrop + right-anchored panel injected into <body>. Used by
+ * packets/nodes/observers when window.innerWidth <= SLIDE_OVER_BP (1023,
+ * matching the data-priority="3" breakpoint reused by TableResponsive).
+ *
+ *   SlideOver.shouldUse()   → boolean (current viewport <= breakpoint)
+ *   SlideOver.open(opts)    → returns the inner content element. opts:
+ *     { title?: string, onClose?: function, restoreFocus?: () => Element|null }
+ *     `restoreFocus` (optional) overrides the auto-captured
+ *     `document.activeElement` and is invoked at close time to look up the
+ *     element to focus. Use this when the caller re-renders the originating
+ *     row before/after opening (which would otherwise detach the focused
+ *     row from the DOM and leave nothing for auto-restore to find).
+ *   SlideOver.close()       → close + dispatch onClose
+ *   SlideOver.isOpen()      → boolean
+ *
+ * Close affordances: X button (.slide-over-close), backdrop click, Escape.
+ * Reuses `slideInRight` keyframe in style.css.
+ */
+(function () {
+  if (window.SlideOver) return;
+
+  // #1168 Munger #3: shared, ref-counted scroll-lock helper. Multiple
+  // modal surfaces (SlideOver, ChannelColorPicker, future modals) call
+  // acquire()/release() with their own token; the body keeps the
+  // `scroll-locked` class (CSS supplies overflow:hidden in style.css)
+  // for as long as the count > 0. Last release removes the class.
+  // This replaces the previous capture-and-restore-string approach
+  // which corrupted body.style.overflow under last-writer-wins races.
+  if (!window.__scrollLock) {
+    let count = 0;
+    let next = 1;
+    const live = new Set();
+    function acquire() {
+      const token = next++;
+      live.add(token);
+      count++;
+      if (count === 1) document.body.classList.add('scroll-locked');
+      return token;
+    }
+    function release(token) {
+      if (token == null || !live.has(token)) return;
+      live.delete(token);
+      count--;
+      if (count <= 0) {
+        count = 0;
+        document.body.classList.remove('scroll-locked');
+      }
+    }
+    window.__scrollLock = { acquire: acquire, release: release };
+  }
+
+  const BP = 1023;
+  let backdrop = null, panel = null, content = null, closeCb = null;
+  let prevFocus = null, prevFocusResolver = null;
+  // #1168 Munger #1: openSeq counter so a stale rAF from close() can
+  // detect a newer open() happened in between and skip its focus call.
+  let openSeq = 0;
+  // #1168 Munger #3: ref-counted scroll-lock token held by THIS surface
+  // (multiple SlideOver opens reuse the same token; only paired with a
+  // matching release on close).
+  let scrollLockToken = null;
+
+  function ensureNodes() {
+    if (panel && backdrop) return;
+    backdrop = document.createElement('div');
+    backdrop.className = 'slide-over-backdrop';
+    backdrop.hidden = true;
+    // Backdrop is decorative — assistive tech should not announce it.
+    backdrop.setAttribute('aria-hidden', 'true');
+    backdrop.addEventListener('click', function () { close(); });
+
+    panel = document.createElement('aside');
+    panel.className = 'slide-over-panel';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-modal', 'true');
+    // #1168 must-fix #4: a static aria-label="Detail" would override the
+    // meaningful <h3 id="slideOverTitle"> (e.g. "Packet ab12cd…", node name)
+    // for screen-reader users. Use aria-labelledby so the announced name
+    // is the actual title rendered into the panel.
+    panel.setAttribute('aria-labelledby', 'slideOverTitle');
+    panel.hidden = true;
+    panel.tabIndex = -1;
+    panel.innerHTML =
+      '<div class="slide-over-header">' +
+        '<h3 class="slide-over-title" id="slideOverTitle"></h3>' +
+        '<button type="button" class="slide-over-close" aria-label="Close detail (Esc)" title="Close">✕</button>' +
+      '</div>' +
+      '<div class="slide-over-content"></div>';
+    panel.querySelector('.slide-over-close').addEventListener('mousedown', function (e) {
+      // Prevent the X from stealing focus on pointer-press. Without this,
+      // Chromium focuses the button on mousedown → close() runs while X has
+      // focus → hiding the panel triggers an implicit blur to <body> that
+      // races with (and clobbers) our row-focus-restore. With this guard,
+      // the originating row keeps focus throughout the click → the post-
+      // close rAF restore runs unopposed.
+      e.preventDefault();
+    });
+    panel.querySelector('.slide-over-close').addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    });
+    // Focus trap: keep Tab cycling inside the panel while open.
+    panel.addEventListener('keydown', function (e) {
+      if (e.key !== 'Tab' || !isOpen()) return;
+      const focusables = panel.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (!focusables.length) return;
+      const first = focusables[0], last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === panel)) {
+        e.preventDefault();
+        try { last.focus(); } catch {}
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        try { first.focus(); } catch {}
+      }
+    });
+    document.body.appendChild(backdrop);
+    document.body.appendChild(panel);
+
+    // Single Escape handler shared across all uses.
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && isOpen()) {
+        e.stopPropagation();
+        close();
+      }
+    });
+
+    // #1168 Munger #2: hashchange cleanup. Without this, navigating from
+    // /#/packets to /#/nodes via location.hash leaves panel + backdrop +
+    // scroll-lock dangling across pages. Registered once with the other
+    // singleton listeners.
+    //
+    // Scope: only close on PAGE-route changes (first hash segment), not
+    // on within-page detail navigation. Observers (and others) write
+    // /#/observers/<id> when opening a row; that hashchange must NOT
+    // close the slide-over we just opened.
+    window.addEventListener('hashchange', function (e) {
+      if (!isOpen()) return;
+      function pageOf(hash) {
+        var m = String(hash || '').match(/^#?\/?([^\/?#]+)/);
+        return m ? m[1] : '';
+      }
+      var oldPage = pageOf(e && e.oldURL ? e.oldURL.split('#')[1] || '' : '');
+      var newPage = pageOf(e && e.newURL ? e.newURL.split('#')[1] || '' : location.hash);
+      if (oldPage !== newPage) close();
+    });
+  }
+
+  function shouldUse() {
+    return (window.innerWidth || document.documentElement.clientWidth) <= BP;
+  }
+
+  function isOpen() {
+    return !!(panel && !panel.hidden);
+  }
+
+  function open(opts) {
+    // If already open, properly close the prior caller first so its onClose
+    // (which clears `selectedKey`/hash state) fires before we replace it.
+    if (isOpen()) close();
+    ensureNodes();
+    opts = opts || {};
+    // #1168 Munger #1: bump open sequence so any pending rAF from a
+    // prior close() can detect that a newer open has happened and skip
+    // its stale focus-restore.
+    openSeq++;
+    closeCb = typeof opts.onClose === 'function' ? opts.onClose : null;
+    // If the caller passes restoreFocus(), it owns lookup at close-time —
+    // useful when the caller re-renders the row table (which would detach
+    // any auto-captured prevFocus DOM node).
+    prevFocusResolver = typeof opts.restoreFocus === 'function' ? opts.restoreFocus : null;
+    // Remember what was focused so we can restore on close.
+    prevFocus = (document.activeElement && document.activeElement !== document.body)
+      ? document.activeElement : null;
+    // #1168 Munger #3: ref-counted scroll-lock — class-based, not value-restore.
+    // Survives interleaved lockers (other modals can also acquire/release).
+    if (scrollLockToken == null) {
+      scrollLockToken = window.__scrollLock.acquire();
+    }
+    const title = panel.querySelector('.slide-over-title');
+    title.textContent = opts.title || 'Detail';
+    content = panel.querySelector('.slide-over-content');
+    content.innerHTML = '';
+    backdrop.hidden = false;
+    panel.hidden = false;
+    // Focus the close button so Esc/Enter works without an extra tab.
+    const x = panel.querySelector('.slide-over-close');
+    if (x) try { x.focus(); } catch {}
+    return content;
+  }
+
+  function close() {
+    if (!panel || panel.hidden) return;
+    panel.hidden = true;
+    if (backdrop) backdrop.hidden = true;
+    // #1168 Munger #3: release the ref-counted scroll-lock token.
+    if (scrollLockToken != null) {
+      window.__scrollLock.release(scrollLockToken);
+      scrollLockToken = null;
+    }
+    const cb = closeCb;
+    closeCb = null;
+    if (content) content.innerHTML = '';
+    // Restore focus to whatever opened us (typically the table row), so
+    // keyboard users don't get dumped at the top of the document.
+    let toFocus = prevFocus;
+    const resolver = prevFocusResolver;
+    prevFocus = null;
+    prevFocusResolver = null;
+    // #1168 Munger #1: capture the open-sequence at close-time. If a NEW
+    // open() happens before our deferred rAF fires, openSeq will have
+    // advanced past this value and the stale rAF must no-op (otherwise
+    // it would steal focus back to row A's originating row AFTER row B
+    // is open — clobbering B's focus).
+    const seqAtClose = openSeq;
+    if (cb) try { cb(); } catch {}
+    // Resolver runs AFTER cb (cb may re-render the table and reattach the row).
+    if (resolver) {
+      try {
+        const resolved = resolver();
+        if (resolved) toFocus = resolved;
+      } catch {}
+    }
+    if (toFocus && typeof toFocus.focus === 'function' && document.body.contains(toFocus)) {
+      // Defer to next microtask + rAF so the focus call lands AFTER any
+      // event-handler bookkeeping (e.g. an Escape keydown chain that would
+      // otherwise see focus snap back to <body> as the key event unwinds).
+      const target = toFocus;
+      const tryFocus = function () {
+        // Munger #1: bail if a newer open() has happened since close-time.
+        if (openSeq !== seqAtClose) return;
+        if (document.body.contains(target)) {
+          try { target.focus(); } catch {}
+        }
+      };
+      tryFocus();
+      requestAnimationFrame(tryFocus);
+    }
+  }
+
+  // If the viewport grows past the breakpoint while open, close the slide-over
+  // so callers can re-route into the wide-viewport side panel.
+  let _resizeT = null;
+  window.addEventListener('resize', function () {
+    if (!isOpen()) return;
+    clearTimeout(_resizeT);
+    _resizeT = setTimeout(function () {
+      if (isOpen() && !shouldUse()) close();
+    }, 120);
+  });
+
+  window.SlideOver = { open: open, close: close, isOpen: isOpen, shouldUse: shouldUse, BP: BP };
+})();
+
 
 (function () {
   let packets = [];
@@ -183,6 +464,75 @@
     const o = observerMap.get(id);
     if (!o) return id;
     return o.iata ? `${o.name} (${o.iata})` : o.name;
+  }
+  // Compact IATA pill (#1188) — renders next to observer name. Prefers
+  // packet.observer_iata (now joined on the server) and falls back to the
+  // observer lookup map for callers that haven't been updated yet.
+  function obsIataBadge(packet) {
+    if (!packet) return '';
+    let iata = packet.observer_iata;
+    if (!iata) {
+      const o = packet.observer_id ? observerMap.get(packet.observer_id) : null;
+      iata = o && o.iata;
+    }
+    return iata ? `<span class="badge-iata">${escapeHtml(iata)}</span>` : '';
+  }
+  // Plain observer name without the trailing IATA — used when the IATA is
+  // rendered separately as a badge (so the cell doesn't show "Name (SJC) SJC").
+  function obsNameOnly(id) {
+    if (!id) return '—';
+    const o = observerMap.get(id);
+    if (!o) return id;
+    return o.name;
+  }
+  // #1189 R1 mesh-operator feedback: in a grouped row the old cell showed ONE
+  // observer's IATA + `+N` — operators couldn't tell whether the N additional
+  // observers were SAME-region (redundant copies) or CROSS-region (interesting
+  // multi-site reception). This helper returns the cell's badge HTML showing
+  // the DISTINCT IATA set: `<badge>SJC</badge>` or `<badge>SJC</badge><badge>SFO</badge>+1`
+  // (capped at 2 visible, remainder rolled into +N of distinct-region count).
+  // Returns '' when no observer in the group carries any IATA.
+  //
+  // #1189 R2: source of truth is `p.distinct_iatas` from the server
+  // (added to /api/packets?groupByHash=true so the default collapsed view
+  // works without needing to expand a row). Falls back to walking
+  // p._children + observerMap for legacy callers and for client-side groups
+  // synthesised by the websocket appender.
+  function groupedObserverIataBadgesHtml(p) {
+    if (!p) return '';
+    const seen = new Set();
+    // R2 happy path: server-provided distinct_iatas.
+    if (Array.isArray(p.distinct_iatas)) {
+      for (const code of p.distinct_iatas) {
+        if (code) seen.add(String(code).toUpperCase());
+      }
+    }
+    // Fallback / supplement: walk header + children (covers in-memory groups
+    // built client-side from websocket events before any server round-trip).
+    if (!seen.size) {
+      const pushIata = (rec) => {
+        if (!rec) return;
+        let iata = rec.observer_iata;
+        if (!iata && rec.observer_id) {
+          const o = observerMap.get(rec.observer_id);
+          iata = o && o.iata;
+        }
+        if (iata) seen.add(String(iata).toUpperCase());
+      };
+      pushIata(p);
+      if (p._children && p._children.length) {
+        for (const c of p._children) pushIata(c);
+      }
+    }
+    if (!seen.size) return '';
+    const list = Array.from(seen).sort();
+    const visible = list.slice(0, 2);
+    const extra = list.length - visible.length;
+    let html = visible
+      .map(code => `<span class="badge-iata">${escapeHtml(code)}</span>`)
+      .join('');
+    if (extra > 0) html += ` +${extra}`;
+    return html;
   }
   let selectedId = null;
   function _isColorByHash() { return localStorage.getItem('meshcore-color-packets-by-hash') !== 'false'; }
@@ -1053,7 +1403,7 @@
         <thead><tr>
           <th scope="col" data-priority="1"></th><th scope="col" class="col-region" data-sort-key="region" data-priority="3">Region</th><th scope="col" class="col-time" data-sort-key="time" data-type="date" data-priority="1">Time</th><th scope="col" class="col-hash" data-sort-key="hash" data-priority="1">Hash</th><th scope="col" class="col-size" data-sort-key="size" data-type="numeric" data-priority="4">Size</th>
           <th scope="col" class="col-hashsize" data-sort-key="hb" data-type="numeric" data-priority="5">HB</th>
-          <th scope="col" class="col-type" data-sort-key="type" data-priority="1">Type</th><th scope="col" class="col-observer" data-sort-key="observer" data-priority="3">Observer</th><th scope="col" class="col-path" data-sort-key="path" data-priority="2">Path</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric" data-priority="4">Rpt</th><th scope="col" class="col-details" data-priority="2">Details</th>
+          <th scope="col" class="col-type" data-sort-key="type" data-priority="1">Type</th><th scope="col" class="col-observer" data-sort-key="observer" data-priority="1">Observer</th><th scope="col" class="col-path" data-sort-key="path" data-priority="2">Path</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric" data-priority="4">Rpt</th><th scope="col" class="col-details" data-priority="2">Details</th>
         </tr></thead>
         <tbody id="pktBody"></tbody>
       </table></div>
@@ -1432,7 +1782,10 @@
       { key: 'details', label: 'Details' },
     ];
     const isNarrow = window.innerWidth <= 640;
-    const defaultHidden = isNarrow ? ['region', 'hash', 'observer', 'path', 'rpt', 'size'] : ['region'];
+    // #1249: observer column must stay visible at narrow widths so the IATA
+    // badge (#1188) renders on mobile. Without observer in scope the user
+    // can't see who heard the packet at all.
+    const defaultHidden = isNarrow ? ['region', 'hash', 'path', 'rpt', 'size'] : ['region'];
     let visibleCols;
     try {
       visibleCols = JSON.parse(localStorage.getItem('packets-visible-cols'));
@@ -1664,7 +2017,7 @@
           <td class="col-size" data-filter-field="size" data-filter-value="${groupSize || ''}">${groupSize ? groupSize + 'B' : '—'}</td>
           <td class="col-hashsize mono">${groupHashBytes}</td>
           <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(groupTypeName || '')}">${p.payload_type != null ? `<span class="badge badge-${groupTypeClass}">${groupTypeName}</span>${transportBadge(p.route_type)}` : '—'}</td>
-          <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsName(headerObserverId) || '')}">${isSingle ? truncate(obsName(headerObserverId), 16) : truncate(obsName(headerObserverId), 10) + (p.observer_count > 1 ? ' +' + (p.observer_count - 1) : '')}</td>
+          <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(headerObserverId) || '')}">${isSingle ? truncate(obsNameOnly(headerObserverId), 16) + obsIataBadge(p) : truncate(obsNameOnly(headerObserverId), 10) + groupedObserverIataBadgesHtml(p)}</td>
           <td class="col-path"><span class="path-hops">${groupPathStr}</span></td>
           <td class="col-rpt">${p.observation_count > 1 ? '<span class="badge badge-obs" title="Seen ' + p.observation_count + ' times">👁 ' + p.observation_count + '</span>' : (isSingle ? '' : p.count)}</td>
           <td class="col-details">${getDetailPreview(getParsedDecoded(p))}</td>
@@ -1690,7 +2043,7 @@
               <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
               <td class="col-hashsize mono">${childHashBytes}</td>
               <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(c.route_type)}</td>
-              <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsName(c.observer_id) || '')}">${truncate(obsName(c.observer_id), 16)}</td>
+              <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(c.observer_id) || '')}">${truncate(obsNameOnly(c.observer_id), 16)}${obsIataBadge(c)}</td>
               <td class="col-path"><span class="path-hops">${childPathStr}</span></td>
               <td class="col-rpt"></td>
               <td class="col-details">${getDetailPreview(getParsedDecoded(c))}</td>
@@ -1722,7 +2075,7 @@
         <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
         <td class="col-hashsize mono">${hashBytes}</td>
         <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(p.route_type)}</td>
-        <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsName(p.observer_id) || '')}">${truncate(obsName(p.observer_id), 16)}</td>
+        <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(p.observer_id) || '')}">${truncate(obsNameOnly(p.observer_id), 16)}${obsIataBadge(p)}</td>
         <td class="col-path"><span class="path-hops">${pathStr}</span></td>
         <td class="col-rpt"></td>
         <td class="col-details">${detail}</td>
@@ -2268,8 +2621,42 @@
     }
     renderTableRows();
     const isMobileNow = window.innerWidth <= 640;
+    // #1168 review note: this branch is intentionally narrower than nodes.js /
+    // observers.js. On packets, ≤640 falls through to the legacy mobile bottom
+    // sheet (`isMobileNow` short-circuits before SlideOver), and SlideOver is
+    // used only for the 641–1023 range. nodes.js and observers.js route into
+    // SlideOver across the full ≤1023 range. Both satisfy AC#4 ("not a
+    // separate page"); the per-page split is deliberate — the packets table
+    // has heavier per-row affordances (hex breakdown, observations grid)
+    // that the bottom sheet handles better at very narrow widths than a
+    // side-anchored slide-over. Do NOT "fix" the inconsistency without
+    // discussing with the issue author.
+    const useSlideOver = !isMobileNow && window.SlideOver && window.SlideOver.shouldUse();
     let panel;
-    if (isMobileNow) {
+    if (useSlideOver) {
+      // #1056 AC#4: narrow viewports (641–1023) — open detail in slide-over
+      // overlay rather than the side panel.
+      panel = window.SlideOver.open({
+        title: hash ? ('Packet ' + String(hash).slice(0, 12)) : 'Packet detail',
+        // After close, the rows are re-rendered (see onClose). Use a resolver
+        // to look up the originating row in the post-render DOM by data-hash
+        // / data-id, so keyboard focus restores to the actual table row.
+        restoreFocus: function () {
+          const lookup = hash || id;
+          if (!lookup) return null;
+          const esc = (window.CSS && CSS.escape) ? CSS.escape(String(lookup)) : String(lookup);
+          return document.querySelector('#pktTable tbody tr[data-hash="' + esc + '"]')
+              || document.querySelector('#pktTable tbody tr[data-id="' + esc + '"]');
+        },
+        onClose: function () {
+          selectedId = null;
+          selectedObservationId = null;
+          history.replaceState(null, '', '#/packets');
+          renderTableRows();
+        }
+      });
+      panel.innerHTML = '<div class="text-center text-muted" style="padding:40px">Loading…</div>';
+    } else if (isMobileNow) {
       // Use mobile bottom sheet
       let sheet = document.getElementById('mobileDetailSheet');
       if (!sheet) {
@@ -2306,11 +2693,11 @@
         const newHops = hops.filter(h => !(h in hopNameCache));
         if (newHops.length) await resolveHops(newHops);
       } catch {}
-      panel.innerHTML = isMobileNow ? '' : '<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML;
+      panel.innerHTML = isMobileNow ? '' : (useSlideOver ? '' : ('<div class="panel-resize-handle" id="pktResizeHandle"></div>' + PANEL_CLOSE_HTML));
       const content = document.createElement('div');
       panel.appendChild(content);
       await renderDetail(content, data, selectedObservationId);
-      if (!isMobileNow) initPanelResize();
+      if (!isMobileNow && !useSlideOver) initPanelResize();
     } catch (e) {
       panel.innerHTML = `<div class="text-muted">Error: ${e.message}</div>`;
     }
@@ -2454,15 +2841,18 @@
       }
     }
 
-    // Location: from ADVERT lat/lon, or from known node via pubkey/sender name
-    let locationHtml = '—';
+    // Location: from ADVERT lat/lon, or from known node via pubkey/sender name.
+    // Issue #1281: only render the row when we actually have transmitter GPS.
+    // Non-ADVERT packets don't carry GPS in the unencrypted payload, so the row
+    // would otherwise render as "—" and waste a slot on ~90% of packet types.
+    let locationHtml = '';
     let locationNodeKey = null;
     if (decoded.lat != null && decoded.lon != null && !(decoded.lat === 0 && decoded.lon === 0)) {
       locationNodeKey = decoded.pubKey || decoded.srcPubKey || '';
       const nodeName = decoded.name || '';
       locationHtml = `${decoded.lat.toFixed(5)}, ${decoded.lon.toFixed(5)}`;
       if (nodeName) locationHtml = `${escapeHtml(nodeName)} — ${locationHtml}`;
-      if (locationNodeKey) locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" style="font-size:0.85em">📍map</a>`;
+      if (locationNodeKey) locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link">📍map</a>`;
     } else {
       // Try to resolve sender node location from nodes list
       const senderKey = decoded.pubKey || decoded.srcPubKey;
@@ -2474,7 +2864,7 @@
             locationNodeKey = nodeData.node.public_key;
             locationHtml = `${nodeData.node.lat.toFixed(5)}, ${nodeData.node.lon.toFixed(5)}`;
             if (nodeData.node.name) locationHtml = `${escapeHtml(nodeData.node.name)} — ${locationHtml}`;
-            locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" style="font-size:0.85em">📍map</a>`;
+            locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link">📍map</a>`;
           } else if (senderName && !senderKey) {
             // Search by name
             const searchData = await api(`/nodes/search?q=${encodeURIComponent(senderName)}`, { ttl: 30000 }).catch(() => null);
@@ -2483,7 +2873,7 @@
               locationNodeKey = match.public_key;
               locationHtml = `${match.lat.toFixed(5)}, ${match.lon.toFixed(5)}`;
               locationHtml = `${escapeHtml(match.name)} — ${locationHtml}`;
-              locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" style="font-size:0.85em">📍map</a>`;
+              locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link">📍map</a>`;
             }
           }
         } catch {}
@@ -2502,14 +2892,35 @@
       ? `<span style="font-size:0.8em;color:var(--text-muted);margin-left:6px">(observation ${observations.indexOf(currentObs) + 1} of ${observations.length})</span>`
       : '';
 
+    // #1279 P2 #3 — Transport codes detail row (firmware/src/Packet.h:46,
+    // parsed at cmd/server/decoder.go:492-498). Present on TRANSPORT_FLOOD/
+    // TRANSPORT_DIRECT routes only.
+    var tcCode1 = '—', tcCode2 = '—', tcShow = false;
+    if (decoded.transportCodes) {
+      tcShow = true;
+      if (decoded.transportCodes.code1) tcCode1 = String(decoded.transportCodes.code1).toUpperCase();
+      if (decoded.transportCodes.code2) tcCode2 = String(decoded.transportCodes.code2).toUpperCase();
+    }
+    var transportCodesRow = tcShow
+      ? `<dt>Transport Codes</dt><dd class="transport-codes">Code1: <code>${escapeHtml(tcCode1)}</code> · Code2: <code>${escapeHtml(tcCode2)}</code></dd>`
+      : '';
+
+    // #1279 P2 #5 — RAW_CUSTOM detail row (firmware/src/Mesh.cpp:577).
+    var rawCustomRow = '';
+    if (pkt.payload_type === 15 && decoded.type === 'RAW_CUSTOM') {
+      var rl = decoded.rawLength != null ? decoded.rawLength + ' byte' + (decoded.rawLength === 1 ? '' : 's') : '—';
+      var ft = decoded.firstByteTag ? String(decoded.firstByteTag).toUpperCase() : '—';
+      rawCustomRow = `<dt>Raw Custom</dt><dd class="raw-custom-detail">Length: <code>${escapeHtml(rl)}</code> · First byte tag: <code>${escapeHtml(ft)}</code></dd>`;
+    }
+
     panel.innerHTML = `
       ${anomalyBanner}
       <div class="detail-title">${hasRawHex ? `Packet Byte Breakdown (${size} bytes)` : typeName + ' Packet'}</div>
       <div class="detail-hash">${pkt.hash || 'Packet #' + pkt.id}${obsIndicator}</div>
       ${messageHtml}
       <dl class="detail-meta">
-        <dt>Observer</dt><dd>${obsName(effectivePkt.observer_id)}</dd>
-        <dt>Location</dt><dd>${locationHtml}</dd>
+        <dt>Observer</dt><dd>${obsNameOnly(effectivePkt.observer_id)}${obsIataBadge(effectivePkt)}</dd>
+        ${locationHtml ? `<dt>Location</dt><dd>${locationHtml}</dd>` : ''}
         <dt>SNR / RSSI</dt><dd>${snr != null ? snr + ' dB' : '—'} / ${rssi != null ? rssi + ' dBm' : '—'}</dd>
         <dt>Route Type</dt><dd>${routeTypeName(pkt.route_type)}</dd>
         <dt>Payload Type</dt><dd><span class="badge badge-${payloadTypeColor(pkt.payload_type)}">${typeName}</span></dd>
@@ -2517,6 +2928,8 @@
         <dt>Timestamp</dt><dd>${renderTimestampCell(effectivePkt.timestamp)}</dd>
         <dt>Propagation</dt><dd>${propagationHtml}</dd>
         <dt>Path</dt><dd>${displayHopCount > 0 ? `<span class="badge badge-info">${displayHopCount} hop${displayHopCount !== 1 ? 's' : ''}</span> ` + renderPath(pathHops, effectivePkt.observer_id) : '— (direct)'}</dd>
+        ${transportCodesRow}
+        ${rawCustomRow}
         ${effectivePkt.direction ? `<dt>Direction</dt><dd>${escapeHtml(effectivePkt.direction)}</dd>` : ''}
       </dl>
       <div class="detail-actions">
@@ -2546,7 +2959,7 @@
             const oPath = getParsedPath(o);
             const isCurrent = currentObs && String(o.id) === String(currentObs.id);
             return `<tr class="detail-obs-row${isCurrent ? ' observation-current' : ''}" data-obs-id="${o.id}" style="cursor:pointer;${isCurrent ? 'background:var(--accent-bg, rgba(0,122,255,0.1))' : ''}" title="Click to view this observation">
-              <td style="padding:4px 6px">${obsName(o.observer_id)}</td>
+              <td style="padding:4px 6px">${obsNameOnly(o.observer_id)}${obsIataBadge(o)}</td>
               <td style="padding:4px 6px">${oPath.length}</td>
               <td style="padding:4px 6px">${o.snr != null ? o.snr + ' dB' : '—'}</td>
               <td style="padding:4px 6px">${o.rssi != null ? o.rssi + ' dBm' : '—'}</td>

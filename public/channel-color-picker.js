@@ -24,6 +24,10 @@
 
   var popoverEl = null;
   var currentChannel = null;
+  // #1168 Munger #3: use shared ref-counted scroll-lock helper instead of
+  // overwriting body.style.overflow directly. Without this, two cooperating
+  // surfaces (this picker + SlideOver) corrupt overflow last-writer-wins.
+  var scrollLockToken = null;
 
   function createPopover() {
     if (popoverEl) return popoverEl;
@@ -126,8 +130,16 @@
       el.style.top = finalY + 'px';
     }
 
-    // Lock background scroll while popover is open
-    document.body.style.overflow = 'hidden';
+    // Lock background scroll while popover is open (#1168 Munger #3:
+    // ref-counted via window.__scrollLock so concurrent modal surfaces
+    // don't corrupt overflow under last-writer-wins).
+    if (window.__scrollLock && scrollLockToken == null) {
+      scrollLockToken = window.__scrollLock.acquire();
+    } else if (!window.__scrollLock) {
+      // Fallback (shouldn't happen — packets.js installs the helper at
+      // load time and is loaded before this picker).
+      document.body.style.overflow = 'hidden';
+    }
 
     // Focus first swatch for keyboard accessibility
     var firstSwatch = el.querySelector('.cc-swatch');
@@ -143,7 +155,12 @@
   function hidePopover() {
     if (popoverEl) popoverEl.style.display = 'none';
     currentChannel = null;
-    document.body.style.overflow = '';
+    if (window.__scrollLock && scrollLockToken != null) {
+      window.__scrollLock.release(scrollLockToken);
+      scrollLockToken = null;
+    } else if (!window.__scrollLock) {
+      document.body.style.overflow = '';
+    }
     document.removeEventListener('click', onOutsideClick, true);
     document.removeEventListener('keydown', onEscape, true);
   }

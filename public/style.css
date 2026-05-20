@@ -525,16 +525,60 @@ input[type="week"] {
   height: 32px;
   width: auto;
 }
-.live-dot {
-  width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted);
-  display: inline-block; margin-left: 4px; transition: background .3s;
+/* #1173: legacy navbar `.live-dot` indicator removed — WS state is now
+   encoded in the brand-logo itself (.logo-disconnected + packet-driven
+   .logo-pulse-active). The navbar element is gone from index.html, so we
+   don't ship a `display: none` shell here — `live.js` reuses `.live-dot`
+   for legend bullets (styled by live.css) and a global no-op rule would
+   wipe those out. If a stale extension/customizer ever injects a navbar
+   `.live-dot`, it's a harmless 0×0 unstyled span. */
+/* #1173: brand-logo packet-pulse animation.
+   - Class toggles only — pure CSS animation. JS adds/removes:
+     .logo-pulse-active (chained ping, source then destination)
+     .logo-pulse-blip   (reduced-motion fallback, destination only)
+     .logo-disconnected (sustained desaturate while WS down)
+   - All color comes from --logo-accent / --logo-accent-hi tokens.
+     Animation only tweaks filter: brightness() + transform: scale(). */
+.brand-logo circle.logo-node-a,
+.brand-logo circle.logo-node-b,
+.brand-mark-only circle.logo-node-a,
+.brand-mark-only circle.logo-node-b {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: filter .12s ease-out;
+  will-change: filter, transform;
 }
-@keyframes pulse-ring {
-  0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6); }
-  70% { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+@keyframes logo-pulse-step {
+  0%   { filter: brightness(1);   transform: scale(1); }
+  40%  { filter: brightness(1.6); transform: scale(1.18); }
+  100% { filter: brightness(1);   transform: scale(1); }
 }
-.live-dot.connected { background: var(--status-green); animation: pulse-ring 2s ease-out infinite; }
+.brand-logo circle.logo-pulse-active,
+.brand-mark-only circle.logo-pulse-active {
+  animation: logo-pulse-step 80ms ease-out;
+}
+@keyframes logo-pulse-blip-step {
+  0%   { opacity: 1; }
+  50%  { opacity: 0.55; }
+  100% { opacity: 1; }
+}
+.brand-logo circle.logo-pulse-blip,
+.brand-mark-only circle.logo-pulse-blip {
+  animation: logo-pulse-blip-step 140ms linear;
+}
+.brand-logo.logo-disconnected,
+.brand-mark-only.logo-disconnected {
+  filter: grayscale(0.6) opacity(0.7);
+  transition: filter .25s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-logo circle.logo-pulse-active,
+  .brand-mark-only circle.logo-pulse-active {
+    /* Defensive: in case anything mistakenly toggles the chained class
+       under reduced-motion, neutralize the scale animation. */
+    animation: none;
+  }
+}
 
 .nav-links { display: flex; align-items: center; gap: var(--space-xs); }
 .nav-link {
@@ -606,7 +650,11 @@ input[type="week"] {
    a fixed-height container (maps, virtual-scroll, split-panels) add
    .app-fixed via the router so their children can use height:100%. */
 #app { min-height: calc(100vh - 52px); min-height: calc(100dvh - 52px); }
-#app.app-fixed { height: calc(100vh - 52px); height: calc(100dvh - 52px); min-height: 0; overflow: hidden; }
+/* #1174 mesh-op review: subtract --bottom-nav-reserve so /map and the
+ * other fixed-height pages (packets, nodes, channels, audio-lab) do not
+ * have their last 56px covered by the bottom-nav at ≤768. The token is
+ * 0px at desktop so wide-viewport behavior is unchanged. */
+#app.app-fixed { height: calc(100vh - 52px - var(--bottom-nav-reserve, 0px)); height: calc(100dvh - 52px - var(--bottom-nav-reserve, 0px)); min-height: 0; overflow: hidden; }
 
 .split-layout {
   display: flex; height: 100%; overflow: hidden;
@@ -751,6 +799,68 @@ input[type="week"] {
 /* MAJOR-2: when user-resizable columns push total width past container,
  * fall back to horizontal scroll on the wrap rather than overflowing the page. */
 .table-fluid-wrap { width: 100%; overflow-x: auto; }
+
+/* === #1056 AC#4: Slide-over row-detail overlay (narrow viewports) ========
+ * Singleton .slide-over-backdrop + .slide-over-panel injected into <body>
+ * by SlideOver helper in packets.js. Used by Packets/Nodes/Observers row
+ * clicks at viewport <=1023 instead of routing to a separate page.
+ * Reuses the existing slideInRight keyframe defined later in this file.
+ */
+
+/* #1168 Munger #3: ref-counted scroll-lock. Multiple modal surfaces
+ * (SlideOver, ChannelColorPicker, future modals) acquire/release a
+ * shared count via window.__scrollLock; the class is added on first
+ * acquire and removed on last release. Replaces the previous
+ * body.style.overflow capture-and-restore string approach which
+ * corrupted overflow under last-writer-wins races. */
+body.scroll-locked { overflow: hidden; }
+.slide-over-backdrop {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+.slide-over-backdrop[hidden] { display: none; }
+.slide-over-panel {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: min(480px, 90vw);
+  z-index: 1001;
+  background: var(--detail-bg, var(--card-bg, #1f2937));
+  color: var(--text, inherit);
+  border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+  overflow-y: auto; overflow-x: hidden;
+  display: flex; flex-direction: column;
+  animation: slideInRight 200ms ease-out;
+}
+.slide-over-panel[hidden] { display: none; }
+.slide-over-header {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 10px 12px;
+  background: var(--card-bg, var(--detail-bg));
+  border-bottom: 1px solid var(--border);
+}
+.slide-over-title {
+  margin: 0; font-size: 14px; font-weight: 600;
+  color: var(--text, inherit);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.slide-over-close {
+  background: none; border: none; cursor: pointer;
+  font-size: 18px; line-height: 1;
+  color: var(--text-muted, #94a3b8);
+  padding: 4px 8px; border-radius: 4px;
+  /* WCAG 2.5.5 / Apple HIG — 48px tap target on touch devices. */
+  min-width: 44px; min-height: 44px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.slide-over-close:hover { color: var(--text, inherit); background: var(--row-hover); }
+.slide-over-close:focus-visible { outline: 2px solid var(--accent, #60a5fa); outline-offset: 2px; }
+.slide-over-content { flex: 1; min-height: 0; padding: 12px; }
+@media (prefers-reduced-motion: reduce) {
+  .slide-over-panel { animation: none; }
+}
+
 .timestamp-future-icon { margin-left: 4px; cursor: help; }
 .data-table tbody tr:nth-child(even) { background: var(--row-stripe); }
 .data-table tbody tr:hover { background: var(--row-hover); cursor: pointer; }
@@ -766,6 +876,15 @@ input[type="week"] {
   display: inline-block; padding: 2px 6px; border-radius: 4px;
   font-size: 10px; font-weight: 700; font-family: var(--mono);
   background: var(--nav-bg); color: var(--nav-text); letter-spacing: .5px;
+}
+/* Observer IATA pill rendered inline next to observer name on packets (#1188).
+ * Visually similar to .badge-region but distinct so the row badge and the
+ * inline-with-observer badge can be styled independently in future themes. */
+.badge-iata {
+  display: inline-block; padding: 1px 5px; border-radius: 4px;
+  font-size: 10px; font-weight: 700; font-family: var(--mono);
+  background: var(--nav-bg); color: var(--nav-text); letter-spacing: .5px;
+  margin-left: 4px; vertical-align: middle;
 }
 /* TODO: expose --transport-badge-bg/fg in customizer THEME_CSS_MAP (tracked in future milestone) */
 .badge-transport {
@@ -798,6 +917,10 @@ input[type="week"] {
 }
 .detail-meta dt { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .3px; }
 .detail-meta dd { font-weight: 500; margin-bottom: 4px; }
+/* #1281: 📍map link inside detail-meta — UA-default blue is unreadable on
+ * dark backgrounds. Force theme-aware color via --accent. */
+.loc-map-link { color: var(--accent); font-size: 0.85em; text-decoration: none; }
+.loc-map-link:hover { text-decoration: underline; }
 .observation-current { background: var(--accent-bg, rgba(0,122,255,0.1)); font-weight: 600; }
 .detail-obs-row:hover { background: var(--hover-bg, rgba(255,255,255,0.05)); }
 .detail-obs-table th { font-size: 0.8em; text-transform: uppercase; color: var(--text-muted); }
@@ -958,8 +1081,24 @@ input[type="week"] {
   max-width: calc(100vw - 24px);
   font-size: 13px;
   max-height: calc(100% - 24px); overflow-y: auto;
+  /* #1236: keep the scrollbar gutter reserved so the scroll affordance is
+     visible even when content briefly fits — users get a consistent visual
+     cue that the panel is scrollable. */
+  scrollbar-gutter: stable;
 }
-.map-controls h3 { font-size: 15px; margin-bottom: 10px; }
+/* #1236: sticky panel title so the scroll affordance is always visible at the
+   top of the scroll container when content overflows on small viewports. */
+.map-controls h3 {
+  font-size: 15px;
+  margin: -14px -16px 10px -16px;
+  padding: 10px 16px;
+  position: sticky;
+  top: -14px;
+  background: var(--card-bg);
+  z-index: 2;
+  border-bottom: 1px solid var(--border);
+  border-radius: 10px 10px 0 0;
+}
 .mc-section { margin-bottom: 10px; }
 .mc-label { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .3px; color: var(--text-muted); margin-bottom: 4px; }
 .mc-section label { display: block; padding: 2px 0; cursor: pointer; }
@@ -1001,11 +1140,17 @@ fieldset.mc-section legend.mc-label { padding: 0; }
   border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden;
 }
 .ch-sidebar-header {
-  padding: 14px 16px; border-bottom: 1px solid var(--border);
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
 }
 .ch-sidebar-title {
-  display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 15px; font-weight: 700;
+  flex: 1 1 auto; min-width: 0;
+  /* Name dominates; no longer push other controls onto a new row */
+  margin: 0;
 }
+.ch-header-region { margin: 0; padding: 0; flex: 0 0 auto; }
 .ch-encrypted-toggle {
   display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-muted);
   cursor: pointer; user-select: none; margin-bottom: 4px;
@@ -1617,6 +1762,39 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .ch-back-btn { display: flex; }
   .ch-main-header { display: flex; align-items: center; gap: 8px; }
 
+  /* #1224 Channels mobile UX: compact header, dominant channel name,
+     icon-only row actions, smaller empty state. */
+  .ch-sidebar-header {
+    padding: 6px 10px; gap: 6px;
+    max-height: 56px;
+  }
+  .ch-sidebar-title { font-size: 14px; }
+  .ch-sidebar-title .ch-icon { font-size: 16px; }
+  .ch-add-channel-btn { padding: 4px 8px; font-size: 12px; }
+  .ch-analytics-link { padding: 3px 7px; font-size: 13px; }
+  /* Region filter shows just its compact pills/dropdown trigger in the header. */
+  .ch-header-region .region-filter-bar { padding: 0; gap: 4px; }
+  .ch-header-region .region-pill { padding: 2px 6px; font-size: 11px; }
+  .ch-header-region .region-dropdown-trigger { padding: 3px 6px; font-size: 11px; }
+
+  /* Channel list row: name must dominate. The inline share/remove icons
+     were eating >88px because of their 44x44 touch target — push them
+     onto a per-row reveal pattern: show a single ⋮ trigger that toggles
+     the action set. Until then, shrink them to icon-only and let the
+     name grow via flex:1. */
+  #chList .ch-item { padding: 10px 12px; gap: 10px; }
+  #chList .ch-item-name { flex: 1 1 auto; min-width: 0; }
+  #chList .ch-item-top { gap: 6px; }
+  #chList .ch-icon-btn { min-width: 32px; min-height: 32px; padding: 2px 4px; }
+  #chList .ch-share-btn { font-size: 0; }
+  #chList .ch-share-btn::before { content: '📤'; font-size: 13px; }
+  #chList .ch-remove-btn { font-size: 12px; padding: 2px 6px; }
+  /* Hide the analytics-style time on mobile rows to free width for the name. */
+  #chList .ch-item-time { font-size: 10px; }
+
+  /* Empty state must not dominate. */
+  .ch-empty { padding: 12px; font-size: 13px; max-height: 30vh; }
+
   /* Tables: smaller text for mobile */
   .data-table { font-size: 11px; min-width: 0; }
   .data-table td { padding: 5px 4px; max-width: 100px; }
@@ -1809,12 +1987,14 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .ch-add-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.3; }
 .ch-add-status { font-size: 12px; margin-top: 4px; padding: 4px 6px; border-radius: 4px; }
 .ch-analytics-link {
-  display: block;
-  padding: 6px 8px;
-  font-size: 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 4px 8px;
+  font-size: 14px;
   text-decoration: none;
   color: var(--text-muted);
-  border-bottom: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  flex: 0 0 auto;
 }
 .ch-analytics-link:hover { color: var(--accent); }
 .ch-add-status--loading { color: var(--text-muted); }
@@ -1845,6 +2025,12 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
     font-size: 14px;
   }
   .ch-avatar.ch-tappable { min-width: 44px; min-height: 44px; width: 44px; height: 44px; }
+  /* #1253: trim .badge-iata h-padding + margin-left on narrow viewports so
+   * the observer cell + IATA pill fits within a 375px viewport. Without this
+   * the badge right edge overflows by ~1.25px at 375px (same class of fix
+   * as #1250/#1251 VCR LCD-clip). Badge stays fully visible — only padding
+   * and side margin shrink; font-size, colors (via vars) unchanged. */
+  .badge-iata { padding: 1px 3px; margin-left: 2px; }
 }
 
 /* Full-screen node detail */
@@ -1951,8 +2137,19 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .stat-label { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 .stat-detail { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .stat-spark { margin-top: 6px; display: flex; justify-content: center; }
-.analytics-row { display: flex; gap: 16px; margin-bottom: 16px; }
-.analytics-row .flex-1 { flex: 1; min-width: 0; }
+/* #1058 — Analytics rows: fluid + auto-stacking via CSS Grid `auto-fit`.
+   Cards stack automatically when the row can't fit two columns at the
+   400px-floor minimum (avoids cramped charts), and otherwise lay out
+   side-by-side. Replaces the prior `flex` + `@media (max-width:640px)`
+   approach so behavior is driven by available width — not viewport —
+   matching #1050's fluid-everywhere mandate. `min(100%, 400px)` keeps
+   the track from overflowing at very narrow widths. */
+.analytics-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
 .rf-stats { display: flex; gap: 16px; flex-wrap: wrap; padding-top: 8px; font-size: 13px; }
 .payload-bars { display: flex; flex-direction: column; gap: 6px; }
 .payload-bar-row { display: flex; align-items: center; gap: 8px; }
@@ -1969,7 +2166,6 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .reach-nodes { flex: 1; font-size: 12px; line-height: 1.6; }
 .reach-count { min-width: 70px; text-align: right; font-size: 12px; color: var(--text-muted); }
 @media (max-width: 640px) {
-  .analytics-row { flex-direction: column; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .repeater-name { min-width: 80px; }
   .reach-ring { flex-wrap: wrap; }
@@ -1978,12 +2174,12 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 }
 .observer-selector { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
 .node-qr { text-align: center; margin-top: 8px; }
-.node-qr svg { max-width: 100px; border-radius: 4px; }
+.node-qr svg { max-width: 100px; height: auto; border-radius: 4px; }
 [data-theme="dark"] .node-qr svg rect[fill="#ffffff"] { fill: var(--card-bg); }
 [data-theme="dark"] .node-qr svg rect[fill="#000000"] { fill: var(--text); }
 .node-map-qr-wrap { position: relative; }
 .node-map-qr-overlay { position: absolute; bottom: 8px; right: 8px; z-index: 400; background: rgba(255,255,255,0.5); border-radius: 4px; padding: 4px; line-height: 0; margin: 0; text-align: center; }
-.node-map-qr-overlay svg { max-width: 56px !important; display: block; margin: 0; }
+.node-map-qr-overlay svg { max-width: 56px !important; height: auto; display: block; margin: 0; }
 [data-theme="dark"] .node-map-qr-overlay { background: rgba(255,255,255,0.4); }
 
 /* Replay on Live Map button in packet detail */
@@ -2270,7 +2466,8 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .node-top-row { display: flex; gap: 16px; margin-bottom: 12px; }
 .node-top-row .node-map-wrap { flex: 3; min-height: 200px; border-radius: 8px; overflow: hidden; }
 .node-top-row .node-map-wrap .node-detail-map { height: 100%; }
-.node-top-row .node-qr-wrap { flex: 1; min-width: 120px; max-width: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.node-top-row .node-qr-wrap { flex: 1; align-self: flex-start; min-width: 120px; max-width: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+.node-top-row .node-qr-wrap .node-qr { margin-top: 0; }
 .node-qr-wrap--full { max-width: 240px; margin: 0 auto; }
 .node-stats-table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
 .node-stats-table td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
@@ -2287,7 +2484,36 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
     height: 200px;
     min-height: 160px;
   }
+  /* #1243 — On mobile, mirror the desktop split-pane behavior used by the
+     compact node detail (.node-map-qr-wrap): overlay the QR on the map
+     instead of stacking a 250px-tall QR panel below it. Desktop (≥768px)
+     keeps the side-by-side flex layout untouched. */
+  .node-top-row { position: relative; }
+  .node-top-row .node-map-wrap { flex: 1 1 100%; }
+  .node-top-row .node-qr-wrap {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    z-index: 400;
+    flex: 0 0 auto;
+    min-width: 0;
+    max-width: 96px;
+    padding: 4px;
+    background: var(--card-bg-translucent, rgba(255, 255, 255, 0.85));
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    line-height: 0;
+    margin: 0;
+  }
+  .node-top-row .node-qr-wrap .node-qr svg { max-width: 72px; height: auto; }
+  /* Hide the redundant pubkey caption inside the overlay QR — it's already
+     shown in the card above and would push the overlay too large. */
+  .node-top-row .node-qr-wrap .mono { display: none; }
+  [data-theme="dark"] .node-top-row .node-qr-wrap {
+    background: var(--card-bg-translucent-dark, rgba(255, 255, 255, 0.4));
+  }
 }
+
 .detail-back-btn {
   background: none;
   border: 1px solid var(--border, #333);
@@ -2509,10 +2735,14 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .matrix-theme .live-feed .live-feed-item:hover { background: rgba(0,255,65,0.08) !important; }
 .matrix-theme .live-feed .feed-hide-btn { color: #00ff41 !important; }
 
-/* Controls in matrix mode */
+/* Controls in matrix mode (#1205 R1) — keep matrix text/accent color
+   only. Background + border are owned by the parent #liveHeader (MESH
+   LIVE panel) now that .live-controls is in-flow and transparent;
+   re-painting an opaque box here would orphan a nested chrome rect
+   inside the header for matrix-theme users. */
 .matrix-theme .live-controls {
-  background: rgba(0, 10, 0, 0.9) !important;
-  border-color: #00ff4130 !important;
+  background: transparent !important;
+  border: 0 !important;
   color: #00ff41 !important;
 }
 .matrix-theme .live-controls label,
@@ -3038,6 +3268,13 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .map-side-pane .pane-toggle { cursor: pointer; padding: 8px; font-size: 14px; text-align: center; }
 .map-side-pane .pane-content { display: none; }
 .map-side-pane.expanded .pane-content { display: block; }
+/* #1236: on mobile the path-inspector side pane was eating 32px of horizontal
+   width (flex:0 0 32px) inside #map-wrap, leaving an unused gutter on the
+   right of the leaflet canvas. Path Inspector is a desktop-only convenience;
+   hide the pane on narrow viewports so the map fills 100% of the viewport. */
+@media (max-width: 640px) {
+  .map-side-pane { display: none; }
+}
 
 /* Tools landing page */
 .tools-landing { padding: 24px; max-width: 600px; }
@@ -3246,3 +3483,271 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .fux-saved-save:hover { background: var(--bg-hover, rgba(120,160,255,0.12)); }
 
 td[data-filter-field] { cursor: context-menu; }
+
+/* === Issue #1064 — Edge-swipe nav drawer ============================
+ * Slide-over from the LEFT edge. Z-index sits ABOVE bottom-nav (1200)
+ * but BELOW modal (var(--z-modal) = 9100). Fenced for parallel-PR
+ * coordination with #1062 (gesture handlers / swipe-affordance section).
+ * --------------------------------------------------------------------- */
+
+/* `pan-y` lets vertical scroll work everywhere; the drawer claims
+ * horizontal swipes inside our viewport. iOS browser back-swipe (system
+ * left-edge gesture) still works — it's at the OS layer, above the page.
+ *
+ * Mesh-Op review (PR #1184): scope this to wide viewports only. At
+ * ≤768px the drawer is `display:none` (Option A), so this rule does
+ * nothing useful and would block horizontal panning gestures the future
+ * gesture system (#1185) might want to claim. */
+@media (min-width: 769px) {
+  body { touch-action: pan-y; }
+}
+
+.nav-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 1250; /* above bottom-nav (1200), below modal-backdrop (9000) */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+.nav-drawer-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.nav-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(320px, 86vw);
+  max-width: 360px;
+  background: var(--surface);
+  color: var(--text);
+  border-right: 1px solid var(--border);
+  box-shadow: 4px 0 18px rgba(0, 0, 0, 0.35);
+  z-index: 1260; /* above its backdrop, still below modal */
+  transform: translateX(-100%);
+  transition: transform 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  outline: none;
+}
+.nav-drawer.is-open { transform: translateX(0); }
+
+.nav-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2, var(--surface));
+}
+.nav-drawer-title {
+  font-weight: 700;
+  font-size: var(--fs-md);
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+.nav-drawer-close {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.nav-drawer-close:hover,
+.nav-drawer-close:focus-visible {
+  background: var(--bg-hover, rgba(120, 160, 255, 0.12));
+  outline: none;
+}
+
+.nav-drawer-list {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+.nav-drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 18px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: var(--fs-md);
+  min-height: 48px;
+  touch-action: manipulation;
+}
+.nav-drawer-item:hover,
+.nav-drawer-item:focus-visible {
+  background: var(--bg-hover, rgba(120, 160, 255, 0.12));
+  outline: none;
+}
+.nav-drawer-icon {
+  font-size: 18px;
+  line-height: 1;
+  width: 24px;
+  text-align: center;
+  flex: none;
+}
+.nav-drawer-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Option A: drawer is wide-only (>768px). At ≤768px the bottom-nav has
+ * the More tab (PR #1174) — drawer is hidden + script bails on open(). */
+@media (max-width: 768px) {
+  .nav-drawer,
+  .nav-drawer-backdrop { display: none !important; }
+}
+
+/* Reduced motion: instant snap, no transition. */
+@media (prefers-reduced-motion: reduce) {
+  .nav-drawer { transition: none; }
+  .nav-drawer-backdrop { transition: none; }
+}
+/* === end #1064 ====================================================== */
+
+/* === #1062 Touch Gestures ============================================
+ * Visual affordances for touch-gestures.js. CSS variables only — no
+ * hardcoded colors. body owns vertical scroll natively (touch-action: pan-y);
+ * the bottom-nav opts out so we manage horizontal swipes on it.
+ * ==================================================================== */
+body { touch-action: pan-y; }
+[data-bottom-nav] { touch-action: none; }
+
+.row-swiping { transition: transform 180ms ease-out; }
+.row-action-overlay {
+  position: fixed;
+  z-index: 1500;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  background: var(--card-bg, #1a1a1a);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(40px);
+  transition: opacity 180ms ease-out, transform 180ms ease-out;
+  pointer-events: auto;
+}
+.row-action-overlay.row-action-overlay-open {
+  opacity: 1;
+  transform: translateX(0);
+}
+.row-action-overlay[hidden] { display: none; }
+.row-action-btn {
+  flex: 1 1 auto;
+  background: transparent;
+  border: none;
+  color: var(--text, #e7e7e7);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  min-height: 48px;
+  border-right: 1px solid var(--border, #333);
+}
+.row-action-btn:last-child { border-right: none; }
+.row-action-btn:hover { background: var(--bg-hover, rgba(120, 160, 255, 0.12)); }
+.row-action-btn:active { background: var(--accent-bg, rgba(0, 122, 255, 0.18)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .row-swiping,
+  .row-action-overlay { transition: none !important; }
+}
+/* === end #1062 ====================================================== */ (feat(#1062): green — implement gesture system)
+
+/* === Issue #1065 — Gesture discoverability hints =================== */
+.gesture-hint {
+  position: fixed;
+  z-index: 9999;
+  max-width: 360px;
+  /* !important guards against any layered cascade enabling pointer-events
+   * (e.g., a future overlay class with higher specificity). The hint
+   * wrapper MUST never capture clicks — only its inner button does. */
+  pointer-events: none !important;
+  opacity: 1;
+  animation-name: gesture-hint-slide-in;
+  animation-duration: 240ms;
+  animation-timing-function: ease-out;
+  animation-fill-mode: both;
+  transition: opacity 320ms ease-out;
+}
+.gesture-hint-bottom {
+  left: 50%;
+  bottom: 80px;
+  transform: translateX(-50%);
+}
+.gesture-hint-top {
+  left: 50%;
+  top: 16px;
+  transform: translateX(-50%);
+}
+.gesture-hint-top-left {
+  left: 16px;
+  top: 80px;
+}
+.gesture-hint-inner {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface-2, #1a1a1a);
+  color: var(--text, #e7e7e7);
+  border: 1px solid var(--border, #333);
+  border-radius: 999px;
+  padding: 8px 8px 8px 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  line-height: 1.3;
+}
+.gesture-hint-text {
+  white-space: normal;
+}
+.gesture-hint-dismiss {
+  pointer-events: auto;
+  background: var(--accent, #4a9eff);
+  color: var(--accent-fg, #fff);
+  border: none;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.gesture-hint-dismiss:hover { filter: brightness(1.1); }
+.gesture-hint-fading { opacity: 0; }
+
+@keyframes gesture-hint-slide-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.gesture-hint-top-left { animation-name: gesture-hint-fade-in; }
+@keyframes gesture-hint-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gesture-hint {
+    animation-name: none !important;
+    animation-duration: 0s !important;
+  }
+}
+/* === end #1065 ====================================================== */

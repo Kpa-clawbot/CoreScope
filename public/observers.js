@@ -27,7 +27,16 @@
       var btn = e.target.closest('[data-action]');
       if (btn && btn.dataset.action === 'obs-refresh') loadObservers();
       var row = e.target.closest('tr[data-action="navigate"]');
-      if (row) location.hash = row.dataset.value;
+      if (row) {
+        // #1056 AC#4: at narrow widths, open detail in slide-over instead of
+        // navigating to a separate page.
+        if (window.SlideOver && window.SlideOver.shouldUse()) {
+          e.preventDefault();
+          openObserverSlideOver(row.dataset.value);
+          return;
+        }
+        location.hash = row.dataset.value;
+      }
     });
     // #209 — Keyboard accessibility for observer rows
     app.addEventListener('keydown', function (e) {
@@ -35,6 +44,10 @@
       if (!row) return;
       if (e.key !== 'Enter' && e.key !== ' ') return;
       e.preventDefault();
+      if (window.SlideOver && window.SlideOver.shouldUse()) {
+        openObserverSlideOver(row.dataset.value);
+        return;
+      }
       location.hash = row.dataset.value;
     });
     // Auto-refresh every 30s
@@ -178,4 +191,32 @@
 
 
   registerPage('observers', { init, destroy });
+
+  // #1056 AC#4: row-detail slide-over (narrow viewports). Renders a compact
+  // summary from the in-memory observer + a link to the full page.
+  function openObserverSlideOver(hashHref) {
+    if (!window.SlideOver) return;
+    var m = String(hashHref || '').match(/#\/observers\/(.+)$/);
+    if (!m) return;
+    var id = decodeURIComponent(m[1]);
+    var o = (observers || []).find(function (x) { return String(x.id) === id; });
+    if (!o) return;
+    var h = healthStatus(o.last_seen);
+    var sk = obsSkewMap[o.id];
+    var skewLine = (sk && sk.samples) ? renderSkewBadge(observerSkewSeverity(sk.offsetSec), sk.offsetSec) + ' (' + sk.samples + ' samples)' : '—';
+    var pkts = sparkBar(o.packetsLastHour || 0, Math.max(1, o.packetsLastHour || 1));
+    var content = window.SlideOver.open({ title: o.name || o.id });
+    content.innerHTML =
+      '<dl class="slide-over-dl" style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px">' +
+        '<dt>Status</dt><dd><span class="health-dot ' + h.cls + '">●</span> ' + h.label + '</dd>' +
+        '<dt>Region</dt><dd>' + (o.iata ? '<span class="badge-region">' + o.iata + '</span>' : '—') + '</dd>' +
+        '<dt>Last status</dt><dd>' + timeAgo(o.last_seen) + '</dd>' +
+        '<dt>Last packet</dt><dd>' + (o.last_packet_at ? timeAgo(o.last_packet_at) : '—') + '</dd>' +
+        '<dt>Total packets</dt><dd>' + (o.packet_count || 0).toLocaleString() + '</dd>' +
+        '<dt>Packets/hr</dt><dd>' + pkts + '</dd>' +
+        '<dt>Clock offset</dt><dd>' + skewLine + '</dd>' +
+        '<dt>Uptime</dt><dd>' + uptimeStr(o.first_seen) + '</dd>' +
+      '</dl>' +
+      '<p style="margin-top:14px"><a class="btn-primary" href="' + hashHref + '">Open full detail →</a></p>';
+  }
 })();

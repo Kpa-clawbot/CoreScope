@@ -47,6 +47,24 @@ The config file uses the same format as the Node.js `config.json`. The ingestor 
 | `DB_PATH` | SQLite database path | `data/meshcore.db` |
 | `MQTT_BROKER` | Single MQTT broker URL (overrides config) | — |
 | `MQTT_TOPIC` | MQTT topic (used with `MQTT_BROKER`) | `meshcore/#` |
+| `CORESCOPE_INGESTOR_STATS` | Path to the per-second stats JSON file consumed by the server's `/api/perf/io` and `/api/perf/write-sources` endpoints (#1120) | `/tmp/corescope-ingestor-stats.json` |
+
+### Stats file (`CORESCOPE_INGESTOR_STATS`)
+
+Every second the ingestor publishes a JSON snapshot of its counters
+(`tx_inserted`, `obs_inserted`, `walCommits`, `backfillUpdates.*`, etc.) plus
+a `procIO` block sampled from `/proc/self/io` (read/write/cancelled bytes per
+second + syscall counts). The server reads this file and surfaces the data on
+the Perf page so operators can self-diagnose write-volume anomalies.
+
+The writer uses `O_NOFOLLOW | O_CREAT | O_TRUNC` mode `0o600`, so a
+pre-planted symlink at the path cannot be used to clobber an arbitrary file.
+
+**Security note:** the default lives in `/tmp`, which is world-writable on
+most hosts (sticky bit only protects deletion, not creation). On
+shared/multi-tenant hosts, override `CORESCOPE_INGESTOR_STATS` to point at a
+private directory (e.g. `/var/lib/corescope/ingestor-stats.json`) that only
+the corescope user can write to.
 
 ### Minimal Config
 

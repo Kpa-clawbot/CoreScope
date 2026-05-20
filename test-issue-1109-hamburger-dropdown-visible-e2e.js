@@ -1,24 +1,23 @@
 #!/usr/bin/env node
-/* Issue #1109 — Mobile hamburger dropdown is invisible (CSS clip).
+/* Issue #1109 (post-#1174 conversion) — Long-tail routes reachable on phones.
  *
- * Symptom: tap the hamburger on mobile, DOM state goes correct
- * (.nav-links.open, body.nav-open, aria-expanded=true) but the
- * dropdown is not visible. Cause: `.top-nav { overflow:hidden;
- * height:52px }` (added in #1066 fluid scaffolding) clips the
- * absolutely-positioned `.nav-links { position:absolute; top:52px }`
- * outside its containing block. Fix: switch to position:fixed at
- * <768px so the dropdown escapes the navbar's overflow trap.
+ * Original contract: tapping the hamburger surfaces the long-tail routes
+ * (Tools/Lab/Perf/Analytics/Observers/Nodes) that don't fit in the primary
+ * nav. Origin used a CSS-clip-prone dropdown.
  *
- * Prior tests checked only `.classList.contains('open')` — pure DOM
- * state — and missed the regression entirely. This test asserts
- * PIXEL-LEVEL visibility via `elementFromPoint` AND a getBoundingClientRect
- * sanity check, so a state-only fix can never lie its way past CI.
+ * #1174 replaced the hamburger-at-narrow-widths path with a 6th "More" tab
+ * in the bottom-nav that opens a bottom-anchored sheet listing the same
+ * long-tail routes. The hamburger is HIDDEN at ≤768px (its job at narrow
+ * widths is now done by the More tab).
  *
- * RCA: https://github.com/Kpa-clawbot/CoreScope/issues/1109#issuecomment-4398900387
- *
- * This test FAILS on master @ origin/master (elementFromPoint at the
- * dropdown center returns <body>, not a .nav-link) and PASSES once
- * the position:fixed fix is applied.
+ * This test asserts the converted contract:
+ *   1. At iPhone-13 viewport (390×844, mobile UA), #hamburger is NOT visible.
+ *   2. The More tab IS visible and toggles the sheet.
+ *   3. Tap More → sheet visible (pixel-level: elementFromPoint inside sheet,
+ *      bounding rect non-zero, top above the bottom-nav).
+ *   4. Tap a long-tail route inside the sheet → URL hash updates AND
+ *      sheet closes.
+ *   5. Tap More again → sheet re-opens (toggle, not push).
  */
 'use strict';
 
@@ -60,106 +59,129 @@ async function main() {
     page.setDefaultTimeout(15000);
 
     await page.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#hamburger');
-    await page.evaluate(() => document.fonts && document.fonts.ready ? document.fonts.ready : null);
+    await page.waitForSelector('[data-bottom-nav-tab="more"]');
 
-    // Sanity: hamburger is visible and dropdown is closed by default.
-    const initial = await page.evaluate(() => {
+    // 1. #hamburger hidden at ≤768px.
+    const hamburgerState = await page.evaluate(() => {
       const h = document.getElementById('hamburger');
-      const nl = document.querySelector('.nav-links');
+      if (!h) return { present: false };
+      const cs = getComputedStyle(h);
+      const r = h.getBoundingClientRect();
       return {
-        hamburgerDisplay: h ? getComputedStyle(h).display : null,
-        navOpen: nl ? nl.classList.contains('open') : null,
-        navDisplay: nl ? getComputedStyle(nl).display : null,
+        present: true,
+        display: cs.display,
+        visibility: cs.visibility,
+        width: r.width, height: r.height,
+        hidden: cs.display === 'none' || cs.visibility === 'hidden' || (r.width === 0 && r.height === 0),
       };
     });
-    if (initial.hamburgerDisplay === 'none') fail(`hamburger should be visible at <768px, got display:${initial.hamburgerDisplay}`);
-    if (initial.navOpen) fail('nav-links should NOT have .open before tap');
-    if (initial.navDisplay !== 'none') fail(`nav-links display should be 'none' before tap, got ${initial.navDisplay}`);
+    if (hamburgerState.present && !hamburgerState.hidden) {
+      fail(`#hamburger should be hidden at ≤768px (replaced by More tab); got display=${hamburgerState.display}, visibility=${hamburgerState.visibility}, size=${hamburgerState.width}x${hamburgerState.height}`);
+    }
 
-    // Tap (mobile context => Playwright synthesizes touch).
-    await page.tap('#hamburger');
-
-    // Step 1: confirm DOM state (the OLD assertion).
-    await page.waitForSelector('.nav-links.open', { timeout: 5000 });
-    const domState = await page.evaluate(() => {
-      const nl = document.querySelector('.nav-links');
-      const h = document.getElementById('hamburger');
+    // 2. More tab visible.
+    const moreState = await page.evaluate(() => {
+      const el = document.querySelector('[data-bottom-nav-tab="more"]');
+      if (!el) return { present: false };
+      const cs = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
       return {
-        open: nl.classList.contains('open'),
-        bodyOpen: document.body.classList.contains('nav-open'),
-        ariaExpanded: h.getAttribute('aria-expanded'),
-        display: getComputedStyle(nl).display,
+        present: true,
+        visible: cs.display !== 'none' && r.width > 0 && r.height > 0,
+        ariaExpanded: el.getAttribute('aria-expanded'),
+        ariaControls: el.getAttribute('aria-controls'),
       };
     });
-    if (!domState.open) fail('.nav-links.open missing after tap');
-    if (!domState.bodyOpen) fail('body.nav-open missing after tap');
-    if (domState.ariaExpanded !== 'true') fail(`aria-expanded should be 'true', got ${domState.ariaExpanded}`);
-    if (domState.display !== 'flex') fail(`nav-links display should be 'flex' after tap, got ${domState.display}`);
+    if (!moreState.present) fail('[data-bottom-nav-tab="more"] missing');
+    if (!moreState.visible) fail('More tab not visible at 390×844');
+    if (moreState.ariaExpanded !== 'false') fail(`More tab aria-expanded should be 'false' before tap, got ${moreState.ariaExpanded}`);
 
-    // Step 2: PIXEL-LEVEL visibility (the NEW assertion that gates the bug).
-    // Pick a point inside where a nav-link should render: center-x, y=100
-    // (well below the 52px navbar). On the bug, this returns <body> because
-    // the dropdown is laid out but clipped by .top-nav { overflow:hidden }.
+    // 3. Tap More → sheet visible (pixel-level).
+    await page.tap('[data-bottom-nav-tab="more"]');
+    await page.waitForSelector('[data-bottom-nav-sheet]', { timeout: 3000 });
     const probe = await page.evaluate(() => {
-      const x = Math.floor(window.innerWidth / 2);
-      const y = 100;
-      const el = document.elementFromPoint(x, y);
-      const navLinks = document.querySelector('.nav-links');
-      const firstLink = navLinks ? navLinks.querySelector('.nav-link') : null;
-      const linkRect = firstLink ? firstLink.getBoundingClientRect() : null;
-      const navLinksRect = navLinks ? navLinks.getBoundingClientRect() : null;
+      const sheet = document.querySelector('[data-bottom-nav-sheet]');
+      const cs = sheet ? getComputedStyle(sheet) : null;
+      const r = sheet ? sheet.getBoundingClientRect() : null;
+      const moreTab = document.querySelector('[data-bottom-nav-tab="more"]');
+      // Probe a point inside the sheet's rect.
+      let hitInside = false;
+      if (sheet && r && r.width > 0 && r.height > 0) {
+        const x = Math.floor(r.left + r.width / 2);
+        const y = Math.floor(r.top + r.height / 2);
+        const hit = document.elementFromPoint(x, y);
+        hitInside = !!(hit && sheet.contains(hit));
+      }
+      const items = sheet ? Array.from(sheet.querySelectorAll('[data-bottom-nav-more-route]')).map(e => e.getAttribute('data-bottom-nav-more-route')) : [];
       return {
-        x, y,
-        hitTag: el ? el.tagName : null,
-        hitClass: el ? el.className : null,
-        // Walk up to see if hit point belongs to the nav-links subtree.
-        hitInsideNavLinks: !!(el && navLinks && navLinks.contains(el)),
-        linkRect: linkRect ? {
-          top: linkRect.top, bottom: linkRect.bottom,
-          left: linkRect.left, right: linkRect.right,
-          width: linkRect.width, height: linkRect.height,
-        } : null,
-        navLinksRect: navLinksRect ? {
-          top: navLinksRect.top, bottom: navLinksRect.bottom,
-          left: navLinksRect.left, right: navLinksRect.right,
-        } : null,
+        rect: r,
+        display: cs ? cs.display : null,
+        visibility: cs ? cs.visibility : null,
+        role: sheet ? sheet.getAttribute('role') : null,
+        hitInside,
+        items,
+        moreExpanded: moreTab ? moreTab.getAttribute('aria-expanded') : null,
       };
     });
-
-    if (!probe.hitInsideNavLinks) {
-      fail(
-        `pixel-level visibility check failed: elementFromPoint(${probe.x}, ${probe.y}) returned ` +
-        `<${probe.hitTag} class="${probe.hitClass}">, expected an element inside .nav-links. ` +
-        `This means the dropdown is laid out but visually clipped (likely by an ancestor with overflow:hidden). ` +
-        `linkRect=${JSON.stringify(probe.linkRect)} navLinksRect=${JSON.stringify(probe.navLinksRect)}`
-      );
+    if (!probe.rect || probe.rect.width === 0 || probe.rect.height === 0) {
+      fail(`sheet has zero area: ${JSON.stringify(probe.rect)}`);
     }
-    if (!probe.linkRect) fail('no .nav-link found inside .nav-links');
-    if (probe.linkRect.bottom <= 60) fail(`first .nav-link bounding rect bottom (${probe.linkRect.bottom}) should be > 60 (below 52px navbar)`);
-    if (probe.linkRect.right <= 0) fail(`first .nav-link bounding rect right (${probe.linkRect.right}) should be > 0`);
-    if (probe.linkRect.width <= 0 || probe.linkRect.height <= 0) {
-      fail(`first .nav-link rect has zero area: ${JSON.stringify(probe.linkRect)}`);
+    if (probe.display === 'none' || probe.visibility === 'hidden') {
+      fail(`sheet hidden: display=${probe.display}, visibility=${probe.visibility}`);
     }
+    if (!probe.hitInside) {
+      fail(`pixel-level visibility check failed: elementFromPoint inside sheet rect did not hit a sheet descendant. rect=${JSON.stringify(probe.rect)}`);
+    }
+    if (probe.role !== 'menu') fail(`sheet role should be 'menu', got ${probe.role}`);
+    if (probe.items.length < 6) fail(`sheet should list ≥6 long-tail routes, got ${probe.items.length}: ${probe.items.join(',')}`);
+    if (probe.moreExpanded !== 'true') fail(`More tab aria-expanded should be 'true' while sheet open, got ${probe.moreExpanded}`);
 
-    // Step 3: tap to close, assert dropdown is no longer rendered.
-    await page.tap('#hamburger');
-    // Wait for state flip.
+    // 4. Tap a long-tail route → hash changes, sheet closes.
+    const firstRoute = probe.items[0];
+    await page.tap(`[data-bottom-nav-more-route="${firstRoute}"]`);
+    await page.waitForFunction((r) => location.hash === `#/${r}`, firstRoute, { timeout: 3000 });
     await page.waitForFunction(() => {
-      const nl = document.querySelector('.nav-links');
-      return nl && !nl.classList.contains('open');
-    }, { timeout: 5000 });
-    const closed = await page.evaluate(() => {
-      const nl = document.querySelector('.nav-links');
+      const s = document.querySelector('[data-bottom-nav-sheet]');
+      if (!s) return true;
+      const cs = getComputedStyle(s);
+      return cs.display === 'none' || cs.visibility === 'hidden';
+    }, null, { timeout: 3000 }).catch(() => {});
+    const afterTap = await page.evaluate(() => {
+      const s = document.querySelector('[data-bottom-nav-sheet]');
+      if (!s) return { sheetClosed: true, hash: location.hash };
+      const cs = getComputedStyle(s);
+      const r = s.getBoundingClientRect();
       return {
-        open: nl.classList.contains('open'),
-        display: getComputedStyle(nl).display,
-        bodyOpen: document.body.classList.contains('nav-open'),
+        sheetClosed: cs.display === 'none' || cs.visibility === 'hidden' || (r.width === 0 && r.height === 0),
+        hash: location.hash,
       };
     });
-    if (closed.open) fail('.nav-links.open should be gone after second tap');
-    if (closed.display !== 'none') fail(`nav-links display should be 'none' after close, got ${closed.display}`);
-    if (closed.bodyOpen) fail('body.nav-open should be cleared after close');
+    if (afterTap.hash !== `#/${firstRoute}`) fail(`hash did not change to #/${firstRoute}, got ${afterTap.hash}`);
+    if (!afterTap.sheetClosed) fail('sheet did not close after route tap');
+
+    // 5. Tap More again → sheet reopens (toggle).
+    await page.tap('[data-bottom-nav-tab="more"]');
+    await page.waitForFunction(() => {
+      const s = document.querySelector('[data-bottom-nav-sheet]');
+      if (!s) return false;
+      const cs = getComputedStyle(s);
+      return cs.display !== 'none' && cs.visibility !== 'hidden';
+    }, null, { timeout: 3000 });
+    // Now tap More AGAIN to confirm toggle (close).
+    await page.tap('[data-bottom-nav-tab="more"]');
+    await page.waitForFunction(() => {
+      const s = document.querySelector('[data-bottom-nav-sheet]');
+      if (!s) return true;
+      const cs = getComputedStyle(s);
+      return cs.display === 'none' || cs.visibility === 'hidden';
+    }, null, { timeout: 3000 }).catch(() => {});
+    const afterToggle = await page.evaluate(() => {
+      const s = document.querySelector('[data-bottom-nav-sheet]');
+      if (!s) return { closed: true };
+      const cs = getComputedStyle(s);
+      return { closed: cs.display === 'none' || cs.visibility === 'hidden' };
+    });
+    if (!afterToggle.closed) fail('sheet did not close on second More tap (toggle behavior expected)');
 
     console.log('test-issue-1109-hamburger-dropdown-visible-e2e.js: PASS');
   } finally {

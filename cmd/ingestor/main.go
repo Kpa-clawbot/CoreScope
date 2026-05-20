@@ -11,11 +11,13 @@ import (
 	"math"
 	"net/http"
 	_ "net/http/pprof"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -60,6 +62,15 @@ func main() {
 	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
 	store.BackfillPathJSONAsync()
 
+	// Soft-delete blacklisted observers (#1287 — moved from cmd/server).
+	if len(cfg.ObserverBlacklist) > 0 {
+		store.SoftDeleteBlacklistedObservers(cfg.ObserverBlacklist)
+	}
+
+	// Async backfill: from_pubkey for legacy ADVERT rows (#1143).
+	// Moved from cmd/server in #1287. Best-effort; must not block MQTT.
+	go store.BackfillFromPubkey(5000, 100*time.Millisecond, nil)
+
 	// Check auto_vacuum mode and optionally migrate (#919)
 	store.CheckAutoVacuum(cfg)
 
@@ -75,6 +86,19 @@ func main() {
 	metricsDays := cfg.MetricsRetentionDays()
 	store.PruneOldMetrics(metricsDays)
 	store.PruneDroppedPackets(metricsDays)
+
+	// Packet (transmissions) retention: previously lived in cmd/server,
+	// moved to ingestor in #1283 to eliminate cross-process write
+	// contention (SQLITE_BUSY). 0 = disabled.
+	packetDays := cfg.PacketDaysOrZero()
+	if packetDays > 0 {
+		if n, err := store.PruneOldPackets(packetDays); err != nil {
+			log.Printf("[prune] error: %v", err)
+		} else if n > 0 {
+			log.Printf("[prune] startup pruned %d transmissions older than %d days", n, packetDays)
+		}
+	}
+
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
@@ -109,6 +133,44 @@ func main() {
 		}
 	}()
 
+	// Daily ticker for transmission retention (#1283).
+	var packetRetentionTicker *time.Ticker
+	if packetDays > 0 {
+		packetRetentionTicker = time.NewTicker(24 * time.Hour)
+		go func() {
+			for range packetRetentionTicker.C {
+				if n, err := store.PruneOldPackets(packetDays); err != nil {
+					log.Printf("[prune] error: %v", err)
+				} else if n > 0 {
+					store.RunIncrementalVacuum(vacuumPages)
+				}
+			}
+		}()
+		log.Printf("[prune] auto-prune enabled: packets older than %d days will be removed daily", packetDays)
+	}
+
+	// Daily neighbor_edges retention (#1287 — moved from cmd/server).
+	{
+		nDays := cfg.NeighborEdgesDaysOrDefault()
+		neighborPruneTicker := time.NewTicker(24 * time.Hour)
+		go func() {
+			time.Sleep(4 * time.Minute) // stagger
+			if n, err := store.PruneNeighborEdges(nDays); err != nil {
+				log.Printf("[neighbor-prune] error: %v", err)
+			} else if n > 0 {
+				log.Printf("[neighbor-prune] startup pruned %d edges older than %d days", n, nDays)
+			}
+			for range neighborPruneTicker.C {
+				if n, err := store.PruneNeighborEdges(nDays); err != nil {
+					log.Printf("[neighbor-prune] error: %v", err)
+				} else if n > 0 {
+					log.Printf("[neighbor-prune] pruned %d edges older than %d days", n, nDays)
+				}
+			}
+		}()
+		log.Printf("[neighbor-prune] auto-prune enabled: edges older than %d days", nDays)
+	}
+
 	// Periodic stats logging (every 5 minutes)
 	statsTicker := time.NewTicker(5 * time.Minute)
 	go func() {
@@ -120,6 +182,13 @@ func main() {
 	// Per-second stats file writer for the server's /api/perf/write-sources
 	// endpoint (#1120). Best-effort; never fatal.
 	StartStatsFileWriter(store, time.Second)
+
+	// Neighbor-edges builder (#1287 — Option 4): ingestor owns
+	// neighbor_edges writes. Runs every 60s. Server reads the snapshot
+	// via cmd/server/neighbor_recomputer.go on the same cadence.
+	stopNeighborBuilder := store.StartNeighborEdgesBuilder(NeighborEdgesBuilderInterval)
+	defer stopNeighborBuilder()
+	log.Printf("[neighbor-build] enabled (interval=%s)", NeighborEdgesBuilderInterval)
 
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {
@@ -141,8 +210,21 @@ func main() {
 		connectTimeout := source.ConnectTimeoutOrDefault()
 		log.Printf("MQTT [%s] connect timeout: %ds", tag, connectTimeout)
 
+		// Pre-allocate the liveness pointer so OnConnect can reset its
+		// stale-message clock on reconnect (PR #1216 r1 item 2). IsConnectedFn
+		// is wired below once the client exists.
+		liveness := &SourceLivenessState{
+			Tag:    tag,
+			Broker: source.Broker,
+		}
+
 		opts.SetOnConnectHandler(func(c mqtt.Client) {
 			log.Printf("MQTT [%s] connected to %s", tag, source.Broker)
+			// PR #1216 r1 item 2: clear the stale LastMessageUnix from
+			// before the outage so the watchdog doesn't immediately scream
+			// "stalled for 2h". Also restarts the cold-start grace window
+			// and clears the alert cooldown so a fresh stall edge can fire.
+			liveness.MarkReconnected(time.Now())
 			topics := source.Topics
 			if len(topics) == 0 {
 				topics = []string{"meshcore/#"}
@@ -173,6 +255,18 @@ func main() {
 		})
 
 		client := mqtt.NewClient(opts)
+		// Wire IsConnectedFn now that the client exists, then register.
+		// Registration BEFORE Connect so the attempt counter is available
+		// to OnConnectAttempt on the very first dial.
+		liveness.IsConnectedFn = client.IsConnected
+		// PR #1216 r2 item 3: tag collisions used to log.Fatalf, which
+		// killed the entire ingestor over one config typo and recreated
+		// the #1212 total-ingest-stop class this PR exists to prevent.
+		// registerLivenessOrSkip logs ERROR + skips liveness registration
+		// for the duplicate; the MQTT source still attempts to connect,
+		// it just isn't tracked by the watchdog. First registration
+		// remains authoritative.
+		registerLivenessOrSkip(liveness)
 		token := client.Connect()
 		// With ConnectRetry=true, token.Wait() blocks forever for unreachable brokers.
 		// WaitTimeout lets startup proceed; the client keeps retrying in the background
@@ -212,6 +306,12 @@ func main() {
 		log.Printf("Running — %d MQTT source(s) connected", connectedCount)
 	}
 
+	// #1212: per-source stall watchdog. Detects "silently dead" sources
+	// where the client reports connected but no messages have flowed. Logs
+	// a WARN line every minute for any source silent for >5m. Scan every
+	// 60s so detection latency is bounded.
+	stopWatchdog := runLivenessWatchdog(60*time.Second, 5*time.Minute)
+
 	// Wait for shutdown signal
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -220,7 +320,11 @@ func main() {
 	log.Println("Shutting down...")
 	retentionTicker.Stop()
 	metricsRetentionTicker.Stop()
+	if packetRetentionTicker != nil {
+		packetRetentionTicker.Stop()
+	}
 	statsTicker.Stop()
+	stopWatchdog()
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
 		c.Disconnect(5000) // 5s to allow in-flight messages to drain
@@ -230,7 +334,18 @@ func main() {
 
 // buildMQTTOpts creates MQTT client options for a source with bounded reconnect
 // backoff, connect timeout, and TLS/auth configuration.
+//
+// Logs every TCP/TLS dial via OnConnectAttempt. Unlike SetReconnectingHandler
+// (which only fires inside paho's reconnect goroutine and can be silent if
+// that loop never iterates), OnConnectAttempt fires on every attempt — the
+// initial Connect() and every reconnect. This is the observability fix for
+// #1212 (prod outage on 2026-05-15 where the disconnect was logged but no
+// reconnect activity was ever visible).
 func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
+	tag := source.Name
+	if tag == "" {
+		tag = source.Broker
+	}
 	opts := mqtt.NewClientOptions().
 		AddBroker(source.Broker).
 		SetAutoReconnect(true).
@@ -239,6 +354,21 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 		SetMaxReconnectInterval(30 * time.Second).
 		SetConnectTimeout(10 * time.Second).
 		SetWriteTimeout(10 * time.Second)
+
+	opts.SetConnectionAttemptHandler(func(broker *url.URL, tlsCfg *tls.Config) *tls.Config {
+		// Look up the per-source liveness state (registered in main) so we
+		// can attach an attempt counter. If not yet registered (first dial
+		// from Connect()), fall through with attempt=1.
+		var attempt int64 = 1
+		livenessRegistryMu.RLock()
+		s := livenessRegistry[tag]
+		livenessRegistryMu.RUnlock()
+		if s != nil {
+			attempt = atomic.AddInt64(&s.AttemptCount, 1)
+		}
+		log.Printf("MQTT [%s] connection attempt #%d to %s", tag, attempt, broker.String())
+		return tlsCfg
+	})
 
 	if source.Username != "" {
 		opts.SetUsername(source.Username)
@@ -255,6 +385,9 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 }
 
 func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, channelKeys map[string]string, cfg *Config) {
+	// Liveness watchdog (#1212): record receipt before any processing so a
+	// slow handler still counts as "source is alive". Cheap atomic store.
+	markLivenessForTag(tag, time.Now())
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("MQTT [%s] panic in handler: %v", tag, r)
@@ -340,7 +473,29 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		validateSigs := cfg.ShouldValidateSignatures()
 		decoded, err := DecodePacket(rawHex, channelKeys, validateSigs)
 		if err != nil {
-			log.Printf("MQTT [%s] decode error: %v", tag, err)
+			// Per #1211: include enough context to repro malformed-packet drops,
+			// but NEVER log the full observer ID (PII / fingerprinting risk).
+			// We log:
+			//   - topic prefix (with observer segment elided)
+			//   - 8-char observer prefix
+			//   - payload length, claimed length (rawHex len)
+			obs := ""
+			if len(parts) > 2 {
+				obs = parts[2]
+			}
+			// Build a redacted topic that replaces parts[2] (the observer id)
+			// with the 8-char prefix, so the rest of the topic is preserved
+			// for debugging without leaking the full identifier.
+			redactedTopic := topic
+			if len(parts) > 2 {
+				redactedParts := make([]string, len(parts))
+				copy(redactedParts, parts)
+				if len(parts[2]) > 8 {
+					redactedParts[2] = parts[2][:8]
+				}
+				redactedTopic = strings.Join(redactedParts, "/")
+			}
+			log.Printf("MQTT [%s] decode error: %v (topic=%s observer=%.8s rawHexLen=%d)", tag, err, redactedTopic, obs, len(rawHex))
 			return
 		}
 
