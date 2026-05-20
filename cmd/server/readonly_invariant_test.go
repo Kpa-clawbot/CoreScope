@@ -3,11 +3,62 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
+
+// TestServerSourceHasNoCachedRWCalls enforces issue #1287: after the
+// follow-up to #1283, cmd/server/ must contain ZERO writer call sites.
+// Specifically, no `cachedRW(`, no `mode=rw`, and no `sql.Open(...rw...)`
+// in non-test source files. All schema migrations, backfills, and
+// neighbor-edge persistence must live in cmd/ingestor or a shared
+// package — the server is the read path.
+func TestServerSourceHasNoCachedRWCalls(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read cmd/server dir: %v", err)
+	}
+	// Patterns that indicate write-side DB usage on the server.
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`\bcachedRW\s*\(`),
+		regexp.MustCompile(`mode=rw`),
+		regexp.MustCompile(`sql\.Open\([^)]*\?[^)]*_journal_mode=WAL[^)]*\)`),
+	}
+	violations := []string{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(".", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for _, p := range patterns {
+			if loc := p.FindIndex(b); loc != nil {
+				// Get line number
+				line := 1 + strings.Count(string(b[:loc[0]]), "\n")
+				violations = append(violations, fmt.Sprintf("%s:%d: %s", name, line, p.String()))
+			}
+		}
+	}
+	if len(violations) > 0 {
+		t.Errorf("cmd/server/ contains forbidden writer call sites (#1287):\n  %s",
+			strings.Join(violations, "\n  "))
+	}
+}
 
 // TestServerDBHasNoWriteMethods enforces the architectural invariant from
 // issue #1283: cmd/server is the read path. All write/maintenance methods
