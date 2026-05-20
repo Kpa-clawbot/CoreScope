@@ -30,13 +30,19 @@ fi
 echo "PASS: fixture aggregates to $out"
 
 # --- Test 2: the broken old regex would have returned something tiny -------
-# (sanity check that we are NOT just reproducing the bug)
-old=$(grep -oP '[0-9]+(?=/)' "$fixture" | tail -1)
-if [ "$old" = "$EXPECTED_PASS" ]; then
-  echo "FAIL: old broken regex coincidentally matches expected — fixture is not discriminating"
-  exit 1
+# (sanity check that we are NOT just reproducing the bug). Requires grep -P
+# (PCRE), which is available in GitHub-hosted Ubuntu runners and most Linux
+# distros but not in BusyBox; skip gracefully if absent.
+if echo "x1/2" | grep -qoP '[0-9]+(?=/)' 2>/dev/null; then
+  old=$(grep -oP '[0-9]+(?=/)' "$fixture" | tail -1)
+  if [ "$old" = "$EXPECTED_PASS" ]; then
+    echo "FAIL: old broken regex coincidentally matches expected — fixture is not discriminating"
+    exit 1
+  fi
+  echo "PASS: old broken regex returned '$old' (NOT $EXPECTED_PASS) — fixture proves the bug"
+else
+  echo "SKIP: grep -P unavailable, cannot verify old broken regex sanity"
 fi
-echo "PASS: old broken regex returned '$old' (NOT $EXPECTED_PASS) — fixture proves the bug"
 
 # --- Test 3: synthetic with failures, ensures FAIL accounting --------------
 tmp=$(mktemp)

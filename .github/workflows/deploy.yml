@@ -279,7 +279,13 @@ jobs:
       - name: Generate frontend coverage badges
         if: success()
         run: |
-          E2E_PASS=$(grep -oP '[0-9]+(?=/)' e2e-output.txt | tail -1 || echo "0")
+          # Aggregate per-suite PASS/FAIL across every test-*-e2e.js summary.
+          # The previous regex (grep -oP '[0-9]+(?=/)' | tail -1) caught a
+          # stray digits-before-slash like the '2' in '2/3 tests passed' from
+          # some sub-output and stamped the badge as '2 passed'. See #1296.
+          eval "$(bash scripts/aggregate-e2e-pass.sh e2e-output.txt)"
+          E2E_PASS=${PASS:-0}
+          E2E_FAIL=${FAIL:-0}
 
           mkdir -p .badges
           if [ -f .nyc_output/frontend-coverage.json ] || [ -f .nyc_output/e2e-coverage.json ]; then
@@ -292,7 +298,14 @@ jobs:
             echo "{\"schemaVersion\":1,\"label\":\"frontend coverage\",\"message\":\"${FE_COVERAGE}%\",\"color\":\"${FE_COLOR}\"}" > .badges/frontend-coverage.json
             echo "## Frontend: ${FE_COVERAGE}% coverage" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "{\"schemaVersion\":1,\"label\":\"e2e tests\",\"message\":\"${E2E_PASS:-0} passed\",\"color\":\"brightgreen\"}" > .badges/e2e-tests.json
+          if [ "${E2E_FAIL:-0}" -gt 0 ]; then
+            E2E_MSG="${E2E_PASS:-0} passed, ${E2E_FAIL} failed"
+            E2E_COLOR="red"
+          else
+            E2E_MSG="${E2E_PASS:-0} passed"
+            E2E_COLOR="brightgreen"
+          fi
+          echo "{\"schemaVersion\":1,\"label\":\"e2e tests\",\"message\":\"${E2E_MSG}\",\"color\":\"${E2E_COLOR}\"}" > .badges/e2e-tests.json
 
       - name: Stop test server
         if: always()
