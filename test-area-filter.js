@@ -117,6 +117,45 @@ console.log('\n=== fetchAreas keeps valid selection ===');
 })();
 
 // ---------------------------------------------------------------------------
+// Select an area, then click "All" — selection clears to null
+// ---------------------------------------------------------------------------
+console.log('\n=== "All" restores empty state ===');
+(async () => {
+  const { AF, storage } = buildCtx({
+    storageValue: 'BEL',
+    fetchResponse: [{ key: 'BEL', label: 'Belgium' }],
+  });
+
+  // Capture the menu onclick handler from render().
+  let menuClickHandler = null;
+  const trigger = { onclick: null, hidden: false, setAttribute: () => {} };
+  const menu = {
+    hidden: true,
+    onclick: null,
+    get onclick() { return menuClickHandler; },
+    set onclick(fn) { menuClickHandler = fn; },
+  };
+  const container = {
+    innerHTML: '',
+    style: {},
+    _areaCleanup: null,
+    querySelector: (sel) => (sel === '.area-dropdown-menu' ? menu : trigger),
+    contains: () => false,
+  };
+
+  await AF.init(container);
+  test('before All click: selected is BEL', () => assert.strictEqual(AF.getSelected(), 'BEL'));
+
+  // Simulate clicking the "All" button in the menu.
+  if (menuClickHandler) {
+    menuClickHandler({ target: { closest: () => ({ dataset: { area: '__all__' } }) } });
+  }
+  test('"All" click clears selection to null', () => assert.strictEqual(AF.getSelected(), null));
+  test('localStorage entry removed after All click', () => assert.strictEqual(storage['meshcore-area-filter'], undefined));
+  test('areaQueryString() empty after All click', () => assert.strictEqual(AF.areaQueryString(), ''));
+})();
+
+// ---------------------------------------------------------------------------
 // onChange / offChange
 // ---------------------------------------------------------------------------
 console.log('\n=== onChange / offChange ===');

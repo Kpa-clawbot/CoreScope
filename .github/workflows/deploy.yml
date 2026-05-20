@@ -104,6 +104,7 @@ jobs:
           node test-pull-to-reconnect-1091.js
           node test-channel-fluid-layout.js
           node test-issue-1279-p2-code-filter.js
+          node test-area-filter.js
 
       - name: Verify proto syntax
         run: |
