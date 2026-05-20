@@ -34,7 +34,7 @@ Filter by packet type (e.g., show only Adverts or Channel Messages).
 
 ### Area filter
 
-If [areas are configured](area-filter.md), an area pill bar appears above the packet list. Selecting an area shows only packets where the transmitting node's GPS position falls within that area.
+If [areas are configured](area-filter.md), an area pill bar appears above the packet list. Selecting an area shows only **ADVERT packets** whose transmitting node's GPS position falls within that area. Other packet types (Channel Msg, Direct Msg, ACK, etc.) have encrypted senders without an attributable GPS position, so they are not shown when an area filter is active.
 
 ### Time window
 
