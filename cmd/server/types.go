@@ -184,19 +184,23 @@ type PacketStoreIndexes struct {
 }
 
 type PerfPacketStoreStats struct {
-	TotalLoaded       int                `json:"totalLoaded"`
-	TotalObservations int                `json:"totalObservations"`
-	Evicted           int                `json:"evicted"`
-	Inserts           int64              `json:"inserts"`
-	Queries           int64              `json:"queries"`
-	InMemory          int                `json:"inMemory"`
-	SqliteOnly        bool               `json:"sqliteOnly"`
-	MaxPackets        int                `json:"maxPackets"`
-	EstimatedMB       float64            `json:"estimatedMB"`
-	TrackedMB         float64            `json:"trackedMB"`
-	AvgBytesPerPacket int64              `json:"avgBytesPerPacket"`
-	MaxMB             int                `json:"maxMB"`
-	Indexes           PacketStoreIndexes `json:"indexes"`
+	TotalLoaded              int                `json:"totalLoaded"`
+	TotalObservations        int                `json:"totalObservations"`
+	Evicted                  int                `json:"evicted"`
+	Inserts                  int64              `json:"inserts"`
+	Queries                  int64              `json:"queries"`
+	InMemory                 int                `json:"inMemory"`
+	SqliteOnly               bool               `json:"sqliteOnly"`
+	MaxPackets               int                `json:"maxPackets"`
+	EstimatedMB              float64            `json:"estimatedMB"`
+	TrackedMB                float64            `json:"trackedMB"`
+	AvgBytesPerPacket        int64              `json:"avgBytesPerPacket"`
+	MaxMB                    int                `json:"maxMB"`
+	Indexes                  PacketStoreIndexes `json:"indexes"`
+	HotStartupHours          float64            `json:"hotStartupHours"`
+	BackgroundLoadComplete   bool               `json:"backgroundLoadComplete"`
+	BackgroundLoadFailed     bool               `json:"backgroundLoadFailed"`
+	BackgroundLoadProgress   int64              `json:"backgroundLoadProgress"`
 }
 
 type WalPages struct {
@@ -260,6 +264,7 @@ type TransmissionResp struct {
 	ObservationCount int              `json:"observation_count"`
 	ObserverID       interface{}      `json:"observer_id"`
 	ObserverName     interface{}      `json:"observer_name"`
+	ObserverIATA     interface{}      `json:"observer_iata"`
 	SNR              interface{}      `json:"snr"`
 	RSSI             interface{}      `json:"rssi"`
 	PathJSON         interface{}      `json:"path_json"`
@@ -274,6 +279,7 @@ type ObservationResp struct {
 	Hash           interface{} `json:"hash,omitempty"`
 	ObserverID     interface{} `json:"observer_id"`
 	ObserverName   interface{} `json:"observer_name"`
+	ObserverIATA   interface{} `json:"observer_iata"`
 	SNR            interface{} `json:"snr"`
 	RSSI           interface{} `json:"rssi"`
 	PathJSON       interface{} `json:"path_json"`
@@ -291,6 +297,7 @@ type GroupedPacketResp struct {
 	Latest           string      `json:"latest"`
 	ObserverID       interface{} `json:"observer_id"`
 	ObserverName     interface{} `json:"observer_name"`
+	ObserverIATA     interface{} `json:"observer_iata"`
 	PathJSON         interface{} `json:"path_json"`
 	PayloadType      int         `json:"payload_type"`
 	RouteType        int         `json:"route_type"`
