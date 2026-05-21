@@ -133,6 +133,22 @@ func IsWeakAPIKey(key string) bool {
 type CompressionConfig struct {
 	GZip      bool `json:"gzip"`
 	Websocket bool `json:"websocket"`
+
+	// Level is the gzip compression level (1=BestSpeed … 9=BestCompression).
+	// 0 / out-of-range means "use compress/gzip.DefaultCompression".
+	Level int `json:"level,omitempty"`
+
+	// MinSizeBytes is an advisory minimum response size below which gzip
+	// would not pay off. Currently informational — kept here so operators
+	// can express intent and so future small-body fast-paths can use it.
+	MinSizeBytes int `json:"minSizeBytes,omitempty"`
+
+	// ContentTypes overrides the default compressible-MIME allow-list. When
+	// empty, a conservative default (application/json, text/html, text/css,
+	// application/javascript, text/plain, image/svg+xml, application/xml)
+	// is used. Already-compressed types (image/*, video/*, application/zip,
+	// application/x-gzip, …) are always skipped.
+	ContentTypes []string `json:"contentTypes,omitempty"`
 }
 
 // GZipEnabled returns true when HTTP gzip compression is explicitly enabled.

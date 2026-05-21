@@ -362,7 +362,7 @@ func main() {
 	// Graceful shutdown
 	var handler http.Handler = router
 	if cfg.GZipEnabled() {
-		handler = gzipMiddleware(router)
+		handler = gzipMiddlewareWithConfig(cfg.Compression, router)
 		log.Printf("[server] HTTP gzip compression enabled")
 	}
 	if cfg.WSCompressionEnabled() {
