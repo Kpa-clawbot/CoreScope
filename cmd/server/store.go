@@ -220,6 +220,14 @@ type PacketStore struct {
 	hashSizeInfoCache map[string]*hashSizeNodeInfo
 	hashSizeInfoAt    time.Time
 
+	// Cached relay stats batch result — recomputed at most once every 300s
+	// or when byPathHop changes (see invalidateRelayStatsCache).
+	relayStatsCacheMu     sync.Mutex
+	relayStatsCache       map[string]RepeaterNodeStats
+	relayStatsCacheAt     time.Time
+	relayStatsCacheWindow float64
+	relayStatsCacheSig    string
+
 	// Cached multi-byte capability map (pubkey → entry), recomputed every 15s.
 	multiByteCapCache map[string]*MultiByteCapEntry
 	multiByteCapAt    time.Time
@@ -733,17 +741,8 @@ func (s *PacketStore) Load() error {
 						s.addToByNode(tx, pk)
 					}
 					// touchRelayLastSeen handled in post-load pass
-					// byPathHop resolved-key entries
-					clear(hopsSeen)
-					for _, hop := range txGetParsedPath(tx) {
-						hopsSeen[strings.ToLower(hop)] = true
-					}
-					for _, pk := range pks {
-						if !hopsSeen[pk] {
-							hopsSeen[pk] = true
-							s.byPathHop[pk] = append(s.byPathHop[pk], tx)
-						}
-					}
+					// byPathHop resolved-key entries (#1164: helper invalidates relay stats cache).
+					s.addResolvedPubkeysToPathHopIndex(tx, pks, hopsSeen)
 					// resolvedPubkeyIndex
 					s.addToResolvedPubkeyIndex(tx.ID, pks)
 				}
@@ -2214,17 +2213,8 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 					s.addToByNode(tx, pk)
 				}
 				s.addToResolvedPubkeyIndex(tx.ID, resolvedPubkeys)
-				// byPathHop resolved-key entries
-				clear(hopsSeen)
-				for _, hop := range txGetParsedPath(tx) {
-					hopsSeen[strings.ToLower(hop)] = true
-				}
-				for _, pk := range resolvedPubkeys {
-					if !hopsSeen[pk] {
-						hopsSeen[pk] = true
-						s.byPathHop[pk] = append(s.byPathHop[pk], tx)
-					}
-				}
+				// byPathHop resolved-key entries (#1164: helper invalidates relay stats cache).
+				s.addResolvedPubkeysToPathHopIndex(tx, resolvedPubkeys, hopsSeen)
 			}
 			// Stash rpForBroadcast for later broadcast/persist (keyed by obs ID)
 			if rpForBroadcast != nil {
@@ -2279,6 +2269,9 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			s.spTotalPaths++
 		}
 		addTxToPathHopIndex(s.byPathHop, tx)
+	}
+	if len(broadcastTxs) > 0 {
+		s.invalidateRelayStatsCache()
 	}
 
 	// Incrementally update precomputed distance index with new transmissions
@@ -2556,17 +2549,8 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 					s.addToByNode(tx, pk)
 				}
 				s.addToResolvedPubkeyIndex(tx.ID, pks)
-				// byPathHop resolved-key entries
-				clear(hopsSeen)
-				for _, hop := range txGetParsedPath(tx) {
-					hopsSeen[strings.ToLower(hop)] = true
-				}
-				for _, pk := range pks {
-					if !hopsSeen[pk] {
-						hopsSeen[pk] = true
-						s.byPathHop[pk] = append(s.byPathHop[pk], tx)
-					}
-				}
+				// byPathHop resolved-key entries (#1164: helper invalidates relay stats cache).
+				s.addResolvedPubkeysToPathHopIndex(tx, pks, hopsSeen)
 			}
 		}
 		// Stash for broadcast/persist
@@ -2659,6 +2643,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	for _, tx := range updatedTxs {
 		pickBestObservation(tx)
 	}
+	pathHopMutated := false
 	for txID, tx := range updatedTxs {
 		if tx.PathJSON != oldPaths[txID] {
 			// Path changed — remove old subpaths, add new ones.
@@ -2686,7 +2671,12 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				s.spTotalPaths++
 			}
 			addTxToPathHopIndex(s.byPathHop, tx)
+			// #1164: coalesce — one invalidate after the loop, not per-tx.
+			pathHopMutated = true
 		}
+	}
+	if pathHopMutated {
+		s.invalidateRelayStatsCache()
 	}
 
 	// Check if any paths changed (used for distance update and cache invalidation).
@@ -3496,6 +3486,48 @@ func removeTxFromPathHopIndex(idx map[string][]*StoreTx, tx *StoreTx) {
 	}
 }
 
+// addResolvedPubkeysToPathHopIndex appends tx into byPathHop under each
+// resolved pubkey key that isn't already present as a raw hop. Mutating
+// byPathHop here MUST be paired with invalidateRelayStatsCache so the
+// cached batch relay stats don't go stale for up to relayStatsCacheTTL.
+// hopsSeen is a scratch map the caller can reuse across calls (it will
+// be cleared on entry).
+//
+// Must be called with s.mu held.
+func (s *PacketStore) addResolvedPubkeysToPathHopIndex(tx *StoreTx, pubkeys []string, hopsSeen map[string]bool) bool {
+	if len(pubkeys) == 0 {
+		return false
+	}
+	clear(hopsSeen)
+	for _, hop := range txGetParsedPath(tx) {
+		hopsSeen[strings.ToLower(hop)] = true
+	}
+	mutated := false
+	for _, pk := range pubkeys {
+		if !hopsSeen[pk] {
+			hopsSeen[pk] = true
+			s.byPathHop[pk] = append(s.byPathHop[pk], tx)
+			mutated = true
+		}
+	}
+	// Mutating byPathHop invalidates the batch relay-stats cache (#1164).
+	if mutated {
+		s.invalidateRelayStatsCache()
+	}
+	return mutated
+}
+
+// invalidateRelayStatsCache drops the cached batch relay-stats result so
+// the next call to GetRepeaterNodeStatsBatchCached recomputes from scratch.
+// Call this whenever byPathHop changes (add or remove). Safe to call while
+// holding s.mu — relayStatsCacheMu is never acquired while holding relayStatsCacheMu,
+// so there is no lock-ordering cycle.
+func (s *PacketStore) invalidateRelayStatsCache() {
+	s.relayStatsCacheMu.Lock()
+	s.relayStatsCache = nil
+	s.relayStatsCacheMu.Unlock()
+}
+
 // removeTxFromSlice removes tx from idx[key] by ID, deleting the key if empty.
 func removeTxFromSlice(idx map[string][]*StoreTx, key string, tx *StoreTx) {
 	list := idx[key]
@@ -3900,6 +3932,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		// Remove from path-hop index
 		removeTxFromPathHopIndex(s.byPathHop, tx)
 	}
+	s.invalidateRelayStatsCache()
 
 	// Batch-remove from byObserver: single pass per affected observer slice
 	for obsID := range affectedObservers {

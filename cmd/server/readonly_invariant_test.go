@@ -74,6 +74,10 @@ func TestServerDBHasNoWriteMethods(t *testing.T) {
 		"PruneOldPackets",
 		"PruneOldMetrics",
 		"RemoveStaleObservers",
+		// #738 / one-click geo-prune: the DELETE must live on the
+		// ingestor's *Store. The server's HTTP handler now enqueues a
+		// marker file (see internal/prunequeue); it does not write.
+		"DeleteNodesByPubkeys",
 	}
 	typ := reflect.TypeOf((*DB)(nil))
 	for _, name := range forbidden {

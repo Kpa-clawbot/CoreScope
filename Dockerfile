@@ -19,6 +19,7 @@ COPY internal/geofilter/ ../../internal/geofilter/
 COPY internal/sigvalidate/ ../../internal/sigvalidate/
 COPY internal/packetpath/ ../../internal/packetpath/
 COPY internal/dbconfig/ ../../internal/dbconfig/
+COPY internal/dbschema/ ../../internal/dbschema/
 COPY internal/perfio/ ../../internal/perfio/
 COPY internal/dbschema/ ../../internal/dbschema/
 RUN go mod download
@@ -33,6 +34,7 @@ COPY internal/geofilter/ ../../internal/geofilter/
 COPY internal/sigvalidate/ ../../internal/sigvalidate/
 COPY internal/packetpath/ ../../internal/packetpath/
 COPY internal/dbconfig/ ../../internal/dbconfig/
+COPY internal/dbschema/ ../../internal/dbschema/
 COPY internal/perfio/ ../../internal/perfio/
 COPY internal/dbschema/ ../../internal/dbschema/
 RUN go mod download

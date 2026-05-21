@@ -53,6 +53,11 @@
       } else if (col === 'role') {
         va = (a.role || '').toLowerCase(); vb = (b.role || '').toLowerCase();
         return va < vb ? -dir : va > vb ? dir : 0;
+      } else if (col === 'default_scope') {
+        va = (a.default_scope || '').toLowerCase(); vb = (b.default_scope || '').toLowerCase();
+        if (!a.default_scope && b.default_scope) return 1;
+        if (a.default_scope && !b.default_scope) return -1;
+        return va < vb ? -dir : va > vb ? dir : 0;
       } else if (col === 'last_seen') {
         va = a.last_heard ? new Date(a.last_heard).getTime() : a.last_seen ? new Date(a.last_seen).getTime() : 0;
         vb = b.last_heard ? new Date(b.last_heard).getTime() : b.last_seen ? new Date(b.last_seen).getTime() : 0;
@@ -1176,6 +1181,7 @@
           <th scope="col" data-sort-key="name" data-priority="1">Name</th>
           <th scope="col" class="col-pubkey" data-sort-key="public_key" data-priority="3">Public Key</th>
           <th scope="col" data-sort-key="role" data-priority="2">Role</th>
+          <th scope="col" data-sort-key="default_scope" data-priority="3">Scope</th>
           <th scope="col" data-sort-key="last_seen" data-sort-default="desc" data-priority="1">Last Seen</th>
           <th scope="col" data-sort-key="advert_count" data-sort-default="desc" data-priority="2">Adverts</th>
         </tr></thead>
@@ -1276,7 +1282,7 @@
     if (!tbody) return;
 
     if (!nodes.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted" style="padding:24px">No nodes found</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted" style="padding:24px">No nodes found</td></tr>';
       return;
     }
 
@@ -1308,6 +1314,7 @@
         <td>${favStar(n.public_key, 'node-fav')}${isClaimed ? '<span class="claimed-badge" title="My Mesh">★</span> ' : ''}<strong>${n.name || '(unnamed)'}</strong>${dupNameBadge(n.name, n.public_key, dupMap)}${skewBadgeHtml}</td>
         <td class="mono col-pubkey">${truncate(n.public_key, 16)}</td>
         <td><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span></td>
+        <td style="font-family:var(--mono);font-size:12px">${n.default_scope ? escapeHtml(n.default_scope) : ''}</td>
         <td class="${lastSeenClass}">${renderNodeTimestampHtml(n.last_heard || n.last_seen)}</td>
         <td>${n.advert_count || 0}</td>
       </tr>`;

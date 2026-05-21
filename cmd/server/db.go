@@ -2474,3 +2474,47 @@ func (db *DB) GetSignatureDropCount() int64 {
 	}
 	return count
 }
+
+// NodeForGeoPrune holds the minimal fields needed for geo-filter pruning.
+type NodeForGeoPrune struct {
+	PubKey string
+	Name   string
+	Lat    *float64
+	Lon    *float64
+}
+
+// GetNodesForGeoPrune returns all nodes with their coordinates for geo-filter evaluation.
+// Read-only — safe on the server's mode=ro handle.
+func (db *DB) GetNodesForGeoPrune() ([]NodeForGeoPrune, error) {
+	rows, err := db.conn.Query("SELECT public_key, name, lat, lon FROM nodes ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []NodeForGeoPrune
+	for rows.Next() {
+		var pk string
+		var name sql.NullString
+		var lat, lon sql.NullFloat64
+		if err := rows.Scan(&pk, &name, &lat, &lon); err != nil {
+			continue
+		}
+		n := NodeForGeoPrune{PubKey: pk, Name: name.String}
+		if lat.Valid {
+			v := lat.Float64
+			n.Lat = &v
+		}
+		if lon.Valid {
+			v := lon.Float64
+			n.Lon = &v
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, rows.Err()
+}
+
+// DeleteNodesByPubkeys was removed in PR #738 follow-up: server is read-only
+// (opened with mode=ro after #1283/#1289), so DELETE statements would fail at
+// runtime. Geo-prune now flows server → marker file → ingestor; see
+// internal/prunequeue and cmd/ingestor/prune_geofilter.go.

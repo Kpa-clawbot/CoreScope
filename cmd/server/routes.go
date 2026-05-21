@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"regexp"
 	"runtime"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/meshcore-analyzer/packetpath"
+	"github.com/meshcore-analyzer/prunequeue"
 )
 
 // Server holds shared state for route handlers.
@@ -25,11 +27,19 @@ type Server struct {
 	cfg       *Config
 	hub       *Hub
 	store     *PacketStore // in-memory packet store (nil = fallback to DB)
+	configDir string       // directory containing config.json (for write-back via PUT /api/config/geo-filter)
 	startedAt time.Time
 	perfStats *PerfStats
 	version   string
 	commit    string
 	buildTime string
+
+	// Guards s.cfg.GeoFilter — read by ingest/handler goroutines, written by PUT handler
+	cfgMu sync.RWMutex
+
+	// Serializes concurrent PUT /api/config/geo-filter disk writes so requests
+	// can't race on the .tmp file or interleave disk/memory updates.
+	saveMu sync.Mutex
 
 	// Cached runtime.MemStats to avoid stop-the-world pauses on every health check
 	memStatsMu   sync.Mutex
@@ -47,6 +57,21 @@ type Server struct {
 
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
+}
+
+// getGeoFilter returns a pointer to the current geo_filter config under read lock.
+// Callers MUST NOT mutate the returned struct.
+func (s *Server) getGeoFilter() *GeoFilterConfig {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.GeoFilter
+}
+
+// setGeoFilter atomically swaps the geo_filter config; used by PUT /api/config/geo-filter.
+func (s *Server) setGeoFilter(gf *GeoFilterConfig) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	s.cfg.GeoFilter = gf
 }
 
 // PerfStats tracks request performance.
@@ -122,6 +147,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/config/geo-filter", s.handleConfigGeoFilter).Methods("GET")
 	r.HandleFunc("/api/config/areas", s.handleConfigAreas).Methods("GET")
 	r.HandleFunc("/api/config/areas/polygons", s.handleConfigAreasPolygons).Methods("GET")
+	r.Handle("/api/config/geo-filter", s.requireAPIKey(http.HandlerFunc(s.handlePutConfigGeoFilter))).Methods("PUT")
 
 	// Readiness endpoint (gated on background init completion)
 	r.HandleFunc("/api/healthz", s.handleHealthz).Methods("GET")
@@ -137,6 +163,12 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// /api/admin/prune removed in #1283 — pruning is owned by the
 	// ingestor process (scheduled tickers + startup pass). Operators
 	// who want an ad-hoc prune can restart the ingestor.
+	//
+	// /api/admin/prune-geo-filter (#669 M4 / PR #738): server enqueues a
+	// marker file; the ingestor (which holds the writable DB handle)
+	// runs the DELETE. /status reports completion.
+	r.Handle("/api/admin/prune-geo-filter", s.requireAPIKey(http.HandlerFunc(s.handlePruneGeoFilter))).Methods("POST")
+	r.Handle("/api/admin/prune-geo-filter/status", s.requireAPIKey(http.HandlerFunc(s.handlePruneGeoFilterStatus))).Methods("GET")
 	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
 	r.Handle("/api/dropped-packets", s.requireAPIKey(http.HandlerFunc(s.handleDroppedPackets))).Methods("GET")
 	r.Handle("/api/backup", s.requireAPIKey(http.HandlerFunc(s.handleBackup))).Methods("GET")
@@ -486,12 +518,15 @@ func (s *Server) handleConfigMap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigGeoFilter(w http.ResponseWriter, r *http.Request) {
-	gf := s.cfg.GeoFilter
+	gf := s.getGeoFilter()
+	// writeEnabled signals to clients (e.g. the customizer UI) whether a
+	// strong API key is configured. Low-sensitivity by design.
+	writeEnabled := s.cfg != nil && s.cfg.APIKey != "" && !IsWeakAPIKey(s.cfg.APIKey)
 	if gf == nil || len(gf.Polygon) == 0 {
-		writeJSON(w, map[string]interface{}{"polygon": nil, "bufferKm": 0})
+		writeJSON(w, map[string]interface{}{"polygon": nil, "bufferKm": 0, "writeEnabled": writeEnabled})
 		return
 	}
-	writeJSON(w, map[string]interface{}{"polygon": gf.Polygon, "bufferKm": gf.BufferKm})
+	writeJSON(w, map[string]interface{}{"polygon": gf.Polygon, "bufferKm": gf.BufferKm, "writeEnabled": writeEnabled})
 }
 
 // --- System Handlers ---
@@ -2987,4 +3022,231 @@ func (s *Server) handleDroppedPackets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, results)
+}
+// handlePruneGeoFilter identifies (dry_run=true, default) or enqueues (confirm=true)
+// deletion of nodes whose GPS coordinates fall outside the currently configured
+// geo_filter. Nodes with no GPS fix are always kept. Requires geo_filter to be
+// configured.
+//
+// Since #1283/#1289 the server opens SQLite read-only, so the actual DELETE is
+// performed by the ingestor. The server writes a request marker file (see
+// internal/prunequeue); the ingestor's maintenance loop consumes it and writes a
+// result marker. The confirm response is 202 Accepted with a request id;
+// clients poll GET /api/admin/prune-geo-filter/status?id=<id> for completion.
+//
+// Confirm requires the pubkeys from the preview in the request body to prevent
+// TOCTOU races: only nodes that were shown in preview AND are still outside the
+// filter are enqueued.
+func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
+	gf := s.getGeoFilter()
+	if gf == nil || len(gf.Polygon) < 3 {
+		writeError(w, http.StatusBadRequest, "no geo_filter configured")
+		return
+	}
+
+	nodes, err := s.db.GetNodesForGeoPrune()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	type nodeResult struct {
+		PubKey string   `json:"pubkey"`
+		Name   string   `json:"name"`
+		Lat    *float64 `json:"lat"`
+		Lon    *float64 `json:"lon"`
+	}
+
+	var outside []nodeResult
+	for _, n := range nodes {
+		if n.Lat == nil || n.Lon == nil {
+			continue // no GPS — always keep
+		}
+		if !NodePassesGeoFilter(*n.Lat, *n.Lon, gf) {
+			outside = append(outside, nodeResult{PubKey: n.PubKey, Name: n.Name, Lat: n.Lat, Lon: n.Lon})
+		}
+	}
+
+	if r.URL.Query().Get("confirm") != "true" {
+		// Dry run — return preview without enqueueing anything.
+		writeJSON(w, map[string]interface{}{
+			"dryRun": true,
+			"count":  len(outside),
+			"nodes":  outside,
+		})
+		return
+	}
+
+	// Confirmed enqueue — require pubkeys from the preview to prevent TOCTOU:
+	// only nodes that were shown in preview AND are still outside the filter
+	// at this exact moment are scheduled for deletion. (The ingestor honors
+	// the list verbatim; it does NOT re-evaluate geo_filter membership.)
+	var body struct {
+		Pubkeys []string `json:"pubkeys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Pubkeys) == 0 {
+		writeError(w, http.StatusBadRequest, "confirm requires pubkeys from preview in request body")
+		return
+	}
+	allowed := make(map[string]bool, len(body.Pubkeys))
+	for _, pk := range body.Pubkeys {
+		allowed[pk] = true
+	}
+
+	var toDelete []nodeResult
+	for _, n := range outside {
+		if allowed[n.PubKey] {
+			toDelete = append(toDelete, n)
+		}
+	}
+
+	pubkeys := make([]string, 0, len(toDelete))
+	for _, n := range toDelete {
+		pubkeys = append(pubkeys, n.PubKey)
+	}
+
+	id := prunequeue.NewID()
+	req := prunequeue.Request{
+		ID:          id,
+		RequestedAt: time.Now().UTC(),
+		Reason:      "geo-prune",
+		Pubkeys:     pubkeys,
+	}
+	if err := prunequeue.WriteRequest(s.db.path, req); err != nil {
+		log.Printf("[geo-prune] failed to enqueue request %s: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "failed to enqueue prune request")
+		return
+	}
+	log.Printf("[geo-prune] enqueued request %s for %d node(s) (queue dir=%s)",
+		id, len(pubkeys), prunequeue.QueueDir(s.db.path))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"dryRun":    false,
+		"accepted":  true,
+		"requestId": id,
+		"count":     len(pubkeys),
+		"nodes":     toDelete,
+		"statusUrl": "/api/admin/prune-geo-filter/status?id=" + id,
+	})
+}
+
+// handlePruneGeoFilterStatus reports the state of a previously-enqueued
+// geo-prune request. While the request marker is still present the response is
+// {"status":"pending"}. Once the ingestor writes a result, the response is
+// {"status":"done","deleted":N,"completedAt":...} (or "error" if the ingestor
+// failed). Returns 404 when neither marker nor result is found.
+func (s *Server) handlePruneGeoFilterStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing id")
+		return
+	}
+
+	res, err := prunequeue.ReadResult(s.db.path, id)
+	if err != nil {
+		if strings.Contains(err.Error(), "invalid prune request id") {
+			writeError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "status read failed")
+		return
+	}
+	if res != nil {
+		status := "done"
+		if res.Error != "" {
+			status = "error"
+		}
+		writeJSON(w, map[string]interface{}{
+			"requestId":   res.ID,
+			"status":      status,
+			"deleted":     res.Deleted,
+			"requestedAt": res.RequestedAt,
+			"completedAt": res.CompletedAt,
+			"error":       res.Error,
+		})
+		return
+	}
+
+	pending, err := prunequeue.RequestExists(s.db.path, id)
+	if err != nil {
+		if strings.Contains(err.Error(), "invalid prune request id") {
+			writeError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "status read failed")
+		return
+	}
+	if pending {
+		writeJSON(w, map[string]interface{}{
+			"requestId": id,
+			"status":    "pending",
+		})
+		return
+	}
+	writeError(w, http.StatusNotFound, "unknown request id")
+}
+
+// handlePutConfigGeoFilter writes the geo_filter config to disk and updates the
+// in-memory pointer atomically. Empty/missing polygon clears the filter.
+//
+// Backstop validation: ≤1000 points, every point in [-90,90]/[-180,180], no
+// NaN/Inf; bufferKm finite, non-negative, ≤ 20000 km. Concurrent PUTs are
+// serialized via s.saveMu so they cannot race on the .tmp file.
+func (s *Server) handlePutConfigGeoFilter(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB cap
+
+	var body struct {
+		Polygon  [][2]float64 `json:"polygon"`
+		BufferKm float64      `json:"bufferKm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if len(body.Polygon) > 0 && len(body.Polygon) < 3 {
+		writeError(w, http.StatusBadRequest, "polygon must have at least 3 points")
+		return
+	}
+	if len(body.Polygon) > 1000 {
+		writeError(w, http.StatusBadRequest, "polygon must have at most 1000 points")
+		return
+	}
+	for _, pt := range body.Polygon {
+		if math.IsNaN(pt[0]) || math.IsNaN(pt[1]) || math.IsInf(pt[0], 0) || math.IsInf(pt[1], 0) ||
+			pt[0] < -90 || pt[0] > 90 || pt[1] < -180 || pt[1] > 180 {
+			writeError(w, http.StatusBadRequest, "polygon point out of range: lat must be in [-90,90], lon in [-180,180]")
+			return
+		}
+	}
+	if math.IsNaN(body.BufferKm) || math.IsInf(body.BufferKm, 0) ||
+		body.BufferKm < 0 || body.BufferKm > 20000 {
+		writeError(w, http.StatusBadRequest, "bufferKm must be a finite number in [0, 20000]")
+		return
+	}
+
+	var gf *GeoFilterConfig
+	if len(body.Polygon) >= 3 {
+		gf = &GeoFilterConfig{Polygon: body.Polygon, BufferKm: body.BufferKm}
+	}
+
+	s.saveMu.Lock()
+	if s.configDir != "" {
+		if err := SaveGeoFilter(s.configDir, gf); err != nil {
+			s.saveMu.Unlock()
+			log.Printf("[geofilter] save failed: %v", err)
+			writeError(w, http.StatusInternalServerError, "failed to save config")
+			return
+		}
+	}
+	s.setGeoFilter(gf)
+	s.saveMu.Unlock()
+
+	if gf != nil {
+		writeJSON(w, map[string]interface{}{"polygon": gf.Polygon, "bufferKm": gf.BufferKm})
+	} else {
+		writeJSON(w, map[string]interface{}{"polygon": nil, "bufferKm": 0})
+	}
 }
