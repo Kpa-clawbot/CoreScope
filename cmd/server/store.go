@@ -733,17 +733,8 @@ func (s *PacketStore) Load() error {
 						s.addToByNode(tx, pk)
 					}
 					// touchRelayLastSeen handled in post-load pass
-					// byPathHop resolved-key entries
-					clear(hopsSeen)
-					for _, hop := range txGetParsedPath(tx) {
-						hopsSeen[strings.ToLower(hop)] = true
-					}
-					for _, pk := range pks {
-						if !hopsSeen[pk] {
-							hopsSeen[pk] = true
-							s.byPathHop[pk] = append(s.byPathHop[pk], tx)
-						}
-					}
+					// byPathHop resolved-key entries (#1164: helper invalidates relay stats cache).
+					s.addResolvedPubkeysToPathHopIndex(tx, pks, hopsSeen)
 					// resolvedPubkeyIndex
 					s.addToResolvedPubkeyIndex(tx.ID, pks)
 				}
@@ -2209,17 +2200,8 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 					s.addToByNode(tx, pk)
 				}
 				s.addToResolvedPubkeyIndex(tx.ID, resolvedPubkeys)
-				// byPathHop resolved-key entries
-				clear(hopsSeen)
-				for _, hop := range txGetParsedPath(tx) {
-					hopsSeen[strings.ToLower(hop)] = true
-				}
-				for _, pk := range resolvedPubkeys {
-					if !hopsSeen[pk] {
-						hopsSeen[pk] = true
-						s.byPathHop[pk] = append(s.byPathHop[pk], tx)
-					}
-				}
+				// byPathHop resolved-key entries (#1164: helper invalidates relay stats cache).
+				s.addResolvedPubkeysToPathHopIndex(tx, resolvedPubkeys, hopsSeen)
 			}
 			// Stash rpForBroadcast for later broadcast/persist (keyed by obs ID)
 			if rpForBroadcast != nil {
@@ -2554,17 +2536,8 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 					s.addToByNode(tx, pk)
 				}
 				s.addToResolvedPubkeyIndex(tx.ID, pks)
-				// byPathHop resolved-key entries
-				clear(hopsSeen)
-				for _, hop := range txGetParsedPath(tx) {
-					hopsSeen[strings.ToLower(hop)] = true
-				}
-				for _, pk := range pks {
-					if !hopsSeen[pk] {
-						hopsSeen[pk] = true
-						s.byPathHop[pk] = append(s.byPathHop[pk], tx)
-					}
-				}
+				// byPathHop resolved-key entries (#1164: helper invalidates relay stats cache).
+				s.addResolvedPubkeysToPathHopIndex(tx, pks, hopsSeen)
 			}
 		}
 		// Stash for broadcast/persist
@@ -2657,6 +2630,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	for _, tx := range updatedTxs {
 		pickBestObservation(tx)
 	}
+	pathHopMutated := false
 	for txID, tx := range updatedTxs {
 		if tx.PathJSON != oldPaths[txID] {
 			// Path changed — remove old subpaths, add new ones.
@@ -2684,8 +2658,12 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 				s.spTotalPaths++
 			}
 			addTxToPathHopIndex(s.byPathHop, tx)
-			s.invalidateRelayStatsCache()
+			// #1164: coalesce — one invalidate after the loop, not per-tx.
+			pathHopMutated = true
 		}
+	}
+	if pathHopMutated {
+		s.invalidateRelayStatsCache()
 	}
 
 	// Check if any paths changed (used for distance update and cache invalidation).
@@ -3456,7 +3434,10 @@ func (s *PacketStore) addResolvedPubkeysToPathHopIndex(tx *StoreTx, pubkeys []st
 			mutated = true
 		}
 	}
-	// TODO(#1164): invalidate relay stats cache here once invariant test is in place.
+	// Mutating byPathHop invalidates the batch relay-stats cache (#1164).
+	if mutated {
+		s.invalidateRelayStatsCache()
+	}
 	return mutated
 }
 

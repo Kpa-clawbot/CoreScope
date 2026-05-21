@@ -89,23 +89,12 @@ func (s *PacketStore) collectRelayEntriesLocked(key string) []relayEntry {
 		}
 	}
 
-	// Size to unique tx count: on busy nodes the same tx is frequently
-	// indexed under BOTH the full pubkey AND the raw prefix, so the naive
-	// sum can over-allocate by ~2x.
-	uniq := make(map[int]struct{}, len(txList)+len(prefixList))
-	for _, tx := range txList {
-		if tx != nil {
-			uniq[tx.ID] = struct{}{}
-		}
-	}
-	for _, tx := range prefixList {
-		if tx != nil {
-			uniq[tx.ID] = struct{}{}
-		}
-	}
-
-	entries := make([]relayEntry, 0, len(uniq))
-	seen := make(map[int]bool, len(uniq))
+	// Capacity hint: upper-bound is len(txList)+len(prefixList). The
+	// collect() pass below uses `seen` for true dedup, so we don't need
+	// a separate prepass (PR #1164 CR item 3: dead `uniq` map removed).
+	hint := len(txList) + len(prefixList)
+	entries := make([]relayEntry, 0, hint)
+	seen := make(map[int]bool, hint)
 	collect := func(list []*StoreTx) {
 		for _, tx := range list {
 			if tx == nil || seen[tx.ID] {
