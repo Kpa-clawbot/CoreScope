@@ -1508,12 +1508,13 @@
 
     if (!_gfLoaded) {
       api('/config/geo-filter', { ttl: 0 }).then(function (gf) {
-        // Show edit controls only on servers that have a write-capable API key configured
-        if (gf && gf.writeEnabled) {
-          _gfWriteEnabled = true;
-          var editEl = container.querySelector('#cv2-gf-edit');
-          if (editEl) editEl.style.display = '';
-        }
+        // Always expose edit controls. The server no longer leaks apiKey presence
+        // via writeEnabled (info-disclosure on a public endpoint); instead, the
+        // user enters their API key into the editor and writes either succeed or
+        // get a 401/403 surfaced as an inline error.
+        _gfWriteEnabled = true;
+        var editEl = container.querySelector('#cv2-gf-edit');
+        if (editEl) editEl.style.display = '';
         if (gf && gf.polygon && gf.polygon.length >= 3) {
           _gfPoints = gf.polygon.map(function (p) { return [p[0], p[1]]; });
           var buf = container.querySelector('#cv2-gf-buffer');
@@ -1523,7 +1524,7 @@
           _gfStatus(container, gf.polygon.length + ' points · bufferKm=' + (gf.bufferKm || 0));
         } else {
           _gfPoints = [];
-          _gfStatus(container, gf && gf.writeEnabled ? 'No geo filter. Click the map to open the editor.' : 'No geo filter configured.');
+          _gfStatus(container, 'No geo filter. Click the map to open the editor.');
           _gfMap.setView([50.5, 4.4], 5);
         }
         _gfLoaded = true;

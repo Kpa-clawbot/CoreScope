@@ -62,7 +62,7 @@ If your server has an `apiKey` configured, the **GeoFilter tab** in the Customiz
 5. Enter your **Server API Key** (the `apiKey` value from `config.json`)
 6. Click **Save to server** — the filter is applied immediately, no restart needed
 
-The editing controls only appear when the server has a write-capable API key configured. On deployments without an `apiKey`, the tab shows the current polygon as read-only.
+The editing controls are always visible. Saving requires entering the server's `apiKey`; on servers without one (or with a weak key), the save request returns `401`/`403` and the error is shown inline.
 
 To remove the filter, click **Remove filter** (also requires the API key).
 
@@ -86,7 +86,7 @@ For local/offline use without a running server, open `tools/geofilter-builder.ht
 GET /api/config/geo-filter
 ```
 
-Returns the current geo filter configuration. Also includes a `writeEnabled` boolean indicating whether the `PUT` endpoint is available (i.e., server has a write-capable `apiKey`).
+Returns the current geo filter configuration (`polygon`, `bufferKm`). Whether the `PUT` endpoint will accept a write depends on whether the server has an `apiKey` configured; clients should attempt the write and handle `401`/`403` if it isn't.
 
 ```
 PUT /api/config/geo-filter

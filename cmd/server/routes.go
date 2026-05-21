@@ -467,15 +467,15 @@ func (s *Server) handleConfigMap(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleConfigGeoFilter(w http.ResponseWriter, r *http.Request) {
 	gf := s.getGeoFilter()
-	// writeEnabled leaks whether the server has a strong API key to unauthenticated
-	// callers. Risk accepted: the information (key is/isn't configured) is low-sensitivity
-	// and the GET endpoint is intentionally public for read-only clients.
-	writeEnabled := s.cfg != nil && s.cfg.APIKey != "" && !IsWeakAPIKey(s.cfg.APIKey)
+	// NOTE: do NOT include any field that derives from APIKey presence/strength here.
+	// This endpoint is intentionally public; leaking whether a write-capable key is
+	// configured is an info-disclosure. Clients that want to write should just try
+	// PUT and handle 401/403. See PR #736 review.
 	if gf == nil || len(gf.Polygon) == 0 {
-		writeJSON(w, map[string]interface{}{"polygon": nil, "bufferKm": 0, "writeEnabled": writeEnabled})
+		writeJSON(w, map[string]interface{}{"polygon": nil, "bufferKm": 0})
 		return
 	}
-	writeJSON(w, map[string]interface{}{"polygon": gf.Polygon, "bufferKm": gf.BufferKm, "writeEnabled": writeEnabled})
+	writeJSON(w, map[string]interface{}{"polygon": gf.Polygon, "bufferKm": gf.BufferKm})
 }
 
 func (s *Server) handlePutConfigGeoFilter(w http.ResponseWriter, r *http.Request) {
