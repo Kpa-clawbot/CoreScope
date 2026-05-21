@@ -109,8 +109,18 @@ async function pickAnyPubkey(page) {
     pickedName = node.name || '';
     // Use prefix of the name (or pubkey) so the API returns at least one hit.
     const q = (pickedName || pickedPubkey).slice(0, 3);
+    // Ensure the input is present + interactable before typing (avoid races
+    // with home-hero re-render that recreates #homeSearch).
+    await page.waitForSelector('#homeSearch', { state: 'visible', timeout: 8000 });
     await page.fill('#homeSearch', q);
-    await page.waitForSelector('.suggest-item, .suggest-empty', { timeout: 5000 });
+    // Suggestions are debounced (200ms) + fetched from /nodes/search; on cold
+    // CI the first request can take well over 5s. The dropdown gets `.open`
+    // added to `.home-suggest` only AFTER the fetch resolves and children
+    // (.suggest-item or .suggest-empty) have been rendered. Wait for the
+    // populated parent — that's the single authoritative signal.
+    await page.waitForSelector('.home-suggest.open', { timeout: 15000 });
+    // Sanity: parent must contain either a result row or the empty marker.
+    await page.waitForSelector('.home-suggest.open .suggest-item, .home-suggest.open .suggest-empty', { timeout: 5000 });
   });
 
   await step('claim button adds a node to My Mesh (localStorage)', async () => {
@@ -148,9 +158,23 @@ async function pickAnyPubkey(page) {
   });
 
   await step('"Full health" button triggers loadHealth again without error', async () => {
-    const btn = await page.$('.mnc-btn[data-action="health"]');
-    if (btn) {
-      await btn.click();
+    // The home page re-renders the My Mesh grid on health load, which can
+    // detach the .mnc-btn handle we capture. Use a locator + retry pattern
+    // so Playwright re-queries each attempt and waits for stability.
+    const btnLocator = page.locator('.mnc-btn[data-action="health"]').first();
+    if (await btnLocator.count() > 0) {
+      // Wait for the surrounding card to stop mutating before clicking.
+      await page.waitForFunction(() => {
+        const el = document.querySelector('.mnc-btn[data-action="health"]');
+        return el && el.getBoundingClientRect().width > 0;
+      }, { timeout: 5000 }).catch(() => {});
+      // Playwright auto-waits + retries on actionability with click(); use
+      // force as a last-resort fallback if the element keeps reflowing.
+      try {
+        await btnLocator.click({ timeout: 5000 });
+      } catch (_) {
+        await btnLocator.click({ force: true, timeout: 5000 });
+      }
       await page.waitForTimeout(400);
       const visible = await page.$('.health-banner');
       assert(visible, 'health banner should remain after re-load');
