@@ -112,6 +112,32 @@ async function clearOverlays(page) {
   });
 }
 
+// Re-open the row-action overlay by swiping a fresh row. Used by cov2/3/4
+// after cov1's trace-click navigated to #/packets/<hash> and dismissed the
+// overlay — subsequent covs need a clean re-open to assert on filter/copy/
+// outside-click branches. Polls for overlay-open up to ~2s with one retry
+// because the first swipe after a hash-route navigation occasionally races
+// the SPA re-render in CI (faster than the swipe gesture lands).
+async function openRowOverlay(page, rowSel) {
+  await page.waitForSelector(rowSel, { timeout: 10000 });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await clearOverlays(page);
+    await page.waitForTimeout(120);
+    const r = await rowRect(page, rowSel);
+    if (!r) { await page.waitForTimeout(200); continue; }
+    const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    await synthSwipe(page, cx + 100, cy, cx - 100, cy);
+    // Poll for overlay up to ~800ms.
+    for (let i = 0; i < 8; i++) {
+      const ok = await page.evaluate(() =>
+        !!document.querySelector('.row-action-overlay.row-action-overlay-open'));
+      if (ok) return r;
+      await page.waitForTimeout(100);
+    }
+  }
+  return null;
+}
+
 async function main() {
   const requireChromium = process.env.CHROMIUM_REQUIRE === '1';
   let browser;
@@ -208,11 +234,8 @@ async function main() {
   await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#pktBody tr[data-hash]', { timeout: 10000 }).catch(() => {});
   await page.waitForTimeout(150);
-  const r2 = await rowRect(page, '#pktBody tr[data-hash]');
+  const r2 = await openRowOverlay(page, '#pktBody tr[data-hash]');
   if (r2) {
-    await clearOverlays(page);
-    const cx = r2.x + r2.w / 2, cy = r2.y + r2.h / 2;
-    await synthSwipe(page, cx + 100, cy, cx - 100, cy);
     const ok = await page.evaluate(() =>
       !!document.querySelector('.row-action-overlay [data-row-action="filter"]'));
     if (!ok) {
@@ -243,12 +266,9 @@ async function main() {
   await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#pktBody tr[data-hash]', { timeout: 10000 }).catch(() => {});
   await page.waitForTimeout(150);
-  const r3 = await rowRect(page, '#pktBody tr[data-hash]');
+  await page.evaluate(() => { window.__clipboardWrites = []; });
+  const r3 = await openRowOverlay(page, '#pktBody tr[data-hash]');
   if (r3) {
-    await clearOverlays(page);
-    await page.evaluate(() => { window.__clipboardWrites = []; });
-    const cx = r3.x + r3.w / 2, cy = r3.y + r3.h / 2;
-    await synthSwipe(page, cx + 100, cy, cx - 100, cy);
     const has = await page.evaluate(() =>
       !!document.querySelector('.row-action-overlay [data-row-action="copy"]'));
     if (!has) {
@@ -274,11 +294,8 @@ async function main() {
   await page.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#pktBody tr[data-hash]', { timeout: 10000 }).catch(() => {});
   await page.waitForTimeout(150);
-  const r4 = await rowRect(page, '#pktBody tr[data-hash]');
+  const r4 = await openRowOverlay(page, '#pktBody tr[data-hash]');
   if (r4) {
-    await clearOverlays(page);
-    const cx = r4.x + r4.w / 2, cy = r4.y + r4.h / 2;
-    await synthSwipe(page, cx + 100, cy, cx - 100, cy);
     const before = await page.evaluate(() =>
       !!document.querySelector('.row-action-overlay.row-action-overlay-open'));
     if (!before) {
