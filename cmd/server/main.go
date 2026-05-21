@@ -271,6 +271,7 @@ func main() {
 
 	// WebSocket hub
 	hub := NewHub()
+	hub.upgrader.EnableCompression = cfg.WSCompressionEnabled()
 
 	// HTTP server
 	srv := NewServer(database, cfg, hub)
@@ -360,9 +361,17 @@ func main() {
 	_ = cfg.NeighborMaxAgeDays()     // ditto — owned by ingestor now
 
 	// Graceful shutdown
+	var handler http.Handler = router
+	if cfg.GZipEnabled() {
+		handler = gzipMiddlewareWithConfig(cfg.Compression, router)
+		log.Printf("[server] HTTP gzip compression enabled")
+	}
+	if cfg.WSCompressionEnabled() {
+		log.Printf("[server] WebSocket permessage-deflate compression enabled")
+	}
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
-		Handler:      router,
+		Handler:      handler,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,

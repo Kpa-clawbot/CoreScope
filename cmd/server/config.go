@@ -101,6 +101,7 @@ type Config struct {
 	obsBlacklistSetCached map[string]bool
 	obsBlacklistOnce      sync.Once
 
+	Compression   *CompressionConfig   `json:"compression,omitempty"`
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
 
@@ -137,6 +138,39 @@ func IsWeakAPIKey(key string) bool {
 		return true
 	}
 	return false
+}
+
+// CompressionConfig controls HTTP gzip and WebSocket permessage-deflate compression.
+// Both are disabled by default — enable only when the upstream proxy does not already compress.
+type CompressionConfig struct {
+	GZip      bool `json:"gzip"`
+	Websocket bool `json:"websocket"`
+
+	// Level is the gzip compression level (1=BestSpeed … 9=BestCompression).
+	// 0 / out-of-range means "use compress/gzip.DefaultCompression".
+	Level int `json:"level,omitempty"`
+
+	// MinSizeBytes is an advisory minimum response size below which gzip
+	// would not pay off. Currently informational — kept here so operators
+	// can express intent and so future small-body fast-paths can use it.
+	MinSizeBytes int `json:"minSizeBytes,omitempty"`
+
+	// ContentTypes overrides the default compressible-MIME allow-list. When
+	// empty, a conservative default (application/json, text/html, text/css,
+	// application/javascript, text/plain, image/svg+xml, application/xml)
+	// is used. Already-compressed types (image/*, video/*, application/zip,
+	// application/x-gzip, …) are always skipped.
+	ContentTypes []string `json:"contentTypes,omitempty"`
+}
+
+// GZipEnabled returns true when HTTP gzip compression is explicitly enabled.
+func (c *Config) GZipEnabled() bool {
+	return c.Compression != nil && c.Compression.GZip
+}
+
+// WSCompressionEnabled returns true when WebSocket permessage-deflate is explicitly enabled.
+func (c *Config) WSCompressionEnabled() bool {
+	return c.Compression != nil && c.Compression.Websocket
 }
 
 // ResolvedPathConfig controls async backfill behavior.
