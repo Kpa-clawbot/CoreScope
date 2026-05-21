@@ -179,6 +179,19 @@ func main() {
 		}
 	}()
 
+	// Prune-request queue (#669 M4 / #738): the read-only server enqueues
+	// geo-prune requests as marker files; the ingestor (which holds the
+	// write handle) executes the DELETEs. Process on startup, then every
+	// 15 seconds — short enough for a one-click UX, long enough to avoid
+	// useless wake-ups.
+	store.RunPendingPruneRequests()
+	pruneQueueTicker := time.NewTicker(15 * time.Second)
+	go func() {
+		for range pruneQueueTicker.C {
+			store.RunPendingPruneRequests()
+		}
+	}()
+
 	// Per-second stats file writer for the server's /api/perf/write-sources
 	// endpoint (#1120). Best-effort; never fatal.
 	StartStatsFileWriter(store, time.Second)
@@ -324,6 +337,7 @@ func main() {
 		packetRetentionTicker.Stop()
 	}
 	statsTicker.Stop()
+	pruneQueueTicker.Stop()
 	stopWatchdog()
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {

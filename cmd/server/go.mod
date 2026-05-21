@@ -41,3 +41,7 @@ require (
 	modernc.org/mathutil v1.6.0 // indirect
 	modernc.org/memory v1.8.0 // indirect
 )
+
+require github.com/meshcore-analyzer/prunequeue v0.0.0
+
+replace github.com/meshcore-analyzer/prunequeue => ../../internal/prunequeue

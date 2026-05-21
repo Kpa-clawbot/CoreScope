@@ -126,7 +126,14 @@ async function effectiveBgFor(page, selector) {
   });
 
   await step('Path link contrast (#pathsContent a) ≥ 4.5:1 in dark mode', async () => {
-    const linkColor = await page.$eval('#pathsContent a[href^="#/nodes/"]', (el) => getComputedStyle(el).color);
+    // Use page.evaluate (single CDP call) so querySelector and getComputedStyle
+    // are atomic — page.$eval splits them across two calls, leaving a window
+    // where a concurrent re-render can detach the element before getComputedStyle
+    // runs, causing Chromium to return '' for color.
+    const linkColor = await page.evaluate(() => {
+      const el = document.querySelector('#pathsContent a[href^="#/nodes/"]');
+      return el ? getComputedStyle(el).color : '';
+    });
     const bgColor = await effectiveBgFor(page, '#pathsContent a[href^="#/nodes/"]');
     const fg = parseRgb(linkColor);
     const bg = parseRgb(bgColor);

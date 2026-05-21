@@ -63,6 +63,7 @@ func (s *DBStats) SnapshotBackfills() map[string]int64 {
 // Store wraps the SQLite database for packet ingestion.
 type Store struct {
 	db    *sql.DB
+	path  string // filesystem path to the SQLite DB (used to resolve queue dirs)
 	Stats DBStats
 
 	stmtGetTxByHash          *sql.Stmt
@@ -118,7 +119,7 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		return nil, fmt.Errorf("dbschema.Apply: %w", err)
 	}
 
-	s := &Store{db: db, sampleIntervalSec: sampleIntervalSec}
+	s := &Store{db: db, path: dbPath, sampleIntervalSec: sampleIntervalSec}
 	if err := s.prepareStatements(); err != nil {
 		return nil, fmt.Errorf("preparing statements: %w", err)
 	}
