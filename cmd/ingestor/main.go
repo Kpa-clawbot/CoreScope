@@ -965,6 +965,14 @@ func resolveRxTime(msg map[string]interface{}, tag string) string {
 		log.Printf("MQTT [%s] future timestamp %q, using ingest time", tag, raw)
 		return now.Format(time.RFC3339)
 	}
+	// Hard reject: > 30 days in the past is an RTC-reset node reporting a
+	// factory date (e.g. 2020-01-01). Such a value would permanently drag
+	// transmissions.first_seen backwards via stmtUpdateTxFirstSeen in
+	// InsertTransmission. No legitimate buffered upload is that stale.
+	if t.Before(now.Add(-30 * 24 * time.Hour)) {
+		log.Printf("MQTT [%s] stale timestamp %q (>30d old), using ingest time", tag, raw)
+		return now.Format(time.RFC3339)
+	}
 	// Soft clamp: naive local-clock timestamps from UTC+N observers are parsed
 	// as-if UTC, making them appear N hours in the future. A UTC+2 observer's
 	// live packet looks 2h ahead, but it is NOT a buffered packet — the whole

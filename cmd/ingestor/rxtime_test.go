@@ -61,4 +61,20 @@ func TestResolveRxTime(t *testing.T) {
 	if got := resolveRxTime(map[string]interface{}{"timestamp": future}, "test"); !nearNow(got) {
 		t.Errorf("future timestamp: got %q, expected ~now (rejected)", got)
 	}
+
+	// RTC-reset node reporting a factory date — must not drag first_seen back.
+	factory := "2020-01-01T00:00:00Z"
+	if got := resolveRxTime(map[string]interface{}{"timestamp": factory}, "test"); !nearNow(got) {
+		t.Errorf("stale factory timestamp: got %q, expected ~now (rejected)", got)
+	}
+	// Just past the 30-day floor → rejected.
+	stale := now.Add(-31 * 24 * time.Hour).Format(time.RFC3339)
+	if got := resolveRxTime(map[string]interface{}{"timestamp": stale}, "test"); !nearNow(got) {
+		t.Errorf("stale timestamp >30d: got %q, expected ~now (rejected)", got)
+	}
+	// Just inside the 30-day floor → used verbatim.
+	recent := now.Add(-29 * 24 * time.Hour).Format(time.RFC3339)
+	if got := resolveRxTime(map[string]interface{}{"timestamp": recent}, "test"); got != recent {
+		t.Errorf("recent timestamp <30d: got %q want %q", got, recent)
+	}
 }
