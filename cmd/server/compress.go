@@ -6,25 +6,49 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 )
 
 // gzipWriterPool pools *gzip.Writer instances to avoid the ~256KB sliding
 // window allocation on every compressed response. Writers are Reset() to the
-// new underlying writer on Get and returned via Put after Close.
-var gzipWriterPool = sync.Pool{
-	New: func() interface{} {
-		// io.Discard placeholder; Reset replaces it on Get.
+// new underlying writer on Get and returned via gzipPut after Close.
+//
+// We use a bounded buffered channel rather than sync.Pool because sync.Pool
+// is aggressively reaped by the GC (full clear after two GC cycles), which
+// makes it lose its pooled entries under any workload that triggers GC —
+// notably the -race-enabled test suite where allocations are inflated ~8x
+// and GC fires repeatedly during a 200-request loop. A channel keeps the
+// gzip.Writer instances live across GC cycles, which is exactly the
+// guarantee `TestGZipMiddleware_PoolReusesWriters` asserts.
+const gzipPoolCapacity = 64
+
+var gzipWriterPool = make(chan *gzip.Writer, gzipPoolCapacity)
+
+func gzipGet() *gzip.Writer {
+	select {
+	case gz := <-gzipWriterPool:
+		return gz
+	default:
+		// gzip.NewWriterLevel only errors on invalid level; DefaultCompression
+		// is always valid, so the error branch is unreachable. Fall back to
+		// the default writer (same level) so we always return a usable writer.
 		gz, err := gzip.NewWriterLevel(discardWriter{}, gzip.DefaultCompression)
 		if err != nil {
-			// gzip.NewWriterLevel only errors on invalid level; DefaultCompression
-			// is always valid, so this branch is unreachable. Fall back to the
-			// default writer (which uses the same level) so the pool always
-			// hands out a usable instance.
 			return gzip.NewWriter(discardWriter{})
 		}
 		return gz
-	},
+	}
+}
+
+func gzipPut(gz *gzip.Writer) {
+	// Reset to a no-op writer so the pooled instance does not retain a
+	// reference to the previous http.ResponseWriter (which would defeat GC
+	// of the request's allocations).
+	gz.Reset(discardWriter{})
+	select {
+	case gzipWriterPool <- gz:
+	default:
+		// Pool full; drop the writer and let GC reclaim it.
+	}
 }
 
 type discardWriter struct{}
@@ -81,7 +105,7 @@ func (g *gzipResponseWriter) init() {
 	}
 
 	// Lease a writer from the pool and rebind it to the real ResponseWriter.
-	gz := gzipWriterPool.Get().(*gzip.Writer)
+	gz := gzipGet()
 	gz.Reset(g.ResponseWriter)
 	g.gz = gz
 	g.compressActive = true
@@ -133,7 +157,7 @@ func (g *gzipResponseWriter) close() {
 		return
 	}
 	_ = g.gz.Close()
-	gzipWriterPool.Put(g.gz)
+	gzipPut(g.gz)
 	g.gz = nil
 }
 
