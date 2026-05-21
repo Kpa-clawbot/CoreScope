@@ -273,6 +273,7 @@ func main() {
 
 	// HTTP server
 	srv := NewServer(database, cfg, hub)
+	srv.configDir = configDir
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)

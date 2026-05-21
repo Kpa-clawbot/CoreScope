@@ -100,10 +100,9 @@
         <div class="analytics-header">
           <h2>📊 Mesh Analytics</h2>
           <p class="text-muted">Deep dive into your mesh network data</p>
-          <div id="analyticsRegionFilter" class="region-filter-container"></div>
-          <div class="time-window-filter" style="margin:8px 0">
-            <label for="analyticsTimeWindow" style="font-size:0.9em;color:var(--text-muted);margin-right:6px">Time window:</label>
-            <select id="analyticsTimeWindow" data-testid="analytics-time-window" aria-label="Time window">
+          <div class="analytics-filters">
+            <div id="analyticsRegionFilter" class="region-filter-container"></div>
+            <select id="analyticsTimeWindow" class="analytics-time-window-select" data-testid="analytics-time-window" aria-label="Time window">
               <option value="">All data</option>
               <option value="1h">Last 1 hour</option>
               <option value="24h">Last 24 hours</option>
@@ -1361,7 +1360,7 @@
         <span style="color:var(--border)">|</span>
         <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">🔎 Check a prefix →</a>
       </nav>
-      <p class="text-muted" style="margin:0 0 12px;font-size:0.78em">This tab shows operational collisions among <strong>repeaters</strong> grouped by their configured hash size. The <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">Prefix Tool</a> checks all repeaters regardless of their configured hash size.</p>
+      <p class="text-muted" style="margin:0 0 12px;font-size:0.78em">Collisions <strong>actually observed in packet traffic</strong> — among <strong>repeaters</strong> grouped by their configured hash size. For <em>theoretical</em> address conflicts that <em>would</em> occur if all repeaters used a given hash size, see the <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">Prefix Tool</a> tab.</p>
 
       <div class="analytics-card" id="inconsistentHashSection">
         <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">⚠️ Inconsistent Hash Sizes</h3><a href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a></div>
@@ -2795,17 +2794,58 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
     // Operational collisions per tier: only consider repeaters CONFIGURED
     // for this hash size — same definition the Hash Issues tab uses.
     // n.hash_size is enriched on the /nodes payload from GetNodeHashSizeInfo.
+    // #1306: keep the per-tier *node lists* per colliding slice so we can
+    // surface WHICH prefixes/nodes collide (not just an aggregate count).
     const opCollisions = { 1: 0, 2: 0, 3: 0 };
+    const opIdx = { 1: new Map(), 2: new Map(), 3: new Map() };
     [1, 2, 3].forEach(b => {
-      const sub = new Map();
       nodes.forEach(n => {
         if (n.hash_size !== b) return;
         const p = n.public_key.toUpperCase().slice(0, b * 2);
-        if (!sub.has(p)) sub.set(p, 0);
-        sub.set(p, sub.get(p) + 1);
+        if (!opIdx[b].has(p)) opIdx[b].set(p, []);
+        opIdx[b].get(p).push(n);
       });
-      opCollisions[b] = [...sub.values()].filter(c => c > 1).length;
+      opCollisions[b] = [...opIdx[b].values()].filter(arr => arr.length > 1).length;
     });
+
+    // #1306: precompute colliding slices per tier (entries with >1 node) for
+    // the "Show N colliding slices →" expandable lists. THEORETICAL = across
+    // every repeater's pubkey prefix (math fact). OPERATIONAL = only among
+    // repeaters configured for this hash size (matches Hash Issues tab math).
+    const collEntries = { theoretical: { 1: [], 2: [], 3: [] }, operational: { 1: [], 2: [], 3: [] } };
+    [1, 2, 3].forEach(b => {
+      collEntries.theoretical[b] = [...idx[b].entries()]
+        .filter(([, arr]) => arr.length > 1)
+        .sort((a, b2) => b2[1].length - a[1].length || a[0].localeCompare(b2[0]));
+      collEntries.operational[b] = [...opIdx[b].entries()]
+        .filter(([, arr]) => arr.length > 1)
+        .sort((a, b2) => b2[1].length - a[1].length || a[0].localeCompare(b2[0]));
+    });
+
+    // #1306: render a "Prefix · Nodes sharing" table for a list of
+    // colliding entries `[ [prefix, [node, ...]], ... ]`.
+    function renderCollideTable(entries) {
+      if (!entries || !entries.length) {
+        return '<div class="text-muted" style="padding:8px;font-size:0.8em">No collisions.</div>';
+      }
+      const rows = entries.map(([prefix, arr]) => {
+        const nodeLinks = arr.map(n => {
+          const label = esc(n.name || n.public_key.slice(0, 10));
+          return `<a href="#/nodes/${encodeURIComponent(n.public_key)}" style="color:var(--accent);text-decoration:none">${label}</a>`;
+        }).join(', ');
+        return `<tr>
+          <td style="padding:4px 8px;font-family:var(--mono);font-weight:600;border-bottom:1px solid var(--border);white-space:nowrap">${esc(prefix)}</td>
+          <td style="padding:4px 8px;font-size:0.85em;border-bottom:1px solid var(--border)">${nodeLinks} <span class="text-muted" style="font-size:0.85em">(${arr.length})</span></td>
+        </tr>`;
+      }).join('');
+      return `<table style="width:100%;border-collapse:collapse;font-size:0.85em">
+        <thead><tr>
+          <th scope="col" style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border);background:var(--bg-secondary,var(--bg))">Prefix</th>
+          <th scope="col" style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border);background:var(--bg-secondary,var(--bg))">Nodes sharing it</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
 
     // Recommendation by network size
     const totalNodes = nodes.length;
@@ -2847,13 +2887,44 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
               // #1270: PRIMARY = configured-for-this-size repeater count
               // (operational truth, matches Hash Stats "By Repeaters").
               // SECONDARY = math fact (unique pubkey slices). OPERATIONAL
-              // COLLISIONS = colliding slices among configured-for-this-size repeaters only.
+              // address conflicts = colliding slices among configured-for-this-size repeaters only.
               const cfg = configuredCount[b];
               const opC = opCollisions[b];
+              const theoC = stats[b].collidingPrefixes;
               const borderVar = opC > 0 ? 'var(--status-red)' : 'var(--border)';
+              // #1306: replace bare "collisions" with "address conflicts" to
+              // distinguish theoretical/would-collide-if-used from packet-
+              // traffic-observed collisions shown on the Hash Issues tab.
               const opLine = opC === 0
-                ? `<span style="color:var(--status-green)">✅ No operational collisions</span>`
-                : `<span style="color:var(--status-red)">⚠️ ${opC} operational collision${opC !== 1 ? 's' : ''}</span>`;
+                ? `<span style="color:var(--status-green)">✅ No address conflicts among configured repeaters</span>`
+                : `<span style="color:var(--status-red)">⚠️ ${opC} address conflict${opC !== 1 ? 's' : ''} among configured repeaters (would-collide-if-used)</span>`;
+              // #1306: expandable WHICH-collides toggles (op + theoretical)
+              const opEntries = collEntries.operational[b];
+              const theoEntries = collEntries.theoretical[b];
+              const opTogId = `ptCollOp${b}`;
+              const theoTogId = `ptCollTheo${b}`;
+              const opToggle = opC > 0 ? `
+                <div style="margin-top:6px">
+                  <button type="button" class="pt-collide-toggle-btn" data-pt-collide-toggle="op-${b}" data-target="${opTogId}"
+                    aria-expanded="false"
+                    style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:0.82em;padding:0">
+                    Show ${opC} colliding slice${opC !== 1 ? 's' : ''} →
+                  </button>
+                  <div id="${opTogId}" data-pt-collide-panel="op-${b}" style="display:none;margin-top:6px;max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                    ${renderCollideTable(opEntries)}
+                  </div>
+                </div>` : '';
+              const theoToggle = theoC > 0 ? `
+                <div style="margin-top:4px">
+                  <button type="button" class="pt-collide-toggle-btn" data-pt-collide-toggle="theo-${b}" data-target="${theoTogId}"
+                    aria-expanded="false"
+                    style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:0.78em;padding:0">
+                    Show ${theoC} would-collide slice${theoC !== 1 ? 's' : ''} (across all repeaters) →
+                  </button>
+                  <div id="${theoTogId}" data-pt-collide-panel="theo-${b}" style="display:none;margin-top:6px;max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                    ${renderCollideTable(theoEntries)}
+                  </div>
+                </div>` : '';
               return `
             <div class="analytics-stat-card" style="flex:1;min-width:170px;border-color:${borderVar}">
               <div class="analytics-stat-label">${b}-byte prefixes</div>
@@ -2863,12 +2934,17 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
                 <span class="text-muted" style="font-size:0.7em"> of ${totalNodes.toLocaleString()} repeaters configured</span>
               </div>
               <div style="font-size:0.82em;margin-top:4px">${opLine}</div>
+              ${opToggle}
               <div class="text-muted" style="font-size:0.72em;margin-top:6px;border-top:1px dashed var(--border);padding-top:4px">
                 <em>Theoretical:</em> ${stats[b].usedPrefixes.toLocaleString()} unique ${b}-byte slice${stats[b].usedPrefixes !== 1 ? 's' : ''}
-                across all repeater pubkeys (of ${spaceSizes[b].toLocaleString()} possible)
+                across all repeater pubkeys (of ${spaceSizes[b].toLocaleString()} possible)${theoC > 0 ? ` — ${theoC} would-collide if every repeater used ${b}-byte` : ''}
               </div>
+              ${theoToggle}
             </div>`;
             }).join('')}
+          </div>
+          <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--accent);border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:0.85em">
+            <strong>ℹ️ Theoretical vs observed:</strong> These are <em>theoretical address conflicts</em> that would occur IF all repeaters used this hash size (would-collide-if-used). For collisions <em>actually observed in packet traffic</em>, see the <a href="#/analytics?tab=collisions" style="color:var(--accent)">Hash Issues</a> tab.
           </div>
           <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:12px">
             <strong>Recommendation: ${rec} prefixes</strong> — ${recDetail}
@@ -2876,8 +2952,8 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
           </div>
           <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:0.85em">
             <strong>ℹ️ About these numbers:</strong> The primary count is how many repeaters are <em>configured</em> for each hash size (their advertised path hash byte length), matching the
-            <a href="#/analytics?tab=hashsizes" style="color:var(--accent)">Hash Stats</a> tab. Operational collisions count only repeaters configured for the same hash size whose actual prefix slices collide — same definition the
-            <a href="#/analytics?tab=collisions" style="color:var(--accent)">Hash Issues</a> tab uses. The <em>theoretical</em> line shows the math fact: how many distinct slices appear when every repeater pubkey is truncated to N bytes, regardless of configured hash size.
+            <a href="#/analytics?tab=hashsizes" style="color:var(--accent)">Hash Stats</a> tab. Address conflicts (would-collide-if-used) count colliding slices among repeaters configured for the same hash size — same definition the
+            <a href="#/analytics?tab=collisions" style="color:var(--accent)">Hash Issues</a> tab uses, except Hash Issues counts collisions <em>actually observed in packet traffic</em> rather than theoretical. The <em>theoretical</em> line shows the math fact: how many distinct slices appear when every repeater pubkey is truncated to N bytes, regardless of configured hash size.
           </div>
         </div>
       </div>
@@ -3056,6 +3132,21 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       const open = body.style.display === 'none';
       body.style.display = open ? '' : 'none';
       chevron.style.transform = open ? 'rotate(90deg)' : '';
+    });
+
+    // #1306: WHICH-collides toggles
+    document.querySelectorAll('[data-pt-collide-toggle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const panel = document.getElementById(btn.dataset.target);
+        if (!panel) return;
+        const open = panel.style.display === 'none' || panel.style.display === '';
+        // Toggle: if currently hidden ('none'), open; else close.
+        const currentlyHidden = panel.style.display === 'none';
+        panel.style.display = currentlyHidden ? 'block' : 'none';
+        btn.setAttribute('aria-expanded', String(currentlyHidden));
+        // Swap arrow direction in label
+        btn.textContent = btn.textContent.replace(currentlyHidden ? '→' : '↓', currentlyHidden ? '↓' : '→');
+      });
     });
 
     // Auto-run from URL params
