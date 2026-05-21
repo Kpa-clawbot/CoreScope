@@ -579,6 +579,8 @@
         .openOn(map);
       dismissTimer = setTimeout(() => { if (map) map.closePopup(); }, CLICKABLE_POPUP_DISMISS_MS);
     });
+  }
+
   function speedLabel(s) {
     if (s === 0.25) return '¼x';
     if (s === 0.5) return '½x';
