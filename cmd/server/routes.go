@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"regexp"
 	"runtime"
@@ -25,11 +26,19 @@ type Server struct {
 	cfg       *Config
 	hub       *Hub
 	store     *PacketStore // in-memory packet store (nil = fallback to DB)
+	configDir string       // directory containing config.json (for write-back)
 	startedAt time.Time
 	perfStats *PerfStats
 	version   string
 	commit    string
 	buildTime string
+
+	// Guards s.cfg.GeoFilter — read by ingest/handler goroutines, written by PUT handler
+	cfgMu sync.RWMutex
+
+	// Serializes concurrent PUT /api/config/geo-filter disk writes so requests
+	// can't race on the .tmp file or interleave disk/memory updates.
+	saveMu sync.Mutex
 
 	// Cached runtime.MemStats to avoid stop-the-world pauses on every health check
 	memStatsMu   sync.Mutex
@@ -57,6 +66,18 @@ type PerfStats struct {
 	Endpoints   map[string]*EndpointPerf
 	SlowQueries []SlowQuery
 	StartedAt   time.Time
+}
+
+func (s *Server) getGeoFilter() *GeoFilterConfig {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.GeoFilter
+}
+
+func (s *Server) setGeoFilter(gf *GeoFilterConfig) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	s.cfg.GeoFilter = gf
 }
 
 type EndpointPerf struct {
@@ -120,6 +141,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/config/theme", s.handleConfigTheme).Methods("GET")
 	r.HandleFunc("/api/config/map", s.handleConfigMap).Methods("GET")
 	r.HandleFunc("/api/config/geo-filter", s.handleConfigGeoFilter).Methods("GET")
+	r.Handle("/api/config/geo-filter", s.requireAPIKey(http.HandlerFunc(s.handlePutConfigGeoFilter))).Methods("PUT")
 
 	// Readiness endpoint (gated on background init completion)
 	r.HandleFunc("/api/healthz", s.handleHealthz).Methods("GET")
@@ -444,12 +466,76 @@ func (s *Server) handleConfigMap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigGeoFilter(w http.ResponseWriter, r *http.Request) {
-	gf := s.cfg.GeoFilter
+	gf := s.getGeoFilter()
+	// NOTE: do NOT include any field that derives from APIKey presence/strength here.
+	// This endpoint is intentionally public; leaking whether a write-capable key is
+	// configured is an info-disclosure. Clients that want to write should just try
+	// PUT and handle 401/403. See PR #736 review.
 	if gf == nil || len(gf.Polygon) == 0 {
 		writeJSON(w, map[string]interface{}{"polygon": nil, "bufferKm": 0})
 		return
 	}
 	writeJSON(w, map[string]interface{}{"polygon": gf.Polygon, "bufferKm": gf.BufferKm})
+}
+
+func (s *Server) handlePutConfigGeoFilter(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB cap
+
+	var body struct {
+		Polygon  [][2]float64 `json:"polygon"`
+		BufferKm float64      `json:"bufferKm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	// Allow clearing (empty/null polygon) or a valid polygon with ≥ 3 points.
+	if len(body.Polygon) > 0 && len(body.Polygon) < 3 {
+		writeError(w, http.StatusBadRequest, "polygon must have at least 3 points")
+		return
+	}
+	if len(body.Polygon) > 1000 {
+		writeError(w, http.StatusBadRequest, "polygon must have at most 1000 points")
+		return
+	}
+	for _, pt := range body.Polygon {
+		if math.IsNaN(pt[0]) || math.IsNaN(pt[1]) || math.IsInf(pt[0], 0) || math.IsInf(pt[1], 0) ||
+			pt[0] < -90 || pt[0] > 90 || pt[1] < -180 || pt[1] > 180 {
+			writeError(w, http.StatusBadRequest, "polygon point out of range: lat must be in [-90,90], lon in [-180,180]")
+			return
+		}
+	}
+
+	// bufferKm must be finite, non-negative, and ≤ 20000 km (half Earth circumference).
+	if math.IsNaN(body.BufferKm) || math.IsInf(body.BufferKm, 0) ||
+		body.BufferKm < 0 || body.BufferKm > 20000 {
+		writeError(w, http.StatusBadRequest, "bufferKm must be a finite number in [0, 20000]")
+		return
+	}
+
+	var gf *GeoFilterConfig
+	if len(body.Polygon) >= 3 {
+		gf = &GeoFilterConfig{Polygon: body.Polygon, BufferKm: body.BufferKm}
+	}
+
+	s.saveMu.Lock()
+	if s.configDir != "" {
+		if err := SaveGeoFilter(s.configDir, gf); err != nil {
+			s.saveMu.Unlock()
+			log.Printf("[geofilter] save failed: %v", err)
+			writeError(w, http.StatusInternalServerError, "failed to save config")
+			return
+		}
+	}
+	s.setGeoFilter(gf)
+	s.saveMu.Unlock()
+
+	if gf != nil {
+		writeJSON(w, map[string]interface{}{"polygon": gf.Polygon, "bufferKm": gf.BufferKm})
+	} else {
+		writeJSON(w, map[string]interface{}{"polygon": nil, "bufferKm": 0})
+	}
 }
 
 // --- System Handlers ---
@@ -1145,20 +1231,17 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if s.cfg.GeoFilter != nil {
+	if gf := s.getGeoFilter(); gf != nil {
 		filtered := nodes[:0]
 		for _, node := range nodes {
 			// Foreign-flagged nodes (#730) are kept even when their GPS lies
-			// outside the geofilter polygon — that's the whole point of the
-			// flag: operators need to SEE bridged/leaked nodes, not have them
-			// filtered away. The ingestor sets foreign_advert=1 when its
-			// configured geo_filter rejected the advert; the server must
-			// surface those.
+			// outside the geofilter polygon — operators need to SEE bridged/
+			// leaked nodes, not have them filtered away.
 			if isForeign, _ := node["foreign"].(bool); isForeign {
 				filtered = append(filtered, node)
 				continue
 			}
-			if NodePassesGeoFilter(node["lat"], node["lon"], s.cfg.GeoFilter) {
+			if NodePassesGeoFilter(node["lat"], node["lon"], gf) {
 				filtered = append(filtered, node)
 			}
 		}

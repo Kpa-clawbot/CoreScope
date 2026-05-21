@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -447,6 +448,68 @@ func (c *Config) IsBlacklisted(pubkey string) bool {
 	return c.blacklistSet()[strings.ToLower(strings.TrimSpace(pubkey))]
 }
 
+// SaveGeoFilter writes the geo_filter section back to config.json on disk.
+// Pass gf=nil to remove the filter. The rest of config.json is preserved as-is.
+func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
+	var configPath string
+	for _, p := range []string{
+		filepath.Join(configDir, "config.json"),
+		filepath.Join(configDir, "data", "config.json"),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			configPath = p
+			break
+		}
+	}
+	if configPath == "" {
+		return fmt.Errorf("config.json not found in %s", configDir)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	// Parse as a raw map so non-struct fields (_comment, etc.) are preserved.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+
+	if gf == nil || len(gf.Polygon) == 0 {
+		delete(raw, "geo_filter")
+	} else {
+		// Round-trip through JSON to get a plain interface{} value.
+		b, _ := json.Marshal(gf)
+		var v interface{}
+		_ = json.Unmarshal(b, &v)
+		raw["geo_filter"] = v
+	}
+
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	out = append(out, '\n')
+
+	// Preserve the original file mode so operators' chmod 0600 survives the write.
+	origMode := os.FileMode(0644)
+	if fi, err := os.Stat(configPath); err == nil {
+		origMode = fi.Mode().Perm()
+	}
+
+	// Atomic write: temp file + rename.
+	tmp := configPath + ".tmp"
+	if err := os.WriteFile(tmp, out, origMode); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := os.Rename(tmp, configPath); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("rename config: %w", err)
+	}
+	return nil
+}
+
 // obsBlacklistSet lazily builds and caches the observerBlacklist as a set for O(1) lookups.
 func (c *Config) obsBlacklistSet() map[string]bool {
 	c.obsBlacklistOnce.Do(func() {
@@ -485,8 +548,8 @@ func (c *Config) IsObserverBlacklisted(id string) bool {
 // RecomputeIntervalSeconds keys (all optional):
 //   topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew
 type AnalyticsConfig struct {
-	DefaultIntervalSeconds    int            `json:"defaultIntervalSeconds,omitempty"`
-	RecomputeIntervalSeconds  map[string]int `json:"recomputeIntervalSeconds,omitempty"`
+	DefaultIntervalSeconds   int            `json:"defaultIntervalSeconds,omitempty"`
+	RecomputeIntervalSeconds map[string]int `json:"recomputeIntervalSeconds,omitempty"`
 }
 
 // AnalyticsDefaultRecomputeInterval returns the configured default

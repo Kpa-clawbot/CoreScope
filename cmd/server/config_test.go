@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -385,5 +386,27 @@ func TestObserverDaysOrDefault(t *testing.T) {
 				t.Errorf("ObserverDaysOrDefault() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSaveGeoFilter_PreservesFileMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file permissions not supported on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"port":3000}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gf := &GeoFilterConfig{Polygon: [][2]float64{{1, 2}, {3, 4}, {5, 6}}, BufferKm: 0}
+	if err := SaveGeoFilter(dir, gf); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Errorf("file mode downgraded: want 0600, got %04o", got)
 	}
 }
