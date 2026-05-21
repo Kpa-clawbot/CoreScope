@@ -2148,6 +2148,56 @@ func TestPerObservationRawHexEnrich(t *testing.T) {
 	}
 }
 
+func TestGetNodesReturnsMultibyteSupField(t *testing.T) {
+	conn, _ := sql.Open("sqlite", ":memory:")
+	conn.SetMaxOpenConns(1)
+	conn.Exec(`CREATE TABLE nodes (
+		public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
+		lat REAL, lon REAL, last_seen TEXT, first_seen TEXT,
+		advert_count INTEGER DEFAULT 0, battery_mv INTEGER, temperature_c REAL,
+		foreign_advert INTEGER DEFAULT 0,
+		multibyte_sup INTEGER NOT NULL DEFAULT 0, multibyte_evidence TEXT
+	)`)
+	conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen)
+		VALUES ('aabb1122', 'TestRep', 'repeater', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+	conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, first_seen, multibyte_sup, multibyte_evidence)
+		VALUES ('ccdd3344', 'ConfirmedRep', 'repeater', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 2, 'advert')`)
+	db := &DB{conn: conn, hasMultibyteSupCols: true}
+
+	nodes, _, _, err := db.GetNodes(10, 0, "", "", "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) < 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(nodes))
+	}
+
+	byKey := map[string]map[string]interface{}{}
+	for _, n := range nodes {
+		if pk, ok := n["public_key"].(string); ok {
+			byKey[pk] = n
+		}
+	}
+
+	// Default node: multibyte_sup present and zero.
+	n := byKey["aabb1122"]
+	if _, ok := n["multibyte_sup"]; !ok {
+		t.Error("multibyte_sup missing from GetNodes response")
+	}
+	if n["multibyte_sup"] != 0 {
+		t.Errorf("aabb1122 multibyte_sup = %v, want 0", n["multibyte_sup"])
+	}
+
+	// Confirmed node: non-zero value and evidence round-trip correctly.
+	c := byKey["ccdd3344"]
+	if c["multibyte_sup"] != 2 {
+		t.Errorf("ccdd3344 multibyte_sup = %v, want 2", c["multibyte_sup"])
+	}
+	if c["multibyte_evidence"] != "advert" {
+		t.Errorf("ccdd3344 multibyte_evidence = %v, want advert", c["multibyte_evidence"])
+	}
+}
+
 // TestLoadIndexesRelayHopsFromResolvedPath verifies that after Load(), relay
 // nodes that appear only in resolved_path (not in decoded_json) are indexed
 // in byNode. Regression for #692: indexByNode was called before observations

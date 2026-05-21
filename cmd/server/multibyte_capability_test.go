@@ -171,14 +171,15 @@ func TestMultiByteCapability_Unknown(t *testing.T) {
 	}
 }
 
-// TestMultiByteCapability_PrefixCollision tests that when two repeaters
-// share the same prefix, one confirmed via advert, the other gets
-// suspected (not confirmed) from path data alone.
-func TestMultiByteCapability_PrefixCollision(t *testing.T) {
+// TestMultiByteCapability_SuspectedFromPath tests that a repeater whose
+// 2-byte prefix appears as a hop in a hs=2 packet is classified as "suspected"
+// when it has no confirming advert, while another node confirmed via advert
+// remains "confirmed" even though the two share no prefix overlap.
+func TestMultiByteCapability_SuspectedFromPath(t *testing.T) {
 	db := setupCapabilityTestDB(t)
 	defer db.conn.Close()
 
-	// Two repeaters sharing 1-byte prefix "aa"
+	// Two repeaters sharing 2-byte prefix "aacc"
 	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
 		"aabb000000000001", "RepConfirmed", "repeater", recentTS(24))
 	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
@@ -189,14 +190,15 @@ func TestMultiByteCapability_PrefixCollision(t *testing.T) {
 	// RepConfirmed has a 2-byte advert
 	addTestPacket(store, makeTestAdvert("aabb000000000001", 2))
 
-	// A packet with 2-byte path containing 1-byte hop "aa" — both share this prefix
+	// A packet with hs=2 path containing 2-byte hop "aacc" — matches RepOther's
+	// 2-byte prefix. Hop length (2 bytes) correctly matches hash_size=2.
 	pathByte := buildPathByte(2, 1)
-	rawHex := "01" + pathByte + "aa"
+	rawHex := "01" + pathByte + "aacc"
 	pt := 1
 	pkt := &StoreTx{
 		RawHex:      rawHex,
 		PayloadType: &pt,
-		PathJSON:    `["aa"]`,
+		PathJSON:    `["aacc"]`,
 		FirstSeen:   recentTS(48),
 	}
 	addTestPacket(store, pkt)
@@ -385,6 +387,102 @@ func TestMultiByteCapability_RoleColumnPopulated(t *testing.T) {
 	}
 }
 
+// TestGetMultibyteCapMap_PopulatedByAnalyticsCycle verifies that calling
+// GetAnalyticsHashSizes populates mbCapSnapshot and that GetMultibyteCapMap
+// then returns the expected entries — exercising the full analytics → publish path.
+func TestGetMultibyteCapMap_PopulatedByAnalyticsCycle(t *testing.T) {
+	db := setupRichTestDB(t)
+	defer db.Close()
+
+	store := NewPacketStore(db, nil)
+	store.Load()
+
+	// GetAnalyticsHashSizes triggers computeMultiByteCapability and publishes mbCapSnapshot.
+	store.GetAnalyticsHashSizes("")
+
+	m := store.GetMultibyteCapMap()
+	// Rich test DB has a repeater (aabbccdd11223344) with hash_size=2 adverts,
+	// so it must appear as "confirmed" after the analytics cycle.
+	e, ok := m["aabbccdd11223344"]
+	if !ok {
+		t.Fatal("expected aabbccdd11223344 in snapshot after analytics cycle")
+	}
+	if e.Status != "confirmed" {
+		t.Errorf("status = %q, want confirmed", e.Status)
+	}
+}
+
+func TestEnrichNodeWithMultibyte_Confirmed(t *testing.T) {
+	node := map[string]interface{}{"public_key": "aabb", "multibyte_sup": 0}
+	enrichNodeWithMultibyte(node, MultiByteCapEntry{Status: "confirmed", Evidence: "advert"})
+	if node["multibyte_sup"] != 2 {
+		t.Errorf("multibyte_sup = %v, want 2", node["multibyte_sup"])
+	}
+	if node["multibyte_evidence"] != "advert" {
+		t.Errorf("multibyte_evidence = %v, want advert", node["multibyte_evidence"])
+	}
+}
+
+func TestEnrichNodeWithMultibyte_Suspected(t *testing.T) {
+	node := map[string]interface{}{"public_key": "aabb", "multibyte_sup": 0}
+	enrichNodeWithMultibyte(node, MultiByteCapEntry{Status: "suspected", Evidence: "path"})
+	if node["multibyte_sup"] != 1 {
+		t.Errorf("multibyte_sup = %v, want 1", node["multibyte_sup"])
+	}
+}
+
+func TestEnrichNodeWithMultibyte_ZeroEntryNoChange(t *testing.T) {
+	// Contract: a zero-status entry (Status=="") must be a no-op so that confirmed
+	// values written by the DB layer are not clobbered when the in-memory snapshot
+	// is missing the pubkey (e.g. immediately after cold start before the first cycle).
+	node := map[string]interface{}{"public_key": "aabb", "multibyte_sup": 0}
+	enrichNodeWithMultibyte(node, MultiByteCapEntry{}) // zero-value = unknown, no pubkey
+	if node["multibyte_sup"] != 0 {
+		t.Errorf("multibyte_sup = %v, want 0 (unchanged for unknown)", node["multibyte_sup"])
+	}
+	if _, ok := node["multibyte_evidence"]; ok {
+		t.Error("multibyte_evidence should not be set for unknown entry")
+	}
+}
+
+// TestMultiByteCapability_HopLengthMismatch tests that a 1-byte hop stored
+// in a hs=2 packet (pre-#886 ingestor data) does NOT trigger suspected.
+// The guard at store.go (len(pfx)/2 != hs) rejects hops whose byte length
+// disagrees with the path_byte hash_size — without it this test would produce "suspected".
+func TestMultiByteCapability_HopLengthMismatch(t *testing.T) {
+	db := setupCapabilityTestDB(t)
+	defer db.conn.Close()
+
+	db.conn.Exec("INSERT INTO nodes (public_key, name, role, last_seen) VALUES (?, ?, ?, ?)",
+		"daabccdd11223344", "LegacyNode", "repeater", recentTS(24))
+
+	store := NewPacketStore(db, nil)
+
+	// Malformed packet: path_json has 1-byte hops but path_byte in raw_hex
+	// encodes hash_size=2 (pre-#886 ingestor stored path bytes individually).
+	// buildPathByte(2,1) gives a path byte with hs=2, hop_count=1.
+	pathByte := buildPathByte(2, 1)
+	// path_json has 1-byte hop "da" — matches 1-byte prefix of node "daab..."
+	// raw_hex says hash_size=2.
+	rawHex := "01" + pathByte + "da"
+	pt := 1
+	pkt := &StoreTx{
+		RawHex:      rawHex,
+		PayloadType: &pt,
+		PathJSON:    `["da"]`,
+		FirstSeen:   recentTS(48),
+	}
+	addTestPacket(store, pkt)
+
+	caps := store.computeMultiByteCapability(nil)
+	if len(caps) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(caps))
+	}
+	if caps[0].Status != "unknown" {
+		t.Errorf("expected unknown (hop length mismatch should be filtered), got %s", caps[0].Status)
+	}
+}
+
 // TestMultiByteCapability_AdopterEvidenceTakesPrecedence tests that when
 // adopter data shows hashSize >= 2 but path evidence says "suspected",
 // the node is upgraded to "confirmed" (Bug 3, #754).
@@ -433,3 +531,31 @@ func TestMultiByteCapability_AdopterEvidenceTakesPrecedence(t *testing.T) {
 		t.Errorf("with adopter data: expected advert evidence, got %s", capByName["RepAdopter"].Evidence)
 	}
 }
+
+
+// TestGetMultibyteCapFor_O1Lookup verifies O(1) index lookup for GetMultibyteCapFor.
+func TestGetMultibyteCapFor_O1Lookup(t *testing.T) {
+	s := &PacketStore{}
+	entries := []MultiByteCapEntry{
+		{PublicKey: "pk1", Status: "confirmed", Evidence: "advert"},
+		{PublicKey: "pk2", Status: "suspected"},
+	}
+	s.cacheMu.Lock()
+	s.mbCapSnapshot = entries
+	idx := make(map[string]MultiByteCapEntry, len(entries))
+	for _, e := range entries {
+		idx[e.PublicKey] = e
+	}
+	s.mbCapIndex = idx
+	s.cacheMu.Unlock()
+
+	e1, ok1 := s.GetMultibyteCapFor("pk1")
+	if !ok1 || e1.Status != "confirmed" {
+		t.Errorf("pk1: want confirmed, got %v ok=%v", e1.Status, ok1)
+	}
+	_, ok2 := s.GetMultibyteCapFor("missing")
+	if ok2 {
+		t.Error("missing key should return ok=false")
+	}
+}
+

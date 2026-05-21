@@ -485,6 +485,65 @@ func TestSchemaNoiseFloorIsReal(t *testing.T) {
 	}
 }
 
+func TestSchemaMultibyteSupColumns(t *testing.T) {
+	dbPath := tempDBPath(t)
+	s, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checkColumns := func(table string) {
+		t.Helper()
+		cols := map[string]string{}
+		rows, err := s.db.Query("PRAGMA table_info(" + table + ")")
+		if err != nil {
+			t.Fatalf("PRAGMA table_info(%s): %v", table, err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var cid int
+			var colName, colType string
+			var notNull, pk int
+			var dflt interface{}
+			if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
+				cols[colName] = colType
+			}
+		}
+		if ct, ok := cols["multibyte_sup"]; !ok {
+			t.Errorf("%s.multibyte_sup column missing", table)
+		} else if ct != "INTEGER" {
+			t.Errorf("%s.multibyte_sup type=%s, want INTEGER", table, ct)
+		}
+		if _, ok := cols["multibyte_evidence"]; !ok {
+			t.Errorf("%s.multibyte_evidence column missing", table)
+		}
+	}
+
+	checkColumns("nodes")
+	checkColumns("inactive_nodes")
+
+	// Migration record must be inserted exactly once.
+	var migCount int
+	s.db.QueryRow("SELECT COUNT(*) FROM _migrations WHERE name = 'multibyte_sup_v1'").Scan(&migCount)
+	if migCount != 1 {
+		t.Errorf("_migrations multibyte_sup_v1 count=%d, want 1", migCount)
+	}
+
+	s.Close()
+
+	// Re-opening must be idempotent: no duplicate-column error and migration count unchanged.
+	s2, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("re-open failed: %v", err)
+	}
+	defer s2.Close()
+
+	s2.db.QueryRow("SELECT COUNT(*) FROM _migrations WHERE name = 'multibyte_sup_v1'").Scan(&migCount)
+	if migCount != 1 {
+		t.Errorf("after re-open: _migrations multibyte_sup_v1 count=%d, want 1", migCount)
+	}
+}
+
 func TestInsertTransmissionWithObserver(t *testing.T) {
 	s, err := OpenStore(tempDBPath(t))
 	if err != nil {

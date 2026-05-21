@@ -475,6 +475,26 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] observations.raw_hex column added")
 	}
 
+	// Migration: add multibyte capability columns to nodes/inactive_nodes (#903)
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'multibyte_sup_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding multibyte_sup columns to nodes/inactive_nodes...")
+		for _, stmt := range []string{
+			`ALTER TABLE nodes ADD COLUMN multibyte_sup INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE nodes ADD COLUMN multibyte_evidence TEXT`,
+			`ALTER TABLE inactive_nodes ADD COLUMN multibyte_sup INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE inactive_nodes ADD COLUMN multibyte_evidence TEXT`,
+		} {
+			if _, err := db.Exec(stmt); err != nil {
+				return fmt.Errorf("multibyte_sup_v1 migration: %w", err)
+			}
+		}
+		if _, err := db.Exec(`INSERT INTO _migrations (name) VALUES ('multibyte_sup_v1')`); err != nil {
+			return fmt.Errorf("multibyte_sup_v1 migration record: %w", err)
+		}
+		log.Println("[migration] multibyte_sup columns added")
+	}
+
 	// Migration: add last_packet_at column to observers (#last-packet-at)
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observers_last_packet_at_v1'")
 	if row.Scan(&migDone) != nil {

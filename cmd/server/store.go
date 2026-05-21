@@ -45,11 +45,11 @@ type StoreTx struct {
 	RSSI         *float64
 	PathJSON     string
 	Direction    string
-	LatestSeen           string // max observation timestamp (or FirstSeen if no observations)
-	UniqueObserverCount  int    // cached count of distinct observer IDs
+	LatestSeen          string // max observation timestamp (or FirstSeen if no observations)
+	UniqueObserverCount int    // cached count of distinct observer IDs
 	// Cached parsed fields (set once, read many)
 	parsedPath    []string               // cached parsePathJSON result
-	pathParsed    bool                    // whether parsedPath has been set
+	pathParsed    bool                   // whether parsedPath has been set
 	decodedOnce   sync.Once              // guards parsedDecoded
 	parsedDecoded map[string]interface{} // cached json.Unmarshal of DecodedJSON
 	// Dedup map: "observerID|pathJSON" → true for O(1) duplicate checks
@@ -92,28 +92,28 @@ func (tx *StoreTx) ParsedDecoded() map[string]interface{} {
 // acquired in the order listed below. Never acquire a higher-numbered lock
 // while holding a lower-numbered one.
 //
-//   1. mu            (sync.RWMutex) — guards the core packet data: packets,
-//                     indexes (byHash, byTxID, byObsID, byObserver, byNode,
-//                     byPathHop, byPayloadType), counters, and loaded flag.
+//  1. mu            (sync.RWMutex) — guards the core packet data: packets,
+//     indexes (byHash, byTxID, byObsID, byObserver, byNode,
+//     byPathHop, byPayloadType), counters, and loaded flag.
 //
-//   2. cacheMu       (sync.Mutex)  — guards analytics response caches:
-//                     rfCache, topoCache, hashCache, collisionCache, chanCache,
-//                     distCache, subpathCache, and their TTLs/hit counters.
-//                     Also guards rate-limited invalidation state
-//                     (lastInvalidated, pendingInv).
+//  2. cacheMu       (sync.Mutex)  — guards analytics response caches:
+//     rfCache, topoCache, hashCache, collisionCache, chanCache,
+//     distCache, subpathCache, and their TTLs/hit counters.
+//     Also guards rate-limited invalidation state
+//     (lastInvalidated, pendingInv).
 //
-//   3. channelsCacheMu (sync.Mutex) — guards the short-lived GetChannels
-//                     cache (channelsCacheKey/Exp/Res).
+//  3. channelsCacheMu (sync.Mutex) — guards the short-lived GetChannels
+//     cache (channelsCacheKey/Exp/Res).
 //
-//   4. groupedCacheMu (sync.Mutex)  — guards the short-lived
-//                     QueryGroupedPackets cache.
+//  4. groupedCacheMu (sync.Mutex)  — guards the short-lived
+//     QueryGroupedPackets cache.
 //
-//   5. regionObsMu   (sync.Mutex)  — guards the region→observer mapping
-//                     cache (regionObsCache, regionObsCacheTime).
+//  5. regionObsMu   (sync.Mutex)  — guards the region→observer mapping
+//     cache (regionObsCache, regionObsCacheTime).
 //
-//   6. hashSizeInfoMu (sync.Mutex)  — guards the cached hash-size-info
-//                     result (hashSizeInfoCache). Acquired independently or
-//                     under mu (in EvictStale).
+//  6. hashSizeInfoMu (sync.Mutex)  — guards the cached hash-size-info
+//     result (hashSizeInfoCache). Acquired independently or
+//     under mu (in EvictStale).
 //
 // Nesting that occurs today:
 //   - IngestNew:               mu → cacheMu → channelsCacheMu  (1 → 2 → 3, OK)
@@ -144,14 +144,16 @@ type PacketStore struct {
 	insertCount   int64
 	queryCount    int64
 	// Response caches (separate mutex to avoid contention with store RWMutex)
-	cacheMu      sync.Mutex
-	rfCache      map[string]*cachedResult // region → cached RF result
-	topoCache    map[string]*cachedResult // region → cached topology result
-	hashCache      map[string]*cachedResult // region → cached hash-sizes result
-	collisionCache map[string]*cachedResult // cached hash-collisions result keyed by region ("" = global)
-	chanCache    map[string]*cachedResult // region → cached channels result
-	distCache    map[string]*cachedResult // region → cached distance result
-	subpathCache map[string]*cachedResult // params → cached subpaths result
+	cacheMu           sync.Mutex
+	rfCache           map[string]*cachedResult // region → cached RF result
+	topoCache         map[string]*cachedResult // region → cached topology result
+	hashCache         map[string]*cachedResult // region → cached hash-sizes result
+	mbCapSnapshot  []MultiByteCapEntry          // latest computeMultiByteCapability result, under cacheMu
+	mbCapIndex     map[string]MultiByteCapEntry // O(1) pubkey lookup, rebuilt with mbCapSnapshot, under cacheMu
+	collisionCache    map[string]*cachedResult // cached hash-collisions result keyed by region ("" = global)
+	chanCache         map[string]*cachedResult // region → cached channels result
+	distCache         map[string]*cachedResult // region → cached distance result
+	subpathCache      map[string]*cachedResult // params → cached subpaths result
 	rfCacheTTL        time.Duration
 	collisionCacheTTL time.Duration
 	// Steady-state analytics recomputers (issue #1240). Each holds the
@@ -266,13 +268,13 @@ type PacketStore struct {
 
 	// Resolved path membership index: xxhash → []txID (forward) and txID → []hashes (reverse).
 	// Replaces per-StoreTx/StoreObs ResolvedPath []*string field (#800).
-	resolvedPubkeyIndex   map[uint64][]int  // hash(pubkey) → []txID
-	resolvedPubkeyReverse map[int][]uint64  // txID → []hashes indexed under
-	useResolvedPathIndex              bool // feature flag (default true, off path = conservative)
-	maxResolvedPubkeyIndexEntries     int  // hard cap for size warning (0 = use default 5M)
-	apiResolvedPathLRU    map[int][]*string // obsID → resolved path (LRU cache for API)
-	lruOrder              []int             // FIFO order for LRU eviction
-	lruMu                 sync.RWMutex     // guards apiResolvedPathLRU + lruOrder
+	resolvedPubkeyIndex           map[uint64][]int  // hash(pubkey) → []txID
+	resolvedPubkeyReverse         map[int][]uint64  // txID → []hashes indexed under
+	useResolvedPathIndex          bool              // feature flag (default true, off path = conservative)
+	maxResolvedPubkeyIndexEntries int               // hard cap for size warning (0 = use default 5M)
+	apiResolvedPathLRU            map[int][]*string // obsID → resolved path (LRU cache for API)
+	lruOrder                      []int             // FIFO order for LRU eviction
+	lruMu                         sync.RWMutex      // guards apiResolvedPathLRU + lruOrder
 
 	// Persisted neighbor graph for hop resolution at ingest time.
 	// Accessed via atomic.Pointer because async rebuilds (path_inspect.go
@@ -332,11 +334,11 @@ type PacketStore struct {
 	hashMigrationComplete atomic.Bool
 
 	// Eviction config and stats
-	retentionHours   float64        // 0 = unlimited
-	maxMemoryMB      int            // 0 = unlimited (packet store memory budget)
-	evicted          int64          // total packets evicted
-	trackedBytes     int64          // running total of estimated packet store memory
-	memoryEstimator  func() float64 // injectable for tests; nil = use runtime.ReadMemStats (stats only)
+	retentionHours  float64        // 0 = unlimited
+	maxMemoryMB     int            // 0 = unlimited (packet store memory budget)
+	evicted         int64          // total packets evicted
+	trackedBytes    int64          // running total of estimated packet store memory
+	memoryEstimator func() float64 // injectable for tests; nil = use runtime.ReadMemStats (stats only)
 }
 
 // Precomputed distance records for fast analytics aggregation.
@@ -424,7 +426,7 @@ func dedupeHopsByPair(hops []distHopRecord, limit int) []map[string]interface{} 
 			"dist": h.Dist, "type": h.Type,
 			"bestSnr": floatPtrOrNil(pe.agg.maxSNR), "medianSnr": floatPtrOrNil(medianSNR),
 			"obsCount": pe.agg.obsCount,
-			"hash": h.Hash, "timestamp": h.Timestamp,
+			"hash":     h.Hash, "timestamp": h.Timestamp,
 		})
 	}
 	return result
@@ -493,12 +495,12 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		byPayloadType: make(map[int][]*StoreTx),
 		rfCache:       make(map[string]*cachedResult),
 		topoCache:     make(map[string]*cachedResult),
-		hashCache:      make(map[string]*cachedResult),
+		hashCache:     make(map[string]*cachedResult),
 
 		collisionCache: make(map[string]*cachedResult),
-		chanCache:     make(map[string]*cachedResult),
-		distCache:     make(map[string]*cachedResult),
-		subpathCache:  make(map[string]*cachedResult),
+		chanCache:      make(map[string]*cachedResult),
+		distCache:      make(map[string]*cachedResult),
+		subpathCache:   make(map[string]*cachedResult),
 		// #1239: 60 seconds by default. rfCacheTTL is the shared TTL for
 		// the RF, topology, distance, hash-sizes, subpath, and channel
 		// analytics caches. Distance analytics IS viewed live during
@@ -507,14 +509,14 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		// cold-miss churn during heavy ingest without freezing data.
 		// Override via cacheTTL.analyticsRF in config.json (also
 		// propagates to distance / topology / hash-sizes / etc.).
-		rfCacheTTL: 60 * time.Second,
+		rfCacheTTL:        60 * time.Second,
 		collisionCacheTTL: 3600 * time.Second,
 		invCooldown:       300 * time.Second,
-		spIndex:       make(map[string]int, 4096),
-		spTxIndex:     make(map[string][]*StoreTx, 4096),
-		advertPubkeys:   make(map[string]int),
-		lastSeenTouched: make(map[string]time.Time),
-		clockSkew:       NewClockSkewEngine(),
+		spIndex:           make(map[string]int, 4096),
+		spTxIndex:         make(map[string][]*StoreTx, 4096),
+		advertPubkeys:     make(map[string]int),
+		lastSeenTouched:   make(map[string]time.Time),
+		clockSkew:         NewClockSkewEngine(),
 		useResolvedPathIndex: true,
 	}
 	ps.initResolvedPathIndex()
@@ -800,6 +802,7 @@ func (s *PacketStore) Load() error {
 		log.Printf("[store] Loaded %d transmissions (%d observations) in %v (tracked ~%.0fMB, heap ~%.0fMB)",
 			len(s.packets), s.totalObs, elapsed, s.trackedMemoryMB(), s.estimatedMemoryMB())
 	}
+	s.loadMultibyteCapFromDB()
 	return nil
 }
 
@@ -2103,7 +2106,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 
 	newMaxID := sinceID
 	broadcastTxs := make(map[int]*StoreTx) // track new transmissions for broadcast
-	hasNewNodes := false                    // track genuinely new node pubkeys
+	hasNewNodes := false                   // track genuinely new node pubkeys
 	var broadcastOrder []int
 
 	// Hoist getCachedNodesAndPM() once before the observation loop to avoid
@@ -2115,8 +2118,8 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 
 	// Decode-window tracking: resolved pubkeys per-tx for touchRelayLastSeen,
 	// and resolved paths per-obs for broadcast/persist.
-	var broadcastRP map[int][]*string           // obsID → resolved path (for broadcast/persist)
-	allResolvedPKs := make(map[int][]string)    // txID → all resolved pubkeys (for touchRelayLastSeen)
+	var broadcastRP map[int][]*string        // obsID → resolved path (for broadcast/persist)
+	allResolvedPKs := make(map[int][]string) // txID → all resolved pubkeys (for touchRelayLastSeen)
 
 	hopsSeen := make(map[string]bool) // reused across observations; cleared per use
 
@@ -6923,7 +6926,18 @@ func (s *PacketStore) computeAnalyticsHashSizesWithCapability(region string) map
 			}
 		}
 	}
-	result["multiByteCapability"] = s.computeMultiByteCapability(globalAdopterHS)
+	mbEntries := s.computeMultiByteCapability(globalAdopterHS)
+	result["multiByteCapability"] = mbEntries
+	s.cacheMu.Lock()
+	s.mbCapSnapshot = mbEntries
+	mbIdx := make(map[string]MultiByteCapEntry, len(mbEntries))
+	for _, e := range mbEntries {
+		mbIdx[e.PublicKey] = e
+	}
+	s.mbCapIndex = mbIdx
+	s.cacheMu.Unlock()
+
+
 	return result
 }
 
@@ -7249,14 +7263,14 @@ func (s *PacketStore) GetAnalyticsHashCollisions(region string) map[string]inter
 
 // collisionNode is a lightweight node representation for collision analysis.
 type collisionNode struct {
-	PublicKey          string `json:"public_key"`
-	Name               string `json:"name"`
-	Role               string `json:"role"`
-	Lat                float64 `json:"lat"`
-	Lon                float64 `json:"lon"`
-	HashSize           int    `json:"hash_size"`
-	HashSizeInconsistent bool `json:"hash_size_inconsistent"`
-	HashSizesSeen      []int  `json:"hash_sizes_seen,omitempty"`
+	PublicKey            string  `json:"public_key"`
+	Name                 string  `json:"name"`
+	Role                 string  `json:"role"`
+	Lat                  float64 `json:"lat"`
+	Lon                  float64 `json:"lon"`
+	HashSize             int     `json:"hash_size"`
+	HashSizeInconsistent bool    `json:"hash_size_inconsistent"`
+	HashSizesSeen        []int   `json:"hash_sizes_seen,omitempty"`
 }
 
 // collisionEntry represents a prefix collision with pre-computed distances.
@@ -7277,10 +7291,10 @@ type prefixCellInfo struct {
 
 // twoByteCellInfo holds per-first-byte-group data for 2-byte matrix.
 type twoByteCellInfo struct {
-	GroupNodes      []collisionNode            `json:"group_nodes"`
-	TwoByteMap      map[string][]collisionNode `json:"two_byte_map"`
-	MaxCollision    int                         `json:"max_collision"`
-	CollisionCount  int                         `json:"collision_count"`
+	GroupNodes     []collisionNode            `json:"group_nodes"`
+	TwoByteMap     map[string][]collisionNode `json:"two_byte_map"`
+	MaxCollision   int                        `json:"max_collision"`
+	CollisionCount int                        `json:"collision_count"`
 }
 
 func (s *PacketStore) computeHashCollisions(region string) map[string]interface{} {
@@ -7689,49 +7703,13 @@ func EnrichNodeWithHashSize(node map[string]interface{}, info *hashSizeNodeInfo)
 	}
 }
 
-// EnrichNodeWithMultiByte adds multi-byte capability fields to a node map.
-func EnrichNodeWithMultiByte(node map[string]interface{}, entry *MultiByteCapEntry) {
-	if entry == nil {
-		return
+// enrichNodeWithMultibyte sets multibyte_sup and multibyte_evidence on a node map
+// from the in-memory analytics snapshot. Co-located with EnrichNodeWithHashSize.
+func enrichNodeWithMultibyte(node map[string]interface{}, e MultiByteCapEntry) {
+	if sup := multibyteStatusToInt(e.Status); sup > 0 {
+		node["multibyte_sup"] = sup
+		node["multibyte_evidence"] = e.Evidence
 	}
-	node["multi_byte_status"] = entry.Status
-	node["multi_byte_evidence"] = entry.Evidence
-	node["multi_byte_max_hash_size"] = entry.MaxHashSize
-}
-
-// GetMultiByteCapMap returns a cached pubkey → MultiByteCapEntry map.
-// Reuses the same 15s TTL cache pattern as hash size info.
-func (s *PacketStore) GetMultiByteCapMap() map[string]*MultiByteCapEntry {
-	s.hashSizeInfoMu.Lock()
-	if s.multiByteCapCache != nil && time.Since(s.multiByteCapAt) < 15*time.Second {
-		cached := s.multiByteCapCache
-		s.hashSizeInfoMu.Unlock()
-		return cached
-	}
-	s.hashSizeInfoMu.Unlock()
-
-	// Get adopter hash sizes from analytics for cross-referencing
-	analyticsData := s.GetAnalyticsHashSizes("")
-	adopterSizes := make(map[string]int)
-	if nodes, ok := analyticsData["nodes"].(map[string]map[string]interface{}); ok {
-		for pk, data := range nodes {
-			if hs, ok := data["hashSize"].(int); ok {
-				adopterSizes[pk] = hs
-			}
-		}
-	}
-
-	caps := s.computeMultiByteCapability(adopterSizes)
-	result := make(map[string]*MultiByteCapEntry, len(caps))
-	for i := range caps {
-		result[caps[i].PublicKey] = &caps[i]
-	}
-
-	s.hashSizeInfoMu.Lock()
-	s.multiByteCapCache = result
-	s.multiByteCapAt = time.Now()
-	s.hashSizeInfoMu.Unlock()
-	return result
 }
 
 // --- Multi-Byte Capability Inference ---
@@ -7741,8 +7719,8 @@ type MultiByteCapEntry struct {
 	PublicKey   string `json:"pubkey"`
 	Name        string `json:"name"`
 	Role        string `json:"role"`
-	Status      string `json:"status"`      // "confirmed", "suspected", "unknown"
-	Evidence    string `json:"evidence"`     // "advert", "path", ""
+	Status      string `json:"status"`   // "confirmed", "suspected", "unknown"
+	Evidence    string `json:"evidence"` // "advert", "path", ""
 	MaxHashSize int    `json:"maxHashSize"`
 	LastSeen    string `json:"lastSeen"`
 }
@@ -7750,19 +7728,19 @@ type MultiByteCapEntry struct {
 // computeMultiByteCapability determines multi-byte capability for each
 // node (repeaters, companions, rooms, sensors) using two methods:
 //
-// 1. Confirmed: the node has advertised with hash_size >= 2 (from advert
-//    path byte). This is 100% reliable because the full public key is
-//    received in adverts — no prefix collision ambiguity.
+//  1. Confirmed: the node has advertised with hash_size >= 2 (from advert
+//     path byte). This is 100% reliable because the full public key is
+//     received in adverts — no prefix collision ambiguity.
 //
-// 2. Suspected: the node's prefix appears as a hop in a packet whose path
-//    header indicates hash_size >= 2. This is <100% reliable because
-//    2-byte prefixes can collide — two different nodes may share the same
-//    prefix. If one is confirmed multi-byte and the other is not, the
-//    non-confirmed one could be a false positive.
+//  2. Suspected: the node's prefix appears as a hop in a packet whose path
+//     header indicates hash_size >= 2. This is <100% reliable because
+//     2-byte prefixes can collide — two different nodes may share the same
+//     prefix. If one is confirmed multi-byte and the other is not, the
+//     non-confirmed one could be a false positive.
 //
-// 3. Unknown: node has only been seen with 1-byte adverts and no
-//    multi-byte path appearances. Could be pre-1.14 firmware or 1.14+
-//    with default (1-byte) settings.
+//  3. Unknown: node has only been seen with 1-byte adverts and no
+//     multi-byte path appearances. Could be pre-1.14 firmware or 1.14+
+//     with default (1-byte) settings.
 //
 // Caller must hold NO locks — this method acquires mu.RLock internally.
 func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int) []MultiByteCapEntry {
@@ -7849,6 +7827,12 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 			if hs < 2 {
 				continue
 			}
+			// Hop length must match hash_size. Pre-#886 ingestor data stored path
+			// bytes individually (1-byte entries) even for hs=2 packets, so a
+			// 1-byte prefix could match a malformed hop in a hs=2 packet.
+			if len(pfx)/2 != hs {
+				continue
+			}
 			// This packet uses multi-byte hashes and contains this prefix as a hop
 			for _, e := range entries {
 				if hs > suspected[e.pubkey] {
@@ -7926,6 +7910,93 @@ func (s *PacketStore) computeMultiByteCapability(adopterHashSizes map[string]int
 	})
 
 	return result
+}
+
+// multibyteStatusToInt maps a capability status to the DB integer representation.
+func multibyteStatusToInt(status string) int {
+	switch status {
+	case "confirmed":
+		return 2
+	case "suspected":
+		return 1
+	default:
+		return 0
+	}
+}
+
+
+// loadMultibyteCapFromDB reads persisted capability values from the nodes table and
+// pre-populates mbCapSnapshot so cold start serves last-known capability immediately.
+func (s *PacketStore) loadMultibyteCapFromDB() {
+	if !s.db.hasMultibyteSupCols {
+		return
+	}
+	rows, err := s.db.conn.Query(
+		`SELECT public_key, COALESCE(name,''), COALESCE(role,''), COALESCE(last_seen,''), multibyte_sup, COALESCE(multibyte_evidence,'')
+		 FROM nodes WHERE multibyte_sup > 0`)
+	if err != nil {
+		log.Printf("[multibyte] loadFromDB: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var entries []MultiByteCapEntry
+	for rows.Next() {
+		var pk, name, role, lastSeen, evidence string
+		var sup int
+		if err := rows.Scan(&pk, &name, &role, &lastSeen, &sup, &evidence); err != nil {
+			continue
+		}
+		status := "unknown"
+		switch sup {
+		case 2:
+			status = "confirmed"
+		case 1:
+			status = "suspected"
+		}
+		entries = append(entries, MultiByteCapEntry{
+			PublicKey: pk,
+			Name:      name,
+			Role:      role,
+			Status:    status,
+			Evidence:  evidence,
+			LastSeen:  lastSeen,
+		})
+	}
+	if len(entries) == 0 {
+		return
+	}
+	s.cacheMu.Lock()
+	s.mbCapSnapshot = entries
+	idx := make(map[string]MultiByteCapEntry, len(entries))
+	for _, e := range entries {
+		idx[e.PublicKey] = e
+	}
+	s.mbCapIndex = idx
+	s.cacheMu.Unlock()
+	log.Printf("[multibyte] loaded %d capability entries from DB", len(entries))
+}
+
+// GetMultibyteCapFor returns the capability entry for a single pubkey.
+// O(1) lookup via mbCapIndex (rebuilt alongside mbCapSnapshot).
+func (s *PacketStore) GetMultibyteCapFor(pk string) (MultiByteCapEntry, bool) {
+	s.cacheMu.Lock()
+	e, ok := s.mbCapIndex[pk]
+	s.cacheMu.Unlock()
+	return e, ok
+}
+
+// GetMultibyteCapMap returns a pubkey→entry map built from the last analytics snapshot.
+// Prefer GetMultibyteCapFor for single-node lookups to avoid allocating the full map.
+func (s *PacketStore) GetMultibyteCapMap() map[string]MultiByteCapEntry {
+	s.cacheMu.Lock()
+	snap := s.mbCapSnapshot
+	s.cacheMu.Unlock()
+	m := make(map[string]MultiByteCapEntry, len(snap))
+	for _, e := range snap {
+		m[e.PublicKey] = e
+	}
+	return m
 }
 
 // --- Bulk Health (in-memory) ---
