@@ -566,11 +566,11 @@
 
   var DEFAULT_TIME_WINDOW = 15;
 
-  function buildPacketsQuery(timeWindowMin, regionParam) {
+  function buildPacketsQuery(timeWindowMin, regionParam, skipHash) {
     var parts = [];
     if (timeWindowMin && timeWindowMin !== DEFAULT_TIME_WINDOW) parts.push('timeWindow=' + timeWindowMin);
     if (regionParam) parts.push('region=' + encodeURIComponent(regionParam));
-    if (filters.hash) parts.push('hash=' + encodeURIComponent(filters.hash));
+    if (!skipHash && filters.hash) parts.push('hash=' + encodeURIComponent(filters.hash));
     if (filters.node) parts.push('node=' + encodeURIComponent(filters.node));
     if (filters.observer) parts.push('observer=' + encodeURIComponent(filters.observer));
     if (filters.channel) parts.push('channel=' + encodeURIComponent(filters.channel));
@@ -593,7 +593,9 @@
     var subpath = '';
     var m = cur.match(/^#\/packets(\/[^?]*)?/);
     if (m && m[1]) subpath = m[1];
-    history.replaceState(null, '', '#/packets' + subpath + buildPacketsQuery(savedTimeWindowMin, RegionFilter.getRegionParam()));
+    // Don't double-encode filters.hash when it's already the path segment.
+    var skipHash = !!(filters.hash && subpath === '/' + filters.hash);
+    history.replaceState(null, '', '#/packets' + subpath + buildPacketsQuery(savedTimeWindowMin, RegionFilter.getRegionParam(), skipHash));
     // Update clear-filters button visibility
     var cb = document.getElementById('clearFiltersBtn');
     if (cb) {
