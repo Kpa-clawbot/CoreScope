@@ -35,13 +35,14 @@ func setupTestDBv2(t *testing.T) *DB {
 		CREATE TABLE observers (
 			id TEXT PRIMARY KEY, name TEXT, iata TEXT, last_seen TEXT, first_seen TEXT,
 			packet_count INTEGER DEFAULT 0, model TEXT, firmware TEXT,
-			client_version TEXT, radio TEXT, battery_mv INTEGER, uptime_secs INTEGER, noise_floor REAL
+			client_version TEXT, radio TEXT, battery_mv INTEGER, uptime_secs INTEGER, noise_floor REAL,
+			inactive INTEGER DEFAULT 0
 		);
 		CREATE TABLE transmissions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT, raw_hex TEXT NOT NULL,
 			hash TEXT NOT NULL UNIQUE, first_seen TEXT NOT NULL,
 			route_type INTEGER, payload_type INTEGER, payload_version INTEGER,
-			decoded_json TEXT, channel_hash TEXT DEFAULT NULL, created_at TEXT DEFAULT (datetime('now'))
+			decoded_json TEXT, channel_hash TEXT DEFAULT NULL, from_pubkey TEXT DEFAULT NULL, created_at TEXT DEFAULT (datetime('now'))
 		);
 		CREATE TABLE observations (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +50,18 @@ func setupTestDBv2(t *testing.T) *DB {
 			observer_id TEXT, observer_name TEXT, direction TEXT,
 			snr REAL, rssi REAL, score INTEGER, path_json TEXT, timestamp INTEGER NOT NULL, raw_hex TEXT
 		);
+		CREATE TRIGGER IF NOT EXISTS test_from_pubkey_advert
+		AFTER INSERT ON transmissions
+		FOR EACH ROW
+		WHEN NEW.from_pubkey IS NULL AND NEW.payload_type = 4 AND NEW.decoded_json IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') IS NOT NULL
+			AND json_extract(NEW.decoded_json, '$.pubKey') <> ''
+		BEGIN
+			UPDATE transmissions
+			SET from_pubkey = json_extract(NEW.decoded_json, '$.pubKey')
+			WHERE id = NEW.id;
+		END;
+		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)
@@ -1321,8 +1334,11 @@ func TestBuildTransmissionWhereRFC3339(t *testing.T) {
 		if len(args) != 1 {
 			t.Errorf("expected 1 arg, got %d", len(args))
 		}
-		if !strings.Contains(where[0], "observations") {
-			t.Error("expected observations subquery for RFC3339 since")
+		// PR #1187 r2: RFC3339 since/until MUST use observations.timestamp
+		// subquery so re-observed packets (older first_seen but recent
+		// observation) are still included. Anything else breaks semantics.
+		if !strings.Contains(where[0], "observations") || !strings.Contains(where[0], "timestamp >= ?") {
+			t.Errorf("expected observations.timestamp subquery for RFC3339 since, got %q", where[0])
 		}
 	})
 
@@ -1335,6 +1351,9 @@ func TestBuildTransmissionWhereRFC3339(t *testing.T) {
 		if len(args) != 1 {
 			t.Errorf("expected 1 arg, got %d", len(args))
 		}
+		if !strings.Contains(where[0], "observations") || !strings.Contains(where[0], "timestamp <= ?") {
+			t.Errorf("expected observations.timestamp subquery for RFC3339 until, got %q", where[0])
+		}
 	})
 
 	t.Run("non-RFC3339 since", func(t *testing.T) {
@@ -1343,8 +1362,8 @@ func TestBuildTransmissionWhereRFC3339(t *testing.T) {
 		if len(where) != 1 {
 			t.Errorf("expected 1 clause, got %d", len(where))
 		}
-		if strings.Contains(where[0], "observations") {
-			t.Error("expected direct first_seen comparison for non-RFC3339")
+		if !strings.Contains(where[0], "first_seen") {
+			t.Error("expected first_seen comparison for non-RFC3339 since")
 		}
 	})
 
@@ -2497,9 +2516,9 @@ func TestStoreGetAnalyticsChannelsNumericHash(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (5, 1, 10.0, -90, '[]', ?)`, recentEpoch)
 
-	// Also a decrypted CHAN with numeric channelHash
+	// Also a decrypted CHAN with numeric channelHash — use hash 198 which is the real hash for #general
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
-		VALUES ('DD03', 'chan_num_hash_3', ?, 1, 5, '{"type":"CHAN","channel":"general","channelHash":97,"channelHashHex":"61","text":"hello","sender":"Alice"}')`, recent)
+		VALUES ('DD03', 'chan_num_hash_3', ?, 1, 5, '{"type":"CHAN","channel":"general","channelHash":198,"channelHashHex":"C6","text":"hello","sender":"Alice"}')`, recent)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (6, 1, 12.0, -88, '[]', ?)`, recentEpoch)
 
@@ -2508,8 +2527,8 @@ func TestStoreGetAnalyticsChannelsNumericHash(t *testing.T) {
 	result := store.GetAnalyticsChannels("")
 
 	channels := result["channels"].([]map[string]interface{})
-	if len(channels) < 2 {
-		t.Errorf("expected at least 2 channels (hash 97 + hash 42), got %d", len(channels))
+	if len(channels) < 3 {
+		t.Errorf("expected at least 3 channels (hash 97 + hash 42 + hash 198), got %d", len(channels))
 	}
 
 	// Verify the numeric-hash channels we inserted have proper hashes (not "?")
@@ -2530,13 +2549,13 @@ func TestStoreGetAnalyticsChannelsNumericHash(t *testing.T) {
 		t.Error("expected to find channel with hash '42' (numeric channelHash parsing)")
 	}
 
-	// Verify the decrypted CHAN channel has the correct name
+	// Verify the decrypted CHAN channel has the correct name (now at hash 198)
 	foundGeneral := false
 	for _, ch := range channels {
 		if ch["name"] == "general" {
 			foundGeneral = true
-			if ch["hash"] != "97" {
-				t.Errorf("expected hash '97' for general channel, got %v", ch["hash"])
+			if ch["hash"] != "198" {
+				t.Errorf("expected hash '198' for general channel, got %v", ch["hash"])
 			}
 		}
 	}

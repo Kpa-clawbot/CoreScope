@@ -49,6 +49,49 @@ test('type == request is false', () => { assert(!PF.compile('type == request').f
 test('route == FLOOD', () => { assert(PF.compile('route == FLOOD').filter(pkt)); });
 test('route == DIRECT is false', () => { assert(!PF.compile('route == DIRECT').filter(pkt)); });
 
+// --- Transport route filters (issue #339) ---
+const tFloodPkt   = { ...pkt, route_type: 0 }; // TRANSPORT_FLOOD
+const floodPkt    = { ...pkt, route_type: 1 }; // FLOOD
+const directPkt   = { ...pkt, route_type: 2 }; // DIRECT
+const tDirectPkt  = { ...pkt, route_type: 3 }; // TRANSPORT_DIRECT
+
+test('route == TRANSPORT_FLOOD matches route_type 0', () => {
+  assert(PF.compile('route == TRANSPORT_FLOOD').filter(tFloodPkt));
+  assert(!PF.compile('route == TRANSPORT_FLOOD').filter(floodPkt));
+});
+test('route == TRANSPORT_DIRECT matches route_type 3', () => {
+  assert(PF.compile('route == TRANSPORT_DIRECT').filter(tDirectPkt));
+  assert(!PF.compile('route == TRANSPORT_DIRECT').filter(directPkt));
+});
+test('route == T_FLOOD alias matches route_type 0', () => {
+  assert(PF.compile('route == T_FLOOD').filter(tFloodPkt));
+  assert(!PF.compile('route == T_FLOOD').filter(floodPkt));
+  assert(!PF.compile('route == T_FLOOD').filter(directPkt));
+});
+test('route == T_DIRECT alias matches route_type 3', () => {
+  assert(PF.compile('route == T_DIRECT').filter(tDirectPkt));
+  assert(!PF.compile('route == T_DIRECT').filter(directPkt));
+  assert(!PF.compile('route == T_DIRECT').filter(tFloodPkt));
+});
+test('transport == true matches TRANSPORT_FLOOD and TRANSPORT_DIRECT', () => {
+  assert(PF.compile('transport == true').filter(tFloodPkt));
+  assert(PF.compile('transport == true').filter(tDirectPkt));
+  assert(!PF.compile('transport == true').filter(floodPkt));
+  assert(!PF.compile('transport == true').filter(directPkt));
+});
+test('transport == false matches non-transported FLOOD and DIRECT', () => {
+  assert(PF.compile('transport == false').filter(floodPkt));
+  assert(PF.compile('transport == false').filter(directPkt));
+  assert(!PF.compile('transport == false').filter(tFloodPkt));
+  assert(!PF.compile('transport == false').filter(tDirectPkt));
+});
+test('bare transport (truthy) matches transported packets', () => {
+  assert(PF.compile('transport').filter(tFloodPkt));
+  assert(PF.compile('transport').filter(tDirectPkt));
+  assert(!PF.compile('transport').filter(floodPkt));
+  assert(!PF.compile('transport').filter(directPkt));
+});
+
 // --- Hash ---
 test('hash == abc123def456', () => { assert(PF.compile('hash == abc123def456').filter(pkt)); });
 test('hash contains abc', () => { assert(PF.compile('hash contains abc').filter(pkt)); });
@@ -143,6 +186,50 @@ test('@@@ garbage → error', () => {
 test('unclosed quote → error', () => {
   const c = PF.compile('type == "hello');
   assert(c.error !== null, 'should have error');
+});
+
+// --- Observer IATA filter field (#1188) ---
+const iataPkt = { ...pkt, observer_iata: 'SJC' };
+const sfoPkt  = { ...pkt, observer_iata: 'SFO' };
+const noIataPkt = { ...pkt, observer_iata: null };
+
+test('observer_iata == "SJC" matches', () => {
+  assert(PF.compile('observer_iata == "SJC"').filter(iataPkt));
+});
+test('observer_iata == "SJC" case-insensitive', () => {
+  assert(PF.compile('observer_iata == "sjc"').filter(iataPkt));
+});
+test('observer_iata == "SFO" does not match SJC packet', () => {
+  assert(!PF.compile('observer_iata == "SFO"').filter(iataPkt));
+});
+test('iata alias works like observer_iata', () => {
+  assert(PF.compile('iata == "SJC"').filter(iataPkt));
+  assert(!PF.compile('iata == "LAX"').filter(iataPkt));
+});
+test('observer_iata in ("SJC","SFO") matches both', () => {
+  assert(PF.compile('observer_iata in ("SJC","SFO")').filter(iataPkt));
+  assert(PF.compile('observer_iata in ("SJC","SFO")').filter(sfoPkt));
+});
+test('iata in ("LAX","OAK") does not match SJC', () => {
+  assert(!PF.compile('iata in ("LAX","OAK")').filter(iataPkt));
+});
+test('observer_iata contains "S"', () => {
+  assert(PF.compile('observer_iata contains "S"').filter(iataPkt));
+  assert(!PF.compile('observer_iata contains "Z"').filter(iataPkt));
+});
+test('missing observer_iata → no match (not parse error)', () => {
+  const c = PF.compile('observer_iata == "SJC"');
+  assert(c.error === null, 'should parse with no error');
+  assert(!c.filter(noIataPkt), 'should not match when iata absent');
+});
+test('combined: type == ADVERT && iata == "SJC"', () => {
+  const advIataPkt = { ...iataPkt, payload_type: 4 };
+  assert(PF.compile('type == ADVERT && iata == "SJC"').filter(advIataPkt));
+});
+test('observer_iata and iata appear in suggest field list', () => {
+  const names = PF.FIELDS.map(f => f.name);
+  assert(names.indexOf('observer_iata') !== -1, 'observer_iata in FIELDS');
+  assert(names.indexOf('iata') !== -1, 'iata in FIELDS');
 });
 
 console.log(`\n=== Results: ${pass} passed, ${fail} failed ===`);

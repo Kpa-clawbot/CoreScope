@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/meshcore-analyzer/dbschema"
 )
 
 // Set via -ldflags at build time
@@ -108,6 +109,25 @@ func main() {
 		log.Printf("[security] WARNING: API key is weak or a known default — write endpoints are vulnerable")
 	}
 
+	// Apply Go runtime soft memory limit (#836).
+	// Honors GOMEMLIMIT if set; otherwise derives from packetStore.maxMemoryMB.
+	{
+		_, envSet := os.LookupEnv("GOMEMLIMIT")
+		maxMB := 0
+		if cfg.PacketStore != nil {
+			maxMB = cfg.PacketStore.MaxMemoryMB
+		}
+		limit, source := applyMemoryLimit(maxMB, envSet)
+		switch source {
+		case "env":
+			log.Printf("[memlimit] using GOMEMLIMIT from environment (%s)", os.Getenv("GOMEMLIMIT"))
+		case "derived":
+			log.Printf("[memlimit] derived from packetStore.maxMemoryMB=%d → %d MiB (1.5x headroom)", maxMB, limit/(1024*1024))
+		default:
+			log.Printf("[memlimit] no soft memory limit set (GOMEMLIMIT unset, packetStore.maxMemoryMB=0); recommend setting one to avoid container OOM-kill")
+		}
+	}
+
 	// Resolve DB path
 	resolvedDB := cfg.ResolveDBPath(configDir)
 	log.Printf("[config] port=%d db=%s public=%s", cfg.Port, resolvedDB, publicDir)
@@ -148,56 +168,62 @@ func main() {
 			stats.TotalTransmissions, stats.TotalObservations, stats.TotalNodes, stats.TotalObservers)
 	}
 
-	// Check auto_vacuum mode and optionally migrate (#919)
-	checkAutoVacuum(database, cfg, resolvedDB)
+	// auto_vacuum is checked + migrated by the ingestor (#1283). The
+	// server is read-only and must not race the writer for the lock.
+
+	// Assert all schema migrations the ingestor owns have already run
+	// (#1287). The server NEVER migrates — it only reads. If a required
+	// column/index/table is missing, the operator must restart the
+	// ingestor (which owns dbschema.Apply) before this server can start.
+	if err := dbschema.AssertReady(database.conn); err != nil {
+		log.Fatalf("[db] schema not ready (ingestor must run migrations first): %v", err)
+	}
 
 	// In-memory packet store
 	store := NewPacketStore(database, cfg.PacketStore, cfg.CacheTTL)
 	if err := store.Load(); err != nil {
 		log.Fatalf("[store] failed to load: %v", err)
 	}
+	if store.hotStartupHours > 0 {
+		log.Printf("[store] starting background load: filling retentionHours=%gh from hotStartupHours=%gh",
+			store.retentionHours, store.hotStartupHours)
+		go store.loadBackgroundChunks()
+	}
 
-	// Initialize persisted neighbor graph
+	// Initialize persisted neighbor graph.
+	// Per #1287, schema migrations all live in the ingestor (see
+	// dbschema.Apply). The server merely loads the snapshot here and
+	// then refreshes it via the recompNeighborGraph slot every 60s.
 	dbPath = database.path
-	if err := ensureNeighborEdgesTable(dbPath); err != nil {
-		log.Printf("[neighbor] warning: could not create neighbor_edges table: %v", err)
-	}
-	// Add resolved_path column if missing.
-	// NOTE on startup ordering (review item #10): ensureResolvedPathColumn runs AFTER
-	// OpenDB/detectSchema, so db.hasResolvedPath will be false on first run with a
-	// pre-existing DB. This means Load() won't SELECT resolved_path from SQLite.
-	// Async backfill runs after HTTP starts (see backfillResolvedPathsAsync below)
-	// AND to SQLite. On next restart, detectSchema finds the column and Load() reads it.
-	if err := ensureResolvedPathColumn(dbPath); err != nil {
-		log.Printf("[store] warning: could not add resolved_path column: %v", err)
-	} else {
-		database.hasResolvedPath = true // detectSchema ran before column was added; fix the flag
-	}
+	database.hasResolvedPath = true // dbschema.AssertReady above already verified observations.resolved_path exists
+
+	// WaitGroup for background init steps that gate /api/healthz readiness.
+	var initWg sync.WaitGroup
 
 	// Load or build neighbor graph
 	if neighborEdgesTableExists(database.conn) {
-		store.graph = loadNeighborEdgesFromDB(database.conn)
+		store.graph.Store(loadNeighborEdgesFromDB(database.conn))
 		log.Printf("[neighbor] loaded persisted neighbor graph")
 	} else {
-		log.Printf("[neighbor] no persisted edges found, will build in background...")
-		store.graph = NewNeighborGraph() // empty graph — gets populated by background goroutine
+		// No persisted snapshot yet (e.g. fresh DB before the ingestor
+		// has run its first edge-build cycle). Build an in-memory graph
+		// from the packets we already have so reads aren't empty. We
+		// do NOT persist — the ingestor owns neighbor_edges writes per
+		// #1287; the recompNeighborGraph recomputer will pick up the
+		// real snapshot as soon as the ingestor populates it.
+		log.Printf("[neighbor] no persisted edges found, will build in-memory in background...")
+		store.graph.Store(NewNeighborGraph())
+		initWg.Add(1)
 		go func() {
+			defer initWg.Done()
 			defer func() {
 				if r := recover(); r != nil {
 					log.Printf("[neighbor] graph build panic recovered: %v", r)
 				}
 			}()
-			rw, rwErr := openRW(dbPath)
-			if rwErr == nil {
-				edgeCount := buildAndPersistEdges(store, rw)
-				rw.Close()
-				log.Printf("[neighbor] persisted %d edges", edgeCount)
-			}
 			built := BuildFromStore(store)
-			store.mu.Lock()
-			store.graph = built
-			store.mu.Unlock()
-			log.Printf("[neighbor] graph build complete")
+			store.graph.Store(built)
+			log.Printf("[neighbor] in-memory graph build complete")
 		}()
 	}
 
@@ -205,7 +231,9 @@ func main() {
 	// API serves best-effort data until this completes (~10s for 100K txs).
 	// Processes in chunks of 5000, releasing the lock between chunks so API
 	// handlers remain responsive.
+	initWg.Add(1)
 	go func() {
+		defer initWg.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[store] pickBestObservation panic recovered: %v", r)
@@ -231,6 +259,13 @@ func main() {
 			}
 		}
 		log.Printf("[store] initial pickBestObservation complete (%d transmissions)", totalPackets)
+	}()
+
+	// Mark server ready once all background init completes.
+	go func() {
+		initWg.Wait()
+		readiness.Store(1)
+		log.Printf("[server] readiness: ready=true (background init complete)")
 	}()
 
 	// WebSocket hub
@@ -269,156 +304,59 @@ func main() {
 	stopEviction := store.StartEvictionTicker()
 	defer stopEviction()
 
-	// Auto-prune old packets if retention.packetDays is configured
-	vacuumPages := cfg.IncrementalVacuumPages()
-	var stopPrune func()
-	if cfg.Retention != nil && cfg.Retention.PacketDays > 0 {
-		days := cfg.Retention.PacketDays
-		pruneTicker := time.NewTicker(24 * time.Hour)
-		pruneDone := make(chan struct{})
-		stopPrune = func() {
-			pruneTicker.Stop()
-			close(pruneDone)
-		}
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[prune] panic recovered: %v", r)
-				}
-			}()
-			time.Sleep(1 * time.Minute)
-			if n, err := database.PruneOldPackets(days); err != nil {
-				log.Printf("[prune] error: %v", err)
-			} else {
-				log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
-				if n > 0 {
-					runIncrementalVacuum(resolvedDB, vacuumPages)
-				}
-			}
-			for {
-				select {
-				case <-pruneTicker.C:
-					if n, err := database.PruneOldPackets(days); err != nil {
-						log.Printf("[prune] error: %v", err)
-					} else {
-						log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
-						if n > 0 {
-							runIncrementalVacuum(resolvedDB, vacuumPages)
-						}
-					}
-				case <-pruneDone:
-					return
-				}
-			}
-		}()
-		log.Printf("[prune] auto-prune enabled: packets older than %d days will be removed daily", days)
-	}
+	// Steady-state analytics recomputers (issue #1240). Replaces the
+	// on-request compute-then-cache pattern for the default (region="",
+	// zero-window) analytics queries with a background refresh loop so
+	// reads always hit cache in <1ms.
+	stopAnalyticsRecomp := store.StartAnalyticsRecomputers(
+		cfg.AnalyticsDefaultRecomputeInterval(),
+		cfg.AnalyticsRecomputeIntervals(),
+	)
+	defer stopAnalyticsRecomp()
+	log.Printf("[analytics-recompute] background recompute enabled (default=%s)", cfg.AnalyticsDefaultRecomputeInterval())
 
-	// Auto-prune old metrics
-	var stopMetricsPrune func()
-	{
-		metricsDays := cfg.MetricsRetentionDays()
-		metricsPruneTicker := time.NewTicker(24 * time.Hour)
-		metricsPruneDone := make(chan struct{})
-		stopMetricsPrune = func() {
-			metricsPruneTicker.Stop()
-			close(metricsPruneDone)
-		}
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[metrics-prune] panic recovered: %v", r)
-				}
-			}()
-			time.Sleep(2 * time.Minute) // stagger after packet prune
-			database.PruneOldMetrics(metricsDays)
-			runIncrementalVacuum(resolvedDB, vacuumPages)
-			for {
-				select {
-				case <-metricsPruneTicker.C:
-					database.PruneOldMetrics(metricsDays)
-					runIncrementalVacuum(resolvedDB, vacuumPages)
-				case <-metricsPruneDone:
-					return
-				}
-			}
-		}()
-		log.Printf("[metrics-prune] auto-prune enabled: metrics older than %d days", metricsDays)
-	}
+	// Steady-state repeater-enrichment recomputer (issue #1262).
+	// Prewarms the bulk caches feeding handleNodes so the very first
+	// /api/nodes?limit=2000 from live.js's SPA bootstrap hits a
+	// populated cache instead of paying a 15.7s on-thread rebuild.
+	// Uses the configured RelayActiveHours window and the same
+	// default recompute interval as the other analytics caches.
+	relayWindowHours := cfg.GetHealthThresholds().RelayActiveHours
+	stopRepeaterEnrichRecomp := store.StartRepeaterEnrichmentRecomputer(
+		relayWindowHours,
+		cfg.AnalyticsDefaultRecomputeInterval(),
+	)
+	defer stopRepeaterEnrichRecomp()
+	log.Printf("[repeater-enrich-recompute] background recompute enabled (window=%.1fh, interval=%s)",
+		relayWindowHours, cfg.AnalyticsDefaultRecomputeInterval())
 
-	// Auto-prune stale observers
-	var stopObserverPrune func()
-	{
-		observerDays := cfg.ObserverDaysOrDefault()
-		if observerDays <= -1 {
-			// -1 means keep forever, skip
-		} else {
-			observerPruneTicker := time.NewTicker(24 * time.Hour)
-			observerPruneDone := make(chan struct{})
-			stopObserverPrune = func() {
-				observerPruneTicker.Stop()
-				close(observerPruneDone)
-			}
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Printf("[observer-prune] panic recovered: %v", r)
-					}
-				}()
-				time.Sleep(3 * time.Minute) // stagger after metrics prune
-				database.RemoveStaleObservers(observerDays)
-				runIncrementalVacuum(resolvedDB, vacuumPages)
-				for {
-					select {
-					case <-observerPruneTicker.C:
-						database.RemoveStaleObservers(observerDays)
-						runIncrementalVacuum(resolvedDB, vacuumPages)
-					case <-observerPruneDone:
-						return
-					}
-				}
-			}()
-			log.Printf("[observer-prune] auto-prune enabled: observers not seen in %d days will be removed", observerDays)
-		}
-	}
+	// Steady-state bridge-centrality recomputer (issue #672 axis 2).
+	// Computes betweenness centrality over the in-memory neighbor
+	// graph and stores the per-pubkey score map atomically. Read by
+	// handleNodes via a single atomic load.
+	stopBridgeRecomp := store.StartBridgeScoreRecomputer(
+		cfg.AnalyticsDefaultRecomputeInterval(),
+	)
+	defer stopBridgeRecomp()
+	log.Printf("[bridge-recompute] background recompute enabled (interval=%s)",
+		cfg.AnalyticsDefaultRecomputeInterval())
 
-	// Auto-prune old neighbor edges
-	var stopEdgePrune func()
-	{
-		maxAgeDays := cfg.NeighborMaxAgeDays()
-		edgePruneTicker := time.NewTicker(24 * time.Hour)
-		edgePruneDone := make(chan struct{})
-		stopEdgePrune = func() {
-			edgePruneTicker.Stop()
-			close(edgePruneDone)
-		}
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("[neighbor-prune] panic recovered: %v", r)
-				}
-			}()
-			time.Sleep(4 * time.Minute) // stagger after metrics prune
-			store.mu.RLock()
-			g := store.graph
-			store.mu.RUnlock()
-			PruneNeighborEdges(dbPath, g, maxAgeDays)
-			runIncrementalVacuum(resolvedDB, vacuumPages)
-			for {
-				select {
-				case <-edgePruneTicker.C:
-					store.mu.RLock()
-					g := store.graph
-					store.mu.RUnlock()
-					PruneNeighborEdges(dbPath, g, maxAgeDays)
-					runIncrementalVacuum(resolvedDB, vacuumPages)
-				case <-edgePruneDone:
-					return
-				}
-			}
-		}()
-		log.Printf("[neighbor-prune] auto-prune enabled: edges older than %d days", maxAgeDays)
-	}
+	// Steady-state neighbor-graph snapshot recomputer (issue #1287).
+	// Per Option 4: the ingestor owns neighbor_edges; the server
+	// READS the snapshot every 60s and atomic-swaps it into s.graph.
+	// This is the ONLY path that updates s.graph at steady state.
+	stopNeighborRecomp := store.StartNeighborGraphRecomputer(NeighborGraphRecomputerDefaultInterval)
+	defer stopNeighborRecomp()
+	log.Printf("[neighbor-recompute] snapshot reload enabled (interval=%s)",
+		NeighborGraphRecomputerDefaultInterval)
+
+	// Packet / metrics / observer retention moved to the ingestor in
+	// #1283 (writes only belong on the writer process). Neighbor-edge
+	// pruning moved to the ingestor in #1287 for the same reason. The
+	// server no longer schedules any of these; the ingestor's tickers
+	// handle them.
+	_ = cfg.IncrementalVacuumPages() // kept reachable for config validation; not used here
+	_ = cfg.NeighborMaxAgeDays()     // ditto — owned by ingestor now
 
 	// Graceful shutdown
 	httpServer := &http.Server{
@@ -438,18 +376,14 @@ func main() {
 		// 1. Stop accepting new WebSocket/poll data
 		poller.Stop()
 
-		// 1b. Stop auto-prune ticker
-		if stopPrune != nil {
-			stopPrune()
-		}
-		if stopMetricsPrune != nil {
-			stopMetricsPrune()
-		}
-		if stopObserverPrune != nil {
-			stopObserverPrune()
-		}
-		if stopEdgePrune != nil {
-			stopEdgePrune()
+		// 1b. Auto-prune tickers were all relocated to the ingestor in
+		// #1283/#1287 — nothing to stop here.
+
+		// 1c. Stop steady-state analytics recomputers (issue #1240).
+		// Must happen before dbClose so any in-flight compute that
+		// reaches into SQLite has finished.
+		if stopAnalyticsRecomp != nil {
+			stopAnalyticsRecomp()
 		}
 
 		// 2. Gracefully drain HTTP connections (up to 15s)
@@ -471,8 +405,10 @@ func main() {
 
 	log.Printf("[server] CoreScope (Go) listening on http://localhost:%d", cfg.Port)
 
-	// Start async backfill in background — HTTP is now available.
-	go backfillResolvedPathsAsync(store, dbPath, 5000, 100*time.Millisecond, cfg.BackfillHours())
+	// Backfills (resolved_path, from_pubkey) moved to the ingestor in
+	// #1287 — they are write operations and belong on the writer
+	// process. The server reads the results via the periodic
+	// recompNeighborGraph / fetchResolvedPathForObs paths.
 
 	// Migrate old content hashes in background (one-time, idempotent).
 	go migrateContentHashesAsync(store, 5000, 100*time.Millisecond)

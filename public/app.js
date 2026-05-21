@@ -4,7 +4,7 @@
 // --- Route/Payload name maps ---
 const ROUTE_TYPES = { 0: 'TRANSPORT_FLOOD', 1: 'FLOOD', 2: 'DIRECT', 3: 'TRANSPORT_DIRECT' };
 const PAYLOAD_TYPES = { 0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert', 5: 'Channel Msg', 6: 'Group Data', 7: 'Anon Req', 8: 'Path', 9: 'Trace', 10: 'Multipart', 11: 'Control', 15: 'Raw Custom' };
-const PAYLOAD_COLORS = { 0: 'req', 1: 'response', 2: 'txt-msg', 3: 'ack', 4: 'advert', 5: 'grp-txt', 7: 'anon-req', 8: 'path', 9: 'trace' };
+const PAYLOAD_COLORS = { 0: 'req', 1: 'response', 2: 'txt-msg', 3: 'ack', 4: 'advert', 5: 'grp-txt', 6: 'grp-data', 7: 'anon-req', 8: 'path', 9: 'trace', 10: 'multipart', 11: 'control', 15: 'raw-custom' };
 
 function routeTypeName(n) { return ROUTE_TYPES[n] || 'UNKNOWN'; }
 function payloadTypeName(n) { return PAYLOAD_TYPES[n] || 'UNKNOWN'; }
@@ -309,6 +309,39 @@ function formatTimestampWithTooltip(isoString, mode) {
   return { text, tooltip, isFuture };
 }
 
+// Format a Date for chart axis labels, respecting customizer timestamp settings.
+// shortForm: true = time only (for intra-day), false = date+time (multi-day).
+function formatChartAxisLabel(d, shortForm) {
+  if (!(d instanceof Date) || !isFinite(d.getTime())) return '—';
+  var timezone = (typeof getTimestampTimezone === 'function') ? getTimestampTimezone() : 'local';
+  var preset = (typeof getTimestampFormatPreset === 'function') ? getTimestampFormatPreset() : 'iso';
+  var useUtc = timezone === 'utc';
+
+  if (preset === 'locale') {
+    if (shortForm) {
+      var opts = { hour: '2-digit', minute: '2-digit' };
+      if (useUtc) opts.timeZone = 'UTC';
+      return d.toLocaleTimeString([], opts);
+    }
+    var opts2 = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+    if (useUtc) opts2.timeZone = 'UTC';
+    return d.toLocaleString([], opts2);
+  }
+
+  // ISO-style (iso or iso-seconds)
+  var hour = useUtc ? d.getUTCHours() : d.getHours();
+  var minute = useUtc ? d.getUTCMinutes() : d.getMinutes();
+  var timeStr = pad2(hour) + ':' + pad2(minute);
+  if (preset === 'iso-seconds') {
+    var sec = useUtc ? d.getUTCSeconds() : d.getSeconds();
+    timeStr += ':' + pad2(sec);
+  }
+  if (shortForm) return timeStr;
+  var month = useUtc ? d.getUTCMonth() + 1 : d.getMonth() + 1;
+  var day = useUtc ? d.getUTCDate() : d.getDate();
+  return pad2(month) + '-' + pad2(day) + ' ' + timeStr;
+}
+
 function truncate(str, len) {
   if (!str) return '';
   return str.length > len ? str.slice(0, len) + '…' : str;
@@ -440,16 +473,160 @@ function buildHexLegend(ranges) {
 let ws = null;
 let wsListeners = [];
 
+// --- Brand-logo packet-driven pulse (#1173) ---
+// Replaces the legacy live-dot indicator. Class-toggle only (CSS animations); colors come from
+// --logo-accent / --logo-accent-hi tokens. Test seam at window.__corescopeLogo.
+//
+// Cache the prefers-reduced-motion MediaQueryList ONCE at module load (#1177
+// Carmack must-fix #2). Calling window.matchMedia on every pulse() allocates
+// a new MQL + parses the query string — wasteful at 15Hz. The CSS @media rule
+// already handles render-time switching, so we just cache and read .matches.
+var _reducedMotionMQL = null;
+try {
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    _reducedMotionMQL = window.matchMedia('(prefers-reduced-motion: reduce)');
+  }
+} catch (_) { _reducedMotionMQL = null; }
+
+const Logo = (function () {
+  const RATE_GAP_MS = 66;       // 15/sec (≤16 toggles per second).
+  const HALF_MS = 80;           // each half of a ping ≤80ms.
+  const stats = { triggered: 0, dropped: 0 };
+  let lastPingTs = 0;
+  let flip = 0;                 // 0 → A→B, 1 → B→A.
+  let lastDirection = null;     // 'a' or 'b' (source circle).
+  let connected = true;         // WS state — gates in-flight chained pulses.
+  let generation = 0;           // bumped on setConnected(false) / visibilitychange to cancel scheduled halves.
+
+  function reducedMotion() {
+    return _reducedMotionMQL ? !!_reducedMotionMQL.matches : false;
+  }
+  function $all(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
+  function clearAll() {
+    $all('.brand-logo circle.logo-node-a, .brand-mark-only circle.logo-node-a,' +
+         '.brand-logo circle.logo-node-b, .brand-mark-only circle.logo-node-b').forEach((el) => {
+      el.classList.remove('logo-pulse-active', 'logo-pulse-blip');
+    });
+  }
+  function pulseChained(srcSel, dstSel) {
+    const gen = generation;
+    // Source half: ~80ms.
+    $all(srcSel).forEach((el) => el.classList.add('logo-pulse-active'));
+    setTimeout(() => {
+      $all(srcSel).forEach((el) => el.classList.remove('logo-pulse-active'));
+      // Destination half: scheduled via rAF then ~80ms.
+      // Bail if WS dropped (or another disconnect cycle ran) since this ping started —
+      // otherwise a zombie pulse fires on a logo that's already showing the
+      // .logo-disconnected sustained state.
+      if (gen !== generation || !connected) return;
+      requestAnimationFrame(() => {
+        if (gen !== generation || !connected) return;
+        $all(dstSel).forEach((el) => el.classList.add('logo-pulse-active'));
+        setTimeout(() => {
+          $all(dstSel).forEach((el) => el.classList.remove('logo-pulse-active'));
+        }, HALF_MS);
+      });
+    }, HALF_MS);
+  }
+  function pulseBlip(dstSel) {
+    // Reduced-motion: single-step opacity blip on destination only.
+    $all(dstSel).forEach((el) => el.classList.add('logo-pulse-blip'));
+    setTimeout(() => {
+      $all(dstSel).forEach((el) => el.classList.remove('logo-pulse-blip'));
+    }, 140);
+  }
+  function pulse(_msg) {
+    // Hidden-tab gate (#1177 Carmack must-fix #1): drop the pulse BEFORE
+    // mutating lastPingTs and BEFORE scheduling any rAF/setTimeout chain.
+    // Background tabs throttle timers but still ran the source-class toggle
+    // and queued a chain that fired in a clump on tab focus — wasted work
+    // and a visible storm. Returning early here makes the gate cost ~1
+    // property read per WS message.
+    if (typeof document !== 'undefined' && document.hidden) {
+      stats.dropped++;
+      return false;
+    }
+    if (!connected) { stats.dropped++; return false; }
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (now - lastPingTs < RATE_GAP_MS) { stats.dropped++; return false; }
+    lastPingTs = now;
+    stats.triggered++;
+    const aToB = (flip === 0);
+    flip ^= 1;
+    lastDirection = aToB ? 'a' : 'b';
+    const srcSel = aToB ? '.brand-logo circle.logo-node-a, .brand-mark-only circle.logo-node-a'
+                        : '.brand-logo circle.logo-node-b, .brand-mark-only circle.logo-node-b';
+    const dstSel = aToB ? '.brand-logo circle.logo-node-b, .brand-mark-only circle.logo-node-b'
+                        : '.brand-logo circle.logo-node-a, .brand-mark-only circle.logo-node-a';
+    if (reducedMotion()) {
+      pulseBlip(dstSel);
+    } else {
+      pulseChained(srcSel, dstSel);
+    }
+    return true;
+  }
+  function setConnected(isConnected) {
+    connected = !!isConnected;
+    // Bump generation so any in-flight chained-pulse callbacks bail before
+    // toggling classes on the destination circle (otherwise a zombie pulse
+    // briefly fights the .logo-disconnected sustained desaturate state).
+    generation++;
+    $all('.brand-logo, .brand-mark-only').forEach((el) => {
+      if (connected) el.classList.remove('logo-disconnected');
+      else el.classList.add('logo-disconnected');
+    });
+    // #1174 mesh-op review: mirror connected state onto the bottom-nav so
+    // the 2px top-border indicator (see bottom-nav.css) goes red on
+    // disconnect. Mesh-alive is otherwise invisible at ≤768 because
+    // .nav-stats is hidden at that breakpoint.
+    var bn = document.querySelector('[data-bottom-nav]');
+    if (bn) {
+      if (connected) bn.classList.remove('disconnected');
+      else bn.classList.add('disconnected');
+    }
+    if (!connected) clearAll();
+  }
+  // Expose hook for E2E + customizer/devtools introspection.
+  // Frozen so consumers can't replace .pulse / .setConnected from outside
+  // (the seam is read-only — invocation only).
+  const api = Object.freeze({
+    pulse: pulse,
+    setConnected: setConnected,
+    get lastDirection() { return lastDirection; },
+    get stats() { return { triggered: stats.triggered, dropped: stats.dropped }; },
+  });
+  try { window.__corescopeLogo = api; } catch (_) {}
+
+  // Visibility gate (#1177 Carmack must-fix #1): when the tab becomes
+  // hidden, bump generation so any in-flight chained pulse halves bail
+  // out before they paint, and clear any active pulse classes. The
+  // pulse() entry already early-returns on document.hidden — this handles
+  // pulses already mid-flight at the moment the tab is backgrounded.
+  try {
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) {
+          generation++;
+          clearAll();
+        }
+      });
+    }
+  } catch (_) {}
+
+  return api;
+})();
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}`);
-  ws.onopen = () => document.getElementById('liveDot')?.classList.add('connected');
+  ws.onopen = () => Logo.setConnected(true);
   ws.onclose = () => {
-    document.getElementById('liveDot')?.classList.remove('connected');
+    Logo.setConnected(false);
     setTimeout(connectWS, 3000);
   };
   ws.onerror = () => ws.close();
   ws.onmessage = (e) => {
+    Logo.pulse(e);
     try {
       const msg = JSON.parse(e.data);
       // Debounce cache invalidation — don't nuke on every packet
@@ -467,6 +644,166 @@ function connectWS() {
 
 function onWS(fn) { wsListeners.push(fn); }
 function offWS(fn) { wsListeners = wsListeners.filter(f => f !== fn); }
+
+// --- Pull-to-reconnect (#1063) ---
+// Touch-device pull-down at scrollTop=0 reconnects the WebSocket
+// (instead of triggering native pull-to-refresh full-page reload).
+// Visual indicator pulses during pull; toast confirms result.
+const PULL_THRESHOLD_PX = 140;
+let _pullToast = null;
+let _pullToastTimer = null;
+let _pullIndicator = null;
+
+function _ensurePullIndicator() {
+  if (_pullIndicator && document.body && typeof document.body.contains === 'function' && document.body.contains(_pullIndicator)) return _pullIndicator;
+  if (_pullIndicator) return _pullIndicator;
+  const el = document.createElement('div');
+  el.id = 'pullReconnectIndicator';
+  el.setAttribute('aria-hidden', 'true');
+  el.innerHTML = '<span class="prr-icon">⟳</span>';
+  el.style.cssText = [
+    'position:fixed', 'top:0', 'left:50%', 'transform:translate(-50%,-100%)',
+    'z-index:99999', 'padding:8px 14px', 'border-radius:0 0 12px 12px',
+    'background:var(--accent,#2563eb)', 'color:#fff', 'font:14px/1 var(--font,system-ui)',
+    'box-shadow:0 2px 8px rgba(0,0,0,.2)', 'pointer-events:none',
+    'transition:transform .15s ease, opacity .15s ease', 'opacity:0',
+  ].join(';');
+  document.body.appendChild(el);
+  _pullIndicator = el;
+  return el;
+}
+
+function _showPullToast(msg, ok) {
+  try {
+    if (_pullToast && _pullToast.remove) _pullToast.remove();
+  } catch (e) {}
+  if (_pullToastTimer) { try { clearTimeout(_pullToastTimer); } catch (e) {} _pullToastTimer = null; }
+  const el = document.createElement('div');
+  el.className = 'pull-reconnect-toast';
+  el.textContent = msg;
+  el.style.cssText = [
+    'position:fixed', 'top:12px', 'left:50%', 'transform:translateX(-50%)',
+    'z-index:99999', 'padding:8px 16px', 'border-radius:8px',
+    'background:' + (ok ? 'var(--status-green,#16a34a)' : 'var(--status-red,#dc2626)'),
+    'color:#fff', 'font:14px/1.2 var(--font,system-ui)',
+    'box-shadow:0 2px 8px rgba(0,0,0,.2)', 'pointer-events:none',
+  ].join(';');
+  document.body.appendChild(el);
+  _pullToast = el;
+  _pullToastTimer = setTimeout(function () {
+    _pullToastTimer = null;
+    try { el.remove(); } catch (e) {}
+  }, 1800);
+}
+
+function pullReconnect() {
+  // If WS is connected (readyState OPEN), give a brief "Connected ✓"
+  // confirmation but still cycle so the user sees fresh data.
+  const wasOpen = ws && ws.readyState === 1;
+  if (wasOpen) {
+    _showPullToast('Connected ✓', true);
+    // Fast cycle: close and let onclose reconnect immediately
+    try { ws.close(); } catch (e) {}
+  } else {
+    _showPullToast('Reconnecting…', true);
+    try { if (ws) ws.close(); } catch (e) {}
+    // onclose handler schedules reconnect; force one now in case ws was null
+    try { connectWS(); } catch (e) {}
+  }
+}
+
+function _isTouchDevice() {
+  try {
+    return ('ontouchstart' in window) ||
+      (navigator && (navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0));
+  } catch (e) { return false; }
+}
+
+function setupPullToReconnect() {
+  // Always attach listeners (tests + future-proof). Inside the handler we
+  // gate on _isTouchDevice() AND scrollTop=0 so desktop/scrolled pages are
+  // unaffected.
+  let startY = null;
+  let pulling = false;
+  let dist = 0;
+
+  function getScrollTop() {
+    return (document.documentElement && document.documentElement.scrollTop) ||
+      (document.body && document.body.scrollTop) || 0;
+  }
+
+  function onStart(e) {
+    if (!_isTouchDevice()) return;
+    // Strict scrollTop === 0: ignore any negative overscroll, ignore any scrolled state
+    if (getScrollTop() !== 0) { startY = null; pulling = false; return; }
+    const t = e.touches && e.touches[0];
+    startY = t ? t.clientY : null;
+    pulling = false;
+    dist = 0;
+  }
+
+  function onMove(e) {
+    if (startY == null) return;
+    // Cancel gesture if scrollTop leaves 0 (page scrolled mid-pull)
+    if (getScrollTop() !== 0) { startY = null; pulling = false; dist = 0; return; }
+    const t = e.touches && e.touches[0];
+    if (!t) return;
+    const dy = t.clientY - startY;
+    if (dy <= 0) {
+      // Upward swipe / retract. If we were past the commit threshold and the
+      // user retracts back, cancel the gesture so a subsequent touchend does
+      // NOT fire reconnect.
+      if (pulling) {
+        pulling = false;
+        dist = 0;
+        if (_pullIndicator) {
+          _pullIndicator.style.opacity = '0';
+          _pullIndicator.style.transform = 'translate(-50%, -100%)';
+        }
+      }
+      return;
+    }
+    dist = dy;
+    if (dy > 8) {
+      pulling = true;
+      const ind = _ensurePullIndicator();
+      const pct = Math.min(1, dy / PULL_THRESHOLD_PX);
+      ind.style.opacity = String(pct);
+      ind.style.transform = 'translate(-50%, ' + (-100 + pct * 100) + '%)';
+      const icon = ind.querySelector && ind.querySelector('.prr-icon');
+      if (icon) icon.style.transform = 'rotate(' + Math.round(pct * 360) + 'deg)';
+      // Only block native pull-to-refresh once we've crossed the commit
+      // threshold — below that, let the browser handle natural scroll/bounce.
+      if (dy >= PULL_THRESHOLD_PX && typeof e.preventDefault === 'function' && e.cancelable !== false) {
+        try { e.preventDefault(); } catch (_) {}
+      }
+    }
+  }
+
+  function onEnd() {
+    const wasPulling = pulling;
+    const finalDist = dist;
+    const stillAtTop = getScrollTop() === 0;
+    startY = null; pulling = false; dist = 0;
+    if (_pullIndicator) {
+      _pullIndicator.style.opacity = '0';
+      _pullIndicator.style.transform = 'translate(-50%, -100%)';
+    }
+    // Trigger only if: gesture was active, crossed threshold, and page is still at scrollTop=0.
+    if (wasPulling && finalDist >= PULL_THRESHOLD_PX && stillAtTop) {
+      try { (window.pullReconnect || pullReconnect)(); } catch (e) {}
+    }
+  }
+
+  document.addEventListener('touchstart', onStart, { passive: true });
+  document.addEventListener('touchmove', onMove, { passive: false });
+  document.addEventListener('touchend', onEnd, { passive: true });
+  document.addEventListener('touchcancel', onEnd, { passive: true });
+}
+
+window.pullReconnect = pullReconnect;
+window.setupPullToReconnect = setupPullToReconnect;
+window.connectWS = connectWS;
 
 /* Global escapeHtml — used by multiple pages */
 function escapeHtml(s) {
@@ -546,6 +883,14 @@ function navigate() {
     return;
   }
 
+  // Backward-compat redirect: #/roles → #/analytics?tab=roles (issue #1085).
+  // The Roles page was folded into the Analytics tab strip; old links and
+  // bookmarks must keep working.
+  if (location.hash === '#/roles' || location.hash.startsWith('#/roles?') || location.hash.startsWith('#/roles/')) {
+    location.hash = '#/analytics?tab=roles';
+    return;
+  }
+
   const hash = location.hash.replace('#/', '') || 'packets';
   const route = hash.split('?')[0];
 
@@ -618,6 +963,14 @@ function navigate() {
     const ms = performance.now() - t0;
     if (ms > 100) console.warn(`[SLOW PAGE] ${basePage} init took ${Math.round(ms)}ms`);
     app.classList.remove('page-enter'); void app.offsetWidth; app.classList.add('page-enter');
+    // #1206 followup: sweep TableResponsive ResizeObservers whose tables were
+    // detached when the prior page's destroy ran (its <table> was wired in
+    // TableResponsive.register; on SPA nav app.innerHTML is rebuilt by the
+    // next init, so the previous table is now detached). Without this, the
+    // last-rendered table on each remountable page leaks 1 RO per remount.
+    if (window.TableResponsive && typeof window.TableResponsive.sweep === 'function') {
+      try { window.TableResponsive.sweep(); } catch (_) {}
+    }
     // #630-7: SPA focus management — move focus to first heading or main content
     requestAnimationFrame(function() {
       var heading = app.querySelector('h1, h2, h3, [role="heading"]');
@@ -643,6 +996,7 @@ window.addEventListener('timestamp-mode-changed', () => {
 });
 window.addEventListener('DOMContentLoaded', () => {
   connectWS();
+  setupPullToReconnect();
 
   // --- Dark Mode ---
   const darkToggle = document.getElementById('darkModeToggle');
@@ -715,18 +1069,197 @@ window.addEventListener('DOMContentLoaded', () => {
     link.addEventListener('click', closeNav);
   });
 
-  // --- "More" dropdown (tablet Priority+ nav) ---
+  // --- "More" dropdown — JS-driven Priority+ (Issue #1102) ---
   const navMoreBtn = document.getElementById('navMoreBtn');
   const navMoreMenu = document.getElementById('navMoreMenu');
-  if (navMoreBtn && navMoreMenu) {
-    // Build More menu dynamically from non-priority nav links (DRY)
-    navMoreMenu.innerHTML = '';
-    document.querySelectorAll('.nav-links a:not([data-priority="high"])').forEach(function(link) {
-      var clone = link.cloneNode(true);
-      clone.setAttribute('role', 'menuitem');
-      clone.addEventListener('click', closeMoreMenu);
-      navMoreMenu.appendChild(clone);
+  const navMoreWrap = document.querySelector('.nav-more-wrap');
+  const navTop  = document.querySelector('.top-nav');
+  const navLeft = document.querySelector('.nav-left');
+  const navRightEl = document.querySelector('.nav-right');
+  const linksContainer = document.querySelector('.nav-links');
+  // Belt-and-braces null guards (#1105 MINOR 4): the outer block measures
+  // and mutates all of these; if any are missing the layout math throws
+  // before we can fall back gracefully.
+  if (navMoreBtn && navMoreMenu && navMoreWrap && navLeft && navRightEl && linksContainer && navTop) {
+    // Measure available room and decide which links overflow.
+    // Algorithm: try to fit all links inline. If the link strip doesn't
+    // fit alongside .nav-right + .nav-brand, hide non-priority links one
+    // at a time (right-to-left, lowest priority first) until it does.
+    // Then mirror the hidden links into the "More ▾" menu so nothing
+    // disappears from the user's reach.
+    const allLinks = Array.from(linksContainer.querySelectorAll('.nav-link'));
+    // overflowQueue (#1105 MINOR 6): the order links are removed from the
+    // inline strip when space runs out. Built right-to-left from
+    // non-priority links (lowest priority dropped first) and then high-
+    // priority links as a last-resort tail. `data-priority="high"` is the
+    // only signal — if you ever need finer ordering, switch to a numeric
+    // attribute (e.g. data-overflow-order="3") rather than re-shuffling
+    // index in HTML.
+    const overflowQueue = allLinks.filter(a => a.dataset.priority !== 'high')
+                                  .reverse() // right-to-left
+                                  .concat(allLinks.filter(a => a.dataset.priority === 'high').reverse());
+
+    function rebuildMoreMenu() {
+      navMoreMenu.innerHTML = '';
+      const hidden = allLinks.filter(a => a.classList.contains('is-overflow'));
+      hidden.forEach(function(link) {
+        var clone = link.cloneNode(true);
+        // The clone is in the overflow menu, not the inline strip.
+        clone.classList.remove('is-overflow');
+        clone.setAttribute('role', 'menuitem');
+        // cloneNode(true) preserves DOM but NOT event listeners. The
+        // originals get `closeNav` attached up above (#1105 MINOR 5);
+        // mirror that here so a click on the More-menu clone behaves
+        // identically to a click on the inline link (closes the
+        // hamburger panel + dismisses the More menu).
+        clone.addEventListener('click', closeNav);
+        clone.addEventListener('click', closeMoreMenu);
+        navMoreMenu.appendChild(clone);
+      });
+      // If nothing overflows, hide the More button entirely so wide
+      // viewports don't show a useless dropdown trigger.
+      navMoreWrap.classList.toggle('is-hidden', hidden.length === 0);
+      // Refresh active state on the More button (a hidden active link
+      // means the More menu currently "is" the active section).
+      var hasActiveMore = navMoreMenu.querySelector('.nav-link.active');
+      navMoreBtn.classList.toggle('active', !!hasActiveMore);
+    }
+
+    // #1105 MINOR 1: cached intrinsic width of the More button. Captured
+    // the first time `fits()` sees navMoreWrap rendered (display:flex).
+    // Falls back to MORE_BTN_RESERVE_PX (a conservative initial guess
+    // sized for "More ▾" at default font/padding) until that happens.
+    var cachedMoreW = 0;
+    var MORE_BTN_RESERVE_PX = 70;
+
+    function applyNavPriority() {
+      // Skip on mobile (<768px) — hamburger CSS owns that layout.
+      if (window.innerWidth < 768) {
+        allLinks.forEach(a => a.classList.remove('is-overflow'));
+        navMoreWrap.classList.add('is-hidden');
+        return;
+      }
+      // Reset: show everything, then hide as needed.
+      allLinks.forEach(a => a.classList.remove('is-overflow'));
+      navMoreWrap.classList.remove('is-hidden');
+      // #1106: in the 768-1100px narrow-desktop band the CSS already
+      // hides .nav-stats and tightens .nav-link padding (see the
+      // "Nav narrow-desktop tightening" media query in style.css).
+      // The design intent of that band is "show exactly the 5 high-
+      // priority links + More". Pure measurement says everything fits
+      // (~981px needed in a 1080px viewport once nav-stats is gone),
+      // but the design contract — locked by test-nav-priority-1102-
+      // e2e.js #1105 MINOR 7 — is exact identity, not "fits". Force-
+      // collapse all non-high-priority links inside this band so the
+      // overflow menu is non-empty and the high-priority set is the
+      // only thing inline. Above 1100px the measurement loop below
+      // owns the decision (and at 2560px nothing overflows).
+      if (window.innerWidth <= 1100) {
+        allLinks.forEach(a => {
+          if (a.dataset.priority !== 'high') a.classList.add('is-overflow');
+        });
+        rebuildMoreMenu();
+        return;
+      }
+      // Iteratively hide low-priority links until the link strip fits.
+      // .top-nav has overflow:hidden and .nav-left has flex-shrink:1, so
+      // an overflowing strip silently clips rather than pushing
+      // nav-right out — bounding-rect math on .nav-left lies. Instead
+      // measure the *intrinsic* widths of the parts (independent of
+      // current clipping) and compare to the viewport. SAFETY absorbs
+      // the .top-nav side padding + nav-right inner gaps + sub-pixel
+      // rounding (the historic #1055 bug was a 6–20px overlap).
+      //
+      // #1105 MINOR 3: at the 1101px media-query flip `.nav-stats`
+      // toggles from display:none → flex (and vice-versa). The resize
+      // handler is rAF-debounced and runs *after* the layout flip, so
+      // navRightEl.scrollWidth measured here reflects the post-flip
+      // intrinsic width — not stale pre-flip width.
+      const navBrand   = document.querySelector('.nav-brand');
+      const SAFETY     = 32;
+      // #1105 MINOR 1+2: read both gap values from CSS rather than a
+      // shared `GUTTER = 24` constant. Today `.nav-left` (gap between
+      // brand/links/more/right cells) and `.nav-links` (gap between
+      // individual link items) both resolve to --space-lg = 24px, but
+      // they're conceptually distinct gaps. If --space-lg or .nav-left's
+      // gap diverges in the future, the fit math must follow.
+      const navLeftGap = parseFloat(getComputedStyle(navLeft).columnGap ||
+                                    getComputedStyle(navLeft).gap || '0') || 0;
+      // #1105 MINOR 1: compute the More-button reserve from its actual
+      // rendered width on first measure, instead of a hard-coded 70px
+      // fallback. Cached so we don't re-measure (offsetWidth is 0 when
+      // display:none; we capture the value the first time it's visible).
+      function fits() {
+        const visibleLinks = allLinks.filter(a => !a.classList.contains('is-overflow'));
+        let linkW = 0;
+        visibleLinks.forEach(a => { linkW += a.getBoundingClientRect().width; });
+        const linkGapPx = parseFloat(getComputedStyle(linksContainer).columnGap ||
+                                     getComputedStyle(linksContainer).gap || '0') || 0;
+        const linksGap = Math.max(0, visibleLinks.length - 1) * linkGapPx;
+        const brandW = navBrand ? navBrand.getBoundingClientRect().width : 0;
+        // Always reserve space for the More button if anything could
+        // overflow. Measure the live width when visible and cache it
+        // for use when the button is currently hidden (display:none →
+        // getBoundingClientRect() returns 0). MORE_BTN_RESERVE_PX is
+        // the conservative initial fallback used until we get a real
+        // measurement.
+        const moreVis = !navMoreWrap.classList.contains('is-hidden');
+        const liveMoreW = moreVis ? navMoreWrap.getBoundingClientRect().width : 0;
+        if (liveMoreW > 0) cachedMoreW = liveMoreW;
+        const moreW = liveMoreW > 0 ? liveMoreW
+                    : (cachedMoreW > 0 ? cachedMoreW : MORE_BTN_RESERVE_PX);
+        const rightW  = navRightEl.scrollWidth; // intrinsic, ignores clipping
+        const needed  = brandW + navLeftGap + linkW + linksGap + navLeftGap + moreW + navLeftGap + rightW + SAFETY;
+        return needed <= window.innerWidth;
+      }
+      let i = 0;
+      while (!fits() && i < overflowQueue.length) {
+        overflowQueue[i].classList.add('is-overflow');
+        i++;
+      }
+      // #1139 Bug B: floor the More menu at >=2 items. The greedy
+      // fits() loop above is happy to stop after pushing exactly ONE
+      // link into overflow (commonly "🎵 Lab" at ~1600px viewports),
+      // producing a degenerate single-item dropdown. If exactly one
+      // link overflowed, promote one more from the queue so the user
+      // sees a useful menu instead of a one-item fragment. Skip when
+      // nothing overflowed (everything fits inline → More is hidden,
+      // which is the correct UX) and skip when the queue is exhausted.
+      var overflowedCount = allLinks.filter(a => a.classList.contains('is-overflow')).length;
+      if (overflowedCount === 1) {
+        if (i < overflowQueue.length) {
+          overflowQueue[i].classList.add('is-overflow');
+          i++;
+        } else {
+          // Defensive: queue exhausted with exactly 1 overflowed link
+          // means we cannot satisfy the >=2 floor (only one promotable
+          // link existed). Surface it loudly instead of silently
+          // shipping the degenerate single-item dropdown the floor
+          // was added to prevent.
+          console.warn('[nav] More menu floor: overflowQueue exhausted with 1 item; cannot enforce >=2 floor');
+        }
+      }
+      rebuildMoreMenu();
+    }
+
+    // Run once on load, again after fonts settle (label widths shift),
+    // and on resize (debounced via rAF).
+    applyNavPriority();
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(applyNavPriority);
+    }
+    let rafId = 0;
+    window.addEventListener('resize', function() {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(applyNavPriority);
     });
+    // Re-apply on route change too: the active link gets bigger padding
+    // (background pill), so which links fit can shift between pages.
+    window.addEventListener('hashchange', function() {
+      // Defer so the route handler's class toggles run first.
+      requestAnimationFrame(applyNavPriority);
+    });
+
     navMoreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const opening = !navMoreMenu.classList.contains('open');
@@ -965,10 +1498,11 @@ window.addEventListener('DOMContentLoaded', () => {
   }).catch(() => {
     window.SITE_CONFIG = { timestamps: { defaultMode: 'ago', timezone: 'local', formatPreset: 'iso', customFormat: '', allowCustomFormat: false } };
     if (window._customizerV2) window._customizerV2.init(window.SITE_CONFIG);
-  }).finally(() => {
-    if (!location.hash || location.hash === '#/') location.hash = '#/home';
-    else navigate();
   });
+
+  // Navigate immediately — don't gate data-fetching pages on cosmetic theme fetch
+  if (!location.hash || location.hash === '#/') location.hash = '#/home';
+  else navigate();
 });
 
 /**

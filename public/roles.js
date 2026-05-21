@@ -15,16 +15,18 @@
   };
 
   window.TYPE_COLORS = {
-    ADVERT: '#22c55e', GRP_TXT: '#3b82f6', TXT_MSG: '#f59e0b', ACK: '#6b7280',
+    ADVERT: '#22c55e', GRP_TXT: '#3b82f6', GRP_DATA: '#8b5cf6', TXT_MSG: '#f59e0b', ACK: '#6b7280',
     REQUEST: '#a855f7', RESPONSE: '#06b6d4', TRACE: '#ec4899', PATH: '#14b8a6',
-    ANON_REQ: '#f43f5e', UNKNOWN: '#6b7280'
+    ANON_REQ: '#f43f5e', MULTIPART: '#0d9488', CONTROL: '#b45309', RAW_CUSTOM: '#c026d3',
+    UNKNOWN: '#6b7280'
   };
 
   // Badge CSS class name mapping
   const TYPE_BADGE_MAP = {
-    ADVERT: 'advert', GRP_TXT: 'grp-txt', TXT_MSG: 'txt-msg', ACK: 'ack',
+    ADVERT: 'advert', GRP_TXT: 'grp-txt', GRP_DATA: 'grp-data', TXT_MSG: 'txt-msg', ACK: 'ack',
     REQUEST: 'req', RESPONSE: 'response', TRACE: 'trace', PATH: 'path',
-    ANON_REQ: 'anon-req', UNKNOWN: 'unknown'
+    ANON_REQ: 'anon-req', MULTIPART: 'multipart', CONTROL: 'control', RAW_CUSTOM: 'raw-custom',
+    UNKNOWN: 'unknown'
   };
 
   // Generate badge CSS from TYPE_COLORS — single source of truth
@@ -453,6 +455,12 @@
     }
     var label = severity === 'ok' ? '⏰' : '⏰ ' + window.formatSkew(skewSec);
     return '<span class="' + cls + '" title="Clock skew: ' + window.formatSkew(skewSec) + ' (' + (SKEW_SEVERITY_LABELS[severity] || severity) + ')">' + label + '</span>';
+  };
+
+  /** Compute severity for an observer's clock offset (seconds). */
+  window.observerSkewSeverity = function(offsetSec) {
+    var abs = Math.abs(offsetSec);
+    return abs >= 3600 ? 'critical' : abs >= 300 ? 'warning' : 'ok';
   };
 
   /** Render a skew sparkline SVG (inline, word-sized) */

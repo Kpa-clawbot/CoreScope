@@ -59,6 +59,9 @@ type pathInspectResponse struct {
 	Candidates []pathCandidate        `json:"candidates"`
 	Input      map[string]interface{} `json:"input"`
 	Stats      map[string]interface{} `json:"stats"`
+	// Stale is true when the response was served from a stale neighbor graph
+	// while a background rebuild is in progress (issue #1203).
+	Stale bool `json:"stale,omitempty"`
 }
 
 // beamEntry represents a partial path being extended during beam search.
@@ -163,28 +166,29 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 		nodeByPK[strings.ToLower(nodes[i].PublicKey)] = &nodes[i]
 	}
 
-	// Get neighbor graph; handle cold start.
-	graph := s.store.graph
-	if graph == nil || graph.IsStale() {
-		rebuilt := make(chan struct{})
-		go func() {
-			s.store.ensureNeighborGraph()
-			close(rebuilt)
-		}()
-		select {
-		case <-rebuilt:
-			graph = s.store.graph
-		case <-time.After(2 * time.Second):
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]interface{}{"retry": true})
-			return
+	// Get neighbor graph (issue #1203): stale-while-revalidate.
+	//   - cold start (nil): return 503 + kick off async rebuild for next request.
+	//   - stale non-nil: serve it immediately with stale:true + async rebuild.
+	//   - fresh: serve normally.
+	graph := s.store.graph.Load()
+	stale := false
+	if graph == nil {
+		// Cold start — kick off rebuild so the next request lands warm,
+		// then return 503 immediately. Don't spawn a fresh goroutine if a
+		// rebuild is already in-flight: singleflight dedups the BUILD, not
+		// the goroutine launch (PR #1208 carmack #2).
+		if !s.store.rebuildInFlight() {
+			go s.store.ensureNeighborGraph()
 		}
-		if graph == nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]interface{}{"retry": true})
-			return
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]interface{}{"retry": true})
+		return
+	}
+	if graph.IsStale() {
+		stale = true
+		if !s.store.rebuildInFlight() {
+			go s.store.ensureNeighborGraph()
 		}
 	}
 
@@ -257,6 +261,7 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 	elapsed := time.Since(start).Milliseconds()
 	resp := pathInspectResponse{
 		Candidates: candidates,
+		Stale:      stale,
 		Input: map[string]interface{}{
 			"prefixes": req.Prefixes,
 			"hops":     len(req.Prefixes),
@@ -268,22 +273,27 @@ func (s *Server) handlePathInspect(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	// Cache result (and evict stale entries).
-	s.store.inspectMu.Lock()
-	if s.store.inspectCache == nil {
-		s.store.inspectCache = make(map[string]*inspectCachedResult)
-	}
-	now2 := time.Now()
-	for k, v := range s.store.inspectCache {
-		if now2.After(v.expiresAt) {
-			delete(s.store.inspectCache, k)
+	// Cache result (and evict stale entries). Don't cache when the response
+	// itself is stale — the rebuild kicked off above will land a fresh graph
+	// shortly and we don't want to pin a stale answer for inspectCacheTTL
+	// (issue #1203).
+	if !stale {
+		s.store.inspectMu.Lock()
+		if s.store.inspectCache == nil {
+			s.store.inspectCache = make(map[string]*inspectCachedResult)
 		}
+		now2 := time.Now()
+		for k, v := range s.store.inspectCache {
+			if now2.After(v.expiresAt) {
+				delete(s.store.inspectCache, k)
+			}
+		}
+		s.store.inspectCache[cacheKey] = &inspectCachedResult{
+			data:      resp,
+			expiresAt: now2.Add(inspectCacheTTL),
+		}
+		s.store.inspectMu.Unlock()
 	}
-	s.store.inspectCache[cacheKey] = &inspectCachedResult{
-		data:      resp,
-		expiresAt: now2.Add(inspectCacheTTL),
-	}
-	s.store.inspectMu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -417,11 +427,63 @@ func sortBeam(beam []beamEntry) {
 	})
 }
 
-// ensureNeighborGraph triggers a graph rebuild if nil or stale.
+// buildGraphFn is the function used by ensureNeighborGraph to rebuild the
+// neighbor graph. It's a package-level var so tests can swap it for a counter
+// wrapper. Default is BuildFromStore.
+var buildGraphFn = func(s *PacketStore) *NeighborGraph { return BuildFromStore(s) }
+
+// Singleflight state for ensureNeighborGraph lives on *PacketStore
+// (see store.go: rebuildMu, rebuildInFlt). It moved off package globals in
+// PR #1208 round-1 so that parallel tests with independent stores don't
+// share rebuild state (cross-store deadlock/skip under -race).
+
+// ensureNeighborGraph triggers a graph rebuild if nil or stale. Concurrent
+// callers share a single in-flight build (singleflight) so the store doesn't
+// churn N parallel BuildFromStore goroutines under load.
 func (s *PacketStore) ensureNeighborGraph() {
-	if s.graph != nil && !s.graph.IsStale() {
+	if g := s.graph.Load(); g != nil && !g.IsStale() {
 		return
 	}
-	g := BuildFromStore(s)
-	s.graph = g
+	s.rebuildMu.Lock()
+	// Re-check under lock to avoid racing two callers past the cheap check.
+	if g := s.graph.Load(); g != nil && !g.IsStale() {
+		s.rebuildMu.Unlock()
+		return
+	}
+	if s.rebuildInFlt != nil {
+		// Another caller is rebuilding — wait for it.
+		ch := s.rebuildInFlt
+		s.rebuildMu.Unlock()
+		<-ch
+		return
+	}
+	// We're the leader. Publish the channel before unlocking so late
+	// arrivals can attach.
+	done := make(chan struct{})
+	s.rebuildInFlt = done
+	s.rebuildMu.Unlock()
+
+	// Defer cleanup so a panic in buildGraphFn doesn't leak the in-flight
+	// channel (which would deadlock every future waiter).
+	var g *NeighborGraph
+	defer func() {
+		if g != nil {
+			s.graph.Store(g)
+		}
+		s.rebuildMu.Lock()
+		s.rebuildInFlt = nil
+		s.rebuildMu.Unlock()
+		close(done)
+	}()
+
+	g = buildGraphFn(s)
+}
+
+// rebuildInFlight reports whether a graph rebuild is currently in progress.
+// Used by callers that want to avoid spawning a goroutine that would just
+// block on the in-flight singleflight wait (PR #1208 carmack #2).
+func (s *PacketStore) rebuildInFlight() bool {
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+	return s.rebuildInFlt != nil
 }

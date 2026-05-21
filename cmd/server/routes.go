@@ -141,7 +141,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/stats", s.handleStats).Methods("GET")
 	r.HandleFunc("/api/perf", s.handlePerf).Methods("GET")
 	r.Handle("/api/perf/reset", s.requireAPIKey(http.HandlerFunc(s.handlePerfReset))).Methods("POST")
-	r.Handle("/api/admin/prune", s.requireAPIKey(http.HandlerFunc(s.handleAdminPrune))).Methods("POST")
+	// /api/admin/prune removed in #1283 — pruning is owned by the
+	// ingestor process (scheduled tickers + startup pass). Operators
+	// who want an ad-hoc prune can restart the ingestor.
 	r.Handle("/api/admin/prune-geo-filter", s.requireAPIKey(http.HandlerFunc(s.handlePruneGeoFilter))).Methods("POST")
 	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
 	r.Handle("/api/dropped-packets", s.requireAPIKey(http.HandlerFunc(s.handleDroppedPackets))).Methods("GET")
@@ -1233,11 +1235,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		EnrichNodeWithHashSize(node, hashInfo[pubkey])
 	}
 
-	name := ""
-	if n, ok := node["name"]; ok && n != nil {
-		name = fmt.Sprintf("%v", n)
-	}
-	recentAdverts, _ := s.db.GetRecentTransmissionsForNode(pubkey, name, 20)
+	recentAdverts, _ := s.db.GetRecentTransmissionsForNode(pubkey, 20)
 
 	writeJSON(w, NodeDetailResponse{
 		Node:          node,
@@ -1416,7 +1414,7 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		if cached, ok := hopCache[hop]; ok {
 			return cached
 		}
-		r, _, _ := pm.resolveWithContext(hop, nil, s.store.graph)
+		r, _, _ := pm.resolveWithContext(hop, nil, s.store.graph.Load())
 		hopCache[hop] = r
 		return r
 	}
@@ -2611,45 +2609,9 @@ func parseWindowDuration(window string) (time.Duration, error) {
 	return time.ParseDuration(window)
 }
 
-func (s *Server) handleAdminPrune(w http.ResponseWriter, r *http.Request) {
-	days := 0
-	if d := r.URL.Query().Get("days"); d != "" {
-		fmt.Sscanf(d, "%d", &days)
-	}
-	if days <= 0 && s.cfg.Retention != nil {
-		days = s.cfg.Retention.PacketDays
-	}
-	if days <= 0 {
-		writeError(w, 400, "days parameter required (or set retention.packetDays in config)")
-		return
-	}
-
-	results := map[string]interface{}{}
-
-	// Prune old packets
-	n, err := s.db.PruneOldPackets(days)
-	if err != nil {
-		writeError(w, 500, err.Error())
-		return
-	}
-	log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
-	results["packets_deleted"] = n
-	results["deleted"] = n // legacy alias
-
-	// Also mark stale observers as inactive if observerDays is configured
-	observerDays := s.cfg.ObserverDaysOrDefault()
-	if observerDays > 0 {
-		obsN, obsErr := s.db.RemoveStaleObservers(observerDays)
-		if obsErr != nil {
-			log.Printf("[prune] observer prune error: %v", obsErr)
-		} else {
-			results["observers_inactive"] = obsN
-		}
-	}
-
-	results["days"] = days
-	writeJSON(w, results)
-}
+// handleAdminPrune was removed in #1283 — server is read-only and cannot
+// invoke PruneOldPackets / RemoveStaleObservers. Pruning now happens in
+// the ingestor (cmd/ingestor/main.go retention tickers).
 
 // handlePruneGeoFilter identifies (dry_run=true, default) or deletes (confirm=true)
 // nodes whose GPS coordinates fall outside the currently configured geo_filter.

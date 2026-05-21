@@ -55,7 +55,9 @@ jobs:
           set -e -o pipefail
           cd cmd/server
           go build .
-          go test -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
+          # -race gates PR #1208's atomic.Pointer migration: the race-detector
+          # is what makes path_inspect_atomic_race_test.go actually assert.
+          go test -race -coverprofile=server-coverage.out ./... 2>&1 | tee server-test.log
           echo "--- Go Server Coverage ---"
           go tool cover -func=server-coverage.out | tail -1
 
@@ -78,6 +80,30 @@ jobs:
           CGO_ENABLED=0 go build -ldflags="-s -w" -o corescope-decrypt .
           go test ./...
           echo "--- Decrypt CLI tests passed ---"
+
+      - name: Lint CSS variables (issue #1128)
+        run: |
+          set -e
+          node scripts/check-css-vars.js
+          node scripts/test-check-css-vars.js
+
+      - name: Run JS unit tests (packet-filter)
+        run: |
+          set -e
+          node test-packet-filter.js
+          node test-packet-filter-time.js
+          node test-channel-decrypt-insecure-context.js
+          node test-live-region-filter.js
+          node test-issue-1136-observer-iata-map.js
+          node test-channel-qr.js
+          node test-channel-qr-wiring.js
+          node test-channel-modal-ux.js
+          node test-channel-issue-1087.js
+          node test-channel-issue-1101.js
+          node test-observer-iata-1188.js
+          node test-pull-to-reconnect-1091.js
+          node test-channel-fluid-layout.js
+          node test-issue-1279-p2-code-filter.js
 
       - name: Verify proto syntax
         run: |
@@ -165,6 +191,12 @@ jobs:
           go build -o ../../corescope-server .
           echo "Go server built successfully"
 
+      - name: Build Go migrate tool
+        run: |
+          cd cmd/migrate
+          go build -o ../../corescope-migrate .
+          echo "Go migrate tool built successfully"
+
       - name: Install npm dependencies
         run: npm ci --production=false
 
@@ -176,6 +208,18 @@ jobs:
       - name: Instrument frontend JS for coverage
         run: sh scripts/instrument-frontend.sh
 
+      - name: Freshen fixture timestamps
+        run: bash tools/freshen-fixture.sh test-fixtures/e2e-fixture.db
+
+      - name: Migrate fixture DB to current schema (#1287)
+        # Server now ASSERTs schema is migrated and refuses to start
+        # otherwise (cmd/server/main.go: dbschema.AssertReady). In prod
+        # the ingestor owns dbschema.Apply, but CI starts only the
+        # server against the committed e2e fixture — so we run the
+        # standalone migrate tool here to bring the fixture up to the
+        # required shape before the server boots.
+        run: ./corescope-migrate -db test-fixtures/e2e-fixture.db
+
       - name: Start Go server with fixture DB
         run: |
           fuser -k 13581/tcp 2>/dev/null || true
@@ -183,7 +227,7 @@ jobs:
           ./corescope-server -port 13581 -db test-fixtures/e2e-fixture.db -public public-instrumented &
           echo $! > .server.pid
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:13581/api/stats > /dev/null 2>&1; then
+            if curl -sf http://localhost:13581/api/healthz > /dev/null 2>&1; then
               echo "Server ready after ${i}s"
               break
             fi
@@ -197,6 +241,63 @@ jobs:
       - name: Run Playwright E2E tests (fail-fast)
         run: |
           BASE_URL=http://localhost:13581 node test-e2e-playwright.js 2>&1 | tee e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-filter-ux-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-channel-issue-1087-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-channel-issue-1111-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-map-modal-fluid-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-observer-iata-1188-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-nav-fluid-1055-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-nav-priority-1102-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-nav-more-floor-1139-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-bottom-nav-1061-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-gestures-1062-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-gestures-1185-scroll-discriminator-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-gesture-hints-1065-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-touch-gestures-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-channel-fluid-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-table-fluid-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-charts-fluid-1058-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-slideover-1056-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-slideover-1168-munger-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-logo-pulse-1173-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1122-packets-filter-ux-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1128-packets-layout-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1128-multi-viewport-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1136-live-region-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1150-404-state-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1146-path-link-contrast-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1147-section-order-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1151-orphan-separators-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-rebrand-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-theme-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-default-sage-teal-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1109-hamburger-dropdown-visible-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-live-layout-1178-1179-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1205-live-controls-anchor-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-live-mql-leak-1180-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1204-live-panel-structure-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1234-live-chrome-pass2-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1206-vcr-overlap-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1244-live-vcr-row-hints-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1224-channels-mobile-ux-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1236-map-mobile-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1273-qr-overlay-height-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1281-location-row-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1279-legend-p2-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-home-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-path-inspector-coverage-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1206-resize-observer-leak-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-nav-drawer-1064-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-audio-live-1297-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-audio-lab-1297-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-channel-decrypt-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-channel-qr-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-channel-color-picker-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-customize-theme-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-customize-branding-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-customize-display-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-customize-export-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-drag-manager-e2e.js 2>&1 | tee -a e2e-output.txt
 
       - name: Collect frontend coverage (parallel)
         if: success() && github.event_name == 'push'
@@ -206,7 +307,13 @@ jobs:
       - name: Generate frontend coverage badges
         if: success()
         run: |
-          E2E_PASS=$(grep -oP '[0-9]+(?=/)' e2e-output.txt | tail -1 || echo "0")
+          # Aggregate per-suite PASS/FAIL across every test-*-e2e.js summary.
+          # The previous regex (grep -oP '[0-9]+(?=/)' | tail -1) caught a
+          # stray digits-before-slash like the '2' in '2/3 tests passed' from
+          # some sub-output and stamped the badge as '2 passed'. See #1296.
+          eval "$(bash scripts/aggregate-e2e-pass.sh e2e-output.txt)"
+          E2E_PASS=${PASS:-0}
+          E2E_FAIL=${FAIL:-0}
 
           mkdir -p .badges
           if [ -f .nyc_output/frontend-coverage.json ] || [ -f .nyc_output/e2e-coverage.json ]; then
@@ -219,7 +326,14 @@ jobs:
             echo "{\"schemaVersion\":1,\"label\":\"frontend coverage\",\"message\":\"${FE_COVERAGE}%\",\"color\":\"${FE_COLOR}\"}" > .badges/frontend-coverage.json
             echo "## Frontend: ${FE_COVERAGE}% coverage" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "{\"schemaVersion\":1,\"label\":\"e2e tests\",\"message\":\"${E2E_PASS:-0} passed\",\"color\":\"brightgreen\"}" > .badges/e2e-tests.json
+          if [ "${E2E_FAIL:-0}" -gt 0 ]; then
+            E2E_MSG="${E2E_PASS:-0} passed, ${E2E_FAIL} failed"
+            E2E_COLOR="red"
+          else
+            E2E_MSG="${E2E_PASS:-0} passed"
+            E2E_COLOR="brightgreen"
+          fi
+          echo "{\"schemaVersion\":1,\"label\":\"e2e tests\",\"message\":\"${E2E_MSG}\",\"color\":\"${E2E_COLOR}\"}" > .badges/e2e-tests.json
 
       - name: Stop test server
         if: always()

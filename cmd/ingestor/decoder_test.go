@@ -631,21 +631,28 @@ func TestDecodeEncryptedPayloadValid(t *testing.T) {
 }
 
 func TestDecodePayloadGRPData(t *testing.T) {
+	// GRP_DATA (0x06) decoder added for #1279 P0 #1 — envelope only when no
+	// channel key matches (firmware/src/helpers/BaseChatMesh.cpp:500).
 	buf := []byte{0x01, 0x02, 0x03}
 	p := decodePayload(PayloadGRP_DATA, buf, nil, false)
-	if p.Type != "UNKNOWN" {
-		t.Errorf("type=%s, want UNKNOWN", p.Type)
-	}
-	if p.RawHex != "010203" {
-		t.Errorf("rawHex=%s, want 010203", p.RawHex)
+	if p.Type != "GRP_DATA" {
+		t.Errorf("type=%s, want GRP_DATA", p.Type)
 	}
 }
 
 func TestDecodePayloadRAWCustom(t *testing.T) {
+	// #1279 P2 #5: RAW_CUSTOM (0x0F) now exposes envelope shape (length +
+	// first-byte tag) per firmware/src/Mesh.cpp:577 (createRawData).
 	buf := []byte{0xFF, 0xFE}
 	p := decodePayload(PayloadRAW_CUSTOM, buf, nil, false)
-	if p.Type != "UNKNOWN" {
-		t.Errorf("type=%s, want UNKNOWN", p.Type)
+	if p.Type != "RAW_CUSTOM" {
+		t.Errorf("type=%s, want RAW_CUSTOM", p.Type)
+	}
+	if p.RawLength == nil || *p.RawLength != 2 {
+		t.Errorf("rawLength missing or wrong, want 2")
+	}
+	if p.FirstByteTag != "FF" {
+		t.Errorf("firstByteTag=%q, want FF", p.FirstByteTag)
 	}
 }
 
@@ -1097,24 +1104,24 @@ func TestDecodeHeaderUnknownTypes(t *testing.T) {
 }
 
 func TestDecodePayloadMultipart(t *testing.T) {
-	// MULTIPART (0x0A) falls through to default → UNKNOWN
+	// MULTIPART (0x0A) now decoded — #1279 P0 #2 (firmware/src/Mesh.cpp:289).
 	p := decodePayload(PayloadMULTIPART, []byte{0x01, 0x02}, nil, false)
-	if p.Type != "UNKNOWN" {
-		t.Errorf("MULTIPART type=%s, want UNKNOWN", p.Type)
+	if p.Type != "MULTIPART" {
+		t.Errorf("MULTIPART type=%s, want MULTIPART", p.Type)
 	}
 }
 
 func TestDecodePayloadControl(t *testing.T) {
-	// CONTROL (0x0B) falls through to default → UNKNOWN
+	// CONTROL (0x0B) now decoded — #1279 P1 #4 (firmware/src/Mesh.cpp:69).
 	p := decodePayload(PayloadCONTROL, []byte{0x01, 0x02}, nil, false)
-	if p.Type != "UNKNOWN" {
-		t.Errorf("CONTROL type=%s, want UNKNOWN", p.Type)
+	if p.Type != "CONTROL" {
+		t.Errorf("CONTROL type=%s, want CONTROL", p.Type)
 	}
 }
 
 func TestDecodePathTruncatedBuffer(t *testing.T) {
 	// path byte claims 5 hops of 2 bytes = 10 bytes, but only 4 available
-	path, consumed := decodePath(0x45, []byte{0xAA, 0x11, 0xBB, 0x22}, 0)
+	path, consumed, _ := decodePath(0x45, []byte{0xAA, 0x11, 0xBB, 0x22}, 0)
 	if path.HashCount != 5 {
 		t.Errorf("hashCount=%d, want 5", path.HashCount)
 	}
@@ -1708,15 +1715,15 @@ func TestZeroHopTransportDirectHashSize(t *testing.T) {
 }
 
 func TestZeroHopTransportDirectHashSizeWithNonZeroUpperBits(t *testing.T) {
-	// TRANSPORT_DIRECT (RouteType=3) + REQ (PayloadType=0) → header byte = 0x03
-	// 4 bytes transport codes + pathByte=0xC0 → hash_count=0, hash_size bits=11 → should still get HashSize=0
+	// pathByte=0xC0 → hash_size bits=11 (4, reserved per firmware Packet.cpp:13-18).
+	// Firmware Packet::isValidPathLen rejects this regardless of hash_count,
+	// because hash_size==4 is reserved. Go decoder must mirror that — even
+	// when hash_count==0, an attacker-emitted 0xC0 byte should not be
+	// silently accepted; firmware never emits hash_size==4.
 	hex := "03" + "11223344" + "C0" + repeatHex("AA", 20)
-	pkt, err := DecodePacket(hex, nil, false)
-	if err != nil {
-		t.Fatalf("DecodePacket failed: %v", err)
-	}
-	if pkt.Path.HashSize != 0 {
-		t.Errorf("TRANSPORT_DIRECT zero-hop with hash_size bits set: want HashSize=0, got %d", pkt.Path.HashSize)
+	_, err := DecodePacket(hex, nil, false)
+	if err == nil {
+		t.Fatalf("DecodePacket(pathByte=0xC0) succeeded; want error mirroring firmware Packet.cpp:13-18 (hash_size==4 reserved)")
 	}
 }
 
@@ -1924,5 +1931,159 @@ func TestDecodePathFromRawHex_Transport(t *testing.T) {
 		if h != expected[i] {
 			t.Errorf("hop[%d] = %s, want %s", i, h, expected[i])
 		}
+	}
+}
+
+func TestDecodeTracePayloadFailSetsAnomaly(t *testing.T) {
+	// Issue #889: TRACE packet with payload too short to decode (< 9 bytes)
+	// should still return a DecodedPacket (observation stored) but with Anomaly
+	// set to warn operators that the decode was degraded.
+	// Packet: header 0x26 (TRACE+DIRECT), pathByte 0x00, payload 4 bytes (too short).
+	pkt, err := DecodePacket("2600aabbccdd", nil, false)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if pkt.Payload.Type != "TRACE" {
+		t.Fatalf("payload type=%s, want TRACE", pkt.Payload.Type)
+	}
+	if pkt.Payload.Error == "" {
+		t.Fatal("expected payload.Error to indicate decode failure")
+	}
+	// The key assertion: Anomaly must be set when TRACE decode fails
+	if pkt.Anomaly == "" {
+		t.Error("expected Anomaly to be set when TRACE payload decode fails but observation is stored")
+	}
+}
+
+// TestDecodeTraceExtractsSNRValues verifies that for TRACE packets, the header
+// path bytes are interpreted as int8 SNR values (quarter-dB) and exposed via
+// payload.SNRValues. Mirrors logic in cmd/server/decoder.go (issue: SNR values
+// extracted by server but never written into decoded_json by ingestor).
+//
+// Packet 26022FF8116A23A80000000001C0DE1000DEDE:
+//   header  0x26 → TRACE (pt=9), DIRECT (rt=2)
+//   pathByte 0x02 → hash_size=1, hash_count=2
+//   header path: 2F F8 → SNR = [int8(0x2F)/4, int8(0xF8)/4] = [11.75, -2.0]
+//   payload (15B): tag=116A23A8 auth=00000000 flags=0x01 pathData=C0DE1000DEDE
+func TestDecodeTraceExtractsSNRValues(t *testing.T) {
+	pkt, err := DecodePacket("26022FF8116A23A80000000001C0DE1000DEDE", nil, false)
+	if err != nil {
+		t.Fatalf("DecodePacket error: %v", err)
+	}
+	if pkt.Payload.Type != "TRACE" {
+		t.Fatalf("payload type=%s, want TRACE", pkt.Payload.Type)
+	}
+	if len(pkt.Payload.SNRValues) != 2 {
+		t.Fatalf("len(SNRValues)=%d, want 2 (got %v)", len(pkt.Payload.SNRValues), pkt.Payload.SNRValues)
+	}
+	if pkt.Payload.SNRValues[0] != 11.75 {
+		t.Errorf("SNRValues[0]=%v, want 11.75", pkt.Payload.SNRValues[0])
+	}
+	if pkt.Payload.SNRValues[1] != -2.0 {
+		t.Errorf("SNRValues[1]=%v, want -2.0", pkt.Payload.SNRValues[1])
+	}
+}
+
+// TestDecodePacketBoundsFromWire — regression for issue #1211.
+//
+// A malformed packet on the wire claimed pathByte=0xF6 (hash_size=4, hash_count=54
+// → 216 path bytes) inside a 15-byte buffer. decodePath() returned bytesConsumed=216
+// without bounds-check, causing the outer slice `payloadBuf := buf[offset:]` to
+// blow up with `slice bounds out of range [218:15]`.
+//
+// Expected behaviour: DecodePacket MUST NOT panic on any input. If the path
+// length claimed by the wire byte exceeds the buffer, it should return a
+// clean error.
+func TestDecodePacketBoundsFromWire_Issue1211(t *testing.T) {
+	// 15-byte buffer: header=0x12 (rt=DIRECT, pt=ADVERT), pathByte=0xF6
+	// (hash_size=4, hash_count=54 → claims 216 path bytes), + 13 garbage bytes.
+	raw := "12F6" + strings.Repeat("AA", 13)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("DecodePacket panicked on malformed input: %v", r)
+		}
+	}()
+	pkt, err := DecodePacket(raw, nil, false)
+	if err == nil {
+		t.Fatalf("expected error for malformed packet (path claims 216 bytes in 15-byte buf), got nil; pkt=%+v", pkt)
+	}
+}
+
+// TestDecodePacketFuzzTruncated — sweep the decoder with truncated payloads.
+// Zero panics is the acceptance bar.
+//
+// Adv M2: the original loop ran 256*256*20 = 1.3M iterations on every
+// `go test` (in both packages, so 2.6M total). That is not "fuzzing" — it
+// is an expensive deterministic sweep that runs in the default unit-test
+// path with no opt-in. We now:
+//
+//   - gate the exhaustive sweep on !testing.Short() so `go test -short`
+//     skips it (CI's unit gate runs short)
+//   - keep the full sweep under `go test ./...` to preserve coverage
+//   - prefer `go test -fuzz=FuzzDecodePacketTruncated` for actual
+//     randomized fuzzing (see FuzzDecodePacketTruncated below)
+func TestDecodePacketFuzzTruncated_Issue1211(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("DecodePacket panicked during fuzz: %v", r)
+		}
+	}()
+	if testing.Short() {
+		t.Skip("skipping exhaustive sweep in -short mode; use FuzzDecodePacketTruncated")
+	}
+	// Sweep every pathByte value with a short tail.
+	for hdr := 0; hdr < 256; hdr++ {
+		for pb := 0; pb < 256; pb++ {
+			for tail := 0; tail < 20; tail++ {
+				raw := hex.EncodeToString([]byte{byte(hdr), byte(pb)}) + strings.Repeat("00", tail)
+				_, _ = DecodePacket(raw, nil, false)
+			}
+		}
+	}
+}
+
+// FuzzDecodePacketTruncated — native go fuzz target. Run with:
+//
+//	go test -fuzz=FuzzDecodePacketTruncated -fuzztime=30s ./cmd/ingestor
+//
+// Zero panics regardless of input is the acceptance bar.
+func FuzzDecodePacketTruncated(f *testing.F) {
+	seeds := [][]byte{
+		{0x12, 0xF6, 0xAA, 0xAA, 0xAA},
+		{0x12, 0x00},
+		{0x03, 0x11, 0x22, 0x33, 0x44, 0xC0, 0xAA, 0xAA, 0xAA},
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("DecodePacket panicked on input %x: %v", data, r)
+			}
+		}()
+		_, _ = DecodePacket(hex.EncodeToString(data), nil, false)
+	})
+}
+
+// TestDecodeAdvertOversizedNameTruncated asserts decodeAdvert truncates the
+// advert name to firmware's MAX_ADVERT_DATA_SIZE=32 (firmware/src/MeshCore.h:11).
+// Firmware writes the node name into a 32-byte buffer, so any on-wire advert
+// carrying >32 bytes of name data is adversarial — the Go decoder must not
+// surface attacker-controlled bytes beyond what firmware would ever emit.
+func TestDecodeAdvertOversizedNameTruncated(t *testing.T) {
+	pubkey := repeatHex("AA", 32)
+	timestamp := "78563412"
+	signature := repeatHex("BB", 64)
+	flags := "81" // chat(1) | hasName(0x80), no location, no feat1/2
+	// 64-byte ASCII 'X' name with no null terminator (firmware buffer is 32 bytes).
+	name := repeatHex("58", 64)
+	hex := "1200" + pubkey + timestamp + signature + flags + name
+	pkt, err := DecodePacket(hex, nil, false)
+	if err != nil {
+		t.Fatalf("DecodePacket: %v", err)
+	}
+	if got := len(pkt.Payload.Name); got > 32 {
+		t.Errorf("name length=%d, want <=32 (MAX_ADVERT_DATA_SIZE firmware/src/MeshCore.h:11)", got)
 	}
 }
