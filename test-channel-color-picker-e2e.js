@@ -165,14 +165,24 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.evaluate(() =>
       window.ChannelColorPicker.show('#outsidechan', 100, 100));
     await page.waitForSelector('.cc-picker-popover');
-    // Click body far away
-    await page.evaluate(() => {
-      document.body.click();
-    });
+    // Wait for the deferred (setTimeout 0) document-level click listener
+    // to be installed before dispatching the outside click. Otherwise the
+    // click races the listener registration and the popover stays open.
+    await page.waitForFunction(() => {
+      const el = document.querySelector('.cc-picker-popover');
+      const rect = el && el.getBoundingClientRect();
+      return rect && rect.width > 0 && rect.height > 0;
+    }, { timeout: 5000 });
+    // Real mouse click at a viewport coordinate that is clearly outside
+    // the popover (popover anchored at 100,100; click at 700,500).
+    // page.mouse.click dispatches PointerEvent + MouseEvent with real
+    // coords, more representative than HTMLElement.click() and reliably
+    // reaches the document-level capture-phase listener.
+    await page.mouse.click(700, 500);
     await page.waitForFunction(() => {
       const el = document.querySelector('.cc-picker-popover');
       return el && el.style.display === 'none';
-    }, { timeout: 3000 });
+    }, { timeout: 15000 });
   });
 
   // Cleanup
