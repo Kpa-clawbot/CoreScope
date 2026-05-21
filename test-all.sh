@@ -25,6 +25,7 @@ node test-channel-qr-wiring.js
 node test-channel-issue-1087.js
 node test-analytics-channels-integration.js
 node test-observers-headings.js
+node test-traces.js
 
 echo ""
 echo "═══════════════════════════════════════"

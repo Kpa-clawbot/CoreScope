@@ -1080,6 +1080,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // Belt-and-braces null guards (#1105 MINOR 4): the outer block measures
   // and mutates all of these; if any are missing the layout math throws
   // before we can fall back gracefully.
+  let navPriorityFn = null;
   if (navMoreBtn && navMoreMenu && navMoreWrap && navLeft && navRightEl && linksContainer && navTop) {
     // Measure available room and decide which links overflow.
     // Algorithm: try to fit all links inline. If the link strip doesn't
@@ -1244,6 +1245,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
     // Run once on load, again after fonts settle (label widths shift),
     // and on resize (debounced via rAF).
+    navPriorityFn = applyNavPriority;
     applyNavPriority();
     if (document.fonts && document.fonts.ready) {
       document.fonts.ready.then(applyNavPriority);
@@ -1467,6 +1469,7 @@ window.addEventListener('DOMContentLoaded', () => {
         el.innerHTML = `<span class="stat-val">${stats.totalPackets}</span> pkts · <span class="stat-val">${stats.totalNodes}</span> nodes · <span class="stat-val">${stats.totalObservers}</span> obs${formatVersionBadge(stats.version, stats.commit, stats.engine, stats.buildTime)}`;
         el.querySelectorAll('.stat-val').forEach(s => s.classList.add('updated'));
         setTimeout(() => { el.querySelectorAll('.stat-val').forEach(s => s.classList.remove('updated')); }, 600);
+        if (navPriorityFn) requestAnimationFrame(navPriorityFn);
       }
     } catch {}
   }
