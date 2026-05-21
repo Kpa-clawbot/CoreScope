@@ -3432,6 +3432,34 @@ func removeTxFromPathHopIndex(idx map[string][]*StoreTx, tx *StoreTx) {
 	}
 }
 
+// addResolvedPubkeysToPathHopIndex appends tx into byPathHop under each
+// resolved pubkey key that isn't already present as a raw hop. Mutating
+// byPathHop here MUST be paired with invalidateRelayStatsCache so the
+// cached batch relay stats don't go stale for up to relayStatsCacheTTL.
+// hopsSeen is a scratch map the caller can reuse across calls (it will
+// be cleared on entry).
+//
+// Must be called with s.mu held.
+func (s *PacketStore) addResolvedPubkeysToPathHopIndex(tx *StoreTx, pubkeys []string, hopsSeen map[string]bool) bool {
+	if len(pubkeys) == 0 {
+		return false
+	}
+	clear(hopsSeen)
+	for _, hop := range txGetParsedPath(tx) {
+		hopsSeen[strings.ToLower(hop)] = true
+	}
+	mutated := false
+	for _, pk := range pubkeys {
+		if !hopsSeen[pk] {
+			hopsSeen[pk] = true
+			s.byPathHop[pk] = append(s.byPathHop[pk], tx)
+			mutated = true
+		}
+	}
+	// TODO(#1164): invalidate relay stats cache here once invariant test is in place.
+	return mutated
+}
+
 // invalidateRelayStatsCache drops the cached batch relay-stats result so
 // the next call to GetRepeaterNodeStatsBatchCached recomputes from scratch.
 // Call this whenever byPathHop changes (add or remove). Safe to call while
