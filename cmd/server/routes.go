@@ -1131,7 +1131,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
 				EnrichNodeWithMultiByte(node, mbCap[pk])
 				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
-				info, _ := lookupRelayInfo(relayMap, pk)
+					info, _ := lookupRelayInfo(relayMap, pk)
 					info.WindowHours = relayWindow
 					if info.LastRelayed != "" {
 						node["last_relayed"] = info.LastRelayed
