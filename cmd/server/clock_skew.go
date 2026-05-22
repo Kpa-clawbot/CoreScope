@@ -766,11 +766,18 @@ func (s *PacketStore) computeFleetClockSkew() []*NodeClockSkew {
 // computeFleetClockSkewForArea is the underlying compute. Must NOT be
 // called with s.mu held.
 func (s *PacketStore) computeFleetClockSkewForArea(area string) []*NodeClockSkew {
+	// Trigger clock-skew engine recompute BEFORE acquiring s.mu. Recompute
+	// takes its own store.mu.RLock internally for sample collection and must
+	// not be called while s.mu is held. getNodeClockSkewLocked (called below
+	// under s.mu) only reads the cached nodeSkew map — if Recompute has never
+	// run, that map is empty and every node returns nil. This mirrors the
+	// pattern used by GetNodeClockSkew (the single-node path).
+	s.clockSkew.Recompute(s)
+
 	var areaNodes map[string]bool
 	if area != "" {
 		areaNodes = s.resolveAreaNodes(area)
 	}
-
 
 	// Pre-warm node cache BEFORE acquiring the store read lock. On a cache miss,
 	// getAllNodes() does a full SQLite SELECT which must not run under s.mu
