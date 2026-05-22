@@ -1000,6 +1000,10 @@ func extractObserverMeta(msg map[string]interface{}) *ObserverMeta {
 		meta.Radio = &v
 		hasData = true
 	}
+	if v, ok := msg["repeat"].(string); ok && v != "" {
+		meta.Repeat = &v
+		hasData = true
+	}
 
 	// Stats fields may be nested under a "stats" object or at top level.
 	// Try nested first, fall back to top-level for backward compatibility.

@@ -162,7 +162,8 @@ func applySchema(db *sql.DB) error {
 			uptime_secs INTEGER,
 			noise_floor REAL,
 			inactive INTEGER DEFAULT 0,
-			last_packet_at TEXT DEFAULT NULL
+			last_packet_at TEXT DEFAULT NULL,
+			repeat TEXT DEFAULT NULL
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes(last_seen);
@@ -628,6 +629,19 @@ func applySchema(db *sql.DB) error {
 		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_sources_status_count_v1')`)     //nolint:errcheck
 	}
 
+	// Migration: add repeat column to observers (Cornmeister-specific; lost in upstream merge).
+	// The server's GetObservers/GetObserverByID SELECT this column; without it all
+	// observer API calls return a SQL error and observers appear offline.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observers_repeat_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding repeat column to observers...")
+		if _, err := db.Exec(`ALTER TABLE observers ADD COLUMN repeat TEXT DEFAULT NULL`); err != nil {
+			log.Printf("[migration] observers.repeat: %v (may already exist)", err)
+		}
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observers_repeat_v1')`) //nolint:errcheck
+		log.Println("[migration] observers.repeat column added")
+	}
+
 	return nil
 }
 
@@ -687,8 +701,8 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtUpsertObserver, err = s.db.Prepare(`
-		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor)
-		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, repeat)
+		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = COALESCE(?, name),
 			iata = COALESCE(?, iata),
@@ -701,6 +715,7 @@ func (s *Store) prepareStatements() error {
 			battery_mv = COALESCE(?, battery_mv),
 			uptime_secs = COALESCE(?, uptime_secs),
 			noise_floor = COALESCE(?, noise_floor),
+			repeat = COALESCE(?, repeat),
 			inactive = 0
 	`)
 	if err != nil {
@@ -955,6 +970,7 @@ type ObserverMeta struct {
 	RecvErrors    *int     // cumulative CRC/decode failures since boot
 	PacketsSent   *int     // cumulative packets sent since boot
 	PacketsRecv   *int     // cumulative packets received since boot
+	Repeat        *string  // observer repeat mode/interval (device-reported)
 }
 
 // UpsertObserver inserts or updates an observer with optional hardware metadata.
@@ -963,7 +979,7 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 	normalizedIATA := strings.TrimSpace(strings.ToUpper(iata))
 
 	var model, firmware, clientVersion, radio interface{}
-	var batteryMv, uptimeSecs, noiseFloor interface{}
+	var batteryMv, uptimeSecs, noiseFloor, repeat interface{}
 	if meta != nil {
 		if meta.Model != nil {
 			model = *meta.Model
@@ -986,11 +1002,14 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 		if meta.NoiseFloor != nil {
 			noiseFloor = *meta.NoiseFloor
 		}
+		if meta.Repeat != nil {
+			repeat = *meta.Repeat
+		}
 	}
 
 	_, err := s.stmtUpsertObserver.Exec(
-		id, name, normalizedIATA, now, now, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor,
-		name, normalizedIATA, now, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor,
+		id, name, normalizedIATA, now, now, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, repeat,
+		name, normalizedIATA, now, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, repeat,
 	)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)

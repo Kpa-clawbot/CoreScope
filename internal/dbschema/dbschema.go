@@ -58,6 +58,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureFromPubkeyColumn(rw, logf); err != nil {
 		return fmt.Errorf("ensure from_pubkey: %w", err)
 	}
+	if err := ensureObserverRepeatColumn(rw, logf); err != nil {
+		return fmt.Errorf("ensure observers.repeat: %w", err)
+	}
 	return nil
 }
 
@@ -93,6 +96,7 @@ func AssertReady(ro *sql.DB) error {
 	mustCol("observers", "inactive")
 	mustCol("observers", "last_packet_at")
 	mustCol("observers", "iata")
+	mustCol("observers", "repeat")
 	mustCol("nodes", "foreign_advert")
 	mustCol("inactive_nodes", "foreign_advert")
 	mustCol("transmissions", "from_pubkey")
@@ -294,6 +298,21 @@ func ensureFromPubkeyColumn(rw *sql.DB, logf Logger) error {
 	if _, err := rw.Exec("CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey)"); err != nil {
 		return err
 	}
+	return nil
+}
+
+func ensureObserverRepeatColumn(rw *sql.DB, logf Logger) error {
+	has, err := TableHasColumn(rw, "observers", "repeat")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+	if _, err := rw.Exec("ALTER TABLE observers ADD COLUMN repeat TEXT DEFAULT NULL"); err != nil {
+		return err
+	}
+	logf("[dbschema] added repeat column to observers")
 	return nil
 }
 
