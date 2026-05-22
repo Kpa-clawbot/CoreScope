@@ -40,10 +40,15 @@ type Server struct {
 	memStatsCache runtime.MemStats
 	memStatsCachedAt time.Time
 
-	// Cached /api/stats response — recomputed at most once every 10s
-	statsMu      sync.Mutex
-	statsCache   *StatsResponse
+	// Cached /api/stats response — recomputed at most once every 10s.
+	// statsComputing prevents thundering-herd: while one goroutine is
+	// computing a fresh response (potentially blocked on s.mu.RLock during
+	// eviction), all other goroutines serve the existing stale cache instead
+	// of queuing behind statsMu for 90+ seconds.
+	statsMu       sync.Mutex
+	statsCache    *StatsResponse
 	statsCachedAt time.Time
+	statsComputing bool
 
 	// Guards s.cfg.GeoFilter — read by ingest/handler goroutines, written by PUT handler
 	cfgMu sync.RWMutex
@@ -750,8 +755,19 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, cached)
 		return
 	}
-	// Hold the lock while computing so concurrent cache-misses queue here instead of
-	// all issuing DB queries simultaneously (thundering-herd prevention).
+	// If another goroutine is already computing a fresh response (potentially
+	// blocked on s.mu.RLock during a long eviction pass), serve the existing
+	// stale cache rather than queuing 80+ goroutines behind statsMu for 90s.
+	if s.statsComputing && s.statsCache != nil {
+		cached := s.statsCache
+		s.statsMu.Unlock()
+		writeJSON(w, cached)
+		return
+	}
+	// Mark computing and release the lock before the expensive work so other
+	// goroutines can serve stale cache (above) without blocking on statsMu.
+	s.statsComputing = true
+	s.statsMu.Unlock()
 
 	var stats *Stats
 	var err error
@@ -761,6 +777,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		stats, err = s.db.GetStats()
 	}
 	if err != nil {
+		s.statsMu.Lock()
+		s.statsComputing = false
+		s.statsMu.Unlock()
 		writeInternalError(w, "handleStats GetStats", err)
 		return
 	}
@@ -820,8 +839,10 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		GoSysMB:       mem.GoSysMB,
 	}
 
+	s.statsMu.Lock()
 	s.statsCache = resp
 	s.statsCachedAt = time.Now()
+	s.statsComputing = false
 	s.statsMu.Unlock()
 
 	writeJSON(w, resp)

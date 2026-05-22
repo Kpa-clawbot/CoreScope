@@ -3792,17 +3792,21 @@ func (s *PacketStore) evictionCandidateTxIDs() []int {
 // rpBatch may be nil (in which case resolved pubkey cleanup for byNode/nodeHashes is skipped).
 // Must be called under s.mu.Lock.
 func (s *PacketStore) EvictStaleWithRP(rpBatch map[int][]string) int {
-	return s.evictStaleInternal(rpBatch)
+	return s.evictStaleInternal(rpBatch, 0)
 }
 
 // EvictStale runs eviction, fetching resolved pubkeys inline (SQL under lock).
 // Prefer RunEviction() which batches the SQL outside the lock.
 // Must be called under s.mu.Lock.
 func (s *PacketStore) EvictStale() int {
-	return s.evictStaleInternal(nil)
+	return s.evictStaleInternal(nil, 0)
 }
 
-func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
+// evictStaleInternal performs one eviction pass under s.mu.Lock.
+// maxChunk caps the number of packets removed in this call (0 = unlimited,
+// governed only by the 25% safety cap). Callers that need chunked passes with
+// lock yields between chunks (i.e. RunEviction) pass a positive maxChunk.
+func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string, maxChunk int) int {
 	if s.retentionHours <= 0 && s.maxMemoryMB <= 0 {
 		return 0
 	}
@@ -3874,6 +3878,11 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 	}
 	if cutoffIdx > len(s.packets) {
 		cutoffIdx = len(s.packets)
+	}
+	// Chunk cap: callers (RunEviction) may request a smaller slice per lock
+	// acquisition so readers get a chance to proceed between batches.
+	if maxChunk > 0 && cutoffIdx > maxChunk {
+		cutoffIdx = maxChunk
 	}
 
 	evicting := s.packets[:cutoffIdx]
@@ -4064,9 +4073,13 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 
 // RunEviction acquires the write lock and runs eviction. Safe to call from
 // a goroutine. Returns evicted count.
-// Uses a two-phase approach: determines eviction candidates under lock,
-// releases lock for batch SQL fetch of resolved pubkeys, then re-acquires
-// lock for the actual eviction pass.
+//
+// Three-phase approach:
+//  1. Determine eviction candidates under a short-held write lock.
+//  2. Batch-fetch resolved pubkeys from SQL with no lock held.
+//  3. Evict in chunks of evictionChunkSize, releasing and re-acquiring the
+//     write lock between chunks. This yields to pending reads (e.g. /api/stats,
+//     packet ingest) so they are not starved for 90 s during large evictions.
 func (s *PacketStore) RunEviction() int {
 	// Phase 1: determine candidates under lock
 	s.mu.Lock()
@@ -4079,10 +4092,23 @@ func (s *PacketStore) RunEviction() int {
 		rpBatch = s.resolvedPubkeysForEvictionBatch(txIDs)
 	}
 
-	// Phase 3: actual eviction under write lock, using pre-fetched data
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.EvictStaleWithRP(rpBatch)
+	// Phase 3: chunked eviction — each iteration holds the write lock only
+	// for evictionChunkSize packets, then yields so readers can proceed.
+	// The inner evictStaleInternal re-evaluates the cutoff on every call so
+	// it naturally stops when memory and time thresholds are satisfied.
+	const evictionChunkSize = 2000
+	total := 0
+	for range 50 { // safety bound: at most 50 chunks (= 100 k packets)
+		s.mu.Lock()
+		n := s.evictStaleInternal(rpBatch, evictionChunkSize)
+		s.mu.Unlock()
+		total += n
+		if n == 0 {
+			break
+		}
+		runtime.Gosched() // yield between chunks so readers can acquire RLock
+	}
+	return total
 }
 
 // StartEvictionTicker starts a background goroutine that runs eviction every
