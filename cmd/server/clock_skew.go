@@ -772,16 +772,17 @@ func (s *PacketStore) computeFleetClockSkewForArea(area string) []*NodeClockSkew
 	}
 
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	// Build name/role lookup BEFORE acquiring store lock so that getCachedNodesAndPM
-	// cannot block on a DB query while holding s.mu (which would delay all writes).
+	// Pre-warm node cache BEFORE acquiring the store read lock. On a cache miss,
+	// getAllNodes() does a full SQLite SELECT which must not run under s.mu
+	// (a pending write lock would stall all readers including this query).
 	allNodes, _ := s.getCachedNodesAndPM()
 	nameMap := make(map[string]nodeInfo, len(allNodes))
 	for _, ni := range allNodes {
 		nameMap[ni.PublicKey] = ni
 	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	var results = []*NodeClockSkew{}
 	for pubkey := range s.byNode {
