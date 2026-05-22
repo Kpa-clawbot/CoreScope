@@ -35,6 +35,13 @@ type edgeRow struct {
 // The function returns a stop closure. Initial build runs synchronously
 // before the ticker starts so the server's first snapshot load picks
 // up real data instead of an empty table.
+//
+// Perf: each tick only scans observations newer than the previous build
+// time (minus a 2-interval overlap for safety). The initial build uses a
+// full prune-window lookback so the table is properly warm after restart.
+// This avoids the previous behaviour of scanning all observations on every
+// 60 s tick — which with 938 k edge rows caused a multi-minute SQLite write
+// lock that blocked packet insertion (observed in production logs).
 func (s *Store) StartNeighborEdgesBuilder(interval time.Duration) func() {
 	if interval <= 0 {
 		interval = NeighborEdgesBuilderInterval
@@ -42,9 +49,10 @@ func (s *Store) StartNeighborEdgesBuilder(interval time.Duration) func() {
 	stop := make(chan struct{})
 	done := make(chan struct{})
 
-	// Synchronous warm-up: a single pass so the first server load
-	// after process start sees a populated table.
-	if n, err := s.buildAndPersistNeighborEdges(); err != nil {
+	// Synchronous warm-up: full 5-day lookback so existing edges are
+	// preserved across restarts without needing a full all-time scan.
+	initialSince := time.Now().Add(-5 * 24 * time.Hour).Unix()
+	if n, err := s.buildAndPersistNeighborEdges(initialSince); err != nil {
 		log.Printf("[neighbor-build] initial build error: %v", err)
 	} else {
 		log.Printf("[neighbor-build] initial build: %d edges upserted", n)
@@ -55,10 +63,17 @@ func (s *Store) StartNeighborEdgesBuilder(interval time.Duration) func() {
 		defer close(done)
 		t := time.NewTicker(interval)
 		defer t.Stop()
+		// lastBuildAt seeds the incremental window. Subtract 2×interval so
+		// the very first tick overlaps the initial build and misses nothing.
+		lastBuildAt := time.Now().Add(-2 * interval)
 		for {
 			select {
 			case <-t.C:
-				if n, err := s.buildAndPersistNeighborEdges(); err != nil {
+				// Only scan observations newer than the previous build (minus a
+				// 10 s overlap to cover any clock skew or in-flight writes).
+				sinceUnix := lastBuildAt.Add(-10 * time.Second).Unix()
+				lastBuildAt = time.Now()
+				if n, err := s.buildAndPersistNeighborEdges(sinceUnix); err != nil {
 					log.Printf("[neighbor-build] tick error: %v", err)
 				} else if n > 0 {
 					log.Printf("[neighbor-build] %d edges upserted", n)
@@ -83,26 +98,45 @@ func (s *Store) StartNeighborEdgesBuilder(interval time.Duration) func() {
 // observer↔last-hop on all packet types) and upserts them into
 // neighbor_edges. Returns count of attempted upserts.
 //
+// sinceUnix limits the scan to observations whose timestamp (Unix epoch)
+// is strictly greater than the given value. Pass 0 to scan all time
+// (used only for the synchronous warm-up on startup).
+//
 // Resolution of hop-prefix → full pubkey is done via a one-shot
 // SELECT of (lowered) pubkey prefixes from nodes. Prefixes with
 // multiple candidates are skipped (matches the conservative
 // resolution rule in cmd/server/extractEdgesFromObs).
-func (s *Store) buildAndPersistNeighborEdges() (int, error) {
+func (s *Store) buildAndPersistNeighborEdges(sinceUnix int64) (int, error) {
 	prefixIdx, err := buildPrefixIndex(s.db)
 	if err != nil {
 		return 0, fmt.Errorf("build prefix index: %w", err)
 	}
 
-	rows, err := s.db.Query(`SELECT
-		t.payload_type,
-		t.decoded_json,
-		COALESCE(t.from_pubkey, ''),
-		COALESCE(o.path_json, ''),
-		COALESCE(obs.id, '') AS observer_id,
-		o.timestamp
-	FROM observations o
-	JOIN transmissions t ON t.id = o.transmission_id
-	LEFT JOIN observers obs ON obs.rowid = o.observer_idx`)
+	var rows *sql.Rows
+	if sinceUnix > 0 {
+		rows, err = s.db.Query(`SELECT
+			t.payload_type,
+			t.decoded_json,
+			COALESCE(t.from_pubkey, ''),
+			COALESCE(o.path_json, ''),
+			COALESCE(obs.id, '') AS observer_id,
+			o.timestamp
+		FROM observations o
+		JOIN transmissions t ON t.id = o.transmission_id
+		LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+		WHERE o.timestamp > ?`, sinceUnix)
+	} else {
+		rows, err = s.db.Query(`SELECT
+			t.payload_type,
+			t.decoded_json,
+			COALESCE(t.from_pubkey, ''),
+			COALESCE(o.path_json, ''),
+			COALESCE(obs.id, '') AS observer_id,
+			o.timestamp
+		FROM observations o
+		JOIN transmissions t ON t.id = o.transmission_id
+		LEFT JOIN observers obs ON obs.rowid = o.observer_idx`)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("scan observations: %w", err)
 	}
