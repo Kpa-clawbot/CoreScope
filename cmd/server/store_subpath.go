@@ -146,9 +146,16 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 	}
 	s.cacheMu.Unlock()
 
+	// Refresh the node cache BEFORE taking s.mu so a cache-miss SQL query
+	// never runs under the read lock (same pattern as computeAnalyticsSubpaths
+	// line ~236). Holding s.mu.RLock while doing a SQLite SELECT starves ingest
+	// writers (Go's sync.RWMutex queues new readers behind a pending writer)
+	// and can cascade the 18s subpath scan into blocking all concurrent
+	// /api/nodes, /api/stats, etc. requests.
+	_, pm := s.getCachedNodesAndPM()
+
 	// Single scan: bucket by hop length into per-group accumulators.
 	s.mu.RLock()
-	_, pm := s.getCachedNodesAndPM()
 	// Aggregate hop-disambiguation context across all packets so the
 	// resolver's tiers 1 and 2 light up even on this bulk-aggregate path
 	// (the index iterates raw subpath strings, not per-tx). See #1197.

@@ -72,11 +72,14 @@
     // Re-fetch broker sources every 30s so status-packet last_seen updates
     // are reflected even when no raw radio packets arrive (status packets
     // update observer_sources but don't emit a WS broadcast event).
+    // Also refreshes live packet-count stat cards (total/hour) so they don't
+    // freeze at page-load values.
     brokerTickTimer = setInterval(function () {
       if (!currentId) return;
       api('/observers/' + encodeURIComponent(currentId)).then(function (fresh) {
         lastObs = fresh;
         renderBrokerSources(fresh);
+        renderLiveStats(fresh);
       }).catch(function () {});
     }, 30000);
 
@@ -91,6 +94,7 @@
       api('/observers/' + encodeURIComponent(currentId), { ttl: 0 }).then(function (obs) {
         lastObs = obs;
         renderBrokerSources(obs);
+        renderLiveStats(obs);
       }).catch(function () {});
     });
   }
@@ -124,6 +128,16 @@
     } catch (e) {
       PageState.error(document.getElementById('obsDetailContent'), e, loadDetail);
     }
+  }
+
+  // Update packet-count stat cards in-place without a full re-render.
+  // Called by the 30s tick and the WS packet handler so these live values
+  // don't freeze at the page-load snapshot.
+  function renderLiveStats(obs) {
+    var totalEl = document.getElementById('obsStatTotalPackets');
+    var hourEl  = document.getElementById('obsStatPacketsHour');
+    if (totalEl) totalEl.textContent = (obs.packet_count || 0).toLocaleString();
+    if (hourEl)  hourEl.textContent  = (obs.packetsLastHour || 0).toLocaleString();
   }
 
   function renderBrokerSources(obs) {
@@ -232,11 +246,11 @@
         </div>
         <div class="stat-card">
           <div class="stat-label">Total Packets</div>
-          <div class="stat-value">${(obs.packet_count || 0).toLocaleString()}</div>
+          <div class="stat-value" id="obsStatTotalPackets">${(obs.packet_count || 0).toLocaleString()}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Packets/Hour</div>
-          <div class="stat-value">${(obs.packetsLastHour || 0).toLocaleString()}</div>
+          <div class="stat-value" id="obsStatPacketsHour">${(obs.packetsLastHour || 0).toLocaleString()}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">First Seen</div>
