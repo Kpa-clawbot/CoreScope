@@ -9,7 +9,11 @@
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
   function statusGreen() { return cssVar('--status-green') || '#22c55e'; }
 
-  let map, ws, nodesLayer, pathsLayer, animLayer, heatLayer, geoFilterLayer;
+  let map, ws, nodesLayer, pathsLayer, animLayer, heatLayer, geoFilterLayer, clickablePathsLayer;
+  let clickablePaths = [];
+  const CLICKABLE_PATH_TTL_MS = 30000;
+  const CLICKABLE_PATH_MAX = 50;
+  const CLICKABLE_POPUP_DISMISS_MS = 20000;
   let nodeMarkers = {};
   let nodeData = {};
   let packetCount = 0;
@@ -53,6 +57,24 @@
   }
   function setObserverIataMap(m) { observerIataMap = m || {}; }
 
+  // #1189 R2 mesh-operator fix: live feed must show the observer's IATA pill
+  // alongside the existing 👁 N badge so operators on /live can tell SAME-
+  // region from CROSS-region reception at a glance (same affordance as the
+  // /packets table). Mirrors `obsIataBadge` in public/packets.js — kept as a
+  // local helper for now (live.js and packets.js are separate IIFEs with no
+  // shared module). TODO: extract `obsIataBadge` into shared packet-helpers.js
+  // and have both surfaces import it.
+  function obsIataBadgeHtml(pkt) {
+    if (!pkt) return '';
+    var iata = pkt.observer_iata;
+    if (!iata && pkt.observer_id) iata = observerIataMap && observerIataMap[pkt.observer_id];
+    if (!iata) return '';
+    var esc = (typeof escapeHtml === 'function')
+      ? escapeHtml(iata)
+      : String(iata).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    return '<span class="badge-iata" style="font-size:10px;margin-left:4px">' + esc + '</span>';
+  }
+
   /**
    * Build observer_id → IATA map from the /api/observers response.
    * The endpoint returns `{ observers: [...], server_time: "..." }`
@@ -74,6 +96,8 @@
     }
     return m;
   }
+  const _savedSpeed = parseFloat(localStorage.getItem('live-vcr-speed'));
+  const _initialSpeed = [0.25, 0.5, 1, 2, 4, 8].includes(_savedSpeed) ? _savedSpeed : 1;
   let rainCanvas = null, rainCtx = null, rainDrops = [], rainRAF = null;
   const propagationBuffer = new Map(); // hash -> {timer, packets[]}
   let _onResize = null;
@@ -103,7 +127,9 @@
 
   const TYPE_COLORS = window.TYPE_COLORS || {
     ADVERT: '#22c55e', GRP_TXT: '#3b82f6', TXT_MSG: '#f59e0b', ACK: '#6b7280',
-    REQUEST: '#a855f7', RESPONSE: '#06b6d4', TRACE: '#ec4899', PATH: '#14b8a6'
+    REQUEST: '#a855f7', RESPONSE: '#06b6d4', TRACE: '#ec4899', PATH: '#14b8a6',
+    ANON_REQ: '#f43f5e', GRP_DATA: '#8b5cf6', MULTIPART: '#0d9488',
+    CONTROL: '#b45309', RAW_CUSTOM: '#c026d3'
   };
 
   const PAYLOAD_ICONS = {
@@ -218,7 +244,32 @@
         // Set live-page height from JS — most reliable across all mobile browsers
         const page = document.querySelector('.live-page');
         const appEl = document.getElementById('app');
-        const h = window.innerHeight;
+        // #1267: the CSS rule for .live-page subtracts --bottom-nav-reserve
+        // (0px desktop, 56px+safe-area at ≤768px) so the fixed .bottom-nav
+        // (z-index 1200) does not occlude the VCR bar (position:absolute;
+        // bottom:0; z-index 1000). Mirror that subtraction here — otherwise
+        // this JS override clobbers the CSS height with raw window.innerHeight
+        // and the VCR bar slides under the bottom-nav (issue #1267).
+        // Prefer the bottom-nav's measured rendered height so we also cover
+        // the 1px top border and any visual chrome the --bottom-nav-reserve
+        // token doesn't account for; fall back to the token-resolved value.
+        const reserve = (() => {
+          const bn = document.querySelector('.bottom-nav');
+          if (bn) {
+            const cs = getComputedStyle(bn);
+            if (cs.display !== 'none') {
+              const r = bn.getBoundingClientRect().height;
+              if (r > 0) return r;
+            }
+          }
+          const probe = document.createElement('div');
+          probe.style.cssText = 'position:absolute;visibility:hidden;height:var(--bottom-nav-reserve,0px);pointer-events:none;';
+          (document.body || document.documentElement).appendChild(probe);
+          const px = probe.getBoundingClientRect().height || 0;
+          probe.remove();
+          return px;
+        })();
+        const h = Math.max(0, window.innerHeight - reserve);
         if (page) page.style.height = h + 'px';
         if (appEl) appEl.style.height = h + 'px';
         if (map) {
@@ -484,10 +535,63 @@
     if (VCR.replayTimer) { clearTimeout(VCR.replayTimer); VCR.replayTimer = null; }
   }
 
+  function buildClickablePathPopupHtml(typeName, color, hopNames, tsMs, hash) {
+    // tsMs is packet receive time — "ago" is relative to when the packet arrived, not when the animation ended
+    const secsAgo = Math.round((Date.now() - tsMs) / 1000);
+    const timeStr = secsAgo < 60 ? secsAgo + 's ago' : Math.round(secsAgo / 60) + 'm ago';
+    const chain = hopNames.join(' → ');
+    const link = hash ? `<a class="lc-path-link" href="#/packets/${hash}" style="color:${color}">full detail →</a>` : '';
+    return `<div class="lc-path-popup">
+      <span class="lc-path-badge" style="background:${color}">${typeName}</span>
+      <div class="lc-path-time">${timeStr}</div>
+      <div class="lc-path-chain">${chain}</div>
+      ${link ? '<div class="lc-path-link-wrap">' + link + '</div>' : ''}
+    </div>`;
+  }
+
+  function pruneClickablePaths(now) {
+    const cutoff = now - CLICKABLE_PATH_TTL_MS;
+    for (let i = clickablePaths.length - 1; i >= 0; i--) {
+      if (clickablePaths[i].addedAt < cutoff) {
+        try { clickablePaths[i].poly.remove(); } catch (_) {}
+        clickablePaths.splice(i, 1);
+      }
+    }
+    while (clickablePaths.length > CLICKABLE_PATH_MAX) {
+      try { clickablePaths[0].poly.remove(); } catch (_) {}
+      clickablePaths.shift();
+    }
+  }
+
+  function registerClickablePath(latLngs, typeName, color, hopNames, tsMs, hash) {
+    if (!clickablePathsLayer) return;
+    const poly = L.polyline(latLngs, { weight: 12, opacity: 0, interactive: true }).addTo(clickablePathsLayer);
+    const entry = { addedAt: Date.now(), poly };
+    clickablePaths.push(entry);
+    pruneClickablePaths(Date.now());
+    let dismissTimer = null;
+    poly.on('click', function(e) {
+      if (dismissTimer) clearTimeout(dismissTimer);
+      const html = buildClickablePathPopupHtml(typeName, color, hopNames, tsMs, hash);
+      L.popup({ maxWidth: 280, className: 'path-info-popup' })
+        .setLatLng(e.latlng)
+        .setContent(html)
+        .openOn(map);
+      dismissTimer = setTimeout(() => { if (map) map.closePopup(); }, CLICKABLE_POPUP_DISMISS_MS);
+    });
+  }
+
+  function speedLabel(s) {
+    if (s === 0.25) return '¼x';
+    if (s === 0.5) return '½x';
+    return s + 'x';
+  }
+
   function vcrSpeedCycle() {
-    const speeds = [1, 2, 4, 8];
+    const speeds = [0.25, 0.5, 1, 2, 4, 8];
     const idx = speeds.indexOf(VCR.speed);
     VCR.speed = speeds[(idx + 1) % speeds.length];
+    localStorage.setItem('live-vcr-speed', VCR.speed);
     updateVCRUI();
     // If replaying, restart with new speed
     if (VCR.mode === 'REPLAY' && VCR.replayTimer) {
@@ -623,7 +727,7 @@
       if (pauseBtn) { pauseBtn.textContent = '⏸'; pauseBtn.setAttribute('aria-label', 'Pause'); }
       if (missedEl) missedEl.classList.add('hidden');
     }
-    if (speedBtn) { speedBtn.textContent = VCR.speed + 'x'; speedBtn.setAttribute('aria-label', 'Speed ' + VCR.speed + 'x'); }
+    if (speedBtn) { speedBtn.textContent = speedLabel(VCR.speed); speedBtn.setAttribute('aria-label', 'Speed ' + speedLabel(VCR.speed)); }
     updateVCRLcd();
   }
 
@@ -957,6 +1061,7 @@
               <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
             </div>
           </div>
+          <div id="liveAreaFilter"></div>
           <button class="live-controls-toggle" data-live-controls-toggle id="liveControlsToggle"
                   aria-expanded="false" aria-controls="liveControlsBody"
                   aria-label="Show live controls">⚙</button>
@@ -992,10 +1097,23 @@
             <li><span class="live-dot" style="background:${TYPE_COLORS.GRP_TXT}" aria-hidden="true"></span> Message — Group text</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.TXT_MSG}" aria-hidden="true"></span> Direct — Direct message</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.REQUEST}" aria-hidden="true"></span> Request — Data request</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.RESPONSE}" aria-hidden="true"></span> Response — Data response</li>
             <li><span class="live-dot" style="background:${TYPE_COLORS.TRACE}" aria-hidden="true"></span> Trace — Route trace</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.PATH}" aria-hidden="true"></span> Path — Path discovery</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.ANON_REQ}" aria-hidden="true"></span> Anon Req — Anonymous request</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.GRP_DATA}" aria-hidden="true"></span> Grp Data — Group datagram</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.MULTIPART}" aria-hidden="true"></span> Multipart — Multi-fragment payload</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.CONTROL}" aria-hidden="true"></span> Control — Control plane</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.RAW_CUSTOM}" aria-hidden="true"></span> Raw Custom — Application-defined payload</li>
+            <li><span class="live-dot" style="background:${TYPE_COLORS.ACK}" aria-hidden="true"></span> Ack / Other — Acknowledgment or unknown type</li>
           </ul>
           <h3 class="legend-title" style="margin-top:8px">NODE ROLES</h3>
           <ul class="legend-list" id="roleLegendList"></ul>
+          <h3 class="legend-title" style="margin-top:8px">MARKER STYLES</h3>
+          <ul class="legend-list">
+            <li><span class="live-ring live-ring--repeater" aria-hidden="true"></span> Bright white ring — repeater</li>
+            <li><span class="live-ring live-ring--other" aria-hidden="true"></span> Faded ring — companion / sensor / room</li>
+          </ul>
           </div>
         </div>
 
@@ -1067,8 +1185,11 @@
     nodesLayer = L.layerGroup().addTo(map);
     pathsLayer = L.layerGroup().addTo(map);
     animLayer = L.layerGroup().addTo(map);
+    clickablePathsLayer = L.layerGroup().addTo(map);
 
     injectSVGFilters();
+    AreaFilter.init(document.getElementById('liveAreaFilter'));
+    AreaFilter.onChange(function () { loadNodes(); });
     await loadNodes();
     showHeatMap();
     connectWS();
@@ -1918,6 +2039,11 @@
           <table style="font-size:12px;width:100%;border-collapse:collapse;">
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Last Seen</td><td>${lastSeen}</td></tr>
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Adverts</td><td>${n.advert_count || 0}</td></tr>
+            ${'default_scope' in n ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Scope</td><td>${
+  n.default_scope === null ? '<span style="color:var(--text-muted)">—</span>'
+  : n.default_scope === '' ? '<span style="color:var(--text-muted)">unknown scope</span>'
+  : `<code style="color:var(--accent)">${escapeHtml(n.default_scope)}</code>`
+}</td></tr>` : ''}
             ${hasLoc ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Location</td><td>${n.lat.toFixed(5)}, ${n.lon.toFixed(5)}</td></tr>` : ''}
             ${stats.avgSnr != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Avg SNR</td><td>${stats.avgSnr.toFixed(1)} dB</td></tr>` : ''}
             ${stats.avgHops != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Avg Hops</td><td>${stats.avgHops.toFixed(1)}</td></tr>` : ''}
@@ -1991,9 +2117,17 @@
 
   async function loadNodes(beforeTs) {
     try {
+      const aqs = AreaFilter.areaQueryString();
       const url = beforeTs
-        ? `/api/nodes?limit=2000&before=${encodeURIComponent(new Date(beforeTs).toISOString())}`
-        : '/api/nodes?limit=2000';
+        ? `/api/nodes?limit=2000&before=${encodeURIComponent(new Date(beforeTs).toISOString())}${aqs}`
+        : `/api/nodes?limit=2000${aqs}`;
+      // Full reload (no beforeTs): clear existing markers so switching areas
+      // removes nodes that no longer belong to the selected area.
+      if (!beforeTs) {
+        if (nodesLayer) nodesLayer.clearLayers();
+        nodeMarkers = {};
+        nodeData = {};
+      }
       const resp = await fetch(url);
       const nodes = await resp.json();
       const list = Array.isArray(nodes) ? nodes : (nodes.nodes || []);
@@ -2183,6 +2317,7 @@
       const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
       const hopStr = longestHops.length ? `<span class="feed-hops">${longestHops.length}⇢</span>` : '';
       const obsBadge = group.count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${group.count}</span>` : '';
+      const iataBadge = obsIataBadgeHtml(pkt);
 
       var _ccPayload = (pkt.decoded || {}).payload || {};
       var _ccChan1 = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload.channel || null) : null;
@@ -2197,7 +2332,7 @@
       item.innerHTML = `
         <span class="feed-icon" style="color:${color}">${icon}</span>
         <span class="feed-type" style="color:${color}">${typeName}</span>
-        ${dotHtml1}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+        ${dotHtml1}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}
         <span class="feed-text">${escapeHtml(preview)}</span>
         <span class="feed-time" data-ts="${group.latestTs || Date.now()}">${formatLiveTimestampHtml(group.latestTs || Date.now())}</span>
       `;
@@ -2320,10 +2455,14 @@
     for (var aKey in nodeActivity) {
       if (!(aKey in nodeData)) delete nodeActivity[aKey];
     }
+    pruneClickablePaths(Date.now());
   }
 
   // Expose for testing
   window._livePruneStaleNodes = pruneStaleNodes;
+  window._liveBuildClickablePathPopupHtml = buildClickablePathPopupHtml;
+  window._livePruneClickablePaths = pruneClickablePaths;
+  window._liveClickablePaths = clickablePaths;
   window._liveNodeMarkers = function() { return nodeMarkers; };
   window._liveNodeData = function() { return nodeData; };
   window._liveNodeActivity = function() { return nodeActivity; };
@@ -2347,6 +2486,7 @@
   window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
   window._liveResolveHopPositions = resolveHopPositions;
   window._liveVcrSpeedCycle = vcrSpeedCycle;
+  window._liveSpeedLabel = speedLabel;
   window._liveVcrPause = vcrPause;
   window._liveVcrResumeLive = vcrResumeLive;
   window._liveVcrSetMode = vcrSetMode;
@@ -2552,6 +2692,7 @@
 
     // --- Animate all unique paths simultaneously ---
     // First path gets audio sync hook, rest are visual-only
+    var pktMeta = { hash: first.hash, ts: first._ts || Date.now() };
     var firstPathDone = false;
     for (var ai = 0; ai < allPaths.length; ai++) {
       var onHop = null;
@@ -2570,7 +2711,7 @@
         var completedPositions = allPaths[ai].hopPositions.slice(0, hopsCompleted + 1);
         var remainingPositions = allPaths[ai].hopPositions.slice(hopsCompleted);
         if (completedPositions.length >= 2) {
-          animatePath(completedPositions, typeName, color, allPaths[ai].raw, onHop, first.hash);
+          animatePath(completedPositions, typeName, color, allPaths[ai].raw, onHop, pktMeta);
         } else if (completedPositions.length === 1) {
           pulseNode(completedPositions[0].key, completedPositions[0].pos, typeName);
         }
@@ -2578,7 +2719,7 @@
           drawDashedPath(remainingPositions, color);
         }
       } else {
-        animatePath(allPaths[ai].hopPositions, typeName, color, allPaths[ai].raw, onHop, first.hash);
+        animatePath(allPaths[ai].hopPositions, typeName, color, allPaths[ai].raw, onHop, pktMeta);
       }
     }
   }
@@ -2687,7 +2828,7 @@
     return raw.filter(h => h.pos != null);
   }
 
-  function animatePath(hopPositions, typeName, color, rawHex, onHop, hash) {
+  function animatePath(hopPositions, typeName, color, rawHex, onHop, pktMeta) {
     if (!animLayer || !pathsLayer) return;
     if (activeAnims >= MAX_CONCURRENT_ANIMS) return;
     activeAnims++;
@@ -2699,6 +2840,14 @@
         activeAnims = Math.max(0, activeAnims - 1);
         const countEl = document.getElementById('liveAnimCount');
         if (countEl) countEl.textContent = activeAnims;
+        if (pktMeta && hopPositions.length >= 2) {
+          const latLngs = [], hopNames = [];
+          for (const hp of hopPositions) {
+            latLngs.push(hp.pos);
+            hopNames.push(hp.name || (hp.key ? hp.key.slice(0, 8) : '?'));
+          }
+          registerClickablePath(latLngs, typeName, color, hopNames, pktMeta.ts, pktMeta.hash);
+        }
         return;
       }
       if (!animLayer) return;
@@ -3006,7 +3155,7 @@
 
     const matrixGreen = '#00ff41';
     const TRAIL_LEN = Math.min(6, bytes.length);
-    const DURATION_MS = 1100; // total hop duration
+    const DURATION_MS = 1100 / VCR.speed;
     const CHAR_INTERVAL = 0.06; // spawn a char every 6% of progress
     const charMarkers = [];
     let nextCharAt = CHAR_INTERVAL;
@@ -3138,8 +3287,9 @@
         return;
       }
       const elapsed = now - lastStep;
-      if (elapsed >= 33) {
-        const ticks = Math.min(Math.floor(elapsed / 33), 4);
+      const stepMs = 33 / VCR.speed;
+      if (elapsed >= stepMs) {
+        const ticks = Math.min(Math.floor(elapsed / stepMs), 4);
         lastStep = now;
         for (let t = 0; t < ticks && step < steps; t++) {
           step++;
@@ -3251,6 +3401,7 @@
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = pkt.observation_count > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${pkt.observation_count}</span>` : '';
+    const iataBadge = obsIataBadgeHtml(pkt);
     const anomalyIcon = (pkt.decoded && pkt.decoded.anomaly) ? '<span title="Anomaly detected" style="margin-left:4px">⚠️</span>' : '';
     var _ccPayload2 = (pkt.decoded || {}).payload || {};
     var _ccChan = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload2.channel || null) : null;
@@ -3270,7 +3421,7 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${anomalyIcon}
+      ${dotHtml}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}${anomalyIcon}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
@@ -3337,6 +3488,7 @@
     const preview = text ? ' ' + (text.length > 35 ? text.slice(0, 35) + '…' : text) : '';
     const hopStr = hops.length ? `<span class="feed-hops">${hops.length}⇢</span>` : '';
     const obsBadge = incomingObs > 1 ? `<span class="badge badge-obs" style="font-size:10px;margin-left:4px">👁 ${incomingObs}</span>` : '';
+    const iataBadge = obsIataBadgeHtml(pkt);
     var _ccPayload3 = (pkt.decoded || {}).payload || {};
     var _ccChan3 = (typeName === 'GRP_TXT' || typeName === 'CHAN') ? (_ccPayload3.channel || null) : null;
     var dotHtml3 = _ccChan3 ? _feedColorDot(_ccChan3) : '';
@@ -3357,7 +3509,7 @@
     item.innerHTML = `
       <span class="feed-icon" style="color:${color}">${icon}</span>
       <span class="feed-type" style="color:${color}">${typeName}</span>
-      ${dotHtml3}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}
+      ${dotHtml3}${transportBadge(pkt.route_type)}${hopStr}${obsBadge}${iataBadge}
       <span class="feed-text">${escapeHtml(preview)}</span>
       <span class="feed-time" data-ts="${pkt._ts || Date.now()}">${formatLiveTimestampHtml(pkt._ts || Date.now())}</span>
     `;
@@ -3471,7 +3623,8 @@
       }
       _navCleanup = null;
     }
-    nodesLayer = pathsLayer = animLayer = heatLayer = geoFilterLayer = null;
+    nodesLayer = pathsLayer = animLayer = heatLayer = geoFilterLayer = clickablePathsLayer = null;
+    clickablePaths = [];
     stopMatrixRain();
     nodeMarkers = {}; nodeData = {};
     activeNodeDetailKey = null;
@@ -3479,7 +3632,7 @@
     packetCount = 0; activeAnims = 0;
     nodeActivity = {}; pktTimestamps = [];
     feedDedup.clear();
-    VCR.buffer = []; VCR.playhead = -1; VCR.mode = 'LIVE'; VCR.missedCount = 0; VCR.speed = 1; VCR.replayGen = 0;
+    VCR.buffer = []; VCR.playhead = -1; VCR.mode = 'LIVE'; VCR.missedCount = 0; VCR.speed = _initialSpeed; VCR.replayGen = 0;
   }
 
   let _themeRefreshHandler = null;

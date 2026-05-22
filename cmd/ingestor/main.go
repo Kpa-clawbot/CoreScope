@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
@@ -62,6 +63,15 @@ func main() {
 	// Async backfill: path_json from raw_hex (#888) — must not block MQTT startup
 	store.BackfillPathJSONAsync()
 
+	// Soft-delete blacklisted observers (#1287 — moved from cmd/server).
+	if len(cfg.ObserverBlacklist) > 0 {
+		store.SoftDeleteBlacklistedObservers(cfg.ObserverBlacklist)
+	}
+
+	// Async backfill: from_pubkey for legacy ADVERT rows (#1143).
+	// Moved from cmd/server in #1287. Best-effort; must not block MQTT.
+	go store.BackfillFromPubkey(5000, 100*time.Millisecond, nil)
+
 	// Check auto_vacuum mode and optionally migrate (#919)
 	store.CheckAutoVacuum(cfg)
 
@@ -77,6 +87,19 @@ func main() {
 	metricsDays := cfg.MetricsRetentionDays()
 	store.PruneOldMetrics(metricsDays)
 	store.PruneDroppedPackets(metricsDays)
+
+	// Packet (transmissions) retention: previously lived in cmd/server,
+	// moved to ingestor in #1283 to eliminate cross-process write
+	// contention (SQLITE_BUSY). 0 = disabled.
+	packetDays := cfg.PacketDaysOrZero()
+	if packetDays > 0 {
+		if n, err := store.PruneOldPackets(packetDays); err != nil {
+			log.Printf("[prune] error: %v", err)
+		} else if n > 0 {
+			log.Printf("[prune] startup pruned %d transmissions older than %d days", n, packetDays)
+		}
+	}
+
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
@@ -111,6 +134,44 @@ func main() {
 		}
 	}()
 
+	// Daily ticker for transmission retention (#1283).
+	var packetRetentionTicker *time.Ticker
+	if packetDays > 0 {
+		packetRetentionTicker = time.NewTicker(24 * time.Hour)
+		go func() {
+			for range packetRetentionTicker.C {
+				if n, err := store.PruneOldPackets(packetDays); err != nil {
+					log.Printf("[prune] error: %v", err)
+				} else if n > 0 {
+					store.RunIncrementalVacuum(vacuumPages)
+				}
+			}
+		}()
+		log.Printf("[prune] auto-prune enabled: packets older than %d days will be removed daily", packetDays)
+	}
+
+	// Daily neighbor_edges retention (#1287 — moved from cmd/server).
+	{
+		nDays := cfg.NeighborEdgesDaysOrDefault()
+		neighborPruneTicker := time.NewTicker(24 * time.Hour)
+		go func() {
+			time.Sleep(4 * time.Minute) // stagger
+			if n, err := store.PruneNeighborEdges(nDays); err != nil {
+				log.Printf("[neighbor-prune] error: %v", err)
+			} else if n > 0 {
+				log.Printf("[neighbor-prune] startup pruned %d edges older than %d days", n, nDays)
+			}
+			for range neighborPruneTicker.C {
+				if n, err := store.PruneNeighborEdges(nDays); err != nil {
+					log.Printf("[neighbor-prune] error: %v", err)
+				} else if n > 0 {
+					log.Printf("[neighbor-prune] pruned %d edges older than %d days", n, nDays)
+				}
+			}
+		}()
+		log.Printf("[neighbor-prune] auto-prune enabled: edges older than %d days", nDays)
+	}
+
 	// Periodic stats logging (every 5 minutes)
 	statsTicker := time.NewTicker(5 * time.Minute)
 	go func() {
@@ -119,9 +180,29 @@ func main() {
 		}
 	}()
 
+	// Prune-request queue (#669 M4 / #738): the read-only server enqueues
+	// geo-prune requests as marker files; the ingestor (which holds the
+	// write handle) executes the DELETEs. Process on startup, then every
+	// 15 seconds — short enough for a one-click UX, long enough to avoid
+	// useless wake-ups.
+	store.RunPendingPruneRequests()
+	pruneQueueTicker := time.NewTicker(15 * time.Second)
+	go func() {
+		for range pruneQueueTicker.C {
+			store.RunPendingPruneRequests()
+		}
+	}()
+
 	// Per-second stats file writer for the server's /api/perf/write-sources
 	// endpoint (#1120). Best-effort; never fatal.
 	StartStatsFileWriter(store, time.Second)
+
+	// Neighbor-edges builder (#1287 — Option 4): ingestor owns
+	// neighbor_edges writes. Runs every 60s. Server reads the snapshot
+	// via cmd/server/neighbor_recomputer.go on the same cadence.
+	stopNeighborBuilder := store.StartNeighborEdgesBuilder(NeighborEdgesBuilderInterval)
+	defer stopNeighborBuilder()
+	log.Printf("[neighbor-build] enabled (interval=%s)", NeighborEdgesBuilderInterval)
 
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {
@@ -129,6 +210,9 @@ func main() {
 	} else {
 		log.Printf("No channel keys loaded — GRP_TXT packets will not be decrypted")
 	}
+
+	regionKeys := loadRegionKeys(cfg)
+	store.BackfillDefaultScopeAsync(regionKeys)
 
 	// Connect to each MQTT source
 	var clients []mqtt.Client
@@ -184,7 +268,7 @@ func main() {
 		// Capture source for closure
 		src := source
 		opts.SetDefaultPublishHandler(func(c mqtt.Client, m mqtt.Message) {
-			handleMessage(store, tag, src, m, channelKeys, cfg)
+			handleMessage(store, tag, src, m, channelKeys, regionKeys, cfg)
 		})
 
 		client := mqtt.NewClient(opts)
@@ -253,7 +337,11 @@ func main() {
 	log.Println("Shutting down...")
 	retentionTicker.Stop()
 	metricsRetentionTicker.Stop()
+	if packetRetentionTicker != nil {
+		packetRetentionTicker.Stop()
+	}
 	statsTicker.Stop()
+	pruneQueueTicker.Stop()
 	stopWatchdog()
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
@@ -314,7 +402,7 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 	return opts
 }
 
-func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, channelKeys map[string]string, cfg *Config) {
+func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, channelKeys map[string]string, regionKeys map[string][]byte, cfg *Config) {
 	// Liveness watchdog (#1212): record receipt before any processing so a
 	// slow handler still counts as "source is alive". Cheap atomic store.
 	markLivenessForTag(tag, time.Now())
@@ -532,7 +620,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				log.Printf("MQTT [%s] foreign advert: node=%s name=%s lat=%.4f lon=%.4f observer=%s",
 					tag, truncPK, decoded.Payload.Name, lat, lon, firstNonEmpty(mqttMsg.Origin, observerID))
 			}
-			pktData := BuildPacketData(mqttMsg, decoded, observerID, region)
+			pktData := BuildPacketData(mqttMsg, decoded, observerID, region, regionKeys)
 			pktData.Foreign = foreign
 			isNew, err := store.InsertTransmission(pktData)
 			if err != nil {
@@ -558,10 +646,16 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 					log.Printf("MQTT [%s] node telemetry update error: %v", tag, err)
 				}
 			}
+			// Update default_scope when advert carries a matched transport scope (#899)
+			if pktData.IsTransportScoped {
+				if err := store.UpdateNodeDefaultScope(decoded.Payload.PubKey, pktData.ScopeName); err != nil {
+					log.Printf("MQTT [%s] node default_scope update error: %v", tag, err)
+				}
+			}
 		} else {
 			// Non-ADVERT packets: store normally (routing/channel messages from
 			// in-area observers are relevant regardless of relay hop origin).
-			pktData := BuildPacketData(mqttMsg, decoded, observerID, region)
+			pktData := BuildPacketData(mqttMsg, decoded, observerID, region, regionKeys)
 			if _, err := store.InsertTransmission(pktData); err != nil {
 				log.Printf("MQTT [%s] db insert error: %v", tag, err)
 			}
@@ -1067,6 +1161,55 @@ func loadChannelKeys(cfg *Config, configPath string) map[string]string {
 	}
 
 	return keys
+}
+
+func loadRegionKeys(cfg *Config) map[string][]byte {
+	keys := make(map[string][]byte)
+	for _, raw := range cfg.HashRegions {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			log.Printf("[regions] skipping empty hashRegions entry")
+			continue
+		}
+		if !strings.HasPrefix(name, "#") {
+			name = "#" + name
+		}
+		if _, exists := keys[name]; exists {
+			log.Printf("[regions] duplicate region %q ignored", name)
+			continue
+		}
+		h := sha256.Sum256([]byte(name))
+		keys[name] = h[:16]
+	}
+	if len(keys) > 0 {
+		log.Printf("[regions] %d region key(s) loaded", len(keys))
+	}
+	return keys
+}
+
+// matchScope performs one HMAC-SHA256 per configured region. Expected
+// len(regionKeys) ≤ 50; beyond that, consider a pre-indexed lookup table.
+func matchScope(regionKeys map[string][]byte, payloadType byte, payloadRaw []byte, code1 string) string {
+	if code1 == "0000" || len(regionKeys) == 0 || len(payloadRaw) == 0 {
+		return ""
+	}
+	for name, key := range regionKeys {
+		mac := hmac.New(sha256.New, key)
+		mac.Write([]byte{payloadType})
+		mac.Write(payloadRaw)
+		hmacBytes := mac.Sum(nil)
+		code := uint16(hmacBytes[0]) | uint16(hmacBytes[1])<<8
+		if code == 0 {
+			code = 1
+		} else if code == 0xFFFF {
+			code = 0xFFFE
+		}
+		codeBytes := [2]byte{byte(code & 0xFF), byte(code >> 8)}
+		if strings.ToUpper(hex.EncodeToString(codeBytes[:])) == code1 {
+			return name
+		}
+	}
+	return ""
 }
 
 // Version info (set via ldflags)

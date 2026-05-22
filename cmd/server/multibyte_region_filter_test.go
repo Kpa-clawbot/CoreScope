@@ -66,14 +66,14 @@ func TestMultiByteCapability_RegionFiltered_PreservesConfirmedStatus(t *testing.
 	store.Load()
 
 	// Sanity: unfiltered view exposes the field.
-	unfiltered := store.GetAnalyticsHashSizes("")
+	unfiltered := store.GetAnalyticsHashSizes("", "")
 	if _, ok := unfiltered["multiByteCapability"]; !ok {
 		t.Fatal("unfiltered result missing multiByteCapability — test setup is wrong")
 	}
 
 	// The actual assertion: region-filtered view MUST also expose the field
 	// AND must report Node A as "confirmed", not "unknown".
-	result := store.GetAnalyticsHashSizes("JKG")
+	result := store.GetAnalyticsHashSizes("JKG", "")
 	capsRaw, ok := result["multiByteCapability"]
 	if !ok {
 		t.Fatalf("expected multiByteCapability in region=JKG result, got keys: %v", keysOf(result))

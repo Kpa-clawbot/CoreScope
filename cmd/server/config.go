@@ -2,15 +2,27 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
 )
+
+// AreaEntry defines a geographic area by polygon or bounding box.
+type AreaEntry struct {
+	Label   string       `json:"label"`
+	Polygon [][2]float64 `json:"polygon,omitempty"`
+	LatMin  *float64     `json:"latMin,omitempty"`
+	LatMax  *float64     `json:"latMax,omitempty"`
+	LonMin  *float64     `json:"lonMin,omitempty"`
+	LonMax  *float64     `json:"lonMax,omitempty"`
+}
 
 // Config mirrors the Node.js config.json structure (read-only fields).
 type Config struct {
@@ -69,6 +81,8 @@ type Config struct {
 
 	GeoFilter *GeoFilterConfig `json:"geo_filter,omitempty"`
 
+	Areas map[string]AreaEntry `json:"areas,omitempty"`
+
 	Timestamps *TimestampConfig `json:"timestamps,omitempty"`
 
 	// CORSAllowedOrigins is the list of origins permitted to make cross-origin
@@ -87,8 +101,12 @@ type Config struct {
 	obsBlacklistSetCached map[string]bool
 	obsBlacklistOnce      sync.Once
 
+	Compression   *CompressionConfig   `json:"compression,omitempty"`
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
+
+	// Analytics steady-state background recompute (issue #1240).
+	Analytics *AnalyticsConfig `json:"analytics,omitempty"`
 
 	// BatteryThresholds: voltage cutoffs for low/critical alerts (#663).
 	BatteryThresholds *BatteryThresholdsConfig `json:"batteryThresholds,omitempty"`
@@ -120,6 +138,39 @@ func IsWeakAPIKey(key string) bool {
 		return true
 	}
 	return false
+}
+
+// CompressionConfig controls HTTP gzip and WebSocket permessage-deflate compression.
+// Both are disabled by default — enable only when the upstream proxy does not already compress.
+type CompressionConfig struct {
+	GZip      bool `json:"gzip"`
+	Websocket bool `json:"websocket"`
+
+	// Level is the gzip compression level (1=BestSpeed … 9=BestCompression).
+	// 0 / out-of-range means "use compress/gzip.DefaultCompression".
+	Level int `json:"level,omitempty"`
+
+	// MinSizeBytes is an advisory minimum response size below which gzip
+	// would not pay off. Currently informational — kept here so operators
+	// can express intent and so future small-body fast-paths can use it.
+	MinSizeBytes int `json:"minSizeBytes,omitempty"`
+
+	// ContentTypes overrides the default compressible-MIME allow-list. When
+	// empty, a conservative default (application/json, text/html, text/css,
+	// application/javascript, text/plain, image/svg+xml, application/xml)
+	// is used. Already-compressed types (image/*, video/*, application/zip,
+	// application/x-gzip, …) are always skipped.
+	ContentTypes []string `json:"contentTypes,omitempty"`
+}
+
+// GZipEnabled returns true when HTTP gzip compression is explicitly enabled.
+func (c *Config) GZipEnabled() bool {
+	return c.Compression != nil && c.Compression.GZip
+}
+
+// WSCompressionEnabled returns true when WebSocket permessage-deflate is explicitly enabled.
+func (c *Config) WSCompressionEnabled() bool {
+	return c.Compression != nil && c.Compression.Websocket
 }
 
 // ResolvedPathConfig controls async backfill behavior.
@@ -443,6 +494,62 @@ func (c *Config) IsBlacklisted(pubkey string) bool {
 	return c.blacklistSet()[strings.ToLower(strings.TrimSpace(pubkey))]
 }
 
+// SaveGeoFilter writes the geo_filter section back to config.json on disk.
+// Pass gf=nil to remove the filter. The rest of config.json is preserved as-is.
+func SaveGeoFilter(configDir string, gf *GeoFilterConfig) error {
+	var configPath string
+	for _, p := range []string{
+		filepath.Join(configDir, "config.json"),
+		filepath.Join(configDir, "data", "config.json"),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			configPath = p
+			break
+		}
+	}
+	if configPath == "" {
+		return fmt.Errorf("config.json not found in %s", configDir)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	// Parse as a raw map so non-struct fields (_comment, etc.) are preserved.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+
+	if gf == nil || len(gf.Polygon) == 0 {
+		delete(raw, "geo_filter")
+	} else {
+		// Round-trip through JSON to get a plain interface{} value.
+		b, _ := json.Marshal(gf)
+		var v interface{}
+		_ = json.Unmarshal(b, &v)
+		raw["geo_filter"] = v
+	}
+
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	out = append(out, '\n')
+
+	// Atomic write: temp file + rename.
+	tmp := configPath + ".tmp"
+	if err := os.WriteFile(tmp, out, 0644); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := os.Rename(tmp, configPath); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("rename config: %w", err)
+	}
+	return nil
+}
+
 // obsBlacklistSet lazily builds and caches the observerBlacklist as a set for O(1) lookups.
 func (c *Config) obsBlacklistSet() map[string]bool {
 	c.obsBlacklistOnce.Do(func() {
@@ -467,4 +574,56 @@ func (c *Config) IsObserverBlacklisted(id string) bool {
 		return false
 	}
 	return c.obsBlacklistSet()[strings.ToLower(strings.TrimSpace(id))]
+}
+
+// AnalyticsConfig controls steady-state background recompute of
+// analytics endpoints (issue #1240).
+//
+// DefaultIntervalSeconds applies to every endpoint that does not have
+// an explicit per-endpoint override in RecomputeIntervalSeconds. The
+// project default is 300 (5 minutes): the operator's guiding principle
+// is "serving slightly stale data quickly is better than real-time
+// data slowly." Lower values give fresher data at higher CPU cost.
+//
+// RecomputeIntervalSeconds keys (all optional):
+//   topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew
+type AnalyticsConfig struct {
+	DefaultIntervalSeconds    int            `json:"defaultIntervalSeconds,omitempty"`
+	RecomputeIntervalSeconds  map[string]int `json:"recomputeIntervalSeconds,omitempty"`
+}
+
+// AnalyticsDefaultRecomputeInterval returns the configured default
+// recompute interval, or 5 minutes if unset/invalid.
+func (c *Config) AnalyticsDefaultRecomputeInterval() time.Duration {
+	if c != nil && c.Analytics != nil && c.Analytics.DefaultIntervalSeconds > 0 {
+		return time.Duration(c.Analytics.DefaultIntervalSeconds) * time.Second
+	}
+	return 5 * time.Minute
+}
+
+// AnalyticsRecomputeIntervals returns the per-endpoint override map.
+// Returns the zero value (all defaults) if the analytics block is
+// absent or empty.
+func (c *Config) AnalyticsRecomputeIntervals() AnalyticsRecomputeIntervals {
+	out := AnalyticsRecomputeIntervals{}
+	if c == nil || c.Analytics == nil || c.Analytics.RecomputeIntervalSeconds == nil {
+		return out
+	}
+	get := func(key string) time.Duration {
+		v, ok := c.Analytics.RecomputeIntervalSeconds[key]
+		if !ok || v <= 0 {
+			return 0
+		}
+		return time.Duration(v) * time.Second
+	}
+	out.Topology = get("topology")
+	out.RF = get("rf")
+	out.Distance = get("distance")
+	out.Channels = get("channels")
+	out.HashCollisions = get("hashCollisions")
+	out.HashSizes = get("hashSizes")
+	out.Roles = get("roles")
+	out.ObserversClockSkew = get("observersClockSkew")
+	out.NodesClockSkew = get("nodesClockSkew")
+	return out
 }

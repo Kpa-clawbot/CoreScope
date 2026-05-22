@@ -31,7 +31,7 @@ func TestHandleMessageDecodeErrorLog_PII_Issue1211(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(orig)
 
-	handleMessage(store, "test", source, msg, nil, &Config{})
+	handleMessage(store, "test", source, msg, nil, nil, &Config{})
 
 	out := buf.String()
 	if !strings.Contains(out, "decode error") {

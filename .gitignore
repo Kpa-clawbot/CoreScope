@@ -31,3 +31,5 @@ cmd/ingestor/ingestor.exe
 !test-fixtures/e2e-fixture.db
 corescope-server
 cmd/server/server
+# Local-only planning and design files
+docs/superpowers/

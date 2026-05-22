@@ -126,6 +126,11 @@ type Payload struct {
 	ChannelHashHex   string    `json:"channelHashHex,omitempty"`
 	DecryptionStatus string    `json:"decryptionStatus,omitempty"`
 	Channel          string    `json:"channel,omitempty"`
+	// GRP_DATA (PAYLOAD_TYPE_GRP_DATA=0x06) inner fields, decoded after
+	// channel decrypt per firmware/src/helpers/BaseChatMesh.cpp:382-385.
+	DataType         *int      `json:"dataType,omitempty"`
+	DataLen          *int      `json:"dataLen,omitempty"`
+	DecryptedBlob    string    `json:"decryptedBlob,omitempty"`
 	Text             string    `json:"text,omitempty"`
 	Sender           string    `json:"sender,omitempty"`
 	SenderTimestamp  uint32    `json:"sender_timestamp,omitempty"`
@@ -137,6 +142,23 @@ type Payload struct {
 	TraceFlags    *int         `json:"traceFlags,omitempty"`
 	RawHex        string       `json:"raw,omitempty"`
 	Error         string       `json:"error,omitempty"`
+	// MULTIPART (PAYLOAD_TYPE_MULTIPART=0x0A) inner fields, decoded per
+	// firmware/src/Mesh.cpp:289 — byte0 = (remaining<<4) | inner_type.
+	Remaining     *int    `json:"remaining,omitempty"`
+	InnerType     *int    `json:"innerType,omitempty"`
+	InnerTypeName string  `json:"innerTypeName,omitempty"`
+	InnerAckCrc   string  `json:"innerAckCrc,omitempty"`
+	InnerPayload  string  `json:"innerPayload,omitempty"`
+	// CONTROL (PAYLOAD_TYPE_CONTROL=0x0B) byte0 flags, per
+	// firmware/src/Mesh.cpp:69 — byte0 high-bit marks zero-hop direct subset.
+	CtrlFlags     string  `json:"ctrlFlags,omitempty"`
+	CtrlZeroHop   *bool   `json:"ctrlZeroHop,omitempty"`
+	CtrlLength    *int    `json:"ctrlLength,omitempty"`
+	// RAW_CUSTOM (PAYLOAD_TYPE_RAW_CUSTOM=0x0F) — application-defined per
+	// firmware/src/Mesh.cpp:577 (createRawData). Exposes the bare envelope
+	// shape (length + leading tag) so consumers can triage by app id.
+	RawLength    *int   `json:"rawLength,omitempty"`
+	FirstByteTag string `json:"firstByteTag,omitempty"`
 }
 
 // DecodedPacket is the full decoded result.
@@ -147,6 +169,7 @@ type DecodedPacket struct {
 	Payload        Payload         `json:"payload"`
 	Raw            string          `json:"raw"`
 	Anomaly        string          `json:"anomaly,omitempty"`
+	payloadRaw     []byte
 }
 
 func decodeHeader(b byte) Header {
@@ -343,6 +366,17 @@ func decodeAdvert(buf []byte, validateSignatures bool) Payload {
 
 		// Telemetry bytes after name: battery_mv(2 LE) + temperature_c(2 LE, signed, /100)
 		// Only sensor nodes (advType=4) carry telemetry bytes.
+		//
+		// Firmware derivation (see firmware/src/helpers/SensorMesh.h and the
+		// SensorHost::handleAdvert path in firmware/src/helpers/SensorMesh.cpp:
+		// the sensor builds appdata as <flags+adv_type><pubkey?><name\0>
+		// followed by two little-endian uint16 fields appended verbatim:
+		//   appdata[name_end+0..1] = battery voltage in millivolts (uint16 LE,
+		//                            valid 0 < mv ≤ 10000)
+		//   appdata[name_end+2..3] = temperature × 100 (int16 LE, divide by 100
+		//                            for °C; valid raw -5000..10000 → -50..100 °C)
+		// We accept only adverts whose flags.Sensor bit is set (firmware
+		// AdvertDataHelpers.h:7-12, ADV_TYPE_SENSOR=4) before parsing telemetry.
 		if p.Flags.Sensor && off+4 <= len(appdata) {
 			batteryMv := int(binary.LittleEndian.Uint16(appdata[off : off+2]))
 			tempRaw := int16(binary.LittleEndian.Uint16(appdata[off+2 : off+4]))
@@ -512,6 +546,185 @@ func decodeGrpTxt(buf []byte, channelKeys map[string]string) Payload {
 	}
 }
 
+// decodeGrpData decodes PAYLOAD_TYPE_GRP_DATA (0x06). Outer envelope is the
+// same shape as GRP_TXT (channel_hash(1)+MAC(2)+ciphertext) — see
+// firmware/src/helpers/BaseChatMesh.cpp:476,500. When the channel key matches,
+// the decrypted inner is parsed per firmware/src/helpers/BaseChatMesh.cpp:382-385
+// as data_type(uint16 LE) + data_len(1) + blob(data_len).
+func decodeGrpData(buf []byte, channelKeys map[string]string) Payload {
+	if len(buf) < 3 {
+		return Payload{Type: "GRP_DATA", Error: "too short", RawHex: hex.EncodeToString(buf)}
+	}
+	channelHash := int(buf[0])
+	channelHashHex := fmt.Sprintf("%02X", buf[0])
+	mac := hex.EncodeToString(buf[1:3])
+	encryptedData := hex.EncodeToString(buf[3:])
+
+	hasKeys := len(channelKeys) > 0
+	if hasKeys && len(encryptedData) >= 10 {
+		for name, key := range channelKeys {
+			plain, err := decryptChannelBlock(encryptedData, mac, key)
+			if err != nil {
+				continue
+			}
+			// Inner: data_type(uint16 LE) + data_len(1) + blob (firmware:382-385).
+			if len(plain) < 3 {
+				return Payload{
+					Type:             "GRP_DATA",
+					Channel:          name,
+					ChannelHash:      channelHash,
+					ChannelHashHex:   channelHashHex,
+					DecryptionStatus: "decrypted",
+					Error:            "inner too short",
+				}
+			}
+			dataType := int(binary.LittleEndian.Uint16(plain[0:2]))
+			dataLen := int(plain[2])
+			if 3+dataLen > len(plain) {
+				return Payload{
+					Type:             "GRP_DATA",
+					Channel:          name,
+					ChannelHash:      channelHash,
+					ChannelHashHex:   channelHashHex,
+					DecryptionStatus: "decrypted",
+					DataType:         &dataType,
+					DataLen:          &dataLen,
+					Error:            "inner data_len exceeds buffer",
+				}
+			}
+			blob := hex.EncodeToString(plain[3 : 3+dataLen])
+			return Payload{
+				Type:             "GRP_DATA",
+				Channel:          name,
+				ChannelHash:      channelHash,
+				ChannelHashHex:   channelHashHex,
+				DecryptionStatus: "decrypted",
+				DataType:         &dataType,
+				DataLen:          &dataLen,
+				DecryptedBlob:    blob,
+			}
+		}
+		return Payload{
+			Type:             "GRP_DATA",
+			ChannelHash:      channelHash,
+			ChannelHashHex:   channelHashHex,
+			DecryptionStatus: "decryption_failed",
+			MAC:              mac,
+			EncryptedData:    encryptedData,
+		}
+	}
+
+	return Payload{
+		Type:             "GRP_DATA",
+		ChannelHash:      channelHash,
+		ChannelHashHex:   channelHashHex,
+		DecryptionStatus: "no_key",
+		MAC:              mac,
+		EncryptedData:    encryptedData,
+	}
+}
+
+// decodeMultipart decodes PAYLOAD_TYPE_MULTIPART (0x0A) per
+// firmware/src/Mesh.cpp:287-310. byte0 = (remaining<<4) | inner_type;
+// when inner_type == PAYLOAD_TYPE_ACK the next 4 bytes are an ack_crc.
+func decodeMultipart(buf []byte) Payload {
+	if len(buf) < 1 {
+		return Payload{Type: "MULTIPART", Error: "too short", RawHex: hex.EncodeToString(buf)}
+	}
+	remaining := int(buf[0] >> 4)
+	innerType := int(buf[0] & 0x0F)
+	innerName := payloadTypeNames[innerType]
+	if innerName == "" {
+		innerName = "UNKNOWN"
+	}
+	p := Payload{
+		Type:          "MULTIPART",
+		Remaining:     &remaining,
+		InnerType:     &innerType,
+		InnerTypeName: innerName,
+	}
+	if innerType == PayloadACK && len(buf) >= 5 {
+		// ack_crc is little-endian; surface as canonical big-endian hex
+		// to match decodeAck's extraHash convention.
+		crc := binary.LittleEndian.Uint32(buf[1:5])
+		p.InnerAckCrc = fmt.Sprintf("%08x", crc)
+	} else if len(buf) > 1 {
+		p.InnerPayload = hex.EncodeToString(buf[1:])
+	}
+	return p
+}
+
+// decodeControl decodes PAYLOAD_TYPE_CONTROL (0x0B) byte0 flags per
+// firmware/src/Mesh.cpp:69 (high-bit set ⇒ zero-hop direct subset).
+func decodeControl(buf []byte) Payload {
+	if len(buf) < 1 {
+		return Payload{Type: "CONTROL", Error: "too short", RawHex: hex.EncodeToString(buf)}
+	}
+	zeroHop := buf[0]&0x80 != 0
+	length := len(buf)
+	return Payload{
+		Type:        "CONTROL",
+		CtrlFlags:   fmt.Sprintf("%02x", buf[0]),
+		CtrlZeroHop: &zeroHop,
+		CtrlLength:  &length,
+		RawHex:      hex.EncodeToString(buf),
+	}
+}
+
+// decodeRawCustom decodes PAYLOAD_TYPE_RAW_CUSTOM (0x0F). Application-defined
+// payload per firmware/src/Mesh.cpp:577 (createRawData); we only surface the
+// envelope shape (total length + leading tag byte).
+func decodeRawCustom(buf []byte) Payload {
+	length := len(buf)
+	p := Payload{
+		Type:      "RAW_CUSTOM",
+		RawLength: &length,
+		RawHex:    hex.EncodeToString(buf),
+	}
+	if length > 0 {
+		p.FirstByteTag = fmt.Sprintf("%02X", buf[0])
+	}
+	return p
+}
+
+// decryptChannelBlock performs the MAC verify + AES-128-ECB decrypt step shared
+// by GRP_TXT and GRP_DATA, returning the raw plaintext block (no further
+// parsing). See firmware/src/helpers/BaseChatMesh.cpp:376-391.
+func decryptChannelBlock(ciphertextHex, macHex, channelKeyHex string) ([]byte, error) {
+	channelKey, err := hex.DecodeString(channelKeyHex)
+	if err != nil || len(channelKey) != 16 {
+		return nil, fmt.Errorf("invalid channel key")
+	}
+	macBytes, err := hex.DecodeString(macHex)
+	if err != nil || len(macBytes) != 2 {
+		return nil, fmt.Errorf("invalid MAC")
+	}
+	ciphertext, err := hex.DecodeString(ciphertextHex)
+	if err != nil || len(ciphertext) == 0 {
+		return nil, fmt.Errorf("invalid ciphertext")
+	}
+	channelSecret := make([]byte, 32)
+	copy(channelSecret, channelKey)
+	h := hmac.New(sha256.New, channelSecret)
+	h.Write(ciphertext)
+	calc := h.Sum(nil)
+	if calc[0] != macBytes[0] || calc[1] != macBytes[1] {
+		return nil, fmt.Errorf("MAC verification failed")
+	}
+	if len(ciphertext)%aes.BlockSize != 0 {
+		return nil, fmt.Errorf("ciphertext not aligned to AES block size")
+	}
+	block, err := aes.NewCipher(channelKey)
+	if err != nil {
+		return nil, err
+	}
+	plain := make([]byte, len(ciphertext))
+	for i := 0; i < len(ciphertext); i += aes.BlockSize {
+		block.Decrypt(plain[i:i+aes.BlockSize], ciphertext[i:i+aes.BlockSize])
+	}
+	return plain, nil
+}
+
 func decodeAnonReq(buf []byte) Payload {
 	if len(buf) < 35 {
 		return Payload{Type: "ANON_REQ", Error: "too short", RawHex: hex.EncodeToString(buf)}
@@ -571,12 +784,20 @@ func decodePayload(payloadType int, buf []byte, channelKeys map[string]string, v
 		return decodeAdvert(buf, validateSignatures)
 	case PayloadGRP_TXT:
 		return decodeGrpTxt(buf, channelKeys)
+	case PayloadGRP_DATA:
+		return decodeGrpData(buf, channelKeys)
 	case PayloadANON_REQ:
 		return decodeAnonReq(buf)
 	case PayloadPATH:
 		return decodePathPayload(buf)
 	case PayloadTRACE:
 		return decodeTrace(buf)
+	case PayloadMULTIPART:
+		return decodeMultipart(buf)
+	case PayloadCONTROL:
+		return decodeControl(buf)
+	case PayloadRAW_CUSTOM:
+		return decodeRawCustom(buf)
 	default:
 		return Payload{Type: "UNKNOWN", RawHex: hex.EncodeToString(buf)}
 	}
@@ -707,6 +928,7 @@ func DecodePacket(hexString string, channelKeys map[string]string, validateSigna
 		Payload:        payload,
 		Raw:            strings.ToUpper(hexString),
 		Anomaly:        anomaly,
+		payloadRaw:     payloadBuf,
 	}, nil
 }
 
@@ -824,8 +1046,13 @@ func ValidateAdvert(p *Payload) (bool, string) {
 
 	if p.Flags != nil {
 		role := advertRole(p.Flags)
-		validRoles := map[string]bool{"repeater": true, "companion": true, "room": true, "sensor": true}
-		if !validRoles[role] {
+		// Accept canonical labels plus "none" (ADV_TYPE_NONE=0) and the
+		// "type-N" placeholders we now return for ADV_TYPE 5-15 (FUTURE)
+		// — see firmware/src/helpers/AdvertDataHelpers.h:7-12.
+		validRoles := map[string]bool{
+			"repeater": true, "companion": true, "room": true, "sensor": true, "none": true,
+		}
+		if !validRoles[role] && !strings.HasPrefix(role, "type-") {
 			return false, fmt.Sprintf("unknown role: %s", role)
 		}
 	}
@@ -845,17 +1072,29 @@ func sanitizeName(s string) string {
 	return b.String()
 }
 
+// advertRole returns a stable role label for an advert. Follows firmware
+// ADV_TYPE_* constants in firmware/src/helpers/AdvertDataHelpers.h:7-12:
+//   0 NONE, 1 CHAT, 2 REPEATER, 3 ROOM, 4 SENSOR, 5-15 FUTURE.
+// Previously this coerced both 0 (NONE) and 5-15 (FUTURE) to "companion",
+// silently relabelling unknown/reserved types — see issue #1279 P1 #3.
 func advertRole(f *AdvertFlags) string {
-	if f.Repeater {
+	if f == nil {
+		return "companion"
+	}
+	switch f.Type {
+	case 0:
+		return "none"
+	case 1:
+		return "companion"
+	case 2:
 		return "repeater"
-	}
-	if f.Room {
+	case 3:
 		return "room"
-	}
-	if f.Sensor {
+	case 4:
 		return "sensor"
+	default:
+		return fmt.Sprintf("type-%d", f.Type)
 	}
-	return "companion"
 }
 
 func epochToISO(epoch uint32) string {

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"syscall"
 	"time"
 
 	"github.com/meshcore-analyzer/perfio"
@@ -67,7 +66,7 @@ func writeStatsAtomic(path string, b []byte) error {
 	// O_NOFOLLOW: if tmp is a pre-existing symlink, openat fails with ELOOP
 	// instead of clobbering the symlink target. O_TRUNC zeroes existing
 	// regular-file content. 0o600 — no need for world-readable.
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|oNoFollow, 0o600)
 	if err != nil {
 		return err
 	}

@@ -7,12 +7,18 @@ import (
 	"log"
 	"math"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/meshcore-analyzer/geofilter"
 	_ "modernc.org/sqlite"
 )
+
+// routeTypeTransport covers FLOOD (0) and DIRECT (3) route types — packets
+// that carry transport-level scoping via Code1.
+const routeTypeTransportSQL = "route_type IN (0, 3)"
 
 // DB wraps a read-only connection to the MeshCore SQLite database.
 type DB struct {
@@ -21,6 +27,8 @@ type DB struct {
 	isV3             bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
 	hasResolvedPath  bool   // observations table has resolved_path column
 	hasObsRawHex     bool   // observations table has raw_hex column (#881)
+	hasScopeName     bool   // transmissions.scope_name column exists (#899)
+	hasDefaultScope  bool   // nodes.default_scope column exists (#899)
 
 	// Channel list cache (60s TTL) — avoids repeated GROUP BY scans (#762)
 	channelsCacheMu  sync.Mutex
@@ -82,6 +90,52 @@ func (db *DB) detectSchema() {
 			}
 		}
 	}
+
+	txRows, err := db.conn.Query("PRAGMA table_info(transmissions)")
+	if err != nil {
+		return
+	}
+	defer txRows.Close()
+	for txRows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if txRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
+			if colName == "scope_name" {
+				db.hasScopeName = true
+			}
+		}
+	}
+
+	nodeRows, err := db.conn.Query("PRAGMA table_info(nodes)")
+	if err != nil {
+		return
+	}
+	defer nodeRows.Close()
+	for nodeRows.Next() {
+		var cid int
+		var colName string
+		var colType sql.NullString
+		var notNull, pk int
+		var dflt sql.NullString
+		if nodeRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
+			if colName == "default_scope" {
+				db.hasDefaultScope = true
+			}
+		}
+	}
+}
+
+// nodeSelectCols returns the SELECT column list for nodes queries.
+// When hasDefaultScope is true, default_scope is appended as the last column.
+func (db *DB) nodeSelectCols() string {
+	cols := "public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert"
+	if db.hasDefaultScope {
+		cols += ", default_scope"
+	}
+	return cols
 }
 
 // transmissionBaseSQL returns the SELECT columns and JOIN clause for transmission-centric queries.
@@ -89,7 +143,7 @@ func (db *DB) transmissionBaseSQL() (selectCols, observerJoin string) {
 	if db.isV3 {
 		selectCols = `t.id, t.raw_hex, t.hash, t.first_seen, t.route_type, t.payload_type, t.decoded_json,
 			COALESCE((SELECT COUNT(*) FROM observations WHERE transmission_id = t.id), 0) AS observation_count,
-			obs.id AS observer_id, obs.name AS observer_name,
+			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json, o.direction`
 		observerJoin = `LEFT JOIN observations o ON o.id = (
 				SELECT id FROM observations WHERE transmission_id = t.id
@@ -99,12 +153,16 @@ func (db *DB) transmissionBaseSQL() (selectCols, observerJoin string) {
 	} else {
 		selectCols = `t.id, t.raw_hex, t.hash, t.first_seen, t.route_type, t.payload_type, t.decoded_json,
 			COALESCE((SELECT COUNT(*) FROM observations WHERE transmission_id = t.id), 0) AS observation_count,
-			o.observer_id, o.observer_name,
+			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
 			o.snr, o.rssi, o.path_json, o.direction`
 		observerJoin = `LEFT JOIN observations o ON o.id = (
 				SELECT id FROM observations WHERE transmission_id = t.id
 				ORDER BY length(COALESCE(path_json,'')) DESC LIMIT 1
-			)`
+			)
+			LEFT JOIN observers obs2 ON obs2.id = o.observer_id`
+	}
+	if db.hasScopeName {
+		selectCols += `, t.scope_name`
 	}
 	return
 }
@@ -113,16 +171,21 @@ func (db *DB) transmissionBaseSQL() (selectCols, observerJoin string) {
 // Returns a map matching the Node.js packet-store transmission shape.
 func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 	var id, observationCount int
-	var rawHex, hash, firstSeen, decodedJSON, observerID, observerName, pathJSON, direction sql.NullString
+	var rawHex, hash, firstSeen, decodedJSON, observerID, observerName, observerIATA, pathJSON, direction sql.NullString
 	var routeType, payloadType sql.NullInt64
 	var snr, rssi sql.NullFloat64
+	var scopeName sql.NullString
 
-	if err := rows.Scan(&id, &rawHex, &hash, &firstSeen, &routeType, &payloadType, &decodedJSON,
-		&observationCount, &observerID, &observerName, &snr, &rssi, &pathJSON, &direction); err != nil {
+	scanArgs := []interface{}{&id, &rawHex, &hash, &firstSeen, &routeType, &payloadType, &decodedJSON,
+		&observationCount, &observerID, &observerName, &observerIATA, &snr, &rssi, &pathJSON, &direction}
+	if db.hasScopeName {
+		scanArgs = append(scanArgs, &scopeName)
+	}
+	if err := rows.Scan(scanArgs...); err != nil {
 		return nil
 	}
 
-	return map[string]interface{}{
+	m := map[string]interface{}{
 		"id":                id,
 		"raw_hex":           nullStr(rawHex),
 		"hash":              nullStr(hash),
@@ -134,11 +197,16 @@ func (db *DB) scanTransmissionRow(rows *sql.Rows) map[string]interface{} {
 		"observation_count": observationCount,
 		"observer_id":       nullStr(observerID),
 		"observer_name":     nullStr(observerName),
+		"observer_iata":     nullStr(observerIATA),
 		"snr":               nullFloat(snr),
 		"rssi":              nullFloat(rssi),
 		"path_json":         nullStr(pathJSON),
 		"direction":         nullStr(direction),
 	}
+	if db.hasScopeName {
+		m["scope_name"] = nullStr(scopeName)
+	}
+	return m
 }
 
 // Node represents a row from the nodes table.
@@ -388,6 +456,7 @@ type PacketQuery struct {
 	Since    string
 	Until    string
 	Region   string
+	Area     string   // area key; filters by transmitting node's GPS position
 	Node     string
 	Channel  string // channel_hash filter (#812). Plain names like "#test"/"public" or "enc_<HEX>" for encrypted
 	Order               string // ASC or DESC
@@ -469,15 +538,20 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 		db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM transmissions t %s", w), args...).Scan(&total)
 	}
 
-	// Build grouped query using transmissions table with correlated subqueries
+	// Build grouped query using transmissions table with correlated subqueries.
+	// #1189 R2: distinct_iatas is a NEW column — comma-separated DISTINCT IATA
+	// codes across all observers of the transmission, with empty/NULL IATAs
+	// excluded. Frontend needs this on the DEFAULT COLLAPSED VIEW (where
+	// p._children is empty), so we compute it server-side.
 	var querySQL string
 	if db.isV3 {
 		querySQL = fmt.Sprintf(`SELECT t.hash, t.first_seen, t.raw_hex, t.decoded_json, t.payload_type, t.route_type,
 			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
 			COALESCE((SELECT COUNT(DISTINCT oi.observer_idx) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
 			COALESCE((SELECT MAX(strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', oi.timestamp, 'unixepoch')) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
-			obs.id AS observer_id, obs.name AS observer_name,
-			o.snr, o.rssi, o.path_json
+			obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
+			o.snr, o.rssi, o.path_json,
+			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.rowid = oi.observer_idx WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
@@ -490,13 +564,15 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			COALESCE((SELECT COUNT(*) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS count,
 			COALESCE((SELECT COUNT(DISTINCT oi.observer_id) FROM observations oi WHERE oi.transmission_id = t.id), 0) AS observer_count,
 			COALESCE((SELECT MAX(oi.timestamp) FROM observations oi WHERE oi.transmission_id = t.id), t.first_seen) AS latest,
-			o.observer_id, o.observer_name,
-			o.snr, o.rssi, o.path_json
+			o.observer_id, o.observer_name, COALESCE(obs2.iata, '') AS observer_iata,
+			o.snr, o.rssi, o.path_json,
+			COALESCE((SELECT GROUP_CONCAT(DISTINCT obi.iata) FROM observations oi JOIN observers obi ON obi.id = oi.observer_id WHERE oi.transmission_id = t.id AND obi.iata IS NOT NULL AND obi.iata != ''), '') AS distinct_iatas
 		FROM transmissions t
 		LEFT JOIN observations o ON o.id = (
 			SELECT id FROM observations WHERE transmission_id = t.id
 			ORDER BY length(COALESCE(path_json,'')) DESC LIMIT 1
 		)
+		LEFT JOIN observers obs2 ON obs2.id = o.observer_id
 		%s ORDER BY latest DESC LIMIT ? OFFSET ?`, w)
 	}
 
@@ -512,14 +588,14 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 
 	packets := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		var hash, firstSeen, rawHex, decodedJSON, latest, observerID, observerName, pathJSON sql.NullString
+		var hash, firstSeen, rawHex, decodedJSON, latest, observerID, observerName, observerIATA, pathJSON, distinctIatasCSV sql.NullString
 		var payloadType, routeType sql.NullInt64
 		var count, observerCount int
 		var snr, rssi sql.NullFloat64
 
 		if err := rows.Scan(&hash, &firstSeen, &rawHex, &decodedJSON, &payloadType, &routeType,
 			&count, &observerCount, &latest,
-			&observerID, &observerName, &snr, &rssi, &pathJSON); err != nil {
+			&observerID, &observerName, &observerIATA, &snr, &rssi, &pathJSON, &distinctIatasCSV); err != nil {
 			continue
 		}
 
@@ -532,6 +608,8 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 			"latest":            nullStr(latest),
 			"observer_id":       nullStr(observerID),
 			"observer_name":     nullStr(observerName),
+			"observer_iata":     nullStr(observerIATA),
+			"distinct_iatas":    parseDistinctIatasCSV(nullStr(distinctIatasCSV)),
 			"path_json":         nullStr(pathJSON),
 			"payload_type":      nullInt(payloadType),
 			"route_type":        nullInt(routeType),
@@ -543,6 +621,29 @@ func (db *DB) QueryGroupedPackets(q PacketQuery) (*PacketResult, error) {
 	}
 
 	return &PacketResult{Packets: packets, Total: total}, nil
+}
+
+// parseDistinctIatasCSV turns SQLite GROUP_CONCAT output ("SJC,SFO,OAK") into
+// a sorted, deduped []string. Returns an empty (non-nil) slice when the input
+// is empty/nil so JSON serialization stays consistent (`[]` not `null`).
+func parseDistinctIatasCSV(v interface{}) []string {
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return []string{}
+	}
+	parts := strings.Split(s, ",")
+	seen := make(map[string]bool, len(parts))
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		code := strings.TrimSpace(p)
+		if code == "" || seen[code] {
+			continue
+		}
+		seen[code] = true
+		out = append(out, code)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (db *DB) buildPacketWhere(q PacketQuery) ([]string, []interface{}) {
@@ -794,7 +895,7 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 	var total int
 	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM nodes %s", w), args...).Scan(&total)
 
-	querySQL := fmt.Sprintf("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", w, order)
+	querySQL := fmt.Sprintf("SELECT %s FROM nodes %s ORDER BY %s LIMIT ? OFFSET ?", db.nodeSelectCols(), w, order)
 	qArgs := append(args, limit, offset)
 
 	rows, err := db.conn.Query(querySQL, qArgs...)
@@ -805,7 +906,7 @@ func (db *DB) GetNodes(limit, offset int, role, search, before, lastHeard, sortB
 
 	nodes := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		n := scanNodeRow(rows)
+		n := db.scanNodeRow(rows)
 		if n != nil {
 			nodes = append(nodes, n)
 		}
@@ -820,8 +921,7 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 	if limit <= 0 {
 		limit = 10
 	}
-	rows, err := db.conn.Query(`SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert
-		FROM nodes WHERE name LIKE ? OR public_key LIKE ? ORDER BY last_seen DESC LIMIT ?`,
+	rows, err := db.conn.Query(fmt.Sprintf("SELECT %s FROM nodes WHERE name LIKE ? OR public_key LIKE ? ORDER BY last_seen DESC LIMIT ?", db.nodeSelectCols()),
 		"%"+query+"%", query+"%", limit)
 	if err != nil {
 		return nil, err
@@ -830,7 +930,7 @@ func (db *DB) SearchNodes(query string, limit int) ([]map[string]interface{}, er
 
 	nodes := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		n := scanNodeRow(rows)
+		n := db.scanNodeRow(rows)
 		if n != nil {
 			nodes = append(nodes, n)
 		}
@@ -859,8 +959,7 @@ func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, erro
 		}
 	}
 	rows, err := db.conn.Query(
-		`SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert
-		   FROM nodes WHERE public_key LIKE ? LIMIT 2`,
+		fmt.Sprintf("SELECT %s FROM nodes WHERE public_key LIKE ? LIMIT 2", db.nodeSelectCols()),
 		prefix+"%",
 	)
 	if err != nil {
@@ -870,7 +969,7 @@ func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, erro
 	var first map[string]interface{}
 	count := 0
 	for rows.Next() {
-		n := scanNodeRow(rows)
+		n := db.scanNodeRow(rows)
 		if n == nil {
 			continue
 		}
@@ -889,13 +988,13 @@ func (db *DB) GetNodeByPrefix(prefix string) (map[string]interface{}, bool, erro
 
 // GetNodeByPubkey returns a single node.
 func (db *DB) GetNodeByPubkey(pubkey string) (map[string]interface{}, error) {
-	rows, err := db.conn.Query("SELECT public_key, name, role, lat, lon, last_seen, first_seen, advert_count, battery_mv, temperature_c, foreign_advert FROM nodes WHERE public_key = ?", pubkey)
+	rows, err := db.conn.Query(fmt.Sprintf("SELECT %s FROM nodes WHERE public_key = ?", db.nodeSelectCols()), pubkey)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	if rows.Next() {
-		return scanNodeRow(rows), nil
+		return db.scanNodeRow(rows), nil
 	}
 	return nil, nil
 }
@@ -971,16 +1070,17 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 
 	var querySQL string
 	if db.isV3 {
-		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, obs.id AS observer_id, obs.name AS observer_name,
+		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, obs.id AS observer_id, obs.name AS observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.direction, o.snr, o.rssi, o.path_json, strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', o.timestamp, 'unixepoch') AS obs_timestamp
 			FROM observations o
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
 			WHERE o.transmission_id IN (%s)
 			ORDER BY o.timestamp DESC`, strings.Join(placeholders, ","))
 	} else {
-		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, o.observer_id, o.observer_name,
+		querySQL = fmt.Sprintf(`SELECT o.transmission_id, o.id, o.observer_id, o.observer_name, COALESCE(obs.iata, '') AS observer_iata,
 			o.direction, o.snr, o.rssi, o.path_json, o.timestamp AS obs_timestamp
 			FROM observations o
+			LEFT JOIN observers obs ON obs.id = o.observer_id
 			WHERE o.transmission_id IN (%s)
 			ORDER BY o.timestamp DESC`, strings.Join(placeholders, ","))
 	}
@@ -993,10 +1093,10 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 
 	for rows.Next() {
 		var txID, obsID int
-		var observerID, observerName, direction, pathJSON, obsTimestamp sql.NullString
+		var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
 		var snr, rssi sql.NullFloat64
 
-		if err := rows.Scan(&txID, &obsID, &observerID, &observerName, &direction,
+		if err := rows.Scan(&txID, &obsID, &observerID, &observerName, &observerIATA, &direction,
 			&snr, &rssi, &pathJSON, &obsTimestamp); err != nil {
 			continue
 		}
@@ -1011,6 +1111,7 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 			"transmission_id": txID,
 			"observer_id":     nullStr(observerID),
 			"observer_name":   nullStr(observerName),
+			"observer_iata":   nullStr(observerIATA),
 			"snr":             nullFloat(snr),
 			"rssi":            nullFloat(rssi),
 			"path_json":       nullStr(pathJSON),
@@ -1921,7 +2022,9 @@ func scanPacketRow(rows *sql.Rows) map[string]interface{} {
 	}
 }
 
-func scanNodeRow(rows *sql.Rows) map[string]interface{} {
+// scanNodeRow scans a node row. When hasDefaultScope is true the SELECT must
+// include default_scope as the last column.
+func (db *DB) scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	var pk string
 	var name, role, lastSeen, firstSeen sql.NullString
 	var lat, lon sql.NullFloat64
@@ -1929,8 +2032,13 @@ func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 	var batteryMv sql.NullInt64
 	var temperatureC sql.NullFloat64
 	var foreign sql.NullInt64
+	var defaultScope sql.NullString
 
-	if err := rows.Scan(&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign); err != nil {
+	scanArgs := []interface{}{&pk, &name, &role, &lat, &lon, &lastSeen, &firstSeen, &advertCount, &batteryMv, &temperatureC, &foreign}
+	if db.hasDefaultScope {
+		scanArgs = append(scanArgs, &defaultScope)
+	}
+	if err := rows.Scan(scanArgs...); err != nil {
 		return nil
 	}
 	m := map[string]interface{}{
@@ -1956,6 +2064,9 @@ func scanNodeRow(rows *sql.Rows) map[string]interface{} {
 		m["temperature_c"] = temperatureC.Float64
 	} else {
 		m["temperature_c"] = nil
+	}
+	if db.hasDefaultScope {
+		m["default_scope"] = nullStr(defaultScope)
 	}
 	return m
 }
@@ -1995,38 +2106,10 @@ func nullInt(ni sql.NullInt64) interface{} {
 	return nil
 }
 
-// PruneOldPackets deletes transmissions and their observations older than the
-// given number of days. Nodes and observers are never touched.
-// Returns the number of transmissions deleted.
-// Opens a separate read-write connection since the main connection is read-only.
-func (db *DB) PruneOldPackets(days int) (int64, error) {
-	rw, err := cachedRW(db.path)
-	if err != nil {
-		return 0, err
-	}
-
-	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
-	tx, err := rw.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
-	// Delete observations linked to old transmissions first (no CASCADE in SQLite)
-	_, err = tx.Exec(`DELETE FROM observations WHERE transmission_id IN (
-		SELECT id FROM transmissions WHERE first_seen < ?
-	)`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-
-	res, err := tx.Exec(`DELETE FROM transmissions WHERE first_seen < ?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return n, tx.Commit()
-}
+// PruneOldPackets, PruneOldMetrics, and RemoveStaleObservers were
+// removed in #1283 — they are write operations and now live on the
+// ingestor's *Store (cmd/ingestor/maintenance.go and cmd/ingestor/db.go).
+// The server is the read path; it must not hold the SQLite write lock.
 
 // MetricsSample represents a single row from observer_metrics with computed deltas.
 type MetricsSample struct {
@@ -2344,52 +2427,8 @@ func (db *DB) GetMetricsSummary(since string) ([]MetricsSummaryRow, error) {
 	return result, nil
 }
 
-// PruneOldMetrics deletes observer_metrics rows older than retentionDays.
-func (db *DB) PruneOldMetrics(retentionDays int) (int64, error) {
-	rw, err := cachedRW(db.path)
-	if err != nil {
-		return 0, err
-	}
-
-	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
-	res, err := rw.Exec(`DELETE FROM observer_metrics WHERE timestamp < ?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	if n > 0 {
-		log.Printf("[metrics] Pruned %d observer_metrics rows older than %d days", n, retentionDays)
-	}
-	return n, nil
-}
-
-// RemoveStaleObservers marks observers that have not actively sent data in observerDays
-// as inactive (soft-delete). This preserves JOIN integrity for observations.observer_idx
-// and observer_metrics.observer_id — historical data still references the correct observer.
-// An observer must actively send data to stay listed — being seen by another node does not count.
-// observerDays <= -1 means never remove (keep forever).
-func (db *DB) RemoveStaleObservers(observerDays int) (int64, error) {
-	if observerDays <= -1 {
-		return 0, nil // keep forever
-	}
-	rw, err := cachedRW(db.path)
-	if err != nil {
-		return 0, err
-	}
-
-	cutoff := time.Now().UTC().AddDate(0, 0, -observerDays).Format(time.RFC3339)
-	res, err := rw.Exec(`UPDATE observers SET inactive = 1 WHERE last_seen < ? AND (inactive IS NULL OR inactive = 0)`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	if n > 0 {
-		// Clean up orphaned metrics for now-inactive observers
-		rw.Exec(`DELETE FROM observer_metrics WHERE observer_id IN (SELECT id FROM observers WHERE inactive = 1)`)
-		log.Printf("[observers] Marked %d observer(s) as inactive (not seen in %d days)", n, observerDays)
-	}
-	return n, nil
-}
+// (PruneOldMetrics / RemoveStaleObservers removed in #1283 — see note
+// above the MetricsSample type. Ingestor owns these writes now.)
 
 // TouchNodeLastSeen updates last_seen for a node identified by full public key.
 // Only updates if the new timestamp is newer than the existing value (or NULL).
@@ -2459,6 +2498,44 @@ func (db *DB) GetDroppedPackets(limit int, observerID, nodePubkey string) ([]map
 	return results, nil
 }
 
+// GetNodePubkeysInArea returns public keys of nodes whose GPS coordinates
+// fall inside the given area polygon or bounding box.
+func (db *DB) GetNodePubkeysInArea(entry AreaEntry) ([]string, error) {
+	rows, err := db.conn.Query("SELECT public_key, lat, lon FROM nodes WHERE lat IS NOT NULL AND lon IS NOT NULL")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	gf := &geofilter.Config{
+		Polygon: entry.Polygon,
+		LatMin:  entry.LatMin,
+		LatMax:  entry.LatMax,
+		LonMin:  entry.LonMin,
+		LonMax:  entry.LonMax,
+	}
+
+	var result []string
+	for rows.Next() {
+		var pk string
+		var lat, lon sql.NullFloat64
+		if err := rows.Scan(&pk, &lat, &lon); err != nil {
+			continue
+		}
+		if !lat.Valid || !lon.Valid {
+			continue
+		}
+		// Skip (0,0) — PassesFilter allows it but these nodes have no real GPS.
+		if lat.Float64 == 0 && lon.Float64 == 0 {
+			continue
+		}
+		if geofilter.PassesFilter(lat.Float64, lon.Float64, gf) {
+			result = append(result, pk)
+		}
+	}
+	return result, rows.Err()
+}
+
 // GetSignatureDropCount returns the total number of dropped packets.
 func (db *DB) GetSignatureDropCount() int64 {
 	var count int64
@@ -2469,3 +2546,147 @@ func (db *DB) GetSignatureDropCount() int64 {
 	}
 	return count
 }
+
+func (db *DB) GetScopeStats(window string) (*ScopeStatsResponse, error) {
+	if !db.hasScopeName {
+		return nil, fmt.Errorf("scope_name column not present — run ingestor to apply migrations")
+	}
+
+	var since string
+	var bucketExpr string
+	switch window {
+	case "1h":
+		since = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+		// 5-minute buckets
+		bucketExpr = `strftime('%Y-%m-%dT%H:', first_seen) || printf('%02d', (CAST(strftime('%M', first_seen) AS INTEGER) / 5) * 5) || ':00Z'`
+	case "7d":
+		since = time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+		// 6-hour buckets
+		bucketExpr = `strftime('%Y-%m-%dT', first_seen) || printf('%02d', (CAST(strftime('%H', first_seen) AS INTEGER) / 6) * 6) || ':00:00Z'`
+	default: // "24h"
+		window = "24h"
+		since = time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+		// 1-hour buckets
+		bucketExpr = `strftime('%Y-%m-%dT%H:00:00Z', first_seen)`
+	}
+
+	resp := &ScopeStatsResponse{Window: window}
+
+	// Summary counts
+	row := db.conn.QueryRow(`
+		SELECT
+			COUNT(*) AS transport_total,
+			COUNT(scope_name) AS scoped,
+			COALESCE(SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END), 0) AS unscoped,
+			COALESCE(SUM(CASE WHEN scope_name = '' THEN 1 ELSE 0 END), 0) AS unknown_scope
+		FROM transmissions
+		WHERE ` + routeTypeTransportSQL + ` AND first_seen >= ?
+	`, since)
+	if err := row.Scan(
+		&resp.Summary.TransportTotal,
+		&resp.Summary.Scoped,
+		&resp.Summary.Unscoped,
+		&resp.Summary.UnknownScope,
+	); err != nil {
+		return nil, fmt.Errorf("scope summary query: %w", err)
+	}
+
+	// Per-region counts (named regions only)
+	rows, err := db.conn.Query(`
+		SELECT scope_name, COUNT(*) AS cnt
+		FROM transmissions
+		WHERE ` + routeTypeTransportSQL + ` AND scope_name IS NOT NULL AND scope_name != '' AND first_seen >= ?
+		GROUP BY scope_name
+		ORDER BY cnt DESC
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("scope byRegion query: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rc ScopeRegionCount
+		if rows.Scan(&rc.Name, &rc.Count) == nil {
+			resp.ByRegion = append(resp.ByRegion, rc)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scope byRegion iteration: %w", err)
+	}
+	if resp.ByRegion == nil {
+		resp.ByRegion = []ScopeRegionCount{}
+	}
+
+	// Time series
+	tsQuery := fmt.Sprintf(`
+		SELECT %s AS bucket,
+			COUNT(scope_name) AS scoped,
+			SUM(CASE WHEN scope_name IS NULL THEN 1 ELSE 0 END) AS unscoped
+		FROM transmissions
+		WHERE ` + routeTypeTransportSQL + ` AND first_seen >= ?
+		GROUP BY bucket
+		ORDER BY bucket
+	`, bucketExpr)
+	tsRows, err := db.conn.Query(tsQuery, since)
+	if err != nil {
+		return nil, fmt.Errorf("scope timeseries query: %w", err)
+	}
+	defer tsRows.Close()
+	for tsRows.Next() {
+		var pt ScopeTimePoint
+		if tsRows.Scan(&pt.T, &pt.Scoped, &pt.Unscoped) == nil {
+			resp.TimeSeries = append(resp.TimeSeries, pt)
+		}
+	}
+	if err := tsRows.Err(); err != nil {
+		return nil, fmt.Errorf("scope timeseries iteration: %w", err)
+	}
+	if resp.TimeSeries == nil {
+		resp.TimeSeries = []ScopeTimePoint{}
+	}
+
+	return resp, nil
+}
+
+// NodeForGeoPrune holds the minimal fields needed for geo-filter pruning.
+type NodeForGeoPrune struct {
+	PubKey string
+	Name   string
+	Lat    *float64
+	Lon    *float64
+}
+
+// GetNodesForGeoPrune returns all nodes with their coordinates for geo-filter evaluation.
+// Read-only — safe on the server's mode=ro handle.
+func (db *DB) GetNodesForGeoPrune() ([]NodeForGeoPrune, error) {
+	rows, err := db.conn.Query("SELECT public_key, name, lat, lon FROM nodes ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []NodeForGeoPrune
+	for rows.Next() {
+		var pk string
+		var name sql.NullString
+		var lat, lon sql.NullFloat64
+		if err := rows.Scan(&pk, &name, &lat, &lon); err != nil {
+			continue
+		}
+		n := NodeForGeoPrune{PubKey: pk, Name: name.String}
+		if lat.Valid {
+			v := lat.Float64
+			n.Lat = &v
+		}
+		if lon.Valid {
+			v := lon.Float64
+			n.Lon = &v
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, rows.Err()
+}
+
+// DeleteNodesByPubkeys was removed in PR #738 follow-up: server is read-only
+// (opened with mode=ro after #1283/#1289), so DELETE statements would fail at
+// runtime. Geo-prune now flows server → marker file → ingestor; see
+// internal/prunequeue and cmd/ingestor/prune_geofilter.go.

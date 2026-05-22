@@ -1469,6 +1469,73 @@ func TestOpenDBInvalidPath(t *testing.T) {
 	}
 }
 
+// TestDetectSchemaScopeName verifies that OpenDB sets hasScopeName and
+// hasDefaultScope via the real detectSchema path when the columns are present.
+// The existing ScopeStats tests set these flags manually — this test ensures
+// the flag-setting code itself is covered.
+func TestDetectSchemaScopeName(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "detect.db")
+
+	// Create file-based DB with the scope_name and default_scope columns.
+	conn, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.SetMaxOpenConns(1)
+	if _, err := conn.Exec(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, hash TEXT, scope_name TEXT)`); err != nil {
+		conn.Close()
+		t.Fatalf("create transmissions: %v", err)
+	}
+	if _, err := conn.Exec(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY, default_scope TEXT)`); err != nil {
+		conn.Close()
+		t.Fatalf("create nodes: %v", err)
+	}
+	if _, err := conn.Exec(`CREATE TABLE observations (id INTEGER PRIMARY KEY)`); err != nil {
+		conn.Close()
+		t.Fatalf("create observations: %v", err)
+	}
+	conn.Close()
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	if !db.hasScopeName {
+		t.Error("hasScopeName should be true when scope_name column exists")
+	}
+	if !db.hasDefaultScope {
+		t.Error("hasDefaultScope should be true when default_scope column exists")
+	}
+
+	// Verify the flags stay false when the columns are absent.
+	dbPath2 := filepath.Join(dir, "detect2.db")
+	conn2, err := sql.Open("sqlite", dbPath2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn2.SetMaxOpenConns(1)
+	conn2.Exec(`CREATE TABLE transmissions (id INTEGER PRIMARY KEY, hash TEXT)`)
+	conn2.Exec(`CREATE TABLE nodes (public_key TEXT PRIMARY KEY)`)
+	conn2.Exec(`CREATE TABLE observations (id INTEGER PRIMARY KEY)`)
+	conn2.Close()
+
+	db2, err := OpenDB(dbPath2)
+	if err != nil {
+		t.Fatalf("OpenDB2: %v", err)
+	}
+	defer db2.Close()
+
+	if db2.hasScopeName {
+		t.Error("hasScopeName should be false when scope_name column is absent")
+	}
+	if db2.hasDefaultScope {
+		t.Error("hasDefaultScope should be false when default_scope column is absent")
+	}
+}
+
 func TestGetChannelMessagesObserverFallback(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -2145,5 +2212,100 @@ func TestPerObservationRawHexEnrich(t *testing.T) {
 				t.Errorf("obs without raw_hex: got %q, want %q (tx fallback)", rh, txHex)
 			}
 		}
+	}
+}
+
+func TestGetScopeStats(t *testing.T) {
+	conn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	conn.SetMaxOpenConns(1)
+	db := &DB{conn: conn}
+	defer db.conn.Close()
+
+	// Create minimal schema
+	db.conn.Exec(`CREATE TABLE IF NOT EXISTS transmissions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		raw_hex TEXT, hash TEXT, first_seen TEXT, route_type INTEGER,
+		payload_type INTEGER, payload_version INTEGER, decoded_json TEXT,
+		scope_name TEXT DEFAULT NULL
+	)`)
+	// Manually set hasScopeName since we bypassed the detector
+	db.hasScopeName = true
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	// Transport scoped, known region
+	db.conn.Exec(`INSERT INTO transmissions (hash, first_seen, route_type, scope_name) VALUES ('a', ?, 0, '#belgium')`, now)
+	// Transport scoped, unknown
+	db.conn.Exec(`INSERT INTO transmissions (hash, first_seen, route_type, scope_name) VALUES ('b', ?, 0, '')`, now)
+	// Transport unscoped (NULL)
+	db.conn.Exec(`INSERT INTO transmissions (hash, first_seen, route_type, scope_name) VALUES ('c', ?, 0, NULL)`, now)
+	// Non-transport (should not count)
+	db.conn.Exec(`INSERT INTO transmissions (hash, first_seen, route_type, scope_name) VALUES ('d', ?, 1, NULL)`, now)
+
+	stats, err := db.GetScopeStats("24h")
+	if err != nil {
+		t.Fatalf("GetScopeStats: %v", err)
+	}
+	if stats.Summary.TransportTotal != 3 {
+		t.Errorf("TransportTotal = %d, want 3", stats.Summary.TransportTotal)
+	}
+	if stats.Summary.Scoped != 2 {
+		t.Errorf("Scoped = %d, want 2", stats.Summary.Scoped)
+	}
+	if stats.Summary.Unscoped != 1 {
+		t.Errorf("Unscoped = %d, want 1", stats.Summary.Unscoped)
+	}
+	if stats.Summary.UnknownScope != 1 {
+		t.Errorf("UnknownScope = %d, want 1", stats.Summary.UnknownScope)
+	}
+	if len(stats.ByRegion) != 1 || stats.ByRegion[0].Name != "#belgium" || stats.ByRegion[0].Count != 1 {
+		t.Errorf("ByRegion = %+v, want [{#belgium 1}]", stats.ByRegion)
+	}
+}
+
+// TestLoadIndexesRelayHopsFromResolvedPath verifies that after Load(), relay
+// nodes that appear only in resolved_path (not in decoded_json) are indexed
+// in byNode. Regression for #692: indexByNode was called before observations
+// were appended, so tx.ResolvedPath was nil at index time — #806 fixed this
+// by indexing inline during the scan, this test locks it in.
+func TestLoadIndexesRelayHopsFromResolvedPath(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	now := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339)
+	epoch := time.Now().UTC().Add(-1 * time.Hour).Unix()
+
+	// Insert a node whose pubkey does NOT appear in any decoded_json —
+	// it only relays traffic (appears in resolved_path of other packets).
+	const relayPubkey = "relay000aabbccddeeff0011"
+	const senderPubkey = "sender00112233445566"
+
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json)
+		VALUES ('FF01', 'relaytest0001hash', ?, 1, 4, ?)`,
+		now, `{"pubKey":"`+senderPubkey+`","name":"Sender","type":"ADVERT"}`)
+
+	// Observer hears the packet via the relay node.
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp, resolved_path)
+		VALUES (1, 1, 10.0, -90, '["rr"]', ?, ?)`,
+		epoch, `["`+relayPubkey+`"]`)
+
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The sender should be in byNode via decoded_json.
+	if len(store.byNode[senderPubkey]) == 0 {
+		t.Errorf("sender not indexed in byNode via decoded_json")
+	}
+
+	// The relay node must be in byNode via resolved_path — this was the bug.
+	if len(store.byNode[relayPubkey]) == 0 {
+		t.Errorf("relay node not indexed in byNode after Load() — resolved_path indexing broken")
+	}
+	if store.byNode[relayPubkey][0].Hash != "relaytest0001hash" {
+		t.Errorf("relay byNode entry has wrong hash: %s", store.byNode[relayPubkey][0].Hash)
 	}
 }

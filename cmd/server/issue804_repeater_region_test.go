@@ -86,7 +86,7 @@ func TestIssue804_AnalyticsAttributesByRepeaterRegion(t *testing.T) {
 	store.Load()
 
 	t.Run("region=SJC excludes PDX-Repeater (heard but not home)", func(t *testing.T) {
-		result := store.GetAnalyticsHashSizes("SJC")
+		result := store.GetAnalyticsHashSizes("SJC", "")
 
 		mb, ok := result["multiByteNodes"].([]map[string]interface{})
 		if !ok {
@@ -113,7 +113,7 @@ func TestIssue804_AnalyticsAttributesByRepeaterRegion(t *testing.T) {
 	})
 
 	t.Run("API exposes attributionMethod", func(t *testing.T) {
-		result := store.GetAnalyticsHashSizes("SJC")
+		result := store.GetAnalyticsHashSizes("SJC", "")
 		method, ok := result["attributionMethod"].(string)
 		if !ok {
 			t.Fatal("expected attributionMethod string field on result")
@@ -124,7 +124,7 @@ func TestIssue804_AnalyticsAttributesByRepeaterRegion(t *testing.T) {
 	})
 
 	t.Run("region=PDX excludes SJC-Repeater", func(t *testing.T) {
-		result := store.GetAnalyticsHashSizes("PDX")
+		result := store.GetAnalyticsHashSizes("PDX", "")
 		mb, _ := result["multiByteNodes"].([]map[string]interface{})
 
 		var foundPDX, foundSJC bool

@@ -1,42 +1,33 @@
+// Package main: read-only neighbor-edges loader.
+//
+// Per issue #1287 (followup to #1283), cmd/server is the read path: it
+// LOADS the in-memory neighbor graph from the SQLite snapshot the
+// ingestor maintains, but never writes to it. The previous write-side
+// helpers in this file (buildAndPersistEdges, asyncPersistResolvedPaths
+// AndEdges, ensure*Column, softDeleteBlacklistedObservers,
+// PruneNeighborEdges, openRW) all moved to cmd/ingestor; cmd/ingestor
+// owns CREATE/ALTER/INSERT/UPDATE/DELETE on neighbor_edges and the
+// observations/resolved_path column.
+//
+// Server now refreshes its in-memory copy of the graph via the
+// recompNeighborGraph slot in analytics_recomputer.go: every 60s it
+// re-reads neighbor_edges and atomic-swaps the resulting NeighborGraph
+// into s.graph.
 package main
 
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log"
 	"strings"
 	"time"
 )
 
-// persistSem limits concurrent async persistence goroutines to 1.
-// Without this, each ingest cycle spawns a goroutine that opens a new
-// SQLite RW connection; under sustained load goroutines pile up with
-// no backpressure, causing contention and busy-timeout cascades.
-var persistSem = make(chan struct{}, 1)
-
-// ─── neighbor_edges table ──────────────────────────────────────────────────────
-
-// ensureNeighborEdgesTable creates the neighbor_edges table if it doesn't exist.
-// Uses a separate read-write connection since the main DB is read-only.
-func ensureNeighborEdgesTable(dbPath string) error {
-	rw, err := cachedRW(dbPath)
-	if err != nil {
-		return fmt.Errorf("open rw for neighbor_edges: %w", err)
-	}
-
-	_, err = rw.Exec(`CREATE TABLE IF NOT EXISTS neighbor_edges (
-		node_a TEXT NOT NULL,
-		node_b TEXT NOT NULL,
-		count INTEGER DEFAULT 1,
-		last_seen TEXT,
-		PRIMARY KEY (node_a, node_b)
-	)`)
-	return err
-}
+// ─── neighbor_edges loader (read-only) ─────────────────────────────────────────
 
 // loadNeighborEdgesFromDB loads all edges from the neighbor_edges table
-// and builds an in-memory NeighborGraph.
+// and builds an in-memory NeighborGraph. Called on server startup and
+// from the recompNeighborGraph background recomputer (#1287).
 func loadNeighborEdgesFromDB(conn *sql.DB) *NeighborGraph {
 	g := NewNeighborGraph()
 
@@ -59,7 +50,6 @@ func loadNeighborEdgesFromDB(conn *sql.DB) *NeighborGraph {
 		if lastSeen.Valid {
 			ts = parseTimestamp(lastSeen.String)
 		}
-		// Build edge directly (both nodes are full pubkeys from persisted data)
 		key := makeEdgeKey(a, b)
 		g.mu.Lock()
 		e, exists := g.edges[key]
@@ -95,353 +85,28 @@ func loadNeighborEdgesFromDB(conn *sql.DB) *NeighborGraph {
 	return g
 }
 
-// ─── shared async persistence helper ───────────────────────────────────────────
-
-// persistObsUpdate holds data for a resolved_path SQLite update.
-type persistObsUpdate struct {
-	obsID        int
-	resolvedPath string
-}
-
-// persistEdgeUpdate holds data for a neighbor_edges SQLite upsert.
-type persistEdgeUpdate struct {
-	a, b, ts string
-}
-
-// asyncPersistResolvedPathsAndEdges writes resolved_path updates and neighbor
-// edge upserts to SQLite in a background goroutine. Shared between
-// IngestNewFromDB and IngestNewObservations to avoid DRY violation.
-func asyncPersistResolvedPathsAndEdges(dbPath string, obsUpdates []persistObsUpdate, edgeUpdates []persistEdgeUpdate, logPrefix string) {
-	if len(obsUpdates) == 0 && len(edgeUpdates) == 0 {
-		return
-	}
-	// Try-acquire semaphore BEFORE spawning goroutine. If another
-	// persistence operation is already running, drop this batch —
-	// data lives in memory and will be backfilled on restart.
-	select {
-	case persistSem <- struct{}{}:
-		// Acquired — spawn goroutine to do the work.
-	default:
-		log.Printf("[store] %s skipped: persistence already in progress", logPrefix)
-		return
-	}
-	go func() {
-		defer func() { <-persistSem }()
-
-		rw, err := cachedRW(dbPath)
-		if err != nil {
-			log.Printf("[store] %s rw open error: %v", logPrefix, err)
-			return
-		}
-
-		if len(obsUpdates) > 0 {
-			sqlTx, err := rw.Begin()
-			if err == nil {
-				stmt, err := sqlTx.Prepare("UPDATE observations SET resolved_path = ? WHERE id = ?")
-				if err == nil {
-					var firstErr error
-					for _, u := range obsUpdates {
-						if _, err := stmt.Exec(u.resolvedPath, u.obsID); err != nil && firstErr == nil {
-							firstErr = err
-						}
-					}
-					stmt.Close()
-					if firstErr != nil {
-						log.Printf("[store] %s resolved_path error (first): %v", logPrefix, firstErr)
-					}
-				} else {
-					log.Printf("[store] %s resolved_path prepare error: %v", logPrefix, err)
-				}
-				sqlTx.Commit()
-			}
-		}
-
-		if len(edgeUpdates) > 0 {
-			sqlTx, err := rw.Begin()
-			if err == nil {
-				stmt, err := sqlTx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
-					VALUES (?, ?, 1, ?)
-					ON CONFLICT(node_a, node_b) DO UPDATE SET
-					count = count + 1, last_seen = MAX(last_seen, excluded.last_seen)`)
-				if err == nil {
-					var firstErr error
-					for _, e := range edgeUpdates {
-						if _, err := stmt.Exec(e.a, e.b, e.ts); err != nil && firstErr == nil {
-							firstErr = err
-						}
-					}
-					stmt.Close()
-					if firstErr != nil {
-						log.Printf("[store] %s edge error (first): %v", logPrefix, firstErr)
-					}
-				} else {
-					log.Printf("[store] %s edge prepare error: %v", logPrefix, err)
-				}
-				sqlTx.Commit()
-			}
-		}
-	}()
-}
-
-// neighborEdgesTableExists checks if the neighbor_edges table has any data.
+// neighborEdgesTableExists returns true when neighbor_edges contains at
+// least one row. Used by main.go to decide between "load snapshot" and
+// "start with empty graph and wait for the ingestor to populate it".
 func neighborEdgesTableExists(conn *sql.DB) bool {
 	var cnt int
 	err := conn.QueryRow("SELECT COUNT(*) FROM neighbor_edges").Scan(&cnt)
 	if err != nil {
-		return false // table doesn't exist
+		return false
 	}
 	return cnt > 0
 }
 
-// buildAndPersistEdges scans all packets in the store, extracts edges per
-// ADVERT/non-ADVERT rules, and persists them to SQLite.
-func buildAndPersistEdges(store *PacketStore, rw *sql.DB) int {
-	store.mu.RLock()
-	packets := make([]*StoreTx, len(store.packets))
-	copy(packets, store.packets)
-	store.mu.RUnlock()
+// ─── resolved_path helpers (read-only / in-memory only) ────────────────────────
 
-	_, pm := store.getCachedNodesAndPM()
-
-	tx, err := rw.Begin()
-	if err != nil {
-		log.Printf("[neighbor] begin tx error: %v", err)
-		return 0
-	}
-	defer tx.Rollback()
-
-	stmt, err := tx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
-		VALUES (?, ?, 1, ?)
-		ON CONFLICT(node_a, node_b) DO UPDATE SET
-		count = count + 1, last_seen = MAX(last_seen, excluded.last_seen)`)
-	if err != nil {
-		log.Printf("[neighbor] prepare stmt error: %v", err)
-		return 0
-	}
-	defer stmt.Close()
-
-	edgeCount := 0
-	var firstErr error
-	for _, pkt := range packets {
-		for _, obs := range pkt.Observations {
-			for _, ec := range extractEdgesFromObs(obs, pkt, pm) {
-				if _, err := stmt.Exec(ec.A, ec.B, ec.Timestamp); err != nil && firstErr == nil {
-					firstErr = err
-				}
-				edgeCount++
-			}
-		}
-	}
-	if firstErr != nil {
-		log.Printf("[neighbor] edge exec error (first): %v", firstErr)
-	}
-
-	if err := tx.Commit(); err != nil {
-		log.Printf("[neighbor] commit error: %v", err)
-		return 0
-	}
-	return edgeCount
-}
-
-// ─── resolved_path column ──────────────────────────────────────────────────────
-
-// ensureResolvedPathColumn adds the resolved_path column to observations if missing.
-func ensureResolvedPathColumn(dbPath string) error {
-	rw, err := cachedRW(dbPath)
-	if err != nil {
-		return err
-	}
-
-	// Check if column already exists
-	rows, err := rw.Query("PRAGMA table_info(observations)")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var cid int
-		var colName string
-		var colType sql.NullString
-		var notNull, pk int
-		var dflt sql.NullString
-		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == "resolved_path" {
-			return nil // already exists
-		}
-	}
-
-	_, err = rw.Exec("ALTER TABLE observations ADD COLUMN resolved_path TEXT")
-	if err != nil {
-		return fmt.Errorf("add resolved_path column: %w", err)
-	}
-	log.Println("[store] Added resolved_path column to observations")
-	return nil
-}
-
-// ensureObserverInactiveColumn adds the inactive column to observers if missing.
-// The column was originally added by ingestor migration (cmd/ingestor/db.go:344) to
-// support soft-delete via RemoveStaleObservers + filtered reads (PR #954). When the
-// server starts against a DB that was never touched by the ingestor (e.g. the e2e
-// fixture), the column is missing and read queries that filter on it (GetObservers,
-// GetStats) silently fail with "no such column: inactive" — leaving /api/observers
-// returning empty.
-func ensureObserverInactiveColumn(dbPath string) error {
-	rw, err := cachedRW(dbPath)
-	if err != nil {
-		return err
-	}
-
-	rows, err := rw.Query("PRAGMA table_info(observers)")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var cid int
-		var colName string
-		var colType sql.NullString
-		var notNull, pk int
-		var dflt sql.NullString
-		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == "inactive" {
-			return nil // already exists
-		}
-	}
-
-	_, err = rw.Exec("ALTER TABLE observers ADD COLUMN inactive INTEGER DEFAULT 0")
-	if err != nil {
-		return fmt.Errorf("add inactive column: %w", err)
-	}
-	log.Println("[store] Added inactive column to observers")
-	return nil
-}
-
-// ensureLastPacketAtColumn adds the last_packet_at column to observers if missing.
-// The column was originally added by ingestor migration (observers_last_packet_at_v1)
-// to track the most recent packet observation time separately from status updates.
-// When the server starts against a DB that was never touched by the ingestor (e.g.
-// the e2e fixture), the column is missing and read queries that reference it
-// (GetObservers, GetObserverByID) fail with "no such column: last_packet_at".
-func ensureLastPacketAtColumn(dbPath string) error {
-	rw, err := cachedRW(dbPath)
-	if err != nil {
-		return err
-	}
-
-	rows, err := rw.Query("PRAGMA table_info(observers)")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var cid int
-		var colName string
-		var colType sql.NullString
-		var notNull, pk int
-		var dflt sql.NullString
-		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == "last_packet_at" {
-			return nil // already exists
-		}
-	}
-
-	_, err = rw.Exec("ALTER TABLE observers ADD COLUMN last_packet_at TEXT")
-	if err != nil {
-		return fmt.Errorf("add last_packet_at column: %w", err)
-	}
-	log.Println("[store] Added last_packet_at column to observers")
-	return nil
-}
-
-// ensureForeignAdvertColumn adds the foreign_advert column to nodes/inactive_nodes
-// if missing (#730). The column is added by the ingestor migration foreign_advert_v1
-// — but the server may run against a DB the ingestor has never touched (e2e fixture,
-// fresh installs where the server boots first), in which case scanNodeRow fails
-// with "no such column: foreign_advert" and /api/nodes silently returns nothing.
-func ensureForeignAdvertColumn(dbPath string) error {
-	rw, err := cachedRW(dbPath)
-	if err != nil {
-		return err
-	}
-	for _, table := range []string{"nodes", "inactive_nodes"} {
-		has, err := tableHasColumn(rw, table, "foreign_advert")
-		if err != nil {
-			return fmt.Errorf("inspect %s: %w", table, err)
-		}
-		if has {
-			continue
-		}
-		if _, err := rw.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN foreign_advert INTEGER DEFAULT 0", table)); err != nil {
-			return fmt.Errorf("add foreign_advert to %s: %w", table, err)
-		}
-		log.Printf("[store] Added foreign_advert column to %s", table)
-	}
-	return nil
-}
-
-// tableHasColumn reports whether the named table has the named column.
-func tableHasColumn(rw *sql.DB, table, column string) (bool, error) {
-	rows, err := rw.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var colName string
-		var colType sql.NullString
-		var notNull, pk int
-		var dflt sql.NullString
-		if rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil && colName == column {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// softDeleteBlacklistedObservers marks observers matching the blacklist as
-// inactive=1 so they are hidden from API responses.  Runs once at startup.
-func softDeleteBlacklistedObservers(dbPath string, blacklist []string) {
-	rw, err := cachedRW(dbPath)
-	if err != nil {
-		log.Printf("[observer-blacklist] warning: could not open DB for soft-delete: %v", err)
-		return
-	}
-
-	placeholders := make([]string, 0, len(blacklist))
-	args := make([]interface{}, 0, len(blacklist))
-	for _, pk := range blacklist {
-		trimmed := strings.TrimSpace(pk)
-		if trimmed == "" {
-			continue
-		}
-		placeholders = append(placeholders, "LOWER(?)")
-		args = append(args, trimmed)
-	}
-	if len(placeholders) == 0 {
-		return
-	}
-
-	query := "UPDATE observers SET inactive = 1 WHERE LOWER(id) IN (" + strings.Join(placeholders, ",") + ") AND (inactive IS NULL OR inactive = 0)"
-	result, err := rw.Exec(query, args...)
-	if err != nil {
-		log.Printf("[observer-blacklist] warning: soft-delete failed: %v", err)
-		return
-	}
-	if n, _ := result.RowsAffected(); n > 0 {
-		log.Printf("[observer-blacklist] soft-deleted %d blacklisted observer(s)", n)
-	}
-}
-
-// resolvePathForObs resolves hop prefixes to full pubkeys for an observation.
-// Returns nil if path is empty.
+// resolvePathForObs resolves hop prefixes to full pubkeys for an
+// observation. Pure compute — does NOT persist (the ingestor owns
+// writes to observations.resolved_path).
 func resolvePathForObs(pathJSON, observerID string, tx *StoreTx, pm *prefixMap, graph *NeighborGraph) []*string {
 	hops := parsePathJSON(pathJSON)
 	if len(hops) == 0 {
 		return nil
 	}
-
-	// Build context pubkeys: observer + originator (if known)
 	contextPKs := make([]string, 0, 3)
 	if observerID != "" {
 		contextPKs = append(contextPKs, strings.ToLower(observerID))
@@ -450,28 +115,23 @@ func resolvePathForObs(pathJSON, observerID string, tx *StoreTx, pm *prefixMap, 
 	if fromNode != "" {
 		contextPKs = append(contextPKs, strings.ToLower(fromNode))
 	}
-
 	resolved := make([]*string, len(hops))
 	for i, hop := range hops {
-		// Add adjacent hops as context for disambiguation
 		ctx := make([]string, len(contextPKs), len(contextPKs)+2)
 		copy(ctx, contextPKs)
-		// Add previously resolved hops as context
 		if i > 0 && resolved[i-1] != nil {
 			ctx = append(ctx, *resolved[i-1])
 		}
-
 		node, _, _ := pm.resolveWithContext(hop, ctx, graph)
 		if node != nil {
 			pk := strings.ToLower(node.PublicKey)
 			resolved[i] = &pk
 		}
 	}
-
 	return resolved
 }
 
-// marshalResolvedPath converts []*string to JSON for storage.
+// marshalResolvedPath converts []*string to JSON for in-memory caching.
 func marshalResolvedPath(rp []*string) string {
 	if len(rp) == 0 {
 		return ""
@@ -495,225 +155,22 @@ func unmarshalResolvedPath(s string) []*string {
 	return result
 }
 
+// ─── Shared edge-extraction helper (used by ingestor + tests) ──────────────────
 
-// backfillResolvedPathsAsync processes observations with NULL resolved_path in
-// chunks, yielding between batches so HTTP handlers remain responsive. It sets
-// store.backfillComplete when finished and re-picks best observations for any
-// transmissions affected by newly resolved paths.
-func backfillResolvedPathsAsync(store *PacketStore, dbPath string, chunkSize int, yieldDuration time.Duration, backfillHours int) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[store] backfillResolvedPathsAsync panic recovered: %v", r)
-		}
-	}()
-	// Collect ALL pending obs refs upfront in one pass under a single RLock (fix A).
-	type obsRef struct {
-		obsID       int
-		pathJSON    string
-		observerID  string
-		txJSON      string
-		payloadType *int
-		txHash      string // to re-pick best obs
-	}
-
-	cutoff := time.Now().UTC().Add(-time.Duration(backfillHours) * time.Hour)
-
-	store.mu.RLock()
-	pm := store.nodePM
-	var allPending []obsRef
-	for _, tx := range store.packets {
-		// Skip transmissions older than the backfill window.
-		if tx.FirstSeen != "" {
-			if ts, err := time.Parse(time.RFC3339Nano, tx.FirstSeen); err == nil && ts.Before(cutoff) {
-				continue
-			}
-			// Also try the common SQLite format
-			if ts, err := time.Parse("2006-01-02 15:04:05", tx.FirstSeen); err == nil && ts.Before(cutoff) {
-				continue
-			}
-		}
-		for _, obs := range tx.Observations {
-			// Check if this observation has been resolved: look up in the index.
-			// If the tx has no reverse-map entries AND path is non-empty, it needs backfill.
-			hasRP := false
-			if _, ok := store.resolvedPubkeyReverse[tx.ID]; ok {
-				hasRP = true
-			}
-			if !hasRP && obs.PathJSON != "" && obs.PathJSON != "[]" {
-				allPending = append(allPending, obsRef{
-					obsID:       obs.ID,
-					pathJSON:    obs.PathJSON,
-					observerID:  obs.ObserverID,
-					txJSON:      tx.DecodedJSON,
-					payloadType: tx.PayloadType,
-					txHash:      tx.Hash,
-				})
-			}
-		}
-	}
-	store.mu.RUnlock()
-
-	totalPending := len(allPending)
-	if totalPending == 0 || pm == nil {
-		store.backfillComplete.Store(true)
-		log.Printf("[store] async resolved_path backfill: nothing to do")
-		return
-	}
-
-	store.backfillTotal.Store(int64(totalPending))
-	store.backfillProcessed.Store(0)
-	log.Printf("[store] async resolved_path backfill starting: %d observations", totalPending)
-
-	// Open RW connection once before the chunk loop (fix B).
-	var rw *sql.DB
-	if dbPath != "" {
-		var err error
-		rw, err = cachedRW(dbPath)
-		if err != nil {
-			log.Printf("[store] async backfill: open rw error: %v", err)
-		}
-	}
-	// rw is cached process-wide; do not close
-
-	totalProcessed := 0
-	for totalProcessed < totalPending {
-		end := totalProcessed + chunkSize
-		if end > totalPending {
-			end = totalPending
-		}
-		chunk := allPending[totalProcessed:end]
-
-		// Re-read graph at the start of each chunk so we pick up a freshly-
-		// built graph once the background build goroutine completes, instead
-		// of using the potentially-empty graph captured at cold start.
-		// (Dead RLock wrap removed PR #1208: store.graph is atomic.Pointer.)
-		graph := store.graph.Load()
-
-		// Resolve paths outside any lock.
-		type resolved struct {
-			obsID  int
-			rp     []*string
-			rpJSON string
-			txHash string
-		}
-		var results []resolved
-		for _, ref := range chunk {
-			fakeTx := &StoreTx{DecodedJSON: ref.txJSON, PayloadType: ref.payloadType}
-			rp := resolvePathForObs(ref.pathJSON, ref.observerID, fakeTx, pm, graph)
-			if len(rp) > 0 {
-				rpJSON := marshalResolvedPath(rp)
-				if rpJSON != "" {
-					results = append(results, resolved{ref.obsID, rp, rpJSON, ref.txHash})
-				}
-			}
-		}
-
-		// Persist to SQLite using the shared connection.
-		if len(results) > 0 && rw != nil {
-			sqlTx, err := rw.Begin()
-			if err != nil {
-				log.Printf("[store] async backfill: begin tx error: %v", err)
-			} else {
-				stmt, err := sqlTx.Prepare("UPDATE observations SET resolved_path = ? WHERE id = ?")
-				if err != nil {
-					log.Printf("[store] async backfill: prepare error: %v", err)
-					sqlTx.Rollback()
-				} else {
-					var execErr error
-					for _, r := range results {
-						if _, e := stmt.Exec(r.rpJSON, r.obsID); e != nil && execErr == nil {
-							execErr = e
-						}
-					}
-					if execErr != nil {
-						log.Printf("[store] async backfill: exec error (first): %v", execErr)
-					}
-					stmt.Close()
-					if err := sqlTx.Commit(); err != nil {
-						log.Printf("[store] async backfill: commit error: %v", err)
-					}
-				}
-			}
-
-			// Update in-memory state: update resolved pubkey index, re-pick best observation,
-			// and invalidate LRU cache entries for backfilled observations (#800).
-			//
-			// Lock ordering: always take s.mu BEFORE lruMu. The read path
-			// (fetchResolvedPathForObs) takes lruMu independently of s.mu,
-			// so we must NOT hold s.mu while taking lruMu. Instead, collect
-			// obsIDs to invalidate under s.mu, release it, then take lruMu.
-			store.mu.Lock()
-			affectedSet := make(map[string]bool)
-			lruInvalidate := make([]int, 0, len(results))
-			for _, r := range results {
-				// Remove old index entries for this tx, then re-add with new pubkeys
-				if !affectedSet[r.txHash] {
-					affectedSet[r.txHash] = true
-					if tx, ok := store.byHash[r.txHash]; ok {
-						store.removeFromResolvedPubkeyIndex(tx.ID)
-					}
-				}
-				// Add new resolved pubkeys to index
-				if tx, ok := store.byHash[r.txHash]; ok {
-					pks := extractResolvedPubkeys(r.rp)
-					store.addToResolvedPubkeyIndex(tx.ID, pks)
-					// Update byNode for relay nodes
-					for _, pk := range pks {
-						store.addToByNode(tx, pk)
-					}
-					// Update byPathHop resolved-key entries
-					hopsSeen := make(map[string]bool)
-					for _, hop := range txGetParsedPath(tx) {
-						hopsSeen[strings.ToLower(hop)] = true
-					}
-					for _, pk := range pks {
-						if !hopsSeen[pk] {
-							hopsSeen[pk] = true
-							store.byPathHop[pk] = append(store.byPathHop[pk], tx)
-						}
-					}
-				}
-				lruInvalidate = append(lruInvalidate, r.obsID)
-			}
-			// Re-pick best observation for affected transmissions
-			for txHash := range affectedSet {
-				if tx, ok := store.byHash[txHash]; ok {
-					pickBestObservation(tx)
-				}
-			}
-			store.mu.Unlock()
-
-			// Invalidate LRU entries AFTER releasing s.mu to maintain lock
-			// ordering (lruMu must never be taken while s.mu is held).
-			store.lruMu.Lock()
-			for _, obsID := range lruInvalidate {
-				store.lruDelete(obsID)
-			}
-			store.lruMu.Unlock()
-		}
-
-		totalProcessed += len(chunk)
-		store.backfillProcessed.Store(int64(totalProcessed))
-		pct := float64(totalProcessed) / float64(totalPending) * 100
-		log.Printf("[store] backfill progress: %d/%d observations (%.1f%%)", totalProcessed, totalPending, pct)
-
-		time.Sleep(yieldDuration)
-	}
-
-	store.backfillComplete.Store(true)
-	log.Printf("[store] async resolved_path backfill complete: %d observations processed", totalProcessed)
-}
-
-// ─── Shared helpers ────────────────────────────────────────────────────────────
-
-// edgeCandidate represents an extracted edge to be persisted.
+// edgeCandidate represents an extracted edge. The ingestor uses the
+// same logic when computing edges from observations.
 type edgeCandidate struct {
 	A, B, Timestamp string
 }
 
-// extractEdgesFromObs extracts neighbor edge candidates from a single observation.
-// For ADVERTs: originator↔path[0] (if unambiguous). For ALL types: observer↔path[last] (if unambiguous).
-// Also handles zero-hop ADVERTs (originator↔observer direct link).
+// extractEdgesFromObs extracts neighbor edge candidates from a single
+// observation. For ADVERTs: originator↔path[0] (if unambiguous). For
+// ALL types: observer↔path[last] (if unambiguous). Also handles
+// zero-hop ADVERTs (originator↔observer direct link).
+//
+// Kept in cmd/server because the in-memory graph builder
+// (neighbor_graph.go) also calls it; it is pure compute and does not
+// touch the DB.
 func extractEdgesFromObs(obs *StoreObs, tx *StoreTx, pm *prefixMap) []edgeCandidate {
 	isAdvert := tx.PayloadType != nil && *tx.PayloadType == PayloadADVERT
 	fromNode := extractFromNode(tx)
@@ -736,7 +193,6 @@ func extractEdgesFromObs(obs *StoreObs, tx *StoreTx, pm *prefixMap) []edgeCandid
 		return edges
 	}
 
-	// Edge 1: originator ↔ path[0] — ADVERTs only (resolve prefix to full pubkey)
 	if isAdvert && fromNode != "" && pm != nil {
 		firstHop := strings.ToLower(path[0])
 		fromLower := strings.ToLower(fromNode)
@@ -753,7 +209,6 @@ func extractEdgesFromObs(obs *StoreObs, tx *StoreTx, pm *prefixMap) []edgeCandid
 		}
 	}
 
-	// Edge 2: observer ↔ path[last] — ALL packet types
 	if pm != nil {
 		lastHop := strings.ToLower(path[len(path)-1])
 		candidates := pm.m[lastHop]
@@ -770,51 +225,4 @@ func extractEdgesFromObs(obs *StoreObs, tx *StoreTx, pm *prefixMap) []edgeCandid
 	}
 
 	return edges
-}
-
-// openRW opens a read-write SQLite connection (same pattern as PruneOldPackets).
-func openRW(dbPath string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL", dbPath)
-	rw, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, err
-	}
-	rw.SetMaxOpenConns(1)
-	// DSN _busy_timeout may not be honored by all drivers; set via PRAGMA
-	// to guarantee SQLite retries for up to 5s before returning SQLITE_BUSY.
-	if _, err := rw.Exec("PRAGMA busy_timeout = 5000"); err != nil {
-		rw.Close()
-		return nil, fmt.Errorf("set busy_timeout: %w", err)
-	}
-	return rw, nil
-}
-
-// PruneNeighborEdges removes edges older than maxAgeDays from both SQLite and
-// the in-memory graph. Uses openRW internally because the shared database.conn
-// is opened with mode=ro and DELETEs would silently fail.
-func PruneNeighborEdges(dbPath string, graph *NeighborGraph, maxAgeDays int) (int, error) {
-	cutoff := time.Now().UTC().Add(-time.Duration(maxAgeDays) * 24 * time.Hour)
-
-	// 1. Prune from SQLite using a read-write connection
-	var dbPruned int64
-	rw, err := cachedRW(dbPath)
-	if err != nil {
-		return 0, fmt.Errorf("prune neighbor_edges: open rw: %w", err)
-	}
-	res, err := rw.Exec("DELETE FROM neighbor_edges WHERE last_seen < ?", cutoff.Format(time.RFC3339))
-	if err != nil {
-		return 0, fmt.Errorf("prune neighbor_edges: %w", err)
-	}
-	dbPruned, _ = res.RowsAffected()
-
-	// 2. Prune from in-memory graph
-	memPruned := 0
-	if graph != nil {
-		memPruned = graph.PruneOlderThan(cutoff)
-	}
-
-	if dbPruned > 0 || memPruned > 0 {
-		log.Printf("[neighbor-prune] removed %d DB rows, %d in-memory edges older than %d days", dbPruned, memPruned, maxAgeDays)
-	}
-	return int(dbPruned), nil
 }

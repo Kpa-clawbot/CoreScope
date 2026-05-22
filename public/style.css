@@ -712,20 +712,20 @@ input[type="week"] {
 .filter-bar input, .filter-bar select {
   padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
   font-size: 13px; background: var(--input-bg); color: var(--text); font-family: var(--font);
-  height: 34px; box-sizing: border-box; line-height: 1;
+  height: 34px; min-height: 34px; box-sizing: border-box; line-height: 1;
 }
 .filter-bar input { width: 120px; }
 .filter-bar select { min-width: 90px; }
 .filter-bar .btn {
   padding: 6px 14px; border: 1px solid var(--border); border-radius: 6px;
   background: var(--input-bg); cursor: pointer; font-size: 13px; transition: all .15s;
-  font-family: var(--font); color: var(--text); height: 34px; box-sizing: border-box; line-height: 1;
+  font-family: var(--font); color: var(--text); height: 34px; min-height: 34px; box-sizing: border-box; line-height: 1;
 }
 .filter-group { display: flex; gap: 6px; align-items: center; }
 /* #1124 (MAJOR-3): each grouped cluster wraps as a single unit at narrow
  * widths instead of letting individual controls reflow across categories. */
 .filter-bar .filter-group { flex-wrap: nowrap; }
-.filter-group .btn { padding: 4px 10px; font-size: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.filter-group .btn { padding: 4px 10px; font-size: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--input-bg); color: var(--text); cursor: pointer; transition: background 0.15s, color 0.15s; height: 34px; min-height: 34px; box-sizing: border-box; line-height: 1; }
 .filter-group .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .filter-group .btn:hover:not(.active) { background: var(--surface-2); }
 .filter-group + .filter-group { border-left: 1px solid var(--border); padding-left: 12px; margin-left: 6px; }
@@ -740,6 +740,7 @@ input[type="week"] {
 .sort-help:hover .sort-help-tip { display: block; }
 .filter-bar .btn:hover { background: var(--row-hover); }
 .filter-bar .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.filter-bar .col-toggle-btn { height: 34px; min-height: 34px; }
 
 .btn-icon {
   background: none; border: 1px solid var(--border); border-radius: 6px;
@@ -877,6 +878,15 @@ body.scroll-locked { overflow: hidden; }
   font-size: 10px; font-weight: 700; font-family: var(--mono);
   background: var(--nav-bg); color: var(--nav-text); letter-spacing: .5px;
 }
+/* Observer IATA pill rendered inline next to observer name on packets (#1188).
+ * Visually similar to .badge-region but distinct so the row badge and the
+ * inline-with-observer badge can be styled independently in future themes. */
+.badge-iata {
+  display: inline-block; padding: 1px 5px; border-radius: 4px;
+  font-size: 10px; font-weight: 700; font-family: var(--mono);
+  background: var(--nav-bg); color: var(--nav-text); letter-spacing: .5px;
+  margin-left: 4px; vertical-align: middle;
+}
 /* TODO: expose --transport-badge-bg/fg in customizer THEME_CSS_MAP (tracked in future milestone) */
 .badge-transport {
   display: inline-block; padding: 1px 5px; border-radius: 4px;
@@ -908,6 +918,10 @@ body.scroll-locked { overflow: hidden; }
 }
 .detail-meta dt { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .3px; }
 .detail-meta dd { font-weight: 500; margin-bottom: 4px; }
+/* #1281: 📍map link inside detail-meta — UA-default blue is unreadable on
+ * dark backgrounds. Force theme-aware color via --accent. */
+.loc-map-link { color: var(--accent); font-size: 0.85em; text-decoration: none; }
+.loc-map-link:hover { text-decoration: underline; }
 .observation-current { background: var(--accent-bg, rgba(0,122,255,0.1)); font-weight: 600; }
 .detail-obs-row:hover { background: var(--hover-bg, rgba(255,255,255,0.05)); }
 .detail-obs-table th { font-size: 0.8em; text-transform: uppercase; color: var(--text-muted); }
@@ -1349,6 +1363,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .nodes-filters select {
   padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
   font-size: 13px; background: var(--input-bg); color: var(--text); font-family: var(--font);
+  height: 34px; min-height: 34px; box-sizing: border-box; line-height: 1;
 }
 
 /* Node Detail */
@@ -2012,6 +2027,12 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
     font-size: 14px;
   }
   .ch-avatar.ch-tappable { min-width: 44px; min-height: 44px; width: 44px; height: 44px; }
+  /* #1253: trim .badge-iata h-padding + margin-left on narrow viewports so
+   * the observer cell + IATA pill fits within a 375px viewport. Without this
+   * the badge right edge overflows by ~1.25px at 375px (same class of fix
+   * as #1250/#1251 VCR LCD-clip). Badge stays fully visible — only padding
+   * and side margin shrink; font-size, colors (via vars) unchanged. */
+  .badge-iata { padding: 1px 3px; margin-left: 2px; }
 }
 
 /* Full-screen node detail */
@@ -2155,12 +2176,12 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 }
 .observer-selector { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
 .node-qr { text-align: center; margin-top: 8px; }
-.node-qr svg { max-width: 100px; border-radius: 4px; }
+.node-qr svg { max-width: 100px; height: auto; border-radius: 4px; }
 [data-theme="dark"] .node-qr svg rect[fill="#ffffff"] { fill: var(--card-bg); }
 [data-theme="dark"] .node-qr svg rect[fill="#000000"] { fill: var(--text); }
 .node-map-qr-wrap { position: relative; }
 .node-map-qr-overlay { position: absolute; bottom: 8px; right: 8px; z-index: 400; background: rgba(255,255,255,0.5); border-radius: 4px; padding: 4px; line-height: 0; margin: 0; text-align: center; }
-.node-map-qr-overlay svg { max-width: 56px !important; display: block; margin: 0; }
+.node-map-qr-overlay svg { max-width: 56px !important; height: auto; display: block; margin: 0; }
 [data-theme="dark"] .node-map-qr-overlay { background: rgba(255,255,255,0.4); }
 
 /* Replay on Live Map button in packet detail */
@@ -2447,7 +2468,8 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 .node-top-row { display: flex; gap: 16px; margin-bottom: 12px; }
 .node-top-row .node-map-wrap { flex: 3; min-height: 200px; border-radius: 8px; overflow: hidden; }
 .node-top-row .node-map-wrap .node-detail-map { height: 100%; }
-.node-top-row .node-qr-wrap { flex: 1; min-width: 120px; max-width: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.node-top-row .node-qr-wrap { flex: 1; align-self: flex-start; min-width: 120px; max-width: 160px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+.node-top-row .node-qr-wrap .node-qr { margin-top: 0; }
 .node-qr-wrap--full { max-width: 240px; margin: 0 auto; }
 .node-stats-table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
 .node-stats-table td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
@@ -2464,7 +2486,36 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
     height: 200px;
     min-height: 160px;
   }
+  /* #1243 — On mobile, mirror the desktop split-pane behavior used by the
+     compact node detail (.node-map-qr-wrap): overlay the QR on the map
+     instead of stacking a 250px-tall QR panel below it. Desktop (≥768px)
+     keeps the side-by-side flex layout untouched. */
+  .node-top-row { position: relative; }
+  .node-top-row .node-map-wrap { flex: 1 1 100%; }
+  .node-top-row .node-qr-wrap {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    z-index: 400;
+    flex: 0 0 auto;
+    min-width: 0;
+    max-width: 96px;
+    padding: 4px;
+    background: var(--card-bg-translucent, rgba(255, 255, 255, 0.85));
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    line-height: 0;
+    margin: 0;
+  }
+  .node-top-row .node-qr-wrap .node-qr svg { max-width: 72px; height: auto; }
+  /* Hide the redundant pubkey caption inside the overlay QR — it's already
+     shown in the card above and would push the overlay too large. */
+  .node-top-row .node-qr-wrap .mono { display: none; }
+  [data-theme="dark"] .node-top-row .node-qr-wrap {
+    background: var(--card-bg-translucent-dark, rgba(255, 255, 255, 0.4));
+  }
 }
+
 .detail-back-btn {
   background: none;
   border: 1px solid var(--border, #333);
@@ -2575,23 +2626,33 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   .perf-table th, .perf-table td { padding: 4px 6px; }
 }
 
-/* ─── Region filter bar ─── */
+/* ─── Region / Area filter bars ─── */
 .region-filter-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; }
+.area-dropdown-menu { min-width: 160px; }
+.area-dropdown-item.area-item-active { color: var(--accent); font-weight: 600; }
 .region-filter-container { margin: 0; padding: 0; display: inline-flex; align-items: center; }
 .region-pill {
   display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 16px;
   font-size: 12px; font-weight: 500; cursor: pointer; border: 1.5px solid var(--border);
-  background: transparent; color: var(--text-muted); transition: all 0.15s;
+  background: transparent; color: var(--text-muted); transition: all 0.15s; white-space: nowrap;
+  flex-shrink: 0;
 }
 .region-pill:hover { border-color: var(--accent); color: var(--accent); }
-.region-pill-active {
+button.region-pill-active {
   background: var(--accent); color: #fff; border-color: var(--accent);
 }
-.region-pill-active:hover { opacity: 0.85; }
+button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 .region-filter-label {
   font-size: 12px; font-weight: 600; color: var(--text-muted); align-self: center;
-  margin-right: 2px; user-select: none;
+  margin-right: 2px; user-select: none; white-space: nowrap; flex-shrink: 0;
 }
+.analytics-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.analytics-time-window-select {
+  height: 34px; min-height: 34px; padding: 0 10px; border-radius: 6px; box-sizing: border-box;
+  font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid var(--border);
+  background: var(--input-bg); color: var(--text); transition: border-color 0.15s;
+}
+.analytics-time-window-select:hover { border-color: var(--accent); }
 .region-dropdown-wrap { position: relative; display: inline-flex; align-items: center; }
 .region-dropdown-trigger {
   display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 6px;
