@@ -233,6 +233,12 @@ type PacketStore struct {
 	multiByteCapCache map[string]*MultiByteCapEntry
 	multiByteCapAt    time.Time
 
+	// Snapshot from the last analytics cycle + O(1) index, both under cacheMu.
+	mbCapSnapshot []MultiByteCapEntry
+	mbCapIndex    map[string]MultiByteCapEntry
+	// Ensures at most one persistMultibyteCapability goroutine runs at a time.
+	mbPersistMu sync.Mutex
+
 	// Cached per-pubkey relay info + usefulness score maps (#1257). These
 	// fold the previously per-node GetRepeaterRelayInfo /
 	// GetRepeaterUsefulnessScore loop in handleNodes into one O(N) pass
@@ -813,6 +819,7 @@ func (s *PacketStore) Load() error {
 		log.Printf("[store] Loaded %d transmissions (%d observations) in %v (tracked ~%.0fMB, heap ~%.0fMB)",
 			len(s.packets), s.totalObs, elapsed, s.trackedMemoryMB(), s.estimatedMemoryMB())
 	}
+	s.loadMultibyteCapFromDB()
 	return nil
 }
 
@@ -7136,7 +7143,20 @@ func (s *PacketStore) computeAnalyticsHashSizesWithCapability(region, area strin
 			}
 		}
 	}
-	result["multiByteCapability"] = s.computeMultiByteCapability(globalAdopterHS)
+	mbEntries := s.computeMultiByteCapability(globalAdopterHS)
+	result["multiByteCapability"] = mbEntries
+
+	// Publish snapshot + O(1) index under cacheMu, then persist to DB.
+	s.cacheMu.Lock()
+	s.mbCapSnapshot = mbEntries
+	mbIdx := make(map[string]MultiByteCapEntry, len(mbEntries))
+	for _, e := range mbEntries {
+		mbIdx[e.PublicKey] = e
+	}
+	s.mbCapIndex = mbIdx
+	s.cacheMu.Unlock()
+	s.maybePersistMultibyteCapability(mbEntries)
+
 	return result
 }
 
@@ -7934,6 +7954,139 @@ func EnrichNodeWithMultiByte(node map[string]interface{}, entry *MultiByteCapEnt
 	node["multi_byte_status"] = entry.Status
 	node["multi_byte_evidence"] = entry.Evidence
 	node["multi_byte_max_hash_size"] = entry.MaxHashSize
+}
+
+// GetMultibyteCapFor returns the capability entry for a single pubkey via an O(1) map
+// lookup into the snapshot rebuilt by each analytics cycle (and pre-populated from
+// the DB on cold start). Returns false when the pubkey has no known capability.
+func (s *PacketStore) GetMultibyteCapFor(pk string) (*MultiByteCapEntry, bool) {
+	s.cacheMu.Lock()
+	e, ok := s.mbCapIndex[pk]
+	s.cacheMu.Unlock()
+	if !ok {
+		return nil, false
+	}
+	return &e, true
+}
+
+// multibyteStatusToInt maps a capability status string to the DB integer (0=unknown, 1=suspected, 2=confirmed).
+func multibyteStatusToInt(status string) int {
+	switch status {
+	case "confirmed":
+		return 2
+	case "suspected":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// loadMultibyteCapFromDB pre-populates mbCapSnapshot and mbCapIndex from the nodes
+// table so cold starts serve the last-known capability without waiting for the first
+// analytics cycle (~15s).
+func (s *PacketStore) loadMultibyteCapFromDB() {
+	if !s.db.hasMultibyteSupCols {
+		return
+	}
+	rows, err := s.db.conn.Query(
+		`SELECT public_key, COALESCE(name,''), COALESCE(role,''), COALESCE(last_seen,''), multibyte_sup, COALESCE(multibyte_evidence,'')
+		 FROM nodes WHERE multibyte_sup > 0`)
+	if err != nil {
+		log.Printf("[multibyte] loadFromDB: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var entries []MultiByteCapEntry
+	for rows.Next() {
+		var pk, name, role, lastSeen, evidence string
+		var sup int
+		if err := rows.Scan(&pk, &name, &role, &lastSeen, &sup, &evidence); err != nil {
+			continue
+		}
+		status := "unknown"
+		switch sup {
+		case 2:
+			status = "confirmed"
+		case 1:
+			status = "suspected"
+		}
+		entries = append(entries, MultiByteCapEntry{
+			PublicKey: pk,
+			Name:      name,
+			Role:      role,
+			Status:    status,
+			Evidence:  evidence,
+			LastSeen:  lastSeen,
+		})
+	}
+	if len(entries) == 0 {
+		return
+	}
+	idx := make(map[string]MultiByteCapEntry, len(entries))
+	for _, e := range entries {
+		idx[e.PublicKey] = e
+	}
+	s.cacheMu.Lock()
+	s.mbCapSnapshot = entries
+	s.mbCapIndex = idx
+	s.cacheMu.Unlock()
+	log.Printf("[multibyte] loaded %d capability entries from DB", len(entries))
+}
+
+// maybePersistMultibyteCapability launches a background persist if none is already in
+// flight. Concurrent analytics cycles are coalesced — the in-flight persist holds a
+// snapshot close to the current one.
+func (s *PacketStore) maybePersistMultibyteCapability(entries []MultiByteCapEntry) {
+	if !s.mbPersistMu.TryLock() {
+		return
+	}
+	go func() {
+		defer s.mbPersistMu.Unlock()
+		s.persistMultibyteCapability(entries)
+	}()
+}
+
+// persistMultibyteCapability writes confirmed/suspected entries to the DB so capability
+// survives server restart. Entries with sup==0 (unknown) are skipped — we never
+// overwrite a previously confirmed/suspected DB value with an empty-snapshot entry.
+func (s *PacketStore) persistMultibyteCapability(entries []MultiByteCapEntry) {
+	if !s.db.hasMultibyteSupCols {
+		return
+	}
+	tx, err := s.db.conn.Begin()
+	if err != nil {
+		log.Printf("[multibyte] persist begin: %v", err)
+		return
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmtNodes, err := tx.Prepare(`UPDATE nodes SET multibyte_sup=?, multibyte_evidence=? WHERE public_key=?`)
+	if err != nil {
+		log.Printf("[multibyte] persist prepare nodes: %v", err)
+		return
+	}
+	defer stmtNodes.Close()
+	stmtInactive, err := tx.Prepare(`UPDATE inactive_nodes SET multibyte_sup=?, multibyte_evidence=? WHERE public_key=?`)
+	if err != nil {
+		log.Printf("[multibyte] persist prepare inactive: %v", err)
+		return
+	}
+	defer stmtInactive.Close()
+
+	for _, e := range entries {
+		sup := multibyteStatusToInt(e.Status)
+		if sup == 0 {
+			continue // never overwrite persisted confirmed/suspected with an unknown entry
+		}
+		evid := e.Evidence
+		stmtNodes.Exec(sup, evid, e.PublicKey)    //nolint:errcheck — UPDATE on a key that moved to inactive is not an error
+		stmtInactive.Exec(sup, evid, e.PublicKey) //nolint:errcheck
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("[multibyte] persist commit: %v", err)
+	}
 }
 
 // GetMultiByteCapMap returns a cached pubkey → MultiByteCapEntry map.

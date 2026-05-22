@@ -2844,3 +2844,59 @@ func TestBackfillPathJSONAsync_BracketRowsTerminate(t *testing.T) {
 		t.Errorf("expected %d rows with path_json='[]', got %d", seedCount, bracketCount)
 	}
 }
+
+// TestSchemaMultibyteSupColumns verifies that the multibyte_sup_v1 migration adds
+// the expected columns and is idempotent across multiple OpenStore calls.
+func TestSchemaMultibyteSupColumns(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	store, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	for _, table := range []string{"nodes", "inactive_nodes"} {
+		rows, err := store.db.Query("PRAGMA table_info(" + table + ")")
+		if err != nil {
+			t.Fatalf("PRAGMA table_info(%s): %v", table, err)
+		}
+		var foundSup, foundEvid bool
+		for rows.Next() {
+			var cid int
+			var name, colType string
+			var notNull, pk int
+			var dflt interface{}
+			if rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk) == nil {
+				if name == "multibyte_sup" {
+					foundSup = true
+				}
+				if name == "multibyte_evidence" {
+					foundEvid = true
+				}
+			}
+		}
+		rows.Close()
+		if !foundSup {
+			t.Errorf("table %s: multibyte_sup column missing", table)
+		}
+		if !foundEvid {
+			t.Errorf("table %s: multibyte_evidence column missing", table)
+		}
+	}
+
+	// Verify migration marker recorded.
+	var migDone int
+	if err := store.db.QueryRow("SELECT 1 FROM _migrations WHERE name='multibyte_sup_v1'").Scan(&migDone); err != nil {
+		t.Error("migration marker 'multibyte_sup_v1' not recorded in _migrations")
+	}
+
+	// Idempotency: re-opening must not fail (migration guarded by marker).
+	store.Close()
+	store2, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenStore (second open): %v", err)
+	}
+	store2.Close()
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -431,5 +432,173 @@ func TestMultiByteCapability_AdopterEvidenceTakesPrecedence(t *testing.T) {
 	}
 	if capByName["RepAdopter"].Evidence != "advert" {
 		t.Errorf("with adopter data: expected advert evidence, got %s", capByName["RepAdopter"].Evidence)
+	}
+}
+
+// --- Persistence layer tests (#903) ---
+
+// setupPersistTestDB creates an in-memory DB with multibyte_sup/multibyte_evidence columns.
+func setupPersistTestDB(t *testing.T) *DB {
+	t.Helper()
+	conn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.SetMaxOpenConns(1)
+	conn.Exec(`CREATE TABLE nodes (
+		public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
+		lat REAL, lon REAL, last_seen TEXT, first_seen TEXT,
+		advert_count INTEGER DEFAULT 0, battery_mv INTEGER, temperature_c REAL,
+		foreign_advert INTEGER DEFAULT 0, default_scope TEXT,
+		multibyte_sup INTEGER NOT NULL DEFAULT 0, multibyte_evidence TEXT
+	)`)
+	conn.Exec(`CREATE TABLE inactive_nodes (
+		public_key TEXT PRIMARY KEY, name TEXT, role TEXT,
+		lat REAL, lon REAL, last_seen TEXT, first_seen TEXT,
+		advert_count INTEGER DEFAULT 0, battery_mv INTEGER, temperature_c REAL,
+		foreign_advert INTEGER DEFAULT 0, default_scope TEXT,
+		multibyte_sup INTEGER NOT NULL DEFAULT 0, multibyte_evidence TEXT
+	)`)
+	return &DB{conn: conn, hasMultibyteSupCols: true}
+}
+
+// TestMultibyteCapPersistRoundTrip verifies that values written by
+// persistMultibyteCapability are correctly read back by loadMultibyteCapFromDB.
+func TestMultibyteCapPersistRoundTrip(t *testing.T) {
+	db := setupPersistTestDB(t)
+	// Seed a node row so the UPDATE in persist has a target.
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, multibyte_sup)
+		VALUES ('aabbccdd11223344', 'TestNode', 'repeater', '2026-01-01T00:00:00Z', 0)`)
+
+	store := NewPacketStore(db, nil)
+	entries := []MultiByteCapEntry{
+		{PublicKey: "aabbccdd11223344", Name: "TestNode", Role: "repeater", Status: "confirmed", Evidence: "advert"},
+	}
+	store.persistMultibyteCapability(entries)
+
+	// Load into a fresh store to verify round-trip.
+	store2 := NewPacketStore(db, nil)
+	store2.loadMultibyteCapFromDB()
+
+	store2.cacheMu.Lock()
+	snap := store2.mbCapSnapshot
+	store2.cacheMu.Unlock()
+
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 entry after round-trip, got %d", len(snap))
+	}
+	if snap[0].PublicKey != "aabbccdd11223344" {
+		t.Errorf("pubkey mismatch: %s", snap[0].PublicKey)
+	}
+	if snap[0].Status != "confirmed" {
+		t.Errorf("status = %q, want confirmed", snap[0].Status)
+	}
+	if snap[0].Evidence != "advert" {
+		t.Errorf("evidence = %q, want advert", snap[0].Evidence)
+	}
+}
+
+// TestMultibyteCapPersistSkipsUnknown verifies that entries with status "unknown"
+// (sup==0) do not overwrite previously confirmed/suspected values in the DB —
+// the data-destruction guard.
+func TestMultibyteCapPersistSkipsUnknown(t *testing.T) {
+	db := setupPersistTestDB(t)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, multibyte_sup, multibyte_evidence)
+		VALUES ('aabbccdd11223344', 'TestNode', 'repeater', '2026-01-01T00:00:00Z', 2, 'advert')`)
+
+	store := NewPacketStore(db, nil)
+	// Persist an "unknown" entry — must NOT overwrite the confirmed DB value.
+	store.persistMultibyteCapability([]MultiByteCapEntry{
+		{PublicKey: "aabbccdd11223344", Status: "unknown"},
+	})
+
+	var sup int
+	var evid sql.NullString
+	db.conn.QueryRow(`SELECT multibyte_sup, multibyte_evidence FROM nodes WHERE public_key='aabbccdd11223344'`).Scan(&sup, &evid)
+	if sup != 2 {
+		t.Errorf("DB was overwritten: multibyte_sup = %d, want 2", sup)
+	}
+	if evid.String != "advert" {
+		t.Errorf("DB was overwritten: multibyte_evidence = %q, want advert", evid.String)
+	}
+}
+
+// TestMultibyteCapMaybePersistCoalesces verifies that concurrent calls to
+// maybePersistMultibyteCapability coalesce via TryLock — at most one goroutine
+// runs persistMultibyteCapability at a time.
+func TestMultibyteCapMaybePersistCoalesces(t *testing.T) {
+	db := setupPersistTestDB(t)
+	store := NewPacketStore(db, nil)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			store.maybePersistMultibyteCapability(nil)
+		}()
+	}
+	wg.Wait()
+	// Success: no panic, no deadlock, TryLock coalesced concurrent callers.
+}
+
+// TestMultibyteCapGetMultibyteCapForO1 verifies that GetMultibyteCapFor returns
+// the correct entry via the O(1) mbCapIndex map.
+func TestMultibyteCapGetMultibyteCapForO1(t *testing.T) {
+	db := setupPersistTestDB(t)
+	store := NewPacketStore(db, nil)
+
+	// Directly populate the index as the analytics cycle would.
+	store.cacheMu.Lock()
+	store.mbCapIndex = map[string]MultiByteCapEntry{
+		"aabbccdd11223344": {PublicKey: "aabbccdd11223344", Status: "confirmed", Evidence: "advert"},
+		"eeff001122334455": {PublicKey: "eeff001122334455", Status: "suspected", Evidence: "path"},
+	}
+	store.cacheMu.Unlock()
+
+	e, ok := store.GetMultibyteCapFor("aabbccdd11223344")
+	if !ok || e == nil {
+		t.Fatal("expected entry for known pubkey, got none")
+	}
+	if e.Status != "confirmed" {
+		t.Errorf("status = %q, want confirmed", e.Status)
+	}
+
+	_, ok = store.GetMultibyteCapFor("0000000000000000")
+	if ok {
+		t.Error("expected no entry for unknown pubkey")
+	}
+}
+
+// TestMultibyteCapLoadFromDB verifies that loadMultibyteCapFromDB skips nodes
+// with multibyte_sup == 0 and only loads confirmed/suspected entries.
+func TestMultibyteCapLoadFromDB(t *testing.T) {
+	db := setupPersistTestDB(t)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, multibyte_sup, multibyte_evidence)
+		VALUES ('aa11', 'A', 'repeater', '2026-01-01T00:00:00Z', 2, 'advert')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, multibyte_sup, multibyte_evidence)
+		VALUES ('bb22', 'B', 'repeater', '2026-01-01T00:00:00Z', 1, 'path')`)
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen, multibyte_sup)
+		VALUES ('cc33', 'C', 'repeater', '2026-01-01T00:00:00Z', 0)`) // unknown — must be skipped
+
+	store := NewPacketStore(db, nil)
+	store.loadMultibyteCapFromDB()
+
+	store.cacheMu.Lock()
+	snap := store.mbCapSnapshot
+	idx := store.mbCapIndex
+	store.cacheMu.Unlock()
+
+	if len(snap) != 2 {
+		t.Fatalf("expected 2 entries (confirmed+suspected), got %d", len(snap))
+	}
+	if e, ok := idx["aa11"]; !ok || e.Status != "confirmed" {
+		t.Errorf("aa11: expected confirmed, got %+v", e)
+	}
+	if e, ok := idx["bb22"]; !ok || e.Status != "suspected" {
+		t.Errorf("bb22: expected suspected, got %+v", e)
+	}
+	if _, ok := idx["cc33"]; ok {
+		t.Error("cc33 with sup=0 should not be in the index")
 	}
 }

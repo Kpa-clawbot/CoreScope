@@ -27,8 +27,9 @@ type DB struct {
 	isV3             bool   // v3 schema: observer_idx in observations (vs observer_id in v2)
 	hasResolvedPath  bool   // observations table has resolved_path column
 	hasObsRawHex     bool   // observations table has raw_hex column (#881)
-	hasScopeName     bool   // transmissions.scope_name column exists (#899)
-	hasDefaultScope  bool   // nodes.default_scope column exists (#899)
+	hasScopeName        bool   // transmissions.scope_name column exists (#899)
+	hasDefaultScope     bool   // nodes.default_scope column exists (#899)
+	hasMultibyteSupCols bool   // nodes/inactive_nodes have multibyte_sup/multibyte_evidence (#903)
 
 	// Channel list cache (60s TTL) — avoids repeated GROUP BY scans (#762)
 	channelsCacheMu  sync.Mutex
@@ -121,8 +122,11 @@ func (db *DB) detectSchema() {
 		var notNull, pk int
 		var dflt sql.NullString
 		if nodeRows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk) == nil {
-			if colName == "default_scope" {
+			switch colName {
+			case "default_scope":
 				db.hasDefaultScope = true
+			case "multibyte_sup":
+				db.hasMultibyteSupCols = true
 			}
 		}
 	}
