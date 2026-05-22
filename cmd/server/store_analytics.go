@@ -1841,15 +1841,19 @@ func (s *PacketStore) GetNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 // Only adverts from the last 7 days are considered so that legitimate config
 // changes during testing don't create permanent false positives.
 func (s *PacketStore) computeNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
+	// Snapshot the advert list under a brief read lock so the CPU-bound parse
+	// pass runs without holding s.mu (same pattern as computeRepeaterRelayInfoMap).
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	adverts := s.byPayloadType[4]
+	snapAdverts := make([]*StoreTx, len(adverts))
+	copy(snapAdverts, adverts)
+	s.mu.RUnlock()
 
 	info := make(map[string]*hashSizeNodeInfo)
 
 	cutoff := time.Now().UTC().Add(-7 * 24 * time.Hour).Format("2006-01-02T15:04:05.000Z")
 
-	adverts := s.byPayloadType[4]
-	for _, tx := range adverts {
+	for _, tx := range snapAdverts {
 		// Skip adverts older than 7 days to avoid false positives from
 		// historical config changes during testing.
 		if tx.FirstSeen != "" && tx.FirstSeen < cutoff {

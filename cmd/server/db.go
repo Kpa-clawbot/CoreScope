@@ -355,10 +355,14 @@ func (db *DB) GetStats() (*Stats, error) {
 	db.conn.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&s.TotalNodesAllTime)
 	db.conn.QueryRow("SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0").Scan(&s.TotalObservers)
 
-	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
+	// observations.timestamp is TEXT (RFC3339); use string comparison so the
+	// idx_observations_timestamp index is used. Integer Unix timestamps vs TEXT
+	// columns trigger SQLite's type-affinity rule (INTEGER < TEXT), which makes
+	// every row pass the filter and causes a full table scan.
+	oneHourAgo := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
 	db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneHourAgo).Scan(&s.PacketsLastHour)
 
-	oneDayAgo := time.Now().Add(-24 * time.Hour).Unix()
+	oneDayAgo := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
 	db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneDayAgo).Scan(&s.PacketsLast24h)
 
 	return s, nil

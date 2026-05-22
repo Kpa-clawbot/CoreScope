@@ -6,11 +6,19 @@ import (
 )
 
 // repeaterEnrichTTL bounds how stale the per-page bulk enrichment caches
-// for handleNodes may be. Same 15s budget as GetNodeHashSizeInfo — the
-// numbers feed an at-a-glance status column, not an alerting path, so
-// up-to-15s freshness is fine and keeps the request path O(page) instead
-// of O(page × byPathHop[pk] × parsed timestamps).
-const repeaterEnrichTTL = 15 * time.Second
+// for handleNodes may be. The numbers feed an at-a-glance status column,
+// not an alerting path, so up-to-6min freshness is fine.
+//
+// IMPORTANT: This TTL must be longer than repeaterEnrichmentRecomputerDefaultInterval
+// (5 min) so the steady-state background recomputer always refreshes the cache
+// before the TTL expires. If the TTL were shorter than the recompute interval
+// (e.g. 15s), the cache would expire between background ticks and every
+// subsequent request would pay the full on-thread rebuild cost (~17s on large
+// networks). The 6-minute value gives a 1-minute margin above the 5-minute
+// tick — in steady state the cache never expires. The TTL only acts as a
+// safety net when the recomputer is not running (e.g. test environments or
+// server startup before the first tick).
+const repeaterEnrichTTL = 6 * time.Minute
 
 // GetRepeaterRelayInfoMap returns a cached pubkey → RepeaterRelayInfo
 // map covering EVERY pubkey that currently appears as a path hop in any
@@ -196,22 +204,35 @@ func (s *PacketStore) GetRepeaterUsefulnessScoreMap() map[string]float64 {
 }
 
 func (s *PacketStore) computeRepeaterUsefulnessScoreMap() map[string]float64 {
+	// Snapshot the maps under a brief read lock, then compute without holding
+	// the lock. The same pattern as computeRepeaterRelayInfoMap: slice headers
+	// point at the live underlying arrays (append-only by ingest), so the
+	// worst-case race is missing a tail element added after the snapshot —
+	// acceptable for a 6-minute-TTL status read.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	snapHop := make(map[string][]*StoreTx, len(s.byPathHop))
+	for k, list := range s.byPathHop {
+		snapHop[k] = list
+	}
+	snapPT := make(map[int][]*StoreTx, len(s.byPayloadType))
+	for pt, list := range s.byPayloadType {
+		snapPT[pt] = list
+	}
+	s.mu.RUnlock()
 
 	totalNonAdvert := 0
-	for pt, list := range s.byPayloadType {
+	for pt, list := range snapPT {
 		if pt == payloadTypeAdvert {
 			continue
 		}
 		totalNonAdvert += len(list)
 	}
-	out := make(map[string]float64, len(s.byPathHop))
+	out := make(map[string]float64, len(snapHop))
 	if totalNonAdvert == 0 {
 		return out
 	}
 	denom := float64(totalNonAdvert)
-	for key, list := range s.byPathHop {
+	for key, list := range snapHop {
 		relayed := 0
 		for _, tx := range list {
 			if tx == nil {
