@@ -402,7 +402,25 @@ func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 	return R * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
+// GetAnalyticsDistance returns distance analytics. For the default query
+// (region="") the steady-state recomputer snapshot (issue #1240) is preferred
+// — atomic load, never blocks.
 func (s *PacketStore) GetAnalyticsDistance(region string) map[string]interface{} {
+	if region == "" {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompDistance
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					s.cacheMu.Lock()
+					s.cacheHits++
+					s.cacheMu.Unlock()
+					return m
+				}
+			}
+		}
+	}
 	s.cacheMu.Lock()
 	if cached, ok := s.distCache[region]; ok && time.Now().Before(cached.expiresAt) {
 		s.cacheHits++

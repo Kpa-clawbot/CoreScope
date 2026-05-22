@@ -20,7 +20,24 @@ func (s *PacketStore) GetAnalyticsRF(region string) map[string]interface{} {
 
 // GetAnalyticsRFWithWindow returns RF analytics bounded by an optional
 // time window (issue #842). Zero TimeWindow = all data (backwards compatible).
+// For the default query (region="", zero window) the steady-state recomputer
+// snapshot (issue #1240) is preferred — atomic load, never blocks.
 func (s *PacketStore) GetAnalyticsRFWithWindow(region string, window TimeWindow) map[string]interface{} {
+	if region == "" && window.IsZero() {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompRF
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					s.cacheMu.Lock()
+					s.cacheHits++
+					s.cacheMu.Unlock()
+					return m
+				}
+			}
+		}
+	}
 	cacheKey := region
 	if !window.IsZero() {
 		cacheKey = region + "|" + window.CacheKey()
@@ -584,7 +601,24 @@ func (s *PacketStore) GetAnalyticsTopology(region string) map[string]interface{}
 }
 
 // GetAnalyticsTopologyWithWindow — see issue #842.
+// For the default query (region="", zero window) the steady-state recomputer
+// snapshot (issue #1240) is preferred — atomic load, never blocks.
 func (s *PacketStore) GetAnalyticsTopologyWithWindow(region string, window TimeWindow) map[string]interface{} {
+	if region == "" && window.IsZero() {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompTopology
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					s.cacheMu.Lock()
+					s.cacheHits++
+					s.cacheMu.Unlock()
+					return m
+				}
+			}
+		}
+	}
 	cacheKey := region
 	if !window.IsZero() {
 		cacheKey = region + "|" + window.CacheKey()
@@ -1082,7 +1116,24 @@ func (s *PacketStore) computeAnalyticsTopology(region string, window TimeWindow)
 	}
 }
 
+// GetAnalyticsHashSizes returns hash-size analytics. For the default query
+// (region="") the steady-state recomputer snapshot (issue #1240) is preferred.
 func (s *PacketStore) GetAnalyticsHashSizes(region string) map[string]interface{} {
+	if region == "" {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompHashSizes
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					s.cacheMu.Lock()
+					s.cacheHits++
+					s.cacheMu.Unlock()
+					return m
+				}
+			}
+		}
+	}
 	s.cacheMu.Lock()
 	if cached, ok := s.hashCache[region]; ok && time.Now().Before(cached.expiresAt) {
 		s.cacheHits++
@@ -1423,7 +1474,24 @@ type hashSizeNodeInfo struct {
 
 // GetAnalyticsHashCollisions returns pre-computed hash collision analysis.
 // This moves the O(n²) distance computation from the frontend to the server.
+// For the default query (region="") the steady-state recomputer snapshot
+// (issue #1240) is preferred — atomic load, never blocks.
 func (s *PacketStore) GetAnalyticsHashCollisions(region string) map[string]interface{} {
+	if region == "" {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompHashCollisions
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					s.cacheMu.Lock()
+					s.cacheHits++
+					s.cacheMu.Unlock()
+					return m
+				}
+			}
+		}
+	}
 	s.cacheMu.Lock()
 	if cached, ok := s.collisionCache[region]; ok && time.Now().Before(cached.expiresAt) {
 		s.cacheHits++

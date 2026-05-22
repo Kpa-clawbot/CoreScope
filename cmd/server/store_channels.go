@@ -439,7 +439,24 @@ func (s *PacketStore) GetAnalyticsChannels(region string) map[string]interface{}
 
 // GetAnalyticsChannelsWithWindow returns channel analytics for the given region,
 // optionally bounded to a time window (issue #842). Zero TimeWindow = all data.
+// For the default query (region="", zero window) the steady-state recomputer
+// snapshot (issue #1240) is preferred — atomic load, never blocks.
 func (s *PacketStore) GetAnalyticsChannelsWithWindow(region string, window TimeWindow) map[string]interface{} {
+	if region == "" && window.IsZero() {
+		s.analyticsRecomputerMu.RLock()
+		rc := s.recompChannels
+		s.analyticsRecomputerMu.RUnlock()
+		if rc != nil {
+			if v := rc.Load(); v != nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					s.cacheMu.Lock()
+					s.cacheHits++
+					s.cacheMu.Unlock()
+					return m
+				}
+			}
+		}
+	}
 	cacheKey := region
 	if !window.IsZero() {
 		cacheKey = region + "|" + window.CacheKey()
