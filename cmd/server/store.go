@@ -2123,6 +2123,12 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		return nil, sinceID
 	}
 
+	// Refresh the node cache BEFORE acquiring s.mu so a 30s cache-miss does
+	// not run a full-table SELECT (getAllNodes) while the store write lock is
+	// held, freezing all readers during the SQLite scan.
+	// getCachedNodesAndPM only takes cacheMu (never s.mu), so this is safe.
+	_, cachedPM := s.getCachedNodesAndPM()
+
 	// Now lock and merge into store
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2132,9 +2138,8 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	hasNewNodes := false                   // track genuinely new node pubkeys
 	var broadcastOrder []int
 
-	// Hoist getCachedNodesAndPM() once before the observation loop to avoid
-	// per-observation function calls (review item #1).
-	_, cachedPM := s.getCachedNodesAndPM()
+	// Cache is already warm from the pre-lock call above; this returns instantly.
+	_, cachedPM = s.getCachedNodesAndPM()
 	// Hoist atomic graph.Load() out of the per-row loop too (PR #1208
 	// carmack #1) — one Load per ingest call, not one per row.
 	cachedGraph := s.graph.Load()
@@ -2502,6 +2507,10 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		return nil
 	}
 
+	// Pre-warm node cache before acquiring s.mu — same fix as IngestNewFromDB.
+	// A 30s cache-miss SELECT under the write lock freezes all readers.
+	_, pm := s.getCachedNodesAndPM()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2512,8 +2521,8 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 	var newObs []*StoreObs
 	var obsRPMap map[int][]*string // obsID → resolved path (decode-window)
 
-	// Hoist getCachedNodesAndPM() before the loop — same pattern as IngestNewFromDB (review fix #1).
-	_, pm := s.getCachedNodesAndPM()
+	// Cache is already warm from the pre-lock call above; this returns instantly.
+	_, pm = s.getCachedNodesAndPM()
 	graphRef := s.graph.Load()
 
 	hopsSeen := make(map[string]bool) // reused across observations; cleared per use
