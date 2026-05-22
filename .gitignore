@@ -35,3 +35,5 @@ cmd/server/server
 _wt-*
 cmd/ingestor/ingestor
 cmd/decrypt/decrypt
+# Local-only planning and design files
+docs/superpowers/

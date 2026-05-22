@@ -27,6 +27,10 @@
   function _stopRolesRefresh() {
     if (_rolesRefreshTimer) { clearInterval(_rolesRefreshTimer); _rolesRefreshTimer = null; }
   }
+  var _scopesRefreshTimer = null;
+  function _stopScopesRefresh() {
+    if (_scopesRefreshTimer) { clearInterval(_scopesRefreshTimer); _scopesRefreshTimer = null; }
+  }
 
   // --- Status color helpers (read from CSS variables for theme support) ---
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -96,10 +100,10 @@
         <div class="analytics-header">
           <h2>📊 Mesh Analytics</h2>
           <p class="text-muted">Deep dive into your mesh network data</p>
-          <div id="analyticsRegionFilter" class="region-filter-container"></div>
-          <div class="time-window-filter" style="margin:8px 0">
-            <label for="analyticsTimeWindow" style="font-size:0.9em;color:var(--text-muted);margin-right:6px">Time window:</label>
-            <select id="analyticsTimeWindow" data-testid="analytics-time-window" aria-label="Time window">
+          <div class="analytics-filters">
+            <div id="analyticsRegionFilter" class="region-filter-container"></div>
+            <div id="analyticsAreaFilter" style="display:none"></div>
+            <select id="analyticsTimeWindow" class="analytics-time-window-select" data-testid="analytics-time-window" aria-label="Time window">
               <option value="">All data</option>
               <option value="1h">Last 1 hour</option>
               <option value="24h">Last 24 hours</option>
@@ -124,6 +128,7 @@
                  Placed after Clock Health (clock-skew posture is shown per-role
                  inside this tab) and before Prefix Tool (utility tabs trail). -->
             <button class="tab-btn" data-tab="roles">Roles</button>
+            <button class="tab-btn" data-tab="scopes">Scopes</button>
             <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
           </div>
         </div>
@@ -131,6 +136,14 @@
           ${PageState.loading('Loading analytics…')}
         </div>
       </div>`;
+
+    // Tabs where the area filter is meaningful (transmitter GPS attribution)
+    const AREA_FILTER_TABS = new Set(['overview', 'rf', 'topology', 'hashsizes', 'collisions', 'nodes', 'clock-health']);
+
+    function setAreaFilterVisibility(tab) {
+      const el = document.getElementById('analyticsAreaFilter');
+      if (el) el.style.display = AREA_FILTER_TABS.has(tab) ? '' : 'none';
+    }
 
     // Tab handling
     const analyticsTabs = document.getElementById('analyticsTabs');
@@ -159,8 +172,10 @@
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       _currentTab = btn.dataset.tab;
+      setAreaFilterVisibility(_currentTab);
       // #1085 — Roles tab owns its own 60s auto-refresh; stop it on switch.
       if (_currentTab !== 'roles') _stopRolesRefresh();
+      if (_currentTab !== 'scopes') _stopScopesRefresh();
       _updateAnalyticsUrl();
       renderTab(_currentTab);
     });
@@ -185,7 +200,10 @@
     }
 
     RegionFilter.init(document.getElementById('analyticsRegionFilter'));
+    AreaFilter.init(document.getElementById('analyticsAreaFilter'));
+    setAreaFilterVisibility(_currentTab);
     RegionFilter.onChange(function () { loadAnalytics(); });
+    AreaFilter.onChange(function () { loadAnalytics(); });
 
     // Time-window picker (#842) — refresh analytics on change.
     const tw = document.getElementById('analyticsTimeWindow');
@@ -221,6 +239,7 @@
     try {
       _analyticsData = {};
       const rqs = RegionFilter.regionQueryString(); // "&region=..." or ""
+      const aqs = AreaFilter.areaQueryString();     // "&area=..." or ""
       // Time window picker (#842) — append &window=… when set.
       // NOTE: only the three window-aware endpoints (rf/topology/channels)
       // receive ?window=…; hash-sizes and hash-collisions are about node
@@ -228,15 +247,20 @@
       const twEl = document.getElementById('analyticsTimeWindow');
       const twVal = twEl ? twEl.value : '';
       const tws = twVal ? '&window=' + encodeURIComponent(twVal) : '';
-      const baseQS = rqs.slice(1); // drop leading '&', "" or "region=…"
+      // hash-sizes / hash-collisions: region + area, no window
+      const baseQS = (rqs + aqs).slice(1);
       const sepBase = baseQS ? '?' + baseQS : '';
-      const windowedQS = (rqs + tws).slice(1);
+      // rf / topology: region + area + window
+      const windowedQS = (rqs + aqs + tws).slice(1);
       const sepWin = windowedQS ? '?' + windowedQS : '';
+      // channels: region + window (no area per original PR intent)
+      const chanQS = (rqs + tws).slice(1);
+      const sepChan = chanQS ? '?' + chanQS : '';
       const [hashData, rfData, topoData, chanData, collisionData] = await Promise.all([
         api('/analytics/hash-sizes' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/rf' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/topology' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
-        api('/analytics/channels' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/channels' + sepChan, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/hash-collisions' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
       ]);
       _analyticsData = { hashData, rfData, topoData, chanData, collisionData };
@@ -264,6 +288,7 @@
       case 'clock-health': await renderClockHealthTab(el); break;
       case 'roles': await renderRolesTab(el); break;
       case 'prefix-tool': await renderPrefixTool(el); break;
+      case 'scopes': await renderScopesTab(el); break;
     }
     // Auto-apply column resizing to all analytics tables
     requestAnimationFrame(() => {
@@ -1355,7 +1380,7 @@
         <span style="color:var(--border)">|</span>
         <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">🔎 Check a prefix →</a>
       </nav>
-      <p class="text-muted" style="margin:0 0 12px;font-size:0.78em">This tab shows operational collisions among <strong>repeaters</strong> grouped by their configured hash size. The <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">Prefix Tool</a> checks all repeaters regardless of their configured hash size.</p>
+      <p class="text-muted" style="margin:0 0 12px;font-size:0.78em">Collisions <strong>actually observed in packet traffic</strong> — among <strong>repeaters</strong> grouped by their configured hash size. For <em>theoretical</em> address conflicts that <em>would</em> occur if all repeaters used a given hash size, see the <a href="#/analytics?tab=prefix-tool" style="color:var(--accent)">Prefix Tool</a> tab.</p>
 
       <div class="analytics-card" id="inconsistentHashSection">
         <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">⚠️ Inconsistent Hash Sizes</h3><a href="#/analytics?tab=collisions" style="font-size:11px;color:var(--text-muted)">↑ top</a></div>
@@ -1985,7 +2010,7 @@
   async function renderNodesTab(el) {
     el.innerHTML = PageState.loading('Loading node analytics…');
     try {
-      const rq = RegionFilter.regionQueryString();
+      const rq = RegionFilter.regionQueryString() + AreaFilter.areaQueryString();
       const [nodesResp, bulkHealth] = await Promise.all([
         api('/nodes?limit=10000&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
         api('/nodes/bulk-health?limit=50' + rq, { ttl: CLIENT_TTL.analyticsRF })
@@ -2233,7 +2258,7 @@
     }
   }
 
-function destroy() { _stopRolesRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
@@ -2718,12 +2743,18 @@ function destroy() { _stopRolesRefresh(); _analyticsData = {}; _channelData = nu
   async function renderPrefixTool(el) {
     el.innerHTML = PageState.loading('Loading prefix data…');
 
-    const rq = RegionFilter.regionQueryString();
+    const rq = RegionFilter.regionQueryString() + AreaFilter.areaQueryString();
     const regionLabel = rq ? (new URLSearchParams(rq.slice(1)).get('region') || '') : '';
 
-    let nodesResp;
+    let nodesResp, hashSizesResp;
     try {
-      nodesResp = await api('/nodes?limit=10000&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList });
+      [nodesResp, hashSizesResp] = await Promise.all([
+        api('/nodes?limit=10000&sortBy=lastSeen' + rq, { ttl: CLIENT_TTL.nodeList }),
+        // #1270: fetch CONFIGURED-hash-size counts so the Network Overview
+        // tells the operational story (matching Hash Stats "By Repeaters"),
+        // not just a math-only count of unique pubkey slices.
+        api('/analytics/hash-sizes' + rq, { ttl: CLIENT_TTL.analyticsRF }).catch(() => null),
+      ]);
     } catch (e) {
       PageState.error(el, e, function () { renderPrefixTool(el); });
       return;
@@ -2767,6 +2798,75 @@ function destroy() { _stopRolesRefresh(); _analyticsData = {}; _channelData = nu
       };
     });
 
+    // #1270: CONFIGURED-hash-size counts (operational truth) from
+    // /api/analytics/hash-sizes — same source the Hash Stats tab uses.
+    // distributionByRepeaters keys are stringified ints ("1","2","3").
+    // "0" = no adverts observed yet, so the configured size is unknown
+    // and that node doesn't count for any tier.
+    const distByRepeaters = (hashSizesResp && hashSizesResp.distributionByRepeaters) || {};
+    const configuredCount = {
+      1: Number(distByRepeaters['1'] || 0),
+      2: Number(distByRepeaters['2'] || 0),
+      3: Number(distByRepeaters['3'] || 0),
+    };
+    const totalConfigured = configuredCount[1] + configuredCount[2] + configuredCount[3];
+
+    // Operational collisions per tier: only consider repeaters CONFIGURED
+    // for this hash size — same definition the Hash Issues tab uses.
+    // n.hash_size is enriched on the /nodes payload from GetNodeHashSizeInfo.
+    // #1306: keep the per-tier *node lists* per colliding slice so we can
+    // surface WHICH prefixes/nodes collide (not just an aggregate count).
+    const opCollisions = { 1: 0, 2: 0, 3: 0 };
+    const opIdx = { 1: new Map(), 2: new Map(), 3: new Map() };
+    [1, 2, 3].forEach(b => {
+      nodes.forEach(n => {
+        if (n.hash_size !== b) return;
+        const p = n.public_key.toUpperCase().slice(0, b * 2);
+        if (!opIdx[b].has(p)) opIdx[b].set(p, []);
+        opIdx[b].get(p).push(n);
+      });
+      opCollisions[b] = [...opIdx[b].values()].filter(arr => arr.length > 1).length;
+    });
+
+    // #1306: precompute colliding slices per tier (entries with >1 node) for
+    // the "Show N colliding slices →" expandable lists. THEORETICAL = across
+    // every repeater's pubkey prefix (math fact). OPERATIONAL = only among
+    // repeaters configured for this hash size (matches Hash Issues tab math).
+    const collEntries = { theoretical: { 1: [], 2: [], 3: [] }, operational: { 1: [], 2: [], 3: [] } };
+    [1, 2, 3].forEach(b => {
+      collEntries.theoretical[b] = [...idx[b].entries()]
+        .filter(([, arr]) => arr.length > 1)
+        .sort((a, b2) => b2[1].length - a[1].length || a[0].localeCompare(b2[0]));
+      collEntries.operational[b] = [...opIdx[b].entries()]
+        .filter(([, arr]) => arr.length > 1)
+        .sort((a, b2) => b2[1].length - a[1].length || a[0].localeCompare(b2[0]));
+    });
+
+    // #1306: render a "Prefix · Nodes sharing" table for a list of
+    // colliding entries `[ [prefix, [node, ...]], ... ]`.
+    function renderCollideTable(entries) {
+      if (!entries || !entries.length) {
+        return '<div class="text-muted" style="padding:8px;font-size:0.8em">No collisions.</div>';
+      }
+      const rows = entries.map(([prefix, arr]) => {
+        const nodeLinks = arr.map(n => {
+          const label = esc(n.name || n.public_key.slice(0, 10));
+          return `<a href="#/nodes/${encodeURIComponent(n.public_key)}" style="color:var(--accent);text-decoration:none">${label}</a>`;
+        }).join(', ');
+        return `<tr>
+          <td style="padding:4px 8px;font-family:var(--mono);font-weight:600;border-bottom:1px solid var(--border);white-space:nowrap">${esc(prefix)}</td>
+          <td style="padding:4px 8px;font-size:0.85em;border-bottom:1px solid var(--border)">${nodeLinks} <span class="text-muted" style="font-size:0.85em">(${arr.length})</span></td>
+        </tr>`;
+      }).join('');
+      return `<table style="width:100%;border-collapse:collapse;font-size:0.85em">
+        <thead><tr>
+          <th scope="col" style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border);background:var(--bg-secondary,var(--bg))">Prefix</th>
+          <th scope="col" style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border);background:var(--bg-secondary,var(--bg))">Nodes sharing it</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+
     // Recommendation by network size
     const totalNodes = nodes.length;
     let rec, recDetail;
@@ -2799,29 +2899,81 @@ function destroy() { _stopRolesRefresh(); _analyticsData = {}; _channelData = nu
             <div class="analytics-stat-card" style="flex:1;min-width:110px">
               <div class="analytics-stat-label">Total repeaters</div>
               <div class="analytics-stat-value">${totalNodes.toLocaleString()}</div>
+              <div class="text-muted" style="font-size:0.78em;margin-top:4px">
+                ${totalConfigured.toLocaleString()} with known hash size
+              </div>
             </div>
-            ${[1, 2, 3].map(b => `
-            <div class="analytics-stat-card" style="flex:1;min-width:150px;border-color:${stats[b].collidingPrefixes > 0 ? 'var(--status-red)' : 'var(--border)'}">
+            ${[1, 2, 3].map(b => {
+              // #1270: PRIMARY = configured-for-this-size repeater count
+              // (operational truth, matches Hash Stats "By Repeaters").
+              // SECONDARY = math fact (unique pubkey slices). OPERATIONAL
+              // address conflicts = colliding slices among configured-for-this-size repeaters only.
+              const cfg = configuredCount[b];
+              const opC = opCollisions[b];
+              const theoC = stats[b].collidingPrefixes;
+              const borderVar = opC > 0 ? 'var(--status-red)' : 'var(--border)';
+              // #1306: replace bare "collisions" with "address conflicts" to
+              // distinguish theoretical/would-collide-if-used from packet-
+              // traffic-observed collisions shown on the Hash Issues tab.
+              const opLine = opC === 0
+                ? `<span style="color:var(--status-green)">✅ No address conflicts among configured repeaters</span>`
+                : `<span style="color:var(--status-red)">⚠️ ${opC} address conflict${opC !== 1 ? 's' : ''} among configured repeaters (would-collide-if-used)</span>`;
+              // #1306: expandable WHICH-collides toggles (op + theoretical)
+              const opEntries = collEntries.operational[b];
+              const theoEntries = collEntries.theoretical[b];
+              const opTogId = `ptCollOp${b}`;
+              const theoTogId = `ptCollTheo${b}`;
+              const opToggle = opC > 0 ? `
+                <div style="margin-top:6px">
+                  <button type="button" class="pt-collide-toggle-btn" data-pt-collide-toggle="op-${b}" data-target="${opTogId}"
+                    aria-expanded="false"
+                    style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:0.82em;padding:0">
+                    Show ${opC} colliding slice${opC !== 1 ? 's' : ''} →
+                  </button>
+                  <div id="${opTogId}" data-pt-collide-panel="op-${b}" style="display:none;margin-top:6px;max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                    ${renderCollideTable(opEntries)}
+                  </div>
+                </div>` : '';
+              const theoToggle = theoC > 0 ? `
+                <div style="margin-top:4px">
+                  <button type="button" class="pt-collide-toggle-btn" data-pt-collide-toggle="theo-${b}" data-target="${theoTogId}"
+                    aria-expanded="false"
+                    style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:0.78em;padding:0">
+                    Show ${theoC} would-collide slice${theoC !== 1 ? 's' : ''} (across all repeaters) →
+                  </button>
+                  <div id="${theoTogId}" data-pt-collide-panel="theo-${b}" style="display:none;margin-top:6px;max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                    ${renderCollideTable(theoEntries)}
+                  </div>
+                </div>` : '';
+              return `
+            <div class="analytics-stat-card" style="flex:1;min-width:170px;border-color:${borderVar}">
               <div class="analytics-stat-label">${b}-byte prefixes</div>
-              <div class="analytics-stat-value" style="font-size:1em">
-                ${stats[b].usedPrefixes.toLocaleString()}
-                <span class="text-muted" style="font-size:0.7em"> / ${spaceSizes[b].toLocaleString()}</span>
+              <div class="analytics-stat-value" style="font-size:1em"
+                   data-pt-configured="${b}" data-value="${cfg}">
+                ${cfg.toLocaleString()}
+                <span class="text-muted" style="font-size:0.7em"> of ${totalNodes.toLocaleString()} repeaters configured</span>
               </div>
-              <div style="font-size:0.82em;margin-top:4px;color:${stats[b].collidingPrefixes > 0 ? 'var(--status-red)' : 'var(--status-green)'}">
-                ${stats[b].collidingPrefixes === 0
-                  ? '✅ No collisions'
-                  : `⚠️ ${stats[b].collidingPrefixes} prefix${stats[b].collidingPrefixes !== 1 ? 'es' : ''} collide`}
+              <div style="font-size:0.82em;margin-top:4px">${opLine}</div>
+              ${opToggle}
+              <div class="text-muted" style="font-size:0.72em;margin-top:6px;border-top:1px dashed var(--border);padding-top:4px">
+                <em>Theoretical:</em> ${stats[b].usedPrefixes.toLocaleString()} unique ${b}-byte slice${stats[b].usedPrefixes !== 1 ? 's' : ''}
+                across all repeater pubkeys (of ${spaceSizes[b].toLocaleString()} possible)${theoC > 0 ? ` — ${theoC} would-collide if every repeater used ${b}-byte` : ''}
               </div>
-            </div>`).join('')}
+              ${theoToggle}
+            </div>`;
+            }).join('')}
+          </div>
+          <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--accent);border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:0.85em">
+            <strong>ℹ️ Theoretical vs observed:</strong> These are <em>theoretical address conflicts</em> that would occur IF all repeaters used this hash size (would-collide-if-used). For collisions <em>actually observed in packet traffic</em>, see the <a href="#/analytics?tab=collisions" style="color:var(--accent)">Hash Issues</a> tab.
           </div>
           <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:12px">
             <strong>Recommendation: ${rec} prefixes</strong> — ${recDetail}
             <span class="text-muted" style="font-size:0.8em;display:block;margin-top:4px">Hash size is configured per-node in firmware. Changing requires reflashing.</span>
           </div>
           <div style="background:var(--bg-secondary,var(--bg));border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:0.85em">
-            <strong>ℹ️ About these numbers:</strong> This tool checks <em>repeater</em> public key prefixes regardless of their configured hash size. Only repeaters are included because they are the nodes that relay packets using hash-based addressing.
-            The <a href="#/analytics?tab=collisions" style="color:var(--accent)">Hash Issues</a> tab shows only <em>operational</em> collisions — nodes that actually use the same hash size and are repeaters.
-            A collision shown here may not appear in Hash Issues if the nodes use a different hash size.
+            <strong>ℹ️ About these numbers:</strong> The primary count is how many repeaters are <em>configured</em> for each hash size (their advertised path hash byte length), matching the
+            <a href="#/analytics?tab=hashsizes" style="color:var(--accent)">Hash Stats</a> tab. Address conflicts (would-collide-if-used) count colliding slices among repeaters configured for the same hash size — same definition the
+            <a href="#/analytics?tab=collisions" style="color:var(--accent)">Hash Issues</a> tab uses, except Hash Issues counts collisions <em>actually observed in packet traffic</em> rather than theoretical. The <em>theoretical</em> line shows the math fact: how many distinct slices appear when every repeater pubkey is truncated to N bytes, regardless of configured hash size.
           </div>
         </div>
       </div>
@@ -3000,6 +3152,21 @@ function destroy() { _stopRolesRefresh(); _analyticsData = {}; _channelData = nu
       const open = body.style.display === 'none';
       body.style.display = open ? '' : 'none';
       chevron.style.transform = open ? 'rotate(90deg)' : '';
+    });
+
+    // #1306: WHICH-collides toggles
+    document.querySelectorAll('[data-pt-collide-toggle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const panel = document.getElementById(btn.dataset.target);
+        if (!panel) return;
+        const open = panel.style.display === 'none' || panel.style.display === '';
+        // Toggle: if currently hidden ('none'), open; else close.
+        const currentlyHidden = panel.style.display === 'none';
+        panel.style.display = currentlyHidden ? 'block' : 'none';
+        btn.setAttribute('aria-expanded', String(currentlyHidden));
+        // Swap arrow direction in label
+        btn.textContent = btn.textContent.replace(currentlyHidden ? '→' : '↓', currentlyHidden ? '↓' : '→');
+      });
     });
 
     // Auto-run from URL params
@@ -3673,7 +3840,8 @@ function destroy() { _stopRolesRefresh(); _analyticsData = {}; _channelData = nu
   async function renderClockHealthTab(el) {
     el.innerHTML = PageState.loading('Loading clock health data…');
     try {
-      var data = await (await fetch('/api/nodes/clock-skew')).json();
+      const aqs = AreaFilter.areaQueryString();
+      var data = await (await fetch('/api/nodes/clock-skew' + (aqs ? '?' + aqs.slice(1) : ''))).json();
       if (!Array.isArray(data) || !data.length) {
         el.innerHTML = PageState.empty({ title: 'No clock skew data available', hint: 'Nodes need recent adverts for clock analysis.' });
         return;
@@ -3774,6 +3942,165 @@ function destroy() { _stopRolesRefresh(); _analyticsData = {}; _channelData = nu
     } catch (err) {
       PageState.error(el, err, function () { renderClockHealthTab(el); });
     }
+  }
+
+  // ===================== SCOPES =====================
+  async function renderScopesTab(el) {
+    var winKey = 'scopes_window';
+    var selectedWindow = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(winKey)) || '24h';
+
+    // Fix 5: write static frame only once
+    if (!el.querySelector('#scopes-cards')) {
+      el.innerHTML =
+        '<h3 style="margin:0 0 12px">Scope Statistics</h3>' +
+        '<div style="margin-bottom:12px">' +
+          ['1h', '24h', '7d'].map(function(v) {
+            return '<button class="tab-btn' + (selectedWindow === v ? ' active' : '') + '" data-win="' + v + '">' + v + '</button>';
+          }).join('') +
+        '</div>' +
+        '<div id="scopes-cards" class="stats-grid" style="margin-bottom:16px"></div>' +
+        '<div class="text-center text-muted" id="scopes-loading" style="padding:20px">Loading scope stats…</div>' +
+        '<table class="data-table analytics-table" style="margin-bottom:8px">' +
+          '<thead><tr><th>Region</th><th>Messages</th><th>% of Scoped</th></tr></thead>' +
+          '<tbody id="scopes-tbody"></tbody>' +
+        '</table>' +
+        '<div id="scopes-chart"></div>';
+
+      // Attach window-button click listeners (once)
+      el.querySelectorAll('[data-win]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          selectedWindow = btn.dataset.win;
+          if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(winKey, selectedWindow);
+          el.querySelectorAll('[data-win]').forEach(function(b) { b.classList.toggle('active', b.dataset.win === selectedWindow); });
+          load(selectedWindow);
+        });
+      });
+    }
+
+    function pct(n, total) {
+      if (!total) return '—';
+      return (n / total * 100).toFixed(1) + '%';
+    }
+
+    async function load(w) {
+      var loadingEl = document.getElementById('scopes-loading');
+      if (loadingEl) loadingEl.style.display = '';
+      try {
+        // Fix 4: use api() instead of raw fetch()
+        var data = await api('/api/scope-stats?window=' + encodeURIComponent(w), { ttl: 30000 });
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (data.error) {
+          var cardsEl2 = document.getElementById('scopes-cards');
+          if (cardsEl2) cardsEl2.innerHTML = '<div class="text-center text-muted" style="padding:20px">' + esc(data.error) + '</div>';
+          return;
+        }
+        updateData(data, w);
+      } catch (err) {
+        if (loadingEl) loadingEl.style.display = 'none';
+        var cardsEl3 = document.getElementById('scopes-cards');
+        if (cardsEl3) cardsEl3.innerHTML = '<div class="text-center" style="color:var(--status-red);padding:20px">Failed to load scope stats: ' + esc(String(err)) + '</div>';
+      }
+    }
+
+    function updateData(d, w) {
+      var s = d.summary;
+      var total = s.transportTotal || 0;
+
+      // Summary cards
+      var cardsEl = document.getElementById('scopes-cards');
+      if (cardsEl) {
+        cardsEl.innerHTML = [
+          { label: 'Transport Total', value: total.toLocaleString(), note: '' },
+          { label: 'Scoped', value: s.scoped.toLocaleString(), note: pct(s.scoped, total) },
+          { label: 'Unscoped', value: s.unscoped.toLocaleString(), note: pct(s.unscoped, total) },
+          { label: 'Unknown Scope', value: s.unknownScope.toLocaleString(), note: pct(s.unknownScope, s.scoped) + ' of scoped' },
+        ].map(function(c) {
+          return '<div class="stat-card"><div class="stat-value">' + c.value + '</div>' +
+            '<div class="stat-label">' + c.label + '</div>' +
+            (c.note ? '<div class="stat-note text-muted" style="font-size:11px">' + c.note + '</div>' : '') +
+            '</div>';
+        }).join('');
+      }
+
+      // Per-region table
+      var tbodyEl = document.getElementById('scopes-tbody');
+      if (tbodyEl) {
+        var tableBody = '';
+        if (d.byRegion && d.byRegion.length) {
+          tableBody = d.byRegion.map(function(r) {
+            return '<tr><td><code>' + esc(r.name) + '</code></td>' +
+              '<td>' + r.count.toLocaleString() + '</td>' +
+              '<td>' + pct(r.count, s.scoped) + '</td></tr>';
+          }).join('');
+          if (s.unknownScope > 0) {
+            tableBody += '<tr><td><em class="text-muted">Unknown scope</em></td>' +
+              '<td>' + s.unknownScope.toLocaleString() + '</td>' +
+              '<td>' + pct(s.unknownScope, s.scoped) + '</td></tr>';
+          }
+        } else if (s.scoped === 0) {
+          tableBody = '<tr><td colspan="3" class="text-muted" style="text-align:center">No scoped messages in this window</td></tr>';
+        } else {
+          tableBody = '<tr><td colspan="3" class="text-muted" style="text-align:center">No regions configured — add <code>hashRegions</code> to your config</td></tr>';
+        }
+        tbodyEl.innerHTML = tableBody;
+      }
+
+      // Time-series chart (two-line SVG)
+      var chartEl = document.getElementById('scopes-chart');
+      if (chartEl) {
+        var chartHtml = '';
+        if (d.timeSeries && d.timeSeries.length > 1) {
+          var scopedVals = d.timeSeries.map(function(p) { return p.scoped; });
+          var unscopedVals = d.timeSeries.map(function(p) { return p.unscoped; });
+          var maxVal = Math.max(1, Math.max.apply(null, scopedVals.concat(unscopedVals)));
+          var W = 800, H = 180, padL = 44, padT = 10, padR = 10;
+          var plotW = W - padL - padR, plotH = H - 24 - padT;
+          var n = d.timeSeries.length;
+
+          function pts(vals) {
+            return vals.map(function(v, i) {
+              var x = padL + i * plotW / Math.max(n - 1, 1);
+              var y = padT + plotH - (v / maxVal) * plotH;
+              return x.toFixed(1) + ',' + y.toFixed(1);
+            }).join(' ');
+          }
+
+          var grid = '';
+          for (var gi = 0; gi <= 4; gi++) {
+            var gy = padT + plotH * gi / 4;
+            var gv = Math.round(maxVal * (4 - gi) / 4);
+            grid += '<line x1="' + padL + '" y1="' + gy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + gy.toFixed(1) + '" stroke="var(--border)" stroke-dasharray="2"/>';
+            grid += '<text x="' + (padL - 4) + '" y="' + (gy + 4).toFixed(1) + '" text-anchor="end" font-size="9" fill="var(--text-muted)">' + gv + '</text>';
+          }
+
+          var legendX = padL + plotW - 120;
+          chartHtml = '<div style="margin-top:16px">' +
+            '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-height:' + H + 'px" role="img" aria-label="Scope time series">' +
+            grid +
+            '<polyline points="' + pts(scopedVals) + '" fill="none" stroke="var(--accent)" stroke-width="2"/>' +
+            '<polyline points="' + pts(unscopedVals) + '" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-dasharray="4"/>' +
+            '<rect x="' + legendX + '" y="' + padT + '" width="10" height="10" fill="var(--accent)"/>' +
+            '<text x="' + (legendX + 14) + '" y="' + (padT + 9) + '" font-size="10" fill="var(--text)">Scoped</text>' +
+            '<rect x="' + legendX + '" y="' + (padT + 16) + '" width="10" height="10" fill="var(--text-muted)"/>' +
+            '<text x="' + (legendX + 14) + '" y="' + (padT + 25) + '" font-size="10" fill="var(--text)">Unscoped</text>' +
+            '</svg></div>';
+        } else {
+          chartHtml = '<p class="text-muted" style="font-size:0.85em;margin:12px 0 0">Insufficient data points to render chart — wait for more observations in this window.</p>';
+        }
+        chartEl.innerHTML = chartHtml;
+      }
+    }
+
+    load(selectedWindow);
+
+    // Fix 6: auto-refresh every 60s
+    _stopScopesRefresh();
+    _scopesRefreshTimer = setInterval(function() {
+      if (_currentTab !== 'scopes') { _stopScopesRefresh(); return; }
+      var cur = document.getElementById('analyticsContent');
+      if (!cur) { _stopScopesRefresh(); return; }
+      load(selectedWindow);
+    }, 60000);
   }
 
   // #1085 — Roles tab (folded in from former /#/roles page).

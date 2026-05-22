@@ -15,11 +15,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/meshcore-analyzer/packetpath"
+	"github.com/meshcore-analyzer/prunequeue"
 )
 
 // Server holds shared state for route handlers.
@@ -28,6 +28,7 @@ type Server struct {
 	cfg       *Config
 	hub       *Hub
 	store     *PacketStore // in-memory packet store (nil = fallback to DB)
+	configDir string       // directory containing config.json (for write-back via PUT /api/config/geo-filter)
 	startedAt time.Time
 	perfStats *PerfStats
 	version   string
@@ -44,11 +45,16 @@ type Server struct {
 	statsCache   *StatsResponse
 	statsCachedAt time.Time
 
-	// Neighbor affinity graph (lazy-built, cached with TTL).
-	// neighborRebuilding guards against concurrent background rebuilds.
-	neighborMu        sync.RWMutex
-	neighborGraph     *NeighborGraph
-	neighborRebuilding atomic.Bool
+	// Guards s.cfg.GeoFilter — read by ingest/handler goroutines, written by PUT handler
+	cfgMu sync.RWMutex
+
+	// Serializes concurrent PUT /api/config/geo-filter disk writes so requests
+	// can't race on the .tmp file or interleave disk/memory updates.
+	saveMu sync.Mutex
+
+	// Neighbor affinity graph (lazy-built, cached with TTL)
+	neighborMu    sync.Mutex
+	neighborGraph *NeighborGraph
 
 	// Channel PSK keys loaded at startup from rainbow file + config.
 	channelKeys map[string]string
@@ -62,12 +68,10 @@ type Server struct {
 	backupRunning  bool
 	backupLastDone time.Time
 
-	// In-memory perf-metrics ring buffer for /api/perf/history. Populated by
-	// a background goroutine (one sample per minute) and capped at
-	// perfHistoryCap. Not persisted — the server DB is opened read-only, so
-	// history resets on restart by design.
-	perfHistoryMu sync.Mutex
-	perfHistory   []PerfSample
+	// Cached /api/scope-stats response — per-window, recomputed at most once every 30s
+	scopeStatsMu       sync.Mutex
+	scopeStatsCache    map[string]*ScopeStatsResponse
+	scopeStatsCachedAt map[string]time.Time
 
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
@@ -77,9 +81,13 @@ type Server struct {
 	cpuLastWall  time.Time
 	cpuLastCPUNs int64
 
-	// Path to the SQLite DB file — set when persistence is available.
-	// Empty string disables async persistence in storePerfSample.
+	// Path to the SQLite DB file — used for admin backup and other references.
 	dbPath string
+
+	// In-memory perf-history ring buffer (Cornmeister extension: /api/perf/history).
+	// The server is read-only (#1283/#1287); samples are only held in RAM.
+	perfHistoryMu sync.Mutex
+	perfHistory   []PerfSample
 
 	// Absolute path to the public/static directory — set after filepath.Abs resolves
 	// the -public flag. Used by handleHealthShare to locate share.html without
@@ -166,6 +174,21 @@ func (s *Server) getMemStats() runtime.MemStats {
 	return s.memStatsCache
 }
 
+// getGeoFilter returns a pointer to the current geo_filter config under read lock.
+// Callers MUST NOT mutate the returned struct.
+func (s *Server) getGeoFilter() *GeoFilterConfig {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg.GeoFilter
+}
+
+// setGeoFilter atomically swaps the geo_filter config; used by PUT /api/config/geo-filter.
+func (s *Server) setGeoFilter(gf *GeoFilterConfig) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	s.cfg.GeoFilter = gf
+}
+
 // RegisterRoutes sets up all HTTP routes on the given router.
 func (s *Server) RegisterRoutes(r *mux.Router) {
 	s.router = r
@@ -190,6 +213,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/config/map", s.handleConfigMap).Methods("GET")
 	r.HandleFunc("/api/config/geo-filter", s.handleConfigGeoFilter).Methods("GET")
 	r.HandleFunc("/api/config/channel-keys", s.handleConfigChannelKeys).Methods("GET")
+	r.HandleFunc("/api/config/areas", s.handleConfigAreas).Methods("GET")
+	r.HandleFunc("/api/config/areas/polygons", s.handleConfigAreasPolygons).Methods("GET")
+	r.Handle("/api/config/geo-filter", s.requireAPIKey(http.HandlerFunc(s.handlePutConfigGeoFilter))).Methods("PUT")
 
 	// Readiness endpoint (gated on background init completion)
 	r.HandleFunc("/api/healthz", s.handleHealthz).Methods("GET")
@@ -200,13 +226,22 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// Prometheus scrape endpoint. Uses the conventional /metrics path (not
 	// /api/metrics) and is intentionally unauthenticated — see handleMetrics.
 	r.HandleFunc("/metrics", s.handleMetrics).Methods("GET")
+	r.HandleFunc("/api/scope-stats", s.handleScopeStats).Methods("GET")
 	r.HandleFunc("/api/perf", s.handlePerf).Methods("GET")
 	r.HandleFunc("/api/perf/history", s.handlePerfHistory).Methods("GET")
 	r.HandleFunc("/api/perf/io", s.handlePerfIO).Methods("GET")
 	r.HandleFunc("/api/perf/sqlite", s.handlePerfSqlite).Methods("GET")
 	r.HandleFunc("/api/perf/write-sources", s.handlePerfWriteSources).Methods("GET")
 	r.Handle("/api/perf/reset", s.requireAPIKey(http.HandlerFunc(s.handlePerfReset))).Methods("POST")
-	r.Handle("/api/admin/prune", s.requireAPIKey(http.HandlerFunc(s.handleAdminPrune))).Methods("POST")
+	// /api/admin/prune removed in #1283 — pruning is owned by the
+	// ingestor process (scheduled tickers + startup pass). Operators
+	// who want an ad-hoc prune can restart the ingestor.
+	//
+	// /api/admin/prune-geo-filter (#669 M4 / PR #738): server enqueues a
+	// marker file; the ingestor (which holds the writable DB handle)
+	// runs the DELETE. /status reports completion.
+	r.Handle("/api/admin/prune-geo-filter", s.requireAPIKey(http.HandlerFunc(s.handlePruneGeoFilter))).Methods("POST")
+	r.Handle("/api/admin/prune-geo-filter/status", s.requireAPIKey(http.HandlerFunc(s.handlePruneGeoFilterStatus))).Methods("GET")
 	r.Handle("/api/debug/affinity", s.requireAPIKey(http.HandlerFunc(s.handleDebugAffinity))).Methods("GET")
 	r.Handle("/api/dropped-packets", s.requireAPIKey(http.HandlerFunc(s.handleDroppedPackets))).Methods("GET")
 	r.Handle("/api/backup", s.requireAPIKey(http.HandlerFunc(s.handleBackup))).Methods("GET")
@@ -383,6 +418,46 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleConfigAreas(w http.ResponseWriter, r *http.Request) {
+	type areaListEntry struct {
+		Key   string `json:"key"`
+		Label string `json:"label"`
+	}
+	result := make([]areaListEntry, 0, len(s.cfg.Areas))
+	for k, v := range s.cfg.Areas {
+		if v.Label == "" {
+			continue // skip comment/invalid entries (e.g. "_comment" keys in config)
+		}
+		result = append(result, areaListEntry{Key: k, Label: v.Label})
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) handleConfigAreasPolygons(w http.ResponseWriter, r *http.Request) {
+	type areaDebugEntry struct {
+		Key     string       `json:"key"`
+		Label   string       `json:"label"`
+		Polygon [][2]float64 `json:"polygon,omitempty"`
+		LatMin  *float64     `json:"latMin,omitempty"`
+		LatMax  *float64     `json:"latMax,omitempty"`
+		LonMin  *float64     `json:"lonMin,omitempty"`
+		LonMax  *float64     `json:"lonMax,omitempty"`
+	}
+	result := make([]areaDebugEntry, 0, len(s.cfg.Areas))
+	for k, v := range s.cfg.Areas {
+		result = append(result, areaDebugEntry{
+			Key:     k,
+			Label:   v.Label,
+			Polygon: v.Polygon,
+			LatMin:  v.LatMin,
+			LatMax:  v.LatMax,
+			LonMin:  v.LonMin,
+			LonMax:  v.LonMax,
+		})
+	}
+	writeJSON(w, result)
+}
+
 func (s *Server) handleConfigRegions(w http.ResponseWriter, r *http.Request) {
 	regions := make(map[string]string)
 	for k, v := range s.cfg.Regions {
@@ -525,12 +600,15 @@ func (s *Server) handleConfigMap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigGeoFilter(w http.ResponseWriter, r *http.Request) {
-	gf := s.cfg.GeoFilter
+	gf := s.getGeoFilter()
+	// writeEnabled signals to clients (e.g. the customizer UI) whether a
+	// strong API key is configured. Low-sensitivity by design.
+	writeEnabled := s.cfg != nil && s.cfg.APIKey != "" && !IsWeakAPIKey(s.cfg.APIKey)
 	if gf == nil || len(gf.Polygon) == 0 {
-		writeJSON(w, map[string]interface{}{"polygon": nil, "bufferKm": 0})
+		writeJSON(w, map[string]interface{}{"polygon": nil, "bufferKm": 0, "writeEnabled": writeEnabled})
 		return
 	}
-	writeJSON(w, map[string]interface{}{"polygon": gf.Polygon, "bufferKm": gf.BufferKm})
+	writeJSON(w, map[string]interface{}{"polygon": gf.Polygon, "bufferKm": gf.BufferKm, "writeEnabled": writeEnabled})
 }
 
 func (s *Server) handleConfigChannelKeys(w http.ResponseWriter, r *http.Request) {
@@ -970,9 +1048,9 @@ func (s *Server) collectPerfSample() PerfSample {
 	return sample
 }
 
-// storePerfSample appends a sample to the server-side ring buffer capped at
-// perfHistoryCap entries, and when a DB path is available persists it
-// asynchronously so history survives restarts.
+// storePerfSample appends a sample to the server-side in-memory ring buffer
+// capped at perfHistoryCap entries. The server is read-only (#1283/#1287)
+// so samples are not persisted to SQLite.
 func (s *Server) storePerfSample(sample PerfSample) {
 	s.perfHistoryMu.Lock()
 	defer s.perfHistoryMu.Unlock()
@@ -981,9 +1059,6 @@ func (s *Server) storePerfSample(sample PerfSample) {
 		trimmed := make([]PerfSample, perfHistoryCap)
 		copy(trimmed, s.perfHistory[len(s.perfHistory)-perfHistoryCap:])
 		s.perfHistory = trimmed
-	}
-	if s.dbPath != "" {
-		asyncSavePerfSample(s.dbPath, sample)
 	}
 }
 
@@ -1084,7 +1159,8 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		Until:    r.URL.Query().Get("until"),
 		Region:   r.URL.Query().Get("region"),
 		Node:     r.URL.Query().Get("node"),
-		Channel:  r.URL.Query().Get("channel"),
+		Channel:            r.URL.Query().Get("channel"),
+		Area:               r.URL.Query().Get("area"),
 		Order:              "DESC",
 		ExpandObservations: r.URL.Query().Get("expand") == "observations",
 	}
@@ -1393,31 +1469,43 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		hashInfo := s.store.GetNodeHashSizeInfo()
 		mbCap := s.store.GetMultiByteCapMap()
 		relayWindow := s.cfg.GetHealthThresholds().RelayActiveHours
-
-		// Collect pubkeys for repeater/room nodes so we can fetch relay+usefulness
-		// data in one lock acquisition instead of once per node.
-		var relayKeys []string
+		// #1257: bulk-compute relay info + usefulness scores ONCE per
+		// request (cached 15s) instead of calling the per-node helpers
+		// inside the loop. The per-node calls each grabbed their own
+		// RLock and walked byPathHop[pk] + byPayloadType, blowing
+		// /api/nodes up to 30+s on busy networks.
+		var relayMap map[string]RepeaterRelayInfo
+		var usefulMap map[string]float64
+		needsRelay := false
 		for _, node := range nodes {
-			if pk, ok := node["public_key"].(string); ok {
-				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
-					relayKeys = append(relayKeys, pk)
-				}
+			if role, _ := node["role"].(string); role == "repeater" || role == "room" {
+				needsRelay = true
+				break
 			}
 		}
-		batchInfo := s.store.GetRepeaterBatchInfo(relayKeys, relayWindow)
-
+		if needsRelay {
+			relayMap = s.store.GetRepeaterRelayInfoMap(relayWindow)
+			usefulMap = s.store.GetRepeaterUsefulnessScoreMap()
+		}
+		// Bridge axis (#672 axis 2 of 4). Snapshot is an atomic load
+		// — safe to call regardless of needsRelay, and we want the
+		// score on repeater rows specifically.
+		bridgeMap := s.store.GetBridgeScoreMap()
 		for _, node := range nodes {
 			if pk, ok := node["public_key"].(string); ok {
 				EnrichNodeWithHashSize(node, hashInfo[pk])
 				EnrichNodeWithMultiByte(node, mbCap[pk])
-				if info, found := batchInfo[pk]; found {
+				if role, _ := node["role"].(string); role == "repeater" || role == "room" {
+					info, _ := lookupRelayInfo(relayMap, pk)
+					info.WindowHours = relayWindow
 					if info.LastRelayed != "" {
 						node["last_relayed"] = info.LastRelayed
 					}
 					node["relay_active"] = info.RelayActive
 					node["relay_count_1h"] = info.RelayCount1h
 					node["relay_count_24h"] = info.RelayCount24h
-					node["usefulness_score"] = info.UsefulnessScore
+					node["usefulness_score"] = lookupUsefulnessScore(usefulMap, pk)
+					node["bridge_score"] = lookupUsefulnessScore(bridgeMap, pk)
 				}
 			}
 		}
@@ -1452,6 +1540,34 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		}
 		total = len(filtered)
 		nodes = filtered
+	}
+	// Filter by area
+	if area := q.Get("area"); area != "" {
+		var areaNodes map[string]bool
+		if s.store != nil {
+			areaNodes = s.store.resolveAreaNodes(area)
+		} else if s.cfg != nil && s.cfg.Areas != nil {
+			if entry, ok := s.cfg.Areas[area]; ok {
+				pks, err := s.db.GetNodePubkeysInArea(entry)
+				if err == nil {
+					areaNodes = make(map[string]bool, len(pks))
+					for _, pk := range pks {
+						areaNodes[pk] = true
+					}
+				}
+			}
+		}
+		if areaNodes != nil {
+			filtered := make([]map[string]interface{}, 0, len(nodes))
+			for _, n := range nodes {
+				pk, _ := n["public_key"].(string)
+				if areaNodes[pk] {
+					filtered = append(filtered, n)
+				}
+			}
+			nodes = filtered
+			total = len(filtered)
+		}
 	}
 	writeJSON(w, NodeListResponse{Nodes: nodes, Total: total, Counts: counts})
 }
@@ -1536,6 +1652,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 			node["relay_count_1h"] = info.RelayCount1h
 			node["relay_count_24h"] = info.RelayCount24h
 			node["usefulness_score"] = s.store.GetRepeaterUsefulnessScore(pubkey)
+			node["bridge_score"] = s.store.GetBridgeScore(pubkey)
 		}
 	}
 
@@ -1743,6 +1860,27 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	}
 	candidates = filtered
 
+	// #1278: Read the CANONICAL persisted resolved_path for each surviving
+	// candidate OUTSIDE s.mu (fetchResolvedPathForTxBest takes lruMu; the
+	// lock-ordering contract forbids acquiring lruMu under s.mu).
+	//
+	// Option A from the issue: the packets page renders each tx via
+	// fetchResolvedPathForTxBest. For /api/nodes/{pk}/paths to stay
+	// CONSISTENT with the packets page, BOTH the containsTarget membership
+	// decision AND the displayed hop names must come from that same
+	// canonical resolved_path — not a re-resolution biased by passing the
+	// queried node as hopContext anchor.
+	//
+	// Falls back to biased re-resolve only when a tx has no persisted
+	// resolved_path (older data / async backfill incomplete); in that case
+	// there's no canonical answer to be consistent with.
+	canonicalRP := make(map[int][]*string, len(candidates))
+	for _, tx := range candidates {
+		if rp := s.store.fetchResolvedPathForTxBest(tx); rp != nil {
+			canonicalRP[tx.ID] = rp
+		}
+	}
+
 	// Re-acquire read lock for the aggregation phase that reads store data.
 	s.store.mu.RLock()
 
@@ -1760,6 +1898,11 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 	// (handleNodePaths aggregates paths terminating at lowerPK). Passing nil
 	// here re-introduced regression #1197 in production. See
 	// resolve_context_callsites_test.go.
+	//
+	// NOTE (#1278): this biased resolver is only consulted for the FALLBACK
+	// path — txs with no persisted resolved_path. Txs with a canonical
+	// resolved_path use the persisted pubkeys directly (see canonicalRP),
+	// which keeps results consistent with the packets page.
 	hopContext := []string{lowerPK}
 	resolveHop := func(hop string) *nodeInfo {
 		if cached, ok := hopCache[hop]; ok {
@@ -1769,38 +1912,96 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		hopCache[hop] = r
 		return r
 	}
+	// nodeByPK caches pubkey → *nodeInfo lookups when rendering canonical
+	// resolved_path entries. Cheap O(1) hit against pm.m (the prefix map
+	// stores the full pubkey as a key for pubkeys >= maxPrefixLen).
+	nodeByPK := make(map[string]*nodeInfo)
+	lookupNode := func(pk string) *nodeInfo {
+		key := strings.ToLower(pk)
+		if cached, ok := nodeByPK[key]; ok {
+			return cached
+		}
+		// Use plain resolve(); we have the full pubkey, no ambiguity.
+		n := pm.resolve(key)
+		if n == nil || !strings.EqualFold(n.PublicKey, key) {
+			// Full pubkey may not be present in pm (role filter, eviction).
+			// Fall through with nil; caller renders prefix-only entry.
+			nodeByPK[key] = nil
+			return nil
+		}
+		nodeByPK[key] = n
+		return n
+	}
 	for _, tx := range candidates {
 		hops := txGetParsedPath(tx)
 		resolvedHops := make([]PathHopResp, len(hops))
 		sigParts := make([]string, len(hops))
-		// For candidates not confirmed via full-pubkey index or SQL, verify that at
-		// least one hop actually resolves to the target. This catches prefix collisions
-		// (e.g. two nodes sharing a "7a" 1-byte prefix) that slipped through the
-		// conservative resolved_path fallback.
-		containsTarget := confirmedByFullKey[tx.ID] || confirmedBySQL[tx.ID]
-		for i, hop := range hops {
-			resolved := resolveHop(hop)
-			entry := PathHopResp{Prefix: hop, Name: hop}
-			if resolved != nil {
-				entry.Name = resolved.Name
-				entry.Pubkey = resolved.PublicKey
-				if resolved.HasGPS {
-					entry.Lat = resolved.Lat
-					entry.Lon = resolved.Lon
+		containsTarget := false
+
+		if rp, ok := canonicalRP[tx.ID]; ok {
+			// Option A: render hops + decide membership from the CANONICAL
+			// persisted resolved_path. resolved_path is parallel to the
+			// best-obs path_json which may be longer than tx.PathJSON used by
+			// txGetParsedPath; align by the shorter length.
+			rpLen := len(rp)
+			for i, hop := range hops {
+				entry := PathHopResp{Prefix: hop, Name: hop}
+				var resolvedPK string
+				if i < rpLen && rp[i] != nil {
+					resolvedPK = strings.ToLower(*rp[i])
 				}
-				sigParts[i] = resolved.PublicKey
-				if strings.ToLower(resolved.PublicKey) == lowerPK {
-					containsTarget = true
+				if resolvedPK != "" {
+					if n := lookupNode(resolvedPK); n != nil {
+						entry.Name = n.Name
+						entry.Pubkey = n.PublicKey
+						if n.HasGPS {
+							entry.Lat = n.Lat
+							entry.Lon = n.Lon
+						}
+						sigParts[i] = n.PublicKey
+					} else {
+						entry.Pubkey = resolvedPK
+						sigParts[i] = resolvedPK
+					}
+					if resolvedPK == lowerPK {
+						containsTarget = true
+					}
+				} else {
+					sigParts[i] = hop
 				}
-			} else {
-				sigParts[i] = hop
-				// Unresolvable hop: keep conservative if prefix could be the target.
-				if strings.HasPrefix(lowerPK, strings.ToLower(hop)) {
-					containsTarget = true
-				}
+				resolvedHops[i] = entry
 			}
-			resolvedHops[i] = entry
+		} else {
+			// Fallback: no canonical resolved_path persisted (older data /
+			// async backfill incomplete). Use biased re-resolve and the
+			// legacy containsTarget heuristics (preserves #1197 behavior
+			// and the #929 prefix-collision exclusion test).
+			containsTarget = confirmedByFullKey[tx.ID] || confirmedBySQL[tx.ID]
+			for i, hop := range hops {
+				resolved := resolveHop(hop)
+				entry := PathHopResp{Prefix: hop, Name: hop}
+				if resolved != nil {
+					entry.Name = resolved.Name
+					entry.Pubkey = resolved.PublicKey
+					if resolved.HasGPS {
+						entry.Lat = resolved.Lat
+						entry.Lon = resolved.Lon
+					}
+					sigParts[i] = resolved.PublicKey
+					if strings.ToLower(resolved.PublicKey) == lowerPK {
+						containsTarget = true
+					}
+				} else {
+					sigParts[i] = hop
+					// Unresolvable hop: keep conservative if prefix could be the target.
+					if strings.HasPrefix(lowerPK, strings.ToLower(hop)) {
+						containsTarget = true
+					}
+				}
+				resolvedHops[i] = entry
+			}
 		}
+
 		if !containsTarget {
 			continue
 		}
@@ -1923,7 +2124,7 @@ func (s *Server) handleFleetClockSkew(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []*NodeClockSkew{})
 		return
 	}
-	writeJSON(w, s.store.GetFleetClockSkew())
+	writeJSON(w, s.store.GetFleetClockSkew(r.URL.Query().Get("area")))
 }
 
 // --- Analytics Handlers ---
@@ -2931,6 +3132,7 @@ func mapSliceToTransmissions(maps []map[string]interface{}) []TransmissionResp {
 		}
 		tx.ObserverID = m["observer_id"]
 		tx.ObserverName = m["observer_name"]
+		tx.ObserverIATA = m["observer_iata"]
 		tx.SNR = m["snr"]
 		tx.RSSI = m["rssi"]
 		tx.PathJSON = m["path_json"]
@@ -2953,6 +3155,7 @@ func mapSliceToObservations(maps []map[string]interface{}) []ObservationResp {
 		obs.Hash = m["hash"]
 		obs.ObserverID = m["observer_id"]
 		obs.ObserverName = m["observer_name"]
+		obs.ObserverIATA = m["observer_iata"]
 		obs.SNR = m["snr"]
 		obs.RSSI = m["rssi"]
 		obs.PathJSON = m["path_json"]
@@ -3098,45 +3301,8 @@ func parseWindowDuration(window string) (time.Duration, error) {
 	return time.ParseDuration(window)
 }
 
-func (s *Server) handleAdminPrune(w http.ResponseWriter, r *http.Request) {
-	days := 0
-	if d := r.URL.Query().Get("days"); d != "" {
-		fmt.Sscanf(d, "%d", &days)
-	}
-	if days <= 0 && s.cfg.Retention != nil {
-		days = s.cfg.Retention.PacketDays
-	}
-	if days <= 0 {
-		writeError(w, 400, "days parameter required (or set retention.packetDays in config)")
-		return
-	}
-
-	results := map[string]interface{}{}
-
-	// Prune old packets
-	n, err := s.db.PruneOldPackets(days)
-	if err != nil {
-		writeInternalError(w, "handleAdminPrune PruneOldPackets", err)
-		return
-	}
-	log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
-	results["packets_deleted"] = n
-	results["deleted"] = n // legacy alias
-
-	// Also mark stale observers as inactive if observerDays is configured
-	observerDays := s.cfg.ObserverDaysOrDefault()
-	if observerDays > 0 {
-		obsN, obsErr := s.db.RemoveStaleObservers(observerDays)
-		if obsErr != nil {
-			log.Printf("[prune] observer prune error: %v", obsErr)
-		} else {
-			results["observers_inactive"] = obsN
-		}
-	}
-
-	results["days"] = days
-	writeJSON(w, results)
-}
+// handleAdminPrune was removed in #1283. Prune now runs in the ingestor
+// process (server is read-only). The function and route are gone.
 
 // constantTimeEqual compares two strings in constant time to prevent timing attacks.
 func constantTimeEqual(a, b string) bool {
@@ -3273,4 +3439,272 @@ func (s *Server) handleDroppedPackets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, results)
+}
+
+func (s *Server) handleScopeStats(w http.ResponseWriter, r *http.Request) {
+	const scopeStatsTTL = 30 * time.Second
+
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = "24h"
+	}
+	if window != "1h" && window != "24h" && window != "7d" {
+		writeError(w, 400, "window must be 1h, 24h, or 7d")
+		return
+	}
+
+	s.scopeStatsMu.Lock()
+	if s.scopeStatsCache != nil {
+		if cached, ok := s.scopeStatsCache[window]; ok && time.Since(s.scopeStatsCachedAt[window]) < scopeStatsTTL {
+			s.scopeStatsMu.Unlock()
+			writeJSON(w, cached)
+			return
+		}
+	}
+	s.scopeStatsMu.Unlock()
+
+	resp, err := s.db.GetScopeStats(window)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+
+	s.scopeStatsMu.Lock()
+	if s.scopeStatsCache == nil {
+		s.scopeStatsCache = make(map[string]*ScopeStatsResponse)
+		s.scopeStatsCachedAt = make(map[string]time.Time)
+	}
+	s.scopeStatsCache[window] = resp
+	s.scopeStatsCachedAt[window] = time.Now()
+	s.scopeStatsMu.Unlock()
+
+	writeJSON(w, resp)
+}
+
+// handlePruneGeoFilter identifies (dry_run=true, default) or enqueues (confirm=true)
+// deletion of nodes whose GPS coordinates fall outside the currently configured
+// geo_filter. Nodes with no GPS fix are always kept. Requires geo_filter to be
+// configured.
+//
+// Since #1283/#1289 the server opens SQLite read-only, so the actual DELETE is
+// performed by the ingestor. The server writes a request marker file (see
+// internal/prunequeue); the ingestor's maintenance loop consumes it and writes a
+// result marker. The confirm response is 202 Accepted with a request id;
+// clients poll GET /api/admin/prune-geo-filter/status?id=<id> for completion.
+//
+// Confirm requires the pubkeys from the preview in the request body to prevent
+// TOCTOU races: only nodes that were shown in preview AND are still outside the
+// filter are enqueued.
+func (s *Server) handlePruneGeoFilter(w http.ResponseWriter, r *http.Request) {
+	gf := s.getGeoFilter()
+	if gf == nil || len(gf.Polygon) < 3 {
+		writeError(w, http.StatusBadRequest, "no geo_filter configured")
+		return
+	}
+
+	nodes, err := s.db.GetNodesForGeoPrune()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db error")
+		return
+	}
+
+	type nodeResult struct {
+		PubKey string   `json:"pubkey"`
+		Name   string   `json:"name"`
+		Lat    *float64 `json:"lat"`
+		Lon    *float64 `json:"lon"`
+	}
+
+	var outside []nodeResult
+	for _, n := range nodes {
+		if n.Lat == nil || n.Lon == nil {
+			continue // no GPS — always keep
+		}
+		if !NodePassesGeoFilter(*n.Lat, *n.Lon, gf) {
+			outside = append(outside, nodeResult{PubKey: n.PubKey, Name: n.Name, Lat: n.Lat, Lon: n.Lon})
+		}
+	}
+
+	if r.URL.Query().Get("confirm") != "true" {
+		// Dry run — return preview without enqueueing anything.
+		writeJSON(w, map[string]interface{}{
+			"dryRun": true,
+			"count":  len(outside),
+			"nodes":  outside,
+		})
+		return
+	}
+
+	// Confirmed enqueue — require pubkeys from the preview to prevent TOCTOU:
+	// only nodes that were shown in preview AND are still outside the filter
+	// at this exact moment are scheduled for deletion. (The ingestor honors
+	// the list verbatim; it does NOT re-evaluate geo_filter membership.)
+	var body struct {
+		Pubkeys []string `json:"pubkeys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Pubkeys) == 0 {
+		writeError(w, http.StatusBadRequest, "confirm requires pubkeys from preview in request body")
+		return
+	}
+	allowed := make(map[string]bool, len(body.Pubkeys))
+	for _, pk := range body.Pubkeys {
+		allowed[pk] = true
+	}
+
+	var toDelete []nodeResult
+	for _, n := range outside {
+		if allowed[n.PubKey] {
+			toDelete = append(toDelete, n)
+		}
+	}
+
+	pubkeys := make([]string, 0, len(toDelete))
+	for _, n := range toDelete {
+		pubkeys = append(pubkeys, n.PubKey)
+	}
+
+	id := prunequeue.NewID()
+	req := prunequeue.Request{
+		ID:          id,
+		RequestedAt: time.Now().UTC(),
+		Reason:      "geo-prune",
+		Pubkeys:     pubkeys,
+	}
+	if err := prunequeue.WriteRequest(s.db.path, req); err != nil {
+		log.Printf("[geo-prune] failed to enqueue request %s: %v", id, err)
+		writeError(w, http.StatusInternalServerError, "failed to enqueue prune request")
+		return
+	}
+	log.Printf("[geo-prune] enqueued request %s for %d node(s) (queue dir=%s)",
+		id, len(pubkeys), prunequeue.QueueDir(s.db.path))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"dryRun":    false,
+		"accepted":  true,
+		"requestId": id,
+		"count":     len(pubkeys),
+		"nodes":     toDelete,
+		"statusUrl": "/api/admin/prune-geo-filter/status?id=" + id,
+	})
+}
+
+// handlePruneGeoFilterStatus reports the state of a previously-enqueued
+// geo-prune request. While the request marker is still present the response is
+// {"status":"pending"}. Once the ingestor writes a result, the response is
+// {"status":"done","deleted":N,"completedAt":...} (or "error" if the ingestor
+// failed). Returns 404 when neither marker nor result is found.
+func (s *Server) handlePruneGeoFilterStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing id")
+		return
+	}
+
+	res, err := prunequeue.ReadResult(s.db.path, id)
+	if err != nil {
+		if strings.Contains(err.Error(), "invalid prune request id") {
+			writeError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "status read failed")
+		return
+	}
+	if res != nil {
+		status := "done"
+		if res.Error != "" {
+			status = "error"
+		}
+		writeJSON(w, map[string]interface{}{
+			"requestId":   res.ID,
+			"status":      status,
+			"deleted":     res.Deleted,
+			"requestedAt": res.RequestedAt,
+			"completedAt": res.CompletedAt,
+			"error":       res.Error,
+		})
+		return
+	}
+
+	pending, err := prunequeue.RequestExists(s.db.path, id)
+	if err != nil {
+		if strings.Contains(err.Error(), "invalid prune request id") {
+			writeError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "status read failed")
+		return
+	}
+	if pending {
+		writeJSON(w, map[string]interface{}{
+			"requestId": id,
+			"status":    "pending",
+		})
+		return
+	}
+	writeError(w, http.StatusNotFound, "unknown request id")
+}
+
+// handlePutConfigGeoFilter writes the geo_filter config to disk and updates the
+// in-memory pointer atomically. Empty/missing polygon clears the filter.
+//
+// Backstop validation: ≤1000 points, every point in [-90,90]/[-180,180], no
+// NaN/Inf; bufferKm finite, non-negative, ≤ 20000 km. Concurrent PUTs are
+// serialized via s.saveMu so they cannot race on the .tmp file.
+func (s *Server) handlePutConfigGeoFilter(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB cap
+
+	var body struct {
+		Polygon  [][2]float64 `json:"polygon"`
+		BufferKm float64      `json:"bufferKm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	if len(body.Polygon) > 0 && len(body.Polygon) < 3 {
+		writeError(w, http.StatusBadRequest, "polygon must have at least 3 points")
+		return
+	}
+	if len(body.Polygon) > 1000 {
+		writeError(w, http.StatusBadRequest, "polygon must have at most 1000 points")
+		return
+	}
+	for _, pt := range body.Polygon {
+		if math.IsNaN(pt[0]) || math.IsNaN(pt[1]) || math.IsInf(pt[0], 0) || math.IsInf(pt[1], 0) ||
+			pt[0] < -90 || pt[0] > 90 || pt[1] < -180 || pt[1] > 180 {
+			writeError(w, http.StatusBadRequest, "polygon point out of range: lat must be in [-90,90], lon in [-180,180]")
+			return
+		}
+	}
+	if math.IsNaN(body.BufferKm) || math.IsInf(body.BufferKm, 0) ||
+		body.BufferKm < 0 || body.BufferKm > 20000 {
+		writeError(w, http.StatusBadRequest, "bufferKm must be a finite number in [0, 20000]")
+		return
+	}
+
+	var gf *GeoFilterConfig
+	if len(body.Polygon) >= 3 {
+		gf = &GeoFilterConfig{Polygon: body.Polygon, BufferKm: body.BufferKm}
+	}
+
+	s.saveMu.Lock()
+	if s.configDir != "" {
+		if err := SaveGeoFilter(s.configDir, gf); err != nil {
+			s.saveMu.Unlock()
+			log.Printf("[geofilter] save failed: %v", err)
+			writeError(w, http.StatusInternalServerError, "failed to save config")
+			return
+		}
+	}
+	s.setGeoFilter(gf)
+	s.saveMu.Unlock()
+
+	if gf != nil {
+		writeJSON(w, map[string]interface{}{"polygon": gf.Polygon, "bufferKm": gf.BufferKm})
+	} else {
+		writeJSON(w, map[string]interface{}{"polygon": nil, "bufferKm": 0})
+	}
 }

@@ -51,6 +51,7 @@ node test-live-region-filter.js
 node test-issue-1136-observer-iata-map.js
 node test-analytics-channels-integration.js
 node test-observers-headings.js
+node test-traces.js
 
 echo ""
 echo "═══════════════════════════════════════"

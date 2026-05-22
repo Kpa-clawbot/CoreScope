@@ -476,10 +476,10 @@ func TestBuildNodeInfoMap_ObserverEnrichment(t *testing.T) {
 	// Create tables
 	for _, stmt := range []string{
 		"CREATE TABLE nodes (public_key TEXT, name TEXT, role TEXT, lat REAL, lon REAL)",
-		"CREATE TABLE observers (id TEXT, name TEXT)",
+		"CREATE TABLE observers (id TEXT, name TEXT, iata TEXT)",
 		"INSERT INTO nodes VALUES ('AAAA1111', 'Repeater-1', 'repeater', 0, 0)",
-		"INSERT INTO observers VALUES ('BBBB2222', 'Observer-Alpha')",
-		"INSERT INTO observers VALUES ('AAAA1111', 'Obs-also-repeater')",
+		"INSERT INTO observers VALUES ('BBBB2222', 'Observer-Alpha', '')",
+		"INSERT INTO observers VALUES ('AAAA1111', 'Obs-also-repeater', '')",
 	} {
 		if _, err := conn.Exec(stmt); err != nil {
 			t.Fatalf("exec %q: %v", stmt, err)

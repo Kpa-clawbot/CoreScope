@@ -489,18 +489,16 @@
     var el = document.getElementById('perfContent');
     if (!el) return;
     try {
-      const results = await Promise.all([
-        fetch('/api/perf').then(function (r) { return r.json(); }),
+      // #1258: /api/health was awaited AFTER Promise.all, adding a full RTT
+      // (~50-200ms) on every 5s refresh. Issue it in parallel with the rest.
+      const [server, client, ioStats, sqliteStats, writeSources, health] = await Promise.all([
+        fetch('/api/perf').then(r => r.json()),
         Promise.resolve(window.apiPerf ? window.apiPerf() : null),
-        loadPerfDetails()
+        fetch('/api/perf/io').then(r => r.json()).catch(() => null),
+        fetch('/api/perf/sqlite').then(r => r.json()).catch(() => null),
+        fetch('/api/perf/write-sources').then(r => r.json()).catch(() => null),
+        fetch('/api/health').then(r => r.json()).catch(() => null)
       ]);
-      const server  = results[0];
-      const client  = results[1];
-      const details = results[2];
-      const ioStats      = details.ioStats;
-      const sqliteStats  = details.sqliteStats;
-      const writeSources = details.writeSources;
-      const health = viewMode === 'cards' ? await loadHealthForCards() : healthCache.data;
 
       pushSample(server, server.observerCounts || null, ioStats, sqliteStats, writeSources);
 
@@ -859,15 +857,29 @@
   registerPage('perf', {
     init(app) {
       render(app);
-      interval = setInterval(refresh, REFRESH_MS);
-      // Detail endpoints poll less often; loadPerfDetails() caches for
-      // DETAIL_REFRESH_MS so this just bumps the cache between perf polls.
-      detailInterval = setInterval(loadPerfDetails, DETAIL_REFRESH_MS);
+      // #1258: don't burn CPU/network rebuilding the page (and its many cards
+      // + 3 large tables) every 5s while the tab is hidden. Pause polling on
+      // visibilitychange and resume on focus. Reduces background fetch traffic
+      // to zero and prevents a returning user from seeing a 100+ms thrash as
+      // a backlog of refreshes flush.
+      const tick = () => {
+        if (document.hidden) return;
+        refresh();
+      };
+      interval = setInterval(tick, 5000);
+      const onVis = () => {
+        if (!document.hidden) refresh();
+      };
+      document.addEventListener('visibilitychange', onVis);
+      this._onVis = onVis;
     },
     destroy() {
       destroyCharts();
-      if (interval)       { clearInterval(interval);       interval = null; }
-      if (detailInterval) { clearInterval(detailInterval); detailInterval = null; }
+      if (interval) { clearInterval(interval); interval = null; }
+      if (this._onVis) {
+        document.removeEventListener('visibilitychange', this._onVis);
+        this._onVis = null;
+      }
     }
   });
 })();

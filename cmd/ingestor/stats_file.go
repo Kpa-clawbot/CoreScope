@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"sync"
-	"syscall"
 	"time"
 
 	"github.com/meshcore-analyzer/perfio"
@@ -68,7 +66,7 @@ func writeStatsAtomic(path string, b []byte) error {
 	// O_NOFOLLOW: if tmp is a pre-existing symlink, openat fails with ELOOP
 	// instead of clobbering the symlink target. O_TRUNC zeroes existing
 	// regular-file content. 0o600 — no need for world-readable.
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|oNoFollow, 0o600)
 	if err != nil {
 		return err
 	}
@@ -169,12 +167,10 @@ func procIORate(prev, cur procIOSnapshot, stamp string) *PerfIOSample {
 //
 // Returns a stop function that terminates the writer goroutine; callers that
 // don't need clean shutdown may ignore it.
-func StartStatsFileWriter(s *Store, interval time.Duration) (stop func()) {
+func StartStatsFileWriter(s *Store, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Second
 	}
-	done := make(chan struct{})
-	var stopOnce sync.Once
 	go func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
@@ -188,16 +184,8 @@ func StartStatsFileWriter(s *Store, interval time.Duration) (stop func()) {
 		// The buffer grows once and stays.
 		var buf bytes.Buffer
 		enc := json.NewEncoder(&buf)
-		for {
-			select {
-			case <-done:
-				return
-			case <-t.C:
-			}
+		for range t.C {
 			// Capture time.Now() ONCE per tick (Carmack must-fix #5).
-			// Both snapshot.SampledAt and procIO.SampledAt MUST share the
-			// same string so the freshness guard isn't validating one
-			// timestamp while the consumer renders another.
 			tickAt := time.Now().UTC()
 			stamp := tickAt.Format(time.RFC3339)
 			curIO := readProcSelfIOFn()
@@ -223,9 +211,6 @@ func StartStatsFileWriter(s *Store, interval time.Duration) (stop func()) {
 				continue
 			}
 			// json.Encoder.Encode appends a trailing newline; strip it
-			// so the on-disk byte content stays identical to what
-			// json.Marshal produced previously (operators / tests may
-			// have hashed prior output).
 			b := buf.Bytes()
 			if n := len(b); n > 0 && b[n-1] == '\n' {
 				b = b[:n-1]
@@ -235,7 +220,4 @@ func StartStatsFileWriter(s *Store, interval time.Duration) (stop func()) {
 			}
 		}
 	}()
-	return func() {
-		stopOnce.Do(func() { close(done) })
-	}
 }

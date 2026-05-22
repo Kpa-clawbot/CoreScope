@@ -389,6 +389,32 @@ console.log('\n=== nodes.js: getStatusTooltip / getStatusInfo (extracted) ===');
       const result = sortNodes(arr);
       assert.ok(Array.isArray(result));
     });
+    test('sortNodes sorts by default_scope asc', () => {
+      if (ctx.window._nodesSetSortState) ctx.window._nodesSetSortState({ column: 'default_scope', direction: 'asc' });
+      const arr = [
+        { name: 'Z', default_scope: 'beta/scope', last_heard: new Date().toISOString() },
+        { name: 'A', default_scope: 'alpha/scope', last_heard: new Date().toISOString() },
+        { name: 'M', default_scope: null, last_heard: new Date().toISOString() },
+      ];
+      const result = sortNodes(arr);
+      assert.ok(Array.isArray(result));
+      assert.strictEqual(result[0].default_scope, 'alpha/scope');
+      assert.strictEqual(result[1].default_scope, 'beta/scope');
+      assert.strictEqual(result[2].default_scope, null);
+    });
+    test('sortNodes sorts by default_scope desc', () => {
+      if (ctx.window._nodesSetSortState) ctx.window._nodesSetSortState({ column: 'default_scope', direction: 'desc' });
+      const arr = [
+        { name: 'Z', default_scope: 'beta/scope', last_heard: new Date().toISOString() },
+        { name: 'A', default_scope: 'alpha/scope', last_heard: new Date().toISOString() },
+        { name: 'M', default_scope: null, last_heard: new Date().toISOString() },
+      ];
+      const result = sortNodes(arr);
+      assert.ok(Array.isArray(result));
+      assert.strictEqual(result[0].default_scope, 'beta/scope');
+      assert.strictEqual(result[1].default_scope, 'alpha/scope');
+      assert.strictEqual(result[2].default_scope, null);
+    });
   }
 
   if (ex.buildDupNameMap) {

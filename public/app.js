@@ -1098,6 +1098,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // Belt-and-braces null guards (#1105 MINOR 4): the outer block measures
   // and mutates all of these; if any are missing the layout math throws
   // before we can fall back gracefully.
+  let navPriorityFn = null;
   if (navMoreBtn && navMoreMenu && navMoreWrap && navLeft && navRightEl && linksContainer && navTop) {
     // Measure available room and decide which links overflow.
     // Algorithm: try to fit all links inline. If the link strip doesn't
@@ -1225,7 +1226,20 @@ window.addEventListener('DOMContentLoaded', () => {
         return needed <= window.innerWidth;
       }
       let i = 0;
+      // #1311 floor: protect data-priority="high" links from being
+      // dropped by the greedy fit loop. The bug was that on a non-high
+      // active route (e.g. /#/perf, /#/audio-lab) at ~1101-1200px, the
+      // active-route pill renders wider than other links, fits() keeps
+      // returning false even after every non-high link is in overflow,
+      // and the loop happily walked into the high-priority tail of
+      // overflowQueue and dropped Home/Packets/Map/Live/Nodes too —
+      // leaving the user with just brand + "More ▾" + the active pill.
+      // High-priority links are inline-pinned by contract; if the strip
+      // still doesn't fit at that point, that's a layout issue (e.g.
+      // shrink the active pill, drop nav-stats earlier) — never the
+      // measurer's call to delete primary navigation.
       while (!fits() && i < overflowQueue.length) {
+        if (overflowQueue[i].dataset.priority === 'high') break;
         overflowQueue[i].classList.add('is-overflow');
         i++;
       }
@@ -1239,7 +1253,12 @@ window.addEventListener('DOMContentLoaded', () => {
       // which is the correct UX) and skip when the queue is exhausted.
       var overflowedCount = allLinks.filter(a => a.classList.contains('is-overflow')).length;
       if (overflowedCount === 1) {
-        if (i < overflowQueue.length) {
+        // #1311: respect the high-priority floor here too — if the only
+        // remaining queue item is a high-priority link, do NOT promote
+        // it just to satisfy the >=2 More-menu floor. A degenerate
+        // 1-item dropdown is a smaller UX paper-cut than nuking a
+        // primary nav link.
+        if (i < overflowQueue.length && overflowQueue[i].dataset.priority !== 'high') {
           overflowQueue[i].classList.add('is-overflow');
           i++;
         } else {
@@ -1256,6 +1275,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
     // Run once on load, again after fonts settle (label widths shift),
     // and on resize (debounced via rAF).
+    navPriorityFn = applyNavPriority;
     applyNavPriority();
     if (document.fonts && document.fonts.ready) {
       document.fonts.ready.then(applyNavPriority);
@@ -1489,6 +1509,7 @@ window.addEventListener('DOMContentLoaded', () => {
         el.innerHTML = `<span class="stat-val">${stats.totalPackets}</span> pkts · <span class="stat-val">${stats.totalNodes}</span> nodes · <span class="stat-val">${stats.onlineObservers}</span> obs${formatVersionBadge(stats.version, stats.commit, stats.engine, stats.buildTime)}`;
         el.querySelectorAll('.stat-val').forEach(s => s.classList.add('updated'));
         setTimeout(() => { el.querySelectorAll('.stat-val').forEach(s => s.classList.remove('updated')); }, 600);
+        if (navPriorityFn) requestAnimationFrame(navPriorityFn);
       }
     } catch {}
   }

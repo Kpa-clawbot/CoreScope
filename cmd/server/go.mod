@@ -29,6 +29,10 @@ require (
 
 replace github.com/meshcore-analyzer/perfio => ../../internal/perfio
 
+require github.com/meshcore-analyzer/dbschema v0.0.0
+
+replace github.com/meshcore-analyzer/dbschema => ../../internal/dbschema
+
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -42,3 +46,7 @@ require (
 	modernc.org/mathutil v1.6.0 // indirect
 	modernc.org/memory v1.8.0 // indirect
 )
+
+require github.com/meshcore-analyzer/prunequeue v0.0.0
+
+replace github.com/meshcore-analyzer/prunequeue => ../../internal/prunequeue

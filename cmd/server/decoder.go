@@ -109,6 +109,32 @@ type Payload struct {
 	SNRValues       []float64    `json:"snrValues,omitempty"`
 	RawHex          string       `json:"raw,omitempty"`
 	Error           string       `json:"error,omitempty"`
+	// GRP_TXT/GRP_DATA channel envelope helpers — see
+	// firmware/src/helpers/BaseChatMesh.cpp:376-391.
+	ChannelHashHex   string `json:"channelHashHex,omitempty"`
+	DecryptionStatus string `json:"decryptionStatus,omitempty"`
+	// GRP_DATA (PAYLOAD_TYPE_GRP_DATA=0x06) inner fields, per
+	// firmware/src/helpers/BaseChatMesh.cpp:382-385.
+	DataType      *int   `json:"dataType,omitempty"`
+	DataLen       *int   `json:"dataLen,omitempty"`
+	DecryptedBlob string `json:"decryptedBlob,omitempty"`
+	// MULTIPART (PAYLOAD_TYPE_MULTIPART=0x0A) inner fields, per
+	// firmware/src/Mesh.cpp:289 — byte0 = (remaining<<4) | inner_type.
+	Remaining     *int   `json:"remaining,omitempty"`
+	InnerType     *int   `json:"innerType,omitempty"`
+	InnerTypeName string `json:"innerTypeName,omitempty"`
+	InnerAckCrc   string `json:"innerAckCrc,omitempty"`
+	InnerPayload  string `json:"innerPayload,omitempty"`
+	// CONTROL (PAYLOAD_TYPE_CONTROL=0x0B) byte0 flags, per
+	// firmware/src/Mesh.cpp:69 — high-bit = zero-hop direct subset.
+	CtrlFlags   string `json:"ctrlFlags,omitempty"`
+	CtrlZeroHop *bool  `json:"ctrlZeroHop,omitempty"`
+	CtrlLength  *int   `json:"ctrlLength,omitempty"`
+	// RAW_CUSTOM (PAYLOAD_TYPE_RAW_CUSTOM=0x0F) — application-defined per
+	// firmware/src/Mesh.cpp:577 (createRawData). We expose the bare envelope
+	// shape so consumers can triage by length + leading tag byte.
+	RawLength    *int   `json:"rawLength,omitempty"`
+	FirstByteTag string `json:"firstByteTag,omitempty"`
 }
 
 // DecodedPacket is the full decoded result.
@@ -313,6 +339,85 @@ func decodeGrpTxt(buf []byte) Payload {
 	}
 }
 
+// decodeGrpData decodes PAYLOAD_TYPE_GRP_DATA (0x06). Outer envelope is the
+// same shape as GRP_TXT (channel_hash(1)+MAC(2)+ciphertext) — see
+// firmware/src/helpers/BaseChatMesh.cpp:476,500. This server-side decoder has
+// no channel keys, so it surfaces the envelope only.
+func decodeGrpData(buf []byte) Payload {
+	if len(buf) < 3 {
+		return Payload{Type: "GRP_DATA", Error: "too short", RawHex: hex.EncodeToString(buf)}
+	}
+	return Payload{
+		Type:           "GRP_DATA",
+		ChannelHash:    int(buf[0]),
+		ChannelHashHex: fmt.Sprintf("%02X", buf[0]),
+		MAC:            hex.EncodeToString(buf[1:3]),
+		EncryptedData:  hex.EncodeToString(buf[3:]),
+	}
+}
+
+// decodeMultipart decodes PAYLOAD_TYPE_MULTIPART (0x0A) per
+// firmware/src/Mesh.cpp:287-310. byte0 = (remaining<<4) | inner_type;
+// when inner_type == PAYLOAD_TYPE_ACK the next 4 bytes are an ack_crc.
+func decodeMultipart(buf []byte) Payload {
+	if len(buf) < 1 {
+		return Payload{Type: "MULTIPART", Error: "too short", RawHex: hex.EncodeToString(buf)}
+	}
+	remaining := int(buf[0] >> 4)
+	innerType := int(buf[0] & 0x0F)
+	innerName := payloadTypeNames[innerType]
+	if innerName == "" {
+		innerName = "UNKNOWN"
+	}
+	p := Payload{
+		Type:          "MULTIPART",
+		Remaining:     &remaining,
+		InnerType:     &innerType,
+		InnerTypeName: innerName,
+	}
+	if innerType == PayloadACK && len(buf) >= 5 {
+		crc := binary.LittleEndian.Uint32(buf[1:5])
+		p.InnerAckCrc = fmt.Sprintf("%08x", crc)
+	} else if len(buf) > 1 {
+		p.InnerPayload = hex.EncodeToString(buf[1:])
+	}
+	return p
+}
+
+// decodeControl decodes PAYLOAD_TYPE_CONTROL (0x0B) byte0 flags per
+// firmware/src/Mesh.cpp:69 (high-bit set ⇒ zero-hop direct subset).
+func decodeControl(buf []byte) Payload {
+	if len(buf) < 1 {
+		return Payload{Type: "CONTROL", Error: "too short", RawHex: hex.EncodeToString(buf)}
+	}
+	zeroHop := buf[0]&0x80 != 0
+	length := len(buf)
+	return Payload{
+		Type:        "CONTROL",
+		CtrlFlags:   fmt.Sprintf("%02x", buf[0]),
+		CtrlZeroHop: &zeroHop,
+		CtrlLength:  &length,
+		RawHex:      hex.EncodeToString(buf),
+	}
+}
+
+// decodeRawCustom decodes PAYLOAD_TYPE_RAW_CUSTOM (0x0F). The payload bytes
+// are application-defined per firmware/src/Mesh.cpp:577 (createRawData), so
+// we only surface the bare envelope shape: total length plus the leading
+// byte, which apps commonly use as a tag/type discriminator.
+func decodeRawCustom(buf []byte) Payload {
+	length := len(buf)
+	p := Payload{
+		Type:      "RAW_CUSTOM",
+		RawLength: &length,
+		RawHex:    hex.EncodeToString(buf),
+	}
+	if length > 0 {
+		p.FirstByteTag = fmt.Sprintf("%02X", buf[0])
+	}
+	return p
+}
+
 func decodeAnonReq(buf []byte) Payload {
 	if len(buf) < 35 {
 		return Payload{Type: "ANON_REQ", Error: "too short", RawHex: hex.EncodeToString(buf)}
@@ -372,12 +477,20 @@ func decodePayload(payloadType int, buf []byte, validateSignatures bool) Payload
 		return decodeAdvert(buf, validateSignatures)
 	case PayloadGRP_TXT:
 		return decodeGrpTxt(buf)
+	case PayloadGRP_DATA:
+		return decodeGrpData(buf)
 	case PayloadANON_REQ:
 		return decodeAnonReq(buf)
 	case PayloadPATH:
 		return decodePathPayload(buf)
 	case PayloadTRACE:
 		return decodeTrace(buf)
+	case PayloadMULTIPART:
+		return decodeMultipart(buf)
+	case PayloadCONTROL:
+		return decodeControl(buf)
+	case PayloadRAW_CUSTOM:
+		return decodeRawCustom(buf)
 	default:
 		return Payload{Type: "UNKNOWN", RawHex: hex.EncodeToString(buf)}
 	}
@@ -627,8 +740,13 @@ func ValidateAdvert(p *Payload) (bool, string) {
 
 	if p.Flags != nil {
 		role := advertRole(p.Flags)
-		validRoles := map[string]bool{"repeater": true, "companion": true, "room": true, "sensor": true}
-		if !validRoles[role] {
+		// Accept canonical labels plus "none" (ADV_TYPE_NONE=0) and "type-N"
+		// placeholders for ADV_TYPE 5-15 (FUTURE) — see
+		// firmware/src/helpers/AdvertDataHelpers.h:7-12.
+		validRoles := map[string]bool{
+			"repeater": true, "companion": true, "room": true, "sensor": true, "none": true,
+		}
+		if !validRoles[role] && !strings.HasPrefix(role, "type-") {
 			return false, fmt.Sprintf("unknown role: %s", role)
 		}
 	}
@@ -648,17 +766,29 @@ func sanitizeName(s string) string {
 	return b.String()
 }
 
+// advertRole returns a stable role label for an advert. Follows firmware
+// ADV_TYPE_* constants in firmware/src/helpers/AdvertDataHelpers.h:7-12:
+//   0 NONE, 1 CHAT, 2 REPEATER, 3 ROOM, 4 SENSOR, 5-15 FUTURE.
+// Previously this coerced both 0 (NONE) and 5-15 (FUTURE) to "companion",
+// silently relabelling unknown/reserved types — see issue #1279 P1 #3.
 func advertRole(f *AdvertFlags) string {
-	if f.Repeater {
+	if f == nil {
+		return "companion"
+	}
+	switch f.Type {
+	case 0:
+		return "none"
+	case 1:
+		return "companion"
+	case 2:
 		return "repeater"
-	}
-	if f.Room {
+	case 3:
 		return "room"
-	}
-	if f.Sensor {
+	case 4:
 		return "sensor"
+	default:
+		return fmt.Sprintf("type-%d", f.Type)
 	}
-	return "companion"
 }
 
 func epochToISO(epoch uint32) string {

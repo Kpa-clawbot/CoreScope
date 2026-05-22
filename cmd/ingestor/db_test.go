@@ -642,7 +642,7 @@ func TestEndToEndIngest(t *testing.T) {
 	msg := &MQTTPacketMessage{
 		Raw: rawHex,
 	}
-	pktData := BuildPacketData(msg, decoded, "obs1", "SJC")
+	pktData := BuildPacketData(msg, decoded, "obs1", "SJC", nil)
 	if _, err := s.InsertTransmission(pktData); err != nil {
 		t.Fatal(err)
 	}
@@ -837,7 +837,7 @@ func TestBuildPacketData(t *testing.T) {
 		Timestamp: "2026-05-16T10:00:00Z",
 	}
 
-	pkt := BuildPacketData(msg, decoded, "obs123", "SJC")
+	pkt := BuildPacketData(msg, decoded, "obs123", "SJC", nil)
 
 	if pkt.RawHex != rawHex {
 		t.Errorf("rawHex mismatch")
@@ -882,7 +882,7 @@ func TestBuildPacketDataWithHops(t *testing.T) {
 		t.Fatal(err)
 	}
 	msg := &MQTTPacketMessage{Raw: raw}
-	pkt := BuildPacketData(msg, decoded, "", "")
+	pkt := BuildPacketData(msg, decoded, "", "", nil)
 
 	if pkt.PathJSON == "[]" {
 		t.Error("pathJSON should contain hops")
@@ -895,7 +895,7 @@ func TestBuildPacketDataWithHops(t *testing.T) {
 func TestBuildPacketDataNilSNRRSSI(t *testing.T) {
 	decoded, _ := DecodePacket("0A00"+strings.Repeat("00", 10), nil, false)
 	msg := &MQTTPacketMessage{Raw: "0A00" + strings.Repeat("00", 10)}
-	pkt := BuildPacketData(msg, decoded, "", "")
+	pkt := BuildPacketData(msg, decoded, "", "", nil)
 
 	if pkt.SNR != nil {
 		t.Errorf("SNR should be nil")
@@ -1753,7 +1753,7 @@ func TestBuildPacketDataScoreAndDirection(t *testing.T) {
 		Direction: &dir,
 	}
 
-	pkt := BuildPacketData(msg, decoded, "obs1", "SJC")
+	pkt := BuildPacketData(msg, decoded, "obs1", "SJC", nil)
 	if pkt.Score == nil || *pkt.Score != 42.0 {
 		t.Errorf("Score=%v, want 42.0", pkt.Score)
 	}
@@ -1765,7 +1765,7 @@ func TestBuildPacketDataScoreAndDirection(t *testing.T) {
 func TestBuildPacketDataNilScoreDirection(t *testing.T) {
 	decoded, _ := DecodePacket("0A00"+strings.Repeat("00", 10), nil, false)
 	msg := &MQTTPacketMessage{Raw: "0A00" + strings.Repeat("00", 10)}
-	pkt := BuildPacketData(msg, decoded, "", "")
+	pkt := BuildPacketData(msg, decoded, "", "", nil)
 
 	if pkt.Score != nil {
 		t.Errorf("Score should be nil, got %v", *pkt.Score)
@@ -2197,7 +2197,7 @@ func TestBuildPacketData_TraceUsesPayloadHops(t *testing.T) {
 	}
 
 	msg := &MQTTPacketMessage{Raw: rawHex}
-	pd := BuildPacketData(msg, decoded, "test-obs", "TST")
+	pd := BuildPacketData(msg, decoded, "test-obs", "TST", nil)
 
 	// For TRACE: path_json MUST be the payload-decoded route hops, NOT the SNR bytes
 	expectedPathJSON := `["67","33","D6","33","67"]`
@@ -2229,11 +2229,136 @@ func TestBuildPacketData_NonTracePathJSON(t *testing.T) {
 	}
 
 	msg := &MQTTPacketMessage{Raw: rawHex}
-	pd := BuildPacketData(msg, decoded, "obs1", "TST")
+	pd := BuildPacketData(msg, decoded, "obs1", "TST", nil)
 
 	expectedPathJSON := `["AA","BB"]`
 	if pd.PathJSON != expectedPathJSON {
 		t.Errorf("path_json = %s, want %s", pd.PathJSON, expectedPathJSON)
+	}
+}
+
+func TestScopeNameMigration(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	store, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	// Verify column exists
+	rows, err := store.db.Query("PRAGMA table_info(transmissions)")
+	if err != nil {
+		t.Fatalf("PRAGMA: %v", err)
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var colName, colType string
+		var notNull, pk int
+		var dflt interface{}
+		if err := rows.Scan(&cid, &colName, &colType, &notNull, &dflt, &pk); err == nil && colName == "scope_name" {
+			found = true
+		}
+	}
+	rows.Close()
+	if !found {
+		t.Fatal("scope_name column not found in transmissions")
+	}
+
+	// Verify column actually stores and retrieves values (NULL and non-NULL).
+	_, err = store.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, scope_name)
+		VALUES ('aabb', 'hash1', '2026-01-01T00:00:00Z', 0, 5, '#belgium')`)
+	if err != nil {
+		t.Fatalf("insert scoped row: %v", err)
+	}
+	_, err = store.db.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, scope_name)
+		VALUES ('ccdd', 'hash2', '2026-01-01T00:00:01Z', 0, 5, NULL)`)
+	if err != nil {
+		t.Fatalf("insert unscoped row: %v", err)
+	}
+
+	var name string
+	if err := store.db.QueryRow(`SELECT scope_name FROM transmissions WHERE hash = 'hash1'`).Scan(&name); err != nil {
+		t.Fatalf("read scope_name: %v", err)
+	}
+	if name != "#belgium" {
+		t.Errorf("scope_name = %q, want #belgium", name)
+	}
+
+	var nullScope interface{}
+	if err := store.db.QueryRow(`SELECT scope_name FROM transmissions WHERE hash = 'hash2'`).Scan(&nullScope); err != nil {
+		t.Fatalf("read null scope_name: %v", err)
+	}
+	if nullScope != nil {
+		t.Errorf("scope_name for unscoped = %v, want nil", nullScope)
+	}
+}
+
+// --- Feature 3: default_scope column on nodes (#899) ---
+
+func TestUpdateNodeDefaultScope(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	store, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	// Insert a node into nodes and inactive_nodes so both tables can be updated.
+	if _, err := store.db.Exec(`INSERT INTO nodes (public_key, name) VALUES ('pk1', 'Node1')`); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO inactive_nodes (public_key, name) VALUES ('pk1', 'Node1')`); err != nil {
+		t.Fatalf("insert inactive node: %v", err)
+	}
+
+	// First call: writes scope to both tables.
+	if err := store.UpdateNodeDefaultScope("pk1", "#belgium"); err != nil {
+		t.Fatalf("UpdateNodeDefaultScope: %v", err)
+	}
+	var got string
+	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = 'pk1'`).Scan(&got); err != nil {
+		t.Fatalf("read nodes.default_scope: %v", err)
+	}
+	if got != "#belgium" {
+		t.Errorf("nodes.default_scope = %q, want #belgium", got)
+	}
+	var gotInactive string
+	if err := store.db.QueryRow(`SELECT default_scope FROM inactive_nodes WHERE public_key = 'pk1'`).Scan(&gotInactive); err != nil {
+		t.Fatalf("read inactive_nodes.default_scope: %v", err)
+	}
+	if gotInactive != "#belgium" {
+		t.Errorf("inactive_nodes.default_scope = %q, want #belgium", gotInactive)
+	}
+
+	// Second call with same value: short-circuit, no redundant UPDATE (verify no error and value stable).
+	if err := store.UpdateNodeDefaultScope("pk1", "#belgium"); err != nil {
+		t.Fatalf("UpdateNodeDefaultScope short-circuit: %v", err)
+	}
+	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = 'pk1'`).Scan(&got); err != nil {
+		t.Fatalf("read after short-circuit: %v", err)
+	}
+	if got != "#belgium" {
+		t.Errorf("after short-circuit nodes.default_scope = %q, want #belgium", got)
+	}
+
+	// Third call with different value: updates both tables.
+	if err := store.UpdateNodeDefaultScope("pk1", "#eu"); err != nil {
+		t.Fatalf("UpdateNodeDefaultScope update: %v", err)
+	}
+	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = 'pk1'`).Scan(&got); err != nil {
+		t.Fatalf("read after update: %v", err)
+	}
+	if got != "#eu" {
+		t.Errorf("after update nodes.default_scope = %q, want #eu", got)
+	}
+	if err := store.db.QueryRow(`SELECT default_scope FROM inactive_nodes WHERE public_key = 'pk1'`).Scan(&gotInactive); err != nil {
+		t.Fatalf("read inactive after update: %v", err)
+	}
+	if gotInactive != "#eu" {
+		t.Errorf("after update inactive_nodes.default_scope = %q, want #eu", gotInactive)
 	}
 }
 
@@ -2427,7 +2552,7 @@ func TestBuildPacketDataRegionFromPayload(t *testing.T) {
 	decoded := &DecodedPacket{
 		Header: Header{RouteType: 1, PayloadType: 3},
 	}
-	pkt := BuildPacketData(msg, decoded, "obs1", "SJC")
+	pkt := BuildPacketData(msg, decoded, "obs1", "SJC", nil)
 	// When payload has region, it should override the topic-derived region
 	if pkt.Region != "PDX" {
 		t.Fatalf("expected region PDX from payload, got %q", pkt.Region)
@@ -2439,7 +2564,7 @@ func TestBuildPacketDataRegionFallsBackToTopic(t *testing.T) {
 	decoded := &DecodedPacket{
 		Header: Header{RouteType: 1, PayloadType: 3},
 	}
-	pkt := BuildPacketData(msg, decoded, "obs1", "SJC")
+	pkt := BuildPacketData(msg, decoded, "obs1", "SJC", nil)
 	if pkt.Region != "SJC" {
 		t.Fatalf("expected region SJC from topic, got %q", pkt.Region)
 	}

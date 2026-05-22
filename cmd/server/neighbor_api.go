@@ -76,56 +76,27 @@ type GraphStats struct {
 
 // ─── Graph accessor on Server ──────────────────────────────────────────────────
 
-// getNeighborGraph returns the current neighbor graph, rebuilding if stale.
+// getNeighborGraph returns the current neighbor graph from the store's
+// atomic pointer (maintained by the recompNeighborGraph recomputer, per #1287).
+// Falls back to s.neighborGraph for backward compat with code that sets it directly.
 func (s *Server) getNeighborGraph() *NeighborGraph {
-	s.neighborMu.RLock()
-	g := s.neighborGraph
-	s.neighborMu.RUnlock()
-
-	if g == nil {
-		// First call — block once so callers never receive nil.
-		s.neighborMu.Lock()
-		if s.neighborGraph == nil {
-			if s.store != nil {
-				opts := BuildOptions{MaxEdgeKm: DefaultMaxEdgeKm}
-				if s.cfg != nil {
-					opts.EnableLog = s.cfg.DebugAffinity
-					opts.MaxEdgeKm = s.cfg.NeighborMaxEdgeKm()
-				}
-				s.neighborGraph = BuildFromStoreWithOptions(s.store, opts)
-			} else {
-				s.neighborGraph = NewNeighborGraph()
-			}
+	// Prefer the store's atomic graph (populated by main.go and refreshed by recomputer).
+	if s.store != nil {
+		if g := s.store.graph.Load(); g != nil {
+			return g
 		}
-		g = s.neighborGraph
-		s.neighborMu.Unlock()
-		return g
 	}
-
-	// Stale: kick off one background rebuild and return the stale graph
-	// immediately so concurrent callers (e.g. 100 WS clients) are never
-	// queued behind the rebuild.
-	if g.IsStale() && s.neighborRebuilding.CompareAndSwap(false, true) {
-		go func() {
-			defer s.neighborRebuilding.Store(false)
-			var built *NeighborGraph
-			if s.store != nil {
-				opts := BuildOptions{MaxEdgeKm: DefaultMaxEdgeKm}
-				if s.cfg != nil {
-					opts.EnableLog = s.cfg.DebugAffinity
-					opts.MaxEdgeKm = s.cfg.NeighborMaxEdgeKm()
-				}
-				built = BuildFromStoreWithOptions(s.store, opts)
-			} else {
-				built = NewNeighborGraph()
-			}
-			s.neighborMu.Lock()
-			s.neighborGraph = built
-			s.neighborMu.Unlock()
-		}()
+	// Fallback: use the Server-level cached graph (legacy path).
+	s.neighborMu.Lock()
+	defer s.neighborMu.Unlock()
+	if s.neighborGraph == nil {
+		if s.store != nil {
+			s.neighborGraph = BuildFromStore(s.store)
+		} else {
+			s.neighborGraph = NewNeighborGraph()
+		}
 	}
-
-	return g
+	return s.neighborGraph
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────────

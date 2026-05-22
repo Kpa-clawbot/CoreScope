@@ -497,6 +497,75 @@
     if (!o) return id;
     return o.iata ? `${o.name} (${o.iata})` : o.name;
   }
+  // Compact IATA pill (#1188) — renders next to observer name. Prefers
+  // packet.observer_iata (now joined on the server) and falls back to the
+  // observer lookup map for callers that haven't been updated yet.
+  function obsIataBadge(packet) {
+    if (!packet) return '';
+    let iata = packet.observer_iata;
+    if (!iata) {
+      const o = packet.observer_id ? observerMap.get(packet.observer_id) : null;
+      iata = o && o.iata;
+    }
+    return iata ? `<span class="badge-iata">${escapeHtml(iata)}</span>` : '';
+  }
+  // Plain observer name without the trailing IATA — used when the IATA is
+  // rendered separately as a badge (so the cell doesn't show "Name (SJC) SJC").
+  function obsNameOnly(id) {
+    if (!id) return '—';
+    const o = observerMap.get(id);
+    if (!o) return id;
+    return o.name;
+  }
+  // #1189 R1 mesh-operator feedback: in a grouped row the old cell showed ONE
+  // observer's IATA + `+N` — operators couldn't tell whether the N additional
+  // observers were SAME-region (redundant copies) or CROSS-region (interesting
+  // multi-site reception). This helper returns the cell's badge HTML showing
+  // the DISTINCT IATA set: `<badge>SJC</badge>` or `<badge>SJC</badge><badge>SFO</badge>+1`
+  // (capped at 2 visible, remainder rolled into +N of distinct-region count).
+  // Returns '' when no observer in the group carries any IATA.
+  //
+  // #1189 R2: source of truth is `p.distinct_iatas` from the server
+  // (added to /api/packets?groupByHash=true so the default collapsed view
+  // works without needing to expand a row). Falls back to walking
+  // p._children + observerMap for legacy callers and for client-side groups
+  // synthesised by the websocket appender.
+  function groupedObserverIataBadgesHtml(p) {
+    if (!p) return '';
+    const seen = new Set();
+    // R2 happy path: server-provided distinct_iatas.
+    if (Array.isArray(p.distinct_iatas)) {
+      for (const code of p.distinct_iatas) {
+        if (code) seen.add(String(code).toUpperCase());
+      }
+    }
+    // Fallback / supplement: walk header + children (covers in-memory groups
+    // built client-side from websocket events before any server round-trip).
+    if (!seen.size) {
+      const pushIata = (rec) => {
+        if (!rec) return;
+        let iata = rec.observer_iata;
+        if (!iata && rec.observer_id) {
+          const o = observerMap.get(rec.observer_id);
+          iata = o && o.iata;
+        }
+        if (iata) seen.add(String(iata).toUpperCase());
+      };
+      pushIata(p);
+      if (p._children && p._children.length) {
+        for (const c of p._children) pushIata(c);
+      }
+    }
+    if (!seen.size) return '';
+    const list = Array.from(seen).sort();
+    const visible = list.slice(0, 2);
+    const extra = list.length - visible.length;
+    let html = visible
+      .map(code => `<span class="badge-iata">${escapeHtml(code)}</span>`)
+      .join('');
+    if (extra > 0) html += ` +${extra}`;
+    return html;
+  }
   let selectedId = null;
   function _isColorByHash() { return localStorage.getItem('meshcore-color-packets-by-hash') !== 'false'; }
   function _currentTheme() { return document.documentElement.dataset.theme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
@@ -529,11 +598,11 @@
 
   var DEFAULT_TIME_WINDOW = 15;
 
-  function buildPacketsQuery(timeWindowMin, regionParam) {
+  function buildPacketsQuery(timeWindowMin, regionParam, skipHash) {
     var parts = [];
     if (timeWindowMin && timeWindowMin !== DEFAULT_TIME_WINDOW) parts.push('timeWindow=' + timeWindowMin);
     if (regionParam) parts.push('region=' + encodeURIComponent(regionParam));
-    if (filters.hash) parts.push('hash=' + encodeURIComponent(filters.hash));
+    if (!skipHash && filters.hash) parts.push('hash=' + encodeURIComponent(filters.hash));
     if (filters.node) parts.push('node=' + encodeURIComponent(filters.node));
     if (filters.observer) parts.push('observer=' + encodeURIComponent(filters.observer));
     if (filters.channel) parts.push('channel=' + encodeURIComponent(filters.channel));
@@ -556,7 +625,9 @@
     var subpath = '';
     var m = cur.match(/^#\/packets(\/[^?]*)?/);
     if (m && m[1]) subpath = m[1];
-    history.replaceState(null, '', '#/packets' + subpath + buildPacketsQuery(savedTimeWindowMin, RegionFilter.getRegionParam()));
+    // Don't double-encode filters.hash when it's already the path segment.
+    var skipHash = !!(filters.hash && subpath === '/' + filters.hash);
+    history.replaceState(null, '', '#/packets' + subpath + buildPacketsQuery(savedTimeWindowMin, RegionFilter.getRegionParam(), skipHash));
     // Update clear-filters button visibility
     var cb = document.getElementById('clearFiltersBtn');
     if (cb) {
@@ -1136,7 +1207,7 @@
   // suppresses ALL other filters (region, time window, observer, node,
   // channel). The user is asking for THAT packet regardless of saved
   // selections.
-  function buildPacketsParams({ filters, regionParam, windowMin, groupByHash, limit }) {
+  function buildPacketsParams({ filters, regionParam, areaParam, windowMin, groupByHash, limit }) {
     const params = new URLSearchParams();
     if (filters.hash) {
       params.set('hash', filters.hash);
@@ -1154,6 +1225,7 @@
     }
     params.set('limit', String(limit));
     if (regionParam) params.set('region', regionParam);
+    if (areaParam) params.set('area', areaParam);
     if (filters.node) params.set('node', filters.node);
     if (filters.observer) params.set('observer', filters.observer);
     if (filters.channel) params.set('channel', filters.channel);
@@ -1176,6 +1248,7 @@
       const params = buildPacketsParams({
         filters,
         regionParam: RegionFilter.getRegionParam(),
+        areaParam: AreaFilter.getAreaParam(),
         windowMin,
         groupByHash,
         limit: PACKET_LIMIT,
@@ -1341,6 +1414,7 @@
             <div class="multi-select-menu" id="observerMenu"></div>
           </div>
           <div id="packetsRegionFilter" class="region-filter-container" style="display:inline-block;vertical-align:middle"></div>
+          <div id="packetsAreaFilter" style="display:none;vertical-align:middle"></div>
           <div class="multi-select-wrap" id="typeFilterWrap">
             <button class="multi-select-trigger" id="typeTrigger" title="Filter by packet type">All Types ▾</button>
             <div class="multi-select-menu" id="typeMenu"></div>
@@ -1370,7 +1444,7 @@
         <thead><tr>
           <th scope="col" data-priority="1"></th><th scope="col" class="col-region" data-sort-key="region" data-priority="3">Region</th><th scope="col" class="col-time" data-sort-key="time" data-type="date" data-priority="1">Time</th><th scope="col" class="col-hash" data-sort-key="hash" data-priority="1">Hash</th><th scope="col" class="col-size" data-sort-key="size" data-type="numeric" data-priority="4">Size</th>
           <th scope="col" class="col-hashsize" data-sort-key="hb" data-type="numeric" data-priority="5">HB</th>
-          <th scope="col" class="col-type" data-sort-key="type" data-priority="1">Type</th><th scope="col" class="col-observer" data-sort-key="observer" data-priority="3">Observer</th><th scope="col" class="col-path" data-sort-key="path" data-priority="2">Path</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric" data-priority="4">Rpt</th><th scope="col" class="col-details" data-priority="2">Details</th>
+          <th scope="col" class="col-type" data-sort-key="type" data-priority="1">Type</th><th scope="col" class="col-observer" data-sort-key="observer" data-priority="1">Observer</th><th scope="col" class="col-path" data-sort-key="path" data-priority="2">Path</th><th scope="col" class="col-rpt" data-sort-key="rpt" data-type="numeric" data-priority="4">Rpt</th><th scope="col" class="col-details" data-priority="2">Details</th>
         </tr></thead>
         <tbody id="pktBody"></tbody>
       </table></div>
@@ -1383,11 +1457,13 @@
 
     // Init shared RegionFilter component
     RegionFilter.init(document.getElementById('packetsRegionFilter'), { dropdown: true });
+    AreaFilter.init(document.getElementById('packetsAreaFilter'));
     if (_pendingUrlRegion) {
       RegionFilter.setSelected(_pendingUrlRegion.split(',').filter(Boolean));
       _pendingUrlRegion = null;
     }
     RegionFilter.onChange(function() { updatePacketsUrl(); loadPackets(); });
+    AreaFilter.onChange(function() { updatePacketsUrl(); loadPackets(); });
 
     // --- Packet Filter Language ---
     (function() {
@@ -1754,7 +1830,10 @@
       { key: 'details', label: 'Details' },
     ];
     const isNarrow = window.innerWidth <= 640;
-    const defaultHidden = isNarrow ? ['region', 'hash', 'observer', 'path', 'rpt', 'size'] : ['region'];
+    // #1249: observer column must stay visible at narrow widths so the IATA
+    // badge (#1188) renders on mobile. Without observer in scope the user
+    // can't see who heard the packet at all.
+    const defaultHidden = isNarrow ? ['region', 'hash', 'path', 'rpt', 'size'] : ['region'];
     let visibleCols;
     try {
       visibleCols = JSON.parse(localStorage.getItem('packets-visible-cols'));
@@ -1986,7 +2065,7 @@
           <td class="col-size" data-filter-field="size" data-filter-value="${groupSize || ''}">${groupSize ? groupSize + 'B' : '—'}</td>
           <td class="col-hashsize mono">${groupHashBytes}</td>
           <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(groupTypeName || '')}">${p.payload_type != null ? `<span class="badge badge-${groupTypeClass}">${groupTypeName}</span>${transportBadge(p.route_type)}` : '—'}</td>
-          <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsName(headerObserverId) || '')}">${isSingle ? truncate(obsName(headerObserverId), 16) : truncate(obsName(headerObserverId), 10) + (p.observer_count > 1 ? ' +' + (p.observer_count - 1) : '')}</td>
+          <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(headerObserverId) || '')}">${isSingle ? truncate(obsNameOnly(headerObserverId), 16) + obsIataBadge(p) : truncate(obsNameOnly(headerObserverId), 10) + groupedObserverIataBadgesHtml(p)}</td>
           <td class="col-path"><span class="path-hops">${groupPathStr}</span></td>
           <td class="col-rpt">${p.observation_count > 1 ? '<span class="badge badge-obs" title="Seen ' + p.observation_count + ' times">👁 ' + p.observation_count + '</span>' : (isSingle ? '' : p.count)}</td>
           <td class="col-details">${getDetailPreview(getParsedDecoded(p))}</td>
@@ -2012,7 +2091,7 @@
               <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
               <td class="col-hashsize mono">${childHashBytes}</td>
               <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(c.route_type)}</td>
-              <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsName(c.observer_id) || '')}">${truncate(obsName(c.observer_id), 16)}</td>
+              <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(c.observer_id) || '')}">${truncate(obsNameOnly(c.observer_id), 16)}${obsIataBadge(c)}</td>
               <td class="col-path"><span class="path-hops">${childPathStr}</span></td>
               <td class="col-rpt"></td>
               <td class="col-details">${getDetailPreview(getParsedDecoded(c))}</td>
@@ -2044,7 +2123,7 @@
         <td class="col-size" data-filter-field="size" data-filter-value="${size || ''}">${size}B</td>
         <td class="col-hashsize mono">${hashBytes}</td>
         <td class="col-type" data-filter-field="type" data-filter-value="${escapeHtml(typeName || '')}"><span class="badge badge-${typeClass}">${typeName}</span>${transportBadge(p.route_type)}</td>
-        <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsName(p.observer_id) || '')}">${truncate(obsName(p.observer_id), 16)}</td>
+        <td class="col-observer" data-filter-field="observer" data-filter-value="${escapeHtml(obsNameOnly(p.observer_id) || '')}">${truncate(obsNameOnly(p.observer_id), 16)}${obsIataBadge(p)}</td>
         <td class="col-path"><span class="path-hops">${pathStr}</span></td>
         <td class="col-rpt"></td>
         <td class="col-details">${detail}</td>
@@ -2812,15 +2891,18 @@
       }
     }
 
-    // Location: from ADVERT lat/lon, or from known node via pubkey/sender name
-    let locationHtml = '—';
+    // Location: from ADVERT lat/lon, or from known node via pubkey/sender name.
+    // Issue #1281: only render the row when we actually have transmitter GPS.
+    // Non-ADVERT packets don't carry GPS in the unencrypted payload, so the row
+    // would otherwise render as "—" and waste a slot on ~90% of packet types.
+    let locationHtml = '';
     let locationNodeKey = null;
     if (decoded.lat != null && decoded.lon != null && !(decoded.lat === 0 && decoded.lon === 0)) {
       locationNodeKey = decoded.pubKey || decoded.srcPubKey || '';
       const nodeName = decoded.name || '';
       locationHtml = `${decoded.lat.toFixed(5)}, ${decoded.lon.toFixed(5)}`;
       if (nodeName) locationHtml = `${escapeHtml(nodeName)} — ${locationHtml}`;
-      if (locationNodeKey) locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" style="font-size:0.85em">📍map</a>`;
+      if (locationNodeKey) locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link">📍map</a>`;
     } else {
       // Try to resolve sender node location from nodes list
       const senderKey = decoded.pubKey || decoded.srcPubKey;
@@ -2832,7 +2914,7 @@
             locationNodeKey = nodeData.node.public_key;
             locationHtml = `${nodeData.node.lat.toFixed(5)}, ${nodeData.node.lon.toFixed(5)}`;
             if (nodeData.node.name) locationHtml = `${escapeHtml(nodeData.node.name)} — ${locationHtml}`;
-            locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" style="font-size:0.85em">📍map</a>`;
+            locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link">📍map</a>`;
           } else if (senderName && !senderKey) {
             // Search by name
             const searchData = await api(`/nodes/search?q=${encodeURIComponent(senderName)}`, { ttl: 30000 }).catch(() => null);
@@ -2841,7 +2923,7 @@
               locationNodeKey = match.public_key;
               locationHtml = `${match.lat.toFixed(5)}, ${match.lon.toFixed(5)}`;
               locationHtml = `${escapeHtml(match.name)} — ${locationHtml}`;
-              locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" style="font-size:0.85em">📍map</a>`;
+              locationHtml += ` <a href="#/map?node=${encodeURIComponent(locationNodeKey)}" class="loc-map-link">📍map</a>`;
             }
           }
         } catch {}
@@ -2860,21 +2942,45 @@
       ? `<span style="font-size:0.8em;color:var(--text-muted);margin-left:6px">(observation ${observations.indexOf(currentObs) + 1} of ${observations.length})</span>`
       : '';
 
+    // #1279 P2 #3 — Transport codes detail row (firmware/src/Packet.h:46,
+    // parsed at cmd/server/decoder.go:492-498). Present on TRANSPORT_FLOOD/
+    // TRANSPORT_DIRECT routes only.
+    var tcCode1 = '—', tcCode2 = '—', tcShow = false;
+    if (decoded.transportCodes) {
+      tcShow = true;
+      if (decoded.transportCodes.code1) tcCode1 = String(decoded.transportCodes.code1).toUpperCase();
+      if (decoded.transportCodes.code2) tcCode2 = String(decoded.transportCodes.code2).toUpperCase();
+    }
+    var transportCodesRow = tcShow
+      ? `<dt>Transport Codes</dt><dd class="transport-codes">Code1: <code>${escapeHtml(tcCode1)}</code> · Code2: <code>${escapeHtml(tcCode2)}</code></dd>`
+      : '';
+
+    // #1279 P2 #5 — RAW_CUSTOM detail row (firmware/src/Mesh.cpp:577).
+    var rawCustomRow = '';
+    if (pkt.payload_type === 15 && decoded.type === 'RAW_CUSTOM') {
+      var rl = decoded.rawLength != null ? decoded.rawLength + ' byte' + (decoded.rawLength === 1 ? '' : 's') : '—';
+      var ft = decoded.firstByteTag ? String(decoded.firstByteTag).toUpperCase() : '—';
+      rawCustomRow = `<dt>Raw Custom</dt><dd class="raw-custom-detail">Length: <code>${escapeHtml(rl)}</code> · First byte tag: <code>${escapeHtml(ft)}</code></dd>`;
+    }
+
     panel.innerHTML = `
       ${anomalyBanner}
       <div class="detail-title">${hasRawHex ? `Packet Byte Breakdown (${size} bytes)` : typeName + ' Packet'}</div>
       <div class="detail-hash">${pkt.hash || 'Packet #' + pkt.id}${obsIndicator}</div>
       ${messageHtml}
       <dl class="detail-meta">
-        <dt>Observer</dt><dd>${obsName(effectivePkt.observer_id)}</dd>
-        <dt>Location</dt><dd>${locationHtml}</dd>
+        <dt>Observer</dt><dd>${obsNameOnly(effectivePkt.observer_id)}${obsIataBadge(effectivePkt)}</dd>
+        ${locationHtml ? `<dt>Location</dt><dd>${locationHtml}</dd>` : ''}
         <dt>SNR / RSSI</dt><dd>${snr != null ? snr + ' dB' : '—'} / ${rssi != null ? rssi + ' dBm' : '—'}</dd>
         <dt>Route Type</dt><dd>${routeTypeName(pkt.route_type)}</dd>
+        ${pkt.scope_name != null ? `<dt>Scope</dt><dd>${pkt.scope_name !== '' ? escapeHtml(pkt.scope_name) : '<span style="color:var(--text-muted)">unknown scope</span>'}</dd>` : ''}
         <dt>Payload Type</dt><dd><span class="badge badge-${payloadTypeColor(pkt.payload_type)}">${typeName}</span></dd>
         ${hashSize ? `<dt>Hash Size</dt><dd>${hashSize} byte${hashSize !== 1 ? 's' : ''}</dd>` : ''}
         <dt>Timestamp</dt><dd>${renderTimestampCell(effectivePkt.timestamp)}</dd>
         <dt>Propagation</dt><dd>${propagationHtml}</dd>
         <dt>Path</dt><dd>${displayHopCount > 0 ? `<span class="badge badge-info">${displayHopCount} hop${displayHopCount !== 1 ? 's' : ''}</span> ` + renderPath(pathHops, effectivePkt.observer_id) : '— (direct)'}</dd>
+        ${transportCodesRow}
+        ${rawCustomRow}
         ${effectivePkt.direction ? `<dt>Direction</dt><dd>${escapeHtml(effectivePkt.direction)}</dd>` : ''}
       </dl>
       <div class="detail-actions">
@@ -2904,7 +3010,7 @@
             const oPath = getParsedPath(o);
             const isCurrent = currentObs && String(o.id) === String(currentObs.id);
             return `<tr class="detail-obs-row${isCurrent ? ' observation-current' : ''}" data-obs-id="${o.id}" style="cursor:pointer;${isCurrent ? 'background:var(--accent-bg, rgba(0,122,255,0.1))' : ''}" title="Click to view this observation">
-              <td style="padding:4px 6px">${obsName(o.observer_id)}</td>
+              <td style="padding:4px 6px">${obsNameOnly(o.observer_id)}${obsIataBadge(o)}</td>
               <td style="padding:4px 6px">${oPath.length}</td>
               <td style="padding:4px 6px">${o.snr != null ? o.snr + ' dB' : '—'}</td>
               <td style="padding:4px 6px">${o.rssi != null ? o.rssi + ' dBm' : '—'}</td>

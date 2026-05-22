@@ -2260,7 +2260,7 @@ func TestStoreGetBulkHealthWithStore(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	results := store.GetBulkHealth(50, "")
+	results := store.GetBulkHealth(50, "", "")
 	if len(results) == 0 {
 		t.Error("expected bulk health results")
 	}
@@ -2275,7 +2275,7 @@ func TestStoreGetBulkHealthWithStore(t *testing.T) {
 	}
 
 	t.Run("with region filter", func(t *testing.T) {
-		results := store.GetBulkHealth(50, "SJC")
+		results := store.GetBulkHealth(50, "SJC", "")
 		_ = results
 	})
 }
@@ -2286,7 +2286,7 @@ func TestStoreGetAnalyticsHashSizes(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	result := store.GetAnalyticsHashSizes("")
+	result := store.GetAnalyticsHashSizes("", "")
 	if result["total"] == nil {
 		t.Error("expected total field")
 	}
@@ -2297,7 +2297,7 @@ func TestStoreGetAnalyticsHashSizes(t *testing.T) {
 	_ = dist
 
 	t.Run("with region", func(t *testing.T) {
-		r := store.GetAnalyticsHashSizes("SJC")
+		r := store.GetAnalyticsHashSizes("SJC", "")
 		_ = r
 	})
 }
@@ -2308,7 +2308,7 @@ func TestHashSizesDistributionByRepeatersFiltersRole(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	result := store.GetAnalyticsHashSizes("")
+	result := store.GetAnalyticsHashSizes("", "")
 
 	// distributionByRepeaters should only count repeater nodes.
 	// Rich test DB: aabbccdd11223344 = repeater (hash size 2), eeff00112233aabb = companion (hash size 3).
@@ -2505,13 +2505,13 @@ func TestStoreGetAnalyticsRFCacheHit(t *testing.T) {
 	store.Load()
 
 	// First call — cache miss
-	result1 := store.GetAnalyticsRF("")
+	result1 := store.GetAnalyticsRF("", "")
 	if result1["totalPackets"] == nil {
 		t.Error("expected totalPackets")
 	}
 
 	// Second call — should hit cache
-	result2 := store.GetAnalyticsRF("")
+	result2 := store.GetAnalyticsRF("", "")
 	if result2["totalPackets"] == nil {
 		t.Error("expected cached totalPackets")
 	}
@@ -2530,7 +2530,7 @@ func TestStoreGetAnalyticsTopology(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	result := store.GetAnalyticsTopology("")
+	result := store.GetAnalyticsTopology("", "")
 	if result == nil {
 		t.Error("expected non-nil result")
 	}
@@ -2549,7 +2549,7 @@ func TestStoreGetAnalyticsTopology(t *testing.T) {
 	}
 
 	t.Run("with region", func(t *testing.T) {
-		r := store.GetAnalyticsTopology("SJC")
+		r := store.GetAnalyticsTopology("SJC", "")
 		_ = r
 	})
 }
@@ -2560,7 +2560,7 @@ func TestStoreGetAnalyticsChannels(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	result := store.GetAnalyticsChannels("")
+	result := store.GetAnalyticsChannels("", "")
 	if _, ok := result["activeChannels"]; !ok {
 		t.Error("expected activeChannels")
 	}
@@ -2572,7 +2572,7 @@ func TestStoreGetAnalyticsChannels(t *testing.T) {
 	}
 
 	t.Run("with region", func(t *testing.T) {
-		r := store.GetAnalyticsChannels("SJC")
+		r := store.GetAnalyticsChannels("SJC", "")
 		_ = r
 	})
 }
@@ -2606,7 +2606,7 @@ func TestStoreGetAnalyticsChannelsNumericHash(t *testing.T) {
 
 	store := NewPacketStore(db, nil)
 	store.Load()
-	result := store.GetAnalyticsChannels("")
+	result := store.GetAnalyticsChannels("", "")
 
 	channels := result["channels"].([]map[string]interface{})
 	if len(channels) < 3 {
@@ -2652,13 +2652,13 @@ func TestStoreGetAnalyticsDistance(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	result := store.GetAnalyticsDistance("")
+	result := store.GetAnalyticsDistance("", "")
 	if result == nil {
 		t.Error("expected non-nil result")
 	}
 
 	t.Run("with region", func(t *testing.T) {
-		r := store.GetAnalyticsDistance("SJC")
+		r := store.GetAnalyticsDistance("SJC", "")
 		_ = r
 	})
 }
@@ -3033,13 +3033,13 @@ func TestCacheHitTopology(t *testing.T) {
 	store.Load()
 
 	// First call — cache miss
-	r1 := store.GetAnalyticsTopology("")
+	r1 := store.GetAnalyticsTopology("", "")
 	if r1 == nil {
 		t.Fatal("expected topology result")
 	}
 
 	// Second call — cache hit
-	r2 := store.GetAnalyticsTopology("")
+	r2 := store.GetAnalyticsTopology("", "")
 	if r2 == nil {
 		t.Fatal("expected cached topology result")
 	}
@@ -3057,12 +3057,12 @@ func TestCacheHitHashSizes(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	r1 := store.GetAnalyticsHashSizes("")
+	r1 := store.GetAnalyticsHashSizes("", "")
 	if r1 == nil {
 		t.Fatal("expected hash sizes result")
 	}
 
-	r2 := store.GetAnalyticsHashSizes("")
+	r2 := store.GetAnalyticsHashSizes("", "")
 	if r2 == nil {
 		t.Fatal("expected cached hash sizes result")
 	}
@@ -3080,12 +3080,12 @@ func TestCacheHitChannels(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	r1 := store.GetAnalyticsChannels("")
+	r1 := store.GetAnalyticsChannels("", "")
 	if r1 == nil {
 		t.Fatal("expected channels result")
 	}
 
-	r2 := store.GetAnalyticsChannels("")
+	r2 := store.GetAnalyticsChannels("", "")
 	if r2 == nil {
 		t.Fatal("expected cached channels result")
 	}
@@ -3480,7 +3480,7 @@ func TestAnalyticsHashSizesZeroHopSkip(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	result := store.GetAnalyticsHashSizes("")
+	result := store.GetAnalyticsHashSizes("", "")
 
 	// The node should appear in multiByteNodes (hashSize=2 from the flood advert)
 	// If the zero-hop bug is present, hashSize would be 1 and the node would NOT

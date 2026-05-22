@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/meshcore-analyzer/dbschema"
 	"github.com/meshcore-analyzer/packetpath"
 	_ "modernc.org/sqlite"
 )
@@ -62,15 +63,16 @@ func (s *DBStats) SnapshotBackfills() map[string]int64 {
 // Store wraps the SQLite database for packet ingestion.
 type Store struct {
 	db    *sql.DB
+	path  string // filesystem path to the SQLite DB (used to resolve queue dirs)
 	Stats DBStats
 
-	stmtGetTxByHash          *sql.Stmt
-	stmtInsertTransmission   *sql.Stmt
-	stmtUpdateTxFirstSeen    *sql.Stmt
-	stmtInsertObservation    *sql.Stmt
-	stmtUpsertNode           *sql.Stmt
-	stmtIncrementAdvertCount *sql.Stmt
-	stmtUpsertObserver       *sql.Stmt
+	stmtGetTxByHash            *sql.Stmt
+	stmtInsertTransmission     *sql.Stmt
+	stmtUpdateTxFirstSeen      *sql.Stmt
+	stmtInsertObservation      *sql.Stmt
+	stmtUpsertNode             *sql.Stmt
+	stmtIncrementAdvertCount   *sql.Stmt
+	stmtUpsertObserver         *sql.Stmt
 	stmtGetObserverRowid       *sql.Stmt
 	stmtUpdateObserverLastSeen *sql.Stmt
 	stmtUpdateNodeTelemetry    *sql.Stmt
@@ -110,7 +112,14 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		return nil, fmt.Errorf("applying schema: %w", err)
 	}
 
-	s := &Store{db: db, sampleIntervalSec: sampleIntervalSec}
+	// Apply the additional server-originated migrations (now owned by
+	// the ingestor per #1287). Adds the indexes/columns that used to live
+	// in cmd/server/ensure_*.go: server now ASSERTS these exist.
+	if err := dbschema.Apply(db, log.Printf); err != nil {
+		return nil, fmt.Errorf("dbschema.Apply: %w", err)
+	}
+
+	s := &Store{db: db, path: dbPath, sampleIntervalSec: sampleIntervalSec}
 	if err := s.prepareStatements(); err != nil {
 		return nil, fmt.Errorf("preparing statements: %w", err)
 	}
@@ -466,6 +475,22 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] observations.raw_hex column added")
 	}
 
+	// Migration: add scope_name column to transmissions (#899)
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'scope_name_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding scope_name column to transmissions...")
+		if _, err := db.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+			log.Printf("[migration] transmissions.scope_name: %v (may already exist)", err)
+		}
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tx_scope_name ON transmissions(scope_name) WHERE scope_name IS NOT NULL`); err != nil {
+			log.Printf("[migration] idx_tx_scope_name: %v", err)
+		}
+		if _, err := db.Exec(`INSERT INTO _migrations (name) VALUES ('scope_name_v1')`); err != nil {
+			return fmt.Errorf("recording scope_name_v1 migration: %w", err)
+		}
+		log.Println("[migration] scope_name column added")
+	}
+
 	// Migration: add last_packet_at column to observers (#last-packet-at)
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observers_last_packet_at_v1'")
 	if row.Scan(&migDone) != nil {
@@ -542,6 +567,22 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] from_pubkey column + index added")
 	}
 
+	// Migration: add default_scope column to nodes (#899 Feature 3)
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'nodes_default_scope_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding default_scope column to nodes/inactive_nodes...")
+		if _, err := db.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
+			log.Printf("[migration] nodes.default_scope: %v (may already exist)", err)
+		}
+		if _, err := db.Exec(`ALTER TABLE inactive_nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
+			log.Printf("[migration] inactive_nodes.default_scope: %v (may already exist)", err)
+		}
+		if _, err := db.Exec(`INSERT INTO _migrations (name) VALUES ('nodes_default_scope_v1')`); err != nil {
+			return fmt.Errorf("recording nodes_default_scope_v1 migration: %w", err)
+		}
+		log.Println("[migration] default_scope column added to nodes/inactive_nodes")
+	}
+
 	return nil
 }
 
@@ -554,8 +595,8 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtInsertTransmission, err = s.db.Prepare(`
-		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, from_pubkey)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, payload_version, decoded_json, channel_hash, scope_name, from_pubkey)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -702,6 +743,7 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 			data.RawHex, hash, now,
 			data.RouteType, data.PayloadType, data.PayloadVersion,
 			data.DecodedJSON, nilIfEmpty(data.ChannelHash),
+			scopeNameForDB(data),
 			nilIfEmpty(data.FromPubkey),
 		)
 		if ierr != nil {
@@ -1139,6 +1181,58 @@ func (s *Store) BackfillPathJSONAsync() {
 	}()
 }
 
+// BackfillDefaultScopeAsync populates default_scope for existing nodes that have
+// transport-scoped ADVERT rows (scope_name IS NOT NULL AND scope_name != “).
+// Runs in a background goroutine so it does not block MQTT startup.
+// Uses the from_pubkey index — O(nodes × indexed lookup), not a full table scan.
+//
+// Concurrency: the store uses SetMaxOpenConns(1) so all DB writes — including
+// MQTT packet inserts and any concurrent backfill goroutines — serialize through
+// the single connection pool. busy_timeout(5000) handles transient cross-process
+// contention with the read-only server process. No additional locking is needed.
+func (s *Store) BackfillDefaultScopeAsync(regionKeys map[string][]byte) {
+	// No region keys configured — all scope_name values will be NULL, nothing to backfill.
+	if len(regionKeys) == 0 {
+		return
+	}
+	s.backfillWg.Add(1)
+	go func() {
+		defer s.backfillWg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[backfill] default_scope async panic recovered: %v", r)
+			}
+		}()
+
+		var done int
+		if s.db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'backfill_default_scope_v1'").Scan(&done) == nil {
+			return // already ran
+		}
+
+		res, err := s.db.Exec(`
+			UPDATE nodes SET default_scope = (
+				SELECT t.scope_name FROM transmissions t
+				WHERE t.from_pubkey = nodes.public_key
+				  AND t.payload_type = 4
+				  AND t.scope_name IS NOT NULL AND t.scope_name != ''
+				ORDER BY t.first_seen DESC LIMIT 1  -- most-recently observed scope wins; first_seen is insertion time
+			) WHERE EXISTS (
+				SELECT 1 FROM transmissions t
+				WHERE t.from_pubkey = nodes.public_key
+				  AND t.payload_type = 4
+				  AND t.scope_name IS NOT NULL AND t.scope_name != ''
+			)`)
+		if err != nil {
+			log.Printf("[backfill] default_scope: %v", err)
+			return
+		}
+		n, _ := res.RowsAffected()
+		s.Stats.IncBackfill("default_scope")
+		log.Printf("[backfill] default_scope populated for %d nodes", n)
+		s.db.Exec(`INSERT INTO _migrations (name) VALUES ('backfill_default_scope_v1')`)
+	}()
+}
+
 // LogStats logs current operational metrics.
 func (s *Store) LogStats() {
 	log.Printf("[stats] tx_inserted=%d tx_dupes=%d obs_inserted=%d node_upserts=%d observer_upserts=%d write_errors=%d sig_drops=%d",
@@ -1247,24 +1341,26 @@ func (s *Store) PruneDroppedPackets(retentionDays int) (int64, error) {
 
 // PacketData holds the data needed to insert a packet into the DB.
 type PacketData struct {
-	RawHex         string
-	Timestamp      string
-	ObserverID     string
-	ObserverName   string
-	SNR            *float64
-	RSSI           *float64
-	Score          *float64
-	Direction      *string
-	Hash           string
-	RouteType      int
-	PayloadType    int
-	PayloadVersion int
-	PathJSON       string
-	DecodedJSON    string
-	ChannelHash    string // grouping key for channel queries (#762)
-	Region         string // observer region: payload > topic > source config (#788)
-	Foreign        bool   // true when ADVERT GPS lies outside configured geofilter (#730)
-	FromPubkey     string // pubkey of the originating node, for exact-match attribution (#1143)
+	RawHex            string
+	Timestamp         string
+	ObserverID        string
+	ObserverName      string
+	SNR               *float64
+	RSSI              *float64
+	Score             *float64
+	Direction         *string
+	Hash              string
+	RouteType         int
+	PayloadType       int
+	PayloadVersion    int
+	PathJSON          string
+	DecodedJSON       string
+	ChannelHash       string // grouping key for channel queries (#762)
+	ScopeName         string // matched region name, or "" for unknown-scoped
+	IsTransportScoped bool   // true when route_type IN (0,3) AND Code1 ≠ "0000"
+	Region            string // observer region: payload > topic > source config (#788)
+	Foreign           bool   // true when ADVERT GPS lies outside configured geofilter (#730)
+	FromPubkey        string // pubkey of the originating node, for exact-match attribution (#1143)
 }
 
 // nilIfEmpty returns nil for empty strings (for nullable DB columns).
@@ -1273,6 +1369,36 @@ func nilIfEmpty(s string) interface{} {
 		return nil
 	}
 	return s
+}
+
+// scopeNameForDB encodes PacketData scope semantics for DB storage:
+// non-transport-scoped → nil (SQL NULL); transport-scoped → pointer to ScopeName
+// (may be "" for unknown region, "#name" for matched region).
+func scopeNameForDB(data *PacketData) *string {
+	if !data.IsTransportScoped {
+		return nil
+	}
+	s := data.ScopeName
+	return &s
+}
+
+// UpdateNodeDefaultScope records the most-recently observed region scope for a
+// node. Skips the UPDATE when the stored value already matches to avoid
+// redundant writes on the hot MQTT ingest path. Updates both nodes and
+// inactive_nodes to stay consistent.
+func (s *Store) UpdateNodeDefaultScope(pubkey, scope string) error {
+	// Short-circuit: skip if already stored.
+	var cur sql.NullString
+	row := s.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = ?`, pubkey)
+	if row.Scan(&cur) == nil && cur.Valid && cur.String == scope {
+		return nil
+	}
+	if _, err := s.db.Exec(`UPDATE nodes SET default_scope = ? WHERE public_key = ?`, scope, pubkey); err != nil {
+		return err
+	}
+	// Mirror to inactive_nodes (node may be there if recently moved by retention).
+	_, err := s.db.Exec(`UPDATE inactive_nodes SET default_scope = ? WHERE public_key = ?`, scope, pubkey)
+	return err
 }
 
 // MQTTPacketMessage is the JSON payload from an MQTT raw packet message.
@@ -1290,7 +1416,7 @@ type MQTTPacketMessage struct {
 // path_json is derived directly from raw_hex header bytes (not decoded.Path.Hops)
 // to guarantee the stored path always matches the raw bytes. This matters for
 // TRACE packets where decoded.Path.Hops is overwritten with payload hops (#886).
-func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID, region string) *PacketData {
+func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID, region string, regionKeys map[string][]byte) *PacketData {
 	now := time.Now().UTC().Format(time.RFC3339)
 	pathJSON := "[]"
 	// For TRACE packets, path_json must be the payload-decoded route hops
@@ -1337,6 +1463,11 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 		} else if decoded.Payload.Type == "GRP_TXT" && decoded.Payload.ChannelHashHex != "" {
 			pd.ChannelHash = "enc_" + decoded.Payload.ChannelHashHex
 		}
+	}
+
+	if decoded.TransportCodes != nil && decoded.TransportCodes.Code1 != "0000" {
+		pd.IsTransportScoped = true
+		pd.ScopeName = matchScope(regionKeys, byte(decoded.Header.PayloadType), decoded.payloadRaw, decoded.TransportCodes.Code1)
 	}
 
 	// Populate from_pubkey at write time (#1143). ADVERTs carry the

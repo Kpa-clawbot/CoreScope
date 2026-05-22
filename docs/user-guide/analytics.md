@@ -83,6 +83,10 @@ Test hash prefix lengths to see how many collisions different sizes would produc
 
 All analytics tabs respect the **region filter** at the top. Select a region to scope the data to observers in that area.
 
+## Area filter
+
+If [areas are configured](area-filter.md), an area pill bar also appears. Selecting an area scopes all analytics to nodes whose GPS position falls within that area. This is based on the transmitting node's own coordinates — not the observer's location — so it avoids cross-region pollution from distant observers.
+
 ## Deep linking
 
 Each tab is deep-linkable. Share a URL like `#/analytics?tab=collisions` to point someone directly at hash issues.

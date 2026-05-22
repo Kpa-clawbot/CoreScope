@@ -48,6 +48,11 @@ type Client struct {
 func NewHub() *Hub {
 	h := &Hub{
 		clients: make(map[*Client]bool),
+		upgrader: websocket.Upgrader{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 4096,
+			CheckOrigin:     func(r *http.Request) bool { return true },
+		},
 	}
 	h.upgrader = websocket.Upgrader{
 		ReadBufferSize:  1024,

@@ -29,7 +29,7 @@ func TestHandleMessageAdvertForeign_FlagModeStoresWithFlag(t *testing.T) {
 		payload: []byte(`{"raw":"` + rawHex + `"}`),
 	}
 	// Default mode (no ForeignAdverts.Mode set) MUST be "flag", per #730 design.
-	handleMessage(store, "test", source, msg, nil, &Config{GeoFilter: gf})
+	handleMessage(store, "test", source, msg, nil, nil, &Config{GeoFilter: gf})
 
 	var nodeCount int
 	if err := store.db.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&nodeCount); err != nil {
@@ -70,7 +70,7 @@ func TestHandleMessageAdvertForeign_DropModeStillDrops(t *testing.T) {
 		GeoFilter:      gf,
 		ForeignAdverts: &ForeignAdvertConfig{Mode: "drop"},
 	}
-	handleMessage(store, "test", source, msg, nil, cfg)
+	handleMessage(store, "test", source, msg, nil, nil, cfg)
 
 	var nodeCount int
 	if err := store.db.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&nodeCount); err != nil {
@@ -99,7 +99,7 @@ func TestHandleMessageAdvertInRegion_NotFlaggedForeign(t *testing.T) {
 		topic:   "meshcore/SJC/obs1/packets",
 		payload: []byte(`{"raw":"` + rawHex + `"}`),
 	}
-	handleMessage(store, "test", source, msg, nil, &Config{GeoFilter: gf})
+	handleMessage(store, "test", source, msg, nil, nil, &Config{GeoFilter: gf})
 
 	var foreign int
 	err := store.db.QueryRow("SELECT foreign_advert FROM nodes").Scan(&foreign)

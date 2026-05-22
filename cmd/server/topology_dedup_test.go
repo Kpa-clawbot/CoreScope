@@ -34,7 +34,7 @@ func TestTopologyDedup_RepeatersMergeByPubkey(t *testing.T) {
 		id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_id TEXT, observer_name TEXT,
 		direction TEXT, snr REAL, rssi REAL, score INTEGER, path_json TEXT, timestamp TEXT, raw_hex TEXT
 	)`)
-	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT)`)
+	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT)`)
 	exec(`CREATE TABLE nodes (
 		public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
 		last_seen TEXT, frequency REAL
@@ -89,7 +89,7 @@ func TestTopologyDedup_RepeatersMergeByPubkey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := store.computeAnalyticsTopology("", TimeWindow{})
+	result := store.computeAnalyticsTopology("", "", TimeWindow{})
 	topRepeaters := result["topRepeaters"].([]map[string]interface{})
 
 	// Build a map of pubkey → total count from topRepeaters
@@ -158,7 +158,7 @@ func TestTopologyDedup_AmbiguousPrefixNotMerged(t *testing.T) {
 		id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_id TEXT, observer_name TEXT,
 		direction TEXT, snr REAL, rssi REAL, score INTEGER, path_json TEXT, timestamp TEXT, raw_hex TEXT
 	)`)
-	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT)`)
+	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT)`)
 	exec(`CREATE TABLE nodes (
 		public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
 		last_seen TEXT, frequency REAL
@@ -209,7 +209,7 @@ func TestTopologyDedup_AmbiguousPrefixNotMerged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := store.computeAnalyticsTopology("", TimeWindow{})
+	result := store.computeAnalyticsTopology("", "", TimeWindow{})
 	topRepeaters := result["topRepeaters"].([]map[string]interface{})
 
 	// "ab" is ambiguous — should NOT be merged with "ab1122"
@@ -264,7 +264,7 @@ func TestTopologyDedup_PairsMergeByPubkey(t *testing.T) {
 		id INTEGER PRIMARY KEY, transmission_id INTEGER, observer_id TEXT, observer_name TEXT,
 		direction TEXT, snr REAL, rssi REAL, score INTEGER, path_json TEXT, timestamp TEXT, raw_hex TEXT
 	)`)
-	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT)`)
+	exec(`CREATE TABLE observers (rowid INTEGER PRIMARY KEY, id TEXT, name TEXT, iata TEXT)`)
 	exec(`CREATE TABLE nodes (
 		public_key TEXT PRIMARY KEY, name TEXT, role TEXT, lat REAL, lon REAL,
 		last_seen TEXT, frequency REAL
@@ -310,7 +310,7 @@ func TestTopologyDedup_PairsMergeByPubkey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := store.computeAnalyticsTopology("", TimeWindow{})
+	result := store.computeAnalyticsTopology("", "", TimeWindow{})
 	topPairs := result["topPairs"].([]map[string]interface{})
 
 	// Should have exactly 1 pair entry for AQUA-BETA with count=15

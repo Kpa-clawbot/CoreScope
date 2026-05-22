@@ -91,6 +91,33 @@ type StatsResponse struct {
 	GoSysMB       float64 `json:"goSysMB"`       // runtime.MemStats.Sys (total Go-managed)
 }
 
+// ─── Scope Stats ───────────────────────────────────────────────────────────────
+
+type ScopeStatsSummary struct {
+	TransportTotal int `json:"transportTotal"`
+	Scoped         int `json:"scoped"`
+	Unscoped       int `json:"unscoped"`
+	UnknownScope   int `json:"unknownScope"`
+}
+
+type ScopeRegionCount struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+type ScopeTimePoint struct {
+	T        string `json:"t"`
+	Scoped   int    `json:"scoped"`
+	Unscoped int    `json:"unscoped"`
+}
+
+type ScopeStatsResponse struct {
+	Window     string             `json:"window"`
+	Summary    ScopeStatsSummary  `json:"summary"`
+	ByRegion   []ScopeRegionCount `json:"byRegion"`
+	TimeSeries []ScopeTimePoint   `json:"timeSeries"`
+}
+
 // ─── Health ────────────────────────────────────────────────────────────────────
 
 type MemoryStats struct {
@@ -324,6 +351,7 @@ type TransmissionResp struct {
 	ObservationCount int              `json:"observation_count"`
 	ObserverID       interface{}      `json:"observer_id"`
 	ObserverName     interface{}      `json:"observer_name"`
+	ObserverIATA     interface{}      `json:"observer_iata"`
 	SNR              interface{}      `json:"snr"`
 	RSSI             interface{}      `json:"rssi"`
 	PathJSON         interface{}      `json:"path_json"`
@@ -338,6 +366,7 @@ type ObservationResp struct {
 	Hash           interface{} `json:"hash,omitempty"`
 	ObserverID     interface{} `json:"observer_id"`
 	ObserverName   interface{} `json:"observer_name"`
+	ObserverIATA   interface{} `json:"observer_iata"`
 	SNR            interface{} `json:"snr"`
 	RSSI           interface{} `json:"rssi"`
 	PathJSON       interface{} `json:"path_json"`
@@ -355,6 +384,7 @@ type GroupedPacketResp struct {
 	Latest           string      `json:"latest"`
 	ObserverID       interface{} `json:"observer_id"`
 	ObserverName     interface{} `json:"observer_name"`
+	ObserverIATA     interface{} `json:"observer_iata"`
 	PathJSON         interface{} `json:"path_json"`
 	PayloadType      int         `json:"payload_type"`
 	RouteType        int         `json:"route_type"`

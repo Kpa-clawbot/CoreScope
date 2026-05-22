@@ -268,6 +268,8 @@ async function run() {
   // Test 5: Node detail loads (reuses nodes page from test 2)
   await test('Node detail loads', async () => {
     await page.waitForSelector('table tbody tr:not([id^=vscroll])');
+    // Use page.click() instead of an element handle to avoid detached-element races
+    // when the WebSocket auto-refresh re-renders the table between querySelector and click.
     await page.click('table tbody tr:not([id^=vscroll])');
     // Wait for detail pane to appear
     await page.waitForSelector('.node-detail');
@@ -282,6 +284,7 @@ async function run() {
     await page.goto(`${BASE}/#/nodes`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-loaded="true"]', { timeout: 15000 });
     await page.waitForSelector('table tbody tr:not([id^=vscroll])');
+    // Use page.click() to avoid detached-element race with WebSocket auto-refresh.
     await page.click('table tbody tr:not([id^=vscroll])');
     await page.waitForSelector('.node-detail');
     // Find the Details link in the side panel
@@ -3071,6 +3074,112 @@ async function run() {
       assert(m.height <= 60,
         `#1220: collapsed mobile header must be ≤60px (got ${m.height}px of empty chrome)`);
     }
+  });
+
+  // Issue #1243: On mobile (≤640px), the QR code on the node detail page must
+  // overlay the map semi-transparently (matching desktop behavior), not render
+  // as its own ~250px-tall panel below the map.
+  await test('#1243 Node detail mobile QR overlays map semi-transparently (desktop parity)', async () => {
+    await page.setViewportSize({ width: 375, height: 800 });
+    // Find a node with location data so the map renders.
+    await page.goto(BASE + '#/nodes', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#nodesBody tr[data-key]', { timeout: 10000 });
+    // Fetch nodes JSON to pick one with lat/lon.
+    const pubkey = await page.evaluate(async () => {
+      const r = await fetch('/api/nodes');
+      const j = await r.json();
+      const arr = Array.isArray(j) ? j : (j.nodes || []);
+      const withLoc = arr.find(n => n.lat != null && n.lon != null && n.public_key);
+      return withLoc ? withLoc.public_key : null;
+    });
+    assert(pubkey, '#1243: need at least one node with lat/lon in fixture/api');
+    await page.goto(BASE + '#/nodes/' + encodeURIComponent(pubkey), { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.node-fullscreen', { timeout: 10000 });
+    await page.waitForSelector('#nodeFullQrCode svg', { timeout: 10000 });
+    await page.waitForTimeout(400); // let leaflet + qr settle
+    const m = await page.evaluate(() => {
+      const qrWrap = document.querySelector('.node-qr-wrap');
+      const mapWrap = document.querySelector('.node-map-wrap');
+      if (!qrWrap || !mapWrap) return { err: 'missing wrap elements' };
+      const qrR = qrWrap.getBoundingClientRect();
+      const mapR = mapWrap.getBoundingClientRect();
+      const cs = getComputedStyle(qrWrap);
+      // Parse bg-color alpha (rgba(r,g,b,a) or rgb(r,g,b))
+      let alpha = 1;
+      const bg = cs.backgroundColor || '';
+      const m1 = bg.match(/rgba?\(([^)]+)\)/);
+      if (m1) {
+        const parts = m1[1].split(',').map(s => s.trim());
+        if (parts.length === 4) alpha = parseFloat(parts[3]);
+        else if (parts.length === 3) alpha = 1;
+      }
+      const overlaps = !(qrR.right <= mapR.left || qrR.left >= mapR.right ||
+                        qrR.bottom <= mapR.top || qrR.top >= mapR.bottom);
+      return {
+        position: cs.position,
+        bg, alpha,
+        qr: { l: qrR.left, t: qrR.top, r: qrR.right, b: qrR.bottom, w: qrR.width, h: qrR.height },
+        map: { l: mapR.left, t: mapR.top, r: mapR.right, b: mapR.bottom, w: mapR.width, h: mapR.height },
+        overlaps,
+      };
+    });
+    assert(!m.err, '#1243: ' + m.err);
+    assert(m.position === 'absolute' || m.position === 'fixed',
+      `#1243: QR wrap must be position:absolute|fixed on mobile (got ${m.position}); qr=${JSON.stringify(m.qr)} map=${JSON.stringify(m.map)}`);
+    assert(m.overlaps,
+      `#1243: QR must overlap map canvas on mobile; qr=${JSON.stringify(m.qr)} map=${JSON.stringify(m.map)}`);
+    assert(m.alpha < 1,
+      `#1243: QR background must be semi-transparent (alpha<1) on mobile; bg=${m.bg}`);
+    await page.setViewportSize({ width: 1280, height: 800 });
+  });
+
+  // Issue #1270: The Prefix Tool's Network Overview must report
+  // CONFIGURED-hash-size repeater counts (the operational truth) as the
+  // primary number for each tier, agreeing with the Hash Stats tab's
+  // "By Repeaters" panel. The math-only "unique slices of every pubkey"
+  // number is allowed only as a secondary/educational stat. Before the
+  // fix, Prefix Tool showed "168 / 65536" for 2-byte while Hash Stats
+  // showed only 20 repeaters actually configured for 2-byte hashing.
+  await test('#1270 Prefix Tool primary counts match Hash Stats By Repeaters', async () => {
+    // 1) Read configured-by-hash-size counts straight from the API
+    //    (this is what the Hash Stats tab renders).
+    const distByRepeaters = await page.evaluate(async () => {
+      const r = await fetch('/api/analytics/hash-sizes');
+      const j = await r.json();
+      return j.distributionByRepeaters || {};
+    });
+    const expected = {
+      1: Number(distByRepeaters['1'] || 0),
+      2: Number(distByRepeaters['2'] || 0),
+      3: Number(distByRepeaters['3'] || 0),
+    };
+
+    // 2) Visit the Prefix Tool tab, open Network Overview, scrape
+    //    the primary stat values for each tier.
+    await page.goto(`${BASE}/#/analytics?tab=prefix-tool`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#ptOverview', { timeout: 15000 });
+    // Open the overview accordion if collapsed.
+    await page.evaluate(() => {
+      const body = document.getElementById('ptOverviewBody');
+      if (body && getComputedStyle(body).display === 'none') {
+        document.getElementById('ptOverviewToggle').click();
+      }
+    });
+    await page.waitForSelector('[data-pt-configured="1"]', { timeout: 5000 });
+    const got = await page.evaluate(() => {
+      const read = (b) => {
+        const el = document.querySelector(`[data-pt-configured="${b}"]`);
+        return el ? Number(el.getAttribute('data-value')) : null;
+      };
+      return { 1: read(1), 2: read(2), 3: read(3) };
+    });
+
+    assert(got[1] === expected[1],
+      `#1270 1-byte: prefix-tool shows ${got[1]}, hash-sizes API shows ${expected[1]}`);
+    assert(got[2] === expected[2],
+      `#1270 2-byte: prefix-tool shows ${got[2]}, hash-sizes API shows ${expected[2]}`);
+    assert(got[3] === expected[3],
+      `#1270 3-byte: prefix-tool shows ${got[3]}, hash-sizes API shows ${expected[3]}`);
   });
 
   await browser.close();

@@ -6,6 +6,11 @@ ARG APP_VERSION=unknown
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIME=unknown
 
+# Internal packages referenced via replace directives (../../internal/...) in
+# both cmd/server and cmd/ingestor go.mod files resolve to /internal/ inside
+# the builder (WORKDIR /build/{server,ingestor} + ../../internal/ = /internal/).
+COPY internal/ /internal/
+
 # Build server
 WORKDIR /build/server
 COPY cmd/server/go.mod cmd/server/go.sum ./
