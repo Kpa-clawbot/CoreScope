@@ -150,18 +150,28 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 	// never runs under the read lock (same pattern as computeAnalyticsSubpaths
 	// line ~236). Holding s.mu.RLock while doing a SQLite SELECT starves ingest
 	// writers (Go's sync.RWMutex queues new readers behind a pending writer)
-	// and can cascade the 18s subpath scan into blocking all concurrent
+	// and can cascade a long subpath scan into blocking all concurrent
 	// /api/nodes, /api/stats, etc. requests.
 	_, pm := s.getCachedNodesAndPM()
 
-	// Single scan: bucket by hop length into per-group accumulators.
+	// Snapshot the subpath index and packet slice under a brief RLock, then
+	// release the lock before doing any computation. The heavy work —
+	// buildAggregateHopContextPubkeys (O(n_packets)) and the spIndex scan with
+	// pm.resolveWithContext calls (O(n_unique_subpaths × hops)) — runs on the
+	// snapshots without holding s.mu at all.
 	s.mu.RLock()
-	// Aggregate hop-disambiguation context across all packets so the
-	// resolver's tiers 1 and 2 light up even on this bulk-aggregate path
-	// (the index iterates raw subpath strings, not per-tx). See #1197.
-	contextPubkeys := buildAggregateHopContextPubkeys(s.packets, pm)
+	snapPackets := s.packets            // copy slice header (ptr+len+cap); elements are *StoreTx (safe to read after unlock)
+	snapIndex := make(map[string]int, len(s.spIndex))
+	for k, v := range s.spIndex {
+		snapIndex[k] = v
+	}
+	totalPaths := s.spTotalPaths
+	graph := s.graph.Load()
+	s.mu.RUnlock()
+
+	// All heavy computation now runs with no store lock held.
+	contextPubkeys := buildAggregateHopContextPubkeys(snapPackets, pm)
 	hopCache := make(map[string]*nodeInfo)
-	graph := s.graph.Load() // hoist out of resolver closure (PR #1208 carmack #1)
 	resolveHop := func(hop string) string {
 		if cached, ok := hopCache[hop]; ok {
 			if cached != nil {
@@ -182,7 +192,7 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 		perGroup[i] = make(map[string]*subpathAccum)
 	}
 
-	for rawKey, count := range s.spIndex {
+	for rawKey, count := range snapIndex {
 		hops := strings.Split(rawKey, ",")
 		hopLen := len(hops)
 
@@ -211,8 +221,6 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 			entry.count += count
 		}
 	}
-	totalPaths := s.spTotalPaths
-	s.mu.RUnlock()
 
 	results := make([]map[string]interface{}, len(groups))
 	for i, g := range groups {
@@ -246,14 +254,21 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 		regionObs = s.resolveRegionObservers(region)
 	}
 
+	// Snapshot index and packet slice under a brief RLock, then release.
+	// buildAggregateHopContextPubkeys (O(n_packets)) and the spIndex scan
+	// with pm.resolveWithContext calls run on the snapshots with no lock.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	snapPackets := s.packets
+	snapIndex := make(map[string]int, len(s.spIndex))
+	for k, v := range s.spIndex {
+		snapIndex[k] = v
+	}
+	snapTotalPaths := s.spTotalPaths
+	graph := s.graph.Load()
+	s.mu.RUnlock()
 
-	// Aggregate hop-disambiguation context across all packets — bulk
-	// aggregator over s.spIndex / per-tx fallback both need it. See #1197.
-	contextPubkeys := buildAggregateHopContextPubkeys(s.packets, pm)
+	contextPubkeys := buildAggregateHopContextPubkeys(snapPackets, pm)
 	hopCache := make(map[string]*nodeInfo)
-	graph := s.graph.Load() // hoist out of resolver closure (PR #1208 carmack #1)
 	resolveHop := func(hop string) string {
 		if cached, ok := hopCache[hop]; ok {
 			if cached != nil {
@@ -270,15 +285,17 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 	}
 
 	// For region queries fall back to packet iteration (region filtering
-	// requires per-transmission observer checks).
+	// requires per-transmission observer checks). Re-acquire the lock since
+	// computeSubpathsSlow reads s.packets and s.spTotalPaths.
 	if region != "" {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
 		return s.computeSubpathsSlow(regionObs, minLen, maxLen, limit, resolveHop)
 	}
 
-	// Fast path: read from precomputed raw-hop subpath index.
-	// Resolve raw hop prefixes to names and merge counts.
-	namedCounts := make(map[string]*subpathAccum, len(s.spIndex))
-	for rawKey, count := range s.spIndex {
+	// Fast path: read from precomputed raw-hop subpath index snapshot.
+	namedCounts := make(map[string]*subpathAccum, len(snapIndex))
+	for rawKey, count := range snapIndex {
 		hops := strings.Split(rawKey, ",")
 		hopLen := len(hops)
 		if hopLen < minLen || hopLen > maxLen {
@@ -297,7 +314,7 @@ func (s *PacketStore) computeAnalyticsSubpaths(region string, minLen, maxLen, li
 		entry.count += count
 	}
 
-	return s.rankSubpaths(namedCounts, s.spTotalPaths, limit)
+	return s.rankSubpaths(namedCounts, snapTotalPaths, limit)
 }
 
 // computeSubpathsSlow is the original O(N) packet-iteration path, used only
