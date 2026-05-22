@@ -466,30 +466,14 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] dropped_packets table created")
 	}
 
-	// Migration: add raw_hex column to observations (#881)
-	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observations_raw_hex_v1'")
-	if row.Scan(&migDone) != nil {
-		log.Println("[migration] Adding raw_hex column to observations...")
-		db.Exec(`ALTER TABLE observations ADD COLUMN raw_hex TEXT`)
-		db.Exec(`INSERT INTO _migrations (name) VALUES ('observations_raw_hex_v1')`)
-		log.Println("[migration] observations.raw_hex column added")
-	}
+	// Migration: observations.raw_hex (#881) is now owned by
+	// internal/dbschema/dbschema.go (#1321). The server PRAGMA-detects
+	// this column as hasObsRawHex; keeping a single canonical Apply
+	// path closes the startup race where the server's detector ran
+	// before this ALTER finished.
 
-	// Migration: add scope_name column to transmissions (#899)
-	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'scope_name_v1'")
-	if row.Scan(&migDone) != nil {
-		log.Println("[migration] Adding scope_name column to transmissions...")
-		if _, err := db.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
-			log.Printf("[migration] transmissions.scope_name: %v (may already exist)", err)
-		}
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_tx_scope_name ON transmissions(scope_name) WHERE scope_name IS NOT NULL`); err != nil {
-			log.Printf("[migration] idx_tx_scope_name: %v", err)
-		}
-		if _, err := db.Exec(`INSERT INTO _migrations (name) VALUES ('scope_name_v1')`); err != nil {
-			return fmt.Errorf("recording scope_name_v1 migration: %w", err)
-		}
-		log.Println("[migration] scope_name column added")
-	}
+	// Migration: transmissions.scope_name (#899) is now owned by
+	// internal/dbschema/dbschema.go (#1321). See above.
 
 	// Migration: add last_packet_at column to observers (#last-packet-at)
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observers_last_packet_at_v1'")
@@ -567,21 +551,10 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] from_pubkey column + index added")
 	}
 
-	// Migration: add default_scope column to nodes (#899 Feature 3)
-	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'nodes_default_scope_v1'")
-	if row.Scan(&migDone) != nil {
-		log.Println("[migration] Adding default_scope column to nodes/inactive_nodes...")
-		if _, err := db.Exec(`ALTER TABLE nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
-			log.Printf("[migration] nodes.default_scope: %v (may already exist)", err)
-		}
-		if _, err := db.Exec(`ALTER TABLE inactive_nodes ADD COLUMN default_scope TEXT DEFAULT NULL`); err != nil {
-			log.Printf("[migration] inactive_nodes.default_scope: %v (may already exist)", err)
-		}
-		if _, err := db.Exec(`INSERT INTO _migrations (name) VALUES ('nodes_default_scope_v1')`); err != nil {
-			return fmt.Errorf("recording nodes_default_scope_v1 migration: %w", err)
-		}
-		log.Println("[migration] default_scope column added to nodes/inactive_nodes")
-	}
+	// Migration: nodes.default_scope (#899 Feature 3) is now owned by
+	// internal/dbschema/dbschema.go (#1321). The server PRAGMA-detects
+	// this column as hasDefaultScope; keeping a single canonical Apply
+	// path closes the startup race that #1321 documented.
 
 	return nil
 }

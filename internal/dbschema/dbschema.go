@@ -7,6 +7,15 @@
 // Apply(rw, log) runs from the ingestor at startup BEFORE subscribing to
 // MQTT. AssertReady(ro) runs from the server at startup and returns an
 // error listing every missing column/index/table.
+//
+// INVARIANT (#1321): Any optional column the SERVER detects via PRAGMA
+// (e.g. cmd/server/db.go detectSchema → hasScopeName, hasDefaultScope,
+// hasObsRawHex, hasResolvedPath) MUST be added here, in Apply, AND
+// asserted in AssertReady. Adding it only to cmd/ingestor/db.go
+// applySchema reintroduces the startup-race bug from #1321: the
+// server's PRAGMA can run before the ingestor finishes applySchema,
+// the boolean caches `false`, and feature endpoints permanently 500
+// until the server restarts. Source of truth lives here — full stop.
 package dbschema
 
 import (
@@ -58,6 +67,15 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureFromPubkeyColumn(rw, logf); err != nil {
 		return fmt.Errorf("ensure from_pubkey: %w", err)
 	}
+	if err := ensureScopeNameColumn(rw, logf); err != nil {
+		return fmt.Errorf("ensure scope_name: %w", err)
+	}
+	if err := ensureDefaultScopeColumns(rw, logf); err != nil {
+		return fmt.Errorf("ensure default_scope: %w", err)
+	}
+	if err := ensureObservationsRawHexColumn(rw, logf); err != nil {
+		return fmt.Errorf("ensure observations.raw_hex: %w", err)
+	}
 	return nil
 }
 
@@ -96,6 +114,12 @@ func AssertReady(ro *sql.DB) error {
 	mustCol("nodes", "foreign_advert")
 	mustCol("inactive_nodes", "foreign_advert")
 	mustCol("transmissions", "from_pubkey")
+	// #1321: server's detectSchema PRAGMA-detects these and caches a
+	// boolean. To kill the startup race they're owned + asserted here.
+	mustCol("transmissions", "scope_name")
+	mustCol("nodes", "default_scope")
+	mustCol("inactive_nodes", "default_scope")
+	mustCol("observations", "raw_hex")
 
 	if len(missing) > 0 {
 		return fmt.Errorf("schema not migrated by ingestor; restart ingestor first. missing: %s",
@@ -295,6 +319,92 @@ func ensureFromPubkeyColumn(rw *sql.DB, logf Logger) error {
 		return err
 	}
 	return nil
+}
+
+// ensureScopeNameColumn adds transmissions.scope_name (+ partial index) and
+// records the legacy `_migrations` marker so the ingestor's old gated path
+// stays idempotent on existing DBs. Moved here from cmd/ingestor/db.go in
+// #1321 to be the canonical source of truth for the optional column the
+// server PRAGMA-detects as hasScopeName.
+func ensureScopeNameColumn(rw *sql.DB, logf Logger) error {
+	if err := ensureMigrationsTable(rw); err != nil {
+		return err
+	}
+	has, err := TableHasColumn(rw, "transmissions", "scope_name")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := rw.Exec(`ALTER TABLE transmissions ADD COLUMN scope_name TEXT DEFAULT NULL`); err != nil {
+			return fmt.Errorf("alter transmissions add scope_name: %w", err)
+		}
+		logf("[dbschema] added scope_name column to transmissions (#899)")
+	}
+	if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_tx_scope_name ON transmissions(scope_name) WHERE scope_name IS NOT NULL`); err != nil {
+		return fmt.Errorf("create idx_tx_scope_name: %w", err)
+	}
+	if _, err := rw.Exec(`INSERT OR IGNORE INTO _migrations (name) VALUES ('scope_name_v1')`); err != nil {
+		return fmt.Errorf("record scope_name_v1: %w", err)
+	}
+	return nil
+}
+
+// ensureDefaultScopeColumns adds default_scope to nodes + inactive_nodes
+// and records the `_migrations` marker. Source of truth lives here per
+// #1321 (was previously cmd/ingestor/db.go only).
+func ensureDefaultScopeColumns(rw *sql.DB, logf Logger) error {
+	if err := ensureMigrationsTable(rw); err != nil {
+		return err
+	}
+	for _, table := range []string{"nodes", "inactive_nodes"} {
+		has, err := TableHasColumn(rw, table, "default_scope")
+		if err != nil {
+			return fmt.Errorf("inspect %s.default_scope: %w", table, err)
+		}
+		if has {
+			continue
+		}
+		if _, err := rw.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN default_scope TEXT DEFAULT NULL`, table)); err != nil {
+			return fmt.Errorf("alter %s add default_scope: %w", table, err)
+		}
+		logf("[dbschema] added default_scope column to %s (#899)", table)
+	}
+	if _, err := rw.Exec(`INSERT OR IGNORE INTO _migrations (name) VALUES ('nodes_default_scope_v1')`); err != nil {
+		return fmt.Errorf("record nodes_default_scope_v1: %w", err)
+	}
+	return nil
+}
+
+// ensureObservationsRawHexColumn adds observations.raw_hex (#881).
+// Source of truth lives here per #1321 (was previously cmd/ingestor/db.go only):
+// the server PRAGMA-detects this column as hasObsRawHex.
+func ensureObservationsRawHexColumn(rw *sql.DB, logf Logger) error {
+	if err := ensureMigrationsTable(rw); err != nil {
+		return err
+	}
+	has, err := TableHasColumn(rw, "observations", "raw_hex")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := rw.Exec(`ALTER TABLE observations ADD COLUMN raw_hex TEXT`); err != nil {
+			return fmt.Errorf("alter observations add raw_hex: %w", err)
+		}
+		logf("[dbschema] added raw_hex column to observations (#881)")
+	}
+	if _, err := rw.Exec(`INSERT OR IGNORE INTO _migrations (name) VALUES ('observations_raw_hex_v1')`); err != nil {
+		return fmt.Errorf("record observations_raw_hex_v1: %w", err)
+	}
+	return nil
+}
+
+// ensureMigrationsTable is idempotent — the ingestor's applySchema also
+// creates this table on legacy paths. Keeping it here lets the gated
+// `INSERT OR IGNORE` markers above stay self-sufficient even when Apply
+// runs against a brand-new fixture DB (e.g. dbschema_test.go).
+func ensureMigrationsTable(rw *sql.DB) error {
+	_, err := rw.Exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`)
+	return err
 }
 
 // SoftDeleteBlacklistedObservers marks the given observer IDs as
