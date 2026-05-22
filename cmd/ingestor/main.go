@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"net/url"
@@ -434,6 +435,22 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 	return opts
 }
 
+// brokerHostname extracts the bare hostname (no port) from an MQTT broker URL
+// such as "tcp://broker.example.com:1883" or "ssl://host:8883". Falls back to
+// the raw string if parsing fails.
+func brokerHostname(broker string) string {
+	if u, err := url.Parse(broker); err == nil && u.Host != "" {
+		if h, _, err := net.SplitHostPort(u.Host); err == nil {
+			return h
+		}
+		return u.Host
+	}
+	if h, _, err := net.SplitHostPort(broker); err == nil {
+		return h
+	}
+	return broker
+}
+
 func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, channelKeys map[string]string, regionKeys map[string][]byte, cfg *Config) {
 	// Liveness watchdog (#1212): record receipt before any processing so a
 	// slow handler still counts as "source is alive". Cheap atomic store.
@@ -443,6 +460,14 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			log.Printf("MQTT [%s] panic in handler: %v", tag, r)
 		}
 	}()
+
+	// Skip retained MQTT messages. Retained messages are the broker's cached
+	// last-known-value snapshot delivered on (re)subscribe. Processing them
+	// would update observers.last_seen to time.Now(), making stale/offline
+	// observers appear online after every server restart.
+	if m.Retained() {
+		return
+	}
 
 	topic := m.Topic()
 	parts := strings.Split(topic, "/")
@@ -482,6 +507,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		if err := store.UpsertObserver(observerID, name, iata, meta); err != nil {
 			log.Printf("MQTT [%s] observer status error: %v", tag, err)
 		}
+		store.UpsertObserverSource(observerID, tag, brokerHostname(source.Broker), true) //nolint:errcheck
 		// Insert metrics sample from status message
 		if meta != nil {
 			metricsData := &MetricsData{
@@ -703,6 +729,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			if err := store.UpsertObserver(observerID, origin, effectiveRegion, nil); err != nil {
 				log.Printf("MQTT [%s] observer upsert error: %v", tag, err)
 			}
+			store.UpsertObserverSource(observerID, tag, brokerHostname(source.Broker), false) //nolint:errcheck
 		}
 
 		return

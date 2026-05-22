@@ -73,6 +73,7 @@ type Store struct {
 	stmtUpsertNode             *sql.Stmt
 	stmtIncrementAdvertCount   *sql.Stmt
 	stmtUpsertObserver         *sql.Stmt
+	stmtUpsertObserverSource   *sql.Stmt
 	stmtGetObserverRowid       *sql.Stmt
 	stmtUpdateObserverLastSeen *sql.Stmt
 	stmtUpdateNodeTelemetry    *sql.Stmt
@@ -583,6 +584,50 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] default_scope column added to nodes/inactive_nodes")
 	}
 
+	// Migration: create observer_sources table
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_sources_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Creating observer_sources table...")
+		if _, err := db.Exec(`
+			CREATE TABLE IF NOT EXISTS observer_sources (
+				observer_id  TEXT NOT NULL,
+				host         TEXT NOT NULL,
+				name         TEXT NOT NULL DEFAULT '',
+				last_seen    TEXT NOT NULL,
+				packet_count INTEGER NOT NULL DEFAULT 0,
+				status_count INTEGER NOT NULL DEFAULT 0,
+				PRIMARY KEY (observer_id, host)
+			)
+		`); err != nil {
+			return fmt.Errorf("observer_sources schema: %w", err)
+		}
+		if _, err := db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_sources_v1')`); err != nil {
+			return fmt.Errorf("recording observer_sources_v1 migration: %w", err)
+		}
+		log.Println("[migration] observer_sources table created")
+	}
+
+	// Migration: add name column to observer_sources (idempotent; table already has it if just created)
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_sources_name_v1'")
+	if row.Scan(&migDone) != nil {
+		db.Exec(`ALTER TABLE observer_sources ADD COLUMN name TEXT NOT NULL DEFAULT ''`) //nolint:errcheck
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_sources_name_v1')`)   //nolint:errcheck
+	}
+
+	// Migration: add packet_count column to observer_sources (idempotent)
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_sources_packet_count_v1'")
+	if row.Scan(&migDone) != nil {
+		db.Exec(`ALTER TABLE observer_sources ADD COLUMN packet_count INTEGER NOT NULL DEFAULT 0`) //nolint:errcheck
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_sources_packet_count_v1')`)     //nolint:errcheck
+	}
+
+	// Migration: add status_count column to observer_sources (idempotent)
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_sources_status_count_v1'")
+	if row.Scan(&migDone) != nil {
+		db.Exec(`ALTER TABLE observer_sources ADD COLUMN status_count INTEGER NOT NULL DEFAULT 0`) //nolint:errcheck
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observer_sources_status_count_v1')`)     //nolint:errcheck
+	}
+
 	return nil
 }
 
@@ -662,6 +707,19 @@ func (s *Store) prepareStatements() error {
 		return err
 	}
 
+	s.stmtUpsertObserverSource, err = s.db.Prepare(`
+		INSERT INTO observer_sources (observer_id, host, name, last_seen, packet_count, status_count)
+		VALUES (?, ?, ?, ?, 1, ?)
+		ON CONFLICT(observer_id, host) DO UPDATE SET
+			name         = excluded.name,
+			last_seen    = excluded.last_seen,
+			packet_count = packet_count + 1,
+			status_count = status_count + excluded.status_count
+	`)
+	if err != nil {
+		return err
+	}
+
 	s.stmtGetObserverRowid, err = s.db.Prepare("SELECT rowid FROM observers WHERE id = ?")
 	if err != nil {
 		return err
@@ -691,6 +749,24 @@ func (s *Store) prepareStatements() error {
 	}
 
 	return nil
+}
+
+// UpsertObserverSource records that the given MQTT broker host relayed data for
+// this observer, updating last_seen on every call. name is the human-readable
+// source label (e.g. the MQTT source tag). isStatus should be true when the
+// triggering message was an observer status packet so status_count is
+// incremented alongside the total packet_count.
+func (s *Store) UpsertObserverSource(observerID, name, host string, isStatus bool) error {
+	if host == "" {
+		return nil
+	}
+	statusInc := 0
+	if isStatus {
+		statusInc = 1
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.stmtUpsertObserverSource.Exec(observerID, host, name, now, statusInc)
+	return err
 }
 
 // InsertTransmission inserts a decoded packet into transmissions + observations.

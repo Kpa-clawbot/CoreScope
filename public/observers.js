@@ -480,10 +480,10 @@ reboot</code></pre>
       .map(function (o) { return { name: o.name || o.id, val: (o.packetsLastHour || 0) + '/hr' }; });
 
     var byUptime = data.slice().sort(function (a, b) {
-      var ua = a.first_seen ? Date.now() - new Date(a.first_seen).getTime() : 0;
-      var ub = b.first_seen ? Date.now() - new Date(b.first_seen).getTime() : 0;
+      var ua = a.uptime_secs != null ? a.uptime_secs * 1000 : (a.first_seen ? Date.now() - new Date(a.first_seen).getTime() : 0);
+      var ub = b.uptime_secs != null ? b.uptime_secs * 1000 : (b.first_seen ? Date.now() - new Date(b.first_seen).getTime() : 0);
       return ub - ua;
-    }).slice(0, 5).map(function (o) { return { name: o.name || o.id, val: uptimeStr(o.first_seen) }; });
+    }).slice(0, 5).map(function (o) { return { name: o.name || o.id, val: uptimeStr(o) }; });
 
     var regionMap = {};
     data.forEach(function (o) { if (o.iata) regionMap[o.iata] = (regionMap[o.iata] || 0) + 1; });
