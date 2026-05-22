@@ -2559,7 +2559,8 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Batch lookup: 1h packet counts only — 24h/7d are served by /api/observers/stats.
-	pktCounts := s.db.GetObserverPacketCounts(time.Now().Add(-1 * time.Hour).Unix())
+	// observations.timestamp is TEXT (RFC3339) — use string comparison, not Unix int.
+	pktCounts := s.db.GetObserverPacketCounts(time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339))
 
 	// Batch lookup: node locations only for observer IDs (not all nodes)
 	observerIDs := make([]string, len(observers))
@@ -2605,11 +2606,12 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 // handleObserversStats returns per-observer 24h and 7d packet counts for the
 // stats block. Kept separate from /api/observers so the main list stays lean.
 func (s *Server) handleObserversStats(w http.ResponseWriter, r *http.Request) {
-	now := time.Now()
+	// observations.timestamp is TEXT (RFC3339) — use string comparison, not Unix int.
+	now := time.Now().UTC()
 	counts := s.db.GetObserverAllPacketCounts(
-		now.Add(-1*time.Hour).Unix(),
-		now.Add(-24*time.Hour).Unix(),
-		now.Add(-7*24*time.Hour).Unix(),
+		now.Add(-1*time.Hour).Format(time.RFC3339),
+		now.Add(-24*time.Hour).Format(time.RFC3339),
+		now.Add(-7*24*time.Hour).Format(time.RFC3339),
 	)
 	result := make([]ObserverStatEntry, 0, len(counts))
 	for id, c := range counts {
@@ -2644,8 +2646,8 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Compute packetsLastHour from observations
-	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
-	pktCounts := s.db.GetObserverPacketCounts(oneHourAgo)
+	// observations.timestamp is TEXT (RFC3339) — use string comparison, not Unix int.
+	pktCounts := s.db.GetObserverPacketCounts(time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339))
 	plh := 0
 	if c, ok := pktCounts[id]; ok {
 		plh = c

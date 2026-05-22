@@ -141,7 +141,7 @@ func TestDetectSchemaV2Queries(t *testing.T) {
 	}
 
 	// v2 GetObserverPacketCounts
-	counts := db.GetObserverPacketCounts(0)
+	counts := db.GetObserverPacketCounts("1970-01-01T00:00:00Z")
 	if counts["obs1"] != 1 {
 		t.Errorf("expected 1 obs count for obs1, got %d", counts["obs1"])
 	}
@@ -1172,7 +1172,7 @@ func TestGetObserverPacketCountsV3(t *testing.T) {
 	defer db.Close()
 	seedTestData(t, db)
 
-	counts := db.GetObserverPacketCounts(0)
+	counts := db.GetObserverPacketCounts("1970-01-01T00:00:00Z")
 	if len(counts) == 0 {
 		t.Error("expected some observer counts")
 	}

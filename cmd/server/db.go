@@ -2035,7 +2035,8 @@ func (db *DB) GetMaxObservationID() int {
 }
 
 // GetObserverPacketCounts returns packetsLastHour for all observers (batch query).
-func (db *DB) GetObserverPacketCounts(sinceEpoch int64) map[string]int {
+// since must be an RFC3339 string — observations.timestamp is TEXT, not a Unix epoch.
+func (db *DB) GetObserverPacketCounts(since string) map[string]int {
 	counts := make(map[string]int)
 	var rows *sql.Rows
 	var err error
@@ -2044,12 +2045,12 @@ func (db *DB) GetObserverPacketCounts(sinceEpoch int64) map[string]int {
 			FROM observations o
 			JOIN observers obs ON obs.rowid = o.observer_idx
 			WHERE o.timestamp > ?
-			GROUP BY obs.id`, sinceEpoch)
+			GROUP BY obs.id`, since)
 	} else {
 		rows, err = db.conn.Query(`SELECT o.observer_id, COUNT(*) as cnt
 			FROM observations o
 			WHERE o.observer_id IS NOT NULL AND o.timestamp > ?
-			GROUP BY o.observer_id`, sinceEpoch)
+			GROUP BY o.observer_id`, since)
 	}
 	if err != nil {
 		return counts
@@ -2068,9 +2069,9 @@ func (db *DB) GetObserverPacketCounts(sinceEpoch int64) map[string]int {
 type ObserverPacketWindows struct{ Hour, Day, Week int }
 
 // GetObserverAllPacketCounts returns packet counts for three time windows in a
-// single query instead of three separate scans. sinceEpoch values must be Unix
-// timestamps in seconds (same unit as observations.timestamp).
-func (db *DB) GetObserverAllPacketCounts(oneHourAgo, oneDayAgo, sevenDaysAgo int64) map[string]ObserverPacketWindows {
+// single query instead of three separate scans. All cutoff values must be
+// RFC3339 strings — observations.timestamp is TEXT, not Unix epoch.
+func (db *DB) GetObserverAllPacketCounts(oneHourAgo, oneDayAgo, sevenDaysAgo string) map[string]ObserverPacketWindows {
 	out := make(map[string]ObserverPacketWindows)
 	var rows *sql.Rows
 	var err error
