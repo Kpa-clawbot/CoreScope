@@ -476,7 +476,9 @@ jobs:
   # ───────────────────────────────────────────────────────────────
   deploy:
     name: "🚀 Deploy Staging"
-    if: github.event_name == 'push'
+    if: |
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && github.ref == 'refs/heads/master'
     needs: [build-and-publish]
     runs-on: [self-hosted, meshcore-runner-2]
     steps:
