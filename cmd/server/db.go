@@ -355,14 +355,12 @@ func (db *DB) GetStats() (*Stats, error) {
 	db.conn.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&s.TotalNodesAllTime)
 	db.conn.QueryRow("SELECT COUNT(*) FROM observers WHERE inactive IS NULL OR inactive = 0").Scan(&s.TotalObservers)
 
-	// observations.timestamp is TEXT (RFC3339); use string comparison so the
-	// idx_observations_timestamp index is used. Integer Unix timestamps vs TEXT
-	// columns trigger SQLite's type-affinity rule (INTEGER < TEXT), which makes
-	// every row pass the filter and causes a full table scan.
-	oneHourAgo := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	// observations.timestamp is INTEGER (Unix epoch seconds). Use integer
+	// comparison so idx_observations_timestamp is used for range scans.
+	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
 	db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneHourAgo).Scan(&s.PacketsLastHour)
 
-	oneDayAgo := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	oneDayAgo := time.Now().Add(-24 * time.Hour).Unix()
 	db.conn.QueryRow("SELECT COUNT(*) FROM observations WHERE timestamp > ?", oneDayAgo).Scan(&s.PacketsLast24h)
 
 	return s, nil
@@ -2035,8 +2033,8 @@ func (db *DB) GetMaxObservationID() int {
 }
 
 // GetObserverPacketCounts returns packetsLastHour for all observers (batch query).
-// since must be an RFC3339 string — observations.timestamp is TEXT, not a Unix epoch.
-func (db *DB) GetObserverPacketCounts(since string) map[string]int {
+// since is a Unix epoch integer — observations.timestamp is INTEGER NOT NULL.
+func (db *DB) GetObserverPacketCounts(since int64) map[string]int {
 	counts := make(map[string]int)
 	var rows *sql.Rows
 	var err error
@@ -2069,9 +2067,9 @@ func (db *DB) GetObserverPacketCounts(since string) map[string]int {
 type ObserverPacketWindows struct{ Hour, Day, Week int }
 
 // GetObserverAllPacketCounts returns packet counts for three time windows in a
-// single query instead of three separate scans. All cutoff values must be
-// RFC3339 strings — observations.timestamp is TEXT, not Unix epoch.
-func (db *DB) GetObserverAllPacketCounts(oneHourAgo, oneDayAgo, sevenDaysAgo string) map[string]ObserverPacketWindows {
+// single query instead of three separate scans. All cutoff values are Unix
+// epoch integers — observations.timestamp is INTEGER NOT NULL.
+func (db *DB) GetObserverAllPacketCounts(oneHourAgo, oneDayAgo, sevenDaysAgo int64) map[string]ObserverPacketWindows {
 	out := make(map[string]ObserverPacketWindows)
 	var rows *sql.Rows
 	var err error

@@ -1573,12 +1573,10 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
 	onlineCutoff := time.Now().UTC().Add(-600 * time.Second).Format(time.RFC3339)
-	// observations.timestamp is TEXT (RFC3339); use string comparison so the
-	// idx_observations_timestamp index is used. Integer Unix timestamps vs TEXT
-	// columns trigger SQLite's type-affinity rule (INTEGER < TEXT), which makes
-	// every row pass the filter and causes a full table scan (~21s on large DBs).
-	oneHourAgo := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
-	oneDayAgo := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	// observations.timestamp is INTEGER (Unix epoch seconds). Use integer
+	// cutoffs so idx_observations_timestamp is used for range scans.
+	oneHourAgo := time.Now().Add(-1 * time.Hour).Unix()
+	oneDayAgo := time.Now().Add(-24 * time.Hour).Unix()
 
 	// Run node/observer counts and observation counts concurrently (2 queries instead of 5).
 	var wg sync.WaitGroup
