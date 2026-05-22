@@ -3679,8 +3679,9 @@ func estimateStoreObsBytes(obs *StoreObs) int64 {
 }
 
 // estimatedMemoryMB returns current Go heap allocation in MB.
-// Kept for stats/debug endpoints only — NOT used in eviction decisions.
-// In tests, memoryEstimator can be set to inject a deterministic value.
+// Used by eviction logic (dual trigger alongside trackedBytes) and by
+// stats/debug endpoints. In tests, memoryEstimator can be set to inject
+// a deterministic value (otherwise runtime.ReadMemStats is called).
 func (s *PacketStore) estimatedMemoryMB() float64 {
 	if s.memoryEstimator != nil {
 		return s.memoryEstimator()
@@ -3727,17 +3728,44 @@ func (s *PacketStore) evictionCandidateTxIDs() []int {
 	if s.maxMemoryMB > 0 {
 		highWatermark := int64(s.maxMemoryMB) * 1048576
 		lowWatermark := int64(float64(highWatermark) * 0.85)
-		if s.trackedBytes > highWatermark && len(s.packets) > 0 {
-			var bytesToEvict int64
+		// Dual trigger: self-accounted trackedBytes OR actual Go heap alloc.
+		// trackedBytes underestimates actual heap by 2–3× (map overhead, GC
+		// metadata, analytics caches are not tracked), so the trackedBytes-only
+		// check silently fails when the process is well over budget.
+		heapMB := s.estimatedMemoryMB()
+		trackedOver := s.trackedBytes > highWatermark
+		heapOver := heapMB > float64(s.maxMemoryMB)
+		if (trackedOver || heapOver) && len(s.packets) > 0 {
 			memCutoff := cutoffIdx
-			for memCutoff < len(s.packets) && (s.trackedBytes-bytesToEvict) > lowWatermark {
-				tx := s.packets[memCutoff]
-				bytesToEvict += estimateStoreTxBytes(tx)
-				for _, obs := range tx.Observations {
-					bytesToEvict += estimateStoreObsBytes(obs)
+			if trackedOver {
+				// trackedBytes path: loop until projected remaining tracked
+				// bytes drop below the 85% low-watermark (original logic).
+				var bytesToEvict int64
+				for memCutoff < len(s.packets) && (s.trackedBytes-bytesToEvict) > lowWatermark {
+					tx := s.packets[memCutoff]
+					bytesToEvict += estimateStoreTxBytes(tx)
+					for _, obs := range tx.Observations {
+						bytesToEvict += estimateStoreObsBytes(obs)
+					}
+					memCutoff++
 				}
-				memCutoff++
 			}
+			if heapOver {
+				// Heap path: evict proportionally to bring heap from current
+				// to the 85% low-watermark. Fraction of packets to evict ≈
+				// fraction of heap overage (assumes roughly uniform per-packet cost).
+				targetMB := float64(s.maxMemoryMB) * 0.85
+				overage := heapMB - targetMB
+				fractionToEvict := overage / heapMB
+				if fractionToEvict < 0 {
+					fractionToEvict = 0
+				}
+				heapCutoff := cutoffIdx + int(fractionToEvict*float64(len(s.packets)))
+				if heapCutoff > memCutoff {
+					memCutoff = heapCutoff
+				}
+			}
+			// Safety cap: never evict more than 25% of packets in a single pass.
 			maxEvict := len(s.packets) / 4
 			if maxEvict < 1 {
 				maxEvict = 1
@@ -3789,25 +3817,45 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string) int {
 		}
 	}
 
-	// Memory-based eviction: use self-accounted trackedBytes with watermark hysteresis.
-	// High watermark = maxMemoryMB (trigger), low watermark = 85% (stop).
-	// Safety cap: never evict more than 25% of packets in a single pass.
+	// Memory-based eviction: dual trigger on self-accounted trackedBytes OR
+	// actual Go heap alloc. High watermark = maxMemoryMB (trigger), low watermark
+	// = 85% (target). Safety cap: never evict more than 25% in a single pass.
+	// trackedBytes underestimates actual heap by 2–3× so the heap check catches
+	// cases the trackedBytes check misses entirely.
 	if s.maxMemoryMB > 0 {
 		highWatermark := int64(s.maxMemoryMB) * 1048576
 		lowWatermark := int64(float64(highWatermark) * 0.85)
-		if s.trackedBytes > highWatermark && len(s.packets) > 0 {
-			// Evict from head until trackedBytes would drop below low watermark
-			var bytesToEvict int64
+		heapMB := s.estimatedMemoryMB()
+		trackedOver := s.trackedBytes > highWatermark
+		heapOver := heapMB > float64(s.maxMemoryMB)
+		if (trackedOver || heapOver) && len(s.packets) > 0 {
 			memCutoff := cutoffIdx
-			for memCutoff < len(s.packets) && (s.trackedBytes-bytesToEvict) > lowWatermark {
-				tx := s.packets[memCutoff]
-				bytesToEvict += estimateStoreTxBytes(tx)
-				for _, obs := range tx.Observations {
-					bytesToEvict += estimateStoreObsBytes(obs)
+			if trackedOver {
+				// Original loop: evict until trackedBytes would drop below low-watermark.
+				var bytesToEvict int64
+				for memCutoff < len(s.packets) && (s.trackedBytes-bytesToEvict) > lowWatermark {
+					tx := s.packets[memCutoff]
+					bytesToEvict += estimateStoreTxBytes(tx)
+					for _, obs := range tx.Observations {
+						bytesToEvict += estimateStoreObsBytes(obs)
+					}
+					memCutoff++
 				}
-				memCutoff++
 			}
-			// Safety cap: never evict more than 25% in a single pass
+			if heapOver {
+				// Heap path: proportional eviction to reach 85% of limit.
+				targetMB := float64(s.maxMemoryMB) * 0.85
+				overage := heapMB - targetMB
+				fractionToEvict := overage / heapMB
+				if fractionToEvict < 0 {
+					fractionToEvict = 0
+				}
+				heapCutoff := cutoffIdx + int(fractionToEvict*float64(len(s.packets)))
+				if heapCutoff > memCutoff {
+					memCutoff = heapCutoff
+				}
+			}
+			// Safety cap: never evict more than 25% in a single pass.
 			maxEvict := len(s.packets) / 4
 			if maxEvict < 1 {
 				maxEvict = 1
