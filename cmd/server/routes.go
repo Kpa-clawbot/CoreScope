@@ -99,6 +99,22 @@ type Server struct {
 	// relying on a hard-coded relative path.
 	publicDir string
 
+	// Cached /api/health response — recomputed at most once every 5s.
+	// healthComputing prevents thundering-herd: while one goroutine is blocked
+	// waiting for s.mu.RLock (e.g. during a long eviction or ingest pass), all
+	// other goroutines serve the existing stale cache instead of queuing.
+	healthCacheMu   sync.Mutex
+	healthCache     *HealthResponse
+	healthCachedAt  time.Time
+	healthComputing bool
+
+	// Cached /api/perf response — recomputed at most once every 10s.
+	// Same thundering-herd protection as healthCache.
+	perfCacheMu   sync.Mutex
+	perfCache     *PerfResponse
+	perfCachedAt  time.Time
+	perfComputing bool
+
 	// Health check subsystem
 	healthDB     *HealthDB
 	healthRL     *HealthRateLimiter
@@ -165,7 +181,11 @@ func NewServer(db *DB, cfg *Config, hub *Hub) *Server {
 	return s
 }
 
-const memStatsTTL = 5 * time.Second
+const (
+	memStatsTTL   = 5 * time.Second
+	healthCacheTTL = 5 * time.Second  // /api/health response cache
+	perfCacheTTL   = 10 * time.Second // /api/perf response cache
+)
 
 // getMemStats returns cached runtime.MemStats, refreshing at most every 5 seconds.
 // runtime.ReadMemStats() stops the world; caching prevents per-request GC pauses.
@@ -652,6 +672,27 @@ func (s *Server) requestAuthorized(r *http.Request) bool {
 // --- System Handlers ---
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	// Serve the cached response if it is still fresh.  While a recompute is in
+	// progress (healthComputing=true) all concurrent callers get the stale entry
+	// immediately — this is the same stale-while-computing pattern used by
+	// /api/stats and prevents thundering-herd when s.mu.RLock() is blocked by a
+	// long ingest or eviction pass.
+	s.healthCacheMu.Lock()
+	if s.healthCache != nil && time.Since(s.healthCachedAt) < healthCacheTTL {
+		cached := s.healthCache
+		s.healthCacheMu.Unlock()
+		writeJSON(w, cached)
+		return
+	}
+	if s.healthComputing && s.healthCache != nil {
+		cached := s.healthCache
+		s.healthCacheMu.Unlock()
+		writeJSON(w, cached)
+		return
+	}
+	s.healthComputing = true
+	s.healthCacheMu.Unlock()
+
 	m := s.getMemStats()
 	uptime := time.Since(s.startedAt).Seconds()
 
@@ -708,7 +749,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	perfSlowCount := len(s.perfStats.SlowQueries)
 	s.perfStats.mu.Unlock()
 
-	writeJSON(w, HealthResponse{
+	resp := &HealthResponse{
 		Status:      "ok",
 		Engine:      "go",
 		Version:     s.version,
@@ -742,7 +783,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 			SlowQueries:   perfSlowCount,
 			RecentSlow:    recentSlow,
 		},
-	})
+	}
+
+	s.healthCacheMu.Lock()
+	s.healthCache = resp
+	s.healthCachedAt = time.Now()
+	s.healthComputing = false
+	s.healthCacheMu.Unlock()
+
+	writeJSON(w, resp)
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -849,6 +898,26 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
+	// Serve the cached response if it is still fresh.  While a recompute is in
+	// progress (perfComputing=true) all concurrent callers get the stale entry
+	// immediately — prevents thundering-herd when GetDBSizeStatsTyped or
+	// GetPerfStoreStatsTyped blocks on s.mu.RLock during ingest/eviction.
+	s.perfCacheMu.Lock()
+	if s.perfCache != nil && time.Since(s.perfCachedAt) < perfCacheTTL {
+		cached := s.perfCache
+		s.perfCacheMu.Unlock()
+		writeJSON(w, cached)
+		return
+	}
+	if s.perfComputing && s.perfCache != nil {
+		cached := s.perfCache
+		s.perfCacheMu.Unlock()
+		writeJSON(w, cached)
+		return
+	}
+	s.perfComputing = true
+	s.perfCacheMu.Unlock()
+
 	// Copy perfStats under lock to avoid data races
 	s.perfStats.mu.Lock()
 	type epSnapshot struct {
@@ -939,13 +1008,12 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 		observerCounts = s.db.GetObserverCounts()
 	}
 
-
 	wsClients := 0
 	if s.hub != nil {
 		wsClients = s.hub.ClientCount()
 	}
 
-	writeJSON(w, PerfResponse{
+	resp := &PerfResponse{
 		Uptime:           uptimeSec,
 		TotalRequests:    totalRequests,
 		AvgMs:            safeAvg(totalMs, float64(totalRequests)),
@@ -972,7 +1040,15 @@ func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
 				TotalSysMB:   float64(ms.Sys) / 1024 / 1024,
 			}
 		}(),
-	})
+	}
+
+	s.perfCacheMu.Lock()
+	s.perfCache = resp
+	s.perfCachedAt = time.Now()
+	s.perfComputing = false
+	s.perfCacheMu.Unlock()
+
+	writeJSON(w, resp)
 }
 
 func (s *Server) handlePerfReset(w http.ResponseWriter, r *http.Request) {

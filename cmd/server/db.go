@@ -36,9 +36,10 @@ type DB struct {
 	channelsCacheRes []map[string]interface{}
 	channelsCacheExp time.Time
 
-	sqliteStatsCacheMu  sync.Mutex
-	sqliteStatsCache    SqliteStats
-	sqliteStatsCacheExp time.Time
+	sqliteStatsCacheMu   sync.Mutex
+	sqliteStatsCache     SqliteStats
+	sqliteStatsCacheExp  time.Time
+	sqliteStatsComputing bool // true while a cold-path recompute is in progress
 
 	// Prepared statements for the hottest repeated single-row lookups
 	// (review item #5). Prepared lazily on first use; nil means "fall back
@@ -48,7 +49,11 @@ type DB struct {
 	resolvedPathByObsStmt     *sql.Stmt
 }
 
-const sqliteStatsCacheTTL = 15 * time.Second
+// sqliteStatsCacheTTL is how long GetDBSizeStatsTyped caches its result.
+// The stats include COUNT(*) queries and a WAL checkpoint PRAGMA that can each
+// take several seconds on a large database.  60 s keeps the data fresh enough
+// for a monitoring dashboard without running the expensive queries on every poll.
+const sqliteStatsCacheTTL = 60 * time.Second
 
 // sqlPlaceholders returns a comma-separated list of n `?` SQL bind
 // placeholders — e.g. sqlPlaceholders(3) == "?,?,?". Returns "" for n <= 0.
@@ -425,6 +430,10 @@ func (db *DB) GetDBSizeStats() map[string]interface{} {
 }
 
 // GetDBSizeStatsTyped returns SQLite file sizes and row counts as a typed struct.
+// Results are cached for sqliteStatsCacheTTL (60 s). Concurrent callers that
+// arrive while a recompute is already in progress immediately get the stale
+// cached value — this prevents thundering-herd where 5+ goroutines each launch
+// their own expensive COUNT(*) queries in parallel against the same SQLite file.
 func (db *DB) GetDBSizeStatsTyped() SqliteStats {
 	now := time.Now()
 	db.sqliteStatsCacheMu.Lock()
@@ -433,6 +442,14 @@ func (db *DB) GetDBSizeStatsTyped() SqliteStats {
 		db.sqliteStatsCacheMu.Unlock()
 		return cached
 	}
+	// If another goroutine is already recomputing, serve the stale entry rather
+	// than starting a duplicate set of COUNT(*) queries.
+	if db.sqliteStatsComputing && !db.sqliteStatsCacheExp.IsZero() {
+		cached := cloneSqliteStats(db.sqliteStatsCache)
+		db.sqliteStatsCacheMu.Unlock()
+		return cached
+	}
+	db.sqliteStatsComputing = true
 	db.sqliteStatsCacheMu.Unlock()
 
 	result := SqliteStats{}
@@ -486,6 +503,7 @@ func (db *DB) GetDBSizeStatsTyped() SqliteStats {
 	db.sqliteStatsCacheMu.Lock()
 	db.sqliteStatsCache = cloneSqliteStats(result)
 	db.sqliteStatsCacheExp = now.Add(sqliteStatsCacheTTL)
+	db.sqliteStatsComputing = false
 	db.sqliteStatsCacheMu.Unlock()
 
 	return result
