@@ -122,6 +122,9 @@ type Config struct {
 	// on RateLimitConfig.
 	RateLimit *RateLimitConfig `json:"rateLimit,omitempty"`
 
+	// Reach configures the observer-count colour thresholds shown on channel
+	// messages (red / yellow / green reach indicator).
+	Reach *ReachThresholds `json:"reachThresholds,omitempty"`
 }
 
 // RateLimitConfig configures the per-IP token-bucket rate limiter. All limits
@@ -319,6 +322,30 @@ type HealthThresholds struct {
 	// repeater to be considered "actively relaying" vs only "alive
 	// (advert-only)". See issue #662. Defaults to 24h.
 	RelayActiveHours float64 `json:"relayActiveHours"`
+}
+
+// ReachThresholds controls the observer-count colour coding on channel messages.
+// A message heard by fewer than MediumMinObservers is "bad" (red);
+// heard by MediumMinObservers..GoodMinObservers-1 is "medium" (yellow);
+// heard by GoodMinObservers or more is "good" (green).
+type ReachThresholds struct {
+	MediumMinObservers int `json:"mediumMinObservers"`
+	GoodMinObservers   int `json:"goodMinObservers"`
+}
+
+// GetReachThresholds returns the configured thresholds or sensible defaults.
+func (c *Config) GetReachThresholds() ReachThresholds {
+	if c.Reach != nil {
+		rt := *c.Reach
+		if rt.MediumMinObservers <= 0 {
+			rt.MediumMinObservers = 2
+		}
+		if rt.GoodMinObservers <= 0 {
+			rt.GoodMinObservers = 4
+		}
+		return rt
+	}
+	return ReachThresholds{MediumMinObservers: 2, GoodMinObservers: 4}
 }
 
 // ThemeFile mirrors theme.json overlay.

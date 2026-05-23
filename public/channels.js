@@ -14,6 +14,8 @@
   let observerSfByName = {};
   let messageRequestId = 0;
   let _serverChannelKeys = null;
+  // Reach thresholds from /api/config/client. Populated once at init.
+  let _reachThresholds = { mediumMinObservers: 2, goodMinObservers: 4 };
 
   function getServerChannelKeys() {
     if (_serverChannelKeys !== null) return Promise.resolve(_serverChannelKeys);
@@ -1105,6 +1107,16 @@
       await addUserChannel('#' + raw, '');
     });
 
+    // Fetch reach thresholds from server config — one-shot, best-effort.
+    api('/config/client', { ttl: CLIENT_TTL.config || 60000 })
+      .then(function (cfg) {
+        if (cfg && cfg.reachThresholds) {
+          _reachThresholds = cfg.reachThresholds;
+          if (messages.length) renderMessages();
+        }
+      })
+      .catch(function () { /* keep defaults */ });
+
     loadObserverRegions();
     loadChannels().then(async function () {
       // Also load user-added encrypted channels into the sidebar.
@@ -2001,6 +2013,26 @@
     } catch {}
   }
 
+  // Returns a coloured "N obs" badge HTML string for the message reach indicator.
+  // Levels: bad (< mediumMin) → red, medium (< goodMin) → yellow, good (≥ goodMin) → green.
+  function reachBadgeHtml(observerCount) {
+    var med = _reachThresholds.mediumMinObservers || 2;
+    var good = _reachThresholds.goodMinObservers || 4;
+    var level, title;
+    if (observerCount >= good) {
+      level = 'good';
+      title = 'Good reach — heard by ' + observerCount + ' observer' + (observerCount !== 1 ? 's' : '');
+    } else if (observerCount >= med) {
+      level = 'medium';
+      title = 'Medium reach — heard by ' + observerCount + ' observer' + (observerCount !== 1 ? 's' : '');
+    } else {
+      level = 'bad';
+      title = 'Poor reach — heard by ' + observerCount + ' observer' + (observerCount !== 1 ? 's' : '');
+    }
+    var label = observerCount + ' obs';
+    return '<span class="ch-reach-badge ch-reach-' + level + '" title="' + title + '" aria-label="' + title + '">' + label + '</span>';
+  }
+
   function renderMessages() {
     const msgEl = document.getElementById('chMessages');
     if (!msgEl) return;
@@ -2017,10 +2049,12 @@
       const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
       const date = msg.timestamp ? new Date(msg.timestamp).toLocaleDateString() : '';
 
+      const obsCount = msg.observers?.length || 0;
       const meta = [];
       meta.push(date + ' ' + time);
       if (msg.repeats > 1) meta.push(`${msg.repeats}× heard`);
-      if (msg.observers?.length > 1) meta.push(`${msg.observers.length} observers`);
+      // Reach indicator: always shown so single-observer messages are visibly flagged red.
+      meta.push(reachBadgeHtml(obsCount));
       if (msg.observers?.length > 0) {
         const sfs = [...new Set(msg.observers.map(o => o.sf).filter(sf => sf != null))].sort((a, b) => a - b);
         if (sfs.length > 0) meta.push('SF' + sfs.join('-SF'));

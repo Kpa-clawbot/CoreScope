@@ -1116,9 +1116,10 @@ type ClientConfigResponse struct {
 	WsReconnectMs      interface{} `json:"wsReconnectMs"`
 	CacheInvalidateMs  interface{} `json:"cacheInvalidateMs"`
 	ExternalUrls       interface{} `json:"externalUrls"`
-	PropagationBufferMs float64         `json:"propagationBufferMs"`
-	Timestamps          TimestampConfig `json:"timestamps"`
-	DebugAffinity       bool            `json:"debugAffinity,omitempty"`
+	PropagationBufferMs float64          `json:"propagationBufferMs"`
+	Timestamps          TimestampConfig  `json:"timestamps"`
+	DebugAffinity       bool             `json:"debugAffinity,omitempty"`
+	ReachThresholds     ReachThresholds  `json:"reachThresholds"`
 }
 
 // ─── IATA Coords ───────────────────────────────────────────────────────────────

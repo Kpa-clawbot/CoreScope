@@ -1333,6 +1333,14 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .ch-mention { color: var(--accent); font-weight: 600; }
 .ch-encrypted-text { font-size: 11px; color: var(--text-muted); }
 .ch-msg-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+.ch-reach-badge {
+  display: inline-block; padding: 1px 5px; border-radius: 9px;
+  font-size: 10px; font-weight: 600; line-height: 1.5;
+  color: #fff; vertical-align: middle; cursor: default;
+}
+.ch-reach-good   { background: #16a34a; }
+.ch-reach-medium { background: #b45309; }
+.ch-reach-bad    { background: #dc2626; }
 .ch-analyze-link { color: var(--accent); text-decoration: none; margin-left: 8px; }
 .ch-analyze-link:hover { text-decoration: underline; }
 .ch-scroll-btn {

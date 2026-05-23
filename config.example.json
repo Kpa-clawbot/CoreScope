@@ -159,6 +159,11 @@
     "relayActiveHours": 24,
     "_comment": "How long (hours) before nodes show as degraded/silent. 'infra' = repeaters & rooms, 'node' = companions & others. relayActiveHours: a repeater is shown as 'actively relaying' if its pubkey appeared as a path hop in a non-advert packet within this window (issue #662)."
   },
+  "reachThresholds": {
+    "mediumMinObservers": 2,
+    "goodMinObservers": 4,
+    "_comment": "Observer-count colour thresholds on channel messages. Heard by fewer than mediumMinObservers = red (poor reach), mediumMinObservers..goodMinObservers-1 = yellow (medium), goodMinObservers or more = green (good)."
+  },
   "defaultRegion": "SJC",
   "mapDefaults": {
     "center": [

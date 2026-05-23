@@ -388,3 +388,65 @@ func TestObserverDaysOrDefault(t *testing.T) {
 	}
 }
 
+func TestGetReachThresholdsDefaults(t *testing.T) {
+	cfg := &Config{}
+	rt := cfg.GetReachThresholds()
+	if rt.MediumMinObservers != 2 {
+		t.Errorf("expected MediumMinObservers=2, got %d", rt.MediumMinObservers)
+	}
+	if rt.GoodMinObservers != 4 {
+		t.Errorf("expected GoodMinObservers=4, got %d", rt.GoodMinObservers)
+	}
+}
+
+func TestGetReachThresholdsCustom(t *testing.T) {
+	cfg := &Config{
+		Reach: &ReachThresholds{MediumMinObservers: 3, GoodMinObservers: 6},
+	}
+	rt := cfg.GetReachThresholds()
+	if rt.MediumMinObservers != 3 {
+		t.Errorf("expected MediumMinObservers=3, got %d", rt.MediumMinObservers)
+	}
+	if rt.GoodMinObservers != 6 {
+		t.Errorf("expected GoodMinObservers=6, got %d", rt.GoodMinObservers)
+	}
+}
+
+func TestGetReachThresholdsPartialZeroFallback(t *testing.T) {
+	// Zero values in the struct should fall back to defaults.
+	cfg := &Config{
+		Reach: &ReachThresholds{MediumMinObservers: 0, GoodMinObservers: 0},
+	}
+	rt := cfg.GetReachThresholds()
+	if rt.MediumMinObservers != 2 {
+		t.Errorf("expected default MediumMinObservers=2 for zero, got %d", rt.MediumMinObservers)
+	}
+	if rt.GoodMinObservers != 4 {
+		t.Errorf("expected default GoodMinObservers=4 for zero, got %d", rt.GoodMinObservers)
+	}
+}
+
+func TestLoadConfigReachThresholds(t *testing.T) {
+	dir := t.TempDir()
+	cfgData := map[string]interface{}{
+		"reachThresholds": map[string]interface{}{
+			"mediumMinObservers": 3,
+			"goodMinObservers":   5,
+		},
+	}
+	data, _ := json.Marshal(cfgData)
+	os.WriteFile(filepath.Join(dir, "config.json"), data, 0644)
+
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := cfg.GetReachThresholds()
+	if rt.MediumMinObservers != 3 {
+		t.Errorf("expected 3, got %d", rt.MediumMinObservers)
+	}
+	if rt.GoodMinObservers != 5 {
+		t.Errorf("expected 5, got %d", rt.GoodMinObservers)
+	}
+}
+
