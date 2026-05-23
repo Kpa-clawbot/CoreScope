@@ -830,11 +830,10 @@ func TestBuildPacketData(t *testing.T) {
 	snr := 5.0
 	rssi := -100.0
 	msg := &MQTTPacketMessage{
-		Raw:       rawHex,
-		SNR:       &snr,
-		RSSI:      &rssi,
-		Origin:    "test-observer",
-		Timestamp: "2026-05-16T10:00:00Z",
+		Raw:    rawHex,
+		SNR:    &snr,
+		RSSI:   &rssi,
+		Origin: "test-observer",
 	}
 
 	pkt := BuildPacketData(msg, decoded, "obs123", "SJC", nil)
@@ -866,8 +865,14 @@ func TestBuildPacketData(t *testing.T) {
 	if pkt.PayloadType != decoded.Header.PayloadType {
 		t.Errorf("payloadType mismatch")
 	}
-	if pkt.Timestamp != "2026-05-16T10:00:00Z" {
-		t.Errorf("timestamp=%s, want 2026-05-16T10:00:00Z", pkt.Timestamp)
+	// BuildPacketData stamps with ingest time (time.Now()); verify it is a
+	// non-empty RFC3339 string within a minute of now.
+	if pkt.Timestamp == "" {
+		t.Error("timestamp should not be empty")
+	} else if ts, err := time.Parse(time.RFC3339, pkt.Timestamp); err != nil {
+		t.Errorf("timestamp %q is not RFC3339: %v", pkt.Timestamp, err)
+	} else if d := time.Since(ts); d < 0 || d > time.Minute {
+		t.Errorf("timestamp %q not near now (delta %v)", pkt.Timestamp, d)
 	}
 	if pkt.DecodedJSON == "" || pkt.DecodedJSON == "{}" {
 		t.Error("decodedJSON should be populated")

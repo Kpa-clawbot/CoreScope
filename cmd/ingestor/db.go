@@ -915,6 +915,12 @@ func (s *Store) UpsertNode(pubKey, name, role string, lat, lon *float64, lastSee
 		s.Stats.WriteErrors.Add(1)
 	} else {
 		s.Stats.NodeUpserts.Add(1)
+		// Key rotation: if another active node shares this name, move it to
+		// inactive_nodes so the same device doesn't appear twice.
+		if name != "" {
+			s.db.Exec(`INSERT OR REPLACE INTO inactive_nodes SELECT * FROM nodes WHERE name = ? AND public_key != ?`, name, pubKey)
+			s.db.Exec(`DELETE FROM nodes WHERE name = ? AND public_key != ?`, name, pubKey)
+		}
 	}
 	return err
 }
@@ -1019,6 +1025,12 @@ func (s *Store) UpsertObserver(id, name, iata string, meta *ObserverMeta) error 
 
 	// Reactivation (inactive = 0) is folded into the ON CONFLICT DO UPDATE
 	// clause above, so no separate UPDATE is needed.
+
+	// Key rotation: if another active observer shares this name, retire it so the
+	// same device doesn't appear twice under the old and new MQTT ID.
+	if name != "" {
+		s.db.Exec(`UPDATE observers SET inactive = 1 WHERE name = ? AND id != ? AND (inactive IS NULL OR inactive = 0)`, name, id)
+	}
 	return nil
 }
 

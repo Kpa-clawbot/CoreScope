@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/meshcore-analyzer/perfio"
@@ -167,10 +168,12 @@ func procIORate(prev, cur procIOSnapshot, stamp string) *PerfIOSample {
 //
 // Returns a stop function that terminates the writer goroutine; callers that
 // don't need clean shutdown may ignore it.
-func StartStatsFileWriter(s *Store, interval time.Duration) {
+func StartStatsFileWriter(s *Store, interval time.Duration) (stop func()) {
 	if interval <= 0 {
 		interval = time.Second
 	}
+	done := make(chan struct{})
+	var stopOnce sync.Once
 	go func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
@@ -184,7 +187,12 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 		// The buffer grows once and stays.
 		var buf bytes.Buffer
 		enc := json.NewEncoder(&buf)
-		for range t.C {
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+			}
 			// Capture time.Now() ONCE per tick (Carmack must-fix #5).
 			tickAt := time.Now().UTC()
 			stamp := tickAt.Format(time.RFC3339)
@@ -220,4 +228,7 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 			}
 		}
 	}()
+	return func() {
+		stopOnce.Do(func() { close(done) })
+	}
 }
