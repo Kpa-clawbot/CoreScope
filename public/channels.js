@@ -2015,19 +2015,24 @@
 
   // Returns a coloured "N obs" badge HTML string for the message reach indicator.
   // Levels: bad (< mediumMin) → red, medium (< goodMin) → yellow, good (≥ goodMin) → green.
-  function reachBadgeHtml(observerCount) {
+  // rawTotal is the raw observation row count (may exceed observerCount due to
+  // duplicate submissions from the same observer); shown in tooltip when it differs.
+  function reachBadgeHtml(observerCount, rawTotal) {
     var med = _reachThresholds.mediumMinObservers || 2;
     var good = _reachThresholds.goodMinObservers || 4;
-    var level, title;
+    var level, quality;
     if (observerCount >= good) {
-      level = 'good';
-      title = 'Good reach — heard by ' + observerCount + ' observer' + (observerCount !== 1 ? 's' : '');
+      level = 'good'; quality = 'Good reach';
     } else if (observerCount >= med) {
-      level = 'medium';
-      title = 'Medium reach — heard by ' + observerCount + ' observer' + (observerCount !== 1 ? 's' : '');
+      level = 'medium'; quality = 'Medium reach';
     } else {
-      level = 'bad';
-      title = 'Poor reach — heard by ' + observerCount + ' observer' + (observerCount !== 1 ? 's' : '');
+      level = 'bad'; quality = 'Poor reach';
+    }
+    var obs = observerCount + ' unique observer' + (observerCount !== 1 ? 's' : '');
+    var title = quality + ' — ' + obs;
+    // Mention raw total only when it differs from unique count (duplicate obs rows).
+    if (rawTotal && rawTotal > observerCount) {
+      title += ' (' + rawTotal + ' total observations)';
     }
     var label = observerCount + ' obs';
     return '<span class="ch-reach-badge ch-reach-' + level + '" title="' + title + '" aria-label="' + title + '">' + label + '</span>';
@@ -2050,11 +2055,15 @@
       const date = msg.timestamp ? new Date(msg.timestamp).toLocaleDateString() : '';
 
       const obsCount = msg.observers?.length || 0;
+      // msg.repeats is the raw observation-row count (not deduplicated by observer).
+      // It can exceed obsCount when the same observer submitted the packet more than
+      // once. We fold it into the reach badge tooltip rather than showing both numbers
+      // side-by-side, which was confusing ("134× heard · 58 obs").
+      const rawObs = msg.repeats || obsCount;
       const meta = [];
       meta.push(date + ' ' + time);
-      if (msg.repeats > 1) meta.push(`${msg.repeats}× heard`);
       // Reach indicator: always shown so single-observer messages are visibly flagged red.
-      meta.push(reachBadgeHtml(obsCount));
+      meta.push(reachBadgeHtml(obsCount, rawObs));
       if (msg.observers?.length > 0) {
         const sfs = [...new Set(msg.observers.map(o => o.sf).filter(sf => sf != null))].sort((a, b) => a - b);
         if (sfs.length > 0) meta.push('SF' + sfs.join('-SF'));
