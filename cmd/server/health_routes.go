@@ -161,6 +161,7 @@ func (s *Server) handleHealthBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mqttConnected := s.healthMQTT != nil && s.healthMQTT.client != nil && s.healthMQTT.client.IsConnected()
+	decryptionConfigured := s.healthMQTT != nil && s.healthMQTT.chanKey != nil
 
 	resp := map[string]interface{}{
 		"observerDirectory":   observerDirectory,
@@ -180,8 +181,9 @@ func (s *Server) handleHealthBootstrap(w http.ResponseWriter, r *http.Request) {
 			"siteKey": hcfg.Turnstile.SiteKey,
 		},
 		"testChannel": map[string]interface{}{
-			"name":       hcfg.TestChannelName,
-			"codePrefix": effectiveCodePrefix(hcfg),
+			"name":                 hcfg.TestChannelName,
+			"codePrefix":           effectiveCodePrefix(hcfg),
+			"decryptionConfigured": decryptionConfigured,
 		},
 	}
 

@@ -192,33 +192,49 @@ func (h *HealthMQTTClient) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 		return
 	}
 
+	log.Printf("[health-mqtt] GRP_TXT from observer=%s channelHash=%d mac=%s encDataLen=%d chanKeyConfigured=%v",
+		observerShortKey(observerKey), pkt.Payload.ChannelHash, pkt.Payload.MAC,
+		len(pkt.Payload.EncryptedData)/2, h.chanKey != nil)
+
 	// Channel hash filter — only process messages for our test channel.
 	if h.chanKey != nil && !h.chanKey.MatchesChannelHash(pkt.Payload.ChannelHash) {
+		log.Printf("[health-mqtt] GRP_TXT dropped: channelHash=%d does not match test channel (expected %d) — check testChannelSecret config",
+			pkt.Payload.ChannelHash, h.chanKey.ChannelHashByte)
 		return
 	}
 
 	// Need ciphertext to proceed.
 	if pkt.Payload.EncryptedData == "" {
+		log.Printf("[health-mqtt] GRP_TXT dropped: no encrypted data in packet")
 		return
 	}
 	cipherBytes, err := hex.DecodeString(pkt.Payload.EncryptedData)
 	if err != nil || len(cipherBytes) == 0 {
+		log.Printf("[health-mqtt] GRP_TXT dropped: could not decode encrypted data: %v", err)
 		return
 	}
 
 	// HMAC validation — reject corrupted / wrong-channel packets.
 	if h.chanKey != nil && !h.chanKey.ValidateMAC(pkt.Payload.MAC, cipherBytes) {
+		log.Printf("[health-mqtt] GRP_TXT dropped: MAC validation failed (mac=%s) — wrong testChannelSecret or corrupted packet",
+			pkt.Payload.MAC)
 		return
 	}
 
 	// Decrypt.
 	if h.chanKey == nil {
+		log.Printf("[health-mqtt] GRP_TXT dropped: testChannelSecret not configured — cannot decrypt; set testChannelSecret in health check config")
 		return
 	}
 	sender, messageBody, valid := h.chanKey.ParseGroupTextMessage(cipherBytes)
 	if !valid || messageBody == "" {
+		log.Printf("[health-mqtt] GRP_TXT dropped: decryption/parsing failed (valid=%v messageBody=%q) — check testChannelSecret matches the channel used",
+			valid, messageBody)
 		return
 	}
+
+	log.Printf("[health-mqtt] GRP_TXT decrypted: observer=%s sender=%q body=%q",
+		observerShortKey(observerKey), sender, messageBody)
 
 	// Determine message hash (for deduplication and re-use detection).
 	msgHash := env.Hash
@@ -301,6 +317,15 @@ func (h *HealthMQTTClient) matchAndRecord(observerKey, messageBody, sender, msgH
 			}
 		}
 		if matched == nil {
+			if len(h.sessions) == 0 {
+				log.Printf("[health-mqtt] GRP_TXT body=%q: no active sessions to match against", messageBody)
+			} else {
+				codes := make([]string, 0, len(h.sessions))
+				for c := range h.sessions {
+					codes = append(codes, c)
+				}
+				log.Printf("[health-mqtt] GRP_TXT body=%q: no session code match (active sessions: %v)", messageBody, codes)
+			}
 			return
 		}
 

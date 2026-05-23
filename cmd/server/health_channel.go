@@ -128,23 +128,28 @@ func (ck *ChannelKey) ParseGroupTextMessage(cipherBytes []byte) (sender, message
 		return "", "", false
 	}
 
-	// Require ≥70 % printable ASCII (same heuristic as source).
-	printable := 0
-	for _, b := range msgBytes {
-		if (b >= 32 && b <= 126) || b == 9 || b == 10 || b == 13 {
-			printable++
-		}
-	}
-	if float64(printable)/float64(len(msgBytes)) < 0.7 {
-		return "", "", false
-	}
-
-	// Strip null bytes.
+	// Strip trailing null bytes first — AES-128-ECB pads the plaintext to a
+	// block boundary with zeros, so we must remove them before checking whether
+	// the content is valid text.
 	raw := string(msgBytes)
 	for len(raw) > 0 && raw[len(raw)-1] == 0 {
 		raw = raw[:len(raw)-1]
 	}
 	if raw == "" {
+		return "", "", false
+	}
+
+	// Require ≥70 % printable ASCII (same heuristic as source), evaluated on
+	// the null-stripped bytes so AES padding doesn't inflate the non-printable
+	// count.
+	printable := 0
+	for i := 0; i < len(raw); i++ {
+		b := raw[i]
+		if (b >= 32 && b <= 126) || b == 9 || b == 10 || b == 13 {
+			printable++
+		}
+	}
+	if float64(printable)/float64(len(raw)) < 0.7 {
 		return "", "", false
 	}
 
