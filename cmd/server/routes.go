@@ -2845,17 +2845,6 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		since = time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	}
 
-	// Fetch observations: DB is authoritative (full history survives restarts and
-	// in-memory evictions). Fall back to the in-memory store only when no DB is
-	// available.
-	var obsRows []ObsAnalyticsRow
-	if s.db != nil {
-		obsRows = s.db.GetObservationsByObserver(id, since, 50000)
-	}
-	if len(obsRows) == 0 && s.store != nil {
-		obsRows = s.storeObsToAnalyticsRows(id, since)
-	}
-
 	var bucketDur time.Duration
 	switch {
 	case totalMinutes <= 60:
@@ -2869,6 +2858,8 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 	default:
 		bucketDur = 24 * time.Hour
 	}
+	bucketSecs := int64(bucketDur.Seconds())
+
 	formatLabel := func(t time.Time) string {
 		if totalMinutes <= 1440 {
 			return t.UTC().Format("15:04")
@@ -2879,84 +2870,171 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		return t.UTC().Format("Jan 02")
 	}
 
+	// ── Data fetch ────────────────────────────────────────────────────────────
+	// DB path: two targeted queries instead of one giant raw-row fetch.
+	//   1. GetObserverBucketAggs  — GROUP BY in SQL; returns O(buckets×hours×types)
+	//      rows regardless of traffic volume. Drives timeline, RSSI, payload types
+	//      and active-hour (uptime) charts with full accuracy.
+	//   2. GetObserverPathSample  — bounded raw fetch for path_json / decoded_json
+	//      needed to count unique nodes per bucket and build SNR distribution.
+	//      Also provides the last 20 rows for the Recent Packets table.
+	//
+	// Store fallback: used only when no DB is available (rare). The store is
+	// already memory-bounded by RetentionHours so volume is acceptable.
+
 	packetTypes := map[string]int{}
 	timelineCounts := map[int64]int{}
 	nodeBucketSets := map[int64]map[string]struct{}{}
 	snrBuckets := map[int]*SnrDistributionEntry{}
-	rssiBuckets := map[int64][]float64{}
+	// rssiAgg accumulates (sum, count) per bucket so we can compute a weighted
+	// average across the (bucket, hour, payloadType) groups returned by the DB.
+	type rssiAcc struct{ sum float64; count int }
+	rssiAgg := map[int64]*rssiAcc{}
 	activeHourBuckets := map[int64]struct{}{}
 	recentPackets := make([]map[string]interface{}, 0, 20)
 
-	for i, obs := range obsRows {
-		if obs.Timestamp == "" {
-			continue
+	if s.db != nil {
+		// ── Query 1: aggregate counts/RSSI from DB ────────────────────────────
+		for _, agg := range s.db.GetObserverBucketAggs(id, since, bucketSecs) {
+			timelineCounts[agg.BucketUnix] += agg.Count
+			activeHourBuckets[agg.HourUnix] = struct{}{}
+			packetTypes[strconv.Itoa(agg.PayloadType)] += agg.Count
+			if agg.CntRSSI > 0 {
+				acc := rssiAgg[agg.BucketUnix]
+				if acc == nil {
+					acc = &rssiAcc{}
+					rssiAgg[agg.BucketUnix] = acc
+				}
+				acc.sum += agg.SumRSSI
+				acc.count += agg.CntRSSI
+			}
 		}
-		ts, err := time.Parse(time.RFC3339Nano, obs.Timestamp)
-		if err != nil {
-			ts, err = time.Parse(time.RFC3339, obs.Timestamp)
-		}
-		if err != nil {
-			ts, err = time.Parse("2006-01-02 15:04:05", obs.Timestamp)
-		}
-		if err != nil {
-			continue
-		}
-		bucketStart := ts.UTC().Truncate(bucketDur).Unix()
-		timelineCounts[bucketStart]++
-		activeHourBuckets[ts.UTC().Truncate(time.Hour).Unix()] = struct{}{}
-		if nodeBucketSets[bucketStart] == nil {
-			nodeBucketSets[bucketStart] = map[string]struct{}{}
-		}
-
-		packetTypes[strconv.Itoa(obs.PayloadType)]++
-		if obs.DecodedJSON != "" {
-			var decoded map[string]interface{}
-			if json.Unmarshal([]byte(obs.DecodedJSON), &decoded) == nil {
-				for _, k := range []string{"pubKey", "srcHash", "destHash"} {
-					if v, ok := decoded[k].(string); ok && v != "" {
-						nodeBucketSets[bucketStart][v] = struct{}{}
+		// ── Query 2: bounded path sample for nodes / SNR / recent packets ─────
+		for i, s := range s.db.GetObserverPathSample(id, since, bucketSecs, 50000) {
+			bk := s.BucketUnix
+			if nodeBucketSets[bk] == nil {
+				nodeBucketSets[bk] = map[string]struct{}{}
+			}
+			if s.DecodedJSON != "" {
+				var dec map[string]interface{}
+				if json.Unmarshal([]byte(s.DecodedJSON), &dec) == nil {
+					for _, k := range []string{"pubKey", "srcHash", "destHash"} {
+						if v, ok := dec[k].(string); ok && v != "" {
+							nodeBucketSets[bk][v] = struct{}{}
+						}
 					}
 				}
 			}
-		}
-		for _, hop := range parsePathJSON(obs.PathJSON) {
-			if hop != "" {
-				nodeBucketSets[bucketStart][hop] = struct{}{}
+			for _, hop := range parsePathJSON(s.PathJSON) {
+				if hop != "" {
+					nodeBucketSets[bk][hop] = struct{}{}
+				}
+			}
+			if s.SNR != nil {
+				b := int(*s.SNR) / 2 * 2
+				if *s.SNR < 0 && int(*s.SNR) != b {
+					b -= 2
+				}
+				if snrBuckets[b] == nil {
+					snrBuckets[b] = &SnrDistributionEntry{Range: fmt.Sprintf("%d to %d", b, b+2)}
+				}
+				snrBuckets[b].Count++
+			}
+			if i < 20 {
+				var snrVal, rssiVal interface{}
+				if s.SNR != nil {
+					snrVal = *s.SNR
+				}
+				if s.RSSI != nil {
+					rssiVal = *s.RSSI
+				}
+				recentPackets = append(recentPackets, map[string]interface{}{
+					"hash":         s.Hash,
+					"timestamp":    s.Timestamp,
+					"payload_type": s.PayloadType,
+					"decoded_json": s.DecodedJSON,
+					"path_json":    s.PathJSON,
+					"snr":          snrVal,
+					"rssi":         rssiVal,
+				})
 			}
 		}
-		if obs.RSSI != nil {
-			rssiBuckets[bucketStart] = append(rssiBuckets[bucketStart], *obs.RSSI)
-		}
-		if obs.SNR != nil {
-			bucket := int(*obs.SNR) / 2 * 2
-			if *obs.SNR < 0 && int(*obs.SNR) != bucket {
-				bucket -= 2
+	} else if s.store != nil {
+		// ── Store fallback (no DB) ────────────────────────────────────────────
+		for i, obs := range s.storeObsToAnalyticsRows(id, since) {
+			if obs.Timestamp == "" {
+				continue
 			}
-			if snrBuckets[bucket] == nil {
-				snrBuckets[bucket] = &SnrDistributionEntry{Range: fmt.Sprintf("%d to %d", bucket, bucket+2)}
+			ts, err := time.Parse(time.RFC3339Nano, obs.Timestamp)
+			if err != nil {
+				ts, err = time.Parse(time.RFC3339, obs.Timestamp)
 			}
-			snrBuckets[bucket].Count++
-		}
-		if i < 20 {
-			snrVal := interface{}(nil)
-			rssiVal := interface{}(nil)
-			if obs.SNR != nil {
-				snrVal = *obs.SNR
+			if err != nil {
+				continue
+			}
+			bk := ts.UTC().Truncate(bucketDur).Unix()
+			timelineCounts[bk]++
+			activeHourBuckets[ts.UTC().Truncate(time.Hour).Unix()] = struct{}{}
+			packetTypes[strconv.Itoa(obs.PayloadType)]++
+			if nodeBucketSets[bk] == nil {
+				nodeBucketSets[bk] = map[string]struct{}{}
+			}
+			if obs.DecodedJSON != "" {
+				var dec map[string]interface{}
+				if json.Unmarshal([]byte(obs.DecodedJSON), &dec) == nil {
+					for _, k := range []string{"pubKey", "srcHash", "destHash"} {
+						if v, ok := dec[k].(string); ok && v != "" {
+							nodeBucketSets[bk][v] = struct{}{}
+						}
+					}
+				}
+			}
+			for _, hop := range parsePathJSON(obs.PathJSON) {
+				if hop != "" {
+					nodeBucketSets[bk][hop] = struct{}{}
+				}
 			}
 			if obs.RSSI != nil {
-				rssiVal = *obs.RSSI
+				acc := rssiAgg[bk]
+				if acc == nil {
+					acc = &rssiAcc{}
+					rssiAgg[bk] = acc
+				}
+				acc.sum += *obs.RSSI
+				acc.count++
 			}
-			recentPackets = append(recentPackets, map[string]interface{}{
-				"hash":         obs.Hash,
-				"timestamp":    obs.Timestamp,
-				"payload_type": obs.PayloadType,
-				"decoded_json": obs.DecodedJSON,
-				"path_json":    obs.PathJSON,
-				"snr":          snrVal,
-				"rssi":         rssiVal,
-			})
+			if obs.SNR != nil {
+				b := int(*obs.SNR) / 2 * 2
+				if *obs.SNR < 0 && int(*obs.SNR) != b {
+					b -= 2
+				}
+				if snrBuckets[b] == nil {
+					snrBuckets[b] = &SnrDistributionEntry{Range: fmt.Sprintf("%d to %d", b, b+2)}
+				}
+				snrBuckets[b].Count++
+			}
+			if i < 20 {
+				var snrVal, rssiVal interface{}
+				if obs.SNR != nil {
+					snrVal = *obs.SNR
+				}
+				if obs.RSSI != nil {
+					rssiVal = *obs.RSSI
+				}
+				recentPackets = append(recentPackets, map[string]interface{}{
+					"hash":         obs.Hash,
+					"timestamp":    obs.Timestamp,
+					"payload_type": obs.PayloadType,
+					"decoded_json": obs.DecodedJSON,
+					"path_json":    obs.PathJSON,
+					"snr":          snrVal,
+					"rssi":         rssiVal,
+				})
+			}
 		}
 	}
+
+	// ── Build output structures ───────────────────────────────────────────────
 
 	buildTimeline := func(counts map[int64]int) []TimeBucket {
 		keys := make([]int64, 0, len(counts))
@@ -2976,6 +3054,7 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 	for k, nodes := range nodeBucketSets {
 		nodeCounts[k] = len(nodes)
 	}
+
 	snrKeys := make([]int, 0, len(snrBuckets))
 	for k := range snrBuckets {
 		snrKeys = append(snrKeys, k)
@@ -2986,8 +3065,8 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		snrDistribution = append(snrDistribution, *snrBuckets[k])
 	}
 
-	// Build uptime timeline: enumerate all buckets in the window and compute
-	// what % of 1h sub-slots had any activity.
+	// Uptime: enumerate all buckets in the window and compute what % of 1h
+	// sub-slots had any activity.
 	subSlots := int(bucketDur / time.Hour)
 	if subSlots < 1 {
 		subSlots = 1
@@ -3007,19 +3086,15 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		uptimeTimeline = append(uptimeTimeline, TimeBucket{Label: &lbl, Count: pct})
 	}
 
-	rssiKeys := make([]int64, 0, len(rssiBuckets))
-	for k := range rssiBuckets {
+	rssiKeys := make([]int64, 0, len(rssiAgg))
+	for k := range rssiAgg {
 		rssiKeys = append(rssiKeys, k)
 	}
 	sort.Slice(rssiKeys, func(i, j int) bool { return rssiKeys[i] < rssiKeys[j] })
 	rssiTimeline := make([]RssiTimelineEntry, 0, len(rssiKeys))
 	for _, k := range rssiKeys {
-		vals := rssiBuckets[k]
-		sum := 0.0
-		for _, v := range vals {
-			sum += v
-		}
-		avg := math.Round((sum/float64(len(vals)))*10) / 10
+		acc := rssiAgg[k]
+		avg := math.Round((acc.sum/float64(acc.count))*10) / 10
 		rssiTimeline = append(rssiTimeline, RssiTimelineEntry{Label: formatLabel(time.Unix(k, 0)), Avg: avg})
 	}
 
@@ -3035,7 +3110,7 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 }
 
 // storeObsToAnalyticsRows converts in-memory store observations for an observer
-// to ObsAnalyticsRow slices (used when no DB is available).
+// into ObsAnalyticsRow slices. Used only when no DB is available.
 func (s *Server) storeObsToAnalyticsRows(observerID string, since time.Time) []ObsAnalyticsRow {
 	s.store.mu.RLock()
 	defer s.store.mu.RUnlock()
@@ -3071,7 +3146,6 @@ func (s *Server) storeObsToAnalyticsRows(observerID string, since time.Time) []O
 		}
 		result = append(result, row)
 	}
-	// Sort newest first to match DB query order.
 	sort.Slice(result, func(i, j int) bool { return result[i].Timestamp > result[j].Timestamp })
 	return result
 }

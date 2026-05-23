@@ -1262,72 +1262,128 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 	return result
 }
 
-// GetObservationsByObserver returns per-observation rows for a single observer
-// since the given time, newest-first, up to limit rows.
-// Used by handleObserverAnalytics as a DB-backed fallback so charts survive
-// server restarts and in-memory evictions.
-func (db *DB) GetObservationsByObserver(observerID string, since time.Time, limit int) []ObsAnalyticsRow {
+// observerWhereClause returns the WHERE fragment, JOIN clause, and positional
+// args needed to filter observations by observer ID for both v2 and v3 schema.
+// v3 uses a rowid foreign key (observer_idx); v2 uses a string observer_id column.
+func (db *DB) observerWhereClause(observerID string, sinceUnix int64) (join, where string, args []interface{}) {
+	if db.isV3 {
+		join = "JOIN observers obs ON obs.rowid = o.observer_idx"
+		where = "obs.id = ? AND o.timestamp >= ?"
+	} else {
+		join = ""
+		where = "o.observer_id = ? AND o.timestamp >= ?"
+	}
+	args = []interface{}{observerID, sinceUnix}
+	return
+}
+
+// GetObserverBucketAggs returns pre-aggregated per-(bucket, hour, payloadType)
+// rows for a single observer. Counts and RSSI sums are computed in SQL so this
+// query returns at most O(buckets × hours-per-bucket × payload-types) rows —
+// typically a few hundred — regardless of how many raw observations exist.
+func (db *DB) GetObserverBucketAggs(observerID string, since time.Time, bucketSecs int64) []ObsBucketAgg {
 	if db == nil || db.conn == nil {
 		return nil
 	}
-	var querySQL string
-	var args []interface{}
-	if db.isV3 {
-		querySQL = `SELECT t.hash, t.payload_type, COALESCE(t.decoded_json,''), COALESCE(o.path_json,''),
-			strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch') AS ts,
-			o.snr, o.rssi
-			FROM observations o
-			JOIN transmissions t ON t.id = o.transmission_id
-			JOIN observers obs ON obs.rowid = o.observer_idx
-			WHERE obs.id = ? AND o.timestamp >= ?
-			ORDER BY o.timestamp DESC
-			LIMIT ?`
-		args = []interface{}{observerID, since.Unix(), limit}
-	} else {
-		// v2 schema: observer reference is a string observer_id column, but
-		// timestamps are still stored as Unix integers — same as v3.
-		querySQL = `SELECT t.hash, t.payload_type, COALESCE(t.decoded_json,''), COALESCE(o.path_json,''),
-			strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch') AS ts,
-			o.snr, o.rssi
-			FROM observations o
-			JOIN transmissions t ON t.id = o.transmission_id
-			WHERE o.observer_id = ? AND o.timestamp >= ?
-			ORDER BY o.timestamp DESC
-			LIMIT ?`
-		args = []interface{}{observerID, since.Unix(), limit}
+	obsJoin, obsWhere, baseArgs := db.observerWhereClause(observerID, since.Unix())
+	if obsJoin != "" {
+		obsJoin = obsJoin + "\n\t\t\t"
 	}
+	querySQL := `SELECT
+		(o.timestamp / ?) * ? AS bs,
+		(o.timestamp / 3600) * 3600 AS hs,
+		COALESCE(t.payload_type, 0) AS pt,
+		COUNT(*) AS cnt,
+		COALESCE(SUM(o.rssi), 0.0) AS sum_rssi,
+		COUNT(o.rssi) AS cnt_rssi
+		FROM observations o
+		JOIN transmissions t ON t.id = o.transmission_id
+		` + obsJoin + `WHERE ` + obsWhere + `
+		GROUP BY bs, hs, pt
+		ORDER BY bs`
+	args := append([]interface{}{bucketSecs, bucketSecs}, baseArgs...)
 
 	rows, err := db.conn.Query(querySQL, args...)
 	if err != nil {
-		log.Printf("[observer-analytics] query error for observer %s: %v", observerID, err)
+		log.Printf("[observer-analytics] bucket-agg query error for %s: %v", observerID, err)
 		return nil
 	}
 	defer rows.Close()
 
-	var result []ObsAnalyticsRow
+	var result []ObsBucketAgg
 	for rows.Next() {
-		var hash, decodedJSON, pathJSON, ts sql.NullString
-		var payloadType sql.NullInt64
-		var snr, rssi sql.NullFloat64
-		if err := rows.Scan(&hash, &payloadType, &decodedJSON, &pathJSON, &ts, &snr, &rssi); err != nil {
+		var r ObsBucketAgg
+		var sumRSSI sql.NullFloat64
+		if err := rows.Scan(&r.BucketUnix, &r.HourUnix, &r.PayloadType, &r.Count, &sumRSSI, &r.CntRSSI); err != nil {
 			continue
 		}
-		row := ObsAnalyticsRow{
-			Hash:        nullStrVal(hash),
-			PayloadType: int(payloadType.Int64),
-			DecodedJSON: nullStrVal(decodedJSON),
-			PathJSON:    nullStrVal(pathJSON),
-			Timestamp:   nullStrVal(ts),
+		if sumRSSI.Valid {
+			r.SumRSSI = sumRSSI.Float64
 		}
+		result = append(result, r)
+	}
+	return result
+}
+
+// GetObserverPathSample returns up to limit observation rows for a single
+// observer, newest-first. Each row carries path_json and decoded_json (for
+// unique-node counting and SNR distribution) plus full fields for the recent-
+// packets table. The limit keeps memory bounded even on high-traffic observers.
+func (db *DB) GetObserverPathSample(observerID string, since time.Time, bucketSecs int64, limit int) []ObsPathSample {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	obsJoin, obsWhere, baseArgs := db.observerWhereClause(observerID, since.Unix())
+	if obsJoin != "" {
+		obsJoin = obsJoin + "\n\t\t\t"
+	}
+	querySQL := `SELECT
+		(o.timestamp / ?) * ? AS bs,
+		COALESCE(o.path_json, '') AS path_json,
+		COALESCE(t.decoded_json, '') AS decoded_json,
+		o.snr,
+		COALESCE(t.hash, '') AS hash,
+		COALESCE(t.payload_type, 0) AS payload_type,
+		o.rssi,
+		strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch') AS ts
+		FROM observations o
+		JOIN transmissions t ON t.id = o.transmission_id
+		` + obsJoin + `WHERE ` + obsWhere + `
+		ORDER BY o.timestamp DESC
+		LIMIT ?`
+	args := append([]interface{}{bucketSecs, bucketSecs}, baseArgs...)
+	args = append(args, limit)
+
+	rows, err := db.conn.Query(querySQL, args...)
+	if err != nil {
+		log.Printf("[observer-analytics] path-sample query error for %s: %v", observerID, err)
+		return nil
+	}
+	defer rows.Close()
+
+	var result []ObsPathSample
+	for rows.Next() {
+		var r ObsPathSample
+		var snr, rssi sql.NullFloat64
+		var hash, pathJSON, decodedJSON, ts sql.NullString
+		var payloadType sql.NullInt64
+		if err := rows.Scan(&r.BucketUnix, &pathJSON, &decodedJSON, &snr, &hash, &payloadType, &rssi, &ts); err != nil {
+			continue
+		}
+		r.PathJSON = nullStrVal(pathJSON)
+		r.DecodedJSON = nullStrVal(decodedJSON)
+		r.Hash = nullStrVal(hash)
+		r.Timestamp = nullStrVal(ts)
+		r.PayloadType = int(payloadType.Int64)
 		if snr.Valid {
 			v := snr.Float64
-			row.SNR = &v
+			r.SNR = &v
 		}
 		if rssi.Valid {
 			v := rssi.Float64
-			row.RSSI = &v
+			r.RSSI = &v
 		}
-		result = append(result, row)
+		result = append(result, r)
 	}
 	return result
 }

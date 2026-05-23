@@ -1000,8 +1000,7 @@ type RssiTimelineEntry struct {
 }
 
 // ObsAnalyticsRow is the minimal per-observation data needed by the observer
-// analytics handler. It is returned by DB.GetObservationsByObserver and also
-// produced from the in-memory store as a fallback.
+// analytics handler. Used only by the in-memory store fallback path.
 type ObsAnalyticsRow struct {
 	Hash        string
 	PayloadType int
@@ -1010,6 +1009,34 @@ type ObsAnalyticsRow struct {
 	Timestamp   string // RFC3339Nano
 	SNR         *float64
 	RSSI        *float64
+}
+
+// ObsBucketAgg is one pre-aggregated row from GetObserverBucketAggs.
+// The DB groups by (bucket_start, hour_start, payload_type) so aggregate
+// queries return O(buckets × hours-per-bucket × payload-types) rows instead
+// of O(observations) rows — critical for high-traffic observers.
+type ObsBucketAgg struct {
+	BucketUnix  int64   // bucket start Unix timestamp
+	HourUnix    int64   // hour-start Unix timestamp (for uptime chart)
+	PayloadType int
+	Count       int
+	SumRSSI     float64 // sum of non-null RSSI values in this group
+	CntRSSI     int     // count of non-null RSSI values in this group
+}
+
+// ObsPathSample is a sampled observation row used for node-counting and SNR
+// analytics. Fetched with a row cap so it is always bounded regardless of
+// traffic volume. Also doubles as the source for the Recent Packets table.
+type ObsPathSample struct {
+	BucketUnix  int64
+	PathJSON    string
+	DecodedJSON string
+	SNR         *float64
+	// Populated for the recent-packets table only
+	Hash        string
+	PayloadType int
+	RSSI        *float64
+	Timestamp   string // RFC3339Nano
 }
 
 type ObserverAnalyticsResponse struct {
