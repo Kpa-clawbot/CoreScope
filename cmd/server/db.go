@@ -2060,6 +2060,29 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		}
 		if existing, ok := msgMap[txID]; ok {
 			existing.Repeats++
+			// Accumulate additional observer names so the SF range (e.g. SF7-SF8)
+			// is preserved when multiple observers heard the same transmission.
+			obsKey := ""
+			if obsName.Valid && obsName.String != "" {
+				obsKey = obsName.String
+			} else if obsID.Valid && obsID.String != "" {
+				obsKey = obsID.String
+			}
+			if obsKey != "" {
+				if obs, ok2 := existing.Data["observers"].([]string); ok2 {
+					// Deduplicate — don't add the same observer twice.
+					found := false
+					for _, o := range obs {
+						if o == obsKey {
+							found = true
+							break
+						}
+					}
+					if !found {
+						existing.Data["observers"] = append(obs, obsKey)
+					}
+				}
+			}
 			continue
 		}
 		var decoded map[string]interface{}
