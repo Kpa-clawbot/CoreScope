@@ -39,6 +39,15 @@ type MQTTSource struct {
 	Region             string   `json:"region,omitempty"`
 }
 
+// ConnectTimeoutOrDefault returns the per-source connect timeout in seconds,
+// defaulting to 10 if not configured (matches the ingestor convention).
+func (s MQTTSource) ConnectTimeoutOrDefault() int {
+	if s.ConnectTimeoutSec > 0 {
+		return s.ConnectTimeoutSec
+	}
+	return 10
+}
+
 // MQTTLegacy is the old single-broker config format, identical to the ingestor's.
 type MQTTLegacy struct {
 	Broker string `json:"broker"`

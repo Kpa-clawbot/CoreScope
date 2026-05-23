@@ -156,12 +156,15 @@ func (h *HealthMQTTClient) connectSource(src MQTTSource) {
 		name = brokerURL
 	}
 
+	connectTimeout := time.Duration(src.ConnectTimeoutOrDefault()) * time.Second
 	opts := mqtt.NewClientOptions().
 		AddBroker(brokerURL).
 		SetClientID(fmt.Sprintf("corescope-health-%s-%d", name, time.Now().UnixNano())).
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
 		SetConnectRetryInterval(5 * time.Second).
+		SetConnectTimeout(connectTimeout).
+		SetWriteTimeout(connectTimeout).
 		SetOnConnectHandler(func(c mqtt.Client) {
 			log.Printf("[health-mqtt] connected to %s (%s)", brokerURL, name)
 			for _, topic := range topics {
@@ -218,13 +221,12 @@ func (h *HealthMQTTClient) connectSource(src MQTTSource) {
 	h.clients = append(h.clients, client)
 	h.clientsMu.Unlock()
 
-	log.Printf("[health-mqtt] connecting to %s (%s)", brokerURL, name)
+	log.Printf("[health-mqtt] connecting to %s (%s) (timeout %s)", brokerURL, name, connectTimeout)
 	tok := client.Connect()
 	// Use WaitTimeout instead of Wait: with ConnectRetry=true, paho loops
 	// RETRYCONN indefinitely on failure and never resolves the token, so
-	// tok.Wait() would block forever.  15 s is long enough to distinguish
-	// a fast-fail (TCP refused/TLS error) from a slow network.
-	if tok.WaitTimeout(15 * time.Second) {
+	// tok.Wait() would block forever.
+	if tok.WaitTimeout(connectTimeout + 2*time.Second) {
 		if err := tok.Error(); err != nil {
 			log.Printf("[health-mqtt] initial connect to %s (%s) failed: %v — will keep retrying", brokerURL, name, err)
 		}
