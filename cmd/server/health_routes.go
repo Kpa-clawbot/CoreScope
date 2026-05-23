@@ -175,6 +175,7 @@ func (s *Server) handleHealthBootstrap(w http.ResponseWriter, r *http.Request) {
 		},
 		"mqtt": map[string]interface{}{
 			"connected": mqttConnected,
+			"broker":    firstBrokerURL(hcfg),
 		},
 		"turnstile": map[string]interface{}{
 			"enabled": hcfg.Turnstile.Enabled,

@@ -81,6 +81,8 @@
     const testChannel = bootstrap.testChannel || {};
     const channelName = testChannel.name || 'test';
     const mqttOk = bootstrap.mqtt && bootstrap.mqtt.connected;
+    const mqttBroker = (bootstrap.mqtt && bootstrap.mqtt.broker) || '';
+    const isLocalFallback = mqttBroker === 'tcp://localhost:1883';
     const decryptionOk = testChannel.decryptionConfigured !== false; // treat absent as ok (older server)
 
     // Tear down any previous map before replacing innerHTML.
@@ -92,7 +94,8 @@
       <div class="hc-wrap">
         <h2>Mesh Health Check</h2>
         <p class="hc-intro">Generate a test code, broadcast it to <strong>#${escHtml(channelName)}</strong>, and see which observers received it.</p>
-        ${!mqttOk ? '<div class="hc-warn">⚠ MQTT not connected — packets will not be received until the broker is reachable.</div>' : ''}
+        ${!mqttOk ? `<div class="hc-warn">⚠ MQTT not connected — packets will not be received until the broker is reachable${mqttBroker ? ' (<code>' + escHtml(mqttBroker) + '</code>)' : ''}.</div>` : ''}
+        ${mqttOk && isLocalFallback ? '<div class="hc-warn">⚠ Health check is subscribed to <code>tcp://localhost:1883</code> (default fallback) — set <code>mqttBroker</code> in the health check config to point at your actual MQTT broker.</div>' : ''}
         ${!decryptionOk ? '<div class="hc-warn">⚠ Channel decryption not configured — set <code>testChannelSecret</code> in the health check config to enable receipt detection.</div>' : ''}
         <div id="hc-map" style="height:260px;border-radius:4px;overflow:hidden;margin-bottom:1rem;"></div>
         <div class="hc-create">

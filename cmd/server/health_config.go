@@ -6,6 +6,11 @@ type HealthCheckConfig struct {
 	// TEST_CHANNEL_SECRET in the source project). The AES key is the first
 	// 16 raw bytes; the channel-hash filter byte is SHA-256(rawBytes)[0].
 	TestChannelSecret    string                `json:"testChannelSecret"`
+	// MQTTBroker is the broker URL the health-check MQTT client connects to.
+	// Supports tcp://, ssl://, ws://, and wss:// schemes. If empty, falls back
+	// to the MQTT_BROKER environment variable, then tcp://localhost:1883.
+	// Example: "wss://collector1.dutchmeshcore.nl:443"
+	MQTTBroker           string                `json:"mqttBroker"`
 	// CodePrefix is prepended to each generated health-check code, e.g. "MHC"
 	// produces codes like "MHC-A3F7Z2". Defaults to "MHC". Set to "" for no
 	// prefix (codes will be plain 6-char alphanumeric strings).

@@ -323,6 +323,60 @@ func TestDecryptGroupText_Empty(t *testing.T) {
 	}
 }
 
+func TestNormaliseBrokerURL(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"mqtt://broker:1883", "tcp://broker:1883"},
+		{"mqtts://broker:8883", "ssl://broker:8883"},
+		{"tcp://broker:1883", "tcp://broker:1883"},
+		{"ssl://broker:8883", "ssl://broker:8883"},
+		{"ws://broker:80/mqtt", "ws://broker:80/mqtt"},
+		{"wss://collector1.example.nl:443", "wss://collector1.example.nl:443"},
+	}
+	for _, tt := range tests {
+		got := normaliseBrokerURL(tt.in)
+		if got != tt.want {
+			t.Errorf("normaliseBrokerURL(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestFirstBrokerURL_ConfigField(t *testing.T) {
+	cfg := &HealthCheckConfig{MQTTBroker: "wss://collector1.example.nl:443"}
+	got := firstBrokerURL(cfg)
+	if got != "wss://collector1.example.nl:443" {
+		t.Errorf("expected wss URL from config, got %q", got)
+	}
+}
+
+func TestFirstBrokerURL_NilConfig(t *testing.T) {
+	// nil config should return localhost fallback (env var not set in test)
+	t.Setenv("MQTT_BROKER", "")
+	got := firstBrokerURL(nil)
+	if got != "tcp://localhost:1883" {
+		t.Errorf("expected localhost fallback, got %q", got)
+	}
+}
+
+func TestFirstBrokerURL_EnvFallback(t *testing.T) {
+	t.Setenv("MQTT_BROKER", "wss://env-broker:443")
+	got := firstBrokerURL(&HealthCheckConfig{}) // empty MQTTBroker
+	if got != "wss://env-broker:443" {
+		t.Errorf("expected wss URL from env var, got %q", got)
+	}
+}
+
+func TestFirstBrokerURL_ConfigTakesPrecedenceOverEnv(t *testing.T) {
+	t.Setenv("MQTT_BROKER", "tcp://env-broker:1883")
+	cfg := &HealthCheckConfig{MQTTBroker: "wss://config-broker:443"}
+	got := firstBrokerURL(cfg)
+	if got != "wss://config-broker:443" {
+		t.Errorf("config MQTTBroker should take precedence over env var, got %q", got)
+	}
+}
+
 // TestChannelHashIsDeterministic verifies the same secret always gives the same hash byte.
 func TestChannelHashIsDeterministic(t *testing.T) {
 	secret := "aabbccddeeff00112233445566778899"

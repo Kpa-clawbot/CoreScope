@@ -468,17 +468,36 @@ func observerKeyFromTopic(topic string) string {
 }
 
 // firstBrokerURL returns the MQTT broker URL for the health subscription.
-// The server Config has no MQTT fields (owned by the ingestor), so we use the
-// MQTT_BROKER environment variable with a fallback to localhost.
-func firstBrokerURL(_ *Config) string {
-	if v := os.Getenv("MQTT_BROKER"); v != "" {
-		if strings.HasPrefix(v, "mqtt://") {
-			return "tcp://" + v[7:]
-		}
-		if strings.HasPrefix(v, "mqtts://") {
-			return "ssl://" + v[8:]
-		}
-		return v
+// Priority:
+//  1. hcfg.MQTTBroker (explicit config — recommended for wss:// brokers)
+//  2. MQTT_BROKER environment variable
+//  3. tcp://localhost:1883 fallback
+//
+// Supported schemes: tcp://, ssl://, ws://, wss://, mqtt://, mqtts://.
+// Paho MQTT natively handles ws:// and wss:// (WebSocket), so they are passed
+// through unchanged. mqtt:// and mqtts:// are normalised to tcp:// and ssl://.
+func firstBrokerURL(hcfg *HealthCheckConfig) string {
+	url := ""
+	if hcfg != nil && hcfg.MQTTBroker != "" {
+		url = hcfg.MQTTBroker
+	} else if v := os.Getenv("MQTT_BROKER"); v != "" {
+		url = v
 	}
-	return "tcp://localhost:1883"
+	if url == "" {
+		return "tcp://localhost:1883"
+	}
+	return normaliseBrokerURL(url)
+}
+
+// normaliseBrokerURL converts mqtt:// → tcp:// and mqtts:// → ssl://.
+// ws:// and wss:// are passed through as-is (paho supports WebSocket natively).
+func normaliseBrokerURL(url string) string {
+	switch {
+	case strings.HasPrefix(url, "mqtt://"):
+		return "tcp://" + url[7:]
+	case strings.HasPrefix(url, "mqtts://"):
+		return "ssl://" + url[8:]
+	default:
+		return url // tcp://, ssl://, ws://, wss:// — all valid for paho
+	}
 }
