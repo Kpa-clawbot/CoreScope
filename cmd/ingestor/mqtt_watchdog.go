@@ -14,6 +14,10 @@ import (
 // shift, infrequent enough not to spam ops chat.
 const livenessHeartbeatInterval = time.Hour
 
+// forceReconnectThrottle is the minimum interval between forced
+// reconnects on the SAME source. See processLivenessTransition.
+const forceReconnectThrottle = 60 * time.Second
+
 // LivenessKind enumerates the watchdog verdicts for a source. Edge-triggered
 // transitions use this to decide whether to emit (and what severity).
 type LivenessKind int
@@ -63,6 +67,22 @@ type SourceLivenessState struct {
 	StartedAt        int64 // atomic; unix seconds when the source was registered / last reconnected (transient-stall tracking)
 	LastAlertUnix    int64 // atomic; unix seconds of last emit (WARN or heartbeat); 0 means quiet
 	IsConnectedFn    func() bool
+	// ForceReconnectFn (#1335) is called by the watchdog when a source
+	// transitions INTO LivenessStalled. It must force the paho client
+	// to drop its current TCP socket and re-establish (typically
+	// client.Disconnect(250) followed by client.Connect()). Half-open
+	// TCP sockets (Azure NAT idle timeout) report IsConnected==true so
+	// paho's own auto-reconnect never fires; this is the recovery path.
+	// May be nil (tests, or sources registered before wiring); the
+	// watchdog must treat that as a safe no-op. Invocations are
+	// throttled at forceReconnectThrottle per source so a
+	// stall→reconnect→re-stall loop self-recovers without hammering
+	// the broker.
+	ForceReconnectFn func()
+	// LastForceReconnectUnix is the unix-seconds timestamp of the most
+	// recent forced reconnect for this source; the watchdog reads it
+	// to enforce forceReconnectThrottle. atomic.
+	LastForceReconnectUnix int64
 	// AttemptCount is incremented on every TCP/TLS connection attempt. Used
 	// by ConnectionAttemptHandler to log attempt # independent of paho's
 	// internal reconnect-loop state. atomic.
