@@ -4145,14 +4145,29 @@ func (s *PacketStore) RunEviction() int {
 	}
 
 	// Phase 3: chunked eviction — each iteration holds the write lock only
-	// for evictionChunkSize packets, then yields so readers can proceed.
-	// The inner evictStaleInternal re-evaluates the cutoff on every call so
-	// it naturally stops when memory and time thresholds are satisfied.
+	// for evictionChunkSize packets, then yields so readers can acquire RLock.
+	//
+	// IMPORTANT: the loop must not evict more than len(txIDs) packets total.
+	// txIDs was produced by evictionCandidateTxIDs() which applies a 25%
+	// safety cap. rpBatch only covers those txIDs; packets evicted beyond
+	// len(txIDs) would have missing resolved-pubkey data, leaving byNode and
+	// nodeHashes indexes stale. Stopping at len(txIDs) also restores the
+	// original intent of the safety cap: at most 25% of the store is removed
+	// per RunEviction call (≈ per ticker fire), preventing sudden large drops.
 	const evictionChunkSize = 2000
+	maxTotal := len(txIDs)
 	total := 0
-	for range 50 { // safety bound: at most 50 chunks (= 100 k packets)
+	for range 50 { // safety bound: never more than 50 lock acquisitions
+		if total >= maxTotal {
+			break
+		}
+		remaining := maxTotal - total
+		chunkCap := evictionChunkSize
+		if remaining < chunkCap {
+			chunkCap = remaining
+		}
 		s.mu.Lock()
-		n := s.evictStaleInternal(rpBatch, evictionChunkSize)
+		n := s.evictStaleInternal(rpBatch, chunkCap)
 		s.mu.Unlock()
 		total += n
 		if n == 0 {
