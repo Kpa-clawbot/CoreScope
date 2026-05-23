@@ -96,8 +96,7 @@ type Server struct {
 	perfHistoryPath string // derived from dbPath; empty = no persistence
 
 	// Absolute path to the public/static directory — set after filepath.Abs resolves
-	// the -public flag. Used by handleHealthShare to locate share.html without
-	// relying on a hard-coded relative path.
+	// the -public flag.
 	publicDir string
 
 	// Cached /api/health response — recomputed at most once every 5s.
@@ -116,12 +115,6 @@ type Server struct {
 	perfCachedAt  time.Time
 	perfComputing bool
 
-	// Health check subsystem
-	healthDB     *HealthDB
-	healthRL     *HealthRateLimiter
-	healthTokens *HealthTokenStore
-	healthMQTT   *HealthMQTTClient
-	healthObs    *ObserverRegistry // in-memory observer directory, shared with healthMQTT
 }
 
 // maxJSONBodyBytes caps the size of JSON request bodies on POST endpoints.

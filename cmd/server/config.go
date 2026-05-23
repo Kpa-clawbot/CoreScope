@@ -24,46 +24,11 @@ type AreaEntry struct {
 	LonMax  *float64     `json:"lonMax,omitempty"`
 }
 
-// MQTTSource mirrors the ingestor's MQTTSource so the shared config.json drives
-// both processes.  The server reads this only to pass sources to the health-check
-// MQTT client; it does not ingest packets itself.
-type MQTTSource struct {
-	Name               string   `json:"name"`
-	Broker             string   `json:"broker"`
-	Username           string   `json:"username,omitempty"`
-	Password           string   `json:"password,omitempty"`
-	RejectUnauthorized *bool    `json:"rejectUnauthorized,omitempty"`
-	Topics             []string `json:"topics"`
-	IATAFilter         []string `json:"iataFilter,omitempty"`
-	ConnectTimeoutSec  int      `json:"connectTimeoutSec,omitempty"`
-	Region             string   `json:"region,omitempty"`
-}
-
-// ConnectTimeoutOrDefault returns the per-source connect timeout in seconds,
-// defaulting to 10 if not configured (matches the ingestor convention).
-func (s MQTTSource) ConnectTimeoutOrDefault() int {
-	if s.ConnectTimeoutSec > 0 {
-		return s.ConnectTimeoutSec
-	}
-	return 10
-}
-
-// MQTTLegacy is the old single-broker config format, identical to the ingestor's.
-type MQTTLegacy struct {
-	Broker string `json:"broker"`
-	Topic  string `json:"topic"`
-}
-
 // Config mirrors the Node.js config.json structure (read-only fields).
 type Config struct {
 	Port    int    `json:"port"`
 	APIKey  string `json:"apiKey"`
 	DBPath  string `json:"dbPath"`
-
-	// MQTT source config — same fields as the ingestor so a shared config.json
-	// can point the health-check MQTT client at the right broker(s) automatically.
-	MQTT        *MQTTLegacy  `json:"mqtt,omitempty"`
-	MQTTSources []MQTTSource `json:"mqttSources,omitempty"`
 
 	// NodeBlacklist is a list of public keys to exclude from all API responses.
 	// Blacklisted nodes are hidden from node lists, search, detail, map, and stats.
@@ -157,7 +122,6 @@ type Config struct {
 	// on RateLimitConfig.
 	RateLimit *RateLimitConfig `json:"rateLimit,omitempty"`
 
-	HealthCheck *HealthCheckConfig `json:"cornscope_healthCheck,omitempty"`
 }
 
 // RateLimitConfig configures the per-IP token-bucket rate limiter. All limits
@@ -388,18 +352,10 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 		}
 		cfg.NormalizeTimestampConfig()
 		cfg.sanitizeCORS()
-		if cfg.HealthCheck == nil {
-			cfg.HealthCheck = &HealthCheckConfig{}
-		}
-		cfg.HealthCheck.applyDefaults()
 		return cfg, nil
 	}
 	cfg.NormalizeTimestampConfig()
 	cfg.sanitizeCORS()
-	if cfg.HealthCheck == nil {
-		cfg.HealthCheck = &HealthCheckConfig{}
-	}
-	cfg.HealthCheck.applyDefaults()
 	return cfg, nil // defaults
 }
 
@@ -497,51 +453,6 @@ func (h HealthThresholds) ToClientMs() map[string]int {
 		"nodeDegradedMs":  int(h.NodeDegradedHours * hourMs),
 		"nodeSilentMs":    int(h.NodeSilentHours * hourMs),
 	}
-}
-
-// ResolvedMQTTSources returns the MQTT sources the health-check client should
-// connect to.  Priority:
-//  1. mqttSources array (multi-broker)
-//  2. legacy mqtt.broker single-broker field
-//  3. MQTT_BROKER env var
-//  4. empty (caller falls back to healthCheck.mqttBroker or localhost)
-//
-// URL schemes are normalised: mqtt:// → tcp://, mqtts:// → ssl://.
-// wss:// and ws:// are passed through unchanged (paho supports WebSocket).
-func (c *Config) ResolvedMQTTSources() []MQTTSource {
-	if len(c.MQTTSources) > 0 {
-		sources := make([]MQTTSource, len(c.MQTTSources))
-		copy(sources, c.MQTTSources)
-		for i := range sources {
-			sources[i].Broker = normaliseMQTTScheme(sources[i].Broker)
-		}
-		return sources
-	}
-	if c.MQTT != nil && c.MQTT.Broker != "" {
-		return []MQTTSource{{
-			Name:   "default",
-			Broker: normaliseMQTTScheme(c.MQTT.Broker),
-			Topics: []string{"meshcore/#"},
-		}}
-	}
-	if v := os.Getenv("MQTT_BROKER"); v != "" {
-		return []MQTTSource{{
-			Name:   "env",
-			Broker: normaliseMQTTScheme(v),
-			Topics: []string{"meshcore/#"},
-		}}
-	}
-	return nil
-}
-
-func normaliseMQTTScheme(url string) string {
-	if strings.HasPrefix(url, "mqtt://") {
-		return "tcp://" + url[7:]
-	}
-	if strings.HasPrefix(url, "mqtts://") {
-		return "ssl://" + url[8:]
-	}
-	return url
 }
 
 func (c *Config) ResolveDBPath(baseDir string) string {

@@ -394,71 +394,6 @@ func main() {
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
-	// Health check subsystem
-	var stopHealthPurge func()
-	if cfg.HealthCheck != nil {
-		hdbPath := healthDBPath(srv.dbPath)
-		hdb, hdbErr := OpenHealthDB(hdbPath)
-		if hdbErr != nil {
-			log.Printf("[health] warning: could not open health DB at %s: %v (health check disabled)", hdbPath, hdbErr)
-		} else {
-			srv.healthDB = hdb
-			srv.healthRL = NewHealthRateLimiter(cfg.HealthCheck.RateLimit.WindowSeconds, cfg.HealthCheck.RateLimit.MaxRequests)
-			srv.healthTokens = NewHealthTokenStore()
-
-			// Build the in-memory observer registry (seeded from KnownObservers).
-			srv.healthObs = NewObserverRegistry(cfg.HealthCheck)
-
-			// Derive channel key from the hex secret (nil-safe — logs warning if absent).
-			var chanKey *ChannelKey
-			if cfg.HealthCheck.TestChannelSecret != "" {
-				var ckErr error
-				chanKey, ckErr = NewChannelKey(cfg.HealthCheck.TestChannelSecret)
-				if ckErr != nil {
-					log.Printf("[health] warning: invalid testChannelSecret (%v) — decryption disabled", ckErr)
-				}
-			} else {
-				log.Printf("[health] warning: testChannelSecret not configured — health check will not decrypt packets")
-			}
-
-			srv.healthMQTT = NewHealthMQTTClient(cfg.HealthCheck, hdb, hub, srv.healthObs, chanKey)
-			// Connect to all configured MQTT sources so packets seen by any
-			// observer on any broker are captured.  Fall back to the health-
-			// check-specific mqttBroker field (or localhost) when no global
-			// mqttSources / mqtt section is present in config.json.
-			mqttSources := cfg.ResolvedMQTTSources()
-			if len(mqttSources) == 0 {
-				mqttSources = []MQTTSource{{
-					Name:   "default",
-					Broker: firstBrokerURL(cfg.HealthCheck),
-					Topics: []string{"meshcore/#"},
-				}}
-			}
-			go srv.healthMQTT.Start(mqttSources)
-			purgeTicker := time.NewTicker(time.Hour)
-			purgeDone := make(chan struct{})
-			stopHealthPurge = func() {
-				purgeTicker.Stop()
-				close(purgeDone)
-			}
-			go func() {
-				for {
-					select {
-					case <-purgeDone:
-						return
-					case <-purgeTicker.C:
-						if err := hdb.PurgeExpired(); err != nil {
-							log.Printf("[health] purge error: %v", err)
-						}
-					}
-				}
-			}()
-			defer hdb.Close()
-			log.Printf("[health] health check DB: %s", hdbPath)
-		}
-		srv.registerHealthRoutes(router)
-	}
-
 	// WebSocket endpoint
 	router.HandleFunc("/ws", hub.ServeWS)
 
@@ -583,20 +518,6 @@ Frontend not found. API available at /api/
 		// reaches into SQLite has finished.
 		if stopAnalyticsRecomp != nil {
 			stopAnalyticsRecomp()
-		}
-
-		// 1c. Stop health check subsystem
-		if stopHealthPurge != nil {
-			stopHealthPurge()
-		}
-		if srv.healthMQTT != nil {
-			srv.healthMQTT.Disconnect()
-		}
-		if srv.healthRL != nil {
-			srv.healthRL.Stop()
-		}
-		if srv.healthTokens != nil {
-			srv.healthTokens.Stop()
 		}
 
 		// 2. Gracefully drain HTTP connections (up to 15s)
