@@ -47,6 +47,12 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[ingestor] ")
 
+	// Route paho's internal ERROR and WARN loggers to our structured log so
+	// WSS handshake failures, TLS errors, and CONNACK rejections are visible
+	// instead of being silently swallowed by the default NOOPLogger (#1298).
+	mqtt.ERROR = log.New(os.Stderr, "[paho-error] ", log.LstdFlags)
+	mqtt.WARN = log.New(os.Stderr, "[paho-warn] ", log.LstdFlags)
+
 	cfg, err := LoadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -429,7 +435,10 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 	}
 	if source.RejectUnauthorized != nil && !*source.RejectUnauthorized {
 		opts.SetTLSConfig(&tls.Config{InsecureSkipVerify: true})
-	} else if strings.HasPrefix(source.Broker, "ssl://") {
+	} else if strings.HasPrefix(source.Broker, "ssl://") || strings.HasPrefix(source.Broker, "wss://") {
+		// Explicitly set an empty TLS config for TLS-based transports so
+		// paho/gorilla always uses the system root CA pool rather than
+		// falling back to library defaults (#1298).
 		opts.SetTLSConfig(&tls.Config{})
 	}
 	return opts

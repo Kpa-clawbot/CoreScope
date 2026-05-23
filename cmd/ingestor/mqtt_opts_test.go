@@ -74,3 +74,17 @@ func TestBuildMQTTOpts_TLS_SSL_Prefix(t *testing.T) {
 		t.Error("InsecureSkipVerify should be false by default")
 	}
 }
+
+func TestBuildMQTTOpts_TLS_WSS_Prefix(t *testing.T) {
+	source := MQTTSource{
+		Broker: "wss://broker:443",
+	}
+	opts := buildMQTTOpts(source)
+
+	if opts.TLSConfig == nil {
+		t.Fatal("TLSConfig should be set for wss:// brokers (#1298)")
+	}
+	if opts.TLSConfig.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify should be false by default")
+	}
+}
