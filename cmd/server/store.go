@@ -3770,9 +3770,17 @@ func (s *PacketStore) evictionCandidateTxIDs() []int {
 		// trackedBytes underestimates actual heap by 2–3× (map overhead, GC
 		// metadata, analytics caches are not tracked), so the trackedBytes-only
 		// check silently fails when the process is well over budget.
+		//
+		// HeapAlloc includes the entire process heap — not just the packet store.
+		// Analytics caches, observer registry, and HTTP buffers add a baseline
+		// overhead that is invisible to trackedBytes. A 15 % uplift on the heap
+		// trigger gives those allocations room to exist without prematurely
+		// evicting packets; at 1.15× the trigger still sits at 77 % of GOMEMLIMIT
+		// (which is set to 1.5× maxMemoryMB), well within the safety margin.
+		const heapTriggerFactor = 1.15
 		heapMB := s.estimatedMemoryMB()
 		trackedOver := s.trackedBytes > highWatermark
-		heapOver := heapMB > float64(s.maxMemoryMB)
+		heapOver := heapMB > float64(s.maxMemoryMB)*heapTriggerFactor
 		if (trackedOver || heapOver) && len(s.packets) > 0 {
 			memCutoff := cutoffIdx
 			if trackedOver {
@@ -3864,12 +3872,18 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string, maxChunk int)
 	// = 85% (target). Safety cap: never evict more than 25% in a single pass.
 	// trackedBytes underestimates actual heap by 2–3× so the heap check catches
 	// cases the trackedBytes check misses entirely.
+	//
+	// The heap trigger uses a 15 % uplift (heapTriggerFactor = 1.15) so that
+	// process-wide baseline allocations (analytics caches, observer registry,
+	// HTTP buffers) do not prematurely starve the packet store of its configured
+	// budget — matching the same constant used in evictionCandidateTxIDs.
 	if s.maxMemoryMB > 0 {
+		const heapTriggerFactor = 1.15
 		highWatermark := int64(s.maxMemoryMB) * 1048576
 		lowWatermark := int64(float64(highWatermark) * 0.85)
 		heapMB := s.estimatedMemoryMB()
 		trackedOver := s.trackedBytes > highWatermark
-		heapOver := heapMB > float64(s.maxMemoryMB)
+		heapOver := heapMB > float64(s.maxMemoryMB)*heapTriggerFactor
 		if (trackedOver || heapOver) && len(s.packets) > 0 {
 			memCutoff := cutoffIdx
 			if trackedOver {

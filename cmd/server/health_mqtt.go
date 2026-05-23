@@ -161,9 +161,26 @@ func (h *HealthMQTTClient) connectSource(src MQTTSource) {
 				tok.Wait()
 				if err := tok.Error(); err != nil {
 					log.Printf("[health-mqtt] subscribe error topic=%s source=%s: %v", topic, name, err)
-				} else {
-					log.Printf("[health-mqtt] subscribed to %s on %s", topic, name)
+					continue
 				}
+				// Check SUBACK return codes. A broker that accepts the CONNECT
+				// but denies SUBSCRIBE (ACL, auth scope, etc.) returns 0x80 in
+				// the SUBACK payload. Paho stores this in Result() but does NOT
+				// set token.Error(), so the caller would silently believe the
+				// subscription succeeded while receiving zero messages (#1298).
+				if subToken, ok := tok.(*mqtt.SubscribeToken); ok {
+					denied := false
+					for t, code := range subToken.Result() {
+						if code == 0x80 {
+							log.Printf("[health-mqtt] subscribe DENIED by broker for %s on %s (SUBACK 0x80) — check ACL / credentials", t, name)
+							denied = true
+						}
+					}
+					if denied {
+						continue
+					}
+				}
+				log.Printf("[health-mqtt] subscribed to %s on %s", topic, name)
 			}
 		}).
 		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
@@ -176,10 +193,15 @@ func (h *HealthMQTTClient) connectSource(src MQTTSource) {
 	if src.Password != "" {
 		opts.SetPassword(src.Password)
 	}
-	// When rejectUnauthorized is explicitly false, skip TLS certificate verification.
-	// This mirrors the ingestor behaviour and lets self-signed certs work.
+	// TLS configuration — mirrors the ingestor's buildMQTTOpts logic (#1298):
+	//  - rejectUnauthorized=false  → skip certificate verification (self-signed certs)
+	//  - ssl:// or wss://          → explicit empty tls.Config so paho/gorilla always
+	//                                uses the system root CA pool instead of falling
+	//                                back to library defaults (unreliable in containers)
 	if src.RejectUnauthorized != nil && !*src.RejectUnauthorized {
 		opts.SetTLSConfig(&tls.Config{InsecureSkipVerify: true}) //nolint:gosec // operator opt-in
+	} else if strings.HasPrefix(brokerURL, "ssl://") || strings.HasPrefix(brokerURL, "wss://") {
+		opts.SetTLSConfig(&tls.Config{})
 	}
 
 	client := mqtt.NewClient(opts)
