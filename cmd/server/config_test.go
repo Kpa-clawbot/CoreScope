@@ -387,3 +387,71 @@ func TestObserverDaysOrDefault(t *testing.T) {
 		})
 	}
 }
+
+func TestResolvedMQTTSources_MQTTSourcesArray(t *testing.T) {
+	c := &Config{
+		MQTTSources: []MQTTSource{
+			{Name: "broker1", Broker: "wss://collector1.example.nl:443", Topics: []string{"meshcore/#"}},
+			{Name: "broker2", Broker: "mqtt://broker2.example.nl:1883", Topics: []string{"meshcore/#"}},
+		},
+	}
+	got := c.ResolvedMQTTSources()
+	if len(got) != 2 {
+		t.Fatalf("want 2 sources, got %d", len(got))
+	}
+	if got[0].Broker != "wss://collector1.example.nl:443" {
+		t.Errorf("source[0].Broker = %q, want wss://...", got[0].Broker)
+	}
+	if got[1].Broker != "tcp://broker2.example.nl:1883" {
+		t.Errorf("source[1].Broker = %q, want tcp:// (normalised from mqtt://)", got[1].Broker)
+	}
+}
+
+func TestResolvedMQTTSources_LegacyMQTT(t *testing.T) {
+	c := &Config{
+		MQTT: &MQTTLegacy{Broker: "mqtts://legacy.example.nl:8883"},
+	}
+	got := c.ResolvedMQTTSources()
+	if len(got) != 1 {
+		t.Fatalf("want 1 source, got %d", len(got))
+	}
+	if got[0].Broker != "ssl://legacy.example.nl:8883" {
+		t.Errorf("Broker = %q, want ssl:// (normalised from mqtts://)", got[0].Broker)
+	}
+	if got[0].Name != "default" {
+		t.Errorf("Name = %q, want default", got[0].Name)
+	}
+}
+
+func TestResolvedMQTTSources_EnvFallback(t *testing.T) {
+	t.Setenv("MQTT_BROKER", "tcp://env-broker.example.nl:1883")
+	c := &Config{}
+	got := c.ResolvedMQTTSources()
+	if len(got) != 1 {
+		t.Fatalf("want 1 source, got %d", len(got))
+	}
+	if got[0].Broker != "tcp://env-broker.example.nl:1883" {
+		t.Errorf("Broker = %q, want tcp://env-broker.example.nl:1883", got[0].Broker)
+	}
+}
+
+func TestResolvedMQTTSources_Empty(t *testing.T) {
+	c := &Config{}
+	got := c.ResolvedMQTTSources()
+	if len(got) != 0 {
+		t.Fatalf("want empty slice, got %v", got)
+	}
+}
+
+func TestResolvedMQTTSources_MQTTSourcesTakesPrecedenceOverLegacy(t *testing.T) {
+	c := &Config{
+		MQTT: &MQTTLegacy{Broker: "tcp://legacy.example.nl:1883"},
+		MQTTSources: []MQTTSource{
+			{Name: "primary", Broker: "wss://primary.example.nl:443", Topics: []string{"meshcore/#"}},
+		},
+	}
+	got := c.ResolvedMQTTSources()
+	if len(got) != 1 || got[0].Name != "primary" {
+		t.Errorf("mqttSources should take precedence over legacy mqtt; got %v", got)
+	}
+}

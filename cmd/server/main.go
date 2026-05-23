@@ -411,7 +411,19 @@ func main() {
 			}
 
 			srv.healthMQTT = NewHealthMQTTClient(cfg.HealthCheck, hdb, hub, srv.healthObs, chanKey)
-			go srv.healthMQTT.Start(firstBrokerURL(cfg.HealthCheck))
+			// Connect to all configured MQTT sources so packets seen by any
+			// observer on any broker are captured.  Fall back to the health-
+			// check-specific mqttBroker field (or localhost) when no global
+			// mqttSources / mqtt section is present in config.json.
+			mqttSources := cfg.ResolvedMQTTSources()
+			if len(mqttSources) == 0 {
+				mqttSources = []MQTTSource{{
+					Name:   "default",
+					Broker: firstBrokerURL(cfg.HealthCheck),
+					Topics: []string{"meshcore/#"},
+				}}
+			}
+			go srv.healthMQTT.Start(mqttSources)
 			purgeTicker := time.NewTicker(time.Hour)
 			purgeDone := make(chan struct{})
 			stopHealthPurge = func() {

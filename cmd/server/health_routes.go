@@ -20,6 +20,29 @@ func effectiveCodePrefix(cfg *HealthCheckConfig) string {
 	return cfg.CodePrefix
 }
 
+// mqttFirstBroker returns the first configured broker URL for the bootstrap
+// response, used by the frontend for display purposes.  Falls back to
+// firstBrokerURL when the client has no sources stored yet.
+func mqttFirstBroker(h *HealthMQTTClient, hcfg *HealthCheckConfig) string {
+	if h != nil {
+		if urls := h.BrokerURLs(); len(urls) > 0 {
+			return urls[0]
+		}
+	}
+	return firstBrokerURL(hcfg)
+}
+
+// mqttAllBrokers returns the broker URLs of every configured source so the
+// frontend can show all active connections in the status panel.
+func mqttAllBrokers(h *HealthMQTTClient, hcfg *HealthCheckConfig) []string {
+	if h != nil {
+		if urls := h.BrokerURLs(); len(urls) > 0 {
+			return urls
+		}
+	}
+	return []string{firstBrokerURL(hcfg)}
+}
+
 func (s *Server) registerHealthRoutes(r *mux.Router) {
 	r.HandleFunc("/api/health/bootstrap", s.handleHealthBootstrap).Methods("GET", "OPTIONS")
 	r.HandleFunc("/api/health/verify-turnstile", s.handleHealthVerifyTurnstile).Methods("POST", "OPTIONS")
@@ -160,7 +183,7 @@ func (s *Server) handleHealthBootstrap(w http.ResponseWriter, r *http.Request) {
 		defaultObserverKeys = []string{}
 	}
 
-	mqttConnected := s.healthMQTT != nil && s.healthMQTT.client != nil && s.healthMQTT.client.IsConnected()
+	mqttConnected := s.healthMQTT != nil && s.healthMQTT.IsAnyConnected()
 	decryptionConfigured := s.healthMQTT != nil && s.healthMQTT.chanKey != nil
 
 	resp := map[string]interface{}{
@@ -175,7 +198,8 @@ func (s *Server) handleHealthBootstrap(w http.ResponseWriter, r *http.Request) {
 		},
 		"mqtt": map[string]interface{}{
 			"connected": mqttConnected,
-			"broker":    firstBrokerURL(hcfg),
+			"broker":    mqttFirstBroker(s.healthMQTT, hcfg),
+			"brokers":   mqttAllBrokers(s.healthMQTT, hcfg),
 		},
 		"turnstile": map[string]interface{}{
 			"enabled": hcfg.Turnstile.Enabled,

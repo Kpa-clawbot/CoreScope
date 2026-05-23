@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -45,18 +46,25 @@ func parseEnvelope(payload []byte) (*mqttEnvelope, bool) {
 // group-text packets against active health-check sessions. It also maintains
 // the ObserverRegistry by processing every MQTT packet (not just health-check
 // ones), so the bootstrap observer directory stays current.
+//
+// It connects to every source in the sources list (typically all mqttSources
+// from config.json) so that packets seen by any observer on any broker are
+// captured.
 type HealthMQTTClient struct {
-	cfg      *HealthCheckConfig
-	hdb      *HealthDB
-	hub      *Hub
-	obs      *ObserverRegistry
-	chanKey  *ChannelKey // nil if secret not configured
-	client   mqtt.Client
+	cfg     *HealthCheckConfig
+	hdb     *HealthDB
+	hub     *Hub
+	obs     *ObserverRegistry
+	chanKey *ChannelKey // nil if secret not configured
 
-	mu          sync.Mutex
-	sessions    map[string]*HealthSession // code → session (active cache)
-	hashToCode  map[string]string         // messageHash → session code (dedup)
-	done        chan struct{}
+	clientsMu sync.Mutex
+	clients   []mqtt.Client
+	sources   []MQTTSource // stored at Start() time for introspection
+
+	mu         sync.Mutex
+	sessions   map[string]*HealthSession // code → session (active cache)
+	hashToCode map[string]string         // messageHash → session code (dedup)
+	done       chan struct{}
 }
 
 // NewHealthMQTTClient creates a client. Call Start to connect.
@@ -74,6 +82,29 @@ func NewHealthMQTTClient(cfg *HealthCheckConfig, hdb *HealthDB, hub *Hub, obs *O
 	}
 }
 
+// IsAnyConnected returns true if at least one broker connection is established.
+func (h *HealthMQTTClient) IsAnyConnected() bool {
+	h.clientsMu.Lock()
+	defer h.clientsMu.Unlock()
+	for _, c := range h.clients {
+		if c.IsConnected() {
+			return true
+		}
+	}
+	return false
+}
+
+// BrokerURLs returns the broker URL of every configured source (in order).
+func (h *HealthMQTTClient) BrokerURLs() []string {
+	h.clientsMu.Lock()
+	defer h.clientsMu.Unlock()
+	urls := make([]string, 0, len(h.sources))
+	for _, src := range h.sources {
+		urls = append(urls, src.Broker)
+	}
+	return urls
+}
+
 // RegisterSession adds (or refreshes) a session in the cache immediately after
 // creation so packets can be matched before the next 30 s refresh tick.
 func (h *HealthMQTTClient) RegisterSession(sess *HealthSession) {
@@ -82,50 +113,104 @@ func (h *HealthMQTTClient) RegisterSession(sess *HealthSession) {
 	h.mu.Unlock()
 }
 
-// Start connects to the MQTT broker and starts the subscription. Blocks until
-// the initial connection attempt completes, then returns.
-func (h *HealthMQTTClient) Start(brokerURL string) {
-	opts := mqtt.NewClientOptions().
-		AddBroker(brokerURL).
-		SetClientID(fmt.Sprintf("corescope-health-%d", time.Now().UnixNano())).
-		SetAutoReconnect(true).
-		SetConnectRetry(true).
-		SetConnectRetryInterval(5 * time.Second).
-		SetOnConnectHandler(func(c mqtt.Client) {
-			log.Printf("[health-mqtt] connected to %s", brokerURL)
-			tok := c.Subscribe("meshcore/#", 0, h.handleMessage)
-			tok.Wait()
-			if err := tok.Error(); err != nil {
-				log.Printf("[health-mqtt] subscribe error: %v", err)
-			} else {
-				log.Printf("[health-mqtt] subscribed to meshcore/#")
-			}
-		}).
-		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
-			log.Printf("[health-mqtt] connection lost: %v — will reconnect", err)
-		})
+// Start connects to every source in sources and starts subscriptions. It spawns
+// one goroutine per source, waits for each initial connect attempt, then returns.
+// Pass a single-element slice for backward-compatible single-broker operation.
+func (h *HealthMQTTClient) Start(sources []MQTTSource) {
+	h.clientsMu.Lock()
+	h.sources = sources
+	h.clientsMu.Unlock()
 
-	log.Printf("[health-mqtt] connecting to %s", brokerURL)
-	h.client = mqtt.NewClient(opts)
-	tok := h.client.Connect()
-	tok.Wait()
-	if err := tok.Error(); err != nil {
-		log.Printf("[health-mqtt] initial connect to %s failed: %v — will keep retrying", brokerURL, err)
+	var wg sync.WaitGroup
+	for _, src := range sources {
+		wg.Add(1)
+		go func(s MQTTSource) {
+			defer wg.Done()
+			h.connectSource(s)
+		}(src)
 	}
+	wg.Wait()
 
 	h.refreshSessions()
 	go h.expiryLoop()
 }
 
-// Disconnect stops background goroutines and disconnects the MQTT client.
+// connectSource creates an MQTT client for src, registers it, and connects.
+// It blocks until the initial connect attempt completes (success or failure).
+func (h *HealthMQTTClient) connectSource(src MQTTSource) {
+	topics := src.Topics
+	if len(topics) == 0 {
+		topics = []string{"meshcore/#"}
+	}
+	brokerURL := src.Broker
+	name := src.Name
+	if name == "" {
+		name = brokerURL
+	}
+
+	opts := mqtt.NewClientOptions().
+		AddBroker(brokerURL).
+		SetClientID(fmt.Sprintf("corescope-health-%s-%d", name, time.Now().UnixNano())).
+		SetAutoReconnect(true).
+		SetConnectRetry(true).
+		SetConnectRetryInterval(5 * time.Second).
+		SetOnConnectHandler(func(c mqtt.Client) {
+			log.Printf("[health-mqtt] connected to %s (%s)", brokerURL, name)
+			for _, topic := range topics {
+				tok := c.Subscribe(topic, 0, h.handleMessage)
+				tok.Wait()
+				if err := tok.Error(); err != nil {
+					log.Printf("[health-mqtt] subscribe error topic=%s source=%s: %v", topic, name, err)
+				} else {
+					log.Printf("[health-mqtt] subscribed to %s on %s", topic, name)
+				}
+			}
+		}).
+		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
+			log.Printf("[health-mqtt] connection lost to %s (%s): %v — will reconnect", brokerURL, name, err)
+		})
+
+	if src.Username != "" {
+		opts.SetUsername(src.Username)
+	}
+	if src.Password != "" {
+		opts.SetPassword(src.Password)
+	}
+	// When rejectUnauthorized is explicitly false, skip TLS certificate verification.
+	// This mirrors the ingestor behaviour and lets self-signed certs work.
+	if src.RejectUnauthorized != nil && !*src.RejectUnauthorized {
+		opts.SetTLSConfig(&tls.Config{InsecureSkipVerify: true}) //nolint:gosec // operator opt-in
+	}
+
+	client := mqtt.NewClient(opts)
+
+	h.clientsMu.Lock()
+	h.clients = append(h.clients, client)
+	h.clientsMu.Unlock()
+
+	log.Printf("[health-mqtt] connecting to %s (%s)", brokerURL, name)
+	tok := client.Connect()
+	tok.Wait()
+	if err := tok.Error(); err != nil {
+		log.Printf("[health-mqtt] initial connect to %s (%s) failed: %v — will keep retrying", brokerURL, name, err)
+	}
+}
+
+// Disconnect stops background goroutines and disconnects all MQTT clients.
 func (h *HealthMQTTClient) Disconnect() {
 	select {
 	case <-h.done:
 	default:
 		close(h.done)
 	}
-	if h.client != nil && h.client.IsConnected() {
-		h.client.Disconnect(500)
+	h.clientsMu.Lock()
+	clients := make([]mqtt.Client, len(h.clients))
+	copy(clients, h.clients)
+	h.clientsMu.Unlock()
+	for _, c := range clients {
+		if c != nil && c.IsConnected() {
+			c.Disconnect(500)
+		}
 	}
 }
 
