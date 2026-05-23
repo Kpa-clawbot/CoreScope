@@ -1006,6 +1006,7 @@
           <div class="live-header-critical" data-live-header-critical>
             <span class="live-beacon" aria-label="WebSocket connection beacon"></span>
             <div class="live-stat-pill live-stat-pill--critical"><span id="livePktCount">0</span> pkts</div>
+            <button class="live-dark-toggle" data-live-dark-toggle aria-label="Toggle dark mode">☀️</button>
           </div>
           <!-- #1234: stats row promoted to a direct child of .live-header so
                the counters are always visible inline on mobile (single-row
@@ -1212,6 +1213,17 @@
     }
 
     map.on('zoomend', rescaleMarkers);
+
+    // Dark mode toggle in live-header-critical (top-nav is hidden on mobile /live)
+    const liveDarkToggle = document.querySelector('[data-live-dark-toggle]');
+    if (liveDarkToggle) {
+      liveDarkToggle.textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? '🌙' : '☀️';
+      liveDarkToggle.addEventListener('click', () => {
+        const realToggle = document.getElementById('darkModeToggle');
+        if (realToggle && !realToggle.disabled) realToggle.click();
+        liveDarkToggle.textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? '🌙' : '☀️';
+      });
+    }
 
     // Heat map toggle — persist in localStorage
     const liveHeatEl = document.getElementById('liveHeatToggle');
@@ -3098,9 +3110,13 @@
         document.documentElement.setAttribute('data-theme', 'dark');
         const dt = document.getElementById('darkModeToggle');
         if (dt) { dt.textContent = '🌙'; dt.disabled = true; }
+        const ldt = document.querySelector('[data-live-dark-toggle]');
+        if (ldt) { ldt.textContent = '🌙'; ldt.disabled = true; }
       } else {
         const dt = document.getElementById('darkModeToggle');
         if (dt) dt.disabled = true;
+        const ldt = document.querySelector('[data-live-dark-toggle]');
+        if (ldt) ldt.disabled = true;
       }
       container.classList.add('matrix-theme');
       if (!document.getElementById('matrixScanlines')) {
@@ -3126,10 +3142,14 @@
         localStorage.setItem('meshcore-theme', prevTheme);
         const dt = document.getElementById('darkModeToggle');
         if (dt) { dt.textContent = prevTheme === 'dark' ? '🌙' : '☀️'; dt.disabled = false; }
+        const ldt = document.querySelector('[data-live-dark-toggle]');
+        if (ldt) { ldt.textContent = prevTheme === 'dark' ? '🌙' : '☀️'; ldt.disabled = false; }
         delete container.dataset.matrixPrevTheme;
       } else {
         const dt = document.getElementById('darkModeToggle');
         if (dt) dt.disabled = false;
+        const ldt = document.querySelector('[data-live-dark-toggle]');
+        if (ldt) ldt.disabled = false;
       }
       for (const [key, marker] of Object.entries(nodeMarkers)) {
         if (marker._matrixPrevColor) {

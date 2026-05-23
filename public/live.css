@@ -121,7 +121,8 @@
    operability rule). Visible glyph stays small (decorative); transparent
    padding expands the hit area without changing the visual chrome. */
 .live-header-toggle,
-.live-controls-toggle {
+.live-controls-toggle,
+.live-dark-toggle {
   display: none;
   align-items: center;
   justify-content: center;
@@ -141,13 +142,19 @@
   flex-shrink: 0;
 }
 .live-header-toggle:hover,
-.live-controls-toggle:hover {
+.live-controls-toggle:hover,
+.live-dark-toggle:hover {
   background: color-mix(in srgb, var(--text) 14%, transparent);
 }
 .live-header-toggle:focus-visible,
-.live-controls-toggle:focus-visible {
+.live-controls-toggle:focus-visible,
+.live-dark-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+.live-dark-toggle:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .live-title {
@@ -459,7 +466,8 @@
 
   /* Show toggle buttons */
   .live-header-toggle,
-  .live-controls-toggle { display: inline-flex; }
+  .live-controls-toggle,
+  .live-dark-toggle { display: inline-flex; }
 
   /* When collapsed, hide the body */
   .live-header.is-collapsed .live-header-body,
@@ -561,7 +569,8 @@
    * strip. Tap target stays ≥40px (above WCAG 24px minimum, within #1060
    * spirit). The header chart-icon toggle is fully removed on mobile so
    * the gear is the only persistent action button. */
-  .live-controls-toggle {
+  .live-controls-toggle,
+  .live-dark-toggle {
     min-width: 36px; min-height: 36px;
     width: 36px; height: 36px;
     padding: 6px;
