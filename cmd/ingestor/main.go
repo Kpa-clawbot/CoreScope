@@ -276,6 +276,18 @@ func main() {
 		// Registration BEFORE Connect so the attempt counter is available
 		// to OnConnectAttempt on the very first dial.
 		liveness.IsConnectedFn = client.IsConnected
+		// #1335: wire force-reconnect so the watchdog can drop a
+		// half-open TCP socket and re-dial when paho.IsConnected==true
+		// but no messages have flowed past the stall threshold. Throttled
+		// per source by the watchdog itself (forceReconnectThrottle).
+		// Disconnect(250) gives in-flight publishes 250ms to drain;
+		// Connect() returns immediately and paho's reconnect machinery
+		// takes over from there. Captured-by-value `client` is the same
+		// pointer used everywhere else for this source.
+		liveness.ForceReconnectFn = func() {
+			client.Disconnect(250)
+			client.Connect()
+		}
 		// PR #1216 r2 item 3: tag collisions used to log.Fatalf, which
 		// killed the entire ingestor over one config typo and recreated
 		// the #1212 total-ingest-stop class this PR exists to prevent.
@@ -371,7 +383,16 @@ func buildMQTTOpts(source MQTTSource) *mqtt.ClientOptions {
 		SetOrderMatters(true).
 		SetMaxReconnectInterval(30 * time.Second).
 		SetConnectTimeout(10 * time.Second).
-		SetWriteTimeout(10 * time.Second)
+		SetWriteTimeout(10 * time.Second).
+		// #1335: TCP-level keepalive surfaces a half-open socket within
+		// ~30-60s instead of waiting for the application-level watchdog
+		// (5m) to notice no messages. paho's MQTT PINGREQ uses this
+		// interval too — if the broker's PINGRESP doesn't arrive,
+		// ConnectionLost fires and auto-reconnect kicks in. Was unset
+		// (paho default 30s actually — making this explicit so it can't
+		// drift, and so operators reading the code know it's intentional
+		// per the #1335 RCA).
+		SetKeepAlive(30 * time.Second)
 
 	opts.SetConnectionAttemptHandler(func(broker *url.URL, tlsCfg *tls.Config) *tls.Config {
 		// Look up the per-source liveness state (registered in main) so we

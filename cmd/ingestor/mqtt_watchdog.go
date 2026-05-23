@@ -292,12 +292,30 @@ func processLivenessTransition(s *SourceLivenessState, kind LivenessKind, msg st
 			// First detection — fire WARN edge.
 			emit(msg)
 			atomic.StoreInt64(&s.LastAlertUnix, now.Unix())
+			// #1335: ONLY LivenessStalled (paho reports connected but no
+			// messages past threshold — classic half-open TCP) gets
+			// force-reconnected. LivenessNeverReceived is almost always
+			// an ACL deny / wrong channel hash — a new TCP socket won't
+			// fix it and would just churn the broker. The distinct
+			// "NEVER received" alarm is the right operator signal for
+			// that class.
+			if kind == LivenessStalled {
+				maybeForceReconnect(s, now, emit)
+			}
 			return
 		}
 		// Already alerted; only re-emit on heartbeat interval to avoid log flood.
 		if now.Sub(time.Unix(lastAlert, 0)) >= livenessHeartbeatInterval {
 			emit(fmt.Sprintf("MQTT [%s] WATCHDOG heartbeat: still stalled — %s", s.Tag, msg))
 			atomic.StoreInt64(&s.LastAlertUnix, now.Unix())
+			// Heartbeat re-emit on a still-Stalled source: try another
+			// force-reconnect IF the throttle window has elapsed. Under
+			// a persistent broker issue this caps at one attempt per
+			// heartbeat (1h) — orders of magnitude under any rate
+			// limit and well within "don't hammer the broker".
+			if kind == LivenessStalled {
+				maybeForceReconnect(s, now, emit)
+			}
 		}
 	case LivenessOK:
 		if lastAlert != 0 {
@@ -312,5 +330,33 @@ func processLivenessTransition(s *SourceLivenessState, kind LivenessKind, msg st
 		// the source comes back stalled. Clearing the cooldown here
 		// would mean a flapping source spams the WARN every cycle.
 	}
+}
+
+// maybeForceReconnect invokes ForceReconnectFn IFF (a) one is wired and
+// (b) the throttle window (forceReconnectThrottle) has elapsed since
+// the most recent forced reconnect for this source. Logs WATCHDOG
+// telemetry before/after so operators can correlate the reconnect with
+// downstream paho ConnectionAttempt/OnConnect lines.
+func maybeForceReconnect(s *SourceLivenessState, now time.Time, emit func(...any)) {
+	if s.ForceReconnectFn == nil {
+		return
+	}
+	lastForce := atomic.LoadInt64(&s.LastForceReconnectUnix)
+	if lastForce != 0 && now.Sub(time.Unix(lastForce, 0)) < forceReconnectThrottle {
+		emit(fmt.Sprintf("MQTT [%s] WATCHDOG suppressing forced reconnect (last attempt %s ago, throttle %s)",
+			s.Tag, now.Sub(time.Unix(lastForce, 0)).Round(time.Second), forceReconnectThrottle))
+		return
+	}
+	atomic.StoreInt64(&s.LastForceReconnectUnix, now.Unix())
+	emit(fmt.Sprintf("MQTT [%s] WATCHDOG forcing reconnect (half-open TCP suspected — paho.IsConnected==true but no messages)", s.Tag))
+	// Run in a goroutine: ForceReconnectFn typically calls
+	// client.Disconnect(250) which blocks up to 250ms, then
+	// client.Connect() which can block on the connect timeout. The
+	// watchdog goroutine must not stall a per-tick scan over a single
+	// slow source.
+	go func() {
+		s.ForceReconnectFn()
+		emit(fmt.Sprintf("MQTT [%s] WATCHDOG reconnect attempt issued", s.Tag))
+	}()
 }
 
