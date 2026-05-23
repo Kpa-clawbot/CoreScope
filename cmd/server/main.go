@@ -411,7 +411,7 @@ func main() {
 			}
 
 			srv.healthMQTT = NewHealthMQTTClient(cfg.HealthCheck, hdb, hub, srv.healthObs, chanKey)
-			go srv.healthMQTT.Start(firstBrokerURL(cfg))
+			go srv.healthMQTT.Start(firstBrokerURL(cfg.HealthCheck))
 			purgeTicker := time.NewTicker(time.Hour)
 			purgeDone := make(chan struct{})
 			stopHealthPurge = func() {
