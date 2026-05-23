@@ -192,6 +192,36 @@
       sheet.appendChild(a);
     });
 
+    // Dark mode toggle — mirrors #darkModeToggle in the hidden top-nav.
+    // Delegates the click to the real button so app.js owns all theme logic.
+    var sep = document.createElement('hr');
+    sep.className = 'bottom-nav-sheet-sep';
+    sheet.appendChild(sep);
+
+    var darkBtn = document.createElement('button');
+    darkBtn.type = 'button';
+    darkBtn.className = 'bottom-nav-sheet-item bottom-nav-sheet-darkbtn';
+    darkBtn.setAttribute('role', 'menuitem');
+    darkBtn.setAttribute('data-bottom-nav-dark-toggle', '');
+
+    var darkIc = document.createElement('span');
+    darkIc.className = 'bottom-nav-sheet-icon';
+    darkIc.setAttribute('aria-hidden', 'true');
+
+    var darkLb = document.createElement('span');
+    darkLb.className = 'bottom-nav-sheet-label';
+
+    darkBtn.appendChild(darkIc);
+    darkBtn.appendChild(darkLb);
+    sheet.appendChild(darkBtn);
+
+    darkBtn.addEventListener('click', function () {
+      var realToggle = document.getElementById('darkModeToggle');
+      if (realToggle) realToggle.click();
+      syncDarkModeBtn();
+      closeSheet();
+    });
+
     // Sit the sheet next to the nav so they share a stacking context.
     var nav = document.querySelector('[data-bottom-nav]');
     if (nav && nav.parentNode) {
@@ -200,6 +230,14 @@
       document.body.appendChild(sheet);
     }
     return sheet;
+  }
+
+  function syncDarkModeBtn() {
+    var btn = document.querySelector('[data-bottom-nav-dark-toggle]');
+    if (!btn) return;
+    var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    btn.querySelector('.bottom-nav-sheet-icon').textContent = isDark ? '🌙' : '☀️';
+    btn.querySelector('.bottom-nav-sheet-label').textContent = isDark ? 'Light mode' : 'Dark mode';
   }
 
   function isSheetOpen() {
@@ -216,6 +254,7 @@
       moreTab.setAttribute('aria-expanded', 'true');
       moreTab.classList.add('active');
     }
+    syncDarkModeBtn();
   }
 
   function closeSheet() {

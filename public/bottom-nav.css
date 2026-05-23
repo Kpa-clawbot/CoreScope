@@ -237,6 +237,20 @@
   white-space: nowrap;
 }
 
+/* Dark mode toggle button — same layout as sheet-item but it's a <button> */
+.bottom-nav-sheet-darkbtn {
+  width: 100%;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* Separator above the dark mode toggle */
+.bottom-nav-sheet-sep {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 8px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bottom-nav-sheet-item {
     transition: none;

@@ -531,7 +531,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		name, _ := msg["origin"].(string)
 		iata := parts[1]
 		meta := extractObserverMeta(msg)
-		if err := store.UpsertObserver(observerID, name, iata, meta); err != nil {
+		if err := store.UpsertObserverAt(observerID, name, iata, meta, resolveRxTime(msg, tag)); err != nil {
 			log.Printf("MQTT [%s] observer status error: %v", tag, err)
 		}
 		store.UpsertObserverSource(observerID, tag, brokerHostname(source.Broker), true) //nolint:errcheck
@@ -616,6 +616,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 
 		mqttMsg := &MQTTPacketMessage{Raw: rawHex}
+		mqttMsg.Timestamp = resolveRxTime(msg, tag)
 		// Parse optional region from JSON payload (#788)
 		if v, ok := msg["region"].(string); ok && v != "" {
 			mqttMsg.Region = v
@@ -753,7 +754,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			if mqttMsg.Region != "" {
 				effectiveRegion = mqttMsg.Region
 			}
-			if err := store.UpsertObserver(observerID, origin, effectiveRegion, nil); err != nil {
+			if err := store.UpsertObserverAt(observerID, origin, effectiveRegion, nil, mqttMsg.Timestamp); err != nil {
 				log.Printf("MQTT [%s] observer upsert error: %v", tag, err)
 			}
 			store.UpsertObserverSource(observerID, tag, brokerHostname(source.Broker), false) //nolint:errcheck
@@ -798,8 +799,9 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 
 		decodedJSON, _ := json.Marshal(channelMsg)
 
-		now := time.Now().UTC().Format(time.RFC3339)
-		hashInput := fmt.Sprintf("ch:%s:%s:%s", channelIdx, text, now)
+		ingestNow := time.Now().UTC().Format(time.RFC3339)
+		rxTime := resolveRxTime(msg, tag)
+		hashInput := fmt.Sprintf("ch:%s:%s:%s", channelIdx, text, ingestNow)
 		h := sha256.Sum256([]byte(hashInput))
 		hash := hex.EncodeToString(h[:])[:16]
 
@@ -839,7 +841,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 
 		pktData := &PacketData{
-			Timestamp:    now,
+			Timestamp:    rxTime,
 			ObserverID:   "companion",
 			ObserverName: "L1 Pro (BLE)",
 			SNR:          snr,
@@ -891,8 +893,9 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 
 		decodedJSON, _ := json.Marshal(dm)
 
-		now := time.Now().UTC().Format(time.RFC3339)
-		hashInput := fmt.Sprintf("dm:%s:%s", text, now)
+		ingestNow := time.Now().UTC().Format(time.RFC3339)
+		rxTime := resolveRxTime(msg, tag)
+		hashInput := fmt.Sprintf("dm:%s:%s", text, ingestNow)
 		h := sha256.Sum256([]byte(hashInput))
 		hash := hex.EncodeToString(h[:])[:16]
 
@@ -932,7 +935,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 
 		pktData := &PacketData{
-			Timestamp:    now,
+			Timestamp:    rxTime,
 			ObserverID:   "companion",
 			ObserverName: "L1 Pro (BLE)",
 			SNR:          snr,
@@ -1118,6 +1121,71 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// resolveRxTime returns the observer receive-time for a packet, taken from
+// the MQTT envelope's "timestamp" field. Falls back to ingest time only when
+// the field is missing, unparseable, or implausibly in the future (a
+// clock-skewed observer). Result is always RFC3339 UTC.
+//
+// The envelope timestamp is stamped by the uploader when the radio receives
+// the frame, not when the MQTT message is published — so a buffered packet
+// uploaded hours late still carries its true receive time. Using ingest time
+// (time.Now()) here mis-dated such packets by the upload delay.
+func resolveRxTime(msg map[string]interface{}, tag string) string {
+	now := time.Now().UTC()
+	raw, _ := msg["timestamp"].(string)
+	if raw == "" {
+		return now.Format(time.RFC3339)
+	}
+	t, err := parseEnvelopeTime(raw)
+	if err != nil {
+		log.Printf("MQTT [%s] unparseable timestamp %q, using ingest time", tag, raw)
+		return now.Format(time.RFC3339)
+	}
+	// Hard reject: > 14h ahead is a genuine clock error (UTC+14 is the maximum
+	// standard offset, so nothing valid should be further ahead than that).
+	if t.After(now.Add(14 * time.Hour)) {
+		log.Printf("MQTT [%s] future timestamp %q, using ingest time", tag, raw)
+		return now.Format(time.RFC3339)
+	}
+	// Hard reject: > 30 days in the past is an RTC-reset node reporting a
+	// factory date (e.g. 2020-01-01). Such a value would permanently drag
+	// transmissions.first_seen backwards via stmtUpdateTxFirstSeen in
+	// InsertTransmission. No legitimate buffered upload is that stale.
+	if t.Before(now.Add(-30 * 24 * time.Hour)) {
+		log.Printf("MQTT [%s] stale timestamp %q (>30d old), using ingest time", tag, raw)
+		return now.Format(time.RFC3339)
+	}
+	// Soft clamp: naive local-clock timestamps from UTC+N observers are parsed
+	// as-if UTC, making them appear N hours in the future. A UTC+2 observer's
+	// live packet looks 2h ahead, but it is NOT a buffered packet — the whole
+	// point of using rxTime is to preserve the past timestamp for packets that
+	// were buffered offline. If rxTime is ahead of now, the packet is live and
+	// ingest time is the correct value. This also prevents storing future
+	// timestamps that would show ⚠️ in the UI for every packet from UTC+N nodes.
+	if t.After(now) {
+		return now.Format(time.RFC3339)
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// parseEnvelopeTime parses the MQTT envelope timestamp. Two on-wire forms
+// occur: zone-aware ISO8601 (RFC3339), and a naive local-clock ISO string
+// with no zone (python datetime.isoformat()). Zone-aware layouts are tried
+// first; naive layouts are assumed UTC, leaving a bounded residual offset
+// equal to the observer's UTC offset for naive-timestamp uploaders.
+func parseEnvelopeTime(s string) (time.Time, error) {
+	for _, layout := range []string{
+		time.RFC3339,                 // 2026-05-16T10:00:00Z / +02:00
+		"2006-01-02T15:04:05.999999", // python isoformat w/ microseconds
+		"2006-01-02T15:04:05",        // naive ISO
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unrecognized timestamp layout: %q", s)
 }
 
 // deriveHashtagChannelKey derives an AES-128 key from a channel name.
