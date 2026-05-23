@@ -112,7 +112,10 @@ async function edgeSwipe(page, x0, y0, x1, y1, steps) {
     });
     assert(rect, '[data-nav-drawer] not in DOM');
     assert(rect.isOpen, 'drawer.isOpen() returned false after edge-swipe');
-    assert(rect.left === 0, `drawer.getBoundingClientRect().left expected 0, got ${rect.left}`);
+    // Sub-pixel rounding tolerance: rect.left can be -0.79 or -0.000003 due to
+    // browser float compositor drift. 1px tolerance is sufficient — anything
+    // larger would represent an actual layout bug.
+    assert(Math.abs(rect.left) < 1, `drawer.getBoundingClientRect().left expected ~0 (±1px), got ${rect.left}`);
     assert(rect.width > 0, 'drawer width is 0');
   });
 
