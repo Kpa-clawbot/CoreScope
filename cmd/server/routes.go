@@ -90,9 +90,10 @@ type Server struct {
 	dbPath string
 
 	// In-memory perf-history ring buffer (Cornmeister extension: /api/perf/history).
-	// The server is read-only (#1283/#1287); samples are only held in RAM.
-	perfHistoryMu sync.Mutex
-	perfHistory   []PerfSample
+	// Persisted to a JSON sidecar file (perfHistoryPath) so history survives restarts.
+	perfHistoryMu   sync.Mutex
+	perfHistory     []PerfSample
+	perfHistoryPath string // derived from dbPath; empty = no persistence
 
 	// Absolute path to the public/static directory — set after filepath.Abs resolves
 	// the -public flag. Used by handleHealthShare to locate share.html without
@@ -1146,9 +1147,9 @@ func (s *Server) collectPerfSample() PerfSample {
 }
 
 // storePerfSample appends a sample to the server-side in-memory ring buffer
-// capped at perfHistoryCap entries. The server is read-only (#1283/#1287)
-// so samples are not persisted to SQLite.
-func (s *Server) storePerfSample(sample PerfSample) {
+// capped at perfHistoryCap entries. Returns a snapshot for the caller to
+// persist without holding the lock.
+func (s *Server) storePerfSample(sample PerfSample) []PerfSample {
 	s.perfHistoryMu.Lock()
 	defer s.perfHistoryMu.Unlock()
 	s.perfHistory = append(s.perfHistory, sample)
@@ -1157,6 +1158,10 @@ func (s *Server) storePerfSample(sample PerfSample) {
 		copy(trimmed, s.perfHistory[len(s.perfHistory)-perfHistoryCap:])
 		s.perfHistory = trimmed
 	}
+	// Return a copy for optional persistence — caller decides whether to save.
+	out := make([]PerfSample, len(s.perfHistory))
+	copy(out, s.perfHistory)
+	return out
 }
 
 // perfHistoryCap bounds the in-memory perf-history ring buffer (48 h at 1-min resolution).
@@ -1179,10 +1184,16 @@ func (s *Server) handlePerfHistory(w http.ResponseWriter, r *http.Request) {
 
 // startPerfHistoryCollector launches the background goroutine that snapshots
 // perf metrics into the ring buffer every minute. It returns a stop function
-// the caller invokes on shutdown.
+// the caller invokes on shutdown; the stop function also flushes the ring
+// buffer to s.perfHistoryPath before returning.
 func (s *Server) startPerfHistoryCollector() func() {
-	const interval = 60 * time.Second
-	ticker := time.NewTicker(interval)
+	const (
+		sampleInterval = 60 * time.Second
+		// Save to disk every 10 minutes (10 samples). Frequent enough to
+		// limit data loss on hard kill; infrequent enough not to hammer disk.
+		saveEvery = 10
+	)
+	ticker := time.NewTicker(sampleInterval)
 	done := make(chan struct{})
 	go func() {
 		defer func() {
@@ -1193,17 +1204,33 @@ func (s *Server) startPerfHistoryCollector() func() {
 		// Seed one sample immediately so /api/perf/history isn't empty for
 		// the first minute after startup.
 		s.storePerfSample(s.collectPerfSample())
+		count := 1
 		for {
 			select {
 			case <-ticker.C:
-				s.storePerfSample(s.collectPerfSample())
+				snap := s.storePerfSample(s.collectPerfSample())
+				count++
+				if count%saveEvery == 0 && s.perfHistoryPath != "" {
+					savePerfHistoryToFile(s.perfHistoryPath, snap)
+				}
 			case <-done:
 				ticker.Stop()
 				return
 			}
 		}
 	}()
-	return func() { close(done) }
+	return func() {
+		close(done)
+		// Final flush on shutdown so we don't lose the last <10 min of data.
+		if s.perfHistoryPath != "" {
+			s.perfHistoryMu.Lock()
+			snap := make([]PerfSample, len(s.perfHistory))
+			copy(snap, s.perfHistory)
+			s.perfHistoryMu.Unlock()
+			savePerfHistoryToFile(s.perfHistoryPath, snap)
+			log.Printf("[perf-history] flushed %d samples to %s", len(snap), s.perfHistoryPath)
+		}
+	}
 }
 
 // --- Packet Handlers ---
@@ -1293,6 +1320,14 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if s.store != nil {
 		result = s.store.QueryPackets(q)
+		// Hash-specific DB fallback: if a direct hash lookup returned nothing
+		// (packet evicted from the in-memory store or not yet loaded), try the
+		// DB so "View packet" links from the channels page never appear broken.
+		if q.Hash != "" && (result == nil || len(result.Packets) == 0) && s.db != nil {
+			if dbResult, dbErr := s.db.QueryPackets(q); dbErr == nil && len(dbResult.Packets) > 0 {
+				result = dbResult
+			}
+		}
 	} else {
 		result, err = s.db.QueryPackets(q)
 	}
@@ -1349,10 +1384,26 @@ func (s *Server) handleBatchObservations(w http.ResponseWriter, r *http.Request)
 	}
 
 	results := make(map[string][]ObservationResp, len(body.Hashes))
+	var missedHashes []string
 	if s.store != nil {
 		for _, hash := range body.Hashes {
 			obs := s.store.GetObservationsForHash(hash)
-			results[hash] = mapSliceToObservations(obs)
+			if len(obs) > 0 {
+				results[hash] = mapSliceToObservations(obs)
+			} else {
+				missedHashes = append(missedHashes, hash)
+			}
+		}
+	} else {
+		missedHashes = body.Hashes
+	}
+	// DB fallback for hashes whose observations were not in the in-memory store
+	// (evicted packets, or packets that predate the store's loaded window).
+	if len(missedHashes) > 0 && s.db != nil {
+		for _, hash := range missedHashes {
+			if obs := s.db.GetObservationsForHash(hash); len(obs) > 0 {
+				results[hash] = mapSliceToObservations(obs)
+			}
 		}
 	}
 	writeJSON(w, map[string]interface{}{"results": results})
@@ -2769,7 +2820,7 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
-	if s.store == nil {
+	if s.store == nil && s.db == nil {
 		writeError(w, 503, "Packet store unavailable")
 		return
 	}
@@ -2794,28 +2845,16 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		since = time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	}
 
-	s.store.mu.RLock()
-	obsList := s.store.byObserver[id]
-	filtered := make([]*StoreObs, 0, len(obsList))
-	for _, obs := range obsList {
-		if obs.Timestamp == "" {
-			continue
-		}
-		t, err := time.Parse(time.RFC3339Nano, obs.Timestamp)
-		if err != nil {
-			t, err = time.Parse(time.RFC3339, obs.Timestamp)
-		}
-		if err != nil {
-			t, err = time.Parse("2006-01-02 15:04:05", obs.Timestamp)
-		}
-		if err != nil {
-			continue
-		}
-		if t.Equal(since) || t.After(since) {
-			filtered = append(filtered, obs)
-		}
+	// Fetch observations: DB is authoritative (full history survives restarts and
+	// in-memory evictions). Fall back to the in-memory store only when no DB is
+	// available.
+	var obsRows []ObsAnalyticsRow
+	if s.db != nil {
+		obsRows = s.db.GetObservationsByObserver(id, since, 50000)
 	}
-	sort.Slice(filtered, func(i, j int) bool { return filtered[i].Timestamp > filtered[j].Timestamp })
+	if len(obsRows) == 0 && s.store != nil {
+		obsRows = s.storeObsToAnalyticsRows(id, since)
+	}
 
 	var bucketDur time.Duration
 	switch {
@@ -2848,7 +2887,10 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 	activeHourBuckets := map[int64]struct{}{}
 	recentPackets := make([]map[string]interface{}, 0, 20)
 
-	for i, obs := range filtered {
+	for i, obs := range obsRows {
+		if obs.Timestamp == "" {
+			continue
+		}
 		ts, err := time.Parse(time.RFC3339Nano, obs.Timestamp)
 		if err != nil {
 			ts, err = time.Parse(time.RFC3339, obs.Timestamp)
@@ -2866,13 +2908,10 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 			nodeBucketSets[bucketStart] = map[string]struct{}{}
 		}
 
-		enriched := s.store.enrichObs(obs)
-		if pt, ok := enriched["payload_type"].(int); ok {
-			packetTypes[strconv.Itoa(pt)]++
-		}
-		if decodedRaw, ok := enriched["decoded_json"].(string); ok && decodedRaw != "" {
+		packetTypes[strconv.Itoa(obs.PayloadType)]++
+		if obs.DecodedJSON != "" {
 			var decoded map[string]interface{}
-			if json.Unmarshal([]byte(decodedRaw), &decoded) == nil {
+			if json.Unmarshal([]byte(obs.DecodedJSON), &decoded) == nil {
 				for _, k := range []string{"pubKey", "srcHash", "destHash"} {
 					if v, ok := decoded[k].(string); ok && v != "" {
 						nodeBucketSets[bucketStart][v] = struct{}{}
@@ -2899,10 +2938,25 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 			snrBuckets[bucket].Count++
 		}
 		if i < 20 {
-			recentPackets = append(recentPackets, enriched)
+			snrVal := interface{}(nil)
+			rssiVal := interface{}(nil)
+			if obs.SNR != nil {
+				snrVal = *obs.SNR
+			}
+			if obs.RSSI != nil {
+				rssiVal = *obs.RSSI
+			}
+			recentPackets = append(recentPackets, map[string]interface{}{
+				"hash":         obs.Hash,
+				"timestamp":    obs.Timestamp,
+				"payload_type": obs.PayloadType,
+				"decoded_json": obs.DecodedJSON,
+				"path_json":    obs.PathJSON,
+				"snr":          snrVal,
+				"rssi":         rssiVal,
+			})
 		}
 	}
-	s.store.mu.RUnlock()
 
 	buildTimeline := func(counts map[int64]int) []TimeBucket {
 		keys := make([]int64, 0, len(counts))
@@ -2978,6 +3032,48 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		RssiTimeline:    rssiTimeline,
 		RecentPackets:   recentPackets,
 	})
+}
+
+// storeObsToAnalyticsRows converts in-memory store observations for an observer
+// to ObsAnalyticsRow slices (used when no DB is available).
+func (s *Server) storeObsToAnalyticsRows(observerID string, since time.Time) []ObsAnalyticsRow {
+	s.store.mu.RLock()
+	defer s.store.mu.RUnlock()
+
+	obsList := s.store.byObserver[observerID]
+	result := make([]ObsAnalyticsRow, 0, len(obsList))
+	for _, obs := range obsList {
+		if obs.Timestamp == "" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, obs.Timestamp)
+		if err != nil {
+			t, err = time.Parse(time.RFC3339, obs.Timestamp)
+		}
+		if err != nil {
+			t, err = time.Parse("2006-01-02 15:04:05", obs.Timestamp)
+		}
+		if err != nil || t.Before(since) {
+			continue
+		}
+		row := ObsAnalyticsRow{
+			PathJSON:  obs.PathJSON,
+			Timestamp: obs.Timestamp,
+			SNR:       obs.SNR,
+			RSSI:      obs.RSSI,
+		}
+		if tx := s.store.byTxID[obs.TransmissionID]; tx != nil {
+			row.Hash = tx.Hash
+			row.DecodedJSON = tx.DecodedJSON
+			if tx.PayloadType != nil {
+				row.PayloadType = *tx.PayloadType
+			}
+		}
+		result = append(result, row)
+	}
+	// Sort newest first to match DB query order.
+	sort.Slice(result, func(i, j int) bool { return result[i].Timestamp > result[j].Timestamp })
+	return result
 }
 
 func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {

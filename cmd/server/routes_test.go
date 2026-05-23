@@ -2782,13 +2782,14 @@ func TestHashSizeInfoTimeWindow(t *testing.T) {
 }
 
 func TestObserverAnalyticsNoStore(t *testing.T) {
+	// No store but DB is available: should fall back to DB and return 200.
 	_, router := setupNoStoreServer(t)
 	req := httptest.NewRequest("GET", "/api/observers/obs1/analytics", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != 503 {
-		t.Fatalf("expected 503, got %d", w.Code)
+	if w.Code != 200 {
+		t.Fatalf("expected 200 (DB fallback), got %d", w.Code)
 	}
 }
 func TestConfigGeoFilterEndpoint(t *testing.T) {

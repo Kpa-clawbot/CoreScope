@@ -999,6 +999,19 @@ type RssiTimelineEntry struct {
 	Avg   float64 `json:"avg"`
 }
 
+// ObsAnalyticsRow is the minimal per-observation data needed by the observer
+// analytics handler. It is returned by DB.GetObservationsByObserver and also
+// produced from the in-memory store as a fallback.
+type ObsAnalyticsRow struct {
+	Hash        string
+	PayloadType int
+	DecodedJSON string
+	PathJSON    string
+	Timestamp   string // RFC3339Nano
+	SNR         *float64
+	RSSI        *float64
+}
+
 type ObserverAnalyticsResponse struct {
 	Timeline        []TimeBucket             `json:"timeline"`
 	PacketTypes     map[string]int           `json:"packetTypes"`

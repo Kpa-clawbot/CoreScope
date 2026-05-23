@@ -380,6 +380,17 @@ func main() {
 	srv.store = store
 	srv.channelKeys = loadServerChannelKeys(cfg, configDir)
 
+	// Perf-history persistence: load existing samples from the JSON sidecar
+	// so the /api/perf/history graphs survive server restarts.
+	perfHistPath := perfHistoryFilePath(resolvedDB)
+	srv.perfHistoryPath = perfHistPath
+	if samples := loadPerfHistoryFromFile(perfHistPath); len(samples) > 0 {
+		srv.perfHistoryMu.Lock()
+		srv.perfHistory = samples
+		srv.perfHistoryMu.Unlock()
+		log.Printf("[perf-history] loaded %d samples from %s", len(samples), perfHistPath)
+	}
+
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
@@ -478,6 +489,11 @@ Frontend not found. API available at /api/
 	// Start periodic eviction
 	stopEviction := store.StartEvictionTicker()
 	defer stopEviction()
+
+	// Perf-history collector — snapshots metrics every minute into the ring
+	// buffer and flushes to the JSON sidecar on shutdown.
+	stopPerfHistory := srv.startPerfHistoryCollector()
+	defer stopPerfHistory()
 
 	// Steady-state analytics recomputers (issue #1240). Replaces the
 	// on-request compute-then-cache pattern for the default (region="",

@@ -1262,6 +1262,76 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 	return result
 }
 
+// GetObservationsByObserver returns per-observation rows for a single observer
+// since the given time, newest-first, up to limit rows.
+// Used by handleObserverAnalytics as a DB-backed fallback so charts survive
+// server restarts and in-memory evictions.
+func (db *DB) GetObservationsByObserver(observerID string, since time.Time, limit int) []ObsAnalyticsRow {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	var querySQL string
+	var args []interface{}
+	if db.isV3 {
+		querySQL = `SELECT t.hash, t.payload_type, COALESCE(t.decoded_json,''), COALESCE(o.path_json,''),
+			strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch') AS ts,
+			o.snr, o.rssi
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			JOIN observers obs ON obs.rowid = o.observer_idx
+			WHERE obs.id = ? AND o.timestamp >= ?
+			ORDER BY o.timestamp DESC
+			LIMIT ?`
+		args = []interface{}{observerID, since.Unix(), limit}
+	} else {
+		// v2 schema: observer reference is a string observer_id column, but
+		// timestamps are still stored as Unix integers — same as v3.
+		querySQL = `SELECT t.hash, t.payload_type, COALESCE(t.decoded_json,''), COALESCE(o.path_json,''),
+			strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch') AS ts,
+			o.snr, o.rssi
+			FROM observations o
+			JOIN transmissions t ON t.id = o.transmission_id
+			WHERE o.observer_id = ? AND o.timestamp >= ?
+			ORDER BY o.timestamp DESC
+			LIMIT ?`
+		args = []interface{}{observerID, since.Unix(), limit}
+	}
+
+	rows, err := db.conn.Query(querySQL, args...)
+	if err != nil {
+		log.Printf("[observer-analytics] query error for observer %s: %v", observerID, err)
+		return nil
+	}
+	defer rows.Close()
+
+	var result []ObsAnalyticsRow
+	for rows.Next() {
+		var hash, decodedJSON, pathJSON, ts sql.NullString
+		var payloadType sql.NullInt64
+		var snr, rssi sql.NullFloat64
+		if err := rows.Scan(&hash, &payloadType, &decodedJSON, &pathJSON, &ts, &snr, &rssi); err != nil {
+			continue
+		}
+		row := ObsAnalyticsRow{
+			Hash:        nullStrVal(hash),
+			PayloadType: int(payloadType.Int64),
+			DecodedJSON: nullStrVal(decodedJSON),
+			PathJSON:    nullStrVal(pathJSON),
+			Timestamp:   nullStrVal(ts),
+		}
+		if snr.Valid {
+			v := snr.Float64
+			row.SNR = &v
+		}
+		if rssi.Valid {
+			v := rssi.Float64
+			row.RSSI = &v
+		}
+		result = append(result, row)
+	}
+	return result
+}
+
 // GetObservers returns active observers (not soft-deleted) sorted by last_seen DESC.
 func (db *DB) GetObservers() ([]Observer, error) {
 	// last_packet_at and repeat are always present in the schema managed by internal/dbschema.

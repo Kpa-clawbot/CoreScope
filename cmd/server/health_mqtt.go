@@ -278,16 +278,16 @@ func (h *HealthMQTTClient) handleMessage(_ mqtt.Client, msg mqtt.Message) {
 		return
 	}
 
+	// Channel hash filter — only process messages for our test channel.
+	// Drop silently: non-matching GRP_TXT packets from other channels are
+	// the common case on a busy mesh and would otherwise spam the log.
+	if h.chanKey != nil && !h.chanKey.MatchesChannelHash(pkt.Payload.ChannelHash) {
+		return
+	}
+
 	log.Printf("[health-mqtt] GRP_TXT from observer=%s channelHash=%d mac=%s encDataLen=%d chanKeyConfigured=%v",
 		observerShortKey(observerKey), pkt.Payload.ChannelHash, pkt.Payload.MAC,
 		len(pkt.Payload.EncryptedData)/2, h.chanKey != nil)
-
-	// Channel hash filter — only process messages for our test channel.
-	if h.chanKey != nil && !h.chanKey.MatchesChannelHash(pkt.Payload.ChannelHash) {
-		log.Printf("[health-mqtt] GRP_TXT dropped: channelHash=%d does not match test channel (expected %d) — check testChannelSecret config",
-			pkt.Payload.ChannelHash, h.chanKey.ChannelHashByte)
-		return
-	}
 
 	// Need ciphertext to proceed.
 	if pkt.Payload.EncryptedData == "" {
