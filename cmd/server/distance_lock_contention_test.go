@@ -66,7 +66,7 @@ func TestComputeAnalyticsDistanceLockHoldDuration(t *testing.T) {
 	store.mu.Unlock()
 
 	// Sanity: result is non-empty.
-	r := store.computeAnalyticsDistance("", "")
+	r := store.computeAnalyticsDistance("")
 	if r == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -84,7 +84,7 @@ func TestComputeAnalyticsDistanceLockHoldDuration(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for !stop.Load() {
-				rr := store.computeAnalyticsDistance("", "")
+				rr := store.computeAnalyticsDistance("")
 				if rr == nil {
 					readerErrs.Add(1)
 				}

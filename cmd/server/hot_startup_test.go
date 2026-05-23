@@ -606,3 +606,52 @@ func TestHotStartup_BackgroundLoadFailureSurfacesInPerf(t *testing.T) {
 		t.Errorf("expected backgroundLoadFailed=true after every chunk errored, got false (observability lying)")
 	}
 }
+
+// TestHotStartup_UnlimitedRetention_FillsAllHistory is a regression test for
+// the bug where retentionHours=0 (unlimited) combined with hotStartupHours>0
+// caused loadBackgroundChunks to exit immediately, silently leaving all data
+// older than hotStartupHours out of memory — making the store appear "new".
+func TestHotStartup_UnlimitedRetention_FillsAllHistory(t *testing.T) {
+	// 8 days × 20 tx/day = 160 total; hot window only covers the last day (20 tx).
+	dbPath := createTestDBMultiDay(t, 8, 20)
+
+	db, err := OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.conn.Close()
+
+	store := NewPacketStore(db, &PacketStoreConfig{
+		RetentionHours:  0,  // unlimited — keep all history
+		HotStartupHours: 24, // fast startup: only sync-load last 24h
+	})
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	// After sync load, only the hot window is in memory (~20 packets from day 8).
+	store.mu.RLock()
+	afterHot := len(store.packets)
+	store.mu.RUnlock()
+	if afterHot == 160 {
+		t.Log("all packets already loaded in hot window — test is a no-op (adjust timing)")
+	}
+
+	// Background fill must load all remaining history.
+	store.loadBackgroundChunks()
+
+	store.mu.RLock()
+	total := len(store.packets)
+	byObsLen := len(store.byObserver["obs1"])
+	store.mu.RUnlock()
+
+	if total != 160 {
+		t.Errorf("expected 160 packets after background fill (retentionHours=0), got %d", total)
+	}
+	if byObsLen != 160 {
+		t.Errorf("expected byObserver[obs1]=160 after background fill, got %d (observer analytics would show empty history)", byObsLen)
+	}
+	if !store.backgroundLoadDone.Load() {
+		t.Error("expected backgroundLoadDone=true after loadBackgroundChunks")
+	}
+}

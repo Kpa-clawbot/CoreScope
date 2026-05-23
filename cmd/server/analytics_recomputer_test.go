@@ -98,7 +98,7 @@ func TestAnalyticsRecomputerSteadyStateLatency(t *testing.T) {
 		go func() {
 			defer rwg.Done()
 			t0 := time.Now()
-			r := store.GetAnalyticsDistance("", "")
+			r := store.GetAnalyticsDistance("")
 			latencies[i] = time.Since(t0)
 			if r == nil {
 				t.Errorf("reader %d got nil result", i)

@@ -750,7 +750,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	if s.db.isV3 {
 		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
-				o.id, obs.id, obs.name, o.direction,
+				o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
 				o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + `
 			FROM transmissions t
 			LEFT JOIN observations o ON o.transmission_id = t.id
@@ -759,10 +759,11 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	} else {
 		chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
 				t.payload_type, t.payload_version, t.decoded_json,
-				o.id, o.observer_id, o.observer_name, o.direction,
+				o.id, o.observer_id, o.observer_name, COALESCE(obs.iata, ''), o.direction,
 				o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRawHexCol + rpCol + `
 			FROM transmissions t
-			LEFT JOIN observations o ON o.transmission_id = t.id` + filterClause + `
+			LEFT JOIN observations o ON o.transmission_id = t.id
+			LEFT JOIN observers obs ON obs.id = o.observer_id` + filterClause + `
 			ORDER BY t.first_seen ASC, o.timestamp DESC`
 	}
 
@@ -788,7 +789,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		var rawHex, hash, firstSeen, decodedJSON sql.NullString
 		var routeType, payloadType, payloadVersion sql.NullInt64
 		var obsID sql.NullInt64
-		var observerID, observerName, direction, pathJSON, obsTimestamp sql.NullString
+		var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
 		var snr, rssi sql.NullFloat64
 		var score sql.NullInt64
 		var obsRawHex sql.NullString
@@ -796,7 +797,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 
 		scanArgs := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
 			&payloadVersion, &decodedJSON,
-			&obsID, &observerID, &observerName, &direction,
+			&obsID, &observerID, &observerName, &observerIATA, &direction,
 			&snr, &rssi, &score, &pathJSON, &obsTimestamp}
 		if s.db.hasObsRawHex {
 			scanArgs = append(scanArgs, &obsRawHex)
@@ -848,6 +849,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				TransmissionID: txID,
 				ObserverID:     obsIDStr,
 				ObserverName:   nullStrVal(observerName),
+				ObserverIATA:   nullStrVal(observerIATA),
 				Direction:      nullStrVal(direction),
 				SNR:            nullFloatPtr(snr),
 				RSSI:           nullFloatPtr(rssi),
@@ -1005,16 +1007,52 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 // chunks are merged it rebuilds analytics indexes once. Chunk errors are
 // handled by advancing past the failed window so the loop always terminates.
 func (s *PacketStore) loadBackgroundChunks() {
-	if s.retentionHours <= 0 {
+	// When hotStartupHours == 0, Load() already loaded the full retention window
+	// (or all history when retentionHours == 0), so there is nothing to fill.
+	if s.hotStartupHours <= 0 {
 		s.backgroundLoadDone.Store(true)
 		return
 	}
 
-	target := time.Now().UTC().Add(-time.Duration(s.retentionHours * float64(time.Hour)))
-	totalHours := s.retentionHours - s.hotStartupHours
-	if totalHours <= 0 {
-		s.backgroundLoadDone.Store(true)
-		return
+	var target time.Time
+	var totalHours float64
+
+	if s.retentionHours > 0 {
+		// Bounded retention: fill from the hot cutoff back to retentionHours ago.
+		totalHours = s.retentionHours - s.hotStartupHours
+		if totalHours <= 0 {
+			s.backgroundLoadDone.Store(true)
+			return
+		}
+		target = time.Now().UTC().Add(-time.Duration(s.retentionHours * float64(time.Hour)))
+	} else {
+		// Unlimited retention (retentionHours == 0) with hotStartupHours > 0:
+		// Load() only loaded the hot window; fill from oldestLoaded back to the
+		// earliest record in the DB so history is not silently dropped.
+		var oldestTS string
+		if err := s.db.conn.QueryRow("SELECT COALESCE(MIN(first_seen), '') FROM transmissions").Scan(&oldestTS); err != nil || oldestTS == "" {
+			log.Printf("[store] background loader: could not determine oldest record, skipping fill")
+			s.backgroundLoadDone.Store(true)
+			return
+		}
+		t, err := time.Parse(time.RFC3339, oldestTS)
+		if err != nil {
+			log.Printf("[store] background loader: bad oldest first_seen %q: %v, skipping fill", oldestTS, err)
+			s.backgroundLoadDone.Store(true)
+			return
+		}
+		// Target one second before the oldest record so the loop includes it.
+		target = t.Add(-time.Second)
+		// Estimate total hours for progress reporting.
+		totalHours = s.hotStartupHours
+		s.mu.RLock()
+		if ol := s.oldestLoaded; ol != "" {
+			if olT, err := time.Parse(time.RFC3339, ol); err == nil {
+				totalHours = olT.Sub(target).Hours()
+			}
+		}
+		s.mu.RUnlock()
+		log.Printf("[store] background loader: unlimited retention with hotStartupHours=%g — filling history back to %s", s.hotStartupHours, oldestTS)
 	}
 
 	var chunksLoaded float64
