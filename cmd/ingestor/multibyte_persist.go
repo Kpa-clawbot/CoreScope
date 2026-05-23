@@ -1,6 +1,8 @@
 package main
 
 import (
+	"log"
+
 	"github.com/meshcore-analyzer/mbcapqueue"
 )
 
@@ -20,20 +22,70 @@ type MultibyteCapPersistStats struct {
 // INVARIANT (canonical owner): multibyte_sup / multibyte_evidence are
 // derived/cached columns. The server COMPUTES the value during its
 // analytics cycle (from observed packets) and writes a snapshot file;
-// this function is the ONLY path that mutates those columns at runtime
+// this function is the ONLY runtime path that mutates those columns
 // (the schema itself is added by internal/dbschema). The server MUST
 // NOT execute any UPDATE on nodes.multibyte_* — see
 // cmd/server/readonly_invariant_test.go for the enforcement.
 //
 // Data-destruction guard: entries with Status=="unknown" (sup==0) are
 // NEVER persisted — we never overwrite a previously confirmed/suspected
-// DB value with a snapshot blank. Same guarantee the server-side helper
-// originally enforced before relocation.
+// DB value with a snapshot blank. Same guarantee the original
+// server-side helper enforced before relocation.
 //
-// STUB: real implementation lands in the following commit (TDD red→green).
+// Safe to call from a ticker; no-op when no snapshot has been written
+// (cold start) or when the snapshot is empty.
 func (s *Store) RunMultibyteCapPersist() (MultibyteCapPersistStats, error) {
-	_ = mbcapqueue.SnapshotPath(s.path) // import retained for green commit
-	return MultibyteCapPersistStats{}, nil
+	var stats MultibyteCapPersistStats
+	snap, err := mbcapqueue.ReadSnapshot(s.path)
+	if err != nil {
+		// Missing snapshot is the steady state until the server's first
+		// analytics cycle completes — treat as no-op.
+		return stats, nil
+	}
+	stats.ReadEntries = len(snap.Entries)
+	if len(snap.Entries) == 0 {
+		return stats, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return stats, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	stmtN, err := tx.Prepare(`UPDATE nodes SET multibyte_sup=?, multibyte_evidence=? WHERE public_key=?`)
+	if err != nil {
+		return stats, err
+	}
+	defer stmtN.Close()
+	stmtI, err := tx.Prepare(`UPDATE inactive_nodes SET multibyte_sup=?, multibyte_evidence=? WHERE public_key=?`)
+	if err != nil {
+		return stats, err
+	}
+	defer stmtI.Close()
+	for _, e := range snap.Entries {
+		sup := multibyteStatusToInt(e.Status)
+		if sup == 0 {
+			stats.Skipped++
+			continue
+		}
+		if r, err := stmtN.Exec(sup, e.Evidence, e.PublicKey); err == nil {
+			if n, _ := r.RowsAffected(); n > 0 {
+				stats.UpdatedActive += n
+			}
+		}
+		if r, err := stmtI.Exec(sup, e.Evidence, e.PublicKey); err == nil {
+			if n, _ := r.RowsAffected(); n > 0 {
+				stats.UpdatedInactive += n
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return stats, err
+	}
+	if stats.UpdatedActive+stats.UpdatedInactive > 0 {
+		log.Printf("[multibyte-persist] applied snapshot: %d entries (%d skipped); updated %d active + %d inactive nodes",
+			stats.ReadEntries, stats.Skipped, stats.UpdatedActive, stats.UpdatedInactive)
+	}
+	return stats, nil
 }
 
 // multibyteStatusToInt mirrors the mapping the server used before relocation.

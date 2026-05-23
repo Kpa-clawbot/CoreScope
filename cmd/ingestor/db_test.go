@@ -2886,13 +2886,10 @@ func TestSchemaMultibyteSupColumns(t *testing.T) {
 		}
 	}
 
-	// Verify migration marker recorded.
-	var migDone int
-	if err := store.db.QueryRow("SELECT 1 FROM _migrations WHERE name='multibyte_sup_v1'").Scan(&migDone); err != nil {
-		t.Error("migration marker 'multibyte_sup_v1' not recorded in _migrations")
-	}
-
-	// Idempotency: re-opening must not fail (migration guarded by marker).
+	// Verify migration is present. As of #1324 follow-up the migration
+	// lives in internal/dbschema (column-probe + idempotent ALTER), not
+	// in the legacy _migrations marker table — so we just re-assert the
+	// columns exist and the second OpenStore is a no-op.
 	store.Close()
 	store2, err := OpenStore(dbPath)
 	if err != nil {

@@ -76,6 +76,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureObservationsRawHexColumn(rw, logf); err != nil {
 		return fmt.Errorf("ensure observations.raw_hex: %w", err)
 	}
+	if err := ensureMultibyteCapColumns(rw, logf); err != nil {
+		return fmt.Errorf("ensure multibyte_cap columns: %w", err)
+	}
 	return nil
 }
 
@@ -120,6 +123,13 @@ func AssertReady(ro *sql.DB) error {
 	mustCol("nodes", "default_scope")
 	mustCol("inactive_nodes", "default_scope")
 	mustCol("observations", "raw_hex")
+	// Multi-byte capability cache (#1324 follow-up; PR #903 surface).
+	// Owned by ingestor — server reads these for O(1) /api/nodes
+	// enrichment, ingestor's RunMultibyteCapPersist is the only writer.
+	mustCol("nodes", "multibyte_sup")
+	mustCol("nodes", "multibyte_evidence")
+	mustCol("inactive_nodes", "multibyte_sup")
+	mustCol("inactive_nodes", "multibyte_evidence")
 
 	if len(missing) > 0 {
 		return fmt.Errorf("schema not migrated by ingestor; restart ingestor first. missing: %s",
@@ -433,4 +443,39 @@ func SoftDeleteBlacklistedObservers(rw *sql.DB, blacklist []string) (int64, erro
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// ensureMultibyteCapColumns adds the multi-byte capability cache columns
+// to nodes / inactive_nodes (PR #903, canonical owner per #1324
+// follow-up). These columns are populated by the ingestor's
+// RunMultibyteCapPersist from snapshot files written by the server's
+// analytics cycle; the server is read-only since #1289 and MUST NOT
+// write here. The schema itself lives here in dbschema (the writer
+// owns migrations, the read-only server merely AssertReady's them).
+func ensureMultibyteCapColumns(rw *sql.DB, logf Logger) error {
+	for _, table := range []string{"nodes", "inactive_nodes"} {
+		hasSup, err := TableHasColumn(rw, table, "multibyte_sup")
+		if err != nil {
+			return fmt.Errorf("inspect %s.multibyte_sup: %w", table, err)
+		}
+		if !hasSup {
+			if _, err := rw.Exec(fmt.Sprintf(
+				"ALTER TABLE %s ADD COLUMN multibyte_sup INTEGER NOT NULL DEFAULT 0", table)); err != nil {
+				return fmt.Errorf("add %s.multibyte_sup: %w", table, err)
+			}
+			logf("[dbschema] added multibyte_sup column to %s", table)
+		}
+		hasEvid, err := TableHasColumn(rw, table, "multibyte_evidence")
+		if err != nil {
+			return fmt.Errorf("inspect %s.multibyte_evidence: %w", table, err)
+		}
+		if !hasEvid {
+			if _, err := rw.Exec(fmt.Sprintf(
+				"ALTER TABLE %s ADD COLUMN multibyte_evidence TEXT", table)); err != nil {
+				return fmt.Errorf("add %s.multibyte_evidence: %w", table, err)
+			}
+			logf("[dbschema] added multibyte_evidence column to %s", table)
+		}
+	}
+	return nil
 }

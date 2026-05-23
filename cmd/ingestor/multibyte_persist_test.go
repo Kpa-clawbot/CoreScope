@@ -21,7 +21,8 @@ import (
 // asserts the relocated path: snapshot in → UPDATEs out, from the
 // ingestor side.
 func TestRunMultibyteCapPersist_AppliesSnapshot(t *testing.T) {
-	dbPath := tempDBPath(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
 	store, err := OpenStore(dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)
@@ -102,7 +103,8 @@ func TestRunMultibyteCapPersist_AppliesSnapshot(t *testing.T) {
 // step is a clean no-op when the server hasn't written a snapshot yet
 // (cold start; the analytics cycle takes ~15s after server boot).
 func TestRunMultibyteCapPersist_NoSnapshot_NoOp(t *testing.T) {
-	dbPath := tempDBPath(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
 	store, err := OpenStore(dbPath)
 	if err != nil {
 		t.Fatalf("OpenStore: %v", err)

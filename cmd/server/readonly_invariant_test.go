@@ -29,6 +29,14 @@ func TestServerSourceHasNoCachedRWCalls(t *testing.T) {
 		regexp.MustCompile(`\bcachedRW\s*\(`),
 		regexp.MustCompile(`mode=rw`),
 		regexp.MustCompile(`sql\.Open\([^)]*\?[^)]*_journal_mode=WAL[^)]*\)`),
+		// #1324 follow-up: PR #903's persistMultibyteCapability moved
+		// to cmd/ingestor — the server may NEVER UPDATE these columns
+		// (it opens mode=ro since #1289). Server publishes a snapshot
+		// file via internal/mbcapqueue; the ingestor applies it.
+		regexp.MustCompile(`UPDATE\s+nodes\s+SET\s+multibyte_`),
+		regexp.MustCompile(`UPDATE\s+inactive_nodes\s+SET\s+multibyte_`),
+		regexp.MustCompile(`\bpersistMultibyteCapability\s*\(`),
+		regexp.MustCompile(`\bmaybePersistMultibyteCapability\s*\(`),
 	}
 	violations := []string{}
 	for _, e := range entries {
@@ -78,6 +86,12 @@ func TestServerDBHasNoWriteMethods(t *testing.T) {
 		// ingestor's *Store. The server's HTTP handler now enqueues a
 		// marker file (see internal/prunequeue); it does not write.
 		"DeleteNodesByPubkeys",
+		// #1324 follow-up: PR #903 originally added these to *PacketStore
+		// (not *DB), and they UPDATEd nodes/inactive_nodes from a
+		// mode=ro handle. After relocation, the methods live in the
+		// ingestor's *Store (cmd/ingestor/multibyte_persist.go). Server
+		// must expose neither on *DB nor on *PacketStore — see the
+		// dedicated test below for *PacketStore.
 	}
 	typ := reflect.TypeOf((*DB)(nil))
 	for _, name := range forbidden {
@@ -129,4 +143,24 @@ func bootstrapMinimalDB(path string) error {
 		return err
 	}
 	return nil
+}
+
+// TestPacketStoreHasNoMultibytePersistMethods enforces the #1324 follow-up:
+// PR #903 wired persistMultibyteCapability + maybePersistMultibyteCapability
+// onto *PacketStore in cmd/server. Both executed UPDATEs on
+// nodes/inactive_nodes from a mode=ro DB handle — impossible since #1289.
+// After relocation the persistence lives in cmd/ingestor/*Store; the
+// server only publishes a snapshot via internal/mbcapqueue. This test
+// fails if a future change re-introduces these methods on *PacketStore.
+func TestPacketStoreHasNoMultibytePersistMethods(t *testing.T) {
+	forbidden := []string{
+		"persistMultibyteCapability",
+		"maybePersistMultibyteCapability",
+	}
+	typ := reflect.TypeOf((*PacketStore)(nil))
+	for _, name := range forbidden {
+		if _, ok := typ.MethodByName(name); ok {
+			t.Errorf("server *PacketStore exposes forbidden write method %q — must be relocated to ingestor (#1324)", name)
+		}
+	}
 }

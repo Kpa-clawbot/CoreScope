@@ -45,3 +45,7 @@ require (
 require github.com/meshcore-analyzer/prunequeue v0.0.0
 
 replace github.com/meshcore-analyzer/prunequeue => ../../internal/prunequeue
+
+require github.com/meshcore-analyzer/mbcapqueue v0.0.0
+
+replace github.com/meshcore-analyzer/mbcapqueue => ../../internal/mbcapqueue

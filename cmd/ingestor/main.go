@@ -197,6 +197,25 @@ func main() {
 	// endpoint (#1120). Best-effort; never fatal.
 	StartStatsFileWriter(store, time.Second)
 
+	// Multi-byte capability persister (#1324 follow-up): the server's
+	// analytics cycle publishes a snapshot file via internal/mbcapqueue
+	// (it cannot UPDATE itself, mode=ro since #1289). The ingestor
+	// applies the snapshot here every 5 minutes — derived/cached
+	// columns, ingestor owns the write.
+	multibytePersistTicker := time.NewTicker(5 * time.Minute)
+	go func() {
+		time.Sleep(2 * time.Minute) // stagger after analytics warmup
+		if _, err := store.RunMultibyteCapPersist(); err != nil {
+			log.Printf("[multibyte-persist] error: %v", err)
+		}
+		for range multibytePersistTicker.C {
+			if _, err := store.RunMultibyteCapPersist(); err != nil {
+				log.Printf("[multibyte-persist] error: %v", err)
+			}
+		}
+	}()
+	log.Printf("[multibyte-persist] enabled (interval=5m)")
+
 	// Neighbor-edges builder (#1287 — Option 4): ingestor owns
 	// neighbor_edges writes. Runs every 60s. Server reads the snapshot
 	// via cmd/server/neighbor_recomputer.go on the same cadence.
