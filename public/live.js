@@ -1712,7 +1712,13 @@
     if (roleLegendList) {
       for (const role of (window.ROLE_SORT || ['repeater', 'companion', 'room', 'sensor', 'observer'])) {
         const li = document.createElement('li');
-        li.innerHTML = `<span class="live-dot" style="background:${ROLE_COLORS[role] || '#6b7280'}" aria-hidden="true"></span> ${(ROLE_LABELS[role] || role).replace(/s$/, '')}`;
+        // #1293 — SVG swatch shows SHAPE + colour so colourblind ops can
+        // distinguish roles without relying on hue alone (WCAG 1.4.1).
+        const color = ROLE_COLORS[role] || '#6b7280';
+        const swatch = window.makeRoleMarkerSVG
+          ? window.makeRoleMarkerSVG(role, color, 14)
+          : `<span class="live-dot" style="background:${color}" aria-hidden="true"></span>`;
+        li.innerHTML = `<span class="live-shape-swatch" aria-hidden="true">${swatch}</span> ${(ROLE_LABELS[role] || role).replace(/s$/, '')}`;
         roleLegendList.appendChild(li);
       }
     }
@@ -2358,38 +2364,106 @@
     const isRepeater = n.role === 'repeater';
     const zoom = map ? map.getZoom() : 11;
     const zoomScale = Math.max(0.4, (zoom - 8) / 6);
-    const size = Math.round((isRepeater ? 6 : 4) * zoomScale);
+    // Shape-aware sizing: keep prior visual weight (~6/4 base) but
+    // route through divIcon so colourblind ops get distinct silhouettes
+    // (#1293). Size is the SVG box; circleMarker radius ~= size/3.
+    const sizePx = Math.max(10, Math.round((isRepeater ? 18 : 14) * zoomScale));
 
-    const glow = L.circleMarker([n.lat, n.lon], {
-      radius: size + 4, fillColor: color, fillOpacity: 0.12, stroke: false, interactive: false
-    }).addTo(nodesLayer);
+    const svgHtml = (window.makeRoleMarkerSVG
+      ? window.makeRoleMarkerSVG(n.role, color, sizePx)
+      : '<svg width="' + sizePx + '" height="' + sizePx + '" viewBox="0 0 ' + sizePx + ' ' + sizePx +
+        '"><circle cx="' + (sizePx/2) + '" cy="' + (sizePx/2) + '" r="' + (sizePx/2 - 2) +
+        '" fill="' + color + '" stroke="#fff" stroke-width="2"/></svg>');
 
-    const marker = L.circleMarker([n.lat, n.lon], {
-      radius: size, fillColor: color, fillOpacity: 0.85,
-      color: '#fff', weight: isRepeater ? 1.5 : 0.5, opacity: isRepeater ? 0.6 : 0.3
+    const icon = L.divIcon({
+      html: svgHtml,
+      className: 'live-node-marker live-node-' + (n.role || 'unknown'),
+      iconSize: [sizePx, sizePx],
+      iconAnchor: [sizePx / 2, sizePx / 2],
+      popupAnchor: [0, -sizePx / 2]
+    });
+    const marker = L.marker([n.lat, n.lon], { icon: icon, interactive: true }).addTo(nodesLayer);
+
+    // Highlight ring (#1293): a separate stroke-only circleMarker layered
+    // BENEATH the shape. Hidden by default; pulseNodeMarker grows/fades
+    // its radius + opacity — never fills, so same-hue concentric stacking
+    // (issue's "blue-on-blue") is impossible.
+    const ringPos = [n.lat, n.lon];
+    const ring = L.circleMarker(ringPos, {
+      radius: sizePx / 2 + 4,
+      fillOpacity: 0,
+      fill: false,
+      color: color,
+      weight: 0,
+      opacity: 0,
+      interactive: false
     }).addTo(nodesLayer);
 
     marker.bindTooltip(n.name || n.public_key.slice(0, 8), {
-      permanent: false, direction: 'top', offset: [0, -10], className: 'live-tooltip'
+      permanent: false, direction: 'top', offset: [0, -sizePx / 2], className: 'live-tooltip'
     });
 
     marker.on('click', () => showNodeDetail(n.public_key));
 
-    marker._glowMarker = glow;
+    marker._highlightRing = ring;
     marker._baseColor = color;
-    marker._baseSize = size;
+    marker._baseSize = sizePx;
+    marker._role = n.role || 'unknown';
     nodeMarkers[n.public_key] = marker;
 
-    // Apply matrix tint if active
+    // Apply matrix tint if active — re-render the SVG with matrix colour
     if (matrixMode) {
       marker._matrixPrevColor = color;
       marker._baseColor = '#008a22';
-      marker.setStyle({ fillColor: '#008a22', color: '#008a22', fillOpacity: 0.5, opacity: 0.5 });
-      glow.setStyle({ fillColor: '#008a22', fillOpacity: 0.15 });
+      const mxHtml = window.makeRoleMarkerSVG
+        ? window.makeRoleMarkerSVG(marker._role, '#008a22', sizePx)
+        : svgHtml;
+      const el = marker.getElement();
+      if (el) el.innerHTML = mxHtml;
     }
 
     return marker;
   }
+
+  // #1293 — divIcon helpers. The live-map node marker is now an
+  // L.marker (divIcon SVG), not an L.circleMarker, so setStyle /
+  // setRadius are no-ops. These helpers update the DOM element
+  // directly so existing call-sites (rescale, stale-dim, matrix mode,
+  // highlight pulse) keep working without same-colour fill stacking.
+  function _liveMarkerEl(marker) {
+    if (!marker || typeof marker.getElement !== 'function') return null;
+    return marker.getElement();
+  }
+  function _liveSetMarkerOpacity(marker, opacity) {
+    var el = _liveMarkerEl(marker);
+    if (el) el.style.opacity = String(opacity);
+  }
+  function _liveSetMarkerSize(marker, sizePx) {
+    var el = _liveMarkerEl(marker);
+    if (!el) return;
+    var svg = el.querySelector('svg');
+    if (svg) {
+      svg.setAttribute('width', sizePx);
+      svg.setAttribute('height', sizePx);
+    }
+    marker._baseSize = sizePx;
+    if (marker._highlightRing && typeof marker._highlightRing.setRadius === 'function') {
+      marker._highlightRing.setRadius(sizePx / 2 + 4);
+    }
+  }
+  function _liveSetMarkerColor(marker, color) {
+    var el = _liveMarkerEl(marker);
+    if (!el) return;
+    if (window.makeRoleMarkerSVG) {
+      el.innerHTML = window.makeRoleMarkerSVG(marker._role || 'unknown', color, marker._baseSize || 14);
+    } else {
+      // Fallback: tweak fill on first shape
+      var shape = el.querySelector('svg > *');
+      if (shape) shape.setAttribute('fill', color);
+    }
+  }
+  window._liveSetMarkerSize = _liveSetMarkerSize;
+  window._liveSetMarkerColor = _liveSetMarkerColor;
 
   function rescaleMarkers() {
     const zoom = map.getZoom();
@@ -2397,10 +2471,8 @@
     for (const [key, marker] of Object.entries(nodeMarkers)) {
       const n = nodeData[key];
       const isRepeater = n && n.role === 'repeater';
-      const size = Math.round((isRepeater ? 6 : 4) * zoomScale);
-      marker.setRadius(size);
-      marker._baseSize = size;
-      if (marker._glowMarker) marker._glowMarker.setRadius(size + 4);
+      const sizePx = Math.max(10, Math.round((isRepeater ? 18 : 14) * zoomScale));
+      _liveSetMarkerSize(marker, sizePx);
     }
   }
 
@@ -2422,15 +2494,14 @@
           // API-loaded nodes: dim instead of removing (consistent with static map)
           if (marker && !marker._staleDimmed) {
             marker._staleDimmed = true;
-            marker.setStyle({ fillOpacity: 0.25, opacity: 0.15 });
-            if (marker._glowMarker) marker._glowMarker.setStyle({ fillOpacity: 0.04 });
+            _liveSetMarkerOpacity(marker, 0.35);
           }
         } else {
           // WS-only nodes: remove to prevent unbounded memory growth
           if (marker) {
             if (nodesLayer) {
               try { nodesLayer.removeLayer(marker); } catch (e) {}
-              if (marker._glowMarker) try { nodesLayer.removeLayer(marker._glowMarker); } catch (e) {}
+              if (marker._highlightRing) try { nodesLayer.removeLayer(marker._highlightRing); } catch (e) {}
             }
           }
           delete nodeMarkers[key];
@@ -2441,9 +2512,7 @@
       } else if (marker && marker._staleDimmed) {
         // Node became active again — restore full opacity
         marker._staleDimmed = false;
-        var isRepeater = n.role === 'repeater';
-        marker.setStyle({ fillOpacity: 0.85, opacity: isRepeater ? 0.6 : 0.3 });
-        if (marker._glowMarker) marker._glowMarker.setStyle({ fillOpacity: 0.12 });
+        _liveSetMarkerOpacity(marker, 1);
       }
     }
     if (pruned) {
@@ -2948,16 +3017,25 @@
     requestAnimationFrame(animatePulse);
 
     const baseColor = marker._baseColor || '#6b7280';
-    const baseSize = marker._baseSize || 6;
-    marker.setStyle({ fillColor: '#fff', fillOpacity: 1, radius: baseSize + 2, color: color, weight: 2 });
+    const baseSize = marker._baseSize || 14;
 
-    if (marker._glowMarker) {
-      marker._glowMarker.setStyle({ fillColor: color, fillOpacity: 0.2, radius: baseSize + 6 });
-      setTimeout(() => marker._glowMarker.setStyle({ fillColor: baseColor, fillOpacity: 0.08, radius: baseSize + 3 }), 500);
+    // #1293 — highlight via OUTLINE ring (no same-colour concentric
+    // fill). Use the marker's pre-allocated _highlightRing; grow + fade
+    // it. Marker shape/colour is left untouched so colourblind silhouette
+    // stays distinguishable during the pulse.
+    const ringHl = marker._highlightRing;
+    if (ringHl && typeof ringHl.setStyle === 'function') {
+      try {
+        ringHl.setStyle({ color: color, weight: 3, opacity: 0.95, fillOpacity: 0, fill: false });
+        ringHl.setRadius(baseSize / 2 + 4);
+        setTimeout(() => {
+          try { ringHl.setStyle({ opacity: 0.4, weight: 2 }); ringHl.setRadius(baseSize / 2 + 8); } catch (e) {}
+        }, 200);
+        setTimeout(() => {
+          try { ringHl.setStyle({ opacity: 0, weight: 0 }); } catch (e) {}
+        }, 700);
+      } catch (e) { /* circleMarker absent — ignore */ }
     }
-
-    setTimeout(() => marker.setStyle({ fillColor: color, fillOpacity: 0.95, radius: baseSize + 1, weight: 1.5 }), 150);
-    setTimeout(() => marker.setStyle({ fillColor: baseColor, fillOpacity: 0.85, radius: baseSize, color: '#fff', weight: marker._baseSize > 6 ? 1.5 : 0.5 }), 700);
 
     nodeActivity[key] = (nodeActivity[key] || 0) + 1;
   }
@@ -3112,8 +3190,7 @@
       for (const [key, marker] of Object.entries(nodeMarkers)) {
         marker._matrixPrevColor = marker._baseColor;
         marker._baseColor = '#008a22';
-        marker.setStyle({ fillColor: '#008a22', color: '#008a22', fillOpacity: 0.5, opacity: 0.5 });
-        if (marker._glowMarker) marker._glowMarker.setStyle({ fillColor: '#008a22', fillOpacity: 0.15 });
+        _liveSetMarkerColor(marker, '#008a22');
       }
     } else {
       container.classList.remove('matrix-theme');
@@ -3134,8 +3211,7 @@
       for (const [key, marker] of Object.entries(nodeMarkers)) {
         if (marker._matrixPrevColor) {
           marker._baseColor = marker._matrixPrevColor;
-          marker.setStyle({ fillColor: marker._matrixPrevColor, color: '#fff', fillOpacity: 0.85, opacity: 1 });
-          if (marker._glowMarker) marker._glowMarker.setStyle({ fillColor: marker._matrixPrevColor });
+          _liveSetMarkerColor(marker, marker._matrixPrevColor);
           delete marker._matrixPrevColor;
         }
       }

@@ -351,6 +351,18 @@
   box-shadow: 0 0 4px currentColor;
 }
 
+/* #1293 — SVG shape-aware legend swatch (replaces the flat colour dot).
+ * Inline-block wrapper keeps SVG aligned with adjacent text labels. */
+.live-shape-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  vertical-align: middle;
+  line-height: 0;
+}
+.live-shape-swatch svg { display: block; }
+
 /* #1274: marker-style swatches — mirror the live map circleMarker ring
  * convention (bright white ring = repeater, faded ring = other roles).
  * Background uses --role-repeater / --text-muted via CSS variables so

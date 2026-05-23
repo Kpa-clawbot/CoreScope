@@ -44,6 +44,18 @@
       case 'triangle':
         path = `<polygon points="${c},2 ${size-2},${size-2} 2,${size-2}" fill="${fillColor}" stroke="#fff" stroke-width="2"/>`;
         break;
+      case 'hexagon': {
+        // #1293 — pointy-top hexagon for room servers
+        const hr = c - 1.5;
+        let hpts = '';
+        for (let hi = 0; hi < 6; hi++) {
+          const ha = (hi * 60 - 90) * Math.PI / 180;
+          hpts += (c + hr * Math.cos(ha)).toFixed(2) + ',' +
+                  (c + hr * Math.sin(ha)).toFixed(2) + ' ';
+        }
+        path = `<polygon points="${hpts.trim()}" fill="${fillColor}" stroke="#fff" stroke-width="2"/>`;
+        break;
+      }
       case 'star': {
         // 5-pointed star
         const cx = c, cy = c, outer = c - 1, inner = outer * 0.4;

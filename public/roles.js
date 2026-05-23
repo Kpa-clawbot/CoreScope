@@ -55,16 +55,95 @@
     sensor: 'Sensors', observer: 'Observers'
   };
 
-  window.ROLE_STYLE = {
-    repeater:  { color: '#dc2626', shape: 'diamond',  radius: 10, weight: 2 },
-    companion: { color: '#2563eb', shape: 'circle',   radius: 8,  weight: 2 },
-    room:      { color: '#16a34a', shape: 'square',   radius: 9,  weight: 2 },
-    sensor:    { color: '#d97706', shape: 'triangle', radius: 8,  weight: 2 },
-    observer:  { color: '#8b5cf6', shape: 'star',     radius: 11, weight: 2 }
+  // #1293 — Marker shape per role (WCAG 1.4.1 — shape, not only colour).
+  // Single source of truth; ROLE_STYLE.shape is derived from this map.
+  window.ROLE_SHAPES = {
+    repeater:  'circle',
+    companion: 'square',
+    room:      'hexagon',
+    sensor:    'triangle',
+    observer:  'diamond'
   };
 
+  window.ROLE_STYLE = {
+    repeater:  { color: '#dc2626', shape: 'circle',   radius: 8,  weight: 2 },
+    companion: { color: '#2563eb', shape: 'square',   radius: 8,  weight: 2 },
+    room:      { color: '#16a34a', shape: 'hexagon',  radius: 9,  weight: 2 },
+    sensor:    { color: '#d97706', shape: 'triangle', radius: 8,  weight: 2 },
+    observer:  { color: '#8b5cf6', shape: 'diamond',  radius: 9,  weight: 2 }
+  };
+
+  // Glyphs mirror the ROLE_SHAPES (used in tooltips, legends, lists).
   window.ROLE_EMOJI = {
-    repeater: '◆', companion: '●', room: '■', sensor: '▲', observer: '★'
+    repeater: '●', companion: '■', room: '⬢', sensor: '▲', observer: '◆'
+  };
+
+  /**
+   * #1293 — Shared SVG marker generator. Returns a self-contained
+   * <svg>...</svg> string for the given role/colour/size, with white
+   * stroke for contrast (works on both dark + light tiles). Used by:
+   *   - public/live.js  → addNodeMarker (L.divIcon)
+   *   - public/live.js  → role legend swatches
+   *   - public/map.js   → makeMarkerIcon (legacy switch retained for
+   *                       per-role overrides + observer star overlay)
+   *
+   * Reads ROLE_SHAPES for the role's geometry; falls back to circle.
+   * Caller controls colour to allow theming overrides (matrix mode,
+   * stale dim, etc.) without rebuilding the marker.
+   */
+  window.makeRoleMarkerSVG = function (role, color, size) {
+    var shape = (window.ROLE_SHAPES && window.ROLE_SHAPES[role]) || 'circle';
+    size = size || 16;
+    var c = size / 2;
+    var fill = color || (window.ROLE_COLORS && window.ROLE_COLORS[role]) || '#6b7280';
+    var path;
+    switch (shape) {
+      case 'square':
+        path = '<rect x="3" y="3" width="' + (size - 6) + '" height="' + (size - 6) +
+               '" fill="' + fill + '" stroke="#fff" stroke-width="2"/>';
+        break;
+      case 'triangle':
+        path = '<polygon points="' + c + ',2 ' + (size - 2) + ',' + (size - 2) +
+               ' 2,' + (size - 2) + '" fill="' + fill + '" stroke="#fff" stroke-width="2"/>';
+        break;
+      case 'diamond':
+        path = '<polygon points="' + c + ',2 ' + (size - 2) + ',' + c + ' ' +
+               c + ',' + (size - 2) + ' 2,' + c +
+               '" fill="' + fill + '" stroke="#fff" stroke-width="2"/>';
+        break;
+      case 'hexagon': {
+        // Pointy-top hexagon centred at (c,c), inscribed radius ≈ c-1.5
+        var r = c - 1.5;
+        var pts = '';
+        for (var i = 0; i < 6; i++) {
+          var a = (i * 60 - 90) * Math.PI / 180;
+          pts += (c + r * Math.cos(a)).toFixed(2) + ',' +
+                 (c + r * Math.sin(a)).toFixed(2) + ' ';
+        }
+        path = '<polygon points="' + pts.trim() + '" fill="' + fill +
+               '" stroke="#fff" stroke-width="2"/>';
+        break;
+      }
+      case 'star': {
+        var cx = c, cy = c, outer = c - 1, inner = outer * 0.4;
+        var spts = '';
+        for (var j = 0; j < 5; j++) {
+          var aO = (j * 72 - 90) * Math.PI / 180;
+          var aI = ((j * 72) + 36 - 90) * Math.PI / 180;
+          spts += (cx + outer * Math.cos(aO)) + ',' + (cy + outer * Math.sin(aO)) + ' ';
+          spts += (cx + inner * Math.cos(aI)) + ',' + (cy + inner * Math.sin(aI)) + ' ';
+        }
+        path = '<polygon points="' + spts.trim() + '" fill="' + fill +
+               '" stroke="#fff" stroke-width="1.5"/>';
+        break;
+      }
+      default: // circle
+        path = '<circle cx="' + c + '" cy="' + c + '" r="' + (c - 2) +
+               '" fill="' + fill + '" stroke="#fff" stroke-width="2"/>';
+    }
+    return '<svg width="' + size + '" height="' + size +
+           '" viewBox="0 0 ' + size + ' ' + size +
+           '" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' + path + '</svg>';
   };
 
   window.ROLE_SORT = ['repeater', 'companion', 'room', 'sensor', 'observer'];
