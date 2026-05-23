@@ -262,6 +262,48 @@
       toggleBtn.setAttribute('aria-expanded', String(!controlsCollapsed));
     });
 
+    // #1329: Map controls accordion. Make each section's legend a button-
+    // style toggle with aria-expanded. On mobile (≤640px) only one section
+    // is open at a time so the panel never needs internal scrolling. On
+    // desktop the .mc-collapsed class has no visual effect (CSS only hides
+    // section bodies inside the mobile media query) so all controls stay
+    // visible — but single-open behaviour is still tracked for state
+    // consistency. See test-issue-1329-map-controls-accordion-e2e.js.
+    (function initMapControlsAccordion() {
+      const isMobile = window.innerWidth <= 640;
+      const sections = Array.from(controlsPanel.querySelectorAll('fieldset.mc-section'));
+      sections.forEach((fs, idx) => {
+        const legend = fs.querySelector('legend.mc-label');
+        if (!legend) return;
+        // Initial state: on mobile only the first section is open; on
+        // desktop all sections are open.
+        const open = !isMobile || idx === 0;
+        legend.setAttribute('role', 'button');
+        legend.setAttribute('tabindex', '0');
+        legend.setAttribute('aria-expanded', String(open));
+        fs.classList.toggle('mc-collapsed', !open);
+        const setOpen = (target, openNow) => {
+          target.setAttribute('aria-expanded', String(openNow));
+          const parent = target.closest('fieldset.mc-section');
+          if (parent) parent.classList.toggle('mc-collapsed', !openNow);
+        };
+        const onActivate = (e) => {
+          e.preventDefault();
+          const currentlyOpen = legend.getAttribute('aria-expanded') === 'true';
+          // Single-open: close every other section first.
+          sections.forEach(other => {
+            const otherLegend = other.querySelector('legend.mc-label');
+            if (otherLegend && otherLegend !== legend) setOpen(otherLegend, false);
+          });
+          setOpen(legend, !currentlyOpen);
+        };
+        legend.addEventListener('click', onActivate);
+        legend.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') onActivate(e);
+        });
+      });
+    })();
+
     // Bind controls
     var clustersEl = document.getElementById('mcClusters');
     if (clustersEl) {

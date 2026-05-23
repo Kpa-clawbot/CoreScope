@@ -1833,8 +1833,34 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .search-box { width: 95vw; }
   .search-overlay { padding-top: 60px; }
 
-  /* Map controls */
-  .map-controls { width: calc(100vw - 24px); right: 12px; top: 8px; max-height: 200px; font-size: 12px; padding: 10px 12px; }
+  /* Map controls — #1329: drop fixed 200px cap, use accordion sections
+     instead so visible content fits without internal scrolling. Panel can
+     grow to fill available height; max-height bound by viewport so it
+     never escapes the screen. */
+  .map-controls { width: calc(100vw - 24px); right: 12px; top: 8px; max-height: calc(100vh - 80px); font-size: 12px; padding: 10px 12px; }
+  /* On mobile, hide collapsed section bodies (everything inside the
+     fieldset except the legend). The legend remains tappable to expand. */
+  .map-controls fieldset.mc-section.mc-collapsed > *:not(legend) { display: none; }
+  .map-controls fieldset.mc-section > legend.mc-label {
+    cursor: pointer;
+    user-select: none;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 0;
+  }
+  /* ▸ / ▾ indicator via ::after so we don't touch markup */
+  .map-controls fieldset.mc-section > legend.mc-label::after {
+    content: '▾';
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-left: 8px;
+    transition: transform 0.15s;
+  }
+  .map-controls fieldset.mc-section.mc-collapsed > legend.mc-label::after {
+    content: '▸';
+  }
   #leaflet-map { z-index: 0; }
   #map-wrap { z-index: 0; }
 
