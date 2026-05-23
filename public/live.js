@@ -2888,7 +2888,7 @@
         const nextGhost = hopPositions[hopIndex + 1].ghost;
         const lineColor = (isGhost || nextGhost) ? '#94a3b8' : color;
         const lineOpacity = (isGhost || nextGhost) ? 0.3 : undefined;
-        drawAnimatedLine(hp.pos, nextPos, lineColor, () => { hopIndex++; nextHop(); }, lineOpacity, rawHex, hash);
+        drawAnimatedLine(hp.pos, nextPos, lineColor, () => { hopIndex++; nextHop(); }, lineOpacity, rawHex, pktMeta?.hash);
       } else {
         if (!isGhost) pulseNode(hp.key, hp.pos, typeName);
         hopIndex++; nextHop();
