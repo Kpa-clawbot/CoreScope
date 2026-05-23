@@ -4070,27 +4070,18 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string, maxChunk int)
 		}
 	}
 
-	// Remove from distance indexes — filter out records referencing evicted txs
-	evictedTxSet := make(map[*StoreTx]bool, cutoffIdx)
-	for _, tx := range evicting {
-		evictedTxSet[tx] = true
+	// Remove from distance indexes — O(evicted) swap-with-last via the by-tx
+	// index maps, instead of O(total distHops+distPaths) full-scan per chunk.
+	// rebuildDistIndexMaps is not needed: removeDistRecordsForTxs maintains the
+	// maps incrementally. Initialise maps from slices only if they are nil.
+	if (s.distHopsByTx == nil || s.distPathsByTx == nil) && (len(s.distHops) > 0 || len(s.distPaths) > 0) {
+		s.rebuildDistIndexMaps()
 	}
-	newDistHops := s.distHops[:0]
-	for i := range s.distHops {
-		if !evictedTxSet[s.distHops[i].tx] {
-			newDistHops = append(newDistHops, s.distHops[i])
-		}
+	evictedTxIDsBool := make(map[int]bool, len(evictedTxIDs))
+	for id := range evictedTxIDs {
+		evictedTxIDsBool[id] = true
 	}
-	s.distHops = newDistHops
-
-	newDistPaths := s.distPaths[:0]
-	for i := range s.distPaths {
-		if !evictedTxSet[s.distPaths[i].tx] {
-			newDistPaths = append(newDistPaths, s.distPaths[i])
-		}
-	}
-	s.distPaths = newDistPaths
-	s.rebuildDistIndexMaps()
+	s.removeDistRecordsForTxs(evictedTxIDsBool)
 
 	// Trim packets slice
 	n := copy(s.packets, s.packets[cutoffIdx:])
@@ -4115,10 +4106,6 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string, maxChunk int)
 	s.hashSizeInfoMu.Lock()
 	s.hashSizeInfoCache = nil
 	s.hashSizeInfoMu.Unlock()
-
-	// Compact resolved pubkey index after eviction sweep
-	s.CompactResolvedPubkeyIndex()
-	s.CheckResolvedPubkeyIndexSize()
 
 	return evictCount
 }
@@ -4154,10 +4141,15 @@ func (s *PacketStore) RunEviction() int {
 	// nodeHashes indexes stale. Stopping at len(txIDs) also restores the
 	// original intent of the safety cap: at most 25% of the store is removed
 	// per RunEviction call (≈ per ticker fire), preventing sudden large drops.
-	const evictionChunkSize = 2000
+	// Smaller chunk size reduces per-chunk write-lock hold from seconds to
+	// tens of milliseconds, giving readers (/api/stats, /api/health) a window
+	// between chunks.  The loop safety bound is set generously so the full
+	// 25%-of-store cap can always be reached even at the smaller chunk size.
+	const evictionChunkSize = 500
 	maxTotal := len(txIDs)
 	total := 0
-	for range 50 { // safety bound: never more than 50 lock acquisitions
+	maxChunks := maxTotal/evictionChunkSize + 10 // generous safety bound
+	for i := 0; i < maxChunks; i++ {
 		if total >= maxTotal {
 			break
 		}
@@ -4174,6 +4166,16 @@ func (s *PacketStore) RunEviction() int {
 			break
 		}
 		runtime.Gosched() // yield between chunks so readers can acquire RLock
+	}
+	// Compact the resolved pubkey index once per RunEviction call rather than
+	// once per chunk — CompactResolvedPubkeyIndex is O(index size) and calling
+	// it 25–100 times per RunEviction was the dominant source of write-lock
+	// contention visible in /api/stats latency.
+	if total > 0 {
+		s.mu.Lock()
+		s.CompactResolvedPubkeyIndex()
+		s.CheckResolvedPubkeyIndexSize()
+		s.mu.Unlock()
 	}
 	return total
 }
