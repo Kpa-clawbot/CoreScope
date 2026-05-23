@@ -105,11 +105,12 @@ func (h *HealthMQTTClient) Start(brokerURL string) {
 			log.Printf("[health-mqtt] connection lost: %v — will reconnect", err)
 		})
 
+	log.Printf("[health-mqtt] connecting to %s", brokerURL)
 	h.client = mqtt.NewClient(opts)
 	tok := h.client.Connect()
 	tok.Wait()
 	if err := tok.Error(); err != nil {
-		log.Printf("[health-mqtt] initial connect to %s failed: %v", brokerURL, err)
+		log.Printf("[health-mqtt] initial connect to %s failed: %v — will keep retrying", brokerURL, err)
 	}
 
 	h.refreshSessions()

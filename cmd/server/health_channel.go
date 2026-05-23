@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"unicode/utf8"
 )
 
 // ChannelKey holds the derived AES and HMAC keys for a health-check channel.
@@ -139,17 +140,14 @@ func (ck *ChannelKey) ParseGroupTextMessage(cipherBytes []byte) (sender, message
 		return "", "", false
 	}
 
-	// Require ≥70 % printable ASCII (same heuristic as source), evaluated on
-	// the null-stripped bytes so AES padding doesn't inflate the non-printable
-	// count.
-	printable := 0
-	for i := 0; i < len(raw); i++ {
-		b := raw[i]
-		if (b >= 32 && b <= 126) || b == 9 || b == 10 || b == 13 {
-			printable++
-		}
-	}
-	if float64(printable)/float64(len(raw)) < 0.7 {
+	// Reject garbage decryption by requiring valid UTF-8.
+	// A wrong AES key produces random bytes that are almost never valid UTF-8
+	// (invalid byte sequences are immediately detectable). The old 70%-printable-
+	// ASCII heuristic was adapted from the source project but failed for any
+	// sender name that contained non-ASCII characters (emoji, accented letters,
+	// symbols like chess pieces) because those multibyte sequences were counted
+	// as non-printable even though they are perfectly valid Unicode text.
+	if !utf8.ValidString(raw) {
 		return "", "", false
 	}
 
