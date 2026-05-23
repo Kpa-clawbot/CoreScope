@@ -1,0 +1,168 @@
+/* nav-drawer.css — Issue #1064 / PR companion to nav-drawer.js
+ *
+ * Left-edge slide-over drawer. Enabled at viewports > 768px only
+ * (Option A per nav-drawer.js header — at ≤768px the bottom-nav More
+ * tab covers the same routes).
+ *
+ * Tokens: --nav-bg, --nav-bg2, --nav-text, --nav-text-muted,
+ *         --nav-active-bg, --accent, --border (all defined in style.css).
+ */
+
+/* ── Backdrop ──────────────────────────────────────────────────────────── */
+.nav-drawer-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1290; /* below drawer (1300), above page content */
+  background: rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transition: opacity 250ms ease;
+}
+
+.nav-drawer-backdrop.is-open {
+  display: block;
+  opacity: 1;
+}
+
+/* ── Drawer panel ──────────────────────────────────────────────────────── */
+.nav-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: min(320px, 85vw);
+  z-index: 1300;
+  background: var(--nav-bg);
+  border-right: 1px solid var(--border);
+  box-shadow: 4px 0 32px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(-100%);
+  transition: transform 250ms ease;
+  overflow: hidden;
+  /* Prevent the off-screen drawer from creating a scrollable region */
+  overscroll-behavior: contain;
+}
+
+.nav-drawer.is-open {
+  transform: translateX(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-drawer,
+  .nav-drawer-backdrop {
+    transition: none;
+  }
+}
+
+/* Hide entirely at ≤768px — bottom-nav More tab handles those routes */
+@media (max-width: 768px) {
+  .nav-drawer,
+  .nav-drawer-backdrop {
+    display: none !important;
+  }
+}
+
+/* ── Header ────────────────────────────────────────────────────────────── */
+.nav-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.nav-drawer-title {
+  color: var(--nav-text);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.nav-drawer-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--nav-text-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.nav-drawer-close:hover,
+.nav-drawer-close:focus-visible {
+  color: var(--nav-text);
+  background: var(--nav-active-bg, rgba(255, 255, 255, 0.08));
+  outline: none;
+}
+
+.nav-drawer-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ── Nav list ──────────────────────────────────────────────────────────── */
+.nav-drawer-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.nav-drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--nav-text-muted);
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 600;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.nav-drawer-item:hover,
+.nav-drawer-item:focus-visible {
+  color: var(--nav-text);
+  background: var(--nav-active-bg, rgba(255, 255, 255, 0.08));
+  outline: none;
+}
+
+.nav-drawer-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.nav-drawer-item.active {
+  color: var(--nav-text);
+  background: var(--nav-active-bg, rgba(255, 255, 255, 0.08));
+  border-left: 3px solid var(--accent);
+  padding-left: 9px; /* compensate for the 3px border */
+}
+
+.nav-drawer-icon {
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.nav-drawer-label {
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-drawer-item,
+  .nav-drawer-close {
+    transition: none;
+  }
+}
