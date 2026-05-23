@@ -113,30 +113,38 @@ func (h *HealthMQTTClient) RegisterSession(sess *HealthSession) {
 	h.mu.Unlock()
 }
 
-// Start connects to every source in sources and starts subscriptions. It spawns
-// one goroutine per source, waits for each initial connect attempt, then returns.
-// Pass a single-element slice for backward-compatible single-broker operation.
+// Start connects to every source in sources and starts subscriptions. It
+// fires one connectSource goroutine per broker and returns immediately —
+// it does NOT wait for connections to be established before returning.
+//
+// The previous design used wg.Wait() to block until every initial connect
+// attempt completed. This is incorrect with SetConnectRetry(true): paho
+// loops RETRYCONN forever on failure, so the Connect token is never
+// resolved and tok.Wait() hangs indefinitely. Any source that never
+// connects (e.g. wss:// brokers with cert/network issues) would prevent
+// wg.Wait() from returning, which in turn prevented refreshSessions() and
+// expiryLoop() from ever starting — silently breaking session matching.
+//
+// Pass a single-element slice for backward-compatible single-broker use.
 func (h *HealthMQTTClient) Start(sources []MQTTSource) {
 	h.clientsMu.Lock()
 	h.sources = sources
 	h.clientsMu.Unlock()
 
-	var wg sync.WaitGroup
 	for _, src := range sources {
-		wg.Add(1)
-		go func(s MQTTSource) {
-			defer wg.Done()
-			h.connectSource(s)
-		}(src)
+		go h.connectSource(src)
 	}
-	wg.Wait()
 
+	// refreshSessions and expiryLoop are independent of broker connectivity;
+	// start them immediately so session matching and expiry work even while
+	// some brokers are still connecting.
 	h.refreshSessions()
 	go h.expiryLoop()
 }
 
 // connectSource creates an MQTT client for src, registers it, and connects.
-// It blocks until the initial connect attempt completes (success or failure).
+// It logs the outcome of the initial connect attempt (with a 15 s timeout)
+// and then returns; ongoing reconnection is handled by paho's AutoReconnect.
 func (h *HealthMQTTClient) connectSource(src MQTTSource) {
 	topics := src.Topics
 	if len(topics) == 0 {
@@ -212,9 +220,16 @@ func (h *HealthMQTTClient) connectSource(src MQTTSource) {
 
 	log.Printf("[health-mqtt] connecting to %s (%s)", brokerURL, name)
 	tok := client.Connect()
-	tok.Wait()
-	if err := tok.Error(); err != nil {
-		log.Printf("[health-mqtt] initial connect to %s (%s) failed: %v — will keep retrying", brokerURL, name, err)
+	// Use WaitTimeout instead of Wait: with ConnectRetry=true, paho loops
+	// RETRYCONN indefinitely on failure and never resolves the token, so
+	// tok.Wait() would block forever.  15 s is long enough to distinguish
+	// a fast-fail (TCP refused/TLS error) from a slow network.
+	if tok.WaitTimeout(15 * time.Second) {
+		if err := tok.Error(); err != nil {
+			log.Printf("[health-mqtt] initial connect to %s (%s) failed: %v — will keep retrying", brokerURL, name, err)
+		}
+	} else {
+		log.Printf("[health-mqtt] initial connect to %s (%s) timed out — will keep retrying in background", brokerURL, name)
 	}
 }
 
