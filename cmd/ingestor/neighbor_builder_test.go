@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestNeighborEdgesBuilderUpsertsFromObservations enforces issue
@@ -61,12 +62,12 @@ func TestNeighborEdgesBuilderUpsertsFromObservations(t *testing.T) {
 	// to bbbbb… in the nodes table). Expected edge: a↔b.
 	if _, err := store.db.Exec(
 		`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp) VALUES (?, ?, ?, ?)`,
-		txID, obsRowid, `["bb"]`, int64(1735689600),
+		txID, obsRowid, `["bb"]`, time.Now().Unix(),
 	); err != nil {
 		t.Fatal(err)
 	}
 
-	n, err := store.buildAndPersistNeighborEdges()
+	n, err := store.buildAndPersistNeighborEdges(7 * 86400)
 	if err != nil {
 		t.Fatalf("buildAndPersistNeighborEdges: %v", err)
 	}

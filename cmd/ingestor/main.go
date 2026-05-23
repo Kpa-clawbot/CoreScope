@@ -200,9 +200,10 @@ func main() {
 	// Neighbor-edges builder (#1287 — Option 4): ingestor owns
 	// neighbor_edges writes. Runs every 60s. Server reads the snapshot
 	// via cmd/server/neighbor_recomputer.go on the same cadence.
-	stopNeighborBuilder := store.StartNeighborEdgesBuilder(NeighborEdgesBuilderInterval)
+	neighborLookback := int64(cfg.NeighborEdgesDaysOrDefault()) * 86400
+	stopNeighborBuilder := store.StartNeighborEdgesBuilder(NeighborEdgesBuilderInterval, neighborLookback)
 	defer stopNeighborBuilder()
-	log.Printf("[neighbor-build] enabled (interval=%s)", NeighborEdgesBuilderInterval)
+	log.Printf("[neighbor-build] enabled (interval=%s, lookback=%dd)", NeighborEdgesBuilderInterval, cfg.NeighborEdgesDaysOrDefault())
 
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {

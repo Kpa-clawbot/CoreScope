@@ -35,7 +35,7 @@ type edgeRow struct {
 // The function returns a stop closure. Initial build runs synchronously
 // before the ticker starts so the server's first snapshot load picks
 // up real data instead of an empty table.
-func (s *Store) StartNeighborEdgesBuilder(interval time.Duration) func() {
+func (s *Store) StartNeighborEdgesBuilder(interval time.Duration, lookbackSecs int64) func() {
 	if interval <= 0 {
 		interval = NeighborEdgesBuilderInterval
 	}
@@ -44,7 +44,7 @@ func (s *Store) StartNeighborEdgesBuilder(interval time.Duration) func() {
 
 	// Synchronous warm-up: a single pass so the first server load
 	// after process start sees a populated table.
-	if n, err := s.buildAndPersistNeighborEdges(); err != nil {
+	if n, err := s.buildAndPersistNeighborEdges(lookbackSecs); err != nil {
 		log.Printf("[neighbor-build] initial build error: %v", err)
 	} else {
 		log.Printf("[neighbor-build] initial build: %d edges upserted", n)
@@ -58,7 +58,7 @@ func (s *Store) StartNeighborEdgesBuilder(interval time.Duration) func() {
 		for {
 			select {
 			case <-t.C:
-				if n, err := s.buildAndPersistNeighborEdges(); err != nil {
+				if n, err := s.buildAndPersistNeighborEdges(lookbackSecs); err != nil {
 					log.Printf("[neighbor-build] tick error: %v", err)
 				} else if n > 0 {
 					log.Printf("[neighbor-build] %d edges upserted", n)
@@ -78,16 +78,17 @@ func (s *Store) StartNeighborEdgesBuilder(interval time.Duration) func() {
 	}
 }
 
-// buildAndPersistNeighborEdges scans transmissions + observations,
-// extracts edge candidates (originator↔first-hop on ADVERTs;
-// observer↔last-hop on all packet types) and upserts them into
-// neighbor_edges. Returns count of attempted upserts.
+// buildAndPersistNeighborEdges scans recent transmissions + observations
+// (within lookbackSecs seconds) and upserts derived neighbor_edges rows.
+// Using a bounded window avoids a full-table scan on large deployments;
+// historical edges already in neighbor_edges are preserved by the upsert.
+// Returns count of attempted upserts.
 //
 // Resolution of hop-prefix → full pubkey is done via a one-shot
 // SELECT of (lowered) pubkey prefixes from nodes. Prefixes with
 // multiple candidates are skipped (matches the conservative
 // resolution rule in cmd/server/extractEdgesFromObs).
-func (s *Store) buildAndPersistNeighborEdges() (int, error) {
+func (s *Store) buildAndPersistNeighborEdges(lookbackSecs int64) (int, error) {
 	prefixIdx, err := buildPrefixIndex(s.db)
 	if err != nil {
 		return 0, fmt.Errorf("build prefix index: %w", err)
@@ -102,7 +103,8 @@ func (s *Store) buildAndPersistNeighborEdges() (int, error) {
 		o.timestamp
 	FROM observations o
 	JOIN transmissions t ON t.id = o.transmission_id
-	LEFT JOIN observers obs ON obs.rowid = o.observer_idx`)
+	LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+	WHERE o.timestamp > strftime('%s', 'now') - ?`, lookbackSecs)
 	if err != nil {
 		return 0, fmt.Errorf("scan observations: %w", err)
 	}
