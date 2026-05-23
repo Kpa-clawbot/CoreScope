@@ -288,9 +288,27 @@ func main() {
 				token.Wait()
 				if token.Error() != nil {
 					log.Printf("MQTT [%s] subscribe error for %s: %v", tag, t, token.Error())
-				} else {
-					log.Printf("MQTT [%s] subscribed to %s", tag, t)
+					continue
 				}
+				// Check SUBACK return codes. A broker that accepts the CONNECT
+				// but denies SUBSCRIBE (ACL, auth scope, etc.) returns 0x80 in
+				// the SUBACK payload. Paho stores this in Result() but does NOT
+				// set token.Error(), so the caller would silently believe the
+				// subscription succeeded while receiving zero messages (#1298).
+				subToken, ok := token.(*mqtt.SubscribeToken)
+				if ok {
+					denied := false
+					for topic, code := range subToken.Result() {
+						if code == 0x80 {
+							log.Printf("MQTT [%s] subscribe DENIED by broker for %s (SUBACK 0x80) — check ACL / credentials", tag, topic)
+							denied = true
+						}
+					}
+					if denied {
+						continue
+					}
+				}
+				log.Printf("MQTT [%s] subscribed to %s", tag, t)
 			}
 		})
 
