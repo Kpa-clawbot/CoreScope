@@ -157,11 +157,11 @@
     o.setAttribute('role', 'group');
     o.setAttribute('aria-label', 'Row actions');
     var hash = row.getAttribute('data-hash') || row.getAttribute('data-id') || '';
+    var hashAttr = ' data-hash="' + String(hash).replace(/"/g, '&quot;') + '"';
     o.innerHTML =
-      '<button type="button" class="row-action-btn" data-row-action="trace">Trace</button>' +
-      '<button type="button" class="row-action-btn" data-row-action="filter">Filter</button>' +
-      '<button type="button" class="row-action-btn" data-row-action="copy" data-hash="' +
-      String(hash).replace(/"/g, '&quot;') + '">Copy hash</button>';
+      '<button type="button" class="row-action-btn" data-row-action="trace"' + hashAttr + '>Trace</button>' +
+      '<button type="button" class="row-action-btn" data-row-action="filter"' + hashAttr + '>Filter</button>' +
+      '<button type="button" class="row-action-btn" data-row-action="copy"' + hashAttr + '>Copy hash</button>';
     document.body.appendChild(o);
     rowOverlay = o;
     return o;
