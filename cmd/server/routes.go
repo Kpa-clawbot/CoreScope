@@ -1665,7 +1665,24 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 			// async backfill incomplete). Use biased re-resolve and the
 			// legacy containsTarget heuristics (preserves #1197 behavior
 			// and the #929 prefix-collision exclusion test).
+			//
+			// #1352: When a hop prefix has MULTIPLE candidates (sibling
+			// prefix collisions), the biased resolver — anchored on the
+			// queried target via hopContext=[lowerPK] — will preferentially
+			// resolve to the target via tier-2 geo / tier-3 GPS. This
+			// causes the SAME tx to be attributed to every prefix sibling
+			// when each is queried in turn. To prevent wrong-node
+			// attribution, we ONLY accept a resolver match as evidence of
+			// target membership when:
+			//   (a) the tx was already pre-confirmed via
+			//       confirmedByFullKey (resolved_path index hit) or
+			//       confirmedBySQL (verified pubkey in resolved_path), OR
+			//   (b) the hop's prefix candidate set is UNIQUE — no
+			//       collision, so the resolver had no choice to bias.
+			// Multi-candidate hops with no SQL/index confirmation are
+			// treated as ambiguous and excluded from paths-through.
 			containsTarget = confirmedByFullKey[tx.ID] || confirmedBySQL[tx.ID]
+			preconfirmed := containsTarget
 			for i, hop := range hops {
 				resolved := resolveHop(hop)
 				entry := PathHopResp{Prefix: hop, Name: hop}
@@ -1678,13 +1695,24 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 					}
 					sigParts[i] = resolved.PublicKey
 					if strings.ToLower(resolved.PublicKey) == lowerPK {
-						containsTarget = true
+						// #1352: only attribute when unambiguous OR
+						// already pre-confirmed via SQL/full-key index.
+						if preconfirmed || len(pm.m[strings.ToLower(hop)]) <= 1 {
+							containsTarget = true
+						}
 					}
 				} else {
 					sigParts[i] = hop
-					// Unresolvable hop: keep conservative if prefix could be the target.
-					if strings.HasPrefix(lowerPK, strings.ToLower(hop)) {
-						containsTarget = true
+					// Unresolvable hop: keep conservative if prefix could
+					// be the target AND there's no sibling collision.
+					// If multiple candidates share this prefix, attribution
+					// is ambiguous — don't claim membership without SQL
+					// confirmation (#1352).
+					lowerHop := strings.ToLower(hop)
+					if strings.HasPrefix(lowerPK, lowerHop) {
+						if preconfirmed || len(pm.m[lowerHop]) <= 1 {
+							containsTarget = true
+						}
 					}
 				}
 				resolvedHops[i] = entry
