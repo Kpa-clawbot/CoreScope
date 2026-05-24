@@ -178,6 +178,9 @@
   --bg-secondary: var(--surface-2);
   --text-secondary: var(--text-muted);
   --bg: var(--surface);
+  /* PR #893: --shadow used by .theme-toggle thumb shadow; define in :root for
+   * light theme. Dark theme override is set in both dark-mode blocks below. */
+  --shadow: rgba(0,0,0,0.3);
   --trace-ghost-color: #94a3b8;
 
   /* #1128: documented z-index scale. Use these custom props for any new
@@ -226,6 +229,7 @@
     --input-bg: #1e1e34;
     --selected-bg: #1e3a5f;
     --hover-bg: rgba(255,255,255, 0.06);
+    --shadow: rgba(0,0,0,0.5);
     --trace-ghost-color: #94a3b8;
     --section-bg: #1e1e34;
   }
@@ -256,6 +260,7 @@
   --input-bg: #1e1e34;
   --selected-bg: #1e3a5f;
   --hover-bg: rgba(255,255,255, 0.06);
+  --shadow: rgba(0,0,0,0.5);
   --trace-ghost-color: #94a3b8;
   --section-bg: #1e1e34;
 }
@@ -640,7 +645,7 @@ input[type="week"] {
 .theme-toggle-thumb {
   position: absolute; left: 3px; width: 18px; height: 18px;
   background: var(--nav-text); border-radius: 50%;
-  box-shadow: 0 1px 3px var(--shadow, rgba(0,0,0,0.3));
+  box-shadow: 0 1px 3px var(--shadow);
   transition: transform 0.2s ease;
   z-index: 1;
 }
