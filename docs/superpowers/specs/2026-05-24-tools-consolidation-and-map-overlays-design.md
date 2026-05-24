@@ -88,12 +88,22 @@ Both files use:
 
 **Inline styles:** Replace all `var(--token, hardcoded-value)` with `var(--token)`. Correct token names to match `style.css` (`--surface-1`, `--surface-2`, `--text`, `--text-muted`, `--border`, `--input-bg`, `--accent`).
 
-**Tile-layer theme switching:** Both files init a Leaflet map with a single `L.tileLayer`. Replace with a `setMapTiles(map)` helper that:
+**Tile-layer theme switching:** Both files init a Leaflet map with a single `L.tileLayer`. Replace with a `setMapTiles(map, selectedTile)` helper that:
 
-1. Reads `document.documentElement.dataset.theme` (or `prefers-color-scheme` media query if no explicit theme is set) to determine current mode.
-2. Uses OSM standard tiles for light mode, OSM dark (`https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png`) for dark mode — same tile sources already used in `map.js`.
-3. Attaches a `MutationObserver` on `document.documentElement` watching `data-theme` attribute changes to swap tile layers live — mirrors the `_mapThemeObs` pattern in `map.js`.
+1. Uses the global `window.getTileUrl()` helper (defined in `roles.js`, always loaded first) to pick `TILE_LIGHT` or `TILE_DARK` based on current theme. These globals are already operator-overridable via `config.tiles`.
+2. If `selectedTile === 'topo'`, always uses `window.TILE_TOPO` regardless of theme (OpenTopo has no dark variant).
+3. Attaches a `MutationObserver` on `document.documentElement` watching `data-theme` changes to call `tileLayer.setUrl(getTileUrl())` — mirrors the `_mapThemeObs` pattern in `map.js`. Observer is a no-op when `selectedTile === 'topo'`.
 4. Observer is stored and disconnected in `destroy()`.
+
+**Tile selector UI:** Each tool map (LOS, RF Coverage, and the Route History map in analytics) gets a small tile-source picker rendered as three buttons inside the map container (top-right, above zoom controls):
+
+```
+[🗺 Default] [🏔 Topo]
+```
+
+"Default" = `getTileUrl()` (light/dark-aware). "Topo" = OpenTopo. The active button gets `.active` styling using CSS variables. Selected tile is persisted per-tool in `localStorage` (e.g. `meshcore-los-tile`, `meshcore-rfc-tile`, `meshcore-rh-tile`).
+
+**`roles.js` addition:** Add `window.TILE_TOPO = 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png'` alongside `TILE_LIGHT` / `TILE_DARK` so all tool maps reference the same constant.
 
 ---
 
@@ -163,7 +173,7 @@ Total edges: N  |  Highest volume: Node A ↔ Node B (47 pkts)
 - Weight: `2 + Math.min(count / 10, 6)` pixels (range 2–8px).
 - Click popup: node names, count, last seen, up to 5 sample hashes as links to `#/tools/trace/<hash>`.
 
-Map uses the same tile-switching pattern as the theming fix (dark/light aware). Tab init fetches data once; Refresh button re-fetches.
+Map uses the same tile-switching pattern as the theming fix (dark/light aware, with OpenTopo option). Uses `window.getTileUrl()` and `window.TILE_TOPO` globals from `roles.js`. Tile selector buttons (Default / Topo) appear top-right of the map; selection persisted to `localStorage('meshcore-rh-tile')`. Tab init fetches data once; Refresh button re-fetches.
 
 ### Live map overlay toggle
 
@@ -308,6 +318,7 @@ Fill opacity: 0.35. Border opacity: 0.6. Click popup: type, SNR, timestamp (huma
 | `cmd/server/config.go` | Modify | Add `MeshMapper *MeshMapperConfig` field + accessors |
 | `cmd/server/routes.go` | Modify | Register new routes |
 | `public/style.css` | Modify | Raise nav-action-btn collapse breakpoints (icon-only ≤1600px, hidden ≤1400px) |
+| `public/roles.js` | Modify | Add `window.TILE_TOPO` constant alongside `TILE_LIGHT` / `TILE_DARK` |
 
 ---
 
