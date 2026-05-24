@@ -132,3 +132,64 @@ func TestHandleLOS_InvalidJSON(t *testing.T) {
 		t.Errorf("expected 400, got %d", w.Code)
 	}
 }
+
+func TestHandleLOS_Integration(t *testing.T) {
+	// Mock elevation API that returns 50m for every point
+	mockElev := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		locations := r.URL.Query().Get("locations")
+		parts := strings.Split(locations, "|")
+		results := make([]map[string]interface{}, len(parts))
+		for i := range parts {
+			results[i] = map[string]interface{}{
+				"lat": 0, "lon": 0,
+				"datasets": []map[string]interface{}{
+					{"elevation": 50.0},
+				},
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"results": results})
+	}))
+	defer mockElev.Close()
+
+	cfg := &Config{LOS: &LOSConfig{
+		ElevationURL:  mockElev.URL,
+		SampleMin:     10,
+		SampleMax:     10,
+		CacheTTLHours: 1,
+	}}
+	srv := &Server{cfg: cfg, perfStats: NewPerfStats()}
+	r := mux.NewRouter()
+	r.HandleFunc("/api/los", srv.handleLOS).Methods("POST")
+
+	body := strings.NewReader(`{
+		"lat_a": 52.0, "lon_a": 4.0,
+		"lat_b": 52.1, "lon_b": 4.1,
+		"antenna_height_a": 2, "antenna_height_b": 2
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/los", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp losResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	// Flat terrain at 50m; antenna raises both endpoints to 52m → LOS clear
+	if !resp.LOSClear {
+		t.Errorf("expected LOS clear for flat terrain, max_violation=%.2f", resp.MaxViolationM)
+	}
+	if resp.MaxViolationM != 0 {
+		t.Errorf("expected 0 violation, got %.2f", resp.MaxViolationM)
+	}
+	if len(resp.Profile) == 0 {
+		t.Errorf("expected non-empty profile")
+	}
+	if resp.DistanceKm <= 0 {
+		t.Errorf("expected positive distance, got %.2f", resp.DistanceKm)
+	}
+}
