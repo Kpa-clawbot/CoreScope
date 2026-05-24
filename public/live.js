@@ -1094,12 +1094,10 @@
             <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
             <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
             <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="Filter live packets by IATA region"></div>
-          </div>
-          <div class="live-overlay-toggles" id="liveOverlayToggles">
             <label><input type="checkbox" id="liveOverlayRouteHistory"> 📈 Route History</label>
             <label id="liveOverlayRadarLabel"><input type="checkbox" id="liveOverlayRadar"> 🌧️ Radar</label>
             <label><input type="checkbox" id="liveOverlayWind"> 💨 Wind</label>
-            <label id="liveOverlayMeshMapperLabel"><input type="checkbox" id="liveOverlayMeshMapper"> 📶 MeshMapper</label>
+            <label id="liveOverlayMeshMapperLabel" style="display:none"><input type="checkbox" id="liveOverlayMeshMapper"> 📶 MeshMapper</label>
           </div>
           <div class="audio-controls hidden" id="audioControls">
             <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
@@ -3883,15 +3881,16 @@
     });
     if (wndCheck && wndCheck.checked) MapOverlays.initWind(map);
 
-    // MeshMapper: probe at init time so the label hides before the user sees it
+    // MeshMapper: label starts hidden; probe at init time reveals it only when configured
     fetch('/api/coverage/meshmapper', { method: 'HEAD' })
       .then(function (r) {
         if (r.status === 503) {
-          if (mmLabel) mmLabel.style.display = 'none';
+          // API key not configured — keep hidden, clear any stale saved state
           localStorage.setItem('meshcore-overlay-meshmapper', 'false');
           return;
         }
-        // Configured — init if saved state is on
+        // Configured — reveal the toggle and restore saved state
+        if (mmLabel) mmLabel.style.display = '';
         if (mmCheck && mmCheck.checked) {
           MapOverlays.initMeshMapper(map, function () {
             if (mmCheck) { mmCheck.checked = false; localStorage.setItem('meshcore-overlay-meshmapper', 'false'); }
@@ -3899,7 +3898,8 @@
         }
       })
       .catch(function () {
-        if (mmLabel) mmLabel.style.display = 'none';
+        // Network error — stay hidden
+        localStorage.setItem('meshcore-overlay-meshmapper', 'false');
       });
 
     rhCheck && rhCheck.addEventListener('change', function () {
