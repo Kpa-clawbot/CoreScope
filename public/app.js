@@ -860,15 +860,18 @@ const pages = {};
 
 function registerPage(name, mod) { pages[name] = mod; }
 
-// Tools landing page — shows sub-menu with Trace and Path Inspector (spec §2.8, M1 fix).
+// Tools landing page — shows sub-menu with all tools.
 registerPage('tools-landing', {
   init: function (container) {
     container.innerHTML =
       '<div class="tools-landing">' +
-        '<h2>Tools</h2>' +
+        '<h2>🛠️ CoreScope Tools</h2>' +
         '<div class="tools-menu">' +
-          '<a href="#/tools/path-inspector" class="tools-card"><h3>🔍 Path Inspector</h3><p>Resolve prefix paths to candidate full-pubkey routes with confidence scoring.</p></a>' +
-          '<a href="#/tools/trace/" class="tools-card"><h3>📡 Trace Viewer</h3><p>View detailed packet traces by hash.</p></a>' +
+          '<a href="#/tools/path-inspector" class="tools-card"><h3>🔍 Path Inspector</h3><p>Resolve hex prefix paths to candidate full-pubkey routes with confidence scoring.</p></a>' +
+          '<a href="#/tools/trace/" class="tools-card"><h3>📡 Trace Viewer</h3><p>View detailed packet traces by hash — see every observer, path, and signal reading.</p></a>' +
+          '<a href="#/tools/los" class="tools-card"><h3>🔭 LOS Analyzer</h3><p>Check line-of-sight between two points with terrain elevation and relay suggestions.</p></a>' +
+          '<a href="#/tools/rf-coverage" class="tools-card"><h3>📡 RF Coverage</h3><p>Compute terrain-aware LoRa coverage polygon from a transmitter position.</p></a>' +
+          '<a href="#/tools/mc-keygen" class="tools-card"><h3>🔑 MC-Keygen</h3><p>Generate and manage MeshCore keypairs for node identity.</p></a>' +
         '</div>' +
       '</div>';
   },
@@ -936,7 +939,7 @@ function navigate() {
     basePage = 'observer-detail';
   }
 
-  // Tools sub-routing (issue #944): tools/trace/<hash>, tools/path-inspector
+  // Tools sub-routing: tools/trace/<hash>, tools/path-inspector, tools/los, tools/rf-coverage, tools/mc-keygen
   if (basePage === 'tools') {
     if (routeParam && routeParam.startsWith('trace/')) {
       basePage = 'traces';
@@ -944,8 +947,16 @@ function navigate() {
     } else if (routeParam === 'path-inspector' || (routeParam && routeParam.startsWith('path-inspector'))) {
       basePage = 'path-inspector';
       routeParam = null;
+    } else if (routeParam === 'los') {
+      basePage = 'los';
+      routeParam = null;
+    } else if (routeParam === 'rf-coverage') {
+      basePage = 'rf-coverage';
+      routeParam = null;
+    } else if (routeParam === 'mc-keygen') {
+      basePage = 'mc-keygen';
+      routeParam = null;
     } else if (!routeParam) {
-      // Default tools landing shows menu with both entries.
       basePage = 'tools-landing';
     }
   }
@@ -956,7 +967,7 @@ function navigate() {
 
   // Update nav active state
   document.querySelectorAll('.nav-link[data-route]').forEach(el => {
-    el.classList.toggle('active', el.dataset.route === basePage || (el.dataset.route === 'tools' && (basePage === 'mc-keygen' || basePage === 'traces' || basePage === 'path-inspector' || basePage === 'tools-landing')));
+    el.classList.toggle('active', el.dataset.route === basePage || (el.dataset.route === 'tools' && (basePage === 'mc-keygen' || basePage === 'traces' || basePage === 'path-inspector' || basePage === 'tools-landing' || basePage === 'los' || basePage === 'rf-coverage')));
   });
   // Update "More" button to show active state if a low-priority page is selected
   var moreBtn = document.getElementById('navMoreBtn');
