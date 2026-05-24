@@ -36,13 +36,13 @@
     let path;
     switch (s.shape) {
       case 'diamond':
-        path = `<polygon points="${c},2 ${size-2},${c} ${c},${size-2} 2,${c}" fill="${fillColor}" stroke="#fff" stroke-width="2"/>`;
+        path = `<polygon points="${c},2 ${size-2},${c} ${c},${size-2} 2,${c}" fill="${fillColor}" stroke="#fff" stroke-width="1"/>`;
         break;
       case 'square':
-        path = `<rect x="3" y="3" width="${size-6}" height="${size-6}" fill="${fillColor}" stroke="#fff" stroke-width="2"/>`;
+        path = `<rect x="3" y="3" width="${size-6}" height="${size-6}" fill="${fillColor}" stroke="#fff" stroke-width="1"/>`;
         break;
       case 'triangle':
-        path = `<polygon points="${c},2 ${size-2},${size-2} 2,${size-2}" fill="${fillColor}" stroke="#fff" stroke-width="2"/>`;
+        path = `<polygon points="${c},2 ${size-2},${size-2} 2,${size-2}" fill="${fillColor}" stroke="#fff" stroke-width="1"/>`;
         break;
       case 'hexagon': {
         // #1293 — pointy-top hexagon for room servers
@@ -53,7 +53,7 @@
           hpts += (c + hr * Math.cos(ha)).toFixed(2) + ',' +
                   (c + hr * Math.sin(ha)).toFixed(2) + ' ';
         }
-        path = `<polygon points="${hpts.trim()}" fill="${fillColor}" stroke="#fff" stroke-width="2"/>`;
+        path = `<polygon points="${hpts.trim()}" fill="${fillColor}" stroke="#fff" stroke-width="1"/>`;
         break;
       }
       case 'star': {
@@ -66,11 +66,11 @@
           pts += `${cx + outer * Math.cos(aOuter)},${cy + outer * Math.sin(aOuter)} `;
           pts += `${cx + inner * Math.cos(aInner)},${cy + inner * Math.sin(aInner)} `;
         }
-        path = `<polygon points="${pts.trim()}" fill="${fillColor}" stroke="#fff" stroke-width="1.5"/>`;
+        path = `<polygon points="${pts.trim()}" fill="${fillColor}" stroke="#fff" stroke-width="1"/>`;
         break;
       }
       default: // circle
-        path = `<circle cx="${c}" cy="${c}" r="${c-2}" fill="${fillColor}" stroke="#fff" stroke-width="2"/>`;
+        path = `<circle cx="${c}" cy="${c}" r="${c-2}" fill="${fillColor}" stroke="#fff" stroke-width="1"/>`;
     }
     // If this node is also an observer, add a small star overlay
     let obsOverlay = '';

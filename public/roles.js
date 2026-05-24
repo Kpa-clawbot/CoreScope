@@ -100,16 +100,16 @@
     switch (shape) {
       case 'square':
         path = '<rect x="3" y="3" width="' + (size - 6) + '" height="' + (size - 6) +
-               '" fill="' + fill + '" stroke="#fff" stroke-width="2"/>';
+               '" fill="' + fill + '" stroke="#fff" stroke-width="1"/>';
         break;
       case 'triangle':
         path = '<polygon points="' + c + ',2 ' + (size - 2) + ',' + (size - 2) +
-               ' 2,' + (size - 2) + '" fill="' + fill + '" stroke="#fff" stroke-width="2"/>';
+               ' 2,' + (size - 2) + '" fill="' + fill + '" stroke="#fff" stroke-width="1"/>';
         break;
       case 'diamond':
         path = '<polygon points="' + c + ',2 ' + (size - 2) + ',' + c + ' ' +
                c + ',' + (size - 2) + ' 2,' + c +
-               '" fill="' + fill + '" stroke="#fff" stroke-width="2"/>';
+               '" fill="' + fill + '" stroke="#fff" stroke-width="1"/>';
         break;
       case 'hexagon': {
         // Pointy-top hexagon centred at (c,c), inscribed radius ≈ c-1.5
@@ -121,7 +121,7 @@
                  (c + r * Math.sin(a)).toFixed(2) + ' ';
         }
         path = '<polygon points="' + pts.trim() + '" fill="' + fill +
-               '" stroke="#fff" stroke-width="2"/>';
+               '" stroke="#fff" stroke-width="1"/>';
         break;
       }
       case 'star': {
@@ -134,12 +134,12 @@
           spts += (cx + inner * Math.cos(aI)) + ',' + (cy + inner * Math.sin(aI)) + ' ';
         }
         path = '<polygon points="' + spts.trim() + '" fill="' + fill +
-               '" stroke="#fff" stroke-width="1.5"/>';
+               '" stroke="#fff" stroke-width="1"/>';
         break;
       }
       default: // circle
         path = '<circle cx="' + c + '" cy="' + c + '" r="' + (c - 2) +
-               '" fill="' + fill + '" stroke="#fff" stroke-width="2"/>';
+               '" fill="' + fill + '" stroke="#fff" stroke-width="1"/>';
     }
     return '<svg width="' + size + '" height="' + size +
            '" viewBox="0 0 ' + size + ' ' + size +
