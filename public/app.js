@@ -1189,7 +1189,6 @@ window.addEventListener('DOMContentLoaded', () => {
       // navRightEl.scrollWidth measured here reflects the post-flip
       // intrinsic width — not stale pre-flip width.
       const navBrand   = document.querySelector('.nav-brand');
-      const SAFETY     = 32;
       // #1105 MINOR 1+2: read both gap values from CSS rather than a
       // shared `GUTTER = 24` constant. Today `.nav-left` (gap between
       // brand/links/more/right cells) and `.nav-links` (gap between
@@ -1198,6 +1197,15 @@ window.addEventListener('DOMContentLoaded', () => {
       // gap diverges in the future, the fit math must follow.
       const navLeftGap = parseFloat(getComputedStyle(navLeft).columnGap ||
                                     getComputedStyle(navLeft).gap || '0') || 0;
+      // #1055-revisit: .top-nav has `padding: 0 var(--gutter)` on both sides.
+      // The old formula used a fixed SAFETY=32 which is accurate at ~2560px but
+      // under-counts by ~8px at 1600px (--gutter=32px each side = 64px total vs
+      // 3×navLeftGap+32 ≈ 104px which may be less than 2×32+2×navLeftGap=112px).
+      // Compute the actual padding once per applyNavPriority call — getComputedStyle
+      // forces layout but is called only in the outer scope (not inside the loop).
+      const navTopPaddingL = parseFloat(getComputedStyle(navTop).paddingLeft)  || 0;
+      const navTopPaddingR = parseFloat(getComputedStyle(navTop).paddingRight) || 0;
+      const navPadding     = navTopPaddingL + navTopPaddingR;
       // #1105 MINOR 1: compute the More-button reserve from its actual
       // rendered width on first measure, instead of a hard-coded 70px
       // fallback. Cached so we don't re-measure (offsetWidth is 0 when
@@ -1222,7 +1230,12 @@ window.addEventListener('DOMContentLoaded', () => {
         const moreW = liveMoreW > 0 ? liveMoreW
                     : (cachedMoreW > 0 ? cachedMoreW : MORE_BTN_RESERVE_PX);
         const rightW  = navRightEl.scrollWidth; // intrinsic, ignores clipping
-        const needed  = brandW + navLeftGap + linkW + linksGap + navLeftGap + moreW + navLeftGap + rightW + SAFETY;
+        // Layout: [navPadding/2] brand [gap] links [gap] more [space-between] right [navPadding/2]
+        // .nav-left has exactly 2 internal gaps (brand→links, links→more); the 3rd
+        // navLeftGap previously used here was spurious (space-between, not a gap).
+        // navPadding replaces the old SAFETY=32 with the actual computed --gutter×2,
+        // which at 1600px is 64px vs the old 32px, preventing subtle end-link clip.
+        const needed  = navPadding + brandW + navLeftGap + linkW + linksGap + navLeftGap + moreW + rightW;
         return needed <= window.innerWidth;
       }
       let i = 0;
