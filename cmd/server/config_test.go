@@ -453,7 +453,7 @@ func TestLoadConfigReachThresholds(t *testing.T) {
 
 func TestLOSConfigDefaults(t *testing.T) {
 	cfg := &Config{}
-	if cfg.LOSElevationURL() != "https://api.open-topo-data.com" {
+	if cfg.LOSElevationURL() != "https://api.opentopodata.org" {
 		t.Errorf("expected default elevation URL, got %s", cfg.LOSElevationURL())
 	}
 	if cfg.LOSSampleMin() != 50 {
@@ -495,3 +495,28 @@ func TestLOSConfigOverride(t *testing.T) {
 	}
 }
 
+func TestRFConfigDefaults(t *testing.T) {
+	cfg := &Config{}
+	if got := cfg.RFMaxRangeKm(); got != 20.0 {
+		t.Errorf("RFMaxRangeKm default: want 20.0, got %f", got)
+	}
+	if got := cfg.RFBearings(); got != 36 {
+		t.Errorf("RFBearings default: want 36, got %d", got)
+	}
+	if got := cfg.RFStepKm(); got != 0.5 {
+		t.Errorf("RFStepKm default: want 0.5, got %f", got)
+	}
+}
+
+func TestRFConfigOverride(t *testing.T) {
+	cfg := &Config{RF: &RFConfig{MaxRangeKm: 30.0, Bearings: 72, StepKm: 0.25}}
+	if got := cfg.RFMaxRangeKm(); got != 30.0 {
+		t.Errorf("RFMaxRangeKm override: want 30.0, got %f", got)
+	}
+	if got := cfg.RFBearings(); got != 72 {
+		t.Errorf("RFBearings override: want 72, got %d", got)
+	}
+	if got := cfg.RFStepKm(); got != 0.25 {
+		t.Errorf("RFStepKm override: want 0.25, got %f", got)
+	}
+}

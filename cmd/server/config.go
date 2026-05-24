@@ -127,6 +127,8 @@ type Config struct {
 	Reach *ReachThresholds `json:"reachThresholds,omitempty"`
 
 	LOS *LOSConfig `json:"los,omitempty"`
+
+	RF *RFConfig `json:"rf,omitempty"`
 }
 
 // RateLimitConfig configures the per-IP token-bucket rate limiter. All limits
@@ -144,10 +146,17 @@ type RateLimitConfig struct {
 
 // LOSConfig controls line-of-sight analysis behaviour.
 type LOSConfig struct {
-	ElevationURL  string `json:"elevationURL,omitempty"`  // base URL for open-topo-data (default https://api.open-topo-data.com)
+	ElevationURL  string `json:"elevationURL,omitempty"`  // base URL for open-topo-data (default https://api.opentopodata.org)
 	SampleMin     int    `json:"sampleMin,omitempty"`     // minimum elevation sample points (default 50)
 	SampleMax     int    `json:"sampleMax,omitempty"`     // maximum elevation sample points (default 500)
 	CacheTTLHours int    `json:"cacheTTLHours,omitempty"` // elevation cache TTL in hours (default 24)
+}
+
+// RFConfig controls RF coverage analysis behaviour.
+type RFConfig struct {
+	MaxRangeKm float64 `json:"maxRangeKm"` // maximum coverage radius to probe (default 20 km)
+	Bearings   int     `json:"bearings"`   // number of radial bearings (default 36)
+	StepKm     float64 `json:"stepKm"`     // radial step size in km (default 0.5)
 }
 
 // weakAPIKeys is the blocklist of known default/example API keys that must be rejected.
@@ -292,7 +301,7 @@ func (c *Config) LOSElevationURL() string {
 	if c != nil && c.LOS != nil && c.LOS.ElevationURL != "" {
 		return c.LOS.ElevationURL
 	}
-	return "https://api.open-topo-data.com"
+	return "https://api.opentopodata.org"
 }
 
 func (c *Config) LOSSampleMin() int {
@@ -314,6 +323,30 @@ func (c *Config) LOSCacheTTL() time.Duration {
 		return time.Duration(c.LOS.CacheTTLHours) * time.Hour
 	}
 	return 24 * time.Hour
+}
+
+// RFMaxRangeKm returns the maximum probing radius in km (default 20).
+func (c *Config) RFMaxRangeKm() float64 {
+	if c.RF != nil && c.RF.MaxRangeKm > 0 {
+		return c.RF.MaxRangeKm
+	}
+	return 20.0
+}
+
+// RFBearings returns the number of radial bearings (default 36).
+func (c *Config) RFBearings() int {
+	if c.RF != nil && c.RF.Bearings > 0 {
+		return c.RF.Bearings
+	}
+	return 36
+}
+
+// RFStepKm returns the radial step size in km (default 0.5).
+func (c *Config) RFStepKm() float64 {
+	if c.RF != nil && c.RF.StepKm > 0 {
+		return c.RF.StepKm
+	}
+	return 0.5
 }
 
 type TimestampConfig struct {
