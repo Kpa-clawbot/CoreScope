@@ -178,13 +178,7 @@
             <legend class="mc-label">Quick Jump</legend>
             <div class="mc-jumps" id="mcJumps" role="group" aria-label="Jump to region"></div>
           </fieldset>
-          <fieldset class="mc-section">
-            <legend class="mc-label">Overlays</legend>
-            <label><input type="checkbox" id="mcRouteHistory"${localStorage.getItem('meshcore-overlay-route-history') === 'true' ? ' checked' : ''}> 📈 Route History</label>
-            <label id="mcRadarLabel"><input type="checkbox" id="mcRadar"${localStorage.getItem('meshcore-overlay-radar') === 'true' ? ' checked' : ''}> 🌧️ Radar</label>
-            <label><input type="checkbox" id="mcWind"${localStorage.getItem('meshcore-overlay-wind') === 'true' ? ' checked' : ''}> 💨 Wind</label>
-            <label id="mcMeshMapperLabel"><input type="checkbox" id="mcMeshMapper"${localStorage.getItem('meshcore-overlay-meshmapper') === 'true' ? ' checked' : ''}> 📶 MeshMapper</label>
-          </fieldset>
+
         </div>
       </div>`;
 
@@ -335,8 +329,6 @@
 
     AreaFilter.init(document.getElementById('mapAreaFilter'));
     AreaFilter.onChange(function () { loadNodes(); });
-
-    setupOverlayToggles(map);
 
     // Status filter buttons
     document.querySelectorAll('#mcStatusFilter .btn').forEach(btn => {
@@ -1375,55 +1367,6 @@
     affinityLayer.addTo(map);
   }
   // ─── End Affinity Debug ────────────────────────────────────────────────────
-
-  function setupOverlayToggles(map) {
-    if (typeof MapOverlays === 'undefined') return;
-
-    var rhCheck  = document.getElementById('mcRouteHistory');
-    var radCheck = document.getElementById('mcRadar');
-    var wndCheck = document.getElementById('mcWind');
-    var mmCheck  = document.getElementById('mcMeshMapper');
-
-    function onMmNotConfigured() {
-      if (!mmCheck) return;
-      mmCheck.checked = false;
-      mmCheck.disabled = true;
-      localStorage.setItem('meshcore-overlay-meshmapper', 'false');
-      var lbl = document.getElementById('mcMeshMapperLabel');
-      if (lbl) lbl.title = 'MeshMapper API key not configured';
-    }
-
-    // Restore toggled-on overlays from localStorage
-    if (rhCheck  && rhCheck.checked)  MapOverlays.initRouteHistory(map, 24);
-    if (radCheck && radCheck.checked) MapOverlays.initRadar(map, function () {
-      if (radCheck) { radCheck.checked = false; radCheck.disabled = true; localStorage.setItem('meshcore-overlay-radar', 'false'); }
-    });
-    if (wndCheck && wndCheck.checked) MapOverlays.initWind(map);
-    if (mmCheck  && mmCheck.checked)  MapOverlays.initMeshMapper(map, onMmNotConfigured);
-
-    rhCheck && rhCheck.addEventListener('change', function () {
-      localStorage.setItem('meshcore-overlay-route-history', this.checked);
-      if (this.checked) MapOverlays.initRouteHistory(map, 24);
-      else MapOverlays.destroyRouteHistory();
-    });
-    radCheck && radCheck.addEventListener('change', function () {
-      localStorage.setItem('meshcore-overlay-radar', this.checked);
-      if (this.checked) MapOverlays.initRadar(map, function () {
-        if (radCheck) { radCheck.checked = false; radCheck.disabled = true; localStorage.setItem('meshcore-overlay-radar', 'false'); }
-      });
-      else MapOverlays.destroyRadar();
-    });
-    wndCheck && wndCheck.addEventListener('change', function () {
-      localStorage.setItem('meshcore-overlay-wind', this.checked);
-      if (this.checked) MapOverlays.initWind(map);
-      else MapOverlays.destroyWind();
-    });
-    mmCheck && mmCheck.addEventListener('change', function () {
-      localStorage.setItem('meshcore-overlay-meshmapper', this.checked);
-      if (this.checked) MapOverlays.initMeshMapper(map, onMmNotConfigured);
-      else MapOverlays.destroyMeshMapper();
-    });
-  }
 
   registerPage('map', {
     init: function(app, routeParam) {
