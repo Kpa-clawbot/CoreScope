@@ -87,9 +87,18 @@ func TestNeighborEdgesBuilderDeltaScan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Initial warm-up: full scan allowed (neighbor_edges is empty).
-	if _, err := store.buildAndPersistNeighborEdges(); err != nil {
-		t.Fatalf("warm-up build: %v", err)
+	// Initial warm-up: drain to completion (StartNeighborEdgesBuilder
+	// does the same — call directly so the test doesn't depend on the
+	// goroutine harness). Full scan allowed because neighbor_edges
+	// starts empty.
+	for {
+		n, err := store.buildAndPersistNeighborEdges()
+		if err != nil {
+			t.Fatalf("warm-up build: %v", err)
+		}
+		if n == 0 || n < 50000 {
+			break
+		}
 	}
 	var edgesAfterWarmup int
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM neighbor_edges`).Scan(&edgesAfterWarmup); err != nil {
@@ -162,13 +171,17 @@ func TestNeighborEdgesBuilderDeltaScan(t *testing.T) {
 		t.Fatalf("delta build: %v", err)
 	}
 	deltaDur := time.Since(deltaStart)
-	if n3 != delta {
-		t.Fatalf("expected %d edges upserted (delta only); got %d. "+
+	// Each ADVERT observation with a non-empty path produces 2 edge
+	// candidates (from↔hop[0] and observer↔hop[-1]). The watermark
+	// must clamp the scan to the delta rows ONLY — anything more
+	// proves the WHERE clause was bypassed.
+	if n3 != delta*2 {
+		t.Fatalf("expected %d edges upserted (delta only, 2 per advert obs); got %d. "+
 			"Builder must only scan observations with timestamp > MAX(neighbor_edges.last_seen). (#1339)",
-			delta, n3)
+			delta*2, n3)
 	}
-	if deltaDur > time.Second {
-		t.Fatalf("delta build of %d rows took %v; expected <1s. (#1339)", delta, deltaDur)
+	if deltaDur > 500*time.Millisecond {
+		t.Fatalf("delta build of %d rows took %v; expected <500ms. (#1339)", delta, deltaDur)
 	}
 
 	// Sanity: MAX(last_seen) advanced.
