@@ -292,6 +292,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// Decode endpoint
 	r.HandleFunc("/api/decode", s.handleDecode).Methods("POST")
 
+	// LOS endpoint
+	r.HandleFunc("/api/los", s.handleLOS).Methods("POST")
+
 	// Node endpoints — fixed routes BEFORE parameterized
 	r.HandleFunc("/api/nodes/search", s.handleNodeSearch).Methods("GET")
 	r.HandleFunc("/api/nodes/bulk-health", s.handleBulkHealth).Methods("GET")

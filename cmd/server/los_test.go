@@ -1,8 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/gorilla/mux"
 )
 
 func TestHaversineKm_KnownDistance(t *testing.T) {
@@ -88,5 +94,41 @@ func TestLOSAnalyze_BlockedPath(t *testing.T) {
 	}
 	if result.Relay == nil {
 		t.Errorf("expected relay suggestion when blocked")
+	}
+}
+
+func TestHandleLOS_BadRequest(t *testing.T) {
+	srv := &Server{cfg: &Config{}, perfStats: NewPerfStats()}
+	r := mux.NewRouter()
+	r.HandleFunc("/api/los", srv.handleLOS).Methods("POST")
+
+	body := strings.NewReader(`{"lat_a": 999, "lon_a": 4.0, "lat_b": 52.0, "lon_b": 4.5}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/los", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["error"] == "" {
+		t.Errorf("expected error field in response")
+	}
+}
+
+func TestHandleLOS_InvalidJSON(t *testing.T) {
+	srv := &Server{cfg: &Config{}, perfStats: NewPerfStats()}
+	r := mux.NewRouter()
+	r.HandleFunc("/api/los", srv.handleLOS).Methods("POST")
+
+	body := strings.NewReader(`not json`)
+	req := httptest.NewRequest(http.MethodPost, "/api/los", body)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
 	}
 }
