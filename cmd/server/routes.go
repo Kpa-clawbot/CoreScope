@@ -125,6 +125,8 @@ type Server struct {
 	losHandler *losHandler // elevation cache + HTTP client for LOS API calls
 	losOnce    sync.Once  // ensures losHandler is initialized exactly once
 
+	// MeshMapper coverage proxy cache.
+	meshMapperCache meshMapperCacheState
 }
 
 // obsAnalyticsCacheEntry holds one cached /api/observers/:id/analytics response.
@@ -301,6 +303,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 
 	// Route History endpoint
 	r.HandleFunc("/api/route-history", s.handleRouteHistory).Methods("GET")
+
+	// MeshMapper coverage proxy
+	r.HandleFunc("/api/coverage/meshmapper", s.handleMeshMapperCoverage).Methods("GET")
 
 	// Node endpoints — fixed routes BEFORE parameterized
 	r.HandleFunc("/api/nodes/search", s.handleNodeSearch).Methods("GET")
