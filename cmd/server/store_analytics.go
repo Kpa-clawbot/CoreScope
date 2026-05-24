@@ -1819,21 +1819,52 @@ func (s *PacketStore) computeHashCollisions(region string) map[string]interface{
 	}
 }
 
-// GetNodeHashSizeInfo returns cached per-node hash size data, recomputing at most every 15s.
+// GetNodeHashSizeInfo returns cached per-node hash size data, recomputing at most every 30s.
+// A singleflight pattern prevents thundering-herd cache misses: if a recompute is already
+// in progress, concurrent callers wait for it rather than launching their own scans.
 func (s *PacketStore) GetNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
-	const ttl = 15 * time.Second
+	const ttl = 30 * time.Second
+
+	// Fast path: cache is warm.
 	s.hashSizeInfoMu.Lock()
 	if s.hashSizeInfoCache != nil && time.Since(s.hashSizeInfoAt) < ttl {
 		cached := s.hashSizeInfoCache
 		s.hashSizeInfoMu.Unlock()
 		return cached
 	}
+
+	// Singleflight: if a recompute is already in progress, wait for it.
+	if s.hashSizeInFlt != nil {
+		ch := s.hashSizeInFlt
+		s.hashSizeInfoMu.Unlock()
+		<-ch
+		// The leader stored the result; return it (may still be within TTL
+		// after a brief wait, or another leader may have started; either way
+		// the next fast-path check will win).
+		s.hashSizeInfoMu.Lock()
+		cached := s.hashSizeInfoCache
+		s.hashSizeInfoMu.Unlock()
+		return cached
+	}
+
+	// We are the leader: publish the channel before releasing the lock.
+	done := make(chan struct{})
+	s.hashSizeInFlt = done
 	s.hashSizeInfoMu.Unlock()
-	result := s.computeNodeHashSizeInfo()
-	s.hashSizeInfoMu.Lock()
-	s.hashSizeInfoCache = result
-	s.hashSizeInfoAt = time.Now()
-	s.hashSizeInfoMu.Unlock()
+
+	// Recompute outside the lock (this is the expensive O(N) scan).
+	var result map[string]*hashSizeNodeInfo
+	defer func() {
+		s.hashSizeInfoMu.Lock()
+		if result != nil {
+			s.hashSizeInfoCache = result
+			s.hashSizeInfoAt = time.Now()
+		}
+		s.hashSizeInFlt = nil
+		s.hashSizeInfoMu.Unlock()
+		close(done)
+	}()
+	result = s.computeNodeHashSizeInfo()
 	return result
 }
 
