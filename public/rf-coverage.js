@@ -158,6 +158,10 @@
     }
 
     var ranges = data.coverage.map(function (pt) { return pt.range_km; });
+    if (ranges.length === 0) {
+      showStatus('ok', '⚠️ No coverage computed — all bearings terrain-blocked.');
+      return;
+    }
     var maxKm  = Math.max.apply(null, ranges).toFixed(1);
     var avgKm  = (ranges.reduce(function (a, b) { return a + b; }, 0) / ranges.length).toFixed(1);
 
