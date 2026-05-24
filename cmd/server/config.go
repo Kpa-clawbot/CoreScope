@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -129,6 +130,8 @@ type Config struct {
 	LOS *LOSConfig `json:"los,omitempty"`
 
 	RF *RFConfig `json:"rf,omitempty"`
+
+	MeshMapper *MeshMapperConfig `json:"meshMapper,omitempty"`
 }
 
 // RateLimitConfig configures the per-IP token-bucket rate limiter. All limits
@@ -157,6 +160,48 @@ type RFConfig struct {
 	MaxRangeKm float64 `json:"maxRangeKm,omitempty"` // maximum coverage radius to probe (default 20 km)
 	Bearings   int     `json:"bearings,omitempty"`   // number of radial bearings (default 36)
 	StepKm     float64 `json:"stepKm,omitempty"`     // radial step size in km (default 0.5)
+}
+
+// MeshMapperConfig controls the MeshMapper community coverage layer proxy.
+type MeshMapperConfig struct {
+	APIUrl       string `json:"apiUrl,omitempty"`          // MeshMapper API base URL
+	APIKey       string `json:"apiKey,omitempty"`          // API key (empty = layer disabled)
+	CacheTTLSecs int    `json:"cacheTTLSeconds,omitempty"` // cache TTL in seconds (default 300)
+}
+
+// MeshMapperAPIUrl returns the MeshMapper API URL (env MESHMAPPER_API_URL overrides config).
+func (c *Config) MeshMapperAPIUrl() string {
+	if v := os.Getenv("MESHMAPPER_API_URL"); v != "" {
+		return v
+	}
+	if c.MeshMapper != nil && c.MeshMapper.APIUrl != "" {
+		return c.MeshMapper.APIUrl
+	}
+	return "https://meshmapper.net/api/coverage"
+}
+
+// MeshMapperAPIKey returns the MeshMapper API key (env MESHMAPPER_API_KEY overrides config).
+func (c *Config) MeshMapperAPIKey() string {
+	if v := os.Getenv("MESHMAPPER_API_KEY"); v != "" {
+		return v
+	}
+	if c.MeshMapper != nil {
+		return c.MeshMapper.APIKey
+	}
+	return ""
+}
+
+// MeshMapperCacheTTL returns the cache TTL for MeshMapper responses (env MESHMAPPER_CACHE_TTL_SECONDS overrides config).
+func (c *Config) MeshMapperCacheTTL() time.Duration {
+	if v := os.Getenv("MESHMAPPER_CACHE_TTL_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	if c.MeshMapper != nil && c.MeshMapper.CacheTTLSecs > 0 {
+		return time.Duration(c.MeshMapper.CacheTTLSecs) * time.Second
+	}
+	return 300 * time.Second
 }
 
 // weakAPIKeys is the blocklist of known default/example API keys that must be rejected.
