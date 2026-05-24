@@ -97,6 +97,7 @@
   // ─── Tile URLs ───
   window.TILE_DARK  = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
   window.TILE_LIGHT = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+  window.TILE_TOPO  = 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png'; // max zoom 17
 
   window.getTileUrl = function () {
     var isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
