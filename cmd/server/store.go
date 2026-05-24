@@ -1373,6 +1373,20 @@ func (s *PacketStore) QueryPackets(q PacketQuery) *PacketResult {
 	results := s.filterPackets(q)
 	total := len(results)
 
+	// #1345: order by ingest id, not insertion-into-s.packets order. After
+	// Load() (which orders by first_seen ASC) the slice is mostly id-ordered
+	// EXCEPT where rxTime ≠ ingest time — exactly the buffered-observer-upload
+	// case that hides fresh activity. Sort by ID DESC so "page 0" is always
+	// the most-recently-ingested transmissions, matching the DB-path fix.
+	// Cost: O(n log n) on the filtered set per query; acceptable for the
+	// typical filter-then-paginate flow (filterPackets already O(n)).
+	sortedByID := make([]*StoreTx, len(results))
+	copy(sortedByID, results)
+	sort.Slice(sortedByID, func(i, j int) bool {
+		return sortedByID[i].ID < sortedByID[j].ID
+	})
+	results = sortedByID
+
 	// results is oldest-first (ASC). For DESC (default) read backwards from the tail;
 	// for ASC read forwards. Both are O(page_size) — no sort copy needed.
 	start := q.Offset
@@ -1956,9 +1970,9 @@ func (s *PacketStore) QueryMultiNodePackets(pubkeys []string, limit, offset int,
 			filtered = append(filtered, tx)
 		}
 	}
-	// Sort oldest-first to match pagination expectations (same as s.packets order).
+	// #1345: sort by ingest id, not first_seen (=rxTime).
 	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].FirstSeen < filtered[j].FirstSeen
+		return filtered[i].ID < filtered[j].ID
 	})
 
 	total := len(filtered)

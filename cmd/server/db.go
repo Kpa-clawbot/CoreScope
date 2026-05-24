@@ -493,8 +493,14 @@ func (db *DB) QueryPackets(q PacketQuery) (*PacketResult, error) {
 		db.conn.QueryRow(countSQL, args...).Scan(&total)
 	}
 
+	// #1345: order by ingest id, NOT first_seen. PR #1233 made first_seen=rxTime,
+	// so buffered-then-uploaded observer packets with hours-old rxTime were
+	// sorting to the top/middle and hiding fresh ingest. Ordering by id keeps
+	// "latest activity" semantically equal to "what we ingested last" — which
+	// is what the packets page is showing. The `since=` filter still uses
+	// first_seen / observation timestamp, preserving "received-by-radio since X."
 	selectCols, observerJoin := db.transmissionBaseSQL()
-	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s %s ORDER BY t.first_seen %s LIMIT ? OFFSET ?",
+	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s %s ORDER BY t.id %s LIMIT ? OFFSET ?",
 		selectCols, observerJoin, w, q.Order)
 
 	qArgs := make([]interface{}, len(args))
@@ -1013,7 +1019,10 @@ func (db *DB) GetRecentTransmissionsForNode(pubkey string, limit int) ([]map[str
 
 	selectCols, observerJoin := db.transmissionBaseSQL()
 
-	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.from_pubkey = ? ORDER BY t.first_seen DESC LIMIT ?",
+	// #1345: order by ingest id, not first_seen (=rxTime). Buffered observer
+	// uploads with old rxTime would otherwise displace fresh activity from
+	// the "recent transmissions for node" list.
+	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s WHERE t.from_pubkey = ? ORDER BY t.id DESC LIMIT ?",
 		selectCols, observerJoin)
 	args := []interface{}{pubkey, limit}
 
@@ -1968,7 +1977,8 @@ func (db *DB) QueryMultiNodePackets(pubkeys []string, limit, offset int, order, 
 	db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM transmissions t %s", w), args...).Scan(&total)
 
 	selectCols, observerJoin := db.transmissionBaseSQL()
-	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s %s ORDER BY t.first_seen %s LIMIT ? OFFSET ?",
+	// #1345: order by ingest id (see QueryPackets comment above).
+	querySQL := fmt.Sprintf("SELECT %s FROM transmissions t %s %s ORDER BY t.id %s LIMIT ? OFFSET ?",
 		selectCols, observerJoin, w, order)
 
 	qArgs := make([]interface{}, len(args))
