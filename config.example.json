@@ -309,5 +309,12 @@
       "nodesClockSkew": 300
     }
   },
-  "_comment_analytics": "Issue #1240 + #1256 + #1265. Each analytics endpoint (topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew) is recomputed in the background on the configured interval and served from an atomic-pointer cache. Reads never block on compute. Default 300s (5 min) per endpoint reflects the operator principle: serving slightly stale data quickly beats real-time data slowly. Lower values = fresher data at higher CPU cost. Only the default query (no region/window) is precomputed; region- and window-filtered requests fall back to the legacy on-request compute + 60s TTL cache."
+  "_comment_analytics": "Issue #1240 + #1256 + #1265. Each analytics endpoint (topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew) is recomputed in the background on the configured interval and served from an atomic-pointer cache. Reads never block on compute. Default 300s (5 min) per endpoint reflects the operator principle: serving slightly stale data quickly beats real-time data slowly. Lower values = fresher data at higher CPU cost. Only the default query (no region/window) is precomputed; region- and window-filtered requests fall back to the legacy on-request compute + 60s TTL cache.",
+  "los": {
+    "elevationURL": "https://api.opentopodata.org",
+    "sampleMin": 50,
+    "sampleMax": 500,
+    "cacheTTLHours": 24
+  },
+  "_comment_los": "Line-of-sight calculator (POST /api/los). elevationURL: base URL of an open-topo-data compatible API (default https://api.opentopodata.org — uses the free public instance, rate-limited; run your own instance for production use: https://www.opentopodata.org/server/). sampleMin/sampleMax: number of elevation profile points sampled along the path (clamped to [sampleMin, sampleMax], auto-scaled by distance at 1 point per 50 m). cacheTTLHours: how long elevation results are cached in memory (default 24 h)."
 }

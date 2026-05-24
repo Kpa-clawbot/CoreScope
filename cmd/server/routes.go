@@ -123,6 +123,7 @@ type Server struct {
 	obsAnalyticsCache map[string]*obsAnalyticsCacheEntry
 
 	losHandler *losHandler // elevation cache + HTTP client for LOS API calls
+	losOnce    sync.Once  // ensures losHandler is initialized exactly once
 
 }
 

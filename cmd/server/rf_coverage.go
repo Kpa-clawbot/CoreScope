@@ -242,6 +242,10 @@ func (s *Server) handleRFCoverage(w http.ResponseWriter, r *http.Request) {
 	default:
 		req.Model = "free"
 	}
+	if req.TxPowerDBm < -30 || req.TxPowerDBm > 36 {
+		writeError(w, http.StatusBadRequest, "tx_power_dbm out of range (must be -30 to 36 dBm)")
+		return
+	}
 
 	h := s.getLOSHandler()
 	coverage, dataGaps, err := h.computeRFCoverage(

@@ -338,9 +338,10 @@ func (s *Server) handleLOS(w http.ResponseWriter, r *http.Request) {
 }
 
 // getLOSHandler returns the server's shared LOS handler, initializing it lazily on first use.
+// sync.Once ensures this is safe for concurrent callers.
 func (s *Server) getLOSHandler() *losHandler {
-	if s.losHandler == nil {
+	s.losOnce.Do(func() {
 		s.losHandler = newLOSHandler(s.cfg)
-	}
+	})
 	return s.losHandler
 }

@@ -131,6 +131,17 @@ func TestHandleRFCoverage_LonOutOfRange(t *testing.T) {
 	}
 }
 
+func TestHandleRFCoverage_TxPowerOutOfRange(t *testing.T) {
+	s := &Server{cfg: &Config{}}
+	body := `{"lat":52.0,"lon":5.0,"tx_power_dbm":100}`
+	r := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/rf-coverage", strings.NewReader(body))
+	s.handleRFCoverage(r, req)
+	if r.Code != http.StatusBadRequest {
+		t.Errorf("want 400 for out-of-range tx_power_dbm, got %d", r.Code)
+	}
+}
+
 // ─── Integration test with mock elevation server ───────────────────────────────
 
 // mockRFElevServer returns a test server that responds with constant elevation 0
