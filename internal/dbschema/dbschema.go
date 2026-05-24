@@ -165,6 +165,7 @@ func ensureServerIndexes(rw *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_transmissions_payload_type ON transmissions(payload_type)`,
 		`CREATE INDEX IF NOT EXISTS idx_observations_timestamp ON observations(timestamp)`,
 		`CREATE INDEX IF NOT EXISTS idx_observations_transmission_id ON observations(transmission_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_obs_tx_path ON observations(transmission_id) WHERE path_json IS NOT NULL AND path_json != '' AND path_json != '[]'`,
 	}
 	for _, s := range stmts {
 		if _, err := rw.Exec(s); err != nil {
