@@ -19,14 +19,33 @@
   }
 
   // ── Map setup ──────────────────────────────────────────────────────────────
+  var _rfcTileLayer = null;
+  var _rfcThemeObs = null;
+
+  function setRfcTiles(tileKey) {
+    if (_rfcTileLayer) { _rfcTileLayer.remove(); _rfcTileLayer = null; }
+    if (_rfcThemeObs) { _rfcThemeObs.disconnect(); _rfcThemeObs = null; }
+    var isTopo = tileKey === 'topo';
+    var url = isTopo ? window.TILE_TOPO : window.getTileUrl();
+    _rfcTileLayer = L.tileLayer(url, {
+      maxZoom: isTopo ? 17 : 19,
+      attribution: isTopo ? '© OpenTopoMap contributors' : '© OpenStreetMap © CartoDB',
+    }).addTo(rfMap);
+    if (!isTopo) {
+      _rfcThemeObs = new MutationObserver(function () {
+        if (_rfcTileLayer) _rfcTileLayer.setUrl(window.getTileUrl());
+      });
+      _rfcThemeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    }
+  }
+
   function initMap(container) {
     if (rfMap) { rfMap.remove(); rfMap = null; }
     rfMap = L.map(container, { zoomControl: true, attributionControl: false });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 18,
-    }).addTo(rfMap);
     rfMap.setView([52.0, 5.0], 9);
     rfMap.on('click', onMapClick);
+    var savedTile = localStorage.getItem('meshcore-rfc-tile') || 'default';
+    setRfcTiles(savedTile);
   }
 
   function onMapClick(e) {
@@ -196,37 +215,29 @@
       '<style>',
       '.rfc-layout{display:flex;gap:12px;height:calc(100vh - 120px);min-height:400px}',
       '.rfc-panel{width:300px;flex-shrink:0;display:flex;flex-direction:column;gap:10px;overflow-y:auto}',
-      '.rfc-map-wrap{flex:1;border-radius:8px;overflow:hidden;min-height:300px}',
+      '.rfc-map-wrap{flex:1;position:relative;border-radius:8px;overflow:hidden;min-height:300px}',
       '#rfc-map{width:100%;height:100%}',
-      '.rfc-section{background:var(--surface1,#fff);border:1px solid var(--border,#e2e5ea);',
-      '  border-radius:8px;padding:12px}',
-      '.rfc-section h3{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--text-muted,#5b6370)}',
+      '.rfc-section{background:var(--surface-1);border:1px solid var(--border);border-radius:8px;padding:12px}',
+      '.rfc-section h3{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--text-muted)}',
       '.rfc-field{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}',
-      '.rfc-field label{font-size:12px;font-weight:500;color:var(--text-muted,#5b6370)}',
-      '.rfc-field input,.rfc-field select{',
-      '  padding:6px 8px;border:1px solid var(--border,#ddd);border-radius:6px;',
-      '  font-size:13px;background:var(--input-bg,#fff);color:var(--text,#1a1a2e);width:100%;box-sizing:border-box}',
+      '.rfc-field label{font-size:12px;font-weight:500;color:var(--text-muted)}',
+      '.rfc-field input,.rfc-field select{padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--input-bg);color:var(--text);width:100%;box-sizing:border-box}',
       '.rfc-coord-row{display:flex;gap:6px}',
       '.rfc-coord-row input{flex:1}',
-      '.rfc-btn{padding:7px 14px;border:none;border-radius:6px;cursor:pointer;',
-      '  font-size:13px;font-weight:500;transition:opacity .15s}',
+      '.rfc-btn{padding:7px 14px;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;transition:opacity .15s}',
       '.rfc-btn:hover{opacity:.85}',
-      '.rfc-btn-primary{background:#3b82f6;color:#fff;width:100%;margin-top:4px}',
-      '.rfc-btn-outline{background:transparent;border:1px solid var(--border,#ddd);',
-      '  color:var(--text,#333);font-size:12px;padding:5px 10px}',
-      '.rfc-pick-active{background:#f59e0b !important;color:#fff !important}',
-      '.rfc-autocomplete-list{position:absolute;z-index:999;background:var(--surface1,#fff);',
-      '  border:1px solid var(--border,#ddd);border-radius:6px;list-style:none;',
-      '  margin:0;padding:4px 0;max-height:180px;overflow-y:auto;min-width:260px}',
+      '.rfc-btn-primary{background:var(--accent);color:#fff;width:100%;margin-top:4px}',
+      '.rfc-btn-outline{background:transparent;border:1px solid var(--border);color:var(--text);font-size:12px;padding:5px 10px}',
+      '.rfc-pick-active{background:var(--status-amber) !important;color:#fff !important}',
+      '.rfc-autocomplete-list{position:absolute;z-index:999;background:var(--surface-1);border:1px solid var(--border);border-radius:6px;list-style:none;margin:0;padding:4px 0;max-height:180px;overflow-y:auto;min-width:260px}',
       '.rfc-autocomplete-item{padding:7px 12px;cursor:pointer;font-size:13px}',
-      '.rfc-autocomplete-item:hover{background:var(--row-hover,#eef2ff)}',
+      '.rfc-autocomplete-item:hover{background:var(--row-hover)}',
       '.rfc-autocomplete-wrap{position:relative}',
       '.rfc-status{padding:8px 12px;border-radius:6px;font-size:13px;line-height:1.5}',
-      '.rfc-status-ok{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}',
-      '.rfc-status-error{background:#fee2e2;color:#991b1b;border:1px solid #fecaca}',
-      '.rfc-status-info{background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe}',
-      '@media(max-width:640px){.rfc-layout{flex-direction:column}',
-      '  .rfc-panel{width:100%;height:auto}.rfc-map-wrap{height:300px}}',
+      '.rfc-status-ok{background:rgba(34,197,94,0.12);color:var(--status-green);border:1px solid rgba(34,197,94,0.3)}',
+      '.rfc-status-error{background:rgba(239,68,68,0.10);color:var(--status-red);border:1px solid rgba(239,68,68,0.3)}',
+      '.rfc-status-info{background:rgba(59,130,246,0.10);color:var(--accent);border:1px solid rgba(59,130,246,0.3)}',
+      '@media(max-width:640px){.rfc-layout{flex-direction:column}.rfc-panel{width:100%;height:auto}.rfc-map-wrap{height:300px}}',
       '</style>',
       '<h2 style="margin:0 0 12px;font-size:18px">📡 RF Coverage Analyzer</h2>',
       '<div class="rfc-layout">',
@@ -285,7 +296,13 @@
       '    </div>',
       '    <div id="rfc-status" class="rfc-status rfc-status-info" hidden></div>',
       '  </div>',
-      '  <div class="rfc-map-wrap"><div id="rfc-map"></div></div>',
+      '  <div class="rfc-map-wrap">',
+      '    <div id="rfc-map"></div>',
+      '    <div class="tool-tile-picker" id="rfc-tile-picker">',
+      '      <button class="tpick-btn" id="rfc-tile-default">🗺 Default</button>',
+      '      <button class="tpick-btn" id="rfc-tile-topo">🏔 Topo</button>',
+      '    </div>',
+      '  </div>',
       '</div>',
     ].join('\n');
   }
@@ -313,6 +330,22 @@
       if (pickBtn) pickBtn.removeEventListener('click', onPickClick);
       if (runBtn)  runBtn.removeEventListener('click', onRunClick);
     });
+
+    // ── Tile picker ────────────────────────────────────────────────────────
+    var savedRfcTile = localStorage.getItem('meshcore-rfc-tile') || 'default';
+    var rfcDefaultBtn = document.getElementById('rfc-tile-default');
+    var rfcTopoBtn    = document.getElementById('rfc-tile-topo');
+    if (rfcDefaultBtn) rfcDefaultBtn.classList.toggle('active', savedRfcTile === 'default');
+    if (rfcTopoBtn)    rfcTopoBtn.classList.toggle('active', savedRfcTile === 'topo');
+
+    function switchRfcTile(key) {
+      localStorage.setItem('meshcore-rfc-tile', key);
+      setRfcTiles(key);
+      if (rfcDefaultBtn) rfcDefaultBtn.classList.toggle('active', key === 'default');
+      if (rfcTopoBtn)    rfcTopoBtn.classList.toggle('active', key === 'topo');
+    }
+    if (rfcDefaultBtn) rfcDefaultBtn.addEventListener('click', function () { switchRfcTile('default'); });
+    if (rfcTopoBtn)    rfcTopoBtn.addEventListener('click', function () { switchRfcTile('topo'); });
   }
 
   function destroy() {
@@ -323,6 +356,8 @@
       rfMap.remove();
       rfMap = null;
     }
+    if (_rfcThemeObs) { _rfcThemeObs.disconnect(); _rfcThemeObs = null; }
+    _rfcTileLayer = null;
     txMarker = null;
     coveragePolygon = null;
     pickingTX = false;
