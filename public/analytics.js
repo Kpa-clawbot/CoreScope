@@ -4278,7 +4278,7 @@ function destroy() { if (_rhMap) { _rhMap.remove(); _rhMap = null; } if (_rhThem
               return '<a href="#/tools/trace/' + encodeURIComponent(h) + '" style="color:var(--accent,#3b82f6)">' + h.slice(0, 8) + '…</a>';
             }).join(' ');
             line.bindPopup(
-              '<strong>' + nameA + ' ↔ ' + nameB + '</strong><br>' +
+              '<strong>' + esc(nameA) + ' ↔ ' + esc(nameB) + '</strong><br>' +
               'Packets: <strong>' + e.count + '</strong><br>' +
               (e.last_seen ? 'Last seen: ' + new Date(e.last_seen).toLocaleString() + '<br>' : '') +
               (sampleLinks ? 'Samples: ' + sampleLinks : '')
