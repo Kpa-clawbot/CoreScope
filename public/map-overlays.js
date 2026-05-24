@@ -84,7 +84,7 @@
         if (_radarLayer) {
           _radarLayer.setUrl(url);
         } else {
-          _radarLayer = L.tileLayer(url, { opacity: 0.5, attribution: '© RainViewer' }).addTo(map);
+          _radarLayer = L.tileLayer(url, { opacity: 0.5, attribution: '© RainViewer', maxNativeZoom: 6 }).addTo(map);
         }
       }).catch(function () { if (onUnavailable) onUnavailable(); });
     }
