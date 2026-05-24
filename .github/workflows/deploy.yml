@@ -107,6 +107,14 @@ jobs:
           node test-area-filter.js
           node test-issue-1293-marker-shapes.js
 
+      - name: 🧹 Frontend lint (eslint no-undef) — issue #1342
+        run: |
+          set -e
+          # Use eslint@8 (legacy .eslintrc.json). Don't migrate to flat-config / eslint@9.
+          # --no-save: avoid touching package.json / no committed node_modules.
+          npm install --no-save --no-audit --no-fund eslint@8
+          npx eslint public/*.js
+
       - name: Verify proto syntax
         run: |
           set -e
