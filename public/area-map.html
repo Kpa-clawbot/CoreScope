@@ -34,6 +34,11 @@
   #show-nodes { accent-color: #1a6abf; cursor: pointer; }
   #node-count { font-size: 0.75rem; color: #999; margin-left: auto; }
 
+  #overlay-section { border-top: 1px solid #eee; padding: 8px 14px; }
+  #overlay-section .section-title { padding: 6px 0; font-size: 0.72rem; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+  .overlay-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.82rem; color: #444; }
+  .overlay-row input { accent-color: #1a6abf; cursor: pointer; }
+
   /* --- builder --- */
   #builder { flex: 1; display: flex; flex-direction: column; border-top: 2px solid #e0e8f4; overflow: hidden; }
   #builder .section-title { background: #eef4fd; color: #1a6abf; border-bottom-color: #ccddf5; }
@@ -82,6 +87,15 @@
       <input type="checkbox" id="show-nodes"/>
       <label for="show-nodes">All nodes (grey)</label>
       <span id="node-count"></span>
+    </div>
+
+    <div id="overlay-section">
+      <div class="section-title">Overlays</div>
+      <div class="overlay-row">
+        <input type="checkbox" id="am-meshmapper" />
+        <label for="am-meshmapper">📶 MeshMapper coverage</label>
+      </div>
+      <div id="am-mm-note" style="font-size:0.72rem;color:#aaa;display:none;padding-left:20px">Key not configured</div>
     </div>
 
     <div id="builder">
@@ -348,6 +362,31 @@ document.getElementById('show-nodes').addEventListener('change', e => {
   if (e.target.checked) allNodeLayer.addTo(map);
   else map.removeLayer(allNodeLayer);
 });
+</script>
+
+<script src="map-overlays.js"></script>
+<script>
+(function () {
+  var mmCheck = document.getElementById('am-meshmapper');
+  var mmNote  = document.getElementById('am-mm-note');
+  // area-map initializes its Leaflet map in the sibling <script> block above.
+  // The variable is `map` declared at page scope — poll until it's ready.
+  function hookMeshMapper() {
+    if (typeof map === 'undefined' || !map) { setTimeout(hookMeshMapper, 100); return; }
+    mmCheck.addEventListener('change', function () {
+      if (this.checked) {
+        MapOverlays.initMeshMapper(map, function () {
+          mmCheck.checked = false;
+          mmCheck.disabled = true;
+          mmNote.style.display = '';
+        });
+      } else {
+        MapOverlays.destroyMeshMapper();
+      }
+    });
+  }
+  if (typeof MapOverlays !== 'undefined') hookMeshMapper();
+})();
 </script>
 </body>
 </html>
