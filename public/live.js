@@ -1095,6 +1095,12 @@
             <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
             <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="Filter live packets by IATA region"></div>
           </div>
+          <div class="live-overlay-toggles" id="liveOverlayToggles">
+            <label><input type="checkbox" id="liveOverlayRouteHistory"> 📈 Route History</label>
+            <label id="liveOverlayRadarLabel"><input type="checkbox" id="liveOverlayRadar"> 🌧️ Radar</label>
+            <label><input type="checkbox" id="liveOverlayWind"> 💨 Wind</label>
+            <label id="liveOverlayMeshMapperLabel"><input type="checkbox" id="liveOverlayMeshMapper"> 📶 MeshMapper</label>
+          </div>
           <div class="audio-controls hidden" id="audioControls">
             <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
             <label class="audio-slider-label">BPM <input type="range" id="audioBpmSlider" min="40" max="300" value="120" class="audio-slider"><span id="audioBpmVal">120</span></label>
@@ -1231,6 +1237,7 @@
 
 
     L.control.zoom({ position: 'topright' }).addTo(map);
+    setupLiveOverlayToggles(map);
 
     // Satmap provider switching
     const _ESRI_SAT        = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
@@ -3854,6 +3861,73 @@
     if (feedEl) feedEl.parentElement.appendChild(card);
   }
 
+  function setupLiveOverlayToggles(map) {
+    if (typeof MapOverlays === 'undefined') return;
+
+    var rhCheck  = document.getElementById('liveOverlayRouteHistory');
+    var radCheck = document.getElementById('liveOverlayRadar');
+    var wndCheck = document.getElementById('liveOverlayWind');
+    var mmCheck  = document.getElementById('liveOverlayMeshMapper');
+    var mmLabel  = document.getElementById('liveOverlayMeshMapperLabel');
+
+    // Restore localStorage state before attaching change handlers
+    if (rhCheck)  rhCheck.checked  = localStorage.getItem('meshcore-overlay-route-history') === 'true';
+    if (radCheck) radCheck.checked = localStorage.getItem('meshcore-overlay-radar')         === 'true';
+    if (wndCheck) wndCheck.checked = localStorage.getItem('meshcore-overlay-wind')          === 'true';
+    if (mmCheck)  mmCheck.checked  = localStorage.getItem('meshcore-overlay-meshmapper')    === 'true';
+
+    // Restore overlays that were already toggled on
+    if (rhCheck  && rhCheck.checked)  MapOverlays.initRouteHistory(map, 24);
+    if (radCheck && radCheck.checked) MapOverlays.initRadar(map, function () {
+      if (radCheck) { radCheck.checked = false; localStorage.setItem('meshcore-overlay-radar', 'false'); }
+    });
+    if (wndCheck && wndCheck.checked) MapOverlays.initWind(map);
+
+    // MeshMapper: probe at init time so the label hides before the user sees it
+    fetch('/api/coverage/meshmapper', { method: 'HEAD' })
+      .then(function (r) {
+        if (r.status === 503) {
+          if (mmLabel) mmLabel.style.display = 'none';
+          localStorage.setItem('meshcore-overlay-meshmapper', 'false');
+          return;
+        }
+        // Configured — init if saved state is on
+        if (mmCheck && mmCheck.checked) {
+          MapOverlays.initMeshMapper(map, function () {
+            if (mmCheck) { mmCheck.checked = false; localStorage.setItem('meshcore-overlay-meshmapper', 'false'); }
+          });
+        }
+      })
+      .catch(function () {
+        if (mmLabel) mmLabel.style.display = 'none';
+      });
+
+    rhCheck && rhCheck.addEventListener('change', function () {
+      localStorage.setItem('meshcore-overlay-route-history', this.checked);
+      if (this.checked) MapOverlays.initRouteHistory(map, 24);
+      else MapOverlays.destroyRouteHistory();
+    });
+    radCheck && radCheck.addEventListener('change', function () {
+      localStorage.setItem('meshcore-overlay-radar', this.checked);
+      if (this.checked) MapOverlays.initRadar(map, function () {
+        if (radCheck) { radCheck.checked = false; localStorage.setItem('meshcore-overlay-radar', 'false'); }
+      });
+      else MapOverlays.destroyRadar();
+    });
+    wndCheck && wndCheck.addEventListener('change', function () {
+      localStorage.setItem('meshcore-overlay-wind', this.checked);
+      if (this.checked) MapOverlays.initWind(map);
+      else MapOverlays.destroyWind();
+    });
+    mmCheck && mmCheck.addEventListener('change', function () {
+      localStorage.setItem('meshcore-overlay-meshmapper', this.checked);
+      if (this.checked) MapOverlays.initMeshMapper(map, function () {
+        if (mmCheck) { mmCheck.checked = false; localStorage.setItem('meshcore-overlay-meshmapper', 'false'); }
+      });
+      else MapOverlays.destroyMeshMapper();
+    });
+  }
+
   function destroy() {
     stopReplay();
     if (_timelineRefreshInterval) { clearInterval(_timelineRefreshInterval); _timelineRefreshInterval = null; }
@@ -3866,6 +3940,12 @@
     if (regionFilterChangeHandler && window.RegionFilter && typeof RegionFilter.offChange === 'function') {
       RegionFilter.offChange(regionFilterChangeHandler);
       regionFilterChangeHandler = null;
+    }
+    if (typeof MapOverlays !== 'undefined') {
+      MapOverlays.destroyRouteHistory();
+      MapOverlays.destroyRadar();
+      MapOverlays.destroyWind();
+      MapOverlays.destroyMeshMapper();
     }
     if (map) { map.remove(); map = null; }
     if (_onResize) {
