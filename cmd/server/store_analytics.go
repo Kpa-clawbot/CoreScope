@@ -1819,6 +1819,10 @@ func (s *PacketStore) computeHashCollisions(region string) map[string]interface{
 	}
 }
 
+// computeHashSizeInfoFn is the function called by GetNodeHashSizeInfo to
+// do the expensive scan. Overridable in tests via variable swap.
+var computeHashSizeInfoFn = (*PacketStore).computeNodeHashSizeInfo
+
 // GetNodeHashSizeInfo returns cached per-node hash size data, recomputing at most every 30s.
 // A singleflight pattern prevents thundering-herd cache misses: if a recompute is already
 // in progress, concurrent callers wait for it rather than launching their own scans.
@@ -1867,7 +1871,7 @@ func (s *PacketStore) GetNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 		s.hashSizeInfoMu.Unlock()
 		close(done)
 	}()
-	result = s.computeNodeHashSizeInfo()
+	result = computeHashSizeInfoFn(s)
 	return result
 }
 
@@ -2001,15 +2005,50 @@ func EnrichNodeWithMultiByte(node map[string]interface{}, entry *MultiByteCapEnt
 }
 
 // GetMultiByteCapMap returns a cached pubkey → MultiByteCapEntry map.
-// Reuses the same 15s TTL cache pattern as hash size info.
+// Uses singleflight to coalesce concurrent callers and a 30s TTL.
 func (s *PacketStore) GetMultiByteCapMap() map[string]*MultiByteCapEntry {
+	const ttl = 30 * time.Second
+
+	// Fast path: cache is warm.
 	s.hashSizeInfoMu.Lock()
-	if s.multiByteCapCache != nil && time.Since(s.multiByteCapAt) < 15*time.Second {
+	if s.multiByteCapCache != nil && time.Since(s.multiByteCapAt) < ttl {
 		cached := s.multiByteCapCache
 		s.hashSizeInfoMu.Unlock()
 		return cached
 	}
+
+	// Singleflight: if a recompute is already in progress, wait for it.
+	if s.multiByteCapInFlt != nil {
+		ch := s.multiByteCapInFlt
+		s.hashSizeInfoMu.Unlock()
+		<-ch
+		// Return the result if cache is still valid; fall through if eviction
+		// invalidated it while the leader was computing.
+		s.hashSizeInfoMu.Lock()
+		cached := s.multiByteCapCache
+		s.hashSizeInfoMu.Unlock()
+		if cached != nil {
+			return cached
+		}
+		// Fall through to leader path below.
+	}
+
+	// We are the leader.
+	done := make(chan struct{})
+	s.multiByteCapInFlt = done
 	s.hashSizeInfoMu.Unlock()
+
+	var result map[string]*MultiByteCapEntry
+	defer func() {
+		s.hashSizeInfoMu.Lock()
+		if result != nil {
+			s.multiByteCapCache = result
+			s.multiByteCapAt = time.Now()
+		}
+		s.multiByteCapInFlt = nil
+		s.hashSizeInfoMu.Unlock()
+		close(done)
+	}()
 
 	// Get adopter hash sizes from analytics for cross-referencing
 	analyticsData := s.GetAnalyticsHashSizes("")
@@ -2023,15 +2062,10 @@ func (s *PacketStore) GetMultiByteCapMap() map[string]*MultiByteCapEntry {
 	}
 
 	caps := s.computeMultiByteCapability(adopterSizes)
-	result := make(map[string]*MultiByteCapEntry, len(caps))
+	result = make(map[string]*MultiByteCapEntry, len(caps))
 	for i := range caps {
 		result[caps[i].PublicKey] = &caps[i]
 	}
-
-	s.hashSizeInfoMu.Lock()
-	s.multiByteCapCache = result
-	s.multiByteCapAt = time.Now()
-	s.hashSizeInfoMu.Unlock()
 	return result
 }
 
