@@ -122,6 +122,8 @@ type Server struct {
 	obsAnalyticsMu    sync.Mutex
 	obsAnalyticsCache map[string]*obsAnalyticsCacheEntry
 
+	losHandler *losHandler // elevation cache + HTTP client for LOS API calls
+
 }
 
 // obsAnalyticsCacheEntry holds one cached /api/observers/:id/analytics response.

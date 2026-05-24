@@ -295,7 +295,7 @@ func (s *Server) handleLOS(w http.ResponseWriter, r *http.Request) {
 		lats[i], lons[i] = interpolatePoint(req.LatA, req.LonA, req.LatB, req.LonB, t)
 	}
 
-	h := newLOSHandler(s.cfg)
+	h := s.getLOSHandler()
 	elevs, dataGaps, err := h.fetchElevations(r.Context(), lats, lons)
 	if err != nil {
 		log.Printf("[los] elevation fetch failed: %v", err)
@@ -335,4 +335,12 @@ func (s *Server) handleLOS(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// getLOSHandler returns the server's shared LOS handler, initializing it lazily on first use.
+func (s *Server) getLOSHandler() *losHandler {
+	if s.losHandler == nil {
+		s.losHandler = newLOSHandler(s.cfg)
+	}
+	return s.losHandler
 }
