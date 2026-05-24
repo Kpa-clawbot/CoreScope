@@ -1,13 +1,14 @@
-/* Tests for #1346 — per-packet animation timing must be CONSTANT, decoupled from VCR.speed.
+/* Tests for #1346 — per-packet animation honors VCR.speed in REPLAY only.
  *
- * Bug: drawAnimatedLine() used `stepMs = 33 / VCR.speed` and drawMatrixLine() used
- * `DURATION_MS = 1100 / VCR.speed`. VCR.speed is a TIME-DOMAIN multiplier for the gaps
- * BETWEEN replay packets (line ~507: `delay = realGap / VCR.speed`), NOT a cadence
- * multiplier for the per-packet animation itself. If user cycled to 4×/8× during a
- * replay, the persisted speed made LIVE animation appear instantaneous.
+ * Bug: `stepMs = 33 / VCR.speed` / `DURATION_MS = 1100 / VCR.speed` ran in BOTH modes,
+ * so cycling speed to 4×/8× during REPLAY made subsequent LIVE animation effectively
+ * instantaneous (persisted VCR.speed kept dividing).
  *
- * Fix: per-packet animation timing is a constant (33ms step / 1100ms duration) in
- * BOTH modes. Inter-packet `delay = realGap / VCR.speed` is left untouched.
+ * Fix:
+ *  - LIVE  → animation always 1× (divisor = 1)
+ *  - REPLAY → animation scaled by VCR.speed (preserves #922 slow-mo @ 0.25×, fast-fwd @ 4×/8×)
+ *  - Inter-packet replay delay `realGap / VCR.speed` unchanged
+ *  - UI: speed button hidden in LIVE (control is meaningless when divisor is fixed at 1)
  */
 'use strict';
 const fs = require('fs');
@@ -21,7 +22,7 @@ function test(name, fn) {
   catch (e) { failed++; console.log(`  ❌ ${name}: ${e.message}`); }
 }
 
-console.log('\n=== #1346 — per-packet animation decoupled from VCR.speed ===');
+console.log('\n=== #1346 — per-packet animation honors VCR.speed in REPLAY only ===');
 
 function extractFn(name) {
   const start = src.indexOf('function ' + name + '(');
@@ -30,36 +31,66 @@ function extractFn(name) {
   return src.substring(start, next === -1 ? start + 4000 : next);
 }
 
-test('drawAnimatedLine: stepMs is constant, not divided by VCR.speed', () => {
-  const body = extractFn('drawAnimatedLine');
-  const m = body.match(/const\s+stepMs\s*=\s*([^;]+);/);
-  assert.ok(m, 'stepMs assignment not found');
-  const expr = m[1];
-  assert.ok(!/VCR\.speed/.test(expr),
-    `stepMs expression must NOT reference VCR.speed (got: ${expr.trim()})`);
+function evalWithVCR(expr, VCR) {
+  return new Function('VCR', `return (${expr});`)(VCR);
+}
 
-  // Behavioural: evaluate the expression in a no-VCR environment.
-  const val = new Function(`return (${expr});`)();
-  assert.strictEqual(val, 33, `stepMs must equal 33, got ${val}`);
+// --- drawAnimatedLine.stepMs ---
+const stepExpr = extractFn('drawAnimatedLine').match(/const\s+stepMs\s*=\s*([^;]+);/)[1];
+
+test('LIVE @ speed=4 → stepMs = 33 (animation 1×)', () => {
+  const v = evalWithVCR(stepExpr, { mode: 'LIVE', speed: 4 });
+  assert.strictEqual(v, 33, `got ${v}`);
+});
+test('LIVE @ speed=8 → stepMs = 33 (animation 1×)', () => {
+  const v = evalWithVCR(stepExpr, { mode: 'LIVE', speed: 8 });
+  assert.strictEqual(v, 33, `got ${v}`);
+});
+test('REPLAY @ speed=4 → stepMs = 8.25 (fast-forward animation)', () => {
+  const v = evalWithVCR(stepExpr, { mode: 'REPLAY', speed: 4 });
+  assert.strictEqual(v, 8.25, `got ${v}`);
+});
+test('REPLAY @ speed=0.25 → stepMs = 132 (#922 slow-mo preserved)', () => {
+  const v = evalWithVCR(stepExpr, { mode: 'REPLAY', speed: 0.25 });
+  assert.strictEqual(v, 132, `got ${v}`);
+});
+test('REPLAY @ speed=1 → stepMs = 33 (baseline)', () => {
+  const v = evalWithVCR(stepExpr, { mode: 'REPLAY', speed: 1 });
+  assert.strictEqual(v, 33, `got ${v}`);
 });
 
-test('drawMatrixLine: DURATION_MS is constant, not divided by VCR.speed', () => {
-  const body = extractFn('drawMatrixLine');
-  const m = body.match(/const\s+DURATION_MS\s*=\s*([^;]+);/);
-  assert.ok(m, 'DURATION_MS assignment not found');
-  const expr = m[1];
-  assert.ok(!/VCR\.speed/.test(expr),
-    `DURATION_MS expression must NOT reference VCR.speed (got: ${expr.trim()})`);
+// --- drawMatrixLine.DURATION_MS ---
+const durExpr = extractFn('drawMatrixLine').match(/const\s+DURATION_MS\s*=\s*([^;]+);/)[1];
 
-  const val = new Function(`return (${expr});`)();
-  assert.strictEqual(val, 1100, `DURATION_MS must equal 1100, got ${val}`);
+test('LIVE @ speed=4 → DURATION_MS = 1100', () => {
+  const v = evalWithVCR(durExpr, { mode: 'LIVE', speed: 4 });
+  assert.strictEqual(v, 1100, `got ${v}`);
+});
+test('REPLAY @ speed=4 → DURATION_MS = 275 (fast-forward)', () => {
+  const v = evalWithVCR(durExpr, { mode: 'REPLAY', speed: 4 });
+  assert.strictEqual(v, 275, `got ${v}`);
+});
+test('REPLAY @ speed=0.25 → DURATION_MS = 4400 (#922 slow-mo)', () => {
+  const v = evalWithVCR(durExpr, { mode: 'REPLAY', speed: 0.25 });
+  assert.strictEqual(v, 4400, `got ${v}`);
 });
 
-test('Inter-packet replay delay still honors VCR.speed (slow-mo / fast-forward)', () => {
-  // The legitimate use of VCR.speed: line ~507 scales the gap BETWEEN replayed packets.
-  // Fix must not regress this.
+// --- inter-packet replay delay regression guard ---
+test('Inter-packet replay delay still divides realGap by VCR.speed', () => {
   assert.ok(/delay\s*=\s*Math\.min\([^;]+?\/\s*VCR\.speed/.test(src),
     'inter-packet replay delay must still divide realGap by VCR.speed');
+});
+
+// --- UI: speed button hidden in LIVE ---
+test('updateVCRUI hides speed button when mode === LIVE', () => {
+  const start = src.indexOf('function updateVCRUI(');
+  assert.ok(start !== -1, 'updateVCRUI not found');
+  const end = src.indexOf('\n  function ', start + 1);
+  const body = src.substring(start, end === -1 ? start + 4000 : end);
+  // Must branch on LIVE and hide speedBtn
+  assert.ok(/speedBtn[\s\S]*VCR\.mode\s*===\s*['"]LIVE['"][\s\S]*classList\.add\(['"]hidden['"]\)/.test(body)
+         || /VCR\.mode\s*===\s*['"]LIVE['"][\s\S]*speedBtn[\s\S]*classList\.add\(['"]hidden['"]\)/.test(body),
+    'speedBtn must be hidden when VCR.mode === LIVE');
 });
 
 console.log(`\n=== ${passed} passed, ${failed} failed ===`);
