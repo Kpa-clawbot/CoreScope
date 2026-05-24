@@ -295,6 +295,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// LOS endpoint
 	r.HandleFunc("/api/los", s.handleLOS).Methods("POST")
 
+	// RF Coverage endpoint
+	r.HandleFunc("/api/rf-coverage", s.handleRFCoverage).Methods("POST")
+
 	// Node endpoints — fixed routes BEFORE parameterized
 	r.HandleFunc("/api/nodes/search", s.handleNodeSearch).Methods("GET")
 	r.HandleFunc("/api/nodes/bulk-health", s.handleBulkHealth).Methods("GET")
