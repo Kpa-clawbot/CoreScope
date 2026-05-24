@@ -1842,16 +1842,16 @@ func (s *PacketStore) GetNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 		ch := s.hashSizeInFlt
 		s.hashSizeInfoMu.Unlock()
 		<-ch
-		// The leader stored the result; return it if the cache is still valid.
-		// If EvictStale invalidated the cache while the leader was computing,
-		// fall through and become a new leader.
+		// Re-acquire to read cache. Return it if still valid.
+		// If the leader panicked (leaving cache nil), fall through with lock
+		// still held to become the new leader.
 		s.hashSizeInfoMu.Lock()
 		cached := s.hashSizeInfoCache
-		s.hashSizeInfoMu.Unlock()
 		if cached != nil {
+			s.hashSizeInfoMu.Unlock()
 			return cached
 		}
-		// Fall through to leader path below.
+		// Cache is nil; lock still held — fall through to leader path.
 	}
 
 	// We are the leader: publish the channel before releasing the lock.
@@ -2022,18 +2022,19 @@ func (s *PacketStore) GetMultiByteCapMap() map[string]*MultiByteCapEntry {
 		ch := s.multiByteCapInFlt
 		s.hashSizeInfoMu.Unlock()
 		<-ch
-		// Return the result if cache is still valid; fall through if eviction
-		// invalidated it while the leader was computing.
+		// Re-acquire to read cache. Return it if still valid.
+		// If the leader panicked (leaving cache nil), fall through with lock
+		// still held to become the new leader.
 		s.hashSizeInfoMu.Lock()
 		cached := s.multiByteCapCache
-		s.hashSizeInfoMu.Unlock()
 		if cached != nil {
+			s.hashSizeInfoMu.Unlock()
 			return cached
 		}
-		// Fall through to leader path below.
+		// Cache is nil; lock still held — fall through to leader path.
 	}
 
-	// We are the leader.
+	// We are the leader: publish the channel before releasing the lock.
 	done := make(chan struct{})
 	s.multiByteCapInFlt = done
 	s.hashSizeInfoMu.Unlock()
