@@ -662,8 +662,10 @@ input[type="week"] {
    where effective viewport ~1129px and buttons + nav-stats fight for space). */
 @media (max-width: 1600px) { .top-nav .nav-action-label { display: none; } .top-nav .nav-action-btn { padding: 6px 10px; } }
 @media (max-width: 1400px) { .top-nav .nav-action-btn { display: none; } }
-/* Brand text: only hide in the tightest band where links + right buttons need every pixel */
-@media (min-width: 769px) and (max-width: 900px) { .brand-text { display: none; } }
+/* Brand text: only hide in the tightest band where links + right buttons need every pixel.
+   Starts at 768px (the narrowest desktop width) — brand-text is still visible on mobile
+   (<768px) where nav-links are collapsed into the hamburger dropdown. */
+@media (min-width: 768px) and (max-width: 900px) { .brand-text { display: none; } }
 /* Tighten nav-left gap at medium widths to reclaim space for links */
 @media (min-width: 769px) and (max-width: 1100px) { .nav-left { gap: var(--space-md); } }
 /* === Nav Stats === */
