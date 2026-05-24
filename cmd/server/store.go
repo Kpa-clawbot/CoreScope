@@ -225,10 +225,13 @@ type PacketStore struct {
 	distHopsByTx  map[int][]int
 	distPathsByTx map[int][]int
 
-	// Cached GetNodeHashSizeInfo result — recomputed at most once every 15s
+	// Cached GetNodeHashSizeInfo result — recomputed at most once every 30s.
+	// hashSizeInFlt is non-nil while a recompute is in progress; concurrent
+	// callers block on it and reuse the result (same pattern as rebuildInFlt).
 	hashSizeInfoMu    sync.Mutex
 	hashSizeInfoCache map[string]*hashSizeNodeInfo
 	hashSizeInfoAt    time.Time
+	hashSizeInFlt     chan struct{} // nil when no recompute in flight
 
 	// Cached relay stats batch result — recomputed at most once every 300s
 	// or when byPathHop changes (see invalidateRelayStatsCache).
@@ -238,9 +241,11 @@ type PacketStore struct {
 	relayStatsCacheWindow float64
 	relayStatsCacheSig    string
 
-	// Cached multi-byte capability map (pubkey → entry), recomputed every 15s.
-	multiByteCapCache map[string]*MultiByteCapEntry
-	multiByteCapAt    time.Time
+	// Cached multi-byte capability map (pubkey → entry), recomputed every 30s.
+	// multiByteCapInFlt is non-nil while a recompute is in progress.
+	multiByteCapCache  map[string]*MultiByteCapEntry
+	multiByteCapAt     time.Time
+	multiByteCapInFlt  chan struct{} // nil when no recompute in flight
 
 	// Cached per-pubkey relay info + usefulness score maps (#1257). These
 	// fold the previously per-node GetRepeaterRelayInfo /
