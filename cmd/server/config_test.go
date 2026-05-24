@@ -520,3 +520,16 @@ func TestRFConfigOverride(t *testing.T) {
 		t.Errorf("RFStepKm override: want 0.25, got %f", got)
 	}
 }
+
+func TestRFConfigZeroValuesFallbackToDefaults(t *testing.T) {
+	cfg := &Config{RF: &RFConfig{MaxRangeKm: 0, Bearings: 0, StepKm: 0}}
+	if got := cfg.RFMaxRangeKm(); got != 20.0 {
+		t.Errorf("zero MaxRangeKm: want 20.0, got %f", got)
+	}
+	if got := cfg.RFBearings(); got != 36 {
+		t.Errorf("zero Bearings: want 36, got %d", got)
+	}
+	if got := cfg.RFStepKm(); got != 0.5 {
+		t.Errorf("zero StepKm: want 0.5, got %f", got)
+	}
+}

@@ -154,9 +154,9 @@ type LOSConfig struct {
 
 // RFConfig controls RF coverage analysis behaviour.
 type RFConfig struct {
-	MaxRangeKm float64 `json:"maxRangeKm"` // maximum coverage radius to probe (default 20 km)
-	Bearings   int     `json:"bearings"`   // number of radial bearings (default 36)
-	StepKm     float64 `json:"stepKm"`     // radial step size in km (default 0.5)
+	MaxRangeKm float64 `json:"maxRangeKm,omitempty"` // maximum coverage radius to probe (default 20 km)
+	Bearings   int     `json:"bearings,omitempty"`   // number of radial bearings (default 36)
+	StepKm     float64 `json:"stepKm,omitempty"`     // radial step size in km (default 0.5)
 }
 
 // weakAPIKeys is the blocklist of known default/example API keys that must be rejected.
