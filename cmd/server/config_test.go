@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadConfigValidJSON(t *testing.T) {
@@ -447,6 +448,50 @@ func TestLoadConfigReachThresholds(t *testing.T) {
 	}
 	if rt.GoodMinObservers != 5 {
 		t.Errorf("expected 5, got %d", rt.GoodMinObservers)
+	}
+}
+
+func TestLOSConfigDefaults(t *testing.T) {
+	cfg := &Config{}
+	if cfg.LOSElevationURL() != "https://api.open-topo-data.com" {
+		t.Errorf("expected default elevation URL, got %s", cfg.LOSElevationURL())
+	}
+	if cfg.LOSSampleMin() != 50 {
+		t.Errorf("expected sample min 50, got %d", cfg.LOSSampleMin())
+	}
+	if cfg.LOSSampleMax() != 500 {
+		t.Errorf("expected sample max 500, got %d", cfg.LOSSampleMax())
+	}
+	if cfg.LOSCacheTTL() != 24*time.Hour {
+		t.Errorf("expected cache TTL 24h, got %v", cfg.LOSCacheTTL())
+	}
+}
+
+func TestLOSConfigOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfgData := map[string]interface{}{
+		"los": map[string]interface{}{
+			"elevationURL":  "https://my-topo.example.com",
+			"sampleMin":     100,
+			"sampleMax":     200,
+			"cacheTTLHours": 48,
+		},
+	}
+	data, _ := json.Marshal(cfgData)
+	os.WriteFile(filepath.Join(dir, "config.json"), data, 0644)
+
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LOSElevationURL() != "https://my-topo.example.com" {
+		t.Errorf("expected override URL, got %s", cfg.LOSElevationURL())
+	}
+	if cfg.LOSSampleMin() != 100 {
+		t.Errorf("expected 100, got %d", cfg.LOSSampleMin())
+	}
+	if cfg.LOSCacheTTL() != 48*time.Hour {
+		t.Errorf("expected 48h, got %v", cfg.LOSCacheTTL())
 	}
 }
 

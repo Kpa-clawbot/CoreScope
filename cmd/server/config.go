@@ -125,6 +125,8 @@ type Config struct {
 	// Reach configures the observer-count colour thresholds shown on channel
 	// messages (red / yellow / green reach indicator).
 	Reach *ReachThresholds `json:"reachThresholds,omitempty"`
+
+	LOS *LOSConfig `json:"los,omitempty"`
 }
 
 // RateLimitConfig configures the per-IP token-bucket rate limiter. All limits
@@ -138,6 +140,14 @@ type RateLimitConfig struct {
 	// (/api/analytics/*, /api/decode, /api/paths/inspect).
 	ExpensiveRPS   float64 `json:"expensiveRps,omitempty"`   // sustained requests/sec per IP (default 5)
 	ExpensiveBurst int     `json:"expensiveBurst,omitempty"` // burst capacity per IP (default 15)
+}
+
+// LOSConfig controls line-of-sight analysis behaviour.
+type LOSConfig struct {
+	ElevationURL  string `json:"elevationURL,omitempty"`  // base URL for open-topo-data (default https://api.open-topo-data.com)
+	SampleMin     int    `json:"sampleMin,omitempty"`     // minimum elevation sample points (default 50)
+	SampleMax     int    `json:"sampleMax,omitempty"`     // maximum elevation sample points (default 500)
+	CacheTTLHours int    `json:"cacheTTLHours,omitempty"` // elevation cache TTL in hours (default 24)
 }
 
 // weakAPIKeys is the blocklist of known default/example API keys that must be rejected.
@@ -276,6 +286,34 @@ func (c *Config) NeighborMaxEdgeKm() float64 {
 		return 0
 	}
 	return c.NeighborGraph.MaxEdgeKm
+}
+
+func (c *Config) LOSElevationURL() string {
+	if c != nil && c.LOS != nil && c.LOS.ElevationURL != "" {
+		return c.LOS.ElevationURL
+	}
+	return "https://api.open-topo-data.com"
+}
+
+func (c *Config) LOSSampleMin() int {
+	if c != nil && c.LOS != nil && c.LOS.SampleMin > 0 {
+		return c.LOS.SampleMin
+	}
+	return 50
+}
+
+func (c *Config) LOSSampleMax() int {
+	if c != nil && c.LOS != nil && c.LOS.SampleMax > 0 {
+		return c.LOS.SampleMax
+	}
+	return 500
+}
+
+func (c *Config) LOSCacheTTL() time.Duration {
+	if c != nil && c.LOS != nil && c.LOS.CacheTTLHours > 0 {
+		return time.Duration(c.LOS.CacheTTLHours) * time.Hour
+	}
+	return 24 * time.Hour
 }
 
 type TimestampConfig struct {
