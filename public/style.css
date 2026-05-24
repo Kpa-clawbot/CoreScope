@@ -660,8 +660,8 @@ input[type="week"] {
    which also sets display:inline-block and would otherwise win the cascade.
    Breakpoints: icon-only ≤1400px, hide entirely ≤1200px (covers 170% zoom on 1080p/1440p
    where effective viewport ~1129px and buttons + nav-stats fight for space). */
-@media (max-width: 1400px) { .top-nav .nav-action-label { display: none; } .top-nav .nav-action-btn { padding: 6px 10px; } }
-@media (max-width: 1200px) { .top-nav .nav-action-btn { display: none; } }
+@media (max-width: 1600px) { .top-nav .nav-action-label { display: none; } .top-nav .nav-action-btn { padding: 6px 10px; } }
+@media (max-width: 1400px) { .top-nav .nav-action-btn { display: none; } }
 /* Brand text: only hide in the tightest band where links + right buttons need every pixel */
 @media (min-width: 769px) and (max-width: 900px) { .brand-text { display: none; } }
 /* Tighten nav-left gap at medium widths to reclaim space for links */
