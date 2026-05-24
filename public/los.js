@@ -31,14 +31,33 @@
   }
 
   // ── Map setup ──────────────────────────────────────────────────────────────
+  var _losTileLayer = null;
+  var _losThemeObs = null;
+
+  function setLosTiles(tileKey) {
+    if (_losTileLayer) { _losTileLayer.remove(); _losTileLayer = null; }
+    if (_losThemeObs) { _losThemeObs.disconnect(); _losThemeObs = null; }
+    var isTopo = tileKey === 'topo';
+    var url = isTopo ? window.TILE_TOPO : window.getTileUrl();
+    _losTileLayer = L.tileLayer(url, {
+      maxZoom: isTopo ? 17 : 19,
+      attribution: isTopo ? '© OpenTopoMap contributors' : '© OpenStreetMap © CartoDB',
+    }).addTo(losMap);
+    if (!isTopo) {
+      _losThemeObs = new MutationObserver(function () {
+        if (_losTileLayer) _losTileLayer.setUrl(window.getTileUrl());
+      });
+      _losThemeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    }
+  }
+
   function initMap(container) {
     if (losMap) { losMap.remove(); losMap = null; }
     losMap = L.map(container, { zoomControl: true, attributionControl: false });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 18,
-    }).addTo(losMap);
     losMap.setView([52.0, 5.0], 9);
     losMap.on('click', onMapClick);
+    var savedTile = localStorage.getItem('meshcore-los-tile') || 'default';
+    setLosTiles(savedTile);
   }
 
   function onMapClick(e) {
@@ -337,7 +356,13 @@
           '<button id="los-run" class="los-btn los-btn-primary">Run Analysis</button>' +
           '<div id="los-result" class="los-result-area"></div>' +
         '</div>' +
-        '<div id="los-map" class="los-map"></div>' +
+        '<div class="los-map-wrap">' +
+          '<div id="los-map" class="los-map"></div>' +
+          '<div class="tool-tile-picker" id="los-tile-picker">' +
+            '<button class="tpick-btn" id="los-tile-default">🗺 Default</button>' +
+            '<button class="tpick-btn" id="los-tile-topo">🏔 Topo</button>' +
+          '</div>' +
+        '</div>' +
       '</div>' +
     '</div>';
   }
@@ -351,7 +376,8 @@
       '.los-page h2 { margin-bottom: 16px; font-size: 1.4rem; }',
       '.los-body { display: flex; gap: 20px; }',
       '.los-controls { flex: 0 0 340px; display: flex; flex-direction: column; gap: 16px; }',
-      '.los-map { flex: 1; min-height: 480px; border-radius: 8px; border: 1px solid var(--border); }',
+      '.los-map-wrap { flex: 1; position: relative; min-height: 480px; }',
+      '.los-map { width: 100%; height: 100%; min-height: 480px; border-radius: 8px; border: 1px solid var(--border); }',
       '.los-point-group { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }',
       '.los-point-group h3 { margin: 0 0 10px; font-size: 0.95rem; }',
       '.los-input { background: var(--input-bg); border: 1px solid var(--border); color: var(--text); border-radius: 4px; padding: 6px 8px; font-size: 13px; width: 100%; box-sizing: border-box; }',
@@ -363,9 +389,9 @@
       '.los-btn { padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; font-size: 13px; background: var(--card-bg); color: var(--text); }',
       '.los-btn:hover { background: var(--row-hover); }',
       '.los-btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; width: 100%; padding: 10px; }',
-      '.los-btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }',
+      '.los-btn-primary:hover { opacity: 0.88; }',
       '.los-pick-btn { flex: 0 0 auto; padding: 6px 10px; font-size: 12px; width: auto; }',
-      '.los-pick-active { background: var(--status-yellow, #f59e0b) !important; color: #fff !important; border-color: transparent !important; }',
+      '.los-pick-active { background: var(--status-amber) !important; color: #fff !important; border-color: transparent !important; }',
       '.los-autocomplete-wrap { position: relative; }',
       '.los-autocomplete-list { position: absolute; top: 100%; left: 0; right: 0; background: var(--card-bg); border: 1px solid var(--border); border-radius: 4px; list-style: none; margin: 2px 0 0; padding: 0; max-height: 200px; overflow-y: auto; z-index: 500; }',
       '.los-autocomplete-item { padding: 7px 10px; font-size: 12px; cursor: pointer; }',
@@ -373,17 +399,23 @@
       '.los-result-area { margin-top: 4px; }',
       '.los-spinner { padding: 16px; text-align: center; color: var(--text-muted); font-size: 13px; }',
       '.los-status { padding: 10px 14px; border-radius: 6px; font-weight: 600; font-size: 14px; margin-bottom: 8px; }',
-      '.los-clear { background: rgba(34,197,94,0.12); color: var(--status-green, #22c55e); border: 1px solid rgba(34,197,94,0.3); }',
-      '.los-blocked { background: rgba(239,68,68,0.10); color: var(--status-red, #ef4444); border: 1px solid rgba(239,68,68,0.3); }',
+      '.los-clear { background: rgba(34,197,94,0.12); color: var(--status-green); border: 1px solid rgba(34,197,94,0.3); }',
+      '.los-blocked { background: rgba(239,68,68,0.10); color: var(--status-red); border: 1px solid rgba(239,68,68,0.3); }',
       '.los-distance { font-size: 13px; color: var(--text-muted); margin-bottom: 8px; }',
-      '.los-warning { font-size: 12px; color: var(--status-yellow, #f59e0b); padding: 6px 8px; background: rgba(245,158,11,0.1); border-radius: 4px; margin-bottom: 8px; }',
-      '.los-error { padding: 10px 14px; background: rgba(239,68,68,0.08); color: var(--status-red, #ef4444); border-radius: 6px; font-size: 13px; }',
+      '.los-warning { font-size: 12px; color: var(--status-amber); padding: 6px 8px; background: rgba(245,158,11,0.1); border-radius: 4px; margin-bottom: 8px; }',
+      '.los-error { padding: 10px 14px; background: rgba(239,68,68,0.08); color: var(--status-red); border-radius: 6px; font-size: 13px; }',
       '.los-chart-wrap { height: 200px; margin-bottom: 10px; }',
-      '.los-relay-info { font-size: 13px; padding: 8px 10px; background: var(--section-bg, var(--card-bg)); border: 1px solid var(--border); border-radius: 6px; }',
+      '.los-relay-info { font-size: 13px; padding: 8px 10px; background: var(--section-bg); border: 1px solid var(--border); border-radius: 6px; }',
       '.los-btn-sm { padding: 3px 8px; font-size: 12px; width: auto; margin-left: 6px; }',
+      '/* tile picker — shared class, also used by rf-coverage and analytics route-history map */',
+      '.tool-tile-picker { position: absolute; top: 8px; right: 8px; z-index: 500; display: flex; gap: 3px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px; box-shadow: 0 1px 4px rgba(0,0,0,0.15); }',
+      '.tpick-btn { padding: 4px 9px; font-size: 11px; border: none; border-radius: 4px; cursor: pointer; background: transparent; color: var(--text-muted); }',
+      '.tpick-btn.active { background: var(--accent); color: #fff; }',
+      '.tpick-btn:hover:not(.active) { background: var(--row-hover); color: var(--text); }',
       '@media (max-width: 768px) {',
       '  .los-body { flex-direction: column; }',
       '  .los-controls { flex: none; }',
+      '  .los-map-wrap { min-height: 300px; }',
       '  .los-map { min-height: 300px; }',
       '}',
     ].join('\n');
@@ -406,6 +438,20 @@
           if (pickingPoint === 'b') stopPickMode(); else startPickMode('b');
         });
         document.getElementById('los-run').addEventListener('click', runAnalysis);
+
+        // ── Tile picker ────────────────────────────────────────────────────
+        var savedTile = localStorage.getItem('meshcore-los-tile') || 'default';
+        document.getElementById('los-tile-default').classList.toggle('active', savedTile === 'default');
+        document.getElementById('los-tile-topo').classList.toggle('active', savedTile === 'topo');
+
+        function switchLosTile(key) {
+          localStorage.setItem('meshcore-los-tile', key);
+          setLosTiles(key);
+          document.getElementById('los-tile-default').classList.toggle('active', key === 'default');
+          document.getElementById('los-tile-topo').classList.toggle('active', key === 'topo');
+        }
+        document.getElementById('los-tile-default').addEventListener('click', function () { switchLosTile('default'); });
+        document.getElementById('los-tile-topo').addEventListener('click', function () { switchLosTile('topo'); });
       }, 0);
     },
     destroy: function () {
@@ -416,6 +462,8 @@
         losMap.remove();
         losMap = null;
       }
+      if (_losThemeObs) { _losThemeObs.disconnect(); _losThemeObs = null; }
+      _losTileLayer = null;
       if (losChart) { losChart.destroy(); losChart = null; }
       markerA = markerB = losPolyline = relayMarker = null;
       pickingPoint = null;
