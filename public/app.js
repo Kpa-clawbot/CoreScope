@@ -958,6 +958,10 @@ function navigate() {
       routeParam = null;
     } else if (!routeParam) {
       basePage = 'tools-landing';
+    } else {
+      // Unknown sub-route: fall back to tools landing
+      basePage = 'tools-landing';
+      routeParam = null;
     }
   }
   // Also support old #/traces (no sub-path) → traces page.
