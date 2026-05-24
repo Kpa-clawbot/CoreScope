@@ -598,8 +598,6 @@ window.addEventListener('DOMContentLoaded', () => {
     darkCheckbox.addEventListener('change', () => {
       applyTheme(darkCheckbox.checked ? 'dark' : 'light');
     });
-    // Prevent click from bubbling to any legacy handler
-    darkToggle.addEventListener('click', (e) => { e.stopPropagation(); });
   } else {
     // Fallback for button-style toggle (upstream compatibility)
     darkToggle.addEventListener('click', () => {
