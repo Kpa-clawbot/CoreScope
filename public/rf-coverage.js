@@ -169,9 +169,10 @@
     var latlngs = data.coverage.map(function (pt) { return [pt.lat, pt.lon]; });
     if (latlngs.length > 0) {
       latlngs.push(latlngs[0]); // close polygon
+      var accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#3b82f6';
       coveragePolygon = L.polygon(latlngs, {
-        color: '#3b82f6', weight: 2,
-        fillColor: '#3b82f6', fillOpacity: 0.18,
+        color: accentColor, weight: 2,
+        fillColor: accentColor, fillOpacity: 0.18,
       }).addTo(rfMap);
       rfMap.fitBounds(coveragePolygon.getBounds().pad(0.1));
     }
