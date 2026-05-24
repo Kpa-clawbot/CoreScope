@@ -299,6 +299,9 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// RF Coverage endpoint
 	r.HandleFunc("/api/rf-coverage", s.handleRFCoverage).Methods("POST")
 
+	// Route History endpoint
+	r.HandleFunc("/api/route-history", s.handleRouteHistory).Methods("GET")
+
 	// Node endpoints — fixed routes BEFORE parameterized
 	r.HandleFunc("/api/nodes/search", s.handleNodeSearch).Methods("GET")
 	r.HandleFunc("/api/nodes/bulk-health", s.handleBulkHealth).Methods("GET")

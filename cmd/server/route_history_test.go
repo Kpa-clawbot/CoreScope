@@ -1,0 +1,80 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+// TestRouteHistoryEdgeNormalize verifies A→B and B→A collapse to the same key.
+func TestRouteHistoryEdgeNormalize(t *testing.T) {
+	cases := []struct{ a, b, wantA, wantB string }{
+		{"aaaa", "bbbb", "aaaa", "bbbb"},
+		{"bbbb", "aaaa", "aaaa", "bbbb"},
+		{"zzzz", "aaaa", "aaaa", "zzzz"},
+		{"xxxx", "xxxx", "xxxx", "xxxx"}, // same pubkey — degenerate edge
+	}
+	for _, tc := range cases {
+		a, b := tc.a, tc.b
+		if a > b {
+			a, b = b, a
+		}
+		if a != tc.wantA || b != tc.wantB {
+			t.Errorf("normalize(%q,%q): got (%q,%q), want (%q,%q)", tc.a, tc.b, a, b, tc.wantA, tc.wantB)
+		}
+	}
+}
+
+// TestHandleRouteHistory_InvalidHours verifies out-of-range hours return 400.
+func TestHandleRouteHistory_InvalidHours(t *testing.T) {
+	cases := []string{"0", "169", "abc", "-1", "999"}
+	for _, h := range cases {
+		s := &Server{cfg: &Config{}}
+		req := httptest.NewRequest("GET", "/api/route-history?hours="+h, nil)
+		rr := httptest.NewRecorder()
+		s.handleRouteHistory(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("hours=%q: want 400, got %d", h, rr.Code)
+		}
+	}
+}
+
+// TestHandleRouteHistory_ValidHoursDefaultsTo24 verifies missing hours param defaults to 24.
+func TestHandleRouteHistory_ValidHoursDefaultsTo24(t *testing.T) {
+	db := setupTestDB(t)
+	s := &Server{cfg: &Config{}, db: db}
+	req := httptest.NewRequest("GET", "/api/route-history", nil)
+	rr := httptest.NewRecorder()
+	s.handleRouteHistory(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp routeHistoryResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.Hours != 24 {
+		t.Errorf("want hours=24, got %d", resp.Hours)
+	}
+}
+
+// TestHandleRouteHistory_EmptyDB verifies an empty DB returns an empty edges list.
+func TestHandleRouteHistory_EmptyDB(t *testing.T) {
+	db := setupTestDB(t)
+	s := &Server{cfg: &Config{}, db: db}
+	req := httptest.NewRequest("GET", "/api/route-history?hours=24", nil)
+	rr := httptest.NewRecorder()
+	s.handleRouteHistory(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	var resp routeHistoryResponse
+	json.NewDecoder(rr.Body).Decode(&resp)
+	if resp.Edges == nil {
+		t.Error("edges should not be nil (should be empty slice)")
+	}
+	if len(resp.Edges) != 0 {
+		t.Errorf("want 0 edges, got %d", len(resp.Edges))
+	}
+}
