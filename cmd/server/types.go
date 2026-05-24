@@ -1097,6 +1097,10 @@ type ThemeResponse struct {
 	NodeColors map[string]interface{} `json:"nodeColors"`
 	TypeColors map[string]interface{} `json:"typeColors"`
 	Home       interface{}            `json:"home"`
+	// Nav allows operator templates to override the top-nav link list.
+	Nav []map[string]interface{} `json:"nav,omitempty"`
+	// Meta allows operator templates to supply page title / OG meta fields.
+	Meta map[string]interface{} `json:"meta,omitempty"`
 }
 
 type MapConfigResponse struct {
