@@ -307,6 +307,33 @@ Fill opacity: 0.35. Border opacity: 0.6. Click popup: type, SNR, timestamp (huma
 | `cmd/server/meshmapper_test.go` | **Create** | Unit + handler tests |
 | `cmd/server/config.go` | Modify | Add `MeshMapper *MeshMapperConfig` field + accessors |
 | `cmd/server/routes.go` | Modify | Register new routes |
+| `public/style.css` | Modify | Raise nav-action-btn collapse breakpoints (icon-only ≤1600px, hidden ≤1400px) |
+
+---
+
+## 5. Nav Action Button Collapse Fix
+
+### Problem
+
+The "Support Us" and "Discord" buttons (`.nav-action-btn`) in `.nav-right` have `flex-shrink: 0`, so they never shrink. The current breakpoints — icon-only at ≤1400px, hidden at ≤1200px — are too wide, causing them to still be visible and block left-side nav links at mid-range desktop widths (1200–1400px viewport).
+
+### Fix
+
+In `public/style.css`, update the two `.nav-action-btn` breakpoint rules:
+
+| Before | After |
+|--------|-------|
+| Icon-only at `max-width: 1400px` | Icon-only at `max-width: 1600px` |
+| Hidden at `max-width: 1200px` | Hidden at `max-width: 1400px` |
+
+```css
+@media (max-width: 1600px) { .top-nav .nav-action-label { display: none; } .top-nav .nav-action-btn { padding: 6px 10px; } }
+@media (max-width: 1400px) { .top-nav .nav-action-btn { display: none; } }
+```
+
+This ensures the action buttons collapse to icon-only well before the nav becomes crowded, and disappear entirely at the same width where `.nav-link` density already forces the Priority+ overflow menu.
+
+**File:** `public/style.css` — modify 2 lines, no other changes needed.
 
 ---
 
