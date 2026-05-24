@@ -681,8 +681,8 @@ const defaultNavLinks = `<a href="#/home" class="nav-link" data-route="home" dat
         <a href="#/tools" class="nav-link" data-route="tools">🛠️ Tools</a>
         <a href="#/observers" class="nav-link" data-route="observers">Observers</a>
         <a href="#/analytics" class="nav-link" data-route="analytics">Analytics</a>
-        <a href="#/perf" class="nav-link" data-route="perf" data-priority="high">⚡ Perf</a>
-        <a href="#/audio-lab" class="nav-link" data-route="audio-lab">🎵 Lab</a>`
+        <a href="#/audio-lab" class="nav-link" data-route="audio-lab">🎵 Lab</a>
+        <a href="#/perf" class="nav-link" data-route="perf" data-priority="high">⚡ Perf</a>`
 
 // buildNavLinks renders the .nav-link anchors for the top nav. When the active
 // template supplies a `nav` array each entry {route, hash, label, priority?}
