@@ -481,6 +481,11 @@ func TestWatermarkHysteresis(t *testing.T) {
 	store.retentionHours = 0 // no time-based eviction
 	store.maxMemoryMB = 1    // 1MB budget
 
+	// Suppress the heap trigger so we test trackedBytes hysteresis in isolation.
+	// Without this, a tiny maxMemoryMB=1 sets heapTrigger at 1.15MB, which the
+	// actual Go test heap always exceeds, causing heapOver to interfere.
+	store.memoryEstimator = func() float64 { return 0 }
+
 	// Set trackedBytes to just above high watermark
 	highWatermark := int64(1 * 1048576)
 	lowWatermark := int64(float64(highWatermark) * 0.85)
@@ -591,6 +596,76 @@ func TestEstimateStoreObsBytes(t *testing.T) {
 	expected := int64(192 + 6 + 6 + 2*48)
 	if est != expected {
 		t.Fatalf("estimateStoreObsBytes = %d, want %d", est, expected)
+	}
+}
+
+// TestHeapTrigger_NoOverEviction_WhenTrackedWithinBudget is a regression test
+// for the heap-path over-eviction bug. When HeapAlloc is above the 1.15×
+// threshold (e.g. due to analytics caches or GC metadata) but trackedBytes is
+// within the configured maxMemoryMB budget, the old formula computed
+// fractionToEvict = (heapMB − targetMB) / heapMB using total heap as the
+// denominator — inflating the fraction by 3–4× and hitting the 25% safety cap
+// every tick. The fix bases the fraction on packet-store overage only.
+//
+// Scenario: 1000 packets, maxMemoryMB=100. trackedBytes = 85MB (at the 85%
+// low-watermark). Injected heap = 180MB (1.8× max → heapTrigger fires because
+// 180 > 100*1.15=115). Old code: overage=180-85=95, fraction=95/180=52.7% →
+// cap at 25% → 250 evictions. New code: storeOverage=85-85=0 → 0 evictions.
+func TestHeapTrigger_NoOverEviction_WhenTrackedWithinBudget(t *testing.T) {
+	now := time.Now().UTC()
+	store := makeTestStore(1000, now.Add(-1*time.Hour), 0)
+	store.retentionHours = 0
+	store.maxMemoryMB = 100
+
+	// Set trackedBytes exactly at the 85% low-watermark (85MB).
+	// trackedOver should be false: 85MB < highWatermark (100MB).
+	lowWatermark := int64(float64(100)*0.85) * 1048576 // 85MB
+	store.trackedBytes = lowWatermark
+
+	// Inject a high heap (180MB) to make heapOver fire.
+	// 180 > 100 * 1.15 = 115, so heapOver = true.
+	store.memoryEstimator = func() float64 { return 180.0 }
+
+	evicted := store.EvictStale()
+	// trackedBytes is AT the low-watermark, so storeOverage = 0 → no eviction.
+	// The heap overage is entirely due to non-store overhead (analytics caches,
+	// GC metadata, etc.) which packet eviction cannot reduce.
+	if evicted != 0 {
+		t.Fatalf("expected 0 evictions (trackedBytes at low-watermark, heap high due to non-store overhead), got %d", evicted)
+	}
+}
+
+// TestHeapTrigger_EvictsProportionally_WhenTrackedOverBudget verifies that
+// when the heap trigger fires AND trackedBytes is over the low-watermark,
+// eviction is proportional to the store overage (not total heap overage).
+func TestHeapTrigger_EvictsProportionally_WhenTrackedOverBudget(t *testing.T) {
+	now := time.Now().UTC()
+	store := makeTestStore(1000, now.Add(-1*time.Hour), 0)
+	store.retentionHours = 0
+	store.maxMemoryMB = 100
+
+	// trackedBytes = 92MB: above low-watermark (85MB) but below high-watermark (100MB).
+	// trackedOver = false, heapOver = true.
+	store.trackedBytes = 92 * 1048576
+
+	// Inject heap = 180MB to trigger heapOver.
+	store.memoryEstimator = func() float64 { return 180.0 }
+
+	evicted := store.EvictStale()
+	// storeOverage = 92 - 85 = 7MB; fractionToEvict = 7/92 ≈ 7.6% → ~76 packets.
+	// Old formula: (180-85)/180 = 52.7% → 25% cap → 250 packets.
+	// New formula: proportional to store overage → roughly 7–10% of 1000 = 70–100.
+	if evicted == 0 {
+		t.Fatal("expected some evictions when trackedBytes is above low-watermark")
+	}
+	if evicted > 250 {
+		t.Fatalf("25%% safety cap violated: evicted %d", evicted)
+	}
+	// Should NOT hit the 25% cap (250) — old bug would always cap at 250.
+	// New code evicts proportionally: roughly 7% of 1000 = ~76 packets.
+	// Allow a range to avoid brittleness, but 250 means the bug is back.
+	if evicted >= 200 {
+		t.Fatalf("evicted %d packets — looks like heap-path over-eviction is back (expected ~76)", evicted)
 	}
 }
 

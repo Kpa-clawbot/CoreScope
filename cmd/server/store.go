@@ -3797,18 +3797,29 @@ func (s *PacketStore) evictionCandidateTxIDs() []int {
 				}
 			}
 			if heapOver {
-				// Heap path: evict proportionally to bring heap from current
-				// to the 85% low-watermark. Fraction of packets to evict ≈
-				// fraction of heap overage (assumes roughly uniform per-packet cost).
+				// Heap path: evict proportionally to bring the packet store's
+				// tracked bytes down to the 85% low-watermark.
+				//
+				// Previous formula used (heapMB - targetMB) / heapMB, which
+				// treated the entire Go heap as if it were all packet-store data.
+				// In practice heapMB includes analytics caches, GC metadata,
+				// WebSocket buffers, and other non-store overhead that cannot be
+				// reduced by evicting packets. When that overhead is large,
+				// fractionToEvict exceeds 1.0 (capped at 25%), causing maximum
+				// eviction every tick even though trackedBytes is within budget.
+				//
+				// Fix: base the fraction on packet-store overage only.
+				// If trackedBytes ≤ targetMB, the heap is high due to non-store
+				// overhead — evicting packets won't help, so skip.
+				storeTrackedMB := trackedBytesToMB(s.trackedBytes)
 				targetMB := float64(s.maxMemoryMB) * 0.85
-				overage := heapMB - targetMB
-				fractionToEvict := overage / heapMB
-				if fractionToEvict < 0 {
-					fractionToEvict = 0
-				}
-				heapCutoff := cutoffIdx + int(fractionToEvict*float64(len(s.packets)))
-				if heapCutoff > memCutoff {
-					memCutoff = heapCutoff
+				storeOverage := storeTrackedMB - targetMB
+				if storeOverage > 0 {
+					fractionToEvict := storeOverage / storeTrackedMB
+					heapCutoff := cutoffIdx + int(fractionToEvict*float64(len(s.packets)))
+					if heapCutoff > memCutoff {
+						memCutoff = heapCutoff
+					}
 				}
 			}
 			// Safety cap: never evict more than 25% of packets in a single pass.
@@ -3899,16 +3910,23 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string, maxChunk int)
 				}
 			}
 			if heapOver {
-				// Heap path: proportional eviction to reach 85% of limit.
+				// Heap path: evict proportionally to bring tracked bytes to
+				// the 85% low-watermark (same target as the trackedOver path).
+				// Using (heapMB - targetMB)/heapMB would treat the entire Go
+				// heap as packet-store data; analytics caches, GC metadata, and
+				// WebSocket buffers inflate heapMB without being reducible by
+				// packet eviction, causing massive over-eviction every tick.
+				// When trackedBytes ≤ targetMB the heap overage is due to
+				// non-store overhead — evicting packets won't help, so skip.
+				storeTrackedMB := trackedBytesToMB(s.trackedBytes)
 				targetMB := float64(s.maxMemoryMB) * 0.85
-				overage := heapMB - targetMB
-				fractionToEvict := overage / heapMB
-				if fractionToEvict < 0 {
-					fractionToEvict = 0
-				}
-				heapCutoff := cutoffIdx + int(fractionToEvict*float64(len(s.packets)))
-				if heapCutoff > memCutoff {
-					memCutoff = heapCutoff
+				storeOverage := storeTrackedMB - targetMB
+				if storeOverage > 0 {
+					fractionToEvict := storeOverage / storeTrackedMB
+					heapCutoff := cutoffIdx + int(fractionToEvict*float64(len(s.packets)))
+					if heapCutoff > memCutoff {
+						memCutoff = heapCutoff
+					}
 				}
 			}
 			// Safety cap: never evict more than 25% in a single pass.
