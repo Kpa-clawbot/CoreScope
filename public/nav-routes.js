@@ -11,5 +11,6 @@
     { route: 'perf',      hash: '#/perf',      label: 'Perf',      icon: '⚡' },
     { route: 'mc-keygen', hash: '#/mc-keygen', label: 'MC-Keygen', icon: '🔑' },
     { route: 'los',       hash: '#/los',       label: 'LOS',       icon: '🔭' },
+    { route: 'rf-coverage', hash: '#/rf-coverage', label: 'RF Coverage', icon: '📡' },
   ];
 })();
