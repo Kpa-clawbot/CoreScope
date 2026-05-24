@@ -192,6 +192,9 @@ func (h *losHandler) computeRFCoverage(ctx context.Context, req rfCoverageReques
 			edgeKm = distKm
 		}
 
+		// edgeKm=0 means every step was blocked or budget was exceeded immediately.
+		// destCoordFromBearing with distKm=0 returns the TX position — the polygon
+		// collapses on that bearing, which is the correct representation of zero range.
 		endLat, endLon := destCoordFromBearing(req.Lat, req.Lon, edgeKm, bearing)
 		coverage[b] = rfCoveragePoint{Lat: endLat, Lon: endLon, RangeKm: edgeKm}
 	}

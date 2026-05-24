@@ -64,7 +64,7 @@ func TestRFPathLossDB_IncreaseWithDistance(t *testing.T) {
 	}
 }
 
-func TestRFPathLossDB_FresnelReference(t *testing.T) {
+func TestRFPathLossDB_AtOneMeter(t *testing.T) {
 	// At 1 m, 869.618 MHz, n=2: FSPL_1m = 20*log10(4*pi*869.618e6/299792458)
 	freqHz := 869.618e6
 	fspl1m := 20 * math.Log10(4*math.Pi*freqHz/299_792_458)
