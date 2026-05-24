@@ -1838,13 +1838,16 @@ func (s *PacketStore) GetNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 		ch := s.hashSizeInFlt
 		s.hashSizeInfoMu.Unlock()
 		<-ch
-		// The leader stored the result; return it (may still be within TTL
-		// after a brief wait, or another leader may have started; either way
-		// the next fast-path check will win).
+		// The leader stored the result; return it if the cache is still valid.
+		// If EvictStale invalidated the cache while the leader was computing,
+		// fall through and become a new leader.
 		s.hashSizeInfoMu.Lock()
 		cached := s.hashSizeInfoCache
 		s.hashSizeInfoMu.Unlock()
-		return cached
+		if cached != nil {
+			return cached
+		}
+		// Fall through to leader path below.
 	}
 
 	// We are the leader: publish the channel before releasing the lock.
