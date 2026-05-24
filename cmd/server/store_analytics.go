@@ -2004,6 +2004,10 @@ func EnrichNodeWithMultiByte(node map[string]interface{}, entry *MultiByteCapEnt
 	node["multi_byte_max_hash_size"] = entry.MaxHashSize
 }
 
+// computeMultiByteCapFn is the function called by GetMultiByteCapMap to
+// do the expensive scan. Overridable in tests via variable swap.
+var computeMultiByteCapFn = (*PacketStore).computeMultiByteCapability
+
 // GetMultiByteCapMap returns a cached pubkey → MultiByteCapEntry map.
 // Uses singleflight to coalesce concurrent callers and a 30s TTL.
 func (s *PacketStore) GetMultiByteCapMap() map[string]*MultiByteCapEntry {
@@ -2062,7 +2066,7 @@ func (s *PacketStore) GetMultiByteCapMap() map[string]*MultiByteCapEntry {
 		}
 	}
 
-	caps := s.computeMultiByteCapability(adopterSizes)
+	caps := computeMultiByteCapFn(s, adopterSizes)
 	result = make(map[string]*MultiByteCapEntry, len(caps))
 	for i := range caps {
 		result[caps[i].PublicKey] = &caps[i]
