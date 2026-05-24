@@ -3231,7 +3231,7 @@
 
     const matrixGreen = '#00ff41';
     const TRAIL_LEN = Math.min(6, bytes.length);
-    const DURATION_MS = 1100 / VCR.speed;
+    const DURATION_MS = 1100; // #1346: per-packet animation is constant; VCR.speed governs INTER-packet replay gap only
     const CHAR_INTERVAL = 0.06; // spawn a char every 6% of progress
     const charMarkers = [];
     let nextCharAt = CHAR_INTERVAL;
@@ -3363,7 +3363,7 @@
         return;
       }
       const elapsed = now - lastStep;
-      const stepMs = 33 / VCR.speed;
+      const stepMs = 33; // #1346: per-packet animation cadence is constant (~30fps); VCR.speed governs INTER-packet replay gap only
       if (elapsed >= stepMs) {
         const ticks = Math.min(Math.floor(elapsed / stepMs), 4);
         lastStep = now;
