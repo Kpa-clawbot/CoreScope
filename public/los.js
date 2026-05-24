@@ -9,6 +9,7 @@
   var relayMarker = null;
   var losChart = null;
   var pickingPoint = null; // 'a' | 'b' | null
+  var _cleanups = []; // teardown callbacks for destroy()
 
   // ── Icons ──────────────────────────────────────────────────────────────────
   function makePin(color) {
@@ -111,7 +112,7 @@
     var list = document.getElementById(inputId + '-list');
     if (!input || !list) return;
     var debounce = null;
-    input.addEventListener('input', function () {
+    function onInput() {
       clearTimeout(debounce);
       var q = input.value.trim();
       if (q.length < 2) { list.innerHTML = ''; list.hidden = true; return; }
@@ -138,9 +139,16 @@
             });
           }).catch(function () { list.hidden = true; });
       }, 250);
-    });
-    input.addEventListener('blur', function () {
+    }
+    function onBlur() {
       setTimeout(function () { list.innerHTML = ''; list.hidden = true; }, 200);
+    }
+    input.addEventListener('input', onInput);
+    input.addEventListener('blur', onBlur);
+    _cleanups.push(function () {
+      clearTimeout(debounce);
+      input.removeEventListener('input', onInput);
+      input.removeEventListener('blur', onBlur);
     });
   }
 
@@ -401,7 +409,13 @@
       }, 0);
     },
     destroy: function () {
-      if (losMap) { losMap.remove(); losMap = null; }
+      _cleanups.forEach(function (fn) { fn(); });
+      _cleanups = [];
+      if (losMap) {
+        losMap.off('click', onMapClick);
+        losMap.remove();
+        losMap = null;
+      }
       if (losChart) { losChart.destroy(); losChart = null; }
       markerA = markerB = losPolyline = relayMarker = null;
       pickingPoint = null;
