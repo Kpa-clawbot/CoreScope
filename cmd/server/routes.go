@@ -115,7 +115,22 @@ type Server struct {
 	perfCachedAt  time.Time
 	perfComputing bool
 
+	// Per-observer analytics cache (60s TTL). The /api/observers/:id/analytics
+	// endpoint is expensive (DB aggregate + path-sample queries). Without caching,
+	// repeated loads of the same observer page hammer the DB. Cache key is
+	// "observerID|totalMinutes".
+	obsAnalyticsMu    sync.Mutex
+	obsAnalyticsCache map[string]*obsAnalyticsCacheEntry
+
 }
+
+// obsAnalyticsCacheEntry holds one cached /api/observers/:id/analytics response.
+type obsAnalyticsCacheEntry struct {
+	payload   []byte
+	expiresAt time.Time
+}
+
+const obsAnalyticsCacheTTL = 60 * time.Second
 
 // maxJSONBodyBytes caps the size of JSON request bodies on POST endpoints.
 // 64 KB is far larger than any legitimate request (the biggest is a 200-hash
@@ -2839,6 +2854,23 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		since = time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	}
 
+	// Serve from per-observer cache when available (60s TTL).
+	// This endpoint runs two heavy DB queries; caching prevents repeated
+	// hammering when the UI auto-refreshes or multiple clients view the same
+	// observer page.
+	cacheKey := id + "|" + strconv.Itoa(totalMinutes)
+	s.obsAnalyticsMu.Lock()
+	if s.obsAnalyticsCache == nil {
+		s.obsAnalyticsCache = make(map[string]*obsAnalyticsCacheEntry)
+	}
+	if entry, ok := s.obsAnalyticsCache[cacheKey]; ok && time.Now().Before(entry.expiresAt) {
+		s.obsAnalyticsMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(entry.payload) //nolint:errcheck
+		return
+	}
+	s.obsAnalyticsMu.Unlock()
+
 	var bucketDur time.Duration
 	switch {
 	case totalMinutes <= 60:
@@ -2904,7 +2936,10 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 			}
 		}
 		// ── Query 2: bounded path sample for nodes / SNR / recent packets ─────
-		for i, s := range s.db.GetObserverPathSample(id, since, bucketSecs, 50000) {
+		// 5000 rows is enough for accurate SNR distribution and per-bucket node
+		// counts. The previous 50000 limit fetched up to 10× more decoded_json /
+		// path_json than needed, inflating both SQL scan time and Go parse work.
+		for i, s := range s.db.GetObserverPathSample(id, since, bucketSecs, 5000) {
 			bk := s.BucketUnix
 			if nodeBucketSets[bk] == nil {
 				nodeBucketSets[bk] = map[string]struct{}{}
@@ -3092,7 +3127,7 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		rssiTimeline = append(rssiTimeline, RssiTimelineEntry{Label: formatLabel(time.Unix(k, 0)), Avg: avg})
 	}
 
-	writeJSON(w, ObserverAnalyticsResponse{
+	resp := ObserverAnalyticsResponse{
 		Timeline:        buildTimeline(timelineCounts),
 		PacketTypes:     packetTypes,
 		NodesTimeline:   buildTimeline(nodeCounts),
@@ -3100,7 +3135,23 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		UptimeTimeline:  uptimeTimeline,
 		RssiTimeline:    rssiTimeline,
 		RecentPackets:   recentPackets,
-	})
+	}
+	payload, encErr := json.Marshal(resp)
+	if encErr == nil {
+		s.obsAnalyticsMu.Lock()
+		if s.obsAnalyticsCache == nil {
+			s.obsAnalyticsCache = make(map[string]*obsAnalyticsCacheEntry)
+		}
+		s.obsAnalyticsCache[cacheKey] = &obsAnalyticsCacheEntry{
+			payload:   payload,
+			expiresAt: time.Now().Add(obsAnalyticsCacheTTL),
+		}
+		s.obsAnalyticsMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload) //nolint:errcheck
+	} else {
+		writeJSON(w, resp)
+	}
 }
 
 // storeObsToAnalyticsRows converts in-memory store observations for an observer

@@ -30,9 +30,10 @@ import (
 // Compute func is called WITHOUT any lock held by this struct, so it
 // may freely take any application-level locks it needs.
 type analyticsRecomputer struct {
-	name     string
-	interval time.Duration
-	compute  func() interface{}
+	name       string
+	interval   time.Duration
+	tickOffset time.Duration // extra delay before the first ticker fire (for staggering)
+	compute    func() interface{}
 
 	cache atomic.Value // holds interface{} — the latest snapshot
 	stop  chan struct{}
@@ -77,6 +78,16 @@ func (r *analyticsRecomputer) Start() {
 
 func (r *analyticsRecomputer) loop() {
 	defer close(r.done)
+	// Stagger start: sleep tickOffset before the first ticker fire so that
+	// multiple recomputers started within the same second don't all fire at
+	// exactly the same time every interval, causing synchronized CPU spikes.
+	if r.tickOffset > 0 {
+		select {
+		case <-time.After(r.tickOffset):
+		case <-r.stop:
+			return
+		}
+	}
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
 	for {
@@ -242,7 +253,16 @@ func (s *PacketStore) StartAnalyticsRecomputers(defaultInterval time.Duration, o
 	}
 	s.analyticsRecomputerMu.Unlock()
 
-	for _, rc := range all {
+	// Stagger ticker offsets so recomputers don't all fire simultaneously every
+	// interval (which causes synchronized CPU spikes). Divide the interval
+	// evenly across all recomputers: if interval=5m and there are 9 recomputers,
+	// each subsequent one fires ~33s after the previous one.
+	// The initial synchronous compute (runOnce in Start) still runs back-to-back
+	// so the cache is warm immediately after startup; only recurring ticker fires
+	// are staggered via tickOffset.
+	stagger := defaultInterval / time.Duration(len(all))
+	for i, rc := range all {
+		rc.tickOffset = time.Duration(i) * stagger
 		rc.Start()
 	}
 

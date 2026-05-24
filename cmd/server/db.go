@@ -1277,6 +1277,26 @@ func (db *DB) observerWhereClause(observerID string, sinceUnix int64) (join, whe
 	return
 }
 
+// observerWhereClauseByRowid is the fast path for v3 schema: with the
+// observer rowid pre-resolved, no JOIN is needed and SQLite can use the
+// compound idx_observations_observer_timestamp index for a single range scan.
+func (db *DB) observerWhereClauseByRowid(rowid int64, sinceUnix int64) (join, where string, args []interface{}) {
+	return "", "o.observer_idx = ? AND o.timestamp >= ?", []interface{}{rowid, sinceUnix}
+}
+
+// GetObserverRowid resolves an observer string ID to its SQLite rowid.
+// Returns (rowid, true) on success, (0, false) if not found or DB is v2.
+// Using the rowid directly in observations queries avoids a JOIN to observers
+// and lets the compound (observer_idx, timestamp) index do a single range scan.
+func (db *DB) GetObserverRowid(id string) (int64, bool) {
+	if db == nil || db.conn == nil || !db.isV3 {
+		return 0, false
+	}
+	var rowid int64
+	err := db.conn.QueryRow("SELECT rowid FROM observers WHERE id = ?", id).Scan(&rowid)
+	return rowid, err == nil
+}
+
 // GetObserverBucketAggs returns pre-aggregated per-(bucket, hour, payloadType)
 // rows for a single observer. Counts and RSSI sums are computed in SQL so this
 // query returns at most O(buckets × hours-per-bucket × payload-types) rows —
@@ -1285,7 +1305,15 @@ func (db *DB) GetObserverBucketAggs(observerID string, since time.Time, bucketSe
 	if db == nil || db.conn == nil {
 		return nil
 	}
-	obsJoin, obsWhere, baseArgs := db.observerWhereClause(observerID, since.Unix())
+	// Fast path (v3): pre-resolve rowid and use the compound
+	// idx_observations_observer_timestamp index — no JOIN needed.
+	var obsJoin, obsWhere string
+	var baseArgs []interface{}
+	if rowid, ok := db.GetObserverRowid(observerID); ok {
+		obsJoin, obsWhere, baseArgs = db.observerWhereClauseByRowid(rowid, since.Unix())
+	} else {
+		obsJoin, obsWhere, baseArgs = db.observerWhereClause(observerID, since.Unix())
+	}
 	if obsJoin != "" {
 		obsJoin = obsJoin + "\n\t\t\t"
 	}
@@ -1333,7 +1361,15 @@ func (db *DB) GetObserverPathSample(observerID string, since time.Time, bucketSe
 	if db == nil || db.conn == nil {
 		return nil
 	}
-	obsJoin, obsWhere, baseArgs := db.observerWhereClause(observerID, since.Unix())
+	// Fast path (v3): pre-resolve rowid and use the compound
+	// idx_observations_observer_timestamp index — no JOIN needed.
+	var obsJoin, obsWhere string
+	var baseArgs []interface{}
+	if rowid, ok := db.GetObserverRowid(observerID); ok {
+		obsJoin, obsWhere, baseArgs = db.observerWhereClauseByRowid(rowid, since.Unix())
+	} else {
+		obsJoin, obsWhere, baseArgs = db.observerWhereClause(observerID, since.Unix())
+	}
 	if obsJoin != "" {
 		obsJoin = obsJoin + "\n\t\t\t"
 	}

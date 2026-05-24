@@ -615,6 +615,22 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] observers.repeat column added")
 	}
 
+	// Migration: add compound (observer_idx, timestamp) index on observations.
+	// Without this index, /api/observers/:id/analytics queries must choose between
+	// the single-column observer_idx index (load all rows for observer, filter by time)
+	// or the timestamp index (load time-range rows, filter by observer). The compound
+	// index lets SQLite do a single B-tree range scan: observer_idx=X AND timestamp>=Y,
+	// reducing observer analytics from ~8s to <100ms on large databases.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'obs_observer_timestamp_idx_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding compound (observer_idx, timestamp) index on observations...")
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_observer_timestamp ON observations(observer_idx, timestamp)`); err != nil {
+			log.Printf("[migration] idx_observations_observer_timestamp: %v", err)
+		}
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('obs_observer_timestamp_idx_v1')`) //nolint:errcheck
+		log.Println("[migration] compound observer/timestamp index created")
+	}
+
 	return nil
 }
 
