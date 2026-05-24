@@ -24,13 +24,10 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var loadedTx, loadedObs int
+	var loadedTx int
 	if s.store != nil {
 		s.store.mu.RLock()
 		loadedTx = len(s.store.packets)
-		for _, p := range s.store.packets {
-			loadedObs += len(p.Observations)
-		}
 		s.store.mu.RUnlock()
 	}
 
@@ -43,9 +40,8 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	bfTotal, bfProcessed, bfDone := fromPubkeyBackfillSnapshot()
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ready":     true,
-		"loadedTx":  loadedTx,
-		"loadedObs": loadedObs,
+		"ready":    true,
+		"loadedTx": loadedTx,
 		"from_pubkey_backfill": map[string]interface{}{
 			"total":     bfTotal,
 			"processed": bfProcessed,

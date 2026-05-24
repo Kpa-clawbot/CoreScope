@@ -57,9 +57,6 @@ func TestHealthzReady(t *testing.T) {
 	if _, ok := resp["loadedTx"]; !ok {
 		t.Fatal("missing loadedTx field")
 	}
-	if _, ok := resp["loadedObs"]; !ok {
-		t.Fatal("missing loadedObs field")
-	}
 }
 
 func TestHealthzAntiTautology(t *testing.T) {
