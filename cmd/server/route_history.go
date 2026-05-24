@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -98,8 +99,12 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
 
-	// Resolve node GPS from nodes table (uses lat/lon column names).
+	// Resolve node GPS from nodes table — single batch query.
 	type nodeInfo struct {
 		name   string
 		lat    float64
@@ -112,17 +117,32 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 		pubkeys[k.b] = true
 	}
 	nodeCache := make(map[string]*nodeInfo, len(pubkeys))
-	for pk := range pubkeys {
-		var name string
-		var lat, lon *float64
-		_ = s.db.conn.QueryRowContext(r.Context(),
-			`SELECT COALESCE(name,''), lat, lon FROM nodes WHERE public_key = ? LIMIT 1`, pk,
-		).Scan(&name, &lat, &lon)
-		info := &nodeInfo{name: name}
-		if lat != nil && lon != nil {
-			info.lat, info.lon, info.hasGPS = *lat, *lon, true
+	if len(pubkeys) > 0 {
+		placeholders := make([]string, 0, len(pubkeys))
+		args := make([]interface{}, 0, len(pubkeys))
+		for pk := range pubkeys {
+			placeholders = append(placeholders, "?")
+			args = append(args, pk)
 		}
-		nodeCache[pk] = info
+		nrows, nerr := s.db.conn.QueryContext(r.Context(),
+			`SELECT public_key, COALESCE(name,''), lat, lon FROM nodes WHERE public_key IN (`+strings.Join(placeholders, ",")+`)`,
+			args...,
+		)
+		if nerr == nil {
+			defer nrows.Close()
+			for nrows.Next() {
+				var pk, name string
+				var lat, lon *float64
+				if nerr := nrows.Scan(&pk, &name, &lat, &lon); nerr != nil {
+					continue
+				}
+				info := &nodeInfo{name: name}
+				if lat != nil && lon != nil {
+					info.lat, info.lon, info.hasGPS = *lat, *lon, true
+				}
+				nodeCache[pk] = info
+			}
+		}
 	}
 
 	edges := make([]routeHistoryEdge, 0, len(edgeMap))
