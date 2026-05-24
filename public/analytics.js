@@ -31,6 +31,9 @@
   function _stopScopesRefresh() {
     if (_scopesRefreshTimer) { clearInterval(_scopesRefreshTimer); _scopesRefreshTimer = null; }
   }
+  var _rhMap = null;
+  var _rhTileLayer = null;
+  var _rhThemeObs = null;
 
   // --- Status color helpers (read from CSS variables for theme support) ---
   function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -130,6 +133,7 @@
             <button class="tab-btn" data-tab="roles">Roles</button>
             <button class="tab-btn" data-tab="scopes">Scopes</button>
             <button class="tab-btn" data-tab="prefix-tool">Prefix Tool</button>
+            <button class="tab-btn" data-tab="route-history">📈 Route History</button>
           </div>
         </div>
         <div id="analyticsContent" class="analytics-content" aria-live="polite">
@@ -289,6 +293,7 @@
       case 'roles': await renderRolesTab(el); break;
       case 'prefix-tool': await renderPrefixTool(el); break;
       case 'scopes': await renderScopesTab(el); break;
+      case 'route-history': renderRouteHistory(el); break;
     }
     // Auto-apply column resizing to all analytics tables
     requestAnimationFrame(() => {
@@ -2258,7 +2263,7 @@
     }
   }
 
-function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
+function destroy() { if (_rhMap) { _rhMap.remove(); _rhMap = null; } if (_rhThemeObs) { _rhThemeObs.disconnect(); _rhThemeObs = null; } _rhTileLayer = null; _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData = {}; _channelData = null; if (_ngState && _ngState.animId) { cancelAnimationFrame(_ngState.animId); } _ngState = null; if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; } }
 
   // Expose for testing
   if (typeof window !== 'undefined') {
@@ -4177,6 +4182,136 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
     } catch (err) {
       PageState.error(el, err, function () { _renderRolesTabBody(el); });
     }
+  }
+
+  // ===================== ROUTE HISTORY =====================
+  function renderRouteHistory(el) {
+    // Tear down any previous instance
+    if (_rhMap) { _rhMap.remove(); _rhMap = null; }
+    if (_rhThemeObs) { _rhThemeObs.disconnect(); _rhThemeObs = null; }
+    _rhTileLayer = null;
+
+    el.innerHTML = '' +
+      '<div class="analytics-card" style="padding:0;overflow:hidden;">' +
+        '<div style="display:flex;gap:8px;align-items:center;padding:12px 16px;flex-wrap:wrap;border-bottom:1px solid var(--border)">' +
+          '<span style="font-size:13px;color:var(--text-muted);font-weight:500;">Time window:</span>' +
+          '<div class="filter-group" id="rhWindowBtns">' +
+            '<button class="btn" data-rh-hours="6">6h</button>' +
+            '<button class="btn" data-rh-hours="12">12h</button>' +
+            '<button class="btn active" data-rh-hours="24">24h</button>' +
+            '<button class="btn" data-rh-hours="48">48h</button>' +
+            '<button class="btn" data-rh-hours="168">7d</button>' +
+          '</div>' +
+          '<button class="btn btn-sm" id="rhRefresh" style="margin-left:auto">↻ Refresh</button>' +
+        '</div>' +
+        '<div id="rhStatus" style="padding:6px 16px;font-size:12px;color:var(--text-muted);display:none"></div>' +
+        '<div style="position:relative;">' +
+          '<div id="rh-map" style="height:420px;width:100%;"></div>' +
+          '<div class="tool-tile-picker" id="rh-tile-picker" style="top:8px;right:8px;">' +
+            '<button class="tpick-btn" id="rh-tile-default">🗺 Default</button>' +
+            '<button class="tpick-btn" id="rh-tile-topo">🏔 Topo</button>' +
+          '</div>' +
+        '</div>' +
+        '<div id="rhSummary" style="padding:8px 16px;font-size:12px;color:var(--text-muted);border-top:1px solid var(--border)"></div>' +
+      '</div>';
+
+    // Init Leaflet map
+    var savedTile = localStorage.getItem('meshcore-rh-tile') || 'default';
+    _rhMap = L.map('rh-map', { zoomControl: true, attributionControl: false });
+
+    function setRhTiles(key) {
+      if (_rhTileLayer) { _rhTileLayer.remove(); _rhTileLayer = null; }
+      if (_rhThemeObs)  { _rhThemeObs.disconnect(); _rhThemeObs = null; }
+      var url = key === 'topo' ? window.TILE_TOPO : window.getTileUrl();
+      _rhTileLayer = L.tileLayer(url, { maxZoom: key === 'topo' ? 17 : 19 }).addTo(_rhMap);
+      if (key !== 'topo') {
+        _rhThemeObs = new MutationObserver(function () {
+          if (_rhTileLayer) _rhTileLayer.setUrl(window.getTileUrl());
+        });
+        _rhThemeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+      }
+    }
+    setRhTiles(savedTile);
+    _rhMap.setView([52.0, 5.0], 7);
+
+    // Tile picker
+    var rhDefaultBtn = document.getElementById('rh-tile-default');
+    var rhTopoBtn    = document.getElementById('rh-tile-topo');
+    if (rhDefaultBtn) rhDefaultBtn.classList.toggle('active', savedTile === 'default');
+    if (rhTopoBtn)    rhTopoBtn.classList.toggle('active', savedTile === 'topo');
+    function switchRhTile(key) {
+      localStorage.setItem('meshcore-rh-tile', key);
+      setRhTiles(key);
+      if (rhDefaultBtn) rhDefaultBtn.classList.toggle('active', key === 'default');
+      if (rhTopoBtn)    rhTopoBtn.classList.toggle('active', key === 'topo');
+    }
+    if (rhDefaultBtn) rhDefaultBtn.addEventListener('click', function () { switchRhTile('default'); });
+    if (rhTopoBtn)    rhTopoBtn.addEventListener('click', function () { switchRhTile('topo'); });
+
+    var currentHours = parseInt(localStorage.getItem('meshcore-rh-hours') || '24', 10);
+    var edgeLayer = null;
+
+    function loadEdges(hours) {
+      currentHours = hours;
+      localStorage.setItem('meshcore-rh-hours', hours);
+      // Sync window buttons
+      document.querySelectorAll('[data-rh-hours]').forEach(function (btn) {
+        btn.classList.toggle('active', parseInt(btn.dataset.rhHours, 10) === hours);
+      });
+      var status = document.getElementById('rhStatus');
+      if (status) { status.textContent = '⏳ Loading…'; status.style.display = ''; }
+      if (edgeLayer) { edgeLayer.clearLayers(); edgeLayer.remove(); edgeLayer = null; }
+      fetch('/api/route-history?hours=' + hours)
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) {
+          if (!data) { if (status) status.textContent = '⚠️ Failed to load.'; return; }
+          if (status) status.style.display = 'none';
+          edgeLayer = L.layerGroup().addTo(_rhMap);
+          var bounds = [];
+          data.edges.forEach(function (e) {
+            var nameA = e.name_a || e.node_a.slice(0, 8) + '…';
+            var nameB = e.name_b || e.node_b.slice(0, 8) + '…';
+            var color  = e.count >= 50 ? '#22c55e' : e.count >= 20 ? '#84cc16' : e.count >= 10 ? '#eab308' : e.count >= 3 ? '#f97316' : '#ef4444';
+            var weight = 2 + Math.min(e.count / 10, 6);
+            var line = L.polyline([[e.lat_a, e.lon_a], [e.lat_b, e.lon_b]], { color: color, weight: weight, opacity: 0.75 });
+            var sampleLinks = (e.samples || []).map(function (h) {
+              return '<a href="#/tools/trace/' + encodeURIComponent(h) + '" style="color:var(--accent,#3b82f6)">' + h.slice(0, 8) + '…</a>';
+            }).join(' ');
+            line.bindPopup(
+              '<strong>' + nameA + ' ↔ ' + nameB + '</strong><br>' +
+              'Packets: <strong>' + e.count + '</strong><br>' +
+              (e.last_seen ? 'Last seen: ' + new Date(e.last_seen).toLocaleString() + '<br>' : '') +
+              (sampleLinks ? 'Samples: ' + sampleLinks : '')
+            );
+            edgeLayer.addLayer(line);
+            bounds.push([e.lat_a, e.lon_a], [e.lat_b, e.lon_b]);
+          });
+          if (bounds.length) _rhMap.fitBounds(L.latLngBounds(bounds).pad(0.1));
+          var summary = document.getElementById('rhSummary');
+          if (summary) {
+            if (data.total_edges === 0) {
+              summary.textContent = 'No route edges with GPS coordinates in the last ' + hours + 'h.';
+            } else {
+              var top = data.edges[0];
+              var topName = top ? (top.name_a || top.node_a.slice(0,8)) + ' ↔ ' + (top.name_b || top.node_b.slice(0,8)) + ' (' + top.count + ' pkts)' : '';
+              summary.textContent = 'Total edges: ' + data.total_edges + (topName ? '  |  Highest volume: ' + topName : '');
+            }
+          }
+        })
+        .catch(function () { if (status) status.textContent = '⚠️ Failed to load route history.'; });
+    }
+
+    // Wire window buttons
+    document.getElementById('rhWindowBtns').addEventListener('click', function (e) {
+      var btn = e.target.closest('[data-rh-hours]');
+      if (btn) loadEdges(parseInt(btn.dataset.rhHours, 10));
+    });
+    document.getElementById('rhRefresh').addEventListener('click', function () { loadEdges(currentHours); });
+
+    loadEdges(currentHours);
+
+    // Invalidate map size after render (tab may have been hidden on init)
+    setTimeout(function () { if (_rhMap) _rhMap.invalidateSize(); }, 100);
   }
 
   registerPage('analytics', { init, destroy });
