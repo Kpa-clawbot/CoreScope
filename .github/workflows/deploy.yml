@@ -108,6 +108,7 @@ jobs:
           node test-issue-1293-marker-shapes.js
           node test-issue-1356-map-a11y.js
           node test-issue-1360-pill-letter-count.js
+          node test-issue-1364-pill-no-clamp.js
 
       - name: Verify proto syntax
         run: |
