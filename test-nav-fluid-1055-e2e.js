@@ -204,9 +204,35 @@ async function main() {
     console.log(`  ❌ long nav-stats @1912px: ${statsReasons.join(' | ')}`);
   }
 
+  await page.setViewportSize({ width: 2560, height: HEIGHT });
+  await page.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.top-nav .nav-action-btn');
+  const actionLabels = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll('.top-nav .nav-action-label')).map((label) => ({
+      text: label.textContent.trim(),
+      display: getComputedStyle(label).display,
+      width: label.getBoundingClientRect().width,
+    }));
+  });
+  const labelReasons = [];
+  if (actionLabels.length !== 2) {
+    labelReasons.push(`expected 2 nav action labels in markup, got ${actionLabels.length}`);
+  }
+  const visibleLabels = actionLabels.filter(label => label.display !== 'none' || label.width > SUBPIXEL_TOL);
+  if (visibleLabels.length) {
+    labelReasons.push(`nav action labels visible: ${visibleLabels.map(label => `${label.text}(display=${label.display},w=${label.width.toFixed(1)})`).join(', ')}`);
+  }
+  if (labelReasons.length === 0) {
+    passes++;
+    console.log('  ✅ nav action labels @2560px: hidden, icons only');
+  } else {
+    failures++;
+    console.log(`  ❌ nav action labels @2560px: ${labelReasons.join(' | ')}`);
+  }
+
   await browser.close();
 
-  const total = ROUTES.length * VIEWPORTS.length + 1;
+  const total = ROUTES.length * VIEWPORTS.length + 2;
   console.log(`\ntest-nav-fluid-1055-e2e.js: ${failures === 0 ? 'OK' : 'FAIL'} — ${passes}/${total} passed`);
   process.exit(failures === 0 ? 0 : 1);
 }

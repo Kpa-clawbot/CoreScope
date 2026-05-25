@@ -658,9 +658,10 @@ input[type="week"] {
 .nav-action-btn { padding: 6px 12px; white-space: nowrap; }
 /* .top-nav scope raises specificity above .home-donate-btn/.home-discord-btn (home.css)
    which also sets display:inline-block and would otherwise win the cascade.
-   Breakpoints: icon-only ≤1600px, hide entirely ≤1400px (covers 170% zoom on 1080p/1440p
-   where effective viewport ~1129px and buttons + nav-stats fight for space). */
-@media (max-width: 1600px) { .top-nav .nav-action-label { display: none; } .top-nav .nav-action-btn { padding: 6px 10px; } }
+   Keep these icon-only at every desktop width; hide entirely ≤1400px
+   (covers 170% zoom on 1080p/1440p where nav-stats fight for space). */
+.top-nav .nav-action-label { display: none; }
+.top-nav .nav-action-btn { padding: 6px 10px; }
 @media (max-width: 1400px) { .top-nav .nav-action-btn { display: none; } }
 /* Brand text: only hide in the tightest band where links + right buttons need every pixel.
    Starts at 768px (the narrowest desktop width) — brand-text is still visible on mobile
