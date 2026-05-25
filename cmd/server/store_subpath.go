@@ -77,6 +77,13 @@ func removeTxFromSubpathIndexFull(idx map[string]int, txIdx map[string][]*StoreT
 	return true
 }
 
+// spIndexSnapshot is the value type stored in PacketStore.spIndexSnap.
+// Both fields are read-only once published via atomic.Value.Store.
+type spIndexSnapshot struct {
+	index      map[string]int
+	totalPaths int
+}
+
 // buildSubpathIndex scans all packets and populates spIndex + spTotalPaths.
 // Must be called with s.mu held.
 func (s *PacketStore) buildSubpathIndex() {
@@ -90,6 +97,20 @@ func (s *PacketStore) buildSubpathIndex() {
 	}
 	log.Printf("[store] Built subpath index: %d unique raw subpaths from %d paths",
 		len(s.spIndex), s.spTotalPaths)
+	s.refreshSpIndexSnap()
+}
+
+// refreshSpIndexSnap publishes a read-only copy of spIndex+spTotalPaths as an
+// atomic snapshot. MUST be called under s.mu.Lock() immediately after any
+// write to spIndex or spTotalPaths. Readers (GetAnalyticsSubpathsBulk) load
+// the snapshot without holding any lock, eliminating the O(n) map copy that
+// previously ran under RLock and blocked ingest writers.
+func (s *PacketStore) refreshSpIndexSnap() {
+	snap := make(map[string]int, len(s.spIndex))
+	for k, v := range s.spIndex {
+		snap[k] = v
+	}
+	s.spIndexSnap.Store(&spIndexSnapshot{index: snap, totalPaths: s.spTotalPaths})
 }
 
 func (s *PacketStore) GetAnalyticsSubpaths(region string, minLen, maxLen, limit int) map[string]interface{} {
@@ -154,20 +175,24 @@ func (s *PacketStore) GetAnalyticsSubpathsBulk(region string, groups []subpathGr
 	// /api/nodes, /api/stats, etc. requests.
 	_, pm := s.getCachedNodesAndPM()
 
-	// Snapshot the subpath index and packet slice under a brief RLock, then
-	// release the lock before doing any computation. The heavy work —
-	// buildAggregateHopContextPubkeys (O(n_packets)) and the spIndex scan with
-	// pm.resolveWithContext calls (O(n_unique_subpaths × hops)) — runs on the
-	// snapshots without holding s.mu at all.
+	// Snapshot the packet slice under a brief RLock (O(1)), then load the
+	// pre-built spIndex snapshot atomically (also O(1) — no map copy).
+	// The heavy work — buildAggregateHopContextPubkeys (O(n_packets)) and the
+	// spIndex scan with pm.resolveWithContext calls (O(n_unique_subpaths×hops))
+	// — runs on the snapshots without holding s.mu at all.
 	s.mu.RLock()
-	snapPackets := s.packets            // copy slice header (ptr+len+cap); elements are *StoreTx (safe to read after unlock)
-	snapIndex := make(map[string]int, len(s.spIndex))
-	for k, v := range s.spIndex {
-		snapIndex[k] = v
-	}
-	totalPaths := s.spTotalPaths
+	snapPackets := s.packets // copy slice header (ptr+len+cap); elements are *StoreTx (safe to read after unlock)
 	graph := s.graph.Load()
 	s.mu.RUnlock()
+
+	// spIndexSnap is refreshed under s.mu.Lock() on every write to spIndex, so
+	// this load is always at least as fresh as the snapPackets above.
+	snap, _ := s.spIndexSnap.Load().(*spIndexSnapshot)
+	if snap == nil {
+		snap = &spIndexSnapshot{index: make(map[string]int), totalPaths: 0}
+	}
+	snapIndex := snap.index
+	totalPaths := snap.totalPaths
 
 	// All heavy computation now runs with no store lock held.
 	contextPubkeys := buildAggregateHopContextPubkeys(snapPackets, pm)

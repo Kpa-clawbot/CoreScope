@@ -217,6 +217,10 @@ type PacketStore struct {
 	spIndex      map[string]int        // "hop1,hop2" → count
 	spTxIndex    map[string][]*StoreTx // "hop1,hop2" → transmissions containing this subpath
 	spTotalPaths int                   // transmissions with paths >= 2 hops
+	// Atomic snapshot of spIndex+spTotalPaths for lock-free reads in
+	// GetAnalyticsSubpathsBulk. Refreshed under s.mu.Lock() whenever spIndex
+	// changes so readers never copy the map under RLock.
+	spIndexSnap  atomic.Value // stores *spIndexSnapshot
 	// Precomputed distance analytics: hop distances and path totals
 	// computed during Load() and incrementally updated on ingest.
 	distHops  []distHopRecord
@@ -1960,13 +1964,19 @@ func (s *PacketStore) GetObservationsForHash(hash string) []map[string]interface
 
 // GetTimestamps returns transmission first_seen timestamps after since, in ASC order.
 func (s *PacketStore) GetTimestamps(since string) []string {
+	// Snapshot the slice header under a brief RLock (O(1)). Elements are
+	// *StoreTx pointers that are never mutated after ingest, so reading them
+	// outside the lock is safe — same pattern as GetAnalyticsSubpathsBulk's
+	// snapPackets. Avoids holding RLock for the full O(n) scan, which would
+	// block the ingest writer and cascade delays to other readers.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	snap := s.packets
+	s.mu.RUnlock()
 
 	// packets sorted oldest-first — scan from tail until we reach items older than since
 	var result []string
-	for i := len(s.packets) - 1; i >= 0; i-- {
-		tx := s.packets[i]
+	for i := len(snap) - 1; i >= 0; i-- {
+		tx := snap[i]
 		if tx.FirstSeen <= since {
 			break
 		}
@@ -2335,6 +2345,9 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			s.spTotalPaths++
 		}
 		addTxToPathHopIndex(s.byPathHop, tx)
+	}
+	if len(broadcastTxs) > 0 {
+		s.refreshSpIndexSnap()
 	}
 	if len(broadcastTxs) > 0 {
 		s.invalidateRelayStatsCache()
@@ -2746,6 +2759,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 		}
 	}
 	if pathHopMutated {
+		s.refreshSpIndexSnap()
 		s.invalidateRelayStatsCache()
 	}
 
@@ -4043,6 +4057,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string, maxChunk int)
 		// Remove from path-hop index
 		removeTxFromPathHopIndex(s.byPathHop, tx)
 	}
+	s.refreshSpIndexSnap()
 	s.invalidateRelayStatsCache()
 
 	// Batch-remove from byObserver: single pass per affected observer slice
