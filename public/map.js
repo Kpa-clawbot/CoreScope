@@ -47,10 +47,11 @@
     suspected: 'status-suspected',
     unknown:   'status-unknown',
   };
-  // NOTE: MB_COLORS removed (#1356) — color is no longer the primary signal.
-  // Kept as an alias to MB_STATUS_CLASS keys so callers passing a status name
-  // through `colorOverride` still flag "multi-byte mode is active" semantically.
-  var MB_COLORS = MB_STATUS_CLASS;
+  // #1356 V3 marker-dot tint set — high-luminance accents that mirror the
+  // CSS `--mc-mb-confirmed/suspected/unknown` left-border stripe palette so the
+  // marker-dot and label-stripe surfaces stay visually consistent. Module
+  // scope (not loop-local) to avoid per-iteration object allocation.
+  var MB_MARKER_TINT = { confirmed: '#56F0A0', suspected: '#FFD966', unknown: '#FF8888' };
 
   function makeMarkerIcon(role, isStale, isAlsoObserver, colorOverride) {
     const s = ROLE_STYLE[role] || ROLE_STYLE.companion;
@@ -988,9 +989,8 @@
       var mbColor = null;
       if (filters.multiByteOverlay && node.role === 'repeater') {
         mbStatus = node.multi_byte_status || 'unknown';
-        // Marker-dot tint (not a label) — use the same high-luminance accent set
-        // as the label border so the two surfaces stay visually consistent.
-        var MB_MARKER_TINT = { confirmed: '#56F0A0', suspected: '#FFD966', unknown: '#FF8888' };
+        // Marker-dot tint (module-scope MB_MARKER_TINT) — high-luminance accent
+        // set kept in sync with --mc-mb-* CSS stripes so label + marker agree.
         mbColor = MB_MARKER_TINT[mbStatus] || MB_MARKER_TINT.unknown;
       }
       const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor);
