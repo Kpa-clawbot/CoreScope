@@ -37,15 +37,15 @@ type StoreTx struct {
 	Observations     []*StoreObs
 	ObservationCount int
 	// Display fields from longest-path observation
-	ObserverID   string
-	ObserverName string
-	ObserverIATA string
-	SNR          *float64
-	RSSI         *float64
-	PathJSON     string
-	Direction    string
-	LatestSeen           string // max observation timestamp (or FirstSeen if no observations)
-	UniqueObserverCount  int    // cached count of distinct observer IDs
+	ObserverID          string
+	ObserverName        string
+	ObserverIATA        string
+	SNR                 *float64
+	RSSI                *float64
+	PathJSON            string
+	Direction           string
+	LatestSeen          string // max observation timestamp (or FirstSeen if no observations)
+	UniqueObserverCount int    // cached count of distinct observer IDs
 	// Cached parsed fields (set once, read many)
 	// pathMu guards parsedPath/pathParsed. txGetParsedPath lazily populates
 	// them and is reachable from read queries holding only s.mu.RLock(), so
@@ -167,18 +167,18 @@ type PacketStore struct {
 	// GetAnalytics* function serves from Load() instead of running the
 	// on-request compute path. Region/window variants still go through
 	// the legacy TTL cache (compute-on-miss).
-	analyticsRecomputerMu sync.RWMutex
-	recompTopology        *analyticsRecomputer
-	recompRF              *analyticsRecomputer
-	recompDistance        *analyticsRecomputer
-	recompChannels        *analyticsRecomputer
-	recompHashCollisions  *analyticsRecomputer
-	recompHashSizes       *analyticsRecomputer
-	recompRoles           *analyticsRecomputer
+	analyticsRecomputerMu    sync.RWMutex
+	recompTopology           *analyticsRecomputer
+	recompRF                 *analyticsRecomputer
+	recompDistance           *analyticsRecomputer
+	recompChannels           *analyticsRecomputer
+	recompHashCollisions     *analyticsRecomputer
+	recompHashSizes          *analyticsRecomputer
+	recompRoles              *analyticsRecomputer
 	recompObserversClockSkew *analyticsRecomputer
 	recompNodesClockSkew     *analyticsRecomputer
-	cacheHits    int64
-	cacheMisses  int64
+	cacheHits                int64
+	cacheMisses              int64
 	// Rate-limited invalidation (fixes #533: caches cleared faster than hit)
 	lastInvalidated time.Time
 	pendingInv      *cacheInvalidation // accumulated dirty flags during cooldown
@@ -220,7 +220,7 @@ type PacketStore struct {
 	// Atomic snapshot of spIndex+spTotalPaths for lock-free reads in
 	// GetAnalyticsSubpathsBulk. Refreshed under s.mu.Lock() whenever spIndex
 	// changes so readers never copy the map under RLock.
-	spIndexSnap  atomic.Value // stores *spIndexSnapshot
+	spIndexSnap atomic.Value // stores *spIndexSnapshot
 	// Precomputed distance analytics: hop distances and path totals
 	// computed during Load() and incrementally updated on ingest.
 	distHops  []distHopRecord
@@ -247,21 +247,21 @@ type PacketStore struct {
 
 	// Cached multi-byte capability map (pubkey → entry), recomputed every 30s.
 	// multiByteCapInFlt is non-nil while a recompute is in progress.
-	multiByteCapCache  map[string]*MultiByteCapEntry
-	multiByteCapAt     time.Time
-	multiByteCapInFlt  chan struct{} // nil when no recompute in flight
+	multiByteCapCache map[string]*MultiByteCapEntry
+	multiByteCapAt    time.Time
+	multiByteCapInFlt chan struct{} // nil when no recompute in flight
 
 	// Cached per-pubkey relay info + usefulness score maps (#1257). These
 	// fold the previously per-node GetRepeaterRelayInfo /
 	// GetRepeaterUsefulnessScore loop in handleNodes into one O(N) pass
 	// per 15s TTL window — eliminating N RLock acquisitions and N×
 	// timestamp parses of the same byPathHop entries per request.
-	repeaterEnrichMu       sync.Mutex
-	repeaterRelayCache     map[string]RepeaterRelayInfo
-	repeaterRelayCacheWin  float64
-	repeaterRelayAt        time.Time
-	repeaterUsefulCache    map[string]float64
-	repeaterUsefulAt       time.Time
+	repeaterEnrichMu      sync.Mutex
+	repeaterRelayCache    map[string]RepeaterRelayInfo
+	repeaterRelayCacheWin float64
+	repeaterRelayAt       time.Time
+	repeaterUsefulCache   map[string]float64
+	repeaterUsefulAt      time.Time
 
 	// Steady-state recomputer for the two caches above (#1262). When
 	// started, an initial sync compute prewarms the caches so the very
@@ -360,11 +360,33 @@ type PacketStore struct {
 	evicted         int64          // total packets evicted
 	trackedBytes    int64          // running total of estimated packet store memory
 	memoryEstimator func() float64 // injectable for tests; nil = use runtime.ReadMemStats (stats only)
+
+	// Lock-free fallback for cheap stats endpoints. Refreshed after mutations
+	// and opportunistically by readers that can acquire s.mu immediately.
+	statsSnapshot atomic.Value // stores *storeStatsSnapshot
 }
 
 type cachedResult struct {
 	data      map[string]interface{}
 	expiresAt time.Time
+}
+
+type storeStatsSnapshot struct {
+	totalLoaded     int
+	totalObs        int
+	hashIdx         int
+	txIdx           int
+	obsIdx          int
+	observerIdx     int
+	nodeIdx         int
+	pathHopIdx      int
+	payloadTypeIdx  int
+	advertPubkeys   int
+	oldestLoaded    string
+	retentionHours  float64
+	maxMemoryMB     int
+	hotStartupHours float64
+	trackedBytes    int64
 }
 
 // cacheTTLSec extracts a duration from the cacheTTL config map.
@@ -431,8 +453,8 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 		lastSeenTouched:      make(map[string]time.Time),
 		clockSkew:            NewClockSkewEngine(),
 		useResolvedPathIndex: true,
-		areaNodeCache:      make(map[string]map[string]bool),
-		areaNodeCacheTimes: make(map[string]time.Time),
+		areaNodeCache:        make(map[string]map[string]bool),
+		areaNodeCacheTimes:   make(map[string]time.Time),
 	}
 	ps.initResolvedPathIndex()
 	if cfg != nil {
@@ -461,6 +483,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 			ps.invCooldown = v
 		}
 	}
+	ps.refreshStatsSnapshotLocked()
 	return ps
 }
 
@@ -470,6 +493,7 @@ func NewPacketStore(db *DB, cfg *PacketStoreConfig, cacheTTLs ...map[string]inte
 func (s *PacketStore) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.refreshStatsSnapshotLocked()
 
 	t0 := time.Now()
 
@@ -986,6 +1010,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			}
 			s.trackAdvertPubkey(tx)
 		}
+		s.refreshStatsSnapshotLocked()
 		s.mu.Unlock()
 		runtime.Gosched()
 	}
@@ -1005,6 +1030,7 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	if localMaxObsID > s.maxObsID {
 		s.maxObsID = localMaxObsID
 	}
+	s.refreshStatsSnapshotLocked()
 	s.mu.Unlock()
 
 	log.Printf("[store] background chunk [%s, %s) merged: %d tx, %d obs", fromStr, toStr, len(localPackets), localTotalObs)
@@ -1102,6 +1128,7 @@ func (s *PacketStore) loadBackgroundChunks() {
 		if s.oldestLoaded > chunkStartStr || s.oldestLoaded == "" {
 			s.oldestLoaded = chunkStartStr
 		}
+		s.refreshStatsSnapshotLocked()
 		s.mu.Unlock()
 
 		chunksLoaded++
@@ -1125,6 +1152,7 @@ func (s *PacketStore) loadBackgroundChunks() {
 	s.buildSubpathIndex()
 	s.buildPathHopIndex()
 	s.buildDistanceIndex()
+	s.refreshStatsSnapshotLocked()
 	s.mu.Unlock()
 
 	s.backgroundLoadDone.Store(true)
@@ -1605,17 +1633,57 @@ func storeTxDistinctIatas(tx *StoreTx) []string {
 	return out
 }
 
+func (s *PacketStore) buildStatsSnapshotLocked() storeStatsSnapshot {
+	return storeStatsSnapshot{
+		totalLoaded:     len(s.packets),
+		totalObs:        s.totalObs,
+		hashIdx:         len(s.byHash),
+		txIdx:           len(s.byTxID),
+		obsIdx:          len(s.byObsID),
+		observerIdx:     len(s.byObserver),
+		nodeIdx:         len(s.byNode),
+		pathHopIdx:      len(s.byPathHop),
+		payloadTypeIdx:  len(s.byPayloadType),
+		advertPubkeys:   len(s.advertPubkeys),
+		oldestLoaded:    s.oldestLoaded,
+		retentionHours:  s.retentionHours,
+		maxMemoryMB:     s.maxMemoryMB,
+		hotStartupHours: s.hotStartupHours,
+		trackedBytes:    s.trackedBytes,
+	}
+}
+
+func (s *PacketStore) refreshStatsSnapshotLocked() {
+	snap := s.buildStatsSnapshotLocked()
+	s.statsSnapshot.Store(&snap)
+}
+
+func (s *PacketStore) getStatsSnapshot() storeStatsSnapshot {
+	if s.mu.TryRLock() {
+		snap := s.buildStatsSnapshotLocked()
+		s.mu.RUnlock()
+		s.statsSnapshot.Store(&snap)
+		return snap
+	}
+	if v := s.statsSnapshot.Load(); v != nil {
+		return *v.(*storeStatsSnapshot)
+	}
+	// Startup-only fallback before the first snapshot is published.
+	s.mu.RLock()
+	snap := s.buildStatsSnapshotLocked()
+	s.mu.RUnlock()
+	s.statsSnapshot.Store(&snap)
+	return snap
+}
+
 // GetStoreStats returns aggregate counts (packet data from memory, node/observer from DB).
 func (s *PacketStore) GetStoreStats() (*Stats, error) {
-	s.mu.RLock()
-	txCount := len(s.packets)
-	obsCount := s.totalObs
-	s.mu.RUnlock()
+	snap := s.getStatsSnapshot()
 
 	st := &Stats{
-		TotalTransmissions: txCount,
-		TotalPackets:       txCount,
-		TotalObservations:  obsCount,
+		TotalTransmissions: snap.totalLoaded,
+		TotalPackets:       snap.totalLoaded,
+		TotalObservations:  snap.totalObs,
 	}
 
 	sevenDaysAgo := time.Now().Add(-7 * 24 * time.Hour).Format(time.RFC3339)
@@ -1665,59 +1733,39 @@ func (s *PacketStore) GetStoreStats() (*Stats, error) {
 
 // GetPerfStoreStats returns packet store statistics for /api/perf.
 func (s *PacketStore) GetPerfStoreStats() map[string]interface{} {
-	s.mu.RLock()
-	totalLoaded := len(s.packets)
-	totalObs := s.totalObs
-	hashIdx := len(s.byHash)
-	txIdx := len(s.byTxID)
-	obsIdx := len(s.byObsID)
-	observerIdx := len(s.byObserver)
-	nodeIdx := len(s.byNode)
-	pathHopIdx := len(s.byPathHop)
-	ptIdx := len(s.byPayloadType)
-	oldestLoaded := s.oldestLoaded
-	retentionHours := s.retentionHours
-	maxMemoryMB := s.maxMemoryMB
-	hotStartupHours := s.hotStartupHours
-
-	// Distinct advert pubkey count — precomputed incrementally (see trackAdvertPubkey).
-	advertByObsCount := len(s.advertPubkeys)
-	// Snapshot trackedBytes under the lock — ingest writers mutate it under
-	// s.mu.Lock, so reading it after RUnlock would be a data race (#8).
-	trackedBytes := s.trackedBytes
-	s.mu.RUnlock()
+	snap := s.getStatsSnapshot()
 
 	estimatedMB := math.Round(s.estimatedMemoryMB()*10) / 10
-	trackedMB := math.Round(trackedBytesToMB(trackedBytes)*10) / 10
+	trackedMB := math.Round(trackedBytesToMB(snap.trackedBytes)*10) / 10
 
 	evicted := atomic.LoadInt64(&s.evicted)
 
 	return map[string]interface{}{
-		"totalLoaded":            totalLoaded,
-		"totalObservations":      totalObs,
+		"totalLoaded":            snap.totalLoaded,
+		"totalObservations":      snap.totalObs,
 		"evicted":                evicted,
 		"inserts":                atomic.LoadInt64(&s.insertCount),
 		"queries":                atomic.LoadInt64(&s.queryCount),
-		"inMemory":               totalLoaded,
+		"inMemory":               snap.totalLoaded,
 		"sqliteOnly":             false,
-		"retentionHours":         retentionHours,
-		"maxMemoryMB":            maxMemoryMB,
-		"oldestLoaded":           oldestLoaded,
+		"retentionHours":         snap.retentionHours,
+		"maxMemoryMB":            snap.maxMemoryMB,
+		"oldestLoaded":           snap.oldestLoaded,
 		"estimatedMB":            estimatedMB,
 		"trackedMB":              trackedMB,
-		"hotStartupHours":        hotStartupHours,
+		"hotStartupHours":        snap.hotStartupHours,
 		"backgroundLoadComplete": s.backgroundLoadDone.Load(),
 		"backgroundLoadFailed":   s.backgroundLoadFailed.Load(),
 		"backgroundLoadProgress": s.backgroundLoadProgress.Load(),
 		"indexes": map[string]interface{}{
-			"byHash":           hashIdx,
-			"byTxID":           txIdx,
-			"byObsID":          obsIdx,
-			"byObserver":       observerIdx,
-			"byNode":           nodeIdx,
-			"byPathHop":        pathHopIdx,
-			"byPayloadType":    ptIdx,
-			"advertByObserver": advertByObsCount,
+			"byHash":           snap.hashIdx,
+			"byTxID":           snap.txIdx,
+			"byObsID":          snap.obsIdx,
+			"byObserver":       snap.observerIdx,
+			"byNode":           snap.nodeIdx,
+			"byPathHop":        snap.pathHopIdx,
+			"byPayloadType":    snap.payloadTypeIdx,
+			"advertByObserver": snap.advertPubkeys,
 		},
 	}
 }
@@ -1860,49 +1908,36 @@ func (s *PacketStore) applyCacheInvalidation(inv cacheInvalidation) {
 
 // GetPerfStoreStatsTyped returns packet store stats as a typed struct.
 func (s *PacketStore) GetPerfStoreStatsTyped() PerfPacketStoreStats {
-	s.mu.RLock()
-	totalLoaded := len(s.packets)
-	totalObs := s.totalObs
-	hashIdx := len(s.byHash)
-	observerIdx := len(s.byObserver)
-	nodeIdx := len(s.byNode)
-
-	advertByObsCount := len(s.advertPubkeys)
-	// Snapshot trackedBytes under the lock — ingest writers mutate it under
-	// s.mu.Lock, so reading it after RUnlock would be a data race (#8). This
-	// aligns GetPerfStoreStatsTyped with the snapshot-under-lock pattern used
-	// by GetStoreStats / GetPerfStoreStats.
-	trackedBytes := s.trackedBytes
-	s.mu.RUnlock()
+	snap := s.getStatsSnapshot()
 
 	estimatedMB := math.Round(s.estimatedMemoryMB()*10) / 10
-	trackedMB := math.Round(trackedBytesToMB(trackedBytes)*10) / 10
+	trackedMB := math.Round(trackedBytesToMB(snap.trackedBytes)*10) / 10
 
 	var avgBytesPerPacket int64
-	if totalLoaded > 0 {
-		avgBytesPerPacket = trackedBytes / int64(totalLoaded)
+	if snap.totalLoaded > 0 {
+		avgBytesPerPacket = snap.trackedBytes / int64(snap.totalLoaded)
 	}
 
 	return PerfPacketStoreStats{
-		TotalLoaded:       totalLoaded,
-		TotalObservations: totalObs,
+		TotalLoaded:       snap.totalLoaded,
+		TotalObservations: snap.totalObs,
 		Evicted:           int(atomic.LoadInt64(&s.evicted)),
 		Inserts:           atomic.LoadInt64(&s.insertCount),
 		Queries:           atomic.LoadInt64(&s.queryCount),
-		InMemory:          totalLoaded,
+		InMemory:          snap.totalLoaded,
 		SqliteOnly:        false,
 		MaxPackets:        2386092,
 		EstimatedMB:       estimatedMB,
 		TrackedMB:         trackedMB,
 		AvgBytesPerPacket: avgBytesPerPacket,
-		MaxMB:             s.maxMemoryMB,
+		MaxMB:             snap.maxMemoryMB,
 		Indexes: PacketStoreIndexes{
-			ByHash:           hashIdx,
-			ByObserver:       observerIdx,
-			ByNode:           nodeIdx,
-			AdvertByObserver: advertByObsCount,
+			ByHash:           snap.hashIdx,
+			ByObserver:       snap.observerIdx,
+			ByNode:           snap.nodeIdx,
+			AdvertByObserver: snap.advertPubkeys,
 		},
-		HotStartupHours:        s.hotStartupHours,
+		HotStartupHours:        snap.hotStartupHours,
 		BackgroundLoadComplete: s.backgroundLoadDone.Load(),
 		BackgroundLoadFailed:   s.backgroundLoadFailed.Load(),
 		BackgroundLoadProgress: s.backgroundLoadProgress.Load(),
@@ -2187,6 +2222,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 	// Now lock and merge into store
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.refreshStatsSnapshotLocked()
 
 	newMaxID := sinceID
 	broadcastTxs := make(map[int]*StoreTx) // track new transmissions for broadcast
@@ -2465,7 +2501,7 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 		s.invalidateCachesFor(inv)
 	}
 
-		// Per #1287 (Option 4): the server NEVER writes to the DB and
+	// Per #1287 (Option 4): the server NEVER writes to the DB and
 	// NEVER mutates the in-memory neighbor graph incrementally. The
 	// ingestor owns neighbor_edges; recompNeighborGraph re-reads the
 	// snapshot every 60s and atomic-swaps it into s.graph. We also no
@@ -2571,6 +2607,7 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.refreshStatsSnapshotLocked()
 
 	updatedTxs := make(map[int]*StoreTx)
 	broadcastMaps := make([]map[string]interface{}, 0, len(obsRows))
@@ -3735,29 +3772,42 @@ func estimateStoreObsBytes(obs *StoreObs) int64 {
 	return base
 }
 
-// estimatedMemoryMB returns current Go heap allocation in MB.
+var (
+	storeMemEstimateMu       sync.Mutex
+	storeMemEstimateMB       float64
+	storeMemEstimateCachedAt time.Time
+)
+
+const storeMemEstimateTTL = 5 * time.Second
+
+// estimatedMemoryMB returns cached Go heap allocation in MB.
 // Used by eviction logic (dual trigger alongside trackedBytes) and by
 // stats/debug endpoints. In tests, memoryEstimator can be set to inject
-// a deterministic value (otherwise runtime.ReadMemStats is called).
+// a deterministic value. The default path rate-limits runtime.ReadMemStats,
+// which can pause the process on large heaps and was visible on /api/health
+// and /api/perf despite the server-level memstats cache.
 func (s *PacketStore) estimatedMemoryMB() float64 {
 	if s.memoryEstimator != nil {
 		return s.memoryEstimator()
 	}
+	storeMemEstimateMu.Lock()
+	defer storeMemEstimateMu.Unlock()
+	if time.Since(storeMemEstimateCachedAt) <= storeMemEstimateTTL {
+		return storeMemEstimateMB
+	}
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	return float64(ms.HeapAlloc) / 1048576.0
+	storeMemEstimateMB = float64(ms.HeapAlloc) / 1048576.0
+	storeMemEstimateCachedAt = time.Now()
+	return storeMemEstimateMB
 }
 
 // trackedMemoryMB returns the self-accounted packet store memory in MB.
-// It reads s.trackedBytes under s.mu.RLock — callers must NOT already hold
-// s.mu. Callers that already hold the lock should snapshot s.trackedBytes
-// into a local and use trackedBytesToMB instead, to avoid a data race with
-// ingest writers that mutate s.trackedBytes under s.mu.Lock.
+// It uses the same stale-while-writing stats snapshot as the health/perf
+// endpoints. Callers that already hold the lock should snapshot s.trackedBytes
+// into a local and use trackedBytesToMB instead.
 func (s *PacketStore) trackedMemoryMB() float64 {
-	s.mu.RLock()
-	tb := s.trackedBytes
-	s.mu.RUnlock()
-	return trackedBytesToMB(tb)
+	return trackedBytesToMB(s.getStatsSnapshot().trackedBytes)
 }
 
 // trackedBytesToMB converts a pre-read trackedBytes value to MB. Pure function
@@ -4145,6 +4195,7 @@ func (s *PacketStore) evictStaleInternal(rpBatch map[int][]string, maxChunk int)
 	s.hashSizeInfoCache = nil
 	s.hashSizeInfoMu.Unlock()
 
+	s.refreshStatsSnapshotLocked()
 	return evictCount
 }
 

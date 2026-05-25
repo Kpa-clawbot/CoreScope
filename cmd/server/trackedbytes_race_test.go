@@ -64,3 +64,37 @@ func TestGetPerfStoreStatsTyped_ConcurrentWithIngest(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+func TestStoreStatsReadersUseSnapshotWhenWriteLocked(t *testing.T) {
+	store := makeTestStore(25, time.Now().Add(-1*time.Hour), 1)
+	store.memoryEstimator = func() float64 { return 42 }
+
+	// Publish an initial snapshot, then simulate a long writer critical section.
+	initial := store.GetPerfStoreStatsTyped()
+	if initial.TotalLoaded != 25 {
+		t.Fatalf("initial TotalLoaded = %d, want 25", initial.TotalLoaded)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.packets = append(store.packets, &StoreTx{ID: 999, Hash: "locked", FirstSeen: time.Now().UTC().Format(time.RFC3339)})
+	store.trackedBytes += 1234
+
+	start := time.Now()
+	stats := store.GetPerfStoreStatsTyped()
+	if elapsed := time.Since(start); elapsed > 25*time.Millisecond {
+		t.Fatalf("GetPerfStoreStatsTyped blocked behind writer for %v", elapsed)
+	}
+	if stats.TotalLoaded != 25 {
+		t.Fatalf("snapshot TotalLoaded = %d, want stale value 25 while writer lock is held", stats.TotalLoaded)
+	}
+	if stats.EstimatedMB != 42 {
+		t.Fatalf("EstimatedMB = %v, want injected estimator value 42", stats.EstimatedMB)
+	}
+
+	start = time.Now()
+	_ = store.trackedMemoryMB()
+	if elapsed := time.Since(start); elapsed > 25*time.Millisecond {
+		t.Fatalf("trackedMemoryMB blocked behind writer for %v", elapsed)
+	}
+}
