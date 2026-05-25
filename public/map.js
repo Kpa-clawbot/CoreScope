@@ -1521,7 +1521,7 @@
                      'role="img" aria-label="' + n + ' ' + role + (n === 1 ? '' : 's') + '" ' +
                      'style="background:' + bg + ';color:#1a1a1a" ' +
                      'title="' + n + ' ' + role + (n === 1 ? '' : 's') + '">' +
-                     letter + '</span>';
+                     letter + n + '</span>';
         pillsShown += 1;
       }
     }
