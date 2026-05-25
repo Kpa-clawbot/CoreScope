@@ -1633,27 +1633,39 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		return nil, 0, err
 	}
 
-	// 2) Page of transmission IDs — newest LIMIT msgs minus OFFSET, returned
-	//    in ASC order to match prior API contract (tail of message log).
-	pageSQL := `SELECT t.id FROM (
-			SELECT id FROM transmissions
-			WHERE channel_hash = ? AND payload_type = 5
-			ORDER BY first_seen DESC
-			LIMIT ? OFFSET ?
-		) t`
-	// When a region filter is in play, we must filter on the inner subquery
-	// against the transmissions table — re-use the same EXISTS form but
-	// wrap so we still get DESC-then-ASC pagination.
+	// 2) Page of transmission IDs — newest LIMIT msgs minus OFFSET.
+	//    Issue #1366 follow-up (fix #2): select page by MAX(o.timestamp)
+	//    (LatestSeen) DESC, NOT by t.first_seen DESC — otherwise a
+	//    heartbeat tx whose FirstSeen is 24h old but whose latest
+	//    observation is fresh gets pushed off page 1. We pre-aggregate
+	//    MAX(timestamp) per tx in a derived table (single grouped scan,
+	//    vs. a correlated subquery per outer row) so the cost is
+	//    O(N_obs) once, not O(N_tx × N_obs).
+	//
+	//    The returned page is in newest-LatestSeen-FIRST (DESC) order.
+	//    The Go side re-orders the emitted rows ASC below (fix #3) so the
+	//    contract matches the in-memory path's tail-of-msgOrder convention.
+	pageSQL := `SELECT t.id, COALESCE(o.latest_obs_epoch, 0) AS latest_obs_epoch
+		FROM transmissions t
+		LEFT JOIN (
+			SELECT transmission_id, MAX(timestamp) AS latest_obs_epoch
+			FROM observations
+			GROUP BY transmission_id
+		) o ON o.transmission_id = t.id
+		WHERE t.channel_hash = ? AND t.payload_type = 5
+		ORDER BY COALESCE(o.latest_obs_epoch, 0) DESC, t.id DESC
+		LIMIT ? OFFSET ?`
 	if len(regionCodes) > 0 {
-		pageSQL = `SELECT id FROM (
-				SELECT t.id, t.first_seen FROM transmissions t
-				WHERE t.channel_hash = ? AND t.payload_type = 5` + regionFilter + `
-				ORDER BY t.first_seen DESC
-				LIMIT ? OFFSET ?
-			) sub
-			ORDER BY first_seen ASC`
-	} else {
-		pageSQL += ` ORDER BY (SELECT first_seen FROM transmissions WHERE id = t.id) ASC`
+		pageSQL = `SELECT t.id, COALESCE(o.latest_obs_epoch, 0) AS latest_obs_epoch
+			FROM transmissions t
+			LEFT JOIN (
+				SELECT transmission_id, MAX(timestamp) AS latest_obs_epoch
+				FROM observations
+				GROUP BY transmission_id
+			) o ON o.transmission_id = t.id
+			WHERE t.channel_hash = ? AND t.payload_type = 5` + regionFilter + `
+			ORDER BY COALESCE(o.latest_obs_epoch, 0) DESC, t.id DESC
+			LIMIT ? OFFSET ?`
 	}
 	pageArgs := []interface{}{channelHash}
 	pageArgs = append(pageArgs, regionArgs...)
@@ -1666,7 +1678,8 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	pageIDs := make([]int, 0, limit)
 	for idRows.Next() {
 		var id int
-		if err := idRows.Scan(&id); err == nil {
+		var le sql.NullInt64
+		if err := idRows.Scan(&id, &le); err == nil {
 			pageIDs = append(pageIDs, id)
 		}
 	}
@@ -1786,7 +1799,16 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		msgMap[txID] = m
 	}
 
-	messages := make([]map[string]interface{}, 0, len(pageIDs))
+	// Issue #1366 follow-up: emit batch sorted by LatestSeen ascending
+	// (newest LAST) — matches the in-memory path's tail-of-msgOrder
+	// convention and the frontend's scrollToBottom() behavior. pageIDs
+	// order is not LatestSeen-ordered for in-page rows after fix #2.
+	type emitted struct {
+		latestEpoch int64
+		txID        int
+		data        map[string]interface{}
+	}
+	rowsOut := make([]emitted, 0, len(pageIDs))
 	for _, id := range pageIDs {
 		m, ok := msgMap[id]
 		if !ok {
@@ -1801,7 +1823,17 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		if m.LatestEpoch > 0 {
 			m.Data["timestamp"] = time.Unix(m.LatestEpoch, 0).UTC().Format(time.RFC3339)
 		}
-		messages = append(messages, m.Data)
+		rowsOut = append(rowsOut, emitted{latestEpoch: m.LatestEpoch, txID: id, data: m.Data})
+	}
+	sort.SliceStable(rowsOut, func(i, j int) bool {
+		if rowsOut[i].latestEpoch != rowsOut[j].latestEpoch {
+			return rowsOut[i].latestEpoch < rowsOut[j].latestEpoch
+		}
+		return rowsOut[i].txID < rowsOut[j].txID
+	})
+	messages := make([]map[string]interface{}, 0, len(rowsOut))
+	for _, e := range rowsOut {
+		messages = append(messages, e.data)
 	}
 
 	return messages, total, nil
