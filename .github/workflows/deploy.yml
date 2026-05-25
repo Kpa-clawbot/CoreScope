@@ -106,6 +106,7 @@ jobs:
           node test-issue-1279-p2-code-filter.js
           node test-area-filter.js
           node test-issue-1293-marker-shapes.js
+          node test-issue-1354-marker-outline.js
 
       - name: Verify proto syntax
         run: |
