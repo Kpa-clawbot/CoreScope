@@ -144,9 +144,69 @@ async function main() {
     }
   }
 
+  // Regression: long nav stats/version text must not paint underneath the
+  // right-side icon controls. Flex can shrink the .nav-stats box while its
+  // nowrap children keep overflowing unless the stats item clips its contents.
+  await page.setViewportSize({ width: 1912, height: HEIGHT });
+  await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.top-nav .nav-right');
+  await page.evaluate(() => {
+    const stats = document.getElementById('navStats');
+    if (!stats) return;
+    stats.innerHTML =
+      '<span class="stat-val">66675</span> pkts · ' +
+      '<span class="stat-val">3090</span> nodes · ' +
+      '<span class="stat-val">93</span> obs ' +
+      '<span class="version-badge">cornv3.7.1-872-g2bacc391 · 2bacc39 (22m ago) · go</span>';
+    window.dispatchEvent(new Event('resize'));
+  });
+  await page.evaluate(() => document.fonts && document.fonts.ready ? document.fonts.ready : null);
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+  const statsClip = await page.evaluate(() => {
+    const stats = document.getElementById('navStats');
+    const fav = document.getElementById('favToggle');
+    if (!stats || !fav) return { missing: true };
+    const statsRect = stats.getBoundingClientRect();
+    const favRect = fav.getBoundingClientRect();
+    const statsStyle = getComputedStyle(stats);
+    return {
+      missing: false,
+      statsRight: statsRect.right,
+      favLeft: favRect.left,
+      statsScrollWidth: stats.scrollWidth,
+      statsClientWidth: stats.clientWidth,
+      statsOverflowX: statsStyle.overflowX,
+      navRight: document.querySelector('.top-nav .nav-right').getBoundingClientRect().right,
+      clientW: document.documentElement.clientWidth,
+    };
+  });
+  const statsReasons = [];
+  if (statsClip.missing) {
+    statsReasons.push('missing nav stats or favorites button');
+  } else {
+    if (statsClip.statsRight > statsClip.favLeft + SUBPIXEL_TOL) {
+      statsReasons.push(`navStats.right=${statsClip.statsRight.toFixed(1)} > fav.left=${statsClip.favLeft.toFixed(1)}`);
+    }
+    if (statsClip.navRight > statsClip.clientW + SUBPIXEL_TOL) {
+      statsReasons.push(`nav-right.right=${statsClip.navRight.toFixed(1)} > clientWidth=${statsClip.clientW}`);
+    }
+    if (statsClip.statsScrollWidth > statsClip.statsClientWidth + SUBPIXEL_TOL &&
+        statsClip.statsOverflowX === 'visible') {
+      statsReasons.push(`navStats has overflowing text (${statsClip.statsScrollWidth}px > ${statsClip.statsClientWidth}px) with overflow-x:visible`);
+    }
+  }
+  if (statsReasons.length === 0) {
+    passes++;
+    console.log('  ✅ long nav-stats @1912px: clipped before right controls');
+  } else {
+    failures++;
+    console.log(`  ❌ long nav-stats @1912px: ${statsReasons.join(' | ')}`);
+  }
+
   await browser.close();
 
-  const total = ROUTES.length * VIEWPORTS.length;
+  const total = ROUTES.length * VIEWPORTS.length + 1;
   console.log(`\ntest-nav-fluid-1055-e2e.js: ${failures === 0 ? 'OK' : 'FAIL'} — ${passes}/${total} passed`);
   process.exit(failures === 0 ? 0 : 1);
 }

@@ -672,6 +672,7 @@ input[type="week"] {
 .nav-stats {
   display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--nav-text-muted);
   font-family: var(--mono); margin-right: 4px; white-space: nowrap;
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
 }
 .nav-stats .stat-val { color: var(--nav-text); font-weight: 600; transition: color 0.3s ease; }
 .nav-stats .stat-val.updated { color: var(--accent); }
@@ -686,6 +687,8 @@ input[type="week"] {
   color: var(--nav-text-muted); background: rgba(255,255,255,0.1);
   padding: 1px 5px; border-radius: var(--badge-radius);
   letter-spacing: 0.5px;
+  min-width: 0; max-width: min(42vw, 520px);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .nav-stats .version-badge a {
   color: var(--nav-text-muted); text-decoration: none;
