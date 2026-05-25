@@ -241,6 +241,10 @@ func main() {
 	defer stopNeighborBuilder()
 	log.Printf("[neighbor-build] enabled (interval=%s)", NeighborEdgesBuilderInterval)
 
+	stopRouteHistoryBuilder := store.StartRouteHistoryBuilder(RouteHistoryBuilderInterval)
+	defer stopRouteHistoryBuilder()
+	log.Printf("[route-history-build] enabled (interval=%s)", RouteHistoryBuilderInterval)
+
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {
 		log.Printf("Loaded %d channel keys for GRP_TXT decryption", len(channelKeys))

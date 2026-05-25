@@ -270,3 +270,56 @@ func TestHandleRouteHistory_CachesByHourWindow(t *testing.T) {
 		t.Fatalf("want cached mapped edge after DB rows deleted, got %d", resp.MappedEdges)
 	}
 }
+
+func TestHandleRouteHistory_UsesMaterializedEdgesBeforeRawScan(t *testing.T) {
+	db := setupTestDB(t)
+	s := &Server{cfg: &Config{}, db: db}
+	now := time.Now().UTC()
+	recent := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	nodeA := "aa11111111111111"
+	nodeB := "bb22222222222222"
+	rawA := "cc33333333333333"
+	rawB := "dd44444444444444"
+
+	mustExecRouteHistoryDB(t, db, `CREATE TABLE route_history_edges (
+		observation_id INTEGER NOT NULL,
+		hop_index INTEGER NOT NULL,
+		bucket_start INTEGER NOT NULL,
+		node_a TEXT NOT NULL,
+		node_b TEXT NOT NULL,
+		packet_hash TEXT NOT NULL,
+		last_seen TEXT NOT NULL,
+		PRIMARY KEY (observation_id, hop_index)
+	)`)
+	mustExecRouteHistoryDB(t, db, `CREATE INDEX idx_route_history_edges_last_seen ON route_history_edges(last_seen)`)
+	mustExecRouteHistoryDB(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon) VALUES
+		(?, 'Mat A', 'repeater', 52.1, 5.1),
+		(?, 'Mat B', 'repeater', 52.2, 5.2),
+		(?, 'Raw A', 'repeater', 53.1, 6.1),
+		(?, 'Raw B', 'repeater', 53.2, 6.2)`, nodeA, nodeB, rawA, rawB)
+	mustExecRouteHistoryDB(t, db, `INSERT INTO route_history_edges
+		(observation_id, hop_index, bucket_start, node_a, node_b, packet_hash, last_seen)
+		VALUES (1, 0, ?, ?, ?, 'mat-hash', ?)`, now.Truncate(time.Hour).Unix(), nodeA, nodeB, recent)
+
+	mustExecRouteHistoryDB(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (10, '00', 'raw-hash', ?)`, recent)
+	mustExecRouteHistoryDB(t, db, `INSERT INTO observations (transmission_id, path_json, resolved_path, timestamp) VALUES (10, ?, ?, ?)`,
+		`["cc","dd"]`, `["`+rawA+`","`+rawB+`"]`, now.Unix())
+
+	req := httptest.NewRequest("GET", "/api/route-history?hours=6", nil)
+	rr := httptest.NewRecorder()
+	s.handleRouteHistory(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp routeHistoryResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.MappedEdges != 1 {
+		t.Fatalf("mapped edges = %d, want 1: %+v", resp.MappedEdges, resp)
+	}
+	e := resp.Edges[0]
+	if e.NodeA != nodeA || e.NodeB != nodeB || e.Samples[0] != "mat-hash" {
+		t.Fatalf("expected materialized edge, got %+v", e)
+	}
+}

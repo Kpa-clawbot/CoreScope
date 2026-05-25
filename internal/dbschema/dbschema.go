@@ -46,6 +46,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureNeighborEdgesTable(rw); err != nil {
 		return fmt.Errorf("ensure neighbor_edges: %w", err)
 	}
+	if err := ensureRouteHistoryEdgesTable(rw); err != nil {
+		return fmt.Errorf("ensure route_history_edges: %w", err)
+	}
 	if err := ensureInactiveNodesTable(rw); err != nil {
 		return fmt.Errorf("ensure inactive_nodes: %w", err)
 	}
@@ -122,6 +125,7 @@ func AssertReady(ro *sql.DB) error {
 	}
 
 	mustTable("neighbor_edges")
+	mustTable("route_history_edges")
 	mustIndex("idx_obs_tx_resolved_path")
 	mustCol("observations", "resolved_path")
 	mustCol("observers", "inactive")
@@ -237,6 +241,30 @@ func ensureNeighborEdgesTable(rw *sql.DB) error {
 		PRIMARY KEY (node_a, node_b)
 	)`)
 	return err
+}
+
+func ensureRouteHistoryEdgesTable(rw *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS route_history_edges (
+			observation_id INTEGER NOT NULL,
+			hop_index INTEGER NOT NULL,
+			bucket_start INTEGER NOT NULL,
+			node_a TEXT NOT NULL,
+			node_b TEXT NOT NULL,
+			packet_hash TEXT NOT NULL,
+			last_seen TEXT NOT NULL,
+			PRIMARY KEY (observation_id, hop_index)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_route_history_edges_last_seen ON route_history_edges(last_seen)`,
+		`CREATE INDEX IF NOT EXISTS idx_route_history_edges_bucket ON route_history_edges(bucket_start)`,
+		`CREATE INDEX IF NOT EXISTS idx_route_history_edges_pair ON route_history_edges(node_a, node_b)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := rw.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureInactiveNodesTable creates the inactive_nodes table if missing.

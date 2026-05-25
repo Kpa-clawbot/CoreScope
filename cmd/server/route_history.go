@@ -187,11 +187,20 @@ func (s *Server) buildRouteHistoryPayload(r *http.Request, hours int) ([]byte, e
 	since := time.Now().Add(-time.Duration(hours) * time.Hour).UTC().Format(time.RFC3339)
 	edgeMap := map[rhEdgeKey]*rhEdgeData{}
 
+	servedFromMaterialized := false
+	if s.db != nil {
+		ok, err := buildRouteHistoryEdgesFromMaterialized(r, s, since, edgeMap)
+		if err != nil {
+			return nil, err
+		}
+		servedFromMaterialized = ok
+	}
+
 	// Prefer the in-memory store when it covers the requested window. For modern
 	// schemas we batch-fetch resolved_path only for the loaded tx IDs, avoiding a
 	// wide observations scan on every route-history cache miss.
 	servedFromStore := false
-	if s.store != nil {
+	if !servedFromMaterialized && s.store != nil {
 		s.store.mu.RLock()
 		oldest := s.store.oldestLoaded
 		snap := s.store.packets
@@ -203,7 +212,7 @@ func (s *Server) buildRouteHistoryPayload(r *http.Request, hours int) ([]byte, e
 		}
 	}
 
-	if !servedFromStore {
+	if !servedFromMaterialized && !servedFromStore {
 		if err := buildRouteHistoryEdgesFromDB(r, s, since, edgeMap); err != nil {
 			return nil, err
 		}
@@ -283,6 +292,37 @@ func (s *Server) buildRouteHistoryPayload(r *http.Request, hours int) ([]byte, e
 		return nil, err
 	}
 	return payload, nil
+}
+
+func buildRouteHistoryEdgesFromMaterialized(r *http.Request, s *Server, since string, edgeMap map[rhEdgeKey]*rhEdgeData) (bool, error) {
+	rows, err := s.db.conn.QueryContext(r.Context(),
+		`SELECT node_a, node_b, packet_hash, last_seen
+		 FROM route_history_edges
+		 WHERE last_seen >= ?
+		 ORDER BY last_seen DESC`,
+		since,
+	)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return false, nil
+		}
+		return false, err
+	}
+	defer rows.Close()
+
+	seen := false
+	for rows.Next() {
+		var a, b, hash, lastSeen string
+		if err := rows.Scan(&a, &b, &hash, &lastSeen); err != nil {
+			continue
+		}
+		addRouteHistoryEdge(a, b, hash, lastSeen, edgeMap)
+		seen = true
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return seen, nil
 }
 
 func buildRouteHistoryEdgesFromSnap(store *PacketStore, snap []*StoreTx, since string, edgeMap map[rhEdgeKey]*rhEdgeData) {
