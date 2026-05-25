@@ -1,0 +1,160 @@
+/**
+ * #1356 — WCAG 2.2 AA accessibility for map cluster bubbles, role pills,
+ * and multi-byte hash labels.
+ *
+ * Locked design = Tufte's structural framing (drop color as primary signal,
+ * use shape / glyph / border-style as carriers) WITH the audit's "Minimal
+ * patch to Tufte's proposal to reach AA" applied.
+ *
+ * Design sources:
+ *   - https://github.com/Kpa-clawbot/CoreScope/issues/1356#issuecomment-4535244400
+ *   - https://github.com/Kpa-clawbot/CoreScope/issues/1356#issuecomment-4535849354
+ *
+ * Pure-string assertions (mirrors test-issue-1293-marker-shapes.js pattern)
+ * so this runs in the JS-unit-tests CI step without a browser.
+ */
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+let passed = 0, failed = 0;
+function assert(cond, msg) {
+  if (cond) { passed++; console.log('  ✓ ' + msg); }
+  else { failed++; console.error('  ✗ ' + msg); }
+}
+
+const mapSrc   = fs.readFileSync(path.join(__dirname, 'public', 'map.js'),   'utf8');
+const cssSrc   = fs.readFileSync(path.join(__dirname, 'public', 'style.css'), 'utf8');
+
+console.log('\n=== #1356 V1: cluster bubble — neutral fill, border-style ramp, ARIA ===');
+
+// V1.a — CSS must define a neutral cluster fill constant (not the bucket color).
+assert(/--mc-cluster-fill\s*:/.test(cssSrc),
+  'style.css declares --mc-cluster-fill CSS variable');
+
+// V1.b — Per-bucket background MUST NOT be the old --info/--warning/--accent system colors.
+// (Those system vars are reserved per AGENTS.md / issue scope.)
+const clusterBlock = cssSrc.match(/\.mc-cluster\.mc-sm[\s\S]{0,400}\.mc-cluster\.mc-lg[^}]*\}/);
+assert(clusterBlock && !/var\(--info|var\(--warning|var\(--accent/.test(clusterBlock[0]),
+  'cluster sm/md/lg no longer use --info / --warning / --accent for fill');
+
+// V1.c — Border-style ramp (solid → heavier → double) is the redundant carrier.
+assert(/\.mc-cluster\.mc-lg[^}]*double/.test(cssSrc),
+  'cluster lg uses "double" border-style as a non-color carrier');
+
+// V1.d — Audit override: border color must be #666 (NOT white) plus a dark halo via box-shadow.
+assert(/--mc-cluster-border\s*:\s*#666/i.test(cssSrc),
+  '--mc-cluster-border is #666 (audit fix for SC 1.4.11 vs Carto-light)');
+assert(/\.mc-cluster[^{]*\{[\s\S]*?box-shadow[^;]*rgba\(0\s*,\s*0\s*,\s*0/i.test(cssSrc),
+  '.mc-cluster has a dark halo box-shadow (audit fix for border visibility)');
+
+// V1.e — ARIA on the cluster div (rendered in makeClusterIcon).
+assert(/role=["']img["']/.test(mapSrc) && /aria-label[^=]*=[^>]*nodes/.test(mapSrc),
+  'makeClusterIcon emits role="img" + aria-label summarising count + role breakdown');
+assert(/aria-label="[^"]*\d+ nodes — /.test(mapSrc) ||
+       /aria-label="\s*'\s*\+\s*total\s*\+\s*' nodes — /.test(mapSrc) ||
+       /aria-label="'\s*\+\s*total\s*\+\s*' nodes — /.test(mapSrc),
+  'cluster aria-label matches /\\d+ nodes — / pattern (summary + breakdown)');
+
+console.log('\n=== #1356 V2: role pills — letter primary, Wong palette, dark text ===');
+
+// V2.a — A ROLE_LETTERS map is defined for the 5 roles.
+assert(/ROLE_LETTERS\s*=\s*\{[\s\S]*?repeater[\s\S]*?['"]R['"][\s\S]*?companion[\s\S]*?['"]C['"][\s\S]*?room[\s\S]*?['"]M['"][\s\S]*?sensor[\s\S]*?['"]S['"][\s\S]*?observer[\s\S]*?['"]O['"]/.test(mapSrc),
+  'map.js defines ROLE_LETTERS with R/C/M/S/O for the five roles');
+
+// V2.b — makeClusterIcon emits the letter (not just a count) inside the pill.
+const pillEmitRe = /<span class="mc-pill[^>]*>[^<]*' \+\s*ROLE_LETTERS\[/;
+assert(pillEmitRe.test(mapSrc) || /ROLE_LETTERS\[role\][\s\S]{0,200}mc-pill/.test(mapSrc) ||
+       /mc-pill[\s\S]{0,200}ROLE_LETTERS\[role\]/.test(mapSrc),
+  'pill HTML embeds ROLE_LETTERS[role] as the primary content');
+
+// V2.c — Dark text on ALL five pills (audit override of Tufte's per-pill switch).
+//   Either inline style="color:#1a1a1a" on the pill OR CSS rule .mc-pill { color: #1a1a1a }.
+assert(/\.mc-pill\b[^{]*\{[^}]*color\s*:\s*#1a1a1a/i.test(cssSrc) ||
+       /class="mc-pill[^"]*"[^>]*style="[^"]*color:\s*#1a1a1a/i.test(mapSrc),
+  '.mc-pill text color is #1a1a1a (dark on all five Wong hues)');
+
+// V2.d — font-size ≥ 10px (audit bumped from 9px).
+const pillFontMatch = cssSrc.match(/\.mc-pill\b[^{]*\{[^}]*font[^;]*;/);
+assert(pillFontMatch && /1[0-9]px|0\.625rem|0\.6875rem|0\.75rem/.test(pillFontMatch[0]),
+  '.mc-pill font-size is ≥ 10px (audit fix for SC 1.4.3 / 1.4.4)');
+
+// V2.e — Wong palette declared as --mc-role-* constants.
+['repeater','companion','room','sensor','observer'].forEach(function(r){
+  assert(new RegExp('--mc-role-' + r + '\\s*:').test(cssSrc),
+    '--mc-role-' + r + ' CSS variable declared');
+});
+
+// V2.f — per-pill aria-label "<N> <role>s".
+assert(/aria-label="'\s*\+\s*n\s*\+\s*' [a-z]+/.test(mapSrc) ||
+       /aria-label="\$\{n\}\s+\$\{role\}s?"/.test(mapSrc) ||
+       /aria-label=("|')[^"']*' \+\s*n\s*\+\s*' [a-z]+/i.test(mapSrc),
+  'pill HTML emits aria-label with count + role');
+
+// V2.g — DO NOT touch --info / --warning / --accent (out of scope hard rule).
+const mcRoleBlock = cssSrc.match(/--mc-role-[\s\S]{0,1500}/);
+assert(mcRoleBlock && !/--info\s*:|--warning\s*:|--accent\s*:/.test(mcRoleBlock[0]),
+  'role pill constants are --mc-* namespaced (do not redefine --info/--warning/--accent)');
+
+console.log('\n=== #1356 V3: multi-byte hash labels — glyph + neutral fill + colored border-left ===');
+
+// V3.a — MB_GLYPHS map for ✓ / ? / ✗.
+assert(/MB_GLYPHS\s*=\s*\{[\s\S]*?confirmed[\s\S]*?['"\\]u2713|MB_GLYPHS\s*=\s*\{[\s\S]*?confirmed[\s\S]*?['"]\u2713['"]/.test(mapSrc) ||
+       /MB_GLYPHS\s*=\s*\{[\s\S]*?confirmed[\s\S]*?['"]✓['"]/.test(mapSrc),
+  'map.js defines MB_GLYPHS with ✓ for confirmed');
+assert(/MB_GLYPHS[\s\S]*?suspected[\s\S]*?['"]\?['"]/.test(mapSrc),
+  'MB_GLYPHS.suspected === "?"');
+assert(/MB_GLYPHS[\s\S]*?unknown[\s\S]*?['"\\]u2717|MB_GLYPHS[\s\S]*?unknown[\s\S]*?['"]✗['"]/.test(mapSrc),
+  'MB_GLYPHS.unknown === ✗ (u2717)');
+
+// V3.b — Neutral fill constant for multi-byte label.
+assert(/--mc-mb-fill\s*:/.test(cssSrc),
+  '--mc-mb-fill CSS variable declared (neutral fill, not status color)');
+
+// V3.c — High-luminance accent set (audit override of Tol "vibrant").
+//   Confirmed #56F0A0 / suspected #FFD966 / unknown #FF8888.
+assert(/--mc-mb-confirmed\s*:\s*#56F0A0/i.test(cssSrc),
+  '--mc-mb-confirmed is #56F0A0 (audit high-luminance set, not #117733)');
+assert(/--mc-mb-suspected\s*:\s*#FFD966/i.test(cssSrc),
+  '--mc-mb-suspected is #FFD966');
+assert(/--mc-mb-unknown\s*:\s*#FF8888/i.test(cssSrc),
+  '--mc-mb-unknown is #FF8888');
+
+// V3.d — 3px colored left border in style.
+assert(/border-left\s*:\s*3px solid/.test(cssSrc),
+  '.mc-mb-label has 3px solid border-left (colored accent stripe)');
+
+// V3.e — makeRepeaterLabelIcon prepends MB_GLYPHS[status].
+assert(/MB_GLYPHS\[[^\]]+\][\s\S]{0,200}shortHash|shortHash[\s\S]{0,200}MB_GLYPHS\[/.test(mapSrc),
+  'makeRepeaterLabelIcon prepends MB_GLYPHS glyph to the hash text');
+
+// V3.f — aria-label "multi-byte <status>, hash <ID>".
+assert(/aria-label="multi-byte '\s*\+\s*[a-zA-Z_.]+\s*\+\s*', hash '\s*\+\s*shortHash/.test(mapSrc) ||
+       /aria-label="multi-byte \$\{[^}]+\}, hash \$\{shortHash\}"/.test(mapSrc),
+  'makeRepeaterLabelIcon emits aria-label "multi-byte <status>, hash <ID>"');
+
+// V3.g — Glyph span must be aria-hidden so AT does not read "check mark 3 E".
+assert(/aria-hidden="true"[\s\S]{0,200}MB_GLYPHS|MB_GLYPHS[\s\S]{0,300}aria-hidden="true"/.test(mapSrc),
+  'visible glyph+hash span is aria-hidden="true" (AT reads aria-label only)');
+
+// V3.h — old MB_COLORS solid-fill behavior must be gone (no per-status background-fill emission).
+assert(!/bgColor\s*=\s*colorOverride\s*\|\|\s*s\.color/.test(mapSrc) ||
+       /background:\s*var\(--mc-mb-fill\)/.test(mapSrc),
+  'repeater label no longer paints background by status (uses --mc-mb-fill neutral)');
+
+console.log('\n=== #1356 Hard rules: --info / --warning / --accent untouched ===');
+
+// Sanity: ensure new --mc-* constants don't redefine the reserved system vars.
+// (--info and --warning are only used via var(..., fallback) — they may not be declared
+//  at all; --accent IS declared.)
+const newConstantsBlock = (cssSrc.match(/\/\*[^*]*#1356[\s\S]*?\*\/[\s\S]*?(?=\/\*|$)/) || ['', ''])[0];
+assert(!/--info\s*:|--warning\s*:|--accent\s*:/.test(newConstantsBlock),
+  '#1356 CSS block does not redefine --info / --warning / --accent');
+assert(/--accent\s*:/.test(cssSrc), '--accent CSS variable still defined');
+
+console.log('\n=== Summary ===');
+console.log(`  Passed: ${passed}`);
+console.log(`  Failed: ${failed}`);
+if (failed > 0) { console.error('\n#1356 FAIL'); process.exit(1); }
+console.log('\n#1356 PASS');
