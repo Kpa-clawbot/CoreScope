@@ -24,9 +24,11 @@ type routeHistoryEdge struct {
 }
 
 type routeHistoryResponse struct {
-	Edges      []routeHistoryEdge `json:"edges"`
-	Hours      int                `json:"hours"`
-	TotalEdges int                `json:"total_edges"`
+	Edges           []routeHistoryEdge `json:"edges"`
+	Hours           int                `json:"hours"`
+	TotalEdges      int                `json:"total_edges"`
+	CandidateEdges  int                `json:"candidate_edges"`
+	MissingGPSEdges int                `json:"missing_gps_edges"`
 }
 
 type rhEdgeKey struct{ a, b string }
@@ -50,12 +52,15 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 	since := time.Now().Add(-time.Duration(hours) * time.Hour).UTC().Format(time.RFC3339)
 	edgeMap := map[rhEdgeKey]*rhEdgeData{}
 
-	// Serve from the in-memory store when it covers the full requested window.
+	// Serve from the in-memory store when it covers the full requested window
+	// only on schemas without persisted resolved_path. When resolved_path is
+	// available, route-history must use it so path prefixes become full pubkeys
+	// that can join to nodes/GPS.
 	// tx.PathJSON is set once under s.mu.Lock() and never mutated after, so
 	// reading it from a snapshotted *StoreTx outside the lock is race-free.
 	// The snap slice header itself is O(1) to copy under RLock.
 	servedFromStore := false
-	if s.store != nil {
+	if s.store != nil && (s.db == nil || !s.db.hasResolvedPath) {
 		s.store.mu.RLock()
 		oldest := s.store.oldestLoaded
 		snap := s.store.packets // O(1) slice header copy
@@ -76,6 +81,8 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	candidateEdges := len(edgeMap)
 
 	// Resolve node GPS from nodes table — single batch query regardless of path taken above.
 	type nodeInfo struct {
@@ -119,9 +126,11 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	edges := make([]routeHistoryEdge, 0, len(edgeMap))
+	missingGPS := 0
 	for k, e := range edgeMap {
 		nA, nB := nodeCache[k.a], nodeCache[k.b]
 		if nA == nil || nB == nil || !nA.hasGPS || !nB.hasGPS {
+			missingGPS++
 			continue
 		}
 		samples := e.samples
@@ -140,9 +149,11 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(edges, func(i, j int) bool { return edges[i].Count > edges[j].Count })
 
 	writeJSON(w, routeHistoryResponse{
-		Edges:      edges,
-		Hours:      hours,
-		TotalEdges: len(edges),
+		Edges:           edges,
+		Hours:           hours,
+		TotalEdges:      len(edges),
+		CandidateEdges:  candidateEdges,
+		MissingGPSEdges: missingGPS,
 	})
 }
 
@@ -162,14 +173,18 @@ func buildRouteHistoryEdgesFromSnap(snap []*StoreTx, since string, edgeMap map[r
 
 // buildRouteHistoryEdgesFromDB runs the legacy JOIN query and populates edgeMap.
 func buildRouteHistoryEdgesFromDB(r *http.Request, s *Server, since string, edgeMap map[rhEdgeKey]*rhEdgeData) error {
+	resolvedPathSelect := "NULL AS resolved_path"
+	resolvedPathWhere := ""
+	if s.db.hasResolvedPath {
+		resolvedPathSelect = "o.resolved_path"
+		resolvedPathWhere = " OR (o.resolved_path IS NOT NULL AND o.resolved_path != '' AND o.resolved_path != '[]')"
+	}
 	rows, err := s.db.conn.QueryContext(r.Context(),
-		`SELECT t.hash, o.path_json, t.first_seen
+		`SELECT t.hash, o.path_json, `+resolvedPathSelect+`, t.first_seen
 		 FROM transmissions t
 		 JOIN observations o ON o.transmission_id = t.id
 		 WHERE t.first_seen >= ?
-		   AND o.path_json IS NOT NULL
-		   AND o.path_json != ''
-		   AND o.path_json != '[]'`,
+		   AND ((o.path_json IS NOT NULL AND o.path_json != '' AND o.path_json != '[]')`+resolvedPathWhere+`)`,
 		since,
 	)
 	if err != nil {
@@ -178,30 +193,55 @@ func buildRouteHistoryEdgesFromDB(r *http.Request, s *Server, since string, edge
 	defer rows.Close()
 
 	for rows.Next() {
-		var hash, pathJSON, firstSeen string
-		if err := rows.Scan(&hash, &pathJSON, &firstSeen); err != nil {
+		var hash, firstSeen string
+		var pathJSON, resolvedPath *string
+		if err := rows.Scan(&hash, &pathJSON, &resolvedPath, &firstSeen); err != nil {
 			continue
 		}
-		addRouteHistoryEdges(hash, pathJSON, firstSeen, edgeMap)
+		addRouteHistoryEdgesFromPaths(hash, strPtrValue(resolvedPath), strPtrValue(pathJSON), firstSeen, edgeMap)
 	}
 	return rows.Err()
 }
 
-// addRouteHistoryEdges parses pathJSON and increments all adjacent-hop edge
-// counts in edgeMap.
-func addRouteHistoryEdges(hash, pathJSON, firstSeen string, edgeMap map[rhEdgeKey]*rhEdgeData) {
-	if pathJSON == "" || pathJSON == "[]" {
+func strPtrValue(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// addRouteHistoryEdgesFromPaths prefers resolvedPath because it contains full
+// node pubkeys. pathJSON stores wire path prefixes and is only useful as a
+// fallback on legacy rows without resolved_path.
+func addRouteHistoryEdgesFromPaths(hash, resolvedPath, pathJSON, firstSeen string, edgeMap map[rhEdgeKey]*rhEdgeData) {
+	if addRouteHistoryEdges(hash, resolvedPath, firstSeen, edgeMap) {
 		return
 	}
-	var hops []string
-	if err := json.Unmarshal([]byte(pathJSON), &hops); err != nil {
-		return
+	addRouteHistoryEdges(hash, pathJSON, firstSeen, edgeMap)
+}
+
+// addRouteHistoryEdges parses a JSON path and increments all adjacent-hop edge
+// counts in edgeMap. It returns false when the path had fewer than two usable
+// hops so callers can fall back to another path source.
+func addRouteHistoryEdges(hash, pathJSON, firstSeen string, edgeMap map[rhEdgeKey]*rhEdgeData) bool {
+	if pathJSON == "" || pathJSON == "[]" {
+		return false
+	}
+	var rawHops []*string
+	if err := json.Unmarshal([]byte(pathJSON), &rawHops); err != nil {
+		return false
+	}
+	hops := make([]string, 0, len(rawHops))
+	for _, h := range rawHops {
+		if h != nil && *h != "" {
+			hops = append(hops, *h)
+		}
+	}
+	if len(hops) < 2 {
+		return false
 	}
 	for i := 0; i < len(hops)-1; i++ {
 		a, b := hops[i], hops[i+1]
-		if a == "" || b == "" {
-			continue
-		}
 		if a > b {
 			a, b = b, a
 		}
@@ -219,4 +259,5 @@ func addRouteHistoryEdges(hash, pathJSON, firstSeen string, edgeMap map[rhEdgeKe
 			e.samples = append(e.samples, hash)
 		}
 	}
+	return true
 }

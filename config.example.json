@@ -1,14 +1,19 @@
 {
   "port": 3000,
   "apiKey": "your-secret-api-key-here",
+  "dbPath": "data/meshcore.db",
+  "logLevel": "info",
   "nodeBlacklist": [],
   "_comment_nodeBlacklist": "Public keys of nodes to hide from all API responses. Use for trolls, offensive names, or nodes reporting false data that operators refuse to fix.",
+  "observerBlacklist": [],
+  "_comment_observerBlacklist": "Public keys of observers to exclude. The ingestor drops blacklisted observers at ingest; the server also filters any historical rows that slipped through before blocking.",
   "observerIATAWhitelist": [],
   "_comment_observerIATAWhitelist": "Global IATA region whitelist. When non-empty, only observers whose IATA code (from MQTT topic) matches are processed. Case-insensitive. Empty = allow all. Unlike per-source iataFilter, this applies across all MQTT sources.",
   "retention": {
     "nodeDays": 7,
     "observerDays": 14,
     "packetDays": 30,
+    "metricsDays": 30,
     "_comment": "nodeDays: nodes not seen in N days moved to inactive_nodes (default 7). observerDays: observers not sending data in N days are removed (-1 = keep forever, default 14). packetDays: transmissions older than N days are deleted (0 = disabled). NOTE (#1283): all four retention fields are consumed by the INGESTOR process. The server is read-only and never prunes."
   },
   "db": {
@@ -16,6 +21,12 @@
     "incrementalVacuumPages": 1024,
     "_comment": "vacuumOnStartup: run one-time full VACUUM to enable incremental auto-vacuum on existing DBs. Executed by the INGESTOR at startup, BEFORE the MQTT subscriber starts (#1283), so there is no contention with concurrent writes. Blocks ingestor startup for minutes on large DBs; requires 2x DB file size in free disk space. incrementalVacuumPages: free pages returned to OS after each retention reaper cycle (default 1024). See #919."
   },
+  "metrics": {
+    "sampleIntervalSec": 300,
+    "_comment": "Observer metrics sampling interval used by the ingestor. Default 300 seconds."
+  },
+  "validateSignatures": true,
+  "_comment_validateSignatures": "Validate MeshCore advert signatures during decode/ingest. Default true; set false only for diagnostics with known bad test data.",
   "_comment_ingestorStats": "Ingestor publishes a 1-Hz stats snapshot consumed by the server's /api/perf/io and /api/perf/write-sources endpoints (#1120). Path is configured via the CORESCOPE_INGESTOR_STATS environment variable on the INGESTOR process. Default: /tmp/corescope-ingestor-stats.json. The writer uses O_NOFOLLOW + 0o600, so a pre-planted symlink in /tmp cannot be used to clobber an arbitrary file. SECURITY: in shared-tmp environments (multi-tenant hosts), point CORESCOPE_INGESTOR_STATS at a private directory like /var/lib/corescope/ingestor-stats.json that only the corescope user can write to.",
   "https": {
     "cert": "/path/to/cert.pem",
@@ -39,6 +50,33 @@
     "statusRed": "#b54a4a",
     "_comment": "CSS color overrides. Use the in-app Theme Customizer for live preview, then export values here."
   },
+  "themeDark": {
+    "accent": "#4a9eff",
+    "accentHover": "#6db3ff",
+    "navBg": "#0f0f23",
+    "navBg2": "#1a1a2e",
+    "navText": "#ffffff",
+    "navTextMuted": "#cbd5e1",
+    "background": "#0f0f23",
+    "text": "#e2e8f0",
+    "textMuted": "#a8b8cc",
+    "border": "#334155",
+    "surface1": "#1a1a2e",
+    "surface2": "#232340",
+    "surface3": "#2d2d50",
+    "sectionBg": "#1e1e34",
+    "cardBg": "#1a1a2e",
+    "contentBg": "#0f0f23",
+    "detailBg": "#232340",
+    "inputBg": "#1e1e34",
+    "rowStripe": "#1e1e34",
+    "rowHover": "#2d2d50",
+    "selectedBg": "#1e3a5f",
+    "statusGreen": "#22c55e",
+    "statusYellow": "#eab308",
+    "statusRed": "#ef4444",
+    "_comment": "Dark-mode CSS color overrides. Same keys as theme."
+  },
   "nodeColors": {
     "repeater": "#dc2626",
     "companion": "#2563eb",
@@ -46,6 +84,19 @@
     "sensor": "#d97706",
     "observer": "#8b5cf6",
     "_comment": "Marker/badge colors per node role. Used on map, nodes list, and live feed."
+  },
+  "typeColors": {
+    "ADVERT": "#22c55e",
+    "GRP_TXT": "#3b82f6",
+    "TXT_MSG": "#f59e0b",
+    "ACK": "#6b7280",
+    "REQUEST": "#a855f7",
+    "RESPONSE": "#06b6d4",
+    "TRACE": "#ec4899",
+    "PATH": "#14b8a6",
+    "ANON_REQ": "#f43f5e",
+    "UNKNOWN": "#6b7280",
+    "_comment": "Packet-type colors used by the UI and Theme Customizer."
   },
   "home": {
     "heroTitle": "CoreScope",
@@ -140,6 +191,8 @@
   "channelKeys": {
     "Public": "8b3387e9c5cdea6ac9e5edbaa115cd72"
   },
+  "channelKeysPath": "",
+  "_comment_channelKeysPath": "Optional path to an external JSON file containing channelKeys. Empty = use inline channelKeys only.",
   "hashChannels": [
     "#LongFast",
     "#test",
@@ -159,6 +212,14 @@
     "relayActiveHours": 24,
     "_comment": "How long (hours) before nodes show as degraded/silent. 'infra' = repeaters & rooms, 'node' = companions & others. relayActiveHours: a repeater is shown as 'actively relaying' if its pubkey appeared as a path hop in a non-advert packet within this window (issue #662)."
   },
+  "roles": {
+    "colors": {},
+    "labels": {},
+    "style": {},
+    "emoji": {},
+    "sort": [],
+    "_comment": "Optional role overrides merged into the frontend role maps. Leave objects empty to use built-in role labels/colors/styles."
+  },
   "reachThresholds": {
     "mediumMinObservers": 2,
     "goodMinObservers": 4,
@@ -172,6 +233,37 @@
     ],
     "zoom": 9
   },
+  "tiles": {
+    "dark": "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+    "light": "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+    "_comment": "Leaflet tile URL templates used by the map and live map."
+  },
+  "snrThresholds": {
+    "excellent": 6,
+    "good": 0
+  },
+  "distThresholds": {
+    "local": 50,
+    "regional": 200
+  },
+  "maxHopDist": 1.8,
+  "limits": {
+    "topNodes": 15,
+    "topPairs": 12,
+    "topRingNodes": 8,
+    "topSenders": 10,
+    "topCollisionNodes": 10,
+    "recentReplay": 8,
+    "feedMax": 25
+  },
+  "perfSlowMs": 100,
+  "wsReconnectMs": 3000,
+  "cacheInvalidateMs": 5000,
+  "externalUrls": {
+    "flasher": "https://flasher.meshcore.co.uk/"
+  },
+  "corsAllowedOrigins": [],
+  "debugAffinity": false,
   "geo_filter": {
     "polygon": [
       [37.80, -122.52],
@@ -248,8 +340,9 @@
   "packetStore": {
     "maxMemoryMB": 1024,
     "estimatedPacketBytes": 450,
+    "maxResolvedPubkeyIndexEntries": 5000000,
     "retentionHours": 168,
-    "hotStartupHours": 0,
+    "hotStartupHours": 24,
     "_comment": "In-memory packet store. maxMemoryMB caps RAM usage. retentionHours: only packets younger than this are kept in memory (0 = unlimited). hotStartupHours: hours loaded synchronously at startup; background loader fills the remaining retentionHours window. 0 = disabled (loads full retentionHours synchronously, legacy behavior). Set to a positive value (e.g. 24) to reduce startup time on large DBs.",
     "_comment_gomemlimit": "On startup the server reads GOMEMLIMIT from the environment if set; otherwise it derives a Go runtime soft memory limit of maxMemoryMB * 1.5 and applies it via debug.SetMemoryLimit. This forces aggressive GC under cgroup pressure so the process self-throttles before the kernel SIGKILLs it. To override, set GOMEMLIMIT explicitly (e.g. GOMEMLIMIT=850MiB). See issue #836."
   },
@@ -262,6 +355,8 @@
     "maxEdgeKm": 500,
     "_comment": "maxAgeDays: neighbor edges older than this many days are pruned on startup and daily. Default 5. maxEdgeKm: geo-implausibility filter — when both endpoints have GPS, edges with haversine distance > maxEdgeKm are rejected at build time to prevent disambiguator self-reinforcement on wide-geo MQTT deployments. Default 500 km (well above any plausible terrestrial LoRa hop). 0 ⇒ use default; set negative to disable the filter. Rejected count surfaces in /api/analytics/neighbor-graph stats. Issue #1228."
   },
+  "neighborEdgesMaxAgeDays": 5,
+  "_comment_neighborEdgesMaxAgeDays": "Ingestor-side retention for neighbor_edges rows. 0 = default 5 days.",
   "batteryThresholds": {
     "lowMv": 3300,
     "criticalMv": 3000,
@@ -284,7 +379,6 @@
     ]
   },
   "_comment_compression": "Opt-in HTTP gzip middleware + WebSocket permessage-deflate. Both default to false — enable ONLY when your upstream reverse proxy is NOT already compressing. gzip: enables the gzipMiddleware wrapper around the HTTP handler. websocket: sets gorilla websocket Upgrader.EnableCompression. level: gzip compression level 1..9 (1=BestSpeed, 9=BestCompression, default 6). minSizeBytes: advisory minimum response size below which compression would not pay off. contentTypes: MIME allow-list — only responses with these Content-Type values are compressed. Already-compressed types (image/*, video/*, audio/*, application/zip, application/x-gzip, application/pdf, application/octet-stream) are always skipped, as are responses whose handler already set Content-Encoding. Omit contentTypes to use the built-in default allow-list.",
-  "_comment_mqttSources": "Each source connects to an MQTT broker. topics: what to subscribe to. iataFilter: only ingest packets from these regions (optional).",
   "_comment_channelKeys": "Hex keys for decrypting channel messages. Key name = channel display name. public channel key is well-known.",
   "_comment_hashChannels": "Channel names whose keys are derived via SHA256. Key = SHA256(name)[:16]. Listed here so the ingestor can auto-derive keys.",
   "hashRegions": [
@@ -310,6 +404,25 @@
     }
   },
   "_comment_analytics": "Issue #1240 + #1256 + #1265. Each analytics endpoint (topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew) is recomputed in the background on the configured interval and served from an atomic-pointer cache. Reads never block on compute. Default 300s (5 min) per endpoint reflects the operator principle: serving slightly stale data quickly beats real-time data slowly. Lower values = fresher data at higher CPU cost. Only the default query (no region/window) is precomputed; region- and window-filtered requests fall back to the legacy on-request compute + 60s TTL cache.",
+  "rateLimit": {
+    "generalRps": 50,
+    "generalBurst": 100,
+    "expensiveRps": 5,
+    "expensiveBurst": 15,
+    "_comment": "Per-client-IP /api token buckets. Expensive applies to /api/analytics/*, /api/decode, and /api/paths/inspect."
+  },
+  "rf": {
+    "maxRangeKm": 20,
+    "bearings": 36,
+    "stepKm": 0.5
+  },
+  "_comment_rf": "RF coverage analysis probing defaults.",
+  "meshMapper": {
+    "apiUrl": "https://meshmapper.net/api/coverage",
+    "apiKey": "",
+    "cacheTTLSeconds": 300
+  },
+  "_comment_meshMapper": "Optional MeshMapper coverage layer proxy. Leave apiKey empty to disable.",
   "los": {
     "elevationURL": "https://api.opentopodata.org",
     "sampleMin": 50,

@@ -1221,6 +1221,8 @@ window.addEventListener('DOMContentLoaded', () => {
       const navTopPaddingL = parseFloat(getComputedStyle(navTop).paddingLeft)  || 0;
       const navTopPaddingR = parseFloat(getComputedStyle(navTop).paddingRight) || 0;
       const navPadding     = navTopPaddingL + navTopPaddingR;
+      const navTopGap = parseFloat(getComputedStyle(navTop).columnGap ||
+                                   getComputedStyle(navTop).gap || '0') || 0;
       // #1105 MINOR 1: compute the More-button reserve from its actual
       // rendered width on first measure, instead of a hard-coded 70px
       // fallback. Cached so we don't re-measure (offsetWidth is 0 when
@@ -1245,12 +1247,12 @@ window.addEventListener('DOMContentLoaded', () => {
         const moreW = liveMoreW > 0 ? liveMoreW
                     : (cachedMoreW > 0 ? cachedMoreW : MORE_BTN_RESERVE_PX);
         const rightW  = navRightEl.scrollWidth; // intrinsic, ignores clipping
-        // Layout: [navPadding/2] brand [gap] links [gap] more [space-between] right [navPadding/2]
+        // Layout: [navPadding/2] brand [gap] links [gap] more [top-nav gap] right [navPadding/2]
         // .nav-left has exactly 2 internal gaps (brand→links, links→more); the 3rd
-        // navLeftGap previously used here was spurious (space-between, not a gap).
-        // navPadding replaces the old SAFETY=32 with the actual computed --gutter×2,
-        // which at 1600px is 64px vs the old 32px, preventing subtle end-link clip.
-        const needed  = navPadding + brandW + navLeftGap + linkW + linksGap + navLeftGap + moreW + rightW;
+        // navLeftGap previously used here was spurious. The top-nav flex gap is
+        // real space between nav-left and nav-right; reserving it prevents the
+        // right controls from being drawn over the More button when More exists.
+        const needed  = navPadding + brandW + navLeftGap + linkW + linksGap + navLeftGap + moreW + navTopGap + rightW;
         return needed <= window.innerWidth;
       }
       let i = 0;

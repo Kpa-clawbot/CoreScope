@@ -4290,11 +4290,19 @@ function destroy() { if (_rhMap) { _rhMap.remove(); _rhMap = null; } if (_rhThem
           var summary = document.getElementById('rhSummary');
           if (summary) {
             if (data.total_edges === 0) {
-              summary.textContent = 'No route edges with GPS coordinates in the last ' + hours + 'h.';
+              var candidates = data.candidate_edges || 0;
+              var missingGPS = data.missing_gps_edges || 0;
+              if (candidates > 0) {
+                summary.textContent = 'Found ' + candidates + ' route edge' + (candidates === 1 ? '' : 's') +
+                  ' in the last ' + hours + 'h, but ' + missingGPS + ' cannot be mapped because one or both endpoints lack GPS.';
+              } else {
+                summary.textContent = 'No route edges in the last ' + hours + 'h.';
+              }
             } else {
               var top = data.edges[0];
               var topName = top ? (top.name_a || top.node_a.slice(0,8)) + ' ↔ ' + (top.name_b || top.node_b.slice(0,8)) + ' (' + top.count + ' pkts)' : '';
-              summary.textContent = 'Total edges: ' + data.total_edges + (topName ? '  |  Highest volume: ' + topName : '');
+              summary.textContent = 'Mapped edges: ' + data.total_edges + (data.candidate_edges && data.candidate_edges !== data.total_edges ? ' of ' + data.candidate_edges : '') +
+                (topName ? '  |  Highest volume: ' + topName : '');
             }
           }
         })

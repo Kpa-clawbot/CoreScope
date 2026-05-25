@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // TestRouteHistoryEdgeNormalize verifies A→B and B→A collapse to the same key.
@@ -76,5 +77,70 @@ func TestHandleRouteHistory_EmptyDB(t *testing.T) {
 	}
 	if len(resp.Edges) != 0 {
 		t.Errorf("want 0 edges, got %d", len(resp.Edges))
+	}
+}
+
+func TestHandleRouteHistory_UsesResolvedPathForGPSNodes(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	seedTestData(t, db)
+
+	s := &Server{cfg: &Config{}, db: db}
+	req := httptest.NewRequest("GET", "/api/route-history?hours=6", nil)
+	rr := httptest.NewRecorder()
+	s.handleRouteHistory(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp routeHistoryResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.TotalEdges != 1 {
+		t.Fatalf("want 1 GPS edge from resolved_path, got %d (%+v)", resp.TotalEdges, resp)
+	}
+	e := resp.Edges[0]
+	if e.NodeA != "aabbccdd11223344" || e.NodeB != "eeff00112233aabb" {
+		t.Fatalf("edge used path_json prefixes instead of resolved pubkeys: %+v", e)
+	}
+	if e.NameA != "TestRepeater" || e.NameB != "TestCompanion" {
+		t.Fatalf("edge names not populated from nodes: %+v", e)
+	}
+	if resp.CandidateEdges != 1 || resp.MissingGPSEdges != 0 {
+		t.Fatalf("unexpected diagnostics: candidates=%d missingGPS=%d", resp.CandidateEdges, resp.MissingGPSEdges)
+	}
+}
+
+func TestHandleRouteHistory_DiagnosticsForMissingGPS(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.conn.Exec(`INSERT INTO nodes (public_key, name, role, lat, lon, last_seen)
+		VALUES ('node-a', 'Node A', 'repeater', 50.0, 5.0, ?),
+		       ('node-b', 'Node B', 'repeater', NULL, NULL, ?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.Exec(`INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES (100, 'AA', 'nogpshash', ?, 1, 9)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
+		VALUES (100, 1, '["aa","bb"]', ?, '["node-a","node-b"]')`, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{cfg: &Config{}, db: db}
+	req := httptest.NewRequest("GET", "/api/route-history?hours=168", nil)
+	rr := httptest.NewRecorder()
+	s.handleRouteHistory(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp routeHistoryResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.TotalEdges != 0 || resp.CandidateEdges != 1 || resp.MissingGPSEdges != 1 {
+		t.Fatalf("unexpected diagnostics: %+v", resp)
 	}
 }

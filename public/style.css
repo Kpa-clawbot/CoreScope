@@ -526,7 +526,7 @@ input[type="week"] {
    clamp() tokens so the bar scales smoothly across viewport widths.
    The hamburger and stacked mobile layout still take over at <768px. */
 .top-nav {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-lg);
   background: linear-gradient(135deg, var(--nav-bg) 0%, var(--nav-bg2) 50%, var(--nav-bg) 100%); color: var(--nav-text);
   padding: 0 var(--gutter); height: 52px;
   position: sticky; top: 0; z-index: 1100;
