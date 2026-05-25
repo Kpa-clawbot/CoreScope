@@ -189,15 +189,17 @@ func TestChannelMessages_OrderedByLatestSeen_InMemory(t *testing.T) {
 	now := time.Now().UTC()
 	tOld := now.Add(-24 * time.Hour)
 	tMid := now.Add(-1 * time.Hour)
+	tNewest := now.Add(-30 * time.Minute)
 	tFresh := now.Add(-1 * time.Minute)
 
 	tOldStr := tOld.Format(time.RFC3339)
 	tMidStr := tMid.Format(time.RFC3339)
+	tNewestStr := tNewest.Format(time.RFC3339)
 
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
 		VALUES ('obsO', 'ObsO', 'SJC', ?, '2026-01-01T00:00:00Z', 10)`, tOldStr)
 
-	// tx-A: FirstSeen 24h ago, observations at T-24h and T-1m.
+	// tx-A: FirstSeen 24h ago, LatestSeen NOW (T-1m). Old insertion order.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
 		VALUES ('AAAA', 'order_hash_a', ?, 1, 5,
 			'{"type":"CHAN","channel":"#ord","text":"Alpha: hb","sender":"Alpha"}', '#ord')`, tOldStr)
@@ -206,29 +208,56 @@ func TestChannelMessages_OrderedByLatestSeen_InMemory(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (1, 1, 11.0, -88, '["aa"]', ?)`, tFresh.Unix())
 
-	// tx-B: FirstSeen 1h ago, single observation at T-1h.
+	// tx-B: FirstSeen 1h ago, LatestSeen 1h ago. OLDEST.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
 		VALUES ('BBBB', 'order_hash_b', ?, 1, 5,
 			'{"type":"CHAN","channel":"#ord","text":"Bravo: msg","sender":"Bravo"}', '#ord')`, tMidStr)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (2, 1, 9.0, -91, '["bb"]', ?)`, tMid.Unix())
 
+	// tx-C: FirstSeen 30m ago, LatestSeen 30m ago. Middle.
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('CCCC', 'order_hash_c', ?, 1, 5,
+			'{"type":"CHAN","channel":"#ord","text":"Charlie: msg","sender":"Charlie"}', '#ord')`, tNewestStr)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (3, 1, 9.0, -91, '["cc"]', ?)`, tNewest.Unix())
+
 	store := NewPacketStore(db, nil)
 	store.Load()
 
-	msgs, total := store.GetChannelMessages("#ord", 10, 0)
-	if total != 2 {
-		t.Fatalf("in-memory: want total=2 (both tx returned), got %d", total)
+	// Full-page: ordering check (fix #1 gates this — without sort,
+	// msgOrder is insertion order and Alpha lands FIRST, not LAST).
+	msgsAll, totalAll := store.GetChannelMessages("#ord", 10, 0)
+	if totalAll != 3 {
+		t.Fatalf("in-memory: want total=3, got %d", totalAll)
 	}
-	if len(msgs) != 2 {
-		t.Fatalf("in-memory: want 2 msgs in page, got %d (tx-A may have been excluded by FirstSeen-based selection)", len(msgs))
+	if len(msgsAll) != 3 {
+		t.Fatalf("in-memory: want 3 msgs, got %d", len(msgsAll))
 	}
-	// Newest-LatestSeen LAST (tail convention). tx-A.LatestSeen > tx-B.LatestSeen,
-	// so tx-A ("Alpha") must come AFTER tx-B ("Bravo").
-	sender0, _ := msgs[0]["sender"].(string)
-	sender1, _ := msgs[1]["sender"].(string)
-	if sender0 != "Bravo" || sender1 != "Alpha" {
-		t.Errorf("in-memory: want order [Bravo, Alpha] (by LatestSeen ASC), got [%q, %q]", sender0, sender1)
+	wantOrder := []string{"Bravo", "Charlie", "Alpha"}
+	for i, want := range wantOrder {
+		got, _ := msgsAll[i]["sender"].(string)
+		if got != want {
+			t.Errorf("in-memory: msg[%d] want sender=%q, got %q (LatestSeen ASC, fix #1)", i, want, got)
+		}
+	}
+
+	// Small page (limit=2): tx-A (Alpha) MUST be included because its
+	// LatestSeen is freshest, even though FirstSeen is oldest. Without
+	// fix #1, the in-memory path takes msgOrder[total-2:] which would
+	// drop Alpha (it sits at msgOrder[0] by insertion order).
+	msgsPage, _ := store.GetChannelMessages("#ord", 2, 0)
+	if len(msgsPage) != 2 {
+		t.Fatalf("in-memory: want 2 msgs at limit=2, got %d", len(msgsPage))
+	}
+	hasAlpha := false
+	for _, m := range msgsPage {
+		if s, _ := m["sender"].(string); s == "Alpha" {
+			hasAlpha = true
+		}
+	}
+	if !hasAlpha {
+		t.Errorf("in-memory: tx-A (Alpha) excluded from limit=2 page — FirstSeen-based tail selection bug (fix #1 reverted?)")
 	}
 }
 
@@ -239,14 +268,19 @@ func TestChannelMessages_OrderedByLatestSeen_DB(t *testing.T) {
 	now := time.Now().UTC()
 	tOld := now.Add(-24 * time.Hour)
 	tMid := now.Add(-1 * time.Hour)
+	tNewest := now.Add(-30 * time.Minute)
 	tFresh := now.Add(-1 * time.Minute)
 
 	tOldStr := tOld.Format(time.RFC3339)
 	tMidStr := tMid.Format(time.RFC3339)
+	tNewestStr := tNewest.Format(time.RFC3339)
 
 	db.conn.Exec(`INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count)
 		VALUES ('obsD', 'ObsD', 'SJC', ?, '2026-01-01T00:00:00Z', 10)`, tOldStr)
 
+	// tx-A: FirstSeen 24h ago, observations at T-24h and T-1m (LatestSeen
+	// = T-1m, the FRESHEST). Despite the freshest LatestSeen, a
+	// FirstSeen-DESC selection would push it OFF a small page.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
 		VALUES ('AADB', 'order_db_hash_a', ?, 1, 5,
 			'{"type":"CHAN","channel":"#ordb","text":"Alpha: hb","sender":"Alpha"}', '#ordb')`, tOldStr)
@@ -255,25 +289,66 @@ func TestChannelMessages_OrderedByLatestSeen_DB(t *testing.T) {
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (1, 1, 11.0, -88, '["aa"]', ?)`, tFresh.Unix())
 
+	// tx-B: FirstSeen 1h ago, LatestSeen 1h ago. OLDEST LatestSeen.
 	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
 		VALUES ('BBDB', 'order_db_hash_b', ?, 1, 5,
 			'{"type":"CHAN","channel":"#ordb","text":"Bravo: msg","sender":"Bravo"}', '#ordb')`, tMidStr)
 	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
 		VALUES (2, 1, 9.0, -91, '["bb"]', ?)`, tMid.Unix())
 
-	msgs, total, err := db.GetChannelMessages("#ordb", 10, 0)
+	// tx-C: FirstSeen 30m ago, LatestSeen 30m ago. Middle LatestSeen.
+	// With FirstSeen-DESC selection + limit=2, page = [tx-C, tx-B] and
+	// tx-A is EXCLUDED — that's the selection bug fix #2 gates.
+	db.conn.Exec(`INSERT INTO transmissions (raw_hex, hash, first_seen, route_type, payload_type, decoded_json, channel_hash)
+		VALUES ('CCDB', 'order_db_hash_c', ?, 1, 5,
+			'{"type":"CHAN","channel":"#ordb","text":"Charlie: msg","sender":"Charlie"}', '#ordb')`, tNewestStr)
+	db.conn.Exec(`INSERT INTO observations (transmission_id, observer_idx, snr, rssi, path_json, timestamp)
+		VALUES (3, 1, 9.0, -91, '["cc"]', ?)`, tNewest.Unix())
+
+	msgs, total, err := db.GetChannelMessages("#ordb", 2, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total != 2 {
-		t.Fatalf("DB: want total=2 (both tx returned), got %d", total)
+	if total != 3 {
+		t.Fatalf("DB: want total=3, got %d", total)
 	}
 	if len(msgs) != 2 {
-		t.Fatalf("DB: want 2 msgs in page, got %d (tx-A may have been excluded by FirstSeen-based selection)", len(msgs))
+		t.Fatalf("DB: want 2 msgs in page (limit=2), got %d", len(msgs))
 	}
+	// Selection (fix #2): the page MUST include tx-A (Alpha) because its
+	// LatestSeen is the newest — even though its FirstSeen is the OLDEST.
+	// With limit=2 + LatestSeen-DESC selection, page = [Alpha, Charlie].
+	// Returned ASC by LatestSeen (newest LAST, fix #3) = [Charlie, Alpha].
 	sender0, _ := msgs[0]["sender"].(string)
 	sender1, _ := msgs[1]["sender"].(string)
-	if sender0 != "Bravo" || sender1 != "Alpha" {
-		t.Errorf("DB: want order [Bravo, Alpha] (by LatestSeen ASC), got [%q, %q]", sender0, sender1)
+	if sender0 != "Charlie" || sender1 != "Alpha" {
+		t.Errorf("DB: want order [Charlie, Alpha] (page selected by LatestSeen DESC, returned ASC, fix #2+#3), got [%q, %q]",
+			sender0, sender1)
+	}
+	hasAlpha := false
+	for _, m := range msgs {
+		if s, _ := m["sender"].(string); s == "Alpha" {
+			hasAlpha = true
+		}
+	}
+	if !hasAlpha {
+		t.Errorf("DB: tx-A (Alpha) excluded from page — FirstSeen-based selection bug (fix #2 reverted?)")
+	}
+
+	// Also exercise large-page case (limit > total): ordering-only check.
+	msgsAll, totalAll, err := db.GetChannelMessages("#ordb", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if totalAll != 3 || len(msgsAll) != 3 {
+		t.Fatalf("DB: want all 3 msgs at limit=10, got total=%d len=%d", totalAll, len(msgsAll))
+	}
+	// Expected ASC by LatestSeen: Bravo (T-1h), Charlie (T-30m), Alpha (T-1m).
+	wantOrder := []string{"Bravo", "Charlie", "Alpha"}
+	for i, want := range wantOrder {
+		got, _ := msgsAll[i]["sender"].(string)
+		if got != want {
+			t.Errorf("DB: msg[%d] want sender=%q, got %q (full order: must be LatestSeen ASC, fix #3)", i, want, got)
+		}
 	}
 }
