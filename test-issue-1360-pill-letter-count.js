@@ -80,8 +80,8 @@ const pillMatch = cssSrc.match(pillRuleRe);
 assert(pillMatch, '.mc-cluster .mc-pill rule found in style.css');
 if (pillMatch) {
   const body = pillMatch[1];
-  assert(/max-width\s*:/.test(body),
-    '.mc-pill declares max-width (bounds pill width for overflow)');
+  // #1364: dropped `max-width` — it over-clamped multi-digit counts.
+  // Graceful-degrade ellipsis assertion stays.
   assert(/text-overflow\s*:\s*ellipsis/.test(body),
     '.mc-pill declares text-overflow: ellipsis (graceful clip)');
 }

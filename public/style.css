@@ -3387,10 +3387,13 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .mc-cluster .mc-pill {
   display: inline-block; min-width: 12px; padding: 1px 3px;
   border-radius: 3px;
-  /* #1360 follow-up: defense-in-depth cap for pathological 4+ digit counts.
-     JS caps the rendered text at "999+" (max 4 chars); this bounds visual
-     width if a stray render slips through. */
-  max-width: 4ch; overflow: hidden; text-overflow: ellipsis;
+  /* #1364: removed the prior `max-width` cap — it clamped the BOX
+     (including the 1px 3px padding) to ~2.5ch of text, ellipsizing `R60`
+     to `R…`. JS in map.js already caps counts at "999+" (max 5 chars:
+     `R999+`), which is the load-bearing safety. `overflow:hidden` +
+     `text-overflow:ellipsis` stay as belt-only graceful-degrade if the
+     JS cap is ever bypassed. */
+  overflow: hidden; text-overflow: ellipsis;
   /* Audit: bump 9px → 10px, monospace, dark text on every Wong hue.
      #1a1a1a on all 5 Wong hues passes SC 1.4.3 small-text (≥4.5:1).
      Sized in rem (0.625rem = 10px @ default 16px root) so user
