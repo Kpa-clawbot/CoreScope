@@ -3379,8 +3379,8 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .mc-cluster.mc-sm { width: 40px; height: 40px; border-width: 1.5px; border-style: solid; }
 .mc-cluster.mc-md { width: 48px; height: 48px; border-width: 2.5px; border-style: solid; }
 .mc-cluster.mc-lg { width: 56px; height: 56px; border-width: 2px;   border-style: double; }
-.mc-cluster .mc-count { font-size: 14px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
-.mc-cluster.mc-lg .mc-count { font-size: 16px; }
+.mc-cluster .mc-count { font-size: 0.875rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.mc-cluster.mc-lg .mc-count { font-size: 1rem; }
 .mc-cluster .mc-pills {
   display: flex; gap: 2px; margin-top: 3px;
 }
@@ -3388,8 +3388,10 @@ th.sort-active { color: var(--accent, #60a5fa); }
   display: inline-block; min-width: 12px; padding: 1px 3px;
   border-radius: 3px;
   /* Audit: bump 9px → 10px, monospace, dark text on every Wong hue.
-     #1a1a1a on all 5 Wong hues passes SC 1.4.3 small-text (≥4.5:1). */
-  font: 700 10px/1.1 ui-monospace, "SF Mono", Consolas, monospace;
+     #1a1a1a on all 5 Wong hues passes SC 1.4.3 small-text (≥4.5:1).
+     Sized in rem (0.625rem = 10px @ default 16px root) so user
+     font-size preferences scale the pill (SC 1.4.4 Resize Text 200%). */
+  font: 700 0.625rem/1.1 ui-monospace, "SF Mono", Consolas, monospace;
   letter-spacing: 0;
   color: #1a1a1a; text-align: center; text-shadow: none;
   border: 1px solid rgba(0,0,0,0.25);
@@ -3400,7 +3402,9 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .mc-mb-label {
   background: var(--mc-mb-fill);
   color: var(--mc-mb-text);
-  font: 600 12px/1.2 ui-monospace, "SF Mono", Consolas, monospace;
+  /* Sized in rem (0.75rem = 12px @ default root) so user font-size
+     preferences scale the label per SC 1.4.4 Resize Text 200%. */
+  font: 600 0.75rem/1.2 ui-monospace, "SF Mono", Consolas, monospace;
   letter-spacing: 0.02em;
   padding: 2px 5px 2px 4px;
   border-left: 3px solid transparent;
