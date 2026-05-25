@@ -43,8 +43,9 @@ type rhEdgeData struct {
 }
 
 type routeHistoryCacheState struct {
-	mu      sync.Mutex
-	entries map[int]routeHistoryCacheEntry
+	mu       sync.Mutex
+	entries  map[int]routeHistoryCacheEntry
+	inFlight map[int]*routeHistoryInFlight
 }
 
 type routeHistoryCacheEntry struct {
@@ -52,16 +53,26 @@ type routeHistoryCacheEntry struct {
 	expiresAt time.Time
 }
 
-const routeHistoryCacheTTL = 15 * time.Second
+type routeHistoryInFlight struct {
+	done    chan struct{}
+	payload []byte
+	err     error
+}
+
+const routeHistoryCacheTTL = 60 * time.Second
 
 func (c *routeHistoryCacheState) get(hours int) []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.getLocked(hours, time.Now())
+}
+
+func (c *routeHistoryCacheState) getLocked(hours int, now time.Time) []byte {
 	if c.entries == nil {
 		return nil
 	}
 	entry, ok := c.entries[hours]
-	if !ok || time.Now().After(entry.expiresAt) {
+	if !ok || now.After(entry.expiresAt) {
 		delete(c.entries, hours)
 		return nil
 	}
@@ -70,9 +81,59 @@ func (c *routeHistoryCacheState) get(hours int) []byte {
 	return payload
 }
 
+func (c *routeHistoryCacheState) getOrStart(hours int) ([]byte, *routeHistoryInFlight, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if payload := c.getLocked(hours, time.Now()); payload != nil {
+		return payload, nil, false
+	}
+	if c.inFlight == nil {
+		c.inFlight = make(map[int]*routeHistoryInFlight)
+	}
+	if call := c.inFlight[hours]; call != nil {
+		return nil, call, false
+	}
+	call := &routeHistoryInFlight{done: make(chan struct{})}
+	c.inFlight[hours] = call
+	return nil, call, true
+}
+
+func (c *routeHistoryCacheState) finish(hours int, call *routeHistoryInFlight, payload []byte, err error) {
+	c.mu.Lock()
+	if c.inFlight != nil && c.inFlight[hours] == call {
+		delete(c.inFlight, hours)
+	}
+	if err == nil && payload != nil {
+		c.setLocked(hours, payload, time.Now())
+	}
+	if payload != nil {
+		call.payload = make([]byte, len(payload))
+		copy(call.payload, payload)
+	}
+	call.err = err
+	c.mu.Unlock()
+	close(call.done)
+}
+
+func (c *routeHistoryCacheState) wait(call *routeHistoryInFlight) ([]byte, error) {
+	<-call.done
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if call.err != nil {
+		return nil, call.err
+	}
+	payload := make([]byte, len(call.payload))
+	copy(payload, call.payload)
+	return payload, nil
+}
+
 func (c *routeHistoryCacheState) set(hours int, payload []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.setLocked(hours, payload, time.Now())
+}
+
+func (c *routeHistoryCacheState) setLocked(hours int, payload []byte, now time.Time) {
 	if c.entries == nil {
 		c.entries = make(map[int]routeHistoryCacheEntry)
 	}
@@ -80,7 +141,7 @@ func (c *routeHistoryCacheState) set(hours int, payload []byte) {
 	copy(copied, payload)
 	c.entries[hours] = routeHistoryCacheEntry{
 		payload:   copied,
-		expiresAt: time.Now().Add(routeHistoryCacheTTL),
+		expiresAt: now.Add(routeHistoryCacheTTL),
 	}
 }
 
@@ -95,20 +156,42 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 		hours = n
 	}
 
-	if payload := s.routeHistoryCache.get(hours); payload != nil {
+	payload, call, started := s.routeHistoryCache.getOrStart(hours)
+	if payload != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload)
+		return
+	}
+	if !started {
+		payload, err := s.routeHistoryCache.wait(call)
+		if err != nil || payload == nil {
+			writeError(w, http.StatusInternalServerError, "database error")
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(payload)
 		return
 	}
 
+	payload, err := s.buildRouteHistoryPayload(r, hours)
+	s.routeHistoryCache.finish(hours, call, payload, err)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(payload)
+}
+
+func (s *Server) buildRouteHistoryPayload(r *http.Request, hours int) ([]byte, error) {
 	since := time.Now().Add(-time.Duration(hours) * time.Hour).UTC().Format(time.RFC3339)
 	edgeMap := map[rhEdgeKey]*rhEdgeData{}
 
-	// Serve from the in-memory store only when resolved_path is unavailable.
-	// Current schemas persist resolved_path, which turns short hop prefixes into
-	// full pubkeys and is required for reliable node/GPS joins.
+	// Prefer the in-memory store when it covers the requested window. For modern
+	// schemas we batch-fetch resolved_path only for the loaded tx IDs, avoiding a
+	// wide observations scan on every route-history cache miss.
 	servedFromStore := false
-	if s.store != nil && (s.db == nil || !s.db.hasResolvedPath) {
+	if s.store != nil {
 		s.store.mu.RLock()
 		oldest := s.store.oldestLoaded
 		snap := s.store.packets
@@ -122,8 +205,7 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 
 	if !servedFromStore {
 		if err := buildRouteHistoryEdgesFromDB(r, s, since, edgeMap); err != nil {
-			writeError(w, http.StatusInternalServerError, "database error")
-			return
+			return nil, err
 		}
 	}
 
@@ -198,12 +280,9 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	payload, err := json.Marshal(resp)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "json error")
-		return
+		return nil, err
 	}
-	s.routeHistoryCache.set(hours, payload)
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(payload)
+	return payload, nil
 }
 
 func buildRouteHistoryEdgesFromSnap(store *PacketStore, snap []*StoreTx, since string, edgeMap map[rhEdgeKey]*rhEdgeData) {
@@ -224,29 +303,53 @@ func buildRouteHistoryEdgesFromSnap(store *PacketStore, snap []*StoreTx, since s
 	if store != nil && store.db != nil && store.db.hasResolvedPath {
 		rpByTx = store.prefetchResolvedPathsForTxs(txIDs)
 	}
+	hasResolvedPath := store != nil && store.db != nil && store.db.hasResolvedPath
 	for _, tx := range txs {
-		if rp := resolvedPathForTxBestFromCache(tx, rpByTx[tx.ID]); rp != nil {
-			if addRouteHistoryEdgesFromResolvedPath(tx.Hash, rp, tx.FirstSeen, edgeMap) > 0 {
-				continue
+		if hasResolvedPath {
+			if rp := resolvedPathForTxBestFromCache(tx, rpByTx[tx.ID]); rp != nil {
+				addRouteHistoryEdgesFromResolvedPath(tx.Hash, rp, tx.FirstSeen, edgeMap)
 			}
+			continue
 		}
 		addRouteHistoryEdges(tx.Hash, tx.PathJSON, tx.FirstSeen, edgeMap)
 	}
 }
 
 func buildRouteHistoryEdgesFromDB(r *http.Request, s *Server, since string, edgeMap map[rhEdgeKey]*rhEdgeData) error {
-	resolvedPathSelect := "NULL AS resolved_path"
-	resolvedPathWhere := ""
 	if s.db.hasResolvedPath {
-		resolvedPathSelect = "o.resolved_path"
-		resolvedPathWhere = " OR (o.resolved_path IS NOT NULL AND o.resolved_path != '' AND o.resolved_path != '[]')"
+		rows, err := s.db.conn.QueryContext(r.Context(),
+			`SELECT t.hash, o.resolved_path, t.first_seen
+			 FROM observations o
+			 JOIN transmissions t ON t.id = o.transmission_id
+			 WHERE t.first_seen >= ?
+			   AND o.resolved_path IS NOT NULL
+			   AND o.resolved_path != ''
+			   AND o.resolved_path != '[]'`,
+			since,
+		)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var hash, resolvedPath, firstSeen string
+			if err := rows.Scan(&hash, &resolvedPath, &firstSeen); err != nil {
+				continue
+			}
+			addRouteHistoryEdges(hash, resolvedPath, firstSeen, edgeMap)
+		}
+		return rows.Err()
 	}
+
 	rows, err := s.db.conn.QueryContext(r.Context(),
-		`SELECT t.hash, o.path_json, `+resolvedPathSelect+`, t.first_seen
+		`SELECT t.hash, o.path_json, t.first_seen
 		 FROM transmissions t
 		 JOIN observations o ON o.transmission_id = t.id
 		 WHERE t.first_seen >= ?
-		   AND ((o.path_json IS NOT NULL AND o.path_json != '' AND o.path_json != '[]')`+resolvedPathWhere+`)`,
+		   AND o.path_json IS NOT NULL
+		   AND o.path_json != ''
+		   AND o.path_json != '[]'`,
 		since,
 	)
 	if err != nil {
@@ -256,30 +359,13 @@ func buildRouteHistoryEdgesFromDB(r *http.Request, s *Server, since string, edge
 
 	for rows.Next() {
 		var hash, firstSeen string
-		var pathJSON, resolvedPath *string
-		if err := rows.Scan(&hash, &pathJSON, &resolvedPath, &firstSeen); err != nil {
+		var pathJSON string
+		if err := rows.Scan(&hash, &pathJSON, &firstSeen); err != nil {
 			continue
 		}
-		addRouteHistoryEdgesFromPaths(hash, strPtrValue(resolvedPath), strPtrValue(pathJSON), firstSeen, edgeMap)
+		addRouteHistoryEdges(hash, pathJSON, firstSeen, edgeMap)
 	}
 	return rows.Err()
-}
-
-func strPtrValue(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
-
-// addRouteHistoryEdgesFromPaths prefers resolvedPath because it contains full
-// node pubkeys. pathJSON stores wire path prefixes and is only useful as a
-// fallback on legacy rows without resolved_path.
-func addRouteHistoryEdgesFromPaths(hash, resolvedPath, pathJSON, firstSeen string, edgeMap map[rhEdgeKey]*rhEdgeData) {
-	if addRouteHistoryEdges(hash, resolvedPath, firstSeen, edgeMap) {
-		return
-	}
-	addRouteHistoryEdges(hash, pathJSON, firstSeen, edgeMap)
 }
 
 func addRouteHistoryEdgesFromResolvedPath(hash string, resolvedPath []*string, firstSeen string, edgeMap map[rhEdgeKey]*rhEdgeData) int {

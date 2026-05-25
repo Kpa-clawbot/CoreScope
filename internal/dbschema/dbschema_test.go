@@ -98,6 +98,12 @@ func TestApplyAddsOptionalColumns_CanonicalSource(t *testing.T) {
 			t.Errorf("after Apply: %s.%s missing — dbschema must be the source of truth for this optional column (#1321)", c.table, c.col)
 		}
 	}
+
+	var indexName string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name='idx_obs_tx_resolved_path'`).Scan(&indexName)
+	if err != nil {
+		t.Fatalf("after Apply: idx_obs_tx_resolved_path missing: %v", err)
+	}
 }
 
 // TestAssertReady_RequiresOptionalColumns enforces that AssertReady

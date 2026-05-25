@@ -52,6 +52,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureResolvedPathColumn(rw, logf); err != nil {
 		return fmt.Errorf("ensure resolved_path: %w", err)
 	}
+	if err := ensureResolvedPathIndexes(rw); err != nil {
+		return fmt.Errorf("ensure resolved_path indexes: %w", err)
+	}
 	if err := ensureObserverInactiveColumn(rw, logf); err != nil {
 		return fmt.Errorf("ensure observers.inactive: %w", err)
 	}
@@ -108,8 +111,18 @@ func AssertReady(ro *sql.DB) error {
 			missing = append(missing, fmt.Sprintf("table:%s (probe error: %v)", name, err))
 		}
 	}
+	mustIndex := func(name string) {
+		var n int
+		err := ro.QueryRow(`SELECT 1 FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&n)
+		if errors.Is(err, sql.ErrNoRows) {
+			missing = append(missing, "index:"+name)
+		} else if err != nil {
+			missing = append(missing, fmt.Sprintf("index:%s (probe error: %v)", name, err))
+		}
+	}
 
 	mustTable("neighbor_edges")
+	mustIndex("idx_obs_tx_resolved_path")
 	mustCol("observations", "resolved_path")
 	mustCol("observers", "inactive")
 	mustCol("observers", "last_packet_at")
@@ -206,6 +219,13 @@ func ensureServerIndexes(rw *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+func ensureResolvedPathIndexes(rw *sql.DB) error {
+	_, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_obs_tx_resolved_path
+		ON observations(transmission_id)
+		WHERE resolved_path IS NOT NULL AND resolved_path != '' AND resolved_path != '[]'`)
+	return err
 }
 
 func ensureNeighborEdgesTable(rw *sql.DB) error {

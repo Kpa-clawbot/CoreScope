@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -143,6 +144,91 @@ func TestHandleRouteHistory_DiagnosticsForMissingGPS(t *testing.T) {
 	if resp.TotalEdges != 0 || resp.CandidateEdges != 1 || resp.MissingGPSEdges != 1 ||
 		resp.MappedEdges != 0 || resp.RawEdges != 1 || resp.UnmappedEdges != 1 {
 		t.Fatalf("unexpected diagnostics: %+v", resp)
+	}
+}
+
+func TestHandleRouteHistory_ModernSchemaIgnoresRawPathFallback(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	now := time.Now().UTC()
+	recent := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	mustExecRouteHistoryDB(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon, last_seen)
+		VALUES ('raw-aa-node', 'Raw A', 'repeater', 50.0, 5.0, ?),
+		       ('raw-bb-node', 'Raw B', 'repeater', 51.0, 5.1, ?)`, recent, recent)
+	mustExecRouteHistoryDB(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen, route_type, payload_type)
+		VALUES (200, 'AA', 'rawpathonly', ?, 1, 9)`, recent)
+	mustExecRouteHistoryDB(t, db, `INSERT INTO observations (transmission_id, observer_idx, path_json, timestamp, resolved_path)
+		VALUES (200, 1, '["raw-aa-node","raw-bb-node"]', ?, NULL)`, now.Unix())
+
+	s := &Server{cfg: &Config{}, db: db}
+	req := httptest.NewRequest("GET", "/api/route-history?hours=6", nil)
+	rr := httptest.NewRecorder()
+	s.handleRouteHistory(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp routeHistoryResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.RawEdges != 0 || resp.UnmappedEdges != 0 || resp.MissingGPSEdges != 0 || resp.MappedEdges != 0 {
+		t.Fatalf("modern schema should ignore unresolved path_json rows, got %+v", resp)
+	}
+}
+
+func TestBuildRouteHistoryEdgesFromSnap_ModernSchemaIgnoresRawPathFallback(t *testing.T) {
+	nodeA := "aa11111111111111"
+	nodeB := "bb22222222222222"
+	store := &PacketStore{
+		db: &DB{hasResolvedPath: true},
+		packets: []*StoreTx{
+			{
+				ID:        1,
+				Hash:      "rawonly",
+				FirstSeen: "2026-01-01T01:00:00Z",
+				PathJSON:  `["` + nodeA + `","` + nodeB + `"]`,
+			},
+		},
+	}
+	edgeMap := map[rhEdgeKey]*rhEdgeData{}
+	buildRouteHistoryEdgesFromSnap(store, store.packets, "2026-01-01T00:00:00Z", edgeMap)
+	if len(edgeMap) != 0 {
+		t.Fatalf("modern in-memory path should not fall back to raw path_json without resolved_path, got %d edge(s)", len(edgeMap))
+	}
+}
+
+func TestRouteHistoryCache_CoalescesInFlightByHourWindow(t *testing.T) {
+	var cache routeHistoryCacheState
+	if payload, call, started := cache.getOrStart(24); payload != nil || call == nil || !started {
+		t.Fatalf("first caller should start compute, payload=%q call=%v started=%v", payload, call, started)
+	}
+
+	_, call, started := cache.getOrStart(24)
+	if call == nil || started {
+		t.Fatalf("second caller should wait on existing in-flight call, call=%v started=%v", call, started)
+	}
+
+	want := []byte(`{"ok":true}`)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var got []byte
+	var waitErr error
+	go func() {
+		defer wg.Done()
+		got, waitErr = cache.wait(call)
+	}()
+	cache.finish(24, call, want, nil)
+	wg.Wait()
+
+	if waitErr != nil {
+		t.Fatalf("wait returned error: %v", waitErr)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("wait payload = %s, want %s", got, want)
+	}
+	if cached := cache.get(24); string(cached) != string(want) {
+		t.Fatalf("cached payload = %s, want %s", cached, want)
 	}
 }
 
