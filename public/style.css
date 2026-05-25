@@ -2802,6 +2802,14 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 /* ─── Region / Area filter bars ─── */
 .region-filter-bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; }
 .area-dropdown-menu { min-width: 160px; }
+.area-dropdown-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+}
 .area-dropdown-item.area-item-active { color: var(--accent); font-weight: 600; }
 .region-filter-container { margin: 0; padding: 0; display: inline-flex; align-items: center; }
 .region-pill {

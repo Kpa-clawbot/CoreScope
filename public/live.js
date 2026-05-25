@@ -3881,26 +3881,23 @@
     });
     if (wndCheck && wndCheck.checked) MapOverlays.initWind(map);
 
-    // MeshMapper: label starts hidden; probe at init time reveals it only when configured
-    fetch('/api/coverage/meshmapper', { method: 'HEAD' })
-      .then(function (r) {
-        if (r.status === 503) {
-          // API key not configured — keep hidden, clear any stale saved state
-          localStorage.setItem('meshcore-overlay-meshmapper', 'false');
-          return;
-        }
-        // Configured — reveal the toggle and restore saved state
-        if (mmLabel) mmLabel.style.display = '';
-        if (mmCheck && mmCheck.checked) {
-          MapOverlays.initMeshMapper(map, function () {
-            if (mmCheck) { mmCheck.checked = false; localStorage.setItem('meshcore-overlay-meshmapper', 'false'); }
-          });
-        }
-      })
-      .catch(function () {
-        // Network error — stay hidden
+    // MeshMapper is exposed only when config.json explicitly contains an API key.
+    Promise.resolve(window.MeshConfigReady).then(function () {
+      if (window.MESHMAPPER_CONFIGURED !== true) {
         localStorage.setItem('meshcore-overlay-meshmapper', 'false');
-      });
+        if (mmCheck) mmCheck.checked = false;
+        return;
+      }
+      if (mmLabel) mmLabel.style.display = '';
+      if (mmCheck && mmCheck.checked) {
+        MapOverlays.initMeshMapper(map, function () {
+          if (mmCheck) { mmCheck.checked = false; localStorage.setItem('meshcore-overlay-meshmapper', 'false'); }
+        });
+      }
+    }).catch(function () {
+      localStorage.setItem('meshcore-overlay-meshmapper', 'false');
+      if (mmCheck) mmCheck.checked = false;
+    });
 
     rhCheck && rhCheck.addEventListener('change', function () {
       localStorage.setItem('meshcore-overlay-route-history', this.checked);

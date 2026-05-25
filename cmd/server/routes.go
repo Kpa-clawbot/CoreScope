@@ -36,8 +36,8 @@ type Server struct {
 	buildTime string
 
 	// Cached runtime.MemStats to avoid stop-the-world pauses on every health check
-	memStatsMu   sync.Mutex
-	memStatsCache runtime.MemStats
+	memStatsMu       sync.Mutex
+	memStatsCache    runtime.MemStats
 	memStatsCachedAt time.Time
 
 	// Cached /api/stats response — recomputed at most once every 10s.
@@ -45,9 +45,9 @@ type Server struct {
 	// computing a fresh response (potentially blocked on s.mu.RLock during
 	// eviction), all other goroutines serve the existing stale cache instead
 	// of queuing behind statsMu for 90+ seconds.
-	statsMu       sync.Mutex
-	statsCache    *StatsResponse
-	statsCachedAt time.Time
+	statsMu        sync.Mutex
+	statsCache     *StatsResponse
+	statsCachedAt  time.Time
 	statsComputing bool
 
 	// Guards s.cfg.GeoFilter — read by ingest/handler goroutines, written by PUT handler
@@ -123,10 +123,13 @@ type Server struct {
 	obsAnalyticsCache map[string]*obsAnalyticsCacheEntry
 
 	losHandler *losHandler // elevation cache + HTTP client for LOS API calls
-	losOnce    sync.Once  // ensures losHandler is initialized exactly once
+	losOnce    sync.Once   // ensures losHandler is initialized exactly once
 
 	// MeshMapper coverage proxy cache.
 	meshMapperCache meshMapperCacheState
+
+	// Cached /api/route-history responses by hour window.
+	routeHistoryCache routeHistoryCacheState
 }
 
 // obsAnalyticsCacheEntry holds one cached /api/observers/:id/analytics response.
@@ -196,7 +199,7 @@ func NewServer(db *DB, cfg *Config, hub *Hub) *Server {
 }
 
 const (
-	memStatsTTL   = 5 * time.Second
+	memStatsTTL    = 5 * time.Second
 	healthCacheTTL = 5 * time.Second  // /api/health response cache
 	perfCacheTTL   = 10 * time.Second // /api/perf response cache
 )
@@ -452,21 +455,22 @@ func (s *Server) handleConfigCache(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ClientConfigResponse{
-		Roles:               s.cfg.Roles,
-		HealthThresholds:    s.cfg.GetHealthThresholds().ToClientMs(),
-		Tiles:               s.cfg.Tiles,
-		SnrThresholds:       s.cfg.SnrThresholds,
-		DistThresholds:      s.cfg.DistThresholds,
-		MaxHopDist:          s.cfg.MaxHopDist,
-		Limits:              s.cfg.Limits,
-		PerfSlowMs:          s.cfg.PerfSlowMs,
-		WsReconnectMs:       s.cfg.WsReconnectMs,
-		CacheInvalidateMs:   s.cfg.CacheInvalidMs,
-		ExternalUrls:        s.cfg.ExternalUrls,
-		PropagationBufferMs: float64(s.cfg.PropagationBufferMs()),
-		Timestamps:          s.cfg.GetTimestampConfig(),
-		DebugAffinity:       s.cfg.DebugAffinity,
-		ReachThresholds:     s.cfg.GetReachThresholds(),
+		Roles:                s.cfg.Roles,
+		HealthThresholds:     s.cfg.GetHealthThresholds().ToClientMs(),
+		Tiles:                s.cfg.Tiles,
+		SnrThresholds:        s.cfg.SnrThresholds,
+		DistThresholds:       s.cfg.DistThresholds,
+		MaxHopDist:           s.cfg.MaxHopDist,
+		Limits:               s.cfg.Limits,
+		PerfSlowMs:           s.cfg.PerfSlowMs,
+		WsReconnectMs:        s.cfg.WsReconnectMs,
+		CacheInvalidateMs:    s.cfg.CacheInvalidMs,
+		ExternalUrls:         s.cfg.ExternalUrls,
+		PropagationBufferMs:  float64(s.cfg.PropagationBufferMs()),
+		Timestamps:           s.cfg.GetTimestampConfig(),
+		DebugAffinity:        s.cfg.DebugAffinity,
+		ReachThresholds:      s.cfg.GetReachThresholds(),
+		MeshMapperConfigured: s.cfg.MeshMapper != nil && s.cfg.MeshMapper.APIKey != "",
 	})
 }
 
@@ -540,30 +544,30 @@ func (s *Server) buildThemeResponse() ThemeResponse {
 	}, s.cfg.Branding, theme.Branding)
 
 	themeColors := mergeMap(map[string]interface{}{
-		"accent":      "#4a9eff",
-		"accentHover": "#6db3ff",
-		"navBg":       "#0f0f23",
-		"navBg2":      "#1a1a2e",
-		"navText":     "#ffffff",
+		"accent":       "#4a9eff",
+		"accentHover":  "#6db3ff",
+		"navBg":        "#0f0f23",
+		"navBg2":       "#1a1a2e",
+		"navText":      "#ffffff",
 		"navTextMuted": "#cbd5e1",
-		"background":  "#f4f5f7",
-		"text":        "#1a1a2e",
-		"textMuted":   "#5b6370",
-		"border":      "#e2e5ea",
-		"surface1":    "#ffffff",
-		"surface2":    "#ffffff",
-		"surface3":    "#ffffff",
-		"sectionBg":   "#eef2ff",
-		"cardBg":      "#ffffff",
-		"contentBg":   "#f4f5f7",
-		"detailBg":    "#ffffff",
-		"inputBg":     "#ffffff",
-		"rowStripe":   "#f9fafb",
-		"rowHover":    "#eef2ff",
-		"selectedBg":  "#dbeafe",
-		"statusGreen": "#22c55e",
+		"background":   "#f4f5f7",
+		"text":         "#1a1a2e",
+		"textMuted":    "#5b6370",
+		"border":       "#e2e5ea",
+		"surface1":     "#ffffff",
+		"surface2":     "#ffffff",
+		"surface3":     "#ffffff",
+		"sectionBg":    "#eef2ff",
+		"cardBg":       "#ffffff",
+		"contentBg":    "#f4f5f7",
+		"detailBg":     "#ffffff",
+		"inputBg":      "#ffffff",
+		"rowStripe":    "#f9fafb",
+		"rowHover":     "#eef2ff",
+		"selectedBg":   "#dbeafe",
+		"statusGreen":  "#22c55e",
 		"statusYellow": "#eab308",
-		"statusRed":   "#ef4444",
+		"statusRed":    "#ef4444",
 	}, s.cfg.Theme, theme.Theme)
 
 	nodeColors := mergeMap(map[string]interface{}{
@@ -575,30 +579,30 @@ func (s *Server) buildThemeResponse() ThemeResponse {
 	}, s.cfg.NodeColors, theme.NodeColors)
 
 	themeDark := mergeMap(map[string]interface{}{
-		"accent":      "#4a9eff",
-		"accentHover": "#6db3ff",
-		"navBg":       "#0f0f23",
-		"navBg2":      "#1a1a2e",
-		"navText":     "#ffffff",
+		"accent":       "#4a9eff",
+		"accentHover":  "#6db3ff",
+		"navBg":        "#0f0f23",
+		"navBg2":       "#1a1a2e",
+		"navText":      "#ffffff",
 		"navTextMuted": "#cbd5e1",
-		"background":  "#0f0f23",
-		"text":        "#e2e8f0",
-		"textMuted":   "#a8b8cc",
-		"border":      "#334155",
-		"surface1":    "#1a1a2e",
-		"surface2":    "#232340",
-		"cardBg":      "#1a1a2e",
-		"contentBg":   "#0f0f23",
-		"detailBg":    "#232340",
-		"inputBg":     "#1e1e34",
-		"rowStripe":   "#1e1e34",
-		"rowHover":    "#2d2d50",
-		"selectedBg":  "#1e3a5f",
-		"statusGreen": "#22c55e",
+		"background":   "#0f0f23",
+		"text":         "#e2e8f0",
+		"textMuted":    "#a8b8cc",
+		"border":       "#334155",
+		"surface1":     "#1a1a2e",
+		"surface2":     "#232340",
+		"cardBg":       "#1a1a2e",
+		"contentBg":    "#0f0f23",
+		"detailBg":     "#232340",
+		"inputBg":      "#1e1e34",
+		"rowStripe":    "#1e1e34",
+		"rowHover":     "#2d2d50",
+		"selectedBg":   "#1e3a5f",
+		"statusGreen":  "#22c55e",
 		"statusYellow": "#eab308",
-		"statusRed":   "#ef4444",
-		"surface3":    "#2d2d50",
-		"sectionBg":   "#1e1e34",
+		"statusRed":    "#ef4444",
+		"surface3":     "#2d2d50",
+		"sectionBg":    "#1e1e34",
 	}, s.cfg.ThemeDark, theme.ThemeDark)
 	typeColors := mergeMap(map[string]interface{}{
 		"ADVERT":   "#22c55e",
@@ -1121,39 +1125,39 @@ func (s *Server) collectPerfSample() PerfSample {
 	s.perfStats.mu.Unlock()
 
 	sample := PerfSample{
-		Ts:              time.Now().UnixMilli(),
-		CpuPercent:      s.getCPUPercent(),
-		TotalSysMB:      float64(ms.Sys) / 1024 / 1024,
-		HeapAllocMB:     float64(ms.HeapAlloc) / 1024 / 1024,
-		HeapInuseMB:     float64(ms.HeapInuse) / 1024 / 1024,
-		HeapSysMB:       float64(ms.HeapSys) / 1024 / 1024,
-		LastPauseMs:     float64(ms.PauseNs[(ms.NumGC+255)%256]) / 1e6,
-		Goroutines:      runtime.NumGoroutine(),
-		PacketsInRAM:    packetsInRAM,
-		TrackedMB:       trackedMB,
-		CacheHitRate:    cacheHitRate,
-		AvgMs:           avgMs,
-		DbSizeMB:        dbSizeMB,
-		WalSizeMB:       walSizeMB,
+		Ts:           time.Now().UnixMilli(),
+		CpuPercent:   s.getCPUPercent(),
+		TotalSysMB:   float64(ms.Sys) / 1024 / 1024,
+		HeapAllocMB:  float64(ms.HeapAlloc) / 1024 / 1024,
+		HeapInuseMB:  float64(ms.HeapInuse) / 1024 / 1024,
+		HeapSysMB:    float64(ms.HeapSys) / 1024 / 1024,
+		LastPauseMs:  float64(ms.PauseNs[(ms.NumGC+255)%256]) / 1e6,
+		Goroutines:   runtime.NumGoroutine(),
+		PacketsInRAM: packetsInRAM,
+		TrackedMB:    trackedMB,
+		CacheHitRate: cacheHitRate,
+		AvgMs:        avgMs,
+		DbSizeMB:     dbSizeMB,
+		WalSizeMB:    walSizeMB,
 	}
 	if s.hub != nil {
 		sample.WSClients = s.hub.ClientCount()
 	}
 	if s.db != nil {
 		if oc := s.db.GetObserverCounts(); oc != nil {
-			sample.TotalObservers   = &oc.Total
-			sample.OnlineObservers  = &oc.Online
-			sample.StaleObservers   = &oc.Stale
+			sample.TotalObservers = &oc.Total
+			sample.OnlineObservers = &oc.Online
+			sample.StaleObservers = &oc.Stale
 			sample.OfflineObservers = &oc.Offline
 		}
 	}
 	if rBps, wBps, sR, sW, ok := collectHistoryIODelta(); ok {
-		sample.IoReadBps       = &rBps
-		sample.IoWriteBps      = &wBps
-		sample.IoSyscallsRead  = &sR
+		sample.IoReadBps = &rBps
+		sample.IoWriteBps = &wBps
+		sample.IoSyscallsRead = &sR
 		sample.IoSyscallsWrite = &sW
 	}
-	sample.SqlitePerfWalMB   = walSizeMB
+	sample.SqlitePerfWalMB = walSizeMB
 	sample.SqliteCacheHitPct = cacheHitRate * 100
 
 	// Snapshot raw ingestor cumulative counters so the frontend can diff
@@ -1161,12 +1165,12 @@ func (s *Server) collectPerfSample() PerfSample {
 	if data, err := os.ReadFile(IngestorStatsPath()); err == nil {
 		var st IngestorStats
 		if json.Unmarshal(data, &st) == nil && st.SampledAt != "" {
-			sample.WriteSrcAt       = &st.SampledAt
-			sample.WriteTxCum       = &st.TxInserted
-			sample.WriteObsCum      = &st.ObsInserted
-			sample.WriteNodeCum     = &st.NodeUpserts
+			sample.WriteSrcAt = &st.SampledAt
+			sample.WriteTxCum = &st.TxInserted
+			sample.WriteObsCum = &st.ObsInserted
+			sample.WriteNodeCum = &st.NodeUpserts
 			sample.WriteObserverCum = &st.ObserverUpserts
-			sample.WriteErrCum      = &st.WriteErrors
+			sample.WriteErrCum = &st.WriteErrors
 		}
 	}
 	return sample
@@ -1301,14 +1305,14 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := PacketQuery{
-		Limit:    queryInt(r, "limit", 50),
-		Offset:   queryInt(r, "offset", 0),
-		Observer: r.URL.Query().Get("observer"),
-		Hash:     r.URL.Query().Get("hash"),
-		Since:    r.URL.Query().Get("since"),
-		Until:    r.URL.Query().Get("until"),
-		Region:   r.URL.Query().Get("region"),
-		Node:     r.URL.Query().Get("node"),
+		Limit:              queryInt(r, "limit", 50),
+		Offset:             queryInt(r, "offset", 0),
+		Observer:           r.URL.Query().Get("observer"),
+		Hash:               r.URL.Query().Get("hash"),
+		Since:              r.URL.Query().Get("since"),
+		Until:              r.URL.Query().Get("until"),
+		Region:             r.URL.Query().Get("region"),
+		Node:               r.URL.Query().Get("node"),
 		Channel:            r.URL.Query().Get("channel"),
 		Area:               r.URL.Query().Get("area"),
 		Order:              "DESC",
@@ -2391,7 +2395,7 @@ func (s *Server) handleAnalyticsHashSizes(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, map[string]interface{}{
-		"total":                    0,
+		"total":                   0,
 		"distribution":            map[string]int{"1": 0, "2": 0, "3": 0},
 		"distributionByRepeaters": map[string]int{"1": 0, "2": 0, "3": 0},
 		"hourly":                  []HashSizeHourly{},
@@ -2436,7 +2440,8 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 
 // handleAnalyticsSubpathsBulk returns multiple length-range buckets in a single
 // response, avoiding repeated scans of the same packet data. Query format:
-//   ?groups=2-2:50,3-3:30,4-4:20,5-8:15   (minLen-maxLen:limit per group)
+//
+//	?groups=2-2:50,3-3:30,4-4:20,5-8:15   (minLen-maxLen:limit per group)
 func (s *Server) handleAnalyticsSubpathsBulk(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	groupsParam := r.URL.Query().Get("groups")
@@ -2761,13 +2766,13 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 			ID: o.ID, Name: o.Name, IATA: o.IATA,
 			LastSeen: o.LastSeen, FirstSeen: o.FirstSeen,
 			PacketCount: o.PacketCount,
-			Model: o.Model, Firmware: o.Firmware,
+			Model:       o.Model, Firmware: o.Firmware,
 			ClientVersion: o.ClientVersion, Radio: o.Radio,
 			BatteryMv: o.BatteryMv, UptimeSecs: o.UptimeSecs,
-			NoiseFloor: o.NoiseFloor,
-			LastPacketAt: o.LastPacketAt,
+			NoiseFloor:      o.NoiseFloor,
+			LastPacketAt:    o.LastPacketAt,
 			PacketsLastHour: plh,
-			Lat: lat, Lon: lon, NodeRole: nodeRole,
+			Lat:             lat, Lon: lon, NodeRole: nodeRole,
 			Repeat: o.Repeat,
 		})
 	}
@@ -2833,11 +2838,11 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 		ID: obs.ID, Name: obs.Name, IATA: obs.IATA,
 		LastSeen: obs.LastSeen, FirstSeen: obs.FirstSeen,
 		PacketCount: obs.PacketCount,
-		Model: obs.Model, Firmware: obs.Firmware,
+		Model:       obs.Model, Firmware: obs.Firmware,
 		ClientVersion: obs.ClientVersion, Radio: obs.Radio,
 		BatteryMv: obs.BatteryMv, UptimeSecs: obs.UptimeSecs,
-		NoiseFloor: obs.NoiseFloor,
-		LastPacketAt: obs.LastPacketAt,
+		NoiseFloor:      obs.NoiseFloor,
+		LastPacketAt:    obs.LastPacketAt,
 		PacketsLastHour: plh,
 		Repeat:          obs.Repeat,
 		IngestSources:   ingestSources,
@@ -2931,7 +2936,10 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 	snrBuckets := map[int]*SnrDistributionEntry{}
 	// rssiAgg accumulates (sum, count) per bucket so we can compute a weighted
 	// average across the (bucket, hour, payloadType) groups returned by the DB.
-	type rssiAcc struct{ sum float64; count int }
+	type rssiAcc struct {
+		sum   float64
+		count int
+	}
 	rssiAgg := map[int64]*rssiAcc{}
 	activeHourBuckets := map[int64]struct{}{}
 	recentPackets := make([]map[string]interface{}, 0, 20)

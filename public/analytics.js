@@ -4289,19 +4289,19 @@ function destroy() { if (_rhMap) { _rhMap.remove(); _rhMap = null; } if (_rhThem
           if (bounds.length) _rhMap.fitBounds(L.latLngBounds(bounds).pad(0.1));
           var summary = document.getElementById('rhSummary');
           if (summary) {
-            if (data.total_edges === 0) {
-              var candidates = data.candidate_edges || 0;
-              var missingGPS = data.missing_gps_edges || 0;
-              if (candidates > 0) {
-                summary.textContent = 'Found ' + candidates + ' route edge' + (candidates === 1 ? '' : 's') +
-                  ' in the last ' + hours + 'h, but ' + missingGPS + ' cannot be mapped because one or both endpoints lack GPS.';
-              } else {
-                summary.textContent = 'No route edges in the last ' + hours + 'h.';
-              }
+            var mappedEdges = data.mapped_edges != null ? data.mapped_edges : data.total_edges;
+            var rawEdges = data.raw_edges != null ? data.raw_edges : (data.candidate_edges != null ? data.candidate_edges : mappedEdges);
+            var unmappedEdges = data.unmapped_edges != null ? data.unmapped_edges :
+              (data.missing_gps_edges != null ? data.missing_gps_edges : Math.max(0, rawEdges - mappedEdges));
+            if (mappedEdges === 0) {
+              summary.textContent = rawEdges > 0
+                ? 'Mapped 0 of ' + rawEdges + ' route edges in the last ' + hours + 'h. Unmapped edges have unresolved hops or endpoints without GPS.'
+                : 'No route edges in the last ' + hours + 'h.';
             } else {
               var top = data.edges[0];
               var topName = top ? (top.name_a || top.node_a.slice(0,8)) + ' ↔ ' + (top.name_b || top.node_b.slice(0,8)) + ' (' + top.count + ' pkts)' : '';
-              summary.textContent = 'Mapped edges: ' + data.total_edges + (data.candidate_edges && data.candidate_edges !== data.total_edges ? ' of ' + data.candidate_edges : '') +
+              summary.textContent = 'Mapped edges: ' + mappedEdges + ' of ' + rawEdges +
+                (unmappedEdges > 0 ? '  |  Unmapped: ' + unmappedEdges : '') +
                 (topName ? '  |  Highest volume: ' + topName : '');
             }
           }

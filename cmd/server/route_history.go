@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -29,6 +30,9 @@ type routeHistoryResponse struct {
 	TotalEdges      int                `json:"total_edges"`
 	CandidateEdges  int                `json:"candidate_edges"`
 	MissingGPSEdges int                `json:"missing_gps_edges"`
+	MappedEdges     int                `json:"mapped_edges"`
+	RawEdges        int                `json:"raw_edges"`
+	UnmappedEdges   int                `json:"unmapped_edges"`
 }
 
 type rhEdgeKey struct{ a, b string }
@@ -36,6 +40,48 @@ type rhEdgeData struct {
 	count    int
 	lastSeen string
 	samples  []string
+}
+
+type routeHistoryCacheState struct {
+	mu      sync.Mutex
+	entries map[int]routeHistoryCacheEntry
+}
+
+type routeHistoryCacheEntry struct {
+	payload   []byte
+	expiresAt time.Time
+}
+
+const routeHistoryCacheTTL = 15 * time.Second
+
+func (c *routeHistoryCacheState) get(hours int) []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		return nil
+	}
+	entry, ok := c.entries[hours]
+	if !ok || time.Now().After(entry.expiresAt) {
+		delete(c.entries, hours)
+		return nil
+	}
+	payload := make([]byte, len(entry.payload))
+	copy(payload, entry.payload)
+	return payload
+}
+
+func (c *routeHistoryCacheState) set(hours int, payload []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[int]routeHistoryCacheEntry)
+	}
+	copied := make([]byte, len(payload))
+	copy(copied, payload)
+	c.entries[hours] = routeHistoryCacheEntry{
+		payload:   copied,
+		expiresAt: time.Now().Add(routeHistoryCacheTTL),
+	}
 }
 
 func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
@@ -49,33 +95,32 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 		hours = n
 	}
 
+	if payload := s.routeHistoryCache.get(hours); payload != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload)
+		return
+	}
+
 	since := time.Now().Add(-time.Duration(hours) * time.Hour).UTC().Format(time.RFC3339)
 	edgeMap := map[rhEdgeKey]*rhEdgeData{}
 
-	// Serve from the in-memory store when it covers the full requested window
-	// only on schemas without persisted resolved_path. When resolved_path is
-	// available, route-history must use it so path prefixes become full pubkeys
-	// that can join to nodes/GPS.
-	// tx.PathJSON is set once under s.mu.Lock() and never mutated after, so
-	// reading it from a snapshotted *StoreTx outside the lock is race-free.
-	// The snap slice header itself is O(1) to copy under RLock.
+	// Serve from the in-memory store only when resolved_path is unavailable.
+	// Current schemas persist resolved_path, which turns short hop prefixes into
+	// full pubkeys and is required for reliable node/GPS joins.
 	servedFromStore := false
 	if s.store != nil && (s.db == nil || !s.db.hasResolvedPath) {
 		s.store.mu.RLock()
 		oldest := s.store.oldestLoaded
-		snap := s.store.packets // O(1) slice header copy
+		snap := s.store.packets
 		s.store.mu.RUnlock()
 
 		if oldest != "" && oldest <= since {
-			// Store covers the full window — no DB query needed.
 			servedFromStore = true
-			buildRouteHistoryEdgesFromSnap(snap, since, edgeMap)
+			buildRouteHistoryEdgesFromSnap(s.store, snap, since, edgeMap)
 		}
 	}
 
 	if !servedFromStore {
-		// Fall back to DB: store doesn't cover the full window (e.g. hot window
-		// shorter than hours, or store disabled). Same query as before.
 		if err := buildRouteHistoryEdgesFromDB(r, s, since, edgeMap); err != nil {
 			writeError(w, http.StatusInternalServerError, "database error")
 			return
@@ -84,13 +129,6 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 
 	candidateEdges := len(edgeMap)
 
-	// Resolve node GPS from nodes table — single batch query regardless of path taken above.
-	type nodeInfo struct {
-		name   string
-		lat    float64
-		lon    float64
-		hasGPS bool
-	}
 	pubkeys := make(map[string]bool, len(edgeMap)*2)
 	for k := range edgeMap {
 		pubkeys[k.a] = true
@@ -116,9 +154,9 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 				if nerr := nrows.Scan(&pk, &name, &lat, &lon); nerr != nil {
 					continue
 				}
-				info := &nodeInfo{name: name}
+				info := &nodeInfo{PublicKey: pk, Name: name}
 				if lat != nil && lon != nil {
-					info.lat, info.lon, info.hasGPS = *lat, *lon, true
+					info.Lat, info.Lon, info.HasGPS = *lat, *lon, !(*lat == 0 && *lon == 0)
 				}
 				nodeCache[pk] = info
 			}
@@ -129,7 +167,7 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 	missingGPS := 0
 	for k, e := range edgeMap {
 		nA, nB := nodeCache[k.a], nodeCache[k.b]
-		if nA == nil || nB == nil || !nA.hasGPS || !nB.hasGPS {
+		if nA == nil || nB == nil || !nA.HasGPS || !nB.HasGPS {
 			missingGPS++
 			continue
 		}
@@ -139,39 +177,63 @@ func (s *Server) handleRouteHistory(w http.ResponseWriter, r *http.Request) {
 		}
 		edges = append(edges, routeHistoryEdge{
 			NodeA: k.a, NodeB: k.b,
-			NameA: nA.name, NameB: nB.name,
-			LatA: nA.lat, LonA: nA.lon,
-			LatB: nB.lat, LonB: nB.lon,
+			NameA: nA.Name, NameB: nB.Name,
+			LatA: nA.Lat, LonA: nA.Lon,
+			LatB: nB.Lat, LonB: nB.Lon,
 			Count: e.count, LastSeen: e.lastSeen,
 			Samples: samples,
 		})
 	}
 	sort.Slice(edges, func(i, j int) bool { return edges[i].Count > edges[j].Count })
 
-	writeJSON(w, routeHistoryResponse{
+	resp := routeHistoryResponse{
 		Edges:           edges,
 		Hours:           hours,
 		TotalEdges:      len(edges),
 		CandidateEdges:  candidateEdges,
 		MissingGPSEdges: missingGPS,
-	})
+		MappedEdges:     len(edges),
+		RawEdges:        candidateEdges,
+		UnmappedEdges:   missingGPS,
+	}
+	payload, err := json.Marshal(resp)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "json error")
+		return
+	}
+	s.routeHistoryCache.set(hours, payload)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(payload)
 }
 
-// buildRouteHistoryEdgesFromSnap populates edgeMap from the in-memory packet
-// snapshot.  Packets are stored oldest-first; we scan backwards and stop as
-// soon as we pass the 'since' boundary.  tx.PathJSON is read lock-free because
-// it is written once under s.mu.Lock() and never mutated afterward.
-func buildRouteHistoryEdgesFromSnap(snap []*StoreTx, since string, edgeMap map[rhEdgeKey]*rhEdgeData) {
+func buildRouteHistoryEdgesFromSnap(store *PacketStore, snap []*StoreTx, since string, edgeMap map[rhEdgeKey]*rhEdgeData) {
+	txs := make([]*StoreTx, 0, 256)
 	for i := len(snap) - 1; i >= 0; i-- {
 		tx := snap[i]
 		if tx.FirstSeen < since {
 			break
 		}
+		txs = append(txs, tx)
+	}
+
+	txIDs := make([]int, 0, len(txs))
+	for _, tx := range txs {
+		txIDs = append(txIDs, tx.ID)
+	}
+	rpByTx := map[int]map[int][]*string{}
+	if store != nil && store.db != nil && store.db.hasResolvedPath {
+		rpByTx = store.prefetchResolvedPathsForTxs(txIDs)
+	}
+	for _, tx := range txs {
+		if rp := resolvedPathForTxBestFromCache(tx, rpByTx[tx.ID]); rp != nil {
+			if addRouteHistoryEdgesFromResolvedPath(tx.Hash, rp, tx.FirstSeen, edgeMap) > 0 {
+				continue
+			}
+		}
 		addRouteHistoryEdges(tx.Hash, tx.PathJSON, tx.FirstSeen, edgeMap)
 	}
 }
 
-// buildRouteHistoryEdgesFromDB runs the legacy JOIN query and populates edgeMap.
 func buildRouteHistoryEdgesFromDB(r *http.Request, s *Server, since string, edgeMap map[rhEdgeKey]*rhEdgeData) error {
 	resolvedPathSelect := "NULL AS resolved_path"
 	resolvedPathWhere := ""
@@ -220,6 +282,22 @@ func addRouteHistoryEdgesFromPaths(hash, resolvedPath, pathJSON, firstSeen strin
 	addRouteHistoryEdges(hash, pathJSON, firstSeen, edgeMap)
 }
 
+func addRouteHistoryEdgesFromResolvedPath(hash string, resolvedPath []*string, firstSeen string, edgeMap map[rhEdgeKey]*rhEdgeData) int {
+	added := 0
+	for i := 0; i < len(resolvedPath)-1; i++ {
+		if resolvedPath[i] == nil || resolvedPath[i+1] == nil {
+			continue
+		}
+		a, b := strings.ToLower(*resolvedPath[i]), strings.ToLower(*resolvedPath[i+1])
+		if a == "" || b == "" {
+			continue
+		}
+		addRouteHistoryEdge(a, b, hash, firstSeen, edgeMap)
+		added++
+	}
+	return added
+}
+
 // addRouteHistoryEdges parses a JSON path and increments all adjacent-hop edge
 // counts in edgeMap. It returns false when the path had fewer than two usable
 // hops so callers can fall back to another path source.
@@ -234,30 +312,33 @@ func addRouteHistoryEdges(hash, pathJSON, firstSeen string, edgeMap map[rhEdgeKe
 	hops := make([]string, 0, len(rawHops))
 	for _, h := range rawHops {
 		if h != nil && *h != "" {
-			hops = append(hops, *h)
+			hops = append(hops, strings.ToLower(*h))
 		}
 	}
 	if len(hops) < 2 {
 		return false
 	}
 	for i := 0; i < len(hops)-1; i++ {
-		a, b := hops[i], hops[i+1]
-		if a > b {
-			a, b = b, a
-		}
-		k := rhEdgeKey{a, b}
-		e := edgeMap[k]
-		if e == nil {
-			e = &rhEdgeData{}
-			edgeMap[k] = e
-		}
-		e.count++
-		if firstSeen > e.lastSeen {
-			e.lastSeen = firstSeen
-		}
-		if len(e.samples) < 5 {
-			e.samples = append(e.samples, hash)
-		}
+		addRouteHistoryEdge(hops[i], hops[i+1], hash, firstSeen, edgeMap)
 	}
 	return true
+}
+
+func addRouteHistoryEdge(a, b, hash, firstSeen string, edgeMap map[rhEdgeKey]*rhEdgeData) {
+	if a > b {
+		a, b = b, a
+	}
+	k := rhEdgeKey{a, b}
+	e := edgeMap[k]
+	if e == nil {
+		e = &rhEdgeData{}
+		edgeMap[k] = e
+	}
+	e.count++
+	if firstSeen > e.lastSeen {
+		e.lastSeen = firstSeen
+	}
+	if len(e.samples) < 5 {
+		e.samples = append(e.samples, hash)
+	}
 }

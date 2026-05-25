@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -72,5 +75,42 @@ func TestMeshMapperCacheTTL_EnvOverride(t *testing.T) {
 	cfg := &Config{}
 	if got := cfg.MeshMapperCacheTTL(); got != 120*time.Second {
 		t.Errorf("want 120s, got %v", got)
+	}
+}
+
+func TestConfigClientMeshMapperConfigured_ConfigOnly(t *testing.T) {
+	os.Setenv("MESHMAPPER_API_KEY", "envkey")
+	defer os.Unsetenv("MESHMAPPER_API_KEY")
+
+	s := &Server{cfg: &Config{}}
+	req := httptest.NewRequest(http.MethodGet, "/api/config/client", nil)
+	rr := httptest.NewRecorder()
+	s.handleConfigClient(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	var resp ClientConfigResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.MeshMapperConfigured {
+		t.Fatal("meshMapperConfigured must ignore MESHMAPPER_API_KEY and require config.json meshMapper.apiKey")
+	}
+}
+
+func TestConfigClientMeshMapperConfigured_WhenConfigHasKey(t *testing.T) {
+	s := &Server{cfg: &Config{MeshMapper: &MeshMapperConfig{APIKey: "configured"}}}
+	req := httptest.NewRequest(http.MethodGet, "/api/config/client", nil)
+	rr := httptest.NewRecorder()
+	s.handleConfigClient(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	var resp ClientConfigResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.MeshMapperConfigured {
+		t.Fatal("meshMapperConfigured should be true when config.json meshMapper.apiKey is set")
 	}
 }

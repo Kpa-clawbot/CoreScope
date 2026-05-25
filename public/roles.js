@@ -143,6 +143,8 @@
     flasher: 'https://flasher.meshcore.co.uk/'
   };
 
+  window.MESHMAPPER_CONFIGURED = false;
+
   // ─── Fetch server overrides ───
   window.MeshConfigReady = fetch('/api/config/client').then(function (r) { return r.json(); }).then(function (cfg) {
     if (cfg.roles) {
@@ -168,6 +170,7 @@
     if (cfg.cacheInvalidateMs != null) window.CACHE_INVALIDATE_MS = cfg.cacheInvalidateMs;
     if (cfg.externalUrls) Object.assign(EXTERNAL_URLS, cfg.externalUrls);
     if (cfg.propagationBufferMs != null) window.PROPAGATION_BUFFER_MS = cfg.propagationBufferMs;
+    window.MESHMAPPER_CONFIGURED = cfg.meshMapperConfigured === true;
     // Sync ROLE_STYLE colors with ROLE_COLORS
     for (var role in ROLE_STYLE) {
       if (ROLE_COLORS[role]) ROLE_STYLE[role].color = ROLE_COLORS[role];
