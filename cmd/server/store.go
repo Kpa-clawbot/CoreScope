@@ -4835,6 +4835,18 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int, 
 		}
 	}
 
+	// Issue #1366 follow-up: msgOrder is in tx insertion order
+	// (≈ FirstSeen ascending). Re-sort by the rendered timestamp field
+	// (= LatestSeen, set above) ascending, so the page tail = newest
+	// LatestSeen. Without this, a long-running heartbeat with old
+	// FirstSeen but fresh LatestSeen ends up at the head of msgOrder
+	// and gets sliced off by the tail selection below.
+	sort.SliceStable(msgOrder, func(i, j int) bool {
+		ti, _ := msgMap[msgOrder[i]].Data["timestamp"].(string)
+		tj, _ := msgMap[msgOrder[j]].Data["timestamp"].(string)
+		return ti < tj
+	})
+
 	total := len(msgOrder)
 	// Return latest messages (tail)
 	start := total - limit - offset
