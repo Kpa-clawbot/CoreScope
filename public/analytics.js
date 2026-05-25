@@ -109,7 +109,7 @@
             <select id="analyticsTimeWindow" class="analytics-time-window-select" data-testid="analytics-time-window" aria-label="Time window">
               <option value="">All data</option>
               <option value="1h">Last 1 hour</option>
-              <option value="24h">Last 24 hours</option>
+              <option value="24h" selected>Last 24 hours</option>
               <option value="7d">Last 7 days</option>
               <option value="30d">Last 30 days</option>
             </select>
@@ -198,9 +198,9 @@
     }
     // #749 — restore time window from URL.
     const urlWindow = _ap.get('window');
-    if (urlWindow) {
-      const twInit = document.getElementById('analyticsTimeWindow');
-      if (twInit) twInit.value = urlWindow;
+    const twInit = document.getElementById('analyticsTimeWindow');
+    if (twInit) {
+      twInit.value = urlWindow || '24h';
     }
 
     RegionFilter.init(document.getElementById('analyticsRegionFilter'));

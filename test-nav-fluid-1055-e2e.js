@@ -157,7 +157,7 @@ async function main() {
       '<span class="stat-val">66675</span> pkts · ' +
       '<span class="stat-val">3090</span> nodes · ' +
       '<span class="stat-val">93</span> obs ' +
-      '<span class="version-badge">cornv3.7.1-872-g2bacc391 · 2bacc39 (22m ago) · go</span>';
+      '<span class="version-badge">cornv3.7.1-875-g7dd0b4a0 · 7dd0b4a (12m ago)</span>';
     window.dispatchEvent(new Event('resize'));
   });
   await page.evaluate(() => document.fonts && document.fonts.ready ? document.fonts.ready : null);
@@ -204,6 +204,73 @@ async function main() {
     console.log(`  ❌ long nav-stats @1912px: ${statsReasons.join(' | ')}`);
   }
 
+  await page.setViewportSize({ width: 1440, height: HEIGHT });
+  await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.top-nav .nav-right');
+  await page.evaluate(() => {
+    const stats = document.getElementById('navStats');
+    if (!stats) return;
+    stats.innerHTML =
+      '<span class="stat-val">64945</span> pkts · ' +
+      '<span class="stat-val">3140</span> nodes · ' +
+      '<span class="stat-val">93</span> obs ' +
+      '<span class="version-badge">cornv3.7.1-875-g7dd0b4a0 · 7dd0b4a (12m ago)</span>';
+    window.dispatchEvent(new Event('resize'));
+  });
+  await page.evaluate(() => document.fonts && document.fonts.ready ? document.fonts.ready : null);
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const centerGuard = await page.evaluate(() => {
+    const stats = document.getElementById('navStats');
+    const links = Array.from(document.querySelectorAll('.nav-links .nav-link'))
+      .filter(a => getComputedStyle(a).display !== 'none');
+    const lastVisible = links[links.length - 1] || null;
+    const statsStyle = stats ? getComputedStyle(stats) : null;
+    const versionText = document.querySelector('.version-badge') ? document.querySelector('.version-badge').textContent : '';
+    return {
+      missing: !stats || !lastVisible,
+      statsDisplay: statsStyle ? statsStyle.display : '',
+      statsLeft: stats ? stats.getBoundingClientRect().left : -1,
+      lastLinkRight: lastVisible ? lastVisible.getBoundingClientRect().right : -1,
+      versionText,
+    };
+  });
+  const centerReasons = [];
+  if (centerGuard.missing) {
+    centerReasons.push('missing stats or visible nav link');
+  } else {
+    if (centerGuard.statsDisplay !== 'none' && centerGuard.statsLeft < centerGuard.lastLinkRight - SUBPIXEL_TOL) {
+      centerReasons.push(`navStats.left=${centerGuard.statsLeft.toFixed(1)} < lastLink.right=${centerGuard.lastLinkRight.toFixed(1)}`);
+    }
+    if (/\s·\sgo$/.test(centerGuard.versionText)) {
+      centerReasons.push(`version badge still includes engine suffix: ${centerGuard.versionText}`);
+    }
+  }
+  if (centerReasons.length === 0) {
+    passes++;
+    console.log('  ✅ nav-stats @1440px: does not cover center nav, no engine suffix');
+  } else {
+    failures++;
+    console.log(`  ❌ nav-stats @1440px: ${centerReasons.join(' | ')}`);
+  }
+
+  const versionBadge = await page.evaluate(() => {
+    if (typeof formatVersionBadge !== 'function') return { missing: true };
+    return { html: formatVersionBadge('v3.7.1', '7dd0b4a0', 'go', new Date(Date.now() - 12 * 60 * 1000).toISOString()) };
+  });
+  const versionReasons = [];
+  if (versionBadge.missing) {
+    versionReasons.push('formatVersionBadge missing');
+  } else if (/engine-badge|>\s*go\s*<|·\s*go/.test(versionBadge.html)) {
+    versionReasons.push(`formatVersionBadge still renders engine: ${versionBadge.html}`);
+  }
+  if (versionReasons.length === 0) {
+    passes++;
+    console.log('  ✅ formatVersionBadge: omits engine suffix');
+  } else {
+    failures++;
+    console.log(`  ❌ formatVersionBadge: ${versionReasons.join(' | ')}`);
+  }
+
   await page.setViewportSize({ width: 2560, height: HEIGHT });
   await page.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.top-nav .nav-action-btn');
@@ -232,7 +299,7 @@ async function main() {
 
   await browser.close();
 
-  const total = ROUTES.length * VIEWPORTS.length + 2;
+  const total = ROUTES.length * VIEWPORTS.length + 4;
   console.log(`\ntest-nav-fluid-1055-e2e.js: ${failures === 0 ? 'OK' : 'FAIL'} — ${passes}/${total} passed`);
   process.exit(failures === 0 ? 0 : 1);
 }

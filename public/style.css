@@ -674,7 +674,9 @@ input[type="week"] {
   display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--nav-text-muted);
   font-family: var(--mono); margin-right: 4px; white-space: nowrap;
   flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  max-width: min(34vw, 620px);
 }
+.top-nav.nav-stats-collapsed .nav-stats { display: none; }
 .nav-stats .stat-val { color: var(--nav-text); font-weight: 600; transition: color 0.3s ease; }
 .nav-stats .stat-val.updated { color: var(--accent); }
 .nav-stats .engine-badge {

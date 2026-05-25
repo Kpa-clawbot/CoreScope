@@ -371,7 +371,6 @@ function formatVersionBadge(version, commit, engine, buildTime) {
     var short = commit.length > 7 ? commit.slice(0, 7) : commit;
     parts.push('<a href="' + GH + '/commit/' + commit + '" target="_blank" rel="noopener">' + short + '</a>' + buildAge);
   }
-  if (engine) parts.push('<span class="engine-badge">' + engine + '</span>');
   if (parts.length === 0) return '';
   return ' <span class="version-badge">' + parts.join(' · ') + '</span>';
 }
@@ -1187,6 +1186,7 @@ window.addEventListener('DOMContentLoaded', () => {
         return;
       }
       // Reset: show everything, then hide as needed.
+      navTop.classList.remove('nav-stats-collapsed');
       allLinks.forEach(a => a.classList.remove('is-overflow'));
       navMoreWrap.classList.remove('is-hidden');
       // Iteratively hide low-priority links until the link strip fits.
@@ -1272,6 +1272,12 @@ window.addEventListener('DOMContentLoaded', () => {
         if (overflowQueue[i].dataset.priority === 'high') break;
         overflowQueue[i].classList.add('is-overflow');
         i++;
+      }
+      // If the pinned primary links still do not fit, collapse nav stats.
+      // The stats string is informational; primary navigation and utility
+      // buttons must never be overdrawn by version/build text.
+      if (!fits()) {
+        navTop.classList.add('nav-stats-collapsed');
       }
       // #1139 Bug B: floor the More menu at >=2 items. The greedy
       // fits() loop above is happy to stop after pushing exactly ONE
