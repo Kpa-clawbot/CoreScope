@@ -3387,6 +3387,10 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .mc-cluster .mc-pill {
   display: inline-block; min-width: 12px; padding: 1px 3px;
   border-radius: 3px;
+  /* #1360 follow-up: defense-in-depth cap for pathological 4+ digit counts.
+     JS caps the rendered text at "999+" (max 4 chars); this bounds visual
+     width if a stray render slips through. */
+  max-width: 4ch; overflow: hidden; text-overflow: ellipsis;
   /* Audit: bump 9px → 10px, monospace, dark text on every Wong hue.
      #1a1a1a on all 5 Wong hues passes SC 1.4.3 small-text (≥4.5:1).
      Sized in rem (0.625rem = 10px @ default 16px root) so user
@@ -3395,7 +3399,10 @@ th.sort-active { color: var(--accent, #60a5fa); }
   letter-spacing: 0;
   color: #1a1a1a; text-align: center; text-shadow: none;
   border: 1px solid rgba(0,0,0,0.25);
-  overflow: visible; /* SC 1.4.12 — user letter-spacing override must not clip */
+  /* #1360: overflow:hidden + text-overflow:ellipsis above bound the pill
+     when counts approach the 4-char cap ("999+"). Acceptable tradeoff vs.
+     SC 1.4.12 letter-spacing clipping: text content is the role letter +
+     <=4 digits, far short of needing aggressive letter-spacing overrides. */
 }
 
 /* V3 — multi-byte hash labels: neutral fill + colored 3px left border */

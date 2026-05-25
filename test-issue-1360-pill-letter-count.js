@@ -63,6 +63,29 @@ if (rlMatch) {
     'ROLE_LETTERS includes R, C, M, S, O so pill body matches /^[RCMSO]\\d+$/');
 }
 
+// === #1360 follow-up: 4+ digit count overflow guard ===
+console.log('\n=== #1360 follow-up: pill width bounded for 4+ digit counts ===');
+
+// F. JS cap: makeClusterIcon must clamp counts > 999 to "999+" so pill body
+//    becomes e.g. "R999+" instead of "R1234" / "R10000".
+const jsCapRe = /n\s*>\s*999[\s\S]{0,80}['"]999\+['"]/;
+assert(jsCapRe.test(mapSrc),
+  'makeClusterIcon caps counts > 999 to "999+" (n > 999 → "999+")');
+
+// G. CSS guard: .mc-pill rule must include max-width AND text-overflow:ellipsis
+//    as defense-in-depth in case a render slips past the JS cap.
+const cssSrc = fs.readFileSync(path.join(__dirname, 'public', 'style.css'), 'utf8');
+const pillRuleRe = /\.mc-cluster\s+\.mc-pill\s*\{([\s\S]*?)\}/;
+const pillMatch = cssSrc.match(pillRuleRe);
+assert(pillMatch, '.mc-cluster .mc-pill rule found in style.css');
+if (pillMatch) {
+  const body = pillMatch[1];
+  assert(/max-width\s*:/.test(body),
+    '.mc-pill declares max-width (bounds pill width for overflow)');
+  assert(/text-overflow\s*:\s*ellipsis/.test(body),
+    '.mc-pill declares text-overflow: ellipsis (graceful clip)');
+}
+
 console.log('\n=== Summary ===');
 console.log('  Passed: ' + passed);
 console.log('  Failed: ' + failed);

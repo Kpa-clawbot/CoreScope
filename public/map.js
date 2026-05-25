@@ -1517,6 +1517,9 @@
       if (pillsShown < 4) {
         var bg = ROLE_BG_VAR[role] || 'var(--mc-role-companion)';
         var letter = ROLE_LETTERS[role] || '?';
+        // #1360 follow-up: cap 4+ digit counts as "999+" to bound pill width.
+        // Defense-in-depth: .mc-pill CSS also enforces max-width + ellipsis.
+        if (n > 999) n = '999+';
         pillsHtml += '<span class="mc-pill role-' + role + '" ' +
                      'role="img" aria-label="' + n + ' ' + role + (n === 1 ? '' : 's') + '" ' +
                      'style="background:' + bg + ';color:#1a1a1a" ' +
