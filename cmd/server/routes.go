@@ -1682,10 +1682,42 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 			// Multi-candidate hops with no SQL/index confirmation are
 			// treated as ambiguous and excluded from paths-through.
 			containsTarget = confirmedByFullKey[tx.ID] || confirmedBySQL[tx.ID]
+			// preconfirmed: SNAPSHOT of containsTarget BEFORE the per-hop
+			// loop runs. Captures only the SQL/full-key index pre-confirmation
+			// signal (independent of biased-resolver output). MUST NOT be
+			// reassigned inside the loop — doing so would let a biased-
+			// resolver match in hop[i] silently authorize a later ambiguous
+			// hop[j], re-opening the #1352 wrong-node attribution path.
+			//
+			// Note: today the loop only ever transitions containsTarget
+			// false → true, so the snapshot is functionally redundant for
+			// the preconfirmed==true case (containsTarget is already true).
+			// We keep the snapshot + the `preconfirmed ||` clauses below
+			// as a structural invariant: future edits that flip
+			// containsTarget back to false inside the loop (e.g. an
+			// "exclude if last hop doesn't match" tweak) would otherwise
+			// silently lose the SQL/index confirmation. The snapshot is
+			// the documented contract.
 			preconfirmed := containsTarget
 			for i, hop := range hops {
 				resolved := resolveHop(hop)
 				entry := PathHopResp{Prefix: hop, Name: hop}
+				lowerHop := strings.ToLower(hop)
+				// #1352 guard helper. We treat as "unique/safe" when the
+				// hop's prefix candidate set has EXACTLY ONE member: no
+				// sibling collision, so the biased resolver had no choice
+				// to bias. len(pm.m[lowerHop]) == 0 is also accepted as
+				// safe-by-default in the resolvable arm because the
+				// resolver returned a non-nil candidate from somewhere
+				// (e.g. a full-pubkey hop longer than maxPrefixLen, or a
+				// hop indexed under a different prefix length); there's
+				// no collision to resolve away. In the unresolvable arm
+				// below, len==0 is the ONLY reachable case (resolveHop
+				// returns nil iff pm.m[lowerHop] is empty — see
+				// resolveWithContext priority chain), so the guard there
+				// is intentionally permissive on len==0 and the
+				// `preconfirmed ||` clause is the meaningful gate.
+				uniquePrefix := len(pm.m[lowerHop]) <= 1
 				if resolved != nil {
 					entry.Name = resolved.Name
 					entry.Pubkey = resolved.PublicKey
@@ -1697,7 +1729,7 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 					if strings.ToLower(resolved.PublicKey) == lowerPK {
 						// #1352: only attribute when unambiguous OR
 						// already pre-confirmed via SQL/full-key index.
-						if preconfirmed || len(pm.m[strings.ToLower(hop)]) <= 1 {
+						if preconfirmed || uniquePrefix {
 							containsTarget = true
 						}
 					}
@@ -1707,10 +1739,10 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 					// be the target AND there's no sibling collision.
 					// If multiple candidates share this prefix, attribution
 					// is ambiguous — don't claim membership without SQL
-					// confirmation (#1352).
-					lowerHop := strings.ToLower(hop)
+					// confirmation (#1352). See comment on uniquePrefix
+					// above re: why len==0 is treated as safe here.
 					if strings.HasPrefix(lowerPK, lowerHop) {
-						if preconfirmed || len(pm.m[lowerHop]) <= 1 {
+						if preconfirmed || uniquePrefix {
 							containsTarget = true
 						}
 					}
