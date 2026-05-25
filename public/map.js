@@ -25,8 +25,32 @@
 
   // Roles loaded from shared roles.js (ROLE_STYLE, ROLE_LABELS, ROLE_COLORS globals)
 
-  // Multi-byte support overlay colors
-  var MB_COLORS = { confirmed: '#27ae60', suspected: '#f39c12', unknown: '#e74c3c' };
+  // ── #1356 a11y constants — letter prefix + glyph + neutral fill carriers ──
+  // ROLE_LETTERS gives each role a single capital-letter primary carrier
+  // (legible at 10px monospace, survives full grayscale).
+  var ROLE_LETTERS = {
+    repeater:  'R',
+    companion: 'C',
+    room:      'M',
+    sensor:    'S',
+    observer:  'O',
+  };
+  // MB_GLYPHS prefix the hash text with a non-color status carrier.
+  var MB_GLYPHS = {
+    confirmed: '\u2713', // ✓
+    suspected: '?',
+    unknown:   '\u2717', // ✗
+  };
+  // Per-status CSS class (drives the colored 3px left-border in style.css).
+  var MB_STATUS_CLASS = {
+    confirmed: 'status-confirmed',
+    suspected: 'status-suspected',
+    unknown:   'status-unknown',
+  };
+  // NOTE: MB_COLORS removed (#1356) — color is no longer the primary signal.
+  // Kept as an alias to MB_STATUS_CLASS keys so callers passing a status name
+  // through `colorOverride` still flag "multi-byte mode is active" semantically.
+  var MB_COLORS = MB_STATUS_CLASS;
 
   function makeMarkerIcon(role, isStale, isAlsoObserver, colorOverride) {
     const s = ROLE_STYLE[role] || ROLE_STYLE.companion;
@@ -97,16 +121,26 @@
     });
   }
 
-  function makeRepeaterLabelIcon(node, isStale, isAlsoObserver, colorOverride) {
-    var s = ROLE_STYLE['repeater'] || ROLE_STYLE.companion;
+  function makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus) {
     var hs = node.hash_size || 1;
     // Show the short mesh hash ID (first N bytes of pubkey, uppercased)
     var shortHash = node.public_key ? node.public_key.slice(0, hs * 2).toUpperCase() : '??';
-    var bgColor = colorOverride || s.color;
-    // If this repeater is also an observer, show a star indicator inside the label
-    var obsIndicator = isAlsoObserver ? ' <span style="color:' + (ROLE_COLORS.observer || '#f1c40f') + ';font-size:13px;line-height:1;" title="Also an observer">★</span>' : '';
-    var html = '<div style="background:' + bgColor + ';color:#fff;font-weight:bold;font-size:11px;padding:2px 5px;border-radius:3px;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.4);text-align:center;line-height:1.2;white-space:nowrap;">' +
-      shortHash + obsIndicator + '</div>';
+    // #1356 V3: glyph is the primary non-color status carrier, hash is the data,
+    // status color is a thin left-border (CSS class drives the hue).
+    var status = mbStatus || null;
+    var glyph = status ? (MB_GLYPHS[status] || MB_GLYPHS.unknown) : '';
+    var statusClass = status ? (' ' + (MB_STATUS_CLASS[status] || MB_STATUS_CLASS.unknown)) : '';
+    var ariaStatus = status ? ('multi-byte ' + status + ', hash ' + shortHash)
+                            : ('repeater hash ' + shortHash);
+    // Observer indicator stays a star — it is an orthogonal signal, not a status color.
+    var obsIndicator = isAlsoObserver
+      ? ' <span aria-hidden="true" style="color:' + (ROLE_COLORS.observer || '#f1c40f') + ';font-size:13px;line-height:1;" title="Also an observer">★</span>'
+      : '';
+    // Glyph + thin-space (U+2009) + hash. Visible content is aria-hidden so AT
+    // reads the aria-label only (avoids "check mark 3 E" literal announcements).
+    var visible = (glyph ? glyph + '\u2009' : '') + shortHash;
+    var html = '<div class="mc-mb-label' + statusClass + '" role="img" aria-label="' + ariaStatus + '">' +
+      '<span aria-hidden="true">' + visible + '</span>' + obsIndicator + '</div>';
     return L.divIcon({
       html: html,
       className: 'meshcore-marker meshcore-label-marker' + (isStale ? ' marker-stale' : ''),
@@ -947,12 +981,19 @@
       const pk = (node.public_key || '').toLowerCase();
       const isAlsoObserver = _observerByPubkey.has(pk);
       const useLabel = node.role === 'repeater' && filters.hashLabels;
-      // Multi-byte overlay: color repeaters by multi_byte_status
+      // #1356 V3: multi-byte status is no longer encoded by label fill color.
+      // Pass the raw status string to the label icon (it picks glyph + CSS class);
+      // marker-dot tinting (for non-label rendering) keeps a colorblind-safe hex.
+      var mbStatus = null;
       var mbColor = null;
       if (filters.multiByteOverlay && node.role === 'repeater') {
-        mbColor = MB_COLORS[node.multi_byte_status] || MB_COLORS.unknown;
+        mbStatus = node.multi_byte_status || 'unknown';
+        // Marker-dot tint (not a label) — use the same high-luminance accent set
+        // as the label border so the two surfaces stay visually consistent.
+        var MB_MARKER_TINT = { confirmed: '#56F0A0', suspected: '#FFD966', unknown: '#FF8888' };
+        mbColor = MB_MARKER_TINT[mbStatus] || MB_MARKER_TINT.unknown;
       }
-      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbColor) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor);
+      const icon = useLabel ? makeRepeaterLabelIcon(node, isStale, isAlsoObserver, mbStatus) : makeMarkerIcon(node.role || 'companion', isStale, isAlsoObserver, mbColor);
       const latLng = L.latLng(node.lat, node.lon);
       allMarkers.push({ latLng, node, icon, isLabel: useLabel, popupFn: function() { return buildPopup(node); }, alt: (node.name || 'Unknown') + ' (' + (node.role || 'node') + (isAlsoObserver ? ' + observer' : '') + ')' });
     }
@@ -1454,24 +1495,43 @@
     var total = (typeof cluster.getChildCount === 'function') ? cluster.getChildCount() : markers.length;
     var bucket = total >= 100 ? 'lg' : total >= 30 ? 'md' : 'sm';
     var roleOrder = ['repeater', 'companion', 'room', 'sensor', 'observer'];
+    // #1356 V2: pill background uses the --mc-role-* Wong palette (CSS var),
+    // pill text is the role letter (primary, monochrome-safe carrier).
+    // The audit's minimal patch keeps dark text on every Wong hue, so no
+    // per-role text-color branching is needed.
+    var ROLE_BG_VAR = {
+      repeater:  'var(--mc-role-repeater)',
+      companion: 'var(--mc-role-companion)',
+      room:      'var(--mc-role-room)',
+      sensor:    'var(--mc-role-sensor)',
+      observer:  'var(--mc-role-observer)',
+    };
     var pillsHtml = '';
     var tooltipParts = [];
     var pillsShown = 0;
-    var palette = (typeof ROLE_COLORS !== 'undefined') ? ROLE_COLORS : {};
     for (var j = 0; j < roleOrder.length; j++) {
       var role = roleOrder[j];
       var n = counts[role] || 0;
       if (n <= 0) continue;
       tooltipParts.push(n + ' ' + role + (n === 1 ? '' : 's'));
       if (pillsShown < 4) {
-        var bg = palette[role] || '#6b7280';
-        pillsHtml += '<span class="mc-pill" style="background:' + bg + '">' + n + '</span>';
+        var bg = ROLE_BG_VAR[role] || 'var(--mc-role-companion)';
+        var letter = ROLE_LETTERS[role] || '?';
+        pillsHtml += '<span class="mc-pill role-' + role + '" ' +
+                     'role="img" aria-label="' + n + ' ' + role + (n === 1 ? '' : 's') + '" ' +
+                     'style="background:' + bg + ';color:#1a1a1a" ' +
+                     'title="' + n + ' ' + role + (n === 1 ? '' : 's') + '">' +
+                     letter + '</span>';
         pillsShown += 1;
       }
     }
-    var html = '<div class="mc-cluster mc-' + bucket + '">' +
-                 '<b class="mc-count">' + total + '</b>' +
-                 '<div class="mc-pills">' + pillsHtml + '</div>' +
+    // #1356 V1: cluster gets role="img" + an aria-label summarising the
+    // count and per-role breakdown so screen readers announce the data.
+    var ariaLabel = total + ' nodes — ' + tooltipParts.join(', ');
+    var html = '<div class="mc-cluster mc-' + bucket + '" ' +
+                 'role="img" aria-label="' + ariaLabel + '">' +
+                 '<b class="mc-count" aria-hidden="true">' + total + '</b>' +
+                 '<div class="mc-pills" aria-hidden="true">' + pillsHtml + '</div>' +
                '</div>';
     var icon = L.divIcon({
       html: html,
@@ -1481,7 +1541,7 @@
     // Stash a tooltip string for callers that want to bindTooltip (markercluster
     // does not natively pipe this through, but it's available via cluster icon
     // for E2E inspection).
-    icon._tooltip = total + ' nodes — ' + tooltipParts.join(', ');
+    icon._tooltip = ariaLabel;
     return icon;
   }
 

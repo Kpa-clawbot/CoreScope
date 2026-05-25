@@ -3322,32 +3322,106 @@ th.sort-active { color: var(--accent, #60a5fa); }
 .tools-card h3 { margin: 0 0 4px 0; font-size: 16px; }
 .tools-card p { margin: 0; font-size: 13px; color: var(--text-muted); }
 
-/* ── Map marker clustering (issue #1036) ── */
+/* ── Map marker clustering (issue #1036, a11y refit issue #1356) ──
+ *
+ * #1356 WCAG 2.2 AA refit — Tufte structural framing + audit minimal patch.
+ * Design source: github.com/Kpa-clawbot/CoreScope/issues/1356 (Tufte + audit comments).
+ *
+ * Carriers (NON-color) of meaning, per WCAG 1.4.1:
+ *   - V1 cluster bubbles: size (40/48/56px) + numeral + border-style ramp
+ *     (1.5px solid / 2.5px solid / 2px double). Fill is a single neutral.
+ *   - V2 role pills: capital-letter prefix (R/C/M/S/O). Wong (2011) palette
+ *     hue is secondary. Dark text (#1a1a1a) on ALL five pills (audit override
+ *     so only ONE text-color rule is needed and every pill passes 4.5:1).
+ *   - V3 multi-byte hash labels: unicode glyph prefix (✓/?/✗) + neutral fill
+ *     + 3px colored left-border using the audit's high-luminance accent set
+ *     (NOT Tol "vibrant" — those failed 3:1 vs the neutral fill).
+ *
+ * Constants are --mc-* namespaced. The reserved --info / --warning / --accent
+ * system vars are NOT touched (per issue scope + AGENTS.md).
+ */
+:root {
+  /* V1 — cluster bubble */
+  --mc-cluster-fill:   rgba(33, 41, 54, 0.88);
+  --mc-cluster-text:   #ffffff;
+  --mc-cluster-border: #666666; /* audit: white border = 1.05:1 vs Carto-light; #666 = 4.83:1 */
+
+  /* V2 — role pills (Wong 2011 colorblind-safe palette) */
+  --mc-role-repeater:  #D55E00; /* vermillion        */
+  --mc-role-companion: #56B4E9; /* sky blue          */
+  --mc-role-room:      #009E73; /* bluish-green      */
+  --mc-role-sensor:    #F0E442; /* yellow            */
+  --mc-role-observer:  #CC79A7; /* reddish-purple    */
+
+  /* V3 — multi-byte hash labels (neutral fill + high-luminance accent stripes) */
+  --mc-mb-fill:        rgba(33, 41, 54, 0.92);
+  --mc-mb-text:        #ffffff;
+  --mc-mb-confirmed:   #56F0A0; /* audit override of Tol vibrant for fill contrast */
+  --mc-mb-suspected:   #FFD966;
+  --mc-mb-unknown:     #FF8888;
+}
+
 .mc-cluster-wrap { background: transparent !important; border: 0 !important; }
 .mc-cluster {
   width: 48px; height: 48px; border-radius: 50%;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   font-family: var(--font, system-ui, sans-serif);
-  color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5);
-  border: 2px solid rgba(255,255,255,0.85);
-  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  background: var(--mc-cluster-fill);
+  color: var(--mc-cluster-text); text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  border: 2px solid var(--mc-cluster-border);
+  /* Dark halo + soft shadow — audit fix so the border edge is visible vs Carto-light */
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.35);
   cursor: pointer;
   transition: transform 120ms ease;
 }
 .mc-cluster:hover { transform: scale(1.06); }
-.mc-cluster.mc-sm { background: var(--info, #2563eb); width: 40px; height: 40px; }
-.mc-cluster.mc-md { background: var(--warning, #d97706); width: 48px; height: 48px; }
-.mc-cluster.mc-lg { background: var(--accent, #dc2626); width: 56px; height: 56px; }
-.mc-cluster .mc-count { font-size: 14px; font-weight: 700; line-height: 1; }
+/* Border-style ramp is the redundant non-color carrier of the count bucket. */
+.mc-cluster.mc-sm { width: 40px; height: 40px; border-width: 1.5px; border-style: solid; }
+.mc-cluster.mc-md { width: 48px; height: 48px; border-width: 2.5px; border-style: solid; }
+.mc-cluster.mc-lg { width: 56px; height: 56px; border-width: 2px;   border-style: double; }
+.mc-cluster .mc-count { font-size: 14px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
 .mc-cluster.mc-lg .mc-count { font-size: 16px; }
 .mc-cluster .mc-pills {
   display: flex; gap: 2px; margin-top: 3px;
 }
 .mc-cluster .mc-pill {
-  display: inline-block; min-width: 12px; padding: 0 3px;
-  border-radius: 6px; font-size: 9px; font-weight: 600; line-height: 12px;
-  color: #fff; text-align: center; text-shadow: none;
-  border: 1px solid rgba(255,255,255,0.4);
+  display: inline-block; min-width: 12px; padding: 1px 3px;
+  border-radius: 3px;
+  /* Audit: bump 9px → 10px, monospace, dark text on every Wong hue.
+     #1a1a1a on all 5 Wong hues passes SC 1.4.3 small-text (≥4.5:1). */
+  font: 700 10px/1.1 ui-monospace, "SF Mono", Consolas, monospace;
+  letter-spacing: 0;
+  color: #1a1a1a; text-align: center; text-shadow: none;
+  border: 1px solid rgba(0,0,0,0.25);
+  overflow: visible; /* SC 1.4.12 — user letter-spacing override must not clip */
+}
+
+/* V3 — multi-byte hash labels: neutral fill + colored 3px left border */
+.mc-mb-label {
+  background: var(--mc-mb-fill);
+  color: var(--mc-mb-text);
+  font: 600 12px/1.2 ui-monospace, "SF Mono", Consolas, monospace;
+  letter-spacing: 0.02em;
+  padding: 2px 5px 2px 4px;
+  border-left: 3px solid transparent;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.35);
+  white-space: nowrap;
+  text-align: center;
+  line-height: 1.2;
+}
+.mc-mb-label.status-confirmed { border-left-color: var(--mc-mb-confirmed); }
+.mc-mb-label.status-suspected { border-left-color: var(--mc-mb-suspected); }
+.mc-mb-label.status-unknown   { border-left-color: var(--mc-mb-unknown);   }
+
+/* Forced-colors / Windows High Contrast — degrade gracefully (audit item 7). */
+@media (forced-colors: active) {
+  .mc-cluster, .mc-pill, .mc-mb-label {
+    forced-color-adjust: auto;
+    background: Canvas;
+    color: CanvasText;
+    border-color: CanvasText;
+  }
 }
 
 /* === #1034 PR1: Channel Add modal + sectioned sidebar === */
