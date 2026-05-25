@@ -172,6 +172,20 @@ func ensureServerIndexes(rw *sql.DB) error {
 			return fmt.Errorf("ensure index %q: %w", s, err)
 		}
 	}
+	// observer_metrics(observer_id, timestamp) — composite index for the
+	// ROW_NUMBER() window function in GetMetricsSummary (PARTITION BY observer_id
+	// ORDER BY timestamp DESC). The table is created by the ingestor so probe
+	// first; servers that pre-date observer_metrics get a graceful no-op.
+	hasOM, err := TableHasColumn(rw, "observer_metrics", "observer_id")
+	if err != nil {
+		return err
+	}
+	if hasOM {
+		if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_observer_metrics_observer_ts ON observer_metrics(observer_id, timestamp)`); err != nil {
+			return err
+		}
+	}
+
 	// observer_idx (v3) vs observer_id (v2) — probe + index the matching one.
 	hasIdx, err := TableHasColumn(rw, "observations", "observer_idx")
 	if err != nil {
