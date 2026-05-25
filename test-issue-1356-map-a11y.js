@@ -69,10 +69,14 @@ assert(pillEmitRe.test(mapSrc) || /ROLE_LETTERS\[role\][\s\S]{0,200}mc-pill/.tes
   'pill HTML embeds ROLE_LETTERS[role] as the primary content');
 
 // V2.c — Dark text on ALL five pills (audit override of Tufte's per-pill switch).
-//   Either inline style="color:#1a1a1a" on the pill OR CSS rule .mc-pill { color: #1a1a1a }.
-assert(/\.mc-pill\b[^{]*\{[^}]*color\s*:\s*#1a1a1a/i.test(cssSrc) ||
-       /class="mc-pill[^"]*"[^>]*style="[^"]*color:\s*#1a1a1a/i.test(mapSrc),
-  '.mc-pill text color is #1a1a1a (dark on all five Wong hues)');
+//   Require the CSS rule `.mc-pill { color: #1a1a1a }` (authoritative).
+//   The inline-style fallback alone is NOT enough: a regression that drops the
+//   CSS rule but keeps a stray inline style would still green, masking the
+//   theming-illusion bug (round-1 adversarial #5 short-circuit).
+assert(/\.mc-pill\b[^{]*\{[^}]*color\s*:\s*#1a1a1a/i.test(cssSrc),
+  '.mc-pill CSS rule sets color #1a1a1a (authoritative, not just inline-style fallback)');
+assert(/class="mc-pill[^"]*"[^>]*style="[^"]*color:\s*#1a1a1a/i.test(mapSrc),
+  '.mc-pill render-site also emits inline color #1a1a1a (defense-in-depth for divIcon)');
 
 // V2.d — font-size ≥ 10px (audit bumped from 9px).
 const pillFontMatch = cssSrc.match(/\.mc-pill\b[^{]*\{[^}]*font[^;]*;/);
@@ -138,10 +142,46 @@ assert(/<span aria-hidden="true">[\s\S]{0,100}shortHash|<span aria-hidden="true"
        /aria-hidden="true">'\s*\+\s*visible/.test(mapSrc),
   'visible glyph+hash span is aria-hidden="true" (AT reads aria-label only)');
 
-// V3.h — old MB_COLORS solid-fill behavior must be gone (no per-status background-fill emission).
-assert(!/bgColor\s*=\s*colorOverride\s*\|\|\s*s\.color/.test(mapSrc) ||
-       /background:\s*var\(--mc-mb-fill\)/.test(mapSrc),
-  'repeater label no longer paints background by status (uses --mc-mb-fill neutral)');
+// V3.h — repeater label MUST use the neutral fill via var(--mc-mb-fill); MUST
+//   NOT paint background per-status (that would re-enable the pre-#1356
+//   color-only signal). Affirmative check on the neutral-fill rule AND
+//   negative check on the per-status bgColor pattern (round-1 adversarial #5:
+//   the prior `!removal || affirmative` form short-circuited to a tautology).
+assert(/\.mc-mb-label\b[^{]*\{[^}]*background\s*:\s*var\(--mc-mb-fill\)/.test(cssSrc),
+  '.mc-mb-label background uses var(--mc-mb-fill) — neutral fill, not status color');
+assert(!/bgColor\s*=\s*colorOverride\s*\|\|\s*s\.color/.test(mapSrc),
+  'old per-status bgColor pattern is gone (no per-status background painting)');
+
+console.log('\n=== #1356 Round-1 coverage adds: dual-marker star, null mbStatus, forced-colors ===');
+
+// COV-1 — Observer-also-repeater dual marker: the ★ star glyph inside
+//   makeRepeaterLabelIcon's obsIndicator branch MUST carry aria-hidden="true",
+//   otherwise the AT announcement is polluted with "black star" / "star" on
+//   top of the meaningful aria-label. Round-1 (Kent + adversarial) flagged.
+//   Match the exact obsIndicator construction shape: `isAlsoObserver ? ' <span aria-hidden="true" ... ★`.
+assert(/isAlsoObserver[\s\S]{0,40}\?\s*['"][^'"]*<span\s+aria-hidden="true"[^>]*>[^<]*★/.test(mapSrc),
+  'observer-also-repeater star span carries aria-hidden="true" (no AT pollution)');
+
+// COV-2 — makeRepeaterLabelIcon with no multi_byte_status field must NOT emit
+//   an aria-label containing "multi-byte undefined" (the obvious bug if the
+//   null-fallback branch is dropped). Verify the source has the explicit
+//   `mbStatus || null` + truthy-check structure that prevents this.
+assert(/var\s+status\s*=\s*mbStatus\s*\|\|\s*null\s*;/.test(mapSrc),
+  'makeRepeaterLabelIcon normalises missing mbStatus to null (not "undefined")');
+assert(/ariaStatus\s*=\s*status\s*\?\s*\(\s*['"]multi-byte\s/.test(mapSrc),
+  'ariaStatus uses ternary on truthy `status` — null falls through to "repeater hash <ID>" branch');
+// Negative regression: no template/concat that would ever produce "multi-byte undefined".
+assert(!/['"]multi-byte\s*['"]\s*\+\s*mbStatus(?![^,]*\?)/.test(mapSrc),
+  'no unconditional concat of "multi-byte " + mbStatus (would emit "multi-byte undefined" on null)');
+
+// COV-3 — @media (forced-colors: active) block MUST exist in style.css AND
+//   MUST NOT contain `forced-color-adjust: none` anywhere within its body
+//   (audit explicitly warned against `none`; degrades High Contrast Mode).
+const fcMatch = cssSrc.match(/@media\s*\(\s*forced-colors\s*:\s*active\s*\)\s*\{[\s\S]*?\n\}/);
+assert(fcMatch, '@media (forced-colors: active) block present in style.css');
+assert(fcMatch && !/forced-color-adjust\s*:\s*none/i.test(fcMatch[0]),
+  '@media (forced-colors: active) block does NOT use forced-color-adjust: none (audit regression guard)');
+
 
 console.log('\n=== #1356 Hard rules: --info / --warning / --accent untouched ===');
 
