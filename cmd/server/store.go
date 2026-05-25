@@ -4791,6 +4791,19 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int, 
 
 			senderTs := decoded.SenderTimestamp
 
+			// Issue #1366: emit tx.LatestSeen (max observation timestamp,
+			// server UTC) as the rendered timestamp — NOT tx.FirstSeen,
+			// which stays pinned at the first-ever observation of a hash
+			// and lags reality for heartbeat-style retransmissions. Fall
+			// back to FirstSeen only when LatestSeen is empty (no obs).
+			// sender_timestamp from the decoded payload is NOT used as the
+			// rendered field: client RTCs are unreliable. It remains in
+			// the response for debug surfaces.
+			displayTs := tx.LatestSeen
+			if displayTs == "" {
+				displayTs = tx.FirstSeen
+			}
+
 			observers := []string{}
 			obsName := tx.ObserverName
 			if obsName == "" {
@@ -4804,7 +4817,8 @@ func (s *PacketStore) GetChannelMessages(channelHash string, limit, offset int, 
 				Data: map[string]interface{}{
 					"sender":           displaySender,
 					"text":             displayText,
-					"timestamp":        strOrNil(tx.FirstSeen),
+					"timestamp":        strOrNil(displayTs),
+					"first_seen":       strOrNil(tx.FirstSeen),
 					"sender_timestamp": senderTs,
 					"packetId":         tx.ID,
 					"packetHash":       strOrNil(tx.Hash),

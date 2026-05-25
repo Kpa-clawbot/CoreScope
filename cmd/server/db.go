@@ -1688,7 +1688,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	var obsSQL string
 	if db.isV3 {
 		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
-				obs.id, obs.name, o.snr, o.path_json
+				obs.id, obs.name, o.snr, o.path_json, o.timestamp
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			LEFT JOIN observers obs ON obs.rowid = o.observer_idx
@@ -1696,7 +1696,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 			ORDER BY o.id ASC`
 	} else {
 		obsSQL = `SELECT o.id, t.id, t.hash, t.decoded_json, t.first_seen,
-				o.observer_id, o.observer_name, o.snr, o.path_json
+				o.observer_id, o.observer_name, o.snr, o.path_json, o.timestamp
 			FROM observations o
 			JOIN transmissions t ON t.id = o.transmission_id
 			WHERE t.id IN (` + strings.Join(idPlaceholders, ",") + `)
@@ -1710,8 +1710,9 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	defer rows.Close()
 
 	type msg struct {
-		Data    map[string]interface{}
-		Repeats int
+		Data       map[string]interface{}
+		Repeats    int
+		LatestEpoch int64 // max observation timestamp (unix seconds) — issue #1366
 	}
 	msgMap := make(map[int]*msg, len(pageIDs))
 
@@ -1719,12 +1720,16 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 		var pktID, txID int
 		var pktHash, dj, fs, obsID, obsName, pathJSON sql.NullString
 		var snr sql.NullFloat64
-		rows.Scan(&pktID, &txID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON)
+		var obsTs sql.NullInt64
+		rows.Scan(&pktID, &txID, &pktHash, &dj, &fs, &obsID, &obsName, &snr, &pathJSON, &obsTs)
 		if !dj.Valid {
 			continue
 		}
 		if existing, ok := msgMap[txID]; ok {
 			existing.Repeats++
+			if obsTs.Valid && obsTs.Int64 > existing.LatestEpoch {
+				existing.LatestEpoch = obsTs.Int64
+			}
 			continue
 		}
 		var decoded map[string]interface{}
@@ -1759,6 +1764,7 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 				"sender":           displaySender,
 				"text":             displayText,
 				"timestamp":        nullStr(fs),
+				"first_seen":       nullStr(fs),
 				"sender_timestamp": senderTs,
 				"packetId":         pktID,
 				"packetHash":       nullStr(pktHash),
@@ -1768,6 +1774,9 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 				"snr":              nullFloat(snr),
 			},
 			Repeats: 1,
+		}
+		if obsTs.Valid {
+			m.LatestEpoch = obsTs.Int64
 		}
 		if obsName.Valid {
 			m.Data["observers"] = []string{obsName.String}
@@ -1787,6 +1796,11 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 			continue
 		}
 		m.Data["repeats"] = m.Repeats
+		// Issue #1366: emit LatestSeen (max obs timestamp) as the rendered
+		// `timestamp` field. `first_seen` stays alongside for debug.
+		if m.LatestEpoch > 0 {
+			m.Data["timestamp"] = time.Unix(m.LatestEpoch, 0).UTC().Format(time.RFC3339)
+		}
 		messages = append(messages, m.Data)
 	}
 
