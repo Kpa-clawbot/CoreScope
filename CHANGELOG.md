@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### 📝 Documentation Corrections
+- **PR #1324 historical record correction** (#1387) — the merged PR #1324 body referenced four tests that do NOT exist in master: `TestMultibyteCapPersistRoundTrip`, `TestMultibyteCapPersistSkipsUnknown`, `TestMaybePersistCoalesces`, and a `TryLock` coalescing test. The actual tests that landed are `TestRunMultibyteCapPersist_AppliesSnapshot` and `TestRunMultibyteCapPersist_NoSnapshot_NoOp`. See issue #1386 for the corrective test additions (round-trip, unknown-key skip, coalescing).
+
 ## [3.7.2] — 2026-05-06
 
 Hotfix release branched from `v3.7.1`. Cherry-picks PR #1121 only — no other changes.
