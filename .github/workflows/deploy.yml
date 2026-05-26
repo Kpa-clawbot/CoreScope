@@ -111,6 +111,7 @@ jobs:
           node test-issue-1364-pill-no-clamp.js
           node test-issue-1375-scope-stats-fetch.js
           node test-issue-1361-cb-presets.js
+          node test-issue-1407-cb-preset-propagation.js
           node test-live.js
 
       - name: 🧹 Frontend lint (eslint no-undef) — issue #1342
