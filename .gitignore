@@ -11,6 +11,9 @@ theme.json
 firmware/
 coverage/
 public-instrumented/
+public-dist/
+# Runtime: server enqueues geo-prune requests as marker files alongside the DB.
+cmd/server/prune-requests/
 .nyc_output/
 .setup-state
 # Squad: ignore runtime state (logs, inbox, sessions)

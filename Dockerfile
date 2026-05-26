@@ -53,6 +53,21 @@ COPY cmd/decrypt/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags="-s -w" -o /corescope-decrypt .
 
+# Minify frontend (esbuild on public/*.js and *.css → public-dist/)
+# Runs natively on the builder arch — output is plain text so no cross-compile
+# concerns.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
+WORKDIR /build/frontend
+# Install ONLY esbuild — the project's package.json devDependencies pulls
+# playwright (>200 MB with browsers), c8, supertest, etc., none of which the
+# frontend minify step needs. Bootstrap a throwaway package.json so this
+# stage's install footprint is just esbuild + its platform binding.
+RUN echo '{"name":"corescope-frontend-build","version":"0.0.0","private":true}' > package.json && \
+    npm install --no-audit --no-fund --omit=optional esbuild@^0.24.0
+COPY scripts/build-frontend.mjs ./scripts/build-frontend.mjs
+COPY public/ ./public/
+RUN node scripts/build-frontend.mjs
+
 # Runtime image
 FROM alpine:3.20
 
@@ -63,8 +78,10 @@ WORKDIR /app
 # Go binaries
 COPY --from=builder /corescope-server /corescope-ingestor /corescope-decrypt /app/
 
-# Frontend assets + config
-COPY public/ ./public/
+# Frontend assets + config. We ship the minified bundle from the Node builder
+# stage (public-dist/) as /app/public — the Go server's -public flag defaults
+# to "public" so no flag change is needed.
+COPY --from=frontend /build/frontend/public-dist/ ./public/
 COPY config.example.json channel-rainbow.json ./
 
 # Bake git commit SHA — manage.sh and CI write .git-commit before build
