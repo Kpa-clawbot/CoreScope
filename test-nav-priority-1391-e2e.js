@@ -30,7 +30,12 @@ const HIGH_PRIORITY_HREFS = ['#/home', '#/packets', '#/map', '#/live', '#/nodes'
 // Routes whose link is NOT data-priority="high" (verified via
 // `grep data-priority public/index.html`). These exercise the
 // "active pill is non-high" branch where the bug surfaces.
-const NON_HIGH_ROUTES = ['#/perf', '#/audio-lab', '#/analytics', '#/observers'];
+// #1396: extended to include /#/channels — operator screenshot at
+// ~1024px on /#/channels showed the entire inline strip EMPTY AND
+// More dropdown containing only one item (Tools). The /channels
+// route uses #1376's chat-app redesign and was not previously
+// covered by the #1391 fix verification loop.
+const NON_HIGH_ROUTES = ['#/perf', '#/audio-lab', '#/analytics', '#/observers', '#/channels'];
 
 // Operator screenshot was ~1080px. Cover the narrow-desktop CSS branch
 // (≤1100) AND the measurement-loop branch (>1100) — bug reproduces in
@@ -160,6 +165,24 @@ async function main() {
           `${tag}: overflowed links missing from More dropdown: [${data.missingFromMore.join(', ')}] ` +
           `(more=[${data.moreItems.join(', ')}])`
         );
+
+        // (4) #1396: in the narrow-desktop band (≤1200) the inline
+        // strip must hold the active pill AND every high-priority
+        // link AND nothing else — which means the More dropdown
+        // contains EXACTLY the 5 non-high non-active links. The
+        // operator screenshot was More=[Tools] only (1/6 expected)
+        // at ~1024px on /#/channels; this assertion locks the
+        // contract.
+        if (w <= 1200) {
+          const ALL_NON_HIGH = ['#/channels', '#/tools', '#/observers', '#/analytics', '#/perf', '#/audio-lab'];
+          const expectedMore = ALL_NON_HIGH.filter(h => h !== expectedActive).sort();
+          assert.deepStrictEqual(
+            [...data.moreItems].sort(),
+            expectedMore,
+            `${tag}: More dropdown must contain exactly the ${expectedMore.length} non-active non-high routes ` +
+            `[${expectedMore.join(', ')}], got [${data.moreItems.join(', ')}]`
+          );
+        }
 
         passes++;
         console.log(`  ✅ ${tag}: active inline + ${data.visibleHighPri.length}/5 high-pri inline + ` +
