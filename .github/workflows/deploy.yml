@@ -317,6 +317,7 @@ jobs:
           BASE_URL=http://localhost:13581 node test-customize-export-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-drag-manager-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1306-collisions-terminology-e2e.js 2>&1 | tee -a e2e-output.txt
+          CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1374-route-map-a11y-e2e.js 2>&1 | tee -a e2e-output.txt
 
       - name: Collect frontend coverage (parallel)
         if: success() && github.event_name == 'push'
