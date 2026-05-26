@@ -37,6 +37,13 @@
         sensor:    '#F0E442', // yellow
         observer:  '#CC79A7'  // reddish-purple
       },
+      // #1407 — per-role text colors paired with each bg for WCAG 1.4.3 AA
+      // (≥4.5:1). Wong defaults all pass with dark text; explicit so the
+      // CSS-var pipeline is uniform across presets.
+      roleText: {
+        repeater: '#1a1a1a', companion: '#1a1a1a', room: '#1a1a1a',
+        sensor: '#1a1a1a', observer: '#1a1a1a'
+      },
       mb: {
         confirmed: '#56F0A0',
         suspected: '#FFD966',
@@ -55,6 +62,12 @@
         sensor:    '#FFB000', // amber
         observer:  '#DC267F'  // magenta
       },
+      // #1407 — IBM 5-class: room (#785EF0) and observer (#DC267F) fail AA
+      // with #1a1a1a (3.86 / 3.83). Flip to white where needed.
+      roleText: {
+        repeater: '#1a1a1a', companion: '#1a1a1a', room: '#ffffff',
+        sensor: '#1a1a1a', observer: '#ffffff'
+      },
       mb: {
         confirmed: '#648FFF',
         suspected: '#FFB000',
@@ -71,6 +84,11 @@
         room:      '#785EF0',
         sensor:    '#FE6100',
         observer:  '#DC267F'
+      },
+      // Same as deut for room/observer.
+      roleText: {
+        repeater: '#1a1a1a', companion: '#1a1a1a', room: '#ffffff',
+        sensor: '#1a1a1a', observer: '#ffffff'
       },
       mb: {
         confirmed: '#648FFF',
@@ -90,6 +108,18 @@
         sensor:    '#DDCC77', // sand (replaces pure yellow)
         observer:  '#AA4499'  // purple
       },
+      // #1407 — Tol muted has 3 darker anchors that fail with dark text:
+      //   companion #117733 vs #1a1a1a = 3.71:1 → use white text
+      //   room #882255 vs #1a1a1a = 2.41:1 → use white text
+      //   observer #AA4499 vs #1a1a1a = 4.00:1 → use white text
+      // The 2 lighter anchors (rose, sand) keep dark text.
+      roleText: {
+        repeater: '#1a1a1a',  // #CC6677 vs #1a1a1a = 5.73:1 ✓
+        companion: '#ffffff', // #117733 vs #fff = 5.66:1 ✓
+        room:      '#ffffff', // #882255 vs #fff = 8.71:1 ✓
+        sensor:    '#1a1a1a', // #DDCC77 vs #1a1a1a = 12.98:1 ✓
+        observer:  '#ffffff'  // #AA4499 vs #fff = 5.25:1 ✓
+      },
       mb: {
         confirmed: '#117733',
         suspected: '#DDCC77',
@@ -100,16 +130,28 @@
       id: 'achromat',
       label: 'Achromatopsia (monochrome)',
       description: 'Pure luminance ramp — relies on shape/letter/glyph carriers from #1356/#1357.',
-      // Luminance ramp at 90/70/50/35/20% per spec. Achromat users distinguish
-      // by lightness; the shape/letter/glyph carriers from #1356/#1357 carry
-      // role identity. Map markers also have the dark halo from #1356 so even
-      // light-grey fills remain visible against Carto-positron.
       roleColors: {
         repeater:  '#333333', // L=20%
         companion: '#595959', // L=35%
         room:      '#808080', // L=50%
         sensor:    '#b3b3b3', // L=70%
         observer:  '#e6e6e6'  // L=90%
+      },
+      // #1407 — original bug: pill text locked to #1a1a1a → 3 of 5 fail AA.
+      // Fix: white text on the 2 darkest grays, dark text on the 2 lightest,
+      // pure black for L=50 mid-gray (neither #1a1a1a nor #fff clears 4.5
+      // there — black yields 5.32:1).
+      //   repeater  #333 vs #fff = 12.63:1 ✓
+      //   companion #595959 vs #fff = 7.00:1 ✓
+      //   room      #808080 vs #000 = 5.32:1 ✓  (vs #1a1a1a = 4.41 ✗ / #fff = 3.95 ✗)
+      //   sensor    #b3b3b3 vs #1a1a1a = 8.30:1 ✓
+      //   observer  #e6e6e6 vs #1a1a1a = 13.94:1 ✓
+      roleText: {
+        repeater:  '#ffffff',
+        companion: '#ffffff',
+        room:      '#000000',
+        sensor:    '#1a1a1a',
+        observer:  '#1a1a1a'
       },
       mb: {
         confirmed: '#b3b3b3',
@@ -190,20 +232,19 @@
       Object.keys(p.roleColors).forEach(function (role) {
         style.setProperty('--mc-role-' + role, p.roleColors[role]);
       });
+      // #1407 — per-role text-color CSS vars so .mc-pill / badges can pick
+      // a foreground that meets WCAG 1.4.3 AA against the role bg.
+      var rt = p.roleText || {};
+      ['repeater', 'companion', 'room', 'sensor', 'observer'].forEach(function (role) {
+        style.setProperty('--mc-role-' + role + '-text', rt[role] || '#1a1a1a');
+      });
       Object.keys(p.mb).forEach(function (k) {
         style.setProperty('--mc-mb-' + k, p.mb[k]);
       });
-      // Keep window.ROLE_COLORS in sync so legend/cluster JS picks up new hues.
-      if (typeof window !== 'undefined' && window.ROLE_COLORS) {
-        Object.keys(p.roleColors).forEach(function (role) {
-          window.ROLE_COLORS[role] = p.roleColors[role];
-        });
-        if (window.ROLE_STYLE) {
-          Object.keys(p.roleColors).forEach(function (role) {
-            if (window.ROLE_STYLE[role]) window.ROLE_STYLE[role].color = p.roleColors[role];
-          });
-        }
-      }
+      // #1407 — ROLE_COLORS / ROLE_STYLE are now live getters in roles.js
+      // that read --mc-role-* directly, so no explicit sync is needed. The
+      // pre-#1407 code path kept them in sync as a workaround for the static
+      // literal bug; with the getter it's a no-op and removed.
     }
     if (!opts.skipPersist) {
       try { if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, p.id); } catch (e) {}

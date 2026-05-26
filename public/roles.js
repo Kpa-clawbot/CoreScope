@@ -9,10 +9,96 @@
 
 (function () {
   // ─── Role definitions ───
-  window.ROLE_COLORS = {
-    repeater: '#dc2626', companion: '#2563eb', room: '#16a34a',
-    sensor: '#d97706', observer: '#8b5cf6', unknown: '#6b7280'
+  // #1407 — Wong palette defaults that match the unscoped --mc-role-* CSS
+  // vars in :root of style.css. These are FALLBACKS only — the live getter
+  // below reads --mc-role-* from documentElement on every access, so any
+  // preset switch (cb-presets.js) is reflected immediately without per-page
+  // listener wiring. The legacy April palette (#dc2626 etc.) was the bug.
+  var WONG_ROLE_DEFAULTS = {
+    repeater:  '#D55E00',
+    companion: '#56B4E9',
+    room:      '#009E73',
+    sensor:    '#F0E442',
+    observer:  '#CC79A7',
+    unknown:   '#6b7280'
   };
+  var WONG_ROLE_TEXT_DEFAULTS = {
+    repeater: '#1a1a1a', companion: '#1a1a1a', room: '#1a1a1a',
+    sensor: '#1a1a1a', observer: '#1a1a1a', unknown: '#1a1a1a'
+  };
+
+  function _readCssVar(name, fallback) {
+    try {
+      if (typeof document === 'undefined' || !document.documentElement) return fallback;
+      var v = '';
+      if (typeof getComputedStyle === 'function') {
+        v = getComputedStyle(document.documentElement).getPropertyValue(name);
+      }
+      if (!v && document.documentElement.style && typeof document.documentElement.style.getPropertyValue === 'function') {
+        v = document.documentElement.style.getPropertyValue(name);
+      }
+      v = (v || '').trim();
+      return v || fallback;
+    } catch (e) { return fallback; }
+  }
+
+  // Server-config overrides go into this object; the getter prefers them
+  // when present so backend-pushed role colors still win over CSS vars.
+  var _roleOverrides = {};
+
+  function _liveRoleColors() {
+    var base = {};
+    var roles = ['repeater', 'companion', 'room', 'sensor', 'observer'];
+    for (var i = 0; i < roles.length; i++) {
+      var k = roles[i];
+      base[k] = _roleOverrides[k] || _readCssVar('--mc-role-' + k, WONG_ROLE_DEFAULTS[k]);
+    }
+    base.unknown = _roleOverrides.unknown || WONG_ROLE_DEFAULTS.unknown;
+    // Wrap in a Proxy so per-key assignment by legacy callers (customizer:
+    //   `window.ROLE_COLORS[key] = inp.value`) lands in _roleOverrides and
+    //   is visible on the NEXT read. Without this, the mutation would be
+    //   thrown away when the snapshot is GC'd. Falls back to a plain object
+    //   in environments without Proxy (none we ship to, but cheap).
+    if (typeof Proxy === 'function') {
+      return new Proxy(base, {
+        set: function (t, prop, value) {
+          _roleOverrides[prop] = value;
+          t[prop] = value;
+          return true;
+        }
+      });
+    }
+    return base;
+  }
+
+  Object.defineProperty(window, 'ROLE_COLORS', {
+    configurable: true,
+    enumerable: true,
+    get: function () { return _liveRoleColors(); },
+    // Setter accepts per-key writes — older callers do
+    //   `ROLE_COLORS.repeater = '#xxx'`
+    // which on a getter-only object would silently no-op in strict mode.
+    // We treat any whole-object assignment as an override merge so the
+    // legacy customizer code path still works.
+    set: function (v) {
+      if (v && typeof v === 'object') {
+        for (var k in v) if (Object.prototype.hasOwnProperty.call(v, k)) _roleOverrides[k] = v[k];
+      }
+    }
+  });
+  // Per-key writes via Proxy not portable enough — expose helper for callers
+  // that want to override at runtime (customizer "node colors" path).
+  window.setRoleColorOverride = function (role, hex) {
+    if (!role) return;
+    if (hex == null || hex === '') delete _roleOverrides[role];
+    else _roleOverrides[role] = hex;
+  };
+  // Back-compat: also export the writable override map so customize.js's
+  // `window.ROLE_COLORS[key] = inp.value` style mutation works.
+  // We intercept by replacing the getter target with a Proxy on access.
+  Object.defineProperty(window, 'ROLE_COLORS_OVERRIDES', {
+    value: _roleOverrides, writable: false, enumerable: false, configurable: false
+  });
 
   window.TYPE_COLORS = {
     ADVERT: '#22c55e', GRP_TXT: '#3b82f6', GRP_DATA: '#8b5cf6', TXT_MSG: '#f59e0b', ACK: '#6b7280',
@@ -65,13 +151,41 @@
     observer:  'diamond'
   };
 
-  window.ROLE_STYLE = {
-    repeater:  { color: '#dc2626', shape: 'circle',   radius: 8,  weight: 2 },
-    companion: { color: '#2563eb', shape: 'square',   radius: 8,  weight: 2 },
-    room:      { color: '#16a34a', shape: 'hexagon',  radius: 9,  weight: 2 },
-    sensor:    { color: '#d97706', shape: 'triangle', radius: 8,  weight: 2 },
-    observer:  { color: '#8b5cf6', shape: 'diamond',  radius: 9,  weight: 2 }
+  // #1407 — ROLE_STYLE.color reads live (matches ROLE_COLORS getter).
+  // The shape/radius/weight stay static. Stored overrides survive across
+  // reads via the closure above.
+  var _styleShapes = {
+    repeater:  { shape: 'circle',   radius: 8, weight: 2 },
+    companion: { shape: 'square',   radius: 8, weight: 2 },
+    room:      { shape: 'hexagon',  radius: 9, weight: 2 },
+    sensor:    { shape: 'triangle', radius: 8, weight: 2 },
+    observer:  { shape: 'diamond',  radius: 9, weight: 2 }
   };
+  function _buildRoleStyle() {
+    var out = {};
+    var live = _liveRoleColors();
+    for (var role in _styleShapes) {
+      var s = _styleShapes[role];
+      out[role] = {
+        color:  _roleOverrides[role] || live[role],
+        shape:  s.shape,
+        radius: s.radius,
+        weight: s.weight
+      };
+    }
+    return out;
+  }
+  Object.defineProperty(window, 'ROLE_STYLE', {
+    configurable: true,
+    enumerable: true,
+    get: function () { return _buildRoleStyle(); },
+    set: function (v) {
+      // Legacy whole-object assignment: copy color overrides only.
+      if (v && typeof v === 'object') {
+        for (var k in v) if (v[k] && v[k].color) _roleOverrides[k] = v[k].color;
+      }
+    }
+  });
 
   // Glyphs mirror the ROLE_SHAPES (used in tooltips, legends, lists).
   window.ROLE_EMOJI = {
@@ -224,10 +338,16 @@
   // ─── Fetch server overrides ───
   window.MeshConfigReady = fetch('/api/config/client').then(function (r) { return r.json(); }).then(function (cfg) {
     if (cfg.roles) {
-      if (cfg.roles.colors) Object.assign(ROLE_COLORS, cfg.roles.colors);
+      if (cfg.roles.colors) {
+        // #1407 — ROLE_COLORS is now a live getter; merge into the override map.
+        for (var rk in cfg.roles.colors) _roleOverrides[rk] = cfg.roles.colors[rk];
+      }
       if (cfg.roles.labels) Object.assign(ROLE_LABELS, cfg.roles.labels);
       if (cfg.roles.style) {
-        for (var k in cfg.roles.style) ROLE_STYLE[k] = Object.assign(ROLE_STYLE[k] || {}, cfg.roles.style[k]);
+        // Same: merge color overrides only; shape/radius/weight come from _styleShapes.
+        for (var sk in cfg.roles.style) {
+          if (cfg.roles.style[sk] && cfg.roles.style[sk].color) _roleOverrides[sk] = cfg.roles.style[sk].color;
+        }
       }
       if (cfg.roles.emoji) Object.assign(ROLE_EMOJI, cfg.roles.emoji);
       if (cfg.roles.sort) window.ROLE_SORT = cfg.roles.sort;
@@ -247,9 +367,7 @@
     if (cfg.externalUrls) Object.assign(EXTERNAL_URLS, cfg.externalUrls);
     if (cfg.propagationBufferMs != null) window.PROPAGATION_BUFFER_MS = cfg.propagationBufferMs;
     // Sync ROLE_STYLE colors with ROLE_COLORS
-    for (var role in ROLE_STYLE) {
-      if (ROLE_COLORS[role]) ROLE_STYLE[role].color = ROLE_COLORS[role];
-    }
+    // #1407 — both are now live getters; no manual sync needed. Kept as no-op for clarity.
   }).catch(function () { /* use defaults */ });
 
   // ─── Built-in IATA airport code → city name mapping ───

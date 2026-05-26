@@ -68,15 +68,17 @@ assert(pillEmitRe.test(mapSrc) || /ROLE_LETTERS\[role\][\s\S]{0,200}mc-pill/.tes
        /mc-pill[\s\S]{0,200}ROLE_LETTERS\[role\]/.test(mapSrc),
   'pill HTML embeds ROLE_LETTERS[role] as the primary content');
 
-// V2.c — Dark text on ALL five pills (audit override of Tufte's per-pill switch).
-//   Require the CSS rule `.mc-pill { color: #1a1a1a }` (authoritative).
-//   The inline-style fallback alone is NOT enough: a regression that drops the
-//   CSS rule but keeps a stray inline style would still green, masking the
-//   theming-illusion bug (round-1 adversarial #5 short-circuit).
-assert(/\.mc-pill\b[^{]*\{[^}]*color\s*:\s*#1a1a1a/i.test(cssSrc),
-  '.mc-pill CSS rule sets color #1a1a1a (authoritative, not just inline-style fallback)');
-assert(/class="mc-pill[^"]*"[^>]*style="[^"]*color:\s*#1a1a1a/i.test(mapSrc),
-  '.mc-pill render-site also emits inline color #1a1a1a (defense-in-depth for divIcon)');
+// V2.c — Dark text on ALL five Wong-default pills (audit override of Tufte's
+//   per-pill switch). #1407 generalized this to a per-role text-color CSS var
+//   (--mc-role-X-text) so darker presets (achromat / trit) can pair white text
+//   with darker bgs and still meet WCAG 1.4.3 AA. The Wong DEFAULT still uses
+//   #1a1a1a — encoded as the fallback in `var(--mc-pill-text, #1a1a1a)` AND
+//   on each `var(--mc-role-X-text, #1a1a1a)`, so any regression that drops the
+//   per-role vars still renders dark text on Wong (no theming illusion).
+assert(/\.mc-pill\b[^{]*\{[^}]*color\s*:\s*var\(\s*--mc-(?:pill|role-[a-z]+)-text\s*,\s*#1a1a1a\s*\)/i.test(cssSrc),
+  '.mc-pill CSS rule sets color: var(--mc-...-text, #1a1a1a) — #1407 generalized #1356\'s authoritative dark default');
+assert(/class="mc-pill[^"]*"[^>]*style="[^"]*color:(?:\s*#1a1a1a|'\s*\+\s*fg\b|\s*var\(--mc-role-[a-z]+-text)/i.test(mapSrc),
+  '.mc-pill render-site emits inline color (#1a1a1a, "+ fg +", or var(--mc-role-X-text, #1a1a1a)) — defense-in-depth for divIcon (#1407)');
 
 // V2.d — font-size ≥ 10px (audit bumped from 9px).
 const pillFontMatch = cssSrc.match(/\.mc-pill\b[^{]*\{[^}]*font[^;]*;/);

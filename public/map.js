@@ -1476,14 +1476,22 @@
     var roleOrder = ['repeater', 'companion', 'room', 'sensor', 'observer'];
     // #1356 V2: pill background uses the --mc-role-* Wong palette (CSS var),
     // pill text is the role letter (primary, monochrome-safe carrier).
-    // The audit's minimal patch keeps dark text on every Wong hue, so no
-    // per-role text-color branching is needed.
+    // #1407: pill text COLOR now comes from --mc-role-X-text (set by
+    // cb-presets.js + style.css :root defaults), paired per-bg to clear
+    // WCAG 1.4.3 AA on every preset (achromat / trit needed the flip).
     var ROLE_BG_VAR = {
       repeater:  'var(--mc-role-repeater)',
       companion: 'var(--mc-role-companion)',
       room:      'var(--mc-role-room)',
       sensor:    'var(--mc-role-sensor)',
       observer:  'var(--mc-role-observer)',
+    };
+    var ROLE_TEXT_VAR = {
+      repeater:  'var(--mc-role-repeater-text, #1a1a1a)',
+      companion: 'var(--mc-role-companion-text, #1a1a1a)',
+      room:      'var(--mc-role-room-text, #1a1a1a)',
+      sensor:    'var(--mc-role-sensor-text, #1a1a1a)',
+      observer:  'var(--mc-role-observer-text, #1a1a1a)',
     };
     var pillsHtml = '';
     var tooltipParts = [];
@@ -1495,13 +1503,14 @@
       tooltipParts.push(n + ' ' + role + (n === 1 ? '' : 's'));
       if (pillsShown < 4) {
         var bg = ROLE_BG_VAR[role] || 'var(--mc-role-companion)';
+        var fg = ROLE_TEXT_VAR[role] || 'var(--mc-role-companion-text, #1a1a1a)';
         var letter = ROLE_LETTERS[role] || '?';
         // #1360 follow-up: cap 4+ digit counts as "999+" to bound pill width.
         // Defense-in-depth: .mc-pill CSS also enforces max-width + ellipsis.
         if (n > 999) n = '999+';
         pillsHtml += '<span class="mc-pill role-' + role + '" ' +
                      'role="img" aria-label="' + n + ' ' + role + (n === 1 ? '' : 's') + '" ' +
-                     'style="background:' + bg + ';color:#1a1a1a" ' +
+                     'style="background:' + bg + ';color:' + fg + '" ' +
                      'title="' + n + ' ' + role + (n === 1 ? '' : 's') + '">' +
                      letter + n + '</span>';
         pillsShown += 1;

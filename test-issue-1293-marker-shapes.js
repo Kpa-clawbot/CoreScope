@@ -56,8 +56,12 @@ for (const role of Object.keys(expectedShapes)) {
   assert(re.test(shapeBlock), `ROLE_SHAPES.${role} === '${expectedShapes[role]}'`);
 }
 
-// ROLE_STYLE shape values match the new map
-const styleBlockMatch = rolesSrc.match(/window\.ROLE_STYLE\s*=\s*\{([\s\S]*?)\};/);
+// ROLE_STYLE shape values match the new map.
+// #1407 refactored ROLE_STYLE into a live getter (over Object.defineProperty)
+// whose shape data lives in a _styleShapes literal — parse that instead.
+const styleBlockMatch =
+  rolesSrc.match(/window\.ROLE_STYLE\s*=\s*\{([\s\S]*?)\};/) ||
+  rolesSrc.match(/_styleShapes\s*=\s*\{([\s\S]*?)\};/);
 const styleBlock = styleBlockMatch ? styleBlockMatch[1] : '';
 for (const role of Object.keys(expectedShapes)) {
   // crude per-line check

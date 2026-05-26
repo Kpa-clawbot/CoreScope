@@ -3439,6 +3439,16 @@ th.sort-active { color: var(--accent, #60a5fa); }
   --mc-role-sensor:    #F0E442; /* yellow            */
   --mc-role-observer:  #CC79A7; /* reddish-purple    */
 
+  /* #1407 — per-role text colors paired with each --mc-role-X bg so
+   * .mc-pill (and any badge using the var) hits WCAG 1.4.3 AA against
+   * the active preset. Wong defaults all clear 4.5:1 with dark text;
+   * preset overrides live in body[data-cb-preset="..."] blocks below. */
+  --mc-role-repeater-text:  #1a1a1a;
+  --mc-role-companion-text: #1a1a1a;
+  --mc-role-room-text:      #1a1a1a;
+  --mc-role-sensor-text:    #1a1a1a;
+  --mc-role-observer-text:  #1a1a1a;
+
   /* V3 — multi-byte hash labels (neutral fill + high-luminance accent stripes) */
   --mc-mb-fill:        rgba(33, 41, 54, 0.92);
   --mc-mb-text:        #ffffff;
@@ -3467,6 +3477,11 @@ body[data-cb-preset="default"] {
   --mc-role-room:      #009E73;
   --mc-role-sensor:    #F0E442;
   --mc-role-observer:  #CC79A7;
+  --mc-role-repeater-text:  #1a1a1a;
+  --mc-role-companion-text: #1a1a1a;
+  --mc-role-room-text:      #1a1a1a;
+  --mc-role-sensor-text:    #1a1a1a;
+  --mc-role-observer-text:  #1a1a1a;
   --mc-mb-confirmed:   #56F0A0;
   --mc-mb-suspected:   #FFD966;
   --mc-mb-unknown:     #FF8888;
@@ -3478,6 +3493,12 @@ body[data-cb-preset="deut"] {
   --mc-role-room:      #785EF0;
   --mc-role-sensor:    #FFB000;
   --mc-role-observer:  #DC267F;
+  /* #1407 — room/observer fail with dark text (3.86/3.83); flip to white. */
+  --mc-role-repeater-text:  #1a1a1a;
+  --mc-role-companion-text: #1a1a1a;
+  --mc-role-room-text:      #ffffff;
+  --mc-role-sensor-text:    #1a1a1a;
+  --mc-role-observer-text:  #ffffff;
   --mc-mb-confirmed:   #648FFF;
   --mc-mb-suspected:   #FFB000;
   --mc-mb-unknown:     #DC267F;
@@ -3489,6 +3510,12 @@ body[data-cb-preset="prot"] {
   --mc-role-room:      #785EF0;
   --mc-role-sensor:    #FE6100;
   --mc-role-observer:  #DC267F;
+  /* #1407 — same room/observer flip as deut. */
+  --mc-role-repeater-text:  #1a1a1a;
+  --mc-role-companion-text: #1a1a1a;
+  --mc-role-room-text:      #ffffff;
+  --mc-role-sensor-text:    #1a1a1a;
+  --mc-role-observer-text:  #ffffff;
   --mc-mb-confirmed:   #648FFF;
   --mc-mb-suspected:   #FFB000;
   --mc-mb-unknown:     #DC267F;
@@ -3500,6 +3527,12 @@ body[data-cb-preset="trit"] {
   --mc-role-room:      #882255;
   --mc-role-sensor:    #DDCC77;
   --mc-role-observer:  #AA4499;
+  /* #1407 — companion / room / observer fail AA with dark text; flip to white. */
+  --mc-role-repeater-text:  #1a1a1a;  /* 5.73:1 */
+  --mc-role-companion-text: #ffffff;  /* 5.66:1 */
+  --mc-role-room-text:      #ffffff;  /* 8.71:1 */
+  --mc-role-sensor-text:    #1a1a1a;  /* 12.98:1 */
+  --mc-role-observer-text:  #ffffff;  /* 5.25:1 */
   --mc-mb-confirmed:   #117733;
   --mc-mb-suspected:   #DDCC77;
   --mc-mb-unknown:     #CC6677;
@@ -3511,6 +3544,15 @@ body[data-cb-preset="achromat"] {
   --mc-role-room:      #808080;
   --mc-role-sensor:    #b3b3b3;
   --mc-role-observer:  #e6e6e6;
+  /* #1407 — original bug: dark text on all 5 grays failed AA on 3 of 5.
+   * Pair each gray with the text color that wins ≥4.5:1; L=50% mid-gray
+   * needs pure black (#1a1a1a yields 4.41, #fff yields 3.95 — neither
+   * passes; black yields 5.32). */
+  --mc-role-repeater-text:  #ffffff;  /* 12.63:1 */
+  --mc-role-companion-text: #ffffff;  /* 7.00:1 */
+  --mc-role-room-text:      #000000;  /* 5.32:1 */
+  --mc-role-sensor-text:    #1a1a1a;  /* 8.30:1 */
+  --mc-role-observer-text:  #1a1a1a;  /* 13.94:1 */
   --mc-mb-confirmed:   #b3b3b3;
   --mc-mb-suspected:   #808080;
   --mc-mb-unknown:     #595959;
@@ -3549,19 +3591,32 @@ body[data-cb-preset="achromat"] {
      `text-overflow:ellipsis` stay as belt-only graceful-degrade if the
      JS cap is ever bypassed. */
   overflow: hidden; text-overflow: ellipsis;
-  /* Audit: bump 9px → 10px, monospace, dark text on every Wong hue.
-     #1a1a1a on all 5 Wong hues passes SC 1.4.3 small-text (≥4.5:1).
+  /* #1407 — pill text color now reads --mc-pill-text (set per-pill via the
+     role-* selectors below), with a #1a1a1a fallback for any caller that
+     forgets to set the role class. This replaces the hardcoded `#1a1a1a`
+     that broke WCAG 1.4.3 AA on the achromat preset for 3 of 5 grays.
+     The Wong (#1357) audit conclusion still holds for the default preset
+     because --mc-role-X-text defaults to #1a1a1a in :root.
      Sized in rem (0.625rem = 10px @ default 16px root) so user
      font-size preferences scale the pill (SC 1.4.4 Resize Text 200%). */
   font: 700 0.625rem/1.1 ui-monospace, "SF Mono", Consolas, monospace;
   letter-spacing: 0;
-  color: #1a1a1a; text-align: center; text-shadow: none;
+  color: var(--mc-pill-text, #1a1a1a); text-align: center; text-shadow: none;
   border: 1px solid rgba(0,0,0,0.25);
   /* #1360: overflow:hidden + text-overflow:ellipsis above bound the pill
      when counts approach the 4-char cap ("999+"). Acceptable tradeoff vs.
      SC 1.4.12 letter-spacing clipping: text content is the role letter +
      <=4 digits, far short of needing aggressive letter-spacing overrides. */
 }
+/* #1407 — per-role pill text color, sourced from --mc-role-*-text vars set
+ * by cb-presets.js applyPreset() (and the body[data-cb-preset=...] CSS
+ * blocks above). The role-<r> class is emitted by makeClusterIcon in
+ * public/map.js, so each pill picks the correct foreground for its bg. */
+.mc-cluster .mc-pill.role-repeater  { color: var(--mc-role-repeater-text,  #1a1a1a); }
+.mc-cluster .mc-pill.role-companion { color: var(--mc-role-companion-text, #1a1a1a); }
+.mc-cluster .mc-pill.role-room      { color: var(--mc-role-room-text,      #1a1a1a); }
+.mc-cluster .mc-pill.role-sensor    { color: var(--mc-role-sensor-text,    #1a1a1a); }
+.mc-cluster .mc-pill.role-observer  { color: var(--mc-role-observer-text,  #1a1a1a); }
 
 /* V3 — multi-byte hash labels: neutral fill + colored 3px left border */
 .mc-mb-label {
