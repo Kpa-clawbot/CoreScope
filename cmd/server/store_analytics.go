@@ -1836,6 +1836,16 @@ func (s *PacketStore) GetNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 		s.hashSizeInfoMu.Unlock()
 		return cached
 	}
+	if s.hashSizeInfoCache != nil {
+		cached := s.hashSizeInfoCache
+		if s.hashSizeInFlt == nil {
+			done := make(chan struct{})
+			s.hashSizeInFlt = done
+			go s.refreshNodeHashSizeInfo(done)
+		}
+		s.hashSizeInfoMu.Unlock()
+		return cached
+	}
 
 	// Singleflight: if a recompute is already in progress, wait for it.
 	if s.hashSizeInFlt != nil {
@@ -1873,6 +1883,23 @@ func (s *PacketStore) GetNodeHashSizeInfo() map[string]*hashSizeNodeInfo {
 	}()
 	result = computeHashSizeInfoFn(s)
 	return result
+}
+
+func (s *PacketStore) refreshNodeHashSizeInfo(done chan struct{}) {
+	var result map[string]*hashSizeNodeInfo
+	defer func() {
+		s.hashSizeInfoMu.Lock()
+		if result != nil {
+			s.hashSizeInfoCache = result
+			s.hashSizeInfoAt = time.Now()
+		}
+		if s.hashSizeInFlt == done {
+			s.hashSizeInFlt = nil
+		}
+		s.hashSizeInfoMu.Unlock()
+		close(done)
+	}()
+	result = computeHashSizeInfoFn(s)
 }
 
 // computeNodeHashSizeInfo scans advert packets to compute per-node hash size data.
@@ -2020,6 +2047,16 @@ func (s *PacketStore) GetMultiByteCapMap() map[string]*MultiByteCapEntry {
 		s.hashSizeInfoMu.Unlock()
 		return cached
 	}
+	if s.multiByteCapCache != nil {
+		cached := s.multiByteCapCache
+		if s.multiByteCapInFlt == nil {
+			done := make(chan struct{})
+			s.multiByteCapInFlt = done
+			go s.refreshMultiByteCapMap(done)
+		}
+		s.hashSizeInfoMu.Unlock()
+		return cached
+	}
 
 	// Singleflight: if a recompute is already in progress, wait for it.
 	if s.multiByteCapInFlt != nil {
@@ -2072,6 +2109,38 @@ func (s *PacketStore) GetMultiByteCapMap() map[string]*MultiByteCapEntry {
 		result[caps[i].PublicKey] = &caps[i]
 	}
 	return result
+}
+
+func (s *PacketStore) refreshMultiByteCapMap(done chan struct{}) {
+	var result map[string]*MultiByteCapEntry
+	defer func() {
+		s.hashSizeInfoMu.Lock()
+		if result != nil {
+			s.multiByteCapCache = result
+			s.multiByteCapAt = time.Now()
+		}
+		if s.multiByteCapInFlt == done {
+			s.multiByteCapInFlt = nil
+		}
+		s.hashSizeInfoMu.Unlock()
+		close(done)
+	}()
+
+	analyticsData := s.GetAnalyticsHashSizes("")
+	adopterSizes := make(map[string]int)
+	if nodes, ok := analyticsData["nodes"].(map[string]map[string]interface{}); ok {
+		for pk, data := range nodes {
+			if hs, ok := data["hashSize"].(int); ok {
+				adopterSizes[pk] = hs
+			}
+		}
+	}
+
+	caps := computeMultiByteCapFn(s, adopterSizes)
+	result = make(map[string]*MultiByteCapEntry, len(caps))
+	for i := range caps {
+		result[caps[i].PublicKey] = &caps[i]
+	}
 }
 
 // MultiByteCapEntry represents a node's inferred multi-byte capability.

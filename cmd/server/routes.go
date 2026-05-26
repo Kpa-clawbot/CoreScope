@@ -835,6 +835,16 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, cached)
 		return
 	}
+	if s.statsCache != nil {
+		cached := s.statsCache
+		if !s.statsComputing {
+			s.statsComputing = true
+			go s.refreshStatsCache()
+		}
+		s.statsMu.Unlock()
+		writeJSON(w, cached)
+		return
+	}
 	// If another goroutine is already computing a fresh response (potentially
 	// blocked on s.mu.RLock during a long eviction pass), serve the existing
 	// stale cache rather than queuing 80+ goroutines behind statsMu for 90s.
@@ -849,6 +859,38 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	s.statsComputing = true
 	s.statsMu.Unlock()
 
+	resp, err := s.buildStatsResponse()
+	if err != nil {
+		s.statsMu.Lock()
+		s.statsComputing = false
+		s.statsMu.Unlock()
+		writeInternalError(w, "handleStats GetStats", err)
+		return
+	}
+
+	s.statsMu.Lock()
+	s.statsCache = resp
+	s.statsCachedAt = time.Now()
+	s.statsComputing = false
+	s.statsMu.Unlock()
+
+	writeJSON(w, resp)
+}
+
+func (s *Server) refreshStatsCache() {
+	resp, err := s.buildStatsResponse()
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	if err == nil && resp != nil {
+		s.statsCache = resp
+		s.statsCachedAt = time.Now()
+	} else if err != nil {
+		log.Printf("[stats] background refresh error: %v", err)
+	}
+	s.statsComputing = false
+}
+
+func (s *Server) buildStatsResponse() (*StatsResponse, error) {
 	var stats *Stats
 	var err error
 	if s.store != nil {
@@ -857,11 +899,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		stats, err = s.db.GetStats()
 	}
 	if err != nil {
-		s.statsMu.Lock()
-		s.statsComputing = false
-		s.statsMu.Unlock()
-		writeInternalError(w, "handleStats GetStats", err)
-		return
+		return nil, err
 	}
 	counts := s.db.GetRoleCounts()
 
@@ -887,7 +925,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 	mem := s.getMemorySnapshot(storeDataMB)
 
-	resp := &StatsResponse{
+	return &StatsResponse{
 		TotalPackets:       stats.TotalPackets,
 		TotalTransmissions: &stats.TotalTransmissions,
 		TotalObservations:  stats.TotalObservations,
@@ -917,15 +955,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		ProcessRSSMB:  mem.ProcessRSSMB,
 		GoHeapInuseMB: mem.GoHeapInuseMB,
 		GoSysMB:       mem.GoSysMB,
-	}
-
-	s.statsMu.Lock()
-	s.statsCache = resp
-	s.statsCachedAt = time.Now()
-	s.statsComputing = false
-	s.statsMu.Unlock()
-
-	writeJSON(w, resp)
+	}, nil
 }
 
 func (s *Server) handlePerf(w http.ResponseWriter, r *http.Request) {
