@@ -13,6 +13,12 @@ import (
 // edge events from observations. The server aggregates this table directly.
 const RouteHistoryBuilderInterval = 60 * time.Second
 
+const (
+	routeHistoryBackfillLookback = 7 * 24 * time.Hour
+	routeHistoryBackfillWindow   = time.Hour
+	routeHistoryBackfillPause    = 2 * time.Second
+)
+
 type routeHistoryEdgeRow struct {
 	obsID       int64
 	hopIndex    int
@@ -28,13 +34,16 @@ func (s *Store) StartRouteHistoryBuilder(interval time.Duration) func() {
 	}
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	backfillDone := make(chan struct{})
 
 	var stopOnce sync.Once
 	go func() {
 		defer close(done)
-		// Warm up in the background. This can scan 7 days of observations on
-		// existing DBs, so it must not delay MQTT connection startup.
-		initialSince := time.Now().Add(-7 * 24 * time.Hour).Unix()
+		// Do not scan the full 7-day route-history window at startup. On large
+		// DBs that monopolized the ingestor for minutes and prevented MQTT
+		// callbacks from flowing. Keep the live edge warm with a small recent
+		// window; the historical window is backfilled below in bounded chunks.
+		initialSince := time.Now().Add(-2 * interval).Unix()
 		if n, err := s.buildAndPersistRouteHistoryEdges(initialSince); err != nil {
 			log.Printf("[route-history-build] initial build error: %v", err)
 		} else {
@@ -74,16 +83,29 @@ func (s *Store) StartRouteHistoryBuilder(interval time.Duration) func() {
 		}
 	}()
 
+	go func() {
+		defer close(backfillDone)
+		s.backfillRouteHistoryEdges(stop, time.Now(), routeHistoryBackfillLookback, routeHistoryBackfillWindow, routeHistoryBackfillPause)
+	}()
+
 	return func() {
 		stopOnce.Do(func() { close(stop) })
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
 		}
+		select {
+		case <-backfillDone:
+		case <-time.After(5 * time.Second):
+		}
 	}
 }
 
 func (s *Store) buildAndPersistRouteHistoryEdges(sinceUnix int64) (int, error) {
+	return s.buildAndPersistRouteHistoryEdgesWindow(sinceUnix, 0)
+}
+
+func (s *Store) buildAndPersistRouteHistoryEdgesWindow(sinceUnix, untilUnix int64) (int, error) {
 	prefixIdx, err := buildPrefixIndex(s.db)
 	if err != nil {
 		return 0, fmt.Errorf("build prefix index: %w", err)
@@ -97,7 +119,12 @@ func (s *Store) buildAndPersistRouteHistoryEdges(sinceUnix int64) (int, error) {
 			(o.resolved_path IS NOT NULL AND o.resolved_path != '' AND o.resolved_path != '[]')
 			OR (o.path_json IS NOT NULL AND o.path_json != '' AND o.path_json != '[]')
 		  )`
-	rows, err := s.db.Query(query, sinceUnix)
+	args := []interface{}{sinceUnix}
+	if untilUnix > 0 {
+		query += ` AND o.timestamp <= ?`
+		args = append(args, untilUnix)
+	}
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("scan observations: %w", err)
 	}
@@ -183,6 +210,40 @@ func (s *Store) buildAndPersistRouteHistoryEdges(sinceUnix int64) (int, error) {
 		return 0, fmt.Errorf("commit: %w", err)
 	}
 	return inserted, nil
+}
+
+func (s *Store) backfillRouteHistoryEdges(stop <-chan struct{}, now time.Time, lookback, window, pause time.Duration) {
+	if lookback <= 0 || window <= 0 {
+		return
+	}
+	end := now.UTC().Truncate(time.Hour)
+	start := end.Add(-lookback)
+	total := 0
+	for cursor := end.Add(-window); !cursor.Before(start); cursor = cursor.Add(-window) {
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		until := cursor.Add(window)
+		n, err := s.buildAndPersistRouteHistoryEdgesWindow(cursor.Unix(), until.Unix())
+		if err != nil {
+			log.Printf("[route-history-build] backfill window [%s, %s) error: %v",
+				cursor.Format(time.RFC3339), until.Format(time.RFC3339), err)
+		} else {
+			total += n
+			if n > 0 {
+				log.Printf("[route-history-build] backfill window [%s, %s): %d edge events inserted",
+					cursor.Format(time.RFC3339), until.Format(time.RFC3339), n)
+			}
+		}
+		select {
+		case <-stop:
+			return
+		case <-time.After(pause):
+		}
+	}
+	log.Printf("[route-history-build] backfill complete: %d edge events inserted", total)
 }
 
 func (s *Store) pruneRouteHistoryEdges(maxAgeDays int) (int64, error) {

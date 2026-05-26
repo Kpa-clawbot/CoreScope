@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestRouteHistoryBuilderPersistsResolvedAdjacentEdges(t *testing.T) {
@@ -113,5 +114,62 @@ func TestRouteHistoryBuilderResolvesRawPathPrefixes(t *testing.T) {
 	}
 	if got != 1 {
 		t.Fatalf("resolved route-history edge rows = %d, want 1", got)
+	}
+}
+
+func TestRouteHistoryBuilderWindowBoundsScan(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "route-history-window.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.db.Exec(
+		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?)`,
+		"aa11111111111111", "a",
+		"bb22222222222222", "b",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	insertObservation := func(hash string, ts int64) {
+		t.Helper()
+		res, err := store.db.Exec(
+			`INSERT INTO transmissions (raw_hex, hash, first_seen) VALUES (?, ?, ?)`,
+			"", hash, time.Unix(ts, 0).UTC().Format(time.RFC3339),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		txID, _ := res.LastInsertId()
+		if _, err := store.db.Exec(
+			`INSERT INTO observations (transmission_id, path_json, resolved_path, timestamp)
+			 VALUES (?, ?, ?, ?)`,
+			txID, `["aa","bb"]`,
+			`["aa11111111111111","bb22222222222222"]`,
+			ts,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	insertObservation("outside-old", 100)
+	insertObservation("inside", 200)
+	insertObservation("outside-new", 400)
+
+	inserted, err := store.buildAndPersistRouteHistoryEdgesWindow(150, 250)
+	if err != nil {
+		t.Fatalf("buildAndPersistRouteHistoryEdgesWindow: %v", err)
+	}
+	if inserted != 1 {
+		t.Fatalf("inserted = %d, want 1 edge from bounded window", inserted)
+	}
+
+	var hashes string
+	if err := store.db.QueryRow(`SELECT GROUP_CONCAT(packet_hash, ',') FROM route_history_edges`).Scan(&hashes); err != nil {
+		t.Fatal(err)
+	}
+	if hashes != "inside" {
+		t.Fatalf("route-history hashes = %q, want only inside", hashes)
 	}
 }
