@@ -152,6 +152,20 @@ func (s *Store) buildAndPersistRouteHistoryEdges(sinceUnix int64) (int, error) {
 		return 0, fmt.Errorf("prepare: %w", err)
 	}
 	defer stmt.Close()
+	aggStmt, err := tx.Prepare(`INSERT INTO route_history_edge_hourly
+		(bucket_start, node_a, node_b, count, last_seen, sample1)
+		VALUES (?, ?, ?, 1, ?, ?)
+		ON CONFLICT(bucket_start, node_a, node_b) DO UPDATE SET
+			count = count + 1,
+			last_seen = MAX(last_seen, excluded.last_seen),
+			sample2 = CASE WHEN sample1 IS NOT excluded.sample1 AND sample2 IS NULL THEN excluded.sample1 ELSE sample2 END,
+			sample3 = CASE WHEN sample1 IS NOT excluded.sample1 AND sample2 IS NOT excluded.sample1 AND sample3 IS NULL THEN excluded.sample1 ELSE sample3 END,
+			sample4 = CASE WHEN sample1 IS NOT excluded.sample1 AND sample2 IS NOT excluded.sample1 AND sample3 IS NOT excluded.sample1 AND sample4 IS NULL THEN excluded.sample1 ELSE sample4 END,
+			sample5 = CASE WHEN sample1 IS NOT excluded.sample1 AND sample2 IS NOT excluded.sample1 AND sample3 IS NOT excluded.sample1 AND sample4 IS NOT excluded.sample1 AND sample5 IS NULL THEN excluded.sample1 ELSE sample5 END`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare aggregate: %w", err)
+	}
+	defer aggStmt.Close()
 	inserted := 0
 	for _, e := range edges {
 		res, err := stmt.Exec(e.obsID, e.hopIndex, e.bucketStart, e.a, e.b, e.hash, e.lastSeen)
@@ -159,6 +173,9 @@ func (s *Store) buildAndPersistRouteHistoryEdges(sinceUnix int64) (int, error) {
 			return 0, fmt.Errorf("insert edge: %w", err)
 		}
 		if n, _ := res.RowsAffected(); n > 0 {
+			if _, err := aggStmt.Exec(e.bucketStart, e.a, e.b, e.lastSeen, e.hash); err != nil {
+				return 0, fmt.Errorf("upsert hourly edge: %w", err)
+			}
 			inserted += int(n)
 		}
 	}
@@ -178,6 +195,10 @@ func (s *Store) pruneRouteHistoryEdges(maxAgeDays int) (int64, error) {
 		return 0, err
 	}
 	n, _ := res.RowsAffected()
+	cutoffBucket := time.Now().UTC().Add(-time.Duration(maxAgeDays) * 24 * time.Hour).Truncate(time.Hour).Unix()
+	if _, err := s.db.Exec(`DELETE FROM route_history_edge_hourly WHERE bucket_start < ?`, cutoffBucket); err != nil {
+		return n, err
+	}
 	return n, nil
 }
 

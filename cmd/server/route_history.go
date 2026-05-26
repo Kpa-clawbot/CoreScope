@@ -187,8 +187,17 @@ func (s *Server) buildRouteHistoryPayload(r *http.Request, hours int) ([]byte, e
 	since := time.Now().Add(-time.Duration(hours) * time.Hour).UTC().Format(time.RFC3339)
 	edgeMap := map[rhEdgeKey]*rhEdgeData{}
 
-	servedFromMaterialized := false
+	servedFromHourly := false
 	if s.db != nil {
+		ok, err := buildRouteHistoryEdgesFromHourly(r, s, since, edgeMap)
+		if err != nil {
+			return nil, err
+		}
+		servedFromHourly = ok
+	}
+
+	servedFromMaterialized := false
+	if !servedFromHourly && s.db != nil {
 		ok, err := buildRouteHistoryEdgesFromMaterialized(r, s, since, edgeMap)
 		if err != nil {
 			return nil, err
@@ -200,7 +209,7 @@ func (s *Server) buildRouteHistoryPayload(r *http.Request, hours int) ([]byte, e
 	// schemas we batch-fetch resolved_path only for the loaded tx IDs, avoiding a
 	// wide observations scan on every route-history cache miss.
 	servedFromStore := false
-	if !servedFromMaterialized && s.store != nil {
+	if !servedFromHourly && !servedFromMaterialized && s.store != nil {
 		s.store.mu.RLock()
 		oldest := s.store.oldestLoaded
 		snap := s.store.packets
@@ -212,7 +221,7 @@ func (s *Server) buildRouteHistoryPayload(r *http.Request, hours int) ([]byte, e
 		}
 	}
 
-	if !servedFromMaterialized && !servedFromStore {
+	if !servedFromHourly && !servedFromMaterialized && !servedFromStore {
 		if err := buildRouteHistoryEdgesFromDB(r, s, since, edgeMap); err != nil {
 			return nil, err
 		}
@@ -292,6 +301,63 @@ func (s *Server) buildRouteHistoryPayload(r *http.Request, hours int) ([]byte, e
 		return nil, err
 	}
 	return payload, nil
+}
+
+func buildRouteHistoryEdgesFromHourly(r *http.Request, s *Server, since string, edgeMap map[rhEdgeKey]*rhEdgeData) (bool, error) {
+	sinceTime, err := time.Parse(time.RFC3339, since)
+	if err != nil {
+		return false, err
+	}
+	rows, err := s.db.conn.QueryContext(r.Context(),
+		`SELECT node_a, node_b, SUM(count), MAX(last_seen),
+		        MAX(sample1), MAX(sample2), MAX(sample3), MAX(sample4), MAX(sample5)
+		 FROM route_history_edge_hourly
+		 WHERE bucket_start >= ?
+		 GROUP BY node_a, node_b`,
+		sinceTime.UTC().Truncate(time.Hour).Unix(),
+	)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return false, nil
+		}
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var a, b, lastSeen string
+		var count int
+		var samples [5]*string
+		if err := rows.Scan(&a, &b, &count, &lastSeen, &samples[0], &samples[1], &samples[2], &samples[3], &samples[4]); err != nil {
+			continue
+		}
+		if a > b {
+			a, b = b, a
+		}
+		k := rhEdgeKey{a, b}
+		e := edgeMap[k]
+		if e == nil {
+			e = &rhEdgeData{}
+			edgeMap[k] = e
+		}
+		e.count += count
+		if lastSeen > e.lastSeen {
+			e.lastSeen = lastSeen
+		}
+		for _, sample := range samples {
+			if sample == nil || *sample == "" || len(e.samples) >= 5 {
+				continue
+			}
+			e.samples = append(e.samples, *sample)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	// If the table exists, it is the bounded source of truth. Returning true
+	// even for zero rows prevents request handlers from falling back to raw
+	// observation scans while the ingestor warms aggregates.
+	return true, nil
 }
 
 func buildRouteHistoryEdgesFromMaterialized(r *http.Request, s *Server, since string, edgeMap map[rhEdgeKey]*rhEdgeData) (bool, error) {

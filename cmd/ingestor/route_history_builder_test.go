@@ -60,6 +60,13 @@ func TestRouteHistoryBuilderPersistsResolvedAdjacentEdges(t *testing.T) {
 	if count != 2 {
 		t.Fatalf("route_history_edges rows = %d, want 2", count)
 	}
+	var hourlyCount int
+	if err := store.db.QueryRow(`SELECT COALESCE(SUM(count), 0) FROM route_history_edge_hourly`).Scan(&hourlyCount); err != nil {
+		t.Fatal(err)
+	}
+	if hourlyCount != 2 {
+		t.Fatalf("hourly route-history count = %d, want 2", hourlyCount)
+	}
 }
 
 func TestRouteHistoryBuilderResolvesRawPathPrefixes(t *testing.T) {

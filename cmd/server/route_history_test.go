@@ -323,3 +323,58 @@ func TestHandleRouteHistory_UsesMaterializedEdgesBeforeRawScan(t *testing.T) {
 		t.Fatalf("expected materialized edge, got %+v", e)
 	}
 }
+
+func TestHandleRouteHistory_UsesHourlyAggregateBeforeRawScan(t *testing.T) {
+	db := setupTestDB(t)
+	s := &Server{cfg: &Config{}, db: db}
+	now := time.Now().UTC()
+	recent := now.Add(-1 * time.Hour).Format(time.RFC3339)
+	nodeA := "aa11111111111111"
+	nodeB := "bb22222222222222"
+	rawA := "cc33333333333333"
+	rawB := "dd44444444444444"
+
+	mustExecRouteHistoryDB(t, db, `CREATE TABLE route_history_edge_hourly (
+		bucket_start INTEGER NOT NULL,
+		node_a TEXT NOT NULL,
+		node_b TEXT NOT NULL,
+		count INTEGER NOT NULL DEFAULT 0,
+		last_seen TEXT NOT NULL,
+		sample1 TEXT,
+		sample2 TEXT,
+		sample3 TEXT,
+		sample4 TEXT,
+		sample5 TEXT,
+		PRIMARY KEY (bucket_start, node_a, node_b)
+	)`)
+	mustExecRouteHistoryDB(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon) VALUES
+		(?, 'Hourly A', 'repeater', 52.1, 5.1),
+		(?, 'Hourly B', 'repeater', 52.2, 5.2),
+		(?, 'Raw A', 'repeater', 53.1, 6.1),
+		(?, 'Raw B', 'repeater', 53.2, 6.2)`, nodeA, nodeB, rawA, rawB)
+	mustExecRouteHistoryDB(t, db, `INSERT INTO route_history_edge_hourly
+		(bucket_start, node_a, node_b, count, last_seen, sample1)
+		VALUES (?, ?, ?, 7, ?, 'hourly-hash')`, now.Truncate(time.Hour).Unix(), nodeA, nodeB, recent)
+
+	mustExecRouteHistoryDB(t, db, `INSERT INTO transmissions (id, raw_hex, hash, first_seen) VALUES (10, '00', 'raw-hash', ?)`, recent)
+	mustExecRouteHistoryDB(t, db, `INSERT INTO observations (transmission_id, path_json, resolved_path, timestamp) VALUES (10, ?, ?, ?)`,
+		`["cc","dd"]`, `["`+rawA+`","`+rawB+`"]`, now.Unix())
+
+	req := httptest.NewRequest("GET", "/api/route-history?hours=6", nil)
+	rr := httptest.NewRecorder()
+	s.handleRouteHistory(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp routeHistoryResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if resp.MappedEdges != 1 {
+		t.Fatalf("mapped edges = %d, want 1: %+v", resp.MappedEdges, resp)
+	}
+	e := resp.Edges[0]
+	if e.NodeA != nodeA || e.NodeB != nodeB || e.Count != 7 || e.Samples[0] != "hourly-hash" {
+		t.Fatalf("expected hourly aggregate edge, got %+v", e)
+	}
+}

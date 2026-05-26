@@ -49,6 +49,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureRouteHistoryEdgesTable(rw); err != nil {
 		return fmt.Errorf("ensure route_history_edges: %w", err)
 	}
+	if err := ensureRouteHistoryHourlyTable(rw); err != nil {
+		return fmt.Errorf("ensure route_history_edge_hourly: %w", err)
+	}
 	if err := ensureInactiveNodesTable(rw); err != nil {
 		return fmt.Errorf("ensure inactive_nodes: %w", err)
 	}
@@ -126,6 +129,7 @@ func AssertReady(ro *sql.DB) error {
 
 	mustTable("neighbor_edges")
 	mustTable("route_history_edges")
+	mustTable("route_history_edge_hourly")
 	mustIndex("idx_obs_tx_resolved_path")
 	mustCol("observations", "resolved_path")
 	mustCol("observers", "inactive")
@@ -258,6 +262,32 @@ func ensureRouteHistoryEdgesTable(rw *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_route_history_edges_last_seen ON route_history_edges(last_seen)`,
 		`CREATE INDEX IF NOT EXISTS idx_route_history_edges_bucket ON route_history_edges(bucket_start)`,
 		`CREATE INDEX IF NOT EXISTS idx_route_history_edges_pair ON route_history_edges(node_a, node_b)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := rw.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureRouteHistoryHourlyTable(rw *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS route_history_edge_hourly (
+			bucket_start INTEGER NOT NULL,
+			node_a TEXT NOT NULL,
+			node_b TEXT NOT NULL,
+			count INTEGER NOT NULL DEFAULT 0,
+			last_seen TEXT NOT NULL,
+			sample1 TEXT,
+			sample2 TEXT,
+			sample3 TEXT,
+			sample4 TEXT,
+			sample5 TEXT,
+			PRIMARY KEY (bucket_start, node_a, node_b)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_route_history_hourly_bucket ON route_history_edge_hourly(bucket_start)`,
+		`CREATE INDEX IF NOT EXISTS idx_route_history_hourly_pair ON route_history_edge_hourly(node_a, node_b)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := rw.Exec(stmt); err != nil {
