@@ -25,6 +25,41 @@
   let realisticPropagation = localStorage.getItem('live-realistic-propagation') === 'true';
   let showOnlyFavorites = localStorage.getItem('live-favorites-only') === 'true';
   let nodeFilterText = localStorage.getItem('live-node-filter') || '';
+  // Cached lower-cased pubkeys of nodes that match the active filter. Without
+  // this cache, packetInvolvesFilteredNode() loops over every entry in
+  // nodeData for every hop of every packet — O(packets · hops · nodes) on
+  // busy mesh feeds. We invalidate on (a) the filter text changing or
+  // (b) nodeData gaining/losing a key (new node arriving via WS, eviction).
+  // A reference-equality check would miss in-place mutations of nodeData (e.g.
+  // when an inbound advert adds a new pubkey), causing matching new packets
+  // to be silently filtered out — Object.keys(nodeData).length catches those.
+  // Renaming an existing node's display name without changing the keys won't
+  // invalidate; that's extremely rare in MeshCore and a one-typed filter
+  // refresh from the user picks up any drift.
+  let _filteredNodeKeys = null;
+  let _filteredNodeKeysFor = '';
+  let _filteredNodeKeysLen = -1;
+  function ensureFilteredNodeKeys() {
+    const f = (nodeFilterText || '').toLowerCase();
+    const len = nodeData ? Object.keys(nodeData).length : 0;
+    if (_filteredNodeKeys && _filteredNodeKeysFor === f && _filteredNodeKeysLen === len) {
+      return _filteredNodeKeys;
+    }
+    const out = [];
+    if (f && nodeData) {
+      for (const k in nodeData) {
+        const kl = k.toLowerCase();
+        const nd = nodeData[k];
+        if (kl.startsWith(f) || (nd && (nd.name || '').toLowerCase().includes(f))) {
+          out.push(kl);
+        }
+      }
+    }
+    _filteredNodeKeys = out;
+    _filteredNodeKeysFor = f;
+    _filteredNodeKeysLen = len;
+    return out;
+  }
   let matrixMode = localStorage.getItem('live-matrix-mode') === 'true';
   let matrixRain = localStorage.getItem('live-matrix-rain') === 'true';
   let colorByHash = localStorage.getItem('meshcore-color-packets-by-hash') !== 'false';
@@ -2593,13 +2628,15 @@
     // path_json: per-observation hop keys (preferred over decoded.path.hops for live pkts)
     // Falls back to decoded.path.hops if path_json is absent.
     const hops = getParsedPath(pkt).length ? getParsedPath(pkt) : ((pkt.decoded || {}).path?.hops || []);
+    // Use a pre-filtered list of node keys that match the filter, instead of
+    // scanning all of nodeData for every hop.
+    const candidates = ensureFilteredNodeKeys();
     for (const hop of hops) {
       const h = (hop.id || hop.public_key || hop).toString().toLowerCase();
       if (h.startsWith(f) || f.startsWith(h)) return true;
-      for (const [k, nd] of Object.entries(nodeData)) {
-        if (k.toLowerCase().startsWith(h) || h.startsWith(k.toLowerCase())) {
-          if ((nd.name || '').toLowerCase().includes(f) || k.toLowerCase().startsWith(f)) return true;
-        }
+      for (let i = 0; i < candidates.length; i++) {
+        const k = candidates[i];
+        if (k.startsWith(h) || h.startsWith(k)) return true;
       }
     }
 
@@ -3791,9 +3828,12 @@
     feed.prepend(item);
     requestAnimationFrame(() => requestAnimationFrame(() => item.classList.remove('live-feed-enter')));
     // #1207: trim to 25 items, but never evict the empty-state placeholder.
-    while (feed.querySelectorAll('.live-feed-item').length > 25) {
-      var _items = feed.querySelectorAll('.live-feed-item');
-      feed.removeChild(_items[_items.length - 1]);
+    // Single querySelectorAll + batched remove (was: O(n²) inside a while
+    // loop, run on every incoming packet — caused layout thrash on busy
+    // channels).
+    const _liveItems = feed.querySelectorAll('.live-feed-item');
+    for (let _i = 25; _i < _liveItems.length; _i++) {
+      _liveItems[_i].remove();
     }
 
     // Register
