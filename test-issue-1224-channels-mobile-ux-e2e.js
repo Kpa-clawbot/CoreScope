@@ -36,7 +36,11 @@ async function run() {
   await page.waitForSelector('#chList', { timeout: 10000 });
   await page.waitForFunction(() => {
     const l = document.getElementById('chList');
-    return l && l.querySelectorAll('.ch-item').length > 0;
+    // #1367: mobile now renders flat .ch-row entries; older .ch-item
+    // markup still ships on desktop. Accept either so this regression
+    // test keeps gating the header/empty-state/name-width invariants
+    // (which apply to both layouts) without pinning the row markup.
+    return l && l.querySelectorAll('.ch-item, .ch-row').length > 0;
   }, { timeout: 15000 });
   await page.waitForTimeout(300);
 
@@ -66,7 +70,11 @@ async function run() {
 
   await step('first channel row name has computed-width >150px', async () => {
     const nameW = await page.evaluate(() => {
-      const name = document.querySelector('#chList .ch-item .ch-item-name');
+      // #1367: chat-app mobile row uses .ch-row + .ch-row-name. Fall back to
+      // the legacy .ch-item .ch-item-name so this test still works on the
+      // desktop layout / any regression that re-renders the old markup.
+      const name = document.querySelector('#chList .ch-row .ch-row-name')
+        || document.querySelector('#chList .ch-item .ch-item-name');
       if (!name) return null;
       return Math.round(name.getBoundingClientRect().width);
     });

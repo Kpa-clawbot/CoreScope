@@ -676,8 +676,6 @@
           <div id="chRegionFilter" class="region-filter-container ch-header-region"></div>
           <button type="button" id="chAddChannelBtn" class="ch-add-channel-btn"
                   aria-label="Add channel" title="Add a channel — generate, paste a key, or monitor a hashtag">+ Add</button>
-          <a href="#/analytics" class="ch-analytics-link"
-             title="Open the Analytics page to see channel activity stats" aria-label="Channel Analytics">📊</a>
         </div>
         <div id="chAddStatus" class="ch-add-status" style="display:none"></div>
         <div class="ch-channel-list" id="chList" role="listbox" aria-label="Channels">
@@ -767,6 +765,8 @@
       </div>
       <div class="ch-main" role="region" aria-label="Channel messages">
         <div class="ch-main-header" id="chHeader">
+          <button type="button" class="ch-back" data-action="ch-back"
+                  aria-label="Back to channel list" title="Back">‹</button>
           <span class="ch-header-text">Select a channel</span>
         </div>
         <div class="ch-messages" id="chMessages">
@@ -1104,6 +1104,18 @@
       if (!btn) return;
       var action = btn.dataset.action;
       if (action === 'ch-close-node') closeNodeDetail();
+      if (action === 'ch-back') {
+        // Mobile slide-back: return to the channel list view.
+        selectedHash = null;
+        messages = [];
+        history.replaceState(null, '', '#/channels');
+        document.querySelector('.ch-layout')?.classList.remove('ch-detail-open');
+        var headerT = document.querySelector('#chHeader .ch-header-text');
+        if (headerT) headerT.textContent = 'Select a channel';
+        var msgEl = document.getElementById('chMessages');
+        if (msgEl) msgEl.innerHTML = '<div class="ch-empty">Choose a channel from the sidebar to view messages</div>';
+        renderChannelList();
+      }
     });
 
     // Event delegation for channel selection (touch-friendly)
@@ -1214,7 +1226,7 @@
         if (ch) ChannelColorPicker.show(ch, e.clientX, e.clientY);
         return;
       }
-      const item = e.target.closest('.ch-item[data-hash]');
+      const item = e.target.closest('.ch-item[data-hash], .ch-row[data-hash]');
       if (item) selectChannel(item.dataset.hash);
     });
 
@@ -1502,14 +1514,27 @@
     window._channelsHandleWSBatchForTest = handleWSBatch;
     window._channelsProcessWSBatchForTest = processWSBatch;
 
+    // #1367: Re-render the channel list when the viewport crosses the
+    // mobile/desktop boundary so the layout swaps between flat .ch-row
+    // and sectioned .ch-item without a navigation.
+    var _chMobileMQ = null;
+    try { _chMobileMQ = window.matchMedia('(max-width: 767px)'); } catch (e) { /* noop */ }
+    if (_chMobileMQ && typeof _chMobileMQ.addEventListener === 'function') {
+      _chMobileMQ.addEventListener('change', function () { renderChannelList(); });
+    }
+
     // Tick relative timestamps every 1s — iterates channels array, updates DOM text only
     timeAgoTimer = setInterval(function () {
       var now = Date.now();
       for (var i = 0; i < channels.length; i++) {
         var ch = channels[i];
         if (!ch.lastActivityMs) continue;
+        var text = formatSecondsAgo(Math.floor((now - ch.lastActivityMs) / 1000));
         var el = document.querySelector('.ch-item-time[data-channel-hash="' + ch.hash + '"]');
-        if (el) el.textContent = formatSecondsAgo(Math.floor((now - ch.lastActivityMs) / 1000));
+        if (el) el.textContent = text;
+        // #1367: mobile rows live in a flat list; update those too.
+        var rowEl = document.querySelector('.ch-row[data-hash="' + ch.hash + '"] .ch-row-time');
+        if (rowEl) rowEl.textContent = text;
       }
     }, 1000);
   }
@@ -1653,11 +1678,72 @@
     </button>`;
   }
 
+  // #1367: mobile chat-app row renderer. Full-width 80px rows with a
+  // hash-colored avatar, bold name, ellipsized last-message preview,
+  // and right-aligned relative timestamp. No inline action chips.
+  function isMobileChannels() {
+    try { return window.matchMedia('(max-width: 767px)').matches; } catch (e) { return false; }
+  }
+
+  function avatarTextForChannel(ch) {
+    const name = ch && ch.name ? String(ch.name) : '';
+    if (name.charAt(0) === '#') return name.slice(0, 3); // "#wa"
+    if (ch && ch.encrypted && !ch.userAdded) return '🔒';
+    if (ch && ch.userAdded) return '🔑';
+    // Fallback: 2-char uppercase abbreviation.
+    return name.replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() ||
+      String(ch && ch.hash || '?').slice(0, 2).toUpperCase();
+  }
+
+  function renderChannelRowMobile(ch) {
+    const isEncrypted = ch.encrypted === true;
+    const isUserAdded = ch.userAdded === true;
+    const encryptedFallback = isEncrypted ? 'Unknown' : '';
+    const name = channelDisplayName(ch, encryptedFallback);
+    const color = (isEncrypted && !isUserAdded)
+      ? 'var(--text-muted, #6b7280)'
+      : getChannelColor(ch.hash);
+    const time = ch.lastActivityMs
+      ? formatSecondsAgo(Math.floor((Date.now() - ch.lastActivityMs) / 1000))
+      : '';
+    let preview = '';
+    if (ch.lastSender && ch.lastMessage) {
+      preview = ch.lastSender + ': ' + ch.lastMessage;
+    } else if (isEncrypted && !isUserAdded) {
+      preview = '0x' + formatHashHex(ch.hash);
+    } else if (typeof ch.messageCount === 'number' && ch.messageCount > 0) {
+      preview = ch.messageCount + ' messages';
+    }
+    const abbr = avatarTextForChannel(ch);
+    const sel = selectedHash === ch.hash ? ' selected' : '';
+    return '<button type="button" class="ch-row' + sel + '" data-hash="' + escapeHtml(ch.hash) +
+      '" role="option" aria-selected="' + (selectedHash === ch.hash ? 'true' : 'false') +
+      '" aria-label="' + escapeHtml(name) + '">' +
+      '<div class="ch-avatar ch-row-avatar" style="background:' + color +
+      '" aria-hidden="true">' + escapeHtml(abbr) + '</div>' +
+      '<div class="ch-row-body">' +
+        '<div class="ch-row-line1">' +
+          '<span class="ch-row-name">' + escapeHtml(name) + '</span>' +
+          '<span class="ch-row-time">' + escapeHtml(time) + '</span>' +
+        '</div>' +
+        '<div class="ch-row-preview">' + escapeHtml(preview) + '</div>' +
+      '</div>' +
+    '</button>';
+  }
+
   // #1034 PR1: sectioned sidebar — My Channels / Network / Encrypted (N).
   function renderChannelList() {
     const el = document.getElementById('chList');
     if (!el) return;
     if (channels.length === 0) { el.innerHTML = '<div class="ch-empty">No channels found</div>'; return; }
+
+    // #1367: mobile gets a flat chat-app list (no sections, no inline actions).
+    if (isMobileChannels()) {
+      const sortByActivity = (a, b) => (b.lastActivityMs || 0) - (a.lastActivityMs || 0);
+      const sorted = channels.slice().sort(sortByActivity);
+      el.innerHTML = sorted.map(renderChannelRowMobile).join('');
+      return;
+    }
 
     const sortByActivity = (a, b) => (b.lastActivityMs || 0) - (a.lastActivityMs || 0);
     const sortByCount = (a, b) => (b.messageCount || 0) - (a.messageCount || 0);
@@ -1717,6 +1803,9 @@
     var __selCh = channels.find(function (c) { return c.hash === hash; });
     if (__selCh && __selCh.unread) { __selCh.unread = 0; }
     history.replaceState(null, '', `#/channels/${encodeURIComponent(hash)}`);
+    // #1367: mobile slide-in — flip the layout into detail mode so CSS
+    // can swap the visible pane. Desktop is a no-op (rule matches mobile).
+    document.querySelector('.ch-layout')?.classList.add('ch-detail-open');
     renderChannelList();
     const ch = channels.find(c => c.hash === hash);
     // #1041: never show raw "psk:<hex>" prefixes in the header — use the
@@ -1896,11 +1985,24 @@
       const senderColor = getSenderColor(sender);
       const senderLetter = sender.replace(/[^\w]/g, '').charAt(0).toUpperCase() || '?';
 
-      let displayText;
-      displayText = highlightMentions(msg.text || '');
+      let rawBody = msg.text || '';
+      // Detect a leading @TARGET reply prefix and split it out so we can
+      // style it in the sender color (#1367 detail-view spec).
+      let replyTarget = '';
+      const replyMatch = rawBody.match(/^@([A-Za-z0-9_\-]{1,32})\s+/);
+      if (replyMatch) {
+        replyTarget = replyMatch[1];
+        rawBody = rawBody.slice(replyMatch[0].length);
+      }
+      let displayText = highlightMentions(rawBody);
+      if (replyTarget) {
+        displayText = '<span class="ch-reply-target" style="color:' + senderColor + '">@' +
+          escapeHtml(replyTarget) + '</span> ' + displayText;
+      }
 
-      const time = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-      const date = msg.timestamp ? new Date(msg.timestamp).toLocaleDateString() : '';
+      const tsDate = msg.timestamp ? new Date(msg.timestamp) : null;
+      const time = tsDate ? tsDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+      const date = tsDate ? tsDate.toLocaleDateString() : '';
 
       const meta = [];
       meta.push(date + ' ' + time);
@@ -1910,12 +2012,15 @@
       if (msg.snr !== null && msg.snr !== undefined) meta.push(`SNR ${msg.snr}`);
 
       const safeId = btoa(encodeURIComponent(sender));
-      return `<div class="ch-msg">
+      // #1367: emit BOTH the new chat-app class names (.ch-message /
+      // .ch-message-bubble / .ch-message-meta) and the legacy .ch-msg*
+      // names so existing tests/themes don't regress.
+      return `<div class="ch-msg ch-message">
         <div class="ch-avatar ch-tappable" style="background:${senderColor}" tabindex="0" role="button" data-node="${safeId}">${senderLetter}</div>
-        <div class="ch-msg-content">
-          <div class="ch-msg-sender ch-sender-link ch-tappable" style="color:${senderColor}" tabindex="0" role="button" data-node="${safeId}">${escapeHtml(sender)}</div>
-          <div class="ch-msg-bubble">${displayText}</div>
-          <div class="ch-msg-meta">${meta.join(' · ')}${msg.packetHash ? ` · <a href="#/packets/${msg.packetHash}" class="ch-analyze-link">View packet →</a>` : ''}</div>
+        <div class="ch-msg-content ch-message-content">
+          <div class="ch-msg-sender ch-message-sender ch-sender-link ch-tappable" style="color:${senderColor}" tabindex="0" role="button" data-node="${safeId}">${escapeHtml(sender)}</div>
+          <div class="ch-msg-bubble ch-message-bubble">${displayText}</div>
+          <div class="ch-msg-meta ch-message-meta">${meta.join(' · ')}${msg.packetHash ? ` · <a href="#/packets/${msg.packetHash}" class="ch-analyze-link">View packet →</a>` : ''}</div>
         </div>
       </div>`;
     }).join('');

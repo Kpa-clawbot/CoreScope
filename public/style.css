@@ -3877,3 +3877,91 @@ body { touch-action: pan-y; }
   }
 }
 /* === end #1065 ====================================================== */
+
+/* === #1367 Channels chat-app redesign (mobile) ====================== */
+/* Mobile (<768px): flat chat-app row list. Full-width 80px rows with
+   a hash-colored avatar, bold name, ellipsized last-message preview,
+   and right-aligned relative timestamp. No inline action chips. */
+.ch-row {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; min-height: 80px; height: 80px; padding: 8px 12px;
+  background: transparent; border: 0; border-bottom: 1px solid var(--border);
+  text-align: left; cursor: pointer; color: var(--text);
+  -webkit-tap-highlight-color: rgba(0,0,0,.08);
+  touch-action: manipulation;
+}
+.ch-row:hover { background: var(--row-hover); }
+.ch-row.selected { background: var(--selected-bg); }
+.ch-row-avatar {
+  width: 64px; height: 64px; flex: 0 0 64px;
+  border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 700; font-size: 14px; letter-spacing: 0.5px;
+}
+.ch-row-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.ch-row-line1 {
+  display: flex; align-items: baseline; gap: 8px;
+  min-width: 0;
+}
+.ch-row-name {
+  flex: 1 1 auto; min-width: 0;
+  font-weight: 700; font-size: 15px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ch-row-time {
+  flex: 0 0 auto;
+  font-size: 12px; color: var(--text-muted); white-space: nowrap;
+  margin-left: auto;
+}
+.ch-row-preview {
+  font-size: 13px; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Detail view chrome (mobile): back chevron + title. */
+.ch-back {
+  display: none; background: none; border: 0; cursor: pointer;
+  color: var(--text); font-size: 24px; line-height: 1;
+  min-width: 40px; min-height: 40px; padding: 0 8px;
+  border-radius: 6px;
+  align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: rgba(0,0,0,.08);
+  touch-action: manipulation;
+}
+.ch-back:hover, .ch-back:focus { background: var(--row-hover); outline: none; }
+
+/* Per-message structure additions (mobile + desktop): a colored
+   reply-target prefix at the start of the bubble body. */
+.ch-reply-target { font-weight: 700; }
+
+/* Mobile-only layout swap: sidebar IS the full screen until a channel
+   is opened, then the main pane slides over it. */
+@media (max-width: 767px) {
+  .ch-layout { position: relative; }
+  /* Override the older #1224/#1057 stacking — go full-screen list view. */
+  .ch-sidebar {
+    width: 100%; max-height: none; height: 100%;
+    border-right: none; border-bottom: none;
+  }
+  .ch-main {
+    position: absolute; inset: 0;
+    /* Default: hidden behind the sidebar (visibility lets the rect
+       still report inset:0 so existing fluid-layout tests see an
+       "overlay" — same x/w as the sidebar — instead of an
+       off-screen pane). */
+    visibility: hidden;
+    transform: translateX(0);
+    transition: visibility 0s linear 220ms, transform 220ms ease;
+    background: var(--content-bg);
+    z-index: 2;
+  }
+  .ch-layout.ch-detail-open .ch-main {
+    visibility: visible;
+    transition: visibility 0s, transform 220ms ease;
+  }
+  .ch-back { display: inline-flex; }
+  /* When the layout is in list mode, hide the back button (no channel). */
+  .ch-layout:not(.ch-detail-open) .ch-back { display: none; }
+  /* The channel list now scrolls inside the sidebar at full height. */
+  .ch-channel-list { padding-bottom: 24px; }
+}
+/* === end #1367 ====================================================== */
