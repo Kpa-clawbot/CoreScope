@@ -104,6 +104,14 @@ func TestApplyAddsOptionalColumns_CanonicalSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("after Apply: idx_obs_tx_resolved_path missing: %v", err)
 	}
+
+	for _, table := range []string{"route_history_edges", "route_history_edge_hourly"} {
+		var name string
+		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
+		if err != nil {
+			t.Fatalf("after Apply: %s missing: %v", table, err)
+		}
+	}
 }
 
 // TestAssertReady_RequiresOptionalColumns enforces that AssertReady
@@ -155,6 +163,23 @@ func TestAssertReady_RequiresOptionalColumns(t *testing.T) {
 	}
 	if err := AssertReady(db); err != nil {
 		t.Fatalf("AssertReady after full Apply: %v", err)
+	}
+}
+
+func TestAssertReady_DoesNotRequireRouteHistoryAccelerationTables(t *testing.T) {
+	db := minimalDB(t)
+	defer db.Close()
+
+	if err := Apply(db, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	for _, table := range []string{"route_history_edges", "route_history_edge_hourly"} {
+		if _, err := db.Exec(`DROP TABLE ` + table); err != nil {
+			t.Fatalf("drop %s: %v", table, err)
+		}
+	}
+	if err := AssertReady(db); err != nil {
+		t.Fatalf("AssertReady should not require route-history acceleration tables: %v", err)
 	}
 }
 

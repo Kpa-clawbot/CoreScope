@@ -128,8 +128,6 @@ func AssertReady(ro *sql.DB) error {
 	}
 
 	mustTable("neighbor_edges")
-	mustTable("route_history_edges")
-	mustTable("route_history_edge_hourly")
 	mustIndex("idx_obs_tx_resolved_path")
 	mustCol("observations", "resolved_path")
 	mustCol("observers", "inactive")
