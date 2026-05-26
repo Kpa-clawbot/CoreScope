@@ -255,9 +255,15 @@ type CompressionConfig struct {
 	ContentTypes []string `json:"contentTypes,omitempty"`
 }
 
-// GZipEnabled returns true when HTTP gzip compression is explicitly enabled.
+// GZipEnabled returns true when HTTP gzip compression is enabled.
+// Defaults to true; set "compression": {"gzip": false} in config.json to disable
+// (useful when an upstream proxy like Caddy/Cloudflare already compresses, in
+// which case double-compressing is wasted CPU but otherwise harmless).
 func (c *Config) GZipEnabled() bool {
-	return c.Compression != nil && c.Compression.GZip
+	if c.Compression == nil {
+		return true
+	}
+	return c.Compression.GZip
 }
 
 // WSCompressionEnabled returns true when WebSocket permessage-deflate is explicitly enabled.

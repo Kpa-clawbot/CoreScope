@@ -354,7 +354,7 @@ func TestSpaHandler(t *testing.T) {
 	fs := http.FileServer(http.Dir(dir))
 	handler := (&Server{cfg: &Config{}}).spaHandler(dir, fs)
 
-	t.Run("existing JS file with cache control", func(t *testing.T) {
+	t.Run("unversioned JS file gets short public cache", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/app.js", nil)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -363,12 +363,26 @@ func TestSpaHandler(t *testing.T) {
 			t.Errorf("expected 200, got %d", w.Code)
 		}
 		cc := w.Header().Get("Cache-Control")
-		if cc != "no-cache, no-store, must-revalidate" {
-			t.Errorf("expected no-cache header for .js, got %s", cc)
+		if cc != "public, max-age=3600" {
+			t.Errorf("expected short public cache for unversioned .js, got %s", cc)
 		}
 	})
 
-	t.Run("existing CSS file with cache control", func(t *testing.T) {
+	t.Run("versioned JS file gets immutable cache", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/app.js?v=12345", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != 200 {
+			t.Errorf("expected 200, got %d", w.Code)
+		}
+		cc := w.Header().Get("Cache-Control")
+		if cc != "public, max-age=31536000, immutable" {
+			t.Errorf("expected immutable cache for versioned .js, got %s", cc)
+		}
+	})
+
+	t.Run("unversioned CSS file gets short public cache", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/style.css", nil)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -377,8 +391,8 @@ func TestSpaHandler(t *testing.T) {
 			t.Errorf("expected 200, got %d", w.Code)
 		}
 		cc := w.Header().Get("Cache-Control")
-		if cc != "no-cache, no-store, must-revalidate" {
-			t.Errorf("expected no-cache header for .css, got %s", cc)
+		if cc != "public, max-age=3600" {
+			t.Errorf("expected short public cache for unversioned .css, got %s", cc)
 		}
 	})
 
