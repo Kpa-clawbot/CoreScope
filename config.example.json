@@ -350,6 +350,13 @@
     "backfillHours": 24,
     "_comment": "How far back (hours) the async backfill scans for observations with NULL resolved_path. Default: 24. Set higher to backfill older data, lower to speed up startup."
   },
+  "routeHistory": {
+    "backfillEnabled": true,
+    "backfillDays": 7,
+    "backfillChunkMinutes": 60,
+    "backfillPauseMs": 2000,
+    "_comment": "Ingestor route-history materialization. backfillEnabled: whether to backfill historical route-history aggregates after startup. backfillDays: how far back to backfill (default 7, capped at 30). backfillChunkMinutes: bounded scan size per chunk (default 60, clamped 5..1440). backfillPauseMs: pause between chunks so MQTT ingestion and SQLite writes keep moving (default 2000, capped at 60000)."
+  },
   "neighborGraph": {
     "maxAgeDays": 5,
     "maxEdgeKm": 500,

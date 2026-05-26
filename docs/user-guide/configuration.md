@@ -170,6 +170,19 @@ Lower values = fresher data but more server load.
 
 > **Warning:** Leaving `retentionHours` at `0` on a large database will cause the server to OOM-kill itself on every cold start. The full packet history is loaded into the subpath index at startup; a DB with ~280K paths produces ~13M index entries before the process is killed.
 
+## Route History
+
+Ingestor-side route-history materialization is controlled by:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `routeHistory.backfillEnabled` | `true` | Backfill historical route-history aggregates after startup |
+| `routeHistory.backfillDays` | `7` | How far back the backfill scans. Values above `30` are capped. |
+| `routeHistory.backfillChunkMinutes` | `60` | Bounded scan size per chunk. Clamped to `5..1440` minutes. |
+| `routeHistory.backfillPauseMs` | `2000` | Pause between chunks so MQTT ingestion and SQLite writes keep moving. Values above `60000` are capped. |
+
+The live derived-edge builder scans recent observations once per minute and feeds both `neighbor_edges` and route-history aggregates. The historical route-history backfill runs separately in bounded chunks.
+
 ## Timestamps
 
 | Field | Default | Description |

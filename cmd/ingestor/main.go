@@ -234,16 +234,15 @@ func main() {
 	// endpoint (#1120). Best-effort; never fatal.
 	StartStatsFileWriter(store, time.Second)
 
-	// Neighbor-edges builder (#1287 — Option 4): ingestor owns
-	// neighbor_edges writes. Runs every 60s. Server reads the snapshot
-	// via cmd/server/neighbor_recomputer.go on the same cadence.
-	stopNeighborBuilder := store.StartNeighborEdgesBuilder(NeighborEdgesBuilderInterval)
-	defer stopNeighborBuilder()
-	log.Printf("[neighbor-build] enabled (interval=%s)", NeighborEdgesBuilderInterval)
-
-	stopRouteHistoryBuilder := store.StartRouteHistoryBuilder(RouteHistoryBuilderInterval)
-	defer stopRouteHistoryBuilder()
-	log.Printf("[route-history-build] enabled (interval=%s)", RouteHistoryBuilderInterval)
+	// Derived-edge builder: ingestor owns neighbor_edges and route-history
+	// materialization. A single live scan feeds both tables so path parsing
+	// and prefix resolution are not duplicated every minute.
+	routeHistoryBackfill := cfg.RouteHistoryBackfillSettings()
+	stopDerivedEdgesBuilder := store.StartDerivedEdgesBuilder(DerivedEdgesBuilderInterval, routeHistoryBackfill)
+	defer stopDerivedEdgesBuilder()
+	log.Printf("[derived-edge-build] enabled (interval=%s)", DerivedEdgesBuilderInterval)
+	log.Printf("[route-history-build] backfill enabled=%t lookback=%s chunk=%s pause=%s",
+		routeHistoryBackfill.Enabled, routeHistoryBackfill.Lookback, routeHistoryBackfill.Window, routeHistoryBackfill.Pause)
 
 	channelKeys := loadChannelKeys(cfg, *configPath)
 	if len(channelKeys) > 0 {

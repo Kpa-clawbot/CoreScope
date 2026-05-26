@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadConfigValidJSON(t *testing.T) {
@@ -315,6 +316,74 @@ func TestConnectTimeoutFromJSON(t *testing.T) {
 	}
 	if got := cfg.MQTTSources[0].ConnectTimeoutOrDefault(); got != 5 {
 		t.Errorf("from JSON: got %d, want 5", got)
+	}
+}
+
+func TestRouteHistoryBackfillSettingsDefaults(t *testing.T) {
+	cfg := &Config{}
+	got := cfg.RouteHistoryBackfillSettings()
+	if !got.Enabled {
+		t.Fatal("route-history backfill should default enabled")
+	}
+	if got.Lookback != 7*24*time.Hour {
+		t.Fatalf("lookback = %s, want 168h", got.Lookback)
+	}
+	if got.Window != time.Hour {
+		t.Fatalf("window = %s, want 1h", got.Window)
+	}
+	if got.Pause != 2*time.Second {
+		t.Fatalf("pause = %s, want 2s", got.Pause)
+	}
+}
+
+func TestRouteHistoryBackfillSettingsFromJSON(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{
+		"routeHistory": {
+			"backfillEnabled": false,
+			"backfillDays": 3,
+			"backfillChunkMinutes": 15,
+			"backfillPauseMs": 250
+		}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.RouteHistoryBackfillSettings()
+	if got.Enabled {
+		t.Fatal("backfillEnabled=false should disable route-history backfill")
+	}
+	if got.Lookback != 3*24*time.Hour {
+		t.Fatalf("lookback = %s, want 72h", got.Lookback)
+	}
+	if got.Window != 15*time.Minute {
+		t.Fatalf("window = %s, want 15m", got.Window)
+	}
+	if got.Pause != 250*time.Millisecond {
+		t.Fatalf("pause = %s, want 250ms", got.Pause)
+	}
+}
+
+func TestRouteHistoryBackfillSettingsClampUnsafeValues(t *testing.T) {
+	pause := 120000
+	cfg := &Config{RouteHistory: &RouteHistoryConfig{
+		BackfillDays:         90,
+		BackfillChunkMinutes: 1,
+		BackfillPauseMs:      &pause,
+	}}
+	got := cfg.RouteHistoryBackfillSettings()
+	if got.Lookback != 30*24*time.Hour {
+		t.Fatalf("lookback = %s, want 720h cap", got.Lookback)
+	}
+	if got.Window != 5*time.Minute {
+		t.Fatalf("window = %s, want 5m floor", got.Window)
+	}
+	if got.Pause != time.Minute {
+		t.Fatalf("pause = %s, want 1m cap", got.Pause)
 	}
 }
 

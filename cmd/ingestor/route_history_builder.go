@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -106,110 +105,11 @@ func (s *Store) buildAndPersistRouteHistoryEdges(sinceUnix int64) (int, error) {
 }
 
 func (s *Store) buildAndPersistRouteHistoryEdgesWindow(sinceUnix, untilUnix int64) (int, error) {
-	prefixIdx, err := buildPrefixIndex(s.db)
+	res, err := s.buildAndPersistDerivedEdgesWindow(sinceUnix, untilUnix, derivedEdgesBuildOptions{RouteHistory: true})
 	if err != nil {
-		return 0, fmt.Errorf("build prefix index: %w", err)
-	}
-
-	query := `SELECT o.id, t.hash, COALESCE(o.resolved_path, ''), COALESCE(o.path_json, ''), t.first_seen, o.timestamp
-		FROM observations o
-		JOIN transmissions t ON t.id = o.transmission_id
-		WHERE o.timestamp > ?
-		  AND (
-			(o.resolved_path IS NOT NULL AND o.resolved_path != '' AND o.resolved_path != '[]')
-			OR (o.path_json IS NOT NULL AND o.path_json != '' AND o.path_json != '[]')
-		  )`
-	args := []interface{}{sinceUnix}
-	if untilUnix > 0 {
-		query += ` AND o.timestamp <= ?`
-		args = append(args, untilUnix)
-	}
-	rows, err := s.db.Query(query, args...)
-	if err != nil {
-		return 0, fmt.Errorf("scan observations: %w", err)
-	}
-	defer rows.Close()
-
-	edges := make([]routeHistoryEdgeRow, 0, 256)
-	for rows.Next() {
-		var obsID, epochTs int64
-		var hash, resolvedPath, pathJSON, firstSeen string
-		if err := rows.Scan(&obsID, &hash, &resolvedPath, &pathJSON, &firstSeen, &epochTs); err != nil {
-			continue
-		}
-		path := parseRouteHistoryPath(resolvedPath, pathJSON, prefixIdx)
-		if len(path) < 2 {
-			continue
-		}
-		lastSeen := firstSeen
-		if epochTs > 0 {
-			lastSeen = time.Unix(epochTs, 0).UTC().Format(time.RFC3339)
-		}
-		bucketStart := time.Unix(epochTs, 0).UTC().Truncate(time.Hour).Unix()
-		for i := 0; i < len(path)-1; i++ {
-			a, b := path[i], path[i+1]
-			if a == "" || b == "" || a == b {
-				continue
-			}
-			if a > b {
-				a, b = b, a
-			}
-			edges = append(edges, routeHistoryEdgeRow{
-				obsID: obsID, hopIndex: i, bucketStart: bucketStart,
-				a: a, b: b, hash: hash, lastSeen: lastSeen,
-			})
-		}
-	}
-	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	if len(edges) == 0 {
-		return 0, nil
-	}
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("begin: %w", err)
-	}
-	defer tx.Rollback()
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO route_history_edges
-		(observation_id, hop_index, bucket_start, node_a, node_b, packet_hash, last_seen)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		return 0, fmt.Errorf("prepare: %w", err)
-	}
-	defer stmt.Close()
-	aggStmt, err := tx.Prepare(`INSERT INTO route_history_edge_hourly
-		(bucket_start, node_a, node_b, count, last_seen, sample1)
-		VALUES (?, ?, ?, 1, ?, ?)
-		ON CONFLICT(bucket_start, node_a, node_b) DO UPDATE SET
-			count = count + 1,
-			last_seen = MAX(last_seen, excluded.last_seen),
-			sample2 = CASE WHEN sample1 IS NOT excluded.sample1 AND sample2 IS NULL THEN excluded.sample1 ELSE sample2 END,
-			sample3 = CASE WHEN sample1 IS NOT excluded.sample1 AND sample2 IS NOT excluded.sample1 AND sample3 IS NULL THEN excluded.sample1 ELSE sample3 END,
-			sample4 = CASE WHEN sample1 IS NOT excluded.sample1 AND sample2 IS NOT excluded.sample1 AND sample3 IS NOT excluded.sample1 AND sample4 IS NULL THEN excluded.sample1 ELSE sample4 END,
-			sample5 = CASE WHEN sample1 IS NOT excluded.sample1 AND sample2 IS NOT excluded.sample1 AND sample3 IS NOT excluded.sample1 AND sample4 IS NOT excluded.sample1 AND sample5 IS NULL THEN excluded.sample1 ELSE sample5 END`)
-	if err != nil {
-		return 0, fmt.Errorf("prepare aggregate: %w", err)
-	}
-	defer aggStmt.Close()
-	inserted := 0
-	for _, e := range edges {
-		res, err := stmt.Exec(e.obsID, e.hopIndex, e.bucketStart, e.a, e.b, e.hash, e.lastSeen)
-		if err != nil {
-			return 0, fmt.Errorf("insert edge: %w", err)
-		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			if _, err := aggStmt.Exec(e.bucketStart, e.a, e.b, e.lastSeen, e.hash); err != nil {
-				return 0, fmt.Errorf("upsert hourly edge: %w", err)
-			}
-			inserted += int(n)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
-	}
-	return inserted, nil
+	return res.RouteHistoryEdges, nil
 }
 
 func (s *Store) backfillRouteHistoryEdges(stop <-chan struct{}, now time.Time, lookback, window, pause time.Duration) {

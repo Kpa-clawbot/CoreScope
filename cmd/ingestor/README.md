@@ -93,6 +93,10 @@ The ingestor reads these fields from the existing `config.json`:
   - `iataFilter` — optional regional filter
 - `mqtt` — legacy single-broker config (auto-converted to `mqttSources`)
 - `dbPath` — SQLite DB path (default: `data/meshcore.db`)
+- `routeHistory.backfillEnabled` — enable historical route-history aggregate backfill (default: `true`)
+- `routeHistory.backfillDays` — days of route-history backfill (default: `7`, capped at `30`)
+- `routeHistory.backfillChunkMinutes` — bounded backfill scan size (default: `60`, clamped to `5..1440`)
+- `routeHistory.backfillPauseMs` — pause between backfill chunks (default: `2000`, capped at `60000`)
 
 ## Test
 
@@ -111,6 +115,7 @@ go test -v ./...
 6. Writes to SQLite: `transmissions` + `observations` tables
 7. Upserts `nodes` from decoded ADVERT packets (with validation)
 8. Upserts `observers` from MQTT topic metadata
+9. Maintains derived neighbor and route-history edge tables from a shared live scan
 
 ## Schema Compatibility
 

@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -107,108 +106,11 @@ func (s *Store) StartNeighborEdgesBuilder(interval time.Duration) func() {
 // multiple candidates are skipped (matches the conservative
 // resolution rule in cmd/server/extractEdgesFromObs).
 func (s *Store) buildAndPersistNeighborEdges(sinceUnix int64) (int, error) {
-	prefixIdx, err := buildPrefixIndex(s.db)
+	res, err := s.buildAndPersistDerivedEdgesWindow(sinceUnix, 0, derivedEdgesBuildOptions{Neighbor: true})
 	if err != nil {
-		return 0, fmt.Errorf("build prefix index: %w", err)
+		return 0, err
 	}
-
-	var rows *sql.Rows
-	if sinceUnix > 0 {
-		rows, err = s.db.Query(`SELECT
-			t.payload_type,
-			t.decoded_json,
-			COALESCE(t.from_pubkey, ''),
-			COALESCE(o.path_json, ''),
-			COALESCE(obs.id, '') AS observer_id,
-			o.timestamp
-		FROM observations o
-		JOIN transmissions t ON t.id = o.transmission_id
-		LEFT JOIN observers obs ON obs.rowid = o.observer_idx
-		WHERE o.timestamp > ?`, sinceUnix)
-	} else {
-		rows, err = s.db.Query(`SELECT
-			t.payload_type,
-			t.decoded_json,
-			COALESCE(t.from_pubkey, ''),
-			COALESCE(o.path_json, ''),
-			COALESCE(obs.id, '') AS observer_id,
-			o.timestamp
-		FROM observations o
-		JOIN transmissions t ON t.id = o.transmission_id
-		LEFT JOIN observers obs ON obs.rowid = o.observer_idx`)
-	}
-	if err != nil {
-		return 0, fmt.Errorf("scan observations: %w", err)
-	}
-	defer rows.Close()
-
-	var edges []edgeRow
-	for rows.Next() {
-		var payloadType sql.NullInt64
-		var decodedJSON, fromPubkey, pathJSON, observerID string
-		var epochTs int64
-		if err := rows.Scan(&payloadType, &decodedJSON, &fromPubkey, &pathJSON, &observerID, &epochTs); err != nil {
-			continue
-		}
-		fromNode := strings.ToLower(fromPubkey)
-		if fromNode == "" {
-			fromNode = strings.ToLower(extractPubkeyFromAdvertJSON(decodedJSON))
-		}
-		isAdvert := payloadType.Valid && payloadType.Int64 == int64(payloadADVERT)
-		ts := time.Unix(epochTs, 0).UTC().Format(time.RFC3339)
-		observerPK := strings.ToLower(observerID)
-		path := parsePathArray(pathJSON)
-
-		if len(path) == 0 {
-			if isAdvert && fromNode != "" && fromNode != observerPK && observerPK != "" {
-				edges = append(edges, canonEdge(fromNode, observerPK, ts))
-			}
-			continue
-		}
-		if isAdvert && fromNode != "" {
-			if resolved, ok := resolvePrefix(prefixIdx, path[0]); ok && resolved != fromNode {
-				edges = append(edges, canonEdge(fromNode, resolved, ts))
-			}
-		}
-		if observerPK != "" {
-			last := path[len(path)-1]
-			if resolved, ok := resolvePrefix(prefixIdx, last); ok && resolved != observerPK {
-				edges = append(edges, canonEdge(observerPK, resolved, ts))
-			}
-		}
-	}
-
-	if len(edges) == 0 {
-		return 0, nil
-	}
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("begin: %w", err)
-	}
-	defer tx.Rollback()
-	stmt, err := tx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
-		VALUES (?, ?, 1, ?)
-		ON CONFLICT(node_a, node_b) DO UPDATE SET
-		  count = count + 1,
-		  last_seen = MAX(last_seen, excluded.last_seen)`)
-	if err != nil {
-		return 0, fmt.Errorf("prepare: %w", err)
-	}
-	defer stmt.Close()
-	var firstErr error
-	for _, e := range edges {
-		if _, err := stmt.Exec(e.a, e.b, e.ts); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	if firstErr != nil {
-		return 0, fmt.Errorf("upsert: %w", firstErr)
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
-	}
-	return len(edges), nil
+	return res.NeighborEdges, nil
 }
 
 // canonEdge orders the pair so node_a <= node_b (matches the existing

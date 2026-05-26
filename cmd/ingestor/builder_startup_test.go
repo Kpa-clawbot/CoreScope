@@ -21,6 +21,7 @@ func TestBuildersReturnBeforeInitialWarmup(t *testing.T) {
 	start := time.Now()
 	stopNeighbor := store.StartNeighborEdgesBuilder(time.Hour)
 	stopRouteHistory := store.StartRouteHistoryBuilder(time.Hour)
+	stopDerived := store.StartDerivedEdgesBuilder(time.Hour, RouteHistoryBackfillSettings{Enabled: false})
 	elapsed := time.Since(start)
 	if elapsed > 200*time.Millisecond {
 		t.Fatalf("builders blocked startup for %s", elapsed)
@@ -31,4 +32,5 @@ func TestBuildersReturnBeforeInitialWarmup(t *testing.T) {
 	}
 	stopNeighbor()
 	stopRouteHistory()
+	stopDerived()
 }

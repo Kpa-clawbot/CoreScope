@@ -173,3 +173,67 @@ func TestRouteHistoryBuilderWindowBoundsScan(t *testing.T) {
 		t.Fatalf("route-history hashes = %q, want only inside", hashes)
 	}
 }
+
+func TestDerivedEdgesBuilderWritesNeighborAndRouteHistory(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "derived-edges.db"))
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	observer := "cc33333333333333"
+	nodeA := "aa11111111111111"
+	nodeB := "bb22222222222222"
+	if _, err := store.db.Exec(
+		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?), (?, ?)`,
+		observer, "observer",
+		nodeA, "a",
+		nodeB, "b",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO observers (id, name) VALUES (?, ?)`, observer, "observer"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := store.db.Exec(
+		`INSERT INTO transmissions (raw_hex, hash, first_seen, payload_type) VALUES (?, ?, ?, ?)`,
+		"", "hash-derived", "2026-01-01T00:30:00Z", 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txID, _ := res.LastInsertId()
+	if _, err := store.db.Exec(
+		`INSERT INTO observations (transmission_id, observer_idx, path_json, resolved_path, timestamp)
+		 VALUES (?, (SELECT rowid FROM observers WHERE id = ?), ?, ?, ?)`,
+		txID, observer, `["aa","bb"]`, `["aa11111111111111","bb22222222222222"]`, int64(1735691400),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.buildAndPersistDerivedEdgesWindow(0, 0, derivedEdgesBuildOptions{Neighbor: true, RouteHistory: true})
+	if err != nil {
+		t.Fatalf("buildAndPersistDerivedEdgesWindow: %v", err)
+	}
+	if got.NeighborEdges != 1 {
+		t.Fatalf("neighbor edges = %d, want 1", got.NeighborEdges)
+	}
+	if got.RouteHistoryEdges != 1 {
+		t.Fatalf("route-history edges = %d, want 1", got.RouteHistoryEdges)
+	}
+
+	var neighborCount int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM neighbor_edges WHERE node_a = ? AND node_b = ?`, nodeB, observer).Scan(&neighborCount); err != nil {
+		t.Fatal(err)
+	}
+	if neighborCount != 1 {
+		t.Fatalf("neighbor_edges rows = %d, want 1", neighborCount)
+	}
+	var routeCount int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM route_history_edges WHERE node_a = ? AND node_b = ?`, nodeA, nodeB).Scan(&routeCount); err != nil {
+		t.Fatal(err)
+	}
+	if routeCount != 1 {
+		t.Fatalf("route_history_edges rows = %d, want 1", routeCount)
+	}
+}

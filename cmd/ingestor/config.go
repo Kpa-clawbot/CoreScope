@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/meshcore-analyzer/dbconfig"
 	"github.com/meshcore-analyzer/geofilter"
@@ -24,6 +25,13 @@ type MQTTSource struct {
 	IATAFilter         []string `json:"iataFilter,omitempty"`
 	ConnectTimeoutSec  int      `json:"connectTimeoutSec,omitempty"`
 	Region             string   `json:"region,omitempty"`
+}
+
+type RouteHistoryConfig struct {
+	BackfillEnabled      *bool `json:"backfillEnabled,omitempty"`
+	BackfillDays         int   `json:"backfillDays,omitempty"`
+	BackfillChunkMinutes int   `json:"backfillChunkMinutes,omitempty"`
+	BackfillPauseMs      *int  `json:"backfillPauseMs,omitempty"`
 }
 
 // ConnectTimeoutOrDefault returns the per-source connect timeout in seconds,
@@ -43,20 +51,20 @@ type MQTTLegacy struct {
 
 // Config holds the ingestor configuration, compatible with the Node.js config.json format.
 type Config struct {
-	DBPath          string            `json:"dbPath"`
-	MQTT            *MQTTLegacy       `json:"mqtt,omitempty"`
-	MQTTSources     []MQTTSource      `json:"mqttSources,omitempty"`
-	LogLevel        string            `json:"logLevel,omitempty"`
-	ChannelKeysPath string            `json:"channelKeysPath,omitempty"`
-	ChannelKeys     map[string]string `json:"channelKeys,omitempty"`
-	HashChannels    []string          `json:"hashChannels,omitempty"`
-	HashRegions     []string          `json:"hashRegions,omitempty"`
-	Retention       *RetentionConfig  `json:"retention,omitempty"`
-	Metrics         *MetricsConfig    `json:"metrics,omitempty"`
-	GeoFilter            *GeoFilterConfig     `json:"geo_filter,omitempty"`
-	ForeignAdverts       *ForeignAdvertConfig `json:"foreignAdverts,omitempty"`
-	ValidateSignatures   *bool             `json:"validateSignatures,omitempty"`
-	DB                   *DBConfig         `json:"db,omitempty"`
+	DBPath             string               `json:"dbPath"`
+	MQTT               *MQTTLegacy          `json:"mqtt,omitempty"`
+	MQTTSources        []MQTTSource         `json:"mqttSources,omitempty"`
+	LogLevel           string               `json:"logLevel,omitempty"`
+	ChannelKeysPath    string               `json:"channelKeysPath,omitempty"`
+	ChannelKeys        map[string]string    `json:"channelKeys,omitempty"`
+	HashChannels       []string             `json:"hashChannels,omitempty"`
+	HashRegions        []string             `json:"hashRegions,omitempty"`
+	Retention          *RetentionConfig     `json:"retention,omitempty"`
+	Metrics            *MetricsConfig       `json:"metrics,omitempty"`
+	GeoFilter          *GeoFilterConfig     `json:"geo_filter,omitempty"`
+	ForeignAdverts     *ForeignAdvertConfig `json:"foreignAdverts,omitempty"`
+	ValidateSignatures *bool                `json:"validateSignatures,omitempty"`
+	DB                 *DBConfig            `json:"db,omitempty"`
 
 	// ObserverIATAWhitelist restricts which observer IATA regions are processed.
 	// When non-empty, only observers whose IATA code (from the MQTT topic) matches
@@ -80,6 +88,8 @@ type Config struct {
 	// NeighborEdgesMaxAgeDays controls neighbor_edges row retention
 	// (#1287 — moved from cmd/server). 0 = default 5.
 	NeighborEdgesMaxAgeDays int `json:"neighborEdgesMaxAgeDays,omitempty"`
+
+	RouteHistory *RouteHistoryConfig `json:"routeHistory,omitempty"`
 }
 
 // NeighborEdgesDaysOrDefault returns the configured pruning window or 5.
@@ -88,6 +98,45 @@ func (c *Config) NeighborEdgesDaysOrDefault() int {
 		return 5
 	}
 	return c.NeighborEdgesMaxAgeDays
+}
+
+func (c *Config) RouteHistoryBackfillSettings() RouteHistoryBackfillSettings {
+	out := DefaultRouteHistoryBackfillSettings()
+	if c == nil || c.RouteHistory == nil {
+		return out
+	}
+	rh := c.RouteHistory
+	if rh.BackfillEnabled != nil {
+		out.Enabled = *rh.BackfillEnabled
+	}
+	if rh.BackfillDays > 0 {
+		days := rh.BackfillDays
+		if days > 30 {
+			days = 30
+		}
+		out.Lookback = time.Duration(days) * 24 * time.Hour
+	}
+	if rh.BackfillChunkMinutes > 0 {
+		minutes := rh.BackfillChunkMinutes
+		if minutes < 5 {
+			minutes = 5
+		}
+		if minutes > 24*60 {
+			minutes = 24 * 60
+		}
+		out.Window = time.Duration(minutes) * time.Minute
+	}
+	if rh.BackfillPauseMs != nil {
+		ms := *rh.BackfillPauseMs
+		if ms < 0 {
+			ms = 0
+		}
+		if ms > 60000 {
+			ms = 60000
+		}
+		out.Pause = time.Duration(ms) * time.Millisecond
+	}
+	return out
 }
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
