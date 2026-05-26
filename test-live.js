@@ -149,6 +149,7 @@ function makeLiveSandbox({ withAppJs = false } = {}) {
   addLiveGlobals(ctx);
 
   loadInCtx(ctx, 'public/roles.js');
+  loadInCtx(ctx, 'public/packet-helpers.js');
   if (withAppJs) loadInCtx(ctx, 'public/app.js');
   try { loadInCtx(ctx, 'public/live.js'); } catch (e) {
     console.error('live.js load error:', e.message);
@@ -190,7 +191,7 @@ console.log('\n=== live.js: dbPacketToLive ===');
     const pkt = { id: 1, hash: 'x', decoded_json: null, path_json: null, timestamp: '2024-01-01T00:00:00Z' };
     const result = dbPacketToLive(pkt);
     assert.strictEqual(result.decoded.header.payloadTypeName, 'UNKNOWN');
-    assert.deepStrictEqual(result.decoded.path.hops, []);
+    assert.strictEqual(result.decoded.path.hops.length, 0);
   });
 
   test('uses payload_type_name as fallback', () => {
