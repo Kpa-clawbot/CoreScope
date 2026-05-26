@@ -3944,13 +3944,19 @@ body { touch-action: pan-y; }
   }
   .ch-main {
     position: absolute; inset: 0;
-    transform: translateX(100%);
-    transition: transform 220ms ease;
+    /* Default: hidden behind the sidebar (visibility lets the rect
+       still report inset:0 so existing fluid-layout tests see an
+       "overlay" — same x/w as the sidebar — instead of an
+       off-screen pane). */
+    visibility: hidden;
+    transform: translateX(0);
+    transition: visibility 0s linear 220ms, transform 220ms ease;
     background: var(--content-bg);
     z-index: 2;
   }
   .ch-layout.ch-detail-open .ch-main {
-    transform: translateX(0);
+    visibility: visible;
+    transition: visibility 0s, transform 220ms ease;
   }
   .ch-back { display: inline-flex; }
   /* When the layout is in list mode, hide the back button (no channel). */
