@@ -382,11 +382,57 @@ func observerList(m map[string]bool) []string {
 	return out
 }
 
-// buildNodeInfoMap returns a map of lowercase pubkey → nodeInfo for name/role lookups.
+// nodeInfoMapCacheTTL caps how often buildNodeInfoMap re-queries the observers
+// table and rebuilds the per-pubkey lookup map. The map is consumed by both
+// /api/nodes/{pubkey}/neighbors and /api/analytics/neighbor-graph (often
+// loaded in quick succession when a user opens a neighbor page), and observers
+// + node roles change on a minute-scale.
+const nodeInfoMapCacheTTL = 60 * time.Second
+
+// buildNodeInfoMap returns a map of lowercase pubkey → nodeInfo for name/role
+// lookups. Cached for nodeInfoMapCacheTTL with singleflight to dedupe
+// concurrent rebuilds.
 func (s *Server) buildNodeInfoMap() map[string]nodeInfo {
 	if s.store == nil {
 		return nil
 	}
+	for {
+		s.nodeInfoMapCache.mu.Lock()
+		if s.nodeInfoMapCache.cached != nil && time.Now().Before(s.nodeInfoMapCache.expiresAt) {
+			m := s.nodeInfoMapCache.cached
+			s.nodeInfoMapCache.mu.Unlock()
+			return m
+		}
+		if s.nodeInfoMapCache.inFlight != nil {
+			ch := s.nodeInfoMapCache.inFlight
+			s.nodeInfoMapCache.mu.Unlock()
+			<-ch
+			continue
+		}
+		done := make(chan struct{})
+		s.nodeInfoMapCache.inFlight = done
+		s.nodeInfoMapCache.mu.Unlock()
+
+		var built map[string]nodeInfo
+		func() {
+			defer func() {
+				s.nodeInfoMapCache.mu.Lock()
+				if built != nil {
+					s.nodeInfoMapCache.cached = built
+					s.nodeInfoMapCache.expiresAt = time.Now().Add(nodeInfoMapCacheTTL)
+				}
+				s.nodeInfoMapCache.inFlight = nil
+				s.nodeInfoMapCache.mu.Unlock()
+				close(done)
+			}()
+			built = s.computeNodeInfoMap()
+		}()
+		return built
+	}
+}
+
+// computeNodeInfoMap builds the pubkey→nodeInfo map from scratch.
+func (s *Server) computeNodeInfoMap() map[string]nodeInfo {
 	nodes, _ := s.store.getCachedNodesAndPM()
 	m := make(map[string]nodeInfo, len(nodes))
 	for _, n := range nodes {

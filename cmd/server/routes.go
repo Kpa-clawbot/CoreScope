@@ -45,10 +45,11 @@ type Server struct {
 	// computing a fresh response (potentially blocked on s.mu.RLock during
 	// eviction), all other goroutines serve the existing stale cache instead
 	// of queuing behind statsMu for 90+ seconds.
-	statsMu        sync.Mutex
-	statsCache     *StatsResponse
-	statsCachedAt  time.Time
-	statsComputing bool
+	statsMu         sync.Mutex
+	statsCache      *StatsResponse
+	statsCacheBytes []byte // pre-marshaled JSON of statsCache; invalidated together
+	statsCachedAt   time.Time
+	statsComputing  bool
 
 	// Guards s.cfg.GeoFilter — read by ingest/handler goroutines, written by PUT handler
 	cfgMu sync.RWMutex
@@ -115,12 +116,15 @@ type Server struct {
 	perfCachedAt  time.Time
 	perfComputing bool
 
-	// Per-observer analytics cache (60s TTL). The /api/observers/:id/analytics
-	// endpoint is expensive (DB aggregate + path-sample queries). Without caching,
+	// Per-observer analytics cache. The /api/observers/:id/analytics endpoint
+	// is expensive (DB aggregate + path-sample queries). Without caching,
 	// repeated loads of the same observer page hammer the DB. Cache key is
-	// "observerID|totalMinutes".
-	obsAnalyticsMu    sync.Mutex
-	obsAnalyticsCache map[string]*obsAnalyticsCacheEntry
+	// "observerID|totalMinutes". A per-key singleflight map coalesces
+	// concurrent cache-miss requests so we don't thundering-herd the DB when
+	// many clients open the same observer page within the same TTL window.
+	obsAnalyticsMu       sync.Mutex
+	obsAnalyticsCache    map[string]*obsAnalyticsCacheEntry
+	obsAnalyticsInFlight map[string]chan struct{}
 
 	losHandler *losHandler // elevation cache + HTTP client for LOS API calls
 	losOnce    sync.Once   // ensures losHandler is initialized exactly once
@@ -130,6 +134,36 @@ type Server struct {
 
 	// Cached /api/route-history responses by hour window.
 	routeHistoryCache routeHistoryCacheState
+
+	// Single-key bytes-payload caches with singleflight. These endpoints are
+	// hot (frontend polls them on a timer) and the response shape is identical
+	// across all callers, so we keep the marshaled JSON and reuse it.
+	observersListCache  singleKeyByteCache
+	observersStatsCache singleKeyByteCache
+	statsBytesCache     singleKeyByteCache
+	nodeInfoMapCache    nodeInfoMapCacheState
+}
+
+// singleKeyByteCache is a tiny TTL cache + singleflight wrapper for endpoints
+// that don't vary by URL path/query. Concurrent cache-miss requests share one
+// in-flight computation; cache hits return the pre-marshaled bytes directly so
+// json.Marshal isn't repeated per request.
+type singleKeyByteCache struct {
+	mu        sync.Mutex
+	payload   []byte
+	expiresAt time.Time
+	inFlight  chan struct{}
+}
+
+// nodeInfoMapCacheState caches the assembled name/role map used by neighbor
+// endpoints. The result is small (~few hundred entries) but is currently
+// rebuilt fresh by every /api/nodes/{pubkey}/neighbors and
+// /api/analytics/neighbor-graph request.
+type nodeInfoMapCacheState struct {
+	mu        sync.Mutex
+	cached    map[string]nodeInfo
+	expiresAt time.Time
+	inFlight  chan struct{}
 }
 
 // obsAnalyticsCacheEntry holds one cached /api/observers/:id/analytics response.
@@ -138,7 +172,70 @@ type obsAnalyticsCacheEntry struct {
 	expiresAt time.Time
 }
 
-const obsAnalyticsCacheTTL = 60 * time.Second
+// serve looks up cached bytes for c, otherwise builds a fresh payload via
+// build, caches it for ttl, and writes the result. Concurrent cache-miss
+// callers share one in-flight build (singleflight). build returns the JSON
+// bytes to cache and write; if it returns an error, the response is a 500
+// with the standard "internal error" body (the underlying error is logged
+// server-side via writeInternalError so raw SQL/filesystem details don't
+// leak to clients). The cache is left untouched on error so the next caller
+// retries.
+//
+// errContext labels the endpoint in server logs (e.g. "handleObservers
+// GetObservers"). It must NOT contain user-controlled input.
+func (c *singleKeyByteCache) serve(w http.ResponseWriter, ttl time.Duration, errContext string, build func() ([]byte, error)) {
+	for {
+		c.mu.Lock()
+		if c.payload != nil && time.Now().Before(c.expiresAt) {
+			payload := c.payload
+			c.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(payload) //nolint:errcheck
+			return
+		}
+		if c.inFlight != nil {
+			ch := c.inFlight
+			c.mu.Unlock()
+			<-ch
+			continue
+		}
+		done := make(chan struct{})
+		c.inFlight = done
+		c.mu.Unlock()
+
+		var (
+			payload []byte
+			err     error
+		)
+		func() {
+			defer func() {
+				c.mu.Lock()
+				if err == nil && payload != nil {
+					c.payload = payload
+					c.expiresAt = time.Now().Add(ttl)
+				}
+				c.inFlight = nil
+				c.mu.Unlock()
+				close(done)
+			}()
+			payload, err = build()
+		}()
+		if err != nil {
+			writeInternalError(w, errContext, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload) //nolint:errcheck
+		return
+	}
+}
+
+// obsAnalyticsCacheTTL caps how often we recompute /api/observers/:id/analytics
+// per (observer, window) key. The data is a backward-looking rollup of mostly
+// >5-minute buckets, so a few extra minutes of staleness is invisible. The
+// previous 60s value caused the endpoint to recompute roughly every observer
+// page refresh.
+const obsAnalyticsCacheTTL = 5 * time.Minute
 
 // maxJSONBodyBytes caps the size of JSON request bodies on POST endpoints.
 // 64 KB is far larger than any legitimate request (the biggest is a 200-hash
@@ -825,33 +922,46 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// writeCachedStats writes the cached stats response. Prefers the pre-marshaled
+// bytes (the common path on cache hit); falls back to marshaling the struct
+// if bytes haven't been populated yet (e.g. test code that sets the struct
+// directly). Caller must NOT hold statsMu.
+func (s *Server) writeCachedStats(w http.ResponseWriter, cached *StatsResponse, bytes []byte) {
+	if bytes != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(bytes) //nolint:errcheck
+		return
+	}
+	writeJSON(w, cached)
+}
+
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	const statsTTL = 10 * time.Second
 
 	s.statsMu.Lock()
 	if s.statsCache != nil && time.Since(s.statsCachedAt) < statsTTL {
-		cached := s.statsCache
+		cached, bytes := s.statsCache, s.statsCacheBytes
 		s.statsMu.Unlock()
-		writeJSON(w, cached)
+		s.writeCachedStats(w, cached, bytes)
 		return
 	}
 	if s.statsCache != nil {
-		cached := s.statsCache
+		cached, bytes := s.statsCache, s.statsCacheBytes
 		if !s.statsComputing {
 			s.statsComputing = true
 			go s.refreshStatsCache()
 		}
 		s.statsMu.Unlock()
-		writeJSON(w, cached)
+		s.writeCachedStats(w, cached, bytes)
 		return
 	}
 	// If another goroutine is already computing a fresh response (potentially
 	// blocked on s.mu.RLock during a long eviction pass), serve the existing
 	// stale cache rather than queuing 80+ goroutines behind statsMu for 90s.
 	if s.statsComputing && s.statsCache != nil {
-		cached := s.statsCache
+		cached, bytes := s.statsCache, s.statsCacheBytes
 		s.statsMu.Unlock()
-		writeJSON(w, cached)
+		s.writeCachedStats(w, cached, bytes)
 		return
 	}
 	// Mark computing and release the lock before the expensive work so other
@@ -868,21 +978,30 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Marshal once and store the bytes so future cache hits don't repeat
+	// the marshal work.
+	respBytes, _ := json.Marshal(resp)
 	s.statsMu.Lock()
 	s.statsCache = resp
+	s.statsCacheBytes = respBytes
 	s.statsCachedAt = time.Now()
 	s.statsComputing = false
 	s.statsMu.Unlock()
 
-	writeJSON(w, resp)
+	s.writeCachedStats(w, resp, respBytes)
 }
 
 func (s *Server) refreshStatsCache() {
 	resp, err := s.buildStatsResponse()
+	var respBytes []byte
+	if err == nil && resp != nil {
+		respBytes, _ = json.Marshal(resp)
+	}
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
 	if err == nil && resp != nil {
 		s.statsCache = resp
+		s.statsCacheBytes = respBytes
 		s.statsCachedAt = time.Now()
 	} else if err != nil {
 		log.Printf("[stats] background refresh error: %v", err)
@@ -2760,82 +2879,102 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ChannelMessagesResponse{Messages: []map[string]interface{}{}, Total: 0})
 }
 
+// observersListCacheTTL caps how often /api/observers re-scans the DB.
+// Observer metadata (name, IATA, model, lat/lon, etc.) is operator-managed
+// and changes on a manual edit timescale; the only fast-moving field in the
+// response is PacketsLastHour, a 1-hour rolling count where 2 minutes of
+// staleness is invisible. The Observers page bursts this endpoint on every
+// inbound WebSocket packet (observers.js debounce + force-refresh), so a
+// short TTL would still let one cold call per ~30s slip through; a 2-minute
+// TTL matches the frontend's default CLIENT_TTL.observers and lets the
+// server skip the GetObservers + GetObserverPacketCounts + GetNodeLocationsByKeys
+// triplet for the bulk of those refreshes.
+const observersListCacheTTL = 2 * time.Minute
+
 func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
-	observers, err := s.db.GetObservers()
-	if err != nil {
-		writeInternalError(w, "handleObservers GetObservers", err)
-		return
-	}
-
-	// Batch lookup: 1h packet counts only — 24h/7d are served by /api/observers/stats.
-	// observations.timestamp is INTEGER (Unix epoch) — use integer cutoff.
-	pktCounts := s.db.GetObserverPacketCounts(time.Now().Add(-1 * time.Hour).Unix())
-
-	// Batch lookup: node locations only for observer IDs (not all nodes)
-	observerIDs := make([]string, len(observers))
-	for i, o := range observers {
-		observerIDs[i] = o.ID
-	}
-	nodeLocations := s.db.GetNodeLocationsByKeys(observerIDs)
-
-	result := make([]ObserverResp, 0, len(observers))
-	for _, o := range observers {
-		// Defense in depth: skip observers that are in the blacklist
-		if s.cfg != nil && s.cfg.IsObserverBlacklisted(o.ID) {
-			continue
-		}
-		plh := pktCounts[o.ID]
-		var lat, lon, nodeRole interface{}
-		if nodeLoc, ok := nodeLocations[strings.ToLower(o.ID)]; ok {
-			lat = nodeLoc["lat"]
-			lon = nodeLoc["lon"]
-			nodeRole = nodeLoc["role"]
+	s.observersListCache.serve(w, observersListCacheTTL, "handleObservers GetObservers", func() ([]byte, error) {
+		observers, err := s.db.GetObservers()
+		if err != nil {
+			return nil, err
 		}
 
-		result = append(result, ObserverResp{
-			ID: o.ID, Name: o.Name, IATA: o.IATA,
-			LastSeen: o.LastSeen, FirstSeen: o.FirstSeen,
-			PacketCount: o.PacketCount,
-			Model:       o.Model, Firmware: o.Firmware,
-			ClientVersion: o.ClientVersion, Radio: o.Radio,
-			BatteryMv: o.BatteryMv, UptimeSecs: o.UptimeSecs,
-			NoiseFloor:      o.NoiseFloor,
-			LastPacketAt:    o.LastPacketAt,
-			PacketsLastHour: plh,
-			Lat:             lat, Lon: lon, NodeRole: nodeRole,
-			Repeat: o.Repeat,
+		// Batch lookup: 1h packet counts only — 24h/7d are served by /api/observers/stats.
+		// observations.timestamp is INTEGER (Unix epoch) — use integer cutoff.
+		pktCounts := s.db.GetObserverPacketCounts(time.Now().Add(-1 * time.Hour).Unix())
+
+		// Batch lookup: node locations only for observer IDs (not all nodes)
+		observerIDs := make([]string, len(observers))
+		for i, o := range observers {
+			observerIDs[i] = o.ID
+		}
+		nodeLocations := s.db.GetNodeLocationsByKeys(observerIDs)
+
+		result := make([]ObserverResp, 0, len(observers))
+		for _, o := range observers {
+			// Defense in depth: skip observers that are in the blacklist
+			if s.cfg != nil && s.cfg.IsObserverBlacklisted(o.ID) {
+				continue
+			}
+			plh := pktCounts[o.ID]
+			var lat, lon, nodeRole interface{}
+			if nodeLoc, ok := nodeLocations[strings.ToLower(o.ID)]; ok {
+				lat = nodeLoc["lat"]
+				lon = nodeLoc["lon"]
+				nodeRole = nodeLoc["role"]
+			}
+
+			result = append(result, ObserverResp{
+				ID: o.ID, Name: o.Name, IATA: o.IATA,
+				LastSeen: o.LastSeen, FirstSeen: o.FirstSeen,
+				PacketCount: o.PacketCount,
+				Model:       o.Model, Firmware: o.Firmware,
+				ClientVersion: o.ClientVersion, Radio: o.Radio,
+				BatteryMv: o.BatteryMv, UptimeSecs: o.UptimeSecs,
+				NoiseFloor:      o.NoiseFloor,
+				LastPacketAt:    o.LastPacketAt,
+				PacketsLastHour: plh,
+				Lat:             lat, Lon: lon, NodeRole: nodeRole,
+				Repeat: o.Repeat,
+			})
+		}
+		return json.Marshal(ObserverListResponse{
+			Observers:  result,
+			ServerTime: time.Now().UTC().Format(time.RFC3339),
 		})
-	}
-	writeJSON(w, ObserverListResponse{
-		Observers:  result,
-		ServerTime: time.Now().UTC().Format(time.RFC3339),
 	})
 }
+
+// observersStatsCacheTTL caps how often /api/observers/stats re-scans the DB.
+// The 24h/7d counts change very slowly relative to the 5-min frontend client
+// TTL — a few extra minutes of staleness on a 7-day count is invisible.
+const observersStatsCacheTTL = 5 * time.Minute
 
 // handleObserversStats returns per-observer 24h and 7d packet counts for the
 // stats block. Kept separate from /api/observers so the main list stays lean.
 func (s *Server) handleObserversStats(w http.ResponseWriter, r *http.Request) {
-	// observations.timestamp is INTEGER (Unix epoch) — use integer cutoffs.
-	now := time.Now()
-	counts := s.db.GetObserverAllPacketCounts(
-		now.Add(-1*time.Hour).Unix(),
-		now.Add(-24*time.Hour).Unix(),
-		now.Add(-7*24*time.Hour).Unix(),
-	)
-	result := make([]ObserverStatEntry, 0, len(counts))
-	for id, c := range counts {
-		if s.cfg != nil && s.cfg.IsObserverBlacklisted(id) {
-			continue
+	s.observersStatsCache.serve(w, observersStatsCacheTTL, "handleObserversStats GetObserverAllPacketCounts", func() ([]byte, error) {
+		// observations.timestamp is INTEGER (Unix epoch) — use integer cutoffs.
+		now := time.Now()
+		counts := s.db.GetObserverAllPacketCounts(
+			now.Add(-1*time.Hour).Unix(),
+			now.Add(-24*time.Hour).Unix(),
+			now.Add(-7*24*time.Hour).Unix(),
+		)
+		result := make([]ObserverStatEntry, 0, len(counts))
+		for id, c := range counts {
+			if s.cfg != nil && s.cfg.IsObserverBlacklisted(id) {
+				continue
+			}
+			result = append(result, ObserverStatEntry{
+				ID:             id,
+				PacketsLast24h: c.Day,
+				PacketsLast7d:  c.Week,
+			})
 		}
-		result = append(result, ObserverStatEntry{
-			ID:             id,
-			PacketsLast24h: c.Day,
-			PacketsLast7d:  c.Week,
+		return json.Marshal(ObserverStatsResponse{
+			Observers:  result,
+			ServerTime: now.UTC().Format(time.RFC3339),
 		})
-	}
-	writeJSON(w, ObserverStatsResponse{
-		Observers:  result,
-		ServerTime: now.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -2906,22 +3045,47 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 		since = time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	}
 
-	// Serve from per-observer cache when available (60s TTL).
-	// This endpoint runs two heavy DB queries; caching prevents repeated
-	// hammering when the UI auto-refreshes or multiple clients view the same
-	// observer page.
+	// Serve from per-observer cache when available. This endpoint runs two
+	// heavy DB queries; caching prevents repeated hammering when the UI
+	// auto-refreshes or multiple clients view the same observer page.
 	cacheKey := id + "|" + strconv.Itoa(totalMinutes)
-	s.obsAnalyticsMu.Lock()
-	if s.obsAnalyticsCache == nil {
-		s.obsAnalyticsCache = make(map[string]*obsAnalyticsCacheEntry)
-	}
-	if entry, ok := s.obsAnalyticsCache[cacheKey]; ok && time.Now().Before(entry.expiresAt) {
+	// Cache + singleflight loop: try the cache, and if it's cold, either
+	// become the leader for this key or wait for the in-flight leader.
+	for {
+		s.obsAnalyticsMu.Lock()
+		if s.obsAnalyticsCache == nil {
+			s.obsAnalyticsCache = make(map[string]*obsAnalyticsCacheEntry)
+		}
+		if entry, ok := s.obsAnalyticsCache[cacheKey]; ok && time.Now().Before(entry.expiresAt) {
+			payload := entry.payload
+			s.obsAnalyticsMu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(payload) //nolint:errcheck
+			return
+		}
+		if s.obsAnalyticsInFlight == nil {
+			s.obsAnalyticsInFlight = make(map[string]chan struct{})
+		}
+		if ch, inflight := s.obsAnalyticsInFlight[cacheKey]; inflight {
+			// Another goroutine is computing this exact response. Wait
+			// for it and re-check the cache when it finishes.
+			s.obsAnalyticsMu.Unlock()
+			<-ch
+			continue
+		}
+		// We're the leader. Publish our in-flight marker and break out
+		// to do the work without holding obsAnalyticsMu.
+		done := make(chan struct{})
+		s.obsAnalyticsInFlight[cacheKey] = done
 		s.obsAnalyticsMu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(entry.payload) //nolint:errcheck
-		return
+		defer func() {
+			s.obsAnalyticsMu.Lock()
+			delete(s.obsAnalyticsInFlight, cacheKey)
+			s.obsAnalyticsMu.Unlock()
+			close(done)
+		}()
+		break
 	}
-	s.obsAnalyticsMu.Unlock()
 
 	var bucketDur time.Duration
 	switch {
