@@ -143,12 +143,14 @@ async function main() {
     }
   }
 
-  // #1105 MINOR 9: when at a collapsed width, navigating to a route
-  // whose link overflows into the More menu must light up #navMoreBtn
-  // with .active. Verifies rebuildMoreMenu() correctly mirrors the
-  // active state from the inline (cloned) link to the More button on
-  // each hashchange (applyNavPriority is wired to hashchange and runs
-  // after the route handler's class toggles).
+  // #1105 MINOR 9 (updated by #1391): the active-route pill is now
+  // PINNED inline at any viewport ≥768px — even if it is not a
+  // data-priority="high" link. So when we navigate to /#/observers
+  // (non-high) at 1080px, the observers link MUST stay inline and the
+  // More menu MUST NOT contain it. The navMoreBtn .active mirror only
+  // fires when the active route is actually in the dropdown — under
+  // #1391 that can no longer happen at any width ≥768px, so this test
+  // verifies the inverse contract.
   await page.setViewportSize({ width: 1080, height: HEIGHT });
   await page.goto(`${BASE}/#/observers`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.top-nav .nav-links');
@@ -171,29 +173,41 @@ async function main() {
   const activeMirror = await page.evaluate(() => {
     const observersInline = document.querySelector('.nav-links .nav-link[href="#/observers"]');
     const inlineHidden = observersInline && observersInline.classList.contains('is-overflow');
+    const inlineActive = observersInline && observersInline.classList.contains('active');
+    const inlineWidth = observersInline ? observersInline.getBoundingClientRect().width : 0;
     const moreBtn = document.getElementById('navMoreBtn');
     const moreBtnActive = moreBtn ? moreBtn.classList.contains('active') : false;
-    const moreMenuActiveHrefs = Array.from(document.querySelectorAll('#navMoreMenu .nav-link.active'))
+    const moreMenuHrefs = Array.from(document.querySelectorAll('#navMoreMenu .nav-link'))
       .map(a => a.getAttribute('href'));
-    return { inlineHidden, moreBtnActive, moreMenuActiveHrefs };
+    return { inlineHidden, inlineActive, inlineWidth, moreBtnActive, moreMenuHrefs };
   });
 
   const mirrorReasons = [];
-  if (!activeMirror.inlineHidden) {
-    mirrorReasons.push('precondition: #/observers should be in the More menu at 1080px (not visible inline)');
+  // #1391: active link MUST stay inline (not overflowed).
+  if (activeMirror.inlineHidden) {
+    mirrorReasons.push('#1391 contract: #/observers is active route — MUST stay inline at 1080px, not in More');
   }
-  if (!activeMirror.moreBtnActive) {
-    mirrorReasons.push('navMoreBtn missing .active class while #/observers is the active route');
+  if (!activeMirror.inlineActive) {
+    mirrorReasons.push('inline #/observers link missing .active class');
   }
-  if (!activeMirror.moreMenuActiveHrefs.includes('#/observers')) {
-    mirrorReasons.push(`More-menu clone of #/observers missing .active (active hrefs in menu: [${activeMirror.moreMenuActiveHrefs.join(', ')}])`);
+  if (activeMirror.inlineWidth === 0) {
+    mirrorReasons.push('inline #/observers has zero width (clipped)');
+  }
+  // #1391: navMoreBtn should NOT have .active because the active link
+  // is inline, not in the dropdown.
+  if (activeMirror.moreBtnActive) {
+    mirrorReasons.push('navMoreBtn has .active but active route #/observers is inline (mirror should be off)');
+  }
+  // #1391: More menu must NOT contain the active link.
+  if (activeMirror.moreMenuHrefs.includes('#/observers')) {
+    mirrorReasons.push(`More menu contains active route #/observers (must be inline only): menu=[${activeMirror.moreMenuHrefs.join(', ')}]`);
   }
   if (mirrorReasons.length === 0) {
     passes++;
-    console.log(`  ✅ active-mirror @1080 #/observers: navMoreBtn.active=true, menu .active=#/observers`);
+    console.log(`  ✅ active-pinned @1080 #/observers: inline + .active set, More mirror off, menu excludes active`);
   } else {
     failures++;
-    console.log(`  ❌ active-mirror @1080 #/observers: ${mirrorReasons.join(' | ')}`);
+    console.log(`  ❌ active-pinned @1080 #/observers: ${mirrorReasons.join(' | ')}`);
   }
 
   await browser.close();

@@ -1133,9 +1133,23 @@ window.addEventListener('DOMContentLoaded', () => {
     // only signal — if you ever need finer ordering, switch to a numeric
     // attribute (e.g. data-overflow-order="3") rather than re-shuffling
     // index in HTML.
-    const overflowQueue = allLinks.filter(a => a.dataset.priority !== 'high')
-                                  .reverse() // right-to-left
-                                  .concat(allLinks.filter(a => a.dataset.priority === 'high').reverse());
+    // #1391: ALSO exclude the currently-active link from the queue.
+    // The active pill has wider rendered width (background + padding),
+    // and acceptance for #1391 requires "Active-route pill MUST always
+    // be visible inline (never overflowed to More) at any viewport
+    // ≥768px." The queue is rebuilt on hashchange (applyNavPriority
+    // is wired to hashchange below), so the exclusion tracks the
+    // current route automatically.
+    function buildOverflowQueue() {
+      var isPinned = function(a) {
+        return a.dataset.priority === 'high' || a.classList.contains('active');
+      };
+      return allLinks.filter(a => !isPinned(a))
+                     .reverse() // right-to-left
+                     .concat(allLinks.filter(a => a.dataset.priority === 'high' && !a.classList.contains('active')).reverse());
+    }
+    var overflowQueue = buildOverflowQueue();
+
 
     function rebuildMoreMenu() {
       navMoreMenu.innerHTML = '';
@@ -1194,7 +1208,14 @@ window.addEventListener('DOMContentLoaded', () => {
       // owns the decision (and at 2560px nothing overflows).
       if (window.innerWidth <= 1100) {
         allLinks.forEach(a => {
-          if (a.dataset.priority !== 'high') a.classList.add('is-overflow');
+          // #1391: never overflow the active-route pill, even in the
+          // narrow-desktop CSS branch — acceptance requires it stay
+          // inline at any viewport ≥768px. Without this guard, a
+          // non-high-priority active route (e.g. /#/perf) would be
+          // shoved into More alongside the rest.
+          if (a.dataset.priority !== 'high' && !a.classList.contains('active')) {
+            a.classList.add('is-overflow');
+          }
         });
         rebuildMoreMenu();
         return;
@@ -1251,6 +1272,11 @@ window.addEventListener('DOMContentLoaded', () => {
         return needed <= window.innerWidth;
       }
       let i = 0;
+      // #1391: rebuild queue here so it reflects the CURRENT active
+      // link (hashchange wakes applyNavPriority, but the queue was
+      // captured at init-time; we need to re-evaluate which link is
+      // active on every run). Cheap — just filters allLinks twice.
+      overflowQueue = buildOverflowQueue();
       // #1311 floor: protect data-priority="high" links from being
       // dropped by the greedy fit loop. The bug was that on a non-high
       // active route (e.g. /#/perf, /#/audio-lab) at ~1101-1200px, the
@@ -1263,8 +1289,13 @@ window.addEventListener('DOMContentLoaded', () => {
       // still doesn't fit at that point, that's a layout issue (e.g.
       // shrink the active pill, drop nav-stats earlier) — never the
       // measurer's call to delete primary navigation.
+      //
+      // #1391: also break on .active — buildOverflowQueue already
+      // excludes the active link from the queue, but the break is a
+      // defensive belt for any future code that re-enqueues it.
       while (!fits() && i < overflowQueue.length) {
         if (overflowQueue[i].dataset.priority === 'high') break;
+        if (overflowQueue[i].classList.contains('active')) break;
         overflowQueue[i].classList.add('is-overflow');
         i++;
       }
@@ -1283,7 +1314,7 @@ window.addEventListener('DOMContentLoaded', () => {
         // it just to satisfy the >=2 More-menu floor. A degenerate
         // 1-item dropdown is a smaller UX paper-cut than nuking a
         // primary nav link.
-        if (i < overflowQueue.length && overflowQueue[i].dataset.priority !== 'high') {
+        if (i < overflowQueue.length && overflowQueue[i].dataset.priority !== 'high' && !overflowQueue[i].classList.contains('active')) {
           overflowQueue[i].classList.add('is-overflow');
           i++;
         } else {
