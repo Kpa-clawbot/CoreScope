@@ -1360,6 +1360,17 @@ type MQTTPacketMessage struct {
 // path_json is derived directly from raw_hex header bytes (not decoded.Path.Hops)
 // to guarantee the stored path always matches the raw bytes. This matters for
 // TRACE packets where decoded.Path.Hops is overwritten with payload hops (#886).
+//
+// Timestamp is server ingest time (time.Now()), NOT msg.Timestamp (#1370):
+// PR #1233 (commit 498fbc03) routed the envelope timestamp into
+// PacketData.Timestamp on the premise that uploader-stamped envelope time
+// was trustworthy. Issue #1370 disproved that premise — observers with
+// broken client clocks (staging Voodoo3 tx 304114: 4/5 obs stamped 18:42
+// while genuine receive was 01:42) poisoned transmissions.first_seen /
+// observations.timestamp and dragged the /api/channels lastActivity 7h
+// into the past. Packet ordering is owned by the server clock; client
+// clocks are untrusted. msg.Timestamp still flows into observer.last_seen
+// via UpsertObserverAt — that's #1233's MAX/MIN guarded path and is fine.
 func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID, region string, regionKeys map[string][]byte) *PacketData {
 	pathJSON := "[]"
 	// For TRACE packets, path_json must be the payload-decoded route hops
@@ -1377,7 +1388,7 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 
 	pd := &PacketData{
 		RawHex:         msg.Raw,
-		Timestamp:      msg.Timestamp,
+		Timestamp:      time.Now().UTC().Format(time.RFC3339), // #1370 (counters #1233)
 		ObserverID:     observerID,
 		ObserverName:   msg.Origin,
 		SNR:            msg.SNR,

@@ -714,7 +714,6 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		decodedJSON, _ := json.Marshal(channelMsg)
 
 		ingestNow := time.Now().UTC().Format(time.RFC3339)
-		rxTime := resolveRxTime(msg, tag)
 		hashInput := fmt.Sprintf("ch:%s:%s:%s", channelIdx, text, ingestNow)
 		h := sha256.Sum256([]byte(hashInput))
 		hash := hex.EncodeToString(h[:])[:16]
@@ -755,7 +754,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 
 		pktData := &PacketData{
-			Timestamp:    rxTime,
+			Timestamp:    ingestNow, // #1370 (counters #1233): server ingest time, not envelope rxTime
 			ObserverID:   "companion",
 			ObserverName: "L1 Pro (BLE)",
 			SNR:          snr,
@@ -808,7 +807,6 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		decodedJSON, _ := json.Marshal(dm)
 
 		ingestNow := time.Now().UTC().Format(time.RFC3339)
-		rxTime := resolveRxTime(msg, tag)
 		hashInput := fmt.Sprintf("dm:%s:%s", text, ingestNow)
 		h := sha256.Sum256([]byte(hashInput))
 		hash := hex.EncodeToString(h[:])[:16]
@@ -849,7 +847,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 
 		pktData := &PacketData{
-			Timestamp:    rxTime,
+			Timestamp:    ingestNow, // #1370 (counters #1233): server ingest time, not envelope rxTime
 			ObserverID:   "companion",
 			ObserverName: "L1 Pro (BLE)",
 			SNR:          snr,

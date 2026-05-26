@@ -866,8 +866,12 @@ func TestBuildPacketData(t *testing.T) {
 	if pkt.PayloadType != decoded.Header.PayloadType {
 		t.Errorf("payloadType mismatch")
 	}
-	if pkt.Timestamp != "2026-05-16T10:00:00Z" {
-		t.Errorf("timestamp=%s, want 2026-05-16T10:00:00Z", pkt.Timestamp)
+	if pkt.Timestamp == "" {
+		t.Errorf("timestamp must be populated (server ingest time, #1370 reverts #1233)")
+	}
+	if pkt.Timestamp == "2026-05-16T10:00:00Z" {
+		t.Errorf("timestamp=%s; must NOT be the envelope value (#1370 reverts #1233's "+
+			"premise that envelope timestamp is trustworthy — buggy client clocks poison ordering)", pkt.Timestamp)
 	}
 	if pkt.DecodedJSON == "" || pkt.DecodedJSON == "{}" {
 		t.Error("decodedJSON should be populated")
