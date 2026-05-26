@@ -1063,6 +1063,16 @@ window.addEventListener('DOMContentLoaded', () => {
       applyTheme(isDark ? 'light' : 'dark');
     });
   }
+  // PR #893 follow-up: cross-tab sync — when another tab toggles theme,
+  // mirror it here without re-persisting (avoid loop). Matches the pattern
+  // used by the cb-presets storage listener below.
+  window.addEventListener('storage', function (ev) {
+    if (!ev || ev.key !== 'meshcore-theme' || !ev.newValue) return;
+    if (ev.newValue !== 'dark' && ev.newValue !== 'light') return;
+    document.documentElement.setAttribute('data-theme', ev.newValue);
+    if (darkCheckbox) darkCheckbox.checked = ev.newValue === 'dark';
+    try { reapplyUserThemeVars(ev.newValue === 'dark'); } catch (_) {}
+  });
 
   // --- #1361 Colorblind preset bootstrap & cross-tab sync ---
   // cb-presets.js auto-inits on module load, but body may not have existed

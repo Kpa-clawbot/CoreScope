@@ -642,6 +642,13 @@ input[type="week"] {
 .theme-toggle input:checked ~ .theme-toggle-track {
   background: var(--accent);
 }
+/* PR #893 follow-up: keyboard focus indicator. The native checkbox is visually
+ * hidden, so we draw the ring on the track sibling when the checkbox is
+ * :focus-visible. Matches the global focus-ring style above. */
+.theme-toggle input:focus-visible ~ .theme-toggle-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .theme-toggle-thumb {
   position: absolute; left: 3px; width: 18px; height: 18px;
   background: var(--nav-text); border-radius: 50%;
@@ -662,6 +669,23 @@ input[type="week"] {
 .theme-toggle-moon { left: 4px; opacity: 0; }
 .theme-toggle input:checked ~ .theme-toggle-track .theme-toggle-sun { opacity: 0; }
 .theme-toggle input:checked ~ .theme-toggle-track .theme-toggle-moon { opacity: 1; }
+/* PR #893 follow-up: respect prefers-reduced-motion — disable the slide/fade
+ * animation so the thumb snaps to position. */
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle-track,
+  .theme-toggle-thumb,
+  .theme-toggle-icon { transition: none; }
+}
+/* PR #893 follow-up: Windows High Contrast / forced-colors mode — the track
+ * background and thumb shadow get flattened to system colors, so explicitly
+ * keep a system-colored border on track and thumb to stay visible. */
+@media (forced-colors: active) {
+  .theme-toggle-track { border: 1px solid CanvasText; background: Canvas; }
+  .theme-toggle-thumb { background: CanvasText; box-shadow: none; }
+  .theme-toggle input:focus-visible ~ .theme-toggle-track {
+    outline: 2px solid Highlight;
+  }
+}
 /* === Nav Stats === */
 .nav-stats {
   display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--nav-text-muted);

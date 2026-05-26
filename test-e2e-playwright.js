@@ -219,6 +219,23 @@ async function run() {
     );
     const themeAfter = await page.$eval('html', el => el.getAttribute('data-theme'));
     assert(themeBefore !== themeAfter, `Theme didn't change: before=${themeBefore}, after=${themeAfter}`);
+
+    // PR #893 follow-up: tighten — if the new toggle-switch is present, verify
+    // (a) the checkbox is present and behaves as role="switch", and
+    // (b) the chosen theme persists across a full reload (localStorage path).
+    const checkbox = await page.$('#darkModeCheckbox');
+    if (checkbox) {
+      const role = await checkbox.evaluate(el => el.getAttribute('role'));
+      assert(role === 'switch', `Expected role="switch" on #darkModeCheckbox, got "${role}"`);
+      const checkedNow = await checkbox.evaluate(el => el.checked);
+      assert(checkedNow === (themeAfter === 'dark'),
+        `Checkbox state out of sync: checked=${checkedNow}, theme=${themeAfter}`);
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('#darkModeToggle');
+      const themePersisted = await page.$eval('html', el => el.getAttribute('data-theme'));
+      assert(themePersisted === themeAfter,
+        `Theme did not persist across reload: was=${themeAfter}, after-reload=${themePersisted}`);
+    }
   });
 
   // Test: Stats bar shows version/commit badge
