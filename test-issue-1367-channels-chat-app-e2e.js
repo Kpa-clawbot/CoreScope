@@ -123,8 +123,17 @@ async function run() {
   });
 
   await step('tap a row → URL hash changes to channel detail route', async () => {
+    // Prefer a row whose preview is non-empty (i.e., the channel has at
+    // least one observed message), so the downstream detail-view test
+    // can rely on .ch-message rendering. Fall back to the first row.
     const targetHash = await page.evaluate(() => {
-      const r = document.querySelector('#chList .ch-row[data-hash]');
+      const rows = Array.from(document.querySelectorAll('#chList .ch-row[data-hash]'));
+      const withPreview = rows.find(r => {
+        const p = r.querySelector('.ch-row-preview');
+        return p && (p.textContent || '').trim().length > 0
+          && !/^0x/.test((p.textContent || '').trim());
+      });
+      const r = withPreview || rows[0];
       return r ? r.getAttribute('data-hash') : null;
     });
     assert(targetHash, 'no .ch-row[data-hash] to click');
@@ -156,10 +165,12 @@ async function run() {
   });
 
   await step('detail view renders at least one .ch-message (avatar + bubble + footer)', async () => {
-    // Wait up to 8s for messages to load (some channels may be empty — pick the busiest).
-    const ok = await page.evaluate(async () => {
+    // Wait up to 10s for messages to load. If the chosen channel renders
+    // an empty-state, fall back to scanning the entire channel list for
+    // the busiest one and re-opening it.
+    let ok = await page.evaluate(async () => {
       function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < 50; i++) {
         const m = document.querySelector('.ch-message');
         if (m) {
           const av = m.querySelector('.ch-avatar');
@@ -171,6 +182,45 @@ async function run() {
       }
       return false;
     });
+    if (!ok) {
+      // Go back to the list and try the row with the highest visible
+      // message count in its preview (e.g. "N messages").
+      await page.evaluate(() => {
+        const back = document.querySelector('.ch-back, [data-action="ch-back"]');
+        if (back) back.click();
+        else history.replaceState(null, '', '#/channels');
+      });
+      await page.waitForSelector('#chList .ch-row[data-hash]', { timeout: 5000 });
+      const altHash = await page.evaluate(() => {
+        const rows = Array.from(document.querySelectorAll('#chList .ch-row[data-hash]'));
+        let best = null, bestN = -1;
+        for (const r of rows) {
+          const p = r.querySelector('.ch-row-preview');
+          const t = (p ? p.textContent || '' : '').trim();
+          const m = t.match(/(\d+)\s+messages/i);
+          const n = m ? parseInt(m[1], 10) : (t && !/^0x/.test(t) ? 1 : 0);
+          if (n > bestN) { bestN = n; best = r.getAttribute('data-hash'); }
+        }
+        return best;
+      });
+      if (altHash) {
+        await page.click('#chList .ch-row[data-hash="' + altHash.replace(/"/g, '\\"') + '"]');
+        ok = await page.evaluate(async () => {
+          function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+          for (let i = 0; i < 50; i++) {
+            const m = document.querySelector('.ch-message');
+            if (m) {
+              const av = m.querySelector('.ch-avatar');
+              const body = m.querySelector('.ch-message-bubble, .ch-msg-bubble');
+              const foot = m.querySelector('.ch-message-meta, .ch-msg-meta');
+              if (av && body && foot) return true;
+            }
+            await sleep(200);
+          }
+          return false;
+        });
+      }
+    }
     assert(ok, '.ch-message with avatar+bubble+footer not rendered in detail view');
   });
 
