@@ -3986,7 +3986,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       if (loadingEl) loadingEl.style.display = '';
       try {
         // Fix 4: use api() instead of raw fetch()
-        var data = await api('/api/scope-stats?window=' + encodeURIComponent(w), { ttl: 30000 });
+        var data = await api('/scope-stats?window=' + encodeURIComponent(w), { ttl: 30000 });
         if (loadingEl) loadingEl.style.display = 'none';
         if (data.error) {
           var cardsEl2 = document.getElementById('scopes-cards');
