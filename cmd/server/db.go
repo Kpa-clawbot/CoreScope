@@ -1634,37 +1634,36 @@ func (db *DB) GetChannelMessages(channelHash string, limit, offset int, region .
 	}
 
 	// 2) Page of transmission IDs — newest LIMIT msgs minus OFFSET.
-	//    Issue #1366 follow-up (fix #2): select page by MAX(o.timestamp)
-	//    (LatestSeen) DESC, NOT by t.first_seen DESC — otherwise a
-	//    heartbeat tx whose FirstSeen is 24h old but whose latest
-	//    observation is fresh gets pushed off page 1. We pre-aggregate
-	//    MAX(timestamp) per tx in a derived table (single grouped scan,
-	//    vs. a correlated subquery per outer row) so the cost is
-	//    O(N_obs) once, not O(N_tx × N_obs).
+	//    Issue #1366 follow-up (fix #2): select page by latest observation
+	//    timestamp (LatestSeen) DESC, NOT by t.first_seen DESC — otherwise
+	//    a heartbeat tx whose FirstSeen is 24h old but whose latest
+	//    observation is fresh gets pushed off page 1.
+	//
+	//    PR #1368 perf fix: use a correlated subquery for MAX(timestamp) per
+	//    transmission. With the composite index idx_observations_tx_ts
+	//    (transmission_id, timestamp) sqlite resolves MAX as an index-only
+	//    rightmost-leaf lookup — total O(N_tx · log N_obs). The previously-
+	//    used grouped derived table (`GROUP BY transmission_id` over the
+	//    whole observations table) scanned all observation rows (O(N_obs))
+	//    and blew the 1.5s perf budget on 1500 tx × 50 obs under -race.
+	//    LEFT JOIN + GROUP BY t.id was even slower because GROUP BY forced
+	//    a temp B-tree on the full transmissions×observations join.
 	//
 	//    The returned page is in newest-LatestSeen-FIRST (DESC) order.
 	//    The Go side re-orders the emitted rows ASC below (fix #3) so the
 	//    contract matches the in-memory path's tail-of-msgOrder convention.
-	pageSQL := `SELECT t.id, COALESCE(o.latest_obs_epoch, 0) AS latest_obs_epoch
+	pageSQL := `SELECT t.id,
+		COALESCE((SELECT MAX(timestamp) FROM observations WHERE transmission_id = t.id), 0) AS latest_obs_epoch
 		FROM transmissions t
-		LEFT JOIN (
-			SELECT transmission_id, MAX(timestamp) AS latest_obs_epoch
-			FROM observations
-			GROUP BY transmission_id
-		) o ON o.transmission_id = t.id
 		WHERE t.channel_hash = ? AND t.payload_type = 5
-		ORDER BY COALESCE(o.latest_obs_epoch, 0) DESC, t.id DESC
+		ORDER BY latest_obs_epoch DESC, t.id DESC
 		LIMIT ? OFFSET ?`
 	if len(regionCodes) > 0 {
-		pageSQL = `SELECT t.id, COALESCE(o.latest_obs_epoch, 0) AS latest_obs_epoch
+		pageSQL = `SELECT t.id,
+			COALESCE((SELECT MAX(timestamp) FROM observations WHERE transmission_id = t.id), 0) AS latest_obs_epoch
 			FROM transmissions t
-			LEFT JOIN (
-				SELECT transmission_id, MAX(timestamp) AS latest_obs_epoch
-				FROM observations
-				GROUP BY transmission_id
-			) o ON o.transmission_id = t.id
 			WHERE t.channel_hash = ? AND t.payload_type = 5` + regionFilter + `
-			ORDER BY COALESCE(o.latest_obs_epoch, 0) DESC, t.id DESC
+			ORDER BY latest_obs_epoch DESC, t.id DESC
 			LIMIT ? OFFSET ?`
 	}
 	pageArgs := []interface{}{channelHash}

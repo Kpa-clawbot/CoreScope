@@ -120,6 +120,16 @@ func setupTestDB(t *testing.T) *DB {
 			WHERE id = NEW.id;
 		END;
 		CREATE INDEX IF NOT EXISTS idx_transmissions_from_pubkey ON transmissions(from_pubkey);
+
+		-- Mirror prod indexes from internal/dbschema/dbschema.go so query plans
+		-- in tests match prod. idx_observations_transmission_id is required by
+		-- GetChannelMessages's grouped MAX(timestamp) per tx aggregate
+		-- (issue #1366 / PR #1368): without it the perf test on 1500 tx × 50 obs
+		-- blows the 1.5s budget under -race.
+		CREATE INDEX IF NOT EXISTS idx_observations_transmission_id ON observations(transmission_id);
+		CREATE INDEX IF NOT EXISTS idx_observations_timestamp ON observations(timestamp);
+		CREATE INDEX IF NOT EXISTS idx_observations_tx_ts ON observations(transmission_id, timestamp);
+		CREATE INDEX IF NOT EXISTS idx_transmissions_channel_hash ON transmissions(channel_hash);
 	`
 	if _, err := conn.Exec(schema); err != nil {
 		t.Fatal(err)

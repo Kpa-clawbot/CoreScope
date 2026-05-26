@@ -161,6 +161,10 @@ func ensureServerIndexes(rw *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_transmissions_payload_type ON transmissions(payload_type)`,
 		`CREATE INDEX IF NOT EXISTS idx_observations_timestamp ON observations(timestamp)`,
 		`CREATE INDEX IF NOT EXISTS idx_observations_transmission_id ON observations(transmission_id)`,
+		// Composite covers GetChannelMessages' grouped MAX(timestamp) per
+		// transmission_id (issue #1366 / PR #1368). With this index sqlite can
+		// satisfy the aggregate index-only without touching the heap.
+		`CREATE INDEX IF NOT EXISTS idx_observations_tx_ts ON observations(transmission_id, timestamp)`,
 	}
 	for _, s := range stmts {
 		if _, err := rw.Exec(s); err != nil {
