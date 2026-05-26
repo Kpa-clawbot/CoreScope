@@ -1327,40 +1327,6 @@ window.addEventListener('DOMContentLoaded', () => {
         }
       }
       rebuildMoreMenu();
-      // #1396 diagnostic — temporary; remove once root cause known.
-      // Gated on `navdebug=1` appearing anywhere in the URL hash (the
-      // app is hash-routed, so this works with e.g. `#/channels?navdebug=1`).
-      // Operator runs the affected device against staging with that
-      // hash and screenshots the green-on-black banner pinned to the
-      // bottom of the viewport — gives us viewport width, UA, total/
-      // visible/overflow counts, CSS-hidden count, and the actual link
-      // labels in each bucket without needing devtools.
-      try {
-        if (typeof window !== 'undefined' && window.location.hash.indexOf('navdebug=1') !== -1) {
-          var __dbgTotal = allLinks.length;
-          var __dbgVisible = allLinks.filter(function(a){ return !a.classList.contains('is-overflow'); });
-          var __dbgOverflow = allLinks.filter(function(a){ return a.classList.contains('is-overflow'); });
-          var __dbgHiddenByCss = __dbgVisible.filter(function(a){
-            return window.getComputedStyle(a).display === 'none';
-          });
-          var __dbgVisNames = __dbgVisible.map(function(a){ return (a.textContent||'').trim().slice(0,12); }).join(',');
-          var __dbgOvrNames = __dbgOverflow.map(function(a){ return (a.textContent||'').trim().slice(0,12); }).join(',');
-          var __dbgActive = (allLinks.filter(function(a){ return a.classList.contains('active'); })[0] || {}).textContent || '';
-          __dbgActive = (__dbgActive || '').trim().slice(0,20);
-          var __dbgBanner = document.getElementById('__navdebug') || document.createElement('div');
-          __dbgBanner.id = '__navdebug';
-          __dbgBanner.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#000;color:#0f0;font:11px ui-monospace,monospace;padding:4px 8px;z-index:99999;white-space:pre-wrap;word-break:break-all;pointer-events:none';
-          __dbgBanner.textContent =
-            '[NAV-DEBUG-1396] vw=' + window.innerWidth + ' total=' + __dbgTotal +
-            ' visible=' + __dbgVisible.length + ' overflow=' + __dbgOverflow.length +
-            ' hidden-by-css=' + __dbgHiddenByCss.length + ' active=' + __dbgActive + '\n' +
-            'visible: [' + __dbgVisNames + ']\n' +
-            'overflow: [' + __dbgOvrNames + ']\n' +
-            'ua: ' + (navigator.userAgent || '').slice(0,80);
-          if (!__dbgBanner.parentNode) document.body.appendChild(__dbgBanner);
-          console.warn('[NAV-DEBUG-1396]', __dbgBanner.textContent);
-        }
-      } catch (e) { /* diagnostic only — never break nav */ }
     }
 
     // Run once on load, again after fonts settle (label widths shift),
