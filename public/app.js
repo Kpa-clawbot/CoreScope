@@ -1348,15 +1348,29 @@ window.addEventListener('DOMContentLoaded', () => {
       requestAnimationFrame(applyNavPriority);
     });
 
+    // #1406: position the fixed dropdown relative to the More button on each open.
+    // Required because .nav-more-menu is position:fixed (so it escapes
+    // .nav-more-wrap's layout box and doesn't inflate the parent flex line).
+    function positionMoreMenu() {
+      var wr = navMoreWrap.getBoundingClientRect();
+      navMoreMenu.style.top = (wr.bottom + 4) + 'px';
+      navMoreMenu.style.right = (window.innerWidth - wr.right) + 'px';
+      navMoreMenu.style.left = 'auto';
+    }
     navMoreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const opening = !navMoreMenu.classList.contains('open');
+      if (opening) positionMoreMenu();
       navMoreMenu.classList.toggle('open');
       navMoreBtn.setAttribute('aria-expanded', String(opening));
       if (opening) {
         var firstLink = navMoreMenu.querySelector('.nav-link');
         if (firstLink) firstLink.focus();
       }
+    });
+    // Re-position on window resize while open.
+    window.addEventListener('resize', () => {
+      if (navMoreMenu.classList.contains('open')) positionMoreMenu();
     });
   }
 

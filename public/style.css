@@ -1691,8 +1691,14 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 /* "More" button (hidden on desktop) */
 .nav-more-wrap { display: none; position: relative; }
 .nav-more-btn { display: inline-flex; }
+/* #1406: position:fixed (not absolute) so the dropdown escapes .nav-more-wrap's
+   layout box. When absolute, the dropdown's content extents inflated
+   .nav-more-wrap.scrollHeight → bubbled into .nav-left flex line-height calc
+   → centered a 279px content line in 52px container → entire nav strip clipped
+   above viewport. position:fixed removes the dropdown from flow entirely; JS in
+   app.js positions top/right dynamically relative to the More button. */
 .nav-more-menu {
-  display: none; position: absolute; top: calc(var(--top-nav-h, 52px) - 4px); right: 0;
+  display: none; position: fixed; right: 0; top: 0;
   background: var(--nav-bg); border: 1px solid var(--border); border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15); flex-direction: column;
   min-width: 160px; padding: 4px 0; z-index: 1200;
