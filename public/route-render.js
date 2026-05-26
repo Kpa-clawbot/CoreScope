@@ -381,11 +381,24 @@
     // 38×24 collision box, but our role-aware labels are often wider. After
     // Leaflet paints, measure the real DOM rects and nudge any overlapping
     // labels vertically using an L.DomUtil offset (no relayout).
-    setTimeout(function () {
+    //
+    // We run the nudge once immediately AND again after `fitBounds`
+    // completes its async pan (`moveend`), because fitBounds re-projects
+    // the labels and can re-introduce overlap that the first nudge missed.
+    function nudgeOverlappingLabels() {
       var containerEl = mapRef.getContainer ? mapRef.getContainer() : document.body;
       var labelEls = Array.from(containerEl.querySelectorAll('.mc-route-label'));
+      // Reset prior nudges so we recompute from scratch (otherwise stacked
+      // nudges from successive passes drift labels off-screen).
+      for (var li = 0; li < labelEls.length; li++) {
+        var parent = labelEls[li].parentElement;
+        if (parent && parent.dataset && parent.dataset.mcRouteDy) {
+          parent.style.marginTop = '';
+          delete parent.dataset.mcRouteDy;
+        }
+      }
       var rects = labelEls.map(function (el) { return el.getBoundingClientRect(); });
-      var maxIter = 6;
+      var maxIter = 8;
       for (var iter = 0; iter < maxIter; iter++) {
         var moved = false;
         for (var i = 0; i < labelEls.length; i++) {
@@ -393,14 +406,14 @@
             var a = rects[i], b = rects[j];
             if (a.x < b.x + b.width && a.x + a.width > b.x &&
                 a.y < b.y + b.height && a.y + a.height > b.y) {
-              // Push the later label downward by the overlap height + 4px.
+              // Push the later label downward by the overlap height + 6px.
               var dy = (a.y + a.height) - b.y + 6;
-              var parent = labelEls[j].parentElement; // .leaflet-marker-icon
-              if (parent && parent.style) {
-                var prev = parent.dataset.mcRouteDy ? Number(parent.dataset.mcRouteDy) : 0;
+              var p2 = labelEls[j].parentElement;
+              if (p2 && p2.style) {
+                var prev = p2.dataset.mcRouteDy ? Number(p2.dataset.mcRouteDy) : 0;
                 var next = prev + dy;
-                parent.dataset.mcRouteDy = String(next);
-                parent.style.marginTop = next + 'px';
+                p2.dataset.mcRouteDy = String(next);
+                p2.style.marginTop = next + 'px';
               }
               rects[j] = labelEls[j].getBoundingClientRect();
               moved = true;
@@ -409,7 +422,9 @@
         }
         if (!moved) break;
       }
-    }, 30);
+    }
+    setTimeout(nudgeOverlappingLabels, 30);
+    mapRef.once('moveend', function () { setTimeout(nudgeOverlappingLabels, 30); });
 
     // Fit map to route
     var coords = positions.filter(function (p) { return p.lat != null && p.lon != null; })

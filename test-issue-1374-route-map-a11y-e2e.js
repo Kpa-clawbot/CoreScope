@@ -83,7 +83,7 @@ async function runViewport(browser, width, height, label) {
 
   const r1 = await renderRouteOnPage(page, ROUTE_FIXTURE);
   assertNoError(r1);
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(1800);
 
   await step(label + ': every hop marker has role="img" and informative aria-label', async () => {
     const data = await page.evaluate(() => {
@@ -198,7 +198,7 @@ async function runViewport(browser, width, height, label) {
     if (window.__mc_routeLayer && window.__mc_routeLayer.clearLayers) window.__mc_routeLayer.clearLayers();
   });
   await renderRouteOnPage(page, PARTIAL_FIXTURE);
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(1500);
 
   await step(label + ': partial-route — unresolved marker carries ch-unresolved class', async () => {
     const data = await page.evaluate(() => {
