@@ -4034,3 +4034,201 @@ body { touch-action: pan-y; }
   .ch-channel-list { padding-bottom: 24px; }
 }
 /* === end #1367 ====================================================== */
+/* ─── #1374 packet-route map view ───────────────────────────────────
+   Role-aware shape markers + sequence-number badges + directional
+   arrows + collapsible legend. WCAG SC 1.3.1 / 1.4.3 / 1.4.11 AA.
+   - Marker badge background uses --mc-route-badge-bg / -fg with measured
+     contrast ≥ 7:1 against #1a1a1a text on Carto Positron AND Dark
+     Matter (we burn-in #f8fafc fill + #0f172a text — both tiles).
+   - Edges use a per-hop HSL gradient as REDUNDANT carrier; the sequence
+     number badge is the primary order signal so colorblind users and
+     forced-colors users still read the route.
+   - `prefers-reduced-motion: reduce` disables marker focus pulse.
+   - `forced-colors: active` strips role colors → uses CanvasText/Canvas.
+   ----------------------------------------------------------------- */
+:root {
+  --mc-route-badge-bg: #f8fafc;
+  --mc-route-badge-fg: #0f172a;
+  --mc-route-badge-border: #1a1a1a;
+  --mc-route-label-bg: #f8fafc;
+  --mc-route-label-fg: #0f172a;
+  --mc-route-label-border: #475569;
+  --mc-route-legend-bg: rgba(248, 250, 252, 0.96);
+  --mc-route-legend-fg: #0f172a;
+  --mc-route-legend-border: #475569;
+}
+[data-theme="dark"] {
+  --mc-route-legend-bg: rgba(15, 23, 42, 0.94);
+  --mc-route-legend-fg: #f1f5f9;
+  --mc-route-legend-border: #94a3b8;
+}
+
+.mc-route-marker-icon { background: transparent !important; border: none !important; }
+.mc-route-marker {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+.mc-route-marker:focus {
+  outline: 3px solid #06b6d4;
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+.mc-route-marker.ch-unresolved {
+  opacity: 0.65;
+  filter: grayscale(0.8);
+}
+.mc-route-seq-badge {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  background: var(--mc-route-badge-bg);
+  color: var(--mc-route-badge-fg);
+  border: 1.5px solid var(--mc-route-badge-border);
+  border-radius: 8px;
+  font: 700 10px/14px system-ui, sans-serif;
+  text-align: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.mc-route-label-icon { background: transparent !important; border: none !important; }
+.mc-route-label {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--mc-route-label-bg);
+  color: var(--mc-route-label-fg);
+  border: 1px solid var(--mc-route-label-border);
+  border-radius: 3px;
+  font: 600 11px/14px system-ui, sans-serif;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+.mc-route-edge {
+  fill: none;
+}
+.mc-route-legend {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 700;
+  max-width: 240px;
+  background: var(--mc-route-legend-bg);
+  color: var(--mc-route-legend-fg);
+  border: 1px solid var(--mc-route-legend-border);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  font: 12px/1.4 system-ui, sans-serif;
+}
+.mc-route-legend-toggle {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-bottom: 1px solid var(--mc-route-legend-border);
+  font: 700 12px/1.2 system-ui, sans-serif;
+  text-align: left;
+  cursor: pointer;
+}
+.mc-route-legend-toggle:focus { outline: 2px solid #06b6d4; outline-offset: 1px; }
+.mc-route-legend-toggle[aria-expanded="false"] + .mc-route-legend-body { display: none; }
+.mc-route-legend-body { padding: 8px 10px; }
+.mc-route-legend-list { list-style: none; padding: 0; margin: 4px 0; }
+.mc-route-legend-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.mc-route-legend-swatch svg { display: block; }
+.mc-route-legend-glyph {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--mc-route-legend-fg);
+}
+.mc-route-legend-gradient {
+  display: inline-block;
+  width: 32px;
+  height: 8px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, hsl(152,70%,50%), hsl(18,70%,58%));
+  border: 1px solid var(--mc-route-legend-border);
+}
+.mc-route-legend-section {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--mc-route-legend-fg);
+  opacity: 0.75;
+}
+.mc-route-resolved-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  margin-bottom: 4px;
+  background: #fef3c7;
+  color: #78350f;
+  border: 1px solid #92400e;
+  border-radius: 3px;
+  font: 700 11px/14px system-ui, sans-serif;
+}
+.mc-route-context-label {
+  position: absolute;
+  top: 12px;
+  left: 60px;
+  z-index: 700;
+  padding: 4px 8px;
+  background: var(--mc-route-legend-bg);
+  color: var(--mc-route-legend-fg);
+  border: 1px solid var(--mc-route-legend-border);
+  border-radius: 4px;
+  font: 600 11px/1.3 system-ui, sans-serif;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+.mc-route-popup .mc-route-popup-title {
+  font: 700 13px/1.3 system-ui, sans-serif;
+  margin-bottom: 4px;
+  color: var(--text, #0f172a);
+}
+.mc-route-popup .mc-route-popup-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font: 11px/1.4 system-ui, sans-serif;
+  color: var(--text-muted, #475569);
+}
+.mc-route-popup .mc-route-popup-row b,
+.mc-route-popup .mc-route-popup-row code {
+  color: var(--text, #0f172a);
+}
+.mc-route-popup-link {
+  color: var(--accent, #0ea5e9);
+  font-size: 11px;
+  text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc-route-marker,
+  .mc-route-edge { transition: none !important; animation: none !important; }
+}
+@media (forced-colors: active) {
+  .mc-route-marker svg circle,
+  .mc-route-marker svg rect,
+  .mc-route-marker svg polygon { stroke: CanvasText !important; }
+  .mc-route-seq-badge,
+  .mc-route-label,
+  .mc-route-legend,
+  .mc-route-context-label {
+    background: Canvas !important;
+    color: CanvasText !important;
+    border-color: CanvasText !important;
+  }
+  .mc-route-edge { stroke: CanvasText !important; }
+}
