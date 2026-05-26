@@ -146,7 +146,7 @@ type PacketStore struct {
 	insertCount   int64
 	queryCount    int64
 	// Response caches (separate mutex to avoid contention with store RWMutex)
-	cacheMu      sync.Mutex
+	cacheMu      sync.RWMutex
 	rfCache      map[string]*cachedResult // region → cached RF result
 	topoCache    map[string]*cachedResult // region → cached topology result
 	hashCache      map[string]*cachedResult // region → cached hash-sizes result
@@ -230,10 +230,6 @@ type PacketStore struct {
 	relayStatsCacheAt     time.Time
 	relayStatsCacheWindow float64
 	relayStatsCacheSig    string
-
-	// Cached multi-byte capability map (pubkey → entry), recomputed every 15s.
-	multiByteCapCache map[string]*MultiByteCapEntry
-	multiByteCapAt    time.Time
 
 	// Snapshot from the last analytics cycle + O(1) index, both under cacheMu.
 	// Populated by analytics + pre-populated from DB on Load (read-only path).
@@ -7196,13 +7192,16 @@ func (s *PacketStore) computeAnalyticsHashSizesWithCapability(region, area strin
 	mbEntries := s.computeMultiByteCapability(globalAdopterHS)
 	result["multiByteCapability"] = mbEntries
 
-	// Publish snapshot + O(1) index under cacheMu, then persist to DB.
-	s.cacheMu.Lock()
-	s.mbCapSnapshot = mbEntries
+	// Build the O(1) lookup index OUTSIDE the cache lock — at Cascadia
+	// scale this is a ~2400-entry allocation + hash + insert per cycle.
+	// Holding cacheMu while doing it blocks every API reader for the
+	// duration. Swap the pointers in under a short write-lock.
 	mbIdx := make(map[string]MultiByteCapEntry, len(mbEntries))
 	for _, e := range mbEntries {
 		mbIdx[e.PublicKey] = e
 	}
+	s.cacheMu.Lock()
+	s.mbCapSnapshot = mbEntries
 	s.mbCapIndex = mbIdx
 	s.cacheMu.Unlock()
 	// Publish snapshot to the on-disk handoff so the ingestor can
@@ -8014,20 +8013,14 @@ func EnrichNodeWithMultiByte(node map[string]interface{}, entry *MultiByteCapEnt
 // lookup into the snapshot rebuilt by each analytics cycle (and pre-populated from
 // the DB on cold start). Returns false when the pubkey has no known capability.
 func (s *PacketStore) GetMultibyteCapFor(pk string) (*MultiByteCapEntry, bool) {
-	s.cacheMu.Lock()
+	s.cacheMu.RLock()
 	e, ok := s.mbCapIndex[pk]
-	s.cacheMu.Unlock()
+	s.cacheMu.RUnlock()
 	if !ok {
 		return nil, false
 	}
 	return &e, true
 }
-
-// multibyteStatusToInt is no longer defined here — the int mapping lives
-// in the ingestor's cmd/ingestor/multibyte_persist.go (the only place
-// that writes to the DB). The server only deals with the string
-// statuses ("confirmed" / "suspected" / "unknown") on its read path
-// and in the snapshot payload.
 
 // loadMultibyteCapFromDB pre-populates mbCapSnapshot and mbCapIndex from the nodes
 // table so cold starts serve the last-known capability without waiting for the first
@@ -8106,41 +8099,6 @@ func (s *PacketStore) publishMultibyteCapSnapshot(entries []MultiByteCapEntry) {
 	if err := mbcapqueue.WriteSnapshot(s.db.path, mbcapqueue.Snapshot{Entries: out}); err != nil {
 		log.Printf("[multibyte] publish snapshot: %v", err)
 	}
-}
-
-// GetMultiByteCapMap returns a cached pubkey → MultiByteCapEntry map.
-// Reuses the same 15s TTL cache pattern as hash size info.
-func (s *PacketStore) GetMultiByteCapMap() map[string]*MultiByteCapEntry {
-	s.hashSizeInfoMu.Lock()
-	if s.multiByteCapCache != nil && time.Since(s.multiByteCapAt) < 15*time.Second {
-		cached := s.multiByteCapCache
-		s.hashSizeInfoMu.Unlock()
-		return cached
-	}
-	s.hashSizeInfoMu.Unlock()
-
-	// Get adopter hash sizes from analytics for cross-referencing
-	analyticsData := s.GetAnalyticsHashSizes("", "")
-	adopterSizes := make(map[string]int)
-	if nodes, ok := analyticsData["nodes"].(map[string]map[string]interface{}); ok {
-		for pk, data := range nodes {
-			if hs, ok := data["hashSize"].(int); ok {
-				adopterSizes[pk] = hs
-			}
-		}
-	}
-
-	caps := s.computeMultiByteCapability(adopterSizes)
-	result := make(map[string]*MultiByteCapEntry, len(caps))
-	for i := range caps {
-		result[caps[i].PublicKey] = &caps[i]
-	}
-
-	s.hashSizeInfoMu.Lock()
-	s.multiByteCapCache = result
-	s.multiByteCapAt = time.Now()
-	s.hashSizeInfoMu.Unlock()
-	return result
 }
 
 // --- Multi-Byte Capability Inference ---
