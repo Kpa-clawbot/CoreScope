@@ -289,8 +289,16 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
    all interactive controls. Targets are achieved with min-height/min-width
    plus inline-flex centering so existing visual styling (font-size, padding,
    icon size) is preserved on desktop while the *hit area* grows for touch.
-   Issue #1060. */
-.nav-link { min-height: 48px; display: inline-flex; align-items: center; }
+   Issue #1060.
+
+   Issue #1400: the global `min-height: 48px` on `.nav-link` was the root
+   cause of ~20 recurring nav-vanishing bugs (#1391, #1396, and ~18 earlier
+   symptoms). 48px links + padding inflated `.nav-links` to 56px tall inside
+   a 52px `.top-nav` with `overflow:hidden`; Firefox flex-centered the
+   over-tall item to a negative y, clipping the entire link strip ABOVE the
+   viewport. Touch-target sizing is preserved for mobile via the
+   `@media (max-width: 767px)` override added near the hamburger block. */
+.nav-link { display: inline-flex; align-items: center; }
 
 /* Generic button surfaces — filter bar, modal buttons, inline .btn usages.
    inline-flex keeps text/icons centered without changing visible padding much. */
@@ -1797,6 +1805,9 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   .nav-links a:not([data-priority="high"]) { display: flex; }
   .nav-links.open { display: flex; }
   .nav-link { padding: 12px 20px; border-bottom: none; }
+  /* Issue #1400: restore 48px touch-target on mobile only. Global rule
+     removed because it overflowed the 52px desktop top-nav. */
+  .nav-link { min-height: 48px; }
   .nav-link.active { background: var(--nav-active-bg); border-radius: 0; margin: 0; padding: 12px 20px; }
   .nav-left { gap: 12px; }
   body.nav-open { overflow: hidden; }
