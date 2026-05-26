@@ -381,6 +381,7 @@ Existing patterns: `#/nodes/{pubkey}?section=node-neighbors`, `#/analytics?tab=c
 
 ## What NOT to Do
 - **Don't check in private information** — no names, API keys, tokens, passwords, IP addresses, personal data, or any identifying information. This is a PUBLIC repo.
+- **Don't introduce new `map[string]interface{}` in API response builders, handler returns, or internal data structures that cross domain boundaries.** Use a named Go struct with explicit JSON tags. CoreScope already carries 694 occurrences (see #1383); the count must monotonically decrease. If your change adds even one new occurrence in a touched file, the PR is wrong-shaped — fix the design, don't paper over with `interface{}`. Exempt: third-party library boundaries that genuinely return `interface{}`, and ad-hoc test fixture assertions.
 - Don't add npm dependencies without asking
 - Don't create a build step
 - Don't add framework abstractions (React, Vue, etc.)
