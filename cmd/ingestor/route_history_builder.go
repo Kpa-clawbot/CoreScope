@@ -29,21 +29,23 @@ func (s *Store) StartRouteHistoryBuilder(interval time.Duration) func() {
 	stop := make(chan struct{})
 	done := make(chan struct{})
 
-	initialSince := time.Now().Add(-7 * 24 * time.Hour).Unix()
-	if n, err := s.buildAndPersistRouteHistoryEdges(initialSince); err != nil {
-		log.Printf("[route-history-build] initial build error: %v", err)
-	} else {
-		log.Printf("[route-history-build] initial build: %d edge events inserted", n)
-	}
-	if n, err := s.pruneRouteHistoryEdges(8); err != nil {
-		log.Printf("[route-history-build] initial prune error: %v", err)
-	} else if n > 0 {
-		log.Printf("[route-history-build] initial prune removed %d old edge events", n)
-	}
-
 	var stopOnce sync.Once
 	go func() {
 		defer close(done)
+		// Warm up in the background. This can scan 7 days of observations on
+		// existing DBs, so it must not delay MQTT connection startup.
+		initialSince := time.Now().Add(-7 * 24 * time.Hour).Unix()
+		if n, err := s.buildAndPersistRouteHistoryEdges(initialSince); err != nil {
+			log.Printf("[route-history-build] initial build error: %v", err)
+		} else {
+			log.Printf("[route-history-build] initial build: %d edge events inserted", n)
+		}
+		if n, err := s.pruneRouteHistoryEdges(8); err != nil {
+			log.Printf("[route-history-build] initial prune error: %v", err)
+		} else if n > 0 {
+			log.Printf("[route-history-build] initial prune removed %d old edge events", n)
+		}
+
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		lastBuildAt := time.Now().Add(-2 * interval)

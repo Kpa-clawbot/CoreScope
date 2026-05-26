@@ -32,9 +32,8 @@ type edgeRow struct {
 // derived neighbor_edges rows. Builder is the only writer to
 // neighbor_edges (#1287).
 //
-// The function returns a stop closure. Initial build runs synchronously
-// before the ticker starts so the server's first snapshot load picks
-// up real data instead of an empty table.
+// The function returns a stop closure immediately. Initial build runs in the
+// builder goroutine so MQTT startup is not blocked by a multi-minute warmup.
 //
 // Perf: each tick only scans observations newer than the previous build
 // time (minus a 2-interval overlap for safety). The initial build uses a
@@ -49,18 +48,19 @@ func (s *Store) StartNeighborEdgesBuilder(interval time.Duration) func() {
 	stop := make(chan struct{})
 	done := make(chan struct{})
 
-	// Synchronous warm-up: full 5-day lookback so existing edges are
-	// preserved across restarts without needing a full all-time scan.
-	initialSince := time.Now().Add(-5 * 24 * time.Hour).Unix()
-	if n, err := s.buildAndPersistNeighborEdges(initialSince); err != nil {
-		log.Printf("[neighbor-build] initial build error: %v", err)
-	} else {
-		log.Printf("[neighbor-build] initial build: %d edges upserted", n)
-	}
-
 	var stopOnce sync.Once
 	go func() {
 		defer close(done)
+		// Warm-up: full 5-day lookback so existing edges are preserved across
+		// restarts without needing a full all-time scan. This must not block
+		// StartNeighborEdgesBuilder returning; MQTT startup depends on that.
+		initialSince := time.Now().Add(-5 * 24 * time.Hour).Unix()
+		if n, err := s.buildAndPersistNeighborEdges(initialSince); err != nil {
+			log.Printf("[neighbor-build] initial build error: %v", err)
+		} else {
+			log.Printf("[neighbor-build] initial build: %d edges upserted", n)
+		}
+
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		// lastBuildAt seeds the incremental window. Subtract 2×interval so
