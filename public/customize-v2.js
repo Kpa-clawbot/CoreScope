@@ -1123,6 +1123,42 @@
     '</div>';
   }
 
+  // ── #1361 Colorblind preset selector ──
+  // MVP scope: radio selector + 1-line description + WCAG warning badge.
+  // Stretch (live Brettel/Vienot simulation overlay, "Reset to default Wong"
+  // button) intentionally deferred to a follow-up issue.
+  function _renderColorblindPresetSelector() {
+    var MCP = (typeof window !== 'undefined') && window.MeshCorePresets;
+    if (!MCP || !Array.isArray(MCP.list)) return '';
+    var current = MCP.currentPreset ? MCP.currentPreset() : 'default';
+    var options = MCP.list.map(function (p) {
+      var checked = p.id === current ? ' checked' : '';
+      return '<label class="cust-cb-preset-row" style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;cursor:pointer">' +
+        '<input type="radio" name="cv2-cb-preset" data-cv2-cb-preset value="' + escAttr(p.id) + '"' + checked + ' style="margin-top:3px">' +
+        '<div style="flex:1">' +
+          '<div style="font-weight:600">' + esc(p.label) + '</div>' +
+          '<div class="cust-hint" style="font-size:12px;color:var(--text-muted)">' + esc(p.description) + '</div>' +
+          _renderCbPresetWarning(p.id) +
+        '</div>' +
+      '</label>';
+    }).join('');
+    return '<p class="cust-section-title">Colorblind Preset</p>' +
+      '<p class="cust-hint" style="margin-bottom:8px">Switch the role/status palette for color-vision variants. Achromatopsia uses a luminance-only ramp and relies on the shape/letter/glyph carriers from #1356/#1357.</p>' +
+      '<div class="cust-cb-presets" data-cv2-cb-preset-group>' + options + '</div>' +
+      '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">';
+  }
+
+  function _renderCbPresetWarning(id) {
+    var MCP = window.MeshCorePresets;
+    if (!MCP || typeof MCP.validatePreset !== 'function') return '';
+    var rep = MCP.validatePreset(id);
+    var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    var failing = rep.filter(function (r) { return dark ? !r.passDark : !r.passLight; });
+    if (!failing.length) return '';
+    var names = failing.map(function (r) { return r.role; }).join(', ');
+    return '<div class="cust-cb-warn" style="margin-top:4px;font-size:11px;color:var(--status-yellow);background:rgba(255,200,0,0.08);padding:4px 6px;border-radius:4px">⚠ WCAG 1.4.11: ' + esc(names) + ' below 3:1 vs ' + (dark ? 'dark' : 'light') + ' tiles</div>';
+  }
+
   function _renderNodes() {
     var eff = _getEffective();
     var server = _getServer();
@@ -1160,6 +1196,7 @@
     var liveHeatPct = Math.round(liveHeatOpacity * 100);
 
     return '<div class="cust-panel' + (_activeTab === 'nodes' ? ' active' : '') + '" data-panel="nodes">' +
+      _renderColorblindPresetSelector() +
       '<p class="cust-section-title">Node Role Colors</p>' + rows +
       '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">' +
       '<p class="cust-section-title">Packet Type Colors</p>' + typeRows +
@@ -1755,6 +1792,18 @@
 
     // GeoFilter tab init
     if (_activeTab === 'geofilter') _initGeoFilterTab(container);
+
+    // #1361 Colorblind preset radio — switches preset via MeshCorePresets.applyPreset
+    container.querySelectorAll('[data-cv2-cb-preset]').forEach(function (radio) {
+      radio.addEventListener('change', function () {
+        if (!radio.checked) return;
+        var id = radio.value;
+        if (window.MeshCorePresets && typeof window.MeshCorePresets.applyPreset === 'function') {
+          window.MeshCorePresets.applyPreset(id);
+          _refreshPanel();
+        }
+      });
+    });
 
     // Preset buttons
     container.querySelectorAll('.cust-preset-btn').forEach(function (btn) {

@@ -1,0 +1,263 @@
+/* cb-presets.js — Colorblind preset registry & runtime switcher (#1361).
+ *
+ * MVP scope:
+ *   - 5 presets: default (Wong 2011), deut (IBM 5-class), prot (IBM 5-class
+ *     with high-luminance amber anchor), trit (Tol muted, blue/yellow-safe),
+ *     achromat (pure luminance ramp).
+ *   - applyPreset(id) sets body[data-cb-preset], writes --mc-role-* and
+ *     --mc-mb-* CSS vars on documentElement, persists to localStorage.
+ *   - initFromStorage() re-applies on reload.
+ *   - storage event listener syncs across tabs.
+ *   - WCAG 2.2 SC 1.4.3 / 1.4.11 contrast helper for validation.
+ *
+ * Stretch (Brettel/Vienot SVG simulation overlay, "Reset to default Wong"
+ * button) is intentionally NOT implemented here — separate follow-up.
+ *
+ * Palette sources cited in PR body.
+ */
+(function () {
+  'use strict';
+
+  var STORAGE_KEY = 'meshcore-cb-preset';
+  var DATA_ATTR   = 'data-cb-preset';
+
+  // ── Palettes ────────────────────────────────────────────────────────────
+  // Each preset declares colors for the 5 roles + the 3 multi-byte status
+  // colors. role keys mirror --mc-role-{repeater|companion|room|sensor|observer}.
+  // mb keys mirror --mc-mb-{confirmed|suspected|unknown}.
+  var PRESETS = [
+    {
+      id: 'default',
+      label: 'Default (Wong 2011)',
+      description: 'Wong\'s 8-class colorblind-safe palette — the project default.',
+      roleColors: {
+        repeater:  '#D55E00', // vermillion
+        companion: '#56B4E9', // sky blue
+        room:      '#009E73', // bluish-green
+        sensor:    '#F0E442', // yellow
+        observer:  '#CC79A7'  // reddish-purple
+      },
+      mb: {
+        confirmed: '#56F0A0',
+        suspected: '#FFD966',
+        unknown:   '#FF8888'
+      }
+    },
+    {
+      id: 'deut',
+      label: 'Deuteranopia-tuned',
+      description: 'IBM 5-class palette — anchors shifted away from red/green collision.',
+      // IBM Design Language colorblind-safe: blue / purple / magenta / orange / amber.
+      roleColors: {
+        repeater:  '#FE6100', // orange (high-luminance anchor for repeater)
+        companion: '#648FFF', // blue
+        room:      '#785EF0', // purple
+        sensor:    '#FFB000', // amber
+        observer:  '#DC267F'  // magenta
+      },
+      mb: {
+        confirmed: '#648FFF',
+        suspected: '#FFB000',
+        unknown:   '#DC267F'
+      }
+    },
+    {
+      id: 'prot',
+      label: 'Protanopia-tuned',
+      description: 'IBM 5-class with amber-shifted repeater anchor (protan-safe luminance).',
+      roleColors: {
+        repeater:  '#FFB000', // amber — higher luminance than orange for protans
+        companion: '#648FFF',
+        room:      '#785EF0',
+        sensor:    '#FE6100',
+        observer:  '#DC267F'
+      },
+      mb: {
+        confirmed: '#648FFF',
+        suspected: '#FFB000',
+        unknown:   '#DC267F'
+      }
+    },
+    {
+      id: 'trit',
+      label: 'Tritanopia-tuned',
+      description: 'Tol muted palette — avoids blue/yellow confusion zone.',
+      // Paul Tol muted (B/Y-safe): red / teal / green / purple / sand.
+      roleColors: {
+        repeater:  '#CC6677', // rose
+        companion: '#117733', // green
+        room:      '#882255', // wine
+        sensor:    '#DDCC77', // sand (replaces pure yellow)
+        observer:  '#AA4499'  // purple
+      },
+      mb: {
+        confirmed: '#117733',
+        suspected: '#DDCC77',
+        unknown:   '#CC6677'
+      }
+    },
+    {
+      id: 'achromat',
+      label: 'Achromatopsia (monochrome)',
+      description: 'Pure luminance ramp — relies on shape/letter/glyph carriers from #1356/#1357.',
+      // Luminance ramp at 90/70/50/35/20% per spec. Achromat users distinguish
+      // by lightness; the shape/letter/glyph carriers from #1356/#1357 carry
+      // role identity. Map markers also have the dark halo from #1356 so even
+      // light-grey fills remain visible against Carto-positron.
+      roleColors: {
+        repeater:  '#333333', // L=20%
+        companion: '#595959', // L=35%
+        room:      '#808080', // L=50%
+        sensor:    '#b3b3b3', // L=70%
+        observer:  '#e6e6e6'  // L=90%
+      },
+      mb: {
+        confirmed: '#b3b3b3',
+        suspected: '#808080',
+        unknown:   '#595959'
+      }
+    }
+  ];
+
+  // ── WCAG helpers ────────────────────────────────────────────────────────
+  function _hexToRgb(hex) {
+    if (!hex || hex[0] !== '#' || hex.length !== 7) return null;
+    return {
+      r: parseInt(hex.slice(1, 3), 16),
+      g: parseInt(hex.slice(3, 5), 16),
+      b: parseInt(hex.slice(5, 7), 16)
+    };
+  }
+  function _channelLin(c) {
+    var s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  }
+  function relativeLuminance(hex) {
+    var rgb = _hexToRgb(hex);
+    if (!rgb) return 0;
+    return 0.2126 * _channelLin(rgb.r) + 0.7152 * _channelLin(rgb.g) + 0.0722 * _channelLin(rgb.b);
+  }
+  function contrast(fg, bg) {
+    var L1 = relativeLuminance(fg);
+    var L2 = relativeLuminance(bg);
+    var hi = Math.max(L1, L2);
+    var lo = Math.min(L1, L2);
+    return (hi + 0.05) / (lo + 0.05);
+  }
+  // Canonical map tile backgrounds for validation (Carto Positron / Dark Matter)
+  var TILE_LIGHT = '#f2efe9';
+  var TILE_DARK  = '#1a1a1a';
+
+  /**
+   * Validate a preset against WCAG 2.2 SC 1.4.11 (3:1 for non-text UI).
+   * Returns an array of { role, color, vsLight, vsDark, passLight, passDark }.
+   */
+  function validatePreset(presetId) {
+    var p = PRESETS.filter(function (x) { return x.id === presetId; })[0];
+    if (!p) return [];
+    var out = [];
+    Object.keys(p.roleColors).forEach(function (role) {
+      var c = p.roleColors[role];
+      var vL = contrast(c, TILE_LIGHT);
+      var vD = contrast(c, TILE_DARK);
+      out.push({
+        role: role,
+        color: c,
+        vsLight: vL,
+        vsDark: vD,
+        passLight: vL >= 3.0,
+        passDark:  vD >= 3.0
+      });
+    });
+    return out;
+  }
+
+  // ── Runtime application ────────────────────────────────────────────────
+  function _byId(id) {
+    for (var i = 0; i < PRESETS.length; i++) if (PRESETS[i].id === id) return PRESETS[i];
+    return null;
+  }
+
+  function applyPreset(id, opts) {
+    opts = opts || {};
+    var p = _byId(id);
+    if (!p) return false;
+    if (typeof document !== 'undefined' && document.body) {
+      document.body.setAttribute(DATA_ATTR, p.id);
+    }
+    if (typeof document !== 'undefined' && document.documentElement) {
+      var style = document.documentElement.style;
+      Object.keys(p.roleColors).forEach(function (role) {
+        style.setProperty('--mc-role-' + role, p.roleColors[role]);
+      });
+      Object.keys(p.mb).forEach(function (k) {
+        style.setProperty('--mc-mb-' + k, p.mb[k]);
+      });
+      // Keep window.ROLE_COLORS in sync so legend/cluster JS picks up new hues.
+      if (typeof window !== 'undefined' && window.ROLE_COLORS) {
+        Object.keys(p.roleColors).forEach(function (role) {
+          window.ROLE_COLORS[role] = p.roleColors[role];
+        });
+        if (window.ROLE_STYLE) {
+          Object.keys(p.roleColors).forEach(function (role) {
+            if (window.ROLE_STYLE[role]) window.ROLE_STYLE[role].color = p.roleColors[role];
+          });
+        }
+      }
+    }
+    if (!opts.skipPersist) {
+      try { if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, p.id); } catch (e) {}
+    }
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof window.CustomEvent === 'function') {
+      try { window.dispatchEvent(new window.CustomEvent('cb-preset-changed', { detail: { id: p.id } })); } catch (e) {}
+    }
+    return true;
+  }
+
+  function currentPreset() {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        var v = localStorage.getItem(STORAGE_KEY);
+        if (v && _byId(v)) return v;
+      }
+    } catch (e) {}
+    return 'default';
+  }
+
+  function initFromStorage() {
+    applyPreset(currentPreset(), { skipPersist: true });
+  }
+
+  // Cross-tab sync via storage event.
+  function _onStorage(ev) {
+    if (!ev || ev.key !== STORAGE_KEY) return;
+    var id = ev.newValue;
+    if (!id || !_byId(id)) return;
+    applyPreset(id, { skipPersist: true });
+  }
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('storage', _onStorage);
+  }
+
+  // Auto-init on module load (so reload re-applies the saved preset before
+  // first paint, modulo script ordering — cb-presets.js loads before app.js).
+  try { initFromStorage(); } catch (e) {}
+
+  // Export
+  var api = {
+    list: PRESETS,
+    applyPreset: applyPreset,
+    currentPreset: currentPreset,
+    initFromStorage: initFromStorage,
+    validatePreset: validatePreset,
+    wcag: {
+      relativeLuminance: relativeLuminance,
+      contrast: contrast,
+      TILE_LIGHT: TILE_LIGHT,
+      TILE_DARK: TILE_DARK
+    },
+    STORAGE_KEY: STORAGE_KEY
+  };
+  if (typeof window !== 'undefined') window.MeshCorePresets = api;
+  if (typeof module !== 'undefined') module.exports = api;
+})();

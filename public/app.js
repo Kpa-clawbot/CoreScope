@@ -1056,6 +1056,25 @@ window.addEventListener('DOMContentLoaded', () => {
     applyTheme(isDark ? 'light' : 'dark');
   });
 
+  // --- #1361 Colorblind preset bootstrap & cross-tab sync ---
+  // cb-presets.js auto-inits on module load, but body may not have existed
+  // yet (script loads in <head>); re-apply now that DOMContentLoaded fired
+  // so body[data-cb-preset] is set before first paint of map/cluster bubbles.
+  try {
+    if (window.MeshCorePresets && typeof window.MeshCorePresets.initFromStorage === 'function') {
+      window.MeshCorePresets.initFromStorage();
+    }
+  } catch (e) { console.error('[cb-preset] init failed:', e); }
+  // Cross-tab sync: storage event listener is also registered inside
+  // cb-presets.js, but we wire a redundant one here so any future refactor
+  // of the module still leaves the cross-tab guarantee intact.
+  window.addEventListener('storage', function (ev) {
+    if (!ev || ev.key !== 'meshcore-cb-preset') return;
+    if (window.MeshCorePresets && ev.newValue) {
+      window.MeshCorePresets.applyPreset(ev.newValue, { skipPersist: true });
+    }
+  });
+
   // --- Hamburger Menu ---
   const hamburger = document.getElementById('hamburger');
   const navLinks = document.querySelector('.nav-links');

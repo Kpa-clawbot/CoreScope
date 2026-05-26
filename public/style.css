@@ -3361,6 +3361,75 @@ th.sort-active { color: var(--accent, #60a5fa); }
   --mc-mb-unknown:     #FF8888;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * #1361 — Colorblind preset overrides.
+ *
+ * Each block overrides --mc-role-* and --mc-mb-* CSS vars when the body
+ * carries the matching data-cb-preset attribute. cb-presets.js also writes
+ * these vars inline on documentElement (defense-in-depth so the preset
+ * takes effect even on pages that ship custom theme overrides), and keeps
+ * window.ROLE_COLORS in sync for JS consumers (legend, cluster builder).
+ *
+ * Palette sources cited in PR body. Authoritative CSS rules here mirror
+ * the JS PRESETS table in public/cb-presets.js — both are the source of
+ * truth so a regression that drops one is still caught by the other
+ * (mirrors the #1356 "pill color: defense-in-depth via CSS + inline" pattern).
+ * ─────────────────────────────────────────────────────────────────────── */
+body[data-cb-preset="default"] {
+  --mc-role-repeater:  #D55E00;
+  --mc-role-companion: #56B4E9;
+  --mc-role-room:      #009E73;
+  --mc-role-sensor:    #F0E442;
+  --mc-role-observer:  #CC79A7;
+  --mc-mb-confirmed:   #56F0A0;
+  --mc-mb-suspected:   #FFD966;
+  --mc-mb-unknown:     #FF8888;
+}
+body[data-cb-preset="deut"] {
+  /* IBM 5-class deut variant — anchors shifted out of red/green collision. */
+  --mc-role-repeater:  #FE6100;
+  --mc-role-companion: #648FFF;
+  --mc-role-room:      #785EF0;
+  --mc-role-sensor:    #FFB000;
+  --mc-role-observer:  #DC267F;
+  --mc-mb-confirmed:   #648FFF;
+  --mc-mb-suspected:   #FFB000;
+  --mc-mb-unknown:     #DC267F;
+}
+body[data-cb-preset="prot"] {
+  /* Protan: swap repeater anchor for higher-luminance amber. */
+  --mc-role-repeater:  #FFB000;
+  --mc-role-companion: #648FFF;
+  --mc-role-room:      #785EF0;
+  --mc-role-sensor:    #FE6100;
+  --mc-role-observer:  #DC267F;
+  --mc-mb-confirmed:   #648FFF;
+  --mc-mb-suspected:   #FFB000;
+  --mc-mb-unknown:     #DC267F;
+}
+body[data-cb-preset="trit"] {
+  /* Paul Tol muted (B/Y-safe). */
+  --mc-role-repeater:  #CC6677;
+  --mc-role-companion: #117733;
+  --mc-role-room:      #882255;
+  --mc-role-sensor:    #DDCC77;
+  --mc-role-observer:  #AA4499;
+  --mc-mb-confirmed:   #117733;
+  --mc-mb-suspected:   #DDCC77;
+  --mc-mb-unknown:     #CC6677;
+}
+body[data-cb-preset="achromat"] {
+  /* Pure luminance ramp at 20/35/50/70/90% — relies on #1356/#1357 carriers. */
+  --mc-role-repeater:  #333333;
+  --mc-role-companion: #595959;
+  --mc-role-room:      #808080;
+  --mc-role-sensor:    #b3b3b3;
+  --mc-role-observer:  #e6e6e6;
+  --mc-mb-confirmed:   #b3b3b3;
+  --mc-mb-suspected:   #808080;
+  --mc-mb-unknown:     #595959;
+}
+
 .mc-cluster-wrap { background: transparent !important; border: 0 !important; }
 .mc-cluster {
   width: 48px; height: 48px; border-radius: 50%;
