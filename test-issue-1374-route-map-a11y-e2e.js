@@ -75,7 +75,7 @@ async function runViewport(browser, width, height, label) {
   const ctx = await browser.newContext({ viewport: { width, height } });
   const page = await ctx.newPage();
   page.on('pageerror', e => console.error('  pageerror:', e.message));
-  await page.goto(BASE + '/#/map', { waitUntil: 'load', timeout: 60000 });
+  await page.goto(BASE + '/#/map', { waitUntil: 'commit', timeout: 30000 });
   await page.waitForSelector('#leaflet-map', { timeout: 10000 });
   // Wait for MeshRoute to register
   await page.waitForFunction(() => window.MeshRoute && window.__mc_map && window.__mc_routeLayer, { timeout: 10000 });

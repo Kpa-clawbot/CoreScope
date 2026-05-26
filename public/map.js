@@ -292,6 +292,12 @@
     clusterGroup = createClusterGroup();
     if (filters.clustering && clusterGroup) clusterGroup.addTo(map);
     routeLayer = L.layerGroup().addTo(map);
+    // Exposed for the #1374 route renderer (window.MeshRoute) and its E2E tests.
+    if (typeof window !== 'undefined') {
+      window.__mc_map = map;
+      window.__mc_routeLayer = routeLayer;
+      window.deconflictLabels = deconflictLabels;
+    }
 
     // Fix map size on SPA load
     setTimeout(() => map.invalidateSize(), 100);
@@ -507,7 +513,7 @@
     });
   }
 
-  function drawPacketRoute(hopKeys, origin) {
+  function drawPacketRoute(hopKeys, origin, opts) {
     // Defensive: origin must be an object with pubkey/lat/lon/name. A bare
     // string slips through both branches at lines below and silently no-ops
     // the originator marker (caused PR #950's bug). Coerce string → object
@@ -516,6 +522,7 @@
       console.warn('drawPacketRoute: origin should be an object {pubkey,lat,lon,name}, got string. Coercing.');
       origin = { pubkey: origin };
     }
+    opts = opts || {};
     // Hide default markers so only the route is visible
     if (markerLayer) map.removeLayer(markerLayer);
     if (clusterGroup) map.removeLayer(clusterGroup);
@@ -534,14 +541,22 @@
         if (markerLayer) map.addLayer(markerLayer);
         if (clusterGroup) map.addLayer(clusterGroup);
         map.removeControl(closeBtn);
+        var container = map.getContainer();
+        var legend = container.querySelector('.mc-route-legend');
+        if (legend) legend.remove();
+        var ctx = container.querySelector('.mc-route-context-label');
+        if (ctx) ctx.remove();
       });
       return div;
     };
     closeBtn.addTo(map);
 
-    // Resolve hop short hashes to node positions with geographic disambiguation
+    // Resolve hop short hashes to node positions with geographic disambiguation.
+    // Unresolvable hops (no matching node) become {resolved:false} sentinels
+    // so the modern renderer (#1374) can render dashed-gray placeholders + a
+    // "X of N hops resolved" badge instead of silently dropping them.
     const raw = hopKeys.map(hop => {
-      const hopLower = hop.toLowerCase();
+      const hopLower = String(hop).toLowerCase();
       const candidates = nodes.filter(n => {
         const pk = n.public_key.toLowerCase();
         return (pk === hopLower || pk.startsWith(hopLower) || hopLower.startsWith(pk)) &&
@@ -551,9 +566,9 @@
         const c = candidates[0];
         return { lat: c.lat, lon: c.lon, name: c.name || hop.slice(0,8), pubkey: c.public_key, role: c.role, resolved: true };
       } else if (candidates.length > 1) {
-        return { name: hop.slice(0,8), resolved: false, candidates };
+        return { name: hop.slice(0,8), pubkey: hop, resolved: false, candidates };
       }
-      return null;
+      return { name: String(hop).slice(0, 8), pubkey: hop, resolved: false };
     });
 
     // Disambiguate: pick candidate closest to center of already-resolved hops
@@ -574,80 +589,42 @@
       }
     }
 
-    const positions = raw.filter(h => h && h.resolved);
+    const positions = raw.filter(h => h != null);
 
     // Resolve and prepend origin node
     if (origin) {
       let originPos = null;
       if (origin.lat != null && origin.lon != null) {
-        originPos = { lat: origin.lat, lon: origin.lon, name: origin.name || 'Sender', pubkey: origin.pubkey, isOrigin: true };
+        originPos = { lat: origin.lat, lon: origin.lon, name: origin.name || 'Sender', pubkey: origin.pubkey, role: origin.role || 'companion', resolved: true, isOrigin: true };
       } else if (origin.pubkey) {
         const pk = origin.pubkey.toLowerCase();
         const match = nodes.find(n => n.public_key.toLowerCase() === pk || n.public_key.toLowerCase().startsWith(pk));
         if (match && match.lat != null && match.lon != null) {
-          originPos = { lat: match.lat, lon: match.lon, name: origin.name || match.name || 'Sender', pubkey: match.public_key, role: match.role, isOrigin: true };
+          originPos = { lat: match.lat, lon: match.lon, name: origin.name || match.name || 'Sender', pubkey: match.public_key, role: match.role || 'companion', resolved: true, isOrigin: true };
         }
       }
       if (originPos) positions.unshift(originPos);
     }
 
     if (positions.length < 1) return;
+    // Mark final hop as destination so the renderer applies the dest glyph.
+    positions[positions.length - 1].isDest = true;
 
-    const coords = positions.map(p => [p.lat, p.lon]);
-
-    if (positions.length >= 2) {
-      L.polyline(coords, {
-        color: '#f59e0b', weight: 3, opacity: 0.8, dashArray: '8 4'
-      }).addTo(routeLayer);
+    // Hand off to the modern role-aware renderer (#1374). Falls back to the
+    // legacy minimal renderer only if MeshRoute hasn't loaded yet.
+    if (window.MeshRoute && typeof window.MeshRoute.render === 'function') {
+      window.MeshRoute.render(map, routeLayer, positions, {
+        timestamp: opts.timestamp || Date.now()
+      });
+      return;
     }
 
-    // Add numbered markers at each hop
-    var labelItems = [];
-    positions.forEach((p, i) => {
-      const isOrigin = i === 0 && p.isOrigin;
-      const isLast = i === positions.length - 1 && positions.length > 1;
-      const color = isOrigin ? '#06b6d4' : isLast ? (getComputedStyle(document.documentElement).getPropertyValue('--status-red').trim() || '#ef4444') : i === 0 ? (getComputedStyle(document.documentElement).getPropertyValue('--status-green').trim() || '#22c55e') : '#f59e0b';
-      const radius = isOrigin ? 14 : 10;
-      const label = isOrigin ? 'Sender' : isLast ? 'Last Hop' : `Hop ${isOrigin ? i : i}`;
-
-      if (isOrigin) {
-        L.circleMarker([p.lat, p.lon], {
-          radius: radius + 4, fillColor: 'transparent', fillOpacity: 0, color: '#06b6d4', weight: 2, opacity: 0.6
-        }).addTo(routeLayer);
-      }
-
-      const marker = L.circleMarker([p.lat, p.lon], {
-        radius: radius, fillColor: color,
-        fillOpacity: 0.9, color: '#fff', weight: 2
-      }).addTo(routeLayer);
-
-      const popupHtml = `<div style="font-size:12px;min-width:160px">
-        <div style="font-weight:700;margin-bottom:4px">${label}: ${safeEsc(p.name)}</div>
-        <div style="color:#9ca3af;font-size:11px;margin-bottom:4px">${p.role || 'unknown'}</div>
-        <div style="font-family:monospace;font-size:10px;color:#6b7280;margin-bottom:6px;word-break:break-all">${safeEsc(p.pubkey || '')}</div>
-        <div style="font-size:11px;color:#9ca3af">${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}</div>
-        ${p.pubkey ? `<div style="margin-top:6px"><a href="#/nodes/${p.pubkey}" style="color:var(--accent);font-size:11px">View Node →</a></div>` : ''}
-      </div>`;
-      marker.bindPopup(popupHtml, { className: 'route-popup' });
-
-      labelItems.push({ latLng: L.latLng(p.lat, p.lon), isLabel: true, text: `${i + 1}. ${p.name}` });
-    });
-
-    // Deconflict labels so overlapping hop names spread out
-    deconflictLabels(labelItems, map);
-    labelItems.forEach(function (m) {
-      var pos = m.adjustedLatLng || m.latLng;
-      var icon = L.divIcon({ className: 'route-tooltip', html: m.text, iconSize: [null, null], iconAnchor: [0, 0] });
-      L.marker(pos, { icon: icon, interactive: false }).addTo(routeLayer);
-      if (m.offset > 2) {
-        L.polyline([m.latLng, pos], { weight: 1, color: '#475569', opacity: 0.5, dashArray: '3 3' }).addTo(routeLayer);
-      }
-    });
-
-    // Fit map to route
+    // ── Legacy fallback (kept tiny — should never run in production) ─────
+    const coords = positions.filter(p => p.lat != null).map(p => [p.lat, p.lon]);
     if (coords.length >= 2) {
+      L.polyline(coords, { color: '#f59e0b', weight: 3, opacity: 0.8, dashArray: '8 4' }).addTo(routeLayer);
       map.fitBounds(L.latLngBounds(coords).pad(0.3));
-    } else {
+    } else if (coords.length === 1) {
       map.setView(coords[0], 13);
     }
   }
