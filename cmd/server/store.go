@@ -4508,7 +4508,13 @@ func (s *PacketStore) GetChannels(region string) []map[string]interface{} {
 		}
 		channelName := decoded.Channel
 		if channelName == "" {
-			channelName = "unknown"
+			// Issue #1373: encrypted-no-key packets decode with channel="".
+			// Previously we bucketed them under a literal "unknown" channel
+			// which then leaked into /api/channels as a ghost entry next to
+			// real channels (especially visible after the operator added a
+			// PSK client-side). Skip them — they belong in encrypted-channels
+			// analytics, not the user-facing channel list.
+			continue
 		}
 		ch := channelMap[channelName]
 		if ch == nil {
