@@ -27,9 +27,9 @@ type AreaEntry struct {
 
 // Config mirrors the Node.js config.json structure (read-only fields).
 type Config struct {
-	Port    int    `json:"port"`
-	APIKey  string `json:"apiKey"`
-	DBPath  string `json:"dbPath"`
+	Port   int    `json:"port"`
+	APIKey string `json:"apiKey"`
+	DBPath string `json:"dbPath"`
 
 	// NodeBlacklist is a list of public keys to exclude from all API responses.
 	// Blacklisted nodes are hidden from node lists, search, detail, map, and stats.
@@ -284,14 +284,22 @@ type PacketStoreConfig struct {
 	HotStartupHours               float64 `json:"hotStartupHours"`               // load only this many hours synchronously; 0 = disabled
 }
 
+const defaultPacketStoreMaxMemoryMB = 1024
+
+func defaultPacketStoreConfig() *PacketStoreConfig {
+	return &PacketStoreConfig{
+		MaxMemoryMB: defaultPacketStoreMaxMemoryMB,
+	}
+}
+
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
 type GeoFilterConfig = geofilter.Config
 
 type RetentionConfig struct {
-	NodeDays      int `json:"nodeDays"`
-	ObserverDays  int `json:"observerDays"`
-	PacketDays    int `json:"packetDays"`
-	MetricsDays   int `json:"metricsDays"`
+	NodeDays     int `json:"nodeDays"`
+	ObserverDays int `json:"observerDays"`
+	PacketDays   int `json:"packetDays"`
+	MetricsDays  int `json:"metricsDays"`
 }
 
 // DBConfig is the shared SQLite vacuum/maintenance config (#919, #921).
@@ -493,13 +501,21 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 		if err := json.Unmarshal(data, cfg); err != nil {
 			continue
 		}
+		cfg.normalizePacketStoreConfig()
 		cfg.NormalizeTimestampConfig()
 		cfg.sanitizeCORS()
 		return cfg, nil
 	}
+	cfg.normalizePacketStoreConfig()
 	cfg.NormalizeTimestampConfig()
 	cfg.sanitizeCORS()
 	return cfg, nil // defaults
+}
+
+func (c *Config) normalizePacketStoreConfig() {
+	if c.PacketStore == nil {
+		c.PacketStore = defaultPacketStoreConfig()
+	}
 }
 
 // sanitizeCORS rejects an unsafe CORS configuration. A "*" wildcard origin
@@ -607,7 +623,6 @@ func (c *Config) ResolveDBPath(baseDir string) string {
 	}
 	return filepath.Join(baseDir, "data", "meshcore.db")
 }
-
 
 func (c *Config) NormalizeTimestampConfig() {
 	defaults := defaultTimestampConfig()
@@ -780,10 +795,11 @@ func (c *Config) IsObserverBlacklisted(id string) bool {
 // data slowly." Lower values give fresher data at higher CPU cost.
 //
 // RecomputeIntervalSeconds keys (all optional):
-//   topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew
+//
+//	topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew
 type AnalyticsConfig struct {
-	DefaultIntervalSeconds    int            `json:"defaultIntervalSeconds,omitempty"`
-	RecomputeIntervalSeconds  map[string]int `json:"recomputeIntervalSeconds,omitempty"`
+	DefaultIntervalSeconds   int            `json:"defaultIntervalSeconds,omitempty"`
+	RecomputeIntervalSeconds map[string]int `json:"recomputeIntervalSeconds,omitempty"`
 }
 
 // AnalyticsDefaultRecomputeInterval returns the configured default

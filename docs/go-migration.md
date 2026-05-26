@@ -78,9 +78,9 @@ Node.js uses `mqtt://` and `mqtts://` scheme prefixes. The Go MQTT library (paho
 
 Both engines support `retention.nodeDays` (default: 7). Stale nodes are moved to the `inactive_nodes` table on the same schedule. No config change needed.
 
-### `packetStore.maxMemoryMB` (Go ignores this — it's Node-only)
+### `packetStore.maxMemoryMB` (compatible)
 
-The Node.js server has a configurable in-memory packet store limit (`packetStore.maxMemoryMB`). The Go server has its own in-memory store that loads all packets from SQLite on startup — it does not read this config value. This is safe to leave in your config; Go simply ignores it.
+The Go server reads `packetStore.maxMemoryMB` and bounds the in-memory packet store from SQLite startup load. If `packetStore` is omitted entirely, the server defaults to a 1024 MB packet-store budget. Setting `maxMemoryMB: 0` explicitly keeps the legacy unlimited behavior.
 
 ### `channelKeys` / `channel-rainbow.json` (compatible)
 
@@ -338,7 +338,6 @@ docker start corescope-prod
 |---------|--------|------------|
 | Companion bridge advertisements | `meshcore/advertisement` topic not handled by Go ingestor | Users relying on companion bridge adverts must stay on Node.js or wait for Go support |
 | Companion bridge `self_info` | `meshcore/self_info` topic not handled | Same as above — minimal impact (only affects local node identity) |
-| `packetStore.maxMemoryMB` config | Go doesn't read this setting | Go manages its own memory; no action needed |
 | Docker Hub images | Go images not published yet | Build locally with `docker build -f Dockerfile.go` |
 | `manage.sh --engine` flag | Can't toggle engines via manage.sh | Manual image swap required (see [Switch to Go](#switch-to-go)) |
 
@@ -349,8 +348,8 @@ docker start corescope-prod
 | `engine` field in `/api/health` | Not present or `"node"` | Always `"go"` |
 | MQTT URL scheme | Uses `mqtt://` / `mqtts://` natively | Auto-converts to `tcp://` / `ssl://` (transparent) |
 | Process model | Single Node.js process (server + ingestor) | Two binaries: `corescope-ingestor` + `corescope-server` (managed by supervisord) |
-| Memory management | Configurable via `packetStore.maxMemoryMB` | Loads all packets; no configurable limit |
-| Startup time | Faster (no compilation) | Slightly slower (loads all packets from DB into memory) |
+| Memory management | Configurable via `packetStore.maxMemoryMB` | Configurable via `packetStore.maxMemoryMB` (defaults to 1024 MB when `packetStore` is omitted) |
+| Startup time | Faster (no compilation) | Depends on packet-store limits and DB size; bounded by `packetStore.maxMemoryMB` |
 
 ---
 

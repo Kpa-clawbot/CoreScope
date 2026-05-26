@@ -100,6 +100,58 @@ func TestLoadConfigNoFiles(t *testing.T) {
 	if ts.DefaultMode != "ago" || ts.Timezone != "local" || ts.FormatPreset != "iso" {
 		t.Errorf("expected default timestamp config ago/local/iso, got %s/%s/%s", ts.DefaultMode, ts.Timezone, ts.FormatPreset)
 	}
+	if cfg.PacketStore == nil {
+		t.Fatal("expected default packetStore config")
+	}
+	if cfg.PacketStore.MaxMemoryMB != defaultPacketStoreMaxMemoryMB {
+		t.Errorf("expected default packetStore.maxMemoryMB %d, got %d", defaultPacketStoreMaxMemoryMB, cfg.PacketStore.MaxMemoryMB)
+	}
+}
+
+func TestLoadConfigPacketStoreDefaultWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	data, _ := json.Marshal(map[string]interface{}{"port": 8080})
+	os.WriteFile(filepath.Join(dir, "config.json"), data, 0644)
+
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PacketStore == nil {
+		t.Fatal("expected packetStore defaults when config omits packetStore")
+	}
+	if cfg.PacketStore.MaxMemoryMB != defaultPacketStoreMaxMemoryMB {
+		t.Errorf("expected default packetStore.maxMemoryMB %d, got %d", defaultPacketStoreMaxMemoryMB, cfg.PacketStore.MaxMemoryMB)
+	}
+}
+
+func TestLoadConfigPacketStoreExplicitZeroPreserved(t *testing.T) {
+	dir := t.TempDir()
+	data, _ := json.Marshal(map[string]interface{}{
+		"packetStore": map[string]interface{}{
+			"maxMemoryMB":     0,
+			"retentionHours":  0,
+			"hotStartupHours": 0,
+		},
+	})
+	os.WriteFile(filepath.Join(dir, "config.json"), data, 0644)
+
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PacketStore == nil {
+		t.Fatal("expected explicit packetStore config")
+	}
+	if cfg.PacketStore.MaxMemoryMB != 0 {
+		t.Errorf("expected explicit maxMemoryMB=0 to remain unlimited, got %d", cfg.PacketStore.MaxMemoryMB)
+	}
+	if cfg.PacketStore.RetentionHours != 0 {
+		t.Errorf("expected explicit retentionHours=0, got %f", cfg.PacketStore.RetentionHours)
+	}
+	if cfg.PacketStore.HotStartupHours != 0 {
+		t.Errorf("expected explicit hotStartupHours=0, got %f", cfg.PacketStore.HotStartupHours)
+	}
 }
 
 func TestLoadConfigInvalidJSON(t *testing.T) {

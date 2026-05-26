@@ -11,6 +11,30 @@ import (
 
 func numGoroutinesForTest() int { return runtime.NumGoroutine() }
 
+func TestAnalyticsRecomputerStartDoesNotBlockOnInitialCompute(t *testing.T) {
+	block := make(chan struct{})
+	started := make(chan struct{})
+	rc := newAnalyticsRecomputer("slow-start", time.Minute, func() interface{} {
+		close(started)
+		<-block
+		return map[string]interface{}{"ok": true}
+	})
+	defer rc.Stop()
+	defer close(block)
+
+	t0 := time.Now()
+	rc.Start()
+	if elapsed := time.Since(t0); elapsed > 50*time.Millisecond {
+		t.Fatalf("Start blocked on initial compute for %v", elapsed)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("initial compute did not start asynchronously")
+	}
+}
+
 // TestAnalyticsRecomputerSteadyStateLatency asserts that issue #1240's
 // steady-state background recompute is in place: reads of the common
 // analytics endpoints (region="") return from cache in <50ms p99 even

@@ -19,13 +19,13 @@ import (
 // in an atomic.Value, refreshed periodically by a background goroutine.
 //
 // Lifecycle:
-//   1. Construct via newAnalyticsRecomputer(...)
-//   2. Call Start() — runs initial compute synchronously, then launches
-//      the recompute goroutine. Initial compute is synchronous so the
-//      first Load() after Start returns never sees a nil cache.
-//   3. Call Load() any number of times concurrently — never blocks
-//      beyond an atomic-pointer load.
-//   4. Call Stop() to terminate the background goroutine cleanly.
+//  1. Construct via newAnalyticsRecomputer(...)
+//  2. Call Start() — launches the recompute goroutine. The first compute
+//     runs in that goroutine after tickOffset so server startup does not
+//     block on every expensive analytics snapshot.
+//  3. Call Load() any number of times concurrently — never blocks
+//     beyond an atomic-pointer load.
+//  4. Call Stop() to terminate the background goroutine cleanly.
 //
 // Compute func is called WITHOUT any lock held by this struct, so it
 // may freely take any application-level locks it needs.
@@ -62,16 +62,13 @@ func newAnalyticsRecomputer(name string, interval time.Duration, compute func() 
 	}
 }
 
-// Start runs the initial compute synchronously (so the first Load
-// after Start returns a populated snapshot, never nil), then launches
-// a background goroutine to periodically recompute.
+// Start launches a background goroutine that runs the initial compute after
+// tickOffset, then periodically recomputes. Startup must not synchronously pay
+// for every expensive analytics endpoint on large databases.
 //
 // Calling Start multiple times is a no-op after the first call.
 func (r *analyticsRecomputer) Start() {
 	r.startOnce.Do(func() {
-		// Initial synchronous compute — first read must NOT see empty
-		// or uninitialized data (acceptance criterion #1240).
-		r.runOnce()
 		go r.loop()
 	})
 }
@@ -88,6 +85,12 @@ func (r *analyticsRecomputer) loop() {
 			return
 		}
 	}
+	select {
+	case <-r.stop:
+		return
+	default:
+	}
+	r.runOnce()
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
 	for {
@@ -157,15 +160,15 @@ func (r *analyticsRecomputer) ComputeRuns() int64 {
 // per-endpoint recompute interval from config.json. Zero values fall
 // back to the defaultInterval passed to StartAnalyticsRecomputers.
 type AnalyticsRecomputeIntervals struct {
-	Topology             time.Duration
-	RF                   time.Duration
-	Distance             time.Duration
-	Channels             time.Duration
-	HashCollisions       time.Duration
-	HashSizes            time.Duration
-	Roles                time.Duration
-	ObserversClockSkew   time.Duration
-	NodesClockSkew       time.Duration
+	Topology           time.Duration
+	RF                 time.Duration
+	Distance           time.Duration
+	Channels           time.Duration
+	HashCollisions     time.Duration
+	HashSizes          time.Duration
+	Roles              time.Duration
+	ObserversClockSkew time.Duration
+	NodesClockSkew     time.Duration
 }
 
 func pickInterval(override, def time.Duration) time.Duration {
@@ -176,9 +179,9 @@ func pickInterval(override, def time.Duration) time.Duration {
 }
 
 // StartAnalyticsRecomputers wires each analytics endpoint to a
-// background recompute goroutine. Each runs an initial compute
-// synchronously (so the first read after startup is a cache hit, never
-// cold) and then refreshes on a ticker.
+// background recompute goroutine. Initial computes are staggered and
+// asynchronous so restarts on large databases do not synchronously run
+// every expensive analytics query before the server can respond.
 //
 // All recomputers serve the DEFAULT query shape only: region="" and
 // zero-window (no ?since= / ?until= params). Region-keyed or windowed
@@ -253,13 +256,10 @@ func (s *PacketStore) StartAnalyticsRecomputers(defaultInterval time.Duration, o
 	}
 	s.analyticsRecomputerMu.Unlock()
 
-	// Stagger ticker offsets so recomputers don't all fire simultaneously every
+	// Stagger initial and recurring offsets so recomputers don't all fire simultaneously every
 	// interval (which causes synchronized CPU spikes). Divide the interval
 	// evenly across all recomputers: if interval=5m and there are 9 recomputers,
 	// each subsequent one fires ~33s after the previous one.
-	// The initial synchronous compute (runOnce in Start) still runs back-to-back
-	// so the cache is warm immediately after startup; only recurring ticker fires
-	// are staggered via tickOffset.
 	stagger := defaultInterval / time.Duration(len(all))
 	for i, rc := range all {
 		rc.tickOffset = time.Duration(i) * stagger
