@@ -1,0 +1,10 @@
+diff --git a/.gitignore b/.gitignore
+index 2cfcf5e6..f35342f7 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -37,5 +37,3 @@ cmd/ingestor/ingestor
+ cmd/decrypt/decrypt
+ # Local-only planning and design files
+ docs/superpowers/
+-api-stats-lock-latency/
+-route-history-config-fix/
