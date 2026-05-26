@@ -93,8 +93,12 @@ func OpenDB(path string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn.SetMaxOpenConns(4)
-	conn.SetMaxIdleConns(2)
+	// WAL readers don't serialize against each other (only writers do), so a
+	// small pool causes API goroutines to queue under concurrent load. Raise
+	// it well above the typical number of in-flight DB-touching requests.
+	conn.SetMaxOpenConns(32)
+	conn.SetMaxIdleConns(8)
+	conn.SetConnMaxIdleTime(5 * time.Minute)
 	if err := conn.Ping(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("ping failed: %w", err)

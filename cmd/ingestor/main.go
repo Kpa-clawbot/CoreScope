@@ -217,6 +217,24 @@ func main() {
 		}
 	}()
 
+	// Periodic WAL checkpoint (every 60s). SQLite auto-checkpoints when the
+	// WAL crosses ~1000 frames, but under sustained write load (hundreds of
+	// MQTT packets/sec) the WAL can still grow into the hundreds of MB
+	// between checkpoints, which makes the next checkpoint slow and stalls
+	// reader queries opened via a fresh snapshot. PASSIVE never blocks
+	// readers — it just commits whatever frames it can.
+	walCheckpointTicker := time.NewTicker(60 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-tickerDone:
+				return
+			case <-walCheckpointTicker.C:
+				store.CheckpointPassive()
+			}
+		}
+	}()
+
 	// Prune-request queue (#669 M4 / #738): the read-only server enqueues
 	// geo-prune requests as marker files; the ingestor (which holds the
 	// write handle) executes the DELETEs. Process on startup, then every

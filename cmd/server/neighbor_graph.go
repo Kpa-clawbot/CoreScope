@@ -238,8 +238,15 @@ func BuildFromStoreWithOptions(store *PacketStore, opts BuildOptions) *NeighborG
 		}
 	}
 
+	// Snapshot the *StoreTx pointer slice under RLock. The copy is O(n)
+	// but on 8-byte pointers, even a 1M-packet store is ~8 MB of memcpy
+	// (low single-digit ms) — and unlike most analytics readers, the
+	// neighbor-graph rebuild iterates every packet × every hop afterwards,
+	// so the copy is well under 1% of the total work. Crucially we cannot
+	// trust the slice header alone: the eviction path (store.go:~4175)
+	// shifts pointers down in place via copy(s.packets, s.packets[cutoffIdx:]),
+	// which would scramble a post-RUnlock iteration over a header snapshot.
 	store.mu.RLock()
-	// Snapshot what we need under lock.
 	packets := make([]*StoreTx, len(store.packets))
 	copy(packets, store.packets)
 	store.mu.RUnlock()

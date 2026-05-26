@@ -1188,6 +1188,16 @@ func (s *Store) Checkpoint() {
 	}
 }
 
+// CheckpointPassive runs a PASSIVE wal_checkpoint — flushes as many WAL frames
+// as it can to the main DB without blocking concurrent readers or writers. Used
+// by the periodic ticker to keep the WAL file from growing unboundedly between
+// writer-startup checkpoints. Quiet on success; a single line on error.
+func (s *Store) CheckpointPassive() {
+	if _, err := s.db.Exec("PRAGMA wal_checkpoint(PASSIVE)"); err != nil {
+		log.Printf("[db] WAL passive checkpoint error: %v", err)
+	}
+}
+
 // BackfillPathJSONAsync launches the path_json backfill in a background goroutine.
 // It processes observations with NULL/empty path_json that have raw_hex available,
 // decoding hop paths and updating the column. Safe to run concurrently with ingest

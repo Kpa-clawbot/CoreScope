@@ -214,6 +214,19 @@ func ensureServerIndexes(rw *sql.DB) error {
 		if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_observer_idx ON observations(observer_idx)`); err != nil {
 			return err
 		}
+		// Compound covering index for the correlated subqueries in
+		// QueryGroupedPackets: COUNT(*), COUNT(DISTINCT observer_idx),
+		// MAX(timestamp), and the GROUP_CONCAT(DISTINCT iata) JOIN on
+		// observer_idx are all evaluated per-row of the result page.
+		// EXPLAIN QUERY PLAN against the test fixture shows the
+		// COUNT(DISTINCT observer_idx) and MAX(timestamp) plans go from
+		// "USE TEMP B-TREE + key lookup per matching row" to a single
+		// "SEARCH USING COVERING INDEX" once this index exists, which is
+		// the dominant cost on a Packets page with many observations
+		// per transmission.
+		if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_tx_observer_ts ON observations(transmission_id, observer_idx, timestamp)`); err != nil {
+			return err
+		}
 	}
 	hasID, err := TableHasColumn(rw, "observations", "observer_id")
 	if err != nil {
@@ -221,6 +234,12 @@ func ensureServerIndexes(rw *sql.DB) error {
 	}
 	if hasID {
 		if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_observer_id ON observations(observer_id)`); err != nil {
+			return err
+		}
+		// v2-schema analogue of idx_observations_tx_observer_ts — covers
+		// the same correlated subqueries when the row uses observer_id
+		// (text pubkey) instead of observer_idx (rowid).
+		if _, err := rw.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_tx_observer_id_ts ON observations(transmission_id, observer_id, timestamp)`); err != nil {
 			return err
 		}
 	}
