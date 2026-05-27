@@ -23,6 +23,7 @@ node test-channel-decrypt-insecure-context.js
 node test-channel-qr.js
 node test-channel-qr-wiring.js
 node test-channel-issue-1087.js
+node test-issue-1409-no-encrypted-flood.js
 node test-analytics-channels-integration.js
 node test-observers-headings.js
 node test-marker-outline-weight.js
