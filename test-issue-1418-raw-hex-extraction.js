@@ -44,6 +44,15 @@ assert(/PAYLOAD_TYPE_MAP\s*=\s*\{[^}]*0:\s*'REQ'[^}]*1:\s*'RESPONSE'[^}]*2:\s*'T
 assert(/5:\s*'GRP_TXT'[^}]*7:\s*'ANON_REQ'[^}]*8:\s*'PATH'/m.test(mapSrc),
   'PAYLOAD_TYPE_MAP covers 5=GRP_TXT, 7=ANON_REQ, 8=PATH');
 
+// Polish review (djb): pathLen MUST be bounded before slicing. A crafted
+// pathLen=200 byte would surface random body bytes as srcHash/destHash.
+// Cap at MeshCore wire max of 64 hops in BOTH the TXT-family branch and
+// the GRP_TXT channel-hash branch.
+assert((mapSrc.match(/pathLen[^>]*>\s*64/g) || []).length >= 2,
+  'raw_hex pathLen capped at >64 in both TXT and GRP_TXT branches (#1423 review/djb)');
+assert(/Number\.isFinite\(pathLen\)/.test(mapSrc),
+  'raw_hex pathLen guarded with Number.isFinite (rejects NaN from non-hex byte)');
+
 console.log('\n=== #1418 raw_hex B: replica extractor reproduces map.js logic ===');
 
 // Pure replica of the extractor inside loadRouteFromDeepLink. If map.js's
@@ -53,6 +62,9 @@ function extractSrcDst(rawHex, payloadType) {
   if (TYPES.indexOf(payloadType) < 0) return { src: null, dst: null };
   try {
     const pathLen = parseInt(rawHex.slice(2, 4), 16);
+    if (!Number.isFinite(pathLen) || pathLen < 0 || pathLen > 64) {
+      return { src: null, dst: null };
+    }
     const destOff = 4 + pathLen * 2;
     if (rawHex.length < destOff + 2) return { src: null, dst: null };
     const dst = rawHex.slice(destOff, destOff + 2).toUpperCase();
@@ -68,6 +80,7 @@ function extractChannelHash(rawHex, payloadType) {
   if (payloadType !== 5) return null;
   try {
     const pathLen = parseInt(rawHex.slice(2, 4), 16);
+    if (!Number.isFinite(pathLen) || pathLen < 0 || pathLen > 64) return null;
     const chOff = 4 + pathLen * 2;
     if (rawHex.length < chOff + 2) return null;
     return rawHex.slice(chOff, chOff + 2).toUpperCase();
@@ -122,6 +135,23 @@ assert(r.src === null && r.dst === null,
 // Edge case: raw_hex too short (path length claims more bytes than present)
 r = extractSrcDst('02' + '04' + 'AB', 2); // claims 4-hop path, only 1 byte payload
 assert(r.src === null && r.dst === null, 'truncated raw_hex → null extraction (no crash)');
+
+// Polish review (djb): malicious pathLen=200 (0xC8) MUST be rejected even
+// when the body is long enough to slice. Without the cap, the extractor
+// would surface random body bytes as src/destHash strings in the UI.
+const evil = '02' + 'C8' + 'AB'.repeat(500); // pathLen=200, plenty of body to slice
+r = extractSrcDst(evil, 2);
+assert(r.src === null && r.dst === null,
+  'malicious pathLen=200 → rejected, no OOB-style byte surfacing');
+const evilCh = extractChannelHash('05' + 'C8' + 'AB'.repeat(500), 5);
+assert(evilCh === null, 'malicious pathLen=200 (GRP_TXT) → rejected');
+// Boundary: pathLen=64 (max) still works; 65 rejected.
+const okBig = '02' + '40' + 'AB'.repeat(64) + 'EE' + 'FF';
+r = extractSrcDst(okBig, 2);
+assert(r.dst === 'EE' && r.src === 'FF', 'pathLen=64 (max allowed) still extracts');
+const tooBig = '02' + '41' + 'AB'.repeat(65) + 'EE' + 'FF';
+r = extractSrcDst(tooBig, 2);
+assert(r.src === null && r.dst === null, 'pathLen=65 → rejected (above wire max of 64)');
 
 console.log('\n=== #1418 raw_hex C: channel_hash NOT extracted for non-GRP_TXT ===');
 [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12].forEach(function (pt) {

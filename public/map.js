@@ -994,7 +994,13 @@
       if ((!inferredSrc || !inferredDst) && chosen.raw_hex && TYPES_WITH_DST_SRC.indexOf(pkt.payload_type) >= 0) {
         try {
           const hex = chosen.raw_hex;
+          // MeshCore wire max for path length is 64 hops. Cap defensively:
+          // a crafted ingest packet with pathLen=200 would slice random body
+          // bytes into the srcHash/destHash UI fields. Guard before use.
           const pathLen = parseInt(hex.slice(2, 4), 16);
+          if (!Number.isFinite(pathLen) || pathLen < 0 || pathLen > 64) {
+            throw new Error('pathLen out of range: ' + pathLen);
+          }
           const destOff = 4 + pathLen * 2;
           if (hex.length >= destOff + 2) {
             inferredDst = inferredDst || hex.slice(destOff, destOff + 2).toUpperCase();
@@ -1012,6 +1018,9 @@
         try {
           const hex = chosen.raw_hex;
           const pathLen = parseInt(hex.slice(2, 4), 16);
+          if (!Number.isFinite(pathLen) || pathLen < 0 || pathLen > 64) {
+            throw new Error('pathLen out of range: ' + pathLen);
+          }
           const chOff = 4 + pathLen * 2;
           if (hex.length >= chOff + 2) {
             inferredChannelHash = hex.slice(chOff, chOff + 2).toUpperCase();
