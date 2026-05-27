@@ -126,6 +126,7 @@ func main() {
 		default:
 			log.Printf("[memlimit] no soft memory limit set (GOMEMLIMIT unset, packetStore.maxMemoryMB=0); recommend setting one to avoid container OOM-kill")
 		}
+		warnIfMemlimitUnderprovisioned(limit)
 	}
 
 	// Resolve DB path
