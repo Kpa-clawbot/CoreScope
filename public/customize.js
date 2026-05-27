@@ -1145,8 +1145,13 @@
       inp.addEventListener('input', function () {
         var key = inp.dataset.node;
         state.nodeColors[key] = inp.value;
-        // Sync to global role colors used by map/packets/etc
-        if (window.ROLE_COLORS) window.ROLE_COLORS[key] = inp.value;
+        // #1412: route per-key user picks through setRoleColorOverride so
+        // the explicit override map is the only place mutation happens.
+        // (Direct subscript assignment would also work via the roles.js
+        // proxy, but the explicit API is the documented contract.)
+        if (typeof window.setRoleColorOverride === 'function') {
+          window.setRoleColorOverride(key, inp.value);
+        }
         if (window.ROLE_STYLE && window.ROLE_STYLE[key]) window.ROLE_STYLE[key].color = inp.value;
         // Trigger re-render of current page
         window.dispatchEvent(new CustomEvent('theme-changed')); autoSave();
@@ -1162,7 +1167,10 @@
       btn.addEventListener('click', function () {
         var key = btn.dataset.resetNode;
         state.nodeColors[key] = DEFAULTS.nodeColors[key];
-        if (window.ROLE_COLORS) window.ROLE_COLORS[key] = DEFAULTS.nodeColors[key];
+        // #1412: clearing the override lets cb-preset CSS var win again.
+        if (typeof window.setRoleColorOverride === 'function') {
+          window.setRoleColorOverride(key, DEFAULTS.nodeColors[key]);
+        }
         if (window.ROLE_STYLE && window.ROLE_STYLE[key]) window.ROLE_STYLE[key].color = DEFAULTS.nodeColors[key];
         render(container);
       });

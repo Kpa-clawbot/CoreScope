@@ -546,13 +546,16 @@
     if (themeSection.background) root.setProperty('--content-bg', themeSection.contentBg || themeSection.background);
     if (themeSection.surface1) root.setProperty('--card-bg', themeSection.cardBg || themeSection.surface1);
 
-    // Node colors → CSS vars + global objects
+    // Node colors → --node-X CSS var only (legacy compat).
+    // #1412: do NOT push server-config nodeColors into window.ROLE_COLORS —
+    // that defeats cb-presets propagation by trapping the legacy palette in
+    // the _roleOverrides map (where the live getter prefers it over the
+    // --mc-role-X CSS vars that presets actually write). User-chosen
+    // overrides still flow through setRoleColorOverride() in customize.js.
     var nc = effectiveConfig.nodeColors;
     if (nc) {
       for (var role in nc) {
         root.setProperty('--node-' + role, nc[role]);
-        if (window.ROLE_COLORS && role in window.ROLE_COLORS) window.ROLE_COLORS[role] = nc[role];
-        if (window.ROLE_STYLE && window.ROLE_STYLE[role]) window.ROLE_STYLE[role].color = nc[role];
       }
     }
 
@@ -2142,11 +2145,11 @@
     if (ovTheme.accentHover) root.setProperty('--logo-accent-hi', ovTheme.accentHover);
     if (themeSection.background) root.setProperty('--content-bg', themeSection.contentBg || themeSection.background);
     if (themeSection.surface1) root.setProperty('--card-bg', themeSection.cardBg || themeSection.surface1);
-    // Apply node/type colors from overrides early
+    // Apply node colors from overrides early — --node-X CSS var only.
+    // #1412: do NOT write to window.ROLE_COLORS / ROLE_STYLE here.
     if (earlyOverrides.nodeColors) {
       for (var role in earlyOverrides.nodeColors) {
-        if (window.ROLE_COLORS && role in window.ROLE_COLORS) window.ROLE_COLORS[role] = earlyOverrides.nodeColors[role];
-        if (window.ROLE_STYLE && window.ROLE_STYLE[role]) window.ROLE_STYLE[role].color = earlyOverrides.nodeColors[role];
+        root.setProperty('--node-' + role, earlyOverrides.nodeColors[role]);
       }
     }
     if (earlyOverrides.typeColors && window.TYPE_COLORS) {
