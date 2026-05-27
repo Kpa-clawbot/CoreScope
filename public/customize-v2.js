@@ -556,6 +556,13 @@
     if (nc) {
       for (var role in nc) {
         root.setProperty('--node-' + role, nc[role]);
+        // #1438 final: also drive --mc-role-{role} so marker SVGs
+        // (fill="var(--mc-role-X)") and other CSS-var consumers pick up
+        // operator per-role customizations on every page load. Without
+        // this, setRoleColorOverride writes the var live, but on reload
+        // only --node-{role} is replayed and --mc-role-{role} falls back
+        // to the active preset, reverting marker fills.
+        root.setProperty('--mc-role-' + role, nc[role]);
       }
     }
 
