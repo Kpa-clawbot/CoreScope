@@ -228,7 +228,7 @@ func (c *perKeyByteCache) serve(w http.ResponseWriter, r *http.Request, key stri
 func writeServedBytes(w http.ResponseWriter, r *http.Request, payload []byte, etag string, opts serveOpts) {
 	if etag != "" {
 		w.Header().Set("ETag", etag)
-		if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+		if ifNoneMatchHits(r.Header.Get("If-None-Match"), etag) {
 			if opts.CacheControl != "" {
 				w.Header().Set("Cache-Control", opts.CacheControl)
 			}
@@ -269,6 +269,32 @@ type singleKeyByteCache struct {
 func computeETag(payload []byte) string {
 	sum := sha256.Sum256(payload)
 	return `"` + hex.EncodeToString(sum[:8]) + `"`
+}
+
+// ifNoneMatchHits returns true if the request's If-None-Match header
+// semantically matches storedETag, using RFC 7232 §2.3.2 weak comparison —
+// the W/ prefix on either side is ignored, and "*" is a wildcard. This
+// matters because intermediaries (Cloudflare, Caddy, …) rewrite strong
+// ETags to weak (W/"…") when they apply a content-encoding transform like
+// gzip or brotli on top of our response. Without weak comparison, the
+// client's If-None-Match never matches our cache's strong ETag and we
+// always send the full body — 304 never fires.
+func ifNoneMatchHits(reqHeader, storedETag string) bool {
+	if reqHeader == "" || storedETag == "" {
+		return false
+	}
+	storedStripped := strings.TrimPrefix(storedETag, "W/")
+	// If-None-Match may be a comma-separated list, or "*". Split and try each.
+	for _, part := range strings.Split(reqHeader, ",") {
+		tag := strings.TrimSpace(part)
+		if tag == "*" {
+			return true
+		}
+		if strings.TrimPrefix(tag, "W/") == storedStripped {
+			return true
+		}
+	}
+	return false
 }
 
 // writeNotModified writes a 304 with the ETag echoed back, no body.
@@ -371,7 +397,7 @@ func (c *singleKeyByteCache) serve(w http.ResponseWriter, r *http.Request, ttl t
 func (c *singleKeyByteCache) writeServed(w http.ResponseWriter, r *http.Request, payload []byte, etag string, opts serveOpts) {
 	if etag != "" {
 		w.Header().Set("ETag", etag)
-		if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+		if ifNoneMatchHits(r.Header.Get("If-None-Match"), etag) {
 			if opts.CacheControl != "" {
 				w.Header().Set("Cache-Control", opts.CacheControl)
 			}
