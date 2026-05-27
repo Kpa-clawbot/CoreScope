@@ -81,6 +81,9 @@ jobs:
           go test ./...
           echo "--- Decrypt CLI tests passed ---"
 
+      - name: Verify Dockerfile COPY invariants (issue #1316)
+        run: bash scripts/check-dockerfile-internal-pkgs.sh
+
       - name: Lint CSS variables (issue #1128)
         run: |
           set -e
