@@ -69,14 +69,14 @@ func TestHandleNodePaths_HopName_CanonicalPathShowsTarget_1144(t *testing.T) {
 	// The "37" prefix resolves to TWO candidates; the canonical path must use
 	// the stored resolved_path pubkey (targetPK) and display the target's name,
 	// NOT the GPS-having sibling.
-	if hop.Name == "Templeton Hills" {
-		t.Errorf("hop name = %q (sibling mis-resolution #1144): canonical path must show target name %q", hop.Name, "CJS SF Mission")
-	}
 	if hop.Name != "CJS SF Mission" {
-		t.Errorf("hop name = %q, want %q", hop.Name, "CJS SF Mission")
+		if hop.Name == "Templeton Hills" {
+			t.Errorf("hop name = %q (sibling mis-resolution #1144): canonical path must show target name %q", hop.Name, "CJS SF Mission")
+		} else {
+			t.Errorf("hop name = %q, want %q", hop.Name, "CJS SF Mission")
+		}
 	}
 	if hop.Pubkey != targetPK {
 		t.Errorf("hop pubkey = %q, want %q", hop.Pubkey, targetPK)
 	}
 }
-
