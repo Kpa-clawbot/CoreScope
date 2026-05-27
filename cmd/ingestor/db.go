@@ -96,7 +96,26 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 		return nil, fmt.Errorf("creating data dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=auto_vacuum(INCREMENTAL)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)")
+	// SQLite PRAGMAs, in addition to the auto_vacuum/WAL/FK/busy_timeout
+	// baseline:
+	//
+	//   synchronous=NORMAL — safe in WAL mode (commits durably fsync only
+	//     on checkpoint), 2-3× faster writes during sustained ingest.
+	//   temp_store=MEMORY — keep temporary B-trees in RAM instead of disk.
+	//     Speeds up COUNT(DISTINCT)/GROUP BY in retention/analytics queries.
+	//   cache_size=-32768 — 32 MiB per-connection page cache. Writer has
+	//     SetMaxOpenConns(1) below so this is the total writer cache.
+	//   journal_size_limit=33554432 — cap WAL file growth at 32 MiB so
+	//     between checkpoints it stays bounded.
+	db, err := sql.Open("sqlite", dbPath+
+		"?_pragma=auto_vacuum(INCREMENTAL)"+
+		"&_pragma=journal_mode(WAL)"+
+		"&_pragma=foreign_keys(ON)"+
+		"&_pragma=busy_timeout(5000)"+
+		"&_pragma=synchronous(NORMAL)"+
+		"&_pragma=temp_store(MEMORY)"+
+		"&_pragma=cache_size(-32768)"+
+		"&_pragma=journal_size_limit(33554432)")
 	if err != nil {
 		return nil, fmt.Errorf("opening db: %w", err)
 	}

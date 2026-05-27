@@ -87,8 +87,26 @@ func (db *DB) resolvedPathByObsStatement() *sql.Stmt {
 }
 
 // OpenDB opens a read-only SQLite connection with WAL mode.
+//
+// PRAGMAs beyond the ro/WAL/busy_timeout baseline:
+//
+//	temp_store=MEMORY — keep temporary B-trees (COUNT DISTINCT, GROUP BY)
+//	  in RAM instead of writing them to /tmp; modest CPU + I/O saving on
+//	  every analytics query.
+//	cache_size=-8192 — 8 MiB per-connection page cache. With
+//	  SetMaxOpenConns(32) below the worst-case total is 256 MiB, but the
+//	  in-memory packet store usually serves reads so DB access is sporadic
+//	  and active connections are far fewer.
+//
+// mmap_size is intentionally NOT set: modernc.org/sqlite is a pure-Go
+// translation that doesn't honor mmap PRAGMAs (no syscall.Mmap path).
 func OpenDB(path string) (*DB, error) {
-	dsn := fmt.Sprintf("file:%s?mode=ro&_journal_mode=WAL&_busy_timeout=5000", path)
+	dsn := fmt.Sprintf("file:%s?mode=ro"+
+		"&_journal_mode=WAL"+
+		"&_busy_timeout=5000"+
+		"&_pragma=temp_store(MEMORY)"+
+		"&_pragma=cache_size(-8192)",
+		path)
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
