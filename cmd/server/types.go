@@ -988,6 +988,9 @@ type ClientConfigResponse struct {
 	PropagationBufferMs float64         `json:"propagationBufferMs"`
 	Timestamps          TimestampConfig `json:"timestamps"`
 	DebugAffinity       bool            `json:"debugAffinity,omitempty"`
+	// #1420 — server default for dark-tile provider picker. Client uses this
+	// as the fallback when no localStorage override is set.
+	MapDarkTileProvider string `json:"mapDarkTileProvider,omitempty"`
 }
 
 // ─── IATA Coords ───────────────────────────────────────────────────────────────

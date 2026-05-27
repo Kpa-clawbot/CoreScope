@@ -92,6 +92,13 @@ type Config struct {
 
 	DebugAffinity bool `json:"debugAffinity,omitempty"`
 
+	// MapDarkTileProvider selects the default dark-mode basemap provider for
+	// new visitors. The client may override per-browser via the customizer
+	// (persisted to localStorage). Allowed values: "carto-dark" (default),
+	// "esri-darkgray-labels", "voyager-inverted", "positron-inverted". See
+	// public/map-tile-providers.js for the registry. #1420.
+	MapDarkTileProvider string `json:"mapDarkTileProvider,omitempty"`
+
 	// ObserverBlacklist is a list of observer public keys to exclude from API
 	// responses (defense in depth — ingestor drops at ingest, server filters
 	// any that slipped through from a prior unblocked window).

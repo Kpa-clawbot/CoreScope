@@ -357,6 +357,10 @@
       if (cfg.tiles.dark) window.TILE_DARK = cfg.tiles.dark;
       if (cfg.tiles.light) window.TILE_LIGHT = cfg.tiles.light;
     }
+    // #1420 — server default for dark-tile provider picker.
+    if (typeof cfg.mapDarkTileProvider === 'string' && typeof window.MC_setServerDefaultTileProvider === 'function') {
+      window.MC_setServerDefaultTileProvider(cfg.mapDarkTileProvider);
+    }
     if (cfg.snrThresholds) Object.assign(SNR_THRESHOLDS, cfg.snrThresholds);
     if (cfg.distThresholds) Object.assign(DIST_THRESHOLDS, cfg.distThresholds);
     if (cfg.maxHopDist != null) window.MAX_HOP_DIST = cfg.maxHopDist;

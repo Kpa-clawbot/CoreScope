@@ -1171,15 +1171,55 @@
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    let tileLayer = L.tileLayer(isDark ? TILE_DARK : TILE_LIGHT, { maxZoom: 19 }).addTo(map);
+    // #1420 — multi-provider dark-tile picker. Light mode unchanged.
+    let _liveDarkRefLayer = null;
+    function _liveResolveTile(dark) {
+      if (!dark) return { url: TILE_LIGHT, attribution: '© OpenStreetMap © CartoDB', refUrl: null };
+      const reg = window.MC_TILE_PROVIDERS || {};
+      const id  = (typeof window.MC_getDarkTileProvider === 'function') ? window.MC_getDarkTileProvider() : 'carto-dark';
+      const p   = reg[id] || reg['carto-dark'] || {};
+      return {
+        url: p.url || p.baseUrl || TILE_DARK,
+        attribution: p.attribution || '© OpenStreetMap © CartoDB',
+        refUrl: p.refUrl || null
+      };
+    }
+    function _liveSyncDarkTiles(dark) {
+      const r = _liveResolveTile(dark);
+      tileLayer.setUrl(r.url);
+      if (tileLayer.options) tileLayer.options.attribution = r.attribution;
+      if (dark && r.refUrl) {
+        if (!_liveDarkRefLayer) {
+          _liveDarkRefLayer = L.tileLayer(r.refUrl, { maxZoom: 19, attribution: r.attribution }).addTo(map);
+        } else {
+          _liveDarkRefLayer.setUrl(r.refUrl);
+        }
+      } else if (_liveDarkRefLayer) {
+        map.removeLayer(_liveDarkRefLayer);
+        _liveDarkRefLayer = null;
+      }
+      if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
+    }
+    const _liveInitTile = _liveResolveTile(isDark);
+    let tileLayer = L.tileLayer(_liveInitTile.url, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(map);
+    if (isDark && _liveInitTile.refUrl) {
+      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(map);
+    }
+    if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
 
     // Swap tiles when theme changes
     const _themeObs = new MutationObserver(function () {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-      tileLayer.setUrl(dark ? TILE_DARK : TILE_LIGHT);
+      _liveSyncDarkTiles(dark);
     });
     _themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    // #1420 — re-render on customizer change.
+    window.addEventListener('mc-tile-provider-changed', function () {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+        (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      _liveSyncDarkTiles(dark);
+    });
     L.control.zoom({ position: 'topright' }).addTo(map);
 
     nodesLayer = L.layerGroup().addTo(map);

@@ -346,6 +346,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		PropagationBufferMs: float64(s.cfg.PropagationBufferMs()),
 		Timestamps:          s.cfg.GetTimestampConfig(),
 		DebugAffinity:       s.cfg.DebugAffinity,
+		MapDarkTileProvider: s.cfg.MapDarkTileProvider,
 	})
 }
 

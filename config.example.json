@@ -47,6 +47,8 @@
     "observer": "#8b5cf6",
     "_comment": "Marker/badge colors per node role. Used on map, nodes list, and live feed."
   },
+  "mapDarkTileProvider": "carto-dark",
+  "_comment_mapDarkTileProvider": "Default dark-mode basemap provider. Allowed: 'carto-dark' (Carto dark_all — default), 'esri-darkgray-labels' (Esri Dark Gray Canvas + reference labels), 'voyager-inverted' (Carto Voyager with CSS invert filter), 'positron-inverted' (Carto Positron with CSS invert filter). Light mode is unaffected. Users can override per-browser via the in-app customizer (persisted to localStorage). #1420.",
   "home": {
     "heroTitle": "CoreScope",
     "heroSubtitle": "Find your nodes to start monitoring them.",

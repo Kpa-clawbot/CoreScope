@@ -36,6 +36,7 @@ node test-issue-1418-cb-preset-ramp.js
 node test-issue-1418-spider-fan.js
 node test-issue-1418-deeplink-hops-channels.js
 node test-issue-1418-polish-review.js
+node test-issue-1420-tile-providers.js
 
 echo ""
 echo "═══════════════════════════════════════"
