@@ -85,7 +85,7 @@ const _apiCache = new Map();
 const _inflight = new Map();
 // Client-side TTLs (ms) — loaded from server config, with defaults
 const CLIENT_TTL = {
-  stats: 10000, nodeDetail: 240000, nodeHealth: 240000, nodeList: 90000,
+  stats: 30000, nodeDetail: 240000, nodeHealth: 240000, nodeList: 90000,
   bulkHealth: 300000, networkStatus: 300000, observers: 120000,
   channels: 15000, channelMessages: 10000, analyticsRF: 300000,
   analyticsTopology: 300000, analyticsChannels: 300000, analyticsHashSizes: 300000,
@@ -1550,8 +1550,19 @@ window.addEventListener('DOMContentLoaded', () => {
     } catch {}
   }
   updateNavStats();
-  setInterval(updateNavStats, 15000);
-  debouncedOnWS(function () { updateNavStats(); });
+  setInterval(updateNavStats, 30000);
+  // WS-driven refresh used to fire updateNavStats() on every packet-burst
+  // debounce — on a busy mesh that hit /api/stats 15+ times per minute.
+  // Throttle to at most once per 30s; the 30s setInterval above is the
+  // floor anyway, so this only adds an immediate refresh after a long
+  // quiet period.
+  let _navStatsLastWS = 0;
+  debouncedOnWS(function () {
+    const now = Date.now();
+    if (now - _navStatsLastWS < 30000) return;
+    _navStatsLastWS = now;
+    updateNavStats();
+  });
 
   // --- Theme Customization ---
   // Fetch theme config and apply via customizer v2 pipeline

@@ -142,6 +142,80 @@ type Server struct {
 	observersStatsCache singleKeyByteCache
 	statsBytesCache     singleKeyByteCache
 	nodeInfoMapCache    nodeInfoMapCacheState
+
+	// Per-key bytes-payload caches. Same singleflight semantics as
+	// singleKeyByteCache but keyed by a string so the same endpoint can
+	// cache distinct query-parameter combinations independently.
+	nodesListCache perKeyByteCache
+	channelsCache  perKeyByteCache
+}
+
+// perKeyByteCache is the multi-key version of singleKeyByteCache — separate
+// TTL'd entries for each distinct cache key, with per-key singleflight so
+// concurrent misses on the same key share one build.
+type perKeyByteCache struct {
+	mu       sync.Mutex
+	entries  map[string]*perKeyByteCacheEntry
+	inFlight map[string]chan struct{}
+}
+
+type perKeyByteCacheEntry struct {
+	payload   []byte
+	expiresAt time.Time
+}
+
+func (c *perKeyByteCache) serve(w http.ResponseWriter, key string, ttl time.Duration, errContext string, build func() ([]byte, error)) {
+	for {
+		c.mu.Lock()
+		if c.entries == nil {
+			c.entries = make(map[string]*perKeyByteCacheEntry)
+		}
+		if c.inFlight == nil {
+			c.inFlight = make(map[string]chan struct{})
+		}
+		if e, ok := c.entries[key]; ok && time.Now().Before(e.expiresAt) {
+			payload := e.payload
+			c.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(payload) //nolint:errcheck
+			return
+		}
+		if ch, inflight := c.inFlight[key]; inflight {
+			c.mu.Unlock()
+			<-ch
+			continue
+		}
+		done := make(chan struct{})
+		c.inFlight[key] = done
+		c.mu.Unlock()
+
+		var (
+			payload []byte
+			err     error
+		)
+		func() {
+			defer func() {
+				c.mu.Lock()
+				if err == nil && payload != nil {
+					c.entries[key] = &perKeyByteCacheEntry{
+						payload:   payload,
+						expiresAt: time.Now().Add(ttl),
+					}
+				}
+				delete(c.inFlight, key)
+				c.mu.Unlock()
+				close(done)
+			}()
+			payload, err = build()
+		}()
+		if err != nil {
+			writeInternalError(w, errContext, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(payload) //nolint:errcheck
+		return
+	}
 }
 
 // singleKeyByteCache is a tiny TTL cache + singleflight wrapper for endpoints
@@ -344,16 +418,22 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// Backfill status header middleware
 	r.Use(s.backfillStatusMiddleware)
 
-	// Config endpoints
+	// Config endpoints. Most are practically static for a given server build
+	// (theme, regions, areas, map config, client config) — let the browser
+	// cache them for 5 minutes so SPA route changes don't re-fetch the same
+	// JSON on every navigation. /api/config/geo-filter is mutable via PUT and
+	// /api/config/channel-keys carries decryption material — both stay
+	// uncached.
+	const configCacheSecs = 300
 	r.HandleFunc("/api/config/cache", s.handleConfigCache).Methods("GET")
-	r.HandleFunc("/api/config/client", s.handleConfigClient).Methods("GET")
-	r.HandleFunc("/api/config/regions", s.handleConfigRegions).Methods("GET")
-	r.HandleFunc("/api/config/theme", s.handleConfigTheme).Methods("GET")
-	r.HandleFunc("/api/config/map", s.handleConfigMap).Methods("GET")
+	r.HandleFunc("/api/config/client", withShortClientCache(configCacheSecs, s.handleConfigClient)).Methods("GET")
+	r.HandleFunc("/api/config/regions", withShortClientCache(configCacheSecs, s.handleConfigRegions)).Methods("GET")
+	r.HandleFunc("/api/config/theme", withShortClientCache(configCacheSecs, s.handleConfigTheme)).Methods("GET")
+	r.HandleFunc("/api/config/map", withShortClientCache(configCacheSecs, s.handleConfigMap)).Methods("GET")
 	r.HandleFunc("/api/config/geo-filter", s.handleConfigGeoFilter).Methods("GET")
 	r.HandleFunc("/api/config/channel-keys", s.handleConfigChannelKeys).Methods("GET")
-	r.HandleFunc("/api/config/areas", s.handleConfigAreas).Methods("GET")
-	r.HandleFunc("/api/config/areas/polygons", s.handleConfigAreasPolygons).Methods("GET")
+	r.HandleFunc("/api/config/areas", withShortClientCache(configCacheSecs, s.handleConfigAreas)).Methods("GET")
+	r.HandleFunc("/api/config/areas/polygons", withShortClientCache(configCacheSecs, s.handleConfigAreasPolygons)).Methods("GET")
 	r.Handle("/api/config/geo-filter", s.requireAPIKey(http.HandlerFunc(s.handlePutConfigGeoFilter))).Methods("PUT")
 
 	// Readiness endpoint (gated on background init completion)
@@ -1780,7 +1860,27 @@ func (s *Server) handlePostPacket(w http.ResponseWriter, r *http.Request) {
 
 // --- Node Handlers ---
 
+// handleNodesTTL caps how often /api/nodes recomputes for a given query-string
+// combination. Frontends call this on dashboard load and on route changes;
+// 30 seconds is short enough that new repeaters appearing on the mesh show up
+// quickly, long enough to absorb burst navigation by N users hitting the same
+// query shape.
+const handleNodesTTL = 30 * time.Second
+
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
+	// The result depends on every query param read below plus the server's
+	// blacklist + geo-filter config (those rarely change during a process
+	// lifetime, so we don't include them in the cache key — restart clears
+	// the cache). Using RawQuery directly means callers that send params
+	// in the same order share a cache entry; callers that re-order would
+	// not share, which is OK (just slightly worse hit rate).
+	cacheKey := r.URL.RawQuery
+	s.nodesListCache.serve(w, cacheKey, handleNodesTTL, "handleNodes GetNodes", func() ([]byte, error) {
+		return s.buildNodesResponse(r)
+	})
+}
+
+func (s *Server) buildNodesResponse(r *http.Request) ([]byte, error) {
 	q := r.URL.Query()
 	nodes, total, counts, err := s.db.GetNodes(
 		queryInt(r, "limit", 50),
@@ -1789,8 +1889,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		q.Get("lastHeard"), q.Get("sortBy"), q.Get("region"),
 	)
 	if err != nil {
-		writeInternalError(w, "handleNodes GetNodes", err)
-		return
+		return nil, err
 	}
 	if s.store != nil {
 		hashInfo := s.store.GetNodeHashSizeInfo()
@@ -1896,7 +1995,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			total = len(filtered)
 		}
 	}
-	writeJSON(w, NodeListResponse{Nodes: nodes, Total: total, Counts: counts})
+	return json.Marshal(NodeListResponse{Nodes: nodes, Total: total, Counts: counts})
 }
 
 func (s *Server) handleNodeSearch(w http.ResponseWriter, r *http.Request) {
@@ -2824,36 +2923,41 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, ResolveHopsResponse{Resolved: resolved})
 }
 
+// handleChannelsTTL caps how often /api/channels recomputes per
+// (region, includeEncrypted) combination. Channels are operator-managed and
+// move on a minute-to-hour timescale; a minute of staleness is invisible.
+const handleChannelsTTL = 60 * time.Second
+
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	includeEncrypted := r.URL.Query().Get("includeEncrypted") == "true"
-	// Prefer DB for full history (in-memory store has limited retention)
-	if s.db != nil {
-		channels, err := s.db.GetChannels(region)
-		if err != nil {
-			writeInternalError(w, "handleChannels GetChannels", err)
-			return
-		}
-		if includeEncrypted {
-			encrypted, err := s.db.GetEncryptedChannels(region)
+	cacheKey := region + "|" + strconv.FormatBool(includeEncrypted)
+	s.channelsCache.serve(w, cacheKey, handleChannelsTTL, "handleChannels GetChannels", func() ([]byte, error) {
+		// Prefer DB for full history (in-memory store has limited retention)
+		if s.db != nil {
+			channels, err := s.db.GetChannels(region)
 			if err != nil {
-				log.Printf("WARN GetEncryptedChannels: %v", err)
-			} else {
-				channels = append(channels, encrypted...)
+				return nil, err
 			}
+			if includeEncrypted {
+				encrypted, err := s.db.GetEncryptedChannels(region)
+				if err != nil {
+					log.Printf("WARN GetEncryptedChannels: %v", err)
+				} else {
+					channels = append(channels, encrypted...)
+				}
+			}
+			return json.Marshal(ChannelListResponse{Channels: channels})
 		}
-		writeJSON(w, ChannelListResponse{Channels: channels})
-		return
-	}
-	if s.store != nil {
-		channels := s.store.GetChannels(region)
-		if includeEncrypted {
-			channels = append(channels, s.store.GetEncryptedChannels(region)...)
+		if s.store != nil {
+			channels := s.store.GetChannels(region)
+			if includeEncrypted {
+				channels = append(channels, s.store.GetEncryptedChannels(region)...)
+			}
+			return json.Marshal(ChannelListResponse{Channels: channels})
 		}
-		writeJSON(w, ChannelListResponse{Channels: channels})
-		return
-	}
-	writeJSON(w, ChannelListResponse{Channels: []map[string]interface{}{}})
+		return json.Marshal(ChannelListResponse{Channels: []map[string]interface{}{}})
+	})
 }
 
 func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
@@ -3556,6 +3660,18 @@ func writeJSONWithReq(w http.ResponseWriter, r *http.Request, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Printf("[routes] JSON encode error on %s %s: %v", r.Method, r.URL.Path, err)
+	}
+}
+
+// withShortClientCache wraps a handler so its responses carry a public
+// Cache-Control header — browsers reuse them across SPA route changes
+// instead of re-fetching practically-static config on every navigation.
+// `seconds` is the max-age in seconds.
+func withShortClientCache(seconds int, h http.HandlerFunc) http.HandlerFunc {
+	cc := fmt.Sprintf("public, max-age=%d", seconds)
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", cc)
+		h(w, r)
 	}
 }
 

@@ -40,3 +40,4 @@ cmd/ingestor/ingestor
 cmd/decrypt/decrypt
 # Local-only planning and design files
 docs/superpowers/
+.patches/
