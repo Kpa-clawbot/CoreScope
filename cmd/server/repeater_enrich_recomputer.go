@@ -7,9 +7,9 @@ import (
 
 // repeaterEnrichmentRecomputerInterval is the default tick interval
 // for the steady-state recompute of the repeater enrichment bulk
-// caches. The on-request 15s-TTL fallback in repeater_enrich_bulk.go
-// is kept as a safety net — the recomputer just makes sure the cache
-// is populated before any request arrives.
+// caches. The on-request TTL fallback in repeater_enrich_bulk.go is
+// kept as a safety net — the recomputer just makes sure the cache is
+// populated before any request arrives.
 //
 // 5min mirrors the analytics_recomputer default from #1240 and is
 // plenty fresh for an at-a-glance status column.

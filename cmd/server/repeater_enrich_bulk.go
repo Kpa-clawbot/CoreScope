@@ -5,12 +5,13 @@ import (
 	"time"
 )
 
-// repeaterEnrichTTL bounds how stale the per-page bulk enrichment caches
-// for handleNodes may be. Same 15s budget as GetNodeHashSizeInfo — the
-// numbers feed an at-a-glance status column, not an alerting path, so
-// up-to-15s freshness is fine and keeps the request path O(page) instead
-// of O(page × byPathHop[pk] × parsed timestamps).
-const repeaterEnrichTTL = 15 * time.Second
+// repeaterEnrichTTL is the safety-net TTL for the bulk enrichment caches.
+// Derived as 2× the recomputer's default tick so the cache is always valid
+// between background refreshes. Without a recomputer (tests, edge cases)
+// the cache rebuilds on-thread at most once per TTL window.
+// Note: if analytics.defaultIntervalSeconds is configured above 600 the
+// TTL will expire before the recomputer runs; keep that value < TTL/2.
+const repeaterEnrichTTL = 2 * repeaterEnrichmentRecomputerDefaultInterval
 
 // GetRepeaterRelayInfoMap returns a cached pubkey → RepeaterRelayInfo
 // map covering EVERY pubkey that currently appears as a path hop in any
@@ -29,9 +30,9 @@ const repeaterEnrichTTL = 15 * time.Second
 // The cached map is keyed by lowercase pubkey/hop key (same shape as
 // byPathHop). Lookups should use strings.ToLower(pk).
 //
-// The cache is invalidated by TTL only — never by ingest. With a 15s
-// budget that's acceptable for a status column; if a fresher signal is
-// ever needed for a non-status caller, expose a non-cached path.
+// The cache is invalidated by TTL only — never by ingest. Up-to-10min
+// freshness is fine for an at-a-glance status column; if a fresher
+// signal is ever needed for a non-status caller, expose a non-cached path.
 func (s *PacketStore) GetRepeaterRelayInfoMap(windowHours float64) map[string]RepeaterRelayInfo {
 	s.repeaterEnrichMu.Lock()
 	if s.repeaterRelayCache != nil &&
