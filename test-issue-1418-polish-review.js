@@ -100,6 +100,14 @@ console.log('\n=== G. deep-link empty-paths toast (doshi) ===');
 assert(/allPaths\.length\s*===\s*0[\s\S]{0,400}(?:console\.warn|alert|toast|showToast|notif)/i.test(mapSrc),
   'deep-link empty-paths path emits a console.warn / toast (no silent return)');
 
+console.log('\n=== H. wireRow row-wireup helper (dijkstra) ===');
+assert(/function\s+wireRow\s*\(\s*row\s*\)/.test(rvSrc),
+  'wireRow(row) helper centralizes row event wiring');
+assert(/sidebar\._wireRow\s*=\s*wireRow/.test(rvSrc),
+  'wireRow stashed on sidebar so restoreAllPaths can reuse');
+assert(/newRowEls\.forEach\(\s*sidebar\._wireRow/.test(rvSrc),
+  'restoreAllPaths re-wires rows via sidebar._wireRow (not inline duplicate)');
+
 console.log('\n=== Summary ===');
 console.log('  passed: ' + passed);
 console.log('  failed: ' + failed);

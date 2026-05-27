@@ -676,8 +676,16 @@
     // Expose so marker-click can call it from render()
     sidebar._highlightHop = highlightHop;
     sidebar._scrollRowIntoView = scrollRowIntoView;
-    rowEls.forEach(function (row) {
+    // Polish review (dijkstra #1423): centralized row-wireup helper. The
+    // sidebar isolate→restore round-trip nukes child listeners via
+    // innerHTML, so the restore path needs to re-wire. Previously the
+    // re-wire lived inline inside restoreAllPaths' closure — a future
+    // refactor adding a new row listener type could easily forget the
+    // restore-side rewire and silently regress. Funneling both paths
+    // through wireRow eliminates that risk.
+    function wireRow(row) {
       var idx = parseInt(row.dataset.hopIdx, 10);
+      if (isNaN(idx)) return;
       row.addEventListener('mouseenter', function () { highlightHop(idx, true); });
       row.addEventListener('mouseleave', function () { highlightHop(idx, false); });
       row.addEventListener('focus', function () { highlightHop(idx, true); });
@@ -710,7 +718,10 @@
         var p = positions[idx];
         if (p.lat != null && p.lon != null) mapRef.flyTo([p.lat, p.lon], 13, { duration: 0.6 });
       });
-    });
+    }
+    // Expose on sidebar so restoreAllPaths (defined later) can re-use it.
+    sidebar._wireRow = wireRow;
+    rowEls.forEach(wireRow);
 
     // Path picker (multi-path mode) — clicking a path REPLACES the
     // canonical edges + markers with the selected path's own. Stroke-width
@@ -912,24 +923,12 @@
         if (pinnedBottom2) pinnedBottom2.innerHTML = sidebar._canonRows.bottom;
         if (listEl2) listEl2.innerHTML = sidebar._canonRows.middle;
         var newRowEls = sidebar.querySelectorAll('.mc-rt-row');
-        newRowEls.forEach(function (row) {
-          var idx = parseInt(row.dataset.hopIdx, 10);
-          if (isNaN(idx)) return;
-          row.addEventListener('click', function (e) {
-            if (e.target && e.target.closest && e.target.closest('a.mc-rt-detail-link, .mc-rt-detail-panel a, .mc-rt-detail-panel button')) return;
-            e.stopPropagation();
-            e.preventDefault();
-            sidebar.querySelectorAll('.mc-rt-detail-panel').forEach(function(p){p.remove();});
-            sidebar.querySelectorAll('.mc-rt-row-expanded').forEach(function(p){p.classList.remove('mc-rt-row-expanded');});
-            var panel = document.createElement('div');
-            panel.className = 'mc-rt-detail-panel';
-            row.appendChild(panel);
-            row.classList.add('mc-rt-row-expanded');
-            renderHopDetail(positions[idx], panel);
-            var p = positions[idx];
-            if (p && p.lat != null) mapRef.flyTo([p.lat, p.lon], 13, { duration: 0.6 });
-          });
-        });
+        // Polish review (dijkstra #1423): centralized wireRow ensures the
+        // restore path picks up every listener type the initial render
+        // attached (mouseenter/leave/focus/blur/click) — no risk of a
+        // future row-listener type being added to the initial path and
+        // forgotten here.
+        newRowEls.forEach(sidebar._wireRow || function () {});
       }
 
       // Union-of-edges (NOT per-path). Iterate edgeCounts once;
