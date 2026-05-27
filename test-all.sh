@@ -37,6 +37,7 @@ node test-issue-1418-spider-fan.js
 node test-issue-1418-deeplink-hops-channels.js
 node test-issue-1418-polish-review.js
 node test-issue-1420-tile-providers.js
+node test-issue-1438-marker-css-vars.js
 
 echo ""
 echo "═══════════════════════════════════════"

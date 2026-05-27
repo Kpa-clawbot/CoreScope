@@ -121,6 +121,7 @@ jobs:
           node test-issue-1418-deeplink-hops-channels.js
           node test-issue-1418-polish-review.js
           node test-issue-1420-tile-providers.js
+          node test-issue-1438-marker-css-vars.js
           node test-live.js
 
       - name: 🧹 Frontend lint (eslint no-undef) — issue #1342
