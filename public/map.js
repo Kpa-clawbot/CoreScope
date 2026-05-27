@@ -1099,7 +1099,25 @@
         }
       }
       if (allPaths.length === 0) {
-        // Nothing to render (every observation had empty path?) — bail.
+        // Polish review (doshi #1423): operator clicked a ?packet=<hash> URL
+        // but every observation had an empty path. Previously this bailed
+        // silently (map stayed where it was, no message). Surface a console
+        // breadcrumb + a brief toast so the operator knows why nothing
+        // rendered.
+        console.warn('[deep-link] packet ' + packetHash + ' has no observed route data (all observations had empty path)');
+        try {
+          var toast = document.createElement('div');
+          toast.className = 'mc-rt-toast';
+          toast.setAttribute('role', 'status');
+          toast.setAttribute('aria-live', 'polite');
+          toast.style.cssText = 'position:fixed;top:80px;left:50%;transform:translateX(-50%);' +
+            'background:var(--mc-bg-secondary,#1a1a1a);color:var(--mc-text-primary,#e5e5e5);' +
+            'padding:10px 16px;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.4);' +
+            'z-index:10000;font:13px/1.4 system-ui,sans-serif;max-width:80vw;text-align:center;';
+          toast.textContent = 'Packet has no observed route data.';
+          document.body.appendChild(toast);
+          setTimeout(function () { try { toast.remove(); } catch (_) {} }, 4000);
+        } catch (e) { console.warn('[deep-link] toast failed:', e); }
         return;
       }
       if (allPaths.length === 1) {

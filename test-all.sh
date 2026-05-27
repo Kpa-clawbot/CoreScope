@@ -35,6 +35,7 @@ node test-issue-1418-edge-weights.js
 node test-issue-1418-cb-preset-ramp.js
 node test-issue-1418-spider-fan.js
 node test-issue-1418-deeplink-hops-channels.js
+node test-issue-1418-polish-review.js
 
 echo ""
 echo "═══════════════════════════════════════"

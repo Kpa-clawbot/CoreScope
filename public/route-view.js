@@ -199,18 +199,34 @@
       '<span class="mc-rt-detail-spark-meta">' + pts.length + ' obs · ' + minS.toFixed(1) + '..' + maxS.toFixed(1) + ' dB</span>';
   }
 
-  var _detailCache = {};
+  // Polish review (carmack #1423): bound _detailCache (was unbounded plain
+  // object; every distinct pubkey ever clicked was retained for the tab's
+  // lifetime). LRU(50) via Map insertion-order. Also cleared on
+  // teardownIfNavigatedAway so a navigate-away frees memory immediately.
+  var DETAIL_CACHE_MAX = 50;
+  var _detailCache = new Map();
   function fetchHopDetail(pubkey) {
     if (!pubkey) return Promise.resolve(null);
     var pk = String(pubkey).toLowerCase();
-    if (_detailCache[pk]) return Promise.resolve(_detailCache[pk]);
+    if (_detailCache.has(pk)) {
+      // LRU bump: re-insert to move to most-recent position.
+      var cached = _detailCache.get(pk);
+      _detailCache.delete(pk);
+      _detailCache.set(pk, cached);
+      return Promise.resolve(cached);
+    }
     return Promise.all([
       fetch('/api/nodes/' + pk).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
       fetch('/api/nodes/' + pk + '/analytics?window=24h').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
       fetch('/api/nodes/' + pk + '/paths?limit=20').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
     ]).then(function (out) {
       var result = { detail: out[0], analytics: out[1], paths: out[2] };
-      _detailCache[pk] = result;
+      // Evict oldest entry (Map preserves insertion order) before adding.
+      while (_detailCache.size >= DETAIL_CACHE_MAX) {
+        var oldestKey = _detailCache.keys().next().value;
+        _detailCache.delete(oldestKey);
+      }
+      _detailCache.set(pk, result);
       return result;
     });
   }
@@ -294,7 +310,7 @@
         var L = (0.299*r + 0.587*g + 0.114*b) / 255;
         if (L > 0.55) textColor = '#000';
       }
-    } catch (e) {}
+    } catch (e) { console.warn('[route-view]', e); }
     // If loop, grow the SVG box to fit the second ring.
     if (isLoop) size = 28;
     var cx = size / 2, cy = size / 2;
@@ -468,7 +484,7 @@
         try {
           var qs = (location.hash || '').split('?')[1];
           if (qs) obsId = new URLSearchParams(qs).get('obs');
-        } catch (e) {}
+        } catch (e) { console.warn('[route-view]', e); }
       }
       var backHref = '#/packets/' + escapeHtml(packetHash) + (obsId ? '?obs=' + escapeHtml(obsId) : '');
       backLink = '<a class="mc-rt-back-link" href="' + backHref +
@@ -512,7 +528,7 @@
       if (savedW && savedW >= 200 && savedW <= 700) {
         sidebar.style.width = savedW + 'px';
       }
-    } catch (e) {}
+    } catch (e) { console.warn('[route-view]', e); }
     // Mobile: collapsible bottom-sheet. Drag handle + compact summary in
     // collapsed state. Tap handle to expand → full content. Per operator
     // feedback, collapsed summary shows: type, hop count, total km, hex route.
@@ -536,7 +552,7 @@
           return String(h).slice(0, 2).toUpperCase();
         }).join('→');
       }
-    } catch (e) {}
+    } catch (e) { console.warn('[route-view]', e); }
     summaryLine = (typeTag ? '<b>' + escapeHtml(typeTag) + '</b> · ' : '') +
                   total + ' hops · ' + totalKm + ' km' +
                   (multiPath ? ' · ' + totalObservers + ' obs' : '') +
@@ -632,7 +648,7 @@
               var isMob = window.innerWidth <= 767;
               mapRef.fitBounds(L.latLngBounds(fitPts.map(function(p){return [p.lat, p.lon]})), isMob ? { paddingTopLeft: [30, 70], paddingBottomRight: [30, 130], maxZoom: 14 } : { padding: [40, 40], maxZoom: 14 });
             }
-          } catch (e) {}
+          } catch (e) { console.warn('[route-view]', e); }
         }, 280);
       });
       handle.addEventListener('keydown', function (e) {
@@ -809,7 +825,7 @@
               ? { paddingTopLeft: [30, 70], paddingBottomRight: [30, 190], maxZoom: 13 }
               : { padding: [40, 40], maxZoom: 13 });
           }
-        } catch (e) {}
+        } catch (e) { console.warn('[route-view]', e); }
       }
       if (coordsForFit.length > 0) {
         // Polish review (carmack/doshi/tufte): single rAF replaces the prior
@@ -1025,7 +1041,7 @@
                     }
                   })(lls);
                 }
-              } catch (e) {}
+              } catch (e) { console.warn('[route-view]', e); }
             });
           }
           if (bounds && bounds.isValid()) {
@@ -1034,7 +1050,7 @@
               ? { paddingTopLeft: [30, 70], paddingBottomRight: [30, 190], maxZoom: 14 }
               : { padding: [40, 40], maxZoom: 14 });
           }
-        } catch (e) {}
+        } catch (e) { console.warn('[route-view]', e); }
       }
       _restoreFit();
       requestAnimationFrame(_restoreFit);
@@ -1135,7 +1151,7 @@
         mcPanel.classList.add('collapsed');
         if (mcToggle) mcToggle.setAttribute('aria-expanded', 'false');
       }
-    } catch (e) {}
+    } catch (e) { console.warn('[route-view]', e); }
 
     // #1418: tear down route view when navigating away from /#/map?route=*.
     // Without this hashchange listener, clicking nav 'Map' from inside the route
@@ -1185,16 +1201,33 @@
     // #1418 Phase E — relive the ramp on CB-preset / theme change. Walks the
     // existing edges / stripes / sparkline dots and re-applies rampColor()
     // which now reads --mc-rt-ramp-* CSS vars set by cb-presets.js.
+    // Polish review (torvalds #1423): scope to the current sidebar/map layer
+    // rather than walking document. If the page ever embeds a second route
+    // surface (e.g. a preview thumbnail), the recolor would otherwise paint
+    // both. `sidebar` is the active root captured by this render() closure;
+    // `layer` is the active route LayerGroup on the map.
     function recolorRoute() {
-      var edgeEls = document.querySelectorAll('.mc-rt-edge');
+      var edgeEls = [];
+      try {
+        if (layer && typeof layer.eachLayer === 'function') {
+          layer.eachLayer(function (child) {
+            try {
+              var el = child && child._path;
+              if (el && el.classList && el.classList.contains('mc-rt-edge')) {
+                edgeEls.push(el);
+              }
+            } catch (e) { console.warn('[route-view] recolor edge walk:', e); }
+          });
+        }
+      } catch (e) { console.warn('[route-view] recolor layer walk:', e); }
       var n = edgeEls.length;
       edgeEls.forEach(function (el, i) {
         var c = rampColor(i, n);
         el.setAttribute('stroke', c);
         el.style.color = c;
       });
-      // Sidebar row stripes + distance bars
-      var rows = document.querySelectorAll('.mc-rt-row');
+      // Sidebar row stripes + distance bars — scoped to THIS sidebar.
+      var rows = sidebar ? sidebar.querySelectorAll('.mc-rt-row') : [];
       var rowCount = rows.length;
       rows.forEach(function (row, idx) {
         var stripeIdx = idx === 0 ? 0 : (idx - 1);
@@ -1203,8 +1236,8 @@
         var bar = row.querySelector('.mc-rt-distbar');
         if (bar) bar.style.background = c;
       });
-      // Sparkline dots
-      var dots = document.querySelectorAll('.mc-rt-spark-dot');
+      // Sparkline dots — scoped to THIS sidebar.
+      var dots = sidebar ? sidebar.querySelectorAll('.mc-rt-spark-dot') : [];
       var dotCount = dots.length;
       dots.forEach(function (d, i) { d.setAttribute('fill', rampColor(i, dotCount)); });
     }
@@ -1491,10 +1524,10 @@
                     if (!bounds) bounds = L.latLngBounds(ll, ll); else bounds.extend(ll);
                   });
                 }
-              } catch (e) {}
+              } catch (e) { console.warn('[route-view]', e); }
             });
           }
-        } catch (e) {}
+        } catch (e) { console.warn('[route-view]', e); }
         if (!bounds && fitPts.length >= 2) {
           bounds = L.latLngBounds(fitPts.map(function(p){return [p.lat, p.lon]}));
         }
@@ -1506,7 +1539,7 @@
             ? { paddingTopLeft: [30, 70], paddingBottomRight: [30, 190], maxZoom: 14 }
             : { padding: [40, 40], maxZoom: 14 });
         }
-      } catch (e) {}
+      } catch (e) { console.warn('[route-view]', e); }
     }
     if (fitPts.length > 0) {
       // Polish review (carmack/doshi/tufte): the previous 5-staggered-timer
