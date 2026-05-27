@@ -29,6 +29,13 @@ node test-observers-headings.js
 node test-marker-outline-weight.js
 node test-traces.js
 
+# #1418 — route-view v2 (Tufte) coverage
+node test-issue-1418-raw-hex-extraction.js
+node test-issue-1418-edge-weights.js
+node test-issue-1418-cb-preset-ramp.js
+node test-issue-1418-spider-fan.js
+node test-issue-1418-deeplink-hops-channels.js
+
 echo ""
 echo "═══════════════════════════════════════"
 echo "  All tests passed"
