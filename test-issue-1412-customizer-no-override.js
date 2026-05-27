@@ -127,6 +127,7 @@ console.log('\n=== #1412 A: server-config nodeColors does NOT clobber preset ROL
   // Now simulate customize-v2 picking up the server config (legacy palette).
   const setupBlockA =
     'var root = document.documentElement.style;\n' +
+    'var userOverrides = undefined;\n' +
     'var effectiveConfig = { nodeColors: { repeater: "#dc2626", companion: "#2563eb", room: "#16a34a", sensor: "#d97706", observer: "#8b5cf6" } };\n' +
     blockA + '\n';
   vm.runInContext(setupBlockA, env.sandbox);
