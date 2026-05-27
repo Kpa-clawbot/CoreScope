@@ -1054,7 +1054,7 @@ func (s *Store) Checkpoint() int {
 		return 0
 	}
 	if walFrames > 0 {
-		log.Printf("[db] WAL checkpoint: %d/%d frames checkpointed, %d busy", checkpointed, walFrames, busy)
+		log.Printf("[db] WAL checkpoint: %d/%d frames checkpointed (blocked=%v)", checkpointed, walFrames, busy != 0)
 	}
 	return checkpointed
 }

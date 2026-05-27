@@ -155,17 +155,15 @@ func main() {
 	// if the server's read connection holds frames, remaining pages stay in the
 	// WAL until the next tick. Staggered 30s after startup to avoid competing
 	// with the initial burst of ingest writes.
-	{
-		walCheckpointTicker := time.NewTicker(1 * time.Hour)
-		go func() {
-			time.Sleep(30 * time.Second)
+	walCheckpointTicker := time.NewTicker(1 * time.Hour)
+	go func() {
+		time.Sleep(30 * time.Second)
+		store.Checkpoint()
+		for range walCheckpointTicker.C {
 			store.Checkpoint()
-			for range walCheckpointTicker.C {
-				store.Checkpoint()
-			}
-		}()
-		log.Printf("[db] WAL checkpoint scheduled every 1h")
-	}
+		}
+	}()
+	log.Printf("[db] WAL checkpoint scheduled every 1h")
 
 	// Daily neighbor_edges retention (#1287 — moved from cmd/server).
 	{
@@ -390,6 +388,7 @@ func main() {
 	}
 	statsTicker.Stop()
 	pruneQueueTicker.Stop()
+	walCheckpointTicker.Stop()
 	stopWatchdog()
 	store.LogStats() // final stats on shutdown
 	for _, c := range clients {
