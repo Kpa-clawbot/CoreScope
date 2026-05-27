@@ -296,6 +296,9 @@
     if (typeof window !== 'undefined') {
       window.__mc_map = map;
       window.__mc_routeLayer = routeLayer;
+      // Expose nodes array for route-tufte's path-picker isolation
+      // (needs to resolve hop prefixes that aren't in the canonical path).
+      Object.defineProperty(window, '__mc_nodes', { get: function () { return nodes; }, configurable: true });
       window.deconflictLabels = deconflictLabels;
     }
 
@@ -502,16 +505,24 @@
         sessionStorage.removeItem('map-route-hops');
         try {
           const parsed = JSON.parse(routeHopsJson);
-          // Support new format {origin, hops, paths} (multi-path #1418), legacy
-          // {origin, hops} (single-path), and plain hops[] array.
           if (Array.isArray(parsed)) {
             drawPacketRoute(parsed, null);
           } else if (parsed.paths && parsed.paths.length > 0) {
-            drawPacketRouteMulti(parsed.paths, parsed.origin || null, { packetHash: parsed.packetHash });
+            drawPacketRouteMulti(parsed.paths, parsed.origin || null, {
+              packetHash: parsed.packetHash,
+              canonicalPath: parsed.hops || null,
+              destination: parsed.destination || null
+            });
           } else {
-            drawPacketRoute(parsed.hops || [], parsed.origin || null);
+            drawPacketRoute(parsed.hops || [], parsed.origin || null, { destination: parsed.destination || null });
           }
         } catch {}
+      } else {
+        // #1418/#1419: deep-link via URL params — #/map?packet=<hash>&obs=<id>
+        // (or just packet=<hash> for first observation). Fetch from API, build
+        // the same payload as the sessionStorage flow, dispatch to renderer.
+        // This makes routes shareable / bookmarkable without sessionStorage state.
+        loadRouteFromDeepLink();
       }
     });
   }
@@ -636,16 +647,41 @@
     // Resolve and prepend origin node
     if (origin) {
       let originPos = null;
-      if (origin.lat != null && origin.lon != null) {
-        originPos = { lat: origin.lat, lon: origin.lon, name: origin.name || 'Sender', pubkey: origin.pubkey, role: origin.role || 'companion', resolved: true, isOrigin: true };
+      const originHasRealGps = (lat, lon) => lat != null && lon != null && !(lat === 0 && lon === 0);
+      if (originHasRealGps(origin.lat, origin.lon)) {
+        originPos = { lat: origin.lat, lon: origin.lon, name: origin.name || 'Sender', pubkey: origin.pubkey, role: origin.role || 'companion', resolved: true, isOrigin: true, _fromPayload: true };
       } else if (origin.pubkey) {
         const pk = origin.pubkey.toLowerCase();
         const match = nodes.find(n => n.public_key.toLowerCase() === pk || n.public_key.toLowerCase().startsWith(pk));
-        if (match && match.lat != null && match.lon != null) {
-          originPos = { lat: match.lat, lon: match.lon, name: origin.name || match.name || 'Sender', pubkey: match.public_key, role: match.role || 'companion', resolved: true, isOrigin: true };
+        if (match) {
+          if (originHasRealGps(match.lat, match.lon)) {
+            originPos = { lat: match.lat, lon: match.lon, name: origin.name || match.name || 'Sender', pubkey: match.public_key, role: match.role || 'companion', resolved: true, isOrigin: true, _fromPayload: true };
+          } else {
+            originPos = { name: origin.name || match.name || 'Sender', pubkey: match.public_key, role: match.role || 'companion', resolved: false, gpsless: true, isOrigin: true, _fromPayload: true };
+          }
         }
       }
       if (originPos) positions.unshift(originPos);
+    }
+
+    // #1418 Phase D: append destination (recipient from decoded.destHash) so
+    // the route view shows: sender → [intermediate hops] → recipient.
+    // GPS-sanity: a lat=0,lon=0 sentinel or null coords means "no real GPS"
+    // — show the node in the sidebar as gpsless rather than drawing it at
+    // (0,0) which would force fitBounds to span the visible route → Africa.
+    // _fromPayload: true so the renderer can visually mark these as "from
+    // payload" (different source-of-truth than path hops).
+    if (opts.destination && opts.destination.pubkey) {
+      const dpk = opts.destination.pubkey.toLowerCase();
+      const dmatch = nodes.find(n => n.public_key.toLowerCase() === dpk || n.public_key.toLowerCase().startsWith(dpk));
+      if (dmatch) {
+        const hasGps = dmatch.lat != null && dmatch.lon != null && !(dmatch.lat === 0 && dmatch.lon === 0);
+        if (hasGps) {
+          positions.push({ lat: dmatch.lat, lon: dmatch.lon, name: opts.destination.name || dmatch.name || 'Recipient', pubkey: dmatch.public_key, role: dmatch.role || 'companion', resolved: true, _fromPayload: true });
+        } else {
+          positions.push({ name: opts.destination.name || dmatch.name || 'Recipient', pubkey: dmatch.public_key, role: dmatch.role || 'companion', resolved: false, gpsless: true, _fromPayload: true });
+        }
+      }
     }
 
     if (positions.length < 1) return;
@@ -657,7 +693,10 @@
     // polyline (should never run in production).
     if (window.MeshRouteTufte && typeof window.MeshRouteTufte.render === 'function') {
       window.MeshRouteTufte.render(map, routeLayer, positions, {
-        timestamp: opts.timestamp || Date.now()
+        timestamp: opts.timestamp || Date.now(),
+        packetHash: opts.packetHash || null,
+        observationId: opts.observationId || null,
+        packetContext: opts.packetContext || null
       });
       return;
     }
@@ -683,6 +722,10 @@
   // per-edge observer-count (for stroke-width weighting), and dispatches to
   // the Tufte renderer with multi-path metadata. Falls back to single-path
   // drawPacketRoute when only one observation is provided.
+  //
+  // opts.canonicalPath (optional): use this exact hop sequence as the canonical
+  // spine — i.e. the observation the operator selected. Without it, longest-path
+  // wins, which can show a totally different route than the user clicked.
   async function drawPacketRouteMulti(paths, origin, opts) {
     opts = opts || {};
     if (typeof origin === 'string') origin = { pubkey: origin };
@@ -691,9 +734,15 @@
       return drawPacketRoute(paths[0].path || [], origin, opts);
     }
 
-    // Canonical sequence = longest path (acts as the spine; shorter paths are subsets).
-    const sortedByLen = paths.slice().sort((a, b) => (b.path || []).length - (a.path || []).length);
-    const canonicalPath = sortedByLen[0].path || [];
+    // Pick canonical: prefer caller-supplied (operator's chosen observation),
+    // else fall back to longest path as the spine.
+    var canonicalPath;
+    if (opts.canonicalPath && Array.isArray(opts.canonicalPath) && opts.canonicalPath.length) {
+      canonicalPath = opts.canonicalPath;
+    } else {
+      const sortedByLen = paths.slice().sort((a, b) => (b.path || []).length - (a.path || []).length);
+      canonicalPath = sortedByLen[0].path || [];
+    }
     const totalObservers = paths.length;
 
     // Count hop & edge occurrences across all paths.
@@ -722,7 +771,20 @@
     const raw = canonicalPath.map(hop => {
       const hopLower = String(hop).toLowerCase();
       const srv = serverResolved && (serverResolved[hop] || serverResolved[hopLower] || serverResolved[hop.toUpperCase()]);
-      const obsInfo = { observerCount: hopCounts[hop] || 1, observerTotal: totalObservers };
+      // hopCounts is keyed on the SHORT prefix from observation paths (e.g. "37"),
+      // but canonicalPath may carry full pubkeys when the operator's selected
+      // observation went through the resolver. Compute hop coverage by checking
+      // EVERY path[]: a hop in canonicalPath is "covered" by a path if the path
+      // contains an entry that is either an exact match OR a prefix of the hop's
+      // full pubkey.
+      let coverage = 0;
+      const hopFullKey = (srv && srv.pubkey) ? srv.pubkey.toLowerCase() : hopLower;
+      paths.forEach(pth => {
+        const phops = (pth.path || []).map(h => String(h).toLowerCase());
+        const matches = phops.some(ph => ph === hopFullKey || hopFullKey.startsWith(ph) || ph.startsWith(hopFullKey));
+        if (matches) coverage++;
+      });
+      const obsInfo = { observerCount: coverage || (hopCounts[hop] || 1), observerTotal: totalObservers };
       if (srv && srv.pubkey) {
         const c = srv.candidates && srv.candidates[0];
         if (c && c.lat != null && c.lon != null && !(c.lat === 0 && c.lon === 0)) {
@@ -750,8 +812,32 @@
     if (origin && origin.pubkey) {
       const op = nodes.find(n => n.public_key.toLowerCase() === origin.pubkey.toLowerCase() ||
                                   n.public_key.toLowerCase().startsWith(origin.pubkey.toLowerCase()));
-      if (op && op.lat != null && op.lon != null) {
-        raw.unshift({ lat: op.lat, lon: op.lon, name: origin.name || op.name || 'Sender', pubkey: op.public_key, role: op.role || 'companion', resolved: true, isOrigin: true, observerCount: totalObservers, observerTotal: totalObservers });
+      if (op) {
+        const hasGps = op.lat != null && op.lon != null && !(op.lat === 0 && op.lon === 0);
+        if (hasGps) {
+          raw.unshift({ lat: op.lat, lon: op.lon, name: origin.name || op.name || 'Sender', pubkey: op.public_key, role: op.role || 'companion', resolved: true, isOrigin: true, observerCount: totalObservers, observerTotal: totalObservers });
+        } else {
+          raw.unshift({ name: origin.name || op.name || 'Sender', pubkey: op.public_key, role: op.role || 'companion', resolved: false, gpsless: true, isOrigin: true, observerCount: totalObservers, observerTotal: totalObservers });
+        }
+      } else if (origin.name) {
+        raw.unshift({ name: origin.name, pubkey: origin.pubkey, role: 'companion', resolved: false, isOrigin: true, observerCount: totalObservers, observerTotal: totalObservers });
+      }
+    }
+    // #1418 Phase D: append destination (recipient from decoded.destHash) so
+    // the route view shows: sender → [intermediate hops] → recipient.
+    // GPS-sanity: a lat=0,lon=0 sentinel or null coords means "no real GPS"
+    // — show the node in the sidebar as gpsless rather than drawing it at
+    // (0,0) which would force fitBounds to span SF→Africa.
+    if (opts.destination && opts.destination.pubkey) {
+      const dp = nodes.find(n => n.public_key.toLowerCase() === opts.destination.pubkey.toLowerCase() ||
+                                  n.public_key.toLowerCase().startsWith(opts.destination.pubkey.toLowerCase()));
+      if (dp) {
+        const hasGps = dp.lat != null && dp.lon != null && !(dp.lat === 0 && dp.lon === 0);
+        if (hasGps) {
+          raw.push({ lat: dp.lat, lon: dp.lon, name: opts.destination.name || dp.name || 'Recipient', pubkey: dp.public_key, role: dp.role || 'companion', resolved: true, observerCount: totalObservers, observerTotal: totalObservers });
+        } else {
+          raw.push({ name: opts.destination.name || dp.name || 'Recipient', pubkey: dp.public_key, role: dp.role || 'companion', resolved: false, gpsless: true, observerCount: totalObservers, observerTotal: totalObservers });
+        }
       }
     }
     raw[raw.length - 1].isDest = true;
@@ -766,11 +852,262 @@
         totalObservers: totalObservers,
         edgeCounts: edgeCounts,
         packetHash: opts.packetHash || null,
-        allPaths: paths
+        observationId: opts.observationId || null,
+        allPaths: paths,
+        packetContext: opts.packetContext || null
       });
     }
   }
   window.drawPacketRouteMulti = drawPacketRouteMulti;
+
+  // #1418/#1419: deep-link loader. Reads URL params
+  //   #/map?packet=<hash>&obs=<observation_id>
+  // fetches the packet+observations from /api/packets/<hash>, picks the
+  // selected observation as canonical, and dispatches the same payload that
+  // the packets-page 'View on map' button would have set in sessionStorage.
+  // Without an obs param, the first observation is used.
+  async function loadRouteFromDeepLink() {
+    try {
+      const hash = location.hash || '';
+      const qs = hash.split('?')[1];
+      if (!qs) return;
+      const params = new URLSearchParams(qs);
+      const packetHash = params.get('packet');
+      const obsId = params.get('obs');
+      if (!packetHash) return;
+      // Wait for nodes to load (drawPacketRoute / Multi rely on `nodes` array
+      // for the local-fallback resolver).
+      if (!nodes || !nodes.length) {
+        await new Promise(r => setTimeout(r, 600));
+      }
+      const resp = await fetch('/api/packets/' + encodeURIComponent(packetHash));
+      if (!resp.ok) {
+        console.warn('[deep-link] /api/packets/' + packetHash + ' returned ' + resp.status);
+        return;
+      }
+      const data = await resp.json();
+      const pkt = data.packet || data;
+      const observations = data.observations || pkt.observations || [];
+      if (!observations.length) return;
+      // Pick the user-chosen observation by id, fall back to first
+      let chosen = null;
+      if (obsId) chosen = observations.find(o => String(o.id) === String(obsId));
+      if (!chosen) chosen = observations[0];
+      // Parse decoded for src/dst.
+      // Try observation first, fall back to packet-level decoded_json (GRP_TXT
+      // / TRACE packets often have channel + content at the packet level, not
+      // per-observation).
+      let decoded = {};
+      try {
+        const obsDec = JSON.parse(chosen.decoded_json || '{}');
+        const pktDec = JSON.parse(pkt.decoded_json || '{}');
+        decoded = Object.keys(obsDec).length ? obsDec : pktDec;
+        // If observation has some fields but missing channel/text, merge from packet.
+        if (decoded === obsDec && pktDec.channel) {
+          decoded = Object.assign({}, pktDec, obsDec);
+        }
+      } catch (_) {}
+      const origin = {};
+      if (decoded.pubKey) origin.pubkey = decoded.pubKey;
+      else if (decoded.srcHash) origin.pubkey = decoded.srcHash;
+      if (decoded.adName || decoded.name) origin.name = decoded.adName || decoded.name;
+      const destination = decoded.destHash ? { pubkey: decoded.destHash } : null;
+      // Resolve the chosen observation's hops (canonical path).
+      // Priority: 1) server-side `resolved_path` (authoritative, eyeball-
+      // validated against packet detail), 2) client-side HopResolver (used
+      // by packets.js — does observer-IATA-aware geographic disambiguation),
+      // 3) raw prefixes (worst case, leaves naive lookup to drawPacketRoute).
+      let chosenPath = [];
+      let rawHops = [];
+      try { rawHops = JSON.parse(chosen.path_json || '[]'); } catch (_) {}
+      let resolvedHops = null;
+      try {
+        if (chosen.resolved_path) {
+          resolvedHops = typeof chosen.resolved_path === 'string' ? JSON.parse(chosen.resolved_path) : chosen.resolved_path;
+        }
+      } catch (_) {}
+      if (Array.isArray(resolvedHops) && resolvedHops.length === rawHops.length) {
+        chosenPath = rawHops.map((h, i) => resolvedHops[i] || h);
+      } else if (window.HopResolver && typeof window.HopResolver.resolve === 'function' && rawHops.length) {
+        // Use the SAME resolver the packets page uses, so route view and
+        // packet detail agree on hop identities.
+        try {
+          // Sender + observer hints help disambiguation
+          const senderLat = decoded.lat || decoded.latitude || null;
+          const senderLon = decoded.lon || decoded.longitude || null;
+          let obsLat = null, obsLon = null;
+          // Try to find observer's coords for geographic affinity scoring
+          if (chosen.observer_id && Array.isArray(nodes)) {
+            const obs = nodes.find(n => (n.public_key || '').toLowerCase() === String(chosen.observer_id).toLowerCase());
+            if (obs && obs.lat != null && obs.lon != null) { obsLat = obs.lat; obsLon = obs.lon; }
+          }
+          // HopResolver.init may already have been done by packets.js; if not,
+          // do a minimal init from window data we have.
+          if (!window.HopResolver.ready || !window.HopResolver.ready()) {
+            try {
+              window.HopResolver.init(nodes || [], { observers: [], iataCoords: {} });
+            } catch (_) {}
+          }
+          const resolveResult = window.HopResolver.resolve(rawHops, senderLat, senderLon, obsLat, obsLon, chosen.observer_id);
+          chosenPath = rawHops.map(h => {
+            const r = resolveResult ? resolveResult[h] : null;
+            return r && r.pubkey ? r.pubkey : h;
+          });
+        } catch (_) {
+          chosenPath = rawHops;
+        }
+      } else {
+        chosenPath = rawHops;
+      }
+      // All observation paths for multi-path stroke weighting
+      const allPaths = observations.map(o => {
+        let p = [];
+        try { p = JSON.parse(o.path_json || '[]'); } catch (_) {}
+        return { path: p, observer: o.observer_name, observer_id: o.observer_id, snr: o.snr, rssi: o.rssi };
+      }).filter(p => p.path && p.path.length > 0);
+      // #1418 Phase Y: derive packet context for the sidebar fact-list.
+      // type comes from decoded.type or pkt.payload_type. Resolve src/dst
+      // names from the nodes table when possible.
+      function resolveNameByHash(h) {
+        if (!h || !nodes || !nodes.length) return null;
+        const hL = String(h).toLowerCase();
+        const m = nodes.find(n => n.public_key.toLowerCase().startsWith(hL));
+        return m ? m.name : null;
+      }
+      // Map payload_type byte → string. Source: cmd/ingestor/decoder.go.
+      // 0=REQ, 1=RESPONSE, 2=TXT_MSG, 3=ACK, 4=ADVERT, 5=GRP_TXT,
+      // 6=GRP_DATA, 7=ANON_REQ, 8=PATH, 9=TRACE, 10=MULTIPART,
+      // 11=CONTROL, 12=RAW_CUSTOM.
+      const PAYLOAD_TYPE_MAP = {
+        0: 'REQ', 1: 'RESPONSE', 2: 'TXT_MSG', 3: 'ACK', 4: 'ADVERT',
+        5: 'GRP_TXT', 6: 'GRP_DATA', 7: 'ANON_REQ', 8: 'PATH',
+        9: 'TRACE', 10: 'MULTIPART', 11: 'CONTROL', 12: 'RAW_CUSTOM'
+      };
+      const inferredType = decoded.type || PAYLOAD_TYPE_MAP[pkt.payload_type] || 'OTHER';
+      // Try to peek at raw_hex bytes to extract src/destHash when decoded is empty.
+      // TXT_MSG/REQ/RESPONSE/ANON_REQ all have the same wire layout:
+      //   byte0=route+type, byte1=path_len, then path bytes, then destHash + srcHash + encrypted body.
+      // ANON_REQ doesn't have a srcHash byte (sender is anonymous), only destHash.
+      let inferredSrc = decoded.srcHash || null;
+      let inferredDst = decoded.destHash || null;
+      const TYPES_WITH_DST_SRC = [1, 2, 7, 8]; // RESPONSE=1, TXT_MSG=2, ANON_REQ=7, PATH=8 — all carry hashes
+      if ((!inferredSrc || !inferredDst) && chosen.raw_hex && TYPES_WITH_DST_SRC.indexOf(pkt.payload_type) >= 0) {
+        try {
+          const hex = chosen.raw_hex;
+          const pathLen = parseInt(hex.slice(2, 4), 16);
+          const destOff = 4 + pathLen * 2;
+          if (hex.length >= destOff + 2) {
+            inferredDst = inferredDst || hex.slice(destOff, destOff + 2).toUpperCase();
+            // ANON_REQ has no srcHash
+            if (pkt.payload_type !== 7 && hex.length >= destOff + 4) {
+              inferredSrc = inferredSrc || hex.slice(destOff + 2, destOff + 4).toUpperCase();
+            }
+          }
+        } catch (_) {}
+      }
+      // GRP_TXT: channel_hash byte sits right after path bytes in raw_hex.
+      // Layout: byte0=route+type, byte1=path_len, path bytes, channel_hash, encrypted body.
+      let inferredChannelHash = decoded.channelHashHex || null;
+      if (!inferredChannelHash && chosen.raw_hex && pkt.payload_type === 5) {
+        try {
+          const hex = chosen.raw_hex;
+          const pathLen = parseInt(hex.slice(2, 4), 16);
+          const chOff = 4 + pathLen * 2;
+          if (hex.length >= chOff + 2) {
+            inferredChannelHash = hex.slice(chOff, chOff + 2).toUpperCase();
+          }
+        } catch (_) {}
+      }
+      const pktCtx = {
+        type: inferredType,
+        decoded: Object.assign({}, decoded, { srcHash: inferredSrc, destHash: inferredDst, channelHashHex: inferredChannelHash || decoded.channelHashHex }),
+        payloadType: pkt.payload_type || null,
+        srcResolvedName: inferredSrc ? resolveNameByHash(inferredSrc) : null,
+        destResolvedName: inferredDst ? resolveNameByHash(inferredDst) : null,
+        observedHops: chosenPath.length,
+        observationCount: observations.length
+      };
+      // GRP_TXT: try to resolve the channel name from /api/channels.
+      if (inferredType === 'GRP_TXT' && inferredChannelHash) {
+        try {
+          const chResp = await fetch('/api/channels?includeEncrypted=true');
+          if (chResp.ok) {
+            const chData = await chResp.json();
+            const chList = chData.channels || [];
+            const wantUp = inferredChannelHash.toUpperCase();
+            // Match by:
+            //   1) hash field starts with target (full hex hash)
+            //   2) hash == "enc_<HEX>" (no-key fallback channels)
+            //   3) name contains "0x<HEX>" (encrypted placeholder)
+            //   4) for keyed channels: compute SHA256(name)[0] === target byte
+            //      (browser SubtleCrypto — async)
+            let match = chList.find(c => {
+              const ch = String(c.hash || '').toUpperCase();
+              const nm = String(c.name || '').toUpperCase();
+              return ch.startsWith(wantUp) ||
+                     ch === 'ENC_' + wantUp ||
+                     nm.includes('0X' + wantUp);
+            });
+            // If not matched and we have SubtleCrypto, try SHA256 lookup
+            if (!match && window.crypto && window.crypto.subtle) {
+              for (const c of chList) {
+                if (c.encrypted) continue; // skip the enc_ placeholders
+                const name = c.name || '';
+                if (!name) continue;
+                try {
+                  const buf = new TextEncoder().encode(name);
+                  const hashBuf = await window.crypto.subtle.digest('SHA-256', buf);
+                  const arr = new Uint8Array(hashBuf);
+                  const byteHex = arr[0].toString(16).padStart(2, '0').toUpperCase();
+                  if (byteHex === wantUp) { match = c; break; }
+                } catch (_) {}
+              }
+            }
+            if (match) {
+              const isEnc = !!match.encrypted || /^enc_/i.test(match.hash || '');
+              pktCtx.channelName = isEnc ? ('Encrypted (0x' + inferredChannelHash + ')') : (match.name || '#' + inferredChannelHash);
+              pktCtx.channelEncrypted = isEnc;
+              if (match.lastMessage && match.lastMessage !== 'Encrypted — click to decrypt') {
+                pktCtx.channelLastMessage = match.lastMessage;
+              }
+            }
+          }
+        } catch (_) {}
+        if (!pktCtx.channelName) {
+          pktCtx.channelName = 'channel 0x' + inferredChannelHash;
+        }
+        // Fetch decrypted text for this specific packet (only if not encrypted-only)
+        if (!pktCtx.channelEncrypted) {
+          try {
+            const cleanName = (pktCtx.channelName || '').replace(/^#/, '');
+            const msgResp = await fetch('/api/channels/' + encodeURIComponent(cleanName) + '/messages?limit=10');
+            if (msgResp.ok) {
+              const msgs = await msgResp.json();
+              const m = (msgs.messages || []).find(mm => mm.packet_hash === packetHash || mm.hash === packetHash);
+              if (m && (m.text || m.plainText)) pktCtx.decryptedText = m.text || m.plainText;
+            }
+          } catch (_) {}
+        }
+      }
+      if (allPaths.length === 0) {
+        // Nothing to render (every observation had empty path?) — bail.
+        return;
+      }
+      if (allPaths.length === 1) {
+        drawPacketRoute(chosenPath, origin, { destination: destination, packetHash: packetHash, observationId: obsId, packetContext: pktCtx });
+      } else {
+        drawPacketRouteMulti(allPaths, origin, {
+          packetHash: packetHash,
+          observationId: obsId,
+          canonicalPath: chosenPath,
+          destination: destination,
+          packetContext: pktCtx
+        });
+      }
+    } catch (e) {
+      console.warn('[deep-link] route load failed', e);
+    }
+  }
 
   async function loadNodes() {
     try {

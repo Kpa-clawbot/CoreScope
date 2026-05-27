@@ -3076,6 +3076,12 @@
           else if (decoded.srcHash) origin.pubkey = decoded.srcHash;
           if (decoded.adName || decoded.name) origin.name = decoded.adName || decoded.name;
           if (senderLat != null && senderLon != null) { origin.lat = senderLat; origin.lon = senderLon; }
+          // #1418 Phase D: also include the recipient (destHash) so the route
+          // displays as: sender → [intermediate hops] → recipient. Without
+          // this the destination node is invisible — operator only sees the
+          // last intermediate repeater.
+          const destination = {};
+          if (decoded.destHash) destination.pubkey = decoded.destHash;
           // #1418 Phase C: include ALL observations as alternate paths so the
           // route view can render union-of-edges with stroke-width weighting.
           // Each observation contributes its own path_json array.
@@ -3084,13 +3090,30 @@
             try { path = JSON.parse(o.path_json || '[]'); } catch (_) {}
             return { path: path, observer: o.observer_name, observer_id: o.observer_id, snr: o.snr, rssi: o.rssi };
           }).filter(p => p.path && p.path.length > 0);
-          sessionStorage.setItem('map-route-hops', JSON.stringify({
-            origin: origin,
-            hops: resolvedKeys,
-            paths: allPaths,
-            packetHash: pkt.hash || pkt.packet_hash
-          }));
-          window.location.hash = '#/map?route=1';
+          // #1418/#1419: navigate via deep-link URL only. The map page's
+          // loadRouteFromDeepLink() re-fetches the packet from the API and
+          // builds the full payload (incl. packetContext) consistently.
+          // SessionStorage was unreliable — the deep-link path includes
+          // packetContext but the sessionStorage payload didn't, leading
+          // to missing chip + facts when entered from the packets page.
+          const obsId = currentObs ? currentObs.id : (observations[0] && observations[0].id);
+          const pkHash = pkt.hash || pkt.packet_hash;
+          const obsPart = obsId ? '&obs=' + encodeURIComponent(obsId) : '';
+          // Tufte audit fix: close ALL mobile packet panels so operator lands
+          // on the route view, not behind a still-visible detail sheet.
+          // Three different panels exist depending on viewport + flow:
+          //   - #pktRight (desktop split-pane)
+          //   - .slide-over-panel (mid-width SlideOver)
+          //   - #mobileDetailSheet (small-mobile bottom sheet)
+          if (window.innerWidth <= 767) {
+            try { closeDetailPanel(); } catch (_) {}
+            try { if (window.SlideOver && window.SlideOver.close) window.SlideOver.close(); } catch (_) {}
+            try {
+              const sheet = document.getElementById('mobileDetailSheet');
+              if (sheet) sheet.classList.remove('open');
+            } catch (_) {}
+          }
+          window.location.hash = '#/map?packet=' + encodeURIComponent(pkHash) + obsPart;
         } catch {
           window.location.hash = '#/map';
         }
