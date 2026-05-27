@@ -107,12 +107,12 @@ var readProcSelfIOFn = readProcSelfIO
 // readProcSelfIO parses /proc/self/io. Returns ok=false on non-Linux hosts or
 // any read/parse failure (caller skips the procIO block in that case).
 func readProcSelfIO() procIOSnapshot {
-	out := procIOSnapshot{at: time.Now()}
 	f, err := os.Open("/proc/self/io")
 	if err != nil {
-		return out
+		return procIOSnapshot{}
 	}
 	defer f.Close()
+	out := procIOSnapshot{at: time.Now()}
 	parseProcSelfIOInto(bufio.NewScanner(f), &out)
 	return out
 }
