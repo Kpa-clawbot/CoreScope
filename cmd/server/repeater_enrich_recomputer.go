@@ -88,9 +88,9 @@ func (s *PacketStore) StartRepeaterEnrichmentRecomputer(windowHours float64, int
 // background goroutine (the previous snapshot remains valid).
 func recomputeRepeaterEnrichmentSafe(s *PacketStore, windowHours float64) {
 	defer func() { _ = recover() }()
-	// Bypass the 15s-TTL gate by forcing a fresh recompute and
-	// installing the result. The public Get* helpers would return the
-	// existing cache when within TTL; we want to refresh proactively.
+	// Write directly to the cache fields under mutex rather than going
+	// through the public Get* helpers — those return the existing
+	// non-nil cache immediately, so calling them here would be a no-op.
 	relay := s.computeRepeaterRelayInfoMap(windowHours)
 	useful := s.computeRepeaterUsefulnessScoreMap()
 	now := time.Now()

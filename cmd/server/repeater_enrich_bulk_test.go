@@ -81,11 +81,8 @@ func TestGetRepeaterRelayInfoMap_BuildsWhenNil(t *testing.T) {
 		t.Fatal("inline compute did not produce entry for seeded hop key")
 	}
 
-	// Second call must return the same cached map (pointer equality).
+	// Second call must return the cached result, not a fresh recompute.
 	got2 := store.GetRepeaterRelayInfoMap(24)
-	if &got2 == &got {
-		// map headers differ but underlying pointers should be identical
-	}
 	if got2["aabbcc"].RelayCount24h != got["aabbcc"].RelayCount24h {
 		t.Fatal("second call returned different map — cache not installed")
 	}
