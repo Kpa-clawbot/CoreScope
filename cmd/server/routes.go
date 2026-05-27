@@ -1789,15 +1789,15 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	sort.Slice(paths, func(i, j int) bool {
-		if paths[i].Count == paths[j].Count {
-			li := ""
-			lj := ""
-			if paths[i].LastSeen != nil {
-				li = fmt.Sprintf("%v", paths[i].LastSeen)
-			}
-			if paths[j].LastSeen != nil {
-				lj = fmt.Sprintf("%v", paths[j].LastSeen)
-			}
+		li := ""
+		lj := ""
+		if paths[i].LastSeen != nil {
+			li = fmt.Sprintf("%v", paths[i].LastSeen)
+		}
+		if paths[j].LastSeen != nil {
+			lj = fmt.Sprintf("%v", paths[j].LastSeen)
+		}
+		if li != lj {
 			return li > lj
 		}
 		return paths[i].Count > paths[j].Count
