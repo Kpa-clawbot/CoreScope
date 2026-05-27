@@ -114,6 +114,14 @@ console.log('\n=== #1438 E: roles.js setRoleColorOverride writes --mc-role-* ===
   if (fnMatch) {
     assert(/--mc-role-/.test(fnMatch[0]),
       'setRoleColorOverride body writes --mc-role-{role} CSS var');
+    // Follow-up: cb-presets ships stylesheet rules of the form
+    //   body[data-cb-preset="X"] { --mc-role-Y: ...; }
+    // which beat inheritance from :root. The override helper MUST
+    // write to body.style.setProperty too, otherwise the customizer
+    // picks remain invisible after a preset switch.
+    assert(/document\.body/.test(fnMatch[0]) ||
+           /body\.style/.test(rolesSrc.slice(rolesSrc.indexOf('_styleTargets'), rolesSrc.indexOf('_styleTargets') + 600)),
+      'setRoleColorOverride writes to document.body.style (beats body[data-cb-preset] cascade)');
   }
 }
 

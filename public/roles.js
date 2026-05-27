@@ -90,39 +90,55 @@
   // that want to override at runtime (customizer "node colors" path).
   // #1438: snapshot of the cb-preset (or initial) CSS-var value per role
   // so that clearing an override restores the preset, not nothing.
+  // We write the override to BOTH documentElement and body inline styles
+  // because cb-presets ships stylesheet rules of the form
+  //   body[data-cb-preset="deut"] { --mc-role-X: #...; }
+  // which beats inheritance from :root. Body inline beats both.
   var _presetCssSnapshot = {};
+  function _styleTargets() {
+    var t = [];
+    try { if (document.documentElement && document.documentElement.style) t.push(document.documentElement.style); } catch (e) {}
+    try { if (document.body && document.body.style) t.push(document.body.style); } catch (e) {}
+    return t.filter(function (s) { return s && typeof s.setProperty === 'function'; });
+  }
   window.setRoleColorOverride = function (role, hex) {
     if (!role) return;
-    var rootStyle = null;
-    try { rootStyle = document.documentElement && document.documentElement.style; }
-    catch (e) { /* SSR */ }
+    var targets = _styleTargets();
+    var varName = '--mc-role-' + role;
 
     if (hex == null || hex === '') {
-      // Clear override → restore prior CSS var value (the preset's
-      // value when the override was first set), so CSS-var consumers
-      // see the preset color again — matching the JS getter behavior.
+      // Clear override → restore prior CSS var values captured at
+      // first-override time, so CSS-var consumers see the preset color
+      // again (matches JS getter behavior, preserves #1412 contract).
       delete _roleOverrides[role];
-      if (rootStyle && Object.prototype.hasOwnProperty.call(_presetCssSnapshot, role)) {
-        var prior = _presetCssSnapshot[role];
-        if (prior) rootStyle.setProperty('--mc-role-' + role, prior);
-        else rootStyle.removeProperty('--mc-role-' + role);
+      if (Object.prototype.hasOwnProperty.call(_presetCssSnapshot, role)) {
+        var snap = _presetCssSnapshot[role] || {};
+        targets.forEach(function (s, i) {
+          var prior = snap[i];
+          if (prior && prior.length) s.setProperty(varName, prior);
+          else s.removeProperty(varName);
+        });
         delete _presetCssSnapshot[role];
+      } else {
+        targets.forEach(function (s) { s.removeProperty(varName); });
       }
       return;
     }
-    // Capture the current CSS var (preset / default) before overwriting,
+    // Capture the current per-target CSS var values before overwriting,
     // but only on the first override for this role so repeated picks
     // don't lose the original preset value.
-    if (rootStyle && !Object.prototype.hasOwnProperty.call(_presetCssSnapshot, role)) {
-      _presetCssSnapshot[role] = rootStyle.getPropertyValue
-        ? (rootStyle.getPropertyValue('--mc-role-' + role) || '').trim()
-        : '';
+    if (!Object.prototype.hasOwnProperty.call(_presetCssSnapshot, role)) {
+      _presetCssSnapshot[role] = targets.map(function (s) {
+        return s.getPropertyValue ? (s.getPropertyValue(varName) || '').trim() : '';
+      });
     }
     _roleOverrides[role] = hex;
     // #1438: drive the CSS var so CSS-var consumers (cluster pills,
-    // route lines, all marker SVGs that now use fill="var(--mc-role-X)")
-    // pick up the operator's hex without a page reload.
-    if (rootStyle) rootStyle.setProperty('--mc-role-' + role, hex);
+    // route lines, all marker SVGs that use fill="var(--mc-role-X)")
+    // pick up the operator's hex without a page reload. Writing to
+    // body inline style is necessary because body[data-cb-preset="..."]
+    // selectors beat :root inheritance.
+    targets.forEach(function (s) { s.setProperty(varName, hex); });
   };
   // Back-compat: also export the writable override map so customize.js's
   // `window.ROLE_COLORS[key] = inp.value` style mutation works.
