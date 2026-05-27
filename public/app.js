@@ -859,6 +859,51 @@ const pages = {};
 
 function registerPage(name, mod) { pages[name] = mod; }
 
+// --- Lazy-loaded page bundles ---
+// Pages that aren't on the critical path of typical sessions (Audio Lab,
+// for now) get their scripts dynamically appended on first navigation
+// instead of loaded eagerly from index.html. Saves ~80 KB compressed off
+// every page load that doesn't visit them.
+//
+// Scripts MUST be listed in execution order: dependencies (the engine)
+// first, then plug-ins (voices), then the page that consumes them.
+const lazyPageScripts = {
+  'audio-lab': [
+    'audio.js',
+    'audio-v1-constellation.js',
+    'audio-v2-pulse.js',
+    'audio-v3-drone.js',
+    'audio-v4-chiptune.js',
+    'audio-v5-blaster.js',
+    'audio-v6-warzone.js',
+    'audio-v7-nggyu.js',
+    'audio-lab.js',
+  ],
+};
+const _lazyPageLoaded = new Set();
+function loadLazyPageScripts(name) {
+  if (_lazyPageLoaded.has(name)) return Promise.resolve();
+  const list = lazyPageScripts[name];
+  if (!list || !list.length) return Promise.resolve();
+  // Load sequentially so the engine is ready before its voice modules
+  // register, and the voice modules are present before audio-lab tries
+  // to enumerate them.
+  let chain = Promise.resolve();
+  list.forEach(function (src) {
+    chain = chain.then(function () {
+      return new Promise(function (resolve) {
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = false;
+        s.onload = function () { resolve(); };
+        s.onerror = function () { console.error('[lazy] failed to load', src); resolve(); };
+        document.head.appendChild(s);
+      });
+    });
+  });
+  return chain.then(function () { _lazyPageLoaded.add(name); });
+}
+
 // Tools landing page — shows sub-menu with all tools.
 registerPage('tools-landing', {
   init: function (container) {
@@ -978,6 +1023,17 @@ function navigate() {
     var moreMenu = document.getElementById('navMoreMenu');
     var hasActiveMore = moreMenu && moreMenu.querySelector('.nav-link.active');
     moreBtn.classList.toggle('active', !!hasActiveMore);
+  }
+
+  // Lazy-loaded pages: fetch the bundle on first visit, then re-run navigate.
+  // We tear down the current page first so it stops running while we wait.
+  if (lazyPageScripts[basePage] && !pages[basePage]) {
+    if (currentPage && pages[currentPage]?.destroy) pages[currentPage].destroy();
+    currentPage = null;
+    const appEl = document.getElementById('app');
+    if (appEl) appEl.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading…</div>';
+    loadLazyPageScripts(basePage).then(navigate);
+    return;
   }
 
   if (currentPage && pages[currentPage]?.destroy) {

@@ -172,15 +172,45 @@
    * camera on resolve/reject. Resolves with `null` if user cancels or
    * camera permission is denied (graceful fallback path).
    */
+  // jsqr.min.js is ~257 KB decoded and only needed when the QR camera
+  // scanner actually opens. We lazy-load it here so every other page load
+  // skips the download. Cached after first use.
+  let _jsqrLoadPromise = null;
+  function _loadJsqr() {
+    if (typeof root.jsQR === 'function') return Promise.resolve(true);
+    if (_jsqrLoadPromise) return _jsqrLoadPromise;
+    _jsqrLoadPromise = new Promise(function (resolve) {
+      const s = document.createElement('script');
+      // No ?v= cache-bust here on purpose: vendored, never changes between
+      // releases, and the immutable cache-control on /vendor/* makes browsers
+      // reuse it across redeploys.
+      s.src = 'vendor/jsqr.min.js';
+      s.async = true;
+      s.onload = function () { resolve(typeof root.jsQR === 'function'); };
+      s.onerror = function () { resolve(false); };
+      document.head.appendChild(s);
+    });
+    return _jsqrLoadPromise;
+  }
+
   function scan() {
     if (!_hasDom()) return Promise.resolve(null);
     const nav = root.navigator;
-    if (!nav || !nav.mediaDevices || !nav.mediaDevices.getUserMedia ||
-        typeof root.jsQR !== 'function') {
+    if (!nav || !nav.mediaDevices || !nav.mediaDevices.getUserMedia) {
       _showCameraFallback();
       return Promise.resolve(null);
     }
 
+    return _loadJsqr().then(function (ok) {
+      if (!ok) {
+        _showCameraFallback();
+        return null;
+      }
+      return _scanWithJsqr();
+    });
+  }
+
+  function _scanWithJsqr() {
     return new Promise(function (resolve) {
       const overlay = document.createElement('div');
       overlay.className = 'channel-qr-scan-overlay';

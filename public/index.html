@@ -138,7 +138,8 @@
   <script defer src="vendor/aes-ecb.js?v=__BUST__"></script>
   <script defer src="vendor/sha256-hmac.js?v=__BUST__"></script>
   <script defer src="channel-decrypt.js?v=__BUST__"></script>
-  <script defer src="vendor/jsqr.min.js"></script>
+  <!-- vendor/jsqr.min.js (~257 KB decoded) is now lazy-loaded by
+       channel-qr.js when the user actually opens the QR camera modal. -->
   <script defer src="channel-qr.js?v=__BUST__"></script>
   <script defer src="channel-colors.js?v=__BUST__"></script>
   <script defer src="channel-color-picker.js?v=__BUST__"></script>
@@ -150,15 +151,9 @@
   <script defer src="traces.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script defer src="path-inspector.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script defer src="analytics.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script defer src="audio.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script defer src="audio-v1-constellation.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script defer src="audio-v2-pulse.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script defer src="audio-v3-drone.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script defer src="audio-v4-chiptune.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script defer src="audio-v5-blaster.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script defer src="audio-v6-warzone.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script defer src="audio-v7-nggyu.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
-  <script defer src="audio-lab.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
+  <!-- audio.js + audio-v*.js voice modules + audio-lab.js (combined ~80 KB
+       compressed) are lazy-loaded by app.js's navigate() on first visit to
+       #/audio-lab. See lazyPageScripts['audio-lab']. -->
   <script defer src="drag-manager.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script defer src="live.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>
   <script defer src="observers.js?v=__BUST__" onerror="console.error('Failed to load:', this.src)"></script>

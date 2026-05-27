@@ -1494,6 +1494,25 @@ func (s *Server) startPerfHistoryCollector() func() {
 
 // --- Packet Handlers ---
 
+// maxPacketsLimit caps the per-request packet result size. Clients have been
+// observed asking for ?limit=50000 (the grouped-packets view on the Live page)
+// which builds enormous JSON responses and hammers the in-memory store. 5000
+// is well above any reasonable UI page (the frontend renders 25-50 at a time)
+// and gives bulk consumers a clear hard ceiling instead of an open-ended one.
+const maxPacketsLimit = 5000
+
+// clampLimit reads `?limit=N` with a default and clamps to maxPacketsLimit.
+func clampLimit(r *http.Request, defaultLimit int) int {
+	v := queryInt(r, "limit", defaultLimit)
+	if v > maxPacketsLimit {
+		return maxPacketsLimit
+	}
+	if v < 1 {
+		return 1
+	}
+	return v
+}
+
 func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 	// Multi-node filter: comma-separated pubkeys (Node.js parity)
 	if nodesParam := r.URL.Query().Get("nodes"); nodesParam != "" {
@@ -1513,11 +1532,11 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		var err error
 		if s.store != nil {
 			result = s.store.QueryMultiNodePackets(cleaned,
-				queryInt(r, "limit", 50), queryInt(r, "offset", 0),
+				clampLimit(r, 50), queryInt(r, "offset", 0),
 				order, r.URL.Query().Get("since"), r.URL.Query().Get("until"))
 		} else {
 			result, err = s.db.QueryMultiNodePackets(cleaned,
-				queryInt(r, "limit", 50), queryInt(r, "offset", 0),
+				clampLimit(r, 50), queryInt(r, "offset", 0),
 				order, r.URL.Query().Get("since"), r.URL.Query().Get("until"))
 		}
 		if err != nil {
@@ -1527,14 +1546,14 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, PacketListResponse{
 			Packets: mapSliceToTransmissions(result.Packets),
 			Total:   result.Total,
-			Limit:   queryInt(r, "limit", 50),
+			Limit:   clampLimit(r, 50),
 			Offset:  queryInt(r, "offset", 0),
 		})
 		return
 	}
 
 	q := PacketQuery{
-		Limit:              queryInt(r, "limit", 50),
+		Limit:              clampLimit(r, 50),
 		Offset:             queryInt(r, "offset", 0),
 		Observer:           r.URL.Query().Get("observer"),
 		Hash:               r.URL.Query().Get("hash"),
@@ -1882,6 +1901,9 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) buildNodesResponse(r *http.Request) ([]byte, error) {
 	q := r.URL.Query()
+	// /api/nodes accepts limits up to the node count (Map page asks for 10000
+	// to plot every node). The handlePackets clamp doesn't apply here — there
+	// is no per-node bloat concern equivalent to per-packet observations.
 	nodes, total, counts, err := s.db.GetNodes(
 		queryInt(r, "limit", 50),
 		queryInt(r, "offset", 0),
@@ -2142,7 +2164,7 @@ func (s *Server) handleNodeHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBulkHealth(w http.ResponseWriter, r *http.Request) {
-	limit := queryInt(r, "limit", 50)
+	limit := clampLimit(r, 50)
 	if limit > 200 {
 		limit = 200
 	}
