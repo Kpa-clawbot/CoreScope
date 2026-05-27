@@ -3076,9 +3076,19 @@
           else if (decoded.srcHash) origin.pubkey = decoded.srcHash;
           if (decoded.adName || decoded.name) origin.name = decoded.adName || decoded.name;
           if (senderLat != null && senderLon != null) { origin.lat = senderLat; origin.lon = senderLon; }
+          // #1418 Phase C: include ALL observations as alternate paths so the
+          // route view can render union-of-edges with stroke-width weighting.
+          // Each observation contributes its own path_json array.
+          const allPaths = (observations || []).map(o => {
+            let path = [];
+            try { path = JSON.parse(o.path_json || '[]'); } catch (_) {}
+            return { path: path, observer: o.observer_name, observer_id: o.observer_id, snr: o.snr, rssi: o.rssi };
+          }).filter(p => p.path && p.path.length > 0);
           sessionStorage.setItem('map-route-hops', JSON.stringify({
             origin: origin,
-            hops: resolvedKeys
+            hops: resolvedKeys,
+            paths: allPaths,
+            packetHash: pkt.hash || pkt.packet_hash
           }));
           window.location.hash = '#/map?route=1';
         } catch {

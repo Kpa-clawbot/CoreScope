@@ -502,9 +502,12 @@
         sessionStorage.removeItem('map-route-hops');
         try {
           const parsed = JSON.parse(routeHopsJson);
-          // Support new format {origin, hops} and legacy plain array
+          // Support new format {origin, hops, paths} (multi-path #1418), legacy
+          // {origin, hops} (single-path), and plain hops[] array.
           if (Array.isArray(parsed)) {
             drawPacketRoute(parsed, null);
+          } else if (parsed.paths && parsed.paths.length > 0) {
+            drawPacketRouteMulti(parsed.paths, parsed.origin || null, { packetHash: parsed.packetHash });
           } else {
             drawPacketRoute(parsed.hops || [], parsed.origin || null);
           }
@@ -513,7 +516,7 @@
     });
   }
 
-  function drawPacketRoute(hopKeys, origin, opts) {
+  async function drawPacketRoute(hopKeys, origin, opts) {
     // Defensive: origin must be an object with pubkey/lat/lon/name. A bare
     // string slips through both branches at lines below and silently no-ops
     // the originator marker (caused PR #950's bug). Coerce string → object
@@ -523,6 +526,21 @@
       origin = { pubkey: origin };
     }
     opts = opts || {};
+    // #1422: use the backend's /api/resolve-hops for proper disambiguation
+    // (unique_prefix vs multi-byte vs gps_preference vs affinity scoring).
+    // Falls back to naive nodes.filter() scan if the API is unreachable.
+    let serverResolved = null;
+    try {
+      const hopList = (hopKeys || []).join(',');
+      const apiUrl = '/api/resolve-hops?hops=' + encodeURIComponent(hopList);
+      const resp = await fetch(apiUrl, { cache: 'no-cache' });
+      if (resp.ok) {
+        const json = await resp.json();
+        serverResolved = json && json.resolved ? json.resolved : null;
+      }
+    } catch (e) {
+      console.warn('resolve-hops API call failed, falling back to local nodes scan', e);
+    }
     // Hide default markers so only the route is visible
     if (markerLayer) map.removeLayer(markerLayer);
     if (clusterGroup) map.removeLayer(clusterGroup);
@@ -555,18 +573,42 @@
     // Unresolvable hops (no matching node) become {resolved:false} sentinels
     // so the modern renderer (#1374) can render dashed-gray placeholders + a
     // "X of N hops resolved" badge instead of silently dropping them.
+    //
+    // #1418/#1422: PREFER serverResolved from /api/resolve-hops which does
+    //   - unique_prefix matching (uses multi-byte adverts to disambiguate 1-byte hops)
+    //   - gps_preference (skips nodes with lat=0 sentinel)
+    //   - affinity scoring (neighbor-graph aware)
+    // Fall back to a naive local nodes.filter() scan when the API failed or
+    // the hop wasn't in the server response. When a node MATCHES by
+    // prefix/pubkey but has no GPS coords, we still want its name/role/pubkey
+    // for the sidebar — flag it as {resolved:false, gpsless:true} so the
+    // renderer can label it "📍 no GPS" instead of "unresolved prefix".
     const raw = hopKeys.map(hop => {
       const hopLower = String(hop).toLowerCase();
-      const candidates = nodes.filter(n => {
+      // Try server resolution first
+      const srv = serverResolved && (serverResolved[hop] || serverResolved[hopLower] || serverResolved[hop.toUpperCase()]);
+      if (srv && srv.pubkey) {
+        const c = srv.candidates && srv.candidates[0];
+        if (c && c.lat != null && c.lon != null && !(c.lat === 0 && c.lon === 0)) {
+          return { lat: c.lat, lon: c.lon, name: srv.name || c.name || hop.slice(0,8), pubkey: srv.pubkey, role: c.role, resolved: true };
+        }
+        // Server resolved but node has no usable GPS
+        return { name: srv.name || hop.slice(0,8), pubkey: srv.pubkey, role: (c && c.role) || null, resolved: false, gpsless: true };
+      }
+      // Fallback: naive local scan (kept for resilience when API is down).
+      const allMatches = nodes.filter(n => {
         const pk = n.public_key.toLowerCase();
-        return (pk === hopLower || pk.startsWith(hopLower) || hopLower.startsWith(pk)) &&
-          n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0);
+        return (pk === hopLower || pk.startsWith(hopLower) || hopLower.startsWith(pk));
       });
-      if (candidates.length === 1) {
-        const c = candidates[0];
+      const withGps = allMatches.filter(n => n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0));
+      if (withGps.length === 1) {
+        const c = withGps[0];
         return { lat: c.lat, lon: c.lon, name: c.name || hop.slice(0,8), pubkey: c.public_key, role: c.role, resolved: true };
-      } else if (candidates.length > 1) {
-        return { name: hop.slice(0,8), pubkey: hop, resolved: false, candidates };
+      } else if (withGps.length > 1) {
+        return { name: hop.slice(0,8), pubkey: hop, resolved: false, candidates: withGps };
+      } else if (allMatches.length >= 1) {
+        const c = allMatches[0];
+        return { name: c.name || hop.slice(0,8), pubkey: c.public_key, role: c.role, resolved: false, gpsless: true };
       }
       return { name: String(hop).slice(0, 8), pubkey: hop, resolved: false };
     });
@@ -610,8 +652,15 @@
     // Mark final hop as destination so the renderer applies the dest glyph.
     positions[positions.length - 1].isDest = true;
 
-    // Hand off to the modern role-aware renderer (#1374). Falls back to the
-    // legacy minimal renderer only if MeshRoute hasn't loaded yet.
+    // Hand off to Tufte-prescribed sequence-primary renderer (#1418), falling
+    // back to the legacy role-aware MeshRoute (#1374), then to the minimal
+    // polyline (should never run in production).
+    if (window.MeshRouteTufte && typeof window.MeshRouteTufte.render === 'function') {
+      window.MeshRouteTufte.render(map, routeLayer, positions, {
+        timestamp: opts.timestamp || Date.now()
+      });
+      return;
+    }
     if (window.MeshRoute && typeof window.MeshRoute.render === 'function') {
       window.MeshRoute.render(map, routeLayer, positions, {
         timestamp: opts.timestamp || Date.now()
@@ -628,6 +677,100 @@
       map.setView(coords[0], 13);
     }
   }
+
+  // #1418 Phase C — multi-path renderer. Accepts an array of paths (each =
+  // {path: [hopKeys], observer, snr, rssi}), aggregates into canonical hops +
+  // per-edge observer-count (for stroke-width weighting), and dispatches to
+  // the Tufte renderer with multi-path metadata. Falls back to single-path
+  // drawPacketRoute when only one observation is provided.
+  async function drawPacketRouteMulti(paths, origin, opts) {
+    opts = opts || {};
+    if (typeof origin === 'string') origin = { pubkey: origin };
+    if (!Array.isArray(paths) || paths.length === 0) return;
+    if (paths.length === 1) {
+      return drawPacketRoute(paths[0].path || [], origin, opts);
+    }
+
+    // Canonical sequence = longest path (acts as the spine; shorter paths are subsets).
+    const sortedByLen = paths.slice().sort((a, b) => (b.path || []).length - (a.path || []).length);
+    const canonicalPath = sortedByLen[0].path || [];
+    const totalObservers = paths.length;
+
+    // Count hop & edge occurrences across all paths.
+    const hopCounts = {};
+    const edgeCounts = {};
+    paths.forEach(p => {
+      const hops = p.path || [];
+      hops.forEach(h => { hopCounts[h] = (hopCounts[h] || 0) + 1; });
+      for (let i = 0; i < hops.length - 1; i++) {
+        const key = hops[i] + '\u2192' + hops[i + 1];
+        edgeCounts[key] = (edgeCounts[key] || 0) + 1;
+      }
+    });
+
+    // Resolve canonical hops via /api/resolve-hops + naive fallback.
+    let serverResolved = null;
+    try {
+      const apiUrl = '/api/resolve-hops?hops=' + encodeURIComponent(canonicalPath.join(','));
+      const resp = await fetch(apiUrl, { cache: 'no-cache' });
+      if (resp.ok) {
+        const json = await resp.json();
+        serverResolved = json && json.resolved ? json.resolved : null;
+      }
+    } catch (e) {}
+
+    const raw = canonicalPath.map(hop => {
+      const hopLower = String(hop).toLowerCase();
+      const srv = serverResolved && (serverResolved[hop] || serverResolved[hopLower] || serverResolved[hop.toUpperCase()]);
+      const obsInfo = { observerCount: hopCounts[hop] || 1, observerTotal: totalObservers };
+      if (srv && srv.pubkey) {
+        const c = srv.candidates && srv.candidates[0];
+        if (c && c.lat != null && c.lon != null && !(c.lat === 0 && c.lon === 0)) {
+          return Object.assign({ lat: c.lat, lon: c.lon, name: srv.name || c.name || hop.slice(0,8), pubkey: srv.pubkey, role: c.role, resolved: true }, obsInfo);
+        }
+        return Object.assign({ name: srv.name || hop.slice(0,8), pubkey: srv.pubkey, role: (c && c.role) || null, resolved: false, gpsless: true }, obsInfo);
+      }
+      const allMatches = nodes.filter(n => {
+        const pk = n.public_key.toLowerCase();
+        return (pk === hopLower || pk.startsWith(hopLower) || hopLower.startsWith(pk));
+      });
+      const withGps = allMatches.filter(n => n.lat != null && n.lon != null && !(n.lat === 0 && n.lon === 0));
+      if (withGps.length >= 1) {
+        const c = withGps[0];
+        return Object.assign({ lat: c.lat, lon: c.lon, name: c.name || hop.slice(0,8), pubkey: c.public_key, role: c.role, resolved: true }, obsInfo);
+      }
+      if (allMatches.length >= 1) {
+        const c = allMatches[0];
+        return Object.assign({ name: c.name || hop.slice(0,8), pubkey: c.public_key, role: c.role, resolved: false, gpsless: true }, obsInfo);
+      }
+      return Object.assign({ name: String(hop).slice(0,8), pubkey: hop, resolved: false }, obsInfo);
+    });
+
+    if (raw.length < 1) return;
+    if (origin && origin.pubkey) {
+      const op = nodes.find(n => n.public_key.toLowerCase() === origin.pubkey.toLowerCase() ||
+                                  n.public_key.toLowerCase().startsWith(origin.pubkey.toLowerCase()));
+      if (op && op.lat != null && op.lon != null) {
+        raw.unshift({ lat: op.lat, lon: op.lon, name: origin.name || op.name || 'Sender', pubkey: op.public_key, role: op.role || 'companion', resolved: true, isOrigin: true, observerCount: totalObservers, observerTotal: totalObservers });
+      }
+    }
+    raw[raw.length - 1].isDest = true;
+    if (raw[0]) raw[0].isOrigin = true;
+
+    if (routeLayer) routeLayer.clearLayers();
+
+    if (window.MeshRouteTufte && typeof window.MeshRouteTufte.render === 'function') {
+      window.MeshRouteTufte.render(map, routeLayer, raw, {
+        timestamp: opts.timestamp || Date.now(),
+        multiPath: true,
+        totalObservers: totalObservers,
+        edgeCounts: edgeCounts,
+        packetHash: opts.packetHash || null,
+        allPaths: paths
+      });
+    }
+  }
+  window.drawPacketRouteMulti = drawPacketRouteMulti;
 
   async function loadNodes() {
     try {

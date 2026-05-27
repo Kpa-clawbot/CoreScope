@@ -1,0 +1,257 @@
+/* route-tufte.css — Tufte-style route view layout + styling. */
+
+body.mc-route-active #leaflet-map { left: 320px !important; width: calc(100% - 320px) !important; }
+
+/* Hide the Map Controls panel entirely during route view — its filters
+   (clustering, byte-size, neighbors, etc.) don't apply to a single route
+   and the panel covers ~20% of the visible map. The route close button
+   restores it on exit. */
+body.mc-route-active .map-controls,
+body.mc-route-active .map-controls-toggle { display: none !important; }
+
+/* Hide regular node clusters and topology markers during route view so the
+   route polyline + its own markers aren't lost in a 600-node mesh. The route
+   layer's own markers use .mc-rt-marker-icon and are NOT hidden. */
+body.mc-route-active .leaflet-marker-pane .meshcore-marker { display: none !important; }
+body.mc-route-active .leaflet-marker-pane .meshcore-label-marker { display: none !important; }
+body.mc-route-active .leaflet-marker-pane .marker-cluster { display: none !important; }
+/* Hide overlay-pane SVG paths that aren't part of the route. The route's
+   own polylines have class="mc-rt-edge". */
+body.mc-route-active .leaflet-overlay-pane svg path:not(.mc-rt-edge) { display: none !important; }
+
+.mc-rt-sidebar {
+  position: fixed;
+  top: 52px; /* below top-nav */
+  left: 0;
+  bottom: 0;
+  width: 320px;
+  background: var(--surface, #1a1a1a);
+  border-right: 1px solid var(--border, #333);
+  color: var(--text, #e7e7e7);
+  font: 13px/1.4 system-ui, -apple-system, sans-serif;
+  display: flex;
+  flex-direction: column;
+  z-index: 500;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.4);
+}
+
+.mc-rt-header {
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border, #333);
+  position: relative;
+}
+.mc-rt-title { font-size: 14px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-muted, #94a3b8); }
+.mc-rt-meta { font-size: 11px; color: var(--text-muted, #94a3b8); margin-top: 2px; }
+.mc-rt-multipath-chip {
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: var(--surface-2, #232323);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text, #cbd5e1);
+  font-family: ui-monospace, Menlo, monospace;
+}
+.mc-rt-multipath-chip b { color: var(--text, #fff); }
+.mc-rt-spark-wrap {
+  margin: 8px 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mc-rt-spark-title {
+  font-size: 10px;
+  color: var(--text-muted, #94a3b8);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.mc-rt-spark-title b { color: var(--text, #e7e7e7); font-weight: 600; }
+.mc-rt-spark { display: block; cursor: pointer; }
+.mc-rt-spark-dot { cursor: pointer; }
+.mc-rt-spark-dot:hover { r: 3; }
+.mc-rt-spark-tooltip {
+  position: absolute;
+  background: var(--surface-2, #2a2a2a);
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font: 11px ui-monospace, Menlo, monospace;
+  color: var(--text, #e7e7e7);
+  pointer-events: none;
+  z-index: 9999;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+}
+.mc-rt-close {
+  position: absolute; top: 10px; right: 10px;
+  background: transparent; border: 1px solid var(--border, #333);
+  color: var(--text, #e7e7e7); border-radius: 4px;
+  width: 26px; height: 26px; cursor: pointer; font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+}
+.mc-rt-close:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
+
+.mc-rt-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; flex: 1; }
+.mc-rt-pinned { padding: 2px 0; }
+.mc-rt-pinned-top { border-bottom: 1px solid var(--border, #333); }
+.mc-rt-pinned-bottom { border-top: 1px solid var(--border, #333); }
+.mc-rt-pinned .mc-rt-row { background: var(--surface-2, #232323); font-weight: 600; }
+.mc-rt-pinned .mc-rt-row::before {
+  content: '';
+  display: inline-block;
+  font-size: 9px; letter-spacing: 1px;
+  color: var(--text-muted, #94a3b8);
+  text-transform: uppercase;
+}
+.mc-rt-pinned-top .mc-rt-row::before { content: 'SRC'; padding-right: 4px; }
+.mc-rt-pinned-bottom .mc-rt-row::before { content: 'DST'; padding-right: 4px; }
+
+.mc-rt-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 4px 22px 18px 1fr auto;
+  grid-template-rows: auto 4px;
+  column-gap: 6px;
+  align-items: center;
+  padding: 4px 12px 4px 0;
+  cursor: pointer;
+  font-family: inherit;
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+}
+.mc-rt-row:hover,
+.mc-rt-row:focus,
+.mc-rt-row.mc-rt-row-active {
+  background: var(--bg-hover, rgba(120,160,255,0.08));
+  outline: none;
+}
+.mc-rt-stripe {
+  grid-column: 1; grid-row: 1 / -1;
+  width: 4px; height: 100%;
+  background: var(--mc-rt-row-color, transparent);
+}
+.mc-rt-seq {
+  grid-column: 2; grid-row: 1;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-muted, #94a3b8);
+  text-align: right;
+}
+.mc-rt-glyph {
+  grid-column: 3; grid-row: 1;
+  text-align: center; font-size: 12px;
+}
+.mc-rt-name {
+  grid-column: 4; grid-row: 1;
+  font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mc-rt-obs-chip {
+  display: inline-block;
+  font-size: 9px; padding: 0 4px;
+  background: var(--surface-2, #2a2a2a);
+  border: 1px solid var(--border, #444);
+  border-radius: 8px;
+  margin-left: 4px;
+  color: var(--text-muted, #94a3b8);
+  font-family: ui-monospace, Menlo, monospace;
+}
+.mc-rt-status-chip {
+  display: inline-block;
+  font-size: 9px; padding: 0 4px;
+  border-radius: 8px;
+  margin-left: 4px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mc-rt-status-nogps {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+.mc-rt-status-unknown {
+  background: rgba(148, 163, 184, 0.18);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+}
+.mc-rt-distlabel {
+  grid-column: 5; grid-row: 1;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-muted, #94a3b8);
+}
+.mc-rt-distbar-wrap {
+  grid-column: 2 / -1; grid-row: 2;
+  height: 3px;
+  background: transparent;
+  margin-top: 2px;
+}
+.mc-rt-distbar {
+  height: 100%;
+  border-radius: 1.5px;
+}
+.mc-rt-unresolved .mc-rt-name { color: var(--text-muted, #94a3b8); font-style: italic; }
+
+/* Drill-in expanding panel (Tufte v2 hop detail) */
+.mc-rt-row.mc-rt-row-expanded {
+  background: var(--bg-hover, rgba(120,160,255,0.12));
+}
+.mc-rt-detail-panel {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  padding: 8px 10px 10px;
+  background: var(--surface-2, #1d1d1d);
+  border-top: 1px solid var(--border, #333);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text, #e7e7e7);
+  margin-top: 2px;
+}
+.mc-rt-row { grid-template-rows: auto 4px auto; }
+.mc-rt-detail-loading,
+.mc-rt-detail-na { color: var(--text-muted, #94a3b8); font-style: italic; font-size: 10px; }
+.mc-rt-detail-row1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-bottom: 4px; }
+.mc-rt-detail-name { font-weight: 700; color: var(--text, #fff); font-size: 12px; }
+.mc-rt-detail-warn {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.mc-rt-detail-meta {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-muted, #94a3b8);
+}
+.mc-rt-detail-label {
+  display: inline-block;
+  width: 50px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted, #94a3b8);
+}
+.mc-rt-detail-snr,
+.mc-rt-detail-relay,
+.mc-rt-detail-also { margin: 2px 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mc-rt-detail-spark { vertical-align: middle; color: var(--text, #cbd5e1); }
+.mc-rt-detail-spark-meta { font-size: 9px; color: var(--text-muted, #94a3b8); font-family: ui-monospace, Menlo, monospace; }
+.mc-rt-detail-link { color: var(--accent, #06b6d4); text-decoration: none; }
+.mc-rt-detail-link:hover { text-decoration: underline; }
+
+/* Marker styles — no chips, just shape. */
+.mc-rt-marker-icon { background: transparent !important; border: none !important; }
+.mc-rt-marker { position: relative; line-height: 0; cursor: pointer; transition: transform 120ms ease-out; }
+.mc-rt-marker:hover,
+.mc-rt-marker.mc-rt-hover { transform: scale(1.5); z-index: 1000 !important; }
+.mc-rt-marker:focus { outline: 2px solid #06b6d4; outline-offset: 2px; border-radius: 50%; }
+
+/* Mobile: sidebar full-width, map hidden */
+@media (max-width: 767px) {
+  .mc-rt-sidebar { width: 100%; }
+  body.mc-route-active #leaflet-map { display: none !important; }
+}
