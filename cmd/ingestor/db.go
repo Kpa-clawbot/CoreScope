@@ -1043,14 +1043,20 @@ func (s *Store) RunIncrementalVacuum(pages int) {
 	}
 }
 
-// Checkpoint forces a WAL checkpoint to release the WAL lock file,
-// preventing lock contention with a new process starting up.
-func (s *Store) Checkpoint() {
-	if _, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+// Checkpoint runs a WAL checkpoint (TRUNCATE mode).
+// Returns the number of WAL frames checkpointed (0 if WAL was already empty).
+// TRUNCATE resets the WAL file to zero bytes when all frames are checkpointed;
+// if active readers hold frames, it checkpoints what it can and leaves the rest.
+func (s *Store) Checkpoint() int {
+	var busy, walFrames, checkpointed int
+	if err := s.db.QueryRow("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &walFrames, &checkpointed); err != nil {
 		log.Printf("[db] WAL checkpoint error: %v", err)
-	} else {
-		log.Println("[db] WAL checkpoint complete")
+		return 0
 	}
+	if walFrames > 0 {
+		log.Printf("[db] WAL checkpoint: %d/%d frames checkpointed, %d busy", checkpointed, walFrames, busy)
+	}
+	return checkpointed
 }
 
 // BackfillPathJSONAsync launches the path_json backfill in a background goroutine.

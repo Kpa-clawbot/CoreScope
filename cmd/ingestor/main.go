@@ -150,6 +150,23 @@ func main() {
 		log.Printf("[prune] auto-prune enabled: packets older than %d days will be removed daily", packetDays)
 	}
 
+	// Hourly WAL checkpoint to prevent unbounded WAL growth.
+	// TRUNCATE resets the WAL file to zero bytes when all frames are flushed;
+	// if the server's read connection holds frames, remaining pages stay in the
+	// WAL until the next tick. Staggered 30s after startup to avoid competing
+	// with the initial burst of ingest writes.
+	{
+		walCheckpointTicker := time.NewTicker(1 * time.Hour)
+		go func() {
+			time.Sleep(30 * time.Second)
+			store.Checkpoint()
+			for range walCheckpointTicker.C {
+				store.Checkpoint()
+			}
+		}()
+		log.Printf("[db] WAL checkpoint scheduled every 1h")
+	}
+
 	// Daily neighbor_edges retention (#1287 — moved from cmd/server).
 	{
 		nDays := cfg.NeighborEdgesDaysOrDefault()
