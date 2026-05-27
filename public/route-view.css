@@ -1,0 +1,727 @@
+/* route-view.css — minimal route view layout + styling. */
+
+body.mc-route-active #leaflet-map { left: 320px !important; width: calc(100% - 320px) !important; }
+
+/* Auto-collapse Map Controls panel when route view opens. The toggle button
+   (.map-controls-toggle) stays visible — clicking it expands the panel.
+   Map controls JS uses the `.collapsed` class for its own toggle state. */
+body.mc-route-active .map-controls.collapsed { display: none !important; }
+body.mc-route-active #pktRight,
+body.mc-route-active .slide-over-panel,
+body.mc-route-active .slide-over-backdrop,
+body.mc-route-active .mobile-detail-sheet { display: none !important; }
+
+/* Hide regular node clusters and topology markers during route view so the
+   route polyline + its own markers aren't lost in a 600-node mesh. The route
+   layer's own markers use .mc-rt-marker-icon and are NOT hidden. */
+body.mc-route-active .leaflet-marker-pane .meshcore-marker { display: none !important; }
+body.mc-route-active .leaflet-marker-pane .meshcore-label-marker { display: none !important; }
+body.mc-route-active .leaflet-marker-pane .marker-cluster { display: none !important; }
+/* CoreScope custom cluster bubble wrappers (not the leaflet.markercluster ones) */
+body.mc-route-active .leaflet-marker-pane .mc-cluster-wrap { display: none !important; }
+/* Hide overlay-pane SVG paths that aren't part of the route. The route's
+   own polylines have class="mc-rt-edge". */
+body.mc-route-active .leaflet-overlay-pane svg path:not(.mc-rt-edge) { display: none !important; }
+
+.mc-rt-sidebar {
+  position: fixed;
+  top: 52px; /* below top-nav */
+  left: 0;
+  bottom: 0;
+  width: 320px;
+  background: var(--surface, #1a1a1a);
+  border-right: 1px solid var(--border, #333);
+  color: var(--text, #e7e7e7);
+  font: 13px/1.4 system-ui, -apple-system, sans-serif;
+  display: flex;
+  flex-direction: column;
+  z-index: 500;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.4);
+}
+
+.mc-rt-header {
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border, #333);
+  position: relative;
+}
+.mc-rt-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding-right: 36px; /* leave room for close button */
+}
+.mc-rt-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--accent, #06b6d4);
+  text-decoration: none;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.mc-rt-back-link:hover {
+  background: var(--bg-hover, rgba(120,160,255,0.12));
+  text-decoration: underline;
+}
+.mc-rt-back-link:focus {
+  outline: 2px solid var(--accent, #06b6d4);
+  outline-offset: 1px;
+}
+.mc-rt-title { font-size: 14px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-muted, #94a3b8); }
+.mc-rt-meta { font-size: 11px; color: var(--text-muted, #94a3b8); margin-top: 2px; }
+.mc-rt-multipath-chip {
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: var(--surface-2, #232323);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text, #cbd5e1);
+  font-family: ui-monospace, Menlo, monospace;
+}
+.mc-rt-multipath-chip b { color: var(--text, #fff); }
+.mc-rt-multipath-key {
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--text-muted, #94a3b8);
+  font-style: italic;
+  font-family: system-ui, sans-serif;
+}
+
+/* Multi-path picker — Click a path to isolate it on the map. */
+.mc-rt-paths {
+  margin-top: 6px;
+  background: var(--surface-2, #232323);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  font-size: 11px;
+  max-height: 180px;
+  overflow: hidden;
+}
+.mc-rt-paths[open] { overflow: auto; max-height: 180px; }
+.mc-rt-paths-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--text-muted, #94a3b8);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  list-style: none;
+  font-weight: 600;
+}
+.mc-rt-paths-header::-webkit-details-marker { display: none; }
+.mc-rt-paths-header::before {
+  content: '▾';
+  margin-right: 4px;
+  font-size: 9px;
+  transition: transform 120ms;
+}
+.mc-rt-paths:not([open]) .mc-rt-paths-header::before { transform: rotate(-90deg); }
+.mc-rt-path-clear {
+  background: transparent;
+  border: 1px solid var(--border, #444);
+  color: var(--text-muted, #94a3b8);
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.mc-rt-path-clear:hover {
+  background: var(--bg-hover, rgba(120,160,255,0.12));
+  color: var(--text, #fff);
+}
+.mc-rt-path-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border, #333);
+}
+.mc-rt-path-row {
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  column-gap: 6px;
+  align-items: center;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-family: ui-monospace, Menlo, monospace;
+}
+.mc-rt-path-row:hover {
+  background: var(--bg-hover, rgba(120,160,255,0.08));
+}
+.mc-rt-path-row.mc-rt-path-active {
+  background: var(--bg-hover, rgba(120,160,255,0.18));
+  border-left: 3px solid var(--accent, #06b6d4);
+  padding-left: 5px;
+}
+.mc-rt-path-row:focus {
+  outline: 2px solid var(--accent, #06b6d4);
+  outline-offset: -2px;
+}
+.mc-rt-path-count {
+  font-weight: 600;
+  font-size: 10px;
+  color: var(--text-muted, #94a3b8);
+  text-align: right;
+}
+.mc-rt-path-hops {
+  font-size: 10px;
+  color: var(--text, #cbd5e1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mc-rt-path-obs {
+  font-size: 9px;
+  color: var(--text-muted, #94a3b8);
+  font-family: system-ui, sans-serif;
+  max-width: 80px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mc-rt-spark-wrap {
+  margin: 8px 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mc-rt-spark-title {
+  font-size: 10px;
+  color: var(--text-muted, #94a3b8);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.mc-rt-spark-title b { color: var(--text, #e7e7e7); font-weight: 600; }
+.mc-rt-spark { display: block; cursor: pointer; }
+.mc-rt-spark-dot { cursor: pointer; }
+.mc-rt-spark-dot:hover { r: 3; }
+.mc-rt-spark-tooltip {
+  position: absolute;
+  background: var(--surface-2, #2a2a2a);
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font: 11px ui-monospace, Menlo, monospace;
+  color: var(--text, #e7e7e7);
+  pointer-events: none;
+  z-index: 9999;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+}
+.mc-rt-close {
+  position: absolute; top: 10px; right: 10px;
+  background: transparent; border: 1px solid var(--border, #333);
+  color: var(--text, #e7e7e7); border-radius: 4px;
+  width: 26px; height: 26px; cursor: pointer; font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+}
+.mc-rt-close:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
+
+.mc-rt-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; flex: 1; }
+.mc-rt-pinned { padding: 2px 0; }
+.mc-rt-pinned-top { border-bottom: 1px solid var(--border, #333); }
+.mc-rt-pinned-bottom { border-top: 1px solid var(--border, #333); }
+.mc-rt-pinned .mc-rt-row { background: var(--surface-2, #232323); font-weight: 600; }
+.mc-rt-pinned .mc-rt-row::before {
+  content: '';
+  display: inline-block;
+  font-size: 9px; letter-spacing: 1px;
+  color: var(--text-muted, #94a3b8);
+  text-transform: uppercase;
+}
+.mc-rt-pinned-top .mc-rt-row::before { content: 'SRC'; padding-right: 4px; }
+.mc-rt-pinned-bottom .mc-rt-row::before { content: 'DST'; padding-right: 4px; }
+
+.mc-rt-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 4px 22px 18px 1fr auto;
+  grid-template-rows: auto 4px;
+  column-gap: 6px;
+  align-items: center;
+  padding: 4px 12px 4px 0;
+  cursor: pointer;
+  font-family: inherit;
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+}
+.mc-rt-row:hover,
+.mc-rt-row:focus,
+.mc-rt-row.mc-rt-row-active {
+  background: var(--bg-hover, rgba(120,160,255,0.08));
+  outline: none;
+}
+.mc-rt-stripe {
+  grid-column: 1; grid-row: 1 / -1;
+  width: 4px; height: 100%;
+  background: var(--mc-rt-row-color, transparent);
+}
+.mc-rt-seq {
+  grid-column: 2; grid-row: 1;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-muted, #94a3b8);
+  text-align: right;
+}
+.mc-rt-glyph {
+  grid-column: 3; grid-row: 1;
+  text-align: center; font-size: 12px;
+}
+.mc-rt-name {
+  grid-column: 4; grid-row: 1;
+  font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mc-rt-obs-chip {
+  display: inline-block;
+  font-size: 9px; padding: 0 4px;
+  background: var(--surface-2, #2a2a2a);
+  border: 1px solid var(--border, #444);
+  border-radius: 8px;
+  margin-left: 4px;
+  color: var(--text-muted, #94a3b8);
+  font-family: ui-monospace, Menlo, monospace;
+}
+.mc-rt-status-chip {
+  display: inline-block;
+  font-size: 9px; padding: 0 4px;
+  border-radius: 8px;
+  margin-left: 4px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mc-rt-status-nogps {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+.mc-rt-status-unknown {
+  background: rgba(148, 163, 184, 0.18);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+}
+.mc-rt-status-payload {
+  background: rgba(6, 182, 212, 0.15);
+  color: #67e8f9;
+  border: 1px solid rgba(6, 182, 212, 0.35);
+  font-style: italic;
+}
+.mc-rt-distlabel {
+  grid-column: 5; grid-row: 1;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-muted, #94a3b8);
+}
+.mc-rt-distbar-wrap {
+  grid-column: 2 / -1; grid-row: 2;
+  height: 3px;
+  background: transparent;
+  margin-top: 2px;
+}
+.mc-rt-distbar {
+  height: 100%;
+  border-radius: 1.5px;
+}
+.mc-rt-unresolved .mc-rt-name { color: var(--text-muted, #94a3b8); font-style: italic; }
+
+/* Drill-in expanding panel (hop detail) */
+.mc-rt-row.mc-rt-row-expanded {
+  background: var(--bg-hover, rgba(120,160,255,0.12));
+}
+.mc-rt-detail-panel {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  padding: 8px 10px 10px;
+  background: var(--surface-2, #1d1d1d);
+  border-top: 1px solid var(--border, #333);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text, #e7e7e7);
+  margin-top: 2px;
+}
+.mc-rt-row { grid-template-rows: auto 4px auto; }
+.mc-rt-detail-loading,
+.mc-rt-detail-na { color: var(--text-muted, #94a3b8); font-style: italic; font-size: 10px; }
+.mc-rt-detail-row1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-bottom: 4px; }
+.mc-rt-detail-name { font-weight: 700; color: var(--text, #fff); font-size: 12px; }
+.mc-rt-detail-warn {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.mc-rt-detail-meta {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-muted, #94a3b8);
+}
+.mc-rt-detail-label {
+  display: inline-block;
+  width: 50px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted, #94a3b8);
+}
+.mc-rt-detail-snr,
+.mc-rt-detail-relay,
+.mc-rt-detail-also { margin: 2px 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mc-rt-detail-spark { vertical-align: middle; color: var(--text, #cbd5e1); }
+.mc-rt-detail-spark-meta { font-size: 9px; color: var(--text-muted, #94a3b8); font-family: ui-monospace, Menlo, monospace; }
+.mc-rt-detail-link { color: var(--accent, #06b6d4); text-decoration: none; }
+.mc-rt-detail-link:hover { text-decoration: underline; }
+.mc-rt-detail-link:focus {
+  outline: 2px solid var(--accent, #06b6d4);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.mc-rt-detail-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--surface-2, #232323);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 11px;
+  transition: background 120ms, border-color 120ms;
+}
+.mc-rt-detail-action:hover {
+  background: var(--bg-hover, rgba(120,160,255,0.12));
+  border-color: var(--accent, #06b6d4);
+  text-decoration: none;
+}
+.mc-rt-route-badge {
+  background: var(--surface, #1a1a1a);
+  border: 1px solid var(--border, #444);
+  border-radius: 8px;
+  padding: 1px 5px;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 9px;
+  color: var(--text-muted, #94a3b8);
+  font-weight: 500;
+}
+
+/* Marker styles — no chips, just shape. */
+.mc-rt-marker-icon { background: transparent !important; border: none !important; }
+.mc-rt-marker { position: relative; line-height: 0; cursor: pointer; transition: transform 120ms ease-out; }
+.mc-rt-marker:hover,
+.mc-rt-marker.mc-rt-hover { transform: scale(1.5); z-index: 1000 !important; }
+.mc-rt-marker:focus { outline: 2px solid #06b6d4; outline-offset: 2px; border-radius: 50%; }
+
+/* packet-context block (type chip + 3-5 facts). Above multi-path. */
+.mc-rt-ctx {
+  margin: 6px 0 4px;
+  padding: 6px 8px;
+  background: var(--surface-2, #1f1f1f);
+  border-left: 3px solid var(--accent, #06b6d4);
+  border-radius: 0 4px 4px 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.mc-rt-ctx-chip {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted, #94a3b8);
+  margin-bottom: 4px;
+}
+.mc-rt-ctx-glyph {
+  font-size: 12px;
+  margin-right: 2px;
+  vertical-align: middle;
+}
+.mc-rt-ctx-facts { display: flex; flex-direction: column; gap: 2px; }
+.mc-rt-ctx-line { color: var(--text, #cbd5e1); }
+.mc-rt-ctx-line b { color: var(--text, #fff); font-weight: 600; }
+.mc-rt-ctx-arrow { color: var(--text-muted, #94a3b8); margin: 0 4px; }
+.mc-rt-ctx-meta { color: var(--text-muted, #94a3b8); font-size: 10px; }
+.mc-rt-ctx-mono { font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text-muted, #94a3b8); }
+.mc-rt-ctx-quote {
+  font-style: italic;
+  color: var(--text, #fff);
+  padding-left: 6px;
+  border-left: 2px solid var(--border, #444);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10px;
+}
+   1,2,3… on the map without scrubbing the sidebar. Origin (square) + dest
+   (triangle) are shape-differentiated and don't need numeric labels. */
+.mc-rt-marker-seq {
+  position: absolute;
+  top: 1px;
+  left: 14px; /* to the right of the marker dot, no overlap */
+  background: var(--surface, #1a1a1a);
+  color: var(--text, #fff);
+  border: 1px solid var(--border, #666);
+  border-radius: 5px;
+  min-width: 13px;
+  height: 11px;
+  padding: 0 2px;
+  font: 700 8px/11px ui-monospace, Menlo, monospace;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  z-index: 2;
+  white-space: nowrap;
+}
+/* Hover/focus on a marker pops its seq label so it's never hidden by
+   neighbors at high density. */
+.mc-rt-marker:hover .mc-rt-marker-seq,
+.mc-rt-marker:focus .mc-rt-marker-seq,
+.mc-rt-marker.mc-rt-hover .mc-rt-marker-seq {
+  z-index: 1000;
+  transform: scale(1.4);
+  transform-origin: left center;
+}
+
+/* Mobile: map dominates (75vh), sidebar is a compact bottom strip (25vh)
+   showing just packet type + hop count + distance + summary. Operator's job:
+   see the route on the map first, scroll the strip for hop list. */
+/* Mobile bottom-sheet handle (visible only on mobile) — hidden by default */
+.mc-rt-mobile-handle { display: none; }
+.mc-rt-collapsed-label { display: none; }
+
+/* Desktop resize handle on the right edge of the sidebar */
+.mc-rt-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 120ms;
+}
+.mc-rt-resize-handle:hover,
+.mc-rt-resize-handle:focus {
+  background: var(--accent, #06b6d4);
+  opacity: 0.4;
+}
+
+/* Desktop collapse button — sits on the RIGHT edge of the sidebar,
+   vertically centered. Standard Material/Drive-style affordance: chevron
+   pointing into the panel = collapse, out of the panel = expand. */
+.mc-rt-collapse-btn {
+  position: absolute;
+  top: 50%;
+  right: -14px;
+  transform: translateY(-50%);
+  background: var(--surface-2, #232323);
+  border: 1px solid var(--border, #333);
+  color: var(--text-muted, #94a3b8);
+  font-size: 12px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  box-shadow: 1px 0 3px rgba(0,0,0,0.4);
+}
+.mc-rt-collapse-btn:hover {
+  background: var(--bg-hover, rgba(120,160,255,0.12));
+  color: var(--text, #fff);
+  border-color: var(--accent, #06b6d4);
+}
+
+/* Vertical "ROUTE" label shown only when collapsed */
+.mc-rt-collapsed-label {
+  display: none;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-90deg);
+  transform-origin: center;
+  white-space: nowrap;
+  font-size: 11px;
+  letter-spacing: 2px;
+  font-weight: 700;
+  color: var(--text-muted, #94a3b8);
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Collapsed state on desktop */
+.mc-rt-sidebar.mc-rt-collapsed {
+  width: 36px !important;
+  min-width: 36px;
+}
+.mc-rt-sidebar.mc-rt-collapsed .mc-rt-header,
+.mc-rt-sidebar.mc-rt-collapsed .mc-rt-list,
+.mc-rt-sidebar.mc-rt-collapsed .mc-rt-pinned,
+.mc-rt-sidebar.mc-rt-collapsed .mc-rt-resize-handle { display: none; }
+.mc-rt-sidebar.mc-rt-collapsed .mc-rt-collapsed-label { display: block; }
+.mc-rt-sidebar.mc-rt-collapsed .mc-rt-collapse-btn {
+  top: 50%;
+  right: -14px;
+  transform: translateY(-50%);
+}
+
+/* When sidebar is collapsed, expand map to fill */
+body.mc-route-active:has(.mc-rt-sidebar.mc-rt-collapsed) #leaflet-map {
+  left: 36px !important;
+  width: calc(100% - 36px) !important;
+}
+
+@media (max-width: 767px) {
+  /* Mobile: hide desktop collapse + resize affordances (mobile uses bottom-sheet) */
+  body.mc-route-active .mc-rt-collapse-btn,
+  body.mc-route-active .mc-rt-resize-handle,
+  body.mc-route-active .mc-rt-collapsed-label { display: none !important; }
+  body.mc-route-active #leaflet-map {
+    position: fixed !important;
+    top: 52px !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    /* iOS Safari/Edge: use dvh (dynamic viewport) so URL bar collapse
+       doesn't leave a stale layout. Fall back to vh for browsers that
+       don't support dvh yet. */
+    bottom: calc(116px + env(safe-area-inset-bottom, 0px)) !important;
+    height: auto !important;
+    z-index: 100 !important;
+  }
+  body.mc-route-active.mc-rt-mobile-sheet-expanded #leaflet-map {
+    bottom: calc(75vh + 56px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+  body.mc-route-active .map-controls-toggle {
+    position: fixed !important;
+    top: 60px !important;
+    right: 8px !important;
+    z-index: 1100 !important;
+    /* Force overlay — no normal-flow row consumption */
+    margin: 0 !important;
+    width: 36px !important;
+    height: 36px !important;
+  }
+  body.mc-route-active .map-controls {
+    position: fixed !important;
+    top: 100px !important;
+    right: 8px !important;
+    left: 8px !important;
+    width: auto !important;
+    max-height: 60vh !important;
+    z-index: 1090 !important;
+    overflow-y: auto;
+  }
+  .mc-rt-sidebar {
+    position: fixed;
+    top: auto !important;
+    left: 0 !important;
+    right: 0;
+    /* Sit ABOVE the bottom-nav (56px) + iOS safe-area inset */
+    bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+    width: 100%;
+    height: 60px;
+    max-height: 60px;
+    transition: height 240ms cubic-bezier(0.4, 0, 0.2, 1);
+    border-right: none;
+    border-top: 1px solid var(--border, #333);
+    box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    z-index: 1190; /* below bottom-nav (1200) but above content */
+  }
+  .mc-rt-sidebar.mc-rt-mobile-expanded {
+    height: 75vh;
+    max-height: 75vh;
+    overflow-y: auto;
+  }
+  /* Bigger touch target — full sheet header tappable, large chevron */
+  .mc-rt-mobile-handle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 14px 8px;
+    cursor: pointer;
+    background: var(--surface, #1a1a1a);
+    user-select: none;
+    height: 60px;
+    box-sizing: border-box;
+    position: relative;
+    /* Prevent the page from scrolling when swiping on this area */
+    touch-action: none;
+  }
+  .mc-rt-mobile-grip {
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60px;
+    height: 6px;
+    background: var(--text-muted, #94a3b8);
+    border-radius: 3px;
+    opacity: 0.6;
+    /* Large tap target around the grip */
+    cursor: grab;
+  }
+  .mc-rt-mobile-grip::before {
+    content: '';
+    position: absolute;
+    top: -12px;
+    left: -20px;
+    right: -20px;
+    bottom: -12px;
+  }
+  .mc-rt-mobile-chevron {
+    font-size: 22px;
+    color: var(--text-muted, #94a3b8);
+    margin-top: 8px;
+    padding: 4px 8px;
+    transition: transform 240ms;
+    /* Make the chevron itself a generous tap target */
+    min-width: 32px;
+    text-align: center;
+  }
+  .mc-rt-mobile-summary {
+    flex: 1;
+    font-size: 11px;
+    color: var(--text, #cbd5e1);
+    font-family: ui-monospace, Menlo, monospace;
+    margin-top: 10px;
+    line-height: 1.3;
+    max-height: 36px;
+    overflow: hidden;
+  }
+  .mc-rt-mobile-hex {
+    color: var(--text-muted, #94a3b8);
+    font-size: 9px;
+    display: block;
+    margin-top: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mc-rt-sidebar.mc-rt-mobile-expanded .mc-rt-mobile-chevron {
+    transform: rotate(180deg);
+  }
+  /* Hide full content when collapsed; show when expanded */
+  .mc-rt-sidebar .mc-rt-header,
+  .mc-rt-sidebar .mc-rt-list,
+  .mc-rt-sidebar .mc-rt-pinned { display: none; }
+  .mc-rt-sidebar.mc-rt-mobile-expanded .mc-rt-header { display: block; padding: 8px 12px 6px; }
+  .mc-rt-sidebar.mc-rt-mobile-expanded .mc-rt-list { display: block; }
+  .mc-rt-sidebar.mc-rt-mobile-expanded .mc-rt-pinned { display: block; }
+  .mc-rt-sidebar.mc-rt-mobile-expanded .mc-rt-ctx { margin: 4px 0 2px; padding: 4px 6px; font-size: 11px; }
+  .mc-rt-sidebar.mc-rt-mobile-expanded .mc-rt-row { padding: 3px 10px 3px 0; font-size: 11px; }
+}
