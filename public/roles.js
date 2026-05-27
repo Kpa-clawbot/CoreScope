@@ -88,10 +88,41 @@
   });
   // Per-key writes via Proxy not portable enough — expose helper for callers
   // that want to override at runtime (customizer "node colors" path).
+  // #1438: snapshot of the cb-preset (or initial) CSS-var value per role
+  // so that clearing an override restores the preset, not nothing.
+  var _presetCssSnapshot = {};
   window.setRoleColorOverride = function (role, hex) {
     if (!role) return;
-    if (hex == null || hex === '') delete _roleOverrides[role];
-    else _roleOverrides[role] = hex;
+    var rootStyle = null;
+    try { rootStyle = document.documentElement && document.documentElement.style; }
+    catch (e) { /* SSR */ }
+
+    if (hex == null || hex === '') {
+      // Clear override → restore prior CSS var value (the preset's
+      // value when the override was first set), so CSS-var consumers
+      // see the preset color again — matching the JS getter behavior.
+      delete _roleOverrides[role];
+      if (rootStyle && Object.prototype.hasOwnProperty.call(_presetCssSnapshot, role)) {
+        var prior = _presetCssSnapshot[role];
+        if (prior) rootStyle.setProperty('--mc-role-' + role, prior);
+        else rootStyle.removeProperty('--mc-role-' + role);
+        delete _presetCssSnapshot[role];
+      }
+      return;
+    }
+    // Capture the current CSS var (preset / default) before overwriting,
+    // but only on the first override for this role so repeated picks
+    // don't lose the original preset value.
+    if (rootStyle && !Object.prototype.hasOwnProperty.call(_presetCssSnapshot, role)) {
+      _presetCssSnapshot[role] = rootStyle.getPropertyValue
+        ? (rootStyle.getPropertyValue('--mc-role-' + role) || '').trim()
+        : '';
+    }
+    _roleOverrides[role] = hex;
+    // #1438: drive the CSS var so CSS-var consumers (cluster pills,
+    // route lines, all marker SVGs that now use fill="var(--mc-role-X)")
+    // pick up the operator's hex without a page reload.
+    if (rootStyle) rootStyle.setProperty('--mc-role-' + role, hex);
   };
   // Back-compat: also export the writable override map so customize.js's
   // `window.ROLE_COLORS[key] = inp.value` style mutation works.
@@ -209,7 +240,12 @@
     var shape = (window.ROLE_SHAPES && window.ROLE_SHAPES[role]) || 'circle';
     size = size || 16;
     var c = size / 2;
-    var fill = color || (window.ROLE_COLORS && window.ROLE_COLORS[role]) || '#6b7280';
+    // #1438: default fill resolves through the live CSS var so existing
+    // mounted SVG markers recolor when cb-preset switches or the
+    // operator picks a per-role override via the customizer. Callers
+    // that need a fixed tint (matrix mode, stale dim) keep passing
+    // their explicit colour.
+    var fill = color || ('var(--mc-role-' + (role || 'companion') + ')');
     var path;
     switch (shape) {
       case 'square':

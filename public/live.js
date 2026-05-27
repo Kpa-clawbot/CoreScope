@@ -2405,6 +2405,11 @@
   function addNodeMarker(n) {
     if (nodeMarkers[n.public_key]) return nodeMarkers[n.public_key];
     const color = ROLE_COLORS[n.role] || ROLE_COLORS.unknown;
+    // #1438: SVG fill expression — use the live CSS var so existing
+    // markers recolor when cb-preset switches or the operator overrides.
+    // `color` (hex from ROLE_COLORS) is still tracked as `_baseColor`
+    // for matrix mode / pulse animations that need an explicit value.
+    const fillExpr = 'var(--mc-role-' + (n.role || 'companion') + ')';
     const isRepeater = n.role === 'repeater';
     const zoom = map ? map.getZoom() : 11;
     const zoomScale = Math.max(0.4, (zoom - 8) / 6);
@@ -2414,10 +2419,10 @@
     const sizePx = Math.max(10, Math.round((isRepeater ? 18 : 14) * zoomScale));
 
     const svgHtml = (window.makeRoleMarkerSVG
-      ? window.makeRoleMarkerSVG(n.role, color, sizePx)
+      ? window.makeRoleMarkerSVG(n.role, null, sizePx)
       : '<svg width="' + sizePx + '" height="' + sizePx + '" viewBox="0 0 ' + sizePx + ' ' + sizePx +
         '"><circle cx="' + (sizePx/2) + '" cy="' + (sizePx/2) + '" r="' + (sizePx/2 - 2) +
-        '" fill="' + color + '" stroke="#fff" stroke-width="1"/></svg>');
+        '" fill="' + fillExpr + '" stroke="#fff" stroke-width="1"/></svg>');
 
     const icon = L.divIcon({
       html: svgHtml,

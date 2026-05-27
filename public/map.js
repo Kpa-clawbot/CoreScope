@@ -57,7 +57,11 @@
 
   function makeMarkerIcon(role, isStale, isAlsoObserver, colorOverride) {
     const s = ROLE_STYLE[role] || ROLE_STYLE.companion;
-    const fillColor = colorOverride || s.color;
+    // #1438: default fill resolves through the live CSS var so existing
+    // mounted SVG markers recolor when cb-preset switches or the
+    // operator picks a per-role override. colorOverride (MultiByte
+    // status tint) wins when provided.
+    const fillColor = colorOverride || ('var(--mc-role-' + (role || 'companion') + ')');
     const size = s.radius * 2 + 4;
     const c = size / 2;
     let path;
@@ -112,7 +116,7 @@
         starPts += `${scx + so * Math.cos(aO)},${scy + so * Math.sin(aO)} `;
         starPts += `${scx + si * Math.cos(aI)},${scy + si * Math.sin(aI)} `;
       }
-      obsOverlay = `<g transform="translate(${sx},${sy})"><polygon points="${starPts.trim()}" fill="${ROLE_COLORS.observer || '#f1c40f'}" stroke="#fff" stroke-width="0.8"/></g>`;
+      obsOverlay = `<g transform="translate(${sx},${sy})"><polygon points="${starPts.trim()}" fill="var(--mc-role-observer)" stroke="#fff" stroke-width="0.8"/></g>`;
     }
     const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">${path}${obsOverlay}</svg>`;
     return L.divIcon({
