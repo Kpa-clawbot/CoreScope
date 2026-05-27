@@ -688,11 +688,11 @@
     // Mark final hop as destination so the renderer applies the dest glyph.
     positions[positions.length - 1].isDest = true;
 
-    // Hand off to Tufte-prescribed sequence-primary renderer (#1418), falling
+    // Hand off to sequence-primary sequence-primary renderer (#1418), falling
     // back to the legacy role-aware MeshRoute (#1374), then to the minimal
     // polyline (should never run in production).
-    if (window.MeshRouteTufte && typeof window.MeshRouteTufte.render === 'function') {
-      window.MeshRouteTufte.render(map, routeLayer, positions, {
+    if (window.MeshRouteView && typeof window.MeshRouteView.render === 'function') {
+      window.MeshRouteView.render(map, routeLayer, positions, {
         timestamp: opts.timestamp || Date.now(),
         packetHash: opts.packetHash || null,
         observationId: opts.observationId || null,
@@ -720,7 +720,7 @@
   // #1418 Phase C — multi-path renderer. Accepts an array of paths (each =
   // {path: [hopKeys], observer, snr, rssi}), aggregates into canonical hops +
   // per-edge observer-count (for stroke-width weighting), and dispatches to
-  // the Tufte renderer with multi-path metadata. Falls back to single-path
+  // the sequence renderer with multi-path metadata. Falls back to single-path
   // drawPacketRoute when only one observation is provided.
   //
   // opts.canonicalPath (optional): use this exact hop sequence as the canonical
@@ -845,8 +845,8 @@
 
     if (routeLayer) routeLayer.clearLayers();
 
-    if (window.MeshRouteTufte && typeof window.MeshRouteTufte.render === 'function') {
-      window.MeshRouteTufte.render(map, routeLayer, raw, {
+    if (window.MeshRouteView && typeof window.MeshRouteView.render === 'function') {
+      window.MeshRouteView.render(map, routeLayer, raw, {
         timestamp: opts.timestamp || Date.now(),
         multiPath: true,
         totalObservers: totalObservers,

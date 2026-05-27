@@ -1,4 +1,4 @@
-/* route-view.js — Tufte-prescribed redesign of the packet-route map view.
+/* route-view.js — sequence-primary redesign of the packet-route map view.
  *
  * Principles (from consultation):
  *   - The data is a SEQUENCE. Geography is annotation.
@@ -78,7 +78,7 @@
     });
   }
 
-  // Tufte v4 — packet-context block (one stable layout, type chip + 3-5
+  // packet-context block (one stable layout, type chip + 3-5
   // facts). pktCtx shape:
   //   { type: 'ADVERT'|'TXT_MSG'|'GRP_TXT'|'TRACE'|other,
   //     decoded: <parsed JSON of decoded_json>,
@@ -94,7 +94,7 @@
         glyph = '📡'; label = 'ADVERT';
         var name = d.adName || d.name || (d.pubKey ? d.pubKey.slice(0, 8) : '?');
         var role = (d.flags && (d.flags.repeater ? 'repeater' : d.flags.room ? 'room' : d.flags.sensor ? 'sensor' : d.flags.chat ? 'companion' : 'unknown')) || 'unknown';
-        // Tufte: no fabricated fields. Battery isn't decoded into the advert
+        // no fabricated fields. Battery isn't decoded into the advert
         // JSON — adverts carry lat/lon + name + flags, not battery. If a
         // future advert version exposes it, re-add then.
         var sig = (d.signatureValid === true) ? '✓' : (d.signatureValid === false ? '✗' : null);
@@ -175,7 +175,7 @@
     var snrs = pts.map(function (p) { return p.snr; });
     var minS = Math.min.apply(null, snrs), maxS = Math.max.apply(null, snrs);
     if (maxS === minS) { minS -= 1; maxS += 1; }
-    // Tufte audit fix: n<3 is not a sparkline — a 2-point polyline implies a
+    // n<3 is not a sparkline — a 2-point polyline implies a
     // trend across time it can't represent. Show DOTS only (no connecting line)
     // when there are fewer than 3 observations.
     var showLine = pts.length >= 3;
@@ -275,7 +275,7 @@
 
 
   function buildMarkerSVG(p, opts) {
-    // Tufte v7: all markers same size + shape. Sequence number INSIDE the
+    // all markers same size + shape. Sequence number INSIDE the
     // marker. SRC and DST each get a 2px hollow ring as pre-attentive
     // endpoint cue. SRC=DST (loop) gets a SECOND concentric ring — same
     // grammar (ring = endpoint), extended for the loop case. Unresolved
@@ -308,7 +308,7 @@
     if (isOrigin || isDest || isLoop) {
       html += '<circle cx="' + cx + '" cy="' + cy + '" r="10" fill="none" stroke="' + color + '" stroke-width="2" opacity="0.9"/>';
     }
-    // Tufte v7 loop case: second outer ring 3px further out
+    // loop case: second outer ring 3px further out
     if (isLoop) {
       html += '<circle cx="' + cx + '" cy="' + cy + '" r="13" fill="none" stroke="' + color + '" stroke-width="2" opacity="0.7"/>';
     }
@@ -378,7 +378,7 @@
           statusBadge = ' <span class="mc-rt-status-chip mc-rt-status-unknown" title="Could not resolve this hop prefix to a known node">🔍 unknown</span>';
         }
       }
-      // Tufte audit: hops derived from the packet's PAYLOAD (sender/recipient
+      // hops derived from the packet's PAYLOAD (sender/recipient
       // encoded in decoded.srcHash/destHash) are visually distinct from hops
       // derived from path_json (the floodband repeaters). Operator confusion:
       // PATH packets show both, but packet-detail page only shows the inner
@@ -411,7 +411,7 @@
     var multiPath = (opts && opts.multiPath) === true;
     var totalObservers = (opts && opts.totalObservers) || 1;
     var packetHash = (opts && opts.packetHash) || null;
-    // Tufte v4 MVP — packet-context block. Type chip + 3-5 facts above the
+    // packet-context block. Type chip + 3-5 facts above the
     // multi-path chip. opts.packetContext is set by the deep-link loader
     // after fetching /api/packets/<hash> and parsing decoded_json from the
     // chosen observation. Falls back to {} when absent (legacy sessionStorage
@@ -455,7 +455,7 @@
         '<button type="button" class="mc-rt-path-clear" aria-label="Show all paths">All</button>' +
         '</summary><ul class="mc-rt-path-list">' + pickerRows + '</ul></details>';
     }
-    // Tufte audit fix: "Back to packet" link when route was entered from a
+    // "Back to packet" link when route was entered from a
     // specific packet — operators want fast round-trip without using browser
     // back (which doesn't reliably restore split-layout state on mobile).
     // Includes ?obs=<id> so the operator lands on the SAME observation they
@@ -675,7 +675,7 @@
         }
         e.stopPropagation();
         e.preventDefault();
-        // Toggle drill-in panel (Tufte expanding row pattern)
+        // Toggle drill-in panel (expanding row)
         var existing = row.querySelector('.mc-rt-detail-panel');
         if (existing) {
           existing.remove();
@@ -696,7 +696,7 @@
       });
     });
 
-    // Path picker (multi-path mode) — Tufte v6: clicking a path REPLACES the
+    // Path picker (multi-path mode) — clicking a path REPLACES the
     // canonical edges + markers with the selected path's own. Stroke-width
     // stays = global observer count per edge. "All" restores the union view.
     // Hides ALL canonical markers + edges to avoid phantom polylines.
@@ -820,7 +820,7 @@
       // Re-fan spider on the new isolated markers
       if (sidebar._respider) sidebar._respider();
 
-      // Tufte v7 #2: when isolating, REPLACE the sidebar hop list with the
+      // when isolating, REPLACE the sidebar hop list with the
       // isolated path's hops so the km-from-prev distances stay correct for
       // what's visible on the map. Restore canonical list on "All".
       var listEl = sidebar.querySelector('.mc-rt-list');
@@ -916,7 +916,7 @@
         });
       }
 
-      // Tufte v7 union-of-edges (NOT per-path). Iterate edgeCounts once;
+      // Union-of-edges (NOT per-path). Iterate edgeCounts once;
       // draw EACH unique edge as a single polyline; stroke-width = count.
       // No sequence numbers (multiple paths means no single sequence).
       if (multiPath && opts.edgeCounts) {
@@ -1275,7 +1275,7 @@
       });
       if (matchCount === 0) return 1.5;
       var ratio = matchCount / totalObservers;
-      // Tufte audit fix: ensure ≥2× min↔max ratio so the visual difference is
+      // ensure ≥2× min↔max ratio so the visual difference is
       // visible. Range 2..8 px (4× ratio). Linear in coverage ratio.
       return 3 + ratio * 6;
     }
@@ -1294,7 +1294,7 @@
     }
 
     // Markers (numbered, no chips, no labels, no arrows).
-    // Tufte v7: when same physical node OR distinct nodes within 25px collide,
+    // when same physical node OR distinct nodes within 25px collide,
     // we draw one marker per data point and spider-fan them on the ARC around
     // the collision centroid in a post-process step (after Leaflet projects
     // to pixel coords). Loop case (SRC == DST same node) gets a double ring
@@ -1319,7 +1319,7 @@
       return mk;
     });
 
-    // Tufte v7 spider-fan: after Leaflet projects, group any markers within
+    // Spider-fan: after Leaflet projects, group any markers within
     // 25px of each other and offset them on an arc around their centroid.
     // Draw a hairline from each offset marker back to the centroid.
     function spiderFanFor(markerArray, positionArray) {
@@ -1336,7 +1336,7 @@
       }).filter(function (x) { return x; });
       var visited = {};
       var groups = [];
-      // Tufte v7 tuned: only fan if markers are TIGHTLY overlapping (<14px).
+      // Tuned: only fan if markers are TIGHTLY overlapping (<14px).
       // Looser thresholds make the map "dance" as zoom changes group membership.
       var COLLISION_THRESHOLD = 14;
       pts.forEach(function (a, ai) {
@@ -1508,5 +1508,5 @@
     }
   }
 
-  window.MeshRouteTufte = { render: render };
+  window.MeshRouteView = { render: render };
 })();

@@ -1,4 +1,4 @@
-/* route-view.css — Tufte-style route view layout + styling. */
+/* route-view.css — minimal route view layout + styling. */
 
 body.mc-route-active #leaflet-map { left: 320px !important; width: calc(100% - 320px) !important; }
 
@@ -90,7 +90,7 @@ body.mc-route-active .leaflet-overlay-pane svg path:not(.mc-rt-edge) { display: 
   font-family: system-ui, sans-serif;
 }
 
-/* Multi-path picker — Tufte v4 #4. Click a path to isolate it on the map. */
+/* Multi-path picker — Click a path to isolate it on the map. */
 .mc-rt-paths {
   margin-top: 6px;
   background: var(--surface-2, #232323);
@@ -332,7 +332,7 @@ body.mc-route-active .leaflet-overlay-pane svg path:not(.mc-rt-edge) { display: 
 }
 .mc-rt-unresolved .mc-rt-name { color: var(--text-muted, #94a3b8); font-style: italic; }
 
-/* Drill-in expanding panel (Tufte v2 hop detail) */
+/* Drill-in expanding panel (hop detail) */
 .mc-rt-row.mc-rt-row-expanded {
   background: var(--bg-hover, rgba(120,160,255,0.12));
 }
@@ -422,7 +422,7 @@ body.mc-route-active .leaflet-overlay-pane svg path:not(.mc-rt-edge) { display: 
 .mc-rt-marker.mc-rt-hover { transform: scale(1.5); z-index: 1000 !important; }
 .mc-rt-marker:focus { outline: 2px solid #06b6d4; outline-offset: 2px; border-radius: 50%; }
 
-/* Tufte v4 — packet-context block (type chip + 3-5 facts). Above multi-path. */
+/* packet-context block (type chip + 3-5 facts). Above multi-path. */
 .mc-rt-ctx {
   margin: 6px 0 4px;
   padding: 6px 8px;
