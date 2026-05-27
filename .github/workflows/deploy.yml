@@ -99,6 +99,7 @@ jobs:
           node test-channel-qr-wiring.js
           node test-channel-modal-ux.js
           node test-channel-issue-1087.js
+          node test-issue-1409-no-encrypted-flood.js
           node test-channel-issue-1101.js
           node test-observer-iata-1188.js
           node test-pull-to-reconnect-1091.js

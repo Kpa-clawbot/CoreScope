@@ -779,10 +779,11 @@
 
     RegionFilter.init(document.getElementById('chRegionFilter'));
 
-    // #1034 PR1: encrypted-channels visibility now driven by sectioned sidebar.
-    // Always include encrypted channels in the API call; the renderer groups them.
-    var showEncrypted = true;
-    try { localStorage.setItem('channels-show-encrypted', 'true'); } catch (e) { /* quota */ }
+    // #1409: Do NOT force-enable encrypted-channel visibility on init. The
+    // operator-facing toggle (read at the includeEncrypted gate in
+    // loadChannels) drives whether the API returns the 246+ encrypted
+    // placeholders. Default is OFF (hidden); a future user-facing toggle
+    // writes the flag explicitly.
 
     regionChangeHandler = RegionFilter.onChange(function () {
       loadChannels(true).then(async function () {
