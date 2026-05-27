@@ -1,8 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -161,10 +163,11 @@ type perKeyByteCache struct {
 
 type perKeyByteCacheEntry struct {
 	payload   []byte
+	etag      string
 	expiresAt time.Time
 }
 
-func (c *perKeyByteCache) serve(w http.ResponseWriter, key string, ttl time.Duration, errContext string, build func() ([]byte, error)) {
+func (c *perKeyByteCache) serve(w http.ResponseWriter, r *http.Request, key string, ttl time.Duration, errContext string, opts serveOpts, build func() ([]byte, error)) {
 	for {
 		c.mu.Lock()
 		if c.entries == nil {
@@ -174,10 +177,9 @@ func (c *perKeyByteCache) serve(w http.ResponseWriter, key string, ttl time.Dura
 			c.inFlight = make(map[string]chan struct{})
 		}
 		if e, ok := c.entries[key]; ok && time.Now().Before(e.expiresAt) {
-			payload := e.payload
+			payload, etag := e.payload, e.etag
 			c.mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(payload) //nolint:errcheck
+			writeServedBytes(w, r, payload, etag, opts)
 			return
 		}
 		if ch, inflight := c.inFlight[key]; inflight {
@@ -192,13 +194,16 @@ func (c *perKeyByteCache) serve(w http.ResponseWriter, key string, ttl time.Dura
 		var (
 			payload []byte
 			err     error
+			etag    string
 		)
 		func() {
 			defer func() {
 				c.mu.Lock()
 				if err == nil && payload != nil {
+					etag = computeETag(payload)
 					c.entries[key] = &perKeyByteCacheEntry{
 						payload:   payload,
+						etag:      etag,
 						expiresAt: time.Now().Add(ttl),
 					}
 				}
@@ -212,21 +217,63 @@ func (c *perKeyByteCache) serve(w http.ResponseWriter, key string, ttl time.Dura
 			writeInternalError(w, errContext, err)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(payload) //nolint:errcheck
+		writeServedBytes(w, r, payload, etag, opts)
 		return
 	}
+}
+
+// writeServedBytes is the per-key analogue of singleKeyByteCache.writeServed.
+// Honors If-None-Match → 304 and stamps the Cache-Control header from opts.
+func writeServedBytes(w http.ResponseWriter, r *http.Request, payload []byte, etag string, opts serveOpts) {
+	if etag != "" {
+		w.Header().Set("ETag", etag)
+		if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+			if opts.CacheControl != "" {
+				w.Header().Set("Cache-Control", opts.CacheControl)
+			}
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+	if opts.CacheControl != "" {
+		w.Header().Set("Cache-Control", opts.CacheControl)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(payload) //nolint:errcheck
 }
 
 // singleKeyByteCache is a tiny TTL cache + singleflight wrapper for endpoints
 // that don't vary by URL path/query. Concurrent cache-miss requests share one
 // in-flight computation; cache hits return the pre-marshaled bytes directly so
 // json.Marshal isn't repeated per request.
+//
+// Also tracks an ETag derived from a SHA-256 of the payload so the handler can
+// return 304 Not Modified when the client re-asks for the same content — this
+// is the big win on slow-changing data like nodes/observers/channels: even
+// after the TTL expires and the browser revalidates, if the payload bytes are
+// identical the server can answer with an empty 304 body instead of
+// re-shipping ~170 KB compressed.
 type singleKeyByteCache struct {
 	mu        sync.Mutex
 	payload   []byte
+	etag      string
 	expiresAt time.Time
 	inFlight  chan struct{}
+}
+
+// computeETag returns a stable, quoted ETag value for the given payload.
+// Truncated SHA-256: 16 hex chars (64 bits of entropy) is plenty for HTTP
+// validators — collisions are 2^32 hashes away and a collision only causes
+// a stale 304, not a security issue.
+func computeETag(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return `"` + hex.EncodeToString(sum[:8]) + `"`
+}
+
+// writeNotModified writes a 304 with the ETag echoed back, no body.
+func writeNotModified(w http.ResponseWriter, etag string) {
+	w.Header().Set("ETag", etag)
+	w.WriteHeader(http.StatusNotModified)
 }
 
 // nodeInfoMapCacheState caches the assembled name/role map used by neighbor
@@ -246,6 +293,15 @@ type obsAnalyticsCacheEntry struct {
 	expiresAt time.Time
 }
 
+// serveOpts configures cache-header behavior for a serve() call.
+type serveOpts struct {
+	// CacheControl is set verbatim as the Cache-Control header. Empty = no
+	// header. Typical values:
+	//   "private, max-age=60, stale-while-revalidate=60"
+	//   "public, max-age=300, stale-while-revalidate=300"
+	CacheControl string
+}
+
 // serve looks up cached bytes for c, otherwise builds a fresh payload via
 // build, caches it for ttl, and writes the result. Concurrent cache-miss
 // callers share one in-flight build (singleflight). build returns the JSON
@@ -257,14 +313,18 @@ type obsAnalyticsCacheEntry struct {
 //
 // errContext labels the endpoint in server logs (e.g. "handleObservers
 // GetObservers"). It must NOT contain user-controlled input.
-func (c *singleKeyByteCache) serve(w http.ResponseWriter, ttl time.Duration, errContext string, build func() ([]byte, error)) {
+//
+// If the cached payload (or freshly-built payload) matches the request's
+// If-None-Match header, the response is a 304 with no body — the big win
+// on slow-changing data.
+func (c *singleKeyByteCache) serve(w http.ResponseWriter, r *http.Request, ttl time.Duration, errContext string, opts serveOpts, build func() ([]byte, error)) {
 	for {
 		c.mu.Lock()
 		if c.payload != nil && time.Now().Before(c.expiresAt) {
 			payload := c.payload
+			etag := c.etag
 			c.mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(payload) //nolint:errcheck
+			c.writeServed(w, r, payload, etag, opts)
 			return
 		}
 		if c.inFlight != nil {
@@ -286,6 +346,7 @@ func (c *singleKeyByteCache) serve(w http.ResponseWriter, ttl time.Duration, err
 				c.mu.Lock()
 				if err == nil && payload != nil {
 					c.payload = payload
+					c.etag = computeETag(payload)
 					c.expiresAt = time.Now().Add(ttl)
 				}
 				c.inFlight = nil
@@ -298,10 +359,30 @@ func (c *singleKeyByteCache) serve(w http.ResponseWriter, ttl time.Duration, err
 			writeInternalError(w, errContext, err)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(payload) //nolint:errcheck
+		c.mu.Lock()
+		etag := c.etag
+		c.mu.Unlock()
+		c.writeServed(w, r, payload, etag, opts)
 		return
 	}
+}
+
+func (c *singleKeyByteCache) writeServed(w http.ResponseWriter, r *http.Request, payload []byte, etag string, opts serveOpts) {
+	if etag != "" {
+		w.Header().Set("ETag", etag)
+		if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+			if opts.CacheControl != "" {
+				w.Header().Set("Cache-Control", opts.CacheControl)
+			}
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+	if opts.CacheControl != "" {
+		w.Header().Set("Cache-Control", opts.CacheControl)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(payload) //nolint:errcheck
 }
 
 // obsAnalyticsCacheTTL caps how often we recompute /api/observers/:id/analytics
@@ -1880,11 +1961,22 @@ func (s *Server) handlePostPacket(w http.ResponseWriter, r *http.Request) {
 // --- Node Handlers ---
 
 // handleNodesTTL caps how often /api/nodes recomputes for a given query-string
-// combination. Frontends call this on dashboard load and on route changes;
-// 30 seconds is short enough that new repeaters appearing on the mesh show up
-// quickly, long enough to absorb burst navigation by N users hitting the same
-// query shape.
-const handleNodesTTL = 30 * time.Second
+// combination. Most of the per-node fields (role, name, lat/lon, hash size)
+// are stable across hours; last_seen drifts every packet. 60s server-side
+// strikes the balance — combined with ETag/304 below, browsers that revalidate
+// after their own max-age get a 304 (a few hundred bytes) instead of the full
+// 168 KB-compressed response when nothing changed.
+const handleNodesTTL = 60 * time.Second
+
+// nodesCacheHeader instructs browsers (and Cloudflare) to:
+//   - Treat the response as cacheable for 60 seconds (no revalidation in that
+//     window — instant local hits).
+//   - After that, revalidate with If-None-Match — server may return 304.
+//   - "private" because the response can vary by future per-user filters
+//     (it does not today, but staying conservative is free).
+//   - stale-while-revalidate gives the browser permission to keep serving the
+//     stale copy for an extra 60s while it asks for an update in the background.
+const nodesCacheHeader = "private, max-age=60, stale-while-revalidate=60"
 
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	// The result depends on every query param read below plus the server's
@@ -1894,7 +1986,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	// in the same order share a cache entry; callers that re-order would
 	// not share, which is OK (just slightly worse hit rate).
 	cacheKey := r.URL.RawQuery
-	s.nodesListCache.serve(w, cacheKey, handleNodesTTL, "handleNodes GetNodes", func() ([]byte, error) {
+	s.nodesListCache.serve(w, r, cacheKey, handleNodesTTL, "handleNodes GetNodes", serveOpts{CacheControl: nodesCacheHeader}, func() ([]byte, error) {
 		return s.buildNodesResponse(r)
 	})
 }
@@ -2946,15 +3038,19 @@ func (s *Server) handleResolveHops(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleChannelsTTL caps how often /api/channels recomputes per
-// (region, includeEncrypted) combination. Channels are operator-managed and
-// move on a minute-to-hour timescale; a minute of staleness is invisible.
-const handleChannelsTTL = 60 * time.Second
+// (region, includeEncrypted) combination. Channels are operator-managed —
+// adverts add new ones, but the set is essentially static within a 5-minute
+// window. Bumped from 60s to 5 min in conjunction with ETag/304: cache misses
+// are rare, browsers revalidate after their own max-age and get a 304 the
+// vast majority of the time.
+const handleChannelsTTL = 5 * time.Minute
+const channelsCacheHeader = "private, max-age=300, stale-while-revalidate=300"
 
 func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	includeEncrypted := r.URL.Query().Get("includeEncrypted") == "true"
 	cacheKey := region + "|" + strconv.FormatBool(includeEncrypted)
-	s.channelsCache.serve(w, cacheKey, handleChannelsTTL, "handleChannels GetChannels", func() ([]byte, error) {
+	s.channelsCache.serve(w, r, cacheKey, handleChannelsTTL, "handleChannels GetChannels", serveOpts{CacheControl: channelsCacheHeader}, func() ([]byte, error) {
 		// Prefer DB for full history (in-memory store has limited retention)
 		if s.db != nil {
 			channels, err := s.db.GetChannels(region)
@@ -3006,19 +3102,17 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 // observersListCacheTTL caps how often /api/observers re-scans the DB.
-// Observer metadata (name, IATA, model, lat/lon, etc.) is operator-managed
-// and changes on a manual edit timescale; the only fast-moving field in the
-// response is PacketsLastHour, a 1-hour rolling count where 2 minutes of
-// staleness is invisible. The Observers page bursts this endpoint on every
-// inbound WebSocket packet (observers.js debounce + force-refresh), so a
-// short TTL would still let one cold call per ~30s slip through; a 2-minute
-// TTL matches the frontend's default CLIENT_TTL.observers and lets the
-// server skip the GetObservers + GetObserverPacketCounts + GetNodeLocationsByKeys
-// triplet for the bulk of those refreshes.
-const observersListCacheTTL = 2 * time.Minute
+// Observer metadata is operator-managed and the only fast-moving field is
+// PacketsLastHour (a 1-hour rolling count) — 5 minutes of staleness on a
+// 60-minute window is invisible. The Observers page bursts this endpoint
+// on every inbound WS packet (observers.js debounce + force-refresh); with
+// ETag/304 below those bursts mostly return 304 anyway, so the TTL can be
+// generous.
+const observersListCacheTTL = 5 * time.Minute
+const observersListCacheHeader = "private, max-age=120, stale-while-revalidate=180"
 
 func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
-	s.observersListCache.serve(w, observersListCacheTTL, "handleObservers GetObservers", func() ([]byte, error) {
+	s.observersListCache.serve(w, r, observersListCacheTTL, "handleObservers GetObservers", serveOpts{CacheControl: observersListCacheHeader}, func() ([]byte, error) {
 		observers, err := s.db.GetObservers()
 		if err != nil {
 			return nil, err
@@ -3074,11 +3168,12 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 // The 24h/7d counts change very slowly relative to the 5-min frontend client
 // TTL — a few extra minutes of staleness on a 7-day count is invisible.
 const observersStatsCacheTTL = 5 * time.Minute
+const observersStatsCacheHeader = "private, max-age=300, stale-while-revalidate=300"
 
 // handleObserversStats returns per-observer 24h and 7d packet counts for the
 // stats block. Kept separate from /api/observers so the main list stays lean.
 func (s *Server) handleObserversStats(w http.ResponseWriter, r *http.Request) {
-	s.observersStatsCache.serve(w, observersStatsCacheTTL, "handleObserversStats GetObserverAllPacketCounts", func() ([]byte, error) {
+	s.observersStatsCache.serve(w, r, observersStatsCacheTTL, "handleObserversStats GetObserverAllPacketCounts", serveOpts{CacheControl: observersStatsCacheHeader}, func() ([]byte, error) {
 		// observations.timestamp is INTEGER (Unix epoch) — use integer cutoffs.
 		now := time.Now()
 		counts := s.db.GetObserverAllPacketCounts(
