@@ -114,4 +114,22 @@
   window.MC_getDarkTileProvider         = getActiveId;
   window.MC_setServerDefaultTileProvider = setServerDefault;
   window.MC_applyTileFilter             = applyTileFilter;
+
+  // ── Cross-tab sync ──────────────────────────────────────────────────────
+  // If another tab in the same browser changes the provider, mirror the
+  // dispatch + filter-apply here so live map.js / live.js swap tiles too.
+  try {
+    window.addEventListener('storage', function (e) {
+      if (!e || e.key !== STORAGE_KEY) return;
+      if (!_hasId(e.newValue)) return;
+      var detail = { id: e.newValue, provider: REGISTRY[e.newValue], crossTab: true };
+      try {
+        var ev = (typeof CustomEvent === 'function')
+          ? new CustomEvent(EVENT_NAME, { detail: detail })
+          : { type: EVENT_NAME, detail: detail };
+        window.dispatchEvent(ev);
+      } catch (_) { /* dispatch optional */ }
+      applyTileFilter();
+    });
+  } catch (_) { /* addEventListener may not exist in some envs */ }
 })();

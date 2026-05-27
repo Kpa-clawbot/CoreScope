@@ -30,6 +30,7 @@ function makeStorage() {
 function makeSandbox(opts) {
   opts = opts || {};
   const events = [];
+  const listeners = {};
   const tilePane = { style: { filter: '' } };
   const ctx = {
     console,
@@ -43,7 +44,7 @@ function makeSandbox(opts) {
       addEventListener: () => {},
     },
     window: {
-      addEventListener: () => {},
+      addEventListener: (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); },
       dispatchEvent: (ev) => { events.push(ev); return true; },
       matchMedia: () => ({ matches: false, addEventListener: () => {} }),
     },
@@ -55,6 +56,7 @@ function makeSandbox(opts) {
   // Make window mirror globals (the module uses window.X assignment)
   ctx.window.document = ctx.document;
   ctx.events = events;
+  ctx.listeners = listeners;
   ctx.tilePane = tilePane;
   return ctx;
 }
@@ -146,6 +148,30 @@ test('Light mode always clears the CSS filter even if inverted provider is selec
   ctx.window.MC_setDarkTileProvider('voyager-inverted');
   ctx.window.MC_applyTileFilter();  // light theme → must clear regardless of provider
   assert.strictEqual(ctx.tilePane.style.filter, '');
+});
+
+test('Cross-tab storage event re-dispatches mc-tile-provider-changed and re-applies filter', () => {
+  const ctx = makeSandbox({ theme: 'dark' });
+  loadProviders(ctx);
+  // Sanity: module registered a storage listener.
+  assert.ok(ctx.listeners.storage && ctx.listeners.storage.length >= 1, 'storage listener registered');
+  // Simulate localStorage change from another tab (do NOT call setActive — that's same-tab).
+  ctx.localStorage.setItem('mc-dark-tile-provider', 'voyager-inverted');
+  const before = ctx.events.length;
+  ctx.listeners.storage[0]({ key: 'mc-dark-tile-provider', newValue: 'voyager-inverted', oldValue: null });
+  assert.ok(ctx.events.length > before, 'storage event re-dispatched mc-tile-provider-changed');
+  const ev = ctx.events[ctx.events.length - 1];
+  assert.strictEqual(ev.type, 'mc-tile-provider-changed');
+  assert.strictEqual(ev.detail.id, 'voyager-inverted');
+  assert.strictEqual(ev.detail.crossTab, true);
+  assert.ok(ctx.tilePane.style.filter.indexOf('invert(') >= 0, 'filter re-applied after cross-tab change');
+  // Unknown values from other tabs must be ignored.
+  const beforeIgnored = ctx.events.length;
+  ctx.listeners.storage[0]({ key: 'mc-dark-tile-provider', newValue: 'bogus', oldValue: 'voyager-inverted' });
+  assert.strictEqual(ctx.events.length, beforeIgnored, 'unknown ids do not re-dispatch');
+  // Unrelated keys must be ignored.
+  ctx.listeners.storage[0]({ key: 'other-key', newValue: 'carto-dark', oldValue: null });
+  assert.strictEqual(ctx.events.length, beforeIgnored, 'unrelated key ignored');
 });
 
 process.on('beforeExit', () => {

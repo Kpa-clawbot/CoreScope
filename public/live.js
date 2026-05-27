@@ -1199,6 +1199,10 @@
         _liveDarkRefLayer = null;
       }
       if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
+      // #1420 parity with map.js — refresh visible attribution credit after provider swap.
+      if (map.attributionControl) {
+        try { map.attributionControl._update && map.attributionControl._update(); } catch (_) {}
+      }
     }
     const _liveInitTile = _liveResolveTile(isDark);
     let tileLayer = L.tileLayer(_liveInitTile.url, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(map);
