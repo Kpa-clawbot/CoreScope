@@ -266,9 +266,16 @@ func (c *Config) GZipEnabled() bool {
 	return c.Compression.GZip
 }
 
-// WSCompressionEnabled returns true when WebSocket permessage-deflate is explicitly enabled.
+// WSCompressionEnabled returns true when WebSocket permessage-deflate is
+// enabled. Defaults to true: the WS broadcast carries full decoded-JSON
+// packets, which compress very well (~4-6× ratio). The per-message CPU cost
+// is negligible compared to the network savings on a busy mesh. Set
+// "compression": {"websocket": false} in config.json to opt out.
 func (c *Config) WSCompressionEnabled() bool {
-	return c.Compression != nil && c.Compression.Websocket
+	if c.Compression == nil {
+		return true
+	}
+	return c.Compression.Websocket
 }
 
 // ResolvedPathConfig controls async backfill behavior.

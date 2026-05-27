@@ -395,6 +395,13 @@ func main() {
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
+	// Keep already-seen /api/nodes cache keys warm. After a user hits a
+	// query shape (limit=2000, limit=10000&lastHeard=30d, …) the cache
+	// stores the bytes; this background refresh re-runs the build before
+	// TTL expiry so the next request always finds a warm entry and never
+	// pays the cold-miss cost. Idle when no keys are cached.
+	srv.StartCacheWarmers()
+
 	// WebSocket endpoint
 	router.HandleFunc("/ws", hub.ServeWS)
 

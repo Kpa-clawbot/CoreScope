@@ -10,6 +10,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"runtime"
@@ -454,7 +455,66 @@ const (
 	memStatsTTL    = 5 * time.Second
 	healthCacheTTL = 5 * time.Second  // /api/health response cache
 	perfCacheTTL   = 10 * time.Second // /api/perf response cache
+
+	// nodesWarmInterval is how often the background goroutine refreshes
+	// already-seen /api/nodes cache keys. Chosen to be a hair below
+	// handleNodesTTL (60s) so each entry gets refreshed just before it
+	// would otherwise go stale.
+	nodesWarmInterval = 45 * time.Second
 )
+
+// StartCacheWarmers kicks off background goroutines that periodically refresh
+// hot response caches so user-visible cache misses are rare. Called from
+// main.go after the server is wired but before HTTP listen.
+func (s *Server) StartCacheWarmers() {
+	go s.warmNodesCacheLoop()
+}
+
+func (s *Server) warmNodesCacheLoop() {
+	tick := time.NewTicker(nodesWarmInterval)
+	defer tick.Stop()
+	for range tick.C {
+		s.warmNodesCacheOnce()
+	}
+}
+
+// warmNodesCacheOnce refreshes every currently-cached /api/nodes entry.
+// Skips when nothing has ever been cached — no point precomputing query
+// shapes the frontend doesn't actually use.
+func (s *Server) warmNodesCacheOnce() {
+	s.nodesListCache.mu.Lock()
+	keys := make([]string, 0, len(s.nodesListCache.entries))
+	for k := range s.nodesListCache.entries {
+		keys = append(keys, k)
+	}
+	s.nodesListCache.mu.Unlock()
+	if len(keys) == 0 {
+		return
+	}
+	for _, key := range keys {
+		req := newWarmRequest(key)
+		payload, err := s.buildNodesResponse(req)
+		if err != nil || payload == nil {
+			continue
+		}
+		etag := computeETag(payload)
+		s.nodesListCache.mu.Lock()
+		s.nodesListCache.entries[key] = &perKeyByteCacheEntry{
+			payload:   payload,
+			etag:      etag,
+			expiresAt: time.Now().Add(handleNodesTTL),
+		}
+		s.nodesListCache.mu.Unlock()
+	}
+}
+
+// newWarmRequest fabricates a minimal *http.Request that buildNodesResponse
+// can read for its query parameters. The cache key from perKeyByteCache is
+// the raw query string (see handleNodes), so we put it back in URL.RawQuery
+// and let Query() parse it the same way the real handler would.
+func newWarmRequest(rawQuery string) *http.Request {
+	return &http.Request{URL: &url.URL{RawQuery: rawQuery}}
+}
 
 // getMemStats returns cached runtime.MemStats, refreshing at most every 5 seconds.
 // runtime.ReadMemStats() stops the world; caching prevents per-request GC pauses.

@@ -1198,6 +1198,20 @@ func (s *Store) CheckpointPassive() {
 	}
 }
 
+// RunAnalyze refreshes SQLite's query-planner statistics by running ANALYZE
+// across every table. The planner uses these stats to pick between candidate
+// indexes — without them, decisions are made on rough rule-of-thumb defaults
+// that can be wrong by an order of magnitude on a populated DB. Cheap on
+// modern SQLite (samples a fixed number of pages per table, not full scans).
+// Run on startup once and from the daily maintenance ticker.
+func (s *Store) RunAnalyze() {
+	if _, err := s.db.Exec("ANALYZE"); err != nil {
+		log.Printf("[db] ANALYZE error: %v", err)
+		return
+	}
+	log.Println("[db] ANALYZE complete — query planner stats refreshed")
+}
+
 // BackfillPathJSONAsync launches the path_json backfill in a background goroutine.
 // It processes observations with NULL/empty path_json that have raw_hex available,
 // decoding hop paths and updating the column. Safe to run concurrently with ingest

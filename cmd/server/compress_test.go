@@ -16,10 +16,11 @@ func TestCompressionConfigDefaults(t *testing.T) {
 	if !cfg.GZipEnabled() {
 		t.Error("GZipEnabled should default to true when compression is nil")
 	}
-	// WebSocket permessage-deflate stays off by default — it adds per-message
-	// CPU for live packet broadcast where messages are already tiny.
-	if cfg.WSCompressionEnabled() {
-		t.Error("WSCompressionEnabled should be false when compression is nil")
+	// WebSocket permessage-deflate also defaults to ON — broadcast packets
+	// carry full decoded JSON which compresses 4-6×, and the per-message CPU
+	// cost is small relative to the network savings on a busy mesh.
+	if !cfg.WSCompressionEnabled() {
+		t.Error("WSCompressionEnabled should default to true when compression is nil")
 	}
 }
 

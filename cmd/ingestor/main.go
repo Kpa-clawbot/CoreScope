@@ -110,6 +110,11 @@ func main() {
 	vacuumPages := cfg.IncrementalVacuumPages()
 	store.RunIncrementalVacuum(vacuumPages)
 
+	// Refresh SQLite's query-planner statistics. The planner uses these to
+	// pick between candidate indexes; without recent ANALYZE the choice can
+	// be order-of-magnitude wrong on a populated DB. Cheap to run.
+	store.RunAnalyze()
+
 	// Shared done-channel: closed on shutdown so all retention/stats ticker
 	// goroutines exit cleanly instead of leaking (mirrors the watchdog's
 	// stop pattern).
@@ -213,6 +218,28 @@ func main() {
 				return
 			case <-statsTicker.C:
 				store.LogStats()
+			}
+		}
+	}()
+
+	// Periodic ANALYZE (every 24h). Keeps SQLite's index-selection
+	// statistics fresh as the DB grows; cheap (samples pages, doesn't
+	// full-scan). Staggered 30 min after startup so it doesn't pile on
+	// the initial vacuum.
+	analyzeTicker := time.NewTicker(24 * time.Hour)
+	go func() {
+		select {
+		case <-tickerDone:
+			return
+		case <-time.After(30 * time.Minute):
+		}
+		store.RunAnalyze()
+		for {
+			select {
+			case <-tickerDone:
+				return
+			case <-analyzeTicker.C:
+				store.RunAnalyze()
 			}
 		}
 	}()
