@@ -1,4 +1,4 @@
-/* route-tufte.js — Tufte-prescribed redesign of the packet-route map view.
+/* route-view.js — Tufte-prescribed redesign of the packet-route map view.
  *
  * Principles (from consultation):
  *   - The data is a SEQUENCE. Geography is annotation.

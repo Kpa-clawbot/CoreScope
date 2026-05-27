@@ -1,4 +1,4 @@
-/* route-tufte.css — Tufte-style route view layout + styling. */
+/* route-view.css — Tufte-style route view layout + styling. */
 
 body.mc-route-active #leaflet-map { left: 320px !important; width: calc(100% - 320px) !important; }
 

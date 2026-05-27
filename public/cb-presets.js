@@ -251,7 +251,7 @@
       Object.keys(p.mb).forEach(function (k) {
         style.setProperty('--mc-mb-' + k, p.mb[k]);
       });
-      // #1418 — route-view sequence ramp (5 stops). route-tufte.js reads
+      // #1418 — route-view sequence ramp (5 stops). route-view.js reads
       // --mc-rt-ramp-0..4 instead of hardcoded viridis/magma so a CB preset
       // changes the route edge colors live. Achromat uses a luminance ramp.
       var rr = p.routeRamp || ['#440154','#3b528b','#21918c','#5ec962','#fde725'];

@@ -296,7 +296,7 @@
     if (typeof window !== 'undefined') {
       window.__mc_map = map;
       window.__mc_routeLayer = routeLayer;
-      // Expose nodes array for route-tufte's path-picker isolation
+      // Expose nodes array for route-view's path-picker isolation
       // (needs to resolve hop prefixes that aren't in the canonical path).
       Object.defineProperty(window, '__mc_nodes', { get: function () { return nodes; }, configurable: true });
       window.deconflictLabels = deconflictLabels;
