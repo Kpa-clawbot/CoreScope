@@ -812,10 +812,10 @@
         } catch (e) {}
       }
       if (coordsForFit.length > 0) {
-        doFit();
-        setTimeout(doFit, 200);
-        setTimeout(doFit, 600);
-        setTimeout(doFit, 1400);
+        // Polish review (carmack/doshi/tufte): single rAF replaces the prior
+        // 3-staggered (0/200/600/1400ms) fit storm. The ResizeObserver wired
+        // in render() catches any subsequent layout settles.
+        requestAnimationFrame(doFit);
       }
       // Re-fan spider on the new isolated markers
       if (sidebar._respider) sidebar._respider();
@@ -1037,9 +1037,7 @@
         } catch (e) {}
       }
       _restoreFit();
-      setTimeout(_restoreFit, 200);
-      setTimeout(_restoreFit, 600);
-      setTimeout(_restoreFit, 1400);
+      requestAnimationFrame(_restoreFit);
     }
     var pathRows = sidebar.querySelectorAll('.mc-rt-path-row');
     pathRows.forEach(function (row) {
@@ -1155,6 +1153,23 @@
         document.body.classList.remove('mc-route-active');
         try { sessionStorage.removeItem('map-route-hops'); } catch (e) {}
         window.removeEventListener('hashchange', teardownIfNavigatedAway);
+        // Polish review (carmack/munger): drop the resize listener + ResizeObserver
+        // wired in render() so they don't accumulate across nav cycles.
+        try {
+          if (window.__mc_routeResizeRefit) {
+            window.removeEventListener('resize', window.__mc_routeResizeRefit);
+            window.__mc_routeResizeRefit = null;
+          }
+        } catch (e) { console.warn('[route-view] resize teardown:', e); }
+        try {
+          if (window.__mc_routeResizeObserver && window.__mc_routeResizeObserver.disconnect) {
+            window.__mc_routeResizeObserver.disconnect();
+            window.__mc_routeResizeObserver = null;
+          }
+        } catch (e) { console.warn('[route-view] ResizeObserver teardown:', e); }
+        // Polish review (carmack): clear the unbounded _detailCache (it grew
+        // for the lifetime of the tab; bounded now to per-route session).
+        try { if (typeof _detailCache !== 'undefined') _detailCache.clear && _detailCache.clear(); } catch (e) {}
         // Leaflet cached its container width while sidebar was open; force a
         // re-measure so markers/tiles re-render at full width.
         if (mapRef && typeof mapRef.invalidateSize === 'function') {
@@ -1494,17 +1509,46 @@
       } catch (e) {}
     }
     if (fitPts.length > 0) {
-      refit();
-      setTimeout(refit, 300);
-      setTimeout(refit, 800);
-      setTimeout(refit, 1600);
-      setTimeout(refit, 2800);
-      // iOS URL-bar resize fires window resize; re-fit then too
+      // Polish review (carmack/doshi/tufte): the previous 5-staggered-timer
+      // (0/300/800/1600/2800ms) + naked window.resize listener leaked one
+      // closure per route-view render and made the map "dance" for ~3s.
+      // Replace with a single rAF for initial settle + a ResizeObserver on
+      // the map container for layout changes. The resize handler is also
+      // stashed on window.__mc_routeResizeRefit so subsequent renders can
+      // detach the prior closure (same pattern as hashchange/cb-preset).
+      requestAnimationFrame(refit);
+
+      // Tear down any prior resize/ResizeObserver attachments first.
+      try {
+        if (window.__mc_routeResizeRefit) {
+          window.removeEventListener('resize', window.__mc_routeResizeRefit);
+        }
+      } catch (e) { console.warn('[route-view] resize cleanup:', e); }
+      try {
+        if (window.__mc_routeResizeObserver && window.__mc_routeResizeObserver.disconnect) {
+          window.__mc_routeResizeObserver.disconnect();
+        }
+      } catch (e) { console.warn('[route-view] ResizeObserver cleanup:', e); }
+
       var _resizeRefitTimer = null;
-      window.addEventListener('resize', function () {
+      function onResize() {
         if (_resizeRefitTimer) clearTimeout(_resizeRefitTimer);
         _resizeRefitTimer = setTimeout(refit, 200);
-      });
+      }
+      window.__mc_routeResizeRefit = onResize;
+      window.addEventListener('resize', onResize);
+
+      // ResizeObserver on the map container catches sidebar open/close,
+      // mobile bottom-sheet expand, and other layout settles that don't
+      // fire a window.resize event.
+      try {
+        var mapEl = mapRef && mapRef.getContainer ? mapRef.getContainer() : null;
+        if (mapEl && typeof ResizeObserver === 'function') {
+          var ro = new ResizeObserver(function () { onResize(); });
+          ro.observe(mapEl);
+          window.__mc_routeResizeObserver = ro;
+        }
+      } catch (e) { console.warn('[route-view] ResizeObserver attach:', e); }
     }
   }
 
