@@ -5,14 +5,6 @@ import (
 	"time"
 )
 
-// repeaterEnrichTTL is the safety-net TTL for the bulk enrichment caches.
-// Derived as 2× the recomputer's default tick so the cache is always valid
-// between background refreshes. Without a recomputer (tests, edge cases)
-// the cache rebuilds on-thread at most once per TTL window.
-// Note: if analytics.defaultIntervalSeconds is configured above 600 the
-// TTL will expire before the recomputer runs; keep that value < TTL/2.
-const repeaterEnrichTTL = 2 * repeaterEnrichmentRecomputerDefaultInterval
-
 // GetRepeaterRelayInfoMap returns a cached pubkey → RepeaterRelayInfo
 // map covering EVERY pubkey that currently appears as a path hop in any
 // non-advert StoreTx. This is the bulk equivalent of calling
@@ -30,28 +22,34 @@ const repeaterEnrichTTL = 2 * repeaterEnrichmentRecomputerDefaultInterval
 // The cached map is keyed by lowercase pubkey/hop key (same shape as
 // byPathHop). Lookups should use strings.ToLower(pk).
 //
-// The cache is invalidated by TTL only — never by ingest. Up-to-10min
-// freshness is fine for an at-a-glance status column; if a fresher
-// signal is ever needed for a non-status caller, expose a non-cached path.
+// The cache is refreshed by the background recomputer (every 5 min by
+// default). This function never rebuilds inline on a populated cache —
+// serving a slightly stale snapshot is always preferable to a 700ms
+// on-request rebuild. The only time an inline compute happens is when
+// the cache is nil (i.e. before the recomputer's synchronous prewarm
+// completes, which can occur in tests without a running recomputer).
 func (s *PacketStore) GetRepeaterRelayInfoMap(windowHours float64) map[string]RepeaterRelayInfo {
 	s.repeaterEnrichMu.Lock()
-	if s.repeaterRelayCache != nil &&
-		time.Since(s.repeaterRelayAt) < repeaterEnrichTTL &&
-		s.repeaterRelayCacheWin == windowHours {
-		cached := s.repeaterRelayCache
-		s.repeaterEnrichMu.Unlock()
+	cached := s.repeaterRelayCache
+	s.repeaterEnrichMu.Unlock()
+	if cached != nil {
 		return cached
 	}
-	s.repeaterEnrichMu.Unlock()
 
+	// Cache is nil — recomputer hasn't prewarmed yet (edge case: tests
+	// without a running recomputer, or a request racing the initial
+	// synchronous prewarm). Build once inline; the recomputer takes over.
 	result := s.computeRepeaterRelayInfoMap(windowHours)
 
 	s.repeaterEnrichMu.Lock()
-	s.repeaterRelayCache = result
-	s.repeaterRelayCacheWin = windowHours
-	s.repeaterRelayAt = time.Now()
+	if s.repeaterRelayCache == nil {
+		s.repeaterRelayCache = result
+		s.repeaterRelayCacheWin = windowHours
+		s.repeaterRelayAt = time.Now()
+	}
+	cached = s.repeaterRelayCache
 	s.repeaterEnrichMu.Unlock()
-	return result
+	return cached
 }
 
 // computeRepeaterRelayInfoMap walks byPathHop once under a single RLock,
@@ -177,23 +175,25 @@ func (s *PacketStore) computeRepeaterRelayInfoMap(windowHours float64) map[strin
 // GetRepeaterUsefulnessScoreMap returns a cached pubkey → 0..1 score
 // for every pubkey appearing in byPathHop. Bulk equivalent of
 // GetRepeaterUsefulnessScore. See GetRepeaterRelayInfoMap for the
-// motivation (#1257).
+// motivation (#1257) and the no-inline-rebuild rationale (#1272).
 func (s *PacketStore) GetRepeaterUsefulnessScoreMap() map[string]float64 {
 	s.repeaterEnrichMu.Lock()
-	if s.repeaterUsefulCache != nil && time.Since(s.repeaterUsefulAt) < repeaterEnrichTTL {
-		cached := s.repeaterUsefulCache
-		s.repeaterEnrichMu.Unlock()
+	cached := s.repeaterUsefulCache
+	s.repeaterEnrichMu.Unlock()
+	if cached != nil {
 		return cached
 	}
-	s.repeaterEnrichMu.Unlock()
 
 	result := s.computeRepeaterUsefulnessScoreMap()
 
 	s.repeaterEnrichMu.Lock()
-	s.repeaterUsefulCache = result
-	s.repeaterUsefulAt = time.Now()
+	if s.repeaterUsefulCache == nil {
+		s.repeaterUsefulCache = result
+		s.repeaterUsefulAt = time.Now()
+	}
+	cached = s.repeaterUsefulCache
 	s.repeaterEnrichMu.Unlock()
-	return result
+	return cached
 }
 
 func (s *PacketStore) computeRepeaterUsefulnessScoreMap() map[string]float64 {
