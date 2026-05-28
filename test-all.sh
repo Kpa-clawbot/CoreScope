@@ -43,6 +43,7 @@ node test-issue-1438-customizer-mcrole.js
 node test-issue-1446-cb-preset-cascade.js
 node test-issue-1450-logo-aspect.js
 node test-issue-1454-channels-toggle.js
+node test-issue-1456-score-labels.js
 
 echo ""
 echo "═══════════════════════════════════════"
