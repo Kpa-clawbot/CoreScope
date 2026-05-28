@@ -208,8 +208,11 @@ async function main() {
 
   await ctx.close();
 
-  // ── (e) at 1024x800, edge-swipe hint visible on first visit ──
-  const ctx2 = await browser.newContext({ viewport: { width: 1024, height: 800 } });
+  // ── (e) at 1024x800 with touch, edge-swipe hint visible on first visit ──
+  // #1065 follow-up: edge-swipe is a touch gesture; the hint must only
+  // appear when the viewport reports touch capability. Test context must
+  // pass hasTouch:true (real edge-swipe-on-tablet/touch-laptop scenario).
+  const ctx2 = await browser.newContext({ viewport: { width: 1024, height: 800 }, hasTouch: true });
   const page2 = await ctx2.newPage();
   await page2.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
   await page2.evaluate((keys) => Object.values(keys).forEach((k) => localStorage.removeItem(k)), KEYS);
