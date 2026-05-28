@@ -575,12 +575,26 @@
           // sits in localStorage but --mc-role-{role} falls back to the
           // active preset on reload, reverting marker fills.
           root.setProperty('--mc-role-' + role, nc[role]);
+          // #1446 — also write to body.style with !important so the user
+          // pick beats the body[data-cb-preset="X"] selector cascade when
+          // a CB preset is active. Without this, the root-level write is
+          // shadowed by the preset's body-scoped CSS rule (root cause of
+          // #1444). When no preset is active, the body write is harmless
+          // and still wins inheritance.
+          if (presetActive && document.body && document.body.style) {
+            document.body.style.setProperty('--mc-role-' + role, nc[role], 'important');
+          }
         } else if (!presetActive) {
           // #1446 — no preset is active; server config is the legitimate
           // source of role colors. Write --mc-role-{role} so marker SVGs
           // honor operator's config.json without forcing visitors to pick
           // a CB preset to "unlock" their server palette.
           root.setProperty('--mc-role-' + role, nc[role]);
+        } else if (presetActive && document.body && document.body.style) {
+          // Preset active AND this role has no user override:
+          // ensure any prior body inline !important is removed so the
+          // preset value (from body[data-cb-preset=X] CSS rule) takes over.
+          document.body.style.removeProperty('--mc-role-' + role);
         }
       }
     }
