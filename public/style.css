@@ -3479,21 +3479,12 @@ th.sort-active { color: var(--accent, #60a5fa); }
  * truth so a regression that drops one is still caught by the other
  * (mirrors the #1356 "pill color: defense-in-depth via CSS + inline" pattern).
  * ─────────────────────────────────────────────────────────────────────── */
-body[data-cb-preset="default"] {
-  --mc-role-repeater:  #D55E00;
-  --mc-role-companion: #56B4E9;
-  --mc-role-room:      #009E73;
-  --mc-role-sensor:    #F0E442;
-  --mc-role-observer:  #CC79A7;
-  --mc-role-repeater-text:  #1a1a1a;
-  --mc-role-companion-text: #1a1a1a;
-  --mc-role-room-text:      #1a1a1a;
-  --mc-role-sensor-text:    #1a1a1a;
-  --mc-role-observer-text:  #1a1a1a;
-  --mc-mb-confirmed:   #56F0A0;
-  --mc-mb-suspected:   #FFD966;
-  --mc-mb-unknown:     #FF8888;
-}
+/* #1446 — the body data-cb-preset rule for the default (Wong) palette is
+ * intentionally OMITTED. Wong is the :root baseline; selecting "default"
+ * from the customizer is identical to "no preset". Writing the Wong
+ * palette here would mask the server config's nodeColors (see #1446
+ * cascade). Wong values remain available via :root above.
+ */
 body[data-cb-preset="deut"] {
   /* IBM 5-class deut variant — anchors shifted out of red/green collision. */
   --mc-role-repeater:  #FE6100;

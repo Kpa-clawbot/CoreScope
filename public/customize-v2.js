@@ -554,12 +554,18 @@
     // overrides still flow through setRoleColorOverride() in customize.js.
     var nc = effectiveConfig.nodeColors;
     if (nc) {
-      // #1438 final: scope --mc-role-{role} writes to USER overrides only.
-      // Server-config nodeColors must stay out of --mc-role-* because
-      // ROLE_COLORS live getter (roles.js) reads from that var; writing
-      // server defaults there would re-introduce the #1412 bug (server
-      // legacy palette trapping cb-preset propagation).
+      // #1438 final: scope --mc-role-{role} writes to USER overrides only,
+      // UNLESS no CB preset is active (#1446). When a preset is active the
+      // server-config palette must stay out of --mc-role-* so the preset
+      // wins (preserves #1412). When NO preset is active, the cascade is:
+      //   user override > server config > built-in :root default.
+      // → server config gets to write --mc-role-{role} in that case.
       var userNc = (userOverrides && userOverrides.nodeColors) || {};
+      var presetActive = false;
+      try {
+        var presetAttr = document.body && document.body.getAttribute && document.body.getAttribute('data-cb-preset');
+        presetActive = !!(presetAttr && presetAttr !== 'none');
+      } catch (e) {}
       for (var role in nc) {
         root.setProperty('--node-' + role, nc[role]);
         if (Object.prototype.hasOwnProperty.call(userNc, role)) {
@@ -568,7 +574,13 @@
           // pick it up on every page load. Without this the user pick
           // sits in localStorage but --mc-role-{role} falls back to the
           // active preset on reload, reverting marker fills.
-          root.setProperty('--mc-role-' + role, userNc[role]);
+          root.setProperty('--mc-role-' + role, nc[role]);
+        } else if (!presetActive) {
+          // #1446 — no preset is active; server config is the legitimate
+          // source of role colors. Write --mc-role-{role} so marker SVGs
+          // honor operator's config.json without forcing visitors to pick
+          // a CB preset to "unlock" their server palette.
+          root.setProperty('--mc-role-' + role, nc[role]);
         }
       }
     }
@@ -1147,7 +1159,9 @@
   function _renderColorblindPresetSelector() {
     var MCP = (typeof window !== 'undefined') && window.MeshCorePresets;
     if (!MCP || !Array.isArray(MCP.list)) return '';
-    var current = MCP.currentPreset ? MCP.currentPreset() : 'default';
+    // #1446 — currentPreset() now returns null when no preset is stored.
+    var current = MCP.currentPreset ? MCP.currentPreset() : null;
+    var clearOpt = _renderCbPresetClearOption(current);
     var options = MCP.list.map(function (p) {
       var checked = p.id === current ? ' checked' : '';
       return '<label class="cust-cb-preset-row" style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;cursor:pointer">' +
@@ -1159,10 +1173,23 @@
         '</div>' +
       '</label>';
     }).join('');
-    return '<p class="cust-section-title">Colorblind Preset</p>' +
-      '<p class="cust-hint" style="margin-bottom:8px">Switch the role/status palette for color-vision variants. Achromatopsia uses a luminance-only ramp and relies on the shape/letter/glyph carriers from #1356/#1357.</p>' +
-      '<div class="cust-cb-presets" data-cv2-cb-preset-group>' + options + '</div>' +
+    return '<p class="cust-section-title">Optional: Colorblind-Safe Preset</p>' +
+      '<p class="cust-hint" style="margin-bottom:8px">A CB preset is an end-user opt-in that swaps the role/status palette for color-vision variants. ' +
+      'Leave unset to use the operator\'s configured colors (or pick from above). ' +
+      'Achromatopsia uses a luminance-only ramp and relies on the shape/letter/glyph carriers from #1356/#1357.</p>' +
+      '<div class="cust-cb-presets" data-cv2-cb-preset-group>' + clearOpt + options + '</div>' +
       '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">';
+  }
+
+  function _renderCbPresetClearOption(current) {
+    var checked = !current ? ' checked' : '';
+    return '<label class="cust-cb-preset-row" style="display:flex;gap:8px;align-items:flex-start;margin:6px 0;cursor:pointer">' +
+      '<input type="radio" name="cv2-cb-preset" data-cv2-cb-preset value="" data-cv2-cb-preset-none' + checked + ' style="margin-top:3px">' +
+      '<div style="flex:1">' +
+        '<div style="font-weight:600">No preset (use operator / custom colors)</div>' +
+        '<div class="cust-hint" style="font-size:12px;color:var(--text-muted)">Default — server-configured colors apply, then any per-role overrides above.</div>' +
+      '</div>' +
+    '</label>';
   }
 
   function _renderCbPresetWarning(id) {
@@ -1213,9 +1240,11 @@
     var liveHeatPct = Math.round(liveHeatOpacity * 100);
 
     return '<div class="cust-panel' + (_activeTab === 'nodes' ? ' active' : '') + '" data-panel="nodes">' +
-      _renderColorblindPresetSelector() +
-      '<p class="cust-section-title">Node Role Colors</p>' + rows +
+      '<p class="cust-section-title">Node Role Colors</p>' +
+      '<p class="cust-hint" style="margin-bottom:8px">These are the canonical role colors used across the app. They inherit from your server config (or built-in defaults), and can be optionally remapped by a colorblind-safe preset below.</p>' +
+      rows +
       '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">' +
+      _renderColorblindPresetSelector() +
       '<p class="cust-section-title">Packet Type Colors</p>' + typeRows +
       '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">' +
       '<p class="cust-section-title">Heatmap Opacity</p>' +
@@ -1833,14 +1862,21 @@
     if (_activeTab === 'geofilter') _initGeoFilterTab(container);
 
     // #1361 Colorblind preset radio — switches preset via MeshCorePresets.applyPreset
+    // #1446 — empty-value radio = "no preset" → clearPreset(), then re-run
+    // the customizer pipeline so server-config colors take over.
     container.querySelectorAll('[data-cv2-cb-preset]').forEach(function (radio) {
       radio.addEventListener('change', function () {
         if (!radio.checked) return;
         var id = radio.value;
-        if (window.MeshCorePresets && typeof window.MeshCorePresets.applyPreset === 'function') {
-          window.MeshCorePresets.applyPreset(id);
-          _refreshPanel();
+        var MCP = window.MeshCorePresets;
+        if (!MCP) return;
+        if (!id) {
+          if (typeof MCP.clearPreset === 'function') MCP.clearPreset();
+          _runPipeline();
+        } else if (typeof MCP.applyPreset === 'function') {
+          MCP.applyPreset(id);
         }
+        _refreshPanel();
       });
     });
 
@@ -2165,6 +2201,18 @@
 
   // 1. Migration check
   migrateOldKeys();
+
+  // #1446 — when a CB preset is cleared (or applied), re-run the customizer
+  // pipeline so server-config nodeColors take over the --mc-role-{role}
+  // CSS vars (the gating logic in applyCSS checks the body[data-cb-preset]
+  // attribute to decide whether to write them).
+  try {
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('cb-preset-changed', function () {
+        if (_initDone) _runPipeline();
+      });
+    }
+  } catch (e) {}
 
   // 2. Read overrides and apply CSS immediately (before DOMContentLoaded)
   // Server defaults will be set later when /api/config/theme completes.

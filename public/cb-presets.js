@@ -279,11 +279,44 @@
         if (v && _byId(v)) return v;
       }
     } catch (e) {}
-    return 'default';
+    // #1446 — return null when no preset is stored. Previously this returned
+    // 'default' unconditionally, which forced body[data-cb-preset="default"]
+    // on every cold boot and trapped --mc-role-* in the Wong palette via the
+    // matching style.css rule. The CB preset is now an end-user opt-in:
+    // absent attribute = "no preset", role colors flow from server config.
+    return null;
+  }
+
+  function clearPreset() {
+    try { if (typeof localStorage !== 'undefined') localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+    if (typeof document !== 'undefined' && document.body && document.body.removeAttribute) {
+      document.body.removeAttribute(DATA_ATTR);
+    }
+    // Strip preset-written CSS vars from documentElement so the cascade
+    // re-falls through :root defaults (or server config, which the
+    // customizer pipeline re-applies via the cb-preset-changed listener).
+    if (typeof document !== 'undefined' && document.documentElement && document.documentElement.style) {
+      var style = document.documentElement.style;
+      ['repeater', 'companion', 'room', 'sensor', 'observer'].forEach(function (role) {
+        style.removeProperty('--mc-role-' + role);
+        style.removeProperty('--mc-role-' + role + '-text');
+      });
+      ['confirmed', 'suspected', 'unknown'].forEach(function (k) {
+        style.removeProperty('--mc-mb-' + k);
+      });
+      for (var ri = 0; ri < 5; ri++) style.removeProperty('--mc-rt-ramp-' + ri);
+    }
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof window.CustomEvent === 'function') {
+      try { window.dispatchEvent(new window.CustomEvent('cb-preset-changed', { detail: { id: null } })); } catch (e) {}
+    }
+    return true;
   }
 
   function initFromStorage() {
-    applyPreset(currentPreset(), { skipPersist: true });
+    var id = currentPreset();
+    // #1446 — only apply when a preset is actually stored. No stored preset
+    // means "no preset active" (the new default), not "fall back to Wong".
+    if (id) applyPreset(id, { skipPersist: true });
   }
 
   // Cross-tab sync via storage event.
@@ -305,6 +338,7 @@
   var api = {
     list: PRESETS,
     applyPreset: applyPreset,
+    clearPreset: clearPreset,
     currentPreset: currentPreset,
     initFromStorage: initFromStorage,
     validatePreset: validatePreset,

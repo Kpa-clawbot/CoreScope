@@ -138,7 +138,23 @@
     // pick up the operator's hex without a page reload. Writing to
     // body inline style is necessary because body[data-cb-preset="..."]
     // selectors beat :root inheritance.
-    targets.forEach(function (s) { s.setProperty(varName, hex); });
+    //
+    // #1446: write with !important so the inline body declaration also
+    // beats the body[data-cb-preset="X"] CSS rule on equal specificity.
+    // Without !important, the cascade order picks the later-defined
+    // stylesheet rule in some browser versions even though specificity
+    // (1,0,1) matches the inline body style — operator pick visibly
+    // loses to active preset (root cause of #1444).
+    targets.forEach(function (s) {
+      // documentElement gets the value without !important (used as the
+      // canonical readout for the JS getter); body gets !important so it
+      // wins the CSS cascade against body[data-cb-preset="X"].
+      if (s === (document.body && document.body.style)) {
+        s.setProperty(varName, hex, 'important');
+      } else {
+        s.setProperty(varName, hex);
+      }
+    });
   };
   // Back-compat: also export the writable override map so customize.js's
   // `window.ROLE_COLORS[key] = inp.value` style mutation works.

@@ -57,6 +57,7 @@ function makeSandbox(localStorageMap) {
   };
   const sandbox = {
     window: null,
+    _listeners: {},
     localStorage: {
       _m: Object.assign({}, localStorageMap),
       getItem(k) { return Object.prototype.hasOwnProperty.call(this._m, k) ? this._m[k] : null; },
@@ -76,7 +77,15 @@ function makeSandbox(localStorageMap) {
     },
     console: console,
     setTimeout: setTimeout, clearTimeout: clearTimeout,
-    addEventListener() {}, dispatchEvent() { return true; },
+    addEventListener(type, fn) {
+      if (!this._listeners[type]) this._listeners[type] = [];
+      this._listeners[type].push(fn);
+    },
+    dispatchEvent(ev) {
+      var arr = this._listeners[ev && ev.type] || [];
+      arr.forEach(function (fn) { try { fn(ev); } catch (e) {} });
+      return true;
+    },
     fetch: function () { return Promise.resolve({ json: function () { return Promise.resolve({}); } }); },
     matchMedia: function () { return { matches: false, addEventListener() {} }; },
     CustomEvent: function (t, o) { this.type = t; this.detail = o && o.detail; },
