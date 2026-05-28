@@ -35,6 +35,17 @@ const VIEWPORTS = [
   { w: 1920, h: 900, expectHidden: false }, // AC #5: also exercise 1920px
 ];
 
+// Per-(page, viewport) override map. After #1415 the packets table's
+// column priorities were rewritten to the locked spec — at 1080px (>1024)
+// every packets column is visible (data-priority 3 columns reveal above
+// 1024px, priority 5 above 768px). The /nodes and /observers tables still
+// match the original #1056 contract. Default falls through to VIEWPORTS.
+function expectHidden(pageName, w) {
+  if (pageName === 'packets' && w >= 1080) return false;
+  const vp = VIEWPORTS.find(v => v.w === w);
+  return vp ? vp.expectHidden : false;
+}
+
 (async () => {
   const browser = await chromium.launch({
     headless: true,
@@ -92,7 +103,7 @@ const VIEWPORTS = [
           };
         }, p.tableSel);
 
-        if (vp.expectHidden) {
+        if (expectHidden(p.name, vp.w)) {
           assert(info.hiddenCount >= 1, `expected ≥1 hidden col at ${vp.w}px, got ${info.hiddenCount}`);
           assert(info.hasPill && info.pillVisible, `expected visible +N pill at ${vp.w}px`);
           assert(/\+\d+/.test(info.pillText), `pill text "${info.pillText}" missing +N marker`);
@@ -105,7 +116,7 @@ const VIEWPORTS = [
         }
       });
 
-      if (vp.expectHidden) {
+      if (expectHidden(p.name, vp.w)) {
         await step(`${tag}: clicking pill reveals hidden columns`, async () => {
           // Click pill
           const pillSel = `${p.tableSel} .col-hidden-pill`;
