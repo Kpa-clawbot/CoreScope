@@ -880,7 +880,10 @@ img.brand-logo {
   padding: 3px 4px; text-align: center;
 }
 
-/* #1461 Tufte v2 mobile prescriptions (iterating; not yet committed). */
+/* #1415 / #1458 / #1461 — mobile packets UX overhaul.
+ * NOTE: hiding the first dt/dd pair below assumes Payload Type is the
+ * first <dt> in .detail-meta (per packets.js renderDetail). Keep that
+ * invariant — test-issue-1415-packets-layout.js asserts it. */
 @media (max-width: 900px) {
   /* #1: kill empty chevron rail */
   #pktTable th.col-expand,

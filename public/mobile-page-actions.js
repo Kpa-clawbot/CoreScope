@@ -121,9 +121,16 @@
    * into the bottom-nav More sheet. bottom-nav.js only wired Dark mode;
    * the others have no mobile surface today. Insert above the existing
    * dark-mode separator so the new items group with the other route items. */
-  function addMissingMoreSheetItems() {
+  function addMissingMoreSheetItems(retryCount) {
+    retryCount = retryCount || 0;
     const sheet = document.querySelector('[data-bottom-nav-sheet]');
-    if (!sheet) { setTimeout(addMissingMoreSheetItems, 500); return; }
+    if (!sheet) {
+      // Bounded retry — bottom-nav.js builds the sheet asynchronously, but
+      // give up after ~5s so we don't poll forever on pages that don't have
+      // bottom-nav (e.g. embedded views, headless tests).
+      if (retryCount < 10) setTimeout(() => addMissingMoreSheetItems(retryCount + 1), 500);
+      return;
+    }
     if (sheet.querySelector('[data-mpa-mirror]')) return;  // already injected
 
     const mirrors = [
