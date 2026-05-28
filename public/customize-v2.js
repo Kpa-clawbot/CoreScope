@@ -74,8 +74,10 @@
       img.className = 'brand-logo';
       img.setAttribute('src', url);
       img.setAttribute('alt', alt || node.getAttribute('aria-label') || 'Brand');
-      img.setAttribute('width', '125');
-      img.setAttribute('height', '36');
+      // #1450 — DO NOT set width/height attrs. CSS img.brand-logo handles
+      // sizing (height:36px, width:auto, max-width cap) so the operator's
+      // natural image aspect ratio is preserved instead of being squished
+      // into the default SVG's 125x36 pill box.
       node.parentNode.replaceChild(img, node);
     } else {
       if (node.tagName.toLowerCase() !== 'img') {

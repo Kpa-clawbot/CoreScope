@@ -518,14 +518,17 @@ input[type="week"] {
 .nav-left { display: flex; align-items: center; gap: var(--space-lg); min-width: 0; flex-shrink: 1; }
 .nav-brand { display: flex; align-items: center; gap: var(--space-sm); text-decoration: none; color: var(--nav-text); font-weight: 700; font-size: var(--fs-md); }
 .brand-icon { font-size: 20px; }
-.brand-logo {
+/* #1450 — split .brand-logo by element type:
+   - Inline default wordmark (<svg>) keeps the 125x36 pin tuned to its
+     viewBox (#1141 widened it to fit CORE/SCOPE; intrinsic content
+     ratio ~3.08:1, so width:125px @ height:36px is the natural box).
+   - Operator custom logo via branding.logoUrl is an <img>, whose
+     natural aspect ratio MUST be preserved — pinning width:125px on
+     a 1:1 or portrait image squishes it into a pill. Use width:auto
+     with a max-width cap so wide logos don't blow the nav layout. */
+svg.brand-logo {
   display: block;
   height: 36px;
-  /* Width matches the inline SVG's effective content aspect (~3.08:1)
-     after cropping to the wordmark+nodes region in the navbar viewBox.
-       /* Pinned to match the SVG intrinsic width (#1141 followup: viewBox
-     widened to 150 10 970 280 to fit CORE/SCOPE wordmark; intrinsic
-     width 125 keeps the text legible at the same ~36px height). */
   width: 125px;
   max-height: 36px;
   /* The logo is inlined into the DOM (PR #1137) so it inherits page
@@ -533,6 +536,14 @@ input[type="week"] {
      in :root above. The .top-nav scope below overrides --logo-text to
      --nav-text so the wordmark stays readable on the dark navbar even
      when the page theme is Light. */
+}
+img.brand-logo {
+  display: block;
+  height: 36px;
+  width: auto;          /* preserve natural aspect of operator image */
+  max-width: 200px;     /* cap wide logos so they can't push nav-right off */
+  max-height: 36px;
+  object-fit: contain;  /* defensive — never crop or stretch the image */
 }
 .top-nav {
   /* Navbar lives on --nav-bg (typically dark), so the brand wordmark
@@ -1726,7 +1737,9 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 @media (max-width: 900px) {
   .panel-right { width: 320px; min-width: 320px; }
   .nav-stats { display: none; }
-  .brand-logo { height: 32px; width: 112px; }
+  /* #1450 — same svg/img split at tablet width */
+  svg.brand-logo { height: 32px; width: 112px; }
+  img.brand-logo { height: 32px; width: auto; max-width: 180px; }
   .nav-link { padding: 14px 8px; font-size: 13px; }
   .map-controls { width: 180px; font-size: 12px; }
 }
