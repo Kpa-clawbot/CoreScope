@@ -879,6 +879,121 @@ img.brand-logo {
   width: 32px; min-width: 32px; max-width: 32px;
   padding: 3px 4px; text-align: center;
 }
+
+/* #1461 Tufte v2 mobile prescriptions (iterating; not yet committed). */
+@media (max-width: 900px) {
+  /* #1: kill empty chevron rail */
+  #pktTable th.col-expand,
+  #pktTable td.col-expand { display: none !important; }
+
+  /* #1b: slim THEAD ~24px sticky */
+  #pktTable thead th {
+    padding: 3px 6px !important;
+    font-size: 9px !important;
+    line-height: 1.2 !important;
+    letter-spacing: 0.04em !important;
+    text-transform: uppercase;
+    height: 24px !important;
+  }
+  #pktTable thead { position: sticky; top: 0; z-index: 5; background: var(--surface-1, #1a1a1a); }
+
+  /* #2: hide page-header row + filter-expr + collapsed filter-bar.
+   * pause + Filters pill are mirrored into .nav-left by mobile-page-actions.js */
+  #pktLeft .page-header { display: none !important; }
+  #pktLeft .pkt-filter-expr { display: none !important; }
+  .filter-bar { display: none !important; }
+  .filter-bar.filters-expanded {
+    display: flex !important;
+    padding: 6px 8px !important;
+    margin-bottom: 4px !important;
+    background: var(--surface-2, rgba(0,0,0,0.05)) !important;
+    border: 1px solid var(--border, #333) !important;
+    border-radius: 6px !important;
+    height: auto;
+  }
+
+  /* #3: detail panel cleanup */
+  /* Strip redundant src→dst line (identity in sticky header) */
+  .mobile-detail-sheet .detail-srcdst { display: none !important; }
+  /* Hide boxed "decoded message" card on mobile — content already in
+   * the sticky header's semantic summary */
+  .mobile-detail-sheet .detail-message { display: none !important; }
+  /* Hide PAYLOAD TYPE row (first dt+dd pair — already in header badge) */
+  .mobile-detail-sheet dl.detail-meta > dt:first-child,
+  .mobile-detail-sheet dl.detail-meta > dt:first-child + dd { display: none !important; }
+  /* 2-col grid for label/value rows */
+  .mobile-detail-sheet dl.detail-meta {
+    display: grid;
+    grid-template-columns: minmax(90px, 30%) 1fr;
+    gap: 4px 10px;
+    margin: 8px 0 !important;
+  }
+  .mobile-detail-sheet dl.detail-meta dt {
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    align-self: center;
+  }
+  .mobile-detail-sheet dl.detail-meta dd {
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 13px;
+  }
+
+  /* #4: sheet structure — kill handle, sticky header inside sheet, clear
+   * bottom-nav (58px tall) so last row doesn't get cut off, taller max */
+  /* Restructure: outer sheet has fixed height + overflow:hidden; the
+   * .mobile-sheet-content is the ONLY scroll region. ✕ close stays sticky
+   * pinned at top of the sheet. Title also stays sticky within the
+   * scroll region. */
+  .mobile-detail-sheet {
+    max-height: calc(100vh - 110px) !important;  /* leave room for bottom nav */
+    padding: 0 !important;
+    overflow: hidden !important;
+    display: none;
+    flex-direction: column;
+  }
+  .mobile-detail-sheet.open { display: flex !important; }
+  .mobile-sheet-handle { display: none !important; }  /* conflicts with browser pull-to-refresh */
+  .mobile-sheet-close {
+    position: absolute !important;
+    top: 6px !important;
+    right: 10px !important;
+    background: var(--surface-2, rgba(0,0,0,0.6)) !important;
+    border-radius: 999px !important;
+    width: 32px !important;
+    height: 32px !important;
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px !important;
+    z-index: 20 !important;
+    border: 1px solid var(--border, #444) !important;
+  }
+  .mobile-sheet-content {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 12px 12px 60px !important;
+    /* visible scrollbar so operator sees there's more */
+    scrollbar-width: thin;
+  }
+  .mobile-sheet-content::-webkit-scrollbar { width: 6px; }
+  .mobile-sheet-content::-webkit-scrollbar-thumb { background: var(--border, #555); border-radius: 3px; }
+  /* Sticky in-sheet header for packet identity */
+  .mobile-detail-sheet .detail-title {
+    position: sticky;
+    top: 0;
+    background: var(--detail-bg);
+    z-index: 5;
+    padding: 6px 36px 8px 0;
+    margin: 0 0 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
 .data-table td:has(.spark-bar), .data-table td.col-spark { max-width: none; overflow: visible; min-width: 80px; }
 .data-table .col-time { min-width: clamp(72px, 8vw, 108px); white-space: nowrap; }
 
