@@ -900,13 +900,14 @@ img.brand-logo {
   }
   #pktTable thead { position: sticky; top: 0; z-index: 5; background: var(--surface-1, #1a1a1a); }
 
-  /* #2: hide page-header row + filter-expr + collapsed filter-bar.
-   * pause + Filters pill are mirrored into .nav-left by mobile-page-actions.js */
+  /* #2: hide page-header row + filter-expr.
+   * pause + Filters pill are mirrored into .nav-left by mobile-page-actions.js.
+   * NOTE: do NOT display:none the entire .filter-bar — the original
+   * .filter-toggle-btn lives inside it and must remain clickable for the
+   * #534 E2E test (and for any user whose navbar mirror failed to inject). */
   #pktLeft .page-header { display: none !important; }
   #pktLeft .pkt-filter-expr { display: none !important; }
-  .filter-bar { display: none !important; }
   .filter-bar.filters-expanded {
-    display: flex !important;
     padding: 6px 8px !important;
     margin-bottom: 4px !important;
     background: var(--surface-2, rgba(0,0,0,0.05)) !important;
