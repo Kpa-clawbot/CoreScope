@@ -17,6 +17,8 @@
     if (!navLeft) return null;
     slot = document.createElement('div');
     slot.id = SLOT_ID;
+    // Layout-only styles inline; visual tokens (border/colors) come from
+    // the mobile @media block in style.css so the customizer can theme us.
     slot.style.cssText = 'display:inline-flex;gap:4px;align-items:center;margin-left:8px;';
     navLeft.appendChild(slot);
     return slot;
@@ -58,15 +60,14 @@
         const real = document.getElementById('pktPauseBtn');
         if (real) real.click();
       });
-      pause.style.cssText = 'padding:4px 6px;font-size:14px;background:transparent;border:1px solid var(--border,#444);border-radius:6px;color:var(--nav-text,#fff);cursor:pointer;';
+      pause.classList.add('mpa-btn-icon');
       slot.appendChild(pause);
       // Mirror filter toggle as a labeled "Filters ▾" pill (matches inline style)
       const filt = makeBtn('Filters ▾', 'Toggle filters', function () {
         const real = document.querySelector('.filter-bar .filter-toggle-btn, #filterToggleBtn');
         if (real) real.click();
       });
-      filt.className = 'nav-btn filter-toggle-btn-mirror';
-      filt.style.cssText = 'padding:4px 10px;font-size:12px;background:transparent;border:1px solid var(--border,#444);border-radius:999px;color:var(--nav-text,#fff);cursor:pointer;font-weight:500;';
+      filt.className = 'nav-btn filter-toggle-btn-mirror mpa-btn-pill';
       slot.appendChild(filt);
     }
   }
@@ -108,7 +109,7 @@
     if (!t) {
       t = document.createElement('div');
       t.id = 'mcMobileToast';
-      t.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:var(--surface-2,#222);color:var(--text,#fff);padding:10px 16px;border:1px solid var(--border,#444);border-radius:8px;font-size:13px;max-width:80vw;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);transition:opacity .3s;';
+      t.className = 'mpa-toast';
       document.body.appendChild(t);
     }
     t.textContent = msg;
