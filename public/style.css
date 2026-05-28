@@ -4021,7 +4021,7 @@ body { touch-action: pan-y; }
   .row-swiping,
   .row-action-overlay { transition: none !important; }
 }
-/* === end #1062 ====================================================== */ (feat(#1062): green — implement gesture system)
+/* === end #1062 ====================================================== */
 
 /* === Issue #1065 — Gesture discoverability hints =================== */
 /* width:fit-content makes the pill shrink to its content; without it
