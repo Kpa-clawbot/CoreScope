@@ -162,27 +162,54 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
 
   await step('outside click closes popover', async () => {
+    // De-flake history: #1317 (62a81776) tried `mouse.click(700,500)` + a
+    // `rect.width > 0` "listener installed" proxy. That proxy is FALSE — it
+    // only proves the popover is visible, not that showPopover's
+    // `setTimeout(0)` document-level click listener has actually run. Under
+    // CI load the macrotask can be deferred past Playwright's polling
+    // resolution, so the synthetic click fires BEFORE the listener exists,
+    // is dropped, and the popover never hides → 8s default-timeout failure
+    // (see run 26574358472 / d24246395 master push).
+    //
+    // Real fix: (1) install a one-shot probe of our own via
+    // `requestAnimationFrame + setTimeout(0)` and `await` it from
+    // node-side, guaranteeing showPopover's setTimeout(0) drained;
+    // (2) retry the click in a small loop, since even with the probe
+    // there's no synchronous handle on Playwright's internal event-loop
+    // ordering. Each click is cheap (~ms); the popover hides on the first
+    // one that reaches the installed listener.
     await page.evaluate(() =>
       window.ChannelColorPicker.show('#outsidechan', 100, 100));
-    await page.waitForSelector('.cc-picker-popover');
-    // Wait for the deferred (setTimeout 0) document-level click listener
-    // to be installed before dispatching the outside click. Otherwise the
-    // click races the listener registration and the popover stays open.
-    await page.waitForFunction(() => {
-      const el = document.querySelector('.cc-picker-popover');
-      const rect = el && el.getBoundingClientRect();
-      return rect && rect.width > 0 && rect.height > 0;
-    }, { timeout: 5000 });
-    // Real mouse click at a viewport coordinate that is clearly outside
-    // the popover (popover anchored at 100,100; click at 700,500).
-    // page.mouse.click dispatches PointerEvent + MouseEvent with real
-    // coords, more representative than HTMLElement.click() and reliably
-    // reaches the document-level capture-phase listener.
-    await page.mouse.click(700, 500);
-    await page.waitForFunction(() => {
-      const el = document.querySelector('.cc-picker-popover');
-      return el && el.style.display === 'none';
-    }, { timeout: 15000 });
+    await page.waitForSelector('.cc-picker-popover', { state: 'visible', timeout: 5000 });
+    // Drain pending macrotasks (showPopover's setTimeout(0) installs the
+    // outside-click listener). Wait two animation frames + a setTimeout(0)
+    // so the same scheduler tier the listener uses has definitely run.
+    await page.evaluate(() => new Promise((r) => {
+      requestAnimationFrame(() => requestAnimationFrame(() =>
+        setTimeout(r, 0)));
+    }));
+    // Click outside in a retry loop — if the very first synthetic click
+    // still races the listener install, subsequent clicks land cleanly.
+    // Popover anchored at (100,100); click at (700,500) is unambiguously
+    // outside its bounding rect (popover is ~300×80).
+    const closed = await (async () => {
+      for (let i = 0; i < 10; i++) {
+        await page.mouse.click(700, 500);
+        try {
+          await page.waitForFunction(() => {
+            const el = document.querySelector('.cc-picker-popover');
+            return el && el.style.display === 'none';
+          }, { timeout: 1000 });
+          return true;
+        } catch (_) {
+          // Re-check listener install by waiting another rAF and retrying.
+          await page.evaluate(() => new Promise((r) =>
+            requestAnimationFrame(() => setTimeout(r, 0))));
+        }
+      }
+      return false;
+    })();
+    assert(closed, 'popover did not close after 10 outside-click attempts');
   });
 
   // Cleanup
