@@ -233,6 +233,33 @@ console.log('\n=== #1446 Scenario 7: customizer UI re-org — node-color pickers
     'preset section labelled "Optional" / "(optional)" in customizer UI');
 }
 
+// ─── SCENARIO 9 (#1446 followup): customize-v2 setOverride path must also write
+//     !important on body.style when a preset is active — same gotcha as
+//     setRoleColorOverride (roles.js), different code path. The legacy
+//     customize.js color picker routes through setRoleColorOverride; the
+//     customize-v2.js color picker routes through setOverride → _runPipeline
+//     → applyCSS. Both code paths must produce the same observable. ───
+console.log('\n=== #1446 Scenario 9: customize-v2 applyCSS writes user override on body with !important when preset active ===');
+{
+  const env = makeSandbox({ 'meshcore-cb-preset': 'deut' });
+  vm.createContext(env.sandbox);
+  vm.runInContext(rolesSrc, env.sandbox);
+  vm.runInContext(presetsSrc, env.sandbox);
+  vm.runInContext(cv2Src, env.sandbox);
+  // Init with server config + simulate a user override stored already.
+  env.sandbox.localStorage.setItem('cs-theme-overrides', JSON.stringify({ nodeColors: { repeater: '#ff00ff' } }));
+  env.sandbox.window._customizerV2.init({ nodeColors: { repeater: '#aaaaaa' } });
+  // Body has data-cb-preset=deut (auto-init), user override = #ff00ff.
+  // After applyCSS: body.style[--mc-role-repeater] must be #ff00ff with !important
+  // so it survives the body[data-cb-preset="deut"] CSS rule cascade.
+  const val = env.body.style.getPropertyValue('--mc-role-repeater').toLowerCase();
+  const prio = env.body.style.getPropertyPriority('--mc-role-repeater');
+  assert(val === '#ff00ff',
+    'applyCSS writes user override on body.style (got: ' + JSON.stringify(val) + ')');
+  assert(prio === 'important',
+    'applyCSS writes user override on body.style with !important (got: ' + JSON.stringify(prio) + ')');
+}
+
 // ─── Source-grep: style.css must NOT define a body[data-cb-preset="default"] rule
 //     that locks --mc-role-X to Wong — Wong is the :root default already, and the
 //     "default" preset selection is the same as "no preset". ───
