@@ -45,6 +45,10 @@ node test-issue-1450-logo-aspect.js
 node test-issue-1454-channels-toggle.js
 node test-issue-1456-score-labels.js
 
+# #1461 mobile UX overhaul + #1470 node-detail tile helper (#1468 covered by E2E)
+node test-issue-1461-mobile-page-actions.js
+node test-issue-1470-node-tile-helper.js
+
 echo ""
 echo "═══════════════════════════════════════"
 echo "  All tests passed"

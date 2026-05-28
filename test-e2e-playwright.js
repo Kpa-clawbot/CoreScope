@@ -2071,6 +2071,87 @@ async function run() {
 
   // ─── End mobile filter tests ──────────────────────────────────────────────
 
+  // ─── #1468 — drop client-side "unknown" channel synthesis ────────────────
+
+  await test('#1468: live WS CHAN message with no payload.channel is dropped (no "unknown" bucket)', async () => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto(`${BASE}/#/channels`, { waitUntil: 'domcontentloaded' });
+    // Wait for the channels init() to mount and expose the test hook.
+    await page.waitForFunction(() => typeof window._channelsProcessWSBatchForTest === 'function', { timeout: 10000 });
+
+    // Snapshot starting state so we can compare deltas.
+    const before = await page.evaluate(() => {
+      const s = window._channelsGetStateForTest();
+      return { count: s.channels.length, names: s.channels.map(c => c.name || c.channel || '') };
+    });
+
+    // Feed a CHAN-like message with NO payload.channel field.
+    await page.evaluate(() => {
+      window._channelsProcessWSBatchForTest([
+        {
+          type: 'packet',
+          data: {
+            decoded: {
+              header: { payloadTypeName: 'GRP_TXT' },
+              payload: { /* no `channel` */ text: 'orphan: hello' },
+            },
+          },
+        },
+      ], null);
+    });
+
+    const after = await page.evaluate(() => {
+      const s = window._channelsGetStateForTest();
+      return { count: s.channels.length, names: s.channels.map(c => c.name || c.channel || '') };
+    });
+
+    // No "unknown" channel materialized.
+    assert(!after.names.includes('unknown'),
+      'channels list does not contain a synthesized "unknown" entry — got ' + JSON.stringify(after.names));
+    // And the channel-count delta is 0 — the orphan message was dropped, not bucketed.
+    assert(after.count === before.count,
+      `channel count unchanged after orphan WS msg — before=${before.count}, after=${after.count}`);
+  });
+
+  await test('#1468 control: same WS message WITH payload.channel is still routed', async () => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto(`${BASE}/#/channels`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => typeof window._channelsProcessWSBatchForTest === 'function', { timeout: 10000 });
+
+    const sentinel = '__test_chan_1468_' + Date.now();
+    const before = await page.evaluate((name) => {
+      const s = window._channelsGetStateForTest();
+      return { hasSentinel: s.channels.some(c => (c.name || c.channel) === name) };
+    }, sentinel);
+    assert(!before.hasSentinel, 'pre: sentinel channel does not pre-exist');
+
+    await page.evaluate((name) => {
+      window._channelsProcessWSBatchForTest([
+        {
+          type: 'packet',
+          data: {
+            decoded: {
+              header: { payloadTypeName: 'GRP_TXT' },
+              payload: { channel: name, text: 'alice: hi', sender: 'alice' },
+            },
+          },
+        },
+      ], null);
+    }, sentinel);
+
+    const after = await page.evaluate((name) => {
+      const s = window._channelsGetStateForTest();
+      return {
+        hasSentinel: s.channels.some(c => (c.name || c.channel) === name),
+        names: s.channels.map(c => c.name || c.channel || ''),
+      };
+    }, sentinel);
+    assert(after.hasSentinel,
+      'control: channel WITH payload.channel IS routed into the registry — got ' + JSON.stringify(after.names));
+  });
+
+  // ─── End #1468 tests ──────────────────────────────────────────────────────
+
   // Extract frontend coverage if instrumented server is running
   try {
     const coverage = await page.evaluate(() => window.__coverage__);
