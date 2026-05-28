@@ -2085,12 +2085,13 @@ async function run() {
       return { count: s.channels.length, names: s.channels.map(c => c.name || c.channel || '') };
     });
 
-    // Feed a CHAN-like message with NO payload.channel field.
+    // Feed a CHAN-like message with NO payload.channel field (but valid hash).
     await page.evaluate(() => {
       window._channelsProcessWSBatchForTest([
         {
           type: 'packet',
           data: {
+            hash: 'test1468drophash' + Date.now(),
             decoded: {
               header: { payloadTypeName: 'GRP_TXT' },
               payload: { /* no `channel` */ text: 'orphan: hello' },
@@ -2130,6 +2131,7 @@ async function run() {
         {
           type: 'packet',
           data: {
+            hash: 'test1468hash' + Date.now(),
             decoded: {
               header: { payloadTypeName: 'GRP_TXT' },
               payload: { channel: name, text: 'alice: hi', sender: 'alice' },
