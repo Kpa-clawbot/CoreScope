@@ -1332,7 +1332,13 @@
         var payload = m.data?.decoded?.payload;
         if (!payload) continue;
 
-        var channelName = payload.channel || 'unknown';
+        // #1468: drop CHAN messages with no decoded channel name instead of
+        // synthesizing a literal "unknown" row that renders as a fake channel
+        // in the sidebar. Server-side (#1373/#1377) already filters these from
+        // /api/channels; the live WebSocket router was the remaining offender.
+        if (!payload.channel) continue;
+
+        var channelName = payload.channel;
         // For live-decrypted user-added (PSK) channels, decryptLivePSKBatch
         // also stamps payload.channelKey ("user:<name>") so we route the
         // message to the correct sidebar row and to the open chat view.
