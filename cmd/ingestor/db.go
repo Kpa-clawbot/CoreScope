@@ -748,9 +748,11 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 		err := s.stmtGetObserverRowid.QueryRow(data.ObserverID).Scan(&rowid)
 		if err == nil {
 			observerIdx = &rowid
-			// Update observer last_seen and last_packet_at on every packet to prevent
-			// low-traffic observers from appearing offline (#463)
-			_, _ = s.stmtUpdateObserverLastSeen.Exec(ingestNow, rxTime, ingestNow, rxTime, rowid)
+			// observer.last_seen and last_packet_at answer "when did the analyzer
+			// last hear from this observer" — both are ingest-time questions.
+			// Per-packet rxTime is stored separately on observations/transmissions
+			// using envelope time (see InsertTransmission above). See #1465.
+			_, _ = s.stmtUpdateObserverLastSeen.Exec(ingestNow, ingestNow, ingestNow, ingestNow, rowid)
 		}
 	}
 

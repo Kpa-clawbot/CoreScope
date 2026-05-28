@@ -487,7 +487,11 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		name, _ := msg["origin"].(string)
 		iata := parts[1]
 		meta := extractObserverMeta(msg)
-		if err := store.UpsertObserverAt(observerID, name, iata, meta, resolveRxTime(msg, tag)); err != nil {
+		// observer.last_seen is "when did the analyzer last hear from this
+		// observer" — fundamentally an ingest-time question. Passing "" makes
+		// UpsertObserverAt use time.Now(), independent of the envelope timestamp
+		// (which can be stale/skewed even when well-formed). See #1465.
+		if err := store.UpsertObserverAt(observerID, name, iata, meta, ""); err != nil {
 			log.Printf("MQTT [%s] observer status error: %v", tag, err)
 		}
 		// Insert metrics sample from status message
@@ -709,7 +713,10 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			if mqttMsg.Region != "" {
 				effectiveRegion = mqttMsg.Region
 			}
-			if err := store.UpsertObserverAt(observerID, origin, effectiveRegion, nil, mqttMsg.Timestamp); err != nil {
+			// Same as the status-path call above: observer.last_seen is ingest
+			// time, not envelope time. Per-packet rxTime (stored in observations
+			// via InsertTransmission) still uses envelope time. See #1465.
+			if err := store.UpsertObserverAt(observerID, origin, effectiveRegion, nil, ""); err != nil {
 				log.Printf("MQTT [%s] observer upsert error: %v", tag, err)
 			}
 		}

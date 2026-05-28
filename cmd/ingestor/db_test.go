@@ -554,18 +554,26 @@ func TestInsertTransmissionUpdatesObserverLastSeen(t *testing.T) {
 		PathJSON:    "[]",
 		DecodedJSON: `{"type":"TXT_MSG"}`,
 	}
+	before := time.Now().Unix()
 	if _, err := s.InsertTransmission(data); err != nil {
 		t.Fatal(err)
 	}
+	after := time.Now().Unix()
 
-	// Verify last_seen was updated
+	// Verify last_seen was updated to INGEST time, not envelope time (#1465).
 	var lastSeenAfter string
 	s.db.QueryRow("SELECT last_seen FROM observers WHERE id = ?", "obs1").Scan(&lastSeenAfter)
 	if lastSeenAfter == oldTime {
 		t.Error("observer last_seen was NOT updated after packet insertion — low-traffic observers will appear offline")
 	}
-	if lastSeenAfter != "2026-03-25T01:00:00Z" {
-		t.Errorf("expected last_seen=2026-03-25T01:00:00Z, got %s", lastSeenAfter)
+	ls, err := time.Parse(time.RFC3339, lastSeenAfter)
+	if err != nil {
+		t.Fatalf("last_seen %q not RFC3339: %v", lastSeenAfter, err)
+	}
+	if ls.Unix() < before-5 || ls.Unix() > after+5 {
+		t.Errorf("expected last_seen ≈ server now (in [%d, %d]), got %s (epoch %d). "+
+			"observer.last_seen must use ingest time, not envelope time (#1465).",
+			before, after, lastSeenAfter, ls.Unix())
 	}
 }
 
@@ -598,18 +606,26 @@ func TestLastPacketAtUpdatedOnPacketOnly(t *testing.T) {
 		PathJSON:    "[]",
 		DecodedJSON: `{"type":"TXT_MSG"}`,
 	}
+	before := time.Now().Unix()
 	if _, err := s.InsertTransmission(data); err != nil {
 		t.Fatal(err)
 	}
+	after := time.Now().Unix()
 
 	s.db.QueryRow("SELECT last_packet_at FROM observers WHERE id = ?", "obs1").Scan(&lastPacketAt)
 	if !lastPacketAt.Valid {
 		t.Fatal("expected last_packet_at to be non-NULL after InsertTransmission")
 	}
-	// InsertTransmission uses `now = data.Timestamp || time.Now()`, so last_packet_at
-	// should match the packet's Timestamp when provided (same source-of-truth as last_seen).
-	if lastPacketAt.String != "2026-04-24T12:00:00Z" {
-		t.Errorf("expected last_packet_at=2026-04-24T12:00:00Z, got %s", lastPacketAt.String)
+	// last_packet_at, like last_seen, is "when did the analyzer last receive a
+	// packet from this observer" — an ingest-time question, independent of the
+	// envelope timestamp. See #1465.
+	lp, err := time.Parse(time.RFC3339, lastPacketAt.String)
+	if err != nil {
+		t.Fatalf("last_packet_at %q not RFC3339: %v", lastPacketAt.String, err)
+	}
+	if lp.Unix() < before-5 || lp.Unix() > after+5 {
+		t.Errorf("expected last_packet_at ≈ server now (in [%d, %d]), got %s (epoch %d)",
+			before, after, lastPacketAt.String, lp.Unix())
 	}
 
 	// UpsertObserver again (status path) — last_packet_at should NOT change
