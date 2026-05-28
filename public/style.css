@@ -884,7 +884,7 @@ img.brand-logo {
  * NOTE: hiding the first dt/dd pair below assumes Payload Type is the
  * first <dt> in .detail-meta (per packets.js renderDetail). Keep that
  * invariant — test-issue-1415-packets-layout.js asserts it. */
-@media (max-width: 900px) {
+@media (max-width: 600px) {
   /* #1: kill empty chevron rail */
   #pktTable th.col-expand,
   #pktTable td.col-expand { display: none !important; }

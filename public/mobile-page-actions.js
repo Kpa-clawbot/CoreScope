@@ -3,7 +3,7 @@
  * row can be hidden entirely. On desktop this script is a no-op. */
 (function () {
   'use strict';
-  const MOBILE_BP = 900;
+  const MOBILE_BP = 600;
   const SLOT_ID = 'navPageActions';
 
   function isMobile() { return window.innerWidth <= MOBILE_BP; }
