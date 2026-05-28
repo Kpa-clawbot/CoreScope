@@ -1749,7 +1749,10 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
    clips when squeezed into the 99px tablet pin (#1137 → SCOPE→SCOF).
    Swap to the dedicated .brand-mark-only inline SVG (arcs+dots only). */
 @media (max-width: 400px) {
-  .brand-logo { display: none; }
+  /* #1450 — must match the svg/img specificity used at top-level
+     (svg.brand-logo / img.brand-logo, 0,1,1) or the new rules win
+     and the wordmark fails to hide on narrow mobile widths. */
+  svg.brand-logo, img.brand-logo { display: none; }
   .brand-mark-only { display: block; }
 }
 
