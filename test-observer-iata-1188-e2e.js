@@ -87,12 +87,13 @@ async function run() {
     }
   });
 
-  await test('Mobile viewport (375px): observer IATA badge stays visible — not clipped', async () => {
-    // #1189 R1 mesh-operator finding: no narrow-viewport validation existed.
-    // At 375px (iPhone SE) the .col-observer cell must still render its
-    // .badge-iata pill within the viewport bounds. If a future CSS change
-    // moves observer behind a hidden column or clips the badge off-screen,
-    // this assertion turns red.
+  await test('Mobile viewport (375px): observer column drops from row, but IATA badge still appears in expanded detail panel (#1415 locked spec)', async () => {
+    // #1415 locked column-priority spec: col-observer is tier-3 (desktop only,
+    // hidden ≤1024px). The iron rule: anything hidden from the row at the
+    // current viewport MUST appear in the expanded Details pane. So at 375px:
+    //   (a) `td.col-observer` is hidden (display:none via .col-hidden)
+    //   (b) tapping a row opens the panel whose .detail-meta carries the
+    //       Observer row + .badge-iata next to the observer name.
     const mobile = await browser.newContext({ viewport: { width: 375, height: 812 } });
     const mpage = await mobile.newPage();
     mpage.setDefaultTimeout(15000);
@@ -101,16 +102,25 @@ async function run() {
     await mpage.reload({ waitUntil: 'load' });
     await mpage.waitForSelector('[data-loaded="true"]', { timeout: 20000 });
     await mpage.waitForSelector('table tbody tr:not([id^=vscroll])', { timeout: 15000 });
-    const badge = await mpage.$('td.col-observer .badge-iata');
-    assert(badge, 'no .badge-iata rendered at 375px viewport');
-    // Must be in the viewport horizontally — not clipped beyond the 375px edge.
-    const box = await badge.boundingBox();
-    assert(box, '.badge-iata has no bounding box (not rendered)');
-    assert(box.x >= 0, `.badge-iata x=${box.x} is off the left edge at 375px`);
-    assert(box.x + box.width <= 375 + 1,
-      `.badge-iata right edge ${box.x + box.width} exceeds 375px viewport`);
-    assert(box.width > 0 && box.height > 0,
-      `.badge-iata has zero dimensions (collapsed/clipped): ${box.width}x${box.height}`);
+
+    // (a) observer column hidden in the row at 375px
+    const rowObserverVisible = await mpage.$eval(
+      'td.col-observer',
+      el => window.getComputedStyle(el).display !== 'none'
+    ).catch(() => false);
+    assert(!rowObserverVisible,
+      'observer column should be hidden in rows at 375px (tier-3, desktop-only per #1415 spec)');
+
+    // (b) tap first row → detail panel renders observer + IATA badge
+    const firstRow = await mpage.$('table tbody tr[data-hash]');
+    assert(firstRow, 'no packet row found to tap');
+    await firstRow.click();
+    await mpage.waitForSelector('.detail-meta', { timeout: 10000 });
+    const detailIata = await mpage.$('.detail-meta .badge-iata');
+    assert(detailIata, '.badge-iata must appear in .detail-meta after tapping a row at 375px');
+    const box = await detailIata.boundingBox();
+    assert(box && box.width > 0 && box.height > 0,
+      `.detail-meta .badge-iata has zero/no dimensions: ${box && (box.width + 'x' + box.height)}`);
     await mobile.close();
   });
 
