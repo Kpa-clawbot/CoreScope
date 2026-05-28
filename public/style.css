@@ -870,7 +870,15 @@ img.brand-logo {
   overflow: hidden; text-overflow: ellipsis;
   max-width: 0; /* forces td to respect table width instead of expanding to content */
 }
-.data-table td.col-details { white-space: normal; word-break: break-word; }
+.data-table td.col-details { white-space: normal; word-break: break-word; max-width: 480px; }
+/* #1415: pin the expand-chevron column narrow at every viewport.
+ * Chevron glyph is ~16px wide; legacy column auto-sized to 50-180px and shoved every
+ * downstream data column right. 32px is enough for the ▶/▼ + 8px padding. */
+.data-table th.col-expand,
+.data-table td.col-expand {
+  width: 32px; min-width: 32px; max-width: 32px;
+  padding: 3px 4px; text-align: center;
+}
 .data-table td:has(.spark-bar), .data-table td.col-spark { max-width: none; overflow: visible; min-width: 80px; }
 .data-table .col-time { min-width: clamp(72px, 8vw, 108px); white-space: nowrap; }
 
@@ -2475,6 +2483,15 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 @media (max-width: 480px) {
   .subpath-detail { min-width: 100%; width: 100%; max-width: 100%; }
   .subpath-layout { flex-direction: column; }
+
+  /* #1415 mobile chrome compaction — keep packets pre-table chrome to ≤2 rows.
+   * Hide BYOP (operator request) to reclaim ~70px from the page-header row,
+   * shrink the page-header h2, and zero its bottom margin. The filter bar
+   * already collapses behind a "Filters ▾" toggle (see existing block above). */
+  .page-header [data-action="pkt-byop"] { display: none; }
+  .page-header { margin-bottom: 6px; }
+  .page-header h2 { font-size: 15px; }
+  .data-table td, .data-table th { padding: 6px 4px; }
 }
 
 /* Legend swatches */

@@ -53,6 +53,30 @@ var pinned = colExpandBlocks.some(function (b) {
 });
 assert(pinned, 'style.css .col-expand pins min-width AND max-width to ~32px');
 
+// ── 1b. Locked column-priority tiers (operator spec) ─────────────────────
+// Tier 1 (always — even on smallest mobile): expand, time, type, details
+// Tier 2 (tablet+):                          path
+// Tier 3 (desktop only):                     hash, observer, rpt
+// Region/Size/HB stay at the existing low-priority tiers (already 3-5).
+//
+// Mapping to priority values (see TableResponsive doc at top of packets.js):
+//   priority 1 → always visible
+//   priority 3 → hidden ≤ 1024 (desktop-only)
+//   priority 5 → hidden ≤  768 (tablet+ only)
+function colPriority(klass) {
+  var re = new RegExp('<th[^>]*class="' + klass + '"[^>]*data-priority="(\\d+)"');
+  var m = pktJs.match(re);
+  return m ? parseInt(m[1], 10) : null;
+}
+assert(colPriority('col-expand')   === 1, 'col-expand is tier-1 priority (always visible)');
+assert(colPriority('col-time')     === 1, 'col-time is tier-1 priority (always visible)');
+assert(colPriority('col-type')     === 1, 'col-type is tier-1 priority (always visible)');
+assert(colPriority('col-details')  === 1, 'col-details is tier-1 priority (always visible)');
+assert(colPriority('col-path')     === 5, 'col-path is tier-2 (hidden ≤768, tablet+ only)');
+assert(colPriority('col-hash')     === 3, 'col-hash is tier-3 (desktop only, hidden ≤1024)');
+assert(colPriority('col-observer') === 3, 'col-observer is tier-3 (desktop only, hidden ≤1024)');
+assert(colPriority('col-rpt')      === 3, 'col-rpt is tier-3 (desktop only, hidden ≤1024)');
+
 // ── 2. DETAILS column capped ─────────────────────────────────────────────
 var colDetailsBlocks = css.match(/\.col-details\b[^{}]*\{[^}]*\}/g) || [];
 var capped = colDetailsBlocks.some(function (b) {
@@ -75,13 +99,12 @@ var mobileBlock = (function () {
 })();
 assert(mobileBlock.length > 0, 'style.css has a @media (max-width: 480px) block');
 assert(
-  /\.col-details[^{}]*\{[^}]*display:\s*none/.test(mobileBlock),
-  'mobile @media block hides .col-details (display: none)'
-);
-assert(
   /pkt-byop[^{}]*\{[^}]*display:\s*none/.test(mobileBlock),
-  'mobile @media block hides the BYOP button'
+  'mobile @media block hides the BYOP button (chrome compaction)'
 );
+// Note: per LOCKED spec, col-details is tier-1 and stays visible at mobile.
+// It is the col-path / col-hash / col-observer / col-rpt that drop on mobile,
+// already enforced via data-priority above (TableResponsive.apply).
 
 // ── 4. renderDetail mobile-priority ordering ────────────────────────────
 var dlMatch = pktJs.match(/<dl class="detail-meta">([\s\S]*?)<\/dl>/);
