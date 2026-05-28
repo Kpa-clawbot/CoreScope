@@ -127,6 +127,43 @@ assert(
   'renderDetail wraps technical fields in <details class="detail-technical">'
 );
 
+// ── 5. #1458 P0-A — semantic-first detail title ─────────────────────────
+// Previously the title hard-coded "Packet Byte Breakdown (N bytes)" when
+// raw_hex was present. Must be replaced by a type-badge + summary header.
+assert(
+  !/Packet Byte Breakdown/.test(pktJs),
+  'renderDetail no longer leads with "Packet Byte Breakdown (N bytes)" title'
+);
+assert(
+  /<div class="detail-title">[\s\S]{0,200}badge badge-\$\{payloadTypeColor/.test(pktJs),
+  'detail-title leads with a type badge (semantic identity first)'
+);
+assert(
+  /<div class="detail-srcdst">/.test(pktJs),
+  'renderDetail emits a .detail-srcdst row (src → dst summary)'
+);
+
+// ── 6. #1458 P0-B — raw-bytes disclosure copy ───────────────────────────
+assert(
+  /<summary>Show raw bytes<\/summary>/.test(pktJs),
+  'detail-technical disclosure summary reads "Show raw bytes" (per spec)'
+);
+
+// ── 7. #1458 P0-C — mobile filter-zone collapse ─────────────────────────
+assert(
+  /pkt-filter-expr/.test(pktJs),
+  'always-on filter input wrapper carries class .pkt-filter-expr'
+);
+assert(
+  /\.pkt-filter-expr[^{}]*\{[^}]*display:\s*none/.test(mobileBlock),
+  'mobile @media (max-width: 480px) hides .pkt-filter-expr by default'
+);
+assert(
+  /\.filter-bar\.filters-expanded[^{}]*\.pkt-filter-expr[^{}]*\{[^}]*display:/.test(mobileBlock) ||
+  /:has\(\.filter-bar\.filters-expanded\)[^{}]*\.pkt-filter-expr[^{}]*\{[^}]*display:/.test(mobileBlock),
+  'expanded filters reveal .pkt-filter-expr on mobile (Filters ▾ toggle)'
+);
+
 // ── Summary ──────────────────────────────────────────────────────────────
 console.log('\n' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed === 0 ? 0 : 1);

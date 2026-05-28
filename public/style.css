@@ -2492,7 +2492,33 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   .page-header { margin-bottom: 6px; }
   .page-header h2 { font-size: 15px; }
   .data-table td, .data-table th { padding: 6px 4px; }
+
+  /* #1458 P0-C — collapse the always-on filter expression input on small mobile.
+   * Reveals when the sibling .filter-bar has .filters-expanded (set by the
+   * existing "Filters ▾" toggle, so one tap reveals BOTH chrome rows). */
+  .pkt-filter-expr { display: none; }
+  #pktLeft:has(.filter-bar.filters-expanded) .pkt-filter-expr { display: block; }
+
+  /* #1458 P0-A — semantic-first detail title: keep it dense, single-row when
+   * possible, badges + summary share a line. */
+  .detail-title { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 15px; }
+  .detail-srcdst { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
 }
+
+/* #1458 P0-B — raw-bytes disclosure styling (applies everywhere). */
+.detail-technical { margin-top: 12px; }
+.detail-technical > summary {
+  cursor: pointer; padding: 6px 0; font-weight: 600; color: var(--text-muted);
+  user-select: none;
+}
+.detail-technical[open] > summary { color: var(--text); }
+
+/* #1458 P0-A — semantic-first title row + src→dst sub-row defaults
+ * (desktop). Mobile tightens these further inside the 480px block above. */
+.detail-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.detail-title .detail-summary { color: var(--text-muted); font-weight: 400; }
+.detail-srcdst { font-size: 14px; margin: 4px 0 8px; }
+.detail-srcdst .arrow { color: var(--text-muted); margin: 0 4px; }
 
 /* Legend swatches */
 .legend-swatch { display: inline-block; width: 12px; height: 12px; border: 1px solid var(--border); vertical-align: middle; }
