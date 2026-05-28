@@ -40,6 +40,7 @@ node test-issue-1420-tile-providers.js
 node test-issue-1438-marker-css-vars.js
 node test-issue-1438-customizer-mcrole.js
 node test-issue-1446-cb-preset-cascade.js
+node test-issue-1450-logo-aspect.js
 
 echo ""
 echo "═══════════════════════════════════════"
