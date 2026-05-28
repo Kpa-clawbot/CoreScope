@@ -1322,8 +1322,27 @@
       '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">Gesture Hints</p>' +
       '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Re-show first-visit gesture discoverability hints (swipe rows, swipe tabs, edge-swipe drawer, pull-to-refresh).</p>' +
       '<button type="button" class="cust-dl-btn" data-cv2-reset-hints data-reset-gesture-hints>↺ Reset gesture hints</button>' +
+      _renderChannelsShowEncryptedToggle() +
       _renderDarkTileProviderSelector() +
     '</div>';
+  }
+
+  // ── #1454 Show-encrypted-channels toggle ──
+  // Writes localStorage["channels-show-encrypted"]. Default OFF: key is
+  // removed (not set to "false") so the read-gate in channels.js cleanly
+  // returns false. Fires `mc-channels-show-encrypted-changed`; channels.js
+  // re-fetches the list live without a page reload.
+  function _renderChannelsShowEncryptedToggle() {
+    var on = false;
+    try { on = localStorage.getItem('channels-show-encrypted') === 'true'; } catch (_e) {}
+    return '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">Channels</p>' +
+      '<p class="cust-hint" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Encrypted channels appear as "Encrypted (0xAB)" with no name. Operators usually leave this off.</p>' +
+      '<div class="cust-field" style="display:flex;align-items:center;gap:8px">' +
+        '<input type="checkbox" id="cv2-channels-show-encrypted" data-cv2-channels-show-encrypted' +
+          (on ? ' checked' : '') +
+          ' style="width:16px;height:16px;cursor:pointer">' +
+        '<label for="cv2-channels-show-encrypted" style="cursor:pointer;margin:0">Show encrypted channels</label>' +
+      '</div>';
   }
 
   // ── #1420 Dark-tile provider selector ──
@@ -1910,6 +1929,21 @@
         if (typeof window.MC_setDarkTileProvider === 'function') {
           window.MC_setDarkTileProvider(id);
         }
+      });
+    });
+
+    // #1454 Show-encrypted-channels checkbox — persists + fires
+    // mc-channels-show-encrypted-changed; channels.js re-fetches live.
+    container.querySelectorAll('[data-cv2-channels-show-encrypted]').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var on = !!cb.checked;
+        try {
+          if (on) localStorage.setItem('channels-show-encrypted', 'true');
+          else localStorage.removeItem('channels-show-encrypted');
+        } catch (_e) { /* private mode etc. */ }
+        window.dispatchEvent(new CustomEvent('mc-channels-show-encrypted-changed', {
+          detail: { value: on }
+        }));
       });
     });
 

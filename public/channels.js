@@ -1079,6 +1079,13 @@
       if (_pendingNode && _pendingNode.length < 200) await showNodeDetail(_pendingNode);
     });
 
+    // #1454 — customizer flips the "show encrypted channels" toggle, which
+    // writes localStorage and fires this event. Re-fetch the list live so
+    // the operator sees the change without a page reload.
+    window.addEventListener('mc-channels-show-encrypted-changed', function () {
+      loadChannels(true);
+    });
+
     // #89: Sidebar resize handle
     (function () {
       var sidebar = app.querySelector('.ch-sidebar');
