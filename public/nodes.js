@@ -74,6 +74,29 @@
   let wsHandler = null;
   let detailMap = null;
 
+  // #1461 followup: node-detail inset map tile layer that honors the
+  // customizer dark-tile-provider pick (#1420/#1430). Falls back to
+  // window.getTileUrl() output if the registry isn't loaded. Also applies
+  // the provider's invert CSS filter to the tile pane when needed.
+  function _applyTilesToNodeMap(map) {
+    if (!map) return;
+    var tileUrl = (window.getTileUrl && window.getTileUrl()) || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+    var provider = window.getActiveTileProvider && window.getActiveTileProvider();
+    var attribution = (provider && provider.attribution) || '© OpenStreetMap contributors';
+    var layer = L.tileLayer(tileUrl, { maxZoom: 18, attribution: attribution }).addTo(map);
+    // Esri 2-layer provider: add the labels reference overlay too
+    if (provider && provider.refUrl) {
+      try { L.tileLayer(provider.refUrl, { maxZoom: 18 }).addTo(map); } catch (_e) {}
+    }
+    // Apply invert CSS filter to the tile pane if the provider needs it
+    try {
+      var pane = map.getPane && map.getPane('tilePane');
+      if (pane) pane.style.filter = (provider && provider.invertFilter) ? provider.invertFilter : '';
+    } catch (_e) {}
+    return layer;
+  }
+
+
   // ROLE_COLORS loaded from shared roles.js
   const TABS = [
     { key: 'all', label: 'All' },
@@ -676,7 +699,7 @@
         try {
           if (detailMap) { detailMap.remove(); detailMap = null; }
           detailMap = L.map('nodeFullMap', { zoomControl: true, attributionControl: false }).setView([n.lat, n.lon], 13);
-          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(detailMap);
+          _applyTilesToNodeMap(detailMap);
           L.marker([n.lat, n.lon]).addTo(detailMap).bindPopup(n.name || n.public_key.slice(0, 12));
           setTimeout(() => detailMap.invalidateSize(), 100);
         } catch {}
@@ -1524,7 +1547,7 @@
       try {
         if (detailMap) { detailMap.remove(); detailMap = null; }
         detailMap = L.map('nodeMap', { zoomControl: false, attributionControl: false }).setView([n.lat, n.lon], 13);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(detailMap);
+        _applyTilesToNodeMap(detailMap);
         L.marker([n.lat, n.lon]).addTo(detailMap).bindPopup(n.name || n.public_key.slice(0, 12));
         setTimeout(() => detailMap.invalidateSize(), 100);
       } catch {}

@@ -363,7 +363,35 @@
     var isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (document.documentElement.getAttribute('data-theme') !== 'light' &&
        window.matchMedia('(prefers-color-scheme: dark)').matches);
-    return isDark ? TILE_DARK : TILE_LIGHT;
+    if (!isDark) return TILE_LIGHT;
+    // #1461 followup: honor customizer's dark-tile-provider pick (#1420 / #1430)
+    // when the registry is loaded. Falls back to TILE_DARK if absent.
+    try {
+      if (window.MC_getDarkTileProvider && window.MC_TILE_PROVIDERS) {
+        var id = window.MC_getDarkTileProvider();
+        var p = window.MC_TILE_PROVIDERS[id];
+        if (p && (p.url || p.baseUrl)) {
+          return p.url || p.baseUrl;
+        }
+      }
+    } catch (_e) {}
+    return TILE_DARK;
+  };
+  /* Helper: get the full provider object (for callers that also need the
+   * invertFilter or refUrl/attribution). Returns null when no customizer
+   * provider applies (light mode, or registry not loaded). */
+  window.getActiveTileProvider = function () {
+    var isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+      (document.documentElement.getAttribute('data-theme') !== 'light' &&
+       window.matchMedia('(prefers-color-scheme: dark)').matches);
+    if (!isDark) return null;
+    try {
+      if (window.MC_getDarkTileProvider && window.MC_TILE_PROVIDERS) {
+        var id = window.MC_getDarkTileProvider();
+        return window.MC_TILE_PROVIDERS[id] || null;
+      }
+    } catch (_e) {}
+    return null;
   };
 
   // ─── SNR thresholds ───
