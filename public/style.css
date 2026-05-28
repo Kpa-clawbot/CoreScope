@@ -4024,13 +4024,19 @@ body { touch-action: pan-y; }
 /* === end #1062 ====================================================== */ (feat(#1062): green — implement gesture system)
 
 /* === Issue #1065 — Gesture discoverability hints =================== */
+/* width:fit-content makes the pill shrink to its content; without it
+ * the wrap defaults to block (100% of body width). Combined with
+ * .gesture-hint-bottom { left:50%; transform:translateX(-50%) } that
+ * pushed the wrap off-screen-left on narrow viewports (#1065 follow-up).
+ * Comments live ABOVE the rule body, not interleaved, because a stray
+ * em-dash or sequence inside the body has historically caused some CSS
+ * parsers to drop the entire rule from the CSSOM. */
 .gesture-hint {
   position: fixed;
   z-index: 9999;
+  width: -moz-fit-content;
+  width: fit-content;
   max-width: 360px;
-  /* !important guards against any layered cascade enabling pointer-events
-   * (e.g., a future overlay class with higher specificity). The hint
-   * wrapper MUST never capture clicks — only its inner button does. */
   pointer-events: none !important;
   opacity: 1;
   animation-name: gesture-hint-slide-in;

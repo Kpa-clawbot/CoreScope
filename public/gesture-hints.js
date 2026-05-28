@@ -31,11 +31,24 @@
     var h = location.hash || '';
     return /^#\/live(\/|$|\?)/.test(h);
   }
+  // #1065 follow-up: hints must only appear on touch-capable viewports.
+  // Mouse-only desktops (e.g. analyzer.00id.net opened in Chrome on a
+  // workstation) were getting "swipe a row left" tips that make no sense.
+  // Three independent probes — any positive answer counts.
+  function hasTouchCapability() {
+    try {
+      if ('ontouchstart' in window) return true;
+      if (navigator.maxTouchPoints && navigator.maxTouchPoints > 0) return true;
+      if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return true;
+    } catch (_e) {}
+    return false;
+  }
   var HINTS = {
     'row-swipe': {
       key: NS + 'row-swipe',
       text: 'Tip: swipe a row left for quick actions.',
       relevant: function () {
+        if (!hasTouchCapability()) return false;
         if (onLiveRoute()) return false; // #1244
         var h = location.hash || '';
         return /^#\/(packets|nodes)/.test(h);
@@ -46,6 +59,7 @@
       key: NS + 'tab-swipe',
       text: 'Tip: swipe left or right to switch tabs.',
       relevant: function () {
+        if (!hasTouchCapability()) return false;
         if (onLiveRoute()) return false; // #1244
         return !!document.querySelector('[data-bottom-nav]');
       },
@@ -55,7 +69,10 @@
       key: NS + 'edge-drawer',
       text: 'Tip: swipe in from the left edge to open navigation.',
       relevant: function () {
+        if (!hasTouchCapability()) return false;
         if (onLiveRoute()) return false; // #1244
+        // nav-drawer.js: NARROW_MAX=768; edge-swipe drawer is the WIDE
+        // (>768) layout's nav UI. Below 768, the bottom-nav owns navigation.
         return window.innerWidth > 768 && !!document.querySelector('.nav-drawer, [data-nav-drawer]');
       },
       position: 'top-left',
@@ -64,6 +81,7 @@
       key: NS + 'pull-refresh',
       text: 'Tip: pull down to refresh the connection.',
       relevant: function () {
+        if (!hasTouchCapability()) return false;
         if (onLiveRoute()) return false; // #1244
         return !!document.querySelector('.pull-to-reconnect');
       },
