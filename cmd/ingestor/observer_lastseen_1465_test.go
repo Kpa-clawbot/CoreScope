@@ -11,7 +11,6 @@ package main
 // asserts only the observer.last_seen path.
 
 import (
-	"strconv"
 	"testing"
 	"time"
 )
@@ -107,5 +106,4 @@ func TestPacketMessage_ObserverLastSeen_AlwaysIngestTime_PastEnvelope_1465(t *te
 			"Envelope stale = %q. Observer just delivered a packet; last_seen must be NOW. Issue #1465.",
 			lastSeen, ls.Unix(), before, after, stale)
 	}
-	_ = strconv.Itoa // keep import stable
 }
