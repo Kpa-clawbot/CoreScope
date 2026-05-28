@@ -1011,7 +1011,14 @@ body.scroll-locked { overflow: hidden; }
 .detail-title {
   font-size: 15px; font-weight: 700; margin-bottom: 12px;
   padding-bottom: 8px; border-bottom: 2px solid var(--border);
+  /* #1458 P0-A: semantic-first header — type badge + summary + hops share a row. */
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
 }
+.detail-title .detail-summary { color: var(--text-muted); font-weight: 400; }
+.detail-srcdst {
+  font-size: 14px; margin: -4px 0 12px; color: var(--text);
+}
+.detail-srcdst .arrow { color: var(--text-muted); margin: 0 4px; }
 .detail-hash {
   font-family: var(--mono); font-size: 12px; color: var(--text-muted);
   margin-bottom: 12px; word-break: break-all;
@@ -2512,13 +2519,6 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
   user-select: none;
 }
 .detail-technical[open] > summary { color: var(--text); }
-
-/* #1458 P0-A — semantic-first title row + src→dst sub-row defaults
- * (desktop). Mobile tightens these further inside the 480px block above. */
-.detail-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.detail-title .detail-summary { color: var(--text-muted); font-weight: 400; }
-.detail-srcdst { font-size: 14px; margin: 4px 0 8px; }
-.detail-srcdst .arrow { color: var(--text-muted); margin: 0 4px; }
 
 /* Legend swatches */
 .legend-swatch { display: inline-block; width: 12px; height: 12px; border: 1px solid var(--border); vertical-align: middle; }
