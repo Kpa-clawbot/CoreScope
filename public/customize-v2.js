@@ -594,7 +594,14 @@
           // Preset active AND this role has no user override:
           // ensure any prior body inline !important is removed so the
           // preset value (from body[data-cb-preset=X] CSS rule) takes over.
+          // Also remove the root-level --mc-role-{role} that a PREVIOUS
+          // setOverride call left behind (#1446 followup): without this,
+          // :root.style.--mc-role-{role} stays stuck at the old user-pick
+          // value even though body's cascaded preset rule now wins for
+          // descendant elements. The visible UI is correct but introspection
+          // (getComputedStyle on documentElement) reports stale color.
           document.body.style.removeProperty('--mc-role-' + role);
+          root.removeProperty('--mc-role-' + role);
         }
       }
     }
