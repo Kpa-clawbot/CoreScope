@@ -7,22 +7,26 @@ import (
 
 func TestParseEnvelopeTime(t *testing.T) {
 	cases := []struct {
-		name string
-		in   string
-		ok   bool
+		name      string
+		in        string
+		ok        bool
+		wantNaive bool
 	}{
-		{"rfc3339 utc", "2026-05-16T10:00:00Z", true},
-		{"rfc3339 offset", "2026-05-16T12:00:00+02:00", true},
-		{"naive iso", "2026-05-16T10:00:00", true},
-		{"naive iso micros", "2026-05-16T10:00:00.123456", true},
-		{"garbage", "not-a-time", false},
-		{"empty", "", false},
+		{"rfc3339 utc", "2026-05-16T10:00:00Z", true, false},
+		{"rfc3339 offset", "2026-05-16T12:00:00+02:00", true, false},
+		{"naive iso", "2026-05-16T10:00:00", true, true},
+		{"naive iso micros", "2026-05-16T10:00:00.123456", true, true},
+		{"garbage", "not-a-time", false, false},
+		{"empty", "", false, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := parseEnvelopeTime(c.in)
+			_, naive, err := parseEnvelopeTime(c.in)
 			if (err == nil) != c.ok {
 				t.Fatalf("parseEnvelopeTime(%q): want ok=%v, got err=%v", c.in, c.ok, err)
+			}
+			if err == nil && naive != c.wantNaive {
+				t.Fatalf("parseEnvelopeTime(%q): want naive=%v, got %v", c.in, c.wantNaive, naive)
 			}
 		})
 	}
