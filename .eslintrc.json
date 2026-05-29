@@ -42,6 +42,7 @@
     "PULL_THRESHOLD_PX": "readonly",
     "PacketFilter": "readonly",
     "PathInspector": "readonly",
+    "PrefixReserved": "readonly",
     "QRCode": "readonly",
     "ROLE_COLORS": "readonly",
     "ROLE_EMOJI": "readonly",
