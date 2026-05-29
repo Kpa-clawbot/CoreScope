@@ -2294,11 +2294,13 @@
       });
     }
 
-    // Reset All
+    // Reset All — #1496: clear every customizer-touched piece of state,
+    // not just STORAGE_KEY. Implementation lives in resetAll() on the
+    // public API so tests can drive it without a DOM button.
     var resetBtn = document.getElementById('cv2ResetAll');
     if (resetBtn) resetBtn.addEventListener('click', function () {
       if (!confirm('Reset all customizations to server defaults?')) return;
-      localStorage.removeItem(STORAGE_KEY);
+      _resetAll();
       _runPipeline();
       _renderPanel(container);
     });
@@ -2449,6 +2451,109 @@
     }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   });
 
+  // ── Reset All (#1496) ──
+  //
+  // The original "Reset All" only cleared STORAGE_KEY (cs-theme-overrides),
+  // leaving CB-preset, encrypted-channel toggle, dark-tile pick, marker
+  // stroke vars and per-role body.style writes stuck — each subsequent
+  // customizer feature (PRs #1430, #1454, #1488, #1448) added its own
+  // out-of-band side effect and forgot to teach Reset about it.
+  //
+  // Single source of truth: this function. Adding a new customizer
+  // feature requires adding its teardown here. Each removal is wrapped
+  // in try/catch because we run before/after page lifecycle in tests
+  // and operators' browsers where any one surface (localStorage,
+  // document, body) could be missing.
+  function _resetAll() {
+    // 1. localStorage — customizer-owned keys ONLY. Theme / favorites /
+    //    gesture hints / channel selection state are explicitly preserved
+    //    (see issue #1496 "Out of scope").
+    var CUSTOMIZER_LS_KEYS = [
+      STORAGE_KEY,                 // 'cs-theme-overrides'
+      'meshcore-cb-preset',        // #1361 CB preset id
+      'channels-show-encrypted',   // #1454 encrypted-channel toggle
+      'mc-dark-tile-provider'      // #1430 dark-tile provider pick
+    ];
+    for (var i = 0; i < CUSTOMIZER_LS_KEYS.length; i++) {
+      try { localStorage.removeItem(CUSTOMIZER_LS_KEYS[i]); } catch (_e) { /* ignore */ }
+    }
+
+    // 2. CB preset — body[data-cb-preset] + CSS var teardown lives in
+    //    MeshCorePresets.clearPreset(). Prefer the canonical helper so
+    //    the dispatch (cb-preset-changed event) fires and downstream
+    //    consumers re-sync to server config without a reload.
+    try {
+      var MCP = (typeof window !== 'undefined') && window.MeshCorePresets;
+      if (MCP && typeof MCP.clearPreset === 'function') {
+        MCP.clearPreset();
+      } else if (typeof document !== 'undefined' && document.body) {
+        // Defensive fallback (e.g. cb-presets.js failed to load).
+        document.body.removeAttribute('data-cb-preset');
+      }
+    } catch (_e) { /* ignore */ }
+
+    // 3. body.style — #1446/#1448 wrote --mc-role-{role} / -text with
+    //    !important so they trump :root.  Strip per role + text role.
+    try {
+      if (typeof document !== 'undefined' && document.body && document.body.style) {
+        ['repeater', 'companion', 'room', 'sensor', 'observer'].forEach(function (role) {
+          document.body.style.removeProperty('--mc-role-' + role);
+          document.body.style.removeProperty('--mc-role-' + role + '-text');
+        });
+      }
+    } catch (_e) { /* ignore */ }
+
+    // 4. :root style — everything the customizer pipeline + cb-presets
+    //    + marker-stroke + tile providers ever wrote onto documentElement.
+    //    A fresh _runPipeline() will re-set whatever server config /
+    //    remaining (theme-only) preferences dictate.
+    try {
+      if (typeof document !== 'undefined' && document.documentElement && document.documentElement.style) {
+        var rs = document.documentElement.style;
+        ['repeater', 'companion', 'room', 'sensor', 'observer'].forEach(function (role) {
+          rs.removeProperty('--mc-role-' + role);
+          rs.removeProperty('--mc-role-' + role + '-text');
+          rs.removeProperty('--node-' + role);
+        });
+        // #1488 marker stroke vars.
+        rs.removeProperty('--mc-marker-stroke-color');
+        rs.removeProperty('--mc-marker-stroke-width');
+        rs.removeProperty('--mc-marker-stroke-opacity');
+        // CB-preset MB / RT-ramp vars (also cleared by clearPreset above
+        // but stripped here defensively in case clearPreset is absent).
+        ['confirmed', 'suspected', 'unknown'].forEach(function (k) {
+          rs.removeProperty('--mc-mb-' + k);
+        });
+        for (var ri = 0; ri < 5; ri++) rs.removeProperty('--mc-rt-ramp-' + ri);
+        // Theme vars the customizer might have stamped onto :root via
+        // applyCSS (logo accents + every entry in THEME_CSS_MAP).
+        rs.removeProperty('--logo-accent');
+        rs.removeProperty('--logo-accent-hi');
+        for (var tkey in THEME_CSS_MAP) {
+          if (Object.prototype.hasOwnProperty.call(THEME_CSS_MAP, tkey)) {
+            rs.removeProperty(THEME_CSS_MAP[tkey]);
+          }
+        }
+      }
+    } catch (_e) { /* ignore */ }
+
+    // 5. Tile provider — clearing the localStorage key (step 1) takes
+    //    care of persistence, but a live consumer needs the
+    //    mc-tile-provider-changed event to swap back to the server
+    //    default. Re-applying the effective active id achieves that
+    //    without forcing a particular value (it falls through to the
+    //    server default / DEFAULT_ID inside getActiveId()).
+    try {
+      if (typeof window !== 'undefined' &&
+          typeof window.MC_setDarkTileProvider === 'function' &&
+          typeof window.MC_getDarkTileProvider === 'function') {
+        window.MC_setDarkTileProvider(window.MC_getDarkTileProvider());
+        // Re-clear so we don't re-persist the just-re-applied value.
+        try { localStorage.removeItem('mc-dark-tile-provider'); } catch (_e) {}
+      }
+    } catch (_e) { /* ignore */ }
+  }
+
   // ── Public API for app.js integration ──
 
   /**
@@ -2474,10 +2579,8 @@
     applyCSS: applyCSS,
     isValidColor: isValidColor,
     isOverridden: _isOverridden,
-    // #1496 — stub. Implementation lands in the green commit so the red
-    // test commit demonstrates the bug as an assertion failure (not a
-    // missing-symbol failure).
-    resetAll: function () {},
+    // #1496 — full reset (not just STORAGE_KEY). See _resetAll() above.
+    resetAll: _resetAll,
     THEME_CSS_MAP: THEME_CSS_MAP
   };
 })();
