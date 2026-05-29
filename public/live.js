@@ -1,4 +1,4 @@
-(function() {
+(function () {
   'use strict';
 
   // getParsedPath / getParsedDecoded are in shared packet-helpers.js (loaded before this file)
@@ -12,8 +12,12 @@
   let map, ws, nodesLayer, pathsLayer, animLayer, heatLayer, geoFilterLayer, clickablePathsLayer;
   // New animation canvas
   let animCanvas, animCtx;
+  let _dprMedia = null;
+  let _dprChangeHandler = null;
   let activeAnimations = [];
   let isAnimating = false;
+  let activeFades = [];
+  let isFading = false;
   let canvasTopLeft;
   let clickablePaths = [];
   const CLICKABLE_PATH_TTL_MS = 30000;
@@ -50,7 +54,7 @@
   function packetMatchesRegion(packets, obsMap, selected) {
     if (!selected || !selected.length) return true;
     if (!packets || !packets.length) return false;
-    const sel = selected.map(function(s) { return String(s).toUpperCase(); });
+    const sel = selected.map(function (s) { return String(s).toUpperCase(); });
     for (var i = 0; i < packets.length; i++) {
       var oid = packets[i] && packets[i].observer_id;
       if (oid == null) continue;
@@ -76,7 +80,7 @@
     if (!iata) return '';
     var esc = (typeof escapeHtml === 'function')
       ? escapeHtml(iata)
-      : String(iata).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+      : String(iata).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     return '<span class="badge-iata" style="font-size:10px;margin-left:4px">' + esc + '</span>';
   }
 
@@ -191,7 +195,7 @@
     // Wire up click handlers on corner buttons
     var btns = document.querySelectorAll('.panel-corner-btn[data-panel]');
     for (var i = 0; i < btns.length; i++) {
-      btns[i].addEventListener('click', function(e) {
+      btns[i].addEventListener('click', function (e) {
         e.stopPropagation();
         var panelId = this.getAttribute('data-panel');
         onCornerClick(panelId);
@@ -243,7 +247,7 @@
 
   function initResizeHandler() {
     let resizeTimer = null;
-    _onResize = function() {
+    _onResize = function () {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         // Set live-page height from JS — most reliable across all mobile browsers
@@ -309,7 +313,7 @@
     // if a prior tracker is still active (re-mount race, dev hot-reload),
     // tear it down BEFORE overwriting _vcrHeightCleanup so the previous
     // ResizeObserver/listeners aren't orphaned.
-    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
+    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) { } _vcrHeightCleanup = null; }
     var bar = document.getElementById('vcrBar');
     var page = document.querySelector('.live-page');
     if (!bar || !page) return;
@@ -326,8 +330,8 @@
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', publish);
     }
-    _vcrHeightCleanup = function() {
-      if (ro) { try { ro.disconnect(); } catch (_) {} ro = null; }
+    _vcrHeightCleanup = function () {
+      if (ro) { try { ro.disconnect(); } catch (_) { } ro = null; }
       window.removeEventListener('resize', publish);
       if (window.visualViewport) {
         window.visualViewport.removeEventListener('resize', publish);
@@ -393,7 +397,7 @@
         const pkts = data.packets || [];
         return expandToBufferEntriesAsync(pkts);
       })
-      .then(function(replayEntries) {
+      .then(function (replayEntries) {
         if (gen !== VCR.replayGen) return; // stale async result — user changed mode
         if (replayEntries.length === 0) {
           vcrSetMode('PAUSED');
@@ -457,7 +461,7 @@
         const filtered = pkts.filter(p => !existingIds.has(p.id));
         return expandToBufferEntriesAsync(filtered);
       })
-      .then(function(newEntries) {
+      .then(function (newEntries) {
         if (gen !== VCR.replayGen) return; // stale async result
         VCR.buffer = [].concat(newEntries, VCR.buffer);
         VCR.playhead = 0;
@@ -466,7 +470,7 @@
         startReplay();
         updateTimeline();
       })
-      .catch(() => {});
+      .catch(() => { });
   }
 
   function startReplay() {
@@ -484,7 +488,7 @@
       }
     }
     const replayGroups = [...hashGroups.values()].sort((a, b) => a.ts - b.ts);
-    console.log('[vcr] ' + replayGroups.length + ' groups from ' + VCR.buffer.length + ' buffer entries. Top 3:', replayGroups.slice(0,3).map(g => g.packets.length + ' obs'));
+    console.log('[vcr] ' + replayGroups.length + ' groups from ' + VCR.buffer.length + ' buffer entries. Top 3:', replayGroups.slice(0, 3).map(g => g.packets.length + ' obs'));
     let groupIdx = 0;
 
     function tick() {
@@ -527,7 +531,7 @@
       .then(data => {
         const pkts = data.packets || [];
         if (pkts.length === 0) return false;
-        return expandToBufferEntriesAsync(pkts).then(function(newEntries) {
+        return expandToBufferEntriesAsync(pkts).then(function (newEntries) {
           if (gen !== VCR.replayGen) return false; // stale
           VCR.buffer = VCR.buffer.concat(newEntries);
           return true;
@@ -558,12 +562,12 @@
     const cutoff = now - CLICKABLE_PATH_TTL_MS;
     for (let i = clickablePaths.length - 1; i >= 0; i--) {
       if (clickablePaths[i].addedAt < cutoff) {
-        try { clickablePaths[i].poly.remove(); } catch (_) {}
+        try { clickablePaths[i].poly.remove(); } catch (_) { }
         clickablePaths.splice(i, 1);
       }
     }
     while (clickablePaths.length > CLICKABLE_PATH_MAX) {
-      try { clickablePaths[0].poly.remove(); } catch (_) {}
+      try { clickablePaths[0].poly.remove(); } catch (_) { }
       clickablePaths.shift();
     }
   }
@@ -575,7 +579,7 @@
     clickablePaths.push(entry);
     pruneClickablePaths(Date.now());
     let dismissTimer = null;
-    poly.on('click', function(e) {
+    poly.on('click', function (e) {
       if (dismissTimer) clearTimeout(dismissTimer);
       const html = buildClickablePathPopupHtml(typeName, color, hopNames, tsMs, hash);
       L.popup({ maxWidth: 280, className: 'path-info-popup' })
@@ -607,28 +611,28 @@
 
   // 7-segment LCD renderer
   const SEG_MAP = {
-    '0':0x7E,'1':0x30,'2':0x6D,'3':0x79,'4':0x33,'5':0x5B,'6':0x5F,'7':0x70,
-    '8':0x7F,'9':0x7B,'-':0x01,':':0x80,' ':0x00,'P':0x67,'A':0x77,'U':0x3E,
-    'S':0x5B,'E':0x4F,'L':0x0E,'I':0x30,'V':0x3E,'+':0x01
+    '0': 0x7E, '1': 0x30, '2': 0x6D, '3': 0x79, '4': 0x33, '5': 0x5B, '6': 0x5F, '7': 0x70,
+    '8': 0x7F, '9': 0x7B, '-': 0x01, ':': 0x80, ' ': 0x00, 'P': 0x67, 'A': 0x77, 'U': 0x3E,
+    'S': 0x5B, 'E': 0x4F, 'L': 0x0E, 'I': 0x30, 'V': 0x3E, '+': 0x01
   };
   function drawSegDigit(ctx, x, y, w, h, bits, color) {
     const t = Math.max(2, h * 0.12); // segment thickness
     const g = 1; // gap
-    const hw = w - 2*g, hh = (h - 3*g) / 2;
+    const hw = w - 2 * g, hh = (h - 3 * g) / 2;
     ctx.fillStyle = color;
     // a=top, b=top-right, c=bot-right, d=bot, e=bot-left, f=top-left, g=mid
-    if (bits & 0x40) ctx.fillRect(x+g+t/2, y, hw-t, t);           // a
-    if (bits & 0x20) ctx.fillRect(x+w-t, y+g+t/2, t, hh-t/2);     // b
-    if (bits & 0x10) ctx.fillRect(x+w-t, y+hh+2*g+t/2, t, hh-t/2);// c
-    if (bits & 0x08) ctx.fillRect(x+g+t/2, y+h-t, hw-t, t);       // d
-    if (bits & 0x04) ctx.fillRect(x, y+hh+2*g+t/2, t, hh-t/2);    // e
-    if (bits & 0x02) ctx.fillRect(x, y+g+t/2, t, hh-t/2);         // f
-    if (bits & 0x01) ctx.fillRect(x+g+t/2, y+hh+g-t/2, hw-t, t);  // g
+    if (bits & 0x40) ctx.fillRect(x + g + t / 2, y, hw - t, t);           // a
+    if (bits & 0x20) ctx.fillRect(x + w - t, y + g + t / 2, t, hh - t / 2);     // b
+    if (bits & 0x10) ctx.fillRect(x + w - t, y + hh + 2 * g + t / 2, t, hh - t / 2);// c
+    if (bits & 0x08) ctx.fillRect(x + g + t / 2, y + h - t, hw - t, t);       // d
+    if (bits & 0x04) ctx.fillRect(x, y + hh + 2 * g + t / 2, t, hh - t / 2);    // e
+    if (bits & 0x02) ctx.fillRect(x, y + g + t / 2, t, hh - t / 2);         // f
+    if (bits & 0x01) ctx.fillRect(x + g + t / 2, y + hh + g - t / 2, hw - t, t);  // g
     // colon
     if (bits & 0x80) {
       const r = t * 0.6;
-      ctx.beginPath(); ctx.arc(x+w/2, y+h*0.33, r, 0, Math.PI*2); ctx.fill();
-      ctx.beginPath(); ctx.arc(x+w/2, y+h*0.67, r, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + w / 2, y + h * 0.33, r, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + w / 2, y + h * 0.67, r, 0, Math.PI * 2); ctx.fill();
     }
   }
   function drawLcdText(text, color) {
@@ -641,13 +645,13 @@
     canvas.width = cw * dpr; canvas.height = ch * dpr;
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, cw, ch);
-    
+
     const digitW = Math.min(16, (cw - 10) / text.length);
     const digitH = ch - 4;
     const totalW = digitW * text.length;
     let x = (cw - totalW) / 2;
     const y = 2;
-    
+
     // Draw ghost segments (dim background) — hardcoded to match LCD green
     const ghostColor = 'rgba(74,222,128,0.07)';
     for (let i = 0; i < text.length; i++) {
@@ -744,7 +748,7 @@
     }
     if (speedBtn) { speedBtn.textContent = speedLabel(VCR.speed); speedBtn.setAttribute('aria-label', 'Speed ' + speedLabel(VCR.speed)); }
     updateVCRLcd();
-    
+
     // WAKE THE ENGINE: If we unpaused or changed speed above 0, kickstart the canvas
     wakeCanvasEngine();
   }
@@ -772,7 +776,7 @@
    */
   var VCR_CHUNK_SIZE = 200;
   function expandToBufferEntriesAsync(pkts) {
-    return new Promise(function(resolve) {
+    return new Promise(function (resolve) {
       var entries = [];
       var i = 0;
       function processChunk() {
@@ -873,11 +877,13 @@
         if (propagationBuffer.has(hash)) {
           propagationBuffer.get(hash).packets.push(pkt);
         } else {
-          const entry = { packets: [pkt], timer: setTimeout(() => {
-            const buffered = propagationBuffer.get(hash);
-            propagationBuffer.delete(hash);
-            if (buffered) renderPacketTree(buffered.packets);
-          }, PROPAGATION_BUFFER_MS) };
+          const entry = {
+            packets: [pkt], timer: setTimeout(() => {
+              const buffered = propagationBuffer.get(hash);
+              propagationBuffer.delete(hash);
+              if (buffered) renderPacketTree(buffered.packets);
+            }, PROPAGATION_BUFFER_MS)
+          };
           propagationBuffer.set(hash, entry);
         }
       } else {
@@ -905,7 +911,7 @@
         VCR.timelineTimestamps = timestamps.map(t => new Date(t).getTime());
         VCR.timelineFetchedScope = scopeMs;
       }
-    } catch(e) { /* ignore */ }
+    } catch (e) { /* ignore */ }
   }
 
   function updateTimeline() {
@@ -1180,12 +1186,12 @@
       const mapCfg = await (await fetch('/api/config/map')).json();
       if (Array.isArray(mapCfg.center) && mapCfg.center.length === 2) mapCenter = mapCfg.center;
       if (typeof mapCfg.zoom === 'number') mapZoom = mapCfg.zoom;
-    } catch {}
+    } catch { }
 
     map = L.map('liveMap', {
-      zoomControl: false, 
+      zoomControl: false,
       attributionControl: false,
-      zoomAnimation: true, 
+      zoomAnimation: true,
       markerZoomAnimation: true,
       preferCanvas: true
     }).setView(mapCenter, mapZoom);
@@ -1202,7 +1208,7 @@
     // We intentionally sandwich this pane at 625 so flying packets draw 
     // visually OVER the static nodes, but safely UNDER tooltips and popups.
     map.getPane('animationsPane').style.zIndex = 625;
-    
+
     // Ensure mouse events pass through to the markers/map below
     map.getPane('animationsPane').style.pointerEvents = 'none';
 
@@ -1210,43 +1216,54 @@
     animCanvas = document.createElement('canvas');
     // Leaflet uses translate3d for positioning, so we use absolute positioning but rely on L.DomUtil
     animCanvas.style.cssText = 'position:absolute; pointer-events:none;';
-    
+
     map.getPane('animationsPane').appendChild(animCanvas);
     animCtx = animCanvas.getContext('2d');
 
     // 3. The Leaflet-native positioning function
     function updateAnimCanvas() {
-        if (!animCanvas || !map) return;
-        
-        // Add a 20% buffer around the visible screen to prevent clipping during short pans
-        const size = map.getSize();
-        const padX = size.x * 0.2;
-        const padY = size.y * 0.2;
-        
-        const w = size.x + padX * 2;
-        const h = size.y + padY * 2;
-        
-        const dpr = window.devicePixelRatio || 1;
-        
-        // Updating width/height automatically clears the canvas
-        animCanvas.width = w * dpr;
-        animCanvas.height = h * dpr;
-        animCanvas.style.width = w + 'px';
-        animCanvas.style.height = h + 'px';
-        
-        animCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (!animCanvas || !map) return;
 
-        // Find the top-left Layer Point (relative to the pane, not the screen)
-        const centerPt = map.latLngToLayerPoint(map.getCenter());
-        canvasTopLeft = L.point(centerPt.x - w/2, centerPt.y - h/2);
-        
-        // Let Leaflet position the canvas inside the pane using CSS transforms
-        L.DomUtil.setPosition(animCanvas, canvasTopLeft);
+      // Add a 20% buffer around the visible screen to prevent clipping during short pans
+      const size = map.getSize();
+      const padX = size.x * 0.2;
+      const padY = size.y * 0.2;
+
+      const w = size.x + padX * 2;
+      const h = size.y + padY * 2;
+
+      const dpr = window.devicePixelRatio || 1;
+
+      // Updating width/height automatically clears the canvas
+      animCanvas.width = w * dpr;
+      animCanvas.height = h * dpr;
+      animCanvas.style.width = w + 'px';
+      animCanvas.style.height = h + 'px';
+
+      animCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      // Find the top-left Layer Point (relative to the pane, not the screen)
+      const centerPt = map.latLngToLayerPoint(map.getCenter());
+      canvasTopLeft = L.point(centerPt.x - w / 2, centerPt.y - h / 2);
+
+      // Let Leaflet position the canvas inside the pane using CSS transforms
+      L.DomUtil.setPosition(animCanvas, canvasTopLeft);
     }
 
     // 4. Hook into Leaflet's transition-end events
     map.on('moveend zoomend resize', updateAnimCanvas);
     updateAnimCanvas();
+
+    _dprChangeHandler = () => {
+      updateAnimCanvas();
+      if (_dprMedia) {
+        _dprMedia.removeEventListener('change', _dprChangeHandler);
+      }
+      _dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      _dprMedia.addEventListener('change', _dprChangeHandler);
+    };
+    _dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    _dprMedia.addEventListener('change', _dprChangeHandler);
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -1255,8 +1272,8 @@
     function _liveResolveTile(dark) {
       if (!dark) return { url: TILE_LIGHT, attribution: '© OpenStreetMap © CartoDB', refUrl: null };
       const reg = window.MC_TILE_PROVIDERS || {};
-      const id  = (typeof window.MC_getDarkTileProvider === 'function') ? window.MC_getDarkTileProvider() : 'carto-dark';
-      const p   = reg[id] || reg['carto-dark'] || {};
+      const id = (typeof window.MC_getDarkTileProvider === 'function') ? window.MC_getDarkTileProvider() : 'carto-dark';
+      const p = reg[id] || reg['carto-dark'] || {};
       return {
         url: p.url || p.baseUrl || TILE_DARK,
         attribution: p.attribution || '© OpenStreetMap © CartoDB',
@@ -1280,7 +1297,7 @@
       if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
       // #1420 parity with map.js — refresh visible attribution credit after provider swap.
       if (map.attributionControl) {
-        try { map.attributionControl._update && map.attributionControl._update(); } catch (_) {}
+        try { map.attributionControl._update && map.attributionControl._update(); } catch (_) { }
       }
     }
     const _liveInitTile = _liveResolveTile(isDark);
@@ -1329,7 +1346,7 @@
         const packets = Array.isArray(parsed) ? parsed : [parsed];
         vcrPause(); // suppress live packets
         setTimeout(() => renderPacketTree(packets, true), 1500);
-      } catch {}
+      } catch { }
     } else {
       // replayRecent(); // disabled — live page starts empty, fills from WS
     }
@@ -1384,11 +1401,11 @@
       // (cmd/server/types.go ObserverListResponse) — NOT a top-level array.
       // Bug #1136: previously parsed as array → map empty → region filter
       // dropped every packet.
-      fetch('/api/observers').then(function(r) { return r.json(); }).then(function(data) {
+      fetch('/api/observers').then(function (r) { return r.json(); }).then(function (data) {
         setObserverIataMap(buildObserverIataMap(data));
-      }).catch(function() { /* leave map empty; filter will hide all when active */ });
+      }).catch(function () { /* leave map empty; filter will hide all when active */ });
       RegionFilter.init(rfEl, { dropdown: true });
-      regionFilterChangeHandler = RegionFilter.onChange(function() { /* selection persisted by RegionFilter; future packets reflect it */ });
+      regionFilterChangeHandler = RegionFilter.onChange(function () { /* selection persisted by RegionFilter; future packets reflect it */ });
     })();
 
     // Node filter input — autocomplete-as-you-type (#1110)
@@ -1425,7 +1442,7 @@
         const qs = params.toString();
         const newHash = base + (qs ? '?' + qs : '');
         const newUrl = location.pathname + location.search + newHash;
-        try { history.replaceState(null, '', newUrl); } catch (_) {}
+        try { history.replaceState(null, '', newUrl); } catch (_) { }
       }
 
       function selectSuggestion(opt) {
@@ -1440,7 +1457,7 @@
         const base = location.hash.split('?')[0] || '#/live';
         const qs = params.toString();
         const newUrl = location.pathname + location.search + base + (qs ? '?' + qs : '');
-        try { history.replaceState(null, '', newUrl); } catch (_) {}
+        try { history.replaceState(null, '', newUrl); } catch (_) { }
         hideDropdown();
       }
 
@@ -1541,7 +1558,7 @@
         const base = location.hash.split('?')[0] || '#/live';
         const qs = params.toString();
         const newUrl = location.pathname + location.search + base + (qs ? '?' + qs : '');
-        try { history.replaceState(null, '', newUrl); } catch (_) {}
+        try { history.replaceState(null, '', newUrl); } catch (_) { }
       });
     }
 
@@ -1706,15 +1723,19 @@
     // hidden attribute. At wide viewports the bodies are always shown.
     (function wireLiveCollapseToggles() {
       var pairs = [
-        { rootId: 'liveHeader',   togId: 'liveHeaderToggle',   bodyId: 'liveHeaderBody',
-          showLabel: 'Show live stats',   hideLabel: 'Hide live stats' },
-        { rootId: 'liveControls', togId: 'liveControlsToggle', bodyId: 'liveControlsBody',
-          showLabel: 'Show live controls', hideLabel: 'Hide live controls' },
+        {
+          rootId: 'liveHeader', togId: 'liveHeaderToggle', bodyId: 'liveHeaderBody',
+          showLabel: 'Show live stats', hideLabel: 'Hide live stats'
+        },
+        {
+          rootId: 'liveControls', togId: 'liveControlsToggle', bodyId: 'liveControlsBody',
+          showLabel: 'Show live controls', hideLabel: 'Hide live controls'
+        },
       ];
       var narrowMql = window.matchMedia('(max-width: 768px)');
       function setExpanded(p, expanded) {
         var root = document.getElementById(p.rootId);
-        var tog  = document.getElementById(p.togId);
+        var tog = document.getElementById(p.togId);
         var body = document.getElementById(p.bodyId);
         if (!root || !tog || !body) return;
         if (expanded) {
@@ -1739,10 +1760,10 @@
             // Always expanded; no hidden attr; no collapse class
             var root = document.getElementById(p.rootId);
             var body = document.getElementById(p.bodyId);
-            var tog  = document.getElementById(p.togId);
+            var tog = document.getElementById(p.togId);
             if (body) body.removeAttribute('hidden');
             if (root) { root.classList.remove('is-collapsed'); root.classList.remove('is-expanded'); }
-            if (tog)  { tog.setAttribute('aria-expanded', 'true'); }
+            if (tog) { tog.setAttribute('aria-expanded', 'true'); }
           }
         }
       }
@@ -1883,7 +1904,7 @@
     // Save/restore map view
     const savedView = localStorage.getItem('live-map-view');
     if (savedView) {
-      try { const v = JSON.parse(savedView); map.setView([v.lat, v.lng], v.zoom); } catch {}
+      try { const v = JSON.parse(savedView); map.setView([v.lat, v.lng], v.zoom); } catch { }
     }
     map.on('moveend', () => {
       const c = map.getCenter();
@@ -1945,13 +1966,13 @@
         e.stopPropagation();
         var open = !menu.hasAttribute('hidden');
         if (open) { menu.setAttribute('hidden', ''); moreBtn.setAttribute('aria-expanded', 'false'); }
-        else      { menu.removeAttribute('hidden');  moreBtn.setAttribute('aria-expanded', 'true');  }
+        else { menu.removeAttribute('hidden'); moreBtn.setAttribute('aria-expanded', 'true'); }
       });
       // Click outside closes the menu.
       document.addEventListener('click', function (e) {
         if (menu.hasAttribute('hidden')) return;
         if (e.target === moreBtn || moreBtn.contains(e.target) ||
-            e.target === menu   || menu.contains(e.target)) return;
+          e.target === menu || menu.contains(e.target)) return;
         menu.setAttribute('hidden', '');
         moreBtn.setAttribute('aria-expanded', 'false');
       });
@@ -2058,8 +2079,8 @@
     _pruneInterval = setInterval(pruneStaleNodes, 60000);
 
     // Refresh relative timestamps in feed every 10 seconds (#701)
-    _feedTimestampInterval = setInterval(function() {
-      document.querySelectorAll('.feed-time[data-ts]').forEach(function(el) {
+    _feedTimestampInterval = setInterval(function () {
+      document.querySelectorAll('.feed-time[data-ts]').forEach(function (el) {
         el.innerHTML = formatLiveTimestampHtml(Number(el.dataset.ts));
       });
     }, 10000);
@@ -2168,11 +2189,10 @@
           <table style="font-size:12px;width:100%;border-collapse:collapse;">
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Last Seen</td><td>${lastSeen}</td></tr>
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Adverts</td><td>${n.advert_count || 0}</td></tr>
-            ${'default_scope' in n ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Scope</td><td>${
-  n.default_scope === null ? '<span style="color:var(--text-muted)">—</span>'
-  : n.default_scope === '' ? '<span style="color:var(--text-muted)">unknown scope</span>'
-  : `<code style="color:var(--accent)">${escapeHtml(n.default_scope)}</code>`
-}</td></tr>` : ''}
+            ${'default_scope' in n ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Scope</td><td>${n.default_scope === null ? '<span style="color:var(--text-muted)">—</span>'
+            : n.default_scope === '' ? '<span style="color:var(--text-muted)">unknown scope</span>'
+              : `<code style="color:var(--accent)">${escapeHtml(n.default_scope)}</code>`
+          }</td></tr>` : ''}
             ${hasLoc ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Location</td><td>${n.lat.toFixed(5)}, ${n.lon.toFixed(5)}</td></tr>` : ''}
             ${stats.avgSnr != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Avg SNR</td><td>${stats.avgSnr.toFixed(1)} dB</td></tr>` : ''}
             ${stats.avgHops != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Avg Hops</td><td>${stats.avgHops.toFixed(1)}</td></tr>` : ''}
@@ -2307,8 +2327,8 @@
 
   function getFavoritePubkeys() {
     let favs = [];
-    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-favorites') || '[]')); } catch {}
-    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]').map(n => n.pubkey)); } catch {}
+    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-favorites') || '[]')); } catch { }
+    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]').map(n => n.pubkey)); } catch { }
     return favs.filter(Boolean);
   }
 
@@ -2434,7 +2454,7 @@
       for (const op of group.packets) {
         let opHops = [];
         if (op.path_json) {
-          try { opHops = getParsedPath(op); } catch {}
+          try { opHops = getParsedPath(op); } catch { }
         } else if (op.decoded?.path?.hops) {
           opHops = op.decoded.path.hops;
         }
@@ -2500,8 +2520,8 @@
     const svgHtml = (window.makeRoleMarkerSVG
       ? window.makeRoleMarkerSVG(n.role, null, sizePx)
       : '<svg width="' + sizePx + '" height="' + sizePx + '" viewBox="0 0 ' + sizePx + ' ' + sizePx +
-        '"><circle cx="' + (sizePx/2) + '" cy="' + (sizePx/2) + '" r="' + (sizePx/2 - 2) +
-        '" fill="' + fillExpr + '" stroke="var(--mc-marker-stroke-color)" stroke-width="var(--mc-marker-stroke-width)" stroke-opacity="var(--mc-marker-stroke-opacity)"/></svg>');
+      '"><circle cx="' + (sizePx / 2) + '" cy="' + (sizePx / 2) + '" r="' + (sizePx / 2 - 2) +
+      '" fill="' + fillExpr + '" stroke="var(--mc-marker-stroke-color)" stroke-width="var(--mc-marker-stroke-width)" stroke-opacity="var(--mc-marker-stroke-opacity)"/></svg>');
 
     const icon = L.divIcon({
       html: svgHtml,
@@ -2628,8 +2648,8 @@
           // WS-only nodes: remove to prevent unbounded memory growth
           if (marker) {
             if (nodesLayer) {
-              try { nodesLayer.removeLayer(marker); } catch (e) {}
-              if (marker._highlightRing) try { nodesLayer.removeLayer(marker._highlightRing); } catch (e) {}
+              try { nodesLayer.removeLayer(marker); } catch (e) { }
+              if (marker._highlightRing) try { nodesLayer.removeLayer(marker._highlightRing); } catch (e) { }
             }
           }
           delete nodeMarkers[key];
@@ -2660,25 +2680,25 @@
   window._liveBuildClickablePathPopupHtml = buildClickablePathPopupHtml;
   window._livePruneClickablePaths = pruneClickablePaths;
   window._liveClickablePaths = clickablePaths;
-  window._liveNodeMarkers = function() { return nodeMarkers; };
-  window._liveNodeData = function() { return nodeData; };
-  window._liveNodeActivity = function() { return nodeActivity; };
+  window._liveNodeMarkers = function () { return nodeMarkers; };
+  window._liveNodeData = function () { return nodeData; };
+  window._liveNodeActivity = function () { return nodeActivity; };
   window._vcrFormatTime = vcrFormatTime;
   window._liveDbPacketToLive = dbPacketToLive;
   window._liveExpandToBufferEntries = expandToBufferEntries;
   window._liveExpandToBufferEntriesAsync = expandToBufferEntriesAsync;
   window._liveSEG_MAP = SEG_MAP;
   window._liveBufferPacket = bufferPacket;
-  window._liveVCR = function() { return VCR; };
+  window._liveVCR = function () { return VCR; };
   window._liveGetFavoritePubkeys = getFavoritePubkeys;
   window._livePacketInvolvesFavorite = packetInvolvesFavorite;
   window._liveIsNodeFavorited = isNodeFavorited;
   window._livePacketInvolvesFilterNode = packetInvolvesFilterNode;
-  window._liveGetNodeFilterKeys = function() { return nodeFilterKeys; };
+  window._liveGetNodeFilterKeys = function () { return nodeFilterKeys; };
   window._livePacketMatchesRegion = packetMatchesRegion;
   window._liveSetObserverIataMap = setObserverIataMap;
   window._liveBuildObserverIataMap = buildObserverIataMap;
-  window._liveGetObserverIataMap = function() { return observerIataMap; };
+  window._liveGetObserverIataMap = function () { return observerIataMap; };
   window._liveSetNodeFilter = setNodeFilter;
   window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
   window._liveResolveHopPositions = resolveHopPositions;
@@ -2689,17 +2709,18 @@
   window._liveVcrSetMode = vcrSetMode;
   // #1207 test seams: expose production feed mutators so E2E can exercise
   // the real eviction guard / placeholder re-add path (not a test-local copy).
-  window._liveAddFeedItem = function(icon, typeName, payload, hops, color, pkt) {
+  window._liveAddFeedItem = function (icon, typeName, payload, hops, color, pkt) {
     return addFeedItem(icon, typeName, payload, hops, color, pkt);
   };
-  window._liveRebuildFeedList = function() { return rebuildFeedList(); };
+  window._liveRebuildFeedList = function () { return rebuildFeedList(); };
 
   // PR #1490 test seams: Expose internal state for Playwright assertions
   window._liveDrawAnimatedLine = drawAnimatedLine;
   window._liveTestSeams = {
     getAnimCount: () => activeAnimations.length,
     isAnimating: () => isAnimating,
-    getPathCount: () => (typeof recentPaths !== 'undefined' ? recentPaths.length : 0)
+    getPathCount: () => (typeof recentPaths !== 'undefined' ? recentPaths.length : 0),
+    wake: wakeCanvasEngine
   };
 
   async function replayRecent() {
@@ -2745,7 +2766,7 @@
         lastTs = groupTs;
       }
       updateTimeline();
-    } catch {}
+    } catch { }
   }
 
   function connectWS() {
@@ -2755,10 +2776,10 @@
       try {
         const msg = JSON.parse(e.data);
         if (msg.type === 'packet') bufferPacket(msg.data);
-      } catch {}
+      } catch { }
     };
     ws.onclose = () => setTimeout(connectWS, WS_RECONNECT_MS);
-    ws.onerror = () => {};
+    ws.onerror = () => { };
   }
 
   // === UNIFIED PACKET RENDERER ===
@@ -2783,12 +2804,12 @@
     }
 
     // --- Favorites filter ---
-    if (showOnlyFavorites && !packets.some(function(p) { return packetInvolvesFavorite(p); })) return;
+    if (showOnlyFavorites && !packets.some(function (p) { return packetInvolvesFavorite(p); })) return;
 
     // --- Node filter ---
     if (nodeFilterKeys.length) {
       nodeFilterTotal++;
-      if (!packets.some(function(p) { return packetInvolvesFilterNode(p, nodeFilterKeys); })) return;
+      if (!packets.some(function (p) { return packetInvolvesFilterNode(p, nodeFilterKeys); })) return;
       nodeFilterShown++;
       updateNodeFilterUI();
     }
@@ -2808,7 +2829,7 @@
       if (h.payloadTypeName === 'ADVERT' && p.pubKey) {
         var key = p.pubKey;
         if (!nodeMarkers[key] && p.lat != null && p.lon != null && !(p.lat === 0 && p.lon === 0)) {
-          var n = { public_key: key, name: p.name || key.slice(0,8), role: p.role || 'unknown', lat: p.lat, lon: p.lon, _liveSeen: Date.now() };
+          var n = { public_key: key, name: p.name || key.slice(0, 8), role: p.role || 'unknown', lat: p.lat, lon: p.lon, _liveSeen: Date.now() };
           nodeData[key] = n;
           addNodeMarker(n);
           if (window.HopResolver) HopResolver.init(Object.values(nodeData));
@@ -2832,7 +2853,7 @@
       for (const fp of packets) {
         let fpHops = [];
         if (fp.path_json) {
-          try { fpHops = getParsedPath(fp); } catch {}
+          try { fpHops = getParsedPath(fp); } catch { }
         } else if (fp.decoded?.path?.hops) {
           fpHops = fp.decoded.path.hops;
         }
@@ -2853,10 +2874,10 @@
 
     // --- Rain drops: one per observation ---
     var baseHops = (decoded.path?.hops || []).length || 1;
-    packets.forEach(function(rp, i) {
+    packets.forEach(function (rp, i) {
       if (i === 0) { addRainDrop(rp); return; }
       var variedHops = Math.max(1, baseHops + Math.floor(Math.random() * 3) - 1);
-      setTimeout(function() { addRainDrop(rp, variedHops); }, i * 150);
+      setTimeout(function () { addRainDrop(rp, variedHops); }, i * 150);
     });
 
     // --- Extract all unique paths from observations ---
@@ -2947,11 +2968,11 @@
           var ghost = L.circleMarker(hp.pos, {
             radius: 3, fillColor: ghostColor, fillOpacity: 0.2, color: color, weight: 1, opacity: 0.3
           }).addTo(pathsLayer);
-          setTimeout((function(g) { return function() { if (pathsLayer.hasLayer(g)) pathsLayer.removeLayer(g); }; })(ghost), GHOST_TIMEOUT_MS);
+          setTimeout((function (g) { return function () { if (pathsLayer.hasLayer(g)) pathsLayer.removeLayer(g); }; })(ghost), GHOST_TIMEOUT_MS);
         }
       }
       // Remove dashed line after timeout
-      setTimeout((function(l) { return function() { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), GHOST_TIMEOUT_MS);
+      setTimeout((function (l) { return function () { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), GHOST_TIMEOUT_MS);
     }
     // Ghost marker for the final unreached hop
     var last = hopPositions[hopPositions.length - 1];
@@ -2959,7 +2980,7 @@
       var ghostEnd = L.circleMarker(last.pos, {
         radius: 4, fillColor: ghostColor, fillOpacity: 0.25, color: color, weight: 1, opacity: 0.35
       }).addTo(pathsLayer);
-      setTimeout(function() { if (pathsLayer.hasLayer(ghostEnd)) pathsLayer.removeLayer(ghostEnd); }, GHOST_TIMEOUT_MS);
+      setTimeout(function () { if (pathsLayer.hasLayer(ghostEnd)) pathsLayer.removeLayer(ghostEnd); }, GHOST_TIMEOUT_MS);
     }
   }
 
@@ -2975,7 +2996,7 @@
     if (resolvedPath && resolvedPath.length === hops.length && window.HopResolver && HopResolver.ready()) {
       resolvedMap = HopResolver.resolveFromServer(hops, resolvedPath);
       // Fill in any null entries from client-side fallback, preserving sender GPS context
-      var nullHops = hops.filter(function(h, i) { return !resolvedPath[i] && !resolvedMap[h]; });
+      var nullHops = hops.filter(function (h, i) { return !resolvedPath[i] && !resolvedMap[h]; });
       if (nullHops.length) {
         var fallback = HopResolver.resolve(nullHops, senderLat, senderLon, null, null, null);
         for (var k in fallback) resolvedMap[k] = fallback[k];
@@ -3057,7 +3078,7 @@
       }
       if (!animLayer) return;
       // Audio hook: notify per-hop callback
-      if (onHop) try { onHop(hopIndex, hopPositions.length, hopPositions[hopIndex]); } catch (e) {}
+      if (onHop) try { onHop(hopIndex, hopPositions.length, hopPositions[hopIndex]); } catch (e) { }
       const hp = hopPositions[hopIndex];
       const isGhost = hp.ghost;
 
@@ -3131,7 +3152,7 @@
     function animatePulse(now) {
       if (!animLayer) return;
       if (now - pulseStart > 2000) {
-        try { animLayer.removeLayer(ring); } catch {}
+        try { animLayer.removeLayer(ring); } catch { }
         return;
       }
       const elapsed = now - lastPulse;
@@ -3140,7 +3161,7 @@
         r += 1.5 * ticks; op -= 0.03 * ticks;
         lastPulse = now;
         if (op <= 0) {
-          try { animLayer.removeLayer(ring); } catch {}
+          try { animLayer.removeLayer(ring); } catch { }
           return;
         }
         try {
@@ -3165,10 +3186,10 @@
         ringHl.setStyle({ color: color, weight: 3, opacity: 0.95, fillOpacity: 0, fill: false });
         ringHl.setRadius(baseSize / 2 + 4);
         setTimeout(() => {
-          try { ringHl.setStyle({ opacity: 0.4, weight: 2 }); ringHl.setRadius(baseSize / 2 + 8); } catch (e) {}
+          try { ringHl.setStyle({ opacity: 0.4, weight: 2 }); ringHl.setRadius(baseSize / 2 + 8); } catch (e) { }
         }, 200);
         setTimeout(() => {
-          try { ringHl.setStyle({ opacity: 0, weight: 0 }); } catch (e) {}
+          try { ringHl.setStyle({ opacity: 0, weight: 0 }); } catch (e) { }
         }, 700);
       } catch (e) { /* circleMarker absent — ignore */ }
     }
@@ -3395,7 +3416,7 @@
       // Remove old chars beyond trail length
       while (charMarkers.length > TRAIL_LEN) {
         const old = charMarkers.shift();
-        try { animLayer.removeLayer(old.marker); } catch {}
+        try { animLayer.removeLayer(old.marker); } catch { }
       }
 
       // Fade existing chars
@@ -3436,8 +3457,8 @@
           }
           const ft = Math.min(1, (now - fadeStart) / 300);
           if (ft >= 1) {
-            for (const cm of charMarkers) try { animLayer.removeLayer(cm.marker); } catch {}
-            try { pathsLayer.removeLayer(trail); } catch {}
+            for (const cm of charMarkers) try { animLayer.removeLayer(cm.marker); } catch { }
+            try { pathsLayer.removeLayer(trail); } catch { }
             charMarkers.length = 0;
           } else {
             const op = 1 - ft;
@@ -3457,35 +3478,35 @@
 
   function renderAnimations(now) {
     if (!animCtx) return;
-    
+
     if (activeAnimations.length === 0) {
       isAnimating = false;
       animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
       return;
     }
-  
+
     const isPaused = VCR.mode === 'PAUSED' || VCR.speed === 0;
-  
+
     // Clear the canvas for this frame
     animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
-  
+
     for (let i = activeAnimations.length - 1; i >= 0; i--) {
       const anim = activeAnimations[i];
-      
+
       // Safely resume without dt time-jumps. 
       // If lastTick is null (because we were paused), reset it to 'now' so dt is 0.
       if (anim.lastTick === null) anim.lastTick = now;
-      
+
       const dt = now - anim.lastTick;
       anim.lastTick = now;
-  
+
       // Advance progress only if we are not paused
       if (!isPaused) {
         anim.progress += (dt / 660) * VCR.speed;
       }
-  
+
       const t = Math.min(1, anim.progress);
-  
+
       // Use LayerPoint math so coordinates lock to the moving pane
       const fromLayerPt = map.latLngToLayerPoint(anim.from);
       const toLayerPt = map.latLngToLayerPoint(anim.to);
@@ -3500,62 +3521,99 @@
         y: toLayerPt.y - canvasTopLeft.y
       };
 
-      const currentX = fromPt.x + (toPt.x - fromPt.x) * t;
-      const currentY = fromPt.y + (toPt.y - fromPt.y) * t;
-  
-      // Draw Contrail (glow)
-      animCtx.beginPath();
-      animCtx.moveTo(fromPt.x, fromPt.y);
-      animCtx.lineTo(currentX, currentY);
-      animCtx.strokeStyle = anim.contrailColor;
-      animCtx.lineWidth = 6;
-      animCtx.globalAlpha = anim.opacity * 0.2;
-      animCtx.lineCap = 'round';
-      animCtx.stroke();
-  
-      // Draw Core Line
-      animCtx.beginPath();
-      animCtx.moveTo(fromPt.x, fromPt.y);
-      animCtx.lineTo(currentX, currentY);
-      if (anim.isDashed) {
+      const W = animCanvas.clientWidth;
+      const H = animCanvas.clientHeight;
+      const cull = (fromPt.x < 0 && toPt.x < 0) || (fromPt.x > W && toPt.x > W) || 
+                   (fromPt.y < 0 && toPt.y < 0) || (fromPt.y > H && toPt.y > H);
+
+      if (!cull) {
+        const currentX = fromPt.x + (toPt.x - fromPt.x) * t;
+        const currentY = fromPt.y + (toPt.y - fromPt.y) * t;
+
+        // Draw Contrail (glow)
+        animCtx.beginPath();
+        animCtx.moveTo(fromPt.x, fromPt.y);
+        animCtx.lineTo(currentX, currentY);
+        animCtx.strokeStyle = anim.contrailColor;
+        animCtx.lineWidth = 6;
+        animCtx.globalAlpha = anim.opacity * 0.2;
+        animCtx.lineCap = 'round';
+        animCtx.stroke();
+
+        // Draw Core Line
+        animCtx.beginPath();
+        animCtx.moveTo(fromPt.x, fromPt.y);
+        animCtx.lineTo(currentX, currentY);
+        if (anim.isDashed) {
           animCtx.setLineDash([4, 6]);
           animCtx.lineWidth = 1.5;
-      } else {
+        } else {
           animCtx.lineWidth = 2;
+        }
+        animCtx.strokeStyle = anim.lineColor;
+        animCtx.globalAlpha = anim.opacity;
+        animCtx.stroke();
+        animCtx.setLineDash([]); // Reset for next draw
+
+        // Draw Leading Dot
+        animCtx.beginPath();
+        animCtx.arc(currentX, currentY, 3.5, 0, Math.PI * 2);
+        animCtx.fillStyle = anim.hashFill;
+        animCtx.fill();
+        animCtx.lineWidth = 1.5;
+        animCtx.strokeStyle = anim.hashOutline;
+        animCtx.stroke();
+        animCtx.globalAlpha = 1.0; // Reset
       }
-      animCtx.strokeStyle = anim.lineColor;
-      animCtx.globalAlpha = anim.opacity;
-      animCtx.stroke();
-      animCtx.setLineDash([]); // Reset for next draw
-  
-      // Draw Leading Dot
-      animCtx.beginPath();
-      animCtx.arc(currentX, currentY, 3.5, 0, Math.PI * 2);
-      animCtx.fillStyle = anim.hashFill;
-      animCtx.fill();
-      animCtx.lineWidth = 1.5;
-      animCtx.strokeStyle = anim.hashOutline;
-      animCtx.stroke();
-      animCtx.globalAlpha = 1.0; // Reset
-  
+
       // Handle completion
       if (t >= 1) {
-          createFadingLeafletLine(anim);
-          if (anim.onComplete) anim.onComplete();
-          activeAnimations.splice(i, 1);
+        createFadingLeafletLine(anim);
+        if (anim.onComplete) anim.onComplete();
+        activeAnimations.splice(i, 1);
       }
     }
-  
+
     // SLEEP LOGIC: If paused, halt the loop and prepare all animations for a clean wake
     if (isPaused) {
       isAnimating = false;
       for (let i = 0; i < activeAnimations.length; i++) {
-        activeAnimations[i].lastTick = null; 
+        activeAnimations[i].lastTick = null;
       }
       return; // Stop requesting frames. GPU goes to sleep.
     }
-  
+
     requestAnimationFrame(renderAnimations);
+  }
+
+  function renderFades(now) {
+    if (activeFades.length === 0) {
+      isFading = false;
+      return;
+    }
+    for (let i = activeFades.length - 1; i >= 0; i--) {
+      const f = activeFades[i];
+      if (!pathsLayer) continue;
+      const fadeElapsed = now - f.lastFade;
+      if (fadeElapsed >= 52) {
+        const fadeTicks = Math.min(Math.floor(fadeElapsed / 52), 4);
+        f.lastFade = now;
+        f.opacity -= 0.1 * fadeTicks;
+        if (f.opacity <= 0) {
+          if (pathsLayer) { pathsLayer.removeLayer(f.line); pathsLayer.removeLayer(f.contrail); }
+          recentPaths = recentPaths.filter(p => p.line !== f.line);
+          activeFades.splice(i, 1);
+        } else {
+          f.line.setStyle({ opacity: f.opacity });
+          f.contrail.setStyle({ opacity: f.opacity * 0.15 });
+        }
+      }
+    }
+    if (activeFades.length > 0) {
+      requestAnimationFrame(renderFades);
+    } else {
+      isFading = false;
+    }
   }
 
   function createFadingLeafletLine(anim) {
@@ -3576,40 +3634,31 @@
     while (recentPaths.length > 5) {
       const old = recentPaths.shift();
       if (pathsLayer) { pathsLayer.removeLayer(old.line); pathsLayer.removeLayer(old.glowLine); }
+      activeFades = activeFades.filter(f => f.line !== old.line);
     }
 
-    // Fade out logic 
-    let fadeOp = anim.opacity;
-    let lastFade = performance.now();
-    function animateFade(now) {
-      if (!pathsLayer) return;
-      const fadeElapsed = now - lastFade;
-      if (fadeElapsed >= 52) {
-        const fadeTicks = Math.min(Math.floor(fadeElapsed / 52), 4);
-        lastFade = now;
-        fadeOp -= 0.1 * fadeTicks;
-        if (fadeOp <= 0) {
-          if (pathsLayer) { pathsLayer.removeLayer(line); pathsLayer.removeLayer(contrail); }
-          recentPaths = recentPaths.filter(p => p.line !== line);
-          return;
-        }
-        line.setStyle({ opacity: fadeOp });
-        contrail.setStyle({ opacity: fadeOp * 0.15 });
-      }
-      requestAnimationFrame(animateFade);
+    activeFades.push({
+      line: line,
+      contrail: contrail,
+      opacity: anim.opacity,
+      lastFade: performance.now()
+    });
+
+    if (!isFading) {
+      isFading = true;
+      requestAnimationFrame(renderFades);
     }
-    requestAnimationFrame(animateFade);
   }
 
   function drawAnimatedLine(from, to, color, onComplete, overrideOpacity, rawHex, hash) {
     // GUARD: Prevent stale callbacks from pushing to a destroyed map
-    if (!map || !animCtx) { 
-      if (onComplete) onComplete(); 
-      return; 
+    if (!map || !animCtx) {
+      if (onComplete) onComplete();
+      return;
     }
-  
+
     if (matrixMode) return drawMatrixLine(from, to, color, onComplete, rawHex);
-  
+
     const mainOpacity = overrideOpacity ?? 0.8;
     const isDashed = overrideOpacity != null;
 
@@ -3638,7 +3687,7 @@
       hashOutline: hashOutline,
       onComplete: onComplete
     });
-     
+
     // WAKE LOGIC: Kickstart the loop if it is currently sleeping
     if (!isAnimating) {
       isAnimating = true;
@@ -3668,7 +3717,7 @@
       }).addTo(map);
       // Set overall layer opacity via canvas element
       if (heatLayer._canvas) { heatLayer._canvas.style.opacity = savedOpacity; }
-      else { setTimeout(function() { if (heatLayer && heatLayer._canvas) heatLayer._canvas.style.opacity = savedOpacity; }, 100); }
+      else { setTimeout(function () { if (heatLayer && heatLayer._canvas) heatLayer._canvas.style.opacity = savedOpacity; }, 100); }
       window._meshcoreLiveHeatLayer = heatLayer;
     }
   }
@@ -3890,6 +3939,10 @@
   }
 
   function destroy() {
+    activeAnimations.length = 0;
+    activeFades.length = 0;
+    isAnimating = false;
+    isFading = false;
     stopReplay();
     if (_timelineRefreshInterval) { clearInterval(_timelineRefreshInterval); _timelineRefreshInterval = null; }
     if (_lcdClockInterval) { clearInterval(_lcdClockInterval); _lcdClockInterval = null; }
@@ -3908,7 +3961,7 @@
       window.removeEventListener('orientationchange', _onResize);
       if (window.visualViewport) window.visualViewport.removeEventListener('resize', _onResize);
     }
-    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
+    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) { } _vcrHeightCleanup = null; }
     // Restore #app height to CSS default
     const appEl = document.getElementById('app');
     if (appEl) appEl.style.height = '';
@@ -3939,9 +3992,19 @@
 
     // CLEANUP: Kill the canvas loop, dump the queue, and clear the screen
     activeAnimations.length = 0;
+    activeFades.length = 0;
     isAnimating = false;
+    isFading = false;
     if (animCtx && animCanvas) {
       animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
+      animCanvas.remove();
+      animCanvas = null;
+      animCtx = null;
+    }
+    if (_dprMedia && _dprChangeHandler) {
+      _dprMedia.removeEventListener('change', _dprChangeHandler);
+      _dprMedia = null;
+      _dprChangeHandler = null;
     }
   }
 
@@ -3954,9 +4017,16 @@
   // across re-mounts. window.__liveMQLBindCount is a debug seam consumed by
   // test-live-mql-leak-1180-e2e.js and otherwise unused.
   var _liveNarrowMqlBound = false;
+  window._liveTestSeams = window._liveTestSeams || {};
+  window._liveTestSeams.wake = function() {
+    if (!isAnimating) {
+      isAnimating = true;
+      requestAnimationFrame(renderAnimations);
+    }
+  };
 
   registerPage('live', {
-    init: function(app, routeParam) {
+    init: function (app, routeParam) {
       _themeRefreshHandler = () => {
         rebuildFeedList();
         if (activeNodeDetailKey) showNodeDetail(activeNodeDetailKey);
@@ -3967,7 +4037,7 @@
       if (window.ChannelColorPicker) window.ChannelColorPicker.installLiveFeed();
       return result;
     },
-    destroy: function() {
+    destroy: function () {
       if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; }
       return destroy();
     }
