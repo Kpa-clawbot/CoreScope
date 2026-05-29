@@ -48,6 +48,12 @@ type Config struct {
 	TypeColors map[string]interface{} `json:"typeColors"`
 	Home       map[string]interface{} `json:"home"`
 
+	// #1488 — marker stroke (outline) settings. Operators dial color, width
+	// and opacity to soften the default white outline when hundreds of
+	// nodes feel overwhelming. Frontend reads these as CSS vars; see
+	// public/customize-v2.js applyCSS markerStroke block.
+	MarkerStroke map[string]interface{} `json:"markerStroke,omitempty"`
+
 	MapDefaults struct {
 		Center []float64 `json:"center"`
 		Zoom   int       `json:"zoom"`
@@ -329,6 +335,8 @@ type ThemeFile struct {
 	NodeColors map[string]interface{} `json:"nodeColors"`
 	TypeColors map[string]interface{} `json:"typeColors"`
 	Home       map[string]interface{} `json:"home"`
+	// #1488 — marker stroke overlay from theme.json.
+	MarkerStroke map[string]interface{} `json:"markerStroke,omitempty"`
 }
 
 func LoadConfig(baseDirs ...string) (*Config, error) {

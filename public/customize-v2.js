@@ -33,8 +33,8 @@
     'meshcore-live-heatmap-opacity'
   ];
 
-  var VALID_SECTIONS = ['branding', 'theme', 'themeDark', 'nodeColors', 'typeColors', 'home', 'timestamps', 'heatmapOpacity', 'liveHeatmapOpacity', 'distanceUnit', 'favorites', 'myNodes'];
-  var OBJECT_SECTIONS = ['branding', 'theme', 'themeDark', 'nodeColors', 'typeColors', 'home', 'timestamps'];
+  var VALID_SECTIONS = ['branding', 'theme', 'themeDark', 'nodeColors', 'typeColors', 'home', 'timestamps', 'heatmapOpacity', 'liveHeatmapOpacity', 'distanceUnit', 'favorites', 'myNodes', 'markerStroke'];
+  var OBJECT_SECTIONS = ['branding', 'theme', 'themeDark', 'nodeColors', 'typeColors', 'home', 'timestamps', 'markerStroke'];
   var SCALAR_SECTIONS = ['heatmapOpacity', 'liveHeatmapOpacity'];
   var DISTANCE_UNIT_VALUES = ['km', 'mi', 'auto'];
 
@@ -409,6 +409,32 @@
         } else {
           console.warn('[customizer-v2] Invalid opacity value rejected:', key, delta[key]);
         }
+      } else if (key === 'markerStroke' && typeof delta[key] === 'object' && delta[key] !== null) {
+        // #1488 — markerStroke { color, width, opacity }
+        var msIn = delta[key];
+        var msOut = {};
+        if (typeof msIn.color === 'string' && isValidColor(msIn.color)) {
+          msOut.color = msIn.color;
+        } else if (msIn.color != null) {
+          console.warn('[customizer-v2] Invalid markerStroke.color rejected:', msIn.color);
+        }
+        var msW = typeof msIn.width === 'string' ? parseFloat(msIn.width) : msIn.width;
+        if (msIn.width != null) {
+          if (isFinite(msW) && msW >= 0 && msW <= 10) {
+            msOut.width = msW;
+          } else {
+            console.warn('[customizer-v2] Invalid markerStroke.width rejected:', msIn.width);
+          }
+        }
+        var msO = typeof msIn.opacity === 'string' ? parseFloat(msIn.opacity) : msIn.opacity;
+        if (msIn.opacity != null) {
+          if (isValidOpacity(msO)) {
+            msOut.opacity = msO;
+          } else {
+            console.warn('[customizer-v2] Invalid markerStroke.opacity rejected:', msIn.opacity);
+          }
+        }
+        if (Object.keys(msOut).length) clean[key] = msOut;
       } else if (key === 'timestamps' && typeof delta[key] === 'object' && delta[key] !== null) {
         var ts = {};
         var tsrc = delta[key];
@@ -635,6 +661,22 @@
     }
     if (typeof effectiveConfig.liveHeatmapOpacity === 'number') {
       localStorage.setItem('meshcore-live-heatmap-opacity', effectiveConfig.liveHeatmapOpacity);
+    }
+
+    // #1488 — marker stroke: drive CSS vars from effective config. SVG
+    // markers across map.js / live.js / roles.js all read these vars, so
+    // a single write here repaints every mounted marker without a reload.
+    var ms = effectiveConfig.markerStroke;
+    if (ms && typeof ms === 'object') {
+      if (typeof ms.color === 'string' && ms.color) {
+        root.setProperty('--mc-marker-stroke-color', ms.color);
+      }
+      if (ms.width != null && isFinite(ms.width)) {
+        root.setProperty('--mc-marker-stroke-width', String(ms.width));
+      }
+      if (ms.opacity != null && isFinite(ms.opacity)) {
+        root.setProperty('--mc-marker-stroke-opacity', String(ms.opacity));
+      }
     }
 
     // Distance unit → sync to localStorage for all pages
@@ -1262,6 +1304,15 @@
     var liveHeatOpacity = typeof eff.liveHeatmapOpacity === 'number' ? eff.liveHeatmapOpacity : 0.3;
     var liveHeatPct = Math.round(liveHeatOpacity * 100);
 
+    // #1488 — marker stroke controls. Defaults match the :root values in
+    // style.css; the UI shows the effective merged value (server config →
+    // local override) so the operator sees what's actually painted.
+    var ms = eff.markerStroke || {};
+    var msColor = typeof ms.color === 'string' && ms.color ? ms.color : '#ffffff';
+    var msWidth = ms.width != null && isFinite(ms.width) ? Number(ms.width) : 1;
+    var msOpacity = ms.opacity != null && isFinite(ms.opacity) ? Number(ms.opacity) : 1;
+    var msOpacityPct = Math.round(msOpacity * 100);
+
     return '<div class="cust-panel' + (_activeTab === 'nodes' ? ' active' : '') + '" data-panel="nodes">' +
       '<p class="cust-section-title">Node Role Colors</p>' +
       '<p class="cust-hint" style="margin-bottom:8px">These are the canonical role colors used across the app. They inherit from your server config (or built-in defaults), and can be optionally remapped by a colorblind-safe preset below.</p>' +
@@ -1279,6 +1330,22 @@
         '<div class="cust-hint">Heatmap overlay on the Live page (0–100%)</div></div>' +
         '<input type="range" data-cv2-slider="liveHeatmapOpacity" min="0" max="100" value="' + liveHeatPct + '" style="width:120px;cursor:pointer">' +
         '<span class="cust-hex" id="cv2LiveHeatPct">' + liveHeatPct + '%</span></div>' +
+      '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">' +
+      '<p class="cust-section-title">Marker Stroke <span style="font-weight:normal;color:var(--text-muted);font-size:11px">(#1488)</span></p>' +
+      '<p class="cust-hint" style="margin-bottom:8px">Outline around each map marker. Dial these down when hundreds of nodes make the default white border overwhelming. Changes are live on every mounted marker.</p>' +
+      '<div class="cust-color-row"><div><label>Color' + _overrideDot('markerStroke', 'color') + '</label>' +
+        '<div class="cust-hint">Marker outline color. Defaults to white for contrast on dark + light tiles.</div></div>' +
+        '<input type="color" data-cv2-field="markerStroke.color" value="' + esc(msColor) + '">' +
+        '<span class="cust-node-dot" style="background:' + esc(msColor) + '"></span>' +
+        '<span class="cust-hex">' + esc(msColor) + '</span></div>' +
+      '<div class="cust-color-row"><div><label>Width' + _overrideDot('markerStroke', 'width') + '</label>' +
+        '<div class="cust-hint">Stroke thickness in SVG units (0–4). Set to 0 to remove the outline entirely.</div></div>' +
+        '<input type="range" data-cv2-marker-stroke="width" min="0" max="4" step="0.1" value="' + msWidth + '" style="width:120px;cursor:pointer">' +
+        '<span class="cust-hex" id="cv2MarkerStrokeW">' + msWidth + '</span></div>' +
+      '<div class="cust-color-row"><div><label>Opacity' + _overrideDot('markerStroke', 'opacity') + '</label>' +
+        '<div class="cust-hint">Stroke alpha (0–100%). Drop this to ~30% for a softer outline.</div></div>' +
+        '<input type="range" data-cv2-marker-stroke="opacity" min="0" max="100" value="' + msOpacityPct + '" style="width:120px;cursor:pointer">' +
+        '<span class="cust-hex" id="cv2MarkerStrokeO">' + msOpacityPct + '%</span></div>' +
     '</div>';
   }
 
@@ -1995,6 +2062,11 @@
           // Mirror to logo brand vars so the wordmark recolors live too.
           if (key === 'accent') document.documentElement.style.setProperty('--logo-accent', inp.value);
           if (key === 'accentHover') document.documentElement.style.setProperty('--logo-accent-hi', inp.value);
+          // #1488 — marker stroke color also gets a live CSS-var write
+          // so the operator sees outlines repaint on drag.
+          if (section === 'markerStroke' && key === 'color') {
+            document.documentElement.style.setProperty('--mc-marker-stroke-color', inp.value);
+          }
           // Update hex display
           var hex = inp.parentElement.querySelector('.cust-hex');
           if (hex) hex.textContent = inp.value;
@@ -2071,6 +2143,40 @@
       });
       inp.addEventListener('change', function () {
         setOverride(null, key, parseInt(inp.value) / 100);
+      });
+    });
+
+    // #1488 — Marker stroke width/opacity sliders. Color picker uses the
+    // generic data-cv2-field handler (markerStroke.color) above.
+    container.querySelectorAll('[data-cv2-marker-stroke]').forEach(function (inp) {
+      var which = inp.dataset.cv2MarkerStroke; // 'width' | 'opacity'
+      inp.addEventListener('input', function () {
+        var raw = parseFloat(inp.value);
+        if (!isFinite(raw)) return;
+        if (which === 'opacity') {
+          var lbl = document.getElementById('cv2MarkerStrokeO');
+          if (lbl) lbl.textContent = Math.round(raw) + '%';
+          // Optimistic CSS write so the markers repaint on drag.
+          document.documentElement.style.setProperty('--mc-marker-stroke-opacity', String(raw / 100));
+        } else {
+          var lblW = document.getElementById('cv2MarkerStrokeW');
+          if (lblW) lblW.textContent = String(raw);
+          document.documentElement.style.setProperty('--mc-marker-stroke-width', String(raw));
+        }
+      });
+      inp.addEventListener('change', function () {
+        var raw = parseFloat(inp.value);
+        if (!isFinite(raw)) return;
+        var eff = _getEffective();
+        var current = JSON.parse(JSON.stringify(eff.markerStroke || {}));
+        if (which === 'opacity') current.opacity = raw / 100;
+        else current.width = raw;
+        // Persist the whole object so partial picks survive (color +
+        // width + opacity coexist in a single section).
+        var delta = JSON.parse(JSON.stringify(readOverrides()));
+        delta.markerStroke = Object.assign({}, delta.markerStroke || {}, current);
+        writeOverrides(delta);
+        _runPipeline();
       });
     });
 

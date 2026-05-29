@@ -2422,7 +2422,7 @@
       ? window.makeRoleMarkerSVG(n.role, null, sizePx)
       : '<svg width="' + sizePx + '" height="' + sizePx + '" viewBox="0 0 ' + sizePx + ' ' + sizePx +
         '"><circle cx="' + (sizePx/2) + '" cy="' + (sizePx/2) + '" r="' + (sizePx/2 - 2) +
-        '" fill="' + fillExpr + '" stroke="#fff" stroke-width="1"/></svg>');
+        '" fill="' + fillExpr + '" stroke="var(--mc-marker-stroke-color)" stroke-width="var(--mc-marker-stroke-width)" stroke-opacity="var(--mc-marker-stroke-opacity)"/></svg>');
 
     const icon = L.divIcon({
       html: svgHtml,

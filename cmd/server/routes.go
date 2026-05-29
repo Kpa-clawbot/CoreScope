@@ -523,13 +523,23 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 	}
 	home := mergeMap(defaultHome, s.cfg.Home, theme.Home)
 
+	// #1488 — marker stroke overlay. Defaults mirror the :root values in
+	// public/style.css so a fresh visitor with no config + no override
+	// still gets the same painted outline as the static CSS fallback.
+	markerStroke := mergeMap(map[string]interface{}{
+		"color":   "rgba(255,255,255,0.85)",
+		"width":   1,
+		"opacity": 1,
+	}, s.cfg.MarkerStroke, theme.MarkerStroke)
+
 	writeJSON(w, ThemeResponse{
-		Branding:   branding,
-		Theme:      themeColors,
-		ThemeDark:  themeDark,
-		NodeColors: nodeColors,
-		TypeColors: typeColors,
-		Home:       home,
+		Branding:     branding,
+		Theme:        themeColors,
+		ThemeDark:    themeDark,
+		NodeColors:   nodeColors,
+		TypeColors:   typeColors,
+		Home:         home,
+		MarkerStroke: markerStroke,
 	})
 }
 

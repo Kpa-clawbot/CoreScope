@@ -3706,6 +3706,16 @@ th.sort-active { color: var(--accent, #60a5fa); }
   --mc-role-sensor:    #F0E442; /* yellow            */
   --mc-role-observer:  #CC79A7; /* reddish-purple    */
 
+  /* #1488 — marker stroke (outline around the role shape on map + live).
+   * Reporter (EldoonNemar) found the new white stroke overwhelming with
+   * hundreds of nodes. Defaults preserve visibility on both dark + light
+   * tiles; operators dial these via the customizer (Colors → Marker
+   * Stroke) or via config.json (markerStroke.*). All SVG marker builders
+   * read these vars so changes propagate live without a reload. */
+  --mc-marker-stroke-color:   rgba(255,255,255,0.85);
+  --mc-marker-stroke-width:   1;
+  --mc-marker-stroke-opacity: 1;
+
   /* #1407 — per-role text colors paired with each --mc-role-X bg so
    * .mc-pill (and any badge using the var) hits WCAG 1.4.3 AA against
    * the active preset. Wong defaults all clear 4.5:1 with dark text;
