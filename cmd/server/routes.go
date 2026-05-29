@@ -511,7 +511,7 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 		"heroTitle":    "CoreScope",
 		"heroSubtitle": "Real-time MeshCore LoRa mesh network analyzer",
 		"steps": []interface{}{
-			map[string]interface{}{"emoji": "🔵", "title": "Connect via Bluetooth", "description": "Flash **BLE companion** firmware from [MeshCore Flasher](https://flasher.meshcore.co.uk/).\n- Screenless devices: default PIN `123456`\n- Screen devices: random PIN shown on display\n- If pairing fails: forget device, reboot, re-pair"},
+			map[string]interface{}{"emoji": "🔵", "title": "Connect via Bluetooth", "description": "Flash **BLE companion** firmware from [MeshCore Flasher](https://flasher.meshcore.io/).\n- Screenless devices: default PIN `123456`\n- Screen devices: random PIN shown on display\n- If pairing fails: forget device, reboot, re-pair"},
 			map[string]interface{}{"emoji": "📻", "title": "Set the right frequency preset", "description": "**US Recommended:**\n`910.525 MHz · BW 62.5 kHz · SF 7 · CR 5`\nSelect **\"US Recommended\"** in the app or flasher."},
 			map[string]interface{}{"emoji": "📡", "title": "Advertise yourself", "description": "Tap the signal icon → **Flood** to broadcast your node to the mesh. Companions only advert when you trigger it manually."},
 			map[string]interface{}{"emoji": "🔁", "title": "Check \"Heard N repeats\"", "description": "- **\"Sent\"** = transmitted, no confirmation\n- **\"Heard 0 repeats\"** = no repeater picked it up\n- **\"Heard 1+ repeats\"** = you're on the mesh!"},
@@ -2414,7 +2414,10 @@ func (s *Server) buildObserversDefaultResponse() (ObserverListResponse, error) {
 	nodeLocations := s.db.GetNodeLocationsByKeys(observerIDs)
 
 	result := make([]ObserverResp, 0, len(observers))
-	for _, o := range observers {
+	nowTime := time.Now().UTC()
+	for i := range observers {
+		o := &observers[i]
+		// Defense in depth: skip observers that are in the blacklist
 		if s.cfg != nil && s.cfg.IsObserverBlacklisted(o.ID) {
 			continue
 		}
@@ -2428,7 +2431,8 @@ func (s *Server) buildObserversDefaultResponse() (ObserverListResponse, error) {
 			lon = nodeLoc["lon"]
 			nodeRole = nodeLoc["role"]
 		}
-		result = append(result, ObserverResp{
+
+		resp := ObserverResp{
 			ID: o.ID, Name: o.Name, IATA: o.IATA,
 			LastSeen: o.LastSeen, FirstSeen: o.FirstSeen,
 			PacketCount: o.PacketCount,
@@ -2439,7 +2443,9 @@ func (s *Server) buildObserversDefaultResponse() (ObserverListResponse, error) {
 			LastPacketAt: o.LastPacketAt,
 			PacketsLastHour: plh,
 			Lat: lat, Lon: lon, NodeRole: nodeRole,
-		})
+		}
+		applyObserverNaiveClock(&resp, o, nowTime)
+		result = append(result, resp)
 	}
 	return ObserverListResponse{
 		Observers:  result,
@@ -2470,17 +2476,21 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 		plh = c
 	}
 
-	writeJSON(w, ObserverResp{
-		ID: obs.ID, Name: obs.Name, IATA: obs.IATA,
-		LastSeen: obs.LastSeen, FirstSeen: obs.FirstSeen,
-		PacketCount: obs.PacketCount,
-		Model: obs.Model, Firmware: obs.Firmware,
-		ClientVersion: obs.ClientVersion, Radio: obs.Radio,
-		BatteryMv: obs.BatteryMv, UptimeSecs: obs.UptimeSecs,
-		NoiseFloor: obs.NoiseFloor,
-		LastPacketAt: obs.LastPacketAt,
-		PacketsLastHour: plh,
-	})
+	writeJSON(w, func() ObserverResp {
+		resp := ObserverResp{
+			ID: obs.ID, Name: obs.Name, IATA: obs.IATA,
+			LastSeen: obs.LastSeen, FirstSeen: obs.FirstSeen,
+			PacketCount: obs.PacketCount,
+			Model: obs.Model, Firmware: obs.Firmware,
+			ClientVersion: obs.ClientVersion, Radio: obs.Radio,
+			BatteryMv: obs.BatteryMv, UptimeSecs: obs.UptimeSecs,
+			NoiseFloor: obs.NoiseFloor,
+			LastPacketAt: obs.LastPacketAt,
+			PacketsLastHour: plh,
+		}
+		applyObserverNaiveClock(&resp, obs, time.Now().UTC())
+		return resp
+	}())
 }
 
 func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request) {

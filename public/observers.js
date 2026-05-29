@@ -1,6 +1,36 @@
 /* === CoreScope — observers.js === */
 'use strict';
 
+// Issue #1478 — naive-clock ⚠️ chip.
+// Exposed as a window global so the renderer (and a jsdom-style test) can
+// call it without depending on the IIFE-scoped helpers below. Returns the
+// chip HTML when the observer's clock is currently flagged naive, or "" when
+// it's clean — never throws.
+window.ObserversNaiveChip = {
+  render: function (o) {
+    if (!o || o.clock_naive !== true) return '';
+    var sec = Number(o.clock_skew_seconds || 0);
+    var absSec = Math.abs(sec);
+    var magnitude;
+    if (absSec >= 3600) {
+      magnitude = (absSec / 3600).toFixed(absSec >= 36000 ? 0 : 1) + 'h';
+    } else if (absSec >= 60) {
+      magnitude = Math.round(absSec / 60) + 'm';
+    } else {
+      magnitude = absSec + 's';
+    }
+    var dir = sec < 0 ? 'behind' : 'ahead of';
+    var count = Number(o.clock_skew_count_24h || 0);
+    var tip = 'Observer\u2019s local clock is ' + magnitude + ' ' + dir
+      + ' UTC — per-packet timing for this observer is being clamped to ingest time'
+      + (count > 0 ? ' (' + count + ' events in last 24h)' : '')
+      + '. Fix: set the host clock to UTC, or emit Z-suffixed/offset-aware timestamps.';
+    return '<span class="obs-clock-naive-chip" title="' + tip.replace(/"/g, '&quot;')
+      + '" aria-label="' + tip.replace(/"/g, '&quot;')
+      + '" style="margin-left:6px;cursor:help">\u26A0\uFE0F</span>';
+  },
+};
+
 (function () {
   let observers = [];
   let obsSkewMap = {}; // observerID → {offsetSec, samples}
@@ -164,7 +194,7 @@
           const shape = h.cls === 'health-green' ? '●' : h.cls === 'health-yellow' ? '▲' : '✕';
           return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/observers/${encodeURIComponent(o.id)}" onclick="location.hash='#/observers/${encodeURIComponent(o.id)}'">
             <td><span class="health-dot ${h.cls}" title="${h.label}">${shape}</span> ${h.label}</td>
-            <td class="mono">${o.name || o.id}</td>
+            <td class="mono">${o.name || o.id}${window.ObserversNaiveChip.render(o)}</td>
             <td>${o.iata ? `<span class="badge-region">${o.iata}</span>` : '—'}</td>
             <td>${timeAgo(o.last_seen)}</td>
             <td>${o.last_packet_at ? timeAgo(o.last_packet_at) : '<span class="text-muted">—</span>'}</td>
@@ -205,8 +235,10 @@
     var sk = obsSkewMap[o.id];
     var skewLine = (sk && sk.samples) ? renderSkewBadge(observerSkewSeverity(sk.offsetSec), sk.offsetSec) + ' (' + sk.samples + ' samples)' : '—';
     var pkts = sparkBar(o.packetsLastHour || 0, Math.max(1, o.packetsLastHour || 1));
-    var content = window.SlideOver.open({ title: o.name || o.id });
+    var content = window.SlideOver.open({ title: (o.name || o.id) });
+    var naiveChipHTML = window.ObserversNaiveChip.render(o);
     content.innerHTML =
+      (naiveChipHTML ? '<div style="margin-bottom:10px">' + naiveChipHTML + ' <span class="text-muted">Clock is naive — per-packet timing clamped to ingest time.</span></div>' : '') +
       '<dl class="slide-over-dl" style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:13px">' +
         '<dt>Status</dt><dd><span class="health-dot ' + h.cls + '">●</span> ' + h.label + '</dd>' +
         '<dt>Region</dt><dd>' + (o.iata ? '<span class="badge-region">' + o.iata + '</span>' : '—') + '</dd>' +

@@ -1,5 +1,50 @@
 /* === CoreScope — observer-detail.js === */
 'use strict';
+
+// Issue #1478 — naive-clock banner for observer detail page.
+// Exposed as a window global so a jsdom-style test can call it directly.
+// Returns the banner HTML when clock_naive is true, or "" when clean.
+window.ObserverDetailNaiveBanner = {
+  render: function (obs) {
+    if (!obs || obs.clock_naive !== true) return '';
+    var sec = Number(obs.clock_skew_seconds || 0);
+    var absSec = Math.abs(sec);
+    var magnitude;
+    if (absSec >= 3600) {
+      magnitude = (absSec / 3600).toFixed(absSec >= 36000 ? 0 : 1) + 'h';
+    } else if (absSec >= 60) {
+      magnitude = Math.round(absSec / 60) + 'm';
+    } else {
+      magnitude = absSec + 's';
+    }
+    var dir = sec < 0 ? 'behind' : 'ahead of';
+    var count = Number(obs.clock_skew_count_24h || 0);
+    var lastAt = obs.clock_last_naive_at ? new Date(obs.clock_last_naive_at).toLocaleString() : '';
+    // Bright warning card. Plain HTML (no framework). Inline styles so it
+    // shows even on pages without the latest CSS bust.
+    return '<div class="obs-clock-naive-banner" role="alert" style="'
+      + 'background:rgba(255,193,7,0.12);border:1px solid #ffc107;border-left-width:4px;'
+      + 'padding:12px 16px;margin-bottom:16px;border-radius:6px;font-size:14px;line-height:1.45">'
+      + '<div style="font-weight:600;font-size:15px;margin-bottom:6px">'
+      + '\u26A0\uFE0F Naive observer clock — timing is being clamped'
+      + '</div>'
+      + '<div>This observer is emitting <strong>zone-less local-time</strong> timestamps '
+      + 'and its clock is currently <strong>' + magnitude + ' ' + dir + ' UTC</strong>.'
+      + (count > 0 ? ' We have recorded <strong>' + count + '</strong> clamp event'
+          + (count === 1 ? '' : 's') + ' in the last 24 hours' : '')
+      + (lastAt ? ' (most recent: ' + lastAt + ')' : '') + '.'
+      + ' Per-packet rxTime for this observer is being collapsed to ingest time, '
+      + 'which muddies propagation-delay analytics.'
+      + '</div>'
+      + '<div style="margin-top:8px"><strong>Fix:</strong> set the observer host clock to <strong>UTC</strong>, '
+      + 'OR have the observer script emit <strong>Z-suffixed</strong> '
+      + '(<code>datetime.now(timezone.utc).isoformat()</code>) or offset-aware timestamps. '
+      + 'The chip and this banner clear automatically once 24 hours pass without a new clamp event.'
+      + '</div>'
+      + '</div>';
+  },
+};
+
 (function () {
   const PAYLOAD_LABELS = { 0: 'Request', 1: 'Response', 2: 'Direct Msg', 3: 'ACK', 4: 'Advert', 5: 'Channel Msg', 7: 'Anon Req', 8: 'Path', 9: 'Trace', 11: 'Control' };
   const CHART_COLORS = ['#4a9eff', '#ff6b6b', '#51cf66', '#fcc419', '#cc5de8', '#20c997', '#ff922b', '#845ef7', '#f06595', '#339af0'];
@@ -107,6 +152,7 @@
     const statusLabel = ago < 600000 ? 'Online' : ago < HEALTH_THRESHOLDS.nodeDegradedMs ? 'Stale' : 'Offline';
 
     el.innerHTML = `
+      ${window.ObserverDetailNaiveBanner.render(obs)}
       <div class="obs-info-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px">
         <div class="stat-card">
           <div class="stat-label">Status</div>

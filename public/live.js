@@ -3280,7 +3280,7 @@
 
     const matrixGreen = '#00ff41';
     const TRAIL_LEN = Math.min(6, bytes.length);
-    const DURATION_MS = 1100 / VCR.speed;
+    const DURATION_MS = VCR.mode === 'REPLAY' ? 1100 / VCR.speed : 1100;
     const CHAR_INTERVAL = 0.06; // spawn a char every 6% of progress
     const charMarkers = [];
     let nextCharAt = CHAR_INTERVAL;
@@ -3412,7 +3412,7 @@
         return;
       }
       const elapsed = now - lastStep;
-      const stepMs = 33 / VCR.speed;
+      const stepMs = VCR.mode === 'REPLAY' ? 33 / VCR.speed : 33;
       if (elapsed >= stepMs) {
         const ticks = Math.min(Math.floor(elapsed / stepMs), 4);
         lastStep = now;

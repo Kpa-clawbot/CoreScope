@@ -903,6 +903,14 @@ type ObserverResp struct {
 	Lat             interface{} `json:"lat"`
 	Lon             interface{} `json:"lon"`
 	NodeRole        interface{} `json:"nodeRole"`
+	// Issue #1478: surface naive-clock observers to the UI.
+	// `clock_naive` is derived from clock_last_naive_at being within the
+	// last 24h; once decayed, all three skew fields read as zero/null so the
+	// chip and banner clear automatically.
+	ClockNaive        bool        `json:"clock_naive"`
+	ClockSkewSeconds  interface{} `json:"clock_skew_seconds"`
+	ClockSkewCount24h int         `json:"clock_skew_count_24h"`
+	ClockLastNaiveAt  interface{} `json:"clock_last_naive_at"`
 }
 
 type ObserverListResponse struct {

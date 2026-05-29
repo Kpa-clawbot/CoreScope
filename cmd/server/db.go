@@ -243,6 +243,14 @@ type Observer struct {
 	UptimeSecs    *int64   `json:"uptime_secs"`
 	NoiseFloor    *float64 `json:"noise_floor"`
 	LastPacketAt  *string  `json:"last_packet_at"`
+	// Issue #1478: per-observer naive-clock skew tracking.
+	// Written by the ingestor in cmd/ingestor/db.go RecordNaiveSkew whenever
+	// resolveRxTime clamps a naive envelope timestamp >15 min off UTC. The
+	// server reads these as-is; the handler derives the bool `clock_naive`
+	// from clock_last_naive_at being within the last 24h.
+	ClockSkewSeconds  *int64  `json:"clock_skew_seconds"`
+	ClockSkewCount24h int     `json:"clock_skew_count_24h"`
+	ClockLastNaiveAt  *string `json:"clock_last_naive_at"`
 }
 
 // Transmission represents a row from the transmissions table.
@@ -1138,7 +1146,10 @@ func (db *DB) getObservationsForTransmissions(txIDs []int) map[int][]map[string]
 
 // GetObservers returns active observers (not soft-deleted) sorted by last_seen DESC.
 func (db *DB) GetObservers() ([]Observer, error) {
-	rows, err := db.conn.Query("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC")
+	rows, err := db.conn.Query(`SELECT id, name, iata, last_seen, first_seen, packet_count,
+		model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at,
+		clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at
+		FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -1147,9 +1158,12 @@ func (db *DB) GetObservers() ([]Observer, error) {
 	var observers []Observer
 	for rows.Next() {
 		var o Observer
-		var batteryMv, uptimeSecs sql.NullInt64
+		var batteryMv, uptimeSecs, clockSkewSec sql.NullInt64
+		var clockSkewCount sql.NullInt64
 		var noiseFloor sql.NullFloat64
-		if err := rows.Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount,
+			&o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt,
+			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt); err != nil {
 			continue
 		}
 		if batteryMv.Valid {
@@ -1162,6 +1176,13 @@ func (db *DB) GetObservers() ([]Observer, error) {
 		if noiseFloor.Valid {
 			o.NoiseFloor = &noiseFloor.Float64
 		}
+		if clockSkewSec.Valid {
+			v := clockSkewSec.Int64
+			o.ClockSkewSeconds = &v
+		}
+		if clockSkewCount.Valid {
+			o.ClockSkewCount24h = int(clockSkewCount.Int64)
+		}
 		observers = append(observers, o)
 	}
 	return observers, nil
@@ -1170,10 +1191,16 @@ func (db *DB) GetObservers() ([]Observer, error) {
 // GetObserverByID returns a single observer.
 func (db *DB) GetObserverByID(id string) (*Observer, error) {
 	var o Observer
-	var batteryMv, uptimeSecs sql.NullInt64
+	var batteryMv, uptimeSecs, clockSkewSec sql.NullInt64
+	var clockSkewCount sql.NullInt64
 	var noiseFloor sql.NullFloat64
-	err := db.conn.QueryRow("SELECT id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at FROM observers WHERE id = ?", id).
-		Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount, &o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt)
+	err := db.conn.QueryRow(`SELECT id, name, iata, last_seen, first_seen, packet_count,
+		model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at,
+		clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at
+		FROM observers WHERE id = ?`, id).
+		Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount,
+			&o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt,
+			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1186,6 +1213,13 @@ func (db *DB) GetObserverByID(id string) (*Observer, error) {
 	}
 	if noiseFloor.Valid {
 		o.NoiseFloor = &noiseFloor.Float64
+	}
+	if clockSkewSec.Valid {
+		v := clockSkewSec.Int64
+		o.ClockSkewSeconds = &v
+	}
+	if clockSkewCount.Valid {
+		o.ClockSkewCount24h = int(clockSkewCount.Int64)
 	}
 	return &o, nil
 }
