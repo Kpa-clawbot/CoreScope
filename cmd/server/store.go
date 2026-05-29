@@ -73,6 +73,40 @@ type StoreObs struct {
 	PathJSON       string
 	RawHex         string
 	Timestamp      string
+
+	// #1481 P0-2: cached parsed timestamp. The legacy handlers parse
+	// Timestamp as RFC3339Nano/RFC3339/"2006-01-02 15:04:05" with a
+	// fallback chain on every read; for /api/observers/{id}/analytics
+	// that fires 60k+ times per request under RLock. ParsedTime returns
+	// the parsed value once, caching for the lifetime of the StoreObs.
+	tsParseOnce sync.Once
+	tsParsed    time.Time
+	tsParsedOK  bool
+}
+
+// ParsedTime returns the parsed Timestamp, caching the result.
+// Tries RFC3339Nano → RFC3339 → "2006-01-02 15:04:05" in order.
+// Returns (zero, false) if Timestamp is empty or unparseable.
+// Thread-safe via sync.Once.
+func (o *StoreObs) ParsedTime() (time.Time, bool) {
+	o.tsParseOnce.Do(func() {
+		if o.Timestamp == "" {
+			return
+		}
+		if t, err := time.Parse(time.RFC3339Nano, o.Timestamp); err == nil {
+			o.tsParsed, o.tsParsedOK = t, true
+			return
+		}
+		if t, err := time.Parse(time.RFC3339, o.Timestamp); err == nil {
+			o.tsParsed, o.tsParsedOK = t, true
+			return
+		}
+		if t, err := time.Parse("2006-01-02 15:04:05", o.Timestamp); err == nil {
+			o.tsParsed, o.tsParsedOK = t, true
+			return
+		}
+	})
+	return o.tsParsed, o.tsParsedOK
 }
 
 // ParsedDecoded returns the parsed DecodedJSON map, caching the result.

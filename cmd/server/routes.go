@@ -69,6 +69,10 @@ type Server struct {
 	// observersCacheTTL elapses. Issue #1481 P0-3.
 	observersCache    atomic.Pointer[ObserverListResponse]
 	observersCachedAt atomic.Int64 // unix-nanos of cache fill time
+
+	// Cached default-shape /api/analytics/neighbor-graph response,
+	// recomputed every 5 min in a background goroutine. Issue #1481 P0-1.
+	neighborGraphCache neighborGraphCacheField
 }
 
 // PerfStats tracks request performance.
@@ -2453,19 +2457,15 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 	since := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	s.store.mu.RLock()
 	obsList := s.store.byObserver[id]
-	filtered := make([]*StoreObs, 0, len(obsList))
-	for _, obs := range obsList {
-		if obs.Timestamp == "" {
-			continue
-		}
-		t, err := time.Parse(time.RFC3339Nano, obs.Timestamp)
-		if err != nil {
-			t, err = time.Parse(time.RFC3339, obs.Timestamp)
-		}
-		if err != nil {
-			t, err = time.Parse("2006-01-02 15:04:05", obs.Timestamp)
-		}
-		if err != nil {
+	// #1481 P0-2: snapshot pointer slice and release RLock immediately —
+	// don't iterate + json-decode + time-parse under the lock.
+	obsSnapshot := make([]*StoreObs, len(obsList))
+	copy(obsSnapshot, obsList)
+	s.store.mu.RUnlock()
+	filtered := make([]*StoreObs, 0, len(obsSnapshot))
+	for _, obs := range obsSnapshot {
+		t, ok := obs.ParsedTime()
+		if !ok {
 			continue
 		}
 		if t.Equal(since) || t.After(since) {
@@ -2497,14 +2497,8 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 	recentPackets := make([]map[string]interface{}, 0, 20)
 
 	for i, obs := range filtered {
-		ts, err := time.Parse(time.RFC3339Nano, obs.Timestamp)
-		if err != nil {
-			ts, err = time.Parse(time.RFC3339, obs.Timestamp)
-		}
-		if err != nil {
-			ts, err = time.Parse("2006-01-02 15:04:05", obs.Timestamp)
-		}
-		if err != nil {
+		ts, ok := obs.ParsedTime()
+		if !ok {
 			continue
 		}
 		bucketStart := ts.UTC().Truncate(bucketDur).Unix()
@@ -2546,7 +2540,8 @@ func (s *Server) handleObserverAnalytics(w http.ResponseWriter, r *http.Request)
 			recentPackets = append(recentPackets, enriched)
 		}
 	}
-	s.store.mu.RUnlock()
+	// #1481 P0-2: RLock was released earlier after snapshotting the
+	// observation pointer slice; no Unlock needed here.
 
 	buildTimeline := func(counts map[int64]int) []TimeBucket {
 		keys := make([]int64, 0, len(counts))
