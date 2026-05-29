@@ -65,10 +65,10 @@ type Server struct {
 	router *mux.Router
 
 	// Cached default (no-filter) /api/observers response, served from an
-	// atomic-pointer snapshot. Recomputed lazily by the handler after
-	// observersCacheTTL elapses. Issue #1481 P0-3.
-	observersCache    atomic.Pointer[ObserverListResponse]
-	observersCachedAt atomic.Int64 // unix-nanos of cache fill time
+	// atomic-pointer snapshot. Refilled via singleflight on TTL boundary
+	// to prevent thundering-herd SQL stampedes. Issue #1481 P0-3 +
+	// #1483 follow-up (singleflight + monotonic time).
+	observersCacheV2 observersCacheField
 
 	// Cached default-shape /api/analytics/neighbor-graph response,
 	// recomputed every 5 min in a background goroutine. Issue #1481 P0-1.
@@ -2344,23 +2344,62 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
-	// #1481 P0-3: serve from 30s atomic-pointer cache for the default
-	// (no-filter) query shape. This handler does 3 SQL queries each
-	// touching the 1.9M-row observations table; the cache keeps p95 flat
-	// under concurrent load.
-	if r.URL.RawQuery == "" {
-		if cached := s.observersCache.Load(); cached != nil {
-			if !s.observersCacheExpired(time.Unix(0, s.observersCachedAt.Load())) {
-				writeJSON(w, *cached)
-				return
-			}
+	// #1481 P0-3 + #1483: serve from 30s atomic-pointer cache for the
+	// default (no-filter) query shape. Refill is collapsed via
+	// singleflight so concurrent TTL-boundary requests do not stampede
+	// the 1.9M-row observations table.
+	isDefault := r.URL.RawQuery == ""
+	if isDefault {
+		if e, ok := s.loadObserversCache(); ok && !s.observersCacheExpired(e.at) {
+			w.Header().Set("X-Cache-Age-Seconds", cacheAgeSecondsHeader(time.Since(e.at)))
+			writeJSON(w, e.resp)
+			return
 		}
 	}
 
-	observers, err := s.db.GetObservers()
+	if isDefault {
+		v, err, _ := s.observersCacheV2.sf.Do(observersCacheFlightKey, func() (interface{}, error) {
+			// Double-check inside the singleflight: another winner
+			// may have just stored a fresh entry.
+			if e, ok := s.loadObserversCache(); ok && !s.observersCacheExpired(e.at) {
+				return e, nil
+			}
+			resp, herr := s.buildObserversDefaultResponse()
+			if herr != nil {
+				return nil, herr
+			}
+			s.observersCacheV2.fillCount.Add(1)
+			entry := &observersCacheEntry{resp: resp, at: time.Now()}
+			s.observersCacheV2.ptr.Store(entry)
+			return entry, nil
+		})
+		if err != nil {
+			writeError(w, 500, err.Error())
+			return
+		}
+		entry := v.(*observersCacheEntry)
+		w.Header().Set("X-Cache-Age-Seconds", cacheAgeSecondsHeader(time.Since(entry.at)))
+		writeJSON(w, entry.resp)
+		return
+	}
+
+	// Non-default queries bypass the cache entirely (filters not yet wired).
+	resp, err := s.buildObserversDefaultResponse()
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
+	}
+	writeJSON(w, resp)
+}
+
+// buildObserversDefaultResponse runs the underlying SQL pipeline for
+// the default-shape /api/observers payload. Extracted so the cache
+// refill path can be wrapped in singleflight and counted by tests.
+// #1483 follow-up.
+func (s *Server) buildObserversDefaultResponse() (ObserverListResponse, error) {
+	observers, err := s.db.GetObservers()
+	if err != nil {
+		return ObserverListResponse{}, err
 	}
 
 	// Batch lookup: packetsLastHour per observer
@@ -2376,7 +2415,6 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 
 	result := make([]ObserverResp, 0, len(observers))
 	for _, o := range observers {
-		// Defense in depth: skip observers that are in the blacklist
 		if s.cfg != nil && s.cfg.IsObserverBlacklisted(o.ID) {
 			continue
 		}
@@ -2390,7 +2428,6 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 			lon = nodeLoc["lon"]
 			nodeRole = nodeLoc["role"]
 		}
-
 		result = append(result, ObserverResp{
 			ID: o.ID, Name: o.Name, IATA: o.IATA,
 			LastSeen: o.LastSeen, FirstSeen: o.FirstSeen,
@@ -2404,16 +2441,10 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 			Lat: lat, Lon: lon, NodeRole: nodeRole,
 		})
 	}
-	resp := ObserverListResponse{
+	return ObserverListResponse{
 		Observers:  result,
 		ServerTime: time.Now().UTC().Format(time.RFC3339),
-	}
-	// #1481 P0-3: fill the default-query cache.
-	if r.URL.RawQuery == "" {
-		s.observersCache.Store(&resp)
-		s.observersCachedAt.Store(time.Now().UnixNano())
-	}
-	writeJSON(w, resp)
+	}, nil
 }
 
 func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
