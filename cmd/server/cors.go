@@ -2,6 +2,13 @@ package main
 
 import "net/http"
 
+// applyCORSEnv overlays cfg.CORSAllowedOrigins from the CORS_ALLOWED_ORIGINS
+// env var (comma-separated). Stub for issue #1369 — implemented in the
+// follow-up green commit.
+func applyCORSEnv(cfg *Config) {
+	// stub: green commit fills this in
+}
+
 // corsMiddleware returns a middleware that sets CORS headers based on the
 // configured allowed origins. When CORSAllowedOrigins is empty (default),
 // no Access-Control-* headers are added, preserving browser same-origin policy.
