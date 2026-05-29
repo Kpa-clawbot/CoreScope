@@ -79,6 +79,9 @@ func Apply(rw *sql.DB, logf Logger) error {
 	if err := ensureMultibyteCapColumns(rw, logf); err != nil {
 		return fmt.Errorf("ensure multibyte_cap columns: %w", err)
 	}
+	if err := ensureObserverNaiveClockColumns(rw, logf); err != nil {
+		return fmt.Errorf("ensure observers naive-clock columns: %w", err)
+	}
 	return nil
 }
 
@@ -130,6 +133,11 @@ func AssertReady(ro *sql.DB) error {
 	mustCol("nodes", "multibyte_evidence")
 	mustCol("inactive_nodes", "multibyte_sup")
 	mustCol("inactive_nodes", "multibyte_evidence")
+	// Issue #1478: per-observer naive-clock skew tracking. Server reads
+	// all three to populate ObserverResp.ClockNaive / ClockSkew* fields.
+	mustCol("observers", "clock_skew_seconds")
+	mustCol("observers", "clock_skew_count_24h")
+	mustCol("observers", "clock_last_naive_at")
 
 	if len(missing) > 0 {
 		return fmt.Errorf("schema not migrated by ingestor; restart ingestor first. missing: %s",
@@ -480,6 +488,37 @@ func ensureMultibyteCapColumns(rw *sql.DB, logf Logger) error {
 			}
 			logf("[dbschema] added multibyte_evidence column to %s", table)
 		}
+	}
+	return nil
+}
+
+// ensureObserverNaiveClockColumns adds the three per-observer naive-clock
+// skew tracking columns (#1478). Server reads them to populate the
+// clock_naive / clock_skew_seconds / clock_skew_count_24h /
+// clock_last_naive_at fields in /api/observers responses; ingestor writes
+// them from resolveRxTime via Store.RecordNaiveSkew on each clamp event.
+// Owned here per the #1321 source-of-truth invariant — the cmd/ingestor
+// copy migrates real prod DBs, dbschema migrates fixture/staging DBs via
+// cmd/migrate.
+func ensureObserverNaiveClockColumns(rw *sql.DB, logf Logger) error {
+	type col struct{ name, ddl string }
+	cols := []col{
+		{"clock_skew_seconds", "ALTER TABLE observers ADD COLUMN clock_skew_seconds INTEGER DEFAULT NULL"},
+		{"clock_skew_count_24h", "ALTER TABLE observers ADD COLUMN clock_skew_count_24h INTEGER DEFAULT 0"},
+		{"clock_last_naive_at", "ALTER TABLE observers ADD COLUMN clock_last_naive_at TEXT DEFAULT NULL"},
+	}
+	for _, c := range cols {
+		has, err := TableHasColumn(rw, "observers", c.name)
+		if err != nil {
+			return fmt.Errorf("inspect observers.%s: %w", c.name, err)
+		}
+		if has {
+			continue
+		}
+		if _, err := rw.Exec(c.ddl); err != nil {
+			return fmt.Errorf("add observers.%s: %w", c.name, err)
+		}
+		logf("[dbschema] added %s column to observers", c.name)
 	}
 	return nil
 }
