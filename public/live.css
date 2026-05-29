@@ -1287,3 +1287,10 @@
 .lc-path-chain { margin-top: 4px; word-break: break-word; }
 .lc-path-link-wrap { margin-top: 4px; }
 .lc-path-link { font-size: 11px; }
+
+/* Eliminate SVG baseline drift inside Leaflet divIcons */
+.live-node-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

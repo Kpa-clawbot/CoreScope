@@ -1226,8 +1226,8 @@
 
       // Add a 20% buffer around the visible screen to prevent clipping during short pans
       const size = map.getSize();
-      const padX = size.x * 0.2;
-      const padY = size.y * 0.2;
+      const padX = Math.round(size.x * 0.2);
+      const padY = Math.round(size.y * 0.2);
 
       const w = size.x + padX * 2;
       const h = size.y + padY * 2;
@@ -1242,9 +1242,13 @@
 
       animCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      // Find the top-left Layer Point (relative to the pane, not the screen)
-      const centerPt = map.latLngToLayerPoint(map.getCenter());
-      canvasTopLeft = L.point(centerPt.x - w / 2, centerPt.y - h / 2);
+      // Find the absolute pixel bounds of the current viewport
+      const pixelBounds = map.getPixelBounds();
+      // Pad the bounds by 20% on all sides
+      const min = pixelBounds.min.subtract([padX, padY]);
+
+      // Convert absolute pixel coordinates to Layer points (relative to the pane)
+      canvasTopLeft = min.subtract(map.getPixelOrigin());
 
       // Let Leaflet position the canvas inside the pane using CSS transforms
       L.DomUtil.setPosition(animCanvas, canvasTopLeft);
@@ -2190,8 +2194,8 @@
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Last Seen</td><td>${lastSeen}</td></tr>
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Adverts</td><td>${n.advert_count || 0}</td></tr>
             ${'default_scope' in n ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Scope</td><td>${n.default_scope === null ? '<span style="color:var(--text-muted)">—</span>'
-            : n.default_scope === '' ? '<span style="color:var(--text-muted)">unknown scope</span>'
-              : `<code style="color:var(--accent)">${escapeHtml(n.default_scope)}</code>`
+          : n.default_scope === '' ? '<span style="color:var(--text-muted)">unknown scope</span>'
+            : `<code style="color:var(--accent)">${escapeHtml(n.default_scope)}</code>`
           }</td></tr>` : ''}
             ${hasLoc ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Location</td><td>${n.lat.toFixed(5)}, ${n.lon.toFixed(5)}</td></tr>` : ''}
             ${stats.avgSnr != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Avg SNR</td><td>${stats.avgSnr.toFixed(1)} dB</td></tr>` : ''}
@@ -2515,7 +2519,11 @@
     // Shape-aware sizing: keep prior visual weight (~6/4 base) but
     // route through divIcon so colourblind ops get distinct silhouettes
     // (#1293). Size is the SVG box; circleMarker radius ~= size/3.
-    const sizePx = Math.max(10, Math.round((isRepeater ? 18 : 14) * zoomScale));
+    let sizePx = Math.max(10, Math.round((isRepeater ? 18 : 14) * zoomScale));
+    // Force sizePx to be an even number so iconAnchor (sizePx/2) is always an integer.
+    // This prevents browser sub-pixel snapping of the divIcon, which causes
+    // it to visibly misalign with mathematically-exact Leaflet SVG paths underneath.
+    if (sizePx % 2 !== 0) sizePx += 1;
 
     const svgHtml = (window.makeRoleMarkerSVG
       ? window.makeRoleMarkerSVG(n.role, null, sizePx)
@@ -2589,6 +2597,14 @@
   function _liveSetMarkerSize(marker, sizePx) {
     var el = _liveMarkerEl(marker);
     if (!el) return;
+
+    // Update the DOM container styles manually so the anchor remains centered
+    // without having to destroy and recreate the Leaflet marker object.
+    el.style.width = sizePx + 'px';
+    el.style.height = sizePx + 'px';
+    el.style.marginLeft = -(sizePx / 2) + 'px';
+    el.style.marginTop = -(sizePx / 2) + 'px';
+
     var svg = el.querySelector('svg');
     if (svg) {
       svg.setAttribute('width', sizePx);
@@ -2619,7 +2635,9 @@
     for (const [key, marker] of Object.entries(nodeMarkers)) {
       const n = nodeData[key];
       const isRepeater = n && n.role === 'repeater';
-      const sizePx = Math.max(10, Math.round((isRepeater ? 18 : 14) * zoomScale));
+      let sizePx = Math.max(10, Math.round((isRepeater ? 18 : 14) * zoomScale));
+      // Force sizePx to be even to prevent sub-pixel anchor drift
+      if (sizePx % 2 !== 0) sizePx += 1;
       _liveSetMarkerSize(marker, sizePx);
     }
   }
@@ -3523,8 +3541,8 @@
 
       const W = animCanvas.clientWidth;
       const H = animCanvas.clientHeight;
-      const cull = (fromPt.x < 0 && toPt.x < 0) || (fromPt.x > W && toPt.x > W) || 
-                   (fromPt.y < 0 && toPt.y < 0) || (fromPt.y > H && toPt.y > H);
+      const cull = (fromPt.x < 0 && toPt.x < 0) || (fromPt.x > W && toPt.x > W) ||
+        (fromPt.y < 0 && toPt.y < 0) || (fromPt.y > H && toPt.y > H);
 
       if (!cull) {
         const currentX = fromPt.x + (toPt.x - fromPt.x) * t;
@@ -4018,7 +4036,7 @@
   // test-live-mql-leak-1180-e2e.js and otherwise unused.
   var _liveNarrowMqlBound = false;
   window._liveTestSeams = window._liveTestSeams || {};
-  window._liveTestSeams.wake = function() {
+  window._liveTestSeams.wake = function () {
     if (!isAnimating) {
       isAnimating = true;
       requestAnimationFrame(renderAnimations);
