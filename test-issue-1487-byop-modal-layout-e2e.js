@@ -118,7 +118,10 @@ async function runViewport(browser, label, viewport) {
 
   console.log(`\n=== #1487 BYOP modal layout E2E against ${BASE} ===`);
 
-  await runViewport(browser, 'mobile', { width: 390, height: 844 });
+  // BYOP button is hidden on mobile (≤900px) per #1471 mobile UX rules.
+  // The bug reported by @EldoonNemar manifested at desktop width; test
+  // only desktop here. If BYOP is ever surfaced on mobile, re-enable
+  // the mobile viewport pass.
   await runViewport(browser, 'desktop', { width: 1280, height: 800 });
 
   await browser.close();

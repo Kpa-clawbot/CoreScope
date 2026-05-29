@@ -1326,9 +1326,21 @@
     });
     L.control.zoom({ position: 'topright' }).addTo(map);
 
+    // #1485 — animations + trails need their own pane above markerPane.
+    // PR #1334 moved node markers from L.circleMarker (overlayPane @ 400)
+    // to L.marker+divIcon (markerPane @ 600); animations stayed in the
+    // default overlayPane and were occluded by every node marker. Custom
+    // pane @ 650 puts them strictly above all nodes. (tooltipPane shares
+    // 650 — tooltips are user-triggered, harmless to share.)
+    map.createPane('liveAnimPane');
+    map.getPane('liveAnimPane').style.zIndex = 650;
+    // Pointer-events default to none so the pane doesn't steal clicks
+    // from the marker pane underneath (clickablePathsLayer handles that).
+    map.getPane('liveAnimPane').style.pointerEvents = 'none';
+
     nodesLayer = L.layerGroup().addTo(map);
-    pathsLayer = L.layerGroup().addTo(map);
-    animLayer = L.layerGroup().addTo(map);
+    pathsLayer = L.layerGroup({ pane: 'liveAnimPane' }).addTo(map);
+    animLayer = L.layerGroup({ pane: 'liveAnimPane' }).addTo(map);
     clickablePathsLayer = L.layerGroup().addTo(map);
 
     injectSVGFilters();

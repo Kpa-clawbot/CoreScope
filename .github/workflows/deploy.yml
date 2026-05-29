@@ -241,6 +241,54 @@ jobs:
       - name: Freshen fixture timestamps
         run: bash tools/freshen-fixture.sh test-fixtures/e2e-fixture.db
 
+      - name: Seed grouped-packet row for #1486 collapse test
+        # The committed fixture has 499 packets, each with exactly ONE
+        # observation, so the packets-page renders only flat
+        # (select-hash) rows. The #1486 repro needs at least one grouped
+        # (toggle-select) row. Insert a NEW transmission with 3
+        # observations.
+        #
+        # The server's async hash-migrate (cmd/server/hash_migrate.go)
+        # recomputes `transmissions.hash` from `raw_hex` via
+        # ComputeContentHash(), so the inserted hash MUST equal that
+        # function's output for the chosen raw_hex — otherwise the row
+        # gets relabelled and the E2E can't find it.
+        #
+        # raw_hex 15000102030405060708090a0b0c0d0e0f
+        #   → header=0x15 (route_type=1, payload_type=5)
+        #   → ComputeContentHash(...) = fae0c9e6d357a814
+        #
+        # The first_seen / observation timestamps are pinned to a date
+        # within retentionHours but outside the default 15-min UI
+        # window so the row is hidden in the default view (keeping
+        # test-e2e-playwright's first-10-rows hex-pane test
+        # unaffected) and reachable via the explicit ?timeWindow=0
+        # deep-link the #1486 test uses.
+        run: |
+          sqlite3 test-fixtures/e2e-fixture.db <<'SQL'
+          -- Sort the seeded row LAST in BOTH default packets views:
+          --   • flat view sorts by transmissions.id DESC → id=0 puts it last
+          --   • grouped view (#default for the packets page) sorts by
+          --     MAX(observations.timestamp) DESC → we must keep our obs
+          --     timestamps OLDER than every other fixture observation.
+          -- Fixture (after freshen) has obs timestamps spanning
+          --   2026-05-17 16:01:39Z .. 2026-05-28 00:00:00Z (max).
+          --   Note: freshen only shifts transmissions.first_seen forward
+          --   to ~now; observation.timestamp is left alone except for
+          --   the timestamp=0 case.
+          -- Use 2026-05-15 (~2 days older than the oldest fixture obs)
+          -- so our row sorts LAST in the grouped view too, keeping
+          -- test-e2e-playwright's first-10-rows hex-pane test
+          -- unaffected. The #1486 test still reaches the row via the
+          -- explicit hash + ?timeWindow=0 deep-link.
+          INSERT INTO transmissions(id,raw_hex,hash,first_seen,route_type,payload_type,payload_version,decoded_json,channel_hash,from_pubkey)
+            VALUES (0,'15000102030405060708090a0b0c0d0e0f','fae0c9e6d357a814','2026-05-15T00:00:00Z',1,5,0,'{"type":"CHAN","channel":"#test","text":"#1486 fixture"}',NULL,NULL);
+          INSERT INTO observations(transmission_id,observer_idx,direction,snr,rssi,score,path_json,timestamp,resolved_path) VALUES
+            (0,1,'rx',5.0,-95,0,'["AA"]',CAST(strftime('%s','2026-05-15T00:00:00Z') AS INTEGER),'["aa00000000000000000000000000000000000000000000000000000000000000"]'),
+            (0,2,'rx',5.5,-92,0,'["BB"]',CAST(strftime('%s','2026-05-15T00:00:00Z') AS INTEGER),'["bb00000000000000000000000000000000000000000000000000000000000000"]'),
+            (0,3,'rx',6.0,-90,0,'["CC"]',CAST(strftime('%s','2026-05-15T00:00:00Z') AS INTEGER),'["cc00000000000000000000000000000000000000000000000000000000000000"]');
+          SQL
+
       - name: Migrate fixture DB to current schema (#1287)
         # Server now ASSERTs schema is migrated and refuses to start
         # otherwise (cmd/server/main.go: dbschema.AssertReady). In prod
@@ -302,6 +350,7 @@ jobs:
           BASE_URL=http://localhost:13581 node test-issue-1146-path-link-contrast-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1147-section-order-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1151-orphan-separators-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1486-collapse-reopens-detail-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-rebrand-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-theme-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-default-sage-teal-e2e.js 2>&1 | tee -a e2e-output.txt

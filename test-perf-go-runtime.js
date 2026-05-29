@@ -249,5 +249,93 @@ test('Missing engine field shows Node UI', async () => {
   assert.ok(!html.includes('Go Runtime'), 'should not show Go Runtime');
 });
 
+// --- Version card ---
+
+test('Version card shows version tag when health.version is set', async () => {
+  const sb = loadPerf();
+  const health = { ...goHealth, version: '3.8.2', commit: 'unknown' };
+  stubFetch(sb, basePerf, health);
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 50));
+  const html = sb.getHtml();
+  assert.ok(html.includes('v3.8.2'), 'should show version tag');
+  assert.ok(html.includes('Version'), 'should show Version label');
+});
+
+test('Version card shows commit hash when version is unknown', async () => {
+  const sb = loadPerf();
+  const health = { ...goHealth, version: 'unknown', commit: 'abc1234def' };
+  stubFetch(sb, basePerf, health);
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 50));
+  const html = sb.getHtml();
+  assert.ok(html.includes('abc1234'), 'should show short commit hash');
+  assert.ok(!html.includes('unknown'), 'should not render literal "unknown"');
+});
+
+test('Version card shows both version and commit when both are known', async () => {
+  const sb = loadPerf();
+  const health = { ...goHealth, version: 'v3.8.2', commit: 'deadbeef1234' };
+  stubFetch(sb, basePerf, health);
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 50));
+  const html = sb.getHtml();
+  assert.ok(html.includes('v3.8.2'), 'should show version');
+  assert.ok(html.includes('deadbee'), 'should show short commit');
+});
+
+test('Version card is absent when health has no version or commit', async () => {
+  const sb = loadPerf();
+  const health = { ...goHealth }; // no version/commit fields
+  stubFetch(sb, basePerf, health);
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 50));
+  const html = sb.getHtml();
+  assert.ok(!html.includes('perf-label">Version<'), 'should not show Version card when fields absent');
+});
+
+test('Version card is absent when both version and commit are "unknown"', async () => {
+  const sb = loadPerf();
+  const health = { ...goHealth, version: 'unknown', commit: 'unknown' };
+  stubFetch(sb, basePerf, health);
+  await sb.pages.perf.init({ set innerHTML(v) {} });
+  await new Promise(r => setTimeout(r, 50));
+  const html = sb.getHtml();
+  assert.ok(!html.includes('perf-label">Version<'), 'should not show Version card when all values are unknown');
+});
+
+// --- renderVersionCard unit tests (direct helper) ---
+
+test('renderVersionCard: version link points to release tag', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderVersionCard({ version: '3.8.2', commit: 'unknown' });
+  assert.ok(card.includes('releases/tag/v3.8.2'), 'version should link to release tag');
+  assert.ok(card.includes('href='), 'should contain an anchor tag');
+});
+
+test('renderVersionCard: commit link points to commit URL', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderVersionCard({ version: 'unknown', commit: 'deadbeef1234' });
+  assert.ok(card.includes('/commit/deadbeef1234'), 'commit should link to commit URL');
+  assert.ok(card.includes('href='), 'should contain an anchor tag');
+});
+
+test('renderVersionCard: returns empty string for null health', () => {
+  const sb = loadPerf();
+  assert.strictEqual(sb.ctx.renderVersionCard(null), '');
+});
+
+test('renderVersionCard: returns empty string when both fields are unknown', () => {
+  const sb = loadPerf();
+  assert.strictEqual(sb.ctx.renderVersionCard({ version: 'unknown', commit: 'unknown' }), '');
+});
+
+test('renderVersionCard: uses perf-num--small class (no inline style)', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderVersionCard({ version: '1.0.0', commit: 'abc1234' });
+  assert.ok(card.includes('perf-num--small'), 'should use perf-num--small class');
+  assert.ok(!card.includes('font-size'), 'should not use inline font-size style');
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed ? 1 : 0);

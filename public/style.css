@@ -721,24 +721,6 @@ img.brand-logo {
 }
 .nav-stats .stat-val { color: var(--nav-text); font-weight: 600; transition: color 0.3s ease; }
 .nav-stats .stat-val.updated { color: var(--accent); }
-.nav-stats .engine-badge {
-  font-size: 10px; font-weight: 600; font-family: var(--mono);
-  color: var(--nav-text-muted); background: rgba(255,255,255,0.1);
-  padding: 1px 5px; border-radius: var(--badge-radius);
-  letter-spacing: 0.5px; text-transform: lowercase;
-}
-.nav-stats .version-badge {
-  font-size: 10px; font-weight: 600; font-family: var(--mono);
-  color: var(--nav-text-muted); background: rgba(255,255,255,0.1);
-  padding: 1px 5px; border-radius: var(--badge-radius);
-  letter-spacing: 0.5px;
-}
-.nav-stats .version-badge a {
-  color: var(--nav-text-muted); text-decoration: none;
-}
-.nav-stats .version-badge a:hover {
-  color: var(--nav-text); text-decoration: underline;
-}
 
 /* === Layout === */
 /* Default: body-scroll mode — content pushes beyond viewport, iOS status-bar
@@ -3014,6 +2996,9 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 /* Perf dashboard */
 .perf-card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; min-width: 120px; text-align: center; }
 .perf-num { font-size: 24px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.perf-num--small { font-size: 0.85em; }
+.perf-num--small a { color: var(--text-muted); text-decoration: none; }
+.perf-num--small a:hover { color: var(--text); }
 .perf-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
 .perf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .perf-table th { text-align: left; padding: 6px 10px; border-bottom: 2px solid var(--border); color: var(--text-muted); font-size: 11px; text-transform: uppercase; }
