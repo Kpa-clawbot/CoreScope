@@ -134,9 +134,11 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       const stillThere = await page.$('.ch-color-clear[data-channel="' + dataCh + '"]');
       assert(!stillThere, 'clear button should be gone after click');
     } else {
-      // ChannelColors API absent — just verify the dot is still present, which
-      // is the structural assertion we actually care about for coverage.
-      assert(firstDot, 'fallback assertion');
+      // ChannelColors API absent — assert the structural invariant we
+      // actually need from this branch: the color dot stays in the DOM,
+      // anchored to the row's data-channel identifier.
+      const stillThere = await page.$('.ch-section-network .ch-color-dot[data-channel="' + dataCh + '"]');
+      assert(stillThere, 'color dot for data-channel should remain rendered');
     }
   });
 

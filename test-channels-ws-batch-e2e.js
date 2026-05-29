@@ -180,13 +180,14 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       'new channel should have lastSender=WsDan, got: ' + JSON.stringify(ch));
   });
 
-  await step('scrollToBottom + scroll button hide branch', async () => {
+  await step('new WS message while scrolled up appends to state', async () => {
     // Force not-at-bottom by scrolling messages container up.
     await page.evaluate(() => {
       const m = document.getElementById('chMessages');
       if (m) m.scrollTop = 0;
     });
-    // Trigger another batch — should reveal scroll button.
+    const before = await page.evaluate(
+      () => window._channelsGetStateForTest().messages.length);
     await page.evaluate(() => {
       const s = window._channelsGetStateForTest();
       const h = s.selectedHash;
@@ -200,51 +201,49 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         },
       }], []);
     });
-    // Either it becomes visible OR the messages el is already at bottom
-    // (small fixture); we just assert no crash + state advanced.
-    const ok = await page.evaluate(() =>
-      typeof window._channelsGetStateForTest === 'function' &&
-      Array.isArray(window._channelsGetStateForTest().messages));
-    assert(ok, 'state hook should remain intact');
+    await page.waitForFunction(
+      (prev) => window._channelsGetStateForTest().messages.length === prev + 1,
+      before, { timeout: 3000 });
+    const last = await page.evaluate(() => {
+      const s = window._channelsGetStateForTest();
+      return s.messages[s.messages.length - 1];
+    });
+    assert(last.sender === 'WsEve' && /tail/.test(last.text),
+      'tail message should be appended, got: ' + JSON.stringify(last));
   });
 
-  await step('region filter exclusion: WS msg outside selected regions is dropped', async () => {
-    // Seed observer regions.
+  await step('region filter: drops msg from observer outside selected regions', async () => {
+    // Seed observer regions. obs-name-1 → XYZ region.
     await page.evaluate(() => {
       if (typeof window._channelsSetObserverRegionsForTest === 'function') {
         window._channelsSetObserverRegionsForTest(
           { 'obs-id-1': 'XYZ' }, { 'obs-name-1': 'XYZ' });
       }
     });
-    const before = await page.evaluate(
-      () => window._channelsGetStateForTest().messages.length);
-    await page.evaluate(() => {
-      // Pass a non-matching regions snapshot; message should be filtered out.
-      window._channelsProcessWSBatchForTest([{
-        type: 'message',
-        data: {
-          hash: 'wsbatch-region-1',
-          id: 'pkt-region-1',
-          observer: 'obs-name-1',
-          packet: { observer_name: 'obs-name-1' },
-          decoded: {
-            payload: {
-              channel: window._channelsGetStateForTest().selectedHash,
-              sender: 'WsFiona',
-              text: 'should be filtered',
-            },
-          },
-        },
-      }], ['DIFFERENT-REGION']);
+    // Direct unit-style test of the exposed predicate — independent of
+    // any state side effects so we can assert true/false explicitly.
+    const verdicts = await page.evaluate(() => {
+      const fn = window._channelsShouldProcessWSMessageForRegion;
+      const byId = { 'obs-id-1': 'XYZ' };
+      const byName = { 'obs-name-1': 'XYZ' };
+      const mkMsg = (name) => ({ data: { observer: name, packet: { observer_name: name } } });
+      return {
+        // Selected region matches observer's region → pass.
+        matchById: fn({ data: { packet: { observer_id: 'obs-id-1' } } }, ['XYZ'], byId, byName),
+        matchByName: fn(mkMsg('obs-name-1'), ['XYZ'], byId, byName),
+        // Selected region doesn't match → filtered.
+        mismatch: fn(mkMsg('obs-name-1'), ['DIFFERENT-REGION'], byId, byName),
+        // Unknown observer (not in maps), regions set → filtered.
+        unknown: fn(mkMsg('obs-unknown'), ['XYZ'], byId, byName),
+        // No regions selected → pass-through.
+        noRegions: fn(mkMsg('obs-name-1'), [], byId, byName),
+      };
     });
-    // Give it a beat — either filtered (no change) OR passed (no harm done).
-    await page.waitForTimeout(150);
-    const after = await page.evaluate(
-      () => window._channelsGetStateForTest().messages.length);
-    // The strong assertion is that the region-filter code path executed
-    // without throwing; the exact count delta depends on the filter's
-    // strictness against unknown observers in selected regions.
-    assert(after >= before, 'count regression after region-filter call');
+    assert(verdicts.matchById === true, 'matching region by id should pass: ' + verdicts.matchById);
+    assert(verdicts.matchByName === true, 'matching region by name should pass: ' + verdicts.matchByName);
+    assert(verdicts.mismatch === false, 'mismatched region should be filtered: ' + verdicts.mismatch);
+    assert(verdicts.unknown === false, 'unknown observer should be filtered: ' + verdicts.unknown);
+    assert(verdicts.noRegions === true, 'empty regions should pass-through: ' + verdicts.noRegions);
   });
 
   await browser.close();
