@@ -2036,14 +2036,21 @@ async function run() {
     // Use a mobile viewport
     await page.setViewportSize({ width: 480, height: 800 });
     await page.goto(`${BASE}/#/packets`);
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(1500);
 
     const filterBar = await page.$('.filter-bar');
     assert(filterBar, 'Filter bar should exist on packets page');
 
-    // Before clicking toggle, filter inputs should be hidden
-    const toggleBtn = await page.$('.filter-toggle-btn');
-    assert(toggleBtn, 'Filter toggle button should exist on mobile');
+    // #1471: on mobile, the in-page .filter-toggle-btn is hidden + the
+    // operator-visible toggle is the navbar mirror injected by
+    // public/mobile-page-actions.js (class: filter-toggle-btn-mirror).
+    // Try mirror first, fall back to in-page button for any test rig where
+    // the mirror script didn't load.
+    let toggleBtn = await page.$('.filter-toggle-btn-mirror');
+    if (!toggleBtn) {
+      toggleBtn = await page.$('.filter-toggle-btn');
+    }
+    assert(toggleBtn, 'Filter toggle button (navbar mirror or in-page fallback) should exist on mobile');
 
     await toggleBtn.click();
     await page.waitForTimeout(300);
