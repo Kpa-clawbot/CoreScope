@@ -13,6 +13,7 @@
   // New animation canvas
   let animCanvas, animCtx;
   let activeAnimations = [];
+  let isAnimating = false;
   let clickablePaths = [];
   const CLICKABLE_PATH_TTL_MS = 30000;
   const CLICKABLE_PATH_MAX = 50;
@@ -1177,24 +1178,24 @@
 
     // Create a raw canvas for high-performance animations
     animCanvas = document.createElement('canvas');
-    animCanvas.style.cssText = 'position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:650;';
+    animCanvas.style.cssText = 'position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:625;';
     
     const mapContainer = document.getElementById('liveMap');
     mapContainer.appendChild(animCanvas);
     animCtx = animCanvas.getContext('2d');
 
     function resizeAnimCanvas() {
-        if (!animCanvas || !mapContainer) return;
-        
-        // Get the exact dimensions of the map container right now
-        const rect = mapContainer.getBoundingClientRect();
-        const dpr = window.devicePixelRatio || 1;
-        
-        animCanvas.width = rect.width * dpr;
-        animCanvas.height = rect.height * dpr;
-        
-        // Reset the scale so everything renders sharply on high-DPI/Retina screens
-        animCtx.scale(dpr, dpr);
+      if (!animCanvas || !mapContainer) return;
+      
+      const rect = mapContainer.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      
+      animCanvas.width = rect.width * dpr;
+      animCanvas.height = rect.height * dpr;
+      
+      // Use setTransform to guarantee an absolute scale overwrite, 
+      // preventing exponential scale compounding on HiDPI screens during resize
+      animCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
     // 1. Catch DOM Element resizes (e.g., when the user drags your feed panel)
@@ -1211,9 +1212,6 @@
 
     // Set the initial size immediately
     resizeAnimCanvas();
-    
-    // Start the master animation engine
-    requestAnimationFrame(renderAnimations);
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -3417,15 +3415,37 @@
   function renderAnimations(now) {
     if (!animCtx) return;
     
+    // SLEEP LOGIC: If no animations are active, shut down the loop
+    if (activeAnimations.length === 0) {
+      isAnimating = false;
+      animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
+      return; // <--- The loop stops here
+    }
+  
     // Clear the canvas for the next frame
     animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
-
+  
+    // Check global pause state
+    const isPaused = VCR.mode === 'PAUSED' || VCR.speed === 0;
+  
     for (let i = activeAnimations.length - 1; i >= 0; i--) {
       const anim = activeAnimations[i];
-      const elapsed = now - anim.startTime;
-      const t = Math.min(1, elapsed / anim.duration);
-
-      // Calculate current screen pixel position (keeps animations glued to the map even while panning)
+      
+      // Calculate time elapsed since the LAST frame (Delta Time)
+      const dt = now - anim.lastTick;
+      anim.lastTick = now;
+  
+      // Advance progress only if we are not paused
+      if (!isPaused) {
+        // Base duration is 660ms. 
+        // (dt / 660) gives the percentage of the animation that should complete this frame.
+        // Multiply by current VCR.speed so it instantly reacts to speed changes.
+        anim.progress += (dt / 660) * VCR.speed;
+      }
+  
+      const t = Math.min(1, anim.progress);
+  
+      // Calculate current screen pixel position
       const fromPt = map.latLngToContainerPoint(anim.from);
       const toPt = map.latLngToContainerPoint(anim.to);
       const currentX = fromPt.x + (toPt.x - fromPt.x) * t;
@@ -3540,8 +3560,8 @@
     activeAnimations.push({
       from: from,
       to: to,
-      startTime: performance.now(),
-      duration: 660 / VCR.speed, // Matches your original duration (33ms * 20 steps)
+      progress: 0, // Start at 0%
+      lastTick: performance.now(), // Track when this animation was last updated
       opacity: mainOpacity,
       isDashed: isDashed,
       lineColor: (colorByHash && hash && !isDashed && window.HashColor) ? hashFill : color,
@@ -3550,6 +3570,21 @@
       hashOutline: hashOutline,
       onComplete: onComplete
     });
+    
+    // Push to the hardware-accelerated canvas engine
+    activeAnimations.push({
+      from: from,
+      to: to,
+      progress: 0,
+      lastTick: performance.now(),
+      // ... rest of the properties ...
+    });
+  
+    // WAKE LOGIC: Kickstart the loop if it is currently sleeping
+    if (!isAnimating) {
+      isAnimating = true;
+      requestAnimationFrame(renderAnimations);
+    }
   }
 
   function showHeatMap() {
