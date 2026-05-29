@@ -241,6 +241,23 @@ jobs:
       - name: Freshen fixture timestamps
         run: bash tools/freshen-fixture.sh test-fixtures/e2e-fixture.db
 
+      - name: Seed grouped-packet row for #1486 collapse test
+        # The committed fixture has 499 packets, each with exactly ONE
+        # observation, so the packets-page renders only flat (select-hash)
+        # rows. The #1486 collapse-chevron repro needs at least one
+        # grouped (toggle-select) row, so we attach 2 extra observations
+        # to the newest transmission. Bump that transmission's
+        # first_seen so it lands at the top and is visible without
+        # scrolling.
+        run: |
+          sqlite3 test-fixtures/e2e-fixture.db <<'SQL'
+          UPDATE transmissions SET first_seen='2099-01-01T00:00:00Z' WHERE id=500;
+          INSERT INTO observations(transmission_id,observer_idx,direction,snr,rssi,score,path_json,timestamp,resolved_path) VALUES
+            (500,2,'rx',5.5,-95,0,'["AA"]',CAST(strftime('%s','2099-01-01T00:00:00Z') AS INTEGER),'["aa00000000000000000000000000000000000000000000000000000000000000"]'),
+            (500,3,'rx',6.5,-90,0,'["BB"]',CAST(strftime('%s','2099-01-01T00:00:00Z') AS INTEGER),'["bb00000000000000000000000000000000000000000000000000000000000000"]');
+          UPDATE observations SET timestamp=CAST(strftime('%s','2099-01-01T00:00:00Z') AS INTEGER) WHERE transmission_id=500;
+          SQL
+
       - name: Migrate fixture DB to current schema (#1287)
         # Server now ASSERTs schema is migrated and refuses to start
         # otherwise (cmd/server/main.go: dbschema.AssertReady). In prod
@@ -302,6 +319,7 @@ jobs:
           BASE_URL=http://localhost:13581 node test-issue-1146-path-link-contrast-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1147-section-order-e2e.js 2>&1 | tee -a e2e-output.txt
           BASE_URL=http://localhost:13581 node test-issue-1151-orphan-separators-e2e.js 2>&1 | tee -a e2e-output.txt
+          BASE_URL=http://localhost:13581 node test-issue-1486-collapse-reopens-detail-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-rebrand-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-theme-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-logo-default-sage-teal-e2e.js 2>&1 | tee -a e2e-output.txt
