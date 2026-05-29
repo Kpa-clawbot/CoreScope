@@ -304,5 +304,38 @@ test('Version card is absent when both version and commit are "unknown"', async 
   assert.ok(!html.includes('perf-label">Version<'), 'should not show Version card when all values are unknown');
 });
 
+// --- renderVersionCard unit tests (direct helper) ---
+
+test('renderVersionCard: version link points to release tag', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderVersionCard({ version: '3.8.2', commit: 'unknown' });
+  assert.ok(card.includes('releases/tag/v3.8.2'), 'version should link to release tag');
+  assert.ok(card.includes('href='), 'should contain an anchor tag');
+});
+
+test('renderVersionCard: commit link points to commit URL', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderVersionCard({ version: 'unknown', commit: 'deadbeef1234' });
+  assert.ok(card.includes('/commit/deadbeef1234'), 'commit should link to commit URL');
+  assert.ok(card.includes('href='), 'should contain an anchor tag');
+});
+
+test('renderVersionCard: returns empty string for null health', () => {
+  const sb = loadPerf();
+  assert.strictEqual(sb.ctx.renderVersionCard(null), '');
+});
+
+test('renderVersionCard: returns empty string when both fields are unknown', () => {
+  const sb = loadPerf();
+  assert.strictEqual(sb.ctx.renderVersionCard({ version: 'unknown', commit: 'unknown' }), '');
+});
+
+test('renderVersionCard: uses perf-num--small class (no inline style)', () => {
+  const sb = loadPerf();
+  const card = sb.ctx.renderVersionCard({ version: '1.0.0', commit: 'abc1234' });
+  assert.ok(card.includes('perf-num--small'), 'should use perf-num--small class');
+  assert.ok(!card.includes('font-size'), 'should not use inline font-size style');
+});
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed ? 1 : 0);

@@ -238,38 +238,46 @@ async function run() {
     }
   });
 
-  // Test: Stats bar shows version/commit badge
-  await test('Stats bar shows version and commit badge', async () => {
+  // Test: Version info is on Perf page (not navbar)
+  await test('Version info lives on Perf dashboard, not in navbar', async () => {
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
-    // Wait for stats to load (fetched from /api/stats)
+    // Wait for nav stats bar to load
     await page.waitForFunction(() => {
       const stats = document.getElementById('navStats');
       return stats && stats.textContent.trim().length > 5;
     }, { timeout: 10000 });
     const navStats = await page.$('#navStats');
     assert(navStats, 'Nav stats bar (#navStats) not found');
-    // Check if stats API exposes version info
+    // Version/engine badges must NOT appear in the navbar
+    const navVersionBadge = await page.$('#navStats .version-badge');
+    assert(!navVersionBadge, 'version-badge should not be in the navbar (moved to Perf dashboard)');
+    const navEngineBadge = await page.$('#navStats .engine-badge');
+    assert(!navEngineBadge, 'engine-badge should not be in the navbar (moved to Perf dashboard)');
+    // Check if health API exposes version info
     const hasVersionData = await page.evaluate(async () => {
       try {
-        const res = await fetch('/api/stats');
+        const res = await fetch('/api/health');
         const data = await res.json();
-        return !!(data.version || data.commit || data.engine);
+        return !!(data.version || data.commit);
       } catch { return false; }
     });
     if (!hasVersionData) {
-      console.log('    ⏭️  Server does not expose version/commit in /api/stats — badge test skipped');
+      console.log('    ⏭️  Server does not expose version/commit in /api/health — perf card test skipped');
       return;
     }
-    // Version badge should appear when data is available
-    await page.waitForFunction(() => !!document.querySelector('.version-badge'), { timeout: 5000 });
-    const badgeText = await page.$eval('.version-badge', el => el.textContent.trim());
-    assert(badgeText.length > 3, `Version badge should have content but got "${badgeText}"`);
-    const hasCommitHash = /[0-9a-f]{7}/i.test(badgeText);
-    assert(hasCommitHash, `Version badge should contain a commit hash, got "${badgeText}"`);
-    const engineBadge = await page.$('.engine-badge');
-    assert(engineBadge, 'Engine badge (.engine-badge) not found');
-    const engineText = await page.$eval('.engine-badge', el => el.textContent.trim().toLowerCase());
-    assert(engineText.includes('node') || engineText.includes('go'), `Engine should contain "node" or "go", got "${engineText}"`);
+    // Version card should appear on the Perf dashboard
+    await page.goto(`${BASE}/#/perf`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => {
+      const cards = document.querySelectorAll('.perf-card .perf-label');
+      return Array.from(cards).some(el => el.textContent.trim() === 'Version');
+    }, { timeout: 10000 });
+    const versionCard = await page.evaluate(() => {
+      const labels = document.querySelectorAll('.perf-card .perf-label');
+      const card = Array.from(labels).find(el => el.textContent.trim() === 'Version');
+      return card ? card.closest('.perf-card').innerText : null;
+    });
+    assert(versionCard, 'Version perf-card not found on #/perf');
+    assert(versionCard.includes('Version'), 'Version card should contain "Version" label');
   });
 
   // --- Group: Nodes page (tests 2, 5) ---

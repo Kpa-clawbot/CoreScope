@@ -1,6 +1,20 @@
 /* === CoreScope — perf.js === */
 'use strict';
 
+var GH = 'https://github.com/Kpa-clawbot/corescope';
+
+function renderVersionCard(health) {
+  if (!health || (!health.version && !health.commit)) return '';
+  var ver = health.version && health.version !== 'unknown' ? health.version : null;
+  var sha = health.commit && health.commit !== 'unknown' ? health.commit : null;
+  if (!ver && !sha) return '';
+  var vTag = ver ? (ver.charAt(0) === 'v' ? ver : 'v' + ver) : null;
+  var parts = [];
+  if (vTag) parts.push('<a href="' + GH + '/releases/tag/' + vTag + '" target="_blank" rel="noopener">' + vTag + '</a>');
+  if (sha) parts.push('<a href="' + GH + '/commit/' + sha + '" target="_blank" rel="noopener">' + sha.slice(0, 7) + '</a>');
+  return '<div class="perf-card"><div class="perf-num perf-num--small">' + parts.join(' · ') + '</div><div class="perf-label">Version</div></div>';
+}
+
 (function () {
   let interval = null;
 
@@ -32,7 +46,7 @@
         <div class="perf-card"><div class="perf-num">${server.avgMs}ms</div><div class="perf-label">Avg Response</div></div>
         <div class="perf-card"><div class="perf-num">${health ? health.uptimeHuman : Math.round(server.uptime / 60) + 'm'}</div><div class="perf-label">Uptime</div></div>
         <div class="perf-card"><div class="perf-num">${server.slowQueries.length}</div><div class="perf-label">Slow (&gt;100ms)</div></div>
-        ${health && (health.version || health.commit) ? `<div class="perf-card"><div class="perf-num" style="font-size:0.85em">${[health.version && health.version !== 'unknown' ? (health.version.charAt(0) === 'v' ? health.version : 'v' + health.version) : '', health.commit && health.commit !== 'unknown' ? health.commit.slice(0,7) : ''].filter(Boolean).join(' · ')}</div><div class="perf-label">Version</div></div>` : ''}
+        ${renderVersionCard(health)}
       </div>`;
 
       // System health (memory, event loop / go runtime, WS)

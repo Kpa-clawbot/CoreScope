@@ -2996,6 +2996,9 @@ tr[data-hops]:hover { background: rgba(59,130,246,0.1); }
 /* Perf dashboard */
 .perf-card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 12px 20px; min-width: 120px; text-align: center; }
 .perf-num { font-size: 24px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.perf-num--small { font-size: 0.85em; }
+.perf-num--small a { color: var(--text-muted); text-decoration: none; }
+.perf-num--small a:hover { color: var(--text); }
 .perf-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 4px; }
 .perf-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .perf-table th { text-align: left; padding: 6px 10px; border-bottom: 2px solid var(--border); color: var(--text-muted); font-size: 11px; text-transform: uppercase; }
