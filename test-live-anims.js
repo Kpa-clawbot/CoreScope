@@ -11,31 +11,27 @@ function test(name, fn) {
   catch (e) { failed++; console.log(`  ❌ ${name}: ${e.message}`); }
 }
 
-console.log('\n=== Animation interval elimination ===');
+console.log('\n=== Canvas Animation Engine Architecture ===');
 
-test('pulseNode does not use setInterval', () => {
-  // Extract pulseNode function body
-  const pulseStart = src.indexOf('function pulseNode(');
-  const nextFn = src.indexOf('\n  function ', pulseStart + 1);
-  const body = src.substring(pulseStart, nextFn);
-  assert.ok(!body.includes('setInterval'), 'pulseNode still uses setInterval');
-  assert.ok(body.includes('requestAnimationFrame'), 'pulseNode should use requestAnimationFrame');
+test('Canvas array, flag, and loop are implemented', () => {
+  assert.ok(src.includes('activeAnimations'), 'Canvas engine missing: activeAnimations array not found');
+  assert.ok(src.includes('preferCanvas: true'), 'Performance regression: preferCanvas flag missing from map init');
+  assert.ok(src.includes("map.createPane('animationsPane')"), 'Z-index regression: animationsPane not created');
+  assert.ok(src.includes('requestAnimationFrame(renderAnimations)'), 'Animation loop missing: renderAnimations not scheduled');
 });
 
-test('drawAnimatedLine does not use setInterval', () => {
-  const drawStart = src.indexOf('function drawAnimatedLine(');
-  const nextFn = src.indexOf('\n  function ', drawStart + 1);
-  const body = src.substring(drawStart, nextFn);
-  assert.ok(!body.includes('setInterval'), 'drawAnimatedLine still uses setInterval');
-  assert.ok(body.includes('requestAnimationFrame'), 'drawAnimatedLine should use requestAnimationFrame');
+test('Leaflet integration and resizing handles DPR correctly', () => {
+  assert.ok(src.includes('map.latLngToLayerPoint'), 'Map de-sync regression: Canvas not using LayerPoints for CSS transform sync');
+  assert.ok(src.includes('animCtx.setTransform(dpr, 0, 0, dpr, 0, 0)'), 'HiDPI regression: resizeAnimCanvas does not reset transform matrix');
+  assert.ok(src.includes('matchMedia'), 'Monitor drag regression: DPR listener missing');
 });
 
-test('ghost hop pulse does not use setInterval', () => {
-  // Ghost pulse is inside animatePath
-  const animStart = src.indexOf('function animatePath(');
-  const animEnd = src.indexOf('\n  function ', animStart + 1);
-  const body = src.substring(animStart, animEnd);
-  assert.ok(!body.includes('setInterval'), 'animatePath still uses setInterval');
+console.log('\n=== Battery / GPU Optimization (State Machine) ===');
+
+test('Engine gracefully sleeps and wakes', () => {
+  assert.ok(src.includes('isAnimating = false'), 'Battery drain regression: Engine does not explicitly sleep on empty queue');
+  assert.ok(src.includes('window._wakeCanvasEngine'), 'Wake controller missing: _wakeCanvasEngine not exposed');
+  assert.ok(src.includes('anim.lastTick = null'), 'Time-jump regression: Engine does not nullify tick on pause');
 });
 
 console.log('\n=== Concurrency cap ===');
@@ -55,6 +51,21 @@ test('animatePath checks MAX_CONCURRENT_ANIMS before proceeding', () => {
   // Check that within the first 200 chars of the function, we check the cap
   const snippet = src.substring(animStart, animStart + 300);
   assert.ok(snippet.includes('activeAnims >= MAX_CONCURRENT_ANIMS'), 'animatePath should check activeAnims against cap');
+});
+
+console.log('\n=== Memory Leaks & Teardown ===');
+
+test('Destroy function cleanly halts canvas engine', () => {
+  const destroyStart = src.indexOf('function destroy()');
+  const destroyBody = src.substring(destroyStart, destroyStart + 800);
+  assert.ok(destroyBody.includes('activeAnimations.length = 0'), 'Memory leak: destroy() does not clear activeAnimations array');
+  assert.ok(destroyBody.includes('isAnimating = false'), 'Memory leak: destroy() does not halt isAnimating flag');
+});
+
+test('Entry points guard against destroyed map', () => {
+  const lineStart = src.indexOf('function drawAnimatedLine(');
+  const lineBody = src.substring(lineStart, lineStart + 150);
+  assert.ok(lineBody.includes('!map || !animCtx'), 'Race condition: drawAnimatedLine missing map/ctx null guard');
 });
 
 console.log('\n=== Safety: no stale setInterval in animation functions ===');
