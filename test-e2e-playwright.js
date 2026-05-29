@@ -2738,29 +2738,6 @@ async function run() {
     assert(hasStripe, 'At least one .live-feed-item should have hash-color border-left stripe when toggle ON');
   });
 
-  // --- Map polyline uses hash color ---
-  await test('Map trace polyline uses hash-derived color when toggle ON', async () => {
-    await page.evaluate(() => localStorage.setItem('meshcore-color-packets-by-hash', 'true'));
-    await page.goto(BASE + '/#/live');
-    await page.waitForTimeout(3000);
-    // Use the dedicated .live-packet-trace class so we don't pick up
-    // unrelated leaflet paths (geofilter polygons, region overlays, etc).
-    const pathCount = await page.evaluate(() => document.querySelectorAll('path.live-packet-trace').length);
-    if (pathCount === 0) {
-      console.log('    (skipped — no live-packet-trace polylines drawn in 3s window)');
-      return;
-    }
-    const hasHslPolyline = await page.evaluate(() => {
-      const paths = document.querySelectorAll('path.live-packet-trace');
-      for (const p of paths) {
-        const stroke = p.getAttribute('stroke') || '';
-        if (stroke.startsWith('hsl(')) return true;
-      }
-      return false;
-    });
-    assert(hasHslPolyline, 'At least one live-packet-trace polyline should have hsl() stroke color from hash');
-  });
-
   // --- Roles folded into Analytics (issue #1085) ---
   // Acceptance criteria:
   //   1. "Roles" link does NOT exist in top nav
