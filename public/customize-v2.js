@@ -2474,6 +2474,10 @@
     applyCSS: applyCSS,
     isValidColor: isValidColor,
     isOverridden: _isOverridden,
+    // #1496 — stub. Implementation lands in the green commit so the red
+    // test commit demonstrates the bug as an assertion failure (not a
+    // missing-symbol failure).
+    resetAll: function () {},
     THEME_CSS_MAP: THEME_CSS_MAP
   };
 })();
