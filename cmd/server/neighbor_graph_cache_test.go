@@ -53,6 +53,31 @@ func TestNeighborGraphCacheServesSentinelOnDefaultParams(t *testing.T) {
 	}
 }
 
+// #1483 follow-up: the analytics UI fetches with min_count=1&min_score=0;
+// that shape must ALSO be cache-served (from a separate atomic-pointer).
+func TestNeighborGraphCacheServesUnfilteredShape(t *testing.T) {
+	s := &Server{}
+	resp := NeighborGraphResponse{
+		Nodes: []GraphNode{{Pubkey: "abcd", Name: "UNFILTERED-SENTINEL"}},
+	}
+	raw, _ := json.Marshal(resp)
+	s.neighborGraphCache.unfilteredPtr.Store(&neighborGraphCacheEntry{resp: resp, json: raw})
+
+	req := httptest.NewRequest("GET", "/api/analytics/neighbor-graph?min_count=1&min_score=0", nil)
+	w := httptest.NewRecorder()
+	s.handleNeighborGraph(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "UNFILTERED-SENTINEL") {
+		t.Fatalf("expected UNFILTERED-SENTINEL in analytics-shape body, got: %s", w.Body.String())
+	}
+	if h := w.Header().Get("X-Cache-Age-Seconds"); h == "" {
+		t.Error("expected X-Cache-Age-Seconds header on cached response")
+	}
+}
+
 // #1481 P0-1: non-default query (e.g. ?region=X) must bypass the cache
 // and call the compute path (verified by injected counter). The bypass
 // branch must NOT serve the sentinel — body must NOT contain it.

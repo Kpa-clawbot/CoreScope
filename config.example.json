@@ -267,7 +267,12 @@
   "neighborGraph": {
     "maxAgeDays": 5,
     "maxEdgeKm": 500,
-    "_comment": "maxAgeDays: neighbor edges older than this many days are pruned on startup and daily. Default 5. maxEdgeKm: geo-implausibility filter — when both endpoints have GPS, edges with haversine distance > maxEdgeKm are rejected at build time to prevent disambiguator self-reinforcement on wide-geo MQTT deployments. Default 500 km (well above any plausible terrestrial LoRa hop). 0 ⇒ use default; set negative to disable the filter. Rejected count surfaces in /api/analytics/neighbor-graph stats. Issue #1228."
+    "cacheRecomputeIntervalSeconds": 300,
+    "_comment": "maxAgeDays: neighbor edges older than this many days are pruned on startup and daily. Default 5. maxEdgeKm: geo-implausibility filter — when both endpoints have GPS, edges with haversine distance > maxEdgeKm are rejected at build time to prevent disambiguator self-reinforcement on wide-geo MQTT deployments. Default 500 km (well above any plausible terrestrial LoRa hop). 0 ⇒ use default; set negative to disable the filter. Rejected count surfaces in /api/analytics/neighbor-graph stats. Issue #1228. cacheRecomputeIntervalSeconds: how often the background recomputer rebuilds the default-shape /api/analytics/neighbor-graph response (#1481 P0-1). Default 300 (5 min). Lower = fresher data, more CPU per minute. Issue #1483."
+  },
+  "observersCache": {
+    "ttlSeconds": 30,
+    "_comment": "TTL for the default-shape /api/observers response cache (#1481 P0-3). Default 30s. Lower = fresher data, more SQL pressure on the 1.9M-row observations table. TTL-boundary refills are collapsed via singleflight so concurrent requests cause exactly one SQL fill. Issue #1483."
   },
   "batteryThresholds": {
     "lowMv": 3300,

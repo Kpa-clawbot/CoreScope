@@ -323,9 +323,13 @@ func main() {
 	// hit an atomic pointer; the rebuild path no longer runs on the
 	// request goroutine for the common filter shape.
 	stopNeighborGraphCache := make(chan struct{})
-	srv.startNeighborGraphRecomputer(neighborGraphCacheInterval, stopNeighborGraphCache)
+	ngInterval := neighborGraphCacheInterval
+	if cfg.NeighborGraph != nil && cfg.NeighborGraph.CacheRecomputeIntervalSeconds > 0 {
+		ngInterval = time.Duration(cfg.NeighborGraph.CacheRecomputeIntervalSeconds) * time.Second
+	}
+	srv.startNeighborGraphRecomputer(ngInterval, stopNeighborGraphCache)
 	defer close(stopNeighborGraphCache)
-	log.Printf("[neighbor-graph-cache] background recompute enabled (interval=%s)", neighborGraphCacheInterval)
+	log.Printf("[neighbor-graph-cache] background recompute enabled (interval=%s)", ngInterval)
 
 	// Steady-state repeater-enrichment recomputer (issue #1262).
 	// Prewarms the bulk caches feeding handleNodes so the very first

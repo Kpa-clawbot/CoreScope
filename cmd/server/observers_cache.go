@@ -17,9 +17,20 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// observersCacheTTL is the freshness window for the cached default
-// (no-filter) /api/observers response.
+// observersCacheTTL is the default freshness window for the cached
+// default (no-filter) /api/observers response when no per-server
+// override is configured. Configurable via ObserversCache.TTLSeconds
+// (#1483).
 const observersCacheTTL = 30 * time.Second
+
+// effectiveObserversCacheTTL returns the cfg-overridden TTL or the
+// default. Falls back to the default on nil cfg / non-positive value.
+func (s *Server) effectiveObserversCacheTTL() time.Duration {
+	if s.cfg != nil && s.cfg.ObserversCache != nil && s.cfg.ObserversCache.TTLSeconds > 0 {
+		return time.Duration(s.cfg.ObserversCache.TTLSeconds) * time.Second
+	}
+	return observersCacheTTL
+}
 
 // singleflight key for the default-shape cache fill.
 const observersCacheFlightKey = "observers:default"
@@ -50,7 +61,7 @@ func (s *Server) observersCacheExpired(t time.Time) bool {
 	if t.IsZero() {
 		return true
 	}
-	return time.Since(t) >= observersCacheTTL
+	return time.Since(t) >= s.effectiveObserversCacheTTL()
 }
 
 // loadObserversCache returns the cached entry and its age, or nil.

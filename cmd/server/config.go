@@ -112,6 +112,9 @@ type Config struct {
 	ResolvedPath  *ResolvedPathConfig  `json:"resolvedPath,omitempty"`
 	NeighborGraph *NeighborGraphConfig `json:"neighborGraph,omitempty"`
 
+	// Observers cache settings (#1481 P0-3 / #1483).
+	ObserversCache *ObserversCacheConfig `json:"observersCache,omitempty"`
+
 	// Analytics steady-state background recompute (issue #1240).
 	Analytics *AnalyticsConfig `json:"analytics,omitempty"`
 
@@ -189,6 +192,21 @@ type ResolvedPathConfig struct {
 type NeighborGraphConfig struct {
 	MaxAgeDays int     `json:"maxAgeDays"` // edges older than this are pruned (default 5)
 	MaxEdgeKm  float64 `json:"maxEdgeKm"`  // geo-implausibility threshold (km); 0 = default 500; negative disables (#1228)
+
+	// CacheRecomputeIntervalSeconds: cadence for the background
+	// recomputer that rebuilds the default-shape neighbor-graph
+	// response (#1481 P0-1). 0/missing = default 300 (5 min).
+	// Lower = fresher data, more CPU per minute. #1483.
+	CacheRecomputeIntervalSeconds int `json:"cacheRecomputeIntervalSeconds,omitempty"`
+}
+
+// ObserversCacheConfig controls the /api/observers default-shape cache.
+// #1481 P0-3 / #1483.
+type ObserversCacheConfig struct {
+	// TTLSeconds: how long the cached default-shape /api/observers
+	// response is served before a singleflight-collapsed refill.
+	// 0/missing = default 30. Lower = fresher data, more SQL pressure.
+	TTLSeconds int `json:"ttlSeconds,omitempty"`
 }
 
 // PacketStoreConfig controls in-memory packet store limits.

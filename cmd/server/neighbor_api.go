@@ -247,6 +247,18 @@ func (s *Server) handleNeighborGraph(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// #1483: also serve the (minCount=1, minScore=0) shape from cache —
+	// that's what the analytics UI tab fetches so it can client-side
+	// slider over the full edge set. Without this branch the user-
+	// visible analytics tab still hit the cold compute path.
+	if minCount == 1 && minScore == 0 && region == "" && roleFilter == "" {
+		if raw, age, ok := s.loadNeighborGraphCacheBytesUnfiltered(); ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Cache-Age-Seconds", cacheAgeSecondsHeader(age))
+			w.Write(raw)
+			return
+		}
+	}
 
 	resp := s.computeNeighborGraphResponseDispatch(minCount, minScore, region, roleFilter)
 	w.Header().Set("Content-Type", "application/json")
