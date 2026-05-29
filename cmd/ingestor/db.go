@@ -373,6 +373,27 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] observations(observer_idx, timestamp) index created")
 	}
 
+	// #1483: normalize nodes.public_key to lowercase. The server's
+	// GetNodeLocationsByKeys lookup dropped LOWER(public_key) for perf
+	// (#1481 P0-3) and now relies on stored keys being lowercase. The
+	// decoder writes lowercase today, but legacy/admin/API inserts may
+	// have left mixed-case rows. Idempotent: counts and lowers any
+	// non-lowercase rows on every boot, runs once via _migrations gate
+	// for the bulk fix. Re-running stays cheap because subsequent
+	// passes match zero rows.
+	if r := db.QueryRow("SELECT COUNT(*) FROM nodes WHERE public_key != lower(public_key)"); r != nil {
+		var n int64
+		_ = r.Scan(&n)
+		if n > 0 {
+			log.Printf("[migration] Normalizing %d nodes.public_key row(s) to lowercase (#1483)...", n)
+			if _, err := db.Exec(`UPDATE nodes SET public_key = lower(public_key) WHERE public_key != lower(public_key)`); err != nil {
+				log.Printf("[migration] public_key lowercase normalize failed: %v", err)
+			} else {
+				log.Printf("[migration] public_key lowercase normalize complete (%d rows)", n)
+			}
+		}
+	}
+
 	// observer_metrics table for RF health dashboard
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_metrics_v1'")
 	if row.Scan(&migDone) != nil {
