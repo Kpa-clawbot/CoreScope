@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -62,6 +63,12 @@ type Server struct {
 
 	// Router reference for OpenAPI spec generation
 	router *mux.Router
+
+	// Cached default (no-filter) /api/observers response, served from an
+	// atomic-pointer snapshot. Recomputed lazily by the handler after
+	// observersCacheTTL elapses. Issue #1481 P0-3.
+	observersCache    atomic.Pointer[ObserverListResponse]
+	observersCachedAt atomic.Int64 // unix-nanos of cache fill time
 }
 
 // PerfStats tracks request performance.
