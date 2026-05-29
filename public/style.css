@@ -2407,6 +2407,25 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .hash-cell-taken  { background: var(--status-green); color: #fff; }
 .hash-cell-possible { background: var(--status-yellow); color: #fff; }
 .hash-cell-collision { color: #fff; }
+/* #1473 — Reserved prefixes (first byte 0x00 / 0xFF) per MeshCore firmware:
+   https://github.com/meshcore-dev/MeshCore/blob/6b52fb32301c273fc78d96183501eb23ad33c5bb/examples/simple_repeater/main.cpp#L64
+   Visually grey + strike, kill pointer events so the matrix click handler
+   skips them. Applied by public/prefix-reserved.js → markReservedCells(). */
+.hash-cell.prefix-reserved,
+.prefix-reserved {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--card-bg),
+    var(--card-bg) 4px,
+    var(--border) 4px,
+    var(--border) 8px
+  ) !important;
+  color: var(--text-muted) !important;
+  text-decoration: line-through;
+  opacity: 0.6;
+  cursor: not-allowed !important;
+  pointer-events: none;
+}
 .hash-matrix-tooltip {
   position: fixed; z-index: var(--z-tooltip); background: var(--surface-1); border: 1px solid var(--border);
   border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); padding: 8px 12px;

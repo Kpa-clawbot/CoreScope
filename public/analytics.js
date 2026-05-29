@@ -1615,6 +1615,12 @@
     html += hashMatrixLegendHtml(legendLabels);
     el.innerHTML = html;
     initMatrixTooltip(el);
+    // #1473 — Mark MeshCore reserved prefixes (first byte 0x00 / 0xFF) BEFORE
+    // wiring click handlers so they're stripped of .hash-active.
+    // Firmware: examples/simple_repeater/main.cpp:64 (reserved id hashes).
+    if (typeof PrefixReserved !== 'undefined' && PrefixReserved && typeof PrefixReserved.markReservedCells === 'function') {
+      PrefixReserved.markReservedCells(el);
+    }
     el.querySelectorAll('.hash-active').forEach(td => {
       td.addEventListener('click', () => {
         clickHandlerFn(td);
@@ -2992,6 +2998,13 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       <div class="analytics-card" id="ptGenerator">
         <h3 style="margin-top:0">Generate Available Prefix</h3>
         <p class="text-muted" style="margin-top:0;font-size:0.9em">Find a prefix with zero current collisions.</p>
+        <p class="text-muted" style="margin:4px 0 10px;font-size:0.82em">
+          <span aria-hidden="true">🚫</span>
+          <strong>0x00 and 0xFF excluded — reserved by the MeshCore protocol</strong>
+          (firmware rerolls identities with those first bytes; see
+          <a href="https://github.com/meshcore-dev/MeshCore/blob/6b52fb32301c273fc78d96183501eb23ad33c5bb/examples/simple_repeater/main.cpp#L64"
+             target="_blank" rel="noopener noreferrer" style="color:var(--accent)">simple_repeater/main.cpp:64</a>).
+        </p>
         <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
             <input type="radio" name="ptGenSize" value="1" ${initGenerate === '1' ? 'checked' : ''}> 1-byte
@@ -3052,6 +3065,18 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         : [{ b: input.length / 2, prefix: input }];
 
       let html = '';
+      // #1473 — Warn loudly when the user pastes a reserved-first-byte prefix
+      // or pubkey. MeshCore firmware (simple_repeater/main.cpp:64) rerolls
+      // these identities, so a node with this prefix should not exist.
+      if (typeof PrefixReserved !== 'undefined' && PrefixReserved &&
+          PrefixReserved.isReservedPrefix(input)) {
+        html += `<div role="alert" style="margin-bottom:10px;padding:10px 14px;border:1px solid var(--status-red);border-radius:6px;background:var(--bg-secondary,var(--bg))">
+          <strong style="color:var(--status-red)">⚠️ Reserved prefix</strong>
+          <div class="text-muted" style="font-size:0.85em;margin-top:4px">
+            <code class="mono">${input.slice(0,2)}</code> is reserved by the MeshCore protocol — firmware rerolls any identity whose first byte is <code class="mono">00</code> or <code class="mono">FF</code>. Should never be used as a node prefix.
+          </div>
+        </div>`;
+      }
       if (isFullKey) {
         const inNetwork = nodes.some(n => n.public_key.toUpperCase() === input);
         html += `<p class="text-muted" style="font-size:0.85em;margin:0 0 10px">Derived prefixes: <code class="mono">${input.slice(0,2)}</code> / <code class="mono">${input.slice(0,4)}</code> / <code class="mono">${input.slice(0,6)}</code>${!inNetwork ? ' — <em>this node is not yet in the network</em>' : ''}</p>`;
@@ -3085,34 +3110,52 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       const b = sizeInput ? parseInt(sizeInput.value) : 2;
       const hexLen = b * 2;
       const totalSpace = spaceSizes[b];
-      const available = totalSpace - idx[b].size;
+      // #1473 — Reserved prefixes (first byte 0x00 / 0xFF) are dropped from
+      // the candidate pool per MeshCore firmware
+      // (examples/simple_repeater/main.cpp:64). Available = space - used - reserved.
+      const reservedTotal = (typeof PrefixReserved !== 'undefined' && PrefixReserved)
+        ? PrefixReserved.reservedCount(b)
+        : 0;
+      // Count reserved prefixes that are ALREADY used so we don't subtract them twice.
+      let reservedUsed = 0;
+      if (typeof PrefixReserved !== 'undefined' && PrefixReserved) {
+        for (const p of idx[b].keys()) {
+          if (PrefixReserved.isReservedPrefix(p)) reservedUsed++;
+        }
+      }
+      const available = totalSpace - idx[b].size - (reservedTotal - reservedUsed);
 
-      if (available === 0) {
+      if (available <= 0) {
         const next = b < 3 ? (b + 1) + '-byte' : 'a different size';
         genResultEl.innerHTML = `<p style="color:var(--status-red);margin:0">No collision-free ${b}-byte prefixes available. Try ${next}.</p>`;
         return;
       }
 
+      const isReserved = (p) =>
+        (typeof PrefixReserved !== 'undefined' && PrefixReserved)
+          ? PrefixReserved.isReservedPrefix(p)
+          : false;
+
       let prefix;
       if (b === 1) {
-        // Enumerate all 256 options
+        // Enumerate all 256 options, skipping used + reserved.
         const free = [];
         for (let i = 0; i < totalSpace; i++) {
           const p = i.toString(16).toUpperCase().padStart(hexLen, '0');
-          if (!idx[b].has(p)) free.push(p);
+          if (!idx[b].has(p) && !isReserved(p)) free.push(p);
         }
         prefix = free[Math.floor(Math.random() * free.length)];
       } else {
-        // Random sampling — with 2K used / 65K space, hit rate >96%
+        // Random sampling — with 2K used / 65K space, hit rate >96%.
         let attempts = 0;
         do {
           prefix = Math.floor(Math.random() * totalSpace).toString(16).toUpperCase().padStart(hexLen, '0');
-        } while (idx[b].has(prefix) && ++attempts < 500);
-        // Fallback to enumeration if sampling kept hitting used prefixes
-        if (idx[b].has(prefix)) {
+        } while ((idx[b].has(prefix) || isReserved(prefix)) && ++attempts < 500);
+        // Fallback to enumeration if sampling kept hitting used/reserved prefixes.
+        if (idx[b].has(prefix) || isReserved(prefix)) {
           for (let i = 0; i < totalSpace; i++) {
             const p = i.toString(16).toUpperCase().padStart(hexLen, '0');
-            if (!idx[b].has(p)) { prefix = p; break; }
+            if (!idx[b].has(p) && !isReserved(p)) { prefix = p; break; }
           }
         }
       }
