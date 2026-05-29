@@ -1333,18 +1333,45 @@ body.scroll-locked { overflow: hidden; }
 .byop-modal .byop-header {
   position: sticky; top: 0; z-index: 2;
   background: var(--card-bg);
-  margin: -24px -24px 12px;
-  padding: 12px 24px;
+  /* #1487: was `margin: -24px -24px 12px; padding: 12px 24px;` — assumed
+     .modal desktop padding of 24px. On mobile .modal switches to 16px
+     padding, so the negative margin overshot, content-flow pushed the
+     next sibling UP under the (sticky-pinned) header, and the
+     description paragraph was visually occluded by ~12px. Drop the
+     full-bleed negative-margin gymnastics — header now uses normal
+     padding (modal padding handles the inset) and bounded sizing. */
+  margin: 0 0 12px;
+  padding: 4px 0;
   border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  /* Hard cap so emoji ascent / btn-icon 48px floor can't blow the header
+     past the safe range (was 73px pre-fix). */
+  max-height: 48px;
+  box-sizing: border-box;
+}
+.byop-modal .byop-header h3 {
+  /* #1487: explicit font + line-height so emoji-bearing title doesn't
+     blow up the header on platforms where the default emoji font has
+     huge ascent metrics (observed contributor to 73px header). */
+  margin: 0; font-size: 1rem; line-height: 1.3;
 }
 /* MINOR-7: dropped position: sticky on .byop-x — it sits inside the
    already-sticky .byop-header, so the sticky on the child was a no-op.
-   We only need visual styling here. */
+   We only need visual styling here.
+   #1487: override .btn-icon 48px floor — inside the header we need a
+   compact button so the header stays bounded. The :before tap-target
+   pad below preserves accessibility (effective hit area ~ 44x44). */
 .byop-modal .byop-x {
   background: var(--card-bg); border: 1px solid var(--border);
-  border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 16px;
+  border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 14px;
   line-height: 1; color: var(--text);
+  min-height: 0; min-width: 0; height: 32px;
+  position: relative;
+}
+/* #1487: invisible tap-pad to keep ≥44px effective hit area while the
+   visual button stays compact inside the bounded header. */
+.byop-modal .byop-x::before {
+  content: ''; position: absolute; inset: -8px; border-radius: 8px;
 }
 .byop-modal .byop-x:hover { background: var(--row-hover, rgba(0,0,0,0.05)); }
 
