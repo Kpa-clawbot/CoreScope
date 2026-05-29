@@ -347,35 +347,6 @@ function truncate(str, len) {
   return str.length > len ? str.slice(0, len) + '…' : str;
 }
 
-function formatEngineBadge(engine) {
-  if (!engine) return '';
-  return ` <span class="engine-badge">${engine}</span>`;
-}
-
-function formatVersionBadge(version, commit, engine, buildTime) {
-  if (!version && !commit && !engine) return '';
-  var buildAge = '';
-  if (buildTime && buildTime !== 'unknown') {
-    var age = timeAgo(buildTime);
-    if (age && age !== '—') buildAge = ' <span class="build-age">(' + age + ')</span>';
-  }
-  var port = (typeof location !== 'undefined' && location.port) || '';
-  var isProd = !port || port === '80' || port === '443';
-  var GH = 'https://github.com/Kpa-clawbot/corescope';
-  var parts = [];
-  if (version && isProd) {
-    var vTag = version.charAt(0) === 'v' ? version : 'v' + version;
-    parts.push('<a href="' + GH + '/releases/tag/' + vTag + '" target="_blank" rel="noopener">' + vTag + '</a>');
-  }
-  if (commit && commit !== 'unknown') {
-    var short = commit.length > 7 ? commit.slice(0, 7) : commit;
-    parts.push('<a href="' + GH + '/commit/' + commit + '" target="_blank" rel="noopener">' + short + '</a>' + buildAge);
-  }
-  if (engine) parts.push('<span class="engine-badge">' + engine + '</span>');
-  if (parts.length === 0) return '';
-  return ' <span class="version-badge">' + parts.join(' · ') + '</span>';
-}
-
 // --- Favorites ---
 const FAV_KEY = 'meshcore-favorites';
 function getFavorites() {
@@ -1150,7 +1121,6 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     var overflowQueue = buildOverflowQueue();
 
-
     function rebuildMoreMenu() {
       navMoreMenu.innerHTML = '';
       const hidden = allLinks.filter(a => a.classList.contains('is-overflow'));
@@ -1566,7 +1536,7 @@ window.addEventListener('DOMContentLoaded', () => {
       const stats = await api('/stats', { ttl: CLIENT_TTL.stats });
       const el = document.getElementById('navStats');
       if (el) {
-        el.innerHTML = `<span class="stat-val">${stats.totalPackets}</span> pkts · <span class="stat-val">${stats.totalNodes}</span> nodes · <span class="stat-val">${stats.totalObservers}</span> obs${formatVersionBadge(stats.version, stats.commit, stats.engine, stats.buildTime)}`;
+        el.innerHTML = `<span class="stat-val">${stats.totalPackets}</span> pkts · <span class="stat-val">${stats.totalNodes}</span> nodes · <span class="stat-val">${stats.totalObservers}</span> obs`;
         el.querySelectorAll('.stat-val').forEach(s => s.classList.add('updated'));
         setTimeout(() => { el.querySelectorAll('.stat-val').forEach(s => s.classList.remove('updated')); }, 600);
         if (navPriorityFn) requestAnimationFrame(navPriorityFn);

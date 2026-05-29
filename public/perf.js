@@ -32,6 +32,7 @@
         <div class="perf-card"><div class="perf-num">${server.avgMs}ms</div><div class="perf-label">Avg Response</div></div>
         <div class="perf-card"><div class="perf-num">${health ? health.uptimeHuman : Math.round(server.uptime / 60) + 'm'}</div><div class="perf-label">Uptime</div></div>
         <div class="perf-card"><div class="perf-num">${server.slowQueries.length}</div><div class="perf-label">Slow (&gt;100ms)</div></div>
+        ${health && (health.version || health.commit) ? `<div class="perf-card"><div class="perf-num" style="font-size:0.85em">${[health.version && health.version !== 'unknown' ? (health.version.charAt(0) === 'v' ? health.version : 'v' + health.version) : '', health.commit && health.commit !== 'unknown' ? health.commit.slice(0,7) : ''].filter(Boolean).join(' · ')}</div><div class="perf-label">Version</div></div>` : ''}
       </div>`;
 
       // System health (memory, event loop / go runtime, WS)
