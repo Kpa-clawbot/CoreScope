@@ -236,6 +236,31 @@ func (s *Server) handleNeighborGraph(w http.ResponseWriter, r *http.Request) {
 	region := r.URL.Query().Get("region")
 	roleFilter := strings.ToLower(r.URL.Query().Get("role"))
 
+	// #1481 P0-1: serve the default-shape request from the atomic-pointer
+	// snapshot maintained by the background recomputer (5 min cadence).
+	// Default shape: minCount=5, minScore=0.1, no region, no role.
+	if minCount == 5 && minScore == 0.1 && region == "" && roleFilter == "" {
+		if resp, ok := s.loadNeighborGraphCache(); ok {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+	}
+
+	resp := s.computeNeighborGraphResponse(minCount, minScore, region, roleFilter)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// buildDefaultNeighborGraphResponse builds the default-shape response
+// used by the #1481 P0-1 recomputer.
+func (s *Server) buildDefaultNeighborGraphResponse() NeighborGraphResponse {
+	return s.computeNeighborGraphResponse(5, 0.1, "", "")
+}
+
+// computeNeighborGraphResponse does the full graph build + filter + score
+// pipeline previously inlined in handleNeighborGraph.
+func (s *Server) computeNeighborGraphResponse(minCount int, minScore float64, region, roleFilter string) NeighborGraphResponse {
 	graph := s.getNeighborGraph()
 	allEdges := graph.AllEdges()
 	now := time.Now()
@@ -349,7 +374,7 @@ func (s *Server) handleNeighborGraph(w http.ResponseWriter, r *http.Request) {
 		avgCluster = float64(len(filteredEdges)*2) / float64(len(nodes))
 	}
 
-	resp := NeighborGraphResponse{
+	return NeighborGraphResponse{
 		Nodes: nodes,
 		Edges: filteredEdges,
 		Stats: GraphStats{
@@ -360,9 +385,6 @@ func (s *Server) handleNeighborGraph(w http.ResponseWriter, r *http.Request) {
 			RejectedEdgesGeoFar: atomic.LoadUint64(&graph.RejectedEdgesGeoFar),
 		},
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
