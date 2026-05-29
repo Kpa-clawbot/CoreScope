@@ -674,6 +674,16 @@
     }
   }
 
+  window._wakeCanvasEngine = function() {
+    if (!isAnimating && activeAnimations.length > 0) {
+      const isPaused = VCR.mode === 'PAUSED' || VCR.speed === 0;
+      if (!isPaused) {
+        isAnimating = true;
+        requestAnimationFrame(renderAnimations);
+      }
+    }
+  };
+
   function vcrFormatTime(tsMs) {
     const d = new Date(tsMs);
     const utc = typeof getTimestampTimezone === 'function' && getTimestampTimezone() === 'utc';
@@ -733,6 +743,9 @@
     }
     if (speedBtn) { speedBtn.textContent = speedLabel(VCR.speed); speedBtn.setAttribute('aria-label', 'Speed ' + speedLabel(VCR.speed)); }
     updateVCRLcd();
+    
+    // WAKE THE ENGINE: If we unpaused or changed speed above 0, kickstart the canvas
+    if (window._wakeCanvasEngine) window._wakeCanvasEngine();
   }
 
   function dbPacketToLive(pkt) {
@@ -3415,31 +3428,29 @@
   function renderAnimations(now) {
     if (!animCtx) return;
     
-    // SLEEP LOGIC: If no animations are active, shut down the loop
     if (activeAnimations.length === 0) {
       isAnimating = false;
       animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
-      return; // <--- The loop stops here
+      return;
     }
   
-    // Clear the canvas for the next frame
-    animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
-  
-    // Check global pause state
     const isPaused = VCR.mode === 'PAUSED' || VCR.speed === 0;
+  
+    // Clear the canvas for this frame
+    animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
   
     for (let i = activeAnimations.length - 1; i >= 0; i--) {
       const anim = activeAnimations[i];
       
-      // Calculate time elapsed since the LAST frame (Delta Time)
+      // Safely resume without dt time-jumps. 
+      // If lastTick is null (because we were paused), reset it to 'now' so dt is 0.
+      if (anim.lastTick === null) anim.lastTick = now;
+      
       const dt = now - anim.lastTick;
       anim.lastTick = now;
   
       // Advance progress only if we are not paused
       if (!isPaused) {
-        // Base duration is 660ms. 
-        // (dt / 660) gives the percentage of the animation that should complete this frame.
-        // Multiply by current VCR.speed so it instantly reacts to speed changes.
         anim.progress += (dt / 660) * VCR.speed;
       }
   
@@ -3450,7 +3461,7 @@
       const toPt = map.latLngToContainerPoint(anim.to);
       const currentX = fromPt.x + (toPt.x - fromPt.x) * t;
       const currentY = fromPt.y + (toPt.y - fromPt.y) * t;
-
+  
       // Draw Contrail (glow)
       animCtx.beginPath();
       animCtx.moveTo(fromPt.x, fromPt.y);
@@ -3460,7 +3471,7 @@
       animCtx.globalAlpha = anim.opacity * 0.2;
       animCtx.lineCap = 'round';
       animCtx.stroke();
-
+  
       // Draw Core Line
       animCtx.beginPath();
       animCtx.moveTo(fromPt.x, fromPt.y);
@@ -3475,7 +3486,7 @@
       animCtx.globalAlpha = anim.opacity;
       animCtx.stroke();
       animCtx.setLineDash([]); // Reset for next draw
-
+  
       // Draw Leading Dot
       animCtx.beginPath();
       animCtx.arc(currentX, currentY, 3.5, 0, Math.PI * 2);
@@ -3485,7 +3496,7 @@
       animCtx.strokeStyle = anim.hashOutline;
       animCtx.stroke();
       animCtx.globalAlpha = 1.0; // Reset
-
+  
       // Handle completion
       if (t >= 1) {
           createFadingLeafletLine(anim);
@@ -3493,6 +3504,16 @@
           activeAnimations.splice(i, 1);
       }
     }
+  
+    // SLEEP LOGIC: If paused, halt the loop and prepare all animations for a clean wake
+    if (isPaused) {
+      isAnimating = false;
+      for (let i = 0; i < activeAnimations.length; i++) {
+        activeAnimations[i].lastTick = null; 
+      }
+      return; // Stop requesting frames. GPU goes to sleep.
+    }
+  
     requestAnimationFrame(renderAnimations);
   }
 
@@ -3561,7 +3582,7 @@
       from: from,
       to: to,
       progress: 0, // Start at 0%
-      lastTick: performance.now(), // Track when this animation was last updated
+      lastTick: null,
       opacity: mainOpacity,
       isDashed: isDashed,
       lineColor: (colorByHash && hash && !isDashed && window.HashColor) ? hashFill : color,
@@ -3570,16 +3591,7 @@
       hashOutline: hashOutline,
       onComplete: onComplete
     });
-    
-    // Push to the hardware-accelerated canvas engine
-    activeAnimations.push({
-      from: from,
-      to: to,
-      progress: 0,
-      lastTick: performance.now(),
-      // ... rest of the properties ...
-    });
-  
+     
     // WAKE LOGIC: Kickstart the loop if it is currently sleeping
     if (!isAnimating) {
       isAnimating = true;
