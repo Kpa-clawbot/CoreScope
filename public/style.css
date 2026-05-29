@@ -907,6 +907,36 @@ img.brand-logo {
    * #534 E2E test (and for any user whose navbar mirror failed to inject). */
   #pktLeft .page-header { display: none !important; }
   #pktLeft .pkt-filter-expr { display: none !important; }
+  /* #1461 followup: the navbar mirror is always present on mobile.
+   * Hide the in-page Filters button visually so we don't double-render the
+   * affordance. Use visibility:hidden (not display:none) so it stays in
+   * the DOM + clickable for the #534 E2E. Pull it to zero size so it
+   * doesn't reserve layout space. */
+  .filter-bar > .filter-toggle-btn {
+    visibility: hidden !important;
+    position: absolute;
+    width: 0;
+    height: 0;
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+    pointer-events: auto;
+  }
+  /* Bar itself has no chrome unless expanded */
+  .filter-bar {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    min-height: 0 !important;
+  }
+  .filter-bar.filters-expanded {
+    padding: 6px 8px !important;
+    margin-bottom: 4px !important;
+    background: var(--surface-2, rgba(0,0,0,0.05)) !important;
+    border: 1px solid var(--border, #333) !important;
+    border-radius: 6px !important;
+  }
 
   /* Navbar-mirror buttons injected by mobile-page-actions.js. Visual tokens
    * (border, colors) live here so the customizer can theme them and so we
