@@ -909,18 +909,23 @@ img.brand-logo {
   #pktLeft .pkt-filter-expr { display: none !important; }
   /* #1461 followup: the navbar mirror is always present on mobile.
    * Hide the in-page Filters button visually so we don't double-render the
-   * affordance. Use visibility:hidden (not display:none) so it stays in
-   * the DOM + clickable for the #534 E2E. Pull it to zero size so it
-   * doesn't reserve layout space. */
+   * affordance. CANNOT use visibility:hidden (#1475 attempt) — Playwright
+   * refuses to click visibility:hidden elements, breaking E2E #534.
+   * Instead: opacity:0 + size 0×0 + position:absolute. Element is still
+   * "visible" per Playwright's check (so .click() works for the E2E) but
+   * paints zero pixels for the user. */
   .filter-bar > .filter-toggle-btn {
-    visibility: hidden !important;
+    opacity: 0 !important;
     position: absolute;
-    width: 0;
-    height: 0;
-    padding: 0;
-    margin: 0;
+    width: 0 !important;
+    height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: 0 !important;
     overflow: hidden;
     pointer-events: auto;
+    min-width: 0 !important;
+    min-height: 0 !important;
   }
   /* Bar itself has no chrome unless expanded */
   .filter-bar {
