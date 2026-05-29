@@ -243,19 +243,35 @@ jobs:
 
       - name: Seed grouped-packet row for #1486 collapse test
         # The committed fixture has 499 packets, each with exactly ONE
-        # observation, so the packets-page renders only flat (select-hash)
-        # rows. The #1486 collapse-chevron repro needs at least one
-        # grouped (toggle-select) row, so we attach 2 extra observations
-        # to the newest transmission. Bump that transmission's
-        # first_seen so it lands at the top and is visible without
-        # scrolling.
+        # observation, so the packets-page renders only flat
+        # (select-hash) rows. The #1486 repro needs at least one grouped
+        # (toggle-select) row. Insert a NEW transmission with 3
+        # observations.
+        #
+        # The server's async hash-migrate (cmd/server/hash_migrate.go)
+        # recomputes `transmissions.hash` from `raw_hex` via
+        # ComputeContentHash(), so the inserted hash MUST equal that
+        # function's output for the chosen raw_hex — otherwise the row
+        # gets relabelled and the E2E can't find it.
+        #
+        # raw_hex 15000102030405060708090a0b0c0d0e0f
+        #   → header=0x15 (route_type=1, payload_type=5)
+        #   → ComputeContentHash(...) = fae0c9e6d357a814
+        #
+        # The first_seen / observation timestamps are pinned to a date
+        # within retentionHours but outside the default 15-min UI
+        # window so the row is hidden in the default view (keeping
+        # test-e2e-playwright's first-10-rows hex-pane test
+        # unaffected) and reachable via the explicit ?timeWindow=0
+        # deep-link the #1486 test uses.
         run: |
           sqlite3 test-fixtures/e2e-fixture.db <<'SQL'
-          UPDATE transmissions SET first_seen='2099-01-01T00:00:00Z' WHERE id=500;
+          INSERT INTO transmissions(id,raw_hex,hash,first_seen,route_type,payload_type,payload_version,decoded_json,channel_hash,from_pubkey)
+            VALUES (9001486,'15000102030405060708090a0b0c0d0e0f','fae0c9e6d357a814','2026-05-28T00:00:00Z',1,5,0,'{"type":"CHAN","channel":"#test","text":"#1486 fixture"}',NULL,NULL);
           INSERT INTO observations(transmission_id,observer_idx,direction,snr,rssi,score,path_json,timestamp,resolved_path) VALUES
-            (500,2,'rx',5.5,-95,0,'["AA"]',CAST(strftime('%s','2099-01-01T00:00:00Z') AS INTEGER),'["aa00000000000000000000000000000000000000000000000000000000000000"]'),
-            (500,3,'rx',6.5,-90,0,'["BB"]',CAST(strftime('%s','2099-01-01T00:00:00Z') AS INTEGER),'["bb00000000000000000000000000000000000000000000000000000000000000"]');
-          UPDATE observations SET timestamp=CAST(strftime('%s','2099-01-01T00:00:00Z') AS INTEGER) WHERE transmission_id=500;
+            (9001486,1,'rx',5.0,-95,0,'["AA"]',CAST(strftime('%s','2026-05-28T00:00:00Z') AS INTEGER),'["aa00000000000000000000000000000000000000000000000000000000000000"]'),
+            (9001486,2,'rx',5.5,-92,0,'["BB"]',CAST(strftime('%s','2026-05-28T00:00:00Z') AS INTEGER),'["bb00000000000000000000000000000000000000000000000000000000000000"]'),
+            (9001486,3,'rx',6.0,-90,0,'["CC"]',CAST(strftime('%s','2026-05-28T00:00:00Z') AS INTEGER),'["cc00000000000000000000000000000000000000000000000000000000000000"]');
           SQL
 
       - name: Migrate fixture DB to current schema (#1287)

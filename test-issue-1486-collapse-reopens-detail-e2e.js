@@ -18,12 +18,18 @@
  * collapsed AND the #pktRight panel must remain in its "empty" /
  * collapsed state.
  *
+ * The CI workflow's "Seed grouped-packet row for #1486" step inserts a
+ * transmission with hash SEED_HASH that carries 3 observations so the
+ * page renders a grouped (toggle-select) row.  When running locally,
+ * seed the same row (see .github/workflows/deploy.yml for the SQL).
+ *
  * Usage: BASE_URL=http://localhost:13581 node test-issue-1486-collapse-reopens-detail-e2e.js
  */
 'use strict';
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://localhost:13581';
+const SEED_HASH = 'fae0c9e6d357a814';
 
 let passed = 0, failed = 0;
 async function step(name, fn) {
@@ -45,45 +51,24 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
   console.log(`\n=== #1486 packets collapse-reopens-detail E2E against ${BASE} ===`);
 
-  await step('navigate to /packets, enable group-by-hash, wait for a group-header row', async () => {
-    await page.goto(BASE + '/#/packets', { waitUntil: 'domcontentloaded' });
+  await step('navigate to /packets filtered to seeded grouped row', async () => {
+    // Deep-link with the seeded hash filter + unbounded time window so
+    // the seeded row is the only thing in the table and is visible.
+    await page.goto(BASE + '/#/packets?hash=' + SEED_HASH + '&timeWindow=0', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#pktBody', { timeout: 8000 });
-    // Widen window so fixture rows render
-    await page.evaluate(() => {
-      const sel = document.getElementById('fTimeWindow');
-      if (sel) { sel.value = '0'; sel.dispatchEvent(new Event('change', { bubbles: true })); }
-    });
-    // Widen window so the seeded grouped fixture row renders
-    await page.evaluate(() => {
-      const sel = document.getElementById('fTimeWindow');
-      if (sel) { sel.value = '0'; sel.dispatchEvent(new Event('change', { bubbles: true })); }
-    });
-    // Group by Hash is ON by default; do not toggle.
-    // Wait for at least one toggle-select (grouped) row
     await page.waitForFunction(
-      () => !!document.querySelector('#pktBody tr[data-action="toggle-select"]'),
+      (h) => !!document.querySelector(`#pktBody tr[data-hash="${h}"][data-action="toggle-select"]`),
+      SEED_HASH,
       { timeout: 12000 }
-    );
-    // Wait for at least one toggle-select row
-    await page.waitForFunction(
-      () => !!document.querySelector('#pktBody tr[data-action="toggle-select"]'),
-      { timeout: 10000 }
     );
   });
 
   await step('1st chevron click expands row AND opens detail panel', async () => {
-    const beforeHash = await page.evaluate(() => {
-      const row = document.querySelector('#pktBody tr[data-action="toggle-select"]');
-      return row?.dataset.hash || null;
-    });
-    assert(beforeHash, 'no group-header row found');
-
     await page.evaluate((h) => {
-      const row = document.querySelector(`#pktBody tr[data-action="toggle-select"][data-hash="${h}"]`);
+      const row = document.querySelector(`#pktBody tr[data-hash="${h}"][data-action="toggle-select"]`);
       row.click();
-    }, beforeHash);
+    }, SEED_HASH);
 
-    // Wait for detail panel to populate
     await page.waitForFunction(
       () => {
         const p = document.getElementById('pktRight');
@@ -93,13 +78,13 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     );
 
     const state = await page.evaluate((h) => {
-      const row = document.querySelector(`#pktBody tr[data-action="toggle-select"][data-hash="${h}"]`);
+      const row = document.querySelector(`#pktBody tr[data-hash="${h}"][data-action="toggle-select"]`);
       const panel = document.getElementById('pktRight');
       return {
         expanded: !!row && row.classList.contains('expanded'),
         panelEmpty: !!panel && panel.classList.contains('empty'),
       };
-    }, beforeHash);
+    }, SEED_HASH);
     assert(state.expanded, 'row should be expanded after 1st click');
     assert(!state.panelEmpty, 'detail panel should be open after 1st click');
   });
@@ -119,30 +104,24 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
 
   await step('2nd chevron click COLLAPSES the row WITHOUT reopening the detail panel', async () => {
-    const hash = await page.evaluate(() => {
-      const row = document.querySelector('#pktBody tr[data-action="toggle-select"].expanded');
-      return row?.dataset.hash || null;
-    });
-    assert(hash, 'no expanded group-header row found before 2nd click');
-
     await page.evaluate((h) => {
-      const row = document.querySelector(`#pktBody tr[data-action="toggle-select"][data-hash="${h}"]`);
+      const row = document.querySelector(`#pktBody tr[data-hash="${h}"][data-action="toggle-select"]`);
       row.click();
-    }, hash);
+    }, SEED_HASH);
 
-    // Give any async pktSelectHash time to (incorrectly) repopulate panel.
-    await page.waitForTimeout(800);
+    // Give any (incorrect) async pktSelectHash time to re-populate.
+    await page.waitForTimeout(1000);
 
     const state = await page.evaluate((h) => {
-      const row = document.querySelector(`#pktBody tr[data-action="toggle-select"][data-hash="${h}"]`);
+      const row = document.querySelector(`#pktBody tr[data-hash="${h}"][data-action="toggle-select"]`);
       const panel = document.getElementById('pktRight');
       return {
         expanded: !!row && row.classList.contains('expanded'),
         panelEmpty: !!panel && panel.classList.contains('empty'),
       };
-    }, hash);
+    }, SEED_HASH);
     assert(!state.expanded, 'row must be collapsed after 2nd chevron click');
-    assert(state.panelEmpty, 'detail panel must NOT reopen after collapse (was: ' + (state.panelEmpty ? 'empty' : 'populated') + ')');
+    assert(state.panelEmpty, 'detail panel must NOT reopen after collapse');
   });
 
   await browser.close();
