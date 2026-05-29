@@ -1,12 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-// #1481 P0-1: handler must serve from cache when set.
+// #1481 P0-1: handler must serve from pre-marshaled cache when set.
 func TestNeighborGraphCacheServesFromAtomicPointer(t *testing.T) {
 	s := &Server{}
 	resp := NeighborGraphResponse{
@@ -14,7 +15,8 @@ func TestNeighborGraphCacheServesFromAtomicPointer(t *testing.T) {
 		Edges: []GraphEdge{},
 		Stats: GraphStats{TotalNodes: 1},
 	}
-	s.neighborGraphCache.ptr.Store(&neighborGraphCacheEntry{resp: resp})
+	raw, _ := json.Marshal(resp)
+	s.neighborGraphCache.ptr.Store(&neighborGraphCacheEntry{resp: resp, json: raw})
 
 	req := httptest.NewRequest("GET", "/api/analytics/neighbor-graph", nil)
 	w := httptest.NewRecorder()
@@ -34,15 +36,13 @@ func TestNeighborGraphCacheBypassOnRegionFilter(t *testing.T) {
 	resp := NeighborGraphResponse{
 		Nodes: []GraphNode{{Pubkey: "deadbeef", Name: "cached-only"}},
 	}
-	s.neighborGraphCache.ptr.Store(&neighborGraphCacheEntry{resp: resp})
+	raw, _ := json.Marshal(resp)
+	s.neighborGraphCache.ptr.Store(&neighborGraphCacheEntry{resp: resp, json: raw})
 
 	req := httptest.NewRequest("GET", "/api/analytics/neighbor-graph?region=USA", nil)
 	w := httptest.NewRecorder()
-	// Will nil-deref on s.store etc. — that's fine; the assertion we want
-	// is "we did NOT short-circuit on the cached entry". Recover the panic.
 	defer func() {
 		_ = recover()
-		// If we reached here without writing "cached-only" we proved bypass.
 		if strings.Contains(w.Body.String(), "cached-only") {
 			t.Fatalf("region=X must bypass cache, but cached value was served")
 		}

@@ -240,9 +240,9 @@ func (s *Server) handleNeighborGraph(w http.ResponseWriter, r *http.Request) {
 	// snapshot maintained by the background recomputer (5 min cadence).
 	// Default shape: minCount=5, minScore=0.1, no region, no role.
 	if minCount == 5 && minScore == 0.1 && region == "" && roleFilter == "" {
-		if resp, ok := s.loadNeighborGraphCache(); ok {
+		if raw, ok := s.loadNeighborGraphCacheBytes(); ok {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			w.Write(raw)
 			return
 		}
 	}
