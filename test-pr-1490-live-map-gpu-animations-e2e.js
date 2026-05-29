@@ -3,7 +3,7 @@ const { test, expect } = require('@playwright/test');
 test.describe('Live Map Canvas Animation Engine', () => {
   test('canvas initializes and animations drain correctly', async ({ page }) => {
     // 1. Load the map route
-    await page.goto('/#/map');
+    await page.goto('/#/live');
 
     // Ensure the map container has loaded
     const mapContainer = page.locator('#liveMap');
@@ -19,15 +19,15 @@ test.describe('Live Map Canvas Animation Engine', () => {
     await page.evaluate((count) => {
       // Ensure the VCR speed is at standard 1x for predictable timing
       if (window._liveVcrSetMode) window._liveVcrSetMode('LIVE');
-      
+
       for (let i = 0; i < count; i++) {
         window._liveDrawAnimatedLine(
-          [37.4, -122.0], 
-          [37.5, -122.1], 
-          '#00ff00', 
-          null, 
-          null, 
-          '00AA', 
+          [37.4, -122.0],
+          [37.5, -122.1],
+          '#00ff00',
+          null,
+          null,
+          '00AA',
           'test-hash-' + i
         );
       }
@@ -48,7 +48,7 @@ test.describe('Live Map Canvas Animation Engine', () => {
       return await page.evaluate(() => window._liveTestSeams.getAnimCount());
     }, {
       message: 'activeAnimations did not drain to 0 within 2x duration',
-      timeout: 1500, 
+      timeout: 1500,
     }).toBe(0);
 
     // 5. Assert the engine gracefully went back to sleep

@@ -23,15 +23,15 @@ test('Canvas array, flag, and loop are implemented', () => {
 test('Leaflet integration and resizing handles DPR correctly', () => {
   assert.ok(src.includes('map.latLngToLayerPoint'), 'Map de-sync regression: Canvas not using LayerPoints for CSS transform sync');
   assert.ok(src.includes('animCtx.setTransform(dpr, 0, 0, dpr, 0, 0)'), 'HiDPI regression: resizeAnimCanvas does not reset transform matrix');
-  assert.ok(src.includes('matchMedia'), 'Monitor drag regression: DPR listener missing');
+  assert.ok(src.includes('matchMedia(`(resolution'), 'Monitor drag regression: DPR listener missing');
 });
 
 console.log('\n=== Battery / GPU Optimization (State Machine) ===');
 
 test('Engine gracefully sleeps and wakes', () => {
   assert.ok(src.includes('isAnimating = false'), 'Battery drain regression: Engine does not explicitly sleep on empty queue');
-  assert.ok(src.includes('window._wakeCanvasEngine'), 'Wake controller missing: _wakeCanvasEngine not exposed');
-  assert.ok(src.includes('anim.lastTick = null'), 'Time-jump regression: Engine does not nullify tick on pause');
+  assert.ok(src.includes('_liveTestSeams.wake'), 'Wake controller missing: wake not exposed on _liveTestSeams');
+  assert.ok(src.includes('.lastTick = null'), 'Time-jump regression: Engine does not nullify tick on pause');
 });
 
 console.log('\n=== Concurrency cap ===');
@@ -64,7 +64,7 @@ test('Destroy function cleanly halts canvas engine', () => {
 
 test('Entry points guard against destroyed map', () => {
   const lineStart = src.indexOf('function drawAnimatedLine(');
-  const lineBody = src.substring(lineStart, lineStart + 150);
+  const lineBody = src.substring(lineStart, lineStart + 250);
   assert.ok(lineBody.includes('!map || !animCtx'), 'Race condition: drawAnimatedLine missing map/ctx null guard');
 });
 
@@ -74,14 +74,14 @@ test('no setInterval remains in animation hot path', () => {
   // The only acceptable setIntervals are the UI ones (timeline, clock, prune, rate counter)
   // Count total setInterval occurrences
   const matches = src.match(/setInterval\(/g) || [];
-  // Count known OK ones: _timelineRefreshInterval, _lcdClockInterval, _pruneInterval, _rateCounterInterval
-  const okPatterns = ['_timelineRefreshInterval', '_lcdClockInterval', '_pruneInterval', '_rateCounterInterval'];
+  // Count known OK ones: _timelineRefreshInterval, _lcdClockInterval, _pruneInterval, _rateCounterInterval, _affinityInterval
+  const okPatterns = ['_timelineRefreshInterval', '_lcdClockInterval', '_pruneInterval', '_rateCounterInterval', '_affinityInterval'];
   let okCount = 0;
   for (const p of okPatterns) {
     if (src.includes(p + ' = setInterval') || src.includes(p + '= setInterval')) okCount++;
   }
   // Allow some non-animation setIntervals (the 4 UI ones above)
-  assert.ok(matches.length <= okCount + 1, 
+  assert.ok(matches.length <= okCount + 1,
     `Found ${matches.length} setInterval calls, expected at most ${okCount + 1} (non-animation). Some animation setIntervals may remain.`);
 });
 
@@ -111,16 +111,10 @@ test2('animatePath fadeOut() has null guard', () => {
   assert.ok(fadeOutBody.includes('!animLayer || !pathsLayer'), 'fadeOut() missing animLayer/pathsLayer null guard');
 });
 
-test2('drawAnimatedLine animateLine() has null guard', () => {
-  const lineStart = src2.indexOf('function animateLine(now)');
-  const lineBody = src2.substring(lineStart, lineStart + 200);
-  assert.ok(lineBody.includes('!animLayer || !pathsLayer'), 'animateLine() missing animLayer/pathsLayer null guard');
-});
-
-test2('drawAnimatedLine animateFade() has null guard', () => {
-  const fadeStart = src2.indexOf('function animateFade(now)');
-  const fadeBody = src2.substring(fadeStart, fadeStart + 200);
-  assert.ok(fadeBody.includes('!pathsLayer'), 'animateFade() missing pathsLayer null guard');
+test2('drawAnimatedLine renderFades() has null guard', () => {
+  const fadeStart = src2.indexOf('function renderFades(now)');
+  const fadeBody = src2.substring(fadeStart, fadeStart + 300);
+  assert.ok(fadeBody.includes('!pathsLayer'), 'renderFades() missing pathsLayer null guard');
 });
 
 test2('pulseNode animatePulse() has null guard', () => {
