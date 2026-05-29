@@ -266,12 +266,18 @@ jobs:
         # deep-link the #1486 test uses.
         run: |
           sqlite3 test-fixtures/e2e-fixture.db <<'SQL'
+          -- Use an explicit small id (0) so the row sorts BELOW the top 10
+          -- by id DESC. test-e2e-playwright's hex-pane test scans the
+          -- first 10 #pktBody rows for one with ≥2 observations; if our
+          -- seeded row lands in the first 10 that test mid-clicks our
+          -- detail-obs-row entries (which have NULL raw_hex) and the
+          -- DOM rebuild detaches the element mid-click.
           INSERT INTO transmissions(id,raw_hex,hash,first_seen,route_type,payload_type,payload_version,decoded_json,channel_hash,from_pubkey)
-            VALUES (9001486,'15000102030405060708090a0b0c0d0e0f','fae0c9e6d357a814','2026-05-28T00:00:00Z',1,5,0,'{"type":"CHAN","channel":"#test","text":"#1486 fixture"}',NULL,NULL);
+            VALUES (0,'15000102030405060708090a0b0c0d0e0f','fae0c9e6d357a814','2026-05-28T00:00:00Z',1,5,0,'{"type":"CHAN","channel":"#test","text":"#1486 fixture"}',NULL,NULL);
           INSERT INTO observations(transmission_id,observer_idx,direction,snr,rssi,score,path_json,timestamp,resolved_path) VALUES
-            (9001486,1,'rx',5.0,-95,0,'["AA"]',CAST(strftime('%s','2026-05-28T00:00:00Z') AS INTEGER),'["aa00000000000000000000000000000000000000000000000000000000000000"]'),
-            (9001486,2,'rx',5.5,-92,0,'["BB"]',CAST(strftime('%s','2026-05-28T00:00:00Z') AS INTEGER),'["bb00000000000000000000000000000000000000000000000000000000000000"]'),
-            (9001486,3,'rx',6.0,-90,0,'["CC"]',CAST(strftime('%s','2026-05-28T00:00:00Z') AS INTEGER),'["cc00000000000000000000000000000000000000000000000000000000000000"]');
+            (0,1,'rx',5.0,-95,0,'["AA"]',CAST(strftime('%s','2026-05-28T00:00:00Z') AS INTEGER),'["aa00000000000000000000000000000000000000000000000000000000000000"]'),
+            (0,2,'rx',5.5,-92,0,'["BB"]',CAST(strftime('%s','2026-05-28T00:00:00Z') AS INTEGER),'["bb00000000000000000000000000000000000000000000000000000000000000"]'),
+            (0,3,'rx',6.0,-90,0,'["CC"]',CAST(strftime('%s','2026-05-28T00:00:00Z') AS INTEGER),'["cc00000000000000000000000000000000000000000000000000000000000000"]');
           SQL
 
       - name: Migrate fixture DB to current schema (#1287)
