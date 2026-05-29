@@ -2328,6 +2328,19 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
+	// #1481 P0-3: serve from 30s atomic-pointer cache for the default
+	// (no-filter) query shape. This handler does 3 SQL queries each
+	// touching the 1.9M-row observations table; the cache keeps p95 flat
+	// under concurrent load.
+	if r.URL.RawQuery == "" {
+		if cached := s.observersCache.Load(); cached != nil {
+			if !s.observersCacheExpired(time.Unix(0, s.observersCachedAt.Load())) {
+				writeJSON(w, *cached)
+				return
+			}
+		}
+	}
+
 	observers, err := s.db.GetObservers()
 	if err != nil {
 		writeError(w, 500, err.Error())
@@ -2375,10 +2388,16 @@ func (s *Server) handleObservers(w http.ResponseWriter, r *http.Request) {
 			Lat: lat, Lon: lon, NodeRole: nodeRole,
 		})
 	}
-	writeJSON(w, ObserverListResponse{
+	resp := ObserverListResponse{
 		Observers:  result,
 		ServerTime: time.Now().UTC().Format(time.RFC3339),
-	})
+	}
+	// #1481 P0-3: fill the default-query cache.
+	if r.URL.RawQuery == "" {
+		s.observersCache.Store(&resp)
+		s.observersCachedAt.Store(time.Now().UnixNano())
+	}
+	writeJSON(w, resp)
 }
 
 func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {

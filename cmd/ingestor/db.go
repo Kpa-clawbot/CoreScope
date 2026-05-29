@@ -360,6 +360,19 @@ func applySchema(db *sql.DB) error {
 		log.Println("[migration] observations timestamp index created")
 	}
 
+	// #1481 P0-3: covering index for GetObserverPacketCounts. The query
+	// joins observations → observers and GROUP BYs observer_idx with a
+	// timestamp WHERE filter; a composite (observer_idx, timestamp)
+	// index lets SQLite resolve the grouping + range filter from the
+	// index alone instead of a 1.9M-row scan.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'obs_observer_ts_idx_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding (observer_idx, timestamp) composite index on observations...")
+		db.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_observer_idx_timestamp ON observations(observer_idx, timestamp)`)
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('obs_observer_ts_idx_v1')`)
+		log.Println("[migration] observations(observer_idx, timestamp) index created")
+	}
+
 	// observer_metrics table for RF health dashboard
 	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observer_metrics_v1'")
 	if row.Scan(&migDone) != nil {

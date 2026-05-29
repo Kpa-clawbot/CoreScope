@@ -1964,7 +1964,10 @@ func (db *DB) GetNodeLocationsByKeys(keys []string) map[string]map[string]interf
 		placeholders[i] = "?"
 		args[i] = strings.ToLower(k)
 	}
-	query := "SELECT public_key, lat, lon, role FROM nodes WHERE LOWER(public_key) IN (" + strings.Join(placeholders, ",") + ")"
+	// #1481 P0-3: drop LOWER(public_key) — that wrap is non-sargable and
+	// forces a full scan. Nodes are stored lowercase already; we lowercase
+	// args in Go above so a plain IN matches the index on public_key.
+	query := "SELECT public_key, lat, lon, role FROM nodes WHERE public_key IN (" + strings.Join(placeholders, ",") + ")"
 	rows, err := db.conn.Query(query, args...)
 	if err != nil {
 		return result

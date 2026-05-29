@@ -19,6 +19,7 @@ func TestObserversCacheServesFromAtomicPointer(t *testing.T) {
 		ServerTime: time.Now().UTC().Format(time.RFC3339),
 	}
 	s.observersCache.Store(&resp)
+	s.observersCachedAt.Store(time.Now().UnixNano())
 
 	req := httptest.NewRequest("GET", "/api/observers", nil)
 	w := httptest.NewRecorder()
