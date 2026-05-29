@@ -175,6 +175,11 @@ function getHashParams() {
   return new URLSearchParams(location.hash.split('?')[1] || '');
 }
 
+// shouldEmbedRoute — issue #1369 stub. Real impl lands in the green commit.
+function shouldEmbedRoute(basePage, hashSearch) {
+  return false;
+}
+
 function getDistanceUnit() {
   var stored = localStorage.getItem('meshcore-distance-unit');
   if (stored === 'km') return 'km';
