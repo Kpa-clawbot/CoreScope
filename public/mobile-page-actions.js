@@ -75,6 +75,22 @@
   window.addEventListener('hashchange', syncForRoute);
   window.addEventListener('resize', syncForRoute);
 
+  /* #1471 followup: also re-attempt sheet injection on More-button click,
+   * in case the page sat idle past the 5s retry window. The bottom-nav.js
+   * sheet is built lazily on first More-click, and addMissingMoreSheetItems
+   * may have given up before then. Catch-all delegate listener handles this
+   * AND survives any bottom-nav.js rebuild path. */
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t) return;
+    // Trigger whether operator clicked More button or any descendant
+    var moreBtn = t.closest && t.closest('[data-bottom-nav-more], button');
+    if (moreBtn && /more/i.test(moreBtn.textContent || '')) {
+      setTimeout(addMissingMoreSheetItems, 50);
+      setTimeout(addMissingMoreSheetItems, 250);  // belt-and-suspenders for slow builds
+    }
+  }, true);
+
   /* #1461 #7: on mobile, packets-list group-header expand is a UX dead-end
    * (we hid the chevron so there's no way to collapse). Intercept those
    * clicks and force them to the single-select code path instead — the
