@@ -34,7 +34,15 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
   // Always start clean so prior runs don't leak keys/colors.
   await page.goto(BASE + '/', { waitUntil: 'domcontentloaded' });
-  await page.evaluate(() => { try { localStorage.clear(); } catch (e) {} });
+  await page.evaluate(() => {
+    try { localStorage.clear(); } catch (e) {}
+    // #1409/#1410: channels.js no longer force-enables this flag at init.
+    // Encrypted channels are excluded from /api/channels by default, so the
+    // sidebar's Encrypted section renders 0 rows and the "lock badge" step
+    // has nothing to assert against. Opt in explicitly so this suite
+    // exercises the encrypted-row rendering path (which is what it's for).
+    try { localStorage.setItem('channels-show-encrypted', 'true'); } catch (e) {}
+  });
 
   await page.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#chList .ch-item', { timeout: 10000 });

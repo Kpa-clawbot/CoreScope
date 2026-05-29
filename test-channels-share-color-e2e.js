@@ -46,7 +46,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   await page.fill('#chPskKey', '00112233445566778899aabbccddeeff');
   await page.fill('#chPskName', 'CovShare');
   await page.click('#chPskAddBtn');
-  await page.waitForSelector('#chAddChannelModal.hidden', { timeout: 5000 });
+  await page.waitForFunction(() => document.getElementById('chAddChannelModal')?.classList.contains('hidden'), { timeout: 5000 });
   await page.waitForSelector('.ch-section-mychannels [data-share-channel]',
     { timeout: 5000 });
 
@@ -74,14 +74,14 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
 
   await step('Escape closes share modal', async () => {
     await page.keyboard.press('Escape');
-    await page.waitForSelector('#chShareModal.hidden', { timeout: 3000 });
+    await page.waitForFunction(() => document.getElementById('chShareModal')?.classList.contains('hidden'), { timeout: 3000 });
   });
 
   await step('Share with no stored key → error modal (openShareModalError)', async () => {
     // Wipe the stored key for our channel, then click Share again.
     await page.evaluate(() => {
       try {
-        var KEY = 'meshcore-channel-keys';
+        var KEY = 'corescope_channel_keys';
         var keys = JSON.parse(localStorage.getItem(KEY) || '{}');
         // Remove every key so getStoredKeys()[name] is undefined.
         localStorage.setItem(KEY, '{}');
@@ -100,7 +100,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     assert(fieldsHidden, 'field groups should be hidden in error mode');
     // Close via the X button.
     await page.click('#chShareModalClose');
-    await page.waitForSelector('#chShareModal.hidden', { timeout: 3000 });
+    await page.waitForFunction(() => document.getElementById('chShareModal')?.classList.contains('hidden'), { timeout: 3000 });
   });
 
   await step('color dot click invokes ChannelColorPicker.show', async () => {
@@ -125,7 +125,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.fill('#chPskKey', '11223344556677889900aabbccddeeff');
     await page.fill('#chPskName', 'CovKbd');
     await page.click('#chPskAddBtn');
-    await page.waitForSelector('#chAddChannelModal.hidden', { timeout: 5000 });
+    await page.waitForFunction(() => document.getElementById('chAddChannelModal')?.classList.contains('hidden'), { timeout: 5000 });
     await page.waitForSelector('.ch-section-mychannels [data-share-channel]',
       { timeout: 5000 });
     const shareSpan = await page.$('.ch-section-mychannels [data-share-channel]');

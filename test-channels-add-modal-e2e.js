@@ -31,7 +31,8 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   // Auto-confirm window.confirm for remove flow.
-  ctx.on('page', (p) => p.on('dialog', (d) => d.accept()));
+  // NOTE: only one dialog handler — Playwright errors if a dialog is
+  // accepted twice. Attach to the page after it's created.
   const page = await ctx.newPage();
   page.on('dialog', (d) => d.accept());
   page.setDefaultTimeout(8000);
@@ -65,16 +66,16 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         /Key generated/i.test(out.textContent || '')));
     });
     assert(filled, 'qr-output should be populated after generate');
-    // Key persists in localStorage under 'meshcore-channel-keys'.
+    // Key persists in localStorage under 'corescope_channel_keys'.
     const stored = await page.evaluate(() => {
-      try { return JSON.parse(localStorage.getItem('meshcore-channel-keys') || '{}'); }
+      try { return JSON.parse(localStorage.getItem('corescope_channel_keys') || '{}'); }
       catch (e) { return {}; }
     });
     assert(Object.keys(stored).length > 0,
       'at least one key should be persisted, got: ' + JSON.stringify(stored));
     // Close modal for next test.
     await page.keyboard.press('Escape');
-    await page.waitForSelector('#chAddChannelModal.hidden', { timeout: 3000 });
+    await page.waitForFunction(() => document.getElementById('chAddChannelModal')?.classList.contains('hidden'), { timeout: 3000 });
   });
 
   await step('Section 2: invalid hex shows inline error, does NOT close modal', async () => {
@@ -95,7 +96,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.fill('#chPskKey', KEY);
     await page.fill('#chPskName', 'CovPsk');
     await page.click('#chPskAddBtn');
-    await page.waitForSelector('#chAddChannelModal.hidden', { timeout: 5000 });
+    await page.waitForFunction(() => document.getElementById('chAddChannelModal')?.classList.contains('hidden'), { timeout: 5000 });
     // Wait for the My Channels section to appear with our row.
     await page.waitForFunction(() => {
       const sec = document.querySelector('.ch-section-mychannels');
@@ -107,7 +108,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await openAddModal();
     await page.fill('#chHashtagName', '#covhashtag');
     await page.click('#chHashtagBtn');
-    await page.waitForSelector('#chAddChannelModal.hidden', { timeout: 5000 });
+    await page.waitForFunction(() => document.getElementById('chAddChannelModal')?.classList.contains('hidden'), { timeout: 5000 });
     await page.waitForFunction(() => {
       const sec = document.querySelector('.ch-section-mychannels');
       return sec && /covhashtag/i.test(sec.textContent);
@@ -148,7 +149,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   await step('Escape key closes add modal', async () => {
     await openAddModal();
     await page.keyboard.press('Escape');
-    await page.waitForSelector('#chAddChannelModal.hidden', { timeout: 3000 });
+    await page.waitForFunction(() => document.getElementById('chAddChannelModal')?.classList.contains('hidden'), { timeout: 3000 });
   });
 
   await step('Remove channel: clicking ✕ removes row + clears localStorage key', async () => {

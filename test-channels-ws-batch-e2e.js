@@ -77,7 +77,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.waitForFunction((prev) => {
       const s = window._channelsGetStateForTest();
       return s.messages.length === prev + 1;
-    }, { timeout: 3000 }, before);
+    }, before, { timeout: 3000 });
     const last = await page.evaluate(() => {
       const s = window._channelsGetStateForTest();
       return s.messages[s.messages.length - 1];
@@ -107,7 +107,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     }, selectedHash);
     await page.waitForFunction((prev) =>
       window._channelsGetStateForTest().messages.length === prev + 1,
-      { timeout: 3000 }, before);
+      before, { timeout: 3000 });
     const last = await page.evaluate(() => {
       const s = window._channelsGetStateForTest();
       return s.messages[s.messages.length - 1];
@@ -146,7 +146,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     }, selectedHash);
     await page.waitForFunction((prev) =>
       window._channelsGetStateForTest().messages.length === prev + 1,
-      { timeout: 3000 }, before);
+      before, { timeout: 3000 });
     const last = await page.evaluate(() => {
       const s = window._channelsGetStateForTest();
       return s.messages[s.messages.length - 1];
@@ -171,7 +171,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     await page.waitForFunction((h) => {
       const s = window._channelsGetStateForTest();
       return s.channels.some((c) => c.hash === h);
-    }, { timeout: 3000 }, newHash);
+    }, newHash, { timeout: 3000 });
     const ch = await page.evaluate((h) => {
       const s = window._channelsGetStateForTest();
       return s.channels.find((c) => c.hash === h);
