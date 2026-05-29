@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -1105,6 +1106,27 @@ func firstNonEmpty(vals ...string) string {
 // the frame, not when the MQTT message is published — so a buffered packet
 // uploaded hours late still carries its true receive time. Using ingest time
 // (time.Now()) here mis-dated such packets by the upload delay.
+// #1466 followup: per-observer log rate-limiter for naive-skew warnings.
+// Returns true if the caller should log; false if a recent log for this
+// observer is still within the cooldown window. Concurrent-safe.
+var (
+	naiveSkewLogMu sync.Mutex
+	naiveSkewLog   = make(map[string]time.Time)
+)
+
+const naiveSkewLogCooldown = time.Hour
+
+func shouldLogNaiveSkew(observer string) bool {
+	naiveSkewLogMu.Lock()
+	defer naiveSkewLogMu.Unlock()
+	now := time.Now()
+	if last, ok := naiveSkewLog[observer]; ok && now.Sub(last) < naiveSkewLogCooldown {
+		return false
+	}
+	naiveSkewLog[observer] = now
+	return true
+}
+
 func resolveRxTime(msg map[string]interface{}, tag string) string {
 	now := time.Now().UTC()
 	raw, _ := msg["timestamp"].(string)
@@ -1147,7 +1169,17 @@ func resolveRxTime(msg map[string]interface{}, tag string) string {
 			delta = -delta
 		}
 		if delta > naiveTolerance {
-			log.Printf("MQTT [%s] naive timestamp %q off by %s, using ingest time", tag, raw, delta.Round(time.Second))
+			// #1466 followup: per-observer log rate-limit. The original
+			// fix logged on every message, which is fine when one observer
+			// has wrong-TZ clock and you want to see it once — but it
+			// drowned the log when an operator left a misconfigured
+			// observer running for hours. observer.last_seen already uses
+			// ingest time regardless (#1466) so this only matters for
+			// per-packet rxTime accuracy in analytics. Log once per
+			// observer per hour.
+			if shouldLogNaiveSkew(tag) {
+				log.Printf("MQTT [%s] naive timestamp %q off by %s, using ingest time (suppressing further for 1h)", tag, raw, delta.Round(time.Second))
+			}
 			return now.Format(time.RFC3339)
 		}
 	}
