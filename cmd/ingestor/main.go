@@ -1147,7 +1147,10 @@ func resolveRxTime(msg map[string]interface{}, tag string) string {
 			delta = -delta
 		}
 		if delta > naiveTolerance {
-			log.Printf("MQTT [%s] naive timestamp %q off by %s, using ingest time", tag, raw, delta.Round(time.Second))
+			// #1478: log silenced — was firing per-message + drowning logs.
+			// observer.last_seen uses ingest time regardless (#1466), and
+			// the bad observer should be surfaced in the UI (see #1478)
+			// rather than per-message console noise.
 			return now.Format(time.RFC3339)
 		}
 	}
