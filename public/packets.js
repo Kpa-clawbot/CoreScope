@@ -1939,7 +1939,14 @@
           }
         }
         else if (action === 'select-hash') pktSelectHash(value);
-        else if (action === 'toggle-select') { pktToggleGroup(value); pktSelectHash(value); }
+        else if (action === 'toggle-select') {
+          // #1486: pktToggleGroup() already opens the detail panel on EXPAND
+          // (via selectPacket()), and must NOT open it on COLLAPSE. The
+          // previously-unconditional pktSelectHash() trailing call was both
+          // redundant on expand AND reopened the panel the operator had just
+          // closed when they clicked the chevron to collapse — drop it.
+          pktToggleGroup(value);
+        }
       };
       pktBody.addEventListener('click', handler);
       pktBody.addEventListener('keydown', handler);
