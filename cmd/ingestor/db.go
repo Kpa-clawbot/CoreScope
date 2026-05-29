@@ -161,7 +161,10 @@ func applySchema(db *sql.DB) error {
 			uptime_secs INTEGER,
 			noise_floor REAL,
 			inactive INTEGER DEFAULT 0,
-			last_packet_at TEXT DEFAULT NULL
+			last_packet_at TEXT DEFAULT NULL,
+			clock_skew_seconds INTEGER DEFAULT NULL,
+			clock_skew_count_24h INTEGER DEFAULT 0,
+			clock_last_naive_at TEXT DEFAULT NULL
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes(last_seen);
@@ -495,6 +498,28 @@ func applySchema(db *sql.DB) error {
 		}
 		db.Exec(`INSERT INTO _migrations (name) VALUES ('observers_last_packet_at_v1')`)
 		log.Println("[migration] observers.last_packet_at column added")
+	}
+
+	// Migration: per-observer naive-clock skew tracking (#1478).
+	// When the ingestor clamps a packet's envelope timestamp because the
+	// observer emitted a zone-less local-time string off from UTC by >15min
+	// (resolveRxTime in main.go), we record the event here so the UI can
+	// surface a ⚠️ chip + banner. Decays after 24h via server-side read sweep.
+	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'observers_clock_naive_v1'")
+	if row.Scan(&migDone) != nil {
+		log.Println("[migration] Adding clock-naive columns to observers (#1478)...")
+		// Each ALTER is independent — ignore "duplicate column" so reruns are safe.
+		for _, stmt := range []string{
+			`ALTER TABLE observers ADD COLUMN clock_skew_seconds INTEGER DEFAULT NULL`,
+			`ALTER TABLE observers ADD COLUMN clock_skew_count_24h INTEGER DEFAULT 0`,
+			`ALTER TABLE observers ADD COLUMN clock_last_naive_at TEXT DEFAULT NULL`,
+		} {
+			if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+				return fmt.Errorf("clock_naive migration: %w", err)
+			}
+		}
+		db.Exec(`INSERT INTO _migrations (name) VALUES ('observers_clock_naive_v1')`)
+		log.Println("[migration] observers.clock_naive columns added")
 	}
 
 	// Migration: backfill observations.path_json from raw_hex (#888)
@@ -1369,6 +1394,39 @@ func (s *Store) UpdateNodeDefaultScope(pubkey, scope string) error {
 	}
 	// Mirror to inactive_nodes (node may be there if recently moved by retention).
 	_, err := s.db.Exec(`UPDATE inactive_nodes SET default_scope = ? WHERE public_key = ?`, scope, pubkey)
+	return err
+}
+
+// RecordNaiveSkew is called when resolveRxTime() clamps a packet's envelope
+// timestamp because the observer is emitting a zone-less local-time string
+// off from UTC by more than 15 min (issue #1478). Stamps the observer's
+// clock_skew_seconds / clock_skew_count_24h / clock_last_naive_at so the
+// server can surface a ⚠️ chip + banner in the UI.
+//
+// The count is reset to 1 (not incremented) if no event has been recorded in
+// the past 24h, otherwise incremented. deltaSec is signed: negative = observer
+// clock is behind UTC, positive = ahead.
+func (s *Store) RecordNaiveSkew(observerID string, deltaSec int64, now time.Time) error {
+	if observerID == "" {
+		return nil
+	}
+	nowStr := now.UTC().Format(time.RFC3339)
+	cutoff := now.Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	// One INSERT-or-UPDATE round trip. ON CONFLICT path resets the rolling
+	// counter when the previous event is older than the 24h window, otherwise
+	// increments it.
+	_, err := s.db.Exec(`
+		INSERT INTO observers (id, clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at)
+		VALUES (?, ?, 1, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			clock_skew_seconds = excluded.clock_skew_seconds,
+			clock_last_naive_at = excluded.clock_last_naive_at,
+			clock_skew_count_24h = CASE
+				WHEN clock_last_naive_at IS NULL OR clock_last_naive_at < ?
+					THEN 1
+				ELSE COALESCE(clock_skew_count_24h, 0) + 1
+			END
+	`, observerID, deltaSec, nowStr, cutoff)
 	return err
 }
 

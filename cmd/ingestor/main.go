@@ -593,7 +593,14 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		}
 
 		mqttMsg := &MQTTPacketMessage{Raw: rawHex}
-		mqttMsg.Timestamp = resolveRxTime(msg, tag)
+		var naiveSkewSec int64
+		mqttMsg.Timestamp, naiveSkewSec = resolveRxTime(msg, tag)
+		if naiveSkewSec != 0 && observerID != "" {
+			// Issue #1478: record so /api/observers can surface ⚠️ chip.
+			if err := store.RecordNaiveSkew(observerID, naiveSkewSec, time.Now()); err != nil {
+				log.Printf("MQTT [%s] RecordNaiveSkew(%s): %v", tag, observerID, err)
+			}
+		}
 		// Parse optional region from JSON payload (#788)
 		if v, ok := msg["region"].(string); ok && v != "" {
 			mqttMsg.Region = v
@@ -1105,22 +1112,28 @@ func firstNonEmpty(vals ...string) string {
 // the frame, not when the MQTT message is published — so a buffered packet
 // uploaded hours late still carries its true receive time. Using ingest time
 // (time.Now()) here mis-dated such packets by the upload delay.
-func resolveRxTime(msg map[string]interface{}, tag string) string {
+//
+// The returned naiveSkewSec is 0 unless a naive (zone-less) timestamp had to
+// be clamped because it was off from server-now by >15min — in which case it
+// is the signed offset in seconds (negative = observer behind UTC, positive =
+// ahead). Caller records this via Store.RecordNaiveSkew so the UI can flag
+// the observer (#1478).
+func resolveRxTime(msg map[string]interface{}, tag string) (string, int64) {
 	now := time.Now().UTC()
 	raw, _ := msg["timestamp"].(string)
 	if raw == "" {
-		return now.Format(time.RFC3339)
+		return now.Format(time.RFC3339), 0
 	}
 	t, naive, err := parseEnvelopeTime(raw)
 	if err != nil {
 		log.Printf("MQTT [%s] unparseable timestamp %q, using ingest time", tag, raw)
-		return now.Format(time.RFC3339)
+		return now.Format(time.RFC3339), 0
 	}
 	// Hard reject: > 14h ahead is a genuine clock error (UTC+14 is the maximum
 	// standard offset, so nothing valid should be further ahead than that).
 	if t.After(now.Add(14 * time.Hour)) {
 		log.Printf("MQTT [%s] future timestamp %q, using ingest time", tag, raw)
-		return now.Format(time.RFC3339)
+		return now.Format(time.RFC3339), 0
 	}
 	// Hard reject: > 30 days in the past is an RTC-reset node reporting a
 	// factory date (e.g. 2020-01-01). Such a value would permanently drag
@@ -1128,7 +1141,7 @@ func resolveRxTime(msg map[string]interface{}, tag string) string {
 	// InsertTransmission. No legitimate buffered upload is that stale.
 	if t.Before(now.Add(-30 * 24 * time.Hour)) {
 		log.Printf("MQTT [%s] stale timestamp %q (>30d old), using ingest time", tag, raw)
-		return now.Format(time.RFC3339)
+		return now.Format(time.RFC3339), 0
 	}
 	// Symmetric naive-timestamp clamp (issue #1463). Naive (zone-less) ISO
 	// values from observers in non-UTC zones are parsed as-if UTC, leaving a
@@ -1142,25 +1155,26 @@ func resolveRxTime(msg map[string]interface{}, tag string) string {
 	// skew so legitimate buffered uploads remain accurate.
 	const naiveTolerance = 15 * time.Minute
 	if naive {
-		delta := t.Sub(now)
-		if delta < 0 {
-			delta = -delta
+		signed := t.Sub(now) // signed: positive = ahead, negative = behind
+		abs := signed
+		if abs < 0 {
+			abs = -abs
 		}
-		if delta > naiveTolerance {
-			// #1478: log silenced — was firing per-message + drowning logs.
-			// observer.last_seen uses ingest time regardless (#1466), and
-			// the bad observer should be surfaced in the UI (see #1478)
-			// rather than per-message console noise.
-			return now.Format(time.RFC3339)
+		if abs > naiveTolerance {
+			// Issue #1478: surface to UI via RecordNaiveSkew (called by handler).
+			// Per-message log was silenced in #1479 — chip + banner in the UI
+			// replace it.
+			deltaSec := int64(signed / time.Second)
+			return now.Format(time.RFC3339), deltaSec
 		}
 	}
 	// Legacy soft clamp for zone-aware near-future values: any value ahead of
 	// now is from a slightly skewed observer clock — collapse to now so we
 	// don't render ⚠️ in the UI for live packets from those nodes.
 	if t.After(now) {
-		return now.Format(time.RFC3339)
+		return now.Format(time.RFC3339), 0
 	}
-	return t.UTC().Format(time.RFC3339)
+	return t.UTC().Format(time.RFC3339), 0
 }
 
 // parseEnvelopeTime parses the MQTT envelope timestamp. Two on-wire forms
