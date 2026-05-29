@@ -449,6 +449,16 @@
 .live-toggles .live-region-filter-container { display: inline-flex; align-items: center; }
 .live-toggles .live-region-filter-container .region-dropdown-trigger { font-size: inherit; padding: 2px 6px; }
 
+/* #1108 — "Show all nodes" sibling of the region dropdown. Reuses the
+   .live-toggles label rhythm so it lines up with the other inline toggles. */
+.live-toggles .live-show-all-region-nodes {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: inherit;
+  white-space: nowrap;
+}
+
 /* ---- Leaflet overrides for dark theme ---- */
 .live-page .leaflet-control-zoom a {
   background: color-mix(in srgb, var(--surface-1) 92%, transparent) !important;

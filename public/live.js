@@ -1321,7 +1321,32 @@
         setObserverIataMap(buildObserverIataMap(data));
       }).catch(function() { /* leave map empty; filter will hide all when active */ });
       RegionFilter.init(rfEl, { dropdown: true });
-      regionFilterChangeHandler = RegionFilter.onChange(function() { /* selection persisted by RegionFilter; future packets reflect it */ });
+      regionFilterChangeHandler = RegionFilter.onChange(function() {
+        // #1108 — when the region selection changes, reload visible map
+        // nodes so non-region nodes disappear (or reappear) immediately.
+        // The packet feed already filters live via packetMatchesRegion.
+        try { loadNodes(); } catch (e) { /* loadNodes not yet defined during init order edge cases */ }
+      });
+      // #1108 — "Show all nodes (faded)" sub-toggle, sibling to the region
+      // dropdown. Off by default = hide non-region nodes; on = legacy
+      // show-everything behavior.
+      (function initShowAllNodesToggle() {
+        if (!window.RegionShowAll) return;
+        var wrap = document.createElement('label');
+        wrap.className = 'live-show-all-region-nodes';
+        wrap.title = 'When a region is selected, show every node on the map (legacy behavior). Off = hide non-region nodes.';
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.id = 'liveShowAllRegionNodes';
+        cb.checked = RegionShowAll.get();
+        wrap.appendChild(cb);
+        wrap.appendChild(document.createTextNode(' Show all nodes'));
+        rfEl.parentNode.insertBefore(wrap, rfEl.nextSibling);
+        cb.addEventListener('change', function() {
+          RegionShowAll.set(cb.checked);
+          try { loadNodes(); } catch (e) {}
+        });
+      })();
     })();
 
     // Node filter input — autocomplete-as-you-type (#1110)
@@ -2180,9 +2205,13 @@
   async function loadNodes(beforeTs) {
     try {
       const aqs = AreaFilter.areaQueryString();
+      // #1108 — honor region selector for visible map nodes unless
+      // "Show all nodes" is enabled. Empty string when no region set.
+      const rqs = (window.RegionFilter && typeof RegionFilter.nodesRegionQueryString === 'function')
+        ? RegionFilter.nodesRegionQueryString() : '';
       const url = beforeTs
-        ? `/api/nodes?limit=2000&before=${encodeURIComponent(new Date(beforeTs).toISOString())}${aqs}`
-        : `/api/nodes?limit=2000${aqs}`;
+        ? `/api/nodes?limit=2000&before=${encodeURIComponent(new Date(beforeTs).toISOString())}${aqs}${rqs}`
+        : `/api/nodes?limit=2000${aqs}${rqs}`;
       // Full reload (no beforeTs): clear existing markers so switching areas
       // removes nodes that no longer belong to the selected area.
       if (!beforeTs) {
