@@ -266,18 +266,27 @@ jobs:
         # deep-link the #1486 test uses.
         run: |
           sqlite3 test-fixtures/e2e-fixture.db <<'SQL'
-          -- Use an explicit small id (0) so the row sorts BELOW the top 10
-          -- by id DESC. test-e2e-playwright's hex-pane test scans the
-          -- first 10 #pktBody rows for one with ≥2 observations; if our
-          -- seeded row lands in the first 10 that test mid-clicks our
-          -- detail-obs-row entries (which have NULL raw_hex) and the
-          -- DOM rebuild detaches the element mid-click.
+          -- Sort the seeded row LAST in BOTH default packets views:
+          --   • flat view sorts by transmissions.id DESC → id=0 puts it last
+          --   • grouped view (#default for the packets page) sorts by
+          --     MAX(observations.timestamp) DESC → we must keep our obs
+          --     timestamps OLDER than every other fixture observation.
+          -- Fixture (after freshen) has obs timestamps spanning
+          --   2026-05-17 16:01:39Z .. 2026-05-28 00:00:00Z (max).
+          --   Note: freshen only shifts transmissions.first_seen forward
+          --   to ~now; observation.timestamp is left alone except for
+          --   the timestamp=0 case.
+          -- Use 2026-05-15 (~2 days older than the oldest fixture obs)
+          -- so our row sorts LAST in the grouped view too, keeping
+          -- test-e2e-playwright's first-10-rows hex-pane test
+          -- unaffected. The #1486 test still reaches the row via the
+          -- explicit hash + ?timeWindow=0 deep-link.
           INSERT INTO transmissions(id,raw_hex,hash,first_seen,route_type,payload_type,payload_version,decoded_json,channel_hash,from_pubkey)
-            VALUES (0,'15000102030405060708090a0b0c0d0e0f','fae0c9e6d357a814','2026-05-28T00:00:00Z',1,5,0,'{"type":"CHAN","channel":"#test","text":"#1486 fixture"}',NULL,NULL);
+            VALUES (0,'15000102030405060708090a0b0c0d0e0f','fae0c9e6d357a814','2026-05-15T00:00:00Z',1,5,0,'{"type":"CHAN","channel":"#test","text":"#1486 fixture"}',NULL,NULL);
           INSERT INTO observations(transmission_id,observer_idx,direction,snr,rssi,score,path_json,timestamp,resolved_path) VALUES
-            (0,1,'rx',5.0,-95,0,'["AA"]',CAST(strftime('%s','2026-05-28T00:00:00Z') AS INTEGER),'["aa00000000000000000000000000000000000000000000000000000000000000"]'),
-            (0,2,'rx',5.5,-92,0,'["BB"]',CAST(strftime('%s','2026-05-28T00:00:00Z') AS INTEGER),'["bb00000000000000000000000000000000000000000000000000000000000000"]'),
-            (0,3,'rx',6.0,-90,0,'["CC"]',CAST(strftime('%s','2026-05-28T00:00:00Z') AS INTEGER),'["cc00000000000000000000000000000000000000000000000000000000000000"]');
+            (0,1,'rx',5.0,-95,0,'["AA"]',CAST(strftime('%s','2026-05-15T00:00:00Z') AS INTEGER),'["aa00000000000000000000000000000000000000000000000000000000000000"]'),
+            (0,2,'rx',5.5,-92,0,'["BB"]',CAST(strftime('%s','2026-05-15T00:00:00Z') AS INTEGER),'["bb00000000000000000000000000000000000000000000000000000000000000"]'),
+            (0,3,'rx',6.0,-90,0,'["CC"]',CAST(strftime('%s','2026-05-15T00:00:00Z') AS INTEGER),'["cc00000000000000000000000000000000000000000000000000000000000000"]');
           SQL
 
       - name: Migrate fixture DB to current schema (#1287)
