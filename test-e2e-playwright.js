@@ -271,13 +271,16 @@ async function run() {
       const cards = document.querySelectorAll('.perf-card .perf-label');
       return Array.from(cards).some(el => el.textContent.trim() === 'Version');
     }, { timeout: 10000 });
-    const versionCard = await page.evaluate(() => {
+    // waitForFunction already confirmed the Version label exists; just grab the num text
+    const versionNumText = await page.evaluate(() => {
       const labels = document.querySelectorAll('.perf-card .perf-label');
-      const card = Array.from(labels).find(el => el.textContent.trim() === 'Version');
-      return card ? card.closest('.perf-card').innerText : null;
+      const label = Array.from(labels).find(el => el.textContent.trim() === 'Version');
+      if (!label) return null;
+      const num = label.closest('.perf-card').querySelector('.perf-num, .perf-num--small');
+      return num ? num.textContent.trim() : '';
     });
-    assert(versionCard, 'Version perf-card not found on #/perf');
-    assert(versionCard.includes('Version'), 'Version card should contain "Version" label');
+    assert(versionNumText !== null, 'Version perf-card not found on #/perf');
+    assert(versionNumText.length > 0, 'Version card .perf-num should have non-empty text');
   });
 
   // --- Group: Nodes page (tests 2, 5) ---
