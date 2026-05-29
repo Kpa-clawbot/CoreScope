@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"log"
+	"runtime/debug"
+	"strconv"
 	"sync/atomic"
 	"time"
 )
@@ -55,12 +58,21 @@ func (s *Server) startNeighborGraphRecomputer(interval time.Duration, stop <-cha
 
 // recomputeNeighborGraphCache builds and pre-marshals the default-shape
 // response and atomically swaps it in. Panic-defensive so a single bad
-// rebuild doesn't kill the background goroutine.
+// rebuild doesn't kill the background goroutine — but logs the panic
+// and increments a counter so operators see the failure (#1483 follow-up).
 func (s *Server) recomputeNeighborGraphCache() {
-	defer func() { _ = recover() }()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[neighbor-graph-cache] rebuild panic: %v\n%s", r, debug.Stack())
+			atomic.AddUint64(&s.neighborGraphCacheRebuildFailures, 1)
+		}
+	}()
+	start := time.Now()
 	resp := s.buildDefaultNeighborGraphResponse()
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
+		log.Printf("[neighbor-graph-cache] marshal error: %v", err)
+		atomic.AddUint64(&s.neighborGraphCacheRebuildFailures, 1)
 		return
 	}
 	s.neighborGraphCache.ptr.Store(&neighborGraphCacheEntry{
@@ -68,6 +80,7 @@ func (s *Server) recomputeNeighborGraphCache() {
 		json: buf.Bytes(),
 		at:   time.Now(),
 	})
+	log.Printf("[neighbor-graph-cache] rebuild ok in %v, nodes=%d", time.Since(start), len(resp.Nodes))
 }
 
 // loadNeighborGraphCache returns the cached default response if present.
@@ -80,11 +93,25 @@ func (s *Server) loadNeighborGraphCache() (NeighborGraphResponse, bool) {
 }
 
 // loadNeighborGraphCacheBytes returns the pre-marshaled JSON for the
-// cached default response if present.
-func (s *Server) loadNeighborGraphCacheBytes() ([]byte, bool) {
+// cached default response if present, along with the age of the
+// snapshot (zero when no entry is present).
+func (s *Server) loadNeighborGraphCacheBytes() ([]byte, time.Duration, bool) {
 	e := s.neighborGraphCache.ptr.Load()
 	if e == nil || len(e.json) == 0 {
-		return nil, false
+		return nil, 0, false
 	}
-	return e.json, true
+	age := time.Duration(0)
+	if !e.at.IsZero() {
+		age = time.Since(e.at)
+	}
+	return e.json, age, true
+}
+
+// cacheAgeSecondsHeader formats a time.Duration as integer seconds for
+// the X-Cache-Age-Seconds response header.
+func cacheAgeSecondsHeader(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	return strconv.FormatInt(int64(d/time.Second), 10)
 }

@@ -240,22 +240,33 @@ func (s *Server) handleNeighborGraph(w http.ResponseWriter, r *http.Request) {
 	// snapshot maintained by the background recomputer (5 min cadence).
 	// Default shape: minCount=5, minScore=0.1, no region, no role.
 	if minCount == 5 && minScore == 0.1 && region == "" && roleFilter == "" {
-		if raw, ok := s.loadNeighborGraphCacheBytes(); ok {
+		if raw, age, ok := s.loadNeighborGraphCacheBytes(); ok {
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Cache-Age-Seconds", cacheAgeSecondsHeader(age))
 			w.Write(raw)
 			return
 		}
 	}
 
-	resp := s.computeNeighborGraphResponse(minCount, minScore, region, roleFilter)
+	resp := s.computeNeighborGraphResponseDispatch(minCount, minScore, region, roleFilter)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
+// computeNeighborGraphResponseDispatch routes to the test-injected
+// function when set, otherwise to the real pipeline. #1483 follow-up.
+func (s *Server) computeNeighborGraphResponseDispatch(minCount int, minScore float64, region, roleFilter string) NeighborGraphResponse {
+	if s.computeNeighborGraphResponseFn != nil {
+		return s.computeNeighborGraphResponseFn(minCount, minScore, region, roleFilter)
+	}
+	return s.computeNeighborGraphResponse(minCount, minScore, region, roleFilter)
+}
+
 // buildDefaultNeighborGraphResponse builds the default-shape response
-// used by the #1481 P0-1 recomputer.
+// used by the #1481 P0-1 recomputer. Goes through the dispatch so test
+// hooks can inject failures (#1483 follow-up).
 func (s *Server) buildDefaultNeighborGraphResponse() NeighborGraphResponse {
-	return s.computeNeighborGraphResponse(5, 0.1, "", "")
+	return s.computeNeighborGraphResponseDispatch(5, 0.1, "", "")
 }
 
 // computeNeighborGraphResponse does the full graph build + filter + score

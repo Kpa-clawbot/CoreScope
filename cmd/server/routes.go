@@ -73,6 +73,16 @@ type Server struct {
 	// Cached default-shape /api/analytics/neighbor-graph response,
 	// recomputed every 5 min in a background goroutine. Issue #1481 P0-1.
 	neighborGraphCache neighborGraphCacheField
+
+	// Counter for rebuild-panic events on the neighbor-graph cache
+	// background recomputer. Surfaced via /api/stats. #1483 follow-up.
+	neighborGraphCacheRebuildFailures uint64
+
+	// Test injection: when non-nil, replaces the real
+	// computeNeighborGraphResponse pipeline so tests can assert the
+	// bypass branch was exercised without standing up a full DB/store.
+	// Production code MUST leave this nil. #1483 follow-up.
+	computeNeighborGraphResponseFn func(minCount int, minScore float64, region, role string) NeighborGraphResponse
 }
 
 // PerfStats tracks request performance.
@@ -719,6 +729,8 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		ProcessRSSMB:  mem.ProcessRSSMB,
 		GoHeapInuseMB: mem.GoHeapInuseMB,
 		GoSysMB:       mem.GoSysMB,
+
+		NeighborGraphCacheRebuildFailures: atomic.LoadUint64(&s.neighborGraphCacheRebuildFailures),
 	}
 
 	s.statsMu.Lock()

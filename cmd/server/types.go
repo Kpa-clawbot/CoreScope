@@ -88,6 +88,11 @@ type StatsResponse struct {
 	ProcessRSSMB  float64 `json:"processRSSMB"`  // process RSS from /proc (Linux) or runtime.Sys fallback
 	GoHeapInuseMB float64 `json:"goHeapInuseMB"` // runtime.MemStats.HeapInuse
 	GoSysMB       float64 `json:"goSysMB"`       // runtime.MemStats.Sys (total Go-managed)
+
+	// NeighborGraphCacheRebuildFailures counts panic/marshal failures in the
+	// background neighbor-graph cache recomputer. Non-zero = stale snapshot
+	// being served indefinitely. Surfaced for operator visibility. #1483 follow-up.
+	NeighborGraphCacheRebuildFailures uint64 `json:"neighborGraphCacheRebuildFailures"`
 }
 
 // ─── Scope Stats ───────────────────────────────────────────────────────────────
