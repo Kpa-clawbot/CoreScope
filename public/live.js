@@ -10,6 +10,9 @@
   function statusGreen() { return cssVar('--status-green') || '#22c55e'; }
 
   let map, ws, nodesLayer, pathsLayer, animLayer, heatLayer, geoFilterLayer, clickablePathsLayer;
+  // New animation canvas
+  let animCanvas, animCtx;
+  let activeAnimations = [];
   let clickablePaths = [];
   const CLICKABLE_PATH_TTL_MS = 30000;
   const CLICKABLE_PATH_MAX = 50;
@@ -1165,9 +1168,52 @@
     } catch {}
 
     map = L.map('liveMap', {
-      zoomControl: false, attributionControl: false,
-      zoomAnimation: true, markerZoomAnimation: true
+      zoomControl: false, 
+      attributionControl: false,
+      zoomAnimation: true, 
+      markerZoomAnimation: true,
+      preferCanvas: true
     }).setView(mapCenter, mapZoom);
+
+    // Create a raw canvas for high-performance animations
+    animCanvas = document.createElement('canvas');
+    animCanvas.style.cssText = 'position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:650;';
+    
+    const mapContainer = document.getElementById('liveMap');
+    mapContainer.appendChild(animCanvas);
+    animCtx = animCanvas.getContext('2d');
+
+    function resizeAnimCanvas() {
+        if (!animCanvas || !mapContainer) return;
+        
+        // Get the exact dimensions of the map container right now
+        const rect = mapContainer.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        
+        animCanvas.width = rect.width * dpr;
+        animCanvas.height = rect.height * dpr;
+        
+        // Reset the scale so everything renders sharply on high-DPI/Retina screens
+        animCtx.scale(dpr, dpr);
+    }
+
+    // 1. Catch DOM Element resizes (e.g., when the user drags your feed panel)
+    if (window.ResizeObserver) {
+        const ro = new ResizeObserver(resizeAnimCanvas);
+        ro.observe(mapContainer);
+    } else {
+        // Fallback for very old browsers
+        window.addEventListener('resize', resizeAnimCanvas);
+    }
+
+    // 2. Catch Leaflet's internal resize events just to be completely safe
+    map.on('resize', resizeAnimCanvas);
+
+    // Set the initial size immediately
+    resizeAnimCanvas();
+    
+    // Start the master animation engine
+    requestAnimationFrame(renderAnimations);
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -3380,21 +3426,121 @@
     requestAnimationFrame(tick);
   }
 
+  function renderAnimations(now) {
+    if (!animCtx) return;
+    
+    // Clear the canvas for the next frame
+    animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
+
+    for (let i = activeAnimations.length - 1; i >= 0; i--) {
+      const anim = activeAnimations[i];
+      const elapsed = now - anim.startTime;
+      const t = Math.min(1, elapsed / anim.duration);
+
+      // Calculate current screen pixel position (keeps animations glued to the map even while panning)
+      const fromPt = map.latLngToContainerPoint(anim.from);
+      const toPt = map.latLngToContainerPoint(anim.to);
+      const currentX = fromPt.x + (toPt.x - fromPt.x) * t;
+      const currentY = fromPt.y + (toPt.y - fromPt.y) * t;
+
+      // Draw Contrail (glow)
+      animCtx.beginPath();
+      animCtx.moveTo(fromPt.x, fromPt.y);
+      animCtx.lineTo(currentX, currentY);
+      animCtx.strokeStyle = anim.contrailColor;
+      animCtx.lineWidth = 6;
+      animCtx.globalAlpha = anim.opacity * 0.2;
+      animCtx.lineCap = 'round';
+      animCtx.stroke();
+
+      // Draw Core Line
+      animCtx.beginPath();
+      animCtx.moveTo(fromPt.x, fromPt.y);
+      animCtx.lineTo(currentX, currentY);
+      if (anim.isDashed) {
+          animCtx.setLineDash([4, 6]);
+          animCtx.lineWidth = 1.5;
+      } else {
+          animCtx.lineWidth = 2;
+      }
+      animCtx.strokeStyle = anim.lineColor;
+      animCtx.globalAlpha = anim.opacity;
+      animCtx.stroke();
+      animCtx.setLineDash([]); // Reset for next draw
+
+      // Draw Leading Dot
+      animCtx.beginPath();
+      animCtx.arc(currentX, currentY, 3.5, 0, Math.PI * 2);
+      animCtx.fillStyle = anim.hashFill;
+      animCtx.fill();
+      animCtx.lineWidth = 1.5;
+      animCtx.strokeStyle = anim.hashOutline;
+      animCtx.stroke();
+      animCtx.globalAlpha = 1.0; // Reset
+
+      // Handle completion
+      if (t >= 1) {
+          createFadingLeafletLine(anim);
+          if (anim.onComplete) anim.onComplete();
+          activeAnimations.splice(i, 1);
+      }
+    }
+    requestAnimationFrame(renderAnimations);
+  }
+
+  function createFadingLeafletLine(anim) {
+    if (!pathsLayer) return;
+
+    const contrail = L.polyline([anim.from, anim.to], {
+      // pane: 'animationsPane', // Uncomment if you created the custom pane in the previous step
+      color: anim.contrailColor, weight: 6, opacity: anim.opacity * 0.2, lineCap: 'round'
+    }).addTo(pathsLayer);
+
+    const line = L.polyline([anim.from, anim.to], {
+      // pane: 'animationsPane', // Uncomment if you created the custom pane in the previous step
+      color: anim.lineColor, weight: anim.isDashed ? 1.5 : 2, opacity: anim.opacity,
+      lineCap: 'round', dashArray: anim.isDashed ? '4 6' : null
+    }).addTo(pathsLayer);
+
+    recentPaths.push({ line, glowLine: contrail, time: Date.now() });
+    while (recentPaths.length > 5) {
+      const old = recentPaths.shift();
+      if (pathsLayer) { pathsLayer.removeLayer(old.line); pathsLayer.removeLayer(old.glowLine); }
+    }
+
+    // Fade out logic 
+    let fadeOp = anim.opacity;
+    let lastFade = performance.now();
+    function animateFade(now) {
+      if (!pathsLayer) return;
+      const fadeElapsed = now - lastFade;
+      if (fadeElapsed >= 52) {
+        const fadeTicks = Math.min(Math.floor(fadeElapsed / 52), 4);
+        lastFade = now;
+        fadeOp -= 0.1 * fadeTicks;
+        if (fadeOp <= 0) {
+          if (pathsLayer) { pathsLayer.removeLayer(line); pathsLayer.removeLayer(contrail); }
+          recentPaths = recentPaths.filter(p => p.line !== line);
+          return;
+        }
+        line.setStyle({ opacity: fadeOp });
+        contrail.setStyle({ opacity: fadeOp * 0.15 });
+      }
+      requestAnimationFrame(animateFade);
+    }
+    requestAnimationFrame(animateFade);
+  }
+
   function drawAnimatedLine(from, to, color, onComplete, overrideOpacity, rawHex, hash) {
-    if (!animLayer || !pathsLayer) { if (onComplete) onComplete(); return; }
     if (matrixMode) return drawMatrixLine(from, to, color, onComplete, rawHex);
-    const steps = 20;
-    const latStep = (to[0] - from[0]) / steps;
-    const lonStep = (to[1] - from[1]) / steps;
-    let step = 0;
-    let currentCoords = [from];
+
     const mainOpacity = overrideOpacity ?? 0.8;
     const isDashed = overrideOpacity != null;
 
-    // Hash-derived color for fill + contrail + outline (when toggle ON and not ghost/dashed line)
     var hashFill = '#fff';
     var hashOutline = color;
     var contrailColor = color;
+
     if (colorByHash && hash && !isDashed && window.HashColor) {
       var hsl = HashColor.hashToHsl(hash, _liveTheme());
       hashFill = hsl;
@@ -3402,82 +3548,20 @@
       contrailColor = hsl;
     }
 
-    const contrail = L.polyline([from], {
-      color: contrailColor, weight: 6, opacity: mainOpacity * 0.2, lineCap: 'round'
-    }).addTo(pathsLayer);
-
-    const line = L.polyline([from], {
-      color: (colorByHash && hash && !isDashed && window.HashColor) ? hashFill : color,
-      weight: isDashed ? 1.5 : 2, opacity: mainOpacity, lineCap: 'round',
-      dashArray: isDashed ? '4 6' : null,
-      className: 'live-packet-trace'
-    }).addTo(pathsLayer);
-
-    const dot = L.circleMarker(from, {
-      radius: 3.5, fillColor: hashFill, fillOpacity: 1, color: hashOutline, weight: 1.5
-    }).addTo(animLayer);
-
-    let lastStep = performance.now();
-    function animateLine(now) {
-      if (!animLayer || !pathsLayer) {
-        if (onComplete) onComplete();
-        return;
-      }
-      const elapsed = now - lastStep;
-      const stepMs = VCR.mode === 'REPLAY' ? 33 / VCR.speed : 33;
-      if (elapsed >= stepMs) {
-        const ticks = Math.min(Math.floor(elapsed / stepMs), 4);
-        lastStep = now;
-        for (let t = 0; t < ticks && step < steps; t++) {
-          step++;
-          const lat = from[0] + latStep * step;
-          const lon = from[1] + lonStep * step;
-          currentCoords.push([lat, lon]);
-        }
-        const lastPt = currentCoords[currentCoords.length - 1];
-        line.setLatLngs(currentCoords);
-        contrail.setLatLngs(currentCoords);
-        dot.setLatLng(lastPt);
-
-        if (step >= steps) {
-          if (animLayer) animLayer.removeLayer(dot);
-
-          recentPaths.push({ line, glowLine: contrail, time: Date.now() });
-          while (recentPaths.length > 5) {
-            const old = recentPaths.shift();
-            if (pathsLayer) { pathsLayer.removeLayer(old.line); pathsLayer.removeLayer(old.glowLine); }
-          }
-
-          setTimeout(() => {
-            let fadeOp = mainOpacity;
-            let lastFade = performance.now();
-            function animateFade(now) {
-              if (!pathsLayer) return;
-              const fadeElapsed = now - lastFade;
-              if (fadeElapsed >= 52) {
-                const fadeTicks = Math.min(Math.floor(fadeElapsed / 52), 4);
-                lastFade = now;
-                fadeOp -= 0.1 * fadeTicks;
-                if (fadeOp <= 0) {
-                  if (pathsLayer) { pathsLayer.removeLayer(line); pathsLayer.removeLayer(contrail); }
-                  recentPaths = recentPaths.filter(p => p.line !== line);
-                  return;
-                }
-                line.setStyle({ opacity: fadeOp });
-                contrail.setStyle({ opacity: fadeOp * 0.15 });
-              }
-              requestAnimationFrame(animateFade);
-            }
-            requestAnimationFrame(animateFade);
-          }, 800);
-
-          if (onComplete) onComplete();
-          return;
-        }
-      }
-      requestAnimationFrame(animateLine);
-    }
-    requestAnimationFrame(animateLine);
+    // Push to the hardware-accelerated canvas engine
+    activeAnimations.push({
+      from: from,
+      to: to,
+      startTime: performance.now(),
+      duration: 660 / VCR.speed, // Matches your original duration (33ms * 20 steps)
+      opacity: mainOpacity,
+      isDashed: isDashed,
+      lineColor: (colorByHash && hash && !isDashed && window.HashColor) ? hashFill : color,
+      contrailColor: contrailColor,
+      hashFill: hashFill,
+      hashOutline: hashOutline,
+      onComplete: onComplete
+    });
   }
 
   function showHeatMap() {
