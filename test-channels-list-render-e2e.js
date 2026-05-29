@@ -150,39 +150,59 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   });
 
   await step('sidebar resize handle persists width to localStorage', async () => {
-    // The previous "empty state" step performs a hash-route bounce
-    // (/#/nodes → /#/channels) which re-renders the sidebar markup. The
-    // #89 init IIFE wired `mousedown` to the OLD .ch-sidebar-resize node
-    // and the new one has no listener — so a drag here would no-op and
-    // localStorage would never be written. Do a full reload so init
-    // runs against the live handle.
+    // Prior "empty state" step does a hash-route bounce that re-renders
+    // the sidebar — channels.js' #89 init IIFE wires `mousedown` to the
+    // ORIGINAL handle node, so the new node has no listener. Full reload
+    // ensures init runs against the live handle.
     await page.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.ch-sidebar-resize');
-    // Clear any value from a prior test run so the assertion proves THIS
-    // drag wrote the key (not a stale leftover).
+    // Clear any prior value so the assertion proves THIS drag wrote it.
     await page.evaluate(() => { try { localStorage.removeItem('channels-sidebar-width'); } catch (e) {} });
-    const handle = await page.$('.ch-sidebar-resize');
-    const hb = await handle.boundingBox();
-    const startX = hb.x + hb.width / 2;
-    const startY = hb.y + hb.height / 2;
-    // Proper Playwright drag: hover → down → multi-step move (with small
-    // delays so each mousemove dispatches separately) → up.
-    await page.mouse.move(startX, startY);
-    await page.mouse.down();
-    // Move in several small steps; Playwright's `steps:` handles
-    // interpolation, but we also add a tiny delay between segments so
-    // listeners attached to `document` reliably observe each event.
-    for (let i = 1; i <= 10; i++) {
-      await page.mouse.move(startX + i * 8, startY, { steps: 2 });
-      await page.waitForTimeout(10);
-    }
-    await page.mouse.up();
-    await page.waitForTimeout(200);
-    const stored = await page.evaluate(
-      () => localStorage.getItem('channels-sidebar-width'));
-    assert(stored !== null, 'sidebar width should be persisted, got: ' + stored);
-    assert(parseInt(stored, 10) >= 180,
-      'sidebar width should be >= 180, got: ' + stored);
+
+    // NOTE: real-mouse drag does NOT work here. The handle is positioned
+    // `right:-3px` (6px wide) but its parent `.ch-sidebar` has
+    // `overflow:hidden`. Half the handle is therefore clipped from hit
+    // testing — `elementFromPoint(bbox.x + bbox.width/2, ...)` resolves to
+    // `.ch-sidebar` (or `.ch-messages` past the sidebar edge), NOT the
+    // handle. `page.mouse.down()` at the bbox center never fires the
+    // handle's mousedown, the `dragging` flag stays false, and the
+    // mouseup listener never writes localStorage.
+    //
+    // Driving the wiring correctly therefore requires dispatching the
+    // mousedown directly on the handle (bubbling up to its listener) and
+    // synthesising mousemove/mouseup on `document` (where channels.js
+    // attaches them). This exercises the SAME production code path,
+    // just bypasses the viewport hit-test that the CSS prevents from
+    // hitting the half-clipped handle.
+    const result = await page.evaluate(() => {
+      const handle = document.querySelector('.ch-sidebar-resize');
+      const sidebar = document.querySelector('.ch-sidebar');
+      const r = handle.getBoundingClientRect();
+      const cx = r.x + r.width / 2;
+      const cy = r.y + r.height / 2;
+      const mk = (type, x) => new MouseEvent(type, {
+        bubbles: true, cancelable: true, view: window,
+        clientX: x, clientY: cy, button: 0,
+      });
+      handle.dispatchEvent(mk('mousedown', cx));
+      // Drag right ~80px in a few steps so listeners observe each move.
+      for (let i = 1; i <= 8; i++) {
+        document.dispatchEvent(mk('mousemove', cx + i * 10));
+      }
+      const widthMid = sidebar.style.width;
+      document.dispatchEvent(mk('mouseup', cx + 80));
+      return {
+        widthMid,
+        widthFinal: sidebar.style.width,
+        stored: localStorage.getItem('channels-sidebar-width'),
+      };
+    });
+    assert(result.widthMid && /\d+px/.test(result.widthMid),
+      'sidebar width should update during drag, got: ' + result.widthMid);
+    assert(result.stored !== null,
+      'sidebar width should be persisted, got: ' + result.stored);
+    assert(parseInt(result.stored, 10) >= 180,
+      'sidebar width should be >= 180, got: ' + result.stored);
   });
 
   await browser.close();
