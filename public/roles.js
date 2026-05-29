@@ -428,7 +428,7 @@
 
   // ─── External URLs ───
   window.EXTERNAL_URLS = {
-    flasher: 'https://flasher.meshcore.co.uk/'
+    flasher: 'https://flasher.meshcore.io/'
   };
 
   // ─── Fetch server overrides ───
