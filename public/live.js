@@ -675,7 +675,7 @@
     }
   }
 
-  window._wakeCanvasEngine = function() {
+  function wakeCanvasEngine() {
     if (!isAnimating && activeAnimations.length > 0) {
       const isPaused = VCR.mode === 'PAUSED' || VCR.speed === 0;
       if (!isPaused) {
@@ -683,7 +683,7 @@
         requestAnimationFrame(renderAnimations);
       }
     }
-  };
+  }
 
   function vcrFormatTime(tsMs) {
     const d = new Date(tsMs);
@@ -746,7 +746,7 @@
     updateVCRLcd();
     
     // WAKE THE ENGINE: If we unpaused or changed speed above 0, kickstart the canvas
-    if (window._wakeCanvasEngine) window._wakeCanvasEngine();
+    wakeCanvasEngine();
   }
 
   function dbPacketToLive(pkt) {
@@ -2705,6 +2705,14 @@
     return addFeedItem(icon, typeName, payload, hops, color, pkt);
   };
   window._liveRebuildFeedList = function() { return rebuildFeedList(); };
+
+  // PR #1490 test seams: Expose internal state for Playwright assertions
+  window._liveDrawAnimatedLine = drawAnimatedLine;
+  window._liveTestSeams = {
+    getAnimCount: () => activeAnimations.length,
+    isAnimating: () => isAnimating,
+    getPathCount: () => (typeof recentPaths !== 'undefined' ? recentPaths.length : 0)
+  };
 
   async function replayRecent() {
     try {
