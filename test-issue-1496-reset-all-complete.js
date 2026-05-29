@@ -81,7 +81,8 @@ function makeSandbox() {
   const ctx = {
     window: {
       addEventListener: () => {},
-      dispatchEvent: () => {},
+      _events: [],
+      dispatchEvent(ev) { this._events.push({ type: ev && ev.type, detail: ev && ev.detail }); },
       SITE_CONFIG: {},
       _SITE_CONFIG_ORIGINAL_HOME: null,
     },
@@ -113,6 +114,7 @@ function makeSandbox() {
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
   };
   ctx.window.localStorage = localStorage;
+  ctx.window.CustomEvent = ctx.CustomEvent;
   ctx.self = ctx.window;
   return { ctx, body, rootStyle, bodyStyle, localStorage, bodyAttrs };
 }
@@ -272,6 +274,15 @@ test('does NOT clear mc-channels-* selection state', () => {
   env.localStorage.setItem('mc-channels-selection', 'foo');
   env.api.resetAll();
   assert.strictEqual(env.localStorage.getItem('mc-channels-selection'), 'foo');
+});
+
+test('dispatches mc-channels-show-encrypted-changed with on:false (live re-render)', () => {
+  const env = loadCustomizer();
+  env.ctx.window._events.length = 0;
+  env.api.resetAll();
+  const ev = env.ctx.window._events.find(e => e.type === 'mc-channels-show-encrypted-changed');
+  assert.ok(ev, 'expected mc-channels-show-encrypted-changed event');
+  assert.strictEqual(ev.detail && ev.detail.on, false, 'expected detail.on === false');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed\n');

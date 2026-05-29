@@ -2552,6 +2552,21 @@
         try { localStorage.removeItem('mc-dark-tile-provider'); } catch (_e) {}
       }
     } catch (_e) { /* ignore */ }
+
+    // 6. Encrypted-channel toggle — removing the LS key (step 1) fixes
+    //    persistence, but channels.js subscribes to
+    //    mc-channels-show-encrypted-changed for live re-render. Fire it
+    //    explicitly with on:false so the channels list reverts to "hide
+    //    encrypted" without a page reload.
+    try {
+      if (typeof window !== 'undefined' &&
+          typeof window.dispatchEvent === 'function' &&
+          typeof window.CustomEvent === 'function') {
+        window.dispatchEvent(new window.CustomEvent('mc-channels-show-encrypted-changed', {
+          detail: { on: false }
+        }));
+      }
+    } catch (_e) { /* ignore */ }
   }
 
   // ── Public API for app.js integration ──
