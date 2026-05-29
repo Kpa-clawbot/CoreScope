@@ -1615,9 +1615,11 @@
     html += hashMatrixLegendHtml(legendLabels);
     el.innerHTML = html;
     initMatrixTooltip(el);
-    // #1473 — Mark MeshCore reserved prefixes (first byte 0x00 / 0xFF) BEFORE
-    // wiring click handlers so they're stripped of .hash-active.
-    // Firmware: examples/simple_repeater/main.cpp:64 (reserved id hashes).
+    // #1473 — Grey out cells whose first byte the MeshCore firmware keygen
+    // routine avoids (pub_key[0] in {0x00, 0xFF}). This is a keygen
+    // CONVENTION, not a protocol-level rejection — see firmware
+    // examples/simple_repeater/main.cpp:83 (HEAD 8ede7641). Must run BEFORE
+    // we wire click handlers so .hash-active is stripped first.
     if (typeof PrefixReserved !== 'undefined' && PrefixReserved && typeof PrefixReserved.markReservedCells === 'function') {
       PrefixReserved.markReservedCells(el);
     }
@@ -3000,10 +3002,9 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         <p class="text-muted" style="margin-top:0;font-size:0.9em">Find a prefix with zero current collisions.</p>
         <p class="text-muted" style="margin:4px 0 10px;font-size:0.82em">
           <span aria-hidden="true">🚫</span>
-          <strong>0x00 and 0xFF excluded — reserved by the MeshCore protocol</strong>
-          (firmware rerolls identities with those first bytes; see
-          <a href="https://github.com/meshcore-dev/MeshCore/blob/6b52fb32301c273fc78d96183501eb23ad33c5bb/examples/simple_repeater/main.cpp#L64"
-             target="_blank" rel="noopener noreferrer" style="color:var(--accent)">simple_repeater/main.cpp:64</a>).
+          <strong>0x00 and 0xFF excluded</strong> as a first byte — the MeshCore firmware keygen routine re-rolls identities whose <code>pub_key[0]</code> is <code>00</code> or <code>FF</code>, so by convention you should not see those prefixes on real nodes (see
+          <a href="https://github.com/meshcore-dev/MeshCore/blob/8ede7641/examples/simple_repeater/main.cpp#L83"
+             target="_blank" rel="noopener noreferrer" style="color:var(--accent)">simple_repeater/main.cpp:83</a>).
         </p>
         <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
@@ -3065,15 +3066,16 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
         : [{ b: input.length / 2, prefix: input }];
 
       let html = '';
-      // #1473 — Warn loudly when the user pastes a reserved-first-byte prefix
-      // or pubkey. MeshCore firmware (simple_repeater/main.cpp:64) rerolls
-      // these identities, so a node with this prefix should not exist.
+      // #1473 — Warn when the user pastes a prefix or full pubkey whose
+      // first byte is one the MeshCore firmware keygen routine avoids
+      // (pub_key[0] in {0x00, 0xFF}). Firmware keygen CONVENTION, not a
+      // protocol-level rejection — see simple_repeater/main.cpp:83.
       if (typeof PrefixReserved !== 'undefined' && PrefixReserved &&
           PrefixReserved.isReservedPrefix(input)) {
-        html += `<div role="alert" style="margin-bottom:10px;padding:10px 14px;border:1px solid var(--status-red);border-radius:6px;background:var(--bg-secondary,var(--bg))">
-          <strong style="color:var(--status-red)">⚠️ Reserved prefix</strong>
+        html += `<div role="alert" style="margin-bottom:10px;padding:10px 14px;border:1px solid var(--status-yellow);border-radius:6px;background:var(--bg-secondary,var(--bg))">
+          <strong style="color:var(--status-yellow)">⚠️ Firmware avoids this first byte</strong>
           <div class="text-muted" style="font-size:0.85em;margin-top:4px">
-            <code class="mono">${input.slice(0,2)}</code> is reserved by the MeshCore protocol — firmware rerolls any identity whose first byte is <code class="mono">00</code> or <code class="mono">FF</code>. Should never be used as a node prefix.
+            <code class="mono">${input.slice(0,2)}</code> as the first byte of a node pubkey is avoided by the MeshCore firmware keygen convention (the standard repeater re-rolls identities whose <code class="mono">pub_key[0]</code> is <code class="mono">00</code> or <code class="mono">FF</code>). You generally shouldn't see this on real nodes.
           </div>
         </div>`;
       }
@@ -3111,8 +3113,11 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
       const hexLen = b * 2;
       const totalSpace = spaceSizes[b];
       // #1473 — Reserved prefixes (first byte 0x00 / 0xFF) are dropped from
-      // the candidate pool per MeshCore firmware
-      // (examples/simple_repeater/main.cpp:64). Available = space - used - reserved.
+      // the candidate pool because the MeshCore firmware keygen routine
+      // re-rolls identities whose pub_key[0] is 0x00 or 0xFF — a keygen
+      // CONVENTION (not a protocol rejection). See firmware
+      // examples/simple_repeater/main.cpp:83 (HEAD 8ede7641).
+      // Available = space - used - reserved.
       const reservedTotal = (typeof PrefixReserved !== 'undefined' && PrefixReserved)
         ? PrefixReserved.reservedCount(b)
         : 0;

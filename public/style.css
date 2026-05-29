@@ -2407,8 +2407,9 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 .hash-cell-taken  { background: var(--status-green); color: #fff; }
 .hash-cell-possible { background: var(--status-yellow); color: #fff; }
 .hash-cell-collision { color: #fff; }
-/* #1473 — Reserved prefixes (first byte 0x00 / 0xFF) per MeshCore firmware:
-   https://github.com/meshcore-dev/MeshCore/blob/6b52fb32301c273fc78d96183501eb23ad33c5bb/examples/simple_repeater/main.cpp#L64
+/* #1473 — First-byte 0x00 / 0xFF pubkeys are avoided by the MeshCore
+   firmware keygen convention (NOT a protocol-level rejection):
+   https://github.com/meshcore-dev/MeshCore/blob/8ede7641/examples/simple_repeater/main.cpp#L83
    Visually grey + strike, kill pointer events so the matrix click handler
    skips them. Applied by public/prefix-reserved.js → markReservedCells(). */
 .hash-cell.prefix-reserved,

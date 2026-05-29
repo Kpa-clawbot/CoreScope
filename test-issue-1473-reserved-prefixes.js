@@ -1,10 +1,15 @@
 /**
- * Issue #1473 — MeshCore reserves prefixes whose first byte is 0x00 or 0xFF.
- * Firmware citation (examples/simple_repeater/main.cpp:64):
+ * Issue #1473 — The MeshCore firmware keygen routine re-rolls any new
+ * identity whose public-key first byte is 0x00 or 0xFF — a KEYGEN
+ * CONVENTION (not a protocol-level rule). Firmware citation (HEAD
+ * 8ede7641, examples/simple_repeater/main.cpp:83):
+ *
  *   while (... && (pub_key[0] == 0x00 || pub_key[0] == 0xFF)) { ... }
  *
+ * Only the FIRST byte is checked — internal 00 / FF bytes are normal.
+ *
  * This test pins:
- *   - isReservedPrefix() semantics (case-insensitive, multi-byte aware)
+ *   - isReservedPrefix() semantics (case-insensitive, first byte only)
  *   - markReservedCells() applies .prefix-reserved + disables click on matrix
  *
  * Reporter: @halo779 (community).
@@ -86,8 +91,8 @@ test('cell FF had .hash-active removed',                              () => asse
 test('cell 10 still has .hash-active (untouched)',                    () => assert.strictEqual(cells[10]._classes.has('hash-active'),  true));
 test('cell 00 has aria-disabled=true',                                () => assert.strictEqual(cells[0]._attrs['aria-disabled'],   'true'));
 test('cell FF has aria-disabled=true',                                () => assert.strictEqual(cells[255]._attrs['aria-disabled'], 'true'));
-test('cell 00 title cites MeshCore protocol', () => assert.ok(/reserved by the MeshCore protocol/i.test(cells[0]._attrs.title)));
-test('cell FF title cites MeshCore protocol', () => assert.ok(/reserved by the MeshCore protocol/i.test(cells[255]._attrs.title)));
+test('cell 00 title cites MeshCore firmware keygen', () => assert.ok(/MeshCore firmware keygen/i.test(cells[0]._attrs.title)));
+test('cell FF title cites MeshCore firmware keygen', () => assert.ok(/MeshCore firmware keygen/i.test(cells[255]._attrs.title)));
 
 console.log('\n=== #1473: prefix-reserved.js loaded by index.html ===');
 const indexHtml = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');

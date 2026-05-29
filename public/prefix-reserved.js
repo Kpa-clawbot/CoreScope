@@ -1,9 +1,19 @@
 /* === CoreScope — prefix-reserved.js =====================================
  *
- * Issue #1473 — Single source of truth for "reserved" MeshCore prefixes.
+ * Issue #1473 — Flag prefixes that the MeshCore firmware keygen routine
+ * avoids by convention.
  *
- * Why: the MeshCore firmware refuses to use any identity whose public-key
- * first byte is 0x00 or 0xFF. From examples/simple_repeater/main.cpp:64:
+ * Scope (narrow, per meshcore-protocol-expert review):
+ *   - This is a FIRMWARE KEYGEN CONVENTION, not a protocol-level rule.
+ *     The standard repeater example re-rolls any new identity whose
+ *     public-key FIRST BYTE is 0x00 or 0xFF, so in practice you should
+ *     never see a node prefix of 00 or FF in the wild.
+ *   - We only check the FIRST byte. Other bytes 00/FF inside a pubkey are
+ *     perfectly normal (~96% of pubkeys contain a 00 or FF byte somewhere).
+ *   - There is NO protocol rejection of such pubkeys and NO routing-level
+ *     wildcard semantics tied to dest_hash == 0xFF.
+ *
+ * Firmware citation (HEAD 8ede7641, examples/simple_repeater/main.cpp:83):
  *
  *   while (count < 10 && (the_mesh.self_id.pub_key[0] == 0x00
  *                      || the_mesh.self_id.pub_key[0] == 0xFF)) {
@@ -11,14 +21,13 @@
  *     the_mesh.self_id = radio_new_identity(); count++;
  *   }
  *
- *   https://github.com/meshcore-dev/MeshCore/blob/6b52fb32301c273fc78d96183501eb23ad33c5bb/examples/simple_repeater/main.cpp#L64
+ *   https://github.com/meshcore-dev/MeshCore/blob/8ede7641/examples/simple_repeater/main.cpp#L83
  *
  * Surfaces that consume this helper:
  *   - Prefix matrix (analytics.js → renderHashMatrixFromServer, 1-byte view):
- *     mark cells 00 / FF as .prefix-reserved and disable click.
+ *     grey 00 / FF cells and disable click, tooltip explains the convention.
  *   - Prefix generator (analytics.js → renderPrefixTool.doGenerate):
- *     never suggest a prefix whose first byte is reserved; show a visible
- *     "excluded — reserved by protocol" note.
+ *     never suggest a prefix whose first byte is 00 / FF; visible note.
  *
  * Reporter: @halo779 (community).
  * ========================================================================= */
@@ -28,9 +37,9 @@
   // First-byte reservations as uppercase 2-char hex strings.
   var RESERVED_FIRST_BYTES = ['00', 'FF'];
   var RESERVED_CLASS = 'prefix-reserved';
-  var RESERVED_NOTE = '0x00 and 0xFF excluded — reserved by the MeshCore protocol.';
+  var RESERVED_NOTE = '0x00 and 0xFF excluded — the MeshCore firmware keygen routine avoids these as the first byte of a node pubkey.';
   var RESERVED_TITLE =
-    '0x00 and 0xFF are reserved by the MeshCore protocol — should never be used as a node prefix.';
+    '0x00 and 0xFF as a first byte are avoided by the MeshCore firmware keygen convention (the standard repeater re-rolls identities whose pub_key[0] is 0x00 or 0xFF), so you should not pick them as a node prefix.';
 
   function isReservedPrefix(prefix) {
     if (prefix == null) return false;

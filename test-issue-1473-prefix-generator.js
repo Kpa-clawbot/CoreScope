@@ -1,7 +1,8 @@
 /**
  * Issue #1473 — Prefix generator (#/analytics?tab=prefix-tool) must NOT
- * suggest 0x00 or 0xFF (or any prefix whose first byte is 0x00/0xFF for
- * multi-byte variants) since MeshCore firmware rerolls such keys.
+ * suggest any prefix whose FIRST byte is 0x00 or 0xFF, since the MeshCore
+ * firmware keygen routine re-rolls such identities by convention (HEAD
+ * 8ede7641, examples/simple_repeater/main.cpp:83).
  *
  * Reporter: @halo779 (community).
  */
@@ -96,7 +97,7 @@ const analyticsSrc = fs.readFileSync(path.join(__dirname, 'public', 'analytics.j
 test('analytics.js references PrefixReserved (generator wiring)',
   () => assert.ok(/PrefixReserved/.test(analyticsSrc)));
 test('analytics.js mentions the reserved-excluded note in the generator card',
-  () => assert.ok(/0x00 and 0xFF[^<]{0,80}reserved/i.test(analyticsSrc)));
+  () => assert.ok(/0x00 and 0xFF[\s\S]{0,200}excluded/i.test(analyticsSrc)));
 test('analytics.js loads prefix-reserved before analytics in index.html',
   () => {
     const html = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
