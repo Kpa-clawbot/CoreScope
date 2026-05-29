@@ -62,18 +62,21 @@
     // operator picks a per-role override. colorOverride (MultiByte
     // status tint) wins when provided.
     const fillColor = colorOverride || ('var(--mc-role-' + (role || 'companion') + ')');
+    // #1488 — marker stroke through CSS vars so operators can dial
+    // colour / width / opacity via the customizer (Colors → Marker Stroke).
+    const strokeAttr = ' stroke="var(--mc-marker-stroke-color)" stroke-width="var(--mc-marker-stroke-width)" stroke-opacity="var(--mc-marker-stroke-opacity)"';
     const size = s.radius * 2 + 4;
     const c = size / 2;
     let path;
     switch (s.shape) {
       case 'diamond':
-        path = `<polygon points="${c},2 ${size-2},${c} ${c},${size-2} 2,${c}" fill="${fillColor}" stroke="#fff" stroke-width="1"/>`;
+        path = `<polygon points="${c},2 ${size-2},${c} ${c},${size-2} 2,${c}" fill="${fillColor}"${strokeAttr}/>`;
         break;
       case 'square':
-        path = `<rect x="3" y="3" width="${size-6}" height="${size-6}" fill="${fillColor}" stroke="#fff" stroke-width="1"/>`;
+        path = `<rect x="3" y="3" width="${size-6}" height="${size-6}" fill="${fillColor}"${strokeAttr}/>`;
         break;
       case 'triangle':
-        path = `<polygon points="${c},2 ${size-2},${size-2} 2,${size-2}" fill="${fillColor}" stroke="#fff" stroke-width="1"/>`;
+        path = `<polygon points="${c},2 ${size-2},${size-2} 2,${size-2}" fill="${fillColor}"${strokeAttr}/>`;
         break;
       case 'hexagon': {
         // #1293 — pointy-top hexagon for room servers
@@ -84,7 +87,7 @@
           hpts += (c + hr * Math.cos(ha)).toFixed(2) + ',' +
                   (c + hr * Math.sin(ha)).toFixed(2) + ' ';
         }
-        path = `<polygon points="${hpts.trim()}" fill="${fillColor}" stroke="#fff" stroke-width="1"/>`;
+        path = `<polygon points="${hpts.trim()}" fill="${fillColor}"${strokeAttr}/>`;
         break;
       }
       case 'star': {
@@ -97,11 +100,11 @@
           pts += `${cx + outer * Math.cos(aOuter)},${cy + outer * Math.sin(aOuter)} `;
           pts += `${cx + inner * Math.cos(aInner)},${cy + inner * Math.sin(aInner)} `;
         }
-        path = `<polygon points="${pts.trim()}" fill="${fillColor}" stroke="#fff" stroke-width="1"/>`;
+        path = `<polygon points="${pts.trim()}" fill="${fillColor}"${strokeAttr}/>`;
         break;
       }
       default: // circle
-        path = `<circle cx="${c}" cy="${c}" r="${c-2}" fill="${fillColor}" stroke="#fff" stroke-width="1"/>`;
+        path = `<circle cx="${c}" cy="${c}" r="${c-2}" fill="${fillColor}"${strokeAttr}/>`;
     }
     // If this node is also an observer, add a small star overlay
     let obsOverlay = '';
@@ -116,7 +119,7 @@
         starPts += `${scx + so * Math.cos(aO)},${scy + so * Math.sin(aO)} `;
         starPts += `${scx + si * Math.cos(aI)},${scy + si * Math.sin(aI)} `;
       }
-      obsOverlay = `<g transform="translate(${sx},${sy})"><polygon points="${starPts.trim()}" fill="var(--mc-role-observer)" stroke="#fff" stroke-width="0.8"/></g>`;
+      obsOverlay = `<g transform="translate(${sx},${sy})"><polygon points="${starPts.trim()}" fill="var(--mc-role-observer)" stroke="var(--mc-marker-stroke-color)" stroke-width="0.8" stroke-opacity="var(--mc-marker-stroke-opacity)"/></g>`;
     }
     const svg = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">${path}${obsOverlay}</svg>`;
     return L.divIcon({

@@ -278,20 +278,23 @@
     // that need a fixed tint (matrix mode, stale dim) keep passing
     // their explicit colour.
     var fill = color || ('var(--mc-role-' + (role || 'companion') + ')');
+    // #1488 — stroke routed through CSS vars so operators can dial
+    // colour/width without code edits (customizer Colors → Marker Stroke).
+    var strokeAttr = ' stroke="var(--mc-marker-stroke-color)" stroke-width="var(--mc-marker-stroke-width)" stroke-opacity="var(--mc-marker-stroke-opacity)"';
     var path;
     switch (shape) {
       case 'square':
         path = '<rect x="3" y="3" width="' + (size - 6) + '" height="' + (size - 6) +
-               '" fill="' + fill + '" stroke="#fff" stroke-width="1"/>';
+               '" fill="' + fill + '"' + strokeAttr + '/>';
         break;
       case 'triangle':
         path = '<polygon points="' + c + ',2 ' + (size - 2) + ',' + (size - 2) +
-               ' 2,' + (size - 2) + '" fill="' + fill + '" stroke="#fff" stroke-width="1"/>';
+               ' 2,' + (size - 2) + '" fill="' + fill + '"' + strokeAttr + '/>';
         break;
       case 'diamond':
         path = '<polygon points="' + c + ',2 ' + (size - 2) + ',' + c + ' ' +
                c + ',' + (size - 2) + ' 2,' + c +
-               '" fill="' + fill + '" stroke="#fff" stroke-width="1"/>';
+               '" fill="' + fill + '"' + strokeAttr + '/>';
         break;
       case 'hexagon': {
         // Pointy-top hexagon centred at (c,c), inscribed radius ≈ c-1.5
@@ -303,7 +306,7 @@
                  (c + r * Math.sin(a)).toFixed(2) + ' ';
         }
         path = '<polygon points="' + pts.trim() + '" fill="' + fill +
-               '" stroke="#fff" stroke-width="1"/>';
+               '"' + strokeAttr + '/>';
         break;
       }
       case 'star': {
@@ -316,12 +319,12 @@
           spts += (cx + inner * Math.cos(aI)) + ',' + (cy + inner * Math.sin(aI)) + ' ';
         }
         path = '<polygon points="' + spts.trim() + '" fill="' + fill +
-               '" stroke="#fff" stroke-width="1"/>';
+               '"' + strokeAttr + '/>';
         break;
       }
       default: // circle
         path = '<circle cx="' + c + '" cy="' + c + '" r="' + (c - 2) +
-               '" fill="' + fill + '" stroke="#fff" stroke-width="1"/>';
+               '" fill="' + fill + '"' + strokeAttr + '/>';
     }
     return '<svg width="' + size + '" height="' + size +
            '" viewBox="0 0 ' + size + ' ' + size +

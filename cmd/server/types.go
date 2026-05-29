@@ -979,6 +979,9 @@ type ThemeResponse struct {
 	NodeColors map[string]interface{} `json:"nodeColors"`
 	TypeColors map[string]interface{} `json:"typeColors"`
 	Home       interface{}            `json:"home"`
+	// #1488 — marker stroke overlay so the frontend can apply server-side
+	// defaults before the operator's localStorage override loads.
+	MarkerStroke map[string]interface{} `json:"markerStroke,omitempty"`
 }
 
 type MapConfigResponse struct {
