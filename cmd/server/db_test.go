@@ -51,7 +51,10 @@ func setupTestDB(t *testing.T) *DB {
 			uptime_secs INTEGER,
 			noise_floor REAL,
 			inactive INTEGER DEFAULT 0,
-			last_packet_at TEXT DEFAULT NULL
+			last_packet_at TEXT DEFAULT NULL,
+			clock_skew_seconds INTEGER DEFAULT NULL,
+			clock_skew_count_24h INTEGER DEFAULT 0,
+			clock_last_naive_at TEXT DEFAULT NULL
 		);
 
 		CREATE TABLE transmissions (
