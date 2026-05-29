@@ -14,6 +14,7 @@
   let animCanvas, animCtx;
   let activeAnimations = [];
   let isAnimating = false;
+  let canvasTopLeft;
   let clickablePaths = [];
   const CLICKABLE_PATH_TTL_MS = 30000;
   const CLICKABLE_PATH_MAX = 50;
@@ -1189,42 +1190,63 @@
       preferCanvas: true
     }).setView(mapCenter, mapZoom);
 
-    // Create a raw canvas for high-performance animations
-    animCanvas = document.createElement('canvas');
-    animCanvas.style.cssText = 'position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:625;';
+    // 1. Create a custom pane for high-performance canvas animations
+    map.createPane('animationsPane');
+
+    // ARCHITECTURE NOTE - z-index: 625
+    // Leaflet's default pane z-indexes dictate the stacking context:
+    // - overlayPane: 400 (vector paths)
+    // - markerPane: 600 (static node dots)
+    // - tooltipPane: 650 (hover labels)
+    // - popupPane: 700 (click details)
+    // We intentionally sandwich this pane at 625 so flying packets draw 
+    // visually OVER the static nodes, but safely UNDER tooltips and popups.
+    map.getPane('animationsPane').style.zIndex = 625;
     
-    const mapContainer = document.getElementById('liveMap');
-    mapContainer.appendChild(animCanvas);
+    // Ensure mouse events pass through to the markers/map below
+    map.getPane('animationsPane').style.pointerEvents = 'none';
+
+    // 2. Create the canvas and inject into the pane
+    animCanvas = document.createElement('canvas');
+    // Leaflet uses translate3d for positioning, so we use absolute positioning but rely on L.DomUtil
+    animCanvas.style.cssText = 'position:absolute; pointer-events:none;';
+    
+    map.getPane('animationsPane').appendChild(animCanvas);
     animCtx = animCanvas.getContext('2d');
 
-    function resizeAnimCanvas() {
-      if (!animCanvas || !mapContainer) return;
-      
-      const rect = mapContainer.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      
-      animCanvas.width = rect.width * dpr;
-      animCanvas.height = rect.height * dpr;
-      
-      // Use setTransform to guarantee an absolute scale overwrite, 
-      // preventing exponential scale compounding on HiDPI screens during resize
-      animCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // 3. The Leaflet-native positioning function
+    function updateAnimCanvas() {
+        if (!animCanvas || !map) return;
+        
+        // Add a 20% buffer around the visible screen to prevent clipping during short pans
+        const size = map.getSize();
+        const padX = size.x * 0.2;
+        const padY = size.y * 0.2;
+        
+        const w = size.x + padX * 2;
+        const h = size.y + padY * 2;
+        
+        const dpr = window.devicePixelRatio || 1;
+        
+        // Updating width/height automatically clears the canvas
+        animCanvas.width = w * dpr;
+        animCanvas.height = h * dpr;
+        animCanvas.style.width = w + 'px';
+        animCanvas.style.height = h + 'px';
+        
+        animCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        // Find the top-left Layer Point (relative to the pane, not the screen)
+        const centerPt = map.latLngToLayerPoint(map.getCenter());
+        canvasTopLeft = L.point(centerPt.x - w/2, centerPt.y - h/2);
+        
+        // Let Leaflet position the canvas inside the pane using CSS transforms
+        L.DomUtil.setPosition(animCanvas, canvasTopLeft);
     }
 
-    // 1. Catch DOM Element resizes (e.g., when the user drags your feed panel)
-    if (window.ResizeObserver) {
-        const ro = new ResizeObserver(resizeAnimCanvas);
-        ro.observe(mapContainer);
-    } else {
-        // Fallback for very old browsers
-        window.addEventListener('resize', resizeAnimCanvas);
-    }
-
-    // 2. Catch Leaflet's internal resize events just to be completely safe
-    map.on('resize', resizeAnimCanvas);
-
-    // Set the initial size immediately
-    resizeAnimCanvas();
+    // 4. Hook into Leaflet's transition-end events
+    map.on('moveend zoomend resize', updateAnimCanvas);
+    updateAnimCanvas();
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -3456,9 +3478,20 @@
   
       const t = Math.min(1, anim.progress);
   
-      // Calculate current screen pixel position
-      const fromPt = map.latLngToContainerPoint(anim.from);
-      const toPt = map.latLngToContainerPoint(anim.to);
+      // Use LayerPoint math so coordinates lock to the moving pane
+      const fromLayerPt = map.latLngToLayerPoint(anim.from);
+      const toLayerPt = map.latLngToLayerPoint(anim.to);
+
+      // Offset by the canvas's position within the pane to get drawable pixels
+      const fromPt = {
+        x: fromLayerPt.x - canvasTopLeft.x,
+        y: fromLayerPt.y - canvasTopLeft.y
+      };
+      const toPt = {
+        x: toLayerPt.x - canvasTopLeft.x,
+        y: toLayerPt.y - canvasTopLeft.y
+      };
+
       const currentX = fromPt.x + (toPt.x - fromPt.x) * t;
       const currentY = fromPt.y + (toPt.y - fromPt.y) * t;
   
@@ -3561,8 +3594,14 @@
   }
 
   function drawAnimatedLine(from, to, color, onComplete, overrideOpacity, rawHex, hash) {
+    // GUARD: Prevent stale callbacks from pushing to a destroyed map
+    if (!map || !animCtx) { 
+      if (onComplete) onComplete(); 
+      return; 
+    }
+  
     if (matrixMode) return drawMatrixLine(from, to, color, onComplete, rawHex);
-
+  
     const mainOpacity = overrideOpacity ?? 0.8;
     const isDashed = overrideOpacity != null;
 
@@ -3889,6 +3928,13 @@
     nodeActivity = {}; pktTimestamps = [];
     feedDedup.clear();
     VCR.buffer = []; VCR.playhead = -1; VCR.mode = 'LIVE'; VCR.missedCount = 0; VCR.speed = _initialSpeed; VCR.replayGen = 0;
+
+    // CLEANUP: Kill the canvas loop, dump the queue, and clear the screen
+    activeAnimations.length = 0;
+    isAnimating = false;
+    if (animCtx && animCanvas) {
+      animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
+    }
   }
 
   let _themeRefreshHandler = null;
