@@ -1259,12 +1259,15 @@
     updateAnimCanvas();
 
     _dprChangeHandler = () => {
-      updateAnimCanvas();
-      if (_dprMedia) {
-        _dprMedia.removeEventListener('change', _dprChangeHandler);
+      try {
+        updateAnimCanvas();
+      } finally {
+        if (_dprMedia) {
+          _dprMedia.removeEventListener('change', _dprChangeHandler);
+        }
+        _dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+        _dprMedia.addEventListener('change', _dprChangeHandler);
       }
-      _dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-      _dprMedia.addEventListener('change', _dprChangeHandler);
     };
     _dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
     _dprMedia.addEventListener('change', _dprChangeHandler);
@@ -2517,6 +2520,9 @@
     rebuildFeedList();
   }
 
+  // Prevent browser sub-pixel snapping by ensuring DOM sizes are even integers
+  function evenSize(n) { return n % 2 ? n + 1 : n; }
+
   function addNodeMarker(n) {
     if (nodeMarkers[n.public_key]) return nodeMarkers[n.public_key];
     const color = ROLE_COLORS[n.role] || ROLE_COLORS.unknown;
@@ -2531,11 +2537,7 @@
     // Shape-aware sizing: keep prior visual weight (~6/4 base) but
     // route through divIcon so colourblind ops get distinct silhouettes
     // (#1293). Size is the SVG box; circleMarker radius ~= size/3.
-    let sizePx = Math.max(10, Math.round((isRepeater ? 18 : 14) * zoomScale));
-    // Force sizePx to be an even number so iconAnchor (sizePx/2) is always an integer.
-    // This prevents browser sub-pixel snapping of the divIcon, which causes
-    // it to visibly misalign with mathematically-exact Leaflet SVG paths underneath.
-    if (sizePx % 2 !== 0) sizePx += 1;
+    let sizePx = evenSize(Math.max(10, Math.round((isRepeater ? 18 : 14) * zoomScale)));
 
     const svgHtml = (window.makeRoleMarkerSVG
       ? window.makeRoleMarkerSVG(n.role, null, sizePx)
@@ -2647,9 +2649,7 @@
     for (const [key, marker] of Object.entries(nodeMarkers)) {
       const n = nodeData[key];
       const isRepeater = n && n.role === 'repeater';
-      let sizePx = Math.max(10, Math.round((isRepeater ? 18 : 14) * zoomScale));
-      // Force sizePx to be even to prevent sub-pixel anchor drift
-      if (sizePx % 2 !== 0) sizePx += 1;
+      let sizePx = evenSize(Math.max(10, Math.round((isRepeater ? 18 : 14) * zoomScale)));
       _liveSetMarkerSize(marker, sizePx);
     }
   }
