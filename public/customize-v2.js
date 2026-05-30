@@ -1309,7 +1309,7 @@
     // local override) so the operator sees what's actually painted.
     var ms = eff.markerStroke || {};
     var msColor = typeof ms.color === 'string' && ms.color ? ms.color : '#ffffff';
-    var msWidth = ms.width != null && isFinite(ms.width) ? Number(ms.width) : 1;
+    var msWidth = ms.width != null && isFinite(ms.width) ? Number(ms.width) : 2;
     var msOpacity = ms.opacity != null && isFinite(ms.opacity) ? Number(ms.opacity) : 1;
     var msOpacityPct = Math.round(msOpacity * 100);
 
