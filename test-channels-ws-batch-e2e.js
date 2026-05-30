@@ -60,7 +60,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   // #1498: this test is genuinely flaky on master CI — closure-over-stale-messages
   // hypothesis isn't yet root-caused. Skipping to unblock master while the real
   // diagnosis is pending. Re-enable by changing step.skip back to step.
-  await step.skip('processWSBatch with explicit sender appends to messages', async () => {
+  await step('processWSBatch with explicit sender appends to messages', async () => {
     await page.evaluate((h) => {
       window._channelsProcessWSBatchForTest([{
         type: 'message',
