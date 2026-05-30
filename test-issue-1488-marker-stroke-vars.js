@@ -94,6 +94,38 @@ console.log('\n=== #1488 E: customize-v2.js exposes marker stroke controls ===')
     'customize-v2.js writes --mc-marker-stroke-opacity');
 }
 
+console.log('\n=== #1506 F: server defaults restored to v3.7.2 (solid white, 2px) ===');
+{
+  // Locate the :root block in style.css and pull the marker-stroke
+  // var defaults; assert they match the v3.7.2 visual (solid white, 2px,
+  // fully opaque). The customizer can dial them down per-operator.
+  var colorMatch = styleSrc.match(/--mc-marker-stroke-color\s*:\s*([^;]+);/);
+  var widthMatch = styleSrc.match(/--mc-marker-stroke-width\s*:\s*([^;]+);/);
+  var opacityMatch = styleSrc.match(/--mc-marker-stroke-opacity\s*:\s*([^;]+);/);
+  assert(colorMatch && /^(#fff|#ffffff|white|rgb\(\s*255\s*,\s*255\s*,\s*255\s*\))$/i.test(colorMatch[1].trim()),
+    'style.css --mc-marker-stroke-color is solid white (got: ' + (colorMatch ? colorMatch[1].trim() : 'MISSING') + ')');
+  assert(widthMatch && Number(widthMatch[1].trim()) === 2,
+    'style.css --mc-marker-stroke-width is 2 (got: ' + (widthMatch ? widthMatch[1].trim() : 'MISSING') + ')');
+  assert(opacityMatch && Number(opacityMatch[1].trim()) === 1,
+    'style.css --mc-marker-stroke-opacity is 1 (got: ' + (opacityMatch ? opacityMatch[1].trim() : 'MISSING') + ')');
+
+  // customize-v2.js fallback defaults (when neither server config nor
+  // local override provides a value) must match the new server defaults
+  // so the customizer UI shows what's actually painted.
+  var fallbackWidth = customizeSrc.match(/ms\.width\s*!=\s*null[^?]*\?\s*Number\(ms\.width\)\s*:\s*(\d+(?:\.\d+)?)/);
+  assert(fallbackWidth && Number(fallbackWidth[1]) === 2,
+    'customize-v2.js msWidth fallback is 2 (got: ' + (fallbackWidth ? fallbackWidth[1] : 'MISSING') + ')');
+
+  // config.example.json defaults must also match so fresh deploys ship
+  // the v3.7.2 visual without operator action.
+  var configSrc = fs.readFileSync(path.join(__dirname, 'config.example.json'), 'utf8');
+  var cfg = JSON.parse(configSrc);
+  assert(cfg.markerStroke && /^(#fff|#ffffff|white|rgb\(\s*255\s*,\s*255\s*,\s*255\s*\))$/i.test(String(cfg.markerStroke.color || '').trim()),
+    'config.example.json markerStroke.color is solid white (got: ' + (cfg.markerStroke && cfg.markerStroke.color) + ')');
+  assert(cfg.markerStroke && cfg.markerStroke.width === 2,
+    'config.example.json markerStroke.width is 2 (got: ' + (cfg.markerStroke && cfg.markerStroke.width) + ')');
+}
+
 console.log('\n--- Summary ---');
 console.log(passed + ' passed, ' + failed + ' failed');
 process.exit(failed > 0 ? 1 : 0);
