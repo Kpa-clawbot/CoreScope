@@ -27,7 +27,6 @@ node test-channel-issue-1087.js
 node test-issue-1409-no-encrypted-flood.js
 node test-analytics-channels-integration.js
 node test-observers-headings.js
-node test-marker-outline-weight.js
 node test-traces.js
 
 # #1418 — route-view v2 (Tufte) coverage

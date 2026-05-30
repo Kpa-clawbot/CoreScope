@@ -1304,3 +1304,21 @@
   margin: 0;
   padding: 0;
 }
+
+@keyframes live-ghost-pulse {
+  0%, 100% { fill-opacity: 0.25; opacity: 0.4; }
+  50% { fill-opacity: 0.6; opacity: 0.7; }
+}
+
+.live-ghost-pulse {
+  animation: live-ghost-pulse 1.2s infinite ease-in-out;
+}
+
+/* Hide all overlays during zoom for maximum smoothness */
+.leaflet-zoom-anim .leaflet-marker-pane,
+.leaflet-zoom-anim .leaflet-tooltip-pane,
+.leaflet-zoom-anim .leaflet-popup-pane,
+.leaflet-zoom-anim .leaflet-overlay-pane,
+.leaflet-zoom-anim .leaflet-liveAnimPane-pane {
+  display: none !important;
+}

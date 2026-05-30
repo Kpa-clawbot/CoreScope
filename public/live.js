@@ -15,6 +15,7 @@
   let _dprMedia = null;
   let _dprChangeHandler = null;
   let activeAnimations = [];
+  let activePulses = [];
   let isAnimating = false;
   let activeFades = [];
   let isFading = false;
@@ -1254,9 +1255,26 @@
       L.DomUtil.setPosition(animCanvas, canvasTopLeft);
     }
 
+    function cullMarkers() {
+      if (!map || !nodesLayer) return;
+      let bounds;
+      try { bounds = map.getBounds().pad(0.5); } catch (e) { return; }
+      for (const key in nodeMarkers) {
+        const marker = nodeMarkers[key];
+        const isVisible = bounds.contains(marker.getLatLng());
+        const hasLayer = nodesLayer.hasLayer(marker);
+        if (isVisible && !hasLayer) nodesLayer.addLayer(marker);
+        else if (!isVisible && hasLayer) nodesLayer.removeLayer(marker);
+      }
+    }
+
     // 4. Hook into Leaflet's transition-end events
-    map.on('moveend zoomend resize', updateAnimCanvas);
+    map.on('moveend zoomend resize', () => {
+      updateAnimCanvas();
+      cullMarkers();
+    });
     updateAnimCanvas();
+    cullMarkers();
 
     _dprChangeHandler = () => {
       try {
@@ -2552,22 +2570,14 @@
       iconAnchor: [sizePx / 2, sizePx / 2],
       popupAnchor: [0, -sizePx / 2]
     });
-    const marker = L.marker([n.lat, n.lon], { icon: icon, interactive: true }).addTo(nodesLayer);
-
-    // Highlight ring (#1293): a separate stroke-only circleMarker layered
-    // BENEATH the shape. Hidden by default; pulseNodeMarker grows/fades
-    // its radius + opacity — never fills, so same-hue concentric stacking
-    // (issue's "blue-on-blue") is impossible.
-    const ringPos = [n.lat, n.lon];
-    const ring = L.circleMarker(ringPos, {
-      radius: sizePx / 2 + 4,
-      fillOpacity: 0,
-      fill: false,
-      color: color,
-      weight: 0,
-      opacity: 0,
-      interactive: false
-    }).addTo(nodesLayer);
+    const marker = L.marker([n.lat, n.lon], { icon: icon, interactive: true });
+    try {
+      if (!map || map.getBounds().pad(0.5).contains(marker.getLatLng())) {
+        marker.addTo(nodesLayer);
+      }
+    } catch (e) {
+      marker.addTo(nodesLayer);
+    }
 
     marker.bindTooltip(n.name || n.public_key.slice(0, 8), {
       permanent: false, direction: 'top', offset: [0, -sizePx / 2], className: 'live-tooltip'
@@ -2575,7 +2585,6 @@
 
     marker.on('click', () => showNodeDetail(n.public_key));
 
-    marker._highlightRing = ring;
     marker._baseColor = color;
     marker._baseSize = sizePx;
     marker._role = n.role || 'unknown';
@@ -2625,9 +2634,6 @@
       svg.setAttribute('height', sizePx);
     }
     marker._baseSize = sizePx;
-    if (marker._highlightRing && typeof marker._highlightRing.setRadius === 'function') {
-      marker._highlightRing.setRadius(sizePx / 2 + 4);
-    }
   }
   function _liveSetMarkerColor(marker, color) {
     var el = _liveMarkerEl(marker);
@@ -2679,7 +2685,6 @@
           if (marker) {
             if (nodesLayer) {
               try { nodesLayer.removeLayer(marker); } catch (e) { }
-              if (marker._highlightRing) try { nodesLayer.removeLayer(marker._highlightRing); } catch (e) { }
             }
           }
           delete nodeMarkers[key];
@@ -3115,25 +3120,13 @@
       if (isGhost) {
         if (!nodeMarkers[hp.key]) {
           const ghost = L.circleMarker(hp.pos, {
-            radius: 3, fillColor: '#94a3b8', fillOpacity: 0.35, color: '#94a3b8', weight: 1, opacity: 0.5
+            radius: 3, fillColor: '#94a3b8', fillOpacity: 0.35, color: '#94a3b8', weight: 1, opacity: 0.5,
+            className: 'live-ghost-pulse'
           }).addTo(animLayer);
-          let pulseUp = true;
-          let lastPulseTime = performance.now();
-          const pulseExpiry = lastPulseTime + 3000;
-          function ghostPulse(now) {
-            if (!animLayer || !animLayer.hasLayer(ghost)) return;
-            if (now >= pulseExpiry) {
-              if (animLayer && animLayer.hasLayer(ghost)) animLayer.removeLayer(ghost);
-              return;
-            }
-            if (now - lastPulseTime >= 600) {
-              lastPulseTime = now;
-              ghost.setStyle({ fillOpacity: pulseUp ? 0.6 : 0.25, opacity: pulseUp ? 0.7 : 0.4 });
-              pulseUp = !pulseUp;
-            }
-            requestAnimationFrame(ghostPulse);
-          }
-          requestAnimationFrame(ghostPulse);
+          
+          setTimeout(() => {
+            if (animLayer && animLayer.hasLayer(ghost)) try { animLayer.removeLayer(ghost); } catch { }
+          }, 3000);
         }
       } else {
         pulseNode(hp.key, hp.pos, typeName);
@@ -3172,56 +3165,23 @@
     if (!marker) return;
     const color = TYPE_COLORS[typeName] || '#6b7280';
 
-    const ring = L.circleMarker(pos, {
-      radius: 2, fillColor: 'transparent', fillOpacity: 0, color: color, weight: 3, opacity: 0.9
-    }).addTo(animLayer);
-
-    let r = 2, op = 0.9;
-    let lastPulse = performance.now();
-    const pulseStart = lastPulse;
-    function animatePulse(now) {
-      if (!animLayer) return;
-      if (now - pulseStart > 2000) {
-        try { animLayer.removeLayer(ring); } catch { }
-        return;
-      }
-      const elapsed = now - lastPulse;
-      if (elapsed >= 26) {
-        const ticks = Math.min(Math.floor(elapsed / 26), 4);
-        r += 1.5 * ticks; op -= 0.03 * ticks;
-        lastPulse = now;
-        if (op <= 0) {
-          try { animLayer.removeLayer(ring); } catch { }
-          return;
-        }
-        try {
-          ring.setRadius(r);
-          ring.setStyle({ opacity: op, weight: Math.max(0.3, 3 - r * 0.04) });
-        } catch { return; }
-      }
-      requestAnimationFrame(animatePulse);
-    }
-    requestAnimationFrame(animatePulse);
-
     const baseColor = marker._baseColor || '#6b7280';
     const baseSize = marker._baseSize || 14;
 
-    // #1293 — highlight via OUTLINE ring (no same-colour concentric
-    // fill). Use the marker's pre-allocated _highlightRing; grow + fade
-    // it. Marker shape/colour is left untouched so colourblind silhouette
-    // stays distinguishable during the pulse.
-    const ringHl = marker._highlightRing;
-    if (ringHl && typeof ringHl.setStyle === 'function') {
-      try {
-        ringHl.setStyle({ color: color, weight: 3, opacity: 0.95, fillOpacity: 0, fill: false });
-        ringHl.setRadius(baseSize / 2 + 4);
-        setTimeout(() => {
-          try { ringHl.setStyle({ opacity: 0.4, weight: 2 }); ringHl.setRadius(baseSize / 2 + 8); } catch (e) { }
-        }, 200);
-        setTimeout(() => {
-          try { ringHl.setStyle({ opacity: 0, weight: 0 }); } catch (e) { }
-        }, 700);
-      } catch (e) { /* circleMarker absent — ignore */ }
+    activePulses.push({
+      pos: pos,
+      color: color,
+      r: 2,
+      op: 0.9,
+      hl_r: baseSize / 2 + 4,
+      hl_op: 0.95,
+      hl_weight: 3,
+      startTime: performance.now(),
+      lastPulse: null
+    });
+    if (!isAnimating) {
+      isAnimating = true;
+      requestAnimationFrame(renderAnimations);
     }
 
     nodeActivity[key] = (nodeActivity[key] || 0) + 1;
@@ -3509,7 +3469,7 @@
   function renderAnimations(now) {
     if (!animCtx) return;
 
-    if (activeAnimations.length === 0) {
+    if (activeAnimations.length === 0 && activePulses.length === 0) {
       isAnimating = false;
       animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
       return;
@@ -3519,6 +3479,60 @@
 
     // Clear the canvas for this frame
     animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
+
+    // Render Pulses
+    for (let i = activePulses.length - 1; i >= 0; i--) {
+      const pulse = activePulses[i];
+      if (pulse.lastPulse === null) pulse.lastPulse = now;
+      const dt = now - pulse.lastPulse;
+      pulse.lastPulse = now;
+
+      if (!isPaused) {
+        const speed = VCR.speed || 1;
+        const dtSec = (dt / 1000) * speed;
+        // Inner pulse (58px/sec, fade out 1.15/sec)
+        pulse.r += 58 * dtSec;
+        pulse.op -= 1.15 * dtSec;
+        // Outer highlight ring (grow 20px/sec, fade out 1.35/sec)
+        pulse.hl_r += 20 * dtSec;
+        pulse.hl_op -= 1.35 * dtSec;
+        pulse.hl_weight = pulse.hl_op > 0.4 ? 3 : 2;
+      }
+
+      if (pulse.op <= 0 || (!isPaused && now - pulse.startTime > 2000)) {
+        activePulses.splice(i, 1);
+        continue;
+      }
+
+      const pulseLayerPt = map.latLngToLayerPoint(pulse.pos);
+      const pulsePt = {
+        x: pulseLayerPt.x - canvasTopLeft.x,
+        y: pulseLayerPt.y - canvasTopLeft.y
+      };
+
+      const W = animCanvas.clientWidth;
+      const H = animCanvas.clientHeight;
+      if (pulsePt.x >= -pulse.r && pulsePt.x <= W + pulse.r && pulsePt.y >= -pulse.r && pulsePt.y <= H + pulse.r) {
+        // Inner expanding pulse
+        animCtx.beginPath();
+        animCtx.arc(pulsePt.x, pulsePt.y, pulse.r, 0, Math.PI * 2);
+        animCtx.lineWidth = Math.max(0.3, 3 - pulse.r * 0.04);
+        animCtx.strokeStyle = pulse.color;
+        animCtx.globalAlpha = Math.max(0, pulse.op);
+        animCtx.stroke();
+
+        // Outer highlight ring (previously marker._highlightRing)
+        if (pulse.hl_op > 0) {
+          animCtx.beginPath();
+          animCtx.arc(pulsePt.x, pulsePt.y, pulse.hl_r, 0, Math.PI * 2);
+          animCtx.lineWidth = pulse.hl_weight;
+          animCtx.strokeStyle = pulse.color;
+          animCtx.globalAlpha = Math.max(0, pulse.hl_op);
+          animCtx.stroke();
+        }
+      }
+    }
+    animCtx.globalAlpha = 1.0;
 
     for (let i = activeAnimations.length - 1; i >= 0; i--) {
       const anim = activeAnimations[i];
@@ -3970,6 +3984,7 @@
 
   function destroy() {
     activeAnimations.length = 0;
+    activePulses.length = 0;
     activeFades.length = 0;
     isAnimating = false;
     isFading = false;
@@ -4022,6 +4037,7 @@
 
     // CLEANUP: Kill the canvas loop, dump the queue, and clear the screen
     activeAnimations.length = 0;
+    activePulses.length = 0;
     activeFades.length = 0;
     isAnimating = false;
     isFading = false;
