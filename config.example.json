@@ -48,10 +48,10 @@
     "_comment": "Marker/badge colors per node role. Used on map, nodes list, and live feed."
   },
   "markerStroke": {
-    "color": "rgba(255,255,255,0.85)",
-    "width": 1,
+    "color": "#fff",
+    "width": 2,
     "opacity": 1,
-    "_comment": "#1488 — outline around each map marker (live + map pages). 'color' accepts any CSS color (hex, rgb, rgba); use rgba() or drop 'opacity' below ~0.5 to soften the outline when hundreds of nodes feel overwhelming. 'width' is the SVG stroke width (0 hides the outline entirely). Operators can override per-browser via the in-app Theme Customizer (Colors tab → Marker Stroke)."
+    "_comment": "#1488/#1506 — outline around each map marker (live + map pages). Defaults restored to v3.7.2 visual (solid white, 2px). 'color' accepts any CSS color (hex, rgb, rgba); use rgba() or drop 'opacity' below ~0.5 to soften the outline when hundreds of nodes feel overwhelming. 'width' is the SVG stroke width (0 hides the outline entirely). Operators can override per-browser via the in-app Theme Customizer (Colors tab → Marker Stroke)."
   },
   "mapDarkTileProvider": "carto-dark",
   "_comment_mapDarkTileProvider": "Default dark-mode basemap provider. Allowed: 'carto-dark' (Carto dark_all — default), 'esri-darkgray-labels' (Esri Dark Gray Canvas + reference labels), 'voyager-inverted' (Carto Voyager with CSS invert filter), 'positron-inverted' (Carto Positron with CSS invert filter). Light mode is unaffected. Users can override per-browser via the in-app customizer (persisted to localStorage). #1420.",
