@@ -6,6 +6,55 @@
   let selectedHash = null;
   let messages = [];
   let wsHandler = null;
+
+  // #1498: messages appended via the live WebSocket are stamped with
+  // _fromWS so a subsequent REST replacement (selectChannel /
+  // refreshMessages) can merge them in instead of stomping them.
+  // mergeWsAppendedIntoRest() preserves any WS-pushed messages whose
+  // packetHash is not already present in the REST response.
+  //
+  // Takes currentMsgs explicitly (rather than reading the module-global
+  // `messages`) so the helper is unit-testable in isolation.
+  //
+  // Eviction policy (round-1 review finding #1):
+  //   - REST contains the same packetHash → REST version wins, survivor
+  //     dropped (_fromWS flag effectively cleared because REST entry
+  //     has no stamp).
+  //   - Survivor with packetHash NOT in REST → preserved as survivor.
+  //   - Survivor older than MAX_WS_SURVIVOR_MS → dropped regardless
+  //     (defensive cap so a WS message REST never returns can't survive
+  //     forever in the array).
+  //   - Survivor with null/undefined packetHash (finding #3): preserved
+  //     too (no hash → no way to dedup against REST → REST can't
+  //     possibly include it). The max-age cap evicts it eventually.
+  //   - Ordering: REST first, survivors appended at the end. Caller's
+  //     ordering convention is oldest→newest, and survivors arrived
+  //     AFTER the REST snapshot, so end-of-array is the correct slot.
+  var MAX_WS_SURVIVOR_MS = 5 * 60 * 1000; // 5 minutes
+  function mergeWsAppendedIntoRest(currentMsgs, restMsgs) {
+    if (!Array.isArray(restMsgs)) return [];
+    if (!Array.isArray(currentMsgs) || currentMsgs.length === 0) return restMsgs.slice();
+    var restHashes = new Set();
+    for (var i = 0; i < restMsgs.length; i++) {
+      var h = restMsgs[i] && restMsgs[i].packetHash;
+      if (h) restHashes.add(h);
+    }
+    var now = Date.now();
+    var survivors = [];
+    for (var j = 0; j < currentMsgs.length; j++) {
+      var m = currentMsgs[j];
+      if (!m || !m._fromWS) continue;
+      // Drop survivors past max age (defensive eviction).
+      if (m._wsAt && (now - m._wsAt) > MAX_WS_SURVIVOR_MS) continue;
+      // If packetHash present and REST contains it, REST wins (drop).
+      if (m.packetHash && restHashes.has(m.packetHash)) continue;
+      // Hash absent OR not in REST → preserve.
+      survivors.push(m);
+    }
+    // Always return a fresh array — never alias restMsgs — so callers
+    // can mutate freely without leaking changes back to the input.
+    return survivors.length ? restMsgs.concat(survivors) : restMsgs.slice();
+  }
   let autoScroll = true;
   let nodeCache = {};
   let selectedNode = null;
@@ -1402,6 +1451,11 @@
             if (observer && existing.observers && existing.observers.indexOf(observer) === -1) {
               existing.observers.push(observer);
             }
+            // #1498 round-1 finding #2: a WS-arriving observer update on a
+            // REST-loaded message must be stamped so the next REST tick
+            // doesn't stomp it. Without this, the new observer disappears.
+            existing._fromWS = true;
+            existing._wsAt = Date.now();
           } else {
             messages.push({
               sender: sender,
@@ -1414,6 +1468,12 @@
               observers: observer ? [observer] : [],
               hops: payload.path_len || 0,
               snr: snr,
+              // #1498: mark as WS-pushed so a later REST replacement
+              // (selectChannel / refreshMessages) can merge instead of
+              // stomp. Without this flag the REST response wipes any
+              // live messages that landed during the in-flight fetch.
+              _fromWS: true,
+              _wsAt: Date.now(),
             });
           }
           messagesDirty = true;
@@ -1812,6 +1872,11 @@
   async function selectChannel(hash, decryptOpts) {
     const rp = RegionFilter.getRegionParam() || '';
     const request = beginMessageRequest(hash, rp);
+    // #1498: clear messages BEFORE flipping selectedHash so any WS-pushed
+    // messages from the previously-viewed channel can't survive into the
+    // new channel's view via mergeWsAppendedIntoRest(). Messages don't
+    // carry channel context, so the merge can't distinguish them itself.
+    messages = [];
     selectedHash = hash;
     // Clear unread badge on the channel we're about to view (#1029).
     var __selCh = channels.find(function (c) { return c.hash === hash; });
@@ -1835,8 +1900,11 @@
       msgEl.innerHTML = '<div class="ch-loading">Decrypting messages…</div>';
       var result = await fetchAndDecryptChannel(keyHex, channelHashByte, channelName, {
         onCacheHit: function (cachedMsgs) {
-          // M5: Render cached messages immediately while delta fetch runs
-          messages = cachedMsgs;
+          // M5: Render cached messages immediately while delta fetch runs.
+          // #1498 round-1 finding #4: this site is a REST replacement
+          // path too — it must merge any WS-pushed messages instead of
+          // stomping them, same as the other two sites below.
+          messages = mergeWsAppendedIntoRest(messages, cachedMsgs || []);
           if (messages.length > 0) {
             header.querySelector('.ch-header-text').textContent = name + ' — ' + messages.length + ' messages (cached)';
             renderMessages();
@@ -1853,7 +1921,8 @@
         msgEl.innerHTML = '<div class="ch-empty">' + escapeHtml(result.error) + '</div>';
         return { error: result.error, messageCount: 0 };
       }
-      messages = result.messages || [];
+      // #1498: merge WS-pushed messages that landed during the decrypt fetch.
+      messages = mergeWsAppendedIntoRest(messages, result.messages || []);
       if (messages.length === 0) {
         msgEl.innerHTML = '<div class="ch-empty">No encrypted messages found for this channel</div>';
       } else {
@@ -1938,7 +2007,9 @@
       const regionQs = rp ? '&region=' + encodeURIComponent(rp) : '';
       const data = await api(`/channels/${encodeURIComponent(hash)}/messages?limit=200${regionQs}`, { ttl: CLIENT_TTL.channelMessages });
       if (isStaleMessageRequest(request)) return;
-      messages = data.messages || [];
+      // #1498: merge so any WS-pushed messages that arrived while the
+      // REST fetch was in flight aren't stomped.
+      messages = mergeWsAppendedIntoRest(messages, data.messages || []);
       if (messages.length === 0 && rp) {
         msgEl.innerHTML = '<div class="ch-empty">Channel not available in selected region</div>';
       } else {
@@ -1974,11 +2045,17 @@
         document.getElementById('chScrollBtn')?.classList.add('hidden');
         return;
       }
-      // #92: Use message ID/hash for change detection instead of count + timestamp
+      // #92: Use message ID/hash for change detection instead of count + timestamp.
+      // #1498 round-1 finding #5: REST returns oldest→newest, and the
+      // merge appends survivors at the END (newest position), so the
+      // last element of `messages` is the newest item — same convention
+      // for REST and for the merged array. _getLastId remains correct.
       var _getLastId = function (arr) { var m = arr.length ? arr[arr.length - 1] : null; return m ? (m.id || m.packetId || m.timestamp || '') : ''; };
       if (newMsgs.length === messages.length && _getLastId(newMsgs) === _getLastId(messages)) return;
       var prevLen = messages.length;
-      messages = newMsgs;
+      // #1498: merge WS-pushed messages so a refresh that races a live
+      // packet doesn't wipe it.
+      messages = mergeWsAppendedIntoRest(messages, newMsgs);
       renderMessages();
       if (wasAtBottom) scrollToBottom();
       else {
@@ -2057,6 +2134,7 @@
   };
   window._channelsSelectChannelForTest = selectChannel;
   window._channelsRefreshMessagesForTest = refreshMessages;
+  window._channelsMergeWsAppendedIntoRestForTest = mergeWsAppendedIntoRest;
   window._channelsLoadChannelsForTest = loadChannels;
   window._channelsBeginMessageRequestForTest = beginMessageRequest;
   window._channelsIsStaleMessageRequestForTest = isStaleMessageRequest;
