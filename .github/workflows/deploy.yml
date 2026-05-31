@@ -95,6 +95,7 @@ jobs:
           set -e
           node test-packet-filter.js
           node test-packet-filter-time.js
+          node test-channels-merge-1498-unit.js
           node test-channel-decrypt-insecure-context.js
           node test-live-region-filter.js
           node test-issue-1136-observer-iata-map.js
