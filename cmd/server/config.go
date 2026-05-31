@@ -359,9 +359,11 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 			continue
 		}
 		cfg.NormalizeTimestampConfig()
+		applyCORSEnv(cfg)
 		return cfg, nil
 	}
 	cfg.NormalizeTimestampConfig()
+	applyCORSEnv(cfg)
 	return cfg, nil // defaults
 }
 

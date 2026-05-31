@@ -60,7 +60,7 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
   // #1498: this test is genuinely flaky on master CI — closure-over-stale-messages
   // hypothesis isn't yet root-caused. Skipping to unblock master while the real
   // diagnosis is pending. Re-enable by changing step.skip back to step.
-  await step.skip('processWSBatch with explicit sender appends to messages', async () => {
+  await step('processWSBatch with explicit sender appends to messages', async () => {
     await page.evaluate((h) => {
       window._channelsProcessWSBatchForTest([{
         type: 'message',
@@ -82,20 +82,18 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     // some unrelated XMD packet instead of our injected one.
     await page.waitForFunction(() => {
       const s = window._channelsGetStateForTest();
-      return s.messages.some((m) => m.hash === 'wsbatch-explicit-1' || m.id === 'pkt-wsbatch-1');
+      return s.messages.some((m) => m.packetHash === 'wsbatch-explicit-1');
     }, null, { timeout: 3000 });
     const ours = await page.evaluate(() => {
       const s = window._channelsGetStateForTest();
-      return s.messages.find((m) => m.hash === 'wsbatch-explicit-1' || m.id === 'pkt-wsbatch-1');
+      return s.messages.find((m) => m.packetHash === 'wsbatch-explicit-1');
     });
-    assert(ours, 'injected message not found in messages by hash/id');
+    assert(ours, 'injected message not found in messages by packetHash');
     assert(ours.sender === 'WsAlice', 'expected sender WsAlice, got ' + ours.sender);
     assert(/hello world/.test(ours.text), 'text mismatch: ' + ours.text);
   });
 
   await step('GRP_TXT shape with "Sender: text" parses sender from text', async () => {
-    const before = await page.evaluate(
-      () => window._channelsGetStateForTest().messages.length);
     await page.evaluate((h) => {
       window._channelsProcessWSBatchForTest([{
         type: 'packet',
@@ -112,22 +110,20 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         },
       }], []);
     }, selectedHash);
-    await page.waitForFunction((prev) =>
-      window._channelsGetStateForTest().messages.length === prev + 1,
-      before, { timeout: 3000 });
-    const last = await page.evaluate(() => {
+    await page.waitForFunction(() =>
+      window._channelsGetStateForTest().messages.some((m) => m.packetHash === 'wsbatch-parse-1'),
+      null, { timeout: 3000 });
+    const parsed = await page.evaluate(() => {
       const s = window._channelsGetStateForTest();
-      return s.messages[s.messages.length - 1];
+      return s.messages.find((m) => m.packetHash === 'wsbatch-parse-1');
     });
-    assert(last.sender === 'WsBob',
-      'should parse sender from "Sender: text", got: ' + last.sender);
-    assert(last.text === 'parsed message',
-      'displayText should strip sender prefix, got: ' + last.text);
+    assert(parsed.sender === 'WsBob',
+      'should parse sender from "Sender: text", got: ' + parsed.sender);
+    assert(parsed.text === 'parsed message',
+      'displayText should strip sender prefix, got: ' + parsed.text);
   });
 
   await step('dedup by packetHash: second observer bumps repeats + observers list', async () => {
-    const before = await page.evaluate(
-      () => window._channelsGetStateForTest().messages.length);
     await page.evaluate((h) => {
       // First observation.
       window._channelsProcessWSBatchForTest([{
@@ -151,16 +147,16 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         },
       }], []);
     }, selectedHash);
-    await page.waitForFunction((prev) =>
-      window._channelsGetStateForTest().messages.length === prev + 1,
-      before, { timeout: 3000 });
-    const last = await page.evaluate(() => {
+    await page.waitForFunction(() =>
+      window._channelsGetStateForTest().messages.some((m) => m.packetHash === 'wsbatch-dup-1'),
+      null, { timeout: 3000 });
+    const deduped = await page.evaluate(() => {
       const s = window._channelsGetStateForTest();
-      return s.messages[s.messages.length - 1];
+      return s.messages.find((m) => m.packetHash === 'wsbatch-dup-1');
     });
-    assert(last.repeats >= 2, 'repeats should be >=2 after dedup, got: ' + last.repeats);
-    assert(Array.isArray(last.observers) && last.observers.length >= 2,
-      'observers should accumulate, got: ' + JSON.stringify(last.observers));
+    assert(deduped.repeats >= 2, 'repeats should be >=2 after dedup, got: ' + deduped.repeats);
+    assert(Array.isArray(deduped.observers) && deduped.observers.length >= 2,
+      'observers should accumulate, got: ' + JSON.stringify(deduped.observers));
   });
 
   await step('new-channel append: previously-unseen channel adds a sidebar row', async () => {
@@ -193,8 +189,6 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       const m = document.getElementById('chMessages');
       if (m) m.scrollTop = 0;
     });
-    const before = await page.evaluate(
-      () => window._channelsGetStateForTest().messages.length);
     await page.evaluate(() => {
       const s = window._channelsGetStateForTest();
       const h = s.selectedHash;
@@ -208,15 +202,15 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
         },
       }], []);
     });
-    await page.waitForFunction(
-      (prev) => window._channelsGetStateForTest().messages.length === prev + 1,
-      before, { timeout: 3000 });
-    const last = await page.evaluate(() => {
+    await page.waitForFunction(() =>
+      window._channelsGetStateForTest().messages.some((m) => m.packetHash === 'wsbatch-scroll-1'),
+      null, { timeout: 3000 });
+    const scrollMsg = await page.evaluate(() => {
       const s = window._channelsGetStateForTest();
-      return s.messages[s.messages.length - 1];
+      return s.messages.find((m) => m.packetHash === 'wsbatch-scroll-1');
     });
-    assert(last.sender === 'WsEve' && /tail/.test(last.text),
-      'tail message should be appended, got: ' + JSON.stringify(last));
+    assert(scrollMsg.sender === 'WsEve' && /tail/.test(scrollMsg.text),
+      'tail message should be appended, got: ' + JSON.stringify(scrollMsg));
   });
 
   await step('region filter: drops msg from observer outside selected regions', async () => {

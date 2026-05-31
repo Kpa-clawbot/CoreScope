@@ -51,7 +51,7 @@ func TestCORS_AllowlistMatch(t *testing.T) {
 	if v := rr.Header().Get("Access-Control-Allow-Origin"); v != "https://good.example" {
 		t.Fatalf("expected origin echo, got %q", v)
 	}
-	if v := rr.Header().Get("Access-Control-Allow-Methods"); v != "GET, POST, OPTIONS" {
+	if v := rr.Header().Get("Access-Control-Allow-Methods"); v != "GET, HEAD, OPTIONS" {
 		t.Fatalf("expected methods header, got %q", v)
 	}
 	if v := rr.Header().Get("Access-Control-Allow-Headers"); v != "Content-Type, X-API-Key" {

@@ -4659,3 +4659,20 @@ body { touch-action: pan-y; }
   }
   .mc-route-edge { stroke: CanvasText !important; }
 }
+
+/* ===========================================================================
+   Issue #1369 — embed mode (?embed=1 on /#/map and /#/channels)
+   Hide all chrome for full-bleed cross-domain iframe embeds. body.embed is
+   toggled in app.js navigate() based on shouldEmbedRoute().
+   =========================================================================== */
+body.embed .top-nav,
+body.embed [data-bottom-nav],
+body.embed .nav-drawer,
+body.embed .nav-drawer-backdrop { display: none !important; }
+body.embed { padding: 0 !important; margin: 0 !important; }
+/* App container occupies full viewport in embed mode — top-nav (52px) and
+   bottom-nav reserve are gone, so reclaim the full dvh. */
+body.embed #app.app-fixed {
+  height: 100vh !important;
+  height: 100dvh !important;
+}
