@@ -1,4 +1,4 @@
-(function () {
+(function() {
   'use strict';
 
   // getParsedPath / getParsedDecoded are in shared packet-helpers.js (loaded before this file)
@@ -80,7 +80,7 @@
     if (!iata) return '';
     var esc = (typeof escapeHtml === 'function')
       ? escapeHtml(iata)
-      : String(iata).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      : String(iata).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     return '<span class="badge-iata" style="font-size:10px;margin-left:4px">' + esc + '</span>';
   }
 
@@ -247,7 +247,7 @@
 
   function initResizeHandler() {
     let resizeTimer = null;
-    _onResize = function () {
+    _onResize = function() {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         // Set live-page height from JS — most reliable across all mobile browsers
@@ -313,7 +313,7 @@
     // if a prior tracker is still active (re-mount race, dev hot-reload),
     // tear it down BEFORE overwriting _vcrHeightCleanup so the previous
     // ResizeObserver/listeners aren't orphaned.
-    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) { } _vcrHeightCleanup = null; }
+    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
     var bar = document.getElementById('vcrBar');
     var page = document.querySelector('.live-page');
     if (!bar || !page) return;
@@ -330,8 +330,8 @@
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', publish);
     }
-    _vcrHeightCleanup = function () {
-      if (ro) { try { ro.disconnect(); } catch (_) { } ro = null; }
+    _vcrHeightCleanup = function() {
+      if (ro) { try { ro.disconnect(); } catch (_) {} ro = null; }
       window.removeEventListener('resize', publish);
       if (window.visualViewport) {
         window.visualViewport.removeEventListener('resize', publish);
@@ -562,12 +562,12 @@
     const cutoff = now - CLICKABLE_PATH_TTL_MS;
     for (let i = clickablePaths.length - 1; i >= 0; i--) {
       if (clickablePaths[i].addedAt < cutoff) {
-        try { clickablePaths[i].poly.remove(); } catch (_) { }
+        try { clickablePaths[i].poly.remove(); } catch (_) {}
         clickablePaths.splice(i, 1);
       }
     }
     while (clickablePaths.length > CLICKABLE_PATH_MAX) {
-      try { clickablePaths[0].poly.remove(); } catch (_) { }
+      try { clickablePaths[0].poly.remove(); } catch (_) {}
       clickablePaths.shift();
     }
   }
@@ -618,7 +618,7 @@
   function drawSegDigit(ctx, x, y, w, h, bits, color) {
     const t = Math.max(2, h * 0.12); // segment thickness
     const g = 1; // gap
-    const hw = w - 2 * g, hh = (h - 3 * g) / 2;
+    const hw = w - 2*g, hh = (h - 3 * g) / 2;
     ctx.fillStyle = color;
     // a=top, b=top-right, c=bot-right, d=bot, e=bot-left, f=top-left, g=mid
     if (bits & 0x40) ctx.fillRect(x + g + t / 2, y, hw - t, t);           // a
@@ -1293,7 +1293,7 @@
       if (tileLayer.options) tileLayer.options.attribution = r.attribution;
       if (dark && r.refUrl) {
         if (!_liveDarkRefLayer) {
-          _liveDarkRefLayer = L.tileLayer(r.refUrl, { maxZoom: 19, attribution: r.attribution }).addTo(map);
+          _liveDarkRefLayer = L.tileLayer(r.refUrl, {maxZoom: 19, attribution: r.attribution}).addTo(map);
         } else {
           _liveDarkRefLayer.setUrl(r.refUrl);
         }
@@ -1304,25 +1304,25 @@
       if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
       // #1420 parity with map.js — refresh visible attribution credit after provider swap.
       if (map.attributionControl) {
-        try { map.attributionControl._update && map.attributionControl._update(); } catch (_) { }
+        try { map.attributionControl._update && map.attributionControl._update(); } catch (_) {}
       }
     }
     const _liveInitTile = _liveResolveTile(isDark);
-    let tileLayer = L.tileLayer(_liveInitTile.url, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(map);
+    let tileLayer = L.tileLayer(_liveInitTile.url, {maxZoom: 19, attribution: _liveInitTile.attribution}).addTo(map);
     if (isDark && _liveInitTile.refUrl) {
-      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(map);
+      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, {maxZoom: 19, attribution: _liveInitTile.attribution}).addTo(map);
     }
     if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
 
     // Swap tiles when theme changes
-    const _themeObs = new MutationObserver(function () {
+    const _themeObs = new MutationObserver(function() {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
       _liveSyncDarkTiles(dark);
     });
     _themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     // #1420 — re-render on customizer change.
-    window.addEventListener('mc-tile-provider-changed', function () {
+    window.addEventListener('mc-tile-provider-changed', function() {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
       _liveSyncDarkTiles(dark);
@@ -1348,7 +1348,7 @@
 
     injectSVGFilters();
     AreaFilter.init(document.getElementById('liveAreaFilter'));
-    AreaFilter.onChange(function () { loadNodes(); });
+    AreaFilter.onChange(function() { loadNodes(); });
     await loadNodes();
     showHeatMap();
     connectWS();
@@ -1422,7 +1422,7 @@
       // dropped every packet.
       fetch('/api/observers').then(function (r) { return r.json(); }).then(function (data) {
         setObserverIataMap(buildObserverIataMap(data));
-      }).catch(function () { /* leave map empty; filter will hide all when active */ });
+      }).catch(function() { /* leave map empty; filter will hide all when active */ });
       RegionFilter.init(rfEl, { dropdown: true });
       regionFilterChangeHandler = RegionFilter.onChange(function() {
         // #1108 — when the region selection changes, reload visible map
@@ -1486,7 +1486,7 @@
         const qs = params.toString();
         const newHash = base + (qs ? '?' + qs : '');
         const newUrl = location.pathname + location.search + newHash;
-        try { history.replaceState(null, '', newUrl); } catch (_) { }
+        try { history.replaceState(null, '', newUrl); } catch (_) {}
       }
 
       function selectSuggestion(opt) {
@@ -1501,7 +1501,7 @@
         const base = location.hash.split('?')[0] || '#/live';
         const qs = params.toString();
         const newUrl = location.pathname + location.search + base + (qs ? '?' + qs : '');
-        try { history.replaceState(null, '', newUrl); } catch (_) { }
+        try { history.replaceState(null, '', newUrl); } catch (_) {}
         hideDropdown();
       }
 
@@ -1587,7 +1587,7 @@
         }
       });
 
-      nodeFilterInput.addEventListener('blur', function () {
+      nodeFilterInput.addEventListener('blur', function() {
         // Slight delay so click on a suggestion can register first.
         setTimeout(hideDropdown, 150);
       });
@@ -1602,12 +1602,12 @@
         const base = location.hash.split('?')[0] || '#/live';
         const qs = params.toString();
         const newUrl = location.pathname + location.search + base + (qs ? '?' + qs : '');
-        try { history.replaceState(null, '', newUrl); } catch (_) { }
+        try { history.replaceState(null, '', newUrl); } catch (_) {}
       });
     }
 
     // Geo filter overlay
-    (async function () {
+    (async function() {
       try {
         const gf = await api('/config/geo-filter', { ttl: 3600 });
         if (!gf || !gf.polygon || gf.polygon.length < 3) return;
@@ -1617,7 +1617,7 @@
           color: geoColor, weight: 2, opacity: 0.8,
           fillColor: geoColor, fillOpacity: 0.08
         });
-        const bufferPoly = gf.bufferKm > 0 ? (function () {
+        const bufferPoly = gf.bufferKm > 0 ? (function() {
           let cLat = 0, cLon = 0;
           gf.polygon.forEach(function (p) { cLat += p[0]; cLon += p[1]; });
           cLat /= gf.polygon.length; cLon /= gf.polygon.length;
@@ -1814,7 +1814,7 @@
       pairs.forEach(function (p) {
         var tog = document.getElementById(p.togId);
         if (!tog) return;
-        tog.addEventListener('click', function () {
+        tog.addEventListener('click', function() {
           var root = document.getElementById(p.rootId);
           var nowExpanded = !(root && root.classList.contains('is-expanded'));
           setExpanded(p, nowExpanded);
@@ -1890,9 +1890,9 @@
 
       // Resize clamping (debounced)
       var resizeTimer = null;
-      window.addEventListener('resize', function () {
+      window.addEventListener('resize', function() {
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(function () { dragMgr.handleResize(); }, 200);
+        resizeTimer = setTimeout(function() { dragMgr.handleResize(); }, 200);
       });
     }
 
@@ -1906,7 +1906,7 @@
         const swatch = window.makeRoleMarkerSVG
           ? window.makeRoleMarkerSVG(role, color, 14)
           : `<span class="live-dot" style="background:${color}" aria-hidden="true"></span>`;
-        li.innerHTML = `<span class="live-shape-swatch" aria-hidden="true">${swatch}</span> ${(ROLE_LABELS[role] || role).replace(/s$/, '')}`;
+        li.innerHTML = `<span class="live-shape-swatch" aria-hidden="true">${swatch}</span> ${(ROLE_LABELS[role] || role).replace(/s$/,'')}`;
         roleLegendList.appendChild(li);
       }
     }
@@ -1997,7 +1997,7 @@
         item.setAttribute('role', 'menuitem');
         item.setAttribute('data-scope', src.dataset.scope);
         item.textContent = src.textContent;
-        item.addEventListener('click', function () {
+        item.addEventListener('click', function() {
           src.click(); // delegate to original handler — keeps single source of truth
           menu.setAttribute('hidden', '');
           moreBtn.setAttribute('aria-expanded', 'false');
@@ -2123,7 +2123,7 @@
     _pruneInterval = setInterval(pruneStaleNodes, 60000);
 
     // Refresh relative timestamps in feed every 10 seconds (#701)
-    _feedTimestampInterval = setInterval(function () {
+    _feedTimestampInterval = setInterval(function() {
       document.querySelectorAll('.feed-time[data-ts]').forEach(function (el) {
         el.innerHTML = formatLiveTimestampHtml(Number(el.dataset.ts));
       });
@@ -2209,7 +2209,7 @@
       const observers = h.observers || [];
       const recent = h.recentPackets || [];
       const roleColor = ROLE_COLORS[n.role] || '#6b7280';
-      const roleLabel = (ROLE_LABELS[n.role] || n.role || 'unknown').replace(/s$/, '');
+      const roleLabel = (ROLE_LABELS[n.role] || n.role || 'unknown').replace(/s$/,'');
       const hasLoc = n.lat != null && n.lon != null;
       const lastSeen = formatLiveTimestampHtml(n.last_seen);
       const thresholds = window.getHealthThresholds ? getHealthThresholds(n.role) : { degradedMs: 3600000, silentMs: 86400000 };
@@ -2739,25 +2739,25 @@
   window._liveBuildClickablePathPopupHtml = buildClickablePathPopupHtml;
   window._livePruneClickablePaths = pruneClickablePaths;
   window._liveClickablePaths = clickablePaths;
-  window._liveNodeMarkers = function () { return nodeMarkers; };
-  window._liveNodeData = function () { return nodeData; };
-  window._liveNodeActivity = function () { return nodeActivity; };
+  window._liveNodeMarkers = function() { return nodeMarkers; };
+  window._liveNodeData = function() { return nodeData; };
+  window._liveNodeActivity = function() { return nodeActivity; };
   window._vcrFormatTime = vcrFormatTime;
   window._liveDbPacketToLive = dbPacketToLive;
   window._liveExpandToBufferEntries = expandToBufferEntries;
   window._liveExpandToBufferEntriesAsync = expandToBufferEntriesAsync;
   window._liveSEG_MAP = SEG_MAP;
   window._liveBufferPacket = bufferPacket;
-  window._liveVCR = function () { return VCR; };
+  window._liveVCR = function() { return VCR; };
   window._liveGetFavoritePubkeys = getFavoritePubkeys;
   window._livePacketInvolvesFavorite = packetInvolvesFavorite;
   window._liveIsNodeFavorited = isNodeFavorited;
   window._livePacketInvolvesFilterNode = packetInvolvesFilterNode;
-  window._liveGetNodeFilterKeys = function () { return nodeFilterKeys; };
+  window._liveGetNodeFilterKeys = function() { return nodeFilterKeys; };
   window._livePacketMatchesRegion = packetMatchesRegion;
   window._liveSetObserverIataMap = setObserverIataMap;
   window._liveBuildObserverIataMap = buildObserverIataMap;
-  window._liveGetObserverIataMap = function () { return observerIataMap; };
+  window._liveGetObserverIataMap = function() { return observerIataMap; };
   window._liveSetNodeFilter = setNodeFilter;
   window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
   window._liveResolveHopPositions = resolveHopPositions;
@@ -2771,7 +2771,7 @@
   window._liveAddFeedItem = function (icon, typeName, payload, hops, color, pkt) {
     return addFeedItem(icon, typeName, payload, hops, color, pkt);
   };
-  window._liveRebuildFeedList = function () { return rebuildFeedList(); };
+  window._liveRebuildFeedList = function() { return rebuildFeedList(); };
 
   // PR #1490 test seams: Expose internal state for Playwright assertions
   window._liveDrawAnimatedLine = drawAnimatedLine;
@@ -2936,7 +2936,7 @@
     packets.forEach(function (rp, i) {
       if (i === 0) { addRainDrop(rp); return; }
       var variedHops = Math.max(1, baseHops + Math.floor(Math.random() * 3) - 1);
-      setTimeout(function () { addRainDrop(rp, variedHops); }, i * 150);
+      setTimeout(function() { addRainDrop(rp, variedHops); }, i * 150);
     });
 
     // --- Extract all unique paths from observations ---
@@ -3027,11 +3027,11 @@
           var ghost = L.circleMarker(hp.pos, {
             radius: 3, fillColor: ghostColor, fillOpacity: 0.2, color: color, weight: 1, opacity: 0.3
           }).addTo(pathsLayer);
-          setTimeout((function (g) { return function () { if (pathsLayer.hasLayer(g)) pathsLayer.removeLayer(g); }; })(ghost), GHOST_TIMEOUT_MS);
+          setTimeout((function (g) { return function() { if (pathsLayer.hasLayer(g)) pathsLayer.removeLayer(g); }; })(ghost), GHOST_TIMEOUT_MS);
         }
       }
       // Remove dashed line after timeout
-      setTimeout((function (l) { return function () { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), GHOST_TIMEOUT_MS);
+      setTimeout((function (l) { return function() { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), GHOST_TIMEOUT_MS);
     }
     // Ghost marker for the final unreached hop
     var last = hopPositions[hopPositions.length - 1];
@@ -3039,7 +3039,7 @@
       var ghostEnd = L.circleMarker(last.pos, {
         radius: 4, fillColor: ghostColor, fillOpacity: 0.25, color: color, weight: 1, opacity: 0.35
       }).addTo(pathsLayer);
-      setTimeout(function () { if (pathsLayer.hasLayer(ghostEnd)) pathsLayer.removeLayer(ghostEnd); }, GHOST_TIMEOUT_MS);
+      setTimeout(function() { if (pathsLayer.hasLayer(ghostEnd)) pathsLayer.removeLayer(ghostEnd); }, GHOST_TIMEOUT_MS);
     }
   }
 
@@ -3776,7 +3776,7 @@
       }).addTo(map);
       // Set overall layer opacity via canvas element
       if (heatLayer._canvas) { heatLayer._canvas.style.opacity = savedOpacity; }
-      else { setTimeout(function () { if (heatLayer && heatLayer._canvas) heatLayer._canvas.style.opacity = savedOpacity; }, 100); }
+      else { setTimeout(function() { if (heatLayer && heatLayer._canvas) heatLayer._canvas.style.opacity = savedOpacity; }, 100); }
       window._meshcoreLiveHeatLayer = heatLayer;
     }
   }
@@ -4020,7 +4020,7 @@
       window.removeEventListener('orientationchange', _onResize);
       if (window.visualViewport) window.visualViewport.removeEventListener('resize', _onResize);
     }
-    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) { } _vcrHeightCleanup = null; }
+    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
     // Restore #app height to CSS default
     const appEl = document.getElementById('app');
     if (appEl) appEl.style.height = '';
@@ -4077,7 +4077,7 @@
   // test-live-mql-leak-1180-e2e.js and otherwise unused.
   var _liveNarrowMqlBound = false;
   window._liveTestSeams = window._liveTestSeams || {};
-  window._liveTestSeams.wake = function () {
+  window._liveTestSeams.wake = function() {
     if (!isAnimating) {
       isAnimating = true;
       requestAnimationFrame(renderAnimations);
@@ -4096,7 +4096,7 @@
       if (window.ChannelColorPicker) window.ChannelColorPicker.installLiveFeed();
       return result;
     },
-    destroy: function () {
+    destroy: function() {
       if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; }
       return destroy();
     }
