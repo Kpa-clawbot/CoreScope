@@ -1262,10 +1262,11 @@
       try {
         updateAnimCanvas();
       } finally {
+        const nextMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
         if (_dprMedia) {
           _dprMedia.removeEventListener('change', _dprChangeHandler);
         }
-        _dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+        _dprMedia = nextMedia;
         _dprMedia.addEventListener('change', _dprChangeHandler);
       }
     };
@@ -3686,12 +3687,12 @@
     if (!pathsLayer) return;
 
     const contrail = L.polyline([anim.from, anim.to], {
-      // pane: 'animationsPane', // Uncomment if you created the custom pane in the previous step
+      pane: 'animationsPane',
       color: anim.contrailColor, weight: 6, opacity: anim.opacity * 0.2, lineCap: 'round'
     }).addTo(pathsLayer);
 
     const line = L.polyline([anim.from, anim.to], {
-      // pane: 'animationsPane', // Uncomment if you created the custom pane in the previous step
+      pane: 'animationsPane',
       color: anim.lineColor, weight: anim.isDashed ? 1.5 : 2, opacity: anim.opacity,
       lineCap: 'round', dashArray: anim.isDashed ? '4 6' : null
     }).addTo(pathsLayer);
