@@ -1,12 +1,21 @@
 #!/usr/bin/env node
-/* Issue #1391 — 20th Priority+ nav regression.
+/* Issue #1391 — Priority+ nav regression: active-route pill overflows at ~1080px.
+ * Issue #1396 — /#/channels extension: entire inline strip EMPTY at ~1024px on /#/channels,
+ *               More dropdown showing only one item (root cause: #1400 min-height overflow).
  *
- * Symptom: at viewport ~1080-1200px on a non-high-priority active route
+ * Symptom (#1391): at viewport ~1080-1200px on a non-high-priority active route
  * (e.g. /#/perf, /#/audio-lab), the active-route pill is shoved into the
  * More dropdown instead of staying visible inline. Operator screenshot at
  * ~1080px on /#/perf showed the navbar with only the "Perf" pill visible
  * (or, in the inverse failure mode, NO inline pill at all, with More
  * containing only the orphaned active route).
+ *
+ * Symptom (#1396): at viewport ~1024px on /#/channels, the entire .nav-links
+ * strip was visually empty (no high-priority links, no active pill, nothing)
+ * and the More dropdown contained only "Tools". Root cause was issue #1400:
+ * min-height:48px on .nav-link inflated the strip beyond the 52px top-nav
+ * height; Firefox flex-centered it to a negative y, clipping it above the
+ * viewport (overflow:hidden). Fixed by PR #1401. This test locks that contract.
  *
  * Acceptance (from issue #1391):
  *   - Active-route pill MUST always be visible inline (never overflowed
@@ -16,8 +25,15 @@
  *   - Every link in overflow MUST be reachable via the More dropdown
  *     (the existing #1311/#1139 contract — don't regress).
  *
+ * Acceptance (from issue #1396 / #1400):
+ *   - .nav-links must never render at a negative top offset (y >= 0).
+ *   - In the ≤1100px force-collapse band on /#/channels, More must contain
+ *     exactly the 5 non-active non-high routes; channels stays inline.
+ *
  * Mutation guard: removing the "pin active inline" rule in applyNavPriority
  * must make this test fail (active link gets overflowed at 1080px on /#/perf).
+ * Mutation guard (#1400): re-adding min-height:48px to .nav-link globally
+ * must make the navLinksTop assertion fail with a large negative value.
  */
 'use strict';
 
@@ -30,7 +46,9 @@ const HIGH_PRIORITY_HREFS = ['#/home', '#/packets', '#/map', '#/live', '#/nodes'
 // Routes whose link is NOT data-priority="high" (verified via
 // `grep data-priority public/index.html`). These exercise the
 // "active pill is non-high" branch where the bug surfaces.
-const NON_HIGH_ROUTES = ['#/perf', '#/audio-lab', '#/analytics', '#/observers'];
+// #1396: extended to include /#/channels — operator screenshot at ~1024px
+// showed the entire inline strip EMPTY and More containing only "Tools".
+const NON_HIGH_ROUTES = ['#/perf', '#/audio-lab', '#/analytics', '#/observers', '#/channels'];
 
 // Operator screenshot was ~1080px. Cover the narrow-desktop CSS branch
 // (≤1100) AND the measurement-loop branch (>1100) — bug reproduces in
@@ -118,10 +136,15 @@ async function main() {
           .filter(a => a.classList.contains('is-overflow'))
           .map(a => a.getAttribute('href'));
         const missingFromMore = overflowedHrefs.filter(h => !moreItems.includes(h));
+        // #1396 / #1400: capture the nav strip's vertical position to
+        // detect the min-height overflow bug (strip rendered at negative y,
+        // clipped invisible by top-nav overflow:hidden).
+        const navLinksRect = document.querySelector('.top-nav .nav-links')?.getBoundingClientRect();
         return {
           activeHref, activeOverflowed, activeWidth,
           visibleHighPri, overflowedHighPri,
           moreVisible, moreItems, overflowedHrefs, missingFromMore,
+          navLinksTop: navLinksRect ? navLinksRect.top : null,
         };
       }, route);
 
@@ -161,9 +184,32 @@ async function main() {
           `(more=[${data.moreItems.join(', ')}])`
         );
 
+        // (4) #1396 / #1400: .nav-links must not be clipped above the viewport.
+        // The original bug had the strip at y ≈ -57, invisible behind top-nav
+        // overflow:hidden. Allow 0.5px sub-pixel rounding tolerance.
+        assert.ok(
+          data.navLinksTop !== null && data.navLinksTop > -1,
+          `${tag}: .nav-links is clipped above viewport (top=${data.navLinksTop}); ` +
+          `root cause was min-height:48px overflowing the 52px top-nav (#1400)`
+        );
+
+        // (5) #1396: in the ≤1100px force-collapse band, More must contain
+        // EXACTLY the non-active non-high routes so the channels link (when
+        // active) stays inline and is not orphaned in the dropdown.
+        if (w <= 1100) {
+          const ALL_NON_HIGH = ['#/channels', '#/tools', '#/observers', '#/analytics', '#/perf', '#/audio-lab'];
+          const expectedMore = ALL_NON_HIGH.filter(h => h !== expectedActive).sort();
+          assert.deepStrictEqual(
+            [...data.moreItems].sort(),
+            expectedMore,
+            `${tag}: More must contain exactly [${expectedMore.join(', ')}], ` +
+            `got [${data.moreItems.join(', ')}]`
+          );
+        }
+
         passes++;
         console.log(`  ✅ ${tag}: active inline + ${data.visibleHighPri.length}/5 high-pri inline + ` +
-                    `More has ${data.moreItems.length} item(s)`);
+                    `More has ${data.moreItems.length} item(s) + strip top=${data.navLinksTop?.toFixed(1)}`);
       } catch (e) {
         failures++;
         console.log(`  ❌ ${tag}: ${e.message}`);
