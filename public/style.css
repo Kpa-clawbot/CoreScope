@@ -219,7 +219,7 @@
     --surface-3: #2d2d50;
     --surface: var(--surface-1);
     --content-bg: var(--surface-0);
-    --card-bg: var(--surface-1);
+    --card-bg: var(--surface-2);
     --text: #e2e8f0;
     --text-muted: #a8b8cc;
     --border: #334155;
@@ -250,7 +250,7 @@
   --surface-3: #2d2d50;
   --surface: var(--surface-1);
   --content-bg: var(--surface-0);
-  --card-bg: var(--surface-1);
+  --card-bg: var(--surface-2);
   --text: #e2e8f0;
   --text-muted: #a8b8cc;
   --border: #334155;
