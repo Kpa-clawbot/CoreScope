@@ -1840,6 +1840,11 @@
   async function selectChannel(hash, decryptOpts) {
     const rp = RegionFilter.getRegionParam() || '';
     const request = beginMessageRequest(hash, rp);
+    // #1498: clear messages BEFORE flipping selectedHash so any WS-pushed
+    // messages from the previously-viewed channel can't survive into the
+    // new channel's view via mergeWsAppendedIntoRest(). Messages don't
+    // carry channel context, so the merge can't distinguish them itself.
+    messages = [];
     selectedHash = hash;
     // Clear unread badge on the channel we're about to view (#1029).
     var __selCh = channels.find(function (c) { return c.hash === hash; });
