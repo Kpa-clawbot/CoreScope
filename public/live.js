@@ -1258,19 +1258,27 @@
     map.on('moveend zoomend resize', updateAnimCanvas);
     updateAnimCanvas();
 
-    _dprChangeHandler = () => {
-      try {
-        updateAnimCanvas();
-      } finally {
-        if (_dprMedia) {
-          _dprMedia.removeEventListener('change', _dprChangeHandler);
-        }
-        _dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-        _dprMedia.addEventListener('change', _dprChangeHandler);
+    // #1514 M1+S10 — DPR change handling.
+    //
+    // matchMedia(`(resolution: ${dpr}dppx)`) is a STRICT-MATCH query: it only
+    // fires when the current DPR stops matching. After it fires, we must rebind
+    // a new MQL keyed to the new DPR. Older code did remove → re-add inside a
+    // try/finally which was fragile (a throw in updateAnimCanvas would still
+    // re-bind, and a synchronous re-entry between remove and add could lose
+    // the handler). The {once: true} pattern below removes the listener
+    // atomically before our handler runs, so re-binding is race-free.
+    function _rebindDPRListener() {
+      if (_dprMedia && _dprChangeHandler) {
+        try { _dprMedia.removeEventListener('change', _dprChangeHandler); } catch (_) {}
       }
-    };
-    _dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-    _dprMedia.addEventListener('change', _dprChangeHandler);
+      _dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      _dprChangeHandler = () => {
+        updateAnimCanvas();
+        _rebindDPRListener();
+      };
+      _dprMedia.addEventListener('change', _dprChangeHandler, { once: true });
+    }
+    _rebindDPRListener();
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
