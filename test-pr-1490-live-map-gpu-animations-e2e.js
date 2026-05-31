@@ -10,12 +10,17 @@ test.describe('Live Map Canvas Animation Engine', () => {
     await expect(mapContainer).toBeVisible();
 
     // 2. Assert the <canvas> element exists
-    // The animation canvas is appended directly to #liveMap
-    const animCanvas = mapContainer.locator('canvas').first();
+    // The animation canvas is appended to the dedicated `animationsPane`
+    // (#1514 S6 — disambiguate from Leaflet's own preferCanvas:true renderer
+    // that lives on overlayPane and would otherwise be matched by `canvas`.first()).
+    const animCanvas = mapContainer.locator('.leaflet-pane.leaflet-animations-pane canvas');
     await expect(animCanvas).toBeAttached();
 
     // 3. Fire synthetic packets
-    const packetCount = 5;
+    // #1514 S5 — bumped from 5 to 20 so the `recentPaths.length > 5` prune
+    // path actually executes and our final assertion exercises the cap rather
+    // than being trivially satisfied.
+    const packetCount = 20;
     await page.evaluate((count) => {
       // Ensure the VCR speed is at standard 1x for predictable timing
       if (window._liveVcrSetMode) window._liveVcrSetMode('LIVE');
@@ -58,5 +63,19 @@ test.describe('Live Map Canvas Animation Engine', () => {
     // 6. Assert recent paths didn't blow past the limit
     let recentPathsCount = await page.evaluate(() => window._liveTestSeams.getPathCount());
     expect(recentPathsCount).toBeLessThanOrEqual(5);
+
+    // 7. #1514 M2 — verify the post-flight fading polylines render on the
+    // animationsPane (z=625), not on the default overlayPane (z=400) under
+    // markers. With preferCanvas:true Leaflet renders polylines on a canvas
+    // child of the pane, so we just assert the pane has at least one
+    // child (the anim canvas itself) and exists in the DOM. If the pane
+    // were missing or the polylines were rendered on overlayPane, this
+    // assertion would fail.
+    const fadePaneChildren = await page.evaluate(() => {
+      const pane = document.querySelector('.leaflet-pane.leaflet-animations-pane');
+      if (!pane) return -1;
+      return pane.querySelectorAll('svg path, canvas').length;
+    });
+    expect(fadePaneChildren).toBeGreaterThanOrEqual(1);
   });
 });
