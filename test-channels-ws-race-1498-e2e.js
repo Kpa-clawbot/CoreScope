@@ -119,6 +119,52 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       'WS message stomped by REST fetch — messages after fetch: ' + JSON.stringify(survives));
   });
 
+  await step('WS messages from previous channel do not leak into next channel', async () => {
+    // Hard reload to drop the fetch stub from the previous step and reset state.
+    await page.goto(BASE + '/', { waitUntil: 'domcontentloaded' });
+    await page.goto(BASE + '/#/channels', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#chList .ch-item', { timeout: 10000 });
+    const rows = await page.$$('.ch-section-network .ch-item');
+    if (rows.length < 2) throw new Error('need at least 2 network channels in fixture');
+    const hashA = await rows[0].getAttribute('data-hash');
+    const hashB = await rows[1].getAttribute('data-hash');
+
+    // Select A, wait for REST to settle (observable via messages state),
+    // then inject a _fromWS message for A.
+    await rows[0].click();
+    await page.waitForFunction((h) => window._channelsGetStateForTest().selectedHash === h, hashA, { timeout: 3000 });
+    await page.evaluate((h) => {
+      window._channelsProcessWSBatchForTest([{
+        type: 'message',
+        data: {
+          hash: 'leak-test-from-A',
+          id: 'pkt-leak-A',
+          decoded: { payload: { channel: h, sender: 'LeakAlice', text: 'A-only' } },
+        },
+      }], []);
+    }, hashA);
+    const inA = await page.evaluate(() =>
+      window._channelsGetStateForTest().messages.some((m) => m.packetHash === 'leak-test-from-A'));
+    assert(inA, 'precondition: WS message for A should be in messages while A is selected');
+
+    // Switch to B. The A-only WS message MUST NOT appear in B's view
+    // even after a REST replacement for B that does NOT contain it.
+    await page.evaluate((h) => window._channelsSelectChannelForTest(h), hashB);
+    await page.waitForFunction((h) => window._channelsGetStateForTest().selectedHash === h, hashB, { timeout: 3000 });
+    // Wait until the REST response for B has populated messages or
+    // explicitly returned empty — observable via a fetch-mock-style flag
+    // is not available here, so wait on selectedHash + a tick.
+    await page.waitForFunction(() => {
+      const s = window._channelsGetStateForTest();
+      // After selectChannel resolves, either messages was repopulated by
+      // REST OR we have an empty array. Both states are observable.
+      return Array.isArray(s.messages);
+    }, undefined, { timeout: 3000 });
+    const leaked = await page.evaluate(() =>
+      window._channelsGetStateForTest().messages.some((m) => m.packetHash === 'leak-test-from-A'));
+    assert(!leaked, 'WS message from channel A leaked into channel B view');
+  });
+
   await browser.close();
   console.log(`\n=== #1498 race: ${passed} passed, ${failed} failed ===\n`);
   process.exit(failed === 0 ? 0 : 1);
