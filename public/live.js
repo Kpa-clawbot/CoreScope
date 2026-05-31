@@ -19,6 +19,10 @@
   let activeFades = [];
   let isFading = false;
   let canvasTopLeft;
+  // #1514 S2 — scratch points reused per-frame in renderAnimations() to avoid
+  // 2 object allocations per anim per frame (50 anims × 60fps = ~6000/sec).
+  const _scratchFrom = { x: 0, y: 0 };
+  const _scratchTo = { x: 0, y: 0 };
   let clickablePaths = [];
   const CLICKABLE_PATH_TTL_MS = 30000;
   const CLICKABLE_PATH_MAX = 50;
@@ -3585,15 +3589,14 @@
       const fromLayerPt = map.latLngToLayerPoint(anim.from);
       const toLayerPt = map.latLngToLayerPoint(anim.to);
 
-      // Offset by the canvas's position within the pane to get drawable pixels
-      const fromPt = {
-        x: fromLayerPt.x - canvasTopLeft.x,
-        y: fromLayerPt.y - canvasTopLeft.y
-      };
-      const toPt = {
-        x: toLayerPt.x - canvasTopLeft.x,
-        y: toLayerPt.y - canvasTopLeft.y
-      };
+      // Offset by the canvas's position within the pane to get drawable pixels.
+      // #1514 S2 — reuse module-scoped scratch objects instead of allocating per frame.
+      const fromPt = _scratchFrom;
+      fromPt.x = fromLayerPt.x - canvasTopLeft.x;
+      fromPt.y = fromLayerPt.y - canvasTopLeft.y;
+      const toPt = _scratchTo;
+      toPt.x = toLayerPt.x - canvasTopLeft.x;
+      toPt.y = toLayerPt.y - canvasTopLeft.y;
 
       const W = animCanvas.clientWidth;
       const H = animCanvas.clientHeight;
@@ -4013,6 +4016,16 @@
   }
 
   function destroy() {
+    // #1514 S3 — drain onComplete callbacks BEFORE clearing the array. Audio
+    // `onHop` hooks rely on these firing exactly once per queued animation;
+    // previously destroy() dropped them silently when navigating away with
+    // packets in flight.
+    for (let i = 0; i < activeAnimations.length; i++) {
+      const a = activeAnimations[i];
+      if (a && typeof a.onComplete === 'function') {
+        try { a.onComplete(); } catch (_) {}
+      }
+    }
     activeAnimations.length = 0;
     activeFades.length = 0;
     isAnimating = false;
