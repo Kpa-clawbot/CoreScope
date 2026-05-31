@@ -3694,12 +3694,12 @@
     if (!pathsLayer) return;
 
     const contrail = L.polyline([anim.from, anim.to], {
-      // pane: 'animationsPane', // Uncomment if you created the custom pane in the previous step
+      pane: 'animationsPane', // #1514 M2 — fades stack with the moving phase (z=625).
       color: anim.contrailColor, weight: 6, opacity: anim.opacity * 0.2, lineCap: 'round'
     }).addTo(pathsLayer);
 
     const line = L.polyline([anim.from, anim.to], {
-      // pane: 'animationsPane', // Uncomment if you created the custom pane in the previous step
+      pane: 'animationsPane', // #1514 M2 — fades stack with the moving phase (z=625).
       color: anim.lineColor, weight: anim.isDashed ? 1.5 : 2, opacity: anim.opacity,
       lineCap: 'round', dashArray: anim.isDashed ? '4 6' : null
     }).addTo(pathsLayer);
