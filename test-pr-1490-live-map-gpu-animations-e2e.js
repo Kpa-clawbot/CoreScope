@@ -56,9 +56,14 @@ test.describe('Live Map Canvas Animation Engine', () => {
       timeout: 1500,
     }).toBe(0);
 
-    // 5. Assert the engine gracefully went back to sleep
-    let isSleeping = await page.evaluate(() => window._liveTestSeams.isAnimating());
-    expect(isSleeping).toBe(false);
+    // 5. Assert the engine gracefully went back to sleep.
+    // (#1514 — there is one rAF tick between activeAnimations going to 0 and
+    // the next renderAnimations frame flipping isAnimating=false. Poll for a
+    // small jitter window instead of a one-shot read so the test isn't racy
+    // against that single-frame settling delay.)
+    await expect.poll(async () => {
+      return await page.evaluate(() => window._liveTestSeams.isAnimating());
+    }, { timeout: 200 }).toBe(false);
 
     // 6. Assert recent paths didn't blow past the limit
     let recentPathsCount = await page.evaluate(() => window._liveTestSeams.getPathCount());

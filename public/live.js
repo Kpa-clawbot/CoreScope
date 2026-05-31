@@ -1203,14 +1203,25 @@
     // 1. Create a custom pane for high-performance canvas animations
     map.createPane('animationsPane');
 
-    // ARCHITECTURE NOTE - z-index: 625
-    // Leaflet's default pane z-indexes dictate the stacking context:
-    // - overlayPane: 400 (vector paths)
-    // - markerPane: 600 (static node dots)
-    // - tooltipPane: 650 (hover labels)
-    // - popupPane: 700 (click details)
-    // We intentionally sandwich this pane at 625 so flying packets draw 
-    // visually OVER the static nodes, but safely UNDER tooltips and popups.
+    // ARCHITECTURE NOTE - dual animation panes (#1514 S7):
+    // Leaflet's default pane z-indexes:
+    //   overlayPane: 400 (vector paths)
+    //   markerPane:  600 (static node dots)
+    //   tooltipPane: 650 (hover labels)
+    //   popupPane:   700 (click details)
+    //
+    // We sandwich TWO panes between markerPane and tooltipPane on purpose:
+    //   - 'animationsPane' (z=625): the canvas engine for in-flight packet
+    //     animations and the post-flight fading polylines (#1514 M2). Sits
+    //     ABOVE static node markers (so packets visibly fly over nodes) but
+    //     UNDER tooltips/popups so hover/click affordances always win.
+    //   - 'liveAnimPane' (z=650, created below): legacy SVG layer used by
+    //     drawMatrixLine/animatePath/pulseNode/ghostMarkers (everything that
+    //     hasn't been ported to the canvas engine yet). Kept just above
+    //     animationsPane so SVG-based effects stack on top of canvas trails.
+    //
+    // Future work (#1514 out-of-scope): port the remaining SVG paths to the
+    // canvas engine and collapse to a single pane.
     map.getPane('animationsPane').style.zIndex = 625;
 
     // Ensure mouse events pass through to the markers/map below
@@ -2568,7 +2579,14 @@
     rebuildFeedList();
   }
 
-  // Prevent browser sub-pixel snapping by ensuring DOM sizes are even integers
+  /**
+   * Round to the next even integer to prevent browser sub-pixel snapping on
+   * SVG node markers. Cross-link: live.css (~line 1300) — "Eliminate SVG
+   * baseline drift" — relies on icon size being even so the half-size
+   * iconAnchor lands on a whole pixel.
+   * @param {number} n size in CSS pixels
+   * @returns {number} `n` if even, else `n + 1`
+   */
   function evenSize(n) { return n % 2 ? n + 1 : n; }
 
   function addNodeMarker(n) {
