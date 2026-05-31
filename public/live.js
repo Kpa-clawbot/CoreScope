@@ -4043,6 +4043,23 @@
       regionFilterChangeHandler = null;
     }
     if (map) { map.remove(); map = null; }
+    // #1514 S8 — canvas teardown moved up here from a duplicate trailing block.
+    // Order matters: clear+detach the canvas BEFORE we null out the map (which
+    // already removed our pane) so we don't call clearRect on a context whose
+    // backing pane is gone. Also drop the DPR MQL listener so a late
+    // resolution change after destroy() can't fire updateAnimCanvas() against
+    // a null map.
+    if (animCtx && animCanvas) {
+      try { animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight); } catch (_) {}
+      animCanvas.remove();
+      animCanvas = null;
+      animCtx = null;
+    }
+    if (_dprMedia && _dprChangeHandler) {
+      try { _dprMedia.removeEventListener('change', _dprChangeHandler); } catch (_) {}
+      _dprMedia = null;
+      _dprChangeHandler = null;
+    }
     if (_onResize) {
       window.removeEventListener('resize', _onResize);
       window.removeEventListener('orientationchange', _onResize);
@@ -4076,23 +4093,6 @@
     nodeActivity = {}; pktTimestamps = [];
     feedDedup.clear();
     VCR.buffer = []; VCR.playhead = -1; VCR.mode = 'LIVE'; VCR.missedCount = 0; VCR.speed = _initialSpeed; VCR.replayGen = 0;
-
-    // CLEANUP: Kill the canvas loop, dump the queue, and clear the screen
-    activeAnimations.length = 0;
-    activeFades.length = 0;
-    isAnimating = false;
-    isFading = false;
-    if (animCtx && animCanvas) {
-      animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
-      animCanvas.remove();
-      animCanvas = null;
-      animCtx = null;
-    }
-    if (_dprMedia && _dprChangeHandler) {
-      _dprMedia.removeEventListener('change', _dprChangeHandler);
-      _dprMedia = null;
-      _dprChangeHandler = null;
-    }
   }
 
   let _themeRefreshHandler = null;
@@ -4104,13 +4104,11 @@
   // across re-mounts. window.__liveMQLBindCount is a debug seam consumed by
   // test-live-mql-leak-1180-e2e.js and otherwise unused.
   var _liveNarrowMqlBound = false;
-  window._liveTestSeams = window._liveTestSeams || {};
-  window._liveTestSeams.wake = function() {
-    if (!isAnimating) {
-      isAnimating = true;
-      requestAnimationFrame(renderAnimations);
-    }
-  };
+  // #1514 S4 — single source of truth for window._liveTestSeams is at the
+  // earlier exposure block (search for `window._liveTestSeams = {`). The
+  // duplicate definition that lived here previously added a `_liveTestSeams.wake`
+  // that bypassed pause/empty-queue guards; tests must use the production
+  // `wakeCanvasEngine` exposed there.
 
   registerPage('live', {
     init: function(app, routeParam) {
