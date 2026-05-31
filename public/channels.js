@@ -6,6 +6,29 @@
   let selectedHash = null;
   let messages = [];
   let wsHandler = null;
+
+  // #1498: messages appended via the live WebSocket are stamped with
+  // _fromWS so a subsequent REST replacement (selectChannel /
+  // refreshMessages) can merge them in instead of stomping them.
+  // mergeWsAppendedIntoRest() preserves any WS-pushed messages whose
+  // packetHash is not already present in the REST response.
+  function mergeWsAppendedIntoRest(restMsgs) {
+    if (!Array.isArray(restMsgs)) return [];
+    if (!messages || messages.length === 0) return restMsgs;
+    var restHashes = new Set();
+    for (var i = 0; i < restMsgs.length; i++) {
+      var h = restMsgs[i] && restMsgs[i].packetHash;
+      if (h) restHashes.add(h);
+    }
+    var survivors = [];
+    for (var j = 0; j < messages.length; j++) {
+      var m = messages[j];
+      if (m && m._fromWS && m.packetHash && !restHashes.has(m.packetHash)) {
+        survivors.push(m);
+      }
+    }
+    return survivors.length ? restMsgs.concat(survivors) : restMsgs;
+  }
   let autoScroll = true;
   let nodeCache = {};
   let selectedNode = null;
@@ -1414,6 +1437,11 @@
               observers: observer ? [observer] : [],
               hops: payload.path_len || 0,
               snr: snr,
+              // #1498: mark as WS-pushed so a later REST replacement
+              // (selectChannel / refreshMessages) can merge instead of
+              // stomp. Without this flag the REST response wipes any
+              // live messages that landed during the in-flight fetch.
+              _fromWS: true,
             });
           }
           messagesDirty = true;
@@ -1853,7 +1881,8 @@
         msgEl.innerHTML = '<div class="ch-empty">' + escapeHtml(result.error) + '</div>';
         return { error: result.error, messageCount: 0 };
       }
-      messages = result.messages || [];
+      // #1498: merge WS-pushed messages that landed during the decrypt fetch.
+      messages = mergeWsAppendedIntoRest(result.messages || []);
       if (messages.length === 0) {
         msgEl.innerHTML = '<div class="ch-empty">No encrypted messages found for this channel</div>';
       } else {
@@ -1938,7 +1967,9 @@
       const regionQs = rp ? '&region=' + encodeURIComponent(rp) : '';
       const data = await api(`/channels/${encodeURIComponent(hash)}/messages?limit=200${regionQs}`, { ttl: CLIENT_TTL.channelMessages });
       if (isStaleMessageRequest(request)) return;
-      messages = data.messages || [];
+      // #1498: merge so any WS-pushed messages that arrived while the
+      // REST fetch was in flight aren't stomped.
+      messages = mergeWsAppendedIntoRest(data.messages || []);
       if (messages.length === 0 && rp) {
         msgEl.innerHTML = '<div class="ch-empty">Channel not available in selected region</div>';
       } else {
@@ -1978,7 +2009,9 @@
       var _getLastId = function (arr) { var m = arr.length ? arr[arr.length - 1] : null; return m ? (m.id || m.packetId || m.timestamp || '') : ''; };
       if (newMsgs.length === messages.length && _getLastId(newMsgs) === _getLastId(messages)) return;
       var prevLen = messages.length;
-      messages = newMsgs;
+      // #1498: merge WS-pushed messages so a refresh that races a live
+      // packet doesn't wipe it.
+      messages = mergeWsAppendedIntoRest(newMsgs);
       renderMessages();
       if (wasAtBottom) scrollToBottom();
       else {
