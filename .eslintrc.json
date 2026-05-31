@@ -52,6 +52,7 @@
     "ROLE_STYLE": "readonly",
     "ROUTE_TYPES": "readonly",
     "RegionFilter": "readonly",
+    "RegionShowAll": "readonly",
     "SITE_CONFIG": "readonly",
     "SKEW_SEVERITY_COLORS": "readonly",
     "SKEW_SEVERITY_LABELS": "readonly",

@@ -175,6 +175,21 @@ function getHashParams() {
   return new URLSearchParams(location.hash.split('?')[1] || '');
 }
 
+// shouldEmbedRoute — issue #1369. Returns true when the SPA should render in
+// "embed" mode (chrome suppressed: no top-nav, no bottom-nav, no side drawer,
+// content full-bleed). Triggered by ?embed=1 in the hash query string.
+//
+// Allowlisted to /#/map and /#/channels — the two surfaces operators asked
+// for in the cross-domain embed scenario. Other pages have chrome assumptions
+// we are not committing to in embed mode (Tufte: ship narrow, expand later
+// only when there is a real ask).
+function shouldEmbedRoute(basePage, hashSearch) {
+  if (basePage !== 'map' && basePage !== 'channels') return false;
+  if (!hashSearch) return false;
+  var params = new URLSearchParams(hashSearch);
+  return params.get('embed') === '1';
+}
+
 function getDistanceUnit() {
   var stored = localStorage.getItem('meshcore-distance-unit');
   if (stored === 'km') return 'km';
@@ -928,6 +943,14 @@ function navigate() {
   // Pages with fixed-height containers (maps, virtual-scroll, split-panels)
   const fixedPages = { packets: 1, nodes: 1, map: 1, live: 1, channels: 1, 'audio-lab': 1 };
   app.classList.toggle('app-fixed', basePage in fixedPages);
+
+  // Issue #1369: ?embed=1 chrome suppression for cross-domain iframe embeds.
+  // Toggles body.embed; CSS in style.css hides top-nav / bottom-nav / nav-drawer
+  // and zeroes body padding so /#/map and /#/channels render full-bleed.
+  try {
+    var hashSearch = (location.hash.split('?')[1] || '');
+    document.body.classList.toggle('embed', shouldEmbedRoute(basePage, hashSearch));
+  } catch (_) { /* DOM may be missing in some test contexts */ }
   if (pages[basePage]?.init) {
     const t0 = performance.now();
     pages[basePage].init(app, routeParam);

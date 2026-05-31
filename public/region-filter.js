@@ -213,6 +213,49 @@
     if (_container) render(_container);
   }
 
+  /**
+   * #1108 — "Show all nodes (faded)" toggle.
+   *
+   * When a region is selected, the default behavior (showAll = false) is to
+   * HIDE non-region nodes on the map: the operator is looking at a region for
+   * a reason, and far-away nodes are visual noise. When the toggle is ON
+   * (showAll = true), legacy behavior is restored — all nodes load, region
+   * scoping only applies to packet feeds / metrics.
+   *
+   * State persists across reloads in localStorage. Default: false (hide).
+   */
+  var SHOW_ALL_KEY = 'mc-region-show-all-nodes';
+  var _showAllListeners = [];
+  function showAllGet() {
+    try { return localStorage.getItem(SHOW_ALL_KEY) === 'true'; }
+    catch (e) { return false; }
+  }
+  function showAllSet(v) {
+    var bool = !!v;
+    try {
+      if (bool) localStorage.setItem(SHOW_ALL_KEY, 'true');
+      else localStorage.removeItem(SHOW_ALL_KEY);
+    } catch (e) { /* ignore */ }
+    _showAllListeners.forEach(function (fn) { fn(bool); });
+  }
+  function showAllOnChange(fn) { _showAllListeners.push(fn); return fn; }
+  function showAllOffChange(fn) {
+    _showAllListeners = _showAllListeners.filter(function (f) { return f !== fn; });
+  }
+
+  /**
+   * Build a node-list query fragment that respects the "show all nodes" toggle.
+   * Returns "&region=SJC,SFO" only when a region is selected AND showAll is
+   * OFF; otherwise empty string. Use this for /api/nodes? requests on map
+   * surfaces where the operator expects the visible markers to follow the
+   * region selector. Other surfaces (packets, metrics) should keep using
+   * regionQueryString() which is unconditional.
+   */
+  function nodesRegionQueryString() {
+    if (showAllGet()) return '';
+    return regionQueryString();
+  }
+
   // Expose globally
   window.RegionFilter = {
     init: initFilter,
@@ -220,9 +263,17 @@
     getSelected: getSelected,
     getRegionParam: getRegionParam,
     regionQueryString: regionQueryString,
+    nodesRegionQueryString: nodesRegionQueryString,
     onChange: onChange,
     offChange: offChange,
     fetchRegions: fetchRegions,
     setSelected: setSelected
+  };
+  window.RegionShowAll = {
+    get: showAllGet,
+    set: showAllSet,
+    onChange: showAllOnChange,
+    offChange: showAllOffChange,
+    STORAGE_KEY: SHOW_ALL_KEY
   };
 })();
