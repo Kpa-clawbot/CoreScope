@@ -12,22 +12,27 @@
   // refreshMessages) can merge them in instead of stomping them.
   // mergeWsAppendedIntoRest() preserves any WS-pushed messages whose
   // packetHash is not already present in the REST response.
-  function mergeWsAppendedIntoRest(restMsgs) {
+  //
+  // Takes currentMsgs explicitly (rather than reading the module-global
+  // `messages`) so the helper is unit-testable in isolation.
+  function mergeWsAppendedIntoRest(currentMsgs, restMsgs) {
     if (!Array.isArray(restMsgs)) return [];
-    if (!messages || messages.length === 0) return restMsgs;
+    if (!Array.isArray(currentMsgs) || currentMsgs.length === 0) return restMsgs.slice();
     var restHashes = new Set();
     for (var i = 0; i < restMsgs.length; i++) {
       var h = restMsgs[i] && restMsgs[i].packetHash;
       if (h) restHashes.add(h);
     }
     var survivors = [];
-    for (var j = 0; j < messages.length; j++) {
-      var m = messages[j];
+    for (var j = 0; j < currentMsgs.length; j++) {
+      var m = currentMsgs[j];
       if (m && m._fromWS && m.packetHash && !restHashes.has(m.packetHash)) {
         survivors.push(m);
       }
     }
-    return survivors.length ? restMsgs.concat(survivors) : restMsgs;
+    // Always return a fresh array — never alias restMsgs — so callers
+    // can mutate freely without leaking changes back to the input.
+    return survivors.length ? restMsgs.concat(survivors) : restMsgs.slice();
   }
   let autoScroll = true;
   let nodeCache = {};
@@ -1887,7 +1892,7 @@
         return { error: result.error, messageCount: 0 };
       }
       // #1498: merge WS-pushed messages that landed during the decrypt fetch.
-      messages = mergeWsAppendedIntoRest(result.messages || []);
+      messages = mergeWsAppendedIntoRest(messages, result.messages || []);
       if (messages.length === 0) {
         msgEl.innerHTML = '<div class="ch-empty">No encrypted messages found for this channel</div>';
       } else {
@@ -1974,7 +1979,7 @@
       if (isStaleMessageRequest(request)) return;
       // #1498: merge so any WS-pushed messages that arrived while the
       // REST fetch was in flight aren't stomped.
-      messages = mergeWsAppendedIntoRest(data.messages || []);
+      messages = mergeWsAppendedIntoRest(messages, data.messages || []);
       if (messages.length === 0 && rp) {
         msgEl.innerHTML = '<div class="ch-empty">Channel not available in selected region</div>';
       } else {
@@ -2016,7 +2021,7 @@
       var prevLen = messages.length;
       // #1498: merge WS-pushed messages so a refresh that races a live
       // packet doesn't wipe it.
-      messages = mergeWsAppendedIntoRest(newMsgs);
+      messages = mergeWsAppendedIntoRest(messages, newMsgs);
       renderMessages();
       if (wasAtBottom) scrollToBottom();
       else {
@@ -2095,6 +2100,7 @@
   };
   window._channelsSelectChannelForTest = selectChannel;
   window._channelsRefreshMessagesForTest = refreshMessages;
+  window._channelsMergeWsAppendedIntoRestForTest = mergeWsAppendedIntoRest;
   window._channelsLoadChannelsForTest = loadChannels;
   window._channelsBeginMessageRequestForTest = beginMessageRequest;
   window._channelsIsStaleMessageRequestForTest = isStaleMessageRequest;
