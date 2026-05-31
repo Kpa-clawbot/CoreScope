@@ -2025,7 +2025,8 @@
     // Auto-hide nav with pin toggle (#62)
     const topNav = document.querySelector('.top-nav');
     if (topNav) { topNav.style.position = 'fixed'; topNav.style.width = '100%'; topNav.style.zIndex = '1100'; }
-    _navCleanup = { timeout: null, fn: null, pinned: false };
+    const _savedPin = localStorage.getItem('live-nav-pinned') === 'true';
+    _navCleanup = { timeout: null, fn: null, pinned: _savedPin };
     // Add pin button to nav (guard against duplicate)
     if (topNav && !document.getElementById('navPinBtn')) {
       const pinBtn = document.createElement('button');
@@ -2039,6 +2040,7 @@
         _navCleanup.pinned = !_navCleanup.pinned;
         pinBtn.classList.toggle('pinned', _navCleanup.pinned);
         pinBtn.setAttribute('aria-pressed', _navCleanup.pinned);
+        try { localStorage.setItem('live-nav-pinned', _navCleanup.pinned); } catch (_) {}
         if (_navCleanup.pinned) {
           clearTimeout(_navCleanup.timeout);
           topNav.classList.remove('nav-autohide');
@@ -2046,6 +2048,11 @@
           _navCleanup.timeout = setTimeout(() => { topNav.classList.add('nav-autohide'); }, 4000);
         }
       });
+      if (_navCleanup.pinned) {
+        pinBtn.classList.add('pinned');
+        pinBtn.setAttribute('aria-pressed', 'true');
+        topNav.classList.remove('nav-autohide');
+      }
       topNav.appendChild(pinBtn);
     }
     function showNav() {
