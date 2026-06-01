@@ -2803,6 +2803,7 @@
   window._liveNodeActivity = function() { return nodeActivity; };
   window._vcrFormatTime = vcrFormatTime;
   window._liveDbPacketToLive = dbPacketToLive;
+  window._liveStepPulse = stepPulse;
   window._liveExpandToBufferEntries = expandToBufferEntries;
   window._liveExpandToBufferEntriesAsync = expandToBufferEntriesAsync;
   window._liveSEG_MAP = SEG_MAP;
@@ -3559,6 +3560,30 @@
     requestAnimationFrame(tick);
   }
 
+  function stepPulse(pulse, now, isPaused, vcrMode, vcrSpeed) {
+    if (pulse.lastPulse === null) pulse.lastPulse = now;
+    
+    // Cap dt at 32ms to prevent teleporting during low framerates / tab wake
+    const rawDt = now - pulse.lastPulse;
+    const dt = Math.min(rawDt, 32); 
+    
+    pulse.lastPulse = now;
+
+    if (!isPaused) {
+      // Only apply VCR speed multiplier if actually replaying
+      const speed = vcrMode === 'REPLAY' ? (vcrSpeed || 1) : 1;
+      const dtSec = (dt / 1000) * speed;
+      
+      // Inner pulse (58px/sec, fade out 1.15/sec)
+      pulse.r += 58 * dtSec;
+      pulse.op -= 1.15 * dtSec;
+      // Outer highlight ring (grow 20px/sec, fade out 1.35/sec)
+      pulse.hl_r += 20 * dtSec;
+      pulse.hl_op -= 1.35 * dtSec;
+      pulse.hl_weight = pulse.hl_op > 0.4 ? 3 : 2;
+    }
+  }
+
   function renderAnimations(now) {
     if (!animCtx) return;
 
@@ -3595,27 +3620,7 @@
     // Render Pulses
     for (let i = activePulses.length - 1; i >= 0; i--) {
       const pulse = activePulses[i];
-      if (pulse.lastPulse === null) pulse.lastPulse = now;
-      
-      // Cap dt at 32ms to prevent teleporting during low framerates / tab wake
-      const rawDt = now - pulse.lastPulse;
-      const dt = Math.min(rawDt, 32); 
-      
-      pulse.lastPulse = now;
-
-      if (!isPaused) {
-        // Only apply VCR speed multiplier if actually replaying
-        const speed = VCR.mode === 'REPLAY' ? (VCR.speed || 1) : 1;
-        const dtSec = (dt / 1000) * speed;
-        
-        // Inner pulse (58px/sec, fade out 1.15/sec)
-        pulse.r += 58 * dtSec;
-        pulse.op -= 1.15 * dtSec;
-        // Outer highlight ring (grow 20px/sec, fade out 1.35/sec)
-        pulse.hl_r += 20 * dtSec;
-        pulse.hl_op -= 1.35 * dtSec;
-        pulse.hl_weight = pulse.hl_op > 0.4 ? 3 : 2;
-      }
+      stepPulse(pulse, now, isPaused, VCR.mode, VCR.speed);
 
       // Natural completion based purely on scaled simulation time
       // with a 30-second wall-clock safety backstop for engine stalls.
