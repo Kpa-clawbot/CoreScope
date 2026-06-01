@@ -2214,7 +2214,7 @@
       }
       const navRight = topNav.querySelector('.nav-right');
       if (navRight) {
-        navRight.insertBefore(pinBtn, navRight.firstChild);
+        navRight.appendChild(pinBtn);
       } else {
         topNav.appendChild(pinBtn);
       }
