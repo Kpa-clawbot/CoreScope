@@ -21,6 +21,10 @@
   let activeFades = [];
   let isFading = false;
   let canvasTopLeft;
+  // #1514 S2 — scratch points reused per-frame in renderAnimations() to avoid
+  // 2 object allocations per anim per frame (50 anims × 60fps = ~6000/sec).
+  const _scratchFrom = { x: 0, y: 0 };
+  const _scratchTo = { x: 0, y: 0 };
   let clickablePaths = [];
   const CLICKABLE_PATH_TTL_MS = 30000;
   const CLICKABLE_PATH_MAX = 50;
@@ -56,7 +60,7 @@
   function packetMatchesRegion(packets, obsMap, selected) {
     if (!selected || !selected.length) return true;
     if (!packets || !packets.length) return false;
-    const sel = selected.map(function (s) { return String(s).toUpperCase(); });
+    const sel = selected.map(function(s) { return String(s).toUpperCase(); });
     for (var i = 0; i < packets.length; i++) {
       var oid = packets[i] && packets[i].observer_id;
       if (oid == null) continue;
@@ -197,7 +201,7 @@
     // Wire up click handlers on corner buttons
     var btns = document.querySelectorAll('.panel-corner-btn[data-panel]');
     for (var i = 0; i < btns.length; i++) {
-      btns[i].addEventListener('click', function (e) {
+      btns[i].addEventListener('click', function(e) {
         e.stopPropagation();
         var panelId = this.getAttribute('data-panel');
         onCornerClick(panelId);
@@ -399,7 +403,7 @@
         const pkts = data.packets || [];
         return expandToBufferEntriesAsync(pkts);
       })
-      .then(function (replayEntries) {
+      .then(function(replayEntries) {
         if (gen !== VCR.replayGen) return; // stale async result — user changed mode
         if (replayEntries.length === 0) {
           vcrSetMode('PAUSED');
@@ -463,7 +467,7 @@
         const filtered = pkts.filter(p => !existingIds.has(p.id));
         return expandToBufferEntriesAsync(filtered);
       })
-      .then(function (newEntries) {
+      .then(function(newEntries) {
         if (gen !== VCR.replayGen) return; // stale async result
         VCR.buffer = [].concat(newEntries, VCR.buffer);
         VCR.playhead = 0;
@@ -472,7 +476,7 @@
         startReplay();
         updateTimeline();
       })
-      .catch(() => { });
+      .catch(() => {});
   }
 
   function startReplay() {
@@ -490,7 +494,7 @@
       }
     }
     const replayGroups = [...hashGroups.values()].sort((a, b) => a.ts - b.ts);
-    console.log('[vcr] ' + replayGroups.length + ' groups from ' + VCR.buffer.length + ' buffer entries. Top 3:', replayGroups.slice(0, 3).map(g => g.packets.length + ' obs'));
+    console.log('[vcr] ' + replayGroups.length + ' groups from ' + VCR.buffer.length + ' buffer entries. Top 3:', replayGroups.slice(0,3).map(g => g.packets.length + ' obs'));
     let groupIdx = 0;
 
     function tick() {
@@ -533,7 +537,7 @@
       .then(data => {
         const pkts = data.packets || [];
         if (pkts.length === 0) return false;
-        return expandToBufferEntriesAsync(pkts).then(function (newEntries) {
+        return expandToBufferEntriesAsync(pkts).then(function(newEntries) {
           if (gen !== VCR.replayGen) return false; // stale
           VCR.buffer = VCR.buffer.concat(newEntries);
           return true;
@@ -581,7 +585,7 @@
     clickablePaths.push(entry);
     pruneClickablePaths(Date.now());
     let dismissTimer = null;
-    poly.on('click', function (e) {
+    poly.on('click', function(e) {
       if (dismissTimer) clearTimeout(dismissTimer);
       const html = buildClickablePathPopupHtml(typeName, color, hopNames, tsMs, hash);
       L.popup({ maxWidth: 280, className: 'path-info-popup' })
@@ -613,9 +617,9 @@
 
   // 7-segment LCD renderer
   const SEG_MAP = {
-    '0': 0x7E, '1': 0x30, '2': 0x6D, '3': 0x79, '4': 0x33, '5': 0x5B, '6': 0x5F, '7': 0x70,
-    '8': 0x7F, '9': 0x7B, '-': 0x01, ':': 0x80, ' ': 0x00, 'P': 0x67, 'A': 0x77, 'U': 0x3E,
-    'S': 0x5B, 'E': 0x4F, 'L': 0x0E, 'I': 0x30, 'V': 0x3E, '+': 0x01
+    '0':0x7E,'1':0x30,'2':0x6D,'3':0x79,'4':0x33,'5':0x5B,'6':0x5F,'7':0x70,
+    '8':0x7F,'9':0x7B,'-':0x01,':':0x80,' ':0x00,'P':0x67,'A':0x77,'U':0x3E,
+    'S':0x5B,'E':0x4F,'L':0x0E,'I':0x30,'V':0x3E,'+':0x01
   };
   function drawSegDigit(ctx, x, y, w, h, bits, color) {
     const t = Math.max(2, h * 0.12); // segment thickness
@@ -633,8 +637,8 @@
     // colon
     if (bits & 0x80) {
       const r = t * 0.6;
-      ctx.beginPath(); ctx.arc(x + w / 2, y + h * 0.33, r, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(x + w / 2, y + h * 0.67, r, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x+w/2, y+h*0.33, r, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x+w/2, y+h*0.67, r, 0, Math.PI*2); ctx.fill();
     }
   }
   function drawLcdText(text, color) {
@@ -778,7 +782,7 @@
    */
   var VCR_CHUNK_SIZE = 200;
   function expandToBufferEntriesAsync(pkts) {
-    return new Promise(function (resolve) {
+    return new Promise(function(resolve) {
       var entries = [];
       var i = 0;
       function processChunk() {
@@ -881,9 +885,9 @@
         } else {
           const entry = {
             packets: [pkt], timer: setTimeout(() => {
-              const buffered = propagationBuffer.get(hash);
-              propagationBuffer.delete(hash);
-              if (buffered) renderPacketTree(buffered.packets);
+            const buffered = propagationBuffer.get(hash);
+            propagationBuffer.delete(hash);
+            if (buffered) renderPacketTree(buffered.packets);
             }, PROPAGATION_BUFFER_MS)
           };
           propagationBuffer.set(hash, entry);
@@ -913,7 +917,7 @@
         VCR.timelineTimestamps = timestamps.map(t => new Date(t).getTime());
         VCR.timelineFetchedScope = scopeMs;
       }
-    } catch (e) { /* ignore */ }
+    } catch(e) { /* ignore */ }
   }
 
   function updateTimeline() {
@@ -1201,14 +1205,25 @@
     // 1. Create a custom pane for high-performance canvas animations
     map.createPane('animationsPane');
 
-    // ARCHITECTURE NOTE - z-index: 625
-    // Leaflet's default pane z-indexes dictate the stacking context:
-    // - overlayPane: 400 (vector paths)
-    // - markerPane: 600 (static node dots)
-    // - tooltipPane: 650 (hover labels)
-    // - popupPane: 700 (click details)
-    // We intentionally sandwich this pane at 625 so flying packets draw 
-    // visually OVER the static nodes, but safely UNDER tooltips and popups.
+    // ARCHITECTURE NOTE - dual animation panes (#1514 S7):
+    // Leaflet's default pane z-indexes:
+    //   overlayPane: 400 (vector paths)
+    //   markerPane:  600 (static node dots)
+    //   tooltipPane: 650 (hover labels)
+    //   popupPane:   700 (click details)
+    //
+    // We sandwich TWO panes between markerPane and tooltipPane on purpose:
+    //   - 'animationsPane' (z=625): the canvas engine for in-flight packet
+    //     animations and the post-flight fading polylines (#1514 M2). Sits
+    //     ABOVE static node markers (so packets visibly fly over nodes) but
+    //     UNDER tooltips/popups so hover/click affordances always win.
+    //   - 'liveAnimPane' (z=650, created below): legacy SVG layer used by
+    //     drawMatrixLine/animatePath/pulseNode/ghostMarkers (everything that
+    //     hasn't been ported to the canvas engine yet). Kept just above
+    //     animationsPane so SVG-based effects stack on top of canvas trails.
+    //
+    // Future work (#1514 out-of-scope): port the remaining SVG paths to the
+    // canvas engine and collapse to a single pane.
     map.getPane('animationsPane').style.zIndex = 625;
 
     // Ensure mouse events pass through to the markers/map below
@@ -1234,7 +1249,7 @@
       const w = size.x + padX * 2;
       const h = size.y + padY * 2;
 
-      const dpr = window.devicePixelRatio || 1;
+    const dpr = window.devicePixelRatio || 1;
 
       // Updating width/height automatically clears the canvas
       animCanvas.width = w * dpr;
@@ -1287,19 +1302,27 @@
     updateAnimCanvas();
     cullMarkers();
 
-    _dprChangeHandler = () => {
-      try {
-        updateAnimCanvas();
-      } finally {
-        if (_dprMedia) {
-          _dprMedia.removeEventListener('change', _dprChangeHandler);
-        }
-        _dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-        _dprMedia.addEventListener('change', _dprChangeHandler);
+    // #1514 M1+S10 — DPR change handling.
+    //
+    // matchMedia(`(resolution: ${dpr}dppx)`) is a STRICT-MATCH query: it only
+    // fires when the current DPR stops matching. After it fires, we must rebind
+    // a new MQL keyed to the new DPR. Older code did remove → re-add inside a
+    // try/finally which was fragile (a throw in updateAnimCanvas would still
+    // re-bind, and a synchronous re-entry between remove and add could lose
+    // the handler). The {once: true} pattern below removes the listener
+    // atomically before our handler runs, so re-binding is race-free.
+    function _rebindDPRListener() {
+      if (_dprMedia && _dprChangeHandler) {
+        try { _dprMedia.removeEventListener('change', _dprChangeHandler); } catch (_) {}
       }
-    };
-    _dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-    _dprMedia.addEventListener('change', _dprChangeHandler);
+      _dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      _dprChangeHandler = () => {
+        updateAnimCanvas();
+        _rebindDPRListener();
+      };
+      _dprMedia.addEventListener('change', _dprChangeHandler, { once: true });
+    }
+    _rebindDPRListener();
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
       (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -1308,8 +1331,8 @@
     function _liveResolveTile(dark) {
       if (!dark) return { url: TILE_LIGHT, attribution: '© OpenStreetMap © CartoDB', refUrl: null };
       const reg = window.MC_TILE_PROVIDERS || {};
-      const id = (typeof window.MC_getDarkTileProvider === 'function') ? window.MC_getDarkTileProvider() : 'carto-dark';
-      const p = reg[id] || reg['carto-dark'] || {};
+      const id  = (typeof window.MC_getDarkTileProvider === 'function') ? window.MC_getDarkTileProvider() : 'carto-dark';
+      const p   = reg[id] || reg['carto-dark'] || {};
       return {
         url: p.url || p.baseUrl || TILE_DARK,
         attribution: p.attribution || '© OpenStreetMap © CartoDB',
@@ -1322,7 +1345,7 @@
       if (tileLayer.options) tileLayer.options.attribution = r.attribution;
       if (dark && r.refUrl) {
         if (!_liveDarkRefLayer) {
-          _liveDarkRefLayer = L.tileLayer(r.refUrl, {maxZoom: 19, attribution: r.attribution}).addTo(map);
+          _liveDarkRefLayer = L.tileLayer(r.refUrl, { maxZoom: 19, attribution: r.attribution }).addTo(map);
         } else {
           _liveDarkRefLayer.setUrl(r.refUrl);
         }
@@ -1337,21 +1360,21 @@
       }
     }
     const _liveInitTile = _liveResolveTile(isDark);
-    let tileLayer = L.tileLayer(_liveInitTile.url, {maxZoom: 19, attribution: _liveInitTile.attribution}).addTo(map);
+    let tileLayer = L.tileLayer(_liveInitTile.url, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(map);
     if (isDark && _liveInitTile.refUrl) {
-      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, {maxZoom: 19, attribution: _liveInitTile.attribution}).addTo(map);
+      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(map);
     }
     if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
 
     // Swap tiles when theme changes
-    const _themeObs = new MutationObserver(function() {
+    const _themeObs = new MutationObserver(function () {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
       _liveSyncDarkTiles(dark);
     });
     _themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     // #1420 — re-render on customizer change.
-    window.addEventListener('mc-tile-provider-changed', function() {
+    window.addEventListener('mc-tile-provider-changed', function () {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
       _liveSyncDarkTiles(dark);
@@ -1377,7 +1400,7 @@
 
     injectSVGFilters();
     AreaFilter.init(document.getElementById('liveAreaFilter'));
-    AreaFilter.onChange(function() { loadNodes(); });
+    AreaFilter.onChange(function () { loadNodes(); });
     await loadNodes();
     showHeatMap();
     connectWS();
@@ -1449,7 +1472,7 @@
       // (cmd/server/types.go ObserverListResponse) — NOT a top-level array.
       // Bug #1136: previously parsed as array → map empty → region filter
       // dropped every packet.
-      fetch('/api/observers').then(function (r) { return r.json(); }).then(function (data) {
+      fetch('/api/observers').then(function(r) { return r.json(); }).then(function(data) {
         setObserverIataMap(buildObserverIataMap(data));
       }).catch(function() { /* leave map empty; filter will hide all when active */ });
       RegionFilter.init(rfEl, { dropdown: true });
@@ -1616,7 +1639,7 @@
         }
       });
 
-      nodeFilterInput.addEventListener('blur', function() {
+      nodeFilterInput.addEventListener('blur', function () {
         // Slight delay so click on a suggestion can register first.
         setTimeout(hideDropdown, 150);
       });
@@ -1636,7 +1659,7 @@
     }
 
     // Geo filter overlay
-    (async function() {
+    (async function () {
       try {
         const gf = await api('/config/geo-filter', { ttl: 3600 });
         if (!gf || !gf.polygon || gf.polygon.length < 3) return;
@@ -1646,7 +1669,7 @@
           color: geoColor, weight: 2, opacity: 0.8,
           fillColor: geoColor, fillOpacity: 0.08
         });
-        const bufferPoly = gf.bufferKm > 0 ? (function() {
+        const bufferPoly = gf.bufferKm > 0 ? (function () {
           let cLat = 0, cLon = 0;
           gf.polygon.forEach(function (p) { cLat += p[0]; cLon += p[1]; });
           cLat /= gf.polygon.length; cLon /= gf.polygon.length;
@@ -1836,14 +1859,14 @@
             var tog = document.getElementById(p.togId);
             if (body) body.removeAttribute('hidden');
             if (root) { root.classList.remove('is-collapsed'); root.classList.remove('is-expanded'); }
-            if (tog) { tog.setAttribute('aria-expanded', 'true'); }
+            if (tog)  { tog.setAttribute('aria-expanded', 'true'); }
           }
         }
       }
       pairs.forEach(function (p) {
         var tog = document.getElementById(p.togId);
         if (!tog) return;
-        tog.addEventListener('click', function() {
+        tog.addEventListener('click', function () {
           var root = document.getElementById(p.rootId);
           var nowExpanded = !(root && root.classList.contains('is-expanded'));
           setExpanded(p, nowExpanded);
@@ -1919,9 +1942,9 @@
 
       // Resize clamping (debounced)
       var resizeTimer = null;
-      window.addEventListener('resize', function() {
+      window.addEventListener('resize', function () {
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(function() { dragMgr.handleResize(); }, 200);
+        resizeTimer = setTimeout(function () { dragMgr.handleResize(); }, 200);
       });
     }
 
@@ -1935,7 +1958,7 @@
         const swatch = window.makeRoleMarkerSVG
           ? window.makeRoleMarkerSVG(role, color, 14)
           : `<span class="live-dot" style="background:${color}" aria-hidden="true"></span>`;
-        li.innerHTML = `<span class="live-shape-swatch" aria-hidden="true">${swatch}</span> ${(ROLE_LABELS[role] || role).replace(/s$/,'')}`;
+        li.innerHTML = `<span class="live-shape-swatch" aria-hidden="true">${swatch}</span> ${(ROLE_LABELS[role] || role).replace(/s$/, '')}`;
         roleLegendList.appendChild(li);
       }
     }
@@ -1977,7 +2000,7 @@
     // Save/restore map view
     const savedView = localStorage.getItem('live-map-view');
     if (savedView) {
-      try { const v = JSON.parse(savedView); map.setView([v.lat, v.lng], v.zoom); } catch { }
+      try { const v = JSON.parse(savedView); map.setView([v.lat, v.lng], v.zoom); } catch {}
     }
     map.on('moveend', () => {
       const c = map.getCenter();
@@ -2026,7 +2049,7 @@
         item.setAttribute('role', 'menuitem');
         item.setAttribute('data-scope', src.dataset.scope);
         item.textContent = src.textContent;
-        item.addEventListener('click', function() {
+        item.addEventListener('click', function () {
           src.click(); // delegate to original handler — keeps single source of truth
           menu.setAttribute('hidden', '');
           moreBtn.setAttribute('aria-expanded', 'false');
@@ -2039,13 +2062,13 @@
         e.stopPropagation();
         var open = !menu.hasAttribute('hidden');
         if (open) { menu.setAttribute('hidden', ''); moreBtn.setAttribute('aria-expanded', 'false'); }
-        else { menu.removeAttribute('hidden'); moreBtn.setAttribute('aria-expanded', 'true'); }
+        else      { menu.removeAttribute('hidden');  moreBtn.setAttribute('aria-expanded', 'true');  }
       });
       // Click outside closes the menu.
       document.addEventListener('click', function (e) {
         if (menu.hasAttribute('hidden')) return;
         if (e.target === moreBtn || moreBtn.contains(e.target) ||
-          e.target === menu || menu.contains(e.target)) return;
+            e.target === menu   || menu.contains(e.target)) return;
         menu.setAttribute('hidden', '');
         moreBtn.setAttribute('aria-expanded', 'false');
       });
@@ -2153,7 +2176,7 @@
 
     // Refresh relative timestamps in feed every 10 seconds (#701)
     _feedTimestampInterval = setInterval(function() {
-      document.querySelectorAll('.feed-time[data-ts]').forEach(function (el) {
+      document.querySelectorAll('.feed-time[data-ts]').forEach(function(el) {
         el.innerHTML = formatLiveTimestampHtml(Number(el.dataset.ts));
       });
     }, 10000);
@@ -2184,10 +2207,10 @@
           _navCleanup.timeout = setTimeout(() => { topNav.classList.add('nav-autohide'); }, 4000);
         }
       });
-      if (_navCleanup.pinned) {
+        if (_navCleanup.pinned) {
         pinBtn.classList.add('pinned');
         pinBtn.setAttribute('aria-pressed', 'true');
-        topNav.classList.remove('nav-autohide');
+          topNav.classList.remove('nav-autohide');
       }
       topNav.appendChild(pinBtn);
     }
@@ -2245,7 +2268,7 @@
       const observers = h.observers || [];
       const recent = h.recentPackets || [];
       const roleColor = ROLE_COLORS[n.role] || '#6b7280';
-      const roleLabel = (ROLE_LABELS[n.role] || n.role || 'unknown').replace(/s$/,'');
+      const roleLabel = (ROLE_LABELS[n.role] || n.role || 'unknown').replace(/s$/, '');
       const hasLoc = n.lat != null && n.lon != null;
       const lastSeen = formatLiveTimestampHtml(n.last_seen);
       const thresholds = window.getHealthThresholds ? getHealthThresholds(n.role) : { degradedMs: 3600000, silentMs: 86400000 };
@@ -2270,9 +2293,9 @@
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Last Seen</td><td>${lastSeen}</td></tr>
             <tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Adverts</td><td>${n.advert_count || 0}</td></tr>
             ${'default_scope' in n ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Scope</td><td>${n.default_scope === null ? '<span style="color:var(--text-muted)">—</span>'
-          : n.default_scope === '' ? '<span style="color:var(--text-muted)">unknown scope</span>'
-            : `<code style="color:var(--accent)">${escapeHtml(n.default_scope)}</code>`
-          }</td></tr>` : ''}
+  : n.default_scope === '' ? '<span style="color:var(--text-muted)">unknown scope</span>'
+  : `<code style="color:var(--accent)">${escapeHtml(n.default_scope)}</code>`
+}</td></tr>` : ''}
             ${hasLoc ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Location</td><td>${n.lat.toFixed(5)}, ${n.lon.toFixed(5)}</td></tr>` : ''}
             ${stats.avgSnr != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Avg SNR</td><td>${stats.avgSnr.toFixed(1)} dB</td></tr>` : ''}
             ${stats.avgHops != null ? `<tr><td style="color:var(--text-muted);padding:4px 8px 4px 0;">Avg Hops</td><td>${stats.avgHops.toFixed(1)}</td></tr>` : ''}
@@ -2411,8 +2434,8 @@
 
   function getFavoritePubkeys() {
     let favs = [];
-    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-favorites') || '[]')); } catch { }
-    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]').map(n => n.pubkey)); } catch { }
+    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-favorites') || '[]')); } catch {}
+    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]').map(n => n.pubkey)); } catch {}
     return favs.filter(Boolean);
   }
 
@@ -2538,7 +2561,7 @@
       for (const op of group.packets) {
         let opHops = [];
         if (op.path_json) {
-          try { opHops = getParsedPath(op); } catch { }
+          try { opHops = getParsedPath(op); } catch {}
         } else if (op.decoded?.path?.hops) {
           opHops = op.decoded.path.hops;
         }
@@ -2585,7 +2608,14 @@
     rebuildFeedList();
   }
 
-  // Prevent browser sub-pixel snapping by ensuring DOM sizes are even integers
+  /**
+   * Round to the next even integer to prevent browser sub-pixel snapping on
+   * SVG node markers. Cross-link: live.css (~line 1300) — "Eliminate SVG
+   * baseline drift" — relies on icon size being even so the half-size
+   * iconAnchor lands on a whole pixel.
+   * @param {number} n size in CSS pixels
+   * @returns {number} `n` if even, else `n + 1`
+   */
   function evenSize(n) { return n % 2 ? n + 1 : n; }
 
   function addNodeMarker(n) {
@@ -2607,8 +2637,8 @@
     const svgHtml = (window.makeRoleMarkerSVG
       ? window.makeRoleMarkerSVG(n.role, null, sizePx)
       : '<svg width="' + sizePx + '" height="' + sizePx + '" viewBox="0 0 ' + sizePx + ' ' + sizePx +
-      '"><circle cx="' + (sizePx / 2) + '" cy="' + (sizePx / 2) + '" r="' + (sizePx / 2 - 2) +
-      '" fill="' + fillExpr + '" stroke="var(--mc-marker-stroke-color)" stroke-width="var(--mc-marker-stroke-width)" stroke-opacity="var(--mc-marker-stroke-opacity)"/></svg>');
+        '"><circle cx="' + (sizePx/2) + '" cy="' + (sizePx/2) + '" r="' + (sizePx/2 - 2) +
+        '" fill="' + fillExpr + '" stroke="var(--mc-marker-stroke-color)" stroke-width="var(--mc-marker-stroke-width)" stroke-opacity="var(--mc-marker-stroke-opacity)"/></svg>');
 
     const icon = L.divIcon({
       html: svgHtml,
@@ -2797,7 +2827,7 @@
   window._liveVcrSetMode = vcrSetMode;
   // #1207 test seams: expose production feed mutators so E2E can exercise
   // the real eviction guard / placeholder re-add path (not a test-local copy).
-  window._liveAddFeedItem = function (icon, typeName, payload, hops, color, pkt) {
+  window._liveAddFeedItem = function(icon, typeName, payload, hops, color, pkt) {
     return addFeedItem(icon, typeName, payload, hops, color, pkt);
   };
   window._liveRebuildFeedList = function() { return rebuildFeedList(); };
@@ -2869,7 +2899,7 @@
       } catch { }
     };
     ws.onclose = () => setTimeout(connectWS, WS_RECONNECT_MS);
-    ws.onerror = () => { };
+    ws.onerror = () => {};
   }
 
   // === UNIFIED PACKET RENDERER ===
@@ -2894,12 +2924,12 @@
     }
 
     // --- Favorites filter ---
-    if (showOnlyFavorites && !packets.some(function (p) { return packetInvolvesFavorite(p); })) return;
+    if (showOnlyFavorites && !packets.some(function(p) { return packetInvolvesFavorite(p); })) return;
 
     // --- Node filter ---
     if (nodeFilterKeys.length) {
       nodeFilterTotal++;
-      if (!packets.some(function (p) { return packetInvolvesFilterNode(p, nodeFilterKeys); })) return;
+      if (!packets.some(function(p) { return packetInvolvesFilterNode(p, nodeFilterKeys); })) return;
       nodeFilterShown++;
       updateNodeFilterUI();
     }
@@ -2919,7 +2949,7 @@
       if (h.payloadTypeName === 'ADVERT' && p.pubKey) {
         var key = p.pubKey;
         if (!nodeMarkers[key] && p.lat != null && p.lon != null && !(p.lat === 0 && p.lon === 0)) {
-          var n = { public_key: key, name: p.name || key.slice(0, 8), role: p.role || 'unknown', lat: p.lat, lon: p.lon, _liveSeen: Date.now() };
+          var n = { public_key: key, name: p.name || key.slice(0,8), role: p.role || 'unknown', lat: p.lat, lon: p.lon, _liveSeen: Date.now() };
           nodeData[key] = n;
           addNodeMarker(n);
           if (window.HopResolver) HopResolver.init(Object.values(nodeData));
@@ -2943,7 +2973,7 @@
       for (const fp of packets) {
         let fpHops = [];
         if (fp.path_json) {
-          try { fpHops = getParsedPath(fp); } catch { }
+          try { fpHops = getParsedPath(fp); } catch {}
         } else if (fp.decoded?.path?.hops) {
           fpHops = fp.decoded.path.hops;
         }
@@ -2964,7 +2994,7 @@
 
     // --- Rain drops: one per observation ---
     var baseHops = (decoded.path?.hops || []).length || 1;
-    packets.forEach(function (rp, i) {
+    packets.forEach(function(rp, i) {
       if (i === 0) { addRainDrop(rp); return; }
       var variedHops = Math.max(1, baseHops + Math.floor(Math.random() * 3) - 1);
       setTimeout(function() { addRainDrop(rp, variedHops); }, i * 150);
@@ -3058,11 +3088,11 @@
           var ghost = L.circleMarker(hp.pos, {
             radius: 3, fillColor: ghostColor, fillOpacity: 0.2, color: color, weight: 1, opacity: 0.3
           }).addTo(pathsLayer);
-          setTimeout((function (g) { return function() { if (pathsLayer.hasLayer(g)) pathsLayer.removeLayer(g); }; })(ghost), GHOST_TIMEOUT_MS);
+          setTimeout((function(g) { return function() { if (pathsLayer.hasLayer(g)) pathsLayer.removeLayer(g); }; })(ghost), GHOST_TIMEOUT_MS);
         }
       }
       // Remove dashed line after timeout
-      setTimeout((function (l) { return function() { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), GHOST_TIMEOUT_MS);
+      setTimeout((function(l) { return function() { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), GHOST_TIMEOUT_MS);
     }
     // Ghost marker for the final unreached hop
     var last = hopPositions[hopPositions.length - 1];
@@ -3086,7 +3116,7 @@
     if (resolvedPath && resolvedPath.length === hops.length && window.HopResolver && HopResolver.ready()) {
       resolvedMap = HopResolver.resolveFromServer(hops, resolvedPath);
       // Fill in any null entries from client-side fallback, preserving sender GPS context
-      var nullHops = hops.filter(function (h, i) { return !resolvedPath[i] && !resolvedMap[h]; });
+      var nullHops = hops.filter(function(h, i) { return !resolvedPath[i] && !resolvedMap[h]; });
       if (nullHops.length) {
         var fallback = HopResolver.resolve(nullHops, senderLat, senderLon, null, null, null);
         for (var k in fallback) resolvedMap[k] = fallback[k];
@@ -3167,6 +3197,7 @@
         return;
       }
       if (!animLayer) return;
+
       const hp = hopPositions[hopIndex];
       
       // Audio hook: notify per-hop callback
@@ -3468,7 +3499,7 @@
       // Remove old chars beyond trail length
       while (charMarkers.length > TRAIL_LEN) {
         const old = charMarkers.shift();
-        try { animLayer.removeLayer(old.marker); } catch { }
+        try { animLayer.removeLayer(old.marker); } catch {}
       }
 
       // Fade existing chars
@@ -3509,8 +3540,8 @@
           }
           const ft = Math.min(1, (now - fadeStart) / 300);
           if (ft >= 1) {
-            for (const cm of charMarkers) try { animLayer.removeLayer(cm.marker); } catch { }
-            try { pathsLayer.removeLayer(trail); } catch { }
+            for (const cm of charMarkers) try { animLayer.removeLayer(cm.marker); } catch {}
+            try { pathsLayer.removeLayer(trail); } catch {}
             charMarkers.length = 0;
           } else {
             const op = 1 - ft;
@@ -3637,15 +3668,14 @@
       const fromLayerPt = map.latLngToLayerPoint(anim.from);
       const toLayerPt = map.latLngToLayerPoint(anim.to);
 
-      // Offset by the canvas's position within the pane to get drawable pixels
-      const fromPt = {
-        x: fromLayerPt.x - canvasTopLeft.x,
-        y: fromLayerPt.y - canvasTopLeft.y
-      };
-      const toPt = {
-        x: toLayerPt.x - canvasTopLeft.x,
-        y: toLayerPt.y - canvasTopLeft.y
-      };
+      // Offset by the canvas's position within the pane to get drawable pixels.
+      // #1514 S2 — reuse module-scoped scratch objects instead of allocating per frame.
+      const fromPt = _scratchFrom;
+      fromPt.x = fromLayerPt.x - canvasTopLeft.x;
+      fromPt.y = fromLayerPt.y - canvasTopLeft.y;
+      const toPt = _scratchTo;
+      toPt.x = toLayerPt.x - canvasTopLeft.x;
+      toPt.y = toLayerPt.y - canvasTopLeft.y;
 
       const W = animCanvas.clientWidth;
       const H = animCanvas.clientHeight;
@@ -3724,8 +3754,8 @@
       const f = activeFades[i];
       if (!pathsLayer) continue;
       const fadeElapsed = now - f.lastFade;
-      if (fadeElapsed >= 52) {
-        const fadeTicks = Math.min(Math.floor(fadeElapsed / 52), 4);
+              if (fadeElapsed >= 52) {
+                const fadeTicks = Math.min(Math.floor(fadeElapsed / 52), 4);
         f.lastFade = now;
         f.opacity -= 0.1 * fadeTicks;
         if (f.opacity <= 0) {
@@ -3749,20 +3779,20 @@
     if (!pathsLayer) return;
 
     const contrail = L.polyline([anim.from, anim.to], {
-      // pane: 'animationsPane', // Uncomment if you created the custom pane in the previous step
+      pane: 'animationsPane', // #1514 M2 — fades stack with the moving phase (z=625).
       color: anim.contrailColor, weight: 6, opacity: anim.opacity * 0.2, lineCap: 'round'
     }).addTo(pathsLayer);
 
     const line = L.polyline([anim.from, anim.to], {
-      // pane: 'animationsPane', // Uncomment if you created the custom pane in the previous step
+      pane: 'animationsPane', // #1514 M2 — fades stack with the moving phase (z=625).
       color: anim.lineColor, weight: anim.isDashed ? 1.5 : 2, opacity: anim.opacity,
       lineCap: 'round', dashArray: anim.isDashed ? '4 6' : null
     }).addTo(pathsLayer);
 
-    recentPaths.push({ line, glowLine: contrail, time: Date.now() });
-    while (recentPaths.length > 5) {
-      const old = recentPaths.shift();
-      if (pathsLayer) { pathsLayer.removeLayer(old.line); pathsLayer.removeLayer(old.glowLine); }
+          recentPaths.push({ line, glowLine: contrail, time: Date.now() });
+          while (recentPaths.length > 5) {
+            const old = recentPaths.shift();
+            if (pathsLayer) { pathsLayer.removeLayer(old.line); pathsLayer.removeLayer(old.glowLine); }
       activeFades = activeFades.filter(f => f.line !== old.line);
     }
 
@@ -4068,12 +4098,37 @@
   }
 
   function destroy() {
+    // #1514 S3 — drain onComplete callbacks BEFORE clearing the array. Audio
+    // `onHop` hooks rely on these firing exactly once per queued animation;
+    // previously destroy() dropped them silently when navigating away with
+    // packets in flight.
+    for (let i = 0; i < activeAnimations.length; i++) {
+      const a = activeAnimations[i];
+      if (a && typeof a.onComplete === 'function') {
+        try { a.onComplete(); } catch (_) {}
+      }
+    }
     activeAnimations.length = 0;
     activePulses.length = 0;
     activeFades.length = 0;
     activeGhosts.length = 0;
     isAnimating = false;
     isFading = false;
+    // #1514 S8 — tear down animation canvas + DPR listener BEFORE map.remove()
+    // (Leaflet pane is still attached). Doing this after map.remove() would
+    // call clearRect on a context whose backing pane is gone, and a late DPR
+    // change could still fire updateAnimCanvas() against a null map.
+    if (animCtx && animCanvas) {
+      try { animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight); } catch (_) {}
+      animCanvas.remove();
+      animCanvas = null;
+      animCtx = null;
+    }
+    if (_dprMedia && _dprChangeHandler) {
+      try { _dprMedia.removeEventListener('change', _dprChangeHandler); } catch (_) {}
+      _dprMedia = null;
+      _dprChangeHandler = null;
+    }
     stopReplay();
     if (_timelineRefreshInterval) { clearInterval(_timelineRefreshInterval); _timelineRefreshInterval = null; }
     if (_lcdClockInterval) { clearInterval(_lcdClockInterval); _lcdClockInterval = null; }
@@ -4120,24 +4175,6 @@
     nodeActivity = {}; pktTimestamps = [];
     feedDedup.clear();
     VCR.buffer = []; VCR.playhead = -1; VCR.mode = 'LIVE'; VCR.missedCount = 0; VCR.speed = _initialSpeed; VCR.replayGen = 0;
-
-    // CLEANUP: Kill the canvas loop, dump the queue, and clear the screen
-    activeAnimations.length = 0;
-    activePulses.length = 0;
-    activeFades.length = 0;
-    isAnimating = false;
-    isFading = false;
-    if (animCtx && animCanvas) {
-      animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
-      animCanvas.remove();
-      animCanvas = null;
-      animCtx = null;
-    }
-    if (_dprMedia && _dprChangeHandler) {
-      _dprMedia.removeEventListener('change', _dprChangeHandler);
-      _dprMedia = null;
-      _dprChangeHandler = null;
-    }
   }
 
   let _themeRefreshHandler = null;
@@ -4149,16 +4186,14 @@
   // across re-mounts. window.__liveMQLBindCount is a debug seam consumed by
   // test-live-mql-leak-1180-e2e.js and otherwise unused.
   var _liveNarrowMqlBound = false;
-  window._liveTestSeams = window._liveTestSeams || {};
-  window._liveTestSeams.wake = function() {
-    if (!isAnimating) {
-      isAnimating = true;
-      requestAnimationFrame(renderAnimations);
-    }
-  };
+  // #1514 S4 — single source of truth for window._liveTestSeams is at the
+  // earlier exposure block (search for `window._liveTestSeams = {`). The
+  // duplicate definition that lived here previously added a `_liveTestSeams.wake`
+  // that bypassed pause/empty-queue guards; tests must use the production
+  // `wakeCanvasEngine` exposed there.
 
   registerPage('live', {
-    init: function (app, routeParam) {
+    init: function(app, routeParam) {
       _themeRefreshHandler = () => {
         rebuildFeedList();
         if (activeNodeDetailKey) showNodeDetail(activeNodeDetailKey);
