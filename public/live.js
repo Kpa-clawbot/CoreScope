@@ -1,4 +1,4 @@
-(function () {
+(function() {
   'use strict';
 
   // getParsedPath / getParsedDecoded are in shared packet-helpers.js (loaded before this file)
@@ -248,7 +248,7 @@
 
   function initResizeHandler() {
     let resizeTimer = null;
-    _onResize = function () {
+    _onResize = function() {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         // Set live-page height from JS — most reliable across all mobile browsers
@@ -314,7 +314,7 @@
     // if a prior tracker is still active (re-mount race, dev hot-reload),
     // tear it down BEFORE overwriting _vcrHeightCleanup so the previous
     // ResizeObserver/listeners aren't orphaned.
-    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) { } _vcrHeightCleanup = null; }
+    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
     var bar = document.getElementById('vcrBar');
     var page = document.querySelector('.live-page');
     if (!bar || !page) return;
@@ -331,8 +331,8 @@
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', publish);
     }
-    _vcrHeightCleanup = function () {
-      if (ro) { try { ro.disconnect(); } catch (_) { } ro = null; }
+    _vcrHeightCleanup = function() {
+      if (ro) { try { ro.disconnect(); } catch (_) {} ro = null; }
       window.removeEventListener('resize', publish);
       if (window.visualViewport) {
         window.visualViewport.removeEventListener('resize', publish);
@@ -489,7 +489,7 @@
       }
     }
     const replayGroups = [...hashGroups.values()].sort((a, b) => a.ts - b.ts);
-    console.log('[vcr] ' + replayGroups.length + ' groups from ' + VCR.buffer.length + ' buffer entries. Top 3:', replayGroups.slice(0, 3).map(g => g.packets.length + ' obs'));
+    console.log('[vcr] ' + replayGroups.length + ' groups from ' + VCR.buffer.length + ' buffer entries. Top 3:', replayGroups.slice(0,3).map(g => g.packets.length + ' obs'));
     let groupIdx = 0;
 
     function tick() {
@@ -563,12 +563,12 @@
     const cutoff = now - CLICKABLE_PATH_TTL_MS;
     for (let i = clickablePaths.length - 1; i >= 0; i--) {
       if (clickablePaths[i].addedAt < cutoff) {
-        try { clickablePaths[i].poly.remove(); } catch (_) { }
+        try { clickablePaths[i].poly.remove(); } catch (_) {}
         clickablePaths.splice(i, 1);
       }
     }
     while (clickablePaths.length > CLICKABLE_PATH_MAX) {
-      try { clickablePaths[0].poly.remove(); } catch (_) { }
+      try { clickablePaths[0].poly.remove(); } catch (_) {}
       clickablePaths.shift();
     }
   }
@@ -1187,7 +1187,7 @@
       const mapCfg = await (await fetch('/api/config/map')).json();
       if (Array.isArray(mapCfg.center) && mapCfg.center.length === 2) mapCenter = mapCfg.center;
       if (typeof mapCfg.zoom === 'number') mapZoom = mapCfg.zoom;
-    } catch { }
+    } catch {}
 
     map = L.map('liveMap', {
       zoomControl: false,
@@ -1311,7 +1311,7 @@
       if (tileLayer.options) tileLayer.options.attribution = r.attribution;
       if (dark && r.refUrl) {
         if (!_liveDarkRefLayer) {
-          _liveDarkRefLayer = L.tileLayer(r.refUrl, { maxZoom: 19, attribution: r.attribution }).addTo(map);
+          _liveDarkRefLayer = L.tileLayer(r.refUrl, {maxZoom: 19, attribution: r.attribution}).addTo(map);
         } else {
           _liveDarkRefLayer.setUrl(r.refUrl);
         }
@@ -1322,25 +1322,25 @@
       if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
       // #1420 parity with map.js — refresh visible attribution credit after provider swap.
       if (map.attributionControl) {
-        try { map.attributionControl._update && map.attributionControl._update(); } catch (_) { }
+        try { map.attributionControl._update && map.attributionControl._update(); } catch (_) {}
       }
     }
     const _liveInitTile = _liveResolveTile(isDark);
-    let tileLayer = L.tileLayer(_liveInitTile.url, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(map);
+    let tileLayer = L.tileLayer(_liveInitTile.url, {maxZoom: 19, attribution: _liveInitTile.attribution}).addTo(map);
     if (isDark && _liveInitTile.refUrl) {
-      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(map);
+      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, {maxZoom: 19, attribution: _liveInitTile.attribution}).addTo(map);
     }
     if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
 
     // Swap tiles when theme changes
-    const _themeObs = new MutationObserver(function () {
+    const _themeObs = new MutationObserver(function() {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
       _liveSyncDarkTiles(dark);
     });
     _themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     // #1420 — re-render on customizer change.
-    window.addEventListener('mc-tile-provider-changed', function () {
+    window.addEventListener('mc-tile-provider-changed', function() {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
       _liveSyncDarkTiles(dark);
@@ -1366,7 +1366,7 @@
 
     injectSVGFilters();
     AreaFilter.init(document.getElementById('liveAreaFilter'));
-    AreaFilter.onChange(function () { loadNodes(); });
+    AreaFilter.onChange(function() { loadNodes(); });
     await loadNodes();
     showHeatMap();
     connectWS();
@@ -1383,7 +1383,7 @@
         const packets = Array.isArray(parsed) ? parsed : [parsed];
         vcrPause(); // suppress live packets
         setTimeout(() => renderPacketTree(packets, true), 1500);
-      } catch { }
+      } catch {}
     } else {
       // replayRecent(); // disabled — live page starts empty, fills from WS
     }
@@ -1440,7 +1440,7 @@
       // dropped every packet.
       fetch('/api/observers').then(function (r) { return r.json(); }).then(function (data) {
         setObserverIataMap(buildObserverIataMap(data));
-      }).catch(function () { /* leave map empty; filter will hide all when active */ });
+      }).catch(function() { /* leave map empty; filter will hide all when active */ });
       RegionFilter.init(rfEl, { dropdown: true });
       regionFilterChangeHandler = RegionFilter.onChange(function() {
         // #1108 — when the region selection changes, reload visible map
@@ -1504,7 +1504,7 @@
         const qs = params.toString();
         const newHash = base + (qs ? '?' + qs : '');
         const newUrl = location.pathname + location.search + newHash;
-        try { history.replaceState(null, '', newUrl); } catch (_) { }
+        try { history.replaceState(null, '', newUrl); } catch (_) {}
       }
 
       function selectSuggestion(opt) {
@@ -1519,7 +1519,7 @@
         const base = location.hash.split('?')[0] || '#/live';
         const qs = params.toString();
         const newUrl = location.pathname + location.search + base + (qs ? '?' + qs : '');
-        try { history.replaceState(null, '', newUrl); } catch (_) { }
+        try { history.replaceState(null, '', newUrl); } catch (_) {}
         hideDropdown();
       }
 
@@ -1605,7 +1605,7 @@
         }
       });
 
-      nodeFilterInput.addEventListener('blur', function () {
+      nodeFilterInput.addEventListener('blur', function() {
         // Slight delay so click on a suggestion can register first.
         setTimeout(hideDropdown, 150);
       });
@@ -1620,12 +1620,12 @@
         const base = location.hash.split('?')[0] || '#/live';
         const qs = params.toString();
         const newUrl = location.pathname + location.search + base + (qs ? '?' + qs : '');
-        try { history.replaceState(null, '', newUrl); } catch (_) { }
+        try { history.replaceState(null, '', newUrl); } catch (_) {}
       });
     }
 
     // Geo filter overlay
-    (async function () {
+    (async function() {
       try {
         const gf = await api('/config/geo-filter', { ttl: 3600 });
         if (!gf || !gf.polygon || gf.polygon.length < 3) return;
@@ -1635,7 +1635,7 @@
           color: geoColor, weight: 2, opacity: 0.8,
           fillColor: geoColor, fillOpacity: 0.08
         });
-        const bufferPoly = gf.bufferKm > 0 ? (function () {
+        const bufferPoly = gf.bufferKm > 0 ? (function() {
           let cLat = 0, cLon = 0;
           gf.polygon.forEach(function (p) { cLat += p[0]; cLon += p[1]; });
           cLat /= gf.polygon.length; cLon /= gf.polygon.length;
@@ -1832,7 +1832,7 @@
       pairs.forEach(function (p) {
         var tog = document.getElementById(p.togId);
         if (!tog) return;
-        tog.addEventListener('click', function () {
+        tog.addEventListener('click', function() {
           var root = document.getElementById(p.rootId);
           var nowExpanded = !(root && root.classList.contains('is-expanded'));
           setExpanded(p, nowExpanded);
@@ -1908,9 +1908,9 @@
 
       // Resize clamping (debounced)
       var resizeTimer = null;
-      window.addEventListener('resize', function () {
+      window.addEventListener('resize', function() {
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(function () { dragMgr.handleResize(); }, 200);
+        resizeTimer = setTimeout(function() { dragMgr.handleResize(); }, 200);
       });
     }
 
@@ -1924,7 +1924,7 @@
         const swatch = window.makeRoleMarkerSVG
           ? window.makeRoleMarkerSVG(role, color, 14)
           : `<span class="live-dot" style="background:${color}" aria-hidden="true"></span>`;
-        li.innerHTML = `<span class="live-shape-swatch" aria-hidden="true">${swatch}</span> ${(ROLE_LABELS[role] || role).replace(/s$/, '')}`;
+        li.innerHTML = `<span class="live-shape-swatch" aria-hidden="true">${swatch}</span> ${(ROLE_LABELS[role] || role).replace(/s$/,'')}`;
         roleLegendList.appendChild(li);
       }
     }
@@ -1966,7 +1966,7 @@
     // Save/restore map view
     const savedView = localStorage.getItem('live-map-view');
     if (savedView) {
-      try { const v = JSON.parse(savedView); map.setView([v.lat, v.lng], v.zoom); } catch { }
+      try { const v = JSON.parse(savedView); map.setView([v.lat, v.lng], v.zoom); } catch {}
     }
     map.on('moveend', () => {
       const c = map.getCenter();
@@ -2015,7 +2015,7 @@
         item.setAttribute('role', 'menuitem');
         item.setAttribute('data-scope', src.dataset.scope);
         item.textContent = src.textContent;
-        item.addEventListener('click', function () {
+        item.addEventListener('click', function() {
           src.click(); // delegate to original handler — keeps single source of truth
           menu.setAttribute('hidden', '');
           moreBtn.setAttribute('aria-expanded', 'false');
@@ -2141,7 +2141,7 @@
     _pruneInterval = setInterval(pruneStaleNodes, 60000);
 
     // Refresh relative timestamps in feed every 10 seconds (#701)
-    _feedTimestampInterval = setInterval(function () {
+    _feedTimestampInterval = setInterval(function() {
       document.querySelectorAll('.feed-time[data-ts]').forEach(function (el) {
         el.innerHTML = formatLiveTimestampHtml(Number(el.dataset.ts));
       });
@@ -2150,7 +2150,8 @@
     // Auto-hide nav with pin toggle (#62)
     const topNav = document.querySelector('.top-nav');
     if (topNav) { topNav.style.position = 'fixed'; topNav.style.width = '100%'; topNav.style.zIndex = '1100'; }
-    _navCleanup = { timeout: null, fn: null, pinned: false };
+    const _savedPin = localStorage.getItem('live-nav-pinned') === 'true';
+    _navCleanup = { timeout: null, fn: null, pinned: _savedPin };
     // Add pin button to nav (guard against duplicate)
     if (topNav && !document.getElementById('navPinBtn')) {
       const pinBtn = document.createElement('button');
@@ -2164,6 +2165,7 @@
         _navCleanup.pinned = !_navCleanup.pinned;
         pinBtn.classList.toggle('pinned', _navCleanup.pinned);
         pinBtn.setAttribute('aria-pressed', _navCleanup.pinned);
+        try { localStorage.setItem('live-nav-pinned', _navCleanup.pinned); } catch (_) {}
         if (_navCleanup.pinned) {
           clearTimeout(_navCleanup.timeout);
           topNav.classList.remove('nav-autohide');
@@ -2171,6 +2173,11 @@
           _navCleanup.timeout = setTimeout(() => { topNav.classList.add('nav-autohide'); }, 4000);
         }
       });
+      if (_navCleanup.pinned) {
+        pinBtn.classList.add('pinned');
+        pinBtn.setAttribute('aria-pressed', 'true');
+        topNav.classList.remove('nav-autohide');
+      }
       topNav.appendChild(pinBtn);
     }
     function showNav() {
@@ -2227,7 +2234,7 @@
       const observers = h.observers || [];
       const recent = h.recentPackets || [];
       const roleColor = ROLE_COLORS[n.role] || '#6b7280';
-      const roleLabel = (ROLE_LABELS[n.role] || n.role || 'unknown').replace(/s$/, '');
+      const roleLabel = (ROLE_LABELS[n.role] || n.role || 'unknown').replace(/s$/,'');
       const hasLoc = n.lat != null && n.lon != null;
       const lastSeen = formatLiveTimestampHtml(n.last_seen);
       const thresholds = window.getHealthThresholds ? getHealthThresholds(n.role) : { degradedMs: 3600000, silentMs: 86400000 };
@@ -2393,8 +2400,8 @@
 
   function getFavoritePubkeys() {
     let favs = [];
-    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-favorites') || '[]')); } catch { }
-    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]').map(n => n.pubkey)); } catch { }
+    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-favorites') || '[]')); } catch {}
+    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]').map(n => n.pubkey)); } catch {}
     return favs.filter(Boolean);
   }
 
@@ -2520,7 +2527,7 @@
       for (const op of group.packets) {
         let opHops = [];
         if (op.path_json) {
-          try { opHops = getParsedPath(op); } catch { }
+          try { opHops = getParsedPath(op); } catch {}
         } else if (op.decoded?.path?.hops) {
           opHops = op.decoded.path.hops;
         }
@@ -2713,7 +2720,7 @@
           // WS-only nodes: remove to prevent unbounded memory growth
           if (marker) {
             if (nodesLayer) {
-              try { nodesLayer.removeLayer(marker); } catch (e) { }
+              try { nodesLayer.removeLayer(marker); } catch (e) {}
             }
           }
           delete nodeMarkers[key];
@@ -2744,25 +2751,25 @@
   window._liveBuildClickablePathPopupHtml = buildClickablePathPopupHtml;
   window._livePruneClickablePaths = pruneClickablePaths;
   window._liveClickablePaths = clickablePaths;
-  window._liveNodeMarkers = function () { return nodeMarkers; };
-  window._liveNodeData = function () { return nodeData; };
-  window._liveNodeActivity = function () { return nodeActivity; };
+  window._liveNodeMarkers = function() { return nodeMarkers; };
+  window._liveNodeData = function() { return nodeData; };
+  window._liveNodeActivity = function() { return nodeActivity; };
   window._vcrFormatTime = vcrFormatTime;
   window._liveDbPacketToLive = dbPacketToLive;
   window._liveExpandToBufferEntries = expandToBufferEntries;
   window._liveExpandToBufferEntriesAsync = expandToBufferEntriesAsync;
   window._liveSEG_MAP = SEG_MAP;
   window._liveBufferPacket = bufferPacket;
-  window._liveVCR = function () { return VCR; };
+  window._liveVCR = function() { return VCR; };
   window._liveGetFavoritePubkeys = getFavoritePubkeys;
   window._livePacketInvolvesFavorite = packetInvolvesFavorite;
   window._liveIsNodeFavorited = isNodeFavorited;
   window._livePacketInvolvesFilterNode = packetInvolvesFilterNode;
-  window._liveGetNodeFilterKeys = function () { return nodeFilterKeys; };
+  window._liveGetNodeFilterKeys = function() { return nodeFilterKeys; };
   window._livePacketMatchesRegion = packetMatchesRegion;
   window._liveSetObserverIataMap = setObserverIataMap;
   window._liveBuildObserverIataMap = buildObserverIataMap;
-  window._liveGetObserverIataMap = function () { return observerIataMap; };
+  window._liveGetObserverIataMap = function() { return observerIataMap; };
   window._liveSetNodeFilter = setNodeFilter;
   window._liveFormatLiveTimestampHtml = formatLiveTimestampHtml;
   window._liveResolveHopPositions = resolveHopPositions;
@@ -2776,7 +2783,16 @@
   window._liveAddFeedItem = function (icon, typeName, payload, hops, color, pkt) {
     return addFeedItem(icon, typeName, payload, hops, color, pkt);
   };
-  window._liveRebuildFeedList = function () { return rebuildFeedList(); };
+  window._liveRebuildFeedList = function() { return rebuildFeedList(); };
+
+  // PR #1490 test seams: Expose internal state for Playwright assertions
+  window._liveDrawAnimatedLine = drawAnimatedLine;
+  window._liveTestSeams = {
+    getAnimCount: () => activeAnimations.length,
+    isAnimating: () => isAnimating,
+    getPathCount: () => (typeof recentPaths !== 'undefined' ? recentPaths.length : 0),
+    wake: wakeCanvasEngine
+  };
 
   // PR #1490 test seams: Expose internal state for Playwright assertions
   window._liveDrawAnimatedLine = drawAnimatedLine;
@@ -2830,7 +2846,7 @@
         lastTs = groupTs;
       }
       updateTimeline();
-    } catch { }
+    } catch {}
   }
 
   function connectWS() {
@@ -2840,7 +2856,7 @@
       try {
         const msg = JSON.parse(e.data);
         if (msg.type === 'packet') bufferPacket(msg.data);
-      } catch { }
+      } catch {}
     };
     ws.onclose = () => setTimeout(connectWS, WS_RECONNECT_MS);
     ws.onerror = () => { };
@@ -2917,7 +2933,7 @@
       for (const fp of packets) {
         let fpHops = [];
         if (fp.path_json) {
-          try { fpHops = getParsedPath(fp); } catch { }
+          try { fpHops = getParsedPath(fp); } catch {}
         } else if (fp.decoded?.path?.hops) {
           fpHops = fp.decoded.path.hops;
         }
@@ -2941,7 +2957,7 @@
     packets.forEach(function (rp, i) {
       if (i === 0) { addRainDrop(rp); return; }
       var variedHops = Math.max(1, baseHops + Math.floor(Math.random() * 3) - 1);
-      setTimeout(function () { addRainDrop(rp, variedHops); }, i * 150);
+      setTimeout(function() { addRainDrop(rp, variedHops); }, i * 150);
     });
 
     // --- Extract all unique paths from observations ---
@@ -3032,11 +3048,11 @@
           var ghost = L.circleMarker(hp.pos, {
             radius: 3, fillColor: ghostColor, fillOpacity: 0.2, color: color, weight: 1, opacity: 0.3
           }).addTo(pathsLayer);
-          setTimeout((function (g) { return function () { if (pathsLayer.hasLayer(g)) pathsLayer.removeLayer(g); }; })(ghost), GHOST_TIMEOUT_MS);
+          setTimeout((function (g) { return function() { if (pathsLayer.hasLayer(g)) pathsLayer.removeLayer(g); }; })(ghost), GHOST_TIMEOUT_MS);
         }
       }
       // Remove dashed line after timeout
-      setTimeout((function (l) { return function () { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), GHOST_TIMEOUT_MS);
+      setTimeout((function (l) { return function() { if (pathsLayer.hasLayer(l)) pathsLayer.removeLayer(l); }; })(line), GHOST_TIMEOUT_MS);
     }
     // Ghost marker for the final unreached hop
     var last = hopPositions[hopPositions.length - 1];
@@ -3044,7 +3060,7 @@
       var ghostEnd = L.circleMarker(last.pos, {
         radius: 4, fillColor: ghostColor, fillOpacity: 0.25, color: color, weight: 1, opacity: 0.35
       }).addTo(pathsLayer);
-      setTimeout(function () { if (pathsLayer.hasLayer(ghostEnd)) pathsLayer.removeLayer(ghostEnd); }, GHOST_TIMEOUT_MS);
+      setTimeout(function() { if (pathsLayer.hasLayer(ghostEnd)) pathsLayer.removeLayer(ghostEnd); }, GHOST_TIMEOUT_MS);
     }
   }
 
@@ -3142,7 +3158,7 @@
       }
       if (!animLayer) return;
       // Audio hook: notify per-hop callback
-      if (onHop) try { onHop(hopIndex, hopPositions.length, hopPositions[hopIndex]); } catch (e) { }
+      if (onHop) try { onHop(); } catch (e) {}
       const hp = hopPositions[hopIndex];
       const isGhost = hp.ghost;
 
@@ -3154,7 +3170,7 @@
           }).addTo(animLayer);
           
           setTimeout(() => {
-            if (animLayer && animLayer.hasLayer(ghost)) try { animLayer.removeLayer(ghost); } catch { }
+            if (animLayer && animLayer.hasLayer(ghost)) try { animLayer.removeLayer(ghost); } catch {}
           }, 3000);
         }
       } else {
@@ -3435,7 +3451,7 @@
       // Remove old chars beyond trail length
       while (charMarkers.length > TRAIL_LEN) {
         const old = charMarkers.shift();
-        try { animLayer.removeLayer(old.marker); } catch { }
+        try { animLayer.removeLayer(old.marker); } catch {}
       }
 
       // Fade existing chars
@@ -3476,8 +3492,8 @@
           }
           const ft = Math.min(1, (now - fadeStart) / 300);
           if (ft >= 1) {
-            for (const cm of charMarkers) try { animLayer.removeLayer(cm.marker); } catch { }
-            try { pathsLayer.removeLayer(trail); } catch { }
+            for (const cm of charMarkers) try { animLayer.removeLayer(cm.marker); } catch {}
+            try { pathsLayer.removeLayer(trail); } catch {}
             charMarkers.length = 0;
           } else {
             const op = 1 - ft;
@@ -3790,7 +3806,7 @@
       }).addTo(map);
       // Set overall layer opacity via canvas element
       if (heatLayer._canvas) { heatLayer._canvas.style.opacity = savedOpacity; }
-      else { setTimeout(function () { if (heatLayer && heatLayer._canvas) heatLayer._canvas.style.opacity = savedOpacity; }, 100); }
+      else { setTimeout(function() { if (heatLayer && heatLayer._canvas) heatLayer._canvas.style.opacity = savedOpacity; }, 100); }
       window._meshcoreLiveHeatLayer = heatLayer;
     }
   }
@@ -4001,7 +4017,7 @@
       const dedupEntry = pkt.hash && feedDedup.get(pkt.hash);
       const replayPkts = (dedupEntry && dedupEntry.packets.length > 1) ? dedupEntry.packets : [pkt];
       const uniquePaths = new Set(replayPkts.map(p => p.path_json || JSON.stringify(p.decoded?.path?.hops || [])));
-      console.log('[replay] hash=' + pkt.hash + ' pkts=' + replayPkts.length + ' uniquePaths=' + uniquePaths.size, [...uniquePaths].slice(0, 3));
+      console.log('[replay] hash=' + pkt.hash + ' pkts=' + replayPkts.length + ' uniquePaths=' + uniquePaths.size, [...uniquePaths].slice(0,3));
       renderPacketTree(replayPkts, true);
     });
     document.addEventListener('click', function dismiss(e) {
@@ -4035,7 +4051,7 @@
       window.removeEventListener('orientationchange', _onResize);
       if (window.visualViewport) window.visualViewport.removeEventListener('resize', _onResize);
     }
-    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) { } _vcrHeightCleanup = null; }
+    if (_vcrHeightCleanup) { try { _vcrHeightCleanup(); } catch (_) {} _vcrHeightCleanup = null; }
     // Restore #app height to CSS default
     const appEl = document.getElementById('app');
     if (appEl) appEl.style.height = '';
@@ -4093,7 +4109,7 @@
   // test-live-mql-leak-1180-e2e.js and otherwise unused.
   var _liveNarrowMqlBound = false;
   window._liveTestSeams = window._liveTestSeams || {};
-  window._liveTestSeams.wake = function () {
+  window._liveTestSeams.wake = function() {
     if (!isAnimating) {
       isAnimating = true;
       requestAnimationFrame(renderAnimations);
@@ -4112,7 +4128,7 @@
       if (window.ChannelColorPicker) window.ChannelColorPicker.installLiveFeed();
       return result;
     },
-    destroy: function () {
+    destroy: function() {
       if (_themeRefreshHandler) { window.removeEventListener('theme-refresh', _themeRefreshHandler); _themeRefreshHandler = null; }
       return destroy();
     }
