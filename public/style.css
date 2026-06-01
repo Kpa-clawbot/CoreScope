@@ -3061,7 +3061,7 @@ button.region-pill-active:hover { opacity: 0.85; color: #fff; }
 .region-dropdown-item {
   display: flex; align-items: center; gap: 6px; padding: 6px 12px;
   font-size: 13px; cursor: pointer; color: var(--text); white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis; width: 100%; width:320px;
+  overflow: hidden; text-overflow: ellipsis; width: 100%; max-width:320px;
   background: transparent; border: 0px;
 }
 .region-dropdown-item input[type="checkbox"] {
