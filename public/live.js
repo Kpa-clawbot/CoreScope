@@ -1275,19 +1275,19 @@
     function cullMarkers() {
       if (!map || !nodesLayer) return;
       if (_cullRAF) return; // Skip if a cull is already queued for this frame
-      
+
       _cullRAF = requestAnimationFrame(() => {
         _cullRAF = null;
         if (!map || !nodesLayer) return;
-        
+
         let bounds;
         try { bounds = map.getBounds().pad(0.5); } catch (e) { return; }
-        
+
         for (const key in nodeMarkers) {
           const marker = nodeMarkers[key];
           const isVisible = bounds.contains(marker.getLatLng());
           const hasLayer = nodesLayer.hasLayer(marker);
-          
+
           if (isVisible && !hasLayer) nodesLayer.addLayer(marker);
           else if (!isVisible && hasLayer) nodesLayer.removeLayer(marker);
         }
@@ -2650,8 +2650,8 @@
     const marker = L.marker([n.lat, n.lon], { icon: icon, interactive: true });
     if (nodesLayer) {
       try {
-        // If the marker is outside the current map bounds, it is intentionally 
-        // deferred to save DOM nodes. cullMarkers() is the only path that will 
+        // If the marker is outside the current map bounds, it is intentionally
+        // deferred to save DOM nodes. cullMarkers() is the only path that will
         // re-attach it later when the user pans or zooms.
         if (!map || map.getBounds().pad(0.5).contains(marker.getLatLng())) {
           marker.addTo(nodesLayer);
@@ -2803,6 +2803,7 @@
   window._liveNodeActivity = function() { return nodeActivity; };
   window._vcrFormatTime = vcrFormatTime;
   window._liveDbPacketToLive = dbPacketToLive;
+  window._liveStepPulse = stepPulse;
   window._liveExpandToBufferEntries = expandToBufferEntries;
   window._liveExpandToBufferEntriesAsync = expandToBufferEntriesAsync;
   window._liveSEG_MAP = SEG_MAP;
@@ -3199,14 +3200,14 @@
       if (!animLayer) return;
 
       const hp = hopPositions[hopIndex];
-      
+
       // Audio hook: notify per-hop callback
       if (onHop) {
-        try { 
-          onHop(hopIndex, hopPositions.length, hp); 
+        try {
+          onHop(hopIndex, hopPositions.length, hp);
         } catch (e) { }
       }
-      
+
       const isGhost = hp.ghost;
 
       if (isGhost) {
@@ -3214,7 +3215,7 @@
           const ghost = L.circleMarker(hp.pos, {
             radius: 3, fillColor: '#94a3b8', fillOpacity: 0.35, color: '#94a3b8', weight: 1, opacity: 0.5,
           }).addTo(animLayer);
-          
+
           activeGhosts.push({ marker: ghost, timeLeft: 3000, lastTick: null });
           if (!isAnimating) {
             isAnimating = true;
@@ -3559,6 +3560,30 @@
     requestAnimationFrame(tick);
   }
 
+  function tickDt(obj, fieldName, now) {
+    if (obj[fieldName] === null) obj[fieldName] = now;
+    const rawDt = now - obj[fieldName];
+    const dt = Math.min(rawDt, 32);
+    obj[fieldName] = now;
+    const speed = VCR.mode === 'REPLAY' ? (VCR.speed || 1) : 1;
+    return dt * speed;
+  }
+
+  function stepPulse(pulse, now, isPaused) {
+    const scaledDt = tickDt(pulse, 'lastPulse', now);
+
+    if (!isPaused) {
+      const dtSec = scaledDt / 1000;
+      // Inner pulse (58px/sec, fade out 1.15/sec)
+      pulse.r += 58 * dtSec;
+      pulse.op -= 1.15 * dtSec;
+      // Outer highlight ring (grow 20px/sec, fade out 1.35/sec)
+      pulse.hl_r += 20 * dtSec;
+      pulse.hl_op -= 1.35 * dtSec;
+      pulse.hl_weight = pulse.hl_op > 0.4 ? 3 : 2;
+    }
+  }
+
   function renderAnimations(now) {
     if (!animCtx) return;
 
@@ -3595,21 +3620,7 @@
     // Render Pulses
     for (let i = activePulses.length - 1; i >= 0; i--) {
       const pulse = activePulses[i];
-      if (pulse.lastPulse === null) pulse.lastPulse = now;
-      const dt = now - pulse.lastPulse;
-      pulse.lastPulse = now;
-
-      if (!isPaused) {
-        const speed = VCR.speed || 1;
-        const dtSec = (dt / 1000) * speed;
-        // Inner pulse (58px/sec, fade out 1.15/sec)
-        pulse.r += 58 * dtSec;
-        pulse.op -= 1.15 * dtSec;
-        // Outer highlight ring (grow 20px/sec, fade out 1.35/sec)
-        pulse.hl_r += 20 * dtSec;
-        pulse.hl_op -= 1.35 * dtSec;
-        pulse.hl_weight = pulse.hl_op > 0.4 ? 3 : 2;
-      }
+      stepPulse(pulse, now, isPaused);
 
       // Natural completion based purely on scaled simulation time
       // with a 30-second wall-clock safety backstop for engine stalls.
@@ -3650,17 +3661,11 @@
 
     for (let i = activeAnimations.length - 1; i >= 0; i--) {
       const anim = activeAnimations[i];
-
-      // Safely resume without dt time-jumps. 
-      // If lastTick is null (because we were paused), reset it to 'now' so dt is 0.
-      if (anim.lastTick === null) anim.lastTick = now;
-
-      const dt = now - anim.lastTick;
-      anim.lastTick = now;
+      const scaledDt = tickDt(anim, 'lastTick', now);
 
       // Advance progress only if we are not paused
       if (!isPaused) {
-        anim.progress += (dt / 660) * VCR.speed;
+        anim.progress += scaledDt / 660;
       }
 
       const t = Math.min(1, anim.progress);
