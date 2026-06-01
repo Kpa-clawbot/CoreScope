@@ -3612,7 +3612,8 @@
       }
 
       // Natural completion based purely on scaled simulation time
-      if (pulse.op <= 0) {
+      // with a 30-second wall-clock safety backstop for engine stalls.
+      if (pulse.op <= 0 || now - pulse.startTime > 30000) {
         activePulses.splice(i, 1);
         continue;
       }
