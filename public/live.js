@@ -623,13 +623,13 @@
     const hw = w - 2*g, hh = (h - 3*g) / 2;
     ctx.fillStyle = color;
     // a=top, b=top-right, c=bot-right, d=bot, e=bot-left, f=top-left, g=mid
-    if (bits & 0x40) ctx.fillRect(x + g + t / 2, y, hw - t, t);           // a
-    if (bits & 0x20) ctx.fillRect(x + w - t, y + g + t / 2, t, hh - t / 2);     // b
-    if (bits & 0x10) ctx.fillRect(x + w - t, y + hh + 2*g + t / 2, t, hh - t / 2);// c
-    if (bits & 0x08) ctx.fillRect(x + g + t / 2, y + h - t, hw - t, t);       // d
-    if (bits & 0x04) ctx.fillRect(x, y + hh + 2*g + t / 2, t, hh - t / 2);    // e
-    if (bits & 0x02) ctx.fillRect(x, y + g + t / 2, t, hh - t / 2);         // f
-    if (bits & 0x01) ctx.fillRect(x + g + t / 2, y + hh + g - t / 2, hw - t, t);  // g
+    if (bits & 0x40) ctx.fillRect(x+g+t/2, y, hw-t, t);           // a
+    if (bits & 0x20) ctx.fillRect(x+w-t, y+g+t/2, t, hh-t/2);     // b
+    if (bits & 0x10) ctx.fillRect(x+w-t, y+hh+2*g+t/2, t, hh-t/2);// c
+    if (bits & 0x08) ctx.fillRect(x+g+t/2, y+h-t, hw-t, t);       // d
+    if (bits & 0x04) ctx.fillRect(x, y+hh+2*g+t/2, t, hh-t/2);    // e
+    if (bits & 0x02) ctx.fillRect(x, y+g+t/2, t, hh-t/2);         // f
+    if (bits & 0x01) ctx.fillRect(x+g+t/2, y+hh+g-t/2, hw-t, t);  // g
     // colon
     if (bits & 0x80) {
       const r = t * 0.6;
