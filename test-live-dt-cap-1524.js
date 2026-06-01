@@ -82,7 +82,7 @@ try {
   };
 
   // 1. Initial tick to set lastPulse
-  stepPulse(pulse, 1000, false, 'LIVE', 1);
+  stepPulse(pulse, 1000, false);
   assert.strictEqual(pulse.lastPulse, 1000, "lastPulse should be initialized");
 
   // 2. Simulate a massive time gap (e.g., 5 seconds)
@@ -90,7 +90,7 @@ try {
   const expectedRIncrease = 58 * expectedMaxDtSec;
 
   const initialR = pulse.r;
-  stepPulse(pulse, 6000, false, 'LIVE', 1); // 5000ms later
+  stepPulse(pulse, 6000, false); // 5000ms later
 
   const actualRIncrease = pulse.r - initialR;
 

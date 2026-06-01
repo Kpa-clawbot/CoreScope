@@ -3560,20 +3560,20 @@
     requestAnimationFrame(tick);
   }
 
-  function stepPulse(pulse, now, isPaused, vcrMode, vcrSpeed) {
-    if (pulse.lastPulse === null) pulse.lastPulse = now;
-
-    // Cap dt at 32ms to prevent teleporting during low framerates / tab wake
-    const rawDt = now - pulse.lastPulse;
+  function tickDt(obj, fieldName, now) {
+    if (obj[fieldName] === null) obj[fieldName] = now;
+    const rawDt = now - obj[fieldName];
     const dt = Math.min(rawDt, 32);
+    obj[fieldName] = now;
+    const speed = VCR.mode === 'REPLAY' ? (VCR.speed || 1) : 1;
+    return dt * speed;
+  }
 
-    pulse.lastPulse = now;
+  function stepPulse(pulse, now, isPaused) {
+    const scaledDt = tickDt(pulse, 'lastPulse', now);
 
     if (!isPaused) {
-      // Only apply VCR speed multiplier if actually replaying
-      const speed = vcrMode === 'REPLAY' ? (vcrSpeed || 1) : 1;
-      const dtSec = (dt / 1000) * speed;
-
+      const dtSec = scaledDt / 1000;
       // Inner pulse (58px/sec, fade out 1.15/sec)
       pulse.r += 58 * dtSec;
       pulse.op -= 1.15 * dtSec;
@@ -3620,7 +3620,7 @@
     // Render Pulses
     for (let i = activePulses.length - 1; i >= 0; i--) {
       const pulse = activePulses[i];
-      stepPulse(pulse, now, isPaused, VCR.mode, VCR.speed);
+      stepPulse(pulse, now, isPaused);
 
       // Natural completion based purely on scaled simulation time
       // with a 30-second wall-clock safety backstop for engine stalls.
@@ -3661,21 +3661,11 @@
 
     for (let i = activeAnimations.length - 1; i >= 0; i--) {
       const anim = activeAnimations[i];
-
-      // Safely resume without dt time-jumps.
-      if (anim.lastTick === null) anim.lastTick = now;
-
-      // Cap dt at 32ms to prevent teleporting during low framerates / tab wake
-      const rawDt = now - anim.lastTick;
-      const dt = Math.min(rawDt, 32);
-
-      anim.lastTick = now;
+      const scaledDt = tickDt(anim, 'lastTick', now);
 
       // Advance progress only if we are not paused
       if (!isPaused) {
-        // Only apply VCR speed multiplier if actually replaying
-        const speed = VCR.mode === 'REPLAY' ? (VCR.speed || 1) : 1;
-        anim.progress += (dt / 660) * speed;
+        anim.progress += scaledDt / 660;
       }
 
       const t = Math.min(1, anim.progress);
