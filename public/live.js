@@ -4048,6 +4048,21 @@
     activeFades.length = 0;
     isAnimating = false;
     isFading = false;
+    // #1514 S8 — tear down animation canvas + DPR listener BEFORE map.remove()
+    // (Leaflet pane is still attached). Doing this after map.remove() would
+    // call clearRect on a context whose backing pane is gone, and a late DPR
+    // change could still fire updateAnimCanvas() against a null map.
+    if (animCtx && animCanvas) {
+      try { animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight); } catch (_) {}
+      animCanvas.remove();
+      animCanvas = null;
+      animCtx = null;
+    }
+    if (_dprMedia && _dprChangeHandler) {
+      try { _dprMedia.removeEventListener('change', _dprChangeHandler); } catch (_) {}
+      _dprMedia = null;
+      _dprChangeHandler = null;
+    }
     stopReplay();
     if (_timelineRefreshInterval) { clearInterval(_timelineRefreshInterval); _timelineRefreshInterval = null; }
     if (_lcdClockInterval) { clearInterval(_lcdClockInterval); _lcdClockInterval = null; }
@@ -4061,23 +4076,6 @@
       regionFilterChangeHandler = null;
     }
     if (map) { map.remove(); map = null; }
-    // #1514 S8 — canvas teardown moved up here from a duplicate trailing block.
-    // Order matters: clear+detach the canvas BEFORE we null out the map (which
-    // already removed our pane) so we don't call clearRect on a context whose
-    // backing pane is gone. Also drop the DPR MQL listener so a late
-    // resolution change after destroy() can't fire updateAnimCanvas() against
-    // a null map.
-    if (animCtx && animCanvas) {
-      try { animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight); } catch (_) {}
-      animCanvas.remove();
-      animCanvas = null;
-      animCtx = null;
-    }
-    if (_dprMedia && _dprChangeHandler) {
-      try { _dprMedia.removeEventListener('change', _dprChangeHandler); } catch (_) {}
-      _dprMedia = null;
-      _dprChangeHandler = null;
-    }
     if (_onResize) {
       window.removeEventListener('resize', _onResize);
       window.removeEventListener('orientationchange', _onResize);
