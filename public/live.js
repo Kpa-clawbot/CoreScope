@@ -3596,12 +3596,18 @@
     for (let i = activePulses.length - 1; i >= 0; i--) {
       const pulse = activePulses[i];
       if (pulse.lastPulse === null) pulse.lastPulse = now;
-      const dt = now - pulse.lastPulse;
+      
+      // Cap dt at 32ms to prevent teleporting during low framerates / tab wake
+      const rawDt = now - pulse.lastPulse;
+      const dt = Math.min(rawDt, 32); 
+      
       pulse.lastPulse = now;
 
       if (!isPaused) {
-        const speed = VCR.speed || 1;
+        // Only apply VCR speed multiplier if actually replaying
+        const speed = VCR.mode === 'REPLAY' ? (VCR.speed || 1) : 1;
         const dtSec = (dt / 1000) * speed;
+        
         // Inner pulse (58px/sec, fade out 1.15/sec)
         pulse.r += 58 * dtSec;
         pulse.op -= 1.15 * dtSec;
@@ -3652,15 +3658,19 @@
       const anim = activeAnimations[i];
 
       // Safely resume without dt time-jumps. 
-      // If lastTick is null (because we were paused), reset it to 'now' so dt is 0.
       if (anim.lastTick === null) anim.lastTick = now;
 
-      const dt = now - anim.lastTick;
+      // Cap dt at 32ms to prevent teleporting during low framerates / tab wake
+      const rawDt = now - anim.lastTick;
+      const dt = Math.min(rawDt, 32);
+      
       anim.lastTick = now;
 
       // Advance progress only if we are not paused
       if (!isPaused) {
-        anim.progress += (dt / 660) * VCR.speed;
+        // Only apply VCR speed multiplier if actually replaying
+        const speed = VCR.mode === 'REPLAY' ? (VCR.speed || 1) : 1;
+        anim.progress += (dt / 660) * speed;
       }
 
       const t = Math.min(1, anim.progress);
