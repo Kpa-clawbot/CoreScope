@@ -572,7 +572,7 @@
 
     // Derived vars
     if (themeSection.background) root.setProperty('--content-bg', themeSection.contentBg || themeSection.background);
-    if (themeSection.surface1) root.setProperty('--card-bg', themeSection.cardBg || themeSection.surface1);
+    if (themeSection.surface1) root.setProperty('--card-bg', themeSection.cardBg || themeSection.surface2 || themeSection.surface1);
 
     // Node colors → --node-X CSS var only (legacy compat).
     // #1412: do NOT push server-config nodeColors into window.ROLE_COLORS —
@@ -2403,7 +2403,7 @@
     if (ovTheme.accent) root.setProperty('--logo-accent', ovTheme.accent);
     if (ovTheme.accentHover) root.setProperty('--logo-accent-hi', ovTheme.accentHover);
     if (themeSection.background) root.setProperty('--content-bg', themeSection.contentBg || themeSection.background);
-    if (themeSection.surface1) root.setProperty('--card-bg', themeSection.cardBg || themeSection.surface1);
+    if (themeSection.surface1) root.setProperty('--card-bg', themeSection.cardBg || themeSection.surface2 || themeSection.surface1);
     // Apply node colors from overrides early — --node-X CSS var only.
     // #1412: do NOT write to window.ROLE_COLORS / ROLE_STYLE here.
     if (earlyOverrides.nodeColors) {

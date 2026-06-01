@@ -551,7 +551,7 @@
       document.documentElement.style.setProperty('--content-bg', t.background);
     }
     if (t.surface1) {
-      document.documentElement.style.setProperty('--card-bg', t.surface1);
+      document.documentElement.style.setProperty('--card-bg', t.cardBg || t.surface2 || t.surface1);
     }
     // Force nav bar to re-render gradient
     var nav = document.querySelector('.top-nav');
