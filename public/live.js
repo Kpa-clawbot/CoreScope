@@ -16,6 +16,7 @@
   let _dprChangeHandler = null;
   let activeAnimations = [];
   let activePulses = [];
+  let activeGhosts = [];
   let isAnimating = false;
   let activeFades = [];
   let isFading = false;
@@ -489,7 +490,7 @@
       }
     }
     const replayGroups = [...hashGroups.values()].sort((a, b) => a.ts - b.ts);
-    console.log('[vcr] ' + replayGroups.length + ' groups from ' + VCR.buffer.length + ' buffer entries. Top 3:', replayGroups.slice(0,3).map(g => g.packets.length + ' obs'));
+    console.log('[vcr] ' + replayGroups.length + ' groups from ' + VCR.buffer.length + ' buffer entries. Top 3:', replayGroups.slice(0, 3).map(g => g.packets.length + ' obs'));
     let groupIdx = 0;
 
     function tick() {
@@ -619,14 +620,14 @@
   function drawSegDigit(ctx, x, y, w, h, bits, color) {
     const t = Math.max(2, h * 0.12); // segment thickness
     const g = 1; // gap
-    const hw = w - 2 * g, hh = (h - 3 * g) / 2;
+    const hw = w - 2*g, hh = (h - 3*g) / 2;
     ctx.fillStyle = color;
     // a=top, b=top-right, c=bot-right, d=bot, e=bot-left, f=top-left, g=mid
     if (bits & 0x40) ctx.fillRect(x + g + t / 2, y, hw - t, t);           // a
     if (bits & 0x20) ctx.fillRect(x + w - t, y + g + t / 2, t, hh - t / 2);     // b
-    if (bits & 0x10) ctx.fillRect(x + w - t, y + hh + 2 * g + t / 2, t, hh - t / 2);// c
+    if (bits & 0x10) ctx.fillRect(x + w - t, y + hh + 2*g + t / 2, t, hh - t / 2);// c
     if (bits & 0x08) ctx.fillRect(x + g + t / 2, y + h - t, hw - t, t);       // d
-    if (bits & 0x04) ctx.fillRect(x, y + hh + 2 * g + t / 2, t, hh - t / 2);    // e
+    if (bits & 0x04) ctx.fillRect(x, y + hh + 2*g + t / 2, t, hh - t / 2);    // e
     if (bits & 0x02) ctx.fillRect(x, y + g + t / 2, t, hh - t / 2);         // f
     if (bits & 0x01) ctx.fillRect(x + g + t / 2, y + hh + g - t / 2, hw - t, t);  // g
     // colon
@@ -1187,7 +1188,7 @@
       const mapCfg = await (await fetch('/api/config/map')).json();
       if (Array.isArray(mapCfg.center) && mapCfg.center.length === 2) mapCenter = mapCfg.center;
       if (typeof mapCfg.zoom === 'number') mapZoom = mapCfg.zoom;
-    } catch {}
+    } catch { }
 
     map = L.map('liveMap', {
       zoomControl: false,
@@ -1255,17 +1256,27 @@
       L.DomUtil.setPosition(animCanvas, canvasTopLeft);
     }
 
+    let _cullRAF = null;
     function cullMarkers() {
       if (!map || !nodesLayer) return;
-      let bounds;
-      try { bounds = map.getBounds().pad(0.5); } catch (e) { return; }
-      for (const key in nodeMarkers) {
-        const marker = nodeMarkers[key];
-        const isVisible = bounds.contains(marker.getLatLng());
-        const hasLayer = nodesLayer.hasLayer(marker);
-        if (isVisible && !hasLayer) nodesLayer.addLayer(marker);
-        else if (!isVisible && hasLayer) nodesLayer.removeLayer(marker);
-      }
+      if (_cullRAF) return; // Skip if a cull is already queued for this frame
+      
+      _cullRAF = requestAnimationFrame(() => {
+        _cullRAF = null;
+        if (!map || !nodesLayer) return;
+        
+        let bounds;
+        try { bounds = map.getBounds().pad(0.5); } catch (e) { return; }
+        
+        for (const key in nodeMarkers) {
+          const marker = nodeMarkers[key];
+          const isVisible = bounds.contains(marker.getLatLng());
+          const hasLayer = nodesLayer.hasLayer(marker);
+          
+          if (isVisible && !hasLayer) nodesLayer.addLayer(marker);
+          else if (!isVisible && hasLayer) nodesLayer.removeLayer(marker);
+        }
+      });
     }
 
     // 4. Hook into Leaflet's transition-end events
@@ -1383,7 +1394,7 @@
         const packets = Array.isArray(parsed) ? parsed : [parsed];
         vcrPause(); // suppress live packets
         setTimeout(() => renderPacketTree(packets, true), 1500);
-      } catch {}
+      } catch { }
     } else {
       // replayRecent(); // disabled — live page starts empty, fills from WS
     }
@@ -1465,7 +1476,7 @@
         rfEl.parentNode.insertBefore(wrap, rfEl.nextSibling);
         cb.addEventListener('change', function() {
           RegionShowAll.set(cb.checked);
-          try { loadNodes(); } catch (e) {}
+          try { loadNodes(); } catch (e) { }
         });
       })();
     })();
@@ -1966,7 +1977,7 @@
     // Save/restore map view
     const savedView = localStorage.getItem('live-map-view');
     if (savedView) {
-      try { const v = JSON.parse(savedView); map.setView([v.lat, v.lng], v.zoom); } catch {}
+      try { const v = JSON.parse(savedView); map.setView([v.lat, v.lng], v.zoom); } catch { }
     }
     map.on('moveend', () => {
       const c = map.getCenter();
@@ -2400,8 +2411,8 @@
 
   function getFavoritePubkeys() {
     let favs = [];
-    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-favorites') || '[]')); } catch {}
-    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]').map(n => n.pubkey)); } catch {}
+    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-favorites') || '[]')); } catch { }
+    try { favs = favs.concat(JSON.parse(localStorage.getItem('meshcore-my-nodes') || '[]').map(n => n.pubkey)); } catch { }
     return favs.filter(Boolean);
   }
 
@@ -2527,7 +2538,7 @@
       for (const op of group.packets) {
         let opHops = [];
         if (op.path_json) {
-          try { opHops = getParsedPath(op); } catch {}
+          try { opHops = getParsedPath(op); } catch { }
         } else if (op.decoded?.path?.hops) {
           opHops = op.decoded.path.hops;
         }
@@ -2607,12 +2618,18 @@
       popupAnchor: [0, -sizePx / 2]
     });
     const marker = L.marker([n.lat, n.lon], { icon: icon, interactive: true });
-    try {
-      if (!map || map.getBounds().pad(0.5).contains(marker.getLatLng())) {
+    if (nodesLayer) {
+      try {
+        // If the marker is outside the current map bounds, it is intentionally 
+        // deferred to save DOM nodes. cullMarkers() is the only path that will 
+        // re-attach it later when the user pans or zooms.
+        if (!map || map.getBounds().pad(0.5).contains(marker.getLatLng())) {
+          marker.addTo(nodesLayer);
+        }
+      } catch (e) {
+        // Fallback: map.getBounds() can throw during early Leaflet initialization
         marker.addTo(nodesLayer);
       }
-    } catch (e) {
-      marker.addTo(nodesLayer);
     }
 
     marker.bindTooltip(n.name || n.public_key.slice(0, 8), {
@@ -2720,7 +2737,7 @@
           // WS-only nodes: remove to prevent unbounded memory growth
           if (marker) {
             if (nodesLayer) {
-              try { nodesLayer.removeLayer(marker); } catch (e) {}
+              try { nodesLayer.removeLayer(marker); } catch (e) { }
             }
           }
           delete nodeMarkers[key];
@@ -2791,16 +2808,9 @@
     getAnimCount: () => activeAnimations.length,
     isAnimating: () => isAnimating,
     getPathCount: () => (typeof recentPaths !== 'undefined' ? recentPaths.length : 0),
-    wake: wakeCanvasEngine
-  };
-
-  // PR #1490 test seams: Expose internal state for Playwright assertions
-  window._liveDrawAnimatedLine = drawAnimatedLine;
-  window._liveTestSeams = {
-    getAnimCount: () => activeAnimations.length,
-    isAnimating: () => isAnimating,
-    getPathCount: () => (typeof recentPaths !== 'undefined' ? recentPaths.length : 0),
-    wake: wakeCanvasEngine
+    wake: wakeCanvasEngine,
+    getPulses: () => activePulses,
+    triggerPulse: pulseNode
   };
 
   async function replayRecent() {
@@ -2846,7 +2856,7 @@
         lastTs = groupTs;
       }
       updateTimeline();
-    } catch {}
+    } catch { }
   }
 
   function connectWS() {
@@ -2856,7 +2866,7 @@
       try {
         const msg = JSON.parse(e.data);
         if (msg.type === 'packet') bufferPacket(msg.data);
-      } catch {}
+      } catch { }
     };
     ws.onclose = () => setTimeout(connectWS, WS_RECONNECT_MS);
     ws.onerror = () => { };
@@ -2933,7 +2943,7 @@
       for (const fp of packets) {
         let fpHops = [];
         if (fp.path_json) {
-          try { fpHops = getParsedPath(fp); } catch {}
+          try { fpHops = getParsedPath(fp); } catch { }
         } else if (fp.decoded?.path?.hops) {
           fpHops = fp.decoded.path.hops;
         }
@@ -3157,21 +3167,28 @@
         return;
       }
       if (!animLayer) return;
-      // Audio hook: notify per-hop callback
-      if (onHop) try { onHop(); } catch (e) {}
       const hp = hopPositions[hopIndex];
+      
+      // Audio hook: notify per-hop callback
+      if (onHop) {
+        try { 
+          onHop(hopIndex, hopPositions.length, hp); 
+        } catch (e) { }
+      }
+      
       const isGhost = hp.ghost;
 
       if (isGhost) {
         if (!nodeMarkers[hp.key]) {
           const ghost = L.circleMarker(hp.pos, {
             radius: 3, fillColor: '#94a3b8', fillOpacity: 0.35, color: '#94a3b8', weight: 1, opacity: 0.5,
-            className: 'live-ghost-pulse'
           }).addTo(animLayer);
           
-          setTimeout(() => {
-            if (animLayer && animLayer.hasLayer(ghost)) try { animLayer.removeLayer(ghost); } catch {}
-          }, 3000);
+          activeGhosts.push({ marker: ghost, timeLeft: 3000, lastTick: null });
+          if (!isAnimating) {
+            isAnimating = true;
+            requestAnimationFrame(renderAnimations);
+          }
         }
       } else {
         pulseNode(hp.key, hp.pos, typeName);
@@ -3451,7 +3468,7 @@
       // Remove old chars beyond trail length
       while (charMarkers.length > TRAIL_LEN) {
         const old = charMarkers.shift();
-        try { animLayer.removeLayer(old.marker); } catch {}
+        try { animLayer.removeLayer(old.marker); } catch { }
       }
 
       // Fade existing chars
@@ -3492,8 +3509,8 @@
           }
           const ft = Math.min(1, (now - fadeStart) / 300);
           if (ft >= 1) {
-            for (const cm of charMarkers) try { animLayer.removeLayer(cm.marker); } catch {}
-            try { pathsLayer.removeLayer(trail); } catch {}
+            for (const cm of charMarkers) try { animLayer.removeLayer(cm.marker); } catch { }
+            try { pathsLayer.removeLayer(trail); } catch { }
             charMarkers.length = 0;
           } else {
             const op = 1 - ft;
@@ -3514,7 +3531,7 @@
   function renderAnimations(now) {
     if (!animCtx) return;
 
-    if (activeAnimations.length === 0 && activePulses.length === 0) {
+    if (activeAnimations.length === 0 && activePulses.length === 0 && activeGhosts.length === 0) {
       isAnimating = false;
       animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
       return;
@@ -3524,6 +3541,25 @@
 
     // Clear the canvas for this frame
     animCtx.clearRect(0, 0, animCanvas.clientWidth, animCanvas.clientHeight);
+
+    // Render Ghosts (VCR-aware timeout)
+    for (let i = activeGhosts.length - 1; i >= 0; i--) {
+      const g = activeGhosts[i];
+      if (g.lastTick === null) g.lastTick = now;
+      const dt = now - g.lastTick;
+      g.lastTick = now;
+
+      if (!isPaused) {
+        g.timeLeft -= dt * (VCR.speed || 1);
+      }
+
+      if (g.timeLeft <= 0) {
+        if (animLayer && animLayer.hasLayer(g.marker)) {
+          try { animLayer.removeLayer(g.marker); } catch { }
+        }
+        activeGhosts.splice(i, 1);
+      }
+    }
 
     // Render Pulses
     for (let i = activePulses.length - 1; i >= 0; i--) {
@@ -3544,7 +3580,8 @@
         pulse.hl_weight = pulse.hl_op > 0.4 ? 3 : 2;
       }
 
-      if (pulse.op <= 0 || (!isPaused && now - pulse.startTime > 2000)) {
+      // Natural completion based purely on scaled simulation time
+      if (pulse.op <= 0) {
         activePulses.splice(i, 1);
         continue;
       }
@@ -3668,6 +3705,9 @@
       isAnimating = false;
       for (let i = 0; i < activeAnimations.length; i++) {
         activeAnimations[i].lastTick = null;
+      }
+      for (let i = 0; i < activeGhosts.length; i++) {
+        activeGhosts[i].lastTick = null;
       }
       return; // Stop requesting frames. GPU goes to sleep.
     }
@@ -4017,7 +4057,7 @@
       const dedupEntry = pkt.hash && feedDedup.get(pkt.hash);
       const replayPkts = (dedupEntry && dedupEntry.packets.length > 1) ? dedupEntry.packets : [pkt];
       const uniquePaths = new Set(replayPkts.map(p => p.path_json || JSON.stringify(p.decoded?.path?.hops || [])));
-      console.log('[replay] hash=' + pkt.hash + ' pkts=' + replayPkts.length + ' uniquePaths=' + uniquePaths.size, [...uniquePaths].slice(0,3));
+      console.log('[replay] hash=' + pkt.hash + ' pkts=' + replayPkts.length + ' uniquePaths=' + uniquePaths.size, [...uniquePaths].slice(0, 3));
       renderPacketTree(replayPkts, true);
     });
     document.addEventListener('click', function dismiss(e) {
@@ -4031,6 +4071,7 @@
     activeAnimations.length = 0;
     activePulses.length = 0;
     activeFades.length = 0;
+    activeGhosts.length = 0;
     isAnimating = false;
     isFading = false;
     stopReplay();
