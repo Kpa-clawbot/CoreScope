@@ -219,7 +219,7 @@
     --surface-3: #2d2d50;
     --surface: var(--surface-1);
     --content-bg: var(--surface-0);
-    --card-bg: var(--surface-1);
+    --card-bg: var(--surface-2);
     --text: #e2e8f0;
     --text-muted: #a8b8cc;
     --border: #334155;
@@ -250,7 +250,7 @@
   --surface-3: #2d2d50;
   --surface: var(--surface-1);
   --content-bg: var(--surface-0);
-  --card-bg: var(--surface-1);
+  --card-bg: var(--surface-2);
   --text: #e2e8f0;
   --text-muted: #a8b8cc;
   --border: #334155;
@@ -1686,7 +1686,7 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 /* #1146: "Paths Through This Node" entries render as <div> blocks, not
    tables, so the rule above doesn't reach them. Without this, the path-hop
    <a> elements inherit the UA-default rgb(0,0,238) blue, which on the dark
-   card surface (--card-bg: #1a1a2e) computes to ~1.8-3.0:1 — well below
+   card surface (--card-bg: #232340 in dark mode) computes to ~2.5-3.5:1 — well below
    the 4.5:1 WCAG AA body-text minimum. Use --accent so the link tracks the
    active theme (and customizer overrides) like the data-table links do. */
 .node-detail-section #pathsContent a,

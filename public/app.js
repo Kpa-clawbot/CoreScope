@@ -1030,7 +1030,7 @@ window.addEventListener('DOMContentLoaded', () => {
         if (themeData[key]) root.setProperty(varMap[key], themeData[key]);
       }
       if (themeData.background) root.setProperty('--content-bg', themeData.contentBg || themeData.background);
-      if (themeData.surface1) root.setProperty('--card-bg', themeData.cardBg || themeData.surface1);
+      if (themeData.surface1) root.setProperty('--card-bg', themeData.cardBg || themeData.surface2 || themeData.surface1);
       // Nav gradient
       if (themeData.navBg) {
         var nav = document.querySelector('.top-nav');
