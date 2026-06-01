@@ -1275,19 +1275,19 @@
     function cullMarkers() {
       if (!map || !nodesLayer) return;
       if (_cullRAF) return; // Skip if a cull is already queued for this frame
-      
+
       _cullRAF = requestAnimationFrame(() => {
         _cullRAF = null;
         if (!map || !nodesLayer) return;
-        
+
         let bounds;
         try { bounds = map.getBounds().pad(0.5); } catch (e) { return; }
-        
+
         for (const key in nodeMarkers) {
           const marker = nodeMarkers[key];
           const isVisible = bounds.contains(marker.getLatLng());
           const hasLayer = nodesLayer.hasLayer(marker);
-          
+
           if (isVisible && !hasLayer) nodesLayer.addLayer(marker);
           else if (!isVisible && hasLayer) nodesLayer.removeLayer(marker);
         }
@@ -2650,8 +2650,8 @@
     const marker = L.marker([n.lat, n.lon], { icon: icon, interactive: true });
     if (nodesLayer) {
       try {
-        // If the marker is outside the current map bounds, it is intentionally 
-        // deferred to save DOM nodes. cullMarkers() is the only path that will 
+        // If the marker is outside the current map bounds, it is intentionally
+        // deferred to save DOM nodes. cullMarkers() is the only path that will
         // re-attach it later when the user pans or zooms.
         if (!map || map.getBounds().pad(0.5).contains(marker.getLatLng())) {
           marker.addTo(nodesLayer);
@@ -3200,14 +3200,14 @@
       if (!animLayer) return;
 
       const hp = hopPositions[hopIndex];
-      
+
       // Audio hook: notify per-hop callback
       if (onHop) {
-        try { 
-          onHop(hopIndex, hopPositions.length, hp); 
+        try {
+          onHop(hopIndex, hopPositions.length, hp);
         } catch (e) { }
       }
-      
+
       const isGhost = hp.ghost;
 
       if (isGhost) {
@@ -3215,7 +3215,7 @@
           const ghost = L.circleMarker(hp.pos, {
             radius: 3, fillColor: '#94a3b8', fillOpacity: 0.35, color: '#94a3b8', weight: 1, opacity: 0.5,
           }).addTo(animLayer);
-          
+
           activeGhosts.push({ marker: ghost, timeLeft: 3000, lastTick: null });
           if (!isAnimating) {
             isAnimating = true;
@@ -3562,18 +3562,18 @@
 
   function stepPulse(pulse, now, isPaused, vcrMode, vcrSpeed) {
     if (pulse.lastPulse === null) pulse.lastPulse = now;
-    
+
     // Cap dt at 32ms to prevent teleporting during low framerates / tab wake
     const rawDt = now - pulse.lastPulse;
-    const dt = Math.min(rawDt, 32); 
-    
+    const dt = Math.min(rawDt, 32);
+
     pulse.lastPulse = now;
 
     if (!isPaused) {
       // Only apply VCR speed multiplier if actually replaying
       const speed = vcrMode === 'REPLAY' ? (vcrSpeed || 1) : 1;
       const dtSec = (dt / 1000) * speed;
-      
+
       // Inner pulse (58px/sec, fade out 1.15/sec)
       pulse.r += 58 * dtSec;
       pulse.op -= 1.15 * dtSec;
@@ -3662,13 +3662,13 @@
     for (let i = activeAnimations.length - 1; i >= 0; i--) {
       const anim = activeAnimations[i];
 
-      // Safely resume without dt time-jumps. 
+      // Safely resume without dt time-jumps.
       if (anim.lastTick === null) anim.lastTick = now;
 
       // Cap dt at 32ms to prevent teleporting during low framerates / tab wake
       const rawDt = now - anim.lastTick;
       const dt = Math.min(rawDt, 32);
-      
+
       anim.lastTick = now;
 
       // Advance progress only if we are not paused
