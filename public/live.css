@@ -445,13 +445,15 @@
   flex-wrap: wrap;
 }
 
-/* Region filter (#1045) inline in live header toggles */
-.live-toggles .live-region-filter-container { display: inline-flex; align-items: center; }
-.live-toggles .live-region-filter-container .region-dropdown-trigger { font-size: inherit; padding: 2px 6px; }
+/* Region/Area filters inline in live header controls body */
+.live-controls-body .live-region-filter-container,
+.live-controls-body .live-area-filter-container { display: inline-flex; align-items: center; }
+.live-controls-body .live-region-filter-container .region-dropdown-trigger,
+.live-controls-body .live-area-filter-container .region-dropdown-trigger { font-size: inherit; padding: 2px 6px; }
 
 /* #1108 — "Show all nodes" sibling of the region dropdown. Reuses the
-   .live-toggles label rhythm so it lines up with the other inline toggles. */
-.live-toggles .live-show-all-region-nodes {
+   .live-controls-body label rhythm so it lines up with the other inline toggles. */
+.live-controls-body .live-show-all-region-nodes {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -499,6 +501,7 @@
     padding: 0;
     flex: 0 0 auto;
     width: auto;
+    margin-left: auto;
   }
   /* #1220 — both panels collapsed = single-row strip. Drop the header's
      vertical padding so the panel hugs the 48px toggle buttons (chrome ≈
@@ -510,7 +513,7 @@
   }
 
   /* Expanded body on narrow: stack so it never overflows the cluster */
-  .live-controls.is-expanded { max-width: calc(100vw - 24px); }
+  .live-controls.is-expanded { max-width: calc(100vw - 24px); margin-top: 12px; }
   .live-controls.is-expanded .live-controls-body { flex-wrap: wrap; }
   .live-controls.is-expanded .live-toggles { flex-wrap: wrap; max-height: 50vh; overflow-y: auto; }
 }

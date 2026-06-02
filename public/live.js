@@ -1076,22 +1076,22 @@
             <span id="audioDesc" class="sr-only">Sonify packets — turn raw bytes into generative music</span>
             <label><input type="checkbox" id="liveFavoritesToggle" aria-describedby="favDesc"> ⭐ Favorites</label>
             <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
+            <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
+            </div>
             <div class="live-node-filter-wrap" style="position:relative">
               <input type="text" id="liveNodeFilterInput" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input" role="combobox" aria-expanded="false" aria-owns="liveNodeFilterDropdown" aria-autocomplete="list" aria-activedescendant="">
               <div id="liveNodeFilterDropdown" class="live-node-filter-dropdown hidden" role="listbox"></div>
               <button id="liveNodeFilterClear" class="vcr-btn" title="Clear node filter" style="display:none">×</button>
             </div>
             <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
-            <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
             <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="Filter live packets by IATA region"></div>
-            </div>
+            <div id="liveAreaFilter" class="live-area-filter-container"></div>
             <div class="audio-controls hidden" id="audioControls">
               <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
               <label class="audio-slider-label">BPM <input type="range" id="audioBpmSlider" min="40" max="300" value="120" class="audio-slider"><span id="audioBpmVal">120</span></label>
               <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
             </div>
           </div>
-          <div id="liveAreaFilter"></div>
           <button class="live-controls-toggle" data-live-controls-toggle id="liveControlsToggle"
                   aria-expanded="false" aria-controls="liveControlsBody"
                   aria-label="Show live controls">⚙</button>

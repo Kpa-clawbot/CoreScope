@@ -3274,6 +3274,13 @@ async function run() {
   await test('Live page: Area dropdown items have transparent background to prevent unreadable text', async () => {
     await page.goto(`${BASE}/#/live`);
     await page.waitForTimeout(1000);
+    // Expand the cog menu first
+    const cog = await page.$('#liveControlsToggle');
+    if (cog) {
+      const expanded = await page.$eval('#liveControlsToggle', el => el.getAttribute('aria-expanded') === 'true');
+      if (!expanded) await cog.click();
+      await page.waitForTimeout(500);
+    }
     // Click the area filter dropdown trigger on the live page
     const trigger = await page.$('#liveAreaFilter .region-dropdown-trigger');
     if (trigger) {
