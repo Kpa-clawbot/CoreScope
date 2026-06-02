@@ -104,6 +104,8 @@
   --nav-text-muted: #cbd5e1;
   --nav-active-bg: rgba(74, 158, 255, 0.15);
   --accent: #4a9eff;
+  --accent-bg: rgba(59, 130, 246, 0.12);
+  --accent-border: rgba(59, 130, 246, 0.25);
   --geo-filter-color: #3b82f6;
   --status-green: #22c55e;
   --status-yellow: #eab308;
@@ -1165,7 +1167,16 @@ body.scroll-locked { overflow: hidden; }
   font-size: 10px; font-weight: 600;
   background: #ede9fe; color: #6d28d9;
 }
-
+.multibyte-badge {
+  color: var(--text);
+  background: var(--accent-bg);
+  font-size: 10px;
+}
+.pubkey-prefix-badge {
+  background:var(--nav-bg);
+  color:var(--nav-text);
+  font-family:var(--mono)
+}
 /* === Monospace === */
 .mono { font-family: var(--mono); font-size: 12px; }
 
@@ -1241,7 +1252,7 @@ body.scroll-locked { overflow: hidden; }
 }
 .field-table .section-row td {
   background: var(--section-bg, #eef2ff); font-weight: 700; font-size: 11px;
-  text-transform: uppercase; letter-spacing: .5px; color: var(--accent);
+  text-transform: uppercase; letter-spacing: .5px; color: var(--text);
 }
 .field-table .section-header td  { background: rgba(243,139,168,0.18); }
 .field-table .section-transport td { background: rgba(137,180,250,0.18); }
@@ -2619,9 +2630,9 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
 
 .copy-link-btn {
   padding: 5px 12px;
-  background: rgba(59, 130, 246, 0.12);
-  border: 1px solid rgba(59, 130, 246, 0.25);
-  color: var(--accent, #3b82f6);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  color: var(--text);
   border-radius: 6px;
   font-size: 0.78rem;
   font-weight: 600;

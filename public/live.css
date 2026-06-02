@@ -986,7 +986,7 @@
 }
 .vcr-scope-btn.active {
   background: rgba(59,130,246,0.2);
-  color: var(--accent);
+  color: var(--text);
   border-color: rgba(59,130,246,0.3);
 }
 
