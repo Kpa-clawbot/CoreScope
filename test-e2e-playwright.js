@@ -670,6 +670,15 @@ async function run() {
     assert(hasChannelHash, 'Undecrypted GRP_TXT detail should show "Channel Hash"');
   });
 
+  await test('#1530 copy-link-btn color differs from accent', async () => {
+    const hash = await page.evaluate(async () => (await (await fetch('/api/packets?limit=1')).json()).packets?.[0]?.hash);
+    if (!hash) return console.log('    ⏭️  Skipped (no packets)');
+    await page.goto(`${BASE}/#/packets/${hash}`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.copy-link-btn', { timeout: 8000 });
+    const diff = await page.evaluate(() => window.getComputedStyle(document.querySelector('.copy-link-btn')).color !== window.getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+    assert(diff, 'copy-link-btn color should not match --accent');
+  });
+
   // --- Group: Analytics page (test 8 + sub-tabs) ---
 
   // Test 8: Analytics page loads with overview
