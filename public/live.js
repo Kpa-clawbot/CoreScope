@@ -2210,9 +2210,14 @@
         if (_navCleanup.pinned) {
         pinBtn.classList.add('pinned');
         pinBtn.setAttribute('aria-pressed', 'true');
-          topNav.classList.remove('nav-autohide');
+        topNav.classList.remove('nav-autohide');
       }
-      topNav.appendChild(pinBtn);
+      const navRight = topNav.querySelector('.nav-right');
+      if (navRight) {
+        navRight.appendChild(pinBtn);
+      } else {
+        topNav.appendChild(pinBtn);
+      }
     }
     function showNav() {
       if (topNav) topNav.classList.remove('nav-autohide');

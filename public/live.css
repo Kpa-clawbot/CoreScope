@@ -1199,7 +1199,6 @@
   padding: 4px 8px;
   opacity: 0.5;
   transition: opacity 0.2s;
-  margin-left: auto;
 }
 .nav-pin-btn:hover { opacity: 0.8; }
 .nav-pin-btn.pinned { opacity: 1; filter: drop-shadow(0 0 4px rgba(59,130,246,0.5)); }

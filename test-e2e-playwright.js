@@ -3262,6 +3262,23 @@ async function run() {
       `#1270 3-byte: prefix-tool shows ${got[3]}, hash-sizes API shows ${expected[3]}`);
   });
 
+  await test('Live page: Area dropdown items have transparent background to prevent unreadable text', async () => {
+    await page.goto(`${BASE}/#/live`);
+    await page.waitForTimeout(1000);
+    // Click the area filter dropdown trigger on the live page
+    const trigger = await page.$('#liveAreaFilter .region-dropdown-trigger');
+    if (trigger) {
+      await trigger.click();
+      await page.waitForSelector('.region-dropdown-item', { state: 'attached', timeout: 2000 });
+      const bg = await page.evaluate(() => {
+        const item = document.querySelector('.region-dropdown-item');
+        return item ? window.getComputedStyle(item).backgroundColor : null;
+      });
+      assert(bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent',
+        `Expected dropdown item background to be transparent, got ${bg}`);
+    }
+  });
+
   await browser.close();
 
   // Summary
