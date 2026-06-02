@@ -51,6 +51,7 @@
     const hash = input.value.trim();
     if (!hash) return;
     currentHash = hash;
+    history.replaceState(null, '', `#/tools/trace/${encodeURIComponent(hash)}`);
 
     const results = document.getElementById('traceResults');
     results.innerHTML = '<div class="text-center text-muted" style="padding:40px">Tracing…</div>';
