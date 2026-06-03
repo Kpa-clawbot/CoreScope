@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -122,6 +123,27 @@ func OpenStoreWithInterval(dbPath string, sampleIntervalSec int) (*Store, error)
 	s := &Store{db: db, path: dbPath, sampleIntervalSec: sampleIntervalSec}
 	if err := s.prepareStatements(); err != nil {
 		return nil, fmt.Errorf("preparing statements: %w", err)
+	}
+
+	// Schedule async migrations. These must NOT block boot. See
+	// async_migration.go for the convention.
+	// PREFLIGHT: async=true reason="composite index build on observations (1.9M+ rows in prod) — converted from sync after v3.8.3"
+	var idxDone int
+	if s.db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'obs_observer_ts_idx_v1'").Scan(&idxDone) != nil {
+		if err := s.RunAsyncMigration(context.Background(), "obs_observer_ts_idx_v1",
+			func(ctx context.Context, d *sql.DB) error {
+				log.Println("[migration/async] Building (observer_idx, timestamp) composite index on observations...")
+				if _, err := d.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_observations_observer_idx_timestamp ON observations(observer_idx, timestamp)`); err != nil {
+					return err
+				}
+				if _, err := d.ExecContext(ctx, `INSERT OR IGNORE INTO _migrations (name) VALUES ('obs_observer_ts_idx_v1')`); err != nil {
+					return err
+				}
+				log.Println("[migration/async] observations(observer_idx, timestamp) index created")
+				return nil
+			}); err != nil {
+			log.Printf("[migration/async] scheduling obs_observer_ts_idx_v1 failed: %v", err)
+		}
 	}
 
 	return s, nil
@@ -368,13 +390,12 @@ func applySchema(db *sql.DB) error {
 	// timestamp WHERE filter; a composite (observer_idx, timestamp)
 	// index lets SQLite resolve the grouping + range filter from the
 	// index alone instead of a 1.9M-row scan.
-	row = db.QueryRow("SELECT 1 FROM _migrations WHERE name = 'obs_observer_ts_idx_v1'")
-	if row.Scan(&migDone) != nil {
-		log.Println("[migration] Adding (observer_idx, timestamp) composite index on observations...")
-		db.Exec(`CREATE INDEX IF NOT EXISTS idx_observations_observer_idx_timestamp ON observations(observer_idx, timestamp)`)
-		db.Exec(`INSERT INTO _migrations (name) VALUES ('obs_observer_ts_idx_v1')`)
-		log.Println("[migration] observations(observer_idx, timestamp) index created")
-	}
+	//
+	// CONVERTED TO ASYNC (preflight-async-migration-gate). Scheduling
+	// happens in OpenStore() once the real *Store exists so the
+	// backfill WaitGroup is shared with the rest of the ingestor.
+	// The legacy `_migrations` gate is preserved by the async fn so
+	// DBs that already completed the sync build stay no-op.
 
 	// #1483: normalize nodes.public_key to lowercase. The server's
 	// GetNodeLocationsByKeys lookup dropped LOWER(public_key) for perf
