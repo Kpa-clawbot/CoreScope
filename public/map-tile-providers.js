@@ -47,10 +47,10 @@
     'carto-voyager': { provider: 'carto', label: 'Carto Voyager (Light)', url: function() { return _getCartoBase() + '/rastertiles/voyager/{z}/{x}/{y}{r}.png'; }, invertFilter: null, type: 'light', attribution: '© OpenStreetMap © CartoDB' },
     'carto-voyager-dark': { provider: 'carto', label: 'Carto Voyager (Dark — inverted)', url: function() { return _getCartoBase() + '/rastertiles/voyager/{z}/{x}/{y}{r}.png'; }, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap © CartoDB' },
     'positron-dark': { provider: 'carto', label: 'Carto Positron (Dark — inverted)', url: function() { return _getCartoBase() + '/light_all/{z}/{x}/{y}{r}.png'; }, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap © CartoDB' },
-    'osm-standard': { provider: 'osm', label: 'OSM Standard (Light)', url: _getOsmUrl, invertFilter: null, type: 'light', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler' },
-    'osm-dark': { provider: 'osm', label: 'OSM Standard (Dark — inverted)', url: _getOsmUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler' },
-    'stamen-toner-lite': { provider: 'stamen', label: 'Stamen Toner Lite (Light)', url: _getStamenUrl, invertFilter: null, type: 'light', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap' },
-    'stamen-toner-dark': { provider: 'stamen', label: 'Stamen Toner Lite (Dark — inverted)', url: _getStamenUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap' },
+    'osm-standard': { provider: 'osm', label: 'OSM Standard (Light)', url: _getOsmUrl, invertFilter: null, type: 'light', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler', maxZoom: 18 },
+    'osm-dark': { provider: 'osm', label: 'OSM Standard (Dark — inverted)', url: _getOsmUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler', maxZoom: 18 },
+    'stamen-toner-lite': { provider: 'stamen', label: 'Stamen Toner Lite (Light)', url: _getStamenUrl, invertFilter: null, type: 'light', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap', maxZoom: 20 },
+    'stamen-toner-dark': { provider: 'stamen', label: 'Stamen Toner Lite (Dark — inverted)', url: _getStamenUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap', maxZoom: 20 },
     'esri-darkgray-labels': { provider: 'esri', label: 'Esri Dark Gray Canvas', url: function() { return 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'; }, invertFilter: null, type: 'dark', attribution: 'Tiles © Esri' }
   };
 
@@ -233,8 +233,8 @@
       });
       _layerMap = {};
       // Remove stale baselayerchange listeners by cloning off event (Leaflet re-adds on new control)
-      if (_baselayerchangeHandler) {
-        try { map.off('baselayerchange', _baselayerchangeHandler); } catch (_) {}
+      if (map._mcBaselayerchangeHandler) {
+        try { map.off('baselayerchange', map._mcBaselayerchangeHandler); } catch (_) {}
       }
 
       var isDark       = _isDarkEffective();
@@ -248,7 +248,7 @@
       function _makeLayer(id) {
         var p   = REGISTRY[id];
         var url = typeof p.url === 'function' ? p.url() : p.url;
-        var layer = L.tileLayer(url, { attribution: p.attribution || '', maxZoom: 19 });
+        var layer = L.tileLayer(url, { attribution: p.attribution || '', maxZoom: p.maxZoom || 19 });
         
         // Every explicit layer enforces its own filter and locks the pane
         layer.on('add', function () {
@@ -289,7 +289,7 @@
         }
       }
 
-      _baselayerchangeHandler = function (e) {
+      map._mcBaselayerchangeHandler = function (e) {
         if (e.name === AUTO_LABEL) {
           _activateAuto();
           return;
@@ -320,7 +320,7 @@
       };
 
       // Now attach the correctly assigned handler
-      map.on('baselayerchange', _baselayerchangeHandler);
+      map.on('baselayerchange', map._mcBaselayerchangeHandler);
 
       return _control;
     }
