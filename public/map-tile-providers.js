@@ -193,8 +193,11 @@
    * @param {L.Map} map - The Leaflet map instance
    * @param {L.LayerGroup} autoLayerGroup - Existing group managed by _syncDarkTiles
    */
-  window.MC_createLayerControl = function(map, autoLayerGroup) {
+  window.MC_createLayerControl = function(map, autoLayerGroup, position) {
     if (typeof L === 'undefined') return null;
+    
+    // Set a default position just in case it isn't provided
+    var controlPosition = position || 'topleft';
 
     var AUTO_LABEL = 'Auto (follows theme)';
     var _control   = null;  // current L.control.layers instance
@@ -262,7 +265,8 @@
       lightIds.forEach(function (id) { baseMaps[REGISTRY[id].label || id] = _makeLayer(id); });
       darkIds.forEach(function  (id) { baseMaps[REGISTRY[id].label || id] = _makeLayer(id); });
 
-      _control = L.control.layers(baseMaps, null, { position: 'topleft' }).addTo(map);
+      // Use the dynamic controlPosition variable instead of a hardcoded string
+      _control = L.control.layers(baseMaps, null, { position: controlPosition }).addTo(map);
 
       // Decide initial active layer
       if (_isAuto) {
@@ -280,7 +284,7 @@
         }
       }
 
-      map.on('baselayerchange', function (e) {
+      _baselayerchangeHandler = function (e) {
         if (e.name === AUTO_LABEL) {
           _activateAuto();
           return;
@@ -305,6 +309,7 @@
         // CSS invert filter is handled by the layer's own add/remove events above
       };
 
+      // Now attach the correctly assigned handler
       map.on('baselayerchange', _baselayerchangeHandler);
 
       return _control;

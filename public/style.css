@@ -2285,6 +2285,17 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   filter: invert(1);
 }
 
+/* ---- Leaflet overrides for dark theme ---- */
+.leaflet-control-zoom a {
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent) !important;
+  backdrop-filter: blur(12px);
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+.leaflet-control-zoom a:hover {
+  background: rgba(59, 130, 246, 0.2) !important;
+}
+
 /* Column resize handles */
 .col-resize-handle {
   position: absolute; top: 0; right: -4px; width: 9px; height: 100%;
