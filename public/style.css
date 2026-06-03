@@ -2271,6 +2271,22 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .leaflet-popup-tip { background: var(--card-bg) !important; }
 .leaflet-popup-content { color: var(--text) !important; font-size: 13px !important; }
 
+/* For Leaflet layer control when an inverted map (e.g. Voyager Inverted) is selected */
+[data-theme="dark"] .leaflet-control-layers,
+[data-theme="dark"] .leaflet-control-layers-expanded {
+  background-color: var(--card-bg);
+  color: var(--text);
+  border-color: var(--border);
+}
+[data-theme="dark"] .leaflet-control-layers-separator {
+  border-top-color: var(--border);
+}
+[data-theme="dark"] .leaflet-control-layers-toggle {
+  filter: invert(1) brightness(2);
+}
+
+.invert-map-filter { filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(1.05); }
+
 /* Column resize handles */
 .col-resize-handle {
   position: absolute; top: 0; right: -4px; width: 9px; height: 100%;

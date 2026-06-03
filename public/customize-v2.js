@@ -1390,7 +1390,7 @@
       '<p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Re-show first-visit gesture discoverability hints (swipe rows, swipe tabs, edge-swipe drawer, pull-to-refresh).</p>' +
       '<button type="button" class="cust-dl-btn" data-cv2-reset-hints data-reset-gesture-hints>↺ Reset gesture hints</button>' +
       _renderChannelsShowEncryptedToggle() +
-      _renderDarkTileProviderSelector() +
+      _renderTileProviderSelector() +
     '</div>';
   }
 
@@ -1415,23 +1415,51 @@
   // ── #1420 Dark-tile provider selector ──
   // Persists per-browser via MC_setDarkTileProvider; map.js / live.js
   // listen for `mc-tile-provider-changed` and swap tiles live.
-  function _renderDarkTileProviderSelector() {
+  
+  function _renderTileProviderSelector() {
     var reg = (typeof window !== 'undefined') && window.MC_TILE_PROVIDERS;
     if (!reg) return '';
-    var active = (typeof window.MC_getDarkTileProvider === 'function') ? window.MC_getDarkTileProvider() : 'carto-dark';
-    var ids = ['carto-dark', 'esri-darkgray-labels', 'voyager-inverted', 'positron-inverted'];
-    var options = ids.filter(function (id) { return reg[id]; }).map(function (id) {
-      var label = reg[id].label || id;
-      var sel   = id === active ? ' selected' : '';
-      return '<option value="' + escAttr(id) + '"' + sel + '>' + esc(label) + '</option>';
-    }).join('');
-    return '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">Dark Map Tiles</p>' +
-      '<p class="cust-hint" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Choose the dark-mode basemap. Light mode is unaffected. Inverted variants apply a CSS filter for higher contrast.</p>' +
-      '<div class="cust-field"><label for="cv2-dark-tile-provider">Provider</label>' +
-        '<select id="cv2-dark-tile-provider" data-cv2-dark-tile-provider style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
-        options +
-        '</select></div>';
+    var activeDark = (typeof window.MC_getDarkTileProvider === 'function') ? window.MC_getDarkTileProvider() : 'carto-dark';
+    var activeLight = (typeof window.MC_getLightTileProvider === 'function') ? window.MC_getLightTileProvider() : 'carto-light';
+    
+    var darkIds = Object.keys(reg).filter(function(id) { return reg[id].type === 'dark'; });
+    var lightIds = Object.keys(reg).filter(function(id) { return reg[id].type === 'light'; });
+    
+    var hasMultipleDark = darkIds.length > 1;
+    var hasMultipleLight = lightIds.length > 1;
+    
+    if (!hasMultipleDark && !hasMultipleLight) return ''; // hide if no options
+    
+    var html = '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">Map Tiles</p>' +
+      '<p class="cust-hint" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Choose the basemap providers. Available options depend on server configuration.</p>';
+      
+    if (hasMultipleLight) {
+        var optionsLight = lightIds.map(function (id) {
+          var label = reg[id].label || id;
+          var sel   = id === activeLight ? ' selected' : '';
+          return '<option value="' + escAttr(id) + '"' + sel + '>' + esc(label) + '</option>';
+        }).join('');
+        html += '<div class="cust-field"><label for="cv2-light-tile-provider">Light Mode Provider</label>' +
+          '<select id="cv2-light-tile-provider" data-cv2-light-tile-provider style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
+          optionsLight +
+          '</select></div>';
+    }
+    
+    if (hasMultipleDark) {
+        var optionsDark = darkIds.map(function (id) {
+          var label = reg[id].label || id;
+          var sel   = id === activeDark ? ' selected' : '';
+          return '<option value="' + escAttr(id) + '"' + sel + '>' + esc(label) + '</option>';
+        }).join('');
+        html += '<div class="cust-field"><label for="cv2-dark-tile-provider">Dark Mode Provider</label>' +
+          '<select id="cv2-dark-tile-provider" data-cv2-dark-tile-provider style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
+          optionsDark +
+          '</select></div>';
+    }
+    
+    return html;
   }
+
 
   function _renderHome() {
     var eff = _getEffective();
@@ -1995,6 +2023,18 @@
         var id = sel.value;
         if (typeof window.MC_setDarkTileProvider === 'function') {
           window.MC_setDarkTileProvider(id);
+        }
+        var warn = document.getElementById('cv2-osm-warning');
+        if (warn) warn.style.display = id.indexOf('osm-') === 0 ? '' : 'none';
+      });
+    });
+
+    // Light-tile provider dropdown — persists + fires mc-tile-provider-changed
+    container.querySelectorAll('[data-cv2-light-tile-provider]').forEach(function (sel) {
+      sel.addEventListener('change', function () {
+        var id = sel.value;
+        if (typeof window.MC_setLightTileProvider === 'function') {
+          window.MC_setLightTileProvider(id);
         }
       });
     });

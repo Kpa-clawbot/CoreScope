@@ -3017,6 +3017,7 @@ console.log('\n=== packets.js: savedTimeWindowMin defaults ===');
     ctx.window.addEventListener = () => {};
     ctx.window.removeEventListener = () => {};
     ctx.RegionFilter = { init() {}, onChange() { return () => {}; }, offChange() {}, getRegionParam() { return ''; } };
+    ctx.AreaFilter = { init() {}, onChange() { return () => {}; }, offChange() {}, getAreaParam() { return ''; } };
     ctx.CLIENT_TTL = { observers: 120000 };
     ctx.debouncedOnWS = (fn) => fn;
     ctx.onWS = () => {};
@@ -3697,6 +3698,7 @@ function makeNodesSandbox(opts) {
   loadInCtx(ctx, 'public/app.js');
   ctx.registerPage = () => {};
   ctx.RegionFilter = { init: () => {}, onChange: () => () => {}, getRegionParam: () => '', offChange: () => {} };
+  ctx.AreaFilter = { init: () => {}, onChange: () => () => {}, getAreaParam: () => '', offChange: () => {} };
   ctx.onWS = () => {};
   ctx.offWS = () => {};
   ctx.debouncedOnWS = (fn) => fn;
@@ -4984,6 +4986,7 @@ console.log('\n=== region-filter.js: setSelected ===');
     removeEventListener: () => {},
   });
 
+  loadInCtx(ctx, 'public/area-filter.js');
   loadInCtx(ctx, 'public/region-filter.js');
 
   const RF = ctx.RegionFilter;
@@ -5083,6 +5086,7 @@ console.log('\n=== packets.js: buildPacketsQuery ===');
 
   ctx.registerPage = () => {};
   ctx.RegionFilter = { init: () => Promise.resolve(), onChange: () => () => {}, offChange: () => {}, getSelected: () => null, getRegionParam: () => '', setSelected: () => {} };
+  ctx.AreaFilter = { init: () => Promise.resolve(), onChange: () => () => {}, offChange: () => {}, getSelected: () => null, getAreaParam: () => '', setSelected: () => {} };
   ctx.onWS = () => {};
   ctx.offWS = () => {};
   ctx.debouncedOnWS = () => () => {};
@@ -6375,6 +6379,37 @@ console.log('\n=== app.js: formatChartAxisLabel ===');
   // Clean up
   ctx.localStorage.removeItem('meshcore-timestamp-format');
   ctx.localStorage.removeItem('meshcore-timestamp-timezone');
+}
+
+// ===== roles.js: Map Tile Config Parsing =====
+console.log('\n=== roles.js: Map Tile Config Parsing ===');
+{
+  function makeRolesSandbox(cfg) {
+    const ctx = makeSandbox();
+    const rolesJs = fs.readFileSync(__dirname + '/public/roles.js', 'utf8');
+    ctx.fetch = () => Promise.resolve({ json: () => Promise.resolve(cfg) });
+    ctx.window.fetch = ctx.fetch;
+    // Load it
+    vm.runInNewContext(rolesJs, ctx);
+    return ctx;
+  }
+
+  test('mapTiles sets MC_MAP_CFG when map config is missing', async () => {
+    const ctx = makeRolesSandbox({});
+    await ctx.window.MeshConfigReady;
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(ctx.window.MC_MAP_CFG)), { tiles: { providers: {} } }, 'Should fallback to empty providers');
+  });
+
+  test('mapTiles exposes map config directly to MC_MAP_CFG', async () => {
+    const mapCfg = {
+      tiles: {
+        providers: { carto: { enabled: true, domain: 'test-carto' }, stamen: { enabled: true, token: 'test-stamen' } }
+      }
+    };
+    const ctx = makeRolesSandbox({ map: mapCfg });
+    await ctx.window.MeshConfigReady;
+    assert.deepStrictEqual(ctx.window.MC_MAP_CFG, mapCfg, 'MC_MAP_CFG should equal cfg.map');
+  });
 }
 
 // ===== SUMMARY =====

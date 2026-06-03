@@ -1329,28 +1329,38 @@
     // #1420 — multi-provider dark-tile picker. Light mode unchanged.
     let _liveDarkRefLayer = null;
     function _liveResolveTile(dark) {
-      if (!dark) return { url: TILE_LIGHT, attribution: '© OpenStreetMap © CartoDB', refUrl: null };
       const reg = window.MC_TILE_PROVIDERS || {};
+      if (!dark) {
+        const lightId = (typeof window.MC_getLightTileProvider === 'function') ? window.MC_getLightTileProvider() : null;
+        const lp = lightId ? (reg[lightId] || null) : null;
+        if (lp && lp.url) {
+          return { url: (typeof lp.url === 'function' ? lp.url() : lp.url), attribution: lp.attribution || '© OpenStreetMap © CartoDB', refUrl: null };
+        }
+        return { url: TILE_LIGHT, attribution: '© OpenStreetMap © CartoDB', refUrl: null };
+      }
       const id  = (typeof window.MC_getDarkTileProvider === 'function') ? window.MC_getDarkTileProvider() : 'carto-dark';
       const p   = reg[id] || reg['carto-dark'] || {};
       return {
-        url: p.url || p.baseUrl || TILE_DARK,
+        url: (typeof p.url === 'function' ? p.url() : p.url) || (typeof p.baseUrl === 'function' ? p.baseUrl() : p.baseUrl) || TILE_DARK,
         attribution: p.attribution || '© OpenStreetMap © CartoDB',
         refUrl: p.refUrl || null
       };
     }
+    const liveAutoLayerGroup = L.layerGroup().addTo(map);
+
     function _liveSyncDarkTiles(dark) {
       const r = _liveResolveTile(dark);
       tileLayer.setUrl(r.url);
       if (tileLayer.options) tileLayer.options.attribution = r.attribution;
       if (dark && r.refUrl) {
         if (!_liveDarkRefLayer) {
-          _liveDarkRefLayer = L.tileLayer(r.refUrl, { maxZoom: 19, attribution: r.attribution }).addTo(map);
+          _liveDarkRefLayer = L.tileLayer(r.refUrl, { maxZoom: 19, attribution: r.attribution }).addTo(liveAutoLayerGroup);
         } else {
           _liveDarkRefLayer.setUrl(r.refUrl);
+          if (!liveAutoLayerGroup.hasLayer(_liveDarkRefLayer)) _liveDarkRefLayer.addTo(liveAutoLayerGroup);
         }
       } else if (_liveDarkRefLayer) {
-        map.removeLayer(_liveDarkRefLayer);
+        liveAutoLayerGroup.removeLayer(_liveDarkRefLayer);
         _liveDarkRefLayer = null;
       }
       if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
@@ -1360,11 +1370,16 @@
       }
     }
     const _liveInitTile = _liveResolveTile(isDark);
-    let tileLayer = L.tileLayer(_liveInitTile.url, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(map);
+    let tileLayer = L.tileLayer(_liveInitTile.url, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(liveAutoLayerGroup);
     if (isDark && _liveInitTile.refUrl) {
-      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(map);
+      _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(liveAutoLayerGroup);
     }
     if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
+
+    // Add Layer Control
+    if (typeof window.MC_createLayerControl === 'function') {
+      window.MC_createLayerControl(map, liveAutoLayerGroup, 'meshcore-live-map-selection');
+    }
 
     // Swap tiles when theme changes
     const _themeObs = new MutationObserver(function () {

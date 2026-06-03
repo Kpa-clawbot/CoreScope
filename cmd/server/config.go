@@ -63,7 +63,7 @@ type Config struct {
 
 	Roles            map[string]interface{} `json:"roles"`
 	HealthThresholds *HealthThresholds      `json:"healthThresholds"`
-	Tiles            map[string]interface{} `json:"tiles"`
+	Map              map[string]interface{} `json:"map"`
 	SnrThresholds    map[string]interface{} `json:"snrThresholds"`
 	DistThresholds   map[string]interface{} `json:"distThresholds"`
 	MaxHopDist       *float64               `json:"maxHopDist"`
@@ -97,13 +97,6 @@ type Config struct {
 	CORSAllowedOrigins []string `json:"corsAllowedOrigins,omitempty"`
 
 	DebugAffinity bool `json:"debugAffinity,omitempty"`
-
-	// MapDarkTileProvider selects the default dark-mode basemap provider for
-	// new visitors. The client may override per-browser via the customizer
-	// (persisted to localStorage). Allowed values: "carto-dark" (default),
-	// "esri-darkgray-labels", "voyager-inverted", "positron-inverted". See
-	// public/map-tile-providers.js for the registry. #1420.
-	MapDarkTileProvider string `json:"mapDarkTileProvider,omitempty"`
 
 	// ObserverBlacklist is a list of observer public keys to exclude from API
 	// responses (defense in depth — ingestor drops at ingest, server filters

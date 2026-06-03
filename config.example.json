@@ -55,8 +55,28 @@
     "opacity": 1,
     "_comment": "#1488/#1506 — outline around each map marker (live + map pages). Defaults restored to v3.7.2 visual (solid white, 2px). 'color' accepts any CSS color (hex, rgb, rgba); use rgba() or drop 'opacity' below ~0.5 to soften the outline when hundreds of nodes feel overwhelming. 'width' is the SVG stroke width (0 hides the outline entirely). Operators can override per-browser via the in-app Theme Customizer (Colors tab → Marker Stroke)."
   },
-  "mapDarkTileProvider": "carto-dark",
-  "_comment_mapDarkTileProvider": "Default dark-mode basemap provider. Allowed: 'carto-dark' (Carto dark_all — default), 'esri-darkgray-labels' (Esri Dark Gray Canvas + reference labels), 'voyager-inverted' (Carto Voyager with CSS invert filter), 'positron-inverted' (Carto Positron with CSS invert filter). Light mode is unaffected. Users can override per-browser via the in-app customizer (persisted to localStorage). #1420.",
+  "map": {
+    "tiles": {
+      "darkDefault": "carto-dark",
+      "lightDefault": "carto-light",
+      "providers": {
+        "carto": {
+          "enabled": true,
+          "domain": ""
+        },
+        "osm": {
+          "enabled": false,
+          "provider": "",
+          "token": ""
+        },
+        "stamen": {
+          "enabled": false,
+          "token": ""
+        }
+      }
+    }
+  },
+  "_comment_map_tiles": "Configure available map tile providers and the default light/dark basemaps. Carto is the default free-tier provider (custom domain can be specified for Carto enterprise). OSM and Stamen are disabled by default due to strict rate limits; if enabling, you must provide a valid provider name and API token. For Stamen (hosted by Stadia - ~200k tiles/mo free), register at https://stadiamaps.com/. For OSM, supported providers are: 'mapbox' (~50k tiles/mo free, https://www.mapbox.com/), 'thunderforest' (~150k tiles/mo free, https://www.thunderforest.com/), and 'maptiler' (~100k tiles/mo free, https://www.maptiler.com/).",
   "home": {
     "heroTitle": "CoreScope",
     "heroSubtitle": "Find your nodes to start monitoring them.",
