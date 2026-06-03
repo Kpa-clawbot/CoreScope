@@ -130,6 +130,24 @@ jobs:
           node test-xss-escape-sinks.js
           node test-preflight-xss-gate.js
 
+      - name: 🛡️ Preflight XSS gate — actual --diff check (PR only)
+        # The fixture self-test above (test-preflight-xss-gate.js) only
+        # asserts the script's behavior against fixtures. It does NOT scan
+        # the PR's own changes. This step closes that gap by running the
+        # gate against added lines in public/**/*.{js,html} on the PR.
+        # Gate is PR-scoped only (per djb finding: merge commits would
+        # slip an opt-out otherwise). Master pushes skip this step.
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PREFLIGHT_PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          set -e
+          git fetch origin master --depth=50 2>&1 | tail -3 || true
+          # Materialize PR body to a file for the opt-out parser.
+          printf '%s' "$PR_BODY" > /tmp/pr-body.md
+          PREFLIGHT_PR_BODY=/tmp/pr-body.md bash scripts/check-xss-sinks.sh --diff origin/master
+
       - name: 🧹 Frontend lint (eslint no-undef) — issue #1342
         run: |
           set -e
