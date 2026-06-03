@@ -486,9 +486,16 @@ test('MC_createLayerControl handles Auto mode and explicit layers correctly', ()
   assert.strictEqual(ctx.localStorage.getItem('mc-dark-tile-provider'), 'carto-dark', 'storage should update');
   
   // Select Auto again
+  const eventsBeforeAuto = ctx.events.length;
   baselayerchangeCallback({ name: 'Auto (follows theme)' });
   assert.ok(addedLayers.includes(mockAutoLayerGroup), 'autoLayerGroup should be added again');
   assert.strictEqual(ctx.tilePane.getAttribute('data-explicit-layer'), null, 'data-explicit-layer should be cleared again');
+  
+  // Verify event dispatched
+  assert.ok(ctx.events.length > eventsBeforeAuto, 'event should be dispatched');
+  const ev = ctx.events[ctx.events.length - 1];
+  assert.strictEqual(ev.type, 'mc-tile-provider-changed', 'event type correct');
+  assert.strictEqual(ev.detail.auto, true, 'event detail.auto should be true');
 });
 
 process.on('beforeExit', () => {
