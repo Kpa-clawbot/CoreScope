@@ -400,28 +400,25 @@ test('ANL-1: analytics.js does NOT assign td.dataset.tip to tip.innerHTML', () =
     'ANL-1: `tip.innerHTML = td.dataset.tip` still present (mutation-XSS). Use textContent.');
 });
 
-test('ANL-1: dataset round-trip preconditions hold + fix uses textContent', () => {
+test('ANL-1: hashCellTd now emits per-field data-tip-* attrs (no HTML round-trip)', () => {
+  // Post-#1539-round-2 contract (see test-anl1-tooltip-render.js for the
+  // behavioral assertions). The XSS gate here: hashCellTd must NOT carry a
+  // pre-rendered HTML string in a single data-tip attribute. Per-field
+  // attrs (data-tip-hex / data-tip-status / data-tip-lines) are plain text
+  // and are rebuilt into DOM via createElement + textContent.
   const src = fs.readFileSync('public/analytics.js', 'utf8');
-  // Extract hashCellTd template.
-  const m = src.match(/function hashCellTd\([^)]*\)\s*\{\s*return\s+`([^`]+)`/);
-  assert.ok(m, 'ANL-1: hashCellTd template not found');
-  const tpl = m[1];
-  // tipHtml is the post-escape value (esc(name)) already entity-encoded.
-  const tipHtml = '<div>' + escapeHtml(TAG_PAYLOAD) + '</div>';
-  const fn = new Function('hex', 'cellSize', 'cls', 'bg', 'count', 'tipHtml', 'fontWeight',
-    'return `' + tpl + '`;');
-  const tdHtml = fn('AB', 36, 'hash-cell-taken', '', 1, tipHtml, '400');
-  const attrM = tdHtml.match(/data-tip="([^"]*)"/);
-  assert.ok(attrM, 'data-tip attribute missing from rendered cell HTML');
-  const attrDecoded = attrM[1]
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-  // Precondition for the mutation-XSS: <img reanimates on dataset read.
-  assert.ok(/<img\b/i.test(attrDecoded),
-    'ANL-1: expected attribute round-trip to reanimate <img — fixture invalid? got: ' + attrDecoded);
-  // Fix path must exist in source.
-  assert.ok(/\btip\.textContent\s*=\s*td\.dataset\.tip\b/.test(src),
-    'ANL-1: analytics.js missing `tip.textContent = td.dataset.tip` (fix not applied).');
+  const m = src.match(/function hashCellTd\([^)]*\)\s*\{([\s\S]*?)\n\s{2}\}/);
+  assert.ok(m, 'ANL-1: hashCellTd function not found');
+  const body = m[1];
+  assert.ok(!/data-tip\s*=\s*"\$\{tipHtml/.test(body),
+    'ANL-1: hashCellTd still writes pre-rendered HTML to data-tip="${tipHtml...}"');
+  assert.ok(/data-tip-hex/.test(body),
+    'ANL-1: hashCellTd missing data-tip-hex attribute (spec-driven contract)');
+  // Mouseover handler must use the new per-field reader, not innerHTML.
+  assert.ok(/buildMatrixTipChildren\s*\(\s*tip\s*,\s*td\s*\)/.test(src),
+    'ANL-1: mouseover handler no longer calls buildMatrixTipChildren(tip, td)');
+  assert.ok(!/\btip\.innerHTML\s*=\s*td\.dataset\.tip\b/.test(src),
+    'ANL-1: tip.innerHTML = td.dataset.tip is the mutation-XSS regression');
 });
 
 // =========================================================================
