@@ -64,6 +64,7 @@ type Config struct {
 	Roles            map[string]interface{} `json:"roles"`
 	HealthThresholds *HealthThresholds      `json:"healthThresholds"`
 	Map              map[string]interface{} `json:"map"`
+	Tiles            map[string]interface{} `json:"tiles"` // deprecated
 	SnrThresholds    map[string]interface{} `json:"snrThresholds"`
 	DistThresholds   map[string]interface{} `json:"distThresholds"`
 	MaxHopDist       *float64               `json:"maxHopDist"`
@@ -97,6 +98,10 @@ type Config struct {
 	CORSAllowedOrigins []string `json:"corsAllowedOrigins,omitempty"`
 
 	DebugAffinity bool `json:"debugAffinity,omitempty"`
+
+	// MapDarkTileProvider selects the default dark-mode basemap provider for
+	// new visitors. Deprecated: use Map.Tiles.DarkDefault instead.
+	MapDarkTileProvider string `json:"mapDarkTileProvider,omitempty"`
 
 	// ObserverBlacklist is a list of observer public keys to exclude from API
 	// responses (defense in depth — ingestor drops at ingest, server filters
@@ -352,12 +357,46 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 			continue
 		}
 		cfg.NormalizeTimestampConfig()
+		cfg.migrateDeprecatedConfig()
 		applyCORSEnv(cfg)
 		return cfg, nil
 	}
 	cfg.NormalizeTimestampConfig()
+	cfg.migrateDeprecatedConfig()
 	applyCORSEnv(cfg)
 	return cfg, nil // defaults
+}
+
+func (c *Config) migrateDeprecatedConfig() {
+	migrated := false
+	if c.Map == nil {
+		c.Map = make(map[string]interface{})
+	}
+	if c.Map["tiles"] == nil {
+		c.Map["tiles"] = make(map[string]interface{})
+	}
+	tilesMap, ok := c.Map["tiles"].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	if c.MapDarkTileProvider != "" {
+		if tilesMap["darkDefault"] == nil {
+			tilesMap["darkDefault"] = c.MapDarkTileProvider
+		}
+		migrated = true
+	}
+	if c.Tiles != nil {
+		for k, v := range c.Tiles {
+			if tilesMap[k] == nil {
+				tilesMap[k] = v
+			}
+		}
+		migrated = true
+	}
+	if migrated {
+		fmt.Fprintf(os.Stderr, "[deprecated] Top-level 'mapDarkTileProvider' and 'tiles' keys in config.json are deprecated and will be ignored in a future release. Please move them into 'map': { 'tiles': { ... } }.\n")
+	}
 }
 
 func LoadTheme(baseDirs ...string) *ThemeFile {

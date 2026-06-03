@@ -1365,7 +1365,8 @@
       }
       if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
       // #1420 parity with map.js — refresh visible attribution credit after provider swap.
-      if (map.attributionControl) {
+      // Make sure the map is loaded before trying to update the ui
+      if (map && map.attributionControl) {
         try { map.attributionControl._update && map.attributionControl._update(); } catch (_) {}
       }
     }
@@ -1375,12 +1376,15 @@
       _liveDarkRefLayer = L.tileLayer(_liveInitTile.refUrl, { maxZoom: 19, attribution: _liveInitTile.attribution }).addTo(liveAutoLayerGroup);
     }
     if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
+  
+    // Add Zoom Control
+    L.control.zoom({ position: 'topright' }).addTo(map);
 
-    // Add Layer Control
+    // Add Layer Control, passing 'topright' to put it on the right
     if (typeof window.MC_createLayerControl === 'function') {
-      window.MC_createLayerControl(map, liveAutoLayerGroup, 'meshcore-live-map-selection');
+      window.MC_createLayerControl(map, liveAutoLayerGroup, 'topright');
     }
-
+    
     // Swap tiles when theme changes
     const _themeObs = new MutationObserver(function () {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
@@ -1389,12 +1393,12 @@
     });
     _themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     // #1420 — re-render on customizer change.
-    window.addEventListener('mc-tile-provider-changed', function () {
+    window.addEventListener('mc-tile-provider-changed', function (e) {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (e && e.detail && e.detail.type && e.detail.type !== (dark ? 'dark' : 'light')) return;
       _liveSyncDarkTiles(dark);
     });
-    L.control.zoom({ position: 'topright' }).addTo(map);
 
     // #1485 — animations + trails need their own pane above markerPane.
     // PR #1334 moved node markers from L.circleMarker (overlayPane @ 400)

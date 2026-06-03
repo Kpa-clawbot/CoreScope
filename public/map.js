@@ -302,7 +302,8 @@
         _darkRefLayer = null;
       }
       if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
-      if (map.attributionControl) {
+      // Make sure the map is loaded before trying to update the ui
+      if (map && map.attributionControl) {
         try { map.attributionControl._update && map.attributionControl._update(); } catch (_) {}
       }
     }
@@ -316,9 +317,9 @@
     }
     if (typeof window.MC_applyTileFilter === 'function') window.MC_applyTileFilter();
     
-    // Add Layer Control
+    // Add Layer Control, passing 'topleft' to put it on the left
     if (typeof window.MC_createLayerControl === 'function') {
-      window.MC_createLayerControl(map, autoLayerGroup, 'meshcore-map-selection');
+      window.MC_createLayerControl(map, autoLayerGroup, 'topleft');
     }
 
     const _mapThemeObs = new MutationObserver(function () {
@@ -328,9 +329,10 @@
     });
     _mapThemeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     // #1420 — re-render when the user picks a different dark provider in the customizer.
-    window.addEventListener('mc-tile-provider-changed', function () {
+    window.addEventListener('mc-tile-provider-changed', function (e) {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (e && e.detail && e.detail.type && e.detail.type !== (dark ? 'dark' : 'light')) return;
       _syncDarkTiles(dark);
     });
 
@@ -1494,7 +1496,10 @@
   }
 
   function _renderMarkersInner() {
-    markerLayer.clearLayers();
+    // Don't clear what doesn't exist (map first loading will throw null error)
+    if (markerLayer) {
+      markerLayer.clearLayers();
+    }
     if (clusterGroup) clusterGroup.clearLayers();
     _currentMarkerData = [];
 

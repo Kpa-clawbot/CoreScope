@@ -458,6 +458,14 @@
       // Fallback for older configs
       window.MC_MAP_CFG = { tiles: { providers: {} } };
     }
+    // Backward compat for older tile URL overrides
+    if (cfg.tiles) {
+      if (cfg.tiles.dark) window.TILE_DARK = cfg.tiles.dark;
+      if (cfg.tiles.light) window.TILE_LIGHT = cfg.tiles.light;
+    } else if (cfg.map && cfg.map.tiles) {
+      if (cfg.map.tiles.darkUrl) window.TILE_DARK = cfg.map.tiles.darkUrl;
+      if (cfg.map.tiles.lightUrl) window.TILE_LIGHT = cfg.map.tiles.lightUrl;
+    }
     if (typeof window.MC_initTileRegistry === 'function') window.MC_initTileRegistry(true);
     if (cfg.snrThresholds) Object.assign(SNR_THRESHOLDS, cfg.snrThresholds);
     if (cfg.distThresholds) Object.assign(DIST_THRESHOLDS, cfg.distThresholds);

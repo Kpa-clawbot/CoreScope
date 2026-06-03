@@ -445,7 +445,7 @@
   flex-wrap: wrap;
 }
 
-/* Region filter (#1045) inline in live header toggles */
+/* Region/Area filters inline in live header controls body */
 .live-controls-body .live-region-filter-container,
 .live-controls-body .live-area-filter-container { display: inline-flex; align-items: center; }
 .live-controls-body .live-region-filter-container .region-dropdown-trigger,
@@ -459,17 +459,6 @@
   gap: 4px;
   font-size: inherit;
   white-space: nowrap;
-}
-
-/* ---- Leaflet overrides for dark theme ---- */
-.live-page .leaflet-control-zoom a {
-  background: color-mix(in srgb, var(--surface-1) 92%, transparent) !important;
-  backdrop-filter: blur(12px);
-  color: var(--text) !important;
-  border-color: var(--border) !important;
-}
-.live-page .leaflet-control-zoom a:hover {
-  background: rgba(59, 130, 246, 0.2) !important;
 }
 
 /* ---- Medium breakpoint (#279) + collapse toggles (#1178, #1179) ---- */

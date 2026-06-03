@@ -2282,21 +2282,30 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
 .leaflet-popup-tip { background: var(--card-bg) !important; }
 .leaflet-popup-content { color: var(--text) !important; font-size: 13px !important; }
 
-/* For Leaflet layer control when an inverted map (e.g. Voyager Inverted) is selected */
-[data-theme="dark"] .leaflet-control-layers,
-[data-theme="dark"] .leaflet-control-layers-expanded {
-  background-color: var(--card-bg);
-  color: var(--text);
-  border-color: var(--border);
+/* For Leaflet layer control */
+.leaflet-control-layers,
+.leaflet-control-layers-expanded {
+  background-color: var(--card-bg) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
 }
-[data-theme="dark"] .leaflet-control-layers-separator {
-  border-top-color: var(--border);
+.leaflet-control-layers-separator {
+  border-top-color: var(--border) !important;
 }
 [data-theme="dark"] .leaflet-control-layers-toggle {
-  filter: invert(1) brightness(2);
+  filter: invert(1);
 }
 
-.invert-map-filter { filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(1.05); }
+/* ---- Leaflet overrides for dark theme ---- */
+.leaflet-control-zoom a {
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent) !important;
+  backdrop-filter: blur(12px);
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+.leaflet-control-zoom a:hover {
+  background: rgba(59, 130, 246, 0.2) !important;
+}
 
 /* Column resize handles */
 .col-resize-handle {

@@ -95,6 +95,8 @@ test('Every registry entry has a url function or string with {z}', () => {
   loadProviders(ctx, { tiles: { providers: { carto: { enabled: true }, osm: { enabled: true }, stamen: { enabled: true } } } });
   ctx.window.MC_initTileRegistry(false);
   const reg = ctx.window.MC_TILE_PROVIDERS;
+  assert.ok(Object.keys(reg).length >= 9, 'registry must contain all 9 providers when all enabled');
+  for (const id of ALL_IDS) assert.ok(reg[id], 'missing provider: ' + id);
   for (const id of Object.keys(reg)) {
     const p = reg[id];
     const url = typeof p.url === 'function' ? p.url() : p.url;
@@ -108,6 +110,8 @@ test('Every registry entry has a type of light or dark', () => {
   loadProviders(ctx, { tiles: { providers: { carto: { enabled: true }, osm: { enabled: true }, stamen: { enabled: true } } } });
   ctx.window.MC_initTileRegistry(false);
   const reg = ctx.window.MC_TILE_PROVIDERS;
+  assert.ok(Object.keys(reg).length >= 9, 'registry must contain all 9 providers when all enabled');
+  for (const id of ALL_IDS) assert.ok(reg[id], 'missing provider: ' + id);
   for (const id of Object.keys(reg)) {
     assert.ok(reg[id].type === 'light' || reg[id].type === 'dark', id + ' must have type light or dark');
   }
@@ -199,6 +203,7 @@ test('MC_setDarkTileProvider rejects unknown IDs', () => {
   const ok = ctx.window.MC_setDarkTileProvider('not-real');
   assert.strictEqual(ok, false);
   assert.strictEqual(ctx.localStorage.getItem('mc-dark-tile-provider'), null);
+  assert.strictEqual(ctx.events.length, 0, 'should not dispatch event on invalid ID');
 });
 
 test('MC_getDarkTileProvider falls back: localStorage > server default > carto-dark', () => {
@@ -233,6 +238,7 @@ test('MC_setLightTileProvider rejects unknown IDs', () => {
   const ok = ctx.window.MC_setLightTileProvider('not-real');
   assert.strictEqual(ok, false);
   assert.strictEqual(ctx.localStorage.getItem('mc-light-tile-provider'), null);
+  assert.strictEqual(ctx.events.length, 0, 'should not dispatch event on invalid ID');
 });
 
 test('MC_getLightTileProvider falls back: localStorage > server default > carto-light', () => {
@@ -351,6 +357,46 @@ test('OSM uses Thunderforest URL when provider=thunderforest and token provided'
   assert.ok(url.indexOf('tf-key') >= 0, 'apikey should be in URL');
 });
 
+test('OSM URL correctly encodes token with special characters', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { osm: { enabled: true, provider: 'maptiler', token: 'a b&c=d?e' } } } });
+  ctx.window.MC_initTileRegistry(false);
+  const reg = ctx.window.MC_TILE_PROVIDERS;
+  const url = typeof reg['osm-standard'].url === 'function' ? reg['osm-standard'].url() : reg['osm-standard'].url;
+  assert.ok(url.indexOf(encodeURIComponent('a b&c=d?e')) >= 0, 'token must be URL encoded');
+  assert.ok(url.indexOf(' ') === -1, 'no raw spaces');
+});
+
+test('OSM Mapbox uses correct raster tile endpoint', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { osm: { enabled: true, provider: 'mapbox', token: 'mbk' } } } });
+  ctx.window.MC_initTileRegistry(false);
+  const reg = ctx.window.MC_TILE_PROVIDERS;
+  const url = typeof reg['osm-standard'].url === 'function' ? reg['osm-standard'].url() : reg['osm-standard'].url;
+  assert.ok(url.indexOf('/tiles/256/{z}/{x}/{y}@2x') >= 0, 'must use correct mapbox raster tile endpoint shape');
+});
+
+// ─── Stamen URL generation ────────────────────────────────────────────────────
+
+test('Stamen generates Stadia URL without token when token is missing', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { stamen: { enabled: true } } } });
+  ctx.window.MC_initTileRegistry(false);
+  const reg = ctx.window.MC_TILE_PROVIDERS;
+  const url = typeof reg['stamen-toner-lite'].url === 'function' ? reg['stamen-toner-lite'].url() : reg['stamen-toner-lite'].url;
+  assert.ok(url.indexOf('stadiamaps.com') >= 0, 'should use stadiamaps URL: ' + url);
+  assert.ok(url.indexOf('?api_key=') === -1, 'should omit api_key query param entirely');
+});
+
+test('Stamen generates Stadia URL with encoded token', () => {
+  const ctx = makeSandbox();
+  loadProviders(ctx, { tiles: { providers: { stamen: { enabled: true, token: 'xyz 123&' } } } });
+  ctx.window.MC_initTileRegistry(false);
+  const reg = ctx.window.MC_TILE_PROVIDERS;
+  const url = typeof reg['stamen-toner-lite'].url === 'function' ? reg['stamen-toner-lite'].url() : reg['stamen-toner-lite'].url;
+  assert.ok(url.indexOf('?api_key=' + encodeURIComponent('xyz 123&')) >= 0, 'must encode stamen token');
+});
+
 // ─── Cross-tab sync ───────────────────────────────────────────────────────────
 
 test('Cross-tab storage event re-dispatches mc-tile-provider-changed', () => {
@@ -364,6 +410,7 @@ test('Cross-tab storage event re-dispatches mc-tile-provider-changed', () => {
   const ev = ctx.events[ctx.events.length - 1];
   assert.strictEqual(ev.type, 'mc-tile-provider-changed');
   assert.strictEqual(ev.detail.crossTab, true);
+  assert.ok(ctx.tilePane.style.filter.indexOf('invert(') >= 0, 'invert filter re-applied');
 });
 
 test('Cross-tab storage event ignores unknown provider ids', () => {

@@ -993,6 +993,7 @@ type ClientConfigResponse struct {
 	Roles              interface{} `json:"roles"`
 	HealthThresholds   interface{} `json:"healthThresholds"`
 	Map                interface{} `json:"map"`
+	Tiles              interface{} `json:"tiles,omitempty"` // deprecated
 	SnrThresholds      interface{} `json:"snrThresholds"`
 	DistThresholds     interface{} `json:"distThresholds"`
 	MaxHopDist         interface{} `json:"maxHopDist"`
@@ -1004,6 +1005,7 @@ type ClientConfigResponse struct {
 	PropagationBufferMs float64         `json:"propagationBufferMs"`
 	Timestamps          TimestampConfig `json:"timestamps"`
 	DebugAffinity       bool            `json:"debugAffinity,omitempty"`
+	MapDarkTileProvider string          `json:"mapDarkTileProvider,omitempty"` // deprecated
 }
 
 // ─── IATA Coords ───────────────────────────────────────────────────────────────
