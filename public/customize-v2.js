@@ -1428,12 +1428,12 @@
     var hasMultipleDark = darkIds.length > 1;
     var hasMultipleLight = lightIds.length > 1;
     
-    if (!hasMultipleDark && !hasMultipleLight) return ''; // hide if no options
+    if (darkIds.length === 0 && lightIds.length === 0) return ''; // hide if no options
     
     var html = '<p class="cust-section-title" style="font-size:14px;margin:16px 0 8px">Map Tiles</p>' +
       '<p class="cust-hint" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Choose the basemap providers. Available options depend on server configuration.</p>';
       
-    if (hasMultipleLight) {
+    if (lightIds.length > 0) {
         var optionsLight = lightIds.map(function (id) {
           var label = reg[id].label || id;
           var sel   = id === activeLight ? ' selected' : '';
@@ -1445,7 +1445,7 @@
           '</select></div>';
     }
     
-    if (hasMultipleDark) {
+    if (darkIds.length > 0) {
         var optionsDark = darkIds.map(function (id) {
           var label = reg[id].label || id;
           var sel   = id === activeDark ? ' selected' : '';
@@ -2024,8 +2024,6 @@
         if (typeof window.MC_setDarkTileProvider === 'function') {
           window.MC_setDarkTileProvider(id);
         }
-        var warn = document.getElementById('cv2-osm-warning');
-        if (warn) warn.style.display = id.indexOf('osm-') === 0 ? '' : 'none';
       });
     });
 

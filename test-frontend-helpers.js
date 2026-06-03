@@ -540,8 +540,8 @@ console.log('\n=== hop-resolver.js ===');
 
   test('resolve single unique prefix', () => {
     HR.init([
-      { public_key: 'abcdef1234567890', name: 'NodeA', lat: 37.3, lon: -122.0 },
-      { public_key: '123456abcdef0000', name: 'NodeB', lat: 37.4, lon: -122.1 },
+      { public_key: 'abcdef1234567890', name: 'NodeA', lat: 37.3, lon: -122.0, role: 'repeater' },
+      { public_key: '123456abcdef0000', name: 'NodeB', lat: 37.4, lon: -122.1, role: 'repeater' },
     ]);
     const result = HR.resolve(['ab'], null, null, null, null);
     assert.strictEqual(result['ab'].name, 'NodeA');
@@ -549,8 +549,8 @@ console.log('\n=== hop-resolver.js ===');
 
   test('resolve ambiguous prefix', () => {
     HR.init([
-      { public_key: 'abcdef1234567890', name: 'NodeA', lat: 37.3, lon: -122.0 },
-      { public_key: 'abcd001234567890', name: 'NodeC', lat: 38.0, lon: -121.0 },
+      { public_key: 'abcdef1234567890', name: 'NodeA', lat: 37.3, lon: -122.0, role: 'repeater' },
+      { public_key: 'abcd001234567890', name: 'NodeC', lat: 38.0, lon: -121.0, role: 'repeater' },
     ]);
     const result = HR.resolve(['ab'], null, null, null, null);
     assert.ok(result['ab'].ambiguous);
@@ -570,8 +570,8 @@ console.log('\n=== hop-resolver.js ===');
 
   test('geo disambiguation with origin anchor', () => {
     HR.init([
-      { public_key: 'abcdef1234567890', name: 'NearNode', lat: 37.31, lon: -122.01 },
-      { public_key: 'abcd001234567890', name: 'FarNode', lat: 50.0, lon: 10.0 },
+      { public_key: 'abcdef1234567890', name: 'NearNode', lat: 37.31, lon: -122.01, role: 'repeater' },
+      { public_key: 'abcd001234567890', name: 'FarNode', lat: 50.0, lon: 10.0, role: 'repeater' },
     ]);
     const result = HR.resolve(['ab'], 37.3, -122.0, null, null);
     // Should prefer the nearer node
@@ -581,8 +581,8 @@ console.log('\n=== hop-resolver.js ===');
   test('regional filtering with IATA', () => {
     HR.init(
       [
-        { public_key: 'abcdef1234567890', name: 'SFONode', lat: 37.6, lon: -122.4 },
-        { public_key: 'abcd001234567890', name: 'LHRNode', lat: 51.5, lon: -0.1 },
+        { public_key: 'abcdef1234567890', name: 'SFONode', lat: 37.6, lon: -122.4, role: 'repeater' },
+        { public_key: 'abcd001234567890', name: 'LHRNode', lat: 51.5, lon: -0.1, role: 'repeater' },
       ],
       {
         observers: [{ id: 'obs1', iata: 'SFO' }],
@@ -726,12 +726,12 @@ console.log('\n=== pickByAffinity neighbor-graph scoring (#874) ===');
 
   // Two nodes sharing prefix "ab", hundreds of km apart.
   // NodeSF is near San Francisco, NodeDEN is near Denver.
-  const nodeSF = { public_key: 'ab11111111111111', name: 'NodeSF', lat: 37.7, lon: -122.4 };
-  const nodeDEN = { public_key: 'ab22222222222222', name: 'NodeDEN', lat: 39.7, lon: -104.9 };
+  const nodeSF = { public_key: 'ab11111111111111', name: 'NodeSF', lat: 37.7, lon: -122.4, role: 'repeater' };
+  const nodeDEN = { public_key: 'ab22222222222222', name: 'NodeDEN', lat: 39.7, lon: -104.9, role: 'repeater' };
   // A known neighbor of NodeSF (in the graph)
-  const nodeNeighbor = { public_key: 'cc33333333333333', name: 'SFNeighbor', lat: 37.8, lon: -122.3 };
+  const nodeNeighbor = { public_key: 'cc33333333333333', name: 'SFNeighbor', lat: 37.8, lon: -122.3, role: 'repeater' };
   // Another known node near Denver
-  const nodeDenNeighbor = { public_key: 'dd44444444444444', name: 'DENNeighbor', lat: 39.8, lon: -105.0 };
+  const nodeDenNeighbor = { public_key: 'dd44444444444444', name: 'DENNeighbor', lat: 39.8, lon: -105.0, role: 'repeater' };
 
   test('#874: graph edge scoring picks correct regional candidate (SF)', () => {
     HR.init([nodeSF, nodeDEN, nodeNeighbor, nodeDenNeighbor]);
@@ -777,7 +777,7 @@ console.log('\n=== pickByAffinity neighbor-graph scoring (#874) ===');
   test('#874: centroid uses average of prev+next positions', () => {
     // Prev near SF, next near Denver → centroid is midpoint (~Nevada)
     // NodeDEN is closer to Nevada midpoint than NodeSF
-    const nodeMid = { public_key: 'ee55555555555555', name: 'MidNode', lat: 38.5, lon: -114.0 };
+    const nodeMid = { public_key: 'ee55555555555555', name: 'MidNode', lat: 38.5, lon: -114.0, role: 'repeater' };
     HR.init([nodeSF, nodeDEN, nodeNeighbor, nodeDenNeighbor, nodeMid]);
     HR.setAffinity({ edges: [] });
     // Path: SFNeighbor → [ab??] → DENNeighbor
@@ -1132,12 +1132,10 @@ console.log('\n=== live.js: pruneStaleNodes ===');
     const markers = ctx.window._liveNodeMarkers();
     const data = ctx.window._liveNodeData();
 
-    let lastStyle = {};
-    let glowStyle = {};
+    let elStyle = {};
     markers['apiStale'] = {
-      _glowMarker: { setStyle: function(s) { glowStyle = s; } },
+      getElement: function() { return { style: elStyle }; },
       _staleDimmed: false,
-      setStyle: function(s) { lastStyle = s; },
     };
     data['apiStale'] = { public_key: 'apiStale', role: 'repeater', _fromAPI: true, _liveSeen: Date.now() - 96 * 3600000 };
 
@@ -1146,8 +1144,7 @@ console.log('\n=== live.js: pruneStaleNodes ===');
     assert.ok(markers['apiStale'], 'API node should NOT be removed');
     assert.ok(data['apiStale'], 'API node data should NOT be removed');
     assert.ok(markers['apiStale']._staleDimmed, 'API node should be marked as dimmed');
-    assert.strictEqual(lastStyle.fillOpacity, 0.25, 'marker should be dimmed to 0.25 fillOpacity');
-    assert.strictEqual(glowStyle.fillOpacity, 0.04, 'glow should be dimmed to 0.04 fillOpacity');
+    assert.strictEqual(elStyle.opacity, '0.35', 'marker should be dimmed to 0.35 opacity');
   });
 
   test('pruneStaleNodes restores API nodes when they become active again', () => {
@@ -1156,12 +1153,12 @@ console.log('\n=== live.js: pruneStaleNodes ===');
     const markers = ctx.window._liveNodeMarkers();
     const data = ctx.window._liveNodeData();
 
-    let lastStyle = {};
-    let glowStyle = {};
+    let elStyle = {};
     markers['apiNode'] = {
-      _glowMarker: { setStyle: function(s) { glowStyle = s; } },
+      getElement: function() { return { style: elStyle }; },
+      _glowMarker: { setStyle: function() {} },
       _staleDimmed: true,
-      setStyle: function(s) { lastStyle = s; },
+      setStyle: function() {},
     };
     data['apiNode'] = { public_key: 'apiNode', role: 'repeater', _fromAPI: true, _liveSeen: Date.now() };
 
@@ -1169,8 +1166,7 @@ console.log('\n=== live.js: pruneStaleNodes ===');
 
     assert.ok(markers['apiNode'], 'API node should remain');
     assert.strictEqual(markers['apiNode']._staleDimmed, false, 'staleDimmed should be cleared');
-    assert.strictEqual(lastStyle.fillOpacity, 0.85, 'opacity should be restored to 0.85');
-    assert.strictEqual(glowStyle.fillOpacity, 0.12, 'glow should be restored to 0.12');
+    assert.strictEqual(elStyle.opacity, '1', 'opacity should be restored to 1');
   });
 
   test('pruneStaleNodes still removes WS-only nodes when stale', () => {
@@ -1402,6 +1398,7 @@ console.log('\n=== nodes.js: WS handler runtime behavior ===');
           querySelectorAll() { return []; },
           querySelector() { return null; },
           getAttribute() { return null; },
+          setAttribute() {},
         };
       }
       return domElements[id];
@@ -1431,6 +1428,7 @@ console.log('\n=== nodes.js: WS handler runtime behavior ===');
     ctx.Set = Set;
     ctx.CLIENT_TTL = { nodeList: 90000, nodeDetail: 240000, nodeHealth: 240000 };
     ctx.RegionFilter = { init() {}, onChange() { return () => {}; }, getRegionParam() { return ''; }, offChange() {} };
+    ctx.AreaFilter = { init() {}, onChange() { return () => {}; }, getAreaParam() { return ''; }, offChange() {} };
 
     // Track API calls and cache invalidation
     let apiCallCount = 0;
@@ -1777,6 +1775,7 @@ console.log('\n=== compare.js: comparePacketSets ===');
     ctx.window.addEventListener = () => {};
     ctx.window.removeEventListener = () => {};
     ctx.RegionFilter = { init() {}, onChange() { return () => {}; }, offChange() {}, getRegionParam() { return ''; } };
+    ctx.AreaFilter = { init() {}, onChange() { return () => {}; }, offChange() {}, getAreaParam() { return ''; } };
     ctx.CLIENT_TTL = { observers: 120000 };
     ctx.debouncedOnWS = (fn) => fn;
     ctx.onWS = () => {};
@@ -3482,14 +3481,9 @@ console.log('\n=== live.js: nextHop null guards ===');
       'nextHop must return early when animLayer is null (post-destroy)');
   });
 
-  test('nextHop setInterval guards animLayer null', () => {
-    assert.ok(liveSource.includes('if (!animLayer || !animLayer.hasLayer(ghost))'),
-      'setInterval in nextHop must guard animLayer null');
-  });
-
-  test('nextHop setTimeout guards animLayer null', () => {
-    assert.ok(liveSource.includes('if (animLayer && animLayer.hasLayer(ghost)) animLayer.removeLayer(ghost)'),
-      'setTimeout in nextHop must guard animLayer null');
+  test('renderAnimations guards animLayer null before removing ghost', () => {
+    assert.ok(liveSource.includes('if (animLayer && animLayer.hasLayer(g.marker))'),
+      'renderAnimations must guard animLayer null before removing ghost');
   });
 
   test('nextHop guards liveAnimCount element null', () => {
@@ -4145,7 +4139,7 @@ console.log('\n=== app.js: payloadTypeColor ===');
   test('payloadTypeColor(99) = unknown', () => assert.strictEqual(payloadTypeColor(99), 'unknown'));
   test('payloadTypeColor(null) = unknown', () => assert.strictEqual(payloadTypeColor(null), 'unknown'));
   test('payloadTypeColor(undefined) = unknown', () => assert.strictEqual(payloadTypeColor(undefined), 'unknown'));
-  test('payloadTypeColor(6) = unknown (no mapping for 6)', () => assert.strictEqual(payloadTypeColor(6), 'unknown'));
+  test('payloadTypeColor(12) = unknown (no mapping for 12)', () => assert.strictEqual(payloadTypeColor(12), 'unknown'));
   test('all defined payload types return a non-unknown string', () => {
     const definedTypes = [0, 1, 2, 3, 4, 5, 7, 8, 9];
     for (const t of definedTypes) {

@@ -318,7 +318,7 @@
     
     // Add Layer Control
     if (typeof window.MC_createLayerControl === 'function') {
-      window.MC_createLayerControl(map, autoLayerGroup, 'meshcore-map-selection');
+      window.MC_createLayerControl(map, autoLayerGroup);
     }
 
     const _mapThemeObs = new MutationObserver(function () {
@@ -328,9 +328,10 @@
     });
     _mapThemeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     // #1420 — re-render when the user picks a different dark provider in the customizer.
-    window.addEventListener('mc-tile-provider-changed', function () {
+    window.addEventListener('mc-tile-provider-changed', function (e) {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (e && e.detail && e.detail.type && e.detail.type !== (dark ? 'dark' : 'light')) return;
       _syncDarkTiles(dark);
     });
 

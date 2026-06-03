@@ -1378,7 +1378,7 @@
 
     // Add Layer Control
     if (typeof window.MC_createLayerControl === 'function') {
-      window.MC_createLayerControl(map, liveAutoLayerGroup, 'meshcore-live-map-selection');
+      window.MC_createLayerControl(map, liveAutoLayerGroup);
     }
 
     // Swap tiles when theme changes
@@ -1389,9 +1389,10 @@
     });
     _themeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     // #1420 — re-render on customizer change.
-    window.addEventListener('mc-tile-provider-changed', function () {
+    window.addEventListener('mc-tile-provider-changed', function (e) {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         (document.documentElement.getAttribute('data-theme') !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (e && e.detail && e.detail.type && e.detail.type !== (dark ? 'dark' : 'light')) return;
       _liveSyncDarkTiles(dark);
     });
     L.control.zoom({ position: 'topright' }).addTo(map);

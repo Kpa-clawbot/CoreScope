@@ -60,15 +60,18 @@
       "darkDefault": "carto-dark",
       "lightDefault": "carto-light",
       "providers": {
+        "_comment_carto": "Carto is the default free-tier provider. Optional: specify 'domain' for Carto enterprise.",
         "carto": {
           "enabled": true,
           "domain": ""
         },
+        "_comment_osm": "OSM providers: 'mapbox', 'thunderforest', 'maptiler'. WARNING: Tokens are sent to the browser. Apply origin/referrer restrictions in your provider dashboard.",
         "osm": {
           "enabled": false,
           "provider": "",
           "token": ""
         },
+        "_comment_stamen": "Stamen (hosted by Stadia). WARNING: Tokens are sent to the browser. Apply origin/referrer restrictions.",
         "stamen": {
           "enabled": false,
           "token": ""
@@ -76,7 +79,9 @@
       }
     }
   },
-  "_comment_map_tiles": "Configure available map tile providers and the default light/dark basemaps. Carto is the default free-tier provider (custom domain can be specified for Carto enterprise). OSM and Stamen are disabled by default due to strict rate limits; if enabling, you must provide a valid provider name and API token. For Stamen (hosted by Stadia - ~200k tiles/mo free), register at https://stadiamaps.com/. For OSM, supported providers are: 'mapbox' (~50k tiles/mo free, https://www.mapbox.com/), 'thunderforest' (~150k tiles/mo free, https://www.thunderforest.com/), and 'maptiler' (~100k tiles/mo free, https://www.maptiler.com/).",
+  "_comment_deprecated_tiles": "The old top-level 'tiles' and 'mapDarkTileProvider' keys are deprecated. Please use the 'map' block above.",
+  "mapDarkTileProvider": "",
+  "tiles": {},
   "home": {
     "heroTitle": "CoreScope",
     "heroSubtitle": "Find your nodes to start monitoring them.",
