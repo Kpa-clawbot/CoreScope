@@ -1,16 +1,15 @@
-/* map-tile-providers.js — Dark-tile provider registry & runtime switcher (#1420).
+/* map-tile-providers.js — Registry of map tile providers & runtime switcher (#1165/#1420).
  *
  * Scope:
- *   - 4 providers: carto-dark (default), esri-darkgray-labels (base+ref),
- *     voyager-inverted, positron-inverted (CSS-filter variants).
- *   - MC_setDarkTileProvider(id) persists per-browser to localStorage and
- *     dispatches `mc-tile-provider-changed` so map.js / live.js can swap.
- *   - MC_getDarkTileProvider() resolves localStorage → server default →
- *     'carto-dark'.
+ *   - Multiple providers: Carto (default), OSM, Stamen, Esri.
+ *   - MC_setDarkTileProvider(id) / MC_setLightTileProvider(id) persist per-browser
+ *     to localStorage and dispatch `mc-tile-provider-changed`.
+ *   - Resolves localStorage → server default → 'carto-dark' / 'carto-light'.
  *   - MC_applyTileFilter() applies/clears the CSS filter on
  *     `.leaflet-tile-pane` based on current theme + selected provider.
+ *   - MC_createLayerControl() builds a Leaflet control mapping providers.
  *
- * No new deps — URL-only providers. Light mode is unchanged.
+ * No new deps — URL-only providers.
  */
 (function () {
   'use strict';
@@ -24,7 +23,6 @@
   
   var _serverDefault = null;
   var _serverDefaultLight = null;
-  var _layerInstance = null;
   
   var INVERT_CSS   = 'invert(1) hue-rotate(180deg) brightness(0.9) contrast(1.05)';
 
@@ -52,7 +50,8 @@
     'osm-standard': { provider: 'osm', label: 'OSM Standard (Light)', url: _getOsmUrl, invertFilter: null, type: 'light', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler' },
     'osm-dark': { provider: 'osm', label: 'OSM Standard (CSS-Inverted Dark)', url: _getOsmUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler' },
     'stamen-toner-lite': { provider: 'stamen', label: 'Stamen Toner Lite (Light)', url: _getStamenUrl, invertFilter: null, type: 'light', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap' },
-    'stamen-toner-dark': { provider: 'stamen', label: 'Stamen Toner Lite (CSS-Inverted Dark)', url: _getStamenUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap' }
+    'stamen-toner-dark': { provider: 'stamen', label: 'Stamen Toner Lite (CSS-Inverted Dark)', url: _getStamenUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap' },
+    'esri-darkgray-labels': { provider: 'esri', label: 'Esri Dark Gray Canvas', url: function() { return 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'; }, invertFilter: null, type: 'dark', attribution: 'Tiles © Esri' }
   };
 
   var REGISTRY = {};
@@ -67,6 +66,7 @@
     var HAS_CARTO = !_cfg || !_cfg.providers || !_cfg.providers.carto || _cfg.providers.carto.enabled !== false;
     var HAS_OSM = _cfg && _cfg.providers && _cfg.providers.osm && _cfg.providers.osm.enabled;
     var HAS_STAMEN = _cfg && _cfg.providers && _cfg.providers.stamen && _cfg.providers.stamen.enabled && !!_cfg.providers.stamen.token;
+    var HAS_ESRI = true; // Kept for backwards compatibility
 
     REGISTRY = {};
     for (var key in BASE_STYLES) {
@@ -74,6 +74,7 @@
       if (style.provider === 'carto' && HAS_CARTO) REGISTRY[key] = style;
       if (style.provider === 'osm' && HAS_OSM) REGISTRY[key] = style;
       if (style.provider === 'stamen' && HAS_STAMEN) REGISTRY[key] = style;
+      if (style.provider === 'esri' && HAS_ESRI) REGISTRY[key] = style;
     }
 
     // Keep the public reference in sync with the newly rebuilt REGISTRY
@@ -128,6 +129,7 @@
   
   function setActive(id, type) {
     if (!_hasId(id)) return false;
+    if (REGISTRY[id].type !== type) return false;
     var skey = type === 'light' ? STORAGE_KEY_LIGHT : STORAGE_KEY;
     try {
       if (window.localStorage) window.localStorage.setItem(skey, id);
@@ -156,24 +158,24 @@
     var pane;
     try { pane = document.querySelector('.leaflet-tile-pane'); } catch (_) { pane = null; }
     if (!pane || !pane.style) return;
+
+    // Contract: if an explicit layer was selected via the map control, it locks
+    // the CSS filter state. We bypass our auto-theme logic here so we don't accidentally
+    // invert an explicitly chosen Light map while the app theme is Dark.
+    if (pane.getAttribute('data-explicit-layer') === 'true') {
+      return;
+    }
+
     var isDark = _isDarkEffective();
     var id = isDark ? getActiveId() : getActiveLightId();
     var p  = REGISTRY[id];
     pane.style.filter = (isDark && p && p.invertFilter) ? p.invertFilter : '';
-    
-    // Also trigger leaflet url update if we have a bound layer
-    if (_layerInstance && p) {
-      var newUrl = typeof p.url === 'function' ? p.url() : p.url;
-      if (_layerInstance._url !== newUrl) {
-         _layerInstance.setUrl(newUrl);
-         // Leaflet doesn't update attribution dynamically easily, but this is fine.
-      }
-    }
   }
 
 
   // ── Public surface ──────────────────────────────────────────────────────
   
+  window.MC_DARK_TILE_DEFAULT           = DEFAULT_ID;
   window.MC_TILE_PROVIDERS              = REGISTRY; // initial ref; MC_initTileRegistry keeps this in sync
   window.MC_setDarkTileProvider         = function(id) { return setActive(id, 'dark'); };
   window.MC_setLightTileProvider        = function(id) { return setActive(id, 'light'); };
@@ -208,6 +210,10 @@
     // Restore the auto tile group and kick _syncDarkTiles
     function _activateAuto() {
       _isAuto = true;
+      try { 
+        var pane = map.getPane('tilePane');
+        if (pane) pane.removeAttribute('data-explicit-layer');
+      } catch (_) {}
       try { if (autoLayerGroup && !map.hasLayer(autoLayerGroup)) map.addLayer(autoLayerGroup); } catch (_) {}
       // Firing mc-tile-provider-changed causes _syncDarkTiles in map.js/live.js
       // to re-evaluate and apply the correct theme tile
@@ -298,6 +304,11 @@
         if (!selectedId) return;
 
         _isAuto = false;
+        try { 
+          var pane = map.getPane('tilePane');
+          // Contract: mark the pane as explicit so applyTileFilter skips auto-theme CSS filters
+          if (pane) pane.setAttribute('data-explicit-layer', 'true');
+        } catch (_) {}
 
         // Hide autoLayerGroup while an explicit layer is active
         try { if (autoLayerGroup && map.hasLayer(autoLayerGroup)) map.removeLayer(autoLayerGroup); } catch (_) {}

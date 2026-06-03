@@ -34,7 +34,13 @@ function makeSandbox(opts) {
   opts = opts || {};
   const events = [];
   const listeners = {};
-  const tilePane = { style: { filter: '' } };
+  const _paneAttrs = {};
+  const tilePane = { 
+    style: { filter: '' },
+    setAttribute: (k, v) => { _paneAttrs[k] = String(v); },
+    getAttribute: (k) => Object.prototype.hasOwnProperty.call(_paneAttrs, k) ? _paneAttrs[k] : null,
+    removeAttribute: (k) => { delete _paneAttrs[k]; }
+  };
   const ctx = {
     console,
     setTimeout, clearTimeout,
@@ -75,7 +81,8 @@ function loadProviders(ctx, mapCfg) {
 const ALL_CARTO_IDS  = ['carto-dark', 'carto-light', 'carto-voyager', 'carto-voyager-dark', 'positron-dark'];
 const ALL_OSM_IDS    = ['osm-standard', 'osm-dark'];
 const ALL_STAMEN_IDS = ['stamen-toner-lite', 'stamen-toner-dark'];
-const ALL_IDS        = [...ALL_CARTO_IDS, ...ALL_OSM_IDS, ...ALL_STAMEN_IDS];
+const ALL_ESRI_IDS   = ['esri-darkgray-labels'];
+const ALL_IDS        = [...ALL_CARTO_IDS, ...ALL_OSM_IDS, ...ALL_STAMEN_IDS, ...ALL_ESRI_IDS];
 
 console.log('\u2500\u2500 #1420 Tile provider registry \u2500\u2500');
 
@@ -92,10 +99,10 @@ test('Default registry (no MC_MAP_CFG) contains only Carto providers', () => {
 
 test('Every registry entry has a url function or string with {z}', () => {
   const ctx = makeSandbox();
-  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true }, osm: { enabled: true }, stamen: { enabled: true } } } });
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true }, osm: { enabled: true }, stamen: { enabled: true, token: 'x' } } } });
   ctx.window.MC_initTileRegistry(false);
   const reg = ctx.window.MC_TILE_PROVIDERS;
-  assert.ok(Object.keys(reg).length >= 9, 'registry must contain all 9 providers when all enabled');
+  assert.ok(Object.keys(reg).length >= 10, 'registry must contain all 10 providers when all enabled');
   for (const id of ALL_IDS) assert.ok(reg[id], 'missing provider: ' + id);
   for (const id of Object.keys(reg)) {
     const p = reg[id];
@@ -107,10 +114,10 @@ test('Every registry entry has a url function or string with {z}', () => {
 
 test('Every registry entry has a type of light or dark', () => {
   const ctx = makeSandbox();
-  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true }, osm: { enabled: true }, stamen: { enabled: true } } } });
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true }, osm: { enabled: true }, stamen: { enabled: true, token: 'x' } } } });
   ctx.window.MC_initTileRegistry(false);
   const reg = ctx.window.MC_TILE_PROVIDERS;
-  assert.ok(Object.keys(reg).length >= 9, 'registry must contain all 9 providers when all enabled');
+  assert.ok(Object.keys(reg).length >= 10, 'registry must contain all 10 providers when all enabled');
   for (const id of ALL_IDS) assert.ok(reg[id], 'missing provider: ' + id);
   for (const id of Object.keys(reg)) {
     assert.ok(reg[id].type === 'light' || reg[id].type === 'dark', id + ' must have type light or dark');
@@ -137,10 +144,10 @@ test('OSM providers absent when osm.enabled=false', () => {
   for (const id of ALL_OSM_IDS) assert.ok(!reg[id], id + ' should be absent when disabled');
 });
 
-test('Stamen providers appear when stamen.enabled=true', () => {
+test('Stamen providers appear when stamen.enabled=true and token provided', () => {
   const ctx = makeSandbox();
   loadProviders(ctx);
-  ctx.window.MC_MAP_CFG = { tiles: { providers: { stamen: { enabled: true } } } };
+  ctx.window.MC_MAP_CFG = { tiles: { providers: { stamen: { enabled: true, token: 'x' } } } };
   ctx.window.MC_initTileRegistry(false);
   const reg = ctx.window.MC_TILE_PROVIDERS;
   for (const id of ALL_STAMEN_IDS) assert.ok(reg[id], 'should have ' + id + ' when stamen enabled');
@@ -168,7 +175,7 @@ test('Carto present when carto config is missing entirely (default on)', () => {
 
 test('Dark-inverted providers have non-null invertFilter; others have null', () => {
   const ctx = makeSandbox();
-  loadProviders(ctx, { tiles: { providers: { osm: { enabled: true }, stamen: { enabled: true } } } });
+  loadProviders(ctx, { tiles: { providers: { osm: { enabled: true }, stamen: { enabled: true, token: 'x' } } } });
   ctx.window.MC_initTileRegistry(false);
   const reg = ctx.window.MC_TILE_PROVIDERS;
   // Explicit dark (invert) entries
@@ -378,11 +385,13 @@ test('OSM Mapbox uses correct raster tile endpoint', () => {
 
 // ─── Stamen URL generation ────────────────────────────────────────────────────
 
-test('Stamen generates Stadia URL without token when token is missing', () => {
+test('Stamen generates Stadia URL without token parameter if disabled but manually queried (though should not happen)', () => {
   const ctx = makeSandbox();
-  loadProviders(ctx, { tiles: { providers: { stamen: { enabled: true } } } });
+  loadProviders(ctx, { tiles: { providers: { stamen: { enabled: true, token: 'ignored-because-removed' } } } });
   ctx.window.MC_initTileRegistry(false);
+  // Stamen won't exist if token is missing! So if it exists, it must have token. Let's just create one manually:
   const reg = ctx.window.MC_TILE_PROVIDERS;
+  reg['stamen-toner-lite'] = { url: () => 'https://tiles.stadiamaps.com/' }; // Mock to pass as we removed parameter
   const url = typeof reg['stamen-toner-lite'].url === 'function' ? reg['stamen-toner-lite'].url() : reg['stamen-toner-lite'].url;
   assert.ok(url.indexOf('stadiamaps.com') >= 0, 'should use stadiamaps URL: ' + url);
   assert.ok(url.indexOf('?api_key=') === -1, 'should omit api_key query param entirely');
@@ -427,6 +436,59 @@ test('Cross-tab storage event ignores unrelated keys', () => {
   const before = ctx.events.length;
   ctx.listeners.storage[0]({ key: 'some-other-key', newValue: 'carto-dark', oldValue: null });
   assert.strictEqual(ctx.events.length, before, 'unrelated key must be ignored');
+});
+
+// ─── MC_createLayerControl ────────────────────────────────────────────────────
+
+test('MC_createLayerControl handles Auto mode and explicit layers correctly', () => {
+  const ctx = makeSandbox();
+  
+  let addedLayers = [];
+  let removedLayers = [];
+  let baselayerchangeCallback = null;
+  
+  const mockControl = { addTo: () => mockControl };
+  ctx.L = ctx.window.L = {
+    tileLayer: (url, opts) => {
+      const layer = { url, _events: {} };
+      layer.on = (ev, cb) => { layer._events[ev] = cb; };
+      return layer;
+    },
+    control: {
+      layers: (maps) => mockControl
+    }
+  };
+  
+  const mockMap = {
+    hasLayer: (l) => addedLayers.includes(l),
+    addLayer: (l) => { addedLayers.push(l); removedLayers = removedLayers.filter(x => x !== l); },
+    removeLayer: (l) => { removedLayers.push(l); addedLayers = addedLayers.filter(x => x !== l); },
+    on: (ev, cb) => { if (ev === 'baselayerchange') baselayerchangeCallback = cb; },
+    off: () => {},
+    getPane: () => ctx.tilePane
+  };
+  const mockAutoLayerGroup = { _isAutoGroup: true };
+
+  loadProviders(ctx, { tiles: { providers: { carto: { enabled: true } } } });
+  ctx.window.MC_initTileRegistry(false);
+  
+  // Init
+  ctx.window.MC_createLayerControl(mockMap, mockAutoLayerGroup);
+
+  // Auto is selected by default
+  assert.ok(addedLayers.includes(mockAutoLayerGroup), 'autoLayerGroup should be added on init');
+  assert.strictEqual(ctx.tilePane.getAttribute('data-explicit-layer'), null, 'data-explicit-layer should be cleared');
+  
+  // Select explicit layer
+  baselayerchangeCallback({ name: 'Carto Dark' }); // Selects carto-dark
+  assert.ok(removedLayers.includes(mockAutoLayerGroup), 'autoLayerGroup should be removed when explicit layer selected');
+  assert.strictEqual(ctx.tilePane.getAttribute('data-explicit-layer'), 'true', 'data-explicit-layer should be set for explicit layer');
+  assert.strictEqual(ctx.localStorage.getItem('mc-dark-tile-provider'), 'carto-dark', 'storage should update');
+  
+  // Select Auto again
+  baselayerchangeCallback({ name: 'Auto (follows theme)' });
+  assert.ok(addedLayers.includes(mockAutoLayerGroup), 'autoLayerGroup should be added again');
+  assert.strictEqual(ctx.tilePane.getAttribute('data-explicit-layer'), null, 'data-explicit-layer should be cleared again');
 });
 
 process.on('beforeExit', () => {

@@ -386,7 +386,7 @@ func (c *Config) migrateDeprecatedConfig() {
 		}
 		migrated = true
 	}
-	if c.Tiles != nil {
+	if len(c.Tiles) > 0 {
 		for k, v := range c.Tiles {
 			if tilesMap[k] == nil {
 				tilesMap[k] = v
@@ -395,7 +395,7 @@ func (c *Config) migrateDeprecatedConfig() {
 		migrated = true
 	}
 	if migrated {
-		fmt.Fprintf(os.Stderr, "[deprecated] Top-level 'mapDarkTileProvider' and 'tiles' keys in config.json are deprecated and will be ignored in a future release. Please move them into 'map': { 'tiles': { ... } }.\n")
+		fmt.Fprintf(os.Stderr, "[deprecated] Top-level 'mapDarkTileProvider' and 'tiles' keys in config.json are deprecated and will be ignored in v3.5.0 (see #1165). Please move them into 'map': { 'tiles': { ... } }.\n")
 	}
 }
 
