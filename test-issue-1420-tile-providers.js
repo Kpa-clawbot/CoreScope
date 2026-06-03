@@ -447,11 +447,14 @@ test('MC_createLayerControl handles Auto mode and explicit layers correctly', ()
   let removedLayers = [];
   let baselayerchangeCallback = null;
   
+  let createdLayers = [];
+  
   const mockControl = { addTo: () => mockControl };
   ctx.L = ctx.window.L = {
     tileLayer: (url, opts) => {
       const layer = { url, _events: {} };
       layer.on = (ev, cb) => { layer._events[ev] = cb; };
+      createdLayers.push(layer);
       return layer;
     },
     control: {
@@ -479,11 +482,22 @@ test('MC_createLayerControl handles Auto mode and explicit layers correctly', ()
   assert.ok(addedLayers.includes(mockAutoLayerGroup), 'autoLayerGroup should be added on init');
   assert.strictEqual(ctx.tilePane.getAttribute('data-explicit-layer'), null, 'data-explicit-layer should be cleared');
   
-  // Select explicit layer
-  baselayerchangeCallback({ name: 'Carto Dark' }); // Selects carto-dark
+  // Select explicit layer with an invert filter
+  baselayerchangeCallback({ name: 'Carto Voyager (CSS-Inverted Dark)' }); // Selects carto-voyager-dark
   assert.ok(removedLayers.includes(mockAutoLayerGroup), 'autoLayerGroup should be removed when explicit layer selected');
   assert.strictEqual(ctx.tilePane.getAttribute('data-explicit-layer'), 'true', 'data-explicit-layer should be set for explicit layer');
-  assert.strictEqual(ctx.localStorage.getItem('mc-dark-tile-provider'), 'carto-dark', 'storage should update');
+  assert.strictEqual(ctx.localStorage.getItem('mc-dark-tile-provider'), 'carto-voyager-dark', 'storage should update');
+  
+  // Simulate Leaflet adding the layer and assert the CSS filter
+  const invertedLayer = createdLayers.find(l => l._events && l._events['add'] && String(l._events['add']).indexOf('p.invertFilter') > -1);
+  if (invertedLayer) {
+    invertedLayer._events['add']();
+    assert.ok(ctx.tilePane.style.filter.indexOf('invert(') >= 0, 'pane.style.filter should be set to invertFilter on explicit layer add');
+    invertedLayer._events['remove']();
+    assert.strictEqual(ctx.tilePane.style.filter, '', 'pane.style.filter should be cleared on explicit layer remove');
+  } else {
+    assert.fail('Could not find inverted tile layer to test CSS filter');
+  }
   
   // Select Auto again
   const eventsBeforeAuto = ctx.events.length;
