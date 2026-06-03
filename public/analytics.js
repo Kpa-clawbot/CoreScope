@@ -2006,7 +2006,7 @@
           color: isEnd ? (i === 0 ? statusGreen() : statusRed()) : statusYellow(),
           fillColor: isEnd ? (i === 0 ? statusGreen() : statusRed()) : statusYellow(),
           fillOpacity: 0.9, weight: 2
-        }).bindTooltip(n.name, { permanent: false }).addTo(map);
+        }).bindTooltip(esc(n.name), { permanent: false }).addTo(map);
       });
 
       L.polyline(latlngs, { color: statusYellow(), weight: 3, dashArray: '8,6', opacity: 0.8 }).addTo(map);
@@ -3359,7 +3359,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
           else if (obs.current_noise_floor >= -100) nfClass = 'rf-nf-warning';
         }
 
-        return `<div class="rf-cell${isSelected ? ' rf-cell-selected' : ''}" data-observer="${obs.observer_id}" tabindex="0" role="button" aria-label="Observer ${name}, noise floor ${nf} dBm">
+        return `<div class="rf-cell${isSelected ? ' rf-cell-selected' : ''}" data-observer="${obs.observer_id}" tabindex="0" role="button" aria-label="Observer ${esc(name)}, noise floor ${nf} dBm">
           <div class="rf-cell-header">
             <span class="rf-cell-name">${esc(name)}</span>
             <span class="rf-cell-nf ${nfClass}">${nf} dBm</span>

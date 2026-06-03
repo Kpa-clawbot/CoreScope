@@ -21,9 +21,14 @@
   let controlsCollapsed = false;
 
   // Safe escape — falls back to identity if app.js hasn't loaded yet.
-  // Note: `esc` is not a true global; some IIFEs define it locally. Reference
-  // through globalThis so the optional lookup is safe under `no-undef`.
-  const safeEsc = (typeof globalThis.esc === 'function') ? globalThis.esc : function (s) { return s; };
+  // Escape untrusted strings (mesh-advertised node names) before HTML interpolation
+  // in map popups. The real global helper is `escapeHtml` (app.js); the previous
+  // `globalThis.esc` lookup was always undefined, making this a no-op → stored XSS
+  // via adv_name (#1536). Fall back to a real escaper, never identity.
+  // 5-char OWASP set — including ' for single-quoted attribute safety.
+  const safeEsc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) {
+    return s == null ? '' : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  };
 
   // Roles loaded from shared roles.js (ROLE_STYLE, ROLE_LABELS, ROLE_COLORS globals)
 

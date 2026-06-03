@@ -817,7 +817,7 @@
           iconAnchor: [(built.size + 4)/2, (built.size + 4)/2]
         });
         var mk = L.marker([p.lat, p.lon], { icon: icon }).addTo(layer);
-        mk.bindTooltip('hop ' + (i+1) + ' · ' + (p.name || '?'), { direction: 'top', offset: [0, -10] });
+        mk.bindTooltip('hop ' + (i+1) + ' · ' + escapeHtml(p.name || '?'), { direction: 'top', offset: [0, -10] });
         sidebar._isoMarkers.push(mk);
       });
       // Fit bounds to selected path. Defer + invalidateSize for mobile,
@@ -1004,7 +1004,7 @@
             iconSize: [18, 18], iconAnchor: [9, 9]
           });
           var mk = L.marker([n.lat, n.lon], { icon: icon }).addTo(layer);
-          mk.bindTooltip(n.name || pre, { direction: 'top', offset: [0, -8] });
+          mk.bindTooltip(escapeHtml(n.name || pre), { direction: 'top', offset: [0, -8] });
           sidebar._unionMarkers.push(mk);
         });
       } else {
