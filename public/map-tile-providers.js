@@ -157,8 +157,8 @@
     try { pane = document.querySelector('.leaflet-tile-pane'); } catch (_) { pane = null; }
     if (!pane || !pane.style) return;
     
-    // NEW: Bail out if a manual layer has claimed control of the filter
-    if (pane.getAttribute('data-explicit-layer') === 'true') return;
+    // Bail out if a manual layer has claimed control of the filter (with test-env safety check)
+    if (typeof pane.getAttribute === 'function' && pane.getAttribute('data-explicit-layer') === 'true') return;
 
     var isDark = _isDarkEffective();
     var id = isDark ? getActiveId() : getActiveLightId();
