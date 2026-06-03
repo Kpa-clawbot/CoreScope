@@ -796,7 +796,16 @@ window.connectWS = connectWS;
    double-quoted AND single-quoted attribute contexts (e.g. the
    data-conflict='${escapeHtml(JSON.stringify(...))}' attr in
    hop-display.js, where JSON containing a single quote would
-   otherwise break out of the attribute). Fixes #1536. */
+   otherwise break out of the attribute). Fixes #1536.
+
+   CANONICAL ESCAPE for HTML sinks that interpolate node-controlled or
+   MQTT-controlled fields (name, adv_name, observer, sender, channel,
+   pubkey, body, …). Enforced at PR-creation time by:
+     - scripts/check-xss-sinks.sh                            (local mirror)
+     - ~/.openclaw/skills/pr-preflight/scripts/check-xss-sinks.sh  (canonical)
+     - test-preflight-xss-gate.js                            (CI gate)
+   See also: escapeAttr (public/home.js, public/path-inspector.js) for
+   attribute-only contexts. */
 function escapeHtml(s) {
   if (s == null) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');

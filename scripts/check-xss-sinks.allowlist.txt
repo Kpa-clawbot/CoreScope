@@ -1,0 +1,64 @@
+# Node-controlled identifiers — when interpolated into an HTML sink in
+# public/**/*.{js,html}, they MUST be wrapped in escapeHtml() / escapeAttr()
+# / safeEsc() (or the diff must justify an opt-out per check-xss-sinks.sh).
+#
+# Derived from PR #1537 (10 sinks) + post-#1537 audit (TRACE-1, OBS-1, ANL-1).
+# One identifier per line. `#` starts a comment. Blank lines OK.
+#
+# Extend whenever a new node/MQTT-controlled field surfaces in an audit.
+
+# advert / identity
+adv_name
+name
+observer
+observer_name
+sender
+from_node
+channel
+channel_name
+
+# device metadata
+model
+firmware
+client_version
+radio
+iata
+
+# hop/route resolution
+hopNames
+nodeLabel
+obsName
+n.name
+o.name
+obs.name
+
+# keys / regions
+public_key
+pubkey
+area_key
+region_name
+
+# message payloads
+text
+body
+message
+preview
+
+# routing hash from URL fragment
+hash
+urlHash
+
+# additional node/MQTT-controlled fields (PR #1543 round-2 additions —
+# cross-referenced with cmd/ingestor/main.go extractObserverMeta + MQTT
+# topic/origin/target/payload propagation paths).
+firmware_version
+clientVersion
+payload
+target
+origin
+topic
+display_name
+displayName
+nodeName
+alias
+nickname

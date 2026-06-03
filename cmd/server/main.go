@@ -458,6 +458,16 @@ func spaHandler(root string, fs http.Handler) http.Handler {
 	log.Printf("[static] cache-bust value: %s", bustValue)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Defense-in-depth: explicitly reject path-traversal attempts before
+		// we touch the filesystem. gorilla/mux + http.FileServer already clean
+		// most of these, but we don't want a future SkipClean(true) (or a
+		// different router) to silently expose the FS. See
+		// audit-input-vulns-20260603 (LOW — SPA static handler depends on
+		// default mux path-cleaning).
+		if !isSafeStaticPath(r.URL.Path, r.URL.RawPath) {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 		// Serve pre-processed index.html for root and /index.html
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -480,4 +490,30 @@ func spaHandler(root string, fs http.Handler) http.Handler {
 		}
 		fs.ServeHTTP(w, r)
 	})
+}
+
+// isSafeStaticPath rejects request paths that contain traversal sequences
+// or backslashes — defense-in-depth for the SPA static handler so a future
+// router with SkipClean(true) cannot expose the filesystem. Empty input is
+// safe (root handled earlier).
+//
+// urlPath is the decoded path (r.URL.Path); rawPath is the raw, possibly
+// percent-encoded path (r.URL.RawPath) used to catch encoded `..` / `\`.
+func isSafeStaticPath(urlPath, rawPath string) bool {
+	for _, p := range []string{urlPath, rawPath} {
+		if p == "" {
+			continue
+		}
+		// Lowercase for case-insensitive percent-encoding checks.
+		lp := strings.ToLower(p)
+		// Block "..", any URL-encoded "%2e%2e" sequence, and backslashes
+		// (which Windows-style traversal exploits convert to "\").
+		if strings.Contains(p, "..") ||
+			strings.Contains(lp, "%2e%2e") ||
+			strings.Contains(p, "\\") ||
+			strings.Contains(lp, "%5c") {
+			return false
+		}
+	}
+	return true
 }

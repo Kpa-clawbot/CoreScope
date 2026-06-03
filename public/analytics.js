@@ -1514,14 +1514,53 @@
   }
   function hideMatrixTip() { if (_matrixTip) _matrixTip.style.display = 'none'; }
 
+  // SECURITY (ANL-1, PR #1539 round 2): rebuild tooltip body via DOM APIs.
+  // The previous round-1 fix used `tip.textContent = td.dataset.tip`, which
+  // defeated the mutation-XSS but also broke the rendered tooltip — the
+  // payload had been a structured HTML string from hashTooltipHtml(), so
+  // users saw literal `<div class="...">…</div>` text. The correct fix is
+  // to stop carrying HTML through the dataset round-trip entirely: each
+  // tooltip field rides as its own data-tip-* attribute (entity-decoded by
+  // the browser on read = plain text), and we materialize the three styled
+  // child <div>s via createElement + textContent. No innerHTML on any
+  // node-controlled field path.
+  function buildMatrixTipChildren(tip, td) {
+    while (tip.firstChild) tip.removeChild(tip.firstChild);
+    const ds = td.dataset || {};
+    if (ds.tipHex) {
+      const h = document.createElement('div');
+      h.className = 'hash-matrix-tooltip-hex';
+      h.textContent = ds.tipHex;
+      tip.appendChild(h);
+    }
+    if (ds.tipStatus) {
+      const s = document.createElement('div');
+      s.className = 'hash-matrix-tooltip-status';
+      s.textContent = ds.tipStatus;
+      tip.appendChild(s);
+    }
+    if (ds.tipLines) {
+      const wrap = document.createElement('div');
+      wrap.className = 'hash-matrix-tooltip-nodes';
+      const lines = ds.tipLines.split('\u001f');
+      for (let i = 0; i < lines.length; i++) {
+        const row = document.createElement('div');
+        row.style.fontSize = '11px';
+        row.textContent = lines[i];
+        wrap.appendChild(row);
+      }
+      tip.appendChild(wrap);
+    }
+  }
+
   function initMatrixTooltip(el) {
     if (el._matrixTipInit) return;
     el._matrixTipInit = true;
     el.addEventListener('mouseover', e => {
-      const td = e.target.closest('td[data-tip]');
+      const td = e.target.closest('td[data-tip-hex]');
       if (!td) return;
       const tip = getMatrixTip();
-      tip.innerHTML = td.dataset.tip;
+      buildMatrixTipChildren(tip, td);
       tip.style.display = 'block';
     });
     el.addEventListener('mousemove', e => {
@@ -1531,7 +1570,7 @@
       _matrixTip.style.top = Math.min(y, window.innerHeight - _matrixTip.offsetHeight - 8) + 'px';
     });
     el.addEventListener('mouseout', e => {
-      if (e.target.closest('td[data-tip]') && !e.relatedTarget?.closest('td[data-tip]')) hideMatrixTip();
+      if (e.target.closest('td[data-tip-hex]') && !e.relatedTarget?.closest('td[data-tip-hex]')) hideMatrixTip();
     });
     el.addEventListener('mouseleave', hideMatrixTip);
   }
@@ -1595,14 +1634,32 @@
     return { cls: 'hash-cell-collision', bg: `background:rgb(${Math.round(220+35*t)},${Math.round(120*(1-t))},30);` };
   }
 
-  function hashCellTd(hex, cellSize, cls, bg, count, tipHtml, fontWeight) {
-    return `<td class="hash-cell ${cls}${count ? ' hash-active' : ''}" data-hex="${hex}" data-tip="${tipHtml.replace(/"/g,'&quot;')}" style="width:${cellSize}px;height:${cellSize}px;text-align:center;${bg}border:1px solid var(--border);cursor:${count ? 'pointer' : 'default'};font-size:11px;font-weight:${fontWeight}">${hex}</td>`;
+  // hashCellTd — emits a hash-matrix <td>. Tooltip data rides as separate
+  // data-tip-* attributes (plain text per field); buildMatrixTipChildren()
+  // materializes the styled DOM on mouseover. NEVER carry HTML through
+  // data-tip-* — see ANL-1 (PR #1539).
+  function hashCellTd(hex, cellSize, cls, bg, count, tipSpec, fontWeight) {
+    // tipSpec: { hex: string, status?: string, lines?: string[] }
+    const spec = tipSpec || {};
+    const hexAttr = ' data-tip-hex="' + esc(spec.hex || '') + '"';
+    const statusAttr = spec.status
+      ? ' data-tip-status="' + esc(spec.status) + '"'
+      : '';
+    // Join row lines with U+001F (Unit Separator) — a control char that
+    // never appears in node names, so we can split safely on the read side.
+    const linesAttr = (spec.lines && spec.lines.length)
+      ? ' data-tip-lines="' + esc(spec.lines.join('\u001f')) + '"'
+      : '';
+    return `<td class="hash-cell ${cls}${count ? ' hash-active' : ''}" data-hex="${hex}"${hexAttr}${statusAttr}${linesAttr} style="width:${cellSize}px;height:${cellSize}px;text-align:center;${bg}border:1px solid var(--border);cursor:${count ? 'pointer' : 'default'};font-size:11px;font-weight:${fontWeight}">${hex}</td>`;
   }
 
-  function hashTooltipHtml(hexLabel, statusText, nodesHtml) {
-    let html = `<div class="hash-matrix-tooltip-hex">${hexLabel}</div><div class="hash-matrix-tooltip-status">${statusText}</div>`;
-    if (nodesHtml) html += `<div class="hash-matrix-tooltip-nodes">${nodesHtml}</div>`;
-    return html;
+  // hashTooltipSpec — returns a plain-data tooltip descriptor consumed by
+  // hashCellTd and rendered by buildMatrixTipChildren. Plain text only;
+  // no HTML, no markup. `lines` is an array of pre-formatted row strings.
+  function hashTooltipSpec(hexLabel, statusText, lines) {
+    const spec = { hex: hexLabel, status: statusText };
+    if (lines && lines.length) spec.lines = lines;
+    return spec;
   }
 
   function renderHashMatrixPanel(el, statCardsHtml, cellRendererFn, detailMaxWidth, legendLabels, clickHandlerFn) {
@@ -1661,12 +1718,13 @@
           const isCollision = count >= 2 && repeaterCount >= 2;
           const isPossible = count >= 2 && !isCollision;
           const { cls, bg } = classifyHashCell(count, isCollision, isPossible);
-          const nodeLabel = m => `<div style="font-size:11px">${esc(m.name||m.public_key.slice(0,12))}${!m.role ? ' <span style="opacity:0.7">(unknown role)</span>' : ''}</div>`;
-          const nodesPreview = nodes.slice(0,5).map(nodeLabel).join('') + (nodes.length > 5 ? `<div class="hash-matrix-tooltip-status">+${nodes.length-5} more</div>` : '');
-          const tip = count === 0 ? hashTooltipHtml(`0x${hex}`, 'Available')
-            : count === 1 ? hashTooltipHtml(`0x${hex}`, 'One node — no collision', nodeLabel(nodes[0]))
-            : isPossible ? hashTooltipHtml(`0x${hex}`, `${count} nodes — POSSIBLE CONFLICT`, nodesPreview)
-            : hashTooltipHtml(`0x${hex}`, `${count} nodes — COLLISION`, nodesPreview);
+          const nodeLabel = m => (m.name || m.public_key.slice(0,12)) + (!m.role ? ' (unknown role)' : '');
+          const previewLines = nodes.slice(0,5).map(nodeLabel);
+          if (nodes.length > 5) previewLines.push(`+${nodes.length-5} more`);
+          const tip = count === 0 ? hashTooltipSpec(`0x${hex}`, 'Available')
+            : count === 1 ? hashTooltipSpec(`0x${hex}`, 'One node — no collision', [nodeLabel(nodes[0])])
+            : isPossible ? hashTooltipSpec(`0x${hex}`, `${count} nodes — POSSIBLE CONFLICT`, previewLines)
+            : hashTooltipSpec(`0x${hex}`, `${count} nodes — COLLISION`, previewLines);
           return hashCellTd(hex, cs, cls, bg, count, tip, count >= 2 ? '700' : '400');
         },
         400,
@@ -1706,14 +1764,14 @@
           const hasConfirmed = overlapping.some(ns => ns.filter(n => n.role === 'repeater').length >= 2);
           const hasPossible = !hasConfirmed && overlapping.some(ns => ns.length >= 2);
           const { cls, bg } = classifyHashCell(maxCol > 0 ? maxCol : nodeCount === 0 ? 0 : 1, hasConfirmed, hasPossible);
-          const nodeLabel2 = m => esc(m.name||m.public_key.slice(0,8)) + (!m.role ? ' (?)' : '');
+          const nodeLabel2 = m => (m.name || m.public_key.slice(0,8)) + (!m.role ? ' (?)' : '');
           const tip = nodeCount === 0
-            ? hashTooltipHtml(`0x${hex}__`, 'No nodes in this group')
+            ? hashTooltipSpec(`0x${hex}__`, 'No nodes in this group')
             : (info.collision_count || 0) === 0
-              ? hashTooltipHtml(`0x${hex}__`, `${nodeCount} node${nodeCount>1?'s':''} — no 2-byte collisions`)
-              : hashTooltipHtml(`0x${hex}__`,
+              ? hashTooltipSpec(`0x${hex}__`, `${nodeCount} node${nodeCount>1?'s':''} — no 2-byte collisions`)
+              : hashTooltipSpec(`0x${hex}__`,
                   hasConfirmed ? (info.collision_count||0) + ' collision' + ((info.collision_count||0)>1?'s':'') : 'Possible conflict',
-                  Object.entries(info.two_byte_map||{}).filter(([,v])=>v.length>1).slice(0,4).map(([p,ns])=>`<div style="font-size:11px;padding:1px 0"><span style="color:${hasConfirmed?'var(--status-red)':'var(--status-yellow)'};font-family:var(--mono);font-weight:700">${p}</span> — ${ns.map(nodeLabel2).join(', ')}</div>`).join(''));
+                  Object.entries(info.two_byte_map||{}).filter(([,v])=>v.length>1).slice(0,4).map(([p,ns])=>`${p} — ${ns.map(nodeLabel2).join(', ')}`));
           return hashCellTd(hex, cs, cls, bg, nodeCount, tip, maxCol > 0 ? '700' : '400');
         },
         420,

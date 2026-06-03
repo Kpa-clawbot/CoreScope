@@ -127,8 +127,15 @@ window.ObserverDetailNaiveBanner = {
       });
       renderDetail(obs, analytics, obsSkew);
     } catch (e) {
-      document.getElementById('obsDetailContent').innerHTML =
-        '<div class="text-muted" style="padding:40px">Error: ' + e.message + '</div>';
+      // SECURITY (OBS-2, PR #1539): use textContent for error messages.
+      // Error.message is JS-controlled and shouldn't normally carry attacker
+      // strings, but textContent is a one-line defense against an upstream
+      // bug that surfaces user-supplied input via thrown errors.
+      const errEl = document.getElementById('obsDetailContent');
+      if (errEl) {
+        errEl.innerHTML = '<div class="text-muted" style="padding:40px"></div>';
+        errEl.firstChild.textContent = 'Error: ' + e.message;
+      }
     }
   }
 
@@ -139,11 +146,22 @@ window.ObserverDetailNaiveBanner = {
     const title = document.getElementById('obsTitle');
     if (title) title.textContent = obs.name || obs.id.substring(0, 16) + '…';
 
-    // Parse radio string
+    // SECURITY (OBS-1, post-#1537 sweep): every MQTT-controlled string from
+    // the observer's `status` topic (extractObserverMeta) must be escaped at
+    // the render sink. Use the global 5-char OWASP escapeHtml from app.js.
+    // Hard-fail if the helper is missing — never identity-passthrough
+    // (see #1537: map.js safeEsc identity-fallback bug).
+    if (typeof escapeHtml !== 'function') {
+      throw new Error('observer-detail.js: global escapeHtml missing — refusing to render unescaped MQTT-controlled input');
+    }
+
+    // Parse radio string. obs.radio is observer-published — split parts must
+    // be escaped before being injected into HTML.
     let radioHtml = '—';
     if (obs.radio) {
-      const rp = obs.radio.split(',');
-      radioHtml = rp[0] + ' MHz · SF' + (rp[2] || '?') + ' · BW' + (rp[1] || '?') + ' · CR' + (rp[3] || '?');
+      const rp = String(obs.radio).split(',');
+      radioHtml = escapeHtml(rp[0] || '?') + ' MHz · SF' + escapeHtml(rp[2] || '?')
+        + ' · BW' + escapeHtml(rp[1] || '?') + ' · CR' + escapeHtml(rp[3] || '?');
     }
 
     // Health status
@@ -160,19 +178,19 @@ window.ObserverDetailNaiveBanner = {
         </div>
         <div class="stat-card">
           <div class="stat-label">Region</div>
-          <div class="stat-value">${obs.iata ? '<span class="badge-region">' + obs.iata + '</span>' : '—'}</div>
+          <div class="stat-value">${obs.iata ? '<span class="badge-region">' + escapeHtml(obs.iata) + '</span>' : '—'}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Model</div>
-          <div class="stat-value">${obs.model || '—'}</div>
+          <div class="stat-value">${escapeHtml(obs.model || '—')}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Firmware</div>
-          <div class="stat-value" style="font-size:0.8em;word-break:break-all">${obs.firmware || '—'}</div>
+          <div class="stat-value" style="font-size:0.8em;word-break:break-all">${escapeHtml(obs.firmware || '—')}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Client</div>
-          <div class="stat-value" style="font-size:0.8em;word-break:break-all">${obs.client_version || '—'}</div>
+          <div class="stat-value" style="font-size:0.8em;word-break:break-all">${escapeHtml(obs.client_version || '—')}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Radio</div>
@@ -180,15 +198,22 @@ window.ObserverDetailNaiveBanner = {
         </div>
         <div class="stat-card">
           <div class="stat-label">Battery</div>
-          <div class="stat-value">${obs.battery_mv ? obs.battery_mv + ' mV' : '—'}</div>
+          <!-- SECURITY (OBS-2, PR #1539): Number() coercion is defense-in-depth.
+               Backend extractObserverMeta types this *int (cmd/ingestor), so a
+               malicious string SHOULD never reach here. If the API contract
+               loosens in the future (e.g. interface{}), Number() strips any
+               XSS payload to NaN, which renders as '—'. Same for uptime_secs
+               and noise_floor below. Do NOT remove without auditing the
+               backend type contract. -->
+          <div class="stat-value">${Number.isFinite(Number(obs.battery_mv)) && Number(obs.battery_mv) ? Number(obs.battery_mv) + ' mV' : '—'}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Uptime</div>
-          <div class="stat-value">${formatDuration(obs.uptime_secs)}</div>
+          <div class="stat-value">${formatDuration(Number.isFinite(Number(obs.uptime_secs)) ? Number(obs.uptime_secs) : 0)}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Noise Floor</div>
-          <div class="stat-value">${obs.noise_floor != null ? obs.noise_floor + ' dBm' : '—'}</div>
+          <div class="stat-value">${obs.noise_floor != null && Number.isFinite(Number(obs.noise_floor)) ? Number(obs.noise_floor) + ' dBm' : '—'}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Total Packets</div>
@@ -212,7 +237,7 @@ window.ObserverDetailNaiveBanner = {
         </div>
       </div>
       <div class="mono" style="font-size:0.75em;color:var(--text-muted);margin-bottom:20px;word-break:break-all">
-        ID: ${obs.id}
+        ID: ${escapeHtml(obs.id)}
       </div>
       ${obsSkew && obsSkew.samples > 0 ? `
       <div class="node-full-card skew-detail-section" style="margin-bottom:20px;padding:12px">
@@ -376,7 +401,7 @@ window.ObserverDetailNaiveBanner = {
         const decoded = typeof p.decoded_json === 'string' ? JSON.parse(p.decoded_json) : (p.decoded_json || {});
         const hops = typeof p.path_json === 'string' ? JSON.parse(p.path_json) : (p.path_json || []);
         const typeName = PAYLOAD_LABELS[p.payload_type] || 'Type ' + p.payload_type;
-        return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/packets/${p.hash || p.id}" onclick="location.hash='#/packets/${p.hash || p.id}'">
+        return `<tr style="cursor:pointer" tabindex="0" role="row" data-action="navigate" data-value="#/packets/${p.hash || p.id}">
           <td>${timeAgo(p.timestamp)}</td>
           <td>${typeName}</td>
           <td class="mono" style="font-size:0.85em">${(p.hash || '').substring(0, 10)}</td>
@@ -386,6 +411,16 @@ window.ObserverDetailNaiveBanner = {
         </tr>`;
       }).join('')}</tbody>
     </table>`;
+
+    // SECURITY (PR #1539, djb finding): inline onclick= is a CSP blocker and
+    // an XSS-amplification path if data ever sneaks in. Replaced with a
+    // single delegated click listener that reads data-value. The keydown
+    // listener below already followed this pattern for #209.
+    el.addEventListener('click', function (e) {
+      var row = e.target.closest('tr[data-action="navigate"]');
+      if (!row) return;
+      location.hash = row.dataset.value;
+    });
 
     // #209 — Keyboard accessibility for recent packet rows
     el.addEventListener('keydown', function (e) {

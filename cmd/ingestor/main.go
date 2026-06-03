@@ -528,7 +528,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 				log.Printf("MQTT [%s] metrics insert error: %v", tag, err)
 			}
 		}
-		log.Printf("MQTT [%s] status: %s (%s)", tag, firstNonEmpty(name, observerID), iata)
+		log.Print(formatStatusLog(tag, firstNonEmpty(name, observerID), iata))
 		return
 	}
 
@@ -657,7 +657,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 					truncPK = truncPK[:16]
 				}
 				log.Printf("MQTT [%s] DROPPED invalid signature: hash=%s name=%s observer=%s pubkey=%s",
-					tag, hash, decoded.Payload.Name, firstNonEmpty(mqttMsg.Origin, observerID), truncPK)
+					tag, hash, sanitizeLogString(decoded.Payload.Name), sanitizeLogString(firstNonEmpty(mqttMsg.Origin, observerID)), truncPK)
 				store.InsertDroppedPacket(&DroppedPacket{
 					Hash:         hash,
 					RawHex:       rawHex,
@@ -687,7 +687,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 					truncPK = truncPK[:16]
 				}
 				log.Printf("MQTT [%s] foreign advert: node=%s name=%s lat=%.4f lon=%.4f observer=%s",
-					tag, truncPK, decoded.Payload.Name, lat, lon, firstNonEmpty(mqttMsg.Origin, observerID))
+					tag, truncPK, sanitizeLogString(decoded.Payload.Name), lat, lon, sanitizeLogString(firstNonEmpty(mqttMsg.Origin, observerID)))
 			}
 			pktData := BuildPacketData(mqttMsg, decoded, observerID, region, regionKeys)
 			pktData.Foreign = foreign
@@ -851,7 +851,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 		// used for claiming/health lookups. The node will get a proper entry when it
 		// sends an advert. See issue #665.
 
-		log.Printf("MQTT [%s] channel message: ch%s from %s", tag, channelIdx, firstNonEmpty(sender, "unknown"))
+		log.Print(formatChannelMessageLog(tag, channelIdx, firstNonEmpty(sender, "unknown")))
 		return
 	}
 
@@ -937,7 +937,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 			log.Printf("MQTT [%s] DM insert error: %v", tag, err)
 		}
 
-		log.Printf("MQTT [%s] direct message from %s", tag, firstNonEmpty(sender, "unknown"))
+		log.Print(formatDirectMessageLog(tag, firstNonEmpty(sender, "unknown")))
 		return
 	}
 }

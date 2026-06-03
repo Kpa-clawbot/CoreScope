@@ -891,15 +891,16 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("order") == "asc" {
 			order = "ASC"
 		}
+		lim := queryLimit(r, 50, 500)
 		var result *PacketResult
 		var err error
 		if s.store != nil {
 			result = s.store.QueryMultiNodePackets(cleaned,
-				queryInt(r, "limit", 50), queryInt(r, "offset", 0),
+				lim, queryInt(r, "offset", 0),
 				order, r.URL.Query().Get("since"), r.URL.Query().Get("until"))
 		} else {
 			result, err = s.db.QueryMultiNodePackets(cleaned,
-				queryInt(r, "limit", 50), queryInt(r, "offset", 0),
+				lim, queryInt(r, "offset", 0),
 				order, r.URL.Query().Get("since"), r.URL.Query().Get("until"))
 		}
 		if err != nil {
@@ -909,14 +910,14 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, PacketListResponse{
 			Packets: mapSliceToTransmissions(result.Packets),
 			Total:   result.Total,
-			Limit:   queryInt(r, "limit", 50),
+			Limit:   lim,
 			Offset:  queryInt(r, "offset", 0),
 		})
 		return
 	}
 
 	q := PacketQuery{
-		Limit:    queryInt(r, "limit", 50),
+		Limit:    queryLimit(r, 50, 500),
 		Offset:   queryInt(r, "offset", 0),
 		Observer: r.URL.Query().Get("observer"),
 		Hash:     r.URL.Query().Get("hash"),
@@ -1210,7 +1211,7 @@ func (s *Server) handlePostPacket(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	nodes, total, counts, err := s.db.GetNodes(
-		queryInt(r, "limit", 50),
+		queryLimit(r, 50, 500),
 		queryInt(r, "offset", 0),
 		q.Get("role"), q.Get("search"), q.Get("before"),
 		q.Get("lastHeard"), q.Get("sortBy"), q.Get("region"),
@@ -1451,10 +1452,7 @@ func (s *Server) handleNodeHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBulkHealth(w http.ResponseWriter, r *http.Request) {
-	limit := queryInt(r, "limit", 50)
-	if limit > 200 {
-		limit = 200
-	}
+	limit := queryLimit(r, 50, 200)
 
 	if s.store != nil {
 		region := r.URL.Query().Get("region")
@@ -2049,7 +2047,7 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 			minLen = 2
 		}
 		maxLen := queryInt(r, "maxLen", 8)
-		limit := queryInt(r, "limit", 100)
+		limit := queryLimit(r, 100, 200)
 		data := s.store.GetAnalyticsSubpaths(region, minLen, maxLen, limit)
 		if s.cfg != nil && len(s.cfg.NodeBlacklist) > 0 {
 			data = s.filterBlacklistedFromSubpaths(data)
@@ -2092,6 +2090,12 @@ func (s *Server) handleAnalyticsSubpathsBulk(w http.ResponseWriter, r *http.Requ
 		if err1 != nil || err2 != nil || err3 != nil || mn < 2 || mx < mn || lim < 1 {
 			writeJSON(w, ErrorResp{Error: "invalid group: " + g})
 			return
+		}
+		// Uniform clamp per audit-input-vulns-20260603 (MEDIUM): match the
+		// /api/analytics/subpaths ceiling so a single bulk request can't
+		// allocate more than the per-group endpoint allows.
+		if lim > 200 {
+			lim = 200
 		}
 		groups = append(groups, subpathGroup{mn, mx, lim})
 	}
@@ -2333,7 +2337,7 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 	hash := mux.Vars(r)["hash"]
-	limit := queryInt(r, "limit", 100)
+	limit := queryLimit(r, 100, 500)
 	offset := queryInt(r, "offset", 0)
 	region := r.URL.Query().Get("region")
 	// Prefer DB for full history (in-memory store has limited retention)
@@ -3171,12 +3175,7 @@ func (s *Server) filterBlacklistedFromSubpaths(data map[string]interface{}) map[
 
 // handleDroppedPackets returns recently dropped packets for investigation.
 func (s *Server) handleDroppedPackets(w http.ResponseWriter, r *http.Request) {
-	limit := 100
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
+	limit := queryLimit(r, 100, 500)
 	observerID := r.URL.Query().Get("observer")
 	nodePubkey := r.URL.Query().Get("pubkey")
 

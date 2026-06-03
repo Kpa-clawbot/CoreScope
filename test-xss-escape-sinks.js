@@ -334,6 +334,237 @@ test('hop-display.js data-conflict attribute: single-quote payload escaped', () 
 });
 
 // =========================================================================
+// D. XSS sweep R2 — TRACE-1 / OBS-1 / ANL-1 (post-#1537 audit findings)
+// =========================================================================
+console.log('\n=== D. XSS R2: TRACE-1 / OBS-1 / ANL-1 ===');
+
+// ----- TRACE-1: traces.js <input value="${urlHash}"> -----
+// urlHash comes from URL fragment, interpolated raw → URL-fragment XSS.
+test('TRACE-1: traces.js urlHash interpolation escapes URL-fragment payload', () => {
+  const src = fs.readFileSync('public/traces.js', 'utf8');
+  const m = src.match(/(<input type="text" id="traceHashInput"[^`]*?value="\$\{[^}]+\}"[^`]*?>)/);
+  assert.ok(m, 'TRACE-1: <input value="${urlHash}"> template not found in traces.js');
+  const tpl = m[1];
+  const fn = new Function('urlHash', 'escapeHtml',
+    'return `' + tpl + '`;');
+  const html = fn(TAG_PAYLOAD + ATTR_PAYLOAD, escapeHtml);
+  assertNoXss(html, 'TRACE-1 traces.js urlHash input');
+});
+
+// ----- OBS-1: observer-detail.js obs.* fields → renderDetail innerHTML -----
+function extractObsStatValue(field) {
+  const src = fs.readFileSync('public/observer-detail.js', 'utf8');
+  const labelMap = { model: 'Model', firmware: 'Firmware', client_version: 'Client', iata: 'Region' };
+  const label = labelMap[field];
+  const re = new RegExp(
+    '<div class="stat-label">' + label + '<\\/div>[\\s\\S]{0,250}?' +
+    '<div class="stat-value"[^>]*>(\\$\\{[^}]*obs\\.' + field + '[^}]*\\})<\\/div>'
+  );
+  const m = src.match(re);
+  if (!m) throw new Error('OBS-1: stat-value for ' + field + ' not found');
+  return m[1];
+}
+
+test('OBS-1: observer-detail.js obs.model is escaped at render sink', () => {
+  const expr = extractObsStatValue('model');
+  const tpl = '<div>' + expr + '</div>';
+  const fn = new Function('obs', 'escapeHtml', 'return `' + tpl + '`;');
+  const html = fn({ model: TAG_PAYLOAD + ATTR_PAYLOAD }, escapeHtml);
+  assertNoXss(html, 'OBS-1 obs.model');
+});
+
+test('OBS-1: observer-detail.js obs.firmware is escaped at render sink', () => {
+  const expr = extractObsStatValue('firmware');
+  const tpl = '<div>' + expr + '</div>';
+  const fn = new Function('obs', 'escapeHtml', 'return `' + tpl + '`;');
+  const html = fn({ firmware: TAG_PAYLOAD + ATTR_PAYLOAD }, escapeHtml);
+  assertNoXss(html, 'OBS-1 obs.firmware');
+});
+
+test('OBS-1: observer-detail.js obs.client_version is escaped at render sink', () => {
+  const expr = extractObsStatValue('client_version');
+  const tpl = '<div>' + expr + '</div>';
+  const fn = new Function('obs', 'escapeHtml', 'return `' + tpl + '`;');
+  const html = fn({ client_version: TAG_PAYLOAD + ATTR_PAYLOAD }, escapeHtml);
+  assertNoXss(html, 'OBS-1 obs.client_version');
+});
+
+// ----- ANL-1: analytics.js mutation-XSS via data-tip dataset round-trip -----
+// `:1599` writes escapeHtml-escaped tipHtml into data-tip (attr storage
+// entity-decodes), and `:1524` does `tip.innerHTML = td.dataset.tip` which
+// reanimates the raw payload. Fix A: tip.textContent = td.dataset.tip.
+test('ANL-1: analytics.js does NOT assign td.dataset.tip to tip.innerHTML', () => {
+  const src = fs.readFileSync('public/analytics.js', 'utf8');
+  const broken = /\btip\.innerHTML\s*=\s*td\.dataset\.tip\b/;
+  assert.ok(!broken.test(src),
+    'ANL-1: `tip.innerHTML = td.dataset.tip` still present (mutation-XSS). Use textContent.');
+});
+
+test('ANL-1: hashCellTd now emits per-field data-tip-* attrs (no HTML round-trip)', () => {
+  // Post-#1539-round-2 contract (see test-anl1-tooltip-render.js for the
+  // behavioral assertions). The XSS gate here: hashCellTd must NOT carry a
+  // pre-rendered HTML string in a single data-tip attribute. Per-field
+  // attrs (data-tip-hex / data-tip-status / data-tip-lines) are plain text
+  // and are rebuilt into DOM via createElement + textContent.
+  const src = fs.readFileSync('public/analytics.js', 'utf8');
+  const m = src.match(/function hashCellTd\([^)]*\)\s*\{([\s\S]*?)\n\s{2}\}/);
+  assert.ok(m, 'ANL-1: hashCellTd function not found');
+  const body = m[1];
+  assert.ok(!/data-tip\s*=\s*"\$\{tipHtml/.test(body),
+    'ANL-1: hashCellTd still writes pre-rendered HTML to data-tip="${tipHtml...}"');
+  assert.ok(/data-tip-hex/.test(body),
+    'ANL-1: hashCellTd missing data-tip-hex attribute (spec-driven contract)');
+  // Mouseover handler must use the new per-field reader, not innerHTML.
+  assert.ok(/buildMatrixTipChildren\s*\(\s*tip\s*,\s*td\s*\)/.test(src),
+    'ANL-1: mouseover handler no longer calls buildMatrixTipChildren(tip, td)');
+  assert.ok(!/\btip\.innerHTML\s*=\s*td\.dataset\.tip\b/.test(src),
+    'ANL-1: tip.innerHTML = td.dataset.tip is the mutation-XSS regression');
+});
+
+// =========================================================================
+// E. OBS-1 expanded surface — iata, id, radio split parts (PR #1539 follow-up)
+//     and OBS-2 Number() coercion at battery/uptime/noise_floor sinks.
+// =========================================================================
+console.log('\n=== E. OBS-1 expanded + OBS-2 Number() coercion ===');
+
+// Capture the entire renderDetail template-literal block once. The block
+// runs `el.innerHTML = \`<long template>\`` — we extract the template body
+// between the first ${window.ObserverDetailNaiveBanner.render(obs)} marker
+// and the closing `;`.
+function loadRenderDetailTemplate() {
+  const src = fs.readFileSync('public/observer-detail.js', 'utf8');
+  const m = src.match(/el\.innerHTML\s*=\s*`([\s\S]*?)`;/);
+  if (!m) throw new Error('renderDetail template literal not found');
+  return m[1];
+}
+
+function renderObsDetail(obs) {
+  const src = fs.readFileSync('public/observer-detail.js', 'utf8');
+  const tpl = loadRenderDetailTemplate();
+  // Extract the PRODUCTION radio-parsing block from source so reverting the
+  // escapeHtml() calls inside that block flips red here. Don't duplicate it
+  // in the test driver — that decouples the assertion from the fix.
+  const radioBlockM = src.match(/let radioHtml[\s\S]*?if \(obs\.radio\) \{[\s\S]*?\n\s*\}/);
+  if (!radioBlockM) throw new Error('renderObsDetail: radio-parsing block not found');
+  const radioBlock = radioBlockM[0];
+  // Stub out window globals and helpers used inside the template.
+  const sandbox = {
+    window: { ObserverDetailNaiveBanner: { render: () => '' } },
+    escapeHtml,
+    HEALTH_THRESHOLDS: { nodeDegradedMs: 1800000 },
+    obsSkew: null,
+    formatDuration: (s) => (s ? Math.floor(s / 60) + 'm' : '—'),
+    timeAgo: () => '—',
+    formatSkew: () => '',
+    renderSkewBadge: () => '',
+    observerSkewSeverity: () => 'ok',
+  };
+  const ago = obs.last_seen ? Date.now() - new Date(obs.last_seen).getTime() : Infinity;
+  const statusCls = ago < 600000 ? 'health-green' : ago < sandbox.HEALTH_THRESHOLDS.nodeDegradedMs ? 'health-yellow' : 'health-red';
+  const statusLabel = ago < 600000 ? 'Online' : ago < sandbox.HEALTH_THRESHOLDS.nodeDegradedMs ? 'Stale' : 'Offline';
+  // Eval the radio block in a fn body, then return the template render.
+  const fn = new Function(
+    'obs', 'obsSkew', 'escapeHtml', 'window', 'HEALTH_THRESHOLDS',
+    'formatDuration', 'timeAgo', 'formatSkew', 'renderSkewBadge', 'observerSkewSeverity',
+    'statusCls', 'statusLabel',
+    radioBlock + '\nreturn `' + tpl + '`;'
+  );
+  return fn(
+    obs, sandbox.obsSkew, escapeHtml, sandbox.window, sandbox.HEALTH_THRESHOLDS,
+    sandbox.formatDuration, sandbox.timeAgo, sandbox.formatSkew,
+    sandbox.renderSkewBadge, sandbox.observerSkewSeverity,
+    statusCls, statusLabel
+  );
+}
+
+test('OBS-1 expanded: obs.iata payload is escaped', () => {
+  const html = renderObsDetail({ id: 'obs-1', iata: TAG_PAYLOAD + ATTR_PAYLOAD });
+  assertNoXss(html, 'OBS-1 obs.iata');
+});
+
+test('OBS-1 expanded: obs.id payload is escaped', () => {
+  const html = renderObsDetail({ id: TAG_PAYLOAD + ATTR_PAYLOAD });
+  assertNoXss(html, 'OBS-1 obs.id');
+});
+
+test('OBS-1 expanded: obs.radio[0] (frequency) payload is escaped', () => {
+  const html = renderObsDetail({ id: 'obs-1', radio: TAG_PAYLOAD + ATTR_PAYLOAD + ',125,7,5' });
+  assertNoXss(html, 'OBS-1 obs.radio[0]');
+});
+
+test('OBS-1 expanded: obs.radio[1] (BW) payload is escaped', () => {
+  const html = renderObsDetail({ id: 'obs-1', radio: '868.5,' + TAG_PAYLOAD + ATTR_PAYLOAD + ',7,5' });
+  assertNoXss(html, 'OBS-1 obs.radio[1]');
+});
+
+test('OBS-1 expanded: obs.radio[2] (SF) payload is escaped', () => {
+  const html = renderObsDetail({ id: 'obs-1', radio: '868.5,125,' + TAG_PAYLOAD + ATTR_PAYLOAD + ',5' });
+  assertNoXss(html, 'OBS-1 obs.radio[2]');
+});
+
+test('OBS-1 expanded: obs.radio[3] (CR) payload is escaped', () => {
+  const html = renderObsDetail({ id: 'obs-1', radio: '868.5,125,7,' + TAG_PAYLOAD + ATTR_PAYLOAD });
+  assertNoXss(html, 'OBS-1 obs.radio[3]');
+});
+
+// ----- OBS-2: Number() coercion strips string XSS payloads at sinks -----
+test('OBS-2: contaminated string obs.battery_mv is Number()-coerced (no payload in HTML)', () => {
+  const html = renderObsDetail({ id: 'obs-1', battery_mv: TAG_PAYLOAD });
+  // Number(TAG_PAYLOAD) is NaN → renders as '—'. Raw payload must NOT survive.
+  if (/<img\b/i.test(html))
+    throw new Error('OBS-2 battery_mv: Number() coercion missing — raw <img survived: ' + html);
+  if (html.includes(TAG_PAYLOAD))
+    throw new Error('OBS-2 battery_mv: raw payload survived: ' + html);
+});
+
+test('OBS-2: contaminated string obs.noise_floor is Number()-coerced (no payload in HTML)', () => {
+  const html = renderObsDetail({ id: 'obs-1', noise_floor: TAG_PAYLOAD });
+  if (/<img\b/i.test(html))
+    throw new Error('OBS-2 noise_floor: Number() coercion missing — raw <img survived: ' + html);
+  if (html.includes(TAG_PAYLOAD))
+    throw new Error('OBS-2 noise_floor: raw payload survived: ' + html);
+});
+
+// =========================================================================
+// F. PR #1539 follow-up — renderRecentPackets must not emit inline onclick=
+// =========================================================================
+console.log('\n=== F. renderRecentPackets: no inline onclick (CSP / XSS-amplifier) ===');
+
+test('renderRecentPackets row template does NOT use inline onclick=', () => {
+  const src = fs.readFileSync('public/observer-detail.js', 'utf8');
+  // Locate the renderRecentPackets function body and grep for onclick=.
+  const m = src.match(/function renderRecentPackets\([^)]*\)\s*\{([\s\S]*?)\n\s{2}\}/);
+  assert.ok(m, 'renderRecentPackets function not found');
+  const body = m[1];
+  // Strip JS line comments before grepping — explanatory comments are allowed
+  // to mention the word `onclick=`. The contract is on the rendered HTML.
+  const code = body.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!/\bonclick\s*=\s*['"]/i.test(code),
+    'renderRecentPackets still contains inline onclick= attribute');
+  // And positive contract: a delegated click listener on `el` exists.
+  assert.ok(/el\.addEventListener\(\s*['"]click['"]/.test(body),
+    'renderRecentPackets missing delegated click listener (data-action=navigate dispatch)');
+});
+
+// =========================================================================
+// G. PR #1539 follow-up — loadDetail error path uses textContent
+// =========================================================================
+console.log('\n=== G. loadDetail error path: textContent over innerHTML ===');
+
+test('loadDetail catch block does NOT interpolate e.message into innerHTML', () => {
+  const src = fs.readFileSync('public/observer-detail.js', 'utf8');
+  const m = src.match(/catch\s*\(\s*e\s*\)\s*\{([\s\S]*?)\n\s{4}\}/);
+  assert.ok(m, 'loadDetail catch block not found');
+  const body = m[1];
+  // The old form interpolated e.message directly into a string assigned to
+  // innerHTML. New form uses textContent.
+  assert.ok(!/innerHTML\s*=\s*[^;]*e\.message/.test(body),
+    'loadDetail still interpolates e.message into innerHTML: ' + body);
+  assert.ok(/textContent\s*=\s*[^;]*e\.message/.test(body),
+    'loadDetail missing textContent assignment for e.message: ' + body);
+});
+
+// =========================================================================
 // SUMMARY
 // =========================================================================
 console.log('\n' + '═'.repeat(48));
