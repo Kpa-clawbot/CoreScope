@@ -334,6 +334,97 @@ test('hop-display.js data-conflict attribute: single-quote payload escaped', () 
 });
 
 // =========================================================================
+// D. XSS sweep R2 — TRACE-1 / OBS-1 / ANL-1 (post-#1537 audit findings)
+// =========================================================================
+console.log('\n=== D. XSS R2: TRACE-1 / OBS-1 / ANL-1 ===');
+
+// ----- TRACE-1: traces.js <input value="${urlHash}"> -----
+// urlHash comes from URL fragment, interpolated raw → URL-fragment XSS.
+test('TRACE-1: traces.js urlHash interpolation escapes URL-fragment payload', () => {
+  const src = fs.readFileSync('public/traces.js', 'utf8');
+  const m = src.match(/(<input type="text" id="traceHashInput"[^`]*?value="\$\{[^}]+\}"[^`]*?>)/);
+  assert.ok(m, 'TRACE-1: <input value="${urlHash}"> template not found in traces.js');
+  const tpl = m[1];
+  const fn = new Function('urlHash', 'escapeHtml',
+    'return `' + tpl + '`;');
+  const html = fn(TAG_PAYLOAD + ATTR_PAYLOAD, escapeHtml);
+  assertNoXss(html, 'TRACE-1 traces.js urlHash input');
+});
+
+// ----- OBS-1: observer-detail.js obs.* fields → renderDetail innerHTML -----
+function extractObsStatValue(field) {
+  const src = fs.readFileSync('public/observer-detail.js', 'utf8');
+  const labelMap = { model: 'Model', firmware: 'Firmware', client_version: 'Client', iata: 'Region' };
+  const label = labelMap[field];
+  const re = new RegExp(
+    '<div class="stat-label">' + label + '<\\/div>[\\s\\S]{0,250}?' +
+    '<div class="stat-value"[^>]*>(\\$\\{[^}]*obs\\.' + field + '[^}]*\\})<\\/div>'
+  );
+  const m = src.match(re);
+  if (!m) throw new Error('OBS-1: stat-value for ' + field + ' not found');
+  return m[1];
+}
+
+test('OBS-1: observer-detail.js obs.model is escaped at render sink', () => {
+  const expr = extractObsStatValue('model');
+  const tpl = '<div>' + expr + '</div>';
+  const fn = new Function('obs', 'escapeHtml', 'return `' + tpl + '`;');
+  const html = fn({ model: TAG_PAYLOAD + ATTR_PAYLOAD }, escapeHtml);
+  assertNoXss(html, 'OBS-1 obs.model');
+});
+
+test('OBS-1: observer-detail.js obs.firmware is escaped at render sink', () => {
+  const expr = extractObsStatValue('firmware');
+  const tpl = '<div>' + expr + '</div>';
+  const fn = new Function('obs', 'escapeHtml', 'return `' + tpl + '`;');
+  const html = fn({ firmware: TAG_PAYLOAD + ATTR_PAYLOAD }, escapeHtml);
+  assertNoXss(html, 'OBS-1 obs.firmware');
+});
+
+test('OBS-1: observer-detail.js obs.client_version is escaped at render sink', () => {
+  const expr = extractObsStatValue('client_version');
+  const tpl = '<div>' + expr + '</div>';
+  const fn = new Function('obs', 'escapeHtml', 'return `' + tpl + '`;');
+  const html = fn({ client_version: TAG_PAYLOAD + ATTR_PAYLOAD }, escapeHtml);
+  assertNoXss(html, 'OBS-1 obs.client_version');
+});
+
+// ----- ANL-1: analytics.js mutation-XSS via data-tip dataset round-trip -----
+// `:1599` writes escapeHtml-escaped tipHtml into data-tip (attr storage
+// entity-decodes), and `:1524` does `tip.innerHTML = td.dataset.tip` which
+// reanimates the raw payload. Fix A: tip.textContent = td.dataset.tip.
+test('ANL-1: analytics.js does NOT assign td.dataset.tip to tip.innerHTML', () => {
+  const src = fs.readFileSync('public/analytics.js', 'utf8');
+  const broken = /\btip\.innerHTML\s*=\s*td\.dataset\.tip\b/;
+  assert.ok(!broken.test(src),
+    'ANL-1: `tip.innerHTML = td.dataset.tip` still present (mutation-XSS). Use textContent.');
+});
+
+test('ANL-1: dataset round-trip preconditions hold + fix uses textContent', () => {
+  const src = fs.readFileSync('public/analytics.js', 'utf8');
+  // Extract hashCellTd template.
+  const m = src.match(/function hashCellTd\([^)]*\)\s*\{\s*return\s+`([^`]+)`/);
+  assert.ok(m, 'ANL-1: hashCellTd template not found');
+  const tpl = m[1];
+  // tipHtml is the post-escape value (esc(name)) already entity-encoded.
+  const tipHtml = '<div>' + escapeHtml(TAG_PAYLOAD) + '</div>';
+  const fn = new Function('hex', 'cellSize', 'cls', 'bg', 'count', 'tipHtml', 'fontWeight',
+    'return `' + tpl + '`;');
+  const tdHtml = fn('AB', 36, 'hash-cell-taken', '', 1, tipHtml, '400');
+  const attrM = tdHtml.match(/data-tip="([^"]*)"/);
+  assert.ok(attrM, 'data-tip attribute missing from rendered cell HTML');
+  const attrDecoded = attrM[1]
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  // Precondition for the mutation-XSS: <img reanimates on dataset read.
+  assert.ok(/<img\b/i.test(attrDecoded),
+    'ANL-1: expected attribute round-trip to reanimate <img — fixture invalid? got: ' + attrDecoded);
+  // Fix path must exist in source.
+  assert.ok(/\btip\.textContent\s*=\s*td\.dataset\.tip\b/.test(src),
+    'ANL-1: analytics.js missing `tip.textContent = td.dataset.tip` (fix not applied).');
+});
+
+// =========================================================================
 // SUMMARY
 // =========================================================================
 console.log('\n' + '═'.repeat(48));
