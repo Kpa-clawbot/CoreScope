@@ -483,7 +483,7 @@ test('MC_createLayerControl handles Auto mode and explicit layers correctly', ()
   assert.strictEqual(ctx.tilePane.getAttribute('data-explicit-layer'), null, 'data-explicit-layer should be cleared');
   
   // Select explicit layer with an invert filter
-  baselayerchangeCallback({ name: 'Carto Voyager (Dark, lower fidelity)' }); // Selects carto-voyager-dark
+  baselayerchangeCallback({ name: 'Carto Voyager (Dark — inverted)' }); // Selects carto-voyager-dark
   assert.ok(removedLayers.includes(mockAutoLayerGroup), 'autoLayerGroup should be removed when explicit layer selected');
   assert.strictEqual(ctx.tilePane.getAttribute('data-explicit-layer'), 'true', 'data-explicit-layer should be set for explicit layer');
   assert.strictEqual(ctx.localStorage.getItem('mc-dark-tile-provider'), 'carto-voyager-dark', 'storage should update');
