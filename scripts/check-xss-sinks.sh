@@ -87,6 +87,11 @@ allow_match() {
     echo "$line" | sed -nE "s/.*\.setAttribute\([^,]*,(.*)/\1/p"
   )
   [ -z "$dyn" ] && return 0
+  # Strip exception/error-object property accesses — these surface in
+  # catch-block error-rendering paths and are NOT node-controlled.
+  # Without this filter, ${e.message}, ${err.message}, ${error.stack}
+  # etc. trip the 'message' allowlist token across every page.
+  dyn=$(echo "$dyn" | sed -E 's/\b(e|err|error|ex|exc|exception)\.(message|stack|name|code|cause)\b//g')
   echo "$dyn" | grep -oE "$ALLOW_WORD_RE" | head -1 \
     | sed -E "s/^[^A-Za-z0-9_\$]?//; s/[^A-Za-z0-9_]?\$//"
 }
