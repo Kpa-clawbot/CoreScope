@@ -45,12 +45,12 @@
     'carto-dark': { provider: 'carto', label: 'Carto Dark', url: function() { return _getCartoBase() + '/dark_all/{z}/{x}/{y}{r}.png'; }, invertFilter: null, type: 'dark', attribution: '© OpenStreetMap © CartoDB' },
     'carto-light': { provider: 'carto', label: 'Carto Positron (Light)', url: function() { return _getCartoBase() + '/light_all/{z}/{x}/{y}{r}.png'; }, invertFilter: null, type: 'light', attribution: '© OpenStreetMap © CartoDB' },
     'carto-voyager': { provider: 'carto', label: 'Carto Voyager (Light)', url: function() { return _getCartoBase() + '/rastertiles/voyager/{z}/{x}/{y}{r}.png'; }, invertFilter: null, type: 'light', attribution: '© OpenStreetMap © CartoDB' },
-    'carto-voyager-dark': { provider: 'carto', label: 'Carto Voyager (CSS-Inverted Dark)', url: function() { return _getCartoBase() + '/rastertiles/voyager/{z}/{x}/{y}{r}.png'; }, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap © CartoDB' },
-    'positron-dark': { provider: 'carto', label: 'Carto Positron (CSS-Inverted Dark)', url: function() { return _getCartoBase() + '/light_all/{z}/{x}/{y}{r}.png'; }, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap © CartoDB' },
+    'carto-voyager-dark': { provider: 'carto', label: 'Carto Voyager (Dark, lower fidelity)', url: function() { return _getCartoBase() + '/rastertiles/voyager/{z}/{x}/{y}{r}.png'; }, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap © CartoDB' },
+    'positron-dark': { provider: 'carto', label: 'Carto Positron (Dark, lower fidelity)', url: function() { return _getCartoBase() + '/light_all/{z}/{x}/{y}{r}.png'; }, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap © CartoDB' },
     'osm-standard': { provider: 'osm', label: 'OSM Standard (Light)', url: _getOsmUrl, invertFilter: null, type: 'light', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler' },
-    'osm-dark': { provider: 'osm', label: 'OSM Standard (CSS-Inverted Dark)', url: _getOsmUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler' },
+    'osm-dark': { provider: 'osm', label: 'OSM Standard (Dark, lower fidelity)', url: _getOsmUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler' },
     'stamen-toner-lite': { provider: 'stamen', label: 'Stamen Toner Lite (Light)', url: _getStamenUrl, invertFilter: null, type: 'light', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap' },
-    'stamen-toner-dark': { provider: 'stamen', label: 'Stamen Toner Lite (CSS-Inverted Dark)', url: _getStamenUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap' },
+    'stamen-toner-dark': { provider: 'stamen', label: 'Stamen Toner Lite (Dark, lower fidelity)', url: _getStamenUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap' },
     'esri-darkgray-labels': { provider: 'esri', label: 'Esri Dark Gray Canvas', url: function() { return 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'; }, invertFilter: null, type: 'dark', attribution: 'Tiles © Esri' }
   };
 
