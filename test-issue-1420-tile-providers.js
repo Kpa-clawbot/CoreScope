@@ -458,7 +458,7 @@ test('MC_createLayerControl handles Auto mode and explicit layers correctly', ()
       return layer;
     },
     control: {
-      layers: (maps) => mockControl
+      layers: (maps) => { ctx._capturedBaseMaps = maps; return mockControl; }
     }
   };
   
@@ -488,15 +488,22 @@ test('MC_createLayerControl handles Auto mode and explicit layers correctly', ()
   assert.strictEqual(ctx.tilePane.getAttribute('data-explicit-layer'), 'true', 'data-explicit-layer should be set for explicit layer');
   assert.strictEqual(ctx.localStorage.getItem('mc-dark-tile-provider'), 'carto-voyager-dark', 'storage should update');
   
-  // Simulate Leaflet adding the layer and assert the CSS filter
-  const invertedLayer = createdLayers.find(l => l._events && l._events['add'] && String(l._events['add']).indexOf('p.invertFilter') > -1);
+  // Simulate Leaflet adding the inverted layer and assert the CSS filter
+  const invertedLayer = ctx._capturedBaseMaps['Carto Voyager (Dark — inverted)'];
   if (invertedLayer) {
     invertedLayer._events['add']();
     assert.ok(ctx.tilePane.style.filter.indexOf('invert(') >= 0, 'pane.style.filter should be set to invertFilter on explicit layer add');
-    invertedLayer._events['remove']();
-    assert.strictEqual(ctx.tilePane.style.filter, '', 'pane.style.filter should be cleared on explicit layer remove');
   } else {
     assert.fail('Could not find inverted tile layer to test CSS filter');
+  }
+
+  // Simulate Leaflet switching to a non-inverted explicit layer and assert the CSS filter is cleared
+  const lightLayer = ctx._capturedBaseMaps['Carto Positron (Light)'];
+  if (lightLayer) {
+    lightLayer._events['add']();
+    assert.strictEqual(ctx.tilePane.style.filter, '', 'pane.style.filter should be cleared on non-inverted explicit layer add');
+  } else {
+    assert.fail('Could not find light tile layer to test CSS filter clearing');
   }
   
   // Select Auto again
