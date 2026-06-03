@@ -1487,7 +1487,7 @@
         if (a.lat == null || b.lat == null) return null;
         return haversineKm(a, b);
       })() : null;
-      var tipText = 'hop ' + (idx + 1) + ' · ' + (p.name || '?') + (dist != null ? ' · ' + dist + ' km from prev' : '');
+      var tipText = 'hop ' + (idx + 1) + ' · ' + escapeHtml(p.name || '?') + (dist != null ? ' · ' + dist + ' km from prev' : '');
       mk.bindTooltip(tipText, { direction: 'top', offset: [0, -10] });
     });
 

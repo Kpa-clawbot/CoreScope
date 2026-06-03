@@ -197,7 +197,7 @@
   }
 
   function escapeHtml(s) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   window.PathInspector = { init: init, destroy: destroy, parsePrefixes: parsePrefixes, validatePrefixes: validatePrefixes };
