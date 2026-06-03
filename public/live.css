@@ -445,7 +445,7 @@
   flex-wrap: wrap;
 }
 
-/* Region filter (#1045) inline in live header toggles */
+/* Region/Area filters inline in live header controls body */
 .live-controls-body .live-region-filter-container,
 .live-controls-body .live-area-filter-container { display: inline-flex; align-items: center; }
 .live-controls-body .live-region-filter-container .region-dropdown-trigger,
@@ -978,7 +978,7 @@
 }
 .vcr-scope-btn.active {
   background: rgba(59,130,246,0.2);
-  color: var(--accent);
+  color: var(--text);
   border-color: rgba(59,130,246,0.3);
 }
 
