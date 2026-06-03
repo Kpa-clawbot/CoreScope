@@ -66,7 +66,7 @@
 
     var HAS_CARTO = !_cfg || !_cfg.providers || !_cfg.providers.carto || _cfg.providers.carto.enabled !== false;
     var HAS_OSM = _cfg && _cfg.providers && _cfg.providers.osm && _cfg.providers.osm.enabled;
-    var HAS_STAMEN = _cfg && _cfg.providers && _cfg.providers.stamen && _cfg.providers.stamen.enabled && !!_cfg.providers.stamen.token;
+    var HAS_STAMEN = _cfg && _cfg.providers && _cfg.providers.stamen && _cfg.providers.stamen.enabled;
 
     REGISTRY = {};
     for (var key in BASE_STYLES) {
@@ -156,6 +156,10 @@
     var pane;
     try { pane = document.querySelector('.leaflet-tile-pane'); } catch (_) { pane = null; }
     if (!pane || !pane.style) return;
+    
+    // NEW: Bail out if a manual layer has claimed control of the filter
+    if (pane.getAttribute('data-explicit-layer') === 'true') return;
+
     var isDark = _isDarkEffective();
     var id = isDark ? getActiveId() : getActiveLightId();
     var p  = REGISTRY[id];
@@ -166,7 +170,6 @@
       var newUrl = typeof p.url === 'function' ? p.url() : p.url;
       if (_layerInstance._url !== newUrl) {
          _layerInstance.setUrl(newUrl);
-         // Leaflet doesn't update attribution dynamically easily, but this is fine.
       }
     }
   }
@@ -208,15 +211,22 @@
     // Restore the auto tile group and kick _syncDarkTiles
     function _activateAuto() {
       _isAuto = true;
+      
+      // Unlock the pane so Auto mode can control the filter again
+      try { 
+        var pane = map.getPane('tilePane');
+        if (pane) pane.removeAttribute('data-explicit-layer');
+      } catch (_) {}
+
       try { if (autoLayerGroup && !map.hasLayer(autoLayerGroup)) map.addLayer(autoLayerGroup); } catch (_) {}
-      // Firing mc-tile-provider-changed causes _syncDarkTiles in map.js/live.js
-      // to re-evaluate and apply the correct theme tile
+      
       try {
         var ev = (typeof CustomEvent === 'function')
           ? new CustomEvent('mc-tile-provider-changed', { detail: { auto: true } })
           : { type: 'mc-tile-provider-changed', detail: { auto: true } };
         window.dispatchEvent(ev);
       } catch (_) {}
+      
       if (typeof applyTileFilter === 'function') applyTileFilter();
     }
 
@@ -244,16 +254,16 @@
         var p   = REGISTRY[id];
         var url = typeof p.url === 'function' ? p.url() : p.url;
         var layer = L.tileLayer(url, { attribution: p.attribution || '', maxZoom: 19 });
-        if (p.invertFilter) {
-          layer.on('add', function () {
-            var pane = map.getPane('tilePane');
-            if (pane) pane.style.filter = p.invertFilter;
-          });
-          layer.on('remove', function () {
-            var pane = map.getPane('tilePane');
-            if (pane) pane.style.filter = '';
-          });
-        }
+        
+        // Every explicit layer enforces its own filter and locks the pane
+        layer.on('add', function () {
+          var pane = map.getPane('tilePane');
+          if (pane) {
+            pane.setAttribute('data-explicit-layer', 'true');
+            pane.style.filter = p.invertFilter || ''; // Clears it if null!
+          }
+        });
+
         _layerMap[id] = layer;
         return layer;
       }
