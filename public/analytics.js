@@ -1521,7 +1521,13 @@
       const td = e.target.closest('td[data-tip]');
       if (!td) return;
       const tip = getMatrixTip();
-      tip.innerHTML = td.dataset.tip;
+      // SECURITY (ANL-1, post-#1537 sweep): use textContent, NOT innerHTML.
+      // data-tip attribute storage entity-decodes on read, so any escaping
+      // done at write time (esc(name) inside hashTooltipHtml) is undone here.
+      // Writing back via innerHTML would reanimate the raw payload and fire
+      // onerror handlers. textContent is safe because the tip is plain text
+      // (label + status + comma-joined node names) with no intended HTML.
+      tip.textContent = td.dataset.tip;
       tip.style.display = 'block';
     });
     el.addEventListener('mousemove', e => {

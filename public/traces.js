@@ -9,6 +9,11 @@
     // Check URL for pre-filled hash — support both route param and query param
     const params = new URLSearchParams(location.hash.split('?')[1] || '');
     const urlHash = routeParam || params.get('hash') || '';
+    // Use the global 5-char OWASP escapeHtml from app.js. Hard-fail if it's
+    // missing — never fall back to identity (see #1537: map.js safeEsc bug).
+    if (typeof escapeHtml !== 'function') {
+      throw new Error('traces.js: global escapeHtml is missing — refusing to render unescaped input');
+    }
 
     app.innerHTML = `
       <div class="traces-page">
@@ -16,7 +21,7 @@
           <h2>🔍 Packet Trace</h2>
         </div>
         <div class="trace-search">
-          <input type="text" id="traceHashInput" placeholder="Enter packet hash…" value="${urlHash}" aria-label="Packet hash to trace">
+          <input type="text" id="traceHashInput" placeholder="Enter packet hash…" value="${escapeHtml(urlHash)}" aria-label="Packet hash to trace">
           <button class="btn-primary" id="traceBtn">Trace</button>
         </div>
         <div id="traceResults"></div>

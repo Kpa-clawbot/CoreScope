@@ -139,11 +139,22 @@ window.ObserverDetailNaiveBanner = {
     const title = document.getElementById('obsTitle');
     if (title) title.textContent = obs.name || obs.id.substring(0, 16) + '…';
 
-    // Parse radio string
+    // SECURITY (OBS-1, post-#1537 sweep): every MQTT-controlled string from
+    // the observer's `status` topic (extractObserverMeta) must be escaped at
+    // the render sink. Use the global 5-char OWASP escapeHtml from app.js.
+    // Hard-fail if the helper is missing — never identity-passthrough
+    // (see #1537: map.js safeEsc identity-fallback bug).
+    if (typeof escapeHtml !== 'function') {
+      throw new Error('observer-detail.js: global escapeHtml missing — refusing to render unescaped MQTT-controlled input');
+    }
+
+    // Parse radio string. obs.radio is observer-published — split parts must
+    // be escaped before being injected into HTML.
     let radioHtml = '—';
     if (obs.radio) {
-      const rp = obs.radio.split(',');
-      radioHtml = rp[0] + ' MHz · SF' + (rp[2] || '?') + ' · BW' + (rp[1] || '?') + ' · CR' + (rp[3] || '?');
+      const rp = String(obs.radio).split(',');
+      radioHtml = escapeHtml(rp[0] || '?') + ' MHz · SF' + escapeHtml(rp[2] || '?')
+        + ' · BW' + escapeHtml(rp[1] || '?') + ' · CR' + escapeHtml(rp[3] || '?');
     }
 
     // Health status
@@ -160,19 +171,19 @@ window.ObserverDetailNaiveBanner = {
         </div>
         <div class="stat-card">
           <div class="stat-label">Region</div>
-          <div class="stat-value">${obs.iata ? '<span class="badge-region">' + obs.iata + '</span>' : '—'}</div>
+          <div class="stat-value">${obs.iata ? '<span class="badge-region">' + escapeHtml(obs.iata) + '</span>' : '—'}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Model</div>
-          <div class="stat-value">${obs.model || '—'}</div>
+          <div class="stat-value">${escapeHtml(obs.model || '—')}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Firmware</div>
-          <div class="stat-value" style="font-size:0.8em;word-break:break-all">${obs.firmware || '—'}</div>
+          <div class="stat-value" style="font-size:0.8em;word-break:break-all">${escapeHtml(obs.firmware || '—')}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Client</div>
-          <div class="stat-value" style="font-size:0.8em;word-break:break-all">${obs.client_version || '—'}</div>
+          <div class="stat-value" style="font-size:0.8em;word-break:break-all">${escapeHtml(obs.client_version || '—')}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Radio</div>
@@ -212,7 +223,7 @@ window.ObserverDetailNaiveBanner = {
         </div>
       </div>
       <div class="mono" style="font-size:0.75em;color:var(--text-muted);margin-bottom:20px;word-break:break-all">
-        ID: ${obs.id}
+        ID: ${escapeHtml(obs.id)}
       </div>
       ${obsSkew && obsSkew.samples > 0 ? `
       <div class="node-full-card skew-detail-section" style="margin-bottom:20px;padding:12px">
