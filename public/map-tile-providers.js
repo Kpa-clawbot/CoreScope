@@ -42,16 +42,16 @@
   };
 
   var BASE_STYLES = {
-    'carto-dark': { provider: 'carto', label: 'Carto Dark', url: function() { return _getCartoBase() + '/dark_all/{z}/{x}/{y}{r}.png'; }, invertFilter: null, type: 'dark', attribution: '© OpenStreetMap © CartoDB' },
-    'carto-light': { provider: 'carto', label: 'Carto Positron (Light)', url: function() { return _getCartoBase() + '/light_all/{z}/{x}/{y}{r}.png'; }, invertFilter: null, type: 'light', attribution: '© OpenStreetMap © CartoDB' },
-    'carto-voyager': { provider: 'carto', label: 'Carto Voyager (Light)', url: function() { return _getCartoBase() + '/rastertiles/voyager/{z}/{x}/{y}{r}.png'; }, invertFilter: null, type: 'light', attribution: '© OpenStreetMap © CartoDB' },
-    'carto-voyager-dark': { provider: 'carto', label: 'Carto Voyager (Dark — inverted)', url: function() { return _getCartoBase() + '/rastertiles/voyager/{z}/{x}/{y}{r}.png'; }, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap © CartoDB' },
-    'positron-dark': { provider: 'carto', label: 'Carto Positron (Dark — inverted)', url: function() { return _getCartoBase() + '/light_all/{z}/{x}/{y}{r}.png'; }, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap © CartoDB' },
-    'osm-standard': { provider: 'osm', label: 'OSM Standard (Light)', url: _getOsmUrl, invertFilter: null, type: 'light', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler', maxZoom: 18 },
-    'osm-dark': { provider: 'osm', label: 'OSM Standard (Dark — inverted)', url: _getOsmUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler', maxZoom: 18 },
-    'stamen-toner-lite': { provider: 'stamen', label: 'Stamen Toner Lite (Light)', url: _getStamenUrl, invertFilter: null, type: 'light', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap', maxZoom: 20 },
-    'stamen-toner-dark': { provider: 'stamen', label: 'Stamen Toner Lite (Dark — inverted)', url: _getStamenUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap', maxZoom: 20 },
-    'esri-darkgray-labels': { provider: 'esri', label: 'Esri Dark Gray Canvas', url: function() { return 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'; }, invertFilter: null, type: 'dark', attribution: 'Tiles © Esri' }
+    'carto-dark': { provider: 'carto', label: 'Carto Dark', url: function() { return _getCartoBase() + '/dark_all/{z}/{x}/{y}{r}.png'; }, invertFilter: null, type: 'dark', attribution: '© OpenStreetMap © CartoDB', maxZoom: 19 },
+    'carto-light': { provider: 'carto', label: 'Carto Positron', url: function() { return _getCartoBase() + '/light_all/{z}/{x}/{y}{r}.png'; }, invertFilter: null, type: 'light', attribution: '© OpenStreetMap © CartoDB', maxZoom: 19 },
+    'carto-voyager': { provider: 'carto', label: 'Carto Voyager', url: function() { return _getCartoBase() + '/rastertiles/voyager/{z}/{x}/{y}{r}.png'; }, invertFilter: null, type: 'light', attribution: '© OpenStreetMap © CartoDB', maxZoom: 19 },
+    'carto-voyager-dark': { provider: 'carto', label: 'Carto Voyager', url: function() { return _getCartoBase() + '/rastertiles/voyager/{z}/{x}/{y}{r}.png'; }, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap © CartoDB', maxZoom: 19 },
+    'positron-dark': { provider: 'carto', label: 'Carto Positron', url: function() { return _getCartoBase() + '/light_all/{z}/{x}/{y}{r}.png'; }, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap © CartoDB', maxZoom: 19 },
+    'osm-standard': { provider: 'osm', label: 'OSM Standard', url: _getOsmUrl, invertFilter: null, type: 'light', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler', maxZoom: 18 },
+    'osm-dark': { provider: 'osm', label: 'OSM Standard', url: _getOsmUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© OpenStreetMap contributors, Maps © Mapbox/Thunderforest/MapTiler', maxZoom: 18 },
+    'stamen-toner-lite': { provider: 'stamen', label: 'Stamen Toner Lite', url: _getStamenUrl, invertFilter: null, type: 'light', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap', maxZoom: 20 },
+    'stamen-toner-dark': { provider: 'stamen', label: 'Stamen Toner Lite', url: _getStamenUrl, invertFilter: INVERT_CSS, type: 'dark', attribution: '© Stadia Maps © Stamen Design © OpenStreetMap', maxZoom: 20 },
+    'esri-darkgray-labels': { provider: 'esri', label: 'Esri Dark Gray Canvas', url: function() { return 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'; }, invertFilter: null, type: 'dark', attribution: 'Tiles © Esri', maxZoom: 19 }
   };
 
   var REGISTRY = {};
@@ -200,7 +200,7 @@
     // Set a default position just in case it isn't provided
     var controlPosition = position || 'topleft';
 
-    var AUTO_LABEL = 'Auto (follows theme)';
+    var AUTO_LABEL = '<span title="Follows the app\'s current light/dark theme">Auto</span>';
     var _control   = null;  // current L.control.layers instance
     var _layerMap  = {};    // provider-id → L.tileLayer
     var _isAuto    = true;  // true when "Auto" is the active selection
@@ -268,10 +268,29 @@
       baseMaps[AUTO_LABEL] = autoLayerGroup;
 
       lightIds.forEach(function (id) { baseMaps[REGISTRY[id].label || id] = _makeLayer(id); });
-      darkIds.forEach(function  (id) { baseMaps[REGISTRY[id].label || id] = _makeLayer(id); });
+      darkIds.forEach(function  (id) { 
+        var lbl = REGISTRY[id].label || id;
+        baseMaps[lbl + '\u200B'] = _makeLayer(id); 
+      });
 
       // Use the dynamic controlPosition variable instead of a hardcoded string
       _control = L.control.layers(baseMaps, null, { position: controlPosition }).addTo(map);
+
+      // DOM surgery: inject a separator between Light and Dark sections.
+      if (lightIds.length > 0 && darkIds.length > 0) {
+        try {
+          var firstDarkLabelStr = (REGISTRY[darkIds[0]].label || darkIds[0]) + '\u200B';
+          var labels = _control.getContainer().querySelectorAll('.leaflet-control-layers-base label');
+          for (var i = 0; i < labels.length; i++) {
+            if (labels[i].textContent.indexOf(firstDarkLabelStr) !== -1 || labels[i].innerHTML.indexOf(firstDarkLabelStr) !== -1) {
+              var sep = document.createElement('div');
+              sep.className = 'leaflet-control-layers-separator';
+              labels[i].parentNode.insertBefore(sep, labels[i]);
+              break;
+            }
+          }
+        } catch (_) {}
+      }
 
       // Decide initial active layer
       if (_isAuto) {
@@ -298,7 +317,11 @@
         // Explicit provider selected — find the registry id by label
         var selectedId = null;
         Object.keys(REGISTRY).forEach(function (id) {
-          if ((REGISTRY[id].label || id) === e.name) selectedId = id;
+          var expectedLabel = REGISTRY[id].label || id;
+          if (REGISTRY[id].type === 'dark') expectedLabel += '\u200B';
+          if (expectedLabel === e.name) {
+            selectedId = id;
+          }
         });
         if (!selectedId) return;
 
