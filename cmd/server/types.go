@@ -1005,7 +1005,7 @@ type ClientConfigResponse struct {
 	PropagationBufferMs float64         `json:"propagationBufferMs"`
 	Timestamps          TimestampConfig `json:"timestamps"`
 	DebugAffinity       bool            `json:"debugAffinity,omitempty"`
-	MapDarkTileProvider string          `json:"mapDarkTileProvider,omitempty"` // deprecated
+	MapDarkTileProvider string          `json:"mapDarkTileProvider,omitempty"` // deprecated. TODO: remove after v3.5.0
 }
 
 // ─── IATA Coords ───────────────────────────────────────────────────────────────

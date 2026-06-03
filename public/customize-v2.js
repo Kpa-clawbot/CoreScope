@@ -1434,33 +1434,31 @@
       '<p class="cust-hint" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Choose the basemap providers. Available options depend on server configuration.</p>';
       
     if (lightIds.length > 0) {
-        var optionsLight = lightIds.map(function (id) {
-          var label = reg[id].label || id;
-          var sel   = id === activeLight ? ' selected' : '';
-          return '<option value="' + escAttr(id) + '"' + sel + '>' + esc(label) + '</option>';
-        }).join('');
-        html += '<div class="cust-field"><label for="cv2-light-tile-provider">Light Mode Provider</label>' +
-          '<select id="cv2-light-tile-provider" data-cv2-light-tile-provider style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
-          optionsLight +
-          '</select></div>';
+      var optionsLight = lightIds.map(function (id) {
+        var label = reg[id].label || id;
+        var sel   = id === activeLight ? ' selected' : '';
+        return '<option value="' + escAttr(id) + '"' + sel + '>' + esc(label) + '</option>';
+      }).join('');
+      html += '<div class="cust-field"><label for="cv2-light-tile-provider">Light Mode Provider</label>' +
+        '<select id="cv2-light-tile-provider" data-cv2-light-tile-provider style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
+        optionsLight +
+        '</select></div>';
     }
     
     if (darkIds.length > 0) {
-        var optionsDark = darkIds.map(function (id) {
-          var label = reg[id].label || id;
-          var sel   = id === activeDark ? ' selected' : '';
-          return '<option value="' + escAttr(id) + '"' + sel + '>' + esc(label) + '</option>';
-        }).join('');
-        html += '<div class="cust-field"><label for="cv2-dark-tile-provider">Dark Mode Provider</label>' +
-          '<select id="cv2-dark-tile-provider" data-cv2-dark-tile-provider style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
-          optionsDark +
-          '</select></div>';
+      var optionsDark = darkIds.map(function (id) {
+        var label = reg[id].label || id;
+        var sel   = id === activeDark ? ' selected' : '';
+        return '<option value="' + escAttr(id) + '"' + sel + '>' + esc(label) + '</option>';
+      }).join('');
+      html += '<div class="cust-field"><label for="cv2-dark-tile-provider">Dark Mode Provider</label>' +
+        '<select id="cv2-dark-tile-provider" data-cv2-dark-tile-provider style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text)">' +
+        optionsDark +
+        '</select></div>';
     }
     
     return html;
   }
-
-
   function _renderHome() {
     var eff = _getEffective();
     var h = eff.home || {};

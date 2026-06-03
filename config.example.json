@@ -60,7 +60,7 @@
       "darkDefault": "carto-dark",
       "lightDefault": "carto-light",
       "providers": {
-        "_comment_carto": "Carto is the default free-tier provider. Optional: specify 'domain' for Carto enterprise.",
+        "_comment_carto": "Carto is the default free-tier provider. Optional: specify 'domain' for Carto enterprise (e.g. 'mycompany' for 'https://{s}.mycompany.cartocdn.com').",
         "carto": {
           "enabled": true,
           "domain": ""
@@ -79,9 +79,6 @@
       }
     }
   },
-  "_comment_deprecated_tiles": "The old top-level 'tiles' and 'mapDarkTileProvider' keys are deprecated. Please use the 'map' block above.",
-  "mapDarkTileProvider": "",
-  "tiles": {},
   "home": {
     "heroTitle": "CoreScope",
     "heroSubtitle": "Find your nodes to start monitoring them.",
