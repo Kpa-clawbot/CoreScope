@@ -204,7 +204,8 @@
     var _control   = null;  // current L.control.layers instance
     var _layerMap  = {};    // provider-id → L.tileLayer
     var _isAuto    = true;  // true when "Auto" is the active selection
-    var _baselayerchangeHandler = null;
+    var _overrideLightId = null;
+    var _overrideDarkId  = null;
 
     // Restore the auto tile group and kick _syncDarkTiles
     function _activateAuto() {
@@ -238,8 +239,8 @@
       }
 
       var isDark       = _isDarkEffective();
-      var activeDarkId  = getActiveId();
-      var activeLightId = getActiveLightId();
+      var activeDarkId  = _overrideDarkId || getActiveId();
+      var activeLightId = _overrideLightId || getActiveLightId();
 
       // Light providers first, then dark — natural grouping in the UI
       var lightIds = Object.keys(REGISTRY).filter(function (id) { return REGISTRY[id].type === 'light'; });
@@ -336,8 +337,8 @@
         try { if (autoLayerGroup && map.hasLayer(autoLayerGroup)) map.removeLayer(autoLayerGroup); } catch (_) {}
 
         var p = REGISTRY[selectedId];
-        if (p.type === 'light') setActive(selectedId, 'light');
-        else                    setActive(selectedId, 'dark');
+        if (p.type === 'light') _overrideLightId = selectedId;
+        else                    _overrideDarkId  = selectedId;
 
         // CSS invert filter is handled by the layer's own add/remove events above
       };
