@@ -657,7 +657,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 					truncPK = truncPK[:16]
 				}
 				log.Printf("MQTT [%s] DROPPED invalid signature: hash=%s name=%s observer=%s pubkey=%s",
-					tag, hash, decoded.Payload.Name, firstNonEmpty(mqttMsg.Origin, observerID), truncPK)
+					tag, hash, sanitizeLogString(decoded.Payload.Name), sanitizeLogString(firstNonEmpty(mqttMsg.Origin, observerID)), truncPK)
 				store.InsertDroppedPacket(&DroppedPacket{
 					Hash:         hash,
 					RawHex:       rawHex,
@@ -687,7 +687,7 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 					truncPK = truncPK[:16]
 				}
 				log.Printf("MQTT [%s] foreign advert: node=%s name=%s lat=%.4f lon=%.4f observer=%s",
-					tag, truncPK, decoded.Payload.Name, lat, lon, firstNonEmpty(mqttMsg.Origin, observerID))
+					tag, truncPK, sanitizeLogString(decoded.Payload.Name), lat, lon, sanitizeLogString(firstNonEmpty(mqttMsg.Origin, observerID)))
 			}
 			pktData := BuildPacketData(mqttMsg, decoded, observerID, region, regionKeys)
 			pktData.Foreign = foreign
