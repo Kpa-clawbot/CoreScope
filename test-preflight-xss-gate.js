@@ -32,14 +32,36 @@ if (!fs.existsSync(FIXTURE_DIR)) {
   process.exit(1);
 }
 
+// Each case may specify which test file(s) to expose via PREFLIGHT_TEST_FILES.
 const cases = [
   // bad fixtures: gate MUST flag (exit 1)
   { file: 'bad-1-template-literal.js', expect: 1, label: 'innerHTML template literal with ${name}' },
   { file: 'bad-2-setAttribute-href.js', expect: 1, label: "setAttribute('href', `…${hash}…`)" },
   { file: 'bad-3-bindPopup.js',         expect: 1, label: 'Leaflet bindPopup(`…${observer}…`)' },
+  { file: 'bad-4-bare-ident.js',        expect: 1, label: 'innerHTML = name (bare ident, no quote/backtick)' },
+  { file: 'bad-5-string-concat.js',     expect: 1, label: 'innerHTML = name + "<b>" (concat)' },
+  { file: 'bad-6-bindPopup-concat.js',  expect: 1, label: 'bindPopup("Name: " + observer) (concat)' },
+  { file: 'bad-7-outerHTML.js',         expect: 1, label: 'outerHTML sink' },
+  { file: 'bad-8-document-write.js',    expect: 1, label: 'document.write template literal' },
+  { file: 'bad-9-shamtest-fixture.js',  expect: 1, label: 'sham test (markers only in comments)',
+    tests: ['sham-test-fixture-9.js'] },
+  { file: 'bad-10-line-level-escape-bypass.js', expect: 1,
+    label: '${escapeHtml(role)} ${name} — one wrapped, one raw' },
+  { file: 'bad-11-comment-rubber-stamp.js', expect: 1,
+    label: 'escapeHtml mentioned only in // comment' },
+  { file: 'bad-12-setattr-concat.js',   expect: 1,
+    label: 'setAttribute("href", "javascript:" + payload) (concat, no $)' },
   // good fixtures: gate MUST pass (exit 0)
   { file: 'good-1-escaped.js', expect: 0, label: 'escapeHtml(${name}) wrapper' },
-  { file: 'good-2-tested.js',  expect: 0, label: 'unescaped but DOM-grep-tested in same PR' },
+  { file: 'good-2-tested.js',  expect: 0, label: 'unescaped but DOM-grep-tested in same PR',
+    tests: ['test-good-2.js'] },
+  { file: 'good-3-catch-block-error.js', expect: 0,
+    label: 'catch (e) { ${e.message} } — exception property' },
+  { file: 'good-3b-chained-cause.js', expect: 0,
+    label: '${error.cause.message} / ${parseError.message} chained error props' },
+  { file: 'good-4-tested.js', expect: 0,
+    label: 'unescaped sink, REAL test (markers in executable code)',
+    tests: ['test-good-4.js'] },
 ];
 
 let failed = 0;
@@ -50,11 +72,13 @@ for (const c of cases) {
     failed++;
     continue;
   }
-  // Pass --pr-test-files so good-2-tested.js can see its companion test.
-  const testFile = path.join(FIXTURE_DIR, 'test-good-2.js');
-  const env = Object.assign({}, process.env, {
-    PREFLIGHT_TEST_FILES: testFile,
-  });
+  const tests = (c.tests || []).map(t => path.join(FIXTURE_DIR, t));
+  const env = Object.assign({}, process.env);
+  if (tests.length > 0) {
+    env.PREFLIGHT_TEST_FILES = tests.join(':');
+  } else {
+    delete env.PREFLIGHT_TEST_FILES;
+  }
   const res = spawnSync('bash', [SCRIPT, '--file', target], {
     env,
     encoding: 'utf8',
