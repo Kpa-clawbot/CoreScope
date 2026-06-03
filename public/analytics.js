@@ -443,7 +443,7 @@
       const pct = (t.count / total * 100).toFixed(1);
       const w = Math.max(t.count / total * 100, 1);
       html += `<div class="payload-bar-row">
-        <div class="payload-bar-label"><span class="legend-dot" style="background:${colors[i]}"></span>${t.name}</div>
+        <div class="payload-bar-label"><span class="legend-dot" style="background:${colors[i]}"></span>${escapeHtml(t.name)}</div>
         <div class="hash-bar-track"><div class="hash-bar-fill" style="width:${w}%;background:${colors[i]}"></div></div>
         <div class="payload-bar-value">${t.count} <span class="text-muted">(${pct}%)</span></div>
       </div>`;
@@ -578,7 +578,7 @@
       const barPct = Math.max(((t.avg - (-12)) / 27) * 100, 2);
       const color = t.avg > 6 ? statusGreen() : t.avg > 0 ? statusYellow() : statusRed();
       html += `<tr>
-        <td><strong>${t.name}</strong></td>
+        <td><strong>${escapeHtml(t.name)}</strong></td>
         <td>${t.count}</td>
         <td><strong>${sf(t.avg, 1)} dB</strong></td>
         <td>${sf(t.min, 1)}</td>
@@ -2006,7 +2006,7 @@
           color: isEnd ? (i === 0 ? statusGreen() : statusRed()) : statusYellow(),
           fillColor: isEnd ? (i === 0 ? statusGreen() : statusRed()) : statusYellow(),
           fillOpacity: 0.9, weight: 2
-        }).bindTooltip(n.name, { permanent: false }).addTo(map);
+        }).bindTooltip(esc(n.name), { permanent: false }).addTo(map);
       });
 
       L.polyline(latlngs, { color: statusYellow(), weight: 3, dashArray: '8,6', opacity: 0.8 }).addTo(map);
@@ -2562,7 +2562,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
             tip.style.display = 'block';
             tip.style.left = (cx + 12) + 'px';
             tip.style.top = (cy - 8) + 'px';
-            tip.innerHTML = `<strong>${esc(n.name || n.pubkey.slice(0, 12) + '…')}</strong><br>Role: ${esc(n.role || 'unknown')}<br>Neighbors: ${n.neighbor_count || 0}`;
+            tip.innerHTML = `<strong>${escapeHtml(n.name || n.pubkey.slice(0, 12) + '…')}</strong><br>Role: ${escapeHtml(n.role || 'unknown')}<br>Neighbors: ${n.neighbor_count || 0}`;
           } else if (tip) {
             tip.style.display = 'none';
           }
@@ -3359,7 +3359,7 @@ function destroy() { _stopRolesRefresh(); _stopScopesRefresh(); _analyticsData =
           else if (obs.current_noise_floor >= -100) nfClass = 'rf-nf-warning';
         }
 
-        return `<div class="rf-cell${isSelected ? ' rf-cell-selected' : ''}" data-observer="${obs.observer_id}" tabindex="0" role="button" aria-label="Observer ${name}, noise floor ${nf} dBm">
+        return `<div class="rf-cell${isSelected ? ' rf-cell-selected' : ''}" data-observer="${obs.observer_id}" tabindex="0" role="button" aria-label="Observer ${esc(name)}, noise floor ${nf} dBm">
           <div class="rf-cell-header">
             <span class="rf-cell-name">${esc(name)}</span>
             <span class="rf-cell-nf ${nfClass}">${nf} dBm</span>

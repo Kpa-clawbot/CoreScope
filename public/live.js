@@ -554,7 +554,9 @@
     // tsMs is packet receive time — "ago" is relative to when the packet arrived, not when the animation ended
     const secsAgo = Math.round((Date.now() - tsMs) / 1000);
     const timeStr = secsAgo < 60 ? secsAgo + 's ago' : Math.round(secsAgo / 60) + 'm ago';
-    const chain = hopNames.join(' → ');
+    // hopNames originate from adv_name (~line 3199) — attacker-controlled. Escape
+    // each before joining into the popup HTML. (#1536)
+    const chain = (hopNames || []).map(escapeHtml).join(' → ');
     const link = hash ? `<a class="lc-path-link" href="#/packets/${hash}" style="color:${color}">full detail →</a>` : '';
     return `<div class="lc-path-popup">
       <span class="lc-path-badge" style="background:${color}">${typeName}</span>
@@ -2532,7 +2534,7 @@
     const dl = document.getElementById('liveNodeFilterList');
     if (!dl) return;
     dl.innerHTML = Object.values(nodeData).map(n =>
-      `<option value="${n.public_key}">${n.name || n.public_key.slice(0, 8)}</option>`
+      `<option value="${escapeHtml(n.public_key)}">${escapeHtml(n.name || n.public_key.slice(0, 8))}</option>`
     ).join('');
   }
 
@@ -2686,7 +2688,7 @@
       }
     }
 
-    marker.bindTooltip(n.name || n.public_key.slice(0, 8), {
+    marker.bindTooltip(escapeHtml(n.name || n.public_key.slice(0, 8)), {
       permanent: false, direction: 'top', offset: [0, -sizePx / 2], className: 'live-tooltip'
     });
 
