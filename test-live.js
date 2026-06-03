@@ -1005,7 +1005,9 @@ console.log('\n=== live.js: node filter ===');
 // ===== Clickable paths (M2 — #771) =====
 console.log('\n=== live.js: clickable paths ===');
 {
-  const ctx = makeLiveSandbox();
+  // withAppJs: true → load public/app.js so global `escapeHtml` is in scope.
+  // buildClickablePathPopupHtml escapes each hop name via escapeHtml (#1536).
+  const ctx = makeLiveSandbox({ withAppJs: true });
   const buildPopupHtml = ctx.window._liveBuildClickablePathPopupHtml;
   assert.ok(buildPopupHtml, '_liveBuildClickablePathPopupHtml must be exposed');
 

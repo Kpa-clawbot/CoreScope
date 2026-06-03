@@ -127,6 +127,7 @@ jobs:
           node test-issue-1420-tile-providers.js
           node test-issue-1438-marker-css-vars.js
           node test-live.js
+          node test-xss-escape-sinks.js
 
       - name: 🧹 Frontend lint (eslint no-undef) — issue #1342
         run: |
