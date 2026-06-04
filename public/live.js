@@ -2371,6 +2371,7 @@
         _navCleanup.pinned = !_navCleanup.pinned;
         pinBtn.classList.toggle('pinned', _navCleanup.pinned);
         pinBtn.setAttribute('aria-pressed', _navCleanup.pinned);
+        document.body.classList.toggle('nav-pinned', _navCleanup.pinned);
         try { localStorage.setItem('live-nav-pinned', _navCleanup.pinned); } catch (_) {}
         if (_navCleanup.pinned) {
           clearTimeout(_navCleanup.timeout);
@@ -2382,6 +2383,7 @@
         if (_navCleanup.pinned) {
         pinBtn.classList.add('pinned');
         pinBtn.setAttribute('aria-pressed', 'true');
+        document.body.classList.add('nav-pinned');
         topNav.classList.remove('nav-autohide');
       }
       const navRight = topNav.querySelector('.nav-right');
@@ -4338,6 +4340,7 @@
     if (topNav) { topNav.classList.remove('nav-autohide'); topNav.style.position = ''; topNav.style.width = ''; topNav.style.zIndex = ''; }
     const existingPin = document.getElementById('navPinBtn');
     if (existingPin) existingPin.remove();
+    if (document.body) document.body.classList.remove('nav-pinned');
     if (_navCleanup) {
       clearTimeout(_navCleanup.timeout);
       const livePage = document.querySelector('.live-page');
