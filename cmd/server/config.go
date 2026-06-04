@@ -325,6 +325,10 @@ type HealthThresholds struct {
 	// repeater to be considered "actively relaying" vs only "alive
 	// (advert-only)". See issue #662. Defaults to 24h.
 	RelayActiveHours float64 `json:"relayActiveHours"`
+	// Issue #1552 — observer health classification thresholds (minutes).
+	// Defaults match prior hardcoded behavior in public/observers.js (10/60).
+	ObserverOnlineMinutes int `json:"observerOnlineMinutes"`
+	ObserverStaleMinutes  int `json:"observerStaleMinutes"`
 }
 
 // ThemeFile mirrors theme.json overlay.

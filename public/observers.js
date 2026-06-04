@@ -126,6 +126,8 @@ window.ObserversNaiveChip = {
     if (ago < 3600000 + tolerance) return { cls: 'health-yellow', label: 'Stale' };   // < 1 hour + tolerance
     return { cls: 'health-red', label: 'Offline' };
   }
+  // Issue #1552 — exposed for tests and external callers.
+  window.observerHealthStatus = healthStatus;
 
   function packetBadge(o) {
     if (!o.last_packet_at) return '<span title="No packets ever observed">📡⚠ never</span>';
