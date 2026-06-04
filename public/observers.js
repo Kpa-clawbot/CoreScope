@@ -124,11 +124,11 @@ window.ObserversNaiveChip = {
     const tolerance = 30000; // 30s tolerance for clock skew
     // Issue #1552 — thresholds are operator-configurable via config.json
     // healthThresholds.observerOnlineMinutes / observerStaleMinutes, surfaced
-    // to the client through window.HEALTH_THRESHOLDS. Defaults match prior
-    // hardcoded behavior (10 min Online / 60 min Stale).
+    // to the client through window.HEALTH_THRESHOLDS. Defaults are 60 min
+    // Online / 1440 min (24h) Stale, matching node thresholds (#1552).
     const th = (typeof window !== 'undefined' && window.HEALTH_THRESHOLDS) || {};
-    const onlineMs = th.observerOnlineMs || 600000;
-    const staleMs = th.observerStaleMs || 3600000;
+    const onlineMs = th.observerOnlineMs || 3600000;
+    const staleMs = th.observerStaleMs || 86400000;
     if (ago < onlineMs + tolerance) return { cls: 'health-green', label: 'Online' };
     if (ago < staleMs + tolerance) return { cls: 'health-yellow', label: 'Stale' };
     return { cls: 'health-red', label: 'Offline' };

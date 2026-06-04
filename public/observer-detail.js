@@ -166,10 +166,10 @@ window.ObserverDetailNaiveBanner = {
 
     // Health status — Issue #1552: thresholds are operator-configurable via
     // window.HEALTH_THRESHOLDS.observerOnlineMs / observerStaleMs (defaults
-    // 10 min / 60 min, matching prior hardcoded behavior).
+    // 60 min / 1440 min (24h), matching node thresholds — #1552).
     const ago = obs.last_seen ? Date.now() - new Date(obs.last_seen).getTime() : Infinity;
-    const _obsOnlineMs = (HEALTH_THRESHOLDS && HEALTH_THRESHOLDS.observerOnlineMs) || 600000;
-    const _obsStaleMs = (HEALTH_THRESHOLDS && HEALTH_THRESHOLDS.observerStaleMs) || 3600000;
+    const _obsOnlineMs = (HEALTH_THRESHOLDS && HEALTH_THRESHOLDS.observerOnlineMs) || 3600000;
+    const _obsStaleMs = (HEALTH_THRESHOLDS && HEALTH_THRESHOLDS.observerStaleMs) || 86400000;
     const statusCls = ago < _obsOnlineMs ? 'health-green' : ago < _obsStaleMs ? 'health-yellow' : 'health-red';
     const statusLabel = ago < _obsOnlineMs ? 'Online' : ago < _obsStaleMs ? 'Stale' : 'Offline';
 

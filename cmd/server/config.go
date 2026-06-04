@@ -427,10 +427,10 @@ func (c *Config) GetHealthThresholds() HealthThresholds {
 		}
 	}
 	if h.ObserverOnlineMinutes <= 0 {
-		h.ObserverOnlineMinutes = 10
+		h.ObserverOnlineMinutes = 60
 	}
 	if h.ObserverStaleMinutes <= 0 {
-		h.ObserverStaleMinutes = 60
+		h.ObserverStaleMinutes = 1440
 	}
 	return h
 }

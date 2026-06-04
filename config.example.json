@@ -177,10 +177,10 @@
     "nodeDegradedHours": 1,
     "nodeSilentHours": 24,
     "relayActiveHours": 24,
-    "observerOnlineMinutes": 10,
-    "observerStaleMinutes": 60,
+    "observerOnlineMinutes": 60,
+    "observerStaleMinutes": 1440,
     "_comment": "How long (hours) before nodes show as degraded/silent. 'infra' = repeaters & rooms, 'node' = companions & others. relayActiveHours: a repeater is shown as 'actively relaying' if its pubkey appeared as a path hop in a non-advert packet within this window (issue #662).",
-    "_comment_observerThresholds": "Observer health classification. Online: last_seen < observerOnlineMinutes ago. Stale: between Online and observerStaleMinutes. Offline: beyond observerStaleMinutes. Default 10/60 matches prior hardcoded behavior. Raise for low-traffic or wide-geo meshes."
+    "_comment_observerThresholds": "Observer health classification. Online: last_seen < observerOnlineMinutes ago. Stale: between Online and observerStaleMinutes. Offline: beyond observerStaleMinutes. Defaults 60 / 1440 (1h / 24h) match the node thresholds for consistency and eliminate flap on low-traffic / CDN-fronted instances (#1552). Operators who want the old aggressive 10-min Online threshold can set observerOnlineMinutes: 10."
   },
   "defaultRegion": "SJC",
   "mapDefaults": {
