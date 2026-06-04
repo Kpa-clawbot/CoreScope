@@ -1104,7 +1104,15 @@ input.live-node-filter-input:focus {
   padding: 4px 10px;
   border-radius: 4px;
   cursor: pointer;
-  transition: all 0.15s;
+  /* #1528: transition was `all 0.15s` which animated background-color +
+   * border-color when --accent-bg / --accent-border changed at runtime
+   * (e.g. customizer overrides, or the Playwright sentinel-swap in
+   * test-e2e-playwright.js #1528). getComputedStyle() polled immediately
+   * after the var swap returned the mid-flight (≈old) value, breaking
+   * the theming-illusion guard test. Restrict the transition to props
+   * that are NOT bound to themable tokens so token swaps render
+   * instantly. */
+  transition: color 0.15s, transform 0.15s;
 }
 .vcr-scope-btn.active {
   background: var(--accent-bg, rgba(59,130,246,0.2));
