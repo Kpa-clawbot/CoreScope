@@ -220,6 +220,10 @@
     init();
   }
 
+  // #1402 test hook: expose hint definitions for E2E predicate probes.
+  // Read-only by convention; tests call .relevant() to verify routing/viewport gates.
+  window.__gestureHintsDefs = HINTS;
+
   window.GestureHints = {
     show: show,
     dismiss: dismiss,

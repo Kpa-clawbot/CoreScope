@@ -245,6 +245,53 @@ async function main() {
   }
   await ctx3.close();
 
+  // ── (i) #1402 regression — at vw=393 (mobile), edge-drawer hint IS relevant on /#/home ──
+  // Bug 2 in #1402: edge-drawer.relevant had window.innerWidth > 768 (inverted).
+  // nav-drawer.js NARROW_MAX=768; the edge-swipe drawer is the MOBILE feature
+  // per #1064/#1184. At vw=393 with a .nav-drawer in the DOM, the hint MUST
+  // be classified as relevant. Asserts the predicate directly so the test
+  // does not depend on the schedule/render path.
+  const ctx4 = await browser.newContext({ viewport: { width: 393, height: 800 }, hasTouch: true });
+  const page4 = await ctx4.newPage();
+  await page4.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+  await page4.evaluate((keys) => Object.values(keys).forEach((k) => localStorage.removeItem(k)), KEYS);
+  await page4.reload({ waitUntil: 'domcontentloaded' });
+  await page4.waitForTimeout(HINT_SETTLE_MS);
+  const probe1402 = await page4.evaluate(() => {
+    const hints = window.__gestureHintsDefs || null;
+    return {
+      hintsExposed: !!hints,
+      vw: window.innerWidth,
+      navDrawerInDom: !!document.querySelector('.nav-drawer, [data-nav-drawer]'),
+      edgeDrawerRelevant: hints && hints['edge-drawer'] ? !!hints['edge-drawer'].relevant() : null,
+    };
+  });
+  if (probe1402.hintsExposed && probe1402.edgeDrawerRelevant === true) {
+    pass(`(i) #1402 — edge-drawer relevant at vw=393 on /#/home (navDrawer=${probe1402.navDrawerInDom})`);
+  } else {
+    fail(`(i) #1402 — edge-drawer NOT relevant at vw=${probe1402.vw} — state=${JSON.stringify(probe1402)}`);
+  }
+
+  // ── (j) #1402 regression — at vw=393, row-swipe hint IS relevant on /#/channels ──
+  // Bug 4 in #1402: row-swipe filter was /^#\/(packets|nodes)/ — must widen to
+  // include channels and observers (both render swipable row tables).
+  await page4.goto(`${BASE}/#/channels`, { waitUntil: 'domcontentloaded' });
+  await page4.waitForTimeout(HINT_SETTLE_MS);
+  const probe1402b = await page4.evaluate(() => {
+    const hints = window.__gestureHintsDefs || null;
+    return {
+      hintsExposed: !!hints,
+      hash: location.hash,
+      rowSwipeRelevant: hints && hints['row-swipe'] ? !!hints['row-swipe'].relevant() : null,
+    };
+  });
+  if (probe1402b.hintsExposed && probe1402b.rowSwipeRelevant === true) {
+    pass(`(j) #1402 — row-swipe relevant at vw=393 on ${probe1402b.hash}`);
+  } else {
+    fail(`(j) #1402 — row-swipe NOT relevant on /#/channels — state=${JSON.stringify(probe1402b)}`);
+  }
+  await ctx4.close();
+
   await browser.close();
   console.log(`\ntest-gesture-hints-1065-e2e.js: ${passes} passed, ${failures} failed`);
   process.exit(failures > 0 ? 1 : 0);
