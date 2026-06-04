@@ -32,6 +32,7 @@ import (
 // from a clean "have not warned yet" state.
 func resetCDNDetectionOnce() {
 	cdnWarnOnce = sync.Once{}
+	cdnWarned.Store(false)
 }
 
 // runWithCDNMiddleware fires the request through the middleware and
@@ -254,3 +255,22 @@ func TestCDNDetectionMiddlewareConcurrentFirstRequestLogsOnce(t *testing.T) {
 type writerFunc func(p []byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+// Round-2 MAJOR finding: sync.Once only short-circuits the log.Printf,
+// not the per-request header scan. firstCDNHeader still iterates 4
+// http.Header.Get lookups on every /api request after warning fires.
+// The fix is an atomic.Bool fast-path checked BEFORE firstCDNHeader.
+// This test gates that the flag is actually set on the first CDN
+// request — without it, the middleware would have no signal to
+// short-circuit on, and the optimization would be a dead store.
+func TestCDNDetection_CdnWarnedFlagSet(t *testing.T) {
+	resetCDNDetectionOnce()
+	req := httptest.NewRequest("GET", "/api/x", nil)
+	req.Header.Set("CF-Ray", "x")
+	if _, nextCalled := runWithCDNMiddleware(t, req); !nextCalled {
+		t.Fatal("middleware did not call next handler")
+	}
+	if !cdnWarned.Load() {
+		t.Fatal("cdnWarned must be true after first CDN request (fast-path flag not set)")
+	}
+}

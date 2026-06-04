@@ -25,9 +25,17 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 )
 
 var cdnWarnOnce sync.Once
+
+// cdnWarned is set true after the first CDN-fronted request has been
+// observed and logged. Subsequent requests short-circuit before the
+// per-request header scan in firstCDNHeader — a hot-path optimization
+// for the steady state (warning already emitted, every /api request
+// otherwise pays for 4 http.Header.Get lookups forever).
+var cdnWarned atomic.Bool
 
 // cdnHeaders are HTTP request headers injected ONLY by CDNs
 // (Cloudflare, Fastly, Akamai) — never by a generic reverse proxy.
