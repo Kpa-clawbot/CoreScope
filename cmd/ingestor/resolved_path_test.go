@@ -162,6 +162,166 @@ func deref(p *string) string {
 	return *p
 }
 
+// ─── #1560: context-aware resolution tests ─────────────────────────────────
+//
+// These exercise the post-fix behavior of resolveHopWithContext +
+// resolvePathWithContext. Until the green commit lands they MUST fail
+// on assertions (the stub falls back to naive `len==1` and returns nil
+// on every >1-candidate prefix), proving the gate is real.
+
+// build5NodeAmbiguousIndex returns a prefixIndex where 3 of 5 nodes
+// share the 1-byte prefix 0x5c. Pubkeys are the "fingerprints":
+//
+//	A = "5c000000000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+//	B = "5c000000000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+//	C = "5c000000000000000000000000000000cccccccccccccccccccccccccccccccc"
+//	D = "dd000000000000000000000000000000dddddddddddddddddddddddddddddddd"
+//	E = "ee000000000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+func build5NodeAmbiguousIndex() (idx prefixIndex, A, B, C, D, E string) {
+	A = "5c000000000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	B = "5c000000000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	C = "5c000000000000000000000000000000cccccccccccccccccccccccccccccccc"
+	D = "dd000000000000000000000000000000dddddddddddddddddddddddddddddddd"
+	E = "ee000000000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	idx = prefixIndex{
+		// 1-byte: 5c → A,B,C (collision); dd → D; ee → E
+		"5c": {A, B, C},
+		"dd": {D},
+		"ee": {E},
+		// full-key entries (so exact-match lookups still resolve)
+		A: {A}, B: {B}, C: {C}, D: {D}, E: {E},
+	}
+	return
+}
+
+// TestResolveHopWithContext_OneByteCollision_AdjacencyResolves
+// asserts the dominant production case (#1560): three nodes share the
+// 1-byte prefix 0x5c, but NeighborGraph adjacency narrows to exactly
+// one. The naive resolver returns nil; the context-aware resolver
+// MUST return the right pubkey.
+func TestResolveHopWithContext_OneByteCollision_AdjacencyResolves(t *testing.T) {
+	idx, A, B, C, D, E := build5NodeAmbiguousIndex()
+	g := NewNeighborGraph()
+	// chain: A↔B, B↔C, C↔D, D↔E
+	g.AddEdge(A, B)
+	g.AddEdge(B, C)
+	g.AddEdge(C, D)
+	g.AddEdge(D, E)
+
+	// Anchored on A, the only 5c neighbor of A is B.
+	got := resolveHopWithContext("5c", A, g, idx)
+	if got == nil {
+		t.Fatalf("anchor=A, hop=5c: want B (%s), got <nil>", B)
+	}
+	if *got != B {
+		t.Errorf("anchor=A, hop=5c: want %s, got %s", B, *got)
+	}
+
+	// Anchored on B, the only 5c neighbors of B are A and C — but A is
+	// the originator anchor in a path-walk; here we just assert that
+	// 2 surviving candidates → nil (cannot disambiguate further).
+	got = resolveHopWithContext("5c", B, g, idx)
+	if got != nil {
+		t.Errorf("anchor=B, hop=5c: ambiguous (A and C both adjacent); want <nil>, got %s", *got)
+	}
+}
+
+// TestResolvePathWithContext_TwoHopChainAnchoredOnFromNode covers the
+// canonical 1-byte collision case end-to-end: path = [5c, 5c],
+// from_node = A → expect [B, C].
+func TestResolvePathWithContext_TwoHopChainAnchoredOnFromNode(t *testing.T) {
+	idx, A, B, C, _, _ := build5NodeAmbiguousIndex()
+	g := NewNeighborGraph()
+	g.AddEdge(A, B)
+	g.AddEdge(B, C)
+
+	got := resolvePathWithContext([]string{"5c", "5c"}, A, g, idx)
+	if len(got) != 2 {
+		t.Fatalf("len(got)=%d, want 2 (raw=%v)", len(got), got)
+	}
+	if got[0] == nil || *got[0] != B {
+		t.Errorf("hop[0]: want %s, got %v", B, deref(got[0]))
+	}
+	if got[1] == nil || *got[1] != C {
+		t.Errorf("hop[1]: want %s, got %v", C, deref(got[1]))
+	}
+}
+
+// TestResolveHopWithContext_NoAdjacencyContext_ReturnsNil asserts the
+// negative gate: 3 nodes with shared prefix, no edges between them in
+// the graph, hop=[5c] with no usable anchor → nil. Guards against an
+// over-eager resolver that just picks the first candidate.
+func TestResolveHopWithContext_NoAdjacencyContext_ReturnsNil(t *testing.T) {
+	idx, _, _, _, _, _ := build5NodeAmbiguousIndex()
+	g := NewNeighborGraph() // empty: no edges
+	got := resolveHopWithContext("5c", "", g, idx)
+	if got != nil {
+		t.Errorf("no anchor + empty graph: want <nil>, got %s", *got)
+	}
+
+	// With an anchor that's not adjacent to any candidate, also nil.
+	got = resolveHopWithContext("5c", "deadbeefdeadbeef", g, idx)
+	if got != nil {
+		t.Errorf("non-adjacent anchor: want <nil>, got %s", *got)
+	}
+}
+
+// TestResolvePathWithContext_AdvertAnchoring asserts ADVERT-style
+// anchoring: from_pubkey is the originator, hop[0] is one of its
+// 1-byte-prefix neighbors → resolved.
+func TestResolvePathWithContext_AdvertAnchoring(t *testing.T) {
+	idx, A, B, _, _, _ := build5NodeAmbiguousIndex()
+	g := NewNeighborGraph()
+	g.AddEdge(A, B) // only B is adjacent to A among the 5c candidates
+
+	got := resolvePathWithContext([]string{"5c"}, A, g, idx)
+	if len(got) != 1 {
+		t.Fatalf("len(got)=%d, want 1", len(got))
+	}
+	if got[0] == nil || *got[0] != B {
+		t.Errorf("ADVERT anchored on A, hop=5c: want %s, got %v", B, deref(got[0]))
+	}
+}
+
+// TestResolvePathWithContext_RegressionMultiByteStillWorks asserts no
+// regression in the 2/3/4-byte prefix path that PR #1548 already
+// handled — unique prefixes resolve regardless of graph context.
+func TestResolvePathWithContext_RegressionMultiByteStillWorks(t *testing.T) {
+	idx, _, _, _, D, E := build5NodeAmbiguousIndex()
+	// dd and ee are unique 1-byte prefixes — naive path still works.
+	got := resolvePathWithContext([]string{"dd", "ee"}, "", nil, idx)
+	if len(got) != 2 {
+		t.Fatalf("len(got)=%d, want 2", len(got))
+	}
+	if got[0] == nil || *got[0] != D {
+		t.Errorf("hop[0] dd: want %s, got %v", D, deref(got[0]))
+	}
+	if got[1] == nil || *got[1] != E {
+		t.Errorf("hop[1] ee: want %s, got %v", E, deref(got[1]))
+	}
+}
+
+// TestResolvePathWithContext_AllNilContractPreserved asserts the
+// all-nil → empty-string clobber-guard contract from PR #1548 still
+// holds: an unresolvable path through the context resolver, when fed
+// to marshalResolvedPath, MUST yield "" (so nilIfEmpty → SQL NULL
+// → COALESCE preserves existing).
+func TestResolvePathWithContext_AllNilContractPreserved(t *testing.T) {
+	// Empty index → every hop nil.
+	got := resolvePathWithContext([]string{"5c", "dd"}, "", nil, prefixIndex{})
+	if len(got) != 2 {
+		t.Fatalf("len(got)=%d, want 2", len(got))
+	}
+	for i, p := range got {
+		if p != nil {
+			t.Errorf("hop[%d]: want <nil>, got %s", i, *p)
+		}
+	}
+	if s := marshalResolvedPath(got); s != "" {
+		t.Errorf("all-nil marshal: want \"\", got %q (clobber-guard regression)", s)
+	}
+}
+
 // TestMarshalResolvedPathAllNilReturnsEmpty is a regression gate for
 // the data-loss clobber bug surfaced in PR #1548 review.
 //
