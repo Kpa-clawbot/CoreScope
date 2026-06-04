@@ -128,6 +128,7 @@ jobs:
           node test-issue-1438-marker-css-vars.js
           node test-issue-1562-observers-summary.js
           node test-issue-1509-nav-active-bg.js
+          node test-issue-1509-detect-preset.js
           node test-live.js
           node test-issue-1532-live-fullscreen.js
           node test-xss-escape-sinks.js
