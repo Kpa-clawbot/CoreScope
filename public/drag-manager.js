@@ -10,6 +10,29 @@
   var SNAP_THRESHOLD = 20; // px — snap to edge on release
   var SNAP_MARGIN = 12;    // px — margin when snapped
 
+  // Shared drag-state cleaner (#1568 round-1 MAJOR 2).
+  // Removes every side-effect _detachFromCorner/_finalizePosition/_persist
+  // can leave on a panel element so subsequent corner CSS rules win the
+  // cascade. Call sites: Escape revert, responsive gate, panel corner-
+  // click, reset-to-defaults. Keep this list in sync with _detachFromCorner.
+  //   - removes `data-dragged` attribute
+  //   - removes `is-dragging` class (defensive: normally cleared on
+  //     pointerup, but cheap symmetry for races)
+  //   - clears inline top/left/right/bottom/transform/position/zIndex
+  //     (zIndex is bumped on every DRAGGING transition; must reset)
+  //   - removes `panel-drag-<id>` from localStorage when clearStorage !== false
+  function clearPanel(el, panelId, opts) {
+    if (!el) return;
+    el.removeAttribute('data-dragged');
+    el.classList.remove('is-dragging');
+    ['top', 'left', 'right', 'bottom', 'transform', 'position', 'zIndex'].forEach(function (p) {
+      el.style[p] = '';
+    });
+    if (!opts || opts.clearStorage !== false) {
+      try { localStorage.removeItem('panel-drag-' + panelId); } catch (_) { /* ignore */ }
+    }
+  }
+
   function DragManager() {
     this.state = 'IDLE';
     this.activePanel = null;
@@ -89,24 +112,21 @@
 
   DragManager.prototype._handleKeyDown = function (e) {
     if (e.key === 'Escape' && this.state === 'DRAGGING' && this.activePanel) {
-      this.activePanel.classList.remove('is-dragging');
-      this.activePanel.style.transform = this.preTransform;
+      var panel = this.activePanel;
+      panel.style.transform = this.preTransform;
       // Revert: re-attach to corner if it was cornered before
-      var saved = localStorage.getItem('panel-drag-' + this.activePanel.id);
+      var saved = localStorage.getItem('panel-drag-' + panel.id);
       if (!saved) {
-        // Was in corner mode — restore corner CSS
-        delete this.activePanel.dataset.dragged;
-        this.activePanel.style.top = '';
-        this.activePanel.style.left = '';
-        this.activePanel.style.right = '';
-        this.activePanel.style.bottom = '';
-        this.activePanel.style.transform = '';
+        // Was in corner mode — restore corner CSS via shared helper.
+        // No storage key existed, so clearStorage is a no-op.
+        DragManager.clearPanel(panel, panel.id);
         // Re-apply corner position from M0
-        var corner = localStorage.getItem('panel-corner-' + this.activePanel.id);
-        if (corner) this.activePanel.setAttribute('data-position', corner);
+        var corner = localStorage.getItem('panel-corner-' + panel.id);
+        if (corner) panel.setAttribute('data-position', corner);
       } else {
         // Was already dragged — revert to pre-drag position
-        this.activePanel.style.transform = 'none';
+        panel.classList.remove('is-dragging');
+        panel.style.transform = 'none';
       }
       this._reset();
     }
@@ -213,4 +233,5 @@
 
   // Export
   window.DragManager = DragManager;
+  DragManager.clearPanel = clearPanel;
 })();
