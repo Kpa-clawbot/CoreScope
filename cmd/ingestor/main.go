@@ -715,8 +715,8 @@ func handleMessage(store *Store, tag string, source MQTTSource, m mqtt.Message, 
 					log.Printf("MQTT [%s] node telemetry update error: %v", tag, err)
 				}
 			}
-			// Update default_scope when advert carries a matched transport scope (#899)
-			if pktData.IsTransportScoped {
+			// Update default_scope when advert carries a matched transport scope (#899, #1534)
+			if shouldUpdateDefaultScope(pktData) {
 				if err := store.UpdateNodeDefaultScope(decoded.Payload.PubKey, pktData.ScopeName); err != nil {
 					log.Printf("MQTT [%s] node default_scope update error: %v", tag, err)
 				}
@@ -1355,4 +1355,12 @@ func init() {
 		fmt.Println("corescope-ingestor", version)
 		os.Exit(0)
 	}
+}
+
+// shouldUpdateDefaultScope returns true when the packet carries a transport
+// scope whose region key matched (#1534). Without the ScopeName non-empty
+// guard, transport-scoped adverts from non-matching regions would overwrite
+// previously-correct default_scope values with the empty string.
+func shouldUpdateDefaultScope(pktData *PacketData) bool {
+	return pktData.IsTransportScoped
 }

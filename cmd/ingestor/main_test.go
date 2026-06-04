@@ -1053,3 +1053,38 @@ func TestHandleMessageObserverIATAWhitelist(t *testing.T) {
 		t.Errorf("observer from whitelisted IATA ARN should be accepted, got count=%d", count)
 	}
 }
+
+// TestBuildPacketDataScopeMatchingNoMatch covers the #1534 regression: a
+// transport-scoped advert from a non-matching region carries
+// IsTransportScoped=true and ScopeName="". The default_scope update guard
+// must skip these packets so previously-correct scopes aren't overwritten
+// with the empty string.
+func TestBuildPacketDataScopeMatchingNoMatch(t *testing.T) {
+	// Code1=2AB5 is the precomputed code for region "#test" (payload="hello",
+	// payloadType=5). Build a region-key map for a DIFFERENT region so
+	// matchScope() finds no match and returns "".
+	const rawHex = "142AB500000068656C6C6F"
+	otherKey, _ := hex.DecodeString("aabbccddeeff00112233445566778899")
+	regionKeys := map[string][]byte{"#other": otherKey}
+
+	decoded, err := DecodePacket(rawHex, nil, false)
+	if err != nil {
+		t.Fatalf("DecodePacket: %v", err)
+	}
+	msg := &MQTTPacketMessage{Raw: rawHex}
+	pktData := BuildPacketData(msg, decoded, "obs1", "region1", regionKeys)
+
+	if !pktData.IsTransportScoped {
+		t.Fatalf("precondition: IsTransportScoped should be true (Code1 != 0000)")
+	}
+	if pktData.ScopeName != "" {
+		t.Fatalf("precondition: ScopeName should be empty (no region match), got %q", pktData.ScopeName)
+	}
+
+	// Regression assertion: when ScopeName is empty, the guard must skip the
+	// UpdateNodeDefaultScope call so an empty value never overwrites a
+	// previously-correct default_scope (#1534).
+	if shouldUpdateDefaultScope(pktData) {
+		t.Errorf("shouldUpdateDefaultScope = true for empty ScopeName; want false (would overwrite default_scope with \"\")")
+	}
+}
