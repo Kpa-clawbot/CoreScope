@@ -4721,7 +4721,12 @@ body.embed #app.app-fixed {
 }
 
 /* #1504 — Path symbols legend disclosure (subtle inline key, shared by Packets + Nodes). */
+.path-symbols-legend-wrapper {
+  margin: 4px 0 6px;
+  text-align: right;
+}
 .path-symbols-legend {
+  position: relative; /* anchor for absolutely-positioned .path-legend-list */
   display: inline-block;
   margin-left: 6px;
   font-weight: normal;

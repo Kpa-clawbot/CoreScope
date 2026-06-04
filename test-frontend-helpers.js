@@ -6451,14 +6451,91 @@ console.log('\n=== roles.js: Map Tile Config Parsing ===');
     assert.ok(html.includes('<details'), 'must render a <details> element');
     assert.ok(html.includes('<summary>Path symbols</summary>'), 'must have summary text "Path symbols"');
     assert.ok(html.includes('⚠'), 'must contain warning glyph');
-    assert.ok(html.includes('⚠️'), 'must contain unreliable (emoji warning) glyph');
     assert.ok(/dashed/i.test(html), 'must describe the dashed underline convention');
   });
 
-  test('#1504: packets.js table head references legend renderer adjacent to Path column', () => {
+  test('#1504: packets.js places legend in a sibling wrapper (NOT inside any <th> with data-sort-key)', () => {
     const src = fs.readFileSync(__dirname + '/public/packets.js', 'utf8');
     assert.ok(src.includes('renderPathSymbolsLegend'),
-      'packets.js must invoke HopDisplay.renderPathSymbolsLegend() near the Path column header');
+      'packets.js must invoke HopDisplay.renderPathSymbolsLegend()');
+    assert.ok(src.includes('path-symbols-legend-wrapper'),
+      'packets.js must wrap the legend in .path-symbols-legend-wrapper (sibling, not inside <th>)');
+    // The legend invocation must NOT be inside a <th>...</th> with data-sort-key.
+    // Simple structural check: in any line that contains renderPathSymbolsLegend,
+    // we must NOT see "data-sort-key" on that same line.
+    src.split('\n').forEach((line, i) => {
+      if (line.includes('renderPathSymbolsLegend') && line.includes('data-sort-key')) {
+        throw new Error('packets.js line ' + (i+1) + ' places legend inside a sortable <th> — will clobber the sort handler: ' + line.trim());
+      }
+    });
+  });
+
+  test('#1504: nodes.js places legend in a sibling wrapper (NOT inside <h4>)', () => {
+    const src = fs.readFileSync(__dirname + '/public/nodes.js', 'utf8');
+    assert.ok(src.includes('path-symbols-legend-wrapper'),
+      'nodes.js must wrap the legend in .path-symbols-legend-wrapper (sibling, not inside <h4>)');
+    src.split('\n').forEach((line, i) => {
+      // line must not contain BOTH <h4 and renderPathSymbolsLegend
+      if (line.includes('renderPathSymbolsLegend') && /<h4[\s>]/.test(line)) {
+        throw new Error('nodes.js line ' + (i+1) + ' still embeds legend inside <h4>: ' + line.trim());
+      }
+    });
+  });
+
+  test('#1504: style.css gives .path-symbols-legend position:relative so absolutely-positioned panel anchors correctly', () => {
+    const css = fs.readFileSync(__dirname + '/public/style.css', 'utf8');
+    // Find the rule block for .path-symbols-legend (NOT .path-symbols-legend-wrapper)
+    const m = css.match(/\.path-symbols-legend\s*\{[^}]*\}/);
+    assert.ok(m, '.path-symbols-legend rule must exist');
+    assert.ok(/position\s*:\s*relative/.test(m[0]),
+      '.path-symbols-legend must declare position:relative so .path-legend-list (position:absolute) anchors to it, not a random ancestor. Block was: ' + m[0]);
+    // And the panel must still be position:absolute
+    const panel = css.match(/\.path-symbols-legend\s+\.path-legend-list\s*\{[^}]*\}/);
+    assert.ok(panel && /position\s*:\s*absolute/.test(panel[0]),
+      '.path-symbols-legend .path-legend-list must remain position:absolute');
+  });
+
+  test('#1504: legend glyphs match what hop-display.js actually renders (no documented-but-missing glyphs)', () => {
+    const hopSrc = fs.readFileSync(__dirname + '/public/hop-display.js', 'utf8');
+    HD.PATH_SYMBOLS_LEGEND.forEach(entry => {
+      const g = entry.glyph;
+      if (g === 'dashed underline') {
+        // documented as a CSS convention; class hop-ambiguous uses border-bottom: dashed
+        assert.ok(/hop-ambiguous|hop-global-fallback/.test(hopSrc),
+          'legend mentions "dashed underline" but hop-display.js has no ambiguous/global-fallback class');
+        return;
+      }
+      if (g === '⚠N') {
+        // Real template literal in hop-display.js: ⚠${badgeCount}
+        assert.ok(hopSrc.includes('⚠${badgeCount}') || hopSrc.includes('\u26a0${badgeCount}'),
+          'legend documents ⚠N but hop-display.js does not emit ⚠${badgeCount}');
+        return;
+      }
+      // Otherwise the literal glyph must appear in the file
+      assert.ok(hopSrc.includes(g),
+        'legend glyph ' + JSON.stringify(g) + ' (codepoints ' +
+          [...g].map(c => 'U+' + c.codePointAt(0).toString(16).toUpperCase()).join(',') +
+          ') not found in hop-display.js');
+    });
+  });
+
+  test('#1504 regression: clicking <summary> in legend does NOT trigger column-sort handler', () => {
+    // Simulate the structural guarantee from the wrapper move: legend must not be a descendant of a sortable <th>.
+    // table-sort.js binds click on th[data-sort-key]; with the legend in a sibling div, no click on summary
+    // can bubble to a sortable th.
+    const pktSrc = fs.readFileSync(__dirname + '/public/packets.js', 'utf8');
+    // Extract the snippet around the table head and confirm the legend is OUTSIDE <thead>...</thead>
+    const theadIdx = pktSrc.indexOf('<thead>');
+    const theadEnd = pktSrc.indexOf('</thead>', theadIdx);
+    const tbodyEnd = pktSrc.indexOf('</table>', theadEnd);
+    assert.ok(theadIdx > 0 && theadEnd > theadIdx, 'must find thead boundaries');
+    const insideThead = pktSrc.slice(theadIdx, theadEnd);
+    assert.ok(!insideThead.includes('renderPathSymbolsLegend'),
+      'renderPathSymbolsLegend must NOT appear inside <thead> — would clobber sort handler');
+    // Also: legend must be outside the entire <table> (sibling)
+    const insideTable = pktSrc.slice(theadIdx, tbodyEnd);
+    assert.ok(!insideTable.includes('renderPathSymbolsLegend'),
+      'legend must be sibling of <table>, not a child of any <th>/<thead>/<tr>');
   });
 }
 

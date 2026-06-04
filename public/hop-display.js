@@ -123,10 +123,15 @@ window.HopDisplay = (function() {
 
   // #1504 — Path symbols legend (shared by Packets + Nodes pages).
   // Tufte: integrate words and graphics — small, on-data, dismissible.
+  // Glyph strings here MUST match exactly what hop-display.js emits in renderHop()
+  // (the yellow ⚠N button + the bare ⚠ unreliable button + dashed-underline class).
   const PATH_SYMBOLS_LEGEND = [
-    { glyph: '⚠N',  description: 'Regional conflict count — multiple candidates for this hop\u2019s prefix in the current region. Click for details.' },
-    { glyph: '⚠\uFE0F', description: 'Unreliable name resolution — best-guess pubkey couldn\u2019t be confirmed against surrounding path hops.' },
-    { glyph: 'dashed underline', description: 'Ambiguous or global-fallback resolution — name matched outside the local region.' },
+    { glyph: '⚠N',
+      description: 'Yellow button next to a hop — N regional candidates share this hop\u2019s prefix. Click for the candidate list.' },
+    { glyph: '⚠',
+      description: 'Warning icon alone (no number) — unreliable name resolution: the best-guess pubkey couldn\u2019t be confirmed against surrounding path hops.' },
+    { glyph: 'dashed underline',
+      description: 'Ambiguous or global-fallback resolution — the name matched outside the current region.' },
   ];
 
   function renderPathSymbolsLegend() {
