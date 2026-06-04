@@ -9,6 +9,7 @@ Comprehensive guide to deploying and operating CoreScope. For a quick start, see
 - [Configuration Reference](#configuration-reference)
 - [MQTT Setup](#mqtt-setup)
 - [TLS / HTTPS](#tls--https)
+- [Behind a CDN (Cloudflare, Fastly)](#behind-a-cdn-cloudflare-fastly)
 - [Monitoring & Health Checks](#monitoring--health-checks)
 - [Backup & Restore](#backup--restore)
 - [Troubleshooting](#troubleshooting)
@@ -339,6 +340,104 @@ curl http://your-instance/api/spec | jq .
 The live instance at [analyzer.00id.net](https://analyzer.00id.net) has all API endpoints publicly accessible:
 - Spec: [analyzer.00id.net/api/spec](https://analyzer.00id.net/api/spec)
 - Docs: [analyzer.00id.net/api/docs](https://analyzer.00id.net/api/docs)
+
+---
+
+## Behind a CDN (Cloudflare, Fastly)
+
+If you front CoreScope with a CDN — Cloudflare, Fastly, Akamai, or
+similar — you **must** configure the CDN to bypass cache for `/api/*`.
+The server emits `Cache-Control: no-store` on every API response
+(see #1551), but Cloudflare's zone-level Cache Rules and legacy Page
+Rules can override origin headers. When that happens, observers, packets,
+stats and other API responses get cached at the edge for minutes to hours,
+producing observer-flap, stale dashboards and inconsistent state across
+viewers.
+
+### 1. Verify whether your CDN is caching `/api/*`
+
+From **outside** the CDN (a different network than your origin), run:
+
+```sh
+curl -sI 'https://<your-domain>/api/observers' | grep -iE 'cf-cache|age|cache-control'
+```
+
+Healthy output (cache is bypassed):
+
+```
+cache-control: no-store
+cf-cache-status: BYPASS
+age: 0
+```
+
+Unhealthy output (CDN is caching despite `no-store`):
+
+```
+cache-control: no-store
+cf-cache-status: HIT
+age: 4732
+```
+
+`HIT` or `age > 0` means an intermediary is serving cached JSON. Fix it
+before relying on the dashboard.
+
+You can also run the bundled helper, which exits non-zero with a precise
+diagnostic when caching is detected:
+
+```sh
+scripts/check-cdn-bypass.sh https://<your-domain>
+```
+
+### 2. Cloudflare: add a Cache Rule (recommended)
+
+Cloudflare Dashboard → your zone → **Caching → Cache Rules → Create rule**:
+
+- **When incoming requests match:** Field = `URI Path`, Operator = `starts with`, Value = `/api/`
+- **Then:** Cache eligibility → **Bypass cache**
+
+Save and deploy. Re-run the curl above; you should now see
+`cf-cache-status: BYPASS`.
+
+Legacy Page Rules equivalent (if your zone has no Cache Rules):
+
+- URL pattern: `*your-domain*/api/*`
+- Setting: **Cache Level → Bypass**
+
+### 3. Fastly / other CDNs
+
+Apply the equivalent bypass-cache rule for the `/api/` path prefix.
+The key invariant is: any response from `/api/*` must reach the
+browser uncached (no shared-cache HIT, no positive `Age` header).
+
+### 4. Re-verify
+
+After applying the rule, run step 1's curl from outside the CDN again
+and confirm `cf-cache-status: BYPASS` (or absence of HIT) and `age: 0`.
+
+### 5. Watch the server log
+
+The server logs a one-shot warning at the first request bearing a
+CDN-typical header (`CF-Ray`, `CF-Connecting-IP`, `X-Forwarded-For`,
+`X-Real-IP`, `Fastly-Client-IP`, `True-Client-IP`):
+
+```
+[security] WARNING: detected request via CDN (CF-Ray header present).
+Ensure /api/* is bypassed in your CDN config — see docs/deployment-behind-cdn.md.
+Cached API responses cause observer-flap and incorrect dashboards.
+```
+
+This is informational — the request is not blocked. Treat it as a
+prompt to run the verification curl above. The warning logs at most
+once per process boot, regardless of how many CDN-fronted requests
+arrive.
+
+### Why this can't be fixed server-side
+
+CDN cache policy is operator-controlled. The application emits the
+most conservative cache header it can (`Cache-Control: no-store`),
+but Cloudflare Cache Rules / Page Rules have higher precedence than
+origin headers in many zone configurations. The only durable fix is
+the operator-side bypass rule.
 
 ---
 

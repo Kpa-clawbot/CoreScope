@@ -172,6 +172,14 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// CDN-cacheable (their headers are set by spaHandler).
 	r.Use(noStoreAPIMiddleware)
 
+	// Detect CDN-fronted deployments and warn the operator ONCE if
+	// any CDN-typical header (CF-Ray, CF-Connecting-IP, etc.) is
+	// observed. See #1561: no-store alone isn't sufficient on
+	// Cloudflare zones with Cache Rules / Page Rules that ignore
+	// origin Cache-Control. Operator must add a Bypass Cache rule
+	// for /api/* — see docs/deployment-behind-cdn.md.
+	r.Use(cdnDetectionMiddleware)
+
 	// Config endpoints
 	r.HandleFunc("/api/config/cache", s.handleConfigCache).Methods("GET")
 	r.HandleFunc("/api/config/client", s.handleConfigClient).Methods("GET")
