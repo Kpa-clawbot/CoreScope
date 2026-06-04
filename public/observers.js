@@ -31,8 +31,75 @@ window.ObserversNaiveChip = {
   },
 };
 
+// #1562 — Pure helper for computing + rendering the observers-page aggregate
+// header. Split out as a window global so it's unit-testable in a vm sandbox
+// without needing a DOM, AND so the render path has one obvious place to wire
+// the "Last updated: X ago" freshness label.
+//
+// Why this exists (per #1562): the header used to derive Online/Stale/Offline
+// counts inline from a possibly-stale cached /api/observers payload, with no
+// UI signal that the data could be stale. After #1551 added Cache-Control:
+// no-store on the server response, the in-memory client cache (api() ttl)
+// could still serve old data. The "Last updated" label makes that visible;
+// manual refresh now also bypasses the cache (bust: true).
+window.ObserversSummary = (function () {
+  // Mirror healthStatus() thresholds from observers.js — kept in sync via
+  // grep test in test-issue-1562-observers-summary.js so any future drift
+  // (e.g. #1552 threshold changes) breaks loudly.
+  function classify(lastSeen) {
+    if (!lastSeen) return 'offline';
+    var ago = Date.now() - new Date(lastSeen).getTime();
+    var tolerance = 30000;
+    if (ago < 600000 + tolerance) return 'online';
+    if (ago < 3600000 + tolerance) return 'stale';
+    return 'offline';
+  }
+
+  function computeCounts(observers) {
+    var online = 0, stale = 0, offline = 0;
+    var list = Array.isArray(observers) ? observers : [];
+    for (var i = 0; i < list.length; i++) {
+      var c = classify(list[i] && list[i].last_seen);
+      if (c === 'online') online++;
+      else if (c === 'stale') stale++;
+      else offline++;
+    }
+    return { online: online, stale: stale, offline: offline, total: list.length };
+  }
+
+  // Renders the obs-summary block as a string. fetchedAt is a ms epoch
+  // timestamp (or null/0 for "unknown" — first render before any successful
+  // fetch). When fetchedAt is older than 60s, the timestamp gets the
+  // obs-updated-stale class so operators see the data is going stale.
+  function renderHeader(counts, fetchedAt) {
+    var c = counts || { online: 0, stale: 0, offline: 0, total: 0 };
+    var updatedHtml = '';
+    if (fetchedAt) {
+      var ageMs = Date.now() - fetchedAt;
+      var staleCls = ageMs > 60000 ? ' obs-updated-stale' : '';
+      var iso = new Date(fetchedAt).toISOString();
+      updatedHtml = '<span class="obs-stat obs-updated' + staleCls
+        + '" data-action="obs-refresh" role="button" tabindex="0"'
+        + ' title="Click to force a fresh fetch (bypass client cache)"'
+        + ' aria-label="Last updated ' + timeAgo(iso) + ' — click to refresh">'
+        + 'Last updated: ' + timeAgo(iso) + '</span>';
+    }
+    return ''
+      + '<div class="obs-summary">'
+      +   '<span class="obs-stat"><span class="health-dot health-green">\u25CF</span> ' + c.online + ' Online</span>'
+      +   '<span class="obs-stat"><span class="health-dot health-yellow">\u25B2</span> ' + c.stale + ' Stale</span>'
+      +   '<span class="obs-stat"><span class="health-dot health-red">\u2715</span> ' + c.offline + ' Offline</span>'
+      +   '<span class="obs-stat">\uD83D\uDCE1 ' + c.total + ' Total</span>'
+      +   updatedHtml
+      + '</div>';
+  }
+
+  return { computeCounts: computeCounts, renderHeader: renderHeader };
+})();
+
 (function () {
   let observers = [];
+  let _fetchedAt = 0; // #1562: ms epoch when the current `observers` payload was received
   let obsSkewMap = {}; // observerID → {offsetSec, samples}
   let wsHandler = null;
   let refreshTimer = null;
@@ -55,7 +122,7 @@ window.ObserversNaiveChip = {
     // Event delegation for data-action buttons
     app.addEventListener('click', function (e) {
       var btn = e.target.closest('[data-action]');
-      if (btn && btn.dataset.action === 'obs-refresh') loadObservers();
+      if (btn && btn.dataset.action === 'obs-refresh') loadObservers({ bust: true });
       var row = e.target.closest('tr[data-action="navigate"]');
       if (row) {
         // #1056 AC#4: at narrow widths, open detail in slide-over instead of
@@ -70,6 +137,14 @@ window.ObserversNaiveChip = {
     });
     // #209 — Keyboard accessibility for observer rows
     app.addEventListener('keydown', function (e) {
+      // #1562 — Last-updated pill (role=button) supports Enter/Space to
+      // force a fresh fetch, matching click behavior on data-action="obs-refresh".
+      var refreshBtn = e.target.closest('[data-action="obs-refresh"]');
+      if (refreshBtn && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        loadObservers({ bust: true });
+        return;
+      }
       var row = e.target.closest('tr[data-action="navigate"]');
       if (!row) return;
       if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -98,13 +173,15 @@ window.ObserversNaiveChip = {
     obsSkewMap = {};
   }
 
-  async function loadObservers() {
+  async function loadObservers(opts) {
+    var bust = !!(opts && opts.bust);
     try {
       const [data, skewData] = await Promise.all([
-        api('/observers', { ttl: CLIENT_TTL.observers }),
+        api('/observers', { ttl: CLIENT_TTL.observers, bust: bust }),
         api('/observers/clock-skew', { ttl: 30000 }).catch(function() { return []; })
       ]);
       observers = data.observers || [];
+      _fetchedAt = Date.now(); // #1562: stamp freshness for the header label
       obsSkewMap = {};
       (Array.isArray(skewData) ? skewData : []).forEach(function(s) {
         if (s && s.observerID) obsSkewMap[s.observerID] = s;
@@ -180,18 +257,13 @@ window.ObserversNaiveChip = {
 
     const maxPktsHr = Math.max(1, ...filtered.map(o => o.packetsLastHour || 0));
 
-    // Summary counts
-    const online = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-green').length;
-    const stale = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-yellow').length;
-    const offline = filtered.filter(o => healthStatus(o.last_seen).cls === 'health-red').length;
+    // #1562 — Aggregate counts + "Last updated" freshness label come from the
+    // pure ObserversSummary helper (unit-tested in test-issue-1562-*).
+    const summaryCounts = window.ObserversSummary.computeCounts(filtered);
+    const summaryHtml = window.ObserversSummary.renderHeader(summaryCounts, _fetchedAt);
 
     el.innerHTML = `
-      <div class="obs-summary">
-        <span class="obs-stat"><span class="health-dot health-green">●</span> ${online} Online</span>
-        <span class="obs-stat"><span class="health-dot health-yellow">▲</span> ${stale} Stale</span>
-        <span class="obs-stat"><span class="health-dot health-red">✕</span> ${offline} Offline</span>
-        <span class="obs-stat">📡 ${filtered.length} Total</span>
-      </div>
+      ${summaryHtml}
       <div class="obs-table-scroll table-fluid-wrap"><table class="data-table obs-table" id="obsTable">
         <caption class="sr-only">Observer status and statistics</caption>
         <thead><tr>
