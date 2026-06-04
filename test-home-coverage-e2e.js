@@ -107,19 +107,33 @@ async function pickAnyPubkey(page) {
   // Use a REAL fixture pubkey (so downstream /api/nodes/<pk>/health calls
   // succeed) but pin a sentinel display name we can assert on.
   const _fixtureNode = await pickAnyPubkey(page);
-  assert(_fixtureNode, 'fixture must have at least one node');
+  assert(_fixtureNode && _fixtureNode.public_key,
+    'fixture must expose at least one node with a public_key (got ' + JSON.stringify(_fixtureNode) + ')');
   const FIXTURE_PUBKEY = _fixtureNode.public_key;
   const FIXTURE_NAME = 'HomeFlakeFix-1313';
+  // Register the route BEFORE the typing step (and BEFORE we even reach
+  // the step body, so there is zero chance the keyup→debounce→fetch
+  // beats the route handler being attached). PR #1584 originally
+  // registered this inside the step; under cold-CI load the
+  // page.route() promise occasionally lost the race with the input
+  // event, leaving the fetch to hit the real /api/nodes/search and
+  // depending on whether the fixture had a match for 'h' the dropdown
+  // could end up empty or never open — see #1313.
+  await page.route('**/api/nodes/search**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      nodes: [{ public_key: FIXTURE_PUBKEY, name: FIXTURE_NAME, role: 'companion' }],
+    }),
+  }));
   let pickedPubkey = null;
   let pickedName = null;
   await step('search input renders suggestions for a 1-char query', async () => {
-    await page.route('**/api/nodes/search**', (route) => route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        nodes: [{ public_key: FIXTURE_PUBKEY, name: FIXTURE_NAME, role: 'companion' }],
-      }),
-    }));
+    // Make sure home.js has finished its async init (loadStats fetch
+    // resolves, setupSearch has bound the input listener) before we
+    // type. Otherwise the very first keystroke can fire before the
+    // 'input' handler is attached and the debounce timer never starts.
+    await page.waitForLoadState('networkidle');
     const input = await page.waitForSelector('#homeSearch', { timeout: 5000 });
     await input.click();
     await input.type('h', { delay: 20 });
