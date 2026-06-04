@@ -3392,6 +3392,30 @@ async function run() {
     }
   });
 
+  await test('#1528 .vcr-scope-btn.active background tracks --accent-bg (token swap, not blue literal)', async () => {
+    await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.vcr-scope-btn.active', { timeout: 8000 });
+    const result = await page.evaluate(() => {
+      const el = document.querySelector('.vcr-scope-btn.active');
+      // Override --accent-bg with a clearly non-blue sentinel so we can detect
+      // whether the rule actually consumes the token (good) or a hardcoded
+      // rgba(59,130,246,...) literal (bad — the theming illusion this fix targets).
+      // Use !important so we beat any customizer-injected :root override.
+      document.documentElement.style.setProperty('--accent-bg', 'rgb(255, 0, 0)', 'important');
+      document.documentElement.style.setProperty('--accent-border', 'rgb(0, 200, 0)', 'important');
+      const bg = window.getComputedStyle(el).backgroundColor;
+      const border = window.getComputedStyle(el).borderColor;
+      document.documentElement.style.removeProperty('--accent-bg');
+      document.documentElement.style.removeProperty('--accent-border');
+      return { bg, border };
+    });
+    // Background should reflect our sentinel red, not blue.
+    assert(/^rgb\(255,\s*0,\s*0\)/.test(result.bg),
+      `.vcr-scope-btn.active bg should track --accent-bg, got ${result.bg}`);
+    assert(/^rgb\(0,\s*200,\s*0\)/.test(result.border),
+      `.vcr-scope-btn.active border should track --accent-border, got ${result.border}`);
+  });
+
   await browser.close();
 
   // Summary
