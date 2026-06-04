@@ -282,9 +282,12 @@
         var labels = _control.getContainer().querySelectorAll('.leaflet-control-layers-base label');
         for (var i = 0; i < labels.length; i++) {
           var labelEl = labels[i];
-          var span = labelEl.querySelector('span');
-          if (!span) continue;
-          
+          var spans = labelEl.querySelectorAll('span');
+          if (spans.length === 0) continue;
+
+          // Target the last span to avoid nuking Leaflet's radio <input>
+          var span = spans[spans.length - 1]; 
+
           var id = span.textContent.trim();
           labelEl.setAttribute('data-tile-id', id);
           
