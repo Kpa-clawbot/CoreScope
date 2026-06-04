@@ -450,7 +450,7 @@
 
 /* Region/Area filters inline in live header controls body */
 .live-controls-body .live-region-filter-container,
-.live-controls-body .live-area-filter-container { display: inline-flex; align-items: center; }
+.live-controls-body .live-area-filter-container { display: inline-flex; align-items: center; font-size: 11px; }
 .live-controls-body .live-region-filter-container .region-dropdown-trigger,
 .live-controls-body .live-area-filter-container .region-dropdown-trigger {
   font-size: inherit;
@@ -533,6 +533,8 @@ body.live-fullscreen:not(.nav-pinned) .leaflet-top.leaflet-right {
   .live-header { gap: 6px; padding: 4px 8px; max-height: none; min-height: 48px; }
   .live-stat-pill { font-size: 11px; padding: 1px 7px; }
   .live-toggles { font-size: 10px; gap: 6px; }
+  .live-controls-body .live-region-filter-container,
+  .live-controls-body .live-area-filter-container { font-size: 10px; }
 
   /* Show toggle buttons */
   .live-header-toggle,
