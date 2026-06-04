@@ -95,10 +95,10 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     const inp = await page.$('input[data-cv2-field="branding.homeUrl"]');
     assert(inp, 'branding.homeUrl input missing — Branding tab must expose homeUrl field');
     const target = 'https://example.com/embed-home';
-    await page.evaluate((el, v) => {
-      el.value = v;
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-    }, inp, target);
+    await page.evaluate((args) => {
+      args.el.value = args.v;
+      args.el.dispatchEvent(new Event('input', { bubbles: true }));
+    }, { el: inp, v: target });
     await page.waitForTimeout(500);
     const href = await page.evaluate(() => {
       const a = document.querySelector('a.nav-brand');
