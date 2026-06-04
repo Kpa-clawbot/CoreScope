@@ -339,6 +339,12 @@
     function publish() {
       var h = Math.ceil(bar.getBoundingClientRect().height) || 58;
       page.style.setProperty('--vcr-bar-height', h + 'px');
+      // #1568 round-2: also publish on :root so JS reading
+      // getComputedStyle(document.documentElement).getPropertyValue(
+      // '--vcr-bar-height') sees the measured value (E2E assertions,
+      // future global consumers). CSS resolution unchanged — the
+      // .live-page-scoped var still wins for live-overlay rules.
+      try { document.documentElement.style.setProperty('--vcr-bar-height', h + 'px'); } catch (_) {}
     }
     publish();
     var ro = null;
