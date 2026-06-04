@@ -58,11 +58,19 @@ var cdnHeaders = []string{
 // middleware always calls next; it never blocks or rewrites.
 func cdnDetectionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Fast path: once we've warned, skip the per-request header
+		// scan entirely. Steady state for any CDN-fronted deploy is
+		// ~every request hitting this branch.
+		if cdnWarned.Load() {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if hdr := firstCDNHeader(r.Header); hdr != "" {
 			cdnWarnOnce.Do(func() {
 				log.Printf("[security] WARNING: detected request via CDN (%s header present). "+
 					"Ensure /api/* is bypassed in your CDN config — see docs/deployment-behind-cdn.md. "+
 					"Cached API responses cause observer-flap and incorrect dashboards.", hdr)
+				cdnWarned.Store(true)
 			})
 		}
 		next.ServeHTTP(w, r)
