@@ -82,6 +82,15 @@ function makeSandbox() {
     MutationObserver: function() { this.observe = () => {}; this.disconnect = () => {}; },
     WebSocket: function() { this.close = () => {}; },
     IATA_COORDS_GEO: {},
+    AreaFilter: {
+      init: () => {},
+      onChange: () => {},
+      areaQueryString: () => ''
+    },
+    RegionFilter: {
+      nodesRegionQueryString: () => '',
+      packetsRegionQueryString: () => ''
+    },
   };
   vm.createContext(ctx);
   return ctx;
