@@ -3349,6 +3349,42 @@ async function run() {
     assert(navVisible, 'Top nav should be visible again after exiting fullscreen');
   });
 
+  // === Live page Controls Cog tests (#1532) ===
+  await test('Live page: Controls cog persistence across reloads', async () => {
+    // Clear state first
+    await page.evaluate(() => localStorage.removeItem('live-controls-expanded'));
+    await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+
+    // Expand the cog menu
+    const cog = await page.$('#liveControlsToggle');
+    if (cog) {
+      let isExpanded = await page.$eval('#liveControls', el => el.classList.contains('is-expanded'));
+      if (!isExpanded) {
+        await cog.click();
+        await page.waitForTimeout(500);
+      }
+      
+      // Verify it's expanded
+      isExpanded = await page.$eval('#liveControls', el => el.classList.contains('is-expanded'));
+      assert(isExpanded, 'Controls should have is-expanded class after clicking cog');
+      
+      // Reload page and verify persistence
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(1000);
+      
+      // Should STILL be expanded
+      isExpanded = await page.$eval('#liveControls', el => el.classList.contains('is-expanded'));
+      assert(isExpanded, 'Controls should persist is-expanded class across reload');
+
+      // Click it again, it should immediately close
+      await page.click('#liveControlsToggle');
+      await page.waitForTimeout(500);
+      isExpanded = await page.$eval('#liveControls', el => el.classList.contains('is-expanded'));
+      assert(!isExpanded, 'Controls should collapse on the first click after a reload');
+    }
+  });
+
   await browser.close();
 
   // Summary
