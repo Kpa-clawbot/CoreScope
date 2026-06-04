@@ -1006,6 +1006,15 @@ type ClientConfigResponse struct {
 	Timestamps          TimestampConfig `json:"timestamps"`
 	DebugAffinity       bool            `json:"debugAffinity,omitempty"`
 	MapDarkTileProvider string          `json:"mapDarkTileProvider,omitempty"` // deprecated. TODO: remove after v3.5.0
+	Customizer          CustomizerClientConfig `json:"customizer"`
+}
+
+// CustomizerClientConfig is the operator-side customizer-modal knobs that
+// /api/config/client surfaces to the frontend. Issue #1508. The field is
+// always present (DisabledTabs defaults to an empty slice) so the frontend
+// can blindly call `.disabledTabs.includes(...)` without an undefined guard.
+type CustomizerClientConfig struct {
+	DisabledTabs []string `json:"disabledTabs"`
 }
 
 // ─── IATA Coords ───────────────────────────────────────────────────────────────

@@ -1164,6 +1164,14 @@
       { id: 'geofilter', label: '🗺️', title: 'GeoFilter' },
       { id: 'export', label: '📤', title: 'Export' }
     ];
+    // #1508 — operators can hide individual tabs server-side via
+    // config.customizer.disabledTabs. The list arrives on
+    // window.MC_CUSTOMIZER_CFG (set by roles.js after /api/config/client).
+    // Default empty so behavior is unchanged when the field is absent.
+    var disabled = (typeof window !== 'undefined' && window.MC_CUSTOMIZER_CFG && window.MC_CUSTOMIZER_CFG.disabledTabs) || [];
+    if (disabled.length) {
+      tabs = tabs.filter(function (t) { return disabled.indexOf(t.id) === -1; });
+    }
     return '<div class="cust-tabs">' + tabs.map(function (t) {
       return '<button class="cust-tab' + (t.id === _activeTab ? ' active' : '') + '" data-tab="' + t.id + '" title="' + t.title + '">' +
         t.label + ' <span class="cust-tab-text">' + t.title + '</span>' + (t.badge || '') + '</button>';
