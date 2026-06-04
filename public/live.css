@@ -511,6 +511,15 @@ body.live-fullscreen .live-header {
   display: none !important;
 }
 
+/* Hide top nav in fullscreen UNLESS it was explicitly pinned */
+body.live-fullscreen:not(.nav-pinned) .top-nav {
+  display: none !important;
+}
+/* Shift map controls up when top nav is hidden */
+body.live-fullscreen:not(.nav-pinned) .leaflet-top.leaflet-right {
+  top: 12px !important;
+}
+
 
 
 /* ---- Medium breakpoint (#279) + collapse toggles (#1178, #1179) ---- */
