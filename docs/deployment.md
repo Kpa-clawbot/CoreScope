@@ -417,8 +417,13 @@ and confirm `cf-cache-status: BYPASS` (or absence of HIT) and `age: 0`.
 ### 5. Watch the server log
 
 The server logs a one-shot warning at the first request bearing a
-CDN-typical header (`CF-Ray`, `CF-Connecting-IP`, `X-Forwarded-For`,
-`X-Real-IP`, `Fastly-Client-IP`, `True-Client-IP`):
+CDN-specific header (`CF-Connecting-IP`, `CF-Ray`, `Fastly-Client-IP`,
+or `True-Client-IP`):
+
+Generic reverse-proxy headers (`X-Forwarded-For`, `X-Real-IP`) are
+deliberately NOT used as the signal — every nginx/Caddy/Traefik/k8s
+deploy sets them, so they'd produce false positives on every
+reverse-proxied install.
 
 ```
 [security] WARNING: detected request via CDN (CF-Ray header present).
