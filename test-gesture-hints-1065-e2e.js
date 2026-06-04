@@ -266,8 +266,10 @@ async function main() {
       edgeDrawerRelevant: hints && hints['edge-drawer'] ? !!hints['edge-drawer'].relevant() : null,
     };
   });
-  if (probe1402.hintsExposed && probe1402.edgeDrawerRelevant === true) {
+  if (probe1402.hintsExposed && probe1402.navDrawerInDom && probe1402.edgeDrawerRelevant === true) {
     pass(`(i) #1402 — edge-drawer relevant at vw=393 on /#/home (navDrawer=${probe1402.navDrawerInDom})`);
+  } else if (!probe1402.navDrawerInDom) {
+    fail(`(i) #1402 — precondition failed: .nav-drawer NOT in DOM at vw=393 — state=${JSON.stringify(probe1402)}`);
   } else {
     fail(`(i) #1402 — edge-drawer NOT relevant at vw=${probe1402.vw} — state=${JSON.stringify(probe1402)}`);
   }
@@ -291,6 +293,32 @@ async function main() {
     fail(`(j) #1402 — row-swipe NOT relevant on /#/channels — state=${JSON.stringify(probe1402b)}`);
   }
   await ctx4.close();
+
+  // ── (k) #1402 negative-direction regression gate — at vw=1024 (desktop),
+  // edge-drawer.relevant() MUST return false. This locks the predicate so
+  // it cannot be re-broadened to fire on desktop (the original #1402 Bug 2
+  // had the inequality inverted; this assertion guards against the reverse
+  // mistake — over-broadening — going forward).
+  const ctx5 = await browser.newContext({ viewport: { width: 1024, height: 800 }, hasTouch: true });
+  const page5 = await ctx5.newPage();
+  await page5.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+  await page5.evaluate((keys) => Object.values(keys).forEach((k) => localStorage.removeItem(k)), KEYS);
+  await page5.reload({ waitUntil: 'domcontentloaded' });
+  await page5.waitForTimeout(HINT_SETTLE_MS);
+  const probe1402c = await page5.evaluate(() => {
+    const hints = window.__gestureHintsDefs || null;
+    return {
+      hintsExposed: !!hints,
+      vw: window.innerWidth,
+      edgeDrawerRelevant: hints && hints['edge-drawer'] ? !!hints['edge-drawer'].relevant() : null,
+    };
+  });
+  if (probe1402c.hintsExposed && probe1402c.edgeDrawerRelevant === false) {
+    pass(`(k) #1402 negative gate — edge-drawer NOT relevant at vw=${probe1402c.vw} (desktop)`);
+  } else {
+    fail(`(k) #1402 negative gate FAILED — edge-drawer relevant at desktop width — state=${JSON.stringify(probe1402c)}`);
+  }
+  await ctx5.close();
 
   await browser.close();
   console.log(`\ntest-gesture-hints-1065-e2e.js: ${passes} passed, ${failures} failed`);
