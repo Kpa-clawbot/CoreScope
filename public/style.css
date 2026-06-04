@@ -2674,7 +2674,7 @@ button.ch-item.ch-item-encrypted .ch-badge { filter: grayscale(0.6); }
   cursor: pointer;
   transition: background 0.15s;
 }
-.copy-link-btn:hover { background: rgba(59, 130, 246, 0.25); }
+.copy-link-btn:hover { background: var(--accent-border, rgba(59, 130, 246, 0.25)); }
 
 /* Route tooltip on map */
 .route-tooltip {

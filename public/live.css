@@ -1107,9 +1107,9 @@ input.live-node-filter-input:focus {
   transition: all 0.15s;
 }
 .vcr-scope-btn.active {
-  background: rgba(59,130,246,0.2);
+  background: var(--accent-bg, rgba(59,130,246,0.2));
   color: var(--text);
-  border-color: rgba(59,130,246,0.3);
+  border-color: var(--accent-border, rgba(59,130,246,0.3));
 }
 
 .vcr-timeline-container {
