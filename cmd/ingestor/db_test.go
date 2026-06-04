@@ -2917,3 +2917,46 @@ func TestSchemaMultibyteSupColumns(t *testing.T) {
 	}
 	store2.Close()
 }
+
+// TestUpdateNodeDefaultScope_EmptyScopeIsNoop is the DB-layer defense-in-depth
+// regression test for #1534. Even if the call-site guard at main.go:720 is
+// later removed or refactored, the DB function MUST refuse to overwrite a
+// previously-correct default_scope with the empty string. This is the
+// belt-and-braces guard recommended by adversarial review (MAJOR-2) and
+// dijkstra review (MINOR-2).
+func TestUpdateNodeDefaultScope_EmptyScopeIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	store, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.db.Exec(`INSERT INTO nodes (public_key, name, default_scope) VALUES ('pk1', 'Node1', '#belgium')`); err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO inactive_nodes (public_key, name, default_scope) VALUES ('pk1', 'Node1', '#belgium')`); err != nil {
+		t.Fatalf("insert inactive node: %v", err)
+	}
+
+	// Empty-scope call must be a silent no-op (return nil), NOT overwrite.
+	if err := store.UpdateNodeDefaultScope("pk1", ""); err != nil {
+		t.Fatalf("UpdateNodeDefaultScope(\"\") returned error: %v (want nil)", err)
+	}
+
+	var got string
+	if err := store.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = 'pk1'`).Scan(&got); err != nil {
+		t.Fatalf("read nodes.default_scope: %v", err)
+	}
+	if got != "#belgium" {
+		t.Errorf("nodes.default_scope after empty-scope call = %q, want #belgium (DB-layer guard missing — #1534)", got)
+	}
+	var gotInactive string
+	if err := store.db.QueryRow(`SELECT default_scope FROM inactive_nodes WHERE public_key = 'pk1'`).Scan(&gotInactive); err != nil {
+		t.Fatalf("read inactive_nodes.default_scope: %v", err)
+	}
+	if gotInactive != "#belgium" {
+		t.Errorf("inactive_nodes.default_scope after empty-scope call = %q, want #belgium (DB-layer guard missing — #1534)", gotInactive)
+	}
+}
