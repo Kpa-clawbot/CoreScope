@@ -209,7 +209,7 @@ func TestResolveHopWithContext_OneByteCollision_AdjacencyResolves(t *testing.T) 
 	g.AddEdge(D, E)
 
 	// Anchored on A, the only 5c neighbor of A is B.
-	got := resolveHopWithContext("5c", A, g, idx)
+	got := resolveHopWithContext("5c", A, g, idx, nil)
 	if got == nil {
 		t.Fatalf("anchor=A, hop=5c: want B (%s), got <nil>", B)
 	}
@@ -220,7 +220,7 @@ func TestResolveHopWithContext_OneByteCollision_AdjacencyResolves(t *testing.T) 
 	// Anchored on B, the only 5c neighbors of B are A and C — but A is
 	// the originator anchor in a path-walk; here we just assert that
 	// 2 surviving candidates → nil (cannot disambiguate further).
-	got = resolveHopWithContext("5c", B, g, idx)
+	got = resolveHopWithContext("5c", B, g, idx, nil)
 	if got != nil {
 		t.Errorf("anchor=B, hop=5c: ambiguous (A and C both adjacent); want <nil>, got %s", *got)
 	}
@@ -254,13 +254,13 @@ func TestResolvePathWithContext_TwoHopChainAnchoredOnFromNode(t *testing.T) {
 func TestResolveHopWithContext_NoAdjacencyContext_ReturnsNil(t *testing.T) {
 	idx, _, _, _, _, _ := build5NodeAmbiguousIndex()
 	g := NewNeighborGraph() // empty: no edges
-	got := resolveHopWithContext("5c", "", g, idx)
+	got := resolveHopWithContext("5c", "", g, idx, nil)
 	if got != nil {
 		t.Errorf("no anchor + empty graph: want <nil>, got %s", *got)
 	}
 
 	// With an anchor that's not adjacent to any candidate, also nil.
-	got = resolveHopWithContext("5c", "deadbeefdeadbeef", g, idx)
+	got = resolveHopWithContext("5c", "deadbeefdeadbeef", g, idx, nil)
 	if got != nil {
 		t.Errorf("non-adjacent anchor: want <nil>, got %s", *got)
 	}

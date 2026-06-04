@@ -86,6 +86,11 @@ type Store struct {
 	// resolved_path writer (#1547). Rebuilt on startup and once per
 	// neighbor-edges builder tick (60s).
 	prefixIdx prefixIdxHolder
+
+	// neighborGraph holds the in-memory NeighborGraph snapshot used
+	// by the context-aware resolver (#1560). Rebuilt on startup and
+	// once per neighbor-edges builder tick (60s).
+	neighborGraph neighborGraphHolder
 }
 
 // OpenStore opens or creates a SQLite DB at the given path, applying the
@@ -850,8 +855,16 @@ func (s *Store) InsertTransmission(data *PacketData) (bool, error) {
 
 	// Resolve hop prefixes to full pubkeys for `observations.resolved_path`.
 	// Per #1547: this writer was lost in the #1289 refactor and lives in
-	// the ingestor now. Empty resolved JSON → NULL via nilIfEmpty.
-	resolved := resolvePath(parsePathArray(data.PathJSON), s.prefixIdx.load())
+	// the ingestor now. Per #1560: use the context-aware resolver so
+	// 1-byte prefix collisions are disambiguated via NeighborGraph
+	// adjacency (anchored on from_pubkey for ADVERTs, previous hop
+	// otherwise). Empty resolved JSON → NULL via nilIfEmpty.
+	resolved := resolvePathWithContext(
+		parsePathArray(data.PathJSON),
+		strings.ToLower(data.FromPubkey),
+		s.neighborGraph.load(),
+		s.prefixIdx.load(),
+	)
 	resolvedJSON := marshalResolvedPath(resolved)
 
 	_, err = s.stmtInsertObservation.Exec(
