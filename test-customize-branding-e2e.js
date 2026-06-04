@@ -90,6 +90,51 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
     assert(src === testUrl, 'brand-logo src should match URL, got: ' + (src || '').slice(0, 40));
   });
 
+  // ── #1518: branding.homeUrl override redirects nav-brand[href] ──
+  await step('#1518: branding.homeUrl override sets .nav-brand[href]', async () => {
+    const inp = await page.$('input[data-cv2-field="branding.homeUrl"]');
+    assert(inp, 'branding.homeUrl input missing — Branding tab must expose homeUrl field');
+    const target = 'https://example.com/embed-home';
+    await page.evaluate((el, v) => {
+      el.value = v;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }, inp, target);
+    await page.waitForTimeout(500);
+    const href = await page.evaluate(() => {
+      const a = document.querySelector('a.nav-brand');
+      return a ? a.getAttribute('href') : null;
+    });
+    assert(href === target, '.nav-brand[href] should equal homeUrl override, got: ' + href);
+  });
+
+  await step('#1518: branding.homeUrl rejects javascript: scheme', async () => {
+    const inp = await page.$('input[data-cv2-field="branding.homeUrl"]');
+    await page.evaluate((el) => {
+      el.value = 'javascript:alert(1)';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }, inp);
+    await page.waitForTimeout(500);
+    const href = await page.evaluate(() => {
+      const a = document.querySelector('a.nav-brand');
+      return a ? a.getAttribute('href') : null;
+    });
+    assert(href !== 'javascript:alert(1)', '.nav-brand[href] must NEVER be javascript:, got: ' + href);
+  });
+
+  await step('#1518: empty branding.homeUrl falls through to #/', async () => {
+    const inp = await page.$('input[data-cv2-field="branding.homeUrl"]');
+    await page.evaluate((el) => {
+      el.value = '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }, inp);
+    await page.waitForTimeout(500);
+    const href = await page.evaluate(() => {
+      const a = document.querySelector('a.nav-brand');
+      return a ? a.getAttribute('href') : null;
+    });
+    assert(href === '#/', '.nav-brand[href] should fall through to "#/" when homeUrl is empty, got: ' + href);
+  });
+
   await step('branding overrides persist across reload', async () => {
     await page.reload({ waitUntil: 'load' });
     await page.waitForFunction(() => window._customizerV2 && window._customizerV2.initDone, null, { timeout: 8000 });

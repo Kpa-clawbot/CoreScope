@@ -344,6 +344,21 @@
     return typeof val === 'number' && isFinite(val) && val >= 0 && val <= 1;
   }
 
+  // ── isValidHomeUrl (#1518) ──
+  // Branding.homeUrl is rendered into <a class="nav-brand">[href], so it MUST
+  // reject any scheme that can execute script (javascript:, data:, vbscript:,
+  // etc.). Whitelist only:
+  //   - http://...   (absolute, plain http — operators may need it for intranet)
+  //   - https://...  (absolute, https)
+  //   - #...         (app-relative hash route, e.g. "#/", "#/home")
+  // Empty / whitespace / non-string → invalid (caller falls through to default).
+  function isValidHomeUrl(val) {
+    // RED-COMMIT STUB: always returns true so tests reach their assertions and
+    // fail on the assertion (not on "undefined function"). Replaced by the
+    // real whitelist implementation in the green commit.
+    return true; // eslint-disable-line no-unused-vars
+  }
+
   var TS_ENUMS = {
     defaultMode: ['ago', 'absolute'],
     timezone: ['local', 'utc'],
@@ -2629,6 +2644,7 @@
     validateShape: validateShape,
     applyCSS: applyCSS,
     isValidColor: isValidColor,
+    isValidHomeUrl: isValidHomeUrl,
     isOverridden: _isOverridden,
     // #1496 — full reset (not just STORAGE_KEY). See _resetAll() above.
     resetAll: _resetAll,
