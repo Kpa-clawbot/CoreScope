@@ -51,7 +51,7 @@
         if (!hasTouchCapability()) return false;
         if (onLiveRoute()) return false; // #1244
         var h = location.hash || '';
-        return /^#\/(packets|nodes)/.test(h);
+        return /^#\/(packets|nodes|channels|observers)/.test(h);
       },
       position: 'bottom',
     },
@@ -71,9 +71,10 @@
       relevant: function () {
         if (!hasTouchCapability()) return false;
         if (onLiveRoute()) return false; // #1244
-        // nav-drawer.js: NARROW_MAX=768; edge-swipe drawer is the WIDE
-        // (>768) layout's nav UI. Below 768, the bottom-nav owns navigation.
-        return window.innerWidth > 768 && !!document.querySelector('.nav-drawer, [data-nav-drawer]');
+        // nav-drawer.js: NARROW_MAX=768; the edge-swipe drawer is the MOBILE
+        // (<768) layout's nav UI per #1064/#1184. Above 768, the persistent
+        // sidebar is visible and no edge-swipe is needed.
+        return window.innerWidth < 768 && !!document.querySelector('.nav-drawer, [data-nav-drawer]');
       },
       position: 'top-left',
     },

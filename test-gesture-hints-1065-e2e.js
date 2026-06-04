@@ -208,11 +208,11 @@ async function main() {
 
   await ctx.close();
 
-  // ── (e) at 1024x800 with touch, edge-swipe hint visible on first visit ──
-  // #1065 follow-up: edge-swipe is a touch gesture; the hint must only
-  // appear when the viewport reports touch capability. Test context must
-  // pass hasTouch:true (real edge-swipe-on-tablet/touch-laptop scenario).
-  const ctx2 = await browser.newContext({ viewport: { width: 1024, height: 800 }, hasTouch: true });
+  // ── (e) at vw=393 with touch, edge-swipe hint visible on first visit ──
+  // #1065 follow-up: edge-swipe is a touch gesture. #1402 fix: edge-drawer
+  // is the MOBILE layout's nav UI (per #1064/#1184, nav-drawer.js NARROW_MAX=768);
+  // hint must appear at narrow viewports, not wide ones.
+  const ctx2 = await browser.newContext({ viewport: { width: 393, height: 800 }, hasTouch: true });
   const page2 = await ctx2.newPage();
   await page2.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
   await page2.evaluate((keys) => Object.values(keys).forEach((k) => localStorage.removeItem(k)), KEYS);
@@ -220,9 +220,9 @@ async function main() {
   await page2.waitForTimeout(HINT_SETTLE_MS);
   const edgeHint = await hintVisible(page2, 'edge-drawer');
   if (edgeHint.present && edgeHint.visible) {
-    pass('(e) edge-drawer hint visible at 1024x800');
+    pass('(e) edge-drawer hint visible at 393x800 (mobile)');
   } else {
-    fail(`(e) edge-drawer hint NOT visible at 1024x800 — state=${JSON.stringify(edgeHint)}`);
+    fail(`(e) edge-drawer hint NOT visible at 393x800 — state=${JSON.stringify(edgeHint)}`);
   }
   await ctx2.close();
 
