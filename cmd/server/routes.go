@@ -164,6 +164,14 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// Backfill status header middleware
 	r.Use(s.backfillStatusMiddleware)
 
+	// /api/* responses must not be cached by upstream CDNs (#1551).
+	// Cloudflare/nginx/Varnish default zone policies cache
+	// application/json for 15min–4h when no Cache-Control is set,
+	// causing operators behind a CDN to serve stale observers/packets/
+	// stats data. Scope: /api/ prefix only — static assets stay
+	// CDN-cacheable (their headers are set by spaHandler).
+	r.Use(noStoreAPIMiddleware)
+
 	// Config endpoints
 	r.HandleFunc("/api/config/cache", s.handleConfigCache).Methods("GET")
 	r.HandleFunc("/api/config/client", s.handleConfigClient).Methods("GET")
@@ -255,6 +263,31 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// OpenAPI spec + Swagger UI
 	r.HandleFunc("/api/spec", s.handleOpenAPISpec).Methods("GET")
 	r.HandleFunc("/api/docs", s.handleSwaggerUI).Methods("GET")
+}
+
+// noStoreAPIMiddleware sets Cache-Control: no-store on every response
+// whose request path starts with /api/. See #1551 — CDNs cache JSON
+// for minutes when no Cache-Control is present, which causes observers/
+// packets/stats responses to go stale through Cloudflare/nginx/Varnish.
+//
+// Why no-store (not private,max-age=0):
+//   - no-store is the most conservative directive; forbids ANY cache
+//     (CDN, browser, intermediary) from storing the response.
+//   - private,max-age=0 still permits short browser caches and some
+//     intermediaries; we don't gain anything from it because the data
+//     is fresh-on-every-request semantics by contract (WS pushes diff
+//     against REST GETs).
+//
+// Scope: /api/ prefix only. Static assets (HTML/JS/CSS) keep their
+// existing headers from spaHandler and remain CDN-cacheable on
+// hashed URLs.
+func noStoreAPIMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) backfillStatusMiddleware(next http.Handler) http.Handler {
