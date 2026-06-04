@@ -1109,13 +1109,13 @@
                 <button id="liveNodeFilterClear" class="vcr-btn" title="Clear node filter" style="display:none">×</button>
               </div>
               <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
-              <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="Filter live packets by IATA region"></div>
-              <div id="liveAreaFilter" class="live-area-filter-container"></div>
-              <div class="audio-controls hidden" id="audioControls">
-                <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
-                <label class="audio-slider-label">BPM <input type="range" id="audioBpmSlider" min="40" max="300" value="120" class="audio-slider"><span id="audioBpmVal">120</span></label>
-                <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
-              </div>
+            </div>
+            <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="Filter live packets by IATA region"></div>
+            <div id="liveAreaFilter" class="live-area-filter-container"></div>
+            <div class="audio-controls hidden" id="audioControls">
+              <label class="audio-slider-label">Voice <select id="audioVoiceSelect" class="audio-voice-select"></select></label>
+              <label class="audio-slider-label">BPM <input type="range" id="audioBpmSlider" min="40" max="300" value="120" class="audio-slider"><span id="audioBpmVal">120</span></label>
+              <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
             </div>
           </div>
         </div>
@@ -1431,10 +1431,11 @@
       options: { position: 'topright' },
       onAdd: function() {
         const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control live-leaflet-toggle');
-        const btn = L.DomUtil.create('a', '', container);
+        const btn = L.DomUtil.create('a', 'live-controls-toggle', container);
         btn.href = 'javascript:void(0)';
         btn.innerHTML = '⚙';
         btn.id = 'liveControlsToggle';
+        btn.setAttribute('data-live-controls-toggle', '');
         btn.title = 'Settings';
         btn.setAttribute('aria-label', 'Show live controls');
         btn.setAttribute('role', 'button');
