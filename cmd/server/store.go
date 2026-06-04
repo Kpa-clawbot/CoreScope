@@ -784,18 +784,8 @@ func (s *PacketStore) Load() error {
 			if rpStr != "" {
 				rp := unmarshalResolvedPath(rpStr)
 				pks := extractResolvedPubkeys(rp)
-				// Feed decode-window consumers for this observation's pubkeys
-				if len(pks) > 0 {
-					// addToByNode for relay nodes
-					for _, pk := range pks {
-						s.addToByNode(tx, pk)
-					}
-					// touchRelayLastSeen handled in post-load pass
-					// byPathHop resolved-key entries (#1164: helper invalidates relay stats cache).
-					s.addResolvedPubkeysToPathHopIndex(tx, pks, hopsSeen)
-					// resolvedPubkeyIndex
-					s.addToResolvedPubkeyIndex(tx.ID, pks)
-				}
+				// Single point of truth — see indexResolvedPathHops doc + #1558.
+				s.indexResolvedPathHops(tx, pks, hopsSeen)
 			}
 
 			tx.Observations = append(tx.Observations, obs)
@@ -923,6 +913,12 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 	localByTxID := make(map[int]*StoreTx)
 	localByObsID := make(map[int]*StoreObs)
 	localByObserver := make(map[string][]*StoreObs)
+	// Issue #1558: accumulate the union of resolved_path relay-hop
+	// pubkeys per tx outside the lock. We unmarshal + dedupe here so the
+	// merge critical section below only does map-append work, mirroring
+	// the rest of loadChunk's "build local, merge under lock" shape.
+	localResolvedPKsByTx := make(map[int][]string)
+	localResolvedSeenByTx := make(map[int]map[string]bool)
 	var localTotalObs int
 	var localTrackedBytes int64
 	var localMaxTxID int
@@ -1022,6 +1018,32 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 			}
 			localTotalObs++
 			localTrackedBytes += estimateStoreObsBytes(obs)
+
+			// Issue #1558: collect resolved_path relay-hop pubkeys for
+			// this observation. We unmarshal + dedupe OUTSIDE the merge
+			// critical section so the lock-held work in the per-batch
+			// merge below stays bounded. Without this, background-loaded
+			// transmissions silently miss byNode entries for every relay
+			// they were heard via — Load() does the equivalent inline.
+			rpStr := nullStrVal(resolvedPathStr)
+			if rpStr != "" {
+				rp := unmarshalResolvedPath(rpStr)
+				pks := extractResolvedPubkeys(rp)
+				if len(pks) > 0 {
+					seen := localResolvedSeenByTx[txID]
+					if seen == nil {
+						seen = make(map[string]bool, len(pks))
+						localResolvedSeenByTx[txID] = seen
+					}
+					for _, pk := range pks {
+						if seen[pk] {
+							continue
+						}
+						seen[pk] = true
+						localResolvedPKsByTx[txID] = append(localResolvedPKsByTx[txID], pk)
+					}
+				}
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1084,6 +1106,10 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 		}
 
 		s.mu.Lock()
+		// Issue #1558: hopsSeen scratch map for indexResolvedPathHops →
+		// addResolvedPubkeysToPathHopIndex. Allocated once per batch and
+		// reused across txs (clear()d on each call inside the helper).
+		hopsSeen := make(map[string]bool)
 		newObsIDs := make(map[int]bool, len(batchObsIDs))
 		for k := range batchObsIDs {
 			if s.byObsID[k] == nil {
@@ -1119,6 +1145,14 @@ func (s *PacketStore) loadChunk(from, to time.Time) error {
 				s.byPayloadType[pt] = append(s.byPayloadType[pt], tx)
 			}
 			s.trackAdvertPubkey(tx)
+			// Issue #1558: mirror Load()'s 783-799 resolved-path branch.
+			// Without this, background-loaded transmissions never enter
+			// byNode under their relay-hop pubkeys → Home-page per-node
+			// stats collapse after restart for relay-heavy nodes. The
+			// pubkey union was pre-built outside the lock above.
+			if pks := localResolvedPKsByTx[tx.ID]; len(pks) > 0 {
+				s.indexResolvedPathHops(tx, pks, hopsSeen)
+			}
 		}
 		s.mu.Unlock()
 		runtime.Gosched()
@@ -1275,6 +1309,35 @@ func pathLen(pathJSON string) int {
 		return 0
 	}
 	return len(hops)
+}
+
+// indexResolvedPathHops indexes a transmission under every relay-hop pubkey
+// extracted from an observation's resolved_path, and refreshes the dependent
+// resolved-pubkey + path-hop indexes. This is the single point of truth for
+// the "feed decode-window consumers for resolved-path pubkeys" contract that
+// must hold across every code path that materializes a transmission into the
+// in-memory store: initial Load (cmd/server/store.go ~783-799), background
+// chunk loads (loadChunk, see issue #1558), MQTT ingest (~2293-2306), and
+// late-arriving-observation ingest (~2630-2643). Duplicating these three
+// calls inline let loadChunk silently drop the branch and collapse per-node
+// Home-page stats after restart for relay-heavy nodes — see #1558.
+//
+// Caller contract:
+//   - Must hold s.mu write lock (addToByNode / addToResolvedPubkeyIndex /
+//     addResolvedPubkeysToPathHopIndex all mutate store state).
+//   - pks should be the output of extractResolvedPubkeys (no nils, no
+//     empties); the helper is a no-op when pks is empty.
+//   - hopsSeen is a reusable scratch map; addResolvedPubkeysToPathHopIndex
+//     clear()s it on entry.
+func (s *PacketStore) indexResolvedPathHops(tx *StoreTx, pks []string, hopsSeen map[string]bool) {
+	if len(pks) == 0 {
+		return
+	}
+	for _, pk := range pks {
+		s.addToByNode(tx, pk)
+	}
+	s.addResolvedPubkeysToPathHopIndex(tx, pks, hopsSeen)
+	s.addToResolvedPubkeyIndex(tx.ID, pks)
 }
 
 // indexByNode extracts pubkeys from decoded_json and indexes the transmission.
@@ -2295,13 +2358,8 @@ func (s *PacketStore) IngestNewFromDB(sinceID, limit int) ([]map[string]interfac
 			if r.pathJSON != "" && r.pathJSON != "[]" && cachedPM != nil {
 				rpForBroadcast = resolvePathForObs(r.pathJSON, r.observerID, tx, cachedPM, cachedGraph)
 				resolvedPubkeys = extractResolvedPubkeys(rpForBroadcast)
-				// Feed decode-window consumers: addToByNode + resolvedPubkeyIndex
-				for _, pk := range resolvedPubkeys {
-					s.addToByNode(tx, pk)
-				}
-				s.addToResolvedPubkeyIndex(tx.ID, resolvedPubkeys)
-				// byPathHop resolved-key entries (#1164: helper invalidates relay stats cache).
-				s.addResolvedPubkeysToPathHopIndex(tx, resolvedPubkeys, hopsSeen)
+				// Single point of truth — see indexResolvedPathHops doc + #1558.
+				s.indexResolvedPathHops(tx, resolvedPubkeys, hopsSeen)
 			}
 			// Stash rpForBroadcast for later broadcast/persist (keyed by obs ID)
 			if rpForBroadcast != nil {
@@ -2632,12 +2690,8 @@ func (s *PacketStore) IngestNewObservations(sinceObsID, limit int) []map[string]
 			if pm != nil {
 				obsResolvedPath = resolvePathForObs(r.pathJSON, r.observerID, tx, pm, graphRef)
 				pks := extractResolvedPubkeys(obsResolvedPath)
-				for _, pk := range pks {
-					s.addToByNode(tx, pk)
-				}
-				s.addToResolvedPubkeyIndex(tx.ID, pks)
-				// byPathHop resolved-key entries (#1164: helper invalidates relay stats cache).
-				s.addResolvedPubkeysToPathHopIndex(tx, pks, hopsSeen)
+				// Single point of truth — see indexResolvedPathHops doc + #1558.
+				s.indexResolvedPathHops(tx, pks, hopsSeen)
 			}
 		}
 		// Stash for broadcast/persist

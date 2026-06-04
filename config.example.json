@@ -356,5 +356,9 @@
       "nodesClockSkew": 300
     }
   },
-  "_comment_analytics": "Issue #1240 + #1256 + #1265. Each analytics endpoint (topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew) is recomputed in the background on the configured interval and served from an atomic-pointer cache. Reads never block on compute. Default 300s (5 min) per endpoint reflects the operator principle: serving slightly stale data quickly beats real-time data slowly. Lower values = fresher data at higher CPU cost. Only the default query (no region/window) is precomputed; region- and window-filtered requests fall back to the legacy on-request compute + 60s TTL cache."
+  "_comment_analytics": "Issue #1240 + #1256 + #1265. Each analytics endpoint (topology, rf, distance, channels, hashCollisions, hashSizes, roles, observersClockSkew, nodesClockSkew) is recomputed in the background on the configured interval and served from an atomic-pointer cache. Reads never block on compute. Default 300s (5 min) per endpoint reflects the operator principle: serving slightly stale data quickly beats real-time data slowly. Lower values = fresher data at higher CPU cost. Only the default query (no region/window) is precomputed; region- and window-filtered requests fall back to the legacy on-request compute + 60s TTL cache.",
+  "customizer": {
+    "disabledTabs": [],
+    "_comment_disabledTabs": "Issue #1508. List of customizer-modal tab ids to hide from end users. Useful when operators want to expose only daily-use viewer controls and keep one-shot admin chrome out of the way. Recognized ids: branding, theme, nodes, home, display, geofilter, export. Example: [\"branding\", \"geofilter\", \"export\"] hides the admin tabs and leaves theme/colors/home/display visible. Default [] keeps the legacy behavior (all tabs visible). Operators edit this in config.json directly — there is no in-app UI for this list (by design)."
+  }
 }

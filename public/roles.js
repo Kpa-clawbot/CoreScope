@@ -476,6 +476,12 @@
     if (cfg.cacheInvalidateMs != null) window.CACHE_INVALIDATE_MS = cfg.cacheInvalidateMs;
     if (cfg.externalUrls) Object.assign(EXTERNAL_URLS, cfg.externalUrls);
     if (cfg.propagationBufferMs != null) window.PROPAGATION_BUFFER_MS = cfg.propagationBufferMs;
+    // #1508 — expose operator-side customizer knobs to customize-v2.js.
+    // Default to an empty disabledTabs list so the .indexOf() guard in
+    // _renderTabs is a no-op when the field is absent.
+    window.MC_CUSTOMIZER_CFG = (cfg.customizer && typeof cfg.customizer === 'object')
+      ? { disabledTabs: Array.isArray(cfg.customizer.disabledTabs) ? cfg.customizer.disabledTabs : [] }
+      : { disabledTabs: [] };
     // Sync ROLE_STYLE colors with ROLE_COLORS
     // #1407 — both are now live getters; no manual sync needed. Kept as no-op for clarity.
   }).catch(function () { /* use defaults */ });

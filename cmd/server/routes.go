@@ -393,6 +393,15 @@ func (s *Server) handleConfigCache(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
+	// #1508 — surface the operator-side customizer knobs. The frontend
+	// (public/customize-v2.js _renderTabs) reads disabledTabs to hide
+	// admin-only tabs from end users. Always return a non-nil slice so
+	// the JSON shape is `[]` (not `null`) and the client can call
+	// `.includes()` without an undefined guard.
+	disabledTabs := []string{}
+	if s.cfg.Customizer != nil && s.cfg.Customizer.DisabledTabs != nil {
+		disabledTabs = s.cfg.Customizer.DisabledTabs
+	}
 	writeJSON(w, ClientConfigResponse{
 		Roles:               s.cfg.Roles,
 		HealthThresholds:    s.cfg.GetHealthThresholds().ToClientMs(),
@@ -410,6 +419,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		DebugAffinity:       s.cfg.DebugAffinity,
 		MapDarkTileProvider: s.cfg.MapDarkTileProvider,
 		Tiles:               s.cfg.Tiles,
+		Customizer:          CustomizerClientConfig{DisabledTabs: disabledTabs},
 	})
 }
 
