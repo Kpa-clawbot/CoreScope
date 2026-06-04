@@ -43,25 +43,36 @@ window.ObserversNaiveChip = {
 // could still serve old data. The "Last updated" label makes that visible;
 // manual refresh now also bypasses the cache (bust: true).
 window.ObserversSummary = (function () {
-  // Mirror healthStatus() thresholds from observers.js — kept in sync via
-  // grep test in test-issue-1562-observers-summary.js so any future drift
-  // (e.g. #1552 threshold changes) breaks loudly.
-  function classify(lastSeen) {
-    if (!lastSeen) return 'offline';
+  // #1563 — Single source of truth: aggregate counts MUST come from the
+  // same classifier used to render the per-row dots. Previously this helper
+  // had its own hardcoded thresholds parallel to healthStatus(); operators
+  // would see "5 Online" in the header but count 12 green rows by hand
+  // (regression of #1562). We now delegate to window.observerHealthStatus
+  // (exposed below by the IIFE) and map its returned .cls to the bucket.
+  //
+  // A default fallback classifier is kept for the case where this module
+  // is loaded BEFORE observers.js wires up window.observerHealthStatus
+  // (e.g. legacy test paths). It mirrors the canonical thresholds, but
+  // production code paths always hit window.observerHealthStatus.
+  function defaultClassify(lastSeen) {
+    if (!lastSeen) return { cls: 'health-red' };
     var ago = Date.now() - new Date(lastSeen).getTime();
     var tolerance = 30000;
-    if (ago < 600000 + tolerance) return 'online';
-    if (ago < 3600000 + tolerance) return 'stale';
-    return 'offline';
+    if (ago < 600000 + tolerance) return { cls: 'health-green' };
+    if (ago < 3600000 + tolerance) return { cls: 'health-yellow' };
+    return { cls: 'health-red' };
   }
 
   function computeCounts(observers) {
     var online = 0, stale = 0, offline = 0;
     var list = Array.isArray(observers) ? observers : [];
+    var classifier = (typeof window !== 'undefined' && typeof window.observerHealthStatus === 'function')
+      ? window.observerHealthStatus
+      : defaultClassify;
     for (var i = 0; i < list.length; i++) {
-      var c = classify(list[i] && list[i].last_seen);
-      if (c === 'online') online++;
-      else if (c === 'stale') stale++;
+      var h = classifier(list[i] && list[i].last_seen) || { cls: 'health-red' };
+      if (h.cls === 'health-green') online++;
+      else if (h.cls === 'health-yellow') stale++;
       else offline++;
     }
     return { online: online, stale: stale, offline: offline, total: list.length };
@@ -100,6 +111,7 @@ window.ObserversSummary = (function () {
 (function () {
   let observers = [];
   let _fetchedAt = 0; // #1562: ms epoch when the current `observers` payload was received
+  let _loadObserversReqId = 0; // #1563: monotonic id; resolutions older than the latest are discarded
   let obsSkewMap = {}; // observerID → {offsetSec, samples}
   let wsHandler = null;
   let refreshTimer = null;
@@ -175,11 +187,17 @@ window.ObserversSummary = (function () {
 
   async function loadObservers(opts) {
     var bust = !!(opts && opts.bust);
+    // #1563 — in-flight guard: every call gets a monotonic id; when we
+    // resolve, if a newer call has started, drop this result silently.
+    // Prevents a slow auto-refresh from clobbering a fresh manual bust
+    // (or vice versa) with stale data + a misleading "0s ago" pill.
+    var myId = ++_loadObserversReqId;
     try {
       const [data, skewData] = await Promise.all([
         api('/observers', { ttl: CLIENT_TTL.observers, bust: bust }),
         api('/observers/clock-skew', { ttl: 30000 }).catch(function() { return []; })
       ]);
+      if (myId !== _loadObserversReqId) return; // stale resolve, newer in-flight
       observers = data.observers || [];
       _fetchedAt = Date.now(); // #1562: stamp freshness for the header label
       obsSkewMap = {};
@@ -188,6 +206,7 @@ window.ObserversSummary = (function () {
       });
       render();
     } catch (e) {
+      if (myId !== _loadObserversReqId) return; // discard stale error too
       document.getElementById('obsContent').innerHTML =
         `<div class="text-muted" role="alert" aria-live="polite" style="padding:40px">Error loading observers: ${e.message}</div>`;
     }
@@ -211,6 +230,9 @@ window.ObserversSummary = (function () {
     return { cls: 'health-red', label: 'Offline' };
   }
   // Issue #1552 — exposed for tests and external callers.
+  // #1563 — Expose for ObserversSummary so aggregate counts and per-row dots
+  // share ONE classifier (single source of truth). If anything reintroduces
+  // parallel thresholds, the new ObserversSummary regression test breaks.
   window.observerHealthStatus = healthStatus;
 
   function packetBadge(o) {
