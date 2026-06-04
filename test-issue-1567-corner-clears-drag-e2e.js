@@ -174,6 +174,75 @@ function assert(c, m) { if (!c) throw new Error(m || 'assertion failed'); }
       'panel must move away from dragged coords (300,500); rect=' + JSON.stringify(after.rect));
   });
 
+  // (c) Same bug applies to `resetPanelPositions` — it calls
+  //     applyPanelPosition without clearing drag state, so a dragged panel
+  //     won't return to its default corner. Re-inject drag state, invoke
+  //     window._panelCorner.resetPanelPositions(), assert full reset.
+  await step('resetPanelPositions clears drag state and snaps to default corner', async () => {
+    const after = await page.evaluate(() => {
+      const el = document.getElementById('liveFeed');
+      // Re-inject drag state (mirrors DragManager output).
+      el.removeAttribute('data-position');
+      el.dataset.dragged = 'true';
+      el.classList.add('is-dragging');
+      el.style.position = 'fixed';
+      el.style.top = '320px';
+      el.style.left = '520px';
+      el.style.right = 'auto';
+      el.style.bottom = 'auto';
+      el.style.transform = 'translate(5px,5px)';
+      el.style.zIndex = '1500';
+      localStorage.setItem('panel-drag-liveFeed', JSON.stringify({
+        xPct: 520 / window.innerWidth, yPct: 320 / window.innerHeight,
+      }));
+      // Now reset.
+      window._panelCorner.resetPanelPositions();
+      const r = el.getBoundingClientRect();
+      const VCR = parseInt(getComputedStyle(document.documentElement)
+        .getPropertyValue('--vcr-bar-height')) || 58;
+      // PANEL_DEFAULTS.liveFeed = 'bl' → anchor bottom: VCR+10, left: 12
+      return {
+        pos: el.getAttribute('data-position'),
+        dragged: el.dataset.dragged,
+        isDragging: el.classList.contains('is-dragging'),
+        inlineTop: el.style.top, inlineLeft: el.style.left,
+        inlineRight: el.style.right, inlineBottom: el.style.bottom,
+        inlineTransform: el.style.transform, inlinePosition: el.style.position,
+        inlineZIndex: el.style.zIndex,
+        ls: localStorage.getItem('panel-drag-liveFeed'),
+        rect: { top: r.top, left: r.left, right: r.right, bottom: r.bottom },
+        vw: window.innerWidth, vh: window.innerHeight,
+        anchor: { bottom: VCR + 10, left: 12 },
+      };
+    });
+
+    assert(after.pos === 'bl',
+      'data-position must reset to default "bl" for liveFeed, got: ' + after.pos);
+    assert(!after.dragged,
+      'data-dragged must be cleared after reset, got: ' + after.dragged);
+    assert(!after.isDragging,
+      'is-dragging class must be cleared after reset');
+    assert(!after.ls,
+      'localStorage panel-drag-liveFeed must be removed after reset, got: ' + after.ls);
+    assert(after.inlineZIndex === '',
+      'inline zIndex must be cleared after reset, got: ' + JSON.stringify(after.inlineZIndex));
+    ['inlineTop', 'inlineLeft', 'inlineRight', 'inlineBottom', 'inlineTransform', 'inlinePosition'].forEach(function (k) {
+      assert(after[k] === '',
+        'inline style ' + k + ' must be cleared after reset, got: ' + JSON.stringify(after[k]));
+    });
+    var TOL = 12;
+    var bottomGap = after.vh - after.rect.bottom;
+    assert(Math.abs(bottomGap - after.anchor.bottom) < TOL,
+      'panel bottom-gap must match default-corner anchor (' + after.anchor.bottom +
+      '), got vh-rect.bottom=' + bottomGap);
+    assert(Math.abs(after.rect.left - after.anchor.left) < TOL,
+      'panel left must match default-corner anchor (' + after.anchor.left +
+      '), got rect.left=' + after.rect.left);
+    // Sanity: panel must have moved off the injected dragged coords.
+    assert(Math.abs(after.rect.top - 320) > TOL || Math.abs(after.rect.left - 520) > TOL,
+      'panel must move away from injected dragged coords (320,520); rect=' + JSON.stringify(after.rect));
+  });
+
   await ctx.close();
   await browser.close();
   console.log(`\n=== Results: ${passed} passed, ${failed} failed ===`);
