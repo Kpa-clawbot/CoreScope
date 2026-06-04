@@ -121,5 +121,21 @@ window.HopDisplay = (function() {
     } catch (e) { console.error('Conflict popover error:', e); }
   }
 
-  return { renderHop, renderPath, _showFromBtn };
+  // #1504 — Path symbols legend (shared by Packets + Nodes pages).
+  // Tufte: integrate words and graphics — small, on-data, dismissible.
+  const PATH_SYMBOLS_LEGEND = [
+    { glyph: '⚠N',  description: 'Regional conflict count — multiple candidates for this hop\u2019s prefix in the current region. Click for details.' },
+    { glyph: '⚠\uFE0F', description: 'Unreliable name resolution — best-guess pubkey couldn\u2019t be confirmed against surrounding path hops.' },
+    { glyph: 'dashed underline', description: 'Ambiguous or global-fallback resolution — name matched outside the local region.' },
+  ];
+
+  function renderPathSymbolsLegend() {
+    const items = PATH_SYMBOLS_LEGEND.map(function(e) {
+      return '<li><span class="path-legend-glyph">' + escapeHtml(e.glyph) + '</span> — ' + escapeHtml(e.description) + '</li>';
+    }).join('');
+    return '<details class="path-symbols-legend"><summary>Path symbols</summary>' +
+           '<ul class="path-legend-list">' + items + '</ul></details>';
+  }
+
+  return { renderHop, renderPath, _showFromBtn, PATH_SYMBOLS_LEGEND, renderPathSymbolsLegend };
 })();

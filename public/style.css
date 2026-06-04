@@ -4719,3 +4719,45 @@ body.embed #app.app-fixed {
   height: 100vh !important;
   height: 100dvh !important;
 }
+
+/* #1504 — Path symbols legend disclosure (subtle inline key, shared by Packets + Nodes). */
+.path-symbols-legend {
+  display: inline-block;
+  margin-left: 6px;
+  font-weight: normal;
+  font-size: 11px;
+  vertical-align: middle;
+}
+.path-symbols-legend > summary {
+  display: inline-block;
+  cursor: pointer;
+  color: var(--text-muted, #888);
+  list-style: none;
+  border-bottom: 1px dotted currentColor;
+  user-select: none;
+}
+.path-symbols-legend > summary::-webkit-details-marker { display: none; }
+.path-symbols-legend > summary::marker { content: ''; }
+.path-symbols-legend > summary::before { content: 'ⓘ '; opacity: 0.7; }
+.path-symbols-legend[open] > summary { color: var(--text, inherit); }
+.path-symbols-legend .path-legend-list {
+  position: absolute;
+  z-index: 50;
+  margin: 4px 0 0;
+  padding: 8px 12px;
+  list-style: none;
+  background: var(--bg-card, var(--bg, #fff));
+  border: 1px solid var(--border, #ddd);
+  border-radius: 4px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+  font-size: 11px;
+  line-height: 1.5;
+  max-width: 360px;
+  color: var(--text, inherit);
+}
+.path-symbols-legend .path-legend-list li { padding: 2px 0; }
+.path-symbols-legend .path-legend-glyph {
+  display: inline-block;
+  min-width: 1.6em;
+  font-weight: 600;
+}
