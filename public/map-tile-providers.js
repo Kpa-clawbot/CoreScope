@@ -200,7 +200,8 @@
     // Set a default position just in case it isn't provided
     var controlPosition = position || 'topleft';
 
-    var AUTO_LABEL = '<span title="Follows the app\'s current light/dark theme">Auto</span>';
+    var AUTO_KEY   = '__auto__';
+    var AUTO_LABEL = ' <span title="Follows the app\'s current light/dark theme">Auto</span>';
     var _control   = null;  // current L.control.layers instance
     var _layerMap  = {};    // provider-id → L.tileLayer
     var _isAuto    = true;  // true when "Auto" is the active selection
@@ -266,32 +267,40 @@
 
       // "Auto" entry is backed by the theme-synced autoLayerGroup
       var baseMaps = {};
-      baseMaps[AUTO_LABEL] = autoLayerGroup;
+      baseMaps[AUTO_KEY] = autoLayerGroup;
 
-      lightIds.forEach(function (id) { baseMaps[REGISTRY[id].label || id] = _makeLayer(id); });
-      darkIds.forEach(function  (id) { 
-        var lbl = REGISTRY[id].label || id;
-        baseMaps[lbl + '\u200B'] = _makeLayer(id); 
-      });
+      lightIds.forEach(function (id) { baseMaps[id] = _makeLayer(id); });
+      darkIds.forEach(function  (id) { baseMaps[id] = _makeLayer(id); });
 
       // Use the dynamic controlPosition variable instead of a hardcoded string
       _control = L.control.layers(baseMaps, null, { position: controlPosition }).addTo(map);
 
-      // DOM surgery: inject a separator between Light and Dark sections.
-      if (lightIds.length > 0 && darkIds.length > 0) {
-        try {
-          var firstDarkLabelStr = (REGISTRY[darkIds[0]].label || darkIds[0]) + '\u200B';
-          var labels = _control.getContainer().querySelectorAll('.leaflet-control-layers-base label');
-          for (var i = 0; i < labels.length; i++) {
-            if (labels[i].textContent.indexOf(firstDarkLabelStr) !== -1 || labels[i].innerHTML.indexOf(firstDarkLabelStr) !== -1) {
-              var sep = document.createElement('div');
-              sep.className = 'leaflet-control-layers-separator';
-              labels[i].parentNode.insertBefore(sep, labels[i]);
-              break;
-            }
+      // DOM surgery: map IDs to human-readable labels, inject separator, set data attributes.
+      // We pass raw IDs to Leaflet as keys so e.name is the exact ID without label parsing.
+      try {
+        var firstDarkId = darkIds.length > 0 ? darkIds[0] : null;
+        var labels = _control.getContainer().querySelectorAll('.leaflet-control-layers-base label');
+        for (var i = 0; i < labels.length; i++) {
+          var labelEl = labels[i];
+          var span = labelEl.querySelector('span');
+          if (!span) continue;
+          
+          var id = span.textContent.trim();
+          labelEl.setAttribute('data-tile-id', id);
+          
+          if (id === AUTO_KEY) {
+            span.innerHTML = AUTO_LABEL;
+          } else if (REGISTRY[id]) {
+            span.innerHTML = ' ' + (REGISTRY[id].label || id);
           }
-        } catch (_) {}
-      }
+          
+          if (id === firstDarkId && lightIds.length > 0) {
+            var sep = document.createElement('div');
+            sep.className = 'leaflet-control-layers-separator';
+            labelEl.parentNode.insertBefore(sep, labelEl);
+          }
+        }
+      } catch (_) {}
 
       // Decide initial active layer
       if (_isAuto) {
@@ -310,21 +319,14 @@
       }
 
       map._mcBaselayerchangeHandler = function (e) {
-        if (e.name === AUTO_LABEL) {
+        if (e.name === AUTO_KEY) {
           _activateAuto();
           return;
         }
 
-        // Explicit provider selected — find the registry id by label
-        var selectedId = null;
-        Object.keys(REGISTRY).forEach(function (id) {
-          var expectedLabel = REGISTRY[id].label || id;
-          if (REGISTRY[id].type === 'dark') expectedLabel += '\u200B';
-          if (expectedLabel === e.name) {
-            selectedId = id;
-          }
-        });
-        if (!selectedId) return;
+        // Explicit provider selected — the name parameter is exactly our registry ID
+        var selectedId = e.name;
+        if (!REGISTRY[selectedId]) return;
 
         _isAuto = false;
         try { 

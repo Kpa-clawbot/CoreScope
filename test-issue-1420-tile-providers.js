@@ -483,13 +483,13 @@ test('MC_createLayerControl handles Auto mode and explicit layers correctly', ()
   assert.strictEqual(ctx.tilePane.getAttribute('data-explicit-layer'), null, 'data-explicit-layer should be cleared');
   
   // Select explicit layer with an invert filter
-  baselayerchangeCallback({ name: 'Carto Voyager\u200B' }); // Selects carto-voyager-dark
+  baselayerchangeCallback({ name: 'carto-voyager-dark' }); // Selects carto-voyager-dark
   assert.ok(removedLayers.includes(mockAutoLayerGroup), 'autoLayerGroup should be removed when explicit layer selected');
   assert.strictEqual(ctx.tilePane.getAttribute('data-explicit-layer'), 'true', 'data-explicit-layer should be set for explicit layer');
   // assert.strictEqual(ctx.localStorage.getItem('mc-dark-tile-provider'), 'carto-voyager-dark', 'storage should update');
   
   // Simulate Leaflet adding the inverted layer and assert the CSS filter
-  const invertedLayer = ctx._capturedBaseMaps['Carto Voyager\u200B'];
+  const invertedLayer = ctx._capturedBaseMaps['carto-voyager-dark'];
   if (invertedLayer) {
     invertedLayer._events['add']();
     assert.ok(ctx.tilePane.style.filter.indexOf('invert(') >= 0, 'pane.style.filter should be set to invertFilter on explicit layer add');
@@ -498,7 +498,7 @@ test('MC_createLayerControl handles Auto mode and explicit layers correctly', ()
   }
 
   // Simulate Leaflet switching to a non-inverted explicit layer and assert the CSS filter is cleared
-  const lightLayer = ctx._capturedBaseMaps['Carto Positron'];
+  const lightLayer = ctx._capturedBaseMaps['carto-light'];
   if (lightLayer) {
     lightLayer._events['add']();
     assert.strictEqual(ctx.tilePane.style.filter, '', 'pane.style.filter should be cleared on non-inverted explicit layer add');
@@ -508,7 +508,7 @@ test('MC_createLayerControl handles Auto mode and explicit layers correctly', ()
   
   // Select Auto again
   const eventsBeforeAuto = ctx.events.length;
-  baselayerchangeCallback({ name: '<span title="Follows the app\'s current light/dark theme">Auto</span>' });
+  baselayerchangeCallback({ name: '__auto__' });
   assert.ok(addedLayers.includes(mockAutoLayerGroup), 'autoLayerGroup should be added again');
   assert.strictEqual(ctx.tilePane.getAttribute('data-explicit-layer'), null, 'data-explicit-layer should be cleared again');
   
