@@ -76,6 +76,7 @@ type Config struct {
 
 	LiveMap struct {
 		PropagationBufferMs int `json:"propagationBufferMs"`
+		MaxNodes            int `json:"maxNodes"`
 	} `json:"liveMap"`
 
 	CacheTTL map[string]interface{} `json:"cacheTTL"`
@@ -579,6 +580,12 @@ func (c *Config) PropagationBufferMs() int {
 		return c.LiveMap.PropagationBufferMs
 	}
 	return 5000
+}
+
+// LiveMapMaxNodes returns 0 (intentional stub for #1574 red commit; real
+// behavior is added in the green commit).
+func (c *Config) LiveMapMaxNodes() int {
+	return 0
 }
 
 // blacklistSet lazily builds and caches the nodeBlacklist as a set for O(1) lookups.
