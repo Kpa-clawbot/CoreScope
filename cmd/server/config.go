@@ -124,6 +124,19 @@ type Config struct {
 
 	// BatteryThresholds: voltage cutoffs for low/critical alerts (#663).
 	BatteryThresholds *BatteryThresholdsConfig `json:"batteryThresholds,omitempty"`
+
+	// Customizer controls operator-side knobs for the in-app customizer modal
+	// (theme/branding/etc.). See CustomizerConfig and issue #1508.
+	Customizer *CustomizerConfig `json:"customizer,omitempty"`
+}
+
+// CustomizerConfig holds operator-side knobs for the in-app customizer modal.
+// Today only DisabledTabs is exposed: a list of tab ids the operator wants to
+// hide from end users (e.g. ["branding","geofilter","export"]). The frontend
+// (public/customize-v2.js _renderTabs) reads this from /api/config/client and
+// filters those tabs out before rendering. Issue #1508.
+type CustomizerConfig struct {
+	DisabledTabs []string `json:"disabledTabs"`
 }
 
 // weakAPIKeys is the blocklist of known default/example API keys that must be rejected.
