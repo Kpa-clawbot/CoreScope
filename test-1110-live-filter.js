@@ -33,6 +33,10 @@ async function test(name, fn) {
     args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
   });
   const ctx = await browser.newContext();
+  // #1532 — controls panel defaults collapsed; pre-seed expanded pref.
+  await ctx.addInitScript(() => {
+    try { localStorage.setItem('live-controls-expanded', 'true'); } catch (_) {}
+  });
   const page = await ctx.newPage();
   page.setDefaultTimeout(10000);
   console.log(`#1110 Live filter E2E against ${BASE}`);

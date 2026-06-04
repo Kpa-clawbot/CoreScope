@@ -1897,6 +1897,14 @@
           // (previously narrow-only). Operators reveal the toggle row
           // via the ⚙ pin, parity with map-controls accordion.
           var defaultCollapsed = (p.rootId === 'liveControls') ? true : false;
+          // Respect the user's prior choice across reloads.
+          if (p.rootId === 'liveControls') {
+            try {
+              var pref = localStorage.getItem('live-controls-expanded');
+              if (pref === 'true')  defaultCollapsed = false;
+              if (pref === 'false') defaultCollapsed = true;
+            } catch (_) { /* private browsing */ }
+          }
           if (narrowMql.matches || defaultCollapsed) {
             // Default collapsed; preserve existing expansion if user
             // already opened it this mount.
@@ -1921,6 +1929,11 @@
           var root = document.getElementById(p.rootId);
           var nowExpanded = !(root && root.classList.contains('is-expanded'));
           setExpanded(p, nowExpanded);
+          // #1532 — persist controls pin state across reloads.
+          if (p.rootId === 'liveControls') {
+            try { localStorage.setItem('live-controls-expanded', nowExpanded ? 'true' : 'false'); }
+            catch (_) { /* private browsing */ }
+          }
         });
       });
       applyForViewport();

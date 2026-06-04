@@ -158,6 +158,11 @@ async function assertMatrixThemeTransparent(page, label) {
     { w: 320,  h: 800, tag: '[320x800 narrow phone]' },
   ]) {
     const ctx = await browser.newContext({ viewport: { width: vp.w, height: vp.h } });
+    // #1532 — controls panel defaults collapsed; pre-seed expanded pref
+    // so anchor + reachability assertions still run against the expanded layout.
+    await ctx.addInitScript(() => {
+      try { localStorage.setItem('live-controls-expanded', 'true'); } catch (_) {}
+    });
     const page = await ctx.newPage();
     page.setDefaultTimeout(8000);
     page.on('pageerror', (e) => console.error('[pageerror]', e.message));

@@ -53,6 +53,12 @@ async function run() {
     args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage']
   });
   const context = await browser.newContext();
+  // #1532 — `.live-controls` defaults collapsed; pre-seed the user's pin
+  // preference so toggle children (#liveHeatToggle, etc.) are visible in
+  // tests that pre-date the change.
+  await context.addInitScript(() => {
+    try { localStorage.setItem('live-controls-expanded', 'true'); } catch (_) {}
+  });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
 
