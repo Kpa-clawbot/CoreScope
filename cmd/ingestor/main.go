@@ -1362,5 +1362,5 @@ func init() {
 // guard, transport-scoped adverts from non-matching regions would overwrite
 // previously-correct default_scope values with the empty string.
 func shouldUpdateDefaultScope(pktData *PacketData) bool {
-	return pktData.IsTransportScoped
+	return pktData.IsTransportScoped && pktData.ScopeName != ""
 }
