@@ -215,6 +215,17 @@
     var nextIdx = (CORNER_CYCLE.indexOf(current) + 1) % 4;
     var next = nextAvailableCorner(panelId, CORNER_CYCLE[nextIdx], positions);
     try { localStorage.setItem('panel-corner-' + panelId, next); } catch (_) { /* quota */ }
+    // #1567: corner button must clear any prior free-form drag state, or
+    // the inline top/left from drag-manager.js wins the cascade over the
+    // corner anchors and the panel silently no-ops on click.
+    var el = document.getElementById(panelId);
+    if (el) {
+      el.removeAttribute('data-dragged');
+      ['top', 'left', 'right', 'bottom', 'transform', 'position'].forEach(function (p) {
+        el.style[p] = '';
+      });
+    }
+    try { localStorage.removeItem('panel-drag-' + panelId); } catch (_) { /* ignore */ }
     applyPanelPosition(panelId, next);
     // Announce for screen readers
     var announce = document.getElementById('panelPositionAnnounce');
