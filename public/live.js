@@ -1933,32 +1933,33 @@
       function applyForViewport() {
         for (var i = 0; i < pairs.length; i++) {
           var p = pairs[i];
-          // #1532 — `liveControls` defaults collapsed at ALL viewports
-          // (previously narrow-only). Operators reveal the toggle row
-          // via the ⚙ pin, parity with map-controls accordion.
-          var defaultCollapsed = (p.rootId === 'liveControls') ? true : false;
-          // Respect the user's prior choice across reloads.
+          var root = document.getElementById(p.rootId);
+          if (!root) continue;
+          
           if (p.rootId === 'liveControls') {
-            try {
-              var pref = localStorage.getItem('live-controls-expanded');
-              if (pref === 'true')  defaultCollapsed = false;
-              if (pref === 'false') defaultCollapsed = true;
-            } catch (_) { /* private browsing */ }
-          }
-          if (narrowMql.matches || defaultCollapsed) {
-            // Default collapsed; preserve existing expansion if user
-            // already opened it this mount.
-            var root = document.getElementById(p.rootId);
-            var alreadyExpanded = root && root.classList.contains('is-expanded');
-            if (!alreadyExpanded) setExpanded(p, false);
+            // #1532 - liveControls is an accordion on all viewports,
+            // persisting state across reloads via localStorage.
+            if (!root.classList.contains('is-expanded') && !root.classList.contains('is-collapsed')) {
+              var startExpanded = false;
+              try {
+                if (localStorage.getItem('live-controls-expanded') === 'true') {
+                  startExpanded = true;
+                }
+              } catch (_) { /* private browsing */ }
+              setExpanded(p, startExpanded);
+            }
           } else {
-            // Always expanded; no hidden attr; no collapse class
-            var root = document.getElementById(p.rootId);
-            var body = document.getElementById(p.bodyId);
-            var tog = document.getElementById(p.togId);
-            if (body) body.removeAttribute('hidden');
-            if (root) { root.classList.remove('is-collapsed'); root.classList.remove('is-expanded'); }
-            if (tog)  { tog.setAttribute('aria-expanded', 'true'); }
+            // liveHeader is collapsible on narrow screens, permanently open on wide
+            if (narrowMql.matches) {
+              if (!root.classList.contains('is-expanded')) setExpanded(p, false);
+            } else {
+              var body = document.getElementById(p.bodyId);
+              var tog = document.getElementById(p.togId);
+              if (body) body.removeAttribute('hidden');
+              root.classList.remove('is-collapsed'); 
+              root.classList.remove('is-expanded');
+              if (tog) tog.setAttribute('aria-expanded', 'true');
+            }
           }
         }
       }
