@@ -164,10 +164,14 @@ window.ObserverDetailNaiveBanner = {
         + ' · BW' + escapeHtml(rp[1] || '?') + ' · CR' + escapeHtml(rp[3] || '?');
     }
 
-    // Health status
+    // Health status — Issue #1552: thresholds are operator-configurable via
+    // window.HEALTH_THRESHOLDS.observerOnlineMs / observerStaleMs (defaults
+    // 10 min / 60 min, matching prior hardcoded behavior).
     const ago = obs.last_seen ? Date.now() - new Date(obs.last_seen).getTime() : Infinity;
-    const statusCls = ago < 600000 ? 'health-green' : ago < HEALTH_THRESHOLDS.nodeDegradedMs ? 'health-yellow' : 'health-red';
-    const statusLabel = ago < 600000 ? 'Online' : ago < HEALTH_THRESHOLDS.nodeDegradedMs ? 'Stale' : 'Offline';
+    const _obsOnlineMs = (HEALTH_THRESHOLDS && HEALTH_THRESHOLDS.observerOnlineMs) || 600000;
+    const _obsStaleMs = (HEALTH_THRESHOLDS && HEALTH_THRESHOLDS.observerStaleMs) || 3600000;
+    const statusCls = ago < _obsOnlineMs ? 'health-green' : ago < _obsStaleMs ? 'health-yellow' : 'health-red';
+    const statusLabel = ago < _obsOnlineMs ? 'Online' : ago < _obsStaleMs ? 'Stale' : 'Offline';
 
     el.innerHTML = `
       ${window.ObserverDetailNaiveBanner.render(obs)}
