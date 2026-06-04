@@ -6412,10 +6412,22 @@ console.log('\n=== observers.js: healthStatus (configurable thresholds) ===');
     assert.strictEqual(r.cls, 'health-green', 'expected Online with 30min override, got ' + JSON.stringify(r));
   });
 
-  test('observer 20min old with default thresholds → Stale', () => {
+  test('observer 20min old with default thresholds → Online (new 1h default, #1552)', () => {
     const ts = new Date(Date.now() - 20 * 60 * 1000).toISOString();
     const r = runHealthStatus(ts, null);
-    assert.strictEqual(r.cls, 'health-yellow', 'expected Stale with defaults, got ' + JSON.stringify(r));
+    assert.strictEqual(r.cls, 'health-green', 'expected Online with 1h default, got ' + JSON.stringify(r));
+  });
+
+  test('observer 30min old with NO HEALTH_THRESHOLDS → Online (#1552 default raised to 1h)', () => {
+    const ts = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const r = runHealthStatus(ts, null);
+    assert.strictEqual(r.cls, 'health-green', 'expected Online with new 1h default, got ' + JSON.stringify(r));
+  });
+
+  test('observer 2h old with default thresholds → Stale (new 24h stale default, #1552)', () => {
+    const ts = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const r = runHealthStatus(ts, null);
+    assert.strictEqual(r.cls, 'health-yellow', 'expected Stale with 24h default, got ' + JSON.stringify(r));
   });
 
   test('observer 90min old with 2h stale override → Stale', () => {

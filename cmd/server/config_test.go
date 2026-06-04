@@ -423,17 +423,35 @@ func TestObserverThresholdsOverride(t *testing.T) {
 func TestObserverThresholdsDefaults(t *testing.T) {
 	cfg := &Config{}
 	h := cfg.GetHealthThresholds()
-	if h.ObserverOnlineMinutes != 10 {
-		t.Errorf("default ObserverOnlineMinutes = %d, want 10", h.ObserverOnlineMinutes)
+	if h.ObserverOnlineMinutes != 60 {
+		t.Errorf("default ObserverOnlineMinutes = %d, want 60", h.ObserverOnlineMinutes)
 	}
-	if h.ObserverStaleMinutes != 60 {
-		t.Errorf("default ObserverStaleMinutes = %d, want 60", h.ObserverStaleMinutes)
+	if h.ObserverStaleMinutes != 1440 {
+		t.Errorf("default ObserverStaleMinutes = %d, want 1440", h.ObserverStaleMinutes)
 	}
 	m := h.ToClientMs()
-	if m["observerOnlineMs"] != 600000 {
-		t.Errorf("default observerOnlineMs = %d, want 600000", m["observerOnlineMs"])
+	if m["observerOnlineMs"] != 3600000 {
+		t.Errorf("default observerOnlineMs = %d, want 3600000", m["observerOnlineMs"])
 	}
-	if m["observerStaleMs"] != 3600000 {
-		t.Errorf("default observerStaleMs = %d, want 3600000", m["observerStaleMs"])
+	if m["observerStaleMs"] != 86400000 {
+		t.Errorf("default observerStaleMs = %d, want 86400000", m["observerStaleMs"])
+	}
+}
+
+// Loading a config with no healthThresholds block at all must still produce
+// the new 60 / 1440 defaults (not zero, not the old 10 / 60).
+func TestObserverThresholdsDefaultsFromEmptyConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"port": 3000}`), 0644)
+	cfg, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := cfg.GetHealthThresholds()
+	if h.ObserverOnlineMinutes != 60 {
+		t.Errorf("empty-config ObserverOnlineMinutes = %d, want 60 (new default)", h.ObserverOnlineMinutes)
+	}
+	if h.ObserverStaleMinutes != 1440 {
+		t.Errorf("empty-config ObserverStaleMinutes = %d, want 1440 (new default)", h.ObserverStaleMinutes)
 	}
 }
