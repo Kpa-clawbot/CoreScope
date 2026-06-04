@@ -402,6 +402,7 @@ func (s *Server) handleConfigClient(w http.ResponseWriter, r *http.Request) {
 		CacheInvalidateMs:   s.cfg.CacheInvalidMs,
 		ExternalUrls:        s.cfg.ExternalUrls,
 		PropagationBufferMs: float64(s.cfg.PropagationBufferMs()),
+		LiveMapMaxNodes:     s.cfg.LiveMapMaxNodes(),
 		Timestamps:          s.cfg.GetTimestampConfig(),
 		DebugAffinity:       s.cfg.DebugAffinity,
 		MapDarkTileProvider: s.cfg.MapDarkTileProvider,

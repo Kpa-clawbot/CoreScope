@@ -482,7 +482,7 @@
     // Fetch packets from DB for the time window
     const now = Date.now();
     const from = new Date(now - ms).toISOString();
-    fetch(`/api/packets?limit=2000&grouped=false&expand=observations&since=${encodeURIComponent(from)}`)
+    fetch(`/api/packets?limit=${LIVE_MAP_MAX_NODES}&grouped=false&expand=observations&since=${encodeURIComponent(from)}`)
       .then(r => r.json())
       .then(data => {
         const pkts = (data.packets || []).reverse(); // oldest first
@@ -2575,8 +2575,8 @@
       const rqs = (window.RegionFilter && typeof RegionFilter.nodesRegionQueryString === 'function')
         ? RegionFilter.nodesRegionQueryString() : '';
       const url = beforeTs
-        ? `/api/nodes?limit=2000&before=${encodeURIComponent(new Date(beforeTs).toISOString())}${aqs}${rqs}`
-        : `/api/nodes?limit=2000${aqs}${rqs}`;
+        ? `/api/nodes?limit=${LIVE_MAP_MAX_NODES}&before=${encodeURIComponent(new Date(beforeTs).toISOString())}${aqs}${rqs}`
+        : `/api/nodes?limit=${LIVE_MAP_MAX_NODES}${aqs}${rqs}`;
       // Full reload (no beforeTs): clear existing markers so switching areas
       // removes nodes that no longer belong to the selected area.
       if (!beforeTs) {

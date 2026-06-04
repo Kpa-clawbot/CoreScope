@@ -278,7 +278,9 @@
   },
   "liveMap": {
     "propagationBufferMs": 5000,
-    "_comment": "How long (ms) to buffer incoming observations of the same packet before animating. Mesh packets propagate through multiple paths and arrive at different observers over several seconds. This window collects all observations of a single transmission so the live map can animate them simultaneously as one realistic propagation event. Set higher for wide meshes with many observers, lower for snappier animations. 5000ms captures ~95% of observations for a typical mesh."
+    "_comment": "How long (ms) to buffer incoming observations of the same packet before animating. Mesh packets propagate through multiple paths and arrive at different observers over several seconds. This window collects all observations of a single transmission so the live map can animate them simultaneously as one realistic propagation event. Set higher for wide meshes with many observers, lower for snappier animations. 5000ms captures ~95% of observations for a typical mesh.",
+    "maxNodes": 2000,
+    "_comment_maxNodes": "Maximum nodes the /live map fetches (and renders) in one page. Default 2000. Raise this on deployments that have measured perf headroom on mid-range mobile (heap + frame-time). Server clamps to [100, 20000]: misconfigured values are coerced silently. Also caps the matching /api/packets?limit fetch the live VCR-rewind code uses. Reporter: #1574."
   },
   "timestamps": {
     "defaultMode": "ago",

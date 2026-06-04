@@ -582,10 +582,25 @@ func (c *Config) PropagationBufferMs() int {
 	return 5000
 }
 
-// LiveMapMaxNodes returns 0 (intentional stub for #1574 red commit; real
-// behavior is added in the green commit).
+// LiveMapMaxNodes returns the operator-configured cap on how many nodes
+// the live map fetches (and thus renders) in a single page. Default is
+// 2000; values are clamped to [100, 20000] to defang misconfig.
+// Negative/zero falls back to default. See #1574.
 func (c *Config) LiveMapMaxNodes() int {
-	return 0
+	const def = 2000
+	const min = 100
+	const max = 20000
+	if c == nil || c.LiveMap.MaxNodes <= 0 {
+		return def
+	}
+	v := c.LiveMap.MaxNodes
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }
 
 // blacklistSet lazily builds and caches the nodeBlacklist as a set for O(1) lookups.

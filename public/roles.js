@@ -434,6 +434,11 @@
   // ─── Cache invalidation debounce (ms) ───
   window.CACHE_INVALIDATE_MS = 5000;
 
+  // #1574 — operator-configurable cap on /live map node fetch (overridden
+  // from /api/config/client below). Default mirrors the historical
+  // hardcoded literal in public/live.js.
+  window.LIVE_MAP_MAX_NODES = 2000;
+
   // ─── External URLs ───
   window.EXTERNAL_URLS = {
     flasher: 'https://flasher.meshcore.io/'
@@ -487,6 +492,8 @@
     window.MC_CUSTOMIZER_CFG = (cfg.customizer && typeof cfg.customizer === 'object')
       ? { disabledTabs: Array.isArray(cfg.customizer.disabledTabs) ? cfg.customizer.disabledTabs : [] }
       : { disabledTabs: [] };
+    // #1574 — operator-configurable cap on /live map node count.
+    if (cfg.liveMapMaxNodes != null) window.LIVE_MAP_MAX_NODES = cfg.liveMapMaxNodes;
     // Sync ROLE_STYLE colors with ROLE_COLORS
     // #1407 — both are now live getters; no manual sync needed. Kept as no-op for clarity.
   }).catch(function () { /* use defaults */ });
