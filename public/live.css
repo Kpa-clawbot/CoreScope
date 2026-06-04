@@ -721,6 +721,14 @@ body.live-fullscreen .live-header {
   color: var(--text) !important;
 }
 
+/* Active states for cog and fullscreen toggles */
+body.live-fullscreen #liveFullscreenToggle,
+#liveControlsToggle[aria-expanded="true"],
+body.live-fullscreen #liveFullscreenToggle:hover,
+#liveControlsToggle[aria-expanded="true"]:hover {
+  color: var(--accent) !important;
+}
+
 
 
 
