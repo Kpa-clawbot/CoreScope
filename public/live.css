@@ -476,7 +476,6 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: inherit;
   white-space: nowrap;
 }
 .live-controls-body .live-show-all-region-nodes input { margin: 0; }
