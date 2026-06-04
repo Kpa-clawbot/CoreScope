@@ -63,6 +63,11 @@ func (s *Store) StartNeighborEdgesBuilder(interval time.Duration) func() {
 	// returning — first server load needs a fully-populated table.
 	wuStart := time.Now()
 	var wuTotal int
+	// Prime the prefix index (#1547) so the very first
+	// InsertTransmission after startup can resolve hop prefixes.
+	if err := s.RefreshPrefixIndex(); err != nil {
+		log.Printf("[neighbor-build] initial prefix-index refresh error: %v", err)
+	}
 	for {
 		n, err := s.buildAndPersistNeighborEdges()
 		if err != nil {
@@ -85,6 +90,11 @@ func (s *Store) StartNeighborEdgesBuilder(interval time.Duration) func() {
 			select {
 			case <-t.C:
 				start := time.Now()
+				// Refresh the prefix index alongside the edges build
+				// (#1547) so new nodes become resolvable within a tick.
+				if err := s.RefreshPrefixIndex(); err != nil {
+					log.Printf("[neighbor-build] prefix-index refresh error: %v", err)
+				}
 				n, err := s.buildAndPersistNeighborEdges()
 				dur := time.Since(start)
 				if err != nil {
