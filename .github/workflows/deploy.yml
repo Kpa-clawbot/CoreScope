@@ -126,6 +126,7 @@ jobs:
           node test-issue-1418-polish-review.js
           node test-issue-1420-tile-providers.js
           node test-issue-1438-marker-css-vars.js
+          node test-issue-1562-observers-summary.js
           node test-live.js
           node test-xss-escape-sinks.js
           node test-preflight-xss-gate.js
