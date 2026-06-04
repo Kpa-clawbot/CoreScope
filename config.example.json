@@ -29,7 +29,8 @@
     "tagline": "Real-time MeshCore LoRa mesh network analyzer",
     "logoUrl": null,
     "faviconUrl": null,
-    "_comment": "Customize site name, tagline, logo, and favicon. logoUrl/faviconUrl can be absolute URLs or relative paths."
+    "homeUrl": null,
+    "_comment": "Customize site name, tagline, logo, and favicon. logoUrl/faviconUrl can be absolute URLs or relative paths. homeUrl (#1518) overrides the navbar logo link target — set to an absolute http(s):// URL for operators embedding CoreScope inside a larger site, or a '#'-prefixed app route (e.g. '#/home') to keep it in-app. Validator rejects javascript:, data:, vbscript:, file:, about:, protocol-relative '//', and bare paths to block XSS. Cross-origin URLs open in the SAME tab (no target=_blank); wrap with your own anchor if you need new-tab behavior. The mobile bottom-nav 🏠 button is intentionally NOT overridden — it stays in-app to preserve SPA back-stack on phones."
   },
   "theme": {
     "accent": "#4a9eff",

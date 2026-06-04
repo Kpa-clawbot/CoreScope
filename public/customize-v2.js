@@ -101,6 +101,22 @@
     if (brandLink) brandLink.setAttribute('aria-label', alt + ' home');
   }
 
+  // ── Brand home-link href swap (#1518) ──
+  // Apply a validated branding.homeUrl to <a class="nav-brand">[href]. When
+  // url is empty / invalid, restore the in-app default '#/' so operators can
+  // clear the override and immediately see the SPA route restored.
+  // Bottom-nav 🏠 stays in-app — do NOT touch public/bottom-nav.js here, that
+  // preserves the SPA back-stack on mobile (per #1518 triage).
+  function _setBrandHomeUrl(url) {
+    var brandLink = document.querySelector('a.nav-brand');
+    if (!brandLink) return;
+    if (url && isValidHomeUrl(url)) {
+      brandLink.setAttribute('href', url);
+    } else {
+      brandLink.setAttribute('href', '#/');
+    }
+  }
+
   // ── Presets (copied from v1 customize.js) ──
   var PRESETS = {
     default: {
@@ -352,11 +368,26 @@
   //   - https://...  (absolute, https)
   //   - #...         (app-relative hash route, e.g. "#/", "#/home")
   // Empty / whitespace / non-string → invalid (caller falls through to default).
+  //
+  // Defence-in-depth: also strip ALL whitespace before scheme-sniffing so a
+  // payload like "java\tscript:alert(1)" — which some lenient URL parsers
+  // collapse to javascript: — is rejected here too.
   function isValidHomeUrl(val) {
-    // RED-COMMIT STUB: always returns true so tests reach their assertions and
-    // fail on the assertion (not on "undefined function"). Replaced by the
-    // real whitelist implementation in the green commit.
-    return true; // eslint-disable-line no-unused-vars
+    if (typeof val !== 'string') return false;
+    var trimmed = val.replace(/^\s+/, '');
+    if (trimmed.length === 0) return false;
+    // Hash routes (app-internal) are always safe.
+    if (trimmed.charAt(0) === '#') return true;
+    // For scheme detection, collapse interior whitespace inside the scheme
+    // portion (chars before first ':'). HTML attribute parsing has been known
+    // to drop these, turning "java\tscript:" into "javascript:" at click time.
+    var colonIdx = trimmed.indexOf(':');
+    if (colonIdx === -1) return false;
+    var schemeRaw = trimmed.slice(0, colonIdx);
+    var schemeClean = schemeRaw.replace(/\s+/g, '').toLowerCase();
+    if (schemeClean !== 'http' && schemeClean !== 'https') return false;
+    // Must look like a real absolute URL: scheme://...
+    return /^https?:\/\//i.test(trimmed);
   }
 
   var TS_ENUMS = {
@@ -725,6 +756,10 @@
         var fav = document.querySelector('link[rel="icon"]');
         if (fav) fav.href = br.faviconUrl;
       }
+      // #1518 — apply validated homeUrl override to .nav-brand[href].
+      // Always call: invalid/empty restores '#/' so a cleared override visibly
+      // reverts. Validator rejects javascript:/data:/etc to prevent XSS.
+      _setBrandHomeUrl(br.homeUrl);
     }
 
     // Dispatch theme-changed event (bare, no payload — matches existing behavior)
@@ -1202,6 +1237,7 @@
       '<div class="cust-field"><label>Site Name' + _overrideDot('branding', 'siteName') + '</label><input type="text" data-cv2-field="branding.siteName" value="' + escAttr(b.siteName || '') + '"></div>' +
       '<div class="cust-field"><label>Tagline' + _overrideDot('branding', 'tagline') + '</label><input type="text" data-cv2-field="branding.tagline" value="' + escAttr(b.tagline || '') + '"></div>' +
       '<div class="cust-field"><label>Logo URL' + _overrideDot('branding', 'logoUrl') + '</label><input type="text" data-cv2-field="branding.logoUrl" value="' + escAttr(b.logoUrl || '') + '" placeholder="https://...">' + logoPreview + '</div>' +
+      '<div class="cust-field"><label>Home URL' + _overrideDot('branding', 'homeUrl') + '</label><input type="text" data-cv2-field="branding.homeUrl" value="' + escAttr(b.homeUrl || '') + '" placeholder="https://your-site.example/ or #/"></div>' +
       '<div class="cust-field"><label>Favicon URL' + _overrideDot('branding', 'faviconUrl') + '</label><input type="text" data-cv2-field="branding.faviconUrl" value="' + escAttr(b.faviconUrl || '') + '" placeholder="https://..."></div>' +
     '</div>';
   }
@@ -2151,6 +2187,11 @@
             var link = document.querySelector('link[rel="icon"]');
             if (link && inp.value) link.href = inp.value;
           }
+          if (section === 'branding' && key === 'homeUrl') {
+            // #1518 — live nav-brand[href] swap. Validator silently drops
+            // bogus schemes so typing 'javascript:' never sets the attribute.
+            _setBrandHomeUrl(inp.value);
+          }
         });
       }
     });
@@ -2492,6 +2533,11 @@
       if (overrides.branding.faviconUrl) {
         var link = document.querySelector('link[rel="icon"]');
         if (link) link.href = overrides.branding.faviconUrl;
+      }
+      // #1518 — re-apply homeUrl override after DOM is ready (handles cold
+      // page loads where the customizer pipeline ran before .nav-brand mounted).
+      if (overrides.branding.homeUrl) {
+        _setBrandHomeUrl(overrides.branding.homeUrl);
       }
     }
 
