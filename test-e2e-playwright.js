@@ -3301,6 +3301,54 @@ async function run() {
     }
   });
 
+  // === Live page Fullscreen tests (#1532) ===
+  await test('Live page: Fullscreen hides unpinned nav and live-header', async () => {
+    await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+    
+    // Ensure we are not pinned
+    await page.evaluate(() => localStorage.setItem('live-nav-pinned', 'false'));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+
+    const isFullscreen = await page.evaluate(() => document.body.classList.contains('live-fullscreen'));
+    if (isFullscreen) {
+      await page.click('#liveFullscreenToggle');
+      await page.waitForTimeout(500);
+    }
+
+    // Enter fullscreen
+    await page.click('#liveFullscreenToggle');
+    await page.waitForTimeout(500);
+
+    // Verify fullscreen class is on body
+    assert(await page.evaluate(() => document.body.classList.contains('live-fullscreen')), 'Body should have live-fullscreen class');
+
+    // Verify top nav is hidden
+    const navHidden = await page.evaluate(() => {
+      const nav = document.querySelector('.top-nav');
+      return window.getComputedStyle(nav).display === 'none';
+    });
+    assert(navHidden, 'Top nav should be hidden in fullscreen when unpinned');
+
+    // Verify live header is hidden
+    const headerHidden = await page.evaluate(() => {
+      const header = document.querySelector('.live-header');
+      return window.getComputedStyle(header).display === 'none';
+    });
+    assert(headerHidden, 'Live header should be completely hidden in fullscreen');
+
+    // Exit fullscreen
+    await page.click('#liveFullscreenToggle');
+    await page.waitForTimeout(500);
+    
+    const navVisible = await page.evaluate(() => {
+      const nav = document.querySelector('.top-nav');
+      return window.getComputedStyle(nav).display !== 'none';
+    });
+    assert(navVisible, 'Top nav should be visible again after exiting fullscreen');
+  });
+
   await browser.close();
 
   // Summary
