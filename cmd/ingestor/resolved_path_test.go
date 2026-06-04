@@ -161,3 +161,126 @@ func deref(p *string) string {
 	}
 	return *p
 }
+
+// TestMarshalResolvedPathAllNilReturnsEmpty is a regression gate for
+// the data-loss clobber bug surfaced in PR #1548 review.
+//
+// When resolvePath fails to resolve ANY hop (every element nil),
+// marshalResolvedPath previously emitted "[null,null,...]" — a
+// non-empty string that bypassed nilIfEmpty and then OVERWROTE the
+// existing resolved_path via the COALESCE(excluded, current) UPSERT
+// on re-ingest. The fix returns "" so nilIfEmpty produces SQL NULL and
+// the COALESCE preserves the existing good value.
+func TestMarshalResolvedPathAllNilReturnsEmpty(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []*string
+	}{
+		{"one-nil", []*string{nil}},
+		{"two-nils", []*string{nil, nil}},
+		{"three-nils", []*string{nil, nil, nil}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := marshalResolvedPath(tc.in)
+			if got != "" {
+				t.Errorf("all-nil input must return \"\" (so nilIfEmpty → SQL NULL → COALESCE preserves existing); got %q", got)
+			}
+		})
+	}
+
+	// Mixed (at least one non-nil) MUST still marshal normally so we
+	// don't lose partial resolutions.
+	a := "aaaaaaaaaa"
+	mixed := marshalResolvedPath([]*string{&a, nil})
+	if mixed != `["aaaaaaaaaa",null]` {
+		t.Errorf("partial resolution must still serialize; got %q", mixed)
+	}
+}
+
+// TestInsertTransmissionDoesNotClobberResolvedPathOnAllNil is the
+// integration-level regression test for the data-loss bug.
+//
+// Setup: insert a transmission whose first ingest resolves cleanly to
+// a known pubkey. Then re-ingest the SAME transmission after the
+// prefix index has been cleared (simulating an empty NeighborGraph /
+// all-nil resolution path) and assert the previously stored
+// resolved_path is PRESERVED (NOT overwritten to "[null]" or NULL).
+//
+// Pre-fix behavior: marshalResolvedPath emitted "[null]", nilIfEmpty
+// kept it non-NULL, and COALESCE(excluded.resolved_path, resolved_path)
+// clobbered the original "bbbbbbbbbb".
+func TestInsertTransmissionDoesNotClobberResolvedPathOnAllNil(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "ingest.db")
+
+	store, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.db.Exec(
+		`INSERT INTO nodes (public_key, name) VALUES (?, ?), (?, ?)`,
+		"aaaaaaaaaa", "from-node",
+		"bbbbbbbbbb", "first-hop",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertObserver("obs-1", "observer-1", "", nil); err != nil {
+		t.Fatalf("UpsertObserver: %v", err)
+	}
+	if err := store.RefreshPrefixIndex(); err != nil {
+		t.Fatalf("RefreshPrefixIndex: %v", err)
+	}
+
+	pkt := &PacketData{
+		RawHex:      "deadbeef",
+		Timestamp:   "2026-06-01T00:00:00Z",
+		ObserverID:  "obs-1",
+		Hash:        "h-clobber",
+		RouteType:   0,
+		PayloadType: int(payloadADVERT),
+		PathJSON:    `["bb"]`,
+		DecodedJSON: "{}",
+		FromPubkey:  "aaaaaaaaaa",
+	}
+	if _, err := store.InsertTransmission(pkt); err != nil {
+		t.Fatalf("first InsertTransmission: %v", err)
+	}
+
+	// Sanity: first write populated resolved_path.
+	var first sql.NullString
+	if err := store.db.QueryRow(
+		`SELECT resolved_path FROM observations WHERE transmission_id = (SELECT id FROM transmissions WHERE hash = ?)`,
+		"h-clobber",
+	).Scan(&first); err != nil {
+		t.Fatalf("first query: %v", err)
+	}
+	if !first.Valid || first.String == "" {
+		t.Fatalf("precondition failed: first ingest left resolved_path NULL/empty; cannot test clobber")
+	}
+	wantPreserved := first.String
+
+	// Now wipe the prefix index so re-ingest produces an all-nil
+	// resolution — exactly the scenario where the bug clobbers data.
+	store.prefixIdx.store(prefixIndex{})
+
+	if _, err := store.InsertTransmission(pkt); err != nil {
+		t.Fatalf("re-ingest InsertTransmission: %v", err)
+	}
+
+	var after sql.NullString
+	if err := store.db.QueryRow(
+		`SELECT resolved_path FROM observations WHERE transmission_id = (SELECT id FROM transmissions WHERE hash = ?)`,
+		"h-clobber",
+	).Scan(&after); err != nil {
+		t.Fatalf("post-reingest query: %v", err)
+	}
+	if !after.Valid {
+		t.Fatalf("data loss: resolved_path was NULL'd by re-ingest (was %q)", wantPreserved)
+	}
+	if after.String != wantPreserved {
+		t.Errorf("data loss: resolved_path was clobbered by all-nil re-ingest\n  before: %s\n  after:  %s", wantPreserved, after.String)
+	}
+}

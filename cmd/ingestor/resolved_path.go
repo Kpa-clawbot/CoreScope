@@ -48,9 +48,30 @@ func resolvePath(hops []string, idx prefixIndex) []*string {
 }
 
 // marshalResolvedPath JSON-encodes a resolved path. Returns "" when
-// the input is empty (writer treats "" as SQL NULL).
+// the input is empty OR when every element is nil (writer treats "" as
+// SQL NULL).
+//
+// The all-nil case matters because of the UPSERT in InsertTransmission:
+//
+//	resolved_path = COALESCE(excluded.resolved_path, resolved_path)
+//
+// If we emitted "[null,null]" here, nilIfEmpty() would let it through
+// as a non-NULL string and the COALESCE would OVERWRITE a previously
+// stored good resolved_path on re-ingest. Returning "" lets nilIfEmpty
+// produce SQL NULL so the COALESCE falls through to the existing value.
+// See issue #1547 / PR #1548 reviewer findings.
 func marshalResolvedPath(rp []*string) string {
 	if len(rp) == 0 {
+		return ""
+	}
+	allNil := true
+	for _, p := range rp {
+		if p != nil {
+			allNil = false
+			break
+		}
+	}
+	if allNil {
 		return ""
 	}
 	b, err := json.Marshal(rp)
