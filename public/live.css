@@ -450,7 +450,8 @@
 
 /* Region/Area filters inline in live header controls body */
 .live-controls-body .live-region-filter-container,
-.live-controls-body .live-area-filter-container { display: inline-flex; align-items: center; font-size: 11px; }
+.live-controls-body .live-area-filter-container,
+.live-controls-body .live-show-all-region-nodes { display: inline-flex; align-items: center; font-size: 11px; }
 .live-controls-body .live-region-filter-container .region-dropdown-trigger,
 .live-controls-body .live-area-filter-container .region-dropdown-trigger {
   font-size: inherit;
@@ -478,6 +479,7 @@
   font-size: inherit;
   white-space: nowrap;
 }
+.live-controls-body .live-show-all-region-nodes input { margin: 0; }
 
 /* ---- #1532 Live: default-collapsed controls + fullscreen mode ---- */
 
@@ -534,7 +536,8 @@ body.live-fullscreen:not(.nav-pinned) .leaflet-top.leaflet-right {
   .live-stat-pill { font-size: 11px; padding: 1px 7px; }
   .live-toggles { font-size: 10px; gap: 6px; }
   .live-controls-body .live-region-filter-container,
-  .live-controls-body .live-area-filter-container { font-size: 10px; }
+  .live-controls-body .live-area-filter-container,
+  .live-controls-body .live-show-all-region-nodes { font-size: 10px; }
 
   /* Show toggle buttons */
   .live-header-toggle,
