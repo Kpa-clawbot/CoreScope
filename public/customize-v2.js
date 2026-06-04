@@ -1147,16 +1147,29 @@
     var effDark = eff.themeDark || {};
     for (var id in PRESETS) {
       var p = PRESETS[id];
+      var pTheme = p.theme || {};
+      var pDark = p.themeDark || {};
       var match = true;
       for (var i = 0; i < THEME_COLOR_KEYS.length && match; i++) {
         var k = THEME_COLOR_KEYS[i];
-        if (effTheme[k] !== (p.theme || {})[k] || effDark[k] !== (p.themeDark || {})[k]) match = false;
+        // An undefined value in the effective theme means the operator
+        // (and server config) has not customized this key — the preset's
+        // value will become effective via the CSS cascade, so it should
+        // match ANY preset value rather than invalidating the match.
+        // This keeps _detectActivePreset() correct as we add new themeable
+        // keys to PRESETS.default (e.g. navActiveBg in #1509).
+        if (effTheme[k] !== undefined && effTheme[k] !== pTheme[k]) match = false;
+        else if (effDark[k] !== undefined && effDark[k] !== pDark[k]) match = false;
       }
       if (match && p.nodeColors && eff.nodeColors) {
-        for (var nk in p.nodeColors) { if (eff.nodeColors[nk] !== p.nodeColors[nk]) { match = false; break; } }
+        for (var nk in p.nodeColors) {
+          if (eff.nodeColors[nk] !== undefined && eff.nodeColors[nk] !== p.nodeColors[nk]) { match = false; break; }
+        }
       }
       if (match && p.typeColors && eff.typeColors) {
-        for (var tk in p.typeColors) { if (eff.typeColors[tk] !== p.typeColors[tk]) { match = false; break; } }
+        for (var tk in p.typeColors) {
+          if (eff.typeColors[tk] !== undefined && eff.typeColors[tk] !== p.typeColors[tk]) { match = false; break; }
+        }
       }
       if (match) return id;
     }
