@@ -6406,6 +6406,62 @@ console.log('\n=== roles.js: Map Tile Config Parsing ===');
   });
 }
 
+// ===== #1504 — Path symbols legend disclosure =====
+{
+  console.log('\n--- #1504: Path symbols legend disclosure ---');
+  const sb = {
+    window: { addEventListener: () => {}, dispatchEvent: () => {} },
+    document: {
+      readyState: 'complete',
+      createElement: () => ({ id: '', textContent: '', innerHTML: '' }),
+      head: { appendChild: () => {} },
+      getElementById: () => null,
+      addEventListener: () => {},
+      querySelectorAll: () => [],
+      querySelector: () => null,
+    },
+    console, Date, Math, Array, Object, String, Number, JSON, RegExp, Map, Set,
+    encodeURIComponent, parseInt, parseFloat, isNaN, Infinity, NaN, undefined,
+    setTimeout: () => {}, setInterval: () => {}, clearTimeout: () => {}, clearInterval: () => {},
+  };
+  sb.window.document = sb.document; sb.self = sb.window; sb.globalThis = sb.window;
+  const ctx1504 = vm.createContext(sb);
+  vm.runInContext(fs.readFileSync(__dirname + '/public/hop-display.js', 'utf8'), ctx1504);
+  const HD = ctx1504.window.HopDisplay;
+
+  test('#1504: HopDisplay.PATH_SYMBOLS_LEGEND is defined and non-empty array', () => {
+    assert.ok(Array.isArray(HD.PATH_SYMBOLS_LEGEND), 'PATH_SYMBOLS_LEGEND must be an array');
+    assert.ok(HD.PATH_SYMBOLS_LEGEND.length >= 3, 'must have at least 3 entries (⚠N, ⚠️, dashed underline)');
+  });
+
+  test('#1504: each legend entry has glyph + description', () => {
+    HD.PATH_SYMBOLS_LEGEND.forEach((e, i) => {
+      assert.ok(e && typeof e.glyph === 'string' && e.glyph.length > 0, 'entry ' + i + ' needs non-empty glyph');
+      assert.ok(typeof e.description === 'string' && e.description.length > 0, 'entry ' + i + ' needs non-empty description');
+    });
+  });
+
+  test('#1504: legend constant + renderer exposed on window.HopDisplay namespace', () => {
+    assert.ok(ctx1504.window.HopDisplay.PATH_SYMBOLS_LEGEND, 'PATH_SYMBOLS_LEGEND exported on namespace');
+    assert.strictEqual(typeof ctx1504.window.HopDisplay.renderPathSymbolsLegend, 'function', 'renderPathSymbolsLegend exported');
+  });
+
+  test('#1504: renderPathSymbolsLegend returns <details> disclosure with "Path symbols" summary + all glyphs', () => {
+    const html = HD.renderPathSymbolsLegend();
+    assert.ok(html.includes('<details'), 'must render a <details> element');
+    assert.ok(html.includes('<summary>Path symbols</summary>'), 'must have summary text "Path symbols"');
+    assert.ok(html.includes('⚠'), 'must contain warning glyph');
+    assert.ok(html.includes('⚠️'), 'must contain unreliable (emoji warning) glyph');
+    assert.ok(/dashed/i.test(html), 'must describe the dashed underline convention');
+  });
+
+  test('#1504: packets.js table head references legend renderer adjacent to Path column', () => {
+    const src = fs.readFileSync(__dirname + '/public/packets.js', 'utf8');
+    assert.ok(src.includes('renderPathSymbolsLegend'),
+      'packets.js must invoke HopDisplay.renderPathSymbolsLegend() near the Path column header');
+  });
+}
+
 // ===== SUMMARY =====
 Promise.allSettled(pendingTests).then(() => {
   console.log(`\n${'═'.repeat(40)}`);
