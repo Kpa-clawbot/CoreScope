@@ -36,10 +36,11 @@
     "accentHover": "#6db3ff",
     "navBg": "#0f0f23",
     "navBg2": "#1a1a2e",
+    "navActiveBg": "rgba(74,158,255,0.15)",
     "statusGreen": "#45644c",
     "statusYellow": "#b08b2d",
     "statusRed": "#b54a4a",
-    "_comment": "CSS color overrides. Use the in-app Theme Customizer for live preview, then export values here."
+    "_comment": "CSS color overrides. Use the in-app Theme Customizer for live preview, then export values here. navActiveBg (#1509) controls the background of the currently-active top-nav link (the 'pill'); accepts any CSS color, typically a translucent rgba() so the nav gradient shows through."
   },
   "nodeColors": {
     "repeater": "#dc2626",
