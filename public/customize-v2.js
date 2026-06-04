@@ -2635,6 +2635,8 @@
     isOverridden: _isOverridden,
     // #1496 — full reset (not just STORAGE_KEY). See _resetAll() above.
     resetAll: _resetAll,
+    // Exposed for tests — see test-issue-1509-detect-preset.js.
+    detectActivePreset: _detectActivePreset,
     THEME_CSS_MAP: THEME_CSS_MAP
   };
 })();
