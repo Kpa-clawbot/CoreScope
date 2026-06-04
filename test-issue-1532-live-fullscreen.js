@@ -108,18 +108,9 @@ assert(cssHides('.vcr-controls'),
 assert(cssHides('.bottom-nav'),
   'body.live-fullscreen hides .bottom-nav (display:none)');
 
-// .live-stats-row must remain visible AND get pinned positioning.
-// Negative: no `body.live-fullscreen .live-stats-row { display: none }`.
-{
-  const re = /body\.live-fullscreen[^{}]*\.live-stats-row\s*\{[^}]*?display\s*:\s*none/;
-  assert(!re.test(liveCss),
-    '.live-stats-row is NOT hidden by body.live-fullscreen (must stay visible)');
-}
-// Positive: pinned positioning under fullscreen.
-assert(
-  /body\.live-fullscreen[\s\S]{0,800}?\.live-stats-row[\s\S]{0,400}?position\s*:\s*(fixed|absolute)/.test(liveCss),
-  '.live-stats-row gets fixed/absolute positioning under body.live-fullscreen'
-);
+// The entire live-header is now hidden in fullscreen per updated user request.
+assert(cssHides('.live-header'),
+  'body.live-fullscreen hides .live-header (display:none)');
 
 // ─────────────────────────────────────────────────────────────────────
 console.log('\n=== #1532 E: .live-controls collapsed by default on desktop ===');

@@ -511,28 +511,7 @@ body.live-fullscreen .feed-show-btn { display: none !important; }
    top-right. The header background/border drop so the stats pills
    float over the map. */
 body.live-fullscreen .live-header {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  left: auto;
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-  padding: 0;
-  max-width: none;
-  z-index: 700;
-}
-body.live-fullscreen .live-stats-row {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  left: auto;
-  z-index: 700;
-  background: color-mix(in srgb, var(--surface-1) 84%, transparent);
-  backdrop-filter: blur(10px);
-  padding: 4px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
+  display: none !important;
 }
 
 /* Hide top nav in fullscreen UNLESS it was explicitly pinned */
