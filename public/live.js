@@ -1983,11 +1983,27 @@
 
       // `F` keypress toggles fullscreen — but only when focus is NOT in
       // a typing surface (node-filter input, audio sliders, etc.).
+      // Escape exits fullscreen (only when currently in fullscreen so we
+      // don't shadow other Escape handlers, e.g. dropdown close on the
+      // node-filter input).
       if (!window.__liveFullscreenKeyBound) {
         window.addEventListener('keydown', function (e) {
           if (e.defaultPrevented) return;
-          if (e.altKey || e.ctrlKey || e.metaKey) return;
           if (typeof e.key !== 'string') return;
+          // Only act when on the live page.
+          if (!document.querySelector('.live-page')) return;
+          // Escape: exit fullscreen if currently in fullscreen. Don't
+          // gate on focus-in-input here — exiting fullscreen via Escape
+          // should always work when chrome is hidden. Do NOT fire when
+          // not currently in fullscreen so other handlers see the key.
+          if (e.key === 'Escape') {
+            if (document.body.classList.contains('live-fullscreen')) {
+              e.preventDefault();
+              setFullscreen(false);
+            }
+            return;
+          }
+          if (e.altKey || e.ctrlKey || e.metaKey) return;
           var isF = (e.key === 'f' || e.key === 'F' || e.key.toLowerCase() === 'f');
           if (!isF) return;
           var t = e.target;
@@ -1996,8 +2012,6 @@
             if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
             if (t.isContentEditable) return;
           }
-          // Only act when on the live page.
-          if (!document.querySelector('.live-page')) return;
           e.preventDefault();
           toggleFullscreen();
         });
@@ -4297,6 +4311,12 @@
     nodesLayer = pathsLayer = animLayer = heatLayer = geoFilterLayer = clickablePathsLayer = null;
     clickablePaths = [];
     stopMatrixRain();
+    // #1572 — clear body.live-fullscreen on route exit. The class hides
+    // .bottom-nav (the only nav on mobile), so leaking it across SPA
+    // routes strands the user. Reset state but DO NOT clear the
+    // localStorage preference — restoring fullscreen on return to /live
+    // is intentional.
+    if (document.body) document.body.classList.remove('live-fullscreen');
     nodeMarkers = {}; nodeData = {};
     activeNodeDetailKey = null;
     recentPaths = [];

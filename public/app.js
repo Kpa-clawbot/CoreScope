@@ -953,6 +953,14 @@ function navigate() {
   }
   currentPage = basePage;
 
+  // #1572 — defensive: ensure body.live-fullscreen is cleared whenever
+  // we navigate to a non-live route. Live page's destroy() also clears
+  // it, but this guards against any boot path (deep-link, restore) that
+  // somehow puts the body into fullscreen state outside /live.
+  if (basePage !== 'live' && document.body) {
+    document.body.classList.remove('live-fullscreen');
+  }
+
   const app = document.getElementById('app');
   // Pages with fixed-height containers (maps, virtual-scroll, split-panels)
   const fixedPages = { packets: 1, nodes: 1, map: 1, live: 1, channels: 1, 'audio-lab': 1 };
