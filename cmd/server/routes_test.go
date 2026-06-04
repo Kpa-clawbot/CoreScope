@@ -230,6 +230,19 @@ func TestStatsEndpoint(t *testing.T) {
 	if bt, ok := body["buildTime"]; !ok || bt == nil {
 		t.Error("expected non-nil buildTime field in stats response")
 	}
+	// Regression (#1546): server-side async backfill was removed in #1289
+	// (backfill moved to the ingestor). The dead "backfilling"/"backfillProgress"
+	// fields had no writer and reported backfilling:true forever. They must not
+	// reappear in the response, and the X-CoreScope-Status header is gone with them.
+	if _, ok := body["backfilling"]; ok {
+		t.Error("stats response must not carry the removed backfilling flag (#1546)")
+	}
+	if _, ok := body["backfillProgress"]; ok {
+		t.Error("stats response must not carry the removed backfillProgress field (#1546)")
+	}
+	if got := w.Header().Get("X-CoreScope-Status"); got != "" {
+		t.Errorf("X-CoreScope-Status header must not be set (#1546), got %q", got)
+	}
 }
 
 func TestPacketsEndpoint(t *testing.T) {

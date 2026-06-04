@@ -161,9 +161,6 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	// Performance instrumentation middleware
 	r.Use(s.perfMiddleware)
 
-	// Backfill status header middleware
-	r.Use(s.backfillStatusMiddleware)
-
 	// /api/* responses must not be cached by upstream CDNs (#1551).
 	// Cloudflare/nginx/Varnish default zone policies cache
 	// application/json for 15min–4h when no Cache-Control is set,
@@ -293,17 +290,6 @@ func noStoreAPIMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (s *Server) backfillStatusMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.store != nil && s.store.backfillComplete.Load() {
-			w.Header().Set("X-CoreScope-Status", "ready")
-		} else {
-			w.Header().Set("X-CoreScope-Status", "backfilling")
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -730,18 +716,6 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 	counts := s.db.GetRoleCounts()
 
-	// Compute backfill progress
-	backfilling := s.store != nil && !s.store.backfillComplete.Load()
-	var backfillProgress float64
-	if backfilling && s.store != nil && s.store.backfillTotal.Load() > 0 {
-		backfillProgress = float64(s.store.backfillProcessed.Load()) / float64(s.store.backfillTotal.Load())
-		if backfillProgress > 1 {
-			backfillProgress = 1
-		}
-	} else if !backfilling {
-		backfillProgress = 1
-	}
-
 	// Memory accounting (#832). storeDataMB is the in-store packet byte
 	// estimate (the old "trackedMB"); processRSSMB / goHeapInuseMB / goSysMB
 	// give ops the breakdown needed to reason about real RSS. All values
@@ -771,8 +745,6 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			Companions: counts["companions"],
 			Sensors:    counts["sensors"],
 		},
-		Backfilling:           backfilling,
-		BackfillProgress:      backfillProgress,
 		SignatureDrops:        s.db.GetSignatureDropCount(),
 		HashMigrationComplete: s.store != nil && s.store.hashMigrationComplete.Load(),
 

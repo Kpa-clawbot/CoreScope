@@ -341,12 +341,6 @@ type PacketStore struct {
 	// Clock skew detection engine.
 	clockSkew *ClockSkewEngine
 
-	// Async backfill state: set after backfillResolvedPathsAsync completes.
-	backfillComplete atomic.Bool
-	// Progress tracking for async backfill (total pending and processed so far).
-	backfillTotal     atomic.Int64 // set once at start of async backfill
-	backfillProcessed atomic.Int64
-
 	// Bounded cold load: oldest packet timestamp loaded into memory.
 	// Empty string means all data is in memory (no limit applied).
 	oldestLoaded string
