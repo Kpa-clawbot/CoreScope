@@ -82,12 +82,12 @@ t('window.ObserversSummary is exposed', () => {
   assert.strictEqual(typeof Summary.renderHeader, 'function');
 });
 
-t('computeCounts classifies 1 online (15s) / 1 stale (15min) / 1 offline (65min)', () => {
+t('computeCounts classifies 1 online (15s) / 1 stale (90min) / 1 offline (25h)', () => {
   const now = Date.now();
   const obs = [
     { id: 'a', last_seen: new Date(now - 15 * 1000).toISOString() },
-    { id: 'b', last_seen: new Date(now - 15 * 60 * 1000).toISOString() },
-    { id: 'c', last_seen: new Date(now - 65 * 60 * 1000).toISOString() },
+    { id: 'b', last_seen: new Date(now - 90 * 60 * 1000).toISOString() },
+    { id: 'c', last_seen: new Date(now - 25 * 60 * 60 * 1000).toISOString() },
   ];
   const r = Summary.computeCounts(obs);
   assert.strictEqual(r.online, 1, 'online=' + r.online);
