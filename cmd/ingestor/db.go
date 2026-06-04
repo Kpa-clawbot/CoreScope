@@ -1463,7 +1463,15 @@ func scopeNameForDB(data *PacketData) *string {
 // node. Skips the UPDATE when the stored value already matches to avoid
 // redundant writes on the hot MQTT ingest path. Updates both nodes and
 // inactive_nodes to stay consistent.
+//
+// Defense-in-depth (#1534): an empty scope is treated as a no-op. The call
+// site at handleMessage is the primary guard (shouldUpdateDefaultScope),
+// but this layer refuses the invalid write so a future caller cannot
+// reintroduce the bug by passing "" directly.
 func (s *Store) UpdateNodeDefaultScope(pubkey, scope string) error {
+	if scope == "" {
+		return nil
+	}
 	// Short-circuit: skip if already stored.
 	var cur sql.NullString
 	row := s.db.QueryRow(`SELECT default_scope FROM nodes WHERE public_key = ?`, pubkey)
