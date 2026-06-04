@@ -104,11 +104,22 @@ async function pickAnyPubkey(page) {
   // against a deterministic response (issue #1313 — the live fetch path
   // flakes intermittently on cold CI; home.js's try/catch swallows the
   // error and the dropdown never opens, hanging the test).
-  const FIXTURE_PUBKEY = '0000000000000000000000000000000000000000000000000000000000001313';
+  // Use a REAL fixture pubkey (so downstream /api/nodes/<pk>/health calls
+  // succeed) but pin a sentinel display name we can assert on.
+  const _fixtureNode = await pickAnyPubkey(page);
+  assert(_fixtureNode, 'fixture must have at least one node');
+  const FIXTURE_PUBKEY = _fixtureNode.public_key;
   const FIXTURE_NAME = 'HomeFlakeFix-1313';
   let pickedPubkey = null;
   let pickedName = null;
   await step('search input renders suggestions for a 1-char query', async () => {
+    await page.route('**/api/nodes/search**', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        nodes: [{ public_key: FIXTURE_PUBKEY, name: FIXTURE_NAME, role: 'companion' }],
+      }),
+    }));
     const input = await page.waitForSelector('#homeSearch', { timeout: 5000 });
     await input.click();
     await input.type('h', { delay: 20 });
