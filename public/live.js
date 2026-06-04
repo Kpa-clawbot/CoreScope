@@ -1116,6 +1116,10 @@
           <button class="live-controls-toggle" data-live-controls-toggle id="liveControlsToggle"
                   aria-expanded="false" aria-controls="liveControlsBody"
                   aria-label="Show live controls">⚙</button>
+          <button class="live-controls-toggle live-fullscreen-toggle" id="liveFullscreenToggle"
+                  aria-pressed="false"
+                  aria-label="Toggle fullscreen (F) — hide chrome, keep stats"
+                  title="Fullscreen (F)">⛶</button>
         </div>
         </div><!-- /#liveHeader -->
         <div class="live-overlay live-feed" id="liveFeed">
@@ -1889,9 +1893,16 @@
       function applyForViewport() {
         for (var i = 0; i < pairs.length; i++) {
           var p = pairs[i];
-          if (narrowMql.matches) {
-            // Default collapsed at narrow viewports
-            setExpanded(p, false);
+          // #1532 — `liveControls` defaults collapsed at ALL viewports
+          // (previously narrow-only). Operators reveal the toggle row
+          // via the ⚙ pin, parity with map-controls accordion.
+          var defaultCollapsed = (p.rootId === 'liveControls') ? true : false;
+          if (narrowMql.matches || defaultCollapsed) {
+            // Default collapsed; preserve existing expansion if user
+            // already opened it this mount.
+            var root = document.getElementById(p.rootId);
+            var alreadyExpanded = root && root.classList.contains('is-expanded');
+            if (!alreadyExpanded) setExpanded(p, false);
           } else {
             // Always expanded; no hidden attr; no collapse class
             var root = document.getElementById(p.rootId);
@@ -1922,6 +1933,62 @@
         try {
           window.__liveMQLBindCount = (window.__liveMQLBindCount || 0) + 1;
         } catch (_) { /* sealed window */ }
+      }
+    })();
+    // ───────────────────────────────────────────────────────────────────────
+
+    // ── #1532 — Live fullscreen toggle ─────────────────────────────────────
+    // Adds `body.live-fullscreen` which CSS uses to hide header body,
+    // controls body, VCR controls, and bottom-nav while leaving
+    // .live-stats-row pinned top-right. Triggered by:
+    //   • clicking #liveFullscreenToggle (⛶ button next to ⚙)
+    //   • pressing the `F` key (when focus is not in an input/textarea)
+    // State persists across reloads via localStorage('live-fullscreen').
+    (function wireLiveFullscreenToggle() {
+      var STORAGE_KEY = 'live-fullscreen';
+      var btn = document.getElementById('liveFullscreenToggle');
+      if (btn) btn.addEventListener('click', function () { toggleFullscreen(); });
+      function setFullscreen(on) {
+        document.body.classList.toggle('live-fullscreen', !!on);
+        if (btn) {
+          btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+          btn.textContent = on ? '⛶' : '⛶';
+          btn.setAttribute('aria-label', on
+            ? 'Exit fullscreen (F)'
+            : 'Toggle fullscreen (F) — hide chrome, keep stats');
+        }
+        try { localStorage.setItem(STORAGE_KEY, on ? 'true' : 'false'); }
+        catch (_) { /* private browsing */ }
+      }
+      function toggleFullscreen() {
+        setFullscreen(!document.body.classList.contains('live-fullscreen'));
+      }
+      // Restore prior choice on mount.
+      try {
+        if (localStorage.getItem(STORAGE_KEY) === 'true') setFullscreen(true);
+      } catch (_) { /* ignore */ }
+
+      // `F` keypress toggles fullscreen — but only when focus is NOT in
+      // a typing surface (node-filter input, audio sliders, etc.).
+      if (!window.__liveFullscreenKeyBound) {
+        window.addEventListener('keydown', function (e) {
+          if (e.defaultPrevented) return;
+          if (e.altKey || e.ctrlKey || e.metaKey) return;
+          if (typeof e.key !== 'string') return;
+          var isF = (e.key === 'f' || e.key === 'F' || e.key.toLowerCase() === 'f');
+          if (!isF) return;
+          var t = e.target;
+          if (t) {
+            var tag = (t.tagName || '').toUpperCase();
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            if (t.isContentEditable) return;
+          }
+          // Only act when on the live page.
+          if (!document.querySelector('.live-page')) return;
+          e.preventDefault();
+          toggleFullscreen();
+        });
+        window.__liveFullscreenKeyBound = true;
       }
     })();
     // ───────────────────────────────────────────────────────────────────────

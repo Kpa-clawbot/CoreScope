@@ -461,6 +461,72 @@
   white-space: nowrap;
 }
 
+/* ---- #1532 Live: default-collapsed controls + fullscreen mode ---- */
+
+/* #1532 — `.live-controls` collapses by default at ALL viewports (was
+   ≤768px only). The ⚙ pin reveals the toggles row on demand, parity
+   with the map-controls accordion pattern. Top-level (not media-gated)
+   so it applies on desktop too. */
+.live-controls-toggle,
+.live-fullscreen-toggle { display: inline-flex; }
+.live-controls.is-collapsed .live-controls-body { display: none; }
+
+/* Fullscreen mode (#1532). The body class hides chrome and
+   pins the 3 stat pills top-right so the firework animation is the
+   primary visual surface. The header band, controls row, VCR row,
+   and bottom-nav drop out; the beacon + pkt-count critical strip is
+   inside the header body so it goes with it (LIVE rate stays in
+   the stats row, which remains). */
+body.live-fullscreen .live-header-body { display: none !important; }
+body.live-fullscreen .live-controls-body { display: none !important; }
+body.live-fullscreen .live-controls-toggle,
+body.live-fullscreen .live-header-toggle { display: none !important; }
+body.live-fullscreen .vcr-bar .vcr-controls { display: none !important; }
+body.live-fullscreen .vcr-bar { display: none !important; }
+body.live-fullscreen .bottom-nav { display: none !important; }
+body.live-fullscreen .live-feed,
+body.live-fullscreen .live-legend,
+body.live-fullscreen .legend-toggle-btn,
+body.live-fullscreen .feed-show-btn { display: none !important; }
+
+/* Collapse the header chrome to just the floating stats row pinned
+   top-right. The header background/border drop so the stats pills
+   float over the map. */
+body.live-fullscreen .live-header {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  left: auto;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  max-width: none;
+  z-index: 700;
+}
+body.live-fullscreen .live-stats-row {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  left: auto;
+  z-index: 700;
+  background: color-mix(in srgb, var(--surface-1) 84%, transparent);
+  backdrop-filter: blur(10px);
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+/* Keep the fullscreen exit affordance reachable: a small chip in the
+   top-left so users can leave the mode without remembering the F key. */
+body.live-fullscreen #liveFullscreenToggle {
+  display: inline-flex !important;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 700;
+}
+
 /* ---- Medium breakpoint (#279) + collapse toggles (#1178, #1179) ---- */
 @media (max-width: 768px) {
   .live-feed { width: 280px; max-height: 200px; }
