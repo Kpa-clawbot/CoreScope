@@ -10,9 +10,13 @@ package main
 // the server side; the best we can do is detect the situation and
 // loudly tell the operator at the logs.
 //
-// Detection: presence of any CDN-typical request header
-// (CF-Connecting-IP, CF-Ray, X-Forwarded-For, X-Real-IP,
-//  Fastly-Client-IP, True-Client-IP).
+// Detection: presence of any CDN-specific request header
+// (CF-Connecting-IP, CF-Ray, Fastly-Client-IP, True-Client-IP).
+// We deliberately exclude X-Forwarded-For and X-Real-IP: every
+// generic reverse proxy (nginx, Caddy, Traefik, k8s ingress) sets
+// those, so including them would warn operators who aren't behind
+// a CDN at all and train them to ignore the warning entirely
+// (defeating the point of #1561).
 //
 // Side effects: a single log line per process boot — never blocks
 // the request, never modifies the response, never logs again.
@@ -25,16 +29,19 @@ import (
 
 var cdnWarnOnce sync.Once
 
-// cdnHeaders are HTTP request headers typically injected by a CDN
-// when it fronts an origin. Detected case-insensitively by
-// http.Header.Get.
+// cdnHeaders are HTTP request headers injected ONLY by CDNs
+// (Cloudflare, Fastly, Akamai) — never by a generic reverse proxy.
+// Detected case-insensitively by http.Header.Get.
+//
+// X-Forwarded-For / X-Real-IP are intentionally NOT in this list:
+// every nginx/Caddy/Traefik/k8s-ingress deployment sets them, so
+// using them as a CDN signal produces a false positive on every
+// reverse-proxied install (issue #1561 round-1 review).
 var cdnHeaders = []string{
-	"CF-Connecting-IP",
-	"CF-Ray",
-	"X-Forwarded-For",
-	"X-Real-IP",
-	"Fastly-Client-IP",
-	"True-Client-IP",
+	"CF-Connecting-IP",  // Cloudflare
+	"CF-Ray",            // Cloudflare
+	"Fastly-Client-IP",  // Fastly
+	"True-Client-IP",    // Akamai (also set by Cloudflare Enterprise)
 }
 
 // cdnDetectionMiddleware inspects each incoming request for CDN

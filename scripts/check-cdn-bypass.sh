@@ -4,7 +4,7 @@
 #
 # Issue #1561. Run this from outside the CDN (e.g. from a different
 # network than the origin). Exits 0 if no CDN caching is detected,
-# 1 otherwise with a specific finding.
+# non-zero otherwise with a specific finding.
 #
 # Usage:
 #   scripts/check-cdn-bypass.sh https://analyzer.example.com
@@ -21,13 +21,36 @@ fi
 HOST="$1"
 URL="${HOST%/}/api/observers"
 
-# -s silent, -S show errors, -I HEAD request, -L follow redirects
-HDRS="$(curl -sSIL "$URL" 2>&1)"
+# -s silent, -S show errors, -I HEAD request, -L follow redirects.
+# -w '%{http_code}' so we can verify we actually reached the endpoint;
+# a 404/401/403/500 has no cf-cache-status / age header and would
+# otherwise be reported as "OK: no CDN caching" — a false success.
+TMP_HDRS="$(mktemp)"
+trap 'rm -f "$TMP_HDRS"' EXIT INT TERM
+
+STATUS="$(curl -sSIL -o "$TMP_HDRS" -w '%{http_code}' "$URL" 2>/tmp/cdn-check-err)"
 rc=$?
-if [ "$rc" != "0" ] && [ -z "$HDRS" ]; then
-    echo "FAIL: curl could not reach $URL (exit $rc)" >&2
+if [ "$rc" != "0" ] && [ ! -s "$TMP_HDRS" ]; then
+    echo "FAIL: curl could not reach $URL (exit $rc): $(cat /tmp/cdn-check-err 2>/dev/null)" >&2
     exit 1
 fi
+
+# Verify the endpoint actually responded successfully. A non-200 means
+# we cannot draw any conclusion about CDN caching from this URL —
+# previously the script would silently return "OK" on 404/401/500.
+case "$STATUS" in
+    2*) : ;;
+    "")
+        echo "FAIL: no HTTP status returned for $URL — cannot verify CDN bypass (check URL / auth / network)." >&2
+        exit 1
+        ;;
+    *)
+        echo "FAIL: endpoint returned HTTP $STATUS — cannot verify CDN bypass (check URL / auth / network)." >&2
+        exit 1
+        ;;
+esac
+
+HDRS="$(cat "$TMP_HDRS")"
 
 # Lowercase the header names so grep is case-insensitive without -i tricks.
 LOWER="$(printf '%s\n' "$HDRS" | awk '{
@@ -62,5 +85,5 @@ if [ -n "$AGE" ]; then
     esac
 fi
 
-echo "OK: no CDN caching detected for /api/observers (cf-cache-status=${CF_STATUS:-absent}, age=${AGE:-0})"
+echo "OK: no CDN caching detected for /api/observers (http=$STATUS, cf-cache-status=${CF_STATUS:-absent}, age=${AGE:-0})"
 exit 0
