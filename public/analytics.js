@@ -1456,7 +1456,7 @@
       if (matrixTitle) matrixTitle.textContent = bytes === 3 ? '🔢 Hash Usage Matrix' : `🔢 ${bytes}-Byte Hash Usage Matrix`;
       if (riskTitle) riskTitle.textContent = `💥 ${bytes}-Byte Collision Risk`;
       if (matrixDesc) {
-        if (bytes === 1) matrixDesc.textContent = 'Click a cell to see which nodes share that 1-byte prefix.';
+        if (bytes === 1) matrixDesc.textContent = 'Cells include the first byte of all repeaters — including those using 2- or 3-byte prefixes — so this reflects real conflicts in the 1-byte hash space. Click a cell to see the nodes.';
         else if (bytes === 2) matrixDesc.textContent = 'Each cell = first-byte group. Color shows worst 2-byte collision within. Click a cell to see the breakdown.';
         else matrixDesc.textContent = '3-byte prefix space is too large to visualize as a matrix — collision table is shown below.';
       }

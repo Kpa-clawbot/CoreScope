@@ -7916,6 +7916,28 @@ func (s *PacketStore) computeHashCollisions(region, area string) map[string]inte
 					oneByteCells[hex] = make([]collisionNode, 0)
 				}
 			}
+			// Fix #1218: a repeater configured for a 2- or 3-byte hash still
+			// occupies its first byte in the 1-byte hash space — any packet
+			// routed by 1-byte path-matching collides on that first byte
+			// regardless of the configured prefix size. Project all repeater
+			// hashes to their first byte so the 1-byte view reflects real
+			// conflicts in the 1-byte hash space.
+			for _, cn := range allCNodes {
+				if cn.Role != "repeater" {
+					continue
+				}
+				if cn.HashSize != 2 && cn.HashSize != 3 {
+					continue
+				}
+				if len(cn.PublicKey) < 2 {
+					continue
+				}
+				hex := strings.ToUpper(cn.PublicKey[:2])
+				if _, ok := oneByteCells[hex]; !ok {
+					continue
+				}
+				oneByteCells[hex] = append(oneByteCells[hex], cn)
+			}
 		} else if bytes == 2 {
 			twoByteCells = make(map[string]*twoByteCellInfo)
 			for i := 0; i < 256; i++ {
