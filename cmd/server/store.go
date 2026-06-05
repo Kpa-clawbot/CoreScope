@@ -9087,6 +9087,19 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 	}, nil
 }
 
+// GetAnalyticsSubpathsWithWindow is the window-aware variant of
+// GetAnalyticsSubpaths. Issue #1217: the Route Patterns chart on /analytics
+// ignored the Time window filter because callers always reached the unbounded
+// path. With a zero TimeWindow this is byte-equivalent to GetAnalyticsSubpaths.
+//
+// NOTE: this initial stub IGNORES the window — it exists so callers (and the
+// failing regression test) can compile. The real filtering lives in the
+// follow-up green commit.
+func (s *PacketStore) GetAnalyticsSubpathsWithWindow(region string, minLen, maxLen, limit int, window TimeWindow) map[string]interface{} {
+	_ = window
+	return s.GetAnalyticsSubpaths(region, minLen, maxLen, limit)
+}
+
 func (s *PacketStore) GetAnalyticsSubpaths(region string, minLen, maxLen, limit int) map[string]interface{} {
 	cacheKey := fmt.Sprintf("%s|%d|%d|%d", region, minLen, maxLen, limit)
 
