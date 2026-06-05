@@ -915,7 +915,11 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("order") == "asc" {
 			order = "ASC"
 		}
-		lim := queryLimit(r, 50, 500)
+		max := 10000
+		if s.cfg != nil && s.cfg.ListLimits != nil {
+			max = s.cfg.ListLimits.PacketsMax
+		}
+		lim := queryLimit(r, 50, max)
 		var result *PacketResult
 		var err error
 		if s.store != nil {
@@ -940,8 +944,12 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+		max := 10000
+	if s.cfg != nil && s.cfg.ListLimits != nil {
+		max = s.cfg.ListLimits.PacketsMax
+	}
 	q := PacketQuery{
-		Limit:    queryLimit(r, 50, 500),
+		Limit:    queryLimit(r, 50, max),
 		Offset:   queryInt(r, "offset", 0),
 		Observer: r.URL.Query().Get("observer"),
 		Hash:     r.URL.Query().Get("hash"),
@@ -1234,8 +1242,12 @@ func (s *Server) handlePostPacket(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	max := 2000
+	if s.cfg != nil && s.cfg.ListLimits != nil {
+		max = s.cfg.ListLimits.NodesMax
+	}
 	nodes, total, counts, err := s.db.GetNodes(
-		queryLimit(r, 50, 500),
+		queryLimit(r, 50, max),
 		queryInt(r, "offset", 0),
 		q.Get("role"), q.Get("search"), q.Get("before"),
 		q.Get("lastHeard"), q.Get("sortBy"), q.Get("region"),
@@ -1476,7 +1488,11 @@ func (s *Server) handleNodeHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBulkHealth(w http.ResponseWriter, r *http.Request) {
-	limit := queryLimit(r, 50, 200)
+	max := 200
+	if s.cfg != nil && s.cfg.ListLimits != nil {
+		max = s.cfg.ListLimits.AnalyticsMax
+	}
+	limit := queryLimit(r, 50, max)
 
 	if s.store != nil {
 		region := r.URL.Query().Get("region")
@@ -2107,7 +2123,11 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 			minLen = 2
 		}
 		maxLen := queryInt(r, "maxLen", 8)
-		limit := queryLimit(r, 100, 200)
+		max := 200
+		if s.cfg != nil && s.cfg.ListLimits != nil {
+			max = s.cfg.ListLimits.AnalyticsMax
+		}
+		limit := queryLimit(r, 100, max)
 		// Issue #1217: honor the Time window filter on Route Patterns.
 		window := ParseTimeWindow(r)
 		data := s.store.GetAnalyticsSubpathsWithWindow(region, minLen, maxLen, limit, window)
@@ -2407,7 +2427,11 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 	hash := mux.Vars(r)["hash"]
-	limit := queryLimit(r, 100, 500)
+	max := 500
+	if s.cfg != nil && s.cfg.ListLimits != nil {
+		max = s.cfg.ListLimits.ChannelMessagesMax
+	}
+	limit := queryLimit(r, 100, max)
 	offset := queryInt(r, "offset", 0)
 	region := r.URL.Query().Get("region")
 	// Prefer DB for full history (in-memory store has limited retention)
@@ -3245,7 +3269,11 @@ func (s *Server) filterBlacklistedFromSubpaths(data map[string]interface{}) map[
 
 // handleDroppedPackets returns recently dropped packets for investigation.
 func (s *Server) handleDroppedPackets(w http.ResponseWriter, r *http.Request) {
-	limit := queryLimit(r, 100, 500)
+	max := 10000
+	if s.cfg != nil && s.cfg.ListLimits != nil {
+		max = s.cfg.ListLimits.PacketsMax
+	}
+	limit := queryLimit(r, 100, max)
 	observerID := r.URL.Query().Get("observer")
 	nodePubkey := r.URL.Query().Get("pubkey")
 

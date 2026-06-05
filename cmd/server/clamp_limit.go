@@ -33,4 +33,3 @@ func clampLimit(raw string, def, max int) int {
 func queryLimit(r *http.Request, def, max int) int {
 	return clampLimit(r.URL.Query().Get("limit"), def, max)
 }
-

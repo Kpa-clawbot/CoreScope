@@ -24,11 +24,20 @@ type AreaEntry struct {
 	LonMax  *float64     `json:"lonMax,omitempty"`
 }
 
+// ListLimitsConfig defines maximum row limits for list endpoints to prevent DoS.
+type ListLimitsConfig struct {
+	PacketsMax         int `json:"packetsMax"`
+	NodesMax           int `json:"nodesMax"`
+	AnalyticsMax       int `json:"analyticsMax"`
+	ChannelMessagesMax int `json:"channelMessagesMax"`
+}
+
 // Config mirrors the Node.js config.json structure (read-only fields).
 type Config struct {
-	Port    int    `json:"port"`
-	APIKey  string `json:"apiKey"`
-	DBPath  string `json:"dbPath"`
+	Port       int               `json:"port"`
+	APIKey     string            `json:"apiKey"`
+	DBPath     string            `json:"dbPath"`
+	ListLimits *ListLimitsConfig `json:"listLimits"`
 
 	// NodeBlacklist is a list of public keys to exclude from all API responses.
 	// Blacklisted nodes are hidden from node lists, search, detail, map, and stats.
@@ -390,13 +399,33 @@ func LoadConfig(baseDirs ...string) (*Config, error) {
 		}
 		cfg.NormalizeTimestampConfig()
 		cfg.migrateDeprecatedConfig()
+		cfg.applyListLimitsDefaults()
 		applyCORSEnv(cfg)
 		return cfg, nil
 	}
 	cfg.NormalizeTimestampConfig()
 	cfg.migrateDeprecatedConfig()
+	cfg.applyListLimitsDefaults()
 	applyCORSEnv(cfg)
 	return cfg, nil // defaults
+}
+
+func (c *Config) applyListLimitsDefaults() {
+	if c.ListLimits == nil {
+		c.ListLimits = &ListLimitsConfig{}
+	}
+	if c.ListLimits.PacketsMax <= 0 {
+		c.ListLimits.PacketsMax = 10000
+	}
+	if c.ListLimits.NodesMax <= 0 {
+		c.ListLimits.NodesMax = 2000
+	}
+	if c.ListLimits.AnalyticsMax <= 0 {
+		c.ListLimits.AnalyticsMax = 200
+	}
+	if c.ListLimits.ChannelMessagesMax <= 0 {
+		c.ListLimits.ChannelMessagesMax = 500
+	}
 }
 
 func (c *Config) migrateDeprecatedConfig() {
