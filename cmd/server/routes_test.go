@@ -3610,6 +3610,80 @@ func TestHashCollisionsOnlyRepeaters(t *testing.T) {
 	}
 }
 
+// TestHashCollisionsOneByteIncludesMultiBytePrefixRepeaters verifies that the
+// 1-byte Hash Usage Matrix view includes the first byte of repeaters configured
+// for 2-byte and 3-byte prefixes. In MeshCore, a multi-byte hash repeater still
+// occupies its first byte in the 1-byte hash space, so any 1-byte path-matching
+// collides on that first byte regardless of the configured prefix size. Omitting
+// these under-reports real conflicts in the 1-byte space. (#1218)
+func TestHashCollisionsOneByteIncludesMultiBytePrefixRepeaters(t *testing.T) {
+	db := setupTestDB(t)
+
+	// Three repeaters with first byte "CC":
+	//   - cc11... (hash_size=1) — already counted in 1-byte view
+	//   - cc22aa... (hash_size=2) — must now be counted in 1-byte view's CC cell
+	//   - cc33bbdd... (hash_size=3) — must now be counted in 1-byte view's CC cell
+	// One unrelated repeater with first byte "DD" must NOT appear in CC cell.
+	now := time.Now().Format("2006-01-02 15:04:05")
+	db.conn.Exec(`INSERT INTO nodes (public_key, name, role, last_seen) VALUES
+		('cc11223344556677', 'Rep1B',  'repeater', ?),
+		('cc22aabbccddeeff', 'Rep2B',  'repeater', ?),
+		('cc33bbddeeff0011', 'Rep3B',  'repeater', ?),
+		('dd44556677889900', 'RepDD',  'repeater', ?)`, now, now, now, now)
+
+	cfg := &Config{Port: 3000}
+	hub := NewHub()
+	srv := NewServer(db, cfg, hub)
+	store := NewPacketStore(db, nil)
+	store.Load()
+	srv.store = store
+
+	store.hashSizeInfoMu.Lock()
+	store.hashSizeInfoCache = map[string]*hashSizeNodeInfo{
+		"cc11223344556677": {HashSize: 1, AllSizes: map[int]bool{1: true}},
+		"cc22aabbccddeeff": {HashSize: 2, AllSizes: map[int]bool{2: true}},
+		"cc33bbddeeff0011": {HashSize: 3, AllSizes: map[int]bool{3: true}},
+		"dd44556677889900": {HashSize: 1, AllSizes: map[int]bool{1: true}},
+	}
+	store.hashSizeInfoAt = time.Now()
+	store.hashSizeInfoMu.Unlock()
+
+	result := store.computeHashCollisions("", "")
+	bySize := result["by_size"].(map[string]interface{})
+	size1 := bySize["1"].(map[string]interface{})
+
+	cells, ok := size1["one_byte_cells"].(map[string][]collisionNode)
+	if !ok {
+		t.Fatalf("one_byte_cells has unexpected type %T", size1["one_byte_cells"])
+	}
+
+	ccNodes := cells["CC"]
+	if len(ccNodes) != 3 {
+		t.Errorf("expected 3 nodes in one_byte_cells[CC] (1B + 2B + 3B repeaters), got %d", len(ccNodes))
+	}
+	seen := map[string]bool{}
+	for _, n := range ccNodes {
+		seen[strings.ToLower(n.PublicKey)] = true
+	}
+	for _, pk := range []string{"cc11223344556677", "cc22aabbccddeeff", "cc33bbddeeff0011"} {
+		if !seen[pk] {
+			t.Errorf("expected one_byte_cells[CC] to include %s, missing", pk)
+		}
+	}
+	// Sanity: DD repeater must not be in CC cell.
+	if seen["dd44556677889900"] {
+		t.Errorf("one_byte_cells[CC] unexpectedly contains DD repeater")
+	}
+
+	// Sanity: the same multi-byte repeaters must NOT be added to the 2/3-byte
+	// view's repeater roster (that view continues to bucket by configured size).
+	size2 := bySize["2"].(map[string]interface{})
+	stats2 := size2["stats"].(map[string]interface{})
+	if n, _ := stats2["nodes_for_byte"].(int); n != 1 {
+		t.Errorf("expected 2-byte view nodes_for_byte=1, got %v", stats2["nodes_for_byte"])
+	}
+}
+
 func TestNodePathsEndpointUsesIndex(t *testing.T) {
 	srv, router := setupTestServer(t)
 
