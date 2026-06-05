@@ -234,33 +234,36 @@ func (s *Store) buildAndPersistNeighborEdges() (int, error) {
 		return 0, nil
 	}
 
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("begin: %w", err)
-	}
-	defer tx.Rollback()
-	stmt, err := tx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
-		VALUES (?, ?, 1, ?)
-		ON CONFLICT(node_a, node_b) DO UPDATE SET
-		  count = count + 1,
-		  last_seen = MAX(last_seen, excluded.last_seen)`)
-	if err != nil {
-		return 0, fmt.Errorf("prepare: %w", err)
-	}
-	defer stmt.Close()
-	var firstErr error
-	for _, e := range edges {
-		if _, err := stmt.Exec(e.a, e.b, e.ts); err != nil && firstErr == nil {
-			firstErr = err
+	// Wrap the whole edge-persist tx under writer-perf instrumentation
+	// (#1340). Slow neighbor-builder ticks (the #1339 root cause) now
+	// show up on /api/perf under component=neighbor_builder.
+	var inserted int
+	err = s.WriterTx("neighbor_builder", func(tx *sql.Tx) error {
+		stmt, err := tx.Prepare(`INSERT INTO neighbor_edges (node_a, node_b, count, last_seen)
+			VALUES (?, ?, 1, ?)
+			ON CONFLICT(node_a, node_b) DO UPDATE SET
+			  count = count + 1,
+			  last_seen = MAX(last_seen, excluded.last_seen)`)
+		if err != nil {
+			return fmt.Errorf("prepare: %w", err)
 		}
+		defer stmt.Close()
+		var firstErr error
+		for _, e := range edges {
+			if _, err := stmt.Exec(e.a, e.b, e.ts); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		if firstErr != nil {
+			return fmt.Errorf("upsert: %w", firstErr)
+		}
+		inserted = len(edges)
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	if firstErr != nil {
-		return 0, fmt.Errorf("upsert: %w", firstErr)
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
-	}
-	return len(edges), nil
+	return inserted, nil
 }
 
 // canonEdge orders the pair so node_a <= node_b (matches the existing
