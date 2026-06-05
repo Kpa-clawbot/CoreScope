@@ -61,6 +61,25 @@ func statsFilePath() string {
 
 // writeStatsAtomic writes b to path via a tmp-then-rename, refusing to follow
 // symlinks on the tmp file. Returns nil on success, an error otherwise.
+//
+// Symlink semantics (refs #1170):
+//
+//   - tmp side (path+".tmp"): protected by O_NOFOLLOW below. If tmp is a
+//     pre-planted symlink, openat fails with ELOOP instead of writing
+//     through it. This is the defensive-coding path that matters when the
+//     default stats path lives under world-writable /tmp.
+//
+//   - rename side (path): NOT protected by O_NOFOLLOW. Instead, os.Rename's
+//     semantics are relied upon — rename atomically replaces any existing
+//     entry at path (including a symlink) with the new regular file. The
+//     symlink's target is NEVER written through, because all writes happened
+//     to the unrelated tmp file before rename. Post-rename, path is a
+//     regular file (not a symlink) and any prior symlink target's contents
+//     are unchanged. The regression guardrail
+//     TestWriteStatsAtomic_SymlinkAtDestIsReplaced pins this behavior so a
+//     future refactor that swaps os.Rename for a destination-symlink-
+//     following primitive (e.g. an open(path, O_WRONLY) without O_NOFOLLOW)
+//     fails loudly.
 func writeStatsAtomic(path string, b []byte) error {
 	tmp := path + ".tmp"
 	// O_NOFOLLOW: if tmp is a pre-existing symlink, openat fails with ELOOP
