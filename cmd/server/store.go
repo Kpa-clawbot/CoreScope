@@ -9092,12 +9092,113 @@ func (s *PacketStore) GetNodeAnalytics(pubkey string, days int) (*NodeAnalyticsR
 // ignored the Time window filter because callers always reached the unbounded
 // path. With a zero TimeWindow this is byte-equivalent to GetAnalyticsSubpaths.
 //
-// NOTE: this initial stub IGNORES the window — it exists so callers (and the
-// failing regression test) can compile. The real filtering lives in the
-// follow-up green commit.
+// For non-zero windows we iterate the packet list and filter on
+// `tx.FirstSeen`. We deliberately do not consult the precomputed `spIndex`
+// (which has no per-tx timestamp), so the windowed path is O(N_tx · path²);
+// this matches the slow region-filtered path and keeps the fast unbounded
+// hot path untouched. Results are cached by (region|area|window) so repeated
+// renders of the same window don't re-scan.
 func (s *PacketStore) GetAnalyticsSubpathsWithWindow(region string, minLen, maxLen, limit int, window TimeWindow) map[string]interface{} {
-	_ = window
-	return s.GetAnalyticsSubpaths(region, minLen, maxLen, limit)
+	if window.IsZero() {
+		return s.GetAnalyticsSubpaths(region, minLen, maxLen, limit)
+	}
+
+	cacheKey := fmt.Sprintf("%s|%d|%d|%d|w=%s", region, minLen, maxLen, limit, window.CacheKey())
+	s.cacheMu.Lock()
+	if cached, ok := s.subpathCache[cacheKey]; ok && time.Now().Before(cached.expiresAt) {
+		s.cacheHits++
+		s.cacheMu.Unlock()
+		return cached.data
+	}
+	s.cacheMisses++
+	s.cacheMu.Unlock()
+
+	result := s.computeAnalyticsSubpathsWindowed(region, minLen, maxLen, limit, window)
+
+	s.cacheMu.Lock()
+	s.subpathCache[cacheKey] = &cachedResult{data: result, expiresAt: time.Now().Add(s.rfCacheTTL)}
+	s.cacheMu.Unlock()
+
+	return result
+}
+
+// computeAnalyticsSubpathsWindowed iterates s.packets and bounds the result
+// to transmissions whose FirstSeen falls inside `window`. Optionally also
+// region-filters. Mirrors computeSubpathsSlow but with the window predicate
+// inlined and without requiring a non-empty region.
+func (s *PacketStore) computeAnalyticsSubpathsWindowed(region string, minLen, maxLen, limit int, window TimeWindow) map[string]interface{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	_, pm := s.getCachedNodesAndPM()
+	contextPubkeys := buildAggregateHopContextPubkeys(s.packets, pm)
+	hopCache := make(map[string]*nodeInfo)
+	graph := s.graph.Load()
+	resolveHop := func(hop string) string {
+		if cached, ok := hopCache[hop]; ok {
+			if cached != nil {
+				return cached.Name
+			}
+			return hop
+		}
+		r, _, _ := pm.resolveWithContext(hop, contextPubkeys, graph)
+		hopCache[hop] = r
+		if r != nil {
+			return r.Name
+		}
+		return hop
+	}
+
+	var regionObs map[string]bool
+	if region != "" {
+		regionObs = s.resolveRegionObservers(region)
+	}
+
+	subpathCounts := make(map[string]*subpathAccum)
+	totalPaths := 0
+
+	for _, tx := range s.packets {
+		if !window.Includes(tx.FirstSeen) {
+			continue
+		}
+		hops := txGetParsedPath(tx)
+		if len(hops) < 2 {
+			continue
+		}
+		if regionObs != nil {
+			match := false
+			for _, obs := range tx.Observations {
+				if regionObs[obs.ObserverID] {
+					match = true
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		totalPaths++
+
+		named := make([]string, len(hops))
+		for i, h := range hops {
+			named[i] = resolveHop(h)
+		}
+
+		for l := minLen; l <= maxLen && l <= len(named); l++ {
+			for start := 0; start <= len(named)-l; start++ {
+				sub := strings.Join(named[start:start+l], " → ")
+				raw := strings.Join(hops[start:start+l], ",")
+				entry := subpathCounts[sub]
+				if entry == nil {
+					entry = &subpathAccum{raw: raw}
+					subpathCounts[sub] = entry
+				}
+				entry.count++
+			}
+		}
+	}
+
+	return s.rankSubpaths(subpathCounts, totalPaths, limit)
 }
 
 func (s *PacketStore) GetAnalyticsSubpaths(region string, minLen, maxLen, limit int) map[string]interface{} {
@@ -9119,6 +9220,21 @@ func (s *PacketStore) GetAnalyticsSubpaths(region string, minLen, maxLen, limit 
 	s.cacheMu.Unlock()
 
 	return result
+}
+
+// GetAnalyticsSubpathsBulkWithWindow is the window-aware variant. For a zero
+// TimeWindow it is byte-equivalent to GetAnalyticsSubpathsBulk; for a non-
+// zero window it delegates to GetAnalyticsSubpathsWithWindow per group so
+// the `tx.FirstSeen` filter is honored (issue #1217).
+func (s *PacketStore) GetAnalyticsSubpathsBulkWithWindow(region string, groups []subpathGroup, window TimeWindow) []map[string]interface{} {
+	if window.IsZero() {
+		return s.GetAnalyticsSubpathsBulk(region, groups)
+	}
+	results := make([]map[string]interface{}, len(groups))
+	for i, g := range groups {
+		results[i] = s.GetAnalyticsSubpathsWithWindow(region, g.MinLen, g.MaxLen, g.Limit, window)
+	}
+	return results
 }
 
 // GetAnalyticsSubpathsBulk returns multiple length-range buckets from a single

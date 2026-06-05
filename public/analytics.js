@@ -1876,7 +1876,12 @@
     el.innerHTML = '<div class="text-center text-muted" style="padding:40px">Analyzing route patterns…</div>';
     try {
       const rq = RegionFilter.regionQueryString();
-      const bulk = await api('/analytics/subpaths-bulk?groups=2-2:50,3-3:30,4-4:20,5-8:15' + rq, { ttl: CLIENT_TTL.analyticsRF });
+      // Issue #1217: thread the Time window picker into the Route Patterns
+      // request so the chart actually reflects the user's selection.
+      const twEl = document.getElementById('analyticsTimeWindow');
+      const twVal = twEl ? twEl.value : '';
+      const tws = twVal ? '&window=' + encodeURIComponent(twVal) : '';
+      const bulk = await api('/analytics/subpaths-bulk?groups=2-2:50,3-3:30,4-4:20,5-8:15' + rq + tws, { ttl: CLIENT_TTL.analyticsRF });
       const [d2, d3, d4, d5] = bulk.results;
 
       function renderTable(data, title) {

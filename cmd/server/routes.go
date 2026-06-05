@@ -2071,7 +2071,9 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 		}
 		maxLen := queryInt(r, "maxLen", 8)
 		limit := queryLimit(r, 100, 200)
-		data := s.store.GetAnalyticsSubpaths(region, minLen, maxLen, limit)
+		// Issue #1217: honor the Time window filter on Route Patterns.
+		window := ParseTimeWindow(r)
+		data := s.store.GetAnalyticsSubpathsWithWindow(region, minLen, maxLen, limit, window)
 		if s.cfg != nil && len(s.cfg.NodeBlacklist) > 0 {
 			data = s.filterBlacklistedFromSubpaths(data)
 		}
@@ -2132,7 +2134,7 @@ func (s *Server) handleAnalyticsSubpathsBulk(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	results := s.store.GetAnalyticsSubpathsBulk(region, groups)
+	results := s.store.GetAnalyticsSubpathsBulkWithWindow(region, groups, ParseTimeWindow(r))
 	if s.cfg != nil && len(s.cfg.NodeBlacklist) > 0 {
 		for i, r := range results {
 			results[i] = s.filterBlacklistedFromSubpaths(r)
