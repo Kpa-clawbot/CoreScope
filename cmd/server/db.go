@@ -479,6 +479,8 @@ type PacketQuery struct {
 type PacketResult struct {
 	Packets []map[string]interface{} `json:"packets"`
 	Total   int                      `json:"total"`
+	Limit   int                      `json:"limit"`
+	Offset  int                      `json:"offset"`
 }
 
 // QueryPackets returns paginated, filtered packets as transmissions (matching Node.js shape).

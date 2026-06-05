@@ -36,13 +36,13 @@ type Server struct {
 	buildTime string
 
 	// Cached runtime.MemStats to avoid stop-the-world pauses on every health check
-	memStatsMu   sync.Mutex
-	memStatsCache runtime.MemStats
+	memStatsMu       sync.Mutex
+	memStatsCache    runtime.MemStats
 	memStatsCachedAt time.Time
 
 	// Cached /api/stats response — recomputed at most once every 10s
-	statsMu      sync.Mutex
-	statsCache   *StatsResponse
+	statsMu       sync.Mutex
+	statsCache    *StatsResponse
 	statsCachedAt time.Time
 
 	// Guards s.cfg.GeoFilter — read by ingest/handler goroutines, written by PUT handler
@@ -111,6 +111,9 @@ func NewPerfStats() *PerfStats {
 }
 
 func NewServer(db *DB, cfg *Config, hub *Hub) *Server {
+	if cfg != nil {
+		cfg.applyListLimitsDefaults()
+	}
 	return &Server{
 		db:        db,
 		cfg:       cfg,
@@ -473,30 +476,30 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 	}, s.cfg.Branding, theme.Branding)
 
 	themeColors := mergeMap(map[string]interface{}{
-		"accent":      "#4a9eff",
-		"accentHover": "#6db3ff",
-		"navBg":       "#0f0f23",
-		"navBg2":      "#1a1a2e",
-		"navText":     "#ffffff",
+		"accent":       "#4a9eff",
+		"accentHover":  "#6db3ff",
+		"navBg":        "#0f0f23",
+		"navBg2":       "#1a1a2e",
+		"navText":      "#ffffff",
 		"navTextMuted": "#cbd5e1",
-		"background":  "#f4f5f7",
-		"text":        "#1a1a2e",
-		"textMuted":   "#5b6370",
-		"border":      "#e2e5ea",
-		"surface1":    "#ffffff",
-		"surface2":    "#ffffff",
-		"surface3":    "#ffffff",
-		"sectionBg":   "#eef2ff",
-		"cardBg":      "#ffffff",
-		"contentBg":   "#f4f5f7",
-		"detailBg":    "#ffffff",
-		"inputBg":     "#ffffff",
-		"rowStripe":   "#f9fafb",
-		"rowHover":    "#eef2ff",
-		"selectedBg":  "#dbeafe",
-		"statusGreen": "#22c55e",
+		"background":   "#f4f5f7",
+		"text":         "#1a1a2e",
+		"textMuted":    "#5b6370",
+		"border":       "#e2e5ea",
+		"surface1":     "#ffffff",
+		"surface2":     "#ffffff",
+		"surface3":     "#ffffff",
+		"sectionBg":    "#eef2ff",
+		"cardBg":       "#ffffff",
+		"contentBg":    "#f4f5f7",
+		"detailBg":     "#ffffff",
+		"inputBg":      "#ffffff",
+		"rowStripe":    "#f9fafb",
+		"rowHover":     "#eef2ff",
+		"selectedBg":   "#dbeafe",
+		"statusGreen":  "#22c55e",
 		"statusYellow": "#eab308",
-		"statusRed":   "#ef4444",
+		"statusRed":    "#ef4444",
 	}, s.cfg.Theme, theme.Theme)
 
 	nodeColors := mergeMap(map[string]interface{}{
@@ -508,30 +511,30 @@ func (s *Server) handleConfigTheme(w http.ResponseWriter, r *http.Request) {
 	}, s.cfg.NodeColors, theme.NodeColors)
 
 	themeDark := mergeMap(map[string]interface{}{
-		"accent":      "#4a9eff",
-		"accentHover": "#6db3ff",
-		"navBg":       "#0f0f23",
-		"navBg2":      "#1a1a2e",
-		"navText":     "#ffffff",
+		"accent":       "#4a9eff",
+		"accentHover":  "#6db3ff",
+		"navBg":        "#0f0f23",
+		"navBg2":       "#1a1a2e",
+		"navText":      "#ffffff",
 		"navTextMuted": "#cbd5e1",
-		"background":  "#0f0f23",
-		"text":        "#e2e8f0",
-		"textMuted":   "#a8b8cc",
-		"border":      "#334155",
-		"surface1":    "#1a1a2e",
-		"surface2":    "#232340",
-		"cardBg":      "#1a1a2e",
-		"contentBg":   "#0f0f23",
-		"detailBg":    "#232340",
-		"inputBg":     "#1e1e34",
-		"rowStripe":   "#1e1e34",
-		"rowHover":    "#2d2d50",
-		"selectedBg":  "#1e3a5f",
-		"statusGreen": "#22c55e",
+		"background":   "#0f0f23",
+		"text":         "#e2e8f0",
+		"textMuted":    "#a8b8cc",
+		"border":       "#334155",
+		"surface1":     "#1a1a2e",
+		"surface2":     "#232340",
+		"cardBg":       "#1a1a2e",
+		"contentBg":    "#0f0f23",
+		"detailBg":     "#232340",
+		"inputBg":      "#1e1e34",
+		"rowStripe":    "#1e1e34",
+		"rowHover":     "#2d2d50",
+		"selectedBg":   "#1e3a5f",
+		"statusGreen":  "#22c55e",
 		"statusYellow": "#eab308",
-		"statusRed":   "#ef4444",
-		"surface3":    "#2d2d50",
-		"sectionBg":   "#1e1e34",
+		"statusRed":    "#ef4444",
+		"surface3":     "#2d2d50",
+		"sectionBg":    "#1e1e34",
 	}, s.cfg.ThemeDark, theme.ThemeDark)
 	typeColors := mergeMap(map[string]interface{}{
 		"ADVERT":   "#22c55e",
@@ -915,11 +918,7 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("order") == "asc" {
 			order = "ASC"
 		}
-		max := 10000
-		if s.cfg != nil && s.cfg.ListLimits != nil {
-			max = s.cfg.ListLimits.PacketsMax
-		}
-		lim := queryLimit(r, 50, max)
+		lim := queryLimit(r, 50, s.cfg.ListLimits.PacketsMax)
 		var result *PacketResult
 		var err error
 		if s.store != nil {
@@ -935,28 +934,21 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, err.Error())
 			return
 		}
-		writeJSON(w, PacketListResponse{
-			Packets: mapSliceToTransmissions(result.Packets),
-			Total:   result.Total,
-			Limit:   lim,
-			Offset:  queryInt(r, "offset", 0),
-		})
+		result.Limit = lim
+		result.Offset = queryInt(r, "offset", 0)
+		writeJSON(w, result)
 		return
 	}
 
-		max := 10000
-	if s.cfg != nil && s.cfg.ListLimits != nil {
-		max = s.cfg.ListLimits.PacketsMax
-	}
 	q := PacketQuery{
-		Limit:    queryLimit(r, 50, max),
-		Offset:   queryInt(r, "offset", 0),
-		Observer: r.URL.Query().Get("observer"),
-		Hash:     r.URL.Query().Get("hash"),
-		Since:    r.URL.Query().Get("since"),
-		Until:    r.URL.Query().Get("until"),
-		Region:   r.URL.Query().Get("region"),
-		Node:     r.URL.Query().Get("node"),
+		Limit:              queryLimit(r, 50, s.cfg.ListLimits.PacketsMax),
+		Offset:             queryInt(r, "offset", 0),
+		Observer:           r.URL.Query().Get("observer"),
+		Hash:               r.URL.Query().Get("hash"),
+		Since:              r.URL.Query().Get("since"),
+		Until:              r.URL.Query().Get("until"),
+		Region:             r.URL.Query().Get("region"),
+		Node:               r.URL.Query().Get("node"),
 		Channel:            r.URL.Query().Get("channel"),
 		Area:               r.URL.Query().Get("area"),
 		Order:              "DESC",
@@ -986,6 +978,8 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, err.Error())
 			return
 		}
+		result.Limit = q.Limit
+		result.Offset = q.Offset
 		writeJSON(w, result)
 		return
 	}
@@ -1002,6 +996,8 @@ func (s *Server) handlePackets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	result.Limit = q.Limit
+	result.Offset = q.Offset
 	writeJSON(w, result)
 }
 
@@ -1488,16 +1484,12 @@ func (s *Server) handleNodeHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBulkHealth(w http.ResponseWriter, r *http.Request) {
-	max := 200
-	if s.cfg != nil && s.cfg.ListLimits != nil {
-		max = s.cfg.ListLimits.AnalyticsMax
-	}
-	limit := queryLimit(r, 50, max)
+	lim := queryLimit(r, 50, s.cfg.ListLimits.NodesMax)
 
 	if s.store != nil {
 		region := r.URL.Query().Get("region")
 		area := r.URL.Query().Get("area")
-		results := s.store.GetBulkHealth(limit, region, area)
+		results := s.store.GetBulkHealth(lim, region, area)
 		// Filter blacklisted nodes
 		if len(s.cfg.NodeBlacklist) > 0 {
 			filtered := make([]map[string]interface{}, 0, len(results))
@@ -2089,7 +2081,7 @@ func (s *Server) handleAnalyticsHashSizes(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, map[string]interface{}{
-		"total":                    0,
+		"total":                   0,
 		"distribution":            map[string]int{"1": 0, "2": 0, "3": 0},
 		"distributionByRepeaters": map[string]int{"1": 0, "2": 0, "3": 0},
 		"hourly":                  []HashSizeHourly{},
@@ -2123,11 +2115,7 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 			minLen = 2
 		}
 		maxLen := queryInt(r, "maxLen", 8)
-		max := 200
-		if s.cfg != nil && s.cfg.ListLimits != nil {
-			max = s.cfg.ListLimits.AnalyticsMax
-		}
-		limit := queryLimit(r, 100, max)
+		limit := queryLimit(r, 50, s.cfg.ListLimits.AnalyticsMax)
 		// Issue #1217: honor the Time window filter on Route Patterns.
 		window := ParseTimeWindow(r)
 		data := s.store.GetAnalyticsSubpathsWithWindow(region, minLen, maxLen, limit, window)
@@ -2145,7 +2133,8 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 
 // handleAnalyticsSubpathsBulk returns multiple length-range buckets in a single
 // response, avoiding repeated scans of the same packet data. Query format:
-//   ?groups=2-2:50,3-3:30,4-4:20,5-8:15   (minLen-maxLen:limit per group)
+//
+//	?groups=2-2:50,3-3:30,4-4:20,5-8:15   (minLen-maxLen:limit per group)
 func (s *Server) handleAnalyticsSubpathsBulk(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil && !s.store.SubpathIndexReady() {
 		writeIndexLoading503(w)
@@ -2427,11 +2416,7 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 	hash := mux.Vars(r)["hash"]
-	max := 500
-	if s.cfg != nil && s.cfg.ListLimits != nil {
-		max = s.cfg.ListLimits.ChannelMessagesMax
-	}
-	limit := queryLimit(r, 100, max)
+	limit := queryLimit(r, 50, s.cfg.ListLimits.ChannelMessagesMax)
 	offset := queryInt(r, "offset", 0)
 	region := r.URL.Query().Get("region")
 	// Prefer DB for full history (in-memory store has limited retention)
@@ -2545,13 +2530,13 @@ func (s *Server) buildObserversDefaultResponse() (ObserverListResponse, error) {
 			ID: o.ID, Name: o.Name, IATA: o.IATA,
 			LastSeen: o.LastSeen, FirstSeen: o.FirstSeen,
 			PacketCount: o.PacketCount,
-			Model: o.Model, Firmware: o.Firmware,
+			Model:       o.Model, Firmware: o.Firmware,
 			ClientVersion: o.ClientVersion, Radio: o.Radio,
 			BatteryMv: o.BatteryMv, UptimeSecs: o.UptimeSecs,
-			NoiseFloor: o.NoiseFloor,
-			LastPacketAt: o.LastPacketAt,
+			NoiseFloor:      o.NoiseFloor,
+			LastPacketAt:    o.LastPacketAt,
 			PacketsLastHour: plh,
-			Lat: lat, Lon: lon, NodeRole: nodeRole,
+			Lat:             lat, Lon: lon, NodeRole: nodeRole,
 		}
 		applyObserverNaiveClock(&resp, o, nowTime)
 		result = append(result, resp)
@@ -2590,11 +2575,11 @@ func (s *Server) handleObserverDetail(w http.ResponseWriter, r *http.Request) {
 			ID: obs.ID, Name: obs.Name, IATA: obs.IATA,
 			LastSeen: obs.LastSeen, FirstSeen: obs.FirstSeen,
 			PacketCount: obs.PacketCount,
-			Model: obs.Model, Firmware: obs.Firmware,
+			Model:       obs.Model, Firmware: obs.Firmware,
 			ClientVersion: obs.ClientVersion, Radio: obs.Radio,
 			BatteryMv: obs.BatteryMv, UptimeSecs: obs.UptimeSecs,
-			NoiseFloor: obs.NoiseFloor,
-			LastPacketAt: obs.LastPacketAt,
+			NoiseFloor:      obs.NoiseFloor,
+			LastPacketAt:    obs.LastPacketAt,
 			PacketsLastHour: plh,
 		}
 		applyObserverNaiveClock(&resp, obs, time.Now().UTC())
@@ -3269,11 +3254,7 @@ func (s *Server) filterBlacklistedFromSubpaths(data map[string]interface{}) map[
 
 // handleDroppedPackets returns recently dropped packets for investigation.
 func (s *Server) handleDroppedPackets(w http.ResponseWriter, r *http.Request) {
-	max := 10000
-	if s.cfg != nil && s.cfg.ListLimits != nil {
-		max = s.cfg.ListLimits.PacketsMax
-	}
-	limit := queryLimit(r, 100, max)
+	limit := queryLimit(r, 100, s.cfg.ListLimits.PacketsMax)
 	observerID := r.URL.Query().Get("observer")
 	nodePubkey := r.URL.Query().Get("pubkey")
 
