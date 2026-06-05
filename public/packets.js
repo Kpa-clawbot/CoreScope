@@ -439,6 +439,15 @@
             if (fresh) t = fresh;
           } catch (_) {}
         }
+
+        // MINOR fix: don't steal focus if the user already focused another input
+        if (document.activeElement && 
+            document.activeElement !== document.body && 
+            document.activeElement !== t && 
+            !panel.contains(document.activeElement)) {
+          return;
+        }
+
         if (t && document.body.contains(t)) {
           try { t.focus({ preventScroll: true }); } catch (_) {}
         }
