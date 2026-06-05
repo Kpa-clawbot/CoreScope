@@ -146,7 +146,17 @@ type parityEndpoint struct {
 
 func TestParityShapes(t *testing.T) {
 	shapes := loadShapes(t)
-	_, router := setupTestServer(t)
+	srv, router := setupTestServer(t)
+	// #1011: lazy distance index — pre-warm before parity shape
+	// validation expects 200.
+	srv.store.TriggerDistanceIndexBuild()
+	deadline := time.Now().Add(5 * time.Second)
+	for !srv.store.DistanceIndexBuilt() {
+		if time.Now().After(deadline) {
+			t.Fatal("distance index did not finish building within 5s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	endpoints := []parityEndpoint{
 		{"stats", "/api/stats"},

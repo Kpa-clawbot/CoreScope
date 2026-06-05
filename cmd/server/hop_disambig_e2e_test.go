@@ -172,6 +172,17 @@ func TestTopHopsRespectsContextAcrossAllCallSites(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
+	// #1011: distance index is now lazy — trigger it explicitly and
+	// wait for build completion before inspecting distHops.
+	store.TriggerDistanceIndexBuild()
+	deadline := time.Now().Add(5 * time.Second)
+	for !store.DistanceIndexBuilt() {
+		if time.Now().After(deadline) {
+			t.Fatal("distance index did not finish building within 5s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	// Inspect precomputed distance index.
 	store.mu.RLock()
 	hops := make([]distHopRecord, len(store.distHops))
