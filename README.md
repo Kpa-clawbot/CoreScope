@@ -21,6 +21,7 @@ The Go backend serves all 40+ API endpoints from an in-memory packet store with 
 | Memory (56K packets) | **~300 MB** (vs 1.3 GB on Node.js) |
 | WebSocket broadcast | **Real-time** to all connected browsers |
 | Channel decryption | **AES-128-ECB** with rainbow table |
+| GOMEMLIMIT (memory-constrained hosts) | **set to ≥1.5× working set** (e.g. 1536 MiB on a 2 GB Pi for a ~1 GB store). Lower values trigger a GC death-spiral. Configure via the `GOMEMLIMIT` env var or `runtime.maxMemoryMB` in `config.json`; env wins. Applies to both server and ingestor. See [#1010](https://github.com/Kpa-clawbot/CoreScope/issues/1010). |
 
 See [PERFORMANCE.md](PERFORMANCE.md) for full benchmarks.
 

@@ -86,6 +86,11 @@ type Config struct {
 
 	PacketStore *PacketStoreConfig `json:"packetStore,omitempty"`
 
+	// Runtime holds Go runtime tuning knobs (#1010).
+	// Currently exposes runtime.maxMemoryMB which sets a soft memory limit
+	// (GOMEMLIMIT) via runtime/debug.SetMemoryLimit at startup. The
+	// GOMEMLIMIT environment variable, when set, takes precedence.
+	Runtime *RuntimeConfig `json:"runtime,omitempty"`
 	GeoFilter *GeoFilterConfig `json:"geo_filter,omitempty"`
 
 	Areas map[string]AreaEntry `json:"areas,omitempty"`
@@ -236,6 +241,16 @@ type PacketStoreConfig struct {
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.
 type GeoFilterConfig = geofilter.Config
+
+// RuntimeConfig holds Go runtime tuning knobs (#1010).
+type RuntimeConfig struct {
+	// MaxMemoryMB sets the Go soft memory limit (GOMEMLIMIT) in MiB via
+	// runtime/debug.SetMemoryLimit at startup. Takes precedence over the
+	// implicit limit derived from packetStore.maxMemoryMB. The GOMEMLIMIT
+	// environment variable, when set, takes precedence over this value.
+	// 0/unset preserves default behavior.
+	MaxMemoryMB int `json:"maxMemoryMB"`
+}
 
 type RetentionConfig struct {
 	NodeDays      int `json:"nodeDays"`

@@ -109,22 +109,37 @@ func main() {
 		log.Printf("[security] WARNING: API key is weak or a known default — write endpoints are vulnerable")
 	}
 
-	// Apply Go runtime soft memory limit (#836).
-	// Honors GOMEMLIMIT if set; otherwise derives from packetStore.maxMemoryMB.
+	// Apply Go runtime soft memory limit (#836, #1010).
+	// Precedence: GOMEMLIMIT env > runtime.maxMemoryMB > derived from packetStore.maxMemoryMB.
 	{
 		_, envSet := os.LookupEnv("GOMEMLIMIT")
+		runtimeMaxMB := 0
+		if cfg.Runtime != nil {
+			runtimeMaxMB = cfg.Runtime.MaxMemoryMB
+		}
 		maxMB := 0
 		if cfg.PacketStore != nil {
 			maxMB = cfg.PacketStore.MaxMemoryMB
 		}
-		limit, source := applyMemoryLimit(maxMB, envSet)
+		// runtime.maxMemoryMB (explicit) wins over packetStore-derived (implicit).
+		effectiveMB := maxMB
+		usedRuntimeCfg := false
+		if !envSet && runtimeMaxMB > 0 {
+			effectiveMB = runtimeMaxMB
+			usedRuntimeCfg = true
+		}
+		limit, source := applyMemoryLimit(effectiveMB, envSet)
 		switch source {
 		case "env":
 			log.Printf("[memlimit] using GOMEMLIMIT from environment (%s)", os.Getenv("GOMEMLIMIT"))
 		case "derived":
-			log.Printf("[memlimit] derived from packetStore.maxMemoryMB=%d → %d MiB (1.5x headroom)", maxMB, limit/(1024*1024))
+			if usedRuntimeCfg {
+				log.Printf("[memlimit] runtime.maxMemoryMB=%d → %d MiB (1.5x headroom)", runtimeMaxMB, limit/(1024*1024))
+			} else {
+				log.Printf("[memlimit] derived from packetStore.maxMemoryMB=%d → %d MiB (1.5x headroom)", maxMB, limit/(1024*1024))
+			}
 		default:
-			log.Printf("[memlimit] no soft memory limit set (GOMEMLIMIT unset, packetStore.maxMemoryMB=0); recommend setting one to avoid container OOM-kill")
+			log.Printf("[memlimit] unset → default (no soft memory limit; recommend setting GOMEMLIMIT or runtime.maxMemoryMB to ≥1.5× working set to avoid OOM-kill)")
 		}
 		warnIfMemlimitUnderprovisioned(limit)
 	}

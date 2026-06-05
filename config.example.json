@@ -295,6 +295,10 @@
     "_comment": "In-memory packet store. maxMemoryMB caps RAM usage. retentionHours: only packets younger than this are kept in memory (0 = unlimited). hotStartupHours: hours loaded synchronously at startup; background loader fills the remaining retentionHours window. 0 = disabled (loads full retentionHours synchronously, legacy behavior). Set to a positive value (e.g. 24) to reduce startup time on large DBs.",
     "_comment_gomemlimit": "On startup the server reads GOMEMLIMIT from the environment if set; otherwise it derives a Go runtime soft memory limit of maxMemoryMB * 1.5 and applies it via debug.SetMemoryLimit. This forces aggressive GC under cgroup pressure so the process self-throttles before the kernel SIGKILLs it. To override, set GOMEMLIMIT explicitly (e.g. GOMEMLIMIT=850MiB). See issue #836."
   },
+  "runtime": {
+    "maxMemoryMB": 0,
+    "_comment_runtime_maxMemoryMB": "Go soft memory limit (GOMEMLIMIT) in MiB applied via runtime/debug.SetMemoryLimit at startup. Precedence: GOMEMLIMIT env var > runtime.maxMemoryMB > packetStore.maxMemoryMB-derived (server only). 0 (default) preserves existing behavior. Set on memory-constrained deployments (2 GB Pi, 4 GB VMs) to trigger earlier GC and avoid container OOM-kill. Floor recommendation: ≥1.5× working set; setting below the working set causes a GC death-spiral. Applies to BOTH cmd/server and cmd/ingestor. See #1010."
+  },
   "resolvedPath": {
     "backfillHours": 24,
     "_comment": "How far back (hours) the async backfill scans for observations with NULL resolved_path. Default: 24. Set higher to backfill older data, lower to speed up startup."

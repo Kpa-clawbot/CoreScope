@@ -53,6 +53,7 @@ type Config struct {
 	HashRegions     []string          `json:"hashRegions,omitempty"`
 	Retention       *RetentionConfig  `json:"retention,omitempty"`
 	Metrics         *MetricsConfig    `json:"metrics,omitempty"`
+	Runtime         *RuntimeConfig    `json:"runtime,omitempty"`
 	GeoFilter            *GeoFilterConfig     `json:"geo_filter,omitempty"`
 	ForeignAdverts       *ForeignAdvertConfig `json:"foreignAdverts,omitempty"`
 	ValidateSignatures   *bool             `json:"validateSignatures,omitempty"`
@@ -132,6 +133,15 @@ func (c *Config) PacketDaysOrZero() int {
 // MetricsConfig controls observer metrics collection.
 type MetricsConfig struct {
 	SampleIntervalSec int `json:"sampleIntervalSec"`
+}
+
+// RuntimeConfig holds Go runtime tuning knobs (#1010).
+type RuntimeConfig struct {
+	// MaxMemoryMB is the soft memory limit (GOMEMLIMIT) in MiB applied via
+	// runtime/debug.SetMemoryLimit at startup. The GOMEMLIMIT environment
+	// variable, when set, takes precedence over this value. 0/unset means
+	// no limit is applied and default Go runtime behavior is preserved.
+	MaxMemoryMB int `json:"maxMemoryMB"`
 }
 
 // DBConfig is the shared SQLite vacuum/maintenance config (#919, #921).

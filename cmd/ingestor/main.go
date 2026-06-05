@@ -51,6 +51,25 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
+	// Apply Go runtime soft memory limit (GOMEMLIMIT). See #1010.
+	// Precedence: GOMEMLIMIT env > runtime.maxMemoryMB > unset (default).
+	{
+		_, envSet := os.LookupEnv("GOMEMLIMIT")
+		runtimeMaxMB := 0
+		if cfg.Runtime != nil {
+			runtimeMaxMB = cfg.Runtime.MaxMemoryMB
+		}
+		limit, source := applyMemoryLimit(runtimeMaxMB, envSet)
+		switch source {
+		case "env":
+			log.Printf("[memlimit] using GOMEMLIMIT from environment (%s)", os.Getenv("GOMEMLIMIT"))
+		case "config":
+			log.Printf("[memlimit] runtime.maxMemoryMB=%d → SetMemoryLimit(%d MiB)", runtimeMaxMB, limit/(1024*1024))
+		default:
+			log.Printf("[memlimit] unset → default (no soft memory limit; recommend setting GOMEMLIMIT or runtime.maxMemoryMB to ≥1.5× working set to avoid OOM-kill)")
+		}
+	}
+
 	sources := cfg.ResolvedSources()
 
 	store, err := OpenStoreWithInterval(cfg.DBPath, cfg.MetricsSampleInterval())
