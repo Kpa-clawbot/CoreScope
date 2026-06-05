@@ -1238,12 +1238,8 @@ func (s *Server) handlePostPacket(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	max := 2000
-	if s.cfg != nil && s.cfg.ListLimits != nil {
-		max = s.cfg.ListLimits.NodesMax
-	}
 	nodes, total, counts, err := s.db.GetNodes(
-		queryLimit(r, 50, max),
+		queryLimit(r, 50, s.cfg.ListLimits.NodesMax),
 		queryInt(r, "offset", 0),
 		q.Get("role"), q.Get("search"), q.Get("before"),
 		q.Get("lastHeard"), q.Get("sortBy"), q.Get("region"),
