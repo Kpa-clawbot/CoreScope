@@ -133,6 +133,7 @@ type NodeClockSkew struct {
 	Samples         []SkewSample `json:"samples,omitempty"` // time-series for sparklines
 	GoodFraction        float64  `json:"goodFraction"`        // fraction of recent samples with |skew| <= 1h
 	RecentBadSampleCount int     `json:"recentBadSampleCount"` // count of recent samples with |skew| > 1h
+	RecentBadSamples     []BadSample `json:"recentBadSamples,omitempty"` // #1094: per-bad-sample evidence (hash + bad advertTS)
 	RecentSampleCount    int     `json:"recentSampleCount"`    // total recent samples in window
 	RecentHashEvidence  []HashEvidence      `json:"recentHashEvidence,omitempty"`
 	CalibrationSummary  *CalibrationSummary `json:"calibrationSummary,omitempty"`
@@ -144,6 +145,15 @@ type NodeClockSkew struct {
 type SkewSample struct {
 	Timestamp int64   `json:"ts"`   // Unix epoch of observation
 	SkewSec   float64 `json:"skew"` // corrected skew in seconds
+}
+
+// BadSample is a single recent advert flagged as having a nonsense timestamp
+// (|corrected skew| in the bimodal-bad band — > 1h, <= 24h). #1094: surfaced
+// so the UI can link each offender to its packet detail page.
+type BadSample struct {
+	Hash     string  `json:"hash"`     // transmission hash for packet-detail deep-link
+	AdvertTS int64   `json:"advertTS"` // the offending advert Unix timestamp
+	SkewSec  float64 `json:"skewSec"`  // corrected skew vs observer at observation time
 }
 
 // HashEvidenceObserver is one observer's contribution to a per-hash evidence entry.
