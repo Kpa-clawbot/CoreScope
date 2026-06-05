@@ -40,6 +40,8 @@ node test-issue-1420-tile-providers.js
 node test-issue-1438-marker-css-vars.js
 node test-issue-1438-customizer-mcrole.js
 node test-issue-1446-cb-preset-cascade.js
+node test-issue-1380-cb-sim-overlay.js
+node test-issue-1380-cb-reset-button.js
 node test-issue-1450-logo-aspect.js
 node test-issue-1454-channels-toggle.js
 node test-issue-1456-score-labels.js

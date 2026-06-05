@@ -3301,6 +3301,97 @@ async function run() {
     }
   });
 
+  // === Live page Fullscreen tests (#1532) ===
+  await test('Live page: Fullscreen hides unpinned nav and live-header', async () => {
+    await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+    
+    // Ensure we are not pinned
+    await page.evaluate(() => localStorage.setItem('live-nav-pinned', 'false'));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+
+    const isFullscreen = await page.evaluate(() => document.body.classList.contains('live-fullscreen'));
+    if (isFullscreen) {
+      await page.click('#liveFullscreenToggle');
+      await page.waitForTimeout(500);
+    }
+
+    // Enter fullscreen
+    await page.click('#liveFullscreenToggle');
+    await page.waitForTimeout(500);
+
+    // Verify fullscreen class is on body
+    assert(await page.evaluate(() => document.body.classList.contains('live-fullscreen')), 'Body should have live-fullscreen class');
+
+    // Verify top nav is hidden
+    const navHidden = await page.evaluate(() => {
+      const nav = document.querySelector('.top-nav');
+      return window.getComputedStyle(nav).display === 'none';
+    });
+    assert(navHidden, 'Top nav should be hidden in fullscreen when unpinned');
+
+    // Verify live header body is hidden
+    const headerBodyHidden = await page.evaluate(() => {
+      const headerBody = document.querySelector('.live-header-body');
+      return !headerBody || window.getComputedStyle(headerBody).display === 'none';
+    });
+    assert(headerBodyHidden, 'Live header body should be hidden in fullscreen');
+
+    // Verify stats row is visible
+    const statsVisible = await page.evaluate(() => {
+      const stats = document.querySelector('.live-stats-row');
+      return stats && window.getComputedStyle(stats).display !== 'none';
+    });
+    assert(statsVisible, 'Live stats row should be visible in fullscreen');
+
+    // Exit fullscreen
+    await page.click('#liveFullscreenToggle');
+    await page.waitForTimeout(500);
+    
+    const navVisible = await page.evaluate(() => {
+      const nav = document.querySelector('.top-nav');
+      return window.getComputedStyle(nav).display !== 'none';
+    });
+    assert(navVisible, 'Top nav should be visible again after exiting fullscreen');
+  });
+
+  // === Live page Controls Cog tests (#1532) ===
+  await test('Live page: Controls cog persistence across reloads', async () => {
+    // Clear state first
+    await page.evaluate(() => localStorage.removeItem('live-controls-expanded'));
+    await page.goto(`${BASE}/#/live`, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+
+    // Expand the cog menu
+    const cog = await page.$('#liveControlsToggle');
+    if (cog) {
+      let isExpanded = await page.$eval('#liveControls', el => el.classList.contains('is-expanded'));
+      if (!isExpanded) {
+        await cog.click();
+        await page.waitForTimeout(500);
+      }
+      
+      // Verify it's expanded
+      isExpanded = await page.$eval('#liveControls', el => el.classList.contains('is-expanded'));
+      assert(isExpanded, 'Controls should have is-expanded class after clicking cog');
+      
+      // Reload page and verify persistence
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(1000);
+      
+      // Should STILL be expanded
+      isExpanded = await page.$eval('#liveControls', el => el.classList.contains('is-expanded'));
+      assert(isExpanded, 'Controls should persist is-expanded class across reload');
+
+      // Click it again, it should immediately close
+      await page.click('#liveControlsToggle');
+      await page.waitForTimeout(500);
+      isExpanded = await page.$eval('#liveControls', el => el.classList.contains('is-expanded'));
+      assert(!isExpanded, 'Controls should collapse on the first click after a reload');
+    }
+  });
+
   await browser.close();
 
   // Summary

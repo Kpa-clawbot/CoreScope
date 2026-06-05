@@ -2019,6 +2019,19 @@ func (s *Server) handleAnalyticsDistance(w http.ResponseWriter, r *http.Request)
 	region := r.URL.Query().Get("region")
 	area := r.URL.Query().Get("area")
 	if s.store != nil {
+		// Lazy build (#1011): distance index is not built at startup.
+		// First request triggers an async build and gets 202 +
+		// Retry-After; concurrent requests during the build window
+		// also get 202. Cached results (after the build completes)
+		// are served as 200 from the analytics recomputer / TTL cache.
+		if !s.store.DistanceIndexBuilt() {
+			s.store.TriggerDistanceIndexBuild()
+			w.Header().Set("Retry-After", "5")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"status":"building","retry_after_seconds":5,"detail":"distance index is being computed (lazy build, #1011). Retry after Retry-After seconds."}`))
+			return
+		}
 		writeJSON(w, s.store.GetAnalyticsDistance(region, area))
 		return
 	}

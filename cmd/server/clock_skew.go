@@ -133,6 +133,7 @@ type NodeClockSkew struct {
 	Samples         []SkewSample `json:"samples,omitempty"` // time-series for sparklines
 	GoodFraction        float64  `json:"goodFraction"`        // fraction of recent samples with |skew| <= 1h
 	RecentBadSampleCount int     `json:"recentBadSampleCount"` // count of recent samples with |skew| > 1h
+	RecentBadSamples     []BadSample `json:"recentBadSamples,omitempty"` // #1094: per-bad-sample evidence (hash + bad advertTS)
 	RecentSampleCount    int     `json:"recentSampleCount"`    // total recent samples in window
 	RecentHashEvidence  []HashEvidence      `json:"recentHashEvidence,omitempty"`
 	CalibrationSummary  *CalibrationSummary `json:"calibrationSummary,omitempty"`
@@ -144,6 +145,15 @@ type NodeClockSkew struct {
 type SkewSample struct {
 	Timestamp int64   `json:"ts"`   // Unix epoch of observation
 	SkewSec   float64 `json:"skew"` // corrected skew in seconds
+}
+
+// BadSample is a single recent advert flagged as having a nonsense timestamp
+// (|corrected skew| in the bimodal-bad band — > 1h, <= 24h). #1094: surfaced
+// so the UI can link each offender to its packet detail page.
+type BadSample struct {
+	Hash     string  `json:"hash"`     // transmission hash for packet-detail deep-link
+	AdvertTS int64   `json:"advertTS"` // the offending advert Unix timestamp
+	SkewSec  float64 `json:"skewSec"`  // corrected skew vs observer at observation time
 }
 
 // HashEvidenceObserver is one observer's contribution to a per-hash evidence entry.
@@ -512,7 +522,7 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 			lastSkew = cs.LastSkewSec
 			lastAdvTS = cs.LastAdvertTS
 		}
-		tsSkews = append(tsSkews, tsSkewPair{ts: cs.LastObservedTS, skew: cs.MedianSkewSec})
+		tsSkews = append(tsSkews, tsSkewPair{ts: cs.LastObservedTS, skew: cs.MedianSkewSec, hash: tx.Hash, advertTS: cs.LastAdvertTS})
 	}
 
 	if len(allSkews) == 0 {
@@ -536,6 +546,7 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 
 	recentSkew := lastSkew
 	var recentVals []float64
+	var recentPairs []tsSkewPair
 	if n := len(tsSkews); n > 0 {
 		latestTS := tsSkews[n-1].ts
 		// Index-based window: last K samples.
@@ -559,6 +570,7 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 			start = startByTime
 		}
 		recentVals = make([]float64, 0, n-start)
+		recentPairs = tsSkews[start:n]
 		for i := start; i < n; i++ {
 			recentVals = append(recentVals, tsSkews[i].skew)
 		}
@@ -583,13 +595,25 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 	// adverts had nonsense timestamps") on otherwise-healthy nodes.
 	var goodSamples []float64
 	var rtcResetCount int
-	for _, v := range recentVals {
+	var recentBadSamples []BadSample // #1094: per-bad-sample evidence (hash + advertTS)
+	for i, v := range recentVals {
 		absV := math.Abs(v)
 		switch {
 		case absV > rtcResetOutlierThresholdSec:
 			rtcResetCount++ // ignored for good/bad classification
 		case absV <= bimodalSkewThresholdSec:
 			goodSamples = append(goodSamples, v)
+		default:
+			// Bimodal-bad: 1h < |skew| <= 24h. Capture hash + advertTS so
+			// the UI can link each offender to its packet detail page
+			// instead of showing a count without evidence (#1094).
+			if i < len(recentPairs) && recentPairs[i].hash != "" {
+				recentBadSamples = append(recentBadSamples, BadSample{
+					Hash:     recentPairs[i].hash,
+					AdvertTS: recentPairs[i].advertTS,
+					SkewSec:  round(v, 1),
+				})
+			}
 		}
 	}
 	recentSampleCount := len(recentVals) - rtcResetCount
@@ -715,6 +739,7 @@ func (s *PacketStore) getNodeClockSkewLocked(pubkey string) *NodeClockSkew {
 		Samples:              samples,
 		GoodFraction:         round(goodFraction, 2),
 		RecentBadSampleCount: recentBadCount,
+		RecentBadSamples:     recentBadSamples,
 		RecentSampleCount:    recentSampleCount,
 		RecentHashEvidence:   recentEvidence,
 		CalibrationSummary:   &calSummary,
@@ -875,10 +900,16 @@ func mean(vals []float64) float64 {
 	return sum / float64(len(vals))
 }
 
-// tsSkewPair is a (timestamp, skew) pair for drift estimation.
+// tsSkewPair is a (timestamp, skew) pair for drift estimation. Also carries
+// the source hash + advertTS so callers building per-sample evidence (e.g.
+// recentBadSamples for #1094) can identify the offending packet without a
+// second pass. Drift code reads only ts/skew; the extra fields are inert
+// there.
 type tsSkewPair struct {
-	ts   int64
-	skew float64
+	ts       int64
+	skew     float64
+	hash     string
+	advertTS int64
 }
 
 // computeDrift estimates linear drift in seconds per day from time-ordered

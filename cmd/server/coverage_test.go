@@ -2701,6 +2701,17 @@ func TestHandleAnalyticsDistanceWithStore(t *testing.T) {
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
 
+	// #1011: lazy distance index — first request returns 202; trigger
+	// the build and wait for it before asserting the 200 shape.
+	store.TriggerDistanceIndexBuild()
+	deadline := time.Now().Add(5 * time.Second)
+	for !store.DistanceIndexBuilt() {
+		if time.Now().After(deadline) {
+			t.Fatal("distance index did not finish building within 5s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	req := httptest.NewRequest("GET", "/api/analytics/distance", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)

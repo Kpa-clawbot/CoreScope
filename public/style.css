@@ -2308,6 +2308,10 @@ button.ch-item:hover .ch-icon-btn { opacity: 1; }
   backdrop-filter: blur(12px);
   color: var(--text) !important;
   border-color: var(--border) !important;
+  width: 44px !important;
+  height: 44px !important;
+  line-height: 44px !important;
+  font-size: 20px !important;
 }
 .leaflet-control-zoom a:hover {
   background: rgba(59, 130, 246, 0.2) !important;

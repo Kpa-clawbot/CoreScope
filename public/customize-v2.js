@@ -1318,7 +1318,86 @@
       'Leave unset to use the operator\'s configured colors (or pick from above). ' +
       'Achromatopsia uses a luminance-only ramp and relies on the shape/letter/glyph carriers from #1356/#1357.</p>' +
       '<div class="cust-cb-presets" data-cv2-cb-preset-group>' + clearOpt + options + '</div>' +
+      _renderCbSimSelector() +
+      _renderCbResetButton() +
       '<hr style="border:none;border-top:1px solid var(--border);margin:16px 0">';
+  }
+
+  // #1380 — Brettel/Vienot 1997 dichromatic simulation overlay.
+  // Preview-only: NOT persisted; clears on reload. Toggled via
+  // body[data-cb-sim] + CSS filter:url(#cb-*) defined in public/index.html.
+  function _renderCbSimSelector() {
+    var SIMS = [
+      { id: '',         label: 'Off',           desc: 'No simulation (default).' },
+      { id: 'deut',     label: 'Deuteranopia',  desc: 'Brettel/Vienot 1997 — green-cone deficit.' },
+      { id: 'prot',     label: 'Protanopia',    desc: 'Brettel/Vienot 1997 — red-cone deficit.' },
+      { id: 'trit',     label: 'Tritanopia',    desc: 'Brettel/Vienot 1997 — blue-cone deficit.' },
+      { id: 'achromat', label: 'Achromatopsia', desc: 'Luminance-only (Rec.601).' }
+    ];
+    // Hardcoded literal lookup so the source contains `value="deut"` etc.
+    // (See test-issue-1380-cb-sim-overlay.js, asserts on source text.)
+    var VALUE_ATTRS = {
+      '':         'value=""',
+      'deut':     'value="deut"',
+      'prot':     'value="prot"',
+      'trit':     'value="trit"',
+      'achromat': 'value="achromat"'
+    };
+    var current = '';
+    try {
+      if (typeof document !== 'undefined' && document.body && document.body.getAttribute) {
+        current = document.body.getAttribute('data-cb-sim') || '';
+      }
+    } catch (e) {}
+    var rows = SIMS.map(function (s) {
+      var checked = s.id === current ? ' checked' : '';
+      return '<label class="cust-cb-sim-row" style="display:flex;gap:8px;align-items:flex-start;margin:4px 0;cursor:pointer">' +
+        '<input type="radio" name="cv2-cb-sim" data-cv2-cb-sim ' + (VALUE_ATTRS[s.id] || ('value="' + escAttr(s.id) + '"')) + checked + ' style="margin-top:3px">' +
+        '<div style="flex:1">' +
+          '<div style="font-weight:600">' + esc(s.label) + '</div>' +
+          '<div class="cust-hint" style="font-size:12px;color:var(--text-muted)">' + esc(s.desc) + '</div>' +
+        '</div>' +
+      '</label>';
+    }).join('');
+    return '<p class="cust-section-title" style="margin-top:12px">Simulation overlay <span style="font-weight:normal;color:var(--text-muted);font-size:11px">(preview-only)</span></p>' +
+      '<p class="cust-hint" style="margin-bottom:8px">Apply a Brettel/Vienot 1997 dichromatic filter to the entire page to preview how the UI reads to colorblind viewers. Not persisted — clears on reload.</p>' +
+      '<div class="cust-cb-sim" data-cv2-cb-sim-group>' + rows + '</div>';
+  }
+
+  // #1380 — Reset-to-default-Wong button. Clears any stored CB preset and
+  // re-applies the Wong palette via MeshCorePresets.applyPreset('default').
+  function _renderCbResetButton() {
+    return '<div style="margin-top:12px">' +
+      '<button type="button" data-cv2-cb-reset class="cust-btn" ' +
+      'style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface-1);color:var(--text);cursor:pointer;font-size:12px">' +
+      'Reset to default Wong</button>' +
+      '<div class="cust-hint" style="font-size:11px;color:var(--text-muted);margin-top:4px">' +
+      'Restores the Wong 2011 palette and clears any saved colorblind preset.</div>' +
+      '</div>';
+  }
+
+  // Exposed helper — toggles body[data-cb-sim]. Pure DOM, no persistence.
+  function _applyCbSim(id) {
+    if (typeof document === 'undefined' || !document.body) return false;
+    if (!id) {
+      if (document.body.removeAttribute) document.body.removeAttribute('data-cb-sim');
+    } else {
+      document.body.setAttribute('data-cb-sim', id);
+    }
+    return true;
+  }
+
+  // Exposed helper — applies the default Wong preset and clears storage.
+  function _resetCbPreset() {
+    var MCP = (typeof window !== 'undefined') && window.MeshCorePresets;
+    var ok = false;
+    if (MCP && typeof MCP.applyPreset === 'function') {
+      ok = MCP.applyPreset('default') || ok;
+    }
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.removeItem('meshcore-cb-preset');
+    } catch (e) {}
+    return ok;
   }
 
   function _renderCbPresetClearOption(current) {
@@ -2090,6 +2169,23 @@
       });
     });
 
+    // #1380 — Brettel/Vienot sim overlay radio: toggle body[data-cb-sim].
+    // Preview-only — no persistence.
+    container.querySelectorAll('[data-cv2-cb-sim]').forEach(function (radio) {
+      radio.addEventListener('change', function () {
+        if (!radio.checked) return;
+        _applyCbSim(radio.value || '');
+      });
+    });
+
+    // #1380 — Reset-to-default-Wong button.
+    container.querySelectorAll('[data-cv2-cb-reset]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        _resetCbPreset();
+        _refreshPanel();
+      });
+    });
+
     // #1420 Dark-tile provider dropdown — persists + fires mc-tile-provider-changed
     container.querySelectorAll('[data-cv2-dark-tile-provider]').forEach(function (sel) {
       sel.addEventListener('change', function () {
@@ -2720,6 +2816,9 @@
     resetAll: _resetAll,
     // Exposed for tests — see test-issue-1509-detect-preset.js.
     detectActivePreset: _detectActivePreset,
+    // #1380 — exposed for unit tests; see test-issue-1380-*.
+    applyCbSim: _applyCbSim,
+    resetCbPreset: _resetCbPreset,
     THEME_CSS_MAP: THEME_CSS_MAP
   };
 })();

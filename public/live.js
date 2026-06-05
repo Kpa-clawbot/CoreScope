@@ -137,6 +137,11 @@
     timelineFetchedScope: 0, // last fetched scope to avoid redundant fetches
     replayGen: 0,            // generation counter — incremented on each replay/rewind to discard stale async results
   };
+  // #1599 — drop live WS packets during a manual replay handoff without
+  // entering VCR PAUSED (which freezes the canvas engine and kills the very
+  // animation we want to play). The handoff sets this true, then clears it
+  // after the replay window has elapsed.
+  let suppressLive = false;
 
   // ROLE_COLORS loaded from shared roles.js (includes 'unknown')
 
@@ -899,6 +904,10 @@
       if (_tabHidden) {
         return;
       }
+      // #1599 — manual replay handoff sets suppressLive=true so incoming live
+      // WS packets don't clutter the replay animation. We still want the
+      // timeline to tick so the UI shows traffic continuing.
+      if (suppressLive) { updateTimeline(); return; }
       if (realisticPropagation && pkt.hash) {
         const hash = pkt.hash;
         if (propagationBuffer.has(hash)) {
@@ -1054,6 +1063,11 @@
       <div class="live-page">
         <div id="liveMap" style="width:100%;height:100%;position:absolute;top:0;left:0;z-index:1"></div>
         <div class="live-overlay live-header" id="liveHeader">
+          <div class="live-header-body" data-live-header-body id="liveHeaderBody">
+            <div class="live-title">
+              MESH LIVE
+            </div>
+          </div>
           <div class="live-header-critical" data-live-header-critical>
             <span class="live-beacon" aria-label="WebSocket connection beacon"></span>
             <div class="live-stat-pill live-stat-pill--critical"><span id="livePktCount">0</span> pkts</div>
@@ -1070,11 +1084,7 @@
           <button class="live-header-toggle" data-live-header-toggle id="liveHeaderToggle"
                   aria-expanded="false" aria-controls="liveHeaderBody"
                   aria-label="Show live stats">📊</button>
-          <div class="live-header-body" data-live-header-body id="liveHeaderBody">
-            <div class="live-title">
-              MESH LIVE
-            </div>
-          </div>
+
         <!-- #1205: settings toggles are children of the MESH LIVE panel
              (#liveHeader), not a free-floating .live-overlay. PR #1180
              detached them; this restores the pre-regression structure. -->
@@ -1099,12 +1109,16 @@
             <span id="favDesc" class="sr-only">Show only favorited and claimed nodes</span>
             <label id="liveGeoFilterLabel" style="display:none"><input type="checkbox" id="liveGeoFilterToggle"> Mesh live area</label>
             </div>
-            <div class="live-node-filter-wrap" style="position:relative">
-              <input type="text" id="liveNodeFilterInput" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input" role="combobox" aria-expanded="false" aria-owns="liveNodeFilterDropdown" aria-autocomplete="list" aria-activedescendant="">
-              <div id="liveNodeFilterDropdown" class="live-node-filter-dropdown hidden" role="listbox"></div>
-              <button id="liveNodeFilterClear" class="vcr-btn" title="Clear node filter" style="display:none">×</button>
+            <div class="live-toggles">
+              <div class="live-node-filter-wrap" style="position:relative">
+                <label class="live-node-filter-hitarea" style="display:inline-flex; align-items:center; min-height:44px; cursor:text;">
+                  <input type="text" id="liveNodeFilterInput" placeholder="Filter by node…" autocomplete="off" class="live-node-filter-input" role="combobox" aria-expanded="false" aria-owns="liveNodeFilterDropdown" aria-autocomplete="list" aria-activedescendant="">
+                </label>
+                <div id="liveNodeFilterDropdown" class="live-node-filter-dropdown hidden" role="listbox"></div>
+                <button id="liveNodeFilterClear" class="vcr-btn" title="Clear node filter" style="display:none">×</button>
+              </div>
+              <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
             </div>
-            <div id="liveNodeFilterCount" class="live-filter-count hidden"></div>
             <div id="liveRegionFilter" class="region-filter-container live-region-filter-container" aria-label="Filter live packets by IATA region"></div>
             <div id="liveAreaFilter" class="live-area-filter-container"></div>
             <div class="audio-controls hidden" id="audioControls">
@@ -1113,13 +1127,6 @@
               <label class="audio-slider-label">Vol <input type="range" id="audioVolSlider" min="0" max="100" value="30" class="audio-slider"><span id="audioVolVal">30</span></label>
             </div>
           </div>
-          <button class="live-controls-toggle" data-live-controls-toggle id="liveControlsToggle"
-                  aria-expanded="false" aria-controls="liveControlsBody"
-                  aria-label="Show live controls">⚙</button>
-          <button class="live-controls-toggle live-fullscreen-toggle" id="liveFullscreenToggle"
-                  aria-pressed="false"
-                  aria-label="Toggle fullscreen (F) — hide chrome, keep stats"
-                  title="Fullscreen (F)">⛶</button>
         </div>
         </div><!-- /#liveHeader -->
         <div class="live-overlay live-feed" id="liveFeed">
@@ -1409,7 +1416,49 @@
     if (typeof window.MC_createLayerControl === 'function') {
       window.MC_createLayerControl(map, liveAutoLayerGroup, 'topright');
     }
-    
+
+    // Add custom Leaflet Control for Fullscreen
+    const LiveFullscreenControl = L.Control.extend({
+      options: { position: 'topright' },
+      onAdd: function() {
+        const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control live-leaflet-toggle');
+        const btn = L.DomUtil.create('a', '', container);
+        btn.href = 'javascript:void(0)';
+        btn.innerHTML = '⛶';
+        btn.id = 'liveFullscreenToggle';
+        btn.title = 'Fullscreen (F)';
+        btn.setAttribute('aria-label', 'Toggle fullscreen');
+        btn.setAttribute('role', 'button');
+        btn.setAttribute('aria-pressed', 'false');
+        L.DomEvent.disableClickPropagation(btn);
+        return container;
+      }
+    });
+    map.addControl(new LiveFullscreenControl());
+
+    // Add custom Leaflet Control for Settings
+    const LiveSettingsControl = L.Control.extend({
+      options: { position: 'topright' },
+      onAdd: function() {
+        const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control live-leaflet-toggle');
+        const btn = L.DomUtil.create('a', 'live-controls-toggle', container);
+        btn.href = 'javascript:void(0)';
+        btn.innerHTML = '⚙';
+        btn.id = 'liveControlsToggle';
+        btn.setAttribute('data-live-controls-toggle', '');
+        btn.title = 'Settings';
+        btn.setAttribute('aria-label', 'Show live controls');
+        btn.setAttribute('role', 'button');
+        btn.setAttribute('aria-expanded', 'false');
+        btn.setAttribute('aria-controls', 'liveControlsBody');
+        L.DomEvent.disableClickPropagation(btn);
+        return container;
+      }
+    });
+    map.addControl(new LiveSettingsControl());
+
+
+
     // Swap tiles when theme changes
     const _themeObs = new MutationObserver(function () {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
@@ -1459,8 +1508,15 @@
       try {
         const parsed = JSON.parse(replayData);
         const packets = Array.isArray(parsed) ? parsed : [parsed];
-        vcrPause(); // suppress live packets
+        // #1599 — mute live WS traffic but keep VCR in LIVE so the canvas
+        // engine keeps advancing animation progress. Using vcrPause() here
+        // set VCR.mode='PAUSED' which froze anim.progress in
+        // renderAnimations(), turning the replay into a blank, motionless map.
+        suppressLive = true;
         setTimeout(() => renderPacketTree(packets, true), 1500);
+        // Clear the suppression after the replay window has elapsed (the
+        // longest animation duration plus a margin) so live traffic resumes.
+        setTimeout(() => { suppressLive = false; }, 12000);
       } catch { }
     } else {
       // replayRecent(); // disabled — live page starts empty, fills from WS
@@ -1808,6 +1864,10 @@
       });
       voiceSelect.value = MeshAudio.getVoiceName() || voices[0] || '';
       voiceSelect.addEventListener('change', (e) => MeshAudio.setVoice(e.target.value));
+      
+      if (voices.length <= 1) {
+        voiceSelect.parentElement.style.display = 'none';
+      }
     }
 
     audioToggle.addEventListener('change', (e) => {
@@ -1893,32 +1953,33 @@
       function applyForViewport() {
         for (var i = 0; i < pairs.length; i++) {
           var p = pairs[i];
-          // #1532 — `liveControls` defaults collapsed at ALL viewports
-          // (previously narrow-only). Operators reveal the toggle row
-          // via the ⚙ pin, parity with map-controls accordion.
-          var defaultCollapsed = (p.rootId === 'liveControls') ? true : false;
-          // Respect the user's prior choice across reloads.
+          var root = document.getElementById(p.rootId);
+          if (!root) continue;
+          
           if (p.rootId === 'liveControls') {
-            try {
-              var pref = localStorage.getItem('live-controls-expanded');
-              if (pref === 'true')  defaultCollapsed = false;
-              if (pref === 'false') defaultCollapsed = true;
-            } catch (_) { /* private browsing */ }
-          }
-          if (narrowMql.matches || defaultCollapsed) {
-            // Default collapsed; preserve existing expansion if user
-            // already opened it this mount.
-            var root = document.getElementById(p.rootId);
-            var alreadyExpanded = root && root.classList.contains('is-expanded');
-            if (!alreadyExpanded) setExpanded(p, false);
+            // #1532 - liveControls is an accordion on all viewports,
+            // persisting state across reloads via localStorage.
+            if (!root.classList.contains('is-expanded') && !root.classList.contains('is-collapsed')) {
+              var startExpanded = false;
+              try {
+                if (localStorage.getItem('live-controls-expanded') === 'true') {
+                  startExpanded = true;
+                }
+              } catch (_) { /* private browsing */ }
+              setExpanded(p, startExpanded);
+            }
           } else {
-            // Always expanded; no hidden attr; no collapse class
-            var root = document.getElementById(p.rootId);
-            var body = document.getElementById(p.bodyId);
-            var tog = document.getElementById(p.togId);
-            if (body) body.removeAttribute('hidden');
-            if (root) { root.classList.remove('is-collapsed'); root.classList.remove('is-expanded'); }
-            if (tog)  { tog.setAttribute('aria-expanded', 'true'); }
+            // liveHeader is collapsible on narrow screens, permanently open on wide
+            if (narrowMql.matches) {
+              if (!root.classList.contains('is-expanded')) setExpanded(p, false);
+            } else {
+              var body = document.getElementById(p.bodyId);
+              var tog = document.getElementById(p.togId);
+              if (body) body.removeAttribute('hidden');
+              root.classList.remove('is-collapsed'); 
+              root.classList.remove('is-expanded');
+              if (tog) tog.setAttribute('aria-expanded', 'true');
+            }
           }
         }
       }
@@ -2331,6 +2392,7 @@
         _navCleanup.pinned = !_navCleanup.pinned;
         pinBtn.classList.toggle('pinned', _navCleanup.pinned);
         pinBtn.setAttribute('aria-pressed', _navCleanup.pinned);
+        document.body.classList.toggle('nav-pinned', _navCleanup.pinned);
         try { localStorage.setItem('live-nav-pinned', _navCleanup.pinned); } catch (_) {}
         if (_navCleanup.pinned) {
           clearTimeout(_navCleanup.timeout);
@@ -2342,6 +2404,7 @@
         if (_navCleanup.pinned) {
         pinBtn.classList.add('pinned');
         pinBtn.setAttribute('aria-pressed', 'true');
+        document.body.classList.add('nav-pinned');
         topNav.classList.remove('nav-autohide');
       }
       const navRight = topNav.querySelector('.nav-right');
@@ -4298,6 +4361,7 @@
     if (topNav) { topNav.classList.remove('nav-autohide'); topNav.style.position = ''; topNav.style.width = ''; topNav.style.zIndex = ''; }
     const existingPin = document.getElementById('navPinBtn');
     if (existingPin) existingPin.remove();
+    if (document.body) document.body.classList.remove('nav-pinned');
     if (_navCleanup) {
       clearTimeout(_navCleanup.timeout);
       const livePage = document.querySelector('.live-page');
