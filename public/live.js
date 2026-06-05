@@ -1420,6 +1420,7 @@
         btn.title = 'Fullscreen (F)';
         btn.setAttribute('aria-label', 'Toggle fullscreen');
         btn.setAttribute('role', 'button');
+        btn.setAttribute('aria-pressed', 'false');
         L.DomEvent.disableClickPropagation(btn);
         return container;
       }
@@ -1439,6 +1440,8 @@
         btn.title = 'Settings';
         btn.setAttribute('aria-label', 'Show live controls');
         btn.setAttribute('role', 'button');
+        btn.setAttribute('aria-expanded', 'false');
+        btn.setAttribute('aria-controls', 'liveControlsBody');
         L.DomEvent.disableClickPropagation(btn);
         return container;
       }
