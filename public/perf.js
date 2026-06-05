@@ -3,6 +3,21 @@
 
 var GH = 'https://github.com/Kpa-clawbot/corescope';
 
+// detectPerfAnomalies — pure, testable.
+// Computes per-component write rates over a rolling time window and flags any
+// component whose current per-second rate exceeds `factor` × its rolling
+// baseline rate. Issue #1120 acceptance: 5-minute window, 10× threshold.
+//
+// STUB: implementation lands in the green commit. Returning empty results
+// keeps callers safe and makes the red test fail on an assertion (not a
+// reference error).
+function detectPerfAnomalies(history, current, opts) {
+  return { rates: {}, baselineRates: {}, flags: {} };
+}
+if (typeof window !== 'undefined') {
+  window.detectPerfAnomalies = detectPerfAnomalies;
+}
+
 function renderVersionCard(health) {
   if (!health || (!health.version && !health.commit)) return '';
   var ver = health.version && health.version !== 'unknown' ? health.version : null;
