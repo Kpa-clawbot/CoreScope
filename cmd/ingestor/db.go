@@ -1608,3 +1608,72 @@ func BuildPacketData(msg *MQTTPacketMessage, decoded *DecodedPacket, observerID,
 
 	return pd
 }
+
+// ─── Writer-lock instrumentation (issue #1340) ────────────────────────────
+//
+// Red-commit stubs. Replaced by real wait/hold/contention histograms in
+// the green commit. Callers see the same API surface either way.
+
+// WriterStatsSnapshot is a per-component wait/hold latency snapshot
+// surfaced via /api/perf to make SQLite writer-lock starvation visible
+// to operators (issue #1340). Times are in milliseconds.
+type WriterStatsSnapshot struct {
+	Count           int64   `json:"count"`
+	ContentionTotal int64   `json:"contention_total"`
+	WaitMsP50       float64 `json:"wait_ms_p50"`
+	WaitMsP95       float64 `json:"wait_ms_p95"`
+	WaitMsP99       float64 `json:"wait_ms_p99"`
+	WaitMsMax       float64 `json:"wait_ms_max"`
+	HoldMsP50       float64 `json:"hold_ms_p50"`
+	HoldMsP95       float64 `json:"hold_ms_p95"`
+	HoldMsP99       float64 `json:"hold_ms_p99"`
+	HoldMsMax       float64 `json:"hold_ms_max"`
+}
+
+// writerStatsStub records call counts per component, no timing.
+var (
+	writerStatsStubMu sync.Mutex
+	writerStatsStub   = map[string]int64{}
+)
+
+// WriterStatsSnapshot returns a per-component perf snapshot. Stub
+// implementation; green commit replaces with real histograms.
+func (s *Store) WriterStatsSnapshot() map[string]WriterStatsSnapshot {
+	writerStatsStubMu.Lock()
+	defer writerStatsStubMu.Unlock()
+	out := make(map[string]WriterStatsSnapshot, len(writerStatsStub))
+	for k, v := range writerStatsStub {
+		out[k] = WriterStatsSnapshot{Count: v}
+	}
+	return out
+}
+
+// SetSlowWriterThresholdMs configures the hold_ms threshold above
+// which writes emit a [db-slow-writer] log line. Stub.
+func SetSlowWriterThresholdMs(ms float64) {}
+
+// WriterExec wraps s.db.Exec with per-component wait/hold instrumentation
+// (issue #1340). Stub: pass-through.
+func (s *Store) WriterExec(component, query string, args ...interface{}) (sql.Result, error) {
+	writerStatsStubMu.Lock()
+	writerStatsStub[component]++
+	writerStatsStubMu.Unlock()
+	return s.db.Exec(query, args...)
+}
+
+// WriterTx wraps s.db.Begin / fn / Commit with per-component wait/hold
+// instrumentation (issue #1340). Stub: pass-through.
+func (s *Store) WriterTx(component string, fn func(*sql.Tx) error) error {
+	writerStatsStubMu.Lock()
+	writerStatsStub[component]++
+	writerStatsStubMu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
