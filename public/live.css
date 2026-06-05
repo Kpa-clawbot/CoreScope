@@ -508,22 +508,8 @@ body.live-fullscreen .live-legend,
 body.live-fullscreen .legend-toggle-btn,
 body.live-fullscreen .feed-show-btn { display: none !important; }
 
-/* Collapse the header chrome to just the floating stats row pinned
-   top-right. The header background/border drop so the stats pills
-   float over the map. */
-body.live-fullscreen .live-header {
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-  pointer-events: none;
-}
-body.live-fullscreen .live-header-body {
-  display: none !important;
-}
-body.live-fullscreen .live-stats-row,
-body.live-fullscreen .live-header-critical {
-  pointer-events: auto;
-}
+/* Hide the header and nav in fullscreen */
+body.live-fullscreen .live-header { display: none !important; }
 
 /* Hide top nav in fullscreen UNLESS it was explicitly pinned */
 body.live-fullscreen:not(.nav-pinned) .top-nav {
