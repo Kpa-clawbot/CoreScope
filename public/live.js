@@ -137,6 +137,11 @@
     timelineFetchedScope: 0, // last fetched scope to avoid redundant fetches
     replayGen: 0,            // generation counter — incremented on each replay/rewind to discard stale async results
   };
+  // #1599 — drop live WS packets during a manual replay handoff without
+  // entering VCR PAUSED (which freezes the canvas engine and kills the very
+  // animation we want to play). The handoff sets this true, then clears it
+  // after the replay window has elapsed.
+  let suppressLive = false;
 
   // ROLE_COLORS loaded from shared roles.js (includes 'unknown')
 
@@ -899,6 +904,10 @@
       if (_tabHidden) {
         return;
       }
+      // #1599 — manual replay handoff sets suppressLive=true so incoming live
+      // WS packets don't clutter the replay animation. We still want the
+      // timeline to tick so the UI shows traffic continuing.
+      if (suppressLive) { updateTimeline(); return; }
       if (realisticPropagation && pkt.hash) {
         const hash = pkt.hash;
         if (propagationBuffer.has(hash)) {
@@ -1499,8 +1508,15 @@
       try {
         const parsed = JSON.parse(replayData);
         const packets = Array.isArray(parsed) ? parsed : [parsed];
-        vcrPause(); // suppress live packets
+        // #1599 — mute live WS traffic but keep VCR in LIVE so the canvas
+        // engine keeps advancing animation progress. Using vcrPause() here
+        // set VCR.mode='PAUSED' which froze anim.progress in
+        // renderAnimations(), turning the replay into a blank, motionless map.
+        suppressLive = true;
         setTimeout(() => renderPacketTree(packets, true), 1500);
+        // Clear the suppression after the replay window has elapsed (the
+        // longest animation duration plus a margin) so live traffic resumes.
+        setTimeout(() => { suppressLive = false; }, 12000);
       } catch { }
     } else {
       // replayRecent(); // disabled — live page starts empty, fills from WS
