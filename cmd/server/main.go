@@ -198,9 +198,30 @@ func main() {
 	// In-memory packet store
 	store := NewPacketStore(database, cfg.PacketStore, cfg.CacheTTL)
 	store.config = cfg
-	if err := store.Load(); err != nil {
-		log.Fatalf("[store] failed to load: %v", err)
+	// #1009: chunked Load with early HTTP readiness. LoadChunked runs
+	// asynchronously and signals FirstChunkReady after the first chunk
+	// is merged so the HTTP listener can bind without waiting for the
+	// full multi-minute scan to finish. loadStatusMiddleware (wired
+	// below) advertises loading|ready via X-CoreScope-Load-Status.
+	chunkSize := cfg.DBLoadChunkSize()
+	loadErrCh := make(chan error, 1)
+	go func() {
+		loadErrCh <- store.LoadChunked(chunkSize)
+	}()
+	select {
+	case <-store.FirstChunkReady():
+		log.Printf("[store] first chunk ready (chunkSize=%d) — HTTP listener may bind", chunkSize)
+	case err := <-loadErrCh:
+		if err != nil {
+			log.Fatalf("[store] LoadChunked failed before first chunk: %v", err)
+		}
+		log.Printf("[store] LoadChunked completed before first-chunk signal (empty DB?)")
 	}
+	go func() {
+		if err := <-loadErrCh; err != nil {
+			log.Printf("[store] LoadChunked background error: %v", err)
+		}
+	}()
 	if store.hotStartupHours > 0 {
 		log.Printf("[store] starting background load: filling retentionHours=%gh from hotStartupHours=%gh",
 			store.retentionHours, store.hotStartupHours)
@@ -395,6 +416,10 @@ func main() {
 		handler = gzipMiddlewareWithConfig(cfg.Compression, router)
 		log.Printf("[server] HTTP gzip compression enabled")
 	}
+	// #1009: stamp X-CoreScope-Load-Status on every response so probes
+	// and dashboards can see when the chunked Load is still in flight.
+	// Outermost wrap so the header is set regardless of gzip/etc.
+	handler = loadStatusMiddleware(store, handler)
 	if cfg.WSCompressionEnabled() {
 		log.Printf("[server] WebSocket permessage-deflate compression enabled")
 	}

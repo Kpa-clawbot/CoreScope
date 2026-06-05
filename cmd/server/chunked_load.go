@@ -1,14 +1,33 @@
 package main
 
-// Stubs for issue #1009 chunked-load contract.
+// Chunked startup load + early HTTP readiness for issue #1009.
 //
-// RED commit: these intentionally do nothing useful so the
-// chunked_load_test.go assertions fail in a behavior-asserting way
-// rather than a compile error. The GREEN commit replaces these stubs
-// with the real implementation.
+// Design:
+//   * LoadChunked paginates transmissions in id-ordered chunks of
+//     `chunkSize` (default 10000 via Config.DBLoadChunkSize). After the
+//     first chunk is merged into the store, FirstChunkReady is closed.
+//     main.go binds the HTTP listener on that signal and serves
+//     partial data while remaining chunks stream in the background.
+//   * loadStatusMiddleware stamps X-CoreScope-Load-Status on every
+//     response: "loading; progress=<rows>" until LoadComplete()
+//     reports true, then "ready". Dashboards and probes can read the
+//     header without parsing JSON.
+//   * OnChunkLoaded registers a per-chunk callback for progress
+//     logging / tests.
+//
+// Concurrency: each chunk acquires s.mu.Lock() ONLY while merging the
+// chunk's rows into store-shared maps. SQLite reads run lock-free so
+// HTTP handlers (which take s.mu.RLock) stay responsive.
 
 import (
+	"database/sql"
+	"fmt"
+	"log"
 	"net/http"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/meshcore-analyzer/dbconfig"
 )
@@ -16,44 +35,381 @@ import (
 // dbLoadConfig is the server-package alias for dbconfig.LoadConfig (#1009).
 type dbLoadConfig = dbconfig.LoadConfig
 
-// DBLoadChunkSize returns the configured chunk size for chunked startup
-// load, or 10000 default (#1009).
+// DBLoadChunkSize returns the configured chunk size for chunked
+// startup load (config: db.load.chunkSize), or 10000 default (#1009).
 func (c *Config) DBLoadChunkSize() int {
 	return c.DB.GetLoadChunkSize()
 }
 
-// LoadChunked is the chunked-load entry point that backs the early
-// HTTP readiness contract from #1009. STUB.
+// chunkedLoadState holds the runtime gates for LoadChunked. It lives
+// on PacketStore via embedded fields — see store.go additions in the
+// same commit.
+
+// FirstChunkReady returns a channel closed once the first chunk has
+// been merged into the store, signalling the HTTP listener can bind.
+func (s *PacketStore) FirstChunkReady() <-chan struct{} {
+	s.chunkedLoadInit()
+	return s.firstChunkReady
+}
+
+// LoadComplete reports whether LoadChunked has finished all chunks.
+func (s *PacketStore) LoadComplete() bool {
+	return s.loadComplete.Load()
+}
+
+// LoadProgress reports the number of transmission rows processed by
+// the in-flight (or completed) LoadChunked call.
+func (s *PacketStore) LoadProgress() int64 {
+	return s.loadProgressRows.Load()
+}
+
+// OnChunkLoaded registers a callback fired once per chunk after that
+// chunk has been merged into the store. The callback receives the
+// number of transmission rows in that chunk and the running total.
+// Multiple registrations chain.
+func (s *PacketStore) OnChunkLoaded(fn func(rowsThisChunk, totalRows int)) {
+	s.chunkedLoadInit()
+	s.chunkCBMu.Lock()
+	defer s.chunkCBMu.Unlock()
+	s.chunkCallbacks = append(s.chunkCallbacks, fn)
+}
+
+// chunkedLoadInit lazily initialises the readiness channel + callback
+// list under a mutex so concurrent first callers don't race.
+func (s *PacketStore) chunkedLoadInit() {
+	s.chunkInitOnce.Do(func() {
+		s.firstChunkReady = make(chan struct{})
+	})
+}
+
+func (s *PacketStore) signalFirstChunk() {
+	if s.firstChunkSignaled.CompareAndSwap(false, true) {
+		close(s.firstChunkReady)
+	}
+}
+
+func (s *PacketStore) fireChunkCallbacks(rowsThisChunk, totalRows int) {
+	s.chunkCBMu.Lock()
+	cbs := append([]func(int, int){}, s.chunkCallbacks...)
+	s.chunkCBMu.Unlock()
+	for _, cb := range cbs {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[store] OnChunkLoaded callback panic: %v", r)
+				}
+			}()
+			cb(rowsThisChunk, totalRows)
+		}()
+	}
+}
+
+// LoadChunked streams transmissions + observations from SQLite into
+// the in-memory store in id-ordered chunks of `chunkSize` rows. Pass
+// 0 to use the default (10000).
+//
+// After the first chunk is merged, FirstChunkReady is closed and the
+// HTTP listener may bind. Remaining chunks stream while handlers run
+// against partially-populated data; loadStatusMiddleware advertises
+// loading status until LoadComplete() returns true.
 func (s *PacketStore) LoadChunked(chunkSize int) error {
-	// Stub: do not signal FirstChunkReady, do not fire chunk callbacks,
-	// do not flip LoadComplete. Tests will fail on assertion.
+	if chunkSize <= 0 {
+		chunkSize = 10000
+	}
+	s.chunkedLoadInit()
+	// Reset state for repeat calls in tests.
+	s.loadComplete.Store(false)
+	s.loadProgressRows.Store(0)
+
+	defer func() {
+		s.loadComplete.Store(true)
+		// Ensure listeners waiting on the readiness signal unblock even
+		// for empty databases.
+		s.signalFirstChunk()
+	}()
+
+	t0 := time.Now()
+
+	var totalInDB int
+	if err := s.db.conn.QueryRow("SELECT COUNT(*) FROM transmissions").Scan(&totalInDB); err != nil {
+		totalInDB = -1
+	}
+
+	// Build the same retention/memory filter the legacy Load() uses so
+	// behavior is preserved when callers migrate from Load → LoadChunked.
+	var loadConditions []string
+	hotCutoffHours := s.retentionHours
+	if s.hotStartupHours > 0 {
+		hotCutoffHours = s.hotStartupHours
+	}
+	var hotCutoffStr string
+	if hotCutoffHours > 0 {
+		hotCutoffStr = time.Now().UTC().Add(-time.Duration(hotCutoffHours * float64(time.Hour))).Format(time.RFC3339)
+		loadConditions = append(loadConditions, fmt.Sprintf("t.first_seen >= '%s'", hotCutoffStr))
+	}
+
+	// Memory cap honoured by clamping the maximum cursor walk.
+	var maxPackets int64
+	if s.maxMemoryMB > 0 {
+		avgBytes := int64(1000)
+		if sample := estimateStoreTxBytesTypical(10); sample > avgBytes {
+			avgBytes = sample
+		}
+		maxPackets = (int64(s.maxMemoryMB) * 1048576) / avgBytes
+		if maxPackets < 1000 {
+			maxPackets = 1000
+		}
+	}
+
+	chunkIdx := 0
+	totalLoaded := 0
+	var cursorID int64 = 0
+
+	for {
+		conds := append([]string{}, loadConditions...)
+		conds = append(conds, fmt.Sprintf("t.id > %d", cursorID))
+		whereClause := "WHERE " + strings.Join(conds, " AND ")
+
+		rpCol := ""
+		if s.db.hasResolvedPath {
+			rpCol = ", o.resolved_path"
+		}
+		obsRawHexCol := ""
+		if s.db.hasObsRawHex {
+			obsRawHexCol = ", o.raw_hex"
+		}
+
+		var chunkSQL string
+		if s.db.isV3 {
+			chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
+					t.payload_type, t.payload_version, t.decoded_json,
+					o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
+					o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + `
+				FROM (SELECT * FROM transmissions t2 ` + strings.Replace(whereClause, "t.", "t2.", -1) + ` ORDER BY t2.id ASC LIMIT ` + fmt.Sprintf("%d", chunkSize) + `) AS t
+				LEFT JOIN observations o ON o.transmission_id = t.id
+				LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+				ORDER BY t.id ASC, o.timestamp DESC`
+		} else {
+			chunkSQL = `SELECT t.id, t.raw_hex, t.hash, t.first_seen, t.route_type,
+					t.payload_type, t.payload_version, t.decoded_json,
+					o.id, o.observer_id, o.observer_name, COALESCE(obs.iata, ''), o.direction,
+					o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRawHexCol + rpCol + `
+				FROM (SELECT * FROM transmissions t2 ` + strings.Replace(whereClause, "t.", "t2.", -1) + ` ORDER BY t2.id ASC LIMIT ` + fmt.Sprintf("%d", chunkSize) + `) AS t
+				LEFT JOIN observations o ON o.transmission_id = t.id
+				LEFT JOIN observers obs ON obs.id = o.observer_id
+				ORDER BY t.id ASC, o.timestamp DESC`
+		}
+
+		rows, err := s.db.conn.Query(chunkSQL)
+		if err != nil {
+			return fmt.Errorf("chunk %d: query: %w", chunkIdx, err)
+		}
+
+		chunkTxCount, lastID, err := s.scanAndMergeChunk(rows)
+		rows.Close()
+		if err != nil {
+			return fmt.Errorf("chunk %d: scan: %w", chunkIdx, err)
+		}
+
+		if chunkTxCount == 0 {
+			break
+		}
+
+		cursorID = lastID
+		totalLoaded += chunkTxCount
+		chunkIdx++
+		s.loadProgressRows.Store(int64(totalLoaded))
+		s.signalFirstChunk()
+		s.fireChunkCallbacks(chunkTxCount, totalLoaded)
+
+		if maxPackets > 0 && int64(totalLoaded) >= maxPackets {
+			break
+		}
+		if chunkTxCount < chunkSize {
+			break
+		}
+	}
+
+	// Post-load: pick best observation, build indexes — same shape as
+	// legacy Load().
+	s.mu.Lock()
+	for _, tx := range s.packets {
+		pickBestObservation(tx)
+		s.indexByNode(tx)
+	}
+	s.buildSubpathIndex()
+	s.buildPathHopIndex()
+	s.buildDistanceIndex()
+	if s.hotStartupHours > 0 {
+		s.oldestLoaded = hotCutoffStr
+	} else if len(s.packets) > 0 {
+		s.oldestLoaded = s.packets[0].FirstSeen
+	}
+	s.loaded = true
+	s.mu.Unlock()
+
+	elapsed := time.Since(t0)
+	log.Printf("[store] LoadChunked: %d transmissions (%d observations) across %d chunk(s) in %v (chunkSize=%d, DB total=%d)",
+		totalLoaded, s.totalObs, chunkIdx, elapsed, chunkSize, totalInDB)
+	s.loadMultibyteCapFromDB()
 	return nil
 }
 
-// FirstChunkReady returns a channel that is closed once the first
-// chunk has been merged into the store. STUB returns a never-closing
-// channel so the readiness assertion fires.
-func (s *PacketStore) FirstChunkReady() <-chan struct{} {
-	return make(chan struct{})
+// scanAndMergeChunk consumes one chunk's rows under s.mu.Lock and
+// returns the number of distinct transmissions seen + the max
+// transmission id (cursor for the next chunk).
+func (s *PacketStore) scanAndMergeChunk(rows *sql.Rows) (int, int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	hopsSeen := make(map[string]bool)
+	seenTxIDs := make(map[int]bool)
+	var maxID int64
+
+	for rows.Next() {
+		var txID int
+		var rawHex, hash, firstSeen, decodedJSON sql.NullString
+		var routeType, payloadType, payloadVersion sql.NullInt64
+		var obsID sql.NullInt64
+		var observerID, observerName, observerIATA, direction, pathJSON, obsTimestamp sql.NullString
+		var snr, rssi sql.NullFloat64
+		var score sql.NullInt64
+		var obsRawHex sql.NullString
+		var resolvedPathStr sql.NullString
+
+		scanArgs := []interface{}{&txID, &rawHex, &hash, &firstSeen, &routeType, &payloadType,
+			&payloadVersion, &decodedJSON,
+			&obsID, &observerID, &observerName, &observerIATA, &direction,
+			&snr, &rssi, &score, &pathJSON, &obsTimestamp}
+		if s.db.hasObsRawHex {
+			scanArgs = append(scanArgs, &obsRawHex)
+		}
+		if s.db.hasResolvedPath {
+			scanArgs = append(scanArgs, &resolvedPathStr)
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
+			log.Printf("[store] LoadChunked scan error: %v", err)
+			continue
+		}
+
+		if int64(txID) > maxID {
+			maxID = int64(txID)
+		}
+		seenTxIDs[txID] = true
+
+		hashStr := nullStrVal(hash)
+		tx := s.byHash[hashStr]
+		if tx == nil {
+			tx = &StoreTx{
+				ID:          txID,
+				RawHex:      nullStrVal(rawHex),
+				Hash:        hashStr,
+				FirstSeen:   nullStrVal(firstSeen),
+				LatestSeen:  nullStrVal(firstSeen),
+				RouteType:   nullIntPtr(routeType),
+				PayloadType: nullIntPtr(payloadType),
+				DecodedJSON: nullStrVal(decodedJSON),
+				obsKeys:     make(map[string]bool),
+				observerSet: make(map[string]bool),
+			}
+			s.byHash[hashStr] = tx
+			s.packets = append(s.packets, tx)
+			s.byTxID[txID] = tx
+			if txID > s.maxTxID {
+				s.maxTxID = txID
+			}
+			s.indexByNode(tx)
+			if tx.PayloadType != nil {
+				pt := *tx.PayloadType
+				s.byPayloadType[pt] = append(s.byPayloadType[pt], tx)
+			}
+			s.trackAdvertPubkey(tx)
+			s.trackedBytes += estimateStoreTxBytes(tx)
+		}
+
+		if obsID.Valid {
+			oid := int(obsID.Int64)
+			obsIDStr := nullStrVal(observerID)
+			obsPJ := nullStrVal(pathJSON)
+
+			dk := obsIDStr + "|" + obsPJ
+			if tx.obsKeys[dk] {
+				continue
+			}
+
+			obs := &StoreObs{
+				ID:             oid,
+				TransmissionID: txID,
+				ObserverID:     obsIDStr,
+				ObserverName:   nullStrVal(observerName),
+				ObserverIATA:   nullStrVal(observerIATA),
+				Direction:      nullStrVal(direction),
+				SNR:            nullFloatPtr(snr),
+				RSSI:           nullFloatPtr(rssi),
+				Score:          nullIntPtr(score),
+				PathJSON:       obsPJ,
+				RawHex:         nullStrVal(obsRawHex),
+				Timestamp:      normalizeTimestamp(nullStrVal(obsTimestamp)),
+			}
+
+			rpStr := nullStrVal(resolvedPathStr)
+			if rpStr != "" {
+				rp := unmarshalResolvedPath(rpStr)
+				pks := extractResolvedPubkeys(rp)
+				s.indexResolvedPathHops(tx, pks, hopsSeen)
+			}
+
+			tx.Observations = append(tx.Observations, obs)
+			tx.obsKeys[dk] = true
+			if obs.ObserverID != "" && !tx.observerSet[obs.ObserverID] {
+				tx.observerSet[obs.ObserverID] = true
+				tx.UniqueObserverCount++
+			}
+			tx.ObservationCount++
+			if obs.Timestamp > tx.LatestSeen {
+				tx.LatestSeen = obs.Timestamp
+			}
+
+			s.byObsID[oid] = obs
+			if oid > s.maxObsID {
+				s.maxObsID = oid
+			}
+			if obsIDStr != "" {
+				s.byObserver[obsIDStr] = append(s.byObserver[obsIDStr], obs)
+			}
+			s.totalObs++
+			s.trackedBytes += estimateStoreObsBytes(obs)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return len(seenTxIDs), maxID, err
+	}
+	return len(seenTxIDs), maxID, nil
 }
 
-// LoadComplete reports whether LoadChunked has finished. STUB.
-func (s *PacketStore) LoadComplete() bool {
-	return false
-}
-
-// OnChunkLoaded registers a callback invoked once per loaded chunk.
-// STUB: never stores or invokes the callback.
-func (s *PacketStore) OnChunkLoaded(fn func(rowsThisChunk, totalRows int)) {
-	_ = fn
-}
-
-// loadStatusMiddleware stamps X-CoreScope-Load-Status on responses
-// based on store.LoadComplete(). STUB always reports "unknown" so the
-// transition assertion fires.
+// loadStatusMiddleware sets X-CoreScope-Load-Status on every response.
+// While LoadChunked is in flight the header reports
+// "loading; progress=<rows>"; after completion it reports "ready".
+// The header is set BEFORE calling the next handler so probes can
+// observe it on any response (including streaming bodies).
 func loadStatusMiddleware(s *PacketStore, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-CoreScope-Load-Status", "unknown")
+		if s != nil && s.LoadComplete() {
+			w.Header().Set("X-CoreScope-Load-Status", "ready")
+		} else if s != nil {
+			w.Header().Set("X-CoreScope-Load-Status",
+				fmt.Sprintf("loading; progress=%d", s.LoadProgress()))
+		} else {
+			w.Header().Set("X-CoreScope-Load-Status", "loading")
+		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+// --- runtime state stitched into PacketStore via store_chunked.go ---
+
+// Forward declarations of the new PacketStore fields used above. The
+// actual struct fields live in store.go; placing them here as a
+// reminder keeps the chunked-load surface easy to audit.
+var _ = sync.Once{}
+var _ atomic.Bool

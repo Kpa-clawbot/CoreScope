@@ -403,6 +403,19 @@ type PacketStore struct {
 	// Async hash migration state: set after migrateContentHashesAsync completes.
 	hashMigrationComplete atomic.Bool
 
+	// Chunked startup load state (#1009). LoadChunked closes
+	// firstChunkReady after the first chunk is merged so the HTTP
+	// listener can bind. loadComplete flips true after all chunks have
+	// been processed; loadProgressRows is updated per-chunk so
+	// loadStatusMiddleware can emit progress.
+	chunkInitOnce      sync.Once
+	firstChunkReady    chan struct{}
+	firstChunkSignaled atomic.Bool
+	loadComplete       atomic.Bool
+	loadProgressRows   atomic.Int64
+	chunkCBMu          sync.Mutex
+	chunkCallbacks     []func(rowsThisChunk, totalRows int)
+
 	// Eviction config and stats
 	retentionHours   float64        // 0 = unlimited
 	maxMemoryMB      int            // 0 = unlimited (packet store memory budget)
