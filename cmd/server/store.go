@@ -3809,6 +3809,15 @@ func (s *PacketStore) updateDistanceIndexForTxs(txs []*StoreTx) {
 	}
 }
 
+// DistanceIndexBuilt reports whether the distance analytics index has
+// been constructed. Used by tests and /api/perf to verify the lazy
+// build invariant from issue #1011 (eager Load() build removed).
+func (s *PacketStore) DistanceIndexBuilt() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.distHops) > 0 || len(s.distPaths) > 0
+}
+
 // buildDistanceIndex precomputes haversine distances for all packets.
 // Must be called with s.mu held (Lock).
 func (s *PacketStore) buildDistanceIndex() {
