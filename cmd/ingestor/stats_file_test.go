@@ -96,3 +96,73 @@ func TestStatsFileWriter_PublishesProcIO(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteStatsAtomic_SymlinkAtDestIsReplaced is a regression guardrail for
+// #1170. The tmp side of writeStatsAtomic uses O_NOFOLLOW so a pre-planted
+// symlink at path+".tmp" cannot redirect the write — but the rename target
+// (`path` itself) is not protected by O_NOFOLLOW. Instead, os.Rename's
+// semantics are relied upon: rename atomically replaces any existing entry
+// at the destination, including a symlink, with the new regular file. The
+// original symlink's target is never written through (because the write
+// happened to the unrelated tmp file).
+//
+// This test pre-plants a symlink at `path` pointing to an unrelated target
+// file and asserts:
+//   (a) post-write, path is a regular file (not a symlink), and
+//   (b) the original target's contents are unchanged.
+//
+// If a future refactor swaps os.Rename for something that follows the
+// destination symlink (e.g. ioutil.WriteFile, or an open(path, O_WRONLY)
+// without O_NOFOLLOW), this test will fail loudly.
+func TestWriteStatsAtomic_SymlinkAtDestIsReplaced(t *testing.T) {
+	dir := t.TempDir()
+
+	// Unrelated target file with sentinel bytes. If writeStatsAtomic ever
+	// followed the symlink at `path`, it would overwrite this file.
+	target := filepath.Join(dir, "unrelated-target.bin")
+	sentinel := []byte("DO-NOT-OVERWRITE-ME-#1170")
+	if err := os.WriteFile(target, sentinel, 0o600); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+
+	// Pre-plant a symlink at the destination path.
+	path := filepath.Join(dir, "stats.json")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	payload := []byte(`{"sampledAt":"2026-01-01T00:00:00Z"}`)
+	if err := writeStatsAtomic(path, payload); err != nil {
+		t.Fatalf("writeStatsAtomic: %v", err)
+	}
+
+	// (a) post-write, path must NOT be a symlink.
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat path: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("post-write path is still a symlink (mode=%v); os.Rename should have atomically replaced it with a regular file", info.Mode())
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("post-write path is not a regular file (mode=%v)", info.Mode())
+	}
+
+	// Path now contains the new payload.
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read path: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Errorf("path contents: want %q, got %q", payload, got)
+	}
+
+	// (b) the original symlink target must be unchanged.
+	gotTarget, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if string(gotTarget) != string(sentinel) {
+		t.Errorf("symlink target was clobbered: want %q, got %q", sentinel, gotTarget)
+	}
+}
