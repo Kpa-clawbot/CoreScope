@@ -1042,7 +1042,21 @@
       var bimodalWarning = '';
       if (cs.severity === 'bimodal_clock') {
         var totalRecent = cs.recentSampleCount || 0;
-        bimodalWarning = '<div style="font-size:12px;color:var(--status-amber-text);margin-top:4px">⚠️ ' + (cs.recentBadSampleCount || '?') + ' of last ' + (totalRecent || '?') + ' adverts had nonsense timestamps (likely RTC reset)</div>';
+        var summary = '⚠️ ' + (cs.recentBadSampleCount || '?') + ' of last ' + (totalRecent || '?') + ' adverts had nonsense timestamps (likely RTC reset)';
+        var badList = '';
+        if (Array.isArray(cs.recentBadSamples) && cs.recentBadSamples.length) {
+          var items = cs.recentBadSamples.map(function(bs) {
+            var hash = String(bs.hash || '');
+            if (!hash) return '';
+            var iso = bs.advertTS ? new Date(bs.advertTS * 1000).toISOString() : '';
+            var label = iso ? formatTimestamp(iso) : '—';
+            return '<li><a href="#/packets/' + encodeURIComponent(hash) + '">' + escapeHtml(hash.slice(0, 8)) + '</a> → <span title="' + escapeHtml(iso) + '">' + escapeHtml(label) + '</span></li>';
+          }).filter(Boolean).join('');
+          if (items) {
+            badList = '<ul style="margin:4px 0 0 18px;padding:0;font-size:11px;color:var(--text-muted)">' + items + '</ul>';
+          }
+        }
+        bimodalWarning = '<div style="font-size:12px;color:var(--status-amber-text);margin-top:4px">' + summary + badList + '</div>';
       }
       container.innerHTML =
         '<h4 style="margin:0 0 6px">⏰ Clock Skew</h4>' +
