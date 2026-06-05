@@ -65,6 +65,17 @@
       } else if (col === 'advert_count') {
         va = a.advert_count || 0; vb = b.advert_count || 0;
         return (va - vb) * dir;
+      } else if (col === 'first_seen') {
+        // Issue #1166: sort by node first_seen. Empty cells always sort
+        // LAST (regardless of direction) so unknown timestamps don't
+        // clutter the top of the table.
+        var aHas = a.first_seen ? 1 : 0;
+        var bHas = b.first_seen ? 1 : 0;
+        if (aHas !== bHas) return bHas - aHas; // dated rows before empties
+        if (!aHas) return 0;
+        va = new Date(a.first_seen).getTime();
+        vb = new Date(b.first_seen).getTime();
+        return (va - vb) * dir;
       }
       return 0;
     });
@@ -1214,6 +1225,7 @@
           <th scope="col" data-sort-key="role" data-priority="2">Role</th>
           <th scope="col" data-sort-key="default_scope" data-priority="3">Scope</th>
           <th scope="col" data-sort-key="last_seen" data-sort-default="desc" data-priority="1">Last Seen</th>
+          <th scope="col" data-sort-key="first_seen" data-sort-default="desc" data-priority="3">First Seen</th>
           <th scope="col" data-sort-key="advert_count" data-sort-default="desc" data-priority="2">Adverts</th>
         </tr></thead>
         <tbody id="nodesBody"></tbody>
@@ -1313,7 +1325,7 @@
     if (!tbody) return;
 
     if (!nodes.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted" style="padding:24px">No nodes found</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted" style="padding:24px">No nodes found</td></tr>';
       return;
     }
 
@@ -1347,6 +1359,7 @@
         <td><span class="badge" style="background:${roleColor}20;color:${roleColor}">${n.role}</span></td>
         <td style="font-family:var(--mono);font-size:12px">${n.default_scope ? escapeHtml(n.default_scope) : ''}</td>
         <td class="${lastSeenClass}">${renderNodeTimestampHtml(n.last_heard || n.last_seen)}</td>
+        <td>${n.first_seen ? renderNodeTimestampHtml(n.first_seen) : '<span class="text-muted">—</span>'}</td>
         <td>${n.advert_count || 0}</td>
       </tr>`;
     }).join('');

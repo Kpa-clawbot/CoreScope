@@ -9,7 +9,8 @@
  * - prefers-reduced-motion: animation-name: none (style.css handles via media query).
  * - Singleton + cleanup: module-scoped guard; SPA re-mount must not re-show dismissed.
  * - Pull-to-refresh hint only when .pull-to-reconnect element exists in DOM.
- * - Edge-drawer hint only at viewport > 768px (where edge-swipe drawer applies).
+ * - Edge-drawer hint only at viewport <= 768px (mobile layout, where the
+ *   edge-swipe drawer is the nav UI; nav-drawer.js NARROW_MAX=768, inclusive).
  * - Row-swipe hint only on table pages: /#/packets, /#/nodes, etc.
  */
 (function () {
@@ -51,7 +52,7 @@
         if (!hasTouchCapability()) return false;
         if (onLiveRoute()) return false; // #1244
         var h = location.hash || '';
-        return /^#\/(packets|nodes)/.test(h);
+        return /^#\/(packets|nodes|channels|observers)/.test(h);
       },
       position: 'bottom',
     },
@@ -71,9 +72,12 @@
       relevant: function () {
         if (!hasTouchCapability()) return false;
         if (onLiveRoute()) return false; // #1244
-        // nav-drawer.js: NARROW_MAX=768; edge-swipe drawer is the WIDE
-        // (>768) layout's nav UI. Below 768, the bottom-nav owns navigation.
-        return window.innerWidth > 768 && !!document.querySelector('.nav-drawer, [data-nav-drawer]');
+        // nav-drawer.js: NARROW_MAX=768; "narrow" is inclusive — narrow when
+        // width <= NARROW_MAX (nav-drawer treats width > NARROW_MAX as the
+        // non-narrow / sidebar layout). The edge-swipe drawer is the MOBILE
+        // (≤768) layout's nav UI per #1064/#1184. Above 768, the persistent
+        // sidebar is visible and no edge-swipe is needed.
+        return window.innerWidth <= 768 && !!document.querySelector('.nav-drawer, [data-nav-drawer]');
       },
       position: 'top-left',
     },
@@ -219,6 +223,16 @@
   } else {
     init();
   }
+
+  // #1402 test hook: expose hint definitions for E2E predicate probes.
+  // Read-only by convention; tests call .relevant() to verify routing/viewport gates.
+  window.__gestureHintsDefs = HINTS;
+  // M3: freeze the hint defs to prevent tests / page scripts from mutating
+  // production state via the test hook. Shallow-freeze HINTS + each def.
+  try {
+    Object.keys(HINTS).forEach(function (id) { Object.freeze(HINTS[id]); });
+    Object.freeze(HINTS);
+  } catch (_e) {}
 
   window.GestureHints = {
     show: show,

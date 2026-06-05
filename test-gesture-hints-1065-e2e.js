@@ -208,11 +208,11 @@ async function main() {
 
   await ctx.close();
 
-  // ── (e) at 1024x800 with touch, edge-swipe hint visible on first visit ──
-  // #1065 follow-up: edge-swipe is a touch gesture; the hint must only
-  // appear when the viewport reports touch capability. Test context must
-  // pass hasTouch:true (real edge-swipe-on-tablet/touch-laptop scenario).
-  const ctx2 = await browser.newContext({ viewport: { width: 1024, height: 800 }, hasTouch: true });
+  // ── (e) at vw=393 with touch, edge-swipe hint visible on first visit ──
+  // #1065 follow-up: edge-swipe is a touch gesture. #1402 fix: edge-drawer
+  // is the MOBILE layout's nav UI (per #1064/#1184, nav-drawer.js NARROW_MAX=768);
+  // hint must appear at narrow viewports, not wide ones.
+  const ctx2 = await browser.newContext({ viewport: { width: 393, height: 800 }, hasTouch: true });
   const page2 = await ctx2.newPage();
   await page2.goto(`${BASE}/#/packets`, { waitUntil: 'domcontentloaded' });
   await page2.evaluate((keys) => Object.values(keys).forEach((k) => localStorage.removeItem(k)), KEYS);
@@ -220,9 +220,9 @@ async function main() {
   await page2.waitForTimeout(HINT_SETTLE_MS);
   const edgeHint = await hintVisible(page2, 'edge-drawer');
   if (edgeHint.present && edgeHint.visible) {
-    pass('(e) edge-drawer hint visible at 1024x800');
+    pass('(e) edge-drawer hint visible at 393x800 (mobile)');
   } else {
-    fail(`(e) edge-drawer hint NOT visible at 1024x800 — state=${JSON.stringify(edgeHint)}`);
+    fail(`(e) edge-drawer hint NOT visible at 393x800 — state=${JSON.stringify(edgeHint)}`);
   }
   await ctx2.close();
 
@@ -244,6 +244,81 @@ async function main() {
     fail(`(f) hint not visible under reduced-motion — state=${JSON.stringify(reducedHint)}`);
   }
   await ctx3.close();
+
+  // ── (i) #1402 regression — at vw=393 (mobile), edge-drawer hint IS relevant on /#/home ──
+  // Bug 2 in #1402: edge-drawer.relevant had window.innerWidth > 768 (inverted).
+  // nav-drawer.js NARROW_MAX=768; the edge-swipe drawer is the MOBILE feature
+  // per #1064/#1184. At vw=393 with a .nav-drawer in the DOM, the hint MUST
+  // be classified as relevant. Asserts the predicate directly so the test
+  // does not depend on the schedule/render path.
+  const ctx4 = await browser.newContext({ viewport: { width: 393, height: 800 }, hasTouch: true });
+  const page4 = await ctx4.newPage();
+  await page4.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+  await page4.evaluate((keys) => Object.values(keys).forEach((k) => localStorage.removeItem(k)), KEYS);
+  await page4.reload({ waitUntil: 'domcontentloaded' });
+  await page4.waitForTimeout(HINT_SETTLE_MS);
+  const probe1402 = await page4.evaluate(() => {
+    const hints = window.__gestureHintsDefs || null;
+    return {
+      hintsExposed: !!hints,
+      vw: window.innerWidth,
+      navDrawerInDom: !!document.querySelector('.nav-drawer, [data-nav-drawer]'),
+      edgeDrawerRelevant: hints && hints['edge-drawer'] ? !!hints['edge-drawer'].relevant() : null,
+    };
+  });
+  if (probe1402.hintsExposed && probe1402.navDrawerInDom && probe1402.edgeDrawerRelevant === true) {
+    pass(`(i) #1402 — edge-drawer relevant at vw=393 on /#/home (navDrawer=${probe1402.navDrawerInDom})`);
+  } else if (!probe1402.navDrawerInDom) {
+    fail(`(i) #1402 — precondition failed: .nav-drawer NOT in DOM at vw=393 — state=${JSON.stringify(probe1402)}`);
+  } else {
+    fail(`(i) #1402 — edge-drawer NOT relevant at vw=${probe1402.vw} — state=${JSON.stringify(probe1402)}`);
+  }
+
+  // ── (j) #1402 regression — at vw=393, row-swipe hint IS relevant on /#/channels ──
+  // Bug 4 in #1402: row-swipe filter was /^#\/(packets|nodes)/ — must widen to
+  // include channels and observers (both render swipable row tables).
+  await page4.goto(`${BASE}/#/channels`, { waitUntil: 'domcontentloaded' });
+  await page4.waitForTimeout(HINT_SETTLE_MS);
+  const probe1402b = await page4.evaluate(() => {
+    const hints = window.__gestureHintsDefs || null;
+    return {
+      hintsExposed: !!hints,
+      hash: location.hash,
+      rowSwipeRelevant: hints && hints['row-swipe'] ? !!hints['row-swipe'].relevant() : null,
+    };
+  });
+  if (probe1402b.hintsExposed && probe1402b.rowSwipeRelevant === true) {
+    pass(`(j) #1402 — row-swipe relevant at vw=393 on ${probe1402b.hash}`);
+  } else {
+    fail(`(j) #1402 — row-swipe NOT relevant on /#/channels — state=${JSON.stringify(probe1402b)}`);
+  }
+  await ctx4.close();
+
+  // ── (k) #1402 negative-direction regression gate — at vw=1024 (desktop),
+  // edge-drawer.relevant() MUST return false. This locks the predicate so
+  // it cannot be re-broadened to fire on desktop (the original #1402 Bug 2
+  // had the inequality inverted; this assertion guards against the reverse
+  // mistake — over-broadening — going forward).
+  const ctx5 = await browser.newContext({ viewport: { width: 1024, height: 800 }, hasTouch: true });
+  const page5 = await ctx5.newPage();
+  await page5.goto(`${BASE}/#/home`, { waitUntil: 'domcontentloaded' });
+  await page5.evaluate((keys) => Object.values(keys).forEach((k) => localStorage.removeItem(k)), KEYS);
+  await page5.reload({ waitUntil: 'domcontentloaded' });
+  await page5.waitForTimeout(HINT_SETTLE_MS);
+  const probe1402c = await page5.evaluate(() => {
+    const hints = window.__gestureHintsDefs || null;
+    return {
+      hintsExposed: !!hints,
+      vw: window.innerWidth,
+      edgeDrawerRelevant: hints && hints['edge-drawer'] ? !!hints['edge-drawer'].relevant() : null,
+    };
+  });
+  if (probe1402c.hintsExposed && probe1402c.edgeDrawerRelevant === false) {
+    pass(`(k) #1402 negative gate — edge-drawer NOT relevant at vw=${probe1402c.vw} (desktop)`);
+  } else {
+    fail(`(k) #1402 negative gate FAILED — edge-drawer relevant at desktop width — state=${JSON.stringify(probe1402c)}`);
+  }
+  await ctx5.close();
 
   await browser.close();
   console.log(`\ntest-gesture-hints-1065-e2e.js: ${passes} passed, ${failures} failed`);
