@@ -117,6 +117,8 @@ jobs:
           node test-issue-1364-pill-no-clamp.js
           node test-issue-1375-scope-stats-fetch.js
           node test-issue-1361-cb-presets.js
+          node test-issue-1380-cb-sim-overlay.js
+          node test-issue-1380-cb-reset-button.js
           node test-issue-1407-cb-preset-propagation.js
           node test-issue-1412-customizer-no-override.js
           node test-issue-1418-raw-hex-extraction.js
