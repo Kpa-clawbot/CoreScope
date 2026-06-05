@@ -529,8 +529,9 @@ body.live-fullscreen .live-header-critical {
 body.live-fullscreen:not(.nav-pinned) .top-nav {
   display: none !important;
 }
-/* Shift map controls up when top nav is hidden */
-body.live-fullscreen:not(.nav-pinned) .leaflet-top.leaflet-right {
+/* Shift map controls and live header up when top nav is hidden */
+body.live-fullscreen:not(.nav-pinned) .leaflet-top.leaflet-right,
+body.live-fullscreen:not(.nav-pinned) .live-header {
   top: 12px !important;
 }
 
