@@ -426,16 +426,37 @@
       // Defer to next microtask + rAF so the focus call lands AFTER any
       // event-handler bookkeeping (e.g. an Escape keydown chain that would
       // otherwise see focus snap back to <body> as the key event unwinds).
-      const target = toFocus;
       const tryFocus = function () {
         // Munger #1: bail if a newer open() has happened since close-time.
         if (openSeq !== seqAtClose) return;
-        if (document.body.contains(target)) {
-          try { target.focus(); } catch {}
+        let t = toFocus;
+        if (resolver) {
+          try {
+            const fresh = resolver();
+            if (fresh) t = fresh;
+          } catch (_) {}
+        }
+
+        // MINOR fix: don't steal focus if the user already focused another input
+        if (document.activeElement && 
+            document.activeElement !== document.body && 
+            document.activeElement !== t && 
+            !panel.contains(document.activeElement)) {
+          return;
+        }
+
+        if (t && document.body.contains(t)) {
+          try { t.focus({ preventScroll: true }); } catch (_) {}
         }
       };
-      tryFocus();
-      requestAnimationFrame(tryFocus);
+
+      requestAnimationFrame(function () {
+        if (document.activeElement && panel.contains(document.activeElement)) {
+          try { document.activeElement.blur(); } catch (_) {}
+        }
+        tryFocus();
+        setTimeout(tryFocus, 10);
+      });
     }
   }
 

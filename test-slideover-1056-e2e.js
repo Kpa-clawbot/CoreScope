@@ -428,6 +428,36 @@ const PAGES = [
       assert(r.isActive, 'focus did NOT restore to originating row after Escape: ' + JSON.stringify(r));
     });
 
+    await step('focus-restore@800: re-renders while open still restore to new row instance', async () => {
+      const rowKey = await openPanelFromRow();
+      
+      // Force a re-render of the table so the original DOM node is detached
+      await page.evaluate(() => {
+        if (typeof window.renderRows === 'function') {
+           window.renderRows();
+        }
+      });
+
+      await page.keyboard.press('Escape');
+      // Wait for renderRows() + post-rAF focus restore to settle.
+      await page.waitForFunction((key) => {
+        const esc = (window.CSS && CSS.escape) ? CSS.escape(key) : key;
+        const row = document.querySelector('#nodesTable tbody tr[data-value="' + esc + '"]');
+        return !!row && document.activeElement === row;
+      }, rowKey, { timeout: 2000 }).catch(() => {});
+
+      const r = await page.evaluate((key) => {
+        const esc = (window.CSS && CSS.escape) ? CSS.escape(key) : key;
+        const row = document.querySelector('#nodesTable tbody tr[data-value="' + esc + '"]');
+        return {
+          rowExists: !!row,
+          isActive: !!row && document.activeElement === row,
+        };
+      }, rowKey);
+      assert(r.rowExists, 'originating row vanished from DOM after manual re-render');
+      assert(r.isActive, 'focus did NOT restore to NEW row instance after Escape: ' + JSON.stringify(r));
+    });
+
     // ------------------------------------------------------------------
     // SKIP: tracked in #1172 — flaky in CI Chromium, see issue for repro.
     // X-click focus-restore is real and works locally; head-to-head with
