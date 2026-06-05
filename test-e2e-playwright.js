@@ -3331,12 +3331,19 @@ async function run() {
     });
     assert(navHidden, 'Top nav should be hidden in fullscreen when unpinned');
 
-    // Verify live header is hidden
-    const headerHidden = await page.evaluate(() => {
-      const header = document.querySelector('.live-header');
-      return window.getComputedStyle(header).display === 'none';
+    // Verify live header body is hidden
+    const headerBodyHidden = await page.evaluate(() => {
+      const headerBody = document.querySelector('.live-header-body');
+      return !headerBody || window.getComputedStyle(headerBody).display === 'none';
     });
-    assert(headerHidden, 'Live header should be completely hidden in fullscreen');
+    assert(headerBodyHidden, 'Live header body should be hidden in fullscreen');
+
+    // Verify stats row is visible
+    const statsVisible = await page.evaluate(() => {
+      const stats = document.querySelector('.live-stats-row');
+      return stats && window.getComputedStyle(stats).display !== 'none';
+    });
+    assert(statsVisible, 'Live stats row should be visible in fullscreen');
 
     // Exit fullscreen
     await page.click('#liveFullscreenToggle');
