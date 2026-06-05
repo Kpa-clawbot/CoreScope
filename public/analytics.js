@@ -256,14 +256,15 @@
       // channels: region + window (no area per original PR intent)
       const chanQS = (rqs + tws).slice(1);
       const sepChan = chanQS ? '?' + chanQS : '';
-      const [hashData, rfData, topoData, chanData, collisionData] = await Promise.all([
+      const [hashData, rfData, topoData, chanData, collisionData, airtimeData] = await Promise.all([
         api('/analytics/hash-sizes' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/rf' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/topology' + sepWin, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/channels' + sepChan, { ttl: CLIENT_TTL.analyticsRF }),
         api('/analytics/hash-collisions' + sepBase, { ttl: CLIENT_TTL.analyticsRF }),
+        api('/analytics/relay-airtime-share' + sepWin, { ttl: CLIENT_TTL.analyticsRF }).catch(() => ({ rows: [] })),
       ]);
-      _analyticsData = { hashData, rfData, topoData, chanData, collisionData };
+      _analyticsData = { hashData, rfData, topoData, chanData, collisionData, airtimeData };
       renderTab(_currentTab);
     } catch (e) {
       document.getElementById('analyticsContent').innerHTML =
@@ -401,6 +402,14 @@
           ${barChart(topo.hopDistribution.map(h=>h.count), topo.hopDistribution.map(h=>h.hops), ['#3b82f6'])}
         </div>
       </div>
+
+      <div class="analytics-row">
+        <div class="analytics-card flex-1">
+          <h3>📡 Relay Airtime Share</h3>
+          <p class="text-muted" style="margin-top:-4px;font-size:12px">Score = payload bytes × distinct repeaters that forwarded the packet. Counts relay re-transmissions; originator TX excluded. Not comparable across meshes.</p>
+          ${renderRelayAirtimeDumbbell(d.airtimeData)}
+        </div>
+      </div>
     `;
 
     // Affinity stats widget — fetch and append if debugAffinity enabled
@@ -449,6 +458,63 @@
       </div>`;
     });
     return html + '</div>';
+  }
+
+  // === Relay Airtime Share — dumbbell chart (#1359) ===
+  // Two dots per payload_type row: gray = count %, colored = airtime %.
+  // Connector line between them = the divergence. Shared 0–100% axis.
+  // Sorted desc by airtime (server-side) so count dots visibly scatter
+  // out of rank order — that visible disorder IS the headline.
+  function renderRelayAirtimeDumbbell(data) {
+    var rows = (data && Array.isArray(data.rows)) ? data.rows : [];
+    if (!rows.length) {
+      return '<div class="text-muted" style="padding:20px">No relay-airtime data in this window.</div>';
+    }
+    var totalScore = (data && typeof data.total_score === 'number') ? data.total_score : 0;
+    if (totalScore <= 0) {
+      return '<div class="text-muted" style="padding:20px">No relay activity observed in this window (all packets direct).</div>';
+    }
+    // Layout: per row → label | track 0..100% | values
+    var palette = ['#ef4444','#f59e0b','#22c55e','#3b82f6','#8b5cf6','#ec4899','#14b8a6','#64748b','#f97316','#06b6d4','#84cc16'];
+    var html = '<div class="dumbbell-chart" style="display:flex;flex-direction:column;gap:8px;padding:8px 4px">';
+    rows.forEach(function (r, i) {
+      var name = r.payload_type || 'UNK';
+      var cnt = Number(r.count || 0);
+      var cpct = Number(r.count_pct || 0);
+      var apct = Number(r.airtime_pct || 0);
+      var score = Number(r.score || 0);
+      var color = palette[i % palette.length];
+      var loPct = Math.min(cpct, apct);
+      var hiPct = Math.max(cpct, apct);
+      // Tooltip per row — payload_type, count %, count N, airtime %, raw score, caveat.
+      var tip =
+        name + '\n' +
+        'Count: ' + cnt.toLocaleString() + ' (' + cpct.toFixed(2) + '%)\n' +
+        'Airtime: ' + apct.toFixed(2) + '% (score ' + score.toLocaleString() + ')\n' +
+        'Score = bytes × distinct repeaters. Within-mesh only.';
+      html += '<div class="dumbbell-row" title="' + esc(tip) + '" style="display:grid;grid-template-columns:80px 1fr 180px;align-items:center;gap:10px;font-size:12px">' +
+        '<div class="dumbbell-label" style="font-weight:600;color:var(--text)">' + esc(name) + '</div>' +
+        '<div class="dumbbell-track" style="position:relative;height:18px;background:var(--bg-elev,rgba(127,127,127,0.12));border-radius:9px">' +
+          '<div class="dumbbell-connector" style="position:absolute;top:50%;left:' + loPct.toFixed(3) + '%;width:' + (hiPct - loPct).toFixed(3) + '%;height:2px;background:var(--text-muted,#888);transform:translateY(-50%);opacity:0.5"></div>' +
+          '<div class="dumbbell-dot dumbbell-dot-count" style="position:absolute;top:50%;left:' + cpct.toFixed(3) + '%;width:10px;height:10px;border-radius:50%;background:var(--text-muted,#888);transform:translate(-50%,-50%);border:1px solid var(--bg,#fff)" aria-label="count share"></div>' +
+          '<div class="dumbbell-dot dumbbell-dot-airtime" style="position:absolute;top:50%;left:' + apct.toFixed(3) + '%;width:12px;height:12px;border-radius:50%;background:' + color + ';transform:translate(-50%,-50%);border:1px solid var(--bg,#fff)" aria-label="airtime share"></div>' +
+        '</div>' +
+        '<div class="dumbbell-values" style="text-align:right;color:var(--text-muted);font-variant-numeric:tabular-nums">' +
+          '<span style="color:var(--text-muted)">cnt ' + cpct.toFixed(1) + '%</span>' +
+          ' &nbsp;·&nbsp; ' +
+          '<span style="color:' + color + ';font-weight:600">air ' + apct.toFixed(1) + '%</span>' +
+        '</div>' +
+      '</div>';
+    });
+    // Axis legend.
+    html += '<div class="dumbbell-axis" style="display:grid;grid-template-columns:80px 1fr 180px;gap:10px;color:var(--text-muted);font-size:11px;margin-top:4px">' +
+      '<div></div>' +
+      '<div style="display:flex;justify-content:space-between"><span>0%</span><span>50%</span><span>100%</span></div>' +
+      '<div></div>' +
+    '</div>';
+    html += '<div class="dumbbell-legend" style="display:flex;gap:14px;font-size:11px;color:var(--text-muted);padding:4px 0 0 84px"><span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-muted,#888);vertical-align:middle"></span> count %</span><span><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent,#3b82f6);vertical-align:middle"></span> airtime %</span></div>';
+    html += '</div>';
+    return html;
   }
 
   // ===================== RF / SIGNAL =====================

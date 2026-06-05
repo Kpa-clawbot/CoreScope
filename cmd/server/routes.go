@@ -250,6 +250,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/analytics/subpaths-bulk", s.handleAnalyticsSubpathsBulk).Methods("GET")
 	r.HandleFunc("/api/analytics/subpath-detail", s.handleAnalyticsSubpathDetail).Methods("GET")
 	r.HandleFunc("/api/analytics/neighbor-graph", s.handleNeighborGraph).Methods("GET")
+	r.HandleFunc("/api/analytics/relay-airtime-share", s.handleAnalyticsRelayAirtimeShare).Methods("GET")
 
 	// Other endpoints
 	r.HandleFunc("/api/resolve-hops", s.handleResolveHops).Methods("GET")
@@ -1966,6 +1967,21 @@ func (s *Server) handleAnalyticsRF(w http.ResponseWriter, r *http.Request) {
 		SnrByType:      []PayloadTypeSignal{},
 		SignalOverTime: []SignalOverTimeEntry{},
 		ScatterData:    []ScatterPoint{},
+	})
+}
+
+func (s *Server) handleAnalyticsRelayAirtimeShare(w http.ResponseWriter, r *http.Request) {
+	window := ParseTimeWindow(r)
+	if s.store != nil {
+		writeJSON(w, s.store.GetRelayAirtimeShareWithWindow(window))
+		return
+	}
+	writeJSON(w, map[string]interface{}{
+		"rows":        []map[string]interface{}{},
+		"total_count": 0,
+		"total_score": 0,
+		"window":      "",
+		"cached":      false,
 	})
 }
 
