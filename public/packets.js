@@ -392,9 +392,6 @@
 
   function close() {
     if (!panel || panel.hidden) return;
-    if (document.activeElement && panel.contains(document.activeElement)) {
-      try { document.activeElement.blur(); } catch (_) {}
-    }
     panel.hidden = true;
     if (backdrop) backdrop.hidden = true;
     // #1168 Munger #3: release the ref-counted scroll-lock token.
@@ -452,8 +449,11 @@
           try { t.focus({ preventScroll: true }); } catch (_) {}
         }
       };
-      tryFocus();
+
       requestAnimationFrame(function () {
+        if (document.activeElement && panel.contains(document.activeElement)) {
+          try { document.activeElement.blur(); } catch (_) {}
+        }
         tryFocus();
         setTimeout(tryFocus, 10);
       });
