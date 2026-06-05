@@ -8,11 +8,65 @@ var GH = 'https://github.com/Kpa-clawbot/corescope';
 // component whose current per-second rate exceeds `factor` × its rolling
 // baseline rate. Issue #1120 acceptance: 5-minute window, 10× threshold.
 //
-// STUB: implementation lands in the green commit. Returning empty results
-// keeps callers safe and makes the red test fail on an assertion (not a
-// reference error).
+// Inputs:
+//   history: ordered array of snapshots [{ sampleAt: ISO, sources: { name: cum } }]
+//   current: the freshest snapshot, same shape
+//   opts:
+//     windowMs       (default 5*60*1000) — rolling baseline window
+//     factor         (default 10)        — rate-multiplier threshold
+//     minHistorySec  (default 30)        — refuse to flag until baseline is stable
+//
+// Returns: { rates, baselineRates, flags } — all keyed by source name.
 function detectPerfAnomalies(history, current, opts) {
-  return { rates: {}, baselineRates: {}, flags: {} };
+  opts = opts || {};
+  const windowMs = opts.windowMs || (5 * 60 * 1000);
+  const factor = opts.factor || 10;
+  const minHistorySec = opts.minHistorySec != null ? opts.minHistorySec : 30;
+  const out = { rates: {}, baselineRates: {}, flags: {} };
+  if (!current || !current.sources || !history || history.length === 0) return out;
+  const curT = Date.parse(current.sampleAt);
+  if (!isFinite(curT)) return out;
+
+  // Find the most recent prior sample (for the *current* per-second rate)
+  // and the oldest sample within the window (for the baseline).
+  const prior = history[history.length - 1];
+  const priorT = Date.parse(prior.sampleAt);
+  const curDt = (curT - priorT) / 1000;
+  if (!(curDt > 0)) return out;
+
+  // Baseline: oldest sample within window vs. prior (the snapshot just before
+  // `current`). Anything older than windowMs is excluded.
+  const cutoff = curT - windowMs;
+  let baseIdx = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (Date.parse(history[i].sampleAt) < cutoff) { baseIdx = i + 1; break; }
+  }
+  if (baseIdx >= history.length) baseIdx = history.length - 1;
+  const baseSnap = history[baseIdx];
+  const baseT = Date.parse(baseSnap.sampleAt);
+  const baseDt = (priorT - baseT) / 1000;
+
+  // Compute rates for every source seen in current.
+  for (const k of Object.keys(current.sources)) {
+    const cur = current.sources[k] || 0;
+    const prev = (prior.sources && prior.sources[k]) || 0;
+    const rate = (cur - prev) / curDt;
+    out.rates[k] = rate;
+    if (baseDt <= 0 || baseDt < minHistorySec) {
+      out.baselineRates[k] = null;
+      continue;
+    }
+    const baseStart = (baseSnap.sources && baseSnap.sources[k]) || 0;
+    const baseEnd = prev; // baseline window = [baseSnap .. prior]
+    const baseRate = (baseEnd - baseStart) / baseDt;
+    out.baselineRates[k] = baseRate;
+    // Guard floor to avoid 0-baseline → infinite ratio false positives.
+    const floor = 0.05; // 1 event per 20s minimum baseline
+    if (rate > factor * Math.max(baseRate, floor) && rate > factor * floor) {
+      out.flags[k] = true;
+    }
+  }
+  return out;
 }
 if (typeof window !== 'undefined') {
   window.detectPerfAnomalies = detectPerfAnomalies;
@@ -142,48 +196,33 @@ function renderVersionCard(health) {
         if (keys.length === 0) {
           html += '<p style="color:var(--text-muted)">No ingestor stats yet (waiting for /tmp/corescope-ingestor-stats.json)</p>';
         } else {
-          // Anomaly detection (#1123 polish):
-          //   Compare PER-SECOND DELTA RATES, not cumulative counts.
-          //   Cumulative-vs-cumulative was a tautology that fired ⚠️ at startup
-          //   (any backfill_* > 10 when tx_inserted=0 → baseline collapses to 1)
-          //   and false-cleared once tx grew past a one-shot backfill burst.
-          //   Now we cache the previous snapshot + sampleAt and only fire when:
-          //     1) we have a real interval (≥ 0.5s) to compute deltas against
-          //     2) tx_inserted has crossed MIN_SAMPLE so the baseline is meaningful
-          //     3) the per-second backfill rate exceeds 10× the per-second tx rate
-          const MIN_SAMPLE = 100;
-          const prev = window._perfWriteSourcesPrev;
-          let prevSrc = null, dtSec = 0;
-          if (prev && prev.sampleAt && writeSources.sampleAt) {
-            dtSec = (Date.parse(writeSources.sampleAt) - Date.parse(prev.sampleAt)) / 1000;
-            if (dtSec >= 0.5) prevSrc = prev.sources;
-          }
-          const txTotal = src.tx_inserted || 0;
-          const txDelta = prevSrc ? (txTotal - (prevSrc.tx_inserted || 0)) : 0;
-          const txRate = (prevSrc && dtSec > 0) ? (txDelta / dtSec) : 0;
-          html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Source</th><th scope="col">Total</th><th scope="col">Rate/s</th><th scope="col">Anomaly</th></tr></thead><tbody>';
+          // Anomaly detection (#1120 acceptance): flag any component whose
+          // per-second write rate exceeds 10× its 5-minute rolling baseline.
+          // History is stashed on window so the detector has multi-sample
+          // context across the 5s refresh tick.
+          if (!window._perfWriteSourcesHistory) window._perfWriteSourcesHistory = [];
+          const history = window._perfWriteSourcesHistory;
+          const current = { sampleAt: writeSources.sampleAt || new Date().toISOString(), sources: { ...src } };
+          const anom = detectPerfAnomalies(history, current, { windowMs: 5 * 60 * 1000, factor: 10 });
+          // Append current and prune anything older than 6 minutes (keeps a
+          // little headroom past the 5-min window, bounded memory).
+          history.push(current);
+          const cutoff = Date.parse(current.sampleAt) - (6 * 60 * 1000);
+          while (history.length > 1 && Date.parse(history[0].sampleAt) < cutoff) history.shift();
+
+          html += '<div style="overflow-x:auto"><table class="perf-table"><thead><tr><th scope="col">Source</th><th scope="col">Total</th><th scope="col">Rate/s</th><th scope="col">Baseline/s</th><th scope="col">Anomaly</th></tr></thead><tbody>';
           for (const k of keys) {
             const v = src[k] || 0;
-            const isBackfill = k.startsWith('backfill_');
-            let rate = 0;
-            let flag = '';
-            if (prevSrc && dtSec > 0) {
-              const delta = v - (prevSrc[k] || 0);
-              rate = delta / dtSec;
-              // Only flag when tx baseline is statistically meaningful AND
-              // backfill is actively running faster than 10× the live tx rate.
-              if (isBackfill && txTotal >= MIN_SAMPLE && rate > 10 * Math.max(txRate, 1)) {
-                flag = ' ⚠️';
-              }
-            }
-            const rateStr = (prevSrc && dtSec > 0) ? rate.toFixed(1) : '—';
-            html += `<tr><td><code>${k}</code></td><td>${v.toLocaleString()}</td><td>${rateStr}</td><td>${flag}</td></tr>`;
+            const rate = anom.rates[k];
+            const base = anom.baselineRates[k];
+            const flag = anom.flags[k] ? ' ⚠️' : '';
+            const rateStr = (rate != null && isFinite(rate)) ? rate.toFixed(2) : '—';
+            const baseStr = (base != null && isFinite(base)) ? base.toFixed(2) : '—';
+            html += `<tr><td><code>${k}</code></td><td>${v.toLocaleString()}</td><td>${rateStr}</td><td>${baseStr}</td><td>${flag}</td></tr>`;
           }
           html += '</tbody></table></div>';
-          // Stash for next tick's delta computation.
-          window._perfWriteSourcesPrev = { sources: { ...src }, sampleAt: writeSources.sampleAt };
           if (writeSources.sampleAt) {
-            html += `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Sampled: ${writeSources.sampleAt}</div>`;
+            html += `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Sampled: ${writeSources.sampleAt} · baseline window: 5 min · threshold: 10×</div>`;
           }
         }
       }
