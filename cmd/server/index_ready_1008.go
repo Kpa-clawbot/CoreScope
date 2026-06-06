@@ -39,6 +39,35 @@
 //     adding a separate gate: the existing main.go boot sequence
 //     does not start ingest goroutines until after store.Load()
 //     and graph init complete.
+//
+// Handler scope of the ready gate (issue #1008 review M2):
+//
+//   - HARD-GATED with 503 + Retry-After: 5 — analytics endpoints whose
+//     entire response is the index aggregate. Empty data would be
+//     visibly broken (charts, top-N tables). See routes.go:
+//     /api/analytics/subpaths, /api/analytics/subpaths-bulk,
+//     /api/analytics/subpath-detail, /api/nodes/{pubkey}/paths.
+//
+//   - BEST-EFFORT (not gated) — endpoints where the index drives
+//     enrichment fields that callers already treat as optional. During
+//     the not-ready window these report zero counts / nil scores
+//     rather than 503-ing the whole list. Acceptable because:
+//
+//       * /api/nodes and /api/nodes/{pubkey} have many other fields
+//         (last-seen, position, advert metadata) that callers depend
+//         on at startup. 503-ing the SPA bootstrap to wait for an
+//         index that exclusively affects "relay activity" badges
+//         would be a worse UX than a 30–60s window of "—" badges.
+//
+//       * GetRepeaterRelayInfoMap / GetRepeaterUsefulnessScoreMap /
+//         GetBridgeScore / repeater_liveness / repeater_usefulness
+//         all walk s.byPathHop. During the build window they return
+//         empty maps or zero scores; the steady-state recomputer
+//         (#1262) refreshes them every 5min once indexes flip ready
+//         (prewarm guarded by WaitIndexesReady — see review M1).
+//
+//     This is documented rather than gated so operators do not see
+//     /api/nodes 503 during routine restarts on Cascadia-scale data.
 package main
 
 import (

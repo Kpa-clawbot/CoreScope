@@ -15,10 +15,18 @@ import (
 // plenty fresh for an at-a-glance status column.
 const repeaterEnrichmentRecomputerDefaultInterval = 5 * time.Minute
 
-// repeaterEnrichmentPrewarmWait (#1008 review M1): unused stub in the
-// red commit; the green commit wires it into the prewarm path so the
-// recomputer waits for background indexes to be ready before snapshotting
-// s.byPathHop. Declared here so the M1 red-commit test file compiles.
+// repeaterEnrichmentPrewarmWait is the upper bound on how long the
+// synchronous prewarm in StartRepeaterEnrichmentRecomputer will wait
+// for the background subpath+pathHop index builds to flip ready before
+// skipping the prewarm. Override in tests via the package-level var.
+//
+// Background (issue #1008 review M1): the prewarm computes against
+// s.byPathHop. If the background index builds haven't finished, the
+// snapshot is built against an empty map and locked into
+// s.repeaterRelayCache for `interval` (default 5min) — every
+// /api/nodes during that window would report relay_count_24h=0. We
+// wait up to this deadline and, on timeout, skip the prewarm entirely
+// so the next ticker fire (which will see ready=true) does the work.
 var repeaterEnrichmentPrewarmWait = 60 * time.Second
 
 // StartRepeaterEnrichmentRecomputer is the steady-state background
@@ -61,7 +69,15 @@ func (s *PacketStore) StartRepeaterEnrichmentRecomputer(windowHours float64, int
 	// is to make sure the very first /api/nodes?limit=2000 from
 	// live.js's SPA bootstrap (issue #1262) hits a populated cache
 	// instead of paying the on-thread rebuild cost.
-	recomputeRepeaterEnrichmentSafe(s, windowHours)
+	//
+	// Issue #1008 review M1: skip the prewarm if the background
+	// subpath+pathHop index builds haven't finished — otherwise we'd
+	// snapshot against an empty s.byPathHop and serve relay_count_24h=0
+	// for the entire `interval` window. The next ticker fire will pick
+	// up the populated index.
+	if s.WaitIndexesReady(repeaterEnrichmentPrewarmWait) {
+		recomputeRepeaterEnrichmentSafe(s, windowHours)
+	}
 
 	var stopOnce sync.Once
 	go func() {

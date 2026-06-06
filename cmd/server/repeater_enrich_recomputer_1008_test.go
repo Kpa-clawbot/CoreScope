@@ -23,6 +23,12 @@ func TestIssue1008_M1_PrewarmWaitsForIndexes(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	// Wait for the background builder to finish so it can't race past
+	// our Store(false) below. Once it's done it won't write the flags
+	// again, so flipping them back to false is stable.
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatal("background builds never finished")
+	}
 	// Force the ready flags back to false to simulate the race where
 	// the recomputer is started before background builds finish.
 	store.subpathReady.Store(false)
