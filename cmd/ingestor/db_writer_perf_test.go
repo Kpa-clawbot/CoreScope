@@ -24,6 +24,12 @@ func TestWriterStarvationVisibleInPerf(t *testing.T) {
 		t.Skip("skipping 60s starvation test in short mode")
 	}
 
+	// Isolate from samples accumulated by earlier tests in the same
+	// package run — without this the mqtt_handler component already
+	// has ~thousand fast InsertTransmission samples and the 5 slow
+	// follower samples can't move p99 above 50s.
+	ResetWriterStatsForTest()
+
 	s, err := OpenStore(tempDBPath(t))
 	if err != nil {
 		t.Fatal(err)

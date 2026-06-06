@@ -1803,6 +1803,22 @@ func (a *writerStatsAggregator) get(component string) *writerComponentStats {
 	return c
 }
 
+// reset clears all per-component samples. Test-only: lets a single
+// scenario assert against a clean aggregator without prior-test noise
+// in the same package run (TestWriterStarvationVisibleInPerf would
+// otherwise mix this run's 5 starved samples with thousands of fast
+// InsertTransmission samples from earlier tests and the p99 would
+// collapse below the 50s threshold).
+func (a *writerStatsAggregator) reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.components = make(map[string]*writerComponentStats)
+}
+
+// ResetWriterStatsForTest wipes the per-component writer stats
+// aggregator. Test-only; not safe to call from production code paths.
+func ResetWriterStatsForTest() { writerStatsAgg.reset() }
+
 func (a *writerStatsAggregator) snapshot() map[string]WriterStatsSnapshot {
 	a.mu.Lock()
 	keys := make([]string, 0, len(a.components))
