@@ -482,6 +482,82 @@ const PAGES = [
       assert(r.isActive, 'focus did NOT restore to originating row after X click: ' + JSON.stringify(r));
     });
 
+    // ------------------------------------------------------------------
+    // #1616 followup: SYNTHETIC deterministic repro for the Escape-path
+    // focus-restore race. The natural test above flakes ~50% of the time
+    // in Chromium-headless because the nodes module's onClose calls
+    // `renderRows()` synchronously and the originating <tr> instance is
+    // replaced — but the exact micro-timing between focus(), the panel
+    // detach, and the synchronous innerHTML swap is racy: under some
+    // schedules Chromium drops activeElement to <body> before the
+    // replacement <tr> is laid out.
+    //
+    // This test forces the race deterministically by driving SlideOver
+    // directly with an onClose that defers the row swap to a microtask
+    // (Promise.resolve().then(...)). Resolver runs synchronously at
+    // close-time and returns the OLD (still-attached) tr — but by the
+    // time the microtask fires, the OLD tr is detached and Chromium
+    // re-derives activeElement = <body>. The MutationObserver fallback
+    // SHOULD pick up the new row attachment and re-land focus.
+    // ------------------------------------------------------------------
+    await step('focus-restore@800: Escape with async-cb re-render (synthetic)', async () => {
+      // Build an isolated test surface: a tbody with a single row and a
+      // resolver/closer pair driven through SlideOver.open() directly.
+      // We rebuild the row from scratch in a microtask after close() to
+      // exactly mirror the production async-render race.
+      await page.evaluate(() => {
+        // Clean any prior fixture so re-runs are deterministic.
+        const old = document.getElementById('synth-1616');
+        if (old) old.remove();
+        const wrap = document.createElement('div');
+        wrap.id = 'synth-1616';
+        wrap.innerHTML = '<table><tbody id="synth-tbody">'
+          + '<tr data-value="row-A" tabindex="0"><td>A</td></tr>'
+          + '</tbody></table>';
+        document.body.appendChild(wrap);
+      });
+      // Focus the row, open SlideOver with a microtask-delayed onClose.
+      await page.evaluate(() => {
+        const tbody = document.getElementById('synth-tbody');
+        const row = tbody.querySelector('tr[data-value="row-A"]');
+        row.focus();
+        window.SlideOver.open({
+          title: 'Synthetic',
+          restoreFocus: function () {
+            return document.querySelector('#synth-tbody tr[data-value="row-A"]');
+          },
+          onClose: function () {
+            // Defer the row swap to a microtask so it lands AFTER
+            // close()'s synchronous focus + detach. This is the precise
+            // race: resolver() returned the OLD tr (still attached at
+            // close() time); the microtask then replaces it.
+            Promise.resolve().then(function () {
+              tbody.innerHTML = '<tr data-value="row-A" tabindex="0"><td>A-new</td></tr>';
+            });
+          }
+        });
+      });
+      // Slide-over is open. Press Escape.
+      await page.keyboard.press('Escape');
+      // Wait for the new row to mount AND focus to land on it.
+      await page.waitForFunction(() => {
+        const row = document.querySelector('#synth-tbody tr[data-value="row-A"]');
+        return !!row && document.activeElement === row;
+      }, null, { timeout: 1500 }).catch(() => {});
+      const r = await page.evaluate(() => {
+        const row = document.querySelector('#synth-tbody tr[data-value="row-A"]');
+        return {
+          rowExists: !!row,
+          isActive: !!row && document.activeElement === row,
+          rowText: row && row.textContent,
+          activeTag: document.activeElement && document.activeElement.tagName,
+        };
+      });
+      assert(r.rowExists, 'synthetic row vanished after async cb');
+      assert(r.rowText === 'A-new', 'synthetic row was not re-rendered by microtask (got: ' + r.rowText + ')');
+      assert(r.isActive, 'focus did NOT restore to NEW synthetic row after async cb: ' + JSON.stringify(r));
+    });
+
     await ctx.close();
   }
 
