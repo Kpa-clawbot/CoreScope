@@ -322,6 +322,18 @@
   visibility: hidden;
 }
 
+/* #1616 — the legend is informational (color swatches + labels). Its only
+ * interactive child is the corner-reposition button in .panel-header. The
+ * legend's bounding box overlaps the Leaflet topright Settings cog
+ * (#liveControlsToggle) on viewports where both pin to the right edge,
+ * which made Playwright (and real users on touch) miss the cog. Disable
+ * pointer events on the legend surface and re-enable only on the move
+ * button so the cog stays clickable through the legend's empty area.
+ */
+.live-legend { pointer-events: none; }
+.live-legend .panel-header,
+.live-legend .panel-corner-btn { pointer-events: auto; }
+
 .legend-title {
   font-size: 9px;
   font-weight: 700;
