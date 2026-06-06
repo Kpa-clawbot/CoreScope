@@ -30,6 +30,7 @@ type ListLimitsConfig struct {
 	NodesMax           int `json:"nodesMax"`
 	AnalyticsMax       int `json:"analyticsMax"`
 	ChannelMessagesMax int `json:"channelMessagesMax"`
+	BulkHealthMax      int `json:"bulkHealthMax"`
 }
 
 // Config mirrors the Node.js config.json structure (read-only fields).
