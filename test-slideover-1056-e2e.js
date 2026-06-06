@@ -459,15 +459,11 @@ const PAGES = [
     });
 
     // ------------------------------------------------------------------
-    // SKIP: tracked in #1172 — flaky in CI Chromium, see issue for repro.
-    // X-click focus-restore is real and works locally; head-to-head with
-    // headless CI flake. Soft-warn pattern was removed (#1168 Munger #4):
-    // skipped tests are VISIBLE in CI output (↷ SKIP), not silently
-    // swallowed by `if (!cond) console.warn(...)`. Hard assertions
-    // preserved below — flip step.skip → step once #1172 ships a fix.
+    // #1616: hard-asserted (architectural fix in SlideOver.close — detach
+    // panel on close, MutationObserver fallback for late-attaching rows).
+    // Supersedes the #1172 soften-and-track approach.
     // ------------------------------------------------------------------
-    step.skip('focus-restore@800: X-button click returns focus to originating row',
-      'tracked in #1172 — flaky in CI Chromium', async () => {
+    await step('focus-restore@800: X-button click returns focus to originating row', async () => {
       const rowKey = await openPanelFromRow();
       await page.evaluate(() => {
         const x = document.querySelector('.slide-over-panel .slide-over-close');
@@ -608,42 +604,17 @@ const PAGES = [
       assert(after.backdropGone, 'backdrop still shown after viewport crossed BP');
       assert(!after.bodyHasLockClass, 'scroll-locked class still present after viewport crossed BP');
       assert(after.bodyOverflow !== 'hidden', 'body scroll-lock not released after viewport crossed BP (overflow=' + after.bodyOverflow + ')');
-      // Focus-restore portion of this scenario is exercised in the
-      // skipped step below (tracked in #1172). Soft-warn pattern removed
-      // per #1168 Munger #4 — skipped is visible, soft-warn was not.
+      // #1616: focus-restore portion is now hard-asserted (architectural
+      // fix in SlideOver.close — panel detach + MutationObserver fallback).
+      assert(after.rowExists, 'originating row vanished after viewport-crossing close');
+      assert(after.focusRestored, 'focus did NOT restore to originating row after viewport-crossing close: ' + JSON.stringify(after));
     });
 
-    // ------------------------------------------------------------------
-    // SKIP: tracked in #1172 — flaky in CI Chromium, see issue for repro.
-    // Same root cause as the X-click case above. Cleanup checks
-    // (panel/backdrop/scroll-lock) are HARD in the step above; only the
-    // focus identity check is skipped. Restore by flipping step.skip →
-    // step once #1172 ships a fix.
-    // ------------------------------------------------------------------
-    step.skip('resize@800→1440 nodes: focus restored after viewport-crossing close',
-      'tracked in #1172 — flaky in CI Chromium', async () => {
-      const rowKey = await page.evaluate(() => {
-        const r = document.querySelector('#nodesTable tbody tr[data-value]');
-        if (!r) return null;
-        r.focus();
-        r.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        return r.getAttribute('data-value');
-      });
-      assert(rowKey, 'no nodes row for resize focus test');
-      await page.waitForFunction(() => {
-        const p = document.querySelector('.slide-over-panel');
-        return p && !p.hidden;
-      }, null, { timeout: 8000 });
-      await page.setViewportSize({ width: 1440, height: 900 });
-      await page.waitForTimeout(500);
-      const after = await page.evaluate((key) => {
-        const esc = (window.CSS && CSS.escape) ? CSS.escape(key) : key;
-        const row = document.querySelector('#nodesTable tbody tr[data-value="' + esc + '"]');
-        return { rowExists: !!row, focusRestored: !!row && document.activeElement === row };
-      }, rowKey);
-      assert(after.rowExists, 'originating row vanished');
-      assert(after.focusRestored, 'focus not restored after viewport-crossing close');
-    });
+    // #1616: the formerly-skipped duplicate focus-only test has been merged
+    // into the cleanup assertion above (single open/resize cycle). The
+    // separate test was unreachable anyway — by the time it ran the viewport
+    // was already 1440, so SlideOver.shouldUse() returned false and the
+    // panel never opened.
 
     await ctx.close();
   }
