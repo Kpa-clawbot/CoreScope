@@ -425,6 +425,26 @@ jobs:
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-channels-ws-race-1498-e2e.js 2>&1 | tee -a e2e-output.txt
           CHROMIUM_REQUIRE=1 BASE_URL=http://localhost:13581 node test-issue-1487-byop-modal-layout-e2e.js 2>&1 | tee -a e2e-output.txt
 
+      # #1616: slide-over focus-restore flake-gate. Runs the slide-over
+      # E2E 20 consecutive times against the SAME backend instance so
+      # the Chromium-headless focus race documented in #1172/#1616 has
+      # a 20× shot at firing. Any single non-zero exit aborts. This is
+      # the architectural-fix gate — if it ever turns red post-merge,
+      # the focused-but-hidden state has crept back in.
+      #
+      # PERMANENT step. Adds ~3-4 min to the e2e-test job in exchange
+      # for closing out a flake family that was blocking ~8 unrelated
+      # PRs at a time. If profiling pressures the budget later, drop
+      # repeat count first; do not delete.
+      - name: Slide-over E2E flake-gate (#1616, --repeat-each=20)
+        run: |
+          set -e
+          for i in $(seq 1 20); do
+            echo "--- slide-over E2E run $i/20 ---"
+            BASE_URL=http://localhost:13581 node test-slideover-1056-e2e.js 2>&1 | tee -a slideover-repeat-output.txt
+          done
+          echo "20 passed"
+
       - name: Collect frontend coverage (parallel)
         if: success() && github.event_name == 'push'
         run: |
