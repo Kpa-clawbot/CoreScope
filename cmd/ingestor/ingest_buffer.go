@@ -1,0 +1,79 @@
+package main
+
+import (
+	"log"
+	"sync"
+	"sync/atomic"
+)
+
+// IngestBuffer decouples MQTT message receipt from DB writes (#1608).
+//
+// On boot the ingestor must subscribe to MQTT immediately, but the single
+// SQLite writer (#1283) can be held for minutes by a startup migration
+// (e.g. a large CREATE INDEX) or prune. Without buffering, every QoS-0 packet
+// received in that window is lost. IngestBuffer holds received work in a
+// bounded FIFO and a single consumer goroutine drains it once Ready() is
+// called — i.e. once the write path is free.
+//
+// A single consumer preserves the single-writer invariant: jobs run one at a
+// time, exactly as paho's in-order handler did before. Submit never blocks the
+// MQTT delivery goroutine; if the buffer is full it drops and counts (bounded
+// memory). Buffering replays the original messages, so it introduces NO
+// duplicates (contrast: a QoS-1 broker-queue would).
+type IngestBuffer struct {
+	jobs      chan func()
+	ready     chan struct{}
+	dropped   atomic.Int64
+	startOnce sync.Once
+	readyOnce sync.Once
+}
+
+// NewIngestBuffer returns a buffer holding up to capacity pending jobs.
+func NewIngestBuffer(capacity int) *IngestBuffer {
+	if capacity < 1 {
+		capacity = 1
+	}
+	return &IngestBuffer{
+		jobs:  make(chan func(), capacity),
+		ready: make(chan struct{}),
+	}
+}
+
+// Submit enqueues a job without blocking. If the buffer is full the job is
+// dropped and the dropped counter is incremented. Safe for concurrent callers.
+func (b *IngestBuffer) Submit(job func()) {
+	select {
+	case b.jobs <- job:
+	default:
+		n := b.dropped.Add(1)
+		if n == 1 || n%1000 == 0 {
+			log.Printf("[ingest-buffer] WARNING: buffer full, dropped %d message(s) — raise ingestBufferSize", n)
+		}
+	}
+}
+
+// Start launches the consumer goroutine. It blocks until Ready() is called,
+// then drains buffered jobs and runs newly-submitted ones serially, in FIFO
+// order. Idempotent.
+func (b *IngestBuffer) Start() {
+	b.startOnce.Do(func() {
+		go func() {
+			<-b.ready
+			for job := range b.jobs {
+				job()
+			}
+		}()
+	})
+}
+
+// Ready signals that the write path is available; the consumer begins
+// draining. Idempotent.
+func (b *IngestBuffer) Ready() {
+	b.readyOnce.Do(func() { close(b.ready) })
+}
+
+// Dropped returns the number of jobs dropped due to a full buffer.
+func (b *IngestBuffer) Dropped() int64 { return b.dropped.Load() }
+
+// Pending returns the current queue depth (best-effort; for observability).
+func (b *IngestBuffer) Pending() int { return len(b.jobs) }
