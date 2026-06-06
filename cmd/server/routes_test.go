@@ -1089,6 +1089,7 @@ func TestChannelMessagesWithRegion(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
@@ -1342,6 +1343,7 @@ func TestResolveHopsAmbiguous(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
@@ -1588,6 +1590,7 @@ func TestNodeAnalyticsNoNameNode(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
@@ -1624,6 +1627,7 @@ func TestNodeHealthForNoNameNode(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
@@ -2260,6 +2264,7 @@ store := NewPacketStore(db, nil)
 if err := store.Load(); err != nil {
 	t.Fatalf("store.Load failed: %v", err)
 }
+store.WaitIndexesReady(5 * time.Second)
 
 pk := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'TestNode', 'repeater')", pk)
@@ -2308,6 +2313,7 @@ store := NewPacketStore(db, nil)
 if err := store.Load(); err != nil {
 	t.Fatalf("store.Load failed: %v", err)
 }
+store.WaitIndexesReady(5 * time.Second)
 
 pk := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'Repeater2B', 'repeater')", pk)
@@ -2351,6 +2357,7 @@ func TestGetNodeHashSizeInfoLatestWins(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'LatestWins', 'repeater')", pk)
@@ -2400,6 +2407,7 @@ func TestGetNodeHashSizeInfoIgnoreDirectZeroHop(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "dddd111122223333444455556666777788889999aaaabbbbccccddddeeee3333"
 	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'DirIgnore', 'repeater')", pk)
@@ -2447,6 +2455,7 @@ func TestGetNodeHashSizeInfoOnlyDirectZeroHopIgnored(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "eeee111122223333444455556666777788889999aaaabbbbccccddddeeee4444"
 	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'OnlyDirect', 'repeater')", pk)
@@ -2481,6 +2490,7 @@ func TestGetNodeHashSizeInfoDirectNonZeroHopCounted(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "ffff111122223333444455556666777788889999aaaabbbbccccddddeeee5555"
 	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'DirNonZero', 'repeater')", pk)
@@ -2520,6 +2530,7 @@ func TestGetNodeHashSizeInfoNoAdverts(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'NoAdverts', 'repeater')", pk)
@@ -2553,6 +2564,7 @@ func TestHashAnalyticsZeroHopAdvert(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	// Capture baseline from seed data (bypass cache via computeAnalyticsHashSizes)
 	baseline := store.computeAnalyticsHashSizes("", "")
@@ -2612,6 +2624,7 @@ func TestAnalyticsHashSizeSameNameDifferentPubkey(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	pk1 := "aaaa111122223333444455556666777788889999aaaabbbbccccddddeeee1111"
 	pk2 := "aaaa111122223333444455556666777788889999aaaabbbbccccddddeeee2222"
@@ -2680,6 +2693,7 @@ func TestInconsistentNodesExcludesCompanions(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	payloadType := 4
@@ -2763,6 +2777,7 @@ func TestHashSizeInfoTimeWindow(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	pk := "dd44444444444444444444444444444444444444444444444444444444444444"
 	db.conn.Exec("INSERT OR IGNORE INTO nodes (public_key, name, role) VALUES (?, 'OldNode', 'repeater')", pk)
@@ -2934,6 +2949,7 @@ func TestLatestSeenMaintained(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	store.mu.RLock()
 	defer store.mu.RUnlock()
@@ -2998,6 +3014,7 @@ func TestQueryGroupedPacketsSortedByLatest(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	result := store.QueryGroupedPackets(PacketQuery{Limit: 50})
 	if result.Total < 2 {
@@ -3035,6 +3052,7 @@ func TestQueryGroupedPacketsCacheReturnsConsistentResult(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	q := PacketQuery{Limit: 50}
 	r1 := store.QueryGroupedPackets(q)
@@ -3064,6 +3082,7 @@ func TestGetChannelsCacheReturnsConsistentResult(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	r1 := store.GetChannels("")
 	r2 := store.GetChannels("")
@@ -3102,6 +3121,7 @@ func TestGetChannelsNotBlockedByLargeLock(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	channels := store.GetChannels("")
 
@@ -3338,6 +3358,7 @@ func TestHashCollisionsCacheTTL(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 
 	if store.collisionCacheTTL != 3600*time.Second {
 		t.Errorf("expected collisionCacheTTL=3600s, got %v", store.collisionCacheTTL)
@@ -3382,6 +3403,7 @@ func TestHashCollisionsEmptyStore(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
@@ -3434,6 +3456,7 @@ func TestHashCollisionsWithCollision(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 	// Inject hash_size=1 for both nodes so they appear in the 1-byte bucket
 	store.hashSizeInfoMu.Lock()
 	store.hashSizeInfoCache = map[string]*hashSizeNodeInfo{
@@ -3500,6 +3523,7 @@ func TestHashCollisionsShortPublicKey(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
@@ -3532,6 +3556,7 @@ func TestHashCollisionsMissingCoordinates(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	store.WaitIndexesReady(5 * time.Second)
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
