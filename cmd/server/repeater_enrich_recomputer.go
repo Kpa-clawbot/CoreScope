@@ -15,6 +15,12 @@ import (
 // plenty fresh for an at-a-glance status column.
 const repeaterEnrichmentRecomputerDefaultInterval = 5 * time.Minute
 
+// repeaterEnrichmentPrewarmWait (#1008 review M1): unused stub in the
+// red commit; the green commit wires it into the prewarm path so the
+// recomputer waits for background indexes to be ready before snapshotting
+// s.byPathHop. Declared here so the M1 red-commit test file compiles.
+var repeaterEnrichmentPrewarmWait = 60 * time.Second
+
 // StartRepeaterEnrichmentRecomputer is the steady-state background
 // recompute loop for the repeater enrichment bulk caches consumed by
 // handleNodes (GetRepeaterRelayInfoMap + GetRepeaterUsefulnessScoreMap).
