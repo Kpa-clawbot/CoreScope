@@ -80,6 +80,12 @@ type Config struct {
 	// NeighborEdgesMaxAgeDays controls neighbor_edges row retention
 	// (#1287 — moved from cmd/server). 0 = default 5.
 	NeighborEdgesMaxAgeDays int `json:"neighborEdgesMaxAgeDays,omitempty"`
+
+	// IngestBufferSize caps the in-memory queue (number of MQTT messages) held
+	// while the single SQLite writer is blocked by startup migrations/prunes
+	// (#1608). Received messages are drained once the write path is ready.
+	// 0 / unset => default. Bounded memory.
+	IngestBufferSize int `json:"ingestBufferSize,omitempty"`
 }
 
 // NeighborEdgesDaysOrDefault returns the configured pruning window or 5.
@@ -88,6 +94,17 @@ func (c *Config) NeighborEdgesDaysOrDefault() int {
 		return 5
 	}
 	return c.NeighborEdgesMaxAgeDays
+}
+
+// IngestBufferSizeOrDefault returns the ingest buffer capacity. Default 50000:
+// at typical mesh rates (~1-2 msg/s) that is many minutes of headroom while a
+// startup migration holds the writer; each queued item is a small closure, so
+// worst-case memory stays in the tens of MB.
+func (c *Config) IngestBufferSizeOrDefault() int {
+	if c.IngestBufferSize > 0 {
+		return c.IngestBufferSize
+	}
+	return 50000
 }
 
 // GeoFilterConfig is an alias for the shared geofilter.Config type.

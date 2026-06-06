@@ -484,3 +484,15 @@ func TestLoadConfigWSSource(t *testing.T) {
 		t.Errorf("ResolvedSources wss broker=%s, want unchanged", sources[1].Broker)
 	}
 }
+
+func TestIngestBufferSizeOrDefault(t *testing.T) {
+	if got := (&Config{}).IngestBufferSizeOrDefault(); got != 50000 {
+		t.Fatalf("default: want 50000, got %d", got)
+	}
+	if got := (&Config{IngestBufferSize: 10}).IngestBufferSizeOrDefault(); got != 10 {
+		t.Fatalf("override: want 10, got %d", got)
+	}
+	if got := (&Config{IngestBufferSize: -5}).IngestBufferSizeOrDefault(); got != 50000 {
+		t.Fatalf("invalid negative should fall back to default, got %d", got)
+	}
+}
