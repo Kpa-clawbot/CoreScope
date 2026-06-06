@@ -92,7 +92,7 @@ function makeNodesEnv(totalNodes, serverCap) {
   const fixture = [];
   for (let i = 0; i < totalNodes; i++) {
     fixture.push({
-      public_key: ('a' + i.toString(16)).padEnd(64, '0'),
+      public_key: i.toString(16).padStart(62, '0') + 'a0',
       name: 'Node' + i,
       role: 'repeater',
       advert_count: 1,
@@ -194,7 +194,7 @@ test('B1: after api() throws mid-pagination, _allNodes resets so next call refet
 
   const fixture = [];
   for (let i = 0; i < 1200; i++) {
-    fixture.push({ public_key: ('b' + i.toString(16)).padEnd(64, '0'), name: 'N' + i, role: 'repeater', advert_count: 1, last_seen: new Date().toISOString() });
+    fixture.push({ public_key: i.toString(16).padStart(62, '0') + 'b0', name: 'N' + i, role: 'repeater', advert_count: 1, last_seen: new Date().toISOString() });
   }
   let callCount = 0;
   let shouldThrow = true;
@@ -265,7 +265,7 @@ test('M1: pagination fetches all pages even when total is understated (filter in
   // Server reports total:50 (filtered count) but actually sends full pages
   const fixture = [];
   for (let i = 0; i < 1200; i++) {
-    fixture.push({ public_key: ('c' + i.toString(16)).padEnd(64, '0'), name: 'M' + i, role: 'repeater', advert_count: 1, last_seen: new Date().toISOString() });
+    fixture.push({ public_key: i.toString(16).padStart(62, '0') + 'c0', name: 'M' + i, role: 'repeater', advert_count: 1, last_seen: new Date().toISOString() });
   }
   ctx.api = function(url) {
     const params = new URLSearchParams(url.split('?')[1] || '');
@@ -343,7 +343,7 @@ test('M2: progress feedback is shown between page fetches', async () => {
 
   const fixture = [];
   for (let i = 0; i < 1200; i++) {
-    fixture.push({ public_key: ('d' + i.toString(16)).padEnd(64, '0'), name: 'P' + i, role: 'repeater', advert_count: 1, last_seen: new Date().toISOString() });
+    fixture.push({ public_key: i.toString(16).padStart(62, '0') + 'd0', name: 'P' + i, role: 'repeater', advert_count: 1, last_seen: new Date().toISOString() });
   }
   ctx.api = function(url) {
     const params = new URLSearchParams(url.split('?')[1] || '');
