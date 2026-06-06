@@ -1112,19 +1112,34 @@
 
   async function loadNodes(refreshOnly) {
     try {
-      // Fetch all nodes once, filter client-side
+      // Fetch all nodes via pagination loop — server clamps /api/nodes ?limit
+      // to 500 (PR #1540 / v3.8.3 DoS guard), so a single fetch silently
+      // truncates large deployments. Loop driven by data.total. See #1606.
       if (!_allNodes) {
-        const params = new URLSearchParams({ limit: '5000' });
+        const PAGE_SIZE = 500;
+        const SAFETY_CAP = 10000; // hard ceiling to bound runaway loops
+        const baseParams = new URLSearchParams({ limit: String(PAGE_SIZE) });
         const rp = RegionFilter.getRegionParam();
-        if (rp) params.set('region', rp);
+        if (rp) baseParams.set('region', rp);
         const ap = AreaFilter.getAreaParam();
-        if (ap) params.set('area', ap);
-        const [data] = await Promise.all([
-          api('/nodes?' + params, { ttl: CLIENT_TTL.nodeList }),
-          getFleetSkew() // pre-fetch clock skew in parallel
-        ]);
-        _allNodes = data.nodes || [];
-        counts = data.counts || {};
+        if (ap) baseParams.set('area', ap);
+
+        _allNodes = [];
+        let offset = 0;
+        let total = Infinity;
+        // Kick off fleet skew in parallel with the first page only.
+        const skewPromise = getFleetSkew();
+        while (_allNodes.length < total && offset < SAFETY_CAP) {
+          baseParams.set('offset', String(offset));
+          const data = await api('/nodes?' + baseParams, { ttl: CLIENT_TTL.nodeList });
+          if (!data || !Array.isArray(data.nodes)) break;
+          _allNodes.push.apply(_allNodes, data.nodes);
+          counts = data.counts || counts || {};
+          total = (typeof data.total === 'number') ? data.total : _allNodes.length;
+          if (data.nodes.length < PAGE_SIZE) break;
+          offset += PAGE_SIZE;
+        }
+        await skewPromise;
       }
 
       // Client-side filtering
