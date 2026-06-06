@@ -1524,6 +1524,10 @@ func (s *Server) handleNodePaths(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 503, "Packet store unavailable")
 		return
 	}
+	if !s.store.PathHopIndexReady() {
+		writeIndexLoading503(w)
+		return
+	}
 
 	// Use the precomputed byPathHop index instead of scanning all packets.
 	// Look up by full pubkey (resolved hops) and by short prefixes (raw hops).
@@ -2077,6 +2081,10 @@ func (s *Server) handleAnalyticsHashCollisions(w http.ResponseWriter, r *http.Re
 
 func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
+		if !s.store.SubpathIndexReady() {
+			writeIndexLoading503(w)
+			return
+		}
 		region := r.URL.Query().Get("region")
 		minLen := queryInt(r, "minLen", 2)
 		if minLen < 2 {
@@ -2101,6 +2109,10 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 // response, avoiding repeated scans of the same packet data. Query format:
 //   ?groups=2-2:50,3-3:30,4-4:20,5-8:15   (minLen-maxLen:limit per group)
 func (s *Server) handleAnalyticsSubpathsBulk(w http.ResponseWriter, r *http.Request) {
+	if s.store != nil && !s.store.SubpathIndexReady() {
+		writeIndexLoading503(w)
+		return
+	}
 	region := r.URL.Query().Get("region")
 	groupsParam := r.URL.Query().Get("groups")
 	if groupsParam == "" {
@@ -2180,6 +2192,10 @@ func (s *Server) handleAnalyticsSubpathDetail(w http.ResponseWriter, r *http.Req
 		}
 	}
 	if s.store != nil {
+		if !s.store.SubpathIndexReady() {
+			writeIndexLoading503(w)
+			return
+		}
 		writeJSON(w, s.store.GetSubpathDetail(rawHops))
 		return
 	}

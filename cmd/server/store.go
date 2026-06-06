@@ -247,6 +247,13 @@ type PacketStore struct {
 	spIndex      map[string]int        // "hop1,hop2" → count
 	spTxIndex    map[string][]*StoreTx // "hop1,hop2" → transmissions containing this subpath
 	spTotalPaths int                   // transmissions with paths >= 2 hops
+	// Background-build ready gates for spIndex/spTxIndex and byPathHop
+	// (#1008). Flipped from false→true exactly once by the goroutine
+	// kicked off in Load() (or synchronously by the background chunk
+	// loader). Handlers gate reads via SubpathIndexReady() /
+	// PathHopIndexReady(); while false, they respond 503 + Retry-After.
+	subpathReady atomic.Bool
+	pathHopReady atomic.Bool
 	// Precomputed distance analytics: hop distances and path totals.
 	// Built LAZILY on first /api/analytics/distance request (#1011) —
 	// previously eager in Load() at startup, which was O(n²) work for
@@ -837,10 +844,15 @@ func (s *PacketStore) Load() error {
 	}
 
 	// Build precomputed subpath index for O(1) analytics queries
-	s.buildSubpathIndex()
+	// — DEFERRED to a background goroutine (#1008). Same rationale
+	// as the distance index (#1011): synchronous build under s.mu
+	// blocks HTTP readiness ~60s at Cascadia scale. The goroutine is
+	// started AFTER s.loaded = true below.
+	// s.buildSubpathIndex()
 
 	// Build path-hop index for O(1) node path lookups
-	s.buildPathHopIndex()
+	// — DEFERRED to a background goroutine (#1008).
+	// s.buildPathHopIndex()
 
 	// Precompute distance analytics (hop distances, path totals)
 	// — DEFERRED to first /api/analytics/distance request (#1011).
@@ -869,6 +881,12 @@ func (s *PacketStore) Load() error {
 			len(s.packets), s.totalObs, elapsed, s.trackedMemoryMB(), s.estimatedMemoryMB())
 	}
 	s.loadMultibyteCapFromDB()
+	// Kick off background subpath + path-hop index builds (#1008).
+	// The goroutine acquires s.mu.Lock() and so will block until Load's
+	// deferred Unlock fires when this function returns. HTTP handlers
+	// gate reads behind SubpathIndexReady() / PathHopIndexReady() and
+	// respond 503 + Retry-After: 5 until the builds finish.
+	s.startBackgroundIndexBuilds()
 	return nil
 }
 

@@ -2289,6 +2289,10 @@ func TestSubpathPrecomputedIndex(t *testing.T) {
 	defer db.Close()
 	store := NewPacketStore(db, nil)
 	store.Load()
+	// #1008: indexes built in background goroutine; wait before reading.
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatal("indexes never became ready")
+	}
 
 	// After Load(), the precomputed index must be populated.
 	if len(store.spIndex) == 0 {
@@ -2343,6 +2347,10 @@ func TestSubpathTxIndexPopulated(t *testing.T) {
 	defer db.Close()
 	store := NewPacketStore(db, nil)
 	store.Load()
+	// #1008: indexes built in background goroutine; wait before reading.
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatal("indexes never became ready")
+	}
 
 	// spTxIndex must be populated alongside spIndex
 	if len(store.spTxIndex) == 0 {
@@ -2387,6 +2395,10 @@ func TestSubpathDetailMixedCaseHops(t *testing.T) {
 	defer db.Close()
 	store := NewPacketStore(db, nil)
 	store.Load()
+	// #1008: indexes built in background goroutine; wait before reading.
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatal("indexes never became ready")
+	}
 
 	// Query with lowercase hops to establish baseline
 	lower := store.GetSubpathDetail([]string{"eeff", "0011"})

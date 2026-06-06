@@ -27,6 +27,12 @@ func setupTestServer(t *testing.T) (*Server, *mux.Router) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	// #1008: Load() now defers subpath + path-hop index builds to a
+	// background goroutine. Wait for them before handlers go live so
+	// the existing assertions (which expect 200, not 503) hold.
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatalf("background indexes never became ready")
+	}
 	srv.store = store
 	router := mux.NewRouter()
 	srv.RegisterRoutes(router)
@@ -43,6 +49,10 @@ func setupTestServerWithAPIKey(t *testing.T, apiKey string) (*Server, *mux.Route
 	store := NewPacketStore(db, nil)
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
+	}
+	// #1008: see setupTestServer comment.
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatalf("background indexes never became ready")
 	}
 	srv.store = store
 	router := mux.NewRouter()
@@ -3773,6 +3783,11 @@ func TestNodePathsPrefixCollisionFilter(t *testing.T) {
 	store := NewPacketStore(srv.db, nil)
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
+	}
+	// #1008: wait for the background index build to complete before
+	// hitting the handler (otherwise it returns 503 index-loading).
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatal("indexes never became ready")
 	}
 	srv.store = store
 
