@@ -174,6 +174,219 @@ test('loadNodes paginates and loads all 1200 nodes when server caps at 500', asy
     ' — frontend silently truncated to server cap (issue #1606)');
 });
 
+// --- B1: partial-load deadlock (api throws on page 2) ---
+test('B1: after api() throws mid-pagination, _allNodes resets so next call refetches', async () => {
+  const ctx = makeSandbox();
+  const domElements = {};
+  function getEl(id) {
+    if (!domElements[id]) {
+      domElements[id] = {
+        id, innerHTML: '', textContent: '', value: '', scrollTop: 0,
+        style: {}, dataset: {},
+        classList: { add(){}, remove(){}, toggle(){}, contains(){return false;} },
+        addEventListener() {}, querySelectorAll() { return []; }, querySelector() { return null; },
+        getAttribute() { return null; }, setAttribute() {}, appendChild() {},
+      };
+    }
+    return domElements[id];
+  }
+  ctx.document.getElementById = getEl;
+
+  const fixture = [];
+  for (let i = 0; i < 1200; i++) {
+    fixture.push({ public_key: ('b' + i.toString(16)).padEnd(64, '0'), name: 'N' + i, role: 'repeater', advert_count: 1, last_seen: new Date().toISOString() });
+  }
+  let callCount = 0;
+  let shouldThrow = true;
+  ctx.api = function(url) {
+    callCount++;
+    const params = new URLSearchParams(url.split('?')[1] || '');
+    const offset = parseInt(params.get('offset') || '0', 10);
+    if (shouldThrow && offset >= 500) return Promise.reject(new Error('network error on page 2'));
+    const page = fixture.slice(offset, offset + 500);
+    return Promise.resolve({ nodes: page, total: 1200, counts: { repeaters: 1200 } });
+  };
+  ctx.invalidateApiCache = () => {};
+  ctx.ROLE_COLORS = { repeater: '#0', room: '#0', companion: '#0', sensor: '#0' };
+  ctx.ROLE_STYLE = {};
+  ctx.TYPE_COLORS = {};
+  ctx.getNodeStatus = () => 'active';
+  ctx.getHealthThresholds = () => ({ staleMs: 1, degradedMs: 1, silentMs: 1 });
+  ctx.timeAgo = () => '';
+  ctx.truncate = (s) => s;
+  ctx.escapeHtml = (s) => String(s || '');
+  ctx.payloadTypeName = () => '';
+  ctx.payloadTypeColor = () => '';
+  ctx.debounce = (fn) => fn;
+  ctx.initTabBar = () => {};
+  ctx.getFavorites = () => [];
+  ctx.favStar = () => '';
+  ctx.bindFavStars = () => {};
+  ctx.makeColumnsResizable = () => {};
+  ctx.CLIENT_TTL = { nodeList: 0, nodeDetail: 0, nodeHealth: 0 };
+  ctx.RegionFilter = { init(){}, onChange(){ return () => {}; }, offChange(){}, getRegionParam(){ return ''; } };
+  ctx.AreaFilter = { init(){}, onChange(){ return () => {}; }, offChange(){}, getAreaParam(){ return ''; } };
+  ctx.getFleetSkew = () => Promise.resolve({});
+  ctx.onWS = () => {};
+  ctx.offWS = () => {};
+  ctx.debouncedOnWS = () => () => {};
+  let pageMod = null;
+  ctx.registerPage = (name, handlers) => { pageMod = handlers; };
+  loadInCtx(ctx, path.join(__dirname, 'public/nodes.js'));
+
+  // First call — will fail on page 2
+  pageMod.init(ctx.document.getElementById('page'));
+  for (let i = 0; i < 50; i++) await new Promise(r => setImmediate(r));
+
+  // _allNodes must be null/undefined after failure (not [] which is truthy and blocks refetch)
+  const afterFail = ctx.window._nodesGetAllNodes();
+  assert.ok(!afterFail || afterFail === null,
+    'B1: after api() throws mid-pagination, _allNodes should be null/falsy so next call refetches, got: ' + JSON.stringify(afterFail && afterFail.length));
+});
+
+// --- M1: total instability — loop must use length-based exit, not total ---
+test('M1: pagination fetches all pages even when total is understated (filter instability)', async () => {
+  const ctx = makeSandbox();
+  const domElements = {};
+  function getEl(id) {
+    if (!domElements[id]) {
+      domElements[id] = {
+        id, innerHTML: '', textContent: '', value: '', scrollTop: 0,
+        style: {}, dataset: {},
+        classList: { add(){}, remove(){}, toggle(){}, contains(){return false;} },
+        addEventListener() {}, querySelectorAll() { return []; }, querySelector() { return null; },
+        getAttribute() { return null; }, setAttribute() {}, appendChild() {},
+      };
+    }
+    return domElements[id];
+  }
+  ctx.document.getElementById = getEl;
+
+  // Server reports total:50 (filtered count) but actually sends full pages
+  const fixture = [];
+  for (let i = 0; i < 1200; i++) {
+    fixture.push({ public_key: ('c' + i.toString(16)).padEnd(64, '0'), name: 'M' + i, role: 'repeater', advert_count: 1, last_seen: new Date().toISOString() });
+  }
+  ctx.api = function(url) {
+    const params = new URLSearchParams(url.split('?')[1] || '');
+    const offset = parseInt(params.get('offset') || '0', 10);
+    const page = fixture.slice(offset, offset + 500);
+    // total is deliberately wrong (mimics routes.go:1357 area filter overwrite)
+    return Promise.resolve({ nodes: page, total: 50, counts: { repeaters: 50 } });
+  };
+  ctx.invalidateApiCache = () => {};
+  ctx.ROLE_COLORS = { repeater: '#0', room: '#0', companion: '#0', sensor: '#0' };
+  ctx.ROLE_STYLE = {};
+  ctx.TYPE_COLORS = {};
+  ctx.getNodeStatus = () => 'active';
+  ctx.getHealthThresholds = () => ({ staleMs: 1, degradedMs: 1, silentMs: 1 });
+  ctx.timeAgo = () => '';
+  ctx.truncate = (s) => s;
+  ctx.escapeHtml = (s) => String(s || '');
+  ctx.payloadTypeName = () => '';
+  ctx.payloadTypeColor = () => '';
+  ctx.debounce = (fn) => fn;
+  ctx.initTabBar = () => {};
+  ctx.getFavorites = () => [];
+  ctx.favStar = () => '';
+  ctx.bindFavStars = () => {};
+  ctx.makeColumnsResizable = () => {};
+  ctx.CLIENT_TTL = { nodeList: 0, nodeDetail: 0, nodeHealth: 0 };
+  ctx.RegionFilter = { init(){}, onChange(){ return () => {}; }, offChange(){}, getRegionParam(){ return ''; } };
+  ctx.AreaFilter = { init(){}, onChange(){ return () => {}; }, offChange(){}, getAreaParam(){ return ''; } };
+  ctx.getFleetSkew = () => Promise.resolve({});
+  ctx.onWS = () => {};
+  ctx.offWS = () => {};
+  ctx.debouncedOnWS = () => () => {};
+  let pageMod = null;
+  ctx.registerPage = (name, handlers) => { pageMod = handlers; };
+  loadInCtx(ctx, path.join(__dirname, 'public/nodes.js'));
+
+  pageMod.init(ctx.document.getElementById('page'));
+  for (let i = 0; i < 50; i++) await new Promise(r => setImmediate(r));
+
+  const all = ctx.window._nodesGetAllNodes();
+  assert.ok(Array.isArray(all), 'M1: _allNodes should be array');
+  // With total-driven loop (current code), it stops at 50 nodes. Correct behavior: fetch all 1200.
+  assert.strictEqual(all.length, 1200,
+    'M1: expected 1200 nodes (length-based exit) but got ' + all.length + ' (total-driven exit stopped early)');
+});
+
+// --- M2: progress feedback during multi-page load ---
+test('M2: progress feedback is shown between page fetches', async () => {
+  const ctx = makeSandbox();
+  const domElements = {};
+  const domUpdates = [];
+  function getEl(id) {
+    if (!domElements[id]) {
+      domElements[id] = {
+        id, innerHTML: '', textContent: '', value: '', scrollTop: 0,
+        style: {}, dataset: {},
+        classList: { add(){}, remove(){}, toggle(){}, contains(){return false;} },
+        addEventListener() {}, querySelectorAll() { return []; }, querySelector() { return null; },
+        getAttribute() { return null; }, setAttribute() {}, appendChild() {},
+      };
+      // Track innerHTML/textContent changes for progress detection
+      const orig = domElements[id];
+      Object.defineProperty(orig, 'innerHTML', {
+        get() { return orig._html || ''; },
+        set(v) { orig._html = v; if (id === 'nodesBody' && v && v.includes('Loading')) domUpdates.push(v); }
+      });
+      Object.defineProperty(orig, 'textContent', {
+        get() { return orig._text || ''; },
+        set(v) { orig._text = v; if (id === 'nodesBody' && v && v.includes('Loading')) domUpdates.push(v); }
+      });
+    }
+    return domElements[id];
+  }
+  ctx.document.getElementById = getEl;
+
+  const fixture = [];
+  for (let i = 0; i < 1200; i++) {
+    fixture.push({ public_key: ('d' + i.toString(16)).padEnd(64, '0'), name: 'P' + i, role: 'repeater', advert_count: 1, last_seen: new Date().toISOString() });
+  }
+  ctx.api = function(url) {
+    const params = new URLSearchParams(url.split('?')[1] || '');
+    const offset = parseInt(params.get('offset') || '0', 10);
+    const page = fixture.slice(offset, offset + 500);
+    return Promise.resolve({ nodes: page, total: 1200, counts: { repeaters: 1200 } });
+  };
+  ctx.invalidateApiCache = () => {};
+  ctx.ROLE_COLORS = { repeater: '#0', room: '#0', companion: '#0', sensor: '#0' };
+  ctx.ROLE_STYLE = {};
+  ctx.TYPE_COLORS = {};
+  ctx.getNodeStatus = () => 'active';
+  ctx.getHealthThresholds = () => ({ staleMs: 1, degradedMs: 1, silentMs: 1 });
+  ctx.timeAgo = () => '';
+  ctx.truncate = (s) => s;
+  ctx.escapeHtml = (s) => String(s || '');
+  ctx.payloadTypeName = () => '';
+  ctx.payloadTypeColor = () => '';
+  ctx.debounce = (fn) => fn;
+  ctx.initTabBar = () => {};
+  ctx.getFavorites = () => [];
+  ctx.favStar = () => '';
+  ctx.bindFavStars = () => {};
+  ctx.makeColumnsResizable = () => {};
+  ctx.CLIENT_TTL = { nodeList: 0, nodeDetail: 0, nodeHealth: 0 };
+  ctx.RegionFilter = { init(){}, onChange(){ return () => {}; }, offChange(){}, getRegionParam(){ return ''; } };
+  ctx.AreaFilter = { init(){}, onChange(){ return () => {}; }, offChange(){}, getAreaParam(){ return ''; } };
+  ctx.getFleetSkew = () => Promise.resolve({});
+  ctx.onWS = () => {};
+  ctx.offWS = () => {};
+  ctx.debouncedOnWS = () => () => {};
+  let pageMod = null;
+  ctx.registerPage = (name, handlers) => { pageMod = handlers; };
+  loadInCtx(ctx, path.join(__dirname, 'public/nodes.js'));
+
+  pageMod.init(ctx.document.getElementById('page'));
+  for (let i = 0; i < 50; i++) await new Promise(r => setImmediate(r));
+
+  // At least one intermediate progress update should have been written to DOM
+  assert.ok(domUpdates.length > 0,
+    'M2: expected progress feedback in #nodesBody during pagination, got 0 updates');
+});
+
 Promise.allSettled(pending).then(() => {
   console.log('\n  Issue #1606: ' + passed + ' passed, ' + failed + ' failed\n');
   if (failed > 0) process.exit(1);
