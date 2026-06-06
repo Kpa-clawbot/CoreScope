@@ -128,6 +128,7 @@ jobs:
           node test-issue-1418-deeplink-hops-channels.js
           node test-issue-1418-polish-review.js
           node test-issue-1420-tile-providers.js
+          node test-issue-1614-tile-url-function.js
           node test-issue-1438-marker-css-vars.js
           node test-issue-1562-observers-summary.js
           node test-issue-1509-nav-active-bg.js

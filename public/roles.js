@@ -374,7 +374,12 @@
         var id = window.MC_getDarkTileProvider();
         var p = window.MC_TILE_PROVIDERS[id];
         if (p && (p.url || p.baseUrl)) {
-          return p.url || p.baseUrl;
+          // #1614: providers added in #1533 (carto/osm/stamen) declare
+          // `url` as a function for lazy config resolution. Invoke it so
+          // we always return a string URL template; L.tileLayer otherwise
+          // stringifies the function source and every tile request 404s.
+          var u = p.url || p.baseUrl;
+          return (typeof u === 'function') ? u() : u;
         }
       }
     } catch (_e) {}
