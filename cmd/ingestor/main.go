@@ -349,6 +349,9 @@ func main() {
 	go func() {
 		for range statsTicker.C {
 			store.LogStats()
+			if d := ingestBuffer.Dropped(); d > 0 || ingestBuffer.Pending() > 0 {
+				log.Printf("[ingest-buffer] pending=%d dropped_total=%d", ingestBuffer.Pending(), d)
+			}
 		}
 	}()
 
