@@ -109,6 +109,15 @@ type Payload struct {
 	MAC           string       `json:"mac,omitempty"`
 	EncryptedData string       `json:"encryptedData,omitempty"`
 	ExtraHash     string       `json:"extraHash,omitempty"`
+	// Extended ACK fields per firmware 1.16.0 (issue #1610) —
+	// firmware/src/helpers/BaseChatMesh.cpp:218-234. ACK payloads grew from
+	// always-4 bytes to 4/5/6 (4-byte truncated sha256 CRC, optional 1-byte
+	// attempt counter, optional 1-byte RNG byte added in commit a130a95a).
+	// AckLen is the wire payload length; AckAttempt/AckRand are surfaced
+	// only when the sender included them (legacy 4-byte ACKs leave them nil).
+	AckLen        *int   `json:"ackLen,omitempty"`
+	AckAttempt    *int   `json:"ackAttempt,omitempty"`
+	AckRand       *int   `json:"ackRand,omitempty"`
 	PubKey        string       `json:"pubKey,omitempty"`
 	Timestamp     uint32       `json:"timestamp,omitempty"`
 	TimestampISO  string       `json:"timestampISO,omitempty"`
@@ -148,6 +157,12 @@ type Payload struct {
 	InnerType     *int    `json:"innerType,omitempty"`
 	InnerTypeName string  `json:"innerTypeName,omitempty"`
 	InnerAckCrc   string  `json:"innerAckCrc,omitempty"`
+	// Extended ACK inner fields (issue #1610) — when the multipart inner
+	// blob is a v1.16+ extended ACK (5 or 6 bytes after the byte0 header),
+	// surface the same attempt/rand bytes as the top-level decoder.
+	InnerAckLen     *int  `json:"innerAckLen,omitempty"`
+	InnerAckAttempt *int  `json:"innerAckAttempt,omitempty"`
+	InnerAckRand    *int  `json:"innerAckRand,omitempty"`
 	InnerPayload  string  `json:"innerPayload,omitempty"`
 	// CONTROL (PAYLOAD_TYPE_CONTROL=0x0B) byte0 flags, per
 	// firmware/src/Mesh.cpp:69 — byte0 high-bit marks zero-hop direct subset.
