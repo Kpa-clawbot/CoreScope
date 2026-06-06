@@ -1480,7 +1480,7 @@ func (s *Server) handleNodeHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBulkHealth(w http.ResponseWriter, r *http.Request) {
-	lim := queryLimit(r, 50, s.cfg.ListLimits.NodesMax)
+	lim := queryLimit(r, 50, s.cfg.ListLimits.BulkHealthMax)
 
 	if s.store != nil {
 		region := r.URL.Query().Get("region")
@@ -2111,7 +2111,7 @@ func (s *Server) handleAnalyticsSubpaths(w http.ResponseWriter, r *http.Request)
 			minLen = 2
 		}
 		maxLen := queryInt(r, "maxLen", 8)
-		limit := queryLimit(r, 50, s.cfg.ListLimits.AnalyticsMax)
+		limit := queryLimit(r, 100, s.cfg.ListLimits.AnalyticsMax)
 		// Issue #1217: honor the Time window filter on Route Patterns.
 		window := ParseTimeWindow(r)
 		data := s.store.GetAnalyticsSubpathsWithWindow(region, minLen, maxLen, limit, window)
@@ -2412,7 +2412,7 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request) {
 	hash := mux.Vars(r)["hash"]
-	limit := queryLimit(r, 50, s.cfg.ListLimits.ChannelMessagesMax)
+	limit := queryLimit(r, 100, s.cfg.ListLimits.ChannelMessagesMax)
 	offset := queryInt(r, "offset", 0)
 	region := r.URL.Query().Get("region")
 	// Prefer DB for full history (in-memory store has limited retention)

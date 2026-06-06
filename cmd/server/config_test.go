@@ -476,6 +476,9 @@ func TestApplyListLimitsDefaults(t *testing.T) {
 		if cfg.ListLimits.ChannelMessagesMax != 500 {
 			t.Errorf("expected 500, got %d", cfg.ListLimits.ChannelMessagesMax)
 		}
+		if cfg.ListLimits.BulkHealthMax != 200 {
+			t.Errorf("expected 200, got %d", cfg.ListLimits.BulkHealthMax)
+		}
 	})
 
 	t.Run("operator overrides honored", func(t *testing.T) {
@@ -486,6 +489,7 @@ func TestApplyListLimitsDefaults(t *testing.T) {
 				"nodesMax":           5000,
 				"analyticsMax":       500,
 				"channelMessagesMax": 1000,
+				"bulkHealthMax":      300,
 			},
 		}
 		data, _ := json.Marshal(cfgData)
@@ -505,6 +509,9 @@ func TestApplyListLimitsDefaults(t *testing.T) {
 		}
 		if cfg.ListLimits.ChannelMessagesMax != 1000 {
 			t.Errorf("expected 1000, got %d", cfg.ListLimits.ChannelMessagesMax)
+		}
+		if cfg.ListLimits.BulkHealthMax != 300 {
+			t.Errorf("expected 300, got %d", cfg.ListLimits.BulkHealthMax)
 		}
 	})
 }

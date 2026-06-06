@@ -427,6 +427,9 @@ func (c *Config) applyListLimitsDefaults() {
 	if c.ListLimits.ChannelMessagesMax <= 0 {
 		c.ListLimits.ChannelMessagesMax = 500
 	}
+	if c.ListLimits.BulkHealthMax <= 0 {
+		c.ListLimits.BulkHealthMax = 200
+	}
 }
 
 func (c *Config) migrateDeprecatedConfig() {
