@@ -115,3 +115,26 @@ func TestIssue1008_HandlerRecoversAfterIndexReady(t *testing.T) {
 		t.Fatalf("status after ready = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
 }
+
+// TestIssue1008_m7_BothFlagsSetAfterParallelStart verifies that the
+// parallel two-goroutine version of startBackgroundIndexBuilds (review
+// m7) sets BOTH ready flags after a bounded wait, regardless of which
+// goroutine wins the race to s.mu.Lock(). Sanity check that breaking
+// the two builds apart didn't drop the pathHop flag flip.
+func TestIssue1008_m7_BothFlagsSetAfterParallelStart(t *testing.T) {
+	db := setupRichTestDB(t)
+	defer db.Close()
+	store := NewPacketStore(db, nil)
+	if err := store.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatal("indexes never ready after parallel start (#1008 m7)")
+	}
+	if !store.SubpathIndexReady() {
+		t.Error("subpath flag not set after WaitIndexesReady returned true")
+	}
+	if !store.PathHopIndexReady() {
+		t.Error("pathHop flag not set after WaitIndexesReady returned true")
+	}
+}

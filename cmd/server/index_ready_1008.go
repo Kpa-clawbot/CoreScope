@@ -17,14 +17,16 @@
 //   - The builder itself acquires s.mu.Lock() and calls the existing
 //     buildSubpathIndex() / buildPathHopIndex() methods. Those methods
 //     replace s.spIndex / s.spTxIndex / s.byPathHop with freshly-
-//     allocated maps under the write lock, so handlers that respect the
-//     ready gate never observe a partial map: they either see "not
-//     ready" (and skip the read) or "ready" (and the maps are fully
-//     populated, the lock release on the build completion happens-
-//     before the atomic store of true, per Go memory model — see Go
-//     spec "channels and other synchronization primitives": an atomic
-//     store after an unlock is observed by readers that acquire the
-//     atomic and then the read lock).
+//     allocated maps under the write lock. Visibility of the populated
+//     maps to handlers that see Ready()==true is guaranteed by Go's
+//     sync/atomic acquire-release semantics (formalized in Go 1.19):
+//     the atomic.Store(true) happens-after the s.mu.Unlock() that
+//     completes the build, and the handler's atomic.Load()==true
+//     synchronizes-with that store. The handler's subsequent s.mu.RLock
+//     is not what establishes visibility — it only serializes against
+//     concurrent ingest writers — so dropping the RLock would still be
+//     safe for the build's "populated map" snapshot (we keep it for
+//     ingest serialization).
 //
 //   - Ingest-side incremental updates in StoreNewTransmissions /
 //     pruning / hash-collision paths continue to write s.spIndex /
@@ -73,7 +75,6 @@ package main
 import (
 	"log"
 	"net/http"
-	"sync/atomic"
 	"time"
 )
 
@@ -88,62 +89,109 @@ func writeIndexLoading503(w http.ResponseWriter) {
 	_, _ = w.Write([]byte(`{"error":"index loading","retryAfter":5}`))
 }
 
-// subpathReady and pathHopReady gate handler reads of the corresponding
-// indexes. Stored as a struct field via the *PacketStore methods below;
-// since Go doesn't allow adding fields from a separate file without
-// touching the struct, we use package-level sync.Map keyed by the store
-// pointer? No — we add real fields on PacketStore in store.go. These
-// helpers operate on those fields.
-
-// SubpathIndexReady reports whether the background subpath index build
-// kicked off by Load() has completed (#1008). Until this returns true,
-// callers must NOT read s.spIndex / s.spTxIndex.
+// SubpathIndexReady reports whether the subpath index build kicked off
+// by Load() has completed (#1008). Until this returns true, callers
+// must NOT read s.spIndex / s.spTxIndex.
 func (s *PacketStore) SubpathIndexReady() bool {
 	return s.subpathReady.Load()
 }
 
-// PathHopIndexReady reports whether the background path-hop index build
-// kicked off by Load() has completed (#1008). Until this returns true,
+// PathHopIndexReady reports whether the path-hop index build kicked
+// off by Load() has completed (#1008). Until this returns true,
 // callers must NOT read s.byPathHop.
 func (s *PacketStore) PathHopIndexReady() bool {
 	return s.pathHopReady.Load()
 }
 
+// indexReadyCh returns the channel that is closed when BOTH indexes
+// have flipped ready. Lazily created on first access. Safe to call
+// concurrently. Used by WaitIndexesReady and any future waiters that
+// want event-driven semantics instead of polling.
+func (s *PacketStore) indexReadyCh() <-chan struct{} {
+	s.indexReadyChMu.Lock()
+	defer s.indexReadyChMu.Unlock()
+	if s.indexReadyChan == nil {
+		s.indexReadyChan = make(chan struct{})
+		// If both are already ready (e.g. background chunk loader
+		// flipped them synchronously before any waiter showed up),
+		// close immediately so the channel is usable as a one-shot.
+		if s.subpathReady.Load() && s.pathHopReady.Load() {
+			close(s.indexReadyChan)
+		}
+	}
+	return s.indexReadyChan
+}
+
+// maybeCloseIndexReadyCh closes the ready channel iff both flags are
+// set. Idempotent (a sync.Once on the channel) and safe to call from
+// either builder goroutine on the green-path transitions, as well as
+// from markIndexesReadySync.
+func (s *PacketStore) maybeCloseIndexReadyCh() {
+	if !(s.subpathReady.Load() && s.pathHopReady.Load()) {
+		return
+	}
+	s.indexReadyChMu.Lock()
+	defer s.indexReadyChMu.Unlock()
+	if s.indexReadyChan == nil {
+		// Lazily allocate AND close it in one step so any future
+		// indexReadyCh() caller gets a pre-closed channel.
+		s.indexReadyChan = make(chan struct{})
+		close(s.indexReadyChan)
+		return
+	}
+	select {
+	case <-s.indexReadyChan:
+		// Already closed.
+	default:
+		close(s.indexReadyChan)
+	}
+}
+
 // startBackgroundIndexBuilds is called from Load() after s.loaded=true
 // to populate the subpath + path-hop indexes off the critical path
-// (#1008). It returns immediately; the work runs in a background
-// goroutine that acquires s.mu.Lock() to install the maps and then
-// sets the atomic ready flags.
+// (#1008). It returns immediately; the work runs in two background
+// goroutines (one per index — see review m7) that each acquire
+// s.mu.Lock() independently, install their map, then set the
+// corresponding atomic ready flag.
 //
 // At Cascadia scale (~5M observations) this previously blocked HTTP
-// readiness ~60s inside Load() under s.mu.
+// readiness ~60s inside Load() under s.mu. Running the two builds in
+// parallel halves the pathHop-not-ready window since the two builders
+// are independent of each other.
 func (s *PacketStore) startBackgroundIndexBuilds() {
 	go func() {
 		t0 := time.Now()
 		s.mu.Lock()
 		s.buildSubpathIndex()
 		s.mu.Unlock()
+		// Atomic.Store happens-after s.mu.Unlock; handlers that
+		// observe Ready()==true synchronize-with this store.
 		s.subpathReady.Store(true)
-		subElapsed := time.Since(t0)
-
+		s.maybeCloseIndexReadyCh()
+		log.Printf("[startup] index build complete: subpath (%s)",
+			time.Since(t0).Round(time.Millisecond))
+	}()
+	go func() {
 		t1 := time.Now()
 		s.mu.Lock()
 		s.buildPathHopIndex()
 		s.mu.Unlock()
 		s.pathHopReady.Store(true)
-		phElapsed := time.Since(t1)
-
-		log.Printf("[startup] index build complete: subpath (%s), pathHop (%s)",
-			subElapsed.Round(time.Millisecond), phElapsed.Round(time.Millisecond))
+		s.maybeCloseIndexReadyCh()
+		log.Printf("[startup] index build complete: pathHop (%s)",
+			time.Since(t1).Round(time.Millisecond))
 	}()
 }
 
-// markIndexesReadySync is a helper for code paths (e.g. background
-// chunk loader, tests) that build the indexes synchronously and want to
-// flip the ready flags in one shot.
+// markIndexesReadySync is the synchronous-build entry point used by
+// the background chunk loader in store.go (and by tests). The chunk
+// loader rebuilds both indexes under s.mu.Lock(); after the Unlock it
+// calls this to flip the ready flags and close the broadcast channel
+// in one shot, preserving symmetry with the goroutine path above.
 func (s *PacketStore) markIndexesReadySync() {
 	s.subpathReady.Store(true)
 	s.pathHopReady.Store(true)
+	s.maybeCloseIndexReadyCh()
 }
 
 // WaitIndexesReady blocks until both background indexes built by
@@ -152,17 +200,19 @@ func (s *PacketStore) markIndexesReadySync() {
 // s.spIndex / s.spTxIndex / s.byPathHop directly after Load(); production
 // code paths gate via SubpathIndexReady() / PathHopIndexReady() and
 // respond 503 + Retry-After to clients instead of blocking.
+//
+// Uses the indexReadyCh broadcast channel rather than polling
+// (see review m6) so wake-up is immediate with no poll-interval jitter.
 func (s *PacketStore) WaitIndexesReady(timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if s.SubpathIndexReady() && s.PathHopIndexReady() {
-			return true
-		}
-		time.Sleep(2 * time.Millisecond)
+	if s.SubpathIndexReady() && s.PathHopIndexReady() {
+		return true
 	}
-	return s.SubpathIndexReady() && s.PathHopIndexReady()
+	ch := s.indexReadyCh()
+	select {
+	case <-ch:
+		return true
+	case <-time.After(timeout):
+		return s.SubpathIndexReady() && s.PathHopIndexReady()
+	}
 }
 
-// Compile-time guarantee that sync/atomic is wired correctly for the
-// ready flags on PacketStore.
-var _ atomic.Bool

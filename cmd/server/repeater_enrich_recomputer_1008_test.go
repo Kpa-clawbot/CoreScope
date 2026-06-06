@@ -30,9 +30,17 @@ func TestIssue1008_M1_PrewarmWaitsForIndexes(t *testing.T) {
 		t.Fatal("background builds never finished")
 	}
 	// Force the ready flags back to false to simulate the race where
-	// the recomputer is started before background builds finish.
+	// the recomputer is started before background builds finish. Also
+	// reset the broadcast channel — it was closed when the background
+	// builder flipped both flags true; if we left it closed,
+	// WaitIndexesReady would return immediately on the channel select
+	// (correct for production semantics where flags never reset,
+	// wrong for this synthetic test).
 	store.subpathReady.Store(false)
 	store.pathHopReady.Store(false)
+	store.indexReadyChMu.Lock()
+	store.indexReadyChan = nil
+	store.indexReadyChMu.Unlock()
 
 	// Use a tiny wait so the test runs fast. With the fix in place the
 	// prewarm should time out waiting for ready and SKIP, leaving the

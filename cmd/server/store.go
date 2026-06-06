@@ -254,6 +254,12 @@ type PacketStore struct {
 	// PathHopIndexReady(); while false, they respond 503 + Retry-After.
 	subpathReady atomic.Bool
 	pathHopReady atomic.Bool
+	// indexReadyChan is closed exactly once when BOTH subpathReady
+	// and pathHopReady are true (#1008 review m6). Replaces the
+	// previous 2ms poll in WaitIndexesReady. Lazily allocated by
+	// indexReadyCh / maybeCloseIndexReadyCh in index_ready_1008.go.
+	indexReadyChMu sync.Mutex
+	indexReadyChan chan struct{}
 	// Precomputed distance analytics: hop distances and path totals.
 	// Built LAZILY on first /api/analytics/distance request (#1011) —
 	// previously eager in Load() at startup, which was O(n²) work for
@@ -1300,6 +1306,13 @@ func (s *PacketStore) loadBackgroundChunks() {
 	s.distLazyOnce = sync.Once{}
 	s.distLazyMu.Unlock()
 	s.mu.Unlock()
+	// #1008 review m3: flip the ready flags after the synchronous
+	// rebuild for symmetry with startBackgroundIndexBuilds. Safe
+	// today because the chunk loader runs after Load() has already
+	// kicked the goroutines that set these to true; this is a
+	// belt-and-suspenders against a future reorder where the chunk
+	// loader could be the first writer.
+	s.markIndexesReadySync()
 
 	s.backgroundLoadDone.Store(true)
 	if chunkErrors > 0 {
