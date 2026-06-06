@@ -1393,6 +1393,16 @@
     });
 
     const dupMap = buildDupNameMap(_allNodes);
+    // #1616 followup: capture the focused row's data-key BEFORE we replace
+    // the tbody — async events (`theme-refresh`, ws node updates, etc.)
+    // can fire renderRows() while the user is keyboard-navigating. Without
+    // restoration, focus drops to <body> on every re-render and the
+    // slide-over close-path focus-restore loses the race.
+    const tbodyHadFocus = tbody.contains(document.activeElement);
+    const focusedKey = tbodyHadFocus
+      ? (document.activeElement.closest('tr[data-key]') || {}).getAttribute &&
+        document.activeElement.closest('tr[data-key]').getAttribute('data-key')
+      : null;
     tbody.innerHTML = sorted.map(n => {
       const roleColor = ROLE_COLORS[n.role] || '#6b7280';
       const isClaimed = myKeys.has(n.public_key);
@@ -1417,6 +1427,17 @@
     if (window.TableResponsive) {
       var _ndTbl = document.getElementById('nodesTable');
       if (_ndTbl) window.TableResponsive.register(_ndTbl);
+    }
+    // #1616 followup: re-land focus on the replacement <tr> with the
+    // same data-key, if the prior tbody had focus. Without this, an
+    // async re-render (theme-refresh, ws node update) blurs the row
+    // the user just keyboard-navigated to.
+    if (focusedKey) {
+      try {
+        const sel = (window.CSS && CSS.escape) ? CSS.escape(focusedKey) : focusedKey;
+        const fresh = tbody.querySelector('tr[data-key="' + sel + '"]');
+        if (fresh) fresh.focus({ preventScroll: true });
+      } catch (_) {}
     }
   }
 

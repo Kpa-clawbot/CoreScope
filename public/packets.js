@@ -469,10 +469,10 @@
     // about non-deterministically. If activeElement is inside the panel
     // when the panel detaches, focus drops to <body>; landing focus on
     // the row first means the detach is a no-op for the active element.
-    let focusedTarget = null;
+    // The deferred microtask + rAF + observer chain below handles the
+    // case where cb() queued an async re-render that detaches this row.
     if (toFocus && typeof toFocus.focus === 'function' && document.body.contains(toFocus)) {
       try { toFocus.focus({ preventScroll: true }); } catch (_) {}
-      if (document.activeElement === toFocus) focusedTarget = toFocus;
     }
 
     // DETACH panel + backdrop. After this point, there is no "panel
@@ -487,56 +487,92 @@
     if (panel.parentNode) panel.parentNode.removeChild(panel);
     if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop);
 
-    // If sync focus landed: done. No deferred work, no race.
-    if (focusedTarget && document.activeElement === focusedTarget) return;
+    // If sync focus landed: schedule a microtask re-check. The
+    // caller's cb() may have queued an ASYNC re-render (microtask
+    // or rAF) that detaches the row AFTER our sync focus() — in that
+    // case activeElement falls to <body> AFTER this function returns,
+    // and we need a second-pass focus restore. queueMicrotask() runs
+    // AFTER any Promise.resolve().then(...) the caller queued from
+    // inside cb() (FIFO microtask queue), so re-resolving here picks
+    // up the NEW row instance.
+    if (!resolver) {
+      // No resolver = no second-pass capability; best-effort done.
+      return;
+    }
 
-    // Fallback: the caller's cb() re-rendered the table, OR the row
-    // hasn't been re-attached yet (e.g. resize-triggered close runs
-    // before the wide-viewport table re-render). Attach a one-shot
-    // MutationObserver to the originating tbody (or document.body if we
-    // don't know) and land focus the moment the matching row appears.
-    if (!resolver) return; // nothing to look up — best-effort done.
-
-    // Heuristic: most resolvers query `table tbody tr[data-...]`. Try
-    // to find a likely root by querying once now; if the resolver
-    // returns an element, watch its closest tbody. Otherwise watch
-    // document.body (broader but still bounded by the 2s timeout).
-    let watchRoot = document.body;
-    try {
-      const probe = resolver();
-      if (probe && probe.closest) {
-        const tbody = probe.closest('tbody') || probe.closest('table') || document.body;
-        watchRoot = tbody;
-      }
-    } catch (_) {}
-
-    const obs = new MutationObserver(function () {
+    // Always run the deferred re-check pass, even if sync focus
+    // appeared to land — it may be on a soon-to-be-detached orphan.
+    function deferredRecheck() {
       // Stale guard — newer open() bumped openSeq; bail.
-      if (openSeq !== seqAtClose) {
+      if (openSeq !== seqAtClose) return;
+      // If focus already landed on something non-body that matches
+      // the resolver, we're done.
+      let fresh = null;
+      try { fresh = resolver(); } catch (_) {}
+      if (fresh && document.body.contains(fresh)) {
+        if (document.activeElement === fresh) return;
+        try { fresh.focus({ preventScroll: true }); } catch (_) {}
+        if (document.activeElement === fresh) return;
+      }
+      // Still not landed. Attach a one-shot MutationObserver rooted
+      // at document.body — broader than the prior tbody-rooted
+      // observer (which fails when the tbody itself is innerHTML-
+      // swapped), still bounded by a short timeout below.
+      attachBodyObserver();
+    }
+
+    function attachBodyObserver() {
+      const obs = new MutationObserver(function () {
+        if (openSeq !== seqAtClose) {
+          obs.disconnect();
+          const idx = pendingFocusObservers.indexOf(obs);
+          if (idx >= 0) pendingFocusObservers.splice(idx, 1);
+          return;
+        }
+        let target = null;
+        try { target = resolver(); } catch (_) {}
+        if (!target || !document.body.contains(target)) return;
+        try { target.focus({ preventScroll: true }); } catch (_) {}
+        if (document.activeElement === target) {
+          obs.disconnect();
+          const idx = pendingFocusObservers.indexOf(obs);
+          if (idx >= 0) pendingFocusObservers.splice(idx, 1);
+        }
+      });
+      // #1616 followup: root = document.body. The prior 'smart' tbody
+      // root logic broke when cb() replaced the entire tbody via
+      // innerHTML — the observer was watching a node that no longer
+      // received the mutation we cared about. document.body is broader
+      // but correctly catches the re-attachment in all known callsites
+      // (nodes/packets/observers all swap rows under tbody under body).
+      obs.observe(document.body, { childList: true, subtree: true });
+      pendingFocusObservers.push(obs);
+      // Tight timeout — 200ms is enough for any sync or microtask/rAF
+      // re-render to commit. Longer (e.g. the prior 2s) creates new
+      // races where the observer fires AFTER a subsequent open() and
+      // steals focus from row B back to row A.
+      setTimeout(function () {
         obs.disconnect();
         const idx = pendingFocusObservers.indexOf(obs);
         if (idx >= 0) pendingFocusObservers.splice(idx, 1);
-        return;
+      }, 200);
+    }
+
+    // Step 1: microtask — runs AFTER cb's Promise.resolve().then(...)
+    // re-renders, BEFORE next animation frame. Catches the common
+    // async-render path.
+    queueMicrotask(function () {
+      if (openSeq !== seqAtClose) return;
+      let fresh = null;
+      try { fresh = resolver(); } catch (_) {}
+      if (fresh && document.body.contains(fresh)
+          && document.activeElement !== fresh) {
+        try { fresh.focus({ preventScroll: true }); } catch (_) {}
       }
-      let target = null;
-      try { target = resolver(); } catch (_) {}
-      if (!target || !document.body.contains(target)) return;
-      try { target.focus({ preventScroll: true }); } catch (_) {}
-      if (document.activeElement === target) {
-        obs.disconnect();
-        const idx = pendingFocusObservers.indexOf(obs);
-        if (idx >= 0) pendingFocusObservers.splice(idx, 1);
-      }
+      // Step 2: rAF — runs after layout commits. Catches re-renders
+      // that wait on rAF or that resolve only after style/layout work.
+      requestAnimationFrame(deferredRecheck);
     });
-    obs.observe(watchRoot, { childList: true, subtree: true });
-    pendingFocusObservers.push(obs);
-    // Timeout fallback — never leak the observer if the row is gone for
-    // good (e.g. the underlying record was deleted).
-    setTimeout(function () {
-      obs.disconnect();
-      const idx = pendingFocusObservers.indexOf(obs);
-      if (idx >= 0) pendingFocusObservers.splice(idx, 1);
-    }, 2000);
   }
 
   // If the viewport grows past the breakpoint while open, close the slide-over
