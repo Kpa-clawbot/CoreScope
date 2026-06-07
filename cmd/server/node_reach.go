@@ -122,7 +122,7 @@ func uniqueResolve(pm *prefixMap, token string) string {
 	return ""
 }
 
-type QualityNode struct {
+type NodeReachInfo struct {
 	Pubkey    string   `json:"pubkey"`
 	Name      string   `json:"name"`
 	Role      string   `json:"role"`
@@ -130,11 +130,11 @@ type QualityNode struct {
 	Lon       *float64 `json:"lon"`
 	FirstSeen string   `json:"first_seen"`
 }
-type QualityWindow struct {
+type NodeReachWindow struct {
 	Days  int    `json:"days"`
 	Since string `json:"since"`
 }
-type QualityImportance struct {
+type NodeReachImportance struct {
 	NeighborDegree     int `json:"neighbor_degree"`
 	DegreeRank         int `json:"degree_rank"`
 	NodesWithEdges     int `json:"nodes_with_edges"`
@@ -142,7 +142,7 @@ type QualityImportance struct {
 	BidirectionalLinks int `json:"bidirectional_links"`
 	DirectObservers    int `json:"direct_observers"`
 }
-type QualityObserver struct {
+type NodeReachObserver struct {
 	Pubkey     string   `json:"pubkey"`
 	Name       string   `json:"name"`
 	Count      int      `json:"count"`
@@ -151,7 +151,7 @@ type QualityObserver struct {
 	Lon        *float64 `json:"lon"`
 	DistanceKm *float64 `json:"distance_km"`
 }
-type QualityLink struct {
+type NodeReachLink struct {
 	Pubkey     string   `json:"pubkey"`
 	Name       string   `json:"name"`
 	Role       string   `json:"role"`
@@ -163,13 +163,13 @@ type QualityLink struct {
 	Bidir      bool     `json:"bidir"`
 	DistanceKm *float64 `json:"distance_km"`
 }
-type NodeQualityResponse struct {
-	Node            QualityNode       `json:"node"`
-	Window          QualityWindow     `json:"window"`
-	ReliableTokens  []string          `json:"reliable_tokens"`
-	Importance      QualityImportance `json:"importance"`
-	DirectObservers []QualityObserver `json:"direct_observers"`
-	Links           []QualityLink     `json:"links"`
+type NodeReachResponse struct {
+	Node            NodeReachInfo       `json:"node"`
+	Window          NodeReachWindow     `json:"window"`
+	ReliableTokens  []string            `json:"reliable_tokens"`
+	Importance      NodeReachImportance `json:"importance"`
+	DirectObservers []NodeReachObserver `json:"direct_observers"`
+	Links           []NodeReachLink     `json:"links"`
 }
 
 func fptr(v float64) *float64 { return &v }
@@ -203,40 +203,40 @@ func clampDays(d int) int {
 // --- bounded TTL cache (perf is gated by the time window; this just avoids
 // recompute under dashboard polling). Keyed "pubkey|days". ---
 const (
-	qualityCacheTTL = 5 * time.Minute
-	qualityCacheMax = 256
+	reachCacheTTL = 5 * time.Minute
+	reachCacheMax = 256
 )
 
-type qualityCacheEntry struct {
+type reachCacheEntry struct {
 	at  time.Time
 	raw []byte
 }
 
 var (
-	qualityCacheMu sync.Mutex
-	qualityCache   = map[string]qualityCacheEntry{}
+	reachCacheMu sync.Mutex
+	reachCache   = map[string]reachCacheEntry{}
 )
 
-func qualityCacheGet(key string) ([]byte, bool) {
-	qualityCacheMu.Lock()
-	defer qualityCacheMu.Unlock()
-	e, ok := qualityCache[key]
-	if !ok || time.Since(e.at) > qualityCacheTTL {
+func reachCacheGet(key string) ([]byte, bool) {
+	reachCacheMu.Lock()
+	defer reachCacheMu.Unlock()
+	e, ok := reachCache[key]
+	if !ok || time.Since(e.at) > reachCacheTTL {
 		return nil, false
 	}
 	return e.raw, true
 }
 
-func qualityCachePut(key string, raw []byte) {
-	qualityCacheMu.Lock()
-	defer qualityCacheMu.Unlock()
-	if len(qualityCache) >= qualityCacheMax {
-		qualityCache = map[string]qualityCacheEntry{} // crude bounded reset
+func reachCachePut(key string, raw []byte) {
+	reachCacheMu.Lock()
+	defer reachCacheMu.Unlock()
+	if len(reachCache) >= reachCacheMax {
+		reachCache = map[string]reachCacheEntry{} // crude bounded reset
 	}
-	qualityCache[key] = qualityCacheEntry{at: time.Now(), raw: raw}
+	reachCache[key] = reachCacheEntry{at: time.Now(), raw: raw}
 }
 
-func (s *Server) handleNodeQuality(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleNodeReach(w http.ResponseWriter, r *http.Request) {
 	pubkey := strings.ToLower(mux.Vars(r)["pubkey"])
 	if s.cfg != nil && s.cfg.IsBlacklisted(pubkey) {
 		writeError(w, 404, "Not found")
@@ -251,32 +251,32 @@ func (s *Server) handleNodeQuality(w http.ResponseWriter, r *http.Request) {
 	days = clampDays(days)
 
 	cacheKey := pubkey + "|" + strconv.Itoa(days)
-	if raw, ok := qualityCacheGet(cacheKey); ok {
+	if raw, ok := reachCacheGet(cacheKey); ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(raw)
 		return
 	}
 
-	resp, ok := s.computeNodeQuality(pubkey, days)
+	resp, ok := s.computeNodeReach(pubkey, days)
 	if !ok {
 		writeError(w, 404, "Not found")
 		return
 	}
 	raw, _ := json.Marshal(resp)
-	qualityCachePut(cacheKey, raw)
+	reachCachePut(cacheKey, raw)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(raw)
 }
 
-// computeNodeQuality does the read-only scan + assembly. ok=false → 404.
-func (s *Server) computeNodeQuality(pubkey string, days int) (NodeQualityResponse, bool) {
+// computeNodeReach does the read-only scan + assembly. ok=false → 404.
+func (s *Server) computeNodeReach(pubkey string, days int) (NodeReachResponse, bool) {
 	if s.store == nil || s.db == nil || s.db.conn == nil {
-		return NodeQualityResponse{}, false
+		return NodeReachResponse{}, false
 	}
 	nodeMap := s.buildNodeInfoMap()
 	self, found := nodeMap[pubkey]
 	if !found {
-		return NodeQualityResponse{}, false
+		return NodeReachResponse{}, false
 	}
 	_, pm := s.store.getCachedNodesAndPM()
 	tokens := reliableTokens(pubkey, pm)
@@ -286,7 +286,7 @@ func (s *Server) computeNodeQuality(pubkey string, days int) (NodeQualityRespons
 
 	var d dirCounts
 	if len(tokens) > 0 {
-		rows := s.scanQualityRows(tokens, sinceEpoch)
+		rows := s.scanReachRows(tokens, sinceEpoch)
 		d = attributeDirections(rows, tokens, pubkey, func(tok string) string {
 			return uniqueResolve(pm, tok)
 		})
@@ -310,7 +310,7 @@ func (s *Server) computeNodeQuality(pubkey string, days int) (NodeQualityRespons
 	s.db.conn.QueryRow(`SELECT first_seen FROM nodes WHERE LOWER(public_key)=?`, pubkey).Scan(&firstSeen)
 
 	// assemble links
-	links := []QualityLink{}
+	links := []NodeReachLink{}
 	bidir := 0
 	seen := map[string]bool{}
 	for pk := range d.we {
@@ -331,7 +331,7 @@ func (s *Server) computeNodeQuality(pubkey string, days int) (NodeQualityRespons
 		if b {
 			bidir++
 		}
-		links = append(links, QualityLink{
+		links = append(links, NodeReachLink{
 			Pubkey: pk, Name: info.Name, Role: info.Role, Lat: lat, Lon: lon,
 			WeHear: we, TheyHear: they, Bottleneck: minInt(we, they), Bidir: b, DistanceKm: dist,
 		})
@@ -347,7 +347,7 @@ func (s *Server) computeNodeQuality(pubkey string, days int) (NodeQualityRespons
 	})
 
 	// direct observers
-	directObs := []QualityObserver{}
+	directObs := []NodeReachObserver{}
 	for pk, a := range d.obs {
 		info := nodeMap[pk]
 		lat, lon := gpsPtrs(info, true)
@@ -358,7 +358,7 @@ func (s *Server) computeNodeQuality(pubkey string, days int) (NodeQualityRespons
 		if self.HasGPS && info.HasGPS {
 			dist = fptr(haversineKm(self.Lat, self.Lon, info.Lat, info.Lon))
 		}
-		directObs = append(directObs, QualityObserver{
+		directObs = append(directObs, NodeReachObserver{
 			Pubkey: pk, Name: info.Name, Count: a.count, AvgSNR: avg, Lat: lat, Lon: lon, DistanceKm: dist,
 		})
 	}
@@ -371,12 +371,12 @@ func (s *Server) computeNodeQuality(pubkey string, days int) (NodeQualityRespons
 	sort.Strings(toks)
 
 	selfLat, selfLon := gpsPtrs(self, true)
-	return NodeQualityResponse{
-		Node: QualityNode{Pubkey: pubkey, Name: self.Name, Role: self.Role,
+	return NodeReachResponse{
+		Node: NodeReachInfo{Pubkey: pubkey, Name: self.Name, Role: self.Role,
 			Lat: selfLat, Lon: selfLon, FirstSeen: firstSeen.String},
-		Window:         QualityWindow{Days: days, Since: since.Format(time.RFC3339)},
+		Window:         NodeReachWindow{Days: days, Since: since.Format(time.RFC3339)},
 		ReliableTokens: toks,
-		Importance: QualityImportance{
+		Importance: NodeReachImportance{
 			NeighborDegree: degree, DegreeRank: rank, NodesWithEdges: nodesWithEdges,
 			RelayObservations: d.relay, BidirectionalLinks: bidir, DirectObservers: len(directObs),
 		},
@@ -385,9 +385,9 @@ func (s *Server) computeNodeQuality(pubkey string, days int) (NodeQualityRespons
 	}, true
 }
 
-// scanQualityRows reads windowed observations whose path contains any reliable
+// scanReachRows reads windowed observations whose path contains any reliable
 // token, with the originator + observer + snr needed for attribution.
-func (s *Server) scanQualityRows(tokens map[string]bool, sinceEpoch int64) []pathRow {
+func (s *Server) scanReachRows(tokens map[string]bool, sinceEpoch int64) []pathRow {
 	likes := make([]string, 0, len(tokens))
 	args := []interface{}{sinceEpoch}
 	for tok := range tokens {

@@ -8,9 +8,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// benchQualityDB builds an in-memory DB with nObs observations whose path
-// contains the "01FA" token, for benchmarking scanQualityRows.
-func benchQualityDB(b *testing.B, nObs int) *DB {
+// benchReachDB builds an in-memory DB with nObs observations whose path
+// contains the "01FA" token, for benchmarking scanReachRows.
+func benchReachDB(b *testing.B, nObs int) *DB {
 	b.Helper()
 	conn, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -41,13 +41,13 @@ func benchQualityDB(b *testing.B, nObs int) *DB {
 	return &DB{conn: conn}
 }
 
-func BenchmarkNodeQualityScan(b *testing.B) {
-	db := benchQualityDB(b, 5000)
+func BenchmarkNodeReachScan(b *testing.B) {
+	db := benchReachDB(b, 5000)
 	srv := &Server{db: db}
 	tokens := map[string]bool{"01FA": true}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rows := srv.scanQualityRows(tokens, 0)
+		rows := srv.scanReachRows(tokens, 0)
 		if len(rows) == 0 {
 			b.Fatal("expected rows")
 		}

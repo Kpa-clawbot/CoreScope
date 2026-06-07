@@ -242,8 +242,15 @@ building the UI (contract is authoritative; AGENTS rule 4).
 
 ## 10. Revisions (post-review, 2026-06-07)
 
-After the first staging deploy, review feedback reshaped the frontend (backend
-endpoint unchanged):
+> **Feature renamed Quality → Reach.** "Quality" didn't capture the page (it's
+> about a node's two-way RF *reach*). Endpoint `/api/nodes/:pubkey/quality` →
+> `/reach`; files `node_quality.go` → `node_reach.go`, `node-quality*.{js,css}` →
+> `node-reach*`; route `#/nodes/<pk>/quality` → `/reach`; Go types `Quality*` →
+> `NodeReach*` (the bare `Reach*` namespace was already taken by the topology
+> per-observer-reach feature). Earlier mentions of "quality" in this doc reflect
+> the original name.
+
+After the first staging deploy, review feedback reshaped the frontend:
 
 - **Standalone page, not a buried section.** Registered as page `node-quality`
   (route `#/nodes/<pubkey>/quality`), mirroring `node-analytics.js`, with a
