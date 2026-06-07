@@ -318,6 +318,8 @@
     "backfillHours": 24,
     "_comment": "How far back (hours) the async backfill scans for observations with NULL resolved_path. Default: 24. Set higher to backfill older data, lower to speed up startup."
   },
+  "ingestBufferSize": 50000,
+  "_comment_ingestBufferSize": "Number of MQTT messages held in memory while the single SQLite writer is blocked by a startup migration/prune (#1608). Drained once the write path is ready; bounded memory (small closure per item). 0 = default 50000.",
   "neighborGraph": {
     "maxAgeDays": 5,
     "maxEdgeKm": 500,
