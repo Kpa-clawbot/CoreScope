@@ -2105,6 +2105,9 @@
     // Initialize DragManager for free-form panel dragging (#608 M1)
     if (window.DragManager) {
       var dragMgr = new DragManager();
+      // #1619: expose so the feed-detail-card popup (constructed in a
+      // different scope) can register itself as draggable.
+      window._liveDragMgr = dragMgr;
       var dragPanels = ['liveFeed', 'liveLegend', 'liveNodeDetail'];
       for (var di = 0; di < dragPanels.length; di++) {
         dragMgr.register(document.getElementById(dragPanels[di]));
@@ -4271,7 +4274,7 @@
     const card = document.createElement('div');
     card.className = 'feed-detail-card';
     card.innerHTML = `
-      <div class="fdc-header" style="border-left:3px solid ${color}">
+      <div class="panel-header" style="border-left:3px solid ${color}">
         <strong>${typeName}</strong>
         ${sender ? `<span class="fdc-sender">${escapeHtml(sender)}</span>` : ''}
         <button class="fdc-close">✕</button>
@@ -4301,6 +4304,12 @@
     });
     const feedEl = document.getElementById('liveFeed');
     if (feedEl) feedEl.parentElement.appendChild(card);
+    // #1619: register the popup with the live DragManager so users can move
+    // it out from behind the legend (responsive gate is handled inside the
+    // manager via its `enabled` flag — no extra wiring required here).
+    if (window._liveDragMgr) {
+      try { window._liveDragMgr.register(card); } catch (_) { /* ignore */ }
+    }
   }
 
   function destroy() {

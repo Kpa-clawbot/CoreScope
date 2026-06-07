@@ -786,7 +786,9 @@ body.live-fullscreen #liveFullscreenToggle:hover,
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px;
-  z-index: 600;
+  /* #1619: was 600 — sat behind legend (z=1000); 1050 keeps it below
+     mobile bottom-nav (z=1100) while clearing all live overlays. */
+  z-index: 1050;
   box-shadow: 0 8px 24px rgba(0,0,0,0.5);
   animation: fadeSlideIn 0.15s ease-out;
   font-size: .8rem;
@@ -794,14 +796,16 @@ body.live-fullscreen #liveFullscreenToggle:hover,
 }
 @keyframes fadeSlideIn { from { opacity:0; transform: translateY(-50%) translateX(8px); } to { opacity:1; transform: translateY(-50%) translateX(0); } }
 
-.fdc-header {
+.fdc-header,
+.feed-detail-card .panel-header {
   display: flex;
   align-items: center;
   gap: 8px;
   padding-left: 8px;
   margin-bottom: 8px;
 }
-.fdc-header strong { font-size: .85rem; color: var(--text); }
+.fdc-header strong,
+.feed-detail-card .panel-header strong { font-size: .85rem; color: var(--text); }
 .fdc-sender { color: var(--text-muted); font-size: .75rem; }
 .fdc-close {
   margin-left: auto;
