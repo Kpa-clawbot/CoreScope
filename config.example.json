@@ -14,7 +14,11 @@
   "db": {
     "vacuumOnStartup": false,
     "incrementalVacuumPages": 1024,
-    "_comment": "vacuumOnStartup: run one-time full VACUUM to enable incremental auto-vacuum on existing DBs. Executed by the INGESTOR at startup, BEFORE the MQTT subscriber starts (#1283), so there is no contention with concurrent writes. Blocks ingestor startup for minutes on large DBs; requires 2x DB file size in free disk space. incrementalVacuumPages: free pages returned to OS after each retention reaper cycle (default 1024). See #919.",
+    "load": {
+      "chunkSize": 10000,
+      "_comment": "chunkSize: rows fetched per chunk by PacketStore.LoadChunked during startup (#1009). Default 10000. Lower values surface the early-HTTP-readiness signal sooner (the listener binds after the first chunk) at the cost of more SQL round-trips. Higher values reduce per-chunk overhead but delay first-chunk readiness. The X-CoreScope-Load-Status response header reports loading|ready and progress=<rows> until the load completes."
+    },
+    "_comment": "vacuumOnStartup: run one-time full VACUUM to enable incremental auto-vacuum on existing DBs. Executed by the INGESTOR at startup, BEFORE the MQTT subscriber starts (#1283), so there is no contention with concurrent writes. Blocks ingestor startup for minutes on large DBs; requires 2x DB file size in free disk space. incrementalVacuumPages: free pages returned to OS after each retention reaper cycle (default 1024). See #919. load.chunkSize: see nested _comment (#1009).",
     "_comment_slowWriterMs": "#1340 — SQLite writer-lock log threshold (default 500). Any wrapped writer call (tagged neighbor_builder, mqtt_handler, prune_packets, prune_observers, prune_metrics, vacuum) whose hold_ms exceeds this emits a single [db-slow-writer] log line. Configured per-process via the CORESCOPE_DB_SLOW_WRITER_MS environment variable on the INGESTOR (e.g. CORESCOPE_DB_SLOW_WRITER_MS=200 for tighter alerting). Per-component wait_ms / hold_ms / contention_total histograms are surfaced via /api/perf/write-sources under .writer_perf regardless of this threshold."
   },
   "listLimits": {
