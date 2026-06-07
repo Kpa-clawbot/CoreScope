@@ -228,9 +228,12 @@ building the UI (contract is authoritative; AGENTS rule 4).
 
 ---
 
-## 9. Open decisions
-1. **Map base**: reuse `map.js`'s Leaflet instance/helpers vs a small dedicated map
-   helper. Lean: extract a minimal reusable `renderLinkMap(container, node, links)`.
-2. **One-way links**: show in table behind a toggle (recommended) vs omit entirely.
-3. **Section vs standalone page**: `?section=quality` on node detail (recommended,
-   consistent) vs a dedicated `#/node-quality/<pubkey>` full-page report.
+## 9. Resolved decisions
+1. **Map base** — extract a minimal reusable `renderLinkMap(container, node, links)`
+   helper (Leaflet tile config/markers reused from `map.js`); do not duplicate the
+   whole map module nor force the full `map.js` instance.
+2. **One-way links** — shown in the table behind a toggle (default **off**), so the
+   default report is the bidirectional set but asymmetry stays diagnosable.
+3. **Placement** — `#/nodes/<pubkey>?section=quality` section on the existing node
+   detail page (consistent with `section=node-neighbors`); no separate full-page
+   route.
