@@ -908,9 +908,9 @@ function navigate() {
     basePage = 'node-analytics';
   }
 
-  // Special route: nodes/PUBKEY/quality → node-quality page
-  if (basePage === 'nodes' && routeParam && routeParam.endsWith('/quality')) {
-    basePage = 'node-quality';
+  // Special route: nodes/PUBKEY/reach → node-reach page
+  if (basePage === 'nodes' && routeParam && routeParam.endsWith('/reach')) {
+    basePage = 'node-reach';
   }
 
   // Special route: packet/123 → standalone packet detail page

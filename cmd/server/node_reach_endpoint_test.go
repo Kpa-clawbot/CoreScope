@@ -9,9 +9,9 @@ import (
 	"github.com/gorilla/mux"
 )
 
-func serveQuality(srv *Server, path string) *httptest.ResponseRecorder {
+func serveReach(srv *Server, path string) *httptest.ResponseRecorder {
 	router := mux.NewRouter()
-	router.HandleFunc("/api/nodes/{pubkey}/quality", srv.handleNodeQuality).Methods("GET")
+	router.HandleFunc("/api/nodes/{pubkey}/reach", srv.handleNodeReach).Methods("GET")
 	req := httptest.NewRequest("GET", path, nil)
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
@@ -27,15 +27,15 @@ func TestClampDays(t *testing.T) {
 	}
 }
 
-func TestNodeQuality_UnknownNode(t *testing.T) {
+func TestNodeReach_UnknownNode(t *testing.T) {
 	srv := makeTestServer(makeTestGraph()) // no store/db wired → 404
-	rr := serveQuality(srv, "/api/nodes/deadbeef/quality")
+	rr := serveReach(srv, "/api/nodes/deadbeef/reach")
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("status=%d want 404", rr.Code)
 	}
 }
 
-func TestNodeQuality_ShapeAndClamp(t *testing.T) {
+func TestNodeReach_ShapeAndClamp(t *testing.T) {
 	db := setupTestDBv2(t)
 	const pk = "01fa326b475800a31105abcb9e4cac000b3e5d9e2b5ba0739981ce8d5f3a6754"
 	mustExecDB(t, db, `INSERT INTO nodes (public_key, name, role, lat, lon, last_seen, first_seen, advert_count)
@@ -44,11 +44,11 @@ func TestNodeQuality_ShapeAndClamp(t *testing.T) {
 	cfg := &Config{}
 	srv := &Server{store: newTestStoreWithDB(t, db, cfg), db: db, cfg: cfg, perfStats: NewPerfStats()}
 
-	rr := serveQuality(srv, "/api/nodes/"+pk+"/quality?days=999")
+	rr := serveReach(srv, "/api/nodes/"+pk+"/reach?days=999")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200 (body=%s)", rr.Code, rr.Body.String())
 	}
-	var resp NodeQualityResponse
+	var resp NodeReachResponse
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("bad json: %v", err)
 	}

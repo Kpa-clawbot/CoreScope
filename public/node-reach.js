@@ -1,7 +1,7 @@
-/* === CoreScope — node-quality.js ===
-   Standalone per-node "Quality" page: importance stats + a map of the node's
-   bidirectional RF links + a quality table. Registered as page 'node-quality'
-   (route #/nodes/<pubkey>/quality), mirroring node-analytics.js. */
+/* === CoreScope — node-reach.js ===
+   Standalone per-node "Reach" page: importance stats + a map of the node's
+   bidirectional RF links + a link table. Registered as page 'node-reach'
+   (route #/nodes/<pubkey>/reach), mirroring node-analytics.js. */
 'use strict';
 (function () {
   var qmap = null;
@@ -40,8 +40,8 @@
   function headerHtml(n, nodeName, days) {
     return '<div class="nq-head" style="max-width:1000px;margin:0 auto;padding:12px 16px">' +
       '<a href="#/nodes/' + encodeURIComponent(n.pubkey) + '" style="color:var(--accent);text-decoration:none;font-size:12px">← Back to ' + nodeName + '</a>' +
-      '<h2 style="margin:4px 0 2px;font-size:18px">📈 ' + nodeName + ' — Quality</h2>' +
-      '<div style="color:var(--text-muted);font-size:11px">' + escapeHtml(n.role || 'Unknown role') + ' · two-way RF link quality</div>' +
+      '<h2 style="margin:4px 0 2px;font-size:18px">📡 ' + nodeName + ' — Reach</h2>' +
+      '<div style="color:var(--text-muted);font-size:11px">' + escapeHtml(n.role || 'Unknown role') + ' · two-way RF link reach</div>' +
       '<div class="analytics-time-range nq-noprint" id="nqDays" style="margin-top:8px">' +
       dayBtn(1, days, '24h') + dayBtn(7, days, '7d') + dayBtn(14, days, '14d') + dayBtn(30, days, '30d') +
       '</div></div>';
@@ -79,13 +79,13 @@
   async function load(container, pubkey, days) {
     current = { pubkey: pubkey, days: days };
     if (qmap) { try { qmap.remove(); } catch (e) {} qmap = null; }
-    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading quality…</div>';
+    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted)">Loading reach…</div>';
 
     var d;
     try {
-      d = await api('/nodes/' + encodeURIComponent(pubkey) + '/quality?days=' + days, { ttl: 30000 });
+      d = await api('/nodes/' + encodeURIComponent(pubkey) + '/reach?days=' + days, { ttl: 30000 });
     } catch (e) {
-      container.innerHTML = '<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load quality: ' + escapeHtml(e.message) + '</div>';
+      container.innerHTML = '<div style="padding:40px;text-align:center;color:#ff6b6b">Failed to load reach: ' + escapeHtml(e.message) + '</div>';
       return;
     }
     current.data = d;
@@ -125,6 +125,13 @@
       '<th>they hear us</th><th>bottleneck</th><th>km</th></tr></thead><tbody id="nqRows"></tbody></table>' +
       '</div>';
 
+    function renderMap(list) {
+      if (qmap) { try { qmap.remove(); } catch (e) {} qmap = null; }
+      if (window.NodeReachMap && n.lat != null) {
+        qmap = window.NodeReachMap.render('nqMap', n, list, colorVar);
+      }
+    }
+
     function paint(showOneWay) {
       var list = (showOneWay ? d.links.slice() : twoWay.slice()).sort(function (a, b) {
         return (b.bidir - a.bidir) || (b.bottleneck - a.bottleneck) ||
@@ -133,24 +140,22 @@
       document.getElementById('nqRows').innerHTML = list.map(function (l, i) { return linkRow(i + 1, l); }).join('');
       document.getElementById('nqCount').textContent =
         'showing ' + list.length + ' of ' + d.links.length + ' (' + twoWay.length + ' two-way)';
+      // Keep the map in sync with the table (one-way links appear when toggled on).
+      renderMap(list);
     }
     paint(false);
     document.getElementById('nqShowOneWay').addEventListener('change', function (e) { paint(e.target.checked); });
     document.getElementById('nqPrintBtn').addEventListener('click', printReport);
 
     wireTimeRange(container, pubkey);
-
-    if (window.NodeQualityMap && n.lat != null) {
-      qmap = window.NodeQualityMap.render('nqMap', n, twoWay, colorVar);
-    }
   }
 
   function init(container, routeParam) {
-    if (!routeParam || !routeParam.endsWith('/quality')) {
-      container.innerHTML = '<div style="padding:40px;text-align:center">Invalid quality URL</div>';
+    if (!routeParam || !routeParam.endsWith('/reach')) {
+      container.innerHTML = '<div style="padding:40px;text-align:center">Invalid reach URL</div>';
       return;
     }
-    load(container, routeParam.slice(0, -'/quality'.length), 7);
+    load(container, routeParam.slice(0, -'/reach'.length), 7);
   }
 
   function destroy() {
@@ -158,5 +163,5 @@
     current = null;
   }
 
-  registerPage('node-quality', { init: init, destroy: destroy });
+  registerPage('node-reach', { init: init, destroy: destroy });
 })();

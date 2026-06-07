@@ -23,7 +23,7 @@
 - [GET /api/nodes/:pubkey/health](#get-apinodespubkeyhealth)
 - [GET /api/nodes/:pubkey/paths](#get-apinodespubkeypaths)
 - [GET /api/nodes/:pubkey/analytics](#get-apinodespubkeyanalytics)
-- [GET /api/nodes/:pubkey/quality](#get-apinodespubkeyquality)
+- [GET /api/nodes/:pubkey/reach](#get-apinodespubkeyreach)
 - [GET /api/packets](#get-apipackets)
 - [GET /api/packets/timestamps](#get-apipacketstimestamps)
 - [GET /api/packets/:id](#get-apipacketsid)
@@ -673,9 +673,9 @@ Per-node analytics over a time range.
 
 ---
 
-## GET /api/nodes/:pubkey/quality
+## GET /api/nodes/:pubkey/reach
 
-Per-node RF link-quality report. Computes **directional** link counts from raw
+Per-node RF reach report (two-way link quality). Computes **directional** link counts from raw
 path adjacency (a flood path is recorded origin→observer, so in `[A,B]` B received
 A directly). A link is **bidirectional** when both directions have observations;
 the **bottleneck** (weaker direction) rates two-way stability. Read-only; bounded

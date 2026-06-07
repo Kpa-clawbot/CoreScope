@@ -1,4 +1,4 @@
-/* window.NodeQualityMap.render(containerId, node, links, colorFn) — focused
+/* window.NodeReachMap.render(containerId, node, links, colorFn) — focused
    Leaflet map of a node and its bidirectional links, coloured by bottleneck.
    Returns the Leaflet map instance (with _nqBounds) so the caller can resize
    for printing. */
@@ -43,5 +43,5 @@
     return map;
   }
 
-  window.NodeQualityMap = { render: render };
+  window.NodeReachMap = { render: render };
 })();
