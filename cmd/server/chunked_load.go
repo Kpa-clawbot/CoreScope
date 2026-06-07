@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -255,6 +256,19 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 		pickBestObservation(tx)
 		s.indexByNode(tx)
 	}
+	// Restore the "s.packets sorted oldest-first by FirstSeen" invariant
+	// that legacy Load() got for free from "ORDER BY t.first_seen ASC".
+	// LoadChunked walks chunks in id-ASC order so the slice ends up
+	// id-ordered, which only equals first_seen-ordered when ids and
+	// timestamps are correlated. After tools/freshen-fixture.sh (or any
+	// real-world out-of-order ingest) they're not, leaving
+	// s.packets[0].FirstSeen pointing at the newest row — which then
+	// poisons oldestLoaded below and routes legitimate in-memory queries
+	// to the SQL fallback. GetTimestamps (store.go) and QueryPackets
+	// both rely on this invariant. See PR #1596 / mobile e2e regression.
+	sort.SliceStable(s.packets, func(i, j int) bool {
+		return s.packets[i].FirstSeen < s.packets[j].FirstSeen
+	})
 	s.buildSubpathIndex()
 	s.buildPathHopIndex()
 	s.buildDistanceIndex()
