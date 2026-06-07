@@ -182,7 +182,16 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 
 	chunkIdx := 0
 	totalLoaded := 0
-	var cursorID int64 = 0
+	// Start the id cursor BELOW the minimum possible row id so the
+	// first chunk's `t2.id > cursorID` predicate includes id=0. The
+	// e2e fixture seed for issue #1486 inserts the grouped-packet row
+	// with id=0 (so it sorts LAST in the default packets view via
+	// `ORDER BY id DESC` / oldest first_seen). Seeding the cursor at
+	// 0 silently excluded that row, leaving the page with no
+	// tr[data-hash] and timing out the playwright wait. Legacy Load()
+	// had no id cursor and loaded id=0 unconditionally — we restore
+	// that semantic by starting one below SQLite's minimum rowid (-1).
+	var cursorID int64 = -1
 
 	for {
 		conds := append([]string{}, loadConditions...)
