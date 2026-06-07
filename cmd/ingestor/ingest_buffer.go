@@ -4,6 +4,7 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // IngestBuffer decouples MQTT message receipt from DB writes (#1608).
@@ -29,7 +30,22 @@ type IngestBuffer struct {
 	startOnce sync.Once
 	readyOnce sync.Once
 	stopOnce  sync.Once
+
+	// dropLogMu guards the time-based drop-log throttle (PR #1623
+	// round-1 fix to #1609 M1). Per-drop logging under sustained
+	// stalls could flood the log at MQTT inbound rate; instead we
+	// always log the FIRST drop of a stall and then summarize at
+	// most once per second until the stall ends.
+	dropLogMu      sync.Mutex
+	stallActive    bool      // true between first drop and first successful Submit
+	stallStart     time.Time // when the current stall began
+	stallStartDrop int64     // dropped() value when stall began
+	lastSummaryAt  time.Time // last time we wrote a summary line
 }
+
+// dropLogSummaryInterval is the minimum interval between summary lines
+// during a sustained stall. Exposed as a var so tests can shrink it.
+var dropLogSummaryInterval = time.Second
 
 // NewIngestBuffer returns a buffer holding up to capacity pending jobs.
 // Non-positive capacity is clamped to 1 and a WARN is logged so the
@@ -55,18 +71,60 @@ func NewIngestBuffer(capacity int) *IngestBuffer {
 // Submit only enqueues — without a running consumer, jobs sit in the channel
 // and (once cap is reached) are silently dropped until Start()+Ready() run.
 //
-// Drop logging (PR #1609 M1): every drop logs a line. The branch only fires
-// when the channel is at capacity (Submit's default case), so the log is
-// cheap when healthy (zero lines) and loud the instant the first stall
-// happens — operators don't have to wait for 1000 lost messages before
-// the alert surfaces.
+// Drop logging (PR #1623 round-1 fix to #1609 M1) uses a time-based
+// throttle to stay loud-on-stall-start without flooding under sustained
+// stalls:
+//   - the FIRST drop of a stall logs immediately
+//   - subsequent drops are summarized at most once per second
+//   - when the next Submit succeeds, a "drained" recovery line is
+//     emitted so operators can quantify the burst
+//
+// All log lines include the buffer capacity for operator triage.
 func (b *IngestBuffer) Submit(job func()) {
 	select {
 	case b.jobs <- job:
+		b.maybeLogRecovery()
 	default:
 		n := b.dropped.Add(1)
-		log.Printf("[ingest-buffer] WARNING: buffer full (cap %d), dropped %d message(s) total — write path stalled, raise ingestBufferSize or investigate slow writer", cap(b.jobs), n)
+		b.logDrop(n)
 	}
+}
+
+// logDrop emits a drop log line under the time-based throttle. The first
+// drop of a stall always logs; subsequent drops summarize at most once
+// per dropLogSummaryInterval.
+func (b *IngestBuffer) logDrop(n int64) {
+	b.dropLogMu.Lock()
+	defer b.dropLogMu.Unlock()
+	now := time.Now()
+	if !b.stallActive {
+		b.stallActive = true
+		b.stallStart = now
+		b.stallStartDrop = n - 1 // last successful Submit -> this is the 1st drop of the stall
+		b.lastSummaryAt = now
+		log.Printf("[ingest-buffer] WARNING: buffer full (cap %d), dropped %d message(s) total — write path stalled, raise ingestBufferSize or investigate slow writer", cap(b.jobs), n)
+		return
+	}
+	if now.Sub(b.lastSummaryAt) >= dropLogSummaryInterval {
+		b.lastSummaryAt = now
+		stallDrops := n - b.stallStartDrop
+		log.Printf("[ingest-buffer] WARNING: buffer full (cap %d), %d drop(s) in current stall, %d total — write path still stalled", cap(b.jobs), stallDrops, n)
+	}
+}
+
+// maybeLogRecovery is called from the success branch of Submit. If a
+// stall was active, it logs a recovery line summarizing the burst and
+// clears the stall state.
+func (b *IngestBuffer) maybeLogRecovery() {
+	b.dropLogMu.Lock()
+	defer b.dropLogMu.Unlock()
+	if !b.stallActive {
+		return
+	}
+	stallDrops := b.dropped.Load() - b.stallStartDrop
+	dur := time.Since(b.stallStart)
+	log.Printf("[ingest-buffer] INFO: buffer drained, %d drop(s) over %s (cap %d) — write path recovered", stallDrops, dur.Round(time.Millisecond), cap(b.jobs))
+	b.stallActive = false
 }
 
 // Start launches the consumer goroutine. It blocks until Ready() is called
