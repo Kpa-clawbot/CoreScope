@@ -54,14 +54,18 @@ func NewIngestBuffer(capacity int) *IngestBuffer {
 // Ordering invariant: callers MUST call Start() before the first Submit().
 // Submit only enqueues — without a running consumer, jobs sit in the channel
 // and (once cap is reached) are silently dropped until Start()+Ready() run.
+//
+// Drop logging (PR #1609 M1): every drop logs a line. The branch only fires
+// when the channel is at capacity (Submit's default case), so the log is
+// cheap when healthy (zero lines) and loud the instant the first stall
+// happens — operators don't have to wait for 1000 lost messages before
+// the alert surfaces.
 func (b *IngestBuffer) Submit(job func()) {
 	select {
 	case b.jobs <- job:
 	default:
 		n := b.dropped.Add(1)
-		if n == 1 || n%1000 == 0 {
-			log.Printf("[ingest-buffer] WARNING: buffer full, dropped %d message(s) — raise ingestBufferSize", n)
-		}
+		log.Printf("[ingest-buffer] WARNING: buffer full (cap %d), dropped %d message(s) total — write path stalled, raise ingestBufferSize or investigate slow writer", cap(b.jobs), n)
 	}
 }
 
