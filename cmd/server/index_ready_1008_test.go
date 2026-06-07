@@ -60,7 +60,9 @@ func TestIssue1008_HandlerReturns503WhileSubpathIndexLoading(t *testing.T) {
 	}
 	// Don't wait for the background build — we want to observe the
 	// not-ready window.
-	srv := &Server{store: store}
+	cfg := &Config{}
+	cfg.applyListLimitsDefaults()
+	srv := &Server{store: store, cfg: cfg}
 
 	req := httptest.NewRequest("GET", "/api/analytics/subpaths?minLen=2&maxLen=4&limit=10", nil)
 	rec := httptest.NewRecorder()
@@ -107,7 +109,9 @@ func TestIssue1008_HandlerRecoversAfterIndexReady(t *testing.T) {
 		t.Fatal("PathHopIndexReady() never flipped true within 5s")
 	}
 
-	srv := &Server{store: store}
+	cfg := &Config{}
+	cfg.applyListLimitsDefaults()
+	srv := &Server{store: store, cfg: cfg}
 	req := httptest.NewRequest("GET", "/api/analytics/subpaths?minLen=2&maxLen=4&limit=10", nil)
 	rec := httptest.NewRecorder()
 	srv.handleAnalyticsSubpaths(rec, req)
