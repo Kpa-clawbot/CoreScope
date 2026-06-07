@@ -32,8 +32,12 @@ type IngestBuffer struct {
 }
 
 // NewIngestBuffer returns a buffer holding up to capacity pending jobs.
+// Non-positive capacity is clamped to 1 and a WARN is logged so the
+// misconfiguration is visible (PR #1609 m2 — silent clamp hid bad
+// ingestBufferSize values).
 func NewIngestBuffer(capacity int) *IngestBuffer {
 	if capacity < 1 {
+		log.Printf("[ingest-buffer] WARN: requested capacity %d < 1, clamping to 1 — check ingestBufferSize config; default is 50000", capacity)
 		capacity = 1
 	}
 	return &IngestBuffer{
