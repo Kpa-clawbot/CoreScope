@@ -57,7 +57,12 @@ const (
 type SourceLivenessState struct {
 	Tag    string
 	Broker string
-	LastMessageUnix int64 // atomic; unix seconds of last successfully received MQTT message
+	LastMessageUnix int64 // atomic; unix seconds of last successfully WRITTEN MQTT message (handleMessage post-write)
+	// LastReceiptUnix (PR #1609 M1) is stamped at MQTT receipt time —
+	// BEFORE the message is handed to the buffer/writer. STUB: unused
+	// in production until the green commit wires MarkReceipt at the
+	// receipt callsite and surfaces it in stats/healthz.
+	LastReceiptUnix int64 // atomic; unix seconds of last RECEIPT (broker liveness)
 	// FirstConnectedAt (PR #1216 r2 item 2) is stamped ONCE at
 	// registerLivenessState time and never reset. Cold-start grace
 	// checks against this so a flapping broker (CONNECT ok, SUBSCRIBE
@@ -93,6 +98,15 @@ type SourceLivenessState struct {
 // call from the message-handling hot path.
 func (s *SourceLivenessState) MarkMessage(now time.Time) {
 	atomic.StoreInt64(&s.LastMessageUnix, now.Unix())
+}
+
+// MarkReceipt records the time of an MQTT message receipt — independent
+// of whether the write path is making progress. STUB: real wiring lands
+// in the next commit; for now this is a no-op so the test compiles and
+// fails on the LastReceiptUnix==0 assertion.
+func (s *SourceLivenessState) MarkReceipt(now time.Time) {
+	// STUB — green commit replaces with atomic.StoreInt64(&s.LastReceiptUnix, ...).
+	_ = now
 }
 
 // MarkReconnected clears stale liveness state so the watchdog does not
