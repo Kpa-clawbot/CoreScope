@@ -566,10 +566,10 @@
           ${renderHashInconsistencyWarning(n)}
           <div class="node-detail-key mono" style="font-size:11px;word-break:break-all;margin-bottom:6px">${n.public_key}</div>
           <div style="display:flex;flex-wrap:wrap;gap:6px">
-            <button class="btn-primary" id="copyUrlBtn" style="font-size:12px;padding:4px 10px">📋 Copy URL</button>
-            <button class="btn-primary" id="copyShortUrlBtn" title="Short URL using an 8-char pubkey prefix — easier to send over the mesh (issue #772)" style="font-size:12px;padding:4px 10px">📡 Copy short URL</button>
-            <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="text-decoration:none;font-size:12px;padding:4px 10px">📊 Analytics</a>
-            <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="text-decoration:none;font-size:12px;padding:4px 10px">📡 Reach</a>
+            <button class="btn-primary" id="copyUrlBtn" style="flex:0 0 auto;font-size:12px;padding:4px 10px">📋 Copy URL</button>
+            <button class="btn-primary" id="copyShortUrlBtn" title="Short URL using an 8-char pubkey prefix — easier to send over the mesh (issue #772)" style="flex:0 0 auto;font-size:12px;padding:4px 10px">📡 Copy short URL</button>
+            <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px">📊 Analytics</a>
+            <a href="#/nodes/${encodeURIComponent(n.public_key)}/reach" class="btn-primary" style="flex:0 0 auto;text-decoration:none;font-size:12px;padding:4px 10px">📡 Reach</a>
           </div>
         </div>
 
