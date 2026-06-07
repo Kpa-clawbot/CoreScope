@@ -129,9 +129,14 @@ func (b *IngestBuffer) maybeLogRecovery() {
 
 // Start launches the consumer goroutine. It blocks until Ready() is called
 // (or Stop() fires, whichever comes first), then drains buffered jobs and
-// runs newly-submitted ones serially, in FIFO order. Idempotent. The
-// consumer exits and closes Done() when either (a) the jobs channel is
-// closed by Stop() while drained, or (b) Stop() is called before Ready().
+// runs newly-submitted ones serially, in FIFO order. Idempotent.
+//
+// Lifecycle: Stop() closes b.stop, which causes the consumer to exit via
+// the stop-select arm (after draining any queued jobs if Ready() had
+// already fired). The b.jobs channel is never closed — closing it would
+// race with concurrent Submit() callers and panic; instead jobs is
+// garbage-collected with the buffer once all references drop. Done() is
+// closed when the consumer goroutine returns.
 func (b *IngestBuffer) Start() {
 	b.startOnce.Do(func() {
 		go func() {
@@ -145,20 +150,16 @@ func (b *IngestBuffer) Start() {
 			}
 			for {
 				select {
-				case job, ok := <-b.jobs:
-					if !ok {
-						return
-					}
+				case job := <-b.jobs:
 					job()
 				case <-b.stop:
 					// Stop after Ready — drain whatever is queued so
-					// shutdown is graceful, then exit.
+					// shutdown is graceful, then exit. b.jobs is never
+					// closed (see Start godoc), so a default-case
+					// non-blocking receive is the correct drain idiom.
 					for {
 						select {
-						case job, ok := <-b.jobs:
-							if !ok {
-								return
-							}
+						case job := <-b.jobs:
 							job()
 						default:
 							return
