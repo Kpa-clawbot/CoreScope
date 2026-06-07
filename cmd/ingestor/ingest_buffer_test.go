@@ -165,3 +165,37 @@ func TestNewIngestBuffer_WarnsOnSubOneClamp(t *testing.T) {
 		t.Fatalf("expected WARN log on sub-one clamp, got %q", got)
 	}
 }
+
+// TestIngestBuffer_DropLogsEveryDropAtCap asserts the noisy-on-stall
+// behavior from PR #1609 M1: when the buffer is at capacity, EVERY
+// dropped Submit must emit a log line (not just n==1 || n%1000==0).
+// First stall must be loud so operators see it within seconds, not after
+// 1000 lost messages.
+func TestIngestBuffer_DropLogsEveryDropAtCap(t *testing.T) {
+	var buf bytes.Buffer
+	oldOut := log.Writer()
+	oldFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(oldOut)
+		log.SetFlags(oldFlags)
+	})
+
+	b := NewIngestBuffer(2)
+	t.Cleanup(b.Stop)
+	// Fill to capacity (no Ready() — nothing drains).
+	for i := 0; i < 2; i++ {
+		b.Submit(func() {})
+	}
+	// Now drop 5 more.
+	for i := 0; i < 5; i++ {
+		b.Submit(func() {})
+	}
+
+	got := buf.String()
+	lines := strings.Count(got, "buffer full")
+	if lines < 5 {
+		t.Fatalf("expected at least 5 'buffer full' log lines at cap (one per drop), got %d:\n%s", lines, got)
+	}
+}
