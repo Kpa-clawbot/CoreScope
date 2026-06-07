@@ -112,6 +112,13 @@ func (s *PacketStore) fireChunkCallbacks(rowsThisChunk, totalRows int) {
 // HTTP listener may bind. Remaining chunks stream while handlers run
 // against partially-populated data; loadStatusMiddleware advertises
 // loading status until LoadComplete() returns true.
+//
+// Re-entrancy: LoadChunked is NOT safe to call concurrently with
+// itself on the same PacketStore — it resets loadComplete /
+// loadProgressRows and mutates store-shared maps under s.mu. In
+// production it is invoked exactly once from main.go boot. Tests that
+// open a fresh store per test are also safe. If a future caller needs
+// repeat or concurrent loads, add a top-level mutex first.
 func (s *PacketStore) LoadChunked(chunkSize int) error {
 	if chunkSize <= 0 {
 		chunkSize = 10000
@@ -121,22 +128,19 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	s.loadComplete.Store(false)
 	s.loadProgressRows.Store(0)
 
-	defer func() {
-		s.loadComplete.Store(true)
-		// Ensure listeners waiting on the readiness signal unblock even
-		// for empty databases.
-		s.signalFirstChunk()
-	}()
+	// On any return — error OR success — unblock listeners that gate on
+	// the readiness signal so an empty/failed DB does not deadlock the
+	// caller. Note: loadComplete is set on the success path only (see
+	// the end of this function) so probes do NOT see ready=true after a
+	// failed load.
+	defer s.signalFirstChunk()
 
 	t0 := time.Now()
 
-	var totalInDB int
-	if err := s.db.conn.QueryRow("SELECT COUNT(*) FROM transmissions").Scan(&totalInDB); err != nil {
-		totalInDB = -1
-	}
-
-	// Build the same retention/memory filter the legacy Load() uses so
+	// Build the retention/memory filter the legacy Load() uses so
 	// behavior is preserved when callers migrate from Load → LoadChunked.
+	// Built against the `t2` alias used inside the chunk subquery so we
+	// don't need brittle post-hoc string rewrites.
 	var loadConditions []string
 	hotCutoffHours := s.retentionHours
 	if s.hotStartupHours > 0 {
@@ -145,7 +149,21 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	var hotCutoffStr string
 	if hotCutoffHours > 0 {
 		hotCutoffStr = time.Now().UTC().Add(-time.Duration(hotCutoffHours * float64(time.Hour))).Format(time.RFC3339)
-		loadConditions = append(loadConditions, fmt.Sprintf("t.first_seen >= '%s'", hotCutoffStr))
+		loadConditions = append(loadConditions, fmt.Sprintf("t2.first_seen >= '%s'", hotCutoffStr))
+	}
+
+	// COUNT honours the same retention/hot-startup filter the chunk
+	// loop applies, so the logged "DB total" matches the rows the
+	// loop will actually walk. Use a `t2` alias to share the WHERE
+	// builder above. If the count fails (e.g. empty DB, locked WAL),
+	// fall through with -1 — it's only used for the post-load log line.
+	totalInDB := -1
+	countSQL := "SELECT COUNT(*) FROM transmissions t2"
+	if len(loadConditions) > 0 {
+		countSQL += " WHERE " + strings.Join(loadConditions, " AND ")
+	}
+	if err := s.db.conn.QueryRow(countSQL).Scan(&totalInDB); err != nil {
+		totalInDB = -1
 	}
 
 	// Memory cap honoured by clamping the maximum cursor walk.
@@ -167,7 +185,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 
 	for {
 		conds := append([]string{}, loadConditions...)
-		conds = append(conds, fmt.Sprintf("t.id > %d", cursorID))
+		conds = append(conds, fmt.Sprintf("t2.id > %d", cursorID))
 		whereClause := "WHERE " + strings.Join(conds, " AND ")
 
 		rpCol := ""
@@ -185,7 +203,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 					t.payload_type, t.payload_version, t.decoded_json,
 					o.id, obs.id, obs.name, COALESCE(obs.iata, ''), o.direction,
 					o.snr, o.rssi, o.score, o.path_json, strftime('%Y-%m-%dT%H:%M:%fZ', o.timestamp, 'unixepoch')` + obsRawHexCol + rpCol + `
-				FROM (SELECT * FROM transmissions t2 ` + strings.Replace(whereClause, "t.", "t2.", -1) + ` ORDER BY t2.id ASC LIMIT ` + fmt.Sprintf("%d", chunkSize) + `) AS t
+				FROM (SELECT * FROM transmissions t2 ` + whereClause + ` ORDER BY t2.id ASC LIMIT ` + fmt.Sprintf("%d", chunkSize) + `) AS t
 				LEFT JOIN observations o ON o.transmission_id = t.id
 				LEFT JOIN observers obs ON obs.rowid = o.observer_idx
 				ORDER BY t.id ASC, o.timestamp DESC`
@@ -194,7 +212,7 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 					t.payload_type, t.payload_version, t.decoded_json,
 					o.id, o.observer_id, o.observer_name, COALESCE(obs.iata, ''), o.direction,
 					o.snr, o.rssi, o.score, o.path_json, o.timestamp` + obsRawHexCol + rpCol + `
-				FROM (SELECT * FROM transmissions t2 ` + strings.Replace(whereClause, "t.", "t2.", -1) + ` ORDER BY t2.id ASC LIMIT ` + fmt.Sprintf("%d", chunkSize) + `) AS t
+				FROM (SELECT * FROM transmissions t2 ` + whereClause + ` ORDER BY t2.id ASC LIMIT ` + fmt.Sprintf("%d", chunkSize) + `) AS t
 				LEFT JOIN observations o ON o.transmission_id = t.id
 				LEFT JOIN observers obs ON obs.id = o.observer_id
 				ORDER BY t.id ASC, o.timestamp DESC`
@@ -248,10 +266,23 @@ func (s *PacketStore) LoadChunked(chunkSize int) error {
 	s.loaded = true
 	s.mu.Unlock()
 
+	// #1009 / PR #1596: flip the subpath + pathHop ready flags now that
+	// the chunk loader has built both indexes synchronously above.
+	// Without this, WaitIndexesReady (used by
+	// StartRepeaterEnrichmentRecomputer at boot) blocks for up to
+	// repeaterEnrichmentPrewarmWait (60s), delaying HTTP listener bind
+	// past CI's 30s /api/healthz deadline.
+	s.markIndexesReadySync()
+
 	elapsed := time.Since(t0)
 	log.Printf("[store] LoadChunked: %d transmissions (%d observations) across %d chunk(s) in %v (chunkSize=%d, DB total=%d)",
 		totalLoaded, s.totalObs, chunkIdx, elapsed, chunkSize, totalInDB)
 	s.loadMultibyteCapFromDB()
+	// Mark complete on the success path only — see the function-level
+	// defer above for why this is NOT in a deferred call. Probes that
+	// read LoadComplete()==true after a failed load would otherwise
+	// see ready=true for a half-loaded store.
+	s.loadComplete.Store(true)
 	return nil
 }
 
