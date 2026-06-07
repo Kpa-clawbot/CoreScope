@@ -62,6 +62,11 @@ func TestSubpathsHonorsTimeWindow_StoreLevel(t *testing.T) {
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
 	}
+	// #1008: indexes build in the background after Load(); tests that
+	// read s.spIndex / s.spTxIndex must wait for the ready flag.
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatalf("indexes not ready after 5s")
+	}
 
 	// Unbounded: should see both transmissions and their subpaths.
 	all := store.GetAnalyticsSubpathsWithWindow("", 2, 8, 100, TimeWindow{})
@@ -100,6 +105,12 @@ func TestSubpathsHandlerHonorsTimeWindow(t *testing.T) {
 	store := NewPacketStore(db, nil)
 	if err := store.Load(); err != nil {
 		t.Fatalf("store.Load failed: %v", err)
+	}
+	// #1008: handler is hard-gated behind SubpathIndexReady() and returns
+	// 503 until the background build completes. Wait for ready before
+	// hitting the route.
+	if !store.WaitIndexesReady(5 * time.Second) {
+		t.Fatalf("indexes not ready after 5s")
 	}
 	srv.store = store
 
