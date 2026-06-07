@@ -41,6 +41,10 @@ func NewIngestBuffer(capacity int) *IngestBuffer {
 
 // Submit enqueues a job without blocking. If the buffer is full the job is
 // dropped and the dropped counter is incremented. Safe for concurrent callers.
+//
+// Ordering invariant: callers MUST call Start() before the first Submit().
+// Submit only enqueues — without a running consumer, jobs sit in the channel
+// and (once cap is reached) are silently dropped until Start()+Ready() run.
 func (b *IngestBuffer) Submit(job func()) {
 	select {
 	case b.jobs <- job:
@@ -68,6 +72,10 @@ func (b *IngestBuffer) Start() {
 
 // Ready signals that the write path is available; the consumer begins
 // draining. Idempotent.
+//
+// Ordering invariant: Start() MUST have been called before Ready() takes
+// effect. Calling Ready() without a prior Start() simply closes the ready
+// channel — nothing drains until a later Start() runs its consumer goroutine.
 func (b *IngestBuffer) Ready() {
 	b.readyOnce.Do(func() { close(b.ready) })
 }
