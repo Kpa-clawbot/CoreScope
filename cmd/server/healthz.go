@@ -42,7 +42,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	// processed<total).
 	bfTotal, bfProcessed, bfDone := fromPubkeyBackfillSnapshot()
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	resp := map[string]interface{}{
 		"ready":     true,
 		"loadedTx":  loadedTx,
 		"loadedObs": loadedObs,
@@ -51,5 +51,15 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 			"processed": bfProcessed,
 			"done":      bfDone,
 		},
-	})
+	}
+	// PR #1609 M1: surface per-MQTT-source receipt vs write-path
+	// liveness so operators can distinguish "broker alive, write
+	// path stuck" (lastReceiptUnix recent, lastMessageUnix stale)
+	// from "everything stalled" (both stale). Additive — older
+	// ingestor builds simply produce no entry and the field is
+	// omitted. Schema-compatible with prior /healthz consumers.
+	if liveness := readIngestorSourceLiveness(); len(liveness) > 0 {
+		resp["ingest_liveness"] = liveness
+	}
+	json.NewEncoder(w).Encode(resp)
 }

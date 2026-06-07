@@ -100,13 +100,14 @@ func (s *SourceLivenessState) MarkMessage(now time.Time) {
 	atomic.StoreInt64(&s.LastMessageUnix, now.Unix())
 }
 
-// MarkReceipt records the time of an MQTT message receipt — independent
-// of whether the write path is making progress. STUB: real wiring lands
-// in the next commit; for now this is a no-op so the test compiles and
-// fails on the LastReceiptUnix==0 assertion.
+// MarkReceipt records the time of an MQTT message receipt — stamped at the
+// paho receipt callback BEFORE the message enters the ingest buffer. PR
+// #1609 M1: kept separate from LastMessageUnix so the watchdog/healthz can
+// distinguish "broker alive, write path stuck" (LastReceiptUnix fresh,
+// LastMessageUnix stale) from "everything stalled" (both stale). Cheap;
+// safe to call from the message-handling hot path.
 func (s *SourceLivenessState) MarkReceipt(now time.Time) {
-	// STUB — green commit replaces with atomic.StoreInt64(&s.LastReceiptUnix, ...).
-	_ = now
+	atomic.StoreInt64(&s.LastReceiptUnix, now.Unix())
 }
 
 // MarkReconnected clears stale liveness state so the watchdog does not
@@ -231,7 +232,8 @@ func registerLivenessOrSkip(s *SourceLivenessState) bool {
 }
 
 // markLivenessForTag is the hot-path entry point: O(1) map lookup +
-// atomic store. Safe to call for unknown tags (no-op).
+// atomic store. Safe to call for unknown tags (no-op). Updates
+// LastMessageUnix (post-write clock).
 func markLivenessForTag(tag string, now time.Time) {
 	livenessRegistryMu.RLock()
 	s := livenessRegistry[tag]
@@ -239,6 +241,38 @@ func markLivenessForTag(tag string, now time.Time) {
 	if s != nil {
 		s.MarkMessage(now)
 	}
+}
+
+// markReceiptForTag is the hot-path entry point used at MQTT receipt
+// (BEFORE the message is buffered/written). Updates LastReceiptUnix only.
+// PR #1609 M1 — separates broker-liveness signal from write-path
+// liveness so /healthz can show a stalled writer with a live broker.
+func markReceiptForTag(tag string, now time.Time) {
+	livenessRegistryMu.RLock()
+	s := livenessRegistry[tag]
+	livenessRegistryMu.RUnlock()
+	if s != nil {
+		s.MarkReceipt(now)
+	}
+}
+
+// SnapshotLivenessClocks returns the per-source receipt vs write-path
+// liveness pair for every registered source. Read-only; safe to call
+// from the stats-file writer. PR #1609 M1.
+func SnapshotLivenessClocks() map[string]SourceLivenessSnapshot {
+	livenessRegistryMu.RLock()
+	defer livenessRegistryMu.RUnlock()
+	if len(livenessRegistry) == 0 {
+		return nil
+	}
+	out := make(map[string]SourceLivenessSnapshot, len(livenessRegistry))
+	for tag, s := range livenessRegistry {
+		out[tag] = SourceLivenessSnapshot{
+			LastReceiptUnix: atomic.LoadInt64(&s.LastReceiptUnix),
+			LastMessageUnix: atomic.LoadInt64(&s.LastMessageUnix),
+		}
+	}
+	return out
 }
 
 // runLivenessWatchdog starts a goroutine that scans the registry every

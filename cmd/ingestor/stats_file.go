@@ -50,6 +50,21 @@ type IngestorStatsSnapshot struct {
 	// via /api/perf/write-sources under .writer_perf. Optional —
 	// older ingestor builds don't publish this field.
 	WriterPerf map[string]WriterStatsSnapshot `json:"writer_perf,omitempty"`
+	// SourceLiveness (PR #1609 M1) is the per-MQTT-source receipt vs
+	// write-path liveness snapshot. Keyed by source Tag. Surfaced by
+	// the server via /api/healthz under .ingest_liveness so operators
+	// can see "broker alive, write path stuck" (lastReceiptUnix recent,
+	// lastMessageUnix stale) distinct from "everything stalled" (both
+	// stale). Additive: omitempty so older server builds ignore it
+	// gracefully.
+	SourceLiveness map[string]SourceLivenessSnapshot `json:"source_liveness,omitempty"`
+}
+
+// SourceLivenessSnapshot is the per-source two-clock view exposed for
+// /api/healthz consumers. unixSeconds for both fields; 0 means "never".
+type SourceLivenessSnapshot struct {
+	LastReceiptUnix int64 `json:"lastReceiptUnix"`
+	LastMessageUnix int64 `json:"lastMessageUnix"`
 }
 
 // statsFilePath returns the writable path the ingestor will publish stats to.
@@ -231,6 +246,7 @@ func StartStatsFileWriter(s *Store, interval time.Duration) {
 				BackfillUpdates:    s.Stats.SnapshotBackfills(),
 				ProcIO:             ioRate,
 				WriterPerf:         s.WriterStatsSnapshot(),
+				SourceLiveness:     SnapshotLivenessClocks(),
 			}
 			buf.Reset()
 			if err := enc.Encode(&snap); err != nil {

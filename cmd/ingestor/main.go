@@ -165,11 +165,12 @@ func main() {
 		// Capture source for closure
 		src := source
 		opts.SetDefaultPublishHandler(func(c mqtt.Client, m mqtt.Message) {
-			// Stamp liveness at RECEIPT (not at processing) so the stall
-			// watchdog reflects broker liveness even while the buffer is
-			// gated during startup (#1608). handleMessage also stamps it,
-			// which is a harmless cheap re-store once draining begins.
-			markLivenessForTag(tag, time.Now())
+			// PR #1609 M1: stamp the RECEIPT clock here (broker liveness)
+			// independently of the post-write clock that handleMessage
+			// stamps. Without separation the watchdog/healthz could
+			// report "fresh" while the writer was stalled and the
+			// buffer was filling.
+			markReceiptForTag(tag, time.Now())
 			ingestBuffer.Submit(func() {
 				handleMessage(store, tag, src, m, channelKeys, regionKeys, cfg)
 			})

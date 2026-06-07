@@ -302,6 +302,20 @@ type IngestorStats struct {
 	// publish this. Surfaced under .writer_perf by
 	// handlePerfWriteSources.
 	WriterPerf map[string]WriterStatsSnapshot `json:"writer_perf,omitempty"`
+	// SourceLiveness (PR #1609 M1) is the per-MQTT-source two-clock
+	// snapshot: lastReceiptUnix (broker liveness, stamped at receipt)
+	// vs lastMessageUnix (write-path liveness, stamped post-write).
+	// Surfaced by /api/healthz under .ingest_liveness so operators can
+	// distinguish "broker alive, write path stuck" from "everything
+	// stalled". Optional — older ingestor builds don't publish this.
+	SourceLiveness map[string]SourceLivenessSnapshot `json:"source_liveness,omitempty"`
+}
+
+// SourceLivenessSnapshot mirrors the ingestor's per-MQTT-source liveness
+// pair (PR #1609 M1). Both fields are unix seconds; 0 means "never".
+type SourceLivenessSnapshot struct {
+	LastReceiptUnix int64 `json:"lastReceiptUnix"`
+	LastMessageUnix int64 `json:"lastMessageUnix"`
 }
 
 // WriterStatsSnapshot mirrors the ingestor's per-component writer-lock
@@ -327,6 +341,23 @@ func IngestorStatsPath() string {
 		return p
 	}
 	return "/tmp/corescope-ingestor-stats.json"
+}
+
+// readIngestorSourceLiveness returns the per-source receipt/write-path
+// liveness map from the ingestor stats file, or nil on any error / older
+// ingestor that doesn't publish the field. PR #1609 M1 — surfaced by
+// /api/healthz under .ingest_liveness so operators can spot "broker
+// alive, write path stuck".
+func readIngestorSourceLiveness() map[string]SourceLivenessSnapshot {
+	data, err := os.ReadFile(IngestorStatsPath())
+	if err != nil {
+		return nil
+	}
+	var st IngestorStats
+	if err := json.Unmarshal(data, &st); err != nil {
+		return nil
+	}
+	return st.SourceLiveness
 }
 
 // handlePerfWriteSources reads the ingestor's stats file and returns a flat
