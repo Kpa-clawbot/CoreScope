@@ -101,7 +101,7 @@
       return;
     }
 
-    container.innerHTML = headerHtml(n, nodeName, days) +
+    var statsHtml = headerHtml(n, nodeName, days) +
       '<div class="nq-body" style="max-width:1000px;margin:0 auto;padding:0 16px">' +
       '<div class="nq-group-h">Network position (all-time)</div>' +
       '<div class="analytics-stats">' +
@@ -114,7 +114,20 @@
       statCard('Two-way', imp.bidirectional_links, 'Neighbours heard in BOTH directions — stable links. Counts mid-path adjacency too, so this can exceed the all-time "Neighbours".') +
       statCard('Relay obs', imp.relay_observations, 'Observations where this node appears anywhere in the path (its relay throughput).') +
       statCard('Direct observers', imp.direct_observers, 'Stations that received this node directly, at 0 hops.') +
-      '</div>' +
+      '</div>';
+
+    // Identifiable, but no path adjacency observed in this window → explain rather
+    // than showing an empty map + table.
+    if (!d.links.length) {
+      container.innerHTML = statsHtml +
+        '<div class="nq-empty">No observed RF links in the last ' + d.window.days +
+        ' days — this node advertises but hasn’t been seen relaying traffic (or no observers captured it). Try a longer window.</div>' +
+        '</div>';
+      wireTimeRange(container, pubkey);
+      return;
+    }
+
+    container.innerHTML = statsHtml +
       '<div class="nq-actions nq-noprint">' +
       '<label><input type="checkbox" id="nqIncoming"> incoming <span class="nq-dir">(we hear them)</span></label>' +
       '<label><input type="checkbox" id="nqOutgoing"> outgoing <span class="nq-dir">(they hear us)</span></label>' +
