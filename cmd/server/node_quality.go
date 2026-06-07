@@ -1,6 +1,17 @@
 package main
 
-import "strings"
+import (
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gorilla/mux"
+)
 
 // advertPayloadType mirrors MeshCore ADVERT (0x04). Local const so this file
 // stays independent of decoder internals.
@@ -169,4 +180,247 @@ func gpsPtrs(info nodeInfo, ok bool) (*float64, *float64) {
 		return nil, nil
 	}
 	return fptr(info.Lat), fptr(info.Lon)
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// --- bounded TTL cache (perf is gated by the time window; this just avoids
+// recompute under dashboard polling). Keyed "pubkey|days". ---
+const (
+	qualityCacheTTL = 5 * time.Minute
+	qualityCacheMax = 256
+)
+
+type qualityCacheEntry struct {
+	at  time.Time
+	raw []byte
+}
+
+var (
+	qualityCacheMu sync.Mutex
+	qualityCache   = map[string]qualityCacheEntry{}
+)
+
+func qualityCacheGet(key string) ([]byte, bool) {
+	qualityCacheMu.Lock()
+	defer qualityCacheMu.Unlock()
+	e, ok := qualityCache[key]
+	if !ok || time.Since(e.at) > qualityCacheTTL {
+		return nil, false
+	}
+	return e.raw, true
+}
+
+func qualityCachePut(key string, raw []byte) {
+	qualityCacheMu.Lock()
+	defer qualityCacheMu.Unlock()
+	if len(qualityCache) >= qualityCacheMax {
+		qualityCache = map[string]qualityCacheEntry{} // crude bounded reset
+	}
+	qualityCache[key] = qualityCacheEntry{at: time.Now(), raw: raw}
+}
+
+func (s *Server) handleNodeQuality(w http.ResponseWriter, r *http.Request) {
+	pubkey := strings.ToLower(mux.Vars(r)["pubkey"])
+	if s.cfg != nil && s.cfg.IsBlacklisted(pubkey) {
+		writeError(w, 404, "Not found")
+		return
+	}
+	days := 7
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			days = n
+		}
+	}
+	if days < 1 {
+		days = 1
+	}
+	if days > 30 {
+		days = 30
+	}
+
+	cacheKey := pubkey + "|" + strconv.Itoa(days)
+	if raw, ok := qualityCacheGet(cacheKey); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(raw)
+		return
+	}
+
+	resp, ok := s.computeNodeQuality(pubkey, days)
+	if !ok {
+		writeError(w, 404, "Not found")
+		return
+	}
+	raw, _ := json.Marshal(resp)
+	qualityCachePut(cacheKey, raw)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(raw)
+}
+
+// computeNodeQuality does the read-only scan + assembly. ok=false → 404.
+func (s *Server) computeNodeQuality(pubkey string, days int) (NodeQualityResponse, bool) {
+	if s.store == nil || s.db == nil || s.db.conn == nil {
+		return NodeQualityResponse{}, false
+	}
+	nodeMap := s.buildNodeInfoMap()
+	self, found := nodeMap[pubkey]
+	if !found {
+		return NodeQualityResponse{}, false
+	}
+	_, pm := s.store.getCachedNodesAndPM()
+	tokens := reliableTokens(pubkey, pm)
+
+	since := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	sinceEpoch := since.Unix()
+
+	var d dirCounts
+	if len(tokens) > 0 {
+		rows := s.scanQualityRows(tokens, sinceEpoch)
+		d = attributeDirections(rows, tokens, pubkey, func(tok string) string {
+			return uniqueResolve(pm, tok)
+		})
+	} else {
+		d = dirCounts{we: map[string]int{}, they: map[string]int{}, obs: map[string]*obsAgg{}}
+	}
+
+	// importance: neighbor_edges degree + rank (all-time)
+	var degree, rank, nodesWithEdges int
+	s.db.conn.QueryRow(`
+		WITH dd AS (SELECT node_a pk, count c FROM neighbor_edges
+		            UNION ALL SELECT node_b, count FROM neighbor_edges),
+		     aa AS (SELECT pk, COUNT(*) neigh FROM dd GROUP BY pk)
+		SELECT (SELECT COUNT(*) FROM aa),
+		       COALESCE((SELECT neigh FROM aa WHERE pk=?),0),
+		       (SELECT 1+COUNT(*) FROM aa WHERE neigh > COALESCE((SELECT neigh FROM aa WHERE pk=?),0))
+	`, pubkey, pubkey).Scan(&nodesWithEdges, &degree, &rank)
+
+	// node first_seen (nodeInfo only carries last_seen; the contract wants first_seen)
+	var firstSeen sql.NullString
+	s.db.conn.QueryRow(`SELECT first_seen FROM nodes WHERE LOWER(public_key)=?`, pubkey).Scan(&firstSeen)
+
+	// assemble links
+	links := []QualityLink{}
+	bidir := 0
+	seen := map[string]bool{}
+	for pk := range d.we {
+		seen[pk] = true
+	}
+	for pk := range d.they {
+		seen[pk] = true
+	}
+	for pk := range seen {
+		we, they := d.we[pk], d.they[pk]
+		info := nodeMap[pk]
+		lat, lon := gpsPtrs(info, true)
+		var dist *float64
+		if self.HasGPS && info.HasGPS {
+			dist = fptr(haversineKm(self.Lat, self.Lon, info.Lat, info.Lon))
+		}
+		b := we > 0 && they > 0
+		if b {
+			bidir++
+		}
+		links = append(links, QualityLink{
+			Pubkey: pk, Name: info.Name, Role: info.Role, Lat: lat, Lon: lon,
+			WeHear: we, TheyHear: they, Bottleneck: minInt(we, they), Bidir: b, DistanceKm: dist,
+		})
+	}
+	sort.Slice(links, func(i, j int) bool {
+		if links[i].Bidir != links[j].Bidir {
+			return links[i].Bidir
+		}
+		if links[i].Bottleneck != links[j].Bottleneck {
+			return links[i].Bottleneck > links[j].Bottleneck
+		}
+		return links[i].WeHear+links[i].TheyHear > links[j].WeHear+links[j].TheyHear
+	})
+
+	// direct observers
+	directObs := []QualityObserver{}
+	for pk, a := range d.obs {
+		info := nodeMap[pk]
+		lat, lon := gpsPtrs(info, true)
+		var avg, dist *float64
+		if a.snrN > 0 {
+			avg = fptr(a.snrSum / float64(a.snrN))
+		}
+		if self.HasGPS && info.HasGPS {
+			dist = fptr(haversineKm(self.Lat, self.Lon, info.Lat, info.Lon))
+		}
+		directObs = append(directObs, QualityObserver{
+			Pubkey: pk, Name: info.Name, Count: a.count, AvgSNR: avg, Lat: lat, Lon: lon, DistanceKm: dist,
+		})
+	}
+	sort.Slice(directObs, func(i, j int) bool { return directObs[i].Count > directObs[j].Count })
+
+	toks := make([]string, 0, len(tokens))
+	for t := range tokens {
+		toks = append(toks, t)
+	}
+	sort.Strings(toks)
+
+	selfLat, selfLon := gpsPtrs(self, true)
+	return NodeQualityResponse{
+		Node: QualityNode{Pubkey: pubkey, Name: self.Name, Role: self.Role,
+			Lat: selfLat, Lon: selfLon, FirstSeen: firstSeen.String},
+		Window:         QualityWindow{Days: days, Since: since.Format(time.RFC3339)},
+		ReliableTokens: toks,
+		Importance: QualityImportance{
+			NeighborDegree: degree, DegreeRank: rank, NodesWithEdges: nodesWithEdges,
+			RelayObservations: d.relay, BidirectionalLinks: bidir, DirectObservers: len(directObs),
+		},
+		DirectObservers: directObs,
+		Links:           links,
+	}, true
+}
+
+// scanQualityRows reads windowed observations whose path contains any reliable
+// token, with the originator + observer + snr needed for attribution.
+func (s *Server) scanQualityRows(tokens map[string]bool, sinceEpoch int64) []pathRow {
+	likes := make([]string, 0, len(tokens))
+	args := []interface{}{sinceEpoch}
+	for tok := range tokens {
+		likes = append(likes, "o.path_json LIKE ?")
+		args = append(args, "%\""+tok+"\"%")
+	}
+	q := `SELECT COALESCE(obs.id,''), COALESCE(t.from_pubkey,''), COALESCE(t.payload_type,0), o.path_json, o.snr
+	      FROM observations o
+	      JOIN transmissions t ON t.id = o.transmission_id
+	      LEFT JOIN observers obs ON obs.rowid = o.observer_idx
+	      WHERE o.timestamp >= ? AND (` + strings.Join(likes, " OR ") + `)`
+	rows, err := s.db.conn.Query(q, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []pathRow
+	for rows.Next() {
+		var oid, fpk, pj string
+		var pt int
+		var snr sql.NullFloat64
+		if err := rows.Scan(&oid, &fpk, &pt, &pj, &snr); err != nil {
+			continue
+		}
+		var raw []string
+		if json.Unmarshal([]byte(pj), &raw) != nil || len(raw) == 0 {
+			continue
+		}
+		path := make([]string, len(raw))
+		for i, h := range raw {
+			path[i] = strings.ToUpper(h)
+		}
+		pr := pathRow{observerPK: strings.ToLower(oid), fromPubkey: strings.ToLower(fpk),
+			payloadType: pt, path: path}
+		if snr.Valid {
+			v := snr.Float64
+			pr.snr = &v
+		}
+		out = append(out, pr)
+	}
+	return out
 }
