@@ -80,3 +80,19 @@ func TestAttributeDirections_LastHopWithObserverCountsObserver(t *testing.T) {
 		t.Fatalf("last-hop observer should be counted, got they=%v", d.they)
 	}
 }
+
+func TestReliableTokens(t *testing.T) {
+	// pm where "01fa" is unique but "01" is shared (collision).
+	nodes := []nodeInfo{
+		{PublicKey: "01fa326b0000", Role: "repeater"},
+		{PublicKey: "0188aaaa0000", Role: "repeater"},
+	}
+	pm := buildPrefixMap(nodes)
+	toks := reliableTokens("01fa326b0000", pm)
+	if !toks["01FA"] {
+		t.Fatalf("expected 01FA reliable, got %v", toks)
+	}
+	if toks["01"] {
+		t.Fatalf("1-byte 01 must be excluded (collision), got %v", toks)
+	}
+}

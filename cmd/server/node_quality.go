@@ -1,5 +1,7 @@
 package main
 
+import "strings"
+
 // advertPayloadType mirrors MeshCore ADVERT (0x04). Local const so this file
 // stays independent of decoder internals.
 const advertPayloadType = 4
@@ -76,4 +78,35 @@ func attributeDirections(rows []pathRow, ourTokens map[string]bool, ourPK string
 		}
 	}
 	return d
+}
+
+// reliableTokens returns the uppercase hex prefixes (1, 2, 3 byte) of pubkey
+// that are UNIQUE among relay-capable nodes in pm. 1-byte prefixes almost always
+// collide and are excluded; only unique prefixes can identify a node in a path.
+func reliableTokens(pubkey string, pm *prefixMap) map[string]bool {
+	out := map[string]bool{}
+	lpk := strings.ToLower(pubkey)
+	for _, l := range []int{2, 4, 6} { // hex chars = 1,2,3 bytes
+		if len(lpk) < l {
+			continue
+		}
+		p := lpk[:l]
+		if pm != nil && len(pm.m[p]) == 1 {
+			out[strings.ToUpper(p)] = true
+		}
+	}
+	return out
+}
+
+// uniqueResolve returns the single relay pubkey (lowercase) for a hop token, or
+// "" when the token resolves to zero or multiple candidates (conservative).
+func uniqueResolve(pm *prefixMap, token string) string {
+	if pm == nil {
+		return ""
+	}
+	cands := pm.m[strings.ToLower(token)]
+	if len(cands) == 1 {
+		return strings.ToLower(cands[0].PublicKey)
+	}
+	return ""
 }
