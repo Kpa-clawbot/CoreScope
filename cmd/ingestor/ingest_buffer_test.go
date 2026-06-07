@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -136,5 +139,29 @@ func TestIngestBuffer_StopUnblocksConsumer(t *testing.T) {
 		// good — consumer goroutine returned
 	case <-time.After(time.Second):
 		t.Fatal("Stop() did not unblock the consumer goroutine within 1s (Done() never closed)")
+	}
+}
+
+// TestNewIngestBuffer_WarnsOnSubOneClamp asserts that constructing the
+// buffer with a non-positive capacity emits a WARN log line. Silent
+// clamping (PR #1609 review m2) hid misconfigurations like
+// ingestBufferSize=-1 or 0-from-default-not-applied paths.
+func TestNewIngestBuffer_WarnsOnSubOneClamp(t *testing.T) {
+	var buf bytes.Buffer
+	oldOut := log.Writer()
+	oldFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(oldOut)
+		log.SetFlags(oldFlags)
+	})
+
+	b := NewIngestBuffer(0)
+	t.Cleanup(b.Stop)
+
+	got := buf.String()
+	if !strings.Contains(got, "WARN") || !strings.Contains(got, "ingest-buffer") {
+		t.Fatalf("expected WARN log on sub-one clamp, got %q", got)
 	}
 }
