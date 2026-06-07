@@ -62,6 +62,10 @@
  * ============================================================ */
 
 :root {
+  /* Node-quality link strength colours (bottleneck tiers) */
+  --link-strong: #1a7f37;
+  --link-medium: #bf8700;
+  --link-weak: #cf222e;
   /* --- Fluid spacing scale ---------------------------------
    * Targets at 1440px viewport: 4 / 8 / 16 / 24 / 32 / 48 px.
    * Min/max clamps keep small viewports usable and prevent
