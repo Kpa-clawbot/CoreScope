@@ -23,9 +23,12 @@ import (
 type IngestBuffer struct {
 	jobs      chan func()
 	ready     chan struct{}
+	stop      chan struct{}
+	done      chan struct{}
 	dropped   atomic.Int64
 	startOnce sync.Once
 	readyOnce sync.Once
+	stopOnce  sync.Once
 }
 
 // NewIngestBuffer returns a buffer holding up to capacity pending jobs.
@@ -36,6 +39,8 @@ func NewIngestBuffer(capacity int) *IngestBuffer {
 	return &IngestBuffer{
 		jobs:  make(chan func(), capacity),
 		ready: make(chan struct{}),
+		stop:  make(chan struct{}),
+		done:  make(chan struct{}),
 	}
 }
 
@@ -56,15 +61,44 @@ func (b *IngestBuffer) Submit(job func()) {
 	}
 }
 
-// Start launches the consumer goroutine. It blocks until Ready() is called,
-// then drains buffered jobs and runs newly-submitted ones serially, in FIFO
-// order. Idempotent.
+// Start launches the consumer goroutine. It blocks until Ready() is called
+// (or Stop() fires, whichever comes first), then drains buffered jobs and
+// runs newly-submitted ones serially, in FIFO order. Idempotent. The
+// consumer exits and closes Done() when either (a) the jobs channel is
+// closed by Stop() while drained, or (b) Stop() is called before Ready().
 func (b *IngestBuffer) Start() {
 	b.startOnce.Do(func() {
 		go func() {
-			<-b.ready
-			for job := range b.jobs {
-				job()
+			defer close(b.done)
+			select {
+			case <-b.ready:
+			case <-b.stop:
+				// Stopped before Ready — exit immediately. Pending jobs
+				// are discarded; the buffer was never authorized to drain.
+				return
+			}
+			for {
+				select {
+				case job, ok := <-b.jobs:
+					if !ok {
+						return
+					}
+					job()
+				case <-b.stop:
+					// Stop after Ready — drain whatever is queued so
+					// shutdown is graceful, then exit.
+					for {
+						select {
+						case job, ok := <-b.jobs:
+							if !ok {
+								return
+							}
+							job()
+						default:
+							return
+						}
+					}
+				}
 			}
 		}()
 	})
@@ -88,17 +122,14 @@ func (b *IngestBuffer) Pending() int { return len(b.jobs) }
 
 // Stop signals the consumer goroutine to exit. Test-hygiene helper so unit
 // tests don't leak the goroutine that Start() spawns. Idempotent / safe to
-// call without a prior Start(). After Stop() returns, Done() is closed.
+// call without a prior Start(). After Stop() the consumer exits and Done()
+// is closed.
 func (b *IngestBuffer) Stop() {
-	// STUB: real implementation lands in the next commit. Returning here
-	// keeps the build green so the test fails on its assertion (Done()
-	// never closes) rather than on a missing-symbol compile error.
+	b.stopOnce.Do(func() { close(b.stop) })
 }
 
 // Done returns a channel that is closed after the consumer goroutine has
-// exited. Closed only after Stop().
+// exited. If Start() was never called, Done() never closes.
 func (b *IngestBuffer) Done() <-chan struct{} {
-	// STUB: returns a never-closed channel so the red test asserts on
-	// timeout rather than panicking.
-	return make(chan struct{})
+	return b.done
 }

@@ -9,6 +9,7 @@ import (
 
 func TestIngestBuffer_BuffersUntilReady(t *testing.T) {
 	b := NewIngestBuffer(10)
+	t.Cleanup(b.Stop)
 	var ran atomic.Int64
 	b.Start()
 	for i := 0; i < 3; i++ {
@@ -30,6 +31,7 @@ func TestIngestBuffer_BuffersUntilReady(t *testing.T) {
 
 func TestIngestBuffer_FIFOOrder(t *testing.T) {
 	b := NewIngestBuffer(10)
+	t.Cleanup(b.Stop)
 	out := make(chan int, 5)
 	b.Start()
 	for i := 0; i < 5; i++ {
@@ -50,7 +52,8 @@ func TestIngestBuffer_FIFOOrder(t *testing.T) {
 }
 
 func TestIngestBuffer_DropsWhenFull(t *testing.T) {
-	b := NewIngestBuffer(2) // never Ready()'d -> nothing drains
+	b := NewIngestBuffer(2)
+	t.Cleanup(b.Stop) // never Ready()'d -> nothing drains
 	for i := 0; i < 5; i++ {
 		b.Submit(func() {})
 	}
@@ -61,6 +64,7 @@ func TestIngestBuffer_DropsWhenFull(t *testing.T) {
 
 func TestIngestBuffer_ProcessesAfterReady(t *testing.T) {
 	b := NewIngestBuffer(10)
+	t.Cleanup(b.Stop)
 	b.Start()
 	b.Ready()
 	done := make(chan struct{})
@@ -74,6 +78,7 @@ func TestIngestBuffer_ProcessesAfterReady(t *testing.T) {
 
 func TestIngestBuffer_SerialExecution(t *testing.T) {
 	b := NewIngestBuffer(50)
+	t.Cleanup(b.Stop)
 	var inFlight atomic.Int32
 	var overlap atomic.Bool
 	var wg sync.WaitGroup
@@ -99,6 +104,7 @@ func TestIngestBuffer_SerialExecution(t *testing.T) {
 
 func TestIngestBuffer_ConcurrentSubmitSafe(t *testing.T) {
 	b := NewIngestBuffer(20000)
+	t.Cleanup(b.Stop)
 	b.Start()
 	var wg sync.WaitGroup
 	for g := 0; g < 8; g++ {
@@ -121,6 +127,7 @@ func TestIngestBuffer_ConcurrentSubmitSafe(t *testing.T) {
 // signal the consumer to exit cleanly without requiring Ready().
 func TestIngestBuffer_StopUnblocksConsumer(t *testing.T) {
 	b := NewIngestBuffer(10)
+	t.Cleanup(b.Stop)
 	b.Start()
 	// Do NOT call Ready(). The consumer must exit purely because of Stop().
 	b.Stop()
