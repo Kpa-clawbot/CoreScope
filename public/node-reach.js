@@ -42,6 +42,7 @@
       '<a href="#/nodes/' + encodeURIComponent(n.pubkey) + '" style="color:var(--accent);text-decoration:none;font-size:12px">← Back to ' + nodeName + '</a>' +
       '<h2 style="margin:4px 0 2px;font-size:18px">📡 ' + nodeName + ' — Reach</h2>' +
       '<div style="color:var(--text-muted);font-size:11px">' + escapeHtml(n.role || 'Unknown role') + ' · two-way RF link reach</div>' +
+      '<div class="nq-note">ℹ️ Reliable by design: built only from unique <b>2–3 byte</b> path-hash (multibyte) matches. 1-byte hops collide between nodes and are excluded, so the links shown are trustworthy.</div>' +
       '<div class="analytics-time-range nq-noprint" id="nqDays" style="margin-top:8px">' +
       dayBtn(1, days, '24h') + dayBtn(7, days, '7d') + dayBtn(14, days, '14d') + dayBtn(30, days, '30d') +
       '</div></div>';

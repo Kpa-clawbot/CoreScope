@@ -4,6 +4,7 @@
 .nq-actions { display:flex; align-items:center; gap:14px; margin:10px 0; font-size:12px; }
 .nq-count { color:var(--text-muted, #57606a); }
 .nq-empty { color:var(--text-muted, #57606a); font-size:13px; padding:18px 12px; border:1px dashed var(--border, #d0d7de); border-radius:6px; margin:6px 0 24px; }
+.nq-note { margin:6px 0 0; padding:6px 10px; font-size:11px; line-height:1.4; color:var(--text-muted, #57606a); background:var(--section-bg, #f6f8fa); border:1px solid var(--border, #d0d7de); border-radius:6px; }
 .nq-map { height:420px; border:1px solid var(--border, #d0d7de); border-radius:6px; margin-bottom:12px; }
 
 .nq-table { border-collapse:collapse; width:100%; font-size:12px; margin-bottom:24px; }
