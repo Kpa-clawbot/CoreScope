@@ -1,11 +1,11 @@
 /* window.NodeQualityMap.render(containerId, node, links, colorFn) — focused
-   Leaflet map of a node and its bidirectional links, coloured by bottleneck. */
+   Leaflet map of a node and its bidirectional links, coloured by bottleneck.
+   Returns the Leaflet map instance (with _nqBounds) so the caller can resize
+   for printing. */
 (function () {
   'use strict';
-  var map = null;
 
   function cssColor(varExpr) {
-    // varExpr looks like "var(--link-strong)" → resolve to a concrete colour.
     var name = varExpr.replace('var(', '').replace(')', '').trim();
     var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
     return v || '#888';
@@ -13,11 +13,9 @@
 
   function render(containerId, node, links, colorFn) {
     var c = document.getElementById(containerId);
-    if (!c || typeof L === 'undefined') return;
-    if (map) { map.remove(); map = null; }
-    map = L.map(containerId, { zoomControl: true, attributionControl: false })
+    if (!c || typeof L === 'undefined') return null;
+    var map = L.map(containerId, { zoomControl: true, attributionControl: false })
       .setView([node.lat, node.lon], 11);
-    // Reuse the node-detail tile applier if present; else plain OSM.
     if (typeof window._applyTilesToNodeMap === 'function') {
       window._applyTilesToNodeMap(map);
     } else {
@@ -27,18 +25,22 @@
     links.forEach(function (l) {
       if (l.lat == null || l.lon == null) return;
       pts.push([l.lat, l.lon]);
+      var col = cssColor(colorFn(l.bottleneck));
       L.polyline([[node.lat, node.lon], [l.lat, l.lon]], {
-        color: cssColor(colorFn(l.bottleneck)),
+        color: col,
         weight: Math.max(1.5, Math.min(7, 1.2 + 1.6 * Math.log10(l.bottleneck + 1))),
-        opacity: 0.8
-      }).addTo(map).bindPopup(escapeHtml(l.name) + '<br>wij ' + l.we_hear + ' / zij ' + l.they_hear);
-      L.circleMarker([l.lat, l.lon], { radius: 5, color: '#fff', weight: 1, fillOpacity: 1 })
+        opacity: 0.85
+      }).addTo(map).bindPopup(escapeHtml(l.name) + '<br>we ' + l.we_hear + ' / they ' + l.they_hear);
+      // Neighbour dot: filled with the link colour (was white/invisible before).
+      L.circleMarker([l.lat, l.lon], { radius: 5, color: '#ffffff', weight: 1, fillColor: col, fillOpacity: 1 })
         .addTo(map).bindTooltip(escapeHtml(l.name));
     });
-    L.circleMarker([node.lat, node.lon], { radius: 8, color: '#fff', weight: 2, fillColor: '#0969da', fillOpacity: 1 })
-      .addTo(map).bindPopup(escapeHtml(node.name));
+    // The node itself: a default Leaflet pin marker — always clearly visible.
+    L.marker([node.lat, node.lon]).addTo(map).bindPopup(escapeHtml(node.name));
     try { map.fitBounds(pts, { padding: [30, 30] }); } catch (e) {}
+    map._nqBounds = pts;
     setTimeout(function () { map.invalidateSize(); }, 120);
+    return map;
   }
 
   window.NodeQualityMap = { render: render };

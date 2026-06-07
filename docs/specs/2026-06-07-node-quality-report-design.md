@@ -234,6 +234,32 @@ building the UI (contract is authoritative; AGENTS rule 4).
    whole map module nor force the full `map.js` instance.
 2. **One-way links** — shown in the table behind a toggle (default **off**), so the
    default report is the bidirectional set but asymmetry stays diagnosable.
-3. **Placement** — `#/nodes/<pubkey>?section=quality` section on the existing node
-   detail page (consistent with `section=node-neighbors`); no separate full-page
-   route.
+3. **Placement** — ~~section on the node detail page~~ → **superseded** (see §10):
+   a dedicated full-page view at `#/nodes/<pubkey>/quality` with a top "Quality"
+   button next to Analytics.
+
+---
+
+## 10. Revisions (post-review, 2026-06-07)
+
+After the first staging deploy, review feedback reshaped the frontend (backend
+endpoint unchanged):
+
+- **Standalone page, not a buried section.** Registered as page `node-quality`
+  (route `#/nodes/<pubkey>/quality`), mirroring `node-analytics.js`, with a
+  📈 Quality button next to Analytics on the node detail (full + side pane). The
+  inline far-down section was removed. (Reverses §9.3.)
+- **English UI** to match the rest of the app.
+- **Day selector** (24h / 7d / 14d / 30d) re-fetching the endpoint; default 7d.
+- **Importance grouped + explained**: "Network position (all-time)" (Neighbours,
+  Rank) vs "Last N days" (Links, Two-way, Relay obs, Direct observers), each card
+  carrying a description — clarifies why all-time *Neighbours* (narrow,
+  geo-filtered neighbour_edges) can be **less** than windowed *Two-way* (full
+  path-adjacency, both directions).
+- **Map fixes**: node shown as a default Leaflet pin (was an invisible white
+  dot); neighbour dots filled with the link colour; print resizes the map to a
+  fixed width + `invalidateSize()` so the whole map prints (was clipped to the
+  left half on wide screens).
+- **One-way toggle made visible**: a live "showing X of Y (Z two-way)" count,
+  one-way rows muted with a direction hint.
+- **Clickable neighbours**: each table row links to that node's detail page.

@@ -569,6 +569,7 @@
             <button class="btn-primary" id="copyUrlBtn" style="font-size:12px;padding:4px 10px">📋 Copy URL</button>
             <button class="btn-primary" id="copyShortUrlBtn" title="Short URL using an 8-char pubkey prefix — easier to send over the mesh (issue #772)" style="font-size:12px;padding:4px 10px;margin-left:6px">📡 Copy short URL</button>
             <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:6px;text-decoration:none;font-size:12px;padding:4px 10px">📊 Analytics</a>
+            <a href="#/nodes/${encodeURIComponent(n.public_key)}/quality" class="btn-primary" style="display:inline-block;margin-left:6px;text-decoration:none;font-size:12px;padding:4px 10px">📈 Quality</a>
           </div>
         </div>
 
@@ -707,12 +708,7 @@
           <div id="fullPathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
         </div>
 
-        <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>
-
-        <div class="node-full-card" id="node-quality">
-          <h4>Link quality (2-weg)</h4>
-          <div id="nodeQualityContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading quality…</div></div>
-        </div>`;
+        <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>`;
 
       // Map
       if (hasLoc) {
@@ -723,11 +719,6 @@
           L.marker([n.lat, n.lon]).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)));
           setTimeout(() => detailMap.invalidateSize(), 100);
         } catch {}
-      }
-
-      // Quality section (fetches /api/nodes/:pk/quality and renders cards/map/table)
-      if (window.NodeQuality) {
-        try { window.NodeQuality.render(n.public_key); } catch (e) {}
       }
 
       // Copy URL
@@ -1361,8 +1352,8 @@
       if (link) {
         e.preventDefault();
         var href = link.getAttribute('href');
-        if (href.indexOf('/analytics') !== -1) {
-          // Analytics link — different page, force hashchange via replaceState + assign
+        if (href.indexOf('/analytics') !== -1 || href.indexOf('/quality') !== -1) {
+          // Analytics/Quality link — different page, force hashchange via replaceState + assign
           history.replaceState(null, '', '#/');
           location.hash = href.substring(1);
         }
@@ -1558,6 +1549,7 @@
         <div class="node-detail-role">${renderNodeBadges(n, roleColor)}
           <button class="btn-primary node-detail-btn" data-pubkey="${encodeURIComponent(n.public_key)}" aria-label="View details for ${escapeHtml(n.name || n.public_key)}" style="font-size:11px;padding:2px 8px;margin-left:8px;cursor:pointer">🔍 Details</button>
           <a href="#/nodes/${encodeURIComponent(n.public_key)}/analytics" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px">📊 Analytics</a>
+          <a href="#/nodes/${encodeURIComponent(n.public_key)}/quality" class="btn-primary" style="display:inline-block;margin-left:4px;text-decoration:none;font-size:11px;padding:2px 8px">📈 Quality</a>
         </div>
         ${renderStatusExplanation(n)}
 
