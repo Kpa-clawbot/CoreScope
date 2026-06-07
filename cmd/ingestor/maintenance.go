@@ -22,26 +22,25 @@ func (s *Store) PruneOldPackets(days int) (int64, error) {
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format(time.RFC3339)
 
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("prune begin: %w", err)
-	}
-	defer tx.Rollback()
+	// Tagged for writer-perf visibility (#1340).
+	var n int64
+	err := s.WriterTx("prune_packets", func(tx *sql.Tx) error {
+		// Delete child observations first (no CASCADE in SQLite).
+		if _, err := tx.Exec(`DELETE FROM observations WHERE transmission_id IN (
+			SELECT id FROM transmissions WHERE first_seen < ?
+		)`, cutoff); err != nil {
+			return fmt.Errorf("prune observations: %w", err)
+		}
 
-	// Delete child observations first (no CASCADE in SQLite).
-	if _, err := tx.Exec(`DELETE FROM observations WHERE transmission_id IN (
-		SELECT id FROM transmissions WHERE first_seen < ?
-	)`, cutoff); err != nil {
-		return 0, fmt.Errorf("prune observations: %w", err)
-	}
-
-	res, err := tx.Exec(`DELETE FROM transmissions WHERE first_seen < ?`, cutoff)
+		res, err := tx.Exec(`DELETE FROM transmissions WHERE first_seen < ?`, cutoff)
+		if err != nil {
+			return fmt.Errorf("prune transmissions: %w", err)
+		}
+		n, _ = res.RowsAffected()
+		return nil
+	})
 	if err != nil {
-		return 0, fmt.Errorf("prune transmissions: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("prune commit: %w", err)
+		return 0, err
 	}
 	if n > 0 {
 		log.Printf("[prune] deleted %d transmissions older than %d days", n, days)
