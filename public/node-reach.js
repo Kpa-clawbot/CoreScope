@@ -21,7 +21,7 @@
 
   function linkRow(i, l) {
     var dist = l.distance_km != null ? Number(l.distance_km).toFixed(1) : '—';
-    var dir = l.bidir ? '' : (l.we_hear > 0 ? 'we hear only →' : '← hears us only');
+    var dir = l.bidir ? '' : (l.we_hear > 0 ? 'incoming' : 'outgoing');
     var href = '#/nodes/' + encodeURIComponent(l.pubkey);
     return '<tr' + (l.bidir ? '' : ' class="nq-oneway"') + '>' +
       '<td class="nq-num">' + i + '</td>' +
@@ -116,7 +116,8 @@
       statCard('Direct observers', imp.direct_observers, 'Stations that received this node directly, at 0 hops.') +
       '</div>' +
       '<div class="nq-actions nq-noprint">' +
-      '<label><input type="checkbox" id="nqShowOneWay"> show one-way links</label>' +
+      '<label><input type="checkbox" id="nqIncoming"> incoming <span class="nq-dir">(we hear them)</span></label>' +
+      '<label><input type="checkbox" id="nqOutgoing"> outgoing <span class="nq-dir">(they hear us)</span></label>' +
       '<span id="nqCount" class="nq-count"></span>' +
       '<button id="nqPrintBtn" class="btn-primary" style="margin-left:auto">🖨️ Print / PDF</button>' +
       '</div>' +
@@ -132,19 +133,28 @@
       }
     }
 
-    function paint(showOneWay) {
-      var list = (showOneWay ? d.links.slice() : twoWay.slice()).sort(function (a, b) {
+    // Two-way links are always shown; the two checkboxes add the asymmetric ones.
+    // incoming = we hear them only; outgoing = they hear us only.
+    function paint() {
+      var inc = document.getElementById('nqIncoming').checked;
+      var out = document.getElementById('nqOutgoing').checked;
+      var list = d.links.filter(function (l) {
+        if (l.bidir) return true;
+        var weOnly = l.we_hear > 0 && l.they_hear === 0;
+        return (inc && weOnly) || (out && !weOnly);
+      }).sort(function (a, b) {
         return (b.bidir - a.bidir) || (b.bottleneck - a.bottleneck) ||
           ((b.we_hear + b.they_hear) - (a.we_hear + a.they_hear));
       });
       document.getElementById('nqRows').innerHTML = list.map(function (l, i) { return linkRow(i + 1, l); }).join('');
       document.getElementById('nqCount').textContent =
         'showing ' + list.length + ' of ' + d.links.length + ' (' + twoWay.length + ' two-way)';
-      // Keep the map in sync with the table (one-way links appear when toggled on).
+      // Keep the map in sync with the table.
       renderMap(list);
     }
-    paint(false);
-    document.getElementById('nqShowOneWay').addEventListener('change', function (e) { paint(e.target.checked); });
+    paint();
+    document.getElementById('nqIncoming').addEventListener('change', paint);
+    document.getElementById('nqOutgoing').addEventListener('change', paint);
     document.getElementById('nqPrintBtn').addEventListener('click', printReport);
 
     wireTimeRange(container, pubkey);
