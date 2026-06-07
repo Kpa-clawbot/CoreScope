@@ -707,7 +707,12 @@
           <div id="fullPathsContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading paths…</div></div>
         </div>
 
-        <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>`;
+        <div class="node-full-card skew-detail-section" id="node-clock-skew" style="display:none"></div>
+
+        <div class="node-full-card" id="node-quality">
+          <h4>Link quality (2-weg)</h4>
+          <div id="nodeQualityContent"><div class="text-muted" style="padding:8px"><span class="spinner"></span> Loading quality…</div></div>
+        </div>`;
 
       // Map
       if (hasLoc) {
@@ -718,6 +723,11 @@
           L.marker([n.lat, n.lon]).addTo(detailMap).bindPopup(escapeHtml(n.name || n.public_key.slice(0, 12)));
           setTimeout(() => detailMap.invalidateSize(), 100);
         } catch {}
+      }
+
+      // Quality section (fetches /api/nodes/:pk/quality and renders cards/map/table)
+      if (window.NodeQuality) {
+        try { window.NodeQuality.render(n.public_key); } catch (e) {}
       }
 
       // Copy URL
