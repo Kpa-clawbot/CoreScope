@@ -85,3 +85,20 @@ func (b *IngestBuffer) Dropped() int64 { return b.dropped.Load() }
 
 // Pending returns the current queue depth (best-effort; for observability).
 func (b *IngestBuffer) Pending() int { return len(b.jobs) }
+
+// Stop signals the consumer goroutine to exit. Test-hygiene helper so unit
+// tests don't leak the goroutine that Start() spawns. Idempotent / safe to
+// call without a prior Start(). After Stop() returns, Done() is closed.
+func (b *IngestBuffer) Stop() {
+	// STUB: real implementation lands in the next commit. Returning here
+	// keeps the build green so the test fails on its assertion (Done()
+	// never closes) rather than on a missing-symbol compile error.
+}
+
+// Done returns a channel that is closed after the consumer goroutine has
+// exited. Closed only after Stop().
+func (b *IngestBuffer) Done() <-chan struct{} {
+	// STUB: returns a never-closed channel so the red test asserts on
+	// timeout rather than panicking.
+	return make(chan struct{})
+}

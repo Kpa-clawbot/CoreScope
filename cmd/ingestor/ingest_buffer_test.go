@@ -114,3 +114,20 @@ func TestIngestBuffer_ConcurrentSubmitSafe(t *testing.T) {
 	b.Ready()
 	// Assertion is the absence of a race/panic; run under -race in CI.
 }
+
+// TestIngestBuffer_StopUnblocksConsumer guards the consumer-goroutine leak
+// described in PR #1609 review m1: Start() blocks on <-b.ready forever if
+// Ready() is never called, leaking the goroutine in test runs. Stop() must
+// signal the consumer to exit cleanly without requiring Ready().
+func TestIngestBuffer_StopUnblocksConsumer(t *testing.T) {
+	b := NewIngestBuffer(10)
+	b.Start()
+	// Do NOT call Ready(). The consumer must exit purely because of Stop().
+	b.Stop()
+	select {
+	case <-b.Done():
+		// good — consumer goroutine returned
+	case <-time.After(time.Second):
+		t.Fatal("Stop() did not unblock the consumer goroutine within 1s (Done() never closed)")
+	}
+}
