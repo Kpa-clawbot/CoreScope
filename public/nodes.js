@@ -106,6 +106,9 @@
     } catch (_e) {}
     return layer;
   }
+  // Exposed so the node-quality link-map (node-quality-map.js) reuses the user's
+  // configured tile provider instead of hardcoding OSM.
+  window._applyTilesToNodeMap = _applyTilesToNodeMap;
 
 
   // ROLE_COLORS loaded from shared roles.js
