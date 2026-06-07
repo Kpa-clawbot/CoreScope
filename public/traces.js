@@ -147,12 +147,12 @@
         </div>
       </div>
 
-      ${allPaths.length > 0 ? renderPathGraph(allPaths, allPathsRaw) : ''}
+      ${allPaths.length > 0 ? renderPathGraph(allPaths, allPathsRaw, decoded) : ''}
       ${traceData.length > 0 ? renderTimeline(t0, spreadMs) : ''}
     `;
   }
 
-  function renderPathGraph(allPaths, allPathsRaw) {
+  function renderPathGraph(allPaths, allPathsRaw, decoded) {
     // Collect unique nodes and edges across all observed paths
     const nodeSet = new Set();
     const edgeMap = new Map(); // "from→to" => Set of observer labels
@@ -261,6 +261,29 @@
     }
 
     let nodesSvg = '';
+    // Per-hop SNR overlay: TRACE packets only, numeric labels at hop midpoints
+    // (Tufte: no double-encoding via color/thickness — number is the signal).
+    const snrValues = (decoded && decoded.type === 'TRACE' && Array.isArray(decoded.snrValues))
+      ? decoded.snrValues : null;
+    if (snrValues && snrValues.length > 0) {
+      // Build the hop chain from the first observed full path (Origin → hops → Dest).
+      const firstPath = allPaths[0];
+      if (firstPath && Array.isArray(firstPath.hops)) {
+        const chain = ['Origin', ...firstPath.hops, 'Dest'];
+        const hopCount = Math.min(snrValues.length, chain.length - 1);
+        for (let i = 0; i < hopCount; i++) {
+          const p1 = nodePos.get(chain[i]);
+          const p2 = nodePos.get(chain[i + 1]);
+          if (!p1 || !p2) continue;
+          const v = snrValues[i];
+          if (v == null || !Number.isFinite(Number(v))) continue;
+          const mx = (p1.x + p2.x) / 2;
+          const my = (p1.y + p2.y) / 2 - 6;
+          const label = Number(v).toFixed(1);
+          nodesSvg += `<text class="hop-snr" x="${mx}" y="${my}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--text, #111827)">${label}</text>`;
+        }
+      }
+    }
     for (const [node, pos] of nodePos) {
       const isEndpoint = node === 'Origin' || node === 'Dest';
       const r = isEndpoint ? 18 : 16;
