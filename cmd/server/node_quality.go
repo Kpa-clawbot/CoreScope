@@ -189,6 +189,17 @@ func minInt(a, b int) int {
 	return b
 }
 
+// clampDays bounds the lookback window to [1,30]; default callers pass 7.
+func clampDays(d int) int {
+	if d < 1 {
+		return 1
+	}
+	if d > 30 {
+		return 30
+	}
+	return d
+}
+
 // --- bounded TTL cache (perf is gated by the time window; this just avoids
 // recompute under dashboard polling). Keyed "pubkey|days". ---
 const (
@@ -237,12 +248,7 @@ func (s *Server) handleNodeQuality(w http.ResponseWriter, r *http.Request) {
 			days = n
 		}
 	}
-	if days < 1 {
-		days = 1
-	}
-	if days > 30 {
-		days = 30
-	}
+	days = clampDays(days)
 
 	cacheKey := pubkey + "|" + strconv.Itoa(days)
 	if raw, ok := qualityCacheGet(cacheKey); ok {
