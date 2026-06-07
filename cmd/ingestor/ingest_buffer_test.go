@@ -166,12 +166,14 @@ func TestNewIngestBuffer_WarnsOnSubOneClamp(t *testing.T) {
 	}
 }
 
-// TestIngestBuffer_DropLogsEveryDropAtCap asserts the noisy-on-stall
-// behavior from PR #1609 M1: when the buffer is at capacity, EVERY
-// dropped Submit must emit a log line (not just n==1 || n%1000==0).
-// First stall must be loud so operators see it within seconds, not after
-// 1000 lost messages.
-func TestIngestBuffer_DropLogsEveryDropAtCap(t *testing.T) {
+// TestIngestBuffer_DropLogThrottle asserts the time-based throttle (PR
+// #1623 round-1 fix to #1609 M1): the FIRST drop of a stall logs
+// immediately (loud), then subsequent drops within the same stall are
+// rate-limited to at most one summary line per second, and a recovery
+// line is emitted when Submit succeeds again. This prevents log-flood
+// under sustained stalls (potentially hundreds of MB/min) while
+// preserving "loud the instant the stall starts".
+func TestIngestBuffer_DropLogThrottle(t *testing.T) {
 	var buf bytes.Buffer
 	oldOut := log.Writer()
 	oldFlags := log.Flags()
@@ -188,14 +190,85 @@ func TestIngestBuffer_DropLogsEveryDropAtCap(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		b.Submit(func() {})
 	}
-	// Now drop 5 more.
-	for i := 0; i < 5; i++ {
+	// 100 drops in tight loop (well under 1s).
+	for i := 0; i < 100; i++ {
 		b.Submit(func() {})
 	}
 
 	got := buf.String()
 	lines := strings.Count(got, "buffer full")
-	if lines < 5 {
-		t.Fatalf("expected at least 5 'buffer full' log lines at cap (one per drop), got %d:\n%s", lines, got)
+	if lines < 1 {
+		t.Fatalf("expected the FIRST drop to log immediately; got 0 'buffer full' lines:\n%s", got)
+	}
+	if lines > 2 {
+		t.Fatalf("expected at most 2 'buffer full' lines for 100 drops in <1s (first + at-most-one summary), got %d:\n%s", lines, got)
+	}
+	// Every line must include the capacity for operator triage.
+	if !strings.Contains(got, "cap 2") {
+		t.Fatalf("expected every drop log line to include 'cap 2', got:\n%s", got)
+	}
+}
+
+// TestIngestBuffer_DropLogFirstAlwaysImmediate guards the "loud the
+// instant the stall starts" half of the throttle contract from PR
+// #1623: even a single drop must log immediately, not be silently
+// absorbed by the per-second summary window.
+func TestIngestBuffer_DropLogFirstAlwaysImmediate(t *testing.T) {
+	var buf bytes.Buffer
+	oldOut := log.Writer()
+	oldFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(oldOut)
+		log.SetFlags(oldFlags)
+	})
+
+	b := NewIngestBuffer(1)
+	t.Cleanup(b.Stop)
+	b.Submit(func() {}) // fills cap=1
+	b.Submit(func() {}) // first drop
+	got := buf.String()
+	if !strings.Contains(got, "buffer full") {
+		t.Fatalf("expected FIRST drop to log immediately; got:\n%s", got)
+	}
+}
+
+// TestIngestBuffer_DropLogRecoveryAfterDrain guards the recovery-line
+// half of the throttle contract: once Submit succeeds again after one
+// or more drops, a "recovered" / "drained" line must be emitted so
+// operators can quantify the burst (PR #1623).
+func TestIngestBuffer_DropLogRecoveryAfterDrain(t *testing.T) {
+	var buf bytes.Buffer
+	oldOut := log.Writer()
+	oldFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(oldOut)
+		log.SetFlags(oldFlags)
+	})
+
+	b := NewIngestBuffer(1)
+	t.Cleanup(b.Stop)
+	b.Submit(func() {}) // fills cap=1
+	for i := 0; i < 3; i++ {
+		b.Submit(func() {}) // drops
+	}
+	// Drain: start consumer and Ready(), wait for queue to empty.
+	b.Start()
+	b.Ready()
+	deadline := time.Now().Add(time.Second)
+	for b.Pending() > 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	// Now a successful Submit should trigger the recovery line.
+	b.Submit(func() {})
+	// Give the goroutine + log a moment.
+	time.Sleep(20 * time.Millisecond)
+
+	got := buf.String()
+	if !strings.Contains(got, "drained") && !strings.Contains(got, "recovered") {
+		t.Fatalf("expected a 'drained'/'recovered' log line after stall ended; got:\n%s", got)
 	}
 }
