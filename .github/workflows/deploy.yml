@@ -135,6 +135,7 @@ jobs:
           node test-issue-1509-detect-preset.js
           node test-live.js
           node test-issue-1532-live-fullscreen.js
+          node test-issue-1619-feed-detail-card-draggable.js
           node test-xss-escape-sinks.js
           node test-preflight-xss-gate.js
 
