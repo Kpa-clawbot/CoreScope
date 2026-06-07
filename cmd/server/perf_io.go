@@ -349,7 +349,7 @@ func IngestorStatsPath() string {
 // /api/healthz under .ingest_liveness so operators can spot "broker
 // alive, write path stuck".
 func readIngestorSourceLiveness() map[string]SourceLivenessSnapshot {
-	data, err := os.ReadFile(IngestorStatsPath())
+	data, err := sourceLivenessReadFile(IngestorStatsPath())
 	if err != nil {
 		return nil
 	}
@@ -359,6 +359,16 @@ func readIngestorSourceLiveness() map[string]SourceLivenessSnapshot {
 	}
 	return st.SourceLiveness
 }
+
+// sourceLivenessReadFile is the file-reader used by
+// readIngestorSourceLiveness. Swappable for tests so call counts can
+// be asserted (PR #1623 round-1 finding 4 TTL cache test).
+var sourceLivenessReadFile = os.ReadFile
+
+// resetSourceLivenessCache clears any cached parse so tests start from
+// a clean slate. In the red commit there is no cache yet; the function
+// is a no-op stub so the test compiles and runs to the assertion.
+func resetSourceLivenessCache() {}
 
 // handlePerfWriteSources reads the ingestor's stats file and returns a flat
 // map of source-name -> counter, plus the sample timestamp.
