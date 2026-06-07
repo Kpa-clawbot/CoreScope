@@ -138,6 +138,7 @@ jobs:
           node test-issue-1619-feed-detail-card-draggable.js
           node test-xss-escape-sinks.js
           node test-preflight-xss-gate.js
+          node test-traces.js
 
       - name: 🛡️ Preflight XSS gate — actual --diff check (PR only)
         # The fixture self-test above (test-preflight-xss-gate.js) only
