@@ -119,6 +119,45 @@ console.log('\n=== traces.js: dedupePrefixPaths ===');
   });
 }
 
+// ===== renderPathGraph: per-hop SNR overlay (#1004 Phase 2 of #979) =====
+console.log('\n=== traces.js: renderPathGraph hop-SNR overlay ===');
+{
+  const ctx = makeSandbox();
+  loadTracesJs(ctx);
+  const { renderPathGraph } = ctx.TracesHelpers;
+  assert.strictEqual(typeof renderPathGraph, 'function', 'renderPathGraph must be exported');
+
+  const paths = [{ hops: ['R1', 'R2'], observer: 'OBS' }];
+  const decodedTrace = { type: 'TRACE', snrValues: [-3.5, -7.0, -12.25] };
+  const decodedNonTrace = { type: 'CHAN', snrValues: [-3.5, -7.0] };
+
+  test('TRACE with snrValues emits <text class="hop-snr"> labels with values', () => {
+    const html = renderPathGraph(paths, paths, decodedTrace);
+    assert.ok(/class="hop-snr"/.test(html), 'expected <text class="hop-snr"> in output');
+    // Each numeric value should appear in a hop-snr label.
+    const labels = html.match(/<text[^>]*class="hop-snr"[^>]*>([^<]+)<\/text>/g) || [];
+    assert.ok(labels.length >= 1, 'expected at least one hop-snr label');
+    const joined = labels.join(' ');
+    assert.ok(/-3\.5/.test(joined), 'expected -3.5 in hop-snr label, got: ' + joined);
+    assert.ok(/-7(\.0)?/.test(joined), 'expected -7 in hop-snr label, got: ' + joined);
+  });
+
+  test('non-TRACE packet: hop-snr labels are ABSENT even when snrValues present', () => {
+    const html = renderPathGraph(paths, paths, decodedNonTrace);
+    assert.ok(!/class="hop-snr"/.test(html), 'hop-snr must not render for non-TRACE');
+  });
+
+  test('TRACE with empty snrValues: no hop-snr labels', () => {
+    const html = renderPathGraph(paths, paths, { type: 'TRACE', snrValues: [] });
+    assert.ok(!/class="hop-snr"/.test(html), 'hop-snr must not render when snrValues empty');
+  });
+
+  test('decoded omitted: no hop-snr labels (back-compat)', () => {
+    const html = renderPathGraph(paths, paths);
+    assert.ok(!/class="hop-snr"/.test(html), 'hop-snr must not render when decoded omitted');
+  });
+}
+
 // ===== SUMMARY =====
 console.log(`\n${'═'.repeat(40)}`);
 console.log(`  traces.js: ${passed} passed, ${failed} failed`);

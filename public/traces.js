@@ -335,7 +335,7 @@
   }
 
   if (typeof window !== 'undefined') {
-    window.TracesHelpers = { dedupePrefixPaths };
+    window.TracesHelpers = { dedupePrefixPaths, renderPathGraph };
   }
 
   registerPage('traces', { init, destroy });
