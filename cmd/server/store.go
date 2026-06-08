@@ -8911,10 +8911,20 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 	// latent regression waiting for any refactor that touches the
 	// observer-id normalization layer.
 	nonRelaySet := map[string]struct{}{}
+	// PR #1624 MAJOR-2: tri-state badge needs to distinguish "confirmed
+	// repeater" (seen=1, can_relay=1) from "unknown" (seen=0). Build
+	// the set of observers we have NO repeat-field record for so the
+	// badge is nil/omitted for them — matches nodes.js:679 tri-state.
+	seenSet := map[string]struct{}{}
 	if s.db != nil && s.db.conn != nil {
 		if pks, err := s.db.GetNonRelayObserverPubkeys(); err == nil {
 			for _, pk := range pks {
 				nonRelaySet[strings.ToLower(pk)] = struct{}{}
+			}
+		}
+		if pks, err := s.db.GetCanRelaySeenObserverPubkeys(); err == nil {
+			for _, pk := range pks {
+				seenSet[strings.ToLower(pk)] = struct{}{}
 			}
 		}
 	}
@@ -8926,9 +8936,14 @@ func (s *PacketStore) GetNodeHealth(pubkey string) (map[string]interface{}, erro
 		if o.rssiCount > 0 {
 			avgRssi = o.rssiSum / float64(o.rssiCount)
 		}
-		canRelay := true
-		if _, isListener := nonRelaySet[strings.ToLower(id)]; isListener {
-			canRelay = false
+		idLower := strings.ToLower(id)
+		var canRelay interface{} // nil = unknown (no repeat field ever)
+		if _, seen := seenSet[idLower]; seen {
+			if _, isListener := nonRelaySet[idLower]; isListener {
+				canRelay = false
+			} else {
+				canRelay = true
+			}
 		}
 		observerRows = append(observerRows, map[string]interface{}{
 			"observer_id": id, "observer_name": o.name,

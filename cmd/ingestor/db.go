@@ -198,7 +198,8 @@ func applySchema(db *sql.DB) error {
 			clock_skew_seconds INTEGER DEFAULT NULL,
 			clock_skew_count_24h INTEGER DEFAULT 0,
 			clock_last_naive_at TEXT DEFAULT NULL,
-			can_relay INTEGER DEFAULT 1
+			can_relay INTEGER DEFAULT 1,
+			can_relay_seen INTEGER DEFAULT 0
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes(last_seen);
@@ -728,8 +729,8 @@ func (s *Store) prepareStatements() error {
 	}
 
 	s.stmtUpsertObserver, err = s.db.Prepare(`
-		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, can_relay)
-		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 1))
+		INSERT INTO observers (id, name, iata, last_seen, first_seen, packet_count, model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, can_relay, can_relay_seen)
+		VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 1), CASE WHEN ? IS NULL THEN 0 ELSE 1 END)
 		ON CONFLICT(id) DO UPDATE SET
 			name = COALESCE(?, name),
 			iata = COALESCE(?, iata),
@@ -742,7 +743,8 @@ func (s *Store) prepareStatements() error {
 			battery_mv = COALESCE(?, battery_mv),
 			uptime_secs = COALESCE(?, uptime_secs),
 			noise_floor = COALESCE(?, noise_floor),
-			can_relay = COALESCE(?, can_relay)
+			can_relay = COALESCE(?, can_relay),
+			can_relay_seen = CASE WHEN ? IS NULL THEN can_relay_seen ELSE 1 END
 	`)
 	if err != nil {
 		return err
@@ -1041,8 +1043,8 @@ func (s *Store) UpsertObserverAt(id, name, iata string, meta *ObserverMeta, last
 	}
 
 	_, err := s.stmtUpsertObserver.Exec(
-		id, name, normalizedIATA, lastSeen, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay,
-		name, normalizedIATA, ingestNow, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay,
+		id, name, normalizedIATA, lastSeen, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay, canRelay,
+		name, normalizedIATA, ingestNow, lastSeen, model, firmware, clientVersion, radio, batteryMv, uptimeSecs, noiseFloor, canRelay, canRelay,
 	)
 	if err != nil {
 		s.Stats.WriteErrors.Add(1)

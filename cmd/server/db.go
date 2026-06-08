@@ -253,10 +253,12 @@ type Observer struct {
 	ClockSkewCount24h int     `json:"clock_skew_count_24h"`
 	ClockLastNaiveAt  *string `json:"clock_last_naive_at"`
 	// Issue #1290: firmware 1.16 `repeat: on|off` flag persisted by the
-	// ingestor. true = relay-capable (default for legacy observers).
-	// false = listener-only; cmd/server/store.go pm.resolveWithContext
-	// excludes these from path-hop candidate sets.
-	CanRelay bool `json:"can_relay"`
+	// ingestor. true = relay-capable, false = listener-only, nil =
+	// unknown (legacy observer that never sent the field — drives the
+	// tri-state UI badge so legacy rows don't masquerade as confirmed
+	// repeaters). The ingestor sets can_relay_seen=1 only when it has
+	// an explicit value; the read layer returns nil when seen=0.
+	CanRelay *bool `json:"can_relay,omitempty"`
 }
 
 // Transmission represents a row from the transmissions table.
@@ -1157,14 +1159,21 @@ func (db *DB) GetObservers() ([]Observer, error) {
 	// Issue #1290: can_relay is read via COALESCE(can_relay, 1). The
 	// column is added by internal/dbschema; older test fixtures and
 	// pre-migration DBs may lack it, so we probe and fall back.
+	// PR #1624 MAJOR-2: can_relay_seen is the tri-state sentinel — 1
+	// means the ingestor explicitly wrote a value, 0 means "unknown"
+	// and the server returns CanRelay=nil so the UI shows no badge.
 	canRelayClause := "COALESCE(can_relay, 1)"
+	canRelaySeenClause := "0"
 	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay"); !hasCol {
 		canRelayClause = "1"
+	}
+	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay_seen"); hasCol {
+		canRelaySeenClause = "COALESCE(can_relay_seen, 0)"
 	}
 	rows, err := db.conn.Query(`SELECT id, name, iata, last_seen, first_seen, packet_count,
 		model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at,
 		clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at,
-		` + canRelayClause + `
+		` + canRelayClause + `, ` + canRelaySeenClause + `
 		FROM observers WHERE inactive IS NULL OR inactive = 0 ORDER BY last_seen DESC`)
 	if err != nil {
 		return nil, err
@@ -1177,13 +1186,16 @@ func (db *DB) GetObservers() ([]Observer, error) {
 		var batteryMv, uptimeSecs, clockSkewSec sql.NullInt64
 		var clockSkewCount sql.NullInt64
 		var noiseFloor sql.NullFloat64
-		var canRelay int
+		var canRelay, canRelaySeen int
 		if err := rows.Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount,
 			&o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt,
-			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt, &canRelay); err != nil {
+			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt, &canRelay, &canRelaySeen); err != nil {
 			continue
 		}
-		o.CanRelay = canRelay != 0
+		if canRelaySeen != 0 {
+			b := canRelay != 0
+			o.CanRelay = &b
+		}
 		if batteryMv.Valid {
 			v := int(batteryMv.Int64)
 			o.BatteryMv = &v
@@ -1235,29 +1247,62 @@ func (db *DB) GetNonRelayObserverPubkeys() ([]string, error) {
 	return out, rows.Err()
 }
 
+// GetCanRelaySeenObserverPubkeys returns the lowercase observer.id
+// pubkeys for which the ingestor has explicitly written a repeat-field
+// value (can_relay_seen=1). PR #1624 MAJOR-2: the badge surface uses
+// this to render tri-state — observers NOT in this set are "unknown"
+// and the UI shows no badge.
+func (db *DB) GetCanRelaySeenObserverPubkeys() ([]string, error) {
+	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay_seen"); !hasCol {
+		return nil, nil
+	}
+	rows, err := db.conn.Query(`SELECT LOWER(id) FROM observers
+		WHERE COALESCE(can_relay_seen, 0) = 1
+		  AND (inactive IS NULL OR inactive = 0)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var pk string
+		if err := rows.Scan(&pk); err == nil && pk != "" {
+			out = append(out, pk)
+		}
+	}
+	return out, rows.Err()
+}
+
 // GetObserverByID returns a single observer.
 func (db *DB) GetObserverByID(id string) (*Observer, error) {
 	var o Observer
 	var batteryMv, uptimeSecs, clockSkewSec sql.NullInt64
 	var clockSkewCount sql.NullInt64
 	var noiseFloor sql.NullFloat64
-	var canRelay int
+	var canRelay, canRelaySeen int
 	canRelayClause := "COALESCE(can_relay, 1)"
+	canRelaySeenClause := "0"
 	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay"); !hasCol {
 		canRelayClause = "1"
+	}
+	if hasCol, _ := dbschema.TableHasColumn(db.conn, "observers", "can_relay_seen"); hasCol {
+		canRelaySeenClause = "COALESCE(can_relay_seen, 0)"
 	}
 	err := db.conn.QueryRow(`SELECT id, name, iata, last_seen, first_seen, packet_count,
 		model, firmware, client_version, radio, battery_mv, uptime_secs, noise_floor, last_packet_at,
 		clock_skew_seconds, clock_skew_count_24h, clock_last_naive_at,
-		`+canRelayClause+`
+		`+canRelayClause+`, `+canRelaySeenClause+`
 		FROM observers WHERE id = ?`, id).
 		Scan(&o.ID, &o.Name, &o.IATA, &o.LastSeen, &o.FirstSeen, &o.PacketCount,
 			&o.Model, &o.Firmware, &o.ClientVersion, &o.Radio, &batteryMv, &uptimeSecs, &noiseFloor, &o.LastPacketAt,
-			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt, &canRelay)
+			&clockSkewSec, &clockSkewCount, &o.ClockLastNaiveAt, &canRelay, &canRelaySeen)
 	if err != nil {
 		return nil, err
 	}
-	o.CanRelay = canRelay != 0
+	if canRelaySeen != 0 {
+		b := canRelay != 0
+		o.CanRelay = &b
+	}
 	if batteryMv.Valid {
 		v := int(batteryMv.Int64)
 		o.BatteryMv = &v
